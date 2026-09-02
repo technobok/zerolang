@@ -90,12 +90,19 @@ holderEq: function {a: ztypes.zlockholder b: ztypes.zlockholder} out bool is {
 # ancestor is EXCLUSIVE, or is a SHARED TARGET and the request is EXCLUSIVE --
 # a live read of a subtree excludes a writer below it, while a SHARED INTENT
 # prefix permits the deeper lock it was taken for. Strict-ancestor requested:
-# conflict iff the request is EXCLUSIVE. Siblings never conflict.
+# conflict iff the request is EXCLUSIVE, or is a SHARED TARGET over a leaf a
+# VARIABLE holds EXCLUSIVE -- reading the whole subtree reads what that
+# holder may be writing through its pin, while an INTENT prefix is only the
+# step toward a sibling. Siblings never conflict.
 lockAcquireConflict: function {
     existingType: ztypes.zlockstate
     existingScope: ztypes.zlockscope
     existingPath: (ListVal zast.nameid).view
+    # the outstanding lock is a VARIABLE's pin rather than a call's
+    existingVarHeld: bool
     reqType: ztypes.zlockstate
+    # the requested lock is a TARGET (a live use) or an INTENT prefix
+    reqScope: ztypes.zlockscope
     reqPath: (ListVal zast.nameid).view
 } out bool is {
     eq: pathsEqual a: existingPath b: reqPath
@@ -118,7 +125,13 @@ lockAcquireConflict: function {
     }
     if rLen < eLen then {
         anc2: isPrefix p: reqPath whole: existingPath
-        if anc2 then return (reqType == ztypes.zlockstate.exclusive)
+        if anc2 then {
+            if reqType == ztypes.zlockstate.exclusive then return true
+            if reqScope == ztypes.zlockscope.target when existingVarHeld then {
+                return existingType == ztypes.zlockstate.exclusive
+            }
+            return false
+        }
     }
     return false
 }
@@ -893,7 +906,9 @@ ZSymbolTable: class {
                         existingType: e.lockType
                         existingScope: e.lockScope
                         existingPath: e.lockPath
+                        existingVarHeld: e.lockHolder.kind.varKind
                         reqType: lockType
+                        reqScope: lockScope
                         reqPath: path
                     )
                     if conflict then {
@@ -1001,6 +1016,36 @@ ZSymbolTable: class {
             e: this.entries.get i: j2
             if e.declId == d then {
                 if e.hasLock then return (optionval.some e.lockHolder)
+            }
+            j = j - 1
+        }
+        return (optionval.none ztypes.zlockholder)
+    }
+
+    # Holder of an EXCLUSIVE lock another VARIABLE holds on a path
+    # prefix-overlapping `path`, or none: the pin an `outx` result keeps on
+    # its `.borrow` input, which a read of that input must not cross.
+    findExclusiveVarLock: function {
+        # the symbol table whose lock rows are scanned
+        this: this.view
+        # the path read, root variable first
+        path: (ListVal zast.nameid).view
+    } out optionval ztypes.zlockholder is {
+        if path.length == 0 then return (optionval.none ztypes.zlockholder)
+        d: this.findLocal nameId: (path.get i: 0)
+        if d.isZero then return (optionval.none ztypes.zlockholder)
+        ne: this.entries.length
+        j: ne
+        for j > 0 loop {
+            j2: j - 1
+            e: this.entries.get i: j2
+            if e.declId == d then {
+                if e.hasLock when e.lockType == ztypes.zlockstate.exclusive then {
+                    if e.lockHolder.kind.varKind then {
+                        ov: pathsOverlap a: e.lockPath b: path
+                        if ov then return (optionval.some e.lockHolder)
+                    }
+                }
             }
             j = j - 1
         }

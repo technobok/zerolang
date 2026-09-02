@@ -28,6 +28,7 @@ public: unit {
     :declkindName
     :declrow
     :ZTyping
+    :PinPath
     :newTyping
     :armside
     :armSideOfName
@@ -311,6 +312,16 @@ Decl: class {
     children: (IdMapV zast.nameid v: ztypes.declid)
 }
 
+# PinPath -- one lock a call's result keeps on an input: the path it was
+# reached through (root first) and the strength the call took on it -- SHARED
+# for a `.view` parameter or receiver, EXCLUSIVE for a `.borrow` one.
+PinPath: class {
+    # the locked path, root variable first
+    path: (ListVal zast.nameid)
+    # SHARED (a `.view` input) rather than EXCLUSIVE (a `.borrow` input)
+    shared: bool
+}
+
 # the typing side-tables: every typecheck stamp keyed by AST node id
 # (types, monomorphisations, lock overlays) plus the declaration tree, kept
 # separate from the frozen AST so the tree is never mutated.
@@ -339,8 +350,6 @@ ZTyping: class {
     # Zero for a generic mono instance walk, which has no declaration of its
     # own to name.
     currentFnTid: ztypes.tid
-    # the root the last lock parameter locked, so a conflict can name it
-    lastLockParamRoot: zast.nameid
 
     # a generic template's syntactic body divergence (its last statement is a
     # return), recorded at resolution for the clone-scope synthesis.
@@ -366,13 +375,14 @@ ZTyping: class {
     # the fn whose body is being walked declares a `.borrow` return: bare
     # field returns are its contract (the lock/borrow source outlives).
     currentReturnsBorrow: bool
-    # the borrow source path a just-coerced BORROW-returning auto-call reported;
-    # consumed by the binding sites, drained at statement and call boundaries.
-    pendingBorrowPath: (ListVal zast.nameid)
-    # the pending borrow is a RETURNED borrow (a `.borrow`-marked return): a
-    # read-view of the source, so the binding's leaf lock is SHARED (the
-    # container-view model) rather than the exclusive alias default.
-    pendingBorrowShared: bool
+    # the locks a just-typed call's result keeps on its inputs (`outx`, or a
+    # reference return), each at its own strength; consumed by the binding
+    # sites, drained at statement and call boundaries.
+    pendingPins: (List PinPath)
+    # the node of the call argument being typed (0 outside one): a reftype
+    # argument is judged by the lock the call takes on it, not by the
+    # field-read rule
+    callArgNode: u64
     # the pending borrow came from an `out T.view` return, so the binding it
     # lands on is READONLY as well as pinned.
     pendingBorrowReadonly: bool
@@ -2454,15 +2464,14 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         synthOwnerName: zast.nameid
         currentThisTid: ztypes.tid
         currentFnTid: ztypes.tid
-        lastLockParamRoot: zast.nameid
         fnBodyDiverges: (IdMapV u64 v: bool)
         funcReturnsBorrow: (IdMapV u64 v: bool)
         funcReturnsView: (IdMapV u64 v: bool)
         funcPins: (IdMapV u64 v: bool)
         funcReturnsFrozen: (IdMapV u64 v: bool)
         currentReturnsBorrow: false
-        pendingBorrowPath: (ListVal zast.nameid)
-        pendingBorrowShared: false
+        pendingPins: (List PinPath)
+        callArgNode: 0
         pendingBorrowReadonly: false
         pendingBorrowOwned: false
         pendingBorrowFrozen: false

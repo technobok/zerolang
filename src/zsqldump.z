@@ -1109,6 +1109,11 @@ ZDumper: class {
     # section so the golden does not depend on map order.
     appendMemberConstCanon: function {:this pool: zast.StringPool.view unm: StringView st: zenv.ZSymbolTable} is {
         rows: (List String)
+        # the iteration holds the table exclusively and rendering a value reads
+        # the whole symbol table: collect this unit's entries first, render
+        # them once the iterator has died
+        mNames: (ListVal u64)
+        mVals: (ListVal ztypes.cval)
         with mcit: st.typing.memberConst.iterateItems do for mc: mcit loop {
             pt: mc.key.owner
             nm: mc.key.name
@@ -1117,11 +1122,17 @@ ZDumper: class {
             # unit and has nothing to say about the unit type itself.
             tn: canonTypeName reg: st.reg tid: (ztypes.tid.create from: pt.u64)
             if tn.stringView == unm then {
-                mn: pool.texts.get i: nm.u64
-                cvt: constValueCanonText :pool :st v: mc.value
-                line: "\{sqlStr s: mn.stringView} | \{sqlStr s: cvt.stringView}"
-                rows.append line
+                mNames.append nm.u64
+                mVals.append mc.value
             }
+        }
+        mi: u64
+        for mi < mNames.length loop {
+            mn: pool.texts.get i: (mNames.get i: mi)
+            cvt: constValueCanonText :pool :st v: (mVals.get i: mi)
+            line: "\{sqlStr s: mn.stringView} | \{sqlStr s: cvt.stringView}"
+            rows.append line
+            mi = mi + 1
         }
         this.emitSection title: "member_const" :rows
     }

@@ -269,9 +269,7 @@ addErrorH: function {
 } is {
     dup: false
     with it: st.typing.errors.iterate do for prev: it loop {
-        if prev.nodeid == nodeid when prev.lineno == lineno when prev.colno == colno when prev.msg.stringView == msg.stringView then {
-            dup = true
-        }
+        if prev.lineno == lineno when prev.msg.stringView == msg.stringView then dup = true
     }
     if (dup) == false then {
         st.typing.errors.append (zast.ErrorData
@@ -303,9 +301,7 @@ addResolveErrorH: function {
 } is {
     dup: false
     with it: st.typing.errors.iterate do for prev: it loop {
-        if prev.nodeid == nodeid when prev.lineno == lineno when prev.colno == colno when prev.msg.stringView == msg.stringView then {
-            dup = true
-        }
+        if prev.lineno == lineno when prev.msg.stringView == msg.stringView then dup = true
     }
     if (dup) == false then {
         st.typing.errors.append (zast.ErrorData
@@ -324,7 +320,9 @@ addResolveErrorH: function {
 }
 
 # addError -- append a typecheck diagnostic to the typing's error list,
-# deduped by node position so a spec resolved more than once reports once.
+# deduped by line and text: a spec resolved more than once reports once, and
+# a statement that fails one lock twice (the call's own lock, then the pin its
+# binding would hold) reports it once.
 addError: function {
     st: zenv.ZSymbolTable
     nodeid: zast.nodeid
@@ -3561,32 +3559,6 @@ partialReturnTid: function {
     return 0
 }
 
-# returnIsIteratorTid -- the resolved return type is an iterator: a class
-# carrying a `call` member, which is the Iterator marker system.z declares
-# (no explicit conformance is required of it). Asked of the generic origin,
-# so a mono answers as its template. Iterator borrows stay EXCLUSIVE (many
-# SHARED views XOR one writer XOR one exclusive iterator); other returned
-# borrows are read-views and lock SHARED.
-returnIsIteratorTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
-    if tid.isZero then return false
-    org: u64
-    {
-        go: st.reg.genericOriginOf :tid
-        if go > 0 then org = go
-    }
-    probe: tid
-    if org > 0 then probe = ztypes.tid.create from: org.u64
-    if (st.reg.typetypeOf typeId: probe) == ztypes.ztypetype.classType then {
-        co9: st.typing.declChildOfId parentTypeId: probe nameId: zast.names.wkCall
-        match (
-            co9
-        ) case some then {
-            return true
-        } case none then null
-    }
-    return false
-}
-
 # markerPeeledBase -- the base atom name under a strip-marker dotted path
 # (`of.take` -> "of"); "" for any other shape.
 markerPeeledBase: function {ast: Ast.view n: Node.view} out String is {
@@ -5615,8 +5587,8 @@ forceMemberDecl: function {
     if opId == 0 then return (optionval.none u64)
     unD: unitDeclOfTid :st tid: (ztypes.tid.create from: otid.u64)
     if unD.isZero then return (optionval.none u64)
-    tn: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: onm)
-    mn: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: mnm)
+    tn: zast.nameTextCopy :ast ref: (zast.nameid.create from: onm)
+    mn: zast.nameTextCopy :ast ref: (zast.nameid.create from: mnm)
     st.typing.declSetResolving declId: memberDeclId mark: true
     memberIdAt: (optionval.none u64)
     if isM then {
@@ -5887,7 +5859,7 @@ forceUnitDef: function {
         unitDecl: uDecl9b
         nameId: nmId
     )) then return 0
-    dn: zast.poolTextAt pool: ast.names ref: nmId
+    dn: zast.nameTextCopy :ast ref: nmId
     (resolveDef
         :st
         :frame
@@ -6069,7 +6041,7 @@ markerTargetId: function {
     }
     if nameId.isZero then return (optionval.none u64)
     {
-        mnm: zast.poolTextAt pool: ast.names ref: nameId
+        mnm: zast.nameTextCopy :ast ref: nameId
         duo: (definingSiteFor :st :frame :ast :unitDecl name: mnm.stringView).defUnit
         if (duo.isZero) == false then {
             descendNamed :st :frame :ast unitDecl: duo name: mnm.stringView
@@ -10921,7 +10893,7 @@ nestedUnitMemberTid: function {
         tto
     ) case some then {
         rf: sub
-        dnT: zast.poolTextAt pool: ast.names ref: defName
+        dnT: zast.nameTextCopy :ast ref: defName
         unitDecl92: (unitDeclOfNameOrOwn :st frame: rf nameId: nestedNameId)
         declared = (declareCanonicalType
             :st
@@ -10971,7 +10943,7 @@ aliasTargetMintedTid: function {
     match (
         tto
     ) case some then {
-        tnT: zast.poolTextAt pool: ast.names ref: defName
+        tnT: zast.nameTextCopy :ast ref: defName
         # declared in the TARGET's frame -- its parent unit -- so the id is
         # the one the target's own resolution declares (keyed on that unit)
         rf: declParentIdOf :st declId: tgt
@@ -11428,8 +11400,8 @@ resolveAliasKeyIn: function {
             defName: altK.defName
         )
     }
-    tu: zast.poolTextAt pool: ast.names ref: altK.unitName
-    tn: zast.poolTextAt pool: ast.names ref: altK.defName
+    tu: zast.nameTextCopy :ast ref: altK.unitName
+    tn: zast.nameTextCopy :ast ref: altK.defName
     aParent: ztypes.declid
     aNameId: zast.nameid
     {
@@ -11438,12 +11410,12 @@ resolveAliasKeyIn: function {
         aNameId = zast.nameid.create from: ado.name
     }
     if aNameId.isZero then return 0
-    aName: zast.poolTextAt pool: ast.names ref: aNameId
+    aName: zast.nameTextCopy :ast ref: aNameId
     # the file unit the alias is written in, for the name walkers and the
     # diagnostics -- the alias's OWN scope is aParent, which is that unit's
     # root for a top-level alias and the nested unit's Decl for a nested one
-    aUnit: (zast.poolTextAt
-        pool: ast.names
+    aUnit: (zast.nameTextCopy
+        :ast
         ref: (declNameIdOf
             :st
             declId: (unitDeclOfNameOrOwn
@@ -13025,7 +12997,7 @@ resolveDemandedDecl: function {
         pdo: st.typing.decls.get i: dParent.u64
         puNm = pdo.name
     }
-    defNameText: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: dName)
+    defNameText: zast.nameTextCopy :ast ref: (zast.nameid.create from: dName)
     puDecl: unitDeclOfNameOrOwn :st frame: rf nameId: (zast.nameid.create from: puNm)
     # a TEMPLATE's member: the template's own resolution minted every method
     # (resolveInlineGenericUnit), and its constants resolve together, keyed on
@@ -15438,7 +15410,7 @@ resolveMainUnitInstantiations: function {
                 match (
                     program
                 ) case program then {
-                    rtT: zast.poolTextAt pool: program.ast.names ref: rtId
+                    rtT: zast.nameTextCopy ast: program.ast ref: rtId
                     parentTid94: (declTypeIdOf :st declId: tpd)
                     (resolveInlineGenericUnit
                         :st
@@ -16452,7 +16424,7 @@ cloneMethodInto: function {
         typeId: fid5
         nameId: (zast.nameid.create from: tpn0id.u32)
     )
-    tpn0: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: tpn0id.u32)
+    tpn0: zast.nameTextCopy :ast ref: (zast.nameid.create from: tpn0id.u32)
     if (optBoolOr o: (st.typing.funcReturnsView.get key: tplFnId) d: false) then {
         st.typing.funcReturnsView.set key: fid5 value: true
     }
@@ -19865,7 +19837,7 @@ checkProjectionCreate: function {
                                     pbv2
                                 ) case some then {
                                     drainPendingBorrow :st
-                                    st.typing.pendingBorrowPath.append pbr
+                                    pinsPushOne :st nameId: pbr shared: false
                                 } case none then null
                             }
                         } else {
@@ -20133,14 +20105,14 @@ checkTypedefBorrow: function {
                         errMark: errT0
                     )
                     if vt > 0 then {
-                        if st.typing.pendingBorrowPath.length <= 0 then {
+                        if st.typing.pendingPins.length == 0 then {
                             tup: (ListVal zast.nameid)
                             (appendValueTuple
                                 :ast
                                 n: (ast.nodes.get i: arg.operation.u64)
                                 dst: tup
                             )
-                            with tit: tup.iterate do for te: tit loop st.typing.pendingBorrowPath.append te
+                            pinsPush :st path: tup shared: false
                         }
                     }
                 }
@@ -20805,60 +20777,20 @@ checkMemberAutoCall: function {
             ro
         ) case some then {
             result = ro
-            fb: st.typing.funcReturnsBorrow.get key: mo
-            match (
-                fb
-            ) case some then {
-                if fb then {
-                    # Build locally, then append through the full field
-                    # path (a field list passed as an argument is a
-                    # non-owning shallow copy -- appends would be lost).
-                    tup: (ListVal zast.nameid)
-                    appendValueTuple :ast n: (ast.nodes.get i: dp.parent.u64) dst: tup
-                    drainPendingBorrow :st
-                    with tit: tup.iterate do for te: tit loop st.typing.pendingBorrowPath.append te
-                    if (returnIsIteratorTid :st tid: result) == false then {
-                        st.typing.pendingBorrowShared = true
-                    } else {
-                        mrv: (methodReceiverIsView
-                            :st
-                            mid: (ztypes.tid.create from: mo.u64)
-                        )
-                        if mrv then st.typing.pendingBorrowShared = true
-                    }
-                    if (optBoolOr o: (st.typing.funcReturnsView.get key: mo) d: false) then {
-                        st.typing.pendingBorrowShared = true
-                        st.typing.pendingBorrowReadonly = true
-                    }
-                } else {
-                    drainPendingBorrow :st
-                }
-            } case none then {
-                # an owning auto-call (`.copy` / `.string` / user methods)
-                # consumes any receiver-evaluation borrow residue (the get
-                # in `(xs.get i).copy` must not flow to the binding).
-                drainPendingBorrow :st
-                if (optBoolOr o: (st.typing.funcPins.get key: mo) d: false) then {
-                    # `takex`: the result is OWNED but pins its source --
-                    # the same receiver pin a borrow return takes, without
-                    # demoting the binding (`pendingBorrowOwned`).
-                    tupX: (ListVal zast.nameid)
-                    appendValueTuple :ast n: (ast.nodes.get i: dp.parent.u64) dst: tupX
-                    with titX: tupX.iterate do for teX: titX loop st.typing.pendingBorrowPath.append teX
-                    if (returnIsIteratorTid :st tid: result) == false then {
-                        st.typing.pendingBorrowShared = true
-                    } else {
-                        mrvX: (methodReceiverIsView :st mid: (ztypes.tid.create from: mo.u64))
-                        if mrvX then st.typing.pendingBorrowShared = true
-                    }
-                    st.typing.pendingBorrowOwned = true
-                }
-                # `hold`: owned and READONLY, with no pin -- so it is set
-                # after the drain above rather than inside the pin block.
-                if (optBoolOr o: (st.typing.funcReturnsFrozen.get key: mo) d: false) then {
-                    st.typing.pendingBorrowFrozen = true
-                }
-            }
+            # an auto-call's only input is its receiver: the pin its result
+            # keeps, if any, is the receiver path at the strength the reader
+            # took. Built locally, then pushed through the full field path (a
+            # field list passed as an argument is a non-owning shallow copy).
+            tup: (ListVal zast.nameid)
+            appendValueTuple :ast n: (ast.nodes.get i: dp.parent.u64) dst: tup
+            noArgs: (List ztyping.PinPath)
+            (pinCallResult
+                :st
+                funcId: (ztypes.tid.create from: mo.u64)
+                pins: noArgs
+                recvPath: tup
+                recvShared: aShr
+            )
         } case none then {
             # A no-`out` METHOD auto-call resolves to null (the
             # reference's auto-call rule for out-less methods). Non-
@@ -20923,7 +20855,7 @@ checkMemberProjections: function {
                 pjvo
             ) case some then {
                 drainPendingBorrow :st
-                st.typing.pendingBorrowPath.append (nameIdOf :ast name: pjroot.stringView)
+                pinsPushOne :st nameId: (nameIdOf :ast name: pjroot.stringView) shared: false
             } case none then null
         }
     }
@@ -21909,6 +21841,23 @@ checkResolvedMember: function {
             lockAutoCallReceiver :ast :st :dp :bt shared: true
         }
     }
+    # A field READ of a path another variable holds an EXCLUSIVE pin on (the
+    # `.borrow` input of an `outx` result) is refused: read through the holder
+    # instead. Asked of the OUTERMOST path only (a base walk sets
+    # suppressBareCtor): a method receiver is judged by the lock its call
+    # takes, a reftype argument by the lock the call takes on it, and a write
+    # target by checkWriteLock.
+    if (st.typing.inAssignTarget) == false when (st.typing.suppressBareCtor) == false then {
+        if (st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)) != ztypes.ztypetype.functionType then {
+            if (st.typing.declIsMethodId parentTypeId: bt nameId: cnId) == false then {
+                argVal: false
+                if dp.nid.u64 == st.typing.callArgNode then {
+                    if (typeIsReftype :st tid: (ztypes.tid.create from: rm.u64)) then argVal = true
+                }
+                if (argVal) == false then refuseReadUnderPin :st :ast :dp
+            }
+        }
+    }
     result = (checkMemberAutoCall
         :st
         :ast
@@ -22623,6 +22572,41 @@ checkDotted: function {
         return (checkUnresolvedMember :st :ast :dp :bt cn: cn.stringView :cnId)
     }
 }
+# refuseReadUnderPin -- the dotted path is READ while another variable holds
+# an EXCLUSIVE pin over it: the pin says that holder may be writing through
+# its reference, so the source is read through the holder or not at all until
+# the holder dies.
+refuseReadUnderPin: function {st: zenv.ZSymbolTable ast: Ast.view dp: dpref} is {
+    rp: (ListVal zast.nameid)
+    appendValueTuple :ast n: (ast.nodes.get i: dp.nid.u64) dst: rp
+    if rp.length == 0 then return
+    rvo: st.lookupVarId nameId: (rp.get i: 0)
+    if rvo.none then return
+    xh: st.findExclusiveVarLock path: rp
+    match (
+        xh
+    ) case some then {
+        if xh.id != rvo then {
+            hn: st.formatLockHolder pool: ast.names holder: xh
+            pp: zenv.formatPath pool: ast.names path: rp
+            mr: "Cannot read '\{pp}': exclusive lock held by '\{hn}'"
+            hr: "read through '\{hn}' instead, or end '\{hn}'s scope first to release the lock"
+            nr: String
+            (addErrorH
+                :st
+                nodeid: dp.nid
+                lineno: dp.lineno
+                colno: dp.colno
+                e: zast.err.ownerError
+                msg: mr
+                note: nr
+                hint: hr
+                width: pp.length.u32.orPanic
+            )
+        }
+    } case none then null
+}
+
 # checkBareTypeValue -- a bare TYPE name in value position is zero-argument
 # construction (`p: Point`), so a synthesized create's required fields are
 # enforced here and an aliased container name resolves through its twin.
@@ -23693,19 +23677,19 @@ checkAssignment: function {
         return
     }
     if vt > 0 then {
-        bsrc: (ListVal zast.nameid)
-        takePendingBorrow :st dst: bsrc
+        bpins: (List ztyping.PinPath)
+        takePendingPins :st dst: bpins
         own: ztypes.zownership.owned
-        # A `takex` result is pinned like a borrow but OWNED like a take, so the
-        # pin must not demote it. `pendingBorrowOwned` is what tells them apart.
+        # An `outx` result is pinned like a borrow but OWNED like a take, so
+        # the pins must not demote it. `pendingBorrowOwned` tells them apart.
         pboX: st.typing.pendingBorrowOwned
-        if bsrc.length > 0 when (typeIsReftype :st tid: vt) then {
+        if bpins.length > 0 when (typeIsReftype :st tid: vt) then {
             if (pboX) == false then own = ztypes.zownership.borrowed
         }
         vid: st.reg.newVariable ztypeId: vt ownership: own
         if own == ztypes.zownership.borrowed then (st.reg.setVariableBorrowOrigin
             id: vid
-            origin: (bsrc.get i: 0)
+            origin: (pinRootAt pins: bpins i: 0)
         )
         # An `out T.view` result makes its binding readonly because the binding
         # IS the reference it handed back. A value merely DERIVED from one --
@@ -23763,18 +23747,17 @@ checkAssignment: function {
         )
         instX: false
         if own == ztypes.zownership.borrowed then instX = true
-        if pboX when bsrc.length > 0 then instX = true
+        if pboX when bpins.length > 0 then instX = true
         st.typing.pendingBorrowOwned = false
         if instX then {
-            lfsA: isViewFamilyTid :ast :st tid: vt
-            if st.typing.pendingBorrowShared then lfsA = true
-            st.typing.pendingBorrowShared = false
-            (installBorrowLocks
+            vfA: isViewFamilyTid :ast :st tid: vt
+            (installPins
                 :st
                 pool: ast.names
-                src: bsrc
+                pins: bpins
                 :vid
-                leafShared: lfsA
+                onlyRoot: zast.nameid
+                forceShared: vfA
                 nodeid: asgn.nid
                 lineno: asgn.lineno
                 colno: asgn.colno
@@ -24133,6 +24116,7 @@ checkReassignment: function {
         if ubnR0.length > 0 then reportUnknownNameAt :st :ast nid: rasgn.value name: ubnR0
     }
     if hbVid > 0 then retakeHoldLock :st :ast :rasgn :hbVid :hbNmId
+    consumeReassignPins :st :ast :rasgn :hbNmId :rvt
     mrv0: materialiseLiteral :ast :st :unitDecl t: rvt
     if mrv0 > 0 when (st.reg.typetypeOf typeId: mrv0) == ztypes.ztypetype.nullType then {
         m0n: "'null' cannot be used as a value — null must be wrapped in a union or variant (eg. option.none)".string
@@ -24175,6 +24159,49 @@ checkReassignment: function {
     checkNarrowedTargetWrite :st :ast :rasgn
     checkMethodRefTarget :st :ast :rasgn
     invalidateMovedSource :st :ast :rasgn :rvt
+}
+
+# consumeReassignPins -- a pinning call on the right of `x = ...` keeps its
+# pins under the TARGET, exactly as a binding would. The value the target held
+# is destroyed by the assignment, so the locks it held go first.
+consumeReassignPins: function {
+    # the symbol table holding the pending pins
+    st: zenv.ZSymbolTable
+    # the tree the target name is spelt in
+    ast: Ast
+    # the reassignment, for the report position
+    rasgn: reasgref
+    # the target's bare name, zero when the target is a path
+    hbNmId: zast.nameid
+    # the assigned value's type, whose view-family-ness makes every pin SHARED
+    rvt: ztypes.tid
+} is {
+    if hbNmId.isZero then return
+    if rvt.isZero then return
+    if st.typing.pendingPins.length == 0 then return
+    rpins: (List ztyping.PinPath)
+    takePendingPins :st dst: rpins
+    tvo: st.lookupVarId nameId: hbNmId
+    match (
+        tvo
+    ) case some then {
+        st.releaseHeldLocks holder: (ztypes.zlockholder
+            kind: ztypes.zlockholderkind.varKind
+            id: tvo
+        )
+        vfR: isViewFamilyTid :ast :st tid: rvt
+        (installPins
+            :st
+            pool: ast.names
+            pins: rpins
+            vid: tvo
+            onlyRoot: zast.nameid
+            forceShared: vfR
+            nodeid: rasgn.nid
+            lineno: rasgn.lineno
+            colno: rasgn.colno
+        )
+    } case none then null
 }
 
 # checkSwap -- `lhs swap rhs`: resolve both operand paths (stamping them). The swap
@@ -24259,35 +24286,41 @@ checkWith: function {
         # The borrow target: a BORROW-returning auto-call reported the receiver
         # source; a plain-path value locks its full dotted tuple. Valtype
         # borrows are copies -- no lock.
-        btgt: (ListVal zast.nameid)
-        takePendingBorrow :st dst: btgt
-        if btgt.length == 0 then {
+        wpins: (List ztyping.PinPath)
+        takePendingPins :st dst: wpins
+        pboW: st.typing.pendingBorrowOwned
+        st.typing.pendingBorrowOwned = false
+        if wpins.length == 0 then {
             if own == ztypes.zownership.borrowed then {
-                appendValueTuple :ast n: (ast.nodes.get i: withnode.value.u64) dst: btgt
+                wtup: (ListVal zast.nameid)
+                appendValueTuple :ast n: (ast.nodes.get i: withnode.value.u64) dst: wtup
+                pinsAppend pins: wpins path: wtup shared: false
             }
         } else {
-            # A pending borrow from the value's call (a lock-param transfer
-            # or a borrow-marked return) makes the with-binding borrowed.
-            own = ztypes.zownership.borrowed
+            # A reference return makes the with-binding borrowed; an `outx`
+            # result stays OWNED (it keeps its destructor) and only pins.
+            if (pboW) == false then own = ztypes.zownership.borrowed
         }
         vid: st.reg.newVariable ztypeId: vt ownership: own
         # the borrow origin, as a plain binding records it: what this alias is
         # a reference INTO. A for-loop over an iterator alias reads it back to
         # learn how strongly the alias pins the container it walks.
-        if btgt.length > 0 then st.reg.setVariableBorrowOrigin id: vid origin: (btgt.get i: 0)
+        if wpins.length > 0 then (st.reg.setVariableBorrowOrigin
+            id: vid
+            origin: (pinRootAt pins: wpins i: 0)
+        )
         st.defineVar nameId: withnode.name :vid
         vid2: vid
         st.typing.defVariableId.set key: withnode.nid.u64 value: vid2
         if (typeIsReftype :st tid: vt) then {
-            lfsW: isViewFamilyTid :ast :st tid: vt
-            if st.typing.pendingBorrowShared then lfsW = true
-            st.typing.pendingBorrowShared = false
-            (installBorrowLocks
+            vfW: isViewFamilyTid :ast :st tid: vt
+            (installPins
                 :st
                 pool: ast.names
-                src: btgt
+                pins: wpins
                 :vid
-                leafShared: lfsW
+                onlyRoot: zast.nameid
+                forceShared: vfW
                 nodeid: withnode.nid
                 lineno: withnode.lineno
                 colno: withnode.colno
@@ -24504,22 +24537,21 @@ bindForBorrowedElement: function {
     # container's storage, and a write through the
     # container reallocates it. The `with` form leaves
     # nothing pending here -- its binding took the lock.
-    fbs: (ListVal zast.nameid)
-    takePendingBorrow :st dst: fbs
+    fpins: (List ztyping.PinPath)
+    takePendingPins :st dst: fpins
     flf: isViewFamilyTid :ast :st tid: vt
-    if st.typing.pendingBorrowShared then flf = true
-    st.typing.pendingBorrowShared = false
-    if fbs.length > 0 then {
+    if fpins.length > 0 then {
         fcn: ast.nodes.get i: cond.operation.u64
         fnd: nodeId n: fcn
         fln: nodeLine n: fcn
         fcl: nodeCol n: fcn
-        (installBorrowLocks
+        (installPins
             :st
             pool: ast.names
-            src: fbs
+            pins: fpins
             :vid
-            leafShared: flf
+            onlyRoot: zast.nameid
+            forceShared: flf
             nodeid: fnd
             lineno: fln
             colno: fcl
@@ -24532,7 +24564,10 @@ bindForBorrowedElement: function {
     # yields writable ones. The binding-free form knows its
     # own strength; the `with` form has to ask its binding.
     elr: flf
-    if fbs.length == 0 then {
+    if fpins.length > 0 then {
+        if (pinsAllShared pins: fpins) then elr = true
+    }
+    if fpins.length == 0 then {
         elr = (iterElementIsReadonly
             :st
             iterName: (atomNameId :ast n: (ast.nodes.get i: cond.operation.u64))
@@ -26274,28 +26309,180 @@ appendValueTuple: function {ast: Ast.view n: Node.view dst: ListVal zast.nameid}
     } else null
 }
 
-# drainPendingBorrow / takePendingBorrow -- clear the borrow side-channel /
-# move it into a local list (root-first order preserved).
+# drainPendingBorrow / takePendingPins -- clear the pin side-channel / move
+# its pins into a local list (call order preserved: the receiver's pin first,
+# then the arguments' in order).
 drainPendingBorrow: function {st: zenv.ZSymbolTable} is {
-    for st.typing.pendingBorrowPath.length > 0 loop st.typing.pendingBorrowPath.pop
-    st.typing.pendingBorrowShared = false
+    for st.typing.pendingPins.length > 0 loop st.typing.pendingPins.pop
     st.typing.pendingBorrowReadonly = false
     st.typing.pendingBorrowOwned = false
     st.typing.pendingBorrowFrozen = false
 }
 
-# drain the pending-borrow markers accumulated during argument hoisting.
-takePendingBorrow: function {st: zenv.ZSymbolTable dst: ListVal zast.nameid} is {
-    with pit: st.typing.pendingBorrowPath.iterate do for e: pit loop dst.append e
-    sh: st.typing.pendingBorrowShared
+# takePendingPins -- move the pending pins into `dst`, keeping the result
+# flags (readonly / owned / frozen) that describe the value they came with.
+takePendingPins: function {st: zenv.ZSymbolTable dst: List ztyping.PinPath} is {
+    rev: (List ztyping.PinPath)
+    for st.typing.pendingPins.length > 0 loop rev.append st.typing.pendingPins.pop
+    for rev.length > 0 loop dst.append rev.pop
     ro: st.typing.pendingBorrowReadonly
     ow: st.typing.pendingBorrowOwned
     fz: st.typing.pendingBorrowFrozen
     drainPendingBorrow :st
-    st.typing.pendingBorrowShared = sh
     st.typing.pendingBorrowReadonly = ro
     st.typing.pendingBorrowOwned = ow
     st.typing.pendingBorrowFrozen = fz
+}
+
+# pinsAppend -- record one pin in `pins`: a copy of `path` at `shared` strength.
+pinsAppend: function {pins: List ztyping.PinPath path: (ListVal zast.nameid).view shared: bool} is {
+    if path.length == 0 then return
+    p: (ListVal zast.nameid)
+    with pit: path.iterate do for seg: pit loop p.append seg
+    pins.append (ztyping.PinPath path: p :shared)
+}
+
+# pinsPush / pinsPushOne -- record a pin the pending result keeps. Appended
+# through the full field path: a field list passed as an argument is a
+# non-owning shallow copy whose appends would be lost.
+pinsPush: function {st: zenv.ZSymbolTable path: (ListVal zast.nameid).view shared: bool} is {
+    if path.length == 0 then return
+    p: (ListVal zast.nameid)
+    with pit: path.iterate do for seg: pit loop p.append seg
+    st.typing.pendingPins.append (ztyping.PinPath path: p :shared)
+}
+
+# pinsPushOne -- pinsPush for a one-segment path: a bare root name.
+pinsPushOne: function {st: zenv.ZSymbolTable nameId: zast.nameid shared: bool} is {
+    if nameId.isZero then return
+    p: (ListVal zast.nameid)
+    p.append nameId
+    st.typing.pendingPins.append (ztyping.PinPath path: p :shared)
+}
+
+# pinsRoot -- the root of the first pending pin, zero when none is pending.
+pinsRoot: function {st: zenv.ZSymbolTable.view} out zast.nameid is {
+    if st.typing.pendingPins.length == 0 then return zast.nameid
+    p0: st.typing.pendingPins.get i: 0
+    return (p0.path.get i: 0)
+}
+
+# pinRootAt -- the root of pin `i` of a local pin list.
+pinRootAt: function {pins: (List ztyping.PinPath).view i: u64} out zast.nameid is {
+    if i >= pins.length then return zast.nameid
+    p: pins.get :i
+    return (p.path.get i: 0)
+}
+
+# pinsAllShared -- every pin is SHARED, so a value derived from them may only
+# be read.
+pinsAllShared: function {pins: (List ztyping.PinPath).view} out bool is {
+    with pit: pins.iterate do for p: pit loop {
+        if (p.shared) == false then return false
+    }
+    return true
+}
+
+# pinsWithoutMethodLeaves -- move `src` into `dst` dropping every pin whose
+# path LEAF is a method: such a path describes a CALL, and a call's result
+# ownership is its signature's business (`.copy` hands back a fresh value).
+pinsWithoutMethodLeaves: function {
+    st: zenv.ZSymbolTable.view
+    src: List ztyping.PinPath
+    dst: List ztyping.PinPath
+} is {
+    rev: (List ztyping.PinPath)
+    for src.length > 0 loop rev.append src.pop
+    for rev.length > 0 loop {
+        p: rev.pop
+        if (pathLeafIsMethod :st path: p.path) == false then dst.append p
+    }
+}
+
+# installPins -- install every pin under the binding `vid`, each at its own
+# strength. `onlyRoot` (when set) keeps the pins rooted at that name -- the
+# argument a hoisted temp stands for -- and `forceShared` makes every leaf
+# SHARED: the bound value is a view-family type, which is a read of its
+# parent whatever the call declared, or the temp of a `.view` parameter.
+installPins: function {
+    # the symbol table the lock rows are laid in
+    st: zenv.ZSymbolTable
+    # the name pool the paths are spelt in
+    pool: zast.StringPool.view
+    # the pins to install, each with its own path and strength
+    pins: (List ztyping.PinPath).view
+    # the binding that holds them
+    vid: ztypes.vid
+    # when set, only the pins rooted at this name are installed
+    onlyRoot: zast.nameid
+    # every leaf SHARED, whatever the pin says
+    forceShared: bool
+    # the node a conflict is reported at
+    nodeid: zast.nodeid
+    # the line a conflict is reported at
+    lineno: u32
+    # the column a conflict is reported at
+    colno: u32
+} is {
+    with pit: pins.iterate do for p: pit loop {
+        keep: true
+        if (onlyRoot.isZero) == false then {
+            if (p.path.get i: 0) != onlyRoot then keep = false
+        }
+        if keep then {
+            ls: p.shared
+            if forceShared then ls = true
+            (installBorrowLocks
+                :st
+                :pool
+                src: p.path
+                :vid
+                leafShared: ls
+                :nodeid
+                :lineno
+                :colno
+            )
+        }
+    }
+}
+
+# pinCallResult -- what a call's result keeps locked. An `outx` result (or,
+# until the marker retires, a `.takex`/`.holdx` one) and a reference return
+# (`.borrow`/`.view`) pin the receiver and every borrow/view argument, each
+# at the strength the call took on it: SHARED for a `.view` input or a
+# whitelisted reader, EXCLUSIVE for a `.borrow` one. A reference result makes
+# its binding borrowed; `.view` makes it readonly; `.hold` freezes it.
+pinCallResult: function {
+    # the symbol table whose pin side channel receives the pins
+    st: zenv.ZSymbolTable
+    # the callee, whose return flags say whether the result pins at all
+    funcId: ztypes.tid
+    # the argument pins the call walk collected
+    pins: (List ztyping.PinPath).view
+    # the receiver path, empty when the receiver is not a variable
+    recvPath: (ListVal zast.nameid).view
+    # the strength the call took on the receiver
+    recvShared: bool
+} is {
+    doPins: optBoolOr o: (st.typing.funcPins.get key: funcId) d: false
+    isRef: optBoolOr o: (st.typing.funcReturnsBorrow.get key: funcId) d: false
+    if isRef then doPins = true
+    # argument evaluation may leave residue (an inner marked-return call, e.g.
+    # the get in `(xs.get i).copy`): the outer call consumes it, and only the
+    # pushes below re-establish one
+    drainPendingBorrow :st
+    if doPins then {
+        pinsPush :st path: recvPath shared: recvShared
+        with pit: pins.iterate do for p: pit loop pinsPush :st path: p.path shared: p.shared
+        if (isRef) == false then st.typing.pendingBorrowOwned = true
+        if (optBoolOr o: (st.typing.funcReturnsView.get key: funcId) d: false) then {
+            st.typing.pendingBorrowReadonly = true
+        }
+    }
+    # `hold`: owned and READONLY with no pin, so it is set after the drain
+    if (optBoolOr o: (st.typing.funcReturnsFrozen.get key: funcId) d: false) then {
+        st.typing.pendingBorrowFrozen = true
+    }
 }
 
 # installBorrowLocks -- SHARED on every path prefix, EXCLUSIVE on the leaf
@@ -26843,19 +27030,18 @@ hoistArg: function {ast: Ast
     if paramType > 0 then atomT = ztypes.tid.create from: paramType.u64
     setm: atomT
     stampGate :st nid: atomId.u64 tid: (ztypes.tid.create from: setm.u64)
-    hbsrc: (ListVal zast.nameid)
-    takePendingBorrow :st dst: hbsrc
+    hpins0: (List ztyping.PinPath)
+    takePendingPins :st dst: hpins0
     # A borrow path whose LEAF is a method describes a CALL, and a call's
     # result ownership is its signature's business: `.copy` hands back a fresh
     # value, so the temp OWNS it and locking `x.copy` as though it were a field
     # read freezes the source for nothing -- which is what made `.copy`, the
     # escape hatch every readonly diagnostic recommends, fail as an argument.
     # c0b482b applied this rule to bindings; the argument path had its own copy.
-    if (pathLeafIsMethod :st path: hbsrc) then {
-        for hbsrc.length > 0 loop hbsrc.pop
-    }
+    hpins: (List ztyping.PinPath)
+    pinsWithoutMethodLeaves :st src: hpins0 dst: hpins
     hown: ztypes.zownership.owned
-    if hbsrc.length > 0 when (typeIsReftype
+    if hpins.length > 0 when (typeIsReftype
         :st
         tid: (ztypes.tid.create from: argType.u64)
     ) then hown = ztypes.zownership.borrowed
@@ -26863,7 +27049,7 @@ hoistArg: function {ast: Ast
     st.reg.setVariableSynthOrigin id: vid origin: "anf".string
     if hown == ztypes.zownership.borrowed then (st.reg.setVariableBorrowOrigin
         id: vid
-        origin: (hbsrc.get i: 0)
+        origin: (pinRootAt pins: hpins i: 0)
     )
     tnId: zast.poolSet pool: ast.names text: tname.stringView
     st.defineVar nameId: tnId :vid
@@ -26878,25 +27064,20 @@ hoistArg: function {ast: Ast
     # receiver locks under a temp holder
     if hown == ztypes.zownership.borrowed then {
         hrt: rootNameIdOf :ast n: (ast.nodes.get i: argId.u64)
-        okInstall: false
-        if (hrt.isZero) == false when hbsrc.length > 0 then {
-            if (hbsrc.get i: 0) == hrt then okInstall = true
-        }
-        if okInstall then {
+        if (hrt.isZero) == false then {
             # A `.view` parameter only reads its argument, so the hoisted temp
             # locks the source SHARED -- exactly as the bare-name leg already
             # did via `isViewArg`. Without this a PATH-shaped argument
             # (`f xs: h.items`) took an exclusive lock and was refused off any
             # readonly holder, while the identical value hoisted to a local by
             # hand was accepted.
-            hlfs: viewParam
-            if st.typing.pendingBorrowShared then hlfs = true
-            (installBorrowLocks
+            (installPins
                 :st
                 pool: ast.names
-                src: hbsrc
+                pins: hpins
                 :vid
-                leafShared: hlfs
+                onlyRoot: hrt
+                forceShared: viewParam
                 nodeid: argId
                 lineno: ln
                 colno: co
@@ -27317,6 +27498,8 @@ lockBorrowedArgPath: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     arg: argref
+    isViewArg: bool
+    pins: List ztyping.PinPath
 } is {
     an: ast.nodes.get i: arg.operation.u64
     src: (ListVal zast.nameid)
@@ -27327,16 +27510,19 @@ lockBorrowedArgPath: function {
         # must not stand in for THIS argument's source:
         # keep a pending path only when it is rooted at
         # this argument's own base
-        if st.typing.pendingBorrowPath.length > 0 then {
-            if (st.typing.pendingBorrowPath.get i: 0) != rt then drainPendingBorrow :st
+        if st.typing.pendingPins.length > 0 then {
+            if (pinsRoot :st) != rt then drainPendingBorrow :st
         }
-        if st.typing.pendingBorrowPath.length == 0 then {
+        if st.typing.pendingPins.length == 0 then {
             rvo: st.lookupVarId nameId: rt
             match (
                 rvo
             ) case some then {
                 drainPendingBorrow :st
-                with sit: src.iterate do for se: sit loop st.typing.pendingBorrowPath.append se
+                pinsPush :st path: src shared: isViewArg
+                # the call's result may keep this pin: a path-shaped argument
+                # pins exactly as a bare one does
+                pinsAppend :pins path: src shared: isViewArg
             } case none then null
         }
     }
@@ -27344,7 +27530,7 @@ lockBorrowedArgPath: function {
 
 # lockNonTrivialArg -- an argument the call cannot hoist to a temp keeps its
 # source: take it, or lock the path it reads through for the call's duration.
-# Answers the lock root.
+# A locked path joins `pins`, the locks the call's result may keep.
 lockNonTrivialArg: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -27354,10 +27540,9 @@ lockNonTrivialArg: function {
     isTake: bool
     isLockish: bool
     isViewArg: bool
-    lockRootIn: zast.nameid
+    pins: List ztyping.PinPath
     arg: argref
-} out zast.nameid is {
-    lockRoot: lockRootIn
+} is {
     # A construction or take parameter consumes the hoisted
     # temp inside the call scope; a lock/borrow parameter
     # locks it there.
@@ -27371,10 +27556,10 @@ lockNonTrivialArg: function {
         :st
         tid: (ztypes.tid.create from: vt.u64)
     ) then {
-        lockBorrowedArgPath :st :ast :arg
+        lockBorrowedArgPath :st :ast :arg :isViewArg :pins
     }
     hadPending: false
-    if st.typing.pendingBorrowPath.length > 0 then hadPending = true
+    if st.typing.pendingPins.length > 0 then hadPending = true
     tnm: (hoistArg
         :ast
         :st
@@ -27401,11 +27586,10 @@ lockNonTrivialArg: function {
             )
         }
     }
-    return lockRoot
 }
 # hoistTrivialArg -- an argument the call CAN hoist to a temp still locks its
-# source when the parameter borrows it: the temp aliases the same storage.
-# Answers the lock root.
+# source when the parameter borrows it: the temp aliases the same storage. A
+# locked source joins `pins`, the locks the call's result may keep.
 hoistTrivialArg: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -27414,12 +27598,10 @@ hoistTrivialArg: function {
     pt: u64
     isTake: bool
     isLockish: bool
-    isDeclLock: bool
     isViewArg: bool
-    lockRootIn: zast.nameid
+    pins: List ztyping.PinPath
     arg: argref
-} out zast.nameid is {
-    lockRoot: lockRootIn
+} is {
     # A trivial literal argument coerces in place at the
     # parameter boundary (no hoist: restamp its bare node).
     if pt > 0 then {
@@ -27473,19 +27655,21 @@ hoistTrivialArg: function {
                         lineno: (nodeLine n: (ast.nodes.get i: arg.operation.u64))
                         colno: (nodeCol n: (ast.nodes.get i: arg.operation.u64))
                     )
-                    if lockRoot.isZero then lockRoot = bnId
-                    if isDeclLock then st.typing.lastLockParamRoot = bnId
+                    # the call's result may keep this pin
+                    bnp: (ListVal zast.nameid)
+                    bnp.append bnId
+                    pinsAppend :pins path: bnp shared: isViewArg
                 }
             }
         } case none then null
     }
-    return lockRoot
 }
 
 
 # hoistAndLockArg -- what the CALL does to the argument's source: hoist a
 # non-trivial value to a temp, take ownership of it, or place the lock a
-# borrowed parameter holds for the call's duration. Answers the lock root.
+# borrowed parameter holds for the call's duration. A locked source joins
+# `pins`, the locks the call's result may keep.
 hoistAndLockArg: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -27494,14 +27678,12 @@ hoistAndLockArg: function {
     pt: u64
     isTake: bool
     isLockish: bool
-    isDeclLock: bool
     isViewArg: bool
-    lockRootIn: zast.nameid
+    pins: List ztyping.PinPath
     arg: argref
-} out zast.nameid is {
-    lockRoot: lockRootIn
+} is {
     if (argIsTrivial :ast op: (ast.nodes.get i: arg.operation.u64)) then {
-        lockRoot = (hoistTrivialArg
+        (hoistTrivialArg
             :st
             :ast
             :call
@@ -27509,13 +27691,12 @@ hoistAndLockArg: function {
             :pt
             :isTake
             :isLockish
-            :isDeclLock
             :isViewArg
-            lockRootIn: lockRoot
+            :pins
             :arg
         )
     } else {
-        lockRoot = (lockNonTrivialArg
+        (lockNonTrivialArg
             :st
             :ast
             :call
@@ -27524,11 +27705,10 @@ hoistAndLockArg: function {
             :isTake
             :isLockish
             :isViewArg
-            lockRootIn: lockRoot
+            :pins
             :arg
         )
     }
-    return lockRoot
 }
 # coercePositionalArg -- a positional argument takes the parameter at its own
 # index: check the value against that parameter's type, and coerce a literal to
@@ -27773,8 +27953,6 @@ argownership: record {
     isTake: bool
     # the parameter locks its argument for the call
     isLockish: bool
-    # the lock is declared rather than implied by a borrow
-    isDeclLock: bool
     # the parameter is `.view`, so the argument stays readable across the call
     isViewArg: bool
     # the parameter's type, which the argument is coerced to
@@ -27794,7 +27972,6 @@ argOwnershipOf: function {
 } out argownership is {
     isTake: false
     isLockish: false
-    isDeclLock: false
     isViewArg: false
     pt: u64
     if funcId > 0 when pn.length > 0 then {
@@ -27853,7 +28030,7 @@ argOwnershipOf: function {
             }
         }
     }
-    return (argownership :isTake :isLockish :isDeclLock :isViewArg :pt)
+    return (argownership :isTake :isLockish :isViewArg :pt)
 }
 # reportPositionalNotAllowed -- a call to a function whose parameters are all
 # named cannot pass one positionally; say so at the argument.
@@ -27880,9 +28057,8 @@ reportPositionalNotAllowed: function {
 
 # checkTypedCallArg -- everything one typed argument goes through: the parameter
 # it binds to, coercion to that parameter's type, the ownership the call takes
-# on it, and the lock a borrowed argument places on its source. Answers the
-# lock root, which the call as a whole reports.
-# what a call does to one argument's source, read off the parameter it binds to.
+# on it, and the lock a borrowed argument places on its source. A locked source
+# joins `pins`, the locks the call's result may keep.
 checkTypedCallArg: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -27895,11 +28071,10 @@ checkTypedCallArg: function {
     argIdx: u64
     boundArgIds: (ListVal u64)
     vt: ztypes.tid
-    lockRootIn: zast.nameid
+    pins: List ztyping.PinPath
     arg: argref
-} out zast.nameid is {
-    lockRoot: lockRootIn
-    if vt.isZero then return lockRoot
+} is {
+    if vt.isZero then return
     pn: zast.nameTextCopy :ast ref: arg.name
     (checkNamedArgParam
         :st
@@ -27938,7 +28113,6 @@ checkTypedCallArg: function {
     aow: argOwnershipOf :st :ast :funcId :isCtor pn: pn.stringView :vt
     isTake: aow.isTake
     isLockish: aow.isLockish
-    isDeclLock: aow.isDeclLock
     isViewArg: aow.isViewArg
     pt: aow.pt
     dispHit: false
@@ -27952,7 +28126,7 @@ checkTypedCallArg: function {
             st.typing.argDisposition.set key: dispNid.u64 value: dispVal
         }
     }
-    lockRoot = (hoistAndLockArg
+    (hoistAndLockArg
         :st
         :ast
         :call
@@ -27960,12 +28134,10 @@ checkTypedCallArg: function {
         :pt
         :isTake
         :isLockish
-        :isDeclLock
         :isViewArg
-        lockRootIn: lockRoot
+        :pins
         :arg
     )
-    return lockRoot
 }
 # ctorEffectiveTid -- for a constructor call, the type whose FIELDS are the
 # parameter list: the type being built, reached through whatever shape the
@@ -28030,7 +28202,7 @@ ctorArgTakesFnRef: function {
 }
 
 # walkOneCallArg -- type one argument of a call and bind it to its parameter.
-# Answers the lock root, which the call reports as a whole.
+# A locked source joins `pins`, the locks the call's result may keep.
 walkOneCallArg: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -28043,10 +28215,9 @@ walkOneCallArg: function {
     recvImplicit: bool
     argIdx: u64
     boundArgIds: (ListVal u64)
-    lockRootIn: zast.nameid
+    pins: List ztyping.PinPath
     argId: u32
-} out zast.nameid is {
-    lockRoot: lockRootIn
+} is {
     arg: argRefAt :ast nid: (zast.nodeid.create from: argId.u32)
     # THE RECEIVER IS SUPPLIED ONCE. An argument that names the receiver
     # parameter when the call already supplied it supplies it twice, and
@@ -28081,7 +28252,13 @@ walkOneCallArg: function {
         if useNC then {
             vt = ztypes.tid.create from: (valueNoCoerceAt :st :unitDecl :ast nid: arg.operation)
         } else {
+            caPrev: st.typing.callArgNode
+            st.typing.callArgNode = (innermostNodeId
+                :ast
+                n: (ast.nodes.get i: arg.operation.u64)
+            ).u64
             vt = checkValueAt :st :unitDecl :ast nid: arg.operation
+            st.typing.callArgNode = caPrev
         }
         if vt.u64 == 0 when st.typing.errors.length == errV then {
             (reportUnresolvedValue
@@ -28110,7 +28287,7 @@ walkOneCallArg: function {
                 :arg
             )
         }
-        lockRoot = (checkTypedCallArg
+        (checkTypedCallArg
             :st
             :ast
             :call
@@ -28122,16 +28299,17 @@ walkOneCallArg: function {
             :argIdx
             :boundArgIds
             :vt
-            lockRootIn: lockRoot
+            :pins
             :arg
         )
     }
-    return lockRoot
 }
 
-# hoist and typecheck each argument of a call.
 # walkCallArgsHoist -- the user-call argument walk: type each argument, then
-# hoist non-trivial ones into synth temps.
+# hoist non-trivial ones into synth temps. Answers the pins the call's result
+# may keep: every borrow/view argument's source path, at the strength the call
+# took on it -- a LOCAL list, appended through the callees' parameter (a field
+# list passed as an argument is a non-owning shallow copy).
 walkCallArgsHoist: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -28141,9 +28319,8 @@ walkCallArgsHoist: function {
     isCtor: bool
     reportUnknown: bool
     recvImplicit: bool
-} out zast.nameid is {
-    lockRoot: zast.nameid
-    st.typing.lastLockParamRoot = zast.nameid
+} out (List ztyping.PinPath) is {
+    pins: (List ztyping.PinPath)
     argIdx: u64
     boundArgIds: (ListVal u64)
     effId: funcId
@@ -28153,7 +28330,7 @@ walkCallArgsHoist: function {
     for kAiter < call.nargs loop {
         argId: (zast.callArgAt :ast nid: call.nid i: kAiter).u32
         kAiter = kAiter + 1
-        lockRoot = (walkOneCallArg
+        (walkOneCallArg
             :st
             :unitDecl
             :ast
@@ -28165,12 +28342,12 @@ walkCallArgsHoist: function {
             :recvImplicit
             :argIdx
             :boundArgIds
-            lockRootIn: lockRoot
+            :pins
             :argId
         )
         argIdx = argIdx + 1
     }
-    return lockRoot
+    return pins
 }
 # boxArgumentTid -- the type a `Box` construction is given: an explicit `t:` type
 # argument, or the type of the single value it boxes. 0 when neither is present.
@@ -28812,7 +28989,7 @@ checkYieldCall: function {
     ) case some then {
         if (typeIsReftype :st tid: (ztypes.tid.create from: yvo.u64)) then {
             drainPendingBorrow :st
-            st.typing.pendingBorrowPath.append yvn
+            pinsPushOne :st nameId: yvn shared: false
         }
         # the CALL wears the resumed type. A yield in expression position is
         # hoisted to its own statement by the emitter, and the temp it binds
@@ -29079,82 +29256,18 @@ checkTypedefOrProjectionCall: function {
     }
     return (callleg handled: false tid: ztypes.tid)
 }
-# pinMethodBorrowReturn -- a method whose return BORROWS pins what it borrowed
-# from for the binding's life: the receiver, or the argument the lock parameter
-# named. An iterator's pin is exclusive; every other read-view is shared.
-pinMethodBorrowReturn: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    call: callref
-    dro: ztypes.tid
-    mres: ztypes.tid
-    mlr: zast.nameid
-} is {
-    if (optBoolOr o: (st.typing.funcReturnsBorrow.get key: dro) d: false) then {
-        rtupB: (ListVal zast.nameid)
-        callableNode: ast.nodes.get i: call.callable.u64
-        methodReceiverTuple :ast n: callableNode dst: rtupB
-        pushedB: false
-        if rtupB.length > 0 then {
-            rvoB: st.lookupVarId nameId: (rtupB.get i: 0)
-            match (
-                rvoB
-            ) case some then {
-                drainPendingBorrow :st
-                with tib: rtupB.iterate do for segB: tib loop st.typing.pendingBorrowPath.append segB
-                # An iterator pins its container as strongly
-                # as its receiver is declared: a `view` receiver
-                # only reads it, so the pin is readonly and
-                # other readers of the container still pass.
-                if (returnIsIteratorTid
-                    :st
-                    tid: (ztypes.tid.create from: mres.u64)
-                ) == false then {
-                    st.typing.pendingBorrowShared = true
-                } else {
-                    if (methodReceiverIsView :st mid: dro) then st.typing.pendingBorrowShared = true
-                }
-                if (optBoolOr
-                    o: (st.typing.funcReturnsView.get key: dro)
-                    d: false
-                ) then {
-                    st.typing.pendingBorrowShared = true
-                    st.typing.pendingBorrowReadonly = true
-                }
-                pushedB = true
-            } case none then null
-        }
-        if (pushedB) == false when (mlr.isZero) == false then {
-            drainPendingBorrow :st
-            st.typing.pendingBorrowPath.append mlr
-            if (returnIsIteratorTid
-                :st
-                tid: (ztypes.tid.create from: mres.u64)
-            ) == false then {
-                st.typing.pendingBorrowShared = true
-            } else {
-                if (methodReceiverIsView :st mid: dro) then st.typing.pendingBorrowShared = true
-            }
-            if (optBoolOr
-                o: (st.typing.funcReturnsView.get key: dro)
-                d: false
-            ) then {
-                st.typing.pendingBorrowShared = true
-                st.typing.pendingBorrowReadonly = true
-            }
-        }
-    }
-}
 # lockMethodReceiver -- the lock a method call places on its RECEIVER: a mutating
 # method takes it exclusively, a `view` receiver shares it, and a receiver that
-# is not a bare name locks the path it was reached through.
+# is not a bare name locks the path it was reached through. Answers whether
+# that lock was SHARED -- the strength the result's pin keeps on the receiver.
 lockMethodReceiver: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     call: callref
     dro: ztypes.tid
     rro: StringView
-} is {
+} out bool is {
+        recvShared: true
         if rro.length > 0 then {
             rvo2: st.lookupVarId nameId: (nameIdOf :ast name: rro)
             match (
@@ -29198,6 +29311,7 @@ lockMethodReceiver: function {
                             mname: rmn.stringView
                         )
                         if (methodReceiverIsView :st mid: dro) then shr = true
+                        recvShared = shr
                         (lockCallArg
                             :st
                             pool: ast.names
@@ -29212,105 +29326,74 @@ lockMethodReceiver: function {
                 } case none then null
             } case none then null
         }
-        if rro.length == 0 then {
-            # Nested receiver (st.reg.map.get ...): the root-name
-            # block above cannot see it. Lock the full receiver
-            # tuple; the immediate receiver type (the stamped
-            # parent) drives the reader/writer kind.
-            rtupC: (ListVal zast.nameid)
-            callableNode: ast.nodes.get i: call.callable.u64
-            methodReceiverTuple :ast n: callableNode dst: rtupC
-            if rtupC.length > 1 then {
-                rvoN: st.lookupVarId nameId: (rtupC.get i: 0)
-                match (
-                    rvoN
-                ) case some then {
-                    callableNode: ast.nodes.get i: call.callable.u64
-                    rpidN: dottedParentNodeId :ast n: callableNode
-                    rvtN: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rpidN.u64
-                    if rvtN > 0 when (typeIsReftype
-                        :st
-                        tid: (ztypes.tid.create from: rvtN.u64)
-                    ) then {
-                        callableNode: ast.nodes.get i: call.callable.u64
-                        rmnN: (zast.nameTextAt
-                            :ast
-                            ref: (dottedChildNameId :ast n: callableNode)
-                        )
-                        shrN: (isContainerReaderCall
-                            :ast
-                            :st
-                            recvTid: rvtN
-                            mname: rmnN.stringView
-                        )
-                        if (methodReceiverIsView :st mid: dro) then shrN = true
-                        (lockCallPath
-                            :st
-                            :ast
-                            pool: ast.names
-                            path: rtupC
-                            callId: call.nid.u64
-                            shared: shrN
-                            nodeid: call.nid
-                            lineno: call.lineno
-                            colno: call.colno
-                        )
-                    }
-                } case none then null
-            }
-        }
-}
-# pinMethodTakexReturn -- a `takex` return is OWNED but still pins the source it
-# was built from: the same receiver pin a borrow return takes, without demoting
-# the binding it lands on.
-pinMethodTakexReturn: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    call: callref
-    dro: ztypes.tid
-    mres: ztypes.tid
-    mlr: zast.nameid
-} is {
-    if (optBoolOr
-        o: (st.typing.funcPins.get key: dro)
-        d: false
-    ) then {
-        # `takex`: pin the source the result was built from,
-        # while the binding stays OWNED. The source is the
-        # receiver when there is one; else `mlr`, the call's
-        # lock root, set for any non-owned argument -- which is
-        # what lets a `borrow` parameter source the pin.
-        rtupX: (ListVal zast.nameid)
-        xq4X: ast.nodes.get i: call.callable.u64
-        methodReceiverTuple :ast n: xq4X dst: rtupX
-        pushedX: false
-        if rtupX.length > 0 then {
-            rvoX: st.lookupVarId nameId: (rtupX.get i: 0)
-            match (
-                rvoX
-            ) case some then {
-                drainPendingBorrow :st
-                with tix: rtupX.iterate do for segX: tix loop st.typing.pendingBorrowPath.append segX
-                if (returnIsIteratorTid
-                    :st
-                    tid: (ztypes.tid.create from: mres.u64)
-                ) == false then {
-                    st.typing.pendingBorrowShared = true
-                } else {
-                    if (methodReceiverIsView :st mid: dro) then st.typing.pendingBorrowShared = true
-                }
-                st.typing.pendingBorrowOwned = true
-                pushedX = true
-            } case none then null
-        }
-        if (pushedX) == false when (mlr.isZero) == false then {
-            drainPendingBorrow :st
-            st.typing.pendingBorrowPath.append mlr
-            st.typing.pendingBorrowOwned = true
-        }
-    }
+        if rro.length == 0 then recvShared = (lockNestedMethodReceiver :st :ast :call :dro)
+        return recvShared
 }
 
+# lockNestedMethodReceiver -- the receiver is not a bare name (st.reg.map.get
+# ...), so the root-name lock cannot see it: lock the full receiver tuple for
+# the call; the immediate receiver type (the stamped parent) drives the
+# reader/writer kind. Answers whether the lock was SHARED (true when nothing
+# was locked).
+lockNestedMethodReceiver: function {
+    # the symbol table the lock row is laid in
+    st: zenv.ZSymbolTable
+    # the tree the receiver path is read from
+    ast: Ast.view
+    # the call whose receiver is locked
+    call: callref
+    # the method called, whose receiver marker sets the strength
+    dro: ztypes.tid
+} out bool is {
+    recvShared: true
+    # Nested receiver (st.reg.map.get ...): the root-name
+    # block above cannot see it. Lock the full receiver
+    # tuple; the immediate receiver type (the stamped
+    # parent) drives the reader/writer kind.
+    rtupC: (ListVal zast.nameid)
+    callableNode: ast.nodes.get i: call.callable.u64
+    methodReceiverTuple :ast n: callableNode dst: rtupC
+    if rtupC.length > 1 then {
+        rvoN: st.lookupVarId nameId: (rtupC.get i: 0)
+        match (
+            rvoN
+        ) case some then {
+            callableNode: ast.nodes.get i: call.callable.u64
+            rpidN: dottedParentNodeId :ast n: callableNode
+            rvtN: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rpidN.u64
+            if rvtN > 0 when (typeIsReftype
+                :st
+                tid: (ztypes.tid.create from: rvtN.u64)
+            ) then {
+                callableNode: ast.nodes.get i: call.callable.u64
+                rmnN: (zast.nameTextAt
+                    :ast
+                    ref: (dottedChildNameId :ast n: callableNode)
+                )
+                shrN: (isContainerReaderCall
+                    :ast
+                    :st
+                    recvTid: rvtN
+                    mname: rmnN.stringView
+                )
+                if (methodReceiverIsView :st mid: dro) then shrN = true
+                recvShared = shrN
+                (lockCallPath
+                    :st
+                    :ast
+                    pool: ast.names
+                    path: rtupC
+                    callId: call.nid.u64
+                    shared: shrN
+                    nodeid: call.nid
+                    lineno: call.lineno
+                    colno: call.colno
+                )
+            }
+        } case none then null
+    }
+    return recvShared
+}
 # checkResolvedMethodCall -- the callable resolved through the dotted walk to a
 # METHOD: check its arguments against that method's parameters, and answer what
 # the call yields. The typedef and projection constructor forms answer here
@@ -29410,7 +29493,7 @@ checkResolvedMethodCall: function {
         # rather than asking again: two derivations of one question is what let
         # a type-qualified call be emitted with its receiver slot never filled.
         if (recvVal) == false then st.typing.callRecvFromArgs.add item: call.nid.u64
-        mlr: (walkCallArgsHoist
+        pins: (walkCallArgsHoist
             :st
             :unitDecl
             :ast
@@ -29422,9 +29505,10 @@ checkResolvedMethodCall: function {
         )
         checkMissingCallArgs :ast :st :call funcId: dro isCtor: false recvImplicit: recvVal
         # The receiver locks for the call's duration too, after
-        # the args.
+        # the args; the strength it took is the strength the result's pin
+        # keeps on it.
         rro: methodReceiverRoot :ast n: (ast.nodes.get i: call.callable.u64)
-        lockMethodReceiver :st :ast :call :dro rro: rro.stringView
+        recvShr: (lockMethodReceiver :st :ast :call :dro rro: rro.stringView)
         st.popTo marker: mcm
         mres: ztypes.tid
         mro: methodReturnOf :st mid: dro
@@ -29458,44 +29542,27 @@ checkResolvedMethodCall: function {
                 }
             }
         }
-        # receiver/argument evaluation may leave a pending borrow
-        # (an inner marked-return call, e.g. the get in
-        # `(xs.get i).copy`): an owning outer call consumes it --
-        # only the push blocks below re-establish one.
-        drainPendingBorrow :st
-        xroot: st.typing.lastLockParamRoot
-        if (xroot.isZero) == false then {
-            st.typing.lastLockParamRoot = zast.nameid
-            drainPendingBorrow :st
-            st.typing.pendingBorrowPath.append xroot
+        # the receiver's pin: its tuple when its root is a variable (a
+        # unit-qualified free function reached through this path has none,
+        # and pins its arguments alone), at the strength the call took
+        rtupP: (ListVal zast.nameid)
+        {
+            callableNodeP: ast.nodes.get i: call.callable.u64
+            methodReceiverTuple :ast n: callableNodeP dst: rtupP
         }
-        pinMethodTakexReturn :st :ast :call :dro :mres :mlr
-        pinMethodBorrowReturn :st :ast :call :dro :mres :mlr
-        # A view-typed result (OptionView from Map.get, ...) is a
-        # borrow into the receiver even without a .borrow marker:
-        # the wrapper is synthesized, so the return TYPE is the
-        # marker. Report the receiver root so the binding goes
-        # borrowed (payload moves rejected, view lock installed).
-        if mres > 0 when mlr.isZero then {
+        if rtupP.length > 0 then {
+            rvbP: st.lookupVarId nameId: (rtupP.get i: 0)
+            if rvbP.none then for rtupP.length > 0 loop rtupP.pop
+        }
+        pinCallResult :st funcId: dro :pins recvPath: rtupP recvShared: recvShr
+        # A view-typed result (OptionView from Map.get, ...) is a borrow into
+        # the receiver even without a marker: the wrapper is synthesized, so
+        # the return TYPE is the marker. Pin the receiver SHARED so the
+        # binding goes borrowed (payload moves rejected, view lock installed).
+        if mres > 0 when rtupP.length > 0 when st.typing.pendingPins.length == 0 then {
             if (isViewFamilyTid :ast :st tid: (ztypes.tid.create from: mres.u64)) then {
-                rtupV: (ListVal zast.nameid)
-                callableNode: ast.nodes.get i: call.callable.u64
-                methodReceiverTuple :ast n: callableNode dst: rtupV
-                if rtupV.length > 0 then {
-                    rvb: st.lookupVarId nameId: (rtupV.get i: 0)
-                    match (
-                        rvb
-                    ) case some then {
-                        drainPendingBorrow :st
-                        with tiv: rtupV.iterate do for segV: tiv loop st.typing.pendingBorrowPath.append segV
-                    } case none then null
-                }
+                pinsPush :st path: rtupP shared: true
             }
-        }
-        # `hold`: owned and READONLY with no pin, so it is set after every
-        # drain this leg performs -- an earlier set would not survive them.
-        if (optBoolOr o: (st.typing.funcReturnsFrozen.get key: dro) d: false) then {
-            st.typing.pendingBorrowFrozen = true
         }
         st.typing.callKind.set key: call.nid.u64 value: zast.callkind.regular
         return (ztypes.tid.create from: mres)
@@ -30336,7 +30403,7 @@ checkUserFnCall: function {
         stampRefDecl :st nid: calid.u64 declId: sfG
     }
     cm: st.pushCall
-    lockRoot: (walkCallArgsHoist
+    pins: (walkCallArgsHoist
         :st
         :unitDecl
         :ast
@@ -30379,22 +30446,22 @@ checkUserFnCall: function {
             st.typing.callKind.set key: call.nid.u64 value: zast.callkind.unionCreate
         }
         # a construction pins its sources exactly as a direct call of the same
-        # `create` does. `out this.takex` is a statement about what the RESULT
-        # holds -- a reference into an argument -- so which spelling reached the
+        # `create` does. `outx this` is a statement about what the RESULT holds
+        # -- a reference into an argument -- so which spelling reached the
         # create, the bare type name or `T.create`, cannot change it. The
-        # binding stays owned; only the source is pinned.
+        # binding stays owned; only the sources are pinned.
         cxO: st.typing.declChildOfId parentTypeId: funcId nameId: zast.names.wkCreate
         match (
             cxO
         ) case some then {
-            if (optBoolOr
-                o: (st.typing.funcPins.get key: cxO)
-                d: false
-            ) when (lockRoot.isZero) == false then {
-                drainPendingBorrow :st
-                st.typing.pendingBorrowPath.append lockRoot
-                st.typing.pendingBorrowOwned = true
-            }
+            noRecvC: (ListVal zast.nameid)
+            (pinCallResult
+                :st
+                funcId: (ztypes.tid.create from: cxO.u64)
+                :pins
+                recvPath: noRecvC
+                recvShared: true
+            )
         } case none then null
     } else {
         st.typing.callKind.set key: call.nid.u64 value: zast.callkind.regular
@@ -30409,46 +30476,11 @@ checkUserFnCall: function {
                 stampGate :st nid: call.nid.u64 tid: setr
             }
         } case none then null
-        # A `.borrow`-marked return borrows from the lock parameter's
-        # argument: report the source for the binding site. Argument
+        # the result's pins: every borrow/view argument at the strength the
+        # call took on it (a free function has no receiver). Argument
         # evaluation residue drains first (owning calls consume it).
-        drainPendingBorrow :st
-        xroot2: st.typing.lastLockParamRoot
-        if (xroot2.isZero) == false then {
-            st.typing.lastLockParamRoot = zast.nameid
-            drainPendingBorrow :st
-            st.typing.pendingBorrowPath.append xroot2
-        }
-        if (optBoolOr
-            o: (st.typing.funcPins.get key: funcId)
-            d: false
-        ) when (lockRoot.isZero) == false then {
-            # `takex`: pin the source, but the binding stays OWNED
-            drainPendingBorrow :st
-            st.typing.pendingBorrowPath.append lockRoot
-            st.typing.pendingBorrowOwned = true
-        }
-        if (optBoolOr
-            o: (st.typing.funcReturnsBorrow.get key: funcId)
-            d: false
-        ) when (lockRoot.isZero) == false then {
-            drainPendingBorrow :st
-            st.typing.pendingBorrowPath.append lockRoot
-            if (returnIsIteratorTid :st tid: result) == false then {
-                st.typing.pendingBorrowShared = true
-            } else {
-                if (methodReceiverIsView :st mid: funcId) then st.typing.pendingBorrowShared = true
-            }
-            if (optBoolOr o: (st.typing.funcReturnsView.get key: funcId) d: false) then {
-                st.typing.pendingBorrowShared = true
-                st.typing.pendingBorrowReadonly = true
-            }
-        }
-        # `hold`: owned and READONLY with no pin, so it is set last -- every
-        # drain in this block has run by here and would otherwise clear it.
-        if (optBoolOr o: (st.typing.funcReturnsFrozen.get key: funcId) d: false) then {
-            st.typing.pendingBorrowFrozen = true
-        }
+        noRecvF: (ListVal zast.nameid)
+        pinCallResult :st :funcId :pins recvPath: noRecvF recvShared: true
     }
     return result
 }
@@ -33362,7 +33394,7 @@ walkDefinitionById: function {
     if dnm == 0 then return
     unTd: unitDeclOfTid :st :tid
     if unTd.isZero then return
-    nt: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: dnm)
+    nt: zast.nameTextCopy :ast ref: (zast.nameid.create from: dnm)
     (walkDeclaredDef
         :st
         frame: st.curFrame
@@ -38370,7 +38402,7 @@ instantiatedAliasFold: function {
     if own.isZero then return false
     unm: unitRootOfDecl :st :declId
     if unm.isZero then return false
-    dnm: zast.poolTextAt pool: ast.names ref: (declNameIdOf :st :declId)
+    dnm: zast.nameTextCopy :ast ref: (declNameIdOf :st :declId)
     if dnm.length == 0 then return false
     cdr: callRefAt :ast nid: opId
     return (resolveInstantiatedAlias
