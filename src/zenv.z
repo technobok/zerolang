@@ -457,9 +457,37 @@ ZSymbolTable: class {
             }
             p2 = p2 + 1
         }
+        # a lock lives as long as its HOLDER: a row a variable of an ENCLOSING
+        # frame holds -- a value that moved out of this frame with its locks --
+        # survives the close, laid again over its root, which is still open
+        mLocks: (List ztypes.ZEntry)
+        p3: start
+        for p3 < endIdx loop {
+            e: this.entries.get i: p3
+            if e.hasLock when e.lockHolder.kind.varKind then {
+                hf: this.frameOfVar vid: (ztypes.vid.create from: e.lockHolder.id)
+                rf: this.typing.declParentOf declId: e.declId
+                if (hf.isZero) == false when hf != top when rf != top then {
+                    le: this.reg.newEntry ztypeId: e.ztypeId
+                    le.declId = e.declId
+                    le.hasLock = true
+                    le.lockType = e.lockType
+                    le.lockScope = e.lockScope
+                    le.lockHolder = e.lockHolder
+                    with lpit: e.lockPath.iterate do for seg: lpit loop le.lockPath.append seg
+                    mLocks.append le
+                }
+            }
+            p3 = p3 + 1
+        }
         this.dropTail :start
         this.open.pop
         this.curFrame = this.innermostFrame
+        for mLocks.length > 0 loop {
+            le2: mLocks.pop
+            d2: le2.declId
+            this.appendRow row: le2 declId: d2
+        }
         mc: mDecls.length
         mi: u64
         for mi < mc loop {
@@ -812,6 +840,86 @@ ZSymbolTable: class {
             cur = this.typing.declParentOf declId: cur
         }
         return 0
+    }
+
+    # frameOfVar -- the open frame that binds `vid`, climbing from the innermost;
+    # zero when no open frame binds it.
+    frameOfVar: function {this: this.view vid: ztypes.vid} out ztypes.declid is {
+        cur: this.curFrame
+        for cur > 0 loop {
+            if (this.typing.declIsFrame declId: cur) == false then return ztypes.declid
+            kn: this.typing.declChildSlots declId: cur
+            ki: kn
+            for ki > 0 loop {
+                ki = ki - 1
+                kd: this.typing.declChildAt declId: cur index: ki
+                if (this.typing.declLocalVarOf declId: kd) == vid then return cur
+            }
+            cur = this.typing.declParentOf declId: cur
+        }
+        return ztypes.declid
+    }
+
+    # frameEncloses -- `outer` is `inner` or one of the frames enclosing it, so
+    # a value bound in `outer` lives at least as long as one bound in `inner`.
+    frameEncloses: function {
+        this: this.view
+        # the frame expected to be the outer one
+        outer: ztypes.declid
+        # the frame whose ancestry is climbed
+        inner: ztypes.declid
+    } out bool is {
+        cur: inner
+        for cur > 0 loop {
+            if cur == outer then return true
+            if (this.typing.declIsFrame declId: cur) == false then return false
+            cur = this.typing.declParentOf declId: cur
+        }
+        return false
+    }
+
+    # heldLockPaths -- the TARGET rows a variable holds, as pins: the path and
+    # its strength. Intent prefixes are re-derived when the pins are installed
+    # under another holder.
+    heldLockPaths: function {
+        this: this.view
+        # the holder whose target rows are collected
+        holder: ztypes.zlockholder
+        # receives one pin per target row
+        dst: List ztyping.PinPath
+    } is {
+        with it: this.entries.iterate do for e: it loop {
+            if e.hasLock when e.lockScope == ztypes.zlockscope.target then {
+                if (holderEq a: e.lockHolder b: holder) then {
+                    p: (ListVal zast.nameid)
+                    with pit: e.lockPath.iterate do for seg: pit loop p.append seg
+                    dst.append (ztyping.PinPath
+                        path: p
+                        shared: (e.lockType == ztypes.zlockstate.shared)
+                        carried: false
+                    )
+                }
+            }
+        }
+    }
+
+    # reholdLocks -- every lock row `from` holds is held by `to` instead: the
+    # value moved, and its locks moved with it.
+    reholdLocks: function {:this from: ztypes.vid to: ztypes.vid} is {
+        n: this.entries.length
+        i: u64
+        for i < n loop {
+            e: this.entries.getMut :i
+            if e.hasLock then {
+                if e.lockHolder.kind.varKind when e.lockHolder.id == from.u64 then {
+                    e.lockHolder = (ztypes.zlockholder
+                        kind: ztypes.zlockholderkind.varKind
+                        id: to.u64
+                    )
+                }
+            }
+            i = i + 1
+        }
     }
 
     # render what holds a lock, so a conflict names the holder rather than only

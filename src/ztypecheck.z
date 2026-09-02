@@ -22339,8 +22339,15 @@ checkTransferMarker: function {
                     blocked: relBlocked
                 )
                 if (relBlocked) == false then {
-                    mh: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: mvo)
-                    st.releaseHeldLocks holder: mh
+                    # a `.take` moved whole into a binding or a reassignment
+                    # keeps its locks for that site to transfer; a `.drop`,
+                    # and a take consumed anywhere else, releases them
+                    keepL: false
+                    if (isMoveMarker name: cn) when st.typing.takeIntoBinding then keepL = true
+                    if (keepL) == false then {
+                        mh: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: mvo)
+                        st.releaseHeldLocks holder: mh
+                    }
                     st.invalidate nameId: mkRootId loc: takenHere
                 }
             } case none then {
@@ -23108,6 +23115,116 @@ checkReturnRooting: function {
     }
 }
 
+# checkReturnCarries -- what a returned value keeps locked. A local that
+# holds locks may be returned only through an `outx` function, and only when
+# every lock is on a parameter or the receiver -- what the caller still owns
+# and its binding will keep locked; a lock on another local would point at a
+# value that dies with this call, and a plain `out` would hand the caller a
+# value whose locks it cannot see. A returned CALL whose result pins a
+# parameter is judged the same way.
+checkReturnCarries: function {
+    # where a refused return is reported
+    st: zenv.ZSymbolTable
+    # the tree the returned expression is read from
+    ast: Ast.view
+    # the returned argument
+    arg: argref
+    # its type
+    argT: ztypes.tid
+} is {
+    if argT.isZero then return
+    if (typeIsReftype :st tid: argT) == false then return
+    fnNm: st.reg.nameOf tid: st.typing.currentFnTid
+    an: ast.nodes.get i: arg.operation.u64
+    rbn: bareAtomNameId :ast n: an
+    if (rbn.isZero) == false then {
+        rvo: st.lookupVarId nameId: rbn
+        match (
+            rvo
+        ) case some then {
+            held: (List ztyping.PinPath)
+            (st.heldLockPaths
+                holder: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: rvo.u64)
+                dst: held
+            )
+            if held.length > 0 then {
+                wn: zast.nameTextCopy :ast ref: rbn
+                src0: zast.nameTextCopy :ast ref: (pinRootAt pins: held i: 0)
+                if (st.typing.currentFnPins) == false then {
+                    m1: "Cannot return '\{wn}': it holds locks on '\{src0}', which the caller cannot see because '\{fnNm}' is `out`, not `outx`"
+                    (addError
+                        :st
+                        nodeid: arg.nid
+                        lineno: arg.lineno
+                        colno: arg.colno
+                        e: zast.err.ownerError
+                        msg: m1
+                    )
+                    return
+                }
+                with hit: held.iterate do for hp: hit loop {
+                    srcNm: hp.path.get i: 0
+                    svo: st.lookupVarId nameId: srcNm
+                    match (
+                        svo
+                    ) case some then {
+                        if (st.reg.variableOriginOf id: svo) != ztypes.zvarorigin.param then {
+                            sn: zast.nameTextCopy :ast ref: srcNm
+                            m2: "Cannot return '\{wn}': it holds locks on '\{sn}', which dies with this call"
+                            (addError
+                                :st
+                                nodeid: arg.nid
+                                lineno: arg.lineno
+                                colno: arg.colno
+                                e: zast.err.ownerError
+                                msg: m2
+                            )
+                            return
+                        }
+                    } case none then null
+                }
+                # the locks travel with the value: the caller's binding installs
+                # the callee's pins, which name these very parameters
+                st.releaseHeldLocks holder: (ztypes.zlockholder
+                    kind: ztypes.zlockholderkind.varKind
+                    id: rvo.u64
+                )
+            }
+        } case none then null
+        return
+    }
+    # a returned call: its pending pins are what the result keeps locked
+    if (callNodeIdOf :ast n: an).isZero then return
+    if st.typing.currentFnPins then return
+    if st.typing.currentReturnsBorrow then return
+    if st.typing.pendingPins.length == 0 then return
+    # found first, reported after: the report takes `st` while the pins are
+    # being read through it
+    badPn: zast.nameid
+    with pit: st.typing.pendingPins.iterate do for p: pit loop {
+        pvo: st.lookupVarId nameId: (p.path.get i: 0)
+        match (
+            pvo
+        ) case some then {
+            if badPn.isZero when (st.reg.variableOriginOf id: pvo) == ztypes.zvarorigin.param then {
+                badPn = p.path.get i: 0
+            }
+        } case none then null
+    }
+    if (badPn.isZero) == false then {
+        pn: zast.nameTextCopy :ast ref: badPn
+        m3: "Cannot return this call's result: it keeps '\{pn}' locked, which the caller cannot see because '\{fnNm}' is `out`, not `outx`"
+        (addError
+            :st
+            nodeid: arg.nid
+            lineno: arg.lineno
+            colno: arg.colno
+            e: zast.err.ownerError
+            msg: m3
+        )
+    }
+}
+
 # reportMissingReturnValue -- a bare `return` in a function that declares a
 # value: reported at the atom.
 reportMissingReturnValue: function {st: zenv.ZSymbolTable node: atomref} is {
@@ -23814,6 +23931,85 @@ materialiseLiteral: function {
     if dn > 0 then return dn
     return (ztypes.tid.create from: t)
 }
+# moveBindSource -- `b: w`: the bare reftype source moves into the binding.
+# A borrowed source cannot move; an owned one moves with its locks and is
+# then spent.
+moveBindSource: function {
+    # the symbol table the source's locks move within
+    st: zenv.ZSymbolTable
+    # the tree the names are spelt in
+    ast: Ast.view
+    # the binding
+    asgn: asgnref
+    # the source's name
+    name: StringView
+    # the source's variable
+    from: ztypes.vid
+    # the new binding's variable
+    to: ztypes.vid
+} is {
+    if (isBorrowedVar :st vid: from) then {
+        mb5: "Cannot move borrowed variable '\{name}' into an owned binding — borrowed names stay bound to their source for the full scope"
+        (addError
+            :st
+            nodeid: asgn.nid
+            lineno: asgn.lineno
+            colno: asgn.colno
+            e: zast.err.ownerError
+            msg: mb5
+        )
+        return
+    }
+    (transferHeldLocks
+        :st
+        :ast
+        :from
+        :to
+        verb: "into an owned binding"
+        nodeid: asgn.nid
+        lineno: asgn.lineno
+        colno: asgn.colno
+    )
+    (st.invalidate
+        nameId: (nameIdOf :ast :name)
+        loc: (optionval.none ztypes.zsrcpos)
+    )
+}
+
+# transferTakeIntoBinding -- `b: w.take`: the take kept the value's locks for
+# this site to move into the new binding.
+transferTakeIntoBinding: function {
+    # the symbol table holding the taken value's locks
+    st: zenv.ZSymbolTable
+    # the tree the value is spelt in
+    ast: Ast.view
+    # the binding
+    asgn: asgnref
+    # the bound type
+    vt: ztypes.tid
+    # the new binding's variable
+    vid2: ztypes.vid
+} is {
+    if (pathLeafIsTake :ast n: (ast.nodes.get i: asgn.value.u64)) == false then return
+    if (typeIsReftype :st tid: vt) == false then return
+    tb5: markerPeeledBase :ast n: (ast.nodes.get i: asgn.value.u64)
+    if tb5.length == 0 then return
+    td5: st.findLocal nameId: (nameIdOf :ast name: tb5.stringView)
+    if td5.isZero then return
+    tv5: st.typing.declLocalVarOf declId: td5
+    if tv5.u64 == 0 then return
+    (transferHeldLocks
+        :st
+        :ast
+        from: tv5
+        to: vid2
+        verb: "into an owned binding"
+        nodeid: asgn.nid
+        lineno: asgn.lineno
+        colno: asgn.colno
+    )
+}
+
 # checkReadonlyBindSource -- binding FROM a readonly source. The test runs outside
 # the destructor gate: a frozen binding may not be moved out of whether or not its
 # type owns heap, and without a destructor the emitter builds a value from a
@@ -23864,24 +24060,10 @@ checkReadonlyBindSource: function {
         match (
             vo5
         ) case some then {
-            if (isBorrowedVar :st vid: vo5) then {
-                mb5: "Cannot move borrowed variable '\{rn5}' into an owned binding — borrowed names stay bound to their source for the full scope"
-                (addError
-                    :st
-                    nodeid: asgn.nid
-                    lineno: asgn.lineno
-                    colno: asgn.colno
-                    e: zast.err.ownerError
-                    msg: mb5
-                )
-            } else {
-                (st.invalidate
-                    nameId: (nameIdOf :ast name: rn5.stringView)
-                    loc: (optionval.none ztypes.zsrcpos)
-                )
-            }
+            moveBindSource :st :ast :asgn name: rn5.stringView from: vo5 to: vid2
         } case none then null
     }
+    transferTakeIntoBinding :st :ast :asgn :vt :vid2
     # Readonly is deep: a reftype read out of a readonly path is itself
     # readonly, and takes the same self-lock. Without this the binding is
     # a laundering step -- `i: c.sub` off a `view` receiver would hand back
@@ -23954,6 +24136,27 @@ checkReadonlyBindSource: function {
 }
 
 
+# checkMovedValueAt -- type the value of a binding or a reassignment. A
+# `w.take` written as the whole value keeps its locks for the site to
+# transfer rather than releasing them, which the take marker reads off
+# takeIntoBinding.
+checkMovedValueAt: function {
+    # the symbol table the moved value's locks are kept in
+    st: zenv.ZSymbolTable
+    # the unit the walk is in
+    unitDecl: ztypes.declid
+    # the tree the value is read from
+    ast: Ast
+    # the value node
+    nid: zast.nodeid
+} out ztypes.tid is {
+    prev: st.typing.takeIntoBinding
+    st.typing.takeIntoBinding = pathLeafIsTake :ast n: (ast.nodes.get i: nid.u64)
+    vt: checkValueAt :st :unitDecl :ast :nid
+    st.typing.takeIntoBinding = prev
+    return vt
+}
+
 # checkAssignment -- a local binding `name: value`: walk the value, materialise a
 # literal-typed value to its concrete default (the binding takes i64, unlike a
 # for-loop binding which keeps the pseudo id), define the local (owned for a plain
@@ -23966,7 +24169,7 @@ checkAssignment: function {
 } is {
     drainPendingBorrow :st
     errA0: st.typing.errors.length
-    vt: checkValueAt :st :unitDecl :ast nid: asgn.value
+    vt: checkMovedValueAt :st :unitDecl :ast nid: asgn.value
     mvt: materialiseLiteral :ast :st :unitDecl t: vt
     vt = mvt
     if vt.isZero when st.typing.errors.length == errA0 then {
@@ -24101,6 +24304,68 @@ checkAssignment: function {
         }
     }
 }
+# moveTakeLocksToTarget -- `x = w.take`: the take kept the value's locks for
+# this site to move into the target.
+moveTakeLocksToTarget: function {
+    # the symbol table the target's locks are re-laid in
+    st: zenv.ZSymbolTable
+    # the tree the value is spelt in
+    ast: Ast.view
+    # the reassignment
+    rasgn: reasgref
+    # the assigned type
+    rvt: ztypes.tid
+} is {
+    if rvt.isZero then return
+    if (pathLeafIsTake :ast n: (ast.nodes.get i: rasgn.value.u64)) == false then return
+    if (typeIsReftype :st tid: rvt) == false then return
+    tbR: markerPeeledBase :ast n: (ast.nodes.get i: rasgn.value.u64)
+    if tbR.length == 0 then return
+    tdR: st.findLocal nameId: (nameIdOf :ast name: tbR.stringView)
+    if tdR.isZero then return
+    tvR: st.typing.declLocalVarOf declId: tdR
+    if tvR.u64 > 0 then moveLocksToTarget :st :ast :rasgn from: tvR
+}
+
+# moveLocksToTarget -- a lock-holding value reassigned into a target moves its
+# locks to the target's root variable: a bare target's old value is destroyed
+# first, and the locks it held with it; a field store keeps the root's.
+moveLocksToTarget: function {
+    # the symbol table the reassigned value's locks move within
+    st: zenv.ZSymbolTable
+    # the tree the target is spelt in
+    ast: Ast.view
+    # the reassignment
+    rasgn: reasgref
+    # the value moving in
+    from: ztypes.vid
+} is {
+    tgtRoot: rootNameIdOf :ast n: (ast.nodes.get i: rasgn.topath.u64)
+    if tgtRoot.isZero then return
+    tvo: st.lookupVarId nameId: tgtRoot
+    match (
+        tvo
+    ) case some then {
+        bareT: (bareAtomNameId :ast n: (ast.nodes.get i: rasgn.topath.u64)).isZero == false
+        if bareT then {
+            st.releaseHeldLocks holder: (ztypes.zlockholder
+                kind: ztypes.zlockholderkind.varKind
+                id: tvo.u64
+            )
+        }
+        (transferHeldLocks
+            :st
+            :ast
+            :from
+            to: tvo
+            verb: "by reassignment"
+            nodeid: rasgn.nid
+            lineno: rasgn.lineno
+            colno: rasgn.colno
+        )
+    } case none then null
+}
+
 # invalidateMovedSource -- a bare-name reftype RHS is a MOVE: the source
 # invalidates, which the symtab records by appending its taken overlay entry.
 invalidateMovedSource: function {
@@ -24147,6 +24412,7 @@ invalidateMovedSource: function {
                         msg: mc
                     )
                 } else {
+                    moveLocksToTarget :st :ast :rasgn from: vo
                     (st.invalidate
                         nameId: (nameIdOf :ast name: rn.stringView)
                         loc: (optionval.none ztypes.zsrcpos)
@@ -24155,6 +24421,7 @@ invalidateMovedSource: function {
             }
         } case none then null
     }
+    moveTakeLocksToTarget :st :ast :rasgn :rvt
 }
 # checkMethodRefTarget -- reassigning through a dotted target whose root is a
 # receiver: the member being written must be a field of it, not a method.
@@ -24432,7 +24699,7 @@ checkReassignment: function {
     }
     checkWriteLock :st :ast n: (ast.nodes.get i: rasgn.topath.u64) verb: "assign to"
     errR0: st.typing.errors.length
-    rvt: checkValueAt :st :unitDecl :ast nid: rasgn.value
+    rvt: checkMovedValueAt :st :unitDecl :ast nid: rasgn.value
     # a value that resolved to nothing and raised nothing: an unresolvable
     # root name is an unknown reference, as at a binding
     if rvt.isZero when st.typing.errors.length == errR0 then {
@@ -26566,6 +26833,12 @@ consumeBareArgOwnership: function {
     ast: Ast.view
     name: StringView
     vid: ztypes.vid
+    # the receiver the value moves into (`xs.append w`), zero when none
+    recvVid: ztypes.vid
+    # the callee's result will hold the value (an `outx` callee, a construction)
+    calleePins: bool
+    # the call's pins, which locks the value carries join
+    pins: List ztyping.PinPath
     nodeid: zast.nodeid
     lineno: u32
     colno: u32
@@ -26603,6 +26876,34 @@ consumeBareArgOwnership: function {
                 msg: mb7
             )
         } else {
+            # the value's locks follow it: into the receiver when there is
+            # one, into the result when the callee's result holds the value,
+            # and nowhere otherwise -- which refuses the move
+            if recvVid.u64 > 0 then {
+                (transferHeldLocks
+                    :st
+                    :ast
+                    from: vid
+                    to: recvVid
+                    verb: "into a taking argument"
+                    :nodeid
+                    :lineno
+                    :colno
+                )
+            } else if calleePins then {
+                carryHeldLocks :st from: vid :pins
+            } else {
+                heldN: (List ztyping.PinPath)
+                (st.heldLockPaths
+                    holder: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: vid.u64)
+                    dst: heldN
+                )
+                if heldN.length > 0 then {
+                    rn7: zast.nameTextCopy :ast ref: (pinRootAt pins: heldN i: 0)
+                    m7: "Cannot move '\{name}' into a taking argument: it holds locks on '\{rn7}' and the callee is not `outx`, so the locks have nowhere to go; copy it first (`.copy`)"
+                    addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: m7
+                }
+            }
             (st.invalidate
                 nameId: (nameIdOf :ast :name)
                 loc: takenHere
@@ -26661,7 +26962,140 @@ pinsAppend: function {pins: List ztyping.PinPath path: (ListVal zast.nameid).vie
     if path.length == 0 then return
     p: (ListVal zast.nameid)
     with pit: path.iterate do for seg: pit loop p.append seg
-    pins.append (ztyping.PinPath path: p :shared)
+    pins.append (ztyping.PinPath path: p :shared carried: false)
+}
+
+# pinsAppendCarried -- record a lock a moved-in value carries: the call's
+# result keeps it whatever the callee declares.
+pinsAppendCarried: function {
+    # the call's pending pins, extended
+    pins: List ztyping.PinPath
+    # the locked path the moved-in value held
+    path: (ListVal zast.nameid).view
+    # whether the carried lock is SHARED rather than EXCLUSIVE
+    shared: bool
+} is {
+    if path.length == 0 then return
+    p: (ListVal zast.nameid)
+    with pit: path.iterate do for seg: pit loop p.append seg
+    pins.append (ztyping.PinPath path: p :shared carried: true)
+}
+
+# varNameText -- the name of the open local bound to `vid`, "" when none is.
+varNameText: function {st: zenv.ZSymbolTable.view ast: Ast.view vid: ztypes.vid} out String is {
+    nm: st.localNameOfVar :vid
+    if nm == 0 then return "".string
+    return (zast.nameTextCopy :ast ref: (zast.nameid.create from: nm.u32))
+}
+
+# transferHeldLocks -- a lock-holding value moves from `from` to `to`, and its
+# locks move with it when `to` cannot outlive what they lock: every source that
+# is a local must be bound in a frame enclosing `to`'s; a source that is a
+# borrow/view parameter or the receiver imposes nothing, and `to` may not be a
+# parameter itself (its locks would be handed to the caller unseen). On success
+# the rows are held by `to`; on failure the move is refused. Answers whether
+# the move went through.
+transferHeldLocks: function {
+    # the symbol table the rows live in
+    st: zenv.ZSymbolTable
+    # the tree the names are spelt in
+    ast: Ast.view
+    # the value moving out
+    from: ztypes.vid
+    # the value it moves into
+    to: ztypes.vid
+    # how the move is written, for the report
+    verb: StringView
+    # the node the report is attached to
+    nodeid: zast.nodeid
+    # the line of the report
+    lineno: u32
+    # the column of the report
+    colno: u32
+} out bool is {
+    held: (List ztyping.PinPath)
+    (st.heldLockPaths
+        holder: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: from.u64)
+        dst: held
+    )
+    if held.length == 0 then return true
+    fromNm: varNameText :st :ast vid: from
+    toNm: varNameText :st :ast vid: to
+    firstRoot: zast.nameTextCopy :ast ref: (pinRootAt pins: held i: 0)
+    if (st.reg.variableOriginOf id: to) == ztypes.zvarorigin.param then {
+        mp: "Cannot move '\{fromNm}' \{verb}: it holds locks on '\{firstRoot}', and a parameter cannot take them; copy it first (`.copy`)"
+        addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: mp
+        return false
+    }
+    toFrame: st.frameOfVar vid: to
+    with hit: held.iterate do for hp: hit loop {
+        rootNm: hp.path.get i: 0
+        rvo: st.lookupVarId nameId: rootNm
+        match (
+            rvo
+        ) case some then {
+            if (st.reg.variableOriginOf id: rvo) != ztypes.zvarorigin.param then {
+                srcFrame: st.frameOfVar vid: rvo
+                if (st.frameEncloses outer: srcFrame inner: toFrame) == false then {
+                    rn: zast.nameTextCopy :ast ref: rootNm
+                    mo: "Cannot move '\{fromNm}' \{verb}: it holds locks on '\{rn}', and '\{toNm}' outlives '\{rn}'; copy it first (`.copy`)"
+                    ho: "keep '\{toNm}' inside '\{rn}'s scope, or end '\{fromNm}' before '\{rn}' does"
+                    no: String
+                    (addErrorH
+                        :st
+                        :nodeid
+                        :lineno
+                        :colno
+                        e: zast.err.ownerError
+                        msg: mo
+                        note: no
+                        hint: ho
+                        width: fromNm.length.u32.orPanic
+                    )
+                    return false
+                }
+            }
+        } case none then null
+    }
+    st.reholdLocks :from :to
+    return true
+}
+
+# carryHeldLocks -- a lock-holding value moves into a call whose result will
+# hold it (an `outx` callee, a construction): its locks join the call's pins
+# as CARRIED, and leave the value. Answers whether the value held any.
+carryHeldLocks: function {
+    # the symbol table the value's rows leave
+    st: zenv.ZSymbolTable
+    # the variable moving into the call
+    from: ztypes.vid
+    # the call's pending pins the carried locks join
+    pins: List ztyping.PinPath
+} out bool is {
+    held: (List ztyping.PinPath)
+    hold: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: from.u64)
+    st.heldLockPaths holder: hold dst: held
+    if held.length == 0 then return false
+    with hit: held.iterate do for hp: hit loop (pinsAppendCarried
+        :pins
+        path: hp.path
+        shared: hp.shared
+    )
+    st.releaseHeldLocks holder: hold
+    return true
+}
+
+# pathLeafIsTake -- the value is `name.take`: a move of the whole binding.
+pathLeafIsTake: function {ast: Ast.view n: Node.view} out bool is {
+    match (
+        n
+    ) case dottedpath then {
+        return (atomNameId :ast n: (ast.nodes.get i: n.child.u64)) == zast.names.wkTake
+    } case expression then {
+        return (pathLeafIsTake :ast n: (ast.nodes.get i: n.expression.u64))
+    } else {
+        return false
+    }
 }
 
 # pinsPush / pinsPushOne -- record a pin the pending result keeps. Appended
@@ -26671,7 +27105,7 @@ pinsPush: function {st: zenv.ZSymbolTable path: (ListVal zast.nameid).view share
     if path.length == 0 then return
     p: (ListVal zast.nameid)
     with pit: path.iterate do for seg: pit loop p.append seg
-    st.typing.pendingPins.append (ztyping.PinPath path: p :shared)
+    st.typing.pendingPins.append (ztyping.PinPath path: p :shared carried: false)
 }
 
 # pinsPushOne -- pinsPush for a one-segment path: a bare root name.
@@ -26679,7 +27113,7 @@ pinsPushOne: function {st: zenv.ZSymbolTable nameId: zast.nameid shared: bool} i
     if nameId.isZero then return
     p: (ListVal zast.nameid)
     p.append nameId
-    st.typing.pendingPins.append (ztyping.PinPath path: p :shared)
+    st.typing.pendingPins.append (ztyping.PinPath path: p :shared carried: false)
 }
 
 # pinsRoot -- the root of the first pending pin, zero when none is pending.
@@ -26768,6 +27202,16 @@ installPins: function {
     }
 }
 
+# pinConstructionResult -- a bare-name construction of a type with a non-owned
+# field, which has no `create` to say `outx this`: the result is OWNED and
+# keeps every borrowed-field argument (and anything a moved-in argument
+# carried) locked, exactly as the `outx this` a written create would declare.
+pinConstructionResult: function {st: zenv.ZSymbolTable pins: (List ztyping.PinPath).view} is {
+    drainPendingBorrow :st
+    with pit: pins.iterate do for p: pit loop pinsPush :st path: p.path shared: p.shared
+    if pins.length > 0 then st.typing.pendingBorrowOwned = true
+}
+
 # pinCallResult -- what a call's result keeps locked. An `outx` result (or,
 # until the marker retires, a `.takex`/`.holdx` one) and a reference return
 # (`.borrow`/`.view`) pin the receiver and every borrow/view argument, each
@@ -26800,6 +27244,17 @@ pinCallResult: function {
         if (optBoolOr o: (st.typing.funcReturnsView.get key: funcId) d: false) then {
             st.typing.pendingBorrowReadonly = true
         }
+    } else {
+        # the locks a moved-in argument carried travel to the result whatever
+        # the callee declares: the value that held them lives in it now
+        anyC: false
+        with pit2: pins.iterate do for p2: pit2 loop {
+            if p2.carried then {
+                pinsPush :st path: p2.path shared: p2.shared
+                anyC = true
+            }
+        }
+        if anyC then st.typing.pendingBorrowOwned = true
     }
     # `hold`: owned and READONLY with no pin, so it is set after the drain
     if (optBoolOr o: (st.typing.funcReturnsFrozen.get key: funcId) d: false) then {
@@ -27922,6 +28377,10 @@ hoistTrivialArg: function {
     isLockish: bool
     isViewArg: bool
     pins: List ztyping.PinPath
+    # the receiver a taken value moves into, zero when the call has none
+    recvVid: ztypes.vid
+    # the call's result will hold a taken value (an `outx` callee, a construction)
+    calleePins: bool
     arg: argref
 } is {
     # A trivial literal argument coerces in place at the
@@ -27961,6 +28420,9 @@ hoistTrivialArg: function {
                     :ast
                     name: bnT.stringView
                     vid: bvo
+                    :recvVid
+                    :calleePins
+                    :pins
                     nodeid: (nodeId n: (ast.nodes.get i: arg.operation.u64))
                     lineno: (nodeLine n: (ast.nodes.get i: arg.operation.u64))
                     colno: (nodeCol n: (ast.nodes.get i: arg.operation.u64))
@@ -28002,6 +28464,10 @@ hoistAndLockArg: function {
     isLockish: bool
     isViewArg: bool
     pins: List ztyping.PinPath
+    # the receiver a taken value moves into, zero when the call has none
+    recvVid: ztypes.vid
+    # the call's result will hold a taken value (an `outx` callee, a construction)
+    calleePins: bool
     arg: argref
 } is {
     if (argIsTrivial :ast op: (ast.nodes.get i: arg.operation.u64)) then {
@@ -28015,6 +28481,8 @@ hoistAndLockArg: function {
             :isLockish
             :isViewArg
             :pins
+            :recvVid
+            :calleePins
             :arg
         )
     } else {
@@ -28448,6 +28916,26 @@ checkTypedCallArg: function {
             st.typing.argDisposition.set key: dispNid.u64 value: dispVal
         }
     }
+    # where a taken argument's locks go: the receiver when the call has one,
+    # the result when the callee's result holds the value
+    recvVid: ztypes.vid
+    if (isCtor) == false then {
+        rtupT: (ListVal zast.nameid)
+        {
+            calT: ast.nodes.get i: call.callable.u64
+            methodReceiverTuple :ast n: calT dst: rtupT
+        }
+        if rtupT.length > 0 then {
+            rvT: st.lookupVarId nameId: (rtupT.get i: 0)
+            match (
+                rvT
+            ) case some then {
+                recvVid = rvT
+            } case none then null
+        }
+    }
+    calleePins: isCtor
+    if (optBoolOr o: (st.typing.funcPins.get key: funcId) d: false) then calleePins = true
     (hoistAndLockArg
         :st
         :ast
@@ -28458,6 +28946,8 @@ checkTypedCallArg: function {
         :isLockish
         :isViewArg
         :pins
+        :recvVid
+        :calleePins
         :arg
     )
 }
@@ -29457,6 +29947,7 @@ checkControlBuiltinCall: function {
                     } case none then null
                 }
                 checkReturnRooting :st :ast :arg :argT
+                checkReturnCarries :st :ast :arg :argT
                 expR: st.typing.currentReturnTypeId
                 if expR > 0 when argT > 0 then {
                     if (typesCompatible :ast :st a: argT b: expR) == false then {
@@ -30027,11 +30518,15 @@ checkGenericTypeCall: function {
                                 match (
                                     fpvo
                                 ) case some then {
+                                    carryF: (List ztyping.PinPath)
                                     (consumeBareArgOwnership
                                         :st
                                         :ast
                                         name: fpbn.stringView
                                         vid: fpvo
+                                        recvVid: ztypes.vid
+                                        calleePins: true
+                                        pins: carryF
                                         nodeid: farg.nid
                                         lineno: farg.lineno
                                         colno: farg.colno
@@ -30102,11 +30597,15 @@ checkTaggedCtorArg: function {
             match (
                 upvo
             ) case some then {
+                carryU: (List ztyping.PinPath)
                 (consumeBareArgOwnership
                     :st
                     :ast
                     name: upbn.stringView
                     vid: upvo
+                    recvVid: ztypes.vid
+                    calleePins: true
+                    pins: carryU
                     nodeid: arg2.nid
                     lineno: arg2.lineno
                     colno: arg2.colno
@@ -30769,14 +31268,27 @@ checkUserFnCall: function {
             cxO
         ) case some then {
             noRecvC: (ListVal zast.nameid)
-            (pinCallResult
-                :st
-                funcId: (ztypes.tid.create from: cxO.u64)
-                :pins
-                recvPath: noRecvC
-                recvShared: true
-            )
-        } case none then null
+            cxPins: optBoolOr o: (st.typing.funcPins.get key: cxO) d: false
+            if (cxPins) == false when (typeHasNonOwnedField :st tid: funcId) then {
+                # a create that does not say `outx this` on a type declaring a
+                # non-owned field is the SYNTHESISED one (a written one is
+                # refused): the construction pins as `outx this` would
+                pinConstructionResult :st :pins
+            } else {
+                (pinCallResult
+                    :st
+                    funcId: (ztypes.tid.create from: cxO.u64)
+                    :pins
+                    recvPath: noRecvC
+                    recvShared: true
+                )
+            }
+        } case none then {
+            # no `create` written: the construction IS the constructor, and a
+            # type declaring a non-owned field is built `outx this` -- every
+            # borrowed-field argument stays pinned under the result
+            if (typeHasNonOwnedField :st tid: funcId) then pinConstructionResult :st :pins
+        }
     } else {
         st.typing.callKind.set key: call.nid.u64 value: zast.callkind.regular
         rnOpt: st.typing.funcReturnNode.get key: funcId

@@ -320,6 +320,9 @@ PinPath: class {
     path: (ListVal zast.nameid)
     # SHARED (a `.view` input) rather than EXCLUSIVE (a `.borrow` input)
     shared: bool
+    # the lock came with a value moved INTO the call (a `.take` argument that
+    # held locks): the result keeps it whatever the callee declares
+    carried: bool
 }
 
 # the typing side-tables: every typecheck stamp keyed by AST node id
@@ -372,6 +375,10 @@ ZTyping: class {
     # -- so it is tracked apart from funcReturnsView, which freezes a binding
     # only because that binding IS the reference handed back.
     funcReturnsFrozen: (IdMapV u64 v: bool)
+    # the binding or reassignment being walked moves a `.take` value in whole
+    # (`b: w.take`): the take keeps the value's locks for the site to transfer
+    # rather than releasing them
+    takeIntoBinding: bool
     # the fn whose body is being walked declares a `.borrow` return: bare
     # field returns are its contract (the lock/borrow source outlives).
     currentReturnsBorrow: bool
@@ -2476,6 +2483,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         funcReturnsView: (IdMapV u64 v: bool)
         funcPins: (IdMapV u64 v: bool)
         funcReturnsFrozen: (IdMapV u64 v: bool)
+        takeIntoBinding: false
         currentReturnsBorrow: false
         currentFnPins: false
         pendingPins: (List PinPath)
