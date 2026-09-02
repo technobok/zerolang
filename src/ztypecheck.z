@@ -22653,6 +22653,13 @@ checkDotted: function {
 # its reference, so the source is read through the holder or not at all until
 # the holder dies.
 refuseReadUnderPin: function {st: zenv.ZSymbolTable ast: Ast.view dp: dpref} is {
+    # the root alone answers the common case: no variable holds an EXCLUSIVE
+    # lock on it, so there is nothing to overlap and no path to build
+    rid: rootNameIdOf :ast n: (ast.nodes.get i: dp.nid.u64)
+    if rid.isZero then return
+    rd: st.findLocal nameId: rid
+    if rd.isZero then return
+    if (st.hasExclusiveVarLock declId: rd) == false then return
     rp: (ListVal zast.nameid)
     appendValueTuple :ast n: (ast.nodes.get i: dp.nid.u64) dst: rp
     if rp.length == 0 then return
@@ -26882,6 +26889,13 @@ pinsAppend: function {pins: List ztyping.PinPath path: (ListVal zast.nameid).vie
     pins.append (ztyping.PinPath path: p :shared carried: false)
 }
 
+# pinsAppendOne -- pinsAppend for a one-segment path: a bare root name.
+pinsAppendOne: function {pins: List ztyping.PinPath nameId: zast.nameid shared: bool} is {
+    p: (ListVal zast.nameid)
+    p.append nameId
+    pins.append (ztyping.PinPath path: p :shared carried: false)
+}
+
 # pinsAppendCarried -- record a lock a moved-in value carries: the call's
 # result keeps it whatever the callee declares.
 pinsAppendCarried: function {
@@ -28194,6 +28208,9 @@ lockBorrowedArgPath: function {
     arg: argref
     isViewArg: bool
     pins: List ztyping.PinPath
+    # the call's result keeps the lock (an `outx` callee, a construction):
+    # only then is the path recorded as a pin
+    calleePins: bool
 } is {
     an: ast.nodes.get i: arg.operation.u64
     src: (ListVal zast.nameid)
@@ -28214,9 +28231,9 @@ lockBorrowedArgPath: function {
             ) case some then {
                 drainPendingBorrow :st
                 pinsPush :st path: src shared: isViewArg
-                # the call's result may keep this pin: a path-shaped argument
+                # the call's result keeps this pin: a path-shaped argument
                 # pins exactly as a bare one does
-                pinsAppend :pins path: src shared: isViewArg
+                if calleePins then pinsAppend :pins path: src shared: isViewArg
             } case none then null
         }
     }
@@ -28235,6 +28252,8 @@ lockNonTrivialArg: function {
     isLockish: bool
     isViewArg: bool
     pins: List ztyping.PinPath
+    # the call's result keeps the locks its arguments place
+    calleePins: bool
     arg: argref
 } is {
     # A construction or take parameter consumes the hoisted
@@ -28250,7 +28269,7 @@ lockNonTrivialArg: function {
         :st
         tid: (ztypes.tid.create from: vt.u64)
     ) then {
-        lockBorrowedArgPath :st :ast :arg :isViewArg :pins
+        lockBorrowedArgPath :st :ast :arg :isViewArg :pins :calleePins
     }
     hadPending: false
     if st.typing.pendingPins.length > 0 then hadPending = true
@@ -28356,10 +28375,8 @@ hoistTrivialArg: function {
                         lineno: (nodeLine n: (ast.nodes.get i: arg.operation.u64))
                         colno: (nodeCol n: (ast.nodes.get i: arg.operation.u64))
                     )
-                    # the call's result may keep this pin
-                    bnp: (ListVal zast.nameid)
-                    bnp.append bnId
-                    pinsAppend :pins path: bnp shared: isViewArg
+                    # the call's result keeps this pin
+                    if calleePins then pinsAppendOne :pins nameId: bnId shared: isViewArg
                 }
             }
         } case none then null
@@ -28413,6 +28430,7 @@ hoistAndLockArg: function {
             :isLockish
             :isViewArg
             :pins
+            :calleePins
             :arg
         )
     }
@@ -28852,6 +28870,7 @@ checkTypedCallArg: function {
     }
     calleePins: isCtor
     if (optBoolOr o: (st.typing.funcPins.get key: funcId) d: false) then calleePins = true
+    if (optBoolOr o: (st.typing.funcReturnsBorrow.get key: funcId) d: false) then calleePins = true
     (hoistAndLockArg
         :st
         :ast
