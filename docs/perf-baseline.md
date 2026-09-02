@@ -157,6 +157,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-08-24 | 48e5f08d | [the type-alias mechanism](#r-48e5f08d) | 0.45s | -- | 92MB / -- | 134 / 182 / 166 (total 482, medians of 5) | 4,863,437 | 310MB | -- | 107,829 |
 | 2026-08-25 | a04609b7 | [the `fold` natives arc](#r-a04609b7) | 0.45s | -- | 93MB / -- | 93 / 198 / 170 (total 461, medians of 5) | 4,899,755 | 312MB | -- | 108,433 |
 | 2026-08-28 | 33e4e5fa | [generic families, then four pre-existing defects](#r-33e4e5fa) | 0.45s | -- | 93MB / -- | 108 / 190 / 174 (total 469, medians of 5) | 4,912,311 | 315MB | -- | 110,984 |
+| 2026-09-03 | 86e7d6f5 | [the `outx` arc, then three measured reductions](#r-86e7d6f5) | 0.47s | -- | 93MB / -- | 112 / 194 / 179 (total 486, medians of 5) | 5,070,508 | 321MB | -- | 116,954 |
 
 2026-08-05 note -- **the measurement floor of this setup, established by
 repetition, and the trap that produced a fake baseline.**
@@ -1939,3 +1940,71 @@ worse at compiling them.
 
 `genericConstraintKind` returning a borrow rather than a copy was tried as a
 candidate for the residual and moved nothing, so it was not kept.
+
+<a id="r-86e7d6f5"></a>
+### The `outx` arc, then three measured reductions
+
+**2026-09-03 · `4088cc11`..`86e7d6f5`**
+
+The `outx` arc (eleven commits) replaced the `.takex`/`.holdx` return markers
+with a return keyword: `out` never pins, `outx` pins every borrow/view input
+and the receiver at call strength, four signature/return rules (L1-L4) are
+enforced, and a lock-holding value carries its locks when it moves. Three
+pre-existing miscompiles were fixed on the way. No perf work in the arc
+itself; this row is the arc's cost, measured, then reduced in three commits.
+
+**Attribution, not one number.** The compilers across the arc do not accept
+each other's sources (commit 1 adds a keyword, commit 6 deletes two), so the
+arc was measured two ways: every commit's series binary on its own source
+(`perf stat -r 7` instructions, valgrind allocations), and every compiler
+from commit 1 to 5 on the commit-5 tree, the last input they all accept.
+Allocation sites came from dhat with `--readable-names` builds; per-function
+instructions from callgrind on the same builds -- sampled `perf` profiles
+moved samples between unrelated symbols across `-O1` builds and could not
+attribute a 0.5% delta, exact counts could.
+
+| commit | what | instructions (own source) | allocations |
+|---|---|---|---|
+| `97afaad6` pre-arc | -- | 5,726,190,917 | 4,961,170 |
+| `c08406f3` pin-all + read rule | +39.5M (+0.69%) | +104,134 |
+| `affd2e6a` L2/L1 at the return | +14.9M | +10,351 |
+| `23375fdc` lock transfer | +73.1M (+1.26%) | +47,450 (LOC +568 in that file) |
+| `d7cbf695` retire takex/holdx | −13.6M | −6,821 |
+| `4a97841a` arc HEAD | +129.7M (+2.26%) | +166,422 (+3.35%), LOC +1,091 (+0.94%) |
+
+On the one shared input (commit-5 tree) the same-input deltas were: pin-all
++24.9M and +97.6k allocations; lock transfer +28.8M (callgrind exact) and
++14.2k allocations; the rest within noise. So about half of the own-source
+rise is the compiler compiling its own new code.
+
+**Where it went (dhat, pre-arc vs HEAD, +166,739 blocks):** the pin lists
+built for every call (+67k: a bare argument's path copied twice, the list
+then dropped for the non-`outx` majority of callees), the read check's
+per-read path (+29k), the fifteen name copies commit 2 made to avoid a view
+of `ast.names` across an exclusive `:ast` (+25k), and source growth.
+
+**Three reductions, each A/B'd on one input against the commit before it:**
+
+| commit | change | instructions | allocations |
+|---|---|---|---|
+| `3067befc` | pins collected only for a callee that keeps them; the read check asks the root before building a path | −13,660,555 (−0.23%) | −47,316 (−0.92%) |
+| `f0d720b1` | receiver path only for a taken argument; a return names its function only when it reports | −10,440,086 (−0.18%) | −13,662 (−0.27%) |
+| `86e7d6f5` | a frame close asks a holder's age (`openframe.firstVid`) before its frame; the callee's pinning is one fact per call | −4,491,971 (−0.08%) | −216 |
+
+Net: −28.6M instructions (−0.49%) and −61,194 allocations (−1.2%) off the
+arc's HEAD, on identical input; spreads ±0.01–0.05%.
+
+**Left on the table, with numbers.** The compiler's largest allocation family
+is unrelated to the arc: 430,460 of 5.13M blocks (8.4%) are owned copies of
+interned name text (`nameTextCopy`), the top sites being `atomTextOf` in the
+emitter (72.8k), `atomName` (59.3k), the per-argument label copy in
+`checkTypedCallArg` (41.7k) and `checkMissingCallArgs` (41.7k). The argument
+check chain threads the parameter NAME as text (`pn: StringView` through
+`checkNamedArgParam`, `positionalParamName`, `coerceArgToParam`); moving it
+to name ids is the "names are pool ids" direction and would retire the copies
+rather than borrow them (a borrowed view of `ast.names` is exactly what
+commit 2 had to remove under an exclusive `:ast`). Smaller: the four
+per-function return-flag maps (`funcPins`, `funcReturnsBorrow`,
+`funcReturnsView`, `funcReturnsFrozen`) are four lookups per call where one
+record would do; and the pending-pin side channel is drained through a
+reversing list on every consume.
