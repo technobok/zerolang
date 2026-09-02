@@ -343,7 +343,7 @@ true false
 
 public private
 
-take borrow view hold takex holdx copy drop generic
+take borrow view hold copy drop generic
 
 this
 meta
@@ -656,9 +656,8 @@ the same meaning regardless of position.</p>
 established rename pattern in the codebase is to pick a role-flavoured
 noun -- <code>result</code>, <code>buf</code>, <code>output</code>, <code>outval</code> and similar -- in
 place of the conflicting word.</p>
-<p>A further nine identifiers are reserved in member position only:
-<code>take</code>, <code>borrow</code>, <code>view</code>, <code>hold</code>, <code>takex</code>,
-<code>holdx</code>, <code>drop</code>, <code>private</code> and
+<p>A further seven identifiers are reserved in member position only:
+<code>take</code>, <code>borrow</code>, <code>view</code>, <code>hold</code>, <code>drop</code>, <code>private</code> and
 <code>public</code>. They are ownership and access markers, so a type body
 (record, class, variant, union, protocol or facet) may not declare a
 member, arm or method with one of these names -- error E0037. The
@@ -981,7 +980,7 @@ the caller's heap data and is rejected at type-check time. Storing such a
 borrowed parameter into an aggregate field (<code>Box label: borrowed_s</code>) is
 rejected for the same reason. Remediations are <code>.copy</code> (clone),
 <code>.take</code> on the parameter (transfer ownership in), or
-<code>out T.borrow</code> + a non-owned parameter (return a borrow tied to a
+<code>outx T.borrow</code> + a non-owned parameter (return a borrow tied to a
 pinned source). See <a href="./ownership.html">ownership for details.</a></p>
 <p>A call carries <em><strong>at most one</strong></em> unlabelled argument, and it must come first.
 Every other argument names the parameter it binds to, and named arguments may
@@ -2323,12 +2322,15 @@ transient. They are destroyed at the end of the current statement unless
 assigned or passed to an owned parameter.</p>
 <h5 id="ownership-type-attributes-on-functions">Ownership Type Attributes on Functions</h5>
 <p>Ownership is specified on function parameters and return types using dotted
-type paths:</p>
+type paths, and on return types by the choice of keyword as well: <code>out</code>
+hands back a value and pins nothing; <code>outx</code> hands back a value that keeps
+every <code>.borrow</code>/<code>.view</code> parameter and the receiver locked for as long as
+it lives. A function declares one or the other, never both.</p>
 <ul>
 <li><code>type.take</code> - for <code>in</code> parameters, ownership is taken from the caller.
 The caller must provide an owned reftype. The function must store or destroy
-the value before it returns. For <code>out</code> return types, <code>.take</code> is the
-default (function returns a new owned instance to caller) and does not need
+the value before it returns. For return types, <code>.take</code> is the default
+(the function returns a new owned instance to the caller) and does not need
 to be specified.</li>
 <li><code>type.borrow</code> - for <code>in</code> parameters, ownership is not taken. The
 function can call methods on the parameter but cannot store or destroy it.
@@ -2336,27 +2338,26 @@ function can call methods on the parameter but cannot store or destroy it.
 reftypes) and does not need to be specified. For valtypes, borrowing means
 a copy is passed (source not invalidated). For reftypes, borrowing means
 a reference is passed. Generic type parameters are exempt from type-family
-restrictions. For <code>out</code> return types, <code>.borrow</code> means a borrowed
-instance is returned. The parameter housing that instance must itself be
-non-owned (<code>.borrow</code> or <code>.view</code>).</li>
+restrictions. A reference return is written <code>outx type.borrow</code>: the
+returned instance lives inside a <code>.borrow</code>/<code>.view</code> parameter or the
+receiver, which <code>outx</code> keeps locked. <code>out type.borrow</code> is refused.</li>
 <li><code>type.view</code> - not owned and readonly: the callee receives a
 reference it may only read. The pin is shared, so the caller keeps
 reading the argument across the call and several <code>.view</code> references to
-one value coexist. A <code>.view</code> receiver is readonly for its whole body.</li>
+one value coexist. A <code>.view</code> receiver is readonly for its whole body.
+A readonly reference return is written <code>outx type.view</code>.</li>
 <li><code>type.hold</code> - owned and readonly: moved in as <code>.take</code> does,
 then frozen. Rebinding requires another owned value (<code>h = y.hold</code>).</li>
 <li><code>out T.hold</code> - an owned return the caller may only read.
 It pins nothing, so whatever the result was built from stays writable.</li>
-<li><code>out T.takex</code> - an owned return that pins the non-owned
-sources it was built from, for as long as the result lives. This is what a
-constructor needs when the value it returns holds a reference into one of
-its arguments.</li>
-<li><code>out T.holdx</code> - <code>.takex</code> with the freeze <code>.hold</code> carries: owned,
-readonly, and pinning. <code>.borrowx</code> and <code>.viewx</code> do not exist -- a
-reference return already pins its source.</li>
-<li><code>.takex</code> and <code>.holdx</code> are return markers only. A parameter or
-field carrying one is an error: they describe what a result does with its
-sources, and a parameter has no sources to pin.</li>
+<li><code>outx T</code> / <code>outx T.hold</code> - an owned return (writable, or
+frozen) that pins every non-owned input of the call for as long as
+the result lives: a <code>.borrow</code> parameter and a bare <code>:this</code> receiver
+exclusively, a <code>.view</code> parameter and a <code>.view</code> receiver shared. This
+is what a constructor needs when the value it returns holds a reference
+into one of its arguments, and <code>outx</code> is required whenever an owned
+result's type declares a <code>.borrow</code>/<code>.view</code> field. An <code>outx</code> with no
+non-owned input to pin is refused.</li>
 </ul>
 <h5 id="ownership-methods-on-instances">Ownership Methods on Instances</h5>
 <p><code>.take</code>, <code>.borrow</code> and <code>.hold</code> can also be used as compiler-generated
@@ -2389,7 +2390,7 @@ so the lock cannot be duplicated.</p>
   pos: i64
   target: container.private.borrow
 } as {
-  create: function {target: container.private.borrow} out this is {
+  create: function {target: container.private.borrow} outx this is {
     return meta.create pos: 0 target: target
   }
 }</code></pre>
@@ -2760,9 +2761,10 @@ path on a type in function parameter declarations, it specifies that ownership
 is not taken. <code>.borrow</code> is the default for all <code>in</code> parameters. For
 valtypes, borrowing means a copy is passed (source not invalidated). For
 reftypes, borrowing means a reference is passed.</p>
-<p>As a return type attribute (<code>out type.borrow</code>): the function returns a
-borrowed reference. At least one <code>in</code> parameter must be non-owned --
-marked <code>.view</code> (readonly) or <code>.borrow</code> (mutable).</p>
+<p>As a return type attribute (<code>outx type.borrow</code>): the function returns a
+reference into a non-owned <code>in</code> parameter -- marked <code>.view</code> (readonly)
+or <code>.borrow</code> (mutable) -- or the receiver, which <code>outx</code> keeps locked for
+the result's lifetime. <code>out type.borrow</code> is refused.</p>
 <p>As a compiler method on instances (<code>x.borrow</code>): valid on all types. For
 reftypes, returns a borrowed reference and exclusively locks the receiver.
 For valtypes, returns a copy without locking. See
@@ -2801,7 +2803,7 @@ base type and return an owned typedef instance.
 Signature: <code>take: function {from: basetype.take} out typedeftype</code></li>
 <li><code>borrow</code> takes a lock on a value of the base type and returns a
 borrowed typedef instance.
-Signature: <code>borrow: function {from: basetype.borrow} out typedeftype.borrow</code></li>
+Signature: <code>borrow: function {from: basetype.borrow} outx typedeftype.borrow</code></li>
 </ul>
 <p>The typedef retains the underlying type and so can continue to be passed to
 functions that expect the underlying type as is (backward compatible). But the
@@ -3200,9 +3202,9 @@ ends the variable's lifetime immediately, as if it fell out of scope. The name
 is invalidated after the call and any subsequent use is a compile error.</p>
 <p>It does two things, in this order:</p>
 <ol>
-<li>every lock the variable holds is released -- the pins a
-<code>.takex</code> or <code>.holdx</code> result took on the sources it was built from, and
-the locks a <code>.borrow</code> or <code>.view</code> binding holds on what it reads. Those
+<li>every lock the variable holds is released -- the pins an
+<code>outx</code> result took on the inputs it was built from, and the locks a
+<code>.borrow</code> or <code>.view</code> binding holds on what it reads. Those
 sources become writable again at once, rather than at the end of the
 enclosing scope.</li>
 <li>then, if the variable owns its value, the value is destroyed --
@@ -3568,14 +3570,16 @@ equivalent when, in both definitions:</p>
 </thead>
 <tbody>
 <tr><td>in</td><td>Yes</td><td>Block of standard parameters</td></tr>
-<tr><td>out</td><td>No</td><td>The return type of the function</td></tr>
+<tr><td>out</td><td>No</td><td>The return type of the function; the result pins nothing</td></tr>
+<tr><td>outx</td><td>No</td><td>The return type of the function; the result keeps the call's <code>.borrow</code>/<code>.view</code> inputs locked</td></tr>
 <tr><td>as</td><td>No</td><td>Generic type parameters for the function</td></tr>
 <tr><td>is</td><td>No</td><td>Function body expression/block</td></tr>
 </tbody>
 </table>
 <p>- <code>in</code> is optional; omitted when no parameters are required. If <code>as</code>
   appears before the parameter block, <code>in</code> must be explicitly stated.
-- <code>out</code> is optional; omitted for procedures and iterators
+- <code>out</code> / <code>outx</code> is optional; omitted for procedures and iterators. A
+  function declares at most one of the two.
 - <code>as</code> is optional; declares generic type parameters. Generic parameters
   <em><strong>must</strong></em> be declared here, not in <code>in</code>.
 - <code>is</code> is optional; omitted when defining a <a href="#specs">spec</a>.</p>
@@ -3604,11 +3608,16 @@ definition. Static functions (functions without <code>this</code>, including tho
 type's <code>as</code> block) may declare their own generic parameters and are
 independently monomorphized.</p>
 <p>A function usually will return a value. The type of the returned item is
-specified by the argument named <code>out</code>. Ownership of a returned reftype value
-after the call implicitly lies with the caller (<code>.take</code> is the default for
-return types and does not need to be specified). A function may return a
-borrowed reference by specifying <code>type.borrow</code> as the return type; in this
-case, at least one parameter must be marked <code>type.borrow</code>.</p>
+specified by the argument named <code>out</code> or <code>outx</code>. Ownership of a returned
+reftype value after the call implicitly lies with the caller (<code>.take</code> is the
+default for return types and does not need to be specified). An <code>out</code>
+result pins nothing: every lock the call took is released when it returns. An
+<code>outx</code> result keeps every <code>.borrow</code>/<code>.view</code> parameter and the receiver
+locked for as long as it lives, at the strength the call took. A function
+returns a reference by specifying <code>outx type.borrow</code> or <code>outx type.view</code>;
+the returned reference must point into a non-owned parameter or the receiver,
+and <code>out type.borrow</code> is refused since nothing would keep that source
+alive. See <a href="./ownership.html">ownership.</a></p>
 <p>The <code>is</code> parameter to <code>function</code> specifies the body. It may be a single
 expression or a block of code. Each line of code is a local variable definition
 or a statement. All arguments supplied can be referenced by name but are
@@ -3672,8 +3681,8 @@ visible where it happens.</p>
 taker arg: MyRefType
 # MyRefType is unavailable in the current scope from this point
 
-# passing a lock parameter and returning a borrow:
-getter: function {t: MyClass.borrow} out refchild.borrow is {
+# a non-owned parameter, and a reference into it returned under `outx`:
+getter: function {t: MyClass.borrow} outx refchild.borrow is {
     return t.myrefchild
 }</code></pre>
 <p>Generic function example:</p>
@@ -3718,9 +3727,10 @@ function argument label), can be:</p>
   parameter
 - a type followed by <code>.borrow</code> (eg. <code>type.borrow</code>) to explicitly borrow
   (this is the default for all parameters and does not need to be specified)
-- a type followed by <code>.borrow</code> (eg. <code>reftype.borrow</code>) to lock the parameter for
-  the lifetime of the return value (compile error on known valtypes; permitted
-  on generic type parameters)
+- a type followed by <code>.view</code> (eg. <code>reftype.view</code>) to borrow readonly: the
+  callee may only read through the parameter, and the pin is shared
+- a type followed by <code>.hold</code> (eg. <code>reftype.hold</code>) to take ownership of the
+  parameter and freeze it
 - a restrained type: a named type followed by a dot then a child named protocol
   or named method of that type. The call must pass an instance of the named
   type and the function declares that it will only use methods in the named
@@ -3842,9 +3852,11 @@ by hand is a compile error. Each parameter's ownership follows the field it
 fills: an owned field (unmarked, <code>.take</code> or <code>.hold</code>) takes a <code>.take</code>
 parameter, so the argument is moved in; a non-owned field (<code>.borrow</code> or
 <code>.view</code>) takes that same marker.</p>
-<p>The generated <code>create</code> returns <code>this.takex</code>, so a non-owned field <strong>pins</strong>
-whatever it points into for the instance's lifetime: while the generator is
-live, its source cannot be moved, written or reassigned. Reads stay legal.</p>
+<p>The generated <code>create</code> is <code>outx this</code> whenever a field is a reference, so
+a non-owned field <strong>pins</strong> whatever it points into for the instance's
+lifetime: while the generator is live, its source cannot be moved, written or
+reassigned. Reads stay legal through a <code>.view</code> field; a <code>.borrow</code> field
+pins exclusively.</p>
 <table>
 <colgroup>
 <col style="width: 33%">
@@ -3865,10 +3877,10 @@ live, its source cannot be moved, written or reassigned. Reads stay legal.</p>
 <p>A generator cannot be declared inside another type's <code>as</code> block -- an inline
 type definition is refused there, for a generator exactly as for a class.
 Declare it at unit level and, where the construction needs privileged access,
-reach it through a method whose own return wears <code>.takex</code>:</p>
+reach it through a method that is itself declared <code>outx</code>:</p>
 <pre><code class="language-zerolang">Bag: class { a: i64  b: i64 } as {
     public: unit { :walk }
-    walk: function {b: this.private.borrow} out BagWalk.takex is {
+    walk: function {b: this.private.borrow} outx BagWalk is {
         return (BagWalk b: b)
     }
 }
@@ -3879,8 +3891,9 @@ BagWalk: generator { b: Bag.private.borrow } as {
         yield this.b.b
     }
 }</code></pre>
-<p>The <code>.takex</code> on <code>walk</code> is what carries the pin out to the caller's
-argument; without it the pin would stop at the method boundary.</p>
+<p>The <code>outx</code> on <code>walk</code> is what carries the pin out to the caller's
+argument; a plain <code>out</code> is refused there, since the result's type declares
+a non-owned field.</p>
 <h2 id="the-call-member"><a href="#the-call-member">8. The call member</a></h2>
 <p><code>call</code> is required, and it is the generator's body. Its <code>out</code> type is the
 <strong>element</strong> type -- what each <code>yield</code> hands back -- not the return type: the
@@ -3969,10 +3982,10 @@ next <code>yield</code> is a compile error. To persist the resumed value across 
 declare the input <code>.take</code>.</p>
 <pre><code class="language-zerolang"># the caller sends a bool back after each yielded line
 Grep: generator { pat: String } as {
-    call: function {keep: bool} out String.borrow is {
+    call: function {keep: bool} out String is {
         for line: stdin.lines loop {
             if line contains: this.pat then {
-                wanted: yield line
+                wanted: yield line.copy
                 if wanted then store_match line
             }
         }
@@ -4354,7 +4367,7 @@ and <a href="./ownership.html">ownership.</a></p>
     pos: i64
     target: bag.private.borrow
 } as {
-    create: function {target: bag.private.borrow} out this is {
+    create: function {target: bag.private.borrow} outx this is {
         return meta.create pos: 0 target: target
     }
 }</code></pre>
@@ -4691,7 +4704,7 @@ a class or union produces a compile-time error.</p>
 instance and return an owned facet.
 Signature: <code>take: function {from: T.take} out facettype</code></li>
 <li><code>borrow</code> copies the source value and locks the source variable.
-Signature: <code>borrow: function {from: T.borrow} out facettype.borrow</code></li>
+Signature: <code>borrow: function {from: T.borrow} outx facettype.borrow</code></li>
 </ul>
 <p>Although the data is always copied, <code>borrow</code> still locks the source to
 maintain consistent ownership semantics with protocols. This is important

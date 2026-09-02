@@ -287,7 +287,10 @@ Can take maximum one each of the arguments in any order.
   It is the block of function/generator parameters. If #~"as" appears before
   the parameter block, #~"in" must be explicitly stated.]
   [#*: #~"out" specifies the return type for the function or for each generated
-  type]
+  type; the result pins nothing]
+  [#*: #~"outx" specifies the return type of a function whose result keeps the
+  call's #~".borrow"/#~".view" inputs locked for its lifetime. A function has
+  #~"out" or #~"outx", never both.]
   [#*: #~"is" specifies the function body]
   [#*: #~"as" (optional) specifies generic type parameters for the function.
   Generic parameters #_*"must" be declared here, not in #~"in". The #~"as"
@@ -299,13 +302,14 @@ All arguments are optional:
 
 #ul:
   [#*: #if #~"in" is not supplied, the function takes no arguments]
-  [#*: #if #~"out" is not supplied, this is a procedure]
+  [#*: #if neither #~"out" nor #~"outx" is supplied, this is a procedure]
   [#*: #if #~"is" is not supplied, this is a function 'spec']
   [#*: #if #~"as" is not supplied, the function has no generic parameters]
   [#*: #if all arguments missing, it is a 'spec' for a procedure with no
   arguments.]
 
-#~"in" and #~"out" #>"operation"'s #_*"must" result in a constant/compile-time type.
+#~"in", #~"out" and #~"outx" #>"operation"'s #_*"must" result in a
+constant/compile-time type.
 
 Parameter (#~"in" parameter):
 
@@ -315,21 +319,26 @@ Parameter (#~"in" parameter):
   [#*: can #~"take" ownership]
   [#*: can borrow. This is the *default*.]
   [#*: can carry an ownership marker suffix -- #~".take", #~".borrow",
-  #~".view", #~".hold" or #~".takex"; semantics in #~"docs/ownership.pdoc".]
+  #~".view" or #~".hold"; semantics in #~"docs/ownership.pdoc".]
   [#*: can NOT declare generic parameters directly (must use #~"as")]
   [#*: can be a constant (numeric constant, function constant, or a numeric
   expression that results in a constant) - this will be the default value of
   the parameter]
 
-Return (#~"out" parameter):
+Return (#~"out" / #~"outx" parameter):
 
 #ul:
   [#*: can #~"take" (return an owned object). This is the #_*"default".]
-  [#*: can #~"borrow" or #~"view". The caller will not have ownership but can
-  call methods. A #~".borrow" / #~".view" return requires a non-owned
-  (#~".view" or #~".borrow") parameter to borrow from; the returned borrow
-  stays pinned to that source for its lifetime. Details in
+  [#*: can #~"hold" (return an owned object the caller may only read).]
+  [#*: can #~"borrow" or #~"view", under #~"outx" only. The caller will not
+  have ownership but can call methods. The returned reference must point into
+  a non-owned (#~".view" or #~".borrow") parameter or the receiver, which
+  #~"outx" keeps locked for the result's lifetime. Details in
   #~"docs/ownership.pdoc".]
+  [#*: under #~"outx", any marker: the result keeps every #~".borrow"/#~".view"
+  parameter and the receiver locked for as long as it lives. #~"outx" with no
+  such input is refused, and so is a plain #~"out" whose owned result's type
+  declares a non-owned field.]
   [#*: can NOT be #~"generic" (but can take generic fields as part of its type
   definition)]
   [#*: technically can be a constant (numeric constant, function constant, or a
@@ -356,7 +365,7 @@ Methods and generic parameters:
       ( #>"label" #>"operation" )
       | #>"label-shorthand"
     } "}" )
-    | ( "out" #>"operation" )
+    | ( ( "out" | "outx" ) #>"operation" )
     | ( "is" ( #>"block" | "native" ) )
     | ( "as" "{" { ( #>"label" #>"operation" ) | #>"label-shorthand" } "}" )
   }

@@ -916,7 +916,7 @@ the caller's heap data and is rejected at type-check time. Storing such a
 borrowed parameter into an aggregate field (#~"Box label: borrowed_s") is
 rejected for the same reason. Remediations are #~".copy" (clone),
 #~".take" on the parameter (transfer ownership in), or
-#~"out T.borrow" + a non-owned parameter (return a borrow tied to a
+#~"outx T.borrow" + a non-owned parameter (return a borrow tied to a
 pinned source). See #> to=./ownership.html: ownership for details.
 
 A call carries #_*"at most one" unlabelled argument, and it must come first.
@@ -2519,13 +2519,16 @@ assigned or passed to an owned parameter.
 #-----: Ownership Type Attributes on Functions
 
 Ownership is specified on function parameters and return types using dotted
-type paths:
+type paths, and on return types by the choice of keyword as well: #~"out"
+hands back a value and pins nothing; #~"outx" hands back a value that keeps
+every #~".borrow"/#~".view" parameter and the receiver locked for as long as
+it lives. A function declares one or the other, never both.
 
 #ul:
   [#*: #~"type.take" - for #~"in" parameters, ownership is taken from the caller.
     The caller must provide an owned reftype. The function must store or destroy
-    the value before it returns. For #~"out" return types, #~".take" is the
-    default (function returns a new owned instance to caller) and does not need
+    the value before it returns. For return types, #~".take" is the default
+    (the function returns a new owned instance to the caller) and does not need
     to be specified.]
   [#*: #~"type.borrow" - for #~"in" parameters, ownership is not taken. The
     function can call methods on the parameter but cannot store or destroy it.
@@ -2533,27 +2536,26 @@ type paths:
     reftypes) and does not need to be specified. For valtypes, borrowing means
     a copy is passed (source not invalidated). For reftypes, borrowing means
     a reference is passed. Generic type parameters are exempt from type-family
-    restrictions. For #~"out" return types, #~".borrow" means a borrowed
-    instance is returned. The parameter housing that instance must itself be
-    non-owned (#~".borrow" or #~".view").]
+    restrictions. A reference return is written #~"outx type.borrow": the
+    returned instance lives inside a #~".borrow"/#~".view" parameter or the
+    receiver, which #~"outx" keeps locked. #~"out type.borrow" is refused.]
   [#*: #~"type.view" - not owned and #_+"readonly": the callee receives a
     reference it may only read. The pin is #_+"shared", so the caller keeps
     reading the argument across the call and several #~".view" references to
-    one value coexist. A #~".view" receiver is readonly for its whole body.]
+    one value coexist. A #~".view" receiver is readonly for its whole body.
+    A readonly reference return is written #~"outx type.view".]
   [#*: #~"type.hold" - #_+"owned" and readonly: moved in as #~".take" does,
     then frozen. Rebinding requires another owned value (#~"h = y.hold").]
   [#*: #~"out T.hold" - an #_+"owned" return the caller may only #_+"read".
     It pins nothing, so whatever the result was built from stays writable.]
-  [#*: #~"out T.takex" - an #_+"owned" return that #_+"pins" the non-owned
-    sources it was built from, for as long as the result lives. This is what a
-    constructor needs when the value it returns holds a reference into one of
-    its arguments.]
-  [#*: #~"out T.holdx" - #~".takex" with the freeze #~".hold" carries: owned,
-    readonly, and pinning. #~".borrowx" and #~".viewx" do not exist -- a
-    reference return already pins its source.]
-  [#*: #~".takex" and #~".holdx" are #_+"return" markers only. A parameter or
-    field carrying one is an error: they describe what a result does with its
-    sources, and a parameter has no sources to pin.]
+  [#*: #~"outx T" / #~"outx T.hold" - an #_+"owned" return (writable, or
+    frozen) that #_+"pins" every non-owned input of the call for as long as
+    the result lives: a #~".borrow" parameter and a bare #~":this" receiver
+    exclusively, a #~".view" parameter and a #~".view" receiver shared. This
+    is what a constructor needs when the value it returns holds a reference
+    into one of its arguments, and #~"outx" is required whenever an owned
+    result's type declares a #~".borrow"/#~".view" field. An #~"outx" with no
+    non-owned input to pin is refused.]
 
 #-----: Ownership Methods on Instances
 
@@ -2591,7 +2593,7 @@ so the lock cannot be duplicated.
     pos: i64
     target: container.private.borrow
   } as {
-    create: function {target: container.private.borrow} out this is {
+    create: function {target: container.private.borrow} outx this is {
       return meta.create pos: 0 target: target
     }
   }
@@ -3066,9 +3068,10 @@ is not taken. #~".borrow" is the default for all #~"in" parameters. For
 valtypes, borrowing means a copy is passed (source not invalidated). For
 reftypes, borrowing means a reference is passed.
 
-As a return type attribute (#~"out type.borrow"): the function returns a
-borrowed reference. At least one #~"in" parameter must be non-owned --
-marked #~".view" (readonly) or #~".borrow" (mutable).
+As a return type attribute (#~"outx type.borrow"): the function returns a
+reference into a non-owned #~"in" parameter -- marked #~".view" (readonly)
+or #~".borrow" (mutable) -- or the receiver, which #~"outx" keeps locked for
+the result's lifetime. #~"out type.borrow" is refused.
 
 As a compiler method on instances (#~"x.borrow"): valid on all types. For
 reftypes, returns a borrowed reference and exclusively locks the receiver.
@@ -3120,7 +3123,7 @@ The compiler generates three constructors for non-generic typedefs:
   Signature: #~"take: function {from: basetype.take} out typedeftype"]
   [#*: #~"borrow" takes a lock on a value of the base type and returns a
   borrowed typedef instance.
-  Signature: #~"borrow: function {from: basetype.borrow} out typedeftype.borrow"]
+  Signature: #~"borrow: function {from: basetype.borrow} outx typedeftype.borrow"]
 
 The typedef retains the underlying type and so can continue to be passed to
 functions that expect the underlying type as is (backward compatible). But the
@@ -3603,9 +3606,9 @@ is invalidated after the call and any subsequent use is a compile error.
 It does two things, in this order:
 
 #ol:
-  [#*: #_+"every lock the variable holds is released" -- the pins a
-    #~".takex" or #~".holdx" result took on the sources it was built from, and
-    the locks a #~".borrow" or #~".view" binding holds on what it reads. Those
+  [#*: #_+"every lock the variable holds is released" -- the pins an
+    #~"outx" result took on the inputs it was built from, and the locks a
+    #~".borrow" or #~".view" binding holds on what it reads. Those
     sources become writable again at once, rather than at the end of the
     enclosing scope.]
   [#*: #_+"then, if the variable owns its value, the value is destroyed" --
@@ -4047,13 +4050,15 @@ Arguments to #~"function":
 #table cols="2 2 4":
   Argument  |Default |Description
   in        |Yes     |Block of standard parameters
-  out       |No      |The return type of the function
+  out       |No      |The return type of the function; the result pins nothing
+  outx      |No      |The return type of the function; the result keeps the call's #~".borrow"/#~".view" inputs locked
   as        |No      |Generic type parameters for the function
   is        |No      |Function body expression/block
 
 - #~"in" is optional; omitted when no parameters are required. If #~"as"
   appears before the parameter block, #~"in" must be explicitly stated.
-- #~"out" is optional; omitted for procedures and iterators
+- #~"out" / #~"outx" is optional; omitted for procedures and iterators. A
+  function declares at most one of the two.
 - #~"as" is optional; declares generic type parameters. Generic parameters
   #_*"must" be declared here, not in #~"in".
 - #~"is" is optional; omitted when defining a [#> to=specs: spec].
@@ -4088,11 +4093,16 @@ type's #~"as" block) may declare their own generic parameters and are
 independently monomorphized.
 
 A function usually will return a value. The type of the returned item is
-specified by the argument named #~"out". Ownership of a returned reftype value
-after the call implicitly lies with the caller (#~".take" is the default for
-return types and does not need to be specified). A function may return a
-borrowed reference by specifying #~"type.borrow" as the return type; in this
-case, at least one parameter must be marked #~"type.borrow".
+specified by the argument named #~"out" or #~"outx". Ownership of a returned
+reftype value after the call implicitly lies with the caller (#~".take" is the
+default for return types and does not need to be specified). An #~"out"
+result pins nothing: every lock the call took is released when it returns. An
+#~"outx" result keeps every #~".borrow"/#~".view" parameter and the receiver
+locked for as long as it lives, at the strength the call took. A function
+returns a reference by specifying #~"outx type.borrow" or #~"outx type.view";
+the returned reference must point into a non-owned parameter or the receiver,
+and #~"out type.borrow" is refused since nothing would keep that source
+alive. See #> to=./ownership.html: ownership.
 
 The #~"is" parameter to #~"function" specifies the body. It may be a single
 expression or a block of code. Each line of code is a local variable definition
@@ -4166,8 +4176,8 @@ visible where it happens.
   taker arg: MyRefType
   # MyRefType is unavailable in the current scope from this point
 
-  # passing a lock parameter and returning a borrow:
-  getter: function {t: MyClass.borrow} out refchild.borrow is {
+  # a non-owned parameter, and a reference into it returned under `outx`:
+  getter: function {t: MyClass.borrow} outx refchild.borrow is {
       return t.myrefchild
   }
   """
@@ -4221,9 +4231,10 @@ function argument label), can be:
   parameter
 - a type followed by #~".borrow" (eg. #~"type.borrow") to explicitly borrow
   (this is the default for all parameters and does not need to be specified)
-- a type followed by #~".borrow" (eg. #~"reftype.borrow") to lock the parameter for
-  the lifetime of the return value (compile error on known valtypes; permitted
-  on generic type parameters)
+- a type followed by #~".view" (eg. #~"reftype.view") to borrow readonly: the
+  callee may only read through the parameter, and the pin is shared
+- a type followed by #~".hold" (eg. #~"reftype.hold") to take ownership of the
+  parameter and freeze it
 - a restrained type: a named type followed by a dot then a child named protocol
   or named method of that type. The call must pass an instance of the named
   type and the function declares that it will only use methods in the named
@@ -4389,9 +4400,11 @@ fills: an #_+"owned" field (unmarked, #~".take" or #~".hold") takes a #~".take"
 parameter, so the argument is moved in; a #_+"non-owned" field (#~".borrow" or
 #~".view") takes that same marker.
 
-The generated #~"create" returns #~"this.takex", so a non-owned field #b:"pins"
-whatever it points into for the instance's lifetime: while the generator is
-live, its source cannot be moved, written or reassigned. Reads stay legal.
+The generated #~"create" is #~"outx this" whenever a field is a reference, so
+a non-owned field #b:"pins" whatever it points into for the instance's
+lifetime: while the generator is live, its source cannot be moved, written or
+reassigned. Reads stay legal through a #~".view" field; a #~".borrow" field
+pins exclusively.
 
 #table cols="3 2 4":
   Field form                     |Stored as            |Argument
@@ -4404,12 +4417,12 @@ live, its source cannot be moved, written or reassigned. Reads stay legal.
 A generator cannot be declared inside another type's #~"as" block -- an inline
 type definition is refused there, for a generator exactly as for a class.
 Declare it at unit level and, where the construction needs privileged access,
-reach it through a method whose own return wears #~".takex":
+reach it through a method that is itself declared #~"outx":
 
 #code language=zerolang: """
   Bag: class { a: i64  b: i64 } as {
       public: unit { :walk }
-      walk: function {b: this.private.borrow} out BagWalk.takex is {
+      walk: function {b: this.private.borrow} outx BagWalk is {
           return (BagWalk b: b)
       }
   }
@@ -4422,8 +4435,9 @@ reach it through a method whose own return wears #~".takex":
   }
   """
 
-The #~".takex" on #~"walk" is what carries the pin out to the caller's
-argument; without it the pin would stop at the method boundary.
+The #~"outx" on #~"walk" is what carries the pin out to the caller's
+argument; a plain #~"out" is refused there, since the result's type declares
+a non-owned field.
 
 #--: The call member
 
@@ -4510,10 +4524,10 @@ declare the input #~".take".
 #code language=zerolang: """
   # the caller sends a bool back after each yielded line
   Grep: generator { pat: String } as {
-      call: function {keep: bool} out String.borrow is {
+      call: function {keep: bool} out String is {
           for line: stdin.lines loop {
               if line contains: this.pat then {
-                  wanted: yield line
+                  wanted: yield line.copy
                   if wanted then store_match line
               }
           }
@@ -4976,7 +4990,7 @@ and #> to=./ownership.html: ownership.
       pos: i64
       target: bag.private.borrow
   } as {
-      create: function {target: bag.private.borrow} out this is {
+      create: function {target: bag.private.borrow} outx this is {
           return meta.create pos: 0 target: target
       }
   }
@@ -5378,7 +5392,7 @@ The compiler generates three constructors for non-generic facets:
   instance and return an owned facet.
   Signature: #~"take: function {from: T.take} out facettype"]
   [#*: #~"borrow" copies the source value and locks the source variable.
-  Signature: #~"borrow: function {from: T.borrow} out facettype.borrow"]
+  Signature: #~"borrow: function {from: T.borrow} outx facettype.borrow"]
 
 Although the data is always copied, #~"borrow" still locks the source to
 maintain consistent ownership semantics with protocols. This is important

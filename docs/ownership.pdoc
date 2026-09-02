@@ -280,12 +280,24 @@ parameter, field and local sits in exactly one cell.
 
 There are no compound specifiers -- a marker names one cell and nothing else.
 
-#_+"Returns" take #~".take", #~".takex", #~".hold", #~".holdx", #~".borrow" or
-#~".view". #~".borrow" and #~".view" hand back a reference into the receiver;
-#~".takex" and #~".holdx" hand back an owned value that #_+"pins" its non-owned
-sources for its own lifetime, #~".holdx" adding the freeze #~".hold" carries.
-#~".borrowx" and #~".viewx" do not exist: a reference return already pins its
-source, so the suffix would say nothing.
+#_+"Returns" are declared #~"out" or #~"outx", and the type after either takes
+one of the four markers (#~".take" is the default and is never written). The
+keyword says whether the result keeps the call's inputs locked; the marker says
+what the result is:
+
+#table cols="3 3 3 2":
+  declaration          |ownership of result |result binding |pins inputs
+  #~"out T"            |owned               |mutable        |no
+  #~"out T.hold"       |owned               |readonly       |no
+  #~"out T.borrow"     |--                  |--             |#_+"error": write #~"outx"
+  #~"out T.view"       |--                  |--             |#_+"error": write #~"outx"
+  #~"outx T"           |owned               |mutable        |yes
+  #~"outx T.hold"      |owned               |readonly       |yes
+  #~"outx T.borrow"    |not owned           |mutable        |yes
+  #~"outx T.view"      |not owned           |readonly       |yes
+
+A reference return (#~".borrow" / #~".view") always keeps its source locked, so
+it is always #~"outx". See #>"outx" below for what a pin is.
 
 #_+"A receiver is #~".borrow" or #~".view", and nothing else." An object cannot
 own itself, so #~".take" and #~".hold" are meaningless there. A bare #~":this"
@@ -379,10 +391,11 @@ destroy the value. Ownership remains with the caller. For valtypes, borrowing
 means a copy is made -- the source is not invalidated. For reftypes, borrowing
 means a reference is passed.
 
-As a return attribute (#~"out type.borrow"): the function returns a borrowed
-value. At least one input parameter must be non-owned (#~".borrow" or #~".view") so the returned
-value has a locked parent to live in. The returned reference points into the
-locked parameter's data.
+As a return attribute (#~"outx type.borrow"): the function returns a
+reference, and is always #~"outx", since the returned reference points into a
+non-owned (#~".borrow" or #~".view") parameter or the receiver, and #~"outx"
+is what keeps that parent locked for as long as the result lives. A plain
+#~"out type.borrow" is refused.
 
 As an inline method (#~"x.borrow"): valid on all types. For reftypes,
 returns a borrowed reference to #~"x" and exclusively locks #~"x" for
@@ -417,39 +430,79 @@ Owned and readonly: the value is moved in as #~".take" does, then frozen. A
 #~"hold" binding may be rebound only from another owned value
 (#~"h = y.hold"); a plain #~"h = y" is an error, and a #~"view" never rebinds.
 
-#---: .takex
+#---: outx
 
-A #_+"return" marker. The result is #_+"owned" -- it carries a destructor and
-may be moved -- and the non-owned sources it was built from stay #_+"pinned"
-for as long as it lives.
+#~"outx" is the return keyword whose result #_+"keeps the call's inputs
+locked". Where #~"out T" hands back a value and pins nothing, #~"outx T" hands
+back a value that holds a lock on #_+"every" #~".borrow"/#~".view" parameter
+and on the receiver, for as long as the result lives:
 
-This is the one thing #~".borrow" and #~".view" cannot express. A constructor
-such as #~"BufWriter.create to: Writer.borrow ... out this.takex" hands back an
-owned value whose #~"sink" field is a reference #_+"into" its argument, so the
-argument must outlive the result. Without the marker nothing pins it and the
-field dangles the moment the caller drops the source.
+#ul:
+  [#*: #_+"Pin-all." Every non-owned input is pinned -- bare arguments and
+  path-shaped ones (#~"f from: h.inner" pins #~"h.inner"), the receiver
+  included. #~".take" and #~".hold" arguments are moved in and pin nothing.]
+  [#*: #_+"Strength per input." A #~".borrow" parameter and a bare #~":this"
+  receiver pin #_+"EXCLUSIVE": until the result dies the caller can neither
+  write nor read that source, and reads it through the result instead. A
+  #~".view" parameter and a #~"{t: this.view}" receiver pin #_+"SHARED": the
+  caller keeps reading. The stdlib's whitelisted readers (#~"get",
+  #~"listView", #~"Map.get") pin SHARED.]
+  [#*: #_+"The result's own ownership is the marker's." #~"outx T" and
+  #~"outx T.hold" are #_+"owned" results -- they carry a destructor and may be
+  moved; #~"outx T.borrow" and #~"outx T.view" are references; #~".hold" and
+  #~".view" freeze the binding.]
+  [#*: #_+"Over-pinning is valid." #~"outx W" where #~"W" declares no non-owned
+  field is accepted: the result may need locked access to its inputs to do its
+  work (an iterator over a native container), and the pin is about that, not
+  about the fields.]
 
-#---: .holdx
-
-A #_+"return" marker, and #~".takex" with the freeze #~".hold" carries: the
-result is #_+"owned", the caller may only #_+"read" it, and the non-owned
-sources it was built from stay #_+"pinned" for as long as it lives.
-
-It is the cell the other three markers cannot reach. #~".takex" pins but hands
-back something writable; #~".hold" freezes but pins nothing, so whatever the
-result reads through is free to change under it; #~".view" freezes and pins but
-does not own, so the result cannot outlive its source. A constructor handing
-back an immutable wrapper over a borrowed source needs all three at once.
+A constructor such as #~"BufWriter.create to: Writer.borrow ... outx this"
+hands back an owned value whose #~"sink" field is a reference #_+"into" its
+argument, so the argument must outlive the result; #~"outx" is what keeps it
+locked, and #~"outx this" is what a constructor of any class with a
+non-owned field declares.
 
 #code language=zerolang:
-  : mk: function {from: Src.view} out W.holdx is {
+  : mk: function {from: Src.view} outx W.hold is {
   :     return (W s: from)
   : }
 
-The result may be read through #~".view" methods, exactly as any frozen binding
-may; writing to it, or calling a mutating method on it, is refused. Writing the
-source while the result is live is refused too, and becomes possible again when
-the result's scope ends.
+That result may be read through #~".view" methods, exactly as any frozen
+binding may; writing to it, or calling a mutating method on it, is refused.
+Writing the source while the result is live is refused too, and becomes
+possible again when the result's scope ends.
+
+Four rules keep a declaration honest, all reported at compile time:
+
+#ul:
+  [#*: #_+"L3" -- #~"outx" with nothing to pin (no #~".borrow"/#~".view"
+  parameter, no receiver, no reftype parameter at all) is refused: write
+  #~"out", or mark the source the result reads through.]
+  [#*: #_+"L4" -- an owned #~"out W" whose type declares a #~".borrow"/#~".view"
+  field must be #~"outx W", for free functions as much as for #~"out this":
+  the result holds a reference into an input, and only #~"outx" keeps that
+  source locked.]
+  [#*: #_+"L2" -- an #~"outx" result's non-owned fields must be filled from a
+  #~".borrow"/#~".view" parameter or the receiver (a path through one is
+  fine), never from a local or a #~".take" parameter, which die with the
+  call.]
+  [#*: #_+"L1" -- an #~"outx T.borrow"/#~".view" return expression is rooted at
+  such a parameter, or is a pinning call on one -- never a local.]
+
+#---: Locks move with the value
+
+A lock-holding value that is moved -- into another binding (#~"b: w",
+#~"b: w.take"), reassigned (#~"x = w"), stored in a field, appended to a
+container, or handed to a #~".take" parameter -- takes its locks with it,
+provided the new owner cannot outlive what the locks protect: a destination
+bound in an #_+"enclosing" scope is refused (within one scope the lock keeps
+the source alive and unwritten until the scope closes, whatever the
+declaration order), as is a destination that is a parameter (its locks would
+leave with the callee unseen), and a #~".take" parameter of a function that
+is not #~"outx" (the locks would have nowhere to go). #~"return
+w" from an #~"outx" function carries them to the caller's binding when every
+source is a parameter or the receiver. The escape hatch is always
+#~".copy": an owned copy holds no locks.
 
 #---: .copy
 
@@ -679,9 +732,9 @@ detail; if the detail ever seems to say something else, these win.
   #~"this.borrow"). A field write or a swap is the same thing at statement
   scope. There is no separate rule for mutation: a mutator is simply a call
   with an exclusive receiver, and no carve-out for readers.]
-  [#*: #_+"The pin is released on return" -- unless the return carries a
-  reference (#~"borrow", #~"view") or pins its sources (#~"takex"), in which
-  case it transfers to the binding and lives exactly as long as it does.]
+  [#*: #_+"The pin is released on return" -- unless the function is declared
+  #~"outx", in which case it transfers to the binding and lives exactly as
+  long as it does.]
   [#*: #_+"Shared and shared coexist. Exclusive coexists with nothing. A
   holder never conflicts with itself."]
 
@@ -711,7 +764,7 @@ patterns, which this document refers to as:
   the call returns.]
   [#*: #_+"Borrow-scoped Locking" -- locks held for the full scope of a
   borrowing variable (#~".borrow", #~".stringView", #~".listView", non-owned fields,
-  returned values of #~".takex" and reference-returning functions). Acquired when
+  the results of #~"outx" functions). Acquired when
   the borrow is bound; released when the borrowing variable falls out of
   scope or is explicitly dropped with #~".drop".]
 
@@ -802,9 +855,10 @@ receiver path, then released when the call returns:
   on #~"(this,)" and exclusive on #~"(this, sub)", leaving other fields
   of #~"this" freely accessible inside the call.]
   [#*: The call is made.]
-  [#*: After the call, for a reference-carrying or #~".takex" return, the leaf locks of its non-owned sources
-  transfer to the returned value and become Borrow-scoped Locks held
-  by that returned value. All other argument and receiver locks are
+  [#*: After the call, for an #~"outx" return, the locks on every
+  #~".borrow"/#~".view" argument and on the receiver transfer to the returned
+  value and become Borrow-scoped Locks held by it, each at the strength the
+  call took. For an #~"out" return every argument and receiver lock is
   released when the call scope pops.]
 
 #~"for" loops over a reftype iteration target take the lock the iterator's
@@ -864,8 +918,8 @@ where applicable), exactly as they would for any nested expression.
 
 A method whose return is locked to its receiver or to a parameter
 declares the source as a non-owned parameter -- e.g.
-#~"function {t: this.borrow} out T.borrow" for a receiver-bound
-borrow, or #~"function {s: T.borrow} out T.borrow" for an explicit
+#~"function {t: this.borrow} outx T.borrow" for a receiver-bound
+borrow, or #~"function {s: T.borrow} outx T.borrow" for an explicit
 arg. The standard non-owned-param transfer at call resolution
 propagates the source lock into the outer scope. The shorthand
 #~":this" cannot carry a marker directly, so receiver-locked
@@ -1041,7 +1095,7 @@ Remediations:
   [#*: #~"return s.copy" -- clone into a fresh owned string.]
   [#*: Annotate the parameter as #~"s: String.take" -- the caller
   transfers ownership in, and the function may pass it through.]
-  [#*: Declare the function as #~"out String.borrow" with a
+  [#*: Declare the function as #~"outx String.borrow" with a
   non-owned parameter -- the caller receives a borrow tied
   to the locked source.]
 
@@ -1080,7 +1134,7 @@ express this:
     state: i64
     target: container.private.borrow
   } as {
-    create: function {target: container.private.borrow} out this.takex is {
+    create: function {target: container.private.borrow} outx this is {
       return meta.create state: 0 target: target
     }
   }
@@ -1135,9 +1189,10 @@ escape check can prove the target outlives the instance. The reference must
 remain valid for the entire lifetime of the instance. Owned fields such as
 iteration counters can be freely mutated.
 
-A constructor that returns such an instance should declare #~"out this.takex",
-so the sources its non-owned fields point into stay pinned for the result's
-lifetime. Without it nothing holds them and the fields dangle.
+A constructor that returns such an instance is declared #~"outx this", so the
+sources its non-owned fields point into stay pinned for the result's lifetime;
+a plain #~"out this" is refused (L4), since nothing would hold them and the
+fields would dangle.
 
 #---: Moving a Class with Non-Owned Fields
 
@@ -1222,32 +1277,34 @@ permitted: the class -- and the locks it holds -- move into the wrapper.
 
 #--: Escape Analysis for Pins
 
-The compiler must verify that borrowed return values -- and owned returns
-that carry non-owned fields -- trace back to non-owned (#~".borrow" or
-#~".view") parameters of the
-current function. This ensures the pinned data stays alive for the lifetime
-of the returned value.
+The compiler verifies that what an #~"outx" result points at -- a reference
+return, or the non-owned fields of an owned one -- traces back to a
+#~".borrow"/#~".view" parameter or the receiver of the current function (rules
+L1 and L2 under #>"outx"). This ensures the pinned data stays alive for the
+lifetime of the returned value; a local dies with the call, and so does a
+#~".take" parameter.
 
-#---: Reftype Borrow Returns
+#---: Reference Returns
 
-For a reftype borrow return, the returned reference must point to data living
-inside a #~".borrow" parameter. The compiler traces the return expression back
-through field accesses to verify it originates from a locked parameter.
+For a reference return, the returned expression must be rooted at a
+#~".borrow"/#~".view" parameter or the receiver, or be a pinning call on one.
+The compiler traces the return expression back through field accesses to
+verify it.
 
 #code language=zerolang: """
   # OK -- return value is a field of the locked parameter
-  get_child: function {t: MyClass.borrow} out child.borrow is {
+  get_child: function {t: MyClass.borrow} outx child.borrow is {
     return t.child
   }
 
-  # ERROR -- cannot return local variable as borrowed
-  bad: function {t: MyClass.borrow} out child.borrow is {
+  # ERROR -- a local dies with this call
+  bad: function {t: MyClass.borrow} outx child.borrow is {
     c: child
     return c
   }
 
-  # ERROR -- no non-owned parameter
-  bad2: function {t: MyClass} out child.borrow is {
+  # ERROR -- a `.take` parameter is owned here and dies with this call
+  bad2: function {t: MyClass.take} outx child.borrow is {
     return t.child
   }
   """
@@ -1255,19 +1312,20 @@ through field accesses to verify it originates from a locked parameter.
 #---: Classes with Non-Owned Fields
 
 A factory that constructs a class with a non-owned field and returns it as
-an owned value must initialise the non-owned field from a #~".borrow"
-parameter. The compiler verifies the construction arguments of the returned
-instance trace back to the locked parameter of the enclosing function.
+an owned value is declared #~"outx", and must initialise the non-owned field
+from a #~".borrow"/#~".view" parameter or the receiver. The compiler verifies
+the construction arguments of the returned instance trace back to one.
 
 #code language=zerolang: """
-  # OK -- target field traces to b which is non-owned
-  iterate: function {b: this.borrow} out MyIter is {
+  # OK -- target field traces to b, a non-owned parameter
+  iterate: function {b: this.borrow} outx MyIter is {
     return MyIter target: b.private
   }
 
-  # ERROR -- b is not non-owned
-  bad_iterate: function {b: this} out MyIter is {
-    return MyIter target: b.private
+  # ERROR -- a local is stored in a non-owned field
+  bad_iterate: function {b: this.borrow} outx MyIter is {
+    tmp: container x: 1
+    return MyIter target: tmp.private
   }
   """
 
@@ -1277,17 +1335,18 @@ locked for the returned instance's lifetime.
 
 #---: Cross-Function Pin Chains
 
-When a function returns a borrowed value that holds pins, and the caller passes
-that value to another function, the pin chain must be maintained. The compiler
-verifies that each link in the chain connects to a non-owned parameter.
+When a function returns a reference that holds pins, and the caller passes
+that value on, the pin chain must be maintained. Each link is an #~"outx"
+declaration, and the compiler verifies that each connects to a non-owned
+parameter.
 
 #code language=zerolang: """
-  # OK -- both functions lock their input and return a borrow
-  inner: function {t: MyClass.borrow} out child.borrow is {
+  # OK -- both functions lock their input and return a reference
+  inner: function {t: MyClass.borrow} outx child.borrow is {
     return t.child
   }
 
-  outer: function {t: MyClass.borrow} out grandchild.borrow is {
+  outer: function {t: MyClass.borrow} outx grandchild.borrow is {
     x: inner t         # x borrows from t, pin on t
     y: x.grandchild    # y borrows from x
     return y            # OK: pin chain traces to t which is non-owned
@@ -1342,7 +1401,7 @@ that cover most code.
   b.take                           # destroys b immediately
 
   # Borrow with lock: return a reference into the locked parameter
-  peek_label: function {b: Crate.borrow} out String.borrow is {
+  peek_label: function {b: Crate.borrow} outx String.borrow is {
     return b.label
   }
   c: Crate label: "gamma" value: 3
@@ -1420,9 +1479,9 @@ The canonical class-based iterator (also in
     public: unit { :count :iterate }
 
     # Factory method: locks 'this', returns an owned iterator.
-    # The lock on 'this' transfers to the returned iterator via its
-    # non-owned field.
-    iterate: function {b: this.borrow} out BagIter is {
+    # `outx` moves the lock on 'this' to the returned iterator, whose
+    # non-owned field points into it.
+    iterate: function {b: this.borrow} outx BagIter is {
       return BagIter target: b.private
     }
   }
@@ -1436,7 +1495,7 @@ The canonical class-based iterator (also in
     max: i64
     target: Bag.private.borrow
   } as {
-    create: function {target: Bag.private.borrow} out this is {
+    create: function {target: Bag.private.borrow} outx this is {
       return meta.create pos: 0 max: 3 target: target
     }
 
@@ -1549,7 +1608,8 @@ return #~"optionval", a copy, no pin). #~"List.get" hands back the
 element's #~"of.view" directly. The same is true of iterator yields,
 #~"MapEntry" pairs from #~"iterateItems", and the #~"stringView" /
 #~"listView" / #~"byteView" families. These are all #b:"views": cheap,
-non-owning windows into a parent container.
+non-owning windows into a parent container, and every one of them is an
+#~"outx" declaration -- that is what pins the parent.
 
 Two rules make views sound, and the compiler enforces both:
 
@@ -1709,8 +1769,12 @@ the direct form.
   What you wrote                                            |Error                                                |Fix
   #~"f borrowed_var.take"                                   |Cannot take a borrowed variable                      |Pass as #~".borrow" or restructure ownership
   #~"x.borrow" on a valtype                                 |Cannot lock a valtype                                |Valtypes are pass-by-value; use a class if identity-based locking is needed
-  #~"return localvar" (as #~".borrow")                      |Cannot return local as borrowed without a non-owned param   |Mark the source parameter #~".view" (readonly) or #~".borrow" (mutable)
-  #~"out this.takex" with no non-owned argument             |Pin return without a pinned parameter                |Give the factory a #~".borrow" / #~".view" parameter to pin
+  #~"return localvar" (as #~"outx T.borrow")                |a reference return must point into a #~".borrow"/#~".view" parameter; 'localvar' is a local and dies with this call |Return a field of a non-owned parameter, or the receiver
+  #~"outx" with nothing to pin                               |#~"outx" pins nothing here: no parameter or receiver is #~".borrow" or #~".view" |Write #~"out", or mark the source the result reads through (e.g. #~"t: this.view")
+  #~"out W" where #~"W" has a non-owned field                |an owned #~"out" result whose type declares a non-owned field must be #~"outx" |Declare #~"outx W" (or #~"outx this")
+  #~"out T.borrow" / #~"out T.view"                          |a reference return keeps its sources locked            |Write #~"outx T.borrow" / #~"outx T.view"
+  #~"return (W s: loc)" from an #~"outx" function            |the returned #~"W" stores 'loc' in its non-owned field 's', but 'loc' is not a #~".borrow"/#~".view" parameter |Fill the field from a parameter or the receiver
+  #~"x = w" where #~"x" outlives what #~"w" locks             |Cannot move 'w' by reassignment: it holds locks on 'a', and 'x' outlives 'a' |Keep 'x' inside 'a's scope, or #~"w.copy"
   non-owned field on a record                               |non-owned fields only allowed on classes              |Change the enclosing type from #~"record" to #~"class"
   non-owned field type mismatch                             |Field type must match constructor parameter type      |Make the parameter type match the field type
   a valtype element in #~"ListRef" (or the converse)        |Bound error naming AnyRef / anyval                   |Pick the container form matching the element family
