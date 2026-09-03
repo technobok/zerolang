@@ -210,14 +210,12 @@ paramVidIn: function {
     piter: params.iterate
     for pmId: piter loop {
         pm: ast.nodes.get i: pmId.u64
-        match (
-            pm
-        ) case namedoperation then {
+        if pm.namedoperation then {
             if pm.name == nameId when pm.operation > 0 then {
                 opNid: interpPartNodeId n: (ast.nodes.get i: pm.operation.u64)
                 return (defVid :symtab nid: opNid)
             }
-        } else null
+        }
     }
     return (ztypes.vid.create from: 0)
 }
@@ -1797,11 +1795,7 @@ isInterp: function {ast: Ast.view parts: (ListVal u32).view} out bool is {
     for pId: piter loop {
         p: ast.nodes.get i: pId.u64
         isC: false
-        match (
-            p
-        ) case stringchunk then {
-            isC = true
-        } else null
+        if p.stringchunk then isC = true
         if (isC) == false then return true
     }
     return false
@@ -1922,9 +1916,7 @@ ternaryClause: function {
         kiter: c.conditions.iterate
         for kId: kiter loop {
             k: ast.nodes.get i: kId.u64
-            match (
-                k
-            ) case namedoperation then {
+            if k.namedoperation then {
                 cv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: k.operation.u64)
                 tw: (truthyCondText
                     :ast
@@ -1939,7 +1931,7 @@ ternaryClause: function {
                 } else {
                     cond.append cv
                 }
-            } else null
+            }
         }
         vx: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: c.statement.u64)
         t0: "((\{cond}) ? (\{vx}) : "
@@ -2368,22 +2360,18 @@ loopNeverExits: function {
         if n.conditions.length != 1 then return false
         firstCondNode: ast.nodes.get i: (n.conditions.get i: 0).u64
         alwaysT: false
-        match (
-            firstCondNode
-        ) case namedoperation then {
+        if firstCondNode.namedoperation then {
             if firstCondNode.name.isZero then {
                 cop: ast.nodes.get i: firstCondNode.operation.u64
                 if (boolArmSideOf :ast :symtab n: cop).truthy then alwaysT = true
                 # `true` also arrives as the dotted tag bool.true
-                match (
-                    cop
-                ) case dottedpath then {
+                if cop.dottedpath then {
                     chn: atomNameIdOf :ast n: (ast.nodes.get i: cop.child.u64)
                     chs: armSideAtNode :symtab nid: cop.nodeid.u64 nameId: chn
                     if chs.truthy then alwaysT = true
-                } else null
+                }
             }
-        } else null
+        }
         if (alwaysT) == false then return false
         return (ztypecheck.blockHasBreak
             :ast
@@ -3638,9 +3626,7 @@ emitNarrowedTakeZero: function {
         aiter: n.arguments.iterate
         for a9Id: aiter loop {
             a: ast.nodes.get i: a9Id.u64
-            match (
-                a
-            ) case namedoperation then {
+            if a.namedoperation then {
                 (emitNarrowedTakeZero
                     :ast
                     :symtab
@@ -3649,7 +3635,7 @@ emitNarrowedTakeZero: function {
                     :ind
                     :buf
                 )
-            } else null
+            }
         }
     } else null
 }
@@ -3915,9 +3901,7 @@ emitCallTakeInvalidations: function {
     aiter: call.arguments.iterate
     for a9Id: aiter loop {
         a: ast.nodes.get i: a9Id.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             ts: takeStringSource :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
             if ts.length > 0 then {
                 holdSkip: false
@@ -4025,7 +4009,7 @@ emitCallTakeInvalidations: function {
                 :buf
             )
             posI = posI + 1
-        } else null
+        }
     }
 }
 
@@ -4592,9 +4576,7 @@ emitSvCompareCall: function {
         citer: call.arguments.iterate
         for caId: citer loop {
             ca: ast.nodes.get i: caId.u64
-            match (
-                ca
-            ) case namedoperation then {
+            if ca.namedoperation then {
                 cae: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: ca.operation.u64)
                 cat: stampNameDeep :ast :symtab n: (ast.nodes.get i: ca.operation.u64)
                 caIsStr: cat.stringView == "String"
@@ -4607,7 +4589,7 @@ emitSvCompareCall: function {
                 )
                 caf: svValueForm :ctx expr: cae.stringView isStr: caIsStr vid: cav
                 if cargs.length == 0 then cargs.append caf
-            } else null
+            }
         }
         ce: "\{ctx.svC}_cmp(\{bf}, \{cargs})"
         return ce
@@ -4717,15 +4699,13 @@ emitSvSplitCall: function {
         sepx: String
         with siter: call.arguments.iterate do for sa9Id: siter loop {
             sa: ast.nodes.get i: sa9Id.u64
-            match (
-                sa
-            ) case namedoperation then {
+            if sa.namedoperation then {
                 saOpNode: ast.nodes.get i: sa.operation.u64
                 if sepx.length == 0 then {
                     sfrag: svNativeArgFrag :ast :symtab :ctx n: saOpNode addrAlways: true
                     sepx.append sfrag
                 }
-            } else null
+            }
         }
         es: "\{ctx.svC}_split(&\{bnv}, \{sepx})"
         return es
@@ -4792,28 +4772,24 @@ emitSvArgNativeCall: function {
         argx: String
         with aiter: call.arguments.iterate do for a9Id: aiter loop {
             a: ast.nodes.get i: a9Id.u64
-            match (
-                a
-            ) case namedoperation then {
+            if a.namedoperation then {
                 aOpNode: ast.nodes.get i: a.operation.u64
                 if argx.length == 0 then {
                     afrag: svNativeArgFrag :ast :symtab :ctx n: aOpNode addrAlways: false
                     argx.append afrag
                 }
-            } else null
+            }
         }
         if mnv == "byteAt" then {
             barg: String
             with biter: call.arguments.iterate do for baId: biter loop {
                 ba: ast.nodes.get i: baId.u64
-                match (
-                    ba
-                ) case namedoperation then {
+                if ba.namedoperation then {
                     if barg.length == 0 then {
                         bx: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: ba.operation.u64)
                         barg.append bx
                     }
-                } else null
+                }
             }
             bargs: ", \{barg}"
             eb: (svNativeCall
@@ -4866,14 +4842,12 @@ emitSvSimpleCall: function {
             aiter: call.arguments.iterate
             for aId: aiter loop {
                 a: ast.nodes.get i: aId.u64
-                match (
-                    a
-                ) case namedoperation then {
+                if a.namedoperation then {
                     aOpNode: ast.nodes.get i: a.operation.u64
                     args.append ", "
                     cfrag: svNativeArgFrag :ast :symtab :ctx n: aOpNode addrAlways: false
                     args.append cfrag
-                } else null
+                }
             }
             e1: (svNativeCall
                 :ctx
@@ -4997,12 +4971,10 @@ emitScalarIterateCall: function {
     fromI: "0".string
     with aitI: call.arguments.iterate do for aIdI: aitI loop {
         aI: ast.nodes.get i: aIdI.u64
-        match (
-            aI
-        ) case namedoperation then {
+        if aI.namedoperation then {
             axI: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: aI.operation.u64)
             if axI.length > 0 then fromI = axI.copy
-        } else null
+        }
     }
     ovcI: ctxCname :ctx tid: ovidI
     someI: variantTag :symtab tid: ovidI arm: "some"
@@ -5099,12 +5071,10 @@ emitDataIndexCall: function {
         aiter: call.arguments.iterate
         for aId: aiter loop {
             a: ast.nodes.get i: aId.u64
-            match (
-                a
-            ) case namedoperation then {
+            if a.namedoperation then {
                 aOpNode: ast.nodes.get i: a.operation.u64
                 ax = emitExpr :ast :symtab :ctx n: aOpNode
-            } else null
+            }
         }
         dsym0: ctxCname :ctx tid: (ztypes.tid.create from: dtid.u64)
         e0: "\{dsym0}[\{ax}]"
@@ -5129,9 +5099,7 @@ listCapArg: function {
         aiter: n.arguments.iterate
         for aId: aiter loop {
             a: ast.nodes.get i: aId.u64
-            match (
-                a
-            ) case namedoperation then {
+            if a.namedoperation then {
                 an: zast.nameTextAt :ast ref: a.name
                 if an.stringView == "capacity" then return (emitExpr
                     :ast
@@ -5139,7 +5107,7 @@ listCapArg: function {
                     :ctx
                     n: (ast.nodes.get i: a.operation.u64)
                 )
-            } else null
+            }
         }
         return "0".string
     } else {
@@ -5302,15 +5270,13 @@ nativeArgHoles: function {
     ai: u64
     with ait: call.arguments.iterate do for aId: ait loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             slot: slots.get i: ai
             if slot < pNames.length then {
                 av: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
                 valBySlot.set key: slot value: av
             }
-        } else null
+        }
         ai = ai + 1
     }
     missing: false
@@ -5364,9 +5330,7 @@ emitStringArgMethod: function {
     argPtr: false
     with aiter: call.arguments.iterate do for aId: aiter loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             if argval.length == 0 then {
                 # an interpolated-literal arg builds a multi-statement String:
                 # hoist it to an _ah temp (freed at the statement flush, the
@@ -5390,7 +5354,7 @@ emitStringArgMethod: function {
                     argPtr = pathIsPointer :ast :symtab :ctx n: argOpNode
                 }
             }
-        } else null
+        }
     }
     if mn == "append" then {
         # The StringLike arg lowers to (data, length) by its concrete type:
@@ -6180,21 +6144,13 @@ emitOperatorCallForm: function {
     lhsNid: u64
     {
         cb: ast.nodes.get i: call.callable.u64
-        match (
-            cb
-        ) case dottedpath then {
-            lhsNid = cb.parent.u64
-        } else null
+        if cb.dottedpath then lhsNid = cb.parent.u64
     }
     if lhsNid == 0 then return "".string
     rhsNid: u64
     {
         a0: ast.nodes.get i: (call.arguments.get i: 0).u64
-        match (
-            a0
-        ) case namedoperation then {
-            rhsNid = a0.operation.u64
-        } else null
+        if a0.namedoperation then rhsNid = a0.operation.u64
     }
     if rhsNid == 0 then return "".string
     l: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: lhsNid)
@@ -6594,9 +6550,7 @@ colArgAsStringViewExpr: function {
     aiter: call.arguments.iterate
     for aId: aiter loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             an: zast.nameTextAt :ast ref: a.name
             if an.stringView == label then {
                 opn: ast.nodes.get i: a.operation.u64
@@ -6605,7 +6559,7 @@ colArgAsStringViewExpr: function {
                 }
                 return "".string
             }
-        } else null
+        }
     }
     return "".string
 }
@@ -7538,9 +7492,7 @@ colArg: function {
     aiter: call.arguments.iterate
     for aId: aiter loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             an: zast.nameTextAt :ast ref: a.name
             if an.stringView == label then {
                 ic: (emitColInterpArg
@@ -7569,7 +7521,7 @@ colArg: function {
                     posFirst = emitExpr :ast :symtab :ctx n: aOpNode
                 }
             }
-        } else null
+        }
     }
     if havePos then return posFirst
     return "0".string
@@ -7589,9 +7541,7 @@ listArg: function {
     aiter: call.arguments.iterate
     for aId: aiter loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             an: zast.nameTextAt :ast ref: a.name
             if an.stringView == label then return (emitExpr
                 :ast
@@ -7604,7 +7554,7 @@ listArg: function {
                 aOpNode: ast.nodes.get i: a.operation.u64
                 posFirst = emitExpr :ast :symtab :ctx n: aOpNode
             }
-        } else null
+        }
     }
     # a single positional arg binds to the (sole) labelless call site, e.g.
     # `xs.get i2` -> the `i` param.
@@ -7622,15 +7572,13 @@ listTakeArgBaseNid: function {
     aiter: call.arguments.iterate
     for aId: aiter loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             an: zast.nameTextAt :ast ref: a.name
             if an.stringView == label then return (takeArgBaseNid
                 :ast
                 n: (ast.nodes.get i: a.operation.u64)
             )
-        } else null
+        }
     }
     return 0
 }
@@ -7687,11 +7635,9 @@ emitTypedefCreateCall: function {
         aiterS: call.arguments.iterate
         for aIdS: aiterS loop {
             aS: ast.nodes.get i: aIdS.u64
-            match (
-                aS
-            ) case namedoperation then {
+            if aS.namedoperation then {
                 return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: aS.operation.u64))
-            } else null
+            }
         }
         return "0".string
     }
@@ -7717,11 +7663,9 @@ emitTypedefCreateCall: function {
     aiter: call.arguments.iterate
     for aId: aiter loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64))
-        } else null
+        }
     }
     return "0".string
 }
@@ -7746,15 +7690,13 @@ emitInlineVariantCtor: function {
         got: false
         for aId: aiter loop {
             a: ast.nodes.get i: aId.u64
-            match (
-                a
-            ) case namedoperation then {
+            if a.namedoperation then {
                 if (got) == false then {
                     got = true
                     aOpNode: ast.nodes.get i: a.operation.u64
                     av = emitExpr :ast :symtab :ctx n: aOpNode
                 }
-            } else null
+            }
         }
         armCiP: memberCPrefix name: arm
         e0: "((\{vc}_t){ .tag = \{tg}, .data.\{armCiP}\{arm} = (\{av}) })"
@@ -7826,9 +7768,7 @@ emitUnionCtor: function {
         aiter: call.arguments.iterate
         for aId: aiter loop {
             a: ast.nodes.get i: aId.u64
-            match (
-                a
-            ) case namedoperation then {
+            if a.namedoperation then {
                 if (got) == false then {
                     got = true
                     # an interpolated payload builds via a self-contained
@@ -7840,7 +7780,7 @@ emitUnionCtor: function {
                         av = emitExpr :ast :symtab :ctx n: aOpNode
                     }
                 }
-            } else null
+            }
         }
         e: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; \{payC}* _b = (\{payC}*)z_xmalloc(sizeof(\{payC})); *_b = \{av}; _u.data = _b; _u; })"
         return e
@@ -7901,9 +7841,7 @@ emitVariantCtorCall: function {
             oaiter: call.arguments.iterate
             for oa9Id: oaiter loop {
                 oa: ast.nodes.get i: oa9Id.u64
-                match (
-                    oa
-                ) case namedoperation then {
+                if oa.namedoperation then {
                     if (ogot) == false then {
                         ogot = true
                         # an interpolated payload builds via a self-contained
@@ -7915,7 +7853,7 @@ emitVariantCtorCall: function {
                             oav = emitExpr :ast :symtab :ctx n: oaOpNode
                         }
                     }
-                } else null
+                }
             }
             es: "({ \{ovc}_t _u = {0}; _u.tag = \{otg9s}; \{opayC}* _b = (\{opayC}*)z_xmalloc(sizeof(\{opayC})); *_b = \{oav}; _u.data = _b; _u; })"
             return es
@@ -8605,9 +8543,7 @@ ctorArgIsBorrow: function {
     aiter: call.arguments.iterate
     for aId: aiter loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             an: zast.nameTextAt :ast ref: a.name
             if an.stringView == label then return (hoistExprIsBorrowRooted
                 :ast
@@ -8615,7 +8551,7 @@ ctorArgIsBorrow: function {
                 :ctx
                 n: (ast.nodes.get i: a.operation.u64)
             )
-        } else null
+        }
     }
     return false
 }
@@ -8632,9 +8568,7 @@ ctorArgIsBorrowPos: function {
     aiter: call.arguments.iterate
     for aId: aiter loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             an: zast.nameTextAt :ast ref: a.name
             if an.length == 0 then {
                 if seen == idx then return (hoistExprIsBorrowRooted
@@ -8645,7 +8579,7 @@ ctorArgIsBorrowPos: function {
                 )
                 seen = seen + 1
             }
-        } else null
+        }
     }
     return false
 }
@@ -8655,12 +8589,10 @@ ctorArgNodeByLabel: function {ast: Ast.view call: zast.CallData.view label: Stri
     aiter: call.arguments.iterate
     for aId: aiter loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             an: zast.nameTextAt :ast ref: a.name
             if an.stringView == label then return a.operation.u64
-        } else null
+        }
     }
     return 0
 }
@@ -8697,9 +8629,7 @@ argIsPointerByLabel: function {
     aiter: call.arguments.iterate
     for aId: aiter loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             an: zast.nameTextAt :ast ref: a.name
             if an.stringView == label then return (pathIsPointer
                 :ast
@@ -8707,7 +8637,7 @@ argIsPointerByLabel: function {
                 :ctx
                 n: (ast.nodes.get i: a.operation.u64)
             )
-        } else null
+        }
     }
     return false
 }
@@ -8720,15 +8650,13 @@ ctorArgNodeByPosition: function {ast: Ast.view call: zast.CallData.view idx: u64
     aiter: call.arguments.iterate
     for aId: aiter loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             an: zast.nameTextAt :ast ref: a.name
             if an.length == 0 then {
                 if seen == idx then return a.operation.u64
                 seen = seen + 1
             }
-        } else null
+        }
     }
     return 0
 }
@@ -8769,9 +8697,7 @@ ctorInterpArgByLabel: function {
     aiter: call.arguments.iterate
     for aId: aiter loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             an: zast.nameTextAt :ast ref: a.name
             if an.stringView == label then {
                 return (emitInterpArgForParam
@@ -8784,7 +8710,7 @@ ctorInterpArgByLabel: function {
                     :pid
                 )
             }
-        } else null
+        }
     }
     return "".string
 }
@@ -8804,9 +8730,7 @@ ctorInterpArgByPosition: function {
     aiter: call.arguments.iterate
     for aId: aiter loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             an: zast.nameTextAt :ast ref: a.name
             if an.length == 0 then {
                 if seen == idx then {
@@ -8822,7 +8746,7 @@ ctorInterpArgByPosition: function {
                 }
                 seen = seen + 1
             }
-        } else null
+        }
     }
     return "".string
 }
@@ -9156,12 +9080,10 @@ ctorHasLabel: function {ast: Ast.view call: zast.CallData.view label: StringView
     aiter: call.arguments.iterate
     for aId: aiter loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             an: zast.nameTextAt :ast ref: a.name
             if an.stringView == label then return true
-        } else null
+        }
     }
     return false
 }
@@ -9354,9 +9276,7 @@ emitGenericFnCall: function {
     aiter: call.arguments.iterate
     for a9Id: aiter loop {
         a: ast.nodes.get i: a9Id.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             argOpNode: ast.nodes.get i: a.operation.u64
             slot9g: slots9g.get i: ai
             if slot9g < fpNames.length then {
@@ -9473,7 +9393,7 @@ emitGenericFnCall: function {
                 }
             }
             ai = ai + 1
-        } else null
+        }
     }
     argTids: String
     emitted9g: u64
@@ -9530,9 +9450,7 @@ emitUnitMethodCall: function {
     aiter: call.arguments.iterate
     for a9Id: aiter loop {
         a: ast.nodes.get i: a9Id.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             argOpNode: ast.nodes.get i: a.operation.u64
             slot9g: slots9g.get i: ai
             if slot9g < fpNames.length then {
@@ -9649,7 +9567,7 @@ emitUnitMethodCall: function {
                 }
             }
             ai = ai + 1
-        } else null
+        }
     }
     argTids: String
     emitted9g: u64
@@ -9741,9 +9659,7 @@ emitCrossUnitFnCall: function {
     aiter: call.arguments.iterate
     for aId: aiter loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             argOpNode: ast.nodes.get i: a.operation.u64
             slot9c: slots9c.get i: ai8
             if slot9c < fpNames.length then {
@@ -9860,7 +9776,7 @@ emitCrossUnitFnCall: function {
                 }
             }
             ai8 = ai8 + 1
-        } else null
+        }
     }
     args: String
     emitted9c: u64
@@ -10113,9 +10029,7 @@ emitCrossUnitSumCtor: function {
         aiter: call.arguments.iterate
         for aId: aiter loop {
             a: ast.nodes.get i: aId.u64
-            match (
-                a
-            ) case namedoperation then {
+            if a.namedoperation then {
                 if (got) == false then {
                     got = true
                     aOpNode: ast.nodes.get i: a.operation.u64
@@ -10125,7 +10039,7 @@ emitCrossUnitSumCtor: function {
                         av = emitExpr :ast :symtab :ctx n: aOpNode
                     }
                 }
-            } else null
+            }
         }
         e: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; \{payC}* _b = (\{payC}*)z_xmalloc(sizeof(\{payC})); *_b = \{av}; _u.data = _b; _u; })"
         return e
@@ -10261,9 +10175,7 @@ emitFnptrFieldCall: function {
     aiter: call.arguments.iterate
     for aId: aiter loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             av: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
             addr: false
             {
@@ -10297,7 +10209,7 @@ emitFnptrFieldCall: function {
             if addr then args.append "&"
             args.append av
             ai = ai + 1
-        } else null
+        }
     }
     mnFfP: memberCPrefix name: mn
     r: "\{recvExpr}\{acc}\{mnFfP}\{mn}(\{args})"
@@ -10340,9 +10252,7 @@ emitFnptrLocalCall: function {
     aiter: call.arguments.iterate
     for aId: aiter loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             av: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
             addr: false
             {
@@ -10376,7 +10286,7 @@ emitFnptrLocalCall: function {
             if addr then args.append "&"
             args.append av
             ai = ai + 1
-        } else null
+        }
     }
     r: "\{fcm}(\{args})"
     return r
@@ -10556,9 +10466,7 @@ emitUserFnCall: function {
     aiter: call.arguments.iterate
     for aId: aiter loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             argOpNode: ast.nodes.get i: a.operation.u64
             slot9b: slots.get i: ai8
             if slot9b < fpNames.length then {
@@ -10573,7 +10481,7 @@ emitUserFnCall: function {
                 )
             }
             ai8 = ai8 + 1
-        } else null
+        }
     }
     args: String
     emitted: u64
@@ -10706,9 +10614,7 @@ emitNamedCalleeChain: function {
         sji: u64
         with sjiter: call.arguments.iterate do for sja9Id: sjiter loop {
             sja: ast.nodes.get i: sja9Id.u64
-            match (
-                sja
-            ) case namedoperation then {
+            if sja.namedoperation then {
                 if sji > 0 then sjargs.append ", "
                 sjn: ast.nodes.get i: sja.operation.u64
                 sjv: emitExpr :ast :symtab :ctx n: sjn
@@ -10729,7 +10635,7 @@ emitNamedCalleeChain: function {
                     sjargs.append sjv
                 }
                 sji = sji + 1
-            } else null
+            }
         }
         return "z_stringJoin(\{sjargs})"
     }
@@ -13699,13 +13605,11 @@ emitInterpBuild: function {
     with piter: parts.iterate do for pId: piter loop {
         p: ast.nodes.get i: pId.u64
         isC: false
-        match (
-            p
-        ) case stringchunk then {
+        if p.stringchunk then {
             isC = true
             tl: p.text.length
             est = est + tl
-        } else null
+        }
         if (isC) == false then est = est + 16
     }
     sN: tmp.next
@@ -14216,9 +14120,7 @@ emitPrintStmt: function {
     aiter: call.arguments.iterate
     for aId: aiter loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             if (emitted) == false then {
                 emitted = true
                 (emitPrintArg
@@ -14231,7 +14133,7 @@ emitPrintStmt: function {
                     :buf
                 )
             }
-        } else null
+        }
     }
     if (emitted) == false then buf.append "    /* zemitterc: print with no argument */\n"
 }
@@ -14246,13 +14148,11 @@ plainStringLiteral: function {ast: Ast.view n: Node.view} out String is {
     } case atomstring then {
         if n.stringparts.length == 1 then {
             p: ast.nodes.get i: (n.stringparts.get i: 0).u64
-            match (
-                p
-            ) case stringchunk then {
+            if p.stringchunk then {
                 pt: p.text.stringView
                 pc: pt.string
                 return pc
-            } else null
+            }
         }
         return "".string
     } else {
@@ -14278,16 +14178,14 @@ emitErrorStmt: function {
     aiter: call.arguments.iterate
     for aId: aiter loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             if (got) == false then {
                 got = true
                 opn: ast.nodes.get i: a.operation.u64
                 av = emitExpr :ast :symtab :ctx n: opn
                 lit = plainStringLiteral :ast n: opn
             }
-        } else null
+        }
     }
     okArg: false
     if got then {
@@ -14323,15 +14221,13 @@ emitPanicStmt: function {
     aiter: call.arguments.iterate
     for aId: aiter loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             if (got) == false then {
                 got = true
                 aOpNode: ast.nodes.get i: a.operation.u64
                 av = emitExpr :ast :symtab :ctx n: aOpNode
             }
-        } else null
+        }
     }
     okArg: false
     if got then {
@@ -14697,15 +14593,13 @@ emitOptionBoxHoist: function {
         aiter: n.arguments.iterate
         for a9Id: aiter loop {
             a: ast.nodes.get i: a9Id.u64
-            match (
-                a
-            ) case namedoperation then {
+            if a.namedoperation then {
                 if (got) == false then {
                     got = true
                     aOpNode: ast.nodes.get i: a.operation.u64
                     av = emitExpr :ast :symtab :ctx n: aOpNode
                 }
-            } else null
+            }
         }
         vc: ctxCname :ctx tid: mid
         payC: armPayloadC :ast :symtab :ctx tid: mid arm: "some"
@@ -14873,14 +14767,12 @@ emitCallStmt: function {
         aiter: call.arguments.iterate
         for aId: aiter loop {
             a: ast.nodes.get i: aId.u64
-            match (
-                a
-            ) case namedoperation then {
+            if a.namedoperation then {
                 if (hasArg) == false then {
                     hasArg = true
                     emitReturnOfNode :ast :symtab :ctx vid: a.operation :ind :tmp :buf
                 }
-            } else null
+            }
         }
         if (hasArg) == false then {
             if ctx.genActive then {
@@ -16079,11 +15971,7 @@ emitDoWhileFor: function {
         pkn: ast.nodes.get i: pk.u64
         # the checker stamps the OPERATION node, so unwrap the same way
         pkop: pk
-        match (
-            pkn
-        ) case namedoperation then {
-            pkop = pkn.operation
-        } else null
+        if pkn.namedoperation then pkop = pkn.operation
         pcv: emitExpr :ast :symtab :ctx n: pkn
         tw8: (truthyCondText
             :ast
@@ -16847,9 +16735,7 @@ emitReassignLvalue: function {
             }
         }
     }
-    match (
-        n
-    ) case dottedpath then {
+    if n.dottedpath then {
         ba: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
         if ba.length > 0 then {
             ba9V: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent.u64))
@@ -16882,7 +16768,7 @@ emitReassignLvalue: function {
             memFpP: memberCPrefix name: memFp.stringView
             return "\{recvFpC}\{accFpL}\{memFpP}\{memFp}"
         }
-    } else null
+    }
     return (emitExpr :ast :symtab :ctx :n)
 }
 
@@ -16944,9 +16830,7 @@ emitGenericDissect: function {
         subjDesc = "\{concrete}"
         with cit: m.clauses.iterate do for cId: cit loop {
             cnode: ast.nodes.get i: cId.u64
-            match (
-                cnode
-            ) case caseclause then {
+            if cnode.caseclause then {
                 if win == 0 then {
                     if cnode.name != 0 then {
                         cnt: zast.poolTextAt pool: ast.names ref: cnode.name
@@ -16958,7 +16842,7 @@ emitGenericDissect: function {
                         } case err then null
                     }
                 }
-            } else null
+            }
         }
     } else {
         cn0: String
@@ -16970,13 +16854,11 @@ emitGenericDissect: function {
         if cn0.length > 0 then cnid = zast.poolFind pool: ast.names text: cn0.stringView
         with cit: m.clauses.iterate do for cId: cit loop {
             cnode: ast.nodes.get i: cId.u64
-            match (
-                cnode
-            ) case caseclause then {
+            if cnode.caseclause then {
                 if win == 0 then {
                     if cnid != 0 when cnode.name.u32 == cnid then win = cnode.statement
                 }
-            } else null
+            }
         }
         subjDesc = cn0
     }
@@ -17072,9 +16954,7 @@ matchGenericRoute: function {
     }
     dcore: matchSubjectCore :ast nid: m.subject.u64
     dcn: ast.nodes.get i: dcore.u64
-    match (
-        dcn
-    ) case dottedpath then {
+    if dcn.dottedpath then {
         dleaf: dottedChildText :ast n: (ast.nodes.get i: dcore.u64)
         dbnid: dottedBaseNodeId :ast n: (ast.nodes.get i: dcore.u64)
         dbst: stampIdOf :symtab nid: dbnid
@@ -17100,7 +16980,7 @@ matchGenericRoute: function {
                 }
             }
         }
-    } else null
+    }
     return false
 }
 
@@ -17290,12 +17170,10 @@ emitMatchStmt: function {
     covA: (ListVal zast.nameid)
     with c3iter: m.clauses.iterate do for c3Id: c3iter loop {
         c3: ast.nodes.get i: c3Id.u64
-        match (
-            c3
-        ) case caseclause then {
+        if c3.caseclause then {
             cnm: c3.name
             covA.append cnm
-        } else null
+        }
     }
     meV: String
     men: (matchElseNarrowing
@@ -17417,9 +17295,7 @@ emitOrdinalPairMatch: function {
     citer: m.clauses.iterate
     for cId: citer loop {
         c: ast.nodes.get i: cId.u64
-        match (
-            c
-        ) case caseclause then {
+        if c.caseclause then {
             condB: subj.string
             if falseArm > 0 when c.name.u64 == falseArm then condB = "!\{subj}"
             kwB: "if"
@@ -17442,7 +17318,7 @@ emitOrdinalPairMatch: function {
             }
             lcB: "\{ind}}\n"
             buf.append lcB
-        } else null
+        }
     }
     bdvg: matchDiverges :symtab nid: m.nodeid.u64
     emitBoolElse :ast :symtab :ctx oId: m.elseclause :assignTo :ind :tmp diverges: bdvg :buf
@@ -17602,9 +17478,7 @@ emitScalarClause: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
-    match (
-        c
-    ) case caseclause then {
+    if c.caseclause then {
         armC: zast.nameTextAt :ast ref: c.name
         arm: armC.stringView
     lbl: scalarArmLabel :ast :symtab :ctx :arm
@@ -17630,7 +17504,7 @@ emitScalarClause: function {
         }
         l6: "\{ind}}\n"
         buf.append l6
-    } else null
+    }
 }
 
 # emit one arm of a match over a tagged sum.
@@ -17649,9 +17523,7 @@ emitMatchClause: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
-    match (
-        c
-    ) case caseclause then {
+    if c.caseclause then {
         armC: zast.nameTextAt :ast ref: c.name
         arm: armC.stringView
         tg: variantTag :symtab tid: (ztypes.tid.create from: vtid.u64) :arm
@@ -17713,7 +17585,7 @@ emitMatchClause: function {
         }
         l6: "\{ind}}\n"
         buf.append l6
-    } else null
+    }
 }
 
 # emit a match's else arm.
@@ -18801,9 +18673,7 @@ rangeFromExpr: function {
         aiter: n.arguments.iterate
         for aId: aiter loop {
             a: ast.nodes.get i: aId.u64
-            match (
-                a
-            ) case namedoperation then {
+            if a.namedoperation then {
                 an: zast.nameTextAt :ast ref: a.name
                 if an.stringView == "from" then return (emitExpr
                     :ast
@@ -18811,7 +18681,7 @@ rangeFromExpr: function {
                     :ctx
                     n: (ast.nodes.get i: a.operation.u64)
                 )
-            } else null
+            }
         }
         return "0".string
     } else {
@@ -18830,9 +18700,7 @@ emitForCond: function {
     ind: StringView
     buf: String.borrow
 } is {
-    match (
-        n
-    ) case namedoperation then {
+    if n.namedoperation then {
         lblR7: zast.nameTextAt :ast ref: n.name
         lblV7: defVid :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.operation.u64))
         lbl: varCName :ctx vid: lblV7 name: lblR7.stringView
@@ -18865,7 +18733,7 @@ emitForCond: function {
                 buf.append li2
             }
         }
-    } else null
+    }
 }
 
 # the node id of expression `n`.
@@ -19390,9 +19258,7 @@ ifPredicateSeeds: function {
     body: ast.nodes.get i: bodyId.u64
     with kit: conds.iterate do for k9Id: kit loop {
         k: ast.nodes.get i: k9Id.u64
-        match (
-            k
-        ) case namedoperation then {
+        if k.namedoperation then {
             (seedCondOp
                 :ast
                 :symtab
@@ -19404,7 +19270,7 @@ ifPredicateSeeds: function {
                 :vals
                 :tids
             )
-        } else null
+        }
     }
 }
 
@@ -19425,9 +19291,7 @@ chainFactsOfClauses: function {
 } is {
     with cit: clauses.iterate do for c9Id: cit loop {
         c: ast.nodes.get i: c9Id.u64
-        match (
-            c
-        ) case ifclause then {
+        if c.ifclause then {
             if c.conditions.length == 1 then {
                 tS: (List String)
                 tV: (ListVal ztypes.vid)
@@ -19437,9 +19301,7 @@ chainFactsOfClauses: function {
                 tR: (List String)
                 with kit: c.conditions.iterate do for k9Id: kit loop {
                     k: ast.nodes.get i: k9Id.u64
-                    match (
-                        k
-                    ) case namedoperation then {
+                    if k.namedoperation then {
                         (chainCondFact
                             :ast
                             :symtab
@@ -19452,7 +19314,7 @@ chainFactsOfClauses: function {
                             negs: tN
                             recvs: tR
                         )
-                    } else null
+                    }
                 }
                 if tS.length == 1 then {
                     ms: tS.pop
@@ -19466,7 +19328,7 @@ chainFactsOfClauses: function {
                     recvs.append mr
                 }
             }
-        } else null
+        }
     }
 }
 
@@ -19774,9 +19636,7 @@ appendCondText: function {
     cond: String.borrow
 } is {
     k: ast.nodes.get i: kId.u64
-    match (
-        k
-    ) case namedoperation then {
+    if k.namedoperation then {
         cv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: k.operation.u64)
         tw: (truthyCondText
             :ast
@@ -19791,7 +19651,7 @@ appendCondText: function {
         } else {
             cond.append cv
         }
-    } else null
+    }
 }
 
 # whenCondSuspends -- a `when` condition of this clause holds a suspension.
@@ -19881,9 +19741,7 @@ emitIfClause: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
-    match (
-        n
-    ) case ifclause then {
+    if n.ifclause then {
         # a suspending `when` cannot be built into the header text: rendering it
         # there would put the suspension inside an expression. Compute the
         # conditions into a guard first and let the header test that. Only the
@@ -19981,7 +19839,7 @@ emitIfClause: function {
             }
             ri = ri + 1
         }
-    } else null
+    }
 }
 
 # emit an if/match else branch.
@@ -20751,9 +20609,7 @@ emitListComprehension: function {
         if forNode.conditions.length != 1 then return
         c0Id: forNode.conditions.get i: 0
         c0: ast.nodes.get i: c0Id.u64
-        match (
-            c0
-        ) case namedoperation then {
+        if c0.namedoperation then {
             lblR6: zast.nameTextAt :ast ref: c0.name
             lblV6: defVid :symtab nid: (interpPartNodeId n: (ast.nodes.get i: c0.operation.u64))
             lbl: varCName :ctx vid: lblV6 name: lblR6.stringView
@@ -20776,7 +20632,7 @@ emitListComprehension: function {
             )
             lcc: "\{ind}}\n"
             buf.append lcc
-        } else null
+        }
     } else null
 }
 
@@ -22174,9 +22030,7 @@ unitConstTextOf: function {
 # resolves every unit's natives under the main unit's name, so every row misses
 # and every declaration in the program reads as unimplemented at once.
 checkLoadedNatives: function {program: Node.view ctx: Ctx} is {
-    match (
-        program
-    ) case program then {
+    if program.program then {
         uCnt9c: program.ast.units.length
         uIdx9c: u64
         for uIdx9c < uCnt9c loop {
@@ -22201,7 +22055,7 @@ checkLoadedNatives: function {program: Node.view ctx: Ctx} is {
                 )
             }
         }
-    } else null
+    }
 }
 
 # checkNativeMembers -- the `is native` members of one of a type's two blocks
@@ -22219,9 +22073,7 @@ checkNativeMembers: function {
         if amn.namedoperation then {
             mn: zast.nameTextAt :ast ref: amn.name
             mo: ast.nodes.get i: amn.operation.u64
-            match (
-                mo
-            ) case functiondef then {
+            if mo.functiondef then {
                 if mo.isNative then {
                     mk: "\{unitName}.\{typeName}.\{mn}"
                     if (nativeHasRow :ctx path: mk.stringView) == false then {
@@ -22232,7 +22084,7 @@ checkNativeMembers: function {
                         )
                     }
                 }
-            } else null
+            }
         }
     }
 }
@@ -22315,9 +22167,7 @@ checkNativesResolve: function {
 # fill the data-element cache for the whole program, once, before anything
 # reads it
 fillDataElems: function {program: Node.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
-    match (
-        program
-    ) case program then {
+    if program.program then {
         uCnt9a: program.ast.units.length
         uIdx9a: u64
         for uIdx9a < uCnt9a loop {
@@ -22337,7 +22187,7 @@ fillDataElems: function {program: Node.view symtab: zenv.ZSymbolTable.view ctx: 
                 )
             }
         }
-    } else null
+    }
 }
 
 # populate a data block's element table.
@@ -22429,9 +22279,7 @@ dataElemLabel: function {ast: Ast.view n: Node.view} out String is {
 
 # scan the program for the runtime helpers it needs.
 fillNeeds: function {program: Node.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
-    match (
-        program
-    ) case program then {
+    if program.program then {
         uCnt9b: program.ast.units.length
         uIdx9b: u64
         for uIdx9b < uCnt9b loop {
@@ -22457,7 +22305,7 @@ fillNeeds: function {program: Node.view symtab: zenv.ZSymbolTable.view ctx: Ctx}
                 )
             }
         }
-    } else null
+    }
 }
 
 # scan one unit for the runtime helpers it needs.
@@ -22720,19 +22568,15 @@ scanNeeds: function {
     } case objectdef then {
         with aiter: n.asItems.iterate do for amId: aiter loop {
             am: ast.nodes.get i: amId.u64
-            match (
-                am
-            ) case namedoperation then {
+            if am.namedoperation then {
                 scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: am.operation.u64)
-            } else null
+            }
         }
         with iiter: n.isItems.iterate do for imId: iiter loop {
             im: ast.nodes.get i: imId.u64
-            match (
-                im
-            ) case namedoperation then {
+            if im.namedoperation then {
                 scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: im.operation.u64)
-            } else null
+            }
         }
     } case statement then {
         siter: n.statements.iterate
@@ -22969,9 +22813,7 @@ emitUnitMonoInstances: function {
                 fit: bodyIds.iterate
                 for fm: fit loop {
                     fm9Node: ast.nodes.get i: fm.u64
-                    match (
-                        fm9Node
-                    ) case namedoperation then {
+                    if fm9Node.namedoperation then {
                         if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: fm9Node.operation.u64)) then {
                             mname: zast.nameTextAt :ast ref: fm9Node.name
                             cfo: (symtab.typing.declChildOf
@@ -23030,7 +22872,7 @@ emitUnitMonoInstances: function {
                                 }
                             } case none then null
                         }
-                    } else null
+                    }
                 }
             }
         }
@@ -23050,9 +22892,7 @@ emitFnsPass: function {
     declOnly: bool
     buf: String.borrow
 } is {
-    match (
-        program
-    ) case program then {
+    if program.program then {
         uCnt9e: program.ast.units.length
         uIdx9e: u64
         for uIdx9e < uCnt9e loop {
@@ -23103,7 +22943,7 @@ emitFnsPass: function {
                 ctxBindMain :ctx name: sm.stringView unitDecl: smD
             }
         }
-    } else null
+    }
 }
 
 # emitFns -- the main unit's function declarations then definitions
@@ -23275,9 +23115,7 @@ collectFnDecls: function {
     di: u64
     with biter: bodyIds.iterate do for bmId: biter loop {
         bm: ast.nodes.get i: bmId.u64
-        match (
-            bm
-        ) case namedoperation then {
+        if bm.namedoperation then {
             if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: bm.operation.u64)) then {
                 nm: zast.nameTextAt :ast ref: bm.name
                 skipDepMain: false
@@ -23300,7 +23138,7 @@ collectFnDecls: function {
                     names.append nm.copy
                 }
             }
-        } else null
+        }
         di = di + 1
     }
 }
@@ -23326,9 +23164,7 @@ emitFnDeclsInOrder: function {
         didx: idxs.get i: wi
         dm2Id: bodyIds.get i: didx
         dm2: ast.nodes.get i: dm2Id.u64
-        match (
-            dm2
-        ) case namedoperation then {
+        if dm2.namedoperation then {
             fid: ztypes.tid
             if ownerTid.isZero then {
                 fid = userFnId :ast :symtab :ctx name: nm2.stringView
@@ -23400,7 +23236,7 @@ emitFnDeclsInOrder: function {
                     buf.append "}\n\n"
                 }
             }
-        } else null
+        }
         wi = wi + 1
     }
 }
@@ -23676,9 +23512,7 @@ emitFnBody: function {
             retTid: (ztypes.tid.create from: rbt.u64)
         )
     }
-    match (
-        op
-    ) case functiondef then {
+    if op.functiondef then {
         tmp: (TmpCtr n: 0 frees: (List OwedFree) listFrees: (List OwedFree))
         pnames: (List String)
         pids: (ListVal u64)
@@ -23756,7 +23590,7 @@ emitFnBody: function {
             lfi: tmp.listFrees.iterate
             for lfs: lfi loop buf.append lfs.stmt
         }
-    } else null
+    }
 }
 
 # collectUnitLiterals -- pool the plain literals of every main-unit
@@ -23767,9 +23601,7 @@ collectUnitLiterals: function {
     ids: ListVal u64
     texts: List String
 } is {
-    match (
-        program
-    ) case program then {
+    if program.program then {
         uCnt9f: program.ast.units.length
         uIdx9f: u64
         for uIdx9f < uCnt9f loop {
@@ -23796,7 +23628,7 @@ collectUnitLiterals: function {
                 )
             }
         }
-    } else null
+    }
 }
 
 # collect a unit's string literals for the literal pool.
@@ -23846,28 +23678,22 @@ collectFnLiterals: function {
     } case objectdef then {
         with iiter: n.isItems.iterate do for imId: iiter loop {
             im: ast.nodes.get i: imId.u64
-            match (
-                im
-            ) case namedoperation then {
+            if im.namedoperation then {
                 collectFnLiterals :ast n: (ast.nodes.get i: im.operation.u64) :ids :texts
-            } else null
+            }
         }
         with aiter: n.asItems.iterate do for amId: aiter loop {
             am: ast.nodes.get i: amId.u64
-            match (
-                am
-            ) case namedoperation then {
+            if am.namedoperation then {
                 collectFnLiterals :ast n: (ast.nodes.get i: am.operation.u64) :ids :texts
-            } else null
+            }
         }
     } case unitdef then {
         with ubiter: n.body.iterate do for ubm: ubiter loop {
             ubn: ast.nodes.get i: ubm.u64
-            match (
-                ubn
-            ) case namedoperation then {
+            if ubn.namedoperation then {
                 collectFnLiterals :ast n: (ast.nodes.get i: ubn.operation.u64) :ids :texts
-            } else null
+            }
         }
     } else null
 }
@@ -23934,9 +23760,7 @@ assembleEmitOutput: function {
     # method -- which emits after the runtime pass -- is still in time. This is
     # why `prelude` is a unit of its own: it goes into the header, ahead of the
     # literal pool, and no codeBuf walk may claim it.
-    match (
-        program
-    ) case program then {
+    if program.program then {
         (emitRuntimeUnit
             ast: program.ast
             :symtab
@@ -23945,7 +23769,7 @@ assembleEmitOutput: function {
             uname: "prelude"
             :buf
         )
-    } else null
+    }
     buf.reserve n: poolBuf.length + codeBuf.length + fnsBuf.length + 4096
     buf.append poolBuf
     buf.append "\n"
@@ -24066,17 +23890,13 @@ resolveRuntimeTids: function {
     sysId: zast.nameid
     strNmId: zast.nameid
     svNmId: zast.nameid
-    match (
-        program
-    ) case program then {
+    if program.program then {
         sysId = zast.poolFind pool: program.ast.names text: "system"
         strNmId = zast.poolFind pool: program.ast.names text: "String"
         svNmId = zast.poolFind pool: program.ast.names text: "StringView"
-    } else null
+    }
     sgo: (optionval.none u64)
-    match (
-        program
-    ) case program then {
+    if program.program then {
         ud11x: ztypecheck.unitDeclOfName st: symtab nameId: sysId
         sgo = (ztypecheck.resolvedByIdsRo
             ast: program.ast
@@ -24084,16 +23904,14 @@ resolveRuntimeTids: function {
             unitDecl: ud11x
             name: strNmId
         )
-    } else null
+    }
     match (
         sgo
     ) case some then {
         strId = ztypes.tid.create from: (sgo)
     } case none then null
     vgo: (optionval.none u64)
-    match (
-        program
-    ) case program then {
+    if program.program then {
         ud12x: ztypecheck.unitDeclOfName st: symtab nameId: sysId
         vgo = (ztypecheck.resolvedByIdsRo
             ast: program.ast
@@ -24101,7 +23919,7 @@ resolveRuntimeTids: function {
             unitDecl: ud12x
             name: svNmId
         )
-    } else null
+    }
     match (
         vgo
     ) case some then {
@@ -24109,9 +23927,7 @@ resolveRuntimeTids: function {
     } case none then null
     cerrId: ztypes.tid
     cgo: (optionval.none u64)
-    match (
-        program
-    ) case program then {
+    if program.program then {
         ud13x: ztypecheck.unitDeclOfName st: symtab nameId: sysId
         cgo = (ztypecheck.resolvedByIdsRo
             ast: program.ast
@@ -24119,7 +23935,7 @@ resolveRuntimeTids: function {
             unitDecl: ud13x
             name: (zast.poolFind pool: program.ast.names text: "converror")
         )
-    } else null
+    }
     match (
         cgo
     ) case some then {
@@ -24241,9 +24057,7 @@ emitCodeBody: function {
     codeBuf: String.borrow
 } is {
     codeBuf.reserve n: nodeEstE * 8
-    match (
-        program
-    ) case program then {
+    if program.program then {
         emitMonos ast: program.ast :symtab :ctx :runtimeDir buf: codeBuf
         # ahead of the runtime fragments: those dereference the layouts of the
         # types they serve, so anything a fragment touches must already be
@@ -24288,7 +24102,7 @@ emitCodeBody: function {
             :runtimeDir
             buf: codeBuf
         )
-    } else null
+    }
 }
 
 
@@ -24453,9 +24267,7 @@ emitC: function {
         }
     }
     loadNativeTbl :ctx :runtimeDir
-    match (
-        program
-    ) case program then {
+    if program.program then {
         buildDefUnitIndex :symtab :ctx ast: program.ast
         bindFragTypeTids :symtab :ctx ast: program.ast
         rmn: ctx.realMain.copy
@@ -24464,16 +24276,12 @@ emitC: function {
             name: rmn.stringView
             unitDecl: (unitDeclByName :symtab ast: program.ast name: rmn.stringView)
         )
-    } else null
+    }
     checkLoadedNatives :program :ctx
     fillDataElems :program :symtab :ctx
     fillNeeds :program :symtab :ctx
     nodeEstE: u64
-    match (
-        program
-    ) case program then {
-        nodeEstE = program.ast.nodes.length
-    } else null
+    if program.program then nodeEstE = program.ast.nodes.length
     fnsBuf: String
     fnsBuf.reserve n: nodeEstE * 24
     emitFns :program :symtab :ctx buf: fnsBuf
@@ -28660,9 +28468,7 @@ emitRecordDefs: function {
     ctx: Ctx
     buf: String.borrow
 } is {
-    match (
-        program
-    ) case program then {
+    if program.program then {
         # 3 phases across ALL file units so cross-unit refs resolve: every unit's
         # structs, then every unit's fwd-decls, then every unit's method bodies.
         ph: 1.u64
@@ -28705,7 +28511,7 @@ emitRecordDefs: function {
             }
             ph = ph + 1
         }
-    } else null
+    }
 }
 
 # emitDefMethods -- emit a record/class def's as-block methods (forward decls
@@ -28718,9 +28524,7 @@ emitDefMethods: function {
     declOnly: bool
     buf: String.borrow
 } is {
-    match (
-        bm
-    ) case namedoperation then {
+    if bm.namedoperation then {
         # A VARIANT'S as-block METHODS ARE METHODS. Only a record leg and a
         # class leg existed, so NO user method on a variant was ever emitted --
         # named or operator -- while the call site emitted a call to it. Every
@@ -28749,7 +28553,7 @@ emitDefMethods: function {
                 :buf
             )
         }
-    } else null
+    }
 }
 
 
@@ -29582,9 +29386,7 @@ fileFromArgCoerce: function {
 } out String is {
     with fiter: call.arguments.iterate do for fa9Id: fiter loop {
         fa: ast.nodes.get i: fa9Id.u64
-        match (
-            fa
-        ) case namedoperation then {
+        if fa.namedoperation then {
             faOpNode: ast.nodes.get i: fa.operation.u64
             fl: zast.nameTextAt :ast ref: fa.name
             if fl.stringView == "from" then {
@@ -29609,7 +29411,7 @@ fileFromArgCoerce: function {
                     return (svValueForm :ctx expr: fb.stringView isStr: true vid: fbq)
                 }
             }
-        } else null
+        }
     }
     return av.string
 }
@@ -29700,15 +29502,13 @@ emitFileMethodCall: function {
 
 # ioCreateWrapper -- the wrapper name X of an `io.X.create` callable, else "".
 ioCreateWrapper: function {ast: Ast.view n: Node.view} outx StringView is {
-    match (
-        n
-    ) case dottedpath then {
+    if n.dottedpath then {
         ccn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
         if ccn.stringView == "create" then {
             pb: dottedBaseAtom :ast n: (ast.nodes.get i: n.parent.u64)
             if pb == "io" then return (dottedChildText :ast n: (ast.nodes.get i: n.parent.u64))
         }
-    } else null
+    }
     return ""
 }
 
@@ -29727,11 +29527,7 @@ argBaseAtom: function {ast: Ast.view n: Node.view} outx StringView is {
     # whenever the label and the variable agree -- so a hand-written
     # `bag: bag` becomes `:bag` on the next format and the base disappeared
     # with it. The label IS the value's name here.
-    match (
-        n
-    ) case labelvalue then {
-        return (zast.nameTextAt :ast ref: n.name).stringView
-    } else null
+    if n.labelvalue then return (zast.nameTextAt :ast ref: n.name).stringView
     return ""
 }
 
@@ -29743,11 +29539,7 @@ argBaseNodeId: function {ast: Ast.view n: Node.view} out u32 is {
     a: (atomNodeId :n).u32.orPanic
     if a > 0 then return a
     # the `:name` shorthand carries its own stamp on its own row
-    match (
-        n
-    ) case labelvalue then {
-        return n.nodeid.u32
-    } else null
+    if n.labelvalue then return n.nodeid.u32
     return 0
 }
 
@@ -29773,9 +29565,7 @@ wrapperCreateArg: function {
     aiter: call.arguments.iterate
     for aId: aiter loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             al: zast.nameTextAt :ast ref: a.name
             if al.stringView == label then {
                 if (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: prtid.u64)) == ztypes.ztypetype.protocolType then {
@@ -29810,7 +29600,7 @@ wrapperCreateArg: function {
                 }
                 return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64))
             }
-        } else null
+        }
     }
     return "0".string
 }
@@ -30068,9 +29858,7 @@ emitNativeArg: function {
     seen: u64
     with aiter: call.arguments.iterate do for aId: aiter loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             al: zast.nameTextAt :ast ref: a.name
             if usePos then {
                 if al.length == 0 then {
@@ -30100,7 +29888,7 @@ emitNativeArg: function {
                     )
                 }
             }
-        } else null
+        }
     }
     return "0".string
 }
@@ -30223,15 +30011,13 @@ emitNativeFreeFnCall: function {
 
 # cliCreateClass -- the class name X of a `cli.X.create` callable, else "".
 cliCreateClass: function {ast: Ast.view n: Node.view} outx StringView is {
-    match (
-        n
-    ) case dottedpath then {
+    if n.dottedpath then {
         ccn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
         if ccn.stringView == "create" then {
             pb: dottedBaseAtom :ast n: (ast.nodes.get i: n.parent.u64)
             if pb == "cli" then return (dottedChildText :ast n: (ast.nodes.get i: n.parent.u64))
         }
-    } else null
+    }
     return ""
 }
 
@@ -30317,11 +30103,7 @@ emitResultCombinator: function {
     bnid: u32
     {
         cnDp: ast.nodes.get i: call.callable.u64
-        match (
-            cnDp
-        ) case dottedpath then {
-            bnid = cnDp.parent
-        } else null
+        if cnDp.dottedpath then bnid = cnDp.parent
     }
     if bnid == 0 then return "".string
     rtid0: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: bnid.u64))
@@ -30348,11 +30130,7 @@ emitResultCombinator: function {
     opId: zast.nodeid
     {
         a: ast.nodes.get i: firstArgId.u64
-        match (
-            a
-        ) case namedoperation then {
-            opId = a.operation
-        } else null
+        if a.namedoperation then opId = a.operation
     }
     if opId.isZero then return "".string
     dExpr: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: opId.u64)
@@ -30455,9 +30233,7 @@ emitUserIterCall: function {
         hasVal: false
         with aiter: call.arguments.iterate do for av9Id: aiter loop {
             atomVarId: ast.nodes.get i: av9Id.u64
-            match (
-                atomVarId
-            ) case namedoperation then {
+            if atomVarId.namedoperation then {
                 # `.call` takes at most ONE argument -- the per-call input --
                 # so the first one IS it, whatever the author labelled it.
                 if (hasVal) == false then {
@@ -30494,7 +30270,7 @@ emitUserIterCall: function {
                         valArg = ve
                     }
                 }
-            } else null
+            }
         }
         if hasVal then return "\{callC}(\{recvExpr}, \{valArg})"
         return "\{callC}(\{recvExpr})"
@@ -30688,9 +30464,7 @@ emitProtocolDispatch: function {
         ai9p: u64
         with aiter: call.arguments.iterate do for aId: aiter loop {
             a: ast.nodes.get i: aId.u64
-            match (
-                a
-            ) case namedoperation then {
+            if a.namedoperation then {
                 slot9p: slots9p.get i: ai9p
                 if slot9p < vpn.length then {
                     av: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
@@ -30715,7 +30489,7 @@ emitProtocolDispatch: function {
                     valBySlot9p.set key: slot9p value: fs9p
                 }
                 ai9p = ai9p + 1
-            } else null
+            }
         }
         pp9p: u64
         ppn9p: vpn.length
@@ -30732,9 +30506,7 @@ emitProtocolDispatch: function {
     } else {
         with aiter: call.arguments.iterate do for aId: aiter loop {
             a: ast.nodes.get i: aId.u64
-            match (
-                a
-            ) case namedoperation then {
+            if a.namedoperation then {
                 av: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
                 atid: (stampIdOf
                     :symtab
@@ -30755,7 +30527,7 @@ emitProtocolDispatch: function {
                 dargs.append ", "
                 dargs.append apfx
                 dargs.append av
-            } else null
+            }
         }
     }
     dslot: cSlotName name: mn
@@ -30790,9 +30562,7 @@ emitProtocolCreateCall: function {
     aiter: call.arguments.iterate
     for aId: aiter loop {
         a: ast.nodes.get i: aId.u64
-        match (
-            a
-        ) case namedoperation then {
+        if a.namedoperation then {
             an: zast.nameTextAt :ast ref: a.name
             if an.stringView == "from" then {
                 fop: ast.nodes.get i: a.operation.u64
@@ -30820,7 +30590,7 @@ emitProtocolCreateCall: function {
                 ce: "\{implBase}_\{label}_\{suffix}(\{refPfx}\{valVarC})"
                 return ce
             }
-        } else null
+        }
     }
     return "".string
 }
@@ -30844,9 +30614,7 @@ emitRecordDefsIn: function {
         if phase == 1 then {
         with biterA: bodyIds.iterate do for bmId: biterA loop {
             bm: ast.nodes.get i: bmId.u64
-            match (
-                bm
-            ) case namedoperation then {
+            if bm.namedoperation then {
                 if (isRecordDef n: (ast.nodes.get i: bm.operation.u64)) then {
                     nm: zast.nameTextAt :ast ref: bm.name
                     rid: userFnId :ast :symtab :ctx name: nm.stringView
@@ -30886,7 +30654,7 @@ emitRecordDefsIn: function {
                     op: (ast.nodes.get i: bm.operation.u64)
                     :buf
                 )
-            } else null
+            }
         }
         }
         if phase == 2 then {
@@ -30896,9 +30664,7 @@ emitRecordDefsIn: function {
         }
         with biterI: bodyIds.iterate do for biId: biterI loop {
             bi: ast.nodes.get i: biId.u64
-            match (
-                bi
-            ) case namedoperation then {
+            if bi.namedoperation then {
                 isImpl: false
                 if (isClassDef n: (ast.nodes.get i: bi.operation.u64)) then isImpl = true
                 if (isRecordDef n: (ast.nodes.get i: bi.operation.u64)) then isImpl = true
@@ -30922,16 +30688,14 @@ emitRecordDefsIn: function {
                         )
                     }
                 }
-            } else null
+            }
         }
         # main-unit function forward decls, after the struct defs (so a generator
         # function returning its synth iter class resolves) and before the method
         # bodies (a synth iterator's call body may call another generator's fn).
         with biterFD: bodyIds.iterate do for bfdId: biterFD loop {
             bfd: ast.nodes.get i: bfdId.u64
-            match (
-                bfd
-            ) case namedoperation then {
+            if bfd.namedoperation then {
                 if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: bfd.operation.u64)) then {
                     fdn: zast.nameTextAt :ast ref: bfd.name
                     fdid: userFnId :ast :symtab :ctx name: fdn.stringView
@@ -30962,7 +30726,7 @@ emitRecordDefsIn: function {
                         buf.append fdl
                     }
                 }
-            } else null
+            }
         }
         }
         if phase == 3 then {
@@ -31615,14 +31379,10 @@ emitAsConsts: function {
     op: Node.view
     buf: String.borrow
 } is {
-    match (
-        op
-    ) case objectdef then {
+    if op.objectdef then {
         with aiter: op.asItems.iterate do for amId: aiter loop {
             am: ast.nodes.get i: amId.u64
-            match (
-                am
-            ) case namedoperation then {
+            if am.namedoperation then {
                 albl: zast.nameTextAt :ast ref: am.name
                 cco: (symtab.typing.declChildOf
                     pool: ast.names
@@ -31656,9 +31416,9 @@ emitAsConsts: function {
                         }
                     }
                 } case none then null
-            } else null
+            }
         }
-    } else null
+    }
 }
 
 # emitClassMonoMethods -- emit every specialization's bodied methods for a
@@ -31673,9 +31433,7 @@ emitClassMonoMethods: function {
     declOnly: bool
     buf: String.borrow
 } is {
-    match (
-        op
-    ) case objectdef then {
+    if op.objectdef then {
         last8: symtab.reg.nextTypeId
         t8: u64
         for t8 < last8 loop {
@@ -31686,9 +31444,7 @@ emitClassMonoMethods: function {
                 ait8: op.isItems.iterate
                 for am8Id: ait8 loop {
                     am8: ast.nodes.get i: am8Id.u64
-                    match (
-                        am8
-                    ) case namedoperation then {
+                    if am8.namedoperation then {
                         if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: am8.operation.u64)) then {
                             mn8: zast.nameTextAt :ast ref: am8.name
                             co8: (symtab.typing.declChildOf
@@ -31747,14 +31503,12 @@ emitClassMonoMethods: function {
                                 }
                             } case none then null
                         }
-                    } else null
+                    }
                 }
                 ait8b: op.asItems.iterate
                 for am8bId: ait8b loop {
                     am8b: ast.nodes.get i: am8bId.u64
-                    match (
-                        am8b
-                    ) case namedoperation then {
+                    if am8b.namedoperation then {
                         if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: am8b.operation.u64)) then {
                             mn8b: zast.nameTextAt :ast ref: am8b.name
                             co8b: (symtab.typing.declChildOf
@@ -31813,12 +31567,12 @@ emitClassMonoMethods: function {
                                 }
                             } case none then null
                         }
-                    } else null
+                    }
                 }
             }
             t8 = t8 + 1
         }
-    } else null
+    }
 }
 
 # emitRecordMethods -- the record's as-block functions as free C
@@ -31845,24 +31599,20 @@ emitRecordMethods: function {
         )
         return
     }
-    match (
-        op
-    ) case objectdef then {
+    if op.objectdef then {
         idxs: (ListVal u64)
         names: (List String)
         ai: u64
         with aiter: op.asItems.iterate do for amId: aiter loop {
             am: ast.nodes.get i: amId.u64
-            match (
-                am
-            ) case namedoperation then {
+            if am.namedoperation then {
                 if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: am.operation.u64)) then {
                     av: ai
                     idxs.append av
                     an: zast.nameTextCopy :ast ref: am.name
                     names.append an
                 }
-            } else null
+            }
             ai = ai + 1
         }
         wi: u64
@@ -31872,9 +31622,7 @@ emitRecordMethods: function {
             mname: names.get i: wi
             am2Id: op.asItems.get i: midx
             am2: ast.nodes.get i: am2Id.u64
-            match (
-                am2
-            ) case namedoperation then {
+            if am2.namedoperation then {
                 mo: (symtab.typing.declChildOf
                     pool: ast.names
                     parentTypeId: tid
@@ -31894,7 +31642,7 @@ emitRecordMethods: function {
                         :buf
                     )
                 } case none then null
-            } else null
+            }
             wi = wi + 1
         }
         iidxs: (ListVal u64)
@@ -31902,16 +31650,14 @@ emitRecordMethods: function {
         iai: u64
         with iiter: op.isItems.iterate do for im9Id: iiter loop {
             im: ast.nodes.get i: im9Id.u64
-            match (
-                im
-            ) case namedoperation then {
+            if im.namedoperation then {
                 if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: im.operation.u64)) then {
                     iav: iai
                     iidxs.append iav
                     ian: zast.nameTextCopy :ast ref: im.name
                     inames.append ian
                 }
-            } else null
+            }
             iai = iai + 1
         }
         iwi: u64
@@ -31921,9 +31667,7 @@ emitRecordMethods: function {
             imname: inames.get i: iwi
             im2Id: op.isItems.get i: imidx
             im2: ast.nodes.get i: im2Id.u64
-            match (
-                im2
-            ) case namedoperation then {
+            if im2.namedoperation then {
                 imo: (symtab.typing.declChildOf
                     pool: ast.names
                     parentTypeId: tid
@@ -31943,10 +31687,10 @@ emitRecordMethods: function {
                         :buf
                     )
                 } case none then null
-            } else null
+            }
             iwi = iwi + 1
         }
-    } else null
+    }
 }
 
 # nodeYieldCount -- the number of `yield` expressions in a subtree (yields do
@@ -32023,20 +31767,14 @@ setupGenCtx: function {
     # the label belongs to the author: the function form always spelled it
     # `value`, and a declared generator spells it whatever its call sites read.
     hasVal: false
-    match (
-        op
-    ) case functiondef then {
+    if op.functiondef then {
         pcnt: u64
         with piter: op.parameters.iterate do for pm9Id: piter loop {
             pm: ast.nodes.get i: pm9Id.u64
-            match (
-                pm
-            ) case namedoperation then {
-                pcnt = pcnt + 1
-            } else null
+            if pm.namedoperation then pcnt = pcnt + 1
         }
         if pcnt > 1 then hasVal = true
-    } else null
+    }
     ctx.genHasValue = hasVal
     return true
 }
@@ -32259,14 +31997,10 @@ hoistExprYields: function {
         # expression. Every later condition is guarded by the ones before it
         # (`when` short-circuits) and every body is guarded by all of them, so
         # the descent goes no further.
-        match (
-            n
-        ) case ifexpr then {
+        if n.ifexpr then {
             if n.clauses.length > 0 then {
                 c0: ast.nodes.get i: (n.clauses.get i: 0).u64
-                match (
-                    c0
-                ) case ifclause then {
+                if c0.ifclause then {
                     if c0.conditions.length > 0 then (hoistExprYields
                         :ast
                         :symtab
@@ -32275,10 +32009,10 @@ hoistExprYields: function {
                         :ind
                         :buf
                     )
-                } else null
+                }
             }
             return
-        } else null
+        }
         if (hoistStopsHere :n) then return
         kids: zast.childIds :ast :n
         kiter: kids.iterate
