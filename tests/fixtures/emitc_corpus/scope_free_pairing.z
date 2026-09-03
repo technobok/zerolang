@@ -1,0 +1,29 @@
+# scope_free_pairing.z -- the emitter's owed-destructor rows stay paired with
+# the variable behind them after a nested block has flushed its own rows: an
+# owned String and an owned class bound BEFORE an inner block, the block's own
+# locals flushed at its close, more owned locals bound AFTER it, and a `.take`
+# alias in scope -- then an early return on one path and the fall-through on
+# the other. Each local is destroyed exactly once on both paths; the alias is
+# never destroyed on its own. The leak kind (ASan) is the judge.
+Box: class {
+    n: i64
+}
+tail: function {early: bool} out String is {
+    outer: "outer".string
+    first: (Box n: 1)
+    if early then {
+        inner: "inner".string
+        innerBox: (Box n: 2)
+        print "inner=\{inner} \{innerBox.n}"
+    }
+    after: "after".string
+    second: (Box n: 3)
+    taken: second.take
+    print "first=\{first.n} taken=\{taken.n}"
+    if early then return "\{outer}+\{after}"
+    return after.copy
+}
+main: function is {
+    print (tail early: true)
+    print (tail early: false)
+}

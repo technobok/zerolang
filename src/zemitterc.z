@@ -15,23 +15,32 @@ Node: zast.Node
 Ast: zast.Ast
 
 
-# TmpCtr -- per-function temp name counter.
+# OwedFree -- one destructor owed at the end of a block: the C name of the
+# local it destroys, the statement that destroys it (empty for a plain String,
+# whose free is composed where it is emitted so it can take that site's
+# indent), and the variable behind it -- the alias table is keyed by variable,
+# so only this can probe it; 0 for a synthesized temp, which is never a binding
+# and so never aliased. One row, so the three cannot drift apart when a block
+# flush pops them.
+OwedFree: class {
+    # the C identifier the destructor takes
+    name: String
+    # the full destructor statement, or empty for a plain String free
+    stmt: String
+    # the variable the local binds, 0 for a temp
+    vid: ztypes.vid
+}
+
+# TmpCtr -- per-function temp name counter, and the destructors owed at the
+# end of each open block.
 TmpCtr: class {
     # the next temp number, so two temps in one function never collide
     n: u64
-    # plain destructor calls owed at the end of the current block
-    frees: (List String)
+    # plain String frees owed at the end of the current block
+    frees: (List OwedFree)
     # collection destructor calls owed at block end, kept apart because they are
     # emitted in the other order
-    listFrees: (List String)
-    # the variable each listFrees entry destroys, parallel to it
-    listFreeVars: (List String)
-    # the VARIABLE of each cleanup entry, beside its emitted identifier: the
-    # alias table is keyed by variable, so only this can probe it. 0 for a
-    # synthesized temp, which is never a binding and so never aliased.
-    freeRaw: (ListVal ztypes.vid)
-    # the variable id behind each, 0 for a temp no binding owns
-    listFreeRaw: (ListVal ztypes.vid)
+    listFrees: (List OwedFree)
 } as {
     # the next temp number, taken and consumed. Numbers are per FUNCTION, not
     # per block, so a temp in one block cannot collide with one in a sibling
@@ -39,6 +48,16 @@ TmpCtr: class {
         v: this.n
         this.n = this.n + 1
         return v
+    }
+
+    # oweFree -- a String local to free at block end
+    oweFree: function {:this name: String.take vid: ztypes.vid} is {
+        this.frees.append (OwedFree :name stmt: String :vid)
+    }
+
+    # oweList -- a collection or class local to destroy at block end
+    oweList: function {:this stmt: String.take name: String.take vid: ztypes.vid} is {
+        this.listFrees.append (OwedFree :name :stmt :vid)
     }
 }
 
@@ -5468,10 +5487,7 @@ flushArgHoists: function {
         buf.append decl
         dto: ctx.argHoistDtors.get :i
         if dto.length > 0 then {
-            dtc: dto.copy
-            tmp.listFrees.append dtc
-            tmp.listFreeVars.append nmo.copy
-            tmp.listFreeRaw.append (ztypes.vid.create from: 0)
+            tmp.oweList stmt: dto.copy name: nmo.copy vid: (ztypes.vid.create from: 0)
         }
         i = i + 1
     }
@@ -7354,14 +7370,7 @@ emitInterpArgExpr: function {
         return (emitInterpArgExpr :ast :symtab :ctx n: (ast.nodes.get i: n.expression.u64))
     } case atomstring then {
         if (isInterp :ast parts: n.stringparts) then {
-            ltmp: (TmpCtr
-                n: 0
-                frees: (List String)
-                listFrees: (List String)
-                listFreeVars: (List String)
-                freeRaw: (ListVal ztypes.vid)
-                listFreeRaw: (ListVal ztypes.vid)
-            )
+            ltmp: (TmpCtr n: 0 frees: (List OwedFree) listFrees: (List OwedFree))
             lbuf: String
             # this interpolation emits into its OWN `({ ... })` scope, so hoists
             # already pending from the enclosing argument list must stay pending:
@@ -14636,9 +14645,7 @@ emitStringBindValue: function {
             sB: emitInterpBuild :ast :symtab :ctx parts: n.stringparts :ind :tmp :buf
             lst: "\{ind}\{ctx.strC}_t \{nm} = _s\{sB};\n"
             buf.append lst
-            nmc: nm.string
-            tmp.frees.append nmc
-            tmp.freeRaw.append nmVid
+            tmp.oweFree name: nm.string vid: nmVid
             return true
         } else {
             return false
@@ -14664,9 +14671,7 @@ emitStringBindValue: function {
                     buf.append th
                     lc: "\{ind}\{ctx.strC}_t \{nm} = \{ctx.strC}_copy(&\{tnm});\n"
                     buf.append lc
-                    nmc: nm.string
-                    tmp.frees.append nmc
-                    tmp.freeRaw.append nmVid
+                    tmp.oweFree name: nm.string vid: nmVid
                     return true
                 }
             }
@@ -15008,10 +15013,7 @@ emitCollectionBind: function {
         if (nbrw) == false then {
             lfree: "    \{lcb}_destroy(&\{nm});\n"
             lfsv: lfree.stringView
-            lfv: lfsv.string
-            tmp.listFrees.append lfv
-            tmp.listFreeVars.append nm.string
-            tmp.listFreeRaw.append nameVid
+            tmp.oweList stmt: lfsv.string name: nm.string vid: nameVid
         }
         return true
     }
@@ -15040,10 +15042,7 @@ emitCollectionBind: function {
         if (nbrw) == false then {
             sfree: "    \{scb}_destroy(\{nm});\n"
             sfsv: sfree.stringView
-            sfv: sfsv.string
-            tmp.listFrees.append sfv
-            tmp.listFreeVars.append nm.string
-            tmp.listFreeRaw.append nameVid
+            tmp.oweList stmt: sfsv.string name: nm.string vid: nameVid
         }
         return true
     }
@@ -15072,10 +15071,7 @@ emitCollectionBind: function {
         if (nbrw) == false then {
             mfree: "    \{mcb}_destroy(\{nm});\n"
             mfsv: mfree.stringView
-            mfv: mfsv.string
-            tmp.listFrees.append mfv
-            tmp.listFreeVars.append nm.string
-            tmp.listFreeRaw.append nameVid
+            tmp.oweList stmt: mfsv.string name: nm.string vid: nameVid
         }
         return true
     }
@@ -15132,9 +15128,7 @@ emitStringBind: function {
         if fvN > 0 then {
             lsc: "\{ind}\{ctx.strC}_t \{nm} = \{ctx.strC}_from_view(_zs\{fvN});\n"
             buf.append lsc
-            nmc2: nm.string
-            tmp.frees.append nmc2
-            tmp.freeRaw.append nameVid
+            tmp.oweFree name: nm.string vid: nameVid
             return true
         }
         did: (emitStringBindValue
@@ -15163,9 +15157,7 @@ emitStringBind: function {
             # branch does
             emitValueTakeInvalidations :ast :symtab :ctx n: avn :ind :buf
             if (bindingRhsIsBorrow :ast :symtab :ctx n: avn) == false then {
-                nmc3: nm.string
-                tmp.frees.append nmc3
-                tmp.freeRaw.append nameVid
+                tmp.oweFree name: nm.string vid: nameVid
                 # a binding from a bare owned local is a MOVE, exactly as a
                 # reassignment from one is: zero the source so its scope-exit
                 # free no-ops now that this binding owns the buffer.
@@ -15365,17 +15357,12 @@ emitTakeAliasBind: function {
                 # like any other owned String local.
                 ldcbC: ctxCname :ctx tid: (ztypes.tid.create from: ntO.u64)
                 if ldcbC.stringView == ctx.strC.stringView then {
-                    nmcB: nm.string
-                    tmp.frees.append nmcB
-                    tmp.freeRaw.append nameVid
+                    tmp.oweFree name: nm.string vid: nameVid
                 } else {
                     if (symtab.reg.needsDestructor typeId: ntO) then {
                         ldcbB: ctxCname :ctx tid: (ztypes.tid.create from: ntO.u64)
                         ldfB: "    \{ldcbB}_destroy(&\{nm});\n"
-                        ldfsB: ldfB.copy
-                        tmp.listFrees.append ldfsB
-                        tmp.listFreeVars.append nm.string
-                        tmp.listFreeRaw.append nameVid
+                        tmp.oweList stmt: ldfB.copy name: nm.string vid: nameVid
                     }
                 }
                 return true
@@ -16344,8 +16331,7 @@ registerScopeDestroy: function {
 } is {
     if (bindingRhsIsBorrow :ast :symtab :ctx n: valueNode) then return
     if tid == ctx.strTid then {
-        tmp.frees.append nm.string
-        tmp.freeRaw.append nameVid
+        tmp.oweFree name: nm.string vid: nameVid
         return
     }
     hasDtor: false
@@ -16359,9 +16345,7 @@ registerScopeDestroy: function {
     dref: "&\{nm}"
     if (isBoxTid :symtab :tid) then dref = nm.string
     df: "    \{dcb}_destroy(\{dref});\n"
-    tmp.listFrees.append df.copy
-    tmp.listFreeVars.append nm.string
-    tmp.listFreeRaw.append nameVid
+    tmp.oweList stmt: df.copy name: nm.string vid: nameVid
 }
 
 # emitWithStmt -- `with x: <value> do <body>`: the value is bound for the body's
@@ -17524,13 +17508,12 @@ flushBlockFrees: function {
     live: diverged == false
     for tmp.listFrees.length > lL loop {
         lvo: tmp.listFrees.pop
-        tmp.listFreeVars.pop
-        if live then buf.append lvo
+        if live then buf.append lvo.stmt
     }
     for tmp.frees.length > fL loop {
         fvo: tmp.frees.pop
         if live then {
-            ff: "    \{ctx.strC}_free(&\{fvo});\n"
+            ff: "    \{ctx.strC}_free(&\{fvo.name});\n"
             buf.append ff
         }
     }
@@ -17549,13 +17532,13 @@ emitBreakFrees: function {ctx: Ctx.view tmp: TmpCtr.view ind: StringView buf: St
     for i > lMark loop {
         i = i - 1
         st: tmp.listFrees.get :i
-        buf.append st
+        buf.append st.stmt
     }
     j: tmp.frees.length
     for j > fMark loop {
         j = j - 1
         nm: tmp.frees.get i: j
-        ff0: "\{ind}\{ctx.strC}_free(&\{nm});\n"
+        ff0: "\{ind}\{ctx.strC}_free(&\{nm.name});\n"
         buf.append ff0
     }
 }
@@ -17576,13 +17559,13 @@ emitContinueFrees: function {
     for i > lMark loop {
         i = i - 1
         st: tmp.listFrees.get :i
-        buf.append st
+        buf.append st.stmt
     }
     j: tmp.frees.length
     for j > fMark loop {
         j = j - 1
         nm: tmp.frees.get i: j
-        ff0: "\{ind}\{ctx.strC}_free(&\{nm});\n"
+        ff0: "\{ind}\{ctx.strC}_free(&\{nm.name});\n"
         buf.append ff0
     }
 }
@@ -17861,10 +17844,7 @@ emitDoBindValue: function {
                 buf.append l0b
                 dcb: ctxCname :ctx :tid
                 ldf: "    \{dcb}_destroy(&\{nm});\n"
-                ldfs: ldf.copy
-                tmp.listFrees.append ldfs
-                tmp.listFreeVars.append nm.string
-                tmp.listFreeRaw.append nmVid
+                tmp.oweList stmt: ldf.copy name: nm.string vid: nmVid
             }
             l1: "\{ind}do {\n"
             buf.append l1
@@ -17898,10 +17878,7 @@ emitDoBindValue: function {
             if (symtab.reg.needsDestructor typeId: tid) then {
                 pdcb: ctxCname :ctx :tid
                 pldf: "    \{pdcb}_destroy(&\{nm});\n"
-                pldfs: pldf.copy
-                tmp.listFrees.append pldfs
-                tmp.listFreeVars.append nm.string
-                tmp.listFreeRaw.append nmVid
+                tmp.oweList stmt: pldf.copy name: nm.string vid: nmVid
             }
             l3: "\{ind}{\n"
             buf.append l3
@@ -18319,10 +18296,8 @@ emitObjIterRecv: function {
         # iterator whose only owned field is a promoted local
         if (structDestroyNontrivial :symtab :ctx tid: itid) then {
             gdt: "    \{itCb}_destroy(&_git\{mN});\n"
-            tmp.listFrees.append gdt
             gdn: "_git\{mN}"
-            tmp.listFreeVars.append gdn
-            tmp.listFreeRaw.append (ztypes.vid.create from: 0)
+            tmp.oweList stmt: gdt name: gdn vid: (ztypes.vid.create from: 0)
         }
     }
     return iterRecv
@@ -23582,17 +23557,17 @@ refsLocal: function {expr: StringView name: StringView} out bool is {
 }
 
 # isRegisteredOwned -- true if `name` is a registered owned local (a String in
-# tmp.frees or a collection/class in tmp.listFreeVars). Decides whether a value
+# tmp.frees or a collection/class in tmp.listFrees). Decides whether a value
 # moved into an inline construction must be zeroed so its scope-cleanup destructor
 # becomes a no-op.
 isRegisteredOwned: function {tmp: TmpCtr.view name: StringView} out bool is {
     fit: tmp.frees.iterate
     for fv: fit loop {
-        if fv.stringView == name then return true
+        if fv.name.stringView == name then return true
     }
-    vit: tmp.listFreeVars.iterate
+    vit: tmp.listFrees.iterate
     for vv: vit loop {
-        if vv.stringView == name then return true
+        if vv.name.stringView == name then return true
     }
     return false
 }
@@ -23615,30 +23590,27 @@ emitReturnCleanup: function {
     fRi: u64
     for fRi < tmp.frees.length loop {
         fvR: tmp.frees.get i: fRi
-        fRaw: tmp.freeRaw.get i: fRi
         fRi = fRi + 1
         keepF: true
         if keepRefd then {
-            if (refsLocal expr: retExpr name: fvR.stringView) then keepF = false
+            if (refsLocal expr: retExpr name: fvR.name.stringView) then keepF = false
         }
-        if (vvHas xs: ctx.aliases vid: fRaw) then keepF = false
+        if (vvHas xs: ctx.aliases vid: fvR.vid) then keepF = false
         if keepF then {
-            lfR: "\{ind}\{ctx.strC}_free(&\{fvR});\n"
+            lfR: "\{ind}\{ctx.strC}_free(&\{fvR.name});\n"
             buf.append lfR
         }
     }
     li: u64
     nL: tmp.listFrees.length
     for li < nL loop {
-        stmt: tmp.listFrees.get i: li
-        var: tmp.listFreeVars.get i: li
-        lRaw: tmp.listFreeRaw.get i: li
+        owed: tmp.listFrees.get i: li
         keepL: true
         if keepRefd then {
-            if (refsLocal expr: retExpr name: var.stringView) then keepL = false
+            if (refsLocal expr: retExpr name: owed.name.stringView) then keepL = false
         }
-        if (vvHas xs: ctx.aliases vid: lRaw) then keepL = false
-        if keepL then buf.append stmt
+        if (vvHas xs: ctx.aliases vid: owed.vid) then keepL = false
+        if keepL then buf.append owed.stmt
         li = li + 1
     }
     # a return exits every enclosing loop: emit each owned-payload loop's
@@ -23688,14 +23660,7 @@ emitFnBody: function {
     match (
         op
     ) case functiondef then {
-        tmp: (TmpCtr
-            n: 0
-            frees: (List String)
-            listFrees: (List String)
-            listFreeVars: (List String)
-            freeRaw: (ListVal ztypes.vid)
-            listFreeRaw: (ListVal ztypes.vid)
-        )
+        tmp: (TmpCtr n: 0 frees: (List OwedFree) listFrees: (List OwedFree))
         pnames: (List String)
         pids: (ListVal u64)
         pids9Nm: (ListVal u64)
@@ -23720,9 +23685,7 @@ emitFnBody: function {
                 )
                 pmn: varCName :ctx vid: pmnB name: ppn.stringView
                 if ppid == ctx.strTid then {
-                    pms: pmn.copy
-                    tmp.frees.append pms
-                    tmp.freeRaw.append pmnB
+                    tmp.oweFree name: pmn.copy vid: pmnB
                 } else {
                     # owned .take Set/Map params are skipped: declared by value, but a
                     # Set/Map _destroy frees the container as a heap pointer (would need
@@ -23747,10 +23710,7 @@ emitFnBody: function {
                         if (symtab.reg.needsDestructor typeId: puse) then {
                             pcb: ctxCname :ctx tid: (ztypes.tid.create from: puse.u64)
                             pdf: "    \{pcb}_destroy(&\{pmn});\n"
-                            pdfs: pdf.copy
-                            tmp.listFrees.append pdfs
-                            tmp.listFreeVars.append pmn.copy
-                            tmp.listFreeRaw.append pmnB
+                            tmp.oweList stmt: pdf.copy name: pmn.copy vid: pmnB
                         }
                     }
                 }
@@ -23771,11 +23731,11 @@ emitFnBody: function {
         if endsRet == false then {
             fiter: tmp.frees.iterate
             for fv: fiter loop {
-                lf: "    \{ctx.strC}_free(&\{fv});\n"
+                lf: "    \{ctx.strC}_free(&\{fv.name});\n"
                 buf.append lf
             }
             lfi: tmp.listFrees.iterate
-            for lfs: lfi loop buf.append lfs
+            for lfs: lfi loop buf.append lfs.stmt
         }
     } else null
 }
