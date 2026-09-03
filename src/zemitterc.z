@@ -9246,30 +9246,24 @@ fnIsNativeId: function {symtab: zenv.ZSymbolTable.view fid: ztypes.tid} out bool
     return (symtab.reg.isNativeOf tid: fid)
 }
 
-# emitGenericFnCall -- a generic free-function call (identity 42): the callable
-# atom is stamped to the mono FUNCTION id by checkGenericCall. Emit that mono's
-# cname applied to the args. "" when the callable does not resolve to a mono fn,
-# or when the mono's template is NATIVE (no emitted body -- its C comes from a
-# name interception like z_stringJoin).
-emitGenericFnCall: function {
+# emitFnCallWithFid -- the argument work a call shares once its callee is
+# known: the parameter lists, the slot each written argument fills, and per
+# argument the pointer / byref / borrow-hoist question the parameter's own
+# ownership answers. What differs between a generic function, a generic unit's
+# method and a cross-unit function is only HOW the callee is found, which is
+# each caller's guard.
+emitFnCallWithFid: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.CallData.view
+    fid: ztypes.tid
 } out String is {
-    gdc: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
-    if gdc.length > 0 then return "".string
-    gmf: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: call.callable.u64))
-    if gmf.isZero then return "".string
-    if (symtab.reg.typetypeOf typeId: gmf) != ztypes.ztypetype.functionType then return "".string
-    gmo: originTidOf :symtab tid: gmf
-    if gmo.isZero then return "".string
-    if (fnIsNativeId :symtab fid: gmf) then return "".string
-    fc: ctxCname :ctx tid: gmf
+    fc: ctxCname :ctx tid: fid
     fpNames: (List String)
     fpIds: (ListVal u64)
     fpIds9Nm: (ListVal u64)
-    recFieldLists :ast :symtab tid: gmf names: fpNames ids: fpIds nameIds: fpIds9Nm
+    recFieldLists :ast :symtab tid: fid names: fpNames ids: fpIds nameIds: fpIds9Nm
     slots9g: argSlotList :ast :call :fpNames
     valBySlot9g: (IdMapR u64 V: String)
     ai: u64
@@ -9287,7 +9281,7 @@ emitGenericFnCall: function {
                     :symtab
                     :ctx
                     n: (ast.nodes.get i: a.operation.u64)
-                    fid: gmf
+                    :fid
                     pname: fpnO.stringView
                     pid: fpid
                 )
@@ -9308,19 +9302,19 @@ emitGenericFnCall: function {
                     if (paramIsReceiverName
                         :ast
                         :symtab
-                        fid: gmf
+                        :fid
                         pname: fpnO.stringView
                     ) then ptra = true
                     if (markedValtypeRefParam
                         :ast
                         :symtab
-                        fid: gmf
+                        :fid
                         pname: fpnO.stringView
                         pid: fpid
                     ) then ptra = true
                     if (symtab.typing.declOwnershipIs
                         pool: ast.names
-                        parentTypeId: gmf
+                        parentTypeId: fid
                         name: fpnO.stringView
                         own: ztypes.zparamownership.takeMode
                     ) == false when (isReftypeParam
@@ -9335,7 +9329,7 @@ emitGenericFnCall: function {
                             :ast
                             :symtab
                             :ctx
-                            fid: gmf
+                            :fid
                             pname: fpnO.stringView
                             pid: (ztypes.tid.create from: fpid.u64)
                         ) then ptra = true
@@ -9345,7 +9339,7 @@ emitGenericFnCall: function {
                             :ast
                             :symtab
                             :ctx
-                            fid: gmf
+                            :fid
                             pname: fpnO.stringView
                             tid: (ztypes.tid.create from: fpid.u64)
                         ) then ptra = true
@@ -9369,7 +9363,7 @@ emitGenericFnCall: function {
                         isBorrow93: (hoistExprIsBorrowRooted :ast :symtab :ctx n: argOpNode)
                         take93: (symtab.typing.declOwnershipIs
                             pool: ast.names
-                            parentTypeId: gmf
+                            parentTypeId: fid
                             name: fpnO.stringView
                             own: ztypes.zparamownership.takeMode
                         )
@@ -9417,6 +9411,29 @@ emitGenericFnCall: function {
 # emitUnitMethodCall -- a generic-unit-instance method call (intmath.add a: 3
 # b: 5): the receiver is stamped to a monomorphized UNIT type; the method is a
 # concrete FUNCTION child of it. Emit that mono fn's cname applied to the args.
+
+# emitGenericFnCall -- a generic free-function call (identity 42): the callable
+# atom is stamped to the mono FUNCTION id by checkGenericCall. Emit that mono's
+# cname applied to the args. "" when the callable does not resolve to a mono fn,
+# or when the mono's template is NATIVE (no emitted body -- its C comes from a
+# name interception like z_stringJoin).
+emitGenericFnCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.CallData.view
+} out String is {
+    gdc: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
+    if gdc.length > 0 then return "".string
+    gmf: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: call.callable.u64))
+    if gmf.isZero then return "".string
+    if (symtab.reg.typetypeOf typeId: gmf) != ztypes.ztypetype.functionType then return "".string
+    gmo: originTidOf :symtab tid: gmf
+    if gmo.isZero then return "".string
+    if (fnIsNativeId :symtab fid: gmf) then return "".string
+    return (emitFnCallWithFid :ast :symtab :ctx :call fid: gmf)
+}
+
 emitUnitMethodCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -9439,159 +9456,9 @@ emitUnitMethodCall: function {
     } case none then null
     if calleeTid.isZero then return "".string
     if (symtab.reg.typetypeOf typeId: calleeTid) != ztypes.ztypetype.functionType then return "".string
-    fc: ctxCname :ctx tid: calleeTid
-    fpNames: (List String)
-    fpIds: (ListVal u64)
-    fpIds9Nm: (ListVal u64)
-    recFieldLists :ast :symtab tid: calleeTid names: fpNames ids: fpIds nameIds: fpIds9Nm
-    slots9g: argSlotList :ast :call :fpNames
-    valBySlot9g: (IdMapR u64 V: String)
-    ai: u64
-    aiter: call.arguments.iterate
-    for a9Id: aiter loop {
-        a: ast.nodes.get i: a9Id.u64
-        if a.namedoperation then {
-            argOpNode: ast.nodes.get i: a.operation.u64
-            slot9g: slots9g.get i: ai
-            if slot9g < fpNames.length then {
-                fpid: fpIds.get i: slot9g
-                fpnO: fpNames.get i: slot9g
-                iav: (emitInterpArgForParam
-                    :ast
-                    :symtab
-                    :ctx
-                    n: (ast.nodes.get i: a.operation.u64)
-                    fid: (ztypes.tid.create from: calleeTid.u64)
-                    pname: fpnO.stringView
-                    pid: fpid
-                )
-                if iav.length > 0 then {
-                    valBySlot9g.set key: slot9g value: iav
-                } else {
-                    atomVarId: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
-                    avq: (atomVidIfPlain
-                        :ast
-                        :symtab
-                        :ctx
-                        n: (ast.nodes.get i: a.operation.u64)
-                        text: atomVarId.stringView
-                    )
-                    byref: false
-                    argRef: String
-                    ptra: false
-                    if (paramIsReceiverName
-                        :ast
-                        :symtab
-                        fid: (ztypes.tid.create from: calleeTid.u64)
-                        pname: fpnO.stringView
-                    ) then ptra = true
-                    if (markedValtypeRefParam
-                        :ast
-                        :symtab
-                        fid: (ztypes.tid.create from: calleeTid.u64)
-                        pname: fpnO.stringView
-                        pid: fpid
-                    ) then ptra = true
-                    if (symtab.typing.declOwnershipIs
-                        pool: ast.names
-                        parentTypeId: calleeTid
-                        name: fpnO.stringView
-                        own: ztypes.zparamownership.takeMode
-                    ) == false when (isReftypeParam
-                        :ast
-                        :symtab
-                        :ctx
-                        tid: (ztypes.tid.create from: fpid.u64)
-                    ) then {
-                        ptra = true
-                    } else {
-                        if (isBorrowStringParam
-                            :ast
-                            :symtab
-                            :ctx
-                            fid: (ztypes.tid.create from: calleeTid.u64)
-                            pname: fpnO.stringView
-                            pid: (ztypes.tid.create from: fpid.u64)
-                        ) then ptra = true
-                    }
-                    if (ptra) == false then {
-                        if (isListPtrParam
-                            :ast
-                            :symtab
-                            :ctx
-                            fid: (ztypes.tid.create from: calleeTid.u64)
-                            pname: fpnO.stringView
-                            tid: (ztypes.tid.create from: fpid.u64)
-                        ) then ptra = true
-                    }
-                    if ptra then {
-                        if (isPtrVid :ctx vid: avq) == false then {
-                            byref = true
-                            isBorrow94: (hoistExprIsBorrowRooted :ast :symtab :ctx n: argOpNode)
-                            argRef = (emitByrefArg
-                                :ast
-                                :symtab
-                                :ctx
-                                av: atomVarId.stringView
-                                pid: (ztypes.tid.create from: fpid.u64)
-                                isBorrow: isBorrow94
-                            )
-                        }
-                    }
-                    vbh9x: String
-                    if (ptra) == false then {
-                        isBorrow95: (hoistExprIsBorrowRooted :ast :symtab :ctx n: argOpNode)
-                        take95: (symtab.typing.declOwnershipIs
-                            pool: ast.names
-                            parentTypeId: calleeTid
-                            name: fpnO.stringView
-                            own: ztypes.zparamownership.takeMode
-                        )
-                        vbh9x = (hoistBorrowValArg
-                            :ast
-                            :symtab
-                            :ctx
-                            av: atomVarId.stringView
-                            pid: (ztypes.tid.create from: fpid.u64)
-                            paramTake: take95
-                            isBorrow: isBorrow95
-                        )
-                    }
-                    finalS9g: atomVarId.copy
-                    if byref then {
-                        finalS9g = argRef.copy
-                    } else {
-                        if vbh9x.length > 0 then finalS9g = vbh9x.copy
-                    }
-                    valBySlot9g.set key: slot9g value: finalS9g
-                }
-            }
-            ai = ai + 1
-        }
-    }
-    argTids: String
-    emitted9g: u64
-    pp9g: u64
-    ppn9g: fpNames.length
-    for pp9g < ppn9g loop {
-        vo9g: valBySlot9g.get key: pp9g
-        match (
-            vo9g
-        ) case some then {
-            if emitted9g > 0 then argTids.append ", "
-            argTids.append vo9g
-            emitted9g = emitted9g + 1
-        } case none then null
-        pp9g = pp9g + 1
-    }
-    e: "\{fc}(\{argTids})"
-    return e
+    return (emitFnCallWithFid :ast :symtab :ctx :call fid: calleeTid)
 }
 
-# dottedMemberTidOf -- the type id a dotted callable's `base.child` names. A
-# file-unit base answers through the unit-name index, which also follows
-# re-exports; a namespace base is absent from that index by design, so it
-# answers off its own type id. 0 when the base names no unit.
 dottedMemberTidOf: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -9648,157 +9515,9 @@ emitCrossUnitFnCall: function {
     fid: dottedMemberTidOf :ast :symtab :ctx callableId: call.callable
     if fid.isZero then return "".string
     if (symtab.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return "".string
-    fc: ctxCname :ctx tid: fid
-    fpNames: (List String)
-    fpIds: (ListVal u64)
-    fpIdsNm: (ListVal u64)
-    recFieldLists :ast :symtab tid: fid names: fpNames ids: fpIds nameIds: fpIdsNm
-    slots9c: argSlotList :ast :call :fpNames
-    valBySlot9c: (IdMapR u64 V: String)
-    ai8: u64
-    aiter: call.arguments.iterate
-    for aId: aiter loop {
-        a: ast.nodes.get i: aId.u64
-        if a.namedoperation then {
-            argOpNode: ast.nodes.get i: a.operation.u64
-            slot9c: slots9c.get i: ai8
-            if slot9c < fpNames.length then {
-                fpid8: fpIds.get i: slot9c
-                fpnO8: fpNames.get i: slot9c
-                iav8: (emitInterpArgForParam
-                    :ast
-                    :symtab
-                    :ctx
-                    n: (ast.nodes.get i: a.operation.u64)
-                    :fid
-                    pname: fpnO8.stringView
-                    pid: fpid8
-                )
-                if iav8.length > 0 then {
-                    valBySlot9c.set key: slot9c value: iav8
-                } else {
-                    atomVarId: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
-                    avq: (atomVidIfPlain
-                        :ast
-                        :symtab
-                        :ctx
-                        n: (ast.nodes.get i: a.operation.u64)
-                        text: atomVarId.stringView
-                    )
-                    byref8: false
-                    argRef8: String
-                    vbh8c: String
-                    ptra8: false
-                    if (paramIsReceiverName
-                        :ast
-                        :symtab
-                        :fid
-                        pname: fpnO8.stringView
-                    ) then ptra8 = true
-                    if (markedValtypeRefParam
-                        :ast
-                        :symtab
-                        :fid
-                        pname: fpnO8.stringView
-                        pid: fpid8
-                    ) then ptra8 = true
-                    if (symtab.typing.declOwnershipIs
-                        pool: ast.names
-                        parentTypeId: fid
-                        name: fpnO8.stringView
-                        own: ztypes.zparamownership.takeMode
-                    ) == false when (isReftypeParam
-                        :ast
-                        :symtab
-                        :ctx
-                        tid: (ztypes.tid.create from: fpid8.u64)
-                    ) then {
-                        ptra8 = true
-                    } else {
-                        if (isBorrowStringParam
-                            :ast
-                            :symtab
-                            :ctx
-                            :fid
-                            pname: fpnO8.stringView
-                            pid: (ztypes.tid.create from: fpid8.u64)
-                        ) then ptra8 = true
-                    }
-                    if (ptra8) == false then {
-                        if (isListPtrParam
-                            :ast
-                            :symtab
-                            :ctx
-                            :fid
-                            pname: fpnO8.stringView
-                            tid: (ztypes.tid.create from: fpid8.u64)
-                        ) then ptra8 = true
-                    }
-                    if ptra8 then {
-                        if (isPtrVid :ctx vid: avq) == false then {
-                            byref8 = true
-                            isBorrow96: (hoistExprIsBorrowRooted :ast :symtab :ctx n: argOpNode)
-                            argRef8 = (emitByrefArg
-                                :ast
-                                :symtab
-                                :ctx
-                                av: atomVarId.stringView
-                                pid: (ztypes.tid.create from: fpid8.u64)
-                                isBorrow: isBorrow96
-                            )
-                        }
-                    }
-                    if (ptra8) == false then {
-                        isBorrow97: (hoistExprIsBorrowRooted :ast :symtab :ctx n: argOpNode)
-                        take97: (symtab.typing.declOwnershipIs
-                            pool: ast.names
-                            parentTypeId: fid
-                            name: fpnO8.stringView
-                            own: ztypes.zparamownership.takeMode
-                        )
-                        vbh8c = (hoistBorrowValArg
-                            :ast
-                            :symtab
-                            :ctx
-                            av: atomVarId.stringView
-                            pid: (ztypes.tid.create from: fpid8.u64)
-                            paramTake: take97
-                            isBorrow: isBorrow97
-                        )
-                    }
-                    finalS9c: atomVarId.copy
-                    if byref8 then {
-                        finalS9c = argRef8.copy
-                    } else {
-                        if vbh8c.length > 0 then finalS9c = vbh8c.copy
-                    }
-                    valBySlot9c.set key: slot9c value: finalS9c
-                }
-            }
-            ai8 = ai8 + 1
-        }
-    }
-    args: String
-    emitted9c: u64
-    pp9c: u64
-    ppn9c: fpNames.length
-    for pp9c < ppn9c loop {
-        vo9c: valBySlot9c.get key: pp9c
-        match (
-            vo9c
-        ) case some then {
-            if emitted9c > 0 then args.append ", "
-            args.append vo9c
-            emitted9c = emitted9c + 1
-        } case none then null
-        pp9c = pp9c + 1
-    }
-    e8: "\{fc}(\{args})"
-    return e8
+    return (emitFnCallWithFid :ast :symtab :ctx :call :fid)
 }
 
-# dottedParentChild -- the middle segment of a 3-segment dotted path `a.b.c`:
-# the child text of the parent (`b`). "" when not a nested dotted path.
 dottedParentChild: function {ast: Ast.view n: Node.view} out String is {
     match (
         n
