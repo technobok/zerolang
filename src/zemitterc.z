@@ -1990,6 +1990,27 @@ monoStampIdOf: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view nid: u64} 
     }
 }
 
+# binopStampAt -- the operator stamp a binop node carries: the instance table
+# first when an instance walk is emitting, then the plain one. The owner and
+# the method are two columns of one answer, so one walk reads either.
+binopStampAt: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    nid: u64
+    # read the resolved METHOD rather than the declaring owner
+    wantMethod: bool
+} out ztypes.tid is {
+    if ctx.curThisTid > 0 then {
+        mk: (ztyping.monostamp mono: ctx.curThisTid.u64 node: nid)
+        mo: symtab.typing.monoBinopOwner.get key: mk
+        if wantMethod then mo = symtab.typing.monoBinopMethod.get key: mk
+        if mo.some then return (ztypes.tid.create from: mo)
+    }
+    go: symtab.typing.binopOwner.get key: nid
+    if wantMethod then go = symtab.typing.binopMethod.get key: nid
+    return (go.or d: ztypes.tid)
+}
+
 # binopOwnerAt / binopMethodAt -- the operator resolution the type checker
 # recorded for a binop node: the type that DECLARES the operator, and the
 # method it resolved to (0 where none was declared). The instance-walk answer
@@ -1998,54 +2019,14 @@ monoStampIdOf: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view nid: u64} 
 # different answer per instance. Both facts read through one accessor each so
 # that no caller can consult one table and forget the other; consulting only
 # the flat one is exactly what makes stampIdDeep blind inside a generic body.
-binopOwnerAt: function {
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    nid: u64
-} out ztypes.tid is {
-    if ctx.curThisTid > 0 then {
-        mk: (ztyping.monostamp mono: ctx.curThisTid.u64 node: nid)
-        mo: symtab.typing.monoBinopOwner.get key: mk
-        match (
-            mo
-        ) case some then {
-            return (ztypes.tid.create from: mo)
-        } case none then null
-    }
-    go: symtab.typing.binopOwner.get key: nid
-    match (
-        go
-    ) case some then {
-        return (ztypes.tid.create from: go)
-    } case none then {
-        return (ztypes.tid.create from: 0)
-    }
+binopOwnerAt: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view nid: u64} out ztypes.tid is {
+    return (binopStampAt :symtab :ctx :nid wantMethod: false)
 }
 
 # the method a binary operator resolved to, read from the stamp rather than
 # re-resolved
-binopMethodAt: function {
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    nid: u64
-} out ztypes.tid is {
-    if ctx.curThisTid > 0 then {
-        mk: (ztyping.monostamp mono: ctx.curThisTid.u64 node: nid)
-        mo: symtab.typing.monoBinopMethod.get key: mk
-        match (
-            mo
-        ) case some then {
-            return (ztypes.tid.create from: mo)
-        } case none then null
-    }
-    go: symtab.typing.binopMethod.get key: nid
-    match (
-        go
-    ) case some then {
-        return (ztypes.tid.create from: go)
-    } case none then {
-        return (ztypes.tid.create from: 0)
-    }
+binopMethodAt: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view nid: u64} out ztypes.tid is {
+    return (binopStampAt :symtab :ctx :nid wantMethod: true)
 }
 
 # nativeMemberKey -- the natives.tbl path of a MEMBER on a native receiver:
@@ -25191,40 +25172,30 @@ emitMapIters: function {
 # parameter rather than off the mono's name: the name is composed text, the
 # parameter is the declaration.
 mapKeyType: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid} out u64 is {
-    so: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkSet
-    match (
-        so
-    ) case some then {
-        ko: (symtab.typing.declChildOfId
-            parentTypeId: (ztypes.tid.create from: so.u64)
-            nameId: zast.names.wkKey
-        )
-        match (
-            ko
-        ) case some then {
-            return ko
-        } case none then null
-    } case none then null
-    return 0
+    return (memberOfMemberType :symtab :monoId outer: zast.names.wkSet inner: zast.names.wkKey)
 }
 
 # the element type id of Set instantiation `monoId`.
 setElemType: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid} out u64 is {
-    ao: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkAdd
-    match (
-        ao
-    ) case some then {
-        io: (symtab.typing.declChildOfId
-            parentTypeId: (ztypes.tid.create from: ao.u64)
-            nameId: zast.names.wkItem
-        )
-        match (
-            io
-        ) case some then {
-            return io
-        } case none then null
-    } case none then null
-    return 0
+    return (memberOfMemberType :symtab :monoId outer: zast.names.wkAdd inner: zast.names.wkItem)
+}
+
+# memberOfMemberType -- the type of `inner` on the type of `outer` on `monoId`:
+# how a container instance names its key or element, through the method that
+# takes one. 0 when either step has no such member.
+memberOfMemberType: function {
+    symtab: zenv.ZSymbolTable.view
+    monoId: ztypes.tid
+    outer: zast.nameid
+    inner: zast.nameid
+} out u64 is {
+    oo: symtab.typing.declChildOfId parentTypeId: monoId nameId: outer
+    if (oo.some) == false then return 0
+    io: (symtab.typing.declChildOfId
+        parentTypeId: (ztypes.tid.create from: oo.u64)
+        nameId: inner
+    )
+    return (io.or d: 0)
 }
 
 # the value type id of Map instantiation `monoId`.
@@ -30655,70 +30626,34 @@ emitOneVariant: function {
     buf.append "}\n\n"
 }
 
+# objectDefIsKind -- the node defines an object of that kind. The four
+# predicates below differ in the kind alone.
+objectDefIsKind: function {n: Node.view kind: zast.objectkind} out bool is {
+    if n.objectdef then return n.kind == kind
+    return false
+}
+
 # true when `n` is a class definition. A generator is one: its `is` fields are
 # a class's fields and its `call` is a method, so it emits through the same path.
 isClassDef: function {n: Node.view} out bool is {
-    match (
-        n
-    ) case objectdef then {
-        if n.kind == zast.objectkind.classDef then {
-            return true
-        } else {
-            if n.kind == zast.objectkind.generatorDef then {
-                return true
-            } else {
-                return false
-            }
-        }
-    } else {
-        return false
-    }
+    if (objectDefIsKind :n kind: zast.objectkind.classDef) then return true
+    return (objectDefIsKind :n kind: zast.objectkind.generatorDef)
 }
 
 # true when `n` is a record definition.
 isRecordDef: function {n: Node.view} out bool is {
-    match (
-        n
-    ) case objectdef then {
-        if n.kind == zast.objectkind.recordDef then {
-            return true
-        } else {
-            return false
-        }
-    } else {
-        return false
-    }
+    return (objectDefIsKind :n kind: zast.objectkind.recordDef)
 }
 
 # true when `n` is a variant definition.
 isVariantDef: function {n: Node.view} out bool is {
-    match (
-        n
-    ) case objectdef then {
-        if n.kind == zast.objectkind.variantDef then {
-            return true
-        } else {
-            return false
-        }
-    } else {
-        return false
-    }
+    return (objectDefIsKind :n kind: zast.objectkind.variantDef)
 }
 
 # whether a node defines a union, which decides whether its arms may carry
 # reftypes
 isUnionDef: function {n: Node.view} out bool is {
-    match (
-        n
-    ) case objectdef then {
-        if n.kind == zast.objectkind.unionDef then {
-            return true
-        } else {
-            return false
-        }
-    } else {
-        return false
-    }
+    return (objectDefIsKind :n kind: zast.objectkind.unionDef)
 }
 
 # structDestroyNontrivial -- the type's destructor frees at least one field.
