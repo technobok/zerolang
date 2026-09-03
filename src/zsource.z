@@ -66,10 +66,11 @@ defaultOpts: function {} out lintopts is {
 
 # ---- AST query helpers for the parse-tier rules ----
 
-# The line count above which A005 reports a function. It counts RAW SOURCE SPAN, so a
-# doc comment and an exploded parameter list both push a function toward it -- which is
-# why the documentation work raised it from 80 rather than changing what it measures.
-longFunctionLines: 100.u32
+# The line count above which A005 reports a function. It counts RAW SOURCE SPAN from
+# the definition to the deepest statement its body reaches, so a doc comment and an
+# exploded parameter list both push a function toward it. A body that is one `match`
+# is exempt: a dispatcher is as long as the arms it names.
+longFunctionLines: 150.u32
 
 # unitOpOfName -- the unitdef node of the program's unit named `uname`, 0 when
 # no unit has that name.
@@ -183,6 +184,29 @@ plainLiteralText: function {ast: Ast.view n: Node.view} out (Option String) is {
     } else {
         return (Option.none String)
     }
+}
+
+# bodyIsOneMatch -- the body is a single statement and that statement is a
+# `match`: a dispatcher, whose length is the number of arms it names. The
+# match sits under the line's expression wrapper, so the wrappers are peeled.
+bodyIsOneMatch: function {ast: Ast.view bodyId: zast.nodeid} out bool is {
+    if (zast.stmtLineCount :ast nid: bodyId) != 1 then return false
+    id: zast.stmtLineAt :ast nid: bodyId i: 0
+    depth: 0
+    for depth < 4 loop {
+        n: ast.nodes.get i: id.u64
+        match (
+            n
+        ) case statementline then {
+            id = n.statementline
+        } case expression then {
+            id = n.expression
+        } case caseexpr then {
+            return true
+        } else return false
+        depth = depth + 1
+    }
+    return false
 }
 
 # isComposedParts -- a string literal's parts shaped like a composed key: two
@@ -1802,19 +1826,14 @@ Analysis: class {
     }
 
     # checkLongFunction -- A005: a function whose body spans more than
-    # longFunctionLines source lines (measured to its last statement line).
+    # longFunctionLines source lines, measured from the definition to the
+    # deepest statement it reaches (one line above the closing brace). A body
+    # that is one `match` is exempt: splitting a dispatcher hides the shape it
+    # exists to show.
     checkLongFunction: function {:this ast: Ast.view bodyId: zast.nodeid line: u32 col: u32} is {
         if bodyId.isZero then return
-        lastLine: line
-        b: ast.nodes.get i: bodyId.u64
-        match (
-            b
-        ) case statement then {
-            with it: b.statements.iterate do for sId: it loop {
-                sp: zast.posOf n: (ast.nodes.get i: sId.u64)
-                if sp.line > lastLine then lastLine = sp.line
-            }
-        } else null
+        if (bodyIsOneMatch :ast :bodyId) then return
+        lastLine: zast.spanEndLineAt :ast id: bodyId.u32
         span: (lastLine - line) + 1
         if span > longFunctionLines then {
             (this.info
