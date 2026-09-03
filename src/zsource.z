@@ -72,6 +72,10 @@ defaultOpts: function {} out lintopts is {
 # is exempt: a dispatcher is as long as the arms it names.
 longFunctionLines: 150.u32
 
+# The body length from which A006 compares shapes: below it a match is a
+# coincidence of small bodies, not a copy.
+duplicateBodyLines: 8.u32
+
 # unitOpOfName -- the unitdef node of the program's unit named `uname`, 0 when
 # no unit has that name.
 unitOpOfName: function {ast: Ast.view uname: StringView} out zast.nodeid is {
@@ -209,6 +213,37 @@ lineLeavesBlock: function {ast: Ast.view id: u32} out bool is {
         depth = depth + 1
     }
     return false
+}
+
+# bodyKeyInto -- the shape of the subtree at `id`, appended to `buf`: every arm
+# name, each binary operator and each literal chunk kept, every other name
+# folded away. Two bodies with the same key differ only in what they call
+# things -- the field they read, the map they probe, the helper they forward
+# to -- which is what A006 exists to find.
+bodyKeyInto: function {ast: Ast.view id: u32 buf: String.borrow} is {
+    n: ast.nodes.get i: id.u64
+    buf.append s: (zast.armName :n)
+    match (
+        n
+    ) case binop then {
+        op: ast.nodes.get i: n.operator.u64
+        match (
+            op
+        ) case atomid then {
+            buf.appendByte b: 32
+            buf.append s: (zast.nameTextAt :ast ref: op.name)
+        } else null
+    } case stringchunk then {
+        buf.appendByte b: 34
+        buf.append s: n.text.stringView
+    } else null
+    buf.appendByte b: 40
+    kids: zast.childIdsAt :ast :id
+    with it: kids.iterate do for k: it loop {
+        bodyKeyInto :ast id: k :buf
+        buf.appendByte b: 44
+    }
+    buf.appendByte b: 41
 }
 
 # bodyIsOneMatch -- the body is a single statement and that statement is a
@@ -1577,6 +1612,57 @@ Analysis: class {
         ) case program then {
             this.walkIds ast: prog.ast ids: prog.ast.units
         } else null
+    }
+
+    # reportDuplicateBodies -- A006: a function body, eight lines or longer,
+    # whose shape (bodyKeyInto) another function in this file already has. The
+    # first site is the original; each later one is reported against it.
+    reportDuplicateBodies: function {:this prog: Node.view} is {
+        firstAt: (MapRV String v: u64)
+        match (
+            prog
+        ) case program then {
+            ui: u64
+            un: prog.ast.units.length
+            for ui < un loop {
+                uid: prog.ast.units.get i: ui
+                this.dupBodyWalk ast: prog.ast id: uid :firstAt
+                ui = ui + 1
+            }
+        } else null
+    }
+
+    # dupBodyWalk -- one node of the duplicate-body pass: a function's body is
+    # keyed and looked up; every child is visited.
+    dupBodyWalk: function {:this ast: Ast.view id: u32 firstAt: (MapRV String v: u64)} is {
+        n: ast.nodes.get i: id.u64
+        match (
+            n
+        ) case functiondef then {
+            if (n.body.isZero) == false then {
+                span: ((zast.spanEndLineAt :ast id: n.body.u32) - n.lineno) + 1
+                if span >= duplicateBodyLines then {
+                    key: String
+                    bodyKeyInto :ast id: n.body.u32 buf: key
+                    seen: firstAt.get :key
+                    match (
+                        seen
+                    ) case some then {
+                        (this.info
+                            code: "A006"
+                            msg: "this body has the shape of the one at line \{seen}; one function, with the difference as an argument"
+                            line: n.lineno
+                            col: n.colno
+                            width: 1
+                        )
+                    } case none then {
+                        firstAt.set key: key.copy value: n.lineno.u64
+                    }
+                }
+            }
+        } else null
+        kids: zast.childIdsAt :ast :id
+        with it: kids.iterate do for k: it loop this.dupBodyWalk :ast id: k :firstAt
     }
 
     # walkTypeCasingProgram / walkTypeCasingAt -- L021 (default-on): a type
@@ -5311,6 +5397,7 @@ analyzeSource: function {source: String.take path: String.take opts: lintopts} o
         :opts
     )
     a.runFastChecks n: root
+    if opts.arch then a.reportDuplicateBodies prog: root
     a.walkTypeCasingProgram prog: root
     a.walkGenericParamCasingProgram prog: root
     if opts.casing then a.walkCasingProgram prog: root
@@ -5404,6 +5491,7 @@ analyzeFileFull: function {
             :opts
         )
         a.runFastChecks n: root
+        if opts.arch then a.reportDuplicateBodies prog: root
         a.walkTypeCasingProgram prog: root
         a.walkGenericParamCasingProgram prog: root
         anyDocs: opts.docs
