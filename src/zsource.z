@@ -186,6 +186,31 @@ plainLiteralText: function {ast: Ast.view n: Node.view} out (Option String) is {
     }
 }
 
+# lineLeavesBlock -- statement line `id` is a `return`, `break` or `continue`
+# (bare, or a call of one), which leaves the block: nothing after it runs.
+lineLeavesBlock: function {ast: Ast.view id: u32} out bool is {
+    cur: id
+    depth: 0
+    for depth < 4 loop {
+        n: ast.nodes.get i: cur.u64
+        match (
+            n
+        ) case statementline then {
+            cur = n.statementline.u32
+        } case expression then {
+            cur = n.expression.u32
+        } case call then {
+            cur = n.callable.u32
+        } case atomid then {
+            if n.name == zast.names.wkReturn then return true
+            if n.name == zast.names.wkBreak then return true
+            return n.name == zast.names.wkContinue
+        } else return false
+        depth = depth + 1
+    }
+    return false
+}
+
 # bodyIsOneMatch -- the body is a single statement and that statement is a
 # `match`: a dispatcher, whose length is the number of arms it names. The
 # match sits under the line's expression wrapper, so the wrappers are peeled.
@@ -1749,6 +1774,8 @@ Analysis: class {
             this.checkBracesMatch :ast clauses: n.clauses elseclauseId: n.elseclause ln: n.lineno
             this.checkChainBodyBreak :ast clauses: n.clauses elseclauseId: n.elseclause
             this.checkNullArms :ast clauses: n.clauses elseclauseId: n.elseclause
+        } case statement then {
+            this.checkUnreachable :ast stmts: n.statements
         } case functiondef then {
             if this.opts.arch then (this.checkLongFunction
                 :ast
@@ -1823,6 +1850,29 @@ Analysis: class {
             :col
             width: 1
         )
+    }
+
+    # checkUnreachable -- L026: a statement after one that leaves its block
+    # (`return`, `break`, `continue`) can never run. Reported once per block,
+    # at the first statement past the exit.
+    checkUnreachable: function {:this ast: Ast.view stmts: (ListVal u32).view} is {
+        i: u64
+        n: stmts.length
+        for i < n loop {
+            sid: stmts.get :i
+            i = i + 1
+            if i < n when (lineLeavesBlock :ast id: sid) then {
+                p: zast.posOf n: (ast.nodes.get i: (stmts.get :i).u64)
+                (this.warn
+                    code: "L026"
+                    msg: "unreachable statement: the block has already returned or jumped".string
+                    line: p.line
+                    col: p.col
+                    width: 1
+                )
+                return
+            }
+        }
     }
 
     # checkLongFunction -- A005: a function whose body spans more than
