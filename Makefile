@@ -802,7 +802,7 @@ emitter-guard:
 	chk "regNameOf" "$$e6" 96; \
 	chk "ztypes.mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 3; \
-	chk "monoOriginName" "$$e9" 8; \
+	chk "monoOriginName" "$$e9" 7; \
 	chk "ztypes.mangleMemberPrefix (inside memberCPrefix)" "$$e10" 1; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  A new name-resolution site was added to the emitter. Read the typechecker"; \

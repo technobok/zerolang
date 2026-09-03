@@ -30293,12 +30293,12 @@ emitCliSpecCreate: function {
     return "\{ccb}_create(\{args})"
 }
 
-# emitResultCombinator -- inline lowering of the built-in result combinators
-# `.orPanic` (unwrap the ok payload or abort) and `.or d:` (unwrap or default)
-# on a `resultval` receiver (the variant is the only type declaring them; the
-# `Result` union's C shape has no tagged arm to project). Branchless
-# statement-expression, no result struct call. "" when the call is not one of
-# these.
+# emitResultCombinator -- inline lowering of the built-in combinators `.orPanic`
+# (unwrap the ok payload or abort) and `.or d:` (unwrap or default) on a
+# `resultval` receiver, and `.or d:` on an `optionval` one (the variants are
+# the only types declaring them; the `Result` and `Option` unions' C shapes
+# have no tagged arm to project). Branchless statement-expression, no result
+# struct call. "" when the call is not one of these.
 emitResultCombinator: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -30325,11 +30325,16 @@ emitResultCombinator: function {
     rtid0: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: bnid.u64))
     rtid: chaseColMono :symtab :ctx tid: rtid0
     if rtid.isZero then return "".string
-    orig: monoOriginName :symtab tid: (ztypes.tid.create from: rtid.u64)
-    if (orig.stringView == "resultval") == false then return "".string
+    isRes: (originIsTid :symtab tid: rtid originTid: (ctx.origins.get i: ogResultval))
+    isOpt: (originIsTid :symtab tid: rtid originTid: (ctx.origins.get i: ogOptionval))
+    if (isRes) == false when (isOpt) == false then return "".string
+    # `orPanic` is resultval's alone
+    if isP when (isRes) == false then return "".string
+    payArm: "ok"
+    if isOpt then payArm = "some"
     recvExpr: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: bnid.u64)
     if recvExpr.length == 0 then return "".string
-    okTag: variantTag :symtab tid: (ztypes.tid.create from: rtid.u64) arm: "ok"
+    okTag: variantTag :symtab tid: (ztypes.tid.create from: rtid.u64) arm: payArm
     rcT: ctxCname :ctx tid: (ztypes.tid.create from: rtid.u64)
     if isP then {
         rp: "({ \{rcT}_t _rc = (\{recvExpr.stringView}); if (_rc.tag != \{okTag.stringView}) z_panic(\"orPanic: result is err\"); _rc.data.ok; })"
@@ -30350,7 +30355,7 @@ emitResultCombinator: function {
     if opId.isZero then return "".string
     dExpr: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: opId.u64)
     if dExpr.length == 0 then return "".string
-    ro: "({ \{rcT}_t _rc = (\{recvExpr.stringView}); (_rc.tag == \{okTag.stringView}) ? _rc.data.ok : (\{dExpr.stringView}); })"
+    ro: "({ \{rcT}_t _rc = (\{recvExpr.stringView}); (_rc.tag == \{okTag.stringView}) ? _rc.data.\{payArm} : (\{dExpr.stringView}); })"
     return ro
 }
 
