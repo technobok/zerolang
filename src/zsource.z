@@ -81,12 +81,10 @@ duplicateBodyLines: 8.u32
 unitOpOfName: function {ast: Ast.view uname: StringView} out zast.nodeid is {
     with it: ast.units.iterate do for uId: it loop {
         u: ast.nodes.get i: uId.u64
-        match (
-            u
-        ) case namedoperation then {
+        if u.namedoperation then {
             un: zast.nameTextAt :ast ref: u.name
             if un.stringView == uname then return u.operation
-        } else null
+        }
     }
     return zast.nodeid
 }
@@ -158,9 +156,7 @@ projectUnitReads: function {dir: StringView uname: StringView into: Set String} 
 # fileUnitReads -- the child names of every `<unit>.<child>` dotted path in one
 # parsed file, into `into`. A deeper path `unit.a.b` reads `a`, the export.
 fileUnitReads: function {root: Node.view uname: StringView into: Set String} is {
-    match (
-        root
-    ) case program then {
+    if root.program then {
         t: root.ast
         uid: zast.poolFind pool: t.names text: uname
         if uid.isZero then return
@@ -168,64 +164,50 @@ fileUnitReads: function {root: Node.view uname: StringView into: Set String} is 
         nn: t.nodes.length
         for ni < nn loop {
             nd: t.nodes.get i: ni
-            match (
-                nd
-            ) case dottedpath then {
+            if nd.dottedpath then {
                 pn: t.nodes.get i: nd.parent.u64
-                match (
-                    pn
-                ) case atomid then {
+                if pn.atomid then {
                     if pn.name == uid then {
                         cn: t.nodes.get i: nd.child.u64
-                        match (
-                            cn
-                        ) case atomid then {
+                        if cn.atomid then {
                             into.add item: (zast.poolTextCopy pool: t.names ref: cn.name)
-                        } else null
+                        }
                     }
-                } else null
-            } else null
+                }
+            }
             ni = ni + 1
         }
-    } else null
+    }
 }
 
 # fileReadNames -- the dotted member reads of one parsed file, into `into`.
 fileReadNames: function {root: Node.view into: Set String} is {
-    match (
-        root
-    ) case program then {
+    if root.program then {
         t: root.ast
         topaths: (IdSet u64)
         ni: 1.u64
         nn: t.nodes.length
         for ni < nn loop {
             nd: t.nodes.get i: ni
-            match (
-                nd
-            ) case reassignment then {
+            if nd.reassignment then {
                 topaths.add item: nd.topath.u64
-            } else null
+            }
             ni = ni + 1
         }
         nj: 1.u64
         for nj < nn loop {
             nd2: t.nodes.get i: nj
-            match (
-                nd2
-            ) case dottedpath then {
+            if nd2.dottedpath then {
                 if (topaths.has item: nj) == false then {
                     cn: t.nodes.get i: nd2.child.u64
-                    match (
-                        cn
-                    ) case atomid then {
+                    if cn.atomid then {
                         into.add item: (zast.poolTextCopy pool: t.names ref: cn.name)
-                    } else null
+                    }
                 }
-            } else null
+            }
             nj = nj + 1
         }
-    } else null
+    }
 }
 
 # plainLiteralText -- the text of a string literal with no interpolation
@@ -285,12 +267,10 @@ bodyKeyInto: function {ast: Ast.view id: u32 buf: String.borrow} is {
         n
     ) case binop then {
         op: ast.nodes.get i: n.operator.u64
-        match (
-            op
-        ) case atomid then {
+        if op.atomid then {
             buf.appendByte b: 32
             buf.append s: (zast.nameTextAt :ast ref: op.name)
-        } else null
+        }
     } case stringchunk then {
         buf.appendByte b: 34
         buf.append s: n.text
@@ -490,12 +470,10 @@ clauseBodiesOnLine: function {
     cit: clauses.iterate
     for clId: cit loop {
         cl: ast.nodes.get i: clId.u64
-        match (
-            cl
-        ) case ifclause then {
+        if cl.ifclause then {
             p: stmtPos n: (ast.nodes.get i: cl.statement.u64)
             if p.line != ln then ok = false
-        } else null
+        }
     }
     if elseclauseId > 0 then {
         pe: stmtPos n: (ast.nodes.get i: elseclauseId.u64)
@@ -516,12 +494,10 @@ caseBodiesOnLine: function {
     cit: clauses.iterate
     for clId: cit loop {
         cl: ast.nodes.get i: clId.u64
-        match (
-            cl
-        ) case caseclause then {
+        if cl.caseclause then {
             p: stmtPos n: (ast.nodes.get i: cl.statement.u64)
             if p.line != ln then ok = false
-        } else null
+        }
     }
     if elseclauseId > 0 then {
         pe: stmtPos n: (ast.nodes.get i: elseclauseId.u64)
@@ -1203,9 +1179,7 @@ Analysis: class {
 
     # checkEmptyThen -- L002 a single-condition clause whose `then {}` is empty.
     checkEmptyThen: function {:this ast: Ast.view clause: Node.view} is {
-        match (
-            clause
-        ) case ifclause then {
+        if clause.ifclause then {
             cst: ast.nodes.get i: clause.statement.u64
             if (isEmptyBlock n: cst) when (clause.conditions.length == 1) then {
                 p: stmtPos n: (ast.nodes.get i: clause.statement.u64)
@@ -1217,7 +1191,7 @@ Analysis: class {
                     width: 2
                 )
             }
-        } else null
+        }
     }
 
     # checkElide -- L003 a built-in template call whose first argument carries its
@@ -1244,9 +1218,7 @@ Analysis: class {
     # checkElideFirst -- flag the first generic argument when its label is the
     # template's primary parameter name.
     checkElideFirst: function {:this ast: Ast.view arg: Node.view primary: StringView} is {
-        match (
-            arg
-        ) case namedoperation then {
+        if arg.namedoperation then {
             if (zast.nameTextEq :ast ref: arg.name s: primary) then {
                 w: primary.length + 1
                 (this.warn
@@ -1257,7 +1229,7 @@ Analysis: class {
                     width: w.u32.orPanic
                 )
             }
-        } else null
+        }
     }
 
     # checkCollapseName -- L006: a named argument `name: name` whose label equals its bare-atom
@@ -1269,9 +1241,7 @@ Analysis: class {
         aiter: arguments.iterate
         for aId: aiter loop {
             a: ast.nodes.get i: aId.u64
-            match (
-                a
-            ) case namedoperation then {
+            if a.namedoperation then {
                 label: zast.nameTextAt :ast ref: a.name
                 val: atomName :ast n: (ast.nodes.get i: a.operation.u64)
                 lsv: label.stringView
@@ -1301,7 +1271,7 @@ Analysis: class {
                         repl: ":".string
                     )
                 }
-            } else null
+            }
         }
     }
 
@@ -1367,9 +1337,7 @@ Analysis: class {
         if bare then this.edits.append (zfix.Edit byteLo: cs byteHi: cs replacement: "(".string)
         with ait: arguments.iterate do for argId: ait loop {
             arg: ast.nodes.get i: argId.u64
-            match (
-                arg
-            ) case namedoperation then {
+            if arg.namedoperation then {
                 startByte: (tokByteStart
                     lineStart: this.lineStart
                     srcLines: this.lines
@@ -1384,7 +1352,7 @@ Analysis: class {
                 } else null
                 ws: wsRunStart src: srcv from: ap
                 this.edits.append (zfix.Edit byteLo: ws byteHi: ap replacement: ind4.copy)
-            } else null
+            }
         }
         this.edits.append (zfix.Edit byteLo: closePos byteHi: closePos replacement: clo)
         this.wrapFound = true
@@ -1424,9 +1392,7 @@ Analysis: class {
         {
             p0nodeId: parameters.get i: 0
             p0node: ast.nodes.get i: p0nodeId.u64
-            match (
-                p0node
-            ) case namedoperation then {
+            if p0node.namedoperation then {
                 p0 = (tokByteStart
                     lineStart: this.lineStart
                     srcLines: this.lines
@@ -1434,7 +1400,7 @@ Analysis: class {
                     colno: p0node.colno
                 )
                 haveParams = true
-            } else null
+            }
         }
         if haveParams == false then return
         obrace: (wsRunStart src: srcv from: p0) - 1
@@ -1460,9 +1426,7 @@ Analysis: class {
         this.wrapGroups.append this.edits.length
         with ait: parameters.iterate do for pmId: ait loop {
             pm: ast.nodes.get i: pmId.u64
-            match (
-                pm
-            ) case namedoperation then {
+            if pm.namedoperation then {
                 ps: (tokByteStart
                     lineStart: this.lineStart
                     srcLines: this.lines
@@ -1477,7 +1441,7 @@ Analysis: class {
                 } else null
                 ws: wsRunStart src: srcv from: pp
                 this.edits.append (zfix.Edit byteLo: ws byteHi: pp replacement: ind4.copy)
-            } else null
+            }
         }
         wsC: wsRunStart src: srcv from: closeB
         this.edits.append (zfix.Edit byteLo: wsC byteHi: closeB replacement: ind0.copy)
@@ -1667,11 +1631,9 @@ Analysis: class {
     # walkProgram -- root entry of the parse-tier rule visitor: the table
     # rides inside the program node.
     walkProgram: function {:this prog: Node.view} is {
-        match (
-            prog
-        ) case program then {
+        if prog.program then {
             this.walkIds ast: prog.ast ids: prog.ast.units
-        } else null
+        }
     }
 
     # reportDuplicateBodies -- A006: a function body, eight lines or longer,
@@ -1679,9 +1641,7 @@ Analysis: class {
     # first site is the original; each later one is reported against it.
     reportDuplicateBodies: function {:this prog: Node.view} is {
         firstAt: (MapRV String v: u64)
-        match (
-            prog
-        ) case program then {
+        if prog.program then {
             ui: u64
             un: prog.ast.units.length
             for ui < un loop {
@@ -1689,16 +1649,14 @@ Analysis: class {
                 this.dupBodyWalk ast: prog.ast id: uid :firstAt
                 ui = ui + 1
             }
-        } else null
+        }
     }
 
     # dupBodyWalk -- one node of the duplicate-body pass: a function's body is
     # keyed and looked up; every child is visited.
     dupBodyWalk: function {:this ast: Ast.view id: u32 firstAt: (MapRV String v: u64)} is {
         n: ast.nodes.get i: id.u64
-        match (
-            n
-        ) case functiondef then {
+        if n.functiondef then {
             if (n.body.isZero) == false then {
                 span: ((zast.spanEndLineAt :ast id: n.body.u32) - n.lineno) + 1
                 if span >= duplicateBodyLines then {
@@ -1720,7 +1678,7 @@ Analysis: class {
                     }
                 }
             }
-        } else null
+        }
         kids: zast.childIdsAt :ast :id
         with it: kids.iterate do for k: it loop this.dupBodyWalk :ast id: k :firstAt
     }
@@ -1729,9 +1687,7 @@ Analysis: class {
     # definition's name casing follows its kind -- record/variant/facet
     # lowercase, class/union/protocol/generator PascalCase (styleguide Naming).
     walkTypeCasingProgram: function {:this prog: Node.view} is {
-        match (
-            prog
-        ) case program then {
+        if prog.program then {
             tci: u64
             tcn: prog.ast.units.length
             for tci < tcn loop {
@@ -1739,7 +1695,7 @@ Analysis: class {
                 this.walkTypeCasingAt ast: prog.ast nId: tcid
                 tci = tci + 1
             }
-        } else null
+        }
     }
 
     # the id-taking entry to the type-casing walk, so the caller can lend the
@@ -1754,13 +1710,9 @@ Analysis: class {
             it: n.body.iterate
             for bId: it loop {
                 bm: ast.nodes.get i: bId.u64
-                match (
-                    bm
-                ) case namedoperation then {
+                if bm.namedoperation then {
                     op: ast.nodes.get i: bm.operation.u64
-                    match (
-                        op
-                    ) case objectdef then {
+                    if op.objectdef then {
                         (this.checkTypeNameCasing
                             :ast
                             nameRef: bm.name
@@ -1768,8 +1720,8 @@ Analysis: class {
                             col: bm.colno
                             kind: op.kind
                         )
-                    } else null
-                } else null
+                    }
+                }
             }
         } else null
     }
@@ -1835,16 +1787,12 @@ Analysis: class {
     # a functiondef's as-block or a unit body, and a walk taught only some of
     # those carriers would pass the rest in silence.
     walkGenericParamCasingProgram: function {:this prog: Node.view} is {
-        match (
-            prog
-        ) case program then {
+        if prog.program then {
             gi: u64
             gn: prog.ast.nodes.length
             for gi < gn loop {
                 gm: prog.ast.nodes.get i: gi
-                match (
-                    gm
-                ) case namedoperation then {
+                if gm.namedoperation then {
                     if (zast.isGenericParamOp ast: prog.ast opId: gm.operation) then {
                         (this.checkGenericParamCasing
                             ast: prog.ast
@@ -1854,10 +1802,10 @@ Analysis: class {
                             col: gm.colno
                         )
                     }
-                } else null
+                }
                 gi = gi + 1
             }
-        } else null
+        }
     }
 
     # checkGenericParamCasing -- flag a generic parameter whose first character's
@@ -1885,9 +1833,7 @@ Analysis: class {
 
     # the root entry to the member-casing walk
     walkCasingProgram: function {:this prog: Node.view} is {
-        match (
-            prog
-        ) case program then {
+        if prog.program then {
             wci: u64
             wcn: prog.ast.units.length
             for wci < wcn loop {
@@ -1895,7 +1841,7 @@ Analysis: class {
                 this.walkCasingAt ast: prog.ast nId: wcid
                 wci = wci + 1
             }
-        } else null
+        }
     }
 
     # walk -- the parse-tier rule visitor: the arms a rule reads are spelled,
@@ -2108,9 +2054,7 @@ Analysis: class {
         it: items.iterate
         for itemId: it loop {
             item: ast.nodes.get i: itemId.u64
-            match (
-                item
-            ) case namedoperation then {
+            if item.namedoperation then {
                 isTypeRef: false
                 match (
                     (ast.nodes.get i: item.operation.u64)
@@ -2135,15 +2079,13 @@ Analysis: class {
                         width: nm.length.u32.orPanic
                     )
                 }
-            } else null
+            }
         }
     }
 
     # checkPublicPosProgram -- L019 entry: check every unit's `public:` block placement.
     checkPublicPosProgram: function {:this prog: Node.view} is {
-        match (
-            prog
-        ) case program then {
+        if prog.program then {
             cui: u64
             cun: prog.ast.units.length
             for cui < cun loop {
@@ -2151,26 +2093,20 @@ Analysis: class {
                 this.checkPublicPosAt ast: prog.ast nId: cuid
                 cui = cui + 1
             }
-        } else null
+        }
     }
 
     # checkPublicPosAt -- L019: a unit's `public:` block must sit at the top,
     # before any definition (only the file header comment may precede it).
     checkPublicPosAt: function {:this ast: Ast.view nId: zast.nodeid} is {
         wn: ast.nodes.get i: nId.u64
-        match (
-            wn
-        ) case namedoperation then {
+        if wn.namedoperation then {
             ud: ast.nodes.get i: wn.operation.u64
-            match (
-                ud
-            ) case unitdef then {
+            if ud.unitdef then {
                 sawDef: false
                 with cbit: ud.body.iterate do for cbId: cbit loop {
                     mn: ast.nodes.get i: cbId.u64
-                    match (
-                        mn
-                    ) case namedoperation then {
+                    if mn.namedoperation then {
                         isPub: (zast.unitOpKindIs
                             :ast
                             opId: mn.operation
@@ -2200,10 +2136,10 @@ Analysis: class {
                         if (isPub == false) when (isPriv == false) when (isReq == false) then {
                             sawDef = true
                         }
-                    } else null
+                    }
                 }
-            } else null
-        } else null
+            }
+        }
     }
 
     # hasDocAbove -- true when the source line directly above `line1` (1-based)
@@ -2237,9 +2173,7 @@ Analysis: class {
     # checkDocsMember -- a parameter or field counts as documented by a leading
     # `#` block or a trailing `#` on its own line; warn `code`/`kind` otherwise.
     checkDocsMember: function {:this ast: Ast.view member: Node.view code: StringView kind: StringView} is {
-        match (
-            member
-        ) case namedoperation then {
+        if member.namedoperation then {
             nm: zast.nameTextAt :ast ref: member.name
             skip: false
             if nm.stringView == "this" then skip = true
@@ -2272,7 +2206,7 @@ Analysis: class {
                     )
                 }
             }
-        } else null
+        }
     }
 
     # docBlockAbove -- the contiguous `#` block directly above `line1`, markers dropped
@@ -2439,11 +2373,9 @@ Analysis: class {
         docFields: bool
     } is {
         isGP: false
-        match (
-            m
-        ) case namedoperation then {
+        if m.namedoperation then {
             if (zast.isGenericParamOp :ast opId: m.operation) then isGP = true
-        } else null
+        }
         if isGP then {
             if docFields then (this.checkDocsMember
                 :ast
@@ -2472,9 +2404,7 @@ Analysis: class {
             hasPub: false
             with pit: n.body.iterate do for pId: pit loop {
                 pm: ast.nodes.get i: pId.u64
-                match (
-                    pm
-                ) case namedoperation then {
+                if pm.namedoperation then {
                     if (zast.unitOpKindIs
                         :ast
                         opId: pm.operation
@@ -2482,14 +2412,10 @@ Analysis: class {
                     ) then {
                         hasPub = true
                         pu: ast.nodes.get i: pm.operation.u64
-                        match (
-                            pu
-                        ) case unitdef then {
+                        if pu.unitdef then {
                             with eit: pu.body.iterate do for eId: eit loop {
                                 en: ast.nodes.get i: eId.u64
-                                match (
-                                    en
-                                ) case namedoperation then {
+                                if en.namedoperation then {
                                     eo: ast.nodes.get i: en.operation.u64
                                     match (
                                         eo
@@ -2498,11 +2424,11 @@ Analysis: class {
                                     } else {
                                         pubSet.add item: en.name.u64
                                     }
-                                } else null
+                                }
                             }
-                        } else null
+                        }
                     }
-                } else null
+                }
             }
             # --docs-private measures the whole unit: a unit with a `public:` block
             # has no public surface to filter BY, so every member is walked. The
@@ -2512,9 +2438,7 @@ Analysis: class {
             with bit: n.body.iterate do for bId: bit loop {
                 member: ast.nodes.get i: bId.u64
                 keep: true
-                match (
-                    member
-                ) case namedoperation then {
+                if member.namedoperation then {
                     if (zast.unitOpKindIs
                         :ast
                         opId: member.operation
@@ -2535,7 +2459,7 @@ Analysis: class {
                         isMain: zast.nameTextEq :ast ref: member.name s: "main"
                         if (inPub == false) when (isMain == false) then keep = false
                     }
-                } else null
+                }
                 if keep then this.walkDocs :ast n: member :docs :docParams :docFields
             }
         } case namedoperation then {
@@ -2659,9 +2583,7 @@ Analysis: class {
 
     # walkDocsProgram -- root entry for the doc-coverage pass.
     walkDocsProgram: function {:this prog: Node.view docs: bool docParams: bool docFields: bool} is {
-        match (
-            prog
-        ) case program then {
+        if prog.program then {
             wdi: u64
             wdn: prog.ast.units.length
             for wdi < wdn loop {
@@ -2669,7 +2591,7 @@ Analysis: class {
                 this.walkDocsAt ast: prog.ast nId: wdid :docs :docParams :docFields
                 wdi = wdi + 1
             }
-        } else null
+        }
     }
 
     # checkNullArms -- L010 over a match's arm and else bodies.
@@ -2677,11 +2599,9 @@ Analysis: class {
         ccit: clauses.iterate
         for ccId: ccit loop {
             cc: ast.nodes.get i: ccId.u64
-            match (
-                cc
-            ) case caseclause then {
+            if cc.caseclause then {
                 this.tryNullBody body: (ast.nodes.get i: cc.statement.u64)
-            } else null
+            }
         }
         if elseclauseId > 0 then {
             this.tryNullBody body: (ast.nodes.get i: elseclauseId.u64)
@@ -2760,9 +2680,7 @@ Analysis: class {
     # commented empties are left alone. A body already written `null` starts
     # at the `n` byte, not `{`, so it never re-fires.
     tryNullBody: function {:this body: Node.view} is {
-        match (
-            body
-        ) case statement then {
+        if body.statement then {
             if body.statements.length != 0 then return
             srcOwned: this.source
             srcv: srcOwned.stringView
@@ -2814,7 +2732,7 @@ Analysis: class {
                 hi: (closeByte + 1)
                 repl: "null".string
             )
-        } else null
+        }
     }
 
     # tryDebrace -- L008: strip the `{ }` around a single-statement clause `body`
@@ -2823,15 +2741,11 @@ Analysis: class {
     # a multi-line body onto the keyword line; false for a multi-clause construct
     # already proven to sit on one line, where stripping only shortens it.
     tryDebrace: function {:this ast: Ast.view body: Node.view collapse: bool} is {
-        match (
-            body
-        ) case statement then {
+        if body.statement then {
             if body.statements.length != 1 then return
             sl0Id: body.statements.get i: 0
             sl0: ast.nodes.get i: sl0Id.u64
-            match (
-                sl0
-            ) case statementline then {
+            if sl0.statementline then {
                 if (debraceEligible
                     :ast
                     n: (ast.nodes.get i: sl0.statementline.u64)
@@ -2910,8 +2824,8 @@ Analysis: class {
                     byteHi: (closeByte + 1)
                     replacement: "".string
                 )
-            } else null
-        } else null
+            }
+        }
     }
 
     # bracesBlocked -- true when the token span strictly between the open and close
@@ -2964,22 +2878,18 @@ Analysis: class {
         if (hasElse == false) when (clauses.length == 1) then {
             c0Id: clauses.get i: 0
             c0: ast.nodes.get i: c0Id.u64
-            match (
-                c0
-            ) case ifclause then {
+            if c0.ifclause then {
                 this.tryDebrace :ast body: (ast.nodes.get i: c0.statement.u64) collapse: true
-            } else null
+            }
             return
         }
         if (clauseBodiesOnLine :ast :clauses :elseclauseId :ln) == false then return
         cit: clauses.iterate
         for clId: cit loop {
             cl: ast.nodes.get i: clId.u64
-            match (
-                cl
-            ) case ifclause then {
+            if cl.ifclause then {
                 this.tryDebrace :ast body: (ast.nodes.get i: cl.statement.u64) collapse: false
-            } else null
+            }
         }
         if elseclauseId > 0 then {
             this.tryDebrace :ast body: (ast.nodes.get i: elseclauseId.u64) collapse: false
@@ -2994,11 +2904,9 @@ Analysis: class {
         cit: clauses.iterate
         for clId: cit loop {
             cl: ast.nodes.get i: clId.u64
-            match (
-                cl
-            ) case caseclause then {
+            if cl.caseclause then {
                 this.tryDebrace :ast body: (ast.nodes.get i: cl.statement.u64) collapse: false
-            } else null
+            }
         }
         if elseclauseId > 0 then {
             this.tryDebrace :ast body: (ast.nodes.get i: elseclauseId.u64) collapse: false
@@ -3030,9 +2938,7 @@ Analysis: class {
     # first statement still shares the `{` line AND is itself single-line. One-line bodies are
     # left to L008; a multi-line first statement is skipped (re-indenting it is out of scope).
     forceBodyBreak: function {:this ast: Ast.view body: Node.view} is {
-        match (
-            body
-        ) case statement then {
+        if body.statement then {
             if body.statements.length == 0 then return
             openByte: (tokByteStart
                 lineStart: this.lineStart
@@ -3057,19 +2963,13 @@ Analysis: class {
             if body.lineno.u64 == closeLine then return
             sl0Id: body.statements.get i: 0
             sl0: ast.nodes.get i: sl0Id.u64
-            match (
-                sl0
-            ) case statementline then {
+            if sl0.statementline then {
                 if sl0.lineno != body.lineno then return
                 firstEnd: (closeLine - 1)
                 if body.statements.length > 1 then {
                     sl1Id: body.statements.get i: 1
                     sl1: ast.nodes.get i: sl1Id.u64
-                    match (
-                        sl1
-                    ) case statementline then {
-                        firstEnd = (sl1.lineno.u64 - 1)
-                    } else null
+                    if sl1.statementline then firstEnd = (sl1.lineno.u64 - 1)
                 }
                 if firstEnd > body.lineno.u64 then return
                 firstInner: (tokByteStart
@@ -3090,8 +2990,8 @@ Analysis: class {
                     byteHi: firstInner
                     replacement: (nlIndent n: (base + 4))
                 )
-            } else null
-        } else null
+            }
+        }
     }
 
     # checkBracesFor -- L008 entry for a `for ... loop`: a terminal single-clause
@@ -3407,9 +3307,7 @@ Analysis: class {
         bnid: u64
         {
             dpn: ast.nodes.get i: dpId.u64
-            match (
-                dpn
-            ) case dottedpath then {
+            if dpn.dottedpath then {
                 chn: ast.nodes.get i: dpn.child.u64
                 cn = atomName :ast n: chn
                 ci: nodeInfoOf n: chn
@@ -3418,7 +3316,7 @@ Analysis: class {
                 pnn: ast.nodes.get i: dpn.parent.u64
                 bni: nodeInfoOf n: pnn
                 bnid = bni.id.u64
-            } else null
+            }
         }
         if cn.length == 0 then return
         if bnid == 0 then return
@@ -3472,11 +3370,7 @@ Analysis: class {
             match (
                 ck
             ) case some then {
-                match (
-                    ck
-                ) case returnCall then {
-                    isRet = true
-                } else null
+                if ck.returnCall then isRet = true
             } case none then null
         }
         if isRet then return
@@ -3516,9 +3410,7 @@ Analysis: class {
         aiter: arguments.iterate
         for aId: aiter loop {
             arg: ast.nodes.get i: aId.u64
-            match (
-                arg
-            ) case namedoperation then {
+            if arg.namedoperation then {
                 an: zast.nameTextAt :ast ref: arg.name
                 pidx: u64
                 pfound: false
@@ -3565,16 +3457,14 @@ Analysis: class {
                     )
                 }
                 firstArg = false
-            } else null
+            }
         }
     }
 
     # sufNamedArg -- a named call/constructor argument whose suffix the parameter / field type
     # fixes.
     sufNamedArg: function {:this ast: Ast.view arg: Node.view calleeType: u64 st: zenv.ZSymbolTable.view} is {
-        match (
-            arg
-        ) case namedoperation then {
+        if arg.namedoperation then {
             an: zast.nameTextAt :ast ref: arg.name
             if an.length > 0 then {
                 s: operandSuffix :ast n: (ast.nodes.get i: arg.operation.u64)
@@ -3614,7 +3504,7 @@ Analysis: class {
                     } case none then null
                 }
             }
-        } else null
+        }
     }
 
     # sufNamedArgReturn -- a return value whose suffix the enclosing function's return type
@@ -3643,11 +3533,7 @@ Analysis: class {
         match (
             ck
         ) case some then {
-            match (
-                ck
-            ) case returnCall then {
-                isRet = true
-            } else null
+            if ck.returnCall then isRet = true
         } case none then null
         if isRet then {
             rtName: typeNameOfOptAt :ast oId: funcretId :st
@@ -3747,9 +3633,7 @@ Analysis: class {
     # lintSuffixUnit -- run the suffix check over a typechecked program's main unit.
     lintSuffixUnit: function {:this prog: Node.view uname: StringView st: zenv.ZSymbolTable} is {
         mn: mainUnitNameOf program: prog
-        match (
-            prog
-        ) case program then {
+        if prog.program then {
             uCnt9a: prog.ast.units.length
             uIdx9a: u64
             for uIdx9a < uCnt9a loop {
@@ -3763,15 +3647,13 @@ Analysis: class {
                     :st
                 )
             }
-        } else null
+        }
     }
 
     # lintSuffixNamedOp -- run the suffix check on the main unit only.
     lintSuffixNamedOp: function {:this ast: Ast.view namedOpId: u32 mainName: StringView uname: StringView st: zenv.ZSymbolTable} is {
         namedOp: ast.nodes.get i: namedOpId.u64
-        match (
-            namedOp
-        ) case namedoperation then {
+        if namedOp.namedoperation then {
             un: zast.nameTextAt :ast ref: namedOp.name
             if un.stringView == mainName then {
                 (this.walkSuf
@@ -3782,7 +3664,7 @@ Analysis: class {
                     funcretId: (zast.nodeid.create from: 0)
                 )
             }
-        } else null
+        }
     }
 
     # checkSuffix -- L005 (typecheck tier): build the project VFS, parse this file's unit in the
@@ -3846,9 +3728,7 @@ Analysis: class {
     # is by name: conservative, so a same-named field elsewhere hides a hit
     # rather than inventing one.
     reportArch: function {:this prog: Node.view uname: StringView st: zenv.ZSymbolTable.view srcdir: StringView systemdir: StringView} is {
-        match (
-            prog
-        ) case program then {
+        if prog.program then {
             ast9: prog.ast
             mainOp: unitOpOfName ast: ast9 :uname
             if mainOp.isZero then return
@@ -3874,14 +3754,12 @@ Analysis: class {
             bodyIds: zast.unitBodyIdsAt ast: ast9 unitId: mainOp
             with bit: bodyIds.iterate do for mId: bit loop {
                 m: ast9.nodes.get i: mId.u64
-                match (
-                    m
-                ) case namedoperation then {
+                if m.namedoperation then {
                     tn: zast.poolTextCopy pool: ast9.names ref: m.name
                     this.archFields ast: ast9 opId: m.operation :readNames typeName: tn.stringView
-                } else null
+                }
             }
-        } else null
+        }
     }
 
     # reportUnusedExports -- A007: a name this unit's `public:` block exports
@@ -3905,13 +3783,11 @@ Analysis: class {
         bodyIds: zast.unitBodyIdsAt :ast :unitId
         with bit: bodyIds.iterate do for mId: bit loop {
             m: ast.nodes.get i: mId.u64
-            match (
-                m
-            ) case namedoperation then {
+            if m.namedoperation then {
                 if (zast.unitOpKindIs :ast opId: m.operation k: zast.unitkind.publicNs) then {
                     this.reportUnreadExportsIn :ast opId: m.operation :reads :mainId
                 }
-            } else null
+            }
         }
     }
 
@@ -3925,14 +3801,10 @@ Analysis: class {
         mainId: zast.nameid
     } is {
         ud: ast.nodes.get i: opId.u64
-        match (
-            ud
-        ) case unitdef then {
+        if ud.unitdef then {
             with it: ud.body.iterate do for lid: it loop {
                 lv: ast.nodes.get i: lid.u64
-                match (
-                    lv
-                ) case namedoperation then {
+                if lv.namedoperation then {
                     nm: zast.poolTextCopy pool: ast.names ref: lv.name
                     if (reads.has item: nm) == false when lv.name != mainId then {
                         (this.info
@@ -3943,17 +3815,15 @@ Analysis: class {
                             width: nm.length.u32.orPanic
                         )
                     }
-                } else null
+                }
             }
-        } else null
+        }
     }
 
     # archFields -- A004 over one record / class definition of this unit.
     archFields: function {:this ast: Ast.view opId: zast.nodeid readNames: (Set String).view typeName: StringView} is {
         n: ast.nodes.get i: opId.u64
-        match (
-            n
-        ) case objectdef then {
+        if n.objectdef then {
             isData: n.kind.recordDef
             if n.kind.classDef then isData = true
             if n.kind.generatorDef then isData = true
@@ -3961,9 +3831,7 @@ Analysis: class {
             if n.isNative then return
             with it: n.isItems.iterate do for mId: it loop {
                 m: ast.nodes.get i: mId.u64
-                match (
-                    m
-                ) case namedoperation then {
+                if m.namedoperation then {
                     mop: ast.nodes.get i: m.operation.u64
                     fnm: zast.poolTextCopy pool: ast.names ref: m.name
                     if (mop.functiondef) == false when (readNames.has item: fnm) == false then {
@@ -3975,18 +3843,16 @@ Analysis: class {
                             width: 1
                         )
                     }
-                } else null
+                }
             }
-        } else null
+        }
     }
 
     # archWalk -- A003 at every literal compare of the unit's subtree.
     archWalk: function {:this ast: Ast.view nId: zast.nodeid namedIds: (IdSet u64).view} is {
         n: ast.nodes.get i: nId.u64
         kids: zast.childIds :ast :n
-        match (
-            n
-        ) case binop then {
+        if n.binop then {
             op: atomName :ast n: (ast.nodes.get i: n.operator.u64)
             isCmp: op.stringView == "=="
             if op.stringView == "!=" then isCmp = true
@@ -3994,7 +3860,7 @@ Analysis: class {
                 this.archNamedLiteral :ast id: n.lhs :namedIds
                 this.archNamedLiteral :ast id: n.rhs :namedIds
             }
-        } else null
+        }
         with kit: kids.iterate do for c: kit loop {
             this.archWalk :ast nId: (zast.nodeid.create from: c) :namedIds
         }
@@ -4149,9 +4015,7 @@ Analysis: class {
     # assignment bindings in this file. The opt-out is to `touch` the variable: write its name on
     # its own line (it lowers to `(void)(x);`), which stamps a use.
     reportUnusedVars: function {:this prog: Node.view uname: StringView st: zenv.ZSymbolTable} is {
-        match (
-            prog
-        ) case program then {
+        if prog.program then {
             # A reassignment's target atom carries an atomVariableId stamp
             # exactly as a read does, so counting every stamp as a use makes a
             # local that is only ever assigned look used. Collect the bare-atom
@@ -4350,7 +4214,7 @@ Analysis: class {
                     }
                 }
             }
-        } else null
+        }
     }
 
     # srcIsFieldRead -- the conversion's source is a FIELD read (`ctx.mainName`)
@@ -4494,9 +4358,7 @@ Analysis: class {
     # (the lock rules) and `variableMoved` (the invalidate choke point) -- a
     # local moved into an owner needs its allocation, so it is not flagged.
     reportViewableLocals: function {:this prog: Node.view uname: StringView st: zenv.ZSymbolTable} is {
-        match (
-            prog
-        ) case program then {
+        if prog.program then {
             mainOp: zast.nodeid
             uN: prog.ast.units.length
             uI: u64
@@ -4549,9 +4411,7 @@ Analysis: class {
                         fs: prog.ast.fsnoForNode nodeid: nid.u32.orPanic
                         if fs == mainFsno then {
                             nodeL: prog.ast.nodes.get i: nid.u64
-                            match (
-                                nodeL
-                            ) case assignment then {
+                            if nodeL.assignment then {
                                 kind: this.owningConvKind ast: prog.ast :st rhsId: nodeL.value
                                 # a view is only equivalent while the SOURCE holds
                                 # the same bytes: a root that is written -- directly,
@@ -4580,12 +4440,12 @@ Analysis: class {
                                         width: nm.length.u32.orPanic
                                     )
                                 }
-                            } else null
+                            }
                         }
                     }
                 }
             }
-        } else null
+        }
     }
 
     # reportUnusedDefs -- L012 (unused private definition). A private unit-level definition
@@ -4594,9 +4454,7 @@ Analysis: class {
     # same member DeclId that carries the private flag, so an unused alias is flagged even when
     # its target is used directly elsewhere.
     reportUnusedDefs: function {:this prog: Node.view uname: StringView st: zenv.ZSymbolTable.view} is {
-        match (
-            prog
-        ) case program then {
+        if prog.program then {
             mainTid: u64
             {
                 uo: (ztypecheck.declTypeIdOf
@@ -4734,11 +4592,9 @@ Analysis: class {
                         ndI: segStart.u64
                         for ndI < segEnd.u64 loop {
                             nd0: prog.ast.nodes.get i: ndI.u64
-                            match (
-                                nd0
-                            ) case atomid then {
+                            if nd0.atomid then {
                                 refNameSet.add item: nd0.name.u64
-                            } else null
+                            }
                             ndI = ndI + 1
                         }
                     } else {
@@ -4759,11 +4615,9 @@ Analysis: class {
                             }
                             if covered == false then {
                                 ndB0: prog.ast.nodes.get i: ndJ
-                                match (
-                                    ndB0
-                                ) case atomid then {
+                                if ndB0.atomid then {
                                     refNameSet.add item: ndB0.name.u64
-                                } else null
+                                }
                             }
                             ndJ = ndJ + 1
                         }
@@ -4850,12 +4704,10 @@ Analysis: class {
                                 tmemIds: (ListVal u32)
                                 {
                                     tod: prog.ast.nodes.get i: tOp.u64
-                                    match (
-                                        tod
-                                    ) case objectdef then {
+                                    if tod.objectdef then {
                                         with iit: tod.isItems.iterate do for iid: iit loop tmemIds.append from: iid
                                         with ait: tod.asItems.iterate do for aid: ait loop tmemIds.append from: aid
-                                    } else null
+                                    }
                                 }
                                 tnm: (zast.poolTextAt
                                     pool: prog.ast.names
@@ -4909,7 +4761,7 @@ Analysis: class {
                     }
                 }
             }
-        } else null
+        }
     }
 }
 
@@ -4937,16 +4789,14 @@ nodeInfoOf: function {n: Node.view} out nodeinfo is {
 # type name maps to itself, anything else to "" (c8/c32 are not
 # zero-suffix candidates).
 bareZeroTypeName: function {ast: Ast.view n: Node.view} out String is {
-    match (
-        n
-    ) case atomid then {
+    if n.atomid then {
         znB: zast.nameTextAt :ast ref: n.name
         if znB.stringView == "string" then return "String".string
         isNum: ztypecheck.isNumericTypeName name: znB.stringView
         if isNum when znB.stringView != "c8" then {
             if znB.stringView != "c32" then return znB.copy
         }
-    } else null
+    }
     return "".string
 }
 
