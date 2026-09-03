@@ -5531,6 +5531,24 @@ hoistBorrowValArg: function {
     return vnmh
 }
 
+# lvalueForm -- `av` as something `&` may be taken of. A receiver that is
+# itself a call is not an lvalue -- C rejects `&f(x)` -- so it is bound to a
+# temp the statement flush declares; a compound literal already is one and
+# pays for nothing.
+lvalueForm: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    av: StringView
+    tid: ztypes.tid
+} out String is {
+    if (av.startsWith prefix: "((") then return av.string
+    if (isNonLvalueArg s: av) == false then return av.string
+    t: hoistLvalue :ast :symtab :ctx :av :tid
+    if t.length > 0 then return t
+    return av.string
+}
+
 # hoistLvalue -- bind an expression to a temp so its ADDRESS can be taken. The
 # sv-native legs pass `&receiver`, and a receiver that is itself a call is not an
 # lvalue: C rejects `&f(x)`. This is hoistBorrowValArg's isBorrow leg generalised
@@ -5643,23 +5661,21 @@ instanceMethodArgValue: function {
     isLbl9b: ctorHasLabel :ast :call label: posParamName
     iiVal: String
     if isLbl9b then {
-        iiVal = (ctorInterpArgByLabel
+        iiVal = (ctorInterpArgAt
             :ast
             :symtab
             :ctx
-            :call
-            label: posParamName
+            aid: (ctorArgNodeByLabel :ast :call label: posParamName)
             fid: (ztypes.tid.create from: mco.u64)
             pname: pnameL
             pid: posParamId
         )
     } else {
-        iiVal = (ctorInterpArgByPosition
+        iiVal = (ctorInterpArgAt
             :ast
             :symtab
             :ctx
-            :call
-            idx: positionalIdx
+            aid: (ctorArgNodeByPosition :ast :call idx: positionalIdx)
             fid: (ztypes.tid.create from: mco.u64)
             pname: posParamName
             pid: posParamId
@@ -8537,12 +8553,22 @@ ctorArgByLabel: function {
 } out String is {
     aid: ctorArgNodeByLabel :ast :call :label
     if aid == 0 then return "0".string
-    and: ast.nodes.get i: aid
-    # an interpolated argument builds via a self-contained statement
-    # expression (emitExpr cannot emit the chain)
-    iv: emitInterpArgExpr :ast :symtab :ctx n: and
+    return (ctorArgTextAt :ast :symtab :ctx :aid)
+}
+
+# ctorArgTextAt -- one argument node's emitted text. An interpolated argument
+# builds through a self-contained statement expression, which emitExpr cannot
+# emit as a chain, so it is asked for first.
+ctorArgTextAt: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    aid: u64
+} out String is {
+    n: ast.nodes.get i: aid
+    iv: emitInterpArgExpr :ast :symtab :ctx :n
     if iv.length > 0 then return iv
-    return (emitExpr :ast :symtab :ctx n: and)
+    return (emitExpr :ast :symtab :ctx :n)
 }
 
 # argIsPointerByLabel -- true when the arg at `label` already evaluates to a C
@@ -8604,80 +8630,25 @@ ctorArgByPosition: function {
 } out String is {
     posParamId: ctorArgNodeByPosition :ast :call :idx
     if posParamId == 0 then return "".string
-    pnd: ast.nodes.get i: posParamId
-    ip: emitInterpArgExpr :ast :symtab :ctx n: pnd
-    if ip.length > 0 then return ip
-    return (emitExpr :ast :symtab :ctx n: pnd)
+    return (ctorArgTextAt :ast :symtab :ctx aid: posParamId)
 }
 
-# ctorInterpArgByLabel -- the interp-arg form (emitInterpArgForParam) for the
-# labeled argument, or "" when absent or not an interpolated literal. Lets a
-# method/ctor call pass an interpolated literal directly (build + coerce + free).
-ctorInterpArgByLabel: function {
+# ctorInterpArgAt -- the interp-arg form (emitInterpArgForParam) for one
+# argument node, or "" when there is none or it is not an interpolated
+# literal. Lets a method or constructor call pass an interpolated literal
+# directly: build, coerce, free. The caller finds the node, by label or by
+# position, through the finders above.
+ctorInterpArgAt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
-    label: StringView
+    aid: u64
     fid: ztypes.tid
     pname: StringView
     pid: u64
 } out String is {
-    aiter: call.arguments.iterate
-    for aId: aiter loop {
-        a: ast.nodes.get i: aId.u64
-        if a.namedoperation then {
-            an: zast.nameTextAt :ast ref: a.name
-            if an.stringView == label then {
-                return (emitInterpArgForParam
-                    :ast
-                    :symtab
-                    :ctx
-                    n: (ast.nodes.get i: a.operation.u64)
-                    :fid
-                    :pname
-                    :pid
-                )
-            }
-        }
-    }
-    return "".string
-}
-
-# ctorInterpArgByPosition -- the interp-arg form for the idx-th positional argument.
-ctorInterpArgByPosition: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    call: zast.CallData.view
-    idx: u64
-    fid: ztypes.tid
-    pname: StringView
-    pid: u64
-} out String is {
-    seen: u64
-    aiter: call.arguments.iterate
-    for aId: aiter loop {
-        a: ast.nodes.get i: aId.u64
-        if a.namedoperation then {
-            an: zast.nameTextAt :ast ref: a.name
-            if an.length == 0 then {
-                if seen == idx then {
-                    return (emitInterpArgForParam
-                        :ast
-                        :symtab
-                        :ctx
-                        n: (ast.nodes.get i: a.operation.u64)
-                        :fid
-                        :pname
-                        :pid
-                    )
-                }
-                seen = seen + 1
-            }
-        }
-    }
-    return "".string
+    if aid == 0 then return "".string
+    return (emitInterpArgForParam :ast :symtab :ctx n: (ast.nodes.get i: aid) :fid :pname :pid)
 }
 
 # argSlotList -- per call-argument (in call order), the index of the parameter
@@ -13090,19 +13061,7 @@ emitOperatorAt: function {
                 # not one -- `&f(x)` is rejected by C. Bind it to a temp the
                 # statement flush declares. A compound literal already is an
                 # lvalue and must not pay for a temp.
-                lhsText: l.copy
-                needsTemp: isNonLvalueArg s: l.stringView
-                if (l.stringView.startsWith prefix: "((") then needsTemp = false
-                if needsTemp then {
-                    lhsTmp: (hoistLvalue
-                        :ast
-                        :symtab
-                        :ctx
-                        av: l.stringView
-                        tid: owner
-                    )
-                    if lhsTmp.length > 0 then lhsText = lhsTmp.copy
-                }
+                lhsText: lvalueForm :ast :symtab :ctx av: l.stringView tid: owner
                 amp: "&\{lhsText}"
                 recvText = amp
             }
@@ -29970,12 +29929,7 @@ emitBinopVtableCall: function {
     if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: lhsNid)) then {
         acc = "->".string
     } else {
-        needsTemp: isNonLvalueArg s: lhs
-        if (lhs.startsWith prefix: "((") then needsTemp = false
-        if needsTemp then {
-            t: hoistLvalue :ast :symtab :ctx av: lhs tid: owner
-            if t.length > 0 then recvText = t.copy
-        }
+        recvText = lvalueForm :ast :symtab :ctx av: lhs tid: owner
     }
     mn: zast.nameTextAt :ast ref: callName
     if mn.length == 0 then return "".string
