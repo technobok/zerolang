@@ -13591,66 +13591,6 @@ interpPartNodeId: function {n: Node.view} out u64 is {
     }
 }
 
-# methodReturnByName -- given a "Base.member" method name, resolve the
-# base type's member child and return its return-type name ("" if not).
-methodReturnByName: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    dotted: StringView
-} out String is {
-    base: String
-    member: String
-    seenDot: false
-    di: u64
-    dn: dotted.length
-    for di < dn loop {
-        bo0: dotted.byteAt i: di
-        match (
-            bo0
-        ) case some then {
-            if bo0 == 46 then {
-                seenDot = true
-            } else {
-                if seenDot then {
-                    member.appendByte b: bo0
-                } else {
-                    base.appendByte b: bo0
-                }
-            }
-        } case none then null
-        di = di + 1
-    }
-    if (seenDot) == false then return "".string
-    # scan for a parent type named `base` that actually declares the
-    # `member` child (a typedef has both a shell and a canonical id;
-    # only the canonical bears children).
-    mnid: (zast.poolFind pool: ast.names text: member.stringView)
-    found: ztypes.tid
-    if mnid > 0 then {
-        lastT: symtab.reg.nextTypeId
-        t: ztypes.tid
-        for t < lastT loop {
-            if found.isZero then {
-                pn: regNameOf :symtab tid: (ztypes.tid.create from: t.u64)
-                if pn.stringView == base.stringView then {
-                    cto: symtab.typing.declChildOfId parentTypeId: t nameId: mnid
-                    match (
-                        cto
-                    ) case some then {
-                        found = ztypes.tid.create from: (cto)
-                    } case none then null
-                }
-            }
-            t = ztypes.tid.create from: (t + 1)
-        }
-    }
-    if found > 0 then {
-        rt2: fnReturnTidOf :symtab tid: (ztypes.tid.create from: found.u64)
-        if rt2 > 0 then return (regNameOf :symtab tid: (ztypes.tid.create from: rt2.u64))
-    }
-    return "".string
-}
-
 # the fully-resolved emitted name for node `n`.
 # stampIdDeep -- stampNameDeep's id form: the stamped type id, peeling
 # expression wrappers and unwrapping a value-position FUNCTION stamp to its
@@ -13705,11 +13645,6 @@ stampNameDeep: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: Node.vi
                 rrt: stampIdOf :symtab nid: rno
                 if rrt > 0 then return (regNameOf :symtab tid: rrt)
             } case none then null
-            # a shell FUNCTION named "Base.member": resolve the method
-            # through the base type's child and read its return.
-            fnm: regNameOf :symtab tid: sid
-            rmn: methodReturnByName :ast :symtab dotted: fnm.stringView
-            if rmn.length > 0 then return rmn
         }
         return (regNameOf :symtab tid: sid)
     }
