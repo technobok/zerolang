@@ -1471,7 +1471,24 @@ linkDeclType: function {
     name: StringView
     tid: ztypes.tid
 } is {
-    dko: declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast :name)
+    nid: nameIdOf :ast :name
+    linkDeclTypeId :st :frame :unitDecl nameId: nid :tid
+}
+
+# linkDeclTypeId -- linkDeclType by the definition's name id.
+linkDeclTypeId: function {
+    # the symbol table whose Decl is linked
+    st: zenv.ZSymbolTable
+    # the unit the definition belongs to
+    unitDecl: ztypes.declid
+    # the frame the definition is found from
+    frame: ztypes.declid
+    # the definition's name id
+    nameId: zast.nameid
+    # the canonical type id to record on it
+    tid: ztypes.tid
+} is {
+    dko: declOfUnitDef :st :frame :unitDecl :nameId
     if dko.u64 == 0 then return
     st.typing.declSetType declId: dko typeId: tid
     st.reg.setDef typeId: tid declId: dko
@@ -1615,6 +1632,31 @@ declareCanonicalType: function {
     name: StringView
     typetype: ztypes.ztypetype
 } out u64 is {
+    # a spelling that reaches here as text is interned first, so the id form
+    # can mint it by the same spelling
+    nid: zast.poolFind pool: ast.names text: name
+    if nid.isZero then nid = ast.internString text: name
+    return (declareCanonicalTypeId :st :frame :ast :unitDecl :ownerNameId nameId: nid :typetype)
+}
+
+# declareCanonicalTypeId -- declareCanonicalType by the type's name id: every
+# lookup is by id, and the spelling is read only at the mint.
+declareCanonicalTypeId: function {
+    # the tree the name was read from
+    ast: Ast
+    # the symbol table the type is declared in
+    st: zenv.ZSymbolTable
+    # the unit the declaration belongs to
+    unitDecl: ztypes.declid
+    # the frame the declaration is made in
+    frame: ztypes.declid
+    # the owning type's name id for a nested type, zero for a unit member
+    ownerNameId: zast.nameid
+    # the declared type's own name id, which every lookup here keys on
+    nameId: zast.nameid
+    # what kind of type is declared
+    typetype: ztypes.ztypetype
+} out u64 is {
     qowner: u64
     # Inside a namespace unit, the enclosing type is a child of THAT unit, not
     # of the file unit -- the unit-name index only ever holds file units.
@@ -1658,16 +1700,12 @@ declareCanonicalType: function {
     if ownerNameId.isZero when (nsT.isZero) == false then {
         nsm: (st.typing.declFindChild
             parentDeclId: nsF
-            nameId: (zast.poolFind pool: ast.names text: name)
+            :nameId
         )
         if (nsm.isZero) == false then qowner = nsT.u64
     }
     if qowner > 0 then {
-        exq: (st.typing.declChildOf
-            pool: ast.names
-            parentTypeId: (ztypes.tid.create from: qowner.u64)
-            :name
-        )
+        exq: st.typing.declChildOfId parentTypeId: (ztypes.tid.create from: qowner.u64) :nameId
         match (
             exq
         ) case some then {
@@ -1680,20 +1718,21 @@ declareCanonicalType: function {
             declId: unitDecl
         )
         if (cudm.isZero) == false then {
-            exm: (st.typing.declChildOf
-                pool: ast.names
-                parentTypeId: (ztypes.tid.create from: cudm.u64)
-                :name
-            )
+            exm: st.typing.declChildOfId parentTypeId: (ztypes.tid.create from: cudm.u64) :nameId
             match (
                 exm
             ) case some then {
-                linkDeclType :st :frame :ast :unitDecl :name tid: (ztypes.tid.create from: exm.u64)
+                linkDeclTypeId :st :frame :unitDecl :nameId tid: (ztypes.tid.create from: exm.u64)
                 return exm
             } case none then null
         }
     }
-    id: st.reg.newType :name ownerTid: qowner :typetype
+    # the mint spells the name: read through a borrow scoped to the block
+    id: ztypes.tid
+    {
+        nT: zast.nameTextAt :ast ref: nameId
+        id = st.reg.newType name: nT.stringView ownerTid: qowner :typetype
+    }
     # valtype-ness is a property of the definition's KIND -- a record or a
     # variant is a valtype, a class or a union is not -- and is known here,
     # at declaration; a reference that reaches the declared id before its
@@ -1706,7 +1745,7 @@ declareCanonicalType: function {
     if qowner > 0 then {
         (st.typing.setMemberType
             parentTypeId: (ztypes.tid.create from: qowner.u64)
-            nameId: (ast.internString text: name)
+            :nameId
             childTypeId: id
         )
     } else {
@@ -1722,7 +1761,7 @@ declareCanonicalType: function {
                 # declChildOf cannot answer. declSynthMemberTyped no-ops when
                 # the name is already declared -- for the type as well as the
                 # declaration, which is the half a bare setMemberType undid.
-                unid: (ast.internString text: name)
+                unid: nameId
                 ukk: ztyping.declkind.typeDecl
                 if typetype == ztypes.ztypetype.functionType then ukk = ztyping.declkind.funcDecl
                 (st.typing.declSynthMember
@@ -1742,7 +1781,7 @@ declareCanonicalType: function {
             }
         }
     }
-    if ownerNameId.isZero then linkDeclType :st :frame :ast :unitDecl :name tid: id
+    if ownerNameId.isZero then linkDeclTypeId :st :frame :unitDecl :nameId tid: id
     prxOk: false
     if (st.reg.defOf tid: id).u64 == 0 then prxOk = true
     if prxOk then {
@@ -1913,15 +1952,14 @@ resolveNamedTypeId: function {
         ) case some then {
             did7: descendNamedId :st :frame :ast unitDecl: duo7 :nameId
             if did7 > 0 then return did7
-            nT8: zast.nameTextCopy :ast ref: nameId
-            return (declareCanonicalType
+            return (declareCanonicalTypeId
                 :st
                 :frame
                 :ast
 
                 unitDecl: duo7
                 ownerNameId: zast.nameid
-                name: nT8.stringView
+                :nameId
                 typetype: tto7
             )
         } case none then {
@@ -3585,7 +3623,7 @@ returnParamTid: function {
         ) case some then {
             return po
         } case none then null
-        # the mint spells the name: read through a borrow scoped to the block
+        # a fresh generic-parameter type is minted under its spelling, read here
         rpt7: ztypes.tid
         {
             bnT: zast.nameTextAt :ast ref: bnId
@@ -3734,7 +3772,7 @@ stampGenericParamRef: function {
         ) case some then {
             gpt3 = gpo3
         } case none then {
-            # the mint spells the name: read through a borrow scoped to the block
+            # the stamp mints the parameter type under its spelling, read here
             {
                 bnT: zast.nameTextAt :ast ref: bnId
                 gpt3 = st.reg.newType name: bnT.stringView typetype: ztypes.ztypetype.genericParam
@@ -11104,16 +11142,15 @@ nestedUnitMemberTid: function {
         tto
     ) case some then {
         rf: sub
-        dnT: zast.nameTextCopy :ast ref: defName
         unitDecl92: (unitDeclOfNameOrOwn :st frame: rf nameId: nestedNameId)
-        declared = (declareCanonicalType
+        declared = (declareCanonicalTypeId
             :st
             frame: rf
             :ast
 
             unitDecl: unitDecl92
             ownerNameId: zast.nameid
-            name: dnT.stringView
+            nameId: defName
             typetype: tto
         )
     } case none then null
@@ -11154,19 +11191,18 @@ aliasTargetMintedTid: function {
     match (
         tto
     ) case some then {
-        tnT: zast.nameTextCopy :ast ref: defName
         # declared in the TARGET's frame -- its parent unit -- so the id is
         # the one the target's own resolution declares (keyed on that unit)
         rf: declParentIdOf :st declId: tgt
         unitDecl93: (unitDeclOfNameOrOwn :st frame: rf nameId: nestedNameId)
-        r: (declareCanonicalType
+        r: (declareCanonicalTypeId
             :st
             frame: rf
             :ast
 
             unitDecl: unitDecl93
             ownerNameId: zast.nameid
-            name: tnT.stringView
+            nameId: defName
             typetype: tto
         )
         return r
@@ -11788,15 +11824,14 @@ descendNamedId: function {
     } case none then null
     tid: u64
     if classified then {
-        nTc: zast.nameTextCopy :ast ref: nameId
-        tid = (declareCanonicalType
+        tid = (declareCanonicalTypeId
             :st
             frame: rf
             :ast
 
             :unitDecl
             ownerNameId: zast.nameid
-            name: nTc.stringView
+            :nameId
             typetype: ttv
         )
     }
