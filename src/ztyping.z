@@ -2045,12 +2045,16 @@ ZTyping: class {
     # record that a member holds a function pointer
     setChildFnptrField: function {:this pool: zast.StringPool.view parentTypeId: ztypes.tid name: StringView} is {
         nid8: pool.find s: name
-        if nid8 > 0 then {
-            md8: this.declMemberIdOf :parentTypeId nameId: nid8
-            if (md8.isZero) == false then {
-                do8: this.decls.getMut i: md8.u64
-                do8.fnptrField = true
-            }
+        if nid8 > 0 then this.setChildFnptrFieldId :parentTypeId nameId: nid8
+    }
+
+    # setChildFnptrFieldId -- setChildFnptrField by the member's name id: the
+    # form a caller holding the id takes, which spares the pool a find.
+    setChildFnptrFieldId: function {:this parentTypeId: ztypes.tid nameId: zast.nameid} is {
+        md8: this.declMemberIdOf :parentTypeId :nameId
+        if (md8.isZero) == false then {
+            do8: this.decls.getMut i: md8.u64
+            do8.fnptrField = true
         }
     }
 
@@ -2063,13 +2067,24 @@ ZTyping: class {
         this.declSetDefault :parentTypeId :pool :name value: (defaultval.literal node)
     }
 
+    # setDefaultLiteralId -- setDefaultLiteral by the member's name id, for a
+    # caller that holds it.
+    setDefaultLiteralId: function {:this parentTypeId: ztypes.tid nameId: zast.nameid node: u32} is {
+        this.declSetDefaultId :parentTypeId :nameId value: (defaultval.literal node)
+    }
+
     # declSetDefault -- record a member declaration's default value; a no-op
     # when the owner type has no declaration (a monomorphisation) or the
     # member is not a declared one.
     declSetDefault: function {:this parentTypeId: ztypes.tid pool: zast.StringPool.view name: StringView value: defaultval} is {
         nid8: pool.find s: name
         if nid8.isZero then return
-        md8: this.declMemberIdOf :parentTypeId nameId: nid8
+        this.declSetDefaultId :parentTypeId nameId: nid8 :value
+    }
+
+    # declSetDefaultId -- declSetDefault by the member's name id.
+    declSetDefaultId: function {:this parentTypeId: ztypes.tid nameId: zast.nameid value: defaultval} is {
+        md8: this.declMemberIdOf :parentTypeId :nameId
         if md8.isZero then return
         do8: this.decls.getMut i: md8.u64
         dv8: value
@@ -2082,11 +2097,21 @@ ZTyping: class {
         this.declSetDefault :parentTypeId :pool :name value: (defaultval.func targetDecl)
     }
 
+    # setDefaultFunctionId -- setDefaultFunction by the member's name id.
+    setDefaultFunctionId: function {:this parentTypeId: ztypes.tid nameId: zast.nameid targetDecl: ztypes.declid} is {
+        this.declSetDefaultId :parentTypeId :nameId value: (defaultval.func targetDecl)
+    }
+
     # setDefaultVariantArm -- a default naming an arm of the member's own
     # type; `targetDecl` is that arm's declaration (0 when it resolved to no
     # declaration).
     setDefaultVariantArm: function {:this pool: zast.StringPool.view parentTypeId: ztypes.tid name: StringView targetDecl: ztypes.declid} is {
         this.declSetDefault :parentTypeId :pool :name value: (defaultval.arm targetDecl)
+    }
+
+    # setDefaultVariantArmId -- setDefaultVariantArm by the member's name id.
+    setDefaultVariantArmId: function {:this parentTypeId: ztypes.tid nameId: zast.nameid targetDecl: ztypes.declid} is {
+        this.declSetDefaultId :parentTypeId :nameId value: (defaultval.arm targetDecl)
     }
 
     # declDefaultText -- a member's default as display text, "" when it has
