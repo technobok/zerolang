@@ -17119,7 +17119,7 @@ matchElseNarrowing: function {
     m: zast.CaseData.view
     vtid: ztypes.tid
     sname: StringView
-    covA: (List String).view
+    covA: (ListVal zast.nameid).view
     mN: u64
     meV: String.borrow
 } out matchelse is {
@@ -17127,19 +17127,24 @@ matchElseNarrowing: function {
     meSeed: false
     if (m.elseclause > 0) == false then return (matchelse :meT :meSeed)
     if sname.length == 0 then return (matchelse :meT :meSeed)
-    allME: (List String)
-    sumArmNamesInto :ast :symtab tid: (ztypes.tid.create from: vtid.u64) names: allME
+    allME: (ListVal u64)
+    (zenv.sumArmNameIds
+        ty: symtab.typing
+        reg: symtab.reg
+        tid: (ztypes.tid.create from: vtid.u64)
+        ids: allME
+    )
     remME: u64
-    armME: String
+    armME: zast.nameid
     with mit: allME.iterate do for ma: mit loop {
+        maId: zast.nameid.create from: ma.u32.orPanic
         cov: false
         with cvi: covA.iterate do for cv: cvi loop {
-            if cv.stringView == ma.stringView then cov = true
+            if cv == maId then cov = true
         }
         if (cov) == false then {
             remME = remME + 1
-            mv: ma.copy
-            armME = mv
+            armME = maId
         }
     }
     if remME == 1 then {
@@ -17150,22 +17155,23 @@ matchElseNarrowing: function {
         }
         if (mre) == false then {
             mrecv: "_m\{mN}"
+            # the residual arm's text is spelled into the alias: one copy, here
+            armMET: zast.poolTextCopy pool: ast.names ref: armME
             aliasText: (armAliasText
                 :ast
                 :symtab
                 :ctx
                 tid: (ztypes.tid.create from: vtid.u64)
-                arm: armME.stringView
+                arm: armMET.stringView
                 recv: mrecv.stringView
                 acc: "."
             )
             if aliasText.length > 0 then {
                 meV.append aliasText
                 meT = ztypes.tid.create from: (ztypecheck.optU64Or
-                    o: (symtab.typing.declChildOf
-                        pool: ast.names
+                    o: (symtab.typing.declChildOfId
                         parentTypeId: (ztypes.tid.create from: vtid.u64)
-                        name: armME.stringView
+                        nameId: armME
                     ) d: 0
                 )
                 meSeed = true
@@ -17279,13 +17285,13 @@ emitMatchStmt: function {
             :buf
         )
     }
-    covA: (List String)
+    covA: (ListVal zast.nameid)
     with c3iter: m.clauses.iterate do for c3Id: c3iter loop {
         c3: ast.nodes.get i: c3Id.u64
         match (
             c3
         ) case caseclause then {
-            cnm: zast.poolTextCopy pool: ast.names ref: c3.name
+            cnm: c3.name
             covA.append cnm
         } else null
     }
