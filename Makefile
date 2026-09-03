@@ -90,7 +90,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard test-tcc test-tcc-heavy mode-parity readable-check user-native-guard perf-strict perf-elision
+.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard test-tcc test-tcc-heavy mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -627,16 +627,39 @@ perf: $(PERFBIN)
 # allocator attribute on z_xmalloc changes nothing). So a clang build is a
 # different measurement, not a wrong one; `make perf-elision` measures that
 # pool deliberately, and it belongs at zero.
+# ALLOC_BASELINE -- heap blocks for one self-compile of $(PERFBIN) (gcc -O1, the
+# default hash, --emit-c /dev/null): the count at the last commit that measured
+# it. The number is bit-identical run to run, so it is a sound ratchet where wall
+# and cycles are not. perf-strict fails ABOVE it; a commit that raises it states
+# the reason in its message, and one that lowers the count lowers it here.
+ALLOC_BASELINE := 4562750
+# ALLOC_LINE -- the one measurement every allocation number comes from.
+ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
+
 perf-strict: $(PERFBIN)
 	@readelf -p .comment $(PERFBIN) | grep -qi clang \
 	  && { echo "perf-strict: $(PERFBIN) is clang-built (PERFCC=$(PERFCC)) -- refusing to measure"; exit 1; } || true
 	@sha=$$(git rev-parse --short HEAD); dirty=$$(git diff --quiet && git diff --cached --quiet && echo clean || echo DIRTY); \
 	  echo "== perf-strict @ $$sha ($$dirty), $(PERFCC) $(firstword $(PERFOPT)) =="
 	@$(PERFRUN) > /dev/null || { echo "perf-strict: self-compile FAILED (exit $$?)"; exit 1; }
-	@line=$$(valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'); \
+	@line=$$($(ALLOC_LINE)); \
 	  echo "  $$line"; \
 	  a=$$(echo "$$line" | sed 's/ allocs.*//;s/,//g'); f=$$(echo "$$line" | sed 's/.* allocs, //;s/ frees.*//;s/,//g'); \
-	  test "$$a" = "$$f" || { echo "perf-strict: allocs != frees -- incomplete or leaking run"; exit 1; }
+	  test "$$a" = "$$f" || { echo "perf-strict: allocs != frees -- incomplete or leaking run"; exit 1; }; \
+	  if [ "$$a" -gt "$(ALLOC_BASELINE)" ]; then \
+	    echo "perf-strict FAIL: $$a allocations > ALLOC_BASELINE $(ALLOC_BASELINE) -- lower the count, or raise the baseline with the reason in the commit"; exit 1; \
+	  elif [ "$$a" -lt "$(ALLOC_BASELINE)" ]; then \
+	    echo "perf-strict: $$a < ALLOC_BASELINE $(ALLOC_BASELINE) -- lower the baseline in the Makefile"; \
+	  else echo "perf-strict OK: $$a allocations (baseline $(ALLOC_BASELINE))"; fi
+	@if command -v perf >/dev/null 2>&1 && perf stat -e instructions true >/dev/null 2>&1; then \
+	  perf stat -e instructions -r 3 $(PERFRUN) 2>&1 | grep -E 'instructions' | sed 's/^ */  /'; \
+	else echo "  (perf stat unavailable -- instructions not measured)"; fi
+
+# pre-push -- what a commit must pass before it leaves the machine: the fast
+# gates plus the allocation ratchet. Not in ci: valgrind costs 15-25s and a
+# shared runner cannot promise the perf binary a quiet core.
+pre-push: check test perf-strict
+	@echo "PRE-PUSH GREEN: check + test + perf-strict (allocations <= $(ALLOC_BASELINE))"
 
 # perf-elision -- how much of the emitted code's allocation the C compiler
 # throws away for us. LLVM deletes an allocation whose bytes are written but

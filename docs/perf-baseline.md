@@ -22,6 +22,7 @@ installed) the allocation total. It measures with the default hash and
 `--emit-c /dev/null`, exactly as below. The remaining columns are manual:
 
 ```bash
+make pre-push                   # check + test + perf-strict: allocations <= ALLOC_BASELINE (Makefile)
 make perf                       # LOC + wall + RSS + phases + allocs (the core row)
 # glibc wall: relink the series binary without mimalloc, time it, then restore:
 rm -f out/zc-perf && make MIMALLOC=0 out/zc-perf
