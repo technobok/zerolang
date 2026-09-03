@@ -3498,29 +3498,25 @@ returnParamTid: function {
 } out u64 is {
     if oId.isZero then return 0
     o: ast.nodes.get i: oId.u64
-    bn: atomName :ast n: o
+    bnId: atomNameId :ast n: o
     # a marker-suffixed generic return (`of.take` / `of.borrow`) reads its
     # base name through the peeled parent.
-    if bn.length == 0 then bn = markerPeeledBase :ast n: o
-    if (st.reg.isGenericParamOf tdecl: enclDecl name: (nameIdOf :ast name: bn.stringView)) then {
-        (recordGenericParamRef
-            :st
-            nid: oId.u64
-            frame: enclDecl
-            name: (nameIdOf :ast name: bn.stringView)
-        )
-        po: st.reg.genericParamTidOf tdecl: enclDecl paramName: (nameIdOf :ast name: bn.stringView)
+    if bnId.isZero then bnId = markerPeeledBaseId :ast n: o
+    if (st.reg.isGenericParamOf tdecl: enclDecl name: bnId) then {
+        recordGenericParamRef :st nid: oId.u64 frame: enclDecl name: bnId
+        po: st.reg.genericParamTidOf tdecl: enclDecl paramName: bnId
         match (
             po
         ) case some then {
             return po
         } case none then null
-        rpt7: st.reg.newType name: bn.stringView typetype: ztypes.ztypetype.genericParam
-        (st.reg.setGenericParamTid
-            tdecl: enclDecl
-            paramName: (nameIdOf :ast name: bn.stringView)
-            tid: rpt7
-        )
+        # the mint spells the name: read through a borrow scoped to the block
+        rpt7: ztypes.tid
+        {
+            bnT: zast.nameTextAt :ast ref: bnId
+            rpt7 = st.reg.newType name: bnT.stringView typetype: ztypes.ztypetype.genericParam
+        }
+        st.reg.setGenericParamTid tdecl: enclDecl paramName: bnId tid: rpt7
         return rpt7
     }
 
@@ -3625,6 +3621,21 @@ markerPeeledBase: function {ast: Ast.view n: Node.view} out String is {
     }
 }
 
+# markerPeeledBaseId -- markerPeeledBase as the base atom's name id (zero for
+# any other shape), for a caller that holds ids.
+markerPeeledBaseId: function {ast: Ast.view n: Node.view} out zast.nameid is {
+    match (
+        n
+    ) case dottedpath then {
+        if (isStripMarkerId nameId: (atomNameId :ast n: (ast.nodes.get i: n.child.u64))) then {
+            return (atomNameId :ast n: (ast.nodes.get i: n.parent.u64))
+        }
+        return zast.nameid
+    } else {
+        return zast.nameid
+    }
+}
+
 # stampGenericParamRef -- a return typeref naming one of the enclosing
 # template's generic params stamps the unit's generic-param type directly
 # (generic params live outside the name-resolution table).
@@ -3635,26 +3646,27 @@ stampGenericParamRef: function {
 } is {
     if oId.isZero then return
     o: ast.nodes.get i: oId.u64
-    bn: atomName :ast n: o
+    bnId: atomNameId :ast n: o
     # a marker-suffixed generic return (`of.take` / `of.borrow`) reads its
     # base name through the peeled parent; the marker dp wears the stamp,
     # matching recordTyperef's convention for concrete marked returns.
-    if bn.length == 0 then bn = markerPeeledBase :ast n: o
-    if (st.reg.isGenericParamOf tdecl: enclDecl name: (nameIdOf :ast name: bn.stringView)) then {
+    if bnId.isZero then bnId = markerPeeledBaseId :ast n: o
+    if (st.reg.isGenericParamOf tdecl: enclDecl name: bnId) then {
         gpt3: u64
-        gpo3: (st.reg.genericParamTidOf
-            tdecl: enclDecl
-            paramName: (nameIdOf :ast name: bn.stringView)
-        )
+        gpo3: st.reg.genericParamTidOf tdecl: enclDecl paramName: bnId
         match (
             gpo3
         ) case some then {
             gpt3 = gpo3
         } case none then {
-            gpt3 = st.reg.newType name: bn.stringView typetype: ztypes.ztypetype.genericParam
+            # the mint spells the name: read through a borrow scoped to the block
+            {
+                bnT: zast.nameTextAt :ast ref: bnId
+                gpt3 = st.reg.newType name: bnT.stringView typetype: ztypes.ztypetype.genericParam
+            }
             (st.reg.setGenericParamTid
                 tdecl: enclDecl
-                paramName: (nameIdOf :ast name: bn.stringView)
+                paramName: bnId
                 tid: (ztypes.tid.create from: gpt3.u64)
             )
         }
@@ -15884,18 +15896,12 @@ stampOnePendingTyperef: function {
     }
     # the frame's unit, as the label the surface / claim probes take
     origin: unitDecl
-    originOwn: String
+    originId: zast.nameid
     {
         our: unitRootOfDecl :st declId: rf
-        if (our.isZero) == false then {
-            originOwn = zast.poolTextCopy pool: ast.names ref: (declNameIdOf :st declId: our)
-        }
+        if (our.isZero) == false then originId = declNameIdOf :st declId: our
     }
-    if originOwn.length > 0 then origin = (unitDeclOfNameOrOwn
-        :st
-        frame: rf
-        nameId: (nameIdOf :ast name: originOwn.stringView)
-        )
+    if (originId.isZero) == false then origin = unitDeclOfNameOrOwn :st frame: rf nameId: originId
     skip0: false
     {
         sk0: st.typing.noStampNode.get key: uk
@@ -20122,12 +20128,11 @@ checkTypedefCreate: function {
         arg: argRefAt :ast nid: (zast.nodeid.create from: argId.u32)
         if (arg.nid.isZero) == false then {
             if (found) == false then {
-                an: zast.nameTextCopy :ast ref: arg.name
                 isFrom: false
-                if an.length == 0 then {
+                if arg.name.isZero then {
                     isFrom = true
                 } else {
-                    if an.stringView == "from" then isFrom = true
+                    if (zast.nameTextEq :ast ref: arg.name s: "from") then isFrom = true
                 }
                 if isFrom then {
                     found = true
@@ -21002,12 +21007,12 @@ refuseHiddenArm: function {
     # whether a public alias already translated this name
     aliasViaX: bool
 } out bool is {
-    cn: zast.nameTextCopy :ast ref: cnId
     if aliasViaX then return false
     baseNodeC: ast.nodes.get i: dp.parent.u64
     if (baseIsPrivateCapable :st :ast :bt baseNode: baseNodeC) then return false
     if (declMemberIsPrivate :st tid: bt nameId: cnId) == false then return false
     ccnode: ast.nodes.get i: dp.child.u64
+    cn: zast.nameTextCopy :ast ref: cnId
     ccbn: st.reg.nameOf tid: bt
     (addErrorH
         :st
@@ -21040,11 +21045,11 @@ refuseBareArmPayload: function {
     # the arm the read named
     cnId: zast.nameid
 } out bool is {
-    cn: zast.nameTextCopy :ast ref: cnId
     if st.typing.calleeDottedNid == dp.nid.u64 then return false
     anId: cnId
     if anId.isZero then return false
     if (armCarriesPayload :st armTid: bt armName: anId) == false then return false
+    cn: zast.nameTextCopy :ast ref: cnId
     btn: st.reg.nameOf tid: bt
     cnode: ast.nodes.get i: dp.child.u64
     mb: "arm '\{cn}' of '\{btn}' carries a payload -- naming an arm gives its tag, and cannot supply what the arm holds"
@@ -24374,13 +24379,13 @@ checkMethodRefTarget: function {
     ast: Ast.view
     rasgn: reasgref
 } is {
-    targetRoot: methodReceiverRoot :ast n: (ast.nodes.get i: rasgn.topath.u64)
+    targetRoot: methodReceiverRootId :ast n: (ast.nodes.get i: rasgn.topath.u64)
     targetFnName: (zast.nameTextAt
         :ast
         ref: (dottedChildNameId :ast n: (ast.nodes.get i: rasgn.topath.u64))
     )
-    if targetRoot.length > 0 when targetFnName.length > 0 then {
-        tto: st.lookup nameId: (nameIdOf :ast name: targetRoot.stringView)
+    if (targetRoot.isZero) == false when targetFnName.length > 0 then {
+        tto: st.lookup nameId: targetRoot
         match (
             tto
         ) case some then {
@@ -24531,9 +24536,9 @@ resolveTypeofTarget: function {
         match (
             tso
         ) case some then {
-            troot: methodReceiverRoot :ast n: (ast.nodes.get i: rasgn.topath.u64)
-            if troot.length > 0 then {
-                tto: st.lookup nameId: (nameIdOf :ast name: troot.stringView)
+            troot: methodReceiverRootId :ast n: (ast.nodes.get i: rasgn.topath.u64)
+            if (troot.isZero) == false then {
+                tto: st.lookup nameId: troot
                 match (
                     tto
                 ) case some then {
@@ -26368,9 +26373,9 @@ taggedRecvIsValue: function {ast: Ast.view st: zenv.ZSymbolTable.view n: Node.vi
     } case call then {
         return true
     } else {
-        rn0: pathRootName :ast :n
-        if rn0.length == 0 then return false
-        rvo0: st.lookupVarId nameId: (nameIdOf :ast name: rn0.stringView)
+        rn0: rootNameIdOf :ast :n
+        if rn0.isZero then return false
+        rvo0: st.lookupVarId nameId: rn0
         match (
             rvo0
         ) case some then {
@@ -26418,6 +26423,18 @@ methodReceiverRoot: function {ast: Ast.view n: Node.view} out String is {
         return (bareAtomName :ast n: (ast.nodes.get i: n.parent.u64))
     } else {
         return "".string
+    }
+}
+
+# methodReceiverRootId -- methodReceiverRoot as the receiver atom's name id
+# (zero when the callable is not a dotted path on a bare atom).
+methodReceiverRootId: function {ast: Ast.view n: Node.view} out zast.nameid is {
+    match (
+        n
+    ) case dottedpath then {
+        return (bareAtomNameId :ast n: (ast.nodes.get i: n.parent.u64))
+    } else {
+        return zast.nameid
     }
 }
 
@@ -29357,10 +29374,9 @@ returnedBareFieldName: function {
         return (returnedBareFieldName :ast :st nid: wrap.expression)
     } case dottedpath then {
         dr: dpRefAt :ast :nid
-        bfc: atomName :ast n: (ast.nodes.get i: dr.child.u64)
         bfcId: atomNameId :ast n: (ast.nodes.get i: dr.child.u64)
-        if bfc.length == 0 then return "".string
-        if (isStripMarker name: bfc.stringView) then return "".string
+        if bfcId.isZero then return "".string
+        if (isStripMarkerId nameId: bfcId) then return "".string
         bft: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: dr.parent.u64
         if bft.isZero then return "".string
         (forceMemberOf
@@ -29379,8 +29395,13 @@ returnedBareFieldName: function {
             bfo
         ) case some then {
             if (st.reg.typetypeOf typeId: (ztypes.tid.create from: bfo.u64)) == ztypes.ztypetype.functionType then return "".string
-            if (st.reg.typetypeOf typeId: (ztypes.tid.create from: bfo.u64)) == ztypes.ztypetype.genericParam then return (bfc.copy)
-            if (typeIsReftype :st tid: (ztypes.tid.create from: bfo.u64)) then return (bfc.copy)
+            if (st.reg.typetypeOf typeId: (ztypes.tid.create from: bfo.u64)) == ztypes.ztypetype.genericParam then {
+                return (zast.nameTextCopy :ast ref: bfcId)
+            }
+            if (typeIsReftype
+                :st
+                tid: (ztypes.tid.create from: bfo.u64)
+            ) then return (zast.nameTextCopy :ast ref: bfcId)
             return "".string
         } case none then {
             return "".string
@@ -30012,15 +30033,16 @@ lockMethodReceiver: function {
     ast: Ast.view
     call: callref
     dro: ztypes.tid
-    rro: StringView
+    # the receiver atom's name id, zero when the receiver is not a bare atom
+    rroId: zast.nameid
 } out bool is {
         recvShared: true
-        if rro.length > 0 then {
-            rvo2: st.lookupVarId nameId: (nameIdOf :ast name: rro)
+        if (rroId.isZero) == false then {
+            rvo2: st.lookupVarId nameId: rroId
             match (
                 rvo2
             ) case some then {
-                rvt2: st.lookup nameId: (nameIdOf :ast name: rro)
+                rvt2: st.lookup nameId: rroId
                 match (
                     rvt2
                 ) case some then {
@@ -30058,7 +30080,7 @@ lockMethodReceiver: function {
                         (lockCallArg
                             :st
                             pool: ast.names
-                            nameId: (nameIdOf :ast name: rro)
+                            nameId: rroId
                             callId: call.nid.u64
                             shared: shr
                             nodeid: call.nid
@@ -30069,7 +30091,7 @@ lockMethodReceiver: function {
                 } case none then null
             } case none then null
         }
-        if rro.length == 0 then recvShared = (lockNestedMethodReceiver :st :ast :call :dro)
+        if rroId.isZero then recvShared = (lockNestedMethodReceiver :st :ast :call :dro)
         return recvShared
 }
 
@@ -30246,8 +30268,8 @@ checkResolvedMethodCall: function {
         # The receiver locks for the call's duration too, after
         # the args; the strength it took is the strength the result's pin
         # keeps on it.
-        rro: methodReceiverRoot :ast n: (ast.nodes.get i: call.callable.u64)
-        recvShr: (lockMethodReceiver :st :ast :call :dro rro: rro.stringView)
+        rro: methodReceiverRootId :ast n: (ast.nodes.get i: call.callable.u64)
+        recvShr: (lockMethodReceiver :st :ast :call :dro rroId: rro)
         st.popTo marker: mcm
         mres: ztypes.tid
         mro: methodReturnOf :st mid: dro
@@ -30683,13 +30705,13 @@ checkGenericFnCall: function {
         # callee (io.eprintln) has no value root and skips.
         mcmG: st.pushCall
         callableNode: ast.nodes.get i: call.callable.u64
-        rroG: methodReceiverRoot :ast n: callableNode
-        if rroG.length > 0 then {
-            rvoG: st.lookupVarId nameId: (nameIdOf :ast name: rroG.stringView)
+        rroG: methodReceiverRootId :ast n: callableNode
+        if (rroG.isZero) == false then {
+            rvoG: st.lookupVarId nameId: rroG
             match (
                 rvoG
             ) case some then {
-                rvtG: st.lookup nameId: (nameIdOf :ast name: rroG.stringView)
+                rvtG: st.lookup nameId: rroG
                 match (
                     rvtG
                 ) case some then {
@@ -30722,7 +30744,7 @@ checkGenericFnCall: function {
                         (lockCallArg
                             :st
                             pool: ast.names
-                            nameId: (nameIdOf :ast name: rroG.stringView)
+                            nameId: rroG
                             callId: call.nid.u64
                             shared: shrG
                             nodeid: call.nid
@@ -30733,7 +30755,7 @@ checkGenericFnCall: function {
                 } case none then null
             } case none then null
         }
-        if rroG.length == 0 then {
+        if rroG.isZero then {
             # Nested receiver (`rec.field.append ...`): the
             # root-name block above cannot see it. Lock the
             # full receiver tuple; the immediate receiver
