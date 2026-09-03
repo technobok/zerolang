@@ -1984,27 +1984,29 @@ atomNameIdOf: function {ast: Ast.view n: Node.view} out zast.nameid is {
     }
 }
 
-# atomTextOf -- an atomid node's name text ("" for any other shape).
-atomTextOf: function {ast: Ast.view n: Node.view} out String is {
+# atomTextOf -- an atomid node's name text ("" for any other shape), a view
+# into the pool: the tree is read-only throughout emission, so the text is
+# never copied out of it.
+atomTextOf: function {ast: Ast.view n: Node.view} outx StringView is {
     match (
         n
     ) case atomid then {
-        return (zast.nameTextCopy :ast ref: n.name)
+        return (zast.nameTextAt :ast ref: n.name).stringView
     } else {
-        return "".string
+        return ""
     }
 }
 
-# atomTextDeep -- atom text through expression wrappers.
-atomTextDeep: function {ast: Ast.view n: Node.view} out String is {
+# atomTextDeep -- atom text through expression wrappers, a view into the pool.
+atomTextDeep: function {ast: Ast.view n: Node.view} outx StringView is {
     match (
         n
     ) case expression then {
         return (atomTextDeep :ast n: (ast.nodes.get i: n.expression.u64))
     } case atomid then {
-        return (zast.nameTextCopy :ast ref: n.name)
+        return (zast.nameTextAt :ast ref: n.name).stringView
     } else {
-        return "".string
+        return ""
     }
 }
 
@@ -3487,9 +3489,16 @@ takeAliasBaseNid: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: Node
 # ownership-transfer alias: the binding reuses the source storage), else "".
 # takeAliasBase -- that base atom's text, derived from the node above so the
 # name and the id can never describe different atoms.
-takeAliasBase: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: Node.view} out String is {
+takeAliasBase: function {
+    # the tree the alias is read from
+    ast: Ast.view
+    # the symbol table the alias stamp lives in
+    symtab: zenv.ZSymbolTable.view
+    # the `.take` node
+    n: Node.view
+} outx StringView is {
     tbn: takeAliasBaseNid :ast :symtab :n
-    if tbn == 0 then return "".string
+    if tbn == 0 then return ""
     return (atomTextOf :ast n: (ast.nodes.get i: tbn))
 }
 
@@ -3770,7 +3779,7 @@ implicitTakeFnId: function {
         # owned arg is never zeroed -> double free at the owner's destructor.
         dn0: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
         if dn0.length > 0 then {
-            rt0: resolveTypeIdByName :ast :symtab :ctx name: dn0.stringView
+            rt0: resolveTypeIdByName :ast :symtab :ctx name: dn0
             if rt0 > 0 then ct = ztypes.tid.create from: rt0.u64
         }
     }
@@ -4183,24 +4192,32 @@ dottedBaseAtomId: function {ast: Ast.view n: Node.view} out zast.nameid is {
 
 # the base atom of a dotted path, which is the sanctioned discriminator the
 # shadow guard allows
-dottedBaseAtom: function {ast: Ast.view n: Node.view} out String is {
+dottedBaseAtom: function {ast: Ast.view n: Node.view} outx StringView is {
     match (
         n
     ) case dottedpath then {
         return (atomTextOf :ast n: (ast.nodes.get i: n.parent.u64))
     } else {
-        return "".string
+        return ""
     }
 }
 
+# atomOrBaseText -- the atom's own text, or a dotted path's base atom's text:
+# the two shapes a receiver or a `.take` source is spelt in ("" otherwise).
+atomOrBaseText: function {ast: Ast.view n: Node.view} outx StringView is {
+    t: atomTextOf :ast :n
+    if t.length > 0 then return t
+    return (dottedBaseAtom :ast :n)
+}
+
 # the child member name of dotted-path node `n`.
-dottedChildText: function {ast: Ast.view n: Node.view} out String is {
+dottedChildText: function {ast: Ast.view n: Node.view} outx StringView is {
     match (
         n
     ) case dottedpath then {
         return (atomTextOf :ast n: (ast.nodes.get i: n.child.u64))
     } else {
-        return "".string
+        return ""
     }
 }
 
@@ -4213,22 +4230,33 @@ aliasOrChild: function {
     symtab: zenv.ZSymbolTable.view
     aliasId: zast.nodeid
     childId: u32
-} out String is {
+} outx StringView is {
     if symtab.typing.renameSeen then {
-        ai: symtab.typing.aliasInternalNameOf nodeid: aliasId
-        if ai.length > 0 then return ai
+        ai: symtab.typing.aliasInternalName.get key: aliasId.u64
+        match (
+            ai
+        ) case some then {
+            if ai.length > 0 then return ai.stringView
+        } case none then null
     }
     return (atomTextOf :ast n: (ast.nodes.get i: childId.u64))
 }
 
 # the emitted (internal) name of a possibly-renamed member access.
-aliasChildName: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: Node.view} out String is {
+aliasChildName: function {
+    # the tree the member name is read from
+    ast: Ast.view
+    # the symbol table holding the rename stamps
+    symtab: zenv.ZSymbolTable.view
+    # the dotted-path node
+    n: Node.view
+} outx StringView is {
     match (
         n
     ) case dottedpath then {
         return (aliasOrChild :ast :symtab aliasId: n.nodeid childId: n.child)
     } else {
-        return "".string
+        return ""
     }
 }
 
@@ -4939,7 +4967,7 @@ emitScalarIterateCall: function {
 } out String is {
     mnI: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if mnI.length == 0 then return "".string
-    nmIdI: zast.poolFind pool: ast.names text: mnI.stringView
+    nmIdI: zast.poolFind pool: ast.names text: mnI
     isRangeI: false
     if nmIdI == zast.names.wkIterate then isRangeI = true
     if nmIdI == zast.names.wkEach then isRangeI = true
@@ -4992,11 +5020,13 @@ emitDottedCall: function {
     ctx: Ctx
     call: zast.CallData.view
 } out String is {
-    bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
+    bn0: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     btid: ztypes.tid
     dcbV: ztypes.vid
-    if bn.length == 0 then {
+    # the receiver's C text: the expression's, or the base atom's local name
+    bn: String
+    if bn0.length == 0 then {
         # nested/projected base (el.text.stringView.stripPrefix): no base atom, but
         # the base is a stamped String/StringView -- emit it as an expression (a
         # compound-literal lvalue, so the `&base` SV-native legs stay valid C).
@@ -5020,13 +5050,13 @@ emitDottedCall: function {
         # in scope substitutes for it, and then no variable is being read -- so
         # the pointer question below has nothing to ask about.
         baseVid: atomVid :symtab nid: bnid
-        bnA: aliasResolve :ctx name: bn.stringView vid: baseVid
-        if bnA.stringView == bn.stringView then dcbV = (atomVid :symtab nid: bnid)
-        bn = emitLocalAtomName :ctx name: bn.stringView vid: baseVid
+        bnA: aliasResolve :ctx name: bn0 vid: baseVid
+        if bnA.stringView == bn0 then dcbV = (atomVid :symtab nid: bnid)
+        bn = emitLocalAtomName :ctx name: bn0 vid: baseVid
     }
     btIsStr: btid == ctx.strTid
     bnv: bn.stringView
-    mnv: mn.stringView
+    mnv: mn
     eCmp: emitSvCompareCall :ast :symtab :ctx :call :bnv :mnv :btid :btIsStr :dcbV
     if eCmp.length > 0 then return eCmp
     eSub: emitSvSubstringCall :ast :symtab :ctx :call :bnv :mnv :btid :btIsStr :dcbV
@@ -5060,7 +5090,7 @@ emitDataIndexCall: function {
     if dtid.isZero then return "".string
     isData: ctx.dataElems.has key: (ztypes.tid.create from: dtid.u64)
     if (isData) == false then return "".string
-    if mn.stringView == "index" then {
+    if mn == "index" then {
         ax: "0".string
         aiter: call.arguments.iterate
         for aId: aiter loop {
@@ -5202,7 +5232,7 @@ emitNativeArgMethod: function {
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if mn.length == 0 then return "".string
     srcP: convSrcPathOf :symtab srcTid: ownerTid
-    key: nativeMemberKey srcPath: srcP.stringView memb: mn.stringView
+    key: nativeMemberKey srcPath: srcP.stringView memb: mn
     if key.length == 0 then return "".string
     body: nativeImplOf :ctx path: key.stringView
     if body.length == 0 then return "".string
@@ -5219,7 +5249,7 @@ emitNativeArgMethod: function {
         recv = rd.copy
     }
     mtid: ztypes.tid.create from: (ztypecheck.optU64Or
-        o: (symtab.typing.declChildOf pool: ast.names parentTypeId: ownerTid name: mn.stringView)
+        o: (symtab.typing.declChildOf pool: ast.names parentTypeId: ownerTid name: mn)
         d: 0
     )
     if mtid.isZero then return "".string
@@ -5308,9 +5338,9 @@ emitStringArgMethod: function {
 } out String is {
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     nativeM: String
-    if mn.stringView == "appendByte" then nativeM = "append_byte".string
-    if mn.stringView == "reserve" then nativeM = "reserve".string
-    if mn.stringView == "append" then nativeM = "append".string
+    if mn == "appendByte" then nativeM = "append_byte".string
+    if mn == "reserve" then nativeM = "reserve".string
+    if mn == "append" then nativeM = "append".string
     if nativeM.length == 0 then return "".string
     callableNode: ast.nodes.get i: call.callable.u64
     recvExpr: emitDottedReceiver :ast :symtab :ctx callable: callableNode
@@ -5357,7 +5387,7 @@ emitStringArgMethod: function {
             }
         } else null
     }
-    if mn.stringView == "append" then {
+    if mn == "append" then {
         # The StringLike arg lowers to (data, length) by its concrete type:
         # an owned String reads .data/.size (through the pointer for a
         # borrowed param); a StringView reads .data/.length.
@@ -6125,18 +6155,18 @@ emitOperatorCallForm: function {
 } out String is {
     mnO: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if mnO.length == 0 then return "".string
-    if (isOperatorName name: mnO.stringView) == false then return "".string
+    if (isOperatorName name: mnO) == false then return "".string
     if call.arguments.length != 1 then return "".string
     rt0: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
     rtc: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: rt0.u64)
-    owner: methodOwnerId :ast :symtab rtid: (ztypes.tid.create from: rtc.u64) mn: mnO.stringView
+    owner: methodOwnerId :ast :symtab rtid: (ztypes.tid.create from: rtc.u64) mn: mnO
     if owner == 0 then return "".string
     method: ztypes.tid
     {
         mo9: (symtab.typing.declChildOf
             pool: ast.names
             parentTypeId: (ztypes.tid.create from: owner.u64)
-            name: mnO.stringView
+            name: mnO
         )
         match (
             mo9
@@ -6169,7 +6199,7 @@ emitOperatorCallForm: function {
     r: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: rhsNid)
     if (nodeIsAtomBox :ast :symtab :ctx n: (ast.nodes.get i: lhsNid)) then l = "(*\{l})"
     if (nodeIsAtomBox :ast :symtab :ctx n: (ast.nodes.get i: rhsNid)) then r = "(*\{r})"
-    oid9: zast.poolFind pool: ast.names text: mnO.stringView
+    oid9: zast.poolFind pool: ast.names text: mnO
     return (emitOperatorAt
         :ast
         :symtab
@@ -6182,7 +6212,7 @@ emitOperatorCallForm: function {
         :rhsNid
         :l
         :r
-        op: mnO.stringView
+        op: mnO
     )
 }
 
@@ -6205,7 +6235,7 @@ emitSynthOperatorCallForm: function {
 } out String is {
     mnS: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if mnS.length == 0 then return "".string
-    if (isOperatorName name: mnS.stringView) == false then return "".string
+    if (isOperatorName name: mnS) == false then return "".string
     if call.arguments.length != 1 then return "".string
     rt0S: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
     rtcS: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: rt0S.u64)
@@ -6213,10 +6243,10 @@ emitSynthOperatorCallForm: function {
         :ast
         :symtab
         rtid: (ztypes.tid.create from: rtcS.u64)
-        mn: mnS.stringView
+        mn: mnS
     )
     if ownerS == 0 then return "".string
-    nidS: zast.poolFind pool: ast.names text: mnS.stringView
+    nidS: zast.poolFind pool: ast.names text: mnS
     if nidS.isZero then return "".string
     if (symtab.typing.declMemberIsSynth
         parentTypeId: (ztypes.tid.create from: ownerS.u64)
@@ -6246,7 +6276,7 @@ emitInstanceMethodCall: function {
     if (symtab.typing.callRecvFromArgs.has item: call.nodeid.u64) then return "".string
     rtid0: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
     rtidc: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: rtid0.u64)
-    rtid: methodOwnerId :ast :symtab rtid: (ztypes.tid.create from: rtidc.u64) mn: mn.stringView
+    rtid: methodOwnerId :ast :symtab rtid: (ztypes.tid.create from: rtidc.u64) :mn
     if rtid == 0 then return "".string
     # Both families reach here: a user record's methods take their receiver by
     # pointer too, so they need the same receiver-addressing logic below. The
@@ -6271,7 +6301,7 @@ emitInstanceMethodCall: function {
     mco: (symtab.typing.declChildOf
         pool: ast.names
         parentTypeId: (ztypes.tid.create from: rtid.u64)
-        name: mn.stringView
+        name: mn
     )
     # a NATIVE member is the dedicated dispatchers' to emit -- the String and
     # StringView emitters, the collection ones, the io/cli/os fragment call --
@@ -6609,7 +6639,7 @@ refBorrowCalleeFid: function {
         mf8: ztypecheck.optU64Or o: (symtab.typing.declChildOf
             pool: ast.names
             parentTypeId: rid8
-            name: ch8.stringView
+            name: ch8
         ) d: 0
         if (funcBorrowFlag :symtab tid: (ztypes.tid.create from: mf8.u64)) then return mf8
         return 0
@@ -6730,8 +6760,8 @@ rhsIsBorrowGet: function {
         cbl: ast.nodes.get i: n.callable.u64
         ch: aliasChildName :ast :symtab n: cbl
         isG: false
-        if ch.stringView == "get" then isG = true
-        if ch.stringView == "getMut" then isG = true
+        if ch == "get" then isG = true
+        if ch == "getMut" then isG = true
         if (isG) == false then return false
         bt: chaseColMono :symtab :ctx tid: (dottedReceiverStampId :ast :symtab callable: cbl)
         isC: false
@@ -6754,7 +6784,7 @@ emitStrConvCall: function {
     call: zast.CallData.view
 } out String is {
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
-    if mn.stringView != "str" then return "".string
+    if mn != "str" then return "".string
     rid0: stampIdOf :symtab nid: call.nodeid.u64
     rid: chaseColMono :symtab :ctx tid: rid0
     if (originIsTid
@@ -7011,7 +7041,7 @@ emitListMethodCall: function {
     if (mnIs :ctx id: mnId at: mnExtend) then {
         eaa: listTakeArgBase :ast :call label: "from"
         eaV: atomVid :symtab nid: (listTakeArgBaseNid :ast :call label: "from")
-        ea: emitLocalAtomName :ctx name: eaa.stringView vid: eaV
+        ea: emitLocalAtomName :ctx name: eaa vid: eaV
         e5: "\{cb}_extend(\{recvR}, &\{ea})"
         return e5
     }
@@ -7616,9 +7646,9 @@ listTakeArgBase: function {
     ast: Ast.view
     call: zast.CallData.view
     label: StringView
-} out String is {
+} outx StringView is {
     lid: listTakeArgBaseNid :ast :call :label
-    if lid == 0 then return "0".string
+    if lid == 0 then return "0"
     return (atomTextOf :ast n: (ast.nodes.get i: lid))
 }
 
@@ -7671,16 +7701,15 @@ emitTypedefCreateCall: function {
         return "0".string
     }
     calr: ast.nodes.get i: call.callable.u64
-    bn: dottedBaseAtom :ast n: calr
-    if bn.length == 0 then bn = atomTextOf :ast n: calr
+    bn: atomOrBaseText :ast n: calr
     if bn.length == 0 then return "".string
-    tid: userFnId :ast :symtab :ctx name: bn.stringView
+    tid: userFnId :ast :symtab :ctx name: bn
     if tid.isZero then {
         so: (ztypecheck.resolveUnitChildRo
             :ast
             st: symtab
             unitDecl: symtab.typing.systemUnitRoot
-            nameId: (zast.poolFind pool: ast.names text: bn.stringView)
+            nameId: (zast.poolFind pool: ast.names text: bn)
         )
         match (
             so
@@ -7785,7 +7814,7 @@ emitUnionCtor: function {
         ) then sysU = true
         if sysU then return "".string
     }
-    utid: resolveTypeIdByName :ast :symtab :ctx name: bn.stringView
+    utid: resolveTypeIdByName :ast :symtab :ctx name: bn
     if utid == 0 then return "".string
     if (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: utid.u64)) != ztypes.ztypetype.unionType then return "".string
     # build from the mono (smid0) for a user generic union; else the named template
@@ -7794,8 +7823,8 @@ emitUnionCtor: function {
         ctid = smid0
     }
     vc: ctxCname :ctx tid: (ztypes.tid.create from: ctid.u64)
-    tg: variantTag :symtab tid: (ztypes.tid.create from: ctid.u64) arm: mn.stringView
-    payC: armPayloadC :ast :symtab :ctx tid: (ztypes.tid.create from: ctid.u64) arm: mn.stringView
+    tg: variantTag :symtab tid: (ztypes.tid.create from: ctid.u64) arm: mn
+    payC: armPayloadC :ast :symtab :ctx tid: (ztypes.tid.create from: ctid.u64) arm: mn
     if payC.length > 0 then {
         av: String
         got: false
@@ -7847,28 +7876,28 @@ emitVariantCtorCall: function {
         :symtab
         tid: smid
         originTid: (ctx.origins.get i: ogOptionval)
-    ) when bn.stringView == "optionval" then sInline = true
+    ) when bn == "optionval" then sInline = true
     if (originIsTid
         :symtab
         tid: smid
         originTid: (ctx.origins.get i: ogResultval)
-    ) when bn.stringView == "resultval" then sInline = true
+    ) when bn == "resultval" then sInline = true
     if sInline then return (emitInlineVariantCtor
         :ast
         :symtab
         :ctx
         :call
         tid: smid
-        arm: mn.stringView
+        arm: mn
     )
     if (originIsTid :symtab tid: smid originTid: (ctx.origins.get i: ogOption)) then {
         ovc: ctxCname :ctx tid: smid
-        if mn.stringView == "none" then {
+        if mn == "none" then {
             otg: variantTag :symtab tid: smid arm: "none"
             en: "((\{ovc}_t){ .tag = \{otg}, .data = NULL })"
             return en
         }
-        if mn.stringView == "some" then {
+        if mn == "some" then {
             otg9s: variantTag :symtab tid: smid arm: "some"
             opayC: armPayloadC :ast :symtab :ctx tid: smid arm: "some"
             if opayC.length == 0 then return "".string
@@ -7898,7 +7927,7 @@ emitVariantCtorCall: function {
         }
         return "".string
     }
-    vtid: userFnId :ast :symtab :ctx name: bn.stringView
+    vtid: userFnId :ast :symtab :ctx name: bn
     if vtid.isZero then return "".string
     if (symtab.reg.typetypeOf typeId: vtid) != ztypes.ztypetype.variantType then return "".string
     # a generic variant's arm is WRITTEN against the template (`Slot.full`), so
@@ -7906,7 +7935,7 @@ emitVariantCtorCall: function {
     # instance has. The mono the binding holds is on the call node's stamp; an
     # id compare against the template is what says the stamp is its instance.
     if (genericOriginTid :symtab tid: smid) == vtid then vtid = smid
-    return (emitInlineVariantCtor :ast :symtab :ctx :call tid: vtid arm: mn.stringView)
+    return (emitInlineVariantCtor :ast :symtab :ctx :call tid: vtid arm: mn)
 }
 
 # emitTypeQualCall -- `point.add a: x b: y`: a dotted callee whose base
@@ -7921,7 +7950,7 @@ emitTypeQualCall: function {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if bn.length == 0 then return "".string
-    btid: userFnId :ast :symtab :ctx name: bn.stringView
+    btid: userFnId :ast :symtab :ctx name: bn
     if btid.isZero then return "".string
     bttq: symtab.reg.typetypeOf typeId: btid
     # a receiver's family decides how it is CARRIED, never how the call is
@@ -7936,7 +7965,7 @@ emitTypeQualCall: function {
     if bttq == ztypes.ztypetype.unionType then isUserObjQ = true
     if bttq == ztypes.ztypetype.facetType then isUserObjQ = true
     if (isUserObjQ) == false then return "".string
-    mco: symtab.typing.declChildOf pool: ast.names parentTypeId: btid name: mn.stringView
+    mco: symtab.typing.declChildOf pool: ast.names parentTypeId: btid name: mn
     match (
         mco
     ) case some then {
@@ -7964,11 +7993,11 @@ emitTypeQualCall: function {
                     mcBody = true
                 } case none then null
             }
-            if mn.stringView == "create" when mcBody == false then {
+            if mn == "create" when mcBody == false then {
                 return (emitRecordCtor :ast :symtab :ctx :call tid: btid)
             }
             pn: pnames.length
-            if mn.stringView == "create" then {
+            if mn == "create" then {
                 # user create: args by the create's own param labels
                 args: String
                 pi: u64
@@ -9486,7 +9515,7 @@ emitUnitMethodCall: function {
     if rmo.isZero then return "".string
     child: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if child.length == 0 then return "".string
-    co: symtab.typing.declChildOf pool: ast.names parentTypeId: rsid name: child.stringView
+    co: symtab.typing.declChildOf pool: ast.names parentTypeId: rsid name: child
     calleeTid: ztypes.tid
     match (
         co
@@ -10048,8 +10077,8 @@ emitCrossUnitSumCtor: function {
 ) == false then return "".string
     ctorArmName: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if ctorArmName.length == 0 then return "".string
-    if ctorArmName.stringView == "create" then return "".string
-    if ctorArmName.stringView == "borrow" then return "".string
+    if ctorArmName == "create" then return "".string
+    if ctorArmName == "borrow" then return "".string
     ud4x: ztypecheck.unitDeclOfName st: symtab nameId: obId
     go: (ztypecheck.resolvedByIdsRo
         :ast
@@ -10071,17 +10100,17 @@ emitCrossUnitSumCtor: function {
         :ctx
         :call
         tid: utid
-        arm: ctorArmName.stringView
+        arm: ctorArmName
     )
     if ttx != ztypes.ztypetype.unionType then return "".string
     vc: ctxCname :ctx tid: (ztypes.tid.create from: utid.u64)
-    tg: variantTag :symtab tid: (ztypes.tid.create from: utid.u64) arm: ctorArmName.stringView
+    tg: variantTag :symtab tid: (ztypes.tid.create from: utid.u64) arm: ctorArmName
     payC: (armPayloadC
         :ast
         :symtab
         :ctx
         tid: (ztypes.tid.create from: utid.u64)
-        arm: ctorArmName.stringView
+        arm: ctorArmName
     )
     if payC.length > 0 then {
         av: String
@@ -10206,7 +10235,7 @@ emitFnptrFieldCall: function {
     if (symtab.typing.declIsFnptrField
         pool: ast.names
         parentTypeId: rtid
-        name: mn.stringView
+        name: mn
     ) == false then return "".string
     callableNode: ast.nodes.get i: call.callable.u64
     recvExpr: emitDottedReceiver :ast :symtab :ctx callable: callableNode
@@ -10219,7 +10248,7 @@ emitFnptrFieldCall: function {
     # and a receiver-typed param (`r: this` on a record) is one of those.
     fnTid: ztypes.tid
     {
-        mnId: zast.poolFind pool: ast.names text: mn.stringView
+        mnId: zast.poolFind pool: ast.names text: mn
         if mnId > 0 then {
             fnTid = (ztypes.tid.create
                 from: (ztypecheck.optU64Or
@@ -10277,7 +10306,7 @@ emitFnptrFieldCall: function {
             ai = ai + 1
         } else null
     }
-    mnFfP: memberCPrefix name: mn.stringView
+    mnFfP: memberCPrefix name: mn
     r: "\{recvExpr}\{acc}\{mnFfP}\{mn}(\{args})"
     return r
 }
@@ -12856,8 +12885,8 @@ emitDottedConversionRead: function {
         :ast
         :symtab
         :ctx
-        pbase: xpb.stringView
-        ptype: xpt.stringView
+        pbase: xpb
+        ptype: xpt
         arm: xar.stringView
     )
     if xtag.length > 0 then return xtag
@@ -13262,7 +13291,7 @@ emitDottedRead: function {
             :symtab
             :ctx
             :n
-            mn2: mn2.stringView
+            :mn2
             bn2: bn2.stringView
             bn2r: bn2r.stringView
             :bn2v
@@ -13270,7 +13299,7 @@ emitDottedRead: function {
         )
         if aba.length > 0 then return aba
     }
-    return (emitDottedNestedBase :ast :symtab :ctx :n mn2: mn2.stringView)
+    return (emitDottedNestedBase :ast :symtab :ctx :n :mn2)
 }
 
 # emitExpr -- the C expression text for a node (calls inline; the scalar
@@ -13754,7 +13783,7 @@ dataIndexElemName: function {
         return (dataIndexElemName :ast :symtab :ctx n: (ast.nodes.get i: n.expression.u64))
     } case call then {
         mn: dottedChildText :ast n: (ast.nodes.get i: n.callable.u64)
-        if mn.stringView == "index" then {
+        if mn == "index" then {
             dnid: dottedBaseNodeId :ast n: (ast.nodes.get i: n.callable.u64)
             dk: dataBlockTid :symtab nid: dnid
             go: ctx.dataElems.get key: dk
@@ -14520,9 +14549,9 @@ stringviewOfBase: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     n: Node.view
-} out String is {
+} outx StringView is {
     sbn: stringviewOfBaseNid :ast :symtab :n
-    if sbn == 0 then return "".string
+    if sbn == 0 then return ""
     return (atomTextOf :ast n: (ast.nodes.get i: sbn))
 }
 
@@ -14671,7 +14700,7 @@ emitOptionBoxHoist: function {
         return (emitOptionBoxHoist :ast :symtab :ctx n: sln :ind :tmp :buf)
     } case call then {
         cn: dottedChildText :ast n: (ast.nodes.get i: n.callable.u64)
-        if cn.stringView != "some" then return "".string
+        if cn != "some" then return "".string
         mid: stampIdOf :symtab nid: n.nodeid.u64
         if (originIsTid :symtab tid: mid originTid: (ctx.origins.get i: ogOption)) == false then {
             return "".string
@@ -15081,7 +15110,7 @@ emitStringBind: function {
             svacc4: ".".string
             svbV: atomVid :symtab nid: (stringviewOfBaseNid :ast :symtab n: avn)
             if (isPtrVid :ctx vid: svbV) then svacc4 = "->".string
-            svbR4: emitLocalAtomName :ctx name: svb.stringView vid: svbV
+            svbR4: emitLocalAtomName :ctx name: svb vid: svbV
             lsv4: "\{ind}\{ctx.svC}_t \{nm} = (\{ctx.svC}_t){ .data = \{svbR4}\{svacc4}data, .size = \{svbR4}\{svacc4}size };\n"
             buf.append lsv4
             return true
@@ -15326,7 +15355,7 @@ emitTakeAliasBind: function {
                     tid: (ztypes.tid.create from: ntO.u64)
                     thisTid: ztypes.tid
                 )
-                valB: takeSourceResolve :ctx name: tabA.stringView vid: tabAV
+                valB: takeSourceResolve :ctx name: tabA vid: tabAV
                 lnB1: "\{ind}\{ctB} \{nm} = \{valB};\n"
                 buf.append lnB1
                 lnB2: "\{ind}\{valB} = (\{ctB}){0};\n"
@@ -15354,7 +15383,7 @@ emitTakeAliasBind: function {
         }
         # the alias VALUE is C text, so it must be the source's emitted
         # identifier -- its source name names nothing in the output
-        tabAE: emitLocalAtomName :ctx name: tabA.stringView vid: tabAV
+        tabAE: emitLocalAtomName :ctx name: tabA vid: tabAV
         lalA: "\{ind}/* alias: \{nm} => \{tabAE} */\n"
         buf.append lalA
         vvSet xs: ctx.aliases vid: nameVid val: tabAE.stringView
@@ -15579,7 +15608,7 @@ emitDottedAutoCallStmt: function {
     # `.drop` on a protocol is a transfer marker (scope-exit destroy
     # covers it) -- emit nothing, like emitCallStmt.
     dct: dottedChildText :ast :n
-    if dct.stringView == "drop" then {
+    if dct == "drop" then {
         rrid: dottedReceiverStampId :ast :symtab callable: n
         rtt: symtab.reg.typetypeOf typeId: rrid
         if rtt == ztypes.ztypetype.protocolType then return
@@ -15783,7 +15812,7 @@ emitReturnStmt: function {
     # a bare no-arg function call as a statement (`check_mode`): typecheck
     # coerced the atom to a call; emit the call expression as a statement.
     fcs: atomTextOf :ast :n
-    ffid: userFnId :ast :symtab :ctx name: fcs.stringView
+    ffid: userFnId :ast :symtab :ctx name: fcs
     if ffid > 0 when (symtab.reg.typetypeOf typeId: ffid) == ztypes.ztypetype.functionType then {
         fce: emitExpr :ast :symtab :ctx :n
         if (fce.stringView.startsWith prefix: "/*") == false then {
@@ -15806,7 +15835,7 @@ emitReturnStmt: function {
     # bare control keywords parse as an AtomId reference (no value): a
     # no-value `return` (goto L_done inside a generator), `break`, `continue`.
     bkw: atomTextOf :ast :n
-    if bkw.stringView == "return" then {
+    if bkw == "return" then {
         if ctx.genActive then {
             lgd: "\{ind}goto L_done;\n"
             buf.append lgd
@@ -15816,10 +15845,10 @@ emitReturnStmt: function {
             buf.append lrt
         }
     } else {
-        if bkw.stringView == "break" then {
+        if bkw == "break" then {
             emitBreakStmt :ctx :ind :tmp :buf
         } else {
-            emitContinueStmt :ast :symtab :ctx :n bkw: bkw.stringView :ind :tmp :buf
+            emitContinueStmt :ast :symtab :ctx :n :bkw :ind :tmp :buf
         }
     }
 }
@@ -16823,7 +16852,7 @@ emitReassignLvalue: function {
             nbo: vvGet xs: ctx.narrowBox vid: ba9V
             if nbo.length > 0 then {
                 mem: atomTextOf :ast n: (ast.nodes.get i: n.child.u64)
-                memP: memberCPrefix name: mem.stringView
+                memP: memberCPrefix name: mem
                 lvx: "\{nbo}.\{memP}\{mem}"
                 return lvx
             }
@@ -17050,7 +17079,7 @@ matchGenericRoute: function {
         if downer > 0 when dleaf.length > 0 then {
             dkey: genericOwnerKey :symtab ownerTid: downer
             if dkey > 0 then {
-                dleafId: zast.poolFind pool: ast.names text: dleaf.stringView
+                dleafId: zast.poolFind pool: ast.names text: dleaf
                 if (symtab.reg.isGenericParamOf tdecl: dkey name: dleafId) then {
                     (emitGenericDissect
                         :ast
@@ -17242,7 +17271,7 @@ emitMatchStmt: function {
             vtid: (ztypes.tid.create from: vtid.u64)
             :isUni
             :mN
-            sname: sname.stringView
+            :sname
             snameVid: snameV
             :assignTo
             ind: ind2.stringView
@@ -17267,7 +17296,7 @@ emitMatchStmt: function {
         :ctx
         :m
         vtid: (ztypes.tid.create from: vtid.u64)
-        sname: sname.stringView
+        :sname
         :covA
         :mN
         :meV
@@ -18935,9 +18964,8 @@ bodyReassigns: function {ast: Ast.view n: Node.view name: StringView} out bool i
         return (bodyReassigns :ast n: (ast.nodes.get i: n.expression.u64) :name)
     } case reassignment then {
         tpn: ast.nodes.get i: n.topath.u64
-        rb: atomTextOf :ast n: tpn
-        if rb.length == 0 then rb = dottedBaseAtom :ast n: tpn
-        return rb.stringView == name
+        rb: atomOrBaseText :ast n: tpn
+        return rb == name
     } case ifexpr then {
         hif: false
         with cit: n.clauses.iterate do for c: cit loop {
@@ -19029,7 +19057,7 @@ seedPositiveCore: function {
     if (isOrdinalVariant :symtab :tid) then return
     subj: atomTextOf :ast n: parent
     if subj.length == 0 then return
-    if (bodyReassigns :ast n: body name: subj.stringView) then return
+    if (bodyReassigns :ast n: body name: subj) then return
     recvText: emitExpr :ast :symtab :ctx n: parent
     accessOp: ".".string
     if (isPtrVid
@@ -19046,7 +19074,7 @@ seedPositiveCore: function {
         acc: accessOp.stringView
     )
     if aliasText.length == 0 then return
-    names.append subj
+    names.append subj.string
     svids.append (atomVid :symtab nid: (atomNodeId n: parent))
     vals.append aliasText
     pt: ztypecheck.optU64Or o: (symtab.typing.declChildOf
@@ -19093,7 +19121,7 @@ seedNegatedFromPredicate: function {
             extra: ctorArmName.stringView
         )
         if rem.length == 0 then return
-        if (bodyReassigns :ast n: body name: subj.stringView) then return
+        if (bodyReassigns :ast n: body name: subj) then return
         recvText: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
         accessOp: ".".string
         if (isPtrVid :ctx vid: snv) then accessOp = "->".string
@@ -19107,7 +19135,7 @@ seedNegatedFromPredicate: function {
             acc: accessOp.stringView
         )
         if aliasText.length == 0 then return
-        names.append subj
+        names.append subj.string
         svids.append snv
         vals.append aliasText
         pt: ztypecheck.optU64Or o: (symtab.typing.declChildOf
@@ -19272,7 +19300,7 @@ seedCondOp: function {
         )
     } case binop then {
         opn: bareAtomText :ast n: (ast.nodes.get i: n.operator.u64)
-        if opn.stringView == "==" then {
+        if opn == "==" then {
             # `== true` / `== false`: the operand names one of bool's arms,
             # and which side it is comes from bool's arm ORDER.
             lsd: boolArmSideOf :ast :symtab n: (ast.nodes.get i: n.lhs.u64)
@@ -19321,16 +19349,16 @@ seedCondOp: function {
 }
 
 # bareAtomText -- the expression-unwrapped bare atom text of a node,
-# "" for any other shape.
-bareAtomText: function {ast: Ast.view n: Node.view} out String is {
+# "" for any other shape; a view into the pool.
+bareAtomText: function {ast: Ast.view n: Node.view} outx StringView is {
     match (
         n
     ) case expression then {
         return (bareAtomText :ast n: (ast.nodes.get i: n.expression.u64))
     } case atomid then {
-        return (zast.nameTextCopy :ast ref: n.name)
+        return (zast.nameTextAt :ast ref: n.name).stringView
     } else {
-        return "".string
+        return ""
     }
 }
 
@@ -19534,7 +19562,7 @@ chainCondFact: function {
         )
     } case binop then {
         opn: bareAtomText :ast n: (ast.nodes.get i: n.operator.u64)
-        if opn.stringView == "==" then {
+        if opn == "==" then {
             # `== true` / `== false`: the operand names one of bool's arms,
             # and which side it is comes from bool's arm ORDER.
             lsd: boolArmSideOf :ast :symtab n: (ast.nodes.get i: n.lhs.u64)
@@ -19670,7 +19698,7 @@ chainFactCore: function {
     if subj.length == 0 then return
     an: childName.string
     rv: emitExpr :ast :symtab :ctx n: parent
-    subjects.append subj
+    subjects.append subj.string
     svids.append (atomVid :symtab nid: (atomNodeId n: parent))
     arms.append an
     tids.append owner
@@ -22342,7 +22370,7 @@ fillOneDataElem: function {
         dtid: stampIdOf :symtab nid: op.nodeid.u64
         k: dtid
         if ebn.length > 0 then {
-            ebv: ebn.stringView
+            ebv: ebn
             ev: ebv.string
             ctx.dataElems.set key: k value: ev
         } else {
@@ -22573,35 +22601,35 @@ scanNeedsCall: function {
         baseId: cbi0
         membId: cmbId
     )
-    if (isSvArgNative name: mn0.stringView) then (needsAddM
+    if (isSvArgNative name: mn0) then (needsAddM
         :ctx
         uname: "system"
-        memb: mn0.stringView
+        memb: mn0
     )
-    if (isSvSimpleNative name: mn0.stringView) then (needsAddM
+    if (isSvSimpleNative name: mn0) then (needsAddM
         :ctx
         uname: "system"
-        memb: mn0.stringView
+        memb: mn0
     )
     # substring emits through its own leg (recv/from/to), so the arg-native
     # table cannot carry it; the need still must pre-register for method
     # bodies, which emit after the runtime pass runs
-    if mn0.stringView == "substring" then needsAddM :ctx uname: "system" memb: "substring"
-    if (isSvParseNative name: mn0.stringView) then (needsAddM
+    if mn0 == "substring" then needsAddM :ctx uname: "system" memb: "substring"
+    if (isSvParseNative name: mn0) then (needsAddM
         :ctx
         uname: "system"
-        memb: mn0.stringView
+        memb: mn0
     )
-    if (isSvNoArgNative name: mn0.stringView) then (needsAddM
+    if (isSvNoArgNative name: mn0) then (needsAddM
         :ctx
         uname: "system"
-        memb: mn0.stringView
+        memb: mn0
     )
     # split/lines emit through the iterator fragments (Splitter/LinesIter),
     # so the native tables cannot carry them; the sv_* needs still must
     # pre-register for method bodies, which emit after the runtime pass runs
-    if mn0.stringView == "split" then needsAddM :ctx uname: "sviter" memb: "sv_split"
-    if mn0.stringView == "lines" then needsAddM :ctx uname: "sviter" memb: "sv_lines"
+    if mn0 == "split" then needsAddM :ctx uname: "sviter" memb: "sv_split"
+    if mn0 == "lines" then needsAddM :ctx uname: "sviter" memb: "sv_lines"
     cjn0: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.callable.u64))
     if cjn0.stringView == "stringJoin" then (needsAddM
         :ctx
@@ -29618,16 +29646,16 @@ emitFileMethodCall: function {
     if bn.length == 0 then return "".string
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     isFM: false
-    if mn.stringView == "close" then isFM = true
-    if mn.stringView == "read" then isFM = true
-    if mn.stringView == "write" then isFM = true
-    if mn.stringView == "seek" then isFM = true
-    if mn.stringView == "flush" then isFM = true
-    if mn.stringView == "writeLine" then isFM = true
-    if mn.stringView == "accept" then isFM = true
+    if mn == "close" then isFM = true
+    if mn == "read" then isFM = true
+    if mn == "write" then isFM = true
+    if mn == "seek" then isFM = true
+    if mn == "flush" then isFM = true
+    if mn == "writeLine" then isFM = true
+    if mn == "accept" then isFM = true
     if (isFM) == false then return "".string
     bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: call.callable.u64)
-    fid: fileTypeIdOf :ast :symtab nid: bnid mname: mn.stringView
+    fid: fileTypeIdOf :ast :symtab nid: bnid mname: mn
     if fid == 0 then return "".string
     fc: ctxCname :ctx tid: (ztypes.tid.create from: fid.u64)
     {
@@ -29636,10 +29664,10 @@ emitFileMethodCall: function {
         if fcc.length > 0 then fc = fcc
     }
     recvV0: atomVid :symtab nid: bnid
-    recv: aliasResolve :ctx name: bn.stringView vid: recvV0
+    recv: aliasResolve :ctx name: bn vid: recvV0
     recvV: ztypes.vid
-    if recv.stringView == bn.stringView then recvV = recvV0
-    recvC: emitLocalAtomName :ctx name: bn.stringView vid: recvV0
+    if recv.stringView == bn then recvV = recvV0
+    recvC: emitLocalAtomName :ctx name: bn vid: recvV0
     recvExpr: "&\{recvC}"
     if (isPtrVid :ctx vid: recvV) then recvExpr = recvC
     isNet: false
@@ -29658,30 +29686,30 @@ emitFileMethodCall: function {
         fmm: "file_\{mn}"
         needsAddM :ctx uname: "io" memb: fmm.stringView
     }
-    if mn.stringView == "accept" then {
+    if mn == "accept" then {
         if (isNet) == false then return "".string
         return "\{fc}_accept(\{recvExpr})"
     }
-    if mn.stringView == "close" then return "\{fc}_close(\{recvExpr})"
-    if mn.stringView == "flush" then return "\{fc}_flush(\{recvExpr})"
-    if mn.stringView == "write" then {
+    if mn == "close" then return "\{fc}_close(\{recvExpr})"
+    if mn == "flush" then return "\{fc}_flush(\{recvExpr})"
+    if mn == "write" then {
         fv: ctorArgByLabel :ast :symtab :ctx :call label: "from"
         fvc: fileFromArgCoerce :ast :symtab :ctx :call av: fv.stringView
         return "\{fc}_write(\{recvExpr}, &\{fvc})"
     }
-    if mn.stringView == "read" then {
+    if mn == "read" then {
         iv: ctorArgByLabel :ast :symtab :ctx :call label: "into"
         mv: ctorArgByLabel :ast :symtab :ctx :call label: "max"
         ivptr: argIsPointerByLabel :ast :symtab :ctx :call label: "into"
         if ivptr then return "\{fc}_read(\{recvExpr}, \{iv}, \{mv})"
         return "\{fc}_read(\{recvExpr}, &\{iv}, \{mv})"
     }
-    if mn.stringView == "seek" then {
+    if mn == "seek" then {
         tv: ctorArgByLabel :ast :symtab :ctx :call label: "to"
         ov: ctorArgByLabel :ast :symtab :ctx :call label: "from"
         return "\{fc}_seek(\{recvExpr}, \{tv}, \{ov})"
     }
-    if mn.stringView == "writeLine" then {
+    if mn == "writeLine" then {
         wlv: ctorArgByLabel :ast :symtab :ctx :call label: "from"
         wlc: fileFromArgCoerce :ast :symtab :ctx :call av: wlv.stringView
         return "\{fc}_writeLine(\{recvExpr}, &\{wlc})"
@@ -29690,19 +29718,17 @@ emitFileMethodCall: function {
 }
 
 # ioCreateWrapper -- the wrapper name X of an `io.X.create` callable, else "".
-ioCreateWrapper: function {ast: Ast.view n: Node.view} out String is {
+ioCreateWrapper: function {ast: Ast.view n: Node.view} outx StringView is {
     match (
         n
     ) case dottedpath then {
         ccn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
         if ccn.stringView == "create" then {
             pb: dottedBaseAtom :ast n: (ast.nodes.get i: n.parent.u64)
-            if pb.stringView == "io" then {
-                return (dottedChildText :ast n: (ast.nodes.get i: n.parent.u64))
-            }
+            if pb == "io" then return (dottedChildText :ast n: (ast.nodes.get i: n.parent.u64))
         }
     } else null
-    return "".string
+    return ""
 }
 
 # argBaseAtom / argBaseNodeId -- the base of a wrapper-create argument. The
@@ -29711,7 +29737,7 @@ ioCreateWrapper: function {ast: Ast.view n: Node.view} out String is {
 # arrives as a BARE atom and is its own base. Without the fallback the emitter
 # builds `z_t0__create(&)` -- an unresolved type and an empty expression -- which
 # typechecks clean and dies at gcc.
-argBaseAtom: function {ast: Ast.view n: Node.view} out String is {
+argBaseAtom: function {ast: Ast.view n: Node.view} outx StringView is {
     b: dottedBaseAtom :ast :n
     if b.length > 0 then return b
     t: atomTextOf :ast :n
@@ -29723,9 +29749,9 @@ argBaseAtom: function {ast: Ast.view n: Node.view} out String is {
     match (
         n
     ) case labelvalue then {
-        return (zast.nameTextCopy :ast ref: n.name)
+        return (zast.nameTextAt :ast ref: n.name).stringView
     } else null
-    return "".string
+    return ""
 }
 
 # the node an argument's value ultimately comes from, unwrapping the
@@ -29778,13 +29804,13 @@ wrapperCreateArg: function {
                         n: (ast.nodes.get i: a.operation.u64)
                     ).u64
                     abrV0: atomVid :symtab nid: abnid
-                    abr: aliasResolve :ctx name: ab.stringView vid: abrV0
+                    abr: aliasResolve :ctx name: ab vid: abrV0
                     abtid: stampIdOf :symtab nid: abnid
                     abcb: ctxCname :ctx tid: abtid
                     ablab: conformanceLabelFor :symtab implTid: abtid protoTid: prtid
                     abv: ztypes.vid
-                    if abr.stringView == ab.stringView then abv = (atomVid :symtab nid: abnid)
-                    abrC: emitLocalAtomName :ctx name: ab.stringView vid: abrV0
+                    if abr.stringView == ab then abv = (atomVid :symtab nid: abnid)
+                    abrC: emitLocalAtomName :ctx name: ab vid: abrV0
                     abpfx: "&".string
                     if (isPtrVid :ctx vid: abv) then abpfx = "".string
                     return "\{abcb}_\{ablab}_create(\{abpfx}\{abrC})"
@@ -29793,10 +29819,10 @@ wrapperCreateArg: function {
                     a2op: ast.nodes.get i: a.operation.u64
                     ab2: argBaseAtom :ast n: a2op
                     argBaseVid: atomVid :symtab nid: (argBaseNodeId :ast n: a2op).u64
-                    abr2: aliasResolve :ctx name: ab2.stringView vid: argBaseVid
+                    abr2: aliasResolve :ctx name: ab2 vid: argBaseVid
                     ab2v: ztypes.vid
-                    if abr2.stringView == ab2.stringView then ab2v = argBaseVid
-                    abr2C: emitLocalAtomName :ctx name: ab2.stringView vid: argBaseVid
+                    if abr2.stringView == ab2 then ab2v = argBaseVid
+                    abr2C: emitLocalAtomName :ctx name: ab2 vid: argBaseVid
                     ab2pfx: "&".string
                     if (isPtrVid :ctx vid: ab2v) then ab2pfx = "".string
                     return "\{ab2pfx}\{abr2C}"
@@ -29819,7 +29845,7 @@ emitIoWrapperCreate: function {
 } out String is {
     wn: ioCreateWrapper :ast n: (ast.nodes.get i: call.callable.u64)
     if wn.length == 0 then return "".string
-    wid: resolveTypeIdByName :ast :symtab :ctx name: wn.stringView
+    wid: resolveTypeIdByName :ast :symtab :ctx name: wn
     if wid == 0 then return "".string
     if (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: wid.u64)) != ztypes.ztypetype.classType then return "".string
     cco: (symtab.typing.declChildOfId
@@ -30111,7 +30137,7 @@ emitNativeFreeFnCall: function {
     call: zast.CallData.view
 } out String is {
     un: String
-    mn: String
+    mn: ""
     fidHint: u64
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
     if bn.length > 0 then {
@@ -30119,11 +30145,11 @@ emitNativeFreeFnCall: function {
         mn = dottedChildText :ast n: calr
         dp: "\{bn}.\{mn}"
         if (nativeIsFragBacked :ctx path: dp.stringView) == false then return "".string
-        un = bn
+        un = bn.string
     } else {
-        cn0: atomTextOf :ast n: (ast.nodes.get i: call.callable.u64)
-        if cn0.length == 0 then return "".string
-        fid0: userFnId :ast :symtab :ctx name: cn0.stringView
+        mn = atomTextOf :ast n: (ast.nodes.get i: call.callable.u64)
+        if mn.length == 0 then return "".string
+        fid0: userFnId :ast :symtab :ctx name: mn
         if fid0.isZero then return "".string
         if (fnIsNativeId
             :symtab
@@ -30133,13 +30159,12 @@ emitNativeFreeFnCall: function {
         match (
             duo0
         ) case some then {
-            bp: "\{duo0}.\{cn0}"
+            bp: "\{duo0}.\{mn}"
             if (nativeIsFragBacked :ctx path: bp.stringView) == false then return "".string
             un = duo0.copy
         } case none then {
             return "".string
         }
-        mn = cn0
         fidHint = fid0
     }
     if mn.length == 0 then return "".string
@@ -30155,7 +30180,7 @@ emitNativeFreeFnCall: function {
             :ast
             st: symtab
             unitDecl: ud15x
-            name: (zast.poolFind pool: ast.names text: mn.stringView)
+            name: (zast.poolFind pool: ast.names text: mn)
         )
         match (
             fo
@@ -30168,7 +30193,7 @@ emitNativeFreeFnCall: function {
     if (symtab.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return "".string
     if (fnIsNativeId :symtab :fid) == false then return "".string
     needsAddM :ctx uname: un.stringView memb: "@unit"
-    needsAddM :ctx uname: un.stringView memb: mn.stringView
+    needsAddM :ctx uname: un.stringView memb: mn
     pn: (List String)
     pidl: (ListVal u64)
     pidlNm: (ListVal u64)
@@ -30216,19 +30241,17 @@ emitNativeFreeFnCall: function {
 }
 
 # cliCreateClass -- the class name X of a `cli.X.create` callable, else "".
-cliCreateClass: function {ast: Ast.view n: Node.view} out String is {
+cliCreateClass: function {ast: Ast.view n: Node.view} outx StringView is {
     match (
         n
     ) case dottedpath then {
         ccn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
         if ccn.stringView == "create" then {
             pb: dottedBaseAtom :ast n: (ast.nodes.get i: n.parent.u64)
-            if pb.stringView == "cli" then {
-                return (dottedChildText :ast n: (ast.nodes.get i: n.parent.u64))
-            }
+            if pb == "cli" then return (dottedChildText :ast n: (ast.nodes.get i: n.parent.u64))
         }
     } else null
-    return "".string
+    return ""
 }
 
 # emitCliSpecCreate -- `cli.Spec.create programName: ... summary: ...` ->
@@ -30244,7 +30267,7 @@ emitCliSpecCreate: function {
     cid: (cliClassTypeId
         :symtab
         :ctx
-        nameId: (zast.poolFind pool: ast.names text: cn.stringView)
+        nameId: (zast.poolFind pool: ast.names text: cn)
     )
     if cid == 0 then return "".string
     cco: (symtab.typing.declChildOfId
@@ -30305,9 +30328,9 @@ emitResultCombinator: function {
 } out String is {
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     isP: false
-    if mn.stringView == "orPanic" then isP = true
+    if mn == "orPanic" then isP = true
     isO: false
-    if mn.stringView == "or" then isO = true
+    if mn == "or" then isO = true
     bothMiss: (isP) == false
     if bothMiss when (isO) == false then return "".string
     bnid: u32
@@ -30365,25 +30388,25 @@ emitParsedMethodCall: function {
     if bn.length == 0 then return "".string
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     isPM: false
-    if mn.stringView == "hasFlag" then isPM = true
-    if mn.stringView == "option" then isPM = true
-    if mn.stringView == "positional" then isPM = true
+    if mn == "hasFlag" then isPM = true
+    if mn == "option" then isPM = true
+    if mn == "positional" then isPM = true
     if (isPM) == false then return "".string
     bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: call.callable.u64)
-    pid: fileTypeIdOf :ast :symtab nid: bnid mname: mn.stringView
+    pid: fileTypeIdOf :ast :symtab nid: bnid mname: mn
     if pid == 0 then return "".string
     pcn: regNameOf :symtab tid: (ztypes.tid.create from: pid.u64)
     if pcn.stringView != "Parsed" then return "".string
     pc: ctxCname :ctx tid: (ztypes.tid.create from: pid.u64)
     recvV0: atomVid :symtab nid: bnid
-    recv: aliasResolve :ctx name: bn.stringView vid: recvV0
+    recv: aliasResolve :ctx name: bn vid: recvV0
     recvV: ztypes.vid
-    if recv.stringView == bn.stringView then recvV = recvV0
-    recvC: emitLocalAtomName :ctx name: bn.stringView vid: recvV0
+    if recv.stringView == bn then recvV = recvV0
+    recvC: emitLocalAtomName :ctx name: bn vid: recvV0
     recvExpr: "&\{recvC}"
     if (isPtrVid :ctx vid: recvV) then recvExpr = recvC
     needsAddM :ctx uname: "cli" memb: "@unit"
-    needsAddM :ctx uname: "cli" memb: mn.stringView
+    needsAddM :ctx uname: "cli" memb: mn
     nameArg: ctorArgByLabel :ast :symtab :ctx :call label: "name"
     return "\{pc}_\{mn}(\{recvExpr}, &\{nameArg})"
 }
@@ -30400,7 +30423,7 @@ emitUserIterCall: function {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
     if bn.length == 0 then return "".string
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
-    if mn.stringView != "call" then return "".string
+    if mn != "call" then return "".string
     bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: call.callable.u64)
     rid0: stampIdOf :symtab nid: bnid
     if rid0.isZero then return "".string
@@ -30436,10 +30459,10 @@ emitUserIterCall: function {
     ) case some then {
         callC: ctxCname :ctx tid: (ztypes.tid.create from: cco.u64)
         recvVid: atomVid :symtab nid: bnid
-        recvText: aliasResolve :ctx name: bn.stringView vid: recvVid
+        recvText: aliasResolve :ctx name: bn vid: recvVid
         recvV: ztypes.vid
-        if recvText.stringView == bn.stringView then recvV = recvVid
-        recvC: emitLocalAtomName :ctx name: bn.stringView vid: recvVid
+        if recvText.stringView == bn then recvV = recvVid
+        recvC: emitLocalAtomName :ctx name: bn vid: recvVid
         recvExpr: "&\{recvC}"
         if (isPtrVid :ctx vid: recvV) then recvExpr = recvC
         valArg: String
@@ -30475,9 +30498,9 @@ emitUserIterCall: function {
                     }
                     if vIsRef then {
                         valueBaseVid: atomVid :symtab nid: vbnid
-                        vbr: aliasResolve :ctx name: vbase.stringView vid: valueBaseVid
+                        vbr: aliasResolve :ctx name: vbase vid: valueBaseVid
                         vbv: ztypes.vid
-                        if vbr.stringView == vbase.stringView then vbv = valueBaseVid
+                        if vbr.stringView == vbase then vbv = valueBaseVid
                         vpfx: "&".string
                         if (isPtrVid :ctx vid: vbv) then vpfx = "".string
                         valArg = "\{vpfx}\{ve}"
@@ -30615,9 +30638,9 @@ emitProtocolDispatch: function {
 } out String is {
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if mn.length == 0 then return "".string
-    if mn.stringView == "create" then return "".string
-    if mn.stringView == "borrow" then return "".string
-    if mn.stringView == "drop" then return "".string
+    if mn == "create" then return "".string
+    if mn == "borrow" then return "".string
+    if mn == "drop" then return "".string
     rtid: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
     if (isDispatchableTid :symtab tid: (ztypes.tid.create from: rtid.u64)) == false then {
         rtn0: regNameOf :symtab tid: (ztypes.tid.create from: rtid.u64)
@@ -30653,7 +30676,7 @@ emitProtocolDispatch: function {
     mtid: ztypecheck.optU64Or o: (symtab.typing.declChildOf
         pool: ast.names
         parentTypeId: rtid
-        name: mn.stringView
+        name: mn
     ) d: 0
     mpNames: (List String)
     mpIds: (ListVal u64)
@@ -30749,7 +30772,7 @@ emitProtocolDispatch: function {
             } else null
         }
     }
-    dslot: cSlotName name: mn.stringView
+    dslot: cSlotName name: mn
     de: "\{recv}\{acc}vtable->\{dslot}(\{dargs})"
     return de
 }
@@ -30767,15 +30790,15 @@ emitProtocolCreateCall: function {
     if bn.length == 0 then return "".string
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     isCreate: false
-    if mn.stringView == "create" then isCreate = true
-    if mn.stringView == "borrow" then isCreate = true
+    if mn == "create" then isCreate = true
+    if mn == "borrow" then isCreate = true
     if (isCreate) == false then return "".string
-    protoTid: resolveTypeIdByName :ast :symtab :ctx name: bn.stringView
+    protoTid: resolveTypeIdByName :ast :symtab :ctx name: bn
     ptt: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: protoTid.u64)
     isFct: ptt == ztypes.ztypetype.facetType
     if ptt != ztypes.ztypetype.protocolType when isFct == false then return "".string
     suffix: "create_owned".string
-    if mn.stringView == "borrow" then suffix = "create".string
+    if mn == "borrow" then suffix = "create".string
     # a facet copies its source either way: one helper serves both verbs
     if isFct then suffix = "create".string
     aiter: call.arguments.iterate
@@ -30787,8 +30810,7 @@ emitProtocolCreateCall: function {
             an: zast.nameTextAt :ast ref: a.name
             if an.stringView == "from" then {
                 fop: ast.nodes.get i: a.operation.u64
-                fromBase: dottedBaseAtom :ast n: fop
-                if fromBase.length == 0 then fromBase = (atomTextOf :ast n: fop)
+                fromBase: atomOrBaseText :ast n: fop
                 fdn: stampNameDeep :ast :symtab n: (ast.nodes.get i: a.operation.u64)
                 fromTid: (canonTypeId
                     :ast
@@ -30803,10 +30825,10 @@ emitProtocolCreateCall: function {
                 if label.length == 0 then return "".string
                 valueVid: atomVid :symtab nid: (dottedBaseNodeId :ast n: fop)
                 if valueVid.isZero then valueVid = (atomVid :symtab nid: (atomNodeId n: fop))
-                valVar: aliasResolve :ctx name: fromBase.stringView vid: valueVid
+                valVar: aliasResolve :ctx name: fromBase vid: valueVid
                 vvv: ztypes.vid
-                if valVar.stringView == fromBase.stringView then vvv = valueVid
-                valVarC: emitLocalAtomName :ctx name: fromBase.stringView vid: valueVid
+                if valVar.stringView == fromBase then vvv = valueVid
+                valVarC: emitLocalAtomName :ctx name: fromBase vid: valueVid
                 refPfx: "&".string
                 if (isPtrVid :ctx vid: vvv) then refPfx = "".string
                 ce: "\{implBase}_\{label}_\{suffix}(\{refPfx}\{valVarC})"
@@ -31037,8 +31059,8 @@ emitDataElem: function {
 }
 
 # the base type name of data block `oId`.
-dataElemBaseName: function {ast: Ast.view oId: zast.nodeid} out String is {
-    if oId.isZero then return "".string
+dataElemBaseName: function {ast: Ast.view oId: zast.nodeid} outx StringView is {
+    if oId.isZero then return ""
     return (atomTextDeep :ast n: (ast.nodes.get i: oId.u64))
 }
 
