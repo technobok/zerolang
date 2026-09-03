@@ -4546,6 +4546,9 @@ pinHonestyAt: function {
     retTid: ztypes.tid
     # the name the refusal underlines
     defName: StringView
+    # the function's name id when the walk holds one -- zero when `defName` is a
+    # composed method label
+    defNameId: zast.nameid
 } is {
     probe: retTid
     {
@@ -4558,7 +4561,7 @@ pinHonestyAt: function {
     # came to reach the wide-integer and half-float units it never named
     if (typeIsReftype :st tid: probe) == false then return
     if (st.typing.declRowSlots ownerTid: probe) == 0 then forceAllMembers :st :frame :ast tid: probe
-    checkPinHonesty :st :ast :fnode :retTid :defName
+    checkPinHonesty :st :ast :fnode :retTid :defName :defNameId
 }
 
 # checkMemberDeclEagerly -- the declaration rules that need no resolved types,
@@ -4596,7 +4599,14 @@ checkThisPinHonesty: function {
     defName: StringView
 } is {
     if (returnNamesThis :ast oId: fnode.returntype) == false then return
-    checkPinHonesty :st :ast :fnode retTid: thisTid :defName
+    checkPinHonesty :st :ast :fnode retTid: thisTid :defName defNameId: zast.nameid
+}
+
+# defNameWidth -- the caret width for a definition's name: the label's when
+# the caller spelt one, else the interned name's.
+defNameWidth: function {ast: Ast.view defName: StringView defNameId: zast.nameid} out u32 is {
+    if defName.length > 0 then return defName.length.u32.orPanic
+    return (zast.nameTextAt :ast ref: defNameId).length.u32.orPanic
 }
 
 # checkPinHonesty -- an OWNED `out T` whose type declares a non-owned field
@@ -4617,6 +4627,9 @@ checkPinHonesty: function {
     retTid: ztypes.tid
     # the method's name, underlined by the report
     defName: StringView
+    # the id behind `defName` when there is one: the report's caret width comes
+    # from it when the label is empty
+    defNameId: zast.nameid
 } is {
     if retTid.isZero then return
     if fnode.pins then return
@@ -4637,7 +4650,7 @@ checkPinHonesty: function {
         colno: fnode.colno
         e: zast.err.ownerError
         msg: "an owned `out` result whose type declares a non-owned field must be `outx` -- the result holds a reference into an input, and only `outx` keeps that source locked for the result's lifetime".string
-        width: defName.length.u32.orPanic
+        width: (defNameWidth :ast :defName :defNameId)
     )
 }
 
@@ -5266,7 +5279,7 @@ finishFunctionSignature: function {
     match (
         rtH
     ) case some then {
-        checkPinHonesty :st :ast :fnode retTid: rtH :defName
+        checkPinHonesty :st :ast :fnode retTid: rtH :defName defNameId: zast.nameid
     } case none then null
     if (fnDecl.isZero) == false then {
         st.typing.declSetType declId: fnDecl typeId: (ztypes.tid.create from: dfid.u64)
@@ -34130,10 +34143,7 @@ maybeWalkMethodsById: function {
     )
     if dd.isZero then return
     if (st.typing.declIsWalked declId: dd) then return
-    # an owned copy of the name: the walk lends ast, and it runs once per
-    # definition
-    nm: zast.nameTextCopy :ast ref: nameId
-    walkDeclaredDef :st :frame :ast :unitDecl name: nm.stringView declId: dd
+    walkDeclaredDef :st :frame :ast :unitDecl :nameId declId: dd
 }
 
 # walkDefinitionById -- walk the definition a RESOLVED ID names, wherever it
@@ -34159,13 +34169,12 @@ walkDefinitionById: function {
     if dnm == 0 then return
     unTd: unitDeclOfTid :st :tid
     if unTd.isZero then return
-    nt: zast.nameTextCopy :ast ref: (zast.nameid.create from: dnm)
     (walkDeclaredDef
         :st
         frame: st.curFrame
         :ast
         unitDecl: unTd
-        name: nt.stringView
+        nameId: (zast.nameid.create from: dnm)
         declId: dcl
     )
 }
@@ -34176,7 +34185,8 @@ walkDeclaredDef: function {
     ast: Ast
     unitDecl: ztypes.declid
     frame: ztypes.declid
-    name: StringView
+    # the definition's name, interned
+    nameId: zast.nameid
     declId: ztypes.declid
 } is {
     # the definition is walked in the frame of its own declaration
@@ -34243,7 +34253,8 @@ walkDeclaredDef: function {
             :st
             frame: rf
             :unitDecl
-            defName: name
+            defName: ""
+            defNameId: nameId
             fn: cfbFr
             thisName: ""
             thisTid: ztypes.tid
@@ -34255,7 +34266,7 @@ walkDeclaredDef: function {
         st.typing.synthOwnerName = prevL9N
         st.typing.currentThisTid = prevT
     } else {
-        walkOwnerMethods :st frame: rf :unitDecl :ast :memId :name
+        walkOwnerMethods :st frame: rf :unitDecl :ast :memId :nameId
     }
     st.typing.curMonoStamp = prevMono
 }
@@ -34269,7 +34280,8 @@ walkOwnerMethods: function {
     frame: ztypes.declid
     ast: Ast
     memId: u32
-    name: StringView
+    # the owner type's name, interned
+    nameId: zast.nameid
 } is {
     mem: argRefAt :ast nid: (zast.nodeid.create from: memId.u32)
     if (mem.nid.isZero) == false then {
@@ -34314,7 +34326,7 @@ walkOwnerMethods: function {
                 :frame
                 :unitDecl
                 :ast
-                typeName: name
+                typeNameId: nameId
                 typeTid: (ztypes.tid.create from: owTid)
                 opId: mem.operation
             )
@@ -34362,15 +34374,15 @@ objectdefHasMethodBodies: function {ast: Ast.view op: Node.view} out bool is {
 # `unitDecl`, or 0.
 methodDeclOf: function {
     st: zenv.ZSymbolTable.view
-    ast: Ast.view
     unitDecl: ztypes.declid
-    typeName: StringView
+    # the owner type's name, interned
+    typeNameId: zast.nameid
     memberId: zast.nameid
 } out ztypes.declid is {
     td: (declOfUnitDefIds
         :st
         :unitDecl
-        nameId: (nameIdOf :ast name: typeName)
+        nameId: typeNameId
     )
     if td.isZero then return (ztypes.declid.create from: 0)
     return (st.typing.declFindChild parentDeclId: td nameId: memberId)
@@ -34384,10 +34396,13 @@ checkMethodBodies: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     ast: Ast
-    typeName: StringView
+    # the owner type's name, interned; its text is copied once below, for
+    # the labels and the receiver name the bodies are walked under
+    typeNameId: zast.nameid
     typeTid: ztypes.tid
     opId: zast.nodeid
 } is {
+    typeName: zast.nameTextCopy :ast ref: typeNameId
     orf: objRefAt :ast nid: opId
     if (orf.nid.isZero) == false then {
         kI: u64
@@ -34415,7 +34430,7 @@ checkMethodBodies: function {
                 {
                     # about to check this body, so its signature is needed:
                     # `this` binds from the resolved receiver
-                    hDefId2: nameIdOf :ast name: typeName
+                    hDefId2: typeNameId
                     (forceUnitDefMember
                         :st
                         :frame
@@ -34426,15 +34441,16 @@ checkMethodBodies: function {
                         memberId: imName
                     )
                     qn: "\{typeName}.\{mname}"
-                    declId93: (methodDeclOf :st :ast :unitDecl :typeName memberId: imName)
+                    declId93: (methodDeclOf :st :unitDecl :typeNameId memberId: imName)
                     imFr: fnRefAt :ast nid: imOp
                     (checkFunctionBody
                         :st
                         :frame
                         :unitDecl
                         defName: qn.stringView
+                        defNameId: zast.nameid
                         fn: imFr
-                        thisName: typeName
+                        thisName: typeName.stringView
                         thisTid: typeTid
                         :ast
                         declId: declId93
@@ -34465,7 +34481,7 @@ checkMethodBodies: function {
             }
             if amIsFn then {
                 {
-                    hDefId: nameIdOf :ast name: typeName
+                    hDefId: typeNameId
                     (forceUnitDefMember
                         :st
                         :frame
@@ -34476,15 +34492,16 @@ checkMethodBodies: function {
                         memberId: amName
                     )
                     qn2: "\{typeName}.\{monoName}"
-                    declId94: (methodDeclOf :st :ast :unitDecl :typeName memberId: amName)
+                    declId94: (methodDeclOf :st :unitDecl :typeNameId memberId: amName)
                     amFr: fnRefAt :ast nid: amOp
                     (checkFunctionBody
                         :st
                         :frame
                         :unitDecl
                         defName: qn2.stringView
+                        defNameId: zast.nameid
                         fn: amFr
-                        thisName: typeName
+                        thisName: typeName.stringView
                         thisTid: typeTid
                         :ast
                         declId: declId94
@@ -34806,13 +34823,19 @@ setSynthOwnerLabel: function {
     unitDecl: ztypes.declid
     ast: Ast.view
     defName: StringView
+    # the definition's interned name; it spells the synth label when `defName` is empty
+    defNameId: zast.nameid
     thisName: StringView
 } is {
     # Synth rows carry the unit member's dump label: a method's nodes
     # live inside its TYPE's subtree, so the label is the type name.
     # Nested method walks save and restore it around their bodies.
     lblUnit: zast.poolTextAt pool: ast.names ref: (unitNameIdOf :st :unitDecl)
-    lbl: "\{lblUnit}.\{defName}"
+    # the definition's spelling: the label's, else the interned name's
+    dnT: zast.nameTextAt :ast ref: defNameId
+    dnv: defName
+    if defName.length == 0 then dnv = dnT.stringView
+    lbl: "\{lblUnit}.\{dnv}"
     if thisName.length > 0 then lbl = "\{lblUnit}.\{thisName}"
     st.typing.synthLabel = lbl
     # the same pair as ids: a method's owner is its TYPE, everything
@@ -34820,7 +34843,8 @@ setSynthOwnerLabel: function {
     # label back apart.
     st.typing.synthOwnerUnit = unitDecl
     {
-        soid: zast.poolFind pool: ast.names text: defName
+        soid: defNameId
+        if soid.isZero then soid = zast.poolFind pool: ast.names text: defName
         if thisName.length > 0 then soid = (zast.poolFind
             pool: ast.names
             text: thisName
@@ -34838,6 +34862,9 @@ checkFunctionBody: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     defName: StringView
+    # the definition's name id when the caller holds one -- zero when `defName`
+    # is a composed label (`Type.method`), which no id spells
+    defNameId: zast.nameid
     fn: fnref
     thisName: StringView
     thisTid: ztypes.tid
@@ -34879,7 +34906,8 @@ checkFunctionBody: function {
         # Claiming first turns the self-call into the signature scan it was
         # always there for, and leaves the body walk to this rf.
         {
-            sfId: zast.poolFind pool: ast.names text: defName
+            sfId: defNameId
+            if sfId.isZero then sfId = zast.poolFind pool: ast.names text: defName
             if (sfId.isZero) == false then {
                 sfd: fnDecl
                 if sfd.isZero then sfd = (declOfUnitDefIds
@@ -34900,7 +34928,11 @@ checkFunctionBody: function {
                 }
             }
         }
-        maybeWalkMethods :st frame: rf :unitDecl :ast name: defName
+        if (defNameId.isZero) == false then {
+            maybeWalkMethodsById :st :unitDecl frame: rf :ast nameId: defNameId
+        } else {
+            maybeWalkMethods :st frame: rf :unitDecl :ast name: defName
+        }
         hasBody: fn.body > 0
         isGenDef: false
         # the function's own tid, off the Decl the caller passed; a defName is
@@ -34923,7 +34955,14 @@ checkFunctionBody: function {
             # its scopes/entries stay out of the dump log).
             prevSup: st.typing.suppressParamStamps
             if isGenDef then st.typing.suppressParamStamps = true
-            sname: "function:\{defName}"
+            sname: String
+            if defName.length > 0 then {
+                sname = "function:\{defName}"
+            } else {
+                # the label spells the name: read through a borrow scoped here
+                dnT: zast.nameTextAt :ast ref: defNameId
+                sname = "function:\{dnT}"
+            }
             st.push name: sname.stringView parent: rf
             kP: u64
             for kP < fn.nparams loop {
@@ -34943,7 +34982,7 @@ checkFunctionBody: function {
                     )
                 }
             }
-            setSynthOwnerLabel :st :unitDecl :ast :defName :thisName
+            setSynthOwnerLabel :st :unitDecl :ast :defName :defNameId :thisName
             st.typing.currentThisTid = thisTid
             prevFn: st.typing.currentFnTid
             st.typing.currentFnTid = fnTid
@@ -34959,7 +34998,7 @@ checkFunctionBody: function {
             # known: an owned result holding a reference into an input is
             # declared `outx` or refused here
             if crt > 0 when (st.typing.generatorCallBodies.has item: fn.nid.u64) == false then {
-                pinHonestyAt :st :ast frame: st.curFrame fnode: fn retTid: crt :defName
+                pinHonestyAt :st :ast frame: st.curFrame fnode: fn retTid: crt :defName :defNameId
             }
             prevRb: st.typing.currentReturnsBorrow
             st.typing.currentReturnsBorrow = (optBoolOr
@@ -35066,6 +35105,7 @@ walkUnitTemplateBodies: function {
                     :frame
                     :unitDecl
                     defName: dn.stringView
+                    defNameId: zast.nameid
                     fn: cfbFr
                     thisName: ""
                     thisTid: ztypes.tid
@@ -35210,6 +35250,7 @@ checkNamespaceBodies: function {
                     frame: rf
                     :unitDecl
                     defName: defNameText.stringView
+                    defNameId: zast.nameid
                     fn: cfbFr
                     thisName: ""
                     thisTid: ztypes.tid
@@ -35251,6 +35292,7 @@ checkUnitBodies: function {
                         :frame
                         :unitDecl
                         defName: memberName.stringView
+                        defNameId: zast.nameid
                         fn: cfbFr
                         thisName: ""
                         thisTid: ztypes.tid
@@ -35320,6 +35362,7 @@ checkUnitBodies: function {
                         :frame
                         :unitDecl
                         defName: defName.stringView
+                        defNameId: zast.nameid
                         fn: cfbFr
                         thisName: ""
                         thisTid: ztypes.tid
@@ -35448,7 +35491,6 @@ walkLateResolvedOwners: function {st: zenv.ZSymbolTable frame: ztypes.declid ast
         swI = swI + 1
         swu: argRefAt :ast nid: (zast.nodeid.create from: swuId.u32)
         if (swu.nid.isZero) == false then {
-            swun: zast.nameTextCopy :ast ref: swu.name
             swBody: zast.unitBodyIdsAt :ast unitId: swu.operation
             swbi: u64
             swbn: swBody.length
@@ -35457,10 +35499,9 @@ walkLateResolvedOwners: function {st: zenv.ZSymbolTable frame: ztypes.declid ast
                 swbi = swbi + 1
                 swm: argRefAt :ast nid: (zast.nodeid.create from: swmId.u32)
                 if (swm.nid.isZero) == false then {
-                    swmn: zast.nameTextCopy :ast ref: swm.name
                     uq8z: (unitDeclOfName
                         :st
-                        nameId: (nameIdOf :ast name: swun.stringView)
+                        nameId: swu.name
                     )
                     swd: (declOfUnitDefIds
                         :st
@@ -35503,7 +35544,7 @@ walkLateResolvedOwners: function {st: zenv.ZSymbolTable frame: ztypes.declid ast
                             if (swKeep) == false then {
                                 uq9z: (unitDeclOfName
                                     :st
-                                    nameId: (nameIdOf :ast name: swun.stringView)
+                                    nameId: swu.name
                                 )
                                 swRo: (resolvedByIds
                                     :st
@@ -35544,7 +35585,7 @@ walkLateResolvedOwners: function {st: zenv.ZSymbolTable frame: ztypes.declid ast
                                 unitDecl: unitDecl911
                                 :ast
                                 memId: swmId
-                                name: swmn.stringView
+                                nameId: swm.name
                             )
                         }
                     }
@@ -35665,6 +35706,7 @@ stampOneFnMono: function {
         :frame
         :unitDecl
         defName: monoNm.stringView
+        defNameId: zast.nameid
         fn: cfbFr
         thisName: ""
         thisTid: ztypes.tid
@@ -35819,6 +35861,7 @@ stampOneClassMono: function {
             :frame
             :unitDecl
             defName: q.stringView
+            defNameId: zast.nameid
             fn: cfbFr
             thisName: monoNm.stringView
             thisTid: monoId
@@ -36143,6 +36186,7 @@ stampOneUnitMono: function {
                 :frame
                 :unitDecl
                 defName: q.stringView
+                defNameId: zast.nameid
                 fn: cfbFr
                 thisName: ""
                 thisTid: ztypes.tid
