@@ -1582,12 +1582,7 @@ printPoolName: function {ast: Ast.view ref: nameid} is {
 # into the type node when present.
 # printOptChildAt -- the id-taking child printer (0 = absent).
 printOptChildAt: function {ast: Ast.view id: u32} is {
-    if id == 0 then {
-        print "  <none>"
-    } else {
-        c: ast.nodes.get i: id.u64
-        printNode :ast n: c
-    }
+    printOptChildWith :ast :id withId: true
 }
 
 # Source position (line, column) of a node. A valtype so it copies
@@ -1718,149 +1713,176 @@ nameTextAt: function {ast: Ast.view ref: nameid} outx String.borrow is {
 # Print one line per Node in the form
 #   "<nodeid>: <arm> @<lineno>:<colno>"
 # Recursive arms (binop, atomstring) descend into their children.
-printNode: function {ast: Ast.view n: Node.view} is {
+# printNodeWith -- one AST node in the dump format the goldens pin. `withId`
+# picks the form: the full dump prefixes every line with the node's id, and
+# the canonical dump -- what the parser goldens compare -- carries no ids at
+# all, so a renumbered tree still matches. The namedoperation line is the one
+# arm that differs beyond the prefix: it has no position in the canonical
+# form, the wrapper's position being its child's.
+printNodeWith: function {ast: Ast.view n: Node.view withId: bool} is {
+    idp: String
+    if withId then idp = "\{nodeIdOf :n}: "
     match (
         n
     ) case error then {
-        print "\{n.nodeid}: error @\{n.lineno}:\{n.colno} err=\{errname n.err} msg=\{n.msg}"
+        print "\{idp}error @\{n.lineno}:\{n.colno} err=\{errname n.err} msg=\{n.msg}"
     } case placeholder then {
         print "placeholder"
     } case atomid then {
         anm: nameTextCopy :ast ref: n.name
-        print "\{n.nodeid}: atomid @\{n.lineno}:\{n.colno} name=\{anm}"
+        print "\{idp}atomid @\{n.lineno}:\{n.colno} name=\{anm}"
     } case labelvalue then {
         lnm: nameTextCopy :ast ref: n.name
-        print "\{n.nodeid}: labelvalue @\{n.lineno}:\{n.colno} name=\{lnm}"
+        print "\{idp}labelvalue @\{n.lineno}:\{n.colno} name=\{lnm}"
     } case stringchunk then {
-        print "\{n.nodeid}: stringchunk @\{n.lineno}:\{n.colno} text=\{n.text} chunkKind=\{n.chunkKind}"
+        print "\{idp}stringchunk @\{n.lineno}:\{n.colno} text=\{n.text} chunkKind=\{n.chunkKind}"
     } case binop then {
-        print "\{n.nodeid}: binop @\{n.lineno}:\{n.colno}"
-        printNode :ast n: (ast.nodes.get i: n.lhs.u64)
-        printNode :ast n: (ast.nodes.get i: n.operator.u64)
-        printNode :ast n: (ast.nodes.get i: n.rhs.u64)
+        print "\{idp}binop @\{n.lineno}:\{n.colno}"
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.lhs.u64)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.operator.u64)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.rhs.u64)
     } case atomstring then {
-        print "\{n.nodeid}: atomstring @\{n.lineno}:\{n.colno} parts=\{n.stringparts.length}"
+        print "\{idp}atomstring @\{n.lineno}:\{n.colno} parts=\{n.stringparts.length}"
         iter: n.stringparts.iterate
-        for partId: iter loop printNode :ast n: (ast.nodes.get i: partId.u64)
+        for partId: iter loop printNodeWith :ast :withId n: (ast.nodes.get i: partId.u64)
     } case dottedpath then {
-        print "\{n.nodeid}: dottedpath @\{n.lineno}:\{n.colno}"
-        printNode :ast n: (ast.nodes.get i: n.parent.u64)
-        printNode :ast n: (ast.nodes.get i: n.child.u64)
+        print "\{idp}dottedpath @\{n.lineno}:\{n.colno}"
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.parent.u64)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.child.u64)
     } case call then {
-        print "\{n.nodeid}: call @\{n.lineno}:\{n.colno} args=\{n.arguments.length}"
-        printNode :ast n: (ast.nodes.get i: n.callable.u64)
+        print "\{idp}call @\{n.lineno}:\{n.colno} args=\{n.arguments.length}"
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.callable.u64)
         argiter: n.arguments.iterate
-        for argId: argiter loop printNode :ast n: (ast.nodes.get i: argId.u64)
+        for argId: argiter loop printNodeWith :ast :withId n: (ast.nodes.get i: argId.u64)
     } case typeofexpr then {
-        print "\{n.nodeid}: typeofexpr @\{n.lineno}:\{n.colno}"
-        printNode :ast n: (ast.nodes.get i: n.source.u64)
+        print "\{idp}typeofexpr @\{n.lineno}:\{n.colno}"
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.source.u64)
     } case namedoperation then {
-        print "\{n.nodeid}: namedoperation @\{n.lineno}:\{n.colno}"
+        if withId then {
+            print "\{idp}namedoperation @\{n.lineno}:\{n.colno}"
+        } else {
+            print "namedoperation"
+        }
         printPoolName :ast ref: n.name
-        printNode :ast n: (ast.nodes.get i: n.operation.u64)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.operation.u64)
     } case datablock then {
-        print "\{n.nodeid}: datablock @\{n.lineno}:\{n.colno} elements=\{n.elements.length}"
+        print "\{idp}datablock @\{n.lineno}:\{n.colno} elements=\{n.elements.length}"
         eiter: n.elements.iterate
-        for elId: eiter loop printNode :ast n: (ast.nodes.get i: elId.u64)
+        for elId: eiter loop printNodeWith :ast :withId n: (ast.nodes.get i: elId.u64)
         print "  outType:"
-        printOptChildAt :ast id: n.outType
+        printOptChildWith :ast :withId id: n.outType
     } case statement then {
-        print "\{n.nodeid}: statement @\{n.lineno}:\{n.colno} statements=\{n.statements.length}"
+        print "\{idp}statement @\{n.lineno}:\{n.colno} statements=\{n.statements.length}"
         siter: n.statements.iterate
-        for lnId: siter loop printNode :ast n: (ast.nodes.get i: lnId.u64)
+        for lnId: siter loop printNodeWith :ast :withId n: (ast.nodes.get i: lnId.u64)
     } case statementline then {
-        print "\{n.nodeid}: statementline @\{n.lineno}:\{n.colno}"
-        printNode :ast n: (ast.nodes.get i: n.statementline.u64)
+        print "\{idp}statementline @\{n.lineno}:\{n.colno}"
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.statementline.u64)
     } case assignment then {
         asn: nameTextCopy :ast ref: n.name
-        print "\{n.nodeid}: assignment @\{n.lineno}:\{n.colno} name=\{asn}"
-        printNode :ast n: (ast.nodes.get i: n.value.u64)
+        print "\{idp}assignment @\{n.lineno}:\{n.colno} name=\{asn}"
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.value.u64)
     } case reassignment then {
-        print "\{n.nodeid}: reassignment @\{n.lineno}:\{n.colno}"
-        printNode :ast n: (ast.nodes.get i: n.topath.u64)
-        printNode :ast n: (ast.nodes.get i: n.value.u64)
+        print "\{idp}reassignment @\{n.lineno}:\{n.colno}"
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.topath.u64)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.value.u64)
     } case swapstmt then {
-        print "\{n.nodeid}: swapstmt @\{n.lineno}:\{n.colno}"
-        printNode :ast n: (ast.nodes.get i: n.lhs.u64)
-        printNode :ast n: (ast.nodes.get i: n.rhs.u64)
+        print "\{idp}swapstmt @\{n.lineno}:\{n.colno}"
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.lhs.u64)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.rhs.u64)
     } case expression then {
-        print "\{n.nodeid}: expression @\{n.lineno}:\{n.colno}"
-        printNode :ast n: (ast.nodes.get i: n.expression.u64)
+        print "\{idp}expression @\{n.lineno}:\{n.colno}"
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.expression.u64)
     } case ifexpr then {
-        print "\{n.nodeid}: ifexpr @\{n.lineno}:\{n.colno} clauses=\{n.clauses.length}"
+        print "\{idp}ifexpr @\{n.lineno}:\{n.colno} clauses=\{n.clauses.length}"
         clit: n.clauses.iterate
-        for clId: clit loop printNode :ast n: (ast.nodes.get i: clId.u64)
+        for clId: clit loop printNodeWith :ast :withId n: (ast.nodes.get i: clId.u64)
         print "  elseclause:"
-        printOptChildAt :ast id: n.elseclause
+        printOptChildWith :ast :withId id: n.elseclause
     } case ifclause then {
-        print "\{n.nodeid}: ifclause @\{n.lineno}:\{n.colno} conditions=\{n.conditions.length}"
+        print "\{idp}ifclause @\{n.lineno}:\{n.colno} conditions=\{n.conditions.length}"
         coit: n.conditions.iterate
-        for coId: coit loop printNode :ast n: (ast.nodes.get i: coId.u64)
-        printNode :ast n: (ast.nodes.get i: n.statement.u64)
+        for coId: coit loop printNodeWith :ast :withId n: (ast.nodes.get i: coId.u64)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.statement.u64)
     } case forexpr then {
-        print "\{n.nodeid}: forexpr @\{n.lineno}:\{n.colno} conditions=\{n.conditions.length} postconditions=\{n.postconditions.length}"
+        print "\{idp}forexpr @\{n.lineno}:\{n.colno} conditions=\{n.conditions.length} postconditions=\{n.postconditions.length}"
         fcit: n.conditions.iterate
-        for fcId: fcit loop printNode :ast n: (ast.nodes.get i: fcId.u64)
+        for fcId: fcit loop printNodeWith :ast :withId n: (ast.nodes.get i: fcId.u64)
         print "  body:"
-        printOptChildAt :ast id: n.body
+        printOptChildWith :ast :withId id: n.body
         fpit: n.postconditions.iterate
-        for fpId: fpit loop printNode :ast n: (ast.nodes.get i: fpId.u64)
+        for fpId: fpit loop printNodeWith :ast :withId n: (ast.nodes.get i: fpId.u64)
     } case doexpr then {
-        print "\{n.nodeid}: doexpr @\{n.lineno}:\{n.colno}"
-        printNode :ast n: (ast.nodes.get i: n.statement.u64)
+        print "\{idp}doexpr @\{n.lineno}:\{n.colno}"
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.statement.u64)
     } case withexpr then {
         wnm: nameTextCopy :ast ref: n.name
-        print "\{n.nodeid}: withexpr @\{n.lineno}:\{n.colno} name=\{wnm}"
-        printNode :ast n: (ast.nodes.get i: n.value.u64)
-        printNode :ast n: (ast.nodes.get i: n.body.u64)
+        print "\{idp}withexpr @\{n.lineno}:\{n.colno} name=\{wnm}"
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.value.u64)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.body.u64)
     } case caseexpr then {
-        print "\{n.nodeid}: caseexpr @\{n.lineno}:\{n.colno} clauses=\{n.clauses.length}"
-        printNode :ast n: (ast.nodes.get i: n.subject.u64)
+        print "\{idp}caseexpr @\{n.lineno}:\{n.colno} clauses=\{n.clauses.length}"
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.subject.u64)
         ccit: n.clauses.iterate
-        for ccId: ccit loop printNode :ast n: (ast.nodes.get i: ccId.u64)
+        for ccId: ccit loop printNodeWith :ast :withId n: (ast.nodes.get i: ccId.u64)
         print "  elseclause:"
-        printOptChildAt :ast id: n.elseclause
+        printOptChildWith :ast :withId id: n.elseclause
     } case caseclause then {
         ccn: nameTextCopy :ast ref: n.name
-        print "\{n.nodeid}: caseclause @\{n.lineno}:\{n.colno} name=\{ccn}"
-        printNode :ast n: (ast.nodes.get i: n.matcharm.u64)
-        printNode :ast n: (ast.nodes.get i: n.statement.u64)
+        print "\{idp}caseclause @\{n.lineno}:\{n.colno} name=\{ccn}"
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.matcharm.u64)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.statement.u64)
     } case functiondef then {
         fdp: ""
         if n.pins then fdp = " pins=true"
-        print "\{n.nodeid}: functiondef @\{n.lineno}:\{n.colno} params=\{n.parameters.length} isNative=\{n.isNative}\{fdp}"
+        print "\{idp}functiondef @\{n.lineno}:\{n.colno} params=\{n.parameters.length} isNative=\{n.isNative}\{fdp}"
         print "  returntype:"
-        printOptChildAt :ast id: n.returntype
+        printOptChildWith :ast :withId id: n.returntype
         piter: n.parameters.iterate
-        for pmId: piter loop printNode :ast n: (ast.nodes.get i: pmId.u64)
+        for pmId: piter loop printNodeWith :ast :withId n: (ast.nodes.get i: pmId.u64)
         print "  body:"
-        printOptChildAt :ast id: n.body
+        printOptChildWith :ast :withId id: n.body
         faiter: n.asItems.iterate
-        for famId: faiter loop printNode :ast n: (ast.nodes.get i: famId.u64)
+        for famId: faiter loop printNodeWith :ast :withId n: (ast.nodes.get i: famId.u64)
     } case objectdef then {
-        print "\{n.nodeid}: objectdef @\{n.lineno}:\{n.colno} kind=\{objectkindname n.kind} isItems=\{n.isItems.length} asItems=\{n.asItems.length} isNative=\{n.isNative}"
+        print "\{idp}objectdef @\{n.lineno}:\{n.colno} kind=\{objectkindname n.kind} isItems=\{n.isItems.length} asItems=\{n.asItems.length} isNative=\{n.isNative}"
         oiiter: n.isItems.iterate
-        for oimId: oiiter loop printNode :ast n: (ast.nodes.get i: oimId.u64)
+        for oimId: oiiter loop printNodeWith :ast :withId n: (ast.nodes.get i: oimId.u64)
         oaiter: n.asItems.iterate
-        for oamId: oaiter loop printNode :ast n: (ast.nodes.get i: oamId.u64)
+        for oamId: oaiter loop printNodeWith :ast :withId n: (ast.nodes.get i: oamId.u64)
     } case unitdef then {
-        print "\{n.nodeid}: unitdef @\{n.lineno}:\{n.colno} kind=\{unitkindname n.kind} body=\{n.body.length}"
+        print "\{idp}unitdef @\{n.lineno}:\{n.colno} kind=\{unitkindname n.kind} body=\{n.body.length}"
         ubi: u64
         ubn: n.body.length
         for ubi < ubn loop {
             ubid: n.body.get i: ubi
-            printNode :ast n: (ast.nodes.get i: ubid.u64)
+            printNodeWith :ast :withId n: (ast.nodes.get i: ubid.u64)
             ubi = ubi + 1
         }
     } case program then {
-        print "\{n.nodeid}: program @\{n.lineno}:\{n.colno} units=\{ast.units.length} mainUnitName=\{n.mainUnitName}"
+        print "\{idp}program @\{n.lineno}:\{n.colno} units=\{ast.units.length} mainUnitName=\{n.mainUnitName}"
         pui: u64
         pun: ast.units.length
         for pui < pun loop {
             puid: (nodeid.create from: (ast.units.get i: pui))
-            printNode :ast n: (ast.nodes.get i: puid.u64)
+            printNodeWith :ast :withId n: (ast.nodes.get i: puid.u64)
             pui = pui + 1
         }
+    }
+}
+
+# printNode -- the full dump, every line carrying the node's id.
+printNode: function {ast: Ast.view n: Node.view} is {
+    printNodeWith :ast :n withId: true
+}
+
+# printOptChildWith -- an optional child (0 = absent), in either form.
+printOptChildWith: function {ast: Ast.view id: u32 withId: bool} is {
+    if id == 0 then {
+        print "  <none>"
+    } else {
+        c: ast.nodes.get i: id.u64
+        printNodeWith :ast n: c :withId
     }
 }
 
@@ -1869,159 +1891,12 @@ printNode: function {ast: Ast.view n: Node.view} is {
 # namedoperation position.
 # printOptChildCanonicalAt -- the id-taking canonical child printer.
 printOptChildCanonicalAt: function {ast: Ast.view id: u32} is {
-    if id == 0 then {
-        print "  <none>"
-    } else {
-        c: ast.nodes.get i: id.u64
-        printNodeCanonical :ast n: c
-    }
+    printOptChildWith :ast :id withId: false
 }
 
 # print one AST node in the canonical dump format.
 printNodeCanonical: function {ast: Ast.view n: Node.view} is {
-    match (
-        n
-    ) case error then {
-        print "error @\{n.lineno}:\{n.colno} err=\{errname n.err} msg=\{n.msg}"
-    } case placeholder then {
-        print "placeholder"
-    } case atomid then {
-        anc: nameTextCopy :ast ref: n.name
-        print "atomid @\{n.lineno}:\{n.colno} name=\{anc}"
-    } case labelvalue then {
-        lnc: nameTextCopy :ast ref: n.name
-        print "labelvalue @\{n.lineno}:\{n.colno} name=\{lnc}"
-    } case stringchunk then {
-        print "stringchunk @\{n.lineno}:\{n.colno} text=\{n.text} chunkKind=\{n.chunkKind}"
-    } case binop then {
-        print "binop @\{n.lineno}:\{n.colno}"
-        printNodeCanonical :ast n: (ast.nodes.get i: n.lhs.u64)
-        printNodeCanonical :ast n: (ast.nodes.get i: n.operator.u64)
-        printNodeCanonical :ast n: (ast.nodes.get i: n.rhs.u64)
-    } case atomstring then {
-        print "atomstring @\{n.lineno}:\{n.colno} parts=\{n.stringparts.length}"
-        iter: n.stringparts.iterate
-        for partId: iter loop printNodeCanonical :ast n: (ast.nodes.get i: partId.u64)
-    } case dottedpath then {
-        print "dottedpath @\{n.lineno}:\{n.colno}"
-        printNodeCanonical :ast n: (ast.nodes.get i: n.parent.u64)
-        printNodeCanonical :ast n: (ast.nodes.get i: n.child.u64)
-    } case call then {
-        print "call @\{n.lineno}:\{n.colno} args=\{n.arguments.length}"
-        printNodeCanonical :ast n: (ast.nodes.get i: n.callable.u64)
-        argiter: n.arguments.iterate
-        for argId: argiter loop printNodeCanonical :ast n: (ast.nodes.get i: argId.u64)
-    } case typeofexpr then {
-        print "typeofexpr @\{n.lineno}:\{n.colno}"
-        printNodeCanonical :ast n: (ast.nodes.get i: n.source.u64)
-    } case namedoperation then {
-        print "namedoperation"
-        printPoolName :ast ref: n.name
-        printNodeCanonical :ast n: (ast.nodes.get i: n.operation.u64)
-    } case datablock then {
-        print "datablock @\{n.lineno}:\{n.colno} elements=\{n.elements.length}"
-        eiter: n.elements.iterate
-        for elId: eiter loop printNodeCanonical :ast n: (ast.nodes.get i: elId.u64)
-        print "  outType:"
-        printOptChildCanonicalAt :ast id: n.outType
-    } case statement then {
-        print "statement @\{n.lineno}:\{n.colno} statements=\{n.statements.length}"
-        siter: n.statements.iterate
-        for lnId: siter loop printNodeCanonical :ast n: (ast.nodes.get i: lnId.u64)
-    } case statementline then {
-        print "statementline @\{n.lineno}:\{n.colno}"
-        printNodeCanonical :ast n: (ast.nodes.get i: n.statementline.u64)
-    } case assignment then {
-        asc: nameTextCopy :ast ref: n.name
-        print "assignment @\{n.lineno}:\{n.colno} name=\{asc}"
-        printNodeCanonical :ast n: (ast.nodes.get i: n.value.u64)
-    } case reassignment then {
-        print "reassignment @\{n.lineno}:\{n.colno}"
-        printNodeCanonical :ast n: (ast.nodes.get i: n.topath.u64)
-        printNodeCanonical :ast n: (ast.nodes.get i: n.value.u64)
-    } case swapstmt then {
-        print "swapstmt @\{n.lineno}:\{n.colno}"
-        printNodeCanonical :ast n: (ast.nodes.get i: n.lhs.u64)
-        printNodeCanonical :ast n: (ast.nodes.get i: n.rhs.u64)
-    } case expression then {
-        print "expression @\{n.lineno}:\{n.colno}"
-        printNodeCanonical :ast n: (ast.nodes.get i: n.expression.u64)
-    } case ifexpr then {
-        print "ifexpr @\{n.lineno}:\{n.colno} clauses=\{n.clauses.length}"
-        clit: n.clauses.iterate
-        for clId: clit loop printNodeCanonical :ast n: (ast.nodes.get i: clId.u64)
-        print "  elseclause:"
-        printOptChildCanonicalAt :ast id: n.elseclause
-    } case ifclause then {
-        print "ifclause @\{n.lineno}:\{n.colno} conditions=\{n.conditions.length}"
-        coit: n.conditions.iterate
-        for coId: coit loop printNodeCanonical :ast n: (ast.nodes.get i: coId.u64)
-        printNodeCanonical :ast n: (ast.nodes.get i: n.statement.u64)
-    } case forexpr then {
-        print "forexpr @\{n.lineno}:\{n.colno} conditions=\{n.conditions.length} postconditions=\{n.postconditions.length}"
-        fcit: n.conditions.iterate
-        for fcId: fcit loop printNodeCanonical :ast n: (ast.nodes.get i: fcId.u64)
-        print "  body:"
-        printOptChildCanonicalAt :ast id: n.body
-        fpit: n.postconditions.iterate
-        for fpId: fpit loop printNodeCanonical :ast n: (ast.nodes.get i: fpId.u64)
-    } case doexpr then {
-        print "doexpr @\{n.lineno}:\{n.colno}"
-        printNodeCanonical :ast n: (ast.nodes.get i: n.statement.u64)
-    } case withexpr then {
-        wnc: nameTextCopy :ast ref: n.name
-        print "withexpr @\{n.lineno}:\{n.colno} name=\{wnc}"
-        printNodeCanonical :ast n: (ast.nodes.get i: n.value.u64)
-        printNodeCanonical :ast n: (ast.nodes.get i: n.body.u64)
-    } case caseexpr then {
-        print "caseexpr @\{n.lineno}:\{n.colno} clauses=\{n.clauses.length}"
-        printNodeCanonical :ast n: (ast.nodes.get i: n.subject.u64)
-        ccit: n.clauses.iterate
-        for ccId: ccit loop printNodeCanonical :ast n: (ast.nodes.get i: ccId.u64)
-        print "  elseclause:"
-        printOptChildCanonicalAt :ast id: n.elseclause
-    } case caseclause then {
-        ccc: nameTextCopy :ast ref: n.name
-        print "caseclause @\{n.lineno}:\{n.colno} name=\{ccc}"
-        printNodeCanonical :ast n: (ast.nodes.get i: n.matcharm.u64)
-        printNodeCanonical :ast n: (ast.nodes.get i: n.statement.u64)
-    } case functiondef then {
-        fdc: ""
-        if n.pins then fdc = " pins=true"
-        print "functiondef @\{n.lineno}:\{n.colno} params=\{n.parameters.length} isNative=\{n.isNative}\{fdc}"
-        print "  returntype:"
-        printOptChildCanonicalAt :ast id: n.returntype
-        piter: n.parameters.iterate
-        for pmId: piter loop printNodeCanonical :ast n: (ast.nodes.get i: pmId.u64)
-        print "  body:"
-        printOptChildCanonicalAt :ast id: n.body
-        faiter: n.asItems.iterate
-        for famId: faiter loop printNodeCanonical :ast n: (ast.nodes.get i: famId.u64)
-    } case objectdef then {
-        print "objectdef @\{n.lineno}:\{n.colno} kind=\{objectkindname n.kind} isItems=\{n.isItems.length} asItems=\{n.asItems.length} isNative=\{n.isNative}"
-        oiiter: n.isItems.iterate
-        for oimId: oiiter loop printNodeCanonical :ast n: (ast.nodes.get i: oimId.u64)
-        oaiter: n.asItems.iterate
-        for oamId: oaiter loop printNodeCanonical :ast n: (ast.nodes.get i: oamId.u64)
-    } case unitdef then {
-        print "unitdef @\{n.lineno}:\{n.colno} kind=\{unitkindname n.kind} body=\{n.body.length}"
-        ubi: u64
-        ubn: n.body.length
-        for ubi < ubn loop {
-            ubid: n.body.get i: ubi
-            printNodeCanonical :ast n: (ast.nodes.get i: ubid.u64)
-            ubi = ubi + 1
-        }
-    } case program then {
-        print "program @\{n.lineno}:\{n.colno} units=\{ast.units.length} mainUnitName=\{n.mainUnitName}"
-        pui: u64
-        pun: ast.units.length
-        for pui < pun loop {
-            puid: (nodeid.create from: (ast.units.get i: pui))
-            printNodeCanonical :ast n: (ast.nodes.get i: puid.u64)
-            pui = pui + 1
-        }
-    }
+    printNodeWith :ast :n withId: false
 }
 
 # printNodeCanonicalAt -- print the row an id names. The row view is this
