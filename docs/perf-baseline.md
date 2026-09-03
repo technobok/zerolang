@@ -160,6 +160,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-09-03 | 86e7d6f5 | [the `outx` arc, then three measured reductions](#r-86e7d6f5) | 0.47s | -- | 93MB / -- | 112 / 194 / 179 (total 486, medians of 5) | 5,070,508 | 321MB | -- | 116,954 |
 | 2026-09-03 | 49b9b267 | [name-text copies become name ids](#r-49b9b267) | 0.46s | -- | 91MB / -- | 109 / 185 / 174 (total 470, medians of 5) | 4,718,425 | 315MB | -- | 116,971 |
 | 2026-09-03 | 56e15e82 | [resolution by id](#r-56e15e82) | 0.46s | -- | 91MB / -- | 109 / 179 / 173 (total 471, medians of 5) | 4,625,858 | 314MB | -- | 117,169 |
+| 2026-09-03 | b7fccae6 | [per-site copies by id](#r-b7fccae6) | 0.45s | -- | 92MB / -- | 108 / 179 / 170 (total 461, medians of 5) | 4,566,490 | 312MB | -- | 117,095 |
 
 2026-08-05 note -- **the measurement floor of this setup, established by
 repetition, and the trap that produced a fake baseline.**
@@ -2114,3 +2115,47 @@ base:`), `emitMatchStmt` (3.3k, arm names into an owning list),
 defName:`), `stampUnitMonoMembers` (2.2k, template labels), and a tail of
 sites under 2k. Each is one more id twin or a label that must be text; none
 is a family.
+
+<a id="r-b7fccae6"></a>
+### Per-site copies by id
+
+**2026-09-03 · `f213ab57`..`b7fccae6`**
+
+The residue of *Resolution by id*: 50,835 name-text copies (1.1% of
+allocations) left at per-site readers, each classified convert or leave by
+what the text was FOR. A copy that is compared, looked up or tested for
+presence converts; one that is spelled into a label, a C type name or a
+registry row stays. Each phase is a commit A/B'd on identical input against
+the commit before it (`out/zc-perf`, gcc -O1, `perf stat -r 7` + valgrind);
+allocations are the metric, instruction deltas under ~20M are "floor".
+
+| commit | phase | allocations | instructions |
+|---|---|---|---|
+| `f213ab57` | S1 constants: `constArmRead typeNameId: armNameId:`, `evalConstArmViaUnit nameCountId:`; the platform seeder is the one text-born caller | −7,873 (−0.17%) | floor |
+| `23bc8d98` | S2 parameter shells and type-head probes: the value-parameter leg by id (the generic leg keeps its copy for the registry), `paramTypeBaseNameId`/`baseTypeNameId` as the definitions with text copies, `fnReturnBaseNameIdOf`, `forFactoryTid fbnId:`, `nameClaimedByScopeId` (text form retired) | −6,541 (−0.14%) | floor |
+| `98cf3fa8` | S3 emitter: match-else narrowing compares arm ids; `sumArmNames` routes through `sumArmNameIds`; C byte-identical | −39,823 (−0.86%) | floor |
+| `b7fccae6` | S4 field heads and return heads: `fieldHeadNameId`/`genericApplHeadId` down the class-field chain into `fieldTypeNeedsCleanup nameId:`; the emitter's presence and `this` tests read `fnReturnBaseNameIdOf`; C byte-identical | −1,789 (−0.04%) | floor |
+
+Net over the arc: **−59,368 (−1.28%) allocations** off `56e15e82` (4,625,858 → 4,566,490 on
+the self-compile); the name-copy family fell from 50,835 blocks (1.1%) to
+30,712 blocks (0.7%).
+
+**What the census was for.** The biggest single step was not in the
+typechecker: `emitMatchStmt` built two owning `List String` per match
+statement with an else (the covered arms and the sum's arm universe) to find
+the residual arm by string compare -- 3.3k blocks in the census, 39.8k
+allocations once the lists, their growth and the per-arm copies are counted.
+A census names the FUNCTION that copies; the A/B tells what the copy costs.
+The other lesson is the seeder: `seedPlatformArm` classifies the host, the
+target triple and the flags -- text-born values -- so the text-to-id step
+lives there and the reader downstream never sees text again.
+
+**Left, and why.** 30,712 blocks blocks (0.7%) remain, all text-native or stores:
+`checkCaseClause` (3.3k, arm labels), `fnSignature` (3.1k, the return head
+spelled through `cTypeOf name:`), `recordUnitConformerContexts` (2.5k),
+`resolveDemandedDecl` (2.3k, `resolveDef defName:`), `stampUnitMonoMembers`
+(2.2k, template labels), `collectMonoRefArgs` (1.9k, labels), the mono parts
+stored as text in a record (`resolveMonoRefParts`, `resolveDottedArgTid`,
+`recordTyperefArgs`, 3.8k), `paramTypeBaseName`'s suffix builders (0.9k),
+`emitRecordMethods` (0.8k, names into owning lists) and a tail of sites under
+0.7k each. Each is a label, a store or a spelling; none is a family.
