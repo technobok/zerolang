@@ -162,6 +162,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-09-03 | 49b9b267 | [name-text copies become name ids](#r-49b9b267) | 0.46s | -- | 91MB / -- | 109 / 185 / 174 (total 470, medians of 5) | 4,718,425 | 315MB | -- | 116,971 |
 | 2026-09-03 | 56e15e82 | [resolution by id](#r-56e15e82) | 0.46s | -- | 91MB / -- | 109 / 179 / 173 (total 471, medians of 5) | 4,625,858 | 314MB | -- | 117,169 |
 | 2026-09-03 | b7fccae6 | [per-site copies by id](#r-b7fccae6) | 0.45s | -- | 92MB / -- | 108 / 179 / 170 (total 461, medians of 5) | 4,566,490 | 312MB | -- | 117,095 |
+| 2026-09-04 | 5061187b | [review phases 1-3: four defects, four gates, two sweeps](#r-5061187b) | 0.47s | -- | 93MB / -- | 103 / 178 / 176 (total 457, medians of 5) | 4,553,926 | 312MB | -- | 116,149 |
 
 2026-08-05 note -- **the measurement floor of this setup, established by
 repetition, and the trap that produced a fake baseline.**
@@ -2116,6 +2117,43 @@ base:`), `emitMatchStmt` (3.3k, arm names into an owning list),
 defName:`), `stampUnitMonoMembers` (2.2k, template labels), and a tail of
 sites under 2k. Each is one more id twin or a label that must be text; none
 is a family.
+
+<a id="r-5061187b"></a>
+### Review phases 1-3: four defects, four gates, two sweeps
+
+**2026-09-03/04 · `f5cd1339`..`5061187b`**
+
+The code review's first three phases. Four defects, each pinned by a fixture
+the pre-fix compiler fails:
+
+- `TmpCtr` kept five parallel owed-destructor lists and a block flush popped
+  three of them, so the variable beside each destructor drifted (latent: no
+  alias and no free are registered for one variable).
+- A005 measured a body to the START line of its last top-level statement, so
+  any body that was one `match` scored two however long it was. 185 functions
+  were over 100 lines against 107 baselined.
+- `condInParens` read a statement expression `({ ... })` as an already
+  parenthesised expression, so `if (` swallowed its paren.
+- A rebind under a narrowing wrote through the arm's payload alias and
+  destroyed the payload's type rather than the variable's: invalid C in a
+  match arm, an 8-byte leak per rebind in an if.
+
+Four gates: `pre-push` ratchets the self-compile's allocation count
+(ALLOC_BASELINE, instructions reported beside it); L026 reports a statement
+after a return/break/continue (it found the twelfth); A006 reports a function
+body with the shape of another in the file (72 at first measure); A007 reports
+an export no other unit under --src reads (zero, after seventeen were demoted).
+The doc ratchet now counts L016/L024/L025 only, and L025 folds the
+declaration's own words and every width out, so a body written once per type
+reads as the one body it is.
+
+Two sweeps: the nine option-default helpers became one `optionval.or`, native
+like `resultval.or` (116 call sites); 497 single-arm matches became arm tests.
+Both byte-identical for zc, zl and zls on frozen sources.
+
+**Net: 117,095 -> 116,149 lines (-946), allocations 4,566,490 -> 4,553,926
+(-0.3%), instructions 5.631G -> 5.606G (-0.4%).** The line count is the
+first fall since the arcs began; the wall and RSS columns did not move.
 
 <a id="r-b7fccae6"></a>
 ### Per-site copies by id
