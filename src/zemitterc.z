@@ -3196,6 +3196,17 @@ userFnIdById: function {
     }
 }
 
+# dropPtrVid -- forget that `vid` arrives by pointer, for the scope in which a
+# narrowing has shadowed it with its payload VALUE; the caller re-appends it
+# when that scope closes.
+dropPtrVid: function {ctx: Ctx vid: ztypes.vid} is {
+    kept: (ListVal ztypes.vid)
+    with it: ctx.ptrVids.iterate do for v: it loop {
+        if v != vid then kept.append from: v
+    }
+    ctx.ptrVids = kept
+}
+
 # isPtrVid -- true when variable `vid` is a pointer-receiver param of the
 # current class method body (so field reads emit `->` instead of `.`). The
 # id-addressed form; a vid of 0 means the site had no variable to name and is
@@ -17637,6 +17648,7 @@ emitMatchClause: function {
         pc: armPayloadC :ast :symtab :ctx tid: (ztypes.tid.create from: vtid.u64) :arm
         ind3: "\{ind}    "
         didSeed: false
+        unptr: false
         if pc.length > 0 when sname.length > 0 then {
             if isUni then {
                 cmt: "\{ind}    /* alias: \{sname} => (*(\{pc}*)_m\{mN}.data) */\n"
@@ -17657,6 +17669,12 @@ emitMatchClause: function {
                 buf.append l3
                 l4: "\{ind}    (void)\{snE};\n"
                 buf.append l4
+                # a subject that arrives by pointer (a method's `this`) is
+                # shadowed by a VALUE here, so the arm must read it as one
+                if (isPtrVid :ctx vid: snameVid) then {
+                    dropPtrVid :ctx vid: snameVid
+                    unptr = true
+                }
             }
         }
         dv: false
@@ -17676,6 +17694,7 @@ emitMatchClause: function {
             vvRemove xs: ctx.narrowBox vid: snameVid
             vtRemove xs: ctx.narrowTid vid: snameVid
         }
+        if unptr then ctx.ptrVids.append from: snameVid
         if dv == false then {
             l5: "\{ind}    break;\n"
             buf.append l5
