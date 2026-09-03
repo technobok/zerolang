@@ -2625,12 +2625,6 @@ baseTypeNameId: function {ast: Ast.view n: Node.view} out zast.nameid is {
     }
 }
 
-# baseTypeName -- baseTypeNameId as text ("" for zero), where the name is
-# written rather than compared.
-baseTypeName: function {ast: Ast.view n: Node.view} out String is {
-    return (zast.nameTextCopy :ast ref: (baseTypeNameId :ast :n))
-}
-
 # genericApplHeadId -- the head type name id of a generic application
 # `(List of: T)` / `(Option t: T)` (the callable's atom name); zero for a
 # non-application expr.
@@ -4492,12 +4486,6 @@ paramTypeBaseNameId: function {ast: Ast.view op: Node.view} out zast.nameid is {
     }
 }
 
-# paramTypeBaseName -- paramTypeBaseNameId spelled out, for the suffix builders
-# that write the name into a mono label.
-paramTypeBaseName: function {ast: Ast.view op: Node.view} out String is {
-    return (zast.nameTextCopy :ast ref: (paramTypeBaseNameId :ast :op))
-}
-
 # isBorrowReftypeCollection -- true for a parameterized collection whose mono is a
 # non-heap-allocated reftype, which takes the reftype-param BORROW default: List and
 # ListView (stack struct + heap buffer). Set/Map monos are heap-allocated (no BORROW);
@@ -4532,16 +4520,6 @@ isNativeValueViewId: function {ast: Ast.view nameId: zast.nameid} out bool is {
 # classifiers above: native types resolve AFTER the main unit, so the metadata
 # that would answer (a native CLASS that owns heap) is not yet populated when a
 # param resolves.
-# isNativeValueView -- true for StringView, the native immutable string view (subtype
-# STRINGVIEW): a param of this type stays unowned (a value-passed copy of a borrowed
-# view), so it takes no BORROW default. Other reftypes -- String (native, owns heap),
-# the mutable iterators (CpIter/Splitter/LinesIter), and non-native views (ListView/
-# OptionView) -- take the normal reftype-param BORROW default.
-isNativeValueView: function {name: StringView} out bool is {
-    if name == "StringView" then return true
-    return false
-}
-
 # demandReturnType -- demand a function's return-type names (`out (Result t:
 # u64 e: IoError)` -> Result), so a type named only in a return position is
 # resolved.
@@ -5557,7 +5535,9 @@ paramIsBorrowReftype: function {ast: Ast
                 isref = rgo
             } case none then null
         }
-        if (isNativeValueView name: thisName) then isref = false
+        if (isNativeValueViewId :ast nameId: (zast.poolFind pool: ast.names text: thisName)) then {
+            isref = false
+        }
     } else {
         if tnId.isZero then {
             base: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId.u64)
@@ -5900,19 +5880,14 @@ stampForcedTyperef: function {
     # the base name: from the pending record when the demand pass saw this
     # node, else off the type-expr itself -- a member resolved on demand never
     # went through a pass that records one
-    recvBaseTid: String
+    recvBaseId: zast.nameid
     {
         pv: st.typing.pendingTyperef.get key: tnid
-        match (
-            pv
-        ) case some then {
-            pvT: zast.nameTextAt :ast ref: pv
-            recvBaseTid = pvT.copy
-        } case none then null
+        if pv.some then recvBaseId = pv
     }
-    if recvBaseTid.length == 0 then recvBaseTid = (baseTypeName :ast n: (ast.nodes.get i: tnid))
-    if recvBaseTid.length == 0 then return
-    r: walkLookupTyperef :st :frame :ast :unitDecl base: recvBaseTid.stringView
+    if recvBaseId.isZero then recvBaseId = (baseTypeNameId :ast n: (ast.nodes.get i: tnid))
+    if recvBaseId.isZero then return
+    r: walkLookupTyperefById :st :frame :ast :unitDecl baseId: recvBaseId
     match (
         r
     ) case some then {
@@ -5923,13 +5898,13 @@ stampForcedTyperef: function {
     # the name resolves nowhere because nothing ever demanded it: a member
     # resolved on demand can be the FIRST reference to a type, and the demand
     # fixpoint finished before the body walk. Descend into it here.
-    dn: descendNamed :st :frame :ast :unitDecl name: recvBaseTid.stringView
+    dn: descendNamedId :st :frame :ast :unitDecl nameId: recvBaseId
     if dn > 0 then {
         ztyping.nodeTypeSet tbl: st.typing.nodeType nid: tnid tid: dn
         ztyping.nodeTypeSet tbl: st.typing.nodeType :nid tid: dn
         return
     }
-    r9b: walkLookupTyperef :st :frame :ast :unitDecl base: recvBaseTid.stringView
+    r9b: walkLookupTyperefById :st :frame :ast :unitDecl baseId: recvBaseId
     match (
         r9b
     ) case some then {
@@ -18651,19 +18626,19 @@ inferConstructionSubs: function {
                 isP = st.reg.isGenericParamOf tdecl: tk name: pk
             }
             if isP then {
-                an: paramTypeBaseName :ast op: (ast.nodes.get i: opId.u64)
-                if (isNumericLiteralName name: an.stringView) then {
+                anId: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId.u64)
+                if (isNumericLiteralNameAt :ast ref: anId) then {
                     sfx.append s: "_"
-                    sfx.append s: an
+                    sfx.append s: (zast.nameTextAt :ast ref: anId)
                     boundParams.add item: pk
                 } else {
-                    ao: (walkLookupTyperef
+                    ao: (walkLookupTyperefById
                         :st
                         frame: st.curFrame
                         :ast
 
                         :unitDecl
-                        base: an.stringView
+                        baseId: anId
                     )
                     match (
                         ao
@@ -19054,14 +19029,17 @@ collectGenericTypeArgs: function {
                 :isP0
             )
             if (isP0) == false when skipCr == false then anyMiss = true
-            an: paramTypeBaseName :ast op: (ast.nodes.get i: opId.u64)
-            if (anyMiss) == false when skipCr == false then { if (isNumericLiteralName name: an.stringView) then {
-                asfx2: "_\{an}"
+            anId0: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId.u64)
+            if (anyMiss) == false when skipCr == false then { if (isNumericLiteralNameAt
+                :ast
+                ref: anId0
+            ) then {
+                asfx2: "_\{zast.nameTextAt :ast ref: anId0}"
                 sfx.append s: asfx2
                 if (pk0.isZero) == false then {
                     numParamNames.append pk0
                     numParamNodes.append opId
-                    pdv0: parseDecimalU64 text: an.stringView
+                    pdv0: parseDecimalU64 text: (zast.nameTextAt :ast ref: anId0).stringView
                     match (
                         pdv0
                     ) case some then {
@@ -19070,13 +19048,13 @@ collectGenericTypeArgs: function {
                     } case none then null
                 }
             } else {
-                ao: (walkLookupTyperef
+                ao: (walkLookupTyperefById
                     :st
                     frame: st.curFrame
                     :ast
 
                     :unitDecl
-                    base: an.stringView
+                    baseId: anId0
                 )
                 aid: ao.or d: 0
                 if aid == 0 then {
