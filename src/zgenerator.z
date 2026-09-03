@@ -934,11 +934,7 @@ cloneInner: function {ast: Ast nid: zast.nodeid} out Node is {
     inner: nid
     {
         n: ast.nodes.get i: nid.u64
-        match (
-            n
-        ) case expression then {
-            inner = n.expression
-        } else null
+        if n.expression then inner = n.expression
     }
     if inner == nid then return (clonePathAt :ast :nid)
     return (cloneInner :ast nid: inner)
@@ -958,14 +954,12 @@ promoteIterables: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out Node is 
     lineIds: (ListVal u32)
     {
         n: ast.nodes.get i: nid.u64
-        match (
-            n
-        ) case statement then {
+        if n.statement then {
             isStmt = true
             lnP = n.lineno
             coP = n.colno
             with sit: n.statements.iterate do for s: sit loop lineIds.append from: s
-        } else null
+        }
     }
     if (isStmt) == false then return (clonePathAt :ast :nid)
     newLines: (ListVal u32)
@@ -1002,9 +996,7 @@ promoteLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid dst: ListVal u32} 
     coQ: u32
     {
         n: ast.nodes.get i: nid.u64
-        match (
-            n
-        ) case statementline then {
+        if n.statementline then {
             innerId = n.statementline
             lnQ = n.lineno
             coQ = n.colno
@@ -1012,7 +1004,7 @@ promoteLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid dst: ListVal u32} 
             if (isFor) == false then {
                 isFor = lineIsWith :ast n: (ast.nodes.get i: n.statementline.u64)
             }
-        } else null
+        }
     }
     if isFor then {
         ni: promoteInExpr :ast :ctr nid: innerId :dst
@@ -1089,14 +1081,12 @@ prependIntoBlock: function {
     isStmt: false
     {
         b: ast.nodes.get i: bodyId.u64
-        match (
-            b
-        ) case statement then {
+        if b.statement then {
             isStmt = true
             lnB = b.lineno
             coB = b.colno
             with bit: b.statements.iterate do for s: bit loop lineIds.append from: s
-        } else null
+        }
     }
     if (isStmt) == false then return 0
     sa2: mkAtom :ast :line :col name: src
@@ -1200,26 +1190,22 @@ promoteWrappedBody: function {ast: Ast ctr: NameCtr oId: zast.nodeid} out u32 is
     coY: u32
     {
         n: ast.nodes.get i: oId.u64
-        match (
-            n
-        ) case expression then {
+        if n.expression then {
             isExpr = true
             innerId = n.expression
             lnY = n.lineno
             coY = n.colno
-        } else null
+        }
     }
     isDo: false
     {
         n: ast.nodes.get i: oId.u64
-        match (
-            n
-        ) case doexpr then {
+        if n.doexpr then {
             isDo = true
             innerId = n.statement
             lnY = n.lineno
             coY = n.colno
-        } else null
+        }
     }
     if (isExpr) == false when (isDo) == false then return (promoteIterablesIdAt :ast :ctr :oId)
     innerNew: promoteWrappedBody :ast :ctr oId: innerId
@@ -1264,16 +1250,14 @@ promoteWith: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out Node is {
     bodyW: zast.nodeid
     {
         n: ast.nodes.get i: nid.u64
-        match (
-            n
-        ) case withexpr then {
+        if n.withexpr then {
             isWith = true
             lnW = n.lineno
             coW = n.colno
             nameW = n.name
             valW = n.value
             bodyW = n.body
-        } else null
+        }
     }
     if (isWith) == false then {
         empty9: (MapRV String v: bool)
@@ -1345,24 +1329,18 @@ promoteInExpr: function {
     coR: u32
     {
         n: ast.nodes.get i: nid.u64
-        match (
-            n
-        ) case expression then {
+        if n.expression then {
             isExpr = true
             innerId = n.expression
             lnR = n.lineno
             coR = n.colno
-        } else null
+        }
     }
     if (isExpr) == false then {
         isW: false
         {
             n9: ast.nodes.get i: nid.u64
-            match (
-                n9
-            ) case withexpr then {
-                isW = true
-            } else null
+            if n9.withexpr then isW = true
         }
         if isW then return (promoteWith :ast :ctr :nid)
         return (promoteFor :ast :ctr :nid :dst)
@@ -1403,15 +1381,13 @@ promoteForInit: function {
     hc1: u32
     {
         c0: ast.nodes.get i: c0Id.u64
-        match (
-            c0
-        ) case namedoperation then {
+        if c0.namedoperation then {
             hp1: zast.posOf n: (ast.nodes.get i: c0.operation.u64)
             hl1 = hp1.line
             hc1 = hp1.col
             opId = c0.operation
             cnId = c0.name
-        } else null
+        }
     }
     if opId.isZero then return
     empty8: (MapRV String v: bool)
@@ -1448,16 +1424,14 @@ forInitIdx: function {ast: Ast.view condIds: (ListVal u32).view} out u64 is {
     for ci < condIds.length loop {
         c0: ast.nodes.get i: (condIds.get i: ci).u64
         ci = ci + 1
-        match (
-            c0
-        ) case namedoperation then {
+        if c0.namedoperation then {
             if (zast.nameTextAt :ast ref: c0.name).length > 0 then {
                 # a second binding is not this shape; the parser forbids it,
                 # so answer 0 rather than guessing which one to hoist
                 if found > 0 then return 0
                 found = ci
             }
-        } else null
+        }
     }
     return found
 }
@@ -1484,9 +1458,7 @@ promoteForCond: function {
     hc0: u32
     {
         c0: ast.nodes.get i: c0Id.u64
-        match (
-            c0
-        ) case namedoperation then {
+        if c0.namedoperation then {
             cn0: zast.nameTextAt :ast ref: c0.name
             if cn0.length > 0 when suspends then {
                 if (condIsTrivial
@@ -1502,7 +1474,7 @@ promoteForCond: function {
                 opId = c0.operation
                 cnId = c0.name
             }
-        } else null
+        }
     }
     if doHoist then {
         synthN: "_iter\{ctr.bump}"
@@ -1553,16 +1525,14 @@ promoteFor: function {
     postIds: (ListVal u32)
     {
         n: ast.nodes.get i: nid.u64
-        match (
-            n
-        ) case forexpr then {
+        if n.forexpr then {
             isFor = true
             lnS = n.lineno
             coS = n.colno
             bodyId = n.body
             with cit: n.conditions.iterate do for c: cit loop condIds.append from: c
             with pit: n.postconditions.iterate do for p: pit loop postIds.append from: p
-        } else null
+        }
     }
     if (isFor) == false then {
         empty4: (MapRV String v: bool)
@@ -2134,11 +2104,7 @@ wrapDeclaredCallReturn: function {
     retId: zast.nodeid
     {
         cf: ast.nodes.get i: callFnId.u64
-        match (
-            cf
-        ) case functiondef then {
-            retId = cf.returntype
-        } else null
+        if cf.functiondef then retId = cf.returntype
     }
     if retId.isZero then return 0
     gp: (GivesParts
@@ -2159,11 +2125,7 @@ wrapDeclaredCallReturn: function {
         )
         wid: zast.tableAdd :ast n: wrapExpr
         cfm: ast.nodes.getMut i: callFnId.u64
-        match (
-            cfm
-        ) case functiondef then {
-            cfm.returntype = (zast.nodeid.create from: wid)
-        } else null
+        if cfm.functiondef then cfm.returntype = (zast.nodeid.create from: wid)
         return wid
     } case none then null
     return 0
@@ -2187,14 +2149,12 @@ injectCallReceiver: function {
     thisParam: mkNamedOp :ast :line :col name: "this" op: thisP
     tpId: zast.tableAdd :ast n: thisParam
     cfm2: ast.nodes.getMut i: callFnId.u64
-    match (
-        cfm2
-    ) case functiondef then {
+    if cfm2.functiondef then {
         rest: (ListVal u32)
         rest.append tpId
         with pit: cfm2.parameters.iterate do for pId: pit loop rest.append pId
         cfm2.parameters = rest
-    } else null
+    }
 }
 
 # buildDeclaredCreate -- `.create` generated from the `is` fields, in order, and
@@ -2244,14 +2204,12 @@ buildDeclaredCreate: function {
     cmN: mkNamedOp :ast :line :col name: "create" op: createM
     cmId: zast.tableAdd :ast n: cmN
     objc: ast.nodes.getMut i: objId.u64
-    match (
-        objc
-    ) case objectdef then {
+    if objc.objectdef then {
         asMerged: (ListVal u32)
         with ait2: objc.asItems.iterate do for aId2: ait2 loop asMerged.append aId2
         asMerged.append cmId
         objc.asItems = asMerged
-    } else null
+    }
 }
 
 # appendDeclaredFields -- the fields the suspension transform needs, appended
@@ -2266,14 +2224,12 @@ appendDeclaredFields: function {
     addFields: (ListVal u32).view
 } is {
     objm: ast.nodes.getMut i: objId.u64
-    match (
-        objm
-    ) case objectdef then {
+    if objm.objectdef then {
         merged: (ListVal u32)
         with iit: objm.isItems.iterate do for iId: iit loop merged.append iId
         with afit: addFields.iterate do for afId: afit loop merged.append afId
         objm.isItems = merged
-    } else null
+    }
 }
 
 # callBodyIdOf -- the body of a `call` functiondef; 0 when it has none. Asked
@@ -2304,18 +2260,12 @@ declaredInputTypeId: function {
     callFnId: zast.nodeid
 } out zast.nodeid is {
     cf: ast.nodes.get i: callFnId.u64
-    match (
-        cf
-    ) case functiondef then {
+    if cf.functiondef then {
         with pit: cf.parameters.iterate do for pId: pit loop {
             pn: ast.nodes.get i: pId.u64
-            match (
-                pn
-            ) case namedoperation then {
-                return pn.operation
-            } else null
+            if pn.namedoperation then return pn.operation
         }
-    } else null
+    }
     return (zast.nodeid.create from: 0)
 }
 
@@ -2340,12 +2290,10 @@ resumeFieldPath: function {
         line = pp.line
         col = pp.col
         bn: ast.nodes.get i: nid.u64
-        match (
-            bn
-        ) case dottedpath then {
+        if bn.dottedpath then {
             parentId = bn.parent
             leafId = leafAtomNameId :ast n: (ast.nodes.get i: bn.child.u64)
-        } else null
+        }
     }
     if leafId == zast.names.wkBorrow then return (clonePathAt :ast :nid)
     if leafId == zast.names.wkView then return (clonePathAt :ast :nid)
@@ -2397,36 +2345,30 @@ readDeclaredParts: function {
     dst: DeclParts
 } is {
     obn: ast.nodes.get i: objId.u64
-    match (
-        obn
-    ) case objectdef then {
+    if obn.objectdef then {
         dst.line = obn.lineno
         dst.colno = obn.colno
         with aiter: obn.asItems.iterate do for amId: aiter loop {
             am: ast.nodes.get i: amId.u64
-            match (
-                am
-            ) case namedoperation then {
+            if am.namedoperation then {
                 if am.name == zast.names.wkCall then {
                     dst.callFnId = am.operation
                     dst.inputTypeId = declaredInputTypeId :ast callFnId: am.operation
                 }
-            } else null
+            }
         }
         # the AUTHOR's fields, read before this pass appends its own: the
         # generated `create` takes exactly these, so what the state machine
         # needs never reaches the construction site.
         with iiter: obn.isItems.iterate do for imId: iiter loop {
             im: ast.nodes.get i: imId.u64
-            match (
-                im
-            ) case namedoperation then {
+            if im.namedoperation then {
                 inm: zast.nameTextAt :ast ref: im.name
                 dst.names.append inm.copy
                 dst.types.append im.operation.u64
-            } else null
+            }
         }
-    } else null
+    }
 }
 
 # appendCrossingFields -- one `typeof`-typed field per local live across a
@@ -2581,12 +2523,10 @@ createParamPath: function {
     parentId: zast.nodeid
     {
         bn: ast.nodes.get i: nid.u64
-        match (
-            bn
-        ) case dottedpath then {
+        if bn.dottedpath then {
             parentId = bn.parent
             leafId = leafAtomNameId :ast n: (ast.nodes.get i: bn.child.u64)
-        } else null
+        }
     }
     isNonOwned: false
     if leafId == zast.names.wkBorrow then isNonOwned = true
@@ -2655,11 +2595,7 @@ lowerDeclared: function {
     newBodyId: promoteIterablesIdAt :ast :ctr oId: bodyId
     if newBodyId > 0 then {
         cfm3: ast.nodes.getMut i: callFnId.u64
-        match (
-            cfm3
-        ) case functiondef then {
-            cfm3.body = (zast.nodeid.create from: newBodyId)
-        } else null
+        if cfm3.functiondef then cfm3.body = (zast.nodeid.create from: newBodyId)
     }
     bodyId2: callBodyIdOf :ast :callFnId
     # the body is TAKEN out of the table for the analysis: read in place it
@@ -2705,11 +2641,7 @@ lowerDeclared: function {
     ) case some then {
         nbId: zast.tableAdd :ast n: newBodyOpt.take
         cfm4: ast.nodes.getMut i: callFnId.u64
-        match (
-            cfm4
-        ) case functiondef then {
-            cfm4.body = (zast.nodeid.create from: nbId)
-        } else null
+        if cfm4.functiondef then cfm4.body = (zast.nodeid.create from: nbId)
     } case none then null
     appendForCounterFields :ast :line :col :forSlots :addFields
     if (parts.inputTypeId.isZero) == false then (appendResumeFields
