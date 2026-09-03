@@ -2654,26 +2654,31 @@ pathOwnership: function {ast: Ast.view n: Node.view} out optionval ztypes.zparam
     }
 }
 
-# baseTypeName -- the underlying base type name of a type expr, peeling `.borrow`/
-# `.private`/etc. dotted-path markers (`Container.private.borrow` -> `Container`,
-# `this.borrow` -> `this`); the atom name for a bare atom; "" otherwise.
-baseTypeName: function {ast: Ast.view n: Node.view} out String is {
+# baseTypeNameId -- the underlying base type name of a type expr, as its name
+# id, peeling `.borrow`/`.private`/etc. dotted-path markers
+# (`Container.private.borrow` -> `Container`, `this.borrow` -> `this`); the
+# atom name for a bare atom; zero otherwise.
+baseTypeNameId: function {ast: Ast.view n: Node.view} out zast.nameid is {
     match (
         n
     ) case atomid then {
-        return (zast.nameTextCopy :ast ref: n.name)
+        return n.name
     } case labelvalue then {
-        return (zast.nameTextCopy :ast ref: n.name)
+        return n.name
     } case dottedpath then {
-        cn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.child.u64))
-        if (isStripMarker name: cn.stringView) then {
-            return (baseTypeName :ast n: (ast.nodes.get i: n.parent.u64))
-        } else {
-            return "".string
+        if (isStripMarkerId nameId: (atomNameId :ast n: (ast.nodes.get i: n.child.u64))) then {
+            return (baseTypeNameId :ast n: (ast.nodes.get i: n.parent.u64))
         }
+        return (zast.nameid.create from: 0)
     } else {
-        return "".string
+        return (zast.nameid.create from: 0)
     }
+}
+
+# baseTypeName -- baseTypeNameId as text ("" for zero), where the name is
+# written rather than compared.
+baseTypeName: function {ast: Ast.view n: Node.view} out String is {
+    return (zast.nameTextCopy :ast ref: (baseTypeNameId :ast :n))
 }
 
 # genericApplHead -- the head type name of a generic application `(List of: T)` /
@@ -4530,7 +4535,10 @@ paramIsThisReceiverId: function {ast: Ast.view opId: u32} out bool is {
 }
 
 # the base type name of parameter operation `op`.
-# paramTypeBaseNameId -- paramTypeBaseName's answer as the name's id.
+# paramTypeBaseNameId -- the base type name of a (possibly parameterized) param
+# type expression, as its name id: an atom name directly, or the callable of a
+# parenthesized `(List of: i64)` form (an expression wrapping a call). Zero for
+# anything else.
 paramTypeBaseNameId: function {ast: Ast.view op: Node.view} out zast.nameid is {
     match (
         op
@@ -4547,40 +4555,27 @@ paramTypeBaseNameId: function {ast: Ast.view op: Node.view} out zast.nameid is {
     }
 }
 
-# paramTypeBaseName -- the base type name of a (possibly parameterized) param type
-# expression: an atom name directly, or the callable of a parenthesized
-# `(List of: i64)` form (an expression wrapping a call). "" for anything else.
+# paramTypeBaseName -- paramTypeBaseNameId spelled out, for the suffix builders
+# that write the name into a mono label.
 paramTypeBaseName: function {ast: Ast.view op: Node.view} out String is {
-    match (
-        op
-    ) case atomid then {
-        return (zast.nameTextCopy :ast ref: op.name)
-    } case labelvalue then {
-        return (zast.nameTextCopy :ast ref: op.name)
-    } case expression then {
-        return (paramTypeBaseName :ast op: (ast.nodes.get i: op.expression.u64))
-    } case call then {
-        return (atomName :ast n: (ast.nodes.get i: op.callable.u64))
-    } else {
-        return "".string
-    }
+    return (zast.nameTextCopy :ast ref: (paramTypeBaseNameId :ast :op))
 }
 
 # isBorrowReftypeCollection -- true for a parameterized collection whose mono is a
 # non-heap-allocated reftype, which takes the reftype-param BORROW default: List and
 # ListView (stack struct + heap buffer). Set/Map monos are heap-allocated (no BORROW);
 # the native iterator views have no destructor (no BORROW); str/array are valtypes.
-isBorrowReftypeCollection: function {name: StringView} out bool is {
-    if name == "List" then return true
-    if name == "ListRef" then return true
-    if name == "ListVal" then return true
-    if name == "ListView" then return true
-    if name == "ListViewVal" then return true
+isBorrowReftypeCollection: function {ast: Ast.view nameId: zast.nameid} out bool is {
+    if (zast.nameTextEq :ast ref: nameId s: "List") then return true
+    if (zast.nameTextEq :ast ref: nameId s: "ListRef") then return true
+    if (zast.nameTextEq :ast ref: nameId s: "ListVal") then return true
+    if (zast.nameTextEq :ast ref: nameId s: "ListView") then return true
+    if (zast.nameTextEq :ast ref: nameId s: "ListViewVal") then return true
     # the id-keyed containers are stack structs too -- a header plus two heap
     # arrays, created BY VALUE -- so they take the same borrow default
-    if name == "IdMapR" then return true
-    if name == "IdMapV" then return true
-    if name == "IdSet" then return true
+    if (zast.nameTextEq :ast ref: nameId s: "IdMapR") then return true
+    if (zast.nameTextEq :ast ref: nameId s: "IdMapV") then return true
+    if (zast.nameTextEq :ast ref: nameId s: "IdSet") then return true
     return false
 }
 
@@ -4886,20 +4881,14 @@ checkParamTypeShape: function {
     unitDecl: ztypes.declid
     rf: ztypes.declid
     cid: u64
-    ptnT: StringView
+    # the name id the parameter's typeref spells at its head
+    ptn: zast.nameid
     pnameId: zast.nameid
     fid: u64
     pm: argref
 } is {
     fnRefIsFn: false
-    fnRefOpt: (walkLookupTyperef
-        :st
-        frame: rf
-        :ast
-
-        :unitDecl
-        base: ptnT
-    )
+    fnRefOpt: (walkLookupTyperefById :st frame: rf :ast :unitDecl baseId: ptn)
     fnRefTid: ztypes.tid
     match (
         fnRefOpt
@@ -4967,7 +4956,8 @@ registerValueParam: function {
     rf: ztypes.declid
     fid: u64
     thisName: StringView
-    ptnT: StringView
+    # the head name id of the declared type (the atom of `pm.operation`)
+    ptn: zast.nameid
     pm: argref
 } is {
     cid: (resolveTyperefShell
@@ -4985,7 +4975,7 @@ registerValueParam: function {
         nameId: pm.name
         childTypeId: cid
     )
-    if (isNumericLiteralName name: ptnT) then {
+    if (isNumericLiteralNameAt :ast ref: ptn) then {
         (st.typing.setDefaultLiteralId
             parentTypeId: (ztypes.tid.create from: fid.u64)
             nameId: pm.name
@@ -4998,7 +4988,7 @@ registerValueParam: function {
             :unitDecl
             :rf
             :cid
-            :ptnT
+            :ptn
             pnameId: pm.name
             :fid
             :pm
@@ -5224,7 +5214,6 @@ resolveFunctionParam: function {
         genParam: false
         fnParam: false
         ptn: atomNameId :ast n: (ast.nodes.get i: pm.operation.u64)
-        ptnT: zast.nameTextCopy :ast ref: ptn
         # A MARKED receiver is an alias, so its type is `this.view` rather
         # than the bare `this` an atom name reports. Ask the shared
         # predicate, which knows every marker form.
@@ -5259,6 +5248,8 @@ resolveFunctionParam: function {
             genParam = true
         }
         if skipParam then {
+            # the registry stores a generic parameter's name as text
+            ptnT: zast.nameTextCopy :ast ref: ptn
             (registerGenericOrReceiverParam
                 :st
                 :ast
@@ -5281,7 +5272,7 @@ resolveFunctionParam: function {
                 :rf
                 :fid
                 :thisName
-                ptnT: ptnT.stringView
+                :ptn
                 :pm
             )
         }
@@ -5638,8 +5629,8 @@ paramIsBorrowReftype: function {ast: Ast
         if (isNativeValueView name: thisName) then isref = false
     } else {
         if tnId.isZero then {
-            base: paramTypeBaseName :ast op: (ast.nodes.get i: opId.u64)
-            isref = isBorrowReftypeCollection name: base.stringView
+            base: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId.u64)
+            isref = isBorrowReftypeCollection :ast nameId: base
         } else {
             isref = nameIsInUnitReftypeId :st :ast :unitDecl nameId: tnId
             tdu: (definingSiteForId :st :frame :ast :unitDecl nameId: tnId).defUnit
@@ -14541,26 +14532,24 @@ createUnitMono: function {
     return monoId
 }
 
-# fnReturnBaseName -- the base type name of a function's return typeref
-# ("" when absent), for completing substituted signatures whose template
-# return was still unresolved at signature time.
-fnReturnBaseName: function {ast: Ast.view oId: zast.nodeid} out String is {
-    if oId.isZero then return "".string
-    o: ast.nodes.get i: oId.u64
-    return (baseTypeName :ast n: o)
-
-}
-
-# the base type name of function `op`'s declared return type -- the
-# head of a form like `List X`.
-fnReturnBaseNameOf: function {ast: Ast.view op: Node.view} out String is {
+# fnReturnBaseNameIdOf -- the base type name id of function `op`'s declared
+# return typeref -- the head of a form like `List X`; zero when absent. Completes
+# substituted signatures whose template return was still unresolved at
+# signature time.
+fnReturnBaseNameIdOf: function {ast: Ast.view op: Node.view} out zast.nameid is {
     match (
         op
     ) case functiondef then {
-        return (fnReturnBaseName :ast oId: op.returntype)
+        if op.returntype.isZero then return (zast.nameid.create from: 0)
+        return (baseTypeNameId :ast n: (ast.nodes.get i: op.returntype.u64))
     } else {
-        return "".string
+        return (zast.nameid.create from: 0)
     }
+}
+
+# fnReturnBaseNameOf -- fnReturnBaseNameIdOf's head as text, for the emitter.
+fnReturnBaseNameOf: function {ast: Ast.view op: Node.view} out String is {
+    return (zast.nameTextCopy :ast ref: (fnReturnBaseNameIdOf :ast :op))
 }
 
 # registerMonoFnParams -- register a mono unit fn's generic-param-typed params
@@ -14665,12 +14654,11 @@ fillMonoMethodSignature: function {
     } else {
         # template return unresolved at signature time
         # (out t): derive from the method's AST typeref.
-        rnm: (fnReturnBaseNameOf
+        rnmId: (fnReturnBaseNameIdOf
             :ast
             op: (ast.nodes.get i: fmNode.operation.u64)
         )
-        if rnm.length > 0 then {
-            rnmId: nameIdOf :ast name: rnm.stringView
+        if (rnmId.isZero) == false then {
             rgo2: gpNames.get key: rnmId
             rid2: u64
             match (
@@ -14683,13 +14671,12 @@ fillMonoMethodSignature: function {
                     rid2 = sg2
                 } case none then null
             } case none then {
-                rlo2: (walkLookupTyperef
+                rlo2: (walkLookupTyperefById
                     :st
                     frame: rf
                     :ast
-
                     unitDecl: tmplUnitName
-                    base: rnm.stringView
+                    baseId: rnmId
                 )
                 match (
                     rlo2
@@ -15965,24 +15952,12 @@ builtinTidTcRo: function {
     return (builtinTidTRo :st frame: st.curFrame :ast :base)
 }
 
-# nameClaimedByScope -- the probe core shared by the negative-proof chains
+# nameClaimedByScopeId -- the probe core shared by the negative-proof chains
 # (unknown-reference at value/callable sites, unknown-type at stampTyperefs):
 # does a unit-level namespace claim the name -- the unit-name space, the
 # current unit's resolved children, or system's children? Callers add their
 # context legs (local variables, the typeref walk, the closure-wide unit
 # scan) and their own exemptions.
-nameClaimedByScope: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    frame: ztypes.declid
-    name: StringView
-} out bool is {
-    nid: nameIdOf :ast :name
-    return (nameClaimedByScopeId :st :frame :ast :unitDecl nameId: nid)
-}
-
-# nameClaimedByScopeId -- nameClaimedByScope by the name's id.
 nameClaimedByScopeId: function {
     # the tree the unit's index is read from
     ast: Ast
@@ -16148,16 +16123,8 @@ stampOnePendingTyperef: function {
                 st.typing.typerefRetry.append from: uk
                 return
             }
-            pvalT: zast.nameTextCopy :ast ref: pval
-            urHit: (nameClaimedByScope
-                :st
-                frame: rf
-                :ast
-
-                unitDecl: origin
-                name: pvalT.stringView
-            )
-            if urHit == false when pvalT.stringView == "Any" then {
+            urHit: (nameClaimedByScopeId :ast :st unitDecl: origin frame: rf nameId: pval)
+            if urHit == false when (zast.nameTextEq :ast ref: pval s: "Any") then {
                 # `Any` is not user-reachable through the closure:
                 # only a scope claim (its own unit defining it)
                 # resolves it, so an unclaimed `Any` reports.
@@ -16185,6 +16152,7 @@ stampOnePendingTyperef: function {
             }
             if urHit then return
             un: ast.nodes.get i: uk
+            pvalT: zast.nameTextCopy :ast ref: pval
             um: "Unknown type '\{pvalT}'"
             (addResolveErrorH
                 :st
@@ -18935,16 +18903,9 @@ inferConstructionSubs: function {
             # binds the primary generic param (`(List String)`); a value
             # first arg (`(box 5)`) is left for value inference.
             if pk.isZero when argIdx == 0 then {
-                anE: paramTypeBaseName :ast op: (ast.nodes.get i: opId.u64)
-                if (isNumericLiteralName name: anE.stringView) == false then {
-                    teo: (walkLookupTyperef
-                        :st
-                        frame: st.curFrame
-                        :ast
-
-                        :unitDecl
-                        base: anE.stringView
-                    )
+                anE: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId.u64)
+                if (isNumericLiteralNameAt :ast ref: anE) == false then {
+                    teo: (walkLookupTyperefById :st frame: st.curFrame :ast :unitDecl baseId: anE)
                     match (
                         teo
                     ) case some then {
@@ -19329,16 +19290,15 @@ collectGenericTypeArgs: function {
             # empty label so the field-bound inference leg owns the call.
             if pk0.isZero when argIdx == 0 then {
                 if (primaryName.isZero) == false then {
-                    anP: paramTypeBaseName :ast op: (ast.nodes.get i: opId.u64)
+                    anP: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId.u64)
                     pid0: u64
-                    if (isNumericLiteralName name: anP.stringView) == false then {
-                        pao0: (walkLookupTyperef
+                    if (isNumericLiteralNameAt :ast ref: anP) == false then {
+                        pao0: (walkLookupTyperefById
                             :st
                             frame: st.curFrame
                             :ast
-
                             :unitDecl
-                            base: anP.stringView
+                            baseId: anP
                         )
                         pid0 = optU64Or o: pao0 d: 0
                         if pid0 == 0 then {
@@ -19745,16 +19705,15 @@ validateGenericTypeArgs: function {
             pk: arg.name
             if pk.isZero when argIdx == 0 then {
                 if (primaryName.isZero) == false then {
-                    anP: paramTypeBaseName :ast op: (ast.nodes.get i: arg.operation.u64)
+                    anP: paramTypeBaseNameId :ast op: (ast.nodes.get i: arg.operation.u64)
                     pid0: u64
-                    if (isNumericLiteralName name: anP.stringView) == false then {
-                        pao0: (walkLookupTyperef
+                    if (isNumericLiteralNameAt :ast ref: anP) == false then {
+                        pao0: (walkLookupTyperefById
                             :st
                             frame: st.curFrame
                             :ast
-
                             :unitDecl
-                            base: anP.stringView
+                            baseId: anP
                         )
                         pid0 = optU64Or o: pao0 d: 0
                         if pid0 == 0 then {
@@ -25429,18 +25388,12 @@ forFactoryTid: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    fbn: StringView
+    # the header's bare atom name id; zero when the condition is not an atom
+    fbnId: zast.nameid
 } out u64 is {
     facId: u64
-    if fbn.length > 0 then {
-        ffo: (walkLookupTyperef
-            :st
-            frame: st.curFrame
-            :ast
-
-            :unitDecl
-            base: fbn
-        )
+    if (fbnId.isZero) == false then {
+        ffo: (walkLookupTyperefById :st frame: st.curFrame :ast :unitDecl baseId: fbnId)
         match (
             ffo
         ) case some then {
@@ -25557,11 +25510,8 @@ checkForCondition: function {
     # A bare 0-arg function returning an iterator class auto-invokes:
     # its walk runs in a call scope and the atom keeps the FUNCTION
     # stamp rather than the auto-call's coerced return.
-    fbn: (zast.nameTextCopy
-        :ast
-        ref: (bareAtomNameId :ast n: (ast.nodes.get i: cond.operation.u64))
-    )
-    facId: forFactoryTid :st :unitDecl :ast fbn: fbn.stringView
+    fbnId: (bareAtomNameId :ast n: (ast.nodes.get i: cond.operation.u64))
+    facId: forFactoryTid :st :unitDecl :ast :fbnId
     vt: ztypes.tid
     errC: st.typing.errors.length
     # A for-header names an ITERATOR, not a call. `for x: 5.iterate loop`
@@ -25577,7 +25527,7 @@ checkForCondition: function {
         # the factory's lazy walks (its body + the iterator class's
         # methods via return-first transitivity) fire before the
         # synthetic invocation's call scope opens.
-        maybeWalkMethods :st frame: st.curFrame :unitDecl :ast name: fbn.stringView
+        maybeWalkMethodsById :st frame: st.curFrame :unitDecl :ast nameId: fbnId
         fcm: st.pushCall
         vt = checkValueAt :st :unitDecl :ast nid: cond.operation
         st.popTo marker: fcm
@@ -30578,24 +30528,23 @@ checkGenericTypeCall: function {
                     if (argFound) == false then {
                         argFound = true
                         if isNullPay then {
-                            etn: (paramTypeBaseName
+                            etn: (paramTypeBaseNameId
                                 :ast
                                 op: (ast.nodes.get i: farg.operation.u64)
                             )
                             subT = ztypes.tid.create from: (optU64Or
-                                o: (walkLookupTyperef
+                                o: (walkLookupTyperefById
                                     :st
                                     frame: st.curFrame
                                     :ast
-
                                     :unitDecl
-                                    base: etn.stringView
+                                    baseId: etn
                                 )
                                 d: 0
                             )
                             if subT.isZero then {
                                 # a cross-unit type arg (optionval.none ztypes.zlockstate):
-                                # paramTypeBaseName/walkLookupTyperef miss a dotted ref, resolve cross-unit.
+                                # paramTypeBaseNameId/walkLookupTyperefById miss a dotted ref, resolve cross-unit.
                                 fargOpNode: ast.nodes.get i: farg.operation.u64
                                 subT = ztypes.tid.create from: (dottedTyperefId
                                     :ast
