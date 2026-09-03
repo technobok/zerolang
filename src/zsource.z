@@ -132,6 +132,64 @@ projectReadNames: function {dir: StringView into: Set String} is {
     } case err then null
 }
 
+# projectUnitReads -- the member names read as `<unit>.<name>` in every `.z` file
+# directly under `dir` other than the unit's own, as text: a parse per file.
+projectUnitReads: function {dir: StringView uname: StringView into: Set String} is {
+    own: "\{uname}.z"
+    ents: io.listDir path: dir
+    match (
+        ents
+    ) case ok then {
+        with eit: ents.iterate do for e: eit loop {
+            ev: e.stringView
+            if (ev.endsWith suffix: ".z") when ev != own.stringView then {
+                fp: "\{dir}/\{ev}"
+                rd: io.readText path: fp
+                match (
+                    rd
+                ) case ok then {
+                    fileUnitReads root: (ast.parseSource source: rd.take) :uname :into
+                } case err then null
+            }
+        }
+    } case err then null
+}
+
+# fileUnitReads -- the child names of every `<unit>.<child>` dotted path in one
+# parsed file, into `into`. A deeper path `unit.a.b` reads `a`, the export.
+fileUnitReads: function {root: Node.view uname: StringView into: Set String} is {
+    match (
+        root
+    ) case program then {
+        t: root.ast
+        uid: zast.poolFind pool: t.names text: uname
+        if uid.isZero then return
+        ni: 1.u64
+        nn: t.nodes.length
+        for ni < nn loop {
+            nd: t.nodes.get i: ni
+            match (
+                nd
+            ) case dottedpath then {
+                pn: t.nodes.get i: nd.parent.u64
+                match (
+                    pn
+                ) case atomid then {
+                    if pn.name == uid then {
+                        cn: t.nodes.get i: nd.child.u64
+                        match (
+                            cn
+                        ) case atomid then {
+                            into.add item: (zast.poolTextCopy pool: t.names ref: cn.name)
+                        } else null
+                    }
+                } else null
+            } else null
+            ni = ni + 1
+        }
+    } else null
+}
+
 # fileReadNames -- the dotted member reads of one parsed file, into `into`.
 fileReadNames: function {root: Node.view into: Set String} is {
     match (
@@ -3807,6 +3865,7 @@ Analysis: class {
             this.archWalk ast: ast9 nId: mainOp :namedIds
             srcUnits: unitNamesIn dir: srcdir
             if (srcUnits.contains item: uname.string) == false then return
+            this.reportUnusedExports ast: ast9 unitId: mainOp :uname :srcdir
             readNames: (Set String)
             projectReadNames dir: srcdir into: readNames
             projectReadNames dir: systemdir into: readNames
@@ -3818,6 +3877,70 @@ Analysis: class {
                 ) case namedoperation then {
                     tn: zast.poolTextCopy pool: ast9.names ref: m.name
                     this.archFields ast: ast9 opId: m.operation :readNames typeName: tn.stringView
+                } else null
+            }
+        } else null
+    }
+
+    # reportUnusedExports -- A007: a name this unit's `public:` block exports
+    # that no other unit under --src reads as `<unit>.<name>`. An export with
+    # no importer is a private definition wearing a public label, and L012
+    # cannot judge it until the label goes. Units under --system are exempt:
+    # their exports serve examples, tests and the runtime's fragments, none
+    # of them under --src. The read evidence is by name: conservative, so a
+    # same-named read elsewhere hides a hit rather than inventing one.
+    reportUnusedExports: function {
+        :this
+        ast: Ast.view
+        unitId: zast.nodeid
+        uname: StringView
+        srcdir: StringView
+    } is {
+        reads: (Set String)
+        projectUnitReads dir: srcdir :uname into: reads
+        # the entry point is read by the loader, not by a unit
+        mainId: zast.poolFind pool: ast.names text: "main"
+        bodyIds: zast.unitBodyIdsAt :ast :unitId
+        with bit: bodyIds.iterate do for mId: bit loop {
+            m: ast.nodes.get i: mId.u64
+            match (
+                m
+            ) case namedoperation then {
+                if (zast.unitOpKindIs :ast opId: m.operation k: zast.unitkind.publicNs) then {
+                    this.reportUnreadExportsIn :ast opId: m.operation :reads :mainId
+                }
+            } else null
+        }
+    }
+
+    # reportUnreadExportsIn -- each `:name` of one public block that `reads` lacks;
+    # the block's items are the labels' named operations.
+    reportUnreadExportsIn: function {
+        :this
+        ast: Ast.view
+        opId: zast.nodeid
+        reads: (Set String).view
+        mainId: zast.nameid
+    } is {
+        ud: ast.nodes.get i: opId.u64
+        match (
+            ud
+        ) case unitdef then {
+            with it: ud.body.iterate do for lid: it loop {
+                lv: ast.nodes.get i: lid.u64
+                match (
+                    lv
+                ) case namedoperation then {
+                    nm: zast.poolTextCopy pool: ast.names ref: lv.name
+                    if (reads.has item: nm) == false when lv.name != mainId then {
+                        (this.info
+                            code: "A007"
+                            msg: "export `\{nm}` is read by no other unit under --src; make it private and let L012 judge it"
+                            line: lv.lineno
+                            col: lv.colno
+                            width: nm.length.u32.orPanic
+                        )
+                    }
                 } else null
             }
         } else null
