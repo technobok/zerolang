@@ -15978,10 +15978,27 @@ nameClaimedByScope: function {
     frame: ztypes.declid
     name: StringView
 } out bool is {
-    if (nameDenotesUnit :st :frame nameId: (nameIdOf :ast :name)) then return true
+    nid: nameIdOf :ast :name
+    return (nameClaimedByScopeId :st :frame :ast :unitDecl nameId: nid)
+}
+
+# nameClaimedByScopeId -- nameClaimedByScope by the name's id.
+nameClaimedByScopeId: function {
+    # the tree the unit's index is read from
+    ast: Ast
+    # the symbol table the name resolves in
+    st: zenv.ZSymbolTable
+    # the unit whose scope is asked
+    unitDecl: ztypes.declid
+    # the frame the question is asked from
+    frame: ztypes.declid
+    # the name asked about, interned
+    nameId: zast.nameid
+} out bool is {
+    if (nameDenotesUnit :st :frame :nameId) then return true
     # a name the unit DECLARES is claimed whether or not it resolved: a
     # failed declaration is reported once, at the declaration
-    declared: st.typing.declFindChild parentDeclId: unitDecl nameId: (nameIdOf :ast :name)
+    declared: st.typing.declFindChild parentDeclId: unitDecl :nameId
     if (declared.isZero) == false then return true
     # the current unit's own resolved members (its index), not its SURFACE:
     # a definition its `public:` block makes is reachable qualified, never
@@ -15989,7 +16006,7 @@ nameClaimedByScope: function {
     ncr: (childOfWalkIds
         :st
         :unitDecl
-        name: (zast.poolFind pool: ast.names text: name)
+        name: nameId
     )
     match (
         ncr
@@ -15998,8 +16015,8 @@ nameClaimedByScope: function {
     } case none then null
     # `Any` is not user-reachable through the system probe: only a real
     # scope claim above (its own unit defining it) counts.
-    if name == "Any" then return false
-    nameId96: (zast.poolFind pool: ast.names text: name)
+    if (zast.nameTextEq :ast ref: nameId s: "Any") then return false
+    nameId96: nameId
     ncs: (resolveUnitChild
         :st
         :ast
@@ -29573,13 +29590,14 @@ returnedBareFieldName: function {
 unresolvedBareName: function {ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
-    name: StringView
+    # the bare name, interned
+    nameId: zast.nameid
 } out String is {
-    if name.length == 0 then return "".string
+    if nameId.isZero then return "".string
     # `meta` is the enclosing type's raw allocator base (meta.create):
     # contextual, never a unit-resolvable name
-    if name == "meta" then return "".string
-    ubv: st.lookupVarId nameId: (nameIdOf :ast :name)
+    if (zast.nameTextEq :ast ref: nameId s: "meta") then return "".string
+    ubv: st.lookupVarId :nameId
     match (
         ubv
     ) case some then {
@@ -29589,29 +29607,15 @@ unresolvedBareName: function {ast: Ast
     # varId (a `meta.create` result) and a MOVED one (both `lookup` and
     # `lookupVarId` refuse a taken local). A declared name is in scope however
     # it was consumed, so the local's declaration itself is the authority.
-    if (st.isLocalName nameId: (nameIdOf :ast :name)) then return "".string
-    if (nameClaimedByScope
-        :st
-        frame: st.curFrame
-        :ast
-
-        :unitDecl
-        :name
-    ) then return "".string
-    ubw: (walkLookupTyperef
-        :st
-        frame: st.curFrame
-        :ast
-
-        :unitDecl
-        base: name
-    )
+    if (st.isLocalName :nameId) then return "".string
+    if (nameClaimedByScopeId :st frame: st.curFrame :ast :unitDecl :nameId) then return "".string
+    ubw: walkLookupTyperefById :st frame: st.curFrame :ast :unitDecl baseId: nameId
     match (
         ubw
     ) case some then {
         return "".string
     } case none then null
-    return name.string
+    return (zast.nameTextCopy :ast ref: nameId)
 }
 
 # dottedRootName -- the root atom name of a dotted path ("" when the
@@ -29685,15 +29689,15 @@ unresolvedBareCallable: function {
     }
     if arm == 1 then return (unresolvedBareCallable :ast :st :unitDecl nid: innerId)
     if arm == 2 then {
-        ubc: String
-        ubr0: String
+        ubc: zast.nameid
+        ubr0: zast.nameid
         {
             cnode: ast.nodes.get i: callableId.u64
-            ubc = zast.nameTextCopy :ast ref: (atomNameId :ast n: cnode)
-            ubr0 = dottedRootName :ast n: cnode
+            ubc = atomNameId :ast n: cnode
+            ubr0 = rootNameIdOf :ast n: cnode
         }
-        if ubc.length > 0 then return (unresolvedBareName :ast :st :unitDecl name: ubc.stringView)
-        return (unresolvedBareName :ast :st :unitDecl name: ubr0.stringView)
+        if (ubc.isZero) == false then return (unresolvedBareName :ast :st :unitDecl nameId: ubc)
+        return (unresolvedBareName :ast :st :unitDecl nameId: ubr0)
     }
     if arm == 3 then {
         # an operand may carry the unresolvable name (`ghost + 1`)
@@ -29701,19 +29705,16 @@ unresolvedBareCallable: function {
         if ubl.length > 0 then return ubl
         return (unresolvedBareCallable :ast :st :unitDecl nid: rhsId)
     }
-    if arm == 4 then {
-        uba: zast.nameTextCopy :ast ref: nameId
-        return (unresolvedBareName :ast :st :unitDecl name: uba.stringView)
-    }
+    if arm == 4 then return (unresolvedBareName :ast :st :unitDecl :nameId)
     if arm == 5 then {
         # a path is no better than its root (`b.n` with no `b`)
-        ubd: String
+        ubd: zast.nameid
         {
             pn: ast.nodes.get i: parentId.u64
-            ubd = dottedRootName :ast n: pn
+            ubd = rootNameIdOf :ast n: pn
         }
-        if ubd.length == 0 then return "".string
-        return (unresolvedBareName :ast :st :unitDecl name: ubd.stringView)
+        if ubd.isZero then return "".string
+        return (unresolvedBareName :ast :st :unitDecl nameId: ubd)
     }
     return "".string
 }
@@ -29731,13 +29732,13 @@ reportUnresolvedValue: function {
     # the row's shape, root name and position are read through a view scoped
     # to this block: the name probes below lend ast
     isDotted: false
-    ubD: String
+    ubD: zast.nameid
     eLn: u32
     eCo: u32
     {
         vnode: ast.nodes.get i: nid.u64
         isDotted = isDottedValue :ast n: vnode
-        if isDotted then ubD = dottedRootName :ast n: vnode
+        if isDotted then ubD = rootNameIdOf :ast n: vnode
         eLn = nodeLine n: vnode
         eCo = nodeCol n: vnode
     }
@@ -29749,7 +29750,7 @@ reportUnresolvedValue: function {
         # binding sites share that helper and reach bodies whose locals are
         # absent from the scope table, where the negative proof would reject
         # a real name (`lx.advance` in zlexer's Lexer).
-        if isDotted then ubU = unresolvedBareName :ast :st :unitDecl name: ubD.stringView
+        if isDotted then ubU = unresolvedBareName :ast :st :unitDecl nameId: ubD
     }
     if ubU.length == 0 then return
     umU: "Unknown reference '\{ubU}'"
@@ -34159,12 +34160,12 @@ scanTypeNameOpt: function {
     if oId.isZero then return
     # the row is read through a view scoped to this block: the walk below
     # lends ast
-    bn: String
+    bnId: zast.nameid
     {
         o: ast.nodes.get i: oId.u64
-        bn = baseTypeName :ast n: o
+        bnId = rootNameIdOf :ast n: o
     }
-    if bn.length > 0 then maybeWalkMethods :st :frame :unitDecl :ast name: bn.stringView
+    if (bnId.isZero) == false then maybeWalkMethodsById :st :unitDecl :frame :ast nameId: bnId
 
 }
 
@@ -34186,13 +34187,13 @@ scanFnSig: function {
         kP = kP + 1
         pm: argRefAt :ast nid: (zast.nodeid.create from: pmId.u32)
         if (pm.nid.isZero) == false then {
-            bn: baseTypeName :ast n: (ast.nodes.get i: pm.operation.u64)
-            if bn.length > 0 then (maybeWalkMethods
+            bnId: rootNameIdOf :ast n: (ast.nodes.get i: pm.operation.u64)
+            if (bnId.isZero) == false then (maybeWalkMethodsById
                 :st
-                :frame
                 :unitDecl
+                :frame
                 :ast
-                name: bn.stringView
+                nameId: bnId
             )
         }
     }
@@ -34223,9 +34224,9 @@ scanMemberSignatures: function {
             fm: argRefAt :ast nid: (zast.nodeid.create from: fmId.u32)
             if (fm.nid.isZero) == false then {
                 if (nodeIsFunctiondef o: (ast.nodes.get i: fm.operation.u64)) == false then {
-                    bn: baseTypeName :ast n: (ast.nodes.get i: fm.operation.u64)
-                    if bn.length > 0 then {
-                        maybeWalkMethods :st :frame :unitDecl :ast name: bn.stringView
+                    bnId: rootNameIdOf :ast n: (ast.nodes.get i: fm.operation.u64)
+                    if (bnId.isZero) == false then {
+                        maybeWalkMethodsById :st :unitDecl :frame :ast nameId: bnId
                     }
                 }
             }
@@ -37326,18 +37327,23 @@ constDefIsComputed: function {ast: Ast.view n: Node.view} out bool is {
     }
 }
 
-# constValueOfMemberTid -- the memoised compile-time value of a member of the
+# constValueOfMemberTidId -- the memoised compile-time value of a member of the
 # unit whose type id is `unitTid`. A nested namespace has no unit-name index
 # entry to reach it through, but resolveNamespaceUnit has already evaluated its
 # members against this id, so the read is a pure lookup rather than a descent.
-constValueOfMemberTid: function {
+# Asked by the member's name id.
+constValueOfMemberTidId: function {
+    # the tree the constant's expression is read from
     ast: Ast
+    # the symbol table holding the constant-evaluation state
     st: zenv.ZSymbolTable
+    # the unit type the member belongs to
     unitTid: ztypes.tid
-    defName: StringView
+    # the member's name id
+    nameId: zast.nameid
 } out ztypes.cval is {
     if unitTid.isZero then return ztypes.noConst
-    nid: zast.poolFind pool: ast.names text: defName
+    nid: nameId
     if nid.isZero then return ztypes.noConst
     k: st.typing.memberConstKey parentTypeId: unitTid nameId: nid
     sg: st.typing.constEvalState.get key: k
@@ -38202,25 +38208,24 @@ constOfNamedBase: function {
     atNid: zast.nodeid
     atLine: u32
     atCol: u32
-    pt: StringView
-    nameCount: StringView
+    # the base atom's name, interned; zero when the parent is not a bare atom
+    ptId: zast.nameid
+    # the member atom's name, interned
+    ncId: zast.nameid
 } out ztypes.cval is {
-    if pt.length > 0 then {
+    if (ptId.isZero) == false then {
         # `1.u32` is a width-suffixed literal, not a member read: the value
         # is the parent's lexeme and the child only names its type.
-        if (isNumericLiteralName name: pt) then return (constLiteralValue name: pt)
+        if (isNumericLiteralNameAt :ast ref: ptId) then {
+            # the literal is parsed from its spelling, read through a borrow
+            ptT: zast.nameTextAt :ast ref: ptId
+            return (constLiteralValue name: ptT.stringView)
+        }
         # `unit.CONST` reads a constant out of another unit.
-        if (nameDenotesUnit :st :frame nameId: (nameIdOf :ast name: pt)) then {
-            nameId98: (nameIdOf :ast name: pt)
+        if (nameDenotesUnit :st :frame nameId: ptId) then {
+            nameId98: ptId
             unitDecl98: unitDeclOfNameOrOwn :st :frame nameId: nameId98
-            return (constValueOfMember
-                :st
-                :frame
-                :ast
-
-                unitDecl: unitDecl98
-                defName: nameCount
-            )
+            return (constValueOfMemberId :st :frame :ast unitDecl: unitDecl98 nameId: ncId)
         }
         # A nested namespace (`m: unit { NUM: 7 }`) is a definition of THIS
         # unit whose type is a unit; it is deliberately absent from the
@@ -38230,20 +38235,14 @@ constOfNamedBase: function {
                 :st
                 :ast
                 :unitDecl
-                name: (nameIdOf :ast name: pt)
+                name: ptId
             )
             match (
                 nso
             ) case some then {
                 nst: ztypes.tid.create from: nso
                 if (st.reg.typetypeOf typeId: nst) == ztypes.ztypetype.unitType then {
-                    nsv: (constValueOfMemberTid
-                        :st
-                        :ast
-
-                        unitTid: nst
-                        defName: nameCount
-                    )
+                    nsv: constValueOfMemberTidId :st :ast unitTid: nst nameId: ncId
                     if (nsv.kind.none) == false then return nsv
                 }
             } case none then null
@@ -38256,7 +38255,7 @@ constOfNamedBase: function {
         # its first hop, since a subunit's subunit is no child of the file.
         {
             sro: unitFrameOf :st declId: frame
-            nestedNameId9: (nameIdOf :ast name: pt)
+            nestedNameId9: ptId
             sst: (nestedUnitTidOf
                 :st
                 :frame
@@ -38266,13 +38265,7 @@ constOfNamedBase: function {
                 nestedNameId: nestedNameId9
             )
             if (sst.isZero) == false then {
-                ssv: (constValueOfMemberTid
-                    :st
-                    :ast
-
-                    unitTid: sst
-                    defName: nameCount
-                )
+                ssv: constValueOfMemberTidId :st :ast unitTid: sst nameId: ncId
                 if (ssv.kind.none) == false then return ssv
             }
         }
@@ -38282,30 +38275,29 @@ constOfNamedBase: function {
         # first because it is the narrower question -- a name is not both,
         # and classifying a constant by its definition's shape would call
         # `CC: cckind.tcc` a variant and read a nonexistent arm off it.
-        pcv: constValueOfMember :st :frame :ast :unitDecl defName: pt
-        if pcv.kind.armKind then {
-            cnid0: zast.poolFind pool: ast.names text: nameCount
-            if cnid0.isZero then return ztypes.noConst
-            return (boolConst :st :frame :ast v: (pcv.armName == cnid0))
-        }
+        pcv: constValueOfMemberId :st :frame :ast :unitDecl nameId: ptId
+        if pcv.kind.armKind then return (boolConst :st :frame :ast v: (pcv.armName == ncId))
         if pcv.kind.svalKind then {
             return (constStringDotted
                 :st
                 v: pcv
-                name: nameCount
+                name: (zast.nameTextAt :ast ref: ncId).stringView
                 nodeid: atNid
                 lineno: atLine
                 colno: atCol
             )
         }
+        # the arm read is text-keyed: copied on this last leg only
+        ptT2: zast.nameTextCopy :ast ref: ptId
+        ncT2: zast.nameTextCopy :ast ref: ncId
         return (constArmRead
             :st
             :frame
             :ast
 
             lookupUnit: unitDecl
-            typeName: pt
-            armName: nameCount
+            typeName: ptT2.stringView
+            armName: ncT2.stringView
         )
     }
     return ztypes.noConst
@@ -38477,26 +38469,26 @@ evalConstDotted: function {
     ln: u32
     co: u32
 } out ztypes.cval is {
-    nameCount: String
+    ncId: zast.nameid
     {
         chn: ast.nodes.get i: childId.u64
-        if chn.atomid then nameCount = zast.nameTextCopy :ast ref: chn.name
+        if chn.atomid then ncId = chn.name
     }
-    if nameCount.length == 0 then return ztypes.noConst
-    pt: String
+    if ncId.isZero then return ztypes.noConst
+    ptId: zast.nameid
     parentIsDotted: false
     gpId: zast.nodeid
     gcId: zast.nodeid
     {
         pn: ast.nodes.get i: parentId.u64
-        if pn.atomid then pt = zast.nameTextCopy :ast ref: pn.name
+        if pn.atomid then ptId = pn.name
         if pn.dottedpath then {
             parentIsDotted = true
             gpId = pn.parent
             gcId = pn.child
         }
     }
-    if pt.length > 0 then {
+    if (ptId.isZero) == false then {
         pbv: (constOfNamedBase
             :st
             :frame
@@ -38505,8 +38497,8 @@ evalConstDotted: function {
             atNid: nid
             atLine: ln
             atCol: co
-            pt: pt.stringView
-            nameCount: nameCount.stringView
+            :ptId
+            :ncId
         )
         if (pbv.kind.none) == false then return pbv
     }
@@ -38516,11 +38508,7 @@ evalConstDotted: function {
     # name would find that variant and answer with an arm where the
     # question was "does it hold this one".
     pv: evalConstNode :st :frame :ast :unitDecl nid: parentId
-    if pv.kind.armKind then {
-        cnid: zast.poolFind pool: ast.names text: nameCount.stringView
-        if cnid.isZero then return ztypes.noConst
-        return (boolConst :st :frame :ast v: (pv.armName == cnid))
-    }
+    if pv.kind.armKind then return (boolConst :st :frame :ast v: (pv.armName == ncId))
     # a literal receiver (`"abcd".length`) or a qualified constant
     # (`quadfloat.LIB.length`): the parent is not a bare atom, so its value
     # comes from the recursive walk above rather than from a member read.
@@ -38528,7 +38516,7 @@ evalConstDotted: function {
         return (constStringDotted
             :st
             v: pv
-            name: nameCount.stringView
+            name: (zast.nameTextAt :ast ref: ncId).stringView
             nodeid: nid
             lineno: ln
             colno: co
@@ -38538,7 +38526,9 @@ evalConstDotted: function {
     # The parent is a dotted path of its own, so the type must be looked up
     # from that unit rather than from the one being evaluated.
     if parentIsDotted then {
-        qa: evalConstArmViaUnit :st :frame :ast :gpId :gcId nameCount: nameCount.stringView
+        # the arm name reaches a text-keyed reader; copied on this leg only
+        ncT: zast.nameTextCopy :ast ref: ncId
+        qa: evalConstArmViaUnit :st :frame :ast :gpId :gcId nameCount: ncT.stringView
         if (qa.kind.none) == false then return qa
     }
     return ztypes.noConst
