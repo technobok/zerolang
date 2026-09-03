@@ -159,6 +159,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-08-28 | 33e4e5fa | [generic families, then four pre-existing defects](#r-33e4e5fa) | 0.45s | -- | 93MB / -- | 108 / 190 / 174 (total 469, medians of 5) | 4,912,311 | 315MB | -- | 110,984 |
 | 2026-09-03 | 86e7d6f5 | [the `outx` arc, then three measured reductions](#r-86e7d6f5) | 0.47s | -- | 93MB / -- | 112 / 194 / 179 (total 486, medians of 5) | 5,070,508 | 321MB | -- | 116,954 |
 | 2026-09-03 | 49b9b267 | [name-text copies become name ids](#r-49b9b267) | 0.46s | -- | 91MB / -- | 109 / 185 / 174 (total 470, medians of 5) | 4,718,425 | 315MB | -- | 116,971 |
+| 2026-09-03 | 56e15e82 | [resolution by id](#r-56e15e82) | 0.46s | -- | 91MB / -- | 109 / 179 / 173 (total 471, medians of 5) | 4,625,858 | 314MB | -- | 117,169 |
 
 2026-08-05 note -- **the measurement floor of this setup, established by
 repetition, and the trap that produced a fake baseline.**
@@ -2062,3 +2063,54 @@ tests on the spelling), and match-arm labels (`checkCaseClause`). Moving
 those is the "resolution by id" arc, not a phase of this one: a name there
 is minted, labelled and parsed as text, and a view cannot live across the
 exclusive `:ast` those walks pass.
+
+<a id="r-56e15e82"></a>
+### Resolution by id
+
+**2026-09-03 · `e4788990`..`56e15e82`**
+
+The successor to *Name-text copies become name ids*: the def-resolution and
+body-walk cores took names as text and re-found the id at every step. Each
+phase is a commit A/B'd on identical input against the commit before it
+(`out/zc-perf`, gcc -O1, `perf stat -r 7` + valgrind). On this input the same
+binary moves up to ~20M instructions between invocations, so allocations
+(deterministic) are the metric and instruction deltas below that are
+reported as "at the floor".
+
+| commit | phase | allocations | instructions |
+|---|---|---|---|
+| `e4788990` | R1a round trips: typeref-stamp origin id, receiver roots (`methodReceiverRootId`, `lockMethodReceiver rroId:`), generic-param returns, `markerPeeledBaseId`, arm refusals copy inside the refusal | −34,416 (−0.73%) | −7.0M |
+| `f308278a` | R1b emitter: 14 more name reads are views; C byte-identical | −13,584 (−0.29%) | floor |
+| `f48db995` | R2 body walk: `walkDeclaredDef nameId:`, `checkFunctionBody defNameId:` beside the label, `checkMethodBodies typeNameId:` (one copy per owner type, not per walk), `methodDeclOf`/`setSynthOwnerLabel` by id | −18,571 (−0.40%) | floor |
+| `93c5eafa` | R3 resolver core: `resolveAtomType`/`resolveNamedTypeId`/`descendNamedId`/`definingSiteForId`/`nameIsInUnitReftypeId`, `recordResolvedName nameId:`, the alias resolvers by id | −9,452 (−0.20%) | floor |
+| `be8645d6` | R3b `declareCanonicalTypeId` / `linkDeclTypeId`: the mint funnel by id | −10,248 (−0.22%) | floor |
+| `56e15e82` | R4 constant evaluator, unresolved-name probe, method-walk triggers by id | −7,569 (−0.16%) | floor |
+
+Net over the arc, identical input: **−92,567 allocations (−1.96%)** off `49b9b267` (4,718,425 → 4,625,858 on the self-compile); the
+name-copy family fell from 148,930 blocks (3.2%) to 50,835 (1.1%).
+
+**What made it cheap, again.** Every text-keyed API in these cores began
+with a find (`nameIdOf`, `poolFind`, `pool.find`): an id twin is the body
+after that line, and the text form becomes a one-line wrapper (interning a
+spelling it does not find where the body used to mint by text). Flip the
+producer, let the typechecker enumerate; bind the id BEFORE a call that also
+takes `:ast` (a `poolFind` inside the argument list is refused as `ast.names`
+inside `ast`); a spelling that must be parsed is read through a block-scoped
+borrow, one that must be minted is copied once in the mint leg; a label is
+built from a borrow or from the caller's text, never both (the A002 ratchet
+counts composed interpolations). `make style-lint` (the `--full`,
+typecheck-tier lint) kept catching what the plain `bin/zl lint` did not: L012
+for a definition whose last caller the wave converted -- run it as the last
+step before `make ci`.
+
+**Left, and why.** 50,835 blocks (1.1%) remain, all small and text-native or per-site:
+`constOfNamedBase`'s two text-keyed legs (6.7k: the arm read and the
+unit-qualified arm, which take `typeName`/`armName` text), `atomName`'s
+label consumers (6.2k: `checkCaseClause`, `collectMonoRefArgs`, which store
+or label with the text), `baseTypeName` (4.9k) and `paramTypeBaseName`
+(2.7k) consumers, `resolveFunctionParam` (3.5k, `ptnT` → `walkLookupTyperef
+base:`), `emitMatchStmt` (3.3k, arm names into an owning list),
+`recordUnitConformerContexts` (2.5k), `resolveDemandedDecl` (2.3k, `resolveDef
+defName:`), `stampUnitMonoMembers` (2.2k, template labels), and a tail of
+sites under 2k. Each is one more id twin or a label that must be text; none
+is a family.
