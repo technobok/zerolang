@@ -61,31 +61,6 @@ TmpCtr: class {
     }
 }
 
-# vidOrZero -- an (optionval vid) to a plain vid (0 when none).
-vidOrZero: function {o: optionval ztypes.vid} out ztypes.vid is {
-    match (
-        o
-    ) case some then {
-        return o
-    } case none then {
-        return (ztypes.vid.create from: 0)
-    }
-}
-
-# tidOrZero -- the same for an optional TYPE id. A sibling rather than a
-# conversion at each call: an `optionval tid` is not an `optionval u64`,
-# since a typedef stands in for its base as a whole value, not as a
-# generic argument.
-tidOrZero: function {o: optionval ztypes.tid} out ztypes.tid is {
-    match (
-        o
-    ) case some then {
-        return o
-    } case none then {
-        return (ztypes.tid.create from: 0)
-    }
-}
-
 # opCnameOf -- a C-identifier spelling for an operator method name (a
 # typedef's shadowed `==`, a numeric `+`), "" for ordinary names.
 opCnameOf: function {name: StringView} out String is {
@@ -155,12 +130,12 @@ ctxCname: function {ctx: Ctx.view tid: ztypes.tid} out String is {
 
 # atomVid -- the variable a reference node resolves to, or 0.
 atomVid: function {symtab: zenv.ZSymbolTable.view nid: u64} out ztypes.vid is {
-    return (vidOrZero o: (symtab.typing.atomVariableId.get key: nid))
+    return ((symtab.typing.atomVariableId.get key: nid).or d: (ztypes.vid.create from: 0))
 }
 
 # defVid -- the variable a binding node introduces, or 0.
 defVid: function {symtab: zenv.ZSymbolTable.view nid: u64} out ztypes.vid is {
-    return (vidOrZero o: (symtab.typing.defVariableId.get key: nid))
+    return ((symtab.typing.defVariableId.get key: nid).or d: (ztypes.vid.create from: 0))
 }
 
 # atomNodeIdDeep -- atomNodeId through `expression` wrappers, mirroring
@@ -2498,13 +2473,12 @@ builtinTidInU: function {
     # ...) and consumes what resolution already minted: the read-only walk
     # answers without the checker's mint legs.
     ud9: ztypecheck.unitDeclOfName st: symtab nameId: (zast.poolFind pool: ast.names text: unitName)
-    return (ztypecheck.optU64Or o: (ztypecheck.walkLookupTyperefRo
+    return ((ztypecheck.walkLookupTyperefRo
         frame: ztypes.declid
         :ast
         st: symtab
         unitDecl: ud9
-        :base) d: 0
-    )
+        :base).or d: 0)
 }
 
 # builtinTid -- builtinTidInU with no unit named, so a user type of the same
@@ -5278,10 +5252,11 @@ emitNativeArgMethod: function {
         rd: "(*\{recv})"
         recv = rd.copy
     }
-    mtid: ztypes.tid.create from: (ztypecheck.optU64Or
-        o: (symtab.typing.declChildOf pool: ast.names parentTypeId: ownerTid name: mn)
-        d: 0
-    )
+    mtid: ztypes.tid.create from: ((symtab.typing.declChildOf
+        pool: ast.names
+        parentTypeId: ownerTid
+        name: mn
+    ).or d: 0)
     if mtid.isZero then return "".string
     rn: (List String)
     rv: (List String)
@@ -6556,10 +6531,10 @@ callRhsIsBorrow: function {
     if chId.isZero then return false
     rid: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
     rid = chaseColMono :symtab :ctx tid: (ztypes.tid.create from: rid.u64)
-    mfid: ztypecheck.optU64Or o: (symtab.typing.declChildOfId
+    mfid: (symtab.typing.declChildOfId
         parentTypeId: rid
         nameId: chId
-    ) d: 0
+    ).or d: 0
     return (funcBorrowFlag :symtab tid: (ztypes.tid.create from: mfid.u64))
 }
 
@@ -6663,11 +6638,11 @@ refBorrowCalleeFid: function {
         if ch8.length == 0 then return 0
         rid8: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: n.callable.u64)
         rid8 = chaseColMono :symtab :ctx tid: (ztypes.tid.create from: rid8.u64)
-        mf8: ztypecheck.optU64Or o: (symtab.typing.declChildOf
+        mf8: (symtab.typing.declChildOf
             pool: ast.names
             parentTypeId: rid8
             name: ch8
-        ) d: 0
+        ).or d: 0
         if (funcBorrowFlag :symtab tid: (ztypes.tid.create from: mf8.u64)) then return mf8
         return 0
     } case dottedpath then {
@@ -10271,9 +10246,7 @@ emitFnptrFieldCall: function {
         mnId: zast.poolFind pool: ast.names text: mn
         if mnId > 0 then {
             fnTid = (ztypes.tid.create
-                from: (ztypecheck.optU64Or
-                    o: (symtab.typing.declChildOfId parentTypeId: rtid nameId: mnId) d: 0
-                )
+                from: ((symtab.typing.declChildOfId parentTypeId: rtid nameId: mnId).or d: 0)
             )
         }
     }
@@ -16697,13 +16670,13 @@ typeIdByNameStages: function {
     ) case some then {
         return mo
     } case none then null
-    lr: ztypecheck.optU64Or o: (ztypecheck.walkLookupTyperefByIdRo
+    lr: (ztypecheck.walkLookupTyperefByIdRo
         frame: ztypes.declid
         :ast
         st: symtab
         unitDecl: ctx.mainUnitId
         baseId: nameId
-) d: 0
+).or d: 0
     if lr > 0 then return lr
     # cross-unit: the type may live in a dep unit (zlexer/zast/zvfs) outside
     # walkLookupTyperefById's search list. Pass 1 probes each unit scope by id
@@ -17161,12 +17134,10 @@ matchElseNarrowing: function {
             )
             if aliasText.length > 0 then {
                 meV.append aliasText
-                meT = ztypes.tid.create from: (ztypecheck.optU64Or
-                    o: (symtab.typing.declChildOfId
+                meT = ztypes.tid.create from: ((symtab.typing.declChildOfId
                         parentTypeId: (ztypes.tid.create from: vtid.u64)
                         nameId: armME
-                    ) d: 0
-                )
+                    ).or d: 0)
                 meSeed = true
             }
         }
@@ -17307,7 +17278,10 @@ emitMatchStmt: function {
     if meSeed then {
         pv: vvGet xs: ctx.narrowBox vid: snameV
         mePrevV = pv
-        mePrevT = ztypes.tid.create from: (tidOrZero o: (vtGet xs: ctx.narrowTid vid: snameV))
+        mePrevT = ztypes.tid.create from: ((vtGet
+            xs: ctx.narrowTid
+            vid: snameV
+        ).or d: (ztypes.tid.create from: 0))
         vvSet xs: ctx.narrowBox vid: snameV val: meV.stringView
         vtSet xs: ctx.narrowTid vid: snameV tid: (ztypes.tid.create from: meT.u64)
     }
@@ -18347,10 +18321,10 @@ emitObjIterPayload: function {
         # are never double-freed).
         payElemPfx: oovorig.length + 1
         payElemName: monoElemName full: ovn prefixLen: payElemPfx
-        payElemTid: ztypecheck.optU64Or o: (symtab.typing.declChildOfId
+        payElemTid: (symtab.typing.declChildOfId
             parentTypeId: ovid
             nameId: zast.names.wkSome
-        ) d: 0
+        ).or d: 0
         payScalarC: (cTypeForNameTid
             :ast
             :symtab
@@ -19075,11 +19049,11 @@ seedPositiveCore: function {
     names.append subj.string
     svids.append (atomVid :symtab nid: (atomNodeId n: parent))
     vals.append aliasText
-    pt: ztypecheck.optU64Or o: (symtab.typing.declChildOf
+    pt: (symtab.typing.declChildOf
         pool: ast.names
         parentTypeId: tid
         name: childName
-    ) d: 0
+    ).or d: 0
     tids.append pt
 }
 
@@ -19136,11 +19110,11 @@ seedNegatedFromPredicate: function {
         names.append subj.string
         svids.append snv
         vals.append aliasText
-        pt: ztypecheck.optU64Or o: (symtab.typing.declChildOf
+        pt: (symtab.typing.declChildOf
             pool: ast.names
             parentTypeId: (ztypes.tid.create from: dap.u64)
             name: rem.stringView
-        ) d: 0
+        ).or d: 0
         tids.append pt
     } else null
 }
@@ -19921,7 +19895,7 @@ emitIfClause: function {
             snv0: sVid.get i: si
             pv: vvGet xs: ctx.narrowBox vid: snv0
             sPrevV.append pv
-            ptv: tidOrZero o: (vtGet xs: ctx.narrowTid vid: snv0)
+            ptv: (vtGet xs: ctx.narrowTid vid: snv0).or d: (ztypes.tid.create from: 0)
             sPrevT.append ptv
             svv: sV.get i: si
             vvSet xs: ctx.narrowBox vid: snv0 val: svv.stringView
@@ -20006,7 +19980,7 @@ emitElse: function {
                 exN.append fv
                 pvc: pv0.copy
                 exPrevV.append pvc
-                exPrevT.append (tidOrZero o: (vtGet xs: ctx.exclTids vid: fv))
+                exPrevT.append ((vtGet xs: ctx.exclTids vid: fv).or d: (ztypes.tid.create from: 0))
                 fa: chArms.get i: fi
                 nx: String
                 if pv0.length > 0 then {
@@ -20075,21 +20049,20 @@ emitElse: function {
                         if aliasText.length > 0 then {
                             pv: vvGet xs: ctx.narrowBox vid: gv
                             sPrevV.append pv
-                            ptv: (tidOrZero
-                                o: (vtGet xs: ctx.narrowTid vid: gv)
-                            )
+                            ptv: ((vtGet
+                                xs: ctx.narrowTid
+                                vid: gv
+                            ).or d: (ztypes.tid.create from: 0))
                             sPrevT.append ptv
                             gsv: gs.copy
                             sN.append gsv
                             sVid.append gv
                             vvSet xs: ctx.narrowBox vid: gv val: aliasText.stringView
-                            pt: (ztypecheck.optU64Or
-                                o: (symtab.typing.declChildOf
+                            pt: ((symtab.typing.declChildOf
                                     pool: ast.names
                                     parentTypeId: (ztypes.tid.create from: gtid.u64)
                                     name: fArm.stringView
-                                ) d: 0
-                            )
+                                ).or d: 0)
                             vtSet xs: ctx.narrowTid vid: gv tid: (ztypes.tid.create from: pt.u64)
                             cmtS: "\{ind}    /* alias: \{gs} => \{aliasText} */\n"
                             buf.append cmtS
@@ -20548,7 +20521,7 @@ emitBodyNode: function {
                 # subject's identifier, and the narrowing tables below key on
                 # the subject's variable
                 pgRecv: String
-                pgrv: vidOrZero o: (symtab.typing.postGuardVarId.get key: pgid)
+                pgrv: (symtab.typing.postGuardVarId.get key: pgid).or d: (ztypes.vid.create from: 0)
                 if pgrv > 0 when pgRawN.length > 0 then {
                     pgre: varCName :ctx vid: pgrv name: pgRawN.stringView
                     pgRecv = pgre
@@ -20575,9 +20548,7 @@ emitBodyNode: function {
                 {
                     if pgRawN.length > 0 when pgRecv.length > 0 when guardStampTid > 0 when guardStampArm.length > 0 then {
                         accessOp: ".".string
-                        pgv: (vidOrZero
-                            o: (symtab.typing.postGuardVarId.get key: pgid)
-                        )
+                        pgv: ((symtab.typing.postGuardVarId.get key: pgid).or d: (ztypes.vid.create from: 0))
                         if (isPtrVid :ctx vid: pgv) then accessOp = "->".string
                         aliasText: (armAliasText
                             :ast
@@ -20591,18 +20562,17 @@ emitBodyNode: function {
                         if aliasText.length > 0 then {
                             pv: vvGet xs: ctx.narrowBox vid: pgrv
                             pgPrevV.append pv
-                            ptv: (tidOrZero
-                                o: (vtGet xs: ctx.narrowTid vid: pgrv)
-                            )
+                            ptv: ((vtGet
+                                xs: ctx.narrowTid
+                                vid: pgrv
+                            ).or d: (ztypes.tid.create from: 0))
                             pgPrevT.append ptv
                             vvSet xs: ctx.narrowBox vid: pgrv val: aliasText.stringView
-                            pt: (ztypecheck.optU64Or
-                                o: (symtab.typing.declChildOf
+                            pt: ((symtab.typing.declChildOf
                                     pool: ast.names
                                     parentTypeId: guardStampTid
                                     name: guardStampArm.stringView
-                                ) d: 0
-                            )
+                                ).or d: 0)
                             (vtSet
                                 xs: ctx.narrowTid
                                 vid: pgrv
@@ -23510,24 +23480,13 @@ cSlotName: function {name: StringView} out String is {
     return result
 }
 
-# optU8Or -- an (optionval u8) to a plain u8 with a default.
-optU8Or: function {o: optionval u8 d: u8} out u8 is {
-    match (
-        o
-    ) case some then {
-        return o
-    } case none then {
-        return d
-    }
-}
-
 # ctEndsWithStar -- true if the C type string ends in '*' (a pointer return:
 # union, protocol, Map/Set, or a user reftype passed by reference). Takes a `ct`
 # param so `.length`/`.byteAt` emit as field/method ops (a chained `.stringView`
 # receiver mis-emits a free function call).
 ctEndsWithStar: function {ct: StringView} out bool is {
     if ct.length == 0 then return false
-    lb: optU8Or o: (ct.byteAt (ct.length - 1)) d: 0
+    lb: (ct.byteAt (ct.length - 1)).or d: 0
     if lb == 42 then return true
     return false
 }
@@ -23554,20 +23513,20 @@ refsLocal: function {expr: StringView name: StringView} out bool is {
         eq: true
         k: u64
         for k < nl loop {
-            ebv: optU8Or o: (expr.byteAt (i + k)) d: 0
-            nbv: optU8Or o: (name.byteAt k) d: 1
+            ebv: (expr.byteAt (i + k)).or d: 0
+            nbv: (name.byteAt k).or d: 1
             if ebv != nbv then eq = false
             k = k + 1
         }
         if eq then {
             beforeOk: true
             if i > 0 then {
-                if (isIdChar b: (optU8Or o: (expr.byteAt (i - 1)) d: 0)) then beforeOk = false
+                if (isIdChar b: ((expr.byteAt (i - 1)).or d: 0)) then beforeOk = false
             }
             afterOk: true
             ep: i + nl
             if ep < el then {
-                if (isIdChar b: (optU8Or o: (expr.byteAt ep) d: 0)) then afterOk = false
+                if (isIdChar b: ((expr.byteAt ep).or d: 0)) then afterOk = false
             }
             if beforeOk when afterOk then return true
         }
@@ -30660,11 +30619,11 @@ emitProtocolDispatch: function {
         acc: acc.stringView
         isFacet: isFacetR
     )
-    mtid: ztypecheck.optU64Or o: (symtab.typing.declChildOf
+    mtid: (symtab.typing.declChildOf
         pool: ast.names
         parentTypeId: rtid
         name: mn
-    ) d: 0
+    ).or d: 0
     mpNames: (List String)
     mpIds: (ListVal u64)
     mpIds9Nm: (ListVal u64)
