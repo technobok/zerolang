@@ -26238,11 +26238,12 @@ emitIoFileConformance: function {
                         okEmit = typeIsUsed :ctx tid: (ztypes.tid.create from: ti.u64)
                     }
                     if okEmit then {
-                        (emitProtocolImplsForType
+                        (emitConformanceImplsForType
                             :ast
                             :symtab
                             :ctx
                             implTid: (ztypes.tid.create from: ti.u64)
+                            isFacet: false
                             :buf
                         )
                     }
@@ -28897,98 +28898,72 @@ emitFacetImpl: function {
     buf.append fc0
 }
 
-# emitFacetImplsForType -- emit facet conformance helpers for every FACET the
-# given impl type satisfies. Class impls are skipped (a class copied into an
-# inline union would violate the valtype guarantee; the checker gap is
-# front-end work).
-emitFacetImplsForType: function {
+# emitConformanceImplsForType -- the conformance helpers one impl type owes a
+# family: every row of the conformance table naming it, each emitted once.
+# The families differ in which impls they accept and which helper they emit,
+# and in nothing else.
+emitConformanceImplsForType: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     implTid: ztypes.tid
+    # which family to emit for: a facet's helpers, or a protocol's
+    isFacet: bool
     buf: String.borrow
 } is {
-    if (symtab.reg.typetypeOf typeId: implTid) != ztypes.ztypetype.recordType then return
+    # a class impl is skipped for a facet: a class copied into an inline union
+    # would break the valtype guarantee, and catching that is front-end work
+    if isFacet then {
+        if (symtab.reg.typetypeOf typeId: implTid) != ztypes.ztypetype.recordType then return
+    }
     if (typeStructEmitted :ctx tid: implTid) == false then return
-    ftids: (ListVal u64)
-    flabels: (List String)
-    frows: (ListVal u64)
-    fri: u64
+    tids: (ListVal u64)
+    labels: (List String)
+    rows: (ListVal u64)
+    ri: u64
     with citer: symtab.typing.conformance.iterate do for row: citer loop {
         if row.implTypeId == implTid then {
-            ftids.append row.specTypeId
-            flabels.append row.label.copy
-            frows.append fri
+            tids.append row.specTypeId
+            labels.append row.label.copy
+            rows.append ri
         }
-        fri = fri + 1
+        ri = ri + 1
     }
-    fi: u64
-    fn: ftids.length
-    for fi < fn loop {
-        ftid: ftids.get i: fi
-        flabel: flabels.get i: fi
-        fdone: conformanceRowEmitted :ctx row: (frows.get i: fi)
+    want: ztypes.ztypetype.protocolType
+    if isFacet then want = ztypes.ztypetype.facetType
+    i: u64
+    n: tids.length
+    for i < n loop {
+        tid: tids.get :i
+        label: labels.get :i
+        done: conformanceRowEmitted :ctx row: (rows.get :i)
         if (symtab.reg.typetypeOf
-            typeId: (ztypes.tid.create from: ftid.u64)
-        ) == ztypes.ztypetype.facetType when (fdone) == false then {
-            conformanceRowMark :ctx row: (frows.get i: fi)
-            (emitFacetImpl
-                :ast
-                :symtab
-                :ctx
-                :implTid
-                facetTid: (ztypes.tid.create from: ftid.u64)
-                label: flabel.stringView
-                :buf
-            )
+            typeId: (ztypes.tid.create from: tid.u64)
+        ) == want when (done) == false then {
+            conformanceRowMark :ctx row: (rows.get :i)
+            if isFacet then {
+                (emitFacetImpl
+                    :ast
+                    :symtab
+                    :ctx
+                    :implTid
+                    facetTid: (ztypes.tid.create from: tid.u64)
+                    label: label.stringView
+                    :buf
+                )
+            } else {
+                (emitProtocolImpl
+                    :ast
+                    :symtab
+                    :ctx
+                    :implTid
+                    protoTid: (ztypes.tid.create from: tid.u64)
+                    label: label.stringView
+                    :buf
+                )
+            }
         }
-        fi = fi + 1
-    }
-}
-
-# emitProtocolImplsForType -- emit conformance helpers for every PROTOCOL the
-# given impl type satisfies (facet conformances emit via emitFacetImplsForType).
-emitProtocolImplsForType: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    implTid: ztypes.tid
-    buf: String.borrow
-} is {
-    if (typeStructEmitted :ctx tid: implTid) == false then return
-    ptids: (ListVal u64)
-    plabels: (List String)
-    prows: (ListVal u64)
-    pri: u64
-    with citer: symtab.typing.conformance.iterate do for row: citer loop {
-        if row.implTypeId == implTid then {
-            ptids.append row.specTypeId
-            plabels.append row.label.copy
-            prows.append pri
-        }
-        pri = pri + 1
-    }
-    pi: u64
-    pn: ptids.length
-    for pi < pn loop {
-        ptid: ptids.get i: pi
-        plabel: plabels.get i: pi
-        pdone: conformanceRowEmitted :ctx row: (prows.get i: pi)
-        if (symtab.reg.typetypeOf
-            typeId: (ztypes.tid.create from: ptid.u64)
-        ) == ztypes.ztypetype.protocolType when (pdone) == false then {
-            conformanceRowMark :ctx row: (prows.get i: pi)
-            (emitProtocolImpl
-                :ast
-                :symtab
-                :ctx
-                :implTid
-                protoTid: (ztypes.tid.create from: ptid.u64)
-                label: plabel.stringView
-                :buf
-            )
-        }
-        pi = pi + 1
+        i = i + 1
     }
 }
 
@@ -30339,18 +30314,20 @@ emitRecordDefsIn: function {
                     nmi7: zast.nameTextAt :ast ref: bi.name
                     iid7: userFnId :ast :symtab :ctx name: nmi7.stringView
                     if iid7 > 0 then {
-                        (emitProtocolImplsForType
+                        (emitConformanceImplsForType
                             :ast
                             :symtab
                             :ctx
                             implTid: iid7
+                            isFacet: false
                             :buf
                         )
-                        (emitFacetImplsForType
+                        (emitConformanceImplsForType
                             :ast
                             :symtab
                             :ctx
                             implTid: iid7
+                            isFacet: true
                             :buf
                         )
                     }
