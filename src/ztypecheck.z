@@ -189,25 +189,31 @@ addResolveError: function {st: zenv.ZSymbolTable e: zast.err msg: String} is {
     }
 }
 
-# stampGate -- a body-walk node stamp that suppresses GENERIC_PARAM values
-# during a generic template walk: the emitter re-walks the shared template
-# AST per instance and must not see template-time param stamps.
+# monoSubstTid -- a tid met during an INSTANCE walk, substituted through the
+# instance's type arguments; the tid itself where the instance binds nothing
+# for it.
+monoSubstTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
+    return ((st.typing.monoParamSubst.get key: tid).or d: tid)
+}
+
+# stampParamSuppressed -- a TEMPLATE walk drops a GENERIC_PARAM answer: the
+# emitter re-walks the shared template AST per instance and must not see
+# template-time param stamps.
+stampParamSuppressed: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    if (st.typing.suppressParamStamps) == false then return false
+    return (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.genericParam
+}
+
+# stampGate -- a body-walk node stamp, routed: an instance walk writes the
+# mono table under the substituted tid, a template walk drops a param answer,
+# and every other walk writes the plain node type.
 stampGate: function {st: zenv.ZSymbolTable nid: u64 tid: ztypes.tid} is {
     if st.typing.curMonoStamp > 0 then {
-        mtid: tid
-        subo: st.typing.monoParamSubst.get key: tid
-        match (
-            subo
-        ) case some then {
-            mtid = ztypes.tid.create from: (subo)
-        } case none then null
         mk: (ztyping.monostamp mono: st.typing.curMonoStamp node: nid)
-        st.typing.monoNodeType.set key: mk value: mtid
+        st.typing.monoNodeType.set key: mk value: (monoSubstTid :st :tid)
         return
     }
-    if st.typing.suppressParamStamps then {
-        if (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.genericParam then return
-    }
+    if (stampParamSuppressed :st :tid) then return
     ztyping.nodeTypeSet tbl: st.typing.nodeType :nid :tid
 }
 
@@ -227,21 +233,12 @@ stampBinopOp: function {
 } is {
     if owner.isZero then return
     if st.typing.curMonoStamp > 0 then {
-        mow: owner
-        subo: st.typing.monoParamSubst.get key: owner
-        match (
-            subo
-        ) case some then {
-            mow = ztypes.tid.create from: (subo)
-        } case none then null
         mk: (ztyping.monostamp mono: st.typing.curMonoStamp node: nid)
-        st.typing.monoBinopOwner.set key: mk value: mow
+        st.typing.monoBinopOwner.set key: mk value: (monoSubstTid :st tid: owner)
         st.typing.monoBinopMethod.set key: mk value: method
         return
     }
-    if st.typing.suppressParamStamps then {
-        if (st.reg.typetypeOf typeId: owner) == ztypes.ztypetype.genericParam then return
-    }
+    if (stampParamSuppressed :st tid: owner) then return
     st.typing.binopOwner.set key: nid value: owner
     st.typing.binopMethod.set key: nid value: method
 }
@@ -278,9 +275,8 @@ addErrorH: function {
     }
 }
 
-# addResolveErrorH -- addErrorH for resolution-time callers that hold the
-# ZTyping directly (no symbol table yet); same dedup, so re-entrant
-# resolution passes report once.
+# addResolveErrorH -- a resolution-time diagnostic: addErrorH with no note and
+# no hint, so a re-entrant resolution pass reports through the same dedup.
 addResolveErrorH: function {
     st: zenv.ZSymbolTable
     nodeid: zast.nodeid
@@ -290,24 +286,7 @@ addResolveErrorH: function {
     msg: String
     width: u32
 } is {
-    dup: false
-    with it: st.typing.errors.iterate do for prev: it loop {
-        if prev.lineno == lineno when prev.msg.stringView == msg.stringView then dup = true
-    }
-    if (dup) == false then {
-        st.typing.errors.append (zast.ErrorData
-            :nodeid
-            :lineno
-            :colno
-            :width
-            err: e
-            msg: msg.copy
-            fsno: zvfs.fsno
-            note: "".string
-            hint: "".string
-        )
-        st.typing.isError = true
-    }
+    addErrorH :st :nodeid :lineno :colno :e msg: msg.copy note: String hint: String :width
 }
 
 # addError -- append a typecheck diagnostic to the typing's error list,
