@@ -618,6 +618,38 @@ docHasWord: function {xs: (List String).view w: StringView} out bool is {
     return found
 }
 
+# docFoldTemplate -- the words of a doc body with every word the declaration itself
+# supplies, and every word carrying a digit (a width, a count), folded to `_`: a body
+# written once per type or per bit-width reads as the one body it is.
+docFoldTemplate: function {
+    words: (List String).view
+    vocab: (List String).view
+} out (List String) is {
+    folded: (List String)
+    with it: words.iterate do for w: it loop {
+        fold: docHasWord xs: vocab w: w.stringView
+        if (fold) == false then fold = docHasDigit w: w.stringView
+        if fold then {
+            folded.append from: "_".string
+        } else {
+            folded.append from: w.copy
+        }
+    }
+    return folded
+}
+
+# docHasDigit -- the word carries a decimal digit.
+docHasDigit: function {w: StringView} out bool is {
+    i: u64
+    n: w.length
+    for i < n loop {
+        c: docByteAt s: w :i
+        if c >= 48 when (c <= 57) then return true
+        i = i + 1
+    }
+    return false
+}
+
 # docJoinWords -- the words joined by single spaces: the normalised key two doc bodies
 # are the same under. Case, punctuation and wrapping all wash out here, so a comment
 # re-wrapped at a different width still matches its twin.
@@ -2171,6 +2203,8 @@ Analysis: class {
     # file. A real invariant stated at forty sites is one invariant and thirty-nine
     # copies: state it once, in the unit header, and leave the sites bare. Blocks under
     # four words are section markers and separators, not docs, and are not counted.
+    # Bodies are compared with the declaration's own words and every width folded
+    # out, so "u8 to i16: every u8 fits i16" and its u16 twin are one body.
     reportDuplicateDocs: function {:this} is {
         keys: (List String)
         starts: (ListVal u64)
@@ -2202,7 +2236,13 @@ Analysis: class {
                 ws: (List String)
                 docWordsInto s: buf.stringView into: ws
                 if ws.length >= 4 then {
-                    key: docJoinWords xs: ws
+                    vocab: (List String)
+                    if i < n then {
+                        decl: (this.lines.get :i).copy
+                        docVocabInto s: (docStripComment ln: decl.stringView) into: vocab
+                    }
+                    folded: docFoldTemplate words: ws :vocab
+                    key: docJoinWords xs: folded
                     c: u64
                     cur: counts.get :key
                     match (
