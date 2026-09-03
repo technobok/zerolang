@@ -158,6 +158,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-08-25 | a04609b7 | [the `fold` natives arc](#r-a04609b7) | 0.45s | -- | 93MB / -- | 93 / 198 / 170 (total 461, medians of 5) | 4,899,755 | 312MB | -- | 108,433 |
 | 2026-08-28 | 33e4e5fa | [generic families, then four pre-existing defects](#r-33e4e5fa) | 0.45s | -- | 93MB / -- | 108 / 190 / 174 (total 469, medians of 5) | 4,912,311 | 315MB | -- | 110,984 |
 | 2026-09-03 | 86e7d6f5 | [the `outx` arc, then three measured reductions](#r-86e7d6f5) | 0.47s | -- | 93MB / -- | 112 / 194 / 179 (total 486, medians of 5) | 5,070,508 | 321MB | -- | 116,954 |
+| 2026-09-03 | 49b9b267 | [name-text copies become name ids](#r-49b9b267) | 0.46s | -- | 91MB / -- | 109 / 185 / 174 (total 470, medians of 5) | 4,718,425 | 315MB | -- | 116,971 |
 
 2026-08-05 note -- **the measurement floor of this setup, established by
 repetition, and the trap that produced a fake baseline.**
@@ -2008,3 +2009,56 @@ per-function return-flag maps (`funcPins`, `funcReturnsBorrow`,
 `funcReturnsView`, `funcReturnsFrozen`) are four lookups per call where one
 record would do; and the pending-pin side channel is drained through a
 reversing list on every consume.
+
+<a id="r-49b9b267"></a>
+### Name-text copies become name ids
+
+**2026-09-03 · `263dee89`..`49b9b267`**
+
+A dhat census at `86e7d6f5` put 430,460 of 5.07M heap blocks (8.5%) in one
+family: an owned `String` copied out of the name pool so a checker or the
+emitter could compare it, look its id up again, or thread it through a
+text-keyed API. Every site started from a node's `nameid`. The migration
+retired the families in measured phases, each a commit A/B'd on identical
+input against the commit before it (`out/zc-perf`, gcc -O1, `perf stat -r 7`
++ valgrind):
+
+| commit | phase | instructions | allocations |
+|---|---|---|---|
+| `263dee89` | P1 argument check chain: the parameter name is an id end to end (`positionalParamNameId`, `declChildOfId`, `provided: ListVal nameid`, `dataFieldIds`) | −65.0M (−1.11%) | −148,053 (−2.92%) |
+| `57a9c4c4` | P2 emitter: the seven name helpers answer `outx StringView` views into the pool (the tree is `Ast.view` at all 454 emitter sites); 139 redundant `.stringView` swept by caret; C byte-identical | −14.9M (−0.26%) | −86,178 (−1.75%) |
+| `24aa103a` | P3 + P4a: `checkDotted` and 22 helpers take `cnId`; marker predicates by id; typeref shells ask ids | −58.9M (−1.02%) | −79,063 (−1.64%) |
+| `593f15dd` | P5 emitter: the last four direct copies are views; C byte-identical | −3.6M (−0.06%) | −24,712 (−0.52%) |
+| `49b9b267` | P4 registrar chain: defaults and ownership recorded by id (`setDefault*Id`) | +5.6M (+0.10%, cross-build band) | −9,024 (−0.19%) |
+
+Net over the arc, identical input: **−137M instructions (−2.4%)** and
+**−347,030 allocations (−6.8%)**; the census family fell from 430,460 blocks
+(8.5%) to 148,930 (3.2%).
+
+**What made it cheap.** Every text lookup in the argument and member chains
+already had an id-keyed twin (`declChildOfId`, `declOwnershipOfId`,
+`declIsBorrowedFieldId`, `declIsFnptrFieldId`); the text forms were
+`pool.find` wrappers. Flipping a producer (`positionalParamNameId`,
+`atomTextOf … outx StringView`, `cnId: zast.nameid`) and letting the
+typechecker enumerate the consumers found every site; the sentinel-shaped
+ones (`x == "word"` → `wkWord`/`nameTextEq`, `isMoveMarker name:` →
+`isMoveMarkerId`, `:cn` → `:cnId`, `find`/`poolFind` round trips) swept by
+reported line, the report sites got a `cn: nameTextCopy` at the top of their
+block (openers computed on the unmodified file, inserted bottom-up), the
+rest by hand. Two gates only `make ci` runs caught what `make check` does
+not: L012 for a text predicate that lost its last caller, and
+`-Werror=unused-variable` for a zerolang binding whose only use was replaced.
+
+**What is left, and why.** The remaining 148,930 (top sites:
+`walkDefinitionById` 15.5k, `stampOnePendingTyperef` 15.2k, `atomName`'s
+other callers 14.7k, `typedefChaseC` 11.5k, `baseTypeName` 7.7k,
+`evalConstDotted` 7.7k, `resolveTyperefAtomShell` 7.2k, `bareAtomName` 5.1k,
+`pathRootName` 4.4k) sit behind text-native APIs: the def-resolution core (`descendNamed` → `resolveDef defName:`,
+`declareCanonicalType name:`, `newType name:` mint by text), the body-walk
+entry points (`checkFunctionBody defName:`, `checkMethodBodies typeName:`,
+reached from `walkDefinitionById`, 15.5k), literal parsing in
+`resolveNamedType`/`evalConstDotted`/`constOfNamedBase` (byte and `contains`
+tests on the spelling), and match-arm labels (`checkCaseClause`). Moving
+those is the "resolution by id" arc, not a phase of this one: a name there
+is minted, labelled and parsed as text, and a view cannot live across the
+exclusive `:ast` those walks pass.
