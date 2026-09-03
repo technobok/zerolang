@@ -545,7 +545,7 @@ checkBareTypeValueAt: function {
     # the zero-argument spelling of self-construction: a bare type name (or
     # `T.create` with no arguments) in value position inside T's own create.
     if (ctorSelfRecursionAt :st :nodeid :lineno :colno :width ctorTid: tid) then return
-    prov: (List String)
+    prov: (ListVal zast.nameid)
     misN: (List String)
     misI: (ListVal u64)
     (missingCtorFields
@@ -20315,7 +20315,7 @@ bareFnRefError: function {
     width: u32
     fid: ztypes.tid
 } is {
-    prov: (List String)
+    prov: (ListVal zast.nameid)
     misN: (List String)
     misI: (ListVal u64)
     (missingCtorFields
@@ -25987,18 +25987,16 @@ checkBinopMethodArg: function {
     ltLit: bool
 } out ztypes.tid is {
     oParamT: ztypes.tid
-    p0n: (positionalParamName
-        :ast
+    p0n: (positionalParamNameId
         :st
         funcId: (ztypes.tid.create from: opo.u64)
         idx: 0
         skipRecv: true
     )
-    if p0n.length > 0 then {
-        ppo: (st.typing.declChildOf
-            pool: ast.names
+    if (p0n.isZero) == false then {
+        ppo: (st.typing.declChildOfId
             parentTypeId: (ztypes.tid.create from: opo.u64)
-            name: p0n.stringView
+            nameId: p0n
         )
         match (
             ppo
@@ -26591,47 +26589,41 @@ ctorSelfRecursionAt: function {
     return true
 }
 
-# positionalParamName -- the funcId's parameter name at `idx` (declaration
-# order), "" when absent. Positional call args map to it. With
+# positionalParamNameId -- the funcId's parameter name at `idx` (declaration
+# order), zero when absent. Positional call args map to it. With
 # skipRecv, receiver rows (`this` or the fn's thisParamName) are excluded
 # from the count: a dotted method call supplies the receiver implicitly, so
 # its positional args map onto the remaining params.
-positionalParamName: function {
-    ast: Ast.view
+positionalParamNameId: function {
+    # the symbol table the parameter rows are read from
     st: zenv.ZSymbolTable.view
+    # the function whose parameter list is walked
     funcId: ztypes.tid
+    # the positional index asked for
     idx: u64
+    # whether receiver rows are left out of the count
     skipRecv: bool
-} out String is {
-    result: String
-    found: false
+} out zast.nameid is {
     seen: u64
     ppi: u64
     ppn: st.typing.declRowSlots ownerTid: funcId
     for ppi < ppn loop {
         prow: st.typing.declRowAt ownerTid: funcId membersOnly: false slot: ppi
         ppi = ppi + 1
-        ppnid: prow.name
-        if prow.keep when (found) == false then {
-            tnB: ast.names.texts.get i: ppnid.u64
+        if prow.keep then {
+            pnid: zast.nameid.create from: prow.name.u32.orPanic
             isRecv: false
             if skipRecv then {
-                if tnB.stringView == "this" then isRecv = true
-                if (st.reg.thisParamNameIs
-                    tid: funcId
-                    nameId: (zast.nameid.create from: ppnid.u32.orPanic)
-                ) then isRecv = true
+                if pnid == zast.names.wkThis then isRecv = true
+                if (st.reg.thisParamNameIs tid: funcId nameId: pnid) then isRecv = true
             }
             if (isRecv) == false then {
-                if seen == idx then {
-                    result = tnB.copy
-                    found = true
-                }
+                if seen == idx then return pnid
                 seen = seen + 1
             }
         }
     }
-    return result
+    return zast.nameid
 }
 
 # markVarMutated -- record that `nameId`'s variable is written somewhere, which
@@ -27910,7 +27902,7 @@ missingCtorFields: function {
     st: zenv.ZSymbolTable
     funcId: ztypes.tid
     isCtor: bool
-    provided: (List String).view
+    provided: (ListVal zast.nameid).view
     posCount: u64
     # whether the receiver arrived some other way than as an argument. Only a
     # dotted call on a VALUE binds it that way; a type-qualified call leaves it
@@ -27949,28 +27941,25 @@ missingCtorFields: function {
             if crBody then effId = ztypes.tid.create from: crId.u64
         }
     }
-    names: (List String)
     ids: (ListVal u64)
     idsNm: (ListVal u64)
     # a WALK consumer: an is-block `function {..} out T` with no body is an
     # fn-ptr FIELD, and an unresolved member carries no type, so it is
     # invisible here rather than reported missing
     forceAllMembers :st frame: st.curFrame :ast tid: effId
-    dataFieldNames :ast :st tid: effId :names :ids nameIds: idsNm
-    pcnt: names.length
+    dataFieldIds :st tid: effId :ids nameIds: idsNm
+    pcnt: ids.length
     if pcnt == 0 then return
-    thisPn: String
-    thisPn = zast.poolTextCopy pool: ast.names ref: (st.reg.thisParamNameIdOf tid: effId)
+    thisPnId: st.reg.thisParamNameIdOf tid: effId
     vpos: u64
     i: u64
     for i < pcnt loop {
-        pname: names.get :i
         pcid: ids.get :i
         pnameId: idsNm.get :i
         i = i + 1
         isRecv: false
         if pnameId == zast.names.wkThis.u64 then isRecv = true
-        if thisPn.length > 0 when thisPn.stringView == pname.stringView then isRecv = true
+        if (thisPnId.isZero) == false when pnameId == thisPnId.u64 then isRecv = true
         # THE RECEIVER IS REQUIRED WHENEVER NOTHING ELSE SUPPLIED IT, and it is
         # the first declared parameter, so it also takes positional slot 0.
         # Skipping it unconditionally credited that slot to the NEXT parameter,
@@ -28002,10 +27991,13 @@ missingCtorFields: function {
                 prov: false
                 if posI < posCount then prov = true
                 with piter: provided.iterate do for pv: piter loop {
-                    if pv.stringView == pname.stringView then prov = true
+                    if pv.u64 == pnameId then prov = true
                 }
                 if (prov) == false then {
-                    missingNames.append pname.copy
+                    missingNames.append (zast.nameTextCopy
+                        :ast
+                        ref: (zast.nameid.create from: pnameId.u32.orPanic)
+                    )
                     missingIds.append pcid
                 }
             }
@@ -28032,7 +28024,7 @@ checkMissingCallArgs: function {ast: Ast
         return
     } case none then null
     posCount: u64
-    provided: (List String)
+    provided: (ListVal zast.nameid)
     kAiter: u64
     for kAiter < call.nargs loop {
         argId: (zast.callArgAt :ast nid: call.nid i: kAiter).u32
@@ -28041,9 +28033,8 @@ checkMissingCallArgs: function {ast: Ast
         match (
             arg
         ) case namedoperation then {
-            an: zast.nameTextCopy :ast ref: arg.name
-            if an.length == 0 then posCount = posCount + 1
-            if an.length > 0 then provided.append an
+            if arg.name.isZero then posCount = posCount + 1
+            if (arg.name.isZero) == false then provided.append arg.name
         } else null
     }
     missingNames: (List String)
@@ -28093,18 +28084,15 @@ checkUntypedArgLabel: function {
     recvImplicit: bool
     arg: argref
 } is {
-        pnU: zast.nameTextCopy :ast ref: arg.name
-        if pnU.length > 0 when effId > 0 then {
+        pnIdU: arg.name
+        if (pnIdU.isZero) == false when effId > 0 then {
             if (st.typing.declMemberCount ownerTid: effId) > 0 then {
                 pcU: (optU64Or
-                    o: (st.typing.declChildOf
-                        pool: ast.names
-                        parentTypeId: effId
-                        name: pnU.stringView
-                    )
+                    o: (st.typing.declChildOfId parentTypeId: effId nameId: pnIdU)
                     d: 0
                 )
                 if pcU == 0 then {
+                    pnU: zast.nameTextCopy :ast ref: pnIdU
                     mU: "unknown argument '\{pnU}'"
                     sugU: (suggestSimilar
                         :ast
@@ -28132,7 +28120,7 @@ checkUntypedArgLabel: function {
                 }
             }
         }
-        if reportUnknown when (isCtor) == false when pnU.length == 0 when funcId > 0 then {
+        if reportUnknown when (isCtor) == false when pnIdU.isZero when funcId > 0 then {
             if (st.typing.declMemberCount ownerTid: funcId) == 0 then {
                 if (st.reg.typetypeOf typeId: funcId) == ztypes.ztypetype.functionType then {
                     tmU: "too many arguments: function takes no parameters".string
@@ -28147,23 +28135,18 @@ checkUntypedArgLabel: function {
                 }
             }
         }
-        if pnU.length == 0 then {
-            pnU = (positionalParamName
-                :ast
-                :st
-                funcId: effId
-                idx: argIdx
-                skipRecv: recvImplicit
-            )
+        if pnIdU.isZero then {
+            pnIdU = positionalParamNameId :st funcId: effId idx: argIdx skipRecv: recvImplicit
         }
-        if effId > 0 when pnU.length > 0 then {
-            dcnU: (zast.poolFind pool: ast.names text: pnU.stringView)
+        if effId > 0 when (pnIdU.isZero) == false then {
+            dcnU: pnIdU
             dupU: false
             with bItU: boundArgIds.iterate do for bIdU: bItU loop {
                 if bIdU == dcnU.u64 then dupU = true
             }
             if dupU when reportUnknown then {
-                dmU: "argument '\{pnU}' specified more than once"
+                pnU2: zast.nameTextCopy :ast ref: pnIdU
+                dmU: "argument '\{pnU2}' specified more than once"
                 (addError
                     :st
                     nodeid: arg.nid
@@ -28444,15 +28427,12 @@ coercePositionalArg: function {
     ast: Ast
     effId: ztypes.tid
     vt: ztypes.tid
-    pn: StringView
+    # the positional slot's parameter name
+    pnId: zast.nameid
     arg: argref
 } is {
     cpidP: (optU64Or
-        o: (st.typing.declChildOf
-            pool: ast.names
-            parentTypeId: effId
-            name: pn
-        )
+        o: (st.typing.declChildOfId parentTypeId: effId nameId: pnId)
         d: 0
     )
     if cpidP > 0 then {
@@ -28494,6 +28474,7 @@ coercePositionalArg: function {
                         anP = "an unresolved value".string
                     }
                     if emitP then {
+                        pn: zast.nameTextCopy :ast ref: pnId
                         tmmP: "argument type mismatch: expected \{enP}, got \{anP}"
                         enP9b: String
                         ehP: String
@@ -28523,23 +28504,25 @@ coerceArgToParam: function {
     ast: Ast
     effId: ztypes.tid
     vt: ztypes.tid
-    pn: StringView
+    # the parameter's name (the label's, or the positional slot's)
+    pnId: zast.nameid
     boundArgIds: (ListVal u64)
     reportUnknown: bool
     wasPos: bool
     arg: argref
 } is {
     if effId.isZero then return
-    if pn.length == 0 then return
+    if pnId.isZero then return
     # the parameter's pool id is identity enough: effId is
     # fixed across this call's argument walk, so two args
     # collide exactly when they name the same parameter
-    dcnid: (zast.poolFind pool: ast.names text: pn)
+    dcnid: pnId
     dupSeen: false
     with bIt: boundArgIds.iterate do for bId: bIt loop {
         if bId == dcnid.u64 then dupSeen = true
     }
     if dupSeen when reportUnknown then {
+        pn: zast.nameTextCopy :ast ref: pnId
         dmm: "argument '\{pn}' specified more than once"
         (addError
             :st
@@ -28552,7 +28535,7 @@ coerceArgToParam: function {
     } else {
         boundArgIds.append dcnid.u64
     }
-    if wasPos then (coercePositionalArg :st :ast :effId :vt :pn :arg)
+    if wasPos then (coercePositionalArg :st :ast :effId :vt :pnId :arg)
 }
 # checkNamedArgParam -- a labelled argument must name a parameter the callee
 # has, and must not name one an earlier argument already bound. Records the
@@ -28561,19 +28544,17 @@ checkNamedArgParam: function {
     st: zenv.ZSymbolTable
     ast: Ast
     effId: ztypes.tid
-    pn: StringView
+    # the label's name, zero for a positional argument
+    pnId: zast.nameid
     vt: ztypes.tid
     arg: argref
 } is {
-    if pn.length > 0 when effId > 0 then {
+    if (pnId.isZero) == false when effId > 0 then {
         if (st.typing.declMemberCount ownerTid: effId) > 0 then {
-            pco: (st.typing.declChildOf
-                pool: ast.names
-                parentTypeId: effId
-                name: pn
-            )
+            pco: st.typing.declChildOfId parentTypeId: effId nameId: pnId
             pcidX: optU64Or o: pco d: 0
             if pcidX == 0 then {
+                pn: zast.nameTextCopy :ast ref: pnId
                 m2: "unknown argument '\{pn}'"
                 anid: arg.nid
                 anln: arg.lineno
@@ -28582,7 +28563,7 @@ checkNamedArgParam: function {
                     :ast
                     :st
                     parentTypeId: (ztypes.tid.create from: effId.u64)
-                    name: pn
+                    name: pn.stringView
                 )
                 h2: String
                 if sug2.length > 0 then {
@@ -28649,6 +28630,7 @@ checkNamedArgParam: function {
                                 if st.typing.errors.length > 0 then emit7 = false
                             }
                             if emit7 then {
+                                pn: zast.nameTextCopy :ast ref: pnId
                                 mm7: "argument '\{pn}' type mismatch: expected \{en7}, got \{an7}"
                                 en7b: String
                                 eh7: String
@@ -28690,23 +28672,19 @@ argownership: record {
 # the caller's argument where any other reftype field takes it.
 argOwnershipOf: function {
     st: zenv.ZSymbolTable.view
-    ast: Ast.view
     funcId: ztypes.tid
     isCtor: bool
-    pn: StringView
+    # the parameter's name, zero when the argument binds no named parameter
+    pnId: zast.nameid
     vt: ztypes.tid
 } out argownership is {
     isTake: false
     isLockish: false
     isViewArg: false
     pt: u64
-    if funcId > 0 when pn.length > 0 then {
+    if funcId > 0 when (pnId.isZero) == false then {
         if (isLiteralTypeId :st tid: (ztypes.tid.create from: vt.u64)) then {
-            po: (st.typing.declChildOf
-                pool: ast.names
-                parentTypeId: funcId
-                name: pn
-            )
+            po: st.typing.declChildOfId parentTypeId: funcId nameId: pnId
             match (
                 po
             ) case some then {
@@ -28715,7 +28693,7 @@ argOwnershipOf: function {
         }
         oo: (st.typing.declOwnershipOfId
             parentTypeId: funcId
-            nameId: (zast.poolFind pool: ast.names text: pn)
+            nameId: pnId
         )
         match (
             oo
@@ -28731,7 +28709,7 @@ argOwnershipOf: function {
             # borrow (ctor field params keep their recorded flow).
             if (isCtor) == false then isLockish = true
         }
-    if funcId > 0 when pn.length == 0 when isCtor then {
+    if funcId > 0 when pnId.isZero when isCtor then {
         # a POSITIONAL constructor argument (a tagged-sum arm
         # payload) transfers ownership exactly like its named
         # form: the arm stores it owned
@@ -28741,11 +28719,7 @@ argOwnershipOf: function {
             # Field ownership flows to the constructor param:
             # a borrowed field locks the caller's argument, any
             # other reftype field takes it.
-            if (st.typing.declIsBorrowedField
-                pool: ast.names
-                parentTypeId: funcId
-                name: pn
-            ) then {
+            if (st.typing.declIsBorrowedFieldId parentTypeId: funcId nameId: pnId) then {
                 isLockish = true
             } else {
                 if (typeIsReftype
@@ -28802,42 +28776,37 @@ checkTypedCallArg: function {
     arg: argref
 } is {
     if vt.isZero then return
-    pn: zast.nameTextCopy :ast ref: arg.name
+    # the parameter's name travels as its id: the label's, or the positional
+    # slot's; text is taken only where a report spells it
+    pnId: arg.name
     (checkNamedArgParam
         :st
         :ast
         :effId
-        pn: pn.stringView
+        :pnId
         :vt
         :arg
     )
-    if reportUnknown when (isCtor) == false when pn.length == 0 when funcId > 0 then {
+    if reportUnknown when (isCtor) == false when pnId.isZero when funcId > 0 then {
         reportPositionalNotAllowed :st :funcId :arg
     }
     wasPos: false
-    if pn.length == 0 then {
+    if pnId.isZero then {
         wasPos = true
-        pp: (positionalParamName
-            :ast
-            :st
-            funcId: effId
-            idx: argIdx
-            skipRecv: recvImplicit
-        )
-        pn = pp
+        pnId = positionalParamNameId :st funcId: effId idx: argIdx skipRecv: recvImplicit
     }
     (coerceArgToParam
         :st
         :ast
         :effId
         :vt
-        pn: pn.stringView
+        :pnId
         :boundArgIds
         :reportUnknown
         :wasPos
         :arg
     )
-    aow: argOwnershipOf :st :ast :funcId :isCtor pn: pn.stringView :vt
+    aow: argOwnershipOf :st :funcId :isCtor :pnId :vt
     isTake: aow.isTake
     isLockish: aow.isLockish
     isViewArg: aow.isViewArg
