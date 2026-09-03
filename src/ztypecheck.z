@@ -1562,10 +1562,32 @@ definingSiteFor: function {
     frame: ztypes.declid
     name: StringView
 } out defsite is {
+    return (definingSiteForId
+        :st
+        :ast
+        :unitDecl
+        :frame
+        nameId: (zast.poolFind pool: ast.names text: name)
+    )
+}
+
+# definingSiteForId -- definingSiteFor by the name's id.
+definingSiteForId: function {
+    # the symbol table whose environment is searched
+    st: zenv.ZSymbolTable.view
+    # the tree the re-export edges are read from
+    ast: Ast.view
+    # the unit the lookup is made from
+    unitDecl: ztypes.declid
+    # the frame the lookup climbs from
+    frame: ztypes.declid
+    # the looked-up name, interned
+    nameId: zast.nameid
+} out defsite is {
     hit: (envLookup
         :st
         frame: (frameFor :st :frame :unitDecl)
-        nameId: (zast.poolFind pool: ast.names text: name)
+        :nameId
     )
     if hit.declId.isZero then return noDefSite
     if hit.frame == unitDecl then {
@@ -1780,7 +1802,33 @@ resolveNamedType: function {
     thisName: StringView
     nid: 0.u64
 } out u64 is {
-    if name == "null" then {
+    # a name that reaches here as text is interned first, so the id form
+    # can mint it by the same spelling
+    nameId: zast.poolFind pool: ast.names text: name
+    if nameId.isZero then nameId = ast.internString text: name
+    return (resolveNamedTypeId :st :frame :ast :unitDecl :nameId :thisName :nid)
+}
+
+# resolveNamedTypeId -- resolveNamedType by the name's id. The spelling is read
+# through a block-scoped borrow where a literal is classified, and copied only
+# where a type is minted or declared under it.
+resolveNamedTypeId: function {
+    # the symbol table the type is declared or found in
+    st: zenv.ZSymbolTable
+    # the tree the name was read from
+    ast: Ast
+    # the unit the reference is written in
+    unitDecl: ztypes.declid
+    # the frame the reference resolves in
+    frame: ztypes.declid
+    # the type's name, interned
+    nameId: zast.nameid
+    # the enclosing type's name for `this`/`type`, "" outside a type
+    thisName: StringView
+    # the referencing node, for the generic-parameter record; 0 when none
+    nid: 0.u64
+} out u64 is {
+    if (zast.nameTextEq :ast ref: nameId s: "null") then {
         return (declareCanonicalType
             :st
             :frame
@@ -1792,7 +1840,7 @@ resolveNamedType: function {
             typetype: ztypes.ztypetype.nullType
         )
     }
-    if name == "never" then {
+    if (zast.nameTextEq :ast ref: nameId s: "never") then {
         return (declareCanonicalType
             :st
             :frame
@@ -1804,20 +1852,25 @@ resolveNamedType: function {
             typetype: ztypes.ztypetype.neverType
         )
     }
-    b0: name.byteAt 0.u64
     isnum: false
-    match (
-        b0
-    ) case some then {
-        if b0 >= 48 when b0 <= 57 then isnum = true
-    } case none then null
+    hasDot: false
+    {
+        nT: zast.nameTextAt :ast ref: nameId
+        b0: nT.stringView.byteAt 0.u64
+        match (
+            b0
+        ) case some then {
+            if b0 >= 48 when b0 <= 57 then isnum = true
+        } case none then null
+        if nT.stringView.contains "." then hasDot = true
+    }
     if isnum then {
         # A numeric-literal name types as the literal's DEFAULT scalar (system
         # i64/f64) -- it is not a name reference, so a unit-local scalar shadow
         # must not capture it. Pre-index (defNodeIndexBuilt false) keeps the
         # named-shell fallback.
         dn7: "i64"
-        if name.contains "." then dn7 = "f64"
+        if hasDot then dn7 = "f64"
         sid7: (descendNamed
             :st
             :frame
@@ -1831,7 +1884,7 @@ resolveNamedType: function {
     }
     if thisName.length > 0 then {
         etk7: declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: thisName)
-        gpn7: nameIdOf :ast :name
+        gpn7: nameId
         if (st.reg.isGenericParamOf tdecl: etk7 name: gpn7) then {
             recordGenericParamRef :st :nid frame: etk7 name: gpn7
             pgo7: st.reg.genericParamTidOf tdecl: etk7 paramName: gpn7
@@ -1840,22 +1893,27 @@ resolveNamedType: function {
             ) case some then {
                 return pgo7
             } case none then null
-            ptid7: st.reg.newType :name typetype: ztypes.ztypetype.genericParam
+            ptid7: ztypes.tid
+            {
+                nT7: zast.nameTextCopy :ast ref: nameId
+                ptid7 = st.reg.newType name: nT7.stringView typetype: ztypes.ztypetype.genericParam
+            }
             st.reg.setGenericParamTid tdecl: etk7 paramName: gpn7 tid: ptid7
             return ptid7
         }
     }
-    site7: definingSiteFor :st :frame :ast :unitDecl :name
+    site7: definingSiteForId :st :frame :ast :unitDecl :nameId
     duo7: site7.defUnit
     if (duo7.isZero) == false then {
         tto7: (optionval.none ztypes.ztypetype)
-        dd7: declOfUnitDef :st :frame unitDecl: duo7 nameId: (nameIdOf :ast :name)
+        dd7: declOfUnitDef :st :frame unitDecl: duo7 :nameId
         if dd7 > 0 then tto7 = declDefTypetype :st :ast declId: dd7
         match (
             tto7
         ) case some then {
-            did7: descendNamed :st :frame :ast unitDecl: duo7 :name
+            did7: descendNamedId :st :frame :ast unitDecl: duo7 :nameId
             if did7 > 0 then return did7
+            nT8: zast.nameTextCopy :ast ref: nameId
             return (declareCanonicalType
                 :st
                 :frame
@@ -1863,7 +1921,7 @@ resolveNamedType: function {
 
                 unitDecl: duo7
                 ownerNameId: zast.nameid
-                :name
+                name: nT8.stringView
                 typetype: tto7
             )
         } case none then {
@@ -1871,7 +1929,7 @@ resolveNamedType: function {
                 :st
                 :ast
                 unitDecl: duo7
-                name: (zast.poolFind pool: ast.names text: name)
+                name: nameId
             )
             match (
                 ex7
@@ -1900,16 +1958,18 @@ resolveNamedType: function {
                 al8: resolveAliasKey :st :ast declId: site7.aliasDecl
                 if al8 > 0 then return al8
             }
-            return (st.reg.newType :name typetype: ztypes.ztypetype.recordType)
+            nT9: zast.nameTextCopy :ast ref: nameId
+            return (st.reg.newType name: nT9.stringView typetype: ztypes.ztypetype.recordType)
         }
     } else {
         # the environment before a shell: a name no unit-name index places
         # but the frame's chain reaches -- a template's generic
         # parameter in its own method signature (`v: t`), which is the
         # canonical GENERIC_PARAM id, not a forward record of that name
-        e7: envTypeIdOf :st :frame nameId: (zast.poolFind pool: ast.names text: name)
+        e7: envTypeIdOf :st :frame :nameId
         if e7 > 0 then return e7
-        return (st.reg.newType :name typetype: ztypes.ztypetype.recordType)
+        nT10: zast.nameTextCopy :ast ref: nameId
+        return (st.reg.newType name: nT10.stringView typetype: ztypes.ztypetype.recordType)
     }
 }
 
@@ -1920,11 +1980,12 @@ resolveAtomType: function {
     ast: Ast
     unitDecl: ztypes.declid
     frame: ztypes.declid
-    nm: StringView
+    # the atom's name, interned
+    nameId: zast.nameid
     thisName: StringView
     nid: 0.u64
 } out u64 is {
-    if nm == "this" then {
+    if nameId == zast.names.wkThis then {
         # the receiver's name is both the name and the receiver: the second
         # role reads an owned copy
         tnOwn: thisName.string
@@ -1937,7 +1998,7 @@ resolveAtomType: function {
             thisName: tnOwn.stringView
         )
     }
-    if nm == "type" then {
+    if (zast.nameTextEq :ast ref: nameId s: "type") then {
         if thisName.length != 0 then {
             tnOwnT: thisName.string
             return (resolveNamedType
@@ -1950,7 +2011,7 @@ resolveAtomType: function {
             )
         }
     }
-    return (resolveNamedType :st :frame :ast :unitDecl name: nm :thisName :nid)
+    return (resolveNamedTypeId :st :frame :ast :unitDecl :nameId :thisName :nid)
 }
 
 # parseDecimalU64 -- a decimal digit string as a u64 value; none when empty
@@ -2609,12 +2670,22 @@ recordNodeName: function {
     nid: u64
     frame: ztypes.declid
 } is {
-    if name.length != 0 then {
-        kc: nid
-        st.typing.pendingTyperef.set key: kc value: (nameIdOf :ast :name)
-        kc3: nid
-        st.typing.pendingTyperefFrame.set key: kc3 value: frame
-    }
+    if name.length != 0 then recordNodeNameId :st nameId: (nameIdOf :ast :name) :nid :frame
+}
+
+# recordNodeNameId -- recordNodeName by the name's id: the pending typeref
+# stores the id, so a caller holding one hands it straight over.
+recordNodeNameId: function {
+    st: zenv.ZSymbolTable
+    nameId: zast.nameid
+    nid: u64
+    frame: ztypes.declid
+} is {
+    if nameId.isZero then return
+    kc: nid
+    st.typing.pendingTyperef.set key: kc value: nameId
+    kc3: nid
+    st.typing.pendingTyperefFrame.set key: kc3 value: frame
 }
 
 # stampNestedTyperef -- a qualified type reference into a NESTED unit
@@ -2661,18 +2732,25 @@ recordResolvedName: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     thisName: StringView
-    name: StringView
+    # the referenced name, interned
+    nameId: zast.nameid
     nid: u64
     recFrame: ztypes.declid
 } is {
-    if name == "this" then {
+    if nameId == zast.names.wkThis then {
         recordNodeName :ast :st name: thisName :nid frame: recFrame
     } else {
-        if name == "type" then {
+        if (zast.nameTextEq :ast ref: nameId s: "type") then {
             recordNodeName :ast :st name: thisName :nid frame: recFrame
         } else {
-            if (isNumericLiteralName :name) then {
-                if name.contains "." then {
+            if (isNumericLiteralNameAt :ast ref: nameId) then {
+                # the literal's spelling decides its default: read in a block
+                isFloat: false
+                {
+                    nT: zast.nameTextAt :ast ref: nameId
+                    if nT.contains "." then isFloat = true
+                }
+                if isFloat then {
                     recordNodeName :ast :st name: "f64" :nid frame: recFrame
                 } else {
                     recordNodeName :ast :st name: "i64" :nid frame: recFrame
@@ -2682,7 +2760,7 @@ recordResolvedName: function {
                 # map feeds mono substitution) but never name-resolves: mark
                 # it no-stamp so resolution doesn't chase or report it
                 gskip: false
-                gpnr: nameIdOf :ast :name
+                gpnr: nameId
                 if thisName.length > 0 then {
                     enclK: declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: thisName)
                     if (st.reg.isGenericParamOf tdecl: enclK name: gpnr) then gskip = true
@@ -2693,7 +2771,7 @@ recordResolvedName: function {
                         name: gpnr
                     ) then gskip = true
                 }
-                recordNodeName :ast :st :name :nid frame: recFrame
+                recordNodeNameId :st :nameId :nid frame: recFrame
                 if gskip then {
                     nsg: nid
                     nsv: true
@@ -3253,7 +3331,6 @@ recordDottedTyperef: function {
         pnId = atomNameId :ast n: pNode
     }
     if (nameDenotesUnit :st :frame nameId: pnId) then {
-        cn: zast.nameTextCopy :ast ref: cnId
         # cross-unit qualified type ref (zlexer.Token): record the MEMBER under
         # its DEFINING unit (the parent) so stampTyperefs bridges this node.
         # The member resolves in the qualifier's frame, not the writer's.
@@ -3273,13 +3350,13 @@ recordDottedTyperef: function {
             :ast
             unitDecl: udQ
             :thisName
-            name: cn.stringView
+            nameId: cnId
             nid: nid.u64
             recFrame: qfr
         )
     } else {
         if (isStripMarkerId nameId: cnId) then {
-            bn: baseTypeName :ast n: (ast.nodes.get i: parentId.u64)
+            bnId: rootNameIdOf :ast n: (ast.nodes.get i: parentId.u64)
             (recordResolvedName
                 :st
                 :frame
@@ -3287,13 +3364,13 @@ recordDottedTyperef: function {
                 :ast
                 :unitDecl
                 :thisName
-                name: bn.stringView
+                nameId: bnId
                 nid: nid.u64
                 recFrame: frame
             )
             # a parameterized parent ((List of: String).take) has no base
             # name; the marker dp wears the parent's mono stamp.
-            if bn.length == 0 then {
+            if bnId.isZero then {
                 (resolveMonoRefInline
                     :st
                     :frame
@@ -3458,7 +3535,6 @@ recordTyperef: function {
         return
     }
     if arm == 4 then {
-        rrA: ast.names.texts.get i: nameId.u64
         (recordResolvedName
             :st
             :frame
@@ -3466,14 +3542,13 @@ recordTyperef: function {
             :ast
             :unitDecl
             :thisName
-            name: rrA.stringView
+            :nameId
             nid: nid.u64
             recFrame: frame
         )
         return
     }
     if arm == 5 then {
-        rrA: ast.names.texts.get i: nameId.u64
         (recordResolvedName
             :st
             :frame
@@ -3481,7 +3556,7 @@ recordTyperef: function {
             :ast
             :unitDecl
             :thisName
-            name: rrA.stringView
+            :nameId
             nid: nid.u64
             recFrame: frame
         )
@@ -3873,33 +3948,31 @@ dottedTyperefShell: function {
     pId: atomNameId :ast n: (ast.nodes.get i: parentId.u64)
     cId: atomNameId :ast n: (ast.nodes.get i: childId.u64)
     if (nameDenotesUnit :frame :st nameId: pId) then {
-        cNm: zast.nameTextCopy :ast ref: cId
         (demandUnitMember :st unitNameId: pId nameId: cId)
         ud8: unitDeclOfNameOrOwn :st :frame nameId: pId
-        did8: (descendNamed
+        did8: (descendNamedId
             :st
             :frame
 
             :ast
             unitDecl: ud8
-            name: cNm.stringView
+            nameId: cId
         )
         if did8 > 0 then return did8
-        return (resolveAtomType :st :frame :ast :unitDecl nm: cNm.stringView :thisName)
+        return (resolveAtomType :st :frame :ast :unitDecl nameId: cId :thisName)
     } else {
         # a dotted numeric literal (4.u64, 2.5.f32) declares the SUFFIX
         # type: peeling to the numeric parent would collapse it to the
         # literal default (i64/f64), silently mistyping the slot
         isSfx: isNumericTypeNameAt :ast ref: cId
         if (isNumericLiteralNameAt :ast ref: pId) when isSfx then {
-            nSfx: zast.nameTextCopy :ast ref: cId
             return (resolveAtomType
                 :st
                 :frame
 
                 :ast
                 :unitDecl
-                nm: nSfx.stringView
+                nameId: cId
                 :thisName
             )
         }
@@ -3942,7 +4015,6 @@ resolveTyperefAtomShell: function {
     demand: bool
     nid: 0.u64
 } out u64 is {
-    teR: zast.nameTextCopy :ast ref: nameId
     if demand then {
         frame93: (frameFor :st :frame :unitDecl)
         (demandDefinition
@@ -3957,7 +4029,7 @@ resolveTyperefAtomShell: function {
 
         :ast
         :unitDecl
-        nm: teR.stringView
+        :nameId
         :thisName
         :nid
     )
@@ -4275,8 +4347,22 @@ nameIsInUnitReftype: function {
     unitDecl: ztypes.declid
     name: StringView
 } out bool is {
-    rrId: zast.poolFind pool: ast.names text: name
-    rr: resolveUnitChild :st :ast :unitDecl nameId: rrId
+    nid: zast.poolFind pool: ast.names text: name
+    return (nameIsInUnitReftypeId :st :ast :unitDecl nameId: nid)
+}
+
+# nameIsInUnitReftypeId -- nameIsInUnitReftype by the name's id.
+nameIsInUnitReftypeId: function {
+    # the tree the unit's members are read from
+    ast: Ast
+    # the symbol table the member resolves in
+    st: zenv.ZSymbolTable
+    # the unit asked
+    unitDecl: ztypes.declid
+    # the member's name, interned
+    nameId: zast.nameid
+} out bool is {
+    rr: resolveUnitChild :st :ast :unitDecl :nameId
     match (
         rr
     ) case some then {
@@ -4460,16 +4546,22 @@ isBorrowReftypeCollection: function {name: StringView} out bool is {
     return false
 }
 
+# isBorrowNativeReftypeId / isNativeValueViewId -- the two native-shape
+# predicates asked of a name id: the text is compared in place, never copied.
+isBorrowNativeReftypeId: function {ast: Ast.view nameId: zast.nameid} out bool is {
+    return (zast.nameTextEq :ast ref: nameId s: "String")
+}
+
+# isNativeValueViewId -- the native value view (`StringView`), asked of a name id.
+isNativeValueViewId: function {ast: Ast.view nameId: zast.nameid} out bool is {
+    return (zast.nameTextEq :ast ref: nameId s: "StringView")
+}
+
 # isBorrowNativeReftype -- true for native heap-owning reftypes (currently String)
 # that take the BORROW default as an unannotated param. Keyed by name, like the
 # classifiers above: native types resolve AFTER the main unit, so the metadata
 # that would answer (a native CLASS that owns heap) is not yet populated when a
 # param resolves.
-isBorrowNativeReftype: function {name: StringView} out bool is {
-    if name == "String" then return true
-    return false
-}
-
 # isNativeValueView -- true for StringView, the native immutable string view (subtype
 # STRINGVIEW): a param of this type stays unowned (a value-passed copy of a borrowed
 # view), so it takes no BORROW default. Other reftypes -- String (native, owns heap),
@@ -5511,15 +5603,11 @@ paramIsBorrowReftype: function {ast: Ast
             base: paramTypeBaseName :ast op: (ast.nodes.get i: opId.u64)
             isref = isBorrowReftypeCollection name: base.stringView
         } else {
-            tn: zast.nameTextCopy :ast ref: tnId
-            isref = nameIsInUnitReftype :st :ast :unitDecl name: tn.stringView
-            tdu: (definingSiteFor :st :frame :ast :unitDecl name: tn.stringView).defUnit
-            if (isBorrowNativeReftype name: tn.stringView) when tdu == st.typing.systemUnitRoot then {
-                isref = true
-            }
-            if (isNativeValueView name: tn.stringView) when tdu == st.typing.systemUnitRoot then {
-                isref = false
-            }
+            isref = nameIsInUnitReftypeId :st :ast :unitDecl nameId: tnId
+            tdu: (definingSiteForId :st :frame :ast :unitDecl nameId: tnId).defUnit
+            inSys: tdu == st.typing.systemUnitRoot
+            if (isBorrowNativeReftypeId :ast nameId: tnId) when inSys then isref = true
+            if (isNativeValueViewId :ast nameId: tnId) when inSys then isref = false
         }
     }
     return isref
@@ -6521,7 +6609,7 @@ attachMarkers: function {
 
                         :ast
                         :unitDecl
-                        nm: amlbl.stringView
+                        nameId: mmName
                         thisName: ""
                     )
                     (st.typing.setMemberType
@@ -6930,9 +7018,9 @@ typedefFieldBaseTid: function {
             nid: 0
         )
         if memberIdAt > 0 then return memberIdAt
-        an: paramTypeBaseName :ast op: (ast.nodes.get i: dr.parent.u64)
-        if an.length == 0 then return 0
-        return (resolveAtomType :st :frame :ast :unitDecl nm: an.stringView thisName: "")
+        anId: rootNameIdOf :ast n: (ast.nodes.get i: dr.parent.u64)
+        if anId.isZero then return 0
+        return (resolveAtomType :st :frame :ast :unitDecl nameId: anId thisName: "")
     } else {
         return 0
     }
@@ -11388,10 +11476,10 @@ aliasTargetTid: function {
     ast: Ast
     adecl: ztypes.declid
     aParent: ztypes.declid
-    aName: StringView
-    aUnit: StringView
-    tu: StringView
-    tn: StringView
+    aNameId: zast.nameid
+    aUnitId: zast.nameid
+    tuId: zast.nameid
+    tnId: zast.nameid
     atid0: ztypes.tid
     rootedOut: (ListVal bool)
     defNameId: zast.nameid
@@ -11404,13 +11492,13 @@ aliasTargetTid: function {
         # of the root type, so the edge binds the ROOT's tid
         nameId92: (declNameIdOf :st declId: (unitRootOfDecl :st declId: adecl))
         hUnitDecl3: unitDeclOfNameOrOwn :st :frame nameId: nameId92
-        rto: (walkLookupTyperef
+        rto: (walkLookupTyperefById
             :st
             :frame
             :ast
 
             unitDecl: hUnitDecl3
-            base: tu
+            baseId: tuId
         )
         if rto.none then {
             # a tagged type declared in THIS file is invisible to the typeref
@@ -11425,7 +11513,7 @@ aliasTargetTid: function {
 
                 :ast
                 unitDecl: hUnitDecl2
-                nm: tu
+                nameId: tuId
                 thisName: ""
             )
             if rtb > 0 then rto = optionval.some rtb.u64
@@ -11438,10 +11526,9 @@ aliasTargetTid: function {
             if rtt == ztypes.ztypetype.variantType then isTag = true
             if rtt == ztypes.ztypetype.unionType then isTag = true
             if isTag then {
-                memberDecl: (st.typing.declChildOf
-                    pool: ast.names
+                memberDecl: (st.typing.declChildOfId
                     parentTypeId: (ztypes.tid.create from: rto.u64)
-                    name: tn
+                    nameId: tnId
                 )
                 match (
                     memberDecl
@@ -11470,6 +11557,9 @@ aliasTargetTid: function {
             # incomplete type. Report it the way the dotted leg does instead.
             btd: st.typing.declFindChild parentDeclId: aParent nameId: defNameId
             if (st.typing.declIsResolving declId: btd) then {
+                aUnit: zast.nameTextCopy :ast ref: aUnitId
+                aName: zast.nameTextCopy :ast ref: aNameId
+                tn: zast.nameTextCopy :ast ref: tnId
                 bcm: "alias cycle: '\{aUnit}.\{aName}' aliases '\{aUnit}.\{tn}' which is still resolving"
                 addResolveError :st e: zast.err.typeError msg: bcm
                 rootedOut.append typeRooted
@@ -11484,7 +11574,7 @@ aliasTargetTid: function {
 
                 :ast
                 unitDecl: hUnitDecl
-                nm: tn
+                nameId: tnId
                 thisName: ""
             )
             st.typing.declSetResolving declId: adecl mark: false
@@ -11523,8 +11613,6 @@ resolveAliasKeyIn: function {
             defName: altK.defName
         )
     }
-    tu: zast.nameTextCopy :ast ref: altK.unitName
-    tn: zast.nameTextCopy :ast ref: altK.defName
     aParent: ztypes.declid
     aNameId: zast.nameid
     {
@@ -11533,19 +11621,15 @@ resolveAliasKeyIn: function {
         aNameId = zast.nameid.create from: ado.name
     }
     if aNameId.isZero then return 0
-    aName: zast.nameTextCopy :ast ref: aNameId
     # the file unit the alias is written in, for the name walkers and the
     # diagnostics -- the alias's OWN scope is aParent, which is that unit's
     # root for a top-level alias and the nested unit's Decl for a nested one
-    aUnit: (zast.nameTextCopy
-        :ast
-        ref: (declNameIdOf
+    aUnitId: (declNameIdOf
+        :st
+        declId: (unitDeclOfNameOrOwn
             :st
-            declId: (unitDeclOfNameOrOwn
-                :st
-                :frame
-                nameId: (declNameIdOf :st declId: (unitRootOfDecl :st declId: adecl))
-            )
+            :frame
+            nameId: (declNameIdOf :st declId: (unitRootOfDecl :st declId: adecl))
         )
     )
     st.typing.declSetResolving declId: adecl mark: true
@@ -11561,13 +11645,13 @@ resolveAliasKeyIn: function {
         defName: altK.defName
     )
     hUnitDecl: unitDeclOfNameOrOwn :st :frame nameId: altK.unitName
-    if atid.isZero then atid = (descendNamed
+    if atid.isZero then atid = (descendNamedId
         :st
         :frame
 
         :ast
         unitDecl: hUnitDecl
-        name: tn.stringView
+        nameId: altK.defName
     )
     st.typing.declSetResolving declId: adecl mark: false
     rootedOut: (ListVal bool)
@@ -11577,10 +11661,10 @@ resolveAliasKeyIn: function {
         :ast
         :adecl
         :aParent
-        aName: aName.stringView
-        aUnit: aUnit.stringView
-        tu: tu.stringView
-        tn: tn.stringView
+        :aNameId
+        :aUnitId
+        tuId: altK.unitName
+        tnId: altK.defName
         atid0: atid
         :rootedOut
         defNameId: altK.defName
@@ -11609,7 +11693,7 @@ resolveAliasKeyIn: function {
             if nop8.namedoperation then dnid = nop8.operation.u64
         }
         if dnid > 0 then {
-            st.typing.pendingTyperef.set key: dnid value: (nameIdOf :ast name: tu.stringView)
+            st.typing.pendingTyperef.set key: dnid value: altK.unitName
             # the alias resolves in the frame it is written in
             st.typing.pendingTyperefFrame.set key: dnid value: aParent
         }
@@ -11657,8 +11741,27 @@ descendNamed: function {
     frame: ztypes.declid
     name: StringView
 } out ztypes.tid is {
+    nid: nameIdOf :ast :name
+    return (descendNamedId :st :frame :ast :unitDecl nameId: nid)
+}
+
+# descendNamedId -- descendNamed by the name's id: one lookup where the text
+# form found the id three times over, the spelling copied only where the
+# definition is declared or resolved under it.
+descendNamedId: function {
+    # the symbol table the definition is resolved into
+    st: zenv.ZSymbolTable
+    # the tree the definition is read from
+    ast: Ast
+    # the unit the name is a member of
+    unitDecl: ztypes.declid
+    # the frame the descent starts from
+    frame: ztypes.declid
+    # the member's name, interned
+    nameId: zast.nameid
+} out ztypes.tid is {
     # `unitDecl.name` resolves in unitDecl's frame, whatever asked for it
-    ddec: declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast :name)
+    ddec: declOfUnitDef :st :frame :unitDecl :nameId
     rf: frame
     if (ddec.isZero) == false then rf = declParentIdOf :st declId: ddec
     if st.typing.defNodeIndexBuilt == false then return (ztypes.tid.create from: 0)
@@ -11684,26 +11787,29 @@ descendNamed: function {
         classified = true
     } case none then null
     tid: u64
-    if classified then tid = (declareCanonicalType
-        :st
-        frame: rf
-        :ast
+    if classified then {
+        nTc: zast.nameTextCopy :ast ref: nameId
+        tid = (declareCanonicalType
+            :st
+            frame: rf
+            :ast
 
-        :unitDecl
-        ownerNameId: zast.nameid
-        :name
-        typetype: ttv
-    )
+            :unitDecl
+            ownerNameId: zast.nameid
+            name: nTc.stringView
+            typetype: ttv
+        )
+    }
     if classified == false then {
         alo: resolveAliasKey :st :ast declId: ddec
         if alo > 0 then return (ztypes.tid.create from: alo.u64)
     }
-    ddecl: declOfUnitDef :st frame: rf :unitDecl nameId: (nameIdOf :ast :name)
+    ddecl: declOfUnitDef :st frame: rf :unitDecl :nameId
     if (defWasResolved
         :st
         frame: rf
         :unitDecl
-        nameId: (zast.poolFind pool: ast.names text: name)
+        :nameId
     ) then {
         # already resolved -- but not necessarily by a path that registered the
         # generic parameters, and the spec trie cannot key a template whose
@@ -11726,6 +11832,7 @@ descendNamed: function {
             # resolve) is a back-edge to a leaf, not a layout cycle
             if cycV when (declDefIsNative :st :ast declId: ddecl) then cycV = false
             if cycV then {
+                name: zast.nameTextCopy :ast ref: nameId
                 cem: "containment cycle: value type '\{unitNameTextOf :st :ast :unitDecl}.\{name}' contains itself by value; box the field behind a class, union, or Option"
                 addResolveError :st e: zast.err.typeError msg: cem
             }
@@ -11741,19 +11848,20 @@ descendNamed: function {
     if dnode == 0 then return (ztypes.tid.create from: tid.u64)
     bmr: argRefAt :ast nid: (zast.nodeid.create from: dnode.u32.orPanic)
     if (bmr.nid.isZero) == false then {
+        # the definition resolves under its spelling: copied once, here
+        nTd: zast.nameTextCopy :ast ref: nameId
         (resolveDef
             :st
             frame: rf
 
             :ast
             :unitDecl
-            defName: name
+            defName: nTd.stringView
             defnId: bmr.operation
         )
     }
     if classified == false then {
-        roId: zast.poolFind pool: ast.names text: name
-        ro: resolveUnitChild :st :ast :unitDecl nameId: roId
+        ro: resolveUnitChild :st :ast :unitDecl :nameId
         return (ztypes.tid.create from: (optU64Or o: ro d: 0))
     }
     return (ztypes.tid.create from: tid)
@@ -11777,7 +11885,6 @@ resolveDottedDef: function {
     apNm: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: defn.parent.u64))
     apId: atomNameId :ast n: (ast.nodes.get i: defn.parent.u64)
     if (nameDenotesUnit :st frame: rf nameId: apId) then {
-        acNm: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: defn.child.u64))
         acId: atomNameId :ast n: (ast.nodes.get i: defn.child.u64)
         demandUnitMember :st unitNameId: apId nameId: acId
         # The alias target is read off the re-export Decl's node on demand
@@ -11790,17 +11897,18 @@ resolveDottedDef: function {
                 nameId: acId
             )
         ) then {
+            acNm: zast.nameTextCopy :ast ref: acId
             aem: "alias cycle: '\{unitNameTextOf :st :ast :unitDecl}.\{defName}' aliases '\{apNm}.\{acNm}' which is still resolving"
             addResolveError :st e: zast.err.typeError msg: aem
         }
-        udA: unitDeclOfNameOrOwn :st frame: rf nameId: (nameIdOf :ast name: apNm.stringView)
-        (descendNamed
+        udA: unitDeclOfNameOrOwn :st frame: rf nameId: apId
+        (descendNamedId
             :st
             frame: rf
 
             :ast
             unitDecl: udA
-            name: acNm.stringView
+            nameId: acId
         )
         udB: unitDeclOfName :st nameId: apId
         tgo: resolvedByIds :st :ast unitDecl: udB name: acId
@@ -11816,7 +11924,7 @@ resolveDottedDef: function {
 
                 :ast
                 :unitDecl
-                nm: acNm.stringView
+                nameId: acId
                 thisName: ""
             )
         }
