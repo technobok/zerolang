@@ -15853,7 +15853,7 @@ emitReassignStmt: function {
     # flush at a later statement, after -- and outside -- this scope)
     flushArgHoists :ctx :ind :tmp :buf
     rtnid: interpPartNodeId n: topathNode
-    rtsid: stampIdOf :symtab nid: rtnid
+    rtsid: reassignDestroyTid :ast :symtab n: topathNode nid: rtnid
     # a collection-typedef lvalue (Bytes) stores and destroys as its
     # chased underlying mono, exactly like the binding path
     rtch: chaseColMono :symtab :ctx tid: rtsid
@@ -16803,12 +16803,50 @@ definedInUnitTid: function {
 # whose base atom is a narrowed match-arm binding over a borrowed reftype view
 # (seeded in narrowBox) writes THROUGH the box into the live entry; the local
 # read-copy is not the backing storage. Other targets emit normally.
+# reassignDestroyTid -- the type an assignment's old value is destroyed as. A
+# REBIND of a bare name replaces the whole variable, so that is the variable's
+# DECLARED type: under a narrowing the occurrence is stamped with the arm's
+# payload type instead, whose destructor answers for the payload and not for
+# the union holding it, and the arm the variable still held would leak. Every
+# other target answers with its own stamp.
+reassignDestroyTid: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    n: Node.view
+    nid: u64
+} out ztypes.tid is {
+    stamped: stampIdOf :symtab :nid
+    rbn: bareAtomText :ast :n
+    if rbn.length == 0 then return stamped
+    rbv: atomVid :symtab nid: (atomNodeId :n)
+    if rbv.isZero then return stamped
+    declared: symtab.reg.variableTypeOf id: rbv
+    if declared.isZero then return stamped
+    return declared
+}
+
 emitReassignLvalue: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: Node.view
 } out String is {
+    # a REBIND names the VARIABLE, never the payload a narrowing aliased it to:
+    # `s = Sum.two` inside an arm that narrowed `s` replaces the whole union,
+    # and writing through the arm's payload view would assign a union to a
+    # payload. A write THROUGH the subject (the dotted leg below) does take the
+    # alias, which is what the narrowing is for.
+    {
+        rbNm: bareAtomText :ast :n
+        if rbNm.length > 0 then {
+            rbVid: atomVid :symtab nid: (atomNodeId :n)
+            if (rbVid.isZero) == false then {
+                if (vvGet xs: ctx.narrowBox vid: rbVid).length > 0 then {
+                    return (varCName :ctx vid: rbVid name: rbNm)
+                }
+            }
+        }
+    }
     match (
         n
     ) case dottedpath then {
