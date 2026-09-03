@@ -36,6 +36,7 @@ public: unit {
     :dataFieldNames
     :descendNamed
     :fnReturnBaseNameOf
+    :fnReturnBaseNameIdOf
     :isBareGenericParam
     :isComparisonOp
     :isGenericParam
@@ -2681,27 +2682,28 @@ baseTypeName: function {ast: Ast.view n: Node.view} out String is {
     return (zast.nameTextCopy :ast ref: (baseTypeNameId :ast :n))
 }
 
-# genericApplHead -- the head type name of a generic application `(List of: T)` /
-# `(Option t: T)` (the callable's atom name); "" for a non-application expr.
-genericApplHead: function {ast: Ast.view n: Node.view} out String is {
+# genericApplHeadId -- the head type name id of a generic application
+# `(List of: T)` / `(Option t: T)` (the callable's atom name); zero for a
+# non-application expr.
+genericApplHeadId: function {ast: Ast.view n: Node.view} out zast.nameid is {
     match (
         n
     ) case expression then {
-        return (genericApplHead :ast n: (ast.nodes.get i: n.expression.u64))
+        return (genericApplHeadId :ast n: (ast.nodes.get i: n.expression.u64))
     } case call then {
-        return (atomName :ast n: (ast.nodes.get i: n.callable.u64))
+        return (atomNameId :ast n: (ast.nodes.get i: n.callable.u64))
     } else {
-        return "".string
+        return (zast.nameid.create from: 0)
     }
 }
 
-# fieldHeadName -- a field type's head name: baseTypeName, falling back to the
-# generic-application head so a `(List of: Node)` / `(Option t: Node)` field is
-# recognized (List/Option) for the destructor-cleanup decision.
-fieldHeadName: function {ast: Ast.view n: Node.view} out String is {
-    b: baseTypeName :ast :n
-    if b.length > 0 then return b
-    return (genericApplHead :ast :n)
+# fieldHeadNameId -- a field type's head name id: baseTypeNameId, falling back
+# to the generic-application head so a `(List of: Node)` / `(Option t: Node)`
+# field is recognized (List/Option) for the destructor-cleanup decision.
+fieldHeadNameId: function {ast: Ast.view n: Node.view} out zast.nameid is {
+    b: baseTypeNameId :ast :n
+    if (b.isZero) == false then return b
+    return (genericApplHeadId :ast :n)
 }
 
 # stamp the name a node resolved to, so nothing downstream has to resolve it
@@ -7779,24 +7781,23 @@ attachRecordField: function {
     fname: StringView
 } is {
     if (refuseStringFieldDefault :st :ast :fname :fm) then return
-    ftnR: fieldHeadName :ast n: (ast.nodes.get i: fm.operation.u64)
+    ftnR: fieldHeadNameId :ast n: (ast.nodes.get i: fm.operation.u64)
     # a field's type-ref can name a SIBLING method (an fn-ptr
     # slot defaulting to it), which is a member like any other
-    nameId9: (zast.poolFind pool: ast.names text: ftnR.stringView)
     (forceMemberOf
         :st
         :frame
 
         :ast
         parentTypeId: (ztypes.tid.create from: rid.u64)
-        nameId: nameId9
+        nameId: ftnR
     )
     mrefR: (resolvedByIdsMember
         :st
         :ast
         :unitDecl
         defId: (zast.poolFind pool: ast.names text: defName)
-        memberId: (zast.poolFind pool: ast.names text: ftnR.stringView)
+        memberId: ftnR
     )
     handledR: false
     match (
@@ -9575,36 +9576,37 @@ fieldTypeNeedsCleanup: function {
     ast: Ast
     unitDecl: ztypes.declid
     frame: ztypes.declid
-    name: StringView
+    # the type name asked about, as its id
+    nameId: zast.nameid
     isBorrowed: bool
 } out bool is {
     if isBorrowed then return true
-    if name == "String" then return true
-    if name == "List" then return true
-    if name == "ListRef" then return true
-    if name == "ListVal" then return true
-    if name == "Map" then return true
-    if name == "MapRR" then return true
-    if name == "MapRV" then return true
-    if name == "MapVR" then return true
-    if name == "MapVV" then return true
-    if name == "Set" then return true
-    if name == "SetRef" then return true
-    if name == "SetVal" then return true
+    if (zast.nameTextEq :ast ref: nameId s: "String") then return true
+    if (zast.nameTextEq :ast ref: nameId s: "List") then return true
+    if (zast.nameTextEq :ast ref: nameId s: "ListRef") then return true
+    if (zast.nameTextEq :ast ref: nameId s: "ListVal") then return true
+    if (zast.nameTextEq :ast ref: nameId s: "Map") then return true
+    if (zast.nameTextEq :ast ref: nameId s: "MapRR") then return true
+    if (zast.nameTextEq :ast ref: nameId s: "MapRV") then return true
+    if (zast.nameTextEq :ast ref: nameId s: "MapVR") then return true
+    if (zast.nameTextEq :ast ref: nameId s: "MapVV") then return true
+    if (zast.nameTextEq :ast ref: nameId s: "Set") then return true
+    if (zast.nameTextEq :ast ref: nameId s: "SetRef") then return true
+    if (zast.nameTextEq :ast ref: nameId s: "SetVal") then return true
     # the id-keyed containers own two heap arrays each. A Map field is a heap
     # POINTER whose destroy the holder calls; these are stack structs, so the
     # holder must free them in place -- and without a cleanup mark the holder
     # gets no destructor at all and the arrays leak.
-    if name == "IdMapR" then return true
-    if name == "IdMapV" then return true
-    if name == "IdSet" then return true
-    if name == "Option" then return true
-    if name == "Result" then return true
-    duo8: (definingSiteFor :st :frame :ast :unitDecl :name).defUnit
+    if (zast.nameTextEq :ast ref: nameId s: "IdMapR") then return true
+    if (zast.nameTextEq :ast ref: nameId s: "IdMapV") then return true
+    if (zast.nameTextEq :ast ref: nameId s: "IdSet") then return true
+    if (zast.nameTextEq :ast ref: nameId s: "Option") then return true
+    if (zast.nameTextEq :ast ref: nameId s: "Result") then return true
+    duo8: (definingSiteForId :st :frame :ast :unitDecl :nameId).defUnit
     if (duo8.isZero) == false then {
         tto8: (optionval.none ztypes.ztypetype)
         {
-            dd8: declOfUnitDef :st :frame unitDecl: duo8 nameId: (nameIdOf :ast :name)
+            dd8: declOfUnitDef :st :frame unitDecl: duo8 :nameId
             if dd8 > 0 then tto8 = declDefTypetype :st :ast declId: dd8
         }
         match (
@@ -9615,11 +9617,11 @@ fieldTypeNeedsCleanup: function {
             if tto8 == ztypes.ztypetype.unionType then boxed8 = true
             if boxed8 then {
                 if (st.typing.declIsResolving
-                    declId: (declOfUnitDef :st :frame unitDecl: duo8 nameId: (nameIdOf :ast :name))
+                    declId: (declOfUnitDef :st :frame unitDecl: duo8 :nameId)
                 ) then return true
             }
         } case none then null
-        descendNamed :st :frame :ast unitDecl: duo8 :name
+        descendNamedId :st :frame :ast unitDecl: duo8 :nameId
     }
     # key by the DEFINING unit: a bare cross-unit field type (Bytes from
     # collections) resolves under its own unit, not the class's
@@ -9630,7 +9632,7 @@ fieldTypeNeedsCleanup: function {
         :st
         :ast
         unitDecl: unitDecl9
-        name: (nameIdOf :ast :name)
+        name: nameId
     )
     match (
         rr
@@ -9945,7 +9947,8 @@ resolveNamedFieldSlot: function {
     defName: StringView
     cid: u64
     fname: StringView
-    ftn: StringView
+    # the field's head type name id
+    ftn: zast.nameid
     borrowedField: bool
     fm: argref
 } out bool is {
@@ -9958,7 +9961,7 @@ resolveNamedFieldSlot: function {
 
             :ast
             :unitDecl
-            name: ftn
+            nameId: ftn
             isBorrowed: borrowedField
         ) then needsDtor = true
     }
@@ -10025,7 +10028,8 @@ resolveClassFieldSlot: function {
     defName: StringView
     cid: u64
     fname: StringView
-    ftn: StringView
+    # the field's head type name id
+    ftn: zast.nameid
     borrowedField: bool
     fm: argref
 } out bool is {
@@ -10215,7 +10219,7 @@ resolveClassFieldEntry: function {
     needsDtor: false
     fname: zast.nameTextCopy :ast ref: fm.name
     if (refuseStringFieldDefault :st :ast fname: fname.stringView :fm) then return false
-    ftn: fieldHeadName :ast n: (ast.nodes.get i: fm.operation.u64)
+    ftn: fieldHeadNameId :ast n: (ast.nodes.get i: fm.operation.u64)
     # A NON-OWNED field marker (lock / borrow / view) makes the
     # slot static: it is set in the constructor, never reassigned,
     # the constructor locks the caller's argument rather than
@@ -10235,21 +10239,20 @@ resolveClassFieldEntry: function {
         if fieldOwn == ztypes.zparamownership.holdMode then fOwned = true
         if fOwned == false then borrowedField = true
     } case none then null
-    hNameId: zast.poolFind pool: ast.names text: ftn.stringView
     (forceMemberOf
         :st
         :frame
 
         :ast
         parentTypeId: (ztypes.tid.create from: cid.u64)
-        nameId: hNameId
+        nameId: ftn
     )
     mref: (resolvedByIdsMember
         :st
         :ast
         :unitDecl
         defId: (zast.poolFind pool: ast.names text: defName)
-        memberId: (zast.poolFind pool: ast.names text: ftn.stringView)
+        memberId: ftn
     )
     match (
         mref
@@ -10264,7 +10267,7 @@ resolveClassFieldEntry: function {
             :defName
             :cid
             fname: fname.stringView
-            ftn: ftn.stringView
+            :ftn
             :borrowedField
             :fm
         ) then needsDtor = true
@@ -10468,16 +10471,9 @@ resolveClassTypedefBase: function {
 } out bool is {
     needsDtor: false
     tdbase: objectTypedefBaseId :ast onode: cnode
-    tdbaseT: zast.nameTextCopy :ast ref: tdbase
-    if (fieldTypeNeedsCleanup
-        :st
-        :frame
-
-        :ast
-        :unitDecl
-        name: tdbaseT.stringView
-        isBorrowed: false
-    ) then needsDtor = true
+    if (fieldTypeNeedsCleanup :st :frame :ast :unitDecl nameId: tdbase isBorrowed: false) then {
+        needsDtor = true
+    }
     if (tdbase.isZero) == false then {
         tdk3: cid
         st.typing.typedefBaseName.set key: tdk3 value: tdbase
