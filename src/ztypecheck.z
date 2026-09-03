@@ -37669,8 +37669,10 @@ constArmRead: function {
     st: zenv.ZSymbolTable
     frame: ztypes.declid
     lookupUnit: ztypes.declid
-    typeName: StringView
-    armName: StringView
+    # the sum type's name id, resolved in `lookupUnit`
+    typeNameId: zast.nameid
+    # the arm's name id
+    armNameId: zast.nameid
 } out ztypes.cval is {
     # the type is looked up in `lookupUnit`'s frame -- `frame` itself when
     # it already lies inside that unit (a nested scope of it is nearer than
@@ -37687,13 +37689,7 @@ constArmRead: function {
         }
     }
     ptu: (optU64Or
-        o: (walkLookupTyperef
-            :st
-            frame: rf
-            :ast
-            unitDecl: lookupUnit
-            base: typeName
-        )
+        o: (walkLookupTyperefById :st frame: rf :ast unitDecl: lookupUnit baseId: typeNameId)
         d: 0
     )
     if ptu == 0 then {
@@ -37701,13 +37697,7 @@ constArmRead: function {
         # nothing and the arm read silently yields no value. Descending mints
         # it, which is what a use site would have done -- a constant reading an
         # arm IS a use of the type.
-        ptu = (descendNamed
-            :st
-            frame: rf
-            :ast
-            unitDecl: lookupUnit
-            name: typeName
-        ).u64
+        ptu = (descendNamedId :st frame: rf :ast unitDecl: lookupUnit nameId: typeNameId).u64
     }
     if ptu == 0 then return ztypes.noConst
     ptid: ztypes.tid.create from: ptu.u64
@@ -37716,7 +37706,7 @@ constArmRead: function {
     if ptt == ztypes.ztypetype.variantType then isSum = true
     if ptt == ztypes.ztypetype.unionType then isSum = true
     if (isSum) == false then return ztypes.noConst
-    anm: zast.poolFind pool: ast.names text: armName
+    anm: armNameId
     if (armCarriesPayload :st armTid: ptid armName: anm) then return ztypes.noConst
     return (ztypes.makeArmConst armTid: ptid armName: anm)
 }
@@ -38287,17 +38277,14 @@ constOfNamedBase: function {
                 colno: atCol
             )
         }
-        # the arm read is text-keyed: copied on this last leg only
-        ptT2: zast.nameTextCopy :ast ref: ptId
-        ncT2: zast.nameTextCopy :ast ref: ncId
         return (constArmRead
             :st
             :frame
             :ast
 
             lookupUnit: unitDecl
-            typeName: ptT2.stringView
-            armName: ncT2.stringView
+            typeNameId: ptId
+            armNameId: ncId
         )
     }
     return ztypes.noConst
@@ -38417,26 +38404,25 @@ evalConstArmViaUnit: function {
     ast: Ast
     gpId: zast.nodeid
     gcId: zast.nodeid
-    nameCount: StringView
+    # the arm's name id
+    nameCountId: zast.nameid
 } out ztypes.cval is {
-    gpt: String
-    gct: String
+    gcNameId: zast.nameid
     gpNameId: zast.nameid
     {
         gp: ast.nodes.get i: gpId.u64
         gc: ast.nodes.get i: gcId.u64
         if gp.atomid when gc.atomid then {
-            gpt = zast.nameTextCopy :ast ref: gp.name
-            gct = zast.nameTextCopy :ast ref: gc.name
+            gcNameId = gc.name
             gpNameId = gp.name
         }
     }
-    if gpt.length > 0 when gct.length > 0 then {
+    if (gpNameId.isZero) == false when (gcNameId.isZero) == false then {
         if (nameDenotesUnit
             :st
             :frame
 
-            nameId: (nameIdOf :ast name: gpt.stringView)
+            nameId: gpNameId
         ) then {
             lookupUnit9: (unitDeclOfNameOrOwn :st :frame nameId: gpNameId)
             qa: (constArmRead
@@ -38445,8 +38431,8 @@ evalConstArmViaUnit: function {
                 :ast
 
                 lookupUnit: lookupUnit9
-                typeName: gct.stringView
-                armName: nameCount
+                typeNameId: gcNameId
+                armNameId: nameCountId
             )
             if (qa.kind.none) == false then return qa
         }
@@ -38526,9 +38512,7 @@ evalConstDotted: function {
     # The parent is a dotted path of its own, so the type must be looked up
     # from that unit rather than from the one being evaluated.
     if parentIsDotted then {
-        # the arm name reaches a text-keyed reader; copied on this leg only
-        ncT: zast.nameTextCopy :ast ref: ncId
-        qa: evalConstArmViaUnit :st :frame :ast :gpId :gcId nameCount: ncT.stringView
+        qa: evalConstArmViaUnit :st :frame :ast :gpId :gcId nameCountId: ncId
         if (qa.kind.none) == false then return qa
     }
     return ztypes.noConst
@@ -39968,14 +39952,18 @@ seedPlatformArm: function {
     armName: StringView
 } is {
     lookupUnit92: (unitDeclOfNameOrOwn :st :frame nameId: (nameIdOf :ast name: "platform"))
+    # the platform's kind and arm are text-born (host, target, flags): the
+    # only text-to-id step of the arm read is here
+    typeNameId: zast.poolFind pool: ast.names text: typeName
+    armNameId: zast.poolFind pool: ast.names text: armName
     valFound: (constArmRead
         :st
         :frame
         :ast
 
         lookupUnit: lookupUnit92
-        :typeName
-        :armName
+        :typeNameId
+        :armNameId
     )
     if valFound.kind.none then return
     (seedPlatformValue :st :ptid :ast :member value: valFound)
