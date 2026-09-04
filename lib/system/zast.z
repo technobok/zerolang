@@ -51,6 +51,7 @@ public: unit {
     :errname
     :isErrorAt
     :childIds
+    :childIdsInto
     :childIdsAt
     :spanEndLineAt
     :stmtLineCount
@@ -1955,6 +1956,15 @@ tableSet: function {ast: Ast id: u32 child: Node.take} is {
 # program's children are the program's units.
 childIds: function {ast: Ast.view n: Node.view} out (ListVal u32) is {
     acc: (ListVal u32)
+    childIdsInto :ast :n :acc
+    return acc
+}
+
+# childIdsInto -- childIds appending into a caller-supplied list rather than a
+# fresh one. A walk that recurses through childIds allocates a list per NODE;
+# driving the same walk from one list it both reads and appends to allocates
+# one per WALK. The list is not cleared, so it doubles as the walk's worklist.
+childIdsInto: function {ast: Ast.view n: Node.view acc: ListVal u32} is {
     match (
         n
     ) case binop then {
@@ -2025,7 +2035,6 @@ childIds: function {ast: Ast.view n: Node.view} out (ListVal u32) is {
     } case program then {
         appendIds :acc ids: ast.units
     } else null
-    return acc
 }
 
 # childIdsAt -- childIds of the node with id `id`.
@@ -2227,9 +2236,24 @@ yieldCountOf: function {ast: Ast.view n: Node.view} out u64 is {
     if n.call then {
         if (isYieldCalleeAt :ast callableId: n.callable) then c = 1
     }
-    kids: childIds :ast :n
-    kiter: kids.iterate
-    for k0: kiter loop c = c + (yieldCountIn :ast nid: (nodeid.create from: k0))
+    # one worklist for the whole subtree, not a child list per node. The count
+    # is a SUM, so the order the worklist drains in does not matter.
+    work: (ListVal u32)
+    childIdsInto :ast :n acc: work
+    wi: u64
+    for wi < work.length loop {
+        wid: work.get i: wi
+        wi = wi + 1
+        if wid > 0 then {
+            wn: ast.nodes.get i: wid.u64
+            if (wn.functiondef) == false then {
+                if wn.call then {
+                    if (isYieldCalleeAt :ast callableId: wn.callable) then c = c + 1
+                }
+                childIdsInto :ast n: wn acc: work
+            }
+        }
+    }
     return c
 }
 
@@ -2269,9 +2293,29 @@ suspendingForCountOf: function {ast: Ast.view n: Node.view} out u64 is {
             }
         }
     }
-    kids: childIds :ast :n
-    kiter: kids.iterate
-    for k0: kiter loop c = c + (suspendingForCountIn :ast nid: (nodeid.create from: k0))
+    # one worklist for the whole subtree, as in yieldCountOf, and for the same
+    # reason: this is a sum, so drain order is free.
+    work: (ListVal u32)
+    childIdsInto :ast :n acc: work
+    wi: u64
+    for wi < work.length loop {
+        wid: work.get i: wi
+        wi = wi + 1
+        if wid > 0 then {
+            wn: ast.nodes.get i: wid.u64
+            if (wn.functiondef) == false then {
+                if wn.forexpr then {
+                    if wn.conditions.length == 1 when (yieldCountIn :ast nid: wn.body) > 0 then {
+                        w0: ast.nodes.get i: (wn.conditions.get i: 0).u64
+                        if w0.namedoperation then {
+                            if (nameTextAt :ast ref: w0.name).length > 0 then c = c + 1
+                        }
+                    }
+                }
+                childIdsInto :ast n: wn acc: work
+            }
+        }
+    }
     return c
 }
 
