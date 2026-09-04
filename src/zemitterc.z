@@ -2083,7 +2083,7 @@ binopKeyOf: function {
         match (
             uo
         ) case some then {
-            tn: regNameOf :symtab tid: owner
+            tn: regNameView :symtab tid: owner
             k: "\{uo}.\{tn}.\{op}"
             return k
         } case none then null
@@ -11513,7 +11513,7 @@ emitUserTypeMemberRead: function {
     bn2v: ztypes.vid
     bstamp: ztypes.tid
 } out String is {
-    fbtn: regNameOf :symtab tid: bstamp
+    fbtn: regNameView :symtab tid: bstamp
     if bstamp == ctx.strTid then {
         sptr: isPtrVid :ctx vid: bn2v
         sm: (emitStringMethod
@@ -11562,7 +11562,7 @@ emitUserTypeMemberRead: function {
             if fduo.stringView == "net" then isNetU = true
         } case none then null
         ffc: ctxCname :ctx tid: bstamp
-        ffcc: ioCanonCname :ast :symtab :ctx canon: fbtn.stringView
+        ffcc: ioCanonCname :ast :symtab :ctx canon: fbtn
         if ffcc.length > 0 then ffc = ffcc
         if isNetU then {
             needsAddM :ctx uname: "net" memb: "@unit"
@@ -11592,7 +11592,7 @@ emitUserTypeMemberRead: function {
             :bn2v
             :bstamp
             :mco
-            fbtn: fbtn.stringView
+            :fbtn
         )
         if rmr.length > 0 then return rmr
     } case none then null
@@ -12086,8 +12086,8 @@ emitDottedAtomBase: function {
     if eTg.length > 0 then return eTg
     bstamp0: stampIdOf :symtab nid: bnid2
     bstamp: bstamp0
-    bsn0: regNameOf :symtab tid: bstamp0
-    bcid: canonFnId :ast :symtab :ctx tid: bstamp0 name: bsn0.stringView
+    bsn0: regNameView :symtab tid: bstamp0
+    bcid: canonFnId :ast :symtab :ctx tid: bstamp0 name: bsn0
     if bcid > 0 then {
         bstamp = ztypes.tid.create from: (bcid)
     } else {
@@ -12099,7 +12099,7 @@ emitDottedAtomBase: function {
         match (
             bduo
         ) case some then null case none then {
-            brid: canonTypeId :ast :symtab :ctx tid: bstamp0 name: bsn0.stringView
+            brid: canonTypeId :ast :symtab :ctx tid: bstamp0 name: bsn0
             if brid > 0 then bstamp = ztypes.tid.create from: brid.u64
         }
     }
@@ -21185,19 +21185,20 @@ typeRefC: function {
     tid: ztypes.tid
     thisTid: ztypes.tid
 } out String is {
-    tn: regNameOf :symtab :tid
-    # A user type shadowing a builtin scalar carries the scalar NAME but not the
-    # `is native` declaration -- emit its struct, not the C scalar. scalarCTypeFor
-    # is that gate, and the sixteen scalars, `bool` and the shells all come back
-    # through it with their C type intact.
-    ct: scalarCTypeFor :symtab name: tn.stringView :tid
-    if ct.length > 0 then return ct
     # canonicalize shells: a param/field child may be a fresh shell id
     # named after the real type; this-typed params take the receiver.
     cid: tid
-    if tn.stringView == "this" when thisTid > 0 then {
-        cid = thisTid
-        tn = regNameOf :symtab tid: cid
+    # the name is compared twice and kept by nobody, so it is borrowed. The
+    # binding is scoped: the pin must not outlive the two questions it answers
+    {
+        tn: regNameView :symtab :tid
+        # A user type shadowing a builtin scalar carries the scalar NAME but not
+        # the `is native` declaration -- emit its struct, not the C scalar.
+        # scalarCTypeFor is that gate, and the sixteen scalars, `bool` and the
+        # shells all come back through it with their C type intact.
+        ct: scalarCTypeFor :symtab name: tn :tid
+        if ct.length > 0 then return ct
+        if tn == "this" when thisTid > 0 then cid = thisTid
     }
     cmid: chaseColMono :symtab :ctx tid: cid
     if cmid != cid then {
@@ -21334,8 +21335,8 @@ variantTag: function {
     tid: ztypes.tid
     arm: StringView
 } out String is {
-    vn: regNameOf :symtab :tid
-    vu: cUpperOf text: vn.stringView
+    vn: regNameView :symtab :tid
+    vu: cUpperOf text: vn
     au: cUpperOf text: arm
     t: "Z_\{vu}_TAG_\{au}"
     return t
@@ -21371,8 +21372,8 @@ armPayloadC: function {
     match (
         co
     ) case some then {
-        pn: regNameOf :symtab tid: (ztypes.tid.create from: co.u64)
-        if pn.stringView == "null" then return "".string
+        pn: regNameView :symtab tid: (ztypes.tid.create from: co.u64)
+        if pn == "null" then return "".string
         return (typeRefC
             :ast
             :symtab
@@ -21483,6 +21484,14 @@ defUnitIdOf: function {ctx: Ctx.view tid: ztypes.tid} out u64 is {
 # scalarCTypeFor / cTypeForNameTid.
 regNameOf: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out String is {
     return (symtab.reg.nameOf tid: (ztypes.tid.create from: tid.u64))
+}
+
+# regNameView -- the type's written name BORROWED rather than copied, for a
+# reader that only compares it or hands it straight to another call. The view
+# pins the registry for its binding's scope; `symtab` is already a view
+# everywhere in the emitter, so a shared pin sits beside the ones already held.
+regNameView: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} outx StringView is {
+    return (symtab.reg.nameViewOf tid: (ztypes.tid.create from: tid.u64))
 }
 
 # pathUnitTidOf -- the type id of the unit a dotted path's BASE names, or 0
@@ -27040,9 +27049,9 @@ isComplexFnptrParam: function {
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
-    nm: regNameOf :symtab :tid
+    nm: regNameView :symtab :tid
     ct: tid
-    can: canonFnId :ast :symtab :ctx :tid name: nm.stringView
+    can: canonFnId :ast :symtab :ctx :tid name: nm
     if can > 0 then ct = ztypes.tid.create from: can.u64
     tt: symtab.reg.typetypeOf typeId: ct
     if tt == ztypes.ztypetype.protocolType then return true
