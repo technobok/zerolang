@@ -165,6 +165,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-09-04 | 5061187b | [review phases 1-3: four defects, four gates, two sweeps](#r-5061187b) | 0.47s | -- | 93MB / -- | 103 / 178 / 176 (total 457, medians of 5) | 4,553,926 | 312MB | -- | 116,149 |
 | 2026-09-04 | e5054d3a | [the token arc: a token's text is a pool id](#r-tokenarc) | 0.46s | -- | 93MB / -- | 104 / 183 / 174 (total 461, medians of 5) | 3,872,623 | 296MB | -- | 114,709 |
 | 2026-09-04 | 905714a8 | [a token is a record](#r-tokenrecord) | 0.45s | -- | 92MB / -- | 100 / 179 / 179 (total 458, medians of 5) | 3,533,963 | 288MB | -- | 114,711 |
+| 2026-09-04 | 0776fbc7 | [child walks without a list per node, and the tree as the carrier](#r-childwalks) | 0.44s | -- | 93MB / -- | 89 / 176 / 168 (total 433) | 2,949,835 | 271MB | -- | 114,917 |
 
 
 <a id="r-tokenarc"></a>
@@ -2264,3 +2265,70 @@ stored as text in a record (`resolveMonoRefParts`, `resolveDottedArgTid`,
 `recordTyperefArgs`, 3.8k), `paramTypeBaseName`'s suffix builders (0.9k),
 `emitRecordMethods` (0.8k, names into owning lists) and a tail of sites under
 0.7k each. Each is a label, a store or a spelling; none is a family.
+
+<a id="r-childwalks"></a>
+### Child walks without a list per node, and the tree as the carrier
+
+`4e3f2e69`..`0776fbc7`, off the 3,097,568 the review's Phase 4 closed at. Two
+allocation commits and one carrier change, plus a compiler defect the spike that
+opened the session walked into.
+
+**A DHAT census attributed to the frame ABOVE the allocator picked the targets.**
+`childIds` was 130,765 blocks, 4.22%, and three call sites carried all of it:
+`scanCallsInNode` 53%, `childIdsAt` 24%, `yieldCountOf` 23%. Nothing else in the
+family was worth touching, and nothing else was touched.
+
+**`4e3f2e69`, the two generator counts.** `yieldCountOf` and
+`suspendingForCountOf` recursed through `childIds`, which allocates a fresh
+child list at every node of the subtree. Both are SUMS, so visit order is free:
+one worklist that the walk both reads and appends to answers the same number and
+allocates once per walk. `childIds` split into `childIdsInto`, which appends
+into a caller-supplied list, and a three-line wrapper keeping the old signature,
+so the fifteen sites that genuinely want a list were untouched. **-29,072
+(-0.94%)**, instructions flat. The goldens were verified load-bearing by
+stopping the worklist at statement nodes: 15 failures.
+
+**`cb49a2fe`, the demand scan.** Ten more `scanCallsInNode` arms walk their own
+fields in `childIds`' order instead of building a list, joining the four that
+already did -- the `statement` arm's own comment had said why. The generic arm
+stays as the backstop, so a new `Node` arm is still walked correctly; it just
+allocates a list to do it. **-112,869 (-3.68%)** and **instructions -46.1M
+(-0.85%)**.
+
+**The unit-frame hoist was the larger instruction win and nearly a mistake.**
+`scanCallsInNode` bound `uFr: unitFrameOf` before its match. Only four of twenty
+arms demand into the unit frame and exactly one arm runs per node, so the hoist
+cost every other arm a lookup it never read: moving it into those four arms is
+**-15.9M instructions by itself**. It has to stay a BINDING -- `demandDefinition
+:st frame: (unitFrameOf :st ...)` lends `st` twice in one call and is E0200,
+which is what the old comment's "the demands below lend st" meant. Dropping the
+hoist also makes the body one dispatch match, so A005's exemption fires and the
+count stays at 10 rather than rising to 11.
+
+**`ccb3c4da`, the tree becomes the carrier.** `ProgramData` held `ast: Ast`, so
+the root node owned the table that was about to contain it, and every reader
+took `program: Node.view`, narrowed it with `if program.program then`, and
+reached the tree through `program.ast`. `parse` and `ast.parseSource` now return
+the `Ast`; the root is a row like any other, named by `Ast.root`, and
+`Ast.mainUnitName` carries the name that was on it. A failed parse hands back
+the tree with its error as the root row, which is how every other parse error
+already travels. **88 parameters changed type and kept their NAME**, so every
+`:program` shorthand still bound and the cascade never reached the call sites;
+375 `program.ast` reads became the parameter and 117 guards went. Allocation-
+neutral by design (-6,799); **instructions -16.7M (-0.31%)** from the retired
+guards. 541 of 542 corpus programs byte-identical.
+
+**Where the census stands after all three (2,949,621 blocks).** `childIds` is
+off it entirely. The parser and AST family is **915,786 blocks, 31.0%** --
+`parsePath` 108,515, `parsePathTail` 106,102, `operationPaths` 103,626,
+`reverseNodes` 99,278, `mkCall` 91,546, `mkNamedOp` 81,360, `acceptBlock`
+73,181, `wrapExpression` 63,500, plus 265,180 `Node` boxes and 532,948 arm-
+payload carriers underneath them. That is one lever, and it is D1's.
+
+**The dead-function count in this file was wrong, and so was the method.**
+`emitOneRecord` emits `#define z_tNNN_create z_tNNN_meta_create`, so a scan that
+tokenises `_meta_create` reports 129 unreferenced definitions where **one** is
+genuinely unreachable; the other 128 are called through the alias. Counting
+`#define` lines as references gives **781** unreferenced static functions in
+`bin/zc.c`, not the 1,034 a token scan reports. Count them with the aliases
+resolved, or the number measures the preprocessor rather than the emitter.
