@@ -1362,16 +1362,22 @@ Spans: class {
         return best
     }
 
-    # walkProgram -- root entry: notes the program node, then walks each
-    # unit wrapper (the table rides inside the program node).
-    walkProgram: function {:this prog: zast.Node.view} is {
-        if prog.program then {
-            this.note id: prog.nodeid line: prog.lineno col: prog.colno
+    # walkProgram -- root entry: notes the root row, then walks each unit
+    # wrapper. The tree is the parameter; `root` names the row inside it.
+    walkProgram: function {:this prog: Ast.view} is {
+        {
+            pr9: prog.nodes.get i: prog.root.u64
+            pp9: zast.posOf n: pr9
+            (this.note
+                id: (zast.nodeIdOf n: pr9)
+                line: pp9.line
+                col: pp9.col
+            )
             wpi: u64
-            wpn: prog.ast.units.length
+            wpn: prog.units.length
             for wpi < wpn loop {
-                wpid: (zast.nodeid.create from: (prog.ast.units.get i: wpi))
-                this.walkAt ast: prog.ast nId: wpid
+                wpid: (zast.nodeid.create from: (prog.units.get i: wpi))
+                this.walkAt ast: prog nId: wpid
                 wpi = wpi + 1
             }
         }
@@ -1658,7 +1664,7 @@ genericParamBoundOf: function {o: (Option zenv.ZSymbolTable).view nid: u64} out 
 # it. The name it was declared under and the bound beside it are what there is.
 genericParamCard: function {
     o: (Option zenv.ZSymbolTable).view
-    prog: zast.Node.view
+    prog: Ast.view
     nid: u64
 } out String is {
     gpd: genericParamDeclOf :o :nid
@@ -1670,12 +1676,12 @@ genericParamCard: function {
         if btid > 0 then bnm = displayTypeNameOfOpt :o tid: (ztypes.tid.create from: btid.u64)
     }
     card: String
-    if prog.program then {
+    {
         pnm: String
         match (
             o
         ) case some then {
-            pnm = declNameText ast: prog.ast st: o declId: gpd
+            pnm = declNameText ast: prog st: o declId: gpd
         } case none then null
         if pnm.length == 0 then return "".string
         card.append pnm
@@ -1692,13 +1698,13 @@ genericParamCard: function {
 # at `nid`, or "". The parameter's Decl is a child of the template's.
 genericParamOwner: function {
     o: (Option zenv.ZSymbolTable).view
-    prog: zast.Node.view
+    prog: Ast.view
     nid: u64
 } out String is {
     gpd: genericParamDeclOf :o :nid
     if gpd.isZero then return "".string
     own: String
-    if prog.program then {
+    {
         match (
             o
         ) case some then {
@@ -1708,7 +1714,7 @@ genericParamOwner: function {
                 par = d.parent
             }
             if (par.isZero) == false then {
-                own = declNameText ast: prog.ast st: o declId: par
+                own = declNameText ast: prog st: o declId: par
             }
         } case none then null
     }
@@ -1799,17 +1805,17 @@ nodeTypeAt: function {o: (Option zenv.ZSymbolTable).view nid: u64} out u64 is {
 # so a hit resolved through a TYPE ID has to land in the same place.
 surfaceDeclOfType: function {
     o: (Option zenv.ZSymbolTable).view
-    prog: zast.Node.view
+    prog: Ast.view
     tid: u64
 } out ztypes.declid is {
     if tid == 0 then return (ztypes.declid.create from: 0)
     match (
         o
     ) case some then {
-        if prog.program then {
+        {
             return (ztypecheck.surfaceDeclOfTypeId
                 st: o
-                ast: prog.ast
+                ast: prog
                 tid: (ztypes.tid.create from: tid)
             )
         }
@@ -2020,7 +2026,7 @@ defaultDisplay: function {
 # line's trailing comment. Empty when the function has no documented parameters.
 paramDocs: function {
     o: (Option zenv.ZSymbolTable).view
-    prog: zast.Node.view
+    prog: Ast.view
     vfs: zvfs.ZVfs
     tid: ztypes.tid
 } out (Map String V: String) is {
@@ -2029,23 +2035,23 @@ paramDocs: function {
     if defNid == 0 then return result
     fnNid: u32
     {
-        if prog.program then {
-            wn: prog.ast.nodes.get i: defNid.u64
+        {
+            wn: prog.nodes.get i: defNid.u64
             if wn.namedoperation then fnNid = wn.operation
         }
     }
     if fnNid == 0 then return result
     fsno: zvfs.fsno
     {
-        if prog.program then {
-            fsno = prog.ast.fsnoForNode nodeid: fnNid
+        {
+            fsno = prog.fsnoForNode nodeid: fnNid
         }
     }
     if fsno.u64 == 0 then return result
     paramIds: (ListVal u32)
     {
-        if prog.program then {
-            fd: prog.ast.nodes.get i: fnNid.u64
+        {
+            fd: prog.nodes.get i: fnNid.u64
             if fd.functiondef then {
                 with pit: fd.parameters.iterate do for pid: pit loop paramIds.append pid
             }
@@ -2059,8 +2065,8 @@ paramDocs: function {
         nameRef: u32
         ln: u32
         {
-            if prog.program then {
-                pnode: prog.ast.nodes.get i: pid.u64
+            {
+                pnode: prog.nodes.get i: pid.u64
                 if pnode.namedoperation then {
                     nameRef = pnode.name
                     ln = pnode.lineno
@@ -2068,8 +2074,8 @@ paramDocs: function {
             }
         }
         if nameRef > 0 then {
-            if prog.program then {
-                nm: zast.nameTextCopy ast: prog.ast ref: (zast.nameid.create from: nameRef.u32)
+            {
+                nm: zast.nameTextCopy ast: prog ref: (zast.nameid.create from: nameRef.u32)
                 pnms.append nm
                 plns.append ln
             }
@@ -2123,7 +2129,7 @@ paramStartsLine: function {vfs: zvfs.ZVfs fsno: zvfs.fsno line1: u32 name: Strin
 # above it. Empty when no parameter carries a leading block.
 paramLeadDocs: function {
     o: (Option zenv.ZSymbolTable).view
-    prog: zast.Node.view
+    prog: Ast.view
     vfs: zvfs.ZVfs
     tid: ztypes.tid
 } out (Map String V: String) is {
@@ -2132,23 +2138,23 @@ paramLeadDocs: function {
     if defNid == 0 then return result
     fnNid: u32
     {
-        if prog.program then {
-            wn: prog.ast.nodes.get i: defNid.u64
+        {
+            wn: prog.nodes.get i: defNid.u64
             if wn.namedoperation then fnNid = wn.operation
         }
     }
     if fnNid == 0 then return result
     fsno: zvfs.fsno
     {
-        if prog.program then {
-            fsno = prog.ast.fsnoForNode nodeid: fnNid
+        {
+            fsno = prog.fsnoForNode nodeid: fnNid
         }
     }
     if fsno.u64 == 0 then return result
     paramIds: (ListVal u32)
     {
-        if prog.program then {
-            fd: prog.ast.nodes.get i: fnNid.u64
+        {
+            fd: prog.nodes.get i: fnNid.u64
             if fd.functiondef then {
                 with pit: fd.parameters.iterate do for pid: pit loop paramIds.append pid
             }
@@ -2162,8 +2168,8 @@ paramLeadDocs: function {
         nameRef: u32
         ln: u32
         {
-            if prog.program then {
-                pnode: prog.ast.nodes.get i: pid.u64
+            {
+                pnode: prog.nodes.get i: pid.u64
                 if pnode.namedoperation then {
                     nameRef = pnode.name
                     ln = pnode.lineno
@@ -2171,8 +2177,8 @@ paramLeadDocs: function {
             }
         }
         if nameRef > 0 then {
-            if prog.program then {
-                nm: zast.nameTextCopy ast: prog.ast ref: (zast.nameid.create from: nameRef.u32)
+            {
+                nm: zast.nameTextCopy ast: prog ref: (zast.nameid.create from: nameRef.u32)
                 pnms.append nm
                 plns.append ln
             }
@@ -2213,7 +2219,7 @@ paramLeadDocs: function {
 # T ...} out Ret", the receiver skipped; "" when the type is not a function.
 fnSigTextOpt: function {
     vfs: zvfs.ZVfs
-    prog: zast.Node.view
+    prog: Ast.view
     o: (Option zenv.ZSymbolTable).view
     tid: ztypes.tid
     name: StringView
@@ -2231,7 +2237,7 @@ fnSigTextOpt: function {
         pnames: (List String)
         ptids: (ListVal u64)
         pnids: (ListVal u64)
-        if prog.program then {
+        {
             userParams :prog :o :tid names: pnames tids: ptids nameIds: pnids
         }
         # render each param display string once the member list is collected:
@@ -2251,9 +2257,9 @@ fnSigTextOpt: function {
             ps.append ": "
             if hasDef then {
                 dd: String
-                if prog.program then {
+                {
                     dd = (defaultDisplay
-                        ast: prog.ast
+                        ast: prog
                         st: o
                         :dv
                         typeName: ptn.stringView
@@ -2400,7 +2406,7 @@ fnSigTextOpt: function {
 # mirroring fnSigTextOpt's param rendering. Raw material for signatureHelp
 # parameters.
 fnParamDisplays: function {
-    prog: zast.Node.view
+    prog: Ast.view
     o: (Option zenv.ZSymbolTable).view
     tid: ztypes.tid
 } out (List String) is {
@@ -2411,7 +2417,7 @@ fnParamDisplays: function {
         pnames: (List String)
         ptids: (ListVal u64)
         pnids: (ListVal u64)
-        if prog.program then {
+        {
             userParams :prog :o :tid names: pnames tids: ptids nameIds: pnids
         }
         pi: u64
@@ -2427,9 +2433,9 @@ fnParamDisplays: function {
             ps.append ": "
             if hasDef then {
                 dd: String
-                if prog.program then {
+                {
                     dd = (defaultDisplay
-                        ast: prog.ast
+                        ast: prog
                         st: o
                         :dv
                         typeName: ptn.stringView
@@ -2496,7 +2502,7 @@ hoverMarkdown: function {code: StringView doc: StringView} out Value is {
 # or a named member inside it. Mono tids chase their generic origin.
 defNodeInfo: function {
     o: (Option zenv.ZSymbolTable).view
-    prog: zast.Node.view
+    prog: Ast.view
     tid: ztypes.tid
     member: StringView
 } out u64 is {
@@ -2508,8 +2514,8 @@ defNodeInfo: function {
     } case none then null
     if did.isZero then return 0
     if member.length == 0 then return (declNodeOf :o declId: did)
-    if prog.program then {
-        mnid: zast.poolFind pool: prog.ast.names text: member
+    {
+        mnid: zast.poolFind pool: prog.names text: member
         if mnid.isZero then return 0
         mdid: ztypes.declid
         match (
@@ -2595,7 +2601,7 @@ locationValue: function {
 # member name); 0 when unresolved.
 defNodeOf: function {
     o: (Option zenv.ZSymbolTable).view
-    prog: zast.Node.view
+    prog: Ast.view
     refVid: ztypes.vid
     refTid: u64
     refOwner: u64
@@ -2754,25 +2760,25 @@ unitGenericParamsOf: function {ast: Ast.view udId: u32} out String is {
 }
 
 # unitGenericSuffix -- the " {T U}" suffix for a generic unit named `name`.
-unitGenericSuffix: function {prog: zast.Node.view name: StringView} out String is {
+unitGenericSuffix: function {prog: Ast.view name: StringView} out String is {
     result: String
-    if prog.program then {
-        uCnt9a: prog.ast.units.length
+    {
+        uCnt9a: prog.units.length
         uIdx9a: u64
         for uIdx9a < uCnt9a loop {
-            u9Id: (zast.nodeid.create from: (prog.ast.units.get i: uIdx9a))
+            u9Id: (zast.nodeid.create from: (prog.units.get i: uIdx9a))
             uIdx9a = uIdx9a + 1
             opId: zast.nodeid
             {
-                u: prog.ast.nodes.get i: u9Id.u64
+                u: prog.nodes.get i: u9Id.u64
                 if u.namedoperation then {
-                    lb: zast.poolTextAt pool: prog.ast.names ref: u.name
+                    lb: zast.poolTextAt pool: prog.names ref: u.name
                     if lb.stringView == name then opId = u.operation
                 }
             }
             if opId > 0 then {
                 gs: (unitGenericParamsOf
-                    ast: prog.ast
+                    ast: prog
                     udId: opId
                 )
                 if gs.length > 0 then result = gs
@@ -2886,7 +2892,7 @@ dispositionNote: function {o: (Option zenv.ZSymbolTable).view nid: u64} out Stri
 # generic param (from the callGenericBinding stamp), or "".
 inferredGenericLines: function {
     o: (Option zenv.ZSymbolTable)
-    prog: zast.Node.view
+    prog: Ast.view
     callId: u64
 } out String is {
     match (
@@ -2894,11 +2900,11 @@ inferredGenericLines: function {
     ) case some then {
         holders: (List String)
         tids: (ListVal u64)
-        if prog.program then {
+        {
             with git: o.typing.callGenericBinding.iterateItems do for e: git loop {
                 if e.key.call == callId then {
                     hv: (zast.poolTextCopy
-                        pool: prog.ast.names
+                        pool: prog.names
                         ref: (zast.nameid.create from: e.key.param.u32.orPanic)
                     )
                     holders.append hv
@@ -2941,7 +2947,7 @@ isInstanceOfOpt: function {o: (Option zenv.ZSymbolTable).view tid: u64 tpl: u64}
 # parameter" / "borrowed local, from s" / "static unit-level"; "" when the
 # reference carries no stamped ownership/origin.
 refAnnotation: function {
-    prog: zast.Node.view
+    prog: Ast.view
     o: (Option zenv.ZSymbolTable).view
     vid: ztypes.vid
     nid: u64
@@ -2972,9 +2978,9 @@ refAnnotation: function {
         }
         bo: o.reg.variableBorrowOriginOf id: vid
         if (bo.isZero) == false then {
-            if prog.program then {
+            {
                 r.append ", from "
-                r.append (zast.poolTextAt pool: prog.ast.names ref: bo)
+                r.append (zast.poolTextAt pool: prog.names ref: bo)
             }
         }
         return r
@@ -3509,20 +3515,20 @@ symbolsAnswer: function {
 
 # collect document-symbol entries for a whole unit.
 collectUnitSymbols: function {
-    prog: zast.Node.view
+    prog: Ast.view
     unitName: StringView
     docText: StringView
     utf32: bool
     arr: Arr
 } is {
-    if prog.program then {
-        uCnt9b: prog.ast.units.length
+    {
+        uCnt9b: prog.units.length
         uIdx9b: u64
         for uIdx9b < uCnt9b loop {
-            u9Id: (zast.nodeid.create from: (prog.ast.units.get i: uIdx9b))
+            u9Id: (zast.nodeid.create from: (prog.units.get i: uIdx9b))
             uIdx9b = uIdx9b + 1
             (collectUnitSymbolsIn
-                ast: prog.ast
+                ast: prog
                 wId: u9Id
                 :unitName
                 :docText
@@ -3659,7 +3665,7 @@ tcLintInto: function {
     text: String.take
     relpath: StringView
     utf32: bool
-    prog: zast.Node.view
+    prog: Ast.view
     uname: StringView
     sto: (Option zenv.ZSymbolTable)
 } is {
@@ -3871,15 +3877,15 @@ defKindOf: function {op: zast.Node.view} out u8 is {
 
 # collectTopDefs -- every loaded unit's name (Module) and top-level
 # definition labels (Function / Class / Constant).
-collectTopDefs: function {prog: zast.Node.view sink: (MapRV String v: u8)} is {
-    if prog.program then {
-        uCnt9z: prog.ast.units.length
+collectTopDefs: function {prog: Ast.view sink: (MapRV String v: u8)} is {
+    {
+        uCnt9z: prog.units.length
         uIdx9z: u64
         for uIdx9z < uCnt9z loop {
-            u9Id: (zast.nodeid.create from: (prog.ast.units.get i: uIdx9z))
+            u9Id: (zast.nodeid.create from: (prog.units.get i: uIdx9z))
             uIdx9z = uIdx9z + 1
             (collectUnitDefs
-            ast: prog.ast
+            ast: prog
             wId: u9Id
             :sink
         )
@@ -3921,26 +3927,20 @@ collectMemberDef: function {ast: Ast.view m: zast.Node.view sink: (MapRV String 
 # adding that definition's parameter names when it is a function.
 # 0 when the cursor precedes every definition.
 enclosingDefStart: function {
-    prog: zast.Node.view
+    prog: Ast.view
     unitName: StringView
     l1u: u32
     sink: (MapRV String v: u8)
 } out u32 is {
-    match (
-        prog
-    ) case program then {
-        uCnt9c: prog.ast.units.length
-        uIdx9c: u64
-        for uIdx9c < uCnt9c loop {
-            u9Id: (zast.nodeid.create from: (prog.ast.units.get i: uIdx9c))
-            uIdx9c = uIdx9c + 1
-            r: enclosingInUnit ast: prog.ast wId: u9Id :unitName :l1u :sink
-            if r > 0 then return r
-        }
-        return 0
-    } else {
-        return 0
+    uCnt9c: prog.units.length
+    uIdx9c: u64
+    for uIdx9c < uCnt9c loop {
+        u9Id: (zast.nodeid.create from: (prog.units.get i: uIdx9c))
+        uIdx9c = uIdx9c + 1
+        r: enclosingInUnit ast: prog wId: u9Id :unitName :l1u :sink
+        if r > 0 then return r
     }
+    return 0
 }
 
 # the definition enclosing a position within a unit.
@@ -4084,7 +4084,7 @@ addScopeCompletions: function {
 # addTypeMembers -- a type's fields (kind 5) and methods (kind 2), the
 # receiver excluded.
 addTypeMembers: function {
-    prog: zast.Node.view
+    prog: Ast.view
     o: (Option zenv.ZSymbolTable).view
     tid: ztypes.tid
     sink: (MapRV String v: u8)
@@ -4095,7 +4095,7 @@ addTypeMembers: function {
     match (
         o
     ) case some then {
-        if prog.program then {
+        {
             addTypeMembersIn :prog :o :tid :sink :skipNumeric
         }
     } case none then null
@@ -4107,7 +4107,7 @@ addTypeMembers: function {
 # name. Collected in one pass because resolving a member declaration takes an
 # exclusive lock on `o`, so no caller may probe while enumerating.
 userParams: function {
-    prog: zast.ProgramData.view
+    prog: Ast.view.view
     o: zenv.ZSymbolTable.view
     tid: ztypes.tid
     names: List String
@@ -4123,7 +4123,7 @@ userParams: function {
         if rwmk.keep then {
             mnid: rwmk.name
             mtid: rwmk.tid
-            cnB: prog.ast.names.texts.get i: mnid.u64
+            cnB: prog.names.texts.get i: mnid.u64
             cn: cnB.stringView
             isRecv: false
             if mnid == zast.names.wkThis.u64 then isRecv = true
@@ -4143,7 +4143,7 @@ userParams: function {
 # addTypeMembersIn -- addTypeMembers with the program narrowed (prog is
 # the ProgramData payload).
 addTypeMembersIn: function {
-    prog: zast.ProgramData.view
+    prog: Ast.view.view
     o: zenv.ZSymbolTable.view
     tid: ztypes.tid
     sink: (MapRV String v: u8)
@@ -4174,19 +4174,19 @@ addTypeMembersIn: function {
 }
 
 # addUnitMembers -- the top-level symbols of the file-unit named `name`.
-addUnitMembers: function {prog: zast.Node.view name: StringView sink: (MapRV String v: u8)} is {
-    if prog.program then {
-        uCnt9d: prog.ast.units.length
+addUnitMembers: function {prog: Ast.view name: StringView sink: (MapRV String v: u8)} is {
+    {
+        uCnt9d: prog.units.length
         uIdx9d: u64
         for uIdx9d < uCnt9d loop {
-            u9Id: (zast.nodeid.create from: (prog.ast.units.get i: uIdx9d))
+            u9Id: (zast.nodeid.create from: (prog.units.get i: uIdx9d))
             uIdx9d = uIdx9d + 1
-            u: prog.ast.nodes.get i: u9Id.u64
+            u: prog.nodes.get i: u9Id.u64
             if u.namedoperation then {
-                lb: zast.poolTextAt pool: prog.ast.names ref: u.name
+                lb: zast.poolTextAt pool: prog.names ref: u.name
                 if lb.stringView == name then (collectUnitDefsIn
-                    ast: prog.ast
-                    ud: (prog.ast.nodes.get i: u.operation.u64)
+                    ast: prog
+                    ud: (prog.nodes.get i: u.operation.u64)
                     :sink
                 )
             }
@@ -4353,7 +4353,7 @@ literalTidOf: function {o: (Option zenv.ZSymbolTable).view name: StringView} out
 # not a call -- so the segment after a literal head resolves to the RETURN type
 # where an ordinary member access would stop at the method.
 literalConvTid: function {
-    prog: zast.Node.view
+    prog: Ast.view
     o: (Option zenv.ZSymbolTable).view
     litTid: u64
     name: StringView
@@ -4376,7 +4376,7 @@ literalConvTid: function {
 # literalDefaultTid -- the concrete type an unpinned literal falls to, asked of
 # the literal type's own declaration rather than spelled here twice.
 literalDefaultTid: function {
-    prog: zast.Node.view
+    prog: Ast.view
     o: (Option zenv.ZSymbolTable).view
     litTid: u64
 } out u64 is {
@@ -4397,7 +4397,7 @@ literalDefaultTid: function {
 # materialised receiver (`5.iterate`, `1.0.scaleB`). Unfiltered, a float literal
 # would be offered twelve conversions that do not compile.
 addLiteralMembers: function {
-    prog: zast.Node.view
+    prog: Ast.view
     o: (Option zenv.ZSymbolTable).view
     litTid: u64
     sink: (MapRV String v: u8)
@@ -4429,7 +4429,7 @@ dotFrom: function {base: StringView start: u64} out u64 is {
 # demand) by the compiler's own reference-level resolver, so it works even
 # for a type not yet referenced elsewhere in the loaded program.
 descendUnitType: function {
-    prog: zast.Node
+    prog: Ast
     unitName: StringView
     name: StringView
     o: (Option zenv.ZSymbolTable)
@@ -4438,15 +4438,15 @@ descendUnitType: function {
     match (
         o
     ) case some then {
-        if prog.program then {
+        {
             ud: (ztypecheck.unitDeclOfName
                 st: o
-                nameId: (zast.poolFind pool: prog.ast.names text: unitName)
+                nameId: (zast.poolFind pool: prog.names text: unitName)
             )
             result = (ztypecheck.descendNamed
         frame: ztypes.declid
                 st: o
-                ast: prog.ast
+                ast: prog
                 unitDecl: ud
                 :name
 )
@@ -4458,7 +4458,7 @@ descendUnitType: function {
 # childOfIn -- the type id of `parent`'s child named `name` (a field, method,
 # or a unit's member type), or 0. The compiler's own per-level resolver.
 childOfIn: function {
-    prog: zast.Node.view
+    prog: Ast.view
     o: (Option zenv.ZSymbolTable).view
     parent: u64
     name: StringView
@@ -4467,9 +4467,9 @@ childOfIn: function {
     match (
         o
     ) case some then {
-        if prog.program then {
+        {
             co: (o.typing.declChildOf
-                pool: prog.ast.names
+                pool: prog.names
                 parentTypeId: (ztypes.tid.create from: parent.u64)
                 :name
             )
@@ -4646,7 +4646,7 @@ completionItem: function {label: StringView kind: u8 detail: StringView} out Val
 caseArmComplete: function {
     arr: Arr
     o: (Option zenv.ZSymbolTable).view
-    prog: zast.Node.view
+    prog: Ast.view
     ltv: StringView
     ps: u64
     prefix: StringView
@@ -4701,8 +4701,8 @@ caseArmComplete: function {
     subjIdx: u32
     clauseIds: (ListVal u64)
     okCase: false
-    if prog.program then {
-        cnode: prog.ast.nodes.get i: caseId.u64
+    {
+        cnode: prog.nodes.get i: caseId.u64
         if cnode.caseexpr then {
             subjIdx = cnode.subject
             with clit: cnode.clauses.iterate do for cl: clit loop clauseIds.append cl.u64
@@ -4712,8 +4712,8 @@ caseArmComplete: function {
     if (okCase) == false then return false
     if subjIdx == 0 then return false
     subjNid: u32
-    if prog.program then {
-        subjNode: prog.ast.nodes.get i: subjIdx.u64
+    {
+        subjNode: prog.nodes.get i: subjIdx.u64
         subjNid = ztypecheck.nodeId n: subjNode
     }
     subjTid: nodeTypeAt :o nid: subjNid.u64
@@ -4723,8 +4723,8 @@ caseArmComplete: function {
     match (
         o
     ) case some then {
-        if prog.program then {
-            arms = ztypecheck.sumSubtypeNames ast: prog.ast st: o sid: subjTid
+        {
+            arms = ztypecheck.sumSubtypeNames ast: prog st: o sid: subjTid
             gotArms = true
         }
     } case none then null
@@ -4734,14 +4734,14 @@ caseArmComplete: function {
     for ui < clauseIds.length loop {
         clId: clauseIds.get i: ui
         maIdx: u32
-        if prog.program then {
-            clNode: prog.ast.nodes.get i: clId.u64
+        {
+            clNode: prog.nodes.get i: clId.u64
             if clNode.caseclause then maIdx = clNode.matcharm
         }
         if maIdx > 0 then {
             maRef: u32
-            if prog.program then {
-                maNode: prog.ast.nodes.get i: maIdx.u64
+            {
+                maNode: prog.nodes.get i: maIdx.u64
                 match (
                     maNode
                 ) case atomid then {
@@ -4751,8 +4751,8 @@ caseArmComplete: function {
                 } else null
             }
             if maRef > 0 then {
-                if prog.program then {
-                    an: zast.nameTextCopy ast: prog.ast ref: (zast.nameid.create from: maRef.u32)
+                {
+                    an: zast.nameTextCopy ast: prog ref: (zast.nameid.create from: maRef.u32)
                     if an.length > 0 then used.append an
                 }
             }
@@ -4901,7 +4901,7 @@ bareCalleeFuncId: function {
 emitLabels: function {
     arr: Arr
     o: (Option zenv.ZSymbolTable).view
-    prog: zast.Node.view
+    prog: Ast.view
     funcId: u64
     supplied: (List String)
     prefix: StringView
@@ -4910,7 +4910,7 @@ emitLabels: function {
     pnames: (List String)
     pnids: (ListVal u64)
     pptids: (ListVal u64)
-    if prog.program then {
+    {
         match (
             o
         ) case some then {
@@ -4970,7 +4970,7 @@ emitLabels: function {
 argLabelComplete: function {
     arr: Arr
     o: (Option zenv.ZSymbolTable).view
-    prog: zast.Node.view
+    prog: Ast.view
     ltv: StringView
     ps: u64
     prefix: StringView
@@ -5027,8 +5027,8 @@ argLabelComplete: function {
     callableIdx: u32
     argIds: (ListVal u64)
     okCall: false
-    if prog.program then {
-        cnode: prog.ast.nodes.get i: callId.u64
+    {
+        cnode: prog.nodes.get i: callId.u64
         if cnode.call then {
             callableIdx = cnode.callable
             with aiter: cnode.arguments.iterate do for aid: aiter loop argIds.append aid.u64
@@ -5039,8 +5039,8 @@ argLabelComplete: function {
     if callableIdx == 0 then return false
     # callee function id (callable node -> nodeId -> useUnitDef)
     calNid: u32
-    if prog.program then {
-        caln: prog.ast.nodes.get i: callableIdx.u64
+    {
+        caln: prog.nodes.get i: callableIdx.u64
         calNid = ztypecheck.nodeId n: caln
     }
     funcId: resolveCalleeFuncId :o nid: calNid.u64
@@ -5050,13 +5050,13 @@ argLabelComplete: function {
     for si < argIds.length loop {
         aid: argIds.get i: si
         nameRef: u32
-        if prog.program then {
-            anode: prog.ast.nodes.get i: aid.u64
+        {
+            anode: prog.nodes.get i: aid.u64
             if anode.namedoperation then nameRef = anode.name
         }
         if nameRef > 0 then {
-            if prog.program then {
-                lbl: zast.nameTextCopy ast: prog.ast ref: (zast.nameid.create from: nameRef.u32)
+            {
+                lbl: zast.nameTextCopy ast: prog ref: (zast.nameid.create from: nameRef.u32)
                 if lbl.length > 0 then supplied.append lbl
             }
         }

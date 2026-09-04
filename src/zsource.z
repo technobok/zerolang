@@ -155,22 +155,21 @@ projectUnitReads: function {dir: StringView uname: StringView into: Set String} 
 
 # fileUnitReads -- the child names of every `<unit>.<child>` dotted path in one
 # parsed file, into `into`. A deeper path `unit.a.b` reads `a`, the export.
-fileUnitReads: function {root: Node.view uname: StringView into: Set String} is {
-    if root.program then {
-        t: root.ast
-        uid: zast.poolFind pool: t.names text: uname
+fileUnitReads: function {root: Ast.view uname: StringView into: Set String} is {
+    {
+        uid: zast.poolFind pool: root.names text: uname
         if uid.isZero then return
         ni: 1.u64
-        nn: t.nodes.length
+        nn: root.nodes.length
         for ni < nn loop {
-            nd: t.nodes.get i: ni
+            nd: root.nodes.get i: ni
             if nd.dottedpath then {
-                pn: t.nodes.get i: nd.parent.u64
+                pn: root.nodes.get i: nd.parent.u64
                 if pn.atomid then {
                     if pn.name == uid then {
-                        cn: t.nodes.get i: nd.child.u64
+                        cn: root.nodes.get i: nd.child.u64
                         if cn.atomid then {
-                            into.add item: (zast.poolTextCopy pool: t.names ref: cn.name)
+                            into.add item: (zast.poolTextCopy pool: root.names ref: cn.name)
                         }
                     }
                 }
@@ -181,14 +180,13 @@ fileUnitReads: function {root: Node.view uname: StringView into: Set String} is 
 }
 
 # fileReadNames -- the dotted member reads of one parsed file, into `into`.
-fileReadNames: function {root: Node.view into: Set String} is {
-    if root.program then {
-        t: root.ast
+fileReadNames: function {root: Ast.view into: Set String} is {
+    {
         topaths: (IdSet u64)
         ni: 1.u64
-        nn: t.nodes.length
+        nn: root.nodes.length
         for ni < nn loop {
-            nd: t.nodes.get i: ni
+            nd: root.nodes.get i: ni
             if nd.reassignment then {
                 topaths.add item: nd.topath.u64
             }
@@ -196,12 +194,12 @@ fileReadNames: function {root: Node.view into: Set String} is {
         }
         nj: 1.u64
         for nj < nn loop {
-            nd2: t.nodes.get i: nj
+            nd2: root.nodes.get i: nj
             if nd2.dottedpath then {
                 if (topaths.has item: nj) == false then {
-                    cn: t.nodes.get i: nd2.child.u64
+                    cn: root.nodes.get i: nd2.child.u64
                     if cn.atomid then {
-                        into.add item: (zast.poolTextCopy pool: t.names ref: cn.name)
+                        into.add item: (zast.poolTextCopy pool: root.names ref: cn.name)
                     }
                 }
             }
@@ -1632,23 +1630,23 @@ Analysis: class {
 
     # walkProgram -- root entry of the parse-tier rule visitor: the table
     # rides inside the program node.
-    walkProgram: function {:this prog: Node.view} is {
-        if prog.program then {
-            this.walkIds ast: prog.ast ids: prog.ast.units
+    walkProgram: function {:this prog: Ast.view} is {
+        {
+            this.walkIds ast: prog ids: prog.units
         }
     }
 
     # reportDuplicateBodies -- A006: a function body, eight lines or longer,
     # whose shape (bodyKeyInto) another function in this file already has. The
     # first site is the original; each later one is reported against it.
-    reportDuplicateBodies: function {:this prog: Node.view} is {
+    reportDuplicateBodies: function {:this prog: Ast.view} is {
         firstAt: (MapRV String v: u64)
-        if prog.program then {
+        {
             ui: u64
-            un: prog.ast.units.length
+            un: prog.units.length
             for ui < un loop {
-                uid: prog.ast.units.get i: ui
-                this.dupBodyWalk ast: prog.ast id: uid :firstAt
+                uid: prog.units.get i: ui
+                this.dupBodyWalk ast: prog id: uid :firstAt
                 ui = ui + 1
             }
         }
@@ -1688,13 +1686,13 @@ Analysis: class {
     # walkTypeCasingProgram / walkTypeCasingAt -- L021 (default-on): a type
     # definition's name casing follows its kind -- record/variant/facet
     # lowercase, class/union/protocol/generator PascalCase (styleguide Naming).
-    walkTypeCasingProgram: function {:this prog: Node.view} is {
-        if prog.program then {
+    walkTypeCasingProgram: function {:this prog: Ast.view} is {
+        {
             tci: u64
-            tcn: prog.ast.units.length
+            tcn: prog.units.length
             for tci < tcn loop {
-                tcid: (zast.nodeid.create from: (prog.ast.units.get i: tci))
-                this.walkTypeCasingAt ast: prog.ast nId: tcid
+                tcid: (zast.nodeid.create from: (prog.units.get i: tci))
+                this.walkTypeCasingAt ast: prog nId: tcid
                 tci = tci + 1
             }
         }
@@ -1788,16 +1786,16 @@ Analysis: class {
     # table rather than a descent: a parameter sits in an objectdef's as-block,
     # a functiondef's as-block or a unit body, and a walk taught only some of
     # those carriers would pass the rest in silence.
-    walkGenericParamCasingProgram: function {:this prog: Node.view} is {
-        if prog.program then {
+    walkGenericParamCasingProgram: function {:this prog: Ast.view} is {
+        {
             gi: u64
-            gn: prog.ast.nodes.length
+            gn: prog.nodes.length
             for gi < gn loop {
-                gm: prog.ast.nodes.get i: gi
+                gm: prog.nodes.get i: gi
                 if gm.namedoperation then {
-                    if (zast.isGenericParamOp ast: prog.ast opId: gm.operation) then {
+                    if (zast.isGenericParamOp ast: prog opId: gm.operation) then {
                         (this.checkGenericParamCasing
-                            ast: prog.ast
+                            ast: prog
                             nameRef: gm.name
                             opId: gm.operation
                             line: gm.lineno
@@ -1834,13 +1832,13 @@ Analysis: class {
     }
 
     # the root entry to the member-casing walk
-    walkCasingProgram: function {:this prog: Node.view} is {
-        if prog.program then {
+    walkCasingProgram: function {:this prog: Ast.view} is {
+        {
             wci: u64
-            wcn: prog.ast.units.length
+            wcn: prog.units.length
             for wci < wcn loop {
-                wcid: (zast.nodeid.create from: (prog.ast.units.get i: wci))
-                this.walkCasingAt ast: prog.ast nId: wcid
+                wcid: (zast.nodeid.create from: (prog.units.get i: wci))
+                this.walkCasingAt ast: prog nId: wcid
                 wci = wci + 1
             }
         }
@@ -2034,7 +2032,7 @@ Analysis: class {
         match (
             n
         ) case program then {
-            it: n.ast.units.iterate
+            it: ast.units.iterate
             for uId: it loop this.walkCasing :ast n: (ast.nodes.get i: uId.u64)
         } case unitdef then {
             it: n.body.iterate
@@ -2086,13 +2084,13 @@ Analysis: class {
     }
 
     # checkPublicPosProgram -- L019 entry: check every unit's `public:` block placement.
-    checkPublicPosProgram: function {:this prog: Node.view} is {
-        if prog.program then {
+    checkPublicPosProgram: function {:this prog: Ast.view} is {
+        {
             cui: u64
-            cun: prog.ast.units.length
+            cun: prog.units.length
             for cui < cun loop {
-                cuid: (zast.nodeid.create from: (prog.ast.units.get i: cui))
-                this.checkPublicPosAt ast: prog.ast nId: cuid
+                cuid: (zast.nodeid.create from: (prog.units.get i: cui))
+                this.checkPublicPosAt ast: prog nId: cuid
                 cui = cui + 1
             }
         }
@@ -2397,7 +2395,7 @@ Analysis: class {
         match (
             n
         ) case program then {
-            wit: n.ast.units.iterate
+            wit: ast.units.iterate
             for uId: wit loop {
                 this.walkDocs :ast n: (ast.nodes.get i: uId.u64) :docs :docParams :docFields
             }
@@ -2577,20 +2575,20 @@ Analysis: class {
     }
 
     # walkDocsAt -- the id-taking entry: the node view is this frame's, so the
-    # program loop can lend prog.ast without an outstanding view lock.
+    # program loop can lend prog without an outstanding view lock.
     walkDocsAt: function {:this ast: Ast.view nId: zast.nodeid docs: bool docParams: bool docFields: bool} is {
         n: ast.nodes.get i: nId.u64
         this.walkDocs :ast :n :docs :docParams :docFields
     }
 
     # walkDocsProgram -- root entry for the doc-coverage pass.
-    walkDocsProgram: function {:this prog: Node.view docs: bool docParams: bool docFields: bool} is {
-        if prog.program then {
+    walkDocsProgram: function {:this prog: Ast.view docs: bool docParams: bool docFields: bool} is {
+        {
             wdi: u64
-            wdn: prog.ast.units.length
+            wdn: prog.units.length
             for wdi < wdn loop {
-                wdid: (zast.nodeid.create from: (prog.ast.units.get i: wdi))
-                this.walkDocsAt ast: prog.ast nId: wdid :docs :docParams :docFields
+                wdid: (zast.nodeid.create from: (prog.units.get i: wdi))
+                this.walkDocsAt ast: prog nId: wdid :docs :docParams :docFields
                 wdi = wdi + 1
             }
         }
@@ -3159,9 +3157,9 @@ Analysis: class {
         }
     }
 
-    # runFastChecks -- the fast-tier passes: parse-error/AST rules over `n`, then the token and
-    # line rules over the source.
-    runFastChecks: function {:this n: Node.view} is {
+    # runFastChecks -- the fast-tier passes: parse-error/AST rules over the tree,
+    # then the token and line rules over the source.
+    runFastChecks: function {:this n: Ast.view} is {
         this.lineStart = lineStartIndex src: this.source.stringView
         this.delimClose = (buildDelimMap
             src: this.source.stringView
@@ -3635,16 +3633,16 @@ Analysis: class {
     }
 
     # lintSuffixUnit -- run the suffix check over a typechecked program's main unit.
-    lintSuffixUnit: function {:this prog: Node.view uname: StringView st: zenv.ZSymbolTable} is {
+    lintSuffixUnit: function {:this prog: Ast.view uname: StringView st: zenv.ZSymbolTable} is {
         mn: mainUnitNameOf program: prog
-        if prog.program then {
-            uCnt9a: prog.ast.units.length
+        {
+            uCnt9a: prog.units.length
             uIdx9a: u64
             for uIdx9a < uCnt9a loop {
-                uId: (zast.nodeid.create from: (prog.ast.units.get i: uIdx9a))
+                uId: (zast.nodeid.create from: (prog.units.get i: uIdx9a))
                 uIdx9a = uIdx9a + 1
                 (this.lintSuffixNamedOp
-                    ast: prog.ast
+                    ast: prog
                     namedOpId: uId
                     mainName: mn.stringView
                     :uname
@@ -3698,9 +3696,9 @@ Analysis: class {
         }
         p: zparser.Parser.create
         prog: p.parse :vfs :rootid mainUnitName: uname.string
-        match (
-            prog
-        ) case error then null else {
+        # a failed parse names its error as the tree's root row. The test is a
+        # call so no lock outlives it: typecheck below takes the tree.
+        if (zast.isErrorAt ast: prog id: prog.root.u32) == false then {
             reg: ztypes.newRegistry
             ccPath9v: zcheck.pickCc ccFlag: "" targetTriple: ""
             ccMode9v: zcheck.pickCcMode modeFlag: ""
@@ -3739,10 +3737,9 @@ Analysis: class {
     # native types (their fields are the runtime's to read). The read evidence
     # is by name: conservative, so a same-named field elsewhere hides a hit
     # rather than inventing one.
-    reportArch: function {:this prog: Node.view uname: StringView st: zenv.ZSymbolTable.view srcdirs: (List String).view systemdir: StringView} is {
-        if prog.program then {
-            ast9: prog.ast
-            mainOp: unitOpOfName ast: ast9 :uname
+    reportArch: function {:this prog: Ast.view uname: StringView st: zenv.ZSymbolTable.view srcdirs: (List String).view systemdir: StringView} is {
+        {
+            mainOp: unitOpOfName ast: prog :uname
             if mainOp.isZero then return
             namedIds: (IdSet u64)
             {
@@ -3756,7 +3753,7 @@ Analysis: class {
                     di = di + 1
                 }
             }
-            this.archWalk ast: ast9 nId: mainOp :namedIds
+            this.archWalk ast: prog nId: mainOp :namedIds
             # A007 speaks only for a unit that lives under one of the roots
             inSrc: false
             with sit: srcdirs.iterate do for d: sit loop {
@@ -3764,18 +3761,18 @@ Analysis: class {
                 if (du.contains item: uname.string) then inSrc = true
             }
             if (inSrc) == false then return
-            this.reportUnusedExports ast: ast9 unitId: mainOp :uname :srcdirs
+            this.reportUnusedExports ast: prog unitId: mainOp :uname :srcdirs
             readNames: (Set String)
             with rit: srcdirs.iterate do for d2: rit loop {
                 projectReadNames dir: d2.stringView into: readNames
             }
             projectReadNames dir: systemdir into: readNames
-            bodyIds: zast.unitBodyIdsAt ast: ast9 unitId: mainOp
+            bodyIds: zast.unitBodyIdsAt ast: prog unitId: mainOp
             with bit: bodyIds.iterate do for mId: bit loop {
-                m: ast9.nodes.get i: mId.u64
+                m: prog.nodes.get i: mId.u64
                 if m.namedoperation then {
-                    tn: zast.poolTextCopy pool: ast9.names ref: m.name
-                    this.archFields ast: ast9 opId: m.operation :readNames typeName: tn.stringView
+                    tn: zast.poolTextCopy pool: prog.names ref: m.name
+                    this.archFields ast: prog opId: m.operation :readNames typeName: tn.stringView
                 }
             }
         }
@@ -4035,8 +4032,8 @@ Analysis: class {
     # main unit's function defs (precise name/position; the receiver is exempt). Locals are the
     # assignment bindings in this file. The opt-out is to `touch` the variable: write its name on
     # its own line (it lowers to `(void)(x);`), which stamps a use.
-    reportUnusedVars: function {:this prog: Node.view uname: StringView st: zenv.ZSymbolTable} is {
-        if prog.program then {
+    reportUnusedVars: function {:this prog: Ast.view uname: StringView st: zenv.ZSymbolTable} is {
+        {
             # A reassignment's target atom carries an atomVariableId stamp
             # exactly as a read does, so counting every stamp as a use makes a
             # local that is only ever assigned look used. Collect the bare-atom
@@ -4045,15 +4042,15 @@ Analysis: class {
             # excludes nothing.
             wtgt: (IdSet u64)
             ni: u64
-            nn: prog.ast.nodes.length
+            nn: prog.nodes.length
             for ni < nn loop {
                 tp: u64
                 {
-                    wn: prog.ast.nodes.get i: ni
+                    wn: prog.nodes.get i: ni
                     match (wn) case reassignment then tp = wn.topath.u64 else null
                 }
                 if tp > 0 then {
-                    tn: prog.ast.nodes.get i: tp
+                    tn: prog.nodes.get i: tp
                     match (tn) case atomid then wtgt.add item: tp else null
                 }
                 ni = ni + 1
@@ -4063,17 +4060,17 @@ Analysis: class {
                 if (wtgt.has item: av.key) == false then used.add item: av.value
             }
             mainOp: zast.nodeid
-            uN: prog.ast.units.length
+            uN: prog.units.length
             uI: u64
             for uI < uN loop {
-                uid: (zast.nodeid.create from: (prog.ast.units.get i: uI))
+                uid: (zast.nodeid.create from: (prog.units.get i: uI))
                 uI = uI + 1
                 unm: String
                 uop: zast.nodeid
                 {
-                    un: prog.ast.nodes.get i: uid.u64
+                    un: prog.nodes.get i: uid.u64
                     if un.namedoperation then {
-                        unm = (zast.poolTextCopy pool: prog.ast.names ref: un.name)
+                        unm = (zast.poolTextCopy pool: prog.names ref: un.name)
                         uop = un.operation
                     }
                 }
@@ -4083,7 +4080,7 @@ Analysis: class {
                 fnOps: (ListVal u32)
                 memIds: (ListVal u32)
                 {
-                    bodyIds: zast.unitBodyIdsAt ast: prog.ast unitId: mainOp
+                    bodyIds: zast.unitBodyIdsAt ast: prog unitId: mainOp
                     with bit: bodyIds.iterate do for mid: bit loop memIds.append from: mid
                 }
                 mN: memIds.length
@@ -4092,21 +4089,21 @@ Analysis: class {
                     mid: memIds.get i: mI
                     mI = mI + 1
                     mop: u32
-                    { m: prog.ast.nodes.get i: mid.u64
+                    { m: prog.nodes.get i: mid.u64
                       if m.namedoperation then mop = m.operation }
                     if mop > 0 then {
                         isFn: false
                         isObj: false
-                        { op: prog.ast.nodes.get i: mop.u64
+                        { op: prog.nodes.get i: mop.u64
                           if op.functiondef then isFn = true
                           if op.objectdef then isObj = true }
                         # synth-lowered defs sit outside every file segment
                         # (fsno 0): they are not user source, so their params
                         # are exempt
-                        if isFn when (prog.ast.fsnoForNode nodeid: mop) > 0 then fnOps.append from: mop
+                        if isFn when (prog.fsnoForNode nodeid: mop) > 0 then fnOps.append from: mop
                         if isObj then {
                             asIds: (ListVal u32)
-                            { op9b: prog.ast.nodes.get i: mop.u64
+                            { op9b: prog.nodes.get i: mop.u64
                               match (op9b) case objectdef then {
                                   with ait: op9b.asItems.iterate do for aid: ait loop asIds.append from: aid
                               } else null }
@@ -4116,13 +4113,13 @@ Analysis: class {
                                 amid: asIds.get i: aI
                                 aI = aI + 1
                                 amop: u32
-                                { am: prog.ast.nodes.get i: amid.u64
+                                { am: prog.nodes.get i: amid.u64
                                   if am.namedoperation then amop = am.operation }
                                 if amop > 0 then {
                                     isFnA: false
-                                    { aop: prog.ast.nodes.get i: amop.u64
+                                    { aop: prog.nodes.get i: amop.u64
                                       if aop.functiondef then isFnA = true }
-                                    if isFnA when (prog.ast.fsnoForNode nodeid: amop) > 0 then fnOps.append from: amop
+                                    if isFnA when (prog.fsnoForNode nodeid: amop) > 0 then fnOps.append from: amop
                                 }
                             }
                         }
@@ -4134,7 +4131,7 @@ Analysis: class {
                     fop: fnOps.get i: fI
                     fI = fI + 1
                     paramIds: (ListVal u32)
-                    { fd: prog.ast.nodes.get i: fop.u64
+                    { fd: prog.nodes.get i: fop.u64
                       match (fd) case functiondef then {
                           with pit: fd.parameters.iterate do for pid: pit loop paramIds.append from: pid
                       } else null }
@@ -4147,7 +4144,7 @@ Analysis: class {
                         pNameRef: zast.nameid
                         pLn: u32
                         pCl: u32
-                        { pm: prog.ast.nodes.get i: pid.u64
+                        { pm: prog.nodes.get i: pid.u64
                           match (pm) case namedoperation then {
                               pOpId = pm.operation
                               pNameRef = pm.name
@@ -4161,7 +4158,7 @@ Analysis: class {
                             if pNameRef == zast.names.wkThis then isRecv = true
                             if (isRecv) == false then {
                                 isRecv = (ztypecheck.paramIsThisReceiverId
-                                    ast: prog.ast
+                                    ast: prog
                                     opId: pOpId
                                 )
                             }
@@ -4172,7 +4169,7 @@ Analysis: class {
                                     if (used.has item: vo) then {
                                         if (umut) == false then {
                                             (this.reportUnmutatedParam
-                                                ast: prog.ast
+                                                ast: prog
                                                 :st
                                                 fnOp: fop
                                                 vid: vo
@@ -4184,7 +4181,7 @@ Analysis: class {
                                     }
                                     if (used.has item: vo) == false then {
                                         pnm: (zast.poolTextAt
-                                            pool: prog.ast.names
+                                            pool: prog.names
                                             ref: (zast.nameid.create from: pNameRef.u32)
                                         )
                                         (this.warn
@@ -4201,22 +4198,22 @@ Analysis: class {
                     }
                 }
                 if fnOps.length > 0 then {
-                    mainFsno: prog.ast.fsnoForNode nodeid: (fnOps.get i: 0)
+                    mainFsno: prog.fsnoForNode nodeid: (fnOps.get i: 0)
                     with dit: st.typing.defVariableId.iterateItems do for dv: dit loop {
                         nid: dv.key
                         vid: dv.value
                         skip: false
                         if (skip) == false when (used.has item: vid) then skip = true
                         if (skip) == false then {
-                            fs: prog.ast.fsnoForNode nodeid: nid.u32.orPanic
+                            fs: prog.fsnoForNode nodeid: nid.u32.orPanic
                             if fs == mainFsno then {
                                 nm: String
                                 ln: u32
                                 cl: u32
                                 okL: false
-                                { nodeL: prog.ast.nodes.get i: nid.u64
+                                { nodeL: prog.nodes.get i: nid.u64
                                   match (nodeL) case assignment then {
-                                      nm = zast.poolTextCopy pool: prog.ast.names ref: nodeL.name
+                                      nm = zast.poolTextCopy pool: prog.names ref: nodeL.name
                                       ln = nodeL.lineno
                                       cl = nodeL.colno
                                       okL = true
@@ -4378,17 +4375,17 @@ Analysis: class {
     # `asString` at a container probe). Mutation evidence is `variableMutated`
     # (the lock rules) and `variableMoved` (the invalidate choke point) -- a
     # local moved into an owner needs its allocation, so it is not flagged.
-    reportViewableLocals: function {:this prog: Node.view uname: StringView st: zenv.ZSymbolTable} is {
-        if prog.program then {
+    reportViewableLocals: function {:this prog: Ast.view uname: StringView st: zenv.ZSymbolTable} is {
+        {
             mainOp: zast.nodeid
-            uN: prog.ast.units.length
+            uN: prog.units.length
             uI: u64
             for uI < uN loop {
-                uid: (zast.nodeid.create from: (prog.ast.units.get i: uI))
+                uid: (zast.nodeid.create from: (prog.units.get i: uI))
                 uI = uI + 1
-                { un: prog.ast.nodes.get i: uid.u64
+                { un: prog.nodes.get i: uid.u64
                   match (un) case namedoperation then {
-                      unm: zast.poolTextAt pool: prog.ast.names ref: un.name
+                      unm: zast.poolTextAt pool: prog.names ref: un.name
                       if unm.stringView == uname then mainOp = un.operation
                   } else null }
             }
@@ -4398,14 +4395,14 @@ Analysis: class {
             mainFsno: zvfs.fsno
             zeroFs: zvfs.fsno
             {
-                bodyIds: zast.unitBodyIdsAt ast: prog.ast unitId: mainOp
+                bodyIds: zast.unitBodyIdsAt ast: prog unitId: mainOp
                 with bit: bodyIds.iterate do for mid: bit loop {
                     if mainFsno == zeroFs then {
                         anch: u32
-                        { m: prog.ast.nodes.get i: mid.u64
+                        { m: prog.nodes.get i: mid.u64
                           if m.namedoperation then anch = m.operation }
                         if anch > 0 then {
-                            mainFsno = prog.ast.fsnoForNode nodeid: anch
+                            mainFsno = prog.fsnoForNode nodeid: anch
                         }
                     }
                 }
@@ -4429,11 +4426,11 @@ Analysis: class {
                     mut: st.typing.variableMutated.has item: vid
                     if (mut) == false then mut = st.typing.variableMoved.has item: vid
                     if (mut) == false then {
-                        fs: prog.ast.fsnoForNode nodeid: nid.u32.orPanic
+                        fs: prog.fsnoForNode nodeid: nid.u32.orPanic
                         if fs == mainFsno then {
-                            nodeL: prog.ast.nodes.get i: nid.u64
+                            nodeL: prog.nodes.get i: nid.u64
                             if nodeL.assignment then {
-                                kind: this.owningConvKind ast: prog.ast :st rhsId: nodeL.value
+                                kind: this.owningConvKind ast: prog :st rhsId: nodeL.value
                                 # a view is only equivalent while the SOURCE holds
                                 # the same bytes: a root that is written -- directly,
                                 # or by a callee taking it as a mutable borrow --
@@ -4443,7 +4440,7 @@ Analysis: class {
                                 srcMut: false
                                 {
                                     rvid: (this.convSourceRootVid
-                                        ast: prog.ast
+                                        ast: prog
                                         :st
                                         rhsId: nodeL.value
                                     )
@@ -4452,7 +4449,7 @@ Analysis: class {
                                     }
                                 }
                                 if kind.length > 0 when (srcMut) == false then {
-                                    nm: zast.poolTextAt pool: prog.ast.names ref: nodeL.name
+                                    nm: zast.poolTextAt pool: prog.names ref: nodeL.name
                                     (this.info
                                         code: "L022"
                                         msg: "local '\{nm}' is an owned copy (\{kind}) that is never mutated -- a borrowed view serves every use (`.stringView`, or `asString` at a probe)"
@@ -4474,15 +4471,15 @@ Analysis: class {
     # dead. Usage is declaration-based: a reference name resolved against the unit maps to the
     # same member DeclId that carries the private flag, so an unused alias is flagged even when
     # its target is used directly elsewhere.
-    reportUnusedDefs: function {:this prog: Node.view uname: StringView st: zenv.ZSymbolTable.view} is {
-        if prog.program then {
+    reportUnusedDefs: function {:this prog: Ast.view uname: StringView st: zenv.ZSymbolTable.view} is {
+        {
             mainTid: u64
             {
                 uo: (ztypecheck.declTypeIdOf
                     :st
                     declId: (st.typing.declFindChild
                         parentDeclId: st.typing.programRoot
-                        nameId: (zast.poolFind pool: prog.ast.names text: uname)
+                        nameId: (zast.poolFind pool: prog.names text: uname)
                     )
 )
                 if (uo.isZero) == false then mainTid = uo.u64
@@ -4530,14 +4527,14 @@ Analysis: class {
                 }
                 tgtNames: (ztypecheck.publicAliasInternalNames
                     :st
-                    pool: prog.ast.names
+                    pool: prog.names
                     tid: (ztypes.tid.create from: mainTid.u64)
 )
                 tI: u64
                 for tI < tgtNames.length loop {
                     tnm: tgtNames.get i: tI
                     tI = tI + 1
-                    tpid: (prog.ast.names.find s: tnm.stringView)
+                    tpid: (prog.names.find s: tnm.stringView)
                     if tpid > 0 then {
                         tdi: (st.typing.declTypedMemberIdOf
                             parentTypeId: (ztypes.tid.create from: mainTid.u64)
@@ -4558,17 +4555,17 @@ Analysis: class {
                     if mdi > 0 then usedE.add item: mdi
                 }
                 mainOp: zast.nodeid
-                uN: prog.ast.units.length
+                uN: prog.units.length
                 uI: u64
                 for uI < uN loop {
-                    uid: (zast.nodeid.create from: (prog.ast.units.get i: uI))
+                    uid: (zast.nodeid.create from: (prog.units.get i: uI))
                     uI = uI + 1
                     unm: String
                     uop: zast.nodeid
                     {
-                        un: prog.ast.nodes.get i: uid.u64
+                        un: prog.nodes.get i: uid.u64
                         if un.namedoperation then {
-                            unm = (zast.poolTextCopy pool: prog.ast.names ref: un.name)
+                            unm = (zast.poolTextCopy pool: prog.names ref: un.name)
                             uop = un.operation
                         }
                     }
@@ -4577,7 +4574,7 @@ Analysis: class {
                 if mainOp > 0 then {
                     memIds: (ListVal u32)
                     {
-                        bodyIds: zast.unitBodyIdsAt ast: prog.ast unitId: mainOp
+                        bodyIds: zast.unitBodyIdsAt ast: prog unitId: mainOp
                         with bit: bodyIds.iterate do for mid: bit loop memIds.append from: mid
                     }
                     # syntactic fallback evidence: stamps exist only for
@@ -4592,11 +4589,11 @@ Analysis: class {
                     if memIds.length > 0 then probe = memIds.get i: 0
                     segStart: u32
                     segEnd: u32
-                    sgN: prog.ast.fileSegs.length
+                    sgN: prog.fileSegs.length
                     {
                         sgI: u64
                         for sgI < sgN loop {
-                            sg: prog.ast.fileSegs.get i: sgI
+                            sg: prog.fileSegs.get i: sgI
                             sgI = sgI + 1
                             if probe >= sg.startId when probe < sg.endId then {
                                 narrower: segEnd == segStart
@@ -4612,7 +4609,7 @@ Analysis: class {
                     if segEnd > segStart then {
                         ndI: segStart.u64
                         for ndI < segEnd.u64 loop {
-                            nd0: prog.ast.nodes.get i: ndI.u64
+                            nd0: prog.nodes.get i: ndI.u64
                             if nd0.atomid then {
                                 refNameSet.add item: nd0.name.u64
                             }
@@ -4622,20 +4619,20 @@ Analysis: class {
                         # no segment covers the unit body: it is the root
                         # parse (only subunit loads append segments), so
                         # scan the nodes no segment covers.
-                        totN: prog.ast.nodes.length
+                        totN: prog.nodes.length
                         ndJ: 1.u64
                         for ndJ < totN loop {
                             covered: false
                             {
                                 sgJ: u64
                                 for sgJ < sgN loop {
-                                    sgB: prog.ast.fileSegs.get i: sgJ
+                                    sgB: prog.fileSegs.get i: sgJ
                                     sgJ = sgJ + 1
                                     if ndJ >= sgB.startId.u64 when ndJ < sgB.endId.u64 then covered = true
                                 }
                             }
                             if covered == false then {
-                                ndB0: prog.ast.nodes.get i: ndJ
+                                ndB0: prog.nodes.get i: ndJ
                                 if ndB0.atomid then {
                                     refNameSet.add item: ndB0.name.u64
                                 }
@@ -4652,7 +4649,7 @@ Analysis: class {
                         mLn: u32
                         mCl: u32
                         {
-                            m: prog.ast.nodes.get i: mid.u64
+                            m: prog.nodes.get i: mid.u64
                             if m.namedoperation then {
                                 mNameRef = m.name
                                 mLn = m.lineno
@@ -4674,7 +4671,7 @@ Analysis: class {
                                 if unref then unref = (refNameSet.has item: mNameRef.u64) == false
                                 if priv when unref then {
                                     dnm: (zast.poolTextAt
-                                        pool: prog.ast.names
+                                        pool: prog.names
                                         ref: (zast.nameid.create from: mNameRef.u32)
                                     )
                                     (this.warn
@@ -4697,7 +4694,7 @@ Analysis: class {
                         tNameRef: zast.nameid
                         tOp: u32
                         {
-                            tm: prog.ast.nodes.get i: tmid.u64
+                            tm: prog.nodes.get i: tmid.u64
                             if tm.namedoperation then {
                                 tNameRef = tm.name
                                 tOp = tm.operation
@@ -4705,7 +4702,7 @@ Analysis: class {
                         }
                         isObjT: false
                         if tOp > 0 then {
-                            to: prog.ast.nodes.get i: tOp.u64
+                            to: prog.nodes.get i: tOp.u64
                             if to.objectdef then isObjT = true
                         }
                         if isObjT when tNameRef > 0 then {
@@ -4724,14 +4721,14 @@ Analysis: class {
                             if typeTid > 0 then {
                                 tmemIds: (ListVal u32)
                                 {
-                                    tod: prog.ast.nodes.get i: tOp.u64
+                                    tod: prog.nodes.get i: tOp.u64
                                     if tod.objectdef then {
                                         with iit: tod.isItems.iterate do for iid: iit loop tmemIds.append from: iid
                                         with ait: tod.asItems.iterate do for aid: ait loop tmemIds.append from: aid
                                     }
                                 }
                                 tnm: (zast.poolTextAt
-                                    pool: prog.ast.names
+                                    pool: prog.names
                                     ref: (zast.nameid.create from: tNameRef.u32)
                                 )
                                 tmN: tmemIds.length
@@ -4743,7 +4740,7 @@ Analysis: class {
                                     tmLn: u32
                                     tmCl: u32
                                     {
-                                        tmm: prog.ast.nodes.get i: tmmid.u64
+                                        tmm: prog.nodes.get i: tmmid.u64
                                         if tmm.namedoperation then {
                                             tmName = tmm.name
                                             tmLn = tmm.lineno
@@ -4763,7 +4760,7 @@ Analysis: class {
 )
                                             if tpriv when (usedE.has item: tmdi) == false then {
                                                 tmnm: (zast.poolTextAt
-                                                    pool: prog.ast.names
+                                                    pool: prog.names
                                                     ref: (zast.nameid.create from: tmName.u32)
                                                 )
                                                 (this.warn
@@ -4976,14 +4973,8 @@ isAnchor: function {
 }
 
 # mainUnitNameOf -- the program's main unit name.
-mainUnitNameOf: function {program: Node.view} out String is {
-    match (
-        program
-    ) case program then {
-        return program.mainUnitName.copy
-    } else {
-        return "".string
-    }
+mainUnitNameOf: function {program: Ast.view} out String is {
+    return program.mainUnitName.copy
 }
 
 # unitNameOf -- a file path's unit name: the final path segment without the ".z" suffix.

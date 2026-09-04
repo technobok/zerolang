@@ -28,16 +28,12 @@ public: unit {
 }
 
 Node: zast.Node
+Ast: zast.Ast
 
 # fsnoFor -- nodeid -> fsno through the snapshot: the program's carrier
 # on a successful parse, the parser's partial carrier on a parse error.
 fsnoFor: function {r: CheckResult.view nodeid: u32} out zvfs.fsno is {
-    pg: r.prog
-    match (
-        pg
-    ) case program then {
-        return (pg.ast.fsnoForNode :nodeid)
-    } else null
+    if r.parseOk then return (r.prog.fsnoForNode :nodeid)
     return (r.parser.ast.fsnoForNode :nodeid)
 }
 
@@ -54,7 +50,7 @@ CheckResult: class {
     # how many diagnostics were raised
     errorCount: u64
     # the tree, owned by the result
-    prog: Node
+    prog: Ast
     # the symbol table, none when checking did not get that far
     st: (Option zenv.ZSymbolTable)
     # the filesystem the sources were read through, kept so a later lookup
@@ -104,12 +100,8 @@ check: function {
     }
     p: zparser.Parser.create
     prog: p.parse :vfs :rootid mainUnitName: mainUnit.string
-    isErr: false
-    match (
-        prog
-    ) case error then {
-        isErr = true
-    } else null
+    # a failed parse names its error as the tree's root row
+    isErr: zast.isErrorAt ast: prog id: prog.root.u32
     if isErr then {
         return (CheckResult
             parseOk: false
@@ -178,7 +170,7 @@ diagrow: record {
 # node->file segments, matching zc's errorMessage.
 diagsOf: function {r: CheckResult.view rows: (ListVal diagrow) msgs: (List String)} is {
     if r.parseOk == false then {
-        appendParseError n: r.prog :rows :msgs
+        appendParseError n: (r.prog.nodes.get i: r.prog.root.u64) :rows :msgs
     }
     diagsOfSt :rows :msgs :r
 }

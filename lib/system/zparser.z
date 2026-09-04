@@ -279,6 +279,18 @@ Parser: class {
         return (zast.nodeid.create from: id)
     }
 
+    # errorTree -- hand the tree back with `e` as its root row. A failed parse
+    # still delivers everything it did build, and the error travels IN the tree
+    # the way every other parse error already does.
+    errorTree: function {:this e: Node.take} out zast.Ast is {
+        eid: this.nextId
+        tbl: Ast.create
+        tbl swap this.ast
+        tbl.root = eid
+        zast.tableSet ast: tbl id: eid.u32 child: e
+        return tbl
+    }
+
     # intern -- move a finished node into its reserved master-table slot.
     intern: function {:this n: Node.take} out zast.nodeid is {
         return (zast.tableAdd ast: this.ast :n)
@@ -3426,7 +3438,7 @@ Parser: class {
     # first so its definitions suppress externs; the worklist is drained
     # LIFO via List.pop. Definitions/queue are parallel String/Node lists
     # (no reftype-valued Map).
-    parse: function {:this vfs: zvfs.ZVfs rootid: zvfs.fsno mainUnitName: String.view} out Node is {
+    parse: function {:this vfs: zvfs.ZVfs rootid: zvfs.fsno mainUnitName: String.view} out zast.Ast is {
         units: (ListVal u32)
         coreNames: (List String)
         coreNamesOut: (ListVal u32)
@@ -3445,7 +3457,7 @@ Parser: class {
         coreOk: false
         if coreErr then {
             coreNF: this.isFileNotFound node: coreRes
-            if (coreNF) == false then return coreRes
+            if (coreNF) == false then return (this.errorTree e: coreRes)
         } else {
             coreOk = true
         }
@@ -3483,7 +3495,7 @@ Parser: class {
                     nf: this.isFileNotFound node: res
                     if nf then {
                         if name.stringView == mainUnitName.stringView then {
-                            return (Node.error (zast.ErrorData
+                            return (this.errorTree e: (Node.error (zast.ErrorData
                                 nodeid: this.nextId
                                 lineno: 0
                                 colno: 0
@@ -3493,7 +3505,7 @@ Parser: class {
                                 fsno: zvfs.fsno
                                 note: "".string
                                 hint: "".string)
-                            )
+                            ))
                         }
                         # a free name with no unit file behind it is not a
                         # load failure: leave it unresolved -- the checker
@@ -3501,7 +3513,7 @@ Parser: class {
                         # positions) and keeps checking the rest of the unit
                         defNames.append name.copy
                     } else {
-                        return res
+                        return (this.errorTree e: res)
                     }
                 } else {
                     defNames.append name.copy
@@ -3514,13 +3526,17 @@ Parser: class {
         units swap this.ast.units
         tbl: Ast.create
         tbl swap this.ast
-        return (Node.program (zast.ProgramData
-            nodeid: pid
-            lineno: 1
-            colno: 1
-            mainUnitName: mainUnitName.copy
-            ast: tbl)
+        # the root is a row like every other node: the tree is what is returned,
+        # and `root` is how a reader finds the row inside it
+        tbl.root = pid
+        mun: mainUnitName.copy
+        mun swap tbl.mainUnitName
+        (zast.tableSet
+            ast: tbl
+            id: pid.u32
+            child: (Node.program (zast.ProgramData nodeid: pid lineno: 1 colno: 1))
         )
+        return tbl
     }
 }
 

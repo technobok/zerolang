@@ -804,11 +804,17 @@ main: function is {
     reqMain: true
     if isDumpSql then reqMain = false
     if isDumpCanon then reqMain = false
-    match (
-        prog
-    ) case error then {
-        emsg: errorMessage e: prog :vfs ast: p.ast fallbackFsno: mainFsno
-        io.eprintln emsg
+    # a failed parse hands back the tree with the error as its root row. The
+    # test is a call, not a binding, so no shared lock on `prog.nodes` outlives
+    # it -- typecheck below takes the tree exclusively.
+    if (zast.isErrorAt ast: prog id: prog.root.u32) then {
+        progRoot: prog.nodes.get i: prog.root.u64
+        match (
+            progRoot
+        ) case error then {
+            emsg: errorMessage e: progRoot :vfs ast: p.ast fallbackFsno: mainFsno
+            io.eprintln emsg
+        } else null
         io.eprintln "1 error found"
         os.exit code: 1
     } else {
@@ -845,14 +851,10 @@ main: function is {
         checkStart: os.monotonicMillis
         nerr: st.typing.errors.length
         if nerr > 0 then {
-            match (
-                prog
-            ) case program then {
-                with eit: st.typing.errors.iterate do for er: eit loop {
-                    elx: errorMessage e: er :vfs ast: prog.ast fallbackFsno: mainFsno
-                    io.eprintln elx
-                }
-            } else null
+            with eit: st.typing.errors.iterate do for er: eit loop {
+                elx: errorMessage e: er :vfs ast: prog fallbackFsno: mainFsno
+                io.eprintln elx
+            }
             if nerr == 1 then {
                 io.eprintln "1 error found"
             } else {

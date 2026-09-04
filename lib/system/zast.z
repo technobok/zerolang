@@ -89,6 +89,7 @@ public: unit {
     :printNodeCanonical
     :printProgramCanonicalRoot
     :tableAdd
+    :tableSet
     :tableReserve
     :tableTake
     :unitBodyIdsAt
@@ -291,9 +292,9 @@ unitkind: variant {
 
 # The AST node, as a reftype tagged sum. The arm is the
 # discriminant; arm-payload carrier classes (declared below)
-# hold the per-arm data. Node is declared before the carriers
-# because carriers store Node fields by value, so the union's
-# struct must be fully visible at each carrier's field site.
+# hold the per-arm data. No carrier holds a Node: every child
+# reference is a nodeid or a list of them, so the tree is flat
+# and a row is reached only through the table.
 Node: union {
     # a parse or check failure, kept IN the tree so a walk can carry on past it
     error: ErrorData
@@ -727,6 +728,12 @@ Ast: class {
     # Per-file nodeid segments: diagnostics map an erroring node back to
     # the file whose parse allocated it.
     fileSegs: (List FileSeg)
+    # the program row's own id. The root is a row like any other, so a reader
+    # holding the tree can reach it without being handed the node separately
+    root: nodeid
+    # the unit a demand-driven walk starts from. It names the tree, not one row
+    # in it, which is why it sits here rather than on the program row
+    mainUnitName: String
 } as {
     # an empty tree: no nodes, no units, and a name pool holding only its
     # sentinel row
@@ -736,6 +743,8 @@ Ast: class {
             names: StringPool.create
             units: (ListVal u32)
             fileSegs: (List FileSeg)
+            root: nodeid
+            mainUnitName: String
         )
         # row 0 is the sentinel a node id of 0 addresses: the placeholder arm,
         # which every reader already treats as "nothing here"
@@ -1397,10 +1406,6 @@ ProgramData: class {
     lineno: u32
     # the column this program starts at
     colno: u32
-    # the unit a demand-driven walk starts from
-    mainUnitName: String
-    # the tree itself. The program node OWNS it, so everything else borrows
-    ast: Ast
 }
 
 # Arm-name dumpers: return the canonical uppercase label for an
@@ -1874,7 +1879,7 @@ printNodeWith: function {ast: Ast.view n: Node.view withId: bool} is {
             ubi = ubi + 1
         }
     } case program then {
-        print "\{idp}program @\{n.lineno}:\{n.colno} units=\{ast.units.length} mainUnitName=\{n.mainUnitName}"
+        print "\{idp}program @\{n.lineno}:\{n.colno} units=\{ast.units.length} mainUnitName=\{ast.mainUnitName}"
         pui: u64
         pun: ast.units.length
         for pui < pun loop {
@@ -1912,16 +1917,17 @@ printNodeCanonicalAt: function {ast: Ast.view nId: nodeid} is {
     printNodeCanonical :ast :n
 }
 
-# printProgramCanonicalRoot -- canonical dump entry for a parsed program
-# node (its master table rides inside it).
-printProgramCanonicalRoot: function {prog: Node.view} is {
+# printProgramCanonicalRoot -- canonical dump entry for a parsed tree, whose
+# root row `ast.root` names.
+printProgramCanonicalRoot: function {ast: Ast.view} is {
+    prog: ast.nodes.get i: ast.root.u64
     if prog.program then {
-        print "program @\{prog.lineno}:\{prog.colno} units=\{prog.ast.units.length} mainUnitName=\{prog.mainUnitName}"
+        print "program @\{prog.lineno}:\{prog.colno} units=\{ast.units.length} mainUnitName=\{ast.mainUnitName}"
         pui: u64
-        pun: prog.ast.units.length
+        pun: ast.units.length
         for pui < pun loop {
-            puid: (nodeid.create from: (prog.ast.units.get i: pui))
-            printNodeCanonicalAt ast: prog.ast nId: puid
+            puid: (nodeid.create from: (ast.units.get i: pui))
+            printNodeCanonicalAt :ast nId: puid
             pui = pui + 1
         }
     }

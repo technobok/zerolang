@@ -394,18 +394,14 @@ ZDumper: class {
     }
 
     # emit the node table: every node of the tree, one row each
-    appendNodes: function {:this program: Node.view} is {
-        match (
-            program
-        ) case program then {
-            uCnt9a: program.ast.units.length
-            uIdx9a: u64
-            for uIdx9a < uCnt9a loop {
-                uId: (zast.nodeid.create from: (program.ast.units.get i: uIdx9a))
-                uIdx9a = uIdx9a + 1
-                this.appendUnitFromNamedOp ast: program.ast unitNamedOpId: uId
-            }
-        } else null
+    appendNodes: function {:this program: Ast.view} is {
+        uCnt9a: program.units.length
+        uIdx9a: u64
+        for uIdx9a < uCnt9a loop {
+            uId: (zast.nodeid.create from: (program.units.get i: uIdx9a))
+            uIdx9a = uIdx9a + 1
+            this.appendUnitFromNamedOp ast: program unitNamedOpId: uId
+        }
     }
 
     # emit a unit's rows, reached through the namedoperation that names it
@@ -422,22 +418,18 @@ ZDumper: class {
     }
 
     # unit stage.
-    appendUnits: function {:this program: Node.view typing: ztyping.ZTyping.view} is {
-        match (
-            program
-        ) case program then {
-            uCnt9b: program.ast.units.length
-            uIdx9b: u64
-            for uIdx9b < uCnt9b loop {
-                uId: (zast.nodeid.create from: (program.ast.units.get i: uIdx9b))
-                uIdx9b = uIdx9b + 1
-                (this.appendUnitRow ast: program.ast
-                    unitNamedOpId: uId
-                    mainName: program.mainUnitName.stringView
-                    :typing
-                )
-            }
-        } else null
+    appendUnits: function {:this program: Ast.view typing: ztyping.ZTyping.view} is {
+        uCnt9b: program.units.length
+        uIdx9b: u64
+        for uIdx9b < uCnt9b loop {
+            uId: (zast.nodeid.create from: (program.units.get i: uIdx9b))
+            uIdx9b = uIdx9b + 1
+            (this.appendUnitRow ast: program
+                unitNamedOpId: uId
+                mainName: program.mainUnitName.stringView
+                :typing
+            )
+        }
     }
 
     # emit one unit row
@@ -800,30 +792,26 @@ ZDumper: class {
 
     # emit the units in CANONICAL order, so two dumps of the same program
     # compare equal whatever order the walk found them in
-    appendUnitsCanon: function {:this program: Node.view} is {
+    appendUnitsCanon: function {:this program: Ast.view} is {
         rows: (List String)
-        match (
-            program
-        ) case program then {
-            mn: program.mainUnitName.stringView
-            uCnt9c: program.ast.units.length
-            uIdx9c: u64
-            for uIdx9c < uCnt9c loop {
-                uId: (zast.nodeid.create from: (program.ast.units.get i: uIdx9c))
-                uIdx9c = uIdx9c + 1
-                u: program.ast.nodes.get i: uId.u64
-                match (
-                    u
-                ) case namedoperation then {
-                    uname: zast.poolTextAt pool: program.ast.names ref: u.name
-                    isMain: uname.stringView == mn
-                    unameSql: sqlStr s: uname.stringView
-                    isMainStr: boolNum b: isMain
-                    line: "\{unameSql} | \{isMainStr}"
-                    rows.append line
-                } else null
-            }
-        } else null
+        mn: program.mainUnitName.stringView
+        uCnt9c: program.units.length
+        uIdx9c: u64
+        for uIdx9c < uCnt9c loop {
+            uId: (zast.nodeid.create from: (program.units.get i: uIdx9c))
+            uIdx9c = uIdx9c + 1
+            u: program.nodes.get i: uId.u64
+            match (
+                u
+            ) case namedoperation then {
+                uname: zast.poolTextAt pool: program.names ref: u.name
+                isMain: uname.stringView == mn
+                unameSql: sqlStr s: uname.stringView
+                isMainStr: boolNum b: isMain
+                line: "\{unameSql} | \{isMainStr}"
+                rows.append line
+            } else null
+        }
         this.emitSection title: "unit" :rows
     }
 
@@ -1255,22 +1243,18 @@ ZDumper: class {
     }
 
     # emit which type argument each call bound a generic parameter to
-    appendCallGenericBindingCanon: function {:this program: Node.view st: zenv.ZSymbolTable} is {
+    appendCallGenericBindingCanon: function {:this program: Ast.view st: zenv.ZSymbolTable} is {
         rows: (List String)
-        match (
-            program
-        ) case program then {
-            with cgit: st.typing.callGenericBinding.iterateItems do for cg: cgit loop {
-                hld: (zast.poolTextAt
-                    pool: program.ast.names
-                    ref: (zast.nameid.create from: cg.key.param.u32.orPanic)
-                )
-                tn: canonTypeName reg: st.reg tid: (ztypes.tid.create from: cg.value)
-                hSql: sqlStr s: hld.stringView
-                tSql: sqlStr s: tn.stringView
-                rows.append "\{hSql} | \{tSql}"
-            }
-        } else null
+        with cgit: st.typing.callGenericBinding.iterateItems do for cg: cgit loop {
+            hld: (zast.poolTextAt
+                pool: program.names
+                ref: (zast.nameid.create from: cg.key.param.u32.orPanic)
+            )
+            tn: canonTypeName reg: st.reg tid: (ztypes.tid.create from: cg.value)
+            hSql: sqlStr s: hld.stringView
+            tSql: sqlStr s: tn.stringView
+            rows.append "\{hSql} | \{tSql}"
+        }
         this.emitSection title: "call_generic_binding" :rows
     }
 
@@ -1472,26 +1456,22 @@ walkExprStampsOptAt: function {
 
 # overrideExpressionStamps -- collect the wrapper overrides across every unit,
 # then rewrite nodeType so appendTypedNodes emits the descended values.
-overrideExpressionStamps: function {typing: ztyping.ZTyping program: Node.view} is {
+overrideExpressionStamps: function {typing: ztyping.ZTyping program: Ast.view} is {
     ids: (ListVal u64)
     vals: (ListVal u64)
-    match (
-        program
-    ) case program then {
-        uCnt9d: program.ast.units.length
-        uIdx9d: u64
-        for uIdx9d < uCnt9d loop {
-            uId: (zast.nodeid.create from: (program.ast.units.get i: uIdx9d))
-            uIdx9d = uIdx9d + 1
-            (walkExprStampsAt
-                :typing
-                ast: program.ast
-                nId: (zast.nodeid.create from: uId)
-                :ids
-                :vals
-            )
-        }
-    } else null
+    uCnt9d: program.units.length
+    uIdx9d: u64
+    for uIdx9d < uCnt9d loop {
+        uId: (zast.nodeid.create from: (program.units.get i: uIdx9d))
+        uIdx9d = uIdx9d + 1
+        (walkExprStampsAt
+            :typing
+            ast: program
+            nId: (zast.nodeid.create from: uId)
+            :ids
+            :vals
+        )
+    }
     i: u64
     cnt: ids.length
     for i < cnt loop {
@@ -1507,38 +1487,22 @@ overrideExpressionStamps: function {typing: ztyping.ZTyping program: Node.view} 
 # --- entry point ---
 
 # dumpSql -- the full dump: schema, then files, ast_nodes and unit rows.
-dumpSql: function {program: Node.view vfs: zvfs.ZVfs symtab: zenv.ZSymbolTable} out String is {
+dumpSql: function {program: Ast.view vfs: zvfs.ZVfs symtab: zenv.ZSymbolTable} out String is {
     d: ZDumper acc: schemaSql
     d.appendFiles :vfs
     d.appendNodes :program
-    match (
-        program
-    ) case program then {
-        d.appendSynthNodes ast: program.ast typing: symtab.typing
-    } else null
+    d.appendSynthNodes ast: program typing: symtab.typing
     d.appendUnits :program typing: symtab.typing
-    match (
-        program
-    ) case program then {
-        d.appendTypes st: symtab
-        d.appendDecls ast: program.ast typing: symtab.typing
-    } else null
+    d.appendTypes st: symtab
+    d.appendDecls ast: program typing: symtab.typing
     d.appendGenericChildren st: symtab
     d.appendGenericArgs st: symtab
     overrideExpressionStamps typing: symtab.typing :program
     d.appendTypedNodes typing: symtab.typing
-    match (
-        program
-    ) case program then {
-        d.appendAtomStamps typing: symtab.typing pool: program.ast.names
-    } else null
+    d.appendAtomStamps typing: symtab.typing pool: program.names
     d.appendMemberConst typing: symtab.typing
     d.appendConformance typing: symtab.typing
-    match (
-        program
-    ) case program then {
-        d.appendSymbolTable pool: program.ast.names st: symtab
-    } else null
+    d.appendSymbolTable pool: program.names st: symtab
     return d.acc.copy
 }
 
@@ -1551,14 +1515,8 @@ canonTypeName: function {reg: ztypes.ZTypeRegistry.view tid: ztypes.tid} out Str
 }
 
 # mainUnitNameOf -- the program's main unit name as an owned String.
-mainUnitNameOf: function {program: Node.view} out String is {
-    match (
-        program
-    ) case program then {
-        return program.mainUnitName.copy
-    } else {
-        return "".string
-    }
+mainUnitNameOf: function {program: Ast.view} out String is {
+    return program.mainUnitName.copy
 }
 
 # dumpCanon -- a canonical, id-normalized rendering of the typecheck state
@@ -1569,26 +1527,18 @@ mainUnitNameOf: function {program: Node.view} out String is {
 # covered by the lexer / parser goldens and omitted here.
 # render the whole program (AST plus symbol table) as canonical text
 # for golden-diff comparison.
-dumpCanon: function {program: Node.view symtab: zenv.ZSymbolTable} out String is {
+dumpCanon: function {program: Ast.view symtab: zenv.ZSymbolTable} out String is {
     mu: mainUnitNameOf :program
     d: ZDumper acc: "".string
     d.appendUnitsCanon :program
-    match (
-        program
-    ) case program then {
-        d.appendTypesCanon unm: mu.stringView st: symtab
-        d.appendDeclChildCanon ast: program.ast unm: mu.stringView st: symtab
-        d.appendArgDispositionCanon ast: program.ast st: symtab
-    } else null
+    d.appendTypesCanon unm: mu.stringView st: symtab
+    d.appendDeclChildCanon ast: program unm: mu.stringView st: symtab
+    d.appendArgDispositionCanon ast: program st: symtab
     d.appendGenericChildrenCanon unm: mu.stringView st: symtab
     d.appendGenericArgsCanon unm: mu.stringView st: symtab
     d.appendConformanceCanon unm: mu.stringView st: symtab
-    match (
-        program
-    ) case program then {
-        d.appendMemberConstCanon pool: program.ast.names unm: mu.stringView st: symtab
-        d.appendSymbolTableCanon pool: program.ast.names st: symtab
-    } else null
+    d.appendMemberConstCanon pool: program.names unm: mu.stringView st: symtab
+    d.appendSymbolTableCanon pool: program.names st: symtab
     d.appendCallGenericBindingCanon :program st: symtab
     return d.acc.copy
 }

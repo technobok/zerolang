@@ -2622,25 +2622,15 @@ mnIs: function {ctx: Ctx.view id: zast.nameid at: u64} out bool is {
 
 # buildMemberNameIds -- those names as pool ids for the program being emitted,
 # in mnXxx order. A carrier with no program answers zeros, which match nothing.
-buildMemberNameIds: function {program: Node.view acc: ListVal zast.nameid} is {
+buildMemberNameIds: function {program: Ast.view acc: ListVal zast.nameid} is {
     names: (List String)
     memberDispatchNames acc: names
     mn9: names.length
     mi9: u64
-    match (
-        program
-    ) case program then {
-        for mi9 < mn9 loop {
-            nm9: names.get i: mi9
-            acc.append (zast.poolFind pool: program.ast.names text: nm9.stringView)
-            mi9 = mi9 + 1
-        }
-    } else {
-        mz9: zast.nameid
-        for mi9 < mn9 loop {
-            acc.append mz9
-            mi9 = mi9 + 1
-        }
+    for mi9 < mn9 loop {
+        nm9: names.get i: mi9
+        acc.append (zast.poolFind pool: program.names text: nm9.stringView)
+        mi9 = mi9 + 1
     }
 }
 
@@ -2695,7 +2685,7 @@ originBaseNames: function {acc: List String} is {
 # registers none of them and every row stays 0; the list is filled either way,
 # so an ogXxx index is always in range.
 buildOriginTids: function {
-    program: Node.view
+    program: Ast.view
     symtab: zenv.ZSymbolTable.view
     acc: ListVal ztypes.tid
 } is {
@@ -2703,21 +2693,11 @@ buildOriginTids: function {
     originBaseNames acc: names
     n: names.length
     i: u64
-    match (
-        program
-    ) case program then {
-        for i < n loop {
-            nm: names.get :i
-            bt: builtinTid ast: program.ast :symtab base: nm.stringView
-            acc.append (ztypes.tid.create from: bt)
-            i = i + 1
-        }
-    } else {
-        zero: ztypes.tid
-        for i < n loop {
-            acc.append zero
-            i = i + 1
-        }
+    for i < n loop {
+        nm: names.get :i
+        bt: builtinTid ast: program :symtab base: nm.stringView
+        acc.append (ztypes.tid.create from: bt)
+        i = i + 1
     }
 }
 
@@ -21641,26 +21621,26 @@ unitConstTextOf: function {
 # lookup key. Hoisting it -- which is what the main-unit filter left behind --
 # resolves every unit's natives under the main unit's name, so every row misses
 # and every declaration in the program reads as unimplemented at once.
-checkLoadedNatives: function {program: Node.view ctx: Ctx} is {
-    if program.program then {
-        uCnt9c: program.ast.units.length
+checkLoadedNatives: function {program: Ast.view ctx: Ctx} is {
+    {
+        uCnt9c: program.units.length
         uIdx9c: u64
         for uIdx9c < uCnt9c loop {
-            uId: (zast.nodeid.create from: (program.ast.units.get i: uIdx9c))
+            uId: (zast.nodeid.create from: (program.units.get i: uIdx9c))
             uIdx9c = uIdx9c + 1
             opId: zast.nodeid
             unitName: String
             {
-                u: program.ast.nodes.get i: uId.u64
+                u: program.nodes.get i: uId.u64
                 if u.namedoperation then {
-                    un: zast.poolTextAt pool: program.ast.names ref: u.name
+                    un: zast.poolTextAt pool: program.names ref: u.name
                     opId = u.operation
                     unitName = un.copy
                 }
             }
             if opId > 0 then {
                 (checkNativesResolve
-                    ast: program.ast
+                    ast: program
                     :ctx
                     unitOpId: opId
                     unitName: unitName.stringView
@@ -21778,23 +21758,23 @@ checkNativesResolve: function {
 
 # fill the data-element cache for the whole program, once, before anything
 # reads it
-fillDataElems: function {program: Node.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
-    if program.program then {
-        uCnt9a: program.ast.units.length
+fillDataElems: function {program: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
+    {
+        uCnt9a: program.units.length
         uIdx9a: u64
         for uIdx9a < uCnt9a loop {
-            uId: (zast.nodeid.create from: (program.ast.units.get i: uIdx9a))
+            uId: (zast.nodeid.create from: (program.units.get i: uIdx9a))
             uIdx9a = uIdx9a + 1
             opId: zast.nodeid
             {
-                u: program.ast.nodes.get i: uId.u64
+                u: program.nodes.get i: uId.u64
                 if u.namedoperation then opId = u.operation
             }
             if opId > 0 then {
                 (fillDataElemsIn
                     :symtab
                     :ctx
-                    ast: program.ast
+                    ast: program
                     mainOpId: opId
                 )
             }
@@ -21890,19 +21870,19 @@ dataElemLabel: function {ast: Ast.view n: Node.view} out String is {
 }
 
 # scan the program for the runtime helpers it needs.
-fillNeeds: function {program: Node.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
-    if program.program then {
-        uCnt9b: program.ast.units.length
+fillNeeds: function {program: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
+    {
+        uCnt9b: program.units.length
         uIdx9b: u64
         for uIdx9b < uCnt9b loop {
-            uId: (zast.nodeid.create from: (program.ast.units.get i: uIdx9b))
+            uId: (zast.nodeid.create from: (program.units.get i: uIdx9b))
             uIdx9b = uIdx9b + 1
             opId: zast.nodeid
             unitNameText: String
             {
-                u: program.ast.nodes.get i: uId.u64
+                u: program.nodes.get i: uId.u64
                 if u.namedoperation then {
-                    un: zast.poolTextAt pool: program.ast.names ref: u.name
+                    un: zast.poolTextAt pool: program.names ref: u.name
                     opId = u.operation
                     unitNameText = un.copy
                 }
@@ -21911,7 +21891,7 @@ fillNeeds: function {program: Node.view symtab: zenv.ZSymbolTable.view ctx: Ctx}
                 (fillNeedsIn
                     :symtab
                     :ctx
-                    ast: program.ast
+                    ast: program
                     unitName: unitNameText.stringView
                     mainOpId: opId
                 )
@@ -22498,25 +22478,25 @@ emitUnitMonoInstances: function {
 # per DEFINITION, by stdFnUndemanded and the native filters collectFnDecls
 # applies. ctx.mainName is rebound to each unit for the duration.
 emitFnsPass: function {
-    program: Node.view
+    program: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     declOnly: bool
     buf: String.borrow
 } is {
-    if program.program then {
-        uCnt9e: program.ast.units.length
+    {
+        uCnt9e: program.units.length
         uIdx9e: u64
         for uIdx9e < uCnt9e loop {
-            uId: (zast.nodeid.create from: (program.ast.units.get i: uIdx9e))
+            uId: (zast.nodeid.create from: (program.units.get i: uIdx9e))
             uIdx9e = uIdx9e + 1
             opId: zast.nodeid
             unitNameText: String
             un9Id: zast.nameid
             {
-                u: program.ast.nodes.get i: uId.u64
+                u: program.nodes.get i: uId.u64
                 if u.namedoperation then {
-                    un: zast.poolTextAt pool: program.ast.names ref: u.name
+                    un: zast.poolTextAt pool: program.names ref: u.name
                     opId = u.operation
                     unitNameText = un.copy
                     un9Id = u.name
@@ -22530,11 +22510,11 @@ emitFnsPass: function {
                     name: unitNameText.stringView
                     unitDecl: (ztypecheck.unitDeclOfName st: symtab nameId: un9Id)
                 )
-                isTpl: isGenericTemplateUnitOp ast: program.ast :opId
+                isTpl: isGenericTemplateUnitOp ast: program :opId
                 if isTpl then {
                     (emitUnitMonoInstances
                         :symtab
-                        ast: program.ast
+                        ast: program
                         :ctx
                         templateName: unitNameText.stringView
                         templateUnitOpId: opId
@@ -22545,7 +22525,7 @@ emitFnsPass: function {
                     (emitFnsIn
                         :symtab
                         :ctx
-                        ast: program.ast
+                        ast: program
                         mainOpId: opId
                         ownerTid: ztypes.tid
                         :declOnly
@@ -22561,7 +22541,7 @@ emitFnsPass: function {
 # emitFns -- the main unit's function declarations then definitions
 # (two-phase index walk so the body list is free during emission).
 emitFns: function {
-    program: Node.view
+    program: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     buf: String.borrow
@@ -23211,30 +23191,30 @@ emitFnBody: function {
 # collectUnitLiterals -- pool the plain literals of every main-unit
 # function body.
 collectUnitLiterals: function {
-    program: Node.view
+    program: Ast.view
     symtab: zenv.ZSymbolTable.view
     ids: ListVal u64
     texts: List String
 } is {
-    if program.program then {
-        uCnt9f: program.ast.units.length
+    {
+        uCnt9f: program.units.length
         uIdx9f: u64
         for uIdx9f < uCnt9f loop {
-            uId: (zast.nodeid.create from: (program.ast.units.get i: uIdx9f))
+            uId: (zast.nodeid.create from: (program.units.get i: uIdx9f))
             uIdx9f = uIdx9f + 1
             opId: zast.nodeid
             unitNameText: String
             {
-                u: program.ast.nodes.get i: uId.u64
+                u: program.nodes.get i: uId.u64
                 if u.namedoperation then {
-                    un: zast.poolTextAt pool: program.ast.names ref: u.name
+                    un: zast.poolTextAt pool: program.names ref: u.name
                     opId = u.operation
                     unitNameText = un.copy
                 }
             }
             if opId > 0 then {
                 (collectUnitLiteralsIn
-                    ast: program.ast
+                    ast: program
                     mainOpId: opId
                     :symtab
                     unitName: unitNameText.stringView
@@ -23361,7 +23341,7 @@ emitLiteralPools: function {
 # for it, and no codeBuf walk may claim it), then the literal pools, the code, the
 # function bodies and C's `main`.
 assembleEmitOutput: function {
-    program: Node.view
+    program: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     runtimeDir: StringView
@@ -23375,9 +23355,9 @@ assembleEmitOutput: function {
     # method -- which emits after the runtime pass -- is still in time. This is
     # why `prelude` is a unit of its own: it goes into the header, ahead of the
     # literal pool, and no codeBuf walk may claim it.
-    if program.program then {
+    {
         (emitRuntimeUnit
-            ast: program.ast
+            ast: program
             :symtab
             :ctx
             :runtimeDir
@@ -23442,7 +23422,7 @@ runtimetids: record {
 # resolveRuntimeTids -- resolve those three, or leave a tid 0 where the program
 # registers none (a unit with no main and no strings registers neither).
 resolveRuntimeTids: function {
-    program: Node.view
+    program: Ast.view
     symtab: zenv.ZSymbolTable.view
 } out runtimetids is {
     strId: ztypes.tid
@@ -23450,16 +23430,16 @@ resolveRuntimeTids: function {
     sysId: zast.nameid
     strNmId: zast.nameid
     svNmId: zast.nameid
-    if program.program then {
-        sysId = zast.poolFind pool: program.ast.names text: "system"
-        strNmId = zast.poolFind pool: program.ast.names text: "String"
-        svNmId = zast.poolFind pool: program.ast.names text: "StringView"
+    {
+        sysId = zast.poolFind pool: program.names text: "system"
+        strNmId = zast.poolFind pool: program.names text: "String"
+        svNmId = zast.poolFind pool: program.names text: "StringView"
     }
     sgo: (optionval.none u64)
-    if program.program then {
+    {
         ud11x: ztypecheck.unitDeclOfName st: symtab nameId: sysId
         sgo = (ztypecheck.resolvedByIdsRo
-            ast: program.ast
+            ast: program
             st: symtab
             unitDecl: ud11x
             name: strNmId
@@ -23471,10 +23451,10 @@ resolveRuntimeTids: function {
         strId = ztypes.tid.create from: (sgo)
     } case none then null
     vgo: (optionval.none u64)
-    if program.program then {
+    {
         ud12x: ztypecheck.unitDeclOfName st: symtab nameId: sysId
         vgo = (ztypecheck.resolvedByIdsRo
-            ast: program.ast
+            ast: program
             st: symtab
             unitDecl: ud12x
             name: svNmId
@@ -23487,13 +23467,13 @@ resolveRuntimeTids: function {
     } case none then null
     cerrId: ztypes.tid
     cgo: (optionval.none u64)
-    if program.program then {
+    {
         ud13x: ztypecheck.unitDeclOfName st: symtab nameId: sysId
         cgo = (ztypecheck.resolvedByIdsRo
-            ast: program.ast
+            ast: program
             st: symtab
             unitDecl: ud13x
-            name: (zast.poolFind pool: program.ast.names text: "converror")
+            name: (zast.poolFind pool: program.names text: "converror")
         )
     }
     match (
@@ -23609,7 +23589,7 @@ emitStringFragments: function {
 # for. The monos come before the runtime fragments: a fragment dereferences the
 # layouts of the types it serves, so those must already be complete.
 emitCodeBody: function {
-    program: Node.view
+    program: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     runtimeDir: StringView
@@ -23617,17 +23597,17 @@ emitCodeBody: function {
     codeBuf: String.borrow
 } is {
     codeBuf.reserve n: nodeEstE * 8
-    if program.program then {
-        emitMonos ast: program.ast :symtab :ctx :runtimeDir buf: codeBuf
+    {
+        emitMonos ast: program :symtab :ctx :runtimeDir buf: codeBuf
         # ahead of the runtime fragments: those dereference the layouts of the
         # types they serve, so anything a fragment touches must already be
         # complete, and this is the pass that orders by-value embedding in both
         # directions (a user struct inside a mono, a mono inside a user struct)
-        emitFnptrTypedefs ast: program.ast :symtab :ctx buf: codeBuf
-        emitUserStructsOrdered ast: program.ast :symtab :ctx :runtimeDir buf: codeBuf
+        emitFnptrTypedefs ast: program :symtab :ctx buf: codeBuf
+        emitUserStructsOrdered ast: program :symtab :ctx :runtimeDir buf: codeBuf
         # File's methods are demanded by the class being REACHABLE rather than
         # by a call, so the injection runs before any row is consulted
-        if (ioFileLive ast: program.ast :symtab :ctx) then {
+        if (ioFileLive ast: program :symtab :ctx) then {
             needsAddM :ctx uname: "io" memb: "@unit"
             needsAddM :ctx uname: "io" memb: "file_close"
             needsAddM :ctx uname: "io" memb: "file_read"
@@ -23643,7 +23623,7 @@ emitCodeBody: function {
         with uoc: ctx.unitOrder.iterate do for uo0: uoc loop uos.append uo0.copy
         with uoit: uos.iterate do for uo: uoit loop {
             (emitRuntimeUnit
-                ast: program.ast
+                ast: program
                 :symtab
                 :ctx
                 :runtimeDir
@@ -23651,12 +23631,12 @@ emitCodeBody: function {
                 buf: codeBuf
             )
             if uo.stringView == "io" then {
-                emitIoFileConformance ast: program.ast :symtab :ctx buf: codeBuf
-                emitIoStdStreams ast: program.ast :symtab :ctx buf: codeBuf
+                emitIoFileConformance ast: program :symtab :ctx buf: codeBuf
+                emitIoStdStreams ast: program :symtab :ctx buf: codeBuf
             }
         }
         (emitUnorderedUnits
-            ast: program.ast
+            ast: program
             :symtab
             :ctx
             :runtimeDir
@@ -23668,7 +23648,7 @@ emitCodeBody: function {
 
 # emitC -- emit the C translation unit for a typechecked program.
 emitC: function {
-    program: Node.view
+    program: Ast.view
     symtab: zenv.ZSymbolTable
     runtimeDir: StringView
     fastHash: bool
@@ -23827,21 +23807,21 @@ emitC: function {
         }
     }
     loadNativeTbl :ctx :runtimeDir
-    if program.program then {
-        buildDefUnitIndex :symtab :ctx ast: program.ast
-        bindFragTypeTids :symtab :ctx ast: program.ast
+    {
+        buildDefUnitIndex :symtab :ctx ast: program
+        bindFragTypeTids :symtab :ctx ast: program
         rmn: ctx.realMain.copy
         (ctxBindMain
             :ctx
             name: rmn.stringView
-            unitDecl: (unitDeclByName :symtab ast: program.ast name: rmn.stringView)
+            unitDecl: (unitDeclByName :symtab ast: program name: rmn.stringView)
         )
     }
     checkLoadedNatives :program :ctx
     fillDataElems :program :symtab :ctx
     fillNeeds :program :symtab :ctx
     nodeEstE: u64
-    if program.program then nodeEstE = program.ast.nodes.length
+    nodeEstE = program.nodes.length
     fnsBuf: String
     fnsBuf.reserve n: nodeEstE * 24
     emitFns :program :symtab :ctx buf: fnsBuf
@@ -23870,32 +23850,26 @@ emitC: function {
 }
 
 # true when the program defines a `main`.
-programHasMain: function {program: Node.view} out bool is {
-    match (
-        program
-    ) case program then {
-        mainName: program.mainUnitName.stringView
-        uCnt9g: program.ast.units.length
-        uIdx9g: u64
-        for uIdx9g < uCnt9g loop {
-            uId: (zast.nodeid.create from: (program.ast.units.get i: uIdx9g))
-            uIdx9g = uIdx9g + 1
-            opId: zast.nodeid
-            {
-                u: program.ast.nodes.get i: uId.u64
-                if u.namedoperation then {
-                    un: zast.poolTextAt pool: program.ast.names ref: u.name
-                    if un.stringView == mainName then opId = u.operation
-                }
-            }
-            if opId > 0 then {
-                if (unitHasMain ast: program.ast mainOpId: opId) then return true
+programHasMain: function {program: Ast.view} out bool is {
+    mainName: program.mainUnitName.stringView
+    uCnt9g: program.units.length
+    uIdx9g: u64
+    for uIdx9g < uCnt9g loop {
+        uId: (zast.nodeid.create from: (program.units.get i: uIdx9g))
+        uIdx9g = uIdx9g + 1
+        opId: zast.nodeid
+        {
+            u: program.nodes.get i: uId.u64
+            if u.namedoperation then {
+                un: zast.poolTextAt pool: program.names ref: u.name
+                if un.stringView == mainName then opId = u.operation
             }
         }
-        return false
-    } else {
-        return false
+        if opId > 0 then {
+            if (unitHasMain ast: program mainOpId: opId) then return true
+        }
     }
+    return false
 }
 
 # true when a unit defines a `main`.
@@ -28075,28 +28049,28 @@ emitMonos: function {
 # emitRecordDefs -- main-unit record structs + meta_create constructors
 # (scalar/record fields).
 emitRecordDefs: function {
-    program: Node.view
+    program: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     buf: String.borrow
 } is {
-    if program.program then {
+    {
         # 3 phases across ALL file units so cross-unit refs resolve: every unit's
         # structs, then every unit's fwd-decls, then every unit's method bodies.
         ph: 1.u64
         for ph <= 3 loop {
-            uCnt9h: program.ast.units.length
+            uCnt9h: program.units.length
             uIdx9h: u64
             for uIdx9h < uCnt9h loop {
-                uId: (zast.nodeid.create from: (program.ast.units.get i: uIdx9h))
+                uId: (zast.nodeid.create from: (program.units.get i: uIdx9h))
                 uIdx9h = uIdx9h + 1
                 opId: zast.nodeid
                 unitNameText: String
                 un9Id: zast.nameid
                 {
-                    u: program.ast.nodes.get i: uId.u64
+                    u: program.nodes.get i: uId.u64
                     if u.namedoperation then {
-                        un: zast.poolTextAt pool: program.ast.names ref: u.name
+                        un: zast.poolTextAt pool: program.names ref: u.name
                         opId = u.operation
                         unitNameText = un.copy
                         un9Id = u.name
@@ -28113,7 +28087,7 @@ emitRecordDefs: function {
                     (emitRecordDefsIn
                         :symtab
                         :ctx
-                        ast: program.ast
+                        ast: program
                         mainOpId: opId
                         phase: ph
                         :buf
@@ -31972,14 +31946,8 @@ emitOneMethod: function {
 }
 
 # the C name of the program's `main`.
-mainCName: function {program: Node.view} out String is {
-    match (
-        program
-    ) case program then {
-        mv: program.mainUnitName.stringView
-        mc: mv.string
-        return mc
-    } else {
-        return "".string
-    }
+mainCName: function {program: Ast.view} out String is {
+    mv: program.mainUnitName.stringView
+    mc: mv.string
+    return mc
 }
