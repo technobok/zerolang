@@ -50,6 +50,10 @@ public: unit {
     :objectkindname
     :errname
     :isErrorAt
+    :kidspan
+    :kidsAdd
+    :kidAt
+    :appendSpan
     :childIds
     :childIdsInto
     :childIdsAt
@@ -725,6 +729,9 @@ Ast: class {
     names: StringPool
     # the node ids of the top-level units, which is where a walk starts
     units: (ListVal u32)
+    # every node's child ids, end to end. A carrier names its own children as a
+    # `kidspan` window into this, so no node owns a list
+    kids: (ListVal u32)
     # Per-file nodeid segments: diagnostics map an erroring node back to
     # the file whose parse allocated it.
     fileSegs: (List FileSeg)
@@ -742,6 +749,7 @@ Ast: class {
             nodes: (List Node)
             names: StringPool.create
             units: (ListVal u32)
+            kids: (ListVal u32)
             fileSegs: (List FileSeg)
             root: nodeid
             mainUnitName: String
@@ -749,6 +757,8 @@ Ast: class {
         # row 0 is the sentinel a node id of 0 addresses: the placeholder arm,
         # which every reader already treats as "nothing here"
         a.nodes.append from: Node.placeholder
+        # and row 0 of the child arena, so that no real span starts at 0
+        a.kids.append from: 0.u32
         a.names.set s: "this"
         a.names.set s: "return"
         a.names.set s: "break"
@@ -862,6 +872,22 @@ nameid: record { val: u32.typedef } as {
 # `fsnoForNode == 0`). A typedef so a node id cannot cross with the pool,
 # type, variable or declaration id spaces; equality is same-space only,
 # sentinels read isZero.
+# kidspan -- a node's child ids as a window into `Ast.kids`, so a carrier
+# names its children without owning a list. Row 0 of the arena is a sentinel
+# no span ever addresses, which makes `first == 0` mean EMPTY and lets a
+# zero-valued span be the absent case with no separate flag.
+kidspan: record {
+    # the arena index of the first child, 0 when there are none
+    first: u32
+    # how many children the span names
+    count: u32
+} as {
+    # the empty test, spelled so a reader never compares against a literal
+    isEmpty: function {this: this.view} out bool is {
+        return this.count == 0
+    }
+}
+
 nodeid: record { val: u32.typedef } as {
     # identity by id. Two nodes are the same node when their ids match; nothing
     # here compares contents
@@ -1128,7 +1154,7 @@ DataBlockData: class {
     # the column this data block starts at
     colno: u32
     # the elements in order
-    elements: (ListVal u32)
+    elements: kidspan
     # the declared element type, 0 when it is left to be inferred
     outType: nodeid
 }
@@ -1729,6 +1755,18 @@ nameTextAt: function {ast: Ast.view ref: nameid} outx String.borrow is {
     return (ast.names.texts.get i: ref.u64)
 }
 
+# printKidsWith -- print every child a span names, in order. An arm that
+# prints a child list is one line, which is what keeps the dispatcher below
+# from growing as carrier fields move into the child arena.
+printKidsWith: function {ast: Ast.view span: kidspan withId: bool} is {
+    ki9: u64
+    for ki9 < span.count.u64 loop {
+        kid: kidAt :ast :span i: ki9
+        ki9 = ki9 + 1
+        printNodeWith :ast :withId n: (ast.nodes.get i: kid.u64)
+    }
+}
+
 # Print one line per Node in the form
 #   "<nodeid>: <arm> @<lineno>:<colno>"
 # Recursive arms (binop, atomstring) descend into their children.
@@ -1785,9 +1823,8 @@ printNodeWith: function {ast: Ast.view n: Node.view withId: bool} is {
         printPoolName :ast ref: n.name
         printNodeWith :ast :withId n: (ast.nodes.get i: n.operation.u64)
     } case datablock then {
-        print "\{idp}datablock @\{n.lineno}:\{n.colno} elements=\{n.elements.length}"
-        eiter: n.elements.iterate
-        for elId: eiter loop printNodeWith :ast :withId n: (ast.nodes.get i: elId.u64)
+        print "\{idp}datablock @\{n.lineno}:\{n.colno} elements=\{n.elements.count}"
+        printKidsWith :ast span: n.elements :withId
         print "  outType:"
         printOptChildWith :ast :withId id: n.outType
     } case statement then {
@@ -1990,7 +2027,7 @@ childIdsInto: function {ast: Ast.view n: Node.view acc: ListVal u32} is {
     } case namedoperation then {
         acc.append from: n.operation.u32
     } case datablock then {
-        appendIds :acc ids: n.elements
+        appendSpan :ast :acc span: n.elements
         appendOptId :acc id: n.outType
     } case statement then {
         appendIds :acc ids: n.statements
@@ -2090,7 +2127,7 @@ ifCondAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 # arm).
 dataElemAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
     n: ast.nodes.get i: nid.u64
-    if n.datablock then return (nodeid.create from: (n.elements.get :i))
+    if n.datablock then return (nodeid.create from: (kidAt :ast span: n.elements :i))
     zn: nodeid
     return zn
 }
@@ -2346,6 +2383,33 @@ stringPartAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 # appendIds -- append every id in `ids` to `acc`. A walk collects a node's
 # children through one accumulator rather than a fresh list per visit, which is
 # where the per-visit lists went.
+# kidsAdd -- copy `xs` into the child arena and answer the span naming it. The
+# copy is what makes a span contiguous: the parser builds a node's children
+# while parsing grandchildren that are appending here too, so the window can
+# only be claimed once the list is finished.
+kidsAdd: function {ast: Ast xs: (ListVal u32).view} out kidspan is {
+    n: xs.length
+    if n == 0 then return (kidspan first: 0 count: 0)
+    f: ast.kids.length.u32.orPanic
+    with it: xs.iterate do for x: it loop ast.kids.append from: x
+    return (kidspan first: f count: n.u32.orPanic)
+}
+
+# kidAt -- child `i` of `span`. Out of range is a panic, not a sentinel: a walk
+# reads `span.count` first and a bad index is a bug in the walk.
+kidAt: function {ast: Ast.view span: kidspan i: u64} out u32 is {
+    return (ast.kids.get i: (span.first.u64 + i))
+}
+
+# appendSpan -- append every id in `span` to `acc`, the span twin of appendIds.
+appendSpan: function {ast: Ast.view acc: ListVal u32 span: kidspan} is {
+    si: u64
+    for si < span.count.u64 loop {
+        acc.append from: (kidAt :ast :span i: si)
+        si = si + 1
+    }
+}
+
 appendIds: function {acc: ListVal u32 ids: (ListVal u32).view} is {
     with it: ids.iterate do for i: it loop acc.append from: i
 }
