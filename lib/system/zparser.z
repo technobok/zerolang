@@ -170,8 +170,8 @@ isBareNullBody: function {ast: Ast.view body: Node.view} out bool is {
     match (
         body
     ) case statement then {
-        if body.statements.length != 1 then return false
-        slId: body.statements.get i: 0
+        if body.statements.count.u64 != 1 then return false
+        slId: zast.kidAt kids: ast.kids span: body.statements i: 0
         return (slIsBareNull :ast sl: (ast.nodes.get i: slId.u64))
     } else {
         return false
@@ -675,7 +675,7 @@ Parser: class {
             nodeid: this.nextId
             lineno: fLine
             colno: fCol
-            stringparts: stripped)
+            stringparts: (zast.kidsAdd kids: this.ast.kids xs: stripped))
         )
     }
 
@@ -881,7 +881,7 @@ Parser: class {
             lineno: line
             colno: col
             callable: (this.intern n: callable)
-            arguments: argIds)
+            arguments: (zast.kidsAdd kids: this.ast.kids xs: argIds))
         )
     }
 
@@ -1332,7 +1332,7 @@ Parser: class {
                     nodeid: this.nextId
                     lineno: sLine
                     colno: sCol
-                    :statements)
+                    statements: (zast.kidsAdd kids: this.ast.kids xs: statements))
                 )
             } case none then {
                 bad: lex.acceptAny pool: this.ast.names
@@ -1377,7 +1377,7 @@ Parser: class {
                 nodeid: this.nextId
                 lineno: line
                 colno: col
-                statements: stmts)
+                statements: (zast.kidsAdd kids: this.ast.kids xs: stmts))
             )
         }
         return body
@@ -1465,7 +1465,7 @@ Parser: class {
                 nodeid: this.nextId
                 lineno: sLine
                 colno: sCol
-                statements: one)
+                statements: (zast.kidsAdd kids: this.ast.kids xs: one))
             )
         } else {
             return (this.mkErrorAt
@@ -1522,7 +1522,7 @@ Parser: class {
                 nodeid: this.nextId
                 lineno: clauseLine
                 colno: clauseCol
-                :conditions
+                conditions: (zast.kidsAdd kids: this.ast.kids xs: conditions)
                 statement: (this.intern n: stmt)
             )
             clauses.append (this.intern n: clause)
@@ -1554,7 +1554,7 @@ Parser: class {
                 nodeid: this.nextId
                 lineno: ifLine
                 colno: ifCol
-                :clauses
+                clauses: (zast.kidsAdd kids: this.ast.kids xs: clauses)
                 elseclause: (this.intern n: estmt))
             )
         }
@@ -1562,7 +1562,7 @@ Parser: class {
             nodeid: this.nextId
             lineno: ifLine
             colno: ifCol
-            :clauses
+            clauses: (zast.kidsAdd kids: this.ast.kids xs: clauses)
             elseclause: (zast.nodeid.create from: 0))
         )
     }
@@ -1679,7 +1679,7 @@ Parser: class {
                 lineno: mLine
                 colno: mCol
                 subject: (zast.nodeid.create from: subjectId)
-                :clauses
+                clauses: (zast.kidsAdd kids: this.ast.kids xs: clauses)
                 elseclause: (this.intern n: estmt))
             )
         } case none then {
@@ -1688,7 +1688,7 @@ Parser: class {
                 lineno: mLine
                 colno: mCol
                 subject: (zast.nodeid.create from: subjectId)
-                :clauses
+                clauses: (zast.kidsAdd kids: this.ast.kids xs: clauses)
                 elseclause: (zast.nodeid.create from: 0))
             )
         }
@@ -1866,9 +1866,9 @@ Parser: class {
                     nodeid: this.nextId
                     lineno: forLine
                     colno: forCol
-                    :conditions
+                    conditions: (zast.kidsAdd kids: this.ast.kids xs: conditions)
                     body: (zast.nodeid.create from: bodyId)
-                    :postconditions)
+                    postconditions: (zast.kidsAdd kids: this.ast.kids xs: postconditions))
                 )
             }
             bad: lex.acceptAny pool: this.ast.names
@@ -1882,9 +1882,9 @@ Parser: class {
             nodeid: this.nextId
             lineno: forLine
             colno: forCol
-            :conditions
+            conditions: (zast.kidsAdd kids: this.ast.kids xs: conditions)
             body: (zast.nodeid.create from: bodyId)
-            :postconditions)
+            postconditions: (zast.kidsAdd kids: this.ast.kids xs: postconditions))
         )
     }
 
@@ -2139,7 +2139,7 @@ Parser: class {
                             typeNode: this.parsePath :lex
                             tErr: this.isError node: typeNode
                             if tErr then return typeNode
-                            eSpan: zast.kidsAdd ast: this.ast xs: elements
+                            eSpan: zast.kidsAdd kids: this.ast.kids xs: elements
                             return (Node.datablock (zast.DataBlockData
                                 nodeid: this.nextId
                                 lineno: dLine
@@ -2156,7 +2156,7 @@ Parser: class {
                             )
                         }
                     } case none then {
-                        eSpan: zast.kidsAdd ast: this.ast xs: elements
+                        eSpan: zast.kidsAdd kids: this.ast.kids xs: elements
                         return (Node.datablock (zast.DataBlockData
                             nodeid: this.nextId
                             lineno: dLine
@@ -2522,11 +2522,11 @@ Parser: class {
             lineno: startLine
             colno: startCol
             returntype: (zast.nodeid.create from: returntypeId)
-            :parameters
+            parameters: (zast.kidsAdd kids: this.ast.kids xs: parameters)
             body: (zast.nodeid.create from: bodyId)
             :isNative
             :pins
-            :asItems)
+            asItems: (zast.kidsAdd kids: this.ast.kids xs: asItems))
         )
     }
 
@@ -2954,17 +2954,20 @@ Parser: class {
                     msg: "Expected closing brace at end of unit".string
                 )
             } case some then {
+                # the span is claimed once and answers both the generic probe
+                # and the node's own children
+                bodySpan: zast.kidsAdd kids: this.ast.kids xs: body
                 uk: kind
                 if kind.namespace when (zast.itemsHaveGenericParam
                     ast: this.ast
-                    items: body
+                    items: bodySpan
                 ) then uk = zast.unitkind.template
                 return (Node.unitdef (zast.UnitData
                     nodeid: this.nextId
                     lineno: startPos.lineno
                     colno: startPos.colno
                     kind: uk
-                    :body)
+                    body: bodySpan)
                 )
             }
         }
@@ -3150,8 +3153,8 @@ Parser: class {
                 lineno: startLine
                 colno: startCol
                 :kind
-                :isItems
-                :asItems
+                isItems: (zast.kidsAdd kids: this.ast.kids xs: isItems)
+                asItems: (zast.kidsAdd kids: this.ast.kids xs: asItems)
                 :isNative)
             )
         }
@@ -3375,7 +3378,7 @@ Parser: class {
                 endId: this.nextNodeId
                 fsno: fsid
             )
-            ewBindNameIds ast: this.ast scope: outNames items: body
+            ewBindNameList ast: this.ast scope: outNames items: body
             raw: collectExterns ast: this.ast :body
             dirid: vfs.walk parent: parentid name: unitname.stringView
             dkind: vfs.arm dentryid: dirid
@@ -3418,7 +3421,7 @@ Parser: class {
                 lineno: firstPos.lineno
                 colno: firstPos.colno
                 :kind
-                :body
+                body: (zast.kidsAdd kids: this.ast.kids xs: body)
             )
             outBody.append (this.intern n: (this.mkNamedOp
                 name: (this.internName name: unitname.stringView)
@@ -3608,13 +3611,21 @@ ewBindOneName: function {scope: (ListVal u32) item: Node.view} is {
 }
 
 # Bind the top-level names of a converted id-list (unit bodies).
-ewBindNameIds: function {ast: Ast.view scope: (ListVal u32) items: (ListVal u32).view} is {
+ewBindNameIds: function {ast: Ast.view scope: (ListVal u32) items: zast.kidspan} is {
     ei: u64
-    en: items.length
+    en: items.count.u64
     for ei < en loop {
-        eid: items.get i: ei
+        eid: zast.kidAt kids: ast.kids span: items i: ei
         ewBindOneName :scope item: (ast.nodes.get i: eid.u64)
         ei = ei + 1
+    }
+}
+
+# ewBindNameList -- ewBindNameIds over a list the parser still holds, before
+# the node that will own the span is built. Same core, different accessor.
+ewBindNameList: function {ast: Ast.view scope: (ListVal u32) items: (ListVal u32).view} is {
+    with it: items.iterate do for eid: it loop {
+        ewBindOneName :scope item: (ast.nodes.get i: eid.u64)
     }
 }
 
@@ -3642,6 +3653,19 @@ ewWalkOptAt: function {
 }
 
 # Walk every node of an id list.
+# ewWalkList -- ewWalkIds over a list the parser still holds, or over the
+# canonical child list of a node with no single span. Same core.
+ewWalkList: function {
+    ast: Ast.view
+    externs: (ListVal u32)
+    scope: (ListVal u32)
+    items: (ListVal u32).view
+} is {
+    with it: items.iterate do for wid: it loop {
+        ewWalk :ast :externs :scope node: (ast.nodes.get i: wid.u64)
+    }
+}
+
 ewWalkIds: function {
     # the tree walked
     ast: Ast.view
@@ -3650,12 +3674,12 @@ ewWalkIds: function {
     # the names bound at this point
     scope: (ListVal u32)
     # the children walked in order
-    items: (ListVal u32).view
+    items: zast.kidspan
 } is {
     wi: u64
-    wn: items.length
+    wn: items.count.u64
     for wi < wn loop {
-        wid: items.get i: wi
+        wid: zast.kidAt kids: ast.kids span: items i: wi
         ewWalk :ast :externs :scope node: (ast.nodes.get i: wid.u64)
         wi = wi + 1
     }
@@ -3713,8 +3737,12 @@ ewWalk: function {ast: Ast.view externs: (ListVal u32) scope: ListVal u32 node: 
         ewTruncate :scope n: base
     } case forexpr then {
         base: scope.length
-        fit: node.conditions.iterate
-        for fc: fit loop ewWalkForCond :ast :externs :scope cond: (ast.nodes.get i: fc.u64)
+        cox1179: u64
+        for cox1179 < node.conditions.count.u64 loop {
+            fc: zast.kidAt kids: ast.kids span: node.conditions i: cox1179
+            cox1179 = cox1179 + 1
+            ewWalkForCond :ast :externs :scope cond: (ast.nodes.get i: fc.u64)
+        }
         ewWalkOptAt :ast :externs :scope oId: node.body
         ewWalkIds :ast :externs :scope items: node.postconditions
         ewTruncate :scope n: base
@@ -3787,7 +3815,7 @@ ewWalk: function {ast: Ast.view externs: (ListVal u32) scope: ListVal u32 node: 
         ewWalkIds :ast :externs :scope items: node.body
         ewTruncate :scope n: base
     } case program then null else {
-        ewWalkIds :ast :externs :scope items: (zast.childIds :ast n: node)
+        ewWalkList :ast :externs :scope items: (zast.childIds :ast n: node)
     }
 }
 
@@ -3801,8 +3829,8 @@ collectExterns: function {ast: Ast.view body: (ListVal u32).view} out List Strin
     ewBindKnown :ast :scope text: "this"
     ewBindKnown :ast :scope text: "type"
     ewBindKnown :ast :scope text: "meta"
-    ewBindNameIds :ast :scope items: body
-    ewWalkIds :ast externs: externIds :scope items: body
+    ewBindNameList :ast :scope items: body
+    ewWalkList :ast externs: externIds :scope items: body
     externs: (List String capacity: externIds.length)
     with eit: externIds.iterate do for eid: eit loop {
         externs.append (zast.poolTextCopy pool: ast.names ref: (zast.nameid.create from: eid.u32))

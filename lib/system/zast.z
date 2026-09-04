@@ -1079,7 +1079,7 @@ AtomStringData: class {
     # the column this interpolated string starts at
     colno: u32
     # the chunks in order: literal text and interpolation holes alternating
-    stringparts: (ListVal u32)
+    stringparts: kidspan
 }
 
 # Dotted-path node payload: a parent path and a child selector,
@@ -1110,7 +1110,7 @@ CallData: class {
     # what is being called -- an atom, or a dotted path for a method
     callable: nodeid
     # the arguments, each a namedoperation carrying its label
-    arguments: (ListVal u32)
+    arguments: kidspan
 }
 
 # typeof-expression payload (compiler-synthesised): the operation
@@ -1169,7 +1169,7 @@ StatementData: class {
     # the column this statement block starts at
     colno: u32
     # the statements in order. This is the block every body is made of
-    statements: (ListVal u32)
+    statements: kidspan
 }
 
 # StatementLine payload: one line of a block, wrapping exactly one of
@@ -1256,7 +1256,7 @@ IfData: class {
     # the column this if starts at
     colno: u32
     # the if and else-if clauses in order; the first whose condition holds wins
-    clauses: (ListVal u32)
+    clauses: kidspan
     # the trailing else, 0 when there is none
     elseclause: nodeid
 }
@@ -1271,7 +1271,7 @@ IfClauseData: class {
     # the column this if clause starts at
     colno: u32
     # the conditions, chained by `when` and short-circuiting on the first false
-    conditions: (ListVal u32)
+    conditions: kidspan
     # the body run when they all hold
     statement: nodeid
 }
@@ -1287,11 +1287,11 @@ ForData: class {
     # the column this for starts at
     colno: u32
     # the leading conditions, chained by `while`; empty for a do-while shape
-    conditions: (ListVal u32)
+    conditions: kidspan
     # the loop body
     body: nodeid
     # the trailing `while` conditions of a do-while shape, tested after the body
-    postconditions: (ListVal u32)
+    postconditions: kidspan
 }
 
 # Do payload: a statement block evaluated as an expression.
@@ -1336,7 +1336,7 @@ CaseData: class {
     # nothing else to narrow
     subject: nodeid
     # the arms in order
-    clauses: (ListVal u32)
+    clauses: kidspan
     # the trailing else, 0 when the arms are exhaustive
     elseclause: nodeid
 }
@@ -1372,7 +1372,7 @@ FunctionData: class {
     # the declared `out` type, 0 when the function returns nothing
     returntype: nodeid
     # the parameters in order, each a namedoperation
-    parameters: (ListVal u32)
+    parameters: kidspan
     # the body, 0 when the function is native and the runtime owns it
     body: nodeid
     # true when there is no body to emit and a natives.tbl row backs it instead
@@ -1382,7 +1382,7 @@ FunctionData: class {
     pins: bool
     # the `as { }` members: generic parameters, and the markers a declaration
     # carries
-    asItems: (ListVal u32)
+    asItems: kidspan
 }
 
 # Unified type-definition payload. `kind` discriminates which kind of
@@ -1400,9 +1400,9 @@ ObjectDefData: class {
     kind: objectkind
     # the `is`-block members: fields for a record or class, ARMS for a variant
     # or union, method declarations for a protocol or facet
-    isItems: (ListVal u32)
+    isItems: kidspan
     # the `as { }` members: generic parameters, conformances and markers
-    asItems: (ListVal u32)
+    asItems: kidspan
     # true when the runtime owns the layout, so no struct is emitted for it
     isNative: bool
 }
@@ -1420,7 +1420,7 @@ UnitData: class {
     # the interface blocks
     kind: unitkind
     # the unit's members in order
-    body: (ListVal u32)
+    body: kidspan
 }
 
 # Program payload (parse root): the file-level units as namedoperation
@@ -1761,7 +1761,7 @@ nameTextAt: function {ast: Ast.view ref: nameid} outx String.borrow is {
 printKidsWith: function {ast: Ast.view span: kidspan withId: bool} is {
     ki9: u64
     for ki9 < span.count.u64 loop {
-        kid: kidAt :ast :span i: ki9
+        kid: kidAt kids: ast.kids :span i: ki9
         ki9 = ki9 + 1
         printNodeWith :ast :withId n: (ast.nodes.get i: kid.u64)
     }
@@ -1799,18 +1799,16 @@ printNodeWith: function {ast: Ast.view n: Node.view withId: bool} is {
         printNodeWith :ast :withId n: (ast.nodes.get i: n.operator.u64)
         printNodeWith :ast :withId n: (ast.nodes.get i: n.rhs.u64)
     } case atomstring then {
-        print "\{idp}atomstring @\{n.lineno}:\{n.colno} parts=\{n.stringparts.length}"
-        iter: n.stringparts.iterate
-        for partId: iter loop printNodeWith :ast :withId n: (ast.nodes.get i: partId.u64)
+        print "\{idp}atomstring @\{n.lineno}:\{n.colno} parts=\{n.stringparts.count.u64}"
+        printKidsWith :ast span: n.stringparts :withId
     } case dottedpath then {
         print "\{idp}dottedpath @\{n.lineno}:\{n.colno}"
         printNodeWith :ast :withId n: (ast.nodes.get i: n.parent.u64)
         printNodeWith :ast :withId n: (ast.nodes.get i: n.child.u64)
     } case call then {
-        print "\{idp}call @\{n.lineno}:\{n.colno} args=\{n.arguments.length}"
+        print "\{idp}call @\{n.lineno}:\{n.colno} args=\{n.arguments.count.u64}"
         printNodeWith :ast :withId n: (ast.nodes.get i: n.callable.u64)
-        argiter: n.arguments.iterate
-        for argId: argiter loop printNodeWith :ast :withId n: (ast.nodes.get i: argId.u64)
+        printKidsWith :ast span: n.arguments :withId
     } case typeofexpr then {
         print "\{idp}typeofexpr @\{n.lineno}:\{n.colno}"
         printNodeWith :ast :withId n: (ast.nodes.get i: n.source.u64)
@@ -1828,9 +1826,8 @@ printNodeWith: function {ast: Ast.view n: Node.view withId: bool} is {
         print "  outType:"
         printOptChildWith :ast :withId id: n.outType
     } case statement then {
-        print "\{idp}statement @\{n.lineno}:\{n.colno} statements=\{n.statements.length}"
-        siter: n.statements.iterate
-        for lnId: siter loop printNodeWith :ast :withId n: (ast.nodes.get i: lnId.u64)
+        print "\{idp}statement @\{n.lineno}:\{n.colno} statements=\{n.statements.count.u64}"
+        printKidsWith :ast span: n.statements :withId
     } case statementline then {
         print "\{idp}statementline @\{n.lineno}:\{n.colno}"
         printNodeWith :ast :withId n: (ast.nodes.get i: n.statementline.u64)
@@ -1850,24 +1847,20 @@ printNodeWith: function {ast: Ast.view n: Node.view withId: bool} is {
         print "\{idp}expression @\{n.lineno}:\{n.colno}"
         printNodeWith :ast :withId n: (ast.nodes.get i: n.expression.u64)
     } case ifexpr then {
-        print "\{idp}ifexpr @\{n.lineno}:\{n.colno} clauses=\{n.clauses.length}"
-        clit: n.clauses.iterate
-        for clId: clit loop printNodeWith :ast :withId n: (ast.nodes.get i: clId.u64)
+        print "\{idp}ifexpr @\{n.lineno}:\{n.colno} clauses=\{n.clauses.count.u64}"
+        printKidsWith :ast span: n.clauses :withId
         print "  elseclause:"
         printOptChildWith :ast :withId id: n.elseclause
     } case ifclause then {
-        print "\{idp}ifclause @\{n.lineno}:\{n.colno} conditions=\{n.conditions.length}"
-        coit: n.conditions.iterate
-        for coId: coit loop printNodeWith :ast :withId n: (ast.nodes.get i: coId.u64)
+        print "\{idp}ifclause @\{n.lineno}:\{n.colno} conditions=\{n.conditions.count.u64}"
+        printKidsWith :ast span: n.conditions :withId
         printNodeWith :ast :withId n: (ast.nodes.get i: n.statement.u64)
     } case forexpr then {
-        print "\{idp}forexpr @\{n.lineno}:\{n.colno} conditions=\{n.conditions.length} postconditions=\{n.postconditions.length}"
-        fcit: n.conditions.iterate
-        for fcId: fcit loop printNodeWith :ast :withId n: (ast.nodes.get i: fcId.u64)
+        print "\{idp}forexpr @\{n.lineno}:\{n.colno} conditions=\{n.conditions.count.u64} postconditions=\{n.postconditions.count.u64}"
+        printKidsWith :ast span: n.conditions :withId
         print "  body:"
         printOptChildWith :ast :withId id: n.body
-        fpit: n.postconditions.iterate
-        for fpId: fpit loop printNodeWith :ast :withId n: (ast.nodes.get i: fpId.u64)
+        printKidsWith :ast span: n.postconditions :withId
     } case doexpr then {
         print "\{idp}doexpr @\{n.lineno}:\{n.colno}"
         printNodeWith :ast :withId n: (ast.nodes.get i: n.statement.u64)
@@ -1877,10 +1870,9 @@ printNodeWith: function {ast: Ast.view n: Node.view withId: bool} is {
         printNodeWith :ast :withId n: (ast.nodes.get i: n.value.u64)
         printNodeWith :ast :withId n: (ast.nodes.get i: n.body.u64)
     } case caseexpr then {
-        print "\{idp}caseexpr @\{n.lineno}:\{n.colno} clauses=\{n.clauses.length}"
+        print "\{idp}caseexpr @\{n.lineno}:\{n.colno} clauses=\{n.clauses.count.u64}"
         printNodeWith :ast :withId n: (ast.nodes.get i: n.subject.u64)
-        ccit: n.clauses.iterate
-        for ccId: ccit loop printNodeWith :ast :withId n: (ast.nodes.get i: ccId.u64)
+        printKidsWith :ast span: n.clauses :withId
         print "  elseclause:"
         printOptChildWith :ast :withId id: n.elseclause
     } case caseclause then {
@@ -1891,27 +1883,23 @@ printNodeWith: function {ast: Ast.view n: Node.view withId: bool} is {
     } case functiondef then {
         fdp: ""
         if n.pins then fdp = " pins=true"
-        print "\{idp}functiondef @\{n.lineno}:\{n.colno} params=\{n.parameters.length} isNative=\{n.isNative}\{fdp}"
+        print "\{idp}functiondef @\{n.lineno}:\{n.colno} params=\{n.parameters.count.u64} isNative=\{n.isNative}\{fdp}"
         print "  returntype:"
         printOptChildWith :ast :withId id: n.returntype
-        piter: n.parameters.iterate
-        for pmId: piter loop printNodeWith :ast :withId n: (ast.nodes.get i: pmId.u64)
+        printKidsWith :ast span: n.parameters :withId
         print "  body:"
         printOptChildWith :ast :withId id: n.body
-        faiter: n.asItems.iterate
-        for famId: faiter loop printNodeWith :ast :withId n: (ast.nodes.get i: famId.u64)
+        printKidsWith :ast span: n.asItems :withId
     } case objectdef then {
-        print "\{idp}objectdef @\{n.lineno}:\{n.colno} kind=\{objectkindname n.kind} isItems=\{n.isItems.length} asItems=\{n.asItems.length} isNative=\{n.isNative}"
-        oiiter: n.isItems.iterate
-        for oimId: oiiter loop printNodeWith :ast :withId n: (ast.nodes.get i: oimId.u64)
-        oaiter: n.asItems.iterate
-        for oamId: oaiter loop printNodeWith :ast :withId n: (ast.nodes.get i: oamId.u64)
+        print "\{idp}objectdef @\{n.lineno}:\{n.colno} kind=\{objectkindname n.kind} isItems=\{n.isItems.count.u64} asItems=\{n.asItems.count.u64} isNative=\{n.isNative}"
+        printKidsWith :ast span: n.isItems :withId
+        printKidsWith :ast span: n.asItems :withId
     } case unitdef then {
-        print "\{idp}unitdef @\{n.lineno}:\{n.colno} kind=\{unitkindname n.kind} body=\{n.body.length}"
+        print "\{idp}unitdef @\{n.lineno}:\{n.colno} kind=\{unitkindname n.kind} body=\{n.body.count.u64}"
         ubi: u64
-        ubn: n.body.length
+        ubn: n.body.count.u64
         for ubi < ubn loop {
-            ubid: n.body.get i: ubi
+            ubid: kidAt kids: ast.kids span: n.body i: ubi
             printNodeWith :ast :withId n: (ast.nodes.get i: ubid.u64)
             ubi = ubi + 1
         }
@@ -2015,22 +2003,22 @@ childIdsInto: function {ast: Ast.view n: Node.view acc: ListVal u32} is {
         acc.append from: n.operator.u32
         acc.append from: n.rhs.u32
     } case atomstring then {
-        appendIds :acc ids: n.stringparts
+        appendSpan kids: ast.kids :acc span: n.stringparts
     } case dottedpath then {
         acc.append from: n.parent.u32
         acc.append from: n.child.u32
     } case call then {
         acc.append from: n.callable.u32
-        appendIds :acc ids: n.arguments
+        appendSpan kids: ast.kids :acc span: n.arguments
     } case typeofexpr then {
         acc.append from: n.source.u32
     } case namedoperation then {
         acc.append from: n.operation.u32
     } case datablock then {
-        appendSpan :ast :acc span: n.elements
+        appendSpan kids: ast.kids :acc span: n.elements
         appendOptId :acc id: n.outType
     } case statement then {
-        appendIds :acc ids: n.statements
+        appendSpan kids: ast.kids :acc span: n.statements
     } case statementline then {
         acc.append from: n.statementline.u32
     } case assignment then {
@@ -2044,15 +2032,15 @@ childIdsInto: function {ast: Ast.view n: Node.view acc: ListVal u32} is {
     } case expression then {
         acc.append from: n.expression.u32
     } case ifexpr then {
-        appendIds :acc ids: n.clauses
+        appendSpan kids: ast.kids :acc span: n.clauses
         appendOptId :acc id: n.elseclause
     } case ifclause then {
-        appendIds :acc ids: n.conditions
+        appendSpan kids: ast.kids :acc span: n.conditions
         acc.append from: n.statement.u32
     } case forexpr then {
-        appendIds :acc ids: n.conditions
+        appendSpan kids: ast.kids :acc span: n.conditions
         appendOptId :acc id: n.body
-        appendIds :acc ids: n.postconditions
+        appendSpan kids: ast.kids :acc span: n.postconditions
     } case doexpr then {
         acc.append from: n.statement.u32
     } case withexpr then {
@@ -2060,21 +2048,21 @@ childIdsInto: function {ast: Ast.view n: Node.view acc: ListVal u32} is {
         acc.append from: n.body.u32
     } case caseexpr then {
         acc.append from: n.subject.u32
-        appendIds :acc ids: n.clauses
+        appendSpan kids: ast.kids :acc span: n.clauses
         appendOptId :acc id: n.elseclause
     } case caseclause then {
         acc.append from: n.matcharm.u32
         acc.append from: n.statement.u32
     } case functiondef then {
         appendOptId :acc id: n.returntype
-        appendIds :acc ids: n.parameters
+        appendSpan kids: ast.kids :acc span: n.parameters
         appendOptId :acc id: n.body
-        appendIds :acc ids: n.asItems
+        appendSpan kids: ast.kids :acc span: n.asItems
     } case objectdef then {
-        appendIds :acc ids: n.isItems
-        appendIds :acc ids: n.asItems
+        appendSpan kids: ast.kids :acc span: n.isItems
+        appendSpan kids: ast.kids :acc span: n.asItems
     } case unitdef then {
-        appendIds :acc ids: n.body
+        appendSpan kids: ast.kids :acc span: n.body
     } case program then {
         appendIds :acc ids: ast.units
     } else null
@@ -2102,7 +2090,7 @@ spanEndLineAt: function {ast: Ast.view id: u32} out u32 is {
 # other arm).
 stmtLineCount: function {ast: Ast.view nid: nodeid} out u64 is {
     n: ast.nodes.get i: nid.u64
-    if n.statement then return n.statements.length
+    if n.statement then return n.statements.count.u64
     return 0
 }
 
@@ -2110,7 +2098,7 @@ stmtLineCount: function {ast: Ast.view nid: nodeid} out u64 is {
 # arm).
 stmtLineAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
     n: ast.nodes.get i: nid.u64
-    if n.statement then return (nodeid.create from: (n.statements.get :i))
+    if n.statement then return (nodeid.create from: (kidAt kids: ast.kids span: n.statements :i))
     zn: nodeid
     return zn
 }
@@ -2118,7 +2106,7 @@ stmtLineAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 # ifCondAt -- the id of condition `i` of if-clause `nid` (0 for any other arm).
 ifCondAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
     n: ast.nodes.get i: nid.u64
-    if n.ifclause then return (nodeid.create from: (n.conditions.get :i))
+    if n.ifclause then return (nodeid.create from: (kidAt kids: ast.kids span: n.conditions :i))
     zn: nodeid
     return zn
 }
@@ -2127,7 +2115,7 @@ ifCondAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 # arm).
 dataElemAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
     n: ast.nodes.get i: nid.u64
-    if n.datablock then return (nodeid.create from: (kidAt :ast span: n.elements :i))
+    if n.datablock then return (nodeid.create from: (kidAt kids: ast.kids span: n.elements :i))
     zn: nodeid
     return zn
 }
@@ -2135,7 +2123,7 @@ dataElemAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 # caseClauseAt -- the id of clause `i` of match `nid` (0 for any other arm).
 caseClauseAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
     n: ast.nodes.get i: nid.u64
-    if n.caseexpr then return (nodeid.create from: (n.clauses.get :i))
+    if n.caseexpr then return (nodeid.create from: (kidAt kids: ast.kids span: n.clauses :i))
     zn: nodeid
     return zn
 }
@@ -2143,7 +2131,7 @@ caseClauseAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 # ifClauseAt -- the id of clause `i` of if `nid` (0 for any other arm).
 ifClauseAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
     n: ast.nodes.get i: nid.u64
-    if n.ifexpr then return (nodeid.create from: (n.clauses.get :i))
+    if n.ifexpr then return (nodeid.create from: (kidAt kids: ast.kids span: n.clauses :i))
     zn: nodeid
     return zn
 }
@@ -2151,7 +2139,7 @@ ifClauseAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 # forCondAt -- the id of condition `i` of for `nid` (0 for any other arm).
 forCondAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
     n: ast.nodes.get i: nid.u64
-    if n.forexpr then return (nodeid.create from: (n.conditions.get :i))
+    if n.forexpr then return (nodeid.create from: (kidAt kids: ast.kids span: n.conditions :i))
     zn: nodeid
     return zn
 }
@@ -2159,7 +2147,7 @@ forCondAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 # forPostAt -- the id of postcondition `i` of for `nid` (0 for any other arm).
 forPostAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
     n: ast.nodes.get i: nid.u64
-    if n.forexpr then return (nodeid.create from: (n.postconditions.get :i))
+    if n.forexpr then return (nodeid.create from: (kidAt kids: ast.kids span: n.postconditions :i))
     zn: nodeid
     return zn
 }
@@ -2168,7 +2156,7 @@ forPostAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 # any other arm).
 objIsItemAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
     n: ast.nodes.get i: nid.u64
-    if n.objectdef then return (nodeid.create from: (n.isItems.get :i))
+    if n.objectdef then return (nodeid.create from: (kidAt kids: ast.kids span: n.isItems :i))
     zn: nodeid
     return zn
 }
@@ -2177,7 +2165,7 @@ objIsItemAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 # any other arm).
 objAsItemAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
     n: ast.nodes.get i: nid.u64
-    if n.objectdef then return (nodeid.create from: (n.asItems.get :i))
+    if n.objectdef then return (nodeid.create from: (kidAt kids: ast.kids span: n.asItems :i))
     zn: nodeid
     return zn
 }
@@ -2186,7 +2174,7 @@ objAsItemAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 # arm).
 fnParamAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
     n: ast.nodes.get i: nid.u64
-    if n.functiondef then return (nodeid.create from: (n.parameters.get :i))
+    if n.functiondef then return (nodeid.create from: (kidAt kids: ast.kids span: n.parameters :i))
     zn: nodeid
     return zn
 }
@@ -2243,8 +2231,8 @@ yieldCallOperandAt: function {ast: Ast.view nid: nodeid} out nodeid is {
     match (
         n
     ) case call then {
-        if n.arguments.length != 1 then return (nodeid.create from: 0)
-        a0: ast.nodes.get i: (n.arguments.get i: 0).u64
+        if n.arguments.count.u64 != 1 then return (nodeid.create from: 0)
+        a0: ast.nodes.get i: (kidAt kids: ast.kids span: n.arguments i: 0).u64
         match (
             a0
         ) case namedoperation then {
@@ -2330,8 +2318,8 @@ suspendingForCountOf: function {ast: Ast.view n: Node.view} out u64 is {
     if n.functiondef then return 0
     c: u64
     if n.forexpr then {
-        if n.conditions.length == 1 when (yieldCountIn :ast nid: n.body) > 0 then {
-            c0: ast.nodes.get i: (n.conditions.get i: 0).u64
+        if n.conditions.count.u64 == 1 when (yieldCountIn :ast nid: n.body) > 0 then {
+            c0: ast.nodes.get i: (kidAt kids: ast.kids span: n.conditions i: 0).u64
             if c0.namedoperation then {
                 if (nameTextAt :ast ref: c0.name).length > 0 then c = 1
             }
@@ -2349,8 +2337,8 @@ suspendingForCountOf: function {ast: Ast.view n: Node.view} out u64 is {
             wn: ast.nodes.get i: wid.u64
             if (wn.functiondef) == false then {
                 if wn.forexpr then {
-                    if wn.conditions.length == 1 when (yieldCountIn :ast nid: wn.body) > 0 then {
-                        w0: ast.nodes.get i: (wn.conditions.get i: 0).u64
+                    if wn.conditions.count.u64 == 1 when (yieldCountIn :ast nid: wn.body) > 0 then {
+                        w0: ast.nodes.get i: (kidAt kids: ast.kids span: wn.conditions i: 0).u64
                         if w0.namedoperation then {
                             if (nameTextAt :ast ref: w0.name).length > 0 then c = c + 1
                         }
@@ -2366,7 +2354,7 @@ suspendingForCountOf: function {ast: Ast.view n: Node.view} out u64 is {
 # callArgAt -- the id of argument `i` of call `nid` (0 for any other arm).
 callArgAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
     n: ast.nodes.get i: nid.u64
-    if n.call then return (nodeid.create from: (n.arguments.get :i))
+    if n.call then return (nodeid.create from: (kidAt kids: ast.kids span: n.arguments :i))
     zn: nodeid
     return zn
 }
@@ -2375,7 +2363,7 @@ callArgAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 # other arm).
 stringPartAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
     n: ast.nodes.get i: nid.u64
-    if n.atomstring then return (nodeid.create from: (n.stringparts.get :i))
+    if n.atomstring then return (nodeid.create from: (kidAt kids: ast.kids span: n.stringparts :i))
     zn: nodeid
     return zn
 }
@@ -2387,25 +2375,25 @@ stringPartAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 # copy is what makes a span contiguous: the parser builds a node's children
 # while parsing grandchildren that are appending here too, so the window can
 # only be claimed once the list is finished.
-kidsAdd: function {ast: Ast xs: (ListVal u32).view} out kidspan is {
+kidsAdd: function {kids: ListVal u32 xs: (ListVal u32).view} out kidspan is {
     n: xs.length
     if n == 0 then return (kidspan first: 0 count: 0)
-    f: ast.kids.length.u32.orPanic
-    with it: xs.iterate do for x: it loop ast.kids.append from: x
+    f: kids.length.u32.orPanic
+    with it: xs.iterate do for x: it loop kids.append from: x
     return (kidspan first: f count: n.u32.orPanic)
 }
 
 # kidAt -- child `i` of `span`. Out of range is a panic, not a sentinel: a walk
 # reads `span.count` first and a bad index is a bug in the walk.
-kidAt: function {ast: Ast.view span: kidspan i: u64} out u32 is {
-    return (ast.kids.get i: (span.first.u64 + i))
+kidAt: function {kids: (ListVal u32).view span: kidspan i: u64} out u32 is {
+    return (kids.get i: (span.first.u64 + i))
 }
 
 # appendSpan -- append every id in `span` to `acc`, the span twin of appendIds.
-appendSpan: function {ast: Ast.view acc: ListVal u32 span: kidspan} is {
+appendSpan: function {kids: (ListVal u32).view acc: ListVal u32 span: kidspan} is {
     si: u64
     for si < span.count.u64 loop {
-        acc.append from: (kidAt :ast :span i: si)
+        acc.append from: (kidAt :kids :span i: si)
         si = si + 1
     }
 }
@@ -2608,11 +2596,11 @@ isGenericParamOp: function {ast: Ast.view opId: u32} out bool is {
 
 # True when any member of the definition list `items` declares a generic
 # parameter, i.e. the body it came from is a template.
-itemsHaveGenericParam: function {ast: Ast.view items: (ListVal u32).view} out bool is {
+itemsHaveGenericParam: function {ast: Ast.view items: zast.kidspan} out bool is {
     hi: u64
-    hn: items.length
+    hn: items.count.u64
     for hi < hn loop {
-        hid: items.get i: hi
+        hid: kidAt kids: ast.kids span: items i: hi
         hm: ast.nodes.get i: hid.u64
         if hm.namedoperation then {
             if (isGenericParamOp :ast opId: hm.operation) then return true
@@ -2666,13 +2654,8 @@ unitOpDeclaresUnit: function {ast: Ast.view opId: u32} out bool is {
 # `.valtype` or `.reftype` -- unwrapping the expression and call wrappers the
 # form can carry. The parser marks a unit body holding one as a template; the
 # typechecker asks the same question of a type body.
-unitBodyIdsAt: function {ast: Ast.view unitId: u32} out (ListVal u32) is {
-    result: (ListVal u32)
-    {
-        u: ast.nodes.get i: unitId.u64
-        if u.unitdef then {
-            with bit: u.body.iterate do for b: bit loop result.append b
-        }
-    }
-    return result
+unitBodyIdsAt: function {ast: Ast.view unitId: u32} out kidspan is {
+    u: ast.nodes.get i: unitId.u64
+    if u.unitdef then return u.body
+    return (kidspan first: 0 count: 0)
 }
