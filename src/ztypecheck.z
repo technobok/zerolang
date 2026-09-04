@@ -12322,6 +12322,59 @@ noMainError: function {
     st.typing.isError = true
 }
 
+# badMainError -- `main` declares a shape the entry point cannot have. The
+# runtime calls it with no arguments and reads no result, so a parameter or an
+# `out` type is a promise the emitter cannot keep: it writes `void z_main(void)`
+# either way, and the C compiler then rejects the body that reads the parameter
+# or returns the value. Refusing here is what keeps zc from accepting a
+# signature it cannot honour.
+badMainError: function {
+    st: zenv.ZSymbolTable
+    at: argref
+    msg: StringView
+    note: StringView
+    hint: StringView
+} is {
+    (addErrorH
+        :st
+        nodeid: at.nid
+        lineno: at.lineno
+        colno: at.colno
+        e: zast.err.badMain
+        msg: msg.string
+        note: note.string
+        hint: hint.string
+        width: 4
+    )
+}
+
+# checkMainSignature -- refuse a `main` that declares parameters or a result.
+# `at` positions the diagnostic on the definition; `fn` carries the shape.
+checkMainSignature: function {
+    st: zenv.ZSymbolTable
+    at: argref
+    fn: fnref
+} is {
+    if fn.nparams > 0 then {
+        (badMainError
+            :st
+            :at
+            msg: "'main' takes no parameters: the runtime has none to pass it"
+            note: "a program reads its command line through `os.args`, not through a parameter"
+            hint: "write `main: function is { ... }` and bind `argv: os.args` in the body"
+        )
+    }
+    if (fn.returntype.isZero) == false then {
+        (badMainError
+            :st
+            :at
+            msg: "'main' declares no result: there is no caller to return one to"
+            note: "the process exit status is set explicitly, not returned from the entry point"
+            hint: "drop the `out` clause and exit with `os.exit code: n`"
+        )
+    }
+}
+
 # register and resolve the program's main unit.
 registerAndResolveMain: function {
     st: zenv.ZSymbolTable
@@ -34849,6 +34902,7 @@ checkUnitBodies: function {
                     foundMain = true
                     hDeclId2: declOfUnitDefIds :st :unitDecl nameId: mm.name
                     cfbFr: fnRefAt :ast nid: (zast.nodeid.create from: mm.operation.u32)
+                    (checkMainSignature :st at: mm fn: cfbFr)
                     (checkFunctionBody
                         :st
                         :frame
