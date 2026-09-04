@@ -312,7 +312,7 @@ Parser: class {
 
     # an error node carrying `tok`'s position, so a parse can keep going and
     # still report exactly where it broke
-    mkError: function {:this tok: zlexer.Token.view lex: zlexer.Lexer.view code: zast.err msg: String.take} out Node is {
+    mkError: function {:this tok: zlexer.Token.view code: zast.err msg: String.take} out Node is {
         pos: (zlexer.tokpos
             fsno: tok.fsno
             lineno: tok.lineno
@@ -323,19 +323,19 @@ Parser: class {
         # token -- which is more precise than what the parser expected here;
         # inside a string literal the same fact is an escape the literal rejects
         if tok.toktype == zlexer.toktype.errTok then {
-            errTxt: zast.poolTextCopy pool: this.ast.names ref: tok.text
-            if code.badString then {
-                return (this.mkErrorAt
-                    :pos
-                    code: zast.err.badString
-                    msg: "unknown escape or character '\{errTxt}' in string literal"
-                )
+            # the view pins the pool, so the message is built inside the block
+            # and the pin is gone before mkErrorAt takes the receiver
+            em9: String
+            {
+                errTxt: zast.poolTextAt pool: this.ast.names ref: tok.text
+                if code.badString then {
+                    em9 = "unknown escape or character '\{errTxt}' in string literal"
+                } else {
+                    em9 = "unexpected characters '\{errTxt}'"
+                }
             }
-            return (this.mkErrorAt
-                :pos
-                code: zast.err.badToken
-                msg: "unexpected characters '\{errTxt}'"
-            )
+            if code.badString then return (this.mkErrorAt :pos code: zast.err.badString msg: em9)
+            return (this.mkErrorAt :pos code: zast.err.badToken msg: em9)
         }
         return (this.mkErrorAt :pos :code :msg)
     }
@@ -522,7 +522,6 @@ Parser: class {
                 bad: lex.acceptAny pool: this.ast.names
                 err: (this.mkError
                     tok: bad
-                    :lex
                     code: zast.err.badPath
                     msg: "Expected ID after dot".string
                 )
@@ -654,7 +653,6 @@ Parser: class {
                 bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
                     tok: bad
-                    :lex
                     code: zast.err.badString
                     msg: "Unexpected token in string literal".string
                 )
@@ -1023,7 +1021,6 @@ Parser: class {
                     bad: lex.acceptAny pool: this.ast.names
                     return (this.mkError
                         tok: bad
-                        :lex
                         code: zast.err.badArgument
                         msg: "Duplicate argument name".string
                     )
@@ -1034,7 +1031,6 @@ Parser: class {
                     bad: lex.acceptAny pool: this.ast.names
                     return (this.mkError
                         tok: bad
-                        :lex
                         code: zast.err.badArgument
                         msg: "Expected an Operation after label".string
                     )
@@ -1063,7 +1059,6 @@ Parser: class {
                         bad: lex.acceptAny pool: this.ast.names
                         return (this.mkError
                             tok: bad
-                            :lex
                             code: zast.err.badArgument
                             msg: "Duplicate argument name".string
                         )
@@ -1274,7 +1269,6 @@ Parser: class {
                 bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
                     tok: bad
-                    :lex
                     code: zast.err.badStatement
                     msg: "Expected expression for assignment statement".string
                 )
@@ -1332,7 +1326,6 @@ Parser: class {
                 bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
                     tok: bad
-                    :lex
                     code: zast.err.badStatement
                     msg: "Expected closing brace for statement body".string
                 )
@@ -1488,7 +1481,6 @@ Parser: class {
                 bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
                     tok: bad
-                    :lex
                     code: zast.err.expectedOp
                     msg: "Expected operation (condition) for 'if'".string
                 )
@@ -1586,7 +1578,6 @@ Parser: class {
                 bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
                     tok: bad
-                    :lex
                     code: zast.err.expectedOp
                     msg: "Expected operation (condition) for 'if'".string
                 )
@@ -1653,7 +1644,6 @@ Parser: class {
                     bad: lex.acceptAny pool: this.ast.names
                     return (this.mkError
                         tok: bad
-                        :lex
                         code: zast.err.badCase
                         msg: "Expected then keyword for case".string
                     )
@@ -1662,7 +1652,6 @@ Parser: class {
                 bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
                     tok: bad
-                    :lex
                     code: zast.err.badReference
                     msg: "Case match expression expected (simple id)".string
                 )
@@ -1719,7 +1708,6 @@ Parser: class {
                 bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
                     tok: bad
-                    :lex
                     code: zast.err.expectedOp
                     msg: "Expected operation for match (subject)".string
                 )
@@ -1756,7 +1744,6 @@ Parser: class {
                 bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
                     tok: bad
-                    :lex
                     code: zast.err.expectedOp
                     msg: "Expected operation (condition) for for".string
                 )
@@ -1811,7 +1798,6 @@ Parser: class {
                 bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
                     tok: bad
-                    :lex
                     code: zast.err.expectedOp
                     msg: "Expected operation for for binding label".string
                 )
@@ -1842,7 +1828,6 @@ Parser: class {
                 bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
                     tok: bad
-                    :lex
                     code: zast.err.badFor
                     msg: "Duplicate loop".string
                 )
@@ -1877,7 +1862,6 @@ Parser: class {
             bad: lex.acceptAny pool: this.ast.names
             return (this.mkError
                 tok: bad
-                :lex
                 code: zast.err.badFor
                 msg: "Require at least one condition or a loop for for".string
             )
@@ -2003,7 +1987,6 @@ Parser: class {
             bad: lex.acceptAny pool: this.ast.names
             return (this.mkError
                 tok: bad
-                :lex
                 code: zast.err.expectedDef
                 msg: "Expected label after with".string
             )
@@ -2033,7 +2016,6 @@ Parser: class {
                 bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
                     tok: bad
-                    :lex
                     code: zast.err.badData
                     msg: "Expected opening brace for data body".string
                 )
@@ -2050,7 +2032,6 @@ Parser: class {
                             bad: lex.acceptAny pool: this.ast.names
                             return (this.mkError
                                 tok: bad
-                                :lex
                                 code: zast.err.badArgument
                                 msg: "Duplicate data member name".string
                             )
@@ -2076,7 +2057,6 @@ Parser: class {
                                 bad: lex.acceptAny pool: this.ast.names
                                 return (this.mkError
                                     tok: bad
-                                    :lex
                                     code: zast.err.badArgument
                                     msg: "Duplicate data member name".string
                                 )
@@ -2128,7 +2108,6 @@ Parser: class {
                     bad: lex.acceptAny pool: this.ast.names
                     return (this.mkError
                         tok: bad
-                        :lex
                         code: zast.err.badData
                         msg: "Expected closing brace for data body".string
                     )
@@ -2159,7 +2138,6 @@ Parser: class {
                             bad: lex.acceptAny pool: this.ast.names
                             return (this.mkError
                                 tok: bad
-                                :lex
                                 code: zast.err.badData
                                 msg: "Expected type reference after out".string
                             )
@@ -2237,7 +2215,6 @@ Parser: class {
             bad: lex.acceptAny pool: this.ast.names
             return (this.mkError
                 tok: bad
-                :lex
                 code: zast.err.badStatement
                 msg: "Swap requires a right hand side".string
             )
@@ -2272,7 +2249,6 @@ Parser: class {
                     if dup then {
                         params.append (this.intern n: (this.mkError
                             tok: lblTok
-                            :lex
                             code: zast.err.badParameter
                             msg: "Duplicate parameter name".string
                         ))
@@ -2298,7 +2274,6 @@ Parser: class {
                         if dup then {
                             params.append (this.intern n: (this.mkError
                                 tok: lblTok
-                                :lex
                                 code: zast.err.badParameter
                                 msg: "Duplicate parameter name".string
                             ))
@@ -2408,7 +2383,6 @@ Parser: class {
                 if outKind == 2 then outWord = "outx"
                 return (this.mkError
                     tok: bad
-                    :lex
                     code: zast.err.badArgument
                     msg: "Expected type reference for \{outWord}"
                 )
@@ -2647,7 +2621,6 @@ Parser: class {
                     if dup then {
                         items.append (this.intern n: (this.mkError
                             tok: lblTok
-                            :lex
                             code: zast.err.badItem
                             msg: "Duplicate item name".string
                         ))
@@ -2673,7 +2646,6 @@ Parser: class {
                         if dup then {
                             items.append (this.intern n: (this.mkError
                                 tok: lblTok
-                                :lex
                                 code: zast.err.badItem
                                 msg: "Duplicate item name".string
                             ))
@@ -2701,7 +2673,6 @@ Parser: class {
                                 if visUnit then em = "'\{lblTxt}:' must introduce a unit definition, e.g. `\{lblTxt}: unit { :field }`"
                                 items.append (this.intern n: (this.mkError
                                     tok: lblTok
-                                    :lex
                                     code: zast.err.reservedMember
                                     msg: em
                                 ))
@@ -2764,7 +2735,6 @@ Parser: class {
             bad: lex.acceptAny pool: this.ast.names
             return (this.mkError
                 tok: bad
-                :lex
                 code: zast.err.badItem
                 msg: "Inline type definition is not allowed here; define it at unit level and reference it by name".string
             )
@@ -2775,7 +2745,6 @@ Parser: class {
             bad: lex.acceptAny pool: this.ast.names
             return (this.mkError
                 tok: bad
-                :lex
                 code: zast.err.badItem
                 msg: "Expected a function or expression for item".string
             )
@@ -2858,7 +2827,6 @@ Parser: class {
                 if dup then {
                     body.append (this.intern n: (this.mkError
                         tok: lblTok
-                        :lex
                         code: zast.err.duplicateDef
                         msg: "Duplicate definition".string
                     ))
@@ -2885,7 +2853,6 @@ Parser: class {
                     if dup then {
                         body.append (this.intern n: (this.mkError
                             tok: lblTok
-                            :lex
                             code: zast.err.duplicateDef
                             msg: "Duplicate definition".string
                         ))
@@ -2912,7 +2879,6 @@ Parser: class {
                         dTxt: zast.poolTextCopy pool: this.ast.names ref: lblTok.text
                         body.append (this.intern n: (this.mkError
                             tok: lblTok
-                            :lex
                             code: zast.err.reservedMember
                             msg: "'\{dTxt}:' must introduce a unit definition, e.g. `\{dTxt}: unit { :field }`"
                         ))
