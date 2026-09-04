@@ -24102,6 +24102,36 @@ emitBoxMono: function {
     buf.append "}\n\n"
 }
 
+# emitListMethodOnDemand -- write one List template method, but only when the
+# program actually calls it on THIS instance. `usedMemberDecl` holds the member
+# declarations a use site resolved; the INSTANCE's own member is the question,
+# because refDecl records the template's and so answers for every instance at
+# once. A method nothing calls is a dead C function in every program that names
+# the collection at all.
+emitListMethodOnDemand: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    runtimeDir: StringView
+    monoId: ztypes.tid
+    nameId: zast.nameid
+    file: StringView
+    nm: StringView
+    ect: StringView
+    buf: String.borrow
+} is {
+    md: symtab.typing.declMemberIdOf parentTypeId: monoId :nameId
+    if md.isZero then return
+    if (symtab.typing.usedMemberDecl.has item: md.u64) == false then return
+    fp: "\{runtimeDir}/\{file}"
+    raw: readTemplateCached :ctx path: fp.stringView
+    if raw.length == 0 then return
+    f1: applyTmpl text: raw key: "NAME" val: nm
+    f2: applyTmpl text: f1 key: "ELEM_T" val: ect
+    buf.append f2
+    buf.append "\n"
+}
+
 # emitListMono -- substitute z_List.c.tmpl for a List instance + the
 # linear-scan contains companion (scalar element equality).
 emitListMono: function {
@@ -24153,6 +24183,33 @@ emitListMono: function {
         buf.append t4
         buf.append "\n"
     }
+    # insert and extend are their own fragments, written only for an instance
+    # that calls them. Every List instance used to carry both, and in the
+    # compiler's own C half of them were never called
+    (emitListMethodOnDemand
+        :ast
+        :symtab
+        :ctx
+        :runtimeDir
+        :monoId
+        nameId: zast.names.wkInsert
+        file: "z_List_insert.c.tmpl"
+        nm: nm.stringView
+        ect: ect.stringView
+        :buf
+    )
+    (emitListMethodOnDemand
+        :ast
+        :symtab
+        :ctx
+        :runtimeDir
+        :monoId
+        nameId: zast.names.wkExtend
+        file: "z_List_extend.c.tmpl"
+        nm: nm.stringView
+        ect: ect.stringView
+        :buf
+    )
     if ctx.colGetFromCode then {
         (emitColGet
             nm: nm.stringView
