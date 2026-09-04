@@ -1,0 +1,64 @@
+# valtype_view_method_arg -- a VALTYPE parameter marked `.view` passes by
+# pointer, and a METHOD declaring one used to be handed a value. The signature
+# emitter has always known the rule (markedValtypeRefParam); of the two places
+# that decide whether to address an argument, only the free-function path asked
+# it, so `this.m :row` emitted `m(recv, row)` against `m(recv, row_t*)` and the
+# C compiler rejected it. A view is the only way to hand a large valtype on
+# without copying it, so the shape matters as soon as any table holds rows.
+
+# four fields, so a wrong pointer level reads as a wrong number rather than
+# happening to work
+info: record { a: u32  b: u32  c: u32  d: u32 }
+
+shape: variant {
+    empty: null
+    full: info
+}
+
+# the free-function form, which always worked
+freeByView: function {s: shape.view} out u32 is {
+    match (
+        s
+    ) case full then {
+        return s.a
+    } else null
+    return 0
+}
+
+Holder: class {
+    tag: u32
+} as {
+    # the method form, which did not
+    methodByView: function {this: this.view s: shape.view} out u32 is {
+        match (
+            s
+        ) case full then {
+            return s.b
+        } else null
+        return 0
+    }
+    # a second one taking the row positionally after the receiver
+    sumByView: function {this: this.view s: shape.view k: u32} out u32 is {
+        match (
+            s
+        ) case full then {
+            return s.c + k
+        } else null
+        return k
+    }
+    run: function {this: this.view rows: (ListVal shape).view} out u32 is {
+        # the row stays in the list until it is read out here, once
+        r: rows.get i: 0
+        m: this.methodByView s: r
+        f: freeByView s: r
+        p: this.sumByView s: r k: 10
+        return ((m + f) + p)
+    }
+}
+
+main: function is {
+    rows: (ListVal t: shape)
+    rows.append from: (shape.full (info a: 1 b: 2 c: 3 d: 4))
+    h: Holder tag: 0
+    print "sum=\{h.run :rows}"
+}
