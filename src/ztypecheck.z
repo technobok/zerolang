@@ -13221,8 +13221,11 @@ scanCallsInNode: function {
     ast: Ast.view
     node: Node.view
 } is {
-    # the unit frame once: the demands below lend st
-    uFr: unitFrameOf :st declId: frame
+    # Four of the twenty arms demand into the unit frame and one arm runs per
+    # node, so each binds it itself: hoisting it cost every OTHER arm a lookup
+    # it never read. It must be a BINDING, never inline in the demand call --
+    # `demandDefinition :st frame: (unitFrameOf :st ...)` lends st twice in one
+    # call and is E0200.
     match (
         node
     ) case call then {
@@ -13236,21 +13239,28 @@ scanCallsInNode: function {
                 nameId: (zast.poolFind pool: ast.names text: "never")
             )
         } else {
+            cFr: unitFrameOf :st declId: frame
             if cn.length > 0 then (demandDefinition
                 :st
-                frame: uFr
+                frame: cFr
                 nameId: (atomNameId :ast n: (ast.nodes.get i: node.callable.u64))
             )
         }
-        scanCallsIn :st :frame :ast ids: (zast.childIdsAt :ast id: node.nodeid.u32)
+        # the callee then the arguments, which is childIds' order for a call,
+        # walked through the node's own fields so no list is built for it
+        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.callable.u64)
+        for aId9: node.arguments.iterate loop {
+            scanCallsInNode :st :frame :ast node: (ast.nodes.get i: aId9.u64)
+        }
     } case atomid then {
         # bare body identifiers demand main-unit definitions (unit constants,
         # data blocks); non-definition names never match a demanded def.
         scN: ast.names.texts.get i: node.name.u64
         if (isNumericLiteralName name: scN.stringView) == false then {
+            aFr: unitFrameOf :st declId: frame
             (demandDefinition
                 :st
-                frame: uFr
+                frame: aFr
                 nameId: node.name
             )
         }
@@ -13283,12 +13293,22 @@ scanCallsInNode: function {
         }
         scanBodyAt :st :frame :ast bodyId: node.elseclause
     } case forexpr then {
+        fFr: unitFrameOf :st declId: frame
         (demandDefinition
             :st
-            frame: uFr
+            frame: fFr
             nameId: (zast.poolFind pool: ast.names text: "never")
         )
-        scanCallsIn :st :frame :ast ids: (zast.childIdsAt :ast id: node.nodeid.u32)
+        # conditions, body, postconditions -- childIds' order for a for, walked
+        # through the node's own fields. scanBodyAt skips an absent body
+        # exactly as childIds' appendOptId omits it.
+        for cId9: node.conditions.iterate loop {
+            scanCallsInNode :st :frame :ast node: (ast.nodes.get i: cId9.u64)
+        }
+        scanBodyAt :st :frame :ast bodyId: node.body
+        for pId9: node.postconditions.iterate loop {
+            scanCallsInNode :st :frame :ast node: (ast.nodes.get i: pId9.u64)
+        }
     } case doexpr then {
         doFr: unitFrameOf :st declId: frame
         (demandDefinition
@@ -13304,12 +13324,41 @@ scanCallsInNode: function {
             )
         }
         scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.statement.u64)
+    } case namedoperation then {
+        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.operation.u64)
+    } case atomstring then {
+        for sId9: node.stringparts.iterate loop {
+            scanCallsInNode :st :frame :ast node: (ast.nodes.get i: sId9.u64)
+        }
+    } case ifclause then {
+        for kId9: node.conditions.iterate loop {
+            scanCallsInNode :st :frame :ast node: (ast.nodes.get i: kId9.u64)
+        }
+        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.statement.u64)
+    } case caseexpr then {
+        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.subject.u64)
+        for qId9: node.clauses.iterate loop {
+            scanCallsInNode :st :frame :ast node: (ast.nodes.get i: qId9.u64)
+        }
+        scanBodyAt :st :frame :ast bodyId: node.elseclause
+    } case reassignment then {
+        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.topath.u64)
+        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.value.u64)
+    } case withexpr then {
+        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.value.u64)
+        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.body.u64)
+    } case swapstmt then {
+        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.lhs.u64)
+        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.rhs.u64)
+    } case typeofexpr then {
+        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.source.u64)
     } case dottedpath then {
         bn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: node.parent.u64))
         if bn.length > 0 then {
+            pFr: unitFrameOf :st declId: frame
             (demandDefinition
                 :st
-                frame: uFr
+                frame: pFr
                 nameId: (atomNameId :ast n: (ast.nodes.get i: node.parent.u64))
             )
             # a unit-qualified member (io.stdout) demands exactly that member
