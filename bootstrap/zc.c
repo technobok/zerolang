@@ -33993,12 +33993,8 @@ static uint32_t z_t4737(z_t579_t* z_v659) {
 
 static z_t580_t z_t4738(z_t579_t* z_v665, z_t581_t z_v666) {
     uint32_t z_v667 = z_t4737(z_v665);
-    z_t580_t z_v668 = z_t4815();
-    {
-        z_t580_t _sw0 = z_v668;
-        z_v668 = z_v665->ast;
-        z_v665->ast = _sw0;
-    }
+    z_t580_t z_v668 = z_v665->ast;
+    z_v665->ast = (z_t580_t){0};
     z_v668.root = z_v667;
     (void)(z_t2053(&z_v668, ((uint32_t)z_v667), z_v666));
     return z_v668;
@@ -37204,18 +37200,14 @@ _s0; });
         z_v3117 = z_v3113->ast.units;
         z_v3113->ast.units = _sw6;
     }
-    z_t580_t z_v3168 = z_t4815();
-    {
-        z_t580_t _sw7 = z_v3168;
-        z_v3168 = z_v3113->ast;
-        z_v3113->ast = _sw7;
-    }
+    z_t580_t z_v3168 = z_v3113->ast;
+    z_v3113->ast = (z_t580_t){0};
     z_v3168.root = z_v3167;
     z_t63_t z_v3169 = z_t63_copy(z_v3116);
     {
-        z_t63_t _sw8 = z_v3169;
+        z_t63_t _sw7 = z_v3169;
         z_v3169 = z_v3168.mainUnitName;
-        z_v3168.mainUnitName = _sw8;
+        z_v3168.mainUnitName = _sw7;
     }
     (void)(z_t2053(&z_v3168, ((uint32_t)z_v3167), ((z_t581_t){ .tag = Z_ASTNODE_TAG_PROGRAM, .data.program = (z_t745_create(z_v3167, 1U, 1U)) })));
     z_t63_free(&z_v3169);
