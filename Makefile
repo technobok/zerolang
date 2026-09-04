@@ -1009,6 +1009,10 @@ zlink-rules-guard:
 # These cannot be errors/ fixtures. That runner's command always ends in
 # --emit-c (zcArgv, src/ztestrunner.z), so it never enters the compile/link
 # branch where the mode and the compiler are resolved and these refusals live.
+#
+# The last case is the other half of the same rule: a value-taking flag that
+# ends the command line is a usage error. It used to read one past argv and
+# abort in the allocator's index check, which names no flag and exits 1.
 refusal-guard: bin/zc $(BUILDDIR)/tcc
 	@d=$(BUILDDIR)/refusal; rm -rf $$d; mkdir -p $$d; bad=0; \
 	bin/zc build hello --src examples --system lib/system --cc tcc --cc-mode spawn \
@@ -1060,6 +1064,13 @@ refusal-guard: bin/zc $(BUILDDIR)/tcc
 	  echo "refusal-guard FAIL: a HOST --target must still build and fold to the host (exit $$rc)"; \
 	  cat $$d/g.log; bad=1; \
 	fi; \
+	for fl in --src --system --runtime --emit-c --dump-sql -o --cc --cc-mode --tcc-lib --target --cflags --ldflags; do \
+	  bin/zc build hello --src examples --system lib/system $$fl > $$d/m.log 2>&1; rc=$$?; \
+	  if [ $$rc -ne 2 ] || ! grep -q -- "zc: $$fl needs a value" $$d/m.log; then \
+	    echo "refusal-guard FAIL: a trailing $$fl must exit 2 naming the flag, got $$rc"; \
+	    cat $$d/m.log; bad=1; \
+	  fi; \
+	done; \
 	if [ $$bad -ne 0 ]; then \
 	  echo "  zc never accepts a flag it will ignore: it names what it resolved and exits 2."; \
 	  exit 1; \
