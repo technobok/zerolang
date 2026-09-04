@@ -163,6 +163,43 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-09-03 | 56e15e82 | [resolution by id](#r-56e15e82) | 0.46s | -- | 91MB / -- | 109 / 179 / 173 (total 471, medians of 5) | 4,625,858 | 314MB | -- | 117,169 |
 | 2026-09-03 | b7fccae6 | [per-site copies by id](#r-b7fccae6) | 0.45s | -- | 92MB / -- | 108 / 179 / 170 (total 461, medians of 5) | 4,566,490 | 312MB | -- | 117,095 |
 | 2026-09-04 | 5061187b | [review phases 1-3: four defects, four gates, two sweeps](#r-5061187b) | 0.47s | -- | 93MB / -- | 103 / 178 / 176 (total 457, medians of 5) | 4,553,926 | 312MB | -- | 116,149 |
+| 2026-09-04 | e5054d3a | [the token arc: a token's text is a pool id](#r-tokenarc) | 0.46s | -- | 93MB / -- | 104 / 183 / 174 (total 461, medians of 5) | 3,872,623 | 296MB | -- | 114,709 |
+
+
+<a id="r-tokenarc"></a>
+**The token arc, taken** (`556fa6f4`..`1df5eaf5`, off `5061187b`'s 4,553,926).
+Two steps. `Token` gained `width: u32` and lost the dead `tokenid` -- 46 sites
+wrote that field and nothing read it -- which is allocation-neutral by design and
+cost 1,928 blocks of extra source. Then `tokstr: String` became
+`text: zast.nameid`: the tokenizer interns the source slice through
+`StringPool.set`, which copies only on first sight, instead of building a
+right-sized owned String per token.
+
+**-652,500 blocks, -14.4%, in one commit** -- the largest single reduction in
+this file. Readable-names DHAT, before and after: `Tokenizer_tokSpan` **533,311
+-> 0**, `Tokenizer_token` 59,293 -> 0, `Parser_acceptCall` -63,271 and
+`Parser_acceptParamBlock` -11,116 as the duplicate-name `List String` became
+`ListVal u64` of ids, against +7,207 in `StringPool_get`, +2,250 in
+`StringPool_set` and +3,859 in `Lexer_advance` -- the interning itself. Bytes
+307.7MB -> 295.9MB; instructions 5.597G -> 5.496G.
+
+**What the prescription at `#r-e2c867af` got right and what it missed.** It
+counted 279,729 of the copies as constants of their token type and proposed a
+`textOfType` table for them before interning. Interning subsumes that step
+entirely: a constant spelling is one pool row and every later token hits it, so
+the table would have bought nothing the pool does not. Its other claim held
+exactly -- pool pollution is not real, the pool grew by roughly four thousand
+rows.
+
+**The pool travels as a PARAMETER, and that was measured, not assumed.** A
+`.borrow` field on the Lexer was tried first and refused for the right reason: a
+non-owned field holds its target's lock for the object's whole life, so
+`Parser.ast.names` stayed locked for the parse and the parser could not call its
+own methods. As a parameter the lock lasts one call.
+
+**Left in the family:** `Lexer_accept` at 338,334, unchanged. Those are `Option
+Token` boxes, and they go when `Token` becomes a record -- the last step of the
+arc.
 
 2026-08-05 note -- **the measurement floor of this setup, established by
 repetition, and the trap that produced a fake baseline.**
