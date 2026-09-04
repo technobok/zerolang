@@ -3158,16 +3158,14 @@ pathIsPointer: function {
     } case atomid then {
         anP: ast.names.texts.get i: n.name.u64
         rnV0: atomVid :symtab nid: n.nodeid.u64
-        rn: aliasResolve :ctx name: anP.stringView vid: rnV0
         rnv: ztypes.vid
-        if rn.stringView == anP.stringView then rnv = rnV0
+        if (aliasResolvesToSelf :ctx name: anP.stringView vid: rnV0) then rnv = rnV0
         return (isPtrVid :ctx vid: rnv)
     } case labelvalue then {
         lnP: ast.names.texts.get i: n.name.u64
         rlnV0: atomVid :symtab nid: n.nodeid.u64
-        rln: aliasResolve :ctx name: lnP.stringView vid: rlnV0
         rlv: ztypes.vid
-        if rln.stringView == lnP.stringView then rlv = rlnV0
+        if (aliasResolvesToSelf :ctx name: lnP.stringView vid: rlnV0) then rlv = rlnV0
         return (isPtrVid :ctx vid: rlv)
     } case call then {
         # a reference-returning call yields `T*`. The arm narrows `n` to
@@ -3356,6 +3354,23 @@ vtRemove: function {xs: List VidTid vid: ztypes.vid} is {
         }
         i = i + 1
     }
+}
+
+# aliasResolvesToSelf -- does `vid` stand for its own name, rather than for a
+# narrowing box or a take alias? The question aliasResolve is asked when the
+# caller wants no text, only the answer; asking it this way copies nothing.
+aliasResolvesToSelf: function {ctx: Ctx.view name: StringView vid: ztypes.vid} out bool is {
+    nb: vvFind xs: ctx.narrowBox :vid
+    if nb > 0 then {
+        eNb: ctx.narrowBox.get i: nb - 1
+        return (eNb.val.stringView == name)
+    }
+    al: vvFind xs: ctx.aliases :vid
+    if al > 0 then {
+        eAl: ctx.aliases.get i: al - 1
+        return (eAl.val.stringView == name)
+    }
+    return true
 }
 
 # aliasResolve -- a `.take` alias's base C name, or the name itself if none.
@@ -20506,15 +20521,12 @@ paramIsReceiverName: function {
     fid: ztypes.tid
     pname: StringView
 } out bool is {
-    rnm: "this".string
-    {
-        tpn: (zast.poolTextAt
-            pool: ast.names
-            ref: (symtab.reg.thisParamNameIdOf tid: fid)
-        )
-        if tpn.length > 0 then rnm = tpn.copy
-    }
-    return (pname == rnm.stringView)
+    # by id, and only fall back to the spelling when the type records no
+    # receiver name of its own -- `this` is the implicit one
+    pid: zast.poolFind pool: ast.names text: pname
+    if (symtab.reg.thisParamNameIs tid: fid nameId: pid) then return true
+    if (symtab.reg.thisParamNameIdOf tid: fid).isZero then return (pid == zast.names.wkThis)
+    return false
 }
 
 # calleeTakesReceiverByPtr -- does this method's FIRST parameter occupy the
