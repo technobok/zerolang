@@ -96,7 +96,7 @@ unitdefNodeId: function {ast: Ast.view nId: zast.nodeid} out zast.nodeid is {
 # kinds a type expression or method def can take (atom / labelvalue / dotted /
 # expression / call / functiondef); 0 otherwise (the stamp is then a no-op row
 # the typed_nodes JOIN drops).
-nodeId: function {n: astnode} out zast.nodeid is {
+nodeId: function {n: astnode.view} out zast.nodeid is {
     match (
         n
     ) case atomid then {
@@ -123,13 +123,13 @@ nodeId: function {n: astnode} out zast.nodeid is {
 }
 
 # nodeLine / nodeCol -- the source position of node `n`.
-nodeLine: function {n: astnode} out u32 is {
+nodeLine: function {n: astnode.view} out u32 is {
     return (zast.posOf :n).line
 }
 
 # a node's column, whatever arm it is. Every carrier holds one and the union
 # has no common accessor, so the match lives here once
-nodeCol: function {n: astnode} out u32 is {
+nodeCol: function {n: astnode.view} out u32 is {
     return (zast.posOf :n).col
 }
 
@@ -137,7 +137,7 @@ nodeCol: function {n: astnode} out u32 is {
 # "" for anything else. Matching the astnode param narrows it cleanly (the proven
 # simple-param pattern), so callers pass a field/arg projection without worrying
 # about path-subject narrowing.
-atomName: function {ast: Ast.view n: astnode} out String is {
+atomName: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
     ) case atomid then {
@@ -151,7 +151,7 @@ atomName: function {ast: Ast.view n: astnode} out String is {
 
 # atomNameId -- the Ast.names pool id of an atomid/labelvalue node's name
 # (0 when the node is neither; no pool id is 0, so lookups by it miss).
-atomNameId: function {ast: Ast.view n: astnode} out zast.nameid is {
+atomNameId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
     ast
     match (
         n
@@ -1478,7 +1478,7 @@ linkDeclTypeId: function {
 # path aliases, the null/never empty types, enums/generics in later slices).
 defTypetypeOf: function {
     ast: Ast.view
-    defn: astnode
+    defn: astnode.view
     name: StringView
 } out optionval ztypes.ztypetype is {
     match (
@@ -1773,7 +1773,7 @@ declareCanonicalTypeId: function {
 
 # dottedDefTargetIds -- dottedDefTarget as an id pair: the parent atom's name
 # id and the child's; an absent pair when the definition is not a dotted alias.
-dottedDefTargetIds: function {ast: Ast.view n: astnode} out ztypes.deftarget is {
+dottedDefTargetIds: function {ast: Ast.view n: astnode.view} out ztypes.deftarget is {
     match (
         n
     ) case expression then {
@@ -1792,7 +1792,7 @@ dottedDefTargetIds: function {ast: Ast.view n: astnode} out ztypes.deftarget is 
 # bareDefTargetNameId -- the name id a BARE alias value names (`Same: Holder`),
 # through any expression wrapper; the zero id when the value is not a bare
 # name. The dotted twin is dottedDefTargetIds.
-bareDefTargetNameId: function {ast: Ast.view n: astnode} out zast.nameid is {
+bareDefTargetNameId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
     match (
         n
     ) case expression then {
@@ -2181,7 +2181,7 @@ isMoveMarker: function {name: StringView} out bool is {
 # valueIsHold -- true when a bound value carries the `.hold` marker, through any
 # `expression` wrapper. `hold` is owned and readonly, so the binding both moves
 # the source away and freezes itself.
-valueIsHold: function {ast: Ast.view n: astnode} out bool is {
+valueIsHold: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
     ) case expression then {
@@ -2249,7 +2249,7 @@ isListViewMemberId: function {nameId: zast.nameid} out bool is {
 
 # isLabelValue -- true when a node is a bare `:X` label-value (an anonymous
 # conformance marker in an as-block parses as a namedoperation wrapping one).
-isLabelValue: function {op: astnode} out bool is {
+isLabelValue: function {op: astnode.view} out bool is {
     match (
         op
     ) case labelvalue then {
@@ -2262,7 +2262,7 @@ isLabelValue: function {op: astnode} out bool is {
 # nodeMentionsName -- whether a subtree references a bare name (atom reads,
 # call callables, dotted bases). Drives the conformer-context gate: the
 # reference's lazy resolution only reaches a conformer the main body names.
-nodeMentionsName: function {ast: Ast.view n: astnode name: StringView} out bool is {
+nodeMentionsName: function {ast: Ast.view n: astnode.view name: StringView} out bool is {
     match (
         n
     ) case atomid then {
@@ -2343,7 +2343,7 @@ nodeMentionsNameOptAt: function {ast: Ast.view oId: zast.nodeid name: StringView
 }
 
 # fnBodyMentions -- nodeMentionsName over a function definition's body.
-fnBodyMentions: function {ast: Ast.view op: astnode name: StringView} out bool is {
+fnBodyMentions: function {ast: Ast.view op: astnode.view name: StringView} out bool is {
     match (
         op
     ) case functiondef then {
@@ -2361,7 +2361,7 @@ recordConformerContexts: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     defName: StringView
-    op: astnode
+    op: astnode.view
 } is {
     if op.objectdef then {
         isRef: false
@@ -2405,7 +2405,7 @@ recordConformerContexts: function {
 # isBareGenericParam -- a generic-param definition in direct dotted form
 # (`t: Any.generic`); wrapped shapes (a def whose payload merely contains a
 # constraint) are not unit-level generic params.
-isBareGenericParam: function {ast: Ast.view op: astnode} out bool is {
+isBareGenericParam: function {ast: Ast.view op: astnode.view} out bool is {
     match (
         op
     ) case dottedpath then {
@@ -2422,7 +2422,7 @@ isBareGenericParam: function {ast: Ast.view op: astnode} out bool is {
 # isGenericParam -- true when a type-expr is a generic-parameter constraint
 # (`Any.generic` / `u64.generic` / `anyval.generic`): a dottedpath whose leaf is
 # `generic` or `valtype`, peeling an `expression` / parameterized `call` wrapper.
-isGenericParam: function {ast: Ast.view op: astnode} out bool is {
+isGenericParam: function {ast: Ast.view op: astnode.view} out bool is {
     match (
         op
     ) case expression then {
@@ -2507,7 +2507,7 @@ registerGenericParamOne: function {
     ast: Ast.view
     st: zenv.ZSymbolTable
     tdecl: ztypes.declid
-    m: astnode
+    m: astnode.view
 } is {
     if m.namedoperation then {
         if (isGenericParam :ast op: (ast.nodes.get i: m.operation.u64)) then {
@@ -2551,7 +2551,7 @@ registerGenericParamOne: function {
 # genericConstraintKind -- the value-kind leaf of a constraint declaration
 # (`Any.valtype` -> "valtype", `Any.reftype` -> "reftype"), "" for plain
 # `.generic` bounds.
-genericConstraintKind: function {ast: Ast.view n: astnode} out String is {
+genericConstraintKind: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
     ) case expression then {
@@ -2568,7 +2568,7 @@ genericConstraintKind: function {ast: Ast.view n: astnode} out String is {
 
 # genericConstraintBase -- the constraint name of a `u64.generic`-style param
 # declaration (the dotted parent), "" otherwise.
-genericConstraintBase: function {ast: Ast.view n: astnode} out String is {
+genericConstraintBase: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
     ) case expression then {
@@ -2618,7 +2618,7 @@ unitDefIsGeneric: function {ast: Ast.view oId: zast.nodeid} out bool is {
 # pathOwnership -- the ownership a param/field/return type expr declares via a
 # dotted-path marker leaf, or none. Fields take the non-owned markers (which make
 # the slot static) or `take`/`hold`; params take any of the four grid markers.
-pathOwnership: function {ast: Ast.view n: astnode} out optionval ztypes.zparamownership is {
+pathOwnership: function {ast: Ast.view n: astnode.view} out optionval ztypes.zparamownership is {
     match (
         n
     ) case dottedpath then {
@@ -2637,7 +2637,7 @@ pathOwnership: function {ast: Ast.view n: astnode} out optionval ztypes.zparamow
 # id, peeling `.borrow`/`.private`/etc. dotted-path markers
 # (`Container.private.borrow` -> `Container`, `this.borrow` -> `this`); the
 # atom name for a bare atom; zero otherwise.
-baseTypeNameId: function {ast: Ast.view n: astnode} out zast.nameid is {
+baseTypeNameId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
     match (
         n
     ) case atomid then {
@@ -2657,7 +2657,7 @@ baseTypeNameId: function {ast: Ast.view n: astnode} out zast.nameid is {
 # genericApplHeadId -- the head type name id of a generic application
 # `(List of: T)` / `(Option t: T)` (the callable's atom name); zero for a
 # non-application expr.
-genericApplHeadId: function {ast: Ast.view n: astnode} out zast.nameid is {
+genericApplHeadId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
     match (
         n
     ) case expression then {
@@ -2672,7 +2672,7 @@ genericApplHeadId: function {ast: Ast.view n: astnode} out zast.nameid is {
 # fieldHeadNameId -- a field type's head name id: baseTypeNameId, falling back
 # to the generic-application head so a `(List of: astnode)` / `(Option t: astnode)`
 # field is recognized (List/Option) for the destructor-cleanup decision.
-fieldHeadNameId: function {ast: Ast.view n: astnode} out zast.nameid is {
+fieldHeadNameId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
     b: baseTypeNameId :ast :n
     if (b.isZero) == false then return b
     return (genericApplHeadId :ast :n)
@@ -3710,7 +3710,7 @@ partialReturnTid: function {
 
 # markerPeeledBase -- the base atom name under a strip-marker dotted path
 # (`of.take` -> "of"); "" for any other shape.
-markerPeeledBase: function {ast: Ast.view n: astnode} out String is {
+markerPeeledBase: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
     ) case dottedpath then {
@@ -3726,7 +3726,7 @@ markerPeeledBase: function {ast: Ast.view n: astnode} out String is {
 
 # markerPeeledBaseId -- markerPeeledBase as the base atom's name id (zero for
 # any other shape), for a caller that holds ids.
-markerPeeledBaseId: function {ast: Ast.view n: astnode} out zast.nameid is {
+markerPeeledBaseId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
     match (
         n
     ) case dottedpath then {
@@ -3852,7 +3852,7 @@ demandTyperefNames: function {
     ast: Ast.view
     unitDecl: ztypes.declid
     frame: ztypes.declid
-    typeExpr: astnode
+    typeExpr: astnode.view
 } is {
     match (
         typeExpr
@@ -3921,7 +3921,7 @@ typeArgSuffixName: function {
     st: zenv.ZSymbolTable.view
     frame: ztypes.declid
     ast: Ast.view
-    op: astnode
+    op: astnode.view
 } out String is {
     match (
         op
@@ -4411,7 +4411,7 @@ nameIsInUnitReftypeId: function {
 # reference into the receiver, `out T.view` a readonly one. Both pin the
 # receiver for the result binding's scope; they differ only in how strongly
 # (returnHasViewMarker picks that apart).
-returnHasBorrowMarkerNode: function {ast: Ast.view n: astnode} out bool is {
+returnHasBorrowMarkerNode: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
     ) case expression then {
@@ -4432,7 +4432,7 @@ returnHasBorrowMarkerNode: function {ast: Ast.view n: astnode} out bool is {
 # returnHasViewMarkerNode / returnHasViewMarker -- the reference the return
 # hands back is READONLY (`out T.view`), so the pin it leaves on the receiver
 # is shared: several such references may be live at once.
-returnHasViewMarkerNode: function {ast: Ast.view n: astnode} out bool is {
+returnHasViewMarkerNode: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
     ) case expression then {
@@ -4461,7 +4461,7 @@ returnHasViewMarker: function {ast: Ast.view oId: zast.nodeid} out bool is {
 # is OWNED and READONLY. It is not a reference return -- the binding keeps its
 # destructor -- so it is kept apart from returnHasViewMarker, which freezes a
 # binding because the binding IS the reference the callee handed back.
-returnHasFrozenMarkerNode: function {ast: Ast.view n: astnode} out bool is {
+returnHasFrozenMarkerNode: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
     ) case expression then {
@@ -4496,7 +4496,7 @@ returnHasBorrowMarker: function {ast: Ast.view oId: zast.nodeid} out bool is {
 
 # paramIsThisReceiver -- the parameter's type names the receiver: bare `this`
 # or a marker-suffixed `this.view` / `this.borrow`.
-paramIsThisReceiver: function {ast: Ast.view op: astnode} out bool is {
+paramIsThisReceiver: function {ast: Ast.view op: astnode.view} out bool is {
     match (
         op
     ) case expression then {
@@ -4521,7 +4521,7 @@ paramIsThisReceiverId: function {ast: Ast.view opId: u32} out bool is {
 # type expression, as its name id: an atom name directly, or the callable of a
 # parenthesized `(List of: i64)` form (an expression wrapping a call). Zero for
 # anything else.
-paramTypeBaseNameId: function {ast: Ast.view op: astnode} out zast.nameid is {
+paramTypeBaseNameId: function {ast: Ast.view op: astnode.view} out zast.nameid is {
     match (
         op
     ) case atomid then {
@@ -6133,7 +6133,7 @@ forceAllFields: function {
 
 # functiondefIsNative -- an is-block method marked `is native` (no body to
 # check or emit; its members come from the native materializer).
-functiondefIsNative: function {op: astnode} out bool is {
+functiondefIsNative: function {op: astnode.view} out bool is {
     match (
         op
     ) case functiondef then {
@@ -6150,7 +6150,7 @@ functiondefIsNative: function {op: astnode} out bool is {
 # place -- so only the non-native ones are marked.
 markGenericMethod: function {
     st: zenv.ZSymbolTable
-    op: astnode
+    op: astnode.view
     mid: u64
     isgen: bool
 } is {
@@ -6163,7 +6163,7 @@ markGenericMethod: function {
 # method), false for a field type-ref. Gates generic-class method production without
 # resolving the function: a generic class never gets a method FUNCTION type of its
 # own, only its instances do.
-isFunctionDefOp: function {op: astnode} out bool is {
+isFunctionDefOp: function {op: astnode.view} out bool is {
     match (
         op
     ) case functiondef then {
@@ -6898,7 +6898,7 @@ resolveData: function {ast: Ast
 # isTypedefField -- true when a type-expr astnode is an `X.typedef` dottedpath (the
 # marker that makes a record a zero-overhead typedef wrapper). Matching the astnode
 # param narrows it cleanly.
-isTypedefField: function {ast: Ast.view n: astnode} out bool is {
+isTypedefField: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
     ) case dottedpath then {
@@ -6928,7 +6928,7 @@ recordIsTypedef: function {ast: Ast.view rnode: objref} out bool is {
 # typedefFieldBaseNameId -- the base type name of an `X.typedef` field's `X`
 # (e.g. `(List of: u8).typedef` -> "List"). Borrows the astnode, never binds it (a
 # bare bind would move the type-expr out of the shared AST).
-typedefFieldBaseNameId: function {ast: Ast.view n: astnode} out zast.nameid is {
+typedefFieldBaseNameId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
     match (
         n
     ) case dottedpath then {
@@ -7037,7 +7037,7 @@ fnFieldFlaggableName: function {name: StringView} out bool is {
 # typeExprHasPrivate -- does a field's type expression carry a `.private` marker
 # (`Container.private.borrow`), i.e. is it a friend handle? Walks the dotted path
 # (markers nest outermost-last: `((Container.private).borrow)`).
-typeExprHasPrivate: function {ast: Ast.view n: astnode} out bool is {
+typeExprHasPrivate: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
     ) case dottedpath then {
@@ -8895,7 +8895,7 @@ variantTagIsOrdinalPlain: function {
 #
 # Found by the `.tag` SUFFIX rather than the member's label: the spec makes the
 # label convention only ("commonly tag, but any name is valid").
-dottedParentName: function {ast: Ast.view n: astnode} out String is {
+dottedParentName: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
     ) case expression then {
@@ -8912,7 +8912,7 @@ dottedParentName: function {ast: Ast.view n: astnode} out String is {
 # resolved through the defining unit's scope. Bare-name visibility covers only
 # main+system, so a dep element misses there; this bridges via the unit probe
 # plus resolved. 0 when not a dotted ref or unresolved.
-dottedTyperefId: function {ast: Ast.view st: zenv.ZSymbolTable op: astnode} out u64 is {
+dottedTyperefId: function {ast: Ast.view st: zenv.ZSymbolTable op: astnode.view} out u64 is {
     match (
         op
     ) case expression then {
@@ -9988,7 +9988,7 @@ recordMemberRefField: function {
 # expressions and dotted segments the way rootNameIdOf does. `"hi"`, `"hi".string`
 # and an interpolated `"a\{n}"` all answer true; a type name or a numeric literal
 # answers false.
-rootIsStringLiteral: function {ast: Ast.view n: astnode} out bool is {
+rootIsStringLiteral: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
     ) case atomstring then {
@@ -12527,7 +12527,7 @@ registerAndResolveMain: function {
 
 # isConformanceMarker -- true when an as-item operation is a bare type reference
 # (atomid / labelvalue), i.e. a conformance marker like `:Text` or `m: Reader`.
-isConformanceMarker: function {op: astnode} out bool is {
+isConformanceMarker: function {op: astnode.view} out bool is {
     match (
         op
     ) case atomid then {
@@ -12540,7 +12540,7 @@ isConformanceMarker: function {op: astnode} out bool is {
 }
 
 # declaresConformance -- true when an objectdef declares conformance via an as-item.
-declaresConformance: function {ast: Ast.view op: astnode} out bool is {
+declaresConformance: function {ast: Ast.view op: astnode.view} out bool is {
     match (
         op
     ) case objectdef then {
@@ -12748,7 +12748,7 @@ bodyEndsInReturn: function {ast: Ast.view bodyId: zast.nodeid} out bool is {
 }
 
 # true when `block`'s last statement is a return.
-blockEndsInReturn: function {ast: Ast.view block: astnode} out bool is {
+blockEndsInReturn: function {ast: Ast.view block: astnode.view} out bool is {
     match (
         block
     ) case statement then {
@@ -12773,7 +12773,7 @@ blockEndsInReturn: function {ast: Ast.view block: astnode} out bool is {
 
 # stmtExprIsReturn -- an expression statement whose inner call's callable is
 # the `return` builtin.
-stmtExprIsReturn: function {ast: Ast.view op: astnode} out bool is {
+stmtExprIsReturn: function {ast: Ast.view op: astnode.view} out bool is {
     match (
         op
     ) case expression then {
@@ -12784,7 +12784,7 @@ stmtExprIsReturn: function {ast: Ast.view op: astnode} out bool is {
 }
 
 # true when operation `op` is a call to the `return` builtin.
-exprCallIsReturn: function {ast: Ast.view op: astnode} out bool is {
+exprCallIsReturn: function {ast: Ast.view op: astnode.view} out bool is {
     match (
         op
     ) case call then {
@@ -12797,7 +12797,7 @@ exprCallIsReturn: function {ast: Ast.view op: astnode} out bool is {
 
 # isFunctionDefWithBody -- true when a node is a functiondef carrying a non-empty body
 # (a real method, not a facet/protocol spec signature whose body is none).
-isFunctionDefWithBody: function {o: astnode} out bool is {
+isFunctionDefWithBody: function {o: astnode.view} out bool is {
     match (
         o
     ) case functiondef then {
@@ -12809,7 +12809,7 @@ isFunctionDefWithBody: function {o: astnode} out bool is {
 
 # objectHasMethodBody -- true when an objectdef holds at least one is/as-item method
 # with a body. Scans both blocks (transient iterators over different lists).
-objectHasMethodBody: function {ast: Ast.view op: astnode} out bool is {
+objectHasMethodBody: function {ast: Ast.view op: astnode.view} out bool is {
     match (
         op
     ) case objectdef then {
@@ -13312,7 +13312,7 @@ scanCallsInNode: function {
     st: zenv.ZSymbolTable
     frame: ztypes.declid
     ast: Ast.view
-    node: astnode
+    node: astnode.view
 } is {
     # Four of the twenty arms demand into the unit frame and one arm runs per
     # node, so each binds it itself: hoisting it cost every OTHER arm a lookup
@@ -13542,7 +13542,7 @@ scanDefCalls: function {
     st: zenv.ZSymbolTable
     frame: ztypes.declid
     ast: Ast.view
-    op: astnode
+    op: astnode.view
 } is {
     match (
         op
@@ -13696,7 +13696,7 @@ resolveDemands: function {
 # outermost first: `mathops` -> [mathops], `helperu.mathops` -> [helperu,
 # mathops]. A segment that is not a plain name appends 0, which
 # instTemplateDecl then rejects -- there is no name to look up.
-instCallablePath: function {ast: Ast.view op: astnode segs: (ListVal u64)} is {
+instCallablePath: function {ast: Ast.view op: astnode.view segs: (ListVal u64)} is {
     match (
         op
     ) case expression then {
@@ -13715,7 +13715,7 @@ instCallablePath: function {ast: Ast.view op: astnode segs: (ListVal u64)} is {
 # expression-wrapped) call. Empty for anything else, which is what says a
 # binding is not an instantiation. The whole path, not a single atom name: a
 # dotted callable names another unit's template.
-callableInstPath: function {ast: Ast.view op: astnode segs: (ListVal u64)} is {
+callableInstPath: function {ast: Ast.view op: astnode.view segs: (ListVal u64)} is {
     match (
         op
     ) case expression then {
@@ -13899,7 +13899,7 @@ InstReq: class {
 
 # instFillIds -- record the instantiation's expression/call/callable/arg node
 # ids on the request; all four stamp at binding resolution.
-instFillIds: function {ast: Ast.view r: InstReq op: astnode} is {
+instFillIds: function {ast: Ast.view r: InstReq op: astnode.view} is {
     match (
         op
     ) case expression then {
@@ -13912,7 +13912,7 @@ instFillIds: function {ast: Ast.view r: InstReq op: astnode} is {
 }
 
 # fill an instantiation request's callable from operation `op`.
-instFillCallable: function {r: InstReq op: astnode} is {
+instFillCallable: function {r: InstReq op: astnode.view} is {
     match (
         op
     ) case atomid then {
@@ -13923,7 +13923,7 @@ instFillCallable: function {r: InstReq op: astnode} is {
 }
 
 # the atom id of an instantiation-call argument.
-instArgAtomId: function {ast: Ast.view op: astnode} out u64 is {
+instArgAtomId: function {ast: Ast.view op: astnode.view} out u64 is {
     match (
         op
     ) case expression then {
@@ -13938,7 +13938,7 @@ instArgAtomId: function {ast: Ast.view op: astnode} out u64 is {
 # fillUnitArgs -- capture every instantiation argument (param label + type/value
 # name + atom id) in declaration order, so a unit monomorphises over ALL its
 # generic parameters, not just the first.
-fillUnitArgs: function {ast: Ast.view r: InstReq op: astnode} is {
+fillUnitArgs: function {ast: Ast.view r: InstReq op: astnode.view} is {
     match (
         op
     ) case expression then {
@@ -13966,7 +13966,7 @@ fillUnitArgs: function {ast: Ast.view r: InstReq op: astnode} is {
 collectMainInstantiations: function {
     st: zenv.ZSymbolTable.view
     ast: Ast.view
-    o: astnode
+    o: astnode.view
     unitDecl: ztypes.declid
     scopeDeclId: ztypes.declid
     reqs: List InstReq
@@ -14120,7 +14120,7 @@ nameIdOf: function {ast: Ast.view name: StringView} out zast.nameid is {
 }
 
 # isUnitOp -- true when a binding's operation is an inline `unit as {...}` definition.
-isUnitOp: function {op: astnode} out bool is {
+isUnitOp: function {op: astnode.view} out bool is {
     match (
         op
     ) case unitdef then {
@@ -14515,7 +14515,7 @@ createUnitMono: function {
 # return typeref -- the head of a form like `List X`; zero when absent. Completes
 # substituted signatures whose template return was still unresolved at
 # signature time.
-fnReturnBaseNameIdOf: function {ast: Ast.view op: astnode} out zast.nameid is {
+fnReturnBaseNameIdOf: function {ast: Ast.view op: astnode.view} out zast.nameid is {
     match (
         op
     ) case functiondef then {
@@ -14527,7 +14527,7 @@ fnReturnBaseNameIdOf: function {ast: Ast.view op: astnode} out zast.nameid is {
 }
 
 # fnReturnBaseNameOf -- fnReturnBaseNameIdOf's head as text, for the emitter.
-fnReturnBaseNameOf: function {ast: Ast.view op: astnode} out String is {
+fnReturnBaseNameOf: function {ast: Ast.view op: astnode.view} out String is {
     return (zast.nameTextCopy :ast ref: (fnReturnBaseNameIdOf :ast :op))
 }
 
@@ -14538,7 +14538,7 @@ fnReturnBaseNameOf: function {ast: Ast.view op: astnode} out String is {
 registerMonoFnParams: function {
     ast: Ast.view
     st: zenv.ZSymbolTable
-    op: astnode
+    op: astnode.view
     fnId: u64
     subs: (IdMapV zast.nameid v: u64).view
 } is {
@@ -19735,7 +19735,7 @@ isOptionViewMono: function {
 
 # createDottedBaseId -- the base atom's node id when a dotted path's child is
 # `create` (explicit construction: `T.create` is bare-name construction).
-createDottedBaseId: function {ast: Ast.view n: astnode} out optionval u32 is {
+createDottedBaseId: function {ast: Ast.view n: astnode.view} out optionval u32 is {
     if n.dottedpath then {
         ccn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.child.u64))
         if ccn.stringView == "create" then return (optionval.some n.parent.u32)
@@ -19745,7 +19745,7 @@ createDottedBaseId: function {ast: Ast.view n: astnode} out optionval u32 is {
 
 # rootNameIdOf -- rootNameOf as an interned name id, for a caller that compares
 # the root rather than printing it.
-rootNameIdOf: function {ast: Ast.view n: astnode} out zast.nameid is {
+rootNameIdOf: function {ast: Ast.view n: astnode.view} out zast.nameid is {
     match (
         n
     ) case atomid then {
@@ -19761,7 +19761,7 @@ rootNameIdOf: function {ast: Ast.view n: astnode} out zast.nameid is {
 
 # rootNameOf -- a value path's root atom name (unwrapping expressions and
 # dotted segments), or "".
-rootNameOf: function {ast: Ast.view n: astnode} out String is {
+rootNameOf: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
     ) case atomid then {
@@ -19776,7 +19776,7 @@ rootNameOf: function {ast: Ast.view n: astnode} out String is {
 }
 
 # dottedChildName -- a dotted path's child atom name, or "".
-dottedChildName: function {ast: Ast.view n: astnode} out String is {
+dottedChildName: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
     ) case dottedpath then {
@@ -19788,7 +19788,7 @@ dottedChildName: function {ast: Ast.view n: astnode} out String is {
 
 # dottedChildNameId -- the pool id of a dotted path's child atom name
 # (0 when the shape differs).
-dottedChildNameId: function {ast: Ast.view n: astnode} out zast.nameid is {
+dottedChildNameId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
     match (
         n
     ) case dottedpath then {
@@ -19803,7 +19803,7 @@ dottedChildNameId: function {ast: Ast.view n: astnode} out zast.nameid is {
 unionCreateArmName: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
-    n: astnode
+    n: astnode.view
 } out String is {
     match (
         n
@@ -19835,7 +19835,7 @@ unionCreateArmName: function {
 
 # borrowDottedBaseId -- the base atom's node id when a dotted path's child is
 # `borrow` (a protocol/facet borrow projection), or none.
-borrowDottedBaseId: function {ast: Ast.view n: astnode} out optionval u32 is {
+borrowDottedBaseId: function {ast: Ast.view n: astnode.view} out optionval u32 is {
     if n.dottedpath then {
         bcn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.child.u64))
         if bcn.stringView == "borrow" then return (optionval.some n.parent.u32)
@@ -19977,7 +19977,7 @@ checkProjectionCreate: function {
 
 # metaCreateBaseId -- the base atom's node id when a callable is the dotted
 # `meta.create` (the enclosing type's raw allocator), or none.
-metaCreateBaseId: function {ast: Ast.view n: astnode} out optionval u32 is {
+metaCreateBaseId: function {ast: Ast.view n: astnode.view} out optionval u32 is {
     if n.dottedpath then {
         pn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.parent.u64))
         cn2: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.child.u64))
@@ -20484,7 +20484,7 @@ baseIsPrivateCapable: function {
     st: zenv.ZSymbolTable.view
     ast: Ast.view
     bt: ztypes.tid
-    baseNode: astnode
+    baseNode: astnode.view
 } out bool is {
     if (bt.isZero) == false when bt == st.typing.currentThisTid then return true
     match (
@@ -22882,7 +22882,7 @@ typeOfBareName: function {
 
 # exprRootNameId -- the root name of an expression: a `:name` label-value
 # shorthand names its local directly, any other shape its path's root.
-exprRootNameId: function {ast: Ast.view n: astnode} out zast.nameid is {
+exprRootNameId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
     match (
         n
     ) case labelvalue then {
@@ -22898,7 +22898,7 @@ exprRootNameId: function {ast: Ast.view n: astnode} out zast.nameid is {
 rootIsBorrowedParam: function {
     st: zenv.ZSymbolTable.view
     ast: Ast.view
-    n: astnode
+    n: astnode.view
 } out bool is {
     rn: exprRootNameId :ast :n
     if rn.isZero then return false
@@ -22932,7 +22932,7 @@ pinsAllParamRooted: function {st: zenv.ZSymbolTable.view} out bool is {
 }
 
 # callNodeIdOf -- the call under expression wrappers; zero for any other shape.
-callNodeIdOf: function {ast: Ast.view n: astnode} out zast.nodeid is {
+callNodeIdOf: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
     match (
         n
     ) case call then {
@@ -22947,7 +22947,7 @@ callNodeIdOf: function {ast: Ast.view n: astnode} out zast.nodeid is {
 # rootNameTextOf -- the root name of an expression as text; empty when it has
 # none (a literal, a construction, a call), so the report can say so instead
 # of naming a variable that does not exist.
-rootNameTextOf: function {ast: Ast.view n: astnode} out String is {
+rootNameTextOf: function {ast: Ast.view n: astnode.view} out String is {
     rn: exprRootNameId :ast :n
     if rn.isZero then return String
     return (zast.nameTextCopy :ast ref: rn)
@@ -23365,7 +23365,7 @@ isComparisonOp: function {name: StringView} out bool is {
 # the registry mutably.
 stampTruthyCond: function {
     st: zenv.ZSymbolTable
-    n: astnode
+    n: astnode.view
     tid: ztypes.tid
 } is {
     ta: ztyping.sumPairTruthyArmOf ty: st.typing reg: st.reg :tid
@@ -23395,7 +23395,7 @@ ArmPredFact: class {
 predDottedCore: function {ast: Ast.view
     st: zenv.ZSymbolTable.view
     nid: u64
-    parent: astnode
+    parent: astnode.view
     childName: zast.nameid
     boolId: u64
     negated: bool
@@ -23417,7 +23417,7 @@ predDottedCore: function {ast: Ast.view
 # predDottedFact -- predDottedCore over a astnode (expression wrappers peeled).
 predDottedFact: function {ast: Ast.view
     st: zenv.ZSymbolTable.view
-    n: astnode
+    n: astnode.view
     boolId: u64
     negated: bool
 } out Option ArmPredFact is {
@@ -23452,8 +23452,8 @@ armSuffixSide: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
     nid: u64
-    parent: astnode
-    child: astnode
+    parent: astnode.view
+    child: astnode.view
 } out ztyping.armside is {
     cid: atomNameId :ast n: child
     return (ztyping.armSuffixSideOf
@@ -23483,7 +23483,7 @@ truthyCondArmOf: function {st: zenv.ZSymbolTable.view nid: u64} out u64 is {
 predFactOf: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
-    n: astnode
+    n: astnode.view
     boolId: u64
 } out Option ArmPredFact is {
     # A bare 2-arm sum as the condition IS an arm predicate with the arm left
@@ -23808,7 +23808,7 @@ checkClause: function {
 
 # lastStmtType -- the resolved type id of a statement block's last statement
 # (the value of a do-block), or 0 when empty/untyped.
-lastStmtType: function {st: zenv.ZSymbolTable.view ast: Ast.view block: astnode} out u64 is {
+lastStmtType: function {st: zenv.ZSymbolTable.view ast: Ast.view block: astnode.view} out u64 is {
     result: u64
     match (
         block
@@ -24747,7 +24747,7 @@ checkSwap: function {
 withValueOwnership: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
-    v: astnode
+    v: astnode.view
 } out ztypes.zownership is {
     match (
         v
@@ -24859,7 +24859,7 @@ checkWith: function {
 # blockHasBreak -- a bare `break` statement somewhere in this block's own
 # control flow (descending if/match/with bodies but NOT nested do/for, whose
 # breaks bind to them). Drives the do-block's optionval wrapping.
-blockHasBreak: function {ast: Ast.view n: astnode} out bool is {
+blockHasBreak: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
     ) case statement then {
@@ -25021,7 +25021,7 @@ checkDo: function {
 }
 
 # isCallNode -- the node is a (possibly expression-wrapped) call.
-isCallNode: function {ast: Ast.view n: astnode} out bool is {
+isCallNode: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
     ) case call then {
@@ -26249,7 +26249,7 @@ checkBinop: function {
 # bare atom, a labelvalue, a string literal without interpolation, or an
 # expression wrapping a bare atom / labelvalue. Anything else (binop, call,
 # dotted path, interpolated string) hoists into a synth temp.
-argIsTrivial: function {ast: Ast.view op: astnode} out bool is {
+argIsTrivial: function {ast: Ast.view op: astnode.view} out bool is {
     match (
         op
     ) case atomid then {
@@ -26305,7 +26305,7 @@ typeIsValtype: function {
 
 # innermostNodeId -- the node id of a value with its expression wrappers
 # stripped (the node the dump's descent reads first); 0 for uncovered kinds.
-innermostNodeId: function {ast: Ast.view n: astnode} out zast.nodeid is {
+innermostNodeId: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
     match (
         n
     ) case expression then {
@@ -26317,7 +26317,7 @@ innermostNodeId: function {ast: Ast.view n: astnode} out zast.nodeid is {
 
 # pathRootName -- the leftmost bare atom of a value path (`a.b.c` -> a,
 # through expression wrappers), "" when the root is not a bare atom.
-pathRootName: function {ast: Ast.view n: astnode} out String is {
+pathRootName: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
     ) case expression then {
@@ -26333,7 +26333,7 @@ pathRootName: function {ast: Ast.view n: astnode} out String is {
 
 # taggedRecvIsValue -- the dotted receiver denotes a VALUE (a variable at
 # the path root, or a call result), not a type/unit reference.
-taggedRecvIsValue: function {ast: Ast.view st: zenv.ZSymbolTable.view n: astnode} out bool is {
+taggedRecvIsValue: function {ast: Ast.view st: zenv.ZSymbolTable.view n: astnode.view} out bool is {
     match (
         n
     ) case expression then {
@@ -26356,7 +26356,7 @@ taggedRecvIsValue: function {ast: Ast.view st: zenv.ZSymbolTable.view n: astnode
 
 # bareAtomNameId -- the interned name id of an expression-unwrapped bare atom,
 # 0 for any other shape. The id twin of bareAtomName.
-bareAtomNameId: function {ast: Ast.view n: astnode} out zast.nameid is {
+bareAtomNameId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
     match (
         n
     ) case expression then {
@@ -26370,7 +26370,7 @@ bareAtomNameId: function {ast: Ast.view n: astnode} out zast.nameid is {
 
 # bareAtomName -- the (expression-unwrapped) bare atom name of a value node,
 # or "" when the value is any other shape.
-bareAtomName: function {ast: Ast.view n: astnode} out String is {
+bareAtomName: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
     ) case expression then {
@@ -26384,7 +26384,7 @@ bareAtomName: function {ast: Ast.view n: astnode} out String is {
 
 # methodReceiverRoot -- the bare root name of a dotted callable's receiver
 # (`a.compare` -> a), "" for non-dotted or non-bare receivers.
-methodReceiverRoot: function {ast: Ast.view n: astnode} out String is {
+methodReceiverRoot: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
     ) case dottedpath then {
@@ -26396,7 +26396,7 @@ methodReceiverRoot: function {ast: Ast.view n: astnode} out String is {
 
 # methodReceiverRootId -- methodReceiverRoot as the receiver atom's name id
 # (zero when the callable is not a dotted path on a bare atom).
-methodReceiverRootId: function {ast: Ast.view n: astnode} out zast.nameid is {
+methodReceiverRootId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
     match (
         n
     ) case dottedpath then {
@@ -26411,7 +26411,7 @@ methodReceiverRootId: function {ast: Ast.view n: astnode} out zast.nameid is {
 # decls]. Empty when the callable is not a dotted path or the receiver
 # is not a plain path. Path-scoped locks need the full tuple so sibling
 # fields stay independent.
-methodReceiverTuple: function {ast: Ast.view n: astnode dst: (ListVal zast.nameid)} is {
+methodReceiverTuple: function {ast: Ast.view n: astnode.view dst: (ListVal zast.nameid)} is {
     if n.dottedpath then {
         appendValueTuple :ast n: (ast.nodes.get i: n.parent.u64) :dst
     }
@@ -26419,7 +26419,7 @@ methodReceiverTuple: function {ast: Ast.view n: astnode dst: (ListVal zast.namei
 
 # dottedParentNodeId -- the nodeid of a dotted callable's receiver expression
 # (its stamped type is the immediate receiver type); 0 otherwise.
-dottedParentNodeId: function {ast: Ast.view n: astnode} out zast.nodeid is {
+dottedParentNodeId: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
     match (
         n
     ) case dottedpath then {
@@ -26834,7 +26834,7 @@ consumeBareArgOwnership: function {
 # appendValueTuple -- the source path of a value node (root first), appended onto
 # dst. Ownership and access markers are not addressable segments, so
 # `rec.field.borrow` contributes (rec, field); non-path shapes contribute nothing.
-appendValueTuple: function {ast: Ast.view n: astnode dst: ListVal zast.nameid} is {
+appendValueTuple: function {ast: Ast.view n: astnode.view dst: ListVal zast.nameid} is {
     match (
         n
     ) case expression then {
@@ -27012,7 +27012,7 @@ carryHeldLocks: function {
 }
 
 # pathLeafIsTake -- the value is `name.take`: a move of the whole binding.
-pathLeafIsTake: function {ast: Ast.view n: astnode} out bool is {
+pathLeafIsTake: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
     ) case dottedpath then {
@@ -27591,7 +27591,7 @@ checkFrozenWrite: function {
 # target path is outstanding: the holder reaches through that path, so the write
 # would invalidate what it points at. Sibling paths do not overlap, so a lock on
 # one field leaves the others writable.
-checkWriteLock: function {st: zenv.ZSymbolTable ast: Ast.view n: astnode verb: StringView} is {
+checkWriteLock: function {st: zenv.ZSymbolTable ast: Ast.view n: astnode.view verb: StringView} is {
     wp: (ListVal zast.nameid)
     appendValueTuple :ast :n dst: wp
     if wp.length == 0 then return
@@ -29399,7 +29399,7 @@ unresolvedBareName: function {ast: Ast
 
 # dottedRootName -- the root atom name of a dotted path ("" when the
 # root is not a bare atom).
-dottedRootName: function {ast: Ast.view n: astnode} out String is {
+dottedRootName: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
     ) case dottedpath then {
@@ -29412,7 +29412,7 @@ dottedRootName: function {ast: Ast.view n: astnode} out String is {
 }
 
 # isDottedValue -- the node under any expression wrappers is a dotted path.
-isDottedValue: function {ast: Ast.view n: astnode} out bool is {
+isDottedValue: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
     ) case expression then {
@@ -31925,7 +31925,7 @@ checkGenericCall: function {
 # subjectAtomName -- a match subject's bare-atom name (narrowing requires a
 # simple addressable name): unwrap expression wrappers, "" for dotted/complex
 # subjects and numeric atoms.
-subjectAtomName: function {ast: Ast.view n: astnode} out String is {
+subjectAtomName: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
     ) case expression then {
@@ -31958,7 +31958,7 @@ sumSubtypeNames: function {ast: Ast.view st: zenv.ZSymbolTable.view sid: u64} ou
 
 # isEmptyBody -- a statement block with no statement lines (an empty
 # `{}` or `null` clause body).
-isEmptyBody: function {n: astnode} out bool is {
+isEmptyBody: function {n: astnode.view} out bool is {
     match (
         n
     ) case statement then {
@@ -33828,7 +33828,7 @@ walkBodyAt: function {
 }
 
 # nodeIsFunctiondef -- kind test that keeps the caller's un-narrowed handle.
-nodeIsFunctiondef: function {o: astnode} out bool is {
+nodeIsFunctiondef: function {o: astnode.view} out bool is {
     match (
         o
     ) case functiondef then {
@@ -33840,7 +33840,7 @@ nodeIsFunctiondef: function {o: astnode} out bool is {
 
 # objectdefIsGeneric -- a type definition with a generic as-block parameter;
 # generic templates are never body-walked (instances clone at call sites).
-objectdefIsGeneric: function {ast: Ast.view o: astnode} out bool is {
+objectdefIsGeneric: function {ast: Ast.view o: astnode.view} out bool is {
     match (
         o
     ) case objectdef then {
@@ -34188,7 +34188,7 @@ walkOwnerMethods: function {
 
 # objectdefHasMethodBodies -- a unit member whose operation is an objectdef
 # with at least one functiondef-with-body item.
-objectdefHasMethodBodies: function {ast: Ast.view op: astnode} out bool is {
+objectdefHasMethodBodies: function {ast: Ast.view op: astnode.view} out bool is {
     match (
         op
     ) case objectdef then {
@@ -34360,7 +34360,7 @@ checkMethodBodies: function {
 
 # lastStmtLineId / lastStmtLineIdAt -- the node id of a function body's last
 # statement line (the implicit-return position), or 0 when absent.
-lastStmtLineId: function {ast: Ast.view block: astnode} out zast.nodeid is {
+lastStmtLineId: function {ast: Ast.view block: astnode.view} out zast.nodeid is {
     if block.statement then {
         ne: block.statements.count.u64
         if ne > 0 then {
@@ -36137,7 +36137,7 @@ foldLiteralStamps: function {st: zenv.ZSymbolTable frame: ztypes.declid program:
 }
 
 # isBinopNode -- kind test without narrowing (the caller keeps the astnode handle).
-isBinopNode: function {n: astnode} out bool is {
+isBinopNode: function {n: astnode.view} out bool is {
     match (
         n
     ) case binop then {
@@ -36997,7 +36997,7 @@ constOwnerDeclForId: function {
 # resolveDef's business. Only a computed definition can be self-referential in
 # the constant sense: a ring of aliases is an alias cycle, and the resolver
 # already reports that with its own diagnostic and its own wording.
-constDefIsComputed: function {ast: Ast.view n: astnode} out bool is {
+constDefIsComputed: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
     ) case expression then {
