@@ -5209,7 +5209,7 @@ nativeArgHoles: function {
     pNameIds: (ListVal u64)
     (recFieldLists :ast :symtab tid: fid names: pNames ids: pIds nameIds: pNameIds)
     if pNames.length < 2 then return false
-    slots: argSlotList :ast :call fpNames: pNames
+    slots: argSlotList :ast :call fpNameIds: pNameIds
     valBySlot: (IdMapR u64 V: String)
     ai: u64
     with ait: call.arguments.iterate do for aId: ait loop {
@@ -8707,10 +8707,10 @@ ctorInterpArgAt: function {
 argSlotList: function {
     ast: Ast.view
     call: zast.CallData.view
-    fpNames: (List String).view
+    fpNameIds: (ListVal u64).view
 } out ListVal u64 is {
     result: (ListVal u64)
-    cn: fpNames.length
+    cn: fpNameIds.length
     consumed: (ListVal bool)
     ci: u64
     for ci < cn loop {
@@ -8724,13 +8724,16 @@ argSlotList: function {
         match (
             a
         ) case namedoperation then {
-            lbl: zast.nameTextAt :ast ref: a.name
-            slot: fpNames.length
-            if lbl.length > 0 then {
+            # the label and the parameter names are both pool ids already, so
+            # the match is an id compare. An UNLABELLED argument carries no name;
+            # the empty spelling has an id of its own, so both are excluded
+            hasLbl: (a.name.isZero) == false
+            if hasLbl when a.name == zast.names.wkEmpty then hasLbl = false
+            slot: fpNameIds.length
+            if hasLbl then {
                 fi: u64
                 for fi < cn loop {
-                    fpn: fpNames.get i: fi
-                    if fpn.stringView == lbl.stringView then slot = fi
+                    if (fpNameIds.get i: fi) == a.name.u64 then slot = fi
                     fi = fi + 1
                 }
             } else {
@@ -8754,7 +8757,7 @@ argSlotList: function {
             if slot < cn then consumed.set i: slot val: true
             result.append slot
         } else {
-            result.append fpNames.length
+            result.append fpNameIds.length
         }
     }
     return result
@@ -9211,7 +9214,7 @@ emitFnCallWithFid: function {
     fpIds: (ListVal u64)
     fpIds9Nm: (ListVal u64)
     recFieldLists :ast :symtab tid: fid names: fpNames ids: fpIds nameIds: fpIds9Nm
-    slots9g: argSlotList :ast :call :fpNames
+    slots9g: argSlotList :ast :call fpNameIds: fpIds9Nm
     valBySlot9g: (IdMapR u64 V: String)
     ai: u64
     aiter: call.arguments.iterate
@@ -10137,11 +10140,10 @@ emitUserFnCall: function {
     fid: ztypes.tid
 } out String is {
     fc: ctxCname :ctx tid: fid
-    fpNames: (List String)
     fpIds: (ListVal u64)
     fpIdsNm: (ListVal u64)
-    recFieldLists :ast :symtab tid: fid names: fpNames ids: fpIds nameIds: fpIdsNm
-    slots: argSlotList :ast :call :fpNames
+    recFieldIds :symtab tid: fid ids: fpIds nameIds: fpIdsNm
+    slots: argSlotList :ast :call fpNameIds: fpIdsNm
     valBySlot: (IdMapR u64 V: String)
     ai8: u64
     aiter: call.arguments.iterate
@@ -10150,14 +10152,18 @@ emitUserFnCall: function {
         if a.namedoperation then {
             argOpNode: ast.nodes.get i: a.operation.u64
             slot9b: slots.get i: ai8
-            if slot9b < fpNames.length then {
+            if slot9b < fpIdsNm.length then {
+                pinNmB: (zast.poolTextAt
+                    pool: ast.names
+                    ref: (zast.nameid.create from: (fpIdsNm.get i: slot9b))
+                )
                 valBySlot.set key: slot9b value: (userFnArgText
                     :ast
                     :symtab
                     :ctx
                     :fid
                     pinId: (fpIds.get i: slot9b)
-                    pinNm: (fpNames.get i: slot9b).stringView
+                    pinNm: pinNmB.stringView
                     :argOpNode
                 )
             }
@@ -10167,7 +10173,7 @@ emitUserFnCall: function {
     args: String
     emitted: u64
     pp: u64
-    ppn: fpNames.length
+    ppn: fpIdsNm.length
     for pp < ppn loop {
         vo: valBySlot.get key: pp
         match (
@@ -20773,14 +20779,15 @@ fnSignature: function {
         ) then ret = "\{ret}*"
     }
     params: String
-    cNames: (List String)
     cIds: (ListVal u64)
     cNmIds: (ListVal u64)
-    recFieldLists :ast :symtab tid: fid names: cNames ids: cIds nameIds: cNmIds
+    recFieldIds :symtab tid: fid ids: cIds nameIds: cNmIds
     pi: u64
-    pn: cNames.length
+    pn: cNmIds.length
     for pi < pn loop {
-        pname: cNames.get i: pi
+        pnmId: (zast.nameid.create from: (cNmIds.get i: pi))
+        pnameB: zast.poolTextAt pool: ast.names ref: pnmId
+        pname: pnameB.stringView
         pid: cIds.get i: pi
         ct: typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: pid.u64) thisTid: ztypes.tid
         ptrp: (paramTypeIsPointer
@@ -20788,7 +20795,7 @@ fnSignature: function {
             :symtab
             :ctx
             :fid
-            pname: pname.stringView
+            :pname
             pid: (ztypes.tid.create from: pid.u64)
         )
         if ptrp then {
@@ -20804,13 +20811,8 @@ fnSignature: function {
             params.append "int64_t"
         }
         params.append " "
-        pmnV: (paramVidByNameId
-            :ast
-            :symtab
-            :op
-            nameId: (zast.nameid.create from: (cNmIds.get i: pi))
-        )
-        pmnDecl: varCName :ctx vid: pmnV name: pname.stringView
+        pmnV: paramVidByNameId :ast :symtab :op nameId: pnmId
+        pmnDecl: varCName :ctx vid: pmnV :name
         params.append pmnDecl
         pi = pi + 1
     }
@@ -29968,15 +29970,17 @@ emitProtocolDispatch: function {
         ids: mpIds
         nameIds: mpIds9Nm
     )
-    vpn: (List String)
+    # the receiver is implicit at the call site, so it is not a slot an
+    # argument can land in. Filtered by id, like the match itself
+    vpn: (ListVal u64)
     vi: u64
-    for vi < mpNames.length loop {
-        nm: mpNames.get i: vi
-        if nm.stringView != "this" then vpn.append nm.copy
+    for vi < mpIds9Nm.length loop {
+        nmId: mpIds9Nm.get i: vi
+        if nmId != zast.names.wkThis.u64 then vpn.append nmId
         vi = vi + 1
     }
     if vpn.length > 0 then {
-        slots9p: argSlotList :ast :call fpNames: vpn
+        slots9p: argSlotList :ast :call fpNameIds: vpn
         valBySlot9p: (IdMapR u64 V: String)
         ai9p: u64
         with aiter: call.arguments.iterate do for aId: aiter loop {
