@@ -164,6 +164,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-09-03 | b7fccae6 | [per-site copies by id](#r-b7fccae6) | 0.45s | -- | 92MB / -- | 108 / 179 / 170 (total 461, medians of 5) | 4,566,490 | 312MB | -- | 117,095 |
 | 2026-09-04 | 5061187b | [review phases 1-3: four defects, four gates, two sweeps](#r-5061187b) | 0.47s | -- | 93MB / -- | 103 / 178 / 176 (total 457, medians of 5) | 4,553,926 | 312MB | -- | 116,149 |
 | 2026-09-04 | e5054d3a | [the token arc: a token's text is a pool id](#r-tokenarc) | 0.46s | -- | 93MB / -- | 104 / 183 / 174 (total 461, medians of 5) | 3,872,623 | 296MB | -- | 114,709 |
+| 2026-09-04 | 905714a8 | [a token is a record](#r-tokenrecord) | 0.45s | -- | 92MB / -- | 100 / 179 / 179 (total 458, medians of 5) | 3,533,963 | 288MB | -- | 114,711 |
 
 
 <a id="r-tokenarc"></a>
@@ -200,6 +201,34 @@ own methods. As a parameter the lock lasts one call.
 **Left in the family:** `Lexer_accept` at 338,334, unchanged. Those are `Option
 Token` boxes, and they go when `Token` becomes a record -- the last step of the
 arc.
+
+
+<a id="r-tokenrecord"></a>
+**A token is a record** (`60f4d880`). Every field of a token is a value once the
+text is a pool id, so the class becomes a record and `Lexer.accept` answers with
+`optionval token` rather than `Option token`. The box a union arm needs around a
+reftype goes with it: `Lexer_accept` **338,334 -> 0**, measured, and the arc's
+own cost is all that is left of the family -- 27,605 interning writes and 36,590
+reads in `StringPool`. Bytes 295.8MB -> 287.7MB; instructions 5.496G -> 5.469G.
+
+**Over the whole arc: -985,150 blocks, -21.8%**, from 4,519,113 to 3,533,963, and
+the token text family that was 20.6% of every heap block is gone.
+
+**`acceptIf` was not added.** The plan wanted an `out bool` form for the eleven
+`zparser` sites that discard `accept`'s result, because each cost a Token plus a
+box. The box is what this commit removed and a discarded VALUE option allocates
+nothing, so the helper would move no number and did not land.
+
+**What the flip cost in names, for whoever reads the diff.** A valtype is
+lowercase and the linter enforces it, so `Token` is `token`; that then collided
+with `Tokenizer.token` the method, which the checker resolved as a
+function-pointer field, so the method is `nextToken`. And an ownership marker on
+a valtype is not part of its type -- `zlexer.Token.view` was emitting a pointer
+parameter that callers filled with a value.
+
+**Next in the census:** `ZTypeRegistry_nameOf` 272,539, `ListRef_Node_append`
+265,059, `ZTyping_declChildWalk` 180,556, `varCName` 142,881, `dataFieldNames`
+142,260.
 
 2026-08-05 note -- **the measurement floor of this setup, established by
 repetition, and the trap that produced a fake baseline.**
