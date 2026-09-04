@@ -1269,6 +1269,19 @@ spanrow: record {
     kind: u8
 }
 
+# spanKindRank -- how strongly a row's kind claims a hit, so the three hit
+# tests share one preference rule instead of three sequences of ifs. A member
+# row outranks a plain use because the dotted path is what the cursor is on; a
+# DECLARATION row is the last resort -- it fills an answer nothing else claimed
+# and never displaces a reference row; everything else sits between. A row is
+# taken only when it outranks the best so far, so the first row wins a tie and
+# walk order decides.
+spanKindRank: function {kind: u8} out u8 is {
+    if kind == 2 then return 2
+    if kind == 6 then return 0
+    return 1
+}
+
 # rangerow -- an enclosing-node span, start..end as line*1048576+col; kind
 # 4 = call, 5 = caseexpr. endPos is the last descendant's start (a subtree
 # extent good enough to find the node enclosing a cursor).
@@ -3019,13 +3032,8 @@ navResolve: function {
                 fs: zcheck.fsnoFor r: snap nodeid: row.nodeid
                 pp: snap.vfs.pathfromprovider dentryid: fs
                 if (pathMatches pv: pp.stringView rel: docRel :srcDir) then {
-                    shouldTake: false
-                    if bestIdx < 0 then shouldTake = true
-                    if row.kind == 2 when bestKind != 2 then shouldTake = true
-                    # a declaration row is the last resort: it fills an answer
-                    # nothing else claimed, and never displaces a reference row
-                    if bestIdx >= 0 when row.kind == 6 then shouldTake = false
-                    if bestKind == 6 when row.kind != 6 then shouldTake = true
+                    shouldTake: bestIdx < 0
+                    if (spanKindRank kind: row.kind) > (spanKindRank kind: bestKind) then shouldTake = true
                     if shouldTake then {
                         bestIdx = ri.i64.orPanic
                         bestKind = row.kind
@@ -4808,9 +4816,8 @@ leafFuncIdAt: function {
                 fs: zcheck.fsnoFor r: snap nodeid: row.nodeid
                 pp: snap.vfs.pathfromprovider dentryid: fs
                 if (pathMatches pv: pp.stringView rel: docRel :srcDir) then {
-                    shouldTake: false
-                    if (found) == false then shouldTake = true
-                    if row.kind == 2 when bk != 2 then shouldTake = true
+                    shouldTake: (found) == false
+                    if (spanKindRank kind: row.kind) > (spanKindRank kind: bk) then shouldTake = true
                     if shouldTake then {
                         leafNid = row.nodeid
                         bk = row.kind
@@ -4870,9 +4877,8 @@ bareCalleeFuncId: function {
                 # identifier text disambiguates
                 nmR: sp.names.get i: rix
                 if nmR.stringView == idTxt then {
-                    shouldTake: false
-                    if (found) == false then shouldTake = true
-                    if row.kind == 2 when bk != 2 then shouldTake = true
+                    shouldTake: (found) == false
+                    if (spanKindRank kind: row.kind) > (spanKindRank kind: bk) then shouldTake = true
                     if shouldTake then {
                         leafNid = row.nodeid
                         bk = row.kind
