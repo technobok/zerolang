@@ -6000,17 +6000,9 @@ emitInstanceMethodBody: function {
     posStart: u64
 } out String is {
     mcn: ctxCname :ctx tid: (ztypes.tid.create from: mco.u64)
-    pnames: (List String)
     pids: (ListVal u64)
     pidsNm: (ListVal u64)
-    (recFieldLists
-        :ast
-        :symtab
-        tid: (ztypes.tid.create from: mco.u64)
-        names: pnames
-        ids: pids
-        nameIds: pidsNm
-    )
+    recFieldIds :symtab tid: (ztypes.tid.create from: mco.u64) ids: pids nameIds: pidsNm
     # The receiver slot is identified by the method's receiver param name
     # (`this` for the `:this` shorthand, or the spelled name for a
     # `b: this.borrow` receiver) -- matching how the definition site names
@@ -6026,12 +6018,16 @@ emitInstanceMethodBody: function {
     args: String
     positionalIdx: posStart
     pi: u64
-    pn: pnames.length
+    pn: pidsNm.length
     for pi < pn loop {
-        posParamName: pnames.get i: pi
+        posParamNameB: (zast.poolTextAt
+            pool: ast.names
+            ref: (zast.nameid.create from: (pidsNm.get i: pi))
+        )
+        posParamName: posParamNameB.stringView
         posParamId: pids.get i: pi
         if pi > 0 then args.append ", "
-        if posParamName.stringView == recvNm.stringView then {
+        if posParamName == recvNm.stringView then {
             if recvIsPtr then {
                 args.append recvExpr
             } else {
@@ -6054,7 +6050,7 @@ emitInstanceMethodBody: function {
                 :ctx
                 :call
                 :mco
-                posParamName: posParamName.stringView
+                :posParamName
                 :posParamId
                 posIdx0: positionalIdx
                 :args
@@ -20486,21 +20482,24 @@ registerReftypeParams: function {
     fid: ztypes.tid
     op: Node.view
 } is {
-    pNames: (List String)
     pIds: (ListVal u64)
     pNmIds: (ListVal u64)
-    recFieldLists :ast :symtab tid: fid names: pNames ids: pIds nameIds: pNmIds
+    recFieldIds :symtab tid: fid ids: pIds nameIds: pNmIds
     ri: u64
-    rn: pNames.length
+    rn: pNmIds.length
     for ri < rn loop {
         rpid: pIds.get i: ri
-        rpn: pNames.get i: ri
+        rpnB: (zast.poolTextAt
+            pool: ast.names
+            ref: (zast.nameid.create from: (pNmIds.get i: ri))
+        )
+        rpn: rpnB.stringView
         regp: (paramTypeIsPointer
             :ast
             :symtab
             :ctx
             :fid
-            pname: rpn.stringView
+            pname: rpn
             pid: (ztypes.tid.create from: rpid.u64)
         )
         if regp then {
@@ -23127,19 +23126,22 @@ emitFnBody: function {
     }
     if op.functiondef then {
         tmp: (TmpCtr n: 0 frees: (List OwedFree) listFrees: (List OwedFree))
-        pnames: (List String)
         pids: (ListVal u64)
         pids9Nm: (ListVal u64)
-        recFieldLists :ast :symtab tid: fid names: pnames ids: pids nameIds: pids9Nm
+        recFieldIds :symtab tid: fid ids: pids nameIds: pids9Nm
         pj: u64
-        pn: pnames.length
+        pn: pids9Nm.length
         for pj < pn loop {
-            ppn: pnames.get i: pj
+            ppnB: (zast.poolTextAt
+                pool: ast.names
+                ref: (zast.nameid.create from: (pids9Nm.get i: pj))
+            )
+            ppn: ppnB.stringView
             ppid: pids.get i: pj
             if (symtab.typing.declOwnershipIs
                 pool: ast.names
                 parentTypeId: fid
-                name: ppn.stringView
+                name: ppn
                 own: ztypes.zparamownership.takeMode
             ) then {
                 ptnm: regNameOf :symtab tid: (ztypes.tid.create from: ppid.u64)
@@ -23149,7 +23151,7 @@ emitFnBody: function {
                     params: op.parameters
                     nameId: (zast.nameid.create from: (pids9Nm.get i: pj))
                 )
-                pmn: varCName :ctx vid: pmnB name: ppn.stringView
+                pmn: varCName :ctx vid: pmnB name: ppn
                 if ppid == ctx.strTid then {
                     tmp.oweFree name: pmn.copy vid: pmnB
                 } else {
@@ -27077,10 +27079,9 @@ emitOneFnptrTypedef: function {
 } is {
     if (seen.contains item: tid) then return
     seen.append tid.u64
-    pNames: (List String)
     pIds: (ListVal u64)
     pIdsNm: (ListVal u64)
-    recFieldLists :ast :symtab :tid names: pNames ids: pIds nameIds: pIdsNm
+    recFieldIds :symtab :tid ids: pIds nameIds: pIdsNm
     # A method's `this`/self-typed receiver child is a fresh shell named after
     # the owner; resolve it to the owner's canonical id so the typedef matches
     # the method's emitted signature (a by-name canonicalization can land on an
@@ -27099,10 +27100,14 @@ emitOneFnptrTypedef: function {
     for ri < rn loop {
         rpv: pIds.get i: ri
         if ownT > 0 then {
-            rpn: pNames.get i: ri
+            rpnB: (zast.poolTextAt
+                pool: ast.names
+                ref: (zast.nameid.create from: (pIdsNm.get i: ri))
+            )
+            rpn: rpnB.stringView
             rtn: regNameOf :symtab tid: (ztypes.tid.create from: rpv.u64)
             isRecv: false
-            if rpn.stringView == "this" then isRecv = true
+            if rpn == "this" then isRecv = true
             if rtn.stringView == "this" then isRecv = true
             if rtn.stringView == ownNm.stringView then isRecv = true
             if rpv == ownT then isRecv = true
@@ -27164,16 +27169,20 @@ emitOneFnptrTypedef: function {
     if rtid > 0 then ensureFwdStruct :symtab :ctx tid: (ztypes.tid.create from: rtid.u64) :buf
     params: String
     pi: u64
-    pn: pNames.length
+    pn: pIdsNm.length
     for pi < pn loop {
-        pnm: pNames.get i: pi
+        pnmB: (zast.poolTextAt
+            pool: ast.names
+            ref: (zast.nameid.create from: (pIdsNm.get i: pi))
+        )
+        pnm: pnmB.stringView
         pidp: rIds.get i: pi
         pct: (fnptrParamTypeC
             :ast
             :symtab
             :ctx
             fid: (ztypes.tid.create from: tid.u64)
-            pname: pnm.stringView
+            pname: pnm
             pid: (ztypes.tid.create from: pidp.u64)
         )
         if pi > 0 then params.append ", "
