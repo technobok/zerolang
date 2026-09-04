@@ -1330,7 +1330,7 @@ Spans: class {
 
     # record the span of a dotted path's MEMBER half, so hovering `a.b` answers
     # about `b` and not about `a`
-    memberRow: function {:this ast: Ast.view dpid: u32 c: zast.Node.view} is {
+    memberRow: function {:this ast: Ast.view dpid: u32 c: zast.astnode} is {
         if c.atomid then {
             cAr: zast.nameTextAt :ast ref: c.name
             this.addRow id: dpid line: c.lineno col: c.colno name: cAr.stringView kind: 2
@@ -1393,7 +1393,7 @@ Spans: class {
     # walk -- note every node's position in pre-order (the navigation index),
     # add the rows names and members contribute, and bracket calls and matches
     # as ranges; children come from zast.childIds.
-    walk: function {:this ast: Ast.view n: zast.Node.view} is {
+    walk: function {:this ast: Ast.view n: zast.astnode} is {
         if n.placeholder then return
         pos: zast.posOf :n
         nid: zast.nodeIdOf :n
@@ -1456,8 +1456,8 @@ Spans: class {
             this.addRow id: n.nodeid line: n.lineno col: n.colno name: anmL.stringView kind: 3
         } case namedoperation then {
             # the DECLARATION's own name. A definition's name lives on the
-            # namedoperation arm that holds it -- FunctionData and
-            # ObjectDefData carry none -- and nothing rowed it, so every
+            # namedoperation arm that holds it -- functionrow and
+            # objectdefrow carry none -- and nothing rowed it, so every
             # top-level def, field, method, arm name and parameter answered
             # null while references to them answered fine. A file that is
             # mostly declarations, which every lib/system unit is, therefore
@@ -3576,7 +3576,7 @@ collectUnitSymbolsIn: function {
 # collect document-symbol entries from a unit body.
 collectBodySymbols: function {
     ast: Ast.view
-    ud: zast.Node.view
+    ud: zast.astnode
     docText: StringView
     utf32: bool
     arr: Arr
@@ -3594,7 +3594,7 @@ collectBodySymbols: function {
 # the document-symbol entry for one definition.
 symbolOf: function {
     ast: Ast.view
-    m: zast.Node.view
+    m: zast.astnode
     docText: StringView
     utf32: bool
     arr: Arr
@@ -3648,7 +3648,7 @@ rangeCopy: function {docText: StringView utf32: bool line0: i64 c0: i64 c1: i64}
 }
 
 # the LSP SymbolKind code for definition `op`.
-symbolKindOf: function {op: zast.Node.view} out i64 is {
+symbolKindOf: function {op: zast.astnode} out i64 is {
     match (
         op
     ) case functiondef then {
@@ -3879,7 +3879,7 @@ addKeywords: function {sink: (MapRV String v: u8)} is {
 }
 
 # defKindOf -- the CompletionItemKind of a top-level definition.
-defKindOf: function {op: zast.Node.view} out u8 is {
+defKindOf: function {op: zast.astnode} out u8 is {
     match (
         op
     ) case functiondef then {
@@ -3920,7 +3920,7 @@ collectUnitDefs: function {ast: Ast.view wId: zast.nodeid sink: (MapRV String v:
 }
 
 # add a unit node's definition names to a completion sink.
-collectUnitDefsIn: function {ast: Ast.view ud: zast.Node.view sink: (MapRV String v: u8)} is {
+collectUnitDefsIn: function {ast: Ast.view ud: zast.astnode sink: (MapRV String v: u8)} is {
     if ud.unitdef then {
         box2059: u64
         for box2059 < ud.body.count.u64 loop {
@@ -3932,7 +3932,7 @@ collectUnitDefsIn: function {ast: Ast.view ud: zast.Node.view sink: (MapRV Strin
 }
 
 # add member `m`'s name to a completion sink.
-collectMemberDef: function {ast: Ast.view m: zast.Node.view sink: (MapRV String v: u8)} is {
+collectMemberDef: function {ast: Ast.view m: zast.astnode sink: (MapRV String v: u8)} is {
     if m.namedoperation then {
         lb: zast.nameTextAt :ast ref: m.name
         if lb.length > 0 then {
@@ -3991,7 +3991,7 @@ enclosingInUnit: function {
 # the definition enclosing a position within a body.
 enclosingInBody: function {
     ast: Ast.view
-    ud: zast.Node.view
+    ud: zast.astnode
     l1u: u32
     sink: (MapRV String v: u8)
 } out u32 is {
@@ -4028,7 +4028,7 @@ enclosingInBody: function {
 }
 
 # the source line where member `m` begins.
-memberStartLine: function {m: zast.Node.view} out u32 is {
+memberStartLine: function {m: zast.astnode} out u32 is {
     match (
         m
     ) case namedoperation then {
@@ -4039,14 +4039,14 @@ memberStartLine: function {m: zast.Node.view} out u32 is {
 }
 
 # add member `m`'s parameter names to a completion sink.
-addMemberParams: function {ast: Ast.view m: zast.Node.view sink: (MapRV String v: u8)} is {
+addMemberParams: function {ast: Ast.view m: zast.astnode sink: (MapRV String v: u8)} is {
     if m.namedoperation then {
         addFnParams :ast op: (ast.nodes.get i: m.operation.u64) :sink
     }
 }
 
 # add function `op`'s parameter names to a completion sink.
-addFnParams: function {ast: Ast.view op: zast.Node.view sink: (MapRV String v: u8)} is {
+addFnParams: function {ast: Ast.view op: zast.astnode sink: (MapRV String v: u8)} is {
     if op.functiondef then {
         pax1529: u64
         for pax1529 < op.parameters.count.u64 loop {
@@ -4059,7 +4059,7 @@ addFnParams: function {ast: Ast.view op: zast.Node.view sink: (MapRV String v: u
 }
 
 # add parameter `pm`'s label to a completion sink.
-addParamLabel: function {ast: Ast.view pm: zast.Node.view sink: (MapRV String v: u8)} is {
+addParamLabel: function {ast: Ast.view pm: zast.astnode sink: (MapRV String v: u8)} is {
     if pm.namedoperation then {
         pl: zast.nameTextAt :ast ref: pm.name
         addCand :sink name: pl.stringView kind: 6
@@ -4167,7 +4167,7 @@ userParams: function {
 }
 
 # addTypeMembersIn -- addTypeMembers with the program narrowed (prog is
-# the ProgramData payload).
+# the programrow payload).
 addTypeMembersIn: function {
     prog: Ast.view.view
     o: zenv.ZSymbolTable.view

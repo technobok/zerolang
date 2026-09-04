@@ -20,15 +20,15 @@ public: unit {
     :lowerDeclared
 }
 
-Node: zast.Node
+astnode: zast.astnode
 Ast: zast.Ast
 
 
-# The counter the synthetic `_iterN` names draw from. Node ids do not
+# The counter the synthetic `_iterN` names draw from. astnode ids do not
 # come from here: a synthesised node reserves its own table slot with
 # zast.tableReserve.
 NameCtr: class {
-    # the next `_iterN` number. Node ids do NOT come from here -- a synthesised
+    # the next `_iterN` number. astnode ids do NOT come from here -- a synthesised
     # node reserves its own table slot
     next: u32
 } as {
@@ -43,7 +43,7 @@ NameCtr: class {
 
 # bodyContainsYield -- a yield anywhere in this subtree, not descending
 # into nested function literals (their yields belong to that function).
-bodyContainsYield: function {ast: Ast.view n: Node.view} out bool is {
+bodyContainsYield: function {ast: Ast.view n: astnode} out bool is {
     match (
         n
     ) case functiondef then {
@@ -138,7 +138,7 @@ bodyContainsYieldOptAt: function {ast: Ast.view oId: zast.nodeid} out bool is {
 }
 
 # leafAtomName -- an atom's name (owned copy); "" for other shapes.
-leafAtomName: function {ast: Ast.view n: Node.view} out String is {
+leafAtomName: function {ast: Ast.view n: astnode} out String is {
     match (
         n
     ) case atomid then {
@@ -150,7 +150,7 @@ leafAtomName: function {ast: Ast.view n: Node.view} out String is {
 
 # leafAtomNameId -- an atom's name id; 0 for other shapes. The id twin of
 # leafAtomName: a resolved compare needs the pool id, never the text.
-leafAtomNameId: function {ast: Ast.view n: Node.view} out zast.nameid is {
+leafAtomNameId: function {ast: Ast.view n: astnode} out zast.nameid is {
     ast
     match (
         n
@@ -162,7 +162,7 @@ leafAtomNameId: function {ast: Ast.view n: Node.view} out zast.nameid is {
 }
 
 # the return-type head name id of operation `n`.
-returnHeadIdOf: function {ast: Ast.view n: Node.view} out zast.nameid is {
+returnHeadIdOf: function {ast: Ast.view n: astnode} out zast.nameid is {
     match (
         n
     ) case expression then {
@@ -179,7 +179,7 @@ returnHeadIdOf: function {ast: Ast.view n: Node.view} out zast.nameid is {
 # pathLeafName -- the take/borrow ownership leaf on a dotted path, "" when
 # none. It answers only those two: a `.view` or `.hold` leaf comes back
 # unmarked, so a caller that needs every marker must read the leaf by name id.
-pathLeafName: function {ast: Ast.view n: Node.view} out String is {
+pathLeafName: function {ast: Ast.view n: astnode} out String is {
     match (
         n
     ) case dottedpath then {
@@ -198,7 +198,7 @@ pathLeafName: function {ast: Ast.view n: Node.view} out String is {
 # one parent. `n` may be a detached node; its children are table rows,
 # cloned and interned by id (clonePathAt) before the clone's own slot is
 # reserved, so nothing lends ast while a row view is live.
-clonePath: function {ast: Ast n: Node.view} out Node is {
+clonePath: function {ast: Ast n: astnode} out astnode is {
     kids: (ListVal u32)
     if (pathShape :n) then kids = zast.childIds :ast :n
     cloned: clonePathKids :ast :kids
@@ -211,7 +211,7 @@ clonePath: function {ast: Ast n: Node.view} out Node is {
 # clonePathAt -- clonePath of the row `nid` names. Each row view is scoped
 # to a block that lends nothing: the children go first (by id), then the
 # clone's slot, then the arm is built from the row's scalars.
-clonePathAt: function {ast: Ast nid: zast.nodeid} out Node is {
+clonePathAt: function {ast: Ast nid: zast.nodeid} out astnode is {
     kids: (ListVal u32)
     {
         n: ast.nodes.get i: nid.u64
@@ -219,7 +219,7 @@ clonePathAt: function {ast: Ast nid: zast.nodeid} out Node is {
     }
     cloned: clonePathKids :ast :kids
     myId: zast.tableReserve :ast
-    built: Node.placeholder
+    built: astnode.placeholder
     {
         n: ast.nodes.get i: nid.u64
         built = clonePathArm :n :myId :cloned kids: ast.kids
@@ -229,7 +229,7 @@ clonePathAt: function {ast: Ast nid: zast.nodeid} out Node is {
 }
 
 # pathShape -- `n` is a shape clonePath copies structurally.
-pathShape: function {n: Node.view} out bool is {
+pathShape: function {n: astnode} out bool is {
     match (
         n
     ) case atomid then {
@@ -281,29 +281,29 @@ idsSlice: function {cloned: (ListVal u32).view lo: u64 hi: u64} out (ListVal u32
 # arm for any shape clonePath does not copy. Reads the view only.
 clonePathArm: function {
     kids: ListVal u32
-    n: Node.view
+    n: astnode
     myId: zast.nodeid
     cloned: (ListVal u32).view
-} out Node is {
+} out astnode is {
     match (
         n
     ) case atomid then {
         # interned name: the clone shares the pool id
-        return (Node.atomid (zast.AtomIdData
+        return (astnode.atomid (zast.atomidrow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
             name: n.name)
         )
     } case labelvalue then {
-        return (Node.labelvalue (zast.LabelValueData
+        return (astnode.labelvalue (zast.labelvaluerow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
             name: n.name)
         )
     } case dottedpath then {
-        return (Node.dottedpath (zast.DottedPathData
+        return (astnode.dottedpath (zast.dottedpathrow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
@@ -311,14 +311,14 @@ clonePathArm: function {
             child: (zast.nodeid.create from: (cloned.get i: 1)))
         )
     } case expression then {
-        return (Node.expression (zast.ExpressionData
+        return (astnode.expression (zast.expressionrow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
             expression: (zast.nodeid.create from: (cloned.get i: 0)))
         )
     } case call then {
-        return (Node.call (zast.CallData
+        return (astnode.call (zast.callrow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
@@ -326,7 +326,7 @@ clonePathArm: function {
             arguments: (zast.kidsAdd :kids xs: (idsSlice :cloned lo: 1 hi: cloned.length)))
         )
     } case namedoperation then {
-        return (Node.namedoperation (zast.NamedOperationData
+        return (astnode.namedoperation (zast.namedoperationrow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
@@ -334,7 +334,7 @@ clonePathArm: function {
             operation: (zast.nodeid.create from: (cloned.get i: 0)))
         )
     } case binop then {
-        return (Node.binop (zast.BinOpData
+        return (astnode.binop (zast.binoprow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
@@ -343,32 +343,30 @@ clonePathArm: function {
             rhs: (zast.nodeid.create from: (cloned.get i: 2)))
         )
     } case atomstring then {
-        return (Node.atomstring (zast.AtomStringData
+        return (astnode.atomstring (zast.atomstringrow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
             stringparts: (zast.kidsAdd :kids xs: (idsSlice :cloned lo: 0 hi: cloned.length)))
         )
     } case stringchunk then {
-        tv8: n.text.stringView
-        tc8: tv8.string
         ck8: n.chunkKind
-        return (Node.stringchunk (zast.StringChunkData
+        return (astnode.stringchunk (zast.stringchunkrow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
-            text: tc8
+            text: n.text
             chunkKind: ck8)
         )
     } else {
-        return Node.placeholder
+        return astnode.placeholder
     }
 }
 
 # clonePathUnsupported -- an unsupported path shape clones to an error
 # atom, which keeps the tree total.
-clonePathUnsupported: function {ast: Ast myId: zast.nodeid} out Node is {
-    return (Node.atomid (zast.AtomIdData
+clonePathUnsupported: function {ast: Ast myId: zast.nodeid} out astnode is {
+    return (astnode.atomid (zast.atomidrow
         nodeid: myId
         lineno: 0
         colno: 0
@@ -383,7 +381,7 @@ clonePathUnsupported: function {ast: Ast myId: zast.nodeid} out Node is {
 GivesParts: class {
     # a CLONE of the element path, which feeds the option wrapper. A clone
     # because the original stays in the tree
-    base: (Option Node)
+    base: (optionval astnode)
     # the ownership leaf. "borrow" selects OptionView and anything else
     # selects Option, which is the whole of the choice
     leaf: String
@@ -414,12 +412,12 @@ givesFromOp: function {ast: Ast nid: zast.nodeid dst: GivesParts} is {
     if lf.length > 0 then {
         if isDotted then {
             bc: clonePathAt :ast nid: parentId
-            dst.base = (Option.some bc)
+            dst.base = (optionval.some bc)
             dst.leaf = lf
         }
     } else {
         bc2: clonePathAt :ast :nid
-        dst.base = (Option.some bc2)
+        dst.base = (optionval.some bc2)
     }
 }
 
@@ -437,8 +435,8 @@ mkAtom: function {
     line: u32
     col: u32
     name: StringView
-} out Node is {
-    return (Node.atomid (zast.AtomIdData
+} out astnode is {
+    return (astnode.atomid (zast.atomidrow
         nodeid: (zast.tableReserve :ast)
         lineno: line
         colno: col
@@ -453,9 +451,9 @@ mkNamedOp: function {
     line: u32
     col: u32
     name: StringView
-    op: Node.take
-} out Node is {
-    return (Node.namedoperation (zast.NamedOperationData
+    op: astnode
+} out astnode is {
+    return (astnode.namedoperation (zast.namedoperationrow
         nodeid: (zast.tableReserve :ast)
         lineno: line
         colno: col
@@ -469,9 +467,9 @@ mkBareOp: function {
     ast: Ast
     line: u32
     col: u32
-    op: Node.take
-} out Node is {
-    return (Node.namedoperation (zast.NamedOperationData
+    op: astnode
+} out astnode is {
+    return (astnode.namedoperation (zast.namedoperationrow
         nodeid: (zast.tableReserve :ast)
         lineno: line
         colno: col
@@ -486,26 +484,26 @@ mkReturnBody: function {
     ast: Ast
     line: u32
     col: u32
-    inner: Node.take
-} out Node is {
+    inner: astnode
+} out astnode is {
     retCal: mkAtom :ast :line :col name: "return"
     retArg: mkBareOp :ast :line :col op: inner
     retArgs: (ListVal u32)
     retArgs.append (zast.tableAdd :ast n: retArg)
-    retCall: (Node.call (zast.CallData
+    retCall: (astnode.call (zast.callrow
         nodeid: (zast.tableReserve :ast)
         lineno: line
         colno: col
         callable: (zast.tableAdd :ast n: retCal)
         arguments: (zast.kidsAdd kids: ast.kids xs: retArgs))
     )
-    retExpr: (Node.expression (zast.ExpressionData
+    retExpr: (astnode.expression (zast.expressionrow
         nodeid: (zast.tableReserve :ast)
         lineno: line
         colno: col
         expression: (zast.tableAdd :ast n: retCall))
     )
-    sline: (Node.statementline (zast.StatementLineData
+    sline: (astnode.statementline (zast.statementlinerow
         nodeid: (zast.tableReserve :ast)
         lineno: line
         colno: col
@@ -513,7 +511,7 @@ mkReturnBody: function {
     )
     slist: (ListVal u32)
     slist.append (zast.tableAdd :ast n: sline)
-    return (Node.statement (zast.StatementData
+    return (astnode.statement (zast.statementrow
         nodeid: (zast.tableReserve :ast)
         lineno: line
         colno: col
@@ -551,10 +549,10 @@ buildCreateMethod: function {
     fwdNames: (List String).view
     # a captured field is a reference, so the create is `outx this`
     pins: bool
-} out Node is {
+} out astnode is {
     metaAtom: mkAtom :ast :line :col name: "meta"
     createAtom: mkAtom :ast :line :col name: "create"
-    metaCreate: (Node.dottedpath (zast.DottedPathData
+    metaCreate: (astnode.dottedpath (zast.dottedpathrow
         nodeid: (zast.tableReserve :ast)
         lineno: line
         colno: col
@@ -570,7 +568,7 @@ buildCreateMethod: function {
     for fi < fn loop {
         f0: fwdNames.get i: fi
         f0v: f0.stringView
-        lv0: (Node.labelvalue (zast.LabelValueData
+        lv0: (astnode.labelvalue (zast.labelvaluerow
             nodeid: (zast.tableReserve :ast)
             lineno: line
             colno: col
@@ -580,7 +578,7 @@ buildCreateMethod: function {
         cargs.append (zast.tableAdd :ast n: fa0)
         fi = fi + 1
     }
-    icall: (Node.call (zast.CallData
+    icall: (astnode.call (zast.callrow
         nodeid: (zast.tableReserve :ast)
         lineno: line
         colno: col
@@ -594,7 +592,7 @@ buildCreateMethod: function {
     # an `outx` with nothing to pin is refused.
     thisRet: mkAtom :ast :line :col name: "this"
     thisRetId: zast.tableAdd :ast n: thisRet
-    return (Node.functiondef (zast.FunctionData
+    return (astnode.functiondef (zast.functionrow
         nodeid: (zast.tableReserve :ast)
         lineno: line
         colno: col
@@ -618,9 +616,9 @@ buildWrapper: function {
     ast: Ast
     line: u32
     col: u32
-    base: Node.take
+    base: astnode
     leaf: StringView
-} out Node is {
+} out astnode is {
     # the wrapper is owned unless the leaf asks for a view: `Option` for a
     # plain or `.take` leaf, `OptionView` for `.borrow` -- which the checker
     # then refuses, since nothing implements a reference yield. The checker
@@ -631,7 +629,7 @@ buildWrapper: function {
     tArg: mkBareOp :ast :line :col op: base
     wargs: (ListVal u32)
     wargs.append (zast.tableAdd :ast n: tArg)
-    return (Node.call (zast.CallData
+    return (astnode.call (zast.callrow
         nodeid: (zast.tableReserve :ast)
         lineno: line
         colno: col
@@ -643,7 +641,7 @@ buildWrapper: function {
 
 # isYieldValue -- the assignment RHS is a yield expression (through
 # expression wrappers): the expression-form `name: yield E`.
-isYieldValue: function {ast: Ast.view n: Node.view} out bool is {
+isYieldValue: function {ast: Ast.view n: astnode} out bool is {
     match (
         n
     ) case expression then {
@@ -683,7 +681,7 @@ GenCross: class {
 # yieldSlotsOpt -- the suspension count of an optional body, which is how many
 # resume slots the state class needs. Reads through a view: the body is still
 # needed afterwards.
-yieldSlotsOpt: function {ast: Ast.view o: (Option Node).view} out u64 is {
+yieldSlotsOpt: function {ast: Ast.view o: (optionval astnode).view} out u64 is {
     match (
         o
     ) case some then {
@@ -696,7 +694,7 @@ yieldSlotsOpt: function {ast: Ast.view o: (Option Node).view} out u64 is {
 # forCounterSlotsOpt -- how many loop-counter fields the state class needs: one
 # per label-bound `for` whose body suspends. Counted by the SAME function the
 # emitter draws its counters from. Reads through a view, like yieldSlotsOpt.
-forCounterSlotsOpt: function {ast: Ast.view o: (Option Node).view} out u64 is {
+forCounterSlotsOpt: function {ast: Ast.view o: (optionval astnode).view} out u64 is {
     match (
         o
     ) case some then {
@@ -707,7 +705,7 @@ forCounterSlotsOpt: function {ast: Ast.view o: (Option Node).view} out u64 is {
 }
 
 # recurse a node, recording locals that cross a yield-loop boundary.
-crossWalk: function {ast: Ast.view gc: GenCross n: Node.view inYieldLoop: bool} is {
+crossWalk: function {ast: Ast.view gc: GenCross n: astnode inYieldLoop: bool} is {
     match (
         n
     ) case functiondef then null case assignment then {
@@ -809,7 +807,12 @@ crossWalkIds: function {ast: Ast.view gc: GenCross ids: (ListVal u32).view inYie
 }
 
 # crossWalk over an optional node.
-crossWalkOpt: function {ast: Ast.view gc: GenCross o: (Option Node).view inYieldLoop: bool} is {
+crossWalkOpt: function {
+    ast: Ast.view
+    gc: GenCross
+    o: (optionval astnode).view
+    inYieldLoop: bool
+} is {
     match (
         o
     ) case some then {
@@ -840,7 +843,7 @@ crossingLocals: function {gc: GenCross.view dst: List String} is {
 # the search continues by id.
 firstRhsOf: function {
     ast: Ast
-    n: Node.view
+    n: astnode
     name: StringView
     dst: GivesParts
 } is {
@@ -872,7 +875,7 @@ firstRhsOfAt: function {
 # and a for/with descends into its body only.
 firstRhsScan: function {
     ast: Ast.view
-    n: Node.view
+    n: astnode
     name: StringView
     kids: ListVal u32
 } out zast.nodeid is {
@@ -940,7 +943,7 @@ firstRhsDescend: function {
         } case none then null
         if (already) == false then {
             rc: cloneInner :ast nid: rhsId
-            dst.base = (Option.some rc)
+            dst.base = (optionval.some rc)
         }
         return
     }
@@ -952,7 +955,7 @@ firstRhsDescend: function {
 # the first right-hand-side node under an optional node (for promotion).
 firstRhsOfOpt: function {
     ast: Ast
-    o: (Option Node).view
+    o: (optionval astnode).view
     name: StringView
     dst: GivesParts
 } is {
@@ -966,7 +969,7 @@ firstRhsOfOpt: function {
 # cloneInner -- clone the inside of an expression wrapper (the typeof
 # field embeds the bare operation). The unwrap continues by id; the view
 # dies before the clone lends `ast`.
-cloneInner: function {ast: Ast nid: zast.nodeid} out Node is {
+cloneInner: function {ast: Ast nid: zast.nodeid} out astnode is {
     inner: nid
     {
         n: ast.nodes.get i: nid.u64
@@ -983,7 +986,7 @@ cloneInner: function {ast: Ast nid: zast.nodeid} out Node is {
 # does not survive a suspension; the synthetic local is visible to the
 # crossing analysis (the yielding-loop rule promotes it) and to the
 # typeof field machinery. Recurses into for bodies only.
-promoteIterables: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out Node is {
+promoteIterables: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out astnode is {
     isStmt: false
     lnP: u32
     coP: u32
@@ -1007,7 +1010,7 @@ promoteIterables: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out Node is 
     with lit: lineIds.iterate do for s0Id: lit loop {
         promoteLine :ast :ctr nid: (zast.nodeid.create from: s0Id) dst: newLines
     }
-    return (Node.statement (zast.StatementData
+    return (astnode.statement (zast.statementrow
         nodeid: (zast.tableReserve :ast)
         lineno: lnP
         colno: coP
@@ -1049,7 +1052,7 @@ promoteLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid dst: ListVal u32} 
     }
     if isFor then {
         ni: promoteInExpr :ast :ctr nid: innerId :dst
-        nl: (Node.statementline (zast.StatementLineData
+        nl: (astnode.statementline (zast.statementlinerow
             nodeid: (zast.tableReserve :ast)
             lineno: lnQ
             colno: coQ
@@ -1064,7 +1067,7 @@ promoteLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid dst: ListVal u32} 
 }
 
 # true when node `n` is a with-statement line.
-lineIsWith: function {ast: Ast.view n: Node.view} out bool is {
+lineIsWith: function {ast: Ast.view n: astnode} out bool is {
     match (
         n
     ) case expression then {
@@ -1084,7 +1087,7 @@ lineIsWith: function {ast: Ast.view n: Node.view} out bool is {
 # question and lowering has no symbol table, so both name-shaped arms answer
 # false here. Being wrong in that direction only leaves a binding unpromoted;
 # being wrong the other way would rebind a borrow, which the checker refuses.
-withValueIsOwned: function {ast: Ast.view n: Node.view} out bool is {
+withValueIsOwned: function {ast: Ast.view n: astnode} out bool is {
     match (
         n
     ) case expression then {
@@ -1136,14 +1139,14 @@ prependIntoBlock: function {
     }
     if (isStmt) == false then return 0
     sa2: mkAtom :ast :line :col name: src
-    ba2: (Node.assignment (zast.AssignmentData
+    ba2: (astnode.assignment (zast.assignmentrow
         nodeid: (zast.tableReserve :ast)
         lineno: line
         colno: col
         :name
         value: (zast.tableAdd :ast n: sa2))
     )
-    bl2: (Node.statementline (zast.StatementLineData
+    bl2: (astnode.statementline (zast.statementlinerow
         nodeid: (zast.tableReserve :ast)
         lineno: line
         colno: col
@@ -1152,7 +1155,7 @@ prependIntoBlock: function {
     newLines: (ListVal u32)
     newLines.append (zast.tableAdd :ast n: bl2)
     with nit: lineIds.iterate do for s2: nit loop newLines.append from: s2
-    nb2: (Node.statement (zast.StatementData
+    nb2: (astnode.statement (zast.statementrow
         nodeid: (zast.tableReserve :ast)
         lineno: lnB
         colno: coB
@@ -1204,7 +1207,7 @@ prependBindLine: function {
     deep: prependBindLine :ast bodyId: inner2.u32 :name :src :line :col
     if deep == inner2.u32 then return bodyId
     if isD2 then {
-        rdo: (Node.doexpr (zast.DoData
+        rdo: (astnode.doexpr (zast.dorow
             nodeid: (zast.tableReserve :ast)
             lineno: lnE2
             colno: coE2
@@ -1212,7 +1215,7 @@ prependBindLine: function {
         )
         return (zast.tableAdd :ast n: rdo)
     }
-    rew: (Node.expression (zast.ExpressionData
+    rew: (astnode.expression (zast.expressionrow
         nodeid: (zast.tableReserve :ast)
         lineno: lnE2
         colno: coE2
@@ -1257,7 +1260,7 @@ promoteWrappedBody: function {ast: Ast ctr: NameCtr oId: zast.nodeid} out u32 is
     innerNew: promoteWrappedBody :ast :ctr oId: innerId
     if innerNew == 0 then return 0
     if isDo then {
-        redo: (Node.doexpr (zast.DoData
+        redo: (astnode.doexpr (zast.dorow
             nodeid: (zast.tableReserve :ast)
             lineno: lnY
             colno: coY
@@ -1265,7 +1268,7 @@ promoteWrappedBody: function {ast: Ast ctr: NameCtr oId: zast.nodeid} out u32 is
         )
         return (zast.tableAdd :ast n: redo)
     }
-    wrapped: (Node.expression (zast.ExpressionData
+    wrapped: (astnode.expression (zast.expressionrow
         nodeid: (zast.tableReserve :ast)
         lineno: lnY
         colno: coY
@@ -1287,7 +1290,7 @@ promoteWrappedBody: function {ast: Ast ctr: NameCtr oId: zast.nodeid} out u32 is
 #
 # The `with` keeps its value, its scope and therefore its locks; only the
 # header's NAME changes, and the block gains one statement ahead of the rest.
-promoteWith: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out Node is {
+promoteWith: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out astnode is {
     isWith: false
     lnW: u32
     coW: u32
@@ -1339,7 +1342,7 @@ promoteWith: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out Node is {
             col: coW
         )
     }
-    return (Node.withexpr (zast.WithData
+    return (astnode.withexpr (zast.withrow
         nodeid: (zast.tableReserve :ast)
         lineno: lnW
         colno: coW
@@ -1350,7 +1353,7 @@ promoteWith: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out Node is {
 }
 
 # true when node `n` is a for-statement line.
-lineIsFor: function {ast: Ast.view n: Node.view} out bool is {
+lineIsFor: function {ast: Ast.view n: astnode} out bool is {
     match (
         n
     ) case expression then {
@@ -1368,7 +1371,7 @@ promoteInExpr: function {
     ctr: NameCtr
     nid: zast.nodeid
     dst: ListVal u32
-} out Node is {
+} out astnode is {
     isExpr: false
     innerId: zast.nodeid
     lnR: u32
@@ -1392,7 +1395,7 @@ promoteInExpr: function {
         return (promoteFor :ast :ctr :nid :dst)
     }
     ni: promoteInExpr :ast :ctr nid: innerId :dst
-    return (Node.expression (zast.ExpressionData
+    return (astnode.expression (zast.expressionrow
         nodeid: (zast.tableReserve :ast)
         lineno: lnR
         colno: coR
@@ -1439,14 +1442,14 @@ promoteForInit: function {
     empty8: (MapRV String v: bool)
     rhs1: rewriteToThisAt :ast nid: opId promoted: empty8
     rhsE1: ensureExpr :ast line: hl1 col: hc1 n: rhs1
-    sa1: (Node.assignment (zast.AssignmentData
+    sa1: (astnode.assignment (zast.assignmentrow
         nodeid: (zast.tableReserve :ast)
         lineno: hl1
         colno: hc1
         name: cnId
         value: (zast.tableAdd :ast n: rhsE1))
     )
-    sl1: (Node.statementline (zast.StatementLineData
+    sl1: (astnode.statementline (zast.statementlinerow
         nodeid: (zast.tableReserve :ast)
         lineno: hl1
         colno: hc1
@@ -1530,14 +1533,14 @@ promoteForCond: function {
         snv0: synthN.stringView
         snid0: zast.poolSet pool: ast.names text: snv0
         sno1: snv0
-        sa0: (Node.assignment (zast.AssignmentData
+        sa0: (astnode.assignment (zast.assignmentrow
             nodeid: (zast.tableReserve :ast)
             lineno: hl0
             colno: hc0
             name: snid0
             value: (zast.tableAdd :ast n: rhsE))
         )
-        sl0: (Node.statementline (zast.StatementLineData
+        sl0: (astnode.statementline (zast.statementlinerow
             nodeid: (zast.tableReserve :ast)
             lineno: hl0
             colno: hc0
@@ -1562,7 +1565,7 @@ promoteFor: function {
     ctr: NameCtr
     nid: zast.nodeid
     dst: ListVal u32
-} out Node is {
+} out astnode is {
     isFor: false
     lnS: u32
     coS: u32
@@ -1623,7 +1626,7 @@ promoteFor: function {
         pp0: rewriteToThisAt :ast nid: (zast.nodeid.create from: p0Id) promoted: empty5
         nposts.append (zast.tableAdd :ast n: pp0)
     }
-    return (Node.forexpr (zast.ForData
+    return (astnode.forexpr (zast.forrow
         nodeid: (zast.tableReserve :ast)
         lineno: lnS
         colno: coS
@@ -1634,7 +1637,7 @@ promoteFor: function {
 }
 
 # true when condition `n` is a trivial always-true form.
-condIsTrivial: function {ast: Ast.view n: Node.view} out bool is {
+condIsTrivial: function {ast: Ast.view n: astnode} out bool is {
     match (
         n
     ) case expression then {
@@ -1651,9 +1654,9 @@ wrapExprNode: function {
     ast: Ast
     line: u32
     col: u32
-    n: Node.take
-} out Node is {
-    return (Node.expression (zast.ExpressionData
+    n: astnode
+} out astnode is {
+    return (astnode.expression (zast.expressionrow
         nodeid: (zast.tableReserve :ast)
         lineno: line
         colno: col
@@ -1662,7 +1665,7 @@ wrapExprNode: function {
 }
 
 # true when `n` is an expression-kind node.
-isExprNode: function {n: Node.view} out bool is {
+isExprNode: function {n: astnode} out bool is {
     match (
         n
     ) case expression then {
@@ -1677,8 +1680,8 @@ ensureExpr: function {
     ast: Ast
     line: u32
     col: u32
-    n: Node.take
-} out Node is {
+    n: astnode
+} out astnode is {
     if (isExprNode :n) then {
         return n
     } else {
@@ -1713,7 +1716,7 @@ rwplan: record {
 # order) appended to `kids` when it is a rewrite shape.
 rewritePlan: function {
     ast: Ast.view
-    n: Node.view
+    n: astnode
     promoted: (MapRV String v: bool)
     kids: ListVal u32
 } out rwplan is {
@@ -1816,12 +1819,12 @@ rewritePromoted: function {
     ast: Ast
     plan: rwplan
     cloned: (ListVal u32).view
-} out Node is {
-    if (plan.promotedName) == false then return Node.placeholder
+} out astnode is {
+    if (plan.promotedName) == false then return astnode.placeholder
     nm: zast.nameTextCopy :ast ref: plan.nameId
     if plan.special == 3 then {
         topath: mkThisDotted :ast line: plan.ln col: plan.co name: nm.stringView
-        return (Node.reassignment (zast.ReassignmentData
+        return (astnode.reassignment (zast.reassignmentrow
             nodeid: (zast.tableReserve :ast)
             lineno: plan.ln
             colno: plan.co
@@ -1837,28 +1840,28 @@ rewritePromoted: function {
 # child is simply not there). Reads the view only.
 rewriteArm: function {
     kids: ListVal u32
-    n: Node.view
+    n: astnode
     myId: zast.nodeid
     cloned: (ListVal u32).view
-} out Node is {
+} out astnode is {
     match (
         n
     ) case atomid then {
-        return (Node.atomid (zast.AtomIdData
+        return (astnode.atomid (zast.atomidrow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
             name: n.name)
         )
     } case labelvalue then {
-        return (Node.labelvalue (zast.LabelValueData
+        return (astnode.labelvalue (zast.labelvaluerow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
             name: n.name)
         )
     } case dottedpath then {
-        return (Node.dottedpath (zast.DottedPathData
+        return (astnode.dottedpath (zast.dottedpathrow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
@@ -1866,14 +1869,14 @@ rewriteArm: function {
             child: (zast.nodeid.create from: (cloned.get i: 1)))
         )
     } case expression then {
-        return (Node.expression (zast.ExpressionData
+        return (astnode.expression (zast.expressionrow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
             expression: (zast.nodeid.create from: (cloned.get i: 0)))
         )
     } case call then {
-        return (Node.call (zast.CallData
+        return (astnode.call (zast.callrow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
@@ -1881,7 +1884,7 @@ rewriteArm: function {
             arguments: (zast.kidsAdd :kids xs: (idsSlice :cloned lo: 1 hi: cloned.length)))
         )
     } case namedoperation then {
-        return (Node.namedoperation (zast.NamedOperationData
+        return (astnode.namedoperation (zast.namedoperationrow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
@@ -1889,7 +1892,7 @@ rewriteArm: function {
             operation: (zast.nodeid.create from: (cloned.get i: 0)))
         )
     } case binop then {
-        return (Node.binop (zast.BinOpData
+        return (astnode.binop (zast.binoprow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
@@ -1898,21 +1901,21 @@ rewriteArm: function {
             rhs: (zast.nodeid.create from: (cloned.get i: 2)))
         )
     } case statement then {
-        return (Node.statement (zast.StatementData
+        return (astnode.statement (zast.statementrow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
             statements: (zast.kidsAdd :kids xs: (idsSlice :cloned lo: 0 hi: cloned.length)))
         )
     } case statementline then {
-        return (Node.statementline (zast.StatementLineData
+        return (astnode.statementline (zast.statementlinerow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
             statementline: (zast.nodeid.create from: (cloned.get i: 0)))
         )
     } case assignment then {
-        return (Node.assignment (zast.AssignmentData
+        return (astnode.assignment (zast.assignmentrow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
@@ -1920,7 +1923,7 @@ rewriteArm: function {
             value: (zast.nodeid.create from: (cloned.get i: 0)))
         )
     } case reassignment then {
-        return (Node.reassignment (zast.ReassignmentData
+        return (astnode.reassignment (zast.reassignmentrow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
@@ -1928,7 +1931,7 @@ rewriteArm: function {
             value: (zast.nodeid.create from: (cloned.get i: 1)))
         )
     } case swapstmt then {
-        return (Node.swapstmt (zast.SwapStmtData
+        return (astnode.swapstmt (zast.swapstmtrow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
@@ -1939,7 +1942,7 @@ rewriteArm: function {
         k: n.clauses.count.u64
         els: zast.nodeid
         if n.elseclause > 0 then els = zast.nodeid.create from: (cloned.get i: k)
-        return (Node.ifexpr (zast.IfData
+        return (astnode.ifexpr (zast.ifrow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
@@ -1948,7 +1951,7 @@ rewriteArm: function {
         )
     } case ifclause then {
         k: n.conditions.count.u64
-        return (Node.ifclause (zast.IfClauseData
+        return (astnode.ifclause (zast.ifclauserow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
@@ -1963,7 +1966,7 @@ rewriteArm: function {
             bodyId = zast.nodeid.create from: (cloned.get i: k)
             postsAt = k + 1
         }
-        return (Node.forexpr (zast.ForData
+        return (astnode.forexpr (zast.forrow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
@@ -1975,14 +1978,14 @@ rewriteArm: function {
             ))
         )
     } case doexpr then {
-        return (Node.doexpr (zast.DoData
+        return (astnode.doexpr (zast.dorow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
             statement: (zast.nodeid.create from: (cloned.get i: 0)))
         )
     } case withexpr then {
-        return (Node.withexpr (zast.WithData
+        return (astnode.withexpr (zast.withrow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
@@ -1994,7 +1997,7 @@ rewriteArm: function {
         k: n.clauses.count.u64
         els: zast.nodeid
         if n.elseclause > 0 then els = zast.nodeid.create from: (cloned.get i: (k + 1))
-        return (Node.caseexpr (zast.CaseData
+        return (astnode.caseexpr (zast.caserow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
@@ -2003,7 +2006,7 @@ rewriteArm: function {
             elseclause: els)
         )
     } case caseclause then {
-        return (Node.caseclause (zast.CaseClauseData
+        return (astnode.caseclause (zast.caseclauserow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
@@ -2012,25 +2015,23 @@ rewriteArm: function {
             statement: (zast.nodeid.create from: (cloned.get i: 1)))
         )
     } case atomstring then {
-        return (Node.atomstring (zast.AtomStringData
+        return (astnode.atomstring (zast.atomstringrow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
             stringparts: (zast.kidsAdd :kids xs: (idsSlice :cloned lo: 0 hi: cloned.length)))
         )
     } case stringchunk then {
-        tvL: n.text.stringView
-        tcL: tvL.string
         ckL: n.chunkKind
-        return (Node.stringchunk (zast.StringChunkData
+        return (astnode.stringchunk (zast.stringchunkrow
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
-            text: tcL
+            text: n.text
             chunkKind: ckL)
         )
     } else {
-        return Node.placeholder
+        return astnode.placeholder
     }
 }
 
@@ -2044,9 +2045,9 @@ rewriteArm: function {
 # lends ast while a row view is live.
 rewriteToThis: function {
     ast: Ast
-    n: Node.view
+    n: astnode
     promoted: (MapRV String v: bool)
-} out Node is {
+} out astnode is {
     kids: (ListVal u32)
     plan: rewritePlan :ast :n :promoted :kids
     if plan.mode == 0 then return (clonePath :ast :n)
@@ -2064,7 +2065,7 @@ rewriteToThisAt: function {
     ast: Ast
     nid: zast.nodeid
     promoted: (MapRV String v: bool)
-} out Node is {
+} out astnode is {
     kids: (ListVal u32)
     plan: (rwplan
         mode: 0
@@ -2083,7 +2084,7 @@ rewriteToThisAt: function {
     special: rewritePromoted :ast :plan :cloned
     if (special.placeholder) == false then return special
     myId: zast.tableReserve :ast
-    built: Node.placeholder
+    built: astnode.placeholder
     {
         n: ast.nodes.get i: nid.u64
         built = rewriteArm :n :myId :cloned kids: ast.kids
@@ -2094,16 +2095,16 @@ rewriteToThisAt: function {
 # rewrite an optional node's local references to `this.<field>` for the lowered class.
 rewriteOptToThis: function {
     ast: Ast
-    o: (Option Node).view
+    o: (optionval astnode).view
     promoted: (MapRV String v: bool)
-} out Option Node is {
+} out optionval astnode is {
     match (
         o
     ) case some then {
         r: rewriteToThis :ast n: o :promoted
-        return (Option.some r)
+        return (optionval.some r)
     } case none then {
-        return (Option.none Node)
+        return (optionval.none astnode)
     }
 }
 
@@ -2113,10 +2114,10 @@ mkThisDotted: function {
     line: u32
     col: u32
     name: StringView
-} out Node is {
+} out astnode is {
     thisAtom: mkAtom :ast :line :col name: "this"
     childAtom: mkAtom :ast :line :col :name
-    return (Node.dottedpath (zast.DottedPathData
+    return (astnode.dottedpath (zast.dottedpathrow
         nodeid: (zast.tableReserve :ast)
         lineno: line
         colno: col
@@ -2135,10 +2136,10 @@ i64TypePath: function {
     line: u32
     # the column likewise
     col: u32
-} out Node is {
+} out astnode is {
     sysAtom: mkAtom :ast :line :col name: "system"
     i64Leaf: mkAtom :ast :line :col name: "i64"
-    return (Node.dottedpath (zast.DottedPathData
+    return (astnode.dottedpath (zast.dottedpathrow
         nodeid: (zast.tableReserve :ast)
         lineno: line
         colno: col
@@ -2168,16 +2169,16 @@ wrapDeclaredCallReturn: function {
     }
     if retId.isZero then return 0
     gp: (GivesParts
-        base: (Option.none Node)
+        base: (optionval.none astnode)
         leaf: "".string
     )
     givesFromOp :ast nid: retId dst: gp
-    gb: gp.base.take
+    gb: gp.base
     match (
         gb
     ) case some then {
-        wrapper: buildWrapper :ast :line :col base: gb.take leaf: gp.leaf.stringView
-        wrapExpr: (Node.expression (zast.ExpressionData
+        wrapper: buildWrapper :ast :line :col base: gb leaf: gp.leaf.stringView
+        wrapExpr: (astnode.expression (zast.expressionrow
             nodeid: (zast.tableReserve :ast)
             lineno: line
             colno: col
@@ -2358,7 +2359,7 @@ resumeFieldPath: function {
     ast: Ast
     # the input parameter's declared type node
     nid: zast.nodeid
-} out Node is {
+} out astnode is {
     leafId: zast.nameid
     parentId: zast.nodeid
     line: u32
@@ -2384,7 +2385,7 @@ resumeFieldPath: function {
     }
     base: clonePathAt :ast :nid
     bl: mkAtom :ast :line :col name: "borrow"
-    return (Node.dottedpath (zast.DottedPathData
+    return (astnode.dottedpath (zast.dottedpathrow
         nodeid: (zast.tableReserve :ast)
         lineno: line
         colno: col
@@ -2468,26 +2469,26 @@ appendCrossingFields: function {
     # the locals live across a suspension, in first-assignment order
     crossing: (List String).view
     # the body their first assignments are read from
-    pBody: (Option Node).view
+    pBody: (optionval astnode).view
     # the field list the typeof fields join
     addFields: ListVal u32
 } is {
     with cit2: crossing.iterate do for l3: cit2 loop {
         l3v: l3.stringView
         rhsCar: (GivesParts
-            base: (Option.none Node)
+            base: (optionval.none astnode)
             leaf: "".string
         )
         firstRhsOfOpt :ast o: pBody name: l3v dst: rhsCar
-        rc3: rhsCar.base.take
+        rc3: rhsCar.base
         match (
             rc3
         ) case some then {
-            tof3: (Node.typeofexpr (zast.TypeOfExprData
+            tof3: (astnode.typeofexpr (zast.typeofexprrow
                 nodeid: (zast.tableReserve :ast)
                 lineno: line
                 colno: col
-                source: (zast.tableAdd :ast n: rc3.take))
+                source: (zast.tableAdd :ast n: rc3))
             )
             nf4: mkNamedOp :ast :line :col name: l3v op: tof3
             addFields.append (zast.tableAdd :ast n: nf4)
@@ -2597,7 +2598,7 @@ createParamPath: function {
     ast: Ast
     # the field's declared type node
     nid: zast.nodeid
-} out Node is {
+} out astnode is {
     # the leaf is read by NAME ID, not through pathLeafName: that one answers
     # only take/lock/borrow, and a `.view` field read through it comes back
     # unmarked and would be handed a `.take` parameter -- an owned copy of a
@@ -2619,7 +2620,7 @@ createParamPath: function {
     base: clonePathAt :ast :nid
     if (parentId.isZero) == false then base = clonePathAt :ast nid: parentId
     takeLeaf: mkAtom :ast line: 0 col: 0 name: "take"
-    return (Node.dottedpath (zast.DottedPathData
+    return (astnode.dottedpath (zast.dottedpathrow
         nodeid: (zast.tableReserve :ast)
         lineno: 0
         colno: 0
@@ -2686,7 +2687,7 @@ lowerDeclared: function {
     # holds a shared lock on `ast.nodes`, and every helper below wants `ast`
     # exclusively to mint into it. lowerOne is lock-free here for the same
     # reason -- it owns the whole functiondef.
-    pBody: (Option.some (zast.tableTake :ast id: bodyId2.u32))
+    pBody: (optionval.some (zast.tableTake :ast id: bodyId2.u32))
     gc: (GenCross
         yieldCount: 0
         firstDef: (MapRV String v: u64)
@@ -2723,7 +2724,7 @@ lowerDeclared: function {
     match (
         newBodyOpt
     ) case some then {
-        nbId: zast.tableAdd :ast n: newBodyOpt.take
+        nbId: zast.tableAdd :ast n: newBodyOpt
         cfm4: ast.nodes.getMut i: callFnId.u64
         if cfm4.functiondef then cfm4.body = (zast.nodeid.create from: nbId)
     } case none then null

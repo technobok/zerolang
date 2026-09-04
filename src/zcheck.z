@@ -27,7 +27,7 @@ public: unit {
     :vendoredTcc
 }
 
-Node: zast.Node
+astnode: zast.astnode
 Ast: zast.Ast
 
 # fsnoFor -- nodeid -> fsno through the snapshot: the program's carrier
@@ -170,26 +170,33 @@ diagrow: record {
 # node->file segments, matching zc's errorMessage.
 diagsOf: function {r: CheckResult.view rows: (ListVal diagrow) msgs: (List String)} is {
     if r.parseOk == false then {
-        appendParseError n: (r.prog.nodes.get i: r.prog.root.u64) :rows :msgs
+        appendParseError ast: r.prog n: (r.prog.nodes.get i: r.prog.root.u64) :rows :msgs
     }
     diagsOfSt :rows :msgs :r
 }
 
 # collect the embedded parse-error nodes under `n` into the diagnostic rows.
-appendParseError: function {n: Node.view rows: (ListVal diagrow) msgs: (List String)} is {
+appendParseError: function {
+    ast: Ast.view
+    n: astnode
+    rows: (ListVal diagrow)
+    msgs: (List String)
+} is {
     match (
         n
     ) case error then {
-        m: n.msg.copy
-        if n.note.length > 0 then {
+        # the row names its text; the reporter wants it owned and folded
+        d9: zast.errorDataOf :ast row: n
+        m: d9.msg.copy
+        if d9.note.length > 0 then {
             m.appendByte b: 10
             m.append "note: "
-            m.append n.note
+            m.append d9.note
         }
-        if n.hint.length > 0 then {
+        if d9.hint.length > 0 then {
             m.appendByte b: 10
             m.append "hint: "
-            m.append n.hint
+            m.append d9.hint
         }
         rows.append (diagrow
             lineno: n.lineno

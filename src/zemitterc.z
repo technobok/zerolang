@@ -11,7 +11,7 @@ public: unit {
     :nativeConvRows
 }
 
-Node: zast.Node
+astnode: zast.astnode
 Ast: zast.Ast
 
 
@@ -140,7 +140,7 @@ defVid: function {symtab: zenv.ZSymbolTable.view nid: u64} out ztypes.vid is {
 
 # atomNodeIdDeep -- atomNodeId through `expression` wrappers, mirroring
 # atomTextDeep so an id and a text always describe the same node.
-atomNodeIdDeep: function {ast: Ast.view n: Node.view} out u64 is {
+atomNodeIdDeep: function {ast: Ast.view n: astnode} out u64 is {
     match (
         n
     ) case expression then {
@@ -161,7 +161,7 @@ atomVidIfPlain: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
-    n: Node.view
+    n: astnode
     text: StringView
 } out ztypes.vid is {
     match (
@@ -231,7 +231,7 @@ paramVidIn: function {
 paramVidByNameId: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    op: Node.view
+    op: astnode
     nameId: zast.nameid
 } out ztypes.vid is {
     match (
@@ -1727,13 +1727,11 @@ loadFragment: function {
 }
 
 # stringChunkText -- a stringchunk's text ("" for any other shape).
-stringChunkText: function {n: Node.view} out String is {
+stringChunkText: function {ast: Ast.view n: astnode} out String is {
     match (
         n
     ) case stringchunk then {
-        pv: n.text.stringView
-        tc: pv.string
-        return tc
+        return (zast.poolTextCopy pool: ast.names ref: n.text)
     } else {
         return "".string
     }
@@ -1760,7 +1758,7 @@ wholeText: function {ast: Ast.view parts: zast.kidspan} out String is {
     for h4x9 < parts.count.u64 loop {
         pId: zast.kidAt kids: ast.kids span: parts i: h4x9
         h4x9 = h4x9 + 1
-        t: stringChunkText n: (ast.nodes.get i: pId.u64)
+        t: stringChunkText :ast n: (ast.nodes.get i: pId.u64)
         buf.append t
     }
     return buf
@@ -1769,7 +1767,7 @@ wholeText: function {ast: Ast.view parts: zast.kidspan} out String is {
 # collectLiterals -- pool every PLAIN string-literal atom in walk order:
 # parallel lists of (nodeid, text). Interpolated literals build at the
 # use site instead.
-collectLiterals: function {ast: Ast.view n: Node.view ids: ListVal u64 texts: List String} is {
+collectLiterals: function {ast: Ast.view n: astnode ids: ListVal u64 texts: List String} is {
     match (
         n
     ) case statement then {
@@ -1889,7 +1887,7 @@ ternaryClause: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    c: Node.view
+    c: astnode
 } out String is {
     match (
         c
@@ -1943,7 +1941,7 @@ ternaryElse: function {
 
 # atomNameIdOf -- an atom's interned name id (0 when the node is not an atom;
 # no pool id is 0, so a lookup by it misses).
-atomNameIdOf: function {ast: Ast.view n: Node.view} out zast.nameid is {
+atomNameIdOf: function {ast: Ast.view n: astnode} out zast.nameid is {
     ast
     match (
         n
@@ -1957,7 +1955,7 @@ atomNameIdOf: function {ast: Ast.view n: Node.view} out zast.nameid is {
 # atomTextOf -- an atomid node's name text ("" for any other shape), a view
 # into the pool: the tree is read-only throughout emission, so the text is
 # never copied out of it.
-atomTextOf: function {ast: Ast.view n: Node.view} outx StringView is {
+atomTextOf: function {ast: Ast.view n: astnode} outx StringView is {
     match (
         n
     ) case atomid then {
@@ -1968,7 +1966,7 @@ atomTextOf: function {ast: Ast.view n: Node.view} outx StringView is {
 }
 
 # atomTextDeep -- atom text through expression wrappers, a view into the pool.
-atomTextDeep: function {ast: Ast.view n: Node.view} outx StringView is {
+atomTextDeep: function {ast: Ast.view n: astnode} outx StringView is {
     match (
         n
     ) case expression then {
@@ -1981,7 +1979,7 @@ atomTextDeep: function {ast: Ast.view n: Node.view} outx StringView is {
 }
 
 # atomNodeId -- an atomid node's id (0 for any other shape).
-atomNodeId: function {n: Node.view} out u64 is {
+atomNodeId: function {n: astnode} out u64 is {
     match (
         n
     ) case atomid then {
@@ -2240,7 +2238,7 @@ blockDiverges: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
-    n: Node.view
+    n: astnode
 } out bool is {
     if (ztypecheck.blockEndsInReturn :ast block: n) then return true
     match (
@@ -2297,7 +2295,7 @@ stmtDiverges: function {
 
 # isBareReturn -- a valueless `return`, which parses as an atom rather than the
 # call shape ztypecheck.blockEndsInReturn looks for. Diverges all the same.
-isBareReturn: function {ast: Ast.view n: Node.view} out bool is {
+isBareReturn: function {ast: Ast.view n: astnode} out bool is {
     match (
         n
     ) case expression then {
@@ -2316,7 +2314,7 @@ isBareReturn: function {ast: Ast.view n: Node.view} out bool is {
 loopNeverExits: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    n: Node.view
+    n: astnode
 } out bool is {
     match (
         n
@@ -2356,7 +2354,7 @@ ifDiverges: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
-    n: Node.view
+    n: astnode
 } out bool is {
     match (
         n
@@ -3142,7 +3140,7 @@ needsValueDeref: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
     tid: ztypes.tid
 } out bool is {
     if (nodeIsBareAtom :ast :n) == false then return false
@@ -3152,7 +3150,7 @@ needsValueDeref: function {
 
 # whether a node is a bare atom, which is what decides whether a name can be
 # used directly or needs an expression
-nodeIsBareAtom: function {ast: Ast.view n: Node.view} out bool is {
+nodeIsBareAtom: function {ast: Ast.view n: astnode} out bool is {
     match (
         n
     ) case expression then {
@@ -3171,7 +3169,7 @@ pathIsPointer: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
 } out bool is {
     match (
         n
@@ -3191,13 +3189,13 @@ pathIsPointer: function {
         return (isPtrVid :ctx vid: rlv)
     } case call then {
         # a reference-returning call yields `T*`. The arm narrows `n` to
-        # CallData, so the Node is re-fetched by its own id.
+        # callrow, so the astnode is re-fetched by its own id.
         cnd: ast.nodes.get i: n.nodeid.u64
         return (nodeIsRefBorrowResult :ast :symtab :ctx n: cnd)
     } case dottedpath then {
         # a ZERO-ARG auto-call reads as a dotted path, so a reference-returning
         # one is itself a `T*` and a read off it is `->`. The arm narrows `n`, so
-        # the Node is re-fetched by its own id.
+        # the astnode is re-fetched by its own id.
         dnd: ast.nodes.get i: n.nodeid.u64
         if (nodeIsRefBorrowResult :ast :symtab :ctx n: dnd) then return true
         cn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
@@ -3225,7 +3223,7 @@ nodeIsRefBorrowResult: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
 } out bool is {
     f: refBorrowCalleeFid :ast :symtab :ctx :n
     if f == 0 then return false
@@ -3417,7 +3415,11 @@ takeSourceResolve: function {ctx: Ctx.view name: StringView vid: ztypes.vid} out
 
 # takeAliasBaseNid -- takeAliasBase as an interned name id, for a caller that
 # compares the base rather than printing it.
-takeAliasBaseNid: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: Node.view} out u64 is {
+takeAliasBaseNid: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    n: astnode
+} out u64 is {
     match (
         n
     ) case expression then {
@@ -3453,7 +3455,7 @@ takeAliasBase: function {
     # the symbol table the alias stamp lives in
     symtab: zenv.ZSymbolTable.view
     # the `.take` node
-    n: Node.view
+    n: astnode
 } outx StringView is {
     tbn: takeAliasBaseNid :ast :symtab :n
     if tbn == 0 then return ""
@@ -3467,7 +3469,7 @@ takeStringSource: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
-    n: Node.view
+    n: astnode
 } out String is {
     match (
         n
@@ -3500,7 +3502,7 @@ takeMoveCtype: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
 } out String is {
     match (
         n
@@ -3521,7 +3523,7 @@ takeMoveCtype: function {
 # itself a dotted path (a field, not a bare atom). The field lvalue is zeroed
 # after the move so the owner's destructor does not double-free the payload the
 # take aliased out (a bare `<x>.take` is handled by takeStringSource).
-isFieldTake: function {ast: Ast.view n: Node.view} out bool is {
+isFieldTake: function {ast: Ast.view n: astnode} out bool is {
     match (
         n
     ) case expression then {
@@ -3547,7 +3549,7 @@ emitNarrowedTakeZero: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
     ind: StringView
     buf: String.borrow
 } is {
@@ -3637,7 +3639,7 @@ implicitTakeSourceAtom: function {
 
 # moveMarkerBase -- the base node id of an explicit `<x>.take` / `<x>.hold`,
 # through any `expression` wrapper; 0 when the node is not a move marker.
-moveMarkerBase: function {ast: Ast.view n: Node.view} out u64 is {
+moveMarkerBase: function {ast: Ast.view n: astnode} out u64 is {
     match (
         n
     ) case expression then {
@@ -3654,7 +3656,7 @@ moveMarkerBase: function {ast: Ast.view n: Node.view} out u64 is {
 # isBareNameValue -- the value is a BARE name (through any expression wrapper).
 # The binding legs test this before asking implicitTakeSource for a move source:
 # that answer costs a String, and only a bare name can move an owned local.
-isBareNameValue: function {ast: Ast.view n: Node.view} out bool is {
+isBareNameValue: function {ast: Ast.view n: astnode} out bool is {
     match (
         n
     ) case expression then {
@@ -3673,7 +3675,7 @@ implicitTakeSource: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
-    n: Node.view
+    n: astnode
 } out String is {
     match (
         n
@@ -3697,7 +3699,7 @@ implicitTakeFnId: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out u64 is {
     ct: (ztypes.tid.create from: (userFnIdById
         :ast
@@ -3731,7 +3733,7 @@ implicitTakeFnId: function {
     }
     if ct.isZero then {
         # a cross-unit construction's callable is a dotted path (e.g.
-        # `zast.UnitData`); atomTextOf is empty, so resolve the type by its
+        # `zast.unitrow`); atomTextOf is empty, so resolve the type by its
         # child name to reach its consuming `create` below (the same-unit path
         # resolves via the bare-atom userFnId above). Without this the moved-in
         # owned arg is never zeroed -> double free at the owner's destructor.
@@ -3781,7 +3783,7 @@ isCtorOwnerCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out bool is {
     smidO: stampIdOf :symtab nid: call.nodeid.u64
     bnOId: dottedBaseAtomId :ast n: (ast.nodes.get i: call.callable.u64)
@@ -3817,7 +3819,7 @@ isCtorOwnerCall: function {
         nameId: (atomNameIdOf :ast n: (ast.nodes.get i: call.callable.u64))
     ))
     if ct.isZero then {
-        # cross-unit construction (dotted callable, e.g. `zast.UnitData`):
+        # cross-unit construction (dotted callable, e.g. `zast.unitrow`):
         # resolve the constructed type by its child name so an owned arg moved
         # into a record/variant/class/union field is zeroed (else double free).
         if (mcOId.isZero) == false then {
@@ -3842,7 +3844,7 @@ emitCallTakeInvalidations: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     ind: StringView
     buf: String.borrow
 } is {
@@ -3989,7 +3991,7 @@ emitValueTakeInvalidations: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
     ind: StringView
     buf: String.borrow
 } is {
@@ -4138,7 +4140,7 @@ svValueForm: function {ctx: Ctx.view expr: StringView isStr: bool vid: ztypes.vi
 # a dotted path ("" when the shape is deeper than one segment).
 # dottedBaseAtomId -- the base atom's interned name id (0 when absent). The
 # id form of dottedBaseAtom, for callers that only need to identify the name.
-dottedBaseAtomId: function {ast: Ast.view n: Node.view} out zast.nameid is {
+dottedBaseAtomId: function {ast: Ast.view n: astnode} out zast.nameid is {
     match (
         n
     ) case dottedpath then {
@@ -4150,7 +4152,7 @@ dottedBaseAtomId: function {ast: Ast.view n: Node.view} out zast.nameid is {
 
 # the base atom of a dotted path, which is the sanctioned discriminator the
 # shadow guard allows
-dottedBaseAtom: function {ast: Ast.view n: Node.view} outx StringView is {
+dottedBaseAtom: function {ast: Ast.view n: astnode} outx StringView is {
     match (
         n
     ) case dottedpath then {
@@ -4162,14 +4164,14 @@ dottedBaseAtom: function {ast: Ast.view n: Node.view} outx StringView is {
 
 # atomOrBaseText -- the atom's own text, or a dotted path's base atom's text:
 # the two shapes a receiver or a `.take` source is spelt in ("" otherwise).
-atomOrBaseText: function {ast: Ast.view n: Node.view} outx StringView is {
+atomOrBaseText: function {ast: Ast.view n: astnode} outx StringView is {
     t: atomTextOf :ast :n
     if t.length > 0 then return t
     return (dottedBaseAtom :ast :n)
 }
 
 # the child member name of dotted-path node `n`.
-dottedChildText: function {ast: Ast.view n: Node.view} outx StringView is {
+dottedChildText: function {ast: Ast.view n: astnode} outx StringView is {
     match (
         n
     ) case dottedpath then {
@@ -4207,7 +4209,7 @@ aliasChildName: function {
     # the symbol table holding the rename stamps
     symtab: zenv.ZSymbolTable.view
     # the dotted-path node
-    n: Node.view
+    n: astnode
 } outx StringView is {
     match (
         n
@@ -4230,7 +4232,7 @@ stmtFormNameId: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
-    n: Node.view
+    n: astnode
 } out zast.nameid is {
     # the child's name as an ID: this runs for every dotted callee in statement
     # position, and four compares against the four forms need no text at all
@@ -4284,7 +4286,7 @@ stmtFormNameId: function {
 }
 
 # the child member name id of dotted-path node `n` (0 when not one).
-dottedChildNameIdOf: function {ast: Ast.view n: Node.view} out zast.nameid is {
+dottedChildNameIdOf: function {ast: Ast.view n: astnode} out zast.nameid is {
     match (
         n
     ) case dottedpath then {
@@ -4295,7 +4297,7 @@ dottedChildNameIdOf: function {ast: Ast.view n: Node.view} out zast.nameid is {
 }
 
 # the middle segment's name id of a LEFT-nested `(a.B).c` path (0 otherwise).
-dottedParentChildId: function {ast: Ast.view n: Node.view} out zast.nameid is {
+dottedParentChildId: function {ast: Ast.view n: astnode} out zast.nameid is {
     match (
         n
     ) case expression then {
@@ -4312,7 +4314,7 @@ dottedParentChildId: function {ast: Ast.view n: Node.view} out zast.nameid is {
 aliasChildNameId: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    n: Node.view
+    n: astnode
 } out zast.nameid is {
     match (
         n
@@ -4339,7 +4341,7 @@ aliasOrChildId: function {
 }
 
 # the base node id of dotted-path node `n`.
-dottedBaseNodeId: function {ast: Ast.view n: Node.view} out u64 is {
+dottedBaseNodeId: function {ast: Ast.view n: astnode} out u64 is {
     match (
         n
     ) case dottedpath then {
@@ -4434,7 +4436,7 @@ svArgAddr: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
 } out String is {
     match (
         n
@@ -4529,7 +4531,7 @@ emitSvCompareCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     bnv: StringView
     mnv: StringView
     btid: ztypes.tid
@@ -4575,7 +4577,7 @@ emitSvSubstringCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     bnv: StringView
     mnv: StringView
     btid: ztypes.tid
@@ -4621,7 +4623,7 @@ svNativeArgFrag: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
     addrAlways: bool
 } out String is {
     sav: svArgAddr :ast :symtab :ctx :n
@@ -4658,7 +4660,7 @@ emitSvSplitCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     bnv: StringView
     mnv: StringView
     btid: ztypes.tid
@@ -4734,7 +4736,7 @@ emitSvArgNativeCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     bnv: StringView
     mnv: StringView
     btid: ztypes.tid
@@ -4799,7 +4801,7 @@ emitSvSimpleCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     bnv: StringView
     mnv: StringView
     btid: ztypes.tid
@@ -4924,7 +4926,7 @@ emitScalarIterateCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     mnI: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if mnI.length == 0 then return "".string
@@ -4980,7 +4982,7 @@ emitDottedCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     bn0: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
@@ -4989,7 +4991,7 @@ emitDottedCall: function {
     # the receiver's C text: the expression's, or the base atom's local name
     bn: String
     if bn0.length == 0 then {
-        # nested/projected base (el.text.stringView.stripPrefix): no base atom, but
+        # nested/projected base ((zast.poolTextAt pool: ast.names ref: el.text).stringView.stripPrefix): no base atom, but
         # the base is a stamped String/StringView -- emit it as an expression (a
         # compound-literal lvalue, so the `&base` SV-native legs stay valid C).
         rsid: (dottedReceiverStampId
@@ -5040,7 +5042,7 @@ emitDataIndexCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
@@ -5077,7 +5079,7 @@ listCapArg: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
 } out String is {
     match (
         n
@@ -5113,7 +5115,7 @@ emitDottedReceiver: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    callable: Node.view
+    callable: astnode
 } out String is {
     match (
         callable
@@ -5130,7 +5132,7 @@ emitDottedReceiver: function {
 dottedReceiverStampId: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    callable: Node.view
+    callable: astnode
 } out ztypes.tid is {
     match (
         callable
@@ -5148,7 +5150,7 @@ dottedReceiverIsPtr: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    callable: Node.view
+    callable: astnode
 } out bool is {
     match (
         callable
@@ -5177,7 +5179,7 @@ emitNativeArgMethod: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     ownerTid: ztypes.tid
 } out String is {
     if call.arguments.count.u64 == 0 then return "".string
@@ -5245,7 +5247,7 @@ nativeArgHoles: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     fid: ztypes.tid
     names: (List String)
     vals: (List String)
@@ -5298,7 +5300,7 @@ emitStringArgMethod: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     nativeM: String
@@ -5653,7 +5655,7 @@ stringViewBinopOperand: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
     expr: StringView
     tname: StringView
 } out String is {
@@ -5713,7 +5715,7 @@ instanceMethodArgValue: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     mco: ztypes.tid
     posParamName: StringView
     posParamId: u64
@@ -5825,7 +5827,7 @@ instanceMethodArgPtr: function {
     avq: ztypes.vid
     # the call, so the argument this parameter binds can be found by label when
     # -- and only when -- the answer is needed
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out instargptr is {
     ptra: false
     isStrBorrow: false
@@ -5962,7 +5964,7 @@ instanceMethodArg: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     mco: ztypes.tid
     posParamName: StringView
     posParamId: u64
@@ -6037,7 +6039,7 @@ emitInstanceMethodBody: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     mco: ztypes.tid
     recvExpr: StringView
     # whether recvExpr is ALREADY a C pointer, so the receiver slot takes it as
@@ -6140,7 +6142,7 @@ emitOperatorCallForm: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     mnO: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if mnO.length == 0 then return "".string
@@ -6212,7 +6214,7 @@ emitSynthOperatorCallForm: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     mnS: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if mnS.length == 0 then return "".string
@@ -6245,7 +6247,7 @@ emitInstanceMethodCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if mn.length == 0 then return "".string
@@ -6331,7 +6333,7 @@ emitInstanceMethodCall: function {
 collectionValueCallRhs: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    n: Node.view
+    n: astnode
 } out bool is {
     match (
         n
@@ -6469,7 +6471,7 @@ hoistExprIsBorrowRooted: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
-    n: Node.view
+    n: astnode
 } out bool is {
     match (
         n
@@ -6497,7 +6499,7 @@ callRhsIsBorrow: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out bool is {
     cstid: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: call.callable.u64))
     if (funcBorrowFlag :symtab tid: cstid) then return true
@@ -6525,7 +6527,7 @@ isSvAsStringNode: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
-    n: Node.view
+    n: astnode
 } out bool is {
     match (
         n
@@ -6548,7 +6550,7 @@ svBaseExprOfAsString: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
 } out String is {
     match (
         n
@@ -6567,7 +6569,7 @@ colArgAsStringViewExpr: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     label: StringView
 } out String is {
     arx289: u64
@@ -6597,7 +6599,7 @@ refBorrowCalleeFid: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
-    n: Node.view
+    n: astnode
 } out u64 is {
     match (
         n
@@ -6656,7 +6658,7 @@ bindingRhsIsBorrow: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
-    n: Node.view
+    n: astnode
 } out bool is {
     match (
         n
@@ -6729,7 +6731,7 @@ rhsIsBorrowGet: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
 } out bool is {
     match (
         n
@@ -6762,7 +6764,7 @@ emitStrConvCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if mn != "str" then return "".string
@@ -6810,7 +6812,7 @@ emitBoxCreate: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     cko: symtab.typing.callKind.get key: call.nodeid.u64
     isBoxC: false
@@ -6840,7 +6842,7 @@ emitBoxCreate: function {
 emitEmptyColCreate: function {ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     cn0: StringView
 } out String is {
     if cn0 == "array" then {
@@ -6909,7 +6911,7 @@ emitCollectionMethodCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     bn: emitDottedReceiver :ast :symtab :ctx callable: (ast.nodes.get i: call.callable.u64)
     if bn.length == 0 then return "".string
@@ -6968,7 +6970,7 @@ emitListMethodCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     mnId: zast.nameid
     bn: String
     bt: ztypes.tid
@@ -7047,7 +7049,7 @@ emitArrayMethodCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     mnId: zast.nameid
     bn: String
     bt: ztypes.tid
@@ -7125,7 +7127,7 @@ ownedReceiverHoist: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     expr: StringView
-    n: Node.view
+    n: astnode
 } out String is {
     if (isNonLvalueArg s: expr) == false then return "".string
     rtid: stampIdOf :symtab nid: (interpPartNodeId :n)
@@ -7158,7 +7160,7 @@ emitSetMethodCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     mnId: zast.nameid
     bn: String
     bt: ztypes.tid
@@ -7199,7 +7201,7 @@ emitMapMethodCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     mnId: zast.nameid
     bn: String
     bt: ztypes.tid
@@ -7251,7 +7253,7 @@ emitIdMapMethodCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     mnId: zast.nameid
     bn: String
     bt: ztypes.tid
@@ -7298,7 +7300,7 @@ emitIdSetMethodCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     mnId: zast.nameid
     bn: String
     bt: ztypes.tid
@@ -7327,7 +7329,7 @@ emitInterpArgExpr: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
 } out String is {
     match (
         n
@@ -7386,7 +7388,7 @@ emitInterpStmtValue: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -7427,7 +7429,7 @@ emitColInterpArg: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
     consumes: bool
 } out String is {
     sx: emitInterpArgExpr :ast :symtab :ctx :n
@@ -7465,7 +7467,7 @@ emitInterpArgForParam: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
     fid: ztypes.tid
     pname: StringView
     pid: u64
@@ -7508,7 +7510,7 @@ colArg: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     label: StringView
     consumes: bool
 } out String is {
@@ -7560,7 +7562,7 @@ listArg: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     label: StringView
 } out String is {
     posFirst: String
@@ -7595,7 +7597,7 @@ listArg: function {
 # that compares the base rather than printing it.
 listTakeArgBaseNid: function {
     ast: Ast.view
-    call: zast.CallData.view
+    call: zast.callrow.view
     label: StringView
 } out u64 is {
     arx319: u64
@@ -7618,7 +7620,7 @@ listTakeArgBaseNid: function {
 # extend source); the bare atom text otherwise.
 listTakeArgBase: function {
     ast: Ast.view
-    call: zast.CallData.view
+    call: zast.callrow.view
     label: StringView
 } outx StringView is {
     lid: listTakeArgBaseNid :ast :call :label
@@ -7627,7 +7629,7 @@ listTakeArgBase: function {
 }
 
 # the base path of a `.take` argument `n`.
-takeArgBaseNid: function {ast: Ast.view n: Node.view} out u64 is {
+takeArgBaseNid: function {ast: Ast.view n: astnode} out u64 is {
     match (
         n
     ) case expression then {
@@ -7647,7 +7649,7 @@ emitTypedefCreateCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     # the call's stamped return IS the typedef (covers the unit-qualified
     # head, whose base atom is the unit name); the name walk stays as the
@@ -7712,7 +7714,7 @@ emitInlineVariantCtor: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     tid: ztypes.tid
     arm: StringView
 } out String is {
@@ -7754,7 +7756,7 @@ emitUnionCtor: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
     if bn.length == 0 then return "".string
@@ -7836,7 +7838,7 @@ emitVariantCtorCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
@@ -7919,7 +7921,7 @@ emitTypeQualCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
@@ -8391,7 +8393,7 @@ emitRecordCtor: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     tid: ztypes.tid
 } out String is {
     # a user-defined `create` (non-empty params) overrides the field-wise ctor:
@@ -8578,7 +8580,7 @@ ctorArgIsBorrow: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
-    call: zast.CallData.view
+    call: zast.callrow.view
     label: StringView
 } out bool is {
     arx369: u64
@@ -8604,7 +8606,7 @@ ctorArgIsBorrowPos: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
-    call: zast.CallData.view
+    call: zast.callrow.view
     idx: u64
 } out bool is {
     seen: u64
@@ -8630,7 +8632,7 @@ ctorArgIsBorrowPos: function {
 }
 
 # the constructor-argument node matching a field label.
-ctorArgNodeByLabel: function {ast: Ast.view call: zast.CallData.view label: StringView} out u64 is {
+ctorArgNodeByLabel: function {ast: Ast.view call: zast.callrow.view label: StringView} out u64 is {
     arx389: u64
     for arx389 < call.arguments.count.u64 loop {
         aId: zast.kidAt kids: ast.kids span: call.arguments i: arx389
@@ -8650,7 +8652,7 @@ ctorArgByLabel: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     label: StringView
 } out String is {
     aid: ctorArgNodeByLabel :ast :call :label
@@ -8683,7 +8685,7 @@ argAlreadyPointer: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
     vid: ztypes.vid
 } out bool is {
     if (isPtrVid :ctx :vid) then return true
@@ -8697,7 +8699,7 @@ argIsPointerByLabel: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     label: StringView
 } out bool is {
     arx399: u64
@@ -8721,7 +8723,7 @@ argIsPointerByLabel: function {
 # ctorArgNodeByPosition -- ctorArgByPosition's node id rather than its C text,
 # for a caller that must look the argument up again instead of printing it.
 # 0 when there is no positional argument at that index.
-ctorArgNodeByPosition: function {ast: Ast.view call: zast.CallData.view idx: u64} out u64 is {
+ctorArgNodeByPosition: function {ast: Ast.view call: zast.callrow.view idx: u64} out u64 is {
     seen: u64
     arx409: u64
     for arx409 < call.arguments.count.u64 loop {
@@ -8748,7 +8750,7 @@ ctorArgByPosition: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     idx: u64
 } out String is {
     posParamId: ctorArgNodeByPosition :ast :call :idx
@@ -8782,7 +8784,7 @@ ctorInterpArgAt: function {
 # param). Lets a call's named args be emitted to C in PARAMETER order.
 argSlotList: function {
     ast: Ast.view
-    call: zast.CallData.view
+    call: zast.callrow.view
     fpNameIds: (ListVal u64).view
 } out ListVal u64 is {
     result: (ListVal u64)
@@ -9104,7 +9106,7 @@ unitTidOf: function {
 }
 
 # ctorHasLabel -- whether a call carries a named argument with this label.
-ctorHasLabel: function {ast: Ast.view call: zast.CallData.view label: StringView} out bool is {
+ctorHasLabel: function {ast: Ast.view call: zast.callrow.view label: StringView} out bool is {
     arx429: u64
     for arx429 < call.arguments.count.u64 loop {
         aId: zast.kidAt kids: ast.kids span: call.arguments i: arx429
@@ -9126,7 +9128,7 @@ emitMetaCreateCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     mcb: ztypecheck.metaCreateBaseId :ast n: (ast.nodes.get i: call.callable.u64)
     match (
@@ -9286,7 +9288,7 @@ emitFnCallWithFid: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     fid: ztypes.tid
 } out String is {
     fc: ctxCname :ctx tid: fid
@@ -9459,7 +9461,7 @@ emitGenericFnCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     gdc: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if gdc.length > 0 then return "".string
@@ -9479,7 +9481,7 @@ emitUnitMethodCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     rsid: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
     if rsid.isZero then return "".string
@@ -9555,7 +9557,7 @@ emitCrossUnitFnCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     fid: dottedMemberTidOf :ast :symtab :ctx callableId: call.callable
     if fid.isZero then return "".string
@@ -9565,7 +9567,7 @@ emitCrossUnitFnCall: function {
 
 # dottedParentChild -- the middle segment of a 3-segment dotted path `a.b.c`:
 # the child text of the parent (`b`). "" when not a nested dotted path.
-dottedParentChild: function {ast: Ast.view n: Node.view} out String is {
+dottedParentChild: function {ast: Ast.view n: astnode} out String is {
     match (
         n
     ) case expression then {
@@ -9583,7 +9585,7 @@ dottedParentChild: function {ast: Ast.view n: Node.view} out String is {
 emitCrossUnitBareCreate: function {ctx: Ctx.view
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    parent: Node.view
+    parent: astnode
     childId: zast.nameid
 } out String is {
     if childId != zast.names.wkCreate then return "".string
@@ -9631,7 +9633,7 @@ emitCrossUnitExplicitCreate: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     armId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if armId != zast.names.wkCreate then return "".string
@@ -9707,7 +9709,7 @@ emitCrossUnitExplicitCreate: function {
 }
 
 # outerBaseAtomId -- the interned name id of outerBaseAtom's leftmost atom.
-outerBaseAtomId: function {ast: Ast.view n: Node.view} out zast.nameid is {
+outerBaseAtomId: function {ast: Ast.view n: astnode} out zast.nameid is {
     match (
         n
     ) case expression then {
@@ -9721,7 +9723,7 @@ outerBaseAtomId: function {ast: Ast.view n: Node.view} out zast.nameid is {
 
 # outerBaseAtom -- the leftmost atom of a LEFT-nested three-segment
 # dotted path `(a.B).c`: "a". "" for shallower shapes.
-outerBaseAtom: function {ast: Ast.view n: Node.view} out String is {
+outerBaseAtom: function {ast: Ast.view n: astnode} out String is {
     match (
         n
     ) case expression then {
@@ -9742,7 +9744,7 @@ emitCrossUnitSumCtor: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     obId: outerBaseAtomId :ast n: (ast.nodes.get i: call.callable.u64)
     pcId: dottedParentChildId :ast n: (ast.nodes.get i: call.callable.u64)
@@ -9818,14 +9820,14 @@ emitCrossUnitSumCtor: function {
 }
 
 # emitCrossUnitCtor -- construction of a cross-unit record/class
-# `unit.TypeName field: val ...` (e.g. a Node arm's zast.ErrorData payload):
+# `unit.TypeName field: val ...` (e.g. a astnode arm's zast.ErrorData payload):
 # resolve the type via the shared cross-unit identity and route to the field-wise
 # (or user-create) constructor. "" when not such a construction.
 emitCrossUnitCtor: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     tid: dottedMemberTidOf :ast :symtab :ctx callableId: call.callable
     if tid.isZero then return "".string
@@ -9902,7 +9904,7 @@ emitFnptrFieldCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if mn.length == 0 then return "".string
@@ -9993,7 +9995,7 @@ emitFnptrLocalCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     fid: ztypes.tid
     cn0: StringView
     cnVid: ztypes.vid
@@ -10073,7 +10075,7 @@ emitFnptrLocalCall: function {
 conformanceArgText: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
-    argOpNode: Node.view
+    argOpNode: astnode
     av: StringView
     avVid: ztypes.vid
     protoTid: u64
@@ -10142,7 +10144,7 @@ userFnArgText: function {
     fid: ztypes.tid
     pinId: u64
     pinNm: StringView
-    argOpNode: Node.view
+    argOpNode: astnode
 } out String is {
     iavb: (emitInterpArgForParam
         :ast
@@ -10224,7 +10226,7 @@ emitUserFnCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     fid: ztypes.tid
 } out String is {
     fc: ctxCname :ctx tid: fid
@@ -10308,7 +10310,7 @@ emitNamedCalleeChain: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     cn0: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: call.callable.u64))
     ecc: emitEmptyColCreate :ast :symtab :ctx :call cn0: cn0.stringView
@@ -10471,7 +10473,7 @@ emitCallProbeChain: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     mcc: emitMetaCreateCall :ast :symtab :ctx :call
     if mcc.length > 0 then return mcc
@@ -10509,7 +10511,7 @@ emitCallByDecl: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     # route by the callee's DECLARATION: its kind and its owner's family
     # name the handler outright
@@ -10634,7 +10636,7 @@ emitCallValue: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     # stamped-kind dispatch head: a call whose kind names its owning handler
     # routes there directly; an empty result or an unstamped / chain-owned
@@ -10799,7 +10801,7 @@ emitDataMember: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: zast.DottedPathData.view
+    n: zast.dottedpathrow.view
     dbt: ztypes.tid
     mn2: String.view
 } out String is {
@@ -10866,7 +10868,7 @@ emitDefRefAtom: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: zast.AtomIdData.view
+    n: zast.atomidrow.view
     brid: ztypes.tid
     bdec: ztypes.declid
 } out String is {
@@ -11017,7 +11019,7 @@ emitAtom: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: zast.AtomIdData.view
+    n: zast.atomidrow.view
 } out String is {
     avC: ast.names.texts.get i: n.name.u64
     av: avC.stringView
@@ -11126,7 +11128,7 @@ emitNestedStringViewBase: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: zast.DottedPathData.view
+    n: zast.dottedpathrow.view
     mn2: StringView
 } out String is {
     if (ztypecheck.isStringViewMember name: mn2) then {
@@ -11211,7 +11213,7 @@ emitNestedMonoMethodBase: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: zast.DottedPathData.view
+    n: zast.dottedpathrow.view
     mn2: StringView
     nlid: ztypes.tid
     baseAtom: StringView
@@ -11310,7 +11312,7 @@ emitDottedNestedBase: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: zast.DottedPathData.view
+    n: zast.dottedpathrow.view
     mn2: StringView
 } out String is {
     # `.stringView` on a String/StringView projects an inline view, not a
@@ -11711,7 +11713,7 @@ emitIdCollectionMemberRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: zast.DottedPathData.view
+    n: zast.dottedpathrow.view
     mn2: StringView
     bn2: StringView
     bstamp: ztypes.tid
@@ -11810,7 +11812,7 @@ emitCollectionMemberRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: zast.DottedPathData.view
+    n: zast.dottedpathrow.view
     mn2: StringView
     bn2: StringView
     bn2v: ztypes.vid
@@ -12148,7 +12150,7 @@ emitDottedAtomBase: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: zast.DottedPathData.view
+    n: zast.dottedpathrow.view
     mn2: StringView
     bn2: StringView
     bn2r: StringView
@@ -12254,7 +12256,7 @@ emitDottedUnitRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: zast.DottedPathData.view
+    n: zast.dottedpathrow.view
 } out String is {
     # `unit.CONST` -- a constant of another unit inlines its rendered C
     # text, exactly as a bare reference to a constant of this unit does
@@ -12424,7 +12426,7 @@ emitDottedConversionRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: zast.DottedPathData.view
+    n: zast.dottedpathrow.view
 } out String is {
     mnc0Id: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
     dps: ast.nodes.get i: n.parent.u64
@@ -12577,7 +12579,7 @@ emitDottedTagRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: zast.DottedPathData.view
+    n: zast.dottedpathrow.view
     # the member, as an id: the two legs that SPELL an arm name copy it there,
     # and the common path -- a dotted read that is neither a tagged
     # construction nor an arm predicate -- copies nothing
@@ -12716,7 +12718,7 @@ emitDottedNativeMarker: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: zast.DottedPathData.view
+    n: zast.dottedpathrow.view
     bn2r: StringView
 } out String is {
     mn2Id: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
@@ -12876,7 +12878,7 @@ emitDottedRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: zast.DottedPathData.view
+    n: zast.dottedpathrow.view
 } out String is {
     # built-in `.orPanic` on a resultval/Result receiver -- any base
     # (a bound var, or a chained call/conversion), emitted via emitExpr so
@@ -12921,7 +12923,7 @@ emitDottedRead: function {
     }
     bn2: emitLocalAtomName :ctx name: bn2r.stringView vid: baseAtomVid
     # a base with no atom NAME still has a stamped type. Every native leg
-    # below sits behind `bn2.length > 0`, so a projection (h.text.stringView)
+    # below sits behind `bn2.length > 0`, so a projection ((zast.poolTextAt pool: ast.names ref: h.text).stringView)
     # or a call (s.trim, (mk s: s)) skipped the lot and fell through to the
     # user-method path, which renders the callee as the method's
     # function-type id -- a symbol nothing defines. emitDottedCall already
@@ -12985,7 +12987,7 @@ emitExpr: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
 } out String is {
     cv: (nodeConstText
         :ast
@@ -13095,7 +13097,7 @@ emitBinop: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    binop: zast.BinOpData.view
+    binop: zast.binoprow.view
     l: String
     r: String
     op: StringView
@@ -13119,7 +13121,7 @@ emitBinop: function {
     )
 }
 
-# emitOperatorAt -- emitBinop's body, driven by ids rather than by a BinOpData.
+# emitOperatorAt -- emitBinop's body, driven by ids rather than by a binoprow.
 # The infix form and the call form (`a.+ rhs: b`) are the SAME one-argument
 # method, so they emit through here alike; only the node ids differ.
 emitOperatorAt: function {
@@ -13380,7 +13382,7 @@ emitInterpBuild: function {
         isC: false
         if p.stringchunk then {
             isC = true
-            tl: p.text.length
+            tl: (zast.poolTextAt pool: ast.names ref: p.text).length
             est = est + tl
         }
         if (isC) == false then est = est + 16
@@ -13445,7 +13447,7 @@ dataIndexElemName: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
-    n: Node.view
+    n: astnode
 } out String is {
     match (
         n
@@ -13478,7 +13480,7 @@ dataIndexElemName: function {
 interpBaseIsMapEntry: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    n: Node.view
+    n: astnode
 } out bool is {
     match (
         n
@@ -13537,7 +13539,7 @@ interpBaseIsMapEntry: function {
 interpBaseIsOwnedStructField: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    n: Node.view
+    n: astnode
 } out bool is {
     match (
         n
@@ -13593,7 +13595,7 @@ emitInterpPart: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
     sN: u64
     ind: StringView
     tmp: TmpCtr
@@ -13602,7 +13604,7 @@ emitInterpPart: function {
     match (
         n
     ) case stringchunk then {
-        tv: n.text.stringView
+        tv: (zast.poolTextAt pool: ast.names ref: n.text).stringView
         esc: cEscape text: tv
         l3: "\{ind}\{ctx.strC}_append(&_s\{sN}, \"\{esc}\", sizeof(\"\{esc}\")-1);\n"
         buf.append l3
@@ -13728,7 +13730,7 @@ emitInterpPart: function {
 }
 
 # interpPartNodeId -- the nodeid of expression-ish shapes used by interp parts.
-interpPartNodeId: function {n: Node.view} out u64 is {
+interpPartNodeId: function {n: astnode} out u64 is {
     match (
         n
     ) case expression then {
@@ -13758,7 +13760,7 @@ interpPartNodeId: function {n: Node.view} out u64 is {
 stampIdDeep: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    n: Node.view
+    n: astnode
 } out ztypes.tid is {
     nid: interpPartNodeId :n
     sid: stampIdOf :symtab :nid
@@ -13788,7 +13790,11 @@ stampIdDeep: function {
 
 # stampNameDeep -- a node's stamped type name, peeling expression
 # wrappers when the wrapper itself is unstamped.
-stampNameDeep: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: Node.view} out String is {
+stampNameDeep: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    n: astnode
+} out String is {
     nid: interpPartNodeId :n
     sid: stampIdOf :symtab :nid
     if sid > 0 then {
@@ -13821,7 +13827,7 @@ emitPrintStmt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -13852,7 +13858,7 @@ emitPrintStmt: function {
 
 # plainStringLiteral -- the text of a single-chunk string literal (through
 # expression wrappers); "" for interpolated or non-literal expressions.
-plainStringLiteral: function {ast: Ast.view n: Node.view} out String is {
+plainStringLiteral: function {ast: Ast.view n: astnode} out String is {
     match (
         n
     ) case expression then {
@@ -13861,7 +13867,7 @@ plainStringLiteral: function {ast: Ast.view n: Node.view} out String is {
         if n.stringparts.count.u64 == 1 then {
             p: ast.nodes.get i: (zast.kidAt kids: ast.kids span: n.stringparts i: 0).u64
             if p.stringchunk then {
-                pt: p.text.stringView
+                pt: (zast.poolTextAt pool: ast.names ref: p.text).stringView
                 pc: pt.string
                 return pc
             }
@@ -13880,7 +13886,7 @@ emitErrorStmt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     ind: StringView
     buf: String.borrow
 } is {
@@ -13926,7 +13932,7 @@ emitPanicStmt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     ind: StringView
     buf: String.borrow
 } is {
@@ -13963,7 +13969,7 @@ emitPrintArg: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -14103,7 +14109,7 @@ bindLitIndex: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
 } out u64 is {
     match (
         n
@@ -14125,7 +14131,7 @@ bindLitIndex: function {
 stringviewOfBaseNid: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    n: Node.view
+    n: astnode
 } out u64 is {
     match (
         n
@@ -14151,7 +14157,7 @@ stringviewOfBaseNid: function {
 stringviewOfBase: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    n: Node.view
+    n: astnode
 } outx StringView is {
     sbn: stringviewOfBaseNid :ast :symtab :n
     if sbn == 0 then return ""
@@ -14163,7 +14169,7 @@ stringCopyLitIndex: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
 } out u64 is {
     match (
         n
@@ -14188,7 +14194,7 @@ copyRvalueHoist: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
     ind: StringView
     buf: String.borrow
 } out String is {
@@ -14222,7 +14228,7 @@ emitStringBindValue: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
     nm: StringView
     nmVid: ztypes.vid
     ind: StringView
@@ -14284,7 +14290,7 @@ emitOptionBoxHoist: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -14355,7 +14361,7 @@ emitStringReturnValue: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -14445,7 +14451,7 @@ emitCallStmt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -14526,7 +14532,7 @@ emitCallStmt: function {
 
 # isDottedAutoCall -- the node is a dotted-path auto-call (a no-arg method
 # reference used in statement position).
-isDottedAutoCall: function {n: Node.view} out bool is {
+isDottedAutoCall: function {n: astnode} out bool is {
     match (
         n
     ) case dottedpath then {
@@ -14545,7 +14551,7 @@ emitCollectionBind: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    n: zast.AssignmentData.view
+    n: zast.assignmentrow.view
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -14678,7 +14684,7 @@ emitStringBind: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: zast.AssignmentData.view
+    n: zast.assignmentrow.view
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -14775,7 +14781,7 @@ emitTypedBind: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: zast.AssignmentData.view
+    n: zast.assignmentrow.view
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -14911,7 +14917,7 @@ emitTakeAliasBind: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: zast.AssignmentData.view
+    n: zast.assignmentrow.view
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -14980,7 +14986,7 @@ bindDeclaredCType: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: zast.AssignmentData.view
+    n: zast.assignmentrow.view
     btid: ztypes.tid
     tn: StringView
 } out String is {
@@ -15026,7 +15032,7 @@ emitAssignment: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    n: zast.AssignmentData.view
+    n: zast.assignmentrow.view
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -15181,7 +15187,7 @@ emitDottedAutoCallStmt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -15293,7 +15299,7 @@ emitContinueStmt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
     bkw: StringView
     ind: StringView
     tmp: TmpCtr
@@ -15379,7 +15385,7 @@ emitReturnStmt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -15440,7 +15446,7 @@ emitReassignStmt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: zast.ReassignmentData.view
+    n: zast.reassignmentrow.view
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -15596,7 +15602,7 @@ emitForStmt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    n: zast.ForData.view
+    n: zast.forrow.view
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -15664,7 +15670,7 @@ emitDoWhileFor: function {
     # the emit context, which carries the loop labels
     ctx: Ctx
     # the for node being emitted
-    n: zast.ForData.view
+    n: zast.forrow.view
     # the indent the loop is written at
     ind: StringView
     # the temp counter the body's frees are registered against
@@ -15726,7 +15732,7 @@ emitPlainWhileHead: function {
     # the emit context the condition text is built in
     ctx: Ctx
     # the for node whose conditions these are
-    n: zast.ForData.view
+    n: zast.forrow.view
     # the indent the loop is written at
     ind: StringView
     # the `while (c) {` line appends here
@@ -15750,7 +15756,7 @@ emitPlainWhileHead: function {
 
 # forCondSuspends -- one of a loop's conditions holds a suspension point, so
 # the header has to be written as a body test instead.
-forCondSuspends: function {ast: Ast.view ctx: Ctx.view n: zast.ForData.view} out bool is {
+forCondSuspends: function {ast: Ast.view ctx: Ctx.view n: zast.forrow.view} out bool is {
     if (ctx.genActive) == false then return false
     cox1269: u64
     for cox1269 < n.conditions.count.u64 loop {
@@ -15777,7 +15783,7 @@ emitSuspendingWhileHead: function {
     # carries the state-machine cursor and the resume slots
     ctx: Ctx
     # the for node whose conditions these are
-    n: zast.ForData.view
+    n: zast.forrow.view
     # the indent the loop itself is written at
     ind: StringView
     # the indent inside it, where the suspensions and the test go
@@ -15819,7 +15825,7 @@ emitIfStmt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    n: zast.IfData.view
+    n: zast.ifrow.view
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -15928,7 +15934,7 @@ registerScopeDestroy: function {
     # the binding's variable id, which the flush matches against
     nameVid: ztypes.vid
     # the value node, for the borrow question
-    valueNode: Node.view
+    valueNode: astnode
     # the block's pending-cleanup lists
     tmp: TmpCtr
 } is {
@@ -15960,7 +15966,7 @@ emitWithStmt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    n: zast.WithData.view
+    n: zast.withrow.view
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -16049,7 +16055,7 @@ emitCaseStmt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    n: zast.CaseData.view
+    n: zast.caserow.view
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -16084,7 +16090,7 @@ emitSwapStmt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: zast.SwapStmtData.view
+    n: zast.swapstmtrow.view
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -16118,7 +16124,7 @@ emitDoStmt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    n: zast.DoData.view
+    n: zast.dorow.view
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -16159,7 +16165,7 @@ emitStmt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    n: Node.view
+    n: astnode
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -16431,7 +16437,7 @@ definedInUnitTid: function {
 reassignDestroyTid: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    n: Node.view
+    n: astnode
     nid: u64
 } out ztypes.tid is {
     stamped: stampIdOf :symtab :nid
@@ -16452,7 +16458,7 @@ emitReassignLvalue: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
 } out String is {
     # a REBIND names the VARIABLE, never the payload a narrowing aliased it to:
     # `s = Sum.two` inside an arm that narrowed `s` replaces the whole union,
@@ -16524,7 +16530,7 @@ emitGenericDissect: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    m: zast.CaseData.view
+    m: zast.caserow.view
     ownerTid: ztypes.tid
     paramName: zast.nameid
     ind: StringView
@@ -16636,7 +16642,7 @@ matchOrdinalPairRoute: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    m: zast.CaseData.view
+    m: zast.caserow.view
     subj: StringView
     assignTo: StringView
     ind: StringView
@@ -16669,7 +16675,7 @@ matchGenericRoute: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    m: zast.CaseData.view
+    m: zast.caserow.view
     stn: StringView
     ind: StringView
     tmp: TmpCtr
@@ -16741,7 +16747,7 @@ matchElseNarrowing: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    m: zast.CaseData.view
+    m: zast.caserow.view
     vtid: ztypes.tid
     sname: StringView
     covA: (ListVal zast.nameid).view
@@ -16817,7 +16823,7 @@ emitMatchStmt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    m: zast.CaseData.view
+    m: zast.caserow.view
     assignTo: StringView
     ind: StringView
     tmp: TmpCtr
@@ -16982,7 +16988,7 @@ emitScalarMatch: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    m: zast.CaseData.view
+    m: zast.caserow.view
     subj: StringView
     assignTo: StringView
     ind: StringView
@@ -17033,7 +17039,7 @@ emitOrdinalPairMatch: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    m: zast.CaseData.view
+    m: zast.caserow.view
     subj: StringView
     tid: ztypes.tid
     assignTo: StringView
@@ -17225,7 +17231,7 @@ emitScalarClause: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    c: Node.view
+    c: astnode
     assignTo: StringView
     ind: StringView
     tmp: TmpCtr
@@ -17265,7 +17271,7 @@ emitMatchClause: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    c: Node.view
+    c: astnode
     vtid: ztypes.tid
     isUni: bool
     mN: u64
@@ -17414,7 +17420,7 @@ emitBranchAssignOptional: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    n: Node.view
+    n: astnode
     target: StringView
     someTag: StringView
     payC: StringView
@@ -17464,7 +17470,7 @@ emitDoBindValue: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    n: Node.view
+    n: astnode
     nm: StringView
     nmVid: ztypes.vid
     ct: StringView
@@ -17565,7 +17571,7 @@ emitMatchBindValue: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    n: Node.view
+    n: astnode
     nm: StringView
     ct: StringView
     ind: StringView
@@ -17591,7 +17597,7 @@ emitMatchBindValue: function {
 # block. A folded if-bind can only shortcut to emitExpr when its live branch is
 # one; a block branch stays on the clause path, which knows how to assign from
 # a body.
-isSimpleValueNode: function {ast: Ast.view n: Node.view} out bool is {
+isSimpleValueNode: function {ast: Ast.view n: astnode} out bool is {
     ast
     match (
         n
@@ -17610,7 +17616,7 @@ emitIfBindValue: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    n: Node.view
+    n: astnode
     nm: StringView
     ct: StringView
     ind: StringView
@@ -17725,7 +17731,7 @@ emitIfBindValue: function {
 # iterableNodeId -- the stamped node id of a for-loop iterable: peel expression
 # wrappers, then take the inner atom / dotted-field / call node (the expression
 # wrapper itself may be unstamped for a `this._iterN` field iterator).
-iterableNodeId: function {ast: Ast.view n: Node.view} out u64 is {
+iterableNodeId: function {ast: Ast.view n: astnode} out u64 is {
     match (
         n
     ) case expression then {
@@ -17744,7 +17750,7 @@ iterableNodeId: function {ast: Ast.view n: Node.view} out u64 is {
 # isForIterCall -- the for-loop iterable is a call expression (an rvalue that
 # must be hoisted to a temp before `&recv`); a bare atom / dotted field is an
 # lvalue used directly.
-isForIterCall: function {ast: Ast.view n: Node.view} out bool is {
+isForIterCall: function {ast: Ast.view n: astnode} out bool is {
     match (
         n
     ) case expression then {
@@ -18080,7 +18086,7 @@ emitObjIterLoop: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    m: zast.ForData.view
+    m: zast.forrow.view
     cOp: zast.nodeid
     cco: ztypes.tid
     itid: ztypes.tid
@@ -18177,7 +18183,7 @@ objIterForNamed: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    m: zast.ForData.view
+    m: zast.forrow.view
     cName: zast.nameid
     cOp: zast.nodeid
     ind: StringView
@@ -18226,7 +18232,7 @@ emitObjIterFor: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    m: zast.ForData.view
+    m: zast.forrow.view
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -18260,7 +18266,7 @@ emitIntRangeFor: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    m: zast.ForData.view
+    m: zast.forrow.view
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -18355,7 +18361,7 @@ rangeBoundExpr: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
 } out String is {
     # THE LEAN FORM, tested once for every arm below: `for x: N loop` is sugar for
     # `for x: N.iterate loop` (spec.pdoc, Iteration), so an integer-typed operand
@@ -18403,7 +18409,7 @@ rangeReceiver: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
 } out String is {
     match (
         n
@@ -18419,7 +18425,7 @@ rangeFromExpr: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
 } out String is {
     match (
         n
@@ -18453,7 +18459,7 @@ emitForCond: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
     cond: String.borrow
     ind: StringView
     buf: String.borrow
@@ -18495,7 +18501,7 @@ emitForCond: function {
 }
 
 # the node id of expression `n`.
-exprNodeId: function {n: Node.view} out u64 is {
+exprNodeId: function {n: astnode} out u64 is {
     match (
         n
     ) case expression then {
@@ -18584,7 +18590,7 @@ hasSpaceDelimitedWord: function {hay: StringView word: StringView} out bool is {
 # bodyReassigns -- true when the body (at any depth through the common
 # statement containers) reassigns `name`, which would stale a narrowBox
 # alias for it.
-bodyReassigns: function {ast: Ast.view n: Node.view name: StringView} out bool is {
+bodyReassigns: function {ast: Ast.view n: astnode name: StringView} out bool is {
     match (
         n
     ) case statement then {
@@ -18654,8 +18660,8 @@ seedFromPredicate: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
-    body: Node.view
+    n: astnode
+    body: astnode
     names: (List String)
     svids: (ListVal ztypes.vid)
     vals: (List String)
@@ -18692,9 +18698,9 @@ seedPositiveCore: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     tid: ztypes.tid
-    parent: Node.view
+    parent: astnode
     childName: StringView
-    body: Node.view
+    body: astnode
     names: List String
     svids: ListVal ztypes.vid
     vals: List String
@@ -18739,8 +18745,8 @@ seedNegatedFromPredicate: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    n: Node.view
-    body: Node.view
+    n: astnode
+    body: astnode
     names: List String
     svids: ListVal ztypes.vid
     vals: List String
@@ -18815,7 +18821,7 @@ armSideAtNode: function {
 boolArmSideOf: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    n: Node.view
+    n: astnode
 } out ztyping.armside is {
     match (
         n
@@ -18840,7 +18846,7 @@ truthyCondText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
-    n: Node.view
+    n: astnode
     raw: StringView
 } out String is {
     fa: u64
@@ -18875,8 +18881,8 @@ seedCondOp: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    n: Node.view
-    body: Node.view
+    n: astnode
+    body: astnode
     names: (List String)
     svids: (ListVal ztypes.vid)
     vals: (List String)
@@ -18997,7 +19003,7 @@ seedCondOp: function {
 
 # bareAtomText -- the expression-unwrapped bare atom text of a node,
 # "" for any other shape; a view into the pool.
-bareAtomText: function {ast: Ast.view n: Node.view} outx StringView is {
+bareAtomText: function {ast: Ast.view n: astnode} outx StringView is {
     match (
         n
     ) case expression then {
@@ -19114,7 +19120,7 @@ chainCondFact: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
     subjects: (List String)
     svids: (ListVal ztypes.vid)
     arms: (List String)
@@ -19289,7 +19295,7 @@ chainInnerFact: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
     neg: bool
     subjects: (List String)
     svids: (ListVal ztypes.vid)
@@ -19332,7 +19338,7 @@ chainFactCore: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     owner: u64
-    parent: Node.view
+    parent: astnode
     childName: StringView
     neg: bool
     subjects: List String
@@ -19436,7 +19442,7 @@ appendCondText: function {
 # ordinary statement-level hoist already reaches it. Every condition after it
 # is guarded by the ones before -- `when` short-circuits -- so its suspension
 # cannot be lifted above the `if` without running on a path never taken.
-whenCondSuspends: function {ast: Ast.view ctx: Ctx.view n: zast.IfClauseData.view} out bool is {
+whenCondSuspends: function {ast: Ast.view ctx: Ctx.view n: zast.ifclauserow.view} out bool is {
     if (ctx.genActive) == false then return false
     wi: 1.u64
     for wi < n.conditions.count.u64 loop {
@@ -19462,7 +19468,7 @@ emitGuardedWhenCond: function {
     # carries the guard counter and the resume slots
     ctx: Ctx
     # the clause whose conditions these are
-    n: zast.IfClauseData.view
+    n: zast.ifclauserow.view
     # the indent the guard and its `if` are written at
     ind: StringView
     # the guard declaration and its computation append here
@@ -19516,7 +19522,7 @@ emitIfClause: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    n: Node.view
+    n: astnode
     isFirst: bool
     assignTo: StringView
     ind: StringView
@@ -19959,7 +19965,7 @@ emitTailStmt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    n: Node.view
+    n: astnode
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -20061,7 +20067,7 @@ emitBranchAssign: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    n: Node.view
+    n: astnode
     target: StringView
     ind: StringView
     tmp: TmpCtr
@@ -20095,7 +20101,11 @@ emitBranchAssign: function {
 
 # postGuardStmtId -- the node id of a guarding if/match statement that
 # recorded a post-guard narrowing; 0 otherwise.
-postGuardStmtId: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: Node.view} out u64 is {
+postGuardStmtId: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    n: astnode
+} out u64 is {
     match (
         n
     ) case statementline then {
@@ -20130,7 +20140,7 @@ emitBodyNode: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    n: Node.view
+    n: astnode
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -20298,7 +20308,7 @@ emitBodyNode: function {
 }
 
 # forexprValue -- the value being bound is a for-loop (a list comprehension).
-forexprValue: function {ast: Ast.view n: Node.view} out bool is {
+forexprValue: function {ast: Ast.view n: astnode} out bool is {
     match (
         n
     ) case expression then {
@@ -20316,7 +20326,7 @@ emitComprehensionBody: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    body: Node.view
+    body: astnode
     listCb: StringView
     listVar: StringView
     ind: StringView
@@ -20332,7 +20342,7 @@ emitComprehensionNode: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    n: Node.view
+    n: astnode
     listCb: StringView
     listVar: StringView
     ind: StringView
@@ -20369,7 +20379,7 @@ emitListComprehension: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    forNode: Node.view
+    forNode: astnode
     listCb: StringView
     listVar: StringView
     ind: StringView
@@ -20425,7 +20435,11 @@ emitListComprehension: function {
 # fnReturnTypeId -- the stamped type id of a function's return-type node (the
 # typecheck stamps `op.returntype`, even for concrete fns whose registry
 # returnTypeId is unset). 0 when the fn has no return type.
-fnReturnTypeId: function {ast: Ast.view symtab: zenv.ZSymbolTable.view op: Node.view} out u64 is {
+fnReturnTypeId: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    op: astnode
+} out u64 is {
     match (
         op
     ) case functiondef then {
@@ -20659,7 +20673,7 @@ registerReftypeParams: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     fid: ztypes.tid
-    op: Node.view
+    op: astnode
 } is {
     pIds: (ListVal u64)
     pNmIds: (ListVal u64)
@@ -20840,7 +20854,7 @@ fnSignature: function {
     ctx: Ctx
     name: StringView
     fid: ztypes.tid
-    op: Node.view
+    op: astnode
 } out String is {
     if name == "main" then return "void z_main(void)".string
     ret: "void".string
@@ -21094,7 +21108,7 @@ nodeIsAtomBox: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
-    n: Node.view
+    n: astnode
 } out bool is {
     match (
         n
@@ -21769,7 +21783,7 @@ unitConstTextOf: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: zast.DottedPathData.view
+    n: zast.dottedpathrow.view
 } out String is {
     cn8: zast.nameid
     {
@@ -22019,7 +22033,7 @@ fillOneDataElem: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     name: StringView
-    op: Node.view
+    op: astnode
 } is {
     match (
         op
@@ -22069,7 +22083,7 @@ fillOneDataElem: function {
 }
 
 # the label of data-block element `n`.
-dataElemLabel: function {ast: Ast.view n: Node.view} out String is {
+dataElemLabel: function {ast: Ast.view n: astnode} out String is {
     match (
         n
     ) case namedoperation then {
@@ -22246,7 +22260,7 @@ scanNeedsCall: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     unitName: StringView
-    n: zast.CallData.view
+    n: zast.callrow.view
 } is {
     mn0: dottedChildText :ast n: (ast.nodes.get i: n.callable.u64)
     cbi0: dottedBaseAtomId :ast n: (ast.nodes.get i: n.callable.u64)
@@ -22314,7 +22328,7 @@ scanNeedsDotted: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     unitName: StringView
-    n: zast.DottedPathData.view
+    n: zast.dottedpathrow.view
 } is {
     pdm: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
     if pdm.stringView == "parseF64" then needsAddM :ctx uname: "system" memb: "parseF64"
@@ -22362,7 +22376,7 @@ scanNeeds: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     unitName: StringView
-    n: Node.view
+    n: astnode
 } is {
     match (
         n
@@ -22811,7 +22825,7 @@ emitFnMonoInstances: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     templateFnId: u64
-    templateFnOp: Node.view
+    templateFnOp: astnode
     declOnly: bool
     buf: String.borrow
 } is {
@@ -23345,7 +23359,7 @@ emitFnBody: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    op: Node.view
+    op: astnode
     fid: ztypes.tid
     buf: String.borrow
 } is {
@@ -23520,7 +23534,7 @@ collectUnitLiteralsIn: function {
 # collect a function's string literals for the literal pool.
 collectFnLiterals: function {
     ast: Ast.view
-    n: Node.view
+    n: astnode
     ids: ListVal u64
     texts: List String
 } is {
@@ -26523,7 +26537,7 @@ emitNetClasses: function {ctx: Ctx buf: String.borrow} is {
 # collection element is embedded BY VALUE by the List/ListView mono, so its
 # struct must precede the mono. Emit it here (guarded by ctx.emittedUserTypes);
 # its methods still emit later in emitRecordDefsIn. Covers main-unit AND dep
-# file-unit element types (the cross-unit Node union returned by value from a
+# file-unit element types (the cross-unit astnode union returned by value from a
 # ListView_Node mono); monos / generics / typedefs and system-unit types (which
 # have their own dedicated sweeps above) are skipped.
 maybePreEmitElem: function {
@@ -26631,8 +26645,8 @@ isFwdDeclared: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
 
 # emitMainFwdDecls -- forward-declare every RECORD + UNION + CLASS type whose
 # body this emitter writes (named-struct typedef + a destructor prototype)
-# before the monos. The AST is a self-referential Node union: Node_destroy +
-# the Option/List monos + the print functions reference Node and the arm *Data
+# before the monos. The AST is a self-referential astnode union: Node_destroy +
+# the Option/List monos + the print functions reference astnode and the arm *Data
 # structs by pointer (or call their destroys) ahead of the bodies, so without
 # forward declarations they are undeclared. The bodies then emit as plain
 # `struct X_t { ... };` via isFwdDeclared.
@@ -28375,7 +28389,7 @@ emitDefMethods: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    bm: Node.view
+    bm: astnode
     declOnly: bool
     buf: String.borrow
 } is {
@@ -29211,7 +29225,7 @@ fileFromArgCoerce: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     av: StringView
 } out String is {
     arx569: u64
@@ -29256,7 +29270,7 @@ emitFileMethodCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
     if bn.length == 0 then return "".string
@@ -29334,7 +29348,7 @@ emitFileMethodCall: function {
 }
 
 # ioCreateWrapper -- the wrapper name X of an `io.X.create` callable, else "".
-ioCreateWrapper: function {ast: Ast.view n: Node.view} outx StringView is {
+ioCreateWrapper: function {ast: Ast.view n: astnode} outx StringView is {
     if n.dottedpath then {
         ccn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
         if ccn.stringView == "create" then {
@@ -29351,7 +29365,7 @@ ioCreateWrapper: function {ast: Ast.view n: Node.view} outx StringView is {
 # arrives as a BARE atom and is its own base. Without the fallback the emitter
 # builds `z_t0__create(&)` -- an unresolved type and an empty expression -- which
 # typechecks clean and dies at gcc.
-argBaseAtom: function {ast: Ast.view n: Node.view} outx StringView is {
+argBaseAtom: function {ast: Ast.view n: astnode} outx StringView is {
     b: dottedBaseAtom :ast :n
     if b.length > 0 then return b
     t: atomTextOf :ast :n
@@ -29366,7 +29380,7 @@ argBaseAtom: function {ast: Ast.view n: Node.view} outx StringView is {
 
 # the node an argument's value ultimately comes from, unwrapping the
 # wrappers between
-argBaseNodeId: function {ast: Ast.view n: Node.view} out u32 is {
+argBaseNodeId: function {ast: Ast.view n: astnode} out u32 is {
     i: dottedBaseNodeId :ast :n
     if i > 0 then return i.u32.orPanic
     a: (atomNodeId :n).u32.orPanic
@@ -29383,7 +29397,7 @@ wrapperCreateArg: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     label: StringView
     ptid: ztypes.tid
 } out String is {
@@ -29447,7 +29461,7 @@ emitIoWrapperCreate: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     wn: ioCreateWrapper :ast n: (ast.nodes.get i: call.callable.u64)
     if wn.length == 0 then return "".string
@@ -29574,7 +29588,7 @@ noArgNativeRhs: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     unitName: StringView
-    n: Node.view
+    n: astnode
 } out bool is {
     match (
         n
@@ -29615,7 +29629,7 @@ lowerNativeArg: function {
     fid: ztypes.tid
     pname: StringView
     pid: ztypes.tid
-    op: Node.view
+    op: astnode
 } out String is {
     isViewP: false
     if pid == ctx.svTid then isViewP = true
@@ -29683,7 +29697,7 @@ emitNativeArg: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
     fid: ztypes.tid
     pname: StringView
     pid: ztypes.tid
@@ -29741,7 +29755,7 @@ emitNativeFreeFnCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     un: String
     mn: ""
@@ -29848,7 +29862,7 @@ emitNativeFreeFnCall: function {
 }
 
 # cliCreateClass -- the class name X of a `cli.X.create` callable, else "".
-cliCreateClass: function {ast: Ast.view n: Node.view} outx StringView is {
+cliCreateClass: function {ast: Ast.view n: astnode} outx StringView is {
     if n.dottedpath then {
         ccn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
         if ccn.stringView == "create" then {
@@ -29865,7 +29879,7 @@ emitCliSpecCreate: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     cn: cliCreateClass :ast n: (ast.nodes.get i: call.callable.u64)
     if cn.length == 0 then return "".string
@@ -29929,7 +29943,7 @@ emitResultCombinator: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     isP: false
@@ -29984,7 +29998,7 @@ emitParsedMethodCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
     if bn.length == 0 then return "".string
@@ -30020,7 +30034,7 @@ emitUserIterCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
     if bn.length == 0 then return "".string
@@ -30210,7 +30224,7 @@ emitBinopVtableCall: function {
 
 # vtableCallC -- the dispatch itself: `recv.vtable->slot(dataArg, args...)`.
 # Four plain values and a ready-made argument tail, so every call form can
-# reach it. emitProtocolDispatch builds a tail out of a CallData's arguments; a
+# reach it. emitProtocolDispatch builds a tail out of a callrow's arguments; a
 # binop's one operand is already emitted by the time emitBinop runs, so it
 # passes that. A binop is the call form for a one-argument method and it now
 # dispatches through the same three spellings the slot, the wrapper and the
@@ -30232,7 +30246,7 @@ emitProtocolDispatch: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if mn.length == 0 then return "".string
@@ -30386,7 +30400,7 @@ emitProtocolCreateCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.CallData.view
+    call: zast.callrow.view
 } out String is {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
     if bn.length == 0 then return "".string
@@ -30610,7 +30624,7 @@ emitDataBlock: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     name: StringView
-    op: Node.view
+    op: astnode
     buf: String.borrow
 } is {
     match (
@@ -30662,7 +30676,7 @@ emitDataElem: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
 } out String is {
     match (
         n
@@ -30869,31 +30883,31 @@ emitOneVariant: function {
 
 # objectDefIsKind -- the node defines an object of that kind. The four
 # predicates below differ in the kind alone.
-objectDefIsKind: function {n: Node.view kind: zast.objectkind} out bool is {
+objectDefIsKind: function {n: astnode kind: zast.objectkind} out bool is {
     if n.objectdef then return n.kind == kind
     return false
 }
 
 # true when `n` is a class definition. A generator is one: its `is` fields are
 # a class's fields and its `call` is a method, so it emits through the same path.
-isClassDef: function {n: Node.view} out bool is {
+isClassDef: function {n: astnode} out bool is {
     if (objectDefIsKind :n kind: zast.objectkind.classDef) then return true
     return (objectDefIsKind :n kind: zast.objectkind.generatorDef)
 }
 
 # true when `n` is a record definition.
-isRecordDef: function {n: Node.view} out bool is {
+isRecordDef: function {n: astnode} out bool is {
     return (objectDefIsKind :n kind: zast.objectkind.recordDef)
 }
 
 # true when `n` is a variant definition.
-isVariantDef: function {n: Node.view} out bool is {
+isVariantDef: function {n: astnode} out bool is {
     return (objectDefIsKind :n kind: zast.objectkind.variantDef)
 }
 
 # whether a node defines a union, which decides whether its arms may carry
 # reftypes
-isUnionDef: function {n: Node.view} out bool is {
+isUnionDef: function {n: astnode} out bool is {
     return (objectDefIsKind :n kind: zast.objectkind.unionDef)
 }
 
@@ -31205,7 +31219,7 @@ emitAsConsts: function {
     ctx: Ctx
     tid: ztypes.tid
     name: StringView
-    op: Node.view
+    op: astnode
     buf: String.borrow
 } is {
     if op.objectdef then {
@@ -31261,7 +31275,7 @@ emitClassMonoMethods: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     tplId: ztypes.tid
-    op: Node.view
+    op: astnode
     declOnly: bool
     buf: String.borrow
 } is {
@@ -31419,7 +31433,7 @@ emitRecordMethods: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     tid: ztypes.tid
-    op: Node.view
+    op: astnode
     declOnly: bool
     buf: String.borrow
 } is {
@@ -31538,12 +31552,12 @@ emitRecordMethods: function {
 # nodeYieldCount -- the number of `yield` expressions in a subtree (yields do
 # not nest). Used to detect a generator `call` body and size its resume-state
 # switch.
-nodeYieldCount: function {ast: Ast.view n: Node.view} out u64 is {
+nodeYieldCount: function {ast: Ast.view n: astnode} out u64 is {
     return (zast.yieldCountOf :ast :n)
 }
 
 # fnYieldCount -- yields in a functiondef body (0 for a non-generator).
-fnYieldCount: function {ast: Ast.view op: Node.view} out u64 is {
+fnYieldCount: function {ast: Ast.view op: astnode} out u64 is {
     match (
         op
     ) case functiondef then {
@@ -31562,7 +31576,7 @@ setupGenCtx: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     mid: ztypes.tid
-    op: Node.view
+    op: astnode
 } out bool is {
     gyc: fnYieldCount :ast :op
     if gyc == 0 then {
@@ -31669,7 +31683,7 @@ emitGenEpilogue: function {ctx: Ctx.view buf: String.borrow} is {
 }
 
 # isYieldNode -- the node (through expression wrappers) is a yield expression.
-isYieldNode: function {ast: Ast.view n: Node.view} out bool is {
+isYieldNode: function {ast: Ast.view n: astnode} out bool is {
     match (
         n
     ) case expression then {
@@ -31689,7 +31703,7 @@ emitYieldFromNode: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: Node.view
+    n: astnode
     ind: StringView
     tmp: TmpCtr.view
     buf: String.borrow
@@ -31711,7 +31725,7 @@ emitExprFormYield: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    value: Node.view
+    value: astnode
     aid: u64
     nm: StringView
     nmVid: ztypes.vid
@@ -31778,7 +31792,7 @@ emitExprFormYield: function {
 # body, a nested definition. A yield there is a statement in its own right and
 # emitStmt reaches it on that path; hoisting it would run the suspension
 # whether or not the branch is taken.
-hoistStopsHere: function {n: Node.view} out bool is {
+hoistStopsHere: function {n: astnode} out bool is {
     match (
         n
     ) case statement then {
@@ -31978,7 +31992,7 @@ methodReturnC: function {
     ctx: Ctx
     mid: ztypes.tid
     thisTid: ztypes.tid
-    op: Node.view
+    op: astnode
 } out String is {
     ret: "void".string
     {
@@ -32075,7 +32089,7 @@ emitMethodParams: function {
     pnames: (List String).view
     pids: (ListVal u64).view
     pidsNm: (ListVal u64).view
-    op: Node.view
+    op: astnode
     params: String.borrow
 } is {
     pi: u64
@@ -32208,7 +32222,7 @@ emitOneMethod: function {
     ctx: Ctx
     mid: ztypes.tid
     thisTid: ztypes.tid
-    op: Node.view
+    op: astnode
     declOnly: bool
     buf: String.borrow
 } is {

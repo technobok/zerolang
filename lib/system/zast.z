@@ -1,5 +1,5 @@
 # Parsed-AST surface for the zerolang compiler: the object-definition kind
-# (objectkind), error codes (err), call classification (callkind), the Node
+# (objectkind), error codes (err), call classification (callkind), the astnode
 # union of all node kinds, and the id-linked node table (Ast) the parser
 # fills.
 
@@ -8,38 +8,40 @@
 public: unit {
     :nameid
     :nodeid
-    :AssignmentData
+    :assignmentrow
     :Ast
-    :AtomIdData
-    :AtomStringData
-    :BinOpData
-    :CallData
-    :CaseClauseData
-    :CaseData
-    :DataBlockData
-    :DoData
-    :DottedPathData
+    :atomidrow
+    :atomstringrow
+    :binoprow
+    :callrow
+    :caseclauserow
+    :caserow
+    :datablockrow
+    :dorow
+    :dottedpathrow
     :ErrorData
-    :ExpressionData
+    :errorrow
+    :errorDataOf
+    :expressionrow
     :FileSeg
-    :ForData
-    :FunctionData
-    :IfClauseData
-    :IfData
-    :LabelValueData
-    :NamedOperationData
-    :Node
-    :ObjectDefData
-    :ProgramData
-    :ReassignmentData
-    :StatementData
-    :StatementLineData
-    :StringChunkData
+    :forrow
+    :functionrow
+    :ifclauserow
+    :ifrow
+    :labelvaluerow
+    :namedoperationrow
+    :astnode
+    :objectdefrow
+    :programrow
+    :reassignmentrow
+    :statementrow
+    :statementlinerow
+    :stringchunkrow
     :StringPool
-    :SwapStmtData
-    :TypeOfExprData
-    :UnitData
-    :WithData
+    :swapstmtrow
+    :typeofexprrow
+    :unitrow
+    :withrow
     :callkind
     :callkindname
     :err
@@ -296,67 +298,67 @@ unitkind: variant {
 
 # The AST node, as a reftype tagged sum. The arm is the
 # discriminant; arm-payload carrier classes (declared below)
-# hold the per-arm data. No carrier holds a Node: every child
+# hold the per-arm data. No carrier holds a astnode: every child
 # reference is a nodeid or a list of them, so the tree is flat
 # and a row is reached only through the table.
-Node: union {
+astnode: variant {
     # a parse or check failure, kept IN the tree so a walk can carry on past it
-    error: ErrorData
+    error: errorrow
     # a bare name
-    atomid: AtomIdData
+    atomid: atomidrow
     # the `:Name` shorthand, whose value is the label itself
-    labelvalue: LabelValueData
+    labelvalue: labelvaluerow
     # one piece of a string literal: literal text, or an interpolation hole
-    stringchunk: StringChunkData
+    stringchunk: stringchunkrow
     # `lhs op rhs`, with no precedence -- left-associative as written
-    binop: BinOpData
+    binop: binoprow
     # a string literal, as its ordered chunks
-    atomstring: AtomStringData
+    atomstring: atomstringrow
     # `a.b`, before anything decides whether it calls
-    dottedpath: DottedPathData
+    dottedpath: dottedpathrow
     # a call with its arguments, each labelled
-    call: CallData
+    call: callrow
     # the type OF an expression, asked for rather than written
-    typeofexpr: TypeOfExprData
+    typeofexpr: typeofexprrow
     # a name bound to something -- the node that carries a label for everything
     # that has one
-    namedoperation: NamedOperationData
+    namedoperation: namedoperationrow
     # a literal sequence of elements
-    datablock: DataBlockData
+    datablock: datablockrow
     # a block of statements
-    statement: StatementData
+    statement: statementrow
     # one statement, wrapped because EOL is a statement boundary
-    statementline: StatementLineData
+    statementline: statementlinerow
     # a binding that DECLARES a name
-    assignment: AssignmentData
+    assignment: assignmentrow
     # a write to a name or path that already exists
-    reassignment: ReassignmentData
+    reassignment: reassignmentrow
     # an exchange of two values, neither left invalid in between
-    swapstmt: SwapStmtData
+    swapstmt: swapstmtrow
     # parentheses, kept because they are what overrides the EOL boundary
-    expression: ExpressionData
+    expression: expressionrow
     # an if with its clauses
-    ifexpr: IfData
+    ifexpr: ifrow
     # one if or else-if: conditions and the body they guard
-    ifclause: IfClauseData
+    ifclause: ifclauserow
     # a loop, in all its shapes
-    forexpr: ForData
+    forexpr: forrow
     # a block used for its value
-    doexpr: DoData
+    doexpr: dorow
     # a binding whose lock lasts exactly one block
-    withexpr: WithData
+    withexpr: withrow
     # a match over a subject
-    caseexpr: CaseData
+    caseexpr: caserow
     # one match arm
-    caseclause: CaseClauseData
+    caseclause: caseclauserow
     # a function or method definition
-    functiondef: FunctionData
+    functiondef: functionrow
     # a type definition, in any of the six kinds
-    objectdef: ObjectDefData
+    objectdef: objectdefrow
     # a unit, or one of the interface blocks inside one
-    unitdef: UnitData
+    unitdef: unitrow
     # the root, owning the tree
-    program: ProgramData
+    program: programrow
     # box-free parser placeholder: a reserved table slot carries this
     # arm (payload-less, no allocation) until intern moves the real
     # row in (see tableSet / zparser.nextId)
@@ -364,9 +366,9 @@ Node: union {
 }
 
 
-# Per-arm Node payload carriers. Each carries a synthetic nodeid
+# Per-arm astnode payload carriers. Each carries a synthetic nodeid
 # plus source position (line + column). The carriers are classes
-# because they hold reftype fields (String, Node, List); records
+# because they hold reftype fields (String, astnode, List); records
 # cannot hold reftypes.
 ErrorData: class {
     # this error node's own row in the node table
@@ -389,6 +391,49 @@ ErrorData: class {
     note: String
     # an optional suggested fix; empty when there is none
     hint: String
+}
+
+# errorrow -- the error ARM's payload: the same failure `ErrorData` describes,
+# with its three texts as pool ids. A variant arm is a valtype and a record may
+# not hold a String, so the tree's rows name their text. The checker's `errors`
+# list is a DIFFERENT use of the same facts and keeps `ErrorData`: its text is
+# owned, built by interpolation, and never worth interning.
+errorrow: record {
+    # this error node's own row in the node table
+    nodeid: nodeid
+    # the line this error node starts on
+    lineno: u32
+    # the column this error node starts at
+    colno: u32
+    # how many columns to underline beneath lineno/colno
+    width: u32
+    # which failure this is, so a caller can branch on the kind rather than on
+    # the text
+    err: err
+    # the sentence shown to the reader, interned
+    msg: nameid
+    # the file it happened in
+    fsno: zvfs.fsno
+    # an optional second line giving context; 0 when there is none
+    note: nameid
+    # an optional suggested fix; 0 when there is none
+    hint: nameid
+}
+
+# errorDataOf -- an error row rendered into the owned-text form every reporter
+# already takes, so a tree error and a checker diagnostic print through one path.
+errorDataOf: function {ast: Ast.view row: errorrow} out ErrorData is {
+    return (ErrorData
+        nodeid: row.nodeid
+        lineno: row.lineno
+        colno: row.colno
+        width: row.width
+        err: row.err
+        msg: (poolTextCopy pool: ast.names ref: row.msg)
+        fsno: row.fsno
+        note: (poolTextCopy pool: ast.names ref: row.note)
+        hint: (poolTextCopy pool: ast.names ref: row.hint)
+    )
 }
 
 # errCode -- the numeric E-code for an err variant.
@@ -609,7 +654,7 @@ explainText: function {code: u32} out String is {
 }
 
 # an atom node (a bare identifier reference): position + interned name id.
-AtomIdData: class {
+atomidrow: record {
     # this atom's own row in the node table
     nodeid: nodeid
     # the line this atom starts on
@@ -622,7 +667,7 @@ AtomIdData: class {
 }
 
 # a label-value node (a `name:`-shaped operand): position + interned name id.
-LabelValueData: class {
+labelvaluerow: record {
     # this label value's own row in the node table
     nodeid: nodeid
     # the line this label value starts on
@@ -635,7 +680,7 @@ LabelValueData: class {
 }
 
 # Interned-name row: the single owner of one distinct identifier's text.
-# AtomIdData.name / LabelValueData.name are Ast.names pool ids, so
+# atomidrow.name / labelvaluerow.name are Ast.names pool ids, so
 # every occurrence of an identifier shares one String (position = first
 # sight). The parser interns; synthesized atoms move into their
 # reserved slots via tableAdd.
@@ -723,7 +768,7 @@ names: data {
 Ast: class {
     # every node of every file, in one table. A node is addressed by its index,
     # which is what makes a nodeid a plain integer
-    nodes: (List Node)
+    nodes: (ListVal astnode)
     # the interned name pool the whole tree shares, so two spellings of one name
     # are one id
     names: StringPool
@@ -746,7 +791,7 @@ Ast: class {
     # sentinel row
     create: function {} out this is {
         a: (meta.create
-            nodes: (List Node)
+            nodes: (ListVal astnode)
             names: StringPool.create
             units: (ListVal u32)
             kids: (ListVal u32)
@@ -756,7 +801,7 @@ Ast: class {
         )
         # row 0 is the sentinel a node id of 0 addresses: the placeholder arm,
         # which every reader already treats as "nothing here"
-        a.nodes.append from: Node.placeholder
+        a.nodes.append from: astnode.placeholder
         # and row 0 of the child arena, so that no real span starts at 0
         a.kids.append from: 0.u32
         a.names.set s: "this"
@@ -1034,24 +1079,26 @@ StringPool: class {
 }
 
 # one chunk of an interpolated string -- literal text or an embedded expression, tagged by `chunkKind`.
-StringChunkData: class {
+stringchunkrow: record {
     # this string chunk's own row in the node table
     nodeid: nodeid
     # the line this string chunk starts on
     lineno: u32
     # the column this string chunk starts at
     colno: u32
-    # the literal bytes of this chunk, escapes already resolved
-    text: String
+    # the literal bytes of this chunk, escapes already resolved, interned. The
+    # lexer already put them in the pool; the row names them rather than owning
+    # a second copy
+    text: nameid
     # whether the chunk is literal text or an interpolation hole
     chunkKind: u8
 }
 
-# Binary-operation node payload: three Node children for the
+# Binary-operation node payload: three astnode children for the
 # left-hand operand, operator, and right-hand operand. Arm-
 # specific child-type constraints (e.g. operator must be an
 # AtomId) live in the typechecker.
-BinOpData: class {
+binoprow: record {
     # this binop's own row in the node table
     nodeid: nodeid
     # the line this binop starts on
@@ -1068,10 +1115,10 @@ BinOpData: class {
     rhs: nodeid
 }
 
-# Interpolated-string-literal payload: an ordered list of Node
+# Interpolated-string-literal payload: an ordered list of astnode
 # children representing the literal text chunks and embedded
 # interpolation expressions.
-AtomStringData: class {
+atomstringrow: record {
     # this interpolated string's own row in the node table
     nodeid: nodeid
     # the line this interpolated string starts on
@@ -1083,8 +1130,8 @@ AtomStringData: class {
 }
 
 # Dotted-path node payload: a parent path and a child selector,
-# both Node children (the child is an AtomId arm).
-DottedPathData: class {
+# both astnode children (the child is an AtomId arm).
+dottedpathrow: record {
     # this dotted path's own row in the node table
     nodeid: nodeid
     # the line this dotted path starts on
@@ -1100,7 +1147,7 @@ DottedPathData: class {
 
 # Call node payload: the callable path and an ordered list of
 # argument nodes (each a NamedOperation arm once that arm lands).
-CallData: class {
+callrow: record {
     # this call's own row in the node table
     nodeid: nodeid
     # the line this call starts on
@@ -1115,7 +1162,7 @@ CallData: class {
 
 # typeof-expression payload (compiler-synthesised): the operation
 # whose static type is taken.
-TypeOfExprData: class {
+typeofexprrow: record {
     # this typeof's own row in the node table
     nodeid: nodeid
     # the line this typeof starts on
@@ -1129,7 +1176,7 @@ TypeOfExprData: class {
 # Named-operation payload: an optional argument label plus the
 # operation value. Appears as a Call/Data argument; `name` is the
 # label's Ast.names pool id (0 = absent / positional).
-NamedOperationData: class {
+namedoperationrow: record {
     # this named operation's own row in the node table
     nodeid: nodeid
     # the line this named operation starts on
@@ -1146,7 +1193,7 @@ NamedOperationData: class {
 # Data-block payload: an ordered list of NamedOperation element
 # nodes and an optional `out <type-ref>` annotation that pins the
 # element type for the whole block.
-DataBlockData: class {
+datablockrow: record {
     # this data block's own row in the node table
     nodeid: nodeid
     # the line this data block starts on
@@ -1161,7 +1208,7 @@ DataBlockData: class {
 
 # Statement payload: an ordered list of StatementLine nodes — the
 # lines of a brace-delimited code block.
-StatementData: class {
+statementrow: record {
     # this statement block's own row in the node table
     nodeid: nodeid
     # the line this statement block starts on
@@ -1174,7 +1221,7 @@ StatementData: class {
 
 # StatementLine payload: one line of a block, wrapping exactly one of
 # assignment / reassignment / swapstmt / expression.
-StatementLineData: class {
+statementlinerow: record {
     # this statement line's own row in the node table
     nodeid: nodeid
     # the line this statement line starts on
@@ -1188,7 +1235,7 @@ StatementLineData: class {
 
 # Assignment payload: bind a new local (an interned name id) to the
 # value of an expression node.
-AssignmentData: class {
+assignmentrow: record {
     # this binding's own row in the node table
     nodeid: nodeid
     # the line this binding starts on
@@ -1204,7 +1251,7 @@ AssignmentData: class {
 
 # Reassignment payload: update the target path with the value of an
 # expression node.
-ReassignmentData: class {
+reassignmentrow: record {
     # this reassignment's own row in the node table
     nodeid: nodeid
     # the line this reassignment starts on
@@ -1219,7 +1266,7 @@ ReassignmentData: class {
 
 # Swap payload: exchange the contents of two owned reference paths.
 # (Arm named swapstmt because `swap` is a keyword.)
-SwapStmtData: class {
+swapstmtrow: record {
     # this swap's own row in the node table
     nodeid: nodeid
     # the line this swap starts on
@@ -1235,7 +1282,7 @@ SwapStmtData: class {
 
 # Expression payload: wraps the single operation/control-flow node
 # that forms an expression.
-ExpressionData: class {
+expressionrow: record {
     # this parenthesised expression's own row in the node table
     nodeid: nodeid
     # the line this parenthesised expression starts on
@@ -1248,7 +1295,7 @@ ExpressionData: class {
 }
 
 # If payload: ordered if/when clauses plus an optional else statement.
-IfData: class {
+ifrow: record {
     # this if's own row in the node table
     nodeid: nodeid
     # the line this if starts on
@@ -1263,7 +1310,7 @@ IfData: class {
 
 # IfClause payload: the clause conditions (each a namedoperation arm;
 # unnamed = positional when-condition) and the statement to run.
-IfClauseData: class {
+ifclauserow: record {
     # this if clause's own row in the node table
     nodeid: nodeid
     # the line this if clause starts on
@@ -1279,7 +1326,7 @@ IfClauseData: class {
 # For payload: loop conditions (namedoperation arms; named = binding,
 # unnamed = while-condition), an optional loop body, and the bool
 # postconditions re-checked each iteration.
-ForData: class {
+forrow: record {
     # this for's own row in the node table
     nodeid: nodeid
     # the line this for starts on
@@ -1295,7 +1342,7 @@ ForData: class {
 }
 
 # Do payload: a statement block evaluated as an expression.
-DoData: class {
+dorow: record {
     # this do's own row in the node table
     nodeid: nodeid
     # the line this do starts on
@@ -1308,7 +1355,7 @@ DoData: class {
 
 # With payload: a scoped binding (an interned name id), its value, and
 # the body expression evaluated under that binding.
-WithData: class {
+withrow: record {
     # this with's own row in the node table
     nodeid: nodeid
     # the line this with starts on
@@ -1325,7 +1372,7 @@ WithData: class {
 
 # Case payload: the subject operation, the ordered match clauses, and
 # an optional else statement.
-CaseData: class {
+caserow: record {
     # this match's own row in the node table
     nodeid: nodeid
     # the line this match starts on
@@ -1343,7 +1390,7 @@ CaseData: class {
 
 # CaseClause payload: the binding name (an interned name id), the AtomId
 # arm being matched, and the statement to run.
-CaseClauseData: class {
+caseclauserow: record {
     # this match arm's own row in the node table
     nodeid: nodeid
     # the line this match arm starts on
@@ -1362,7 +1409,7 @@ CaseClauseData: class {
 # arms), an optional body statement (none for a spec), the native flag,
 # and the `as`-block members (namedoperation arms). Member maps are
 # ordered name+node lists, not keyed Maps.
-FunctionData: class {
+functionrow: record {
     # this function definition's own row in the node table
     nodeid: nodeid
     # the line this function definition starts on
@@ -1389,7 +1436,7 @@ FunctionData: class {
 # object this is (one of objectkind RECORD/CLASS/UNION/VARIANT/
 # PROTOCOL/FACET). `isItems` are the `is`-block members and `asItems`
 # the `as`-block members, each a namedoperation arm.
-ObjectDefData: class {
+objectdefrow: record {
     # this type definition's own row in the node table
     nodeid: nodeid
     # the line this type definition starts on
@@ -1409,7 +1456,7 @@ ObjectDefData: class {
 
 # Unit payload: `kind` is how the unit was written and what it means;
 # `body` holds its top-level definitions as namedoperation arms.
-UnitData: class {
+unitrow: record {
     # this unit's own row in the node table
     nodeid: nodeid
     # the line this unit starts on
@@ -1425,7 +1472,7 @@ UnitData: class {
 
 # Program payload (parse root): the file-level units as namedoperation
 # arms keyed by unit name, plus the entry unit's name.
-ProgramData: class {
+programrow: record {
     # this program's own row in the node table
     nodeid: nodeid
     # the line this program starts on
@@ -1641,7 +1688,7 @@ nodepos: record {
 }
 
 # Position of any node; (0, 0) for the placeholder.
-posOf: function {n: Node.view} out nodepos is {
+posOf: function {n: astnode} out nodepos is {
     match (
         n
     ) case error then {
@@ -1767,7 +1814,7 @@ printKidsWith: function {ast: Ast.view span: kidspan withId: bool} is {
     }
 }
 
-# Print one line per Node in the form
+# Print one line per astnode in the form
 #   "<nodeid>: <arm> @<lineno>:<colno>"
 # Recursive arms (binop, atomstring) descend into their children.
 # printNodeWith -- one AST node in the dump format the goldens pin. `withId`
@@ -1776,13 +1823,14 @@ printKidsWith: function {ast: Ast.view span: kidspan withId: bool} is {
 # all, so a renumbered tree still matches. The namedoperation line is the one
 # arm that differs beyond the prefix: it has no position in the canonical
 # form, the wrapper's position being its child's.
-printNodeWith: function {ast: Ast.view n: Node.view withId: bool} is {
+printNodeWith: function {ast: Ast.view n: astnode withId: bool} is {
     idp: String
     if withId then idp = "\{nodeIdOf :n}: "
     match (
         n
     ) case error then {
-        print "\{idp}error @\{n.lineno}:\{n.colno} err=\{errname n.err} msg=\{n.msg}"
+        emsg9: poolTextAt pool: ast.names ref: n.msg
+        print "\{idp}error @\{n.lineno}:\{n.colno} err=\{errname n.err} msg=\{emsg9}"
     } case placeholder then {
         print "placeholder"
     } case atomid then {
@@ -1792,7 +1840,8 @@ printNodeWith: function {ast: Ast.view n: Node.view withId: bool} is {
         lnm: nameTextCopy :ast ref: n.name
         print "\{idp}labelvalue @\{n.lineno}:\{n.colno} name=\{lnm}"
     } case stringchunk then {
-        print "\{idp}stringchunk @\{n.lineno}:\{n.colno} text=\{n.text} chunkKind=\{n.chunkKind}"
+        ctx9: poolTextAt pool: ast.names ref: n.text
+        print "\{idp}stringchunk @\{n.lineno}:\{n.colno} text=\{ctx9} chunkKind=\{n.chunkKind}"
     } case binop then {
         print "\{idp}binop @\{n.lineno}:\{n.colno}"
         printNodeWith :ast :withId n: (ast.nodes.get i: n.lhs.u64)
@@ -1916,7 +1965,7 @@ printNodeWith: function {ast: Ast.view n: Node.view withId: bool} is {
 }
 
 # printNode -- the full dump, every line carrying the node's id.
-printNode: function {ast: Ast.view n: Node.view} is {
+printNode: function {ast: Ast.view n: astnode} is {
     printNodeWith :ast :n withId: true
 }
 
@@ -1931,7 +1980,7 @@ printOptChildWith: function {ast: Ast.view id: u32 withId: bool} is {
 }
 
 # print one AST node in the canonical dump format.
-printNodeCanonical: function {ast: Ast.view n: Node.view} is {
+printNodeCanonical: function {ast: Ast.view n: astnode} is {
     printNodeWith :ast :n withId: false
 }
 
@@ -1969,13 +2018,13 @@ printProgramCanonicalRoot: function {ast: Ast.view} is {
 # node in.
 tableReserve: function {ast: Ast} out nodeid is {
     id: (nodeid.create from: (ast.nodes.length).u32.orPanic)
-    ast.nodes.append from: Node.placeholder
+    ast.nodes.append from: astnode.placeholder
     return id
 }
 
 # tableSet -- move a converted parent's child into its reserved slot
 # (the displaced placeholder is destroyed here).
-tableSet: function {ast: Ast id: u32 child: Node.take} is {
+tableSet: function {ast: Ast id: u32 child: astnode} is {
     ast.nodes.set i: id.u64 val: child
 }
 
@@ -1985,7 +2034,7 @@ tableSet: function {ast: Ast id: u32 child: Node.take} is {
 # own arm for that child and takes the rest from here. Absent optional
 # children (an if without else, a function without a body) are omitted, and a
 # program's children are the program's units.
-childIds: function {ast: Ast.view n: Node.view} out (ListVal u32) is {
+childIds: function {ast: Ast.view n: astnode} out (ListVal u32) is {
     acc: (ListVal u32)
     childIdsInto :ast :n :acc
     return acc
@@ -1995,7 +2044,7 @@ childIds: function {ast: Ast.view n: Node.view} out (ListVal u32) is {
 # fresh one. A walk that recurses through childIds allocates a list per NODE;
 # driving the same walk from one list it both reads and appends to allocates
 # one per WALK. The list is not cleared, so it doubles as the walk's worklist.
-childIdsInto: function {ast: Ast.view n: Node.view acc: ListVal u32} is {
+childIdsInto: function {ast: Ast.view n: astnode acc: ListVal u32} is {
     match (
         n
     ) case binop then {
@@ -2261,7 +2310,7 @@ yieldCallOperandAt: function {ast: Ast.view nid: nodeid} out nodeid is {
 # A nested function's yields belong to that function, so the walk stops there.
 # Everything else is reached through childIds, which is what lets it see a
 # yield nested inside another expression.
-yieldCountOf: function {ast: Ast.view n: Node.view} out u64 is {
+yieldCountOf: function {ast: Ast.view n: astnode} out u64 is {
     if n.functiondef then return 0
     c: u64
     if n.call then {
@@ -2314,7 +2363,7 @@ yieldCountIn: function {ast: Ast.view nid: nodeid} out u64 is {
 # It takes the NODE for the same reason `yieldCountOf` does: lowering asks about
 # a body it has just minted and not yet placed in the table. There is no id
 # form, because the worklist below reaches the children itself.
-suspendingForCountOf: function {ast: Ast.view n: Node.view} out u64 is {
+suspendingForCountOf: function {ast: Ast.view n: astnode} out u64 is {
     if n.functiondef then return 0
     c: u64
     if n.forexpr then {
@@ -2412,7 +2461,7 @@ appendOptId: function {acc: ListVal u32 id: nodeid} is {
 }
 
 # nodeIdOf -- a node's own id (any arm).
-nodeIdOf: function {n: Node.view} out nodeid is {
+nodeIdOf: function {n: astnode} out nodeid is {
     zn: nodeid
     match (
         n
@@ -2478,7 +2527,7 @@ nodeIdOf: function {n: Node.view} out nodeid is {
 }
 
 # tableAdd -- move a finished node into its reserved slot; returns its id.
-tableAdd: function {ast: Ast n: Node.take} out nodeid is {
+tableAdd: function {ast: Ast n: astnode} out nodeid is {
     id: nodeIdOf :n
     tableSet :ast :id child: n
     return id
@@ -2486,8 +2535,8 @@ tableAdd: function {ast: Ast n: Node.take} out nodeid is {
 
 # tableTake -- swap a row out of the table (a placeholder goes back in);
 # used to propagate an error node up out of a converted list.
-tableTake: function {ast: Ast id: u32} out Node is {
-    return (ast.nodes.set i: id.u64 val: Node.placeholder)
+tableTake: function {ast: Ast id: u32} out astnode is {
+    return (ast.nodes.set i: id.u64 val: astnode.placeholder)
 }
 
 # isErrorAt -- the node with id `id` is an error arm.
@@ -2497,8 +2546,8 @@ isErrorAt: function {ast: Ast.view id: u32} out bool is {
     return false
 }
 
-# armName -- the name of `n`'s arm, as spelled in the Node union.
-armName: function {n: Node.view} out StringView is {
+# armName -- the name of `n`'s arm, as spelled in the astnode union.
+armName: function {n: astnode} out StringView is {
     match (
         n
     ) case error then {
