@@ -2970,32 +2970,44 @@ refAnnotation: function {
     }
 }
 
-# navAnswer -- definition (1), hover (2), references (3) from the
-# last-good snapshot.
-navAnswer: function {
+# navhit -- what navResolve found under the cursor: the span row it landed on,
+# and the target that row resolves to. An absent option means the cursor sat on
+# nothing and every mode answers null. The row's NAME is not a field because a
+# record holds no reftype; the caller reads it from the Spans by `idx`.
+navhit: record {
+    # the span row's index, which is also its index in the Spans' name list
+    idx: u64
+    # the row kind that won the hit test (1 use, 2 member, 3 binding, 6
+    # declaration, 7 operator)
+    kind: u8
+    # the hit span's width in columns, which a Location needs
+    width: u32
+    # the node the row belongs to
+    nodeid: u64
+    # the variable the reference resolved to, zero when it is not one
+    vid: ztypes.vid
+    # the type the reference resolved to, zero when it is not one
+    tid: u64
+    # the owner type of a member hit, zero when it is not one
+    owner: u64
+    # the Decl the reference resolved to; a re-export keeps its own
+    declId: ztypes.declid
+    # set when the name denotes a UNIT rather than anything inside one
+    unitFsno: zvfs.fsno
+}
+
+# navResolve -- hit-test a cursor against the span index and resolve what it
+# landed on. The three per-mode answers below all start here, so the resolution
+# rules live in one place and cannot drift between definition, hover and
+# references.
+navResolve: function {
     snap: zcheck.CheckResult
+    sp: Spans.view
     docRel: StringView
-    docUri: StringView
     srcDir: StringView
-    systemDir: StringView
-    docText: StringView
-    line0: i64
-    ch: i64
-    utf32: bool
-    mode: u8
-} out Value is {
-    l1: line0 + 1
-    l1u: l1.u32.orPanic
-    lt: docLine text: docText lineno: l1u
-    cp1: cpColOf lineText: lt.stringView :ch :utf32
-    sp: (Spans
-        rows: (ListVal spanrow)
-        names: (List String)
-        pos: (IdMapV u64 v: u64)
-        ranges: (ListVal rangerow)
-        lastPos: 0
-    )
-    sp.walkProgram prog: snap.prog
+    l1u: u32
+    cp1: u32
+} out (optionval navhit) is {
     bestIdx: -1
     bestKind: u8
     nr: sp.rows.length
@@ -3023,10 +3035,10 @@ navAnswer: function {
         }
         ri = ri + 1
     }
-    if bestIdx < 0 then return Value.nul
+    if bestIdx < 0 then return (optionval.none navhit)
     bi: bestIdx.u64.orPanic
     hit: sp.rows.get i: bi
-    hname: (sp.names.get i: bi).copy
+    hnm: sp.names.get i: bi
     w: hit.colHi - hit.colLo
     hnid: hit.nodeid.u64
 
@@ -3081,7 +3093,7 @@ navAnswer: function {
     # stamped with the type that pinned it and never wore a literal one, so the
     # fold pass had nothing to record. Its lexeme is the only tell left.
     if bestKind == 1 when refDeclId.isZero then {
-        if (ztypecheck.isNumericLiteralName name: hname.stringView) then {
+        if (ztypecheck.isNumericLiteralName name: hnm.stringView) then {
             refDeclId = (surfaceDeclOfType
                 o: snap.st
                 prog: snap.prog
@@ -3094,244 +3106,313 @@ navAnswer: function {
     }
 
     unitFsno: zvfs.fsno
-    if refVid.isZero when refTid == 0 then unitFsno = unitFsnoByName :snap name: hname.stringView
+    if refVid.isZero when refTid == 0 then unitFsno = unitFsnoByName :snap name: hnm.stringView
+    found: (navhit
+        idx: bi
+        kind: bestKind
+        width: w
+        nodeid: hnid
+        vid: refVid
+        tid: refTid
+        owner: refOwner
+        declId: refDeclId
+        :unitFsno
+    )
+    return (optionval.some found)
+}
 
-    if mode == 2 then {
-        if unitFsno.u64 > 0 then {
-            ub: hname.copy
-            ub.append ": unit"
-            ugs: unitGenericSuffix prog: snap.prog name: hname.stringView
-            ub.append ugs
-            udoc: unitDocComment :snap fsno: unitFsno
-            return (hoverMarkdown code: ub.stringView doc: udoc.stringView)
-        }
-        tnid: hnid
-        t: nodeTypeAt o: snap.st nid: tnid
-        # a callable / unit-member auto-calls to its return type in value
-        # position; prefer its stamped def tid so a function hovers as its
-        # signature rather than the return value's type.
-        ud: useUnitDef o: snap.st nid: tnid
-        sigTid: t
-        if ud > 0 then sigTid = ud
-        # a generic call's callable carries the TEMPLATE's declaration; the
-        # instance the call resolved to is the stamp, and that is the
-        # signature worth showing
-        if (isInstanceOfOpt o: snap.st tid: t tpl: ud) then sigTid = t
-        # a hit only the Decl layer resolves (a public-interface entry)
-        # carries no node stamps; its Decl's type is the signature
-        if sigTid == 0 then sigTid = refTid
-        # an operator's node stamp is the binop's RESULT type; the signature
-        # worth showing is the method it resolved to
-        if bestKind == 7 then sigTid = refTid
-        body: (fnSigTextOpt
-            vfs: snap.vfs
-            prog: snap.prog
+# genericParamHoverCard -- the card for a hit on a generic PARAMETER, or nul
+# when the hit is not one. A generic parameter answers nothing through the type
+# fallbacks -- its Decl has no type id and its node no stamp -- so it gets its
+# own card. Never for a member row: the `.generic` selector shares the
+# declaration's node id, and a card there would sit on a word that is not the
+# parameter.
+genericParamHoverCard: function {snap: zcheck.CheckResult hit: navhit} out Value is {
+    if hit.kind == 2 then return Value.nul
+    gcard: genericParamCard o: snap.st prog: snap.prog nid: hit.nodeid
+    if gcard.length == 0 then return Value.nul
+    gdoc: String
+    gown: genericParamOwner o: snap.st prog: snap.prog nid: hit.nodeid
+    if gown.length > 0 then {
+        gdoc.append "generic parameter of `"
+        gdoc.append gown
+        gdoc.appendByte b: 96
+    }
+    return (hoverMarkdown code: gcard.stringView doc: gdoc.stringView)
+}
+
+# hoverTypeFence -- the code-fence text for a hit that has no signature: the
+# type's kind when the registry knows one, otherwise `owner.name: type` with the
+# reference's ownership annotation. "" when nothing can be said, which is the
+# caller's signal to answer null.
+hoverTypeFence: function {
+    snap: zcheck.CheckResult
+    hit: navhit
+    hname: String
+    # the node's own stamped type, which the kind fallback does not use
+    t: u64
+} out String is {
+    tk: typeKindTextOpt o: snap.st tid: (ztypes.tid.create from: hit.tid.u64)
+    if tk.length > 0 then {
+        kindFence: displayTypeNameOfOpt o: snap.st tid: (ztypes.tid.create from: hit.tid.u64)
+        kindFence.append ": "
+        kindFence.append tk
+        return kindFence
+    }
+    if t == 0 then return "".string
+    tn: displayTypeNameOfOpt o: snap.st tid: (ztypes.tid.create from: t.u64)
+    if tn.length == 0 then return "".string
+    fence: String
+    if hit.owner > 0 then {
+        own: (displayTypeNameOfOpt
             o: snap.st
-            tid: (ztypes.tid.create from: sigTid.u64)
-            name: hname.stringView
+            tid: (ztypes.tid.create from: hit.owner.u64)
         )
-        if body.length == 0 then {
-            # a generic parameter answers nothing through any fallback below --
-            # its Decl has no type id and its node no stamp -- so it gets its
-            # own card. Never for a member row: the `.generic` selector shares
-            # the declaration's node id, and a card there would sit on a word
-            # that is not the parameter.
-            if bestKind != 2 then {
-                gcard: genericParamCard o: snap.st prog: snap.prog nid: hnid
-                if gcard.length > 0 then {
-                    gdoc: String
-                    gown: genericParamOwner o: snap.st prog: snap.prog nid: hnid
-                    if gown.length > 0 then {
-                        gdoc.append "generic parameter of `"
-                        gdoc.append gown
-                        gdoc.appendByte b: 96
+        if own.length > 0 then {
+            fence.append own
+            fence.appendByte b: 46
+        }
+    }
+    fence.append hname
+    fence.append ": "
+    fence.append tn
+    annot: refAnnotation prog: snap.prog o: snap.st vid: hit.vid nid: hit.nodeid
+    if annot.length > 0 then {
+        fence.append "  # "
+        fence.append annot
+    }
+    return fence
+}
+
+# navHoverAnswer -- the hover card for a resolved hit: a code fence holding the
+# signature or the type, and the doc block above the definition it names.
+navHoverAnswer: function {
+    snap: zcheck.CheckResult
+    sp: Spans.view
+    hit: navhit
+    hname: String
+} out Value is {
+    if hit.unitFsno.u64 > 0 then {
+        ub: hname.copy
+        ub.append ": unit"
+        ugs: unitGenericSuffix prog: snap.prog name: hname.stringView
+        ub.append ugs
+        udoc: unitDocComment :snap fsno: hit.unitFsno
+        return (hoverMarkdown code: ub.stringView doc: udoc.stringView)
+    }
+    tnid: hit.nodeid
+    t: nodeTypeAt o: snap.st nid: tnid
+    # a callable / unit-member auto-calls to its return type in value
+    # position; prefer its stamped def tid so a function hovers as its
+    # signature rather than the return value's type.
+    ud: useUnitDef o: snap.st nid: tnid
+    sigTid: t
+    if ud > 0 then sigTid = ud
+    # a generic call's callable carries the TEMPLATE's declaration; the
+    # instance the call resolved to is the stamp, and that is the
+    # signature worth showing
+    if (isInstanceOfOpt o: snap.st tid: t tpl: ud) then sigTid = t
+    # a hit only the Decl layer resolves (a public-interface entry)
+    # carries no node stamps; its Decl's type is the signature
+    if sigTid == 0 then sigTid = hit.tid
+    # an operator's node stamp is the binop's RESULT type; the signature
+    # worth showing is the method it resolved to
+    if hit.kind == 7 then sigTid = hit.tid
+    body: (fnSigTextOpt
+        vfs: snap.vfs
+        prog: snap.prog
+        o: snap.st
+        tid: (ztypes.tid.create from: sigTid.u64)
+        name: hname.stringView
+    )
+    if body.length == 0 then {
+        gc: genericParamHoverCard :snap :hit
+        if (gc.nul) == false then return gc
+        tf: hoverTypeFence :snap :hit :hname :t
+        if tf.length == 0 then return Value.nul
+        body.append tf
+    }
+    docBody: String
+    # append the `#` doc block above the definition, if any (cross-file
+    # ok). The referenced surface Decl wins (a bare `i64` reads core's
+    # re-export line); the canonical def node is the doc fallback.
+    legacyDnd: (defNodeOf
+        o: snap.st
+        prog: snap.prog
+        refVid: hit.vid
+        refTid: hit.tid
+        refOwner: hit.owner
+        member: hname.stringView
+    )
+    dnd: declNodeOf o: snap.st declId: hit.declId
+    if dnd == 0 then dnd = legacyDnd
+    if dnd > 0 then {
+        dfs: zcheck.fsnoFor r: snap nodeid: dnd.u32.orPanic
+        dpg: sp.pos.get key: dnd
+        match (
+            dpg
+        ) case some then {
+            dln: (dpg / 1048576).u32.orPanic
+            if dfs > 0 when dln > 1 then {
+                doc: docCommentForNode :snap fsno: dfs defLine: dln
+                if doc.length > 0 then docBody = doc
+                if hit.owner > 0 then {
+                    tc: trailingDocOf vfs: snap.vfs fsno: dfs line1: dln
+                    if tc.length > 0 then {
+                        body.append "  # "
+                        body.append tc
                     }
-                    return (hoverMarkdown code: gcard.stringView doc: gdoc.stringView)
                 }
             }
-            tk: typeKindTextOpt o: snap.st tid: (ztypes.tid.create from: refTid.u64)
-            if tk.length > 0 then {
-                body = displayTypeNameOfOpt o: snap.st tid: (ztypes.tid.create from: refTid.u64)
-                body.append ": "
-                body.append tk
-            } else {
-                if t == 0 then return Value.nul
-                tn: displayTypeNameOfOpt o: snap.st tid: (ztypes.tid.create from: t.u64)
-                if tn.length == 0 then return Value.nul
-                if refOwner > 0 then {
-                    own: (displayTypeNameOfOpt
-                        o: snap.st
-                        tid: (ztypes.tid.create from: refOwner.u64)
-                    )
-                    if own.length > 0 then {
-                        body.append own
-                        body.appendByte b: 46
-                    }
+        } case none then null
+    }
+    if docBody.length == 0 when legacyDnd > 0 when legacyDnd != dnd then {
+        lfs: zcheck.fsnoFor r: snap nodeid: legacyDnd.u32.orPanic
+        lpg: sp.pos.get key: legacyDnd
+        match (
+            lpg
+        ) case some then {
+            lln: (lpg / 1048576).u32.orPanic
+            if lfs > 0 when lln > 1 then {
+                ldoc: docCommentForNode :snap fsno: lfs defLine: lln
+                if ldoc.length > 0 then docBody = ldoc
+            }
+        } case none then null
+    }
+    # call-site enrichment: hovering a callee appends inferred generic
+    # bindings (in-fence); hovering an argument appends its disposition.
+    hpos: u64
+    {
+        hp: sp.pos.get key: hit.nodeid
+        match (
+            hp
+        ) case some then {
+            hpos = hp
+        } case none then null
+    }
+    callId: sp.innerRangeOfKind curPos: hpos kind: 4 slack: 0
+    if callId > 0 then {
+        callPos: u64
+        {
+            cp9x: sp.pos.get key: callId.u64
+            match (
+                cp9x
+            ) case some then {
+                callPos = cp9x
+            } case none then null
+        }
+        if callPos == hpos then {
+            gl: inferredGenericLines o: snap.st prog: snap.prog callId: callId.u64
+            if gl.length > 0 then {
+                body.appendByte b: 10
+                body.append gl
+            }
+        } else {
+            dn9x: dispositionNote o: snap.st nid: hit.nodeid
+            if dn9x.length > 0 then {
+                if docBody.length > 0 then {
+                    docBody.appendByte b: 10
+                    docBody.appendByte b: 10
                 }
-                body.append hname
-                body.append ": "
-                body.append tn
-                annot: refAnnotation prog: snap.prog o: snap.st vid: refVid nid: tnid
-                if annot.length > 0 then {
-                    body.append "  # "
-                    body.append annot
-                }
+                docBody.append dn9x
             }
         }
-        docBody: String
-        # append the `#` doc block above the definition, if any (cross-file
-        # ok). The referenced surface Decl wins (a bare `i64` reads core's
-        # re-export line); the canonical def node is the doc fallback.
-        legacyDnd: (defNodeOf
+    }
+    ln9: (literalNote
+        o: snap.st
+        name: hname.stringView
+        refTid: hit.tid
+        nodeTid: (nodeTypeAt o: snap.st nid: hit.nodeid)
+    )
+    if ln9.length > 0 then {
+        if docBody.length > 0 then {
+            docBody.appendByte b: 10
+            docBody.appendByte b: 10
+        }
+        docBody.append ln9
+    }
+    return (hoverMarkdown code: body.stringView doc: docBody.stringView)
+}
+
+# navDefinitionAnswer -- the Location a resolved hit points at: the file top for
+# a unit, otherwise the node that declares it.
+navDefinitionAnswer: function {
+    snap: zcheck.CheckResult
+    sp: Spans.view
+    hit: navhit
+    hname: String
+    docRel: StringView
+    docUri: StringView
+    srcDir: StringView
+    systemDir: StringView
+    docText: StringView
+    utf32: bool
+} out Value is {
+    if hit.unitFsno.u64 > 0 then {
+        return (locationAtFileTop :snap fsno: hit.unitFsno :docRel :docUri :srcDir :systemDir)
+    }
+    dn: declNodeOf o: snap.st declId: hit.declId
+    if dn == 0 then {
+        dn = (defNodeOf
             o: snap.st
             prog: snap.prog
-            :refVid
-            :refTid
-            :refOwner
+            refVid: hit.vid
+            refTid: hit.tid
+            refOwner: hit.owner
             member: hname.stringView
         )
-        dnd: declNodeOf o: snap.st declId: refDeclId
-        if dnd == 0 then dnd = legacyDnd
-        if dnd > 0 then {
-            dfs: zcheck.fsnoFor r: snap nodeid: dnd.u32.orPanic
-            dpg: sp.pos.get key: dnd
-            match (
-                dpg
-            ) case some then {
-                dln: (dpg / 1048576).u32.orPanic
-                if dfs > 0 when dln > 1 then {
-                    doc: docCommentForNode :snap fsno: dfs defLine: dln
-                    if doc.length > 0 then docBody = doc
-                    if refOwner > 0 then {
-                        tc: trailingDocOf vfs: snap.vfs fsno: dfs line1: dln
-                        if tc.length > 0 then {
-                            body.append "  # "
-                            body.append tc
-                        }
-                    }
-                }
-            } case none then null
-        }
-        if docBody.length == 0 when legacyDnd > 0 when legacyDnd != dnd then {
-            lfs: zcheck.fsnoFor r: snap nodeid: legacyDnd.u32.orPanic
-            lpg: sp.pos.get key: legacyDnd
-            match (
-                lpg
-            ) case some then {
-                lln: (lpg / 1048576).u32.orPanic
-                if lfs > 0 when lln > 1 then {
-                    ldoc: docCommentForNode :snap fsno: lfs defLine: lln
-                    if ldoc.length > 0 then docBody = ldoc
-                }
-            } case none then null
-        }
-        # call-site enrichment: hovering a callee appends inferred generic
-        # bindings (in-fence); hovering an argument appends its disposition.
-        hpos: u64
-        {
-            hp: sp.pos.get key: hnid
-            match (
-                hp
-            ) case some then {
-                hpos = hp
-            } case none then null
-        }
-        callId: sp.innerRangeOfKind curPos: hpos kind: 4 slack: 0
-        if callId > 0 then {
-            callPos: u64
-            {
-                cp9x: sp.pos.get key: callId.u64
-                match (
-                    cp9x
-                ) case some then {
-                    callPos = cp9x
-                } case none then null
-            }
-            if callPos == hpos then {
-                gl: inferredGenericLines o: snap.st prog: snap.prog callId: callId.u64
-                if gl.length > 0 then {
-                    body.appendByte b: 10
-                    body.append gl
-                }
-            } else {
-                dn9x: dispositionNote o: snap.st nid: hnid
-                if dn9x.length > 0 then {
-                    if docBody.length > 0 then {
-                        docBody.appendByte b: 10
-                        docBody.appendByte b: 10
-                    }
-                    docBody.append dn9x
-                }
-            }
-        }
-        ln9: (literalNote
-            o: snap.st
-            name: hname.stringView
-            :refTid
-            nodeTid: (nodeTypeAt o: snap.st nid: hnid)
-        )
-        if ln9.length > 0 then {
-            if docBody.length > 0 then {
-                docBody.appendByte b: 10
-                docBody.appendByte b: 10
-            }
-            docBody.append ln9
-        }
-        return (hoverMarkdown code: body.stringView doc: docBody.stringView)
     }
+    if dn == 0 then return Value.nul
+    return (locationValue
+        :snap
+        :sp
+        nid: dn
+        width: hit.width
+        :docRel
+        :docUri
+        :srcDir
+        :systemDir
+        :docText
+        :utf32
+    )
+}
 
-    if mode == 1 then {
-        if unitFsno.u64 > 0 then {
-            return (locationAtFileTop :snap fsno: unitFsno :docRel :docUri :srcDir :systemDir)
-        }
-        dn: declNodeOf o: snap.st declId: refDeclId
-        if dn == 0 then {
-            dn = (defNodeOf
-                o: snap.st
-                prog: snap.prog
-                :refVid
-                :refTid
-                :refOwner
-                member: hname.stringView
-            )
-        }
-        if dn == 0 then return Value.nul
-        return (locationValue
-            :snap
-            :sp
-            nid: dn
-            width: w
-            :docRel
-            :docUri
-            :srcDir
-            :systemDir
-            :docText
-            :utf32
-        )
-    }
-
+# navReferencesAnswer -- every span row that resolves to the same target as the
+# hit, as an array of Locations. One pass over the rows.
+navReferencesAnswer: function {
+    snap: zcheck.CheckResult
+    sp: Spans.view
+    hit: navhit
+    hname: String
+    docRel: StringView
+    docUri: StringView
+    srcDir: StringView
+    systemDir: StringView
+    docText: StringView
+    utf32: bool
+} out Value is {
     # references: one pass over the span rows
     arr: newArr
     rj: u64
-    for rj < nr loop {
+    for rj < sp.rows.length loop {
         row2: sp.rows.get i: rj
         n2: row2.nodeid.u64
         add: false
-        if (refVid.isZero) == false then {
+        if (hit.vid.isZero) == false then {
             if row2.kind == 1 then {
                 uvN: useVarId o: snap.st nid: n2
-                if uvN == refVid then add = true
+                if uvN == hit.vid then add = true
             }
             if row2.kind == 3 then {
                 dvN: defVarIdOf o: snap.st nid: n2
-                if dvN == refVid then add = true
+                if dvN == hit.vid then add = true
             }
         }
-        if refTid > 0 when row2.kind == 1 then {
-            if (useUnitDef o: snap.st nid: n2) == refTid then add = true
+        if hit.tid > 0 when row2.kind == 1 then {
+            if (useUnitDef o: snap.st nid: n2) == hit.tid then add = true
         }
-        if refOwner > 0 when row2.kind == 2 then {
-            if (memberOwnerOf o: snap.st nid: n2) == refOwner then {
+        if hit.owner > 0 when row2.kind == 2 then {
+            if (memberOwnerOf o: snap.st nid: n2) == hit.owner then {
                 nm2: sp.names.get i: rj
                 if nm2.stringView == hname.stringView then add = true
             }
@@ -3354,6 +3435,49 @@ navAnswer: function {
         rj = rj + 1
     }
     return (Value.array arr)
+}
+
+# navAnswer -- definition (1), hover (2), references (3) from the
+# last-good snapshot.
+navAnswer: function {
+    snap: zcheck.CheckResult
+    docRel: StringView
+    docUri: StringView
+    srcDir: StringView
+    systemDir: StringView
+    docText: StringView
+    line0: i64
+    ch: i64
+    utf32: bool
+    mode: u8
+} out Value is {
+    l1: line0 + 1
+    l1u: l1.u32.orPanic
+    lt: docLine text: docText lineno: l1u
+    cp1: cpColOf lineText: lt.stringView :ch :utf32
+    sp: (Spans
+        rows: (ListVal spanrow)
+        names: (List String)
+        pos: (IdMapV u64 v: u64)
+        ranges: (ListVal rangerow)
+        lastPos: 0
+    )
+    sp.walkProgram prog: snap.prog
+    hitOpt: navResolve :snap :sp :docRel :srcDir :l1u :cp1
+    if hitOpt.none then return Value.nul
+    hit: hitOpt
+    hname: (sp.names.get i: hit.idx).copy
+    if mode == 2 then return (navHoverAnswer :snap :sp :hit :hname)
+    if mode == 1 then {
+        return (navDefinitionAnswer
+            :snap :sp :hit :hname
+            :docRel :docUri :srcDir :systemDir :docText :utf32
+        )
+    }
+    return (navReferencesAnswer
+        :snap :sp :hit :hname
+        :docRel :docUri :srcDir :systemDir :docText :utf32
+    )
 }
 
 # appendIfObject -- append `v` when it is a real Location (drop nul).
