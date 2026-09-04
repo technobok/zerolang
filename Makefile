@@ -1534,6 +1534,11 @@ highlight-guard:
 #               literal); no C function receives it
 #   byvalue     the C receives a copy, so it cannot write through to the source
 #   unemitted   declared, but nothing emits a call to it
+#   ondemand    emitted only for an instance whose program CALLS it, so the
+#               program this guard reads has no C function for it. Not the same
+#               as unemitted: a program that calls it does get one, and if the
+#               guard's own program ever starts calling it the entry becomes a
+#               staleness error, which is the right way to be told
 #   Type.method the receiver is projected and handed to another declared
 #               method, which must itself be `.view` before this one may be
 # A registered entry that turns out to HAVE a backing is an error too, so the
@@ -1562,6 +1567,7 @@ VIEW_GUARD_INTERNAL := String.cat String.print String.free String.eq String.cmp 
   IdMapR.destroy IdMapR.grow IdMapR.find IdMapR.slot IdMapR.entries_cap \
   IdSet.destroy IdSet.grow IdSet.find IdSet.slot IdSet.items_cap
 VIEW_GUARD_INLINE := Bytes.byteView:unemitted \
+  ListRef.insert:ondemand ListRef.extend:ondemand \
   StringView.asString:inline \
   ListVal.append:ListRef.append ListVal.insert:ListRef.insert \
   ListVal.extend:ListRef.extend ListVal.get:ListRef.get ListVal.set:ListRef.set \
@@ -1839,13 +1845,14 @@ END {
             continue
         }
         if (!(dot in rwhy)) {
-            print "view-guard FAIL: " dot " declares a receiver that reaches no C function the guard can read -- say why in VIEW_GUARD_INLINE (inline / byvalue / unemitted / <Type.method> it delegates to)"
+            print "view-guard FAIL: " dot " declares a receiver that reaches no C function the guard can read -- say why in VIEW_GUARD_INLINE (inline / byvalue / unemitted / ondemand / <Type.method> it delegates to)"
             bad = 1
             continue
         }
         nreg++
         why = rwhy[dot]
         if (why == "inline" || why == "byvalue" || why == "unemitted") continue
+        if (why == "ondemand") continue
         tgt = why; sub(/\./, " ", tgt)
         if (!(tgt in dkind)) {
             print "view-guard FAIL: " dot " is registered as delegating to " why ", which is not a declared native receiver"
