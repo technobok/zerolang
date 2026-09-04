@@ -3,7 +3,7 @@
 # scans bytes, tracks line and column, manages a state stack for
 # nested string interpolation, and emits one token per call to
 # `token`. The binary built from this file is a token-dump CLI:
-# given a source file it prints `<lineno>:<colno> <toktype> "<tokstr>"`
+# given a source file it prints `<lineno>:<colno> <toktype> "<text>"`
 # per token, exercised by tests/fixtures/lexer_golden/.
 
 # Public interface -- the definitions other units may reference; all
@@ -213,8 +213,11 @@ textWidth: function {s: String} out u32 is {
 Token: class {
     # which kind of token this is
     toktype: toktype
-    # the source text it was made from, kept verbatim
-    tokstr: String
+    # its text, interned in the name pool. An id rather than an owned copy:
+    # a token's spelling is nearly always one the pool already holds, and the
+    # ones that are not are the names the parser was going to intern anyway.
+    # Zero reads as the pool's sentinel row, which is the empty text
+    text: zast.nameid
     # the file it came from
     fsno: zvfs.fsno
     # the line it starts on
@@ -438,7 +441,7 @@ Tokenizer: class {
             nexttok: (Token
                 toktype: toktype.eofTok
                 width: 0
-                tokstr: "".string
+                text: (zast.nameid.create from: 0)
                 :fsno
                 lineno: 0
                 colno: 0
@@ -499,18 +502,18 @@ Tokenizer: class {
     # acceptcharescape; otherwise gather STRC bytes into a STRMID. If
     # the very first byte is not STRC (and not backslash), emit an ERR
     # with that single byte to guarantee scanner forward progress.
-    acceptstringtoken: function {:this} out Token is {
+    acceptstringtoken: function {:this pool: zast.StringPool} out Token is {
         line: this.lineno
         col: this.colno
         c: this.atchar
-        if c == ascii.backslash then return this.acceptcharescape
+        if c == ascii.backslash then return (this.acceptcharescape :pool)
         s0: this.tokpos
         for (isstrc this.atchar) loop this.accept
         if this.tokpos > s0 then {
             return (Token
                 toktype: toktype.strMidTok
                 width: (spanWidth s: s0 e: this.tokpos)
-                tokstr: (this.tokSpan s: s0 e: this.tokpos)
+                text: (this.tokSpanId :pool s: s0 e: this.tokpos)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -520,7 +523,7 @@ Tokenizer: class {
         return (Token
             toktype: toktype.errTok
             width: 1
-            tokstr: (this.tokSpan s: s0 e: s0 + 1)
+            text: (this.tokSpanId :pool s: s0 e: s0 + 1)
             fsno: this.fsno
             lineno: line
             colno: col
@@ -536,7 +539,7 @@ Tokenizer: class {
     # popped. EOL/EOF are NOT consumed here; the outer dispatcher
     # routes them to the EOF / EOL branches in `token` on the next
     # call, which re-enters this method afterwards.
-    acceptstringrawtoken: function {:this delim_len: u8} out Token is {
+    acceptstringrawtoken: function {:this pool: zast.StringPool delim_len: u8} out Token is {
         line: this.lineno
         col: this.colno
         stringparts: String
@@ -553,7 +556,7 @@ Tokenizer: class {
                     return (Token
                         toktype: toktype.strMidTok
                         width: (textWidth s: stringparts)
-                        tokstr: stringparts
+                        text: (pool.set s: stringparts.stringView)
                         fsno: this.fsno
                         lineno: line
                         colno: col
@@ -565,7 +568,7 @@ Tokenizer: class {
                 return (Token
                     toktype: toktype.errTok
                     width: (textWidth s: err)
-                    tokstr: err
+                    text: (pool.set s: err.stringView)
                     fsno: this.fsno
                     lineno: line
                     colno: col
@@ -592,7 +595,7 @@ Tokenizer: class {
                     this.nexttok = (Token
                         toktype: toktype.strEndTok
                         width: (textWidth s: delimparts)
-                        tokstr: delimparts
+                        text: (pool.set s: delimparts.stringView)
                         fsno: this.fsno
                         lineno: dline
                         colno: dcol
@@ -601,7 +604,7 @@ Tokenizer: class {
                     return (Token
                         toktype: toktype.strMidTok
                         width: (textWidth s: stringparts)
-                        tokstr: stringparts
+                        text: (pool.set s: stringparts.stringView)
                         fsno: this.fsno
                         lineno: line
                         colno: col
@@ -610,7 +613,7 @@ Tokenizer: class {
                 return (Token
                     toktype: toktype.strEndTok
                     width: (textWidth s: delimparts)
-                    tokstr: delimparts
+                    text: (pool.set s: delimparts.stringView)
                     fsno: this.fsno
                     lineno: dline
                     colno: dcol
@@ -621,7 +624,7 @@ Tokenizer: class {
         return (Token
             toktype: toktype.errTok
             width: 0
-            tokstr: "".string
+            text: (zast.nameid.create from: 0)
             fsno: this.fsno
             lineno: line
             colno: col
@@ -636,8 +639,8 @@ Tokenizer: class {
     #   \{              -> STREXPRBEG, push STRINGEXPR (the `{` itself
     #                       becomes the next token and pushes
     #                       STRINGEXPRBRACE on top)
-    # Any other byte after the backslash is an ERR with tokstr "\<c>".
-    acceptcharescape: function {:this} out Token is {
+    # Any other byte after the backslash is an ERR whose text is "\<c>".
+    acceptcharescape: function {:this pool: zast.StringPool} out Token is {
         line: this.lineno
         col: this.colno
         c: this.atchar
@@ -647,7 +650,7 @@ Tokenizer: class {
             return (Token
                 toktype: toktype.errTok
                 width: (textWidth s: err)
-                tokstr: err
+                text: (pool.set s: err.stringView)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -685,7 +688,7 @@ Tokenizer: class {
             return (Token
                 toktype: toktype.strChrTok
                 width: (textWidth s: sc)
-                tokstr: sc
+                text: (pool.set s: sc.stringView)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -693,10 +696,10 @@ Tokenizer: class {
         }
 
         if c == ascii.lowerX then {
-            return (this.accepthexescape n: 2 specifier: ascii.lowerX :line :col)
+            return (this.accepthexescape :pool n: 2 specifier: ascii.lowerX :line :col)
         }
         if c == ascii.lowerU then {
-            return (this.accepthexescape n: 6 specifier: ascii.lowerU :line :col)
+            return (this.accepthexescape :pool n: 6 specifier: ascii.lowerU :line :col)
         }
 
         if c == ascii.braceOpen then {
@@ -706,7 +709,7 @@ Tokenizer: class {
             return (Token
                 toktype: toktype.strExprBegTok
                 width: (textWidth s: bs)
-                tokstr: bs
+                text: (pool.set s: bs.stringView)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -719,7 +722,7 @@ Tokenizer: class {
         return (Token
             toktype: toktype.errTok
             width: (textWidth s: err)
-            tokstr: err
+            text: (pool.set s: err.stringView)
             fsno: this.fsno
             lineno: line
             colno: col
@@ -728,15 +731,15 @@ Tokenizer: class {
 
     # Consume `n` hex digits and produce a STRCHR with the decoded
     # value. `specifier` is the `x` or `u` that follows the backslash;
-    # used to rebuild the ERR tokstr ("\<specifier><digits-seen>") on
+    # used to rebuild the ERR text ("\<specifier><digits-seen>") on
     # malformed input. Caller has already consumed the backslash but
     # NOT the specifier itself.
     #
-    # \xHH is a raw byte escape: tokstr is the single byte (cp <= 0xFF).
-    # \uHHHHHH is a codepoint escape: tokstr is the UTF-8 encoding of
+    # \xHH is a raw byte escape: the text is the single byte (cp <= 0xFF).
+    # \uHHHHHH is a codepoint escape: the text is the UTF-8 encoding of
     # the codepoint (1-4 bytes). Codepoints above U+10FFFF cannot be
     # represented in 1-4 byte UTF-8 and are rejected as ERR.
-    accepthexescape: function {:this n: u32 specifier: u8 line: u32 col: u32} out Token is {
+    accepthexescape: function {:this pool: zast.StringPool n: u32 specifier: u8 line: u32 col: u32} out Token is {
         this.accept
         digits: String
         consumed: u32
@@ -763,7 +766,7 @@ Tokenizer: class {
                         return (Token
                             toktype: toktype.errTok
                             width: (textWidth s: err)
-                            tokstr: err
+                            text: (pool.set s: err.stringView)
                             fsno: this.fsno
                             lineno: line
                             colno: col
@@ -774,7 +777,7 @@ Tokenizer: class {
                 return (Token
                     toktype: toktype.errTok
                     width: (textWidth s: err)
-                    tokstr: err
+                    text: (pool.set s: err.stringView)
                     fsno: this.fsno
                     lineno: line
                     colno: col
@@ -783,7 +786,7 @@ Tokenizer: class {
         }
 
         # Walk the collected digits once: rebuild the source-form ERR
-        # tokstr alongside the parsed codepoint value. The ERR variant
+        # text alongside the parsed codepoint value. The ERR variant
         # is only returned for \u escapes whose value exceeds U+10FFFF;
         # in every other path `err` falls out of scope unused.
         val: u64
@@ -812,7 +815,7 @@ Tokenizer: class {
                 return (Token
                     toktype: toktype.errTok
                     width: (textWidth s: err)
-                    tokstr: err
+                    text: (pool.set s: err.stringView)
                     fsno: this.fsno
                     lineno: line
                     colno: col
@@ -823,7 +826,7 @@ Tokenizer: class {
             return (Token
                 toktype: toktype.strChrTok
                 width: (textWidth s: sc)
-                tokstr: sc
+                text: (pool.set s: sc.stringView)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -836,24 +839,26 @@ Tokenizer: class {
         return (Token
             toktype: toktype.strChrTok
             width: (textWidth s: sc)
-            tokstr: sc
+            text: (pool.set s: sc.stringView)
             fsno: this.fsno
             lineno: line
             colno: col
         )
     }
 
-    # tokSpan -- the source bytes [s, e) as one right-sized owned String.
-    tokSpan: function {:this s: u64 e: u64} out String is {
+    # tokSpanId -- the pool id for the source bytes [s, e). The pool copies
+    # the bytes only on first sight, so a spelling the source has used before
+    # -- which is nearly all of them -- costs nothing but the probe.
+    tokSpanId: function {:this pool: zast.StringPool s: u64 e: u64} out zast.nameid is {
         sv: this.source.stringView
-        return ((sv.substring from: s to: e).string)
+        piece: sv.substring from: s to: e
+        return (pool.set s: piece)
     }
 
     # the next token, advancing past it
-    token: function {:this} out Token is {
-        # Drain the lookahead slot first if a token is staged.
-        # Inlined fields make this straightforward: copy out the
-        # tokstr (cheap -- short strings) and construct a Token.
+    token: function {:this pool: zast.StringPool} out Token is {
+        # Drain the lookahead slot first if a token is staged. Every field
+        # is a value now, the text included, so the staged row copies out.
         if this.hasnext then {
             # EOF stays staged so subsequent calls keep returning it;
             # everything else gets cleared.
@@ -866,23 +871,21 @@ Tokenizer: class {
                 is_eof = false
             }
             if is_eof then {
-                # EOF's staged tokstr is always empty
+                # EOF's staged text is always empty
                 return (Token
                     toktype: this.nexttok.toktype
                     width: 0
-                    tokstr: "".string
+                    text: (zast.nameid.create from: 0)
                     fsno: this.fsno
                     lineno: this.nexttok.lineno
                     colno: this.nexttok.colno
                 )
             }
             this.hasnext = false
-            ds: String
-            ds swap this.nexttok.tokstr
             return (Token
                 toktype: this.nexttok.toktype
-                width: (textWidth s: ds)
-                tokstr: ds
+                width: this.nexttok.width
+                text: this.nexttok.text
                 fsno: this.fsno
                 lineno: this.nexttok.lineno
                 colno: this.nexttok.colno
@@ -902,7 +905,7 @@ Tokenizer: class {
             return (Token
                 toktype: toktype.eofTok
                 width: 0
-                tokstr: "".string
+                text: (zast.nameid.create from: 0)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -916,7 +919,7 @@ Tokenizer: class {
             return (Token
                 toktype: toktype.eolTok
                 width: (spanWidth s: s0 e: this.tokpos)
-                tokstr: (this.tokSpan s: s0 e: this.tokpos)
+                text: (this.tokSpanId :pool s: s0 e: this.tokpos)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -930,7 +933,7 @@ Tokenizer: class {
             return (Token
                 toktype: toktype.eolTok
                 width: (spanWidth s: s0 e: this.tokpos)
-                tokstr: (this.tokSpan s: s0 e: this.tokpos)
+                text: (this.tokSpanId :pool s: s0 e: this.tokpos)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -965,24 +968,24 @@ Tokenizer: class {
                 return (Token
                     toktype: toktype.strEndTok
                     width: 1
-                    tokstr: (this.tokSpan s: s0 e: s0 + 1)
+                    text: (this.tokSpanId :pool s: s0 e: s0 + 1)
                     fsno: this.fsno
                     lineno: line
                     colno: col
                 )
             }
-            return this.acceptstringtoken
+            return (this.acceptstringtoken :pool)
         }
-        if raw_delim > 0 then return (this.acceptstringrawtoken delim_len: raw_delim)
+        if raw_delim > 0 then return (this.acceptstringrawtoken :pool delim_len: raw_delim)
 
         if (isws b: c) then {
             for (isws b: this.atchar) loop this.accept
-            wsText: String
-            if this.keepTrivia then wsText = this.tokSpan s: s0 e: this.tokpos
+            wsText: zast.nameid
+            if this.keepTrivia then wsText = this.tokSpanId :pool s: s0 e: this.tokpos
             return (Token
                 toktype: toktype.wsTok
-                width: (textWidth s: wsText)
-                tokstr: wsText
+                width: (spanWidth s: s0 e: this.tokpos)
+                text: wsText
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -991,12 +994,12 @@ Tokenizer: class {
 
         if c == ascii.hash then {
             for (iscommentbody b: this.atchar) loop this.accept
-            cmText: String
-            if this.keepTrivia then cmText = this.tokSpan s: s0 e: this.tokpos
+            cmText: zast.nameid
+            if this.keepTrivia then cmText = this.tokSpanId :pool s: s0 e: this.tokpos
             return (Token
                 toktype: toktype.commentTok
-                width: (textWidth s: cmText)
-                tokstr: cmText
+                width: (spanWidth s: s0 e: this.tokpos)
+                text: cmText
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -1020,7 +1023,7 @@ Tokenizer: class {
                 this.nexttok = (Token
                     toktype: toktype.strEndTok
                     width: 1
-                    tokstr: (this.tokSpan s: s0 + 1 e: s0 + 2)
+                    text: (this.tokSpanId :pool s: s0 + 1 e: s0 + 2)
                     fsno: this.fsno
                     lineno: line
                     colno: col + 1
@@ -1029,7 +1032,7 @@ Tokenizer: class {
                 return (Token
                     toktype: toktype.strBegTok
                     width: 1
-                    tokstr: (this.tokSpan s: s0 e: s0 + 1)
+                    text: (this.tokSpanId :pool s: s0 e: s0 + 1)
                     fsno: this.fsno
                     lineno: line
                     colno: col
@@ -1040,7 +1043,7 @@ Tokenizer: class {
                 return (Token
                     toktype: toktype.strBegTok
                     width: (spanWidth s: s0 e: this.tokpos)
-                    tokstr: (this.tokSpan s: s0 e: this.tokpos)
+                    text: (this.tokSpanId :pool s: s0 e: this.tokpos)
                     fsno: this.fsno
                     lineno: line
                     colno: col
@@ -1053,7 +1056,7 @@ Tokenizer: class {
             return (Token
                 toktype: toktype.strBegTok
                 width: (spanWidth s: s0 e: this.tokpos)
-                tokstr: (this.tokSpan s: s0 e: this.tokpos)
+                text: (this.tokSpanId :pool s: s0 e: this.tokpos)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -1070,7 +1073,7 @@ Tokenizer: class {
                 return (Token
                     toktype: toktype.dotTok
                     width: (spanWidth s: s0 e: this.tokpos)
-                    tokstr: (this.tokSpan s: s0 e: this.tokpos)
+                    text: (this.tokSpanId :pool s: s0 e: this.tokpos)
                     fsno: this.fsno
                     lineno: line
                     colno: col
@@ -1079,7 +1082,7 @@ Tokenizer: class {
             return (Token
                 toktype: toktype.errTok
                 width: (spanWidth s: s0 e: this.tokpos)
-                tokstr: (this.tokSpan s: s0 e: this.tokpos)
+                text: (this.tokSpanId :pool s: s0 e: this.tokpos)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -1091,7 +1094,7 @@ Tokenizer: class {
             return (Token
                 toktype: toktype.parenOpenTok
                 width: 1
-                tokstr: (this.tokSpan s: s0 e: s0 + 1)
+                text: (this.tokSpanId :pool s: s0 e: s0 + 1)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -1102,7 +1105,7 @@ Tokenizer: class {
             return (Token
                 toktype: toktype.parenCloseTok
                 width: 1
-                tokstr: (this.tokSpan s: s0 e: s0 + 1)
+                text: (this.tokSpanId :pool s: s0 e: s0 + 1)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -1128,7 +1131,7 @@ Tokenizer: class {
             return (Token
                 toktype: toktype.braceOpenTok
                 width: 1
-                tokstr: (this.tokSpan s: s0 e: s0 + 1)
+                text: (this.tokSpanId :pool s: s0 e: s0 + 1)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -1163,7 +1166,7 @@ Tokenizer: class {
             return (Token
                 toktype: toktype.braceCloseTok
                 width: 1
-                tokstr: (this.tokSpan s: s0 e: s0 + 1)
+                text: (this.tokSpanId :pool s: s0 e: s0 + 1)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -1174,7 +1177,7 @@ Tokenizer: class {
             return (Token
                 toktype: toktype.semicolonTok
                 width: 1
-                tokstr: (this.tokSpan s: s0 e: s0 + 1)
+                text: (this.tokSpanId :pool s: s0 e: s0 + 1)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -1241,7 +1244,7 @@ Tokenizer: class {
                 this.nexttok = (Token
                     toktype: toktype.dotTok
                     width: 1
-                    tokstr: ".".string
+                    text: (pool.set s: ".")
                     fsno: this.fsno
                     lineno: dot_line
                     colno: dot_col
@@ -1259,7 +1262,7 @@ Tokenizer: class {
                 return (Token
                     toktype: toktype.errTok
                     width: 1
-                    tokstr: (this.tokSpan s: s0 e: s0 + 1)
+                    text: (this.tokSpanId :pool s: s0 e: s0 + 1)
                     fsno: this.fsno
                     lineno: colonpre_line
                     colno: colonpre_col
@@ -1269,7 +1272,7 @@ Tokenizer: class {
             return (Token
                 toktype: toktype.errTok
                 width: 1
-                tokstr: (this.tokSpan s: s_word e: s_word + 1)
+                text: (this.tokSpanId :pool s: s_word e: s_word + 1)
                 fsno: this.fsno
                 lineno: line
                 colno: col
@@ -1298,7 +1301,7 @@ Tokenizer: class {
             this.nexttok = (Token
                 toktype: stage_tt
                 width: (spanWidth s: s_word e: e_word)
-                tokstr: (this.tokSpan s: s_word e: e_word)
+                text: (this.tokSpanId :pool s: s_word e: e_word)
                 fsno: this.fsno
                 lineno: word_line
                 colno: word_col
@@ -1307,7 +1310,7 @@ Tokenizer: class {
             return (Token
                 toktype: toktype.colonTok
                 width: 1
-                tokstr: (this.tokSpan s: s0 e: s0 + 1)
+                text: (this.tokSpanId :pool s: s0 e: s0 + 1)
                 fsno: this.fsno
                 lineno: colonpre_line
                 colno: colonpre_col
@@ -1328,7 +1331,7 @@ Tokenizer: class {
             this.nexttok = (Token
                 toktype: toktype.colonTok
                 width: 1
-                tokstr: ":".string
+                text: (pool.set s: ":")
                 fsno: this.fsno
                 lineno: this.lineno
                 colno: this.colno
@@ -1338,7 +1341,7 @@ Tokenizer: class {
             return (Token
                 toktype: toktype.labelTok
                 width: (spanWidth s: s_word e: e_word)
-                tokstr: (this.tokSpan s: s_word e: e_word)
+                text: (this.tokSpanId :pool s: s_word e: e_word)
                 fsno: this.fsno
                 lineno: word_line
                 colno: word_col
@@ -1353,7 +1356,7 @@ Tokenizer: class {
         return (Token
             toktype: ret_tt
             width: (spanWidth s: s_word e: e_word)
-            tokstr: (this.tokSpan s: s_word e: e_word)
+            text: (this.tokSpanId :pool s: s_word e: e_word)
             fsno: this.fsno
             lineno: word_line
             colno: word_col
@@ -1376,7 +1379,12 @@ Lexer: class {
     # wherever a construct spans lines
     filterEol: bool
 } as {
-    # a Lexer over `lexer`, taking it
+    # a Lexer over `lexer`, taking it. The pool every token's text is interned
+    # in travels as a PARAMETER on the methods that lex, not as a field: a
+    # field would hold the pool's lock for the Lexer's whole life, and the pool
+    # belongs to the parser, which must keep calling its own methods while the
+    # Lexer is alive. `create` does not lex, so it does not take one -- the
+    # caller primes the first token with `advance`.
     create: function {lexer: Tokenizer.take} out this is {
         # advance drops ws and comment tokens unconditionally, so their text
         # is read by nobody on this path and is the tokenizer largest
@@ -1385,20 +1393,18 @@ Lexer: class {
         placeholder: (Token
             toktype: toktype.bofTok
             width: 0
-            tokstr: "".string
+            text: (zast.nameid.create from: 0)
             fsno: zvfs.fsno
             lineno: 0
             colno: 0
         )
-        lx: (meta.create :lexer thistoken: placeholder filterEol: true)
-        lx.advance
-        return lx
+        return (meta.create :lexer thistoken: placeholder filterEol: true)
     }
 
     # Read the next token into thistoken, dropping filtered tokens.
-    advance: function {:this} is {
+    advance: function {:this pool: zast.StringPool} is {
         for true loop {
-            t: this.lexer.token
+            t: this.lexer.token :pool
             keep: true
             match (
                 t.toktype
@@ -1433,36 +1439,38 @@ Lexer: class {
         )
     }
 
-    # A view of the buffered token's text. Pins the lexer, so the view must
-    # not be live across advance / accept / acceptAny.
-    peekText: function {t: this.view} outx StringView is {
-        return t.thistoken.tokstr.stringView
+    # The buffered token's text, as its pool id. An id rather than a view
+    # because a view would pin the Lexer and the caller almost always wants to
+    # compare or store, not to read bytes.
+    peekTextId: function {t: this.view} out zast.nameid is {
+        return t.thistoken.text
     }
 
+
     # Accept and advance if the buffered token matches tt; else none.
-    accept: function {:this tt: toktype} out Option Token is {
+    accept: function {:this tt: toktype pool: zast.StringPool} out Option Token is {
         if this.thistoken.toktype == tt then {
             tok: this.takeCurrent
-            this.advance
+            this.advance :pool
             return (Option.some tok)
         }
         return (Option.none Token)
     }
 
     # Accept and return the buffered token unconditionally, advancing.
-    acceptAny: function {:this} out Token is {
+    acceptAny: function {:this pool: zast.StringPool} out Token is {
         tok: this.takeCurrent
-        this.advance
+        this.advance :pool
         return tok
     }
 
     # Set EOL filtering. When turning filtering back on, drop a
     # currently-buffered EOL so the next peek sees a real token.
-    setFilterEol: function {:this enabled: bool} is {
+    setFilterEol: function {:this enabled: bool pool: zast.StringPool} is {
         this.filterEol = enabled
         if enabled then {
             iseol: this.thistoken.toktype == toktype.eolTok
-            if iseol then this.advance
+            if iseol then this.advance :pool
         }
     }
 
@@ -1476,14 +1484,12 @@ Lexer: class {
     # field subvalues into a fresh Token mirrors Tokenizer.token; a
     # free helper taking a borrowed Token param is rejected (the
     # projection would alias the caller's still-owned value).
-    # Move the buffered token out (tokstr swaps into a fresh String;
-    # advance overwrites the emptied husk immediately after).
+    # The buffered token's fields into a fresh Token; the text is an id, so
+    # there is nothing to move out any more.
     takeCurrent: function {:this} out Token is {
-        s: String
-        s swap this.thistoken.tokstr
         return (Token
             toktype: this.thistoken.toktype
-            tokstr: s
+            text: this.thistoken.text
             fsno: this.thistoken.fsno
             lineno: this.thistoken.lineno
             colno: this.thistoken.colno

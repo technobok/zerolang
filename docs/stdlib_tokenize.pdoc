@@ -63,13 +63,13 @@ Accessed via qualified names only -- #~"tokenize.scan ...",
 
 #ul:
   [#*: #> to=tokenizer: #b:"Tokenizer" -- #~"class as { create: function {source: String.take fsno: zvfs.fsno} out this  ...  token: function {:this} out Token }"]
-  [#*: #> to=token: #b:"Token" -- #~"class { toktype: toktype  tokstr: String  fsno: zvfs.fsno  lineno: u32  colno: u32  tokenid: u64 }"]
+  [#*: #> to=token: #b:"Token" -- #~"class { toktype: toktype  text: zast.nameid  fsno: zvfs.fsno  lineno: u32  colno: u32  width: u32 }"]
   [#*: #> to=tt: #b:"toktype" -- #~"variant { ...51 arms: wsTok, eolTok, commentTok, eofTok, refIdTok, keywords (functionTok, ifTok, forTok, ...), literals, punctuation... }"]
 
 #p: #b:"Functions"
 
 #ul:
-  [#*: #> to=scan: #b:"tokenize.scan" -- #~"function {source: String.take} out (List Token)"]
+  [#*: #> to=scan: #b:"tokenize.scan" -- #~"function {source: String.take pool: StringPool} out (List Token)"]
 
 
 #--: tokenizer
@@ -104,10 +104,13 @@ tokenizer by hand.
 
 
 One lexical token. #~"toktype" is its #~"toktype" classification;
-#~"tokstr" is the exact source slice (so a #~"wsTok" token's
-#~"tokstr" is the run of spaces, a #~"commentTok" token's is the
-comment text). #~"lineno" / #~"colno" are 1-based; the token's
-byte width is #~"tokstr.length".
+#~"text" is its spelling INTERNED in the pool the scan was given, and
+#~"zast.poolTextAt" reads it back -- for a #~"wsTok" that is the run of
+spaces, for a #~"commentTok" the comment text. A token carries an id
+rather than its own copy because nearly every spelling in a source file
+has been seen before, and the pool copies only on first sight.
+#~"lineno" / #~"colno" are 1-based, and #~"width" is the token's byte
+count, which is what a diagnostic underlines.
 
 
 #--: tt
@@ -138,7 +141,11 @@ Tokenize #~"source" into its full raw token stream -- whitespace,
 comments, and EOL trivia included -- terminated by the #~"eofTok"
 token. The one-call convenience over #~"Tokenizer".
 
+The pool outlives the scan, so the caller owns it and reads spellings
+back from it afterwards.
+
 #code language=zerolang: """
-  toks: tokenize.scan source: src.copy
+  pool: tokenize.StringPool.create
+  toks: tokenize.scan source: src.copy :pool
   print "tokens: \{toks.length}"
 """

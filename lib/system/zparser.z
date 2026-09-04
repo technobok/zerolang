@@ -116,8 +116,7 @@ chunkStartsWith: function {n: Node.view p: StringView} out bool is {
 # True for the ownership/access marker names that cannot be declared as
 # type-body members (the language claims them in member position); the
 # visibility members `public:`/`private:` carve out the unit form.
-isReservedMemberName: function {pool: zast.StringPool.view name: StringView} out bool is {
-    id: zast.poolFind :pool text: name
+isReservedMemberName: function {id: zast.nameid} out bool is {
     if id.isZero then return false
     if id == zast.names.wkTake then return true
     if id == zast.names.wkBorrow then return true
@@ -133,10 +132,10 @@ isReservedMemberName: function {pool: zast.StringPool.view name: StringView} out
 # the one place a unit's meaning is read from a name; every later reader asks
 # `zast.UnitData.kind`. `require:` is a unit-level block only, so a type-body
 # member of that name is an ordinary namespace.
-unitKindForLabel: function {name: StringView unitBody: bool} out zast.unitkind is {
-    if name == "public" then return zast.unitkind.publicNs
-    if name == "private" then return zast.unitkind.privateNs
-    if unitBody when name == "require" then return zast.unitkind.requirement
+unitKindForLabel: function {id: zast.nameid unitBody: bool} out zast.unitkind is {
+    if id == zast.names.wkPublic then return zast.unitkind.publicNs
+    if id == zast.names.wkPrivate then return zast.unitkind.privateNs
+    if unitBody when id == zast.names.wkRequire then return zast.unitkind.requirement
     return zast.unitkind.namespace
 }
 
@@ -293,6 +292,16 @@ Parser: class {
 
 
     # Build an error node located at `tok`.
+    # peekReservedWord -- the buffered token's spelling when it is a keyword or
+    # a reserved word, and "" when it is not. One place asks the pool for the
+    # text and one place decides, so a caller tests a length and then has the
+    # word to name in its diagnostic.
+    peekReservedWord: function {:this lex: zlexer.Lexer.view} out String is {
+        w: zast.poolTextCopy pool: this.ast.names ref: lex.peekTextId
+        if (this.svIsReservedWord sv: w.stringView) then return w
+        return "".string
+    }
+
     # True when `sv` names a keyword or a future-reserved word (illegal
     # where a declaration name is expected -> E0033).
     svIsReservedWord: function {sv: StringView} out bool is {
@@ -303,7 +312,7 @@ Parser: class {
 
     # an error node carrying `tok`'s position, so a parse can keep going and
     # still report exactly where it broke
-    mkError: function {:this tok: zlexer.Token.view code: zast.err msg: String.take} out Node is {
+    mkError: function {:this tok: zlexer.Token.view lex: zlexer.Lexer.view code: zast.err msg: String.take} out Node is {
         pos: (zlexer.tokpos
             fsno: tok.fsno
             lineno: tok.lineno
@@ -314,17 +323,18 @@ Parser: class {
         # token -- which is more precise than what the parser expected here;
         # inside a string literal the same fact is an escape the literal rejects
         if tok.toktype == zlexer.toktype.errTok then {
+            errTxt: zast.poolTextCopy pool: this.ast.names ref: tok.text
             if code.badString then {
                 return (this.mkErrorAt
                     :pos
                     code: zast.err.badString
-                    msg: "unknown escape or character '\{tok.tokstr}' in string literal"
+                    msg: "unknown escape or character '\{errTxt}' in string literal"
                 )
             }
             return (this.mkErrorAt
                 :pos
                 code: zast.err.badToken
-                msg: "unexpected characters '\{tok.tokstr}'"
+                msg: "unexpected characters '\{errTxt}'"
             )
         }
         return (this.mkErrorAt :pos :code :msg)
@@ -446,13 +456,13 @@ Parser: class {
     # a bare identifier as an atom. The parser's smallest leaf: everything that
     # resolves to a name starts here
     parseAtomId: function {:this lex: zlexer.Lexer} out Node is {
-        r: lex.accept tt: zlexer.toktype.refIdTok
+        r: lex.accept tt: zlexer.toktype.refIdTok pool: this.ast.names
         match r case some then {
             return (Node.atomid (zast.AtomIdData
                 nodeid: this.nextId
                 lineno: r.lineno
                 colno: r.colno
-                name: (this.internName name: r.tokstr.stringView))
+                name: r.text)
             )
         } case none then {
             tPos: lex.peekPos
@@ -488,17 +498,17 @@ Parser: class {
     # reassigning an outer-scope binding) keeps each owned `parent`
     # local to its call.
     parsePathTail: function {:this lex: zlexer.Lexer parent: Node.take startLine: u32 startCol: u32} out Node is {
-        dotOpt: lex.accept tt: zlexer.toktype.dotTok
+        dotOpt: lex.accept tt: zlexer.toktype.dotTok pool: this.ast.names
         match dotOpt case none then {
             return parent
         } case some then {
-            idOpt: lex.accept tt: zlexer.toktype.refIdTok
+            idOpt: lex.accept tt: zlexer.toktype.refIdTok pool: this.ast.names
             match idOpt case some then {
                 child: Node.atomid (zast.AtomIdData
                     nodeid: this.nextId
                     lineno: idOpt.lineno
                     colno: idOpt.colno
-                    name: (this.internName name: idOpt.tokstr.stringView)
+                    name: idOpt.text
                 )
                 np: Node.dottedpath (zast.DottedPathData
                     nodeid: this.nextId
@@ -509,9 +519,10 @@ Parser: class {
                 )
                 return (this.parsePathTail :lex parent: np :startLine :startCol)
             } case none then {
-                bad: lex.acceptAny
+                bad: lex.acceptAny pool: this.ast.names
                 err: (this.mkError
                     tok: bad
+                    :lex
                     code: zast.err.badPath
                     msg: "Expected ID after dot".string
                 )
@@ -536,7 +547,7 @@ Parser: class {
     # Expression node (bare), or an error.
     parseAtomExpr: function {:this lex: zlexer.Lexer} out Node is {
         firstPos: lex.peekPos
-        openOpt: lex.accept tt: zlexer.toktype.parenOpenTok
+        openOpt: lex.accept tt: zlexer.toktype.parenOpenTok pool: this.ast.names
         match openOpt case none then {
             return (this.mkErrorAt
                 pos: firstPos
@@ -545,15 +556,15 @@ Parser: class {
             )
         } case some then {
             prevFilter: lex.filterEolState
-            lex.setFilterEol enabled: true
+            lex.setFilterEol enabled: true pool: this.ast.names
             expr: this.parseExpression :lex
             isErr: this.isError node: expr
             if isErr then {
-                lex.setFilterEol enabled: prevFilter
+                lex.setFilterEol enabled: prevFilter pool: this.ast.names
                 return expr
             }
-            lex.setFilterEol enabled: prevFilter
-            closeOpt: lex.accept tt: zlexer.toktype.parenCloseTok
+            lex.setFilterEol enabled: prevFilter pool: this.ast.names
+            closeOpt: lex.accept tt: zlexer.toktype.parenCloseTok pool: this.ast.names
             match closeOpt case some then {
                 return expr
             } case none then {
@@ -573,19 +584,18 @@ Parser: class {
     # is rejected for now because acceptExpression is stubbed. The
     # closing STREND must repeat the opening delimiter.
     parseAtomString: function {:this lex: zlexer.Lexer} out Node is {
-        firstTok: lex.acceptAny
+        firstTok: lex.acceptAny pool: this.ast.names
         fLine: firstTok.lineno
         fCol: firstTok.colno
-        fDelim: String
-        fDelim swap firstTok.tokstr
+        fDelim: firstTok.text
         parts: (ListVal u32)
         for true loop {
             tPos: lex.peekPos
             tt: lex.peekType
             if tt == zlexer.toktype.strEndTok then {
-                same: lex.peekText == fDelim.stringView
+                same: lex.peekTextId == fDelim
                 if same then {
-                    lex.advance
+                    lex.advance pool: this.ast.names
                     break
                 } else {
                     return (this.mkErrorAt
@@ -595,7 +605,7 @@ Parser: class {
                     )
                 }
             } else if tt == zlexer.toktype.strExprBegTok then {
-                lex.advance
+                lex.advance pool: this.ast.names
                 btPos: lex.peekPos
                 if lex.peekType != zlexer.toktype.braceOpenTok then {
                     return (this.mkErrorAt
@@ -604,7 +614,7 @@ Parser: class {
                         msg: "Expected open brace after backslash in string interpolation".string
                     )
                 }
-                lex.advance
+                lex.advance pool: this.ast.names
                 eLook: this.exprLookahead :lex
                 if eLook then {
                     expr: this.parseExpression :lex
@@ -619,7 +629,7 @@ Parser: class {
                             msg: "Expected close brace after interpolation expression".string
                         )
                     }
-                    lex.advance
+                    lex.advance pool: this.ast.names
                 } else {
                     badPos: lex.peekPos
                     return (this.mkErrorAt
@@ -630,9 +640,8 @@ Parser: class {
                 }
             } else if (isStrChunkTok :tt) then {
                 ck: chunkKindOf :tt
-                chunkTok: lex.acceptAny
-                tc0: String
-                tc0 swap chunkTok.tokstr
+                chunkTok: lex.acceptAny pool: this.ast.names
+                tc0: zast.poolTextCopy pool: this.ast.names ref: chunkTok.text
                 chunk: Node.stringchunk (zast.StringChunkData
                     nodeid: this.nextId
                     lineno: chunkTok.lineno
@@ -642,9 +651,10 @@ Parser: class {
                 )
                 parts.append (this.intern n: chunk)
             } else {
-                bad: lex.acceptAny
+                bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
                     tok: bad
+                    :lex
                     code: zast.err.badString
                     msg: "Unexpected token in string literal".string
                 )
@@ -879,12 +889,12 @@ Parser: class {
 
     # a labelvalue for the `:name` shorthand, where the label and the value it
     # stands for are the same word
-    mkLabelValue: function {:this line: u32 col: u32 name: String.take} out Node is {
+    mkLabelValue: function {:this line: u32 col: u32 nameId: zast.nameid} out Node is {
         return (Node.labelvalue (zast.LabelValueData
             nodeid: this.nextId
             lineno: line
             colno: col
-            name: (this.internName name: name.stringView))
+            name: nameId)
         )
     }
 
@@ -1000,19 +1010,20 @@ Parser: class {
                 args.append uarg
             }
         }
-        argNames: (List String)
+        argNames: (ListVal u64)
         for true loop {
-            lblOpt: lex.accept tt: zlexer.toktype.labelTok
+            lblOpt: lex.accept tt: zlexer.toktype.labelTok pool: this.ast.names
             match lblOpt case some then {
-                nm: lblOpt.tokstr.copy
-                noName: lblOpt.tokstr
+                nm: lblOpt.text
+                noName: lblOpt.text
                 vLine: lblOpt.lineno
                 vCol: lblOpt.colno
-                dup: argNames.contains item: nm
+                dup: argNames.contains item: nm.u64
                 if dup then {
-                    bad: lex.acceptAny
+                    bad: lex.acceptAny pool: this.ast.names
                     return (this.mkError
                         tok: bad
+                        :lex
                         code: zast.err.badArgument
                         msg: "Duplicate argument name".string
                     )
@@ -1020,9 +1031,10 @@ Parser: class {
                 vpaths: this.operationPaths :lex
                 vlen: vpaths.length
                 if vlen == 0 then {
-                    bad: lex.acceptAny
+                    bad: lex.acceptAny pool: this.ast.names
                     return (this.mkError
                         tok: bad
+                        :lex
                         code: zast.err.badArgument
                         msg: "Expected an Operation after label".string
                     )
@@ -1031,39 +1043,40 @@ Parser: class {
                 vIsErr: this.isError node: val
                 if vIsErr then return val
                 no: (this.mkNamedOp
-                    name: (this.internName name: noName.stringView)
+                    name: noName
                     operation: val
                     line: vLine
                     col: vCol
                 )
                 args.append no
-                argNames.append nm
+                argNames.append from: nm.u64
             } case none then {
-                lblOpt2: lex.accept tt: zlexer.toktype.labelPreTok
+                lblOpt2: lex.accept tt: zlexer.toktype.labelPreTok pool: this.ast.names
                 match lblOpt2 case some then {
-                    nm: lblOpt2.tokstr.copy
-                    lvName: lblOpt2.tokstr.copy
-                    noName: lblOpt2.tokstr
+                    nm: lblOpt2.text
+                    lvName: lblOpt2.text
+                    noName: lblOpt2.text
                     vLine: lblOpt2.lineno
                     vCol: lblOpt2.colno
-                    dup: argNames.contains item: nm
+                    dup: argNames.contains item: nm.u64
                     if dup then {
-                        bad: lex.acceptAny
+                        bad: lex.acceptAny pool: this.ast.names
                         return (this.mkError
                             tok: bad
+                            :lex
                             code: zast.err.badArgument
                             msg: "Duplicate argument name".string
                         )
                     }
-                    lv: this.mkLabelValue line: vLine col: vCol name: lvName
+                    lv: this.mkLabelValue line: vLine col: vCol nameId: lvName
                     no: (this.mkNamedOp
-                        name: (this.internName name: noName.stringView)
+                        name: noName
                         operation: lv
                         line: vLine
                         col: vCol
                     )
                     args.append no
-                    argNames.append nm
+                    argNames.append from: nm.u64
                 } case none then {
                     break
                 }
@@ -1217,10 +1230,10 @@ Parser: class {
         sCol: startPos.colno
         tt: lex.peekType
         if tt == zlexer.toktype.labelPreTok then {
-            lblTok: lex.acceptAny
-            lvName: lblTok.tokstr.copy
-            asgnName: this.internName name: lblTok.tokstr.stringView
-            lv: this.mkLabelValue line: lblTok.lineno col: lblTok.colno name: lvName
+            lblTok: lex.acceptAny pool: this.ast.names
+            lvName: lblTok.text
+            asgnName: lblTok.text
+            lv: this.mkLabelValue line: lblTok.lineno col: lblTok.colno nameId: lvName
             asgn: Node.assignment (zast.AssignmentData
                 nodeid: this.nextId
                 lineno: sLine
@@ -1236,9 +1249,9 @@ Parser: class {
             )
         }
         if tt == zlexer.toktype.labelTok then {
-            lblTok: lex.acceptAny
-            nm: this.internName name: lblTok.tokstr.stringView
-            lex.accept tt: zlexer.toktype.eolTok
+            lblTok: lex.acceptAny pool: this.ast.names
+            nm: lblTok.text
+            lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
             eLook: this.exprLookahead :lex
             if eLook then {
                 expr: this.parseExpression :lex
@@ -1258,9 +1271,10 @@ Parser: class {
                     statementline: (this.intern n: asgn))
                 )
             } else {
-                bad: lex.acceptAny
+                bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
                     tok: bad
+                    :lex
                     code: zast.err.badStatement
                     msg: "Expected expression for assignment statement".string
                 )
@@ -1285,19 +1299,19 @@ Parser: class {
         startPos: lex.peekPos
         sLine: startPos.lineno
         sCol: startPos.colno
-        openOpt: lex.accept tt: zlexer.toktype.braceOpenTok
+        openOpt: lex.accept tt: zlexer.toktype.braceOpenTok pool: this.ast.names
         match openOpt case some then {
             prevFilter: lex.filterEolState
-            lex.setFilterEol enabled: false
+            lex.setFilterEol enabled: false pool: this.ast.names
             statements: (ListVal u32)
             for true loop {
-                for (this.atSeparator :lex) loop lex.advance
+                for (this.atSeparator :lex) loop lex.advance pool: this.ast.names
                 la: this.blocklineLookahead :lex
                 if la then {
                     sl: this.parseBlockline :lex
                     slErr: this.isError node: sl
                     if slErr then {
-                        lex.setFilterEol enabled: prevFilter
+                        lex.setFilterEol enabled: prevFilter pool: this.ast.names
                         return sl
                     }
                     statements.append (this.intern n: sl)
@@ -1305,8 +1319,8 @@ Parser: class {
                     break
                 }
             }
-            lex.setFilterEol enabled: prevFilter
-            closeOpt: lex.accept tt: zlexer.toktype.braceCloseTok
+            lex.setFilterEol enabled: prevFilter pool: this.ast.names
+            closeOpt: lex.accept tt: zlexer.toktype.braceCloseTok pool: this.ast.names
             match closeOpt case some then {
                 return (Node.statement (zast.StatementData
                     nodeid: this.nextId
@@ -1315,9 +1329,10 @@ Parser: class {
                     :statements)
                 )
             } case none then {
-                bad: lex.acceptAny
+                bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
                     tok: bad
+                    :lex
                     code: zast.err.badStatement
                     msg: "Expected closing brace for statement body".string
                 )
@@ -1465,14 +1480,15 @@ Parser: class {
         tPos: lex.peekPos
         tt: lex.peekType
         if tt == zlexer.toktype.whenTok then {
-            lex.advance
-            lex.accept tt: zlexer.toktype.eolTok
+            lex.advance pool: this.ast.names
+            lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
             vpaths: this.operationPaths :lex
             n: vpaths.length
             if n == 0 then {
-                bad: lex.acceptAny
+                bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
                     tok: bad
+                    :lex
                     code: zast.err.expectedOp
                     msg: "Expected operation (condition) for 'if'".string
                 )
@@ -1494,7 +1510,7 @@ Parser: class {
             )
         }
         if tt == zlexer.toktype.thenTok then {
-            lex.advance
+            lex.advance pool: this.ast.names
             stmt: this.acceptClauseBody :lex
             sErr: this.isError node: stmt
             if sErr then return stmt
@@ -1526,7 +1542,7 @@ Parser: class {
             )
         }
         if tt == zlexer.toktype.elseTok then {
-            lex.advance
+            lex.advance pool: this.ast.names
             estmt: this.acceptElseBody :lex
             eErr: this.isError node: estmt
             if eErr then return estmt
@@ -1553,7 +1569,7 @@ Parser: class {
         startPos: lex.peekPos
         ifLine: startPos.lineno
         ifCol: startPos.colno
-        ifOpt: lex.accept tt: zlexer.toktype.ifTok
+        ifOpt: lex.accept tt: zlexer.toktype.ifTok pool: this.ast.names
         match ifOpt case none then {
             return (this.mkErrorAt
                 pos: startPos
@@ -1567,9 +1583,10 @@ Parser: class {
             vpaths: this.operationPaths :lex
             n: vpaths.length
             if n == 0 then {
-                bad: lex.acceptAny
+                bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
                     tok: bad
+                    :lex
                     code: zast.err.expectedOp
                     msg: "Expected operation (condition) for 'if'".string
                 )
@@ -1605,20 +1622,20 @@ Parser: class {
             clausePos: lex.peekPos
             cLine: clausePos.lineno
             cCol: clausePos.colno
-            lex.advance
-            lex.accept tt: zlexer.toktype.eolTok
-            idOpt: lex.accept tt: zlexer.toktype.refIdTok
+            lex.advance pool: this.ast.names
+            lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
+            idOpt: lex.accept tt: zlexer.toktype.refIdTok pool: this.ast.names
             match idOpt case some then {
-                nm: this.internName name: idOpt.tokstr.stringView
+                nm: idOpt.text
                 armNode: Node.atomid (zast.AtomIdData
                     nodeid: this.nextId
                     lineno: idOpt.lineno
                     colno: idOpt.colno
-                    name: (this.internName name: idOpt.tokstr.stringView)
+                    name: idOpt.text
                 )
                 isThen: lex.peekType == zlexer.toktype.thenTok
                 if isThen then {
-                    lex.advance
+                    lex.advance pool: this.ast.names
                     body: this.acceptClauseBody :lex
                     bErr: this.isError node: body
                     if bErr then return body
@@ -1633,23 +1650,25 @@ Parser: class {
                     clauses.append (this.intern n: clause)
                     return (this.caseClausesTail :lex :subjectId :clauses :mLine :mCol)
                 } else {
-                    bad: lex.acceptAny
+                    bad: lex.acceptAny pool: this.ast.names
                     return (this.mkError
                         tok: bad
+                        :lex
                         code: zast.err.badCase
                         msg: "Expected then keyword for case".string
                     )
                 }
             } case none then {
-                bad: lex.acceptAny
+                bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
                     tok: bad
+                    :lex
                     code: zast.err.badReference
                     msg: "Case match expression expected (simple id)".string
                 )
             }
         }
-        elseOpt: lex.accept tt: zlexer.toktype.elseTok
+        elseOpt: lex.accept tt: zlexer.toktype.elseTok pool: this.ast.names
         match elseOpt case some then {
             estmt: this.acceptElseBody :lex
             eErr: this.isError node: estmt
@@ -1685,7 +1704,7 @@ Parser: class {
         startPos: lex.peekPos
         mLine: startPos.lineno
         mCol: startPos.colno
-        matchOpt: lex.accept tt: zlexer.toktype.matchTok
+        matchOpt: lex.accept tt: zlexer.toktype.matchTok pool: this.ast.names
         match matchOpt case none then {
             return (this.mkErrorAt
                 pos: startPos
@@ -1693,13 +1712,14 @@ Parser: class {
                 msg: "Expected match".string
             )
         } case some then {
-            lex.accept tt: zlexer.toktype.onTok
+            lex.accept tt: zlexer.toktype.onTok pool: this.ast.names
             spaths: this.operationPaths :lex
             sn: spaths.length
             if sn == 0 then {
-                bad: lex.acceptAny
+                bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
                     tok: bad
+                    :lex
                     code: zast.err.expectedOp
                     msg: "Expected operation for match (subject)".string
                 )
@@ -1728,14 +1748,15 @@ Parser: class {
         tPos: lex.peekPos
         tt: lex.peekType
         if tt == zlexer.toktype.whileTok then {
-            lex.advance
-            lex.accept tt: zlexer.toktype.eolTok
+            lex.advance pool: this.ast.names
+            lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
             vpaths: this.operationPaths :lex
             n: vpaths.length
             if n == 0 then {
-                bad: lex.acceptAny
+                bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
                     tok: bad
+                    :lex
                     code: zast.err.expectedOp
                     msg: "Expected operation (condition) for for".string
                 )
@@ -1781,15 +1802,16 @@ Parser: class {
                     msg: "for accepts at most one binding".string
                 )
             }
-            lblTok: lex.acceptAny
-            nm: lblTok.tokstr
-            lex.accept tt: zlexer.toktype.eolTok
+            lblTok: lex.acceptAny pool: this.ast.names
+            nm: lblTok.text
+            lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
             vpaths: this.operationPaths :lex
             n: vpaths.length
             if n == 0 then {
-                bad: lex.acceptAny
+                bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
                     tok: bad
+                    :lex
                     code: zast.err.expectedOp
                     msg: "Expected operation for for binding label".string
                 )
@@ -1798,7 +1820,7 @@ Parser: class {
             oErr: this.isError node: op
             if oErr then return op
             no: (this.mkNamedOp
-                name: (this.internName name: nm.stringView)
+                name: nm
                 operation: op
                 line: lblTok.lineno
                 col: lblTok.colno
@@ -1817,10 +1839,15 @@ Parser: class {
         }
         if tt == zlexer.toktype.loopTok then {
             if hasBody then {
-                bad: lex.acceptAny
-                return (this.mkError tok: bad code: zast.err.badFor msg: "Duplicate loop".string)
+                bad: lex.acceptAny pool: this.ast.names
+                return (this.mkError
+                    tok: bad
+                    :lex
+                    code: zast.err.badFor
+                    msg: "Duplicate loop".string
+                )
             }
-            lex.advance
+            lex.advance pool: this.ast.names
             stmt: this.acceptExpressionBody :lex
             sErr: this.isError node: stmt
             if sErr then return stmt
@@ -1847,9 +1874,10 @@ Parser: class {
                     :postconditions)
                 )
             }
-            bad: lex.acceptAny
+            bad: lex.acceptAny pool: this.ast.names
             return (this.mkError
                 tok: bad
+                :lex
                 code: zast.err.badFor
                 msg: "Require at least one condition or a loop for for".string
             )
@@ -1874,7 +1902,7 @@ Parser: class {
         startPos: lex.peekPos
         forLine: startPos.lineno
         forCol: startPos.colno
-        forOpt: lex.accept tt: zlexer.toktype.forTok
+        forOpt: lex.accept tt: zlexer.toktype.forTok pool: this.ast.names
         match forOpt case none then {
             return (this.mkErrorAt
                 pos: startPos
@@ -1924,7 +1952,7 @@ Parser: class {
         startPos: lex.peekPos
         wLine: startPos.lineno
         wCol: startPos.colno
-        wOpt: lex.accept tt: zlexer.toktype.withTok
+        wOpt: lex.accept tt: zlexer.toktype.withTok pool: this.ast.names
         match wOpt case none then {
             return (this.mkErrorAt
                 pos: startPos
@@ -1934,8 +1962,8 @@ Parser: class {
         } case some then {
             isLabel: lex.peekType == zlexer.toktype.labelTok
             if isLabel then {
-                lblTok: lex.acceptAny
-                nm: this.internName name: lblTok.tokstr.stringView
+                lblTok: lex.acceptAny pool: this.ast.names
+                nm: lblTok.text
                 vpaths: this.operationPaths :lex
                 n: vpaths.length
                 if n == 0 then {
@@ -1950,7 +1978,7 @@ Parser: class {
                 oErr: this.isError node: op
                 if oErr then return op
                 value: this.wrapExpression inner: op
-                doOpt: lex.accept tt: zlexer.toktype.doTok
+                doOpt: lex.accept tt: zlexer.toktype.doTok pool: this.ast.names
                 match doOpt case none then {
                     badPos: lex.peekPos
                     return (this.mkErrorAt
@@ -1972,9 +2000,10 @@ Parser: class {
                     )
                 }
             }
-            bad: lex.acceptAny
+            bad: lex.acceptAny pool: this.ast.names
             return (this.mkError
                 tok: bad
+                :lex
                 code: zast.err.expectedDef
                 msg: "Expected label after with".string
             )
@@ -1990,7 +2019,7 @@ Parser: class {
         startPos: lex.peekPos
         dLine: startPos.lineno
         dCol: startPos.colno
-        dOpt: lex.accept tt: zlexer.toktype.dataTok
+        dOpt: lex.accept tt: zlexer.toktype.dataTok pool: this.ast.names
         match dOpt case none then {
             return (this.mkErrorAt
                 pos: startPos
@@ -1998,38 +2027,40 @@ Parser: class {
                 msg: "Expected data".string
             )
         } case some then {
-            lex.accept tt: zlexer.toktype.isTok
-            openOpt: lex.accept tt: zlexer.toktype.braceOpenTok
+            lex.accept tt: zlexer.toktype.isTok pool: this.ast.names
+            openOpt: lex.accept tt: zlexer.toktype.braceOpenTok pool: this.ast.names
             match openOpt case none then {
-                bad: lex.acceptAny
+                bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
                     tok: bad
+                    :lex
                     code: zast.err.badData
                     msg: "Expected opening brace for data body".string
                 )
             } case some then {
                 elements: (ListVal u32)
-                datanames: (List String)
+                datanames: (ListVal u64)
                 for true loop {
                     ett: lex.peekType
                     if ett == zlexer.toktype.labelPreTok then {
-                        lblTok: lex.acceptAny
-                        checkName: lblTok.tokstr.copy
-                        dup: datanames.contains item: checkName
+                        lblTok: lex.acceptAny pool: this.ast.names
+                        checkName: lblTok.text
+                        dup: datanames.contains item: checkName.u64
                         if dup then {
-                            bad: lex.acceptAny
+                            bad: lex.acceptAny pool: this.ast.names
                             return (this.mkError
                                 tok: bad
+                                :lex
                                 code: zast.err.badArgument
                                 msg: "Duplicate data member name".string
                             )
                         }
-                        datanames.append checkName
-                        lvName: lblTok.tokstr.copy
-                        opName: lblTok.tokstr
-                        lv: this.mkLabelValue line: lblTok.lineno col: lblTok.colno name: lvName
+                        datanames.append from: checkName.u64
+                        lvName: lblTok.text
+                        opName: lblTok.text
+                        lv: this.mkLabelValue line: lblTok.lineno col: lblTok.colno nameId: lvName
                         no: (this.mkNamedOp
-                            name: (this.internName name: opName.stringView)
+                            name: opName
                             operation: lv
                             line: lblTok.lineno
                             col: lblTok.colno
@@ -2038,26 +2069,27 @@ Parser: class {
                     } else {
                         isLbl: ett == zlexer.toktype.labelTok
                         if isLbl then {
-                            lblTok: lex.acceptAny
-                            checkName: lblTok.tokstr.copy
-                            dup: datanames.contains item: checkName
+                            lblTok: lex.acceptAny pool: this.ast.names
+                            checkName: lblTok.text
+                            dup: datanames.contains item: checkName.u64
                             if dup then {
-                                bad: lex.acceptAny
+                                bad: lex.acceptAny pool: this.ast.names
                                 return (this.mkError
                                     tok: bad
+                                    :lex
                                     code: zast.err.badArgument
                                     msg: "Duplicate data member name".string
                                 )
                             }
-                            datanames.append checkName
-                            opName: lblTok.tokstr
+                            datanames.append from: checkName.u64
+                            opName: lblTok.text
                             la: this.atomLookahead :lex
                             if la then {
                                 pathNode: this.parsePath :lex
                                 pErr: this.isError node: pathNode
                                 if pErr then return pathNode
                                 no: (this.mkNamedOp
-                                    name: (this.internName name: opName.stringView)
+                                    name: opName
                                     operation: pathNode
                                     line: lblTok.lineno
                                     col: lblTok.colno
@@ -2091,11 +2123,12 @@ Parser: class {
                         }
                     }
                 }
-                closeOpt: lex.accept tt: zlexer.toktype.braceCloseTok
+                closeOpt: lex.accept tt: zlexer.toktype.braceCloseTok pool: this.ast.names
                 match closeOpt case none then {
-                    bad: lex.acceptAny
+                    bad: lex.acceptAny pool: this.ast.names
                     return (this.mkError
                         tok: bad
+                        :lex
                         code: zast.err.badData
                         msg: "Expected closing brace for data body".string
                     )
@@ -2108,7 +2141,7 @@ Parser: class {
                             msg: "data definition must have at least one element".string
                         )
                     }
-                    outOpt: lex.accept tt: zlexer.toktype.outTok
+                    outOpt: lex.accept tt: zlexer.toktype.outTok pool: this.ast.names
                     match outOpt case some then {
                         la: this.atomLookahead :lex
                         if la then {
@@ -2123,9 +2156,10 @@ Parser: class {
                                 outType: (this.intern n: typeNode))
                             )
                         } else {
-                            bad: lex.acceptAny
+                            bad: lex.acceptAny pool: this.ast.names
                             return (this.mkError
                                 tok: bad
+                                :lex
                                 code: zast.err.badData
                                 msg: "Expected type reference after out".string
                             )
@@ -2200,9 +2234,10 @@ Parser: class {
                 rhs: (this.intern n: rhs))
             )
         } else {
-            bad: lex.acceptAny
+            bad: lex.acceptAny pool: this.ast.names
             return (this.mkError
                 tok: bad
+                :lex
                 code: zast.err.badStatement
                 msg: "Swap requires a right hand side".string
             )
@@ -2216,8 +2251,8 @@ Parser: class {
     # last element (the caller pop-checks and propagates).
     acceptParamBlock: function {:this lex: zlexer.Lexer} out ListVal u32 is {
         params: (ListVal u32)
-        names: (List String)
-        openOpt: lex.accept tt: zlexer.toktype.braceOpenTok
+        names: (ListVal u64)
+        openOpt: lex.accept tt: zlexer.toktype.braceOpenTok pool: this.ast.names
         match openOpt case none then {
             badPos: lex.peekPos
             params.append (this.intern n: (this.mkErrorAt
@@ -2228,26 +2263,27 @@ Parser: class {
             return params
         } case some then {
             for true loop {
-                lex.accept tt: zlexer.toktype.eolTok
+                lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
                 pktt: lex.peekType
                 if pktt == zlexer.toktype.labelPreTok then {
-                    lblTok: lex.acceptAny
-                    nm: lblTok.tokstr.copy
-                    dup: names.contains item: nm
+                    lblTok: lex.acceptAny pool: this.ast.names
+                    nm: lblTok.text
+                    dup: names.contains item: nm.u64
                     if dup then {
                         params.append (this.intern n: (this.mkError
                             tok: lblTok
+                            :lex
                             code: zast.err.badParameter
                             msg: "Duplicate parameter name".string
                         ))
                         return params
                     }
-                    names.append nm
-                    lvName: lblTok.tokstr.copy
-                    opName: lblTok.tokstr
-                    lv: this.mkLabelValue line: lblTok.lineno col: lblTok.colno name: lvName
+                    names.append from: nm.u64
+                    lvName: lblTok.text
+                    opName: lblTok.text
+                    lv: this.mkLabelValue line: lblTok.lineno col: lblTok.colno nameId: lvName
                     no: (this.mkNamedOp
-                        name: (this.internName name: opName.stringView)
+                        name: opName
                         operation: lv
                         line: lblTok.lineno
                         col: lblTok.colno
@@ -2256,19 +2292,20 @@ Parser: class {
                 } else {
                     isLbl: pktt == zlexer.toktype.labelTok
                     if isLbl then {
-                        lblTok: lex.acceptAny
-                        nm: lblTok.tokstr.copy
-                        dup: names.contains item: nm
+                        lblTok: lex.acceptAny pool: this.ast.names
+                        nm: lblTok.text
+                        dup: names.contains item: nm.u64
                         if dup then {
                             params.append (this.intern n: (this.mkError
                                 tok: lblTok
+                                :lex
                                 code: zast.err.badParameter
                                 msg: "Duplicate parameter name".string
                             ))
                             return params
                         }
-                        names.append nm
-                        opName: lblTok.tokstr
+                        names.append from: nm.u64
+                        opName: lblTok.text
                         la: this.atomLookahead :lex
                         if la then {
                             pathNode: this.parseTyperefOperation :lex
@@ -2278,7 +2315,7 @@ Parser: class {
                                 return params
                             }
                             no: (this.mkNamedOp
-                                name: (this.internName name: opName.stringView)
+                                name: opName
                                 operation: pathNode
                                 line: lblTok.lineno
                                 col: lblTok.colno
@@ -2298,14 +2335,15 @@ Parser: class {
                     }
                 }
             }
-            closeOpt: lex.accept tt: zlexer.toktype.braceCloseTok
+            closeOpt: lex.accept tt: zlexer.toktype.braceCloseTok pool: this.ast.names
             match closeOpt case none then {
                 badPos: lex.peekPos
-                if (this.svIsReservedWord sv: lex.peekText) then {
+                rwTxt: this.peekReservedWord :lex
+                if rwTxt.length > 0 then {
                     params.append (this.intern n: (this.mkErrorAt
                         pos: badPos
                         code: zast.err.reservedName
-                        msg: "'\{lex.peekText}' is a reserved word and cannot be used as a name"
+                        msg: "'\{rwTxt}' is a reserved word and cannot be used as a name"
                     ))
                     return params
                 }
@@ -2343,7 +2381,7 @@ Parser: class {
                     msg: "a function declares one of `out` or `outx`".string
                 )
             }
-            lex.advance
+            lex.advance pool: this.ast.names
             la: this.atomLookahead :lex
             if la then {
                 rt: this.parseTyperefOperation :lex
@@ -2365,11 +2403,12 @@ Parser: class {
                     :startCol
                 )
             } else {
-                bad: lex.acceptAny
+                bad: lex.acceptAny pool: this.ast.names
                 outWord: "out"
                 if outKind == 2 then outWord = "outx"
                 return (this.mkError
                     tok: bad
+                    :lex
                     code: zast.err.badArgument
                     msg: "Expected type reference for \{outWord}"
                 )
@@ -2383,8 +2422,8 @@ Parser: class {
                     msg: "Duplicate is".string
                 )
             }
-            lex.advance
-            natOpt: lex.accept tt: zlexer.toktype.nativeTok
+            lex.advance pool: this.ast.names
+            natOpt: lex.accept tt: zlexer.toktype.nativeTok pool: this.ast.names
             match natOpt case some then {
                 return (this.functionClausesTail
                     :lex
@@ -2430,7 +2469,7 @@ Parser: class {
                     msg: "Duplicate as".string
                 )
             }
-            lex.advance
+            lex.advance pool: this.ast.names
             ab: this.getObjectBody :lex typeBody: false
             an: ab.length
             if an > 0 then {
@@ -2464,7 +2503,7 @@ Parser: class {
                     msg: "Duplicate in".string
                 )
             }
-            lex.advance
+            lex.advance pool: this.ast.names
             pb: this.acceptParamBlock :lex
             pn: pb.length
             if pn > 0 then {
@@ -2560,7 +2599,7 @@ Parser: class {
     # generator lowering put it in, so a yield inside a literal simply does
     # not resolve.
     parseFunctionDefinition: function {:this lex: zlexer.Lexer startPos: zlexer.tokpos} out Node is {
-        lex.advance
+        lex.advance pool: this.ast.names
         return (this.functionDefinitionInner
             :lex
             startLine: startPos.lineno
@@ -2587,8 +2626,8 @@ Parser: class {
     # malformed item for the caller to detect.
     getObjectBody: function {:this lex: zlexer.Lexer typeBody: bool} out ListVal u32 is {
         items: (ListVal u32)
-        names: (List String)
-        openOpt: lex.accept tt: zlexer.toktype.braceOpenTok
+        names: (ListVal u64)
+        openOpt: lex.accept tt: zlexer.toktype.braceOpenTok pool: this.ast.names
         match openOpt case none then {
             badPos: lex.peekPos
             items.append (this.intern n: (this.mkErrorAt
@@ -2599,26 +2638,27 @@ Parser: class {
             return items
         } case some then {
             for true loop {
-                for (this.atEol :lex) loop lex.advance
+                for (this.atEol :lex) loop lex.advance pool: this.ast.names
                 pktt: lex.peekType
                 if pktt == zlexer.toktype.labelPreTok then {
-                    lblTok: lex.acceptAny
-                    nm: lblTok.tokstr.copy
-                    dup: names.contains item: nm
+                    lblTok: lex.acceptAny pool: this.ast.names
+                    nm: lblTok.text
+                    dup: names.contains item: nm.u64
                     if dup then {
                         items.append (this.intern n: (this.mkError
                             tok: lblTok
+                            :lex
                             code: zast.err.badItem
                             msg: "Duplicate item name".string
                         ))
                         return items
                     }
-                    names.append nm
-                    lvName: lblTok.tokstr.copy
-                    opName: lblTok.tokstr
-                    lv: this.mkLabelValue line: lblTok.lineno col: lblTok.colno name: lvName
+                    names.append from: nm.u64
+                    lvName: lblTok.text
+                    opName: lblTok.text
+                    lv: this.mkLabelValue line: lblTok.lineno col: lblTok.colno nameId: lvName
                     no: (this.mkNamedOp
-                        name: (this.internName name: opName.stringView)
+                        name: opName
                         operation: lv
                         line: lblTok.lineno
                         col: lblTok.colno
@@ -2627,41 +2667,41 @@ Parser: class {
                 } else {
                     isLbl: pktt == zlexer.toktype.labelTok
                     if isLbl then {
-                        lblTok: lex.acceptAny
-                        nm: lblTok.tokstr.copy
-                        dup: names.contains item: nm
+                        lblTok: lex.acceptAny pool: this.ast.names
+                        nm: lblTok.text
+                        dup: names.contains item: nm.u64
                         if dup then {
                             items.append (this.intern n: (this.mkError
                                 tok: lblTok
+                                :lex
                                 code: zast.err.badItem
                                 msg: "Duplicate item name".string
                             ))
                             return items
                         }
-                        names.append nm
-                        opName: lblTok.tokstr
-                        mKind: unitKindForLabel name: lblTok.tokstr.stringView unitBody: false
-                        lex.accept tt: zlexer.toktype.eolTok
+                        names.append from: nm.u64
+                        opName: lblTok.text
+                        mKind: unitKindForLabel id: lblTok.text unitBody: false
+                        lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
                         member: this.objectBodyMember :lex unitKind: mKind
                         mErr: this.isError node: member
                         if mErr then {
                             items.append (this.intern n: member)
                             return items
                         }
-                        if typeBody when (isReservedMemberName
-                            pool: this.ast.names
-                            name: lblTok.tokstr.stringView
-                        ) then {
+                        if typeBody when (isReservedMemberName id: lblTok.text) then {
                             visUnit: false
                             if mKind.publicNs then visUnit = true
                             if mKind.privateNs then visUnit = true
                             allowed: false
                             if visUnit when (this.isUnitDef node: member) then allowed = true
                             if (allowed) == false then {
-                                em: "'\{lblTok.tokstr.stringView}' is a reserved member name"
-                                if visUnit then em = "'\{lblTok.tokstr.stringView}:' must introduce a unit definition, e.g. `\{lblTok.tokstr.stringView}: unit { :field }`"
+                                lblTxt: zast.poolTextCopy pool: this.ast.names ref: lblTok.text
+                                em: "'\{lblTxt}' is a reserved member name"
+                                if visUnit then em = "'\{lblTxt}:' must introduce a unit definition, e.g. `\{lblTxt}: unit { :field }`"
                                 items.append (this.intern n: (this.mkError
                                     tok: lblTok
+                                    :lex
                                     code: zast.err.reservedMember
                                     msg: em
                                 ))
@@ -2669,7 +2709,7 @@ Parser: class {
                             }
                         }
                         no: (this.mkNamedOp
-                            name: (this.internName name: opName.stringView)
+                            name: opName
                             operation: member
                             line: lblTok.lineno
                             col: lblTok.colno
@@ -2680,14 +2720,15 @@ Parser: class {
                     }
                 }
             }
-            closeOpt: lex.accept tt: zlexer.toktype.braceCloseTok
+            closeOpt: lex.accept tt: zlexer.toktype.braceCloseTok pool: this.ast.names
             match closeOpt case none then {
                 badPos: lex.peekPos
-                if (this.svIsReservedWord sv: lex.peekText) then {
+                rwTxt: this.peekReservedWord :lex
+                if rwTxt.length > 0 then {
                     items.append (this.intern n: (this.mkErrorAt
                         pos: badPos
                         code: zast.err.reservedName
-                        msg: "'\{lex.peekText}' is a reserved word and cannot be used as a name"
+                        msg: "'\{rwTxt}' is a reserved word and cannot be used as a name"
                     ))
                     return items
                 }
@@ -2720,9 +2761,10 @@ Parser: class {
         )
         inlineTypedef: isInlineTypedefTok :tt
         if inlineTypedef then {
-            bad: lex.acceptAny
+            bad: lex.acceptAny pool: this.ast.names
             return (this.mkError
                 tok: bad
+                :lex
                 code: zast.err.badItem
                 msg: "Inline type definition is not allowed here; define it at unit level and reference it by name".string
             )
@@ -2730,9 +2772,10 @@ Parser: class {
         paths: this.operationPaths :lex
         n: paths.length
         if n == 0 then {
-            bad: lex.acceptAny
+            bad: lex.acceptAny pool: this.ast.names
             return (this.mkError
                 tok: bad
+                :lex
                 code: zast.err.badItem
                 msg: "Expected a function or expression for item".string
             )
@@ -2802,31 +2845,32 @@ Parser: class {
     # namedoperation arms; a trailing error node flags a malformed body.
     acceptUnitBody: function {:this lex: zlexer.Lexer} out ListVal u32 is {
         body: (ListVal u32)
-        names: (List String)
+        names: (ListVal u64)
         prevFilter: lex.filterEolState
-        lex.setFilterEol enabled: false
+        lex.setFilterEol enabled: false pool: this.ast.names
         for true loop {
-            for (this.atEol :lex) loop lex.advance
+            for (this.atEol :lex) loop lex.advance pool: this.ast.names
             pktt: lex.peekType
             if pktt == zlexer.toktype.labelPreTok then {
-                lblTok: lex.acceptAny
-                nm: lblTok.tokstr.copy
-                dup: names.contains item: nm
+                lblTok: lex.acceptAny pool: this.ast.names
+                nm: lblTok.text
+                dup: names.contains item: nm.u64
                 if dup then {
                     body.append (this.intern n: (this.mkError
                         tok: lblTok
+                        :lex
                         code: zast.err.duplicateDef
                         msg: "Duplicate definition".string
                     ))
-                    lex.setFilterEol enabled: prevFilter
+                    lex.setFilterEol enabled: prevFilter pool: this.ast.names
                     return body
                 }
-                names.append nm
-                lvName: lblTok.tokstr.copy
-                opName: lblTok.tokstr
-                lv: this.mkLabelValue line: lblTok.lineno col: lblTok.colno name: lvName
+                names.append from: nm.u64
+                lvName: lblTok.text
+                opName: lblTok.text
+                lv: this.mkLabelValue line: lblTok.lineno col: lblTok.colno nameId: lvName
                 no: (this.mkNamedOp
-                    name: (this.internName name: opName.stringView)
+                    name: opName
                     operation: lv
                     line: lblTok.lineno
                     col: lblTok.colno
@@ -2835,45 +2879,48 @@ Parser: class {
             } else {
                 isLbl: pktt == zlexer.toktype.labelTok
                 if isLbl then {
-                    lblTok: lex.acceptAny
-                    nm: lblTok.tokstr.copy
-                    dup: names.contains item: nm
+                    lblTok: lex.acceptAny pool: this.ast.names
+                    nm: lblTok.text
+                    dup: names.contains item: nm.u64
                     if dup then {
                         body.append (this.intern n: (this.mkError
                             tok: lblTok
+                            :lex
                             code: zast.err.duplicateDef
                             msg: "Duplicate definition".string
                         ))
-                        lex.setFilterEol enabled: prevFilter
+                        lex.setFilterEol enabled: prevFilter pool: this.ast.names
                         return body
                     }
-                    names.append nm
-                    opName: lblTok.tokstr
-                    dKind: unitKindForLabel name: lblTok.tokstr.stringView unitBody: true
-                    lex.accept tt: zlexer.toktype.eolTok
-                    lex.setFilterEol enabled: true
+                    names.append from: nm.u64
+                    opName: lblTok.text
+                    dKind: unitKindForLabel id: lblTok.text unitBody: true
+                    lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
+                    lex.setFilterEol enabled: true pool: this.ast.names
                     defNode: this.acceptTypeDefinition :lex unitKind: dKind
-                    lex.setFilterEol enabled: false
+                    lex.setFilterEol enabled: false pool: this.ast.names
                     dErr: this.isError node: defNode
                     if dErr then {
                         body.append (this.intern n: defNode)
-                        lex.setFilterEol enabled: prevFilter
+                        lex.setFilterEol enabled: prevFilter pool: this.ast.names
                         return body
                     }
                     isVisU: false
                     if dKind.publicNs then isVisU = true
                     if dKind.privateNs then isVisU = true
                     if isVisU when (this.isUnitDef node: defNode) == false then {
+                        dTxt: zast.poolTextCopy pool: this.ast.names ref: lblTok.text
                         body.append (this.intern n: (this.mkError
                             tok: lblTok
+                            :lex
                             code: zast.err.reservedMember
-                            msg: "'\{lblTok.tokstr.stringView}:' must introduce a unit definition, e.g. `\{lblTok.tokstr.stringView}: unit { :field }`"
+                            msg: "'\{dTxt}:' must introduce a unit definition, e.g. `\{dTxt}: unit { :field }`"
                         ))
-                        lex.setFilterEol enabled: prevFilter
+                        lex.setFilterEol enabled: prevFilter pool: this.ast.names
                         return body
                     }
                     no: (this.mkNamedOp
-                        name: (this.internName name: opName.stringView)
+                        name: opName
                         operation: defNode
                         line: lblTok.lineno
                         col: lblTok.colno
@@ -2884,7 +2931,7 @@ Parser: class {
                 }
             }
         }
-        lex.setFilterEol enabled: prevFilter
+        lex.setFilterEol enabled: prevFilter pool: this.ast.names
         return body
     }
 
@@ -2892,9 +2939,9 @@ Parser: class {
     # the `unit` keyword (startPos); this consumes it and stamps the `kind`
     # its label implies. Returns a bare unitdef Node positioned at the keyword.
     parseUnitDefinition: function {:this lex: zlexer.Lexer startPos: zlexer.tokpos kind: zast.unitkind} out Node is {
-        lex.advance
-        lex.accept tt: zlexer.toktype.asTok
-        openOpt: lex.accept tt: zlexer.toktype.braceOpenTok
+        lex.advance pool: this.ast.names
+        lex.accept tt: zlexer.toktype.asTok pool: this.ast.names
+        openOpt: lex.accept tt: zlexer.toktype.braceOpenTok pool: this.ast.names
         match openOpt case none then {
             badPos: lex.peekPos
             return (this.mkErrorAt
@@ -2912,13 +2959,14 @@ Parser: class {
                 }
                 body.append lastId
             }
-            closeOpt: lex.accept tt: zlexer.toktype.braceCloseTok
+            closeOpt: lex.accept tt: zlexer.toktype.braceCloseTok pool: this.ast.names
             match closeOpt case none then {
                 badPos: lex.peekPos
-                if (this.svIsReservedWord sv: lex.peekText) then return (this.mkErrorAt
+                rwTxt: this.peekReservedWord :lex
+                if rwTxt.length > 0 then return (this.mkErrorAt
                     pos: badPos
                     code: zast.err.reservedName
-                    msg: "'\{lex.peekText}' is a reserved word and cannot be used as a name"
+                    msg: "'\{rwTxt}' is a reserved word and cannot be used as a name"
                 )
                 return (this.mkErrorAt
                     pos: badPos
@@ -2947,7 +2995,7 @@ Parser: class {
     # empty is/as accumulators, and tail-calls the reorder loop. Stays a
     # thin seed so the tail is re-entrant with the keyword already consumed.
     parseItemDefinition: function {:this lex: zlexer.Lexer startPos: zlexer.tokpos kind: zast.objectkind} out Node is {
-        lex.advance
+        lex.advance pool: this.ast.names
         isItems: (ListVal u32)
         asItems: (ListVal u32)
         return (this.acceptItemBodiesTail
@@ -2986,8 +3034,8 @@ Parser: class {
                     msg: "Duplicate is clause".string
                 )
             }
-            lex.advance
-            natOpt: lex.accept tt: zlexer.toktype.nativeTok
+            lex.advance pool: this.ast.names
+            natOpt: lex.accept tt: zlexer.toktype.nativeTok pool: this.ast.names
             match natOpt case some then {
                 return (this.acceptItemBodiesTail
                     :lex
@@ -3028,7 +3076,7 @@ Parser: class {
             if hasIs then noBodyYet = false
             if isNative then noBodyYet = false
             if noBodyYet then {
-                lex.advance
+                lex.advance pool: this.ast.names
                 return (this.acceptItemBodiesTail
                     :lex
                     :isItems
@@ -3050,7 +3098,7 @@ Parser: class {
                     msg: "Duplicate as clause".string
                 )
             }
-            lex.advance
+            lex.advance pool: this.ast.names
             ab: this.getObjectBody :lex typeBody: true
             abn: ab.length
             if abn > 0 then {
@@ -3196,7 +3244,7 @@ Parser: class {
                 msg: "Expected an expression".string
             )
         }
-        eqOpt: lex.accept tt: zlexer.toktype.equalsTok
+        eqOpt: lex.accept tt: zlexer.toktype.equalsTok pool: this.ast.names
         match eqOpt case some then {
             return (this.buildReassignment
                 :paths
@@ -3205,7 +3253,7 @@ Parser: class {
                 startCol: tPos.colno
             )
         } case none then {
-            swOpt: lex.accept tt: zlexer.toktype.swapTok
+            swOpt: lex.accept tt: zlexer.toktype.swapTok pool: this.ast.names
             match swOpt case some then {
                 return (this.buildSwap
                     :paths
@@ -3313,6 +3361,7 @@ Parser: class {
         } case ok then {
             tk: zlexer.Tokenizer.create source: r.take fsno: fsid
             lx: zlexer.Lexer.create lexer: tk
+            lx.advance pool: this.ast.names
             firstPos: lx.peekPos
             segStart: this.nextNodeId
             body: this.acceptUnitBody lex: lx
@@ -3324,15 +3373,16 @@ Parser: class {
                 }
                 body.append lastId
             }
-            eofOpt: lx.accept tt: zlexer.toktype.eofTok
+            eofOpt: lx.accept tt: zlexer.toktype.eofTok pool: this.ast.names
             match (
                 eofOpt
             ) case none then {
                 badPos: lx.peekPos
-                if (this.svIsReservedWord sv: lx.peekText) then return (this.mkErrorAt
+                rwTxt: this.peekReservedWord lex: lx
+                if rwTxt.length > 0 then return (this.mkErrorAt
                     pos: badPos
                     code: zast.err.reservedName
-                    msg: "'\{lx.peekText}' is a reserved word and cannot be used as a name"
+                    msg: "'\{rwTxt}' is a reserved word and cannot be used as a name"
                 )
                 return (this.mkErrorAt
                     pos: badPos

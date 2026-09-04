@@ -123,12 +123,12 @@ compiler front-end (<code>lib/system/zlexer.z</code>); the raw
 <p><strong>Types</strong></p>
 <ul>
 <li><a href="#tokenizer"><strong>Tokenizer</strong> -- <code>class as { create: function {source: String.take fsno: zvfs.fsno} out this  ...  token: function {:this} out Token }</code></a></li>
-<li><a href="#token"><strong>Token</strong> -- <code>class { toktype: toktype  tokstr: String  fsno: zvfs.fsno  lineno: u32  colno: u32  tokenid: u64 }</code></a></li>
+<li><a href="#token"><strong>Token</strong> -- <code>class { toktype: toktype  text: zast.nameid  fsno: zvfs.fsno  lineno: u32  colno: u32  width: u32 }</code></a></li>
 <li><a href="#tt"><strong>toktype</strong> -- <code>variant { ...51 arms: wsTok, eolTok, commentTok, eofTok, refIdTok, keywords (functionTok, ifTok, forTok, ...), literals, punctuation... }</code></a></li>
 </ul>
 <p><strong>Functions</strong></p>
 <ul>
-<li><a href="#scan"><strong>tokenize.scan</strong> -- <code>function {source: String.take} out (List Token)</code></a></li>
+<li><a href="#scan"><strong>tokenize.scan</strong> -- <code>function {source: String.take pool: StringPool} out (List Token)</code></a></li>
 </ul>
 <h2 id="tokenizer"><a href="#tokenizer">3. tokenizer</a></h2>
 <p>The raw scanner. <code>create</code> takes ownership of the <code>source</code>
@@ -152,10 +152,13 @@ Each call to <code>token</code> returns the next <code>Token</code>, including
 tokenizer by hand.</p>
 <h2 id="token"><a href="#token">4. token</a></h2>
 <p>One lexical token. <code>toktype</code> is its <code>toktype</code> classification;
-<code>tokstr</code> is the exact source slice (so a <code>wsTok</code> token's
-<code>tokstr</code> is the run of spaces, a <code>commentTok</code> token's is the
-comment text). <code>lineno</code> / <code>colno</code> are 1-based; the token's
-byte width is <code>tokstr.length</code>.</p>
+<code>text</code> is its spelling INTERNED in the pool the scan was given, and
+<code>zast.poolTextAt</code> reads it back -- for a <code>wsTok</code> that is the run of
+spaces, for a <code>commentTok</code> the comment text. A token carries an id
+rather than its own copy because nearly every spelling in a source file
+has been seen before, and the pool copies only on first sight.
+<code>lineno</code> / <code>colno</code> are 1-based, and <code>width</code> is the token's byte
+count, which is what a diagnostic underlines.</p>
 <h2 id="tt"><a href="#tt">5. tt</a></h2>
 <p><code>toktype</code> is a <code>variant</code> with one arm per token kind. Trivia arms
 <code>wsTok</code>, <code>commentTok</code>, and <code>eolTok</code> carry the between-token
@@ -175,7 +178,10 @@ dispatch:</p>
 <p>Tokenize <code>source</code> into its full raw token stream -- whitespace,
 comments, and EOL trivia included -- terminated by the <code>eofTok</code>
 token. The one-call convenience over <code>Tokenizer</code>.</p>
-<pre><code class="language-zerolang">  toks: tokenize.scan source: src.copy
+<p>The pool outlives the scan, so the caller owns it and reads spellings
+back from it afterwards.</p>
+<pre><code class="language-zerolang">  pool: tokenize.StringPool.create
+  toks: tokenize.scan source: src.copy :pool
   print "tokens: \{toks.length}"</code></pre>
 </main>
 </body>
