@@ -814,24 +814,25 @@ suggestSimilar: function {
     best: String
     bestDist: 3.u64
     tied: false
-    nms: (ListVal u64)
-    tds: (ListVal u64)
-    st.typing.declChildRows ownerTid: parentTypeId names: nms tids: tds
+    otci: parentTypeId
     ci: u64
-    nameCount: nms.length
+    nameCount: st.typing.declRowSlots ownerTid: otci
     for ci < nameCount loop {
-        nid: nms.get i: ci
+        rwci: st.typing.declRowAt ownerTid: otci membersOnly: false slot: ci
         ci = ci + 1
-        cnB: ast.names.texts.get i: nid.u64
-        cn: cnB.stringView
-        if (cn == name) == false then {
-            d: levenshtein a: name b: cn
-            if d < bestDist then {
-                best = cnB.copy
-                bestDist = d
-                tied = false
-            } else {
-                if d == bestDist then tied = true
+        if rwci.keep then {
+            nid: rwci.name
+            cnB: ast.names.texts.get i: nid.u64
+            cn: cnB.stringView
+            if (cn == name) == false then {
+                d: levenshtein a: name b: cn
+                if d < bestDist then {
+                    best = cnB.copy
+                    bestDist = d
+                    tied = false
+                } else {
+                    if d == bestDist then tied = true
+                }
             }
         }
     }
@@ -3077,15 +3078,16 @@ validateMonoRefLabels: function {
     if tname.length == 0 then return
     childNames: (ListVal zast.nameid)
     {
-        mrN: (ListVal u64)
-        mrT: (ListVal u64)
-        st.typing.declChildRows ownerTid: tplId names: mrN tids: mrT
+        otmri: tplId
         mri: u64
-        mrn: mrN.length
+        mrn: st.typing.declRowSlots ownerTid: otmri
         for mri < mrn loop {
-            mrnid: mrN.get i: mri
+            rwmri: st.typing.declRowAt ownerTid: otmri membersOnly: false slot: mri
             mri = mri + 1
-            childNames.append (zast.nameid.create from: mrnid.u32.orPanic)
+            if rwmri.keep then {
+                mrnid: rwmri.name
+                childNames.append (zast.nameid.create from: mrnid.u32.orPanic)
+            }
         }
     }
     aiterV: arguments.iterate
@@ -7019,51 +7021,49 @@ materializeCreateParams: function {
     }
     fnameIds: (ListVal u64)
     ftypeIds: (ListVal u64)
-    rowNids: (ListVal u64)
-    rowCtos: (ListVal u64)
-    (st.typing.declMemberList
-        ownerTid: (ztypes.tid.create from: typeTid.u64)
-        names: rowNids
-        tids: rowCtos
-    )
+    ot_ri: (ztypes.tid.create from: typeTid.u64)
     {
         {
             ri: u64
-            for ri < rowNids.length loop {
-                tcNameId: rowNids.get i: ri
-                cto: rowCtos.get i: ri
+            n_ri: st.typing.declRowSlots ownerTid: ot_ri
+            for ri < n_ri loop {
+                rw_ri: st.typing.declRowAt ownerTid: ot_ri membersOnly: true slot: ri
                 ri = ri + 1
-                inc: false
-                fptr: false
-                fptr = (st.typing.declIsFnptrFieldId
-                    parentTypeId: (ztypes.tid.create from: typeTid.u64)
-                    nameId: (zast.nameid.create from: tcNameId.u32.orPanic)
-                )
-                if fptr then {
-                    inc = true
-                } else {
-                    if cto > 0 when (st.reg.typetypeOf typeId: (ztypes.tid.create from: cto.u64)) != ztypes.ztypetype.functionType then {
-                        isC: false
-                        aco: st.typing.asConstClone.get key: cto
-                        match (
-                            aco
-                        ) case some then {
-                            isC = aco
-                        } case none then null
-                        isMk8: false
-                        mi8: u64
-                        mn8: mkIds8.length
-                        for mi8 < mn8 loop {
-                            mv8: mkIds8.get i: mi8
-                            if mv8 > 0 when mv8 == tcNameId then isMk8 = true
-                            mi8 = mi8 + 1
+                if rw_ri.keep then {
+                    tcNameId: rw_ri.name
+                    cto: rw_ri.tid
+                    inc: false
+                    fptr: false
+                    fptr = (st.typing.declIsFnptrFieldId
+                        parentTypeId: (ztypes.tid.create from: typeTid.u64)
+                        nameId: (zast.nameid.create from: tcNameId.u32.orPanic)
+                    )
+                    if fptr then {
+                        inc = true
+                    } else {
+                        if cto > 0 when (st.reg.typetypeOf typeId: (ztypes.tid.create from: cto.u64)) != ztypes.ztypetype.functionType then {
+                            isC: false
+                            aco: st.typing.asConstClone.get key: cto
+                            match (
+                                aco
+                            ) case some then {
+                                isC = aco
+                            } case none then null
+                            isMk8: false
+                            mi8: u64
+                            mn8: mkIds8.length
+                            for mi8 < mn8 loop {
+                                mv8: mkIds8.get i: mi8
+                                if mv8 > 0 when mv8 == tcNameId then isMk8 = true
+                                mi8 = mi8 + 1
+                            }
+                            if isC == false when isMk8 == false then inc = true
                         }
-                        if isC == false when isMk8 == false then inc = true
                     }
-                }
-                if inc then {
-                    fnameIds.append tcNameId
-                    ftypeIds.append cto
+                    if inc then {
+                        fnameIds.append tcNameId
+                        ftypeIds.append cto
+                    }
                 }
             }
         }
@@ -14334,18 +14334,15 @@ fillMonoMethodSignature: function {
     subs: (IdMapV zast.nameid v: u64).view
     gpNames: (IdMapV zast.nameid v: bool).view
 } is {
-    bmNms: (ListVal u64)
-    cIds: (ListVal u64)
-    (st.typing.declMemberList
-        ownerTid: (ztypes.tid.create from: srcId.u64)
-        names: bmNms
-        tids: cIds
-    )
+    otBm: (ztypes.tid.create from: srcId.u64)
     ci: u64
-    cn3: bmNms.length
+    cn3: st.typing.declRowSlots ownerTid: otBm
     for ci < cn3 loop {
-        chName: zast.nameid.create from: (bmNms.get i: ci).u32.orPanic
-        chId: cIds.get i: ci
+        rwBm: st.typing.declRowAt ownerTid: otBm membersOnly: true slot: ci
+        ci = ci + 1
+        if rwBm.keep then {
+        chName: zast.nameid.create from: rwBm.name.u32.orPanic
+        chId: rwBm.tid
         target: chId
         ctnT: st.reg.nameOf tid: (ztypes.tid.create from: chId.u64)
         ctn: nameIdOf :ast name: ctnT.stringView
@@ -14365,7 +14362,7 @@ fillMonoMethodSignature: function {
             nameId: chName
             childTypeId: target
         )
-        ci = ci + 1
+        }
     }
     rto: st.reg.returnTypeOf tid: (ztypes.tid.create from: srcId.u64)
     if rto > 0 then {
@@ -16390,18 +16387,19 @@ cloneMethodInto: function {
     cOh5: (ListVal bool)
     cOv5: (ListVal ztypes.zparamownership)
     {
-        (st.typing.declMemberList
-            ownerTid: (ztypes.tid.create from: tplFnId.u64)
-            names: cNid5
-            tids: cI5
-        )
+        ot5: (ztypes.tid.create from: tplFnId.u64)
         cq5: u64
-        cqn5: cNid5.length
+        cqn5: st.typing.declRowSlots ownerTid: ot5
         for cq5 < cqn5 loop {
-            nmB5: ast.names.texts.get i: ((cNid5.get i: cq5)).u64
-            nm5: nmB5.copy
-            cN5.append nm5
+            rw5: st.typing.declRowAt ownerTid: ot5 membersOnly: true slot: cq5
             cq5 = cq5 + 1
+            if rw5.keep then {
+                cNid5.append rw5.name
+                cI5.append rw5.tid
+                nmB5: ast.names.texts.get i: rw5.name
+                nm5: nmB5.copy
+                cN5.append nm5
+            }
         }
     }
     # the template's parameter ownership
@@ -17086,15 +17084,17 @@ mintMonoMembers: function {
     cIds: (ListVal u64)
     forceAllMembers :st frame: rf :ast tid: templateId
     {
-        mmNms: (ListVal u64)
-        st.typing.declMemberList ownerTid: templateId names: mmNms tids: cIds
         mmq: u64
-        mmn: mmNms.length
+        mmn: st.typing.declRowSlots ownerTid: templateId
         for mmq < mmn loop {
-            cnB1: ast.names.texts.get i: ((mmNms.get i: mmq)).u64
-            cn: cnB1.copy
-            cNames.append cn
+            rwMm: st.typing.declRowAt ownerTid: templateId membersOnly: true slot: mmq
             mmq = mmq + 1
+            if rwMm.keep then {
+                cIds.append rwMm.tid
+                cnB1: ast.names.texts.get i: rwMm.name
+                cn: cnB1.copy
+                cNames.append cn
+            }
         }
     }
     listRefTid: builtinTidT :st frame: rf :ast base: "ListRef"
@@ -18722,16 +18722,15 @@ inferGenericConstruction: function {
     childNames: (ListVal zast.nameid)
     cIds3: (ListVal u64)
     {
-        igNms: (ListVal u64)
-        igTds: (ListVal u64)
-        st.typing.declMemberList ownerTid: tplId names: igNms tids: igTds
         igi: u64
-        ign: igNms.length
+        ign: st.typing.declRowSlots ownerTid: tplId
         for igi < ign loop {
-            childNames.append (zast.nameid.create from: ((igNms.get i: igi)).u32.orPanic)
-            cid1: igTds.get i: igi
-            cIds3.append cid1
+            rwIg: st.typing.declRowAt ownerTid: tplId membersOnly: true slot: igi
             igi = igi + 1
+            if rwIg.keep then {
+                childNames.append (zast.nameid.create from: rwIg.name.u32.orPanic)
+                cIds3.append rwIg.tid
+            }
         }
     }
     fNames: (ListVal zast.nameid)
@@ -19328,15 +19327,16 @@ validateGenericTypeArgs: function {
     tk: declOfTypeId :st tid: tplId
     childNames: (ListVal zast.nameid)
     {
-        vgN: (ListVal u64)
-        vgT: (ListVal u64)
-        st.typing.declChildRows ownerTid: tplId names: vgN tids: vgT
+        otvgi: tplId
         vgi: u64
-        vgn: vgN.length
+        vgn: st.typing.declRowSlots ownerTid: otvgi
         for vgi < vgn loop {
-            vgnid: vgN.get i: vgi
+            rwvgi: st.typing.declRowAt ownerTid: otvgi membersOnly: false slot: vgi
             vgi = vgi + 1
-            childNames.append (zast.nameid.create from: vgnid.u32.orPanic)
+            if rwvgi.keep then {
+                vgnid: rwvgi.name
+                childNames.append (zast.nameid.create from: vgnid.u32.orPanic)
+            }
         }
     }
     primaryName: firstGenericParamId :st templateId: (ztypes.tid.create from: tplId.u64)
@@ -27543,54 +27543,56 @@ dataFieldIds: function {
     }
     # collect the rows first: the fnptr probe below resolves a member
     # declaration, which locks the whole ZTyping this iteration is holding
-    rowNids: (ListVal u64)
-    rowCtos: (ListVal u64)
-    st.typing.declMemberList ownerTid: tid names: rowNids tids: rowCtos
+    ot_ri: tid
     {
         {
             ri: u64
-            for ri < rowNids.length loop {
-                tcNameId: rowNids.get i: ri
-                cto: rowCtos.get i: ri
+            n_ri: st.typing.declRowSlots ownerTid: ot_ri
+            for ri < n_ri loop {
+                rw_ri: st.typing.declRowAt ownerTid: ot_ri membersOnly: true slot: ri
                 ri = ri + 1
-                inc: false
-            if isFn then {
-                inc = true
-            } else {
-                fptr: false
-                fptr = (st.typing.declIsFnptrFieldId
-                    parentTypeId: tid
-                    nameId: (zast.nameid.create from: tcNameId.u32.orPanic)
-                )
-                if fptr then {
+                if rw_ri.keep then {
+                    tcNameId: rw_ri.name
+                    cto: rw_ri.tid
+                    inc: false
+                if isFn then {
                     inc = true
                 } else {
-                    if cto > 0 when (st.reg.typetypeOf typeId: (ztypes.tid.create from: cto.u64)) != ztypes.ztypetype.functionType then {
-                        isC: false
-                        aco: st.typing.asConstClone.get key: cto
-                        match (
-                            aco
-                        ) case some then {
-                            isC = aco
-                        } case none then null
-                        isMk8: false
-                        mi8: u64
-                        mn8: mkIds8.length
-                        for mi8 < mn8 loop {
-                            mv8: mkIds8.get i: mi8
-                            if mv8 > 0 when mv8 == tcNameId then isMk8 = true
-                            mi8 = mi8 + 1
+                    fptr: false
+                    fptr = (st.typing.declIsFnptrFieldId
+                        parentTypeId: tid
+                        nameId: (zast.nameid.create from: tcNameId.u32.orPanic)
+                    )
+                    if fptr then {
+                        inc = true
+                    } else {
+                        if cto > 0 when (st.reg.typetypeOf typeId: (ztypes.tid.create from: cto.u64)) != ztypes.ztypetype.functionType then {
+                            isC: false
+                            aco: st.typing.asConstClone.get key: cto
+                            match (
+                                aco
+                            ) case some then {
+                                isC = aco
+                            } case none then null
+                            isMk8: false
+                            mi8: u64
+                            mn8: mkIds8.length
+                            for mi8 < mn8 loop {
+                                mv8: mkIds8.get i: mi8
+                                if mv8 > 0 when mv8 == tcNameId then isMk8 = true
+                                mi8 = mi8 + 1
+                            }
+                            if isC == false when isMk8 == false then inc = true
                         }
-                        if isC == false when isMk8 == false then inc = true
                     }
                 }
-            }
-            if inc then {
-                idx0: cto
-                ids.append idx0
-                nid0: tcNameId
-                nameIds.append nid0
-            }
+                if inc then {
+                    idx0: cto
+                    ids.append idx0
+                    nid0: tcNameId
+                    nameIds.append nid0
+                }
+                }
             }
         }
     }
@@ -28963,14 +28965,14 @@ checkBoxConstruction: function {
         )
         # Stage the element's members first: setMemberType appends to the very
         # declaration being iterated.
-        cIds2: (ListVal u64)
-        cNid2: (ListVal u64)
-        st.typing.declMemberList ownerTid: vt names: cNid2 tids: cIds2
         bi: u64
-        bn2: cNid2.length
+        bn2: st.typing.declRowSlots ownerTid: vt
         for bi < bn2 loop {
-            chi: cIds2.get i: bi
-            chnId: (zast.nameid.create from: (cNid2.get i: bi))
+            rwB2: st.typing.declRowAt ownerTid: vt membersOnly: true slot: bi
+            bi = bi + 1
+            if rwB2.keep then {
+            chi: rwB2.tid
+            chnId: (zast.nameid.create from: rwB2.name)
             (forceMemberOf :st frame: st.curFrame :ast parentTypeId: mid nameId: chnId)
             ext: st.typing.declChildOfId parentTypeId: mid nameId: chnId
             match (
@@ -28988,7 +28990,7 @@ checkBoxConstruction: function {
                 st.typing.declSynthMember parentTypeId: mid nameId: chnId kind: kk
                 st.typing.setMemberType parentTypeId: mid nameId: chnId childTypeId: chi
             }
-            bi = bi + 1
+            }
         }
     }
     bcal: nodeId n: (ast.nodes.get i: call.callable.u64)
@@ -31472,33 +31474,34 @@ genericCallHolders: function {
 } out (ListVal zast.nameid) is {
     gparams: (st.reg.genericParamNamesOf tdecl: (st.typing.declIdOfType typeId: funcId))
     {
-        gcNms: (ListVal u64)
-        gcTds: (ListVal u64)
-        st.typing.declMemberList ownerTid: funcId names: gcNms tids: gcTds
+        ot_gci: funcId
         {
             gci: u64
-            gcn: gcNms.length
+            gcn: st.typing.declRowSlots ownerTid: ot_gci
             for gci < gcn loop {
-                gcNid: gcNms.get i: gci
-                cto: gcTds.get i: gci
+                rw_gci: st.typing.declRowAt ownerTid: ot_gci membersOnly: true slot: gci
                 gci = gci + 1
-                {
-                    # the receiver is implicit at method call sites: keep it
-                    # out of the positional holder list so a label-free arg
-                    # maps to the first USER param (T holders included). The
-                    # receiver is the shorthand `this` or the type's recorded
-                    # long-form receiver name.
-                    isRecv: gcNid == zast.names.wkThis.u64
-                    if (isRecv) == false then {
-                        isRecv = (st.reg.thisParamNameIs
-                            tid: funcId
-                            nameId: (zast.nameid.create from: gcNid.u32.orPanic)
-                        )
-                    }
-                    if (isRecv) == false then {
-                        pNames.append (zast.nameid.create from: gcNid.u32.orPanic)
-                        cto2: cto
-                        pHolderIds.append cto2
+                if rw_gci.keep then {
+                    gcNid: rw_gci.name
+                    cto: rw_gci.tid
+                    {
+                        # the receiver is implicit at method call sites: keep it
+                        # out of the positional holder list so a label-free arg
+                        # maps to the first USER param (T holders included). The
+                        # receiver is the shorthand `this` or the type's recorded
+                        # long-form receiver name.
+                        isRecv: gcNid == zast.names.wkThis.u64
+                        if (isRecv) == false then {
+                            isRecv = (st.reg.thisParamNameIs
+                                tid: funcId
+                                nameId: (zast.nameid.create from: gcNid.u32.orPanic)
+                            )
+                        }
+                        if (isRecv) == false then {
+                            pNames.append (zast.nameid.create from: gcNid.u32.orPanic)
+                            cto2: cto
+                            pHolderIds.append cto2
+                        }
                     }
                 }
             }

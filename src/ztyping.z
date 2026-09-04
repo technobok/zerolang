@@ -1810,8 +1810,10 @@ ZTyping: class {
     }
 
     # declMemberCount -- how many members the type's declaration carries: the
-    # declaration-side form of childCount. Routed through declMemberList so the
-    # two can never disagree about what counts as a member.
+    # declaration-side form of childCount. It walks the children directly and
+    # repeats declRowAt's member test rather than reading rows through it: this
+    # is a hot probe, and routing it through the row reader cost 91.6M
+    # instructions to save 1,510 allocations. Keep the two tests in step.
     declMemberCount: function {this: this.view ownerTid: ztypes.tid} out u64 is {
         od: this.declIdOfType typeId: ownerTid
         if od.isZero then return (this.declPendCount parentTypeId: ownerTid)
@@ -1844,9 +1846,10 @@ ZTyping: class {
     }
 
     # declLastChildNameId -- the name pool id of the LAST typed child of the
-    # type's declaration, 0 when it has none. Last, because that is the row a
-    # declChildRows walk leaves behind; paired with declMemberCount == 1 by the
-    # single-parameter probes, which want the name without a row list.
+    # type's declaration, 0 when it has none. Last, because that is the row an
+    # unfiltered walk leaves behind; paired with declMemberCount == 1 by the
+    # single-parameter probes, which want the name without a row list. Direct,
+    # for the same measured reason as declMemberCount above.
     declLastChildNameId: function {this: this.view ownerTid: ztypes.tid} out u64 is {
         od: this.declIdOfType typeId: ownerTid
         if od.isZero then return 0

@@ -1043,22 +1043,22 @@ ZDumper: class {
                 if pdu.stringView == unm then inUnit = true
             } case none then null
             if inUnit then {
-                nms: (ListVal u64)
-                tds: (ListVal u64)
-                (st.typing.declChildRows
-                    ownerTid: (ztypes.tid.create from: pid.u64)
-                    names: nms
-                    tids: tds
-                )
-                pName: canonTypeName reg: st.reg tid: (ztypes.tid.create from: pid.u64)
+                otSq: (ztypes.tid.create from: pid.u64)
+                pName: canonTypeName reg: st.reg tid: otSq
                 pSql: sqlStr s: pName.stringView
                 pos: u64
-                cn: nms.length
+                # the row's ORDINAL among the kept children, which is what the
+                # dump has always printed -- not the slot it came from
+                ord: u64
+                cn: st.typing.declRowSlots ownerTid: otSq
                 for pos < cn loop {
-                    nid: nms.get i: pos
+                    rwSq: st.typing.declRowAt ownerTid: otSq membersOnly: false slot: pos
+                    pos = pos + 1
+                    if rwSq.keep then {
+                    nid: rwSq.name
                     cName: (canonTypeName
                         reg: st.reg
-                        tid: (ztypes.tid.create from: (tds.get i: pos))
+                        tid: (ztypes.tid.create from: rwSq.tid)
                     )
                     cnB8: ast.names.texts.get i: nid.u64
                     cnSql: sqlStr s: cnB8.stringView
@@ -1068,9 +1068,10 @@ ZDumper: class {
                         nameId: (zast.nameid.create from: nid.u32.orPanic)
                     )
                     poSql: paramOwnSql o: own
-                    line: "\{pSql} | \{cnSql} | \{ctSql} | \{pos} | \{poSql}"
+                    line: "\{pSql} | \{cnSql} | \{ctSql} | \{ord} | \{poSql}"
+                    ord = ord + 1
                     rows.append line
-                    pos = pos + 1
+                    }
                 }
             }
         }
