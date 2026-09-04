@@ -166,6 +166,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-09-04 | e5054d3a | [the token arc: a token's text is a pool id](#r-tokenarc) | 0.46s | -- | 93MB / -- | 104 / 183 / 174 (total 461, medians of 5) | 3,872,623 | 296MB | -- | 114,709 |
 | 2026-09-04 | 905714a8 | [a token is a record](#r-tokenrecord) | 0.45s | -- | 92MB / -- | 100 / 179 / 179 (total 458, medians of 5) | 3,533,963 | 288MB | -- | 114,711 |
 | 2026-09-04 | 0776fbc7 | [child walks without a list per node, and the tree as the carrier](#r-childwalks) | 0.44s | -- | 93MB / -- | 89 / 176 / 168 (total 433) | 2,949,835 | 271MB | -- | 114,917 |
+| 2026-09-05 | c1022464 | [D1: the node table holds values, not boxes](#r-nodeflip) | 0.47s | -- | 102MB / -- | 111 / 180 / 189 (total 480) | 2,254,086 | 302MB | -- | 115,951 |
 
 
 <a id="r-tokenarc"></a>
@@ -2332,3 +2333,73 @@ genuinely unreachable; the other 128 are called through the alias. Counting
 `#define` lines as references gives **781** unreferenced static functions in
 `bin/zc.c`, not the 1,034 a token scan reports. Count them with the aliases
 resolved, or the number measures the preprocessor rather than the emitter.
+
+<a id="r-nodeflip"></a>
+### D1: the node table holds values, not boxes
+
+`6a4b8e3a`..`819f8719`, off the 2,949,835 the child-walk arc closed at. `astnode`
+is a valtype `variant` with record payload arms and `Ast.nodes` is a `ListVal`,
+so a node is a row in a table rather than a box pointing at another box.
+
+**Allocations 2,949,835 -> 2,254,086, -23.6%**, and the whole session
+3,097,568 -> 2,254,086, **-27.2%**. The parser and AST family, which a
+readable-names census put at 928,281 blocks (31.0%) before, is **279,334
+(12.1%)** after.
+
+**THE COSTS ARE REAL AND ARE NOT BURIED.** A row is 52 bytes where a pointer was
+8, so everything that copies a node copies 6.5x more:
+
+| | before | after |
+|---|---|---|
+| bytes churned | 271MB | 302MB |
+| instructions | 5.393G | 5.453G |
+| peak RSS | 93MB | 102MB |
+| parse phase | 89ms | 111ms |
+| wall | 0.44s | 0.47s |
+
+**RSS went the wrong way and D1's own metric was "allocations and RSS".** The
+cause is the table's own over-capacity: 265k rows at 52 bytes is 13.8MB used
+against a doubling capacity of 27MB, and the last growth holds the old array
+alongside the new. The spike measured a pre-sized table at 4 allocations and
+20.2MB against 54 and 50.9MB, so pre-sizing the node table is where that comes
+back; nothing in the arc does it yet, because `Ast.create` runs before any
+source is read.
+
+**The flip had to be ONE commit and the compiler is what said so.** Giving a
+single arm a record payload while the type was still a `union` is `E0100: a
+union arm holds reftypes; box the valtype`. So the four remaining String fields,
+27 carriers turning into records, the union turning into a variant and the table
+turning into a value list all landed together.
+
+**Three things came with it that the plan had not costed.** The type-casing rule
+is a WARNING and a warning fails ci, so the 27 carriers became `…row` and `Node`
+became `astnode` -- not `node`, because 195 locals already carry that name: 1,251
+renames. All 391 `.view` / `.take` / `.borrow` markers on the node type had to go,
+and the C compiler is what found them, emitting a pointer parameter that callers
+filled with a value -- the same thing the token flip recorded, and the reason the
+spike's own preference for `.view` did not survive contact with a tree that
+declares no valtype `.view` parameter anywhere. And the error arm and the
+diagnostics list turned out to be two uses of one type: every `ErrorData` the
+checker builds goes to `st.typing.errors`, every one the parser builds becomes a
+tree node, and no site does both, so the arm became an `errorrow` naming its text
+in the pool while `ErrorData` stayed a class.
+
+**The enabler half cost what it said it would.** The child arena
+(`6a4b8e3a`..`ffcdad5c`) moved no allocation of its own -- `kidsAdd` copies a
+list the parser still builds -- and cost 39,390 blocks and 1,000 lines of new
+source. Its accessors take `ast.kids` rather than the tree, because a walk
+holding a row through `nodes.getMut` cannot also lend `ast` shared, and that is
+what lets the generator rewrite a node's children in place.
+
+**`mkCall`'s two reversals were a no-op on order.** They existed to intern in
+source order. Replacing them with one reverse inverted every argument list and
+the corpus said so at once: 292 type errors, starting with generic
+instantiations whose named argument had moved.
+
+**What is left in the parse phase is the value table itself** -- every
+`nodes.get` copies 52 bytes. Shrinking the row (the largest arm is a function
+definition at twelve u32 fields) or pre-sizing the table are the two levers, and
+neither is taken here.
+
+Oracle throughout: 541 of 542 corpus programs byte-identical at every step, the
+one exception being `astdemo`, the only example that compiles `zast` itself.
