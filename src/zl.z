@@ -64,7 +64,7 @@ reportAnalysis: function {a: zsource.Analysis.view} is {
 # diagnostics fail the gate.
 runLint: function {
     paths: (List String).borrow
-    srcdir: StringView
+    srcdirs: (List String).view
     systemdir: StringView
     opts: zsource.lintopts
 } out i32 is {
@@ -74,7 +74,7 @@ runLint: function {
     }
     total: u64
     with pit: paths.iterate do for p: pit loop {
-        a: zsource.analyzeFileTiered path: p.copy :srcdir :systemdir :opts
+        a: zsource.analyzeFileTiered path: p.copy :srcdirs :systemdir :opts
         reportAnalysis :a
         total = total + a.failCount
     }
@@ -116,7 +116,7 @@ runFmt: function {
     stdout: bool
     diff: bool
     full: bool
-    srcdir: StringView
+    srcdirs: (List String).view
     systemdir: StringView
     lineLength: u32
 } out i32 is {
@@ -137,7 +137,7 @@ runFmt: function {
         fmtOpts: zsource.defaultOpts
         fmtOpts.full = full
         fmtOpts.lineLength = lineLength
-        a: zsource.analyzeFileTiered path: p.copy :srcdir :systemdir opts: fmtOpts
+        a: zsource.analyzeFileTiered path: p.copy :srcdirs :systemdir opts: fmtOpts
         if a.parseErrorCount > 0 then {
             reportAnalysis :a
             msg: "zl fmt: \{p} has parse errors; not formatting"
@@ -253,7 +253,9 @@ main: function is {
     fDocsPrivate: false
     fDocsQuality: false
     fArch: false
-    srcdir: ".".string
+    # every --src, in the order given: all are roots and the first that answers
+    # a unit name wins, as zc resolves them
+    srcdirs: (List String)
     systemdir: "lib/system".string
     lineLength: u32
     llSet: false
@@ -292,7 +294,7 @@ main: function is {
         } else if av == "--src" then {
             if (i + 1) < n then {
                 i = i + 1
-                srcdir = (argv.get :i).copy
+                srcdirs.append from: (argv.get :i).copy
             } else {
                 io.eprintln "zl: --src needs a directory"
                 os.exit code: 2
@@ -336,6 +338,7 @@ main: function is {
         i = i + 1
     }
 
+    if srcdirs.length == 0 then srcdirs.append from: ".".string
     if sv == "lint" then {
         lintOpts: (zsource.lintopts
             full: fFull
@@ -348,7 +351,7 @@ main: function is {
             docsQuality: fDocsQuality
             arch: fArch
         )
-        rc: runLint :paths srcdir: srcdir.stringView systemdir: systemdir.stringView opts: lintOpts
+        rc: runLint :paths :srcdirs systemdir: systemdir.stringView opts: lintOpts
         os.exit code: rc
     }
     if sv == "fmt" then {
@@ -359,7 +362,7 @@ main: function is {
             stdout: fStdout
             diff: fDiff
             full: fFull
-            srcdir: srcdir.stringView
+            :srcdirs
             systemdir: systemdir.stringView
             :lineLength
         )

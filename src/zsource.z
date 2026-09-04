@@ -3670,7 +3670,7 @@ Analysis: class {
     # checkSuffix -- L005 (typecheck tier): build the project VFS, parse this file's unit in the
     # project, typecheck, and walk the typed tree for redundant numeric suffixes. A missing
     # dependency (in-project parse error) skips the check silently.
-    checkSuffix: function {:this srcdir: StringView systemdir: StringView uname: StringView} is {
+    checkSuffix: function {:this srcdirs: (List String).view systemdir: StringView uname: StringView} is {
         vfs: (zvfs.ZVfs
             providers: (List zvfs.ProviderBox)
             providerRoot: (IdMapR u32 V: String)
@@ -3681,9 +3681,17 @@ Analysis: class {
         )
         vfs.registerNull
         systemid: vfs.registerFS rootpath: systemdir.string parentpath: "".string
-        srcid: vfs.registerFS rootpath: srcdir.string parentpath: "".string
         vfs.bindRoot newid: systemid kind: zvfs.bindkind.instead
-        rootid: vfs.bindRoot newid: srcid kind: zvfs.bindkind.before
+        # each `before` goes ahead of what is already bound, so binding back to
+        # front leaves the first --src searched first, as zc resolves them
+        rootid: zvfs.fsno
+        si: srcdirs.length
+        for si > 0 loop {
+            si = si - 1
+            sd: srcdirs.get i: si
+            sid: vfs.registerFS rootpath: sd.copy parentpath: "".string
+            rootid = vfs.bindRoot newid: sid kind: zvfs.bindkind.before
+        }
         p: zparser.Parser.create
         prog: p.parse :vfs :rootid mainUnitName: uname.string
         match (
@@ -3712,7 +3720,7 @@ Analysis: class {
             this.reportUnusedDefs :prog :uname :st
             this.reportUnusedVars :prog :uname :st
             this.reportViewableLocals :prog :uname :st
-            if this.opts.arch then this.reportArch :prog :uname :st :srcdir :systemdir
+            if this.opts.arch then this.reportArch :prog :uname :st :srcdirs :systemdir
         }
     }
 
@@ -3727,7 +3735,7 @@ Analysis: class {
     # native types (their fields are the runtime's to read). The read evidence
     # is by name: conservative, so a same-named field elsewhere hides a hit
     # rather than inventing one.
-    reportArch: function {:this prog: Node.view uname: StringView st: zenv.ZSymbolTable.view srcdir: StringView systemdir: StringView} is {
+    reportArch: function {:this prog: Node.view uname: StringView st: zenv.ZSymbolTable.view srcdirs: (List String).view systemdir: StringView} is {
         if prog.program then {
             ast9: prog.ast
             mainOp: unitOpOfName ast: ast9 :uname
@@ -3745,11 +3753,18 @@ Analysis: class {
                 }
             }
             this.archWalk ast: ast9 nId: mainOp :namedIds
-            srcUnits: unitNamesIn dir: srcdir
-            if (srcUnits.contains item: uname.string) == false then return
-            this.reportUnusedExports ast: ast9 unitId: mainOp :uname :srcdir
+            # A007 speaks only for a unit that lives under one of the roots
+            inSrc: false
+            with sit: srcdirs.iterate do for d: sit loop {
+                du: unitNamesIn dir: d.stringView
+                if (du.contains item: uname.string) then inSrc = true
+            }
+            if (inSrc) == false then return
+            this.reportUnusedExports ast: ast9 unitId: mainOp :uname :srcdirs
             readNames: (Set String)
-            projectReadNames dir: srcdir into: readNames
+            with rit: srcdirs.iterate do for d2: rit loop {
+                projectReadNames dir: d2.stringView into: readNames
+            }
             projectReadNames dir: systemdir into: readNames
             bodyIds: zast.unitBodyIdsAt ast: ast9 unitId: mainOp
             with bit: bodyIds.iterate do for mId: bit loop {
@@ -3774,10 +3789,12 @@ Analysis: class {
         ast: Ast.view
         unitId: zast.nodeid
         uname: StringView
-        srcdir: StringView
+        srcdirs: (List String).view
     } is {
         reads: (Set String)
-        projectUnitReads dir: srcdir :uname into: reads
+        with sit: srcdirs.iterate do for d: sit loop {
+            projectUnitReads dir: d.stringView :uname into: reads
+        }
         # the entry point is read by the loader, not by a unit
         mainId: zast.poolFind pool: ast.names text: "main"
         bodyIds: zast.unitBodyIdsAt :ast :unitId
@@ -5438,7 +5455,8 @@ analyzeFile: function {path: String.take opts: lintopts} out Analysis is {
 # resolved types. Slower than analyzeFile; only the --full path calls it.
 analyzeFileFull: function {
     path: String.take
-    srcdir: StringView
+    # every --src root, searched in the order given
+    srcdirs: (List String).view
     systemdir: StringView
     opts: lintopts
 } out Analysis is {
@@ -5481,7 +5499,7 @@ analyzeFileFull: function {
             docFields: opts.docFields
         )
         un: unitNameOf path: a.path.stringView
-        a.checkSuffix :srcdir :systemdir uname: un.stringView
+        a.checkSuffix :srcdirs :systemdir uname: un.stringView
         a.checkLineLength width: opts.lineLength
         a.sortEditsInPlace
         return a
@@ -5522,11 +5540,12 @@ analyzeFileFull: function {
 # the full (typecheck) tier under --full (which also needs the project src/system dirs).
 analyzeFileTiered: function {
     path: String.take
-    srcdir: StringView
+    # every --src root, searched in the order given
+    srcdirs: (List String).view
     systemdir: StringView
     opts: lintopts
 } out Analysis is {
-    if opts.full then return (analyzeFileFull :path :srcdir :systemdir :opts)
+    if opts.full then return (analyzeFileFull :path :srcdirs :systemdir :opts)
     return (analyzeFile :path :opts)
 }
 

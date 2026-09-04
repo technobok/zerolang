@@ -572,8 +572,9 @@ main: function is {
         unitname = arg1.copy
     }
 
-    srcdir: ".".string
-    srcSet: false
+    # every --src, in the order given: they are all roots, and the first one
+    # that answers a name wins
+    srcdirs: (List String)
     systemFlag: String
     runtimeFlag: String
     emitTarget: String
@@ -616,9 +617,9 @@ main: function is {
             printVersion
             os.exit code: 0
         } else if a.stringView == "--src" then {
-            srcdir = (flagValue :argv :i :n flagName: "--src")
+            sdv: (flagValue :argv :i :n flagName: "--src")
+            srcdirs.append from: sdv
             i = i + 1
-            srcSet = true
         } else if a.stringView == "--system" then {
             systemFlag = (flagValue :argv :i :n flagName: "--system")
             i = i + 1
@@ -741,7 +742,7 @@ main: function is {
         os.exit code: 2
     }
 
-    if srcSet == false then {
+    if srcdirs.length == 0 then {
         isPath: false
         if (unitname.stringView.endsWith suffix: ".z") then isPath = true
         if (unitname.stringView.contains needle: "/") then isPath = true
@@ -749,10 +750,11 @@ main: function is {
             baseNoExt: stripDotZ p: unitname.stringView
             d: zcheck.dirname p: baseNoExt.stringView
             bn: baseName p: baseNoExt.stringView
-            srcdir = d
+            srcdirs.append from: d
             unitname = bn
         }
     }
+    if srcdirs.length == 0 then srcdirs.append from: ".".string
 
     systemdir: zcheck.resolveSystemDir flagVal: systemFlag.stringView
     runtimeDir: zcheck.resolveRuntimeDir flagVal: runtimeFlag.stringView
@@ -778,9 +780,18 @@ main: function is {
     )
     vfs.registerNull
     systemid: vfs.registerFS rootpath: systemdir.copy parentpath: "".string
-    srcid: vfs.registerFS rootpath: srcdir.copy parentpath: "".string
     vfs.bindRoot newid: systemid kind: zvfs.bindkind.instead
-    rootid: vfs.bindRoot newid: srcid kind: zvfs.bindkind.before
+    # each `before` puts its root ahead of everything already bound, so binding
+    # back to front leaves the FIRST --src searched first. A unit name that two
+    # roots both answer resolves to the earlier flag's copy.
+    rootid: zvfs.fsno
+    si: srcdirs.length
+    for si > 0 loop {
+        si = si - 1
+        sd: srcdirs.get i: si
+        sid: vfs.registerFS rootpath: sd.copy parentpath: "".string
+        rootid = vfs.bindRoot newid: sid kind: zvfs.bindkind.before
+    }
 
     p: zparser.Parser.create
     prog: p.parse :vfs :rootid mainUnitName: unitname

@@ -485,7 +485,7 @@ test-bootstrap:
 	    echo "FAIL: seed-built compiler does not converge under $$tag"; \
 	    diff $(BUILDDIR)/b2-$$tag.c $(BUILDDIR)/b3-$$tag.c | head -6; exit 1; \
 	  fi; \
-	  $(BUILDDIR)/zc-b1-$$tag ztypes_smoke --src src --system lib/system --emit-c $(BUILDDIR)/zt-$$tag.c; \
+	  $(BUILDDIR)/zc-b1-$$tag ztypes_smoke --src tests/unit --src src --system lib/system --emit-c $(BUILDDIR)/zt-$$tag.c; \
 	  $$cc $$f -o $(BUILDDIR)/zt-$$tag $(BUILDDIR)/zt-$$tag.c $(call ZLINKOF,$(BUILDDIR)/zt-$$tag.c) -lm; \
 	  $(BUILDDIR)/zt-$$tag | diff - tests/fixtures/ztypes_smoke_z/smoke.expected; \
 	  echo "  correctness OK (seed-built zc compiles the ztypes smoke to golden) under $$tag"; \
