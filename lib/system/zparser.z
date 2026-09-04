@@ -208,9 +208,9 @@ isInlineTypedefTok: function {tt: zlexer.toktype} out bool is {
 # built in source order but consumed front-to-back; List.pop yields the
 # tail, so reversing once lets each pop yield the next source element.
 # The input is drained (its elements move into the result).
-reverseNodes: function {src: (ListVal astnode).take} out ListVal astnode is {
-    # in place: a row is 52 bytes now, so draining into a second list cost a
-    # whole extra copy of every element plus the list it drained into
+reverseNodes: function {src: (ListVal u32).take} out ListVal u32 is {
+    # in place, and over IDS: the parse stack holds a node's id, not its row,
+    # so a swap moves four bytes rather than fifty-two
     n: src.length
     i: u64
     for i < (n / 2) loop {
@@ -875,30 +875,27 @@ Parser: class {
 
     # mkBinop / mkCall / mkNamedOp / mkLabelValue: id-allocating node
     # constructors for the operations layer. Children move in.
-    mkBinop: function {:this lhs: astnode operator: astnode rhs: astnode line: u32 col: u32} out astnode is {
+    mkBinop: function {:this lhs: u32 operator: u32 rhs: u32 line: u32 col: u32} out astnode is {
         return (astnode.binop (zast.binoprow
             nodeid: this.nextId
             lineno: line
             colno: col
-            lhs: (this.intern n: lhs)
-            operator: (this.intern n: operator)
-            rhs: (this.intern n: rhs))
+            lhs: (zast.nodeid.create from: lhs)
+            operator: (zast.nodeid.create from: operator)
+            rhs: (zast.nodeid.create from: rhs))
         )
     }
 
-    # a call node over an already-built callable and argument list. The
-    # arguments arrive reversed off the parse stack and are put back in order
-    # here
-    mkCall: function {:this callable: astnode arguments: (ListVal astnode).take line: u32 col: u32} out astnode is {
-        rev: (ListVal astnode)
-        for arguments.length > 0 loop rev.append arguments.pop
-        argIds: (ListVal u32)
-        for rev.length > 0 loop argIds.append (this.intern n: rev.pop)
+    # a call node over an already-built callable and argument list. The list
+    # arrives in source order; the two reversals this used to do existed only
+    # to intern in that order, and the paths are interned as they are parsed now
+    mkCall: function {:this callable: u32 arguments: (ListVal u32).take line: u32 col: u32} out astnode is {
+        argIds: arguments
         return (astnode.call (zast.callrow
             nodeid: this.nextId
             lineno: line
             colno: col
-            callable: (this.intern n: callable)
+            callable: (zast.nodeid.create from: callable)
             arguments: (zast.kidsAdd kids: this.ast.kids xs: argIds))
         )
     }
@@ -930,12 +927,12 @@ Parser: class {
     # the first non-atom token. A malformed path is appended as a
     # trailing error arm (callers pop and check the tail before
     # dispatching on the count).
-    operationPaths: function {:this lex: zlexer.Lexer} out ListVal astnode is {
-        paths: (ListVal astnode)
+    operationPaths: function {:this lex: zlexer.Lexer} out ListVal u32 is {
+        paths: (ListVal u32)
         for (this.atomLookahead :lex) loop {
             node: this.parsePath :lex
             errored: this.isError :node
-            paths.append node
+            paths.append (this.intern n: node).u32
             if errored then break
         }
         return paths
@@ -945,19 +942,19 @@ Parser: class {
     # into a left-associative, flat-precedence binop chain. The stack
     # must be non-empty. The whole chain is positioned at its first
     # operand.
-    foldStack: function {:this stack: (ListVal astnode).take lex: zlexer.Lexer.view} out astnode is {
+    foldStack: function {:this stack: (ListVal u32).take lex: zlexer.Lexer.view} out astnode is {
         acc: stack.pop
-        sp: zast.posOf n: acc
+        sp: zast.posOf n: (this.ast.nodes.get i: acc.u64)
         return (this.foldBinopTail :stack :acc line: sp.line col: sp.col :lex)
     }
 
     # collapse the operand/operator stack into a left-nested binop chain. Binops
     # have NO precedence here, so the fold is purely left to right and the shape
     # is exactly what was written
-    foldBinopTail: function {:this stack: (ListVal astnode).take acc: astnode line: u32 col: u32 lex: zlexer.Lexer.view} out astnode is {
-        if stack.length == 0 then return acc
+    foldBinopTail: function {:this stack: (ListVal u32).take acc: u32 line: u32 col: u32 lex: zlexer.Lexer.view} out astnode is {
+        if stack.length == 0 then return (this.ast.nodes.get i: acc.u64)
         op: stack.pop
-        opOk: this.isAtomId node: op
+        opOk: this.isAtomId node: (this.ast.nodes.get i: op.u64)
         if opOk then {
             if stack.length == 0 then {
                 return (this.mkErrorAt
@@ -968,7 +965,7 @@ Parser: class {
             }
             rhs: stack.pop
             nb: this.mkBinop lhs: acc operator: op :rhs :line :col
-            return (this.foldBinopTail :stack acc: nb :line :col :lex)
+            return (this.foldBinopTail :stack acc: (this.intern n: nb).u32 :line :col :lex)
         } else {
             return (this.mkErrorAt
                 pos: lex.peekPos
@@ -980,24 +977,24 @@ Parser: class {
 
     # Fold a source-order path list into a binop chain (reverse, then
     # drain). A single path returns itself.
-    foldBinop: function {:this paths: (ListVal astnode).take lex: zlexer.Lexer.view} out astnode is {
+    foldBinop: function {:this paths: (ListVal u32).take lex: zlexer.Lexer.view} out astnode is {
         stack: this.reverseStack src: paths
         return (this.foldStack :stack :lex)
     }
 
     # reverseNodes wrapper as a method, for `this.`-prefixed calls.
-    reverseStack: function {src: (ListVal astnode).take} out ListVal astnode is {
+    reverseStack: function {src: (ListVal u32).take} out ListVal u32 is {
         return (reverseNodes :src)
     }
 
     # ( term binop ) form: callable + one unnamed folded argument, with
     # NO named arguments. Distinct from acceptCall (which consumes named
     # args); used for grammar operations like `abs -5`.
-    acceptTermBinopCall: function {:this paths: (ListVal astnode).take lex: zlexer.Lexer.view} out astnode is {
+    acceptTermBinopCall: function {:this paths: (ListVal u32).take lex: zlexer.Lexer.view} out astnode is {
         stack: this.reverseStack src: paths
         callable: stack.pop
-        cp: zast.posOf n: callable
-        args: (ListVal astnode)
+        cp: zast.posOf n: (this.ast.nodes.get i: callable.u64)
+        args: (ListVal u32)
         if stack.length > 0 then {
             argNode: this.foldStack :stack :lex
             argIsErr: this.isError node: argNode
@@ -1009,7 +1006,7 @@ Parser: class {
                 line: ap.line
                 col: ap.col
             )
-            args.append uarg
+            args.append (this.intern n: uarg).u32
         }
         return (this.mkCall :callable arguments: args line: cp.line col: cp.col)
     }
@@ -1017,11 +1014,11 @@ Parser: class {
     # call = callable path + arguments. The first unnamed argument is the
     # remaining paths folded as a binop; then zero or more named
     # arguments (LABEL -> operation value; LABELPRE -> label shorthand).
-    acceptCall: function {:this lex: zlexer.Lexer paths: (ListVal astnode).take} out astnode is {
+    acceptCall: function {:this lex: zlexer.Lexer paths: (ListVal u32).take} out astnode is {
         stack: this.reverseStack src: paths
         callable: stack.pop
-        cp: zast.posOf n: callable
-        args: (ListVal astnode)
+        cp: zast.posOf n: (this.ast.nodes.get i: callable.u64)
+        args: (ListVal u32)
         if stack.length > 0 then {
             argNode: this.foldStack :stack :lex
             argIsErr: this.isError node: argNode
@@ -1035,7 +1032,7 @@ Parser: class {
                     line: ap.line
                     col: ap.col
                 )
-                args.append uarg
+                args.append (this.intern n: uarg).u32
             }
         }
         argNames: (ListVal u64)
@@ -1074,7 +1071,7 @@ Parser: class {
                     line: vLine
                     col: vCol
                 )
-                args.append no
+                args.append (this.intern n: no).u32
                 argNames.append from: nm.u64
             } case none then {
                 lblOpt2: lex.accept tt: zlexer.toktype.labelPreTok pool: this.ast.names
@@ -1100,7 +1097,7 @@ Parser: class {
                         line: vLine
                         col: vCol
                     )
-                    args.append no
+                    args.append (this.intern n: no).u32
                     argNames.append from: nm.u64
                 } case none then {
                     break
@@ -1113,10 +1110,10 @@ Parser: class {
     # Bare operation core: dispatch a non-empty path list. Odd count ->
     # binop; even count -> ( term binop ) call. A trailing error path is
     # propagated. NO named arguments (those belong to acceptCall).
-    operationFromPaths: function {:this paths: (ListVal astnode).take lex: zlexer.Lexer.view} out astnode is {
+    operationFromPaths: function {:this paths: (ListVal u32).take lex: zlexer.Lexer.view} out astnode is {
         last: paths.pop
-        lerr: this.isError node: last
-        if lerr then return last
+        lerr: zast.isErrorAt ast: this.ast id: last
+        if lerr then return (this.ast.nodes.get i: last.u64)
         paths.append last
         n: paths.length
         even: (n & 1) == 0
@@ -1157,10 +1154,10 @@ Parser: class {
     # to a call (named args allowed) or a binop, returning the bare astnode.
     # parseExpression needs the bare result to wrap it in an Expression
     # without moving it out of an Option.
-    operationOrCallFromPaths: function {:this paths: (ListVal astnode).take lex: zlexer.Lexer} out astnode is {
+    operationOrCallFromPaths: function {:this paths: (ListVal u32).take lex: zlexer.Lexer} out astnode is {
         last: paths.pop
-        lerr: this.isError node: last
-        if lerr then return last
+        lerr: zast.isErrorAt ast: this.ast id: last
+        if lerr then return (this.ast.nodes.get i: last.u64)
         paths.append last
         n: paths.length
         even: (n & 1) == 0
@@ -1175,7 +1172,7 @@ Parser: class {
 
     # operation-or-call: top-level Option boundary over the bare core;
     # none when the pre-parsed path list is empty.
-    acceptOperationOrCall: function {:this paths: (ListVal astnode).take lex: zlexer.Lexer} out optionval astnode is {
+    acceptOperationOrCall: function {:this paths: (ListVal u32).take lex: zlexer.Lexer} out optionval astnode is {
         n0: paths.length
         if n0 == 0 then return (optionval.none astnode)
         return (optionval.some (this.operationOrCallFromPaths :paths :lex))
@@ -2191,7 +2188,7 @@ Parser: class {
     # Build a reassignment from an already-parsed LHS path list (the `=`
     # is consumed). The LHS must be a single path; the RHS is a full
     # expression (so `x = if c then a else b` parses).
-    buildReassignment: function {:this paths: (ListVal astnode).take lex: zlexer.Lexer startLine: u32 startCol: u32} out astnode is {
+    buildReassignment: function {:this paths: (ListVal u32).take lex: zlexer.Lexer startLine: u32 startCol: u32} out astnode is {
         n: paths.length
         if n != 1 then {
             badPos: lex.peekPos
@@ -2202,8 +2199,8 @@ Parser: class {
             )
         }
         lhs: paths.pop
-        lhsErr: this.isError node: lhs
-        if lhsErr then return lhs
+        lhsErr: zast.isErrorAt ast: this.ast id: lhs
+        if lhsErr then return (this.ast.nodes.get i: lhs.u64)
         rhs: this.parseExpression :lex
         rErr: this.isError node: rhs
         if rErr then return rhs
@@ -2211,14 +2208,14 @@ Parser: class {
             nodeid: this.nextId
             lineno: startLine
             colno: startCol
-            topath: (this.intern n: lhs)
+            topath: (zast.nodeid.create from: lhs)
             value: (this.intern n: rhs))
         )
     }
 
     # Build a swap from an already-parsed LHS path list (the `swap` is
     # consumed). Both sides are single paths.
-    buildSwap: function {:this paths: (ListVal astnode).take lex: zlexer.Lexer startLine: u32 startCol: u32} out astnode is {
+    buildSwap: function {:this paths: (ListVal u32).take lex: zlexer.Lexer startLine: u32 startCol: u32} out astnode is {
         n: paths.length
         if n != 1 then {
             badPos: lex.peekPos
@@ -2229,8 +2226,8 @@ Parser: class {
             )
         }
         lhs: paths.pop
-        lhsErr: this.isError node: lhs
-        if lhsErr then return lhs
+        lhsErr: zast.isErrorAt ast: this.ast id: lhs
+        if lhsErr then return (this.ast.nodes.get i: lhs.u64)
         la: this.atomLookahead :lex
         if la then {
             rhs: this.parsePath :lex
@@ -2240,7 +2237,7 @@ Parser: class {
                 nodeid: this.nextId
                 lineno: startLine
                 colno: startCol
-                lhs: (this.intern n: lhs)
+                lhs: (zast.nodeid.create from: lhs)
                 rhs: (this.intern n: rhs))
             )
         } else {
