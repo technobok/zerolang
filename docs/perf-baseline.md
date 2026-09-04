@@ -167,6 +167,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-09-04 | 905714a8 | [a token is a record](#r-tokenrecord) | 0.45s | -- | 92MB / -- | 100 / 179 / 179 (total 458, medians of 5) | 3,533,963 | 288MB | -- | 114,711 |
 | 2026-09-04 | 0776fbc7 | [child walks without a list per node, and the tree as the carrier](#r-childwalks) | 0.44s | -- | 93MB / -- | 89 / 176 / 168 (total 433) | 2,949,835 | 271MB | -- | 114,917 |
 | 2026-09-05 | c1022464 | [D1: the node table holds values, not boxes](#r-nodeflip) | 0.47s | -- | 102MB / -- | 111 / 180 / 189 (total 480) | 2,254,086 | 302MB | -- | 115,951 |
+| 2026-09-05 | b006be2c | [D1 recovery: a node parameter is a view again](#r-nodeview) | 0.44s | -- | 101MB / -- | 98 / 176 / 179 (total 453) | 2,264,234 | 301MB | -- | 116,000 |
 
 
 <a id="r-tokenarc"></a>
@@ -2403,3 +2404,57 @@ neither is taken here.
 
 Oracle throughout: 541 of 542 corpus programs byte-identical at every step, the
 one exception being `astdemo`, the only example that compiles `zast` itself.
+
+<a id="r-nodeview"></a>
+### D1 recovery: a node parameter is a view again
+
+`10d2fcea`..`b006be2c`. The flip's wall and instruction costs were not inherent
+to the value table. They came from a compiler defect that the flip had worked
+around by stripping every ownership marker off the node type.
+
+**The defect.** `markedValtypeRefParam` has always said a valtype parameter
+marked `.view` is passed by pointer, and the signature emitter has always
+written one. Of the two places deciding whether to ADDRESS an argument, only the
+free-function path asked it (through `paramTypeIsPointer`);
+`instanceMethodArgPtr` asked about reftypes, borrowed Strings and list pointers
+and not about this. So a METHOD declaring such a parameter got a pointer in its
+signature and a value at every call. gcc rejected it, the typechecker did not,
+and the flip therefore passed all 391 node parameters BY VALUE -- a 52-byte copy
+per call. Same shape as `27d7142e`: one question, more than one site, two
+answers. Fixture `valtype_view_method_arg`.
+
+With the question asked at both sites, 386 parameters take a reference again:
+
+| | flip | recovery | pre-flip |
+|---|---|---|---|
+| wall | 0.47s | **0.44s** | 0.44s |
+| instructions | 5.459G | **5.409G** | 5.393G |
+| parse / typecheck / emit | 111 / 180 / 189 | **98 / 176 / 179** | 89 / 176 / 168 |
+
+**Wall and typecheck are back to their pre-flip figures.** Parse is 98 against
+89 and emit 179 against 168; what is left is the table's own row copy on every
+`nodes.get`, which no marker can remove.
+
+**Eleven parameters stay by value, and the distinction is the rule.** A
+parameter that CONSUMES the row -- `tableSet`, `tableAdd`, `intern`,
+`parsePathTail`, `wrapExpression`, `mkNamedOp`, `errorTree` and the generator's
+four node factories -- is a move, and a move takes the value. Only a parameter
+that reads is a view.
+
+**Two figures are still worse and both have one cause: a row is 52 bytes.**
+Bytes churned 271 -> 301MB and peak RSS 93 -> 101MB.
+
+**RSS was probed and the obvious fix BACKFIRES.** Pre-sizing `Ast.create`'s node
+list to 300k took RSS from 101MB to 107MB, because `parse` and `errorTree` each
+build a SECOND `Ast` purely to swap the live one out, so a blanket capacity
+sizes two tables and uses one. Sizing only `Parser.create`'s table is no better,
+because it runs before any source is read: a fixed capacity that suits a
+self-compile wastes 15MB on `hello.z`. **The remaining lever is a `reserve`
+native on `ListVal`** -- the runtime template already has the `grow` helper it
+would call -- applied once the parser knows a file's size. Worth about 7MB, the
+whole remaining gap.
+
+**The row itself cannot shrink much.** Measured across all 28 arms: the median
+is 20 bytes and the largest, a function definition, is 48. The union is sized by
+its largest arm, and moving position out of every arm buys nothing because the
+side table then costs what the union saved.
