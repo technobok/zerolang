@@ -5756,6 +5756,9 @@ instanceMethodArgPtr: function {
     posParamId: u64
     usedInterp: bool
     avq: ztypes.vid
+    # the call, so the argument this parameter binds can be found by label when
+    # -- and only when -- the answer is needed
+    call: zast.CallData.view
 } out instargptr is {
     ptra: false
     isStrBorrow: false
@@ -5804,8 +5807,19 @@ instanceMethodArgPtr: function {
     }
     if usedInterp then ptra = false
     byref: false
-    if ptra then {
-        if (isPtrVid :ctx vid: avq) == false then byref = true
+    # an argument that already holds a pointer must not be addressed again. A
+    # bare local answers through its vid; a PATH -- a non-owned reftype field,
+    # a reference-returning call -- has no vid, and only the argument's own
+    # expression answers for it. Asking one half hands the callee a `T**`.
+    # The path walk runs only when the cheap test has already said no
+    if ptra when (isPtrVid :ctx vid: avq) == false then {
+        if (argIsPointerByLabel
+            :ast
+            :symtab
+            :ctx
+            :call
+            label: posParamName
+        ) == false then byref = true
     }
     return (instargptr
         :ptra
@@ -5909,6 +5923,7 @@ instanceMethodArg: function {
         :posParamId
         usedInterp: avr.usedInterp
         avq: avr.avq
+        :call
     )
     if ptr.byref then {
         if (isNonLvalueArg s: atomVarId.stringView) then {
@@ -8571,6 +8586,23 @@ ctorArgTextAt: function {
     return (emitExpr :ast :symtab :ctx :n)
 }
 
+# argAlreadyPointer -- does this argument expression already evaluate to a C
+# pointer, so that addressing it again would hand the callee a `T**`? Two ways
+# it can be one, and a site that asks only the first is wrong: a bare local
+# holding a reference answers through its VID, while a path -- a non-owned
+# reftype field, a reference-returning call -- has no vid of its own and only
+# `pathIsPointer` sees it. Every byref decision asks this, not one half of it.
+argAlreadyPointer: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: Node.view
+    vid: ztypes.vid
+} out bool is {
+    if (isPtrVid :ctx :vid) then return true
+    return (pathIsPointer :ast :symtab :ctx :n)
+}
+
 # argIsPointerByLabel -- true when the arg at `label` already evaluates to a C
 # pointer (a reftype/List param or a borrowed field), so a native by-pointer
 # parameter must pass it directly rather than re-addressing it with `&`.
@@ -9245,7 +9277,13 @@ emitFnCallWithFid: function {
                         ) then ptra = true
                     }
                     if ptra then {
-                        if (isPtrVid :ctx vid: avq) == false then {
+                        if (argAlreadyPointer
+                            :ast
+                            :symtab
+                            :ctx
+                            n: argOpNode
+                            vid: avq
+                        ) == false then {
                             byref = true
                             isBorrow92: (hoistExprIsBorrowRooted :ast :symtab :ctx n: argOpNode)
                             argRef = (emitByrefArg
@@ -10050,7 +10088,7 @@ userFnArgText: function {
     )
     isBorrowed: hoistExprIsBorrowRooted :ast :symtab :ctx n: argOpNode
     if (userFnParamByPointer :ast :symtab :ctx :fid pname: pinNm pid: pinId take: pTake8) then {
-        if (isPtrVid :ctx vid: avq) then return atomVarId
+        if (argAlreadyPointer :ast :symtab :ctx n: argOpNode vid: avq) then return atomVarId
         return (emitByrefArg
             :ast
             :symtab

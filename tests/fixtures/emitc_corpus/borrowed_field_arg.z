@@ -1,0 +1,74 @@
+# borrowed_field_arg -- a class field holding a NON-OWNED reftype, passed on as
+# an argument. The field already holds a pointer, so the call must not address
+# it again; before the byref decision asked about the argument's variable id
+# alone, a field path had no variable to answer for it, and every one of these
+# calls emitted `&p->field` -- a `T**` where the callee wants a `T*`, which the
+# C compiler rejects. Reading the field was always correct, so only a call
+# shows it. Covers the free-function, method-argument and receiver forms.
+
+Box: class {
+    # the value a reader gets back, so a wrong pointer level shows as a wrong number
+    n: u64
+} as {
+    # sum through a borrowed receiver and a borrowed argument
+    plus: function {b: this.view other: Box.view} out u64 is {
+        return (b.n + other.n)
+    }
+}
+
+# a sink whose method takes the borrowed reftype as an argument
+Sink: class {
+    # what the last call stored
+    got: u64
+} as {
+    # store the argument's value
+    eat: function {:this b: Box.view} is {
+        this.got = b.n
+    }
+}
+
+# reads its Box through a borrowed field rather than owning it
+Holder: class {
+    # the borrowed reftype field -- the shape under test
+    inner: Box.view
+} as {
+    # the field as a method argument
+    viaMethod: function {h: this.view s: Sink} out u64 is {
+        s.eat b: h.inner
+        return s.got
+    }
+    # the field as a method RECEIVER
+    viaRecv: function {h: this.view other: Box.view} out u64 is {
+        return (h.inner.plus :other)
+    }
+    # the field as an argument to a call on something else
+    viaArg: function {h: this.view base: Box.view} out u64 is {
+        return (base.plus other: h.inner)
+    }
+    # the field read directly, which was correct all along
+    direct: function {h: this.view} out u64 is {
+        return h.inner.n
+    }
+}
+
+# the field passed to a FREE function, which is where it was found
+readBox: function {b: Box.view} out u64 is {
+    return b.n
+}
+
+# the free-function form, reached through the borrowed field
+viaFree: function {h: Holder.view} out u64 is {
+    return (readBox b: h.inner)
+}
+
+main: function is {
+    b: (Box n: 7)
+    c: (Box n: 5)
+    h: (Holder inner: b)
+    s: (Sink got: 0)
+    print "direct=\{h.direct}"
+    print "free=\{viaFree :h}"
+    print "method=\{h.viaMethod :s}"
+    print "recv=\{h.viaRecv other: c}"
+    print "arg=\{h.viaArg base: c}"
+}
