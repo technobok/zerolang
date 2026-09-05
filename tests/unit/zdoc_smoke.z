@@ -1,0 +1,238 @@
+# zdoc_smoke -- the zdoc smoke harness: builds small documents by hand and
+# prints each at a few widths, so every printer path (flat, break, indent,
+# ifBreak, suffix, blank line, fill, bestFitting, verbatim, codepoint width)
+# is pinned. Compared against tests/fixtures/zdoc_smoke_z/smoke.expected.
+
+public: unit {
+    :main
+}
+
+# show -- print `root` at `width` under a header, then a `--` end marker so a
+# trailing newline is visible
+show: function {label: StringView d: zdoc.Doc root: u32 width: u32} is {
+    print "=== \{label} @\{width} ==="
+    s: d.print :root :width
+    print s
+    print "--"
+}
+
+# words -- `a` and `b` around a line, in a group
+words: function {d: zdoc.Doc a: StringView b: StringView} out u32 is {
+    xs: (ListVal u32)
+    xs.append (d.lex a)
+    xs.append (d.line)
+    xs.append (d.lex b)
+    return (d.group (d.concat xs))
+}
+
+# caseWords -- a two-word group flat and broken, and codepoints not bytes
+caseWords: function is {
+    d: zdoc.Doc.create source: String
+    r: words :d a: "foo" b: "bar"
+    show label: "words" :d root: r width: 80
+    show label: "words" :d root: r width: 5
+    u: words :d a: "héllo" b: "wörld"
+    show label: "unicode" :d root: u width: 11
+    show label: "unicode" :d root: u width: 10
+    s: (ListVal u32)
+    s.append (d.lex "a")
+    s.append (d.softline)
+    s.append (d.lex "b")
+    g: d.group (d.concat s)
+    show label: "softline" :d root: g width: 80
+}
+
+# parens -- `open` inner `close` with the inner indented: the wrap shape
+parens: function {d: zdoc.Doc open: u32 inner: u32 close: u32} out u32 is {
+    mid: (ListVal u32)
+    mid.append (d.softline)
+    mid.append inner
+    xs: (ListVal u32)
+    xs.append open
+    xs.append (d.indent (d.concat mid))
+    xs.append (d.softline)
+    xs.append close
+    return (d.group (d.concat xs))
+}
+
+# caseParens -- a parenthesised pair flat and broken, then nested groups where
+# the inner one still fits after the outer breaks
+caseParens: function is {
+    d: zdoc.Doc.create source: String
+    ab: (ListVal u32)
+    ab.append (d.lex "a")
+    ab.append (d.line)
+    ab.append (d.lex "b")
+    po: d.lex "("
+    pi: d.concat ab
+    pc: d.lex ")"
+    p: parens :d open: po inner: pi close: pc
+    show label: "parens" :d root: p width: 80
+    show label: "parens" :d root: p width: 4
+    xy: (ListVal u32)
+    xy.append (d.lex "x")
+    xy.append (d.line)
+    xy.append (d.lex "y")
+    go: d.lex "g("
+    gi: d.concat xy
+    gc: d.lex ")"
+    g: parens :d open: go inner: gi close: gc
+    gz: (ListVal u32)
+    gz.append g
+    gz.append (d.line)
+    gz.append (d.lex "z")
+    fo: d.lex "f("
+    fi: d.concat gz
+    fc: d.lex ")"
+    f: parens :d open: fo inner: fi close: fc
+    show label: "nested" :d root: f width: 80
+    show label: "nested" :d root: f width: 10
+}
+
+# caseIfBreak -- parens that exist only when the group breaks
+caseIfBreak: function is {
+    d: zdoc.Doc.create source: String
+    mid: (ListVal u32)
+    mid.append (d.softline)
+    mid.append (d.lex "aaa")
+    mid.append (d.line)
+    mid.append (d.lex "bbb")
+    xs: (ListVal u32)
+    xs.append (d.ifBreak brk: (d.lex "(") flat: 0)
+    xs.append (d.indent (d.concat mid))
+    xs.append (d.softline)
+    xs.append (d.ifBreak brk: (d.lex ")") flat: 0)
+    g: d.group (d.concat xs)
+    show label: "ifbreak" :d root: g width: 80
+    show label: "ifbreak" :d root: g width: 6
+}
+
+# caseSuffix -- a trailing comment held to the end of its line, and a blank
+# line inside an indent carrying no spaces
+caseSuffix: function is {
+    d: zdoc.Doc.create source: String
+    xs: (ListVal u32)
+    xs.append (d.lex "x: 1")
+    xs.append (d.lineSuffix (d.lex "  # one"))
+    xs.append (d.breakParent)
+    xs.append (d.hardline)
+    xs.append (d.lex "y: 2")
+    g: d.group (d.concat xs)
+    show label: "suffix" :d root: g width: 80
+    bl: (ListVal u32)
+    bl.append (d.lex "a")
+    bl.append (d.hardline)
+    bl.append (d.hardline)
+    bl.append (d.lex "b")
+    blr: d.indent (d.concat bl)
+    show label: "blank" :d root: blr width: 80
+}
+
+# caseFill -- twelve numbers filled into rows
+caseFill: function is {
+    d: zdoc.Doc.create source: String
+    xs: (ListVal u32)
+    xs.append (d.lex "1")
+    xs.append (d.line)
+    xs.append (d.lex "2")
+    xs.append (d.line)
+    xs.append (d.lex "3")
+    xs.append (d.line)
+    xs.append (d.lex "4")
+    xs.append (d.line)
+    xs.append (d.lex "5")
+    xs.append (d.line)
+    xs.append (d.lex "6")
+    xs.append (d.line)
+    xs.append (d.lex "7")
+    xs.append (d.line)
+    xs.append (d.lex "8")
+    xs.append (d.line)
+    xs.append (d.lex "9")
+    xs.append (d.line)
+    xs.append (d.lex "10")
+    xs.append (d.line)
+    xs.append (d.lex "11")
+    xs.append (d.line)
+    xs.append (d.lex "12")
+    f: d.fill xs
+    show label: "fill" :d root: f width: 20
+    show label: "fill" :d root: f width: 80
+}
+
+# header -- a function header with its params laid out as `params` between
+# `function {` and `} out i64 is {`
+header: function {d: zdoc.Doc params: u32} out u32 is {
+    mid: (ListVal u32)
+    mid.append (d.line)
+    mid.append params
+    xs: (ListVal u32)
+    xs.append (d.lex "function {")
+    xs.append (d.indent (d.concat mid))
+    xs.append (d.line)
+    xs.append (d.lex "} out i64 is {")
+    return (d.concat xs)
+}
+
+# caseBest -- the signature ladder: flat, params on one line, one per line;
+# a tail after the ladder counts against the last line
+caseBest: function is {
+    d: zdoc.Doc.create source: String
+    v1: d.lex "function {a: i64 b: i64} out i64 is {"
+    p2: d.lex "a: i64 b: i64"
+    v2: header :d params: p2
+    pp: (ListVal u32)
+    pp.append (d.lex "a: i64")
+    pp.append (d.line)
+    pp.append (d.lex "b: i64")
+    p3: d.concat pp
+    v3: header :d params: p3
+    vs: (ListVal u32)
+    vs.append v1
+    vs.append v2
+    vs.append v3
+    xs: (ListVal u32)
+    xs.append (d.bestFitting vs)
+    xs.append (d.lex " # tail")
+    root: d.concat xs
+    show label: "best" :d :root width: 60
+    show label: "best" :d :root width: 40
+    show label: "best" :d :root width: 34
+    show label: "best" :d :root width: 12
+}
+
+# caseVerbatim -- a multi-line literal kept byte-exact, then moved with its
+# statement one indent step deeper
+caseVerbatim: function is {
+    src: "s: \"\"\"\n        abc\n\n            deep\n        \"\"\"\n"
+    d: zdoc.Doc.create source: src.string
+    lo: 3.u64
+    hi: src.length - 1
+    keep: (ListVal u32)
+    keep.append (d.hardline)
+    keep.append (d.text lo: 0 hi: 3)
+    keep.append (d.verbatim :lo :hi origIndent: 4 shift: false)
+    kr: d.indent (d.concat keep)
+    show label: "verbatim" :d root: kr width: 80
+    move: (ListVal u32)
+    move.append (d.hardline)
+    move.append (d.text lo: 0 hi: 3)
+    move.append (d.verbatim :lo :hi origIndent: 4 shift: true)
+    mr: d.indent (d.indent (d.concat move))
+    show label: "verbatim-shift" :d root: mr width: 80
+    back: (ListVal u32)
+    back.append (d.text lo: 0 hi: 3)
+    back.append (d.verbatim :lo :hi origIndent: 4 shift: true)
+    br: d.concat back
+    show label: "verbatim-unshift" :d root: br width: 80
+}
+
+main: function is {
+    caseWords
+    caseParens
+    caseIfBreak
+    caseSuffix
+    caseFill
+    caseBest
+    caseVerbatim
+}

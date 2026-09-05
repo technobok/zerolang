@@ -1,0 +1,703 @@
+# zdoc -- the formatter's document IR and printer. A document is a Wadler tree
+# held as rows in one table: a text is a byte slice of the source the Doc owns
+# or of the lexicon inserted text is appended to, and the layout nodes are
+# line, softline, hardline, group, indent, ifBreak, lineSuffix, breakParent,
+# fill, bestFitting, concat and verbatim. The printer lays a document out at a
+# column width the Prettier way: outside in, each group flat when its flat
+# form fits the line and broken otherwise. The unit knows nothing of the
+# syntax tree; the builder in zfmt does.
+
+# Public interface -- the definitions other units may reference; all
+# other top-level definitions are private to this unit.
+public: unit {
+    :Doc
+}
+
+# the columns one indent step adds
+indentStep: 4.u32
+
+# the layout mode a command is printed in: flat spells every line as a space
+modeFlat: 0.u8
+
+# the layout mode a command is printed in: break spells every line as a newline
+modeBreak: 1.u8
+
+# what a row is: the shape of one document node
+dockind: variant {
+    # a byte slice of the source or the lexicon, never holding a newline
+    text: null
+    # a space when flat, a newline when broken
+    line: null
+    # nothing when flat, a newline when broken
+    softline: null
+    # always a newline; every group above it breaks
+    hardline: null
+    # printed flat when its flat form fits the line, broken otherwise
+    group: null
+    # its child one step further in
+    indent: null
+    # its first child when the enclosing group broke, its second when flat
+    ifBreak: null
+    # its child is held back and printed just before the next newline
+    lineSuffix: null
+    # nothing itself; every group above it breaks
+    breakParent: null
+    # content and separator children alternating; a separator breaks only
+    # when the content after it would not fit
+    fill: null
+    # variants from the most compact to the most expanded, each printed in
+    # break mode; the first whose every line fits is printed, else the last
+    bestFitting: null
+    # its children in order
+    concat: null
+    # a byte slice printed exactly, newlines included; its inner lines move
+    # with the indent when the builder marked it shiftable
+    verbatim: null
+} as { tag: u8.tag }
+
+# a window into Doc.kids: the children of a concat, fill or bestFitting row
+docspan: record {
+    # the arena index of the first child id, 0 when there are none
+    first: u32
+    # how many children the span names
+    count: u32
+}
+
+# one document node. A text is a slice, not a copy: the row names where the
+# bytes are and how wide they print
+docrow: record {
+    # which node this is
+    kind: dockind
+    # a text's or a verbatim's first byte
+    lo: u32
+    # one past its last byte
+    hi: u32
+    # whether the slice is of the source (true) or of the lexicon (false)
+    src: bool
+    # a text's width in codepoints; a verbatim's first line's width
+    width: u32
+    # the child of a group, indent or lineSuffix; the broken child of an
+    # ifBreak
+    child: u32
+    # the flat child of an ifBreak; 1 for a verbatim holding a newline
+    alt: u32
+    # the children of a concat, fill or bestFitting
+    kids: docspan
+    # whether a hardline, breakParent or verbatim sits somewhere below, which
+    # breaks every group above it
+    breaks: bool
+    # whether a verbatim's inner lines follow the indent it is printed at
+    shift: bool
+    # the indent of the line a verbatim was written on
+    origIndent: u32
+}
+
+# one printer command: a row to print, at an indent, in a mode
+cmd: record {
+    # the columns a newline inside it indents to
+    ind: u32
+    # modeFlat or modeBreak
+    mode: u8
+    # the row
+    id: u32
+    # how many children of a fill were already printed
+    off: u32
+}
+
+# the printer's state while it lays one document out
+Printer: class {
+    # the text produced so far
+    buf: String
+    # the column the next text lands on, in codepoints
+    pos: u32
+    # the column width being laid out to
+    width: u32
+    # whether a flat line left a space to write before the next text
+    pendingSpace: bool
+    # whether a newline left its indent to write before the next text, so a
+    # blank line never carries spaces
+    pendingIndent: bool
+    # the indent the pending newline asks for
+    indentCols: u32
+    # whether any text ran past the width, which is what a bestFitting
+    # measurement asks of a variant
+    overflow: bool
+    # the commands still to print, the next on top
+    cmds: (ListVal cmd)
+    # the lineSuffix children held back for the next newline
+    suffixes: (ListVal cmd)
+}
+
+# blankRow -- a row of `kind` with every other field at its zero
+blankRow: function {kind: dockind} out docrow is {
+    return (docrow
+        :kind
+        lo: 0
+        hi: 0
+        src: false
+        width: 0
+        child: 0
+        alt: 0
+        kids: (docspan first: 0 count: 0)
+        breaks: false
+        shift: false
+        origIndent: 0
+    )
+}
+
+# textRow -- a text row over [lo, hi) of the source or the lexicon
+textRow: function {lo: u64 hi: u64 src: bool width: u64} out docrow is {
+    r: blankRow kind: dockind.text
+    r.lo = lo.u32.orPanic
+    r.hi = hi.u32.orPanic
+    r.src = src
+    r.width = width.u32.orPanic
+    return r
+}
+
+# newPrinter -- a printer at column `pos` with nothing printed yet
+newPrinter: function {
+    width: u32
+    pos: u32
+    pendingSpace: bool
+    pendingIndent: bool
+    indentCols: u32
+} out Printer is {
+    return (Printer
+        buf: String
+        :pos
+        :width
+        :pendingSpace
+        :pendingIndent
+        :indentCols
+        overflow: false
+        cmds: (ListVal cmd)
+        suffixes: (ListVal cmd)
+    )
+}
+
+# a document: its rows, its child arena, and the two texts its slices name
+Doc: class {
+    # the source the source slices point into
+    source: String
+    # the inserted text the other slices point into
+    lexicon: String
+    # every node, addressed by index; row 0 is the sentinel no-node
+    rows: (ListVal docrow)
+    # every concat, fill and bestFitting child list, end to end
+    kids: (ListVal u32)
+} as {
+    # an empty document over `source`, with the sentinel row in place
+    create: function {source: String.take} out this is {
+        d: (meta.create :source lexicon: String rows: (ListVal docrow) kids: (ListVal u32))
+        d.rows.append (blankRow kind: dockind.concat)
+        return d
+    }
+
+    # add -- append a row, answering its id
+    add: function {:this row: docrow} out u32 is {
+        id: this.rows.length
+        this.rows.append row
+        return id.u32.orPanic
+    }
+
+    # text -- the source bytes [lo, hi), which must hold no newline
+    text: function {:this lo: u64 hi: u64} out u32 is {
+        w: u64
+        {
+            sv: this.source.substring from: lo to: hi
+            w = sv.count
+        }
+        return (this.add row: (textRow :lo :hi src: true width: w))
+    }
+
+    # lex -- inserted text, appended to the lexicon
+    lex: function {:this s: StringView} out u32 is {
+        lo: this.lexicon.length
+        this.lexicon.append s
+        return (this.add row: (textRow :lo hi: this.lexicon.length src: false width: s.count))
+    }
+
+    # line -- a space when flat, a newline when broken
+    line: function {:this} out u32 is {
+        return (this.add row: (blankRow kind: dockind.line))
+    }
+
+    # softline -- nothing when flat, a newline when broken
+    softline: function {:this} out u32 is {
+        return (this.add row: (blankRow kind: dockind.softline))
+    }
+
+    # hardline -- a newline, and every group above it breaks
+    hardline: function {:this} out u32 is {
+        r: blankRow kind: dockind.hardline
+        r.breaks = true
+        return (this.add row: r)
+    }
+
+    # breakParent -- nothing, and every group above it breaks
+    breakParent: function {:this} out u32 is {
+        r: blankRow kind: dockind.breakParent
+        r.breaks = true
+        return (this.add row: r)
+    }
+
+    # group -- `child` flat when it fits the line, broken otherwise
+    group: function {:this child: u32} out u32 is {
+        r: blankRow kind: dockind.group
+        r.child = child
+        r.breaks = (this.rows.get i: child.u64).breaks
+        return (this.add row: r)
+    }
+
+    # indent -- `child` one step further in
+    indent: function {:this child: u32} out u32 is {
+        r: blankRow kind: dockind.indent
+        r.child = child
+        r.breaks = (this.rows.get i: child.u64).breaks
+        return (this.add row: r)
+    }
+
+    # ifBreak -- `brk` when the enclosing group broke, `flat` when it stayed
+    # flat; either may be 0 for nothing
+    ifBreak: function {:this brk: u32 flat: u32} out u32 is {
+        r: blankRow kind: dockind.ifBreak
+        r.child = brk
+        r.alt = flat
+        if brk > 0 then r.breaks = (this.rows.get i: brk.u64).breaks
+        if flat > 0 when (this.rows.get i: flat.u64).breaks then r.breaks = true
+        return (this.add row: r)
+    }
+
+    # lineSuffix -- `child` held back and printed just before the next newline
+    lineSuffix: function {:this child: u32} out u32 is {
+        r: blankRow kind: dockind.lineSuffix
+        r.child = child
+        return (this.add row: r)
+    }
+
+    # spanOf -- `xs` appended to the child arena, as the span that names them,
+    # and whether any of them breaks
+    spanOf: function {:this xs: (ListVal u32).take} out docrow is {
+        r: blankRow kind: dockind.concat
+        r.kids = (docspan first: this.kids.length.u32.orPanic count: xs.length.u32.orPanic)
+        i: u64
+        for i < xs.length loop {
+            k: xs.get :i
+            this.kids.append k
+            if (this.rows.get i: k.u64).breaks then r.breaks = true
+            i = i + 1
+        }
+        return r
+    }
+
+    # concat -- `xs` in order
+    concat: function {:this xs: (ListVal u32).take} out u32 is {
+        r: this.spanOf :xs
+        return (this.add row: r)
+    }
+
+    # fill -- `xs` as content, separator, content, ...; a separator breaks only
+    # when the content after it would not fit
+    fill: function {:this xs: (ListVal u32).take} out u32 is {
+        r: this.spanOf :xs
+        r.kind = dockind.fill
+        return (this.add row: r)
+    }
+
+    # bestFitting -- `xs` as variants, most compact first, each printed in
+    # break mode: the first whose every line fits, else the last
+    bestFitting: function {:this xs: (ListVal u32).take} out u32 is {
+        r: this.spanOf :xs
+        r.kind = dockind.bestFitting
+        return (this.add row: r)
+    }
+
+    # verbatim -- the source bytes [lo, hi) printed exactly, newlines included.
+    # `origIndent` is the indent of the line the slice was written on and
+    # `shift` whether its inner lines may follow a new indent
+    verbatim: function {:this lo: u64 hi: u64 origIndent: u32 shift: bool} out u32 is {
+        r: blankRow kind: dockind.verbatim
+        r.lo = lo.u32.orPanic
+        r.hi = hi.u32.orPanic
+        r.src = true
+        r.origIndent = origIndent
+        r.shift = shift
+        r.breaks = true
+        {
+            sv: this.source.stringView
+            i: lo
+            w: u64
+            for i < hi loop {
+                b: (sv.byteAt :i).or d: 0
+                if b == 10 then {
+                    r.alt = 1
+                    break
+                }
+                if (b & 192) != 128 then w = w + 1
+                i = i + 1
+            }
+            r.width = w.u32.orPanic
+        }
+        return (this.add row: r)
+    }
+
+    # print -- `root` laid out at `width` columns, from column 0
+    print: function {:this root: u32 width: u32} out String is {
+        p: (newPrinter :width pos: 0 pendingSpace: false pendingIndent: false indentCols: 0)
+        p.cmds.append (cmd ind: 0 mode: modeBreak id: root off: 0)
+        printLoop d: this :p
+        result: String
+        result swap p.buf
+        return result
+    }
+}
+
+# kidAt -- the i-th child id a span names
+kidAt: function {d: Doc.view span: docspan i: u32} out u32 is {
+    return (d.kids.get i: (span.first + i).u64)
+}
+
+# pushKidsOnto -- the children of `span` from index `from` on, pushed so the
+# first is on top, each in the command's indent and mode
+pushKidsOnto: function {d: Doc.view stack: (ListVal cmd) c: cmd span: docspan from: u32} is {
+    i: span.count
+    for i > from loop {
+        i = i - 1
+        stack.append (cmd ind: c.ind mode: c.mode id: (kidAt :d :span :i) off: 0)
+    }
+}
+
+# printLoop -- run the printer until nothing is left, the held suffixes
+# included
+printLoop: function {d: Doc.view p: Printer} is {
+    for true loop {
+        if p.cmds.length == 0 then {
+            if p.suffixes.length == 0 then break
+            flushSuffixes :p
+        }
+        c: p.cmds.pop
+        printCmd :d :p :c
+    }
+}
+
+# printCmd -- one command, by the kind of its row
+printCmd: function {d: Doc.view p: Printer c: cmd} is {
+    row: d.rows.get i: c.id.u64
+    match (
+        row.kind
+    ) case text then {
+        emitText :d :p :row
+    } case line then {
+        emitLine :p :c hard: false soft: false
+    } case softline then {
+        emitLine :p :c hard: false soft: true
+    } case hardline then {
+        emitLine :p :c hard: true soft: false
+    } case group then {
+        printGroup :d :p :c :row
+    } case indent then {
+        p.cmds.append (cmd ind: c.ind + indentStep mode: c.mode id: row.child off: 0)
+    } case ifBreak then {
+        pick: row.alt
+        if c.mode == modeBreak then pick = row.child
+        if pick > 0 then p.cmds.append (cmd ind: c.ind mode: c.mode id: pick off: 0)
+    } case lineSuffix then {
+        p.suffixes.append (cmd ind: c.ind mode: c.mode id: row.child off: 0)
+    } case breakParent then null case fill then {
+        printFill :d :p :c :row
+    } case bestFitting then {
+        printBest :d :p :c :row
+    } case concat then {
+        pushKidsOnto :d stack: p.cmds :c span: row.kids from: 0
+    } case verbatim then {
+        emitVerbatim :d :p :c :row
+    }
+}
+
+# writePending -- the indent and the space a newline or a flat line left for
+# the next text
+writePending: function {p: Printer} is {
+    if p.pendingIndent then {
+        i: u32
+        for i < p.indentCols loop {
+            p.buf.appendByte b: 32
+            i = i + 1
+        }
+        p.pendingIndent = false
+    }
+    if p.pendingSpace then {
+        p.buf.appendByte b: 32
+        p.pendingSpace = false
+    }
+}
+
+# emitText -- a text's bytes, after whatever was pending
+emitText: function {d: Doc.view p: Printer row: docrow} is {
+    writePending :p
+    if row.src then {
+        p.buf.append (d.source.substring from: row.lo.u64 to: row.hi.u64)
+    } else {
+        p.buf.append (d.lexicon.substring from: row.lo.u64 to: row.hi.u64)
+    }
+    p.pos = p.pos + row.width
+    if p.pos > p.width then p.overflow = true
+}
+
+# emitLine -- a line: a pending space when flat (nothing for a softline), else
+# the held suffixes first and then a newline whose indent is pending
+emitLine: function {p: Printer c: cmd hard: bool soft: bool} is {
+    if c.mode == modeFlat when (hard) == false then {
+        if (soft) == false then {
+            p.pendingSpace = true
+            p.pos = p.pos + 1
+        }
+        return
+    }
+    if p.suffixes.length > 0 then {
+        p.cmds.append c
+        flushSuffixes :p
+        return
+    }
+    p.buf.appendByte b: 10
+    p.pendingSpace = false
+    p.pendingIndent = true
+    p.indentCols = c.ind
+    p.pos = c.ind
+}
+
+# flushSuffixes -- the held suffixes onto the command stack, in order
+flushSuffixes: function {p: Printer} is {
+    i: p.suffixes.length
+    for i > 0 loop {
+        i = i - 1
+        p.cmds.append (p.suffixes.get :i)
+    }
+    p.suffixes = (ListVal cmd)
+}
+
+# printGroup -- the group's child flat when it fits the rest of the line,
+# broken otherwise; a group already flat stays flat unless something below
+# forces a break
+printGroup: function {d: Doc.view p: Printer c: cmd row: docrow} is {
+    if c.mode == modeFlat when (row.breaks) == false then {
+        p.cmds.append (cmd ind: c.ind mode: modeFlat id: row.child off: 0)
+        return
+    }
+    next: (cmd ind: c.ind mode: modeFlat id: row.child off: 0)
+    first: (ListVal cmd)
+    first.append next
+    rem: p.width.i64 - p.pos.i64
+    flat: fitsCmds :d :p stack: first :rem useRest: true mustBeFlat: false
+    if (row.breaks) == false when flat then {
+        p.cmds.append next
+        return
+    }
+    p.cmds.append (cmd ind: c.ind mode: modeBreak id: row.child off: 0)
+}
+
+# fitsCmds -- whether `stack` printed as given, followed when `useRest` by what
+# the stack holds up to the next newline, stays within `rem` columns. A
+# broken group in the rest ends the line and so fits; under `mustBeFlat` a
+# group that must break does not fit at all
+fitsCmds: function {
+    d: Doc.view
+    p: Printer.view
+    stack: (ListVal cmd).take
+    rem: i64
+    useRest: bool
+    mustBeFlat: bool
+} out bool is {
+    left: rem
+    restIdx: p.cmds.length
+    if (useRest) == false then restIdx = 0
+    for left >= 0 loop {
+        if stack.length == 0 then {
+            if restIdx == 0 then return true
+            restIdx = restIdx - 1
+            stack.append (p.cmds.get i: restIdx)
+            continue
+        }
+        c: stack.pop
+        row: d.rows.get i: c.id.u64
+        match (
+            row.kind
+        ) case text then {
+            left = left - row.width.i64
+        } case line then {
+            if c.mode == modeBreak then return true
+            left = left - 1
+        } case softline then {
+            if c.mode == modeBreak then return true
+        } case hardline then {
+            return true
+        } case group then {
+            if mustBeFlat when row.breaks then return false
+            m: c.mode
+            if row.breaks then m = modeBreak
+            stack.append (cmd ind: c.ind mode: m id: row.child off: 0)
+        } case indent then {
+            stack.append (cmd ind: c.ind mode: c.mode id: row.child off: 0)
+        } case ifBreak then {
+            pick: row.alt
+            if c.mode == modeBreak then pick = row.child
+            if pick > 0 then stack.append (cmd ind: c.ind mode: c.mode id: pick off: 0)
+        } case lineSuffix then null case breakParent then null case fill then {
+            pushKidsOnto :d :stack :c span: row.kids from: c.off
+        } case bestFitting then {
+            if mustBeFlat when row.breaks then return false
+            m: c.mode
+            if row.breaks then m = modeBreak
+            pick: kidAt :d span: row.kids i: 0
+            if m == modeBreak then pick = kidAt :d span: row.kids i: row.kids.count - 1
+            stack.append (cmd ind: c.ind mode: m id: pick off: 0)
+        } case concat then {
+            pushKidsOnto :d :stack :c span: row.kids from: 0
+        } case verbatim then {
+            left = left - row.width.i64
+            if row.alt > 0 then return true
+        }
+    }
+    return false
+}
+
+# fitsFlat -- whether `ids`, printed flat on their own, fit `rem` columns
+fitsFlat: function {
+    d: Doc.view
+    p: Printer
+    ind: u32
+    ids: (ListVal u32).take
+    rem: i64
+} out bool is {
+    first: (ListVal cmd)
+    i: ids.length
+    for i > 0 loop {
+        i = i - 1
+        first.append (cmd :ind mode: modeFlat id: (ids.get :i) off: 0)
+    }
+    ok: fitsCmds :d :p stack: first :rem useRest: false mustBeFlat: true
+    return ok
+}
+
+# printFill -- the next content and separator of a fill: the content flat when
+# it fits, the separator flat when the content after it fits too, and the rest
+# of the fill re-queued behind them
+printFill: function {d: Doc.view p: Printer c: cmd row: docrow} is {
+    n: row.kids.count
+    if c.off >= n then return
+    rem: p.width.i64 - p.pos.i64
+    content: kidAt :d span: row.kids i: c.off
+    one: (ListVal u32)
+    one.append content
+    contentFits: fitsFlat :d :p ind: c.ind ids: one :rem
+    contentMode: modeBreak
+    if contentFits then contentMode = modeFlat
+    if c.off + 1 >= n then {
+        p.cmds.append (cmd ind: c.ind mode: contentMode id: content off: 0)
+        return
+    }
+    sep: kidAt :d span: row.kids i: c.off + 1
+    sepMode: contentMode
+    if c.off + 2 < n then {
+        p.cmds.append (cmd ind: c.ind mode: c.mode id: c.id off: c.off + 2)
+        three: (ListVal u32)
+        three.append content
+        three.append sep
+        three.append (kidAt :d span: row.kids i: c.off + 2)
+        pairFits: fitsFlat :d :p ind: c.ind ids: three :rem
+        if (pairFits) == false then sepMode = modeBreak
+    }
+    p.cmds.append (cmd ind: c.ind mode: sepMode id: sep off: 0)
+    p.cmds.append (cmd ind: c.ind mode: contentMode id: content off: 0)
+}
+
+# printBest -- the first variant whose every line fits, else the last; a
+# bestFitting something below forces to break prints its last variant
+printBest: function {d: Doc.view p: Printer c: cmd row: docrow} is {
+    n: row.kids.count
+    if n == 0 then return
+    last: kidAt :d span: row.kids i: n - 1
+    if (row.breaks) == false then {
+        i: u32
+        for i + 1 < n loop {
+            v: kidAt :d span: row.kids :i
+            i = i + 1
+            if (variantFits :d :p ind: c.ind id: v) then {
+                p.cmds.append (cmd ind: c.ind mode: modeBreak id: v off: 0)
+                return
+            }
+        }
+    }
+    p.cmds.append (cmd ind: c.ind mode: modeBreak id: last off: 0)
+}
+
+# variantFits -- whether variant `id`, printed in break mode from the current
+# column, keeps every line within the width, and the rest of the line after
+# it still fits
+variantFits: function {d: Doc.view p: Printer ind: u32 id: u32} out bool is {
+    sub: (newPrinter
+        width: p.width
+        pos: p.pos
+        pendingSpace: p.pendingSpace
+        pendingIndent: p.pendingIndent
+        indentCols: p.indentCols
+    )
+    sub.cmds.append (cmd :ind mode: modeBreak :id off: 0)
+    printLoop :d p: sub
+    if sub.overflow then return false
+    none: (ListVal cmd)
+    rest: (fitsCmds
+        :d
+        :p
+        stack: none
+        rem: p.width.i64 - sub.pos.i64
+        useRest: true
+        mustBeFlat: false
+    )
+    return rest
+}
+
+# emitVerbatim -- the slice byte-exact; when shiftable, each inner line that
+# is not empty gains or loses the columns between the indent here and the one
+# it was written at, the closing line included, so the literal's value is
+# unchanged
+emitVerbatim: function {d: Doc.view p: Printer c: cmd row: docrow} is {
+    writePending :p
+    delta: i64
+    if row.shift then delta = c.ind.i64 - row.origIndent.i64
+    col: u32
+    sawNl: false
+    sv: d.source.stringView
+    i: row.lo.u64
+    hi: row.hi.u64
+    for i < hi loop {
+        b: (sv.byteAt :i).or d: 0
+        i = i + 1
+        if b == 10 then {
+            p.buf.appendByte b: 10
+            sawNl = true
+            col = 0
+            nb: (sv.byteAt :i).or d: 0
+            if i < hi when nb != 10 then {
+                k: i64
+                for k < (0 - delta) loop {
+                    if ((sv.byteAt :i).or d: 0) == 32 then i = i + 1
+                    k = k + 1
+                }
+                for k < delta loop {
+                    p.buf.appendByte b: 32
+                    col = col + 1
+                    k = k + 1
+                }
+            }
+        } else {
+            p.buf.appendByte :b
+            if (b & 192) != 128 then col = col + 1
+        }
+    }
+    if sawNl then {
+        p.pos = col
+    } else {
+        p.pos = p.pos + col
+    }
+}
