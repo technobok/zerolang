@@ -44,6 +44,7 @@ printUsage: function is {
     io.eprintln "  --docs-all      every doc flag at once"
     io.eprintln "  --arch    report architecture findings: string-literal compares, composed keys, long functions, and under --full unit/type-name compares and write-only fields (advisory)"
     io.eprintln "  --line-length N  report lines over N columns (advisory; default off)"
+    io.eprintln "  --complexity N  report functions whose cognitive complexity exceeds N (advisory; --arch implies 15)"
 }
 
 # reportAnalysis -- render every collected diagnostic for one file to stderr,
@@ -266,6 +267,8 @@ main: function is {
     fDocsQuality: false
     fArch: false
     fCollapse: false
+    fComplexity: u32
+    fcSet: false
     # every --src, in the order given: all are roots and the first that answers
     # a unit name wins, as zc resolves them
     srcdirs: List String
@@ -341,6 +344,25 @@ main: function is {
                 io.eprintln "zl: --line-length needs a number"
                 os.exit code: 2
             }
+        } else if av == "--complexity" then {
+            if (i + 1) < n then {
+                i = i + 1
+                ccStr: (argv.get :i)
+                ccSv: ccStr.stringView
+                ccPv: ccSv.parseU64
+                match (
+                    ccPv
+                ) case ok then {
+                    fComplexity = ccPv.u32.orPanic
+                    fcSet = true
+                } case err then {
+                    io.eprintln "zl: --complexity needs a number"
+                    os.exit code: 2
+                }
+            } else {
+                io.eprintln "zl: --complexity needs a number"
+                os.exit code: 2
+            }
         } else if (av.startsWith prefix: "-") then {
             eu: "zl: unknown flag \{av}"
             io.eprintln eu
@@ -355,6 +377,8 @@ main: function is {
 
     if srcdirs.length == 0 then srcdirs.append from: ".".string
     if sv == "lint" then {
+        ccThreshold: fComplexity
+        if fcSet == false when fArch then ccThreshold = zsource.complexityThreshold
         lintOpts: (zsource.lintopts
             full: fFull
             :lineLength
@@ -365,6 +389,7 @@ main: function is {
             docsPrivate: fDocsPrivate
             docsQuality: fDocsQuality
             arch: fArch
+            complexity: ccThreshold
         )
         rc: runLint :paths :srcdirs systemdir: systemdir.stringView opts: lintOpts
         os.exit code: rc

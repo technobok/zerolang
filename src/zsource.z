@@ -12,6 +12,7 @@ public: unit {
     :analyzeSource
     :lintopts
     :defaultOpts
+    :complexityThreshold
     :lineDiffEdits
     :renderDiff
     :sourceParses
@@ -46,6 +47,9 @@ lintopts: record {
     docsQuality: bool
     # run the A-codes, which are advisory and ratcheted rather than gating
     arch: bool
+    # the cognitive-complexity threshold A008 reports against; 0 turns the rule
+    # off. `--arch` sets the default, `--complexity N` overrides it
+    complexity: u32
 }
 
 # defaultOpts -- the fast tier with every optional rule off.
@@ -60,6 +64,7 @@ defaultOpts: function {} out lintopts is {
         docsPrivate: false
         docsQuality: false
         arch: false
+        complexity: 0
     )
 }
 
@@ -74,6 +79,10 @@ longFunctionLines: 150.u32
 # The body length from which A006 compares shapes: below it a match is a
 # coincidence of small bodies, not a copy.
 duplicateBodyLines: 8.u32
+
+# The cognitive complexity above which A008 reports a function: SonarSource's
+# default. `--complexity N` overrides it, and 0 turns the rule off.
+complexityThreshold: 15.u32
 
 # unitOpOfName -- the unitdef node of the program's unit named `uname`, 0 when
 # no unit has that name.
@@ -304,6 +313,204 @@ bodyIsOneMatch: function {ast: Ast.view bodyId: zast.nodeid} out bool is {
         depth = depth + 1
     }
     return false
+}
+
+# CcState -- the running score of one function's complexity walk, a class so
+# the recursion below adds to one value
+CcState: class {
+    # the score so far
+    score: u32
+}
+
+# soleIfOf -- the `if` a body holds when it is exactly one `if` statement (an
+# `else if`), 0 otherwise. The if sits under the line's expression wrapper,
+# so the wrappers are peeled.
+soleIfOf: function {ast: Ast.view bodyId: zast.nodeid} out zast.nodeid is {
+    zero: zast.nodeid
+    if bodyId.isZero then return zero
+    if (zast.stmtLineCount :ast nid: bodyId) != 1 then return zero
+    id: zast.stmtLineAt :ast nid: bodyId i: 0
+    depth: 0
+    for depth < 4 loop {
+        n: ast.nodes.get i: id.u64
+        match (
+            n
+        ) case statementline then {
+            id = n.statementline
+        } case expression then {
+            id = n.expression
+        } case ifexpr then {
+            return id
+        } else return zero
+        depth = depth + 1
+    }
+    return zero
+}
+
+# ccSelfRef -- whether `id` spells the function being scored: its bare name,
+# or `this.` followed by it. A reference to a function calls it, so either is
+# a recursive call.
+ccSelfRef: function {ast: Ast.view id: zast.nodeid fnName: zast.nameid} out bool is {
+    n: ast.nodes.get i: id.u64
+    match (
+        n
+    ) case atomid then {
+        return n.name == fnName
+    } case dottedpath then {
+        p: ast.nodes.get i: n.parent.u64
+        isThis: false
+        match (
+            p
+        ) case atomid then {
+            if p.name == zast.names.wkThis then isThis = true
+        } else null
+        if isThis then {
+            c: ast.nodes.get i: n.child.u64
+            match (
+                c
+            ) case atomid then {
+                return c.name == fnName
+            } else null
+        }
+    } else null
+    return false
+}
+
+# ccVisitSpan -- ccVisit over every node of a span
+ccVisitSpan: function {
+    ast: Ast.view span: zast.kidspan nesting: u32 fnName: zast.nameid acc: CcState
+} is {
+    i: u64
+    for i < span.count.u64 loop {
+        kid: zast.kidAt kids: ast.kids :span :i
+        i = i + 1
+        ccVisit :ast id: (zast.nodeid.create from: kid) :nesting :fnName :acc
+    }
+}
+
+# ccArms -- ccVisit over each match arm's body, the arm names skipped: an arm
+# named like the function is not a call
+ccArms: function {
+    ast: Ast.view span: zast.kidspan nesting: u32 fnName: zast.nameid acc: CcState
+} is {
+    i: u64
+    for i < span.count.u64 loop {
+        kid: zast.kidAt kids: ast.kids :span :i
+        i = i + 1
+        c: ast.nodes.get i: kid.u64
+        match (
+            c
+        ) case caseclause then {
+            ccVisit :ast id: c.statement :nesting :fnName :acc
+        } else null
+    }
+}
+
+# ccIf -- an `if`: one plus its nesting for the first clause, unless it
+# continues an `else if` chain whose `else` paid, one for each further clause,
+# one for a `when` chain, the bodies one level deeper; then the `else`: one
+# for an `else if`, walked as a chained if at the same nesting, one for a
+# plain `else` with its body one level deeper
+ccIf: function {
+    ast: Ast.view
+    clauses: zast.kidspan
+    elseclause: zast.nodeid
+    chained: bool
+    nesting: u32
+    fnName: zast.nameid
+    acc: CcState
+} is {
+    ci: u64
+    for ci < clauses.count.u64 loop {
+        cid: zast.kidAt kids: ast.kids span: clauses i: ci
+        ci = ci + 1
+        c: ast.nodes.get i: cid.u64
+        match (
+            c
+        ) case ifclause then {
+            if ci == 1 then {
+                if chained == false then acc.score = acc.score + 1 + nesting
+            } else {
+                acc.score = acc.score + 1
+            }
+            if c.conditions.count > 1 then acc.score = acc.score + 1
+            ccVisitSpan :ast span: c.conditions :nesting :fnName :acc
+            ccVisit :ast id: c.statement nesting: (nesting + 1) :fnName :acc
+        } else null
+    }
+    if elseclause.isZero then return
+    inner: soleIfOf :ast bodyId: elseclause
+    acc.score = acc.score + 1
+    if inner.isZero then {
+        ccVisit :ast id: elseclause nesting: (nesting + 1) :fnName :acc
+    } else {
+        m: ast.nodes.get i: inner.u64
+        match (
+            m
+        ) case ifexpr then {
+            (ccIf
+                :ast
+                clauses: m.clauses
+                elseclause: m.elseclause
+                chained: true
+                :nesting
+                :fnName
+                :acc
+            )
+        } else null
+    }
+}
+
+# ccVisit -- add `id`'s contribution at `nesting` to `acc`, then its
+# children's: an `if`, `for` or `match` costs one plus its nesting and nests
+# its bodies, a chained header condition costs one, a recursive call costs
+# one, a nested function literal nests its body and costs nothing, and
+# everything else is walked through
+ccVisit: function {ast: Ast.view id: zast.nodeid nesting: u32 fnName: zast.nameid acc: CcState} is {
+    if id.isZero then return
+    n: ast.nodes.get i: id.u64
+    match (
+        n
+    ) case ifexpr then {
+        (ccIf
+            :ast
+            clauses: n.clauses
+            elseclause: n.elseclause
+            chained: false
+            :nesting
+            :fnName
+            :acc
+        )
+    } case forexpr then {
+        acc.score = acc.score + 1 + nesting
+        if (n.conditions.count + n.postconditions.count) > 1 then acc.score = acc.score + 1
+        ccVisitSpan :ast span: n.conditions :nesting :fnName :acc
+        ccVisit :ast id: n.body nesting: (nesting + 1) :fnName :acc
+        ccVisitSpan :ast span: n.postconditions :nesting :fnName :acc
+    } case caseexpr then {
+        acc.score = acc.score + 1 + nesting
+        ccVisit :ast id: n.subject :nesting :fnName :acc
+        ccArms :ast span: n.clauses nesting: (nesting + 1) :fnName :acc
+        ccVisit :ast id: n.elseclause nesting: (nesting + 1) :fnName :acc
+    } case functiondef then {
+        ccVisit :ast id: n.body nesting: (nesting + 1) :fnName :acc
+    } case call then {
+        if (ccSelfRef :ast id: n.callable :fnName) then acc.score = acc.score + 1
+        ccVisitSpan :ast span: n.arguments :nesting :fnName :acc
+    } case atomid then {
+        if n.name == fnName then acc.score = acc.score + 1
+    } case dottedpath then {
+        if (ccSelfRef :ast :id :fnName) then {
+            acc.score = acc.score + 1
+        } else {
+            ccVisit :ast id: n.parent :nesting :fnName :acc
+        }
+    } else {
+        kids: zast.childIds :ast :n
+        with it: kids.iterate do for k: it loop {
+            ccVisit :ast id: (zast.nodeid.create from: k) :nesting :fnName :acc
+        }
+    }
 }
 
 # isComposedParts -- a string literal's parts shaped like a composed key: two
@@ -1421,6 +1628,10 @@ Analysis: class {
                 line: n.lineno
                 col: n.colno
             )
+        } case namedoperation then {
+            if this.opts.complexity > 0 when this.funcDepth == 0 then {
+                this.checkComplexity :ast nameId: n.name opId: n.operation
+            }
         } case assignment then {
             if this.funcDepth > 0 then (this.tryBareZeroInit
                 :ast
@@ -1553,6 +1764,34 @@ Analysis: class {
                 width: 1
             )
         }
+    }
+
+    # checkComplexity -- A008: a function whose cognitive complexity exceeds
+    # the threshold, scored over its whole body with nested literals folded
+    # in. The definition names it: unit-level functions and methods, which the
+    # walk reaches at function depth zero.
+    checkComplexity: function {:this ast: Ast.view nameId: zast.nameid opId: zast.nodeid} is {
+        if opId.isZero then return
+        op: ast.nodes.get i: opId.u64
+        match (
+            op
+        ) case functiondef then {
+            if op.body.isZero then return
+            acc: (CcState score: 0)
+            ccVisit :ast id: op.body nesting: 0 fnName: nameId :acc
+            if acc.score > this.opts.complexity then {
+                nm: zast.poolTextCopy pool: ast.names ref: nameId
+                sc: acc.score
+                th: this.opts.complexity
+                (this.warn
+                    code: "A008"
+                    msg: "function `\{nm}` has cognitive complexity \{sc} (threshold \{th})"
+                    line: op.lineno
+                    col: op.colno
+                    width: 1
+                )
+            }
+        } else null
     }
 
     # walkCasingAt -- the id-taking entry for the casing visitor.
