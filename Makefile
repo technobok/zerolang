@@ -362,7 +362,7 @@ zc: bin/zc
 # front-end via the compiler. A separate binary from zc so the compiler stays
 # lean; zl links the front-end + typecheck (for --full's suffix rule), but never
 # the emitter.
-out/zl.c: $(BUILDDIR)/zc.o $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z) $(RT_DEP) | bin/zc
+out/zl.c: $(BUILDDIR)/zc.o $(wildcard src/zl.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard src/zfmt.z) $(wildcard src/zfmtcursor.z) $(wildcard src/zdoc.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z) $(RT_DEP) | bin/zc
 	@mkdir -p out
 	bin/zc zl --src src --system lib/system $(ZCHASH) --emit-c out/zl.c
 
@@ -377,7 +377,7 @@ bin/zl: $(BUILDDIR)/zl.o $(BUILDDIR)/buildstamp.o $(MIMALLOC_OBJ)
 # stdio/--replay on the shared front-end via zcheck; no emitter. The
 # lsp test kind in ztestrunner builds its own copy; this rule is the
 # editor-facing binary.
-out/zls.c: $(BUILDDIR)/zc.o $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z) $(RT_DEP) | bin/zc
+out/zls.c: $(BUILDDIR)/zc.o $(wildcard src/zls.z) $(wildcard src/zcheck.z) $(wildcard src/zsource.z) $(wildcard src/zdiag.z) $(wildcard src/zrule.z) $(wildcard src/zfix.z) $(wildcard src/ztypecheck.z) $(wildcard src/ztypes.z) $(wildcard src/zenv.z) $(wildcard src/ztyping.z) $(wildcard src/zgenerator.z) $(wildcard src/zfmt.z) $(wildcard src/zfmtcursor.z) $(wildcard src/zdoc.z) $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z) $(RT_DEP) | bin/zc
 	@mkdir -p out
 	bin/zc zls --src src --system lib/system $(ZCHASH) --emit-c out/zls.c
 
@@ -441,6 +441,38 @@ regen-fmt-goldens: out/zfmt
 		$(BUILDDIR)/zfmt $$f $$args > tests/fixtures/fmt_golden/$$name.z; \
 	done
 	@echo "regenerated fmt goldens via $(BUILDDIR)/zfmt"
+
+# fmt-compare -- the old `zl fmt --stdout` against the new `zl format --stdout`
+# over the reformat scope: one unified diff per changed file under
+# $(BUILDDIR)/fmt-compare, refusals named, and a summary line. The review gate
+# before the reformat commit.
+FMTCOMPARE_SCOPE := $(FMTSCOPE) tests/unit/*.z
+fmt-compare: bin/zl
+	@rm -rf $(BUILDDIR)/fmt-compare; mkdir -p $(BUILDDIR)/fmt-compare
+	@changed=0; refused=0; total=0; \
+	for f in $(FMTCOMPARE_SCOPE); do \
+	  total=$$((total+1)); n=$$(echo $$f | tr / _); \
+	  bin/zl fmt --stdout $$f > $(BUILDDIR)/fmt-compare/$$n.old 2>/dev/null; \
+	  if bin/zl format --stdout $$f > $(BUILDDIR)/fmt-compare/$$n.new 2> $(BUILDDIR)/fmt-compare/$$n.err; then \
+	    if diff -u $(BUILDDIR)/fmt-compare/$$n.old $(BUILDDIR)/fmt-compare/$$n.new > $(BUILDDIR)/fmt-compare/$$n.diff; then \
+	      rm -f $(BUILDDIR)/fmt-compare/$$n.diff; \
+	    else changed=$$((changed+1)); fi; \
+	  else refused=$$((refused+1)); echo "REFUSED $$f: $$(head -1 $(BUILDDIR)/fmt-compare/$$n.err)"; fi; \
+	done; \
+	echo "fmt-compare: $$total files, $$changed differ, $$refused refused; diffs under $(BUILDDIR)/fmt-compare/"
+
+# emit-snapshot -- the emitted C of every example and corpus program and of the
+# three drivers, under SNAP=<dir>: two snapshots taken around a reformat must
+# compare equal, since layout and parentheses reach no emitted byte.
+emit-snapshot: bin/zc
+	@test -n "$(SNAP)" || { echo "usage: make emit-snapshot SNAP=<dir>"; exit 2; }
+	@mkdir -p $(SNAP)/examples $(SNAP)/corpus $(SNAP)/drivers
+	@for f in examples/*.z; do n=$$(basename $$f .z); \
+	  bin/zc $$n --src examples --system lib/system --emit-c $(SNAP)/examples/$$n.c 2>/dev/null || echo "no emit: $$f"; done
+	@for f in tests/fixtures/emitc_corpus/*.z; do n=$$(basename $$f .z); \
+	  bin/zc $$n --src tests/fixtures/emitc_corpus --system lib/system --emit-c $(SNAP)/corpus/$$n.c 2>/dev/null || echo "no emit: $$f"; done
+	@for d in zc zl zls; do bin/zc $$d --src src --system lib/system --emit-c $(SNAP)/drivers/$$d.c; done
+	@echo "emitted C snapshot under $(SNAP)"
 
 # bump-seed -- regenerate the committed seed from a fresh bin/zc. Run only when
 # test-bootstrap reports the seed can no longer build main, or for hygiene.

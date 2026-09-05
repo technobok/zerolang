@@ -23,12 +23,15 @@ printUsage: function is {
     io.eprintln "commands:"
     io.eprintln "  lint <files>   report diagnostics"
     io.eprintln "  fmt  <files>   apply safe fixes (refuses files with parse errors)"
+    io.eprintln "  format <files> apply safe fixes, then lay the file out with the printer"
     io.eprintln "  explain <code> describe a lint code"
     io.eprintln "fmt flags:"
     io.eprintln "  --check   exit non-zero if any file needs formatting; write nothing"
     io.eprintln "  --stdout  print the formatted result instead of writing in place"
     io.eprintln "  --diff    print a unified diff of the changes; write nothing"
     io.eprintln "  --line-length N  wrap over-long named-arg calls at N columns (default 100; 0 off)"
+    io.eprintln "format flags: --check, --stdout, --diff and --full as fmt; --line-length N is the width"
+    io.eprintln "  --collapse  ignore the author's keep-open newline markers"
     io.eprintln "lint flags:"
     io.eprintln "  --full    also run typecheck-tier rules (--src DIR --system DIR set the project)"
     io.eprintln "  --casing  report variant/union members that are not lowerCamelCase (advisory)"
@@ -207,6 +210,117 @@ runFmt: function {
     return rc
 }
 
+# runFormat -- lay each target file out with the printer: the safe non-layout
+# fixes first (elision, label collapse, zero-init, string-like), then the
+# document printer at `lineLength` columns. `--check`, `--stdout` and `--diff`
+# as `fmt` has them. A file the printer refuses (parse error, a walk out of
+# step, a different tree) is reported and left untouched. Exit 1 if a file is
+# refused or, under --check, would change.
+runFormat: function {
+    paths: (List String).borrow
+    check: bool
+    stdout: bool
+    diff: bool
+    full: bool
+    srcdirs: (List String).view
+    systemdir: StringView
+    lineLength: u32
+    collapse: bool
+} out i32 is {
+    if paths.length == 0 then {
+        io.eprintln "zl format: no input files"
+        return 2
+    }
+    modes: u32
+    if check then modes = modes + 1
+    if stdout then modes = modes + 1
+    if diff then modes = modes + 1
+    if modes > 1 then {
+        io.eprintln "zl format: --check, --stdout and --diff are mutually exclusive"
+        return 2
+    }
+    rc: i32
+    with pit: paths.iterate do for p: pit loop {
+        fmtOpts: zsource.defaultOpts
+        fmtOpts.full = full
+        fmtOpts.layout = false
+        a: zsource.analyzeFileTiered path: p.copy :srcdirs :systemdir opts: fmtOpts
+        if a.parseErrorCount > 0 then {
+            reportAnalysis :a
+            msg: "zl format: \{p} has parse errors; not formatting"
+            io.eprintln msg
+            if stdout then writeStdout s: a.source.stringView
+            rc = 1
+        } else {
+            hasEdits: a.edits.length > 0
+            newsrc: a.source.copy
+            valid: true
+            if hasEdits then {
+                newsrc = zfix.applyEdits source: a.source.stringView edits: a.edits
+                valid = zsource.sourceParses source: newsrc.copy
+            }
+            if (hasEdits) when (valid == false) then {
+                eb: "zl format: a fix would break \{p}; skipped"
+                io.eprintln eb
+                if stdout then writeStdout s: a.source.stringView
+                rc = 1
+            } else {
+                res: (zfmt.formatSource
+                    source: newsrc.stringView
+                    width: lineLength
+                    :collapse
+                    raw: false
+                    gate: true
+                )
+                if res.ok == false then {
+                    er: "zl format: \{p} refused at line \{res.line}, column \{res.col}: \{res.msg}"
+                    io.eprintln er
+                    if stdout then writeStdout s: a.source.stringView
+                    rc = 1
+                } else {
+                    text: res.text.take
+                    changed: (text.stringView == a.source.stringView) == false
+                    if stdout then {
+                        writeStdout s: text.stringView
+                    } else if diff then {
+                        if changed then {
+                            de: zsource.lineDiffEdits old: a.source.stringView new: text.stringView
+                            dtext: (zsource.renderDiff
+                                path: a.path.stringView
+                                source: a.source.stringView
+                                edits: de
+                            )
+                            writeStdout s: dtext.stringView
+                            rc = 1
+                        }
+                    } else if check then {
+                        if changed then {
+                            wf: "would reformat \{p}"
+                            print wf
+                            rc = 1
+                        }
+                    } else {
+                        if changed then {
+                            wr: io.writeText path: a.path content: text
+                            match (
+                                wr
+                            ) case ok then {
+                                fm: "formatted \{p}"
+                                print fm
+                            } case err then {
+                                ew: "zl format: could not write \{p}"
+                                io.eprintln ew
+                                rc = 1
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return rc
+}
+
 # CLI entry point for the zl linter/formatter: parse the subcommand
 # (lint / fmt / explain) and flags, then run it.
 main: function is {
@@ -253,6 +367,7 @@ main: function is {
     fDocsPrivate: false
     fDocsQuality: false
     fArch: false
+    fCollapse: false
     # every --src, in the order given: all are roots and the first that answers
     # a unit name wins, as zc resolves them
     srcdirs: (List String)
@@ -291,6 +406,8 @@ main: function is {
             fDocsQuality = true
         } else if av == "--arch" then {
             fArch = true
+        } else if av == "--collapse" then {
+            fCollapse = true
         } else if av == "--src" then {
             if (i + 1) < n then {
                 i = i + 1
@@ -350,6 +467,7 @@ main: function is {
             docsPrivate: fDocsPrivate
             docsQuality: fDocsQuality
             arch: fArch
+            layout: true
         )
         rc: runLint :paths :srcdirs systemdir: systemdir.stringView opts: lintOpts
         os.exit code: rc
@@ -365,6 +483,21 @@ main: function is {
             :srcdirs
             systemdir: systemdir.stringView
             :lineLength
+        )
+        os.exit code: rc
+    }
+    if sv == "format" then {
+        if llSet == false then lineLength = 100
+        rc: (runFormat
+            :paths
+            check: fCheck
+            stdout: fStdout
+            diff: fDiff
+            full: fFull
+            :srcdirs
+            systemdir: systemdir.stringView
+            :lineLength
+            collapse: fCollapse
         )
         os.exit code: rc
     }

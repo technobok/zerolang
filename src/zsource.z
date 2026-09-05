@@ -47,6 +47,10 @@ lintopts: record {
     docsQuality: bool
     # run the A-codes, which are advisory and ratcheted rather than gating
     arch: bool
+    # run the layout rules: trailing whitespace, final newline, colon spacing,
+    # blank lines, redundant parens, braces, null bodies, chain bodies and the
+    # wrap. Off under `zl format`, whose printer owns the layout
+    layout: bool
 }
 
 # defaultOpts -- the fast tier with every optional rule off.
@@ -61,6 +65,7 @@ defaultOpts: function {} out lintopts is {
         docsPrivate: false
         docsQuality: false
         arch: false
+        layout: true
     )
 }
 
@@ -1927,14 +1932,23 @@ Analysis: class {
             )
         } case ifexpr then {
             this.checkEmpty :ast elseclauseId: n.elseclause clauses: n.clauses
-            this.checkBracesIf :ast clauses: n.clauses elseclauseId: n.elseclause ln: n.lineno
-            this.checkChainBodyBreak :ast clauses: n.clauses elseclauseId: n.elseclause
+            if this.opts.layout then {
+                this.checkBracesIf :ast clauses: n.clauses elseclauseId: n.elseclause ln: n.lineno
+                this.checkChainBodyBreak :ast clauses: n.clauses elseclauseId: n.elseclause
+            }
         } case forexpr then {
-            this.checkBracesFor :ast bodyId: n.body
+            if this.opts.layout then this.checkBracesFor :ast bodyId: n.body
         } case caseexpr then {
-            this.checkBracesMatch :ast clauses: n.clauses elseclauseId: n.elseclause ln: n.lineno
-            this.checkChainBodyBreak :ast clauses: n.clauses elseclauseId: n.elseclause
-            this.checkNullArms :ast clauses: n.clauses elseclauseId: n.elseclause
+            if this.opts.layout then {
+                (this.checkBracesMatch
+                    :ast
+                    clauses: n.clauses
+                    elseclauseId: n.elseclause
+                    ln: n.lineno
+                )
+                this.checkChainBodyBreak :ast clauses: n.clauses elseclauseId: n.elseclause
+                this.checkNullArms :ast clauses: n.clauses elseclauseId: n.elseclause
+            }
         } case statement then {
             this.checkUnreachable :ast stmts: n.statements
         } case functiondef then {
@@ -3254,11 +3268,13 @@ Analysis: class {
         this.walkProgram prog: n
         this.checkPublicPosProgram prog: n
         this.checkForWhile
-        this.checkTrailingWs
-        this.checkFinalNewline
-        this.checkColonSpacing
-        this.checkBlankLines
-        this.checkRedundantParens
+        if this.opts.layout then {
+            this.checkTrailingWs
+            this.checkFinalNewline
+            this.checkColonSpacing
+            this.checkBlankLines
+            this.checkRedundantParens
+        }
     }
 
     # sortEditsInPlace -- reorder the collected edits by byteLo so the applier and the diff
