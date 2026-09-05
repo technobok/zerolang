@@ -33,8 +33,8 @@
 
 #code: """
   zl lint    [--full] [--arch] [--casing] [--docs] [--docs-params] [--docs-fields] [--docs-private] [--docs-quality] [--docs-all] [--src DIR] [--system DIR] [--line-length N] <files...>
-  zl fmt     [--check | --stdout | --diff] [--full] [--line-length N] <files...>
-  zl format  [--check | --stdout | --diff] [--full] [--line-length N] [--collapse] <files...>
+  zl fmt     [--check | --stdout | --diff] [--full] [--line-length N] [--collapse] <files...>
+  zl format  an alias of fmt
   zl explain <code>
   """
 
@@ -87,17 +87,15 @@ under one root reads an export declared under another.
     ratcheted the same way the #~"A" codes are, against
     #~"tests/fixtures/doc_baseline.txt", but only under #~"make ci": it is a
     full-corpus lint pass and too slow for the fast gate.]
-  [#*: #b:"fmt" #~"<files...>" — apply the safe fixes and write each file in
-    place. A file with a parse error is refused and left unchanged.]
-  [#*: #b:"format" #~"<files...>" — the successor to #b:"fmt": the safe
-    non-layout fixes, then the whole file laid out by a document printer
-    (#~"src/zfmt.z" over #~"src/zdoc.z") at #~"--line-length" columns, default
-    100. Parentheses that only group are removed where the printer re-inserts
-    them on a break; a newline the author left right after an opening
-    delimiter keeps that group open (#~"--collapse" ignores it); comments are
-    never moved across a delimiter. The printed text is reparsed and compared
-    with the input tree before it is written, so a file the printer cannot
-    reproduce is refused and left untouched.]
+  [#*: #b:"fmt" #~"<files...>" — the safe fixes, then the whole file laid out
+    by a document printer (#~"src/zfmt.z" over #~"src/zdoc.z") at
+    #~"--line-length" columns, default 100, and written in place. Parentheses
+    that only group are removed where the printer re-inserts them on a break; a
+    newline the author left right after an opening delimiter keeps that group
+    open (#~"--collapse" ignores it); comments are never moved across a
+    delimiter. The printed text is reparsed and compared with the input tree
+    before it is written, so a file with a parse error, or one the printer
+    cannot reproduce, is refused and left untouched. #b:"format" is an alias.]
   [#*: #b:"explain" #~"<code>" — print the registry entry for a rule code, for
     example #~"zl explain L003".]
 
@@ -111,21 +109,21 @@ arguments, so the two tools never diverge.
     nothing. For CI.]
   [#*: #~"--stdout" — write the formatted result to stdout instead of in place
     (a lossless, byte-exact filter).]
-  [#*: #~"--diff" — print a unified (line-level) diff of the changes; write nothing. Reflects the
-    full result, including #~"--line-length" wraps.]
+  [#*: #~"--diff" — print a unified (line-level) diff of the changes; write
+    nothing. Reflects the full result, the printer's layout included.]
   [#*: #~"--full" — also apply the typecheck-tier fixes (needs #~"--src" /
     #~"--system").]
   [#*: #~"-V" / #~"--version" — print the version line and exit. Same line
     #~"zc --version" prints, under this tool's name.]
-  [#*: #~"--line-length N" — the wrap column. #~"fmt" breaks an over-long line's
-    named-argument list onto one item per line, at three sites: a #_+"call"
-    (parens added when bare), a #_+"paren-call in an #~"if"/#~"when" condition or
-    #~"match" subject" (broken inside the existing parens), and a #_+"function
-    signature's #~"{ }" param block". #_*"On by default" at N=100 (the styleguide
-    soft limit); #~"--line-length 0" disables it. Wrap-only (never re-wraps or
-    joins); applies in write, #~"--stdout", #~"--check" and #~"--diff" modes.
-    Lines it cannot wrap (comments, string literals, binop chains) are left
-    untouched; #~"zl lint --line-length N" reports them (W005).]
+  [#*: #~"--line-length N" — the width the printer lays out at, in codepoints;
+    default 100, the styleguide's soft limit. Every group that does not fit in
+    it breaks, and every group that fits prints flat, so the printer both wraps
+    and joins. Comments and string literals are never reflowed, so a line they
+    make longer stays as written; #~"zl lint --line-length N" reports it (W005).]
+  [#*: #~"--collapse" — ignore the author's keep-open markers: a newline or
+    comment right after an opening delimiter no longer holds that group open, so
+    a call or declaration written expanded joins back into one line when it
+    fits.]
 
 #~"--check", #~"--stdout" and #~"--diff" are mutually exclusive.
 
@@ -151,16 +149,6 @@ declares a #_*"tier" — #b:"token" and #b:"parse" run on the fast path;
   [#*: #b:"L006" #_*"redundant-label" — a named argument #~"name: name" whose
     label repeats its bare-atom value; the fix collapses it to the #~":name"
     shorthand. (parse)]
-  [#*: #b:"L007" #_*"redundant-parens" — parentheses wrapping an #_+"entire" #~"if"
-    condition that does not require them (e.g. #~"if (a < b)" → #~"if a < b"). A
-    named-arg-call condition keeps its parens (they delimit the args before #~"then");
-    sub-expression precedence parens are left alone. (token)]
-  [#*: #b:"L008" #_*"redundant-braces" — curly braces around a #_+"single-statement"
-    #~"then"/#~"else", #~"for"-loop, or #~"match"-arm body inside a function that fits
-    without them (e.g. #~"if c then { return x }" → #~"if c then return x"). A
-    multi-clause #~"if"/#~"match" is de-braced only when the whole construct already fits
-    on one line; a labelled-call or commented body, and unit-level #~"if" branches (where
-    braces are required), keep them. (token)]
   [#*: #b:"L009" #_*"member-casing" — a #~"variant"/#~"union" arm name that is not
     #_+"lowerCamelCase" (it starts with an uppercase letter). Advisory and #_+"opt-in":
     off by default, run #~"zl lint --casing". The message suggests a rename; when the
@@ -168,10 +156,6 @@ declares a #_*"tier" — #b:"token" and #b:"parse" run on the fast path;
     (e.g. #~"CLASS" → #~"classKind" for a type-kind, #~"classDef" for an AST node). Type-
     reference union arms (#~":StringView") are exempt. No autofix — a rename must update
     every reference. (parse)]
-  [#*: #b:"L010" #_*"null-body" — an empty #~"{ }" #~"match" arm or #~"else" body.
-    The bare identifier #~"null" is the empty-body spelling: #~"case a then null",
-    #~"} else null". Autofixed by #~"zl fmt" when the merged line fits the wrap width;
-    commented empties keep their braces. (parse)]
   [#*: #b:"L011" #_*"bare-zero-init" — a zero or empty binding initializer written
     as a literal (#~"\"\".string", #~"0.u64") where the bare type name constructs
     the same value (#~"buf: String", #~"n: u64"). Function-body binding initializers
@@ -259,14 +243,6 @@ declares a #_*"tier" — #b:"token" and #b:"parse" run on the fast path;
     #~"return", #~"break" or #~"continue" in the same block can never run; the
     emitter drops it, so only the source carries it. Delete it. No autofix.
     (parse)]
-  [#*: #b:"W001" #_*"trailing-whitespace" — trailing whitespace on a line.
-    (token)]
-  [#*: #b:"W002" #_*"final-newline" — a non-empty file that does not end with a
-    newline. (token)]
-  [#*: #b:"W003" #_*"colon-spacing" — a #~":" followed by a value on the same
-    line must have exactly one space after it; missing or extra spaces (and
-    column alignment, which the styleguide forbids) are normalized. The
-    #~":label" shorthand and a colon at end of line are left alone. (token)]
   [#*: #b:"A001" #_*"literal-compare" — a #~"==" / #~"!=" against a string
     literal: the code routes by spelling what it should compare by id (a name
     id, a declaration, a type id). #_+"Architecture rule", opt-in via
@@ -302,8 +278,6 @@ declares a #_*"tier" — #b:"token" and #b:"parse" run on the fast path;
     wearing a public label. Make it private and let L012 judge it. Units under
     #~"--system" are exempt: their exports serve examples, tests and the
     runtime's fragments. Opt-in via #~"--arch --full". No autofix. (typecheck)]
-  [#*: #b:"W004" #_*"blank-lines" — three or more consecutive blank lines
-    collapse to one. (token)]
   [#*: #b:"W005" #_*"line-length" — a line wider than #~"--line-length N" columns.
     #_+"Advisory" (INFO): it reports but never fails the gate, and is off unless
     #~"--line-length" is given. Matches the styleguide's soft column guideline. (token)]
@@ -311,15 +285,33 @@ declares a #_*"tier" — #b:"token" and #b:"parse" run on the fast path;
 
 #--: Formatter semantics
 
-#~"zl fmt" is an #_+"autofixer, not a canonicalizer". It makes targeted
-byte-range edits; every untouched byte — comments, the author's layout — is
-preserved verbatim. The only structural change is the #~"--line-length" wrap of
-over-long named-arg calls (on by default at 100); otherwise there is no reflow.
-Two valid files that trip no rule may legitimately differ.
+#~"zl fmt" is a #_+"canonicaliser" in two stages. The safe fixes come first as
+byte-range edits (L004, L006, L011, L015; L005 under #~"--full"), and the fixed
+text is re-parsed. Then the whole file is laid out again by a document printer:
+the tree is walked in lockstep with its raw token stream, so what the tree does
+not record — parentheses, clause order, the spelling of #~"is native", comments,
+blank lines — is read from the tokens as the walk passes them, and a
+Wadler-style document is printed at #~"--line-length" columns (default 100).
+Each group of the document prints flat when it fits and breaks otherwise: one
+argument per line for a call, one operand per line with trailing operators for
+a condition, a parameter block on one indented line before one parameter per
+line for a signature. Parentheses that only group are removed and re-inserted
+only when the value breaks; a newline or comment the author left right after an
+opening delimiter keeps that group open (#~"--collapse" ignores the marker); a
+code block written across lines stays across lines; blank-line runs are capped
+at two between definitions and one inside a body, and one is required before a
+definition's doc block and after a multi-line definition. Comments are never
+reflowed or moved across a delimiter. Two valid files that parse to the same
+tree lay out the same, up to those markers.
 
-The result is #_*"idempotent": running #~"zl fmt" twice produces no further
-change. Formatting is #_*"semantics-preserving": the whole compiler formats to
-a byte-identical emitted C.
+The printed text is reparsed and compared with the input tree, expression
+wrappers ignored on both sides; a file that does not parse, walks out of step
+with its tokens, or prints to a different tree is refused and left untouched.
+The result is #_*"idempotent": laying a laid-out file out again changes
+nothing, and #~"make check" holds every unit in the repository to that. It is
+#_*"semantics-preserving": layout and parentheses reach no emitted byte, and
+#~"make emit-snapshot" taken before and after the reformat of the tree compared
+equal file for file.
 
 #--: Why not operator or comma spacing
 
@@ -328,17 +320,18 @@ nothing for a comma rule to act on. The numeric and comparison operators are
 #_+"ordinary identifiers": #~"a+b" lexes as the single identifier #~"a+b", not
 as #~"a" #~"+" #~"b". Inserting spaces there would change the token stream and
 so the meaning, which a formatter must never do. Only the colon — a genuine
-structural token — is safely spaced (#b:"W003"). See #~"docs/styleguide.pdoc"
-for the identifier-spacing rule this follows.
+structural token — is safely spaced: the printer writes one space after it. See
+#~"docs/styleguide.pdoc" for the identifier-spacing rule this follows.
 
 
 #--: Integration
 
 #ul:
   [#*: #~"make check" — #~"bin/zl lint" over the tool + compiler sources and
-    the relocated front-end (the fast tier).]
-  [#*: #~"make style-lint" — adds #~"bin/zl lint --full" (the suffix rule) and
-    #~"bin/zl fmt --check".]
+    the relocated front-end (the fast tier), and #~"bin/zl fmt --check" over
+    every unit, example and unit test.]
+  [#*: #~"make style-lint" — the same with #~"bin/zl lint --full" (the suffix
+    rule).]
 
 The rule catalogue lives in #~"src/zrule.z"; the analysis facade and rule
 implementations in #~"src/zsource.z"; the diagnostic renderer in

@@ -16,7 +16,6 @@ public: unit {
     :renderDiff
     :sourceParses
     :unitNameOf
-    :wrapSource
 }
 
 astnode: zast.astnode
@@ -47,10 +46,6 @@ lintopts: record {
     docsQuality: bool
     # run the A-codes, which are advisory and ratcheted rather than gating
     arch: bool
-    # run the layout rules: trailing whitespace, final newline, colon spacing,
-    # blank lines, redundant parens, braces, null bodies, chain bodies and the
-    # wrap. Off under `zl format`, whose printer owns the layout
-    layout: bool
 }
 
 # defaultOpts -- the fast tier with every optional rule off.
@@ -65,7 +60,6 @@ defaultOpts: function {} out lintopts is {
         docsPrivate: false
         docsQuality: false
         arch: false
-        layout: true
     )
 }
 
@@ -444,84 +438,6 @@ isElseIfWrap: function {ast: Ast.view n: astnode.view} out bool is {
     }
 }
 
-# debraceEligible -- the inner node of a single-statement clause body is a simple
-# statement that de-braces safely: a call (including return/break/yield), a
-# reassignment, a swap, a binop, a dotted path, or a bare atom -- never a binding
-# `x: y`, a control-flow construct, or a data block.
-debraceEligible: function {ast: Ast.view n: astnode.view} out bool is {
-    match (
-        n
-    ) case expression then {
-        return (debraceEligible :ast n: (ast.nodes.get i: n.expression.u64))
-    } case call then {
-        return true
-    } case reassignment then {
-        return true
-    } case swapstmt then {
-        return true
-    } case binop then {
-        return true
-    } case dottedpath then {
-        return true
-    } case atomid then {
-        return true
-    } else {
-        return false
-    }
-}
-
-# clauseBodiesOnLine -- every then-body and the else-body of an `if` sit on the
-# construct's start line `ln` (the whole `if ... else` is a one-liner).
-clauseBodiesOnLine: function {
-    ast: Ast.view
-    clauses: zast.kidspan
-    elseclauseId: zast.nodeid
-    ln: u32
-} out bool is {
-    ok: true
-    h11x9: u64
-    for h11x9 < clauses.count.u64 loop {
-        clId: zast.kidAt kids: ast.kids span: clauses i: h11x9
-        h11x9 = h11x9 + 1
-        cl: ast.nodes.get i: clId.u64
-        if cl.ifclause then {
-            p: stmtPos n: (ast.nodes.get i: cl.statement.u64)
-            if p.line != ln then ok = false
-        }
-    }
-    if elseclauseId > 0 then {
-        pe: stmtPos n: (ast.nodes.get i: elseclauseId.u64)
-        if pe.line != ln then ok = false
-    }
-    return ok
-}
-
-# caseBodiesOnLine -- every arm-body and the else-body of a `match` sit on the
-# construct's start line `ln` (the whole `match` is a one-liner).
-caseBodiesOnLine: function {
-    ast: Ast.view
-    clauses: zast.kidspan
-    elseclauseId: zast.nodeid
-    ln: u32
-} out bool is {
-    ok: true
-    h12x9: u64
-    for h12x9 < clauses.count.u64 loop {
-        clId: zast.kidAt kids: ast.kids span: clauses i: h12x9
-        h12x9 = h12x9 + 1
-        cl: ast.nodes.get i: clId.u64
-        if cl.caseclause then {
-            p: stmtPos n: (ast.nodes.get i: cl.statement.u64)
-            if p.line != ln then ok = false
-        }
-    }
-    if elseclauseId > 0 then {
-        pe: stmtPos n: (ast.nodes.get i: elseclauseId.u64)
-        if pe.line != ln then ok = false
-    }
-    return ok
-}
-
 # primaryGenericParam -- the elidable first parameter name of a built-in template,
 # or "" when `name` is not such a template. Index 0 only.
 #
@@ -890,35 +806,6 @@ casingMessage: function {orig: StringView sug: StringView} out String is {
     return "member '\{orig}' is not lowerCamelCase -- rename to '\{sug}'"
 }
 
-# trailingWsLen -- number of trailing ASCII-whitespace bytes (space, tab, CR) in
-# `ln`. Computed by hand (StringView.trimEnd's native is not emitted).
-trailingWsLen: function {ln: StringView} out u64 is {
-    n: ln.length
-    k: u64
-    keep: true
-    for keep loop {
-        if k >= n then {
-            keep = false
-        } else {
-            bo: ln.byteAt i: (n - 1 - k)
-            isws: false
-            match (
-                bo
-            ) case some then {
-                if bo == 32 then isws = true
-                if bo == 9 then isws = true
-                if bo == 13 then isws = true
-            } case none then null
-            if isws then {
-                k = k + 1
-            } else {
-                keep = false
-            }
-        }
-    }
-    return k
-}
-
 # endsWithNewline -- true if `src` is empty or its last byte is a newline.
 endsWithNewline: function {src: StringView} out bool is {
     n: src.length
@@ -942,8 +829,8 @@ Analysis: class {
     path: String
     # its full text, owned for the analysis's life
     source: String
-    # the text split into lines, which the doc and wrap rules read directly
-    # rather than through the tree
+    # the text split into lines, which the doc rules read directly rather than
+    # through the tree
     lines: List String
     # each line's byte offset, so a token's position converts to an offset
     # without rescanning
@@ -952,24 +839,10 @@ Analysis: class {
     diags: List zdiag.Diagnostic
     # the byte-range replacements a fix would apply
     edits: List zfix.Edit
-    # the width wrapping targets; 0 disables it
-    wrapWidth: u32
-    # a byte offset before which nothing is wrapped
-    wrapSkip: u64
-    # whether this pass wrapped anything. Only the FIRST over-long construct per
-    # pass is wrapped, and the fixpoint handles the rest
-    wrapFound: bool
-    # the line the current wrap began on, so the same one is not wrapped twice
-    wrapStart: u64
-    # each opening delimiter's matching close, so a signature's `}` is found by
-    # the map rather than by line end
-    delimClose: (IdMapV u64 v: u64)
     # the token stream, for the rules that need tokens and not a tree
     fastToks: ListVal tokenize.token
     # how deep in nested functions the walk is
     funcDepth: u64
-    # the argument groups a wrap has already decided about
-    wrapGroups: ListVal u64
     # which optional rules this run enables. One value threads from the command
     # line to every rule, so a new rule is a field here and not a parameter on
     # every layer between
@@ -1022,102 +895,6 @@ Analysis: class {
         this.edits.append (zfix.Edit byteLo: lo byteHi: hi replacement: repl)
     }
 
-    # checkTrailingWs -- W001: trailing whitespace on a line. Byte-exact from line
-    # byte-lengths (independent of the codepoint-based column).
-    checkTrailingWs: function {:this} is {
-        lls: linesOf src: this.source.stringView
-        off: u64
-        lno: 1.u32
-        with it: lls.iterate do for ln: it loop {
-            llen: ln.length
-            twl: trailingWsLen ln: ln.stringView
-            if twl > 0 then {
-                keptLen: llen - twl
-                (this.warnFix
-                    code: "W001"
-                    msg: "trailing whitespace".string
-                    line: lno
-                    col: (keptLen + 1).u32.orPanic
-                    width: twl.u32.orPanic
-                    lo: (off + keptLen)
-                    hi: (off + llen)
-                    repl: "".string
-                )
-            }
-            off = off + llen + 1
-            lno = lno + 1
-        }
-    }
-
-    # checkFinalNewline -- W002: a non-empty file that does not end in a newline.
-    checkFinalNewline: function {:this} is {
-        n: this.source.length
-        if n > 0 when (endsWithNewline src: this.source.stringView) == false then {
-            (this.warnFix
-                code: "W002"
-                msg: "file does not end with a newline".string
-                line: 0
-                col: 0
-                width: 0
-                lo: n
-                hi: n
-                repl: "\n".string
-            )
-        }
-    }
-
-    # checkBlankLines -- W004: collapse a run of 3 or more consecutive blank lines (empty or
-    # whitespace-only) to a single blank line, deleting the extras. Byte-exact from the line
-    # start index; runs of two or fewer are left alone.
-    checkBlankLines: function {:this} is {
-        srcOwned: this.source
-        sv: srcOwned.stringView
-        lls: linesOf src: sv
-        lineStart: lineStartIndex src: sv
-        nLines: lls.length
-        srcLen: sv.length
-        i: u64
-        for i < nLines loop {
-            ln: lls.get :i
-            blank: (trailingWsLen ln: ln.stringView) == ln.length
-            if blank then {
-                e: i + 1
-                scanning: true
-                for scanning loop {
-                    if e >= nLines then {
-                        scanning = false
-                    } else {
-                        le: lls.get i: e
-                        lblank: (trailingWsLen ln: le.stringView) == le.length
-                        if lblank then {
-                            e = e + 1
-                        } else {
-                            scanning = false
-                        }
-                    }
-                }
-                runLen: e - i
-                if runLen >= 3 then {
-                    lo: lineStart.get i: (i + 1)
-                    hi: srcLen
-                    if e < nLines then hi = lineStart.get i: e
-                    (this.warnFix
-                        code: "W004"
-                        msg: "too many consecutive blank lines".string
-                        line: (i + 2).u32.orPanic
-                        col: 1
-                        width: 1
-                        :lo
-                        :hi
-                        repl: "".string
-                    )
-                }
-                i = e
-            } else {
-                i = i + 1
-            }
-        }
-    }
     # walkOptAt -- the id-taking entry (0 = absent).
     walkOptAt: function {:this ast: Ast.view oId: zast.nodeid} is {
         if oId.isZero then return
@@ -1307,192 +1084,6 @@ Analysis: class {
         }
     }
 
-    # tryWrapCall -- wrap mode (--line-length): if this over-long single-line call has >= 2 named
-    # args and starts at/after wrapSkip, emit the wrap edits (one arg per line at base+4; a `(` is
-    # added when the call is bare) and set wrapFound. Only the first such call per pass is wrapped;
-    # wrapSource's re-parse gate + fixpoint handle discards and the rest.
-    tryWrapCall: function {:this ast: Ast.view arguments: zast.kidspan line: u32 col: u32} is {
-        if line.u64 == this.wrapStart then return
-        ac: arguments.count.u64
-        if ac < 2 then return
-        lidx: (line - 1).u64
-        if lidx >= this.lines.length then return
-        lnt: (this.lines.get i: lidx)
-        cw: codepointLen s: lnt.stringView
-        if cw <= this.wrapWidth.u64 then return
-        if (hasHash line: lnt.stringView) then return
-        cs: tokByteStart lineStart: this.lineStart srcLines: this.lines lineno: line colno: col
-        ok: true
-        h3x9: u64
-        for h3x9 < arguments.count.u64 loop {
-            argId: zast.kidAt kids: ast.kids span: arguments i: h3x9
-            h3x9 = h3x9 + 1
-            arg: ast.nodes.get i: argId.u64
-            match (
-                arg
-            ) case namedoperation then {
-                if arg.lineno != line then ok = false
-                anm: zast.nameTextAt :ast ref: arg.name
-                if anm.length == 0 then ok = false
-            } else {
-                ok = false
-            }
-        }
-        if ok == false then return
-        base: leadingSpaces line: lnt.stringView
-        srcOwned: this.source
-        srcv: srcOwned.stringView
-        bare: true
-        if cs > 0 then {
-            pb: srcv.byteAt i: (cs - 1)
-            match (
-                pb
-            ) case some then {
-                if pb == 40 then bare = false
-            } case none then null
-        }
-        lsb: this.lineStart.get i: lidx
-        contentEnd: lsb + (rstripLen line: lnt.stringView)
-        ind4: nlIndent n: (base + 4)
-        ind0: nlIndent n: base
-        closePos: contentEnd
-        clo: "\{ind0})"
-        if bare == false then {
-            coff: this.delimClose.get key: (cs - 1)
-            match (
-                coff
-            ) case some then {
-                closePos = coff
-                clo = ind0.copy
-            } case none then {
-                return
-            }
-        }
-        this.wrapGroups.append this.edits.length
-        if bare then this.edits.append (zfix.Edit byteLo: cs byteHi: cs replacement: "(".string)
-        h4x9: u64
-        for h4x9 < arguments.count.u64 loop {
-            argId: zast.kidAt kids: ast.kids span: arguments i: h4x9
-            h4x9 = h4x9 + 1
-            arg: ast.nodes.get i: argId.u64
-            if arg.namedoperation then {
-                startByte: (tokByteStart
-                    lineStart: this.lineStart
-                    srcLines: this.lines
-                    lineno: arg.lineno
-                    colno: arg.colno
-                )
-                ap: startByte
-                match (
-                    (ast.nodes.get i: arg.operation.u64)
-                ) case labelvalue then {
-                    ap = startByte - 1
-                } else null
-                ws: wsRunStart src: srcv from: ap
-                this.edits.append (zfix.Edit byteLo: ws byteHi: ap replacement: ind4.copy)
-            }
-        }
-        this.edits.append (zfix.Edit byteLo: closePos byteHi: closePos replacement: clo)
-        this.wrapFound = true
-        this.wrapStart = line.u64
-    }
-
-    # tryWrapParams -- wrap mode: an over-long single-line function signature with >= 2 params breaks
-    # its `{ }` param block onto one-param-per-line (the `{ }` already filters eol). Same batch/fixpoint
-    # bookkeeping as tryWrapCall; the close `}` is located via the delimiter map, not line-end.
-    tryWrapParams: function {:this ast: Ast.view parameters: zast.kidspan line: u32} is {
-        if line.u64 == this.wrapStart then return
-        pc: parameters.count.u64
-        if pc < 2 then return
-        lidx: (line - 1).u64
-        if lidx >= this.lines.length then return
-        lnt: (this.lines.get i: lidx)
-        cw: codepointLen s: lnt.stringView
-        if cw <= this.wrapWidth.u64 then return
-        if (hasHash line: lnt.stringView) then return
-        ok: true
-        h8x9: u64
-        for h8x9 < parameters.count.u64 loop {
-            pmId: zast.kidAt kids: ast.kids span: parameters i: h8x9
-            h8x9 = h8x9 + 1
-            pm: ast.nodes.get i: pmId.u64
-            match (
-                pm
-            ) case namedoperation then {
-                if pm.lineno != line then ok = false
-            } else {
-                ok = false
-            }
-        }
-        if ok == false then return
-        base: leadingSpaces line: lnt.stringView
-        srcOwned: this.source
-        srcv: srcOwned.stringView
-        p0: u64
-        haveParams: false
-        {
-            p0nodeId: zast.kidAt kids: ast.kids span: parameters i: 0
-            p0node: ast.nodes.get i: p0nodeId.u64
-            if p0node.namedoperation then {
-                p0 = (tokByteStart
-                    lineStart: this.lineStart
-                    srcLines: this.lines
-                    lineno: p0node.lineno
-                    colno: p0node.colno
-                )
-                haveParams = true
-            }
-        }
-        if haveParams == false then return
-        obrace: (wsRunStart src: srcv from: p0) - 1
-        bchk: srcv.byteAt i: obrace
-        isBrace: false
-        match (
-            bchk
-        ) case some then {
-            if bchk == 123 then isBrace = true
-        } case none then null
-        if isBrace == false then return
-        coff: this.delimClose.get key: obrace
-        closeB: u64
-        match (
-            coff
-        ) case some then {
-            closeB = coff
-        } case none then {
-            return
-        }
-        ind4: nlIndent n: (base + 4)
-        ind0: nlIndent n: base
-        this.wrapGroups.append this.edits.length
-        h9x9: u64
-        for h9x9 < parameters.count.u64 loop {
-            pmId: zast.kidAt kids: ast.kids span: parameters i: h9x9
-            h9x9 = h9x9 + 1
-            pm: ast.nodes.get i: pmId.u64
-            if pm.namedoperation then {
-                ps: (tokByteStart
-                    lineStart: this.lineStart
-                    srcLines: this.lines
-                    lineno: pm.lineno
-                    colno: pm.colno
-                )
-                pp: ps
-                match (
-                    (ast.nodes.get i: pm.operation.u64)
-                ) case labelvalue then {
-                    pp = ps - 1
-                } else null
-                ws: wsRunStart src: srcv from: pp
-                this.edits.append (zfix.Edit byteLo: ws byteHi: pp replacement: ind4.copy)
-            }
-        }
-        wsC: wsRunStart src: srcv from: closeB
-        this.edits.append (zfix.Edit byteLo: wsC byteHi: closeB replacement: ind0.copy)
-        this.wrapFound = true
-        this.wrapStart = line.u64
-    }
-
     # checkForWhile -- L004 token tier: a `for` immediately followed by `while`.
     # Re-tokenizes the source (parse-free; immune to strings and comments).
     checkForWhile: function {:this} is {
@@ -1563,112 +1154,6 @@ Analysis: class {
                 prevFor = false
             } else {
                 prevFor = false
-            }
-            i = i + 1
-        }
-    }
-
-    # checkColonSpacing -- W003 token tier: exactly one space after a `:` when a value follows
-    # on the same line. The `:label` shorthand (a colon immediately before a LABELPRE, e.g.
-    # `:this`) and a colon at end of line (value continues below) are left alone. Walks the raw
-    # token stream, so colons inside strings and comments are never touched.
-    checkColonSpacing: function {:this} is {
-        srcOwned: this.source
-        sv: srcOwned.stringView
-        scanPool: zast.StringPool.create
-        toks: tokenize.scan source: srcOwned.copy pool: scanPool
-        lineStart: lineStartIndex src: sv
-        srcLines: linesOf src: sv
-        m: toks.length
-        i: u64
-        for i < m loop {
-            t: toks.get :i
-            isColon: false
-            match (
-                t.toktype
-            ) case colonTok then {
-                isColon = true
-            } else null
-            if isColon then {
-                cl: t.lineno
-                cc: t.colno
-                shorthand: false
-                if (i + 1) < m then {
-                    t1: toks.get i: (i + 1)
-                    match (
-                        t1.toktype
-                    ) case labelPreTok then {
-                        shorthand = true
-                    } else null
-                }
-                if shorthand == false then {
-                    j: i + 1
-                    foundNxt: false
-                    nxtContent: false
-                    nl: u32
-                    nc: u32
-                    for j < m loop {
-                        tj: toks.get i: j
-                        isWs: false
-                        isTerm: false
-                        match (
-                            tj.toktype
-                        ) case wsTok then {
-                            isWs = true
-                        } case eolTok then {
-                            isTerm = true
-                        } case eofTok then {
-                            isTerm = true
-                        } case commentTok then {
-                            isTerm = true
-                        } case parenCloseTok then {
-                            isTerm = true
-                        } case braceCloseTok then {
-                            isTerm = true
-                        } case semicolonTok then {
-                            isTerm = true
-                        } else null
-                        if isWs then {
-                            j = j + 1
-                        } else {
-                            foundNxt = true
-                            nl = tj.lineno
-                            nc = tj.colno
-                            nxtContent = isTerm == false
-                            break
-                        }
-                    }
-                    if foundNxt when nxtContent when nl == cl then {
-                        colByteStart: tokByteStart :lineStart :srcLines lineno: cl colno: cc
-                        colEnd: colByteStart + 1
-                        valStart: tokByteStart :lineStart :srcLines lineno: nl colno: nc
-                        doFix: false
-                        if valStart == colEnd then {
-                            doFix = true
-                        } else if valStart == (colEnd + 1) then {
-                            bo: sv.byteAt i: colEnd
-                            issp: false
-                            match (
-                                bo
-                            ) case some then {
-                                if bo == 32 then issp = true
-                            } case none then null
-                            if issp == false then doFix = true
-                        } else if valStart > colEnd then doFix = true
-                        if doFix then {
-                            (this.warnFix
-                                code: "W003"
-                                msg: "expected a single space after `:`".string
-                                line: cl
-                                col: cc
-                                width: 1
-                                lo: colEnd
-                                hi: valStart
-                                repl: " ".string
-                            )
-                        }
-                    }
-                }
             }
             i = i + 1
         }
@@ -1923,16 +1408,12 @@ Analysis: class {
                 this.checkLiteralCompare :ast opId: n.operator lhsId: n.lhs rhsId: n.rhs
             }
         } case call then {
-            if this.wrapWidth > 0 then {
-                this.tryWrapCall :ast arguments: n.arguments line: n.lineno col: n.colno
-            } else {
-                (this.checkElide
-                    :ast
-                    callable: (ast.nodes.get i: n.callable.u64)
-                    arguments: n.arguments
-                )
-                this.checkCollapseName :ast arguments: n.arguments
-            }
+            (this.checkElide
+                :ast
+                callable: (ast.nodes.get i: n.callable.u64)
+                arguments: n.arguments
+            )
+            this.checkCollapseName :ast arguments: n.arguments
         } case atomstring then {
             if this.opts.arch then (this.checkComposedKey
                 :ast
@@ -1947,23 +1428,6 @@ Analysis: class {
             )
         } case ifexpr then {
             this.checkEmpty :ast elseclauseId: n.elseclause clauses: n.clauses
-            if this.opts.layout then {
-                this.checkBracesIf :ast clauses: n.clauses elseclauseId: n.elseclause ln: n.lineno
-                this.checkChainBodyBreak :ast clauses: n.clauses elseclauseId: n.elseclause
-            }
-        } case forexpr then {
-            if this.opts.layout then this.checkBracesFor :ast bodyId: n.body
-        } case caseexpr then {
-            if this.opts.layout then {
-                (this.checkBracesMatch
-                    :ast
-                    clauses: n.clauses
-                    elseclauseId: n.elseclause
-                    ln: n.lineno
-                )
-                this.checkChainBodyBreak :ast clauses: n.clauses elseclauseId: n.elseclause
-                this.checkNullArms :ast clauses: n.clauses elseclauseId: n.elseclause
-            }
         } case statement then {
             this.checkUnreachable :ast stmts: n.statements
         } case functiondef then {
@@ -1974,11 +1438,6 @@ Analysis: class {
                 col: n.colno
             )
             # the body is walked one function deeper; the signature is not
-            if this.wrapWidth > 0 then (this.tryWrapParams
-                :ast
-                parameters: n.parameters
-                line: n.lineno
-            )
             this.walkOptAt :ast oId: n.returntype
             this.walkIds :ast ids: n.parameters
             this.funcDepth = this.funcDepth + 1
@@ -2706,24 +2165,6 @@ Analysis: class {
         }
     }
 
-    # checkNullArms -- L010 over a match's arm and else bodies.
-    checkNullArms: function {
-        :this ast: Ast.view clauses: zast.kidspan elseclauseId: zast.nodeid
-    } is {
-        h14x9: u64
-        for h14x9 < clauses.count.u64 loop {
-            ccId: zast.kidAt kids: ast.kids span: clauses i: h14x9
-            h14x9 = h14x9 + 1
-            cc: ast.nodes.get i: ccId.u64
-            if cc.caseclause then {
-                this.tryNullBody body: (ast.nodes.get i: cc.statement.u64)
-            }
-        }
-        if elseclauseId > 0 then {
-            this.tryNullBody body: (ast.nodes.get i: elseclauseId.u64)
-        }
-    }
-
     # tryBareZeroInit -- L011: a zero/empty binding initializer written as a
     # literal (`"".string`, `0.u64`) where the bare type name constructs the
     # same value. Function-body binding initializers only: record/class
@@ -2790,534 +2231,15 @@ Analysis: class {
         } else null
     }
 
-    # tryNullBody -- L010: an empty `{ }` match arm/else body reads better as
-    # the bare `null` body. Replaces the brace span (including any interior
-    # newlines) with `null` when the merged line stays inside the wrap width;
-    # commented empties are left alone. A body already written `null` starts
-    # at the `n` byte, not `{`, so it never re-fires.
-    tryNullBody: function {:this body: astnode.view} is {
-        if body.statement then {
-            if body.statements.count.u64 != 0 then return
-            srcOwned: this.source
-            srcv: srcOwned.stringView
-            openByte: (tokByteStart
-                lineStart: this.lineStart
-                srcLines: this.lines
-                lineno: body.lineno
-                colno: body.colno
-            )
-            ob: srcv.byteAt i: openByte
-            isBrace: false
-            match (
-                ob
-            ) case some then {
-                if ob == 123 then isBrace = true
-            } case none then null
-            if isBrace == false then return
-            coff: this.delimClose.get key: openByte
-            closeByte: u64
-            match (
-                coff
-            ) case some then {
-                closeByte = coff
-            } case none then {
-                return
-            }
-            if (this.bracesBlocked :openByte :closeByte) then return
-            closeLine: (byteToLine
-                lineStart: this.lineStart
-                off: closeByte
-                nLines: this.lines.length
-            )
-            lineEndB: srcv.length
-            if (closeLine + 1) < this.lineStart.length then {
-                lineEndB = (this.lineStart.get i: (closeLine + 1)) - 1
-            }
-            tailLen: lineEndB - (closeByte + 1)
-            limit: 100.u64
-            if this.wrapWidth > 0 then limit = this.wrapWidth.u64
-            resultLen: (body.colno.u64 - 1) + 4 + tailLen
-            if resultLen > limit then return
-            (this.warnFix
-                code: "L010"
-                msg: "empty match body: write `null`".string
-                line: body.lineno
-                col: body.colno
-                width: 1
-                lo: openByte
-                hi: (closeByte + 1)
-                repl: "null".string
-            )
-        }
-    }
-
-    # tryDebrace -- L008: strip the `{ }` around a single-statement clause `body`
-    # when it de-braces safely and the result fits on one line. `collapse` is true
-    # for a terminal single-clause body (for-loop, if-without-else), which may pull
-    # a multi-line body onto the keyword line; false for a multi-clause construct
-    # already proven to sit on one line, where stripping only shortens it.
-    tryDebrace: function {:this ast: Ast.view body: astnode.view collapse: bool} is {
-        if body.statement then {
-            if body.statements.count.u64 != 1 then return
-            sl0Id: zast.kidAt kids: ast.kids span: body.statements i: 0
-            sl0: ast.nodes.get i: sl0Id.u64
-            if sl0.statementline then {
-                if (
-                    (debraceEligible
-                        :ast
-                        n: (ast.nodes.get i: sl0.statementline.u64)
-                    ) ==
-                    false
-                ) then return
-                srcOwned: this.source
-                srcv: srcOwned.stringView
-                openByte: (tokByteStart
-                    lineStart: this.lineStart
-                    srcLines: this.lines
-                    lineno: body.lineno
-                    colno: body.colno
-                )
-                ob: srcv.byteAt i: openByte
-                isBrace: false
-                match (
-                    ob
-                ) case some then {
-                    if ob == 123 then isBrace = true
-                } case none then null
-                if isBrace == false then return
-                coff: this.delimClose.get key: openByte
-                closeByte: u64
-                match (
-                    coff
-                ) case some then {
-                    closeByte = coff
-                } case none then {
-                    return
-                }
-                if (this.bracesBlocked :openByte :closeByte) then return
-                firstInner: (tokByteStart
-                    lineStart: this.lineStart
-                    srcLines: this.lines
-                    lineno: sl0.lineno
-                    colno: sl0.colno
-                )
-                tailStart: wsRunStartNL src: srcv from: closeByte
-                cEndLine: (
-                    (byteToLine
-                        lineStart: this.lineStart
-                        off: (tailStart - 1)
-                        nLines: this.lines.length
-                    ) +
-                    1
-                )
-                if sl0.lineno.u64 != cEndLine then return
-                closeLine: (
-                    (byteToLine
-                        lineStart: this.lineStart
-                        off: closeByte
-                        nLines: this.lines.length
-                    ) +
-                    1
-                )
-                sameLine: body.lineno.u64 == closeLine
-                doStrip: false
-                if collapse == false then {
-                    doStrip = true
-                } else if sameLine then {
-                    doStrip = true
-                } else {
-                    limit: 100.u64
-                    if this.wrapWidth > 0 then limit = this.wrapWidth.u64
-                    resultLen: (body.colno.u64 - 1) + (tailStart - firstInner)
-                    if resultLen <= limit then doStrip = true
-                }
-                if doStrip == false then return
-                (this.warn
-                    code: "L008"
-                    msg: "redundant braces around a single-statement body".string
-                    line: body.lineno
-                    col: body.colno
-                    width: 1
-                )
-                this.edits.append (zfix.Edit
-                    byteLo: openByte
-                    byteHi: firstInner
-                    replacement: "".string
-                )
-                this.edits.append (zfix.Edit
-                    byteLo: tailStart
-                    byteHi: (closeByte + 1)
-                    replacement: "".string
-                )
-            }
-        }
-    }
-
-    # bracesBlocked -- true when the token span strictly between the open and close
-    # brace bytes holds a top-level colon (a labelled call or binding, which cannot
-    # lose its braces) or a comment (which a one-line collapse would swallow).
-    bracesBlocked: function {:this openByte: u64 closeByte: u64} out bool is {
-        m: this.fastToks.length
-        depth: i64
-        blocked: false
-        i: u64
-        for i < m loop {
-            t: this.fastToks.get :i
-            tb: (tokByteStart
-                lineStart: this.lineStart
-                srcLines: this.lines
-                lineno: t.lineno
-                colno: t.colno
-            )
-            if tb >= closeByte then break
-            if tb > openByte then {
-                match (
-                    t.toktype
-                ) case parenOpenTok then {
-                    depth = depth + 1
-                } case braceOpenTok then {
-                    depth = depth + 1
-                } case parenCloseTok then {
-                    depth = depth - 1
-                } case braceCloseTok then {
-                    depth = depth - 1
-                } case colonTok then {
-                    if depth == 0 then blocked = true
-                } case commentTok then {
-                    blocked = true
-                } else null
-            }
-            i = i + 1
-        }
-        return blocked
-    }
-
-    # checkBracesIf -- L008 entry for an `if`: a terminal single-clause `if ... then`
-    # (no else) may collapse its then-body; an `if` with an else or extra clauses
-    # de-braces only when the whole construct already sits on one line. Unit-level
-    # `if`s (funcDepth == 0) keep their braces -- braceless branches are unsafe where
-    # EOL filtering is on.
-    checkBracesIf: function {
-        :this ast: Ast.view clauses: zast.kidspan elseclauseId: zast.nodeid ln: u32
-    } is {
-        if this.funcDepth == 0 then return
-        hasElse: elseclauseId > 0
-        if hasElse == false when clauses.count.u64 == 1 then {
-            c0Id: zast.kidAt kids: ast.kids span: clauses i: 0
-            c0: ast.nodes.get i: c0Id.u64
-            if c0.ifclause then {
-                this.tryDebrace :ast body: (ast.nodes.get i: c0.statement.u64) collapse: true
-            }
-            return
-        }
-        if (clauseBodiesOnLine :ast :clauses :elseclauseId :ln) == false then return
-        h15x9: u64
-        for h15x9 < clauses.count.u64 loop {
-            clId: zast.kidAt kids: ast.kids span: clauses i: h15x9
-            h15x9 = h15x9 + 1
-            cl: ast.nodes.get i: clId.u64
-            if cl.ifclause then {
-                this.tryDebrace :ast body: (ast.nodes.get i: cl.statement.u64) collapse: false
-            }
-        }
-        if elseclauseId > 0 then {
-            this.tryDebrace :ast body: (ast.nodes.get i: elseclauseId.u64) collapse: false
-        }
-    }
-
-    # checkBracesMatch -- L008 entry for a `match`: always multi-clause, so its arm
-    # and else braces are stripped only when the whole match already sits on one line.
-    checkBracesMatch: function {
-        :this ast: Ast.view clauses: zast.kidspan elseclauseId: zast.nodeid ln: u32
-    } is {
-        if this.funcDepth == 0 then return
-        if (caseBodiesOnLine :ast :clauses :elseclauseId :ln) == false then return
-        h16x9: u64
-        for h16x9 < clauses.count.u64 loop {
-            clId: zast.kidAt kids: ast.kids span: clauses i: h16x9
-            h16x9 = h16x9 + 1
-            cl: ast.nodes.get i: clId.u64
-            if cl.caseclause then {
-                this.tryDebrace :ast body: (ast.nodes.get i: cl.statement.u64) collapse: false
-            }
-        }
-        if elseclauseId > 0 then {
-            this.tryDebrace :ast body: (ast.nodes.get i: elseclauseId.u64) collapse: false
-        }
-    }
-
-    # checkChainBodyBreak -- fmt: in a multi-line `match` or `if`, break any arm/clause
-    # body whose first statement clings to the opening `{` onto its own line.
-    checkChainBodyBreak: function {
-        :this ast: Ast.view clauses: zast.kidspan elseclauseId: zast.nodeid
-    } is {
-        if this.funcDepth == 0 then return
-        h17x9: u64
-        for h17x9 < clauses.count.u64 loop {
-            clId: zast.kidAt kids: ast.kids span: clauses i: h17x9
-            h17x9 = h17x9 + 1
-            cl: ast.nodes.get i: clId.u64
-            match (
-                cl
-            ) case caseclause then {
-                this.forceBodyBreak :ast body: (ast.nodes.get i: cl.statement.u64)
-            } case ifclause then {
-                this.forceBodyBreak :ast body: (ast.nodes.get i: cl.statement.u64)
-            } else null
-        }
-        if elseclauseId > 0 then {
-            this.forceBodyBreak :ast body: (ast.nodes.get i: elseclauseId.u64)
-        }
-    }
-
-    # forceBodyBreak -- a braced body whose closing `}` is not on the opening `{` line (a
-    # multi-line clause) starts its body on the next line at base+4; emit that edit when the
-    # first statement still shares the `{` line AND is itself single-line. One-line bodies are
-    # left to L008; a multi-line first statement is skipped (re-indenting it is out of scope).
-    forceBodyBreak: function {:this ast: Ast.view body: astnode.view} is {
-        if body.statement then {
-            if body.statements.count.u64 == 0 then return
-            openByte: (tokByteStart
-                lineStart: this.lineStart
-                srcLines: this.lines
-                lineno: body.lineno
-                colno: body.colno
-            )
-            coff: this.delimClose.get key: openByte
-            closeByte: u64
-            match (
-                coff
-            ) case some then {
-                closeByte = coff
-            } case none then {
-                return
-            }
-            closeLine: (
-                (byteToLine
-                    lineStart: this.lineStart
-                    off: closeByte
-                    nLines: this.lines.length
-                ) +
-                1
-            )
-            if body.lineno.u64 == closeLine then return
-            sl0Id: zast.kidAt kids: ast.kids span: body.statements i: 0
-            sl0: ast.nodes.get i: sl0Id.u64
-            if sl0.statementline then {
-                if sl0.lineno != body.lineno then return
-                firstEnd: closeLine - 1
-                if body.statements.count.u64 > 1 then {
-                    sl1Id: zast.kidAt kids: ast.kids span: body.statements i: 1
-                    sl1: ast.nodes.get i: sl1Id.u64
-                    if sl1.statementline then firstEnd = sl1.lineno.u64 - 1
-                }
-                if firstEnd > body.lineno.u64 then return
-                firstInner: (tokByteStart
-                    lineStart: this.lineStart
-                    srcLines: this.lines
-                    lineno: sl0.lineno
-                    colno: sl0.colno
-                )
-                oline: (byteToLine
-                    lineStart: this.lineStart
-                    off: openByte
-                    nLines: this.lines.length
-                )
-                lt: this.lines.get i: oline
-                base: (leadingSpaces line: lt.stringView)
-                this.edits.append (zfix.Edit
-                    byteLo: (openByte + 1)
-                    byteHi: firstInner
-                    replacement: (nlIndent n: (base + 4))
-                )
-            }
-        }
-    }
-
-    # checkBracesFor -- L008 entry for a `for ... loop`: a terminal single-clause
-    # body that may collapse onto the loop header.
-    checkBracesFor: function {:this ast: Ast.view bodyId: zast.nodeid} is {
-        if this.funcDepth == 0 then return
-        if bodyId > 0 then {
-            this.tryDebrace :ast body: (ast.nodes.get i: bodyId.u64) collapse: true
-        }
-    }
-
-    # checkRedundantParens -- L007: a paren wrapping an ENTIRE `if` condition, when the condition
-    # does not require it. A named-argument-call condition needs the parens (its args are greedy and
-    # would swallow `then`), detected as a top-level colon inside the paren; those and sub-expression
-    # precedence parens are left alone. Removes the `(` and `)`.
-    checkRedundantParens: function {:this} is {
-        srcOwned: this.source
-        sv: srcOwned.stringView
-        scanPool: zast.StringPool.create
-        toks: tokenize.scan source: srcOwned.copy pool: scanPool
-        lineStart: lineStartIndex src: sv
-        srcLines: linesOf src: sv
-        m: toks.length
-        i: u64
-        for i < m loop {
-            t: toks.get :i
-            isIf: false
-            match (
-                t.toktype
-            ) case ifTok then {
-                isIf = true
-            } else null
-            if isIf then {
-                fs: i + 1
-                fsScan: true
-                for fsScan loop {
-                    if fs >= m then {
-                        fsScan = false
-                    } else {
-                        tf: toks.get i: fs
-                        tv: false
-                        match (
-                            tf.toktype
-                        ) case wsTok then {
-                            tv = true
-                        } case eolTok then {
-                            tv = true
-                        } case commentTok then {
-                            tv = true
-                        } else null
-                        if tv then {
-                            fs = fs + 1
-                        } else {
-                            fsScan = false
-                        }
-                    }
-                }
-                isOpen: false
-                if fs < m then {
-                    tf2: toks.get i: fs
-                    match (
-                        tf2.toktype
-                    ) case parenOpenTok then {
-                        isOpen = true
-                    } else null
-                }
-                if isOpen then {
-                    depth: 1.u64
-                    j: fs + 1
-                    matchIdx: m
-                    hasColon: false
-                    mScan: true
-                    for mScan loop {
-                        if j >= m then {
-                            mScan = false
-                        } else {
-                            tj: toks.get i: j
-                            kind: u32
-                            match (
-                                tj.toktype
-                            ) case parenOpenTok then {
-                                kind = 1
-                            } case parenCloseTok then {
-                                kind = 2
-                            } case colonTok then {
-                                kind = 3
-                            } else null
-                            if kind == 1 then {
-                                depth = depth + 1
-                            } else if kind == 2 then {
-                                depth = depth - 1
-                                if depth == 0 then {
-                                    matchIdx = j
-                                    mScan = false
-                                }
-                            } else if kind == 3 then {
-                                if depth == 1 then hasColon = true
-                            }
-                            if mScan then j = j + 1
-                        }
-                    }
-                    thenOk: false
-                    if matchIdx < m then {
-                        ns: matchIdx + 1
-                        nScan: true
-                        for nScan loop {
-                            if ns >= m then {
-                                nScan = false
-                            } else {
-                                tn: toks.get i: ns
-                                tv2: false
-                                match (
-                                    tn.toktype
-                                ) case wsTok then {
-                                    tv2 = true
-                                } case eolTok then {
-                                    tv2 = true
-                                } case commentTok then {
-                                    tv2 = true
-                                } else null
-                                if tv2 then {
-                                    ns = ns + 1
-                                } else {
-                                    nScan = false
-                                }
-                            }
-                        }
-                        if ns < m then {
-                            tn2: toks.get i: ns
-                            match (
-                                tn2.toktype
-                            ) case thenTok then {
-                                thenOk = true
-                            } else null
-                        }
-                    }
-                    if thenOk when hasColon == false then {
-                        to: toks.get i: fs
-                        tc: toks.get i: matchIdx
-                        oStart: tokByteStart :lineStart :srcLines lineno: to.lineno colno: to.colno
-                        cStart: tokByteStart :lineStart :srcLines lineno: tc.lineno colno: tc.colno
-                        (this.warn
-                            code: "L007"
-                            msg: "redundant parentheses around the condition".string
-                            line: to.lineno
-                            col: to.colno
-                            width: 1
-                        )
-                        this.edits.append (zfix.Edit
-                            byteLo: oStart
-                            byteHi: (oStart + 1)
-                            replacement: "".string
-                        )
-                        this.edits.append (zfix.Edit
-                            byteLo: cStart
-                            byteHi: (cStart + 1)
-                            replacement: "".string
-                        )
-                    }
-                }
-            }
-            i = i + 1
-        }
-    }
-
     # runFastChecks -- the fast-tier passes: parse-error/AST rules over the tree,
-    # then the token and line rules over the source.
+    # then the token rules over the source.
     runFastChecks: function {:this n: Ast.view} is {
         this.lineStart = lineStartIndex src: this.source.stringView
-        this.delimClose = (buildDelimMap
-            src: this.source.stringView
-            lineStart: this.lineStart
-            srcLines: this.lines
-        )
         scanPool: zast.StringPool.create
         this.fastToks = tokenize.scan source: this.source.copy pool: scanPool
         this.walkProgram prog: n
         this.checkPublicPosProgram prog: n
         this.checkForWhile
-        if this.opts.layout then {
-            this.checkTrailingWs
-            this.checkFinalNewline
-            this.checkColonSpacing
-            this.checkBlankLines
-            this.checkRedundantParens
-        }
     }
 
     # sortEditsInPlace -- reorder the collected edits by byteLo so the applier and the diff
@@ -5376,8 +4298,8 @@ linesOf: function {src: StringView} out List String is {
 }
 
 # lineStartIndex -- byte offset of each line's first byte, one entry per line (matching
-# linesOf). Extends the W001 `off += len + 1` accumulator; converts token/edit positions to
-# byte offsets and back without depending on the tokenizer's escape-decoded widths.
+# linesOf), an `off += len + 1` accumulator over the lines; converts token/edit positions
+# to byte offsets and back without depending on the tokenizer's escape-decoded widths.
 lineStartIndex: function {src: StringView} out ListVal u64 is {
     ls: ListVal u64
     off: u64
@@ -5733,14 +4655,8 @@ analyzeSource: function {source: String.take path: String.take opts: lintopts} o
         lineStart: (ListVal u64)
         diags: (List zdiag.Diagnostic)
         edits: (List zfix.Edit)
-        wrapWidth: 0
-        wrapSkip: 0
-        wrapFound: false
-        wrapStart: 0
-        delimClose: (IdMapV u64 v: u64)
         fastToks: (ListVal tokenize.token)
         funcDepth: 0
-        wrapGroups: (ListVal u64)
         :opts
     )
     a.runFastChecks n: root
@@ -5780,14 +4696,8 @@ analyzeFile: function {path: String.take opts: lintopts} out Analysis is {
             lineStart: (ListVal u64)
             diags: (List zdiag.Diagnostic)
             edits: (List zfix.Edit)
-            wrapWidth: 0
-            wrapSkip: 0
-            wrapFound: false
-            wrapStart: 0
-            delimClose: (IdMapV u64 v: u64)
             fastToks: (ListVal tokenize.token)
             funcDepth: 0
-            wrapGroups: (ListVal u64)
             :opts
         )
         d: (zdiag.errorDiag
@@ -5828,14 +4738,8 @@ analyzeFileFull: function {
             lineStart: (ListVal u64)
             diags: (List zdiag.Diagnostic)
             edits: (List zfix.Edit)
-            wrapWidth: 0
-            wrapSkip: 0
-            wrapFound: false
-            wrapStart: 0
-            delimClose: (IdMapV u64 v: u64)
             fastToks: (ListVal tokenize.token)
             funcDepth: 0
-            wrapGroups: (ListVal u64)
             :opts
         )
         a.runFastChecks n: root
@@ -5866,14 +4770,8 @@ analyzeFileFull: function {
             lineStart: (ListVal u64)
             diags: (List zdiag.Diagnostic)
             edits: (List zfix.Edit)
-            wrapWidth: 0
-            wrapSkip: 0
-            wrapFound: false
-            wrapStart: 0
-            delimClose: (IdMapV u64 v: u64)
             fastToks: (ListVal tokenize.token)
             funcDepth: 0
-            wrapGroups: (ListVal u64)
             :opts
         )
         d: (zdiag.errorDiag
@@ -5934,14 +4832,8 @@ sourceParses: function {source: String.take} out bool is {
         lineStart: (ListVal u64)
         diags: (List zdiag.Diagnostic)
         edits: (List zfix.Edit)
-        wrapWidth: 0
-        wrapSkip: 0
-        wrapFound: false
-        wrapStart: 0
-        delimClose: (IdMapV u64 v: u64)
         fastToks: (ListVal tokenize.token)
         funcDepth: 0
-        wrapGroups: (ListVal u64)
         opts: defaultOpts
     )
     root: ast.parseSource :source
@@ -5949,93 +4841,7 @@ sourceParses: function {source: String.take} out bool is {
     return a.parseErrorCount == 0
 }
 
-# nlIndent -- a newline followed by `n` spaces (the wrap indent unit).
-nlIndent: function {n: u64} out String is {
-    s: "\n".string
-    i: u64
-    for i < n loop {
-        s.appendByte b: 32
-        i = i + 1
-    }
-    return s
-}
-
-# leadingSpaces -- count of leading space bytes on a line.
-leadingSpaces: function {line: StringView} out u64 is {
-    n: u64
-    for n < line.length loop {
-        bo: line.byteAt i: n
-        sp: false
-        match (
-            bo
-        ) case some then {
-            if bo == 32 then sp = true
-        } case none then null
-        if sp == false then return n
-        n = n + 1
-    }
-    return n
-}
-
-# rstripLen -- byte length of a line excluding trailing spaces and tabs.
-rstripLen: function {line: StringView} out u64 is {
-    n: line.length
-    for n > 0 loop {
-        bo: line.byteAt i: (n - 1)
-        ws: false
-        match (
-            bo
-        ) case some then {
-            if bo == 32 then ws = true
-            if bo == 9 then ws = true
-        } case none then null
-        if ws == false then return n
-        n = n - 1
-    }
-    return 0
-}
-
-# wsRunStartNL -- like wsRunStart but also swallows newline bytes: the start of
-# the whitespace-and-newline run ending at `from`. Collapses the indentation and
-# line break between a single-statement body and its closing brace.
-wsRunStartNL: function {src: StringView from: u64} out u64 is {
-    n: from
-    for n > 0 loop {
-        bo: src.byteAt i: (n - 1)
-        ws: false
-        match (
-            bo
-        ) case some then {
-            if bo == 32 then ws = true
-            if bo == 9 then ws = true
-            if bo == 10 then ws = true
-            if bo == 13 then ws = true
-        } case none then null
-        if ws == false then return n
-        n = n - 1
-    }
-    return n
-}
-
-# wsRunStart -- start byte of the whitespace run ending just before `from`.
-wsRunStart: function {src: StringView from: u64} out u64 is {
-    n: from
-    for n > 0 loop {
-        bo: src.byteAt i: (n - 1)
-        ws: false
-        match (
-            bo
-        ) case some then {
-            if bo == 32 then ws = true
-            if bo == 9 then ws = true
-        } case none then null
-        if ws == false then return n
-        n = n - 1
-    }
-    return n
-}
-
-# hasHash -- true if the line contains a `#` (a comment; wrapping skips such lines).
+# hasHash -- true if the line contains a `#`, so a comment.
 hasHash: function {line: StringView} out bool is {
     n: u64
     for n < line.length loop {
@@ -6048,126 +4854,4 @@ hasHash: function {line: StringView} out bool is {
         n = n + 1
     }
     return false
-}
-
-# buildDelimMap -- build a map of open-byte -> matching close-byte for every () and {} pair, from
-# the token stream. String-literal and interpolation delimiters are distinct token kinds, so they
-# are never counted.
-buildDelimMap: function {
-    src: StringView
-    lineStart: (ListVal u64).view
-    srcLines: (List String).borrow
-} out (IdMapV u64 v: u64) is {
-    m: (IdMapV u64 v: u64)
-    scanPool: zast.StringPool.create
-    toks: tokenize.scan source: src.string pool: scanPool
-    nt: toks.length
-    stack: ListVal u64
-    i: u64
-    for i < nt loop {
-        t: toks.get :i
-        kind: u32
-        match (
-            t.toktype
-        ) case parenOpenTok then {
-            kind = 1
-        } case braceOpenTok then {
-            kind = 1
-        } case parenCloseTok then {
-            kind = 2
-        } case braceCloseTok then {
-            kind = 2
-        } else null
-        if kind == 1 then {
-            b: tokByteStart :lineStart :srcLines lineno: t.lineno colno: t.colno
-            stack.append b
-        } else if kind == 2 then {
-            if stack.length > 0 then {
-                ob: stack.pop
-                cb: tokByteStart :lineStart :srcLines lineno: t.lineno colno: t.colno
-                m.set key: ob value: cb
-            }
-        }
-        i = i + 1
-    }
-    return m
-}
-
-# wrapSource -- fixpoint auto-wrap of over-long named-arg calls under --line-length. Each pass wraps
-# the first over-long single-line call (adding parens when bare), re-parses, and discards a wrap that
-# would not parse (skipping past it); loops until no wrappable call remains.
-wrapSource: function {source: StringView lineLength: u32} out String is {
-    cur: source.string
-    guard: u64
-    for guard < 40 loop {
-        guard = guard + 1
-        rd: cur.copy
-        a: (Analysis
-            path: "".string
-            source: rd.copy
-            lines: (linesOf src: rd.stringView)
-            lineStart: (lineStartIndex src: rd.stringView)
-            diags: (List zdiag.Diagnostic)
-            edits: (List zfix.Edit)
-            wrapWidth: lineLength
-            wrapSkip: 0
-            wrapFound: false
-            wrapStart: 0
-            delimClose: (IdMapV u64 v: u64)
-            fastToks: (ListVal tokenize.token)
-            funcDepth: 0
-            wrapGroups: (ListVal u64)
-            opts: defaultOpts
-        )
-        root: ast.parseSource source: rd.copy
-        a.delimClose = buildDelimMap src: rd.stringView lineStart: a.lineStart srcLines: a.lines
-        # the wrap pass runs the full visitor: bracesBlocked (the comment
-        # guard for L008/L010 debraces) reads fastToks, so the token scan
-        # must be populated here too or commented bodies lose their
-        # comments whenever a wrap edit lands in the same batch
-        scanPool: zast.StringPool.create
-        a.fastToks = tokenize.scan source: rd.copy pool: scanPool
-        a.walkProgram prog: root
-        if a.wrapFound == false then break
-        se: sortEdits edits: a.edits
-        cand: zfix.applyEdits source: cur.stringView edits: se
-        cok: sourceParses source: cand.copy
-        if cok then {
-            cur = cand
-        } else {
-            good: List zfix.Edit
-            ng: a.wrapGroups.length
-            gi: u64
-            for gi < ng loop {
-                gstart: a.wrapGroups.get i: gi
-                gend: a.edits.length
-                if (gi + 1) < ng then gend = a.wrapGroups.get i: (gi + 1)
-                added: u64
-                k: gstart
-                for k < gend loop {
-                    e: a.edits.get i: k
-                    good.append (zfix.Edit
-                        byteLo: e.byteLo
-                        byteHi: e.byteHi
-                        replacement: e.replacement.copy
-                    )
-                    added = added + 1
-                    k = k + 1
-                }
-                cnd2: zfix.applyEdits source: cur.stringView edits: good
-                bad: (sourceParses source: cnd2.copy) == false
-                if bad then {
-                    j: u64
-                    for j < added loop {
-                        good.pop
-                        j = j + 1
-                    }
-                }
-                gi = gi + 1
-            }
-            if good.length == 0 then break
-            cur = zfix.applyEdits source: cur.stringView edits: good
-        }
-    }
-    return cur
 }

@@ -105,8 +105,8 @@ Table of Contents</div>
 <main id="content">
 <h2 id="synopsis"><a href="#synopsis">1. Synopsis</a></h2>
 <pre><code>zl lint    [--full] [--arch] [--casing] [--docs] [--docs-params] [--docs-fields] [--docs-private] [--docs-quality] [--docs-all] [--src DIR] [--system DIR] [--line-length N] &lt;files...&gt;
-zl fmt     [--check | --stdout | --diff] [--full] [--line-length N] &lt;files...&gt;
-zl format  [--check | --stdout | --diff] [--full] [--line-length N] [--collapse] &lt;files...&gt;
+zl fmt     [--check | --stdout | --diff] [--full] [--line-length N] [--collapse] &lt;files...&gt;
+zl format  an alias of fmt
 zl explain &lt;code&gt;</code></pre>
 <h2 id="description"><a href="#description">2. Description</a></h2>
 <p><code>zl</code> is the zerolang linter and formatter &#x2014; a ruff-inspired tool, and a
@@ -148,17 +148,15 @@ and <code>--docs-all</code> turns on every doc flag at once. The doc codes are
 ratcheted the same way the <code>A</code> codes are, against
 <code>tests/fixtures/doc_baseline.txt</code>, but only under <code>make ci</code>: it is a
 full-corpus lint pass and too slow for the fast gate.</li>
-<li><strong>fmt</strong> <code>&lt;files...&gt;</code> &#x2014; apply the safe fixes and write each file in
-place. A file with a parse error is refused and left unchanged.</li>
-<li><strong>format</strong> <code>&lt;files...&gt;</code> &#x2014; the successor to <strong>fmt</strong>: the safe
-non-layout fixes, then the whole file laid out by a document printer
-(<code>src/zfmt.z</code> over <code>src/zdoc.z</code>) at <code>--line-length</code> columns, default
-100. Parentheses that only group are removed where the printer re-inserts
-them on a break; a newline the author left right after an opening
-delimiter keeps that group open (<code>--collapse</code> ignores it); comments are
-never moved across a delimiter. The printed text is reparsed and compared
-with the input tree before it is written, so a file the printer cannot
-reproduce is refused and left untouched.</li>
+<li><strong>fmt</strong> <code>&lt;files...&gt;</code> &#x2014; the safe fixes, then the whole file laid out
+by a document printer (<code>src/zfmt.z</code> over <code>src/zdoc.z</code>) at
+<code>--line-length</code> columns, default 100, and written in place. Parentheses
+that only group are removed where the printer re-inserts them on a break; a
+newline the author left right after an opening delimiter keeps that group
+open (<code>--collapse</code> ignores it); comments are never moved across a
+delimiter. The printed text is reparsed and compared with the input tree
+before it is written, so a file with a parse error, or one the printer
+cannot reproduce, is refused and left untouched. <strong>format</strong> is an alias.</li>
 <li><strong>explain</strong> <code>&lt;code&gt;</code> &#x2014; print the registry entry for a rule code, for
 example <code>zl explain L003</code>.</li>
 </ul>
@@ -170,21 +168,21 @@ arguments, so the two tools never diverge.</p>
 nothing. For CI.</li>
 <li><code>--stdout</code> &#x2014; write the formatted result to stdout instead of in place
 (a lossless, byte-exact filter).</li>
-<li><code>--diff</code> &#x2014; print a unified (line-level) diff of the changes; write nothing. Reflects the
-full result, including <code>--line-length</code> wraps.</li>
+<li><code>--diff</code> &#x2014; print a unified (line-level) diff of the changes; write
+nothing. Reflects the full result, the printer's layout included.</li>
 <li><code>--full</code> &#x2014; also apply the typecheck-tier fixes (needs <code>--src</code> /
 <code>--system</code>).</li>
 <li><code>-V</code> / <code>--version</code> &#x2014; print the version line and exit. Same line
 <code>zc --version</code> prints, under this tool's name.</li>
-<li><code>--line-length N</code> &#x2014; the wrap column. <code>fmt</code> breaks an over-long line's
-named-argument list onto one item per line, at three sites: a call
-(parens added when bare), a paren-call in an #~if"/#~"when" condition or
-#~"match" subject" (broken inside the existing parens), and a function
-    signature's #~{ }" param block". <em><strong>On by default</strong></em> at N=100 (the styleguide
-soft limit); <code>--line-length 0</code> disables it. Wrap-only (never re-wraps or
-joins); applies in write, <code>--stdout</code>, <code>--check</code> and <code>--diff</code> modes.
-Lines it cannot wrap (comments, string literals, binop chains) are left
-untouched; <code>zl lint --line-length N</code> reports them (W005).</li>
+<li><code>--line-length N</code> &#x2014; the width the printer lays out at, in codepoints;
+default 100, the styleguide's soft limit. Every group that does not fit in
+it breaks, and every group that fits prints flat, so the printer both wraps
+and joins. Comments and string literals are never reflowed, so a line they
+make longer stays as written; <code>zl lint --line-length N</code> reports it (W005).</li>
+<li><code>--collapse</code> &#x2014; ignore the author's keep-open markers: a newline or
+comment right after an opening delimiter no longer holds that group open, so
+a call or declaration written expanded joins back into one line when it
+fits.</li>
 </ul>
 <p><code>--check</code>, <code>--stdout</code> and <code>--diff</code> are mutually exclusive.</p>
 <h2 id="rules"><a href="#rules">6. Rules</a></h2>
@@ -206,16 +204,6 @@ function). The fix removes the suffix. (typecheck, <code>--full</code> only)</li
 <li><strong>L006</strong> <em><strong>redundant-label</strong></em> &#x2014; a named argument <code>name: name</code> whose
 label repeats its bare-atom value; the fix collapses it to the <code>:name</code>
 shorthand. (parse)</li>
-<li><strong>L007</strong> <em><strong>redundant-parens</strong></em> &#x2014; parentheses wrapping an entire <code>if</code>
-condition that does not require them (e.g. <code>if (a &lt; b)</code> &#x2192; <code>if a &lt; b</code>). A
-named-arg-call condition keeps its parens (they delimit the args before <code>then</code>);
-sub-expression precedence parens are left alone. (token)</li>
-<li><strong>L008</strong> <em><strong>redundant-braces</strong></em> &#x2014; curly braces around a single-statement
-<code>then</code>/<code>else</code>, <code>for</code>-loop, or <code>match</code>-arm body inside a function that fits
-without them (e.g. <code>if c then { return x }</code> &#x2192; <code>if c then return x</code>). A
-multi-clause <code>if</code>/<code>match</code> is de-braced only when the whole construct already fits
-on one line; a labelled-call or commented body, and unit-level <code>if</code> branches (where
-braces are required), keep them. (token)</li>
 <li><strong>L009</strong> <em><strong>member-casing</strong></em> &#x2014; a <code>variant</code>/<code>union</code> arm name that is not
 lowerCamelCase (it starts with an uppercase letter). Advisory and opt-in:
 off by default, run <code>zl lint --casing</code>. The message suggests a rename; when the
@@ -223,10 +211,6 @@ lowercased form is a keyword or reserved word it suggests a role-suffixed altern
 (e.g. <code>CLASS</code> &#x2192; <code>classKind</code> for a type-kind, <code>classDef</code> for an AST node). Type-
 reference union arms (<code>:StringView</code>) are exempt. No autofix &#x2014; a rename must update
 every reference. (parse)</li>
-<li><strong>L010</strong> <em><strong>null-body</strong></em> &#x2014; an empty <code>{ }</code> <code>match</code> arm or <code>else</code> body.
-The bare identifier <code>null</code> is the empty-body spelling: <code>case a then null</code>,
-<code>} else null</code>. Autofixed by <code>zl fmt</code> when the merged line fits the wrap width;
-commented empties keep their braces. (parse)</li>
 <li><strong>L011</strong> <em><strong>bare-zero-init</strong></em> &#x2014; a zero or empty binding initializer written
 as a literal (<code>"".string</code>, <code>0.u64</code>) where the bare type name constructs
 the same value (<code>buf: String</code>, <code>n: u64</code>). Function-body binding initializers
@@ -314,14 +298,6 @@ not counted. Advisory and opt-in: off by default, run
 <code>return</code>, <code>break</code> or <code>continue</code> in the same block can never run; the
 emitter drops it, so only the source carries it. Delete it. No autofix.
 (parse)</li>
-<li><strong>W001</strong> <em><strong>trailing-whitespace</strong></em> &#x2014; trailing whitespace on a line.
-(token)</li>
-<li><strong>W002</strong> <em><strong>final-newline</strong></em> &#x2014; a non-empty file that does not end with a
-newline. (token)</li>
-<li><strong>W003</strong> <em><strong>colon-spacing</strong></em> &#x2014; a <code>:</code> followed by a value on the same
-line must have exactly one space after it; missing or extra spaces (and
-column alignment, which the styleguide forbids) are normalized. The
-<code>:label</code> shorthand and a colon at end of line are left alone. (token)</li>
 <li><strong>A001</strong> <em><strong>literal-compare</strong></em> &#x2014; a <code>==</code> / <code>!=</code> against a string
 literal: the code routes by spelling what it should compare by id (a name
 id, a declaration, a type id). Architecture rule, opt-in via
@@ -357,35 +333,52 @@ no other unit under <code>--src</code> reads as <code>unit.name</code>: a privat
 wearing a public label. Make it private and let L012 judge it. Units under
 <code>--system</code> are exempt: their exports serve examples, tests and the
 runtime's fragments. Opt-in via <code>--arch --full</code>. No autofix. (typecheck)</li>
-<li><strong>W004</strong> <em><strong>blank-lines</strong></em> &#x2014; three or more consecutive blank lines
-collapse to one. (token)</li>
 <li><strong>W005</strong> <em><strong>line-length</strong></em> &#x2014; a line wider than <code>--line-length N</code> columns.
 Advisory (INFO): it reports but never fails the gate, and is off unless
 <code>--line-length</code> is given. Matches the styleguide's soft column guideline. (token)</li>
 </ul>
 <h2 id="formatter-semantics"><a href="#formatter-semantics">7. Formatter semantics</a></h2>
-<p><code>zl fmt</code> is an autofixer, not a canonicalizer. It makes targeted
-byte-range edits; every untouched byte &#x2014; comments, the author's layout &#x2014; is
-preserved verbatim. The only structural change is the <code>--line-length</code> wrap of
-over-long named-arg calls (on by default at 100); otherwise there is no reflow.
-Two valid files that trip no rule may legitimately differ.</p>
-<p>The result is <em><strong>idempotent</strong></em>: running <code>zl fmt</code> twice produces no further
-change. Formatting is <em><strong>semantics-preserving</strong></em>: the whole compiler formats to
-a byte-identical emitted C.</p>
+<p><code>zl fmt</code> is a canonicaliser in two stages. The safe fixes come first as
+byte-range edits (L004, L006, L011, L015; L005 under <code>--full</code>), and the fixed
+text is re-parsed. Then the whole file is laid out again by a document printer:
+the tree is walked in lockstep with its raw token stream, so what the tree does
+not record &#x2014; parentheses, clause order, the spelling of <code>is native</code>, comments,
+blank lines &#x2014; is read from the tokens as the walk passes them, and a
+Wadler-style document is printed at <code>--line-length</code> columns (default 100).
+Each group of the document prints flat when it fits and breaks otherwise: one
+argument per line for a call, one operand per line with trailing operators for
+a condition, a parameter block on one indented line before one parameter per
+line for a signature. Parentheses that only group are removed and re-inserted
+only when the value breaks; a newline or comment the author left right after an
+opening delimiter keeps that group open (<code>--collapse</code> ignores the marker); a
+code block written across lines stays across lines; blank-line runs are capped
+at two between definitions and one inside a body, and one is required before a
+definition's doc block and after a multi-line definition. Comments are never
+reflowed or moved across a delimiter. Two valid files that parse to the same
+tree lay out the same, up to those markers.</p>
+<p>The printed text is reparsed and compared with the input tree, expression
+wrappers ignored on both sides; a file that does not parse, walks out of step
+with its tokens, or prints to a different tree is refused and left untouched.
+The result is <em><strong>idempotent</strong></em>: laying a laid-out file out again changes
+nothing, and <code>make check</code> holds every unit in the repository to that. It is
+<em><strong>semantics-preserving</strong></em>: layout and parentheses reach no emitted byte, and
+<code>make emit-snapshot</code> taken before and after the reformat of the tree compared
+equal file for file.</p>
 <h2 id="why-not-operator-or-comma-spacing"><a href="#why-not-operator-or-comma-spacing">8. Why not operator or comma spacing</a></h2>
 <p>Zerolang has no comma token &#x2014; a comma is a lexical error, so there is
 nothing for a comma rule to act on. The numeric and comparison operators are
 ordinary identifiers: <code>a+b</code> lexes as the single identifier <code>a+b</code>, not
 as <code>a</code> <code>+</code> <code>b</code>. Inserting spaces there would change the token stream and
 so the meaning, which a formatter must never do. Only the colon &#x2014; a genuine
-structural token &#x2014; is safely spaced (<strong>W003</strong>). See <code>docs/styleguide.pdoc</code>
-for the identifier-spacing rule this follows.</p>
+structural token &#x2014; is safely spaced: the printer writes one space after it. See
+<code>docs/styleguide.pdoc</code> for the identifier-spacing rule this follows.</p>
 <h2 id="integration"><a href="#integration">9. Integration</a></h2>
 <ul>
 <li><code>make check</code> &#x2014; <code>bin/zl lint</code> over the tool + compiler sources and
-the relocated front-end (the fast tier).</li>
-<li><code>make style-lint</code> &#x2014; adds <code>bin/zl lint --full</code> (the suffix rule) and
-<code>bin/zl fmt --check</code>.</li>
+the relocated front-end (the fast tier), and <code>bin/zl fmt --check</code> over
+every unit, example and unit test.</li>
+<li><code>make style-lint</code> &#x2014; the same with <code>bin/zl lint --full</code> (the suffix
+rule).</li>
 </ul>
 <p>The rule catalogue lives in <code>src/zrule.z</code>; the analysis facade and rule
 implementations in <code>src/zsource.z</code>; the diagnostic renderer in

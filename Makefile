@@ -449,25 +449,6 @@ regen-fmt-goldens: out/zfmt
 regen-lsp-goldens: bin/zc $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC) --regen-lsp
 
-# fmt-compare -- the old `zl fmt --stdout` against the new `zl format --stdout`
-# over the reformat scope: one unified diff per changed file under
-# $(BUILDDIR)/fmt-compare, refusals named, and a summary line. The review gate
-# before the reformat commit.
-FMTCOMPARE_SCOPE := $(FMTSCOPE) tests/unit/*.z
-fmt-compare: bin/zl
-	@rm -rf $(BUILDDIR)/fmt-compare; mkdir -p $(BUILDDIR)/fmt-compare
-	@changed=0; refused=0; total=0; \
-	for f in $(FMTCOMPARE_SCOPE); do \
-	  total=$$((total+1)); n=$$(echo $$f | tr / _); \
-	  bin/zl fmt --stdout $$f > $(BUILDDIR)/fmt-compare/$$n.old 2>/dev/null; \
-	  if bin/zl format --stdout $$f > $(BUILDDIR)/fmt-compare/$$n.new 2> $(BUILDDIR)/fmt-compare/$$n.err; then \
-	    if diff -u $(BUILDDIR)/fmt-compare/$$n.old $(BUILDDIR)/fmt-compare/$$n.new > $(BUILDDIR)/fmt-compare/$$n.diff; then \
-	      rm -f $(BUILDDIR)/fmt-compare/$$n.diff; \
-	    else changed=$$((changed+1)); fi; \
-	  else refused=$$((refused+1)); echo "REFUSED $$f: $$(head -1 $(BUILDDIR)/fmt-compare/$$n.err)"; fi; \
-	done; \
-	echo "fmt-compare: $$total files, $$changed differ, $$refused refused; diffs under $(BUILDDIR)/fmt-compare/"
-
 # emit-snapshot -- the emitted C of every example and corpus program and of the
 # three drivers, under SNAP=<dir>: two snapshots taken around a reformat must
 # compare equal, since layout and parentheses reach no emitted byte.
