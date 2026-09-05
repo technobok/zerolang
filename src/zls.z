@@ -3747,13 +3747,15 @@ appendLintDiags: function {arr: Arr la: zsource.Analysis.view utf32: bool} is {
     }
 }
 
-# formatAnswer -- the zl fmt pipeline over a live buffer: fast-tier
-# edits, re-parse validation, wrap at 100. One whole-document TextEdit
-# when anything changed; null when the buffer has parse errors or a
-# fix would break it (the editor keeps the buffer untouched).
+# formatAnswer -- the zl format pipeline over a live buffer: the safe
+# non-layout fixes, re-parse validation, then the document printer at
+# 100 columns. One whole-document TextEdit when anything changed; null
+# when the buffer has parse errors, a fix would break it or the printer
+# refuses it (the editor keeps the buffer untouched).
 formatAnswer: function {text: StringView relpath: StringView} out Value is {
     fo: zsource.defaultOpts
     fo.lineLength = 100
+    fo.layout = false
     a: zsource.analyzeSource source: text.string path: relpath.string opts: fo
     if a.parseErrorCount > 0 then return Value.nul
     newsrc: a.source.copy
@@ -3763,8 +3765,16 @@ formatAnswer: function {text: StringView relpath: StringView} out Value is {
         valid = zsource.sourceParses source: newsrc.copy
     }
     if valid == false then return Value.nul
-    wrapped: zsource.wrapSource source: newsrc.stringView lineLength: 100
-    newsrc = wrapped
+    res: (zfmt.formatSource
+        source: newsrc.stringView
+        width: 100
+        collapse: false
+        raw: false
+        gate: true
+    )
+    if res.ok == false then return Value.nul
+    laid: res.text.take
+    newsrc = laid
     arr: newArr
     changed: false
     {

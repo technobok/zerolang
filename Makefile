@@ -442,6 +442,12 @@ regen-fmt-goldens: out/zfmt
 	done
 	@echo "regenerated fmt goldens via $(BUILDDIR)/zfmt"
 
+# regen-lsp-goldens -- rewrite tests/fixtures/lsp_golden/*.out from the
+# language server's current answers. A full runner pass, since the runner
+# has no kind filter; the run's other kinds gate as usual.
+regen-lsp-goldens: bin/zc $(BUILDDIR)/ztestrunner
+	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --jobs $(NPROC) --regen-lsp
+
 # fmt-compare -- the old `zl fmt --stdout` against the new `zl format --stdout`
 # over the reformat scope: one unified diff per changed file under
 # $(BUILDDIR)/fmt-compare, refusals named, and a summary line. The review gate

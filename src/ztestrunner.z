@@ -19,6 +19,8 @@
 #
 # Usage: ztestrunner --zc <zc> --cc gcc --root <repo> [--jobs N] [--heavy] [--report]
 #   --jobs defaults to os.cpuCount, so it follows the machine it runs on.
+#   --regen-lsp rewrites every tests/fixtures/lsp_golden/*.out from this run's
+#   answers instead of comparing against them.
 
 # Public interface -- the definitions other units may reference; all
 # other top-level definitions are private to this unit.
@@ -637,6 +639,8 @@ Runner: class {
     report: bool
     # keep the scratch directory, so a failure can be inspected after the run
     saveTemps: bool
+    # rewrite the LSP goldens from this run's answers instead of comparing
+    regenLsp: bool
     # the error-case directory
     errors: String
     # where the RUN cases' expected output lives
@@ -1161,7 +1165,20 @@ runLspCases: function {r: Runner} is {
                     timeoutSecs: r.timeoutSecs
                 )
                 goldP: "\{lspGold.stringView}/\{nm}.out"
-                if (io.exists path: goldP) == false then {
+                if r.regenLsp then {
+                    rawOut: slurp path: outP.stringView
+                    norm: deframeLsp raw: rawOut.stringView
+                    wrg: io.writeText path: goldP content: norm
+                    match (
+                        wrg
+                    ) case ok then {
+                        print "regenerated lsp golden \{nm}"
+                        r.passN = r.passN + 1
+                    } case err then {
+                        print "FAIL(lsp) \{nm} (write golden)"
+                        r.fails = r.fails + 1
+                    }
+                } else if (io.exists path: goldP) == false then {
                     r.skip = r.skip + 1
                 } else {
                     rawOut: slurp path: outP.stringView
@@ -2539,6 +2556,7 @@ main: function is {
     report: false
     heavy: false
     saveTemps: false
+    regenLsp: false
     timeoutSecs: 60.i32
     # the machine, not a number someone typed. --jobs still overrides, and the
     # Makefile passes nproc explicitly; this is what a direct invocation gets. A
@@ -2568,6 +2586,8 @@ main: function is {
             heavy = true
         } else if av == "--save-temps" then {
             saveTemps = true
+        } else if av == "--regen-lsp" then {
+            regenLsp = true
         } else if av == "--jobs" then {
             i = i + 1
             jval: (argv.get :i)
@@ -2645,6 +2665,7 @@ main: function is {
         :heavy
         :report
         :saveTemps
+        :regenLsp
         errors: errors.take
         rungold: rungold.take
         runcases: runcases.take
