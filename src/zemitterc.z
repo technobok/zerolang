@@ -1316,222 +1316,275 @@ readTemplateCached: function {ctx: Ctx path: StringView} out String is {
     return txt
 }
 
+# NativeHead -- a row's head, parsed: the path key and the attributes the
+# table spells, each "" or false until a word of the head sets it.
+NativeHead: class {
+    # the row's path, the first word of the head
+    key: String
+    # `needs=`: the runtime the row needs linked
+    need: String
+    # `frag=`: the runtime fragment the row is backed by
+    frag: String
+    # `demand=`: the demand the fragment answers to; the path's last segment
+    # when absent
+    dem: String
+    # `order=`: on the `@units` row, the order the units' runtimes run in
+    ord: String
+    # `const=`: the argument position a constant-operand variant of the row
+    # applies to
+    cst: String
+    # `args=ptr`: the arguments arrive as pointers
+    ptr: bool
+    # `fold`: the row folds at compile time
+    isFold: bool
+} as {
+    # create -- the head between `[` and `]`, split on spaces: the first word
+    # is the key, every other word an attribute
+    create: function {head: StringView} out this is {
+        h: (meta.create
+            key: String
+            need: String
+            frag: String
+            dem: String
+            ord: String
+            cst: String
+            ptr: false
+            isFold: false
+        )
+        with fit: (head.split sep: " ") do for f: fit loop {
+            if f.length > 0 then {
+                if h.key.length == 0 then {
+                    h.key = f.string
+                } else {
+                    h.setAttr :f
+                }
+            }
+        }
+        return h
+    }
+
+    # setAttr -- one attribute word. A BARE attribute, like fold, is matched
+    # by STRIPPING rather than comparing: the keyed attributes below already
+    # ask that way, and a spelling compare is what the architecture rules
+    # count against this file.
+    setAttr: function {:this f: StringView} is {
+        if f == "args=ptr" then this.ptr = true
+        fdo: f.stripPrefix p: "fold"
+        match (
+            fdo
+        ) case some then {
+            if fdo.length == 0 then this.isFold = true
+        } case none then null
+        fo: f.stripPrefix p: "frag="
+        match (
+            fo
+        ) case some then {
+            this.frag = fo.string
+        } case none then null
+        demandText: f.stripPrefix p: "demand="
+        match (
+            demandText
+        ) case some then {
+            this.dem = demandText.string
+        } case none then null
+        so: f.stripPrefix p: "needs="
+        match (
+            so
+        ) case some then {
+            this.need = so.string
+        } case none then null
+        oo: f.stripPrefix p: "order="
+        match (
+            oo
+        ) case some then {
+            this.ord = oo.string
+        } case none then null
+        co: f.stripPrefix p: "const="
+        match (
+            co
+        ) case some then {
+            this.cst = co.string
+        } case none then null
+    }
+}
+
+# recordUnitOrder -- the `@units` pseudo-row: not a row but the order the
+# units' runtimes run in, comma-separated
+recordUnitOrder: function {ctx: Ctx order: StringView} is {
+    with oit: (order.split sep: ",") do for ou: oit loop {
+        if ou.length > 0 then ctx.unitOrder.append from: ou.string
+    }
+}
+
+# recordConvMember -- a receiver-only path is <unit>.<type>.<member>: three
+# segments whose last is an identifier, AND it carries a body. A fragment-backed
+# row has three segments too -- io.File.close -- and must not make `close`
+# read as one, which is what routed a File close through the numeric cast.
+# Only the member NAME is collected: it is the cheap filter the dotted-read
+# leg asks first, and the row named by the source path is what actually
+# answers. Pairing them here instead would be a CROSS PRODUCT -- every conv
+# source crossed with every conv member -- which said yes to `u8.bits` on the
+# strength of `bits` existing on i8.
+recordConvMember: function {ctx: Ctx key: StringView body: StringView} is {
+    firstDot: key.indexOf needle: "."
+    match (
+        firstDot
+    ) case some then {
+        afterFirstDot: key.substring from: (firstDot + 1) to: key.length
+        secondDot: afterFirstDot.indexOf needle: "."
+        match (
+            secondDot
+        ) case some then {
+            mem: afterFirstDot.substring from: (secondDot + 1) to: afterFirstDot.length
+            if (isBareCName s: mem) then {
+                mk: mem.string
+                # a row naming an ARGUMENT hole is not a receiver-only
+                # conversion, and must not be offered to the leg that fills
+                # @V@ and nothing else
+                if (body.contains needle: "@A1@") then {
+                    ctx.nativeArgMemb.set key: mk value: true
+                } else {
+                    ctx.nativeConvMemb.set key: mk value: true
+                }
+            }
+        } case none then null
+    } case none then null
+}
+
+# recordFragmentRow -- a fragment-backed row: its path, then the row's own
+# halves, split here and nowhere else. The unit is the path's first segment
+# with the `@` that marks a path outside the declaration space stripped; the
+# demand is `demand=` or the path's last segment; the type name is the
+# demand's `uses_` suffix when it has one. Neither half starts as a copy of
+# the key: both are assigned on every path below, so a copy here would be
+# written and never read -- one per fragment row, which was the whole of
+# `make perf-elision`'s pool.
+recordFragmentRow: function {ctx: Ctx key: StringView frag: StringView dem: StringView} is {
+    fp: key.string
+    ctx.nativeFragPaths.set key: fp value: true
+    du: String
+    {
+        fd: key.indexOf needle: "."
+        match (
+            fd
+        ) case some then {
+            hd: key.substring from: 0 to: fd
+            so: hd.stripPrefix p: "@"
+            match (
+                so
+            ) case some then {
+                du = so.string
+            } case none then {
+                du = hd.string
+            }
+        } case none then {
+            # no `.` at all: the whole path is the unit
+            du = key.string
+        }
+    }
+    dm: String
+    if dem.length == 0 then {
+        ld: key.lastIndexOf needle: "."
+        match (
+            ld
+        ) case some then {
+            dm = (key.substring from: (ld + 1) to: key.length).string
+        } case none then {
+            dm = key.string
+        }
+    } else {
+        dm = dem.string
+    }
+    tn: String
+    {
+        uo: dm.stringView.stripPrefix p: "uses_"
+        match (
+            uo
+        ) case some then {
+            tn = uo.string
+        } case none then null
+    }
+    ctx.fragUnits.append from: du
+    ctx.fragMembs.append from: dm
+    ctx.fragNames.append from: frag.string
+    ctx.fragTypeNames.append from: tn
+}
+
+# recordRowBodies -- the row's tables: its body, under `const=` a
+# constant-operand variant with its position and otherwise the plain body,
+# then the runtime it needs, pointer arguments and folding, each keyed by the
+# path
+recordRowBodies: function {ctx: Ctx h: NativeHead.view body: StringView} is {
+    if body.length > 0 then {
+        kb: h.key.copy
+        if h.cst.length > 0 then {
+            ctx.nativeConstBody.set key: kb value: body.string
+            kc: h.key.copy
+            ctx.nativeConstPos.set key: kc value: h.cst.copy
+        } else {
+            ctx.nativeTbl.set key: kb value: body.string
+        }
+    }
+    if h.need.length > 0 then {
+        kn: h.key.copy
+        ctx.nativeNeed.set key: kn value: h.need.copy
+    }
+    if h.ptr then {
+        kp: h.key.copy
+        ctx.nativePtrArgs.set key: kp value: true
+    }
+    if h.isFold then {
+        kf: h.key.copy
+        ctx.nativeFold.set key: kf value: true
+    }
+}
+
+# recordNativeRow -- one row: its key, then the member filter it may feed,
+# the fragment halves when it is fragment-backed, and its tables
+recordNativeRow: function {ctx: Ctx h: NativeHead.view body: StringView} is {
+    kk: h.key.copy
+    ctx.nativeKeys.set key: kk value: true
+    if body.length > 0 when h.cst.length == 0 then {
+        recordConvMember :ctx key: h.key.stringView :body
+    }
+    if h.frag.length > 0 then {
+        (recordFragmentRow
+            :ctx
+            key: h.key.stringView
+            frag: h.frag.stringView
+            dem: h.dem.stringView
+        )
+    }
+    recordRowBodies :ctx :h :body
+}
+
 # loadNativeTbl -- parse natives.tbl into the three row tables. A row is
 # `[<path> attr=value ...] <body>`; `#` starts a comment and blank lines are
-# skipped. Read through readTemplateCached, which caches it and reports a
-# missing file as an emission failure -- the table is not optional, so a
-# program that cannot find it fails rather than falling back to something.
+# skipped, as is any line that does not open a row. Read through
+# readTemplateCached, which caches it and reports a missing file as an
+# emission failure -- the table is not optional, so a program that cannot
+# find it fails rather than falling back to something.
 loadNativeTbl: function {ctx: Ctx runtimeDir: StringView} is {
     p: "\{runtimeDir}/natives.tbl"
     txt: readTemplateCached :ctx path: p.stringView
     if txt.length == 0 then return
     with lit: txt.stringView.lines do for ln: lit loop {
         t: ln.trim
-        if t.length > 0 when (t.startsWith prefix: "#") == false then {
-            if (t.startsWith prefix: "[") then {
-                co: t.indexOf needle: "]"
-                match (
-                    co
-                ) case some then {
-                    head: t.substring from: 1 to: co
-                    rest: t.substring from: (co + 1) to: t.length
-                    body: rest.trim
-                    key: String
-                    need: String
-                    frag: String
-                    dem: String
-                    ord: String
-                    cst: String
-                    ptr: false
-                    isFold: false
-                    with fit: (head.split sep: " ") do for f: fit loop {
-                        if f.length > 0 then {
-                            if key.length == 0 then {
-                                key = f.string
-                            } else {
-                                if f == "args=ptr" then ptr = true
-                                # a BARE attribute, like args=ptr. Matched by
-                                # STRIPPING rather than comparing: the keyed
-                                # attributes below already ask that way, and a
-                                # spelling compare is what the architecture
-                                # rules count against this file.
-                                fdo: f.stripPrefix p: "fold"
-                                match (
-                                    fdo
-                                ) case some then {
-                                    if fdo.length == 0 then isFold = true
-                                } case none then null
-                                fo: f.stripPrefix p: "frag="
-                                match (
-                                    fo
-                                ) case some then {
-                                    frag = fo.string
-                                } case none then null
-                                demandText: f.stripPrefix p: "demand="
-                                match (
-                                    demandText
-                                ) case some then {
-                                    dem = demandText.string
-                                } case none then null
-                                so: f.stripPrefix p: "needs="
-                                match (
-                                    so
-                                ) case some then {
-                                    need = so.string
-                                } case none then null
-                                oo: f.stripPrefix p: "order="
-                                match (
-                                    oo
-                                ) case some then {
-                                    ord = oo.string
-                                } case none then null
-                                co: f.stripPrefix p: "const="
-                                match (
-                                    co
-                                ) case some then {
-                                    cst = co.string
-                                } case none then null
-                            }
-                        }
-                    }
-                    if key == "@units" then {
-                        # not a row: the order the units' runtimes run in
-                        with oit: (ord.stringView.split sep: ",") do for ou: oit loop {
-                            if ou.length > 0 then ctx.unitOrder.append from: ou.string
-                        }
-                        key = "".string
-                    }
-                    if key.length > 0 then {
-                        kk: key.copy
-                        ctx.nativeKeys.set key: kk value: true
-                        # a receiver-only path is <unit>.<type>.<member>: three segments whose
-                        # last is an identifier, AND it carries a body. A fragment-backed row
-                        # has three segments too -- io.File.close -- and must not make `close`
-                        # read as one, which is what routed a File close through the numeric
-                        # cast. Only the member NAME is collected: it is the cheap filter the
-                        # dotted-read leg asks first, and the row named by the source path is
-                        # what actually answers. Pairing them here instead would be a CROSS
-                        # PRODUCT -- every conv source crossed with every conv member -- which
-                        # said yes to `u8.bits` on the strength of `bits` existing on i8.
-                        if body.length > 0 when cst.length == 0 then {
-                            firstDot: key.stringView.indexOf needle: "."
-                            match (
-                                firstDot
-                            ) case some then {
-                                afterFirstDot: (key.stringView.substring
-                                    from: (firstDot + 1)
-                                    to: key.length
-                                )
-                                secondDot: afterFirstDot.indexOf needle: "."
-                                match (
-                                    secondDot
-                                ) case some then {
-                                    mem: (afterFirstDot.substring
-                                        from: (secondDot + 1)
-                                        to: afterFirstDot.length
-                                    )
-                                    if (isBareCName s: mem) then {
-                                        mk: mem.string
-                                        # a row naming an ARGUMENT hole is not a
-                                        # receiver-only conversion, and must not
-                                        # be offered to the leg that fills @V@
-                                        # and nothing else
-                                        if (body.contains needle: "@A1@") then {
-                                            ctx.nativeArgMemb.set key: mk value: true
-                                        } else {
-                                            ctx.nativeConvMemb.set key: mk value: true
-                                        }
-                                    }
-                                } case none then null
-                            } case none then null
-                        }
-                        if frag.length > 0 then {
-                            fp: key.copy
-                            ctx.nativeFragPaths.set key: fp value: true
-                            # the row's own halves, split here and nowhere else: the unit is the
-                            # path's first segment, the demand is `demand=` or the last segment.
-                            # Neither starts as a copy of the key: both are assigned on every
-                            # path below, so a copy here is written and never read -- one per
-                            # fragment row, which was the whole of `make perf-elision`'s pool.
-                            du: String
-                            dm: String
-                            {
-                                fd: key.stringView.indexOf needle: "."
-                                match (
-                                    fd
-                                ) case some then {
-                                    hd: key.stringView.substring from: 0 to: fd
-                                    # the `@` marks a path outside the declaration
-                                    # space; the unit it names is still the unit
-                                    so: hd.stripPrefix p: "@"
-                                    match (
-                                        so
-                                    ) case some then {
-                                        du = so.string
-                                    } case none then {
-                                        du = hd.string
-                                    }
-                                } case none then {
-                                    # no `.` at all: the whole path is the unit
-                                    du = key.copy
-                                }
-                            }
-                            if dem.length == 0 then {
-                                li: u64
-                                kn: key.length
-                                cut: u64
-                                for li < kn loop {
-                                    bo: key.stringView.byteAt i: li
-                                    match (
-                                        bo
-                                    ) case some then {
-                                        if bo == 46 then cut = li + 1
-                                    } case none then null
-                                    li = li + 1
-                                }
-                                dm = (key.stringView.substring from: cut to: kn).string
-                            } else {
-                                dm = dem.copy
-                            }
-                            tn: String
-                            {
-                                uo: dm.stringView.stripPrefix p: "uses_"
-                                match (
-                                    uo
-                                ) case some then {
-                                    tn = uo.string
-                                } case none then null
-                            }
-                            ctx.fragUnits.append from: du
-                            ctx.fragMembs.append from: dm
-                            ctx.fragNames.append from: frag.copy
-                            ctx.fragTypeNames.append from: tn
-                        }
-                        if body.length > 0 then {
-                            kb: key.copy
-                            if cst.length > 0 then {
-                                ctx.nativeConstBody.set key: kb value: body.string
-                                kc: key.copy
-                                ctx.nativeConstPos.set key: kc value: cst.copy
-                            } else {
-                                ctx.nativeTbl.set key: kb value: body.string
-                            }
-                        }
-                        if need.length > 0 then {
-                            kn: key.copy
-                            ctx.nativeNeed.set key: kn value: need.copy
-                        }
-                        if ptr then {
-                            kp: key.copy
-                            ctx.nativePtrArgs.set key: kp value: true
-                        }
-                        if isFold then {
-                            kf: key.copy
-                            ctx.nativeFold.set key: kf value: true
-                        }
-                    }
-                } case none then null
-            }
+        if (t.startsWith prefix: "[") then {
+            co: t.indexOf needle: "]"
+            match (
+                co
+            ) case some then {
+                head: t.substring from: 1 to: co
+                rest: t.substring from: (co + 1) to: t.length
+                body: rest.trim
+                h: NativeHead.create :head
+                if h.key == "@units" then {
+                    recordUnitOrder :ctx order: h.ord.stringView
+                } else if h.key.length > 0 then {
+                    recordNativeRow :ctx :h :body
+                }
+            } case none then null
         }
     }
 }
