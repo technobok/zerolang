@@ -9843,6 +9843,31 @@ emitCrossUnitExplicitCreate: function {
             (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: cco.u64)) ==
             ztypes.ztypetype.functionType
         ) then {
+            ccBody: false
+            {
+                ccrn: symtab.typing.funcReturnNode.get key: cco
+                match (
+                    ccrn
+                ) case some then {
+                    ccBody = true
+                } case none then null
+            }
+            # a user create with a body is a function like any other, so its
+            # arguments take the pointer / byref / hoist question the
+            # parameter's own ownership answers. A list of argument texts
+            # cannot ask it: a class field handed across the unit boundary
+            # arrived by value where the callee wanted a pointer
+            if ccBody then {
+                return (emitFnCallWithFid
+                    :ast
+                    :symtab
+                    :ctx
+                    :call
+                    fid: (ztypes.tid.create from: cco.u64)
+                )
+            }
+            # no body: the synthesised create, whose arguments are the fields
+            # moved in
             cpn: List String
             cpi: ListVal u64
             cpiNm: ListVal u64
@@ -9863,19 +9888,6 @@ emitCrossUnitExplicitCreate: function {
                 if ci > 0 then cargs.append ", "
                 cargs.append cav
                 ci = ci + 1
-            }
-            ccBody: false
-            {
-                ccrn: symtab.typing.funcReturnNode.get key: cco
-                match (
-                    ccrn
-                ) case some then {
-                    ccBody = true
-                } case none then null
-            }
-            if ccBody then {
-                ccb: ctxCname :ctx tid: (ztypes.tid.create from: cco.u64)
-                return "\{ccb}(\{cargs})"
             }
             fwcb: ctxCname :ctx :tid
             return "\{fwcb}_create(\{cargs})"
@@ -14811,10 +14823,9 @@ isDottedAutoCall: function {n: astnode.view} out bool is {
 
 # emitCollectionBind -- binding a List, Set or Map: the mono's own create, the
 # capacity the construction asked for, and the cleanup entry the local earns.
-# The cleanup entry is what `nbrw` gates, in each of the three legs below: a
-# field read ALIASES the holder's heap -- the struct copy shares its buffer --
-# so the holder alone owns it, and registering a destructor here freed that
-# buffer twice.
+# The cleanup entry is what `nbrw` gates, in each leg: a field read ALIASES the
+# holder's heap -- the struct copy shares its buffer -- so the holder alone owns
+# it, and registering a destructor here freed that buffer twice.
 emitCollectionBind: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
@@ -14826,142 +14837,162 @@ emitCollectionBind: function {
     nm: StringView
     nameVid: ztypes.vid
 } out bool is {
-    handled: false
     avn: ast.nodes.get i: n.value.u64
     nbrw: bindingRhsIsBorrow :ast :symtab :ctx n: avn
     ltid: stampIdOf :symtab nid: n.nodeid.u64
     if ltid.isZero then ltid = stampIdOf :symtab nid: (interpPartNodeId n: avn)
     ltid = ztypes.tid.create from: (chaseColMono :symtab :ctx tid: ltid)
     if (isListOriginOf :symtab :ctx tid: ltid) then {
-        lcb: ctxCname :ctx tid: ltid
-        if (noArgNativeRhs :ast :symtab unitName: ctx.mainName.stringView n: avn) then {
-            # owned List returned by os.args / os.envNames: emit the call.
-            losr: emitExpr :ast :symtab :ctx n: avn
-            losb: "\{ind}\{lcb}_t \{nm} = \{losr};\n"
-            buf.append losb
+        emitListBind :ast :symtab :ctx :avn :ind :tmp :buf :nm :nameVid :ltid :nbrw
+        return true
+    }
+    isHeap: isSetOriginOf :symtab :ctx tid: ltid
+    if (isMapOriginOf :symtab :ctx tid: ltid) then isHeap = true
+    if isHeap then {
+        hcb: ctxCname :ctx tid: ltid
+        (emitHeapColBind
+            :ast
+            :symtab
+            :ctx
+            :avn
+            :ind
+            :tmp
+            :buf
+            :nm
+            :nameVid
+            cb: hcb.stringView
+            :nbrw
+        )
+        return true
+    }
+    return false
+}
+
+# emitListBind -- the List leg of emitCollectionBind: a no-argument native's
+# owned result, a comprehension, a call result moved in, or a fresh list at the
+# capacity asked for; then the cleanup entry unless the binding borrows
+emitListBind: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    avn: astnode.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+    nm: StringView
+    nameVid: ztypes.vid
+    ltid: ztypes.tid
+    nbrw: bool
+} is {
+    lcb: ctxCname :ctx tid: ltid
+    if (noArgNativeRhs :ast :symtab unitName: ctx.mainName.stringView n: avn) then {
+        # owned List returned by os.args / os.envNames: emit the call.
+        losr: emitExpr :ast :symtab :ctx n: avn
+        flushArgHoists :ctx :ind :tmp :buf
+        losb: "\{ind}\{lcb}_t \{nm} = \{losr};\n"
+        buf.append losb
+    } else {
+        if (forexprValue :ast n: avn) then {
+            # list comprehension: `xs: for ... loop { expr }` create + populate
+            lc0: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)0);\n"
+            buf.append lc0
+            (emitListComprehension
+                :ast
+                :symtab
+                :ctx
+                forNode: avn
+                listCb: lcb.stringView
+                listVar: nm
+                :ind
+                :tmp
+                :buf
+            )
         } else {
-            if (forexprValue :ast n: avn) then {
-                # list comprehension: `xs: for ... loop { expr }` create + populate
-                lc0: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)0);\n"
-                buf.append lc0
-                (emitListComprehension
-                    :ast
-                    :symtab
-                    :ctx
-                    forNode: avn
-                    listCb: lcb.stringView
-                    listVar: nm
-                    :ind
-                    :tmp
-                    :buf
-                )
+            if (collectionValueCallRhs :ast :symtab n: avn) then {
+                lvr0: emitExpr :ast :symtab :ctx n: avn
+                flushArgHoists :ctx :ind :tmp :buf
+                lb0: "\{ind}\{lcb}_t \{nm} = \{lvr0};\n"
+                buf.append lb0
+                emitValueTakeInvalidations :ast :symtab :ctx n: avn :ind :buf
+                # a binding from a bare owned local is a MOVE: zero the
+                # source so its scope-exit free no-ops now that this
+                # binding owns the buffer
+                if (isBareNameValue :ast n: avn) then {
+                    lzs0: implicitTakeSource :ast :symtab :ctx n: avn
+                    if lzs0.length > 0 then {
+                        lzi0: "\{ind}\{lzs0} = (\{lcb}_t){0};\n"
+                        buf.append lzi0
+                    }
+                }
+                # a take out of a FIELD moves the buffer the same way:
+                # the field is zeroed so the holder's destroy no-ops
+                if (isFieldTake :ast n: avn) then {
+                    lzf0: "\{ind}\{lvr0} = (\{lcb}_t){0};\n"
+                    buf.append lzf0
+                }
             } else {
-                if (collectionValueCallRhs :ast :symtab n: avn) then {
-                    lvr0: emitExpr :ast :symtab :ctx n: avn
-                    lb0: "\{ind}\{lcb}_t \{nm} = \{lvr0};\n"
-                    buf.append lb0
-                    emitValueTakeInvalidations :ast :symtab :ctx n: avn :ind :buf
-                    # a binding from a bare owned local is a MOVE: zero the
-                    # source so its scope-exit free no-ops now that this
-                    # binding owns the buffer
-                    if (isBareNameValue :ast n: avn) then {
-                        lzs0: implicitTakeSource :ast :symtab :ctx n: avn
-                        if lzs0.length > 0 then {
-                            lzi0: "\{ind}\{lzs0} = (\{lcb}_t){0};\n"
-                            buf.append lzi0
-                        }
-                    }
-                    # a take out of a FIELD moves the buffer the same way:
-                    # the field is zeroed so the holder's destroy no-ops
-                    if (isFieldTake :ast n: avn) then {
-                        lzf0: "\{ind}\{lvr0} = (\{lcb}_t){0};\n"
-                        buf.append lzf0
-                    }
-                } else {
-                    lcap: listCapArg :ast :symtab :ctx n: avn
-                    lb1: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)\{lcap});\n"
-                    buf.append lb1
-                }
+                lcap: listCapArg :ast :symtab :ctx n: avn
+                lb1: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)\{lcap});\n"
+                buf.append lb1
             }
         }
-        if nbrw == false then {
-            lfree: "    \{lcb}_destroy(&\{nm});\n"
-            lfsv: lfree.stringView
-            tmp.oweList stmt: lfsv.string name: nm.string vid: nameVid
-        }
-        return true
     }
-    if (isSetOriginOf :symtab :ctx tid: ltid) then {
-        scb: ctxCname :ctx tid: ltid
-        if (collectionValueCallRhs :ast :symtab n: avn) then {
-            svr: emitExpr :ast :symtab :ctx n: avn
-            sbc: "\{ind}\{scb}_t* \{nm} = \{svr};\n"
-            buf.append sbc
-            emitValueTakeInvalidations :ast :symtab :ctx n: avn :ind :buf
-            # a heap collection binding from a bare owned local is a MOVE:
-            # clear the source so its scope-exit destroy no-ops now that
-            # this binding owns the allocation
-            if (isBareNameValue :ast n: avn) then {
-                hzs0: implicitTakeSource :ast :symtab :ctx n: avn
-                if hzs0.length > 0 then {
-                    hzi0: "\{ind}\{hzs0} = NULL;\n"
-                    buf.append hzi0
-                }
-            }
-            # a take out of a FIELD moves the allocation the same way: the
-            # field is cleared so the holder's destroy no-ops
-            if (isFieldTake :ast n: avn) then {
-                hzf0: "\{ind}\{svr} = NULL;\n"
-                buf.append hzf0
-            }
-        } else {
-            scap: listCapArg :ast :symtab :ctx n: avn
-            sb0: "\{ind}\{scb}_t* \{nm} = \{scb}_create((uint64_t)\{scap});\n"
-            buf.append sb0
-        }
-        if nbrw == false then {
-            sfree: "    \{scb}_destroy(\{nm});\n"
-            sfsv: sfree.stringView
-            tmp.oweList stmt: sfsv.string name: nm.string vid: nameVid
-        }
-        return true
+    if nbrw == false then {
+        lfree: "    \{lcb}_destroy(&\{nm});\n"
+        lfsv: lfree.stringView
+        tmp.oweList stmt: lfsv.string name: nm.string vid: nameVid
     }
-    if (isMapOriginOf :symtab :ctx tid: ltid) then {
-        mcb: ctxCname :ctx tid: ltid
-        if (collectionValueCallRhs :ast :symtab n: avn) then {
-            mvr: emitExpr :ast :symtab :ctx n: avn
-            mbc: "\{ind}\{mcb}_t* \{nm} = \{mvr};\n"
-            buf.append mbc
-            emitValueTakeInvalidations :ast :symtab :ctx n: avn :ind :buf
-            # a heap collection binding from a bare owned local is a MOVE:
-            # clear the source so its scope-exit destroy no-ops now that
-            # this binding owns the allocation
-            if (isBareNameValue :ast n: avn) then {
-                hzs0: implicitTakeSource :ast :symtab :ctx n: avn
-                if hzs0.length > 0 then {
-                    hzi0: "\{ind}\{hzs0} = NULL;\n"
-                    buf.append hzi0
-                }
+}
+
+# emitHeapColBind -- the Set and Map leg of emitCollectionBind, one body for
+# both since only the mono's cname differs: a call result moved in, or a fresh
+# collection at the capacity asked for; then the cleanup entry unless the
+# binding borrows
+emitHeapColBind: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    avn: astnode.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+    nm: StringView
+    nameVid: ztypes.vid
+    cb: StringView
+    nbrw: bool
+} is {
+    if (collectionValueCallRhs :ast :symtab n: avn) then {
+        hvr: emitExpr :ast :symtab :ctx n: avn
+        flushArgHoists :ctx :ind :tmp :buf
+        hbc: "\{ind}\{cb}_t* \{nm} = \{hvr};\n"
+        buf.append hbc
+        emitValueTakeInvalidations :ast :symtab :ctx n: avn :ind :buf
+        # a heap collection binding from a bare owned local is a MOVE:
+        # clear the source so its scope-exit destroy no-ops now that
+        # this binding owns the allocation
+        if (isBareNameValue :ast n: avn) then {
+            hzs0: implicitTakeSource :ast :symtab :ctx n: avn
+            if hzs0.length > 0 then {
+                hzi0: "\{ind}\{hzs0} = NULL;\n"
+                buf.append hzi0
             }
-            # a take out of a FIELD moves the allocation the same way: the
-            # field is cleared so the holder's destroy no-ops
-            if (isFieldTake :ast n: avn) then {
-                mzf0: "\{ind}\{mvr} = NULL;\n"
-                buf.append mzf0
-            }
-        } else {
-            mcap: listCapArg :ast :symtab :ctx n: avn
-            mb0: "\{ind}\{mcb}_t* \{nm} = \{mcb}_create((uint64_t)\{mcap});\n"
-            buf.append mb0
         }
-        if nbrw == false then {
-            mfree: "    \{mcb}_destroy(\{nm});\n"
-            mfsv: mfree.stringView
-            tmp.oweList stmt: mfsv.string name: nm.string vid: nameVid
+        # a take out of a FIELD moves the allocation the same way: the
+        # field is cleared so the holder's destroy no-ops
+        if (isFieldTake :ast n: avn) then {
+            hzf0: "\{ind}\{hvr} = NULL;\n"
+            buf.append hzf0
         }
-        return true
+    } else {
+        hcap: listCapArg :ast :symtab :ctx n: avn
+        hb0: "\{ind}\{cb}_t* \{nm} = \{cb}_create((uint64_t)\{hcap});\n"
+        buf.append hb0
     }
-    return handled
+    if nbrw == false then {
+        hfree: "    \{cb}_destroy(\{nm});\n"
+        hfsv: hfree.stringView
+        tmp.oweList stmt: hfsv.string name: nm.string vid: nameVid
+    }
 }
 
 # emitStringBind -- binding a StringView or a String. A view aliases its source and
