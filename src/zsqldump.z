@@ -117,7 +117,7 @@ frameLabelOf: function {st: zenv.ZSymbolTable.view frame: ztypes.declid} out Str
 
 # definedUnitOf -- a type's defining unit as an Option, derived off the
 # Decl parent chain.
-definedUnitOf: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out (Option String) is {
+definedUnitOf: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out Option String is {
     nm: ztypecheck.unitNameOfTid :st tid: (ztypes.tid.create from: tid.u64)
     if nm.length == 0 then return (Option.none String)
     return (Option.some nm)
@@ -138,31 +138,81 @@ unitdefNodeId: function {ast: Ast.view nId: zast.nodeid} out u32 is {
 # projections read are declared.
 schemaSql: function {} out String is {
     acc: String
-    acc.append s: "CREATE TABLE IF NOT EXISTS files (file_id INTEGER PRIMARY KEY, path TEXT NOT NULL);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS ast_nodes (node_id INTEGER PRIMARY KEY, kind TEXT NOT NULL, token_id INTEGER, name TEXT, file_id INTEGER, start_line INTEGER, start_col INTEGER, synth_origin TEXT);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS unit (unit_id INTEGER PRIMARY KEY, name TEXT NOT NULL, is_main INTEGER NOT NULL, unit_type_id INTEGER);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS types (type_id INTEGER PRIMARY KEY, name TEXT NOT NULL, typetype TEXT NOT NULL, is_valtype INTEGER, is_generic INTEGER, generic_origin_id INTEGER, needs_destructor INTEGER, is_heap_allocated INTEGER, defined_in_unit TEXT);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS decl (decl_id INTEGER PRIMARY KEY, name TEXT NOT NULL, parent_decl_id INTEGER NOT NULL, kind TEXT NOT NULL, node_id INTEGER NOT NULL, type_id INTEGER NOT NULL, ownership INTEGER NOT NULL, is_fnptr_field INTEGER NOT NULL, grants_private INTEGER NOT NULL);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS decl_child (parent_decl_id INTEGER NOT NULL, name TEXT NOT NULL, child_decl_id INTEGER NOT NULL, position INTEGER NOT NULL);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS ref_decl (node_id INTEGER PRIMARY KEY, decl_id INTEGER NOT NULL);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS typed_nodes (node_id INTEGER PRIMARY KEY, type_id INTEGER, is_const INTEGER, const_value TEXT);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS member_const (parent_type_id INTEGER NOT NULL, name_id INTEGER NOT NULL, value TEXT NOT NULL);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS conformance (conformance_id INTEGER PRIMARY KEY, impl_type_id INTEGER NOT NULL, spec_type_id INTEGER NOT NULL, label TEXT NOT NULL, is_facet INTEGER NOT NULL);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS scope (scope_id INTEGER PRIMARY KEY, parent_id INTEGER, kind TEXT NOT NULL, name TEXT NOT NULL, depth INTEGER NOT NULL, unreachable INTEGER NOT NULL);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS variable (variable_id INTEGER PRIMARY KEY, ztype_id INTEGER, ownership TEXT NOT NULL, is_private_access INTEGER NOT NULL, borrow_origin TEXT, synth_origin TEXT, origin TEXT);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS entry (entry_id INTEGER PRIMARY KEY, scope_id INTEGER NOT NULL, position INTEGER NOT NULL, name TEXT NOT NULL, ztype_id INTEGER NOT NULL, is_definition INTEGER NOT NULL, variable_id INTEGER, original_ztype_id INTEGER, is_taken INTEGER NOT NULL, taken_at_line INTEGER, taken_at_col INTEGER, taken_at_file INTEGER);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS narrowed_subtype (entry_id INTEGER NOT NULL, name TEXT NOT NULL, type_id INTEGER, excluded INTEGER NOT NULL);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS generic_child (parent_id INTEGER NOT NULL, arg_key INTEGER NOT NULL, child_id INTEGER NOT NULL);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS generic_arg (spec_id INTEGER NOT NULL, ordinal INTEGER NOT NULL, arg_id INTEGER NOT NULL, arg_is_value INTEGER NOT NULL);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS atom_variable (node_id INTEGER PRIMARY KEY, variable_id INTEGER NOT NULL);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS implicit_create (node_id INTEGER PRIMARY KEY, type_id INTEGER NOT NULL);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS arm_predicate (node_id INTEGER PRIMARY KEY, type_id INTEGER NOT NULL);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS tag_read (node_id INTEGER PRIMARY KEY, type_id INTEGER NOT NULL);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS tag_accessor (type_id INTEGER PRIMARY KEY, name TEXT NOT NULL, tag_type_id INTEGER NOT NULL);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS post_guard (node_id INTEGER PRIMARY KEY, name TEXT NOT NULL, type_id INTEGER NOT NULL, arm TEXT NOT NULL);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS arg_disposition (node_id INTEGER PRIMARY KEY, disposition INTEGER NOT NULL);\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS call_generic_binding (call_node INTEGER NOT NULL, param_name INTEGER NOT NULL, type_id INTEGER NOT NULL, PRIMARY KEY (call_node, param_name));\n"
-    acc.append s: "CREATE TABLE IF NOT EXISTS binop_operator (mono_id INTEGER NOT NULL, node_id INTEGER NOT NULL, owner_type_id INTEGER NOT NULL, method_id INTEGER NOT NULL, PRIMARY KEY (mono_id, node_id));\n"
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS files (file_id INTEGER PRIMARY KEY, path TEXT NOT NULL);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS ast_nodes (node_id INTEGER PRIMARY KEY, kind TEXT NOT NULL, token_id INTEGER, name TEXT, file_id INTEGER, start_line INTEGER, start_col INTEGER, synth_origin TEXT);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS unit (unit_id INTEGER PRIMARY KEY, name TEXT NOT NULL, is_main INTEGER NOT NULL, unit_type_id INTEGER);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS types (type_id INTEGER PRIMARY KEY, name TEXT NOT NULL, typetype TEXT NOT NULL, is_valtype INTEGER, is_generic INTEGER, generic_origin_id INTEGER, needs_destructor INTEGER, is_heap_allocated INTEGER, defined_in_unit TEXT);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS decl (decl_id INTEGER PRIMARY KEY, name TEXT NOT NULL, parent_decl_id INTEGER NOT NULL, kind TEXT NOT NULL, node_id INTEGER NOT NULL, type_id INTEGER NOT NULL, ownership INTEGER NOT NULL, is_fnptr_field INTEGER NOT NULL, grants_private INTEGER NOT NULL);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS decl_child (parent_decl_id INTEGER NOT NULL, name TEXT NOT NULL, child_decl_id INTEGER NOT NULL, position INTEGER NOT NULL);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS ref_decl (node_id INTEGER PRIMARY KEY, decl_id INTEGER NOT NULL);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS typed_nodes (node_id INTEGER PRIMARY KEY, type_id INTEGER, is_const INTEGER, const_value TEXT);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS member_const (parent_type_id INTEGER NOT NULL, name_id INTEGER NOT NULL, value TEXT NOT NULL);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS conformance (conformance_id INTEGER PRIMARY KEY, impl_type_id INTEGER NOT NULL, spec_type_id INTEGER NOT NULL, label TEXT NOT NULL, is_facet INTEGER NOT NULL);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS scope (scope_id INTEGER PRIMARY KEY, parent_id INTEGER, kind TEXT NOT NULL, name TEXT NOT NULL, depth INTEGER NOT NULL, unreachable INTEGER NOT NULL);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS variable (variable_id INTEGER PRIMARY KEY, ztype_id INTEGER, ownership TEXT NOT NULL, is_private_access INTEGER NOT NULL, borrow_origin TEXT, synth_origin TEXT, origin TEXT);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS entry (entry_id INTEGER PRIMARY KEY, scope_id INTEGER NOT NULL, position INTEGER NOT NULL, name TEXT NOT NULL, ztype_id INTEGER NOT NULL, is_definition INTEGER NOT NULL, variable_id INTEGER, original_ztype_id INTEGER, is_taken INTEGER NOT NULL, taken_at_line INTEGER, taken_at_col INTEGER, taken_at_file INTEGER);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS narrowed_subtype (entry_id INTEGER NOT NULL, name TEXT NOT NULL, type_id INTEGER, excluded INTEGER NOT NULL);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS generic_child (parent_id INTEGER NOT NULL, arg_key INTEGER NOT NULL, child_id INTEGER NOT NULL);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS generic_arg (spec_id INTEGER NOT NULL, ordinal INTEGER NOT NULL, arg_id INTEGER NOT NULL, arg_is_value INTEGER NOT NULL);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS atom_variable (node_id INTEGER PRIMARY KEY, variable_id INTEGER NOT NULL);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS implicit_create (node_id INTEGER PRIMARY KEY, type_id INTEGER NOT NULL);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS arm_predicate (node_id INTEGER PRIMARY KEY, type_id INTEGER NOT NULL);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS tag_read (node_id INTEGER PRIMARY KEY, type_id INTEGER NOT NULL);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS tag_accessor (type_id INTEGER PRIMARY KEY, name TEXT NOT NULL, tag_type_id INTEGER NOT NULL);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS post_guard (node_id INTEGER PRIMARY KEY, name TEXT NOT NULL, type_id INTEGER NOT NULL, arm TEXT NOT NULL);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS arg_disposition (node_id INTEGER PRIMARY KEY, disposition INTEGER NOT NULL);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS call_generic_binding (call_node INTEGER NOT NULL, param_name INTEGER NOT NULL, type_id INTEGER NOT NULL, PRIMARY KEY (call_node, param_name));\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS binop_operator (mono_id INTEGER NOT NULL, node_id INTEGER NOT NULL, owner_type_id INTEGER NOT NULL, method_id INTEGER NOT NULL, PRIMARY KEY (mono_id, node_id));\n"
+    )
     return acc
 }
 
@@ -203,7 +253,7 @@ paramOwnSql: function {o: optionval ztypes.zparamownership} out String is {
 
 # varOwnSql -- a variable's ownership enum as a SQL string literal.
 varOwnSql: function {o: ztypes.zownership} out String is {
-    ownStr: (ztypes.zownershipName o)
+    ownStr: ztypes.zownershipName o
     return (sqlStr s: ownStr.stringView)
 }
 
@@ -269,8 +319,8 @@ ZDumper: class {
 
     # files stage.
     appendFiles: function {:this vfs: zvfs.ZVfs} is {
-        ids: (ListVal zvfs.fsno)
-        paths: (List String)
+        ids: ListVal zvfs.fsno
+        paths: List String
         vfs.fileTable outIds: ids outPaths: paths
         i: u64
         n: ids.length
@@ -366,7 +416,9 @@ ZDumper: class {
     # the unit name), then each body definition's subtree labelled
     # "<unit>.<def>": the unit node is emitted directly and each definition
     # subtree is walked under its own label.
-    appendUnitDefAndBody: function {:this ast: Ast.view unitdef: astnode.view uname: StringView} is {
+    appendUnitDefAndBody: function {
+        :this ast: Ast.view unitdef: astnode.view uname: StringView
+    } is {
         match (
             unitdef
         ) case unitdef then {
@@ -435,7 +487,8 @@ ZDumper: class {
         for uIdx9b < uCnt9b loop {
             uId: (zast.nodeid.create from: (program.units.get i: uIdx9b))
             uIdx9b = uIdx9b + 1
-            (this.appendUnitRow ast: program
+            (this.appendUnitRow
+                ast: program
                 unitNamedOpId: uId
                 mainName: program.mainUnitName.stringView
                 :typing
@@ -690,7 +743,9 @@ ZDumper: class {
     # columns line up with the decl tables.
     appendMemberConst: function {:this typing: ztyping.ZTyping} is {
         with mcit: typing.memberConst.iterateItems do for mc: mcit loop {
-            row: "INSERT OR IGNORE INTO member_const VALUES (\{mc.key.owner}, \{mc.key.name}, '\{constValueText v: mc.value}');\n"
+            row: "INSERT OR IGNORE INTO member_const VALUES (\{mc.key.owner}, \{mc.key.name}, '\{(constValueText
+                v: mc.value
+            )}');\n"
             this.acc.append s: row
         }
     }
@@ -713,14 +768,16 @@ ZDumper: class {
     # snapshotted when each frame closed; variable rows the per-id side
     # tables, deduped.
     appendSymbolTable: function {:this pool: zast.StringPool.view st: zenv.ZSymbolTable.view} is {
-        seen: (IdSet u64)
+        seen: IdSet u64
         depth: u64
         nd: st.typing.decls.length
         di: u64
         for di < nd loop {
             d: ztypes.declid.create from: di
             di = di + 1
-            if (st.typing.declIsFrame declId: d) when (st.frameHidden.has item: d.u64) == false then {
+            if (st.typing.declIsFrame declId: d) when (
+                (st.frameHidden.has item: d.u64) == false
+            ) then {
                 lbl: frameLabelOf :st frame: d
                 kind: "BLOCK"
                 if lbl.length == 0 then kind = "CALL"
@@ -744,7 +801,7 @@ ZDumper: class {
             enmSql: sqlStr s: enmT.stringView
             r: "INSERT OR IGNORE INTO entry VALUES (\{e.entryId}, \{e.scopeId}, \{e.position}, \{enmSql}, \{e.ztypeId}, \{defNum}, \{varSql}, \{origSql}, \{takNum}, NULL, NULL, NULL);\n"
             this.acc.append s: r
-            if (e.narrowedSubtype.isZero) == false then {
+            if e.narrowedSubtype.isZero == false then {
                 nnb: zast.poolTextAt :pool ref: e.narrowedSubtype
                 nnm: sqlStr s: nnb.stringView
                 nr: "INSERT INTO narrowed_subtype VALUES (\{e.entryId}, \{nnm}, NULL, 0);\n"
@@ -804,7 +861,7 @@ ZDumper: class {
     # emit the units in CANONICAL order, so two dumps of the same program
     # compare equal whatever order the walk found them in
     appendUnitsCanon: function {:this program: Ast.view} is {
-        rows: (List String)
+        rows: List String
         mn: program.mainUnitName.stringView
         uCnt9c: program.units.length
         uIdx9c: u64
@@ -825,7 +882,6 @@ ZDumper: class {
         }
         this.emitSection title: "unit" :rows
     }
-
 
     # appendGenericChildren -- one row per specialization-tree edge:
     # parent type-id x argument key -> child spec type-id.
@@ -849,7 +905,7 @@ ZDumper: class {
         n: st.reg.nextTypeId
         tid: ztypes.tid
         for tid < n loop {
-            gargs: (ListVal u64)
+            gargs: ListVal u64
             if tid < st.reg.typeById.length then {
                 zt: st.reg.typeById.get i: tid
                 zn: zt.genericArgs.length
@@ -879,12 +935,12 @@ ZDumper: class {
 
     # emit each template's instantiations, canonically ordered
     appendGenericChildrenCanon: function {:this unm: StringView st: zenv.ZSymbolTable.view} is {
-        rows: (List String)
+        rows: List String
         n: st.reg.nextTypeId
         tid: ztypes.tid
         for tid < n loop {
-            gkeys: (ListVal u64)
-            gtids: (ListVal u64)
+            gkeys: ListVal u64
+            gtids: ListVal u64
             if tid < st.reg.typeById.length then {
                 zt: st.reg.typeById.get i: tid
                 du: definedUnitOf :st :tid
@@ -939,11 +995,11 @@ ZDumper: class {
 
     # emit each instantiation's type arguments, canonically ordered
     appendGenericArgsCanon: function {:this unm: StringView st: zenv.ZSymbolTable.view} is {
-        rows: (List String)
+        rows: List String
         n: st.reg.nextTypeId
         tid: ztypes.tid
         for tid < n loop {
-            cargs: (ListVal u64)
+            cargs: ListVal u64
             if tid < st.reg.typeById.length then {
                 zt: st.reg.typeById.get i: tid
                 du: definedUnitOf :st :tid
@@ -994,7 +1050,7 @@ ZDumper: class {
 
     # emit the type table, canonically ordered
     appendTypesCanon: function {:this unm: StringView st: zenv.ZSymbolTable.view} is {
-        rows: (List String)
+        rows: List String
         n: st.reg.nextTypeId
         tid: ztypes.tid
         for tid < n loop {
@@ -1027,8 +1083,10 @@ ZDumper: class {
     # this unit, one row per typed child: owner name, child name, child type
     # name, position, param ownership. The canon dump's only view of member
     # structure, so it resolves ids to names rather than dumping the decl tree.
-    appendDeclChildCanon: function {:this ast: Ast.view unm: StringView st: zenv.ZSymbolTable.view} is {
-        rows: (List String)
+    appendDeclChildCanon: function {
+        :this ast: Ast.view unm: StringView st: zenv.ZSymbolTable.view
+    } is {
+        rows: List String
         tn: st.reg.nextTypeId
         tid: u64
         for tid < tn loop {
@@ -1054,22 +1112,22 @@ ZDumper: class {
                     rwSq: st.typing.declRowAt ownerTid: otSq membersOnly: false slot: pos
                     pos = pos + 1
                     if rwSq.keep then {
-                    nid: rwSq.name
-                    cName: (canonTypeName
-                        reg: st.reg
-                        tid: (ztypes.tid.create from: rwSq.tid)
-                    )
-                    cnB8: ast.names.texts.get i: nid.u64
-                    cnSql: sqlStr s: cnB8.stringView
-                    ctSql: sqlStr s: cName.stringView
-                    own: (st.typing.declOwnershipOfId
-                        parentTypeId: (ztypes.tid.create from: pid.u64)
-                        nameId: (zast.nameid.create from: nid.u32.orPanic)
-                    )
-                    poSql: paramOwnSql o: own
-                    line: "\{pSql} | \{cnSql} | \{ctSql} | \{ord} | \{poSql}"
-                    ord = ord + 1
-                    rows.append line
+                        nid: rwSq.name
+                        cName: (canonTypeName
+                            reg: st.reg
+                            tid: (ztypes.tid.create from: rwSq.tid)
+                        )
+                        cnB8: ast.names.texts.get i: nid.u64
+                        cnSql: sqlStr s: cnB8.stringView
+                        ctSql: sqlStr s: cName.stringView
+                        own: (st.typing.declOwnershipOfId
+                            parentTypeId: (ztypes.tid.create from: pid.u64)
+                            nameId: (zast.nameid.create from: nid.u32.orPanic)
+                        )
+                        poSql: paramOwnSql o: own
+                        line: "\{pSql} | \{cnSql} | \{ctSql} | \{ord} | \{poSql}"
+                        ord = ord + 1
+                        rows.append line
                     }
                 }
             }
@@ -1079,7 +1137,7 @@ ZDumper: class {
 
     # emit the conformances, canonically ordered
     appendConformanceCanon: function {:this unm: StringView st: zenv.ZSymbolTable.view} is {
-        rows: (List String)
+        rows: List String
         citer: st.typing.conformance.iterate
         for cf: citer loop {
             idu: definedUnitOf :st tid: (ztypes.tid.create from: cf.implTypeId)
@@ -1107,13 +1165,15 @@ ZDumper: class {
     # this unit declares, keyed by name rather than by the packed
     # (parentTypeId, nameId) the table uses, and sorted like every canon
     # section so the golden does not depend on map order.
-    appendMemberConstCanon: function {:this pool: zast.StringPool.view unm: StringView st: zenv.ZSymbolTable} is {
-        rows: (List String)
+    appendMemberConstCanon: function {
+        :this pool: zast.StringPool.view unm: StringView st: zenv.ZSymbolTable
+    } is {
+        rows: List String
         # the iteration holds the table exclusively and rendering a value reads
         # the whole symbol table: collect this unit's entries first, render
         # them once the iterator has died
-        mNames: (ListVal u64)
-        mVals: (ListVal ztypes.cval)
+        mNames: ListVal u64
+        mVals: ListVal ztypes.cval
         with mcit: st.typing.memberConst.iterateItems do for mc: mcit loop {
             pt: mc.key.owner
             nm: mc.key.name
@@ -1142,16 +1202,20 @@ ZDumper: class {
     # dropped, a frame's parent named by its label, entry/variable ztype via
     # canonTypeName. No unit filter -- the table holds only the main unit's
     # bodies.
-    appendSymbolTableCanon: function {:this pool: zast.StringPool.view st: zenv.ZSymbolTable.view} is {
+    appendSymbolTableCanon: function {
+        :this pool: zast.StringPool.view st: zenv.ZSymbolTable.view
+    } is {
         scopeName: (IdMapR u64 V: String)
-        scopeRows: (List String)
+        scopeRows: List String
         depth: u64
         nd: st.typing.decls.length
         di: u64
         for di < nd loop {
             d: ztypes.declid.create from: di
             di = di + 1
-            if (st.typing.declIsFrame declId: d) when (st.frameHidden.has item: d.u64) == false then {
+            if (st.typing.declIsFrame declId: d) when (
+                (st.frameHidden.has item: d.u64) == false
+            ) then {
                 lbl: frameLabelOf :st frame: d
                 scopeName.set key: d.u64 value: lbl.copy
                 parentNameSql: "NULL".string
@@ -1174,9 +1238,9 @@ ZDumper: class {
         }
         this.emitSection title: "scope" rows: scopeRows
 
-        entryRows: (List String)
-        narrowedRows: (List String)
-        seen: (IdSet u64)
+        entryRows: List String
+        narrowedRows: List String
+        seen: IdSet u64
         for e: st.entryDump.iterate loop {
             so: scopeName.get key: e.scopeId
             match (
@@ -1200,7 +1264,7 @@ ZDumper: class {
                 eline: "\{scNameSql} | \{e.position} | \{enmSql} | \{ztSql} | \{defNum} | \{hasVarNum} | \{takNum}"
                 entryRows.append eline
             } case none then null
-            if (e.narrowedSubtype.isZero) == false then {
+            if e.narrowedSubtype.isZero == false then {
                 nnb8: zast.poolTextAt :pool ref: e.narrowedSubtype
                 nnmSql: sqlStr s: nnb8.stringView
                 narrowedRows.append "\{nnmSql} | 0"
@@ -1219,7 +1283,7 @@ ZDumper: class {
         }
         this.emitSection title: "entry" rows: entryRows
 
-        varRows: (List String)
+        varRows: List String
         for vid: seen.iterate loop {
             vidT: ztypes.vid.create from: vid
             if (st.reg.hasVariable id: vidT) == false then continue
@@ -1241,7 +1305,7 @@ ZDumper: class {
 
     # emit what each call argument's ownership resolved to
     appendArgDispositionCanon: function {:this ast: Ast.view st: zenv.ZSymbolTable.view} is {
-        rows: (List String)
+        rows: List String
         with adit: st.typing.argDisposition.iterateItems do for ad: adit loop {
             an: argAtomName :ast id: ad.key
             if an.length > 0 then {
@@ -1255,7 +1319,7 @@ ZDumper: class {
 
     # emit which type argument each call bound a generic parameter to
     appendCallGenericBindingCanon: function {:this program: Ast.view st: zenv.ZSymbolTable} is {
-        rows: (List String)
+        rows: List String
         with cgit: st.typing.callGenericBinding.iterateItems do for cg: cgit loop {
             hld: (zast.poolTextAt
                 pool: program.names
@@ -1268,7 +1332,6 @@ ZDumper: class {
         }
         this.emitSection title: "call_generic_binding" :rows
     }
-
 }
 
 # walkExprStampsAt -- the id-taking entry: the row view is this frame's, so a
@@ -1278,7 +1341,7 @@ walkExprStampsAt: function {
     ast: Ast.view
     nId: zast.nodeid
     ids: ListVal u64
-    vals: (ListVal u64)
+    vals: ListVal u64
 } out u64 is {
     n: ast.nodes.get i: nId.u64
     return (walkExprStamps :typing :ast :n :ids :vals)
@@ -1486,7 +1549,7 @@ walkExprStampsOptAt: function {
     ast: Ast.view
     oId: zast.nodeid
     ids: ListVal u64
-    vals: (ListVal u64)
+    vals: ListVal u64
 } is {
     if oId.isZero then return
     o: ast.nodes.get i: oId.u64
@@ -1496,8 +1559,8 @@ walkExprStampsOptAt: function {
 # overrideExpressionStamps -- collect the wrapper overrides across every unit,
 # then rewrite nodeType so appendTypedNodes emits the descended values.
 overrideExpressionStamps: function {typing: ztyping.ZTyping program: Ast.view} is {
-    ids: (ListVal u64)
-    vals: (ListVal u64)
+    ids: ListVal u64
+    vals: ListVal u64
     uCnt9d: program.units.length
     uIdx9d: u64
     for uIdx9d < uCnt9d loop {

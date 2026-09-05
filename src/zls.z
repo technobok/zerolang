@@ -374,7 +374,7 @@ sendResult: function {id: Value.take result: Value.take tp: Transport} is {
     o.set key: "jsonrpc".string value: (Value.text "2.0".string)
     o.set key: "id".string value: id
     o.set key: "result".string value: result
-    root: (Value.object o)
+    root: Value.object o
     body: json.serialize v: root
     frameAndSend :body :tp
 }
@@ -388,7 +388,7 @@ sendError: function {id: Value.take code: i64 message: StringView tp: Transport}
     o.set key: "jsonrpc".string value: (Value.text "2.0".string)
     o.set key: "id".string value: id
     o.set key: "error".string value: (Value.object e)
-    root: (Value.object o)
+    root: Value.object o
     body: json.serialize v: root
     frameAndSend :body :tp
 }
@@ -399,7 +399,7 @@ sendNotification: function {method: StringView params: Value.take tp: Transport}
     o.set key: "jsonrpc".string value: (Value.text "2.0".string)
     o.set key: "method".string value: (Value.text method.string)
     o.set key: "params".string value: params
-    root: (Value.object o)
+    root: Value.object o
     body: json.serialize v: root
     frameAndSend :body :tp
 }
@@ -505,7 +505,7 @@ Server: class {
 
     # one byte from the transport, refilling the buffer when it runs dry. none
     # means the connection ended
-    needByte: function {:this} out (optionval u8) is {
+    needByte: function {:this} out optionval u8 is {
         for this.inpos >= this.inbuf.length loop {
             fresh: Bytes
             this.inbuf = fresh
@@ -526,7 +526,7 @@ Server: class {
 
     # one LSP header line, up to its CRLF. none when the connection ended mid-
     # header
-    readHeaderLine: function {:this} out (Option String) is {
+    readHeaderLine: function {:this} out Option String is {
         line: String
         for true loop {
             bo: this.needByte
@@ -558,7 +558,7 @@ Server: class {
 
     # exactly `n` bytes of message body, which Content-Length has already told
     # us to expect
-    readBody: function {:this n: u64} out (Option String) is {
+    readBody: function {:this n: u64} out Option String is {
         body: String
         body.reserve :n
         i: u64
@@ -577,7 +577,7 @@ Server: class {
     }
 
     # readMessage -- one framed JSON-RPC payload; none at end of input.
-    readMessage: function {:this} out (Option String) is {
+    readMessage: function {:this} out Option String is {
         clen: u64
         for true loop {
             lo: this.readHeaderLine
@@ -612,8 +612,7 @@ Server: class {
             mv: mo.stringView
             if mv == "initialize" then {
                 this.handleInitialize :msg
-            } else if mv == "initialized" then {
-            } else if mv == "shutdown" then {
+            } else if mv == "initialized" then null else if mv == "shutdown" then {
                 this.shutdownReq = true
                 idv: idValueOf :msg
                 sendResult id: idv result: Value.nul tp: this.transport
@@ -744,7 +743,7 @@ Server: class {
         res.set key: "capabilities".string value: (Value.object caps)
         res.set key: "serverInfo".string value: (Value.object info)
         idv: idValueOf :msg
-        resv: (Value.object res)
+        resv: Value.object res
         sendResult id: idv result: resv tp: this.transport
         this.initialized = true
     }
@@ -845,7 +844,7 @@ Server: class {
             p: newObj
             p.set key: "uri".string value: (Value.text uo.copy)
             p.set key: "diagnostics".string value: (Value.array empty)
-            pv: (Value.object p)
+            pv: Value.object p
             (sendNotification
                 method: "textDocument/publishDiagnostics"
                 params: pv
@@ -880,7 +879,7 @@ Server: class {
     # are copied out first: recomputeFor locks `this`, which would conflict
     # with a live iterator over this.dirty.
     flushDirty: function {:this} is {
-        uris: (List String)
+        uris: List String
         with it: this.dirty.iterateItems do for e: it loop uris.append e.key.copy
         fresh: (MapRV String v: bool)
         this.dirty = fresh
@@ -938,8 +937,8 @@ Server: class {
             mainUnit: mu.stringView
             overlays: ov
         )
-        rows: (ListVal zcheck.diagrow)
-        msgs: (List String)
+        rows: ListVal zcheck.diagrow
+        msgs: List String
         zcheck.diagsOf :r :rows :msgs
         this.publishAll :r :rows :msgs mainUnit: mu.stringView mainPath: mp.stringView
         if r.parseOk then {
@@ -954,12 +953,12 @@ Server: class {
         :this
         r: zcheck.CheckResult
         rows: (ListVal zcheck.diagrow).view
-        msgs: (List String)
+        msgs: List String
         mainUnit: StringView
         mainPath: StringView
     } is {
         # resolve each row's provider path once (parallel to rows)
-        paths: (List String)
+        paths: List String
         with rit: rows.iterate do for row: rit loop {
             pp: String
             if row.fsno > 0 then pp = r.vfs.pathfromprovider dentryid: row.fsno
@@ -1018,7 +1017,7 @@ Server: class {
             p: newObj
             p.set key: "uri".string value: (Value.text durl)
             p.set key: "diagnostics".string value: (Value.array arr)
-            pv: (Value.object p)
+            pv: Value.object p
             (sendNotification
                 method: "textDocument/publishDiagnostics"
                 params: pv
@@ -1299,14 +1298,14 @@ rangerow: record {
 # the per-file table of hit-testable spans built for goto-def / hover / references.
 Spans: class {
     # the line/column spans, which is what a position lookup searches
-    rows: (ListVal spanrow)
+    rows: ListVal spanrow
     # the names those rows refer to, kept beside them so a row stays a fixed-
     # size value
-    names: (List String)
+    names: List String
     # node id to its position, for the lookups that go the other way
     pos: (IdMapV u64 v: u64)
     # the byte-offset ranges, which a formatting or a rename edit needs
-    ranges: (ListVal rangerow)
+    ranges: ListVal rangerow
     # the last position recorded, so an append can tell whether it is moving
     # forward
     lastPos: u64
@@ -1463,7 +1462,7 @@ Spans: class {
             # mostly declarations, which every lib/system unit is, therefore
             # read as though navigation were dead. Kind 6 is ranked last in
             # navAnswer so it can only fill an answer, never displace one.
-            if (n.name.isZero) == false then {
+            if n.name.isZero == false then {
                 nmD: zast.nameTextAt :ast ref: n.name
                 # keyed by the OPERATION node, not the arm: the arm carries
                 # the name and the position, the operation carries the
@@ -1713,7 +1712,7 @@ genericParamOwner: function {
                 d: o.typing.decls.get i: gpd.u64
                 par = d.parent
             }
-            if (par.isZero) == false then {
+            if par.isZero == false then {
                 own = declNameText ast: prog st: o declId: par
             }
         } case none then null
@@ -1894,13 +1893,13 @@ displayTypeNameSt: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out Str
     bname: String
     {
         name9v: st.reg.nameOf tid: (ztypes.tid.create from: base.u64)
-            bname = name9v
+        bname = name9v
     }
     if bname.length == 0 then return disp
     unitName: (ztypecheck.unitNameOfTid
         :st
         tid: (ztypes.tid.create from: base.u64)
-)
+    )
     if unitName.length == 0 then return disp
     uv: unitName.stringView
     if uv == "system" then return disp
@@ -2048,7 +2047,7 @@ paramDocs: function {
         }
     }
     if fsno.u64 == 0 then return result
-    paramIds: (ListVal u32)
+    paramIds: ListVal u32
     {
         {
             fd: prog.nodes.get i: fnNid.u64
@@ -2062,8 +2061,8 @@ paramDocs: function {
             }
         }
     }
-    pnms: (List String)
-    plns: (ListVal u32)
+    pnms: List String
+    plns: ListVal u32
     pk: u64
     for pk < paramIds.length loop {
         pid: paramIds.get i: pk
@@ -2156,7 +2155,7 @@ paramLeadDocs: function {
         }
     }
     if fsno.u64 == 0 then return result
-    paramIds: (ListVal u32)
+    paramIds: ListVal u32
     {
         {
             fd: prog.nodes.get i: fnNid.u64
@@ -2170,8 +2169,8 @@ paramLeadDocs: function {
             }
         }
     }
-    pnms: (List String)
-    plns: (ListVal u32)
+    pnms: List String
+    plns: ListVal u32
     pk: u64
     for pk < paramIds.length loop {
         pid: paramIds.get i: pk
@@ -2240,20 +2239,23 @@ fnSigTextOpt: function {
         o
     ) case some then {
         isFn: false
-        if (o.reg.typetypeOf typeId: (ztypes.tid.create from: tid.u64)) == ztypes.ztypetype.functionType then isFn = true
-        if (isFn) == false then return "".string
+        if (
+            (o.reg.typetypeOf typeId: (ztypes.tid.create from: tid.u64)) ==
+            ztypes.ztypetype.functionType
+        ) then isFn = true
+        if isFn == false then return "".string
         # the declared parameters, skipping the receiver; type names resolve
         # afterwards (the name read takes a lock on `o`)
-        pnames: (List String)
-        ptids: (ListVal u64)
-        pnids: (ListVal u64)
+        pnames: List String
+        ptids: ListVal u64
+        pnids: ListVal u64
         {
             userParams :prog :o :tid names: pnames tids: ptids nameIds: pnids
         }
         # render each param display string once the member list is collected:
         # resolving a member declaration locks `o` exclusively. A defaulted
         # param shows its value; else its type + ownership.
-        pdisp: (List String)
+        pdisp: List String
         pi: u64
         for pi < pnames.length loop {
             pt: ptids.get i: pi
@@ -2261,7 +2263,7 @@ fnSigTextOpt: function {
                 parentTypeId: (ztypes.tid.create from: tid.u64)
                 nameId: (zast.nameid.create from: (pnids.get i: pi).u32.orPanic)
             )
-            hasDef: (dv.none) == false
+            hasDef: dv.none == false
             ptn: displayTypeNameSt st: o tid: (ztypes.tid.create from: pt.u64)
             ps: (pnames.get i: pi).copy
             ps.append ": "
@@ -2324,8 +2326,8 @@ fnSigTextOpt: function {
             if ((o.typing.funcReturnsFrozen.get key: tid).or d: false) then rets.append ".hold"
         }
         # one line, or param-per-line (zl fmt >100-col style) when too long.
-        pdocs: (List String)
-        pleads: (List String)
+        pdocs: List String
+        pleads: List String
         hasDocs: false
         pdi: u64
         for pdi < pnames.length loop {
@@ -2419,14 +2421,14 @@ fnParamDisplays: function {
     prog: Ast.view
     o: (Option zenv.ZSymbolTable).view
     tid: ztypes.tid
-} out (List String) is {
-    result: (List String)
+} out List String is {
+    result: List String
     match (
         o
     ) case some then {
-        pnames: (List String)
-        ptids: (ListVal u64)
-        pnids: (ListVal u64)
+        pnames: List String
+        ptids: ListVal u64
+        pnids: ListVal u64
         {
             userParams :prog :o :tid names: pnames tids: ptids nameIds: pnids
         }
@@ -2437,7 +2439,7 @@ fnParamDisplays: function {
                 parentTypeId: (ztypes.tid.create from: tid.u64)
                 nameId: (zast.nameid.create from: (pnids.get i: pi).u32.orPanic)
             )
-            hasDef: (dv.none) == false
+            hasDef: dv.none == false
             ptn: displayTypeNameSt st: o tid: (ztypes.tid.create from: pt.u64)
             ps: (pnames.get i: pi).copy
             ps.append ": "
@@ -2617,7 +2619,7 @@ defNodeOf: function {
     refOwner: u64
     member: StringView
 } out u64 is {
-    if (refVid.isZero) == false then return (varDefNode :o vid: refVid)
+    if refVid.isZero == false then return (varDefNode :o vid: refVid)
     if refTid > 0 then return (defNodeInfo
         :o
         :prog
@@ -2654,7 +2656,7 @@ trailingDocOf: function {vfs: zvfs.ZVfs fsno: zvfs.fsno line1: u32} out String i
             match (
                 b
             ) case some then {
-                if b == 34 then inStr = (inStr == false)
+                if b == 34 then inStr = inStr == false
                 if b == 35 when inStr == false when found == false then {
                     hashAt = i
                     found = true
@@ -2677,7 +2679,7 @@ trailingDocOf: function {vfs: zvfs.ZVfs fsno: zvfs.fsno line1: u32} out String i
 # top-to-bottom by newlines; "" when there is none. Reads through the vfs.
 docBlockAboveOf: function {vfs: zvfs.ZVfs fsno: zvfs.fsno line1: u32} out String is {
     if line1 <= 1 then return "".string
-    acc: (List String)
+    acc: List String
     k: line1
     for k > 1 loop {
         k = k - 1
@@ -2728,8 +2730,8 @@ docCommentForNode: function {snap: zcheck.CheckResult fsno: zvfs.fsno defLine: u
 # unitFsnoByName -- the vfs dentry id of the file for the unit named
 # `name`, or 0 when no such unit file exists.
 unitFsnoByName: function {snap: zcheck.CheckResult name: StringView} out zvfs.fsno is {
-    ids: (ListVal zvfs.fsno)
-    paths: (List String)
+    ids: ListVal zvfs.fsno
+    paths: List String
     snap.vfs.fileTable outIds: ids outPaths: paths
     result: zvfs.fsno
     i: u64
@@ -2903,15 +2905,15 @@ dispositionNote: function {o: (Option zenv.ZSymbolTable).view nid: u64} out Stri
 # `callId` whose callee is `calleeNid`, one "# T = Type" comment per bound
 # generic param (from the callGenericBinding stamp), or "".
 inferredGenericLines: function {
-    o: (Option zenv.ZSymbolTable)
+    o: Option zenv.ZSymbolTable
     prog: Ast.view
     callId: u64
 } out String is {
     match (
         o
     ) case some then {
-        holders: (List String)
-        tids: (ListVal u64)
+        holders: List String
+        tids: ListVal u64
         {
             with git: o.typing.callGenericBinding.iterateItems do for e: git loop {
                 if e.key.call == callId then {
@@ -2989,7 +2991,7 @@ refAnnotation: function {
             r.append orig
         }
         bo: o.reg.variableBorrowOriginOf id: vid
-        if (bo.isZero) == false then {
+        if bo.isZero == false then {
             {
                 r.append ", from "
                 r.append (zast.poolTextAt pool: prog.names ref: bo)
@@ -3038,7 +3040,7 @@ navResolve: function {
     srcDir: StringView
     l1u: u32
     cp1: u32
-} out (optionval navhit) is {
+} out optionval navhit is {
     bestIdx: -1
     bestKind: u8
     nr: sp.rows.length
@@ -3051,7 +3053,9 @@ navResolve: function {
                 pp: snap.vfs.pathfromprovider dentryid: fs
                 if (pathMatches pv: pp.stringView rel: docRel :srcDir) then {
                     shouldTake: bestIdx < 0
-                    if (spanKindRank kind: row.kind) > (spanKindRank kind: bestKind) then shouldTake = true
+                    if (
+                        (spanKindRank kind: row.kind) > (spanKindRank kind: bestKind)
+                    ) then shouldTake = true
                     if shouldTake then {
                         bestIdx = ri.i64.orPanic
                         bestKind = row.kind
@@ -3111,7 +3115,7 @@ navResolve: function {
     # a DECLARATION whose written type is a literal type: the fold rewrote the
     # node's stamp to i64/f64, so the card named the default while the doc
     # beneath it described the literal type. The Decl is the honest answer.
-    if bestKind == 6 when (refDeclId.isZero) == false then {
+    if bestKind == 6 when refDeclId.isZero == false then {
         dt9: declTypeIdOf o: snap.st declId: refDeclId
         if (isLiteralTid o: snap.st tid: dt9) then refTid = dt9
     }
@@ -3253,7 +3257,7 @@ navHoverAnswer: function {
     )
     if body.length == 0 then {
         gc: genericParamHoverCard :snap :hit
-        if (gc.nul) == false then return gc
+        if gc.nul == false then return gc
         tf: hoverTypeFence :snap :hit :hname :t
         if tf.length == 0 then return Value.nul
         body.append tf
@@ -3424,7 +3428,7 @@ navReferencesAnswer: function {
         row2: sp.rows.get i: rj
         n2: row2.nodeid.u64
         add: false
-        if (hit.vid.isZero) == false then {
+        if hit.vid.isZero == false then {
             if row2.kind == 1 then {
                 uvN: useVarId o: snap.st nid: n2
                 if uvN == hit.vid then add = true
@@ -3496,13 +3500,29 @@ navAnswer: function {
     if mode == 2 then return (navHoverAnswer :snap :sp :hit :hname)
     if mode == 1 then {
         return (navDefinitionAnswer
-            :snap :sp :hit :hname
-            :docRel :docUri :srcDir :systemDir :docText :utf32
+            :snap
+            :sp
+            :hit
+            :hname
+            :docRel
+            :docUri
+            :srcDir
+            :systemDir
+            :docText
+            :utf32
         )
     }
     return (navReferencesAnswer
-        :snap :sp :hit :hname
-        :docRel :docUri :srcDir :systemDir :docText :utf32
+        :snap
+        :sp
+        :hit
+        :hname
+        :docRel
+        :docUri
+        :srcDir
+        :systemDir
+        :docText
+        :utf32
     )
 }
 
@@ -3619,7 +3639,7 @@ symbolOf: function {
         rg: newObj
         rg.set key: "start".string value: (Value.object st)
         rg.set key: "end".string value: (Value.object en)
-        rv: (Value.object rg)
+        rv: Value.object rg
         sy: newObj
         sy.set key: "name".string value: (Value.text lb.copy)
         sy.set key: "kind".string value: (Value.intval k)
@@ -3683,7 +3703,7 @@ tcLintInto: function {
     utf32: bool
     prog: Ast.view
     uname: StringView
-    sto: (Option zenv.ZSymbolTable)
+    sto: Option zenv.ZSymbolTable
 } is {
     lo: zsource.defaultOpts
     lo.lineLength = 100
@@ -3911,10 +3931,10 @@ collectTopDefs: function {prog: Ast.view sink: (MapRV String v: u8)} is {
             u9Id: (zast.nodeid.create from: (prog.units.get i: uIdx9z))
             uIdx9z = uIdx9z + 1
             (collectUnitDefs
-            ast: prog
-            wId: u9Id
-            :sink
-        )
+                ast: prog
+                wId: u9Id
+                :sink
+            )
         }
     }
 }
@@ -4167,7 +4187,7 @@ userParams: function {
                 tid: (ztypes.tid.create from: tid.u64)
                 nameId: (zast.nameid.create from: mnid.u32.orPanic)
             ) then isRecv = true
-            if (isRecv) == false then {
+            if isRecv == false then {
                 names.append cn.string
                 tids.append mtid
                 nameIds.append mnid
@@ -4187,10 +4207,12 @@ addTypeMembersIn: function {
 } is {
     # a unit's children are its definitions, not members: addUnitMembers
     # handles those, and declMemberList excludes them by design
-    if (o.reg.typetypeOf typeId: (ztypes.tid.create from: tid.u64)) == ztypes.ztypetype.unitType then return
-    pn8: (List String)
-    pt8: (ListVal u64)
-    pi8: (ListVal u64)
+    if (
+        (o.reg.typetypeOf typeId: (ztypes.tid.create from: tid.u64)) == ztypes.ztypetype.unitType
+    ) then return
+    pn8: List String
+    pt8: ListVal u64
+    pi8: ListVal u64
     userParams :prog :o :tid names: pn8 tids: pt8 nameIds: pi8
     mk8: u64
     mn8: pn8.length
@@ -4202,7 +4224,10 @@ addTypeMembersIn: function {
         }
         if skip8 == false then {
             k: 5.u8
-            if (o.reg.typetypeOf typeId: (ztypes.tid.create from: (pt8.get i: mk8))) == ztypes.ztypetype.functionType then k = 2
+            if (
+                (o.reg.typetypeOf typeId: (ztypes.tid.create from: (pt8.get i: mk8))) ==
+                ztypes.ztypetype.functionType
+            ) then k = 2
             addCand :sink name: cn.stringView kind: k
         }
         mk8 = mk8 + 1
@@ -4468,7 +4493,7 @@ descendUnitType: function {
     prog: Ast
     unitName: StringView
     name: StringView
-    o: (Option zenv.ZSymbolTable)
+    o: Option zenv.ZSymbolTable
 } out u64 is {
     result: u64
     match (
@@ -4480,12 +4505,12 @@ descendUnitType: function {
                 nameId: (zast.poolFind pool: prog.names text: unitName)
             )
             result = (ztypecheck.descendNamed
-        frame: ztypes.declid
+                frame: ztypes.declid
                 st: o
                 ast: prog
                 unitDecl: ud
                 :name
-)
+            )
         }
     } case none then null
     return result
@@ -4722,7 +4747,7 @@ caseArmComplete: function {
         word: ltv.substring from: wb2 to: ws
         if word == "case" then isCaseKw = true
     }
-    if (isCaseKw) == false then return false
+    if isCaseKw == false then return false
     sp: (Spans
         rows: (ListVal spanrow)
         names: (List String)
@@ -4735,7 +4760,7 @@ caseArmComplete: function {
     if caseId == 0 then return false
     # caseexpr subject index + clause ids (scoped: one node view at a time)
     subjIdx: u32
-    clauseIds: (ListVal u64)
+    clauseIds: ListVal u64
     okCase: false
     {
         cnode: prog.nodes.get i: caseId.u64
@@ -4750,7 +4775,7 @@ caseArmComplete: function {
             okCase = true
         }
     }
-    if (okCase) == false then return false
+    if okCase == false then return false
     if subjIdx == 0 then return false
     subjNid: u32
     {
@@ -4759,7 +4784,7 @@ caseArmComplete: function {
     }
     subjTid: nodeTypeAt :o nid: subjNid.u64
     if subjTid == 0 then return false
-    arms: (List String)
+    arms: List String
     gotArms: false
     match (
         o
@@ -4769,8 +4794,8 @@ caseArmComplete: function {
             gotArms = true
         }
     } case none then null
-    if (gotArms) == false then return false
-    used: (List String)
+    if gotArms == false then return false
+    used: List String
     ui: u64
     for ui < clauseIds.length loop {
         clId: clauseIds.get i: ui
@@ -4858,8 +4883,10 @@ leafFuncIdAt: function {
                 fs: zcheck.fsnoFor r: snap nodeid: row.nodeid
                 pp: snap.vfs.pathfromprovider dentryid: fs
                 if (pathMatches pv: pp.stringView rel: docRel :srcDir) then {
-                    shouldTake: (found) == false
-                    if (spanKindRank kind: row.kind) > (spanKindRank kind: bk) then shouldTake = true
+                    shouldTake: found == false
+                    if (
+                        (spanKindRank kind: row.kind) > (spanKindRank kind: bk)
+                    ) then shouldTake = true
                     if shouldTake then {
                         leafNid = row.nodeid
                         bk = row.kind
@@ -4870,7 +4897,7 @@ leafFuncIdAt: function {
         }
         rix = rix + 1
     }
-    if (found) == false then return 0
+    if found == false then return 0
     return (resolveCalleeFuncId :o nid: leafNid.u64)
 }
 
@@ -4919,8 +4946,10 @@ bareCalleeFuncId: function {
                 # identifier text disambiguates
                 nmR: sp.names.get i: rix
                 if nmR.stringView == idTxt then {
-                    shouldTake: (found) == false
-                    if (spanKindRank kind: row.kind) > (spanKindRank kind: bk) then shouldTake = true
+                    shouldTake: found == false
+                    if (
+                        (spanKindRank kind: row.kind) > (spanKindRank kind: bk)
+                    ) then shouldTake = true
                     if shouldTake then {
                         leafNid = row.nodeid
                         bk = row.kind
@@ -4931,7 +4960,7 @@ bareCalleeFuncId: function {
         }
         rix = rix + 1
     }
-    if (found) == false then return 0
+    if found == false then return 0
     return (resolveCalleeFuncId :o nid: leafNid.u64)
 }
 
@@ -4944,13 +4973,13 @@ emitLabels: function {
     o: (Option zenv.ZSymbolTable).view
     prog: Ast.view
     funcId: u64
-    supplied: (List String)
+    supplied: List String
     prefix: StringView
 } out bool is {
     # callee params (skip receiver), collected before any declaration read
-    pnames: (List String)
-    pnids: (ListVal u64)
-    pptids: (ListVal u64)
+    pnames: List String
+    pnids: ListVal u64
+    pptids: ListVal u64
     {
         match (
             o
@@ -5050,7 +5079,7 @@ argLabelComplete: function {
     )
     sp.walkProgram :prog
     callId: sp.innerRangeOfKind curPos: cursorPos kind: 4 slack: 1048576
-    supplied: (List String)
+    supplied: List String
     # a bare function/method name (no label yet) has no call node; on a fresh
     # arg position (empty prefix) resolve the identifier just before the cursor
     # and, when it names a function/method, offer its labels. Gated to the
@@ -5059,14 +5088,14 @@ argLabelComplete: function {
     if prefix.length == 0 then {
         bfid: bareCalleeFuncId :o :ltv :ws :cursorPos :sp
         if bfid > 0 then {
-            empty: (List String)
+            empty: List String
             return (emitLabels :arr :o :prog funcId: bfid supplied: empty :prefix)
         }
     }
     if callId == 0 then return false
     # callable index + supplied argument node ids (scoped: one node view)
     callableIdx: u32
-    argIds: (ListVal u64)
+    argIds: ListVal u64
     okCall: false
     {
         cnode: prog.nodes.get i: callId.u64
@@ -5081,7 +5110,7 @@ argLabelComplete: function {
             okCall = true
         }
     }
-    if (okCall) == false then return false
+    if okCall == false then return false
     if callableIdx == 0 then return false
     # callee function id (callable node -> nodeId -> useUnitDef)
     calNid: u32
@@ -5292,7 +5321,7 @@ signatureHelpAnswer: function {
         ) case some then {
             if db == 46 then isDot = true
         } case none then null
-        if (isDot) == false then break
+        if isDot == false then break
         j = j + 1
         segStart = j
         for j < hlen loop {
@@ -5487,7 +5516,7 @@ completionAnswer: function {
     # an owned copy: the completers below lend the line
     prefix: (ltv.substring from: ps to: cur).string
 
-    if (memberMode) == false then {
+    if memberMode == false then {
         curPos: (l1u.u64 * 1048576) + cp1.u64
         handledCA: (caseArmComplete
             :arr
@@ -5513,7 +5542,7 @@ completionAnswer: function {
         addScopeCompletions :snap :docRel :srcDir :l1u sink: cands
     }
 
-    labels: (List String)
+    labels: List String
     with cit: cands.iterateItems do for ce: cit loop {
         pv: prefix.stringView
         if pv.length == 0 then {
@@ -5608,8 +5637,7 @@ main: function is {
             v: zversion.versionLine tool: "zls"
             print "\{v}\n"
             os.exit code: 0
-        } else if av == "--stdio" then {
-        } else if av == "--replay" then {
+        } else if av == "--stdio" then null else if av == "--replay" then {
             if (i + 1) < n then {
                 i = i + 1
                 replay = (argv.get :i).copy
@@ -5653,7 +5681,7 @@ main: function is {
         exitCode: 0
         inbuf: ib
         inpos: 0
-        transport: (Transport.stdio)
+        transport: Transport.stdio
         debounce: true
         dirty: (MapRV String v: bool)
         snapshots: (Map String V: zcheck.CheckResult)
@@ -5676,7 +5704,7 @@ main: function is {
                 match (
                     ao
                 ) case ok then {
-                    srv.transport = (Transport.tcp ao)
+                    srv.transport = Transport.tcp ao
                     serve :srv
                 } case err then {
                     io.eprintln "zls: accept failed"
@@ -5695,7 +5723,7 @@ main: function is {
         match (
             fo
         ) case ok then {
-            srv.transport = (Transport.replay fo)
+            srv.transport = Transport.replay fo
             srv.debounce = false
             serve :srv
         } case err then {

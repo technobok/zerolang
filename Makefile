@@ -100,9 +100,9 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 # well as the relocated front-end, because they share that directory. What it does NOT
 # reach is examples/ and tests/fixtures/; a rule that must hold there needs its own guard.
 ZLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z tests/unit/*.z
-# FMTSCOPE -- what the zl *formatter* checks: fmt applies only whitespace/colon fixes (no
-# elide-label issue), so it covers the whole codebase, keeping every .z consistently formatted.
-FMTSCOPE := src/*.z lib/system/*.z lib/system/system/*.z examples/*.z
+# FMTSCOPE -- what the zl *formatter* checks: every unit the printer lays out, the unit
+# tests included; tests/fixtures/ stays as written, since its files are inputs.
+FMTSCOPE := src/*.z lib/system/*.z lib/system/system/*.z examples/*.z tests/unit/*.z
 
 # all -- the default target: build the three tools (compiler, linter/formatter,
 # language server). `make check` / `make test` are the gates; `make build` compiles
@@ -115,15 +115,16 @@ check: style-lint-fast
 
 # Style gate, enforced by the self-hosted `zl` linter/formatter (src/zl.z). style-lint-fast is
 # the fast tier (empty clauses, first-arg elision, for-while, trailing whitespace, final
-# newline, colon and blank-line spacing) plus `zl fmt --check`; it runs in `check`. style-lint
-# adds the typecheck-tier redundant-suffix rule (slower; run pre-push). See docs/zl.pdoc.
+# newline, colon and blank-line spacing) plus `zl format --check`, the printer's layout; it
+# runs in `check`. style-lint adds the typecheck-tier redundant-suffix rule (slower; run
+# pre-push). See docs/zl.pdoc.
 style-lint-fast: bin/zl
 	bin/zl lint $(ZLSCOPE)
-	bin/zl fmt --check $(FMTSCOPE)
+	bin/zl format --check $(FMTSCOPE)
 
 style-lint: bin/zl
 	bin/zl lint --full --src src --system lib/system $(ZLSCOPE)
-	bin/zl fmt --check $(FMTSCOPE)
+	bin/zl format --check $(FMTSCOPE)
 
 # out/ztestrunner -- the self-hosted corpus runner (src/ztestrunner.z), built
 # on demand; test/ci run it with --jobs so per-case pipelines fan out (heavy
