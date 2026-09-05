@@ -2082,6 +2082,140 @@ runSmokeCases: function {r: Runner} is {
     }
 }
 
+# runFmtCases -- the FMT (formatter golden) kind: build the formatter's dump
+# tool with the r.zc under test, lay out every tests/fixtures/fmt_cases/*.z
+# (with the flags its `.args` file names) against its golden under
+# tests/fixtures/fmt_golden, and lay the golden out again, which must give
+# the golden back: a fixture pins the layout and its idempotency at once.
+runFmtCases: function {r: Runner} is {
+    casesDir: "\{r.root.stringView}/tests/fixtures/fmt_cases"
+    goldDir: "\{r.root.stringView}/tests/fixtures/fmt_golden"
+    zfC: "\{r.tmp.stringView}/F_zfmt.c"
+    zfB: "\{r.tmp.stringView}/F_zfmt.bin"
+    # the src column is a colon-joined path list, as a case file spells it
+    srcs: r.unitDir.copy
+    srcs.append ":"
+    srcs.append r.srcDir.stringView
+    built: false
+    zfE: (zcArgv
+        zc: r.zc.stringView
+        ccFwd: r.ccFwd.stringView
+        name: "zfmt_dump"
+        srcdir: srcs.stringView
+        sys: r.sys.stringView
+        outc: zfC.stringView
+    )
+    if (os.spawn
+        argv: zfE
+        cwd: ""
+        outPath: "/dev/null"
+        errPath: "/dev/null"
+        timeoutSecs: 0
+    ) == 0 then {
+        zfG: (withZlink
+            argv: (gccArgv
+                cc: r.cc.stringView
+                ccflags: r.ccflags.stringView
+                bin: zfB.stringView
+                csrc: zfC.stringView
+                asan: false
+            )
+            csrc: zfC.stringView
+        )
+        if (os.spawn
+            argv: zfG
+            cwd: ""
+            outPath: "/dev/null"
+            errPath: "/dev/null"
+            timeoutSecs: 0
+        ) == 0 then built = true
+    }
+    if built == false then {
+        print "FAIL(fmt-build) zfmt_dump"
+        r.fails = r.fails + 1
+        return
+    }
+    dr: io.listDir path: casesDir.stringView
+    match (
+        dr
+    ) case ok then {
+        di: u64
+        for di < dr.length loop {
+            dent: (dr.get i: di)
+            di = di + 1
+            dsfx: dent.stringView.stripSuffix s: ".z"
+            match (
+                dsfx
+            ) case some then {
+                nm: dsfx
+                src: "\{casesDir.stringView}/\{nm}.z"
+                gold: "\{goldDir.stringView}/\{nm}.z"
+                argsFile: "\{casesDir.stringView}/\{nm}.args"
+                if (io.exists path: gold.stringView) == false then {
+                    r.skip = r.skip + 1
+                } else {
+                    (fmtGoldenCase
+                        :r
+                        bin: zfB.stringView
+                        src: src.stringView
+                        gold: gold.stringView
+                        argsFile: argsFile.stringView
+                        name: nm
+                    )
+                }
+            } case none then null
+        }
+    } case err then null
+}
+
+# fmtGoldenCase -- one fmt fixture: the source laid out must match the golden,
+# and the golden laid out must be itself
+fmtGoldenCase: function {
+    r: Runner
+    bin: StringView
+    src: StringView
+    gold: StringView
+    argsFile: StringView
+    name: StringView
+} is {
+    outP: "\{r.tmp.stringView}/F_\{name}.out"
+    fa: binArgv :bin :argsFile
+    fa.append from: src.string
+    rc: (os.spawn
+        argv: fa
+        cwd: ""
+        outPath: outP.stringView
+        errPath: "/dev/null"
+        timeoutSecs: r.timeoutSecs
+    )
+    gC: slurp path: gold
+    oC: slurp path: outP.stringView
+    if rc == 0 when oC.stringView == gC.stringView then {
+        r.passN = r.passN + 1
+    } else {
+        print "FAIL(fmt) \{name}"
+        r.fails = r.fails + 1
+        return
+    }
+    againP: "\{r.tmp.stringView}/F_\{name}.again"
+    ga: binArgv :bin :argsFile
+    ga.append from: gold.string
+    rc2: (os.spawn
+        argv: ga
+        cwd: ""
+        outPath: againP.stringView
+        errPath: "/dev/null"
+        timeoutSecs: r.timeoutSecs
+    )
+    aC: slurp path: againP.stringView
+    if rc2 == 0 when aC.stringView == gC.stringView then {
+        r.passN = r.passN + 1
+    } else {
+        print "FAIL(fmt-idem) \{name}"
+        r.fails = r.fails + 1
+    }
+}
+
 # addSelfhostJob -- one pooled invocation of the sanitized compiler over one
 # unit in one mode. ONE job per (unit, mode) and not one job with two steps,
 # because runJobs reports a job's status as its LAST step's exit and the leak
@@ -2535,6 +2669,7 @@ main: function is {
     runDifferentialCases :r
     runVfsCases :r
     runSmokeCases :r
+    runFmtCases :r
     runSelfhostAsan :r
     runFixpoint :r
     runArchCases :r

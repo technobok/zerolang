@@ -424,6 +424,24 @@ regen-goldens: out/zlexer out/zparser
 	done
 	@echo "regenerated lexer/parser/program goldens via $(BUILDDIR)/zlexer + $(BUILDDIR)/zparser"
 
+# The formatter's dump tool behind the fmt goldens: tests/unit/zfmt_dump.z over
+# src/zfmt.z, src/zfmtcursor.z and src/zdoc.z.
+out/zfmt: bin/zc tests/unit/zfmt_dump.z src/zfmt.z src/zfmtcursor.z src/zdoc.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z)
+	@mkdir -p $(BUILDDIR)
+	bin/zc zfmt_dump --src tests/unit --src src --system lib/system --emit-c $(BUILDDIR)/zfmt.c
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/zfmt $(BUILDDIR)/zfmt.c $(call ZLINKOF,$(BUILDDIR)/zfmt.c) -lm
+
+# Regenerate the fmt goldens from the dump tool; a case's `.args` file names
+# the flags it is laid out with. Always review the resulting diff before
+# committing.
+regen-fmt-goldens: out/zfmt
+	@for f in tests/fixtures/fmt_cases/*.z; do \
+		name=$$(basename $$f .z); args=""; \
+		[ -f tests/fixtures/fmt_cases/$$name.args ] && args=$$(cat tests/fixtures/fmt_cases/$$name.args); \
+		$(BUILDDIR)/zfmt $$f $$args > tests/fixtures/fmt_golden/$$name.z; \
+	done
+	@echo "regenerated fmt goldens via $(BUILDDIR)/zfmt"
+
 # bump-seed -- regenerate the committed seed from a fresh bin/zc. Run only when
 # test-bootstrap reports the seed can no longer build main, or for hygiene.
 bump-seed: bin/zc

@@ -1,0 +1,95 @@
+# zfmt_dump -- the formatter's dump tool: `zfmt_dump <file.z> [--width N]
+# [--collapse] [--raw] [--unchecked]` prints the formatted source to stdout
+# byte-exact; a refused file reports the refusal to stderr and exits 1. Drives
+# the fmt goldens; `--raw` is the cursor's round-trip proof; `--unchecked`
+# prints a layout the reparse gate would refuse, for looking at it.
+
+public: unit {
+    :main
+}
+
+# newline) this is a lossless filter: the output matches the in-place write byte for
+# byte, so `--stdout` and the default writer never diverge.
+writeStdout: function {s: StringView} is {
+    b: Bytes
+    i: u64
+    n: s.length
+    for i < n loop {
+        bo: s.byteAt :i
+        match (
+            bo
+        ) case some then {
+            b.append from: bo
+        } case none then null
+        i = i + 1
+    }
+    bv: ByteView.borrow from: b.listView
+    w: io.stdout
+    wr: w.write from: bv
+    match (
+        wr
+    ) case ok then null case err then null
+}
+
+# report -- the formatted text to stdout, or the refusal to stderr and exit 1
+report: function {res: zfmt.FmtResult path: StringView} is {
+    if res.ok then {
+        writeStdout s: res.text.stringView
+    } else {
+        io.eprintln "\{path}:\{res.line}:\{res.col}: \{res.msg}"
+        os.exit code: 1
+    }
+}
+
+main: function is {
+    argv: os.args
+    n: argv.length
+    if n < 2 then {
+        io.eprintln "usage: zfmt_dump <file.z> [--width N] [--collapse] [--raw] [--unchecked]"
+        os.exit code: 2
+    }
+    path: String
+    width: 100.u32
+    collapse: false
+    raw: false
+    gate: true
+    i: 1.u64
+    for i < n loop {
+        a: argv.get :i
+        av: a.stringView
+        if av == "--width" then {
+            i = i + 1
+            if i < n then {
+                wv: (argv.get :i).stringView.parseU64
+                match (
+                    wv
+                ) case ok then {
+                    width = wv.u32.orPanic
+                } case err then {
+                    io.eprintln "zfmt_dump: --width needs a number"
+                    os.exit code: 2
+                }
+            }
+        } else if av == "--collapse" then {
+            collapse = true
+        } else if av == "--raw" then {
+            raw = true
+        } else if av == "--unchecked" then {
+            gate = false
+        } else {
+            path = a.copy
+        }
+        i = i + 1
+    }
+    r: io.readText path: path.stringView
+    match (
+        r
+    ) case ok then {
+        src: r.take
+        res: zfmt.formatSource source: src.stringView :width :collapse :raw :gate
+        report :res path: path.stringView
+    } case err then {
+        io.eprintln "zfmt_dump: could not read \{path}"
+        os.exit code: 1
+    }
+}

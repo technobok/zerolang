@@ -122,6 +122,10 @@ Printer: class {
     # whether any text ran past the width, which is what a bestFitting
     # measurement asks of a variant
     overflow: bool
+    # whether a group breaking to fit counts as overflow: a bestFitting
+    # variant is measured strictly, so a rung is chosen only when it holds
+    # without folding anything inside it
+    strict: bool
     # the commands still to print, the next on top
     cmds: (ListVal cmd)
     # the lineSuffix children held back for the next newline
@@ -171,6 +175,7 @@ newPrinter: function {
         :pendingIndent
         :indentCols
         overflow: false
+        strict: false
         cmds: (ListVal cmd)
         suffixes: (ListVal cmd)
     )
@@ -199,6 +204,11 @@ Doc: class {
         id: this.rows.length
         this.rows.append row
         return id.u32.orPanic
+    }
+
+    # breaksAt -- whether row `id` holds a forced break
+    breaksAt: function {:this id: u32} out bool is {
+        return (this.rows.get i: id.u64).breaks
     }
 
     # text -- the source bytes [lo, hi), which must hold no newline
@@ -493,6 +503,7 @@ printGroup: function {d: Doc.view p: Printer c: cmd row: docrow} is {
         p.cmds.append next
         return
     }
+    if (row.breaks) == false when p.strict then p.overflow = true
     p.cmds.append (cmd ind: c.ind mode: modeBreak id: row.child off: 0)
 }
 
@@ -642,6 +653,7 @@ variantFits: function {d: Doc.view p: Printer ind: u32 id: u32} out bool is {
         pendingIndent: p.pendingIndent
         indentCols: p.indentCols
     )
+    sub.strict = true
     sub.cmds.append (cmd :ind mode: modeBreak :id off: 0)
     printLoop :d p: sub
     if sub.overflow then return false

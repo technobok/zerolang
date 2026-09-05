@@ -1,0 +1,2294 @@
+# zfmt -- the formatter: a syntax tree walked in lockstep with its token
+# stream, building a zdoc document that the printer lays out. The parser is
+# untouched; what the tree does not record (parentheses, clause order, the
+# spelling of `is native`, comments, blank lines) is read from the cursor as
+# the walk passes it. Every token of the source is consumed exactly once, a
+# mismatch refuses the file, and the printed result is reparsed and compared
+# with the input tree before it is handed back.
+#
+# In RAW mode the walk copies every byte it passes instead of laying it out,
+# which round-trips the source exactly when the walk is complete: that is the
+# cursor's own proof, run over the whole codebase.
+
+# Public interface -- the definitions other units may reference; all
+# other top-level definitions are private to this unit.
+public: unit {
+    :FmtResult
+    :formatSource
+}
+
+# where a value sits, which decides whether its parentheses are layout
+# (removable, re-inserted when the value breaks) or part of the meaning
+slotStatement: 1.u8
+
+# the right-hand side of a binding in a code block
+slotRhs: 2.u8
+
+# an `if`/`when`/`while` condition, a `for` leading condition, a `match` subject
+slotCond: 3.u8
+
+# an operand of a binop other than the leftmost
+slotOperand: 4.u8
+
+# the leftmost operand of a left-deep chain
+slotLeft: 5.u8
+
+# the leftmost operand when another operand of the chain is parenthesised
+slotLeftSym: 6.u8
+
+# a call argument's value
+slotArg: 7.u8
+
+# the parent of a dotted path
+slotPathParent: 8.u8
+
+# a parameter or result type
+slotType: 9.u8
+
+# an object field's value
+slotField: 10.u8
+
+# a position whose parentheses are never touched
+slotKeep: 11.u8
+
+# the outcome of formatting one source: the text, or why it was refused
+FmtResult: class {
+    # whether `text` holds the formatted source
+    ok: bool
+    # the formatted source when ok
+    text: String
+    # why the file was refused, when not ok
+    msg: String
+    # the line the refusal points at, 0 when none
+    line: u32
+    # the column the refusal points at
+    col: u32
+}
+
+# what a gap of trivia contributed, as document ids
+gapdocs: record {
+    # a lineSuffix for a comment on the previous token's line, 0 when none
+    trailing: u32
+    # the own-line comments, each followed by a hardline; 0 when none
+    lead: u32
+    # the same comments with hardlines only between them, for a gap that
+    # ends at a closing delimiter; 0 when none
+    dangling: u32
+    # blank lines the author left before the next token, after the policy
+    blanks: u32
+    # whether the gap opens with a newline
+    marker: bool
+    # whether the gap holds any comment
+    hasComment: bool
+}
+
+# a builder over one source: the tree, the token cursor and the document
+Builder: class {
+    # the tree being printed
+    ast: zast.Ast
+    # the document being built, which owns a copy of the source
+    d: zdoc.Doc
+    # the token cursor, in lockstep with the walk
+    c: zfmtcursor.Cursor
+    # whether the author's "keep expanded" newline markers are honoured
+    keepMarkers: bool
+    # whether the walk copies bytes instead of laying them out
+    raw: bool
+    # the bytes copied so far in raw mode
+    rawOut: String
+    # the raw token index up to which bytes were copied
+    rawNext: u64
+    # the shared " " text row
+    idSpace: u32
+    # the shared "(" text row
+    idOpen: u32
+    # the shared ")" text row
+    idClose: u32
+    # the shared ": " text row
+    idColonSpace: u32
+    # the shared "null" text row
+    idNull: u32
+    # the shared line row
+    idLine: u32
+    # the shared softline row
+    idSoft: u32
+    # the shared hardline row
+    idHard: u32
+    # the shared breakParent row
+    idBreak: u32
+} as {
+    # a builder over `source`, parsed and scanned
+    create: function {source: StringView keepMarkers: bool raw: bool} out this is {
+        ast: ast.parseSource source: source.string
+        # the scan interns into a pool of its own, which the cursor keeps: a
+        # token's text is compared with a tree name by its bytes
+        scanPool: zast.StringPool.create
+        toks: tokenize.scan source: source.string pool: scanPool
+        c: zfmtcursor.Cursor.create :toks pool: scanPool :source
+        d: zdoc.Doc.create source: source.string
+        idSpace: d.lex " "
+        idOpen: d.lex "("
+        idClose: d.lex ")"
+        idColonSpace: d.lex ": "
+        idNull: d.lex "null"
+        idLine: d.line
+        idSoft: d.softline
+        idHard: d.hardline
+        idBreak: d.breakParent
+        return (meta.create
+            :ast
+            :d
+            :c
+            :keepMarkers
+            :raw
+            rawOut: String
+            rawNext: 0
+            :idSpace
+            :idOpen
+            :idClose
+            :idColonSpace
+            :idNull
+            :idLine
+            :idSoft
+            :idHard
+            :idBreak
+        )
+    }
+
+    # node -- the row of node `id`
+    node: function {:this id: zast.nodeid} out zast.astnode is {
+        return (this.ast.nodes.get i: id.u64)
+    }
+
+    # kid -- the i-th child id a span names
+    kid: function {:this span: zast.kidspan i: u64} out zast.nodeid is {
+        return (zast.nodeid.create from: (zast.kidAt kids: this.ast.kids :span :i))
+    }
+
+    # rawCopy -- in raw mode, the bytes from the last copied token through
+    # token `k`
+    rawCopy: function {:this k: u64} is {
+        if (this.raw) == false then return
+        if k >= this.c.count then return
+        lo: this.c.rawLo k: this.rawNext
+        hi: this.c.rawHi :k
+        if hi > lo then this.rawOut.append (this.d.source.substring from: lo to: hi)
+        this.rawNext = k + 1
+    }
+
+    # tok -- the next significant token, which must be `tt`, as a text row
+    tok: function {:this tt: zlexer.toktype} out u32 is {
+        k: this.c.expect :tt
+        if k >= this.c.count then return 0
+        this.rawCopy :k
+        return (this.d.text lo: (this.c.rawLo :k) hi: (this.c.rawHi :k))
+    }
+
+    # skipTok -- the next significant token, which must be `tt`, consumed
+    # with no row: a parenthesis the layout re-inserts on its own
+    skipTok: function {:this tt: zlexer.toktype} is {
+        k: this.c.expect :tt
+        this.rawCopy :k
+    }
+
+    # tokLabel -- a `label:` pair as `label: ` (the colon spaced), whose text
+    # must be `name`
+    tokLabel: function {:this name: zast.nameid} out u32 is {
+        xs: (ListVal u32)
+        k: this.c.expect tt: zlexer.toktype.labelTok
+        if k < this.c.count then {
+            same: true
+            {
+                nm: zast.nameTextAt ast: this.ast ref: name
+                same = this.c.textEq :k s: nm.stringView
+            }
+            if (same) == false then this.c.note msg: "label does not name the definition".string
+            this.rawCopy :k
+            xs.append (this.d.text lo: (this.c.rawLo :k) hi: (this.c.rawHi :k))
+        }
+        this.skipTok tt: zlexer.toktype.colonTok
+        xs.append this.idColonSpace
+        return (this.d.concat xs)
+    }
+
+    # tokShorthand -- a `:name` pair, whose name must be `name`
+    tokShorthand: function {:this name: zast.nameid} out u32 is {
+        xs: (ListVal u32)
+        xs.append (this.tok tt: zlexer.toktype.colonTok)
+        k: this.c.expect tt: zlexer.toktype.labelPreTok
+        if k < this.c.count then {
+            same: true
+            {
+                nm: zast.nameTextAt ast: this.ast ref: name
+                same = this.c.textEq :k s: nm.stringView
+            }
+            if (same) == false then this.c.note msg: "shorthand does not name the definition".string
+            this.rawCopy :k
+            xs.append (this.d.text lo: (this.c.rawLo :k) hi: (this.c.rawHi :k))
+        }
+        return (this.d.concat xs)
+    }
+
+    # peekIs -- whether the next significant token is `tt`
+    peekIs: function {:this tt: zlexer.toktype} out bool is {
+        return this.c.peekKind == tt
+    }
+
+    # peekIsNull -- whether the next significant token is the name `null`
+    peekIsNull: function {:this} out bool is {
+        if (this.peekIs tt: zlexer.toktype.refIdTok) == false then return false
+        return (this.c.peekTextIs s: "null")
+    }
+
+    # commentText -- comment token `k` as a text row, its trailing spaces
+    # dropped
+    commentText: function {:this k: u64} out u32 is {
+        lo: this.c.rawLo :k
+        hi: this.c.rawHi :k
+        {
+            sv: this.d.source.stringView
+            for hi > lo loop {
+                b: (sv.byteAt i: hi - 1).or d: 0
+                if b != 32 when b != 9 then break
+                hi = hi - 1
+            }
+        }
+        return (this.d.text :lo :hi)
+    }
+
+    # trailingText -- comment token `k` with the author's spaces before it,
+    # as one text row for a lineSuffix
+    trailingText: function {:this k: u64} out u32 is {
+        lo: this.c.rawLo :k
+        if k > 0 when (this.c.rawKind k: k - 1) == zlexer.toktype.wsTok then lo = this.c.rawLo k: k - 1
+        hi: this.c.rawHi :k
+        {
+            sv: this.d.source.stringView
+            for hi > lo loop {
+                b: (sv.byteAt i: hi - 1).or d: 0
+                if b != 32 when b != 9 then break
+                hi = hi - 1
+            }
+        }
+        return (this.d.text :lo :hi)
+    }
+
+    # gapDocs -- the trivia before the next significant token, placed: a
+    # comment on the previous token's line becomes a lineSuffix, own-line
+    # comments become lines of their own, blank lines are counted against
+    # `cap`. `marker` reads the newline that opens the gap
+    gapDocs: function {:this cap: u32} out gapdocs is {
+        info: this.c.gap
+        return (this.placeGap :info :cap)
+    }
+
+    # placeGap -- gapDocs over a gap already read from the cursor
+    placeGap: function {:this info: zfmtcursor.gapinfo cap: u32} out gapdocs is {
+        g: (gapdocs
+            trailing: 0
+            lead: 0
+            dangling: 0
+            blanks: 0
+            marker: info.newlineFirst
+            hasComment: info.count > 0
+        )
+        if info.count == 0 then {
+            if info.eolsEnd > 1 then g.blanks = capped n: info.eolsEnd - 1 :cap
+            return g
+        }
+        j: u32
+        lead: (ListVal u32)
+        dang: (ListVal u32)
+        for j < info.count loop {
+            k: this.c.commentAt :info :j
+            eols: this.c.commentEols :info :j
+            if j == 0 when info.trailing then {
+                ts: (ListVal u32)
+                ts.append (this.d.lineSuffix (this.trailingText :k))
+                ts.append this.idBreak
+                g.trailing = this.d.concat ts
+            } else {
+                blanks: u32
+                if eols > 1 then blanks = capped n: eols - 1 :cap
+                if j == 0 then {
+                    g.blanks = blanks
+                } else {
+                    dang.append this.idHard
+                    b: u32
+                    for b < blanks loop {
+                        lead.append this.idHard
+                        dang.append this.idHard
+                        b = b + 1
+                    }
+                }
+                ct: this.commentText :k
+                lead.append ct
+                lead.append this.idHard
+                dang.append ct
+                if info.eolsEnd > 1 when j + 1 == info.count then {
+                    e: u32
+                    ex: capped n: info.eolsEnd - 1 :cap
+                    for e < ex loop {
+                        lead.append this.idHard
+                        e = e + 1
+                    }
+                }
+            }
+            j = j + 1
+        }
+        if lead.length > 0 then g.lead = this.d.concat lead
+        if dang.length > 0 then g.dangling = this.d.concat dang
+        return g
+    }
+
+    # appendBlanks -- `n` extra newlines, which the printer writes bare
+    appendBlanks: function {:this xs: (ListVal u32) n: u32} is {
+        i: u32
+        for i < n loop {
+            xs.append this.idHard
+            i = i + 1
+        }
+    }
+
+    # ---- the unit ----
+
+    # formatUnit -- the whole source as one document: the root unit's body
+    formatUnit: function {:this} out u32 is {
+        rootId: this.ast.root
+        units: this.ast.units
+        if units.length == 0 then return 0
+        un: this.node id: (zast.nodeid.create from: (units.get i: 0))
+        xs: (ListVal u32)
+        match (
+            un
+        ) case namedoperation then {
+            ud: this.node id: un.operation
+            match (
+                ud
+            ) case unitdef then {
+                this.visitItems :xs span: ud.body topLevel: true
+            } else null
+        } else null
+        rootId
+        # the trivia after the last definition: comments kept, blanks dropped
+        g: this.gapDocs cap: 2
+        if g.trailing > 0 then xs.append g.trailing
+        if g.dangling > 0 then {
+            xs.append this.idHard
+            this.appendBlanks :xs n: g.blanks
+            xs.append g.dangling
+        }
+        if (this.raw) == false then {
+            if (this.c.atEof) == false then this.c.note msg: "tokens remain after the last definition".string
+        }
+        # every file ends with exactly one newline
+        xs.append this.idHard
+        return (this.d.concat xs)
+    }
+
+    # visitItems -- the `name: value` / `:name` items of a unit body or an
+    # object body, one per line, with the blank-line policy between them
+    visitItems: function {:this xs: (ListVal u32) span: zast.kidspan topLevel: bool} is {
+        cap: 1.u32
+        if topLevel then cap = 2
+        i: u64
+        prevMulti: false
+        for i < span.count.u64 loop {
+            itemId: this.kid :span :i
+            i = i + 1
+            g: this.gapDocs :cap
+            if g.trailing > 0 then xs.append g.trailing
+            first: i == 1
+            blanks: g.blanks
+            # a definition after a multi-line one, or one carrying a doc
+            # block, gets a blank line even when the author left none
+            if (first) == false when topLevel when prevMulti when blanks == 0 then blanks = 1
+            if (first) == false when topLevel when g.lead > 0 when blanks == 0 then blanks = 1
+            if (first) == false then xs.append this.idHard
+            if (first) == false then this.appendBlanks :xs n: blanks
+            if first when g.lead > 0 when blanks > 0 when topLevel == false then (this.appendBlanks
+                :xs
+                n: blanks
+            )
+            if g.lead > 0 then xs.append g.lead
+            startLine: this.c.rawLine k: this.c.peekIndex
+            xs.append (this.visitItem id: itemId)
+            endLine: this.c.rawLine k: this.c.prev
+            prevMulti = endLine > startLine
+        }
+    }
+
+    # visitItem -- one `name: value` or `:name` item
+    visitItem: function {:this id: zast.nodeid} out u32 is {
+        n: this.node :id
+        match (
+            n
+        ) case namedoperation then {
+            op: this.node id: n.operation
+            match (
+                op
+            ) case labelvalue then {
+                return (this.tokShorthand name: n.name)
+            } else null
+            xs: (ListVal u32)
+            xs.append (this.tokLabel name: n.name)
+            xs.append (this.visitDefinition id: n.operation)
+            return (this.d.concat xs)
+        } case error then {
+            this.c.note msg: "the tree holds a parse error".string
+            return 0
+        } else {
+            this.c.note msg: "an item that is not a definition".string
+            return 0
+        }
+    }
+
+    # visitDefinition -- the value of a definition: a function, a type, a
+    # unit, or a bare operation
+    visitDefinition: function {:this id: zast.nodeid} out u32 is {
+        n: this.node :id
+        match (
+            n
+        ) case functiondef then {
+            return (this.visitFunction :id)
+        } case objectdef then {
+            return (this.visitObject :id)
+        } case unitdef then {
+            return (this.visitUnit :id)
+        } else {
+            return (this.visitValue :id slot: slotField wrapped: false)
+        }
+    }
+
+    # ---- values ----
+
+    # visitValue -- any value node, by its arm, starting a fresh parenthesis
+    # budget at the cursor
+    visitValue: function {:this id: zast.nodeid slot: u8 wrapped: bool} out u32 is {
+        return (this.visitValueB :id :slot :wrapped remaining: 0 owned: 0)
+    }
+
+    # spineCount -- the expression wrappers on the first-child spine from `id`
+    # down (the node included): a parenthesis at the cursor belongs to one of
+    # them, the innermost first
+    spineCount: function {:this id: zast.nodeid} out u32 is {
+        k: u32
+        cur: id
+        for (cur.isZero) == false loop {
+            n: this.node id: cur
+            match (
+                n
+            ) case expression then {
+                k = k + 1
+                cur = n.expression
+            } case binop then {
+                cur = n.lhs
+            } case call then {
+                cur = n.callable
+            } case dottedpath then {
+                cur = n.parent
+            } case reassignment then {
+                cur = n.topath
+            } case swapstmt then {
+                cur = n.lhs
+            } else {
+                break
+            }
+        }
+        return k
+    }
+
+    # outerIsBare -- whether the value at the cursor, below the `synthetic`
+    # wrappers its context always adds, opens with no parenthesis of its own:
+    # the node there is not a wrapper, or is one the parentheses at the cursor
+    # do not reach
+    outerIsBare: function {:this id: zast.nodeid synthetic: u32} out bool is {
+        k: this.spineCount :id
+        p: this.c.parenRun
+        cur: id
+        d: u32
+        for d < synthetic loop {
+            n: this.node id: cur
+            match (
+                n
+            ) case expression then {
+                cur = n.expression
+            } else {
+                return true
+            }
+            d = d + 1
+        }
+        n: this.node id: cur
+        if (n.expression) == false then return true
+        return p < (k - synthetic)
+    }
+
+    # visitValueB -- visitValue with the parenthesis budget of an enclosing
+    # chain: `remaining` wrappers lie on the spine from here, and the innermost
+    # `owned` of them own a `(` each
+    visitValueB: function {:this id: zast.nodeid slot: u8 wrapped: bool remaining: u32 owned: u32} out u32 is {
+        n: this.node :id
+        match (
+            n
+        ) case expression then {
+            return (this.visitExprChain :id :slot :wrapped :remaining :owned)
+        } case binop then {
+            return (this.visitBinop :id :wrapped :remaining :owned)
+        } case call then {
+            return (this.visitCall :id inParens: false :remaining :owned)
+        } case dottedpath then {
+            return (this.visitPath :id :remaining :owned)
+        } case atomid then {
+            return (this.tok tt: zlexer.toktype.refIdTok)
+        } case labelvalue then {
+            return (this.tokShorthand name: n.name)
+        } case atomstring then {
+            return (this.visitString :id)
+        } case ifexpr then {
+            return (this.visitIf :id)
+        } case forexpr then {
+            return (this.visitFor :id)
+        } case caseexpr then {
+            return (this.visitMatch :id)
+        } case doexpr then {
+            return (this.visitBlock id: n.statement)
+        } case withexpr then {
+            return (this.visitWith :id)
+        } case datablock then {
+            return (this.visitData :id)
+        } case reassignment then {
+            return (this.visitReassign :id :remaining :owned)
+        } case swapstmt then {
+            return (this.visitSwap :id :remaining :owned)
+        } case functiondef then {
+            return (this.visitFunction :id)
+        } case error then {
+            this.c.note msg: "the tree holds a parse error".string
+            return 0
+        } else {
+            this.c.note msg: "a value the formatter does not print".string
+            return 0
+        }
+    }
+
+    # innerOf -- the node below every expression wrapper
+    innerOf: function {:this id: zast.nodeid} out zast.nodeid is {
+        cur: id
+        for true loop {
+            n: this.node id: cur
+            match (
+                n
+            ) case expression then {
+                cur = n.expression
+            } else {
+                return cur
+            }
+        }
+        return cur
+    }
+
+    # isTerm -- an atom, a path, a string or a shorthand
+    isTerm: function {:this id: zast.nodeid} out bool is {
+        n: this.node id: (this.innerOf :id)
+        match (
+            n
+        ) case atomid then {
+            return true
+        } case dottedpath then {
+            return true
+        } case atomstring then {
+            return true
+        } case labelvalue then {
+            return true
+        } else {
+            return false
+        }
+    }
+
+    # isBinop -- a binop below its wrappers
+    isBinop: function {:this id: zast.nodeid} out bool is {
+        n: this.node id: (this.innerOf :id)
+        return n.binop
+    }
+
+    # isApplication -- a call whose only argument is unnamed and a term
+    # (`List u64`), the shape that may lose its parentheses
+    isApplication: function {:this id: zast.nodeid} out bool is {
+        n: this.node id: (this.innerOf :id)
+        match (
+            n
+        ) case call then {
+            if n.arguments.count != 1 then return false
+            a: this.node id: (this.kid span: n.arguments i: 0)
+            match (
+                a
+            ) case namedoperation then {
+                if (a.name.isZero) == false then return false
+                return (this.isTerm id: a.operation)
+            } else {
+                return false
+            }
+        } else {
+            return false
+        }
+    }
+
+    # isLabelledCall -- a call with a named argument
+    isLabelledCall: function {:this id: zast.nodeid} out bool is {
+        n: this.node id: (this.innerOf :id)
+        match (
+            n
+        ) case call then {
+            i: u64
+            for i < n.arguments.count.u64 loop {
+                a: this.node id: (this.kid span: n.arguments :i)
+                i = i + 1
+                match (
+                    a
+                ) case namedoperation then {
+                    if (a.name.isZero) == false then return true
+                } else null
+            }
+            return false
+        } else {
+            return false
+        }
+    }
+
+    # parenIsLayout -- whether the parentheses around `inner` in `slot` are
+    # layout only, re-inserted by the printer when the value breaks
+    parenIsLayout: function {:this inner: zast.nodeid slot: u8} out bool is {
+        term: this.isTerm id: inner
+        if slot == slotCond then {
+            if term then return true
+            return (this.isBinop id: inner)
+        }
+        if slot == slotStatement then return term
+        if slot == slotRhs then {
+            if term then return true
+            if (this.isBinop id: inner) then return true
+            return (this.isApplication id: inner)
+        }
+        if slot == slotLeft then {
+            if term then return true
+            return (this.isBinop id: inner)
+        }
+        if slot == slotOperand then return term
+        if slot == slotArg then return term
+        if slot == slotType then return (this.isApplication id: inner)
+        if slot == slotField then return (this.isApplication id: inner)
+        return false
+    }
+
+    # visitExprChain -- an expression wrapper: with no budget yet, the spine
+    # below it is counted and the parentheses at the cursor are given to the
+    # innermost wrappers
+    visitExprChain: function {:this id: zast.nodeid slot: u8 wrapped: bool remaining: u32 owned: u32} out u32 is {
+        rem: remaining
+        own: owned
+        if rem == 0 then {
+            rem = this.spineCount :id
+            own = this.c.parenRun
+            if own > rem then {
+                this.c.note msg: "more parentheses than the tree holds".string
+                own = rem
+            }
+        }
+        return (this.visitWrapper :id remaining: rem owned: own :slot :wrapped)
+    }
+
+    # visitWrapper -- one wrapper of a chain: it owns a `(` when it is among
+    # the innermost `owned` of the `remaining` wrappers on the spine
+    visitWrapper: function {:this id: zast.nodeid remaining: u32 owned: u32 slot: u8 wrapped: bool} out u32 is {
+        n: this.node :id
+        inner: zast.nodeid
+        match (
+            n
+        ) case expression then {
+            inner = n.expression
+        } else {
+            return (this.visitValueB :id :slot :wrapped :remaining :owned)
+        }
+        if owned < remaining then {
+            # a wrapper the parser made: nothing to consume
+            return (this.visitValueB id: inner :slot :wrapped remaining: remaining - 1 :owned)
+        }
+        layout: this.parenIsLayout :inner :slot
+        innerNode: this.node id: inner
+        isCall: innerNode.call
+        if layout when isCall then {
+            # a call fills the pair the printer inserts when it breaks, so the
+            # written pair is dropped
+            this.skipTok tt: zlexer.toktype.parenOpenTok
+            g: this.gapDocs cap: 0
+            body: this.visitCall id: inner inParens: false remaining: remaining - 1 owned: owned - 1
+            h: this.gapDocs cap: 0
+            this.skipTok tt: zlexer.toktype.parenCloseTok
+            return (this.withComments :body before: g after: h)
+        }
+        this.skipTok tt: zlexer.toktype.parenOpenTok
+        g: this.gapDocs cap: 0
+        body: u32
+        if isCall then {
+            body = this.visitCall id: inner inParens: true remaining: remaining - 1 owned: owned - 1
+        } else {
+            body = (this.visitValueB
+                id: inner
+                :slot
+                wrapped: true
+                remaining: remaining - 1
+                owned: owned - 1
+            )
+        }
+        h: this.gapDocs cap: 0
+        this.skipTok tt: zlexer.toktype.parenCloseTok
+        if isCall then {
+            return (this.parenGroup
+                :body
+                open: this.idOpen
+                close: this.idClose
+                marker: g.marker
+                before: g
+                after: h
+                callShape: true
+            )
+        }
+        if layout then {
+            return (this.parenGroup
+                :body
+                open: (this.d.ifBreak brk: this.idOpen flat: 0)
+                close: (this.d.ifBreak brk: this.idClose flat: 0)
+                marker: g.marker
+                before: g
+                after: h
+                callShape: false
+            )
+        }
+        return (this.parenGroup
+            :body
+            open: this.idOpen
+            close: this.idClose
+            marker: g.marker
+            before: g
+            after: h
+            callShape: false
+        )
+    }
+
+    # parenGroup -- `open body close` as a group that breaks inside: the body
+    # one step in, the closer on its own line; a call-shaped body already
+    # carries its own indent
+    parenGroup: function {:this body: u32 open: u32 close: u32 marker: bool before: gapdocs after: gapdocs callShape: bool} out u32 is {
+        xs: (ListVal u32)
+        xs.append open
+        if marker when this.keepMarkers then xs.append this.idBreak
+        if before.trailing > 0 then xs.append before.trailing
+        if callShape then {
+            xs.append body
+        } else {
+            mid: (ListVal u32)
+            mid.append this.idSoft
+            if before.lead > 0 then mid.append before.lead
+            mid.append body
+            if after.trailing > 0 then mid.append after.trailing
+            if after.dangling > 0 then {
+                mid.append this.idHard
+                mid.append after.dangling
+            }
+            xs.append (this.d.indent (this.d.concat mid))
+        }
+        if callShape when after.trailing > 0 then xs.append after.trailing
+        if callShape when after.dangling > 0 then {
+            dg: (ListVal u32)
+            dg.append this.idHard
+            dg.append after.dangling
+            xs.append (this.d.indent (this.d.concat dg))
+        }
+        xs.append this.idSoft
+        xs.append close
+        return (this.d.group (this.d.concat xs))
+    }
+
+    # withComments -- `body` with a gap's comments around it, for a place that
+    # has no delimiters of its own to hang them on
+    withComments: function {:this body: u32 before: gapdocs after: gapdocs} out u32 is {
+        if before.trailing == 0 when before.lead == 0 when after.trailing == 0 when after.lead == 0 then return body
+        xs: (ListVal u32)
+        if before.trailing > 0 then xs.append before.trailing
+        if before.lead > 0 then {
+            xs.append this.idHard
+            xs.append before.lead
+        }
+        xs.append body
+        if after.trailing > 0 then xs.append after.trailing
+        if after.dangling > 0 then {
+            xs.append this.idHard
+            xs.append after.dangling
+        }
+        return (this.d.concat xs)
+    }
+
+    # visitBinop -- a left-deep chain flattened: operands with their trailing
+    # operators, one operand per line when the enclosing parens break; bare
+    # (unwrapped) the chain never breaks. The leftmost operand continues the
+    # parenthesis budget of the chain; its own parentheses are redundant only
+    # when every operator inside and outside them is the same one
+    visitBinop: function {:this id: zast.nodeid wrapped: bool remaining: u32 owned: u32} out u32 is {
+        operands: (ListVal u32)
+        operators: (ListVal u32)
+        cur: id
+        for true loop {
+            n: this.node id: cur
+            match (
+                n
+            ) case binop then {
+                operands.append n.rhs.u32
+                operators.append n.operator.u32
+                cur = n.lhs
+            } else {
+                operands.append cur.u32
+                break
+            }
+        }
+        leftId: zast.nodeid.create from: (operands.get i: operands.length - 1)
+        leftSlot: slotLeft
+        if (this.isBinop id: leftId) then {
+            if (this.sameOperators :operators inner: leftId) == false then leftSlot = slotLeftSym
+            j: u64
+            for j + 1 < operands.length loop {
+                oid: zast.nodeid.create from: (operands.get i: j)
+                opnode: this.node id: oid
+                if opnode.expression when (this.isBinop id: oid) then leftSlot = slotLeftSym
+                j = j + 1
+            }
+        }
+        xs: (ListVal u32)
+        idx: operands.length
+        first: true
+        for idx > 0 loop {
+            idx = idx - 1
+            oid: zast.nodeid.create from: (operands.get i: idx)
+            if first then {
+                xs.append (this.visitValueB id: oid slot: leftSlot wrapped: false :remaining :owned)
+            } else {
+                xs.append this.idSpace
+                xs.append (this.visitValue
+                    id: (zast.nodeid.create from: (operators.get i: idx))
+                    slot: slotKeep
+                    wrapped: false
+                )
+                if wrapped then {
+                    xs.append this.idLine
+                } else {
+                    xs.append this.idSpace
+                }
+                xs.append (this.visitValue id: oid slot: slotOperand wrapped: false)
+            }
+            first = false
+        }
+        # a wrapped chain is a group of its own: it stays on one line when it
+        # fits, and breaks at its operators only when it does not
+        if wrapped then return (this.d.group (this.d.concat xs))
+        return (this.d.concat xs)
+    }
+
+    # isAssociative -- one of the operators a left-deep chain may spell without
+    # inner parentheses
+    isAssociative: function {:this name: zast.nameid} out bool is {
+        if (zast.nameTextEq ast: this.ast ref: name s: "+") then return true
+        if (zast.nameTextEq ast: this.ast ref: name s: "*") then return true
+        if (zast.nameTextEq ast: this.ast ref: name s: "&") then return true
+        if (zast.nameTextEq ast: this.ast ref: name s: "|") then return true
+        return false
+    }
+
+    # sameOperators -- whether every operator of a chain and every operator
+    # of the parenthesised chain `inner` at its left spell the same name
+    sameOperators: function {:this operators: (ListVal u32) inner: zast.nodeid} out bool is {
+        want: zast.nameid
+        i: u64
+        for i < operators.length loop {
+            opn: this.node id: (zast.nodeid.create from: (operators.get :i))
+            i = i + 1
+            match (
+                opn
+            ) case atomid then {
+                if want.isZero then want = opn.name
+                if opn.name != want then return false
+            } else {
+                return false
+            }
+        }
+        # only an associative operator makes the grouping redundant: a
+        # comparison chain reads as a mistake without its parentheses
+        if (this.isAssociative name: want) == false then return false
+        cur: this.innerOf id: inner
+        for true loop {
+            n: this.node id: cur
+            match (
+                n
+            ) case binop then {
+                opn: this.node id: n.operator
+                match (
+                    opn
+                ) case atomid then {
+                    if opn.name != want then return false
+                } else {
+                    return false
+                }
+                cur = this.innerOf id: n.lhs
+            } else {
+                break
+            }
+        }
+        return true
+    }
+
+    # visitCall -- a callable and its arguments: flat when they fit, else one
+    # argument per line inside parentheses the printer inserts when the call
+    # is bare (`inParens` says the caller supplies them). A newline after the
+    # callable is the author's keep-open marker. A last argument that breaks
+    # on its own (an expanded construction, a block) is hugged: the call stays
+    # on its line and the argument breaks inside its own delimiters. The
+    # callable continues the parenthesis budget of the chain
+    visitCall: function {:this id: zast.nodeid inParens: bool remaining: u32 owned: u32} out u32 is {
+        n: this.node :id
+        callable: u32
+        args: (ListVal u32)
+        trails: (ListVal u32)
+        forced: false
+        match (
+            n
+        ) case call then {
+            callable = (this.visitValueB
+                id: n.callable
+                slot: slotKeep
+                wrapped: false
+                :remaining
+                :owned
+            )
+            i: u64
+            for i < n.arguments.count.u64 loop {
+                aid: this.kid span: n.arguments :i
+                i = i + 1
+                a: this.node id: aid
+                match (
+                    a
+                ) case namedoperation then {
+                    g: this.gapDocs cap: 0
+                    if i == 1 when g.marker when this.keepMarkers then forced = true
+                    if g.hasComment then forced = true
+                    trails.append g.trailing
+                    one: (ListVal u32)
+                    if g.lead > 0 then one.append g.lead
+                    if a.name.isZero then {
+                        one.append (this.visitValue id: a.operation slot: slotArg wrapped: false)
+                    } else {
+                        op: this.node id: a.operation
+                        match (
+                            op
+                        ) case labelvalue then {
+                            one.append (this.tokShorthand name: a.name)
+                        } else {
+                            one.append (this.tokLabel name: a.name)
+                            one.append (this.visitValue
+                                id: a.operation
+                                slot: slotArg
+                                wrapped: false
+                            )
+                        }
+                    }
+                    args.append (this.d.concat one)
+                } else null
+            }
+        } else null
+        if args.length == 0 then return callable
+        # a lone unnamed term (`print "x"`, `List u8`) gains nothing from a
+        # wrap: the pair would hold what it holds now
+        if args.length == 1 when (this.soleTermArg :n) then {
+            xs: (ListVal u32)
+            xs.append callable
+            t0: trails.get i: 0
+            if t0 > 0 then xs.append t0
+            xs.append this.idSpace
+            xs.append (args.get i: 0)
+            return (this.d.concat xs)
+        }
+        # hug the last argument when it alone carries a forced break
+        hug: (forced) == false
+        ai: u64
+        for ai < args.length loop {
+            if (this.d.breaksAt id: (args.get i: ai)) then {
+                if ai + 1 < args.length then hug = false
+            } else if ai + 1 == args.length then hug = false
+            ai = ai + 1
+        }
+        if hug then {
+            xs: (ListVal u32)
+            xs.append callable
+            aj: u64
+            for aj < args.length loop {
+                t: trails.get i: aj
+                if t > 0 then xs.append t
+                xs.append this.idSpace
+                xs.append (args.get i: aj)
+                aj = aj + 1
+            }
+            return (this.d.concat xs)
+        }
+        body: (ListVal u32)
+        body.append callable
+        inner: (ListVal u32)
+        ak: u64
+        for ak < args.length loop {
+            t: trails.get i: ak
+            if t > 0 then inner.append t
+            inner.append this.idLine
+            inner.append (args.get i: ak)
+            ak = ak + 1
+        }
+        if forced then inner.append this.idBreak
+        body.append (this.d.indent (this.d.concat inner))
+        # inside written parentheses the call is a group of its own, so it
+        # stays flat when it fits however the parentheses break
+        if inParens then return (this.d.group (this.d.concat body))
+        outer: (ListVal u32)
+        outer.append (this.d.ifBreak brk: this.idOpen flat: 0)
+        outer.append (this.d.concat body)
+        outer.append this.idSoft
+        outer.append (this.d.ifBreak brk: this.idClose flat: 0)
+        return (this.d.group (this.d.concat outer))
+    }
+
+    # soleTermArg -- whether the call's one argument is unnamed and a term
+    soleTermArg: function {:this n: zast.astnode} out bool is {
+        match (
+            n
+        ) case call then {
+            if n.arguments.count != 1 then return false
+            a: this.node id: (this.kid span: n.arguments i: 0)
+            match (
+                a
+            ) case namedoperation then {
+                if (a.name.isZero) == false then return false
+                return (this.isTerm id: a.operation)
+            } else {
+                return false
+            }
+        } else {
+            return false
+        }
+    }
+
+    # visitPath -- `parent.child`, never broken
+    visitPath: function {:this id: zast.nodeid remaining: u32 owned: u32} out u32 is {
+        n: this.node :id
+        xs: (ListVal u32)
+        match (
+            n
+        ) case dottedpath then {
+            xs.append (this.visitValueB
+                id: n.parent
+                slot: slotPathParent
+                wrapped: false
+                :remaining
+                :owned
+            )
+            xs.append (this.tok tt: zlexer.toktype.dotTok)
+            xs.append (this.tok tt: zlexer.toktype.refIdTok)
+        } else null
+        return (this.d.concat xs)
+    }
+
+    # visitString -- a string literal walked token by token: chunks and
+    # escapes as text, each hole's expression through the tree; a literal
+    # holding a newline is printed verbatim
+    visitString: function {:this id: zast.nodeid} out u32 is {
+        n: this.node :id
+        parts: (zast.kidspan first: 0 count: 0)
+        match (
+            n
+        ) case atomstring then {
+            parts = n.stringparts
+        } else null
+        begK: this.c.expect tt: zlexer.toktype.strBegTok
+        if begK >= this.c.count then return 0
+        this.rawCopy k: begK
+        xs: (ListVal u32)
+        xs.append (this.d.text lo: (this.c.rawLo k: begK) hi: (this.c.rawHi k: begK))
+        multi: false
+        partIdx: u64
+        endK: begK
+        for true loop {
+            if this.c.failed then break
+            kind: this.c.rawKind k: this.c.i
+            if kind == zlexer.toktype.strEndTok then {
+                endK = this.c.takeRaw
+                this.rawCopy k: endK
+                xs.append (this.d.text lo: (this.c.rawLo k: endK) hi: (this.c.rawHi k: endK))
+                break
+            }
+            if kind == zlexer.toktype.eofTok then {
+                this.c.note msg: "unterminated string literal".string
+                break
+            }
+            if kind == zlexer.toktype.strExprBegTok then {
+                bk: this.c.takeRaw
+                this.rawCopy k: bk
+                xs.append (this.d.text lo: (this.c.rawLo k: bk) hi: (this.c.rawHi k: bk))
+                xs.append (this.tok tt: zlexer.toktype.braceOpenTok)
+                hole: this.holePart :parts from: partIdx
+                partIdx = hole + 1
+                if hole < parts.count.u64 then {
+                    xs.append (this.visitValue
+                        id: (this.kid span: parts i: hole)
+                        slot: slotKeep
+                        wrapped: false
+                    )
+                }
+                xs.append (this.tok tt: zlexer.toktype.braceCloseTok)
+                continue
+            }
+            ck: this.c.takeRaw
+            this.rawCopy k: ck
+            if kind == zlexer.toktype.eolTok then multi = true
+            xs.append (this.d.text lo: (this.c.rawLo k: ck) hi: (this.c.rawHi k: ck))
+        }
+        if multi then {
+            lo: this.c.rawLo k: begK
+            hi: this.c.rawHi k: endK
+            return (this.d.verbatim :lo :hi origIndent: 0 shift: false)
+        }
+        return (this.d.concat xs)
+    }
+
+    # holePart -- the index of the next interpolation expression among the
+    # string parts from `from` on; the count when there is none
+    holePart: function {:this parts: zast.kidspan from: u64} out u64 is {
+        i: from
+        for i < parts.count.u64 loop {
+            p: this.node id: (this.kid span: parts :i)
+            if p.expression then return i
+            i = i + 1
+        }
+        return parts.count.u64
+    }
+
+    # visitReassign -- `path = value`
+    visitReassign: function {:this id: zast.nodeid remaining: u32 owned: u32} out u32 is {
+        n: this.node :id
+        xs: (ListVal u32)
+        match (
+            n
+        ) case reassignment then {
+            xs.append (this.visitValueB
+                id: n.topath
+                slot: slotKeep
+                wrapped: false
+                :remaining
+                :owned
+            )
+            xs.append this.idSpace
+            xs.append (this.tok tt: zlexer.toktype.equalsTok)
+            xs.append this.idSpace
+            xs.append (this.rhsValue id: n.value)
+        } else null
+        return (this.d.concat xs)
+    }
+
+    # visitSwap -- `path swap path`
+    visitSwap: function {:this id: zast.nodeid remaining: u32 owned: u32} out u32 is {
+        n: this.node :id
+        xs: (ListVal u32)
+        match (
+            n
+        ) case swapstmt then {
+            xs.append (this.visitValueB id: n.lhs slot: slotKeep wrapped: false :remaining :owned)
+            xs.append this.idSpace
+            xs.append (this.tok tt: zlexer.toktype.swapTok)
+            xs.append this.idSpace
+            xs.append (this.visitValue id: n.rhs slot: slotKeep wrapped: false)
+        } else null
+        return (this.d.concat xs)
+    }
+
+    # wrappedValue -- a value whose context adds `synthetic` wrappers: bare,
+    # a binop gets parentheses the printer inserts only when it breaks; a
+    # call carries its own; anything else prints as it is
+    wrappedValue: function {:this id: zast.nodeid slot: u8 synthetic: u32} out u32 is {
+        inner: this.innerOf :id
+        bare: this.outerIsBare :id :synthetic
+        if bare when (this.isBinop id: inner) then {
+            body: this.visitValue :id :slot wrapped: true
+            empty: (gapdocs
+                trailing: 0
+                lead: 0
+                dangling: 0
+                blanks: 0
+                marker: false
+                hasComment: false
+            )
+            return (this.parenGroup
+                :body
+                open: (this.d.ifBreak brk: this.idOpen flat: 0)
+                close: (this.d.ifBreak brk: this.idClose flat: 0)
+                marker: false
+                before: empty
+                after: empty
+                callShape: false
+            )
+        }
+        return (this.visitValue :id :slot wrapped: false)
+    }
+
+    # rhsValue -- the value of a binding or a reassignment
+    rhsValue: function {:this id: zast.nodeid} out u32 is {
+        return (this.wrappedValue :id slot: slotRhs synthetic: 1)
+    }
+
+    # condValue -- a condition, which its context never wraps
+    condValue: function {:this id: zast.nodeid} out u32 is {
+        return (this.wrappedValue :id slot: slotCond synthetic: 0)
+    }
+
+    # ---- statements ----
+
+    # visitBlock -- `{ statements }`: one statement written on one line may
+    # stay so; two or more are one per line; a block written across lines
+    # stays across lines
+    visitBlock: function {:this id: zast.nodeid} out u32 is {
+        n: this.node :id
+        stmts: (zast.kidspan first: 0 count: 0)
+        match (
+            n
+        ) case statement then {
+            stmts = n.statements
+        } else null
+        openK: this.c.peekIndex
+        openLine: this.c.rawLine k: openK
+        xs: (ListVal u32)
+        xs.append (this.tok tt: zlexer.toktype.braceOpenTok)
+        inner: (ListVal u32)
+        count: stmts.count.u64
+        i: u64
+        forced: false
+        for i < count loop {
+            sid: this.kid span: stmts :i
+            g: this.gapDocs cap: 1
+            if g.trailing > 0 then inner.append g.trailing
+            if i == 0 then {
+                inner.append this.idLine
+            } else {
+                inner.append this.idHard
+                this.appendBlanks xs: inner n: g.blanks
+            }
+            if g.lead > 0 then {
+                if i == 0 then forced = true
+                inner.append g.lead
+            }
+            inner.append (this.visitStatement id: sid)
+            i = i + 1
+        }
+        g: this.gapDocs cap: 1
+        if g.trailing > 0 then inner.append g.trailing
+        if g.dangling > 0 then {
+            inner.append this.idHard
+            this.appendBlanks xs: inner n: g.blanks
+            inner.append g.dangling
+            forced = true
+        }
+        closeK: this.c.peekIndex
+        closeLine: this.c.rawLine k: closeK
+        if count > 1 then forced = true
+        if closeLine > openLine then forced = true
+        if inner.length > 0 then {
+            xs.append (this.d.indent (this.d.concat inner))
+            xs.append this.idLine
+        }
+        if forced then xs.append this.idBreak
+        xs.append (this.tok tt: zlexer.toktype.braceCloseTok)
+        return (this.d.group (this.d.concat xs))
+    }
+
+    # visitStatement -- one statement line: a binding, or a value
+    visitStatement: function {:this id: zast.nodeid} out u32 is {
+        n: this.node :id
+        match (
+            n
+        ) case statementline then {
+            inner: this.node id: n.statementline
+            match (
+                inner
+            ) case assignment then {
+                return (this.visitAssignment id: n.statementline)
+            } else {
+                return (this.visitValue id: n.statementline slot: slotStatement wrapped: false)
+            }
+        } case assignment then {
+            return (this.visitAssignment :id)
+        } else {
+            return (this.visitValue :id slot: slotStatement wrapped: false)
+        }
+    }
+
+    # visitAssignment -- `name: value` or `:name`
+    visitAssignment: function {:this id: zast.nodeid} out u32 is {
+        n: this.node :id
+        match (
+            n
+        ) case assignment then {
+            v: this.node id: n.value
+            match (
+                v
+            ) case labelvalue then {
+                return (this.tokShorthand name: n.name)
+            } else null
+            xs: (ListVal u32)
+            xs.append (this.tokLabel name: n.name)
+            xs.append (this.rhsValue id: n.value)
+            return (this.d.concat xs)
+        } else {
+            return 0
+        }
+    }
+
+    # visitBody -- a clause body: `null`, `{}` (printed `null` when `clause`,
+    # which a loop body is not), a block, or a bare statement
+    visitBody: function {:this id: zast.nodeid clause: bool} out u32 is {
+        n: this.node :id
+        count: u64
+        match (
+            n
+        ) case statement then {
+            count = n.statements.count.u64
+        } else null
+        if this.peekIsNull then {
+            this.skipTok tt: zlexer.toktype.refIdTok
+            return this.idNull
+        }
+        if (this.peekIs tt: zlexer.toktype.braceOpenTok) then {
+            if count == 0 when clause then {
+                # `{}` with nothing inside prints as `null`; a comment inside
+                # keeps the braces
+                openK: this.c.peekIndex
+                k: openK + 1
+                onlyWs: true
+                for (this.c.rawKind :k) != zlexer.toktype.braceCloseTok loop {
+                    kk: this.c.rawKind :k
+                    if kk == zlexer.toktype.commentTok then onlyWs = false
+                    if kk == zlexer.toktype.eofTok then break
+                    k = k + 1
+                }
+                if onlyWs then {
+                    this.skipTok tt: zlexer.toktype.braceOpenTok
+                    this.skipTok tt: zlexer.toktype.braceCloseTok
+                    return this.idNull
+                }
+            }
+            return (this.visitBlock :id)
+        }
+        # a bare body: the one statement
+        match (
+            n
+        ) case statement then {
+            if count == 1 then return (this.visitStatement id: (this.kid span: n.statements i: 0))
+        } else null
+        this.c.note msg: "a clause body the formatter does not print".string
+        return 0
+    }
+
+    # ---- control flow ----
+
+    # visitIf -- `if` conditions `then` body, `when` chains, `else`
+    visitIf: function {:this id: zast.nodeid} out u32 is {
+        n: this.node :id
+        xs: (ListVal u32)
+        match (
+            n
+        ) case ifexpr then {
+            xs.append (this.tok tt: zlexer.toktype.ifTok)
+            ci: u64
+            for ci < n.clauses.count.u64 loop {
+                cl: this.node id: (this.kid span: n.clauses i: ci)
+                ci = ci + 1
+                match (
+                    cl
+                ) case ifclause then {
+                    k: u64
+                    for k < cl.conditions.count.u64 loop {
+                        cond: this.node id: (this.kid span: cl.conditions i: k)
+                        k = k + 1
+                        if (this.peekIs tt: zlexer.toktype.whenTok) then {
+                            xs.append this.idSpace
+                            xs.append (this.tok tt: zlexer.toktype.whenTok)
+                        }
+                        xs.append this.idSpace
+                        match (
+                            cond
+                        ) case namedoperation then {
+                            xs.append (this.condValue id: cond.operation)
+                        } else null
+                    }
+                    xs.append this.idSpace
+                    xs.append (this.tok tt: zlexer.toktype.thenTok)
+                    xs.append this.idSpace
+                    xs.append (this.visitBody id: cl.statement clause: true)
+                } else null
+            }
+            if (n.elseclause.isZero) == false then {
+                xs.append this.idSpace
+                xs.append (this.tok tt: zlexer.toktype.elseTok)
+                xs.append this.idSpace
+                xs.append (this.visitElse id: n.elseclause)
+            }
+        } else null
+        return (this.d.concat xs)
+    }
+
+    # visitElse -- an else body: `null`, a block, a bare `if` (`else if`), or a
+    # bare statement
+    visitElse: function {:this id: zast.nodeid} out u32 is {
+        if (this.peekIs tt: zlexer.toktype.ifTok) then {
+            n: this.node :id
+            match (
+                n
+            ) case statement then {
+                if n.statements.count == 1 then return (this.visitStatement id: (this.kid
+                    span: n.statements
+                    i: 0
+                ))
+            } else null
+        }
+        return (this.visitBody :id clause: true)
+    }
+
+    # visitFor -- the loop header in the order it was written, then the body
+    visitFor: function {:this id: zast.nodeid} out u32 is {
+        n: this.node :id
+        xs: (ListVal u32)
+        match (
+            n
+        ) case forexpr then {
+            xs.append (this.tok tt: zlexer.toktype.forTok)
+            ci: u64
+            pi: u64
+            sawBody: false
+            for true loop {
+                if this.c.failed then break
+                kind: this.c.peekKind
+                if kind == zlexer.toktype.whileTok then {
+                    xs.append this.idSpace
+                    xs.append (this.tok tt: zlexer.toktype.whileTok)
+                    xs.append this.idSpace
+                    if sawBody then {
+                        if pi < n.postconditions.count.u64 then {
+                            xs.append (this.condValue id: (this.kid span: n.postconditions i: pi))
+                            pi = pi + 1
+                        }
+                    } else {
+                        xs.append (this.forCondition :n index: ci)
+                        ci = ci + 1
+                    }
+                } else if kind == zlexer.toktype.labelTok when (sawBody) == false when ci < n.conditions.count.u64 then {
+                    xs.append this.idSpace
+                    xs.append (this.forCondition :n index: ci)
+                    ci = ci + 1
+                } else if kind == zlexer.toktype.loopTok then {
+                    xs.append this.idSpace
+                    xs.append (this.tok tt: zlexer.toktype.loopTok)
+                    xs.append this.idSpace
+                    xs.append (this.visitBody id: n.body clause: false)
+                    sawBody = true
+                } else if ci == 0 when (sawBody) == false when n.conditions.count > 0 then {
+                    # the leading condition, spelled without `while`
+                    xs.append this.idSpace
+                    xs.append (this.forCondition :n index: ci)
+                    ci = ci + 1
+                } else {
+                    break
+                }
+            }
+        } else null
+        return (this.d.concat xs)
+    }
+
+    # forCondition -- condition `index` of a loop header: a `label: value`
+    # binding, or a bare condition
+    forCondition: function {:this n: zast.forrow index: u64} out u32 is {
+        if index >= n.conditions.count.u64 then {
+            this.c.note msg: "a loop condition the tree does not hold".string
+            return 0
+        }
+        cond: this.node id: (this.kid span: n.conditions i: index)
+        match (
+            cond
+        ) case namedoperation then {
+            if cond.name.isZero then return (this.condValue id: cond.operation)
+            xs: (ListVal u32)
+            xs.append (this.tokLabel name: cond.name)
+            xs.append (this.visitValue id: cond.operation slot: slotKeep wrapped: false)
+            return (this.d.concat xs)
+        } else {
+            return 0
+        }
+    }
+
+    # visitMatch -- `match [on] subject case arm then body ... else body` as
+    # one group: flat on one line with the subject bare, else the subject in
+    # parentheses on their own lines with the arms aligned under them. A
+    # subject that needs its parentheses keeps them in both shapes
+    visitMatch: function {:this id: zast.nodeid} out u32 is {
+        n: this.node :id
+        xs: (ListVal u32)
+        match (
+            n
+        ) case caseexpr then {
+            xs.append (this.tok tt: zlexer.toktype.matchTok)
+            xs.append this.idSpace
+            if (this.peekIs tt: zlexer.toktype.onTok) then {
+                xs.append (this.tok tt: zlexer.toktype.onTok)
+                xs.append this.idSpace
+            }
+            this.matchSubject :xs id: n.subject
+            ci: u64
+            for ci < n.clauses.count.u64 loop {
+                cl: this.node id: (this.kid span: n.clauses i: ci)
+                ci = ci + 1
+                match (
+                    cl
+                ) case caseclause then {
+                    xs.append this.idSpace
+                    xs.append (this.tok tt: zlexer.toktype.caseTok)
+                    xs.append this.idSpace
+                    xs.append (this.tok tt: zlexer.toktype.refIdTok)
+                    xs.append this.idSpace
+                    xs.append (this.tok tt: zlexer.toktype.thenTok)
+                    xs.append this.idSpace
+                    xs.append (this.visitBody id: cl.statement clause: true)
+                } else null
+            }
+            if (n.elseclause.isZero) == false then {
+                xs.append this.idSpace
+                xs.append (this.tok tt: zlexer.toktype.elseTok)
+                xs.append this.idSpace
+                xs.append (this.visitElse id: n.elseclause)
+            }
+        } else null
+        return (this.d.group (this.d.concat xs))
+    }
+
+    # matchSubject -- the subject's pieces appended to the match group: an
+    # opener, the subject one step in behind a softline, a softline and a
+    # closer. The pair is inserted when the subject is bare or its
+    # parentheses are layout only, and written when it needs them; a call
+    # keeps its callable on the opener's line
+    matchSubject: function {:this xs: (ListVal u32) id: zast.nodeid} is {
+        k: this.spineCount :id
+        p: this.c.parenRun
+        subj: this.node :id
+        if p == 0 then {
+            core: this.visitValue :id slot: slotCond wrapped: true
+            xs.append (this.d.ifBreak brk: this.idOpen flat: 0)
+            mid: (ListVal u32)
+            mid.append this.idSoft
+            mid.append core
+            xs.append (this.d.indent (this.d.concat mid))
+            xs.append this.idSoft
+            xs.append (this.d.ifBreak brk: this.idClose flat: 0)
+            return
+        }
+        inner: zast.nodeid
+        match (
+            subj
+        ) case expression then {
+            inner = subj.expression
+        } else {
+            this.c.note msg: "a parenthesis the tree does not hold".string
+            return
+        }
+        if p > k then {
+            this.c.note msg: "more parentheses than the tree holds".string
+            p = k
+        }
+        layout: this.parenIsLayout :inner slot: slotCond
+        innerNode: this.node id: inner
+        isCall: innerNode.call
+        this.skipTok tt: zlexer.toktype.parenOpenTok
+        g: this.gapDocs cap: 0
+        core: u32
+        if isCall then {
+            core = this.visitCall id: inner inParens: true remaining: k - 1 owned: p - 1
+        } else {
+            core = (this.visitValueB
+                id: inner
+                slot: slotCond
+                wrapped: true
+                remaining: k - 1
+                owned: p - 1
+            )
+        }
+        h: this.gapDocs cap: 0
+        this.skipTok tt: zlexer.toktype.parenCloseTok
+        if layout when (isCall) == false then {
+            xs.append (this.d.ifBreak brk: this.idOpen flat: 0)
+        } else {
+            xs.append this.idOpen
+        }
+        if g.marker when this.keepMarkers then xs.append this.idBreak
+        if g.trailing > 0 then xs.append g.trailing
+        mid: (ListVal u32)
+        mid.append this.idSoft
+        if g.lead > 0 then mid.append g.lead
+        mid.append core
+        if h.trailing > 0 then mid.append h.trailing
+        if h.dangling > 0 then {
+            mid.append this.idHard
+            mid.append h.dangling
+        }
+        xs.append (this.d.indent (this.d.concat mid))
+        xs.append this.idSoft
+        if layout when (isCall) == false then {
+            xs.append (this.d.ifBreak brk: this.idClose flat: 0)
+        } else {
+            xs.append this.idClose
+        }
+    }
+
+    # visitWith -- `with name: value do body`
+    visitWith: function {:this id: zast.nodeid} out u32 is {
+        n: this.node :id
+        xs: (ListVal u32)
+        match (
+            n
+        ) case withexpr then {
+            xs.append (this.tok tt: zlexer.toktype.withTok)
+            xs.append this.idSpace
+            xs.append (this.tokLabel name: n.name)
+            xs.append (this.visitValue id: n.value slot: slotKeep wrapped: false)
+            xs.append this.idSpace
+            xs.append (this.tok tt: zlexer.toktype.doTok)
+            xs.append this.idSpace
+            xs.append (this.visitValue id: n.body slot: slotStatement wrapped: false)
+        } else null
+        return (this.d.concat xs)
+    }
+
+    # visitData -- `data [is] { elements } [out type]`
+    visitData: function {:this id: zast.nodeid} out u32 is {
+        n: this.node :id
+        xs: (ListVal u32)
+        match (
+            n
+        ) case datablock then {
+            xs.append (this.tok tt: zlexer.toktype.dataTok)
+            xs.append this.idSpace
+            if (this.peekIs tt: zlexer.toktype.isTok) then {
+                xs.append (this.tok tt: zlexer.toktype.isTok)
+                xs.append this.idSpace
+            }
+            xs.append (this.visitDelimited span: n.elements kind: 3)
+            if (n.outType.isZero) == false then {
+                xs.append this.idSpace
+                xs.append (this.tok tt: zlexer.toktype.outTok)
+                xs.append this.idSpace
+                xs.append (this.visitValue id: n.outType slot: slotKeep wrapped: false)
+            }
+        } else null
+        return (this.d.concat xs)
+    }
+
+    # ---- definitions ----
+
+    # visitFunction -- `function` and its clauses in the order written
+    visitFunction: function {:this id: zast.nodeid} out u32 is {
+        n: this.node :id
+        xs: (ListVal u32)
+        match (
+            n
+        ) case functiondef then {
+            xs.append (this.tok tt: zlexer.toktype.functionTok)
+            for true loop {
+                if this.c.failed then break
+                kind: this.c.peekKind
+                if kind == zlexer.toktype.braceOpenTok then {
+                    xs.append this.idSpace
+                    xs.append (this.visitParamLadder span: n.parameters)
+                } else if kind == zlexer.toktype.inTok then {
+                    xs.append this.idSpace
+                    xs.append (this.tok tt: zlexer.toktype.inTok)
+                    xs.append this.idSpace
+                    xs.append (this.visitParamLadder span: n.parameters)
+                } else if kind == zlexer.toktype.outTok then {
+                    xs.append this.idSpace
+                    xs.append (this.tok tt: zlexer.toktype.outTok)
+                    xs.append this.idSpace
+                    xs.append (this.visitValue id: n.returntype slot: slotType wrapped: false)
+                } else if kind == zlexer.toktype.outxTok then {
+                    xs.append this.idSpace
+                    xs.append (this.tok tt: zlexer.toktype.outxTok)
+                    xs.append this.idSpace
+                    xs.append (this.visitValue id: n.returntype slot: slotType wrapped: false)
+                } else if kind == zlexer.toktype.isTok then {
+                    xs.append this.idSpace
+                    xs.append (this.tok tt: zlexer.toktype.isTok)
+                    xs.append this.idSpace
+                    if (this.peekIs tt: zlexer.toktype.nativeTok) then {
+                        xs.append (this.tok tt: zlexer.toktype.nativeTok)
+                    } else {
+                        xs.append (this.visitBlock id: n.body)
+                    }
+                } else if kind == zlexer.toktype.asTok then {
+                    xs.append this.idSpace
+                    xs.append (this.tok tt: zlexer.toktype.asTok)
+                    xs.append this.idSpace
+                    xs.append (this.visitDelimited span: n.asItems kind: 2)
+                } else {
+                    break
+                }
+            }
+        } else null
+        return (this.d.concat xs)
+    }
+
+    # visitObject -- a type definition and its clauses in the order written
+    visitObject: function {:this id: zast.nodeid} out u32 is {
+        n: this.node :id
+        xs: (ListVal u32)
+        match (
+            n
+        ) case objectdef then {
+            xs.append (this.tok tt: this.c.peekKind)
+            for true loop {
+                if this.c.failed then break
+                kind: this.c.peekKind
+                if kind == zlexer.toktype.isTok then {
+                    xs.append this.idSpace
+                    xs.append (this.tok tt: zlexer.toktype.isTok)
+                    xs.append this.idSpace
+                    if (this.peekIs tt: zlexer.toktype.nativeTok) then {
+                        xs.append (this.tok tt: zlexer.toktype.nativeTok)
+                    } else {
+                        xs.append (this.visitDelimited span: n.isItems kind: 2)
+                    }
+                } else if kind == zlexer.toktype.braceOpenTok then {
+                    xs.append this.idSpace
+                    xs.append (this.visitDelimited span: n.isItems kind: 2)
+                } else if kind == zlexer.toktype.nativeTok then {
+                    xs.append this.idSpace
+                    xs.append (this.tok tt: zlexer.toktype.nativeTok)
+                } else if kind == zlexer.toktype.asTok then {
+                    xs.append this.idSpace
+                    xs.append (this.tok tt: zlexer.toktype.asTok)
+                    xs.append this.idSpace
+                    xs.append (this.visitDelimited span: n.asItems kind: 2)
+                } else {
+                    break
+                }
+            }
+        } else null
+        return (this.d.concat xs)
+    }
+
+    # visitUnit -- `unit [as] { items }`
+    visitUnit: function {:this id: zast.nodeid} out u32 is {
+        n: this.node :id
+        xs: (ListVal u32)
+        match (
+            n
+        ) case unitdef then {
+            xs.append (this.tok tt: zlexer.toktype.unitTok)
+            xs.append this.idSpace
+            if (this.peekIs tt: zlexer.toktype.asTok) then {
+                xs.append (this.tok tt: zlexer.toktype.asTok)
+                xs.append this.idSpace
+            }
+            xs.append (this.visitDelimited span: n.body kind: 2)
+        } else null
+        return (this.d.concat xs)
+    }
+
+    # visitParamLadder -- a function's `{ params }` as the signature ladder:
+    # on the header line; as one block line one step in; one parameter per
+    # line. Parameters the author spread over lines, a comment, or a
+    # parameter spanning lines force the last rung (a newline after `{`
+    # alone is the second rung's own shape, not a marker)
+    visitParamLadder: function {:this span: zast.kidspan} out u32 is {
+        openTok: this.tok tt: zlexer.toktype.braceOpenTok
+        items: (ListVal u32)
+        trails: (ListVal u32)
+        forced: false
+        prevEnd: u32
+        i: u64
+        for i < span.count.u64 loop {
+            itemId: this.kid :span :i
+            g: this.gapDocs cap: 0
+            if g.hasComment then forced = true
+            trails.append g.trailing
+            one: (ListVal u32)
+            if g.lead > 0 then one.append g.lead
+            startLine: this.c.rawLine k: this.c.peekIndex
+            if i > 0 when startLine > prevEnd when this.keepMarkers then forced = true
+            one.append (this.visitParam id: itemId)
+            endLine: this.c.rawLine k: this.c.prev
+            if endLine > startLine then forced = true
+            prevEnd = endLine
+            items.append (this.d.concat one)
+            i = i + 1
+        }
+        g: this.gapDocs cap: 0
+        if g.hasComment then forced = true
+        tail: (ListVal u32)
+        if g.trailing > 0 then tail.append g.trailing
+        if g.dangling > 0 then {
+            tail.append this.idHard
+            tail.append g.dangling
+        }
+        tailDoc: this.d.concat tail
+        closeTok: this.tok tt: zlexer.toktype.braceCloseTok
+        if items.length == 0 then {
+            xs: (ListVal u32)
+            xs.append openTok
+            if forced then xs.append this.idBreak
+            xs.append tailDoc
+            xs.append closeTok
+            return (this.d.concat xs)
+        }
+        spaced: this.joined :items :trails sep: this.idSpace
+        lined: this.joined :items :trails sep: this.idLine
+        # rung one: on the header line
+        v1: (ListVal u32)
+        v1.append openTok
+        v1.append spaced
+        v1.append tailDoc
+        v1.append closeTok
+        # rung two: the parameters as one line, one step in
+        v2: (ListVal u32)
+        v2.append openTok
+        v2in: (ListVal u32)
+        v2in.append this.idLine
+        v2in.append spaced
+        v2in.append tailDoc
+        v2.append (this.d.indent (this.d.concat v2in))
+        v2.append this.idLine
+        v2.append closeTok
+        # rung three: one parameter per line
+        v3: (ListVal u32)
+        v3.append openTok
+        v3in: (ListVal u32)
+        v3in.append this.idLine
+        v3in.append lined
+        v3in.append tailDoc
+        v3.append (this.d.indent (this.d.concat v3in))
+        v3.append this.idLine
+        if forced then v3.append this.idBreak
+        v3.append closeTok
+        vs: (ListVal u32)
+        vs.append (this.d.concat v1)
+        vs.append (this.d.concat v2)
+        vs.append (this.d.concat v3)
+        return (this.d.bestFitting vs)
+    }
+
+    # joined -- `items` with `sep` between them, each item's trailing comment
+    # (if any) placed before the separator that follows it
+    joined: function {:this items: (ListVal u32) trails: (ListVal u32) sep: u32} out u32 is {
+        xs: (ListVal u32)
+        i: u64
+        for i < items.length loop {
+            if i > 0 then {
+                t: trails.get :i
+                if t > 0 then xs.append t
+                xs.append sep
+            }
+            xs.append (items.get :i)
+            i = i + 1
+        }
+        return (this.d.concat xs)
+    }
+
+    # visitDelimited -- `{ items }` for a parameter block (kind 1), an object
+    # or unit body (kind 2) or a data block (kind 3): flat when written so and
+    # fitting, else one item per line; a newline or comment right after `{`
+    # keeps it open
+    visitDelimited: function {:this span: zast.kidspan kind: u8} out u32 is {
+        xs: (ListVal u32)
+        xs.append (this.tok tt: zlexer.toktype.braceOpenTok)
+        inner: (ListVal u32)
+        forced: false
+        # a data block of bare elements fills its rows, the author's own row
+        # breaks kept; anything else is one item per line when broken
+        filling: false
+        if kind == 3 when span.count > 1 when (this.allUnlabelled :span) then filling = true
+        fillKids: (ListVal u32)
+        prevEnd: u32
+        i: u64
+        for i < span.count.u64 loop {
+            itemId: this.kid :span :i
+            g: this.gapDocs cap: 1
+            if i == 0 when g.marker when this.keepMarkers then forced = true
+            if g.hasComment then forced = true
+            if filling then {
+                if g.trailing > 0 then fillKids.append g.trailing
+                if i == 0 then {
+                    inner.append this.idLine
+                } else {
+                    startLine0: this.c.rawLine k: this.c.peekIndex
+                    if startLine0 > prevEnd then {
+                        fillKids.append this.idHard
+                    } else {
+                        fillKids.append this.idLine
+                    }
+                }
+                if g.lead > 0 then fillKids.append g.lead
+                fillKids.append (this.visitElement id: itemId)
+                prevEnd = this.c.rawLine k: this.c.prev
+                i = i + 1
+                continue
+            }
+            if g.trailing > 0 then inner.append g.trailing
+            if kind == 1 when i == 0 then {
+                inner.append this.idSoft
+            } else {
+                inner.append this.idLine
+            }
+            if i > 0 then this.appendBlanks xs: inner n: g.blanks
+            if g.lead > 0 then inner.append g.lead
+            startLine: this.c.rawLine k: this.c.peekIndex
+            if kind == 3 then {
+                inner.append (this.visitElement id: itemId)
+            } else if kind == 1 then {
+                inner.append (this.visitParam id: itemId)
+            } else {
+                inner.append (this.visitItem id: itemId)
+            }
+            endLine: this.c.rawLine k: this.c.prev
+            if endLine > startLine then forced = true
+            i = i + 1
+        }
+        if filling then inner.append (this.d.fill fillKids)
+        g: this.gapDocs cap: 1
+        if g.hasComment then forced = true
+        if g.trailing > 0 then inner.append g.trailing
+        if g.dangling > 0 then {
+            inner.append this.idHard
+            this.appendBlanks xs: inner n: g.blanks
+            inner.append g.dangling
+        }
+        if span.count == 0 when g.marker when this.keepMarkers then forced = true
+        if inner.length > 0 then {
+            xs.append (this.d.indent (this.d.concat inner))
+            if kind == 1 then {
+                xs.append this.idSoft
+            } else {
+                xs.append this.idLine
+            }
+        }
+        if forced then xs.append this.idBreak
+        xs.append (this.tok tt: zlexer.toktype.braceCloseTok)
+        return (this.d.group (this.d.concat xs))
+    }
+
+    # allUnlabelled -- whether every element of a data block is a bare term
+    allUnlabelled: function {:this span: zast.kidspan} out bool is {
+        i: u64
+        for i < span.count.u64 loop {
+            e: this.node id: (this.kid :span :i)
+            i = i + 1
+            match (
+                e
+            ) case namedoperation then {
+                if (e.name.isZero) == false then return false
+            } else {
+                return false
+            }
+        }
+        return true
+    }
+
+    # visitParam -- `name: type` or `:name`
+    visitParam: function {:this id: zast.nodeid} out u32 is {
+        n: this.node :id
+        match (
+            n
+        ) case namedoperation then {
+            op: this.node id: n.operation
+            match (
+                op
+            ) case labelvalue then {
+                return (this.tokShorthand name: n.name)
+            } else null
+            xs: (ListVal u32)
+            xs.append (this.tokLabel name: n.name)
+            xs.append (this.visitValue id: n.operation slot: slotType wrapped: false)
+            return (this.d.concat xs)
+        } else {
+            this.c.note msg: "a parameter the formatter does not print".string
+            return 0
+        }
+    }
+
+    # visitElement -- a data element: `term`, `name: term` or `:name`
+    visitElement: function {:this id: zast.nodeid} out u32 is {
+        n: this.node :id
+        match (
+            n
+        ) case namedoperation then {
+            op: this.node id: n.operation
+            match (
+                op
+            ) case labelvalue then {
+                return (this.tokShorthand name: n.name)
+            } else null
+            if n.name.isZero then return (this.visitValue
+                id: n.operation
+                slot: slotKeep
+                wrapped: false
+            )
+            xs: (ListVal u32)
+            xs.append (this.tokLabel name: n.name)
+            xs.append (this.visitValue id: n.operation slot: slotKeep wrapped: false)
+            return (this.d.concat xs)
+        } else {
+            this.c.note msg: "a data element the formatter does not print".string
+            return 0
+        }
+    }
+}
+
+# capped -- `n` no higher than `cap`
+capped: function {n: u32 cap: u32} out u32 is {
+    if n > cap then return cap
+    return n
+}
+
+# firstError -- the first parse error node in the tree, as its id; zero when
+# the tree is clean
+firstError: function {ast: zast.Ast.view} out zast.nodeid is {
+    i: 1.u64
+    n: ast.nodes.length
+    for i < n loop {
+        node: ast.nodes.get :i
+        if node.error then return (zast.nodeid.create from: i.u32.orPanic)
+        i = i + 1
+    }
+    return zast.nodeid
+}
+
+# treesEqual -- whether two nodes print the same program: the same arm, the
+# same names and flags, and the same children pairwise, expression wrappers
+# ignored on both sides
+treesEqual: function {
+    a: zast.Ast.view
+    ida: zast.nodeid
+    b: zast.Ast.view
+    idb: zast.nodeid
+} out bool is {
+    na: unwrapped ast: a id: ida
+    nb: unwrapped ast: b id: idb
+    xa: a.nodes.get i: na.u64
+    xb: b.nodes.get i: nb.u64
+    if (zast.armName n: xa) != (zast.armName n: xb) then return false
+    if (sameFacts :a :xa :b :xb) == false then return false
+    ka: zast.childIds ast: a n: xa
+    kb: zast.childIds ast: b n: xb
+    if ka.length != kb.length then return false
+    i: u64
+    for i < ka.length loop {
+        ca: zast.nodeid.create from: (ka.get :i)
+        cb: zast.nodeid.create from: (kb.get :i)
+        i = i + 1
+        if ca.isZero when cb.isZero then continue
+        if ca.isZero then return false
+        if cb.isZero then return false
+        if (treesEqual :a ida: ca :b idb: cb) == false then return false
+    }
+    return true
+}
+
+# unwrapped -- `id` below every expression wrapper
+unwrapped: function {ast: zast.Ast.view id: zast.nodeid} out zast.nodeid is {
+    cur: id
+    for (cur.isZero) == false loop {
+        n: ast.nodes.get i: cur.u64
+        match (
+            n
+        ) case expression then {
+            cur = n.expression
+        } else {
+            return cur
+        }
+    }
+    return cur
+}
+
+# sameFacts -- the per-arm facts a child walk does not cover: names by text,
+# string chunks, and the flags a definition carries
+sameFacts: function {
+    a: zast.Ast.view
+    xa: zast.astnode.view
+    b: zast.Ast.view
+    xb: zast.astnode.view
+} out bool is {
+    match (
+        xa
+    ) case atomid then {
+        return (sameName :a ra: xa.name :b :xb)
+    } case labelvalue then {
+        return (sameName :a ra: xa.name :b :xb)
+    } case namedoperation then {
+        return (sameName :a ra: xa.name :b :xb)
+    } case assignment then {
+        return (sameName :a ra: xa.name :b :xb)
+    } case withexpr then {
+        return (sameName :a ra: xa.name :b :xb)
+    } case caseclause then {
+        return (sameName :a ra: xa.name :b :xb)
+    } case stringchunk then {
+        match (
+            xb
+        ) case stringchunk then {
+            if xa.chunkKind != xb.chunkKind then return false
+            ta: zast.nameTextAt ast: a ref: xa.text
+            return (zast.nameTextEq ast: b ref: xb.text s: ta.stringView)
+        } else {
+            return false
+        }
+    } case functiondef then {
+        match (
+            xb
+        ) case functiondef then {
+            if xa.isNative != xb.isNative then return false
+            return xa.pins == xb.pins
+        } else {
+            return false
+        }
+    } case objectdef then {
+        match (
+            xb
+        ) case objectdef then {
+            if xa.isNative != xb.isNative then return false
+            return xa.kind == xb.kind
+        } else {
+            return false
+        }
+    } case unitdef then {
+        match (
+            xb
+        ) case unitdef then {
+            return xa.kind == xb.kind
+        } else {
+            return false
+        }
+    } else {
+        return true
+    }
+}
+
+# sameName -- whether node `xb` carries the same name text as `ra` does in `a`
+sameName: function {
+    a: zast.Ast.view
+    ra: zast.nameid
+    b: zast.Ast.view
+    xb: zast.astnode.view
+} out bool is {
+    rb: zast.nameid
+    match (
+        xb
+    ) case atomid then {
+        rb = xb.name
+    } case labelvalue then {
+        rb = xb.name
+    } case namedoperation then {
+        rb = xb.name
+    } case assignment then {
+        rb = xb.name
+    } case withexpr then {
+        rb = xb.name
+    } case caseclause then {
+        rb = xb.name
+    } else {
+        return false
+    }
+    ta: zast.nameTextAt ast: a ref: ra
+    return (zast.nameTextEq ast: b ref: rb s: ta.stringView)
+}
+
+# refused -- a result carrying a refusal
+refused: function {msg: String.take line: u32 col: u32} out FmtResult is {
+    return (FmtResult ok: false text: String :msg :line :col)
+}
+
+# formatSource -- `source` laid out at `width` columns; `collapse` ignores
+# the author's keep-open markers; `raw` copies the bytes instead (the cursor
+# proof). A file that does not parse, walks out of step with its tokens, or
+# prints to a different tree is refused untouched; `gate` false skips that
+# last comparison, for looking at what a refused file would have become
+formatSource: function {
+    source: StringView
+    width: u32
+    collapse: bool
+    raw: bool
+    gate: bool
+} out FmtResult is {
+    b: Builder.create :source keepMarkers: (collapse) == false :raw
+    firstErr: firstError ast: b.ast
+    if (firstErr.isZero) == false then {
+        en: b.ast.nodes.get i: firstErr.u64
+        match (
+            en
+        ) case error then {
+            m: zast.nameTextCopy ast: b.ast ref: en.msg
+            return (refused msg: "parse error: \{m}" line: en.lineno col: en.colno)
+        } else null
+        return (refused msg: "parse error".string line: 0 col: 0)
+    }
+    root: b.formatUnit
+    if b.c.failed then {
+        return (refused msg: "internal: \{b.c.failMsg}" line: b.c.failLine col: b.c.failCol)
+    }
+    if (b.c.atEof) == false then {
+        return (refused
+            msg: "internal: tokens remain after the walk".string
+            line: (b.c.rawLine k: b.c.peekIndex)
+            col: 0
+        )
+    }
+    if b.c.lostComments > 0 then {
+        return (refused
+            msg: "internal: \{b.c.lostComments} comment(s) were not placed"
+            line: 0
+            col: 0
+        )
+    }
+    if raw then {
+        b.rawCopy k: b.c.count - 1
+        copied: String
+        copied swap b.rawOut
+        return (FmtResult ok: true text: copied msg: String line: 0 col: 0)
+    }
+    text: b.d.print :root :width
+    if (gate) == false then return (FmtResult ok: true :text msg: String line: 0 col: 0)
+    again: ast.parseSource source: text.copy
+    againErr: firstError ast: again
+    if (againErr.isZero) == false then {
+        en: again.nodes.get i: againErr.u64
+        match (
+            en
+        ) case error then {
+            m: zast.nameTextCopy ast: again ref: en.msg
+            return (refused
+                msg: "internal: the printed text does not parse: \{m}"
+                line: en.lineno
+                col: en.colno
+            )
+        } else null
+    }
+    if (treesEqual a: b.ast ida: b.ast.root b: again idb: again.root) == false then {
+        return (refused
+            msg: "internal: the printed text parses to a different tree".string
+            line: 0
+            col: 0
+        )
+    }
+    return (FmtResult ok: true :text msg: String line: 0 col: 0)
+}

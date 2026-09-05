@@ -1,0 +1,567 @@
+# zfmtcursor -- the formatter's token cursor: the raw token stream of one
+# source (whitespace, comments and newlines included) with a byte offset per
+# token, walked in lockstep with the syntax tree. The builder asks for the next
+# SIGNIFICANT token and expects its kind; the trivia between two significant
+# tokens is reported as newline counts and comment tokens for the builder to
+# place. A kind the tree did not predict is a lockstep failure, recorded once,
+# after which every expectation answers the failure -- the caller refuses the
+# file rather than printing a guess. A comment the builder never asked for is
+# counted too, and a count above zero refuses the file the same way.
+
+# Public interface -- the definitions other units may reference; all
+# other top-level definitions are private to this unit.
+public: unit {
+    :Cursor
+    :gapinfo
+}
+
+# the lexing state the cursor mirrors: reading string content, or reading the
+# code of an interpolation hole
+stateString: 1.u8
+
+# the lexing state of an interpolation hole, whose braces are counted so the
+# one that closes the hole is known
+stateHole: 2.u8
+
+# what lies between the last consumed significant token and the next one
+gapinfo: record {
+    # whether the gap begins with a newline before any comment: the author's
+    # "keep expanded" marker after an opening delimiter
+    newlineFirst: bool
+    # whether the first comment sits on the previous token's line
+    trailing: bool
+    # the comments, as a window into Cursor.gapComments and gapEols
+    first: u32
+    # how many comments the gap holds
+    count: u32
+    # the newlines after the last comment, or since the previous token when
+    # there is none
+    eolsEnd: u32
+}
+
+# isTrivia -- a token the tree never names: whitespace, a newline, a comment
+# or a statement separator
+isTrivia: function {tt: zlexer.toktype} out bool is {
+    match tt case wsTok then {
+        return true
+    } case eolTok then {
+        return true
+    } case commentTok then {
+        return true
+    } case semicolonTok then {
+        return true
+    } else {
+        return false
+    }
+}
+
+# kindName -- a token kind spelled as its arm name, for a lockstep failure
+# message
+kindName: function {tt: zlexer.toktype} out String is {
+    match (
+        tt
+    ) case bofTok then {
+        return "bofTok".string
+    } case eofTok then {
+        return "eofTok".string
+    } case errTok then {
+        return "errTok".string
+    } case wsTok then {
+        return "wsTok".string
+    } case eolTok then {
+        return "eolTok".string
+    } case commentTok then {
+        return "commentTok".string
+    } case colonTok then {
+        return "colonTok".string
+    } case semicolonTok then {
+        return "semicolonTok".string
+    } case parenOpenTok then {
+        return "parenOpenTok".string
+    } case parenCloseTok then {
+        return "parenCloseTok".string
+    } case braceOpenTok then {
+        return "braceOpenTok".string
+    } case braceCloseTok then {
+        return "braceCloseTok".string
+    } case dotTok then {
+        return "dotTok".string
+    } case refIdTok then {
+        return "refIdTok".string
+    } case labelTok then {
+        return "labelTok".string
+    } case labelPreTok then {
+        return "labelPreTok".string
+    } case equalsTok then {
+        return "equalsTok".string
+    } case functionTok then {
+        return "functionTok".string
+    } case ifTok then {
+        return "ifTok".string
+    } case whenTok then {
+        return "whenTok".string
+    } case thenTok then {
+        return "thenTok".string
+    } case elseTok then {
+        return "elseTok".string
+    } case forTok then {
+        return "forTok".string
+    } case loopTok then {
+        return "loopTok".string
+    } case whileTok then {
+        return "whileTok".string
+    } case doTok then {
+        return "doTok".string
+    } case caseTok then {
+        return "caseTok".string
+    } case matchTok then {
+        return "matchTok".string
+    } case onTok then {
+        return "onTok".string
+    } case outTok then {
+        return "outTok".string
+    } case outxTok then {
+        return "outxTok".string
+    } case inTok then {
+        return "inTok".string
+    } case swapTok then {
+        return "swapTok".string
+    } case unitTok then {
+        return "unitTok".string
+    } case recordTok then {
+        return "recordTok".string
+    } case classTok then {
+        return "classTok".string
+    } case unionTok then {
+        return "unionTok".string
+    } case variantTok then {
+        return "variantTok".string
+    } case protocolTok then {
+        return "protocolTok".string
+    } case dataTok then {
+        return "dataTok".string
+    } case isTok then {
+        return "isTok".string
+    } case asTok then {
+        return "asTok".string
+    } case withTok then {
+        return "withTok".string
+    } case facetTok then {
+        return "facetTok".string
+    } case generatorTok then {
+        return "generatorTok".string
+    } case nativeTok then {
+        return "nativeTok".string
+    } case strBegTok then {
+        return "strBegTok".string
+    } case strMidTok then {
+        return "strMidTok".string
+    } case strChrTok then {
+        return "strChrTok".string
+    } case strEndTok then {
+        return "strEndTok".string
+    } case strExprBegTok then {
+        return "strExprBegTok".string
+    }
+}
+
+# lineStartsOf -- the byte offset every line begins at, line 1 first
+lineStartsOf: function {source: StringView} out ListVal u64 is {
+    starts: (ListVal u64)
+    starts.append 0
+    i: u64
+    n: source.length
+    for i < n loop {
+        b: (source.byteAt :i).or d: 0
+        i = i + 1
+        if b == 10 then starts.append i
+        if b == 13 then {
+            nb: (source.byteAt :i).or d: 0
+            if nb != 10 then starts.append i
+        }
+    }
+    return starts
+}
+
+# the raw token stream of one source and the tree walk's position in it
+Cursor: class {
+    # every token of the source, trivia included, ending with the EOF token
+    toks: (ListVal tokenize.token)
+    # the pool the tokens' texts are interned in: the scan's own, so a text
+    # is compared with a tree name by its bytes
+    pool: zast.StringPool
+    # each token's first byte, plus one more entry holding the source length
+    lo: (ListVal u64)
+    # the next raw index, which trivia skipping moves past
+    i: u64
+    # the last consumed significant token
+    prev: u64
+    # whether any significant token was consumed yet
+    hasPrev: bool
+    # the raw index up to which trivia was reported to the builder
+    reported: u64
+    # the lexing states open at the cursor: string content, or a hole
+    states: (ListVal u8)
+    # the brace depth of each open hole, parallel to states
+    depths: (ListVal u32)
+    # every reported comment's raw index, end to end
+    gapComments: (ListVal u64)
+    # the newlines before each reported comment, parallel to gapComments
+    gapEols: (ListVal u32)
+    # comments the builder consumed a token past without asking for
+    lostComments: u64
+    # whether a lockstep failure was recorded
+    failed: bool
+    # the line of the first failure
+    failLine: u32
+    # the column of the first failure
+    failCol: u32
+    # what the first failure expected and found
+    failMsg: String
+} as {
+    # a cursor at the first token of `source`, over its scanned tokens, whose
+    # texts live in `pool`
+    create: function {
+        toks: (ListVal tokenize.token).take
+        pool: zast.StringPool.take
+        source: StringView
+    } out this is {
+        lo: byteOffsetsOf :toks :source
+        return (meta.create
+            :toks
+            :pool
+            :lo
+            i: 0
+            prev: 0
+            hasPrev: false
+            reported: 0
+            states: (ListVal u8)
+            depths: (ListVal u32)
+            gapComments: (ListVal u64)
+            gapEols: (ListVal u32)
+            lostComments: 0
+            failed: false
+            failLine: 0
+            failCol: 0
+            failMsg: String
+        )
+    }
+
+    # count -- how many raw tokens there are, the EOF token included
+    count: function {:this} out u64 is {
+        return this.toks.length
+    }
+
+    # rawKind -- the kind of raw token `k`
+    rawKind: function {:this k: u64} out zlexer.toktype is {
+        return (this.toks.get i: k).toktype
+    }
+
+    # rawText -- the interned text of raw token `k`
+    rawText: function {:this k: u64} out zast.nameid is {
+        return (this.toks.get i: k).text
+    }
+
+    # textEq -- whether raw token `k` spells `s`
+    textEq: function {:this k: u64 s: StringView} out bool is {
+        return (zast.poolTextEq pool: this.pool ref: (this.toks.get i: k).text :s)
+    }
+
+    # peekTextIs -- whether the next significant token spells `s`
+    peekTextIs: function {:this s: StringView} out bool is {
+        this.skipTrivia
+        return (this.textEq k: this.i :s)
+    }
+
+    # rawLo -- the first byte of raw token `k`
+    rawLo: function {:this k: u64} out u64 is {
+        return (this.lo.get i: k)
+    }
+
+    # rawHi -- one past the last byte of raw token `k`
+    rawHi: function {:this k: u64} out u64 is {
+        return (this.lo.get i: k + 1)
+    }
+
+    # rawLine -- the line raw token `k` starts on
+    rawLine: function {:this k: u64} out u32 is {
+        return (this.toks.get i: k).lineno
+    }
+
+    # inContent -- whether the next raw token is string content, where a
+    # newline is a chunk and not trivia
+    inContent: function {:this} out bool is {
+        n: this.states.length
+        if n == 0 then return false
+        return (this.states.get i: n - 1) == stateString
+    }
+
+    # skipTrivia -- move past the trivia before the next significant token
+    skipTrivia: function {:this} is {
+        n: this.toks.length
+        for this.i + 1 < n loop {
+            tt: (this.toks.get i: this.i).toktype
+            if (isTrivia :tt) == false then break
+            this.i = this.i + 1
+        }
+    }
+
+    # peekIndex -- the raw index of the next significant token
+    peekIndex: function {:this} out u64 is {
+        this.skipTrivia
+        return this.i
+    }
+
+    # peekKind -- the kind of the next significant token
+    peekKind: function {:this} out zlexer.toktype is {
+        this.skipTrivia
+        return (this.toks.get i: this.i).toktype
+    }
+
+    # peekText -- the interned text of the next significant token
+    peekText: function {:this} out zast.nameid is {
+        this.skipTrivia
+        return (this.toks.get i: this.i).text
+    }
+
+    # peekKindAhead -- the kind of the significant token `ahead` places after
+    # the next one; EOF past the end
+    peekKindAhead: function {:this ahead: u64} out zlexer.toktype is {
+        this.skipTrivia
+        k: this.i
+        n: this.toks.length
+        left: ahead
+        for left > 0 loop {
+            if k + 1 >= n then return zlexer.toktype.eofTok
+            k = k + 1
+            tt: (this.toks.get i: k).toktype
+            if (isTrivia :tt) == false then left = left - 1
+        }
+        return (this.toks.get i: k).toktype
+    }
+
+    # parenRun -- how many `(` in a row open at the next significant token
+    parenRun: function {:this} out u32 is {
+        this.skipTrivia
+        k: this.i
+        n: this.toks.length
+        run: u32
+        for k < n loop {
+            tt: (this.toks.get i: k).toktype
+            if tt == zlexer.toktype.parenOpenTok then {
+                run = run + 1
+            } else if (isTrivia :tt) == false then break
+            k = k + 1
+        }
+        return run
+    }
+
+    # atEof -- whether every significant token was consumed
+    atEof: function {:this} out bool is {
+        return this.peekKind == zlexer.toktype.eofTok
+    }
+
+    # note -- record the first lockstep failure at the next raw token
+    note: function {:this msg: String.take} is {
+        if this.failed then return
+        this.failed = true
+        t: this.toks.get i: this.i
+        this.failLine = t.lineno
+        this.failCol = t.colno
+        this.failMsg = msg
+    }
+
+    # consume -- the raw token at the cursor, as its index, mirroring the
+    # lexing state it opens or closes
+    consume: function {:this} out u64 is {
+        k: this.i
+        n: this.toks.length
+        if k + 1 >= n then return n
+        tt: (this.toks.get i: k).toktype
+        match (
+            tt
+        ) case strBegTok then {
+            this.states.append stateString
+            this.depths.append 0
+        } case strEndTok then {
+            this.popState
+        } case strExprBegTok then {
+            this.states.append stateHole
+            this.depths.append 0
+        } case braceOpenTok then {
+            if this.inHole then this.bumpHole delta: 1
+        } case braceCloseTok then {
+            if this.inHole then {
+                this.bumpHole delta: 0 - 1
+                d: this.depths.get i: this.depths.length - 1
+                if d == 0 then this.popState
+            }
+        } else null
+        this.i = k + 1
+        return k
+    }
+
+    # inHole -- whether the cursor is inside an interpolation hole's code
+    inHole: function {:this} out bool is {
+        n: this.states.length
+        if n == 0 then return false
+        return (this.states.get i: n - 1) == stateHole
+    }
+
+    # bumpHole -- the innermost hole's brace depth moved by `delta`
+    bumpHole: function {:this delta: i64} is {
+        n: this.depths.length
+        d: (this.depths.get i: n - 1).i64 + delta
+        if d < 0 then d = 0
+        this.depths.set i: n - 1 val: d.u32.orPanic
+    }
+
+    # popState -- leave the innermost lexing state
+    popState: function {:this} is {
+        if this.states.length > 0 then {
+            this.states.pop
+            this.depths.pop
+        }
+    }
+
+    # takeRaw -- consume the next raw token whatever it is, for the string
+    # walk, which reads chunks and newlines the tree does not name
+    takeRaw: function {:this} out u64 is {
+        return this.consume
+    }
+
+    # expect -- consume the next significant token, which must be `tt`; on a
+    # mismatch the failure is recorded and the EOF index answers, so the
+    # builder can finish and the caller can refuse the file
+    expect: function {:this tt: zlexer.toktype} out u64 is {
+        this.skipTrivia
+        n: this.toks.length
+        got: (this.toks.get i: this.i).toktype
+        if got != tt then {
+            en: kindName :tt
+            gn: kindName tt: got
+            this.note msg: "expected \{en}, found \{gn}"
+            return n
+        }
+        this.countLost
+        k: this.consume
+        this.prev = k
+        this.hasPrev = true
+        return k
+    }
+
+    # expectAny -- consume the next significant token whatever its kind
+    expectAny: function {:this} out u64 is {
+        this.skipTrivia
+        this.countLost
+        k: this.consume
+        this.prev = k
+        this.hasPrev = true
+        return k
+    }
+
+    # countLost -- comments between the last report and the cursor that no
+    # gap request covered
+    countLost: function {:this} is {
+        k: this.reported
+        for k < this.i loop {
+            if (this.toks.get i: k).toktype == zlexer.toktype.commentTok then {
+                this.lostComments = this.lostComments + 1
+            }
+            k = k + 1
+        }
+        this.reported = this.i
+    }
+
+    # gap -- the trivia between the last consumed significant token and the
+    # next one, its comments appended to gapComments / gapEols
+    gap: function {:this} out gapinfo is {
+        this.skipTrivia
+        stop: this.i
+        k: this.reported
+        if this.hasPrev when this.prev + 1 > k then k = this.prev + 1
+        info: (gapinfo
+            newlineFirst: false
+            trailing: false
+            first: this.gapComments.length.u32.orPanic
+            count: 0
+            eolsEnd: 0
+        )
+        eols: u32
+        sawNonWs: false
+        for k < stop loop {
+            tt: (this.toks.get i: k).toktype
+            if tt == zlexer.toktype.eolTok then {
+                if (sawNonWs) == false then info.newlineFirst = true
+                sawNonWs = true
+                eols = eols + 1
+            } else if tt == zlexer.toktype.commentTok then {
+                if info.count == 0 when eols == 0 when this.hasPrev then info.trailing = true
+                sawNonWs = true
+                this.gapComments.append k
+                this.gapEols.append eols
+                info.count = info.count + 1
+                eols = 0
+            } else if tt == zlexer.toktype.semicolonTok then sawNonWs = true
+            k = k + 1
+        }
+        info.eolsEnd = eols
+        this.reported = stop
+        return info
+    }
+
+    # commentAt -- the raw index of the j-th comment of a gap
+    commentAt: function {:this info: gapinfo j: u32} out u64 is {
+        return (this.gapComments.get i: (info.first + j).u64)
+    }
+
+    # commentEols -- the newlines before the j-th comment of a gap
+    commentEols: function {:this info: gapinfo j: u32} out u32 is {
+        return (this.gapEols.get i: (info.first + j).u64)
+    }
+}
+
+# byteOffsetsOf -- each token's first byte from its line and codepoint column,
+# with one extra entry holding the source length. Widths are never summed: an
+# escape token's width is its decoded size, not its source span
+byteOffsetsOf: function {
+    toks: (ListVal tokenize.token).view
+    source: StringView
+} out ListVal u64 is {
+    starts: lineStartsOf :source
+    offs: (ListVal u64)
+    curLine: 1.u32
+    curCol: 1.u32
+    curByte: u64
+    n: source.length
+    k: u64
+    for k < toks.length loop {
+        t: toks.get i: k
+        k = k + 1
+        if t.toktype == zlexer.toktype.eofTok then {
+            offs.append n
+            continue
+        }
+        if t.lineno != curLine then {
+            curLine = t.lineno
+            curCol = 1
+            curByte = n
+            if curLine.u64 <= starts.length then curByte = starts.get i: curLine.u64 - 1
+        }
+        for curCol < t.colno loop {
+            b: (source.byteAt i: curByte).or d: 0
+            curByte = curByte + 1
+            # a continuation byte is not a codepoint of its own
+            for curByte < n loop {
+                nb: (source.byteAt i: curByte).or d: 0
+                if (nb & 192) != 128 then break
+                curByte = curByte + 1
+            }
+            b
+            curCol = curCol + 1
+        }
+        offs.append curByte
+    }
+    offs.append n
+    return offs
+}
