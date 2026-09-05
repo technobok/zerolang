@@ -837,7 +837,7 @@ emitter-guard:
 	chk "resolveTypeIdByName" "$$e3" 21; \
 	chk "userFnId" "$$e4" 31; \
 	chk "childOwnershipText" "$$e5" 0; \
-	chk "regNameOf" "$$e6" 96; \
+	chk "regNameOf" "$$e6" 85; \
 	chk "ztypes.mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 3; \
 	chk "monoOriginName" "$$e9" 7; \
@@ -1424,18 +1424,18 @@ eager-guard: bin/zc
 # the spelling moves, and it dies silently.
 member-guard:
 	@m1=$$(grep -cE '[a-z]*cn\.stringView ==|[a-z]*cn == "' src/ztypecheck.z); \
-	if [ "$$m1" -gt 22 ]; then \
-	  echo "member-guard FAIL: string-keyed member compares = $$m1 (baseline 22)"; \
+	if [ "$$m1" -gt 10 ]; then \
+	  echo "member-guard FAIL: string-keyed member compares = $$m1 (baseline 10)"; \
 	  echo "  A new hardcoded string-keyed member/marker special-case was added to the"; \
 	  echo "  type checker. Resolve members through their declared childOf edges (the"; \
 	  echo "  system units are the source of truth); bump the baseline only for a"; \
 	  echo "  genuinely-sanctioned marker."; \
 	  exit 1; \
 	fi; \
-	if [ "$$m1" -lt 22 ]; then \
-	  echo "member-guard: string-keyed member compares = $$m1 < baseline 22 -- lower the baseline here"; \
+	if [ "$$m1" -lt 10 ]; then \
+	  echo "member-guard: string-keyed member compares = $$m1 < baseline 10 -- lower the baseline here"; \
 	fi; \
-	echo "member-guard OK: string-keyed member compares = $$m1 (<=22)"
+	echo "member-guard OK: string-keyed member compares = $$m1 (<=10)"
 
 # highlight-guard -- the two syntax highlighters must carry the language's
 # actual vocabulary. THE LANGUAGE IS THE SOURCE OF TRUTH, never the lists:
