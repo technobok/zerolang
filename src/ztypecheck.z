@@ -420,13 +420,14 @@ checkBareTypeValueAt: function {
     tid: ztypes.tid
 } is {
     tt: st.reg.typetypeOf typeId: tid
-    isFam: false
-    if tt == ztypes.ztypetype.recordType then isFam = true
-    if tt == ztypes.ztypetype.classType then isFam = true
-    if tt == ztypes.ztypetype.unionType then isFam = true
-    if tt == ztypes.ztypetype.variantType then isFam = true
-    if tt == ztypes.ztypetype.protocolType then isFam = true
-    if tt == ztypes.ztypetype.facetType then isFam = true
+    isFam: (
+        (tt == ztypes.ztypetype.recordType) or
+        (tt == ztypes.ztypetype.classType) or
+        (tt == ztypes.ztypetype.unionType) or
+        (tt == ztypes.ztypetype.variantType) or
+        (tt == ztypes.ztypetype.protocolType) or
+        (tt == ztypes.ztypetype.facetType)
+    )
     if isFam.not then return
     tn: st.reg.nameOf :tid
     # borrowed views -- including a typedef class over a view (PathView) --
@@ -460,9 +461,7 @@ checkBareTypeValueAt: function {
         return
     }
     # unions and variants select an arm; bool's arms are its literals
-    isUV: false
-    if tt == ztypes.ztypetype.unionType then isUV = true
-    if tt == ztypes.ztypetype.variantType then isUV = true
+    isUV: (tt == ztypes.ztypetype.unionType) or (tt == ztypes.ztypetype.variantType)
     if isUV then {
         mu: "cannot construct '\{tn}' from its bare name: a union/variant selects an arm"
         hu: "construct an arm: '\{tn}.<arm> ...'"
@@ -472,9 +471,7 @@ checkBareTypeValueAt: function {
         bareCtorError :st :nodeid :lineno :colno :width msg: mu hint: hu
         return
     }
-    isPF: false
-    if tt == ztypes.ztypetype.protocolType then isPF = true
-    if tt == ztypes.ztypetype.facetType then isPF = true
+    isPF: (tt == ztypes.ztypetype.protocolType) or (tt == ztypes.ztypetype.facetType)
     if isPF then {
         mp: "cannot construct '\{tn}' from its bare name: a protocol/facet projects a conforming value"
         hp: "bind a value of a conforming type instead".string
@@ -488,10 +485,11 @@ checkBareTypeValueAt: function {
         return
     }
     # source-produced iterators have no standalone construction
-    isIt: false
-    if tid == (builtinTidT :st frame: st.curFrame :ast base: "CpIter") then isIt = true
-    if tid == (builtinTidT :st frame: st.curFrame :ast base: "Splitter") then isIt = true
-    if tid == (builtinTidT :st frame: st.curFrame :ast base: "LinesIter") then isIt = true
+    isIt: (
+        (tid == (builtinTidT :st frame: st.curFrame :ast base: "CpIter")) or
+        (tid == (builtinTidT :st frame: st.curFrame :ast base: "Splitter")) or
+        (tid == (builtinTidT :st frame: st.curFrame :ast base: "LinesIter"))
+    )
     if isIt then {
         mi: "cannot construct '\{tn}' from its bare name: iterators are produced by their source"
         hi: "call '.iterate' / '.split' / '.codepoints' / '.lines' on the source value".string
@@ -632,67 +630,19 @@ isContainerReaderCall: function {
         rg: st.reg.genericOriginOf tid: (ztypes.tid.create from: recvTid.u64)
         if rg > 0 then recvBaseTid = rg
     }
-    isMapB: false
-    if (
-        recvBaseTid ==
-        (builtinTidTRo
-            :st
-            frame: st.curFrame
-            :ast
-            base: "MapRR"
-        )
-    ) then isMapB = true
-    if (
-        recvBaseTid ==
-        (builtinTidTRo
-            :st
-            frame: st.curFrame
-            :ast
-            base: "MapRV"
-        )
-    ) then isMapB = true
-    if (
-        recvBaseTid ==
-        (builtinTidTRo
-            :st
-            frame: st.curFrame
-            :ast
-            base: "MapVR"
-        )
-    ) then isMapB = true
-    if (
-        recvBaseTid ==
-        (builtinTidTRo
-            :st
-            frame: st.curFrame
-            :ast
-            base: "MapVV"
-        )
-    ) then isMapB = true
+    isMapB: (
+        (recvBaseTid == (builtinTidTRo :st frame: st.curFrame :ast base: "MapRR")) or
+        (recvBaseTid == (builtinTidTRo :st frame: st.curFrame :ast base: "MapRV")) or
+        (recvBaseTid == (builtinTidTRo :st frame: st.curFrame :ast base: "MapVR")) or
+        (recvBaseTid == (builtinTidTRo :st frame: st.curFrame :ast base: "MapVV"))
+    )
     if isMapB then {
-        if mnameId == zast.names.wkGet then return true
-        if (zast.nameTextEq :ast ref: mnameId s: "copy") then return true
-        return false
+        return (mnameId == zast.names.wkGet) or (zast.nameTextEq :ast ref: mnameId s: "copy")
     }
-    isSetB: false
-    if (
-        recvBaseTid ==
-        (builtinTidTRo
-            :st
-            frame: st.curFrame
-            :ast
-            base: "SetRef"
-        )
-    ) then isSetB = true
-    if (
-        recvBaseTid ==
-        (builtinTidTRo
-            :st
-            frame: st.curFrame
-            :ast
-            base: "SetVal"
-        )
-    ) then isSetB = true
+    isSetB: (
+        (recvBaseTid == (builtinTidTRo :st frame: st.curFrame :ast base: "SetRef")) or
+        (recvBaseTid == (builtinTidTRo :st frame: st.curFrame :ast base: "SetVal"))
+    )
     if isSetB then {
         if (zast.nameTextEq :ast ref: mnameId s: "copy") then return true
         return false
@@ -700,30 +650,15 @@ isContainerReaderCall: function {
     # BOTH List templates: they share one emitted `get`, so they share its
     # reason for being here -- a mutable interior pointer whose C refuses a
     # const receiver.
-    isListB: false
-    if (
-        recvBaseTid ==
-        (builtinTidTRo
-            :st
-            frame: st.curFrame
-            :ast
-            base: "ListRef"
-        )
-    ) then isListB = true
-    if (
-        recvBaseTid ==
-        (builtinTidTRo
-            :st
-            frame: st.curFrame
-            :ast
-            base: "ListVal"
-        )
-    ) then isListB = true
+    isListB: (
+        (recvBaseTid == (builtinTidTRo :st frame: st.curFrame :ast base: "ListRef")) or
+        (recvBaseTid == (builtinTidTRo :st frame: st.curFrame :ast base: "ListVal"))
+    )
     if isListB then {
-        if mnameId == zast.names.wkGet then return true
-        if (isListViewMemberId nameId: mnameId) then return true
-        if (zast.nameTextEq :ast ref: mnameId s: "copy") then return true
-        return false
+        (return
+            (mnameId == zast.names.wkGet) or (isListViewMemberId nameId: mnameId
+            ) or (zast.nameTextEq :ast ref: mnameId s: "copy")
+        )
     }
     return false
 }
@@ -1279,9 +1214,7 @@ indexDeclObjInner: function {
 } is {
     ob: objRefAt :ast nid: (zast.nodeid.create from: objNodeId)
     if ob.nid.isZero.not then {
-        isArm: false
-        if ob.kind.variantDef then isArm = true
-        if ob.kind.unionDef then isArm = true
+        isArm: ob.kind.variantDef or ob.kind.unionDef
         kIit: u64
         for kIit < ob.nis loop {
             iId: (zast.objIsItemAt :ast nid: ob.nid i: kIit).u32
@@ -2192,9 +2125,7 @@ isListViewMember: function {name: StringView} out bool is {
 # source exactly as `.take` does; the two differ only in whether the destination
 # is frozen afterwards.
 isMoveMarker: function {name: StringView} out bool is {
-    if name == "take" then return true
-    if name == "hold" then return true
-    return false
+    return (name == "take") or (name == "hold")
 }
 
 # valueIsHold -- true when a bound value carries the `.hold` marker, through any
@@ -2230,9 +2161,7 @@ isStripMarker: function {name: StringView} out bool is {
 # isListViewMemberId -- the predicates above asked of an interned name, which
 # is what a member check holds; no text is read.
 isMoveMarkerId: function {nameId: zast.nameid} out bool is {
-    if nameId == zast.names.wkTake then return true
-    if nameId == zast.names.wkHold then return true
-    return false
+    return (nameId == zast.names.wkTake) or (nameId == zast.names.wkHold)
 }
 
 # isDropMarkerId -- the early-lifetime marker, by id. A statement-only sibling
@@ -2383,10 +2312,11 @@ recordConformerContexts: function {
     op: astnode.view
 } is {
     if op.objectdef then {
-        isRef: false
-        if op.kind == zast.objectkind.classDef then isRef = true
-        if op.kind == zast.objectkind.unionDef then isRef = true
-        if op.kind == zast.objectkind.generatorDef then isRef = true
+        isRef: (
+            (op.kind == zast.objectkind.classDef) or
+            (op.kind == zast.objectkind.unionDef) or
+            (op.kind == zast.objectkind.generatorDef)
+        )
         dk0: (zast.poolFind pool: ast.names text: defName).u64
         dv0: isRef
         st.typing.mainDefIsReftype.set key: dk0 value: dv0
@@ -2400,9 +2330,7 @@ recordConformerContexts: function {
                     :ast
                     ref: (atomNameId :ast n: (ast.nodes.get i: am.operation.u64))
                 )
-                skipIt: false
-                if cn.length == 0 then skipIt = true
-                if (isNumericLiteralName name: cn.stringView) then skipIt = true
+                skipIt: (cn.length == 0) or (isNumericLiteralName name: cn.stringView)
                 if skipIt.not then {
                     ro8: unitDecl
                     if ro8.isZero.not then {
@@ -2429,10 +2357,11 @@ isBareGenericParam: function {ast: Ast.view op: astnode.view} out bool is {
         op
     ) case dottedpath then {
         leaf: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: op.child.u64))
-        if leaf.stringView == "generic" then return true
-        if leaf.stringView == "valtype" then return true
-        if leaf.stringView == "reftype" then return true
-        return false
+        (return
+            (leaf.stringView == "generic") or (leaf.stringView == "valtype") or (
+                leaf.stringView == "reftype"
+            )
+        )
     } else {
         return false
     }
@@ -2450,10 +2379,11 @@ isGenericParam: function {ast: Ast.view op: astnode.view} out bool is {
         return (isGenericParam :ast op: (ast.nodes.get i: op.callable.u64))
     } case dottedpath then {
         leaf: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: op.child.u64))
-        if leaf.stringView == "generic" then return true
-        if leaf.stringView == "valtype" then return true
-        if leaf.stringView == "reftype" then return true
-        return false
+        (return
+            (leaf.stringView == "generic") or (leaf.stringView == "valtype") or (
+                leaf.stringView == "reftype"
+            )
+        )
     } else {
         return false
     }
@@ -3311,9 +3241,7 @@ resolveMonoRefParts: function {
         if memberIdAt.isZero then return 0
         # backstop for a sized record whose size literal did not parse as a
         # decimal (the value-keyed trie path arms sized specs centrally)
-        isSized: false
-        if tn.stringView == "str" then isSized = true
-        if tn.stringView == "array" then isSized = true
+        isSized: (tn.stringView == "str") or (tn.stringView == "array")
         if isSized then {
             (mintCollectionChildren
                 :st
@@ -4553,10 +4481,13 @@ isBorrowReftypeCollection: function {ast: Ast.view nameId: zast.nameid} out bool
     if (zast.nameTextEq :ast ref: nameId s: "ListViewVal") then return true
     # the id-keyed containers are stack structs too -- a header plus two heap
     # arrays, created BY VALUE -- so they take the same borrow default
-    if (zast.nameTextEq :ast ref: nameId s: "IdMapR") then return true
-    if (zast.nameTextEq :ast ref: nameId s: "IdMapV") then return true
-    if (zast.nameTextEq :ast ref: nameId s: "IdSet") then return true
-    return false
+    (return
+        (zast.nameTextEq :ast ref: nameId s: "IdMapR") or (zast.nameTextEq
+            :ast
+            ref: nameId
+            s: "IdMapV"
+        ) or (zast.nameTextEq :ast ref: nameId s: "IdSet")
+    )
 }
 
 # isBorrowNativeReftypeId / isNativeValueViewId -- the two native-shape
@@ -6346,9 +6277,7 @@ eqNullOptOut: function {ast: Ast.view asItems: zast.kidspan} out bool is {
         am: ast.nodes.get i: amId.u64
         if am.namedoperation then {
             mn: zast.nameTextAt :ast ref: am.name
-            isEqNe: false
-            if mn.stringView == "==" then isEqNe = true
-            if mn.stringView == "!=" then isEqNe = true
+            isEqNe: (mn.stringView == "==") or (mn.stringView == "!=")
             if isEqNe then {
                 vn: (zast.nameTextAt
                     :ast
@@ -7024,11 +6953,7 @@ objectTypedefBaseTid: function {
 # fnptr slot (a spec field / method / method-ref), excluding the constructor and
 # comparison synthetics so they stay free functions / ctors.
 fnFieldFlaggableName: function {name: StringView} out bool is {
-    if name == "create" then return false
-    if name == "==" then return false
-    if name == "!=" then return false
-    if name == "borrow" then return false
-    return true
+    return ((name == "create") or (name == "==") or (name == "!=") or (name == "borrow")).not
 }
 
 # typeExprHasPrivate -- does a field's type expression carry a `.private` marker
@@ -8228,12 +8153,8 @@ resolveRecord: function {
     # the synth path only reads it, so the minting lookup has to happen here
     # a member the SOURCE declares, by either block: the decl tree does not
     # carry them yet at this point
-    eqDeclR: false
-    if eqAsR then eqDeclR = true
-    if hasEqIs then eqDeclR = true
-    neDeclR: false
-    if neAsR then neDeclR = true
-    if hasNeIs then neDeclR = true
+    eqDeclR: eqAsR or hasEqIs
+    neDeclR: neAsR or hasNeIs
     (synthRecordMembers
         :st
         :ast
@@ -9500,9 +9421,7 @@ fieldTypeNeedsCleanup: function {
         match (
             tto8
         ) case some then {
-            boxed8: false
-            if tto8 == ztypes.ztypetype.classType then boxed8 = true
-            if tto8 == ztypes.ztypetype.unionType then boxed8 = true
+            boxed8: (tto8 == ztypes.ztypetype.classType) or (tto8 == ztypes.ztypetype.unionType)
             if boxed8 then {
                 if (st.typing.declIsResolving
                     declId: (declOfUnitDef :st :frame unitDecl: duo8 :nameId)
@@ -9557,10 +9476,11 @@ resolveClassMethodDecl: function {
                 # special-cased; length/capacity stay field children
                 # (their C surface is a struct read, not a method).
                 if unitDecl == st.typing.collectionsUnitRoot then {
-                    prodSkipL: false
-                    if fm.name == zast.names.wkCreate then prodSkipL = true
-                    if fm.name == zast.names.wkLength then prodSkipL = true
-                    if fm.name == zast.names.wkCapacity then prodSkipL = true
+                    prodSkipL: (
+                        (fm.name == zast.names.wkCreate) or
+                        (fm.name == zast.names.wkLength) or
+                        (fm.name == zast.names.wkCapacity)
+                    )
                     if prodSkipL.not then prodM4 = true
                 }
             }
@@ -10133,9 +10053,10 @@ resolveClassFieldEntry: function {
         # This test is INVERTED: anything not named here becomes a
         # borrowed field, so a new owned mode must be listed or it is
         # silently treated as non-owned.
-        fOwned: false
-        if fieldOwn == ztypes.zparamownership.takeMode then fOwned = true
-        if fieldOwn == ztypes.zparamownership.holdMode then fOwned = true
+        fOwned: (
+            (fieldOwn == ztypes.zparamownership.takeMode) or
+            (fieldOwn == ztypes.zparamownership.holdMode)
+        )
         if fOwned.not then borrowedField = true
     } case none then null
     (forceMemberOf
@@ -10242,10 +10163,11 @@ resolveClassAsMethods: function {
                 if isgen then {
                     if fnNativeP4 then {
                         if unitDecl == st.typing.collectionsUnitRoot then {
-                            skipA4: false
-                            if amP4.name == zast.names.wkCreate then skipA4 = true
-                            if amP4.name == zast.names.wkLength then skipA4 = true
-                            if amP4.name == zast.names.wkCapacity then skipA4 = true
+                            skipA4: (
+                                (amP4.name == zast.names.wkCreate) or
+                                (amP4.name == zast.names.wkLength) or
+                                (amP4.name == zast.names.wkCapacity)
+                            )
                             if skipA4.not then prodA4 = true
                         }
                     } else {
@@ -11124,9 +11046,7 @@ refuseArmAliasPayload: function {
 } is {
     if tid.isZero then return
     tt: st.reg.typetypeOf typeId: tid
-    isSum: false
-    if tt == ztypes.ztypetype.variantType then isSum = true
-    if tt == ztypes.ztypetype.unionType then isSum = true
+    isSum: (tt == ztypes.ztypetype.variantType) or (tt == ztypes.ztypetype.unionType)
     if isSum.not then return
     tgt: reexportTargetIdsOf :st :ast :declId
     if tgt.defName.isZero then return
@@ -11417,9 +11337,7 @@ aliasTargetTid: function {
             rto
         ) case some then {
             rtt: st.reg.typetypeOf typeId: (ztypes.tid.create from: rto.u64)
-            isTag: false
-            if rtt == ztypes.ztypetype.variantType then isTag = true
-            if rtt == ztypes.ztypetype.unionType then isTag = true
+            isTag: (rtt == ztypes.ztypetype.variantType) or (rtt == ztypes.ztypetype.unionType)
             if isTag then {
                 memberDecl: (st.typing.declChildOfId
                     parentTypeId: (ztypes.tid.create from: rto.u64)
@@ -11429,9 +11347,9 @@ aliasTargetTid: function {
                     memberDecl
                 ) case some then {
                     mtt: st.reg.typetypeOf typeId: (ztypes.tid.create from: memberDecl.u64)
-                    isMem: true
-                    if mtt == ztypes.ztypetype.functionType then isMem = false
-                    if mtt == ztypes.ztypetype.dataType then isMem = false
+                    isMem: (
+                        (mtt == ztypes.ztypetype.functionType) or (mtt == ztypes.ztypetype.dataType)
+                    ).not
                     if isMem then {
                         atid = ztypes.tid.create from: rto
                         typeRooted = true
@@ -11709,9 +11627,7 @@ descendNamedId: function {
         # boxed) are legal forward declarations; a VALUE-kind target reached
         # through a containment edge cannot lay out.
         if st.typing.inContainmentEdge then {
-            cycV: false
-            if ttv == ztypes.ztypetype.recordType then cycV = true
-            if ttv == ztypes.ztypetype.variantType then cycV = true
+            cycV: (ttv == ztypes.ztypetype.recordType) or (ttv == ztypes.ztypetype.variantType)
             # a NATIVE record (a scalar: `u8: record is native`) lays out
             # nothing of its own and can hold nothing by value: reaching it
             # grey through a containment edge (a conversion of another scalar
@@ -13773,9 +13689,7 @@ declParentIdOf: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out 
 # parent at all, or the program root whose children are the file units? The
 # question every walk out of a file unit asks.
 declAtProgramTop: function {st: zenv.ZSymbolTable.view parentDeclId: ztypes.declid} out bool is {
-    if parentDeclId.isZero then return true
-    if parentDeclId == st.typing.programRoot then return true
-    return false
+    return parentDeclId.isZero or (parentDeclId == st.typing.programRoot)
 }
 
 # instTemplateDecl -- the DECLARATION an instantiation's callable path names,
@@ -16852,19 +16766,13 @@ cloneGenericMemberInto: function {
     idSubs: (IdMapV u64 v: u64)
 } out bool is {
     deep5: false
-    isSynth: false
-    if chName == "create" then isSynth = true
-    if chName == "borrow" then isSynth = true
-    if chName == "==" then isSynth = true
-    if chName == "!=" then isSynth = true
+    isSynth: (chName == "create") or (chName == "borrow") or (chName == "==") or (chName == "!=")
     if isSynth.not then {
         skip5: false
         # List's contains/sort exist only for eligible element
         # kinds (use-site parity with the materializer gate).
         if templateId == listRefTid when listRefTid > 0 then {
-            csM5: false
-            if chName == "contains" then csM5 = true
-            if chName == "sort" then csM5 = true
+            csM5: (chName == "contains") or (chName == "sort")
             if csM5 then {
                 elemTid: ((subs.get key: (firstGenericParamId :st :templateId)).or d: 0)
                 if elemTid == 0 then elemTid = fallbackArg
@@ -17156,9 +17064,10 @@ mintMonoRecordShape: function {
     tplUnit: ztypes.declid
 } is {
     if tt == ztypes.ztypetype.recordType then {
-        isSized: false
-        if templateId == (builtinTidT :st frame: rf :ast base: "str") then isSized = true
-        if templateId == (builtinTidT :st frame: rf :ast base: "array") then isSized = true
+        isSized: (
+            (templateId == (builtinTidT :st frame: rf :ast base: "str")) or
+            (templateId == (builtinTidT :st frame: rf :ast base: "array"))
+        )
         tk: declOfTypeId :st tid: templateId
         pNames: st.reg.genericParamNamesOf tdecl: tk
         pi: u64
@@ -17277,20 +17186,21 @@ templateNeedsMonoDtor: function {
     rf: ztypes.declid
     templateId: ztypes.tid
 } out bool is {
-    needsDtorM: false
-    if templateId == (builtinTidT :st frame: rf :ast base: "ListRef") then needsDtorM = true
-    if templateId == (builtinTidT :st frame: rf :ast base: "ListVal") then needsDtorM = true
-    if templateId == (builtinTidT :st frame: rf :ast base: "Option") then needsDtorM = true
-    if templateId == (builtinTidT :st frame: rf :ast base: "Result") then needsDtorM = true
-    if templateId == (builtinTidT :st frame: rf :ast base: "MapRR") then needsDtorM = true
-    if templateId == (builtinTidT :st frame: rf :ast base: "MapRV") then needsDtorM = true
-    if templateId == (builtinTidT :st frame: rf :ast base: "MapVR") then needsDtorM = true
-    if templateId == (builtinTidT :st frame: rf :ast base: "MapVV") then needsDtorM = true
-    if templateId == (builtinTidT :st frame: rf :ast base: "SetRef") then needsDtorM = true
-    if templateId == (builtinTidT :st frame: rf :ast base: "SetVal") then needsDtorM = true
-    if templateId == (builtinTidT :st frame: rf :ast base: "IdMapR") then needsDtorM = true
-    if templateId == (builtinTidT :st frame: rf :ast base: "IdMapV") then needsDtorM = true
-    if templateId == (builtinTidT :st frame: rf :ast base: "IdSet") then needsDtorM = true
+    needsDtorM: (
+        (templateId == (builtinTidT :st frame: rf :ast base: "ListRef")) or
+        (templateId == (builtinTidT :st frame: rf :ast base: "ListVal")) or
+        (templateId == (builtinTidT :st frame: rf :ast base: "Option")) or
+        (templateId == (builtinTidT :st frame: rf :ast base: "Result")) or
+        (templateId == (builtinTidT :st frame: rf :ast base: "MapRR")) or
+        (templateId == (builtinTidT :st frame: rf :ast base: "MapRV")) or
+        (templateId == (builtinTidT :st frame: rf :ast base: "MapVR")) or
+        (templateId == (builtinTidT :st frame: rf :ast base: "MapVV")) or
+        (templateId == (builtinTidT :st frame: rf :ast base: "SetRef")) or
+        (templateId == (builtinTidT :st frame: rf :ast base: "SetVal")) or
+        (templateId == (builtinTidT :st frame: rf :ast base: "IdMapR")) or
+        (templateId == (builtinTidT :st frame: rf :ast base: "IdMapV")) or
+        (templateId == (builtinTidT :st frame: rf :ast base: "IdSet"))
+    )
     return needsDtorM
 }
 
@@ -17302,9 +17212,7 @@ mintMonoTagShape: function {
     tt: ztypes.ztypetype
     name: StringView
 } is {
-    wantTag: false
-    if tt == ztypes.ztypetype.variantType then wantTag = true
-    if tt == ztypes.ztypetype.unionType then wantTag = true
+    wantTag: (tt == ztypes.ztypetype.variantType) or (tt == ztypes.ztypetype.unionType)
     if wantTag then {
         tagName: "\{name}:tag:data"
         tagId: st.reg.newType name: tagName.stringView typetype: ztypes.ztypetype.dataType
@@ -17928,9 +17836,7 @@ heapOwningValtypeTid: function {
     tid: ztypes.tid
 } out bool is {
     tt: st.reg.typetypeOf typeId: tid
-    isVR: false
-    if tt == ztypes.ztypetype.recordType then isVR = true
-    if tt == ztypes.ztypetype.variantType then isVR = true
+    isVR: (tt == ztypes.ztypetype.recordType) or (tt == ztypes.ztypetype.variantType)
     if isVR.not then return false
     hcn: st.typing.declRowSlots ownerTid: tid
     hci: u64
@@ -17997,11 +17903,12 @@ completeSpecChildren: function {
     # MapItemIter's iterator element is the derived MapEntry spec (its
     # call's OptionView some-arm), not a trie key
     skipChild: false
-    itemIsIter: false
-    if templateId == (builtinTidT :st :frame :ast base: "MapItemIter") then itemIsIter = true
-    if templateId == (builtinTidT :st :frame :ast base: "MapItemIterRV") then itemIsIter = true
-    if templateId == (builtinTidT :st :frame :ast base: "MapItemIterVR") then itemIsIter = true
-    if templateId == (builtinTidT :st :frame :ast base: "MapItemIterVV") then itemIsIter = true
+    itemIsIter: (
+        (templateId == (builtinTidT :st :frame :ast base: "MapItemIter")) or
+        (templateId == (builtinTidT :st :frame :ast base: "MapItemIterRV")) or
+        (templateId == (builtinTidT :st :frame :ast base: "MapItemIterVR")) or
+        (templateId == (builtinTidT :st :frame :ast base: "MapItemIterVV"))
+    )
     if itemIsIter then {
         skipChild = true
         (forceMemberOf :st :frame :ast parentTypeId: mid8 nameId: zast.names.wkCall)
@@ -18486,13 +18393,14 @@ mintEntryAndSizedChildren: function {
     ) case some then {
         boolid = bo
     } case none then null
-    isEntryTpl: false
-    if templateId == mapEntryTid then isEntryTpl = true
-    if templateId == mapEntryRVTid then isEntryTpl = true
-    if templateId == mapEntryVRTid then isEntryTpl = true
-    if templateId == mapEntryVVTid then isEntryTpl = true
-    if templateId == idMapEntryRTid then isEntryTpl = true
-    if templateId == idMapEntryVTid then isEntryTpl = true
+    isEntryTpl: (
+        (templateId == mapEntryTid) or
+        (templateId == mapEntryRVTid) or
+        (templateId == mapEntryVRTid) or
+        (templateId == mapEntryVVTid) or
+        (templateId == idMapEntryRTid) or
+        (templateId == idMapEntryVTid)
+    )
     if isEntryTpl then {
         kyId: mintCollectionMethod :st :ast :monoId m: "key"
         st.reg.setReturnType typeId: (ztypes.tid.create from: kyId.u64) value: elemArg
@@ -18579,22 +18487,23 @@ templateIsCollection: function {
     mapEntryRVTid: builtinTidT :st frame: rf :ast base: "MapEntryRV"
     mapEntryVRTid: builtinTidT :st frame: rf :ast base: "MapEntryVR"
     mapEntryVVTid: builtinTidT :st frame: rf :ast base: "MapEntryVV"
-    isIter: false
-    if templateId == listIterTid then isIter = true
-    if templateId == listIterValTid then isIter = true
-    if templateId == setIterTid then isIter = true
-    if templateId == setIterValTid then isIter = true
-    if templateId == idSetIterTid then isIter = true
-    if templateId == idMapItemIterRTid then isIter = true
-    if templateId == idMapItemIterVTid then isIter = true
-    if templateId == mapKeyIterTid then isIter = true
-    if templateId == mapItemIterTid then isIter = true
-    if templateId == mapKeyIterRVTid then isIter = true
-    if templateId == mapKeyIterVRTid then isIter = true
-    if templateId == mapKeyIterVVTid then isIter = true
-    if templateId == mapItemIterRVTid then isIter = true
-    if templateId == mapItemIterVRTid then isIter = true
-    if templateId == mapItemIterVVTid then isIter = true
+    isIter: (
+        (templateId == listIterTid) or
+        (templateId == listIterValTid) or
+        (templateId == setIterTid) or
+        (templateId == setIterValTid) or
+        (templateId == idSetIterTid) or
+        (templateId == idMapItemIterRTid) or
+        (templateId == idMapItemIterVTid) or
+        (templateId == mapKeyIterTid) or
+        (templateId == mapItemIterTid) or
+        (templateId == mapKeyIterRVTid) or
+        (templateId == mapKeyIterVRTid) or
+        (templateId == mapKeyIterVVTid) or
+        (templateId == mapItemIterRVTid) or
+        (templateId == mapItemIterVRTid) or
+        (templateId == mapItemIterVVTid)
+    )
     isColl: isIter
     if templateId == listTid then isColl = true
     if templateId == listValTid then isColl = true
@@ -18672,9 +18581,7 @@ mintCollectionCounters: function {
     # ListView children come from the produced template method (get); the
     # length field (the canonical u64) and the create child materialize here,
     # once per mono (post-memo: this arm mints).
-    isLViewTpl: false
-    if templateId == listViewTid then isLViewTpl = true
-    if templateId == listViewValTid then isLViewTpl = true
+    isLViewTpl: (templateId == listViewTid) or (templateId == listViewValTid)
     if isLViewTpl then {
         mintCounterFields :st :monoId :u64id withCapacity: false
         mintCollectionMethod :st :ast :monoId m: "create"
@@ -18683,9 +18590,7 @@ mintCollectionCounters: function {
     # Set children come from the produced template methods (returns healed
     # by respecialize); the length/capacity fields (the canonical u64) and
     # the create child materialize here, once per mono.
-    isSetTpl: false
-    if templateId == setTid then isSetTpl = true
-    if templateId == setValTid then isSetTpl = true
+    isSetTpl: (templateId == setTid) or (templateId == setValTid)
     if isSetTpl then {
         mintCounterFields :st :monoId :u64id withCapacity: true
         mintCollectionMethod :st :ast :monoId m: "create"
@@ -18702,11 +18607,12 @@ mintCollectionCounters: function {
     # value, an `OptionView`/`Option` for a reference one -- so the clone pass
     # heals get/remove like any other composite return and only the
     # length/capacity fields materialize here.
-    isMapTpl: false
-    if templateId == mapTid then isMapTpl = true
-    if templateId == mapRVTid then isMapTpl = true
-    if templateId == mapVRTid then isMapTpl = true
-    if templateId == mapVVTid then isMapTpl = true
+    isMapTpl: (
+        (templateId == mapTid) or
+        (templateId == mapRVTid) or
+        (templateId == mapVRTid) or
+        (templateId == mapVVTid)
+    )
     if isMapTpl when valArg > 0 then {
         mintCounterFields :st :monoId :u64id withCapacity: true
         return
@@ -18715,9 +18621,7 @@ mintCollectionCounters: function {
     # real returns are declared and the clone pass heals them, so only the
     # length/capacity counters need their canonical u64 stamped on the mono.
     # IdSet has no value parameter, so it is tested on its own.
-    isIdMapTpl: false
-    if templateId == idMapRTid then isIdMapTpl = true
-    if templateId == idMapVTid then isIdMapTpl = true
+    isIdMapTpl: (templateId == idMapRTid) or (templateId == idMapVTid)
     if isIdMapTpl when valArg > 0 then {
         mintCounterFields :st :monoId :u64id withCapacity: true
         return
@@ -18765,9 +18669,7 @@ mintCollectionChildren: function {
     # List children come from the produced template methods cloned per
     # instance (composite returns healed by respecialize); only the
     # length/capacity u64 children materialize here. Runs on every naming.
-    isListTpl: false
-    if templateId == listTid then isListTpl = true
-    if templateId == listValTid then isListTpl = true
+    isListTpl: (templateId == listTid) or (templateId == listValTid)
     if isListTpl then {
         # system's u64, whichever unit instantiates the collection: a user
         # unit may shadow the name
@@ -18812,9 +18714,7 @@ mintCollectionChildren: function {
         :u64id
         :isIter
     )
-    isSized: false
-    if templateId == strTid then isSized = true
-    if templateId == arrayTid then isSized = true
+    isSized: (templateId == strTid) or (templateId == arrayTid)
     # str/array are PERMANENT materializer arms: sized RECORDs are keyed by
     # a numeric value parameter that rides the trie as a literal VALUE key
     # (genericArgIsValue marks the ordinal); it never enters idSubs, so
@@ -19145,106 +19045,19 @@ templateTakesCapacity: function {
     st: zenv.ZSymbolTable
     tplId: ztypes.tid
 } out bool is {
-    sized: false
-    if (
-        tplId ==
-        (builtinTidT
-            :st
-            frame: st.curFrame
-            :ast
-            base: "ListRef"
-        )
-    ) then sized = true
-    if (
-        tplId ==
-        (builtinTidT
-            :st
-            frame: st.curFrame
-            :ast
-            base: "ListVal"
-        )
-    ) then sized = true
-    if (
-        tplId ==
-        (builtinTidT
-            :st
-            frame: st.curFrame
-            :ast
-            base: "MapRR"
-        )
-    ) then sized = true
-    if (
-        tplId ==
-        (builtinTidT
-            :st
-            frame: st.curFrame
-            :ast
-            base: "MapRV"
-        )
-    ) then sized = true
-    if (
-        tplId ==
-        (builtinTidT
-            :st
-            frame: st.curFrame
-            :ast
-            base: "MapVR"
-        )
-    ) then sized = true
-    if (
-        tplId ==
-        (builtinTidT
-            :st
-            frame: st.curFrame
-            :ast
-            base: "MapVV"
-        )
-    ) then sized = true
-    if (
-        tplId ==
-        (builtinTidT
-            :st
-            frame: st.curFrame
-            :ast
-            base: "SetRef"
-        )
-    ) then sized = true
-    if (
-        tplId ==
-        (builtinTidT
-            :st
-            frame: st.curFrame
-            :ast
-            base: "SetVal"
-        )
-    ) then sized = true
-    if (
-        tplId ==
-        (builtinTidT
-            :st
-            frame: st.curFrame
-            :ast
-            base: "IdMapR"
-        )
-    ) then sized = true
-    if (
-        tplId ==
-        (builtinTidT
-            :st
-            frame: st.curFrame
-            :ast
-            base: "IdMapV"
-        )
-    ) then sized = true
-    if (
-        tplId ==
-        (builtinTidT
-            :st
-            frame: st.curFrame
-            :ast
-            base: "IdSet"
-        )
-    ) then sized = true
+    sized: (
+        (tplId == (builtinTidT :st frame: st.curFrame :ast base: "ListRef")) or
+        (tplId == (builtinTidT :st frame: st.curFrame :ast base: "ListVal")) or
+        (tplId == (builtinTidT :st frame: st.curFrame :ast base: "MapRR")) or
+        (tplId == (builtinTidT :st frame: st.curFrame :ast base: "MapRV")) or
+        (tplId == (builtinTidT :st frame: st.curFrame :ast base: "MapVR")) or
+        (tplId == (builtinTidT :st frame: st.curFrame :ast base: "MapVV")) or
+        (tplId == (builtinTidT :st frame: st.curFrame :ast base: "SetRef")) or
+        (tplId == (builtinTidT :st frame: st.curFrame :ast base: "SetVal")) or
+        (tplId == (builtinTidT :st frame: st.curFrame :ast base: "IdMapR")) or
+        (tplId == (builtinTidT :st frame: st.curFrame :ast base: "IdMapV")) or
+        (tplId == (builtinTidT :st frame: st.curFrame :ast base: "IdSet"))
+    )
     return sized
 }
 
@@ -19478,9 +19291,7 @@ genericTypeConstruction: function {
         )
         npi = npi + 1
     }
-    isSized: false
-    if tname.stringView == "str" then isSized = true
-    if tname.stringView == "array" then isSized = true
+    isSized: (tname.stringView == "str") or (tname.stringView == "array")
     if isSized then {
         (mintCollectionChildren
             :st
@@ -20356,9 +20167,7 @@ fnAutoCallable: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out bool i
         i = i + 1
         if row.keep then {
             pnameId: row.name
-            isRecv: false
-            if pnameId == zast.names.wkThis.u64 then isRecv = true
-            if thisPnId > 0 when pnameId == thisPnId then isRecv = true
+            isRecv: (pnameId == zast.names.wkThis.u64) or ((thisPnId > 0) and (pnameId == thisPnId))
             if isRecv.not then {
                 userSeen = true
                 hd: (st.typing.declHasDefaultId
@@ -20584,12 +20393,13 @@ baseIsPrivateCapable: function {
 # stay lenient because their members are minted per-instantiation.
 memberStrictType: function {st: zenv.ZSymbolTable.view bt: u64} out bool is {
     tt: st.reg.typetypeOf typeId: (ztypes.tid.create from: bt.u64)
-    isConc: false
-    if tt == ztypes.ztypetype.recordType then isConc = true
-    if tt == ztypes.ztypetype.classType then isConc = true
-    if tt == ztypes.ztypetype.unionType then isConc = true
-    if tt == ztypes.ztypetype.variantType then isConc = true
-    if tt == ztypes.ztypetype.dataType then isConc = true
+    isConc: (
+        (tt == ztypes.ztypetype.recordType) or
+        (tt == ztypes.ztypetype.classType) or
+        (tt == ztypes.ztypetype.unionType) or
+        (tt == ztypes.ztypetype.variantType) or
+        (tt == ztypes.ztypetype.dataType)
+    )
     if isConc.not then return false
     hasUnit: (unitDeclOfTid :st tid: (ztypes.tid.create from: bt.u64)) > 0
     if hasUnit.not then return false
@@ -20696,12 +20506,13 @@ reportUnknownMember: function {
     # walks stay silent -- their members resolve through later
     # passes or per-instantiation.
     bttMm: st.reg.typetypeOf typeId: bt
-    isConcMm: false
-    if bttMm == ztypes.ztypetype.recordType then isConcMm = true
-    if bttMm == ztypes.ztypetype.classType then isConcMm = true
-    if bttMm == ztypes.ztypetype.unionType then isConcMm = true
-    if bttMm == ztypes.ztypetype.variantType then isConcMm = true
-    if bttMm == ztypes.ztypetype.dataType then isConcMm = true
+    isConcMm: (
+        (bttMm == ztypes.ztypetype.recordType) or
+        (bttMm == ztypes.ztypetype.classType) or
+        (bttMm == ztypes.ztypetype.unionType) or
+        (bttMm == ztypes.ztypetype.variantType) or
+        (bttMm == ztypes.ztypetype.dataType)
+    )
     if isConcMm when (memberStrictType :st :bt) then {
         if st.typing.suppressParamStamps.not then {
             # demand-order safety: walk the type's methods once and
@@ -20791,9 +20602,7 @@ checkCopyMember: function {
         # user-reftype capability gap stays an error.
         if st.typing.curMonoStamp > 0 then {
             bttIw: st.reg.typetypeOf typeId: bt
-            isRefIw: false
-            if bttIw == ztypes.ztypetype.classType then isRefIw = true
-            if bttIw == ztypes.ztypetype.unionType then isRefIw = true
+            isRefIw: (bttIw == ztypes.ztypetype.classType) or (bttIw == ztypes.ztypetype.unionType)
             if isRefIw then {
                 # native view classes (StringView) copy by assignment --
                 # only USER reftypes lack a lowering
@@ -20807,10 +20616,11 @@ checkCopyMember: function {
         }
         btnCp: st.reg.nameOf tid: bt
         bttCp: st.reg.typetypeOf typeId: bt
-        isValCp: false
-        if bttCp == ztypes.ztypetype.recordType then isValCp = true
-        if bttCp == ztypes.ztypetype.variantType then isValCp = true
-        if bttCp == ztypes.ztypetype.facetType then isValCp = true
+        isValCp: (
+            (bttCp == ztypes.ztypetype.recordType) or
+            (bttCp == ztypes.ztypetype.variantType) or
+            (bttCp == ztypes.ztypetype.facetType)
+        )
         # A valtype's DEFAULT `.copy` is the byte copy its assignment
         # already performs -- a valtype holds no reftype, so copying the
         # bytes copies the whole value. Writing one in the as-block
@@ -21148,14 +20958,12 @@ checkTaggedMemberPath: function {
     # PREDICATE: it types bool (true when the value currently holds
     # that arm) and stamps dpArmPredicate for the tag-compare emission.
     btt0: st.reg.typetypeOf typeId: bt
-    isTagged: false
-    if btt0 == ztypes.ztypetype.variantType then isTagged = true
-    if btt0 == ztypes.ztypetype.unionType then isTagged = true
+    isTagged: (btt0 == ztypes.ztypetype.variantType) or (btt0 == ztypes.ztypetype.unionType)
     if isTagged then {
         ctt0: st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)
-        isMember: true
-        if ctt0 == ztypes.ztypetype.functionType then isMember = false
-        if ctt0 == ztypes.ztypetype.dataType then isMember = false
+        isMember: (
+            (ctt0 == ztypes.ztypetype.functionType) or (ctt0 == ztypes.ztypetype.dataType)
+        ).not
         if isMember then {
             isVal: taggedRecvIsValue :ast :st n: (ast.nodes.get i: dp.parent.u64)
             if isVal.not then {
@@ -21214,9 +21022,7 @@ checkTagAccessor: function {
     # exposes the discriminator on instances as a read-only numeric under
     # the declared name; without one, instance reads of `tag` are rejected.
     btt5: st.reg.typetypeOf typeId: bt
-    isSum: false
-    if btt5 == ztypes.ztypetype.variantType then isSum = true
-    if btt5 == ztypes.ztypetype.unionType then isSum = true
+    isSum: (btt5 == ztypes.ztypetype.variantType) or (btt5 == ztypes.ztypetype.unionType)
     if isSum when (taggedRecvIsValue :ast :st n: (ast.nodes.get i: dp.parent.u64)) then {
         tagHit: false
         {
@@ -22155,9 +21961,10 @@ checkMarkerMember: function {
     # the path resolves to the str TEMPLATE (unstamped -- the call check
     # mints the sized instance and stamps only the Call node).
     if (zast.nameTextEq :ast ref: cnId s: "str") then {
-        isStrBase: false
-        if bt == (builtinTidTc :ast :st base: "String") then isStrBase = true
-        if bt == (builtinTidTc :ast :st base: "StringView") then isStrBase = true
+        isStrBase: (
+            (bt == (builtinTidTc :ast :st base: "String")) or
+            (bt == (builtinTidTc :ast :st base: "StringView"))
+        )
         if isStrBase.not then {
             bga: u64
             {
@@ -22181,9 +21988,7 @@ checkMarkerMember: function {
         # Protocol/facet `.borrow` and a typedef wrapper's FUNCTION borrow
         # child are projection callables, not ownership markers.
         btt1: st.reg.typetypeOf typeId: bt
-        isMk: true
-        if btt1 == ztypes.ztypetype.protocolType then isMk = false
-        if btt1 == ztypes.ztypetype.facetType then isMk = false
+        isMk: ((btt1 == ztypes.ztypetype.protocolType) or (btt1 == ztypes.ztypetype.facetType)).not
         if isMk then {
             (forceMemberOf
                 :st
@@ -22235,9 +22040,7 @@ checkTransferMarker: function {
     # `.take` / `.drop`: ownership transfer markers, not members. The path
     # carries the base's type; a bare-name source releases its held locks and
     # invalidates (the taken overlay propagates out of popped scopes).
-    isXferMarker: false
-    if (isMoveMarkerId nameId: cnId) then isXferMarker = true
-    if (isDropMarkerId nameId: cnId) then isXferMarker = true
+    isXferMarker: (isMoveMarkerId nameId: cnId) or (isDropMarkerId nameId: cnId)
     if isXferMarker then {
         # a native has no reference form. The compiler supplies the body, and an
         # inlined one -- a binop, a conversion -- has no C function whose address
@@ -23349,9 +23152,7 @@ reportMissingReturnValue: function {st: zenv.ZSymbolTable node: atomref} is {
     mrt: st.typing.currentReturnTypeId
     if mrt > 0 then {
         mtt: st.reg.typetypeOf typeId: mrt
-        isVoidRet: false
-        if mtt == ztypes.ztypetype.nullType then isVoidRet = true
-        if mtt == ztypes.ztypetype.neverType then isVoidRet = true
+        isVoidRet: (mtt == ztypes.ztypetype.nullType) or (mtt == ztypes.ztypetype.neverType)
         if isVoidRet.not then {
             rtn: st.reg.nameOf tid: mrt
             mm: "missing return value: function expects '\{rtn}'"
@@ -23462,9 +23263,7 @@ checkAtomid: function {
         result = ztypes.tid.create from: vtOpt.u64
         # break/continue diverge: the atom's value is never (the scope
         # entry stays the unregistered placeholder).
-        isBrk: false
-        if node.name.u32 == zast.names.wkBreak then isBrk = true
-        if node.name.u32 == zast.names.wkContinue then isBrk = true
+        isBrk: (node.name.u32 == zast.names.wkBreak) or (node.name.u32 == zast.names.wkContinue)
         if isBrk then {
             result = ztypes.tid.create from: ((walkLookupTyperef
                 :st
@@ -23821,9 +23620,7 @@ shadowCollapseIfSingle: function {
 # the payload); the opposite excludes it, and an exclusion that leaves a
 # single payload arm collapses to the same shadow form.
 applyPredFact: function {ast: Ast.view st: zenv.ZSymbolTable f: ArmPredFact.view holds: bool} is {
-    doNarrow: false
-    if holds when f.negated.not then doNarrow = true
-    if holds.not when f.negated then doNarrow = true
+    doNarrow: holds != f.negated
     if doNarrow then {
         po: (st.typing.declChildOfId
             parentTypeId: f.fullTid
@@ -24391,9 +24188,7 @@ checkAssignment: function {
             :vt
             :vid2
         )
-        instX: false
-        if own == ztypes.zownership.borrowed then instX = true
-        if pboX when bpins.length > 0 then instX = true
+        instX: (own == ztypes.zownership.borrowed) or (pboX and (bpins.length > 0))
         st.typing.pendingBorrowOwned = false
         if instX then {
             (installPins
@@ -25631,9 +25426,7 @@ forComprehensionTid: function {
     # that element type (the comprehension form).
     if elemT > 0 then {
         en: st.reg.nameOf tid: (ztypes.tid.create from: elemT.u64)
-        isNull: false
-        if en.stringView == "null" then isNull = true
-        if en.length == 0 then isNull = true
+        isNull: (en.stringView == "null") or (en.length == 0)
         if isNull.not then {
             # the comprehension's element decides the family, exactly as a
             # written-out container declaration would
@@ -26097,11 +25890,7 @@ reportMissingBinopMethod: function {
         # declare the operator (numerics declare all six). An undeclared
         # `<` / `>` / `<=` / `>=` -- on a resultval or any other aggregate --
         # is a hard error, not invalid C.
-        isOrd: false
-        if opn == "<" then isOrd = true
-        if opn == ">" then isOrd = true
-        if opn == "<=" then isOrd = true
-        if opn == ">=" then isOrd = true
+        isOrd: (opn == "<") or (opn == ">") or (opn == "<=") or (opn == ">=")
         if isOrd then {
             lnOr: st.reg.nameOf tid: (ztypes.tid.create from: dt.u64)
             mgOr: "type '\{lnOr}' has no '\{opn}' method"
@@ -26140,11 +25929,12 @@ reportMissingBinopMethod: function {
     # type error rather than invalid C. Type params, protocols, facets and
     # non-aggregates resolve elsewhere and keep the coercible lhs result.
     aTt: st.reg.typetypeOf typeId: dt
-    aAgg: false
-    if aTt == ztypes.ztypetype.recordType then aAgg = true
-    if aTt == ztypes.ztypetype.classType then aAgg = true
-    if aTt == ztypes.ztypetype.unionType then aAgg = true
-    if aTt == ztypes.ztypetype.variantType then aAgg = true
+    aAgg: (
+        (aTt == ztypes.ztypetype.recordType) or
+        (aTt == ztypes.ztypetype.classType) or
+        (aTt == ztypes.ztypetype.unionType) or
+        (aTt == ztypes.ztypetype.variantType)
+    )
     if aAgg then {
         ln: st.reg.nameOf tid: (ztypes.tid.create from: dt.u64)
         noMethodMsg: "type '\{ln}' has no '\{opn}' method"
@@ -26196,12 +25986,8 @@ checkBinopMethodArg: function {
             skipA: false
             strT9x: builtinTidTc :ast :st base: "String"
             svT9x: builtinTidTc :ast :st base: "StringView"
-            rSty: false
-            if rt == strT9x then rSty = true
-            if rt == svT9x then rSty = true
-            pSty: false
-            if oParamT == strT9x then pSty = true
-            if oParamT == svT9x then pSty = true
+            rSty: (rt == strT9x) or (rt == svT9x)
+            pSty: (oParamT == strT9x) or (oParamT == svT9x)
             if rSty when pSty then skipA = true
             ptt: st.reg.typetypeOf typeId: oParamT
             if ptt == ztypes.ztypetype.protocolType then skipA = true
@@ -26648,12 +26434,13 @@ memberIsSelfTyped: function {
         ppi = ppi + 1
         if prow.keep then {
             pnid: prow.name
-            isRecv: false
-            if pnid == zast.names.wkThis.u64 then isRecv = true
-            if (st.reg.thisParamNameIs
-                tid: memberTid
-                nameId: (zast.nameid.create from: pnid.u32.orPanic)
-            ) then isRecv = true
+            isRecv: (
+                (pnid == zast.names.wkThis.u64) or
+                (st.reg.thisParamNameIs
+                    tid: memberTid
+                    nameId: (zast.nameid.create from: pnid.u32.orPanic)
+                )
+            )
             tnB: ast.names.texts.get i: pnid.u64
             if isRecv.not then {
                 pto: (st.typing.declChildOf
@@ -26686,9 +26473,7 @@ refuseSelfTypedMember: function {
     colno: u32
 } out bool is {
     btt: st.reg.typetypeOf typeId: recvTid
-    isIface: false
-    if btt == ztypes.ztypetype.protocolType then isIface = true
-    if btt == ztypes.ztypetype.facetType then isIface = true
+    isIface: (btt == ztypes.ztypetype.protocolType) or (btt == ztypes.ztypetype.facetType)
     if isIface.not then return false
     mo: st.typing.declChildOfId parentTypeId: recvTid :nameId
     match (
@@ -28176,9 +27961,10 @@ missingCtorFields: function {
         pcid: ids.get :i
         pnameId: idsNm.get :i
         i = i + 1
-        isRecv: false
-        if pnameId == zast.names.wkThis.u64 then isRecv = true
-        if thisPnId.isZero.not when pnameId == thisPnId.u64 then isRecv = true
+        isRecv: (
+            (pnameId == zast.names.wkThis.u64) or
+            (thisPnId.isZero.not and (pnameId == thisPnId.u64))
+        )
         # THE RECEIVER IS REQUIRED WHENEVER NOTHING ELSE SUPPLIED IT, and it is
         # the first declared parameter, so it also takes positional slot 0.
         # Skipping it unconditionally credited that slot to the NEXT parameter,
@@ -28200,9 +27986,9 @@ missingCtorFields: function {
                 # symbol (the fnptr-field fill in the emitter's create path)
                 fhbOk: (st.typing.fnHasBody.get key: pcid).or d: false
                 effTT: st.reg.typetypeOf typeId: effId
-                ctorFill: false
-                if effTT == ztypes.ztypetype.recordType then ctorFill = true
-                if effTT == ztypes.ztypetype.classType then ctorFill = true
+                ctorFill: (
+                    (effTT == ztypes.ztypetype.recordType) or (effTT == ztypes.ztypetype.classType)
+                )
                 if fhbOk when ctorFill then need = false
             }
             if (st.typing.declHasDefaultId
@@ -29032,9 +28818,7 @@ checkTypedCallArg: function {
     isLockish: aow.isLockish
     isViewArg: aow.isViewArg
     pt: aow.pt
-    dispHit: false
-    if isTake then dispHit = true
-    if isLockish then dispHit = true
+    dispHit: isTake or isLockish
     if dispHit when (typeIsReftype :st tid: (ztypes.tid.create from: vt.u64)) then {
         dispVal: ztypes.zparamownership.borrowMode
         if isTake then dispVal = ztypes.zparamownership.takeMode
@@ -30152,21 +29936,10 @@ checkTypedefOrProjectionCall: function {
     isBorrowForm: bool
 } out callleg is {
     tdo: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: tdcid.u64
-    isTd: false
-    if (
-        (typedefBaseOf
-            :st
-            tid: (ztypes.tid.create from: tdo.u64)
-        ) >
-        0
-    ) then isTd = true
-    if (
-        (typedefBaseTidOf
-            :st
-            tid: (ztypes.tid.create from: tdo.u64)
-        ) >
-        0
-    ) then isTd = true
+    isTd: (
+        ((typedefBaseOf :st tid: (ztypes.tid.create from: tdo.u64)) > 0) or
+        ((typedefBaseTidOf :st tid: (ztypes.tid.create from: tdo.u64)) > 0)
+    )
     if isTd when isBorrowForm then {
         return (callleg handled: true tid: (checkTypedefBorrow
             :st
@@ -30188,9 +29961,7 @@ checkTypedefOrProjectionCall: function {
         )
     }
     pjtt: st.reg.typetypeOf typeId: (ztypes.tid.create from: tdo.u64)
-    isProj: false
-    if pjtt == ztypes.ztypetype.facetType then isProj = true
-    if pjtt == ztypes.ztypetype.protocolType then isProj = true
+    isProj: (pjtt == ztypes.ztypetype.facetType) or (pjtt == ztypes.ztypetype.protocolType)
     if isProj then {
         pjTake: false
         pjBorrow: false
@@ -30245,9 +30016,7 @@ lockMethodReceiver: function {
                 # unconditionally.
                 doLock: false
                 rtt: st.reg.typetypeOf typeId: (ztypes.tid.create from: rvt2.u64)
-                isFP: false
-                if rtt == ztypes.ztypetype.facetType then isFP = true
-                if rtt == ztypes.ztypetype.protocolType then isFP = true
+                isFP: (rtt == ztypes.ztypetype.facetType) or (rtt == ztypes.ztypetype.protocolType)
                 if isFP then {
                     doLock = true
                 } else {
@@ -30908,9 +30677,9 @@ checkGenericFnCall: function {
             ) case some then {
                 doLockG: false
                 rttG: st.reg.typetypeOf typeId: (ztypes.tid.create from: rvtG.u64)
-                isFPG: false
-                if rttG == ztypes.ztypetype.facetType then isFPG = true
-                if rttG == ztypes.ztypetype.protocolType then isFPG = true
+                isFPG: (
+                    (rttG == ztypes.ztypetype.facetType) or (rttG == ztypes.ztypetype.protocolType)
+                )
                 if isFPG then {
                     doLockG = true
                 } else {
@@ -31081,9 +30850,7 @@ checkResolvedValueCall: function {
         # generic). Walk the ctor args (hoist + consume) and the
         # value IS the constructed type, so the binding stamps.
         dctt: st.reg.typetypeOf typeId: dro
-        isCtorT: false
-        if dctt == ztypes.ztypetype.classType then isCtorT = true
-        if dctt == ztypes.ztypetype.recordType then isCtorT = true
+        isCtorT: (dctt == ztypes.ztypetype.classType) or (dctt == ztypes.ztypetype.recordType)
         if isCtorT then {
             if call.nargs > 0 then {
                 dcm: st.pushCall
@@ -34024,10 +33791,11 @@ checkStmtExpression: function {
     ckOpt0: st.typing.callKind.get key: wrap.expression.u64
     isR0: isReturnCallKind o: ckOpt0
     bn0: bareAtomNameId :ast n: (ast.nodes.get i: wrap.expression.u64)
-    ctl0: false
-    if bn0 == zast.names.wkBreak then ctl0 = true
-    if bn0 == zast.names.wkContinue then ctl0 = true
-    if bn0 == zast.names.wkReturn then ctl0 = true
+    ctl0: (
+        (bn0 == zast.names.wkBreak) or
+        (bn0 == zast.names.wkContinue) or
+        (bn0 == zast.names.wkReturn)
+    )
     if ctl0 then isR0 = true
     # a statement whose value resolved to nothing and raised nothing:
     # an unresolvable root name is an unknown reference (the emitter
@@ -36588,12 +36356,8 @@ constantCompareType: function {
     lt: u64
     rt: u64
 } out u64 is {
-    lLit: false
-    if lt == st.reg.literalIntTid then lLit = true
-    if lt == st.reg.literalFloatTid then lLit = true
-    rLit: false
-    if rt == st.reg.literalIntTid then rLit = true
-    if rt == st.reg.literalFloatTid then rLit = true
+    lLit: (lt == st.reg.literalIntTid) or (lt == st.reg.literalFloatTid)
+    rLit: (rt == st.reg.literalIntTid) or (rt == st.reg.literalFloatTid)
     conc: u64
     if lLit.not then {
         if lt > 0 then conc = lt
@@ -37125,9 +36889,7 @@ constArithInt: function {
         if b == 0 then return (ztypes.makeIntConst 0)
         # -fwrapv makes the product defined, so dividing it back is a valid
         # test; MIN * -1 wraps to itself and passes it, hence the pair below.
-        bad: false
-        if a == (0 - 1) when b == mn then bad = true
-        if b == (0 - 1) when a == mn then bad = true
+        bad: ((a == (0 - 1)) and (b == mn)) or ((b == (0 - 1)) and (a == mn))
         r: a * b
         if (r / a) != b then bad = true
         if bad then {
@@ -37236,9 +36998,7 @@ constBoolLogic: function {
         return (boolConst :st :frame :ast v: both)
     }
     if opnId == zast.names.wkOr then {
-        either: false
-        if la == 1 then either = true
-        if ra == 1 then either = true
+        either: (la == 1) or (ra == 1)
         return (boolConst :st :frame :ast v: either)
     }
     return ztypes.noConst
@@ -37767,9 +37527,7 @@ constArmRead: function {
     if ptu == 0 then return ztypes.noConst
     ptid: ztypes.tid.create from: ptu.u64
     ptt: st.reg.typetypeOf typeId: ptid
-    isSum: false
-    if ptt == ztypes.ztypetype.variantType then isSum = true
-    if ptt == ztypes.ztypetype.unionType then isSum = true
+    isSum: (ptt == ztypes.ztypetype.variantType) or (ptt == ztypes.ztypetype.unionType)
     if isSum.not then return ztypes.noConst
     anm: armNameId
     if (armCarriesPayload :st armTid: ptid armName: anm) then return ztypes.noConst
@@ -37988,12 +37746,7 @@ constStringMethod: function {
         if f.kind.ivalKind.not then return ztypes.noConst
         if t.kind.ivalKind.not then return ztypes.noConst
         sz: s.length.i64.orPanic
-        bad: false
-        if f.ival < 0 then bad = true
-        if t.ival < 0 then bad = true
-        if f.ival > sz then bad = true
-        if t.ival > sz then bad = true
-        if f.ival > t.ival then bad = true
+        bad: (f.ival < 0) or (t.ival < 0) or (f.ival > sz) or (t.ival > sz) or (f.ival > t.ival)
         if bad then {
             (constFailRecord
                 :st
@@ -39527,17 +39280,10 @@ resolveConstantDefsIn: function {
             bmNode: argRefAt :ast nid: (zast.nodeid.create from: bm.u32)
             if bmNode.nid.isZero.not then {
                 defName: zast.nameTextCopy :ast ref: bmNode.name
-                isNs: false
-                if (zast.unitOpKindIs
-                    :ast
-                    opId: bmNode.operation
-                    k: zast.unitkind.namespace
-                ) then isNs = true
-                if (zast.unitOpKindIs
-                    :ast
-                    opId: bmNode.operation
-                    k: zast.unitkind.subunit
-                ) then isNs = true
+                isNs: (
+                    (zast.unitOpKindIs :ast opId: bmNode.operation k: zast.unitkind.namespace) or
+                    (zast.unitOpKindIs :ast opId: bmNode.operation k: zast.unitkind.subunit)
+                )
                 # a generic template's constants are its own too, keyed on the
                 # template's id (the def-node stamp resolveInlineGenericUnit
                 # lays); a template nothing resolved yet has none to key on
@@ -39798,9 +39544,7 @@ targetIsHost: function {triple: StringView} out bool is {
     if a9h.length == 0 then return true
     ho: os.hostOsName
     ha: os.hostArchName
-    if (o9h.stringView == ho.stringView).not then return false
-    if (a9h.stringView == ha.stringView).not then return false
-    return true
+    return (o9h.stringView == ho.stringView) and (a9h.stringView == ha.stringView)
 }
 
 # seedFoldNatives -- answer the compile-time values THIS TABLE names.
