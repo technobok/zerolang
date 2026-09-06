@@ -19340,6 +19340,64 @@ bareAtomText: function {ast: Ast.view n: astnode.view} outx StringView is {
     }
 }
 
+# seedCondOne -- the narrowBox seeds one condition contributes, appended to the
+# parallel lists. Seeding a conjunct as it is emitted is what lets the conjunct
+# after it read the payload this one narrowed.
+seedCondOne: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    condId: u32
+    bodyId: zast.nodeid
+    names: List String
+    svids: ListVal ztypes.vid
+    vals: List String
+    tids: ListVal u64
+} is {
+    k: ast.nodes.get i: condId.u64
+    if k.namedoperation then {
+        (seedCondOp
+            :ast
+            :symtab
+            :ctx
+            n: (ast.nodes.get i: k.operation.u64)
+            body: (ast.nodes.get i: bodyId.u64)
+            :names
+            :svids
+            :vals
+            :tids
+        )
+    }
+}
+
+# installNarrowSeeds -- install the aliases at index `from` and after, recording
+# what each vid held so the clause can put it back. The saved value is the one
+# in place BEFORE this clause touched it, so installing in stages still
+# restores in one pass.
+installNarrowSeeds: function {
+    ctx: Ctx
+    svids: (ListVal ztypes.vid).view
+    vals: (List String).view
+    tids: (ListVal u64).view
+    prevV: List String
+    prevT: ListVal u64
+    from: u64
+} is {
+    si: from
+    for si < svids.length loop {
+        snv0: svids.get i: si
+        pv: vvGet xs: ctx.narrowBox vid: snv0
+        prevV.append pv
+        ptv: (vtGet xs: ctx.narrowTid vid: snv0).or d: (ztypes.tid.create from: 0)
+        prevT.append ptv
+        svv: vals.get i: si
+        vvSet xs: ctx.narrowBox vid: snv0 val: svv.stringView
+        stt: tids.get i: si
+        vtSet xs: ctx.narrowTid vid: snv0 tid: (ztypes.tid.create from: stt.u64)
+        si = si + 1
+    }
+}
+
 # ifPredicateSeeds -- collect the narrowBox seeds for a clause's bare
 # arm-predicate conjuncts, all condition forms (parallel lists).
 ifPredicateSeeds: function {
@@ -19860,6 +19918,12 @@ emitIfClause: function {
         # conditions into a guard first and let the header test that. Only the
         # FIRST clause takes this path -- a later clause's header is
         # `} else if (..) {`, which has nowhere to put the statements.
+        sN: List String
+        sVid: ListVal ztypes.vid
+        sV: List String
+        sT: ListVal u64
+        sPrevV: List String
+        sPrevT: ListVal u64
         guarded: false
         if isFirst when (whenCondSuspends :ast :ctx :n) then guarded = true
         cond: String
@@ -19867,12 +19931,57 @@ emitIfClause: function {
             flushArgHoists :ctx :ind :tmp :buf
             gv: emitGuardedWhenCond :ast :symtab :ctx :n :ind :buf
             cond.append gv
+            (ifPredicateSeeds
+                :ast
+                :symtab
+                :ctx
+                conds: n.conditions
+                bodyId: n.statement
+                names: sN
+                svids: sVid
+                vals: sV
+                tids: sT
+            )
+            (installNarrowSeeds
+                :ctx
+                svids: sVid
+                vals: sV
+                tids: sT
+                prevV: sPrevV
+                prevT: sPrevT
+                from: 0
+            )
         } else {
             cox1309: u64
             for cox1309 < n.conditions.count.u64 loop {
                 kId: zast.kidAt kids: ast.kids span: n.conditions i: cox1309
                 cox1309 = cox1309 + 1
                 appendCondText :ast :symtab :ctx :kId :cond
+                # this conjunct's alias goes in before the next one renders:
+                # `when` short-circuits, so a later conjunct runs only where
+                # this one held and must read the payload it narrowed. The
+                # checker's twin of this ordering is checkClause.
+                had: sVid.length
+                (seedCondOne
+                    :ast
+                    :symtab
+                    :ctx
+                    condId: kId
+                    bodyId: n.statement
+                    names: sN
+                    svids: sVid
+                    vals: sV
+                    tids: sT
+                )
+                (installNarrowSeeds
+                    :ctx
+                    svids: sVid
+                    vals: sV
+                    tids: sT
+                    prevV: sPrevV
+                    prevT: sPrevT
+                    from: had
+                )
             }
         }
         if isFirst then {
@@ -19886,35 +19995,10 @@ emitIfClause: function {
             buf.append lg
         }
         ind2: "\{ind}    "
-        sN: List String
-        sVid: ListVal ztypes.vid
-        sV: List String
-        sT: ListVal u64
-        (ifPredicateSeeds
-            :ast
-            :symtab
-            :ctx
-            conds: n.conditions
-            bodyId: n.statement
-            names: sN
-            svids: sVid
-            vals: sV
-            tids: sT
-        )
-        sPrevV: List String
-        sPrevT: ListVal u64
         si: u64
         for si < sN.length loop {
             snm: sN.get i: si
-            snv0: sVid.get i: si
-            pv: vvGet xs: ctx.narrowBox vid: snv0
-            sPrevV.append pv
-            ptv: (vtGet xs: ctx.narrowTid vid: snv0).or d: (ztypes.tid.create from: 0)
-            sPrevT.append ptv
             svv: sV.get i: si
-            vvSet xs: ctx.narrowBox vid: snv0 val: svv.stringView
-            stt: sT.get i: si
-            vtSet xs: ctx.narrowTid vid: snv0 tid: (ztypes.tid.create from: stt.u64)
             cmtS: "\{ind}    /* alias: \{snm} => \{svv} */\n"
             buf.append cmtS
             si = si + 1

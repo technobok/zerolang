@@ -23757,28 +23757,22 @@ checkClause: function {
         condId: zast.ifCondAt :ast nid: clause.nid i: k
         k = k + 1
         cond: argRefAt :ast nid: condId
-        if cond.nid.isZero.not then checkClauseCondition :st :unitDecl :ast :cond :boolId
-    }
-    k2: u64
-    for k2 < clause.nconds loop {
-        cndId: zast.ifCondAt :ast nid: clause.nid i: k2
-        k2 = k2 + 1
-        cnd: argRefAt :ast nid: cndId
-        if cnd.nid.isZero.not then {
-            fo: predFactOf :ast :st n: (ast.nodes.get i: cnd.operation.u64) :boolId
+        if cond.nid.isZero.not then {
+            checkClauseCondition :st :unitDecl :ast :cond :boolId
+            # the fact a conjunct establishes holds for the conjuncts after it,
+            # not only for the body: `when` short-circuits, so a later conjunct
+            # runs only where this one held. Applying it here is what makes
+            # `if x.some when x > 3` mean what the nested form means.
+            fo: predFactOf :ast :st n: (ast.nodes.get i: cond.operation.u64) :boolId
             match (
                 fo
             ) case some then {
-                factsOut.append fo.take
+                pf: fo.take
+                applyPredFact :ast :st f: pf holds: true
+                factsOut.append pf
             } case none then null
         }
     }
-    with afit: factsOut.iterate do for af: afit loop (applyPredFact
-        :ast
-        :st
-        f: af
-        holds: true
-    )
     # a condition's borrow residue is dead once the condition value is
     # consumed -- it must not leak into the block's argument lock seeds
     drainPendingBorrow :st
