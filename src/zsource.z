@@ -3482,23 +3482,7 @@ Analysis: class {
             with uit: st.typing.atomVariableId.iterateItems do for av: uit loop {
                 if (wtgt.has item: av.key) == false then used.add item: av.value
             }
-            mainOp: zast.nodeid
-            uN: prog.units.length
-            uI: u64
-            for uI < uN loop {
-                uid: (zast.nodeid.create from: (prog.units.get i: uI))
-                uI = uI + 1
-                unm: String
-                uop: zast.nodeid
-                {
-                    un: prog.nodes.get i: uid.u64
-                    if un.namedoperation then {
-                        unm = (zast.poolTextCopy pool: prog.names ref: un.name)
-                        uop = un.operation
-                    }
-                }
-                if unm.stringView == uname when uop > 0 then mainOp = uop
-            }
+            mainOp: unitBodyOpOf :prog :uname
             if mainOp > 0 then {
                 fnOps: ListVal u32
                 memIds: ListVal u32
@@ -3858,22 +3842,7 @@ Analysis: class {
         :this prog: Ast.view uname: StringView st: zenv.ZSymbolTable
     } is {
         {
-            mainOp: zast.nodeid
-            uN: prog.units.length
-            uI: u64
-            for uI < uN loop {
-                uid: (zast.nodeid.create from: (prog.units.get i: uI))
-                uI = uI + 1
-                {
-                    un: prog.nodes.get i: uid.u64
-                    match (
-                        un
-                    ) case namedoperation then {
-                        unm: zast.poolTextAt pool: prog.names ref: un.name
-                        if unm.stringView == uname then mainOp = un.operation
-                    } else null
-                }
-            }
+            mainOp: unitBodyOpOf :prog :uname
             if mainOp.isZero then return
             # the unit node itself is fsno-less; anchor on the first member's
             # operation node, like the L013 walk does
@@ -3961,347 +3930,350 @@ Analysis: class {
     # reportUnusedDefs -- L012 (unused private definition). A private unit-level definition
     # (function, type, or alias excluded from a `public:` block) that is never referenced is
     # dead. Usage is declaration-based: a reference name resolved against the unit maps to the
-    # same member DeclId that carries the private flag, so an unused alias is flagged even when
-    # its target is used directly elsewhere.
+    # member DeclId that carries the private flag. An alias declares no typed member of its
+    # own and is not judged. The evidence is gathered once -- the recorded references and,
+    # as a fallback, every atom name in the unit's own file segment -- then the unit's
+    # members and each type's members are judged against it.
     reportUnusedDefs: function {
         :this prog: Ast.view uname: StringView st: zenv.ZSymbolTable.view
     } is {
-        {
-            mainTid: u64
-            {
-                uo: (ztypecheck.declTypeIdOf
-                    :st
-                    declId: (st.typing.declFindChild
-                        parentDeclId: st.typing.programRoot
-                        nameId: (zast.poolFind pool: prog.names text: uname)
-                    )
+        mainTid: unitTidOf :prog :uname :st
+        if mainTid == 0 then return
+        usedE: usedDeclSet :prog :st :mainTid
+        mainOp: unitBodyOpOf :prog :uname
+        if mainOp.isZero then return
+        memIds: unitMemberIds :prog unitOp: mainOp
+        refNames: unitAtomNames :prog :memIds
+        ev: (UnusedEvidence :mainTid :usedE :refNames :memIds)
+        this.reportUnusedUnitDefs :prog :st :ev
+        this.reportUnusedTypeMembers :prog :st :ev
+    }
+
+    # reportUnusedUnitDefs -- L012 over the unit's own members
+    reportUnusedUnitDefs: function {
+        :this prog: Ast.view st: zenv.ZSymbolTable.view ev: UnusedEvidence.view
+    } is {
+        mI: u64
+        for mI < ev.memIds.length loop {
+            mid: ev.memIds.get i: mI
+            mI = mI + 1
+            this.reportIfUnusedDef :prog :st :ev :mid
+        }
+    }
+
+    # reportIfUnusedDef -- L012 for one unit-level member: private, reached by
+    # no recorded reference, and named by no atom in the unit's own segment
+    reportIfUnusedDef: function {
+        :this prog: Ast.view st: zenv.ZSymbolTable.view ev: UnusedEvidence.view mid: u32
+    } is {
+        m: zast.namedSiteAt ast: prog nid: mid
+        if m.name.isZero then return
+        dmD: (st.typing.declTypedMemberIdOf
+            parentTypeId: (ztypes.tid.create from: ev.mainTid.u64)
+            nameId: m.name
+        )
+        if dmD.isZero then return
+        if (ev.usedE.has item: dmD) then return
+        if (ev.refNames.has item: m.name.u64) then return
+        if (ztypecheck.declMemberIsPrivate
+            :st
+            tid: (ztypes.tid.create from: ev.mainTid.u64)
+            nameId: m.name
+        ) then {
+            dnm: (zast.poolTextAt pool: prog.names ref: m.name)
+            (this.warn
+                code: "L012"
+                msg: "private definition '\{dnm}' is never used"
+                line: m.line
+                col: m.col
+                width: dnm.length.u32.orPanic
+            )
+        }
+    }
+
+    # reportUnusedTypeMembers -- L012 over the `is`/`as` members of each type
+    # the unit defines
+    reportUnusedTypeMembers: function {
+        :this prog: Ast.view st: zenv.ZSymbolTable.view ev: UnusedEvidence.view
+    } is {
+        tmI: u64
+        for tmI < ev.memIds.length loop {
+            tmid: ev.memIds.get i: tmI
+            tmI = tmI + 1
+            this.reportUnusedMembersOf :prog :st :ev site: (zast.namedSiteAt ast: prog nid: tmid)
+        }
+    }
+
+    # reportUnusedMembersOf -- L012 for each private member of the type a unit
+    # member defines, a private edge no recorded reference reaches; nothing
+    # when the member defines no type
+    reportUnusedMembersOf: function {
+        :this prog: Ast.view st: zenv.ZSymbolTable.view ev: UnusedEvidence.view site: zast.namedsite
+    } is {
+        typeTid: definedTypeTidOf :prog :st mainTid: ev.mainTid :site
+        if typeTid == 0 then return
+        tnm: (zast.poolTextAt pool: prog.names ref: site.name)
+        items: zast.objItemIds ast: prog nid: site.operation
+        j: u64
+        for j < items.length loop {
+            member: zast.namedSiteAt ast: prog nid: (items.get i: j)
+            j = j + 1
+            if member.name.isZero == false then {
+                tmdi: (st.typing.declTypedMemberIdOf
+                    parentTypeId: (ztypes.tid.create from: typeTid.u64)
+                    nameId: member.name
                 )
-                if uo.isZero == false then mainTid = uo.u64
-            }
-            if mainTid > 0 then {
-                usedE: IdSet u64
-                # reference evidence off refDecl: a use of a unit-level def
-                # marks its declaration under the unit; a member use marks
-                # the member declaration under the owning type's canonical tid
-                uNames: ListVal u64
-                mOwn: ListVal u64
-                mNms: ListVal u64
-                with a: st.typing.refDecl.iterateItems do for e: a loop {
-                    dNm: u64
-                    dPar: u64
-                    {
-                        dlo: st.typing.decls.get i: e.value.u64
-                        dNm = dlo.name.u64
-                        dPar = dlo.parent
-                    }
-                    if dPar > 0 when dNm > 0 then {
-                        pKindU: false
-                        pTid: u64
-                        {
-                            plo: st.typing.decls.get i: dPar
-                            if plo.kind.unitDecl then pKindU = true
-                            if plo.kind.typeDecl then pTid = plo.typeId
-                        }
-                        if pKindU then uNames.append from: dNm
-                        if pTid > 0 then {
-                            mOwn.append from: pTid
-                            mNms.append from: dNm
-                        }
-                    }
-                }
-                unI: u64
-                for unI < uNames.length loop {
-                    un9b: uNames.get i: unI
-                    unI = unI + 1
-                    cdi: (st.typing.declTypedMemberIdOf
-                        parentTypeId: (ztypes.tid.create from: mainTid.u64)
-                        nameId: (zast.nameid.create from: un9b.u32.orPanic)
-                    )
-                    if cdi > 0 then usedE.add item: cdi
-                }
-                tgtNames: (ztypecheck.publicAliasInternalNames
-                    :st
-                    pool: prog.names
-                    tid: (ztypes.tid.create from: mainTid.u64)
-                )
-                tI: u64
-                for tI < tgtNames.length loop {
-                    tnm: tgtNames.get i: tI
-                    tI = tI + 1
-                    tpid: (prog.names.find s: tnm.stringView)
-                    if tpid > 0 then {
-                        tdi: (st.typing.declTypedMemberIdOf
-                            parentTypeId: (ztypes.tid.create from: mainTid.u64)
-                            nameId: tpid
+                if tmdi.isZero == false when (ev.usedE.has item: tmdi) == false then {
+                    if (ztypecheck.declMemberIsPrivate
+                        :st
+                        tid: (ztypes.tid.create from: typeTid.u64)
+                        nameId: member.name
+                    ) then {
+                        tmnm: (zast.poolTextAt pool: prog.names ref: member.name)
+                        (this.warn
+                            code: "L012"
+                            msg: "private member '\{tnm}.\{tmnm}' is never used"
+                            line: member.line
+                            col: member.col
+                            width: tmnm.length.u32.orPanic
                         )
-                        if tdi > 0 then usedE.add item: tdi
-                    }
-                }
-                moI: u64
-                for moI < mOwn.length loop {
-                    moTid: mOwn.get i: moI
-                    moNm: mNms.get i: moI
-                    moI = moI + 1
-                    mdi: (st.typing.declTypedMemberIdOf
-                        parentTypeId: (ztypes.tid.create from: moTid.u64)
-                        nameId: (zast.nameid.create from: moNm.u32.orPanic)
-                    )
-                    if mdi > 0 then usedE.add item: mdi
-                }
-                mainOp: zast.nodeid
-                uN: prog.units.length
-                uI: u64
-                for uI < uN loop {
-                    uid: (zast.nodeid.create from: (prog.units.get i: uI))
-                    uI = uI + 1
-                    unm: String
-                    uop: zast.nodeid
-                    {
-                        un: prog.nodes.get i: uid.u64
-                        if un.namedoperation then {
-                            unm = (zast.poolTextCopy pool: prog.names ref: un.name)
-                            uop = un.operation
-                        }
-                    }
-                    if unm.stringView == uname when uop > 0 then mainOp = uop
-                }
-                if mainOp > 0 then {
-                    memIds: ListVal u32
-                    {
-                        bodyIds: zast.unitBodyIdsAt ast: prog unitId: mainOp
-                        vx419: u64
-                        for vx419 < bodyIds.count.u64 loop {
-                            mid: zast.kidAt kids: prog.kids span: bodyIds i: vx419
-                            vx419 = vx419 + 1
-                            memIds.append from: mid
-                        }
-                    }
-                    # syntactic fallback evidence: stamps exist only for
-                    # bodies the demand walk checked, so a private def used
-                    # only inside an unchecked body (a construction in a
-                    # never-demanded factory) would read as dead. Any atomid
-                    # in the unit's own file segment is a reference. The
-                    # unit's wrapper nodes are minted after its file segment
-                    # closes, so the first body member -- not the unitdef --
-                    # probes for the segment.
-                    probe: u32
-                    if memIds.length > 0 then probe = memIds.get i: 0
-                    segStart: u32
-                    segEnd: u32
-                    sgN: prog.fileSegs.length
-                    {
-                        sgI: u64
-                        for sgI < sgN loop {
-                            sg: prog.fileSegs.get i: sgI
-                            sgI = sgI + 1
-                            if probe >= sg.startId when probe < sg.endId then {
-                                narrower: segEnd == segStart
-                                if (
-                                    (sg.endId - sg.startId) < (segEnd - segStart)
-                                ) then narrower = true
-                                if narrower then {
-                                    segStart = sg.startId
-                                    segEnd = sg.endId
-                                }
-                            }
-                        }
-                    }
-                    refNameSet: IdSet u64
-                    if segEnd > segStart then {
-                        ndI: segStart.u64
-                        for ndI < segEnd.u64 loop {
-                            nd0: prog.nodes.get i: ndI.u64
-                            if nd0.atomid then {
-                                refNameSet.add item: nd0.name.u64
-                            }
-                            ndI = ndI + 1
-                        }
-                    } else {
-                        # no segment covers the unit body: it is the root
-                        # parse (only subunit loads append segments), so
-                        # scan the nodes no segment covers.
-                        totN: prog.nodes.length
-                        ndJ: 1.u64
-                        for ndJ < totN loop {
-                            covered: false
-                            {
-                                sgJ: u64
-                                for sgJ < sgN loop {
-                                    sgB: prog.fileSegs.get i: sgJ
-                                    sgJ = sgJ + 1
-                                    if ndJ >= sgB.startId.u64 when (
-                                        ndJ < sgB.endId.u64
-                                    ) then covered = true
-                                }
-                            }
-                            if covered == false then {
-                                ndB0: prog.nodes.get i: ndJ
-                                if ndB0.atomid then {
-                                    refNameSet.add item: ndB0.name.u64
-                                }
-                            }
-                            ndJ = ndJ + 1
-                        }
-                    }
-                    mN: memIds.length
-                    mI: u64
-                    for mI < mN loop {
-                        mid: memIds.get i: mI
-                        mI = mI + 1
-                        mNameRef: u32
-                        mLn: u32
-                        mCl: u32
-                        {
-                            m: prog.nodes.get i: mid.u64
-                            if m.namedoperation then {
-                                mNameRef = m.name
-                                mLn = m.lineno
-                                mCl = m.colno
-                            }
-                        }
-                        if mNameRef > 0 then {
-                            dmD: (st.typing.declTypedMemberIdOf
-                                parentTypeId: (ztypes.tid.create from: mainTid.u64)
-                                nameId: (zast.nameid.create from: mNameRef.u32)
-                            )
-                            if dmD > 0 then {
-                                priv: (ztypecheck.declMemberIsPrivate
-                                    :st
-                                    tid: (ztypes.tid.create from: mainTid.u64)
-                                    nameId: (zast.nameid.create from: mNameRef.u32)
-                                )
-                                unref: (usedE.has item: dmD) == false
-                                if unref then unref = (refNameSet.has item: mNameRef.u64) == false
-                                if priv when unref then {
-                                    dnm: (zast.poolTextAt
-                                        pool: prog.names
-                                        ref: (zast.nameid.create from: mNameRef.u32)
-                                    )
-                                    (this.warn
-                                        code: "L012"
-                                        msg: "private definition '\{dnm}' is never used"
-                                        line: mLn
-                                        col: mCl
-                                        width: dnm.length.u32.orPanic
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    # private type members: walk each type definition's is/as
-                    # members and flag private edges with no recorded use
-                    tmI: u64
-                    for tmI < mN loop {
-                        tmid: memIds.get i: tmI
-                        tmI = tmI + 1
-                        tNameRef: zast.nameid
-                        tOp: u32
-                        {
-                            tm: prog.nodes.get i: tmid.u64
-                            if tm.namedoperation then {
-                                tNameRef = tm.name
-                                tOp = tm.operation
-                            }
-                        }
-                        isObjT: false
-                        if tOp > 0 then {
-                            to: prog.nodes.get i: tOp.u64
-                            if to.objectdef then isObjT = true
-                        }
-                        if isObjT when tNameRef > 0 then {
-                            typeTid: u64
-                            {
-                                cto: (st.typing.declChildOfId
-                                    parentTypeId: (ztypes.tid.create from: mainTid.u64)
-                                    nameId: tNameRef
-                                )
-                                match (
-                                    cto
-                                ) case some then {
-                                    typeTid = cto
-                                } case none then null
-                            }
-                            if typeTid > 0 then {
-                                tmemIds: ListVal u32
-                                {
-                                    tod: prog.nodes.get i: tOp.u64
-                                    if tod.objectdef then {
-                                        isx1949: u64
-                                        for isx1949 < tod.isItems.count.u64 loop {
-                                            iid: (zast.kidAt
-                                                kids: prog.kids
-                                                span: tod.isItems
-                                                i: isx1949
-                                            )
-                                            isx1949 = isx1949 + 1
-                                            tmemIds.append from: iid
-                                        }
-                                        asx1769: u64
-                                        for asx1769 < tod.asItems.count.u64 loop {
-                                            aid: (zast.kidAt
-                                                kids: prog.kids
-                                                span: tod.asItems
-                                                i: asx1769
-                                            )
-                                            asx1769 = asx1769 + 1
-                                            tmemIds.append from: aid
-                                        }
-                                    }
-                                }
-                                tnm: (zast.poolTextAt
-                                    pool: prog.names
-                                    ref: (zast.nameid.create from: tNameRef.u32)
-                                )
-                                tmN: tmemIds.length
-                                tmJ: u64
-                                for tmJ < tmN loop {
-                                    tmmid: tmemIds.get i: tmJ
-                                    tmJ = tmJ + 1
-                                    tmName: u32
-                                    tmLn: u32
-                                    tmCl: u32
-                                    {
-                                        tmm: prog.nodes.get i: tmmid.u64
-                                        if tmm.namedoperation then {
-                                            tmName = tmm.name
-                                            tmLn = tmm.lineno
-                                            tmCl = tmm.colno
-                                        }
-                                    }
-                                    if tmName > 0 then {
-                                        tmdi: (st.typing.declTypedMemberIdOf
-                                            parentTypeId: (ztypes.tid.create from: typeTid.u64)
-                                            nameId: (zast.nameid.create from: tmName.u32)
-                                        )
-                                        if tmdi > 0 then {
-                                            tpriv: (ztypecheck.declMemberIsPrivate
-                                                :st
-                                                tid: (ztypes.tid.create from: typeTid.u64)
-                                                nameId: (zast.nameid.create from: tmName.u32)
-                                            )
-                                            if tpriv when (usedE.has item: tmdi) == false then {
-                                                tmnm: (zast.poolTextAt
-                                                    pool: prog.names
-                                                    ref: (zast.nameid.create from: tmName.u32)
-                                                )
-                                                (this.warn
-                                                    code: "L012"
-                                                    msg: "private member '\{tnm}.\{tmnm}' is never used"
-                                                    line: tmLn
-                                                    col: tmCl
-                                                    width: tmnm.length.u32.orPanic
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
                     }
                 }
             }
         }
     }
+}
+
+# ---- L012 unused-definition helpers ----
+
+# UnusedEvidence -- what L012 judges a unit's members against: the unit's type
+# id, the declarations its recorded references reach, the atom names of its
+# own file segment, and its member nodes
+UnusedEvidence: class {
+    # the type id of the unit being linted
+    mainTid: u64
+    # every declaration a recorded reference reaches
+    usedE: IdSet u64
+    # every atom name in the unit's own file segment, the syntactic fallback
+    refNames: IdSet u64
+    # the unit body's member nodes, in order
+    memIds: ListVal u32
+}
+
+# unitTidOf -- the type id of the unit named `uname`, 0 when the program declares
+# no such unit
+unitTidOf: function {prog: Ast.view uname: StringView st: zenv.ZSymbolTable.view} out u64 is {
+    uo: (ztypecheck.declTypeIdOf
+        :st
+        declId: (st.typing.declFindChild
+            parentDeclId: st.typing.programRoot
+            nameId: (zast.poolFind pool: prog.names text: uname)
+        )
+    )
+    if uo.isZero then return 0
+    return uo.u64
+}
+
+# unitBodyOpOf -- the body node of the unit named `uname` in `prog`, 0 when no
+# unit carries that name; the last of several wins, as it always has
+unitBodyOpOf: function {prog: Ast.view uname: StringView} out zast.nodeid is {
+    found: zast.nodeid
+    uN: prog.units.length
+    uI: u64
+    for uI < uN loop {
+        uid: (zast.nodeid.create from: (prog.units.get i: uI))
+        uI = uI + 1
+        un: prog.nodes.get i: uid.u64
+        match (
+            un
+        ) case namedoperation then {
+            unm: zast.poolTextAt pool: prog.names ref: un.name
+            if unm.stringView == uname then found = un.operation
+        } else null
+    }
+    return found
+}
+
+# unitMemberIds -- the unit body's member nodes, in order
+unitMemberIds: function {prog: Ast.view unitOp: zast.nodeid} out ListVal u32 is {
+    return (zast.kidIds ast: prog span: (zast.unitBodyIdsAt ast: prog unitId: unitOp))
+}
+
+# usedDeclSet -- every declaration the recorded references reach: a use of a
+# unit-level name marks that name under the linted unit, a member use marks
+# the member under its owning type, and each public alias marks the name it
+# stands for. The pairs are collected first and resolved after the walk, since
+# a member lookup through the table cannot run while its table is iterated.
+usedDeclSet: function {prog: Ast.view st: zenv.ZSymbolTable.view mainTid: u64} out IdSet u64 is {
+    usedE: IdSet u64
+    owners: ListVal u64
+    names: ListVal u64
+    with a: st.typing.refDecl.iterateItems do for e: a loop {
+        dNm: u64
+        dPar: u64
+        {
+            dlo: st.typing.decls.get i: e.value.u64
+            dNm = dlo.name.u64
+            dPar = dlo.parent
+        }
+        if dPar > 0 when dNm > 0 then {
+            ownerTid: u64
+            {
+                plo: st.typing.decls.get i: dPar
+                if plo.kind.unitDecl then ownerTid = mainTid
+                if plo.kind.typeDecl then ownerTid = plo.typeId
+            }
+            if ownerTid > 0 then {
+                owners.append from: ownerTid
+                names.append from: dNm
+            }
+        }
+    }
+    addUsedMembers :st tids: owners nms: names into: usedE
+    addPublicAliasTargets :prog :st :mainTid into: usedE
+    return usedE
+}
+
+# addUsedMembers -- each (owner type, member name) pair resolved to its
+# declaration and added to `into`; a pair naming no member adds nothing
+addUsedMembers: function {
+    st: zenv.ZSymbolTable.view tids: (ListVal u64).view nms: (ListVal u64).view into: IdSet u64
+} is {
+    i: u64
+    for i < tids.length loop {
+        di: (st.typing.declTypedMemberIdOf
+            parentTypeId: (ztypes.tid.create from: (tids.get :i))
+            nameId: (zast.nameid.create from: (nms.get :i).u32.orPanic)
+        )
+        i = i + 1
+        if di > 0 then into.add item: di
+    }
+}
+
+# addPublicAliasTargets -- each name a public alias of the unit stands for
+# counts as used: the alias is the public face, the target is what it names
+addPublicAliasTargets: function {
+    prog: Ast.view st: zenv.ZSymbolTable.view mainTid: u64 into: IdSet u64
+} is {
+    tgtNames: (ztypecheck.publicAliasInternalNames
+        :st
+        pool: prog.names
+        tid: (ztypes.tid.create from: mainTid.u64)
+    )
+    tI: u64
+    for tI < tgtNames.length loop {
+        tnm: tgtNames.get i: tI
+        tI = tI + 1
+        tpid: (prog.names.find s: tnm.stringView)
+        if tpid > 0 then {
+            tdi: (st.typing.declTypedMemberIdOf
+                parentTypeId: (ztypes.tid.create from: mainTid.u64)
+                nameId: tpid
+            )
+            if tdi > 0 then into.add item: tdi
+        }
+    }
+}
+
+# segrange -- a range of node ids: a file segment, or empty when none covers
+segrange: record {
+    # the first node id of the range
+    start: u32
+    # one past the last node id of the range
+    end: u32
+}
+
+# unitFileSegment -- the narrowest file segment holding `probe`, the unit's
+# first body member: the unit's wrapper nodes are minted after its file segment
+# closes, so the first member, not the unitdef, probes for it. Empty when no
+# segment covers it, which is the root parse.
+unitFileSegment: function {prog: Ast.view probe: u32} out segrange is {
+    r: (segrange start: 0 end: 0)
+    sgN: prog.fileSegs.length
+    sgI: u64
+    for sgI < sgN loop {
+        sg: prog.fileSegs.get i: sgI
+        sgI = sgI + 1
+        if probe >= sg.startId when probe < sg.endId then {
+            narrower: r.end == r.start
+            if (sg.endId - sg.startId) < (r.end - r.start) then narrower = true
+            if narrower then {
+                r.start = sg.startId
+                r.end = sg.endId
+            }
+        }
+    }
+    return r
+}
+
+# atomNamesInRange -- every atom name among the nodes of `[start, end)`
+atomNamesInRange: function {prog: Ast.view start: u32 end: u32 into: IdSet u64} is {
+    ndI: start.u64
+    for ndI < end.u64 loop {
+        nd0: prog.nodes.get i: ndI.u64
+        if nd0.atomid then into.add item: nd0.name.u64
+        ndI = ndI + 1
+    }
+}
+
+# atomNamesOutsideSegments -- every atom name among the nodes no file segment
+# covers: the root parse's own, since only subunit loads append segments
+atomNamesOutsideSegments: function {prog: Ast.view into: IdSet u64} is {
+    sgN: prog.fileSegs.length
+    totN: prog.nodes.length
+    ndJ: 1.u64
+    for ndJ < totN loop {
+        covered: false
+        sgJ: u64
+        for sgJ < sgN loop {
+            sgB: prog.fileSegs.get i: sgJ
+            sgJ = sgJ + 1
+            if ndJ >= sgB.startId.u64 when ndJ < sgB.endId.u64 then covered = true
+        }
+        if covered == false then {
+            ndB0: prog.nodes.get i: ndJ
+            if ndB0.atomid then into.add item: ndB0.name.u64
+        }
+        ndJ = ndJ + 1
+    }
+}
+
+# unitAtomNames -- the syntactic fallback evidence: every atom name in the
+# unit's own file segment. Stamps exist only for the bodies the demand walk
+# checked, so a private def used only inside an unchecked body (a construction
+# in a never-demanded factory) would otherwise read as dead.
+unitAtomNames: function {prog: Ast.view memIds: (ListVal u32).view} out IdSet u64 is {
+    names: IdSet u64
+    probe: u32
+    if memIds.length > 0 then probe = memIds.get i: 0
+    seg: unitFileSegment :prog :probe
+    if seg.end > seg.start then {
+        atomNamesInRange :prog start: seg.start end: seg.end into: names
+    } else {
+        atomNamesOutsideSegments :prog into: names
+    }
+    return names
+}
+
+# definedTypeTidOf -- the type id a unit member defines, 0 when the member is
+# not an object definition or resolves to no type under the unit
+definedTypeTidOf: function {
+    prog: Ast.view st: zenv.ZSymbolTable.view mainTid: u64 site: zast.namedsite
+} out u64 is {
+    if site.name.isZero then return 0
+    if site.operation.isZero then return 0
+    to: prog.nodes.get i: site.operation.u64
+    if to.objectdef == false then return 0
+    cto: (st.typing.declChildOfId
+        parentTypeId: (ztypes.tid.create from: mainTid.u64)
+        nameId: site.name
+    )
+    match (
+        cto
+    ) case some then {
+        return cto
+    } case none then null
+    return 0
 }
 
 # ---- L005 redundant-suffix helpers (typecheck tier; run only under --full) ----

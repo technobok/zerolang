@@ -55,6 +55,7 @@ public: unit {
     :kidspan
     :kidsAdd
     :kidAt
+    :kidIds
     :appendSpan
     :childIds
     :childIdsInto
@@ -73,6 +74,7 @@ public: unit {
     :yieldCallOperandAt
     :fnParamAt
     :objIsItemAt
+    :objItemIds
     :objAsItemAt
     :caseClauseAt
     :ifClauseAt
@@ -80,6 +82,8 @@ public: unit {
     :forPostAt
     :dataElemAt
     :nameTextAt
+    :namedSiteAt
+    :namedsite
     :nameTextCopy
     :nameTextEq
     :nodeIdOf
@@ -2436,6 +2440,64 @@ kidsAdd: function {kids: ListVal u32 xs: (ListVal u32).view} out kidspan is {
 # reads `span.count` first and a bad index is a bug in the walk.
 kidAt: function {kids: (ListVal u32).view span: kidspan i: u64} out u32 is {
     return (kids.get i: (span.first.u64 + i))
+}
+
+# kidIds -- the children of `span`, in order, as a list of their own: the shape
+# a walk wants when it visits them more than once or hands them on
+kidIds: function {ast: Ast.view span: kidspan} out ListVal u32 is {
+    ids: ListVal u32
+    i: u64
+    for i < span.count.u64 loop {
+        ids.append from: (kidAt kids: ast.kids :span :i)
+        i = i + 1
+    }
+    return ids
+}
+
+# objItemIds -- every member node of an object definition, its `is` items then
+# its `as` items; empty when `nid` is not an object definition
+objItemIds: function {ast: Ast.view nid: nodeid} out ListVal u32 is {
+    ids: ListVal u32
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case objectdef then {
+        ids = kidIds :ast span: n.isItems
+        more: kidIds :ast span: n.asItems
+        with it: more.iterate do for k: it loop ids.append from: k
+    } else null
+    return ids
+}
+
+# namedsite -- what a named member's node says about itself: the name, the
+# operation the name labels, and where it is. Every field is zero for a node
+# that is not a namedoperation, so `name.isZero` is the test.
+namedsite: record {
+    # the member's name
+    name: nameid
+    # the operation the name labels
+    operation: nodeid
+    # the source line of the name
+    line: u32
+    # the source column of the name
+    col: u32
+}
+
+# namedSiteAt -- the namedsite of node `nid`
+namedSiteAt: function {ast: Ast.view nid: u32} out namedsite is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case namedoperation then {
+        return (namedsite name: n.name operation: n.operation line: n.lineno col: n.colno)
+    } else {
+        return (namedsite
+            name: (nameid.create from: 0)
+            operation: (nodeid.create from: 0)
+            line: 0
+            col: 0
+        )
+    }
 }
 
 # appendSpan -- append every id in `span` to `acc`, the span twin of appendIds.
