@@ -109,9 +109,24 @@ FMTSCOPE := src/*.z lib/system/*.z lib/system/system/*.z examples/*.z tests/unit
 # the examples.
 all: bin/zc bin/zl bin/zls
 
-# check -- the fast pre-commit gate: the parse/token/whitespace rules, plus a repo-wide
-# formatter check.
-check: style-lint-fast
+# check -- the fast pre-commit gate: the parse/token/whitespace rules, a repo-wide
+# formatter check, and the cognitive-complexity report.
+check: style-lint-fast complexity-report
+
+# complexity-report -- every function over A008's cognitive-complexity threshold,
+# one per line (score, file:line, name), highest first, under $(BUILDDIR); the
+# summary line is what check and ci print. Parse tier, so no project flags. The
+# ratchet that holds the count per file is tests/fixtures/arch_baseline.txt.
+COMPLEXITY_SCOPE := src/*.z lib/system/*.z lib/system/system/*.z tests/unit/*.z examples/*.z
+COMPLEXITY_TSV := $(BUILDDIR)/cognitive-complexity.tsv
+complexity-report: bin/zl
+	@mkdir -p $(BUILDDIR)
+	@{ printf 'score\tfile:line\tfunction\n'; bin/zl lint --complexity 15 $(COMPLEXITY_SCOPE) 2>&1 \
+	  | grep -A1 'warning\[A008\]' | grep -v '^--$$' | paste - - \
+	  | sed -E 's/.*function `([^`]+)` has cognitive complexity ([0-9]+).*--> ([^:]+:[0-9]+):.*/\2\t\3\t\1/' \
+	  | sort -t "$$(printf '\t')" -k1,1nr; } > $(COMPLEXITY_TSV)
+	@n=$$(($$(wc -l < $(COMPLEXITY_TSV)) - 1)); top=$$(sed -n '2p' $(COMPLEXITY_TSV) | cut -f1,3 | tr '\t' ' '); \
+	  echo "complexity-report: $$n functions over 15, highest $$top -- $(COMPLEXITY_TSV)"
 
 # Style gate, enforced by the self-hosted `zl` linter/formatter (src/zl.z). style-lint-fast is
 # the fast tier (empty clauses, first-arg elision, for-while, trailing whitespace, final
@@ -146,7 +161,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint warn-check shadow-guard emitter-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard readable-check test-tcc-heavy mode-parity ci-corpus
+ci: style-lint complexity-report warn-check shadow-guard emitter-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard readable-check test-tcc-heavy mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
