@@ -6513,6 +6513,22 @@ funcBorrowFlag: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bo
     }
 }
 
+# funcViewFlag -- does the function type `tid` return a VIEW? The view half of
+# funcBorrowFlag: such a result is read through and never written through, so
+# the pointer that carries it says `const`.
+funcViewFlag: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    if tid.isZero then return false
+    return ((symtab.typing.funcReturnsView.get key: tid).or d: false)
+}
+
+# refPtrC -- the C spelling of a reference a function hands back, or of the
+# local that binds one: a pointer to `base`, `const` when the callee's result
+# is a `.view`, which is read through and never written through.
+refPtrC: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid base: StringView} out String is {
+    if (funcViewFlag :symtab :tid) then return "const \{base}*"
+    return "\{base}*"
+}
+
 # isColGetMutRef -- `fid` is a List/ListView mono's `getMut` whose element is a
 # COMPOUND VALTYPE, i.e. the one case where emitColGet's generated `getMut`
 # returns a pointer that `get` does not.
@@ -9362,7 +9378,16 @@ emitMetaCreateCall: function {
                     :symtab
                     :ctx
                     fid: (ztypes.tid.create from: ffid.u64)
-                ) then ffct = "\{ffct}*"
+                ) then {
+                    ffctP: (storedFieldPtrC
+                        :ast
+                        :symtab
+                        ownerTid: et
+                        fname: fname.stringView
+                        fct: ffct.stringView
+                    )
+                    ffct = ffctP
+                }
                 av = "(\{ffct}){0}"
             }
             if fi > 0 then args.append ", "
@@ -15134,7 +15159,7 @@ emitTypedBind: function {
                 fid: (ztypes.tid.create from: rbf8.u64)
                 retTid: ltid
             ) then {
-                ctB8 = "\{ct}*"
+                ctB8 = (refPtrC :symtab tid: (ztypes.tid.create from: rbf8.u64) base: ct)
                 ctx.ptrVids.append nameVid
             }
             if (isSvAsStringNode :ast :symtab :ctx n: avn) then {
@@ -16339,7 +16364,8 @@ emitWithStmt: function {
             fid: (ztypes.tid.create from: wrb.u64)
             retTid: (ztypes.tid.create from: wsid.u64)
         ) then {
-            wct = "\{wct}*"
+            wctP: (refPtrC :symtab tid: (ztypes.tid.create from: wrb.u64) base: wct.stringView)
+            wct = wctP
             ctx.ptrVids.append (defVid :symtab nid: n.nodeid.u64)
         }
     }
@@ -20397,7 +20423,12 @@ emitTailStmt: function {
                 fid: (ztypes.tid.create from: wrbT.u64)
                 retTid: (ztypes.tid.create from: wsidT.u64)
             ) then {
-                wctT = "\{wctT}*"
+                wctTP: (refPtrC
+                    :symtab
+                    tid: (ztypes.tid.create from: wrbT.u64)
+                    base: wctT.stringView
+                )
+                wctT = wctTP
                 ctx.ptrVids.append (defVid :symtab nid: n.nodeid.u64)
             }
         }
@@ -21347,7 +21378,10 @@ fnSignature: function {
             :ctx
             :fid
             retTid: (ztypes.tid.create from: retColId.u64)
-        ) then ret = "\{ret}*"
+        ) then {
+            retP: refPtrC :symtab tid: fid base: ret.stringView
+            ret = retP
+        }
     }
     params: String
     cIds: ListVal u64
@@ -27806,7 +27840,7 @@ fnptrRetTypeC: function {
         fid: tid
         retTid: rtid
     ) then {
-        bs9b: "\{base9}*"
+        bs9b: refPtrC :symtab :tid base: base9.stringView
         base9 = bs9b
     }
     return base9
@@ -31600,6 +31634,25 @@ emitStructDestructor: function {
     buf.append "}\n\n"
 }
 
+# storedFieldPtrC -- the C type of a non-owned reftype field, and of the
+# meta_create parameter that fills it: a pointer to the container, `const`
+# when the field is a `.view`, since what it reaches is only ever read.
+storedFieldPtrC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ownerTid: ztypes.tid
+    fname: StringView
+    fct: StringView
+} out String is {
+    if (symtab.typing.declOwnershipIs
+        pool: ast.names
+        parentTypeId: ownerTid
+        name: fname
+        own: ztypes.zparamownership.viewMode
+    ) then return "const \{fct}*"
+    return "\{fct}*"
+}
+
 # borrowedFieldIsReftypePtr -- a borrowed field is stored as a pointer to its container
 # only when that container is a reftype (class/union); a protocol lock is the fat
 # pointer by value, and a valtype lock (a bidirectional generator's bool resume
@@ -31666,7 +31719,16 @@ emitOneRecord: function {
                 :symtab
                 :ctx
                 fid: (ztypes.tid.create from: fid.u64)
-            ) then fct = "\{fct}*"
+            ) then {
+                fctP: (storedFieldPtrC
+                    :ast
+                    :symtab
+                    ownerTid: tid
+                    fname: fname.stringView
+                    fct: fct.stringView
+                )
+                fct = fctP
+            }
         }
         if (isHeapPtrCollection
             :symtab
@@ -31703,7 +31765,16 @@ emitOneRecord: function {
                 :symtab
                 :ctx
                 fid: (ztypes.tid.create from: fid2.u64)
-            ) then fct2 = "\{fct2}*"
+            ) then {
+                fct2P: (storedFieldPtrC
+                    :ast
+                    :symtab
+                    ownerTid: tid
+                    fname: fname2.stringView
+                    fct: fct2.stringView
+                )
+                fct2 = fct2P
+            }
         }
         if (isHeapPtrCollection
             :symtab
@@ -32673,7 +32744,10 @@ methodReturnC: function {
             :ctx
             fid: mid
             retTid: (ztypes.tid.create from: retColId.u64)
-        ) then ret = "\{ret}*"
+        ) then {
+            retP: refPtrC :symtab tid: mid base: ret.stringView
+            ret = retP
+        }
     }
     return ret
 }
