@@ -23641,8 +23641,9 @@ predDottedFact: function {
     }
 }
 
-# armSuffixSide -- the `.true` / `.false` suffix on a dotted arm predicate,
-# read by arm identity. See ztyping.armSuffixSideOf.
+# armSuffixSide -- the `.true` / `.false` / `.not` suffix on a dotted arm
+# predicate, read by arm identity (`.not` answers as `.false`). See
+# ztyping.armSuffixSideOf.
 armSuffixSide: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
@@ -37217,6 +37218,73 @@ boolConst: function {
     return (ztypes.makeArmConst armTid: bt armName: (zast.nameid.create from: nmNode.u32.orPanic))
 }
 
+# boolArmTruth -- which of bool's arms an armKind constant names: 0 for the arm
+# bool declares first (`false`), 1 for the second (`true`), 2 when the constant
+# is not a bool arm at all -- another variant's tag, or bool's arms not
+# recorded. The read mirrors boolConst, so the two cannot disagree.
+boolArmTruth: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    v: ztypes.cval
+} out u8 is {
+    if v.kind.armKind == false then return 2
+    bt: builtinTidT :st :frame :ast base: "bool"
+    if bt.isZero then return 2
+    if v.armTid != bt then return 2
+    f: (st.typing.sumPairFirstArm.get key: bt.u64).or d: 0
+    s: (st.typing.sumPairSecondArm.get key: bt.u64).or d: 0
+    if f == 0 then return 2
+    if v.armName.u64 == f then return 0
+    if v.armName.u64 == s then return 1
+    return 2
+}
+
+# constBoolLogic -- `and` / `or` over two bool arm constants; noConst when either
+# side is not a bool arm or the operator is neither.
+constBoolLogic: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    lv: ztypes.cval
+    rv: ztypes.cval
+    opnId: zast.nameid
+} out ztypes.cval is {
+    la: boolArmTruth :st :frame :ast v: lv
+    ra: boolArmTruth :st :frame :ast v: rv
+    if la > 1 then return ztypes.noConst
+    if ra > 1 then return ztypes.noConst
+    if opnId == zast.names.wkAnd then {
+        both: false
+        if la == 1 when ra == 1 then both = true
+        return (boolConst :st :frame :ast v: both)
+    }
+    if opnId == zast.names.wkOr then {
+        either: false
+        if la == 1 then either = true
+        if ra == 1 then either = true
+        return (boolConst :st :frame :ast v: either)
+    }
+    return ztypes.noConst
+}
+
+# constArmChild -- a member read on an arm constant: `.not` on a bool arm is
+# bool's negation, and any other child names an arm to compare with -- the
+# predicate `value.arm`, true when the constant holds that arm.
+constArmChild: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    v: ztypes.cval
+    ncId: zast.nameid
+} out ztypes.cval is {
+    if ncId == zast.names.wkNot then {
+        t: boolArmTruth :st :frame :ast :v
+        if t < 2 then return (boolConst :st :frame :ast v: (t == 0))
+    }
+    return (boolConst :st :frame :ast v: (v.armName == ncId))
+}
+
 # fold a comparison of two integer constants
 constCompareInt: function {
     ast: Ast
@@ -37978,14 +38046,17 @@ constOfBinopFold: function {
     lv: ztypes.cval
     rv: ztypes.cval
     op: StringView
+    opnId: zast.nameid
     nid: zast.nodeid
     ln: u32
     co: u32
 } out ztypes.cval is {
     # two tags compare by ARM IDENTITY -- the owning type and the arm's
-    # name-pool id -- never by rendered text. Only equality is defined:
-    # arms have no order.
+    # name-pool id -- never by rendered text. Only equality is defined, since
+    # arms have no order -- except bool's, which also fold `and` and `or`.
     if lv.kind.armKind when rv.kind.armKind then {
+        bl: constBoolLogic :st :frame :ast :lv :rv :opnId
+        if bl.kind.none == false then return bl
         same: false
         if lv.armTid == rv.armTid when lv.armName == rv.armName then same = true
         if op == "==" then return (boolConst :st :frame :ast v: same)
@@ -38074,9 +38145,10 @@ constOfBinop: function {
     if lv.kind.none then return ztypes.noConst
     rv: evalConstNode :st :frame :ast :unitDecl nid: rhsId
     if rv.kind.none then return ztypes.noConst
-    opNode: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: opId.u64))
+    opnId: atomNameId :ast n: (ast.nodes.get i: opId.u64)
+    opNode: zast.nameTextCopy :ast ref: opnId
     if opNode.length == 0 then return ztypes.noConst
-    return (constOfBinopFold :st :frame :ast :lv :rv op: opNode.stringView :nid :ln :co)
+    return (constOfBinopFold :st :frame :ast :lv :rv op: opNode.stringView :opnId :nid :ln :co)
 }
 
 # constOfStringMethodCall -- a static method on a string constant
@@ -38281,7 +38353,7 @@ constOfNamedBase: function {
         # and classifying a constant by its definition's shape would call
         # `CC: cckind.tcc` a variant and read a nonexistent arm off it.
         pcv: constValueOfMemberId :st :frame :ast :unitDecl nameId: ptId
-        if pcv.kind.armKind then return (boolConst :st :frame :ast v: (pcv.armName == ncId))
+        if pcv.kind.armKind then return (constArmChild :st :frame :ast v: pcv :ncId)
         if pcv.kind.svalKind then {
             return (constStringDotted
                 :st
@@ -38509,7 +38581,7 @@ evalConstDotted: function {
     # name would find that variant and answer with an arm where the
     # question was "does it hold this one".
     pv: evalConstNode :st :frame :ast :unitDecl nid: parentId
-    if pv.kind.armKind then return (boolConst :st :frame :ast v: (pv.armName == ncId))
+    if pv.kind.armKind then return (constArmChild :st :frame :ast v: pv :ncId)
     # a literal receiver (`"abcd".length`) or a qualified constant
     # (`quadfloat.LIB.length`): the parent is not a bare atom, so its value
     # comes from the recursive walk above rather than from a member read.

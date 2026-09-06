@@ -76,7 +76,7 @@ operation can fail for reasons the caller needs to handle
 #p: #b:"Primitive types"
 
 #ul:
-  [#*: #> to=bool: #b:"bool" -- #~"variant { false: null  true: null }"]
+  [#*: #> to=bool: #b:"bool" -- #~"variant { false: null  true: null }"; comparisons, #~"and" / #~"or" / #~"not"]
   [#*: #> to=null: #b:"null" -- #~"null: record is native"]
   [#*: #> to=never: #b:"never" -- #~"never: record is native"]
   [#*: #> to=literal-types: #b:"intliteral" / #b:"floatliteral" -- the compile-time types of a numeric literal]
@@ -190,11 +190,11 @@ than reaching undefined behaviour.
   e: a >> 64          # -1   -- sign fill, defined
 """
 Operators resolve as ordinary declared methods -- the system
-units are the single source of truth -- so an operator on a type
-that declares none
-(e.g. #~"bool + 1") is a plain "type has no method" error, and a
-mismatched rhs (#~"1 + true") is an argument-type mismatch against
-the method. No implicit promotion: #~"i32 + i64" is a type error;
+units are the single source of truth -- so an operator a type does
+not declare (#~"bool + 1": #~"bool" declares comparisons and the
+logic set, no arithmetic) is a plain "type has no method" error,
+and a mismatched rhs (#~"1 + true") is an argument-type mismatch
+against the method. No implicit promotion: #~"i32 + i64" is a type error;
 cast first.
 
 #b:"Comparison." Every type declares #~"<", #~"<=", #~">", #~">=",
@@ -356,16 +356,36 @@ expression whose type is #~"bool". Consumed by #~"if" /
 
 #b:"C emission." Despite the variant declaration, #~"bool" is
 emitted as C99 #~"_Bool" (from #~"<stdbool.h>") -- TYPEMAP
-maps it to the primitive short-circuit. Struct-wrapped variant
+maps it to the primitive. Struct-wrapped variant
 storage is never materialised for bool. Comparisons emit as
 raw C boolean expressions (#~"(a < b)"), #~"if" conditionals
 work with the primitive directly (no #~".tag" access), and
 #~"match" on a bool subject lowers to an #~"if" / #~"else if"
 on the primitive.
 
-No bitwise #~"and" / #~"or" / #~"not" methods on #~"bool" yet
--- short-circuit #~"&&" / #~"||" lives at the expression
-level; see #> to=./grammar.html: grammar.
+#b:"Logic." #~"bool" declares #~"and" and #~"or" as native methods
+taking a same-type #~"rhs", and #~"not" as a zero-argument method.
+zerolang has no unary operators, so negation is #~"x.not" -- a
+method, as the integers' bitwise #~"not" is. #~"and" / #~"or" are
+operators like any other one-parameter method: #~"a or b" and
+#~"a.or rhs: b" name one declaration. #b:"Both operands are always
+evaluated", left then right: an operation is a call, and a call
+evaluates every argument, so nothing short-circuits at the call
+level. The short-circuit forms are the control-flow heads --
+#~"if a when b then" runs #~"b" only when #~"a" held, and a
+#~"for" head chains #~"while" conditions the same way. Chains fold
+left with no precedence (#~"a or b and c" is #~"(a or b) and c"),
+so parenthesise a chain that mixes operators, and chain in the
+infix form (#~"a or b or c"): the dotted form does not chain. The
+arm predicates every 2-arm sum has, #~".true" / #~".false", remain
+valid on a bool; #~"x.not" is the idiom.
+
+#code language=zerolang: """
+  inRange: (n > 0) and (n < 10)
+  if inRange.not then return
+  if (c == 32) or (c == 9) then skip     # both sides evaluated
+  if n > 0 when (total / n) > 10 then    # short-circuit: `when`
+"""
 
 
 #--: null

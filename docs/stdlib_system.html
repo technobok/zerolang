@@ -175,7 +175,7 @@ operation can fail for reasons the caller needs to handle
 </ul>
 <p><strong>Primitive types</strong></p>
 <ul>
-<li><a href="#bool"><strong>bool</strong> -- <code>variant { false: null  true: null }</code></a></li>
+<li><a href="#bool"><strong>bool</strong> -- <code>variant { false: null  true: null }</code>; comparisons, <code>and</code> / <code>or</code> / <code>not</code></a></li>
 <li><a href="#null"><strong>null</strong> -- <code>null: record is native</code></a></li>
 <li><a href="#never"><strong>never</strong> -- <code>never: record is native</code></a></li>
 <li><a href="#literal-types"><strong>intliteral</strong> / <strong>floatliteral</strong> -- the compile-time types of a numeric literal</a></li>
@@ -274,11 +274,11 @@ than reaching undefined behaviour.</p>
   d: a &lt;&lt; 64          # 0    -- at the width, defined
   e: a &gt;&gt; 64          # -1   -- sign fill, defined</code></pre>
 <p>Operators resolve as ordinary declared methods -- the system
-units are the single source of truth -- so an operator on a type
-that declares none
-(e.g. <code>bool + 1</code>) is a plain "type has no method" error, and a
-mismatched rhs (<code>1 + true</code>) is an argument-type mismatch against
-the method. No implicit promotion: <code>i32 + i64</code> is a type error;
+units are the single source of truth -- so an operator a type does
+not declare (<code>bool + 1</code>: <code>bool</code> declares comparisons and the
+logic set, no arithmetic) is a plain "type has no method" error,
+and a mismatched rhs (<code>1 + true</code>) is an argument-type mismatch
+against the method. No implicit promotion: <code>i32 + i64</code> is a type error;
 cast first.</p>
 <p><strong>Comparison.</strong> Every type declares <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code>,
 <code>==</code>, <code>!=</code> as native methods taking a same-type rhs; all return
@@ -405,15 +405,32 @@ expression whose type is <code>bool</code>. Consumed by <code>if</code> /
   case false then print "no"</code></pre>
 <p><strong>C emission.</strong> Despite the variant declaration, <code>bool</code> is
 emitted as C99 <code>_Bool</code> (from <code>&lt;stdbool.h&gt;</code>) -- TYPEMAP
-maps it to the primitive short-circuit. Struct-wrapped variant
+maps it to the primitive. Struct-wrapped variant
 storage is never materialised for bool. Comparisons emit as
 raw C boolean expressions (<code>(a &lt; b)</code>), <code>if</code> conditionals
 work with the primitive directly (no <code>.tag</code> access), and
 <code>match</code> on a bool subject lowers to an <code>if</code> / <code>else if</code>
 on the primitive.</p>
-<p>No bitwise <code>and</code> / <code>or</code> / <code>not</code> methods on <code>bool</code> yet
--- short-circuit <code>&amp;&amp;</code> / <code>||</code> lives at the expression
-level; see <a href="./grammar.html">grammar.</a></p>
+<p><strong>Logic.</strong> <code>bool</code> declares <code>and</code> and <code>or</code> as native methods
+taking a same-type <code>rhs</code>, and <code>not</code> as a zero-argument method.
+zerolang has no unary operators, so negation is <code>x.not</code> -- a
+method, as the integers' bitwise <code>not</code> is. <code>and</code> / <code>or</code> are
+operators like any other one-parameter method: <code>a or b</code> and
+<code>a.or rhs: b</code> name one declaration. <strong>Both operands are always
+evaluated</strong>, left then right: an operation is a call, and a call
+evaluates every argument, so nothing short-circuits at the call
+level. The short-circuit forms are the control-flow heads --
+<code>if a when b then</code> runs <code>b</code> only when <code>a</code> held, and a
+<code>for</code> head chains <code>while</code> conditions the same way. Chains fold
+left with no precedence (<code>a or b and c</code> is <code>(a or b) and c</code>),
+so parenthesise a chain that mixes operators, and chain in the
+infix form (<code>a or b or c</code>): the dotted form does not chain. The
+arm predicates every 2-arm sum has, <code>.true</code> / <code>.false</code>, remain
+valid on a bool; <code>x.not</code> is the idiom.</p>
+<pre><code class="language-zerolang">  inRange: (n &gt; 0) and (n &lt; 10)
+  if inRange.not then return
+  if (c == 32) or (c == 9) then skip     # both sides evaluated
+  if n &gt; 0 when (total / n) &gt; 10 then    # short-circuit: `when`</code></pre>
 <h2 id="null"><a href="#null">6. null</a></h2>
 <p>The unit type. Exactly one value, also spelled <code>null</code>. Used as
 the payload in variant / union arms that carry no data

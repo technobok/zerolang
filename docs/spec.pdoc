@@ -154,8 +154,9 @@ Identifiers are case sensitive.
 
 Identifiers must be separated from surrounding tokens with whitespace or the
 [#> to=delimiters: delimiters] or [#> to=separators: separators]. Specifically
-note that mathematical operators are standard identifiers and so must also be
-surrounded by whitespace.
+note that operators -- the mathematical ones and the word-named #~"and" /
+#~"or" alike -- are standard identifiers and so must also be surrounded by
+whitespace.
 
 Exceptions and special cases:
 
@@ -1236,6 +1237,11 @@ block return true, the #~"then" block will execute. If any fail, the tests for
 the remainder of the block stop (short-circuit) and the process continues after
 that related #~"then" block.
 
+This is the language's short-circuit form. #~"bool"'s #~"and" / #~"or" methods
+do not short-circuit: an operation is a call, and a call evaluates every
+argument. Write #~"if a when b then" when #~"b" must not run unless #~"a" held,
+and #~"if a and b then" when both are safe to evaluate.
+
 If no blocks of conditions completely succeed, the #~"else" block will execute,
 if present.
 
@@ -1259,6 +1265,12 @@ to the expression form.
   # statement if
   if x == 1 then {
       # will match if 'true'
+  }
+
+  # several conditions: each `when` runs only if the ones before it held
+  if n > 0 when (total / n) > 10 then {
+      # short-circuit conjunction; `(n > 0) and ((total / n) > 10)` would
+      # divide first
   }
 
   # if-as-expression: result is the value of the executed branch
@@ -1773,10 +1785,11 @@ like #~"this.state.a", or a call result). On the #_*"type" the same
 spelling remains the construction reference: #~"kind.a" builds the arm,
 #~"x.a" tests it.
 
-#~"bool" is itself a variant, so predicates compose: a trailing
-#~".false" negates a predicate (#~"if x.a.false then" reads "if x is not
-a") and #~".true" passes it through. Comparing with #~"== false" remains
-equivalent.
+Negation is #~".not", #~"bool"'s negation method: #~"if x.a.not then"
+reads "if x is not a". #~"bool" is itself a variant, so the arm
+predicates compose too -- a trailing #~".false" negates and #~".true"
+passes through -- and comparing with #~"== false" remains equivalent;
+#~".not" is the idiom.
 
 The predicate is the #_*"only" meaning of #~"x.arm" on a value — there
 is no payload read through the arm name. The payload is reached by
@@ -1795,8 +1808,8 @@ a #~"match" arm. In the #~"else" branch (and in later #~"else if"
 clauses) the arm is excluded; exclusions accumulate across a clause
 chain, and when only one arm remains the subject collapses to the
 payload: the bare name #_*"is" the payload, exactly as in the #~"then"
-branch. The negated conditions #~"(x.a) == false" and #~"x.a.false"
-flip the two sides.
+branch. The negated conditions #~"x.a.not", #~"x.a.false" and
+#~"(x.a) == false" flip the two sides.
 Every bare-predicate conjunct of a #~"when" chain narrows in its
 #~"then" branch; multi-conjunct conditions contribute nothing to the
 else side. Loop conditions do not narrow.
@@ -1850,7 +1863,9 @@ discriminator is #_*"0":
 #~"bool" is the stdlib instance of the shape --
 #~"variant { false: null  true: null }" -- so this is one rule rather
 than two: a boolean condition is a 2-arm sum condition whose falsy arm
-is spelled #~"false".
+is spelled #~"false". The logic methods #~"and", #~"or" and #~"not" are
+declared on #~"bool" alone: a #~"mood" is a condition, but it has no
+#~".not" -- test its arm.
 
 Falsy is a property of the discriminator's #_*"value", not of where the
 arm was written. The two coincide under the default tag -- #~"u8",
@@ -2006,8 +2021,8 @@ of #~"if x.a then" SHADOWS #~"x" with the arm payload, exactly as a
 #~"case a" arm does. The #~"else" branch and later #~"else if" clauses
 see the tested arms excluded, and exclusions accumulate across the
 chain — when a single arm remains the subject collapses to the payload
-(the bare name reads it). The negated conditions #~"(x.a) == false"
-and #~"x.a.false" swap the two sides.
+(the bare name reads it). The negated conditions #~"x.a.not",
+#~"x.a.false" and #~"(x.a) == false" swap the two sides.
 See [#> to=sum-types: Narrowing in if].
 
 If all branches of an #~"if" or #~"match" exit the current scope (return, break,
@@ -3392,10 +3407,15 @@ character, equivalent to a u8.
 
 The predeclared identifiers #~"true" and #~"false" are the boolean literals.
 
-Because #~"bool" is a variant, its arm predicates are available on any
-boolean value: #~"b.false" is the negation of #~"b" (the language's
-negation form — there is no #~"not" operator) and #~"b.true" is #~"b"
-itself. See [#> to=sum-types: arm predicates].
+Negation is the method #~"not": #~"b.not" is the negation of #~"b". There
+is no #~"not" operator, because zerolang has no unary operators; the same
+method on the integers is the bitwise complement. #~"and" and #~"or" are
+#~"bool"'s binary methods, written infix (#~"a or b") or as calls
+(#~"a.or rhs: b"), and both operands are always evaluated -- see
+[#> to=binary-operations: Binary operations]. Because #~"bool" is a
+variant, its arm predicates are available too: #~"b.false" is also the
+negation of #~"b" and #~"b.true" is #~"b" itself. See
+[#> to=sum-types: arm predicates].
 
 #----: this
 
@@ -5757,8 +5777,14 @@ parameter.
 Operations are evaluated left to right. Only parentheses can be used to change
 precedence.
 
+An operation is a call, so #_*"both operands are always evaluated", left then
+right, whatever the operator: #~"a or b" evaluates #~"b" even when #~"a" is
+true. Nothing short-circuits at the call level; the short-circuit forms are the
+#~"when" chain of an #>"if" and the #~"while" chain of a #>"for".
+
 Operator names are simply method names. Identifiers used for method names can
-include the usual mathematical operator names eg. #~"+ - / *"
+include the usual mathematical operator names eg. #~"+ - / *", and a word is an
+operator name too: #~"and" and #~"or" on #~"bool".
 
 
 #---: Auto-Generated Equality
@@ -5880,7 +5906,8 @@ all candidates for folding.
 Supported operations: #~"+" #~"-" #~"*" #~"/" #~"<" #~">" #~"<=" #~">="
 #~"==" #~"!=". Integer division uses truncation toward zero (matching C
 semantics). Float (#~"f64") division produces a float result without
-truncation. Comparisons produce #~"bool" values (#~"true"/#~"false").
+truncation. Comparisons produce #~"bool" values (#~"true"/#~"false"), and
+on #~"bool" constants #~"and", #~"or" and #~".not" fold as well.
 
 Division by a constant zero is a compile time error (for both integer
 and float types). If the result of a constant integer operation overflows

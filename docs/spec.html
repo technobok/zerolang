@@ -317,8 +317,9 @@ underscores are ignored.</p>
 <p>Identifiers are case sensitive.</p>
 <p>Identifiers must be separated from surrounding tokens with whitespace or the
 <a href="#delimiters">delimiters</a> or <a href="#separators">separators</a>. Specifically
-note that mathematical operators are standard identifiers and so must also be
-surrounded by whitespace.</p>
+note that operators -- the mathematical ones and the word-named <code>and</code> /
+<code>or</code> alike -- are standard identifiers and so must also be surrounded by
+whitespace.</p>
 <p>Exceptions and special cases:</p>
 <ul>
 <li>some identifiers are <a href="#predefined-identifiers">predefined</a></li>
@@ -1250,6 +1251,10 @@ condition specified immediately after the <code>if</code>.</p>
 block return true, the <code>then</code> block will execute. If any fail, the tests for
 the remainder of the block stop (short-circuit) and the process continues after
 that related <code>then</code> block.</p>
+<p>This is the language's short-circuit form. <code>bool</code>'s <code>and</code> / <code>or</code> methods
+do not short-circuit: an operation is a call, and a call evaluates every
+argument. Write <code>if a when b then</code> when <code>b</code> must not run unless <code>a</code> held,
+and <code>if a and b then</code> when both are safe to evaluate.</p>
 <p>If no blocks of conditions completely succeed, the <code>else</code> block will execute,
 if present.</p>
 <p>A successful clause will exit the <code>if</code> expression -- at most, one <code>then</code> or
@@ -1267,6 +1272,12 @@ to the expression form.</p>
 <pre><code class="language-zerolang"># statement if
 if x == 1 then {
     # will match if 'true'
+}
+
+# several conditions: each `when` runs only if the ones before it held
+if n &gt; 0 when (total / n) &gt; 10 then {
+    # short-circuit conjunction; `(n &gt; 0) and ((total / n) &gt; 10)` would
+    # divide first
 }
 
 # if-as-expression: result is the value of the executed branch
@@ -1721,10 +1732,11 @@ for every arm &#x2014; with or without a payload, including type-reference arms
 like <code>this.state.a</code>, or a call result). On the <em><strong>type</strong></em> the same
 spelling remains the construction reference: <code>kind.a</code> builds the arm,
 <code>x.a</code> tests it.</p>
-<p><code>bool</code> is itself a variant, so predicates compose: a trailing
-<code>.false</code> negates a predicate (<code>if x.a.false then</code> reads "if x is not
-a") and <code>.true</code> passes it through. Comparing with <code>== false</code> remains
-equivalent.</p>
+<p>Negation is <code>.not</code>, <code>bool</code>'s negation method: <code>if x.a.not then</code>
+reads "if x is not a". <code>bool</code> is itself a variant, so the arm
+predicates compose too -- a trailing <code>.false</code> negates and <code>.true</code>
+passes through -- and comparing with <code>== false</code> remains equivalent;
+<code>.not</code> is the idiom.</p>
 <p>The predicate is the <em><strong>only</strong></em> meaning of <code>x.arm</code> on a value &#x2014; there
 is no payload read through the arm name. The payload is reached by
 narrowing: inside a <code>match</code> arm or the <code>then</code> branch of
@@ -1740,8 +1752,8 @@ a <code>match</code> arm. In the <code>else</code> branch (and in later <code>el
 clauses) the arm is excluded; exclusions accumulate across a clause
 chain, and when only one arm remains the subject collapses to the
 payload: the bare name <em><strong>is</strong></em> the payload, exactly as in the <code>then</code>
-branch. The negated conditions <code>(x.a) == false</code> and <code>x.a.false</code>
-flip the two sides.
+branch. The negated conditions <code>x.a.not</code>, <code>x.a.false</code> and
+<code>(x.a) == false</code> flip the two sides.
 Every bare-predicate conjunct of a <code>when</code> chain narrows in its
 <code>then</code> branch; multi-conjunct conditions contribute nothing to the
 else side. Loop conditions do not narrow.</p>
@@ -1785,7 +1797,9 @@ if narrowed then print "converted"  # true when the arm is not `err`</code></pre
 <p><code>bool</code> is the stdlib instance of the shape --
 <code>variant { false: null  true: null }</code> -- so this is one rule rather
 than two: a boolean condition is a 2-arm sum condition whose falsy arm
-is spelled <code>false</code>.</p>
+is spelled <code>false</code>. The logic methods <code>and</code>, <code>or</code> and <code>not</code> are
+declared on <code>bool</code> alone: a <code>mood</code> is a condition, but it has no
+<code>.not</code> -- test its arm.</p>
 <p>Falsy is a property of the discriminator's <em><strong>value</strong></em>, not of where the
 arm was written. The two coincide under the default tag -- <code>u8</code>,
 sequential from 0, so the arm written first carries 0 -- and writing the
@@ -1907,8 +1921,8 @@ of <code>if x.a then</code> SHADOWS <code>x</code> with the arm payload, exactly
 <code>case a</code> arm does. The <code>else</code> branch and later <code>else if</code> clauses
 see the tested arms excluded, and exclusions accumulate across the
 chain &#x2014; when a single arm remains the subject collapses to the payload
-(the bare name reads it). The negated conditions <code>(x.a) == false</code>
-and <code>x.a.false</code> swap the two sides.
+(the bare name reads it). The negated conditions <code>x.a.not</code>,
+<code>x.a.false</code> and <code>(x.a) == false</code> swap the two sides.
 See <a href="#sum-types">Narrowing in if</a>.</p>
 <p>If all branches of an <code>if</code> or <code>match</code> exit the current scope (return, break,
 continue), any statements following that expression are unreachable and are
@@ -3044,10 +3058,15 @@ and are stored as an unsigned 32 bit integer (equivalent to u32) or an ASCII
 character, equivalent to a u8.</p>
 <h4 id="boolean-identifiers"><a href="#boolean-identifiers">5.4.18. Boolean Identifiers</a></h4>
 <p>The predeclared identifiers <code>true</code> and <code>false</code> are the boolean literals.</p>
-<p>Because <code>bool</code> is a variant, its arm predicates are available on any
-boolean value: <code>b.false</code> is the negation of <code>b</code> (the language's
-negation form &#x2014; there is no <code>not</code> operator) and <code>b.true</code> is <code>b</code>
-itself. See <a href="#sum-types">arm predicates</a>.</p>
+<p>Negation is the method <code>not</code>: <code>b.not</code> is the negation of <code>b</code>. There
+is no <code>not</code> operator, because zerolang has no unary operators; the same
+method on the integers is the bitwise complement. <code>and</code> and <code>or</code> are
+<code>bool</code>'s binary methods, written infix (<code>a or b</code>) or as calls
+(<code>a.or rhs: b</code>), and both operands are always evaluated -- see
+<a href="#binary-operations">Binary operations</a>. Because <code>bool</code> is a
+variant, its arm predicates are available too: <code>b.false</code> is also the
+negation of <code>b</code> and <code>b.true</code> is <code>b</code> itself. See
+<a href="#sum-types">arm predicates</a>.</p>
 <h4 id="this"><a href="#this">5.4.19. this</a></h4>
 <p><code>this</code> is a predefined identifier within an object definition (record, class
 etc) that can be used as a type in method signatures on that object.</p>
@@ -5005,8 +5024,13 @@ an alternate function call syntax for methods with a receiver and a single
 parameter.</p>
 <p>Operations are evaluated left to right. Only parentheses can be used to change
 precedence.</p>
+<p>An operation is a call, so <em><strong>both operands are always evaluated</strong></em>, left then
+right, whatever the operator: <code>a or b</code> evaluates <code>b</code> even when <code>a</code> is
+true. Nothing short-circuits at the call level; the short-circuit forms are the
+<code>when</code> chain of an <a href="#if">if</a> and the <code>while</code> chain of a <a href="#for">for</a>.</p>
 <p>Operator names are simply method names. Identifiers used for method names can
-include the usual mathematical operator names eg. <code>+ - / *</code></p>
+include the usual mathematical operator names eg. <code>+ - / *</code>, and a word is an
+operator name too: <code>and</code> and <code>or</code> on <code>bool</code>.</p>
 <h3 id="auto-generated-equality"><a href="#auto-generated-equality">11.11. Auto-Generated Equality</a></h3>
 <p>All value types (records, variants, arrays, str) automatically receive
 <code>==</code> and <code>!=</code> operators. This is structural equality: records compare
@@ -5096,7 +5120,8 @@ all candidates for folding.</p>
 <p>Supported operations: <code>+</code> <code>-</code> <code>*</code> <code>/</code> <code>&lt;</code> <code>&gt;</code> <code>&lt;=</code> <code>&gt;=</code>
 <code>==</code> <code>!=</code>. Integer division uses truncation toward zero (matching C
 semantics). Float (<code>f64</code>) division produces a float result without
-truncation. Comparisons produce <code>bool</code> values (<code>true</code>/<code>false</code>).</p>
+truncation. Comparisons produce <code>bool</code> values (<code>true</code>/<code>false</code>), and
+on <code>bool</code> constants <code>and</code>, <code>or</code> and <code>.not</code> fold as well.</p>
 <p>Division by a constant zero is a compile time error (for both integer
 and float types). If the result of a constant integer operation overflows
 the target type, a compile time error is reported.</p>

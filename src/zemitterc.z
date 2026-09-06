@@ -1440,8 +1440,12 @@ recordConvMember: function {ctx: Ctx key: StringView body: StringView} is {
                 mk: mem.string
                 # a row naming an ARGUMENT hole is not a receiver-only
                 # conversion, and must not be offered to the leg that fills
-                # @V@ and nothing else
-                if (body.contains needle: "@A1@") then {
+                # @V@ and nothing else. A word-named OPERATOR row (`bool.and`)
+                # binds @L@ and @R@: it takes an argument too, in the operator
+                # emitter's holes
+                takesArg: body.contains needle: "@A1@"
+                if (body.contains needle: "@L@") then takesArg = true
+                if takesArg then {
                     ctx.nativeArgMemb.set key: mk value: true
                 } else {
                     ctx.nativeConvMemb.set key: mk value: true
@@ -6230,7 +6234,9 @@ emitInstanceMethodBody: function {
 
 # isOperatorName -- a member whose name is punctuation rather than an
 # identifier. Not opCnameOf: that table names twelve spellings and has never
-# carried `| ^ << >>`, which the bitwise arc added.
+# carried `| ^ << >>`, which the bitwise arc added. A WORD-named operator
+# (`bool.and`) is admitted by emitOperatorCallForm on the strength of its
+# natives.tbl row instead, never by spelling.
 isOperatorName: function {name: StringView} out bool is {
     b0: name.byteAt 0.u64
     match (
@@ -6244,11 +6250,32 @@ isOperatorName: function {name: StringView} out bool is {
     return false
 }
 
+# wordOperatorRowBinds -- whether a WORD-named one-argument member (`bool.or`)
+# is an operator in call form: it resolves to a NATIVE method whose natives.tbl
+# row binds the operator holes. THE ROW IS THE AUTHORITY -- a bodyless row
+# (`optionval.or`) or a user method with a word name is not an operator.
+wordOperatorRowBinds: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    method: ztypes.tid
+    owner: ztypes.tid
+    mn: StringView
+} out bool is {
+    if (nativeIsArgMembOf :ctx memb: mn) == false then return false
+    if (fnIsNativeId :symtab fid: method) == false then return false
+    key: binopKeyOf :ast :symtab :owner isNative: true op: mn
+    body: nativeImplOf :ctx path: key.stringView
+    return (body.stringView.contains needle: "@L@")
+}
+
 # emitOperatorCallForm -- `a.+ rhs: b` through the same emitter the infix form
 # uses. "" when this is not a one-argument operator call, which leaves the
 # caller on its ordinary legs. The operands are prepared exactly as the binop
 # arm prepares them, an atom box dereferenced alike, because from here down the
-# two forms are one.
+# two forms are one. A word-named member (`a.or rhs: b`) is an operator call
+# when it resolves to a NATIVE method whose natives.tbl row binds the operator
+# holes -- the row is the authority, not the spelling.
 emitOperatorCallForm: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -6257,7 +6284,6 @@ emitOperatorCallForm: function {
 } out String is {
     mnO: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if mnO.length == 0 then return "".string
-    if (isOperatorName name: mnO) == false then return "".string
     if call.arguments.count.u64 != 1 then return "".string
     rt0: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
     rtc: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: rt0.u64)
@@ -6277,6 +6303,17 @@ emitOperatorCallForm: function {
         } case none then null
     }
     if method.isZero then return "".string
+    if (isOperatorName name: mnO) == false when (
+        (wordOperatorRowBinds
+            :ast
+            :symtab
+            :ctx
+            :method
+            owner: (ztypes.tid.create from: owner.u64)
+            mn: mnO
+        ) ==
+        false
+    ) then return "".string
     lhsNid: u64
     {
         cb: ast.nodes.get i: call.callable.u64
