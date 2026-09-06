@@ -169,6 +169,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-09-05 | c1022464 | [D1: the node table holds values, not boxes](#r-nodeflip) | 0.47s | -- | 102MB / -- | 111 / 180 / 189 (total 480) | 2,254,086 | 302MB | -- | 115,951 |
 | 2026-09-05 | b006be2c | [D1 recovery: a node parameter is a view again](#r-nodeview) | 0.44s | -- | 101MB / -- | 98 / 176 / 179 (total 453) | 2,264,234 | 301MB | -- | 116,000 |
 | 2026-09-06 | 327b9b6c | [bool gains `and`, `or` and `not`; the disjunction sweep](#r-boollogic) | 0.45s | -- | 101MB / -- | 107 / 172 / 176 (total 455) | 2,251,883 | 301MB | -- | 120,541 |
+| 2026-09-06 | 49cf12e9 | [`when` conjuncts narrow in turn; the nested-if collapse](#r-whennarrow) | 0.44s | -- | 101MB / -- | 131 / 170 / 173 (total 474) | 2,244,864 | 301MB | -- | 119,796 |
 
 
 <a id="r-tokenarc"></a>
@@ -2493,3 +2494,33 @@ those two carries how much is not.
 
 **LOC rises by 71 across the arc**, the four lints and their fixtures against
 409 lines the sweep itself removed.
+
+<a id="r-whennarrow"></a>
+
+### `when` conjuncts narrow in turn; the nested-if collapse
+
+`4753ad02`..`49cf12e9`. A conjunct's narrowing now reaches the conjuncts after
+it, which is what made `if A then { if B then X }` rewritable as
+`if A when B then X`; all 410 sites the A010 lint found were collapsed.
+
+| | before (`327b9b6c`) | after (`49cf12e9`) |
+|---|---|---|
+| wall (best of 5) | 0.45s | 0.44s |
+| allocs | 2,251,883 | 2,244,864 |
+| bytes churned | 301MB | 301MB |
+| LOC (src + lib/system) | 120,541 | 119,796 |
+
+**The collapse is free by construction.** Nested `if (a) { if (b) { X } }` and
+`if (a && b) { X }` are the same program, and C's `&&` short-circuits exactly as
+the nesting did. Every one of the 403 corpus programs and 147 examples emits
+byte-identically except the three whose library code was itself rewritten, and
+those differ only by the collapse shape.
+
+**Allocations fall 7,019 and the collapse is not the cause** -- a control-flow
+rewrite allocates nothing either way. The drop is the handful of flag
+accumulators the collapse exposed and which became bound expressions, the
+`isUserStructType`-shaped work of not rebuilding the same value twice.
+
+**The phase split is one run and disagrees with the wall.** Parse reads 131ms
+against 107, while best-of-5 wall is a hundredth of a second BETTER. Trust the
+wall, which is a best of five, over a single `--time` sample.
