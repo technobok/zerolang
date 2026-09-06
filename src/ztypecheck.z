@@ -23113,6 +23113,9 @@ checkReturnRooting: function {
                 msg: m1
             )
         }
+        if okRef when st.typing.currentReturnsView == false then {
+            checkBorrowResultSource :st :ast :arg :cid
+        }
         return
     }
     if st.typing.currentFnPins == false then return
@@ -23171,6 +23174,74 @@ checkReturnRooting: function {
             }
         }
     }
+}
+
+# checkBorrowResultSource -- a `.borrow` result lends mutability, so it may
+# not be read out of a readonly source: a `.view` parameter or receiver, a
+# `.view`/`.hold` field on the way, or a call whose result is a `.view`. A
+# view is the most restricted ownership and converts to no other; the
+# function declares `outx T.view` instead, or takes its source as `.borrow`.
+# Runs after the rooting check passed, so the root is a parameter.
+checkBorrowResultSource: function {
+    # where the refusal lands
+    st: zenv.ZSymbolTable
+    # the tree the return's path is read out of
+    ast: Ast.view
+    # the return's argument, whose source is judged
+    arg: argref
+    # the returned call's node, zero when the return is a path
+    cid: zast.nodeid
+} is {
+    if cid.isZero == false then {
+        if st.typing.pendingBorrowReadonly then {
+            (addError
+                :st
+                nodeid: arg.nid
+                lineno: arg.lineno
+                colno: arg.colno
+                e: zast.err.ownerError
+                msg: "a `.borrow` result cannot be lent from a `.view` result: a view converts to no other ownership -- declare `outx T.view`".string
+            )
+        }
+        return
+    }
+    path: ListVal zast.nameid
+    appendValueTuple :ast n: (ast.nodes.get i: arg.operation.u64) dst: path
+    if path.length == 0 then return
+    # a no-paren auto-call is a path whose leaf is a method: what it lends is
+    # the method's result, judged by the method's own flag
+    lm: pathLeafMethodId :st :path
+    if lm.isZero == false then {
+        if ((st.typing.funcReturnsView.get key: lm.u64).or d: false) then {
+            (addError
+                :st
+                nodeid: arg.nid
+                lineno: arg.lineno
+                colno: arg.colno
+                e: zast.err.ownerError
+                msg: "a `.borrow` result cannot be lent from a `.view` result: a view converts to no other ownership -- declare `outx T.view`".string
+            )
+        }
+        return
+    }
+    if (pathIsReadonly :st :path) == false then return
+    ff: frozenFieldInPath :st :path upTo: path.length
+    m: String
+    if ff.isZero then {
+        rnm: rootNameTextOf :ast n: (ast.nodes.get i: arg.operation.u64)
+        m = "a `.borrow` result cannot be lent through '\{rnm}', a `.view`: a view converts to no other ownership -- declare `outx T.view`, or take '\{rnm}' as `.borrow`"
+    } else {
+        fnm: zast.nameTextCopy :ast ref: ff
+        m = "a `.borrow` result cannot be lent through the readonly field '\{fnm}': a view converts to no other ownership -- declare `outx T.view`"
+    }
+    (addError
+        :st
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+        e: zast.err.ownerError
+        msg: m
+    )
 }
 
 # checkReturnCarries -- what a returned value keeps locked. A local that
@@ -27449,8 +27520,19 @@ pathLeafIsMethod: function {
     st: zenv.ZSymbolTable.view
     path: (ListVal zast.nameid).view
 } out bool is {
+    return (pathLeafMethodId :st :path).isZero == false
+}
+
+# pathLeafMethodId -- the function id of the METHOD a path's last segment
+# names, zero when the leaf is a field or the path does not resolve. The walk
+# pathLeafIsMethod asks; a caller that needs the method's own flags (what its
+# result lends) asks this.
+pathLeafMethodId: function {
+    st: zenv.ZSymbolTable.view
+    path: (ListVal zast.nameid).view
+} out ztypes.tid is {
     n: path.length
-    if n < 2 then return false
+    if n < 2 then return ztypes.tid
     cur: u64
     {
         ro: st.lookup nameId: (path.get i: 0)
@@ -27459,7 +27541,7 @@ pathLeafIsMethod: function {
         ) case some then {
             cur = ro
         } case none then {
-            return false
+            return ztypes.tid
         }
     }
     last: n - 1
@@ -27474,8 +27556,8 @@ pathLeafIsMethod: function {
         ) case some then {
             if i == last then {
                 tt: st.reg.typetypeOf typeId: (ztypes.tid.create from: co.u64)
-                if tt == ztypes.ztypetype.functionType then return true
-                return false
+                if tt == ztypes.ztypetype.functionType then return (ztypes.tid.create from: co.u64)
+                return ztypes.tid
             }
             # An INTERMEDIATE method continues from what it RETURNS, not from
             # the function type: `e.value.copy` walks entry -> value's return
@@ -27490,11 +27572,11 @@ pathLeafIsMethod: function {
                 }
             }
         } case none then {
-            return false
+            return ztypes.tid
         }
         i = i + 1
     }
-    return false
+    return ztypes.tid
 }
 
 # pathIsReadonly -- true when a value path may only be read: it passes through
@@ -35080,6 +35162,10 @@ checkFunctionBody: function {
             st.typing.currentReturnsBorrow = ((st.typing.funcReturnsBorrow.get key: fitid).or
                 d: false
             )
+            prevRv: st.typing.currentReturnsView
+            st.typing.currentReturnsView = ((st.typing.funcReturnsView.get key: fitid).or
+                d: false
+            )
             prevFp: st.typing.currentFnPins
             st.typing.currentFnPins = (st.typing.funcPins.get key: fitid).or d: false
             # `yield` enters scope for a generator's synth `.call` body and
@@ -35110,6 +35196,7 @@ checkFunctionBody: function {
             st.typing.currentYieldInputTid = prevYi
             st.typing.currentReturnTypeId = prevRet
             st.typing.currentReturnsBorrow = prevRb
+            st.typing.currentReturnsView = prevRv
             st.typing.currentFnPins = prevFp
             st.typing.currentFnTid = prevFn
             (coerceImplicitReturn

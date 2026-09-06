@@ -1307,7 +1307,23 @@ verify it.
   bad2: function {t: MyClass.take} outx child.borrow is {
     return t.child
   }
+
+  # ERROR -- a `.borrow` result lent through a `.view` receiver
+  bad3: function {t: this.view} outx child.borrow is {
+    return t.child
+  }
+
+  # OK -- what a view can lend is a view
+  peek: function {t: this.view} outx child.view is {
+    return t.child
+  }
   """
+
+A #~".borrow" result lends mutability, so it cannot be read out of a readonly
+source: a #~".view" parameter or receiver, a #~".view"/#~".hold" field on the
+way, or a call whose result is a #~".view". A view is the most restricted
+ownership and converts to no other; such a function declares #~"outx T.view",
+or takes its source as #~".borrow".
 
 #---: Classes with Non-Owned Fields
 
@@ -1770,6 +1786,7 @@ the direct form.
   #~"f borrowed_var.take"                                   |Cannot take a borrowed variable                      |Pass as #~".borrow" or restructure ownership
   #~"x.borrow" on a valtype                                 |Cannot lock a valtype                                |Valtypes are pass-by-value; use a class if identity-based locking is needed
   #~"return localvar" (as #~"outx T.borrow")                |a reference return must point into a #~".borrow"/#~".view" parameter; 'localvar' is a local and dies with this call |Return a field of a non-owned parameter, or the receiver
+  #~"return t.child" as #~"outx T.borrow" with #~"t: this.view" |a #~".borrow" result cannot be lent through 't', a #~".view" |Declare #~"outx T.view", or take #~"t" as #~".borrow"
   #~"outx" with nothing to pin                               |#~"outx" pins nothing here: no parameter or receiver is #~".borrow" or #~".view" |Write #~"out", or mark the source the result reads through (e.g. #~"t: this.view")
   #~"out W" where #~"W" has a non-owned field                |an owned #~"out" result whose type declares a non-owned field must be #~"outx" |Declare #~"outx W" (or #~"outx this")
   #~"out T.borrow" / #~"out T.view"                          |a reference return keeps its sources locked            |Write #~"outx T.borrow" / #~"outx T.view"
