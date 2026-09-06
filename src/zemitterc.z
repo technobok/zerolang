@@ -2874,6 +2874,14 @@ Ctx: class {
     exclArms: List VidVal
     # the types behind those exclusions
     exclTids: List VidTid
+    # the save stack for exclusions layered by an `if` clause's conjuncts. One
+    # stack for the whole emission, indexed per clause, because a clause layers
+    # nothing at all in the ordinary case and three lists per clause is three
+    # allocations per clause for an empty answer. Entries are popped in reverse,
+    # so a nested clause restores before the one enclosing it.
+    exSaveVid: ListVal ztypes.vid
+    exSaveV: List String
+    exSaveT: ListVal u64
     # whether a generator body is being emitted, which changes what a return
     # means
     genActive: bool
@@ -19208,9 +19216,6 @@ seedAndLayerCond: function {
     tids: ListVal u64
     prevV: List String
     prevT: ListVal u64
-    exVids: ListVal ztypes.vid
-    exPrevV: List String
-    exPrevT: ListVal u64
 } is {
     had: svids.length
     (seedCondOne
@@ -19225,7 +19230,7 @@ seedAndLayerCond: function {
         :tids
     )
     (installNarrowSeeds :ctx :svids :vals :tids :prevV :prevT from: had)
-    (layerCondExclusion :ast :symtab :ctx :condId :exVids :exPrevV :exPrevT)
+    (layerCondExclusion :ast :symtab :ctx :condId)
 }
 
 # layerCondExclusion -- record that a conjunct's NEGATED arm predicate excludes
@@ -19233,83 +19238,56 @@ seedAndLayerCond: function {
 # body. `remainingArm` reads ctx.exclArms, so two exclusions that leave one arm
 # collapse the subject to that arm's payload -- the rule the checker already
 # applies, and which the emitter used to apply only on the else side.
+#
+# Classification is the chain facts' own, so this cannot disagree with them, and
+# it allocates nothing at all unless the conjunct really does exclude an arm.
 layerCondExclusion: function {
     ast: Ast.view
-    symtab: zenv.ZSymbolTable
+    symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     condId: u32
-    exVids: ListVal ztypes.vid
-    exPrevV: List String
-    exPrevT: ListVal u64
 } is {
     k: ast.nodes.get i: condId.u64
     if k.namedoperation.not then return
-    tS: List String
-    tV: ListVal ztypes.vid
-    tA: List String
-    tT: ListVal u64
-    tN: ListVal bool
-    tR: List String
-    (chainCondFact
-        :ast
-        :symtab
-        :ctx
-        n: (ast.nodes.get i: k.operation.u64)
-        subjects: tS
-        svids: tV
-        arms: tA
-        tids: tT
-        negs: tN
-        recvs: tR
-    )
-    qi: u64
-    for qi < tV.length loop {
-        if (tN.get i: qi) then {
-            fv: tV.get i: qi
-            pv0: vvGet xs: ctx.exclArms vid: fv
-            exVids.append fv
-            pvc: pv0.copy
-            exPrevV.append pvc
-            exPrevT.append ((vtGet xs: ctx.exclTids vid: fv).or d: (ztypes.tid.create from: 0))
-            fa: tA.get i: qi
-            nx: String
-            if pv0.length > 0 then {
-                nj: "\{pv0} \{fa}"
-                nx = nj
-            } else {
-                na0: fa.copy
-                nx = na0
-            }
-            vvSet xs: ctx.exclArms vid: fv val: nx.stringView
-            vtSet xs: ctx.exclTids vid: fv tid: (ztypes.tid.create from: (tT.get i: qi))
-        }
-        qi = qi + 1
+    f: classifyCondFact :ast :symtab n: (ast.nodes.get i: k.operation.u64)
+    if f.ok.not then return
+    if f.neg.not then return
+    fa: zast.nameTextAt :ast ref: f.armRef
+    pv0: vvGet xs: ctx.exclArms vid: f.svid
+    ctx.exSaveVid.append f.svid
+    pvc: pv0.copy
+    ctx.exSaveV.append pvc
+    ctx.exSaveT.append ((vtGet xs: ctx.exclTids vid: f.svid).or d: (ztypes.tid.create from: 0))
+    nx: String
+    if pv0.length > 0 then {
+        nj: "\{pv0} \{fa}"
+        nx = nj
+    } else {
+        na0: fa.copy
+        nx = na0
     }
+    vvSet xs: ctx.exclArms vid: f.svid val: nx.stringView
+    vtSet xs: ctx.exclTids vid: f.svid tid: (ztypes.tid.create from: f.owner.u64)
 }
 
-# restoreCondExclusions -- put back what each layered vid held before the clause.
-restoreCondExclusions: function {
-    ctx: Ctx
-    exVids: (ListVal ztypes.vid).view
-    exPrevV: (List String).view
-    exPrevT: (ListVal u64).view
-} is {
-    ri: u64
-    for ri < exVids.length loop {
-        rv: exVids.get i: ri
-        pv: exPrevV.get i: ri
+# restoreCondExclusions -- put back what each vid this clause layered held
+# before it, newest first, and drop those entries so the enclosing clause's mark
+# still points where it did.
+restoreCondExclusions: function {ctx: Ctx mark: u64} is {
+    for ctx.exSaveVid.length > mark loop {
+        rv: ctx.exSaveVid.pop
+        pv: ctx.exSaveV.pop
+        pt: ctx.exSaveT.pop
         if pv.length > 0 then {
             vvSet xs: ctx.exclArms vid: rv val: pv.stringView
         } else {
             vvRemove xs: ctx.exclArms vid: rv
         }
-        pt: exPrevT.get i: ri
         if pt > 0 then {
             vtSet xs: ctx.exclTids vid: rv tid: (ztypes.tid.create from: pt.u64)
         } else {
             vtRemove xs: ctx.exclTids vid: rv
         }
-        ri = ri + 1
     }
 }
 
@@ -19438,8 +19416,177 @@ chainFactsOfClauses: function {
     }
 }
 
-# chainCondFact -- recognize one condition operation as a bare arm
-# predicate for chain accumulation (all four forms).
+# condarmfact -- one condition's arm-predicate classification, carrying no built
+# text: which sum type the subject has, which node it is, which arm the
+# predicate names, and whether the predicate is the falsy side. `ok` is false
+# when the condition is not an arm predicate at all.
+#
+# Classification is split from recording so the two callers cannot drift: the
+# else emission classifies and then builds its strings, while the exclusion
+# layering classifies and stops. A separate probe that mirrored these legs could
+# silently disagree, and a missed exclusion puts invalid C back.
+condarmfact: record {
+    ok: bool
+    owner: u64
+    parentNid: zast.nodeid
+    svid: ztypes.vid
+    armRef: zast.nameid
+    neg: bool
+}
+
+# noArmFact -- the "not an arm predicate" answer.
+noArmFact: function out condarmfact is {
+    return (condarmfact
+        ok: false
+        owner: 0
+        parentNid: (zast.nodeid.create from: 0)
+        svid: (ztypes.vid.create from: 0)
+        armRef: (zast.nameid.create from: 0)
+        neg: false
+    )
+}
+
+# classifyFactCore -- the guards every arm-predicate fact must pass, answered
+# without allocating: a real sum owner, not an ordinal variant, and a subject
+# that is a bare atom.
+classifyFactCore: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    owner: u64
+    parentNid: zast.nodeid
+    armRef: zast.nameid
+    neg: bool
+} out condarmfact is {
+    none9: noArmFact
+    if owner == 0 then return none9
+    if (isOrdinalVariant :symtab tid: (ztypes.tid.create from: owner.u64)) then return none9
+    parent: ast.nodes.get i: parentNid.u64
+    subj: atomTextOf :ast n: parent
+    if subj.length == 0 then return none9
+    return (condarmfact
+        ok: true
+        :owner
+        :parentNid
+        svid: (atomVid :symtab nid: (atomNodeId n: parent))
+        :armRef
+        :neg
+    )
+}
+
+# classifyInnerFact -- the stamped bare-predicate core, as a classification.
+classifyInnerFact: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    n: astnode.view
+    neg: bool
+} out condarmfact is {
+    match (
+        n
+    ) case expression then {
+        return (classifyInnerFact :ast :symtab n: (ast.nodes.get i: n.expression.u64) :neg)
+    } case dottedpath then {
+        return (classifyFactCore
+            :ast
+            :symtab
+            owner: (dottedArmPredicateTid :symtab nid: n.nodeid.u64)
+            parentNid: (zast.nodeid.create from: n.parent)
+            armRef: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
+            :neg
+        )
+    } else {
+        none9: noArmFact
+        return none9
+    }
+}
+
+# classifyCondFact -- one condition operation as an arm predicate, by the same
+# legs the chain facts have always used: the bare stamped form, a `.true` /
+# `.false` suffix whose side comes from the arm ORDER, and `== true` / `== false`
+# against bool. Answers without building any text.
+classifyCondFact: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    n: astnode.view
+} out condarmfact is {
+    none9: noArmFact
+    {
+        ta1: ztypecheck.truthyCondArmOf st: symtab nid: (interpPartNodeId :n)
+        if ta1 > 0 then {
+            return (classifyFactCore
+                :ast
+                :symtab
+                owner: (ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: (interpPartNodeId :n)
+                ).u64
+                # the subject here is `n` itself. classifyFactCore answers ok
+                # only when that node is an atomid (atomTextOf names nothing
+                # else), and interpPartNodeId of an atomid IS its own id, so
+                # carrying the id is exactly carrying the node.
+                parentNid: (zast.nodeid.create from: (interpPartNodeId :n).u32.orPanic)
+                armRef: (zast.nameid.create from: ta1.u32.orPanic)
+                neg: false
+            )
+        }
+    }
+    match (
+        n
+    ) case expression then {
+        return (classifyCondFact :ast :symtab n: (ast.nodes.get i: n.expression.u64))
+    } case dottedpath then {
+        sd: (ztypecheck.armSuffixSide
+            :ast
+            st: symtab
+            nid: n.nodeid.u64
+            parent: (ast.nodes.get i: n.parent.u64)
+            child: (ast.nodes.get i: n.child.u64)
+        )
+        if sd.truthy then {
+            return (classifyInnerFact
+                :ast
+                :symtab
+                n: (ast.nodes.get i: n.parent.u64)
+                neg: false
+            )
+        }
+        if sd.falsy then {
+            return (classifyInnerFact :ast :symtab n: (ast.nodes.get i: n.parent.u64) neg: true)
+        }
+        return (classifyFactCore
+            :ast
+            :symtab
+            owner: (dottedArmPredicateTid :symtab nid: n.nodeid.u64)
+            parentNid: (zast.nodeid.create from: n.parent)
+            armRef: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
+            neg: false
+        )
+    } case binop then {
+        opn: bareAtomText :ast n: (ast.nodes.get i: n.operator.u64)
+        if opn != "==" then return none9
+        # `== true` / `== false`: the operand names one of bool's arms, and which
+        # side it is comes from bool's arm ORDER.
+        lsd: boolArmSideOf :ast :symtab n: (ast.nodes.get i: n.lhs.u64)
+        rsd: boolArmSideOf :ast :symtab n: (ast.nodes.get i: n.rhs.u64)
+        if rsd.truthy then {
+            return (classifyInnerFact :ast :symtab n: (ast.nodes.get i: n.lhs.u64) neg: false)
+        }
+        if rsd.falsy then {
+            return (classifyInnerFact :ast :symtab n: (ast.nodes.get i: n.lhs.u64) neg: true)
+        }
+        if lsd.truthy then {
+            return (classifyInnerFact :ast :symtab n: (ast.nodes.get i: n.rhs.u64) neg: false)
+        }
+        if lsd.falsy then {
+            return (classifyInnerFact :ast :symtab n: (ast.nodes.get i: n.rhs.u64) neg: true)
+        }
+        return none9
+    } else {
+        return none9
+    }
+}
+
+# chainCondFact -- one condition operation as a bare arm predicate, recorded
+# into the parallel chain-fact lists. Classification is classifyCondFact's; this
+# adds only the text the else emission reuses rather than re-deriving -- the
+# subject spelling and the emitted receiver.
 chainCondFact: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -19452,237 +19599,17 @@ chainCondFact: function {
     negs: ListVal bool
     recvs: List String
 } is {
-    # the bare form again -- same fact, recorded for the else emission
-    {
-        ta1: ztypecheck.truthyCondArmOf st: symtab nid: (interpPartNodeId :n)
-        if ta1 > 0 then {
-            an1: zast.nameTextAt :ast ref: (zast.nameid.create from: ta1.u32.orPanic)
-            own1: (ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: (interpPartNodeId :n)).u64
-            (chainFactCore
-                :ast
-                :symtab
-                :ctx
-                owner: own1
-                parent: n
-                childName: an1.stringView
-                neg: false
-                :subjects
-                :svids
-                :arms
-                :tids
-                :negs
-                :recvs
-            )
-            return
-        }
-    }
-    match (
-        n
-    ) case expression then {
-        iexD: ast.nodes.get i: n.expression.u64
-        chainCondFact :ast :symtab :ctx n: iexD :subjects :svids :arms :tids :negs :recvs
-    } case dottedpath then {
-        cn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-        # `.true` / `.false` on a predicate: which side it is comes from the
-        # stamped type's arm ORDER, never from the spelling of the segment.
-        sd: (ztypecheck.armSuffixSide
-            :ast
-            st: symtab
-            nid: n.nodeid.u64
-            parent: (ast.nodes.get i: n.parent.u64)
-            child: (ast.nodes.get i: n.child.u64)
-        )
-        if sd.truthy then {
-            (chainInnerFact
-                :ast
-                :symtab
-                :ctx
-                n: (ast.nodes.get i: n.parent.u64)
-                neg: false
-                :subjects
-                :svids
-                :arms
-                :tids
-                :negs
-                :recvs
-            )
-            return
-        }
-        if sd.falsy then {
-            (chainInnerFact
-                :ast
-                :symtab
-                :ctx
-                n: (ast.nodes.get i: n.parent.u64)
-                neg: true
-                :subjects
-                :svids
-                :arms
-                :tids
-                :negs
-                :recvs
-            )
-            return
-        }
-        owner9: (dottedArmPredicateTid :symtab nid: n.nodeid.u64)
-        (chainFactCore
-            :ast
-            :symtab
-            :ctx
-            owner: owner9
-            parent: (ast.nodes.get i: n.parent.u64)
-            childName: cn.stringView
-            neg: false
-            :subjects
-            :svids
-            :arms
-            :tids
-            :negs
-            :recvs
-        )
-    } case binop then {
-        opn: bareAtomText :ast n: (ast.nodes.get i: n.operator.u64)
-        if opn == "==" then {
-            # `== true` / `== false`: the operand names one of bool's arms,
-            # and which side it is comes from bool's arm ORDER.
-            lsd: boolArmSideOf :ast :symtab n: (ast.nodes.get i: n.lhs.u64)
-            rsd: boolArmSideOf :ast :symtab n: (ast.nodes.get i: n.rhs.u64)
-            if rsd.truthy then {
-                (chainInnerFact
-                    :ast
-                    :symtab
-                    :ctx
-                    n: (ast.nodes.get i: n.lhs.u64)
-                    neg: false
-                    :subjects
-                    :svids
-                    :arms
-                    :tids
-                    :negs
-                    :recvs
-                )
-                return
-            }
-            if rsd.falsy then {
-                (chainInnerFact
-                    :ast
-                    :symtab
-                    :ctx
-                    n: (ast.nodes.get i: n.lhs.u64)
-                    neg: true
-                    :subjects
-                    :svids
-                    :arms
-                    :tids
-                    :negs
-                    :recvs
-                )
-                return
-            }
-            if lsd.truthy then {
-                (chainInnerFact
-                    :ast
-                    :symtab
-                    :ctx
-                    n: (ast.nodes.get i: n.rhs.u64)
-                    neg: false
-                    :subjects
-                    :svids
-                    :arms
-                    :tids
-                    :negs
-                    :recvs
-                )
-                return
-            }
-            if lsd.falsy then {
-                (chainInnerFact
-                    :ast
-                    :symtab
-                    :ctx
-                    n: (ast.nodes.get i: n.rhs.u64)
-                    neg: true
-                    :subjects
-                    :svids
-                    :arms
-                    :tids
-                    :negs
-                    :recvs
-                )
-            }
-        }
-    } else null
-}
-
-# chainInnerFact -- the stamped bare-predicate core for chain facts.
-chainInnerFact: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    n: astnode.view
-    neg: bool
-    subjects: List String
-    svids: ListVal ztypes.vid
-    arms: List String
-    tids: ListVal u64
-    negs: ListVal bool
-    recvs: List String
-} is {
-    match (
-        n
-    ) case expression then {
-        iexE: ast.nodes.get i: n.expression.u64
-        chainInnerFact :ast :symtab :ctx n: iexE :neg :subjects :svids :arms :tids :negs :recvs
-    } case dottedpath then {
-        arm0: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-        owner92: (dottedArmPredicateTid :symtab nid: n.nodeid.u64)
-        (chainFactCore
-            :ast
-            :symtab
-            :ctx
-            owner: owner92
-            parent: (ast.nodes.get i: n.parent.u64)
-            childName: arm0.stringView
-            :neg
-            :subjects
-            :svids
-            :arms
-            :tids
-            :negs
-            :recvs
-        )
-    } else null
-}
-
-# chainFactCore -- the exploded chain-fact core (dotted node fields).
-# Captures the emitted receiver text alongside the fact so the else
-# emission never re-derives it from the name.
-chainFactCore: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    owner: u64
-    parent: astnode.view
-    childName: StringView
-    neg: bool
-    subjects: List String
-    svids: ListVal ztypes.vid
-    arms: List String
-    tids: ListVal u64
-    negs: ListVal bool
-    recvs: List String
-} is {
-    if owner == 0 then return
-    if (isOrdinalVariant :symtab tid: (ztypes.tid.create from: owner.u64)) then return
+    f: classifyCondFact :ast :symtab :n
+    if f.ok.not then return
+    parent: ast.nodes.get i: f.parentNid.u64
     subj: atomTextOf :ast n: parent
-    if subj.length == 0 then return
-    an: childName.string
+    an: zast.nameTextAt :ast ref: f.armRef
     rv: emitExpr :ast :symtab :ctx n: parent
     subjects.append subj.string
-    svids.append (atomVid :symtab nid: (atomNodeId n: parent))
-    arms.append an
-    tids.append owner
-    negs.append neg
+    svids.append f.svid
+    arms.append an.copy
+    tids.append f.owner
+    negs.append f.neg
     recvs.append rv
 }
 
@@ -19865,9 +19792,7 @@ emitIfClause: function {
         sT: ListVal u64
         sPrevV: List String
         sPrevT: ListVal u64
-        xVid: ListVal ztypes.vid
-        xPrevV: List String
-        xPrevT: ListVal u64
+        xMark: ctx.exSaveVid.length
         guarded: false
         if isFirst when (whenCondSuspends :ast :ctx :n) then guarded = true
         cond: String
@@ -19914,9 +19839,6 @@ emitIfClause: function {
                     tids: sT
                     prevV: sPrevV
                     prevT: sPrevT
-                    exVids: xVid
-                    exPrevV: xPrevV
-                    exPrevT: xPrevT
                 )
             }
         }
@@ -19975,7 +19897,7 @@ emitIfClause: function {
             }
             ri = ri + 1
         }
-        (restoreCondExclusions :ctx exVids: xVid exPrevV: xPrevV exPrevT: xPrevT)
+        (restoreCondExclusions :ctx mark: xMark)
     }
 }
 
@@ -24401,6 +24323,9 @@ emitC: function {
         narrowTid: List VidTid
         exclArms: List VidVal
         exclTids: List VidTid
+        exSaveVid: ListVal ztypes.vid
+        exSaveV: List String
+        exSaveT: ListVal u64
         genActive: false
         genRecvC: "this".string
         genValC: "value".string
