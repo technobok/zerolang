@@ -234,14 +234,9 @@ reverseNodes: function {src: (ListVal u32).take} out ListVal u32 is {
 # digits, or underscores (zlexer.isvalidunitname). Returns the negative so
 # the scanner can early-return on the first bad byte.
 unitNameCharBad: function {b: u8 first: bool} out bool is {
-    if first then {
-        if b >= 97 when b <= 122 then return false
-        return true
-    }
-    if b >= 97 when b <= 122 then return false
-    if b >= 48 when b <= 57 then return false
-    if b == 95 then return false
-    return true
+    lower: (b >= 97) and (b <= 122)
+    if first then return lower.not
+    return (lower or ((b >= 48) and (b <= 57)) or (b == 95)).not
 }
 
 # Port of zlexer.isvalidunitname: a unit (file) name is a lowercase ascii
@@ -2859,9 +2854,7 @@ Parser: class {
                             return items
                         }
                         if typeBody when (isReservedMemberName id: lblTok.text) then {
-                            visUnit: false
-                            if mKind.publicNs then visUnit = true
-                            if mKind.privateNs then visUnit = true
+                            visUnit: mKind.publicNs or mKind.privateNs
                             allowed: false
                             if visUnit when (this.isUnitDef node: member) then allowed = true
                             if allowed.not then {
@@ -3080,9 +3073,7 @@ Parser: class {
                         lex.setFilterEol enabled: prevFilter pool: this.ast.names
                         return body
                     }
-                    isVisU: false
-                    if dKind.publicNs then isVisU = true
-                    if dKind.privateNs then isVisU = true
+                    isVisU: dKind.publicNs or dKind.privateNs
                     if isVisU when (this.isUnitDef node: defNode).not then {
                         dTxt: zast.poolTextCopy pool: this.ast.names ref: lblTok.text
                         body.append (this.intern n: (this.mkError
@@ -3272,9 +3263,7 @@ Parser: class {
             }
         }
         if tt == zlexer.toktype.nativeTok then {
-            noBodyYet: true
-            if hasIs then noBodyYet = false
-            if isNative then noBodyYet = false
+            noBodyYet: (hasIs or isNative).not
             if noBodyYet then {
                 lex.advance pool: this.ast.names
                 return (this.acceptItemBodiesTail
@@ -3356,9 +3345,7 @@ Parser: class {
                 )
             }
         }
-        hasBody: false
-        if hasIs then hasBody = true
-        if isNative then hasBody = true
+        hasBody: hasIs or isNative
         # a generator's `is` block declares its construction fields, and one
         # that captures nothing has none to write. Its body is `call`, which
         # lives in `as`, so `as` alone is a complete definition -- for this kind
