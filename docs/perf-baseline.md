@@ -168,6 +168,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-09-04 | 0776fbc7 | [child walks without a list per node, and the tree as the carrier](#r-childwalks) | 0.44s | -- | 93MB / -- | 89 / 176 / 168 (total 433) | 2,949,835 | 271MB | -- | 114,917 |
 | 2026-09-05 | c1022464 | [D1: the node table holds values, not boxes](#r-nodeflip) | 0.47s | -- | 102MB / -- | 111 / 180 / 189 (total 480) | 2,254,086 | 302MB | -- | 115,951 |
 | 2026-09-05 | b006be2c | [D1 recovery: a node parameter is a view again](#r-nodeview) | 0.44s | -- | 101MB / -- | 98 / 176 / 179 (total 453) | 2,264,234 | 301MB | -- | 116,000 |
+| 2026-09-06 | 327b9b6c | [bool gains `and`, `or` and `not`; the disjunction sweep](#r-boollogic) | 0.45s | -- | 101MB / -- | 107 / 172 / 176 (total 455) | 2,251,883 | 301MB | -- | 120,541 |
 
 
 <a id="r-tokenarc"></a>
@@ -2458,3 +2459,37 @@ whole remaining gap.
 is 20 bytes and the largest, a function definition, is 48. The union is sized by
 its largest arm, and moving position out of every arm buys nothing because the
 side table then costs what the union saved.
+
+<a id="r-boollogic"></a>
+
+### bool gains `and`, `or` and `not`; the disjunction sweep
+
+`6fe3d22e`..`327b9b6c`, measured against `b53667e3` immediately before it. Three
+declared methods on bool, then every flag accumulator the new A009 lint found
+rewritten as one bound expression: the rule's baseline went 181 to 0, and 33
+short `if … then return true` chains in `src` went with them.
+
+| | before (`b53667e3`) | after (`327b9b6c`) |
+|---|---|---|
+| wall (best of 5) | 0.44s | 0.45s |
+| parse / typecheck / emit | 120 / 175 / 178 (total 473) | 107 / 172 / 176 (total 455) |
+| allocs | 2,276,845 | 2,251,883 |
+| bytes churned | 302MB | 301MB |
+| LOC (src + lib/system) | 120,470 | 120,541 |
+
+**The sweep costs nothing, and it was always going to cost nothing.** An
+accumulator evaluates every one of its conditions before it reaches the flag
+test, so an `or` chain that also evaluates every operand runs the same work in
+the same order. The emitted row is
+`({ bool _l = @L@; bool _r = @R@; (_l | _r); })` -- no call, no allocation.
+Wall moves by one hundredth of a second, which is this measurement's noise.
+
+**Allocations fall 24,962, and the drop is not in the operators.** Three
+measurements bracket it: 2,276,845 before the arc, 2,257,820 after E2, 2,251,883
+at the end. Three quarters of it therefore lands in E1 and E2 -- the stdlib's
+byte-class predicates and the `isUserStructType` extraction, where three sites
+had each built the same type-family name. The endpoints are measured; which of
+those two carries how much is not.
+
+**LOC rises by 71 across the arc**, the four lints and their fixtures against
+409 lines the sweep itself removed.
