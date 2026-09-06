@@ -547,11 +547,11 @@ isComposedParts: function {ast: Ast.view parts: zast.kidspan} out bool is {
 # what joins the halves of a composed key (a path is composed too, and is not
 # a key).
 isKeySeparator: function {s: StringView} out bool is {
-    if s.length == 0 then return false
-    if s.length > 2 then return false
-    if (s.contains needle: " ") then return false
-    if (s.contains needle: "/") then return false
-    return true
+    (return
+        (s.length > 0) and (s.length <= 2) and (s.contains needle: " ").not and (s.contains
+            needle: "/"
+        ).not
+    )
 }
 
 # atomName -- the identifier name of an atomid node, else "".
@@ -816,11 +816,7 @@ trimBackWs: function {s: StringView hi: u64} out u64 is {
 
 # byteIsWs -- a space, tab or line-end byte.
 byteIsWs: function {b: u8} out bool is {
-    if b == 32 then return true
-    if b == 9 then return true
-    if b == 10 then return true
-    if b == 13 then return true
-    return false
+    return (b == 32) or (b == 9) or (b == 10) or (b == 13)
 }
 
 # parenGroupStart -- the index of the `(` matching the `)` at `close - 1`; 0 when
@@ -857,10 +853,7 @@ onlyOpensBetween: function {s: StringView lo: u64 hi: u64} out bool is {
 # docByteIsWord -- true for the ASCII letters and digits a word is made of. Everything
 # else -- punctuation, backticks, the `--` dash, path separators -- is a boundary.
 docByteIsWord: function {b: u8} out bool is {
-    if b >= 97 when b <= 122 then return true
-    if b >= 65 when b <= 90 then return true
-    if b >= 48 when b <= 57 then return true
-    return false
+    return ((b >= 97) and (b <= 122)) or ((b >= 65) and (b <= 90)) or ((b >= 48) and (b <= 57))
 }
 
 # docIsStopword -- true for a function word every doc shares, which therefore says
@@ -1037,9 +1030,7 @@ docStartsLine: function {ln: StringView col: u32} out bool is {
     i: u64
     for i < n loop {
         c: docByteAt s: ln :i
-        isSpace: false
-        if c == 32 then isSpace = true
-        if c == 9 then isSpace = true
+        isSpace: (c == 32) or (c == 9)
         if isSpace.not then return false
         i = i + 1
     }
@@ -1604,15 +1595,17 @@ Analysis: class {
     checkTypeNameCasing: function {
         :this ast: Ast.view nameRef: zast.nameid line: u32 col: u32 kind: zast.objectkind
     } is {
-        isVal: false
-        if kind == zast.objectkind.recordDef then isVal = true
-        if kind == zast.objectkind.variantDef then isVal = true
-        if kind == zast.objectkind.facetDef then isVal = true
-        isRef: false
-        if kind == zast.objectkind.classDef then isRef = true
-        if kind == zast.objectkind.unionDef then isRef = true
-        if kind == zast.objectkind.protocolDef then isRef = true
-        if kind == zast.objectkind.generatorDef then isRef = true
+        isVal: (
+            (kind == zast.objectkind.recordDef) or
+            (kind == zast.objectkind.variantDef) or
+            (kind == zast.objectkind.facetDef)
+        )
+        isRef: (
+            (kind == zast.objectkind.classDef) or
+            (kind == zast.objectkind.unionDef) or
+            (kind == zast.objectkind.protocolDef) or
+            (kind == zast.objectkind.generatorDef)
+        )
         if isVal.not when isRef.not then return
         nm: zast.nameTextAt :ast ref: nameRef
         hasUpper: false
@@ -1820,9 +1813,7 @@ Analysis: class {
         isTrue: litNm == this.trueId
         isFalse: litNm == this.falseId
         if isTrue.not when isFalse.not then return
-        neg: false
-        if isEq when isFalse then neg = true
-        if isNe when isTrue then neg = true
+        neg: (isEq and isFalse) or (isNe and isTrue)
         litLen: 4
         if isFalse then litLen = 5
         this.reportBoolLiteralCompare :ast :lhsId :opId :rhsId :neg :litLen
@@ -2198,9 +2189,7 @@ Analysis: class {
     # checkMemberCasing -- flag each variant/union arm whose name starts with an uppercase
     # letter (not lowerCamelCase), with a suggested rename (see casingSuggest/casingMessage).
     checkMemberCasing: function {:this ast: Ast.view kind: zast.objectkind items: zast.kidspan} is {
-        isVU: false
-        if kind == zast.objectkind.variantDef then isVU = true
-        if kind == zast.objectkind.unionDef then isVU = true
+        isVU: (kind == zast.objectkind.variantDef) or (kind == zast.objectkind.unionDef)
         if isVU.not then return
         h9x9: u64
         for h9x9 < items.count.u64 loop {
@@ -2676,16 +2665,18 @@ Analysis: class {
                     line: n.lineno
                     col: n.colno
                 )
-                isRC: false
-                if op.kind == zast.objectkind.recordDef then isRC = true
-                if op.kind == zast.objectkind.classDef then isRC = true
-                if op.kind == zast.objectkind.generatorDef then isRC = true
-                isVU: false
-                if op.kind == zast.objectkind.variantDef then isVU = true
-                if op.kind == zast.objectkind.unionDef then isVU = true
-                isPF: false
-                if op.kind == zast.objectkind.protocolDef then isPF = true
-                if op.kind == zast.objectkind.facetDef then isPF = true
+                isRC: (
+                    (op.kind == zast.objectkind.recordDef) or
+                    (op.kind == zast.objectkind.classDef) or
+                    (op.kind == zast.objectkind.generatorDef)
+                )
+                isVU: (
+                    (op.kind == zast.objectkind.variantDef) or (op.kind == zast.objectkind.unionDef)
+                )
+                isPF: (
+                    (op.kind == zast.objectkind.protocolDef) or
+                    (op.kind == zast.objectkind.facetDef)
+                )
                 if docFields when isRC then {
                     isx1909: u64
                     for isx1909 < op.isItems.count.u64 loop {
@@ -5025,12 +5016,11 @@ sortEdits: function {edits: (List zfix.Edit).borrow} out List zfix.Edit is {
             u: used.get :i
             if u.not then {
                 e: edits.get :i
-                take: false
-                if best == n then {
-                    take = true
-                } else if e.byteLo < bestLo then {
-                    take = true
-                } else if e.byteLo == bestLo when e.byteHi > bestHi then take = true
+                take: (
+                    (best == n) or
+                    (e.byteLo < bestLo) or
+                    ((e.byteLo == bestLo) and (e.byteHi > bestHi))
+                )
                 if take then {
                     best = i
                     bestLo = e.byteLo
@@ -5184,9 +5174,7 @@ lineDiffEdits: function {old: StringView new: StringView} out List zfix.Edit is 
             nhi: byteAtLine starts: newStarts srcLen: newLen k: p2
             repl: String
             zfix.appendRange buf: repl src: new lo: nlo hi: nhi
-            doEmit: false
-            if hi > lo then doEmit = true
-            if nhi > nlo then doEmit = true
+            doEmit: (hi > lo) or (nhi > nlo)
             if doEmit then edits.append (zfix.Edit byteLo: lo byteHi: hi replacement: repl)
             i = i2
             p = p2
