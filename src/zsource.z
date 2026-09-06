@@ -622,6 +622,68 @@ slIsIf: function {ast: Ast.view sl: astnode.view} out bool is {
     }
 }
 
+# flagbind -- a `name: true` / `name: false` statement line: the local and the
+# literal it was bound to; both 0 for any other line.
+flagbind: record {
+    name: zast.nameid
+    lit: zast.nameid
+}
+
+# innerNodeIdOf -- `id` with its statement-line and expression wrappers peeled:
+# the node a statement line actually holds.
+innerNodeIdOf: function {ast: Ast.view id: zast.nodeid} out zast.nodeid is {
+    n: ast.nodes.get i: id.u64
+    match (
+        n
+    ) case statementline then {
+        return (innerNodeIdOf :ast id: n.statementline)
+    } case expression then {
+        return (innerNodeIdOf :ast id: n.expression)
+    } else {
+        return id
+    }
+}
+
+# singleLineBodyOf -- the one statement an `if` clause's block holds, wrappers
+# peeled; 0 when the block holds any other number of lines.
+singleLineBodyOf: function {ast: Ast.view clauseId: u32} out zast.nodeid is {
+    c: ast.nodes.get i: clauseId.u64
+    match (
+        c
+    ) case ifclause then {
+        b: ast.nodes.get i: c.statement.u64
+        match (
+            b
+        ) case statement then {
+            if b.statements.count.u64 != 1 then return zast.nodeid
+            first: zast.kidAt kids: ast.kids span: b.statements i: 0
+            return (innerNodeIdOf :ast id: (zast.nodeid.create from: first))
+        } else {
+            return zast.nodeid
+        }
+    } else {
+        return zast.nodeid
+    }
+}
+
+# innerBinopOperator -- the operator name id of the binop at `id`, 0 when the
+# node is not a bare binop (a parenthesised one is an `expression`).
+innerBinopOperator: function {ast: Ast.view id: zast.nodeid} out zast.nameid is {
+    n: ast.nodes.get i: id.u64
+    match (
+        n
+    ) case binop then {
+        return (atomNameIdOf n: (ast.nodes.get i: n.operator.u64))
+    } else {
+        return zast.nameid
+    }
+}
+
+# isLogicOp -- the name id is bool's `and` or `or`.
+isLogicOp: function {id: zast.nameid} out bool is {
+    return (id == zast.names.wkAnd) or (id == zast.names.wkOr)
+}
+
 # isElseIfWrap -- the else clause is the synthetic block an `else if` chain parses
 # to (a single statement line wrapping an `if`), not a real braced `else { ... }`.
 isElseIfWrap: function {ast: Ast.view n: astnode.view} out bool is {
@@ -1678,6 +1740,7 @@ Analysis: class {
             this.diags.append d
         } case binop then {
             this.checkBoolLiteralCompare :ast opId: n.operator lhsId: n.lhs rhsId: n.rhs
+            this.checkMixedLogicalChain :ast opId: n.operator lhsId: n.lhs
             if this.opts.arch then {
                 this.checkLiteralCompare :ast opId: n.operator lhsId: n.lhs rhsId: n.rhs
             }
@@ -1706,8 +1769,10 @@ Analysis: class {
             )
         } case ifexpr then {
             this.checkEmpty :ast elseclauseId: n.elseclause clauses: n.clauses
+            this.checkNestedIf :ast clauses: n.clauses elseclauseId: n.elseclause
         } case statement then {
             this.checkUnreachable :ast stmts: n.statements
+            this.checkFlagAccumulator :ast stmts: n.statements
         } case functiondef then {
             if this.opts.arch then (this.checkLongFunction
                 :ast
@@ -1834,7 +1899,154 @@ Analysis: class {
         )
     }
 
+    # checkMixedLogicalChain -- L029: a binop chain mixing `and` / `or` with a
+    # different operator without parentheses. Chains fold left with no
+    # precedence, so `a or b and c` is `(a or b) and c` and `x or y == z` is
+    # `(x or y) == z`. The fold's lhs is the only place an unparenthesised
+    # inner binop can sit; a parenthesised one is an `expression` node.
+    checkMixedLogicalChain: function {:this ast: Ast.view opId: zast.nodeid lhsId: zast.nodeid} is {
+        opNm: atomNameIdOf n: (ast.nodes.get i: opId.u64)
+        innerNm: innerBinopOperator :ast id: lhsId
+        if innerNm.isZero then return
+        if innerNm == opNm then return
+        if (isLogicOp id: opNm).not when (isLogicOp id: innerNm).not then return
+        p: zast.posOf n: (ast.nodes.get i: opId.u64)
+        (this.warn
+            code: "L029"
+            msg: "a chain mixing `and` / `or` with another operator folds left with no precedence: `a or b and c` is `(a or b) and c`; parenthesise the grouping meant".string
+            line: p.line
+            col: p.col
+            width: 1
+        )
+    }
+
     # ---- architecture rules (zl lint --arch) ----
+
+    # checkFlagAccumulator -- A009: a bool local bound to a literal and then set
+    # to the other literal by two or more consecutive single-clause `if`
+    # statements: a disjunction (or, from `true`, a conjunction) written as a
+    # flag. Reported at the binding.
+    checkFlagAccumulator: function {:this ast: Ast.view stmts: zast.kidspan} is {
+        if this.opts.arch.not then return
+        n: stmts.count.u64
+        i: u64
+        for i < n loop {
+            sid: zast.kidAt kids: ast.kids span: stmts :i
+            i = i + 1
+            fb: this.flagBindingAt :ast :sid
+            if fb.name.isZero then continue
+            other: this.trueId
+            if fb.lit == this.trueId then other = this.falseId
+            sets: u64
+            j: i
+            for j < n while (this.flagSetAt
+                :ast
+                sid: (zast.kidAt kids: ast.kids span: stmts i: j)
+                name: fb.name
+                lit: other
+            ) loop {
+                sets = sets + 1
+                j = j + 1
+            }
+            if sets >= 2 then {
+                p: zast.posOf n: (ast.nodes.get i: sid.u64)
+                fn: zast.nameTextAt :ast ref: fb.name
+                (this.info
+                    code: "A009"
+                    msg: "flag accumulator: `\{fn}` is bound to a literal and then set by \{sets} `if` statements; bind the `or` chain instead"
+                    line: p.line
+                    col: p.col
+                    width: 1
+                )
+            }
+        }
+    }
+
+    # flagBindingAt -- the flag binding a statement line holds (`name: true` /
+    # `name: false`), or zeros for any other line.
+    flagBindingAt: function {this: this.view ast: Ast.view sid: u32} out flagbind is {
+        n: ast.nodes.get i: (innerNodeIdOf :ast id: (zast.nodeid.create from: sid)).u64
+        match (
+            n
+        ) case assignment then {
+            lit: this.boolLiteralAt :ast id: n.value
+            if lit.isZero then return (flagbind name: zast.nameid lit: zast.nameid)
+            return (flagbind name: n.name :lit)
+        } else {
+            return (flagbind name: zast.nameid lit: zast.nameid)
+        }
+    }
+
+    # boolLiteralAt -- the pool id of `true` / `false` when the node at `id`, its
+    # wrappers peeled, is that literal; 0 otherwise.
+    boolLiteralAt: function {this: this.view ast: Ast.view id: zast.nodeid} out zast.nameid is {
+        nm: atomNameIdOf n: (ast.nodes.get i: (innerNodeIdOf :ast :id).u64)
+        if nm.isZero then return nm
+        if nm == this.trueId then return nm
+        if nm == this.falseId then return nm
+        return zast.nameid
+    }
+
+    # flagSetAt -- statement line `sid` is `if <cond> then <name> = <lit>`: one
+    # clause, no else, a body of exactly that reassignment.
+    flagSetAt: function {
+        this: this.view ast: Ast.view sid: u32 name: zast.nameid lit: zast.nameid
+    } out bool is {
+        n: ast.nodes.get i: (innerNodeIdOf :ast id: (zast.nodeid.create from: sid)).u64
+        match (
+            n
+        ) case ifexpr then {
+            if n.elseclause.isZero.not then return false
+            if n.clauses.count.u64 != 1 then return false
+            bodyId: singleLineBodyOf :ast clauseId: (zast.kidAt kids: ast.kids span: n.clauses i: 0)
+            if bodyId.isZero then return false
+            return (this.reassignsTo :ast id: bodyId :name :lit)
+        } else {
+            return false
+        }
+    }
+
+    # reassignsTo -- the node at `id` is `name = <lit>`.
+    reassignsTo: function {
+        this: this.view ast: Ast.view id: zast.nodeid name: zast.nameid lit: zast.nameid
+    } out bool is {
+        n: ast.nodes.get i: id.u64
+        match (
+            n
+        ) case reassignment then {
+            if (atomNameIdOf n: (ast.nodes.get i: n.topath.u64)) != name then return false
+            return (this.boolLiteralAt :ast id: n.value) == lit
+        } else {
+            return false
+        }
+    }
+
+    # checkNestedIf -- A010: an `if` with one clause and no else whose body is a
+    # block holding exactly one `if` with one clause and no else: the two
+    # conditions are one `when` chain. Reported at the inner `if`.
+    checkNestedIf: function {
+        :this ast: Ast.view clauses: zast.kidspan elseclauseId: zast.nodeid
+    } is {
+        if this.opts.arch.not then return
+        if elseclauseId.isZero.not then return
+        if clauses.count.u64 != 1 then return
+        innerId: singleLineBodyOf :ast clauseId: (zast.kidAt kids: ast.kids span: clauses i: 0)
+        if innerId.isZero then return
+        inner: ast.nodes.get i: innerId.u64
+        match (
+            inner
+        ) case ifexpr then {
+            if inner.elseclause.isZero.not then return
+            if inner.clauses.count.u64 != 1 then return
+            (this.info
+                code: "A010"
+                msg: "nested `if` with nothing else in the outer body: chain the conditions with `when`".string
+                line: inner.lineno
+                col: inner.colno
+                width: 2
+            )
+        } else null
+    }
 
     # checkLiteralCompare -- A001: `==` / `!=` against a string literal. The
     # compiler compares by id -- a name id, a declaration, a type id -- and a
