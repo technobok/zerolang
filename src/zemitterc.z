@@ -870,14 +870,12 @@ emitNumericCast: function {
     retTid: ztypes.tid
     key: StringView
 } out String is {
-    if (isFloatName name: dstName) then {
-        # a bare float-literal operand re-parses at the destination width
-        # via the C literal suffix (single rounding, full precision). A LITERAL
-        # concern, not a conversion one: there is no value to convert yet.
-        if (isFloatLitText s: val) then {
-            fl: cFloatLitSuffix name: dstName
-            return "\{val}\{fl}"
-        }
+    # a bare float-literal operand re-parses at the destination width
+    # via the C literal suffix (single rounding, full precision). A LITERAL
+    # concern, not a conversion one: there is no value to convert yet.
+    if (isFloatName name: dstName) when (isFloatLitText s: val) then {
+        fl: cFloatLitSuffix name: dstName
+        return "\{val}\{fl}"
     }
     body: nativeImplOf :ctx path: key
     if body.length == 0 then {
@@ -3903,14 +3901,12 @@ isCtorOwnerCall: function {
         nameId: (atomNameIdOf :ast n: (ast.nodes.get i: call.callable.u64))
     )
     )
-    if ct.isZero then {
-        # cross-unit construction (dotted callable, e.g. `zast.unitrow`):
-        # resolve the constructed type by its child name so an owned arg moved
-        # into a record/variant/class/union field is zeroed (else double free).
-        if mcOId.isZero.not then {
-            rt0: resolveTypeIdByNameId :ast :symtab :ctx nameId: mcOId
-            if rt0 > 0 then ct = ztypes.tid.create from: rt0.u64
-        }
+    # cross-unit construction (dotted callable, e.g. `zast.unitrow`):
+    # resolve the constructed type by its child name so an owned arg moved
+    # into a record/variant/class/union field is zeroed (else double free).
+    if ct.isZero when mcOId.isZero.not then {
+        rt0: resolveTypeIdByNameId :ast :symtab :ctx nameId: mcOId
+        if rt0 > 0 then ct = ztypes.tid.create from: rt0.u64
     }
     if ct.isZero then return false
     (return
@@ -6766,9 +6762,7 @@ refBorrowCalleeFid: function {
             if (
                 (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: cc7.u64)) ==
                 ztypes.ztypetype.functionType
-            ) then {
-                if (funcBorrowFlag :symtab tid: (ztypes.tid.create from: cc7.u64)) then return cc7
-            }
+            ) when (funcBorrowFlag :symtab tid: (ztypes.tid.create from: cc7.u64)) then return cc7
             return 0
         } case none then {
             return 0
@@ -8649,33 +8643,17 @@ emitRecordCtor: function {
         ) when (symtab.typing.declIsBorrowedFieldId
             parentTypeId: tid
             nameId: (zast.nameid.create from: fnameId.u32.orPanic)
-        ) then {
-            if (borrowedFieldIsReftypePtr
+        ) when (borrowedFieldIsReftypePtr :ast :symtab :ctx fid: (ztypes.tid.create from: ffid0.u64)
+        ) when (argIsPointerByLabel :ast :symtab :ctx :call label: fname.stringView).not then {
+            avP: (emitByrefArg
                 :ast
                 :symtab
                 :ctx
-                fid: (ztypes.tid.create from: ffid0.u64)
-            ) then {
-                if (
-                    (argIsPointerByLabel
-                        :ast
-                        :symtab
-                        :ctx
-                        :call
-                        label: fname.stringView
-                    ).not
-                ) then {
-                    avP: (emitByrefArg
-                        :ast
-                        :symtab
-                        :ctx
-                        av: av.stringView
-                        pid: (ztypes.tid.create from: ffid0.u64)
-                        isBorrow: true
-                    )
-                    av = avP
-                }
-            }
+                av: av.stringView
+                pid: (ztypes.tid.create from: ffid0.u64)
+                isBorrow: true
+            )
+            av = avP
         }
         if fi > 0 then args.append ", "
         args.append av
@@ -9269,33 +9247,23 @@ emitMetaCreateCall: function {
                     pool: ast.names
                     parentTypeId: et
                     name: fname.stringView
+                ) when (borrowedFieldIsReftypePtr
+                    :ast
+                    :symtab
+                    :ctx
+                    fid: (ztypes.tid.create from: ffidL.u64)
+                ) when (
+                    (argIsPointerByLabel :ast :symtab :ctx :call label: fname.stringView).not
                 ) then {
-                    if (borrowedFieldIsReftypePtr
+                    avM: (emitByrefArg
                         :ast
                         :symtab
                         :ctx
-                        fid: (ztypes.tid.create from: ffidL.u64)
-                    ) then {
-                        if (
-                            (argIsPointerByLabel
-                                :ast
-                                :symtab
-                                :ctx
-                                :call
-                                label: fname.stringView
-                            ).not
-                        ) then {
-                            avM: (emitByrefArg
-                                :ast
-                                :symtab
-                                :ctx
-                                av: av.stringView
-                                pid: (ztypes.tid.create from: ffidL.u64)
-                                isBorrow: true
-                            )
-                            av = avM
-                        }
-                    }
+                        av: av.stringView
+                        pid: (ztypes.tid.create from: ffidL.u64)
+                        isBorrow: true
+                    )
+                    av = avM
                 }
             } else {
                 # a field absent from the meta.create args (a generator's promoted
@@ -11653,13 +11621,8 @@ emitResolvedMemberRead: function {
         # a receiver-taking method takes it by pointer in both
         # families, so address it unless it already is one
         methodRecv: "\{bn2}"
-        if (calleeTakesReceiverByPtr
-            :ast
-            :symtab
-            fid: (ztypes.tid.create from: mco.u64)
-        ) then {
-            if (isPtrVid :ctx vid: bn2v).not then methodRecv = "&\{bn2}"
-        }
+        if (calleeTakesReceiverByPtr :ast :symtab fid: (ztypes.tid.create from: mco.u64)
+        ) when (isPtrVid :ctx vid: bn2v).not then methodRecv = "&\{bn2}"
         ida: (renderedMethodDefaultArgs
             :ast
             :symtab
@@ -12240,23 +12203,13 @@ dottedAtomRecClsBase: function {
     rtt: ztypes.ztypetype
 } out String is {
     isRecOrCls: false
-    if rtt == ztypes.ztypetype.recordType then {
-        # array/str monos are RECORD typetype but keep their own legs
-        # below (a.0 -> a.data[0]; str .length -> .len etc.).
-        if (
-            (originIsTid
-                :symtab
-                tid: bstamp
-                originTid: (ctx.origins.get i: ogArray)
-            ).not
-        ) when (
-            (originIsTid
-                :symtab
-                tid: bstamp
-                originTid: (ctx.origins.get i: ogStr)
-            ).not
-        ) then isRecOrCls = true
-    }
+    # array/str monos are RECORD typetype but keep their own legs
+    # below (a.0 -> a.data[0]; str .length -> .len etc.).
+    if rtt == ztypes.ztypetype.recordType when (
+        (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: ogArray)).not
+    ) when (
+        (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: ogStr)).not
+    ) then isRecOrCls = true
     if rtt == ztypes.ztypetype.classType then {
         # user classes only -- collection monos (List/Set/Map, with a
         # generic origin) keep their own dottedpath legs below.
@@ -14187,9 +14140,7 @@ emitPrintArg: function {
                 usesAmp: false
                 if (
                     (symtab.reg.typetypeOf typeId: argTid) == ztypes.ztypetype.classType
-                ) when argOrig.isZero then {
-                    if (isPtrVid :ctx vid: anv).not then usesAmp = true
-                }
+                ) when argOrig.isZero when (isPtrVid :ctx vid: anv).not then usesAmp = true
                 if usesAmp then {
                     lpt: "\{ind}\{ctx.svC}_print(\{mcb}(&\{anmE}));\n"
                     buf.append lpt
@@ -18148,15 +18099,13 @@ emitObjIterRecv: function {
     # enclosing block's flush (and the return path), freeing owned
     # captured params. Registered BEFORE the loop label so break /
     # continue inside the loop never free the live instance.
-    if ownGit then {
-        # gated on structDestroyNontrivial ALONE: the destructor is now emitted
-        # for anything it answers true for, and the stamped flag misses a synth
-        # iterator whose only owned field is a promoted local
-        if (structDestroyNontrivial :symtab :ctx tid: itid) then {
-            gdt: "    \{itCb}_destroy(&_git\{mN});\n"
-            gdn: "_git\{mN}"
-            tmp.oweList stmt: gdt name: gdn vid: (ztypes.vid.create from: 0)
-        }
+    # gated on structDestroyNontrivial ALONE: the destructor is now emitted
+    # for anything it answers true for, and the stamped flag misses a synth
+    # iterator whose only owned field is a promoted local
+    if ownGit when (structDestroyNontrivial :symtab :ctx tid: itid) then {
+        gdt: "    \{itCb}_destroy(&_git\{mN});\n"
+        gdn: "_git\{mN}"
+        tmp.oweList stmt: gdt name: gdn vid: (ztypes.vid.create from: 0)
     }
     return iterRecv
 }
@@ -21801,13 +21750,11 @@ variantArmIds: function {
             if (
                 (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: vtid1.u64)) !=
                 ztypes.ztypetype.functionType
-            ) then {
-                if vnid1 != zast.names.wkTag.u64 then {
-                    cid0: vtid1
-                    ids.append cid0
-                    nid0: vnid1
-                    nameIds.append nid0
-                }
+            ) when vnid1 != zast.names.wkTag.u64 then {
+                cid0: vtid1
+                ids.append cid0
+                nid0: vnid1
+                nameIds.append nid0
             }
         }
     }
@@ -23236,13 +23183,8 @@ emitNestedUnitFns: function {
             if (zast.unitOpDeclaresUnit :ast opId: iuOpId) then isNs = true
             # a `public:` block that DEFINES no function of its own has
             # nothing to emit here (its entries name the unit's siblings)
-            if isNs when (zast.unitOpKindIs
-                :ast
-                opId: iuOpId
-                k: zast.unitkind.publicNs
-            ) then {
-                if (unitOpHasBodiedFn :ast opId: iuOpId).not then isNs = false
-            }
+            if isNs when (zast.unitOpKindIs :ast opId: iuOpId k: zast.unitkind.publicNs
+            ) when (unitOpHasBodiedFn :ast opId: iuOpId).not then isNs = false
             if isNs then {
                 nsTid: ztypes.tid
                 {
@@ -26614,11 +26556,8 @@ ioFileId: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out u64 is {
         if (
             (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: ti.u64)) ==
             ztypes.ztypetype.classType
-        ) then {
-            if (regNameIs :symtab tid: (ztypes.tid.create from: ti.u64) name: "File"
-            ) when (definedInNonMain :symtab :ctx tid: (ztypes.tid.create from: ti.u64)
-            ) then return ti
-        }
+        ) when (regNameIs :symtab tid: (ztypes.tid.create from: ti.u64) name: "File"
+        ) when (definedInNonMain :symtab :ctx tid: (ztypes.tid.create from: ti.u64)) then return ti
         ti = ti + 1
     }
     return 0
@@ -30467,42 +30406,40 @@ emitUserIterCall: function {
             av9Id: zast.kidAt kids: ast.kids span: call.arguments i: arx599
             arx599 = arx599 + 1
             atomVarId: ast.nodes.get i: av9Id.u64
-            if atomVarId.namedoperation then {
-                # `.call` takes at most ONE argument -- the per-call input --
-                # so the first one IS it, whatever the author labelled it.
-                if hasVal.not then {
-                    hasVal = true
-                    ve: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: atomVarId.operation.u64)
-                    # The resume value goes by REFERENCE when it is a reftype --
-                    # the synthesised `.call` declares that parameter as a
-                    # pointer. Decided by the TYPE, never by the argument's
-                    # spelling (a `borrow` parameter's bare-name argument needs
-                    # its `&` too); a `.borrow`-suffixed argument reaches the same
-                    # answer through argBaseAtom.
-                    vop: ast.nodes.get i: atomVarId.operation.u64
-                    vbase: argBaseAtom :ast n: vop
-                    vbnid: (argBaseNodeId :ast n: vop).u64
-                    vIsRef: false
-                    if vbase.length > 0 then {
-                        tid95: (stampIdOf :symtab nid: vbnid)
-                        vIsRef = (isReftypeParam
-                            :ast
-                            :symtab
-                            :ctx
-                            tid: tid95
-                        )
-                    }
-                    if vIsRef then {
-                        valueBaseVid: atomVid :symtab nid: vbnid
-                        vbr: aliasResolve :ctx name: vbase vid: valueBaseVid
-                        vbv: ztypes.vid
-                        if vbr.stringView == vbase then vbv = valueBaseVid
-                        vpfx: "&".string
-                        if (isPtrVid :ctx vid: vbv) then vpfx = "".string
-                        valArg = "\{vpfx}\{ve}"
-                    } else {
-                        valArg = ve
-                    }
+            # `.call` takes at most ONE argument -- the per-call input --
+            # so the first one IS it, whatever the author labelled it.
+            if atomVarId.namedoperation when hasVal.not then {
+                hasVal = true
+                ve: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: atomVarId.operation.u64)
+                # The resume value goes by REFERENCE when it is a reftype --
+                # the synthesised `.call` declares that parameter as a
+                # pointer. Decided by the TYPE, never by the argument's
+                # spelling (a `borrow` parameter's bare-name argument needs
+                # its `&` too); a `.borrow`-suffixed argument reaches the same
+                # answer through argBaseAtom.
+                vop: ast.nodes.get i: atomVarId.operation.u64
+                vbase: argBaseAtom :ast n: vop
+                vbnid: (argBaseNodeId :ast n: vop).u64
+                vIsRef: false
+                if vbase.length > 0 then {
+                    tid95: (stampIdOf :symtab nid: vbnid)
+                    vIsRef = (isReftypeParam
+                        :ast
+                        :symtab
+                        :ctx
+                        tid: tid95
+                    )
+                }
+                if vIsRef then {
+                    valueBaseVid: atomVid :symtab nid: vbnid
+                    vbr: aliasResolve :ctx name: vbase vid: valueBaseVid
+                    vbv: ztypes.vid
+                    if vbr.stringView == vbase then vbv = valueBaseVid
+                    vpfx: "&".string
+                    if (isPtrVid :ctx vid: vbv) then vpfx = "".string
+                    valArg = "\{vpfx}\{ve}"
+                } else {
+                    valArg = ve
                 }
             }
         }
@@ -31469,22 +31406,16 @@ emitOneRecord: function {
         if (symtab.typing.declIsBorrowedFieldId
             parentTypeId: tid
             nameId: (zast.nameid.create from: fnameId.u32.orPanic)
+        ) when (borrowedFieldIsReftypePtr :ast :symtab :ctx fid: (ztypes.tid.create from: fid.u64)
         ) then {
-            if (borrowedFieldIsReftypePtr
+            fctP: (storedFieldPtrC
                 :ast
                 :symtab
-                :ctx
-                fid: (ztypes.tid.create from: fid.u64)
-            ) then {
-                fctP: (storedFieldPtrC
-                    :ast
-                    :symtab
-                    ownerTid: tid
-                    fname: fname.stringView
-                    fct: fct.stringView
-                )
-                fct = fctP
-            }
+                ownerTid: tid
+                fname: fname.stringView
+                fct: fct.stringView
+            )
+            fct = fctP
         }
         if (isHeapPtrCollection
             :symtab
@@ -31515,22 +31446,16 @@ emitOneRecord: function {
         if (symtab.typing.declIsBorrowedFieldId
             parentTypeId: tid
             nameId: (zast.nameid.create from: fname2Id.u32.orPanic)
+        ) when (borrowedFieldIsReftypePtr :ast :symtab :ctx fid: (ztypes.tid.create from: fid2.u64)
         ) then {
-            if (borrowedFieldIsReftypePtr
+            fct2P: (storedFieldPtrC
                 :ast
                 :symtab
-                :ctx
-                fid: (ztypes.tid.create from: fid2.u64)
-            ) then {
-                fct2P: (storedFieldPtrC
-                    :ast
-                    :symtab
-                    ownerTid: tid
-                    fname: fname2.stringView
-                    fct: fct2.stringView
-                )
-                fct2 = fct2P
-            }
+                ownerTid: tid
+                fname: fname2.stringView
+                fct: fct2.stringView
+            )
+            fct2 = fct2P
         }
         if (isHeapPtrCollection
             :symtab
@@ -32573,14 +32498,8 @@ emitMethodParams: function {
                         name: pname.stringView
                         own: ztypes.zparamownership.takeMode
                     ).not
-                ) then {
-                    if (isReftypeParam
-                        :ast
-                        :symtab
-                        :ctx
-                        tid: (ztypes.tid.create from: pid.u64)
-                    ) then giveptr = true
-                }
+                ) when (isReftypeParam :ast :symtab :ctx tid: (ztypes.tid.create from: pid.u64)
+                ) then giveptr = true
                 ibs: (isBorrowStringParam
                     :ast
                     :symtab
