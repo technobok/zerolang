@@ -21372,6 +21372,15 @@ fnSignature: function {
         if ptrp then {
             if ct.length > 0 then {
                 ctp: "\{ct}*"
+                # a view is read through and never written through, and the
+                # C says so: the runtime readers it reaches take const too, so
+                # a writer reached through a view is refused by the C compiler
+                if (symtab.typing.declOwnershipIs
+                    pool: ast.names
+                    parentTypeId: fid
+                    name: pname
+                    own: ztypes.zparamownership.viewMode
+                ) then ctp = "const \{ct}*"
                 ct = ctp
             }
         }
@@ -24948,7 +24957,7 @@ emitColGet: function {
     rv: "    return _this->data[_idx];\n".string
     if ptr then {
         rt = "\{ect}*"
-        rv = "    return &_this->data[_idx];\n".string
+        rv = "    return (\{rt})&_this->data[_idx];\n"
     }
     # `getMut` answers a DIFFERENT question from `get`: a valtype element copies
     # out of `get` (cheap, cannot alias) but must come back BY REFERENCE from
@@ -24970,9 +24979,9 @@ emitColGet: function {
     guard.append b2
     guard.append "        z_panic(_zp_buf);\n"
     guard.append "    }\n"
-    s0: "static \{rt} z_\{nm}_get(z_\{nm}_t* _this, uint64_t _idx);\n"
+    s0: "static \{rt} z_\{nm}_get(const z_\{nm}_t* _this, uint64_t _idx);\n"
     buf.append s0
-    s1: "static \{rt} z_\{nm}_get(z_\{nm}_t* _this, uint64_t _idx) {\n"
+    s1: "static \{rt} z_\{nm}_get(const z_\{nm}_t* _this, uint64_t _idx) {\n"
     buf.append s1
     buf.append guard
     buf.append rv
@@ -25157,7 +25166,7 @@ listviewMethods: function {
             {
                 lvc: ctxCname :ctx tid: (ztypes.tid.create from: rt.u64)
                 buf: String
-                m0: "static \{lvc}_t z_\{nm}_listView(z_\{nm}_t* _this) { return *(\{lvc}_t*)_this; }\n"
+                m0: "static \{lvc}_t z_\{nm}_listView(const z_\{nm}_t* _this) { return *(\{lvc}_t*)_this; }\n"
                 buf.append m0
                 m1: "static void z_\{nm}_extendView(z_\{nm}_t* _this, \{lvc}_t _from) {\n"
                 buf.append m1
@@ -25421,10 +25430,32 @@ monoElemName: function {full: String prefixLen: u64} out String is {
 # fragments of a Set mono: the keyed byte hash (SipHash by default,
 # z_fasthash_* under --fast-hash) + memcmp + per-item free for String keys,
 # the integer hash + `==` + no item cleanup otherwise.
-# declaredKeyFnC -- the C name of a `hash` or `==` the KEY TYPE declared, or
-# "" when it declares none. A reftype key has no byte representation to hash --
+# declaredKeyFnId -- the fn id of a `hash` or `==` the KEY TYPE declared, or
+# zero when it declares none. A reftype key has no byte representation to hash --
 # its contents live behind a pointer -- so RefHashable makes it declare both,
 # and the container must then CALL them instead of casting the aggregate.
+declaredKeyFnId: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    member: StringView
+} out ztypes.tid is {
+    nid: zast.poolFind pool: ast.names text: member
+    if nid.isZero then return ztypes.tid
+    if (symtab.typing.declIsMethodId parentTypeId: tid nameId: nid) == false then return ztypes.tid
+    if (symtab.typing.declMemberIsSynth parentTypeId: tid nameId: nid) then return ztypes.tid
+    mo: symtab.typing.declChildOfId parentTypeId: tid nameId: nid
+    match (
+        mo
+    ) case some then {
+        return (ztypes.tid.create from: mo.u64)
+    } case none then {
+        return ztypes.tid
+    }
+}
+
+# declaredKeyFnC -- the C name of a declared key `hash` or `==`, "" when the
+# key declares none.
 #
 # The member's receiver is a pointer like any other method's, and the template
 # holds the key BY VALUE, so the caller addresses it.
@@ -25435,18 +25466,60 @@ declaredKeyFnC: function {
     tid: ztypes.tid
     member: StringView
 } out String is {
-    nid: zast.poolFind pool: ast.names text: member
-    if nid.isZero then return "".string
-    if (symtab.typing.declIsMethodId parentTypeId: tid nameId: nid) == false then return "".string
-    if (symtab.typing.declMemberIsSynth parentTypeId: tid nameId: nid) then return "".string
-    mo: symtab.typing.declChildOfId parentTypeId: tid nameId: nid
-    match (
-        mo
-    ) case some then {
-        return (ctxCname :ctx tid: (ztypes.tid.create from: mo.u64))
-    } case none then {
-        return "".string
-    }
+    fid: declaredKeyFnId :ast :symtab :tid :member
+    if fid.isZero then return "".string
+    return (ctxCname :ctx tid: fid)
+}
+
+# keyFnParamConstC -- "const " when the declared key method's parameter at
+# `index` is a view (its pointer is written `const` in the definition), ""
+# otherwise or when there is no such method.
+keyFnParamConstC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    fid: ztypes.tid
+    index: u64
+} out String is {
+    if fid.isZero then return "".string
+    pIds: ListVal u64
+    pIdsNm: ListVal u64
+    recFieldIds :symtab tid: fid ids: pIds nameIds: pIdsNm
+    if index >= pIdsNm.length then return "".string
+    pnmB: (zast.poolTextAt
+        pool: ast.names
+        ref: (zast.nameid.create from: (pIdsNm.get i: index))
+    )
+    if (symtab.typing.declOwnershipIs
+        pool: ast.names
+        parentTypeId: fid
+        name: pnmB.stringView
+        own: ztypes.zparamownership.viewMode
+    ) then return "const ".string
+    return "".string
+}
+
+# keyFnProtosC -- the prototypes of a key's declared `hash` and `==`: the mono
+# is emitted before user method bodies, so it declares the two it calls, and
+# each must agree with its definition, which says `const` on a view pointer.
+# The receiver is the first parameter; `==`'s `rhs` is the second, a pointer
+# when the key's calling convention is.
+keyFnProtosC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    dh: StringView
+    de: StringView
+    keyT: StringView
+    rhsT: StringView
+    rhsByPtr: bool
+} out String is {
+    hfid: declaredKeyFnId :ast :symtab :tid member: "hash"
+    efid: declaredKeyFnId :ast :symtab :tid member: "=="
+    hq: keyFnParamConstC :ast :symtab fid: hfid index: 0
+    eq: keyFnParamConstC :ast :symtab fid: efid index: 0
+    rq: String
+    if rhsByPtr then rq = (keyFnParamConstC :ast :symtab fid: efid index: 1)
+    return "static uint64_t \{dh}(\{hq}\{keyT}*);\nstatic bool \{de}(\{eq}\{keyT}*, \{rq}\{rhsT});\n"
 }
 
 # keyHashKind -- classify a Set element / Map key by canonical id (never by
@@ -25624,7 +25697,16 @@ emitSetMono: function {
             }
             eb: "\{de}(&_a, \{rhsAs})"
             eqBody = eb
-            fd: "static uint64_t \{dh}(\{itemT}*);\nstatic bool \{de}(\{itemT}*, \{rhsTs});\n"
+            fd: (keyFnProtosC
+                :ast
+                :symtab
+                tid: (ztypes.tid.create from: elemTid.u64)
+                dh: dh.stringView
+                de: de.stringView
+                keyT: itemT.stringView
+                rhsT: rhsTs.stringView
+                rhsByPtr: rhsPs
+            )
             buf.append fd
         }
     }
@@ -25927,9 +26009,16 @@ emitMapMono: function {
             }
             ebm: "\{dem}(&_a, \{rhsA})"
             keysEqBody = ebm
-            # the mono is emitted before user method bodies, so declare the
-            # two it calls
-            fdm: "static uint64_t \{dhm}(\{keyT}*);\nstatic bool \{dem}(\{keyT}*, \{rhsT});\n"
+            fdm: (keyFnProtosC
+                :ast
+                :symtab
+                tid: (ztypes.tid.create from: keyTid.u64)
+                dh: dhm.stringView
+                de: dem.stringView
+                keyT: keyT.stringView
+                rhsT: rhsT.stringView
+                rhsByPtr: rhsP
+            )
             buf.append fdm
         }
     }
@@ -26025,7 +26114,7 @@ emitMapMono: function {
         # String-keyed maps: a view-keyed get. The temporary String header
         # aliases the view bytes; get/find only hash and compare the key,
         # never store or free it.
-        gv0: "static z_\{ov}_t z_\{nm}_getv(z_\{nm}_t* _this, \{ctx.svC}_t _key) {\n"
+        gv0: "static z_\{ov}_t z_\{nm}_getv(const z_\{nm}_t* _this, \{ctx.svC}_t _key) {\n"
         buf.append gv0
         gv1: "    \{ctx.strC}_t _k = { _key.size, (char*)_key.data, _key.size };\n"
         buf.append gv1
@@ -27739,6 +27828,14 @@ fnptrParamTypeC: function {
     if ptrp then {
         if ct.length > 0 then {
             ctp: "\{ct}*"
+            # the same rule as fnSignature: a view is read through, and a
+            # function value must match the signatures it is assigned
+            if (symtab.typing.declOwnershipIs
+                pool: ast.names
+                parentTypeId: fid
+                name: pname
+                own: ztypes.zparamownership.viewMode
+            ) then ctp = "const \{ct}*"
             ct = ctp
         }
     }
@@ -32630,6 +32727,12 @@ emitMethodParams: function {
         # rule still applies to class methods only.
         if isRecv then {
             pt = "\{pt}*"
+            if (symtab.typing.declOwnershipIs
+                pool: ast.names
+                parentTypeId: mid
+                name: pname.stringView
+                own: ztypes.zparamownership.viewMode
+            ) then pt = "const \{pt}"
             pvd: (paramVidByNameId
                 :ast
                 :symtab
@@ -32694,6 +32797,12 @@ emitMethodParams: function {
                 ) then giveptr = true
                 if giveptr then {
                     pt = "\{pt}*"
+                    if (symtab.typing.declOwnershipIs
+                        pool: ast.names
+                        parentTypeId: mid
+                        name: pname.stringView
+                        own: ztypes.zparamownership.viewMode
+                    ) then pt = "const \{pt}"
                     pvd9b: (paramVidByNameId
                         :ast
                         :symtab

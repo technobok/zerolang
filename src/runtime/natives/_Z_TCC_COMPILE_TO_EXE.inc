@@ -18,11 +18,11 @@
    both through one path rather than growing a second. */
 static int32_t z_tcc_compileToExe(
     z_@StringView@_t csrc, z_@StringView@_t exe, z_@StringView@_t tccDir,
-    bool release, z_@StringView@_t cflags, z_@List_String@_t* libs
+    bool release, z_@StringView@_t cflags, const z_@List_String@_t* libs
 );
 static int32_t z_tcc_compileToExe(
     z_@StringView@_t csrc, z_@StringView@_t exe, z_@StringView@_t tccDir,
-    bool release, z_@StringView@_t cflags, z_@List_String@_t* libs
+    bool release, z_@StringView@_t cflags, const z_@List_String@_t* libs
 ) {
     z_tcc_api_t a;
     if (!z_tcc_open(&a, tccDir)) return 127;

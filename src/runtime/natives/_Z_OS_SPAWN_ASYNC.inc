@@ -3,11 +3,11 @@
    pid; -1 on setup/fork failure. No timeout: the caller reaps with
    waitAny and enforces deadlines with monotonicMillis + kill. */
 static int32_t z_os_spawnAsync(
-    z_@List_String@_t* argv, z_@StringView@_t cwd, z_@StringView@_t outPath,
+    const z_@List_String@_t* argv, z_@StringView@_t cwd, z_@StringView@_t outPath,
     z_@StringView@_t errPath
 );
 static int32_t z_os_spawnAsync(
-    z_@List_String@_t* argv, z_@StringView@_t cwd, z_@StringView@_t outPath,
+    const z_@List_String@_t* argv, z_@StringView@_t cwd, z_@StringView@_t outPath,
     z_@StringView@_t errPath
 ) {
     if (argv->length == 0) return -1;
