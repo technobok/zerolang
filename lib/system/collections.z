@@ -122,10 +122,10 @@ ListVal: class is native as {
     # append every element of another ListVal, which is taken whole rather than
     # element by element
     extend: function {:this from: type.take} is native
-    # a COPY of the element -- cheap, and it cannot alias. The RECEIVER still
-    # says `borrow` because this shares `ListRef.get`'s emitted C, and two
-    # declarations over one function cannot disagree about their receiver;
-    # the difference that matters is the RETURN.
+    # a COPY of the element -- cheap, and it cannot alias. That RETURN is what
+    # separates this from `ListRef.get`, which hands back a view. The two share
+    # one emitted C, whose receiver is const, so their declared receivers may
+    # differ: `ListRef.get` says `.view` and this one `.borrow`.
     get: function {t: this.borrow i: u64} out t is native
     # the mutable element reference: a COMPOUND valtype's children are mutated
     # in place through it. Whole-element replacement is `set`.
@@ -147,7 +147,7 @@ ListVal: class is native as {
     capacity: function {t: this.view} out u64 is native
     # a borrowed readonly view over the whole ListVal. It pins the list, so it
     # must not outlive it
-    listView: function {t: this.borrow} outx ListViewVal t is native
+    listView: function {t: this.view} outx ListViewVal t is native
     # the readonly walk over a ListVal: a shared receiver, so several may run at
     # once and the container stays readable throughout. Elements come out BY
     # VALUE
@@ -187,7 +187,9 @@ ListIterVal: class is native as {
     call: function {:this} outx OptionView t is native
 }
 
-# a borrowed window over a List's elements (no ownership).
+# a READONLY borrowed window over a List's elements (no ownership). A view
+# reads; writing an element in place is the owner's job (`ListRef.getMut`,
+# `set`, `iterateMut`).
 ListView: class is native as {
     # the REFERENCE element type of ListView. Uppercase says reftype, so a
     # binding of it MOVES
@@ -196,17 +198,14 @@ ListView: class is native as {
     # the element at `i`, readonly. A ListView borrows its storage and never
     # owns it
     get: function {t: this.view i: u64} outx T.view is native
-    # the mutable element reference, which excludes every other reference to the
-    # viewed container
-    getMut: function {t: this.borrow i: u64} outx T.borrow is native
     # how many elements the ListView spans
     length: function {t: this.view} out u64 is native
 }
 
-# a borrowed window over a ListVal's elements (no ownership). The valtype twin
-# of `ListView`: `get` hands back a COPY of the element -- cheap, and it cannot
-# alias -- while `getMut` is a reference, because a COMPOUND valtype's children
-# are mutated in place through it.
+# a READONLY borrowed window over a ListVal's elements (no ownership). The
+# valtype twin of `ListView`: `get` hands back a COPY of the element -- cheap,
+# and it cannot alias -- where `ListView.get` hands back a `T.view`. Writing an
+# element in place is the owner's job (`ListVal.getMut`, `set`, `iterateMut`).
 ListViewVal: class is native as {
     # the VALUE element type of ListViewVal. Lowercase says valtype, so a
     # binding of it COPIES
@@ -215,9 +214,6 @@ ListViewVal: class is native as {
     # the element at `i`, readonly. A ListViewVal borrows its storage and never
     # owns it
     get: function {t: this.borrow i: u64} out t is native
-    # the mutable element reference, which excludes every other reference to the
-    # viewed container
-    getMut: function {t: this.borrow i: u64} outx t.borrow is native
     # how many elements the ListViewVal spans
     length: function {t: this.view} out u64 is native
 }
@@ -227,10 +223,10 @@ ListViewVal: class is native as {
 # live in their own namespace. List operations flow through via the
 # typedef backward-compatibility rule (list is a class).
 Bytes: class { val: (ListVal u8).typedef } as {
-    # Borrowed read-only view over the buffer; locks the source for
+    # Borrowed read-only view over the buffer; pins the source SHARED for
     # the lifetime of the binding (mirrors string.stringView /
     # list.listView).
-    byteView: function {t: this.borrow} outx ByteView is native
+    byteView: function {t: this.view} outx ByteView is native
 }
 
 # ByteView -- read-only borrowed view into a bytes value. Class typedef

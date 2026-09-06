@@ -598,9 +598,9 @@ methodReceiverIsView: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out 
 # can express has moved to the declarations (methodReceiverIsView, ORed in at
 # every call site); what is left is what a marker cannot cover:
 #
-#   get / listView hand out a mutable interior pointer, so their C
-#   refuses a const receiver and `.view` would let a caller write through an
-#   alias obtained from a readonly receiver;
+#   get hands out a mutable interior pointer, so its C refuses a const
+#   receiver and `.view` would let a caller write through an alias obtained
+#   from a readonly receiver;
 #   MapEntry.key / .value are projections through the entry pointer with no
 #   method declaration to mark;
 #   copy is the universal `.copy` marker, which resolves to no method either.
@@ -609,10 +609,12 @@ methodReceiverIsView: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out 
 # isContainerReaderCall -- the irreducible core. Every entry left here is one a
 # DECLARATION cannot express, and the reason differs per entry:
 #
-#   Map.get / List.get / List.listView  hand back a MUTABLE interior
-#     pointer (`_r.data = &_this->entries[idx].value`), so their C refuses
-#     `const` and `.view` would hand a caller a writable alias out of a readonly
-#     receiver. List.get write-back is load-bearing at 28 sites.
+#   Map.get / List.get  hand back a MUTABLE interior pointer
+#     (`_r.data = &_this->entries[idx].value`), so their C refuses `const` and
+#     `.view` would hand a caller a writable alias out of a readonly receiver.
+#     List.get write-back is load-bearing at 28 sites. `listView` has left:
+#     both List templates now declare a `.view` receiver, so the declaration
+#     answers through methodReceiverIsView.
 #   Map.copy / Set.copy / List.copy  are the synthesised `.copy` marker; the
 #     containers declare no `copy` member to mark.
 #
@@ -656,8 +658,7 @@ isContainerReaderCall: function {
     )
     if isListB then {
         (return
-            (mnameId == zast.names.wkGet) or (isListViewMemberId nameId: mnameId
-            ) or (zast.nameTextEq :ast ref: mnameId s: "copy")
+            (mnameId == zast.names.wkGet) or (zast.nameTextEq :ast ref: mnameId s: "copy")
         )
     }
     return false
@@ -2141,9 +2142,9 @@ isStripMarker: function {name: StringView} out bool is {
     return false
 }
 
-# isMoveMarkerId / isDropMarkerId / isStripMarkerId / isStringViewMemberId /
-# isListViewMemberId -- the predicates above asked of an interned name, which
-# is what a member check holds; no text is read.
+# isMoveMarkerId / isDropMarkerId / isStripMarkerId / isStringViewMemberId --
+# the predicates above asked of an interned name, which is what a member check
+# holds; no text is read.
 isMoveMarkerId: function {nameId: zast.nameid} out bool is {
     return (nameId == zast.names.wkTake) or (nameId == zast.names.wkHold)
 }
@@ -2172,11 +2173,6 @@ isStripMarkerId: function {nameId: zast.nameid} out bool is {
 # isStringViewMemberId -- `.stringView`, by id.
 isStringViewMemberId: function {nameId: zast.nameid} out bool is {
     return nameId == zast.names.wkStringView
-}
-
-# isListViewMemberId -- `.listView`, by id.
-isListViewMemberId: function {nameId: zast.nameid} out bool is {
-    return nameId == zast.names.wkListView
 }
 
 # isLabelValue -- true when a node is a bare `:X` label-value (an anonymous

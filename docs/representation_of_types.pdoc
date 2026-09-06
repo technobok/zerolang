@@ -717,9 +717,10 @@ correct and the copy cost is negligible for element-sized data.
 
 #~"ListView" (and #~"ListViewVal", its valtype-element twin) is a generic
 window into a list. It is a class (single ownership) whose production pins
-the parent list exclusively. It is not read-only: #~"get" is the readonly
-accessor and #~"getMut" borrows the element for in-place writes; what a
-view cannot do is change the sequence.
+the parent list SHARED. It is read-only: #~"get" is its only element
+accessor. Writing an element in place is the owner's job
+(#~"ListRef.getMut", #~"set", #~"iterateMut"), and a view cannot change the
+sequence either.
 
 #---: Memory Layout
 
@@ -737,8 +738,9 @@ Field order matches the first two fields of #~"List": #~"length" first,
 #---: Ownership
 
 Listview is a class (reftype): single ownership, cannot be copied. It holds a
-#~".borrow" on the source list, preventing mutation of the list while the view
-exists. When the listView falls out of scope, the lock is released.
+#~".view" on the source list, preventing mutation of the list while the view
+exists; other readers stay legal. When the listView falls out of scope, the
+lock is released.
 
 Listview does #_*"not" need a destructor (no heap allocations of its own). The
 data it points to is owned by the parent list.
@@ -761,20 +763,18 @@ The listView holds a compile-time lock on the source list:
 #---: Methods
 
 #ul:
-  [#*: #~"get(i: u64)" -- bounds-checked readonly access (#~"of.view" on
+  [#*: #~"get(i: u64)" -- bounds-checked readonly access (#~"T.view" on
     #~"ListView", a copy on #~"ListViewVal")]
-  [#*: #~"getMut(i: u64) outx of.borrow" -- exclusive element access]
   [#*: #~"length() out u64" -- number of elements in the view]
 
 #---: Zerolang Definition
 
 #code language=zerolang: """
-  ListView: class {
-      get: function {t: this.borrow i: u64} outx of.view is native
-      getMut: function {t: this.borrow i: u64} outx of.borrow is native
+  ListView: class is native as {
+      T: AnyRef.generic
+
+      get: function {t: this.view i: u64} outx T.view is native
       length: function {t: this.view} out u64 is native
-  } as {
-      of: AnyRef.generic
   }
   """
 

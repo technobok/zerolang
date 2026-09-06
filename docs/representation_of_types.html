@@ -784,9 +784,10 @@ correct and the copy cost is negligible for element-sized data.</p>
 <h2 id="listview-t"><a href="#listview-t">12. listView(T)</a></h2>
 <p><code>ListView</code> (and <code>ListViewVal</code>, its valtype-element twin) is a generic
 window into a list. It is a class (single ownership) whose production pins
-the parent list exclusively. It is not read-only: <code>get</code> is the readonly
-accessor and <code>getMut</code> borrows the element for in-place writes; what a
-view cannot do is change the sequence.</p>
+the parent list SHARED. It is read-only: <code>get</code> is its only element
+accessor. Writing an element in place is the owner's job
+(<code>ListRef.getMut</code>, <code>set</code>, <code>iterateMut</code>), and a view cannot change the
+sequence either.</p>
 <h3 id="memory-layout-9"><a href="#memory-layout-9">12.1. Memory Layout</a></h3>
 <pre><code class="language-c">typedef struct {
     uint64_t length;
@@ -797,8 +798,9 @@ view cannot do is change the sequence.</p>
 <code>z_listview_i64_t*</code> -- the memory is reinterpreted without copying.</p>
 <h3 id="ownership-3"><a href="#ownership-3">12.2. Ownership</a></h3>
 <p>Listview is a class (reftype): single ownership, cannot be copied. It holds a
-<code>.borrow</code> on the source list, preventing mutation of the list while the view
-exists. When the listView falls out of scope, the lock is released.</p>
+<code>.view</code> on the source list, preventing mutation of the list while the view
+exists; other readers stay legal. When the listView falls out of scope, the
+lock is released.</p>
 <p>Listview does <em><strong>not</strong></em> need a destructor (no heap allocations of its own). The
 data it points to is owned by the parent list.</p>
 <h3 id="locking"><a href="#locking">12.3. Locking</a></h3>
@@ -813,18 +815,16 @@ print v.get i: 0.u64       # OK: read through view
 # when v falls out of scope, nums is unlocked</code></pre>
 <h3 id="methods-2"><a href="#methods-2">12.4. Methods</a></h3>
 <ul>
-<li><code>get(i: u64)</code> -- bounds-checked readonly access (<code>of.view</code> on
+<li><code>get(i: u64)</code> -- bounds-checked readonly access (<code>T.view</code> on
 <code>ListView</code>, a copy on <code>ListViewVal</code>)</li>
-<li><code>getMut(i: u64) outx of.borrow</code> -- exclusive element access</li>
 <li><code>length() out u64</code> -- number of elements in the view</li>
 </ul>
 <h3 id="zerolang-definition"><a href="#zerolang-definition">12.5. Zerolang Definition</a></h3>
-<pre><code class="language-zerolang">ListView: class {
-    get: function {t: this.borrow i: u64} outx of.view is native
-    getMut: function {t: this.borrow i: u64} outx of.borrow is native
+<pre><code class="language-zerolang">ListView: class is native as {
+    T: AnyRef.generic
+
+    get: function {t: this.view i: u64} outx T.view is native
     length: function {t: this.view} out u64 is native
-} as {
-    of: AnyRef.generic
 }</code></pre>
 <h2 id="map-k-v-set-t"><a href="#map-k-v-set-t">13. map(K,V) / set(T)</a></h2>
 <p><code>Map</code> (the four key/value families <code>MapRR</code> / <code>MapRV</code> / <code>MapVR</code> /

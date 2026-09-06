@@ -24772,12 +24772,14 @@ emitListMono: function {
         :buf
     )
     if ctx.colGetFromCode then {
+        gmo: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkGetMut
         (emitColGet
             nm: nm.stringView
             ect: ect.stringView
             kind: "List"
             ptr: (elemBorrowsByPtr :ast :symtab :ctx tid: (ztypes.tid.create from: eid.u64))
             mutPtr: (elemRefByPtr :ast :symtab :ctx tid: (ztypes.tid.create from: eid.u64))
+            hasMut: gmo.some
             :buf
         )
     }
@@ -24829,13 +24831,15 @@ emitListMono: function {
 # so every value context stays value-shaped. `kind` only spells the panic
 # message. One emitter for both templates, so List.listView cannot hand out a
 # view that disagrees with its source. The return type and its forward
-# declaration come from one string and cannot diverge.
+# declaration come from one string and cannot diverge. `hasMut` says the mono
+# declares a `getMut` child: the view templates are readonly and get none.
 emitColGet: function {
     nm: StringView
     ect: StringView
     kind: StringView
     ptr: bool
     mutPtr: bool
+    hasMut: bool
     buf: String.borrow
 } is {
     rt: ect.string
@@ -24843,16 +24847,6 @@ emitColGet: function {
     if ptr then {
         rt = "\{ect}*"
         rv = "    return (\{rt})&_this->data[_idx];\n"
-    }
-    # `getMut` answers a DIFFERENT question from `get`: a valtype element copies
-    # out of `get` (cheap, cannot alias) but must come back BY REFERENCE from
-    # `getMut`, or a write to the referenced element's children lands on the
-    # copy and is silently lost.
-    mrt: ect.string
-    mrv: "    return _this->data[_idx];\n".string
-    if mutPtr then {
-        mrt = "\{ect}*"
-        mrv = "    return &_this->data[_idx];\n".string
     }
     # Both names are spelled LITERALLY -- view-guard reads these string literals
     # to learn which declaration each emitted function backs, and cannot see
@@ -24871,13 +24865,25 @@ emitColGet: function {
     buf.append guard
     buf.append rv
     buf.append "}\n\n"
-    m0: "static \{mrt} z_\{nm}_getMut(z_\{nm}_t* _this, uint64_t _idx);\n"
-    buf.append m0
-    m1: "static \{mrt} z_\{nm}_getMut(z_\{nm}_t* _this, uint64_t _idx) {\n"
-    buf.append m1
-    buf.append guard
-    buf.append mrv
-    buf.append "}\n\n"
+    # `getMut` answers a DIFFERENT question from `get`: a valtype element copies
+    # out of `get` (cheap, cannot alias) but must come back BY REFERENCE from
+    # `getMut`, or a write to the referenced element's children lands on the
+    # copy and is silently lost.
+    if hasMut then {
+        mrt: ect.string
+        mrv: "    return _this->data[_idx];\n".string
+        if mutPtr then {
+            mrt = "\{ect}*"
+            mrv = "    return &_this->data[_idx];\n".string
+        }
+        m0: "static \{mrt} z_\{nm}_getMut(z_\{nm}_t* _this, uint64_t _idx);\n"
+        buf.append m0
+        m1: "static \{mrt} z_\{nm}_getMut(z_\{nm}_t* _this, uint64_t _idx) {\n"
+        buf.append m1
+        buf.append guard
+        buf.append mrv
+        buf.append "}\n\n"
+    }
 }
 
 # emitListIter -- the borrowed-view iterator over a List mono (a `{List*; idx}`
@@ -25022,12 +25028,14 @@ emitListViewMono: function {
         buf.append "\n"
     }
     if ctx.colGetFromCode then {
+        gmo: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkGetMut
         (emitColGet
             nm: nm.stringView
             ect: ect.stringView
             kind: "ListView"
             ptr: (elemBorrowsByPtr :ast :symtab :ctx tid: (ztypes.tid.create from: eid.u64))
             mutPtr: (elemRefByPtr :ast :symtab :ctx tid: (ztypes.tid.create from: eid.u64))
+            hasMut: gmo.some
             :buf
         )
     }
