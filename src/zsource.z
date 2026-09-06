@@ -204,7 +204,7 @@ fileReadNames: function {root: Ast.view into: Set String} is {
         for nj < nn loop {
             nd2: root.nodes.get i: nj
             if nd2.dottedpath then {
-                if (topaths.has item: nj) == false then {
+                if (topaths.has item: nj).not then {
                     cn: root.nodes.get i: nd2.child.u64
                     if cn.atomid then {
                         into.add item: (zast.poolTextCopy pool: root.names ref: cn.name)
@@ -429,7 +429,7 @@ ccIf: function {
             c
         ) case ifclause then {
             if ci == 1 then {
-                if chained == false then acc.score = acc.score + 1 + nesting
+                if chained.not then acc.score = acc.score + 1 + nesting
             } else {
                 acc.score = acc.score + 1
             }
@@ -730,6 +730,68 @@ docByteAt: function {s: StringView i: u64} out u8 is {
     return 0
 }
 
+# atomNameIdOf -- an atom's interned name id, 0 when the node is not an atom
+# (no pool id is 0, so a compare against it misses).
+atomNameIdOf: function {n: astnode.view} out zast.nameid is {
+    match (
+        n
+    ) case atomid then {
+        return n.name
+    } else {
+        return zast.nameid
+    }
+}
+
+# trimBackWs -- `hi` moved back over the whitespace before it.
+trimBackWs: function {s: StringView hi: u64} out u64 is {
+    h: hi
+    for h > 0 loop {
+        if (byteIsWs b: (docByteAt :s i: (h - 1))).not then return h
+        h = h - 1
+    }
+    return h
+}
+
+# byteIsWs -- a space, tab or line-end byte.
+byteIsWs: function {b: u8} out bool is {
+    if b == 32 then return true
+    if b == 9 then return true
+    if b == 10 then return true
+    if b == 13 then return true
+    return false
+}
+
+# parenGroupStart -- the index of the `(` matching the `)` at `close - 1`; 0 when
+# that byte is not a `)` or nothing matches it (no operand starts at byte 0).
+parenGroupStart: function {s: StringView close: u64} out u64 is {
+    if close == 0 then return 0
+    if (docByteAt :s i: (close - 1)) != 41 then return 0
+    depth: 0
+    i: close
+    for i > 0 loop {
+        i = i - 1
+        b: docByteAt :s :i
+        if b == 41 then depth = depth + 1
+        if b == 40 then {
+            depth = depth - 1
+            if depth == 0 then return i
+        }
+    }
+    return 0
+}
+
+# onlyOpensBetween -- every byte in [lo, hi) is a `(` or whitespace: the gap
+# between a paren group's `(` and the operand the tree positions inside it.
+onlyOpensBetween: function {s: StringView lo: u64 hi: u64} out bool is {
+    i: lo
+    for i < hi loop {
+        b: docByteAt :s :i
+        if b != 40 when (byteIsWs :b).not then return false
+        i = i + 1
+    }
+    return true
+}
+
 # docByteIsWord -- true for the ASCII letters and digits a word is made of. Everything
 # else -- punctuation, backticks, the `--` dash, path separators -- is a boundary.
 docByteIsWord: function {b: u8} out bool is {
@@ -838,7 +900,7 @@ docFoldTemplate: function {
     folded: List String
     with it: words.iterate do for w: it loop {
         fold: docHasWord xs: vocab w: w.stringView
-        if fold == false then fold = docHasDigit w: w.stringView
+        if fold.not then fold = docHasDigit w: w.stringView
         if fold then {
             folded.append from: "_".string
         } else {
@@ -916,7 +978,7 @@ docStartsLine: function {ln: StringView col: u32} out bool is {
         isSpace: false
         if c == 32 then isSpace = true
         if c == 9 then isSpace = true
-        if isSpace == false then return false
+        if isSpace.not then return false
         i = i + 1
     }
     return true
@@ -959,7 +1021,7 @@ genericBoundBase: function {ast: Ast.view opId: u32} out String is {
         } case labelvalue then {
             if (zast.nameTextEq :ast ref: c.name s: "generic") then isGen = true
         } else null
-        if isGen == false then return "".string
+        if isGen.not then return "".string
         return (atomName :ast n: (ast.nodes.get i: n.parent.u64))
     } else {
         return "".string
@@ -1050,6 +1112,10 @@ Analysis: class {
     fastToks: ListVal tokenize.token
     # how deep in nested functions the walk is
     funcDepth: u64
+    # the pool ids of `true` and `false` in this file, 0 when absent, so the
+    # boolean-literal rule compares ids and never spellings
+    trueId: zast.nameid
+    falseId: zast.nameid
     # which optional rules this run enables. One value threads from the command
     # line to every rule, so a new rule is a field here and not a parameter on
     # every layer between
@@ -1080,7 +1146,7 @@ Analysis: class {
             ) case info then {
                 isInfo = true
             } else null
-            if isInfo == false then c = c + 1
+            if isInfo.not then c = c + 1
         }
         return c
     }
@@ -1178,7 +1244,7 @@ Analysis: class {
                 width: 2
             )
         } else if (isStatementArm n: elseNode) when clauses.count.u64 == 1 then {
-            if (isElseIfWrap :ast n: elseNode) == false then {
+            if (isElseIfWrap :ast n: elseNode).not then {
                 h13x9: u64
                 for h13x9 < clauses.count.u64 loop {
                     c0Id: zast.kidAt kids: ast.kids span: clauses i: h13x9
@@ -1400,7 +1466,7 @@ Analysis: class {
     dupBodyWalk: function {:this ast: Ast.view id: u32 firstAt: (MapRV String v: u64)} is {
         n: ast.nodes.get i: id.u64
         if n.functiondef then {
-            if n.body.isZero == false then {
+            if n.body.isZero.not then {
                 span: ((zast.spanEndLineAt :ast id: n.body.u32) - n.lineno) + 1
                 if span >= duplicateBodyLines then {
                     key: String
@@ -1485,7 +1551,7 @@ Analysis: class {
         if kind == zast.objectkind.unionDef then isRef = true
         if kind == zast.objectkind.protocolDef then isRef = true
         if kind == zast.objectkind.generatorDef then isRef = true
-        if isVal == false when isRef == false then return
+        if isVal.not when isRef.not then return
         nm: zast.nameTextAt :ast ref: nameRef
         hasUpper: false
         ci: u64
@@ -1512,7 +1578,7 @@ Analysis: class {
             bad = true
             msg = "valtype '\{nm}' should be lowercase -- record/variant/facet names run their words together without capitals"
         }
-        if isRef when firstUpper == false then {
+        if isRef when firstUpper.not then {
             bad = true
             msg = "reftype '\{nm}' should be PascalCase -- class/union/protocol/generator names start with a capital"
         }
@@ -1611,6 +1677,7 @@ Analysis: class {
             )
             this.diags.append d
         } case binop then {
+            this.checkBoolLiteralCompare :ast opId: n.operator lhsId: n.lhs rhsId: n.rhs
             if this.opts.arch then {
                 this.checkLiteralCompare :ast opId: n.operator lhsId: n.lhs rhsId: n.rhs
             }
@@ -1673,6 +1740,100 @@ Analysis: class {
         }
     }
 
+    # checkBoolLiteralCompare -- L028: a comparison with a boolean literal.
+    # `X == false` / `X != true` is `X.not`, and `X == true` / `X != false` is
+    # `X` itself. Both operator and literal are matched by pool id.
+    checkBoolLiteralCompare: function {
+        :this ast: Ast.view opId: zast.nodeid lhsId: zast.nodeid rhsId: zast.nodeid
+    } is {
+        opNm: atomNameIdOf n: (ast.nodes.get i: opId.u64)
+        isEq: opNm == zast.names.wkOpEq
+        isNe: opNm == zast.names.wkOpNe
+        if isEq.not when isNe.not then return
+        litNm: atomNameIdOf n: (ast.nodes.get i: rhsId.u64)
+        if litNm.isZero then return
+        isTrue: litNm == this.trueId
+        isFalse: litNm == this.falseId
+        if isTrue.not when isFalse.not then return
+        neg: false
+        if isEq when isFalse then neg = true
+        if isNe when isTrue then neg = true
+        litLen: 4
+        if isFalse then litLen = 5
+        this.reportBoolLiteralCompare :ast :lhsId :opId :rhsId :neg :litLen
+    }
+
+    # reportBoolLiteralCompare -- the L028 finding and its fix: the whole
+    # comparison, from the operand's first byte to the literal's last, becomes
+    # the operand (parenthesised when it is itself an unparenthesised binop)
+    # with `.not` appended for a negation. A paren group's bytes are checked
+    # against the tree; when they do not delimit, the finding is reported
+    # without a fix so the gate still names the site.
+    reportBoolLiteralCompare: function {
+        :this
+        ast: Ast.view
+        lhsId: zast.nodeid
+        opId: zast.nodeid
+        rhsId: zast.nodeid
+        neg: bool
+        litLen: u64
+    } is {
+        lhsN: ast.nodes.get i: lhsId.u64
+        lp: zast.posOf n: lhsN
+        op: zast.posOf n: (ast.nodes.get i: opId.u64)
+        rp: zast.posOf n: (ast.nodes.get i: rhsId.u64)
+        srcOwned: this.source
+        srcv: srcOwned.stringView
+        xStart: (tokByteStart
+            lineStart: this.lineStart
+            srcLines: this.lines
+            lineno: lp.line
+            colno: lp.col
+        )
+        opLo: (tokByteStart
+            lineStart: this.lineStart
+            srcLines: this.lines
+            lineno: op.line
+            colno: op.col
+        )
+        litLo: (tokByteStart
+            lineStart: this.lineStart
+            srcLines: this.lines
+            lineno: rp.line
+            colno: rp.col
+        )
+        litHi: litLo + litLen
+        xHi: trimBackWs s: srcv hi: opLo
+        xLo: xStart
+        ok: litHi <= srcv.length
+        if xHi <= xStart then ok = false
+        if lhsN.expression then {
+            xLo = parenGroupStart s: srcv close: xHi
+            if xLo == 0 then ok = false
+            if (onlyOpensBetween s: srcv lo: (xLo + 1) hi: xStart).not then ok = false
+        }
+        what: "`== true` / `!= false` is the value itself: drop the comparison".string
+        if neg then what = "`== false` / `!= true` negates: write `.not`".string
+        if ok.not then {
+            this.warn code: "L028" msg: what line: lp.line col: lp.col width: 1
+            return
+        }
+        xText: (srcv.substring from: xLo to: xHi).string
+        if lhsN.binop then xText = "(\{xText})"
+        suffix: ".not"
+        if neg.not then suffix = ""
+        (this.warnFix
+            code: "L028"
+            msg: what
+            line: lp.line
+            col: lp.col
+            width: (litHi - xLo).u32.orPanic
+            lo: xLo
+            hi: litHi
+            repl: "\{xText}\{suffix}"
+        )
+    }
+
     # ---- architecture rules (zl lint --arch) ----
 
     # checkLiteralCompare -- A001: `==` / `!=` against a string literal. The
@@ -1684,7 +1845,7 @@ Analysis: class {
         op: atomName :ast n: (ast.nodes.get i: opId.u64)
         isCmp: op.stringView == "=="
         if op.stringView == "!=" then isCmp = true
-        if isCmp == false then return
+        if isCmp.not then return
         this.literalCompareSide :ast id: lhsId
         this.literalCompareSide :ast id: rhsId
     }
@@ -1712,7 +1873,7 @@ Analysis: class {
     # (holes joined by a separator) -- a spelling that stands in for a tree
     # walk or a pair key.
     checkComposedKey: function {:this ast: Ast.view parts: zast.kidspan line: u32 col: u32} is {
-        if (isComposedParts :ast :parts) == false then return
+        if (isComposedParts :ast :parts).not then return
         (this.info
             code: "A002"
             msg: "composed string key: key the table by ids (a pair record, or walk the tree)".string
@@ -1828,7 +1989,7 @@ Analysis: class {
         isVU: false
         if kind == zast.objectkind.variantDef then isVU = true
         if kind == zast.objectkind.unionDef then isVU = true
-        if isVU == false then return
+        if isVU.not then return
         h9x9: u64
         for h9x9 < items.count.u64 loop {
             itemId: zast.kidAt kids: ast.kids span: items i: h9x9
@@ -1849,7 +2010,7 @@ Analysis: class {
                 ) case some then {
                     if fb >= 65 when fb <= 90 then up = true
                 } case none then null
-                if up when isTypeRef == false then {
+                if up when isTypeRef.not then {
                     sug: casingSuggest name: nm.stringView
                     (this.warn
                         code: "L009"
@@ -1916,7 +2077,7 @@ Analysis: class {
                                 width: 6
                             )
                         }
-                        if isPub == false when isPriv == false when isReq == false then {
+                        if isPub.not when isPriv.not when isReq.not then {
                             sawDef = true
                         }
                     }
@@ -1962,17 +2123,17 @@ Analysis: class {
             nm: zast.nameTextAt :ast ref: member.name
             skip: false
             if nm.stringView == "this" then skip = true
-            if skip == false then {
+            if skip.not then {
                 documented: false
                 if (this.hasDocAbove line1: member.lineno) then documented = true
-                if documented == false then {
+                if documented.not then {
                     li: (member.lineno - 1).u64
                     if li < this.lines.length then {
                         mline: this.lines.get i: li
                         if (hasHash line: mline.stringView) then documented = true
                     }
                 }
-                if documented == false then {
+                if documented.not then {
                     msg: "missing doc comment: add a `#` comment above this \{kind}"
                     (this.warn
                         :code
@@ -2003,7 +2164,7 @@ Analysis: class {
         lo: (line1 - 2).u64
         if lo >= this.lines.length then return buf
         last: this.lines.get i: lo
-        if (docLineIsComment ln: last.stringView) == false then return buf
+        if (docLineIsComment ln: last.stringView).not then return buf
         top: lo
         more: true
         for more loop {
@@ -2040,7 +2201,7 @@ Analysis: class {
         # own the line: a live view into this.lines would hold a shared lock across the
         # warn below, which needs the receiver exclusively.
         decl: (this.lines.get i: li).copy
-        if (docStartsLine ln: decl.stringView :col) == false then return
+        if (docStartsLine ln: decl.stringView :col).not then return
         if doc.length == 0 then doc = docTrailingComment ln: decl.stringView
         if doc.length == 0 then return
         vocab: List String
@@ -2049,8 +2210,8 @@ Analysis: class {
         docWordsInto s: doc.stringView into: words
         novel: u64
         with wit: words.iterate do for w: wit loop {
-            if (docIsStopword w: w.stringView) == false then {
-                if (docHasWord xs: vocab w: w.stringView) == false then novel = novel + 1
+            if (docIsStopword w: w.stringView).not then {
+                if (docHasWord xs: vocab w: w.stringView).not then novel = novel + 1
             }
         }
         if novel > 0 then return
@@ -2078,7 +2239,7 @@ Analysis: class {
         n: this.lines.length
         for i < n loop {
             head: this.lines.get :i
-            if (docLineIsComment ln: head.stringView) == false then {
+            if (docLineIsComment ln: head.stringView).not then {
                 i = i + 1
             } else {
                 st: i
@@ -2253,7 +2414,7 @@ Analysis: class {
                     if hasPub when keep then {
                         inPub: pubSet.has item: member.name.u64
                         isMain: zast.nameTextEq :ast ref: member.name s: "main"
-                        if inPub == false when isMain == false then keep = false
+                        if inPub.not when isMain.not then keep = false
                     }
                 }
                 if keep then this.walkDocs :ast n: member :docs :docParams :docFields
@@ -2430,8 +2591,8 @@ Analysis: class {
             if ptext.length == 0 then return
             isStr: ptext.stringView == "\"\""
             isStrRepl: repl.stringView == "String"
-            if isStr when isStrRepl == false then return
-            if isStr == false when isStrRepl then return
+            if isStr when isStrRepl.not then return
+            if isStr.not when isStrRepl then return
             pin: nodeInfoOf n: (ast.nodes.get i: value.parent.u64)
             cin: nodeInfoOf n: (ast.nodes.get i: value.child.u64)
             if pin.line != cin.line then return
@@ -2474,6 +2635,8 @@ Analysis: class {
     # then the token rules over the source.
     runFastChecks: function {:this n: Ast.view} is {
         this.lineStart = lineStartIndex src: this.source.stringView
+        this.trueId = zast.poolFind pool: n.names text: "true"
+        this.falseId = zast.poolFind pool: n.names text: "false"
         scanPool: zast.StringPool.create
         this.fastToks = tokenize.scan source: this.source.copy pool: scanPool
         this.walkProgram prog: n
@@ -2603,7 +2766,7 @@ Analysis: class {
             tdecl: tk
             paramName: (zast.poolFind pool: ast.names text: gpn.stringView)
         )
-        if (cd.kind == ztypes.constraintkind.stringLike) == false then return
+        if (cd.kind == ztypes.constraintkind.stringLike).not then return
         dpId: opId
         {
             opn: ast.nodes.get i: dpId.u64
@@ -2652,8 +2815,7 @@ Analysis: class {
                     parentTypeId: (ztypes.tid.create from: originTid.u64)
                     name: pname
                     own: ztypes.zparamownership.takeMode
-                ) ==
-                false
+                ).not
             ) then {
                 (this.emitConv
                     ln: cln
@@ -2733,7 +2895,7 @@ Analysis: class {
                 if an.length > 0 then {
                     pi: u64
                     for pi < names.length loop {
-                        if pfound == false then {
+                        if pfound.not then {
                             pnm: names.get i: pi
                             if pnm.stringView == an.stringView then {
                                 pidx = pi
@@ -2746,14 +2908,14 @@ Analysis: class {
                     # the elided first label binds the first non-receiver param
                     pj: u64
                     for pj < names.length loop {
-                        if pfound == false then {
+                        if pfound.not then {
                             pnm9b: names.get i: pj
                             isRecv: false
                             if (nameIds.get i: pj) == zast.names.wkThis.u64 then isRecv = true
                             if thisPn.length > 0 when (
                                 thisPn.stringView == pnm9b.stringView
                             ) then isRecv = true
-                            if isRecv == false then {
+                            if isRecv.not then {
                                 pidx = pj
                                 pfound = true
                             }
@@ -3073,7 +3235,7 @@ Analysis: class {
         prog: p.parse :vfs :rootid mainUnitName: uname.string
         # a failed parse names its error as the tree's root row. The test is a
         # call so no lock outlives it: typecheck below takes the tree.
-        if (zast.isErrorAt ast: prog id: prog.root.u32) == false then {
+        if (zast.isErrorAt ast: prog id: prog.root.u32).not then {
             reg: ztypes.newRegistry
             ccPath9v: zcheck.pickCc ccFlag: "" targetTriple: ""
             ccMode9v: zcheck.pickCcMode modeFlag: ""
@@ -3142,7 +3304,7 @@ Analysis: class {
                 du: unitNamesIn dir: d.stringView
                 if (du.contains item: uname.string) then inSrc = true
             }
-            if inSrc == false then return
+            if inSrc.not then return
             this.reportUnusedExports ast: prog unitId: mainOp :uname :srcdirs
             readNames: Set String
             with rit: srcdirs.iterate do for d2: rit loop {
@@ -3215,7 +3377,7 @@ Analysis: class {
                 lv: ast.nodes.get i: lid.u64
                 if lv.namedoperation then {
                     nm: zast.poolTextCopy pool: ast.names ref: lv.name
-                    if (reads.has item: nm) == false when lv.name != mainId then {
+                    if (reads.has item: nm).not when lv.name != mainId then {
                         (this.info
                             code: "A007"
                             msg: "export `\{nm}` is read by no other unit under --src; make it private and let L012 judge it"
@@ -3238,7 +3400,7 @@ Analysis: class {
             isData: n.kind.recordDef
             if n.kind.classDef then isData = true
             if n.kind.generatorDef then isData = true
-            if isData == false then return
+            if isData.not then return
             if n.isNative then return
             isx1939: u64
             for isx1939 < n.isItems.count.u64 loop {
@@ -3248,7 +3410,7 @@ Analysis: class {
                 if m.namedoperation then {
                     mop: ast.nodes.get i: m.operation.u64
                     fnm: zast.poolTextCopy pool: ast.names ref: m.name
-                    if mop.functiondef == false when (readNames.has item: fnm) == false then {
+                    if mop.functiondef.not when (readNames.has item: fnm).not then {
                         (this.warn
                             code: "A004"
                             msg: "field `\{typeName}.\{fnm}` is written and never read anywhere in the project"
@@ -3289,7 +3451,7 @@ Analysis: class {
             txt
         ) case some then {
             nid: ast.names.find s: txt.stringView
-            if nid.isZero == false when (namedIds.has item: nid.u64) then {
+            if nid.isZero.not when (namedIds.has item: nid.u64) then {
                 p: zast.posOf :n
                 (this.warn
                     code: "A003"
@@ -3422,10 +3584,10 @@ Analysis: class {
         line: u32
         col: u32
     } is {
-        if (st.reg.hasVariable id: vid) == false then return
+        if (st.reg.hasVariable id: vid).not then return
         vt: (st.reg.variableTypeOf id: vid).u64
         if vt == 0 then return
-        if (st.reg.isReftypeOf tid: (ztypes.tid.create from: vt.u64)) == false then return
+        if (st.reg.isReftypeOf tid: (ztypes.tid.create from: vt.u64)).not then return
         if (this.isBuiltinCarrierTid :ast :st tid: (ztypes.tid.create from: vt.u64)) then return
         ftid: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: fnOp.u64
         if ftid.isZero then return
@@ -3439,7 +3601,7 @@ Analysis: class {
         ) case some then {
             if own != ztypes.zparamownership.borrowMode then mutable = false
         } case none then null
-        if mutable == false then return
+        if mutable.not then return
         pnm: zast.poolTextAt pool: ast.names ref: nameRef
         (this.info
             code: "L020"
@@ -3460,16 +3622,16 @@ Analysis: class {
         :this ast: Ast.view st: zenv.ZSymbolTable.view opId: u32 line: u32 col: u32
     } is {
         op: ast.nodes.get i: opId.u64
-        if op.labelvalue == false then return
+        if op.labelvalue.not then return
         vo: st.typing.defVariableId.get key: opId.u64
         match (
             vo
         ) case some then {
             if (st.typing.variableMutated.has item: vo) then return
-            if (st.reg.hasVariable id: vo) == false then return
+            if (st.reg.hasVariable id: vo).not then return
             vt: (st.reg.variableTypeOf id: vo).u64
             if vt == 0 then return
-            if (st.reg.isReftypeOf tid: (ztypes.tid.create from: vt.u64)) == false then return
+            if (st.reg.isReftypeOf tid: (ztypes.tid.create from: vt.u64)).not then return
             (this.warn
                 code: "L027"
                 msg: "receiver `this` is never mutated -- declare it `this: this.view` so callers may keep reading the object across the call".string
@@ -3510,7 +3672,7 @@ Analysis: class {
             }
             used: IdSet u64
             with uit: st.typing.atomVariableId.iterateItems do for av: uit loop {
-                if (wtgt.has item: av.key) == false then used.add item: av.value
+                if (wtgt.has item: av.key).not then used.add item: av.value
             }
             mainOp: unitBodyOpOf :prog :uname
             if mainOp > 0 then {
@@ -3634,7 +3796,7 @@ Analysis: class {
                             # (zast.names.wkThis); a spelled `b: this.borrow` is receiver-shaped
                             isRecv: false
                             if pNameRef == zast.names.wkThis then isRecv = true
-                            if isRecv == false then {
+                            if isRecv.not then {
                                 isRecv = (ztypecheck.paramIsThisReceiverId
                                     ast: prog
                                     opId: pOpId
@@ -3649,14 +3811,14 @@ Analysis: class {
                                     col: pCl
                                 )
                             }
-                            if isRecv == false then {
+                            if isRecv.not then {
                                 vo: st.typing.defVariableId.get key: pOpId.u64
                                 match (
                                     vo
                                 ) case some then {
                                     umut: st.typing.variableMutated.has item: vo
                                     if (used.has item: vo) then {
-                                        if umut == false then {
+                                        if umut.not then {
                                             (this.reportUnmutatedParam
                                                 ast: prog
                                                 :st
@@ -3668,7 +3830,7 @@ Analysis: class {
                                             )
                                         }
                                     }
-                                    if (used.has item: vo) == false then {
+                                    if (used.has item: vo).not then {
                                         pnm: (zast.poolTextAt
                                             pool: prog.names
                                             ref: (zast.nameid.create from: pNameRef.u32)
@@ -3692,8 +3854,8 @@ Analysis: class {
                         nid: dv.key
                         vid: dv.value
                         skip: false
-                        if skip == false when (used.has item: vid) then skip = true
-                        if skip == false then {
+                        if skip.not when (used.has item: vid) then skip = true
+                        if skip.not then {
                             fs: prog.fsnoForNode nodeid: nid.u32.orPanic
                             if fs == mainFsno then {
                                 nm: String
@@ -3924,8 +4086,8 @@ Analysis: class {
                 dpi = dpi + 2
                 if (used.has item: vid) then {
                     mut: st.typing.variableMutated.has item: vid
-                    if mut == false then mut = st.typing.variableMoved.has item: vid
-                    if mut == false then {
+                    if mut.not then mut = st.typing.variableMoved.has item: vid
+                    if mut.not then {
                         fs: prog.fsnoForNode nodeid: nid.u32.orPanic
                         if fs == mainFsno then {
                             nodeL: prog.nodes.get i: nid.u64
@@ -3944,11 +4106,11 @@ Analysis: class {
                                         :st
                                         rhsId: nodeL.value
                                     )
-                                    if rvid.isZero == false then {
+                                    if rvid.isZero.not then {
                                         srcMut = st.typing.variableMutated.has item: rvid
                                     }
                                 }
-                                if kind.length > 0 when srcMut == false then {
+                                if kind.length > 0 when srcMut.not then {
                                     nm: zast.poolTextAt pool: prog.names ref: nodeL.name
                                     (this.info
                                         code: "L022"
@@ -4057,12 +4219,12 @@ Analysis: class {
         for j < items.length loop {
             member: zast.namedSiteAt ast: prog nid: (items.get i: j)
             j = j + 1
-            if member.name.isZero == false then {
+            if member.name.isZero.not then {
                 tmdi: (st.typing.declTypedMemberIdOf
                     parentTypeId: (ztypes.tid.create from: typeTid.u64)
                     nameId: member.name
                 )
-                if tmdi.isZero == false when (ev.usedE.has item: tmdi) == false then {
+                if tmdi.isZero.not when (ev.usedE.has item: tmdi).not then {
                     if (ztypecheck.declMemberIsPrivate
                         :st
                         tid: (ztypes.tid.create from: typeTid.u64)
@@ -4269,7 +4431,7 @@ atomNamesOutsideSegments: function {prog: Ast.view into: IdSet u64} is {
             sgJ = sgJ + 1
             if ndJ >= sgB.startId.u64 when ndJ < sgB.endId.u64 then covered = true
         }
-        if covered == false then {
+        if covered.not then {
             ndB0: prog.nodes.get i: ndJ
             if ndB0.atomid then into.add item: ndB0.name.u64
         }
@@ -4302,7 +4464,7 @@ definedTypeTidOf: function {
     if site.name.isZero then return 0
     if site.operation.isZero then return 0
     to: prog.nodes.get i: site.operation.u64
-    if to.objectdef == false then return 0
+    if to.objectdef.not then return 0
     cto: (st.typing.declChildOfId
         parentTypeId: (ztypes.tid.create from: mainTid.u64)
         nameId: site.name
@@ -4380,7 +4542,7 @@ isNonDec: function {s: StringView} out bool is {
 # non-decimal). A literal that overflows the default keeps its suffix (load-bearing).
 literalFitsBase: function {numstr: StringView} out bool is {
     pv: ztypes.parseLiteralValue :numstr
-    if pv.ok == false then return false
+    if pv.ok.not then return false
     if pv.isFloat then return true
     if (isNonDec s: numstr) then return true
     iMax: 9223372036854775807.u64
@@ -4407,12 +4569,12 @@ operandSuffix: function {ast: Ast.view n: astnode.view} out SufRec is {
         return (operandSuffix :ast n: (ast.nodes.get i: n.expression.u64))
     } case dottedpath then {
         cn: atomName :ast n: (ast.nodes.get i: n.child.u64)
-        if (ztypecheck.isNumericTypeName name: cn.stringView) == false then {
+        if (ztypecheck.isNumericTypeName name: cn.stringView).not then {
             return (SufRec tname: "".string line: 0 col: 0)
         }
         pn: atomName :ast n: (ast.nodes.get i: n.parent.u64)
         if pn.length == 0 then return (SufRec tname: "".string line: 0 col: 0)
-        if (literalFitsBase numstr: pn.stringView) == false then {
+        if (literalFitsBase numstr: pn.stringView).not then {
             return (SufRec tname: "".string line: 0 col: 0)
         }
         ci: nodeInfoOf n: (ast.nodes.get i: n.child.u64)
@@ -4495,8 +4657,8 @@ isAnchor: function {
             zhit = true
             znm = name9v
         }
-        if zhit == false then return false
-        if (znm.stringView == tname) == false then return false
+        if zhit.not then return false
+        if (znm.stringView == tname).not then return false
         if (isNodeConst nid: (zast.nodeid.create from: nid.u32.orPanic) :st) then return false
         return true
     } else {
@@ -4649,7 +4811,7 @@ sortEdits: function {edits: (List zfix.Edit).borrow} out List zfix.Edit is {
         i: u64
         for i < n loop {
             u: used.get :i
-            if u == false then {
+            if u.not then {
                 e: edits.get :i
                 take: false
                 if best == n then {
@@ -4725,14 +4887,14 @@ emitDiffHunk: function {
         buf.append dm
         oi = oi + 1
     }
-    if (clHi + 1) == nLines when (endsWithNewline src: source) == false then {
+    if (clHi + 1) == nLines when (endsWithNewline src: source).not then {
         buf.append "\\ No newline at end of file\n"
     }
     with nit: newLines.iterate do for nl: nit loop {
         pm: "+\{nl}\n"
         buf.append pm
     }
-    if newBlock.length > 0 when (endsWithNewline src: newBlock.stringView) == false then {
+    if newBlock.length > 0 when (endsWithNewline src: newBlock.stringView).not then {
         buf.append "\\ No newline at end of file\n"
     }
     return (newDelta + newCount.i64.orPanic) - oldCount.i64.orPanic
@@ -4796,7 +4958,7 @@ lineDiffEdits: function {old: StringView new: StringView} out List zfix.Edit is 
                 }
                 t = t + 1
             }
-            if found == false then {
+            if found.not then {
                 we: i + 256
                 if we > m then we = m
                 wf: p + 256
@@ -4850,7 +5012,7 @@ renderDiff: function {
         lo: byteToLine :lineStart off: e.byteLo :nLines
         hi: lo
         if e.byteHi > e.byteLo then hi = byteToLine :lineStart off: (e.byteHi - 1) :nLines
-        if cActive == false then {
+        if cActive.not then {
             cActive = true
             cStart = i
             clLo = lo
@@ -4907,6 +5069,8 @@ analyzeSource: function {source: String.take path: String.take opts: lintopts} o
         edits: List zfix.Edit
         fastToks: ListVal tokenize.token
         funcDepth: 0
+        trueId: zast.nameid
+        falseId: zast.nameid
         :opts
     )
     a.runFastChecks n: root
@@ -4948,6 +5112,8 @@ analyzeFile: function {path: String.take opts: lintopts} out Analysis is {
             edits: List zfix.Edit
             fastToks: ListVal tokenize.token
             funcDepth: 0
+            trueId: zast.nameid
+            falseId: zast.nameid
             :opts
         )
         d: (zdiag.errorDiag
@@ -4990,6 +5156,8 @@ analyzeFileFull: function {
             edits: List zfix.Edit
             fastToks: ListVal tokenize.token
             funcDepth: 0
+            trueId: zast.nameid
+            falseId: zast.nameid
             :opts
         )
         a.runFastChecks n: root
@@ -5022,6 +5190,8 @@ analyzeFileFull: function {
             edits: List zfix.Edit
             fastToks: ListVal tokenize.token
             funcDepth: 0
+            trueId: zast.nameid
+            falseId: zast.nameid
             :opts
         )
         d: (zdiag.errorDiag
@@ -5066,7 +5236,7 @@ codepointLen: function {s: StringView} out u64 is {
         ) case some then {
             if bo >= 128 when bo < 192 then cont = true
         } case none then null
-        if cont == false then c = c + 1
+        if cont.not then c = c + 1
         b = b + 1
     }
     return c
@@ -5084,6 +5254,8 @@ sourceParses: function {source: String.take} out bool is {
         edits: List zfix.Edit
         fastToks: ListVal tokenize.token
         funcDepth: 0
+        trueId: zast.nameid
+        falseId: zast.nameid
         opts: defaultOpts
     )
     root: ast.parseSource :source
