@@ -83,7 +83,9 @@ pair exists because the readonly half is what most code wants:
   readonly. #~"iterateMut" (lists) is the mutable twin: it takes
   the container #~".borrow" and its elements may be written
   through, which is why nothing else may touch the container
-  while it runs. #~"iterateItems" (maps) also takes #~".borrow"
+  while it runs. A view has no mutable twin at all -- it is
+  readonly, so it declares #~"iterate" and no #~"iterateMut".
+  #~"iterateItems" (maps) also takes #~".borrow"
   and pins exclusively, but its entries stay readonly by design
   -- a key is hashed, so writing through an entry in place would
   leave it in the wrong bucket.]
@@ -101,9 +103,9 @@ carries the longer name.
 #b:"Views pin their source." Every view factory, iterator
 #~"call" and element accessor here is an #~"outx" declaration,
 so its result keeps the container locked for its lifetime at
-the strength the receiver marker names: #~"listView" installs an
-EXCLUSIVE pin on the source list (its receiver is
-#~"this.borrow"), #~"get" and #~"iterate" a SHARED one. You
+the strength the receiver marker names: #~"listView", #~"slice",
+#~"get" and #~"iterate" all declare #~"this.view" and install a
+SHARED pin, so readers coexist and only a writer is refused. You
 cannot store a view into a class field or return it across a
 function boundary unless the source is a non-owned parameter;
 see #> to=./ownership.html: ownership.
@@ -333,6 +335,22 @@ window pointing at freed storage:
   }
 """
 
+#b:"Walking a window." Both view templates declare #~"iterate",
+so a window is walked exactly as its source is:
+
+#code language=zerolang: """
+  mid: nums.slice from: 1 to: 3
+  with it: mid.iterate do for e: it loop print "\{e}"
+"""
+
+The cursor holds the WINDOW -- the element pointer and the count
+as they stood when #~"iterate" was called -- rather than the
+container, which is what lets a list and a view of it share one
+cursor type and drops a pointer indirection per step. It also
+means the walk does not re-read the container each step; that is
+unobservable in a valid program, because the lock model already
+excludes a writer for the iterator's lifetime.
+
 #~"ByteView" is #~"(ListViewVal t: u8)" behind a typedef -- the
 standard byte-window type that #~"io" writers accept.
 
@@ -421,7 +439,9 @@ readonly) #~"iterate" with no mutable twin by design.
 
 Each container family has its own iterator template, because the
 emitter names the cursor struct after #~"iterate"'s declared
-return: #~"ListIter" / #~"ListIterVal", #~"SetIter" /
+return -- and within the List family a list and a window into it
+share one, since both name the same return: #~"ListIter" /
+#~"ListIterVal", #~"SetIter" /
 #~"SetIterVal", and per Map form #~"MapKeyIter" /
 #~"MapItemIter" / #~"MapEntry" (plain names serve #~"MapRR";
 the RV / VR / VV forms serve their maps). All iterators yield

@@ -1,0 +1,62 @@
+# A window walks. `List T` and `ListView T` resolve `iterate` to the SAME
+# ListIter mono, so the cursor is named after that mono and must be emitted
+# once; it holds the WINDOW (`{data, length, idx}`) rather than the container,
+# which is what lets one struct serve both. A cursor naming its container would
+# put two bodies under one typedef name -- it typechecks and then fails at gcc
+# with `invalid initializer`, which is why the valtype twin was split off.
+#
+# Values are printed, not merely compiled: a cursor that read the container's
+# length instead of the window's would walk past the window's end and still
+# compile.
+
+Row: class {
+    n: i64
+}
+
+main: function is {
+    ns: (ListVal i64)
+    ns.append from: 10
+    ns.append from: 20
+    ns.append from: 30
+    ns.append from: 40
+
+    # a walk over a ListViewVal, whose bounds are the WINDOW's
+    mid: ns.slice from: 1 to: 3
+    s1: 0
+    with a: mid.iterate do for x: a loop {
+        s1 = s1 + x
+    }
+    print "window sum=\{s1} len=\{mid.length}"
+
+    # a walk over a window of a window
+    inner: mid.slice from: 1 to: 2
+    s2: 0
+    with b: inner.iterate do for y: b loop {
+        s2 = s2 + y
+    }
+    print "inner sum=\{s2}"
+
+    # THE collision: a walk of the owner and a walk of a window over it, live
+    # at once. One ListIter mono, one cursor, two constructors
+    s3: 0
+    s4: 0
+    with c: ns.iterate do for p: c loop {
+        with d: mid.iterate do for q: d loop {
+            s4 = s4 + q
+        }
+        s3 = s3 + p
+    }
+    print "owner sum=\{s3} nested sum=\{s4}"
+
+    # the reference family walks the same way; the element comes out as a view
+    rows: (List Row)
+    rows.append (Row n: 1)
+    rows.append (Row n: 2)
+    rows.append (Row n: 3)
+    rv: rows.slice from: 1 to: 3
+    s5: 0
+    with e: rv.iterate do for r: e loop {
+        s5 = s5 + r.n
+    }
+    print "ref sum=\{s5}"
+}

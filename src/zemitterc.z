@@ -3045,6 +3045,9 @@ Ctx: class {
     usedTypeIds: IdSet u64
     # conformance rows whose helper set is already in the buffer, by row index
     emittedConformance: IdSet u64
+    # ListIter monos whose cursor is already in the buffer. A List and a view
+    # of it resolve `iterate` to ONE mono, so both reach the same typedef
+    emittedListIters: IdSet u64
     # the units the table orders, in that order. A unit with rows that is not
     # named here runs after those that are.
     unitOrder: List String
@@ -4178,6 +4181,20 @@ conformanceRowMark: function {ctx: Ctx row: u64} is {
 # repeat it
 conformanceRowEmitted: function {ctx: Ctx.view row: u64} out bool is {
     return (ctx.emittedConformance.has item: row)
+}
+
+# listIterMark / listIterEmitted -- the cursor for one ListIter mono, keyed by
+# that mono's tid. `List T` and `ListView T` resolve `iterate` to the SAME
+# ListIter mono, so the second container to be emitted must not repeat the
+# typedef and the `call` definition.
+listIterMark: function {ctx: Ctx tid: u64} is {
+    ctx.emittedListIters.add item: tid
+}
+
+# whether that mono's cursor is already out, so a second container reaching it
+# writes only its own constructors
+listIterEmitted: function {ctx: Ctx.view tid: u64} out bool is {
+    return (ctx.emittedListIters.has item: tid)
 }
 
 # typeIsUsed -- the program constructed this type, so the rows its
@@ -11963,11 +11980,24 @@ emitCollectionMemberRead: function {
             return esvw
         }
     }
-    if (isListOriginOf :symtab :ctx tid: bstamp) then {
+    # a List and a window into one answer these the same way: the window IS
+    # the first two fields of the list struct, and the cursor holds the window
+    # either way, so one leg says so once for both
+    isListy9: (
+        (isListOriginOf :symtab :ctx tid: bstamp) or (isListViewOriginOf :symtab :ctx tid: bstamp)
+    )
+    if isListy9 then {
         if mn2 == "length" then {
             el0: "\{bn2}\{accB2}length"
             return el0
         }
+        if mn2 == "iterate" then {
+            lcb9: ctxCname :ctx tid: bstamp
+            epLi: "\{lcb9}_iterate(\{recvB2})"
+            return epLi
+        }
+    }
+    if (isListOriginOf :symtab :ctx tid: bstamp) then {
         if mn2 == "capacity" then {
             el1: "\{bn2}\{accB2}capacity"
             return el1
@@ -11985,18 +12015,10 @@ emitCollectionMemberRead: function {
             ep2: "\{lcb2}_listView(\{recvB2})"
             return ep2
         }
-        if mn2 == "iterate" then {
-            epLi: "\{lcb2}_iterate(\{recvB2})"
-            return epLi
-        }
         if mn2 == "iterateMut" then {
             epLiM: "\{lcb2}_iterateMut(\{recvB2})"
             return epLiM
         }
-    }
-    if (isListViewOriginOf :symtab :ctx tid: bstamp) when mn2 == "length" then {
-        elv: "\{bn2}\{accB2}length"
-        return elv
     }
     # the id-keyed pair are STACK structs, so their counters are read
     # through accB2 (`.` or `->`) exactly as a List's are, not through
@@ -24369,6 +24391,7 @@ emitC: function {
         demandGatedTids: IdSet u64
         usedTypeIds: IdSet u64
         emittedConformance: IdSet u64
+        emittedListIters: IdSet u64
         unitOrder: List String
         argHoistNames: List String
         argHoistVals: List String
@@ -24836,7 +24859,7 @@ emitListMono: function {
         kind: "List"
         :buf
     )
-    emitListIter :ctx :symtab :monoId nm: nm.stringView :buf
+    emitListIter :ctx :symtab :monoId nm: nm.stringView ect: ect.stringView :buf
 }
 
 # emitColGet -- the element `get` for a List / ListView mono. The declared
@@ -24961,15 +24984,59 @@ emitListSliceOnDemand: function {
     } case none then null
 }
 
-# emitListIter -- the borrowed-view iterator over a List mono (a `{List*; idx}`
-# cursor yielding OptionView<T> by reference), emitted only when List.iterate is
-# used (the ListIter / OptionView monos were minted). The OptionView mono is
-# emitted by the earlier OptionView pass, so this can reference it.
+# emitListIterCursor -- the cursor struct and its `call`, written ONCE per
+# ListIter mono. The cursor holds the WINDOW it walks -- `{data, length, idx}`
+# -- not the container, which is what lets a List and a view of it share it: the
+# two resolve `iterate` to the same ListIter mono, and a cursor naming its
+# container would put two different bodies under that one typedef name (which
+# typechecks and then fails at gcc with `invalid initializer` -- the reason
+# ListIterVal was split off in the first place). Holding the window also drops
+# one pointer indirection per step.
+#
+# The walk therefore reads `{data, length}` as they were at `iterate` time
+# rather than re-reading the container. Unreachable in a valid program: the lock
+# model already excludes a writer for the iterator's lifetime.
+emitListIterCursor: function {
+    ctx: Ctx
+    liId: u64
+    ovId: u64
+    ovu: StringView
+    ect: StringView
+    buf: String.borrow
+} is {
+    if (listIterEmitted :ctx tid: liId) then return
+    listIterMark :ctx tid: liId
+    li: cbaseNoPrefix :ctx tid: (ztypes.tid.create from: liId.u64)
+    ov: cbaseNoPrefix :ctx tid: (ztypes.tid.create from: ovId.u64)
+    s0: "typedef struct {\n    \{ect}* data;\n    uint64_t length;\n    uint64_t idx;\n} z_\{li}_t;\n"
+    buf.append s0
+    s1: "static z_\{ov}_t z_\{li}_call(z_\{li}_t* _it);\n"
+    buf.append s1
+    s2: "static z_\{ov}_t z_\{li}_call(z_\{li}_t* _it) {\n"
+    buf.append s2
+    s3: "    z_\{ov}_t _out = {0};\n"
+    buf.append s3
+    s4: "    if (_it->idx >= _it->length) { _out.tag = Z_\{ovu}_TAG_NONE; return _out; }\n"
+    buf.append s4
+    s5: "    _out.tag = Z_\{ovu}_TAG_SOME;\n"
+    buf.append s5
+    s6: "    _out.data = &_it->data[_it->idx];\n"
+    buf.append s6
+    s7: "    _it->idx++;\n    return _out;\n}\n"
+    buf.append s7
+}
+
+# emitListIter -- the borrowed-view iterator over a List or ListView mono: the
+# shared cursor (above) plus this container's constructors, emitted only when
+# `iterate` resolved (the ListIter / OptionView monos were minted). The
+# OptionView mono is emitted by the earlier OptionView pass, so this can
+# reference it.
 emitListIter: function {
-    ctx: Ctx.view
+    ctx: Ctx
     symtab: zenv.ZSymbolTable.view
     monoId: ztypes.tid
     nm: StringView
+    ect: StringView
     buf: String.borrow
 } is {
     liId: monoMethodReturn :symtab :monoId nameId: zast.names.wkIterate
@@ -24981,42 +25048,43 @@ emitListIter: function {
     )
     if ovId == 0 then return
     ovName: regNameOf :symtab tid: (ztypes.tid.create from: ovId.u64)
-    li: cbaseNoPrefix :ctx tid: (ztypes.tid.create from: liId.u64)
-    ov: cbaseNoPrefix :ctx tid: (ztypes.tid.create from: ovId.u64)
     ovu: cUpperOf text: ovName.stringView
-    s0: "typedef struct {\n    z_\{nm}_t* list;\n    uint64_t idx;\n} z_\{li}_t;\n"
-    buf.append s0
-    s1: "static z_\{ov}_t z_\{li}_call(z_\{li}_t* _it);\n"
-    buf.append s1
-    s2: "static z_\{ov}_t z_\{li}_call(z_\{li}_t* _it) {\n"
-    buf.append s2
-    s3: "    z_\{ov}_t _out = {0};\n"
-    buf.append s3
-    s4: "    if (_it->idx >= _it->list->length) { _out.tag = Z_\{ovu}_TAG_NONE; return _out; }\n"
-    buf.append s4
-    s5: "    _out.tag = Z_\{ovu}_TAG_SOME;\n"
-    buf.append s5
-    s6: "    _out.data = &_it->list->data[_it->idx];\n"
-    buf.append s6
-    s7: "    _it->idx++;\n    return _out;\n}\n"
-    buf.append s7
+    (emitListIterCursor
+        :ctx
+        :liId
+        :ovId
+        ovu: ovu.stringView
+        :ect
+        :buf
+    )
+    li: cbaseNoPrefix :ctx tid: (ztypes.tid.create from: liId.u64)
     # `iterate` is the READONLY walk, so its receiver is const and view-guard
-    # checks it. The cursor keeps a plain T* and OptionView's payload is one
-    # void* shared with the readers that hand out a mutable interior pointer on
-    # purpose (List.get's write-back), so const stops at this ONE cast. That the
-    # ELEMENTS are readonly is a typecheck-level guarantee -- the element
-    # inherits the strength of the lock its holder has on the container.
+    # checks it. No cast is needed to read the window out of it -- a const
+    # struct makes its members `T* const` and the top-level const drops on read
+    # -- but the cursor's own `data` is a plain T*, and OptionView's payload is
+    # one void* shared with the readers that hand out a mutable interior
+    # pointer on purpose (List.get's write-back). So the laundering is at that
+    # field. That the ELEMENTS are readonly is a typecheck-level guarantee --
+    # the element inherits the strength of the lock its holder has on the
+    # container.
     s8: "static z_\{li}_t z_\{nm}_iterate(const z_\{nm}_t* _this);\n"
     buf.append s8
-    s: "static z_\{li}_t z_\{nm}_iterate(const z_\{nm}_t* _this) {\n    z_\{li}_t _it = {0};\n    _it.list = (z_\{nm}_t*)_this;\n    _it.idx = 0;\n    return _it;\n}\n\n"
+    s: "static z_\{li}_t z_\{nm}_iterate(const z_\{nm}_t* _this) {\n    z_\{li}_t _it = {0};\n    _it.data = _this->data;\n    _it.length = _this->length;\n    _it.idx = 0;\n    return _it;\n}\n\n"
     buf.append s
-    # iterateMut -- the mutable walk. The same cursor over the same storage;
-    # the two differ only in what the typechecker lets the caller do with the
-    # elements, so the C bodies are identical.
-    s10: "static z_\{li}_t z_\{nm}_iterateMut(z_\{nm}_t* _this);\n"
-    buf.append s10
-    s11: "static z_\{li}_t z_\{nm}_iterateMut(z_\{nm}_t* _this) {\n    z_\{li}_t _it = {0};\n    _it.list = _this;\n    _it.idx = 0;\n    return _it;\n}\n\n"
-    buf.append s11
+    # iterateMut -- the mutable walk, for a mono that declares one. The same
+    # cursor over the same storage; the two differ only in what the typechecker
+    # lets the caller do with the elements, so the C bodies are identical. A
+    # view declares none: it is readonly, and an ungated one would be a
+    # writable walk over storage the view may not write.
+    imo: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkIterateMut
+    match (
+        imo
+    ) case some then {
+        s10: "static z_\{li}_t z_\{nm}_iterateMut(z_\{nm}_t* _this);\n"
+        buf.append s10
+        s11: "static z_\{li}_t z_\{nm}_iterateMut(z_\{nm}_t* _this) {\n    z_\{li}_t _it = {0};\n    _it.data = _this->data;\n    _it.length = _this->length;\n    _it.idx = 0;\n    return _it;\n}\n\n"
+        buf.append s11
+    } case none then null
 }
 
 # emitListSort -- stable in-place mergesort companion (scalar `<`).
@@ -25122,6 +25190,7 @@ emitListViewMono: function {
         kind: "ListView"
         :buf
     )
+    emitListIter :ctx :symtab :monoId nm: nm.stringView ect: ect.stringView :buf
 }
 
 # listviewMethods -- the _listview cast + _extendView companions when a

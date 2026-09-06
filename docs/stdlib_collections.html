@@ -153,7 +153,9 @@ stays readable throughout, and the elements it yields are
 readonly. <code>iterateMut</code> (lists) is the mutable twin: it takes
 the container <code>.borrow</code> and its elements may be written
 through, which is why nothing else may touch the container
-while it runs. <code>iterateItems</code> (maps) also takes <code>.borrow</code>
+while it runs. A view has no mutable twin at all -- it is
+readonly, so it declares <code>iterate</code> and no <code>iterateMut</code>.
+<code>iterateItems</code> (maps) also takes <code>.borrow</code>
 and pins exclusively, but its entries stay readonly by design
 -- a key is hashed, so writing through an entry in place would
 leave it in the wrong bucket.</li>
@@ -170,9 +172,9 @@ carries the longer name.</p>
 <p><strong>Views pin their source.</strong> Every view factory, iterator
 <code>call</code> and element accessor here is an <code>outx</code> declaration,
 so its result keeps the container locked for its lifetime at
-the strength the receiver marker names: <code>listView</code> installs an
-EXCLUSIVE pin on the source list (its receiver is
-<code>this.borrow</code>), <code>get</code> and <code>iterate</code> a SHARED one. You
+the strength the receiver marker names: <code>listView</code>, <code>slice</code>,
+<code>get</code> and <code>iterate</code> all declare <code>this.view</code> and install a
+SHARED pin, so readers coexist and only a writer is refused. You
 cannot store a view into a class field or return it across a
 function boundary unless the source is a non-owned parameter;
 see <a href="./ownership.html">ownership.</a></p>
@@ -348,6 +350,17 @@ window pointing at freed storage:</p>
       print "\{v.get i: 0}"
       # nums.append from: 2   # rejected: nums is pinned by v
   }</code></pre>
+<p><strong>Walking a window.</strong> Both view templates declare <code>iterate</code>,
+so a window is walked exactly as its source is:</p>
+<pre><code class="language-zerolang">  mid: nums.slice from: 1 to: 3
+  with it: mid.iterate do for e: it loop print "\{e}"</code></pre>
+<p>The cursor holds the WINDOW -- the element pointer and the count
+as they stood when <code>iterate</code> was called -- rather than the
+container, which is what lets a list and a view of it share one
+cursor type and drops a pointer indirection per step. It also
+means the walk does not re-read the container each step; that is
+unobservable in a valid program, because the lock model already
+excludes a writer for the iterator's lifetime.</p>
 <p><code>ByteView</code> is <code>(ListViewVal t: u8)</code> behind a typedef -- the
 standard byte-window type that <code>io</code> writers accept.</p>
 <h2 id="the-map-family"><a href="#the-map-family">7. The Map family</a></h2>
@@ -413,7 +426,9 @@ readonly) <code>iterate</code> with no mutable twin by design.</p>
 <h2 id="iterators-and-entries"><a href="#iterators-and-entries">9. Iterators and entries</a></h2>
 <p>Each container family has its own iterator template, because the
 emitter names the cursor struct after <code>iterate</code>'s declared
-return: <code>ListIter</code> / <code>ListIterVal</code>, <code>SetIter</code> /
+return -- and within the List family a list and a window into it
+share one, since both name the same return: <code>ListIter</code> /
+<code>ListIterVal</code>, <code>SetIter</code> /
 <code>SetIterVal</code>, and per Map form <code>MapKeyIter</code> /
 <code>MapItemIter</code> / <code>MapEntry</code> (plain names serve <code>MapRR</code>;
 the RV / VR / VV forms serve their maps). All iterators yield

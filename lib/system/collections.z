@@ -167,9 +167,11 @@ ListVal: class is native as {
     create: function {capacity: 0.u64} out type is native
 }
 
-# Borrowed-view iterator over a list. listiter holds a lock on the
-# source list for its lifetime; each .call yields an optionview.some
-# pointing into the list's storage, or optionview.none when exhausted.
+# Borrowed-view iterator over a list or a window into one. The cursor holds
+# the WINDOW -- the element pointer and the count as they were at `iterate`
+# time -- so a List and a view of it construct the same one; it keeps a lock on
+# its source for its lifetime, and each .call yields an optionview.some
+# pointing into that storage, or optionview.none when exhausted.
 # See for-loop dispatch (rule 1) and the iterators chapter in the spec.
 ListIter: class is native as {
     # the REFERENCE element type of ListIter. Uppercase says reftype, so a
@@ -180,12 +182,10 @@ ListIter: class is native as {
     call: function {:this} outx OptionView T is native
 }
 
-# Borrowed-view iterator over a ListVal. The valtype twin of `ListIter`, and
-# it must be its own template rather than shared: the emitter names the
-# iterator struct after `iterate`'s DECLARED return and gives it a `list`
-# field pointing at the container. Two containers declaring the same iterator
-# type therefore emit two structs under ONE name, with different bodies --
-# which typechecks and then fails at gcc with `invalid initializer`.
+# Borrowed-view iterator over a ListVal or a window into one. The valtype twin
+# of `ListIter`, and its own template because it binds the VALUE generic family
+# (`anyval`) where `ListIter` binds the reference one -- a shared template could
+# not be bounded for both. The two cursors are otherwise the same shape.
 ListIterVal: class is native as {
     # the VALUE element type of ListIterVal. Lowercase says valtype, so a
     # binding of it COPIES
@@ -210,6 +210,11 @@ ListView: class is native as {
     # view. It pins nothing: a view is value-passed and carries nothing that
     # can dangle. Panics when from > to or to > length
     slice: function {t: this.view from: u64 to: u64} out type is native
+    # the readonly walk over the window: a shared receiver, so several may run
+    # at once and the window stays readable throughout. There is no mutable
+    # twin -- a view is readonly, and `ListRef.iterateMut` is where writing
+    # through a walk lives
+    iterate: function {t: this.view} outx (ListIter :T) is native
     # how many elements the ListView spans
     length: function {t: this.view} out u64 is native
 }
@@ -230,6 +235,11 @@ ListViewVal: class is native as {
     # view. It pins nothing: a view is value-passed and carries nothing that
     # can dangle. Panics when from > to or to > length
     slice: function {t: this.view from: u64 to: u64} out type is native
+    # the readonly walk over the window: a shared receiver, so several may run
+    # at once and the window stays readable throughout. There is no mutable
+    # twin -- a view is readonly, and `ListVal.iterateMut` is where writing
+    # through a walk lives
+    iterate: function {t: this.view} outx (ListIterVal :t) is native
     # how many elements the ListViewVal spans
     length: function {t: this.view} out u64 is native
 }
