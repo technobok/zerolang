@@ -19192,6 +19192,127 @@ seedCondOne: function {
     }
 }
 
+# seedAndLayerCond -- everything one conjunct owes the conjuncts after it and
+# the clause body: the alias for what it narrowed, and the exclusion for what it
+# ruled out. Both are installed before the next conjunct renders, because `when`
+# short-circuits and a later conjunct is reached only where this one held.
+seedAndLayerCond: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    condId: u32
+    bodyId: zast.nodeid
+    names: List String
+    svids: ListVal ztypes.vid
+    vals: List String
+    tids: ListVal u64
+    prevV: List String
+    prevT: ListVal u64
+    exVids: ListVal ztypes.vid
+    exPrevV: List String
+    exPrevT: ListVal u64
+} is {
+    had: svids.length
+    (seedCondOne
+        :ast
+        :symtab
+        :ctx
+        :condId
+        :bodyId
+        :names
+        :svids
+        :vals
+        :tids
+    )
+    (installNarrowSeeds :ctx :svids :vals :tids :prevV :prevT from: had)
+    (layerCondExclusion :ast :symtab :ctx :condId :exVids :exPrevV :exPrevT)
+}
+
+# layerCondExclusion -- record that a conjunct's NEGATED arm predicate excludes
+# its arm, for everything after it: the conjuncts that follow and the clause
+# body. `remainingArm` reads ctx.exclArms, so two exclusions that leave one arm
+# collapse the subject to that arm's payload -- the rule the checker already
+# applies, and which the emitter used to apply only on the else side.
+layerCondExclusion: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    condId: u32
+    exVids: ListVal ztypes.vid
+    exPrevV: List String
+    exPrevT: ListVal u64
+} is {
+    k: ast.nodes.get i: condId.u64
+    if k.namedoperation.not then return
+    tS: List String
+    tV: ListVal ztypes.vid
+    tA: List String
+    tT: ListVal u64
+    tN: ListVal bool
+    tR: List String
+    (chainCondFact
+        :ast
+        :symtab
+        :ctx
+        n: (ast.nodes.get i: k.operation.u64)
+        subjects: tS
+        svids: tV
+        arms: tA
+        tids: tT
+        negs: tN
+        recvs: tR
+    )
+    qi: u64
+    for qi < tV.length loop {
+        if (tN.get i: qi) then {
+            fv: tV.get i: qi
+            pv0: vvGet xs: ctx.exclArms vid: fv
+            exVids.append fv
+            pvc: pv0.copy
+            exPrevV.append pvc
+            exPrevT.append ((vtGet xs: ctx.exclTids vid: fv).or d: (ztypes.tid.create from: 0))
+            fa: tA.get i: qi
+            nx: String
+            if pv0.length > 0 then {
+                nj: "\{pv0} \{fa}"
+                nx = nj
+            } else {
+                na0: fa.copy
+                nx = na0
+            }
+            vvSet xs: ctx.exclArms vid: fv val: nx.stringView
+            vtSet xs: ctx.exclTids vid: fv tid: (ztypes.tid.create from: (tT.get i: qi))
+        }
+        qi = qi + 1
+    }
+}
+
+# restoreCondExclusions -- put back what each layered vid held before the clause.
+restoreCondExclusions: function {
+    ctx: Ctx
+    exVids: (ListVal ztypes.vid).view
+    exPrevV: (List String).view
+    exPrevT: (ListVal u64).view
+} is {
+    ri: u64
+    for ri < exVids.length loop {
+        rv: exVids.get i: ri
+        pv: exPrevV.get i: ri
+        if pv.length > 0 then {
+            vvSet xs: ctx.exclArms vid: rv val: pv.stringView
+        } else {
+            vvRemove xs: ctx.exclArms vid: rv
+        }
+        pt: exPrevT.get i: ri
+        if pt > 0 then {
+            vtSet xs: ctx.exclTids vid: rv tid: (ztypes.tid.create from: pt.u64)
+        } else {
+            vtRemove xs: ctx.exclTids vid: rv
+        }
+        ri = ri + 1
+    }
+}
+
 # installNarrowSeeds -- install the aliases at index `from` and after, recording
 # what each vid held so the clause can put it back. The saved value is the one
 # in place BEFORE this clause touched it, so installing in stages still
@@ -19744,6 +19865,9 @@ emitIfClause: function {
         sT: ListVal u64
         sPrevV: List String
         sPrevT: ListVal u64
+        xVid: ListVal ztypes.vid
+        xPrevV: List String
+        xPrevT: ListVal u64
         guarded: false
         if isFirst when (whenCondSuspends :ast :ctx :n) then guarded = true
         cond: String
@@ -19777,12 +19901,8 @@ emitIfClause: function {
                 kId: zast.kidAt kids: ast.kids span: n.conditions i: cox1309
                 cox1309 = cox1309 + 1
                 appendCondText :ast :symtab :ctx :kId :cond
-                # this conjunct's alias goes in before the next one renders:
-                # `when` short-circuits, so a later conjunct runs only where
-                # this one held and must read the payload it narrowed. The
-                # checker's twin of this ordering is checkClause.
-                had: sVid.length
-                (seedCondOne
+                # the checker's twin of this ordering is checkClause
+                (seedAndLayerCond
                     :ast
                     :symtab
                     :ctx
@@ -19792,15 +19912,11 @@ emitIfClause: function {
                     svids: sVid
                     vals: sV
                     tids: sT
-                )
-                (installNarrowSeeds
-                    :ctx
-                    svids: sVid
-                    vals: sV
-                    tids: sT
                     prevV: sPrevV
                     prevT: sPrevT
-                    from: had
+                    exVids: xVid
+                    exPrevV: xPrevV
+                    exPrevT: xPrevT
                 )
             }
         }
@@ -19859,6 +19975,7 @@ emitIfClause: function {
             }
             ri = ri + 1
         }
+        (restoreCondExclusions :ctx exVids: xVid exPrevV: xPrevV exPrevT: xPrevT)
     }
 }
 
