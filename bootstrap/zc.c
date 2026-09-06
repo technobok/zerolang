@@ -91870,6 +91870,11 @@ bool z_t4183(z_t1039_t* z_v11363, z_t580_t* z_v11364, uint64_t z_v11365, uint64_
         z_v11397 = z_t3560(z_v11363, z_v11364, z_v11365, z_v11366, z_v11368, z_v11372.operation, z_v11367);
     }
     (void)(z_t5038(&z_v11363->typing, ((uint64_t)z_v11368), z_v11372.name, z_v11397));
+    if ((z_v11373 == ((bool)Z_BOOL_TAG_FALSE)) && (z_t4898(&z_v11397) == ((bool)Z_BOOL_TAG_FALSE))) {
+        if (z_t4926(&z_v11363->reg, z_v11397)) {
+            z_v11373 = ((bool)Z_BOOL_TAG_TRUE);
+        }
+    }
     (void)(z_t4339(z_v11363, z_v11364, z_v11368, z_v11369, z_v11372));
     if (z_t4924(&z_v11363->reg, z_v11397) == ((uint8_t)Z_ZTYPETYPE_TAG_FUNCTIONTYPE)) {
         (void)(z_t5048(&z_v11363->typing, &z_v11364->names, ((uint64_t)z_v11368), z_v11369));
