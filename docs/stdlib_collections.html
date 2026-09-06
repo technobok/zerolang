@@ -303,6 +303,9 @@ writes reach the stored element</li>
 element</li>
 <li><code>append</code> / <code>insert</code> -- take a reftype element
 (<code>from: T.take</code>), copy a valtype one (<code>from: t</code>)</li>
+<li><code>slice from: to:</code> -- a readonly window over the half-open
+range, the list twin of <code>String.substring</code>. See the list views
+below</li>
 </ul>
 <p><strong>Iteration.</strong></p>
 <pre><code class="language-zerolang">  with it: xs.iterate do for x: it loop print "\{x}"
@@ -318,13 +321,27 @@ matching list form (<code>ListRef.listView</code> returns a <code>ListView</code
 <code>ListVal.listView</code> returns a <code>ListViewVal</code>). The view shares
 the list's storage -- its layout is the first two fields of the
 list struct, so producing one is a cast, not a copy.</p>
+<p><strong>Sub-ranges.</strong> <code>slice from: u64 to: u64</code> is the same window
+narrowed to the half-open range <code>[from, to)</code>. It is the list twin
+of <code>String.substring</code>, down to the contract: it panics when
+<code>from &gt; to</code> or <code>to &gt; length</code>, and it allocates nothing -- the
+result is a length and a pointer advance over the same storage.
+<code>listView</code> is the offset-zero case of it.</p>
+<p>Both view templates declare <code>slice</code> too, so a window narrows
+further, and the offsets compose against the WINDOW rather than the
+source list. A slice of a slice pins nothing new: a view is
+value-passed and carries nothing that can dangle, exactly as
+<code>StringView.substring</code> does not pin where <code>String.substring</code>
+does.</p>
 <p>A view is read-only: <code>get</code> is its only element accessor.
 Writing an element in place stays on the owner (<code>getMut</code>,
 <code>set</code>, <code>iterateMut</code>), and a view cannot change the sequence
 either -- no append, insert, pop or set.</p>
-<p><strong>Pinning.</strong> <code>listView</code> takes the source <code>this.view</code>, so the
-source list is pinned SHARED for the view's lifetime. Other
-readers, further views included, stay legal; a writer is refused:</p>
+<p><strong>Pinning.</strong> <code>listView</code> and <code>slice</code> take the source
+<code>this.view</code>, so the source list is pinned SHARED for the window's
+lifetime. Other readers, further windows included, stay legal; a
+writer is refused, because <code>append</code> may reallocate and leave the
+window pointing at freed storage:</p>
 <pre><code class="language-zerolang">  nums: (ListVal t: i64)
   nums.append from: 1
   with v: nums.listView do {

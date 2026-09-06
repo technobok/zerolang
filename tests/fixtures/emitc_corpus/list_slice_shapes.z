@@ -1,0 +1,66 @@
+# `slice from: to:` across all four list templates, values printed rather than
+# merely compiled: a slice is a length and a pointer advance over storage the
+# source still owns, so an off-by-one in the pointer arithmetic compiles clean
+# and reads the wrong element. Only the printed values catch it.
+#
+# Covers: a ListVal slice (elements copy out), a ListRef slice (elements come
+# out as views), a slice of a slice (the view templates return their own mono),
+# two simultaneous slices of one list read through both, the degenerate
+# whole-list slice against `listView`, and a Bytes slice reaching a ByteView
+# parameter through the typedef.
+
+Row: class {
+    n: i64
+    tag: String
+}
+
+spanOf: function {bv: ByteView} out u64 is {
+    return bv.length
+}
+
+main: function is {
+    ns: (ListVal i64)
+    ns.append from: 10
+    ns.append from: 20
+    ns.append from: 30
+    ns.append from: 40
+    ns.append from: 50
+
+    mid: ns.slice from: 1 to: 4
+    print "val len=\{mid.length} \{mid.get i: 0},\{mid.get i: 1},\{mid.get i: 2}"
+
+    # a slice of a slice: ListViewVal.slice returns its own mono, and the
+    # offsets compose against the SLICE, not the source list
+    inner: mid.slice from: 1 to: 3
+    print "inner len=\{inner.length} \{inner.get i: 0},\{inner.get i: 1}"
+
+    # two windows over one list, both live: the source is pinned SHARED, so
+    # readers coexist
+    head: ns.slice from: 0 to: 2
+    tail: ns.slice from: 3 to: 5
+    print "head=\{head.get i: 0},\{head.get i: 1} tail=\{tail.get i: 0},\{tail.get i: 1}"
+
+    # the whole-list window is the offset-zero case `listView` is shorthand for
+    whole: ns.slice from: 0 to: ns.length
+    lv: ns.listView
+    print "whole=\{whole.length} listView=\{lv.length}"
+
+    # a reftype list: the element comes out as a T.view, not a copy
+    rows: (List Row)
+    rows.append (Row n: 1 tag: "a".string)
+    rows.append (Row n: 2 tag: "b".string)
+    rows.append (Row n: 3 tag: "c".string)
+    rs: rows.slice from: 1 to: 3
+    print "ref len=\{rs.length} \{(rs.get i: 0).n},\{(rs.get i: 0).tag} \{(rs.get i: 1).n},\{(rs.get i: 1).tag}"
+
+    # Bytes has no slice of its own -- it reaches ListVal's through the typedef,
+    # and the ListViewVal u8 it hands back is what a ByteView borrows
+    buf: Bytes
+    buf.append from: 104.u8
+    buf.append from: 105.u8
+    buf.append from: 33.u8
+    buf.append from: 10.u8
+    bs: buf.slice from: 0 to: 3
+    bv: ByteView.borrow from: bs
+    print "bytes span=\{spanOf bv: bv}"
+}

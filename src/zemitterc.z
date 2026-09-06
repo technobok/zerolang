@@ -7136,6 +7136,12 @@ emitListMethodCall: function {
         ) then return "(*\{e1m})"
         return e1m
     }
+    if mnId == zast.names.wkSlice then {
+        vf9: listArg :ast :symtab :ctx :call label: "from"
+        vt9: listArg :ast :symtab :ctx :call label: "to"
+        e1s: "\{cb}_slice(\{recvR}, \{vf9}, \{vt9})"
+        return e1s
+    }
     if mnId == zast.names.wkSet then {
         vi: listArg :ast :symtab :ctx :call label: "i"
         vv: listArg :ast :symtab :ctx :call label: "val"
@@ -24822,6 +24828,14 @@ emitListMono: function {
             :buf
         )
     } case none then null
+    (emitListSliceOnDemand
+        :symtab
+        :ctx
+        :monoId
+        nm: nm.stringView
+        kind: "List"
+        :buf
+    )
     emitListIter :ctx :symtab :monoId nm: nm.stringView :buf
 }
 
@@ -24884,6 +24898,67 @@ emitColGet: function {
         buf.append mrv
         buf.append "}\n\n"
     }
+}
+
+# emitColSlice -- the sub-range `slice` for a List / ListView mono: the window
+# [from, to) over the same storage. The result is a ListView struct built by
+# compound literal, so the whole operation is a length and a pointer advance --
+# no allocation and no cast, where `listView` casts the source struct whole.
+# `lvc` is the C base of the view it returns: another mono for a List, the mono
+# itself for a ListView. `kind` only spells the panic message. The signature is
+# written out at both the prototype and the definition rather than composed
+# once: view-guard reads these string literals to learn which declaration the
+# emitted function backs, and a name behind a local is a name it cannot see.
+emitColSlice: function {
+    nm: StringView
+    lvc: StringView
+    kind: StringView
+    buf: String.borrow
+} is {
+    s0: "static \{lvc}_t z_\{nm}_slice(const z_\{nm}_t* _this, uint64_t _from, uint64_t _to);\n"
+    buf.append s0
+    s1: "static \{lvc}_t z_\{nm}_slice(const z_\{nm}_t* _this, uint64_t _from, uint64_t _to) {\n"
+    buf.append s1
+    buf.append "    if (_from > _to || _to > _this->length) {\n"
+    buf.append "        char _zp_buf[128];\n"
+    b2: "        snprintf(_zp_buf, sizeof(_zp_buf), \"\{kind} slice: [%lu, %lu) out of bounds (length %lu)\", (unsigned long)_from, (unsigned long)_to, (unsigned long)_this->length);\n"
+    buf.append b2
+    buf.append "        z_panic(_zp_buf);\n"
+    buf.append "    }\n"
+    s3: "    return (\{lvc}_t){ .length = _to - _from, .data = _this->data + _from };\n"
+    buf.append s3
+    buf.append "}\n\n"
+}
+
+# emitListSliceOnDemand -- emitColSlice for one mono, written only when a use
+# site resolved THIS instance's `slice`. `declChildOfId` is the wrong question:
+# every instance carries every template member, so it answers yes everywhere and
+# the window becomes dead C in each program that merely NAMES a list --
+# `usedMemberDecl` is what `insert` and `extend` are gated on and is the demand
+# itself. The view it slices to comes from the member's declared return, which
+# is another mono for a List and the mono itself for a ListView, so one path
+# serves both templates.
+emitListSliceOnDemand: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    monoId: ztypes.tid
+    nm: StringView
+    kind: StringView
+    buf: String.borrow
+} is {
+    md: symtab.typing.declMemberIdOf parentTypeId: monoId nameId: zast.names.wkSlice
+    if md.isZero then return
+    if (symtab.typing.usedMemberDecl.has item: md.u64).not then return
+    co: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkSlice
+    match (
+        co
+    ) case some then {
+        rt: fnReturnTidOf :symtab tid: (ztypes.tid.create from: co.u64)
+        if rt > 0 then {
+            lvc: ctxCname :ctx tid: (ztypes.tid.create from: rt.u64)
+            emitColSlice :nm lvc: lvc.stringView :kind :buf
+        }
+    } case none then null
 }
 
 # emitListIter -- the borrowed-view iterator over a List mono (a `{List*; idx}`
@@ -25039,6 +25114,14 @@ emitListViewMono: function {
             :buf
         )
     }
+    (emitListSliceOnDemand
+        :symtab
+        :ctx
+        :monoId
+        nm: nm.stringView
+        kind: "ListView"
+        :buf
+    )
 }
 
 # listviewMethods -- the _listview cast + _extendView companions when a

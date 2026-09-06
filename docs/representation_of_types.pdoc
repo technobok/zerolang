@@ -735,6 +735,11 @@ Field order matches the first two fields of #~"List": #~"length" first,
 #~"data" second. This enables zero-cost casting from a #~"z_list_i64_t*" to a
 #~"z_listview_i64_t*" -- the memory is reinterpreted without copying.
 
+A #~"slice from: to:" reaches the same layout by arithmetic rather than by
+cast: #~"length" becomes #~"to - from" and #~"data" advances by #~"from"
+elements. The emitted C is one compound literal behind a bounds check, so a
+sub-range costs two registers and no allocation.
+
 #---: Ownership
 
 Listview is a class (reftype): single ownership, cannot be copied. It holds a
@@ -765,6 +770,8 @@ The listView holds a compile-time lock on the source list:
 #ul:
   [#*: #~"get(i: u64)" -- bounds-checked readonly access (#~"T.view" on
     #~"ListView", a copy on #~"ListViewVal")]
+  [#*: #~"slice(from: u64, to: u64)" -- a narrower window over the same
+    storage; offsets are this view's, and it pins nothing further]
   [#*: #~"length() out u64" -- number of elements in the view]
 
 #---: Zerolang Definition
@@ -774,6 +781,7 @@ The listView holds a compile-time lock on the source list:
       T: AnyRef.generic
 
       get: function {t: this.view i: u64} outx T.view is native
+      slice: function {t: this.view from: u64 to: u64} out type is native
       length: function {t: this.view} out u64 is native
   }
   """

@@ -685,7 +685,7 @@ perf: $(PERFBIN)
 # it. The number is bit-identical run to run, so it is a sound ratchet where wall
 # and cycles are not. perf-strict fails ABOVE it; a commit that raises it states
 # the reason in its message, and one that lowers the count lowers it here.
-ALLOC_BASELINE := 2246066
+ALLOC_BASELINE := 2250111
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1607,6 +1607,7 @@ VIEW_GUARD_PLACEHOLDER := z_List.c.tmpl=@@NAME@@:ListRef z_Map.c.tmpl=@@NAME@@:M
   z_IdMapMut.c.tmpl=@@NAME@@:IdMapR \
   z_IdSet.c.tmpl=@@NAME@@:IdSet,@@IDSETITER@@:IdSetIter
 VIEW_GUARD_EMITTED := get:ListRef.get,ListView.get getMut:ListRef.getMut \
+  slice:ListRef.slice,ListView.slice \
   contains:ListRef.contains \
   listView:ListRef.listView sort:ListRef.sort iterate:ListRef.iterate \
   call:ListIter.call,ListIterVal.call \
@@ -1626,9 +1627,10 @@ VIEW_GUARD_INLINE := Bytes.byteView:unemitted \
   ListVal.extend:ListRef.extend ListVal.get:ListRef.get ListVal.set:ListRef.set \
   ListVal.pop:ListRef.pop ListVal.contains:ListRef.contains \
   ListVal.getMut:ListRef.getMut \
-  ListViewVal.get:ListView.get \
+  ListViewVal.get:ListView.get ListViewVal.slice:ListView.slice \
   ListViewVal.length:inline \
   ListVal.sort:ListRef.sort ListVal.listView:ListRef.listView \
+  ListVal.slice:ListRef.slice \
   ListVal.iterate:ListRef.iterate ListVal.iterateMut:ListRef.iterateMut \
   ListVal.length:inline ListVal.capacity:inline \
   SetVal.add:SetRef.add SetVal.has:SetRef.has SetVal.delete:SetRef.delete \

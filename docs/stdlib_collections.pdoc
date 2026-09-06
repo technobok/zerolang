@@ -273,6 +273,9 @@ Whole-element replacement is #~"set".
     element]
   [#*: #~"append" / #~"insert" -- take a reftype element
     (#~"from: T.take"), copy a valtype one (#~"from: t")]
+  [#*: #~"slice from: to:" -- a readonly window over the half-open
+    range, the list twin of #~"String.substring". See the list views
+    below]
 
 #b:"Iteration."
 
@@ -296,14 +299,30 @@ matching list form (#~"ListRef.listView" returns a #~"ListView";
 the list's storage -- its layout is the first two fields of the
 list struct, so producing one is a cast, not a copy.
 
+#b:"Sub-ranges." #~"slice from: u64 to: u64" is the same window
+narrowed to the half-open range #~"[from, to)". It is the list twin
+of #~"String.substring", down to the contract: it panics when
+#~"from > to" or #~"to > length", and it allocates nothing -- the
+result is a length and a pointer advance over the same storage.
+#~"listView" is the offset-zero case of it.
+
+Both view templates declare #~"slice" too, so a window narrows
+further, and the offsets compose against the WINDOW rather than the
+source list. A slice of a slice pins nothing new: a view is
+value-passed and carries nothing that can dangle, exactly as
+#~"StringView.substring" does not pin where #~"String.substring"
+does.
+
 A view is read-only: #~"get" is its only element accessor.
 Writing an element in place stays on the owner (#~"getMut",
 #~"set", #~"iterateMut"), and a view cannot change the sequence
 either -- no append, insert, pop or set.
 
-#b:"Pinning." #~"listView" takes the source #~"this.view", so the
-source list is pinned SHARED for the view's lifetime. Other
-readers, further views included, stay legal; a writer is refused:
+#b:"Pinning." #~"listView" and #~"slice" take the source
+#~"this.view", so the source list is pinned SHARED for the window's
+lifetime. Other readers, further windows included, stay legal; a
+writer is refused, because #~"append" may reallocate and leave the
+window pointing at freed storage:
 
 #code language=zerolang: """
   nums: (ListVal t: i64)
