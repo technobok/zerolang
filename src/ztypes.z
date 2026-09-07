@@ -736,6 +736,13 @@ ZType: class {
     isBox: bool
     # whether the runtime owns the layout, so no struct is emitted for it
     isNative: bool
+    # whether it is a PARTIAL specialization: an instantiation one of whose
+    # arguments is a generic parameter rather than a concrete type, so it has
+    # an origin, arguments and a trie edge but no members, and respecialize
+    # completes it per instance. The typetype cannot say this -- GENERIC_PARAM
+    # is worn by a bare type parameter, by a partial, and by a trie interior
+    # node alike -- so the partial reading gets its own bit.
+    isPartial: bool
     # whether the runtime addresses it by index rather than by name
     runtimeIndexed: bool
     # a data block's single element type. The checker settles it from `out T`
@@ -894,6 +901,7 @@ holeType: function {} out ZType is {
         isHeapAllocated: false
         isBox: false
         isNative: false
+        isPartial: false
         runtimeIndexed: false
         dataElemTypeId: optionval.none tid
         def: declid
@@ -986,6 +994,7 @@ ZTypeRegistry: class {
             isHeapAllocated: false
             isBox: false
             isNative: false
+            isPartial: false
             runtimeIndexed: false
             dataElemTypeId: optionval.none tid
             def: declid
@@ -1225,6 +1234,14 @@ ZTypeRegistry: class {
         got.isNative = value
     }
 
+    # record that the specialization is PARTIAL -- one of its arguments is a
+    # generic parameter, so it carries no members and completes per instance
+    setPartial: function {:this typeId: tid value: bool} is {
+        if typeId >= this.typeById.length then return
+        got: this.typeById.getMut i: typeId
+        got.isPartial = value
+    }
+
     # file an instantiation under its template, keyed by its argument trie --
     # which is what makes the same arguments find the same mono instead of
     # minting a twin
@@ -1365,6 +1382,15 @@ ZTypeRegistry: class {
         if tid >= t.typeById.length then return false
         got: t.typeById.get i: tid
         return got.isNative
+    }
+
+    # isPartialOf -- the specialization is partial. Ask this rather than the
+    # typetype: GENERIC_PARAM answers yes for a bare type parameter and for a
+    # trie interior node too, and only this bit means the partial.
+    isPartialOf: function {t: this.view tid: tid} out bool is {
+        if tid >= t.typeById.length then return false
+        got: t.typeById.get i: tid
+        return got.isPartial
     }
 
     # isValtypeOf -- the type is known to be a valtype. An unset or
