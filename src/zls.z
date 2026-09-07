@@ -2220,6 +2220,209 @@ paramLeadDocs: function {
     return result
 }
 
+# ownershipSuffix -- a parameter's declared ownership as the text a signature
+# spells after its type: ".take", ".borrow", ".view" or ".hold", and "" when
+# the declaration records no ownership, which is the common case.
+ownershipSuffix: function {
+    st: zenv.ZSymbolTable.view
+    parentTypeId: ztypes.tid
+    nameId: zast.nameid
+} out StringView is {
+    oo: st.typing.declOwnershipOfId :parentTypeId :nameId
+    match (
+        oo
+    ) case some then {
+        if oo == ztypes.zparamownership.takeMode then return ".take"
+        if oo == ztypes.zparamownership.borrowMode then return ".borrow"
+        if oo == ztypes.zparamownership.viewMode then return ".view"
+        if oo == ztypes.zparamownership.holdMode then return ".hold"
+    } case none then null
+    return ""
+}
+
+# paramDisplayOf -- one parameter as a signature spells it: "name: <default>"
+# when the declaration carries a default value, "name: <type><ownership>"
+# otherwise. The single renderer behind the hover signature, the signatureHelp
+# parameter list and the argument-label completions.
+paramDisplayOf: function {
+    prog: Ast.view
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    pname: StringView
+    ptid: u64
+    pnid: u64
+} out String is {
+    owner: ztypes.tid.create from: tid.u64
+    pid: zast.nameid.create from: pnid.u32.orPanic
+    dv: st.typing.declDefaultOfId parentTypeId: owner nameId: pid
+    ptn: displayTypeNameSt :st tid: (ztypes.tid.create from: ptid)
+    ps: pname.string
+    ps.append ": "
+    if dv.none then {
+        ps.append ptn
+        ps.append (ownershipSuffix :st parentTypeId: owner nameId: pid)
+        return ps
+    }
+    dd: defaultDisplay ast: prog :st :dv typeName: ptn.stringView
+    if dd.length > 0 then {
+        ps.append dd
+        return ps
+    }
+    ps.append ptn
+    return ps
+}
+
+# returnSuffix -- the ownership a function's RESULT carries, as the text a
+# signature spells after the return type: ".view", ".borrow", or "" when the
+# result is owned.
+returnSuffix: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out StringView is {
+    rb: st.typing.funcReturnsBorrow.get key: tid
+    match (
+        rb
+    ) case some then {
+        if rb then {
+            if ((st.typing.funcReturnsView.get key: tid).or d: false) then return ".view"
+            return ".borrow"
+        }
+    } case none then null
+    return ""
+}
+
+# fnReturnClause -- a function type's return clause as a signature spells it,
+# " out T" or " outx T" with the result's own ownership suffixes after the
+# type. "" when the function returns nothing.
+fnReturnClause: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out String is {
+    rets: String
+    rr: ztypecheck.methodReturnOf :st mid: (ztypes.tid.create from: tid.u64)
+    rtid: rr.or d: ztypes.tid
+    if rtid.isZero then return rets
+    if ((st.typing.funcPins.get key: tid).or d: false) then {
+        rets.append " outx "
+    } else {
+        rets.append " out "
+    }
+    rets.append (displayTypeNameSt :st tid: rtid)
+    rets.append (returnSuffix :st :tid)
+    if ((st.typing.funcReturnsFrozen.get key: tid).or d: false) then rets.append ".hold"
+    return rets
+}
+
+# paramDocLines -- each parameter's trailing doc and its leading doc block,
+# index for index with `pnames`. Returns true when any parameter carries
+# either, which is what forces the wrapped render however short the line is.
+paramDocLines: function {
+    pnames: (List String).view
+    docs: (Map String V: String).view
+    leads: (Map String V: String).view
+    pdocs: List String
+    pleads: List String
+} out bool is {
+    hasDocs: false
+    pdi: u64
+    for pdi < pnames.length loop {
+        pdc: String
+        plc: String
+        {
+            pn0: pnames.get i: pdi
+            dgot: docs.get key: pn0
+            match (
+                dgot
+            ) case some then {
+                pdc = dgot.copy
+            } case none then null
+            lgot: leads.get key: pn0
+            match (
+                lgot
+            ) case some then {
+                plc = lgot.copy
+            } case none then null
+        }
+        if pdc.length > 0 then hasDocs = true
+        if plc.length > 0 then hasDocs = true
+        pdocs.append pdc
+        pleads.append plc
+        pdi = pdi + 1
+    }
+    return hasDocs
+}
+
+# sigOneLine -- the whole signature on one line, "name: function {p: T q: U}"
+# followed by the return clause; the parameter block is dropped when there are
+# no parameters.
+sigOneLine: function {name: StringView pdisp: (List String).view rets: StringView} out String is {
+    one: name.string
+    one.append ": function"
+    if pdisp.length > 0 then {
+        one.append " {"
+        oi: u64
+        for oi < pdisp.length loop {
+            if oi > 0 then one.append " "
+            one.append (pdisp.get i: oi)
+            oi = oi + 1
+        }
+        one.append "}"
+    }
+    one.append rets
+    return one
+}
+
+# docPrefixed -- a parameter's leading doc block as the comment lines a wrapped
+# signature spells above it: a newline and "    # " before the block, and again
+# in place of every newline inside it.
+docPrefixed: function {block: StringView} out String is {
+    r: String
+    r.appendByte b: 10
+    r.append "    # "
+    wbj: u64
+    for wbj < block.length loop {
+        wcb: block.byteAt i: wbj
+        match (
+            wcb
+        ) case some then {
+            if wcb == 10 then {
+                r.appendByte b: 10
+                r.append "    # "
+            } else {
+                r.appendByte b: wcb
+            }
+        } case none then null
+        wbj = wbj + 1
+    }
+    return r
+}
+
+# sigWrapped -- the signature laid out one parameter per line, the form `zl
+# fmt` uses past 100 columns: each parameter's leading doc block above it and
+# its trailing doc beside it.
+sigWrapped: function {
+    name: StringView
+    pdisp: (List String).view
+    pdocs: (List String).view
+    pleads: (List String).view
+    rets: StringView
+} out String is {
+    wrap: name.string
+    wrap.append ": function {"
+    wi: u64
+    for wi < pdisp.length loop {
+        wlb: pleads.get i: wi
+        if wlb.length > 0 then wrap.append (docPrefixed block: wlb.stringView)
+        wrap.appendByte b: 10
+        wrap.append "    "
+        wrap.append (pdisp.get i: wi)
+        wpdc: pdocs.get i: wi
+        if wpdc.length > 0 then {
+            wrap.append "  # "
+            wrap.append wpdc
+        }
+        wi = wi + 1
+    }
+    wrap.appendByte b: 10
+    wrap.append "}"
+    wrap.append rets
+    return wrap
+}
+
 # fnSigTextOpt -- a function type's readable signature "name: function {p:
 # T ...} out Ret", the receiver skipped; "" when the type is not a function.
 fnSigTextOpt: function {
@@ -2254,156 +2457,26 @@ fnSigTextOpt: function {
         pdisp: List String
         pi: u64
         for pi < pnames.length loop {
-            pt: ptids.get i: pi
-            dv: (o.typing.declDefaultOfId
-                parentTypeId: (ztypes.tid.create from: tid.u64)
-                nameId: (zast.nameid.create from: (pnids.get i: pi).u32.orPanic)
+            pn: pnames.get i: pi
+            pdisp.append (paramDisplayOf
+                :prog
+                st: o
+                :tid
+                pname: pn.stringView
+                ptid: (ptids.get i: pi)
+                pnid: (pnids.get i: pi)
             )
-            hasDef: dv.none.not
-            ptn: displayTypeNameSt st: o tid: (ztypes.tid.create from: pt.u64)
-            ps: (pnames.get i: pi).copy
-            ps.append ": "
-            if hasDef then {
-                dd: String
-                {
-                    dd = (defaultDisplay
-                        ast: prog
-                        st: o
-                        :dv
-                        typeName: ptn.stringView
-                    )
-                }
-                if dd.length > 0 then {
-                    ps.append dd
-                } else {
-                    ps.append ptn
-                }
-            } else {
-                ps.append ptn
-                oo: (o.typing.declOwnershipOfId
-                    parentTypeId: (ztypes.tid.create from: tid.u64)
-                    nameId: (zast.nameid.create from: (pnids.get i: pi).u32.orPanic)
-                )
-                match (
-                    oo
-                ) case some then {
-                    if oo == ztypes.zparamownership.takeMode then ps.append ".take"
-                    if oo == ztypes.zparamownership.borrowMode then ps.append ".borrow"
-                    if oo == ztypes.zparamownership.viewMode then ps.append ".view"
-                    if oo == ztypes.zparamownership.holdMode then ps.append ".hold"
-                } case none then null
-            }
-            pdisp.append ps
             pi = pi + 1
         }
-        rets: String
-        rr: ztypecheck.methodReturnOf st: o mid: (ztypes.tid.create from: tid.u64)
-        rtid: rr.or d: ztypes.tid
-        if rtid > 0 then {
-            rtn: displayTypeNameSt st: o tid: rtid
-            if ((o.typing.funcPins.get key: tid).or d: false) then {
-                rets.append " outx "
-            } else {
-                rets.append " out "
-            }
-            rets.append rtn
-            rb: o.typing.funcReturnsBorrow.get key: tid
-            match (
-                rb
-            ) case some then {
-                if rb then {
-                    if ((o.typing.funcReturnsView.get key: tid).or d: false) then {
-                        rets.append ".view"
-                    } else {
-                        rets.append ".borrow"
-                    }
-                }
-            } case none then null
-            if ((o.typing.funcReturnsFrozen.get key: tid).or d: false) then rets.append ".hold"
-        }
+        rets: fnReturnClause st: o :tid
         # one line, or param-per-line (zl fmt >100-col style) when too long.
         pdocs: List String
         pleads: List String
-        hasDocs: false
-        pdi: u64
-        for pdi < pnames.length loop {
-            pdc: String
-            plc: String
-            {
-                pn0: pnames.get i: pdi
-                dgot: docs.get key: pn0
-                match (
-                    dgot
-                ) case some then {
-                    pdc = dgot.copy
-                } case none then null
-                lgot: leads.get key: pn0
-                match (
-                    lgot
-                ) case some then {
-                    plc = lgot.copy
-                } case none then null
-            }
-            if pdc.length > 0 then hasDocs = true
-            if plc.length > 0 then hasDocs = true
-            pdocs.append pdc
-            pleads.append plc
-            pdi = pdi + 1
-        }
-        one: name.string
-        one.append ": function"
-        if pdisp.length > 0 then {
-            one.append " {"
-            oi: u64
-            for oi < pdisp.length loop {
-                if oi > 0 then one.append " "
-                one.append (pdisp.get i: oi)
-                oi = oi + 1
-            }
-            one.append "}"
-        }
-        one.append rets
+        hasDocs: paramDocLines :pnames :docs :leads :pdocs :pleads
+        one: sigOneLine :name :pdisp rets: rets.stringView
         if one.length <= 100 when hasDocs.not then return one
         if pdisp.length == 0 then return one
-        wrap: name.string
-        wrap.append ": function {"
-        wi: u64
-        for wi < pdisp.length loop {
-            wlb: pleads.get i: wi
-            if wlb.length > 0 then {
-                wlv: wlb.stringView
-                wrap.appendByte b: 10
-                wrap.append "    # "
-                wbj: u64
-                for wbj < wlv.length loop {
-                    wcb: wlv.byteAt i: wbj
-                    match (
-                        wcb
-                    ) case some then {
-                        if wcb == 10 then {
-                            wrap.appendByte b: 10
-                            wrap.append "    # "
-                        } else {
-                            wrap.appendByte b: wcb
-                        }
-                    } case none then null
-                    wbj = wbj + 1
-                }
-            }
-            wrap.appendByte b: 10
-            wrap.append "    "
-            wrap.append (pdisp.get i: wi)
-            wpdc: pdocs.get i: wi
-            if wpdc.length > 0 then {
-                wrap.append "  # "
-                wrap.append wpdc
-            }
-            wi = wi + 1
-        }
-        wrap.appendByte b: 10
-        wrap.append "}"
-        wrap.append rets
-        return wrap
+        return (sigWrapped :name :pdisp :pdocs :pleads rets: rets.stringView)
     } case none then {
         return "".string
     }
@@ -2430,46 +2503,15 @@ fnParamDisplays: function {
         }
         pi: u64
         for pi < pnames.length loop {
-            pt: ptids.get i: pi
-            dv: (o.typing.declDefaultOfId
-                parentTypeId: (ztypes.tid.create from: tid.u64)
-                nameId: (zast.nameid.create from: (pnids.get i: pi).u32.orPanic)
+            pn: pnames.get i: pi
+            result.append (paramDisplayOf
+                :prog
+                st: o
+                :tid
+                pname: pn.stringView
+                ptid: (ptids.get i: pi)
+                pnid: (pnids.get i: pi)
             )
-            hasDef: dv.none.not
-            ptn: displayTypeNameSt st: o tid: (ztypes.tid.create from: pt.u64)
-            ps: (pnames.get i: pi).copy
-            ps.append ": "
-            if hasDef then {
-                dd: String
-                {
-                    dd = (defaultDisplay
-                        ast: prog
-                        st: o
-                        :dv
-                        typeName: ptn.stringView
-                    )
-                }
-                if dd.length > 0 then {
-                    ps.append dd
-                } else {
-                    ps.append ptn
-                }
-            } else {
-                ps.append ptn
-                oo: (o.typing.declOwnershipOfId
-                    parentTypeId: (ztypes.tid.create from: tid.u64)
-                    nameId: (zast.nameid.create from: (pnids.get i: pi).u32.orPanic)
-                )
-                match (
-                    oo
-                ) case some then {
-                    if oo == ztypes.zparamownership.takeMode then ps.append ".take"
-                    if oo == ztypes.zparamownership.borrowMode then ps.append ".borrow"
-                    if oo == ztypes.zparamownership.viewMode then ps.append ".view"
-                    if oo == ztypes.zparamownership.holdMode then ps.append ".hold"
-                } case none then null
-            }
-            result.append ps
             pi = pi + 1
         }
     } case none then null
@@ -4989,18 +5031,11 @@ emitLabels: function {
             ) case some then {
                 tn: displayTypeNameSt st: o tid: (ztypes.tid.create from: (pptids.get i: ri))
                 det.append tn
-                oo: (o.typing.declOwnershipOfId
+                det.append (ownershipSuffix
+                    st: o
                     parentTypeId: (ztypes.tid.create from: funcId.u64)
                     nameId: (zast.nameid.create from: (pnids.get i: ri).u32.orPanic)
                 )
-                match (
-                    oo
-                ) case some then {
-                    if oo == ztypes.zparamownership.takeMode then det.append ".take"
-                    if oo == ztypes.zparamownership.borrowMode then det.append ".borrow"
-                    if oo == ztypes.zparamownership.viewMode then det.append ".view"
-                    if oo == ztypes.zparamownership.holdMode then det.append ".hold"
-                } case none then null
             } case none then null
             arr.items.append (completionItem label: pn.stringView kind: 5 detail: det.stringView)
         }
