@@ -1,0 +1,65 @@
+# string_key_view_param.z -- a String `.view` PARAMETER handed to a String-keyed
+# Map or Set as its key/item. The parameter arrives as `const String_t*`, so
+# stringKeyArgPointer must pass it through rather than address it again: `&p` on
+# a pointer is a `String_t**` the C compiler rejects. All five sites that reach
+# that helper are here -- Map get/has/remove and Set has/delete -- each once
+# through a `.view` parameter and once through an owned local, which still needs
+# the `&`.
+
+# mapText -- `m`'s entry for `key`, or "?" when it holds none. `key` is a view.
+mapText: function {m: (Map String V: String).view key: String.view} out String is {
+    got: m.get :key
+    match (
+        got
+    ) case some then {
+        return got.copy
+    } case none then null
+    return "?".string
+}
+
+# mapHas -- whether `m` holds an entry for the viewed `key`.
+mapHas: function {m: (Map String V: String).view key: String.view} out bool is {
+    return (m.has :key)
+}
+
+# mapDrop -- take `key` out of `m` and say whether anything was there.
+mapDrop: function {m: (Map String V: String) key: String.view} out bool is {
+    gone: m.remove :key
+    return gone.none.not
+}
+
+# setHas -- whether `s` holds the viewed `item`.
+setHas: function {s: (Set String).view item: String.view} out bool is {
+    return (s.has :item)
+}
+
+# setDrop -- remove the viewed `item` from `s`.
+setDrop: function {s: Set String item: String.view} out bool is {
+    return (s.delete :item)
+}
+
+main: function is {
+    m: (Map String V: String)
+    m.set key: "a".string value: "one".string
+    m.set key: "b".string value: "two".string
+    ka: "a".string
+    kz: "z".string
+    print "get=\{mapText :m key: ka}"
+    print "miss=\{mapText :m key: kz}"
+    print "has=\{mapHas :m key: ka} \{mapHas :m key: kz}"
+    # the owned-local leg: the key is a value here and still needs the address.
+    # The read is scoped so its shared lock on `m` dies before mapDrop below
+    {
+        own: m.get key: ka
+        match (
+            own
+        ) case some then print "own=\{own.stringView}" case none then null
+    }
+    s: Set String
+    s.add item: "x".string
+    kx: "x".string
+    print "set=\{setHas :s item: kx} \{setHas :s item: kz}"
+    print "drop=\{setDrop :s item: kx} \{setDrop :s item: kz}"
+    print "rm=\{mapDrop :m key: ka} \{mapDrop :m key: kz}"
+    print "left=\{m.length}"
+}

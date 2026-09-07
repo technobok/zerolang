@@ -7255,9 +7255,21 @@ setElemIsString: function {
 }
 
 # stringKeyArgPointer -- a String-keyed mono's view-mode key/item argument as a C
-# POINTER: `&lvalue` directly, else a hoisted temp (owned by the statement,
-# freed at its flush -- a probe never retains its key).
-stringKeyArgPointer: function {ctx: Ctx expr: StringView} out String is {
+# POINTER: the expression itself when it already is one, else `&lvalue`, else a
+# hoisted temp (owned by the statement, freed at its flush -- a probe never
+# retains its key).
+stringKeyArgPointer: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    label: StringView
+    expr: StringView
+} out String is {
+    # a String `.view`/`.borrow` PARAMETER, or a borrowed field, arrives as a
+    # pointer already; addressing it again hands the runtime a `String_t**`,
+    # which the C compiler rejects
+    if (argIsPointerByLabel :ast :symtab :ctx :call :label) then return expr.string
     if (isNonLvalueArg s: expr) then {
         hnK: ctx.argHoistCtr
         ctx.argHoistCtr = ctx.argHoistCtr + 1
@@ -7335,7 +7347,14 @@ emitSetMethodCall: function {
         if viv.length > 0 then return "\{cb}_hasv(\{bn}, \{viv})"
         v: colArg :ast :symtab :ctx :call label: "item" consumes: false
         if (setElemIsString :symtab :ctx monoId: bt) then {
-            return "\{cb}_has(\{bn}, \{stringKeyArgPointer :ctx expr: v.stringView})"
+            return "\{cb}_has(\{bn}, \{(stringKeyArgPointer
+                :ast
+                :symtab
+                :ctx
+                :call
+                label: "item"
+                expr: v.stringView
+            )})"
         }
         e1: "\{cb}_has(\{bn}, \{v})"
         return e1
@@ -7345,7 +7364,14 @@ emitSetMethodCall: function {
         if viv.length > 0 then return "\{cb}_deletev(\{bn}, \{viv})"
         v: colArg :ast :symtab :ctx :call label: "item" consumes: false
         if (setElemIsString :symtab :ctx monoId: bt) then {
-            return "\{cb}_delete(\{bn}, \{stringKeyArgPointer :ctx expr: v.stringView})"
+            return "\{cb}_delete(\{bn}, \{(stringKeyArgPointer
+                :ast
+                :symtab
+                :ctx
+                :call
+                label: "item"
+                expr: v.stringView
+            )})"
         }
         e2: "\{cb}_delete(\{bn}, \{v})"
         return e2
@@ -7377,7 +7403,14 @@ emitMapMethodCall: function {
         if vkv.length > 0 then return "\{cb}_getv(\{bn}, \{vkv})"
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
         if (mapKeyIsString :symtab :ctx monoId: bt) then {
-            return "\{cb}_get(\{bn}, \{stringKeyArgPointer :ctx expr: vk.stringView})"
+            return "\{cb}_get(\{bn}, \{(stringKeyArgPointer
+                :ast
+                :symtab
+                :ctx
+                :call
+                label: "key"
+                expr: vk.stringView
+            )})"
         }
         e1: "\{cb}_get(\{bn}, \{vk})"
         return e1
@@ -7387,7 +7420,14 @@ emitMapMethodCall: function {
         if vkv.length > 0 then return "\{cb}_hasv(\{bn}, \{vkv})"
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
         if (mapKeyIsString :symtab :ctx monoId: bt) then {
-            return "\{cb}_has(\{bn}, \{stringKeyArgPointer :ctx expr: vk.stringView})"
+            return "\{cb}_has(\{bn}, \{(stringKeyArgPointer
+                :ast
+                :symtab
+                :ctx
+                :call
+                label: "key"
+                expr: vk.stringView
+            )})"
         }
         e2: "\{cb}_has(\{bn}, \{vk})"
         return e2
@@ -7395,7 +7435,14 @@ emitMapMethodCall: function {
     if mnId == zast.names.wkRemove then {
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
         if (mapKeyIsString :symtab :ctx monoId: bt) then {
-            return "\{cb}_remove(\{bn}, \{stringKeyArgPointer :ctx expr: vk.stringView})"
+            return "\{cb}_remove(\{bn}, \{(stringKeyArgPointer
+                :ast
+                :symtab
+                :ctx
+                :call
+                label: "key"
+                expr: vk.stringView
+            )})"
         }
         e: "\{cb}_remove(\{bn}, \{vk})"
         return e
