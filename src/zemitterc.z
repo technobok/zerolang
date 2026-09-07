@@ -24713,6 +24713,22 @@ emitBoxMono: function {
     buf.append "}\n\n"
 }
 
+# monoMemberUsed -- whether a USE SITE resolved this member on this mono. The
+# question a per-mono emission must ask, and not the same as declChildOfId:
+# every instance carries every template member, so that one answers yes
+# everywhere and gates nothing. emitListMethodOnDemand has always asked this;
+# the members written inline beside it asked the other, and so were emitted into
+# every program that instantiated the container at all.
+monoMemberUsed: function {
+    symtab: zenv.ZSymbolTable.view
+    monoId: ztypes.tid
+    nameId: zast.nameid
+} out bool is {
+    md9: symtab.typing.declMemberIdOf parentTypeId: monoId :nameId
+    if md9.isZero then return false
+    return (symtab.typing.usedMemberDecl.has item: md9.u64)
+}
+
 # emitListMethodOnDemand -- write one List template method, but only when the
 # program actually calls it on THIS instance. `usedMemberDecl` holds the member
 # declarations a use site resolved; the INSTANCE's own member is the question,
@@ -24818,22 +24834,22 @@ emitListMono: function {
         ect: ect.stringView
         :buf
     )
-    if ctx.colGetFromCode then {
-        gmo: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkGetMut
+    if ctx.colGetFromCode when (monoMemberUsed
+        :symtab
+        :monoId
+        nameId: zast.names.wkGet
+    ) then {
         (emitColGet
             nm: nm.stringView
             ect: ect.stringView
             kind: "List"
             ptr: (elemBorrowsByPtr :ast :symtab :ctx tid: (ztypes.tid.create from: eid.u64))
             mutPtr: (elemRefByPtr :ast :symtab :ctx tid: (ztypes.tid.create from: eid.u64))
-            hasMut: gmo.some
+            hasMut: (monoMemberUsed :symtab :monoId nameId: zast.names.wkGetMut)
             :buf
         )
     }
-    co: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkContains
-    match (
-        co
-    ) case some then {
+    if (monoMemberUsed :symtab :monoId nameId: zast.names.wkContains) then {
         c0: "static bool z_\{nm}_contains(const z_\{nm}_t* _this, \{ect} _needle);\n"
         buf.append c0
         c1: "static bool z_\{nm}_contains(const z_\{nm}_t* _this, \{ect} _needle) {\n"
@@ -24853,11 +24869,8 @@ emitListMono: function {
         buf.append "    }\n"
         buf.append "    return false;\n"
         buf.append "}\n\n"
-    } case none then null
-    so: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkSort
-    match (
-        so
-    ) case some then {
+    }
+    if (monoMemberUsed :symtab :monoId nameId: zast.names.wkSort) then {
         (emitListSort
             nm: nm.stringView
             ect: ect.stringView
@@ -24868,7 +24881,7 @@ emitListMono: function {
             svC: ctx.svC.stringView
             :buf
         )
-    } case none then null
+    }
     (emitListSliceOnDemand
         :symtab
         :ctx
@@ -25086,23 +25099,22 @@ emitListIter: function {
     # the element inherits the strength of the lock its holder has on the
     # container.
     s8: "static z_\{li}_t z_\{nm}_iterate(const z_\{nm}_t* _this);\n"
-    buf.append s8
-    s: "static z_\{li}_t z_\{nm}_iterate(const z_\{nm}_t* _this) {\n    z_\{li}_t _it = {0};\n    _it.data = _this->data;\n    _it.length = _this->length;\n    _it.idx = 0;\n    return _it;\n}\n\n"
-    buf.append s
+    if (monoMemberUsed :symtab :monoId nameId: zast.names.wkIterate) then {
+        buf.append s8
+        s: "static z_\{li}_t z_\{nm}_iterate(const z_\{nm}_t* _this) {\n    z_\{li}_t _it = {0};\n    _it.data = _this->data;\n    _it.length = _this->length;\n    _it.idx = 0;\n    return _it;\n}\n\n"
+        buf.append s
+    }
     # iterateMut -- the mutable walk, for a mono that declares one. The same
     # cursor over the same storage; the two differ only in what the typechecker
     # lets the caller do with the elements, so the C bodies are identical. A
     # view declares none: it is readonly, and an ungated one would be a
     # writable walk over storage the view may not write.
-    imo: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkIterateMut
-    match (
-        imo
-    ) case some then {
+    if (monoMemberUsed :symtab :monoId nameId: zast.names.wkIterateMut) then {
         s10: "static z_\{li}_t z_\{nm}_iterateMut(z_\{nm}_t* _this);\n"
         buf.append s10
         s11: "static z_\{li}_t z_\{nm}_iterateMut(z_\{nm}_t* _this) {\n    z_\{li}_t _it = {0};\n    _it.data = _this->data;\n    _it.length = _this->length;\n    _it.idx = 0;\n    return _it;\n}\n\n"
         buf.append s11
-    } case none then null
+    }
 }
 
 # emitListSort -- stable in-place mergesort companion (scalar `<`).
@@ -25188,15 +25200,18 @@ emitListViewMono: function {
         buf.append t2
         buf.append "\n"
     }
-    if ctx.colGetFromCode then {
-        gmo: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkGetMut
+    if ctx.colGetFromCode when (monoMemberUsed
+        :symtab
+        :monoId
+        nameId: zast.names.wkGet
+    ) then {
         (emitColGet
             nm: nm.stringView
             ect: ect.stringView
             kind: "ListView"
             ptr: (elemBorrowsByPtr :ast :symtab :ctx tid: (ztypes.tid.create from: eid.u64))
             mutPtr: (elemRefByPtr :ast :symtab :ctx tid: (ztypes.tid.create from: eid.u64))
-            hasMut: gmo.some
+            hasMut: (monoMemberUsed :symtab :monoId nameId: zast.names.wkGetMut)
             :buf
         )
     }
@@ -25233,19 +25248,11 @@ listviewMethods: function {
             {
                 lvc: ctxCname :ctx tid: (ztypes.tid.create from: rt.u64)
                 buf: String
-                m0: "static \{lvc}_t z_\{nm}_listView(const z_\{nm}_t* _this) { return *(\{lvc}_t*)_this; }\n"
-                buf.append m0
-                evWanted: false
-                {
-                    emd: (symtab.typing.declMemberIdOf
-                        parentTypeId: monoId
-                        nameId: zast.names.wkExtendView
-                    )
-                    if emd.isZero.not when (symtab.typing.usedMemberDecl.has
-                        item: emd.u64
-                    ) then evWanted = true
+                if (monoMemberUsed :symtab :monoId nameId: zast.names.wkListView) then {
+                    m0: "static \{lvc}_t z_\{nm}_listView(const z_\{nm}_t* _this) { return *(\{lvc}_t*)_this; }\n"
+                    buf.append m0
                 }
-                if evWanted then {
+                if (monoMemberUsed :symtab :monoId nameId: zast.names.wkExtendView) then {
                     m1: "static void z_\{nm}_extendView(z_\{nm}_t* _this, \{lvc}_t _from) {\n"
                     buf.append m1
                     # an empty window carries a null data pointer, and memcpy is
