@@ -3825,249 +3825,137 @@ Analysis: class {
         } case none then null
     }
 
+    # warnUnusedParam -- L014: a parameter no read reaches.
+    warnUnusedParam: function {:this prog: Ast.view site: zast.namedsite} is {
+        pnm: zast.poolTextAt pool: prog.names ref: site.name
+        (this.warn
+            code: "L014"
+            msg: "parameter '\{pnm}' is never used (touch it with a bare `\{pnm}` statement if intentional)"
+            line: site.line
+            col: site.col
+            width: pnm.length.u32.orPanic
+        )
+    }
+
+    # reportParamAt -- one parameter. The receiver is exempt from the use test
+    # and takes L027 instead, since what is judged of it is mutation rather than
+    # use; every other parameter takes L020 when it is read but never written
+    # and L014 when no read reaches it at all.
+    reportParamAt: function {
+        :this
+        prog: Ast.view
+        st: zenv.ZSymbolTable
+        used: (IdSet u64).view
+        fop: u32
+        site: zast.namedsite
+    } is {
+        if site.operation.isZero then return
+        pOpId: site.operation.u32
+        # the receiver is exempt: `:this` names it directly (zast.names.wkThis);
+        # a spelled `b: this.borrow` is receiver-shaped
+        isRecv: site.name == zast.names.wkThis
+        if isRecv.not then isRecv = (ztypecheck.paramIsThisReceiverId ast: prog opId: pOpId)
+        if isRecv then {
+            (this.reportUnmutatedReceiver
+                ast: prog
+                :st
+                opId: pOpId
+                line: site.line
+                col: site.col
+            )
+            return
+        }
+        vo: st.typing.defVariableId.get key: pOpId.u64
+        match (
+            vo
+        ) case some then {
+            umut: st.typing.variableMutated.has item: vo
+            if (used.has item: vo) when umut.not then {
+                (this.reportUnmutatedParam
+                    ast: prog
+                    :st
+                    fnOp: fop
+                    vid: vo
+                    nameRef: site.name
+                    line: site.line
+                    col: site.col
+                )
+            }
+            if (used.has item: vo).not then this.warnUnusedParam :prog :site
+        } case none then null
+    }
+
+    # reportParamsOf -- every parameter of one function definition.
+    reportParamsOf: function {
+        :this
+        prog: Ast.view
+        st: zenv.ZSymbolTable
+        used: (IdSet u64).view
+        fop: u32
+    } is {
+        paramIds: fnParamIds :prog :fop
+        with pit: paramIds.iterate do for pid: pit loop {
+            this.reportParamAt :prog :st :used :fop site: (zast.namedSiteAt ast: prog nid: pid)
+        }
+    }
+
+    # reportUnusedLocalAt -- L013: a local binding no read reaches. Only a
+    # binding in the unit's OWN file is judged, which is what mainFsno says.
+    # This takes no symbol table on purpose: it runs with defVariableId pinned
+    # by its own walk, and lending the table under that pin is the shape
+    # usedDeclSet was rewritten to avoid.
+    reportUnusedLocalAt: function {
+        :this
+        prog: Ast.view
+        used: (IdSet u64).view
+        mainFsno: zvfs.fsno
+        nid: u64
+        vid: u64
+    } is {
+        if (used.has item: vid) then return
+        if (prog.fsnoForNode nodeid: nid.u32.orPanic) != mainFsno then return
+        nm: String
+        ln: u32
+        cl: u32
+        okL: false
+        {
+            nodeL: prog.nodes.get i: nid
+            match (
+                nodeL
+            ) case assignment then {
+                nm = zast.poolTextCopy pool: prog.names ref: nodeL.name
+                ln = nodeL.lineno
+                cl = nodeL.colno
+                okL = true
+            } else null
+        }
+        if okL.not then return
+        (this.warn
+            code: "L013"
+            msg: "local '\{nm}' is never used (touch it with a bare `\{nm}` statement if intentional)"
+            line: ln
+            col: cl
+            width: nm.length.u32.orPanic
+        )
+    }
+
     # reportUnusedVars -- L014 (unused parameter) + L013 (unused local). A binding whose
     # variableId never appears as a use (atomVariableId) is dead. Params are walked from the
     # main unit's function defs (precise name/position; the receiver is exempt). Locals are the
     # assignment bindings in this file. The opt-out is to `touch` the variable: write its name on
     # its own line (it lowers to `(void)(x);`), which stamps a use.
     reportUnusedVars: function {:this prog: Ast.view uname: StringView st: zenv.ZSymbolTable} is {
-        {
-            # A reassignment's target atom carries an atomVariableId stamp
-            # exactly as a read does, so counting every stamp as a use makes a
-            # local that is only ever assigned look used. Collect the bare-atom
-            # write targets and leave them out. Only a BARE atom: reaching
-            # `a.b` to write it genuinely reads `a`, so a dotted target
-            # excludes nothing.
-            wtgt: IdSet u64
-            ni: u64
-            nn: prog.nodes.length
-            for ni < nn loop {
-                tp: u64
-                {
-                    wn: prog.nodes.get i: ni
-                    match wn case reassignment then tp = wn.topath.u64 else null
-                }
-                if tp > 0 then {
-                    tn: prog.nodes.get i: tp
-                    match tn case atomid then wtgt.add item: tp else null
-                }
-                ni = ni + 1
-            }
-            used: IdSet u64
-            with uit: st.typing.atomVariableId.iterateItems do for av: uit loop {
-                if (wtgt.has item: av.key).not then used.add item: av.value
-            }
-            mainOp: unitBodyOpOf :prog :uname
-            if mainOp > 0 then {
-                fnOps: ListVal u32
-                memIds: ListVal u32
-                {
-                    bodyIds: zast.unitBodyIdsAt ast: prog unitId: mainOp
-                    vx399: u64
-                    for vx399 < bodyIds.count.u64 loop {
-                        mid: zast.kidAt kids: prog.kids span: bodyIds i: vx399
-                        vx399 = vx399 + 1
-                        memIds.append from: mid
-                    }
-                }
-                mN: memIds.length
-                mI: u64
-                for mI < mN loop {
-                    mid: memIds.get i: mI
-                    mI = mI + 1
-                    mop: u32
-                    {
-                        m: prog.nodes.get i: mid.u64
-                        if m.namedoperation then mop = m.operation
-                    }
-                    if mop > 0 then {
-                        isFn: false
-                        isObj: false
-                        {
-                            op: prog.nodes.get i: mop.u64
-                            if op.functiondef then isFn = true
-                            if op.objectdef then isObj = true
-                        }
-                        # synth-lowered defs sit outside every file segment
-                        # (fsno 0): they are not user source, so their params
-                        # are exempt
-                        if isFn when (prog.fsnoForNode nodeid: mop) > 0 then fnOps.append from: mop
-                        if isObj then {
-                            asIds: ListVal u32
-                            {
-                                op9b: prog.nodes.get i: mop.u64
-                                match (
-                                    op9b
-                                ) case objectdef then {
-                                    asx1759: u64
-                                    for asx1759 < op9b.asItems.count.u64 loop {
-                                        aid: (zast.kidAt
-                                            kids: prog.kids
-                                            span: op9b.asItems
-                                            i: asx1759
-                                        )
-                                        asx1759 = asx1759 + 1
-                                        asIds.append from: aid
-                                    }
-                                } else null
-                            }
-                            aN: asIds.length
-                            aI: u64
-                            for aI < aN loop {
-                                amid: asIds.get i: aI
-                                aI = aI + 1
-                                amop: u32
-                                {
-                                    am: prog.nodes.get i: amid.u64
-                                    if am.namedoperation then amop = am.operation
-                                }
-                                if amop > 0 then {
-                                    isFnA: false
-                                    {
-                                        aop: prog.nodes.get i: amop.u64
-                                        if aop.functiondef then isFnA = true
-                                    }
-                                    if isFnA when (
-                                        (prog.fsnoForNode nodeid: amop) > 0
-                                    ) then fnOps.append from: amop
-                                }
-                            }
-                        }
-                    }
-                }
-                fN: fnOps.length
-                fI: u64
-                for fI < fN loop {
-                    fop: fnOps.get i: fI
-                    fI = fI + 1
-                    paramIds: ListVal u32
-                    {
-                        fd: prog.nodes.get i: fop.u64
-                        match (
-                            fd
-                        ) case functiondef then {
-                            pax1549: u64
-                            for pax1549 < fd.parameters.count.u64 loop {
-                                pid: zast.kidAt kids: prog.kids span: fd.parameters i: pax1549
-                                pax1549 = pax1549 + 1
-                                paramIds.append from: pid
-                            }
-                        } else null
-                    }
-                    pN: paramIds.length
-                    pI: u64
-                    for pI < pN loop {
-                        pid: paramIds.get i: pI
-                        pI = pI + 1
-                        pOpId: u32
-                        pNameRef: zast.nameid
-                        pLn: u32
-                        pCl: u32
-                        {
-                            pm: prog.nodes.get i: pid.u64
-                            match (
-                                pm
-                            ) case namedoperation then {
-                                pOpId = pm.operation
-                                pNameRef = pm.name
-                                pLn = pm.lineno
-                                pCl = pm.colno
-                            } else null
-                        }
-                        if pOpId > 0 then {
-                            # the receiver is exempt: `:this` names it directly
-                            # (zast.names.wkThis); a spelled `b: this.borrow` is receiver-shaped
-                            isRecv: false
-                            if pNameRef == zast.names.wkThis then isRecv = true
-                            if isRecv.not then {
-                                isRecv = (ztypecheck.paramIsThisReceiverId
-                                    ast: prog
-                                    opId: pOpId
-                                )
-                            }
-                            if isRecv then {
-                                (this.reportUnmutatedReceiver
-                                    ast: prog
-                                    :st
-                                    opId: pOpId
-                                    line: pLn
-                                    col: pCl
-                                )
-                            }
-                            if isRecv.not then {
-                                vo: st.typing.defVariableId.get key: pOpId.u64
-                                match (
-                                    vo
-                                ) case some then {
-                                    umut: st.typing.variableMutated.has item: vo
-                                    if (used.has item: vo) when umut.not then {
-                                        (this.reportUnmutatedParam
-                                            ast: prog
-                                            :st
-                                            fnOp: fop
-                                            vid: vo
-                                            nameRef: pNameRef
-                                            line: pLn
-                                            col: pCl
-                                        )
-                                    }
-                                    if (used.has item: vo).not then {
-                                        pnm: (zast.poolTextAt
-                                            pool: prog.names
-                                            ref: (zast.nameid.create from: pNameRef.u32)
-                                        )
-                                        (this.warn
-                                            code: "L014"
-                                            msg: "parameter '\{pnm}' is never used (touch it with a bare `\{pnm}` statement if intentional)"
-                                            line: pLn
-                                            col: pCl
-                                            width: pnm.length.u32.orPanic
-                                        )
-                                    }
-                                } case none then null
-                            }
-                        }
-                    }
-                }
-                if fnOps.length > 0 then {
-                    mainFsno: prog.fsnoForNode nodeid: (fnOps.get i: 0)
-                    with dit: st.typing.defVariableId.iterateItems do for dv: dit loop {
-                        nid: dv.key
-                        vid: dv.value
-                        skip: false
-                        if skip.not when (used.has item: vid) then skip = true
-                        if skip.not then {
-                            fs: prog.fsnoForNode nodeid: nid.u32.orPanic
-                            if fs == mainFsno then {
-                                nm: String
-                                ln: u32
-                                cl: u32
-                                okL: false
-                                {
-                                    nodeL: prog.nodes.get i: nid.u64
-                                    match (
-                                        nodeL
-                                    ) case assignment then {
-                                        nm = zast.poolTextCopy pool: prog.names ref: nodeL.name
-                                        ln = nodeL.lineno
-                                        cl = nodeL.colno
-                                        okL = true
-                                    } else null
-                                }
-                                if okL then {
-                                    (this.warn
-                                        code: "L013"
-                                        msg: "local '\{nm}' is never used (touch it with a bare `\{nm}` statement if intentional)"
-                                        line: ln
-                                        col: cl
-                                        width: nm.length.u32.orPanic
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        used: usedVarSet :st wtgt: (writeTargetAtoms :prog)
+        mainOp: unitBodyOpOf :prog :uname
+        if mainOp.isZero then return
+        fnOps: collectFnOps :prog :mainOp
+        with fit: fnOps.iterate do for fop: fit loop {
+            this.reportParamsOf :prog :st :used :fop
+        }
+        if fnOps.length == 0 then return
+        mainFsno: prog.fsnoForNode nodeid: (fnOps.get i: 0)
+        with dit: st.typing.defVariableId.iterateItems do for dv: dit loop {
+            this.reportUnusedLocalAt :prog :used :mainFsno nid: dv.key vid: dv.value
         }
     }
 
@@ -4407,6 +4295,107 @@ Analysis: class {
             }
         }
     }
+}
+
+# ---- L013 / L014 unused-variable helpers ----
+
+# writeTargetAtoms -- every BARE atom node that is a reassignment target. A
+# reassignment's target atom carries an atomVariableId stamp exactly as a read
+# does, so counting every stamp as a use makes a local that is only ever
+# assigned look used; these are the ones to leave out. Only a BARE atom:
+# reaching `a.b` to write it genuinely reads `a`, so a dotted target excludes
+# nothing.
+writeTargetAtoms: function {prog: Ast.view} out IdSet u64 is {
+    wtgt: IdSet u64
+    ni: u64
+    nn: prog.nodes.length
+    for ni < nn loop {
+        tp: u64
+        {
+            wn: prog.nodes.get i: ni
+            match wn case reassignment then tp = wn.topath.u64 else null
+        }
+        if tp > 0 then {
+            tn: prog.nodes.get i: tp
+            match tn case atomid then wtgt.add item: tp else null
+        }
+        ni = ni + 1
+    }
+    return wtgt
+}
+
+# usedVarSet -- every variable a READ reaches: the atom stamps, less the ones
+# sitting on a reassignment target
+usedVarSet: function {st: zenv.ZSymbolTable.view wtgt: (IdSet u64).view} out IdSet u64 is {
+    used: IdSet u64
+    with uit: st.typing.atomVariableId.iterateItems do for av: uit loop {
+        if (wtgt.has item: av.key).not then used.add item: av.value
+    }
+    return used
+}
+
+# appendUserFnOp -- append `opId` when it defines a function written in a real
+# file. Synth-lowered defs sit outside every file segment (fsno 0): they are not
+# user source, so their parameters are exempt
+appendUserFnOp: function {prog: Ast.view opId: u32 fnOps: ListVal u32} is {
+    isFn: false
+    {
+        n: prog.nodes.get i: opId.u64
+        if n.functiondef then isFn = true
+    }
+    if isFn.not then return
+    if (prog.fsnoForNode nodeid: opId) > 0 then fnOps.append from: opId
+}
+
+# appendFnOpsOf -- the function definitions one unit member contributes: itself
+# when it defines a function, and the methods of its `as` block when it defines
+# a type
+appendFnOpsOf: function {prog: Ast.view opId: u32 fnOps: ListVal u32} is {
+    appendUserFnOp :prog :opId :fnOps
+    # only the `as` half of a type carries methods; its `is` half declares
+    # fields and arms, which have no parameters to judge
+    asIds: ListVal u32
+    {
+        op: prog.nodes.get i: opId.u64
+        match op case objectdef then asIds = (zast.kidIds ast: prog span: op.asItems) else null
+    }
+    with ait: asIds.iterate do for amid: ait loop {
+        asite: zast.namedSiteAt ast: prog nid: amid
+        if asite.operation.isZero.not then (appendUserFnOp
+            :prog
+            opId: asite.operation.u32
+            :fnOps
+        )
+    }
+}
+
+# collectFnOps -- every function definition the unit declares, in declaration
+# order: its own members first, then the methods of each type it declares. The
+# ORDER is load-bearing -- L013 anchors its file segment on the first entry
+collectFnOps: function {prog: Ast.view mainOp: zast.nodeid} out ListVal u32 is {
+    fnOps: ListVal u32
+    memIds: unitMemberIds :prog unitOp: mainOp
+    with mit: memIds.iterate do for mid: mit loop {
+        msite: zast.namedSiteAt ast: prog nid: mid
+        if msite.operation.isZero.not then (appendFnOpsOf
+            :prog
+            opId: msite.operation.u32
+            :fnOps
+        )
+    }
+    return fnOps
+}
+
+# fnParamIds -- a function definition's parameter nodes, in order
+fnParamIds: function {prog: Ast.view fop: u32} out ListVal u32 is {
+    ids: ListVal u32
+    fd: prog.nodes.get i: fop.u64
+    match (
+        fd
+    ) case functiondef then {
+        ids = zast.kidIds ast: prog span: fd.parameters
+    } else null
+    return ids
 }
 
 # ---- L012 unused-definition helpers ----
