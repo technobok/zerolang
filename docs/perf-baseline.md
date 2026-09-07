@@ -2590,3 +2590,28 @@ per node. `zast.kidSlice` was not written: `kidIds` has three call sites, one
 concatenating two spans and one a linter helper called once per run, so a window
 would serve one cold caller while pinning the tree. None of the three would have
 moved the metric.
+
+## 2026-09-07 -- END TO END, `ff23e204` -> `fa50596f` (both arcs together)
+
+The two rows above measure adjacent segments over DIFFERENT source trees, so
+they do not compose by addition. This is the single measurement across both,
+each compiler run over the `ff23e204` tree.
+
+| | ff23e204 | fa50596f | delta |
+|---|---|---|---|
+| instructions | 5,417.5M -- 5,417.9M | 5,420.5M -- 5,422.6M | **+0.07%** |
+| allocs | 2,253,181 | 2,255,287 | **+0.09%** |
+| bytes churned | 301,742,738 | 301,672,030 | **-0.02%** |
+| cycles | 2,357.4M -- 2,362.6M | 2,354.4M -- 2,371.4M | flat (bands overlap) |
+| wall (best of 5) | 0.46 -- 0.48s | 0.46 -- 0.48s | flat |
+
+**The whole cost is the generic-parameter mechanism, and the slice phases gave
+part of it back.** At `c2d6511d` this tree measured 2,255,515 allocations;
+at `fa50596f` it measures 2,255,287, so Phases 4 and 5 returned 228 of the
+2,334 the type work cost. Bytes end BELOW where they started.
+
+**`ALLOC_BASELINE` moved 2,252,948 -> 2,260,698 (+7,750) across the same span,
+and only +2,106 of that is the compiler.** The rest is the self-compile having
+more of its own source to compile. Read the ratchet as a ratchet, not as a
+measurement: it is the right instrument for catching an unexplained rise, and
+the wrong one for asking what a change cost.
