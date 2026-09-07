@@ -13,6 +13,53 @@ public: unit {
 
 astnode: zast.astnode
 
+# errorFsno -- the file an error belongs to: its own stamp when it carries one,
+# else the file of the node it names, else the main unit's. A typecheck error
+# stamps fsno 0, which is why there are three answers and not one.
+errorFsno: function {
+    e: zast.ErrorData.view
+    ast: zast.Ast.view
+    fallbackFsno: zvfs.fsno
+} out zvfs.fsno is {
+    if e.fsno.u64 > 0 then return e.fsno
+    if e.nodeid > 0 then {
+        sf: ast.fsnoForNode nodeid: e.nodeid
+        if sf.u64 > 0 then return sf
+    }
+    return fallbackFsno
+}
+
+# errorSnippet -- the source line the error sits on behind a line-number
+# gutter, and under it a caret run the width of the span it names. "" when the
+# file holds no such line.
+errorSnippet: function {e: zast.ErrorData.view vfs: zvfs.ZVfs fno: zvfs.fsno} out String is {
+    buf: String
+    lnOpt: vfs.getline dentryid: fno lineno: (e.lineno - 1).u64
+    match (
+        lnOpt
+    ) case some then {
+        src: lnOpt
+        gut: zdiag.rpad4 n: e.lineno
+        eg: zdiag.spacesOf n: 4
+        co: e.colno
+        if co > 0 then co = co - 1
+        sp: zdiag.spacesOf n: co.u64
+        buf.append "\n"
+        buf.append gut
+        buf.append " | "
+        buf.append src
+        buf.append "\n"
+        buf.append eg
+        buf.append " | "
+        buf.append sp
+        cw: e.width
+        if cw < 1 then cw = 1
+        car: zdiag.caretsOf n: cw.u64
+        buf.append car
+    } case none then null
+    return buf
+}
+
 # errorMessage -- rustc-style render: code+message, location, source snippet +
 # caret, then note/hint. fallbackFsno (the main unit's file) covers errors that
 # carry no file id of their own (typecheck errors stamp fsno 0).
@@ -23,40 +70,13 @@ errorMessage: function {
     fallbackFsno: zvfs.fsno
 } out String is {
     buf: zast.errorLine :e
-    fno: e.fsno
-    if fno.u64 == 0 when e.nodeid > 0 then {
-        sf: ast.fsnoForNode nodeid: e.nodeid
-        if sf.u64 > 0 then fno = sf
-    }
-    if fno.u64 == 0 then fno = fallbackFsno
+    fno: errorFsno :e :ast :fallbackFsno
     if fno.u64 > 0 when e.lineno > 0 then {
         path: vfs.pathfromprovider dentryid: fno
         loc: " --> \{path}:\{e.lineno}:\{e.colno}"
         buf.append "\n"
         buf.append loc
-        lnOpt: vfs.getline dentryid: fno lineno: (e.lineno - 1).u64
-        match (
-            lnOpt
-        ) case some then {
-            src: lnOpt
-            gut: zdiag.rpad4 n: e.lineno
-            eg: zdiag.spacesOf n: 4
-            co: e.colno
-            if co > 0 then co = co - 1
-            sp: zdiag.spacesOf n: co.u64
-            buf.append "\n"
-            buf.append gut
-            buf.append " | "
-            buf.append src
-            buf.append "\n"
-            buf.append eg
-            buf.append " | "
-            buf.append sp
-            cw: e.width
-            if cw < 1 then cw = 1
-            car: zdiag.caretsOf n: cw.u64
-            buf.append car
-        } case none then null
+        buf.append (errorSnippet :e :vfs :fno)
     }
     if e.note.length > 0 then {
         ntl: "\n     = note: \{e.note}"
