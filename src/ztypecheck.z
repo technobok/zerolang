@@ -3529,6 +3529,12 @@ returnParamTid: function {
 # (resolveMonoRefParts with the template's enclKey). Returns the spec only
 # when it is PARTIAL (an argument named a generic param); a fully-concrete
 # composite stays 0, preserving the caller's eager-path behavior.
+# `stampNid` is the OUTERMOST typeref node and stays fixed while `nid` descends
+# through wrappers and markers -- the same split recordTyperef makes. It has to
+# be carried: a generator's synthesised wrapper return collapses `Option` to
+# `optionval` over a valtype element, and that collapse is keyed on this very
+# node. Resolving without it re-mints `Option i64`, which its own AnyRef
+# constraint then refuses.
 partialTyperefTid: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -3536,13 +3542,22 @@ partialTyperefTid: function {
     frame: ztypes.declid
     enclDecl: ztypes.declid
     nid: zast.nodeid
+    stampNid: u32
 } out u64 is {
     arm: rowArmAt :ast :nid
     match (
         arm
     ) case expression then {
         wrap: exprRefAt :ast :nid
-        return (partialTyperefTid :st :frame :ast :unitDecl :enclDecl nid: wrap.expression)
+        return (partialTyperefTid
+            :st
+            :frame
+            :ast
+            :unitDecl
+            :enclDecl
+            nid: wrap.expression
+            :stampNid
+        )
     } case dottedpath then {
         dr: dpRefAt :ast :nid
         # the child's name is read through a view scoped to this block: the
@@ -3559,6 +3574,7 @@ partialTyperefTid: function {
             :unitDecl
             :enclDecl
             nid: dr.parent
+            :stampNid
         )
         return 0
     } case call then {
@@ -3579,7 +3595,7 @@ partialTyperefTid: function {
             :enclDecl
             callableNid: cr.callable
             arguments: args6
-            nid: 0
+            nid: stampNid
         )
         if rmp6 > 0 when (st.reg.isPartialOf
             tid: (ztypes.tid.create from: rmp6.u64)
@@ -3599,7 +3615,15 @@ partialReturnTid: function {
     oId: zast.nodeid
 } out u64 is {
     if oId.isZero then return 0
-    return (partialTyperefTid :st :frame :ast :unitDecl :enclDecl nid: oId)
+    return (partialTyperefTid
+        :st
+        :frame
+        :ast
+        :unitDecl
+        :enclDecl
+        nid: oId
+        stampNid: oId.u32
+    )
 }
 
 # markerPeeledBase -- the base atom name under a strip-marker dotted path
@@ -5162,10 +5186,13 @@ recordFunctionReturn: function {
         # (gated on isgeneric) must substitute the return for each mono
         st.reg.setGeneric typeId: (ztypes.tid.create from: fid.u64) value: true
     }
-    if rpt4 == 0 when unitDecl == st.typing.collectionsUnitRoot then {
-        # collection template methods declare composite parameterized returns
-        # ((ListIter of: of).borrow); they resolve to partial specs so clones
-        # heal through respecialize.
+    if rpt4 == 0 then {
+        # a composite parameterized return whose argument names a generic
+        # parameter -- `(ListIter of: of).borrow`, `(Cell :t)` -- resolves to a
+        # partial spec, which the clone heals through respecialize. Concrete
+        # composites answer 0 here and keep the caller's eager-path behaviour,
+        # so this asks every unit: collection templates were only ever the
+        # first callers, never the rule.
         prt4: (partialReturnTid
             :st
             frame: rf
