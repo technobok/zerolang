@@ -2591,7 +2591,7 @@ concatenating two spans and one a linter helper called once per run, so a window
 would serve one cold caller while pinning the tree. None of the three would have
 moved the metric.
 
-## 2026-09-07 -- END TO END, `ff23e204` -> `fa50596f` (both arcs together)
+## 2026-09-07 -- END TO END, `ff23e204` -> `fa50596f` (the two arcs, before the follow-on defects)
 
 The two rows above measure adjacent segments over DIFFERENT source trees, so
 they do not compose by addition. This is the single measurement across both,
@@ -2615,3 +2615,32 @@ and only +2,106 of that is the compiler.** The rest is the self-compile having
 more of its own source to compile. Read the ratchet as a ratchet, not as a
 measurement: it is the right instrument for catching an unexplained rise, and
 the wrong one for asking what a change cost.
+
+## 2026-09-07 -- FINAL, `ff23e204` -> `4dfc2919` (everything, follow-on defects included)
+
+Three interleaved A/B rounds, same-session gcc `-O1` binaries, both run over the
+`ff23e204` source tree.
+
+| | ff23e204 | 4dfc2919 | delta |
+|---|---|---|---|
+| instructions | 5,417.3M -- 5,417.6M | 5,422.1M -- 5,422.3M | **+0.09%** |
+| allocs | 2,253,181 | 2,255,287 | **+0.09%** |
+| bytes churned | 301,744,376 | 301,672,030 | **-0.02%** |
+| cycles | 2,369.3M -- 2,385.1M | 2,356.4M -- 2,382.4M | flat, B's band lower |
+| peak RSS (best of 5) | 101.2 -- 105.8 MB | 100.9 -- 101.1 MB | **-4%, and steadier** |
+| wall (best of 5) | 0.465 -- 0.476s | 0.458 -- 0.475s | flat |
+
+**Fixing the two follow-on defects cost nothing measurable.** The same tree read
+2,255,287 allocations at `fa50596f` and reads 2,255,287 now: the construction
+fix resolves a nested argument that no program in the corpus writes, and the
+member-read fix changes which stamp is CONSULTED, not how many are made.
+
+**`ALLOC_BASELINE` moved 2,252,948 -> 2,261,063 (+8,115) over the whole session,
+and +2,106 of that is the compiler.** The remaining ~6,000 is the self-compile
+having more of its own source to compile -- eleven new functions across
+ztypecheck, zemitterc and zast, plus four new corpus programs' monos. The
+ratchet cannot separate those two, which is the whole reason these rows measure
+the new compiler on the OLD tree.
+
+**Bytes and RSS both END BELOW where the session started.** RSS is also far
+steadier: the old binary swings 101-106 MB run to run, the new one sits at 101.
