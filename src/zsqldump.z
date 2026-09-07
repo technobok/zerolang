@@ -148,7 +148,7 @@ schemaSql: function {} out String is {
         s: "CREATE TABLE IF NOT EXISTS unit (unit_id INTEGER PRIMARY KEY, name TEXT NOT NULL, is_main INTEGER NOT NULL, unit_type_id INTEGER);\n"
     )
     (acc.append
-        s: "CREATE TABLE IF NOT EXISTS types (type_id INTEGER PRIMARY KEY, name TEXT NOT NULL, typetype TEXT NOT NULL, is_valtype INTEGER, is_generic INTEGER, generic_origin_id INTEGER, needs_destructor INTEGER, is_heap_allocated INTEGER, is_partial INTEGER, defined_in_unit TEXT);\n"
+        s: "CREATE TABLE IF NOT EXISTS types (type_id INTEGER PRIMARY KEY, name TEXT NOT NULL, typetype TEXT NOT NULL, is_valtype INTEGER, is_generic INTEGER, generic_origin_id INTEGER, needs_destructor INTEGER, is_heap_allocated INTEGER, is_partial INTEGER, is_trie_node INTEGER, defined_in_unit TEXT);\n"
     )
     (acc.append
         s: "CREATE TABLE IF NOT EXISTS decl (decl_id INTEGER PRIMARY KEY, name TEXT NOT NULL, parent_decl_id INTEGER NOT NULL, kind TEXT NOT NULL, node_id INTEGER NOT NULL, type_id INTEGER NOT NULL, ownership INTEGER NOT NULL, is_fnptr_field INTEGER NOT NULL, grants_private INTEGER NOT NULL);\n"
@@ -538,8 +538,9 @@ ZDumper: class {
             ndSql: boolNum b: zt.needsDestructor
             heapSql: boolNum b: zt.isHeapAllocated
             partSql: boolNum b: zt.isPartial
+            nodeSql: boolNum b: zt.isTrieNode
             duSql: optStrSql o: (definedUnitOf :st :tid)
-            row: "INSERT OR IGNORE INTO types VALUES (\{tid}, \{nameSql}, \{ttSql}, \{valSql}, \{genSql}, \{goSql}, \{ndSql}, \{heapSql}, \{partSql}, \{duSql});\n"
+            row: "INSERT OR IGNORE INTO types VALUES (\{tid}, \{nameSql}, \{ttSql}, \{valSql}, \{genSql}, \{goSql}, \{ndSql}, \{heapSql}, \{partSql}, \{nodeSql}, \{duSql});\n"
             this.acc.append s: row
             tid = tid.next
         }
@@ -1073,7 +1074,8 @@ ZDumper: class {
                 ndSql: boolNum b: zt.needsDestructor
                 heapSql: boolNum b: zt.isHeapAllocated
                 partSql: boolNum b: zt.isPartial
-                line: "\{nameSql} | \{ttSql} | \{valSql} | \{genSql} | \{ndSql} | \{heapSql} | \{partSql}"
+                nodeSql: boolNum b: zt.isTrieNode
+                line: "\{nameSql} | \{ttSql} | \{valSql} | \{genSql} | \{ndSql} | \{heapSql} | \{partSql} | \{nodeSql}"
                 rows.append line
             }
             tid = tid.next
@@ -1612,9 +1614,20 @@ dumpSql: function {program: Ast.view vfs: zvfs.ZVfs symtab: zenv.ZSymbolTable} o
 
 # canonTypeName -- a type id's registered name, or "?" when unregistered.
 # Renders foreign-key ids as stable names in the canonical dump.
+#
+# An interior TRIE NODE is labelled after the template it hangs under, so its
+# name alone is ambiguous here -- `generic_child pairops i64 pairops` reads as a
+# self-edge. The marker is added on RENDER, from the flag, so the row keeps a
+# clean name and the dump stays unambiguous. `typeValid` must stay the FIRST
+# test: it asks row identity, and nameOf answers "" for a hole and for an
+# out-of-range id alike.
 canonTypeName: function {reg: ztypes.ZTypeRegistry.view tid: ztypes.tid} out String is {
     if (reg.typeValid tid: (ztypes.tid.create from: tid.u64)).not then return "?".string
     zt: reg.typeById.get i: tid
+    if zt.isTrieNode then {
+        marked: "\{zt.name}__node"
+        return marked
+    }
     return zt.name.copy
 }
 

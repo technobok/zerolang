@@ -15423,9 +15423,10 @@ unitMonoOnTrie: function {
 
 # unitMonoJoinTrie -- lay the mono's path under the template: one level per
 # parameter, keyed on the argument (a type id or a numeric value; the kinds
-# never share a level), interior nodes minted as `{template}__node`, the leaf
-# the mono. getOrMintSpec keys a record specialisation the same way; a unit
-# tid parents a trie node exactly as a record tid does.
+# never share a level), interior nodes labelled after the template and marked
+# by `isTrieNode` on their row, the leaf the mono. getOrMintSpec keys a record
+# specialisation the same way; a unit tid parents a trie node exactly as a
+# record tid does.
 unitMonoJoinTrie: function {
     st: zenv.ZSymbolTable
     tplTid: ztypes.tid
@@ -15451,9 +15452,8 @@ unitMonoJoinTrie: function {
             if last then {
                 step = monoId.u64
             } else {
-                inm: "\{tplName}__node"
                 step = (st.reg.newType
-                    name: inm.stringView
+                    name: tplName
                     typetype: ztypes.ztypetype.genericParam
                 )
                 st.reg.setTrieNode typeId: (ztypes.tid.create from: step.u64) value: true
@@ -16135,15 +16135,18 @@ stampPendingTyperefs: function {
     gpiN: 1.u64
     gpLast: st.reg.nextTypeId
     for gpiN < gpLast loop {
-        # A PARTIAL wears GENERIC_PARAM too, and its label is a spec's
-        # (`Cell_t`), not a parameter's -- a name a program may itself declare.
-        # Interning it here would make a typeref spelled that way resolve as a
-        # type PARAMETER. Ask the flag: the name shape must not be what decides
-        # this, which is the whole reason the flag exists.
+        # A PARTIAL and a trie NODE wear GENERIC_PARAM too, and neither label
+        # is a parameter's: a partial's is a spec's (`Cell_t`) and a node's is
+        # the template's own. Both are names a program may itself declare, and
+        # interning either here would make a typeref spelled that way resolve
+        # as a type PARAMETER. Ask the flags: the name shape must not be what
+        # decides this, which is the whole reason the flags exist. Measured --
+        # a node reaches this sweep in 559 of 602 corpus programs, and reaches
+        # no other GENERIC_PARAM consumer at all.
         gpTid9: ztypes.tid.create from: gpiN.u64
         if (st.reg.typetypeOf typeId: gpTid9) == ztypes.ztypetype.genericParam when (
             (st.reg.isPartialOf tid: gpTid9).not
-        ) then {
+        ) when (st.reg.isTrieNodeOf tid: gpTid9).not then {
             gnm: st.reg.nameOf tid: gpTid9
             gnmId: nameIdOf :ast name: gnm.stringView
             if gnmId.isZero.not then gpNames.add item: gnmId
@@ -18116,9 +18119,8 @@ registerSpecOnTrie: function {
                 # partial sets one, a node never has. Keep it that way --
                 # respecialize's only guard against walking a node is that
                 # origin being zero.
-                inm: "\{name}__node"
                 step = (st.reg.newType
-                    name: inm.stringView
+                    :name
                     typetype: ztypes.ztypetype.genericParam
                 )
                 st.reg.setTrieNode typeId: (ztypes.tid.create from: step.u64) value: true
