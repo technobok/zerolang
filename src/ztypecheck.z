@@ -3605,6 +3605,63 @@ partialTyperefTid: function {
     return 0
 }
 
+# partialParamTid -- partialTyperefTid over a PARAMETER's typeref, and the
+# enclosing declaration is the whole of it: `(Cell :t)` names `t` in the
+# template that owns it, so a resolution given no enclosing declaration cannot
+# see `t` as a parameter at all and mints a fresh record shell named `Cell_t`
+# instead. A function's own generic parameters win over the receiver's, the
+# order recordFunctionReturn uses for the same reason.
+partialParamTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    fnDecl: ztypes.declid
+    receiverEnclDecl: ztypes.declid
+    isgen: bool
+    oId: zast.nodeid
+} out u64 is {
+    if oId.isZero then return 0
+    ppt: u64
+    # Only a declaration that OWNS generic parameters can have one named in a
+    # typeref written inside it, and the resolve below is not free -- it walks
+    # the argument list and mints. Asking the cheap question first keeps every
+    # ordinary parameter on the path it already took.
+    fnHasP9: false
+    if fnDecl.isZero.not when (st.reg.genericParamCountOf tdecl: fnDecl) > 0 then {
+        fnHasP9 = true
+    }
+    rcHasP9: false
+    if receiverEnclDecl.isZero.not when (
+        (st.reg.genericParamCountOf
+            tdecl: receiverEnclDecl
+        ) >
+        0
+    ) then {
+        rcHasP9 = true
+    }
+    if fnHasP9.not when rcHasP9.not then return 0
+    if isgen when fnHasP9 then ppt = (partialTyperefTid
+        :st
+        :frame
+        :ast
+        :unitDecl
+        enclDecl: fnDecl
+        nid: oId
+        stampNid: oId.u32
+    )
+    if ppt == 0 when rcHasP9 then ppt = (partialTyperefTid
+        :st
+        :frame
+        :ast
+        :unitDecl
+        enclDecl: receiverEnclDecl
+        nid: oId
+        stampNid: oId.u32
+    )
+    return ppt
+}
+
 # partialReturnTid -- partialTyperefTid over a function's return typeref.
 partialReturnTid: function {
     st: zenv.ZSymbolTable
@@ -4842,9 +4899,14 @@ registerValueParam: function {
     thisName: StringView
     # the head name id of the declared type (the atom of `pm.operation`)
     ptn: zast.nameid
+    # the partial specialisation the typeref resolves to when its argument names
+    # a generic parameter, 0 for every other shape -- the shell path below has no
+    # enclosing declaration and would mint a fresh record named after the head
+    partialTid: u64
     pm: argref
 } is {
-    cid: (resolveTyperefShell
+    cid: partialTid
+    if cid == 0 then cid = (resolveTyperefShell
         :st
         frame: rf
         :ast
@@ -5142,6 +5204,16 @@ resolveFunctionParam: function {
                 :pm
             )
         } else {
+            ppt9: (partialParamTid
+                :st
+                :ast
+                :unitDecl
+                frame: rf
+                :fnDecl
+                :receiverEnclDecl
+                :isgen
+                oId: pm.operation
+            )
             (registerValueParam
                 :st
                 :ast
@@ -5150,6 +5222,7 @@ resolveFunctionParam: function {
                 :fid
                 :thisName
                 :ptn
+                partialTid: ppt9
                 :pm
             )
         }
@@ -22382,6 +22455,19 @@ checkDotted: function {
                 mo = st.typing.declChildOfId parentTypeId: bt nameId: cnId
             }
         }
+        # A partial carries no members of its own: getOrMintSpec skips the
+        # clone for it, because an argument that is still a generic parameter
+        # has nothing concrete to substitute. Read through to the TEMPLATE,
+        # whose members ARE the answer while the template body is being
+        # checked; the per-instance walk asks the completed spec instead.
+        if (st.reg.isPartialOf tid: bt) then {
+            pob9: st.reg.genericOriginOf tid: bt
+            if pob9 > 0 then {
+                bt = ztypes.tid.create from: pob9.u64
+                (forceMemberOf :st frame: st.curFrame :ast parentTypeId: bt nameId: cnId)
+                mo = st.typing.declChildOfId parentTypeId: bt nameId: cnId
+            }
+        }
     }
     match (
         mo
@@ -35366,6 +35452,14 @@ stampMonoTemplateClass: function {
         {
             go: st.reg.genericOriginOf tid: (ztypes.tid.create from: t.u64)
             if go.u64 == templateTid when go > 0 then isMono = true
+        }
+        # a PARTIAL names this template too -- it records the template as its
+        # origin -- but it is trie bookkeeping with no members, and walking the
+        # body against it would bind the template's parameter names to generic
+        # parameters rather than to types. The function and unit enumerators
+        # exclude it by asking for their own typetype; this one has to say so.
+        if isMono when (st.reg.isPartialOf tid: (ztypes.tid.create from: t.u64)) then {
+            isMono = false
         }
         if isMono then {
             (stampOneClassMono
