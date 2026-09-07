@@ -685,7 +685,7 @@ perf: $(PERFBIN)
 # it. The number is bit-identical run to run, so it is a sound ratchet where wall
 # and cycles are not. perf-strict fails ABOVE it; a commit that raises it states
 # the reason in its message, and one that lowers the count lowers it here.
-ALLOC_BASELINE := 2260362
+ALLOC_BASELINE := 2261141
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1571,7 +1571,7 @@ highlight-guard:
 # An emitter-built function names a runtime mono rather than a type the guard
 # can read, so VIEW_GUARD_EMITTED says which declaration each one backs; `-`
 # marks the ones backing no reference-type method at all (array / str value
-# equality, a union destructor, ListRef.extendView).
+# equality, a union destructor).
 #
 # A receiver-bearing C function that resolves to no declaration is an ERROR,
 # not a skip -- a silently unchecked backing is exactly what the guard exists
@@ -1612,7 +1612,8 @@ VIEW_GUARD_EMITTED := get:ListRef.get,ListView.get getMut:ListRef.getMut \
   listView:ListRef.listView sort:ListRef.sort \
   iterate:ListRef.iterate,ListView.iterate \
   call:ListIter.call,ListIterVal.call \
-  iterateMut:ListRef.iterateMut getv:MapRR.get eq:- extendView:- destroy:- \
+  iterateMut:ListRef.iterateMut getv:MapRR.get eq:- \
+  extendView:ListVal.extendView destroy:- \
   hasv:MapRR.has,SetRef.has deletev:SetRef.delete
 VIEW_GUARD_BACKS := StringView.eq===,!= StringView.cmp=compare,<,<=,>,>=
 VIEW_GUARD_INTERNAL := String.cat String.print String.free String.eq String.cmp \

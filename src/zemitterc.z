@@ -7159,6 +7159,11 @@ emitListMethodCall: function {
         e1s: "\{cb}_slice(\{recvR}, \{vf9}, \{vt9})"
         return e1s
     }
+    if mnId == zast.names.wkExtendView then {
+        vw9: listArg :ast :symtab :ctx :call label: "from"
+        e1e: "\{cb}_extendView(\{recvR}, \{vw9})"
+        return e1e
+    }
     if mnId == zast.names.wkSet then {
         vi: listArg :ast :symtab :ctx :call label: "i"
         vv: listArg :ast :symtab :ctx :call label: "val"
@@ -25193,8 +25198,12 @@ emitListViewMono: function {
     emitListIter :ctx :symtab :monoId nm: nm.stringView ect: ect.stringView :buf
 }
 
-# listviewMethods -- the _listview cast + _extendView companions when a
-# List mono carries a listView child; "" otherwise.
+# listviewMethods -- the _listView cast when a List mono carries a listView
+# child, plus the _extendView companion when something actually calls it; ""
+# otherwise. extendView is gated on the USE SITE (usedMemberDecl), not on the
+# instance declaring the member: every instance carries every template member,
+# so gating on that emits it into every program -- which is what it did before
+# it had a declaration at all.
 listviewMethods: function {
     ctx: Ctx.view
     symtab: zenv.ZSymbolTable.view
@@ -25213,14 +25222,30 @@ listviewMethods: function {
                 buf: String
                 m0: "static \{lvc}_t z_\{nm}_listView(const z_\{nm}_t* _this) { return *(\{lvc}_t*)_this; }\n"
                 buf.append m0
-                m1: "static void z_\{nm}_extendView(z_\{nm}_t* _this, \{lvc}_t _from) {\n"
-                buf.append m1
-                m2: "    z_\{nm}_grow(_this, _this->length + _from.length);\n"
-                buf.append m2
-                m3: "    memcpy(&_this->data[_this->length], _from.data, _from.length * sizeof(\{ect}));\n"
-                buf.append m3
-                buf.append "    _this->length += _from.length;\n"
-                buf.append "}\n\n"
+                evWanted: false
+                {
+                    emd: (symtab.typing.declMemberIdOf
+                        parentTypeId: monoId
+                        nameId: zast.names.wkExtendView
+                    )
+                    if emd.isZero.not when (symtab.typing.usedMemberDecl.has
+                        item: emd.u64
+                    ) then evWanted = true
+                }
+                if evWanted then {
+                    m1: "static void z_\{nm}_extendView(z_\{nm}_t* _this, \{lvc}_t _from) {\n"
+                    buf.append m1
+                    # an empty window carries a null data pointer, and memcpy is
+                    # undefined on one even for zero bytes -- as is indexing
+                    # _this->data before grow has allocated anything
+                    buf.append "    if (_from.length == 0) { return; }\n"
+                    m2: "    z_\{nm}_grow(_this, _this->length + _from.length);\n"
+                    buf.append m2
+                    m3: "    memcpy(&_this->data[_this->length], _from.data, _from.length * sizeof(\{ect}));\n"
+                    buf.append m3
+                    buf.append "    _this->length += _from.length;\n"
+                    buf.append "}\n\n"
+                }
                 return buf
             }
         }
