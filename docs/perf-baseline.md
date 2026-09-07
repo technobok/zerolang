@@ -2524,3 +2524,38 @@ accumulators the collapse exposed and which became bound expressions, the
 **The phase split is one run and disagrees with the wall.** Parse reads 131ms
 against 107, while best-of-5 wall is a hundredth of a second BETTER. Trust the
 wall, which is a best of five, over a single `--time` sample.
+
+## 2026-09-07 -- a generic instantiation over a generic parameter, S1..S8 (`67d474e5`..`c2d6511d`)
+
+`ff23e204` -> `c2d6511d`. Both binaries gcc `-O1`, built in the same session,
+A/B interleaved twice. **Measured over the SAME source tree (the `ff23e204`
+one), which is what separates the compiler's own cost from the fact that the
+arc added source for it to compile.**
+
+| | ff23e204 | c2d6511d | delta |
+|---|---|---|---|
+| instructions | 5,416.6M -- 5,418.0M | 5,421.6M -- 5,421.9M | **+0.08%** |
+| allocs | 2,253,181 | 2,255,515 | **+0.10%** |
+| bytes churned | 301,743,443 | 301,722,697 | -0.007% |
+| peak RSS (best of 5) | 101.2 -- 105.7 MB | 100.8 -- 101.1 MB | -4%, steadier |
+| wall (best of 5) | 0.47s | 0.47s | flat |
+
+**`ALLOC_BASELINE` moved 2,252,948 -> 2,260,362 (+7,414) and only +2,334 of
+that is the compiler.** The other ~5,080 is the self-compile having more source
+to compile: the arc added `isPartial` and its accessor pair, `partialUnderDecl`
+/ `partialFieldTid` / `partialParamTid` / `fieldSlotTid`, and the two binders
+the free-generic-function call needs. Measuring the new compiler on the OLD
+tree is what separates the two, and the ratchet on its own cannot: it compares
+a compiler against the source it happens to ship with.
+
+**The +2,334 is the mechanism, and it is bounded by declaration count, not by
+program size.** A parameterised typeref inside a template now resolves twice --
+once eagerly, once under the enclosing declaration -- and `partialUnderDecl`
+answers 0 without minting for any declaration that owns no generic parameters.
+Removing that gate cost +11,204 instead of +1,695 at S4, which is the measure
+of how much the cheap question is worth.
+
+**Bytes and RSS fall while allocs rise**, which is the shape to expect: a
+partial spec is a small row that replaces a fabricated record shell, and S8
+deleted two families of per-instance members that were minted for every
+MapEntry and MapItemIter mono in every program.
