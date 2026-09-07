@@ -743,6 +743,13 @@ ZType: class {
     # is worn by a bare type parameter, by a partial, and by a trie interior
     # node alike -- so the partial reading gets its own bit.
     isPartial: bool
+    # whether it is an INTERIOR NODE of the specialization trie: a multi-level
+    # path needs a parent for its next key, and this is that parent. Never
+    # emitted, never name-registered, and not a specialization -- it carries a
+    # PREFIX of the key list and no origin, where a partial carries the whole
+    # list and its template. GENERIC_PARAM cannot say this either, so the node
+    # reading gets its own bit as the partial reading did.
+    isTrieNode: bool
     # whether the runtime addresses it by index rather than by name
     runtimeIndexed: bool
     # a data block's single element type. The checker settles it from `out T`
@@ -902,6 +909,7 @@ holeType: function {} out ZType is {
         isBox: false
         isNative: false
         isPartial: false
+        isTrieNode: false
         runtimeIndexed: false
         dataElemTypeId: optionval.none tid
         def: declid
@@ -995,6 +1003,7 @@ ZTypeRegistry: class {
             isBox: false
             isNative: false
             isPartial: false
+            isTrieNode: false
             runtimeIndexed: false
             dataElemTypeId: optionval.none tid
             def: declid
@@ -1242,6 +1251,14 @@ ZTypeRegistry: class {
         got.isPartial = value
     }
 
+    # record that the row is an interior node of the specialization trie --
+    # bookkeeping that parents the next key, not a type any program named
+    setTrieNode: function {:this typeId: tid value: bool} is {
+        if typeId >= this.typeById.length then return
+        got: this.typeById.getMut i: typeId
+        got.isTrieNode = value
+    }
+
     # file an instantiation under its template, keyed by its argument trie --
     # which is what makes the same arguments find the same mono instead of
     # minting a twin
@@ -1391,6 +1408,15 @@ ZTypeRegistry: class {
         if tid >= t.typeById.length then return false
         got: t.typeById.get i: tid
         return got.isPartial
+    }
+
+    # isTrieNodeOf -- the row is an interior trie node. Ask this rather than the
+    # typetype or the label: GENERIC_PARAM is worn by a bare type parameter and
+    # by a partial too, and the name is a name.
+    isTrieNodeOf: function {t: this.view tid: tid} out bool is {
+        if tid >= t.typeById.length then return false
+        got: t.typeById.get i: tid
+        return got.isTrieNode
     }
 
     # isValtypeOf -- the type is known to be a valtype. An unset or
