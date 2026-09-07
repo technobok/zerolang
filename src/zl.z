@@ -111,11 +111,110 @@ writeStdout: function {s: StringView} is {
     ) case ok then null case err then null
 }
 
-# runFormat -- `zl fmt`: lay each target file out with the printer, the safe
-# fixes first (elision, label collapse, zero-init, string-like), then the
-# document printer at `lineLength` columns. A file the printer refuses (parse
-# error, a walk out of step, a different tree) is reported and left untouched.
-# Exit 1 if a file is refused or, under --check, would change.
+# refuseFormat -- report a file the formatter will not rewrite. Under --stdout
+# the source is echoed unchanged, so a pipeline still gets its input back.
+refuseFormat: function {msg: StringView source: StringView stdout: bool} out i32 is {
+    io.eprintln msg
+    if stdout then writeStdout s: source
+    return 1
+}
+
+# reportFmtDiff -- `--diff`: a unified diff of what would change, and 1 when
+# anything would.
+reportFmtDiff: function {a: zsource.Analysis.view text: StringView changed: bool} out i32 is {
+    if changed.not then return 0
+    de: zsource.lineDiffEdits old: a.source.stringView new: text
+    dtext: zsource.renderDiff path: a.path.stringView source: a.source.stringView edits: de
+    writeStdout s: dtext.stringView
+    return 1
+}
+
+# reportFmtCheck -- `--check`: name a file that would change, and 1 when one
+# would.
+reportFmtCheck: function {p: StringView changed: bool} out i32 is {
+    if changed.not then return 0
+    wf: "would reformat \{p}"
+    print wf
+    return 1
+}
+
+# writeFormatted -- the default: write the laid-out text back over the file.
+writeFormatted: function {
+    a: zsource.Analysis.view
+    p: StringView
+    text: String
+    changed: bool
+} out i32 is {
+    if changed.not then return 0
+    wr: io.writeText path: a.path content: text
+    match (
+        wr
+    ) case ok then {
+        fm: "formatted \{p}"
+        print fm
+        return 0
+    } case err then null
+    ew: "zl fmt: could not write \{p}"
+    io.eprintln ew
+    return 1
+}
+
+# formatOnePath -- lay one file out: the safe fixes first (elision, label
+# collapse, zero-init, string-like), then the document printer at `lineLength`
+# columns. Returns 1 when the file is refused, or when --check or --diff finds
+# it would change, and 0 when there is nothing to report.
+formatOnePath: function {
+    p: StringView
+    check: bool
+    stdout: bool
+    diff: bool
+    full: bool
+    srcdirs: (List String).view
+    systemdir: StringView
+    lineLength: u32
+    collapse: bool
+} out i32 is {
+    fmtOpts: zsource.defaultOpts
+    fmtOpts.full = full
+    a: zsource.analyzeFileTiered path: p.string :srcdirs :systemdir opts: fmtOpts
+    if a.parseErrorCount > 0 then {
+        reportAnalysis :a
+        mp: "zl fmt: \{p} has parse errors; not formatting"
+        return (refuseFormat msg: mp.stringView source: a.source.stringView :stdout)
+    }
+    newsrc: a.source.copy
+    if a.edits.length > 0 then {
+        newsrc = zfix.applyEdits source: a.source.stringView edits: a.edits
+        if (zsource.sourceParses source: newsrc.copy).not then {
+            eb: "zl fmt: a fix would break \{p}; skipped"
+            return (refuseFormat msg: eb.stringView source: a.source.stringView :stdout)
+        }
+    }
+    res: (zfmt.formatSource
+        source: newsrc.stringView
+        width: lineLength
+        :collapse
+        raw: false
+        gate: true
+    )
+    if res.ok.not then {
+        er: "zl fmt: \{p} refused at line \{res.line}, column \{res.col}: \{res.msg}"
+        return (refuseFormat msg: er.stringView source: a.source.stringView :stdout)
+    }
+    text: res.text.take
+    changed: (text.stringView == a.source.stringView).not
+    if stdout then {
+        writeStdout s: text.stringView
+        return 0
+    }
+    if diff then return (reportFmtDiff :a text: text.stringView :changed)
+    if check then return (reportFmtCheck :p :changed)
+    return (writeFormatted :a :p :text :changed)
+}
+
+# runFormat -- `zl fmt`: lay each target file out. The three reporting modes are
+# mutually exclusive, and the exit status is 1 when any file was refused or,
+# under --check or --diff, would change.
 runFormat: function {
     paths: (List String).borrow
     check: bool
@@ -141,81 +240,18 @@ runFormat: function {
     }
     rc: i32
     with pit: paths.iterate do for p: pit loop {
-        fmtOpts: zsource.defaultOpts
-        fmtOpts.full = full
-        a: zsource.analyzeFileTiered path: p.copy :srcdirs :systemdir opts: fmtOpts
-        if a.parseErrorCount > 0 then {
-            reportAnalysis :a
-            msg: "zl fmt: \{p} has parse errors; not formatting"
-            io.eprintln msg
-            if stdout then writeStdout s: a.source.stringView
-            rc = 1
-        } else {
-            hasEdits: a.edits.length > 0
-            newsrc: a.source.copy
-            valid: true
-            if hasEdits then {
-                newsrc = zfix.applyEdits source: a.source.stringView edits: a.edits
-                valid = zsource.sourceParses source: newsrc.copy
-            }
-            if hasEdits when valid.not then {
-                eb: "zl fmt: a fix would break \{p}; skipped"
-                io.eprintln eb
-                if stdout then writeStdout s: a.source.stringView
-                rc = 1
-            } else {
-                res: (zfmt.formatSource
-                    source: newsrc.stringView
-                    width: lineLength
-                    :collapse
-                    raw: false
-                    gate: true
-                )
-                if res.ok.not then {
-                    er: "zl fmt: \{p} refused at line \{res.line}, column \{res.col}: \{res.msg}"
-                    io.eprintln er
-                    if stdout then writeStdout s: a.source.stringView
-                    rc = 1
-                } else {
-                    text: res.text.take
-                    changed: (text.stringView == a.source.stringView).not
-                    if stdout then {
-                        writeStdout s: text.stringView
-                    } else if diff then {
-                        if changed then {
-                            de: zsource.lineDiffEdits old: a.source.stringView new: text.stringView
-                            dtext: (zsource.renderDiff
-                                path: a.path.stringView
-                                source: a.source.stringView
-                                edits: de
-                            )
-                            writeStdout s: dtext.stringView
-                            rc = 1
-                        }
-                    } else if check then {
-                        if changed then {
-                            wf: "would reformat \{p}"
-                            print wf
-                            rc = 1
-                        }
-                    } else {
-                        if changed then {
-                            wr: io.writeText path: a.path content: text
-                            match (
-                                wr
-                            ) case ok then {
-                                fm: "formatted \{p}"
-                                print fm
-                            } case err then {
-                                ew: "zl fmt: could not write \{p}"
-                                io.eprintln ew
-                                rc = 1
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        one: (formatOnePath
+            p: p.stringView
+            :check
+            :stdout
+            :diff
+            :full
+            :srcdirs
+            :systemdir
+            :lineLength
+            :collapse
+        )
+        if one != 0 then rc = one
     }
     return rc
 }
