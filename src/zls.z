@@ -3892,6 +3892,60 @@ byteIdxOfCp: function {s: StringView cp1: u32} out u64 is {
     return n
 }
 
+# byteOr -- the byte at `i`, and `d` when `i` is past the end. The scans below
+# read a line right to left and treat "off the end" as "not the byte I want",
+# which is what `d` spells without a `match` around every read.
+byteOr: function {s: StringView i: u64 d: u8} out u8 is {
+    got: s.byteAt :i
+    match (
+        got
+    ) case some then {
+        return got
+    } case none then null
+    return d
+}
+
+# byteIs -- is the byte at `i` exactly `b`? False past the end.
+byteIs: function {s: StringView i: u64 b: u8} out bool is {
+    return (byteOr :s :i d: 0) == b
+}
+
+# skipSpacesFrom -- the first index at or after `from` holding neither a space
+# nor a tab; the length when the rest of the line is blank.
+skipSpacesFrom: function {s: StringView from: u64} out u64 is {
+    j: from
+    n: s.length
+    for j < n loop {
+        b: byteOr :s i: j d: 0
+        if b != 32 when b != 9 then return j
+        j = j + 1
+    }
+    return j
+}
+
+# identEndFrom -- the first index at or after `from` whose byte cannot continue
+# an identifier; `from` itself when the byte there already cannot.
+identEndFrom: function {s: StringView from: u64} out u64 is {
+    j: from
+    n: s.length
+    for j < n loop {
+        if (isIdentByte b: (byteOr :s i: j d: 0)).not then return j
+        j = j + 1
+    }
+    return j
+}
+
+# identStartBack -- the first index of the identifier run ending at `from`,
+# read backwards and never past `floor`.
+identStartBack: function {s: StringView from: u64 floor: u64} out u64 is {
+    ls: from
+    for ls > floor loop {
+        if (isIdentByte b: (byteOr :s i: ls - 1 d: 0)).not then return ls
+        ls = ls - 1
+    }
+    return ls
+}
+
 # true when byte `b` may appear in an identifier.
 isIdentByte: function {b: u8} out bool is {
     (return
@@ -5151,6 +5205,218 @@ argLabelComplete: function {
     return (emitLabels :arr :o :prog :funcId :supplied :prefix)
 }
 
+# HeadScan -- the running state of the backward scan for the head of the call
+# being typed: the paren depth carried from line to line, the head once a line
+# has decided it, and the fallback statement start (the first line begun
+# outside parens).
+HeadScan: class {
+    # paren depth: each ")" met scanning back opens one that an "(" must close
+    pd: i64
+    # the line the head sits on, once decided
+    headLine: u32
+    # the head's byte offset on that line
+    headByte: u64
+    # the nearest statement start, taken when a block boundary is met first
+    stmtLine: u32
+    # that statement's byte offset, always the start of its line
+    stmtByte: u64
+    # whether a statement start has been seen at all
+    haveStmt: bool
+    # set when the head is decided and the walk must end
+    stop: bool
+} as {
+    # takeHead -- record `line` and `byte` as the head and end the walk.
+    takeHead: function {:this line: u32 byte: u64} is {
+        this.headLine = line
+        this.headByte = byte
+        this.stop = true
+    }
+
+    # takeBoundary -- a block brace at depth zero, or the top of the buffer: the
+    # statement start wins when one has been seen, else the boundary's own
+    # position.
+    takeBoundary: function {:this line: u32 byte: u64} is {
+        if this.haveStmt then {
+            this.takeHead line: this.stmtLine byte: this.stmtByte
+            return
+        }
+        this.takeHead :line :byte
+    }
+}
+
+# headpos -- where a call's head sits in the buffer.
+headpos: record {
+    # the head's line, 1-based
+    line: u32
+    # the head's byte offset on that line
+    byte: u64
+}
+
+# scanLineForHead -- one line of the backward head scan, read right to left
+# from `end`. It records the head and stops at the innermost unmatched "(" or
+# at a block brace outside parens; anything else only moves the depth.
+scanLineForHead: function {hs: HeadScan s: StringView line: u32 end: u64} is {
+    i: end
+    for i > 0 loop {
+        bb: byteOr :s i: i - 1 d: 0
+        if bb == 41 then hs.pd = hs.pd + 1
+        if bb == 40 then {
+            if hs.pd > 0 then {
+                hs.pd = hs.pd - 1
+            } else {
+                hs.takeHead :line byte: i
+            }
+        }
+        isBrace: (bb == 123) or (bb == 125)
+        if isBrace when hs.pd == 0 then hs.takeBoundary :line byte: i
+        if hs.stop then return
+        i = i - 1
+    }
+}
+
+# callHeadAt -- the head of the call being typed at (`line`, `byte`). Scanning
+# back through the buffer, the innermost unmatched "(" wins -- an enclosing,
+# possibly multi-line, call -- and otherwise the nearest statement start, once a
+# block boundary or the top of the buffer is reached. A newline is NOT a hard
+# stop: a call spans lines inside parens.
+callHeadAt: function {
+    docText: StringView
+    line: u32
+    byte: u64
+    lineText: StringView
+} out headpos is {
+    hs: (HeadScan
+        pd: 0
+        headLine: line
+        headByte: 0
+        stmtLine: line
+        stmtByte: 0
+        haveStmt: false
+        stop: false
+    )
+    scanLine: line
+    scanText: lineText.string
+    scanEnd: byte
+    for hs.stop.not loop {
+        scanLineForHead :hs s: scanText.stringView line: scanLine end: scanEnd
+        if hs.stop then break
+        if hs.pd == 0 when hs.haveStmt.not then {
+            hs.stmtLine = scanLine
+            hs.stmtByte = 0
+            hs.haveStmt = true
+        }
+        if scanLine <= 1 then {
+            hs.takeBoundary line: 1 byte: 0
+        } else {
+            scanLine = scanLine - 1
+            scanText = docLine text: docText lineno: scanLine
+            scanEnd = scanText.length
+        }
+    }
+    return (headpos line: hs.headLine byte: hs.headByte)
+}
+
+# namespan -- the callee path written at a call's head: the byte range of its
+# LAST dotted segment, which is the name to resolve, and the end of the whole
+# path.
+namespan: record {
+    # the first byte of the last dotted segment
+    segStart: u64
+    # one past the last byte of the whole path
+    calleeEnd: u64
+    # false when the head holds no identifier at all
+    found: bool
+}
+
+# calleeNameOn -- the callee path written at `from`: leading blanks skipped, an
+# identifier taken, a `name:` binder stepped over to the name it binds, then
+# every `.segment` after it followed.
+calleeNameOn: function {s: StringView from: u64} out namespan is {
+    j: skipSpacesFrom :s :from
+    ids: j
+    j = identEndFrom :s from: j
+    # `x: f a: 1` heads a BINDING, so the callee is what follows the colon
+    if (byteIs :s i: j b: 58) then {
+        j = skipSpacesFrom :s from: j + 1
+        ids = j
+        j = identEndFrom :s from: j
+    }
+    if j == ids then return (namespan segStart: 0 calleeEnd: 0 found: false)
+    segStart: ids
+    for (byteIs :s i: j b: 46) loop {
+        j = j + 1
+        segStart = j
+        j = identEndFrom :s from: j
+    }
+    return (namespan :segStart calleeEnd: j found: true)
+}
+
+# labelBefore -- the identifier immediately before the ":" at `colon`, and ""
+# when there is none before `floor`.
+labelBefore: function {s: StringView colon: u64 floor: u64} out String is {
+    ls: identStartBack :s from: colon :floor
+    if ls < colon then return (s.substring from: ls to: colon).string
+    return "".string
+}
+
+# activeLabelAt -- the argument label the cursor sits inside: read back from
+# `cursor`, the identifier before the nearest ":" at paren depth zero. "" when
+# there is none before `floor`.
+activeLabelAt: function {s: StringView cursor: u64 floor: u64} out String is {
+    k: cursor
+    apd: i64
+    for k > floor loop {
+        ab: byteOr :s i: k - 1 d: 0
+        if ab == 41 then apd = apd + 1
+        if ab == 40 when apd > 0 then apd = apd - 1
+        if ab == 58 when apd == 0 then {
+            lab: labelBefore :s colon: k - 1 :floor
+            if lab.length > 0 then return lab
+        }
+        k = k - 1
+    }
+    return "".string
+}
+
+# paramLabelOf -- a parameter display's label: everything before its first ":",
+# and the whole display when it holds none.
+paramLabelOf: function {disp: StringView} out StringView is {
+    ci: u64
+    for ci < disp.length loop {
+        if (byteIs s: disp i: ci b: 58) then return (disp.substring from: 0 to: ci)
+        ci = ci + 1
+    }
+    return disp
+}
+
+# activeParamIndex -- which parameter `label` names, and 0 when none does,
+# which is also what an absent label answers.
+activeParamIndex: function {pdisps: (List String).view label: StringView} out i64 is {
+    if label.length == 0 then return 0
+    pi: u64
+    for pi < pdisps.length loop {
+        pds: pdisps.get i: pi
+        if (paramLabelOf disp: pds.stringView) == label then return pi.i64.orPanic
+        pi = pi + 1
+    }
+    return 0
+}
+
+# signatureParams -- the SignatureHelp `parameters` array: one object per
+# parameter display, labelled with the display itself.
+signatureParams: function {pdisps: (List String).view} out Arr is {
+    params: newArr
+    pi: u64
+    for pi < pdisps.length loop {
+        pds: pdisps.get i: pi
+        pobj: newObj
+        pobj.set key: "label".string value: Value.text pds.copy
+        params.items.append (Value.object pobj)
+        pi = pi + 1
+    }
+    return params
+}
+
 # signatureHelpAnswer -- a mid-typing signature popup. A call being typed often
 # fails to parse (a trailing label -> "Expected an Operation after label") and is
 # absent from the last-good snapshot tree, so locate the enclosing call by a
@@ -5173,228 +5439,20 @@ signatureHelpAnswer: function {
     curLt: docLine text: docText lineno: l1u
     cp1: cpColOf lineText: curLt.stringView :ch :utf32
     curByte: byteIdxOfCp s: curLt.stringView :cp1
-    # scan backward for the operation head: the innermost unmatched "(" (an
-    # enclosing, possibly multi-line, call) wins; otherwise the nearest statement
-    # start (a line begun outside parens) once a block boundary or the buffer top
-    # is reached. Newlines are NOT hard stops -- a call spans lines inside parens.
-    pd: i64
-    headLine: l1u
-    headByte: u64
-    stmtLine: l1u
-    stmtByte: u64
-    haveStmt: false
-    stop: false
-    scanLine: l1u
-    scanText: curLt.copy
-    scanEnd: curByte
-    for stop.not loop {
-        {
-            stv: scanText.stringView
-            i: scanEnd
-            for i > 0 loop {
-                bb: stv.byteAt i: i - 1
-                match (
-                    bb
-                ) case some then {
-                    if bb == 41 then pd = pd + 1
-                    if bb == 40 then {
-                        if pd > 0 then {
-                            pd = pd - 1
-                        } else {
-                            headLine = scanLine
-                            headByte = i
-                            stop = true
-                        }
-                    }
-                    if bb == 123 when pd == 0 then {
-                        if haveStmt then {
-                            headLine = stmtLine
-                            headByte = stmtByte
-                        } else {
-                            headLine = scanLine
-                            headByte = i
-                        }
-                        stop = true
-                    }
-                    if bb == 125 when pd == 0 then {
-                        if haveStmt then {
-                            headLine = stmtLine
-                            headByte = stmtByte
-                        } else {
-                            headLine = scanLine
-                            headByte = i
-                        }
-                        stop = true
-                    }
-                } case none then null
-                if stop then break
-                i = i - 1
-            }
-        }
-        if stop then break
-        if pd == 0 when haveStmt.not then {
-            stmtLine = scanLine
-            stmtByte = 0
-            haveStmt = true
-        }
-        if scanLine <= 1 then {
-            if haveStmt then {
-                headLine = stmtLine
-                headByte = stmtByte
-            } else {
-                headLine = 1
-                headByte = 0
-            }
-            stop = true
-        } else {
-            scanLine = scanLine - 1
-            scanText = docLine text: docText lineno: scanLine
-            scanEnd = scanText.length
-        }
-    }
-    headLt: docLine text: docText lineno: headLine
+    head: (callHeadAt :docText line: l1u byte: curByte lineText: curLt.stringView)
+    headLt: docLine text: docText lineno: head.line
     hstv: headLt.stringView
-    hlen: hstv.length
-    j: headByte
-    for j < hlen loop {
-        wb: hstv.byteAt i: j
-        stopw: false
-        match (
-            wb
-        ) case some then {
-            if wb != 32 when wb != 9 then stopw = true
-        } case none then {
-            stopw = true
-        }
-        if stopw then break
-        j = j + 1
-    }
-    ids: j
-    for j < hlen loop {
-        ib: hstv.byteAt i: j
-        stopi: false
-        match (
-            ib
-        ) case some then {
-            if (isIdentByte b: ib).not then stopi = true
-        } case none then {
-            stopi = true
-        }
-        if stopi then break
-        j = j + 1
-    }
-    isBind: false
-    {
-        cb: hstv.byteAt i: j
-        match (
-            cb
-        ) case some then {
-            if cb == 58 then isBind = true
-        } case none then null
-    }
-    if isBind then {
-        j = j + 1
-        for j < hlen loop {
-            wb2: hstv.byteAt i: j
-            stopw2: false
-            match (
-                wb2
-            ) case some then {
-                if wb2 != 32 when wb2 != 9 then stopw2 = true
-            } case none then {
-                stopw2 = true
-            }
-            if stopw2 then break
-            j = j + 1
-        }
-        ids = j
-        for j < hlen loop {
-            ib2: hstv.byteAt i: j
-            stopi2: false
-            match (
-                ib2
-            ) case some then {
-                if (isIdentByte b: ib2).not then stopi2 = true
-            } case none then {
-                stopi2 = true
-            }
-            if stopi2 then break
-            j = j + 1
-        }
-    }
-    if j == ids then return Value.nul
-    segStart: ids
-    for true loop {
-        db: hstv.byteAt i: j
-        isDot: false
-        match (
-            db
-        ) case some then {
-            if db == 46 then isDot = true
-        } case none then null
-        if isDot.not then break
-        j = j + 1
-        segStart = j
-        for j < hlen loop {
-            ib3: hstv.byteAt i: j
-            stopi3: false
-            match (
-                ib3
-            ) case some then {
-                if (isIdentByte b: ib3).not then stopi3 = true
-            } case none then {
-                stopi3 = true
-            }
-            if stopi3 then break
-            j = j + 1
-        }
-    }
-    calleeEnd: j
-    activeLabel: String
-    {
-        lowb: u64
-        if headLine == l1u then lowb = calleeEnd
-        alstv: curLt.stringView
-        k: curByte
-        apd: i64
-        albreak: false
-        for k > lowb loop {
-            ab: alstv.byteAt i: k - 1
-            match (
-                ab
-            ) case some then {
-                if ab == 41 then apd = apd + 1
-                if ab == 40 when apd > 0 then apd = apd - 1
-                if ab == 58 when apd == 0 then {
-                    le: k - 1
-                    ls: le
-                    for ls > lowb loop {
-                        lb: alstv.byteAt i: ls - 1
-                        stopl: false
-                        match (
-                            lb
-                        ) case some then {
-                            if (isIdentByte b: lb).not then stopl = true
-                        } case none then {
-                            stopl = true
-                        }
-                        if stopl then break
-                        ls = ls - 1
-                    }
-                    if ls < le then {
-                        activeLabel = (alstv.substring from: ls to: le).string
-                        albreak = true
-                    }
-                }
-            } case none then null
-            if albreak then break
-            k = k - 1
-        }
-    }
-    nmS: (hstv.substring from: segStart to: calleeEnd)
+    nm: calleeNameOn s: hstv from: head.byte
+    if nm.found.not then return Value.nul
+    # the label scan must not reach back into the callee's own name when the
+    # head shares the cursor's line
+    lowb: u64
+    if head.line == l1u then lowb = nm.calleeEnd
+    activeLabel: (activeLabelAt s: curLt.stringView cursor: curByte floor: lowb)
+    nmS: (hstv.substring from: nm.segStart to: nm.calleeEnd)
     segCp: u64
     {
-        hsub: hstv.substring from: 0 to: segStart
+        hsub: hstv.substring from: 0 to: nm.segStart
         segCp = hsub.count
     }
     idCol: segCp.u32.orPanic + 1
@@ -5406,7 +5464,7 @@ signatureHelpAnswer: function {
         lastPos: 0
     )
     sp.walkProgram prog: snap.prog
-    funcId: leafFuncIdAt :snap :sp :docRel :srcDir line1u: headLine :idCol
+    funcId: leafFuncIdAt :snap :sp :docRel :srcDir line1u: head.line :idCol
     if funcId == 0 then return Value.nul
     label: (fnSigTextOpt
         vfs: snap.vfs
@@ -5417,39 +5475,8 @@ signatureHelpAnswer: function {
     )
     if label.length == 0 then return Value.nul
     pdisps: fnParamDisplays prog: snap.prog o: snap.st tid: (ztypes.tid.create from: funcId.u64)
-    params: newArr
-    activeIdx: i64
-    foundActive: false
-    pi: u64
-    for pi < pdisps.length loop {
-        pds: pdisps.get i: pi
-        pdv: pds.stringView
-        colon: u64
-        hasColon: false
-        ci: u64
-        for ci < pdv.length loop {
-            cbb: pdv.byteAt i: ci
-            match (
-                cbb
-            ) case some then {
-                if cbb == 58 when hasColon.not then {
-                    colon = ci
-                    hasColon = true
-                }
-            } case none then null
-            ci = ci + 1
-        }
-        pnm: pdv
-        if hasColon then pnm = pdv.substring from: 0 to: colon
-        if foundActive.not when activeLabel.length > 0 when pnm == activeLabel.stringView then {
-            activeIdx = pi.i64.orPanic
-            foundActive = true
-        }
-        pobj: newObj
-        pobj.set key: "label".string value: Value.text pdv.string
-        params.items.append (Value.object pobj)
-        pi = pi + 1
-    }
+    activeIdx: activeParamIndex :pdisps label: activeLabel.stringView
+    params: signatureParams :pdisps
     siginfo: newObj
     siginfo.set key: "label".string value: Value.text label
     siginfo.set key: "parameters".string value: Value.array params
