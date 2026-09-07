@@ -18743,6 +18743,37 @@ firstGenericParamId: function {
     return zast.nameid
 }
 
+# constructionArgTid -- the type a construction's type ARGUMENT names. An
+# argument that is ITSELF an instantiation -- `(Pair t: (Cell t: i64))` -- has
+# no name of its own, so a name lookup finds its HEAD and hands back the bare
+# template. That is not just a wrong label: the template is what gets recorded
+# as the argument and what keys the trie, so two different nested arguments
+# collapse onto one mono, and a field typed by the parameter then names a type
+# nothing ever emits. Resolve the instantiation first, through the same
+# disassembly the type-position path uses; every other shape falls through to
+# the name it spells.
+constructionArgTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    opId: zast.nodeid
+    baseId: zast.nameid
+} out u64 is {
+    inl9: (resolveMonoRefInline
+        :st
+        frame: st.curFrame
+        :ast
+        :unitDecl
+        thisName: ""
+        enclDecl: ztypes.declid
+        opNid: opId
+        nid: 0
+    )
+    if inl9 > 0 then return inl9
+    ao9: walkLookupTyperefById :st frame: st.curFrame :ast :unitDecl :baseId
+    return (ao9.or d: 0)
+}
+
 # inferConstructionSubs -- infer a generic construction's type arguments from the
 # values it is given. The value-arg walk is a DRY RUN: its ownership effects (take
 # overlays, borrow locks) are bracketed in a frame discarded whole, so the real
@@ -18810,28 +18841,26 @@ inferConstructionSubs: function {
                     sfx.append s: (zast.nameTextAt :ast ref: anId)
                     boundParams.add item: pk
                 } else {
-                    ao: (walkLookupTyperefById
+                    aid9: (constructionArgTid
                         :st
-                        frame: st.curFrame
                         :ast
                         :unitDecl
+                        :opId
                         baseId: anId
                     )
-                    match (
-                        ao
-                    ) case some then {
+                    if aid9 > 0 then {
                         atn: (monoValName
                             :st
                             frame: st.curFrame
                             :ast
-                            tid: (ztypes.tid.create from: ao.u64)
+                            tid: (ztypes.tid.create from: aid9.u64)
                         )
                         sfx.append s: "_"
                         sfx.append s: atn
-                        pv2: ao
+                        pv2: aid9
                         subs.set key: pk value: pv2
                         boundParams.add item: pk
-                    } case none then null
+                    }
                 }
             } else {
                 vt0: checkValueAt :st :unitDecl :ast nid: opId
@@ -19167,14 +19196,13 @@ collectGenericTypeArgs: function {
                         } case none then null
                     }
                 } else {
-                    ao: (walkLookupTyperefById
+                    aid: (constructionArgTid
                         :st
-                        frame: st.curFrame
                         :ast
                         :unitDecl
+                        :opId
                         baseId: anId0
                     )
-                    aid: ao.or d: 0
                     if aid == 0 then {
                         argOpNode: ast.nodes.get i: opId.u64
                         aid = dottedTyperefId :ast :st op: argOpNode

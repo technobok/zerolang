@@ -1,0 +1,38 @@
+# generic_nested_construction.z -- a type ARGUMENT that is itself an
+# instantiation, in a value construction: `(Box t: (Cell t: i64) …)`.
+#
+# A nested argument has no name of its own, so resolving it by name found its
+# HEAD and bound the bare template. That is not just a wrong label. The
+# template was what got recorded as the argument and what keyed the trie, so
+# two constructions differing only in the nested argument collapsed onto ONE
+# mono, and a field typed by the parameter named a type nothing ever emits
+# (`unknown type name` from the C compiler).
+#
+# Both failure modes are covered, and the values are what covers the silent
+# one: `Box` holds a field OF its parameter and the three arguments have
+# different layouts, so a conflation prints a wrong number rather than merely
+# compiling.
+Cell: record {
+    v: t
+} as { t: anyval.generic }
+
+Wide: record {
+    v: i64
+    w: i64
+} as { t: anyval.generic }
+
+Box: record {
+    inner: t
+} as { t: anyval.generic }
+
+main: function is {
+    # same template, DIFFERENT argument: these two must not share a mono
+    a: (Box t: (Cell t: i64) inner: (Cell t: i64 v: 7))
+    b: (Box t: (Cell t: u8) inner: (Cell t: u8 v: 200))
+    # a different template again, and a wider layout: reading two fields off it
+    # catches a Box that took the wrong inner type
+    c: (Box t: (Wide t: i64) inner: (Wide t: i64 v: 11 w: 13))
+    print "a=\{a.inner.v}"
+    print "b=\{b.inner.v}"
+    print "c=\{c.inner.v} \{c.inner.w}"
+}
