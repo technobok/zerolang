@@ -499,48 +499,44 @@ flagValue: function {argv: (List String).view i: u64 n: u64 flagName: StringView
     return "".string
 }
 
-# CLI entry point: parse the arguments, run the requested subcommand
-# (build / check / emit-c / explain), and exit with its status.
-main: function is {
-    argv: os.args
-    n: argv.length
-    if n < 2 then {
+# dispatchHelpVerb -- the verbs that only print and stop: -h, --help,
+# help [command], -V, --version and version. Anything else returns.
+dispatchHelpVerb: function {argv: (List String).view n: u64 arg1: StringView} is {
+    if arg1 == "-h" then {
         printUsage
-        os.exit code: 2
+        os.exit code: 0
     }
+    if arg1 == "--help" then {
+        printUsage
+        os.exit code: 0
+    }
+    if arg1 == "-V" then {
+        printVersion
+        os.exit code: 0
+    }
+    if arg1 == "--version" then {
+        printVersion
+        os.exit code: 0
+    }
+    if arg1 == "version" then {
+        printVersion
+        os.exit code: 0
+    }
+    if arg1 != "help" then return
+    if n > 2 then {
+        hc: argv.get i: 2
+        printCommandHelp cmd: hc.stringView
+    } else {
+        printUsage
+    }
+    os.exit code: 0
+}
 
-    arg1: (argv.get i: 1).copy
-
-    if arg1.stringView == "-h" then {
-        printUsage
-        os.exit code: 0
-    }
-    if arg1.stringView == "--help" then {
-        printUsage
-        os.exit code: 0
-    }
-    if arg1.stringView == "-V" then {
-        printVersion
-        os.exit code: 0
-    }
-    if arg1.stringView == "--version" then {
-        printVersion
-        os.exit code: 0
-    }
-    if arg1.stringView == "version" then {
-        printVersion
-        os.exit code: 0
-    }
-    if arg1.stringView == "help" then {
-        if n > 2 then {
-            hc: argv.get i: 2
-            printCommandHelp cmd: hc.stringView
-        } else {
-            printUsage
-        }
-        os.exit code: 0
-    }
-    if arg1.stringView == "explain" then {
+# dispatchToolVerb -- the verbs that do work of their own before any unit is
+# named: `explain`, the natives table, and the three that shim through to zl.
+# Anything else returns.
+dispatchToolVerb: function {argv: (List String).borrow n: u64 arg1: StringView} is {
+    if arg1 == "explain" then {
         if n > 2 then {
             ec: argv.get i: 2
             runExplain codeArg: ec.stringView
@@ -550,242 +546,376 @@ main: function is {
         }
         os.exit code: 0
     }
-    if arg1.stringView == "natives" then {
+    if arg1 == "natives" then {
         nrows: zemitterc.nativeConvRows
         print nrows
         os.exit code: 0
     }
-    if arg1.stringView == "fmt" then {
-        rc: runZlShim verb: "fmt" :argv
-        os.exit code: rc
+    if arg1 == "fmt" then {
+        rcf: runZlShim verb: "fmt" :argv
+        os.exit code: rcf
     }
-    if arg1.stringView == "lint" then {
-        rc: runZlShim verb: "lint" :argv
-        os.exit code: rc
+    if arg1 == "lint" then {
+        rcl: runZlShim verb: "lint" :argv
+        os.exit code: rcl
     }
-    if arg1.stringView == "format" then {
-        rc: runZlShim verb: "format" :argv
-        os.exit code: rc
+    if arg1 == "format" then {
+        rcm: runZlShim verb: "format" :argv
+        os.exit code: rcm
     }
+}
 
-    sub: String
+# dispatchInlineVerb -- the print-and-stop flags accepted anywhere on the line,
+# after the subcommand rather than instead of it. Nothing returns true: each
+# one exits, and the caller reads the result like any other flag group.
+dispatchInlineVerb: function {av: StringView sub: StringView} out bool is {
+    if av == "-h" then {
+        printCommandHelp cmd: sub
+        os.exit code: 0
+    }
+    if av == "--help" then {
+        printCommandHelp cmd: sub
+        os.exit code: 0
+    }
+    if av == "-V" then {
+        printVersion
+        os.exit code: 0
+    }
+    if av == "--version" then {
+        printVersion
+        os.exit code: 0
+    }
+    return false
+}
+
+# refuseUnknownCcMode -- the one value-taking flag that validates its VALUE and
+# not merely that one was given. It has to: an unrecognised mode would
+# otherwise resolve to `spawn` and the build would silently do something other
+# than what was asked, which is the same failure `--cc-mode` exists to rule
+# out.
+refuseUnknownCcMode: function {mode: StringView} is {
+    known: (mode == "spawn") or (mode == "inproc")
+    if known then return
+    mm: "zc: --cc-mode must be 'spawn' or 'inproc', not '\{mode}'"
+    io.eprintln mm
+    os.exit code: 2
+}
+
+# argstep -- what reading one command-line argument decided.
+argstep: record {
+    # false when the argument named no flag, so the caller must judge it itself
+    taken: bool
+    # the index of the last argument consumed, one past the flag when the flag
+    # took a value
+    at: u64
+}
+
+# outmode -- what a run produces, which the subcommand and the flags decide
+# together.
+outmode: variant {
+    # build a native executable, and under `run` execute it
+    build: null
+    # standalone C
+    emitc: null
+    # the typecheck model as SQL
+    dumpsql: null
+    # the canonical model dump
+    dumpcanon: null
+}
+
+# resolveOutMode -- what was asked for. A bare unit name with --emit-c or
+# --dump-sql means that output; with neither it names no command at all.
+resolveOutMode: function {
+    sub: StringView
+    unitname: StringView
+    canon: bool
+    emitTarget: StringView
+    dumpSqlTarget: StringView
+} out outmode is {
+    if sub == "emit" then return outmode.emitc
+    if sub == "dump" then {
+        if canon then return outmode.dumpcanon
+        return outmode.dumpsql
+    }
+    if sub.length > 0 then return outmode.build
+    if emitTarget.length > 0 then return outmode.emitc
+    if dumpSqlTarget.length > 0 then return outmode.dumpsql
+    um: "zc: unknown command '\{unitname}'"
+    io.eprintln um
+    printUsage
+    os.exit code: 2
+    return outmode.build
+}
+
+# ZcFlags -- what zc's command line sets: the roots and files it names, the
+# switches it turns on, and the C toolchain it picks.
+ZcFlags: class {
+    # the unit to compile, from the command line or from a path argument
     unitname: String
-    if (isPipelineVerb name: arg1.stringView) then {
-        sub = arg1.copy
-    } else {
-        unitname = arg1.copy
-    }
-
     # every --src, in the order given: they are all roots, and the first one
     # that answers a name wins
     srcdirs: List String
+    # --system: where the stdlib lives, "" for the resolved default
     systemFlag: String
+    # --runtime: where the C runtime and natives.tbl live, "" for the default
     runtimeFlag: String
+    # --emit-c: where the C goes, "" for -o or stdout
     emitTarget: String
+    # --dump-sql: where the SQL dump goes, "" for -o or stdout
     dumpSqlTarget: String
+    # -o: where any output goes when its own flag named none
     outPath: String
-    canon: false
-    release: false
-    saveTemps: false
-    timed: false
-    fastHash: false
-    readableNames: false
-    eagerCheck: false
+    # --cc: the C compiler to drive, "" to resolve one from the target
     ccFlag: String
+    # --cc-mode: "spawn" to run the compiler as a child, "inproc" for libtcc
     ccModeFlag: String
+    # --tcc-lib: the tcc runtime payload directory, "" for the vendored one
     tccLibFlag: String
+    # --target: the triple to build for, "" for the host
     targetTriple: String
+    # --cflags: passed through to the C compile step
     cflags: String
+    # --ldflags: passed through to the link step, which inproc does not have
     ldflags: String
+    # --canon: `dump` writes the canonical model rather than SQL
+    canon: bool
+    # --release: build with optimisation
+    release: bool
+    # --save-temps: keep the generated C rather than removing it
+    saveTemps: bool
+    # --time: print the per-phase timings
+    timed: bool
+    # --fast-hash: the emitter's cheaper name hash
+    fastHash: bool
+    # --readable-names: emit source names rather than numbered ones
+    readableNames: bool
+    # --eager: typecheck every definition, not only what main reaches
+    eagerCheck: bool
+    # the arguments after `--`, which belong to the program and not to zc
     progArgs: List String
-    inProgArgs: false
-    isRun: sub.stringView == "run"
+    # whether `--` has been seen
+    inProgArgs: bool
+} as {
+    # takeProgArg -- once `--` has been seen, every remaining argument belongs
+    # to the program rather than to zc.
+    takeProgArg: function {:this av: StringView arg: String.view} out bool is {
+        if this.inProgArgs then {
+            this.progArgs.append from: arg.copy
+            return true
+        }
+        if av != "--" then return false
+        this.inProgArgs = true
+        return true
+    }
 
+    # setSwitch -- the flags that take no value. True when `av` named one.
+    setSwitch: function {:this av: StringView} out bool is {
+        if av == "--canon" then {
+            this.canon = true
+            return true
+        }
+        if av == "--release" then {
+            this.release = true
+            return true
+        }
+        if av == "--save-temps" then {
+            this.saveTemps = true
+            return true
+        }
+        if av == "--time" then {
+            this.timed = true
+            return true
+        }
+        if av == "--fast-hash" then {
+            this.fastHash = true
+            return true
+        }
+        if av == "--readable-names" then {
+            this.readableNames = true
+            return true
+        }
+        if av == "--eager" then {
+            this.eagerCheck = true
+            return true
+        }
+        return false
+    }
+
+    # takePathFlag -- the flags naming a file or a directory.
+    takePathFlag: function {
+        :this
+        av: StringView
+        argv: (List String).view
+        i: u64
+        n: u64
+    } out argstep is {
+        if av == "--src" then {
+            this.srcdirs.append from: (flagValue :argv :i :n flagName: "--src")
+            return (argstep taken: true at: i + 1)
+        }
+        if av == "--system" then {
+            this.systemFlag = (flagValue :argv :i :n flagName: "--system")
+            return (argstep taken: true at: i + 1)
+        }
+        if av == "--runtime" then {
+            this.runtimeFlag = (flagValue :argv :i :n flagName: "--runtime")
+            return (argstep taken: true at: i + 1)
+        }
+        if av == "--emit-c" then {
+            this.emitTarget = (flagValue :argv :i :n flagName: "--emit-c")
+            return (argstep taken: true at: i + 1)
+        }
+        if av == "--dump-sql" then {
+            this.dumpSqlTarget = (flagValue :argv :i :n flagName: "--dump-sql")
+            return (argstep taken: true at: i + 1)
+        }
+        if av == "-o" then {
+            this.outPath = (flagValue :argv :i :n flagName: "-o")
+            return (argstep taken: true at: i + 1)
+        }
+        return (argstep taken: false at: i)
+    }
+
+    # takeToolFlag -- the flags naming the C toolchain and what to hand it.
+    takeToolFlag: function {
+        :this
+        av: StringView
+        argv: (List String).view
+        i: u64
+        n: u64
+    } out argstep is {
+        if av == "--cc" then {
+            this.ccFlag = (flagValue :argv :i :n flagName: "--cc")
+            return (argstep taken: true at: i + 1)
+        }
+        if av == "--cc-mode" then {
+            this.ccModeFlag = (flagValue :argv :i :n flagName: "--cc-mode")
+            refuseUnknownCcMode mode: this.ccModeFlag.stringView
+            return (argstep taken: true at: i + 1)
+        }
+        if av == "--tcc-lib" then {
+            this.tccLibFlag = (flagValue :argv :i :n flagName: "--tcc-lib")
+            return (argstep taken: true at: i + 1)
+        }
+        if av == "--target" then {
+            this.targetTriple = (flagValue :argv :i :n flagName: "--target")
+            return (argstep taken: true at: i + 1)
+        }
+        if av == "--cflags" then {
+            this.cflags = (flagValue :argv :i :n flagName: "--cflags")
+            return (argstep taken: true at: i + 1)
+        }
+        if av == "--ldflags" then {
+            this.ldflags = (flagValue :argv :i :n flagName: "--ldflags")
+            return (argstep taken: true at: i + 1)
+        }
+        return (argstep taken: false at: i)
+    }
+
+    # takeOperand -- an argument naming no flag: the unit, and after it (under
+    # `run`) the program's own arguments.
+    takeOperand: function {:this arg: String.view isRun: bool} is {
+        if this.unitname.length == 0 then {
+            this.unitname = arg.copy
+            return
+        }
+        if isRun.not then return
+        this.progArgs.append from: arg.copy
+        this.inProgArgs = true
+    }
+
+    # resolveRoots -- with no --src given, a unit named as a PATH supplies its
+    # own root: the directory it sits in, with the bare stem as the unit name.
+    # With no root either way, the current directory is one.
+    resolveRoots: function {:this} is {
+        if this.srcdirs.length == 0 then {
+            isPath: (
+                (this.unitname.stringView.endsWith suffix: ".z") or
+                (this.unitname.stringView.contains needle: "/")
+            )
+            if isPath then {
+                baseNoExt: stripDotZ p: this.unitname.stringView
+                d: zcheck.dirname p: baseNoExt.stringView
+                bn: baseName p: baseNoExt.stringView
+                this.srcdirs.append from: d
+                this.unitname = bn
+            }
+        }
+        if this.srcdirs.length == 0 then this.srcdirs.append from: ".".string
+    }
+}
+
+# parseZcArgs -- every argument after the subcommand, read into a fresh
+# ZcFlags: the print-and-stop flags first, then the switches, then the two
+# groups of value-taking flags, and anything left is the unit or the program's
+# own argument.
+parseZcArgs: function {
+    argv: (List String).view
+    n: u64
+    sub: StringView
+    unitname: String.view
+    isRun: bool
+} out ZcFlags is {
+    cf: (ZcFlags
+        unitname: unitname.copy
+        srcdirs: List String
+        systemFlag: String
+        runtimeFlag: String
+        emitTarget: String
+        dumpSqlTarget: String
+        outPath: String
+        ccFlag: String
+        ccModeFlag: String
+        tccLibFlag: String
+        targetTriple: String
+        cflags: String
+        ldflags: String
+        canon: false
+        release: false
+        saveTemps: false
+        timed: false
+        fastHash: false
+        readableNames: false
+        eagerCheck: false
+        progArgs: List String
+        inProgArgs: false
+    )
     i: 2.u64
     for i < n loop {
         a: argv.get :i
-        if inProgArgs then {
-            progArgs.append from: a.copy
-        } else if a.stringView == "--" then {
-            inProgArgs = true
-        } else if a.stringView == "-h" then {
-            printCommandHelp cmd: sub.stringView
-            os.exit code: 0
-        } else if a.stringView == "--help" then {
-            printCommandHelp cmd: sub.stringView
-            os.exit code: 0
-        } else if a.stringView == "-V" then {
-            printVersion
-            os.exit code: 0
-        } else if a.stringView == "--version" then {
-            printVersion
-            os.exit code: 0
-        } else if a.stringView == "--src" then {
-            sdv: (flagValue :argv :i :n flagName: "--src")
-            srcdirs.append from: sdv
-            i = i + 1
-        } else if a.stringView == "--system" then {
-            systemFlag = (flagValue :argv :i :n flagName: "--system")
-            i = i + 1
-        } else if a.stringView == "--runtime" then {
-            runtimeFlag = (flagValue :argv :i :n flagName: "--runtime")
-            i = i + 1
-        } else if a.stringView == "--emit-c" then {
-            emitTarget = (flagValue :argv :i :n flagName: "--emit-c")
-            i = i + 1
-        } else if a.stringView == "--dump-sql" then {
-            dumpSqlTarget = (flagValue :argv :i :n flagName: "--dump-sql")
-            i = i + 1
-        } else if a.stringView == "-o" then {
-            outPath = (flagValue :argv :i :n flagName: "-o")
-            i = i + 1
-        } else if a.stringView == "--cc" then {
-            ccFlag = (flagValue :argv :i :n flagName: "--cc")
-            i = i + 1
-        } else if a.stringView == "--cc-mode" then {
-            ccModeFlag = (flagValue :argv :i :n flagName: "--cc-mode")
-            i = i + 1
-            # the one value-taking flag here that validates its VALUE, not
-            # merely that one was given. It has to: an
-            # unrecognised mode would otherwise resolve to `spawn` and the
-            # build would silently do something other than what was asked,
-            # which is the same failure `--cc-mode` exists to rule out.
-            mv: ccModeFlag.stringView
-            known: (mv == "spawn") or (mv == "inproc")
-            if known.not then {
-                mm: "zc: --cc-mode must be 'spawn' or 'inproc', not '\{mv}'"
-                io.eprintln mm
-                os.exit code: 2
-            }
-        } else if a.stringView == "--tcc-lib" then {
-            tccLibFlag = (flagValue :argv :i :n flagName: "--tcc-lib")
-            i = i + 1
-        } else if a.stringView == "--target" then {
-            targetTriple = (flagValue :argv :i :n flagName: "--target")
-            i = i + 1
-        } else if a.stringView == "--cflags" then {
-            cflags = (flagValue :argv :i :n flagName: "--cflags")
-            i = i + 1
-        } else if a.stringView == "--ldflags" then {
-            ldflags = (flagValue :argv :i :n flagName: "--ldflags")
-            i = i + 1
-        } else if a.stringView == "--canon" then {
-            canon = true
-        } else if a.stringView == "--release" then {
-            release = true
-        } else if a.stringView == "--save-temps" then {
-            saveTemps = true
-        } else if a.stringView == "--time" then {
-            timed = true
-        } else if a.stringView == "--fast-hash" then {
-            fastHash = true
-        } else if a.stringView == "--readable-names" then {
-            readableNames = true
-        } else if a.stringView == "--eager" then {
-            eagerCheck = true
-        } else if unitname.length == 0 then {
-            unitname = a.copy
-        } else if isRun then {
-            progArgs.append from: a.copy
-            inProgArgs = true
+        av: a.stringView
+        known: cf.takeProgArg :av arg: a
+        if known.not then known = dispatchInlineVerb :av :sub
+        if known.not then known = cf.setSwitch :av
+        if known.not then {
+            sp: cf.takePathFlag :av :argv :i :n
+            known = sp.taken
+            i = sp.at
         }
+        if known.not then {
+            st9: cf.takeToolFlag :av :argv :i :n
+            known = st9.taken
+            i = st9.at
+        }
+        if known.not then cf.takeOperand arg: a :isRun
         i = i + 1
     }
+    return cf
+}
 
-    # validated here, not at the flag, because `--target` and `--cc` are order
-    # independent and this is the first point where both are known. It runs for
-    # every subcommand: `zc env --target <garbage>` reported a cross compiler
-    # for a triple that means nothing, and `zc emit` folded the host into it.
-    {
-        te: ztypecheck.targetTripleError triple: targetTriple.stringView
-        if te.length > 0 then {
-            tm: "zc: \{te.stringView}"
-            io.eprintln tm
-            os.exit code: 2
-        }
-    }
-
-    if sub.stringView == "env" then {
-        (printEnv
-            systemFlag: systemFlag.stringView
-            runtimeFlag: runtimeFlag.stringView
-            ccFlag: ccFlag.stringView
-            ccModeFlag: ccModeFlag.stringView
-            targetTriple: targetTriple.stringView
-            tccLibFlag: tccLibFlag.stringView
-        )
-        os.exit code: 0
-    }
-
-    isEmit: sub.stringView == "emit"
-    isDumpSql: false
-    isDumpCanon: false
-    if sub.stringView == "dump" then {
-        if canon then {
-            isDumpCanon = true
-        } else {
-            isDumpSql = true
-        }
-    } else if sub.length == 0 then {
-        if emitTarget.length > 0 then {
-            isEmit = true
-        } else if dumpSqlTarget.length > 0 then {
-            isDumpSql = true
-        } else {
-            um: "zc: unknown command '\{unitname.stringView}'"
-            io.eprintln um
-            printUsage
-            os.exit code: 2
-        }
-    }
-
-    if unitname.length == 0 then {
-        io.eprintln "zc: no unit specified"
-        os.exit code: 2
-    }
-
-    if srcdirs.length == 0 then {
-        isPath: (
-            (unitname.stringView.endsWith suffix: ".z") or
-            (unitname.stringView.contains needle: "/")
-        )
-        if isPath then {
-            baseNoExt: stripDotZ p: unitname.stringView
-            d: zcheck.dirname p: baseNoExt.stringView
-            bn: baseName p: baseNoExt.stringView
-            srcdirs.append from: d
-            unitname = bn
-        }
-    }
-    if srcdirs.length == 0 then srcdirs.append from: ".".string
-
-    systemdir: zcheck.resolveSystemDir flagVal: systemFlag.stringView
-    runtimeDir: zcheck.resolveRuntimeDir flagVal: runtimeFlag.stringView
-    # resolved BEFORE the parse: the `platform` unit's constants are folded
-    # during type checking, so the answer has to exist by then. The build
-    # branch below reuses this rather than resolving a second time.
-    ccPath: zcheck.pickCc ccFlag: ccFlag.stringView targetTriple: targetTriple.stringView
-    # resolved here for the same reason: the payload directory belongs to the
-    # compiler choice, and the build branch below reuses this rather than
-    # resolving a second time.
-    tccDir: zcheck.resolveTccDir flagVal: tccLibFlag.stringView
-    ccMode: zcheck.pickCcMode modeFlag: ccModeFlag.stringView
-
-    tParse0: os.monotonicMillis
-    vfs: (zvfs.ZVfs
-        providers: List zvfs.ProviderBox
-        providerRoot: (IdMapR u32 V: String)
-        entrytable: (zvfs.DentryTable entries: ListVal zvfs.dentry)
-        file_names: List String
-        walk_cache: (MapRV String v: zvfs.fsno)
-        rootid: zvfs.fsno
-    )
+# buildVfs -- the file system a parse reads: the stdlib bound first, then each
+# --src root. Each `before` puts its root ahead of everything already bound, so
+# binding back to front leaves the FIRST --src searched first. A unit name that
+# two roots both answer resolves to the earlier flag's copy. Returns the root
+# the parse starts from.
+buildVfs: function {
+    vfs: zvfs.ZVfs
+    systemdir: StringView
+    srcdirs: (List String).view
+} out zvfs.fsno is {
     vfs.registerNull
-    systemid: vfs.registerFS rootpath: systemdir.copy parentpath: "".string
+    systemid: vfs.registerFS rootpath: systemdir.string parentpath: "".string
     vfs.bindRoot newid: systemid kind: zvfs.bindkind.instead
-    # each `before` puts its root ahead of everything already bound, so binding
-    # back to front leaves the FIRST --src searched first. A unit name that two
-    # roots both answer resolves to the earlier flag's copy.
     rootid: zvfs.fsno
     si: srcdirs.length
     for si > 0 loop {
@@ -794,244 +924,422 @@ main: function is {
         sid: vfs.registerFS rootpath: sd.copy parentpath: "".string
         rootid = vfs.bindRoot newid: sid kind: zvfs.bindkind.before
     }
+    return rootid
+}
 
+# reportParseError -- a failed parse hands the tree back with the error as its
+# root row: render it and stop.
+reportParseError: function {
+    prog: zast.Ast.view
+    vfs: zvfs.ZVfs
+    ast: zast.Ast.view
+    fallbackFsno: zvfs.fsno
+} is {
+    progRoot: prog.nodes.get i: prog.root.u64
+    match (
+        progRoot
+    ) case error then {
+        emsg: (errorMessage
+            e: (zast.errorDataOf ast: prog row: progRoot)
+            :vfs
+            :ast
+            :fallbackFsno
+        )
+        io.eprintln emsg
+    } else null
+    io.eprintln "1 error found"
+    os.exit code: 1
+}
+
+# reportTypeErrors -- render every type error and stop, the count last.
+# Returns when the program typechecked.
+reportTypeErrors: function {
+    st: zenv.ZSymbolTable.view
+    prog: zast.Ast.view
+    vfs: zvfs.ZVfs
+    mainFsno: zvfs.fsno
+} is {
+    nerr: st.typing.errors.length
+    if nerr == 0 then return
+    with eit: st.typing.errors.iterate do for er: eit loop {
+        elx: errorMessage e: er :vfs ast: prog fallbackFsno: mainFsno
+        io.eprintln elx
+    }
+    if nerr == 1 then {
+        io.eprintln "1 error found"
+    } else {
+        summ: "\{nerr} errors found"
+        io.eprintln summ
+    }
+    os.exit code: 1
+}
+
+# outTarget -- where an output goes: the flag that names it, else -o, else
+# stdout.
+outTarget: function {primary: StringView fallback: StringView} out String is {
+    if primary.length > 0 then return primary.string
+    if fallback.length > 0 then return fallback.string
+    return "-".string
+}
+
+# chooseExePath -- where a build writes its executable: a temporary under
+# `run`, `-o` when it names one, else `./<unit>` with the target's suffix.
+chooseExePath: function {
+    isRun: bool
+    outPath: StringView
+    unitname: StringView
+    targetTriple: StringView
+} out String is {
+    if isRun then return (tempPath uname: unitname ext: ".bin")
+    if outPath.length > 0 then return outPath.string
+    e2: "./".string
+    e2.append unitname
+    e2.append (ztypecheck.targetExeSuffix triple: targetTriple)
+    return e2
+}
+
+# refuseCrossTarget -- a cross target is only as real as the compiler resolved
+# for it. `--cc` wins over the triple in pickCc, which is right for picking but
+# meant nobody ever asked whether the two AGREE: --cc tcc --target
+# x86_64-windows built a Linux ELF that printed `platform=windows`. The
+# evidence accepted is the compiler's own name -- a `<triple>-` prefixed
+# driver, which is exactly what pickCc synthesises when no --cc is given, so
+# the documented cross path passes unchanged.
+refuseCrossTarget: function {targetTriple: StringView cc: StringView isTcc: bool} is {
+    if (ztypecheck.targetIsHost triple: targetTriple) then return
+    cb: baseName p: cc
+    tp: targetTriple.string
+    tp.append "-"
+    if (cb.stringView.startsWith prefix: tp) then return
+    if isTcc then {
+        tt: "zc: --cc tcc cannot build for --target '\{targetTriple}'"
+        io.eprintln tt
+        io.eprintln "  the vendored tinycc is a host-only linux-x86_64 build: one backend, one config triple"
+    } else {
+        tc: "zc: '\{cc}' cannot build for --target '\{targetTriple}'"
+        io.eprintln tc
+        th: "  a cross build needs a compiler named '\{tp.stringView}gcc' or '\{tp.stringView}clang'"
+        io.eprintln th
+    }
+    os.exit code: 2
+}
+
+# refuseInprocMisuse -- `--cc-mode inproc` means libtcc, so it means tcc.
+# Rejecting the combination here rather than letting the mode quietly apply to
+# a gcc build follows the rule everywhere: the resolved mode is the requested
+# one, or it is an error.
+refuseInprocMisuse: function {
+    isTcc: bool
+    cc: StringView
+    ccTcc: StringView
+    tccDir: StringView
+    ldflags: StringView
+} is {
+    if isTcc.not then {
+        nm: "zc: --cc-mode inproc needs a tcc compiler; --cc resolved to '\{cc}'"
+        io.eprintln nm
+        os.exit code: 2
+    }
+    if ccTcc.length == 0 then {
+        nd: "zc: --cc-mode inproc found no tcc runtime payload at '\{tccDir}'; set --tcc-lib or ZEROLANG_TCC"
+        io.eprintln nd
+        os.exit code: 2
+    }
+    # --ldflags reaches a linker and inproc has none. Dropping them would make
+    # the SAME command fail under spawn and succeed here; that divergence is
+    # what this refusal stops.
+    if ldflags.length > 0 then {
+        nf: "zc: --ldflags '\{ldflags}' cannot be honoured under --cc-mode inproc"
+        io.eprintln nf
+        io.eprintln "  libtcc links through the state that compiled, so there is no link step to pass them to; use --cc-mode spawn"
+        os.exit code: 2
+    }
+}
+
+# reportBuildFailure -- 127 from either mode: os.spawn returns it when exec
+# fails, tcc.compileToExe when libtcc will not load. One code, one report, with
+# the path that was actually tried. Returns when the build succeeded.
+reportBuildFailure: function {rc: i32 inproc: bool cc: StringView ccTcc: StringView} is {
+    if rc == 0 then return
+    if rc == 127 then {
+        cmsg: "zc: could not run C compiler '\{cc}' (not found?); set --cc or install it"
+        if inproc then cmsg = "zc: could not load libtcc from '\{ccTcc}/libtcc.so'; set --tcc-lib, or drop --cc-mode inproc to run tcc as a child process"
+        io.eprintln cmsg
+    }
+    os.exit code: rc
+}
+
+# runBuiltProgram -- `zc run`: hand the program its own arguments, remove the
+# executable, and exit with its status.
+runBuiltProgram: function {exe: StringView progArgs: (List String).view} is {
+    sargs: List String
+    sargs.append from: exe.string
+    with pit: progArgs.iterate do for pe: pit loop {
+        sargs.append from: pe.copy
+    }
+    prc: os.spawn argv: sargs cwd: "" outPath: "" errPath: "" timeoutSecs: 0
+    removeTemp path: exe
+    os.exit code: prc
+}
+
+# buildAndRun -- the default output: write the C to a temporary, compile it
+# with the resolved toolchain, and under `run` execute the result.
+buildAndRun: function {
+    cf: ZcFlags.view
+    csrc: StringView
+    libs: (List String).view
+    cc: StringView
+    ccMode: StringView
+    tccDir: StringView
+    isRun: bool
+} is {
+    tmpc: tempPath uname: cf.unitname.stringView ext: ".c"
+    wrc: io.writeText path: tmpc content: csrc
+    match (
+        wrc
+    ) case ok then null case err then {
+        io.eprintln "zc: could not write temporary C"
+        os.exit code: 1
+    }
+    exe: (chooseExePath
+        :isRun
+        outPath: cf.outPath.stringView
+        unitname: cf.unitname.stringView
+        targetTriple: cf.targetTriple.stringView
+    )
+    # -B goes to tcc and to nothing else: another compiler would reject it, and
+    # a tcc that is not the one this tree ships has a payload of its own.
+    # `--tcc-lib` overrides when both are present.
+    ccTcc: String
+    cka: ztypecheck.ccKindArm ccPath: cc
+    isTcc: cka.stringView == "tcc"
+    if isTcc when (io.exists path: tccDir) then ccTcc = tccDir.string
+    refuseCrossTarget targetTriple: cf.targetTriple.stringView :cc :isTcc
+    inproc: ccMode == "inproc"
+    if inproc then (refuseInprocMisuse
+        :isTcc
+        :cc
+        ccTcc: ccTcc.stringView
+        :tccDir
+        ldflags: cf.ldflags.stringView
+    )
+    rc: (buildExe
+        :cc
+        tempC: tmpc.stringView
+        exe: exe.stringView
+        release: cf.release
+        cflags: cf.cflags.stringView
+        ldflags: cf.ldflags.stringView
+        :libs
+        tccDir: ccTcc.stringView
+        :inproc
+    )
+    if cf.saveTemps then {
+        kept: "zc: kept generated C at \{tmpc.stringView}"
+        io.eprintln kept
+    } else {
+        removeTemp path: tmpc.stringView
+    }
+    reportBuildFailure :rc :inproc :cc ccTcc: ccTcc.stringView
+    if isRun then runBuiltProgram exe: exe.stringView progArgs: cf.progArgs
+}
+
+# refuseBadTarget -- validated here, not at the flag, because `--target` and
+# `--cc` are order independent and this is the first point where both are
+# known. It runs for every subcommand: `zc env --target <garbage>` reported a
+# cross compiler for a triple that means nothing, and `zc emit` folded the host
+# into it.
+refuseBadTarget: function {targetTriple: StringView} is {
+    te: ztypecheck.targetTripleError triple: targetTriple
+    if te.length == 0 then return
+    tm: "zc: \{te.stringView}"
+    io.eprintln tm
+    os.exit code: 2
+}
+
+# newVfs -- an empty file system for a parse to bind its roots into.
+newVfs: function {} out zvfs.ZVfs is {
+    return (zvfs.ZVfs
+        providers: List zvfs.ProviderBox
+        providerRoot: (IdMapR u32 V: String)
+        entrytable: (zvfs.DentryTable entries: ListVal zvfs.dentry)
+        file_names: List String
+        walk_cache: (MapRV String v: zvfs.fsno)
+        rootid: zvfs.fsno
+    )
+}
+
+# resolveFoldPaths -- the paths natives.tbl marks `fold` are what the type
+# checker is allowed to answer at compile time, and it reads no files itself.
+# An unreadable table is a broken install, and a compiler that went on to fold
+# nothing would report a guard it never evaluated.
+resolveFoldPaths: function {runtimeDir: StringView into: List String} is {
+    if (zcheck.foldNativePaths :runtimeDir :into) then return
+    io.eprintln "zc: cannot read '\{runtimeDir}/natives.tbl'"
+    io.eprintln "zc: the compile-time values it names cannot be answered without it"
+    os.exit code: 2
+}
+
+# emitCSource -- the C for the whole program, with any emitter refusal reported
+# and the phase timings printed when --time asked for them. Both output paths
+# that need C ask this, so they cannot drift apart.
+emitCSource: function {
+    prog: zast.Ast.view
+    st: zenv.ZSymbolTable
+    runtimeDir: StringView
+    cf: ZcFlags.view
+    libs: (List String).view
+    t0: i64
+    t1: i64
+    t2: i64
+} out String is {
+    emitErrs: List String
+    csrc: (zemitterc.emitC
+        program: prog
+        symtab: st
+        :runtimeDir
+        fastHash: cf.fastHash
+        readableNames: cf.readableNames
+        errs: emitErrs
+        :libs
+    )
+    failEmitErrors errs: emitErrs
+    if cf.timed then printPhases :t0 :t1 :t2 t3: os.monotonicMillis
+    return csrc
+}
+
+# CLI entry point: read the verbs answered before any flag, parse the rest of
+# the command line, then produce what the subcommand and the flags asked for --
+# C, a model dump, or a native executable, run when `run` asked for it.
+main: function is {
+    argv: os.args
+    n: argv.length
+    if n < 2 then {
+        printUsage
+        os.exit code: 2
+    }
+    arg1: (argv.get i: 1).copy
+    dispatchHelpVerb :argv :n arg1: arg1.stringView
+    dispatchToolVerb :argv :n arg1: arg1.stringView
+    sub: String
+    unitname: String
+    if (isPipelineVerb name: arg1.stringView) then {
+        sub = arg1.copy
+    } else {
+        unitname = arg1.copy
+    }
+    isRun: sub.stringView == "run"
+    cf: parseZcArgs :argv :n sub: sub.stringView :unitname :isRun
+    refuseBadTarget targetTriple: cf.targetTriple.stringView
+    if sub.stringView == "env" then {
+        (printEnv
+            systemFlag: cf.systemFlag.stringView
+            runtimeFlag: cf.runtimeFlag.stringView
+            ccFlag: cf.ccFlag.stringView
+            ccModeFlag: cf.ccModeFlag.stringView
+            targetTriple: cf.targetTriple.stringView
+            tccLibFlag: cf.tccLibFlag.stringView
+        )
+        os.exit code: 0
+    }
+    mode: (resolveOutMode
+        sub: sub.stringView
+        unitname: cf.unitname.stringView
+        canon: cf.canon
+        emitTarget: cf.emitTarget.stringView
+        dumpSqlTarget: cf.dumpSqlTarget.stringView
+    )
+    if cf.unitname.length == 0 then {
+        io.eprintln "zc: no unit specified"
+        os.exit code: 2
+    }
+    cf.resolveRoots
+    systemdir: zcheck.resolveSystemDir flagVal: cf.systemFlag.stringView
+    runtimeDir: zcheck.resolveRuntimeDir flagVal: cf.runtimeFlag.stringView
+    # resolved BEFORE the parse: the `platform` unit's constants are folded
+    # during type checking, so the answer has to exist by then. The build
+    # branch below reuses this rather than resolving a second time.
+    ccPath: (zcheck.pickCc
+        ccFlag: cf.ccFlag.stringView
+        targetTriple: cf.targetTriple.stringView
+    )
+    # resolved here for the same reason: the payload directory belongs to the
+    # compiler choice, and the build branch below reuses this rather than
+    # resolving a second time.
+    tccDir: zcheck.resolveTccDir flagVal: cf.tccLibFlag.stringView
+    ccMode: zcheck.pickCcMode modeFlag: cf.ccModeFlag.stringView
+    tParse0: os.monotonicMillis
+    vfs: newVfs
+    rootid: buildVfs :vfs systemdir: systemdir.stringView srcdirs: cf.srcdirs
     p: zparser.Parser.create
-    prog: p.parse :vfs :rootid mainUnitName: unitname
+    prog: p.parse :vfs :rootid mainUnitName: cf.unitname
     tParse1: os.monotonicMillis
-    mfn: "\{unitname.stringView}.z"
+    mfn: "\{cf.unitname.stringView}.z"
     mainFsno: vfs.walk parent: rootid name: mfn.stringView
-
     # a dump introspects the unit rather than building it, so it asks for no
     # entry point -- the one command that reads the model instead of emitting it
-    reqMain: (isDumpSql or isDumpCanon).not
+    wantRows: mode.dumpsql or mode.dumpcanon
     # a failed parse hands back the tree with the error as its root row. The
     # test is a call, not a binding, so no shared lock on `prog.nodes` outlives
     # it -- typecheck below takes the tree exclusively.
     if (zast.isErrorAt ast: prog id: prog.root.u32) then {
-        progRoot: prog.nodes.get i: prog.root.u64
-        match (
-            progRoot
-        ) case error then {
-            emsg: (errorMessage
-                e: (zast.errorDataOf ast: prog row: progRoot)
-                :vfs
-                ast: p.ast
-                fallbackFsno: mainFsno
-            )
-            io.eprintln emsg
-        } else null
-        io.eprintln "1 error found"
-        os.exit code: 1
-    } else {
-        reg: ztypes.newRegistry
-        # the model dump reads the per-frame rows; a build or emit does not
-        wantRows: isDumpSql or isDumpCanon
-        foldPaths: List String
-        # resolved here with ccPath and for the same reason: the paths
-        # natives.tbl marks `fold` are what the type checker is allowed to
-        # answer at compile time, and it reads no files itself. An
-        # unreadable table is a broken install, and a compiler that went on
-        # to fold nothing would report a guard it never evaluated.
-        if (
-            (zcheck.foldNativePaths
-                runtimeDir: runtimeDir.stringView
-                into: foldPaths
-            ).not
-        ) then {
-            io.eprintln "zc: cannot read '\{runtimeDir.stringView}/natives.tbl'"
-            io.eprintln "zc: the compile-time values it names cannot be answered without it"
-            os.exit code: 2
-        }
-        st: (ztypecheck.typecheck
-            program: prog
-            :reg
-            eager: eagerCheck
-            requireMain: reqMain
-            dumpRows: wantRows
-            ccPath: ccPath.stringView
-            ccMode: ccMode.stringView
-            target: targetTriple.stringView
-            :foldPaths
-        )
-        checkStart: os.monotonicMillis
-        nerr: st.typing.errors.length
-        if nerr > 0 then {
-            with eit: st.typing.errors.iterate do for er: eit loop {
-                elx: errorMessage e: er :vfs ast: prog fallbackFsno: mainFsno
-                io.eprintln elx
-            }
-            if nerr == 1 then {
-                io.eprintln "1 error found"
-            } else {
-                summ: "\{nerr} errors found"
-                io.eprintln summ
-            }
-            os.exit code: 1
-        }
-        if isEmit then {
-            emitErrs: List String
-            emitLibs: ztypecheck.requiredLibs :st program: prog
-            csrc: (zemitterc.emitC
-                program: prog
-                symtab: st
-                runtimeDir: runtimeDir.stringView
-                :fastHash
-                :readableNames
-                errs: emitErrs
-                libs: emitLibs
-            )
-            failEmitErrors errs: emitErrs
-            if timed then printPhases t0: tParse0 t1: tParse1 t2: checkStart t3: os.monotonicMillis
-            tgt: emitTarget.copy
-            if tgt.length == 0 then tgt = outPath.copy
-            if tgt.length == 0 then tgt = "-".string
-            writeOut target: tgt.stringView content: csrc.stringView what: "C output"
-        } else if isDumpCanon then {
-            canonOut: zsqldump.dumpCanon program: prog symtab: st
-            tgt2: outPath.copy
-            if tgt2.length == 0 then tgt2 = "-".string
-            writeOut target: tgt2.stringView content: canonOut.stringView what: "canonical dump"
-        } else if isDumpSql then {
-            sql: zsqldump.dumpSql program: prog :vfs symtab: st
-            tgt3: dumpSqlTarget.copy
-            if tgt3.length == 0 then tgt3 = outPath.copy
-            if tgt3.length == 0 then tgt3 = "-".string
-            writeOut target: tgt3.stringView content: sql.stringView what: "SQL dump"
-        } else {
-            emitErrs2: List String
-            emitLibs2: ztypecheck.requiredLibs :st program: prog
-            csrc2: (zemitterc.emitC
-                program: prog
-                symtab: st
-                runtimeDir: runtimeDir.stringView
-                :fastHash
-                :readableNames
-                errs: emitErrs2
-                libs: emitLibs2
-            )
-            failEmitErrors errs: emitErrs2
-            if timed then printPhases t0: tParse0 t1: tParse1 t2: checkStart t3: os.monotonicMillis
-            tmpc: tempPath uname: unitname.stringView ext: ".c"
-            wrc: io.writeText path: tmpc content: csrc2
-            match (
-                wrc
-            ) case ok then null case err then {
-                io.eprintln "zc: could not write temporary C"
-                os.exit code: 1
-            }
-            cc: ccPath.copy
-            exe: String
-            if isRun then {
-                exe = tempPath uname: unitname.stringView ext: ".bin"
-            } else {
-                if outPath.length > 0 then {
-                    exe = outPath.copy
-                } else {
-                    e2: "./".string
-                    e2.append unitname
-                    e2.append (ztypecheck.targetExeSuffix triple: targetTriple.stringView)
-                    exe = e2
-                }
-            }
-            # -B goes to tcc and to nothing else: another compiler would
-            # reject it, and a tcc that is not the one this tree ships has a
-            # payload of its own. `--tcc-lib` overrides when both are present.
-            ccTcc: String
-            cka: ztypecheck.ccKindArm ccPath: cc.stringView
-            isTcc: cka.stringView == "tcc"
-            if isTcc when (io.exists path: tccDir) then ccTcc = tccDir.copy
-            # A cross target is only as real as the compiler resolved for it.
-            # `--cc` wins over the triple in pickCc, which is right for picking
-            # but meant nobody ever asked whether the two AGREE: --cc tcc
-            # --target x86_64-windows built a Linux ELF that printed
-            # `platform=windows`. The evidence accepted is the compiler's own
-            # name -- a `<triple>-` prefixed driver, which is exactly what
-            # pickCc synthesises when no --cc is given, so the documented cross
-            # path passes unchanged.
-            if (ztypecheck.targetIsHost triple: targetTriple.stringView).not then {
-                cb: baseName p: cc.stringView
-                tp: targetTriple.copy
-                tp.append "-"
-                if (cb.stringView.startsWith prefix: tp).not then {
-                    if isTcc then {
-                        tt: "zc: --cc tcc cannot build for --target '\{targetTriple.stringView}'"
-                        io.eprintln tt
-                        io.eprintln "  the vendored tinycc is a host-only linux-x86_64 build: one backend, one config triple"
-                    } else {
-                        tc: "zc: '\{cc.stringView}' cannot build for --target '\{targetTriple.stringView}'"
-                        io.eprintln tc
-                        th: "  a cross build needs a compiler named '\{tp.stringView}gcc' or '\{tp.stringView}clang'"
-                        io.eprintln th
-                    }
-                    os.exit code: 2
-                }
-            }
-            # `--cc-mode inproc` means libtcc, so it means tcc. Rejecting the
-            # combination here rather than letting the mode quietly apply to a
-            # gcc build follows the rule everywhere: the resolved mode is the
-            # requested one, or it is an error.
-            inproc: ccMode.stringView == "inproc"
-            if inproc then {
-                if isTcc.not then {
-                    nm: "zc: --cc-mode inproc needs a tcc compiler; --cc resolved to '\{cc.stringView}'"
-                    io.eprintln nm
-                    os.exit code: 2
-                }
-                if ccTcc.length == 0 then {
-                    nd: "zc: --cc-mode inproc found no tcc runtime payload at '\{tccDir.stringView}'; set --tcc-lib or ZEROLANG_TCC"
-                    io.eprintln nd
-                    os.exit code: 2
-                }
-                # --ldflags reaches a linker and inproc has none. Dropping
-                # them would make the SAME command fail under spawn and
-                # succeed here; that divergence is what this refusal stops.
-                if ldflags.length > 0 then {
-                    nf: "zc: --ldflags '\{ldflags.stringView}' cannot be honoured under --cc-mode inproc"
-                    io.eprintln nf
-                    io.eprintln "  libtcc links through the state that compiled, so there is no link step to pass them to; use --cc-mode spawn"
-                    os.exit code: 2
-                }
-            }
-            rc: (buildExe
-                cc: cc.stringView
-                tempC: tmpc.stringView
-                exe: exe.stringView
-                :release
-                cflags: cflags.stringView
-                ldflags: ldflags.stringView
-                libs: emitLibs2
-                tccDir: ccTcc.stringView
-                :inproc
-            )
-            if saveTemps then {
-                kept: "zc: kept generated C at \{tmpc.stringView}"
-                io.eprintln kept
-            } else {
-                removeTemp path: tmpc.stringView
-            }
-            if rc != 0 then {
-                if rc == 127 then {
-                    # 127 from either mode: os.spawn returns it when exec
-                    # fails, tcc.compileToExe when libtcc will not load. One
-                    # code, one report, with the path that was actually tried.
-                    cmsg: "zc: could not run C compiler '\{cc.stringView}' (not found?); set --cc or install it"
-                    if inproc then {
-                        cmsg = "zc: could not load libtcc from '\{ccTcc.stringView}/libtcc.so'; set --tcc-lib, or drop --cc-mode inproc to run tcc as a child process"
-                    }
-                    io.eprintln cmsg
-                }
-                os.exit code: rc
-            }
-            if isRun then {
-                sargs: List String
-                sargs.append from: exe.copy
-                with pit: progArgs.iterate do for pe: pit loop {
-                    sargs.append from: pe.copy
-                }
-                prc: os.spawn argv: sargs cwd: "" outPath: "" errPath: "" timeoutSecs: 0
-                removeTemp path: exe.stringView
-                os.exit code: prc
-            }
-        }
+        reportParseError :prog :vfs ast: p.ast fallbackFsno: mainFsno
     }
+    reg: ztypes.newRegistry
+    foldPaths: List String
+    # resolved here with ccPath and for the same reason
+    resolveFoldPaths runtimeDir: runtimeDir.stringView into: foldPaths
+    st: (ztypecheck.typecheck
+        program: prog
+        :reg
+        eager: cf.eagerCheck
+        requireMain: wantRows.not
+        dumpRows: wantRows
+        ccPath: ccPath.stringView
+        ccMode: ccMode.stringView
+        target: cf.targetTriple.stringView
+        :foldPaths
+    )
+    checkStart: os.monotonicMillis
+    reportTypeErrors :st :prog :vfs :mainFsno
+    if mode.dumpcanon then {
+        canonOut: zsqldump.dumpCanon program: prog symtab: st
+        tgt2: outTarget primary: "" fallback: cf.outPath.stringView
+        writeOut target: tgt2.stringView content: canonOut.stringView what: "canonical dump"
+        return
+    }
+    if mode.dumpsql then {
+        sql: zsqldump.dumpSql program: prog :vfs symtab: st
+        tgt3: (outTarget
+            primary: cf.dumpSqlTarget.stringView
+            fallback: cf.outPath.stringView
+        )
+        writeOut target: tgt3.stringView content: sql.stringView what: "SQL dump"
+        return
+    }
+    emitLibs: ztypecheck.requiredLibs :st program: prog
+    csrc: (emitCSource
+        :prog
+        :st
+        runtimeDir: runtimeDir.stringView
+        :cf
+        libs: emitLibs
+        t0: tParse0
+        t1: tParse1
+        t2: checkStart
+    )
+    if mode.emitc then {
+        tgt: outTarget primary: cf.emitTarget.stringView fallback: cf.outPath.stringView
+        writeOut target: tgt.stringView content: csrc.stringView what: "C output"
+        return
+    }
+    (buildAndRun
+        :cf
+        csrc: csrc.stringView
+        libs: emitLibs
+        cc: ccPath.stringView
+        ccMode: ccMode.stringView
+        tccDir: tccDir.stringView
+        :isRun
+    )
 }
