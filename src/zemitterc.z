@@ -11494,7 +11494,12 @@ emitDottedNestedBase: function {
     # a no-arg List method on a nested receiver (this.field.pop): the bsmn
     # leg above missed it (bstamp keys off an atom base, 0 for a nested
     # path). Resolve the List mono from the base node and emit the call.
-    nlid: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64))
+    # the same mono-first rule the atom base takes: a CLASS receiver reaches the
+    # nested leg rather than the atom one, and inside a template body its plain
+    # stamp is the TEMPLATE, whose members name functions that are never emitted
+    nnid9: interpPartNodeId n: (ast.nodes.get i: n.parent.u64)
+    nlid: monoStampIdOf :symtab :ctx nid: nnid9.u64
+    if nlid.isZero then nlid = stampIdOf :symtab nid: nnid9
     nlid = ztypes.tid.create from: (chaseColMono :symtab :ctx tid: nlid)
     eCo: (emitNestedCollectionBase
         :symtab
@@ -12313,7 +12318,15 @@ emitDottedAtomBase: function {
     }
     eTg: dottedAtomTaggedBase :ast :symtab :ctx :mn2 :bn2r :baseAtomVid
     if eTg.length > 0 then return eTg
-    bstamp0: stampIdOf :symtab nid: bnid2
+    # Inside a generic template's body the receiver stamps as the TEMPLATE in
+    # the plain table, so a member read on it resolved the TEMPLATE's member and
+    # named a function that is never emitted -- only the per-instance clones
+    # are. The instance walk records the mono's own stamp for this very node;
+    # ask that first while one is emitting, as binopStampAt does for an
+    # operator's owner. A zero-arg method auto-call arrives HERE, through the
+    # member-read path, not through emitInstanceMethodCall.
+    bstamp0: monoStampIdOf :symtab :ctx nid: bnid2.u64
+    if bstamp0.isZero then bstamp0 = stampIdOf :symtab nid: bnid2
     bstamp: bstamp0
     bsn0: regNameView :symtab tid: bstamp0
     bcid: canonFnId :ast :symtab :ctx tid: bstamp0 name: bsn0
