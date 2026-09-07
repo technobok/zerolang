@@ -10680,133 +10680,201 @@ emitCallProbeChain: function {
     return (emitNamedCalleeChain :ast :symtab :ctx :call)
 }
 
+# ownerIsCollectionFamily -- is `fam` one of the native container families?
+# A mono's methods are the TEMPLATE's, so the family asked here is the
+# template's own id.
+ownerIsCollectionFamily: function {ctx: Ctx.view fam: ztypes.tid} out bool is {
+    return (
+        (fam == (ctx.origins.get i: ogList)) or
+        (fam == (ctx.origins.get i: ogListVal)) or
+        (fam == (ctx.origins.get i: ogListView)) or
+        (fam == (ctx.origins.get i: ogListViewVal)) or
+        (fam == (ctx.origins.get i: ogSet)) or
+        (fam == (ctx.origins.get i: ogSetVal)) or
+        (fam == (ctx.origins.get i: ogMap)) or
+        (fam == (ctx.origins.get i: ogMapRV)) or
+        (fam == (ctx.origins.get i: ogMapVR)) or
+        (fam == (ctx.origins.get i: ogMapVV)) or
+        (fam == (ctx.origins.get i: ogIdMapR)) or
+        (fam == (ctx.origins.get i: ogIdMapV)) or
+        (fam == (ctx.origins.get i: ogIdSet)) or
+        (fam == (ctx.origins.get i: ogArray))
+    )
+}
+
+# emitStringFamilyCall -- a method whose owner is String or StringView: the
+# String-argument form first, then the dotted form both share. "" declines, as
+# every leg here does.
+emitStringFamilyCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    ownerTid: ztypes.tid
+} out String is {
+    if ownerTid == ctx.strTid then {
+        rsa: emitStringArgMethod :ast :symtab :ctx :call
+        if rsa.length > 0 then return rsa
+        return (emitDottedCall :ast :symtab :ctx :call)
+    }
+    if ownerTid != ctx.svTid then return "".string
+    return (emitDottedCall :ast :symtab :ctx :call)
+}
+
+# emitUserMethodLeg -- a method on a type the compiler emits itself: the
+# iterate shim, a type-qualified call, a call through a function-pointer field,
+# and otherwise the ordinary instance method.
+emitUserMethodLeg: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    fnptrField: bool
+} out String is {
+    ruic: emitUserIterCall :ast :symtab :ctx :call
+    if ruic.length > 0 then return ruic
+    rtq: emitTypeQualCall :ast :symtab :ctx :call
+    if rtq.length > 0 then return rtq
+    if fnptrField then {
+        rfp: emitFnptrFieldCall :ast :symtab :ctx :call
+        if rfp.length > 0 then return rfp
+    }
+    return (emitInstanceMethodCall :ast :symtab :ctx :call)
+}
+
+# emitMethodDeclCall -- a callee declared as a METHOD, routed by its owner's
+# family: a native collection, the two string types, a native that takes
+# arguments, a protocol or facet, and otherwise the compiler's own emission. A
+# native, a spec, an io/net handle and a `create` never reach that last leg.
+emitMethodDeclCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    ownerTid: ztypes.tid
+    fnptrField: bool
+    isCreate: bool
+} out String is {
+    # the owner is the TEMPLATE for a native collection's method (the mono's
+    # methods are the template's); its family is its own id
+    ownerFam: originTidOf :symtab tid: ownerTid
+    if ownerFam.isZero then ownerFam = ownerTid
+    if (ownerIsCollectionFamily :ctx fam: ownerFam) then {
+        rcol: emitCollectionMethodCall :ast :symtab :ctx :call
+        if rcol.length > 0 then return rcol
+    }
+    rstr: emitStringFamilyCall :ast :symtab :ctx :call :ownerTid
+    if rstr.length > 0 then return rstr
+    # a native that takes arguments answers from its own row, before the
+    # receiver-only and operator legs get a chance to not know it
+    rnam: emitNativeArgMethod :ast :symtab :ctx :call :ownerTid
+    if rnam.length > 0 then return rnam
+    ott: symtab.reg.typetypeOf typeId: ownerTid
+    isSpec: (ott == ztypes.ztypetype.protocolType) or (ott == ztypes.ztypetype.facetType)
+    if isSpec then return (emitProtocolDispatch :ast :symtab :ctx :call)
+    if (symtab.reg.isNativeOf tid: ownerTid) then return "".string
+    isIoNat: (
+        (ownerTid.u64 == ctx.ioFileTid) or
+        (ownerTid.u64 == ctx.netListenerTid) or
+        (ownerTid.u64 == ctx.netConnTid)
+    )
+    if isIoNat then return "".string
+    if isCreate then return "".string
+    return (emitUserMethodLeg :ast :symtab :ctx :call :fnptrField)
+}
+
+# emitSiblingFnCall -- a bare call of a function declared in the unit at hand.
+# A fn-typed LOCAL's atom carries its variable id and calls through the pointer
+# instead, so an atom that has one is not this. Inside a template instance's
+# body the sibling is the instance's own function, on the per-mono stamp.
+emitSiblingFnCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    rtid: ztypes.tid
+} out String is {
+    rcal: ast.nodes.get i: call.callable.u64
+    if rcal.atomid.not then return "".string
+    if (symtab.typing.atomVariableId.has key: call.callable.u64) then return "".string
+    mfid: monoStampIdOf :symtab :ctx nid: call.callable.u64
+    if mfid.isZero then mfid = rtid
+    return (emitUserFnCall :ast :symtab :ctx :call fid: mfid)
+}
+
+# emitFuncDeclCall -- a callee declared as a free FUNCTION: a native, a generic
+# instantiation, a cross-unit call, or a sibling in the unit at hand. A native
+# answers alone: nothing follows it when its own row declines.
+emitFuncDeclCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    rtid: ztypes.tid
+} out String is {
+    if rtid > 0 when (symtab.reg.isNativeOf tid: rtid) then {
+        return (emitNativeFreeFnCall :ast :symtab :ctx :call)
+    }
+    if rtid > 0 when (isGenericType :symtab tid: rtid) then {
+        rgf: emitGenericFnCall :ast :symtab :ctx :call
+        if rgf.length > 0 then return rgf
+    }
+    rcu: emitCrossUnitFnCall :ast :symtab :ctx :call
+    if rcu.length > 0 then return rcu
+    if rtid > 0 when (isGenericType :symtab tid: rtid).not then {
+        return (emitSiblingFnCall :ast :symtab :ctx :call :rtid)
+    }
+    return "".string
+}
+
+# emitCtorDeclCall -- a callee declared as a variant ARM or as a TYPE: a
+# variant or union constructor, or a cross-unit one.
+emitCtorDeclCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    isArm: bool
+} out String is {
+    if isArm then {
+        rvc: emitVariantCtorCall :ast :symtab :ctx :call
+        if rvc.length > 0 then return rvc
+        return (emitUnionCtor :ast :symtab :ctx :call)
+    }
+    return (emitCrossUnitCtor :ast :symtab :ctx :call)
+}
+
 # emitCallByDecl -- route by the callee's DECLARATION: its kind and its owner's
-# family name the handler outright, with no name lookup and no probe. The owner of
-# a native collection's method is the TEMPLATE (a mono's methods are the
-# template's), so its family is its own id.
+# family name the handler outright, with no name lookup and no probe. A
+# declaration has ONE kind, so the four legs below are alternatives and the
+# first that matches is the answer, "" when it declines.
 emitCallByDecl: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
 } out String is {
-    # route by the callee's DECLARATION: its kind and its owner's family
-    # name the handler outright
     rdo: symtab.typing.refDecl.get key: call.callable.u64
-    match (
-        rdo
-    ) case some then {
-        rdecl: symtab.typing.decls.get i: rdo.u64
-        rkind: rdecl.kind
-        rtid: rdecl.typeId
-        ownerTid: ztypes.tid
-        if rdecl.parent.isZero.not then ownerTid = (symtab.typing.decls.get i: rdecl.parent.u64
-        ).typeId
-        if rkind.methodDecl when ownerTid.isZero.not then {
-            # the owner is the TEMPLATE for a native collection's method (the
-            # mono's methods are the template's); its family is its own id
-            ownerFam: originTidOf :symtab tid: ownerTid
-            if ownerFam.isZero then ownerFam = ownerTid
-            isCol: (
-                (ownerFam == (ctx.origins.get i: ogList)) or
-                (ownerFam == (ctx.origins.get i: ogListVal)) or
-                (ownerFam == (ctx.origins.get i: ogListView)) or
-                (ownerFam == (ctx.origins.get i: ogListViewVal)) or
-                (ownerFam == (ctx.origins.get i: ogSet)) or
-                (ownerFam == (ctx.origins.get i: ogSetVal)) or
-                (ownerFam == (ctx.origins.get i: ogMap)) or
-                (ownerFam == (ctx.origins.get i: ogMapRV)) or
-                (ownerFam == (ctx.origins.get i: ogMapVR)) or
-                (ownerFam == (ctx.origins.get i: ogMapVV)) or
-                (ownerFam == (ctx.origins.get i: ogIdMapR)) or
-                (ownerFam == (ctx.origins.get i: ogIdMapV)) or
-                (ownerFam == (ctx.origins.get i: ogIdSet)) or
-                (ownerFam == (ctx.origins.get i: ogArray))
-            )
-            if isCol then {
-                rcol: emitCollectionMethodCall :ast :symtab :ctx :call
-                if rcol.length > 0 then return rcol
-            }
-            if ownerTid == ctx.strTid then {
-                rsa: emitStringArgMethod :ast :symtab :ctx :call
-                if rsa.length > 0 then return rsa
-                rsd: emitDottedCall :ast :symtab :ctx :call
-                if rsd.length > 0 then return rsd
-            }
-            if ownerTid == ctx.svTid then {
-                rsv: emitDottedCall :ast :symtab :ctx :call
-                if rsv.length > 0 then return rsv
-            }
-            # a native that takes arguments answers from its own row, before
-            # the receiver-only and operator legs get a chance to not know it
-            rnam: emitNativeArgMethod :ast :symtab :ctx :call :ownerTid
-            if rnam.length > 0 then return rnam
-            ott: symtab.reg.typetypeOf typeId: ownerTid
-            isSpec: (ott == ztypes.ztypetype.protocolType) or (ott == ztypes.ztypetype.facetType)
-            if isSpec then {
-                rpd: emitProtocolDispatch :ast :symtab :ctx :call
-                if rpd.length > 0 then return rpd
-            }
-            isIoNat: (
-                (ownerTid.u64 == ctx.ioFileTid) or
-                (ownerTid.u64 == ctx.netListenerTid) or
-                (ownerTid.u64 == ctx.netConnTid)
-            )
+    if rdo.none then return "".string
+    rdecl: symtab.typing.decls.get i: rdo.u64
+    rkind: rdecl.kind
+    rtid: rdecl.typeId
+    ownerTid: ztypes.tid
+    if rdecl.parent.isZero.not then ownerTid = (symtab.typing.decls.get i: rdecl.parent.u64).typeId
+    if rkind.methodDecl when ownerTid.isZero.not then {
+        return (emitMethodDeclCall
+            :ast
+            :symtab
+            :ctx
+            :call
+            :ownerTid
+            fnptrField: rdecl.fnptrField
             isCreate: (zast.nameid.create from: rdecl.name) == zast.names.wkCreate
-            if (symtab.reg.isNativeOf tid: ownerTid).not when isSpec.not when (
-                isIoNat.not
-            ) when isCreate.not then {
-                ruic: emitUserIterCall :ast :symtab :ctx :call
-                if ruic.length > 0 then return ruic
-                rtq: emitTypeQualCall :ast :symtab :ctx :call
-                if rtq.length > 0 then return rtq
-                if rdecl.fnptrField then {
-                    rfp: emitFnptrFieldCall :ast :symtab :ctx :call
-                    if rfp.length > 0 then return rfp
-                }
-                rim: emitInstanceMethodCall :ast :symtab :ctx :call
-                if rim.length > 0 then return rim
-            }
-        }
-        if rkind.funcDecl then {
-            if rtid > 0 when (symtab.reg.isNativeOf tid: rtid) then {
-                rnf: emitNativeFreeFnCall :ast :symtab :ctx :call
-                if rnf.length > 0 then return rnf
-            } else {
-                if rtid > 0 when (isGenericType :symtab tid: rtid) then {
-                    rgf: emitGenericFnCall :ast :symtab :ctx :call
-                    if rgf.length > 0 then return rgf
-                }
-                rcu: emitCrossUnitFnCall :ast :symtab :ctx :call
-                if rcu.length > 0 then return rcu
-                # a bare call of a function declared in the unit at hand; a
-                # fn-typed LOCAL's atom carries its variable id and calls
-                # through the pointer instead
-                if rtid > 0 when (isGenericType :symtab tid: rtid).not then {
-                    rcal: ast.nodes.get i: call.callable.u64
-                    if rcal.atomid when (
-                        (symtab.typing.atomVariableId.has key: call.callable.u64).not
-                    ) then {
-                        # inside a template instance's body the sibling is the
-                        # instance's own function, on the per-mono stamp
-                        mfid: monoStampIdOf :symtab :ctx nid: call.callable.u64
-                        if mfid.isZero then mfid = rtid
-                        return (emitUserFnCall :ast :symtab :ctx :call fid: mfid)
-                    }
-                }
-            }
-        }
-        if rkind.armDecl then {
-            rvc: emitVariantCtorCall :ast :symtab :ctx :call
-            if rvc.length > 0 then return rvc
-            ruc: emitUnionCtor :ast :symtab :ctx :call
-            if ruc.length > 0 then return ruc
-        }
-        if rkind.typeDecl then {
-            rxc: emitCrossUnitCtor :ast :symtab :ctx :call
-            if rxc.length > 0 then return rxc
-        }
-    } case none then null
+        )
+    }
+    if rkind.funcDecl then return (emitFuncDeclCall :ast :symtab :ctx :call :rtid)
+    if rkind.armDecl then return (emitCtorDeclCall :ast :symtab :ctx :call isArm: true)
+    if rkind.typeDecl then return (emitCtorDeclCall :ast :symtab :ctx :call isArm: false)
     return "".string
 }
 
