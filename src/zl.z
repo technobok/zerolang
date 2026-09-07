@@ -220,6 +220,236 @@ runFormat: function {
     return rc
 }
 
+# argstep -- what reading one command-line argument decided.
+argstep: record {
+    # false when the argument named no flag, so the caller must judge it itself
+    taken: bool
+    # the index of the last argument consumed, which is one past the flag when
+    # the flag took a value
+    at: u64
+}
+
+# flagValue -- the argument after `i`, which is `opt`'s value. An option with no
+# argument left is a refusal, named by what it wanted: there is no default that
+# would be right to guess.
+flagValue: function {
+    opt: StringView
+    noun: StringView
+    argv: (List String).view
+    i: u64
+    n: u64
+} out String is {
+    if (i + 1) < n then return (argv.get i: i + 1).copy
+    ev: "zl: \{opt} needs a \{noun}"
+    io.eprintln ev
+    os.exit code: 2
+    return "".string
+}
+
+# flagU32 -- `opt`'s value read as a number. A value that is not one is the
+# same refusal as no value at all.
+flagU32: function {opt: StringView argv: (List String).view i: u64 n: u64} out u32 is {
+    v: flagValue :opt noun: "number" :argv :i :n
+    pv: v.stringView.parseU64
+    match (
+        pv
+    ) case ok then {
+        return pv.u32.orPanic
+    } case err then null
+    ev: "zl: \{opt} needs a number"
+    io.eprintln ev
+    os.exit code: 2
+    return 0
+}
+
+# CliFlags -- what `zl`'s command line sets: the lint options a run threads
+# through every rule, the formatter's own switches, and the roots a unit name
+# resolves against. The two "was it given" bits are kept because --line-length
+# and --complexity each have a default that applies only when the flag is
+# absent.
+CliFlags: class {
+    # the files named on the command line, in the order given
+    paths: List String
+    # every --src, in the order given: all are roots and the first that answers
+    # a unit name wins, as zc resolves them
+    srcdirs: List String
+    # where the stdlib lives
+    systemdir: String
+    # the lint options, filled in place as the flags are read
+    opts: zsource.lintopts
+    # --check: report what would change and write nothing
+    check: bool
+    # --stdout: write the result to stdout rather than back to the file
+    stdout: bool
+    # --diff: report a unified diff of what would change
+    diff: bool
+    # --collapse: collapse an elidable label
+    collapse: bool
+    # whether --line-length was given, which is what suppresses fmt's default
+    llSet: bool
+    # whether --complexity was given, which is what suppresses --arch's default
+    fcSet: bool
+} as {
+    # setLintSwitch -- the lint tier switches. True when `av` named one.
+    setLintSwitch: function {:this av: StringView} out bool is {
+        if av == "--full" then {
+            this.opts.full = true
+            return true
+        }
+        if av == "--casing" then {
+            this.opts.casing = true
+            return true
+        }
+        if av == "--docs" then {
+            this.opts.docs = true
+            return true
+        }
+        if av == "--docs-params" then {
+            this.opts.docParams = true
+            return true
+        }
+        if av == "--docs-fields" then {
+            this.opts.docFields = true
+            return true
+        }
+        if av == "--docs-private" then {
+            this.opts.docsPrivate = true
+            return true
+        }
+        if av == "--docs-quality" then {
+            this.opts.docsQuality = true
+            return true
+        }
+        if av == "--docs-all" then {
+            this.opts.docs = true
+            this.opts.docParams = true
+            this.opts.docFields = true
+            this.opts.docsPrivate = true
+            this.opts.docsQuality = true
+            return true
+        }
+        if av == "--arch" then {
+            this.opts.arch = true
+            return true
+        }
+        return false
+    }
+
+    # setFormatSwitch -- the formatter switches. True when `av` named one.
+    setFormatSwitch: function {:this av: StringView} out bool is {
+        if av == "--check" then {
+            this.check = true
+            return true
+        }
+        if av == "--stdout" then {
+            this.stdout = true
+            return true
+        }
+        if av == "--diff" then {
+            this.diff = true
+            return true
+        }
+        if av == "--collapse" then {
+            this.collapse = true
+            return true
+        }
+        return false
+    }
+
+    # takeValueFlag -- the flags whose value is the next argument. The step says
+    # whether one matched and where to continue from.
+    takeValueFlag: function {
+        :this
+        av: StringView
+        argv: (List String).view
+        i: u64
+        n: u64
+    } out argstep is {
+        if av == "--src" then {
+            this.srcdirs.append from: (flagValue opt: av noun: "directory" :argv :i :n)
+            return (argstep taken: true at: i + 1)
+        }
+        if av == "--system" then {
+            this.systemdir = flagValue opt: av noun: "directory" :argv :i :n
+            return (argstep taken: true at: i + 1)
+        }
+        if av == "--line-length" then {
+            this.opts.lineLength = flagU32 opt: av :argv :i :n
+            this.llSet = true
+            return (argstep taken: true at: i + 1)
+        }
+        if av == "--complexity" then {
+            this.opts.complexity = flagU32 opt: av :argv :i :n
+            this.fcSet = true
+            return (argstep taken: true at: i + 1)
+        }
+        return (argstep taken: false at: i)
+    }
+
+    # takeOperand -- an argument that named no flag: a target file, unless it is
+    # spelled like a flag, which is a refusal rather than a filename.
+    takeOperand: function {:this av: StringView arg: String.view} is {
+        if (av.startsWith prefix: "-") then {
+            eu: "zl: unknown flag \{av}"
+            io.eprintln eu
+            os.exit code: 2
+        }
+        # `av` views `arg` for the whole branch chain, so the list takes its own
+        # copy rather than moving the buffer out from under it
+        this.paths.append arg.copy
+    }
+
+    # lintOpts -- the options a lint run threads through every rule. --arch
+    # implies the default complexity threshold, unless --complexity named one.
+    lintOpts: function {this: this.view} out zsource.lintopts is {
+        o: this.opts
+        if this.fcSet.not when this.opts.arch then o.complexity = zsource.complexityThreshold
+        return o
+    }
+
+    # formatWidth -- the column the printer wraps at: --line-length when it was
+    # given, and fmt's own default otherwise. Lint leaves the option at 0, which
+    # turns both wrapping and W005 off.
+    formatWidth: function {this: this.view} out u32 is {
+        if this.llSet then return this.opts.lineLength
+        return 100
+    }
+}
+
+# parseArgs -- every argument from `from` on, read into a fresh CliFlags: the
+# lint switches first, then the formatter's, then the value-taking flags, and
+# anything left is a target file.
+parseArgs: function {argv: (List String).view from: u64 n: u64} out CliFlags is {
+    cf: (CliFlags
+        paths: List String
+        srcdirs: List String
+        systemdir: "lib/system".string
+        opts: zsource.defaultOpts
+        check: false
+        stdout: false
+        diff: false
+        collapse: false
+        llSet: false
+        fcSet: false
+    )
+    i: from
+    for i < n loop {
+        arg: (argv.get :i)
+        av: arg.stringView
+        known: cf.setLintSwitch :av
+        if known.not then known = cf.setFormatSwitch :av
+        if known.not then {
+            step: cf.takeValueFlag :av :argv :i :n
+            known = step.taken
+            i = step.at
+        }
+        if known.not then cf.takeOperand :av :arg
+        i = i + 1
+    }
+    if cf.srcdirs.length == 0 then cf.srcdirs.append from: ".".string
+    return cf
+}
+
 # CLI entry point for the zl linter/formatter: parse the subcommand
 # (lint / fmt / explain) and flags, then run it.
 main: function is {
@@ -254,160 +484,31 @@ main: function is {
         os.exit code: 0
     }
 
-    paths: List String
-    fCheck: false
-    fStdout: false
-    fDiff: false
-    fFull: false
-    fCasing: false
-    fDocs: false
-    fDocParams: false
-    fDocFields: false
-    fDocsPrivate: false
-    fDocsQuality: false
-    fArch: false
-    fCollapse: false
-    fComplexity: u32
-    fcSet: false
-    # every --src, in the order given: all are roots and the first that answers
-    # a unit name wins, as zc resolves them
-    srcdirs: List String
-    systemdir: "lib/system".string
-    lineLength: u32
-    llSet: false
-    i: 2.u64
-    for i < n loop {
-        arg: (argv.get :i)
-        av: arg.stringView
-        if av == "--check" then {
-            fCheck = true
-        } else if av == "--stdout" then {
-            fStdout = true
-        } else if av == "--diff" then {
-            fDiff = true
-        } else if av == "--full" then {
-            fFull = true
-        } else if av == "--casing" then {
-            fCasing = true
-        } else if av == "--docs" then {
-            fDocs = true
-        } else if av == "--docs-params" then {
-            fDocParams = true
-        } else if av == "--docs-fields" then {
-            fDocFields = true
-        } else if av == "--docs-private" then {
-            fDocsPrivate = true
-        } else if av == "--docs-quality" then {
-            fDocsQuality = true
-        } else if av == "--docs-all" then {
-            fDocs = true
-            fDocParams = true
-            fDocFields = true
-            fDocsPrivate = true
-            fDocsQuality = true
-        } else if av == "--arch" then {
-            fArch = true
-        } else if av == "--collapse" then {
-            fCollapse = true
-        } else if av == "--src" then {
-            if (i + 1) < n then {
-                i = i + 1
-                srcdirs.append from: (argv.get :i).copy
-            } else {
-                io.eprintln "zl: --src needs a directory"
-                os.exit code: 2
-            }
-        } else if av == "--system" then {
-            if (i + 1) < n then {
-                i = i + 1
-                systemdir = (argv.get :i).copy
-            } else {
-                io.eprintln "zl: --system needs a directory"
-                os.exit code: 2
-            }
-        } else if av == "--line-length" then {
-            if (i + 1) < n then {
-                i = i + 1
-                llStr: (argv.get :i)
-                llSv: llStr.stringView
-                llPv: llSv.parseU64
-                match (
-                    llPv
-                ) case ok then {
-                    lineLength = llPv.u32.orPanic
-                    llSet = true
-                } case err then {
-                    io.eprintln "zl: --line-length needs a number"
-                    os.exit code: 2
-                }
-            } else {
-                io.eprintln "zl: --line-length needs a number"
-                os.exit code: 2
-            }
-        } else if av == "--complexity" then {
-            if (i + 1) < n then {
-                i = i + 1
-                ccStr: (argv.get :i)
-                ccSv: ccStr.stringView
-                ccPv: ccSv.parseU64
-                match (
-                    ccPv
-                ) case ok then {
-                    fComplexity = ccPv.u32.orPanic
-                    fcSet = true
-                } case err then {
-                    io.eprintln "zl: --complexity needs a number"
-                    os.exit code: 2
-                }
-            } else {
-                io.eprintln "zl: --complexity needs a number"
-                os.exit code: 2
-            }
-        } else if (av.startsWith prefix: "-") then {
-            eu: "zl: unknown flag \{av}"
-            io.eprintln eu
-            os.exit code: 2
-        } else {
-            # `av` views `arg` for the whole branch chain, so the list takes
-            # its own copy rather than moving the buffer out from under it.
-            paths.append arg.copy
-        }
-        i = i + 1
-    }
-
-    if srcdirs.length == 0 then srcdirs.append from: ".".string
+    cf: parseArgs :argv from: 2 :n
     if sv == "lint" then {
-        ccThreshold: fComplexity
-        if fcSet.not when fArch then ccThreshold = zsource.complexityThreshold
-        lintOpts: (zsource.lintopts
-            full: fFull
-            :lineLength
-            casing: fCasing
-            docs: fDocs
-            docParams: fDocParams
-            docFields: fDocFields
-            docsPrivate: fDocsPrivate
-            docsQuality: fDocsQuality
-            arch: fArch
-            complexity: ccThreshold
+        lintOpts: cf.lintOpts
+        rc: (runLint
+            paths: cf.paths
+            srcdirs: cf.srcdirs
+            systemdir: cf.systemdir.stringView
+            opts: lintOpts
         )
-        rc: runLint :paths :srcdirs systemdir: systemdir.stringView opts: lintOpts
         os.exit code: rc
     }
     isFmt: sv == "fmt"
     if sv == "format" then isFmt = true
     if isFmt then {
-        if llSet.not then lineLength = 100
+        lineLength: cf.formatWidth
         rc: (runFormat
-            :paths
-            check: fCheck
-            stdout: fStdout
-            diff: fDiff
-            full: fFull
-            :srcdirs
-            systemdir: systemdir.stringView
+            paths: cf.paths
+            check: cf.check
+            stdout: cf.stdout
+            diff: cf.diff
+            full: cf.opts.full
+            srcdirs: cf.srcdirs
+            systemdir: cf.systemdir.stringView
             :lineLength
-            collapse: fCollapse
+            collapse: cf.collapse
         )
         os.exit code: rc
     }
