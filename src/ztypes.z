@@ -1574,7 +1574,20 @@ ZTypeRegistry: class {
     }
 
     # record the canonical GENERIC_PARAM type minted for a parameter, which
-    # stays 0 until resolution reaches it
+    # stays 0 until resolution reaches it.
+    #
+    # Recording under a declaration that does not own the parameter used to
+    # return without a word, which is the worst shape a miss can have here: the
+    # type the caller just minted is orphaned, every later lookup mints another,
+    # and the substitution map the clone reads comes out empty with nothing
+    # anywhere saying why. All nine callers ask isGenericParamOf (or read the
+    # declaration the parameter came from) before recording under that same
+    # declaration, so a miss is a compiler bug rather than anything a program
+    # can provoke -- measured, not assumed: instrumented to panic on either
+    # miss, no program in examples/ or the corpus reached it, nor the
+    # self-compile. It panics rather than shrugging, so the next caller that
+    # breaks the invariant hears about it at the write instead of somewhere
+    # downstream.
     setGenericParamTid: function {
         this: this.view
         # the template the parameter belongs to
@@ -1595,8 +1608,16 @@ ZTypeRegistry: class {
                 v: tid
                 pdx: plo.params.getMut i: po
                 pdx.paramTid = v
-            } case none then null
-        } case none then null
+            } case none then {
+                (panic
+                    msg: "setGenericParamTid: the declaration owns an ordinal for this parameter but no parameter list"
+                )
+            }
+        } case none then {
+            (panic
+                msg: "setGenericParamTid: recording a generic parameter under a declaration that does not own it"
+            )
+        }
     }
 
     # declare one generic parameter on a template, with its constraint
