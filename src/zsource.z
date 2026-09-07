@@ -2522,6 +2522,190 @@ Analysis: class {
         this.walkDocs :ast n: m :docs :docParams :docFields
     }
 
+    # reportDefDocs -- a definition's own two doc judgements: L016 when it
+    # carries no doc block, and L024 when the block it carries only re-says the
+    # declaration.
+    reportDefDocs: function {:this ast: Ast.view site: zast.namedsite docs: bool} is {
+        if docs then this.reportUndocDef :ast nameRef: site.name line: site.line col: site.col
+        if this.opts.docsQuality then (this.reportDocEcho
+            :ast
+            nameRef: site.name
+            line: site.line
+            col: site.col
+        )
+    }
+
+    # checkDocsMembersIn -- checkDocsMember over every member of `span`, which
+    # is the same walk for a parameter, a field and an arm; only the code and
+    # the noun differ.
+    checkDocsMembersIn: function {
+        :this
+        ast: Ast.view
+        span: zast.kidspan
+        code: StringView
+        kind: StringView
+    } is {
+        ids: zast.kidIds :ast :span
+        with cit: ids.iterate do for mId: cit loop {
+            this.checkDocsMember :ast member: (ast.nodes.get i: mId.u64) :code :kind
+        }
+    }
+
+    # walkDocsAsItems -- walkDocsAsItem over every member of `span`.
+    walkDocsAsItems: function {
+        :this ast: Ast.view span: zast.kidspan docs: bool docParams: bool docFields: bool
+    } is {
+        ids: zast.kidIds :ast :span
+        with ait: ids.iterate do for mId: ait loop {
+            this.walkDocsAsItem :ast m: (ast.nodes.get i: mId.u64) :docs :docParams :docFields
+        }
+    }
+
+    # walkDocsIn -- descend into every member of `span` as a definition of its
+    # own.
+    walkDocsIn: function {
+        :this ast: Ast.view span: zast.kidspan docs: bool docParams: bool docFields: bool
+    } is {
+        ids: zast.kidIds :ast :span
+        with wit: ids.iterate do for mId: wit loop {
+            (this.walkDocsAt
+                :ast
+                nId: (zast.nodeid.create from: mId)
+                :docs
+                :docParams
+                :docFields
+            )
+        }
+    }
+
+    # walkDocsFunction -- a function definition: its own docs, its parameters'
+    # docs, and each member of its `as` block.
+    walkDocsFunction: function {
+        :this
+        ast: Ast.view
+        site: zast.namedsite
+        params: zast.kidspan
+        asItems: zast.kidspan
+        docs: bool
+        docParams: bool
+        docFields: bool
+    } is {
+        this.reportDefDocs :ast :site :docs
+        if docParams then (this.checkDocsMembersIn
+            :ast
+            span: params
+            code: "L017"
+            kind: "parameter"
+        )
+        this.walkDocsAsItems :ast span: asItems :docs :docParams :docFields
+    }
+
+    # walkDocsObject -- a type definition: its own docs, then its is-block read
+    # according to what the kind keeps there, then each member of its `as`
+    # block.
+    walkDocsObject: function {
+        :this
+        ast: Ast.view
+        site: zast.namedsite
+        okind: zast.objectkind
+        isItems: zast.kidspan
+        asItems: zast.kidspan
+        docs: bool
+        docParams: bool
+        docFields: bool
+    } is {
+        this.reportDefDocs :ast :site :docs
+        isRC: (
+            (okind == zast.objectkind.recordDef) or
+            (okind == zast.objectkind.classDef) or
+            (okind == zast.objectkind.generatorDef)
+        )
+        isVU: (
+            (okind == zast.objectkind.variantDef) or (okind == zast.objectkind.unionDef)
+        )
+        isPF: (
+            (okind == zast.objectkind.protocolDef) or (okind == zast.objectkind.facetDef)
+        )
+        if docFields when isRC then (this.checkDocsMembersIn
+            :ast
+            span: isItems
+            code: "L018"
+            kind: "field"
+        )
+        # an arm reaches a reader the same way a field does -- hovered, one line
+        # of prose -- so it is the same code with its own noun.
+        if docFields when isVU then (this.checkDocsMembersIn
+            :ast
+            span: isItems
+            code: "L018"
+            kind: "arm"
+        )
+        # a protocol's and a facet's members are METHOD DECLARATIONS, which sit
+        # in the is-block where a record keeps its fields. They are definitions,
+        # so they descend to L016 rather than reporting as members.
+        if isPF then this.walkDocsIn :ast span: isItems :docs :docParams :docFields
+        this.walkDocsAsItems :ast span: asItems :docs :docParams :docFields
+    }
+
+    # walkDocsNamed -- a named definition, dispatched on what the name labels: a
+    # function, a type, or a nested unit.
+    walkDocsNamed: function {
+        :this ast: Ast.view site: zast.namedsite docs: bool docParams: bool docFields: bool
+    } is {
+        op: ast.nodes.get i: site.operation.u64
+        match (
+            op
+        ) case functiondef then {
+            (this.walkDocsFunction
+                :ast
+                :site
+                params: op.parameters
+                asItems: op.asItems
+                :docs
+                :docParams
+                :docFields
+            )
+        } case objectdef then {
+            (this.walkDocsObject
+                :ast
+                :site
+                okind: op.kind
+                isItems: op.isItems
+                asItems: op.asItems
+                :docs
+                :docParams
+                :docFields
+            )
+        } case unitdef then {
+            this.walkDocsUnit :ast body: op.body :docs :docParams :docFields
+        } else null
+    }
+
+    # walkDocsUnit -- a unit definition: its public surface first, then every
+    # member that surface admits.
+    walkDocsUnit: function {
+        :this ast: Ast.view body: zast.kidspan docs: bool docParams: bool docFields: bool
+    } is {
+        pubSet: IdSet u64
+        hasPub: unitPublicNames :ast :body into: pubSet
+        # --docs-private measures the whole unit: a unit with a `public:` block
+        # has no public surface to filter BY, so every member is walked. The
+        # compiler's units export a handful of names each -- zemitterc.z exports 2
+        # of 741 -- so without this the pass reports 0 and means nothing.
+        if this.opts.docsPrivate then hasPub = false
+        ids: zast.kidIds :ast span: body
+        with bit: ids.iterate do for bId: bit loop {
+            bsite: zast.namedSiteAt :ast nid: bId
+            if (unitMemberIsWalkable :ast site: bsite :pubSet :hasPub) then (this.walkDocsAt
+                :ast
+                nId: (zast.nodeid.create from: bId)
+                :docs
+                :docParams
+                :docFields
+            )
+        }
+    }
+
     # walkDocs -- opt-in doc-coverage pass. L016 flags a type/function/method with
     # no leading `#` block; L017 an undocumented parameter; L018 an undocumented
     # record/class field. Each tier is gated by its own flag.
@@ -2533,201 +2717,29 @@ Analysis: class {
         ) case program then {
             wit: ast.units.iterate
             for uId: wit loop {
-                this.walkDocs :ast n: (ast.nodes.get i: uId.u64) :docs :docParams :docFields
-            }
-        } case unitdef then {
-            pubSet: IdSet u64
-            hasPub: false
-            box2119: u64
-            for box2119 < n.body.count.u64 loop {
-                pId: zast.kidAt kids: ast.kids span: n.body i: box2119
-                box2119 = box2119 + 1
-                pm: ast.nodes.get i: pId.u64
-                if pm.namedoperation when (zast.unitOpKindIs
+                (this.walkDocsAt
                     :ast
-                    opId: pm.operation
-                    k: zast.unitkind.publicNs
-                ) then {
-                    hasPub = true
-                    pu: ast.nodes.get i: pm.operation.u64
-                    if pu.unitdef then {
-                        box2129: u64
-                        for box2129 < pu.body.count.u64 loop {
-                            eId: zast.kidAt kids: ast.kids span: pu.body i: box2129
-                            box2129 = box2129 + 1
-                            en: ast.nodes.get i: eId.u64
-                            if en.namedoperation then {
-                                eo: ast.nodes.get i: en.operation.u64
-                                match (
-                                    eo
-                                ) case atomid then {
-                                    pubSet.add item: eo.name.u64
-                                } else {
-                                    pubSet.add item: en.name.u64
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            # --docs-private measures the whole unit: a unit with a `public:` block
-            # has no public surface to filter BY, so every member is walked. The
-            # compiler's units export a handful of names each -- zemitterc.z exports 2
-            # of 741 -- so without this the pass reports 0 and means nothing.
-            if this.opts.docsPrivate then hasPub = false
-            box2139: u64
-            for box2139 < n.body.count.u64 loop {
-                bId: zast.kidAt kids: ast.kids span: n.body i: box2139
-                box2139 = box2139 + 1
-                member: ast.nodes.get i: bId.u64
-                keep: true
-                if member.namedoperation then {
-                    if (zast.unitOpKindIs
-                        :ast
-                        opId: member.operation
-                        k: zast.unitkind.publicNs
-                    ) then keep = false
-                    if (zast.unitOpKindIs
-                        :ast
-                        opId: member.operation
-                        k: zast.unitkind.privateNs
-                    ) then keep = false
-                    if (zast.unitOpKindIs
-                        :ast
-                        opId: member.operation
-                        k: zast.unitkind.requirement
-                    ) then keep = false
-                    if hasPub when keep then {
-                        inPub: pubSet.has item: member.name.u64
-                        isMain: zast.nameTextEq :ast ref: member.name s: "main"
-                        if inPub.not when isMain.not then keep = false
-                    }
-                }
-                if keep then this.walkDocs :ast n: member :docs :docParams :docFields
-            }
-        } case namedoperation then {
-            op: ast.nodes.get i: n.operation.u64
-            match (
-                op
-            ) case functiondef then {
-                if docs then this.reportUndocDef :ast nameRef: n.name line: n.lineno col: n.colno
-                if this.opts.docsQuality then (this.reportDocEcho
-                    :ast
-                    nameRef: n.name
-                    line: n.lineno
-                    col: n.colno
-                )
-                if docParams then {
-                    pax1539: u64
-                    for pax1539 < op.parameters.count.u64 loop {
-                        pmId: zast.kidAt kids: ast.kids span: op.parameters i: pax1539
-                        pax1539 = pax1539 + 1
-                        (this.checkDocsMember
-                            :ast
-                            member: (ast.nodes.get i: pmId.u64)
-                            code: "L017"
-                            kind: "parameter"
-                        )
-                    }
-                }
-                asx1739: u64
-                for asx1739 < op.asItems.count.u64 loop {
-                    amId: zast.kidAt kids: ast.kids span: op.asItems i: asx1739
-                    asx1739 = asx1739 + 1
-                    (this.walkDocsAsItem
-                        :ast
-                        m: (ast.nodes.get i: amId.u64)
-                        :docs
-                        :docParams
-                        :docFields
-                    )
-                }
-            } case objectdef then {
-                if docs then this.reportUndocDef :ast nameRef: n.name line: n.lineno col: n.colno
-                if this.opts.docsQuality then (this.reportDocEcho
-                    :ast
-                    nameRef: n.name
-                    line: n.lineno
-                    col: n.colno
-                )
-                isRC: (
-                    (op.kind == zast.objectkind.recordDef) or
-                    (op.kind == zast.objectkind.classDef) or
-                    (op.kind == zast.objectkind.generatorDef)
-                )
-                isVU: (
-                    (op.kind == zast.objectkind.variantDef) or (op.kind == zast.objectkind.unionDef)
-                )
-                isPF: (
-                    (op.kind == zast.objectkind.protocolDef) or
-                    (op.kind == zast.objectkind.facetDef)
-                )
-                if docFields when isRC then {
-                    isx1909: u64
-                    for isx1909 < op.isItems.count.u64 loop {
-                        fId: zast.kidAt kids: ast.kids span: op.isItems i: isx1909
-                        isx1909 = isx1909 + 1
-                        (this.checkDocsMember
-                            :ast
-                            member: (ast.nodes.get i: fId.u64)
-                            code: "L018"
-                            kind: "field"
-                        )
-                    }
-                }
-                # an arm reaches a reader the same way a field does -- hovered, one line
-                # of prose -- so it is the same code with its own noun.
-                if docFields when isVU then {
-                    isx1919: u64
-                    for isx1919 < op.isItems.count.u64 loop {
-                        vId: zast.kidAt kids: ast.kids span: op.isItems i: isx1919
-                        isx1919 = isx1919 + 1
-                        (this.checkDocsMember
-                            :ast
-                            member: (ast.nodes.get i: vId.u64)
-                            code: "L018"
-                            kind: "arm"
-                        )
-                    }
-                }
-                # a protocol's and a facet's members are METHOD DECLARATIONS, which sit
-                # in the is-block where a record keeps its fields. They are definitions,
-                # so they descend to L016 rather than reporting as members.
-                if isPF then {
-                    isx1929: u64
-                    for isx1929 < op.isItems.count.u64 loop {
-                        pfId: zast.kidAt kids: ast.kids span: op.isItems i: isx1929
-                        isx1929 = isx1929 + 1
-                        (this.walkDocs
-                            :ast
-                            n: (ast.nodes.get i: pfId.u64)
-                            :docs
-                            :docParams
-                            :docFields
-                        )
-                    }
-                }
-                asx1749: u64
-                for asx1749 < op.asItems.count.u64 loop {
-                    oamId: zast.kidAt kids: ast.kids span: op.asItems i: asx1749
-                    asx1749 = asx1749 + 1
-                    (this.walkDocsAsItem
-                        :ast
-                        m: (ast.nodes.get i: oamId.u64)
-                        :docs
-                        :docParams
-                        :docFields
-                    )
-                }
-            } case unitdef then {
-                (this.walkDocs
-                    :ast
-                    n: (ast.nodes.get i: n.operation.u64)
+                    nId: (zast.nodeid.create from: uId)
                     :docs
                     :docParams
                     :docFields
                 )
-            } else null
+            }
+        } case unitdef then {
+            this.walkDocsUnit :ast body: n.body :docs :docParams :docFields
+        } case namedoperation then {
+            (this.walkDocsNamed
+                :ast
+                site: (zast.namedsite
+                    name: n.name
+                    operation: n.operation
+                    line: n.lineno
+                    col: n.colno
+                )
+                :docs
+                :docParams
+                :docFields
+            )
         } else null
     }
 
@@ -4295,6 +4307,73 @@ Analysis: class {
             }
         }
     }
+}
+
+# ---- doc-coverage helpers ----
+
+# addPublicName -- the name one `public:` entry exports: an entry spelled as a
+# bare atom exports that atom's name, any other shape its own
+addPublicName: function {ast: Ast.view site: zast.namedsite into: IdSet u64} is {
+    eo: ast.nodes.get i: site.operation.u64
+    match (
+        eo
+    ) case atomid then {
+        into.add item: eo.name.u64
+    } else {
+        into.add item: site.name.u64
+    }
+}
+
+# addPublicNames -- every name one `public:` block spells, added to `into`
+addPublicNames: function {ast: Ast.view opId: zast.nodeid into: IdSet u64} is {
+    ids: ListVal u32
+    {
+        pu: ast.nodes.get i: opId.u64
+        if pu.unitdef then ids = (zast.kidIds :ast span: pu.body)
+    }
+    with eit: ids.iterate do for eId: eit loop {
+        esite: zast.namedSiteAt :ast nid: eId
+        if esite.name.isZero.not then addPublicName :ast site: esite :into
+    }
+}
+
+# unitPublicNames -- the names a unit's `public:` blocks export, into `into`;
+# the result says whether the unit has such a block at all, which is what
+# decides whether there is a surface to filter by
+unitPublicNames: function {ast: Ast.view body: zast.kidspan into: IdSet u64} out bool is {
+    hasPub: false
+    ids: zast.kidIds :ast span: body
+    with pit: ids.iterate do for pId: pit loop {
+        psite: zast.namedSiteAt :ast nid: pId
+        if psite.name.isZero.not when (zast.unitOpKindIs
+            :ast
+            opId: psite.operation
+            k: zast.unitkind.publicNs
+        ) then {
+            hasPub = true
+            addPublicNames :ast opId: psite.operation :into
+        }
+    }
+    return hasPub
+}
+
+# unitMemberIsWalkable -- does the doc pass descend into this unit member? A
+# `public:`, `private:` or `require:` block is structure rather than a
+# definition, and when the unit HAS a public surface only what it exports --
+# plus `main`, which no unit exports and every program needs -- is judged
+unitMemberIsWalkable: function {
+    ast: Ast.view
+    site: zast.namedsite
+    pubSet: (IdSet u64).view
+    hasPub: bool
+} out bool is {
+    if site.name.isZero then return true
+    if (zast.unitOpKindIs :ast opId: site.operation k: zast.unitkind.publicNs) then return false
+    if (zast.unitOpKindIs :ast opId: site.operation k: zast.unitkind.privateNs) then return false
+    if (zast.unitOpKindIs :ast opId: site.operation k: zast.unitkind.requirement) then return false
+    if hasPub.not then return true
+    if (pubSet.has item: site.name.u64) then return true
+    return (zast.nameTextEq :ast ref: site.name s: "main")
 }
 
 # ---- L013 / L014 unused-variable helpers ----
