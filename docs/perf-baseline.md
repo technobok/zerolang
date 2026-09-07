@@ -2559,3 +2559,34 @@ of how much the cheap question is worth.
 partial spec is a small row that replaces a fabricated record shell, and S8
 deleted two families of per-instance members that were minted for every
 MapEntry and MapItemIter mono in every program.
+
+## 2026-09-07 -- list slices, Phases 4 and 5 (`5ce8285f`, `eb417db5`)
+
+`c2d6511d` -> `eb417db5`, same-session gcc `-O1` binaries, A/B interleaved
+twice over the SAME source tree.
+
+| | c2d6511d | eb417db5 | delta |
+|---|---|---|---|
+| instructions | 5,432.6M -- 5,433.7M | 5,433.3M -- 5,434.2M | +0.01% (noise) |
+| allocs | 2,260,595 | 2,260,134 | **-461** |
+| bytes churned | 302,006,288 | 301,892,732 | **-113,556** |
+| wall (best of 5) | 0.46s | 0.46s | flat |
+
+**The two phases pull in opposite directions and the windows win.** Phase 4
+declared `ListVal.extendView`, which adds one member to the ListVal template and
+so mints per instance (+779 on its own). Phase 5 deleted `zgenerator.idsSlice`
+and windowed the clone at its eleven call sites instead (-443). Net across both:
+fewer allocations and 113KB less churn than before either landed.
+
+**Demand-gating `_extendView` is why the member is nearly free.** It had been
+emitted into every List mono since listviewMethods was written -- `hello.c`
+included -- and is now gated on the use site, so declaring it removed more C
+than it added.
+
+**Phase 5's other named targets were measured and left alone.**
+`zdoc.pushKidsOnto` already walks its span by index with no list;
+`zast.childIdsInto` already exists so a recursing walk allocates per WALK, not
+per node. `zast.kidSlice` was not written: `kidIds` has three call sites, one
+concatenating two spans and one a linter helper called once per run, so a window
+would serve one cold caller while pinning the tree. None of the three would have
+moved the metric.
