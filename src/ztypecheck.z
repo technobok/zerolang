@@ -3605,12 +3605,81 @@ partialTyperefTid: function {
     return 0
 }
 
-# partialParamTid -- partialTyperefTid over a PARAMETER's typeref, and the
-# enclosing declaration is the whole of it: `(Cell :t)` names `t` in the
-# template that owns it, so a resolution given no enclosing declaration cannot
-# see `t` as a parameter at all and mints a fresh record shell named `Cell_t`
-# instead. A function's own generic parameters win over the receiver's, the
-# order recordFunctionReturn uses for the same reason.
+# partialUnderDecl -- partialTyperefTid under one enclosing declaration, and the
+# declaration is the whole of it: `(Cell :t)` names `t` in the template that owns
+# it, so a resolution given none cannot see `t` as a parameter at all and mints a
+# fresh record shell under the composed name instead. Answers 0 for a declaration
+# that owns no generic parameters, which is the cheap question and keeps every
+# ordinary typeref on the path it already took.
+partialUnderDecl: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    enclDecl: ztypes.declid
+    oId: zast.nodeid
+} out u64 is {
+    if oId.isZero then return 0
+    if enclDecl.isZero then return 0
+    if (st.reg.genericParamCountOf tdecl: enclDecl) == 0 then return 0
+    return (partialTyperefTid
+        :st
+        :frame
+        :ast
+        :unitDecl
+        :enclDecl
+        nid: oId
+        stampNid: oId.u32
+    )
+}
+
+# partialFieldTid -- partialUnderDecl over a FIELD's typeref, under the
+# declaration of the type that owns the field.
+partialFieldTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    ownerTid: u64
+    oId: zast.nodeid
+} out ztypes.tid is {
+    if ownerTid == 0 then return (ztypes.tid.create from: 0)
+    od9: declOfTypeId :st tid: (ztypes.tid.create from: ownerTid.u64)
+    pu9: (partialUnderDecl :st :ast :unitDecl :frame enclDecl: od9 :oId)
+    return (ztypes.tid.create from: pu9.u64)
+}
+
+# fieldSlotTid -- a field's declared type: the partial specialisation when the
+# typeref's argument names a generic parameter of the owning template, and the
+# ordinary named shell otherwise. Both field paths ask this rather than carrying
+# the choice themselves. `shellOwnerId` is the owner the shell path wants, which
+# is not the same question as which template owns the parameter.
+fieldSlotTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    ownerTid: u64
+    shellOwnerId: u64
+    oId: zast.nodeid
+    thisName: StringView
+} out ztypes.tid is {
+    pt9: partialFieldTid :st :ast :unitDecl :frame :ownerTid :oId
+    if pt9.isZero.not then return pt9
+    return (resolveTyperefShellMarked
+        :st
+        :frame
+        :ast
+        :unitDecl
+        ownerId: shellOwnerId
+        nid: oId
+        :thisName
+    )
+}
+
+# partialParamTid -- partialUnderDecl over a PARAMETER's typeref. A function's
+# own generic parameters win over the receiver's, the order
+# recordFunctionReturn uses for the same reason.
 partialParamTid: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -3621,43 +3690,15 @@ partialParamTid: function {
     isgen: bool
     oId: zast.nodeid
 } out u64 is {
-    if oId.isZero then return 0
     ppt: u64
-    # Only a declaration that OWNS generic parameters can have one named in a
-    # typeref written inside it, and the resolve below is not free -- it walks
-    # the argument list and mints. Asking the cheap question first keeps every
-    # ordinary parameter on the path it already took.
-    fnHasP9: false
-    if fnDecl.isZero.not when (st.reg.genericParamCountOf tdecl: fnDecl) > 0 then {
-        fnHasP9 = true
-    }
-    rcHasP9: false
-    if receiverEnclDecl.isZero.not when (
-        (st.reg.genericParamCountOf
-            tdecl: receiverEnclDecl
-        ) >
-        0
-    ) then {
-        rcHasP9 = true
-    }
-    if fnHasP9.not when rcHasP9.not then return 0
-    if isgen when fnHasP9 then ppt = (partialTyperefTid
+    if isgen then ppt = (partialUnderDecl :st :ast :unitDecl :frame enclDecl: fnDecl :oId)
+    if ppt == 0 then ppt = (partialUnderDecl
         :st
-        :frame
         :ast
         :unitDecl
-        enclDecl: fnDecl
-        nid: oId
-        stampNid: oId.u32
-    )
-    if ppt == 0 when rcHasP9 then ppt = (partialTyperefTid
-        :st
         :frame
-        :ast
-        :unitDecl
         enclDecl: receiverEnclDecl
-        nid: oId
-        stampNid: oId.u32
+        :oId
     )
     return ppt
 }
@@ -4174,6 +4215,53 @@ resolveTyperefCallShell: function {
                 typeExpr: (ast.nodes.get i: opId.u64)
             )
         }
+    }
+    # The shell is a NAME, not a definition: nothing ever gives it members or a
+    # layout, so if it survives to the emitter the C is invalid -- an incomplete
+    # type, or one no translation unit declares. That is fine for the shapes it
+    # exists for (a forward reference, a sized record's value key), and a lie
+    # for a GENERIC template whose arguments did not settle: `(Cell :t)` written
+    # where nothing owns a `t` reaches here, and used to compile to a struct
+    # field of a type that was never defined. Say so instead.
+    hn9: String
+    hl9: u32
+    hc9: u32
+    {
+        cn9: ast.nodes.get i: callableId.u64
+        hn9 = atomName :ast n: cn9
+        hl9 = nodeLine n: cn9
+        hc9 = nodeCol n: cn9
+    }
+    hdG9: false
+    if hn9.length > 0 then {
+        # the head is found the way resolveMonoRefParts finds it: a name the
+        # CURRENT unit defines wins over a same-named one up the ladder
+        hid9: ztypes.tid
+        du9: (definingSiteFor :st :frame :ast :unitDecl name: hn9.stringView).defUnit
+        if du9 == unitDecl then {
+            hid9 = descendNamed :st :frame :ast unitDecl: du9 name: hn9.stringView
+        }
+        if hid9.isZero then {
+            hw9: walkLookupTyperef :st :frame :ast :unitDecl base: hn9.stringView
+            hid9 = ztypes.tid.create from: (hw9.or d: 0)
+        }
+        if hid9.isZero.not when (st.reg.isGenericOf tid: hid9) then hdG9 = true
+    }
+    if hdG9 then {
+        m9: "type argument of generic type '\{hn9}' does not name a type here"
+        h9: "a `:name` argument is `name: name`, and the VALUE must name a type or a generic parameter the enclosing declaration owns".string
+        nt9: String
+        (addErrorH
+            :st
+            nodeid: callableId
+            lineno: hl9
+            colno: hc9
+            e: zast.err.genericError
+            msg: m9
+            note: nt9
+            hint: h9
+            width: hn9.length.u32.orPanic
+        )
     }
     return (st.reg.newType name: suffix.stringView typetype: ztypes.ztypetype.recordType)
 }
@@ -7706,13 +7794,14 @@ attachRecordField: function {
         handledR = true
     } case none then null
     if handledR.not then {
-        cid: (resolveTyperefShellMarked
+        cid: (fieldSlotTid
             :st
-            :frame
             :ast
             :unitDecl
-            ownerId: 0
-            nid: fm.operation
+            :frame
+            ownerTid: rid
+            shellOwnerId: 0
+            oId: fm.operation
             thisName: defName
         )
         (refuseNullTyped
@@ -9785,13 +9874,14 @@ resolveNamedFieldSlot: function {
     # declaration that names no constant falls through to the type-ref path.
     foldTid: foldedFieldType :st :ast :cid :fm
     cidf: foldTid
-    if cidf.isZero then cidf = (resolveTyperefShellMarked
+    if cidf.isZero then cidf = (fieldSlotTid
         :st
-        :frame
         :ast
         :unitDecl
-        ownerId: cid
-        nid: fm.operation
+        :frame
+        ownerTid: cid
+        shellOwnerId: cid
+        oId: fm.operation
         thisName: defName
     )
     (st.typing.setMemberType
@@ -31458,6 +31548,80 @@ healGenericReturn: function {
     }
 }
 
+# bindPartialParamSubs -- a parameter declared as a partial specialisation binds
+# its template's parameters POSITIONALLY against the argument's own arguments:
+# `(Cell :t)` met by a `Cell_i64` binds `t` to i64. A bare parameter binds by
+# name, which is what the caller's holder list already does; this is the case
+# where the name is buried one or more levels inside a composite, so there is no
+# holder to read. The two types must share an origin and an arity, and an
+# argument that is itself a partial recurses -- that is what makes
+# `(Pair t: (Cell :t))` bind at all.
+bindPartialParamSubs: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    gparams: (ListVal zast.nameid).view
+    paramTid: u64
+    argTid: u64
+    subs: (IdMapV zast.nameid v: u64)
+} is {
+    if (st.reg.isPartialOf tid: (ztypes.tid.create from: paramTid.u64)).not then return
+    po9: st.reg.genericOriginOf tid: (ztypes.tid.create from: paramTid.u64)
+    ao9: st.reg.genericOriginOf tid: (ztypes.tid.create from: argTid.u64)
+    if po9.isZero then return
+    if (po9 == ao9).not then return
+    n9: st.reg.genericArgCount specId: (ztypes.tid.create from: paramTid.u64)
+    if (st.reg.genericArgCount specId: (ztypes.tid.create from: argTid.u64)) != n9 then return
+    i9: u64
+    for i9 < n9 loop {
+        pa9: st.reg.genericArgAt specId: (ztypes.tid.create from: paramTid.u64) ordinal: i9
+        aa9: st.reg.genericArgAt specId: (ztypes.tid.create from: argTid.u64) ordinal: i9
+        if (st.reg.isPartialOf tid: (ztypes.tid.create from: pa9.u64)) then {
+            (bindPartialParamSubs :st :ast :gparams paramTid: pa9 argTid: aa9 :subs)
+        } else {
+            (bindOneGenericParam
+                :st
+                :ast
+                :gparams
+                paramTid: pa9
+                argTid: aa9
+                :subs
+            )
+        }
+        i9 = i9 + 1
+    }
+}
+
+# bindOneGenericParam -- bind ONE of the template's generic parameters, named by
+# the spelling its canonical GENERIC_PARAM type carries, to the type that met it.
+# A name the template does not declare is not a binding, and a name already bound
+# keeps its first answer.
+bindOneGenericParam: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    gparams: (ListVal zast.nameid).view
+    paramTid: u64
+    argTid: u64
+    subs: (IdMapV zast.nameid v: u64)
+} is {
+    if argTid == 0 then return
+    pn9: st.reg.nameOf tid: (ztypes.tid.create from: paramTid.u64)
+    if pn9.length == 0 then return
+    nm9: nameIdOf :ast name: pn9.stringView
+    if nm9.isZero then return
+    isP9: false
+    with gi9: gparams.iterate do for gp9: gi9 loop {
+        if gp9 == nm9 then isP9 = true
+    }
+    if isP9.not then return
+    got9: subs.get key: nm9
+    match (
+        got9
+    ) case some then null case none then {
+        sv9: argTid
+        subs.set key: nm9 value: sv9
+    }
+}
+
 # inferGenericCallSubs -- read one call's arguments into the generic-parameter
 # substitutions: an explicit type argument names its parameter, a value argument
 # infers from the type it walks to, and a positional one binds by index.
@@ -31471,6 +31635,7 @@ inferGenericCallSubs: function {
     subs: (IdMapV zast.nameid v: u64)
     funcId: ztypes.tid
     pHolders: (ListVal zast.nameid).view
+    pHolderIds: (ListVal u64).view
 } is {
     posIdx: u64
     kAiter: u64
@@ -31507,6 +31672,7 @@ inferGenericCallSubs: function {
                 avt: (checkValueAt :st :unitDecl :ast nid: arg.operation)
                 mat: materialiseLiteral :ast :st :unitDecl t: avt
                 holder: zast.nameid
+                slotIx9: pHolderIds.length
                 # a holder of 0 is a parameter whose type name the pool never
                 # interned (a minted mono like `ListRef_String`): it binds no
                 # generic parameter, which is not the same as an unknown label
@@ -31517,6 +31683,7 @@ inferGenericCallSubs: function {
                     for hi < hn2 loop {
                         if (pNames.get i: hi) == an2 then {
                             holder = pHolders.get i: hi
+                            slotIx9 = hi
                             argFound = true
                         }
                         hi = hi + 1
@@ -31546,9 +31713,23 @@ inferGenericCallSubs: function {
                 } else {
                     if posIdx < pHolders.length then {
                         holder = pHolders.get i: posIdx
+                        slotIx9 = posIdx
                     }
                 }
                 posIdx = posIdx + 1
+                # a composite parameter buries the template's parameter name one
+                # or more levels down, so there is no holder to read: unify the
+                # declared partial against the argument's own arguments instead
+                if slotIx9 < pHolderIds.length when mat > 0 then {
+                    (bindPartialParamSubs
+                        :st
+                        :ast
+                        :gparams
+                        paramTid: (pHolderIds.get i: slotIx9)
+                        argTid: mat.u64
+                        :subs
+                    )
+                }
                 if holder.isZero.not when mat > 0 then {
                     hgot: subs.get key: holder
                     match (
@@ -31708,6 +31889,7 @@ checkGenericCall: function {
         :subs
         :funcId
         :pHolders
+        :pHolderIds
     )
     mname: st.reg.nameOf tid: funcId
     if mname.length == 0 then return (ztypes.tid.create from: 0)
