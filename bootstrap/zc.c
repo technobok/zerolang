@@ -49950,7 +49950,7 @@ uint64_t z_t3085(const z_t1067_t* z_v25318, uint64_t z_v25319, uint64_t z_v25320
 }
 
 uint64_t z_t2882(const z_t1067_t* z_v23782, uint64_t z_v23783) {
-    if (z_t5036(&z_v23782->reg, z_v23783) == ((uint8_t)Z_ZTYPETYPE_TAG_GENERICPARAM)) {
+    if (z_t5064(&z_v23782->reg, z_v23783)) {
         return 0;
     }
     return z_t5072(&z_v23782->reg, z_v23783);
@@ -73751,7 +73751,7 @@ z_t63_t z_t3046(z_t63_t* z_v34297, z_t79_t z_v34298, z_t79_t z_v34299) {
 }
 
 z_t63_t z_t3557(const z_t1067_t* z_v24118, uint64_t z_v24119) {
-    if (z_t5036(&z_v24118->reg, z_v24119) == ((uint8_t)Z_ZTYPETYPE_TAG_GENERICPARAM)) {
+    if (z_t5064(&z_v24118->reg, z_v24119)) {
         return z_t63_from_view(_zs1634);
     }
     uint64_t z_v24124 = z_t3106(z_v24118, z_v24119);
@@ -86629,7 +86629,7 @@ uint64_t z_t3908(z_t1067_t* z_v13508, z_t592_t* z_v13509, uint64_t z_v13510, uin
                 z_v13527 = (z_v13527 + 1);
             }
             uint64_t z_v13531 = z_t3462(z_v13508, z_v13509, z_v13510, z_v13511, _zcs10, z_v13512, z_v13525.callable, &z_v13526, 0U);
-            if ((z_v13531 > 0) && (z_t5036(&z_v13508->reg, ((uint64_t)z_v13531)) == ((uint8_t)Z_ZTYPETYPE_TAG_GENERICPARAM))) {
+            if ((z_v13531 > 0) && z_t5064(&z_v13508->reg, ((uint64_t)z_v13531))) {
     z_t791_destroy(&z_v13526);
                 return z_v13531;
             }
