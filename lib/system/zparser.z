@@ -2817,6 +2817,137 @@ Parser: class {
         return (optionval.none astnode)
     }
 
+    # objectMemberItem -- a `name:` item with no member after it, which names a
+    # member of the object. True when a duplicate name was recorded.
+    objectMemberItem: function {
+        :this
+        lex: zlexer.Lexer
+        items: ListVal u32
+        names: ListVal u64
+    } out bool is {
+        lblTok: lex.acceptAny pool: this.ast.names
+        nm: lblTok.text
+        dup: names.contains item: nm.u64
+        if dup then {
+            items.append (this.intern n: (this.mkError
+                tok: lblTok
+                code: zast.err.badItem
+                msg: "Duplicate item name".string
+            )
+            )
+            return true
+        }
+        names.append from: nm.u64
+        lvName: lblTok.text
+        opName: lblTok.text
+        lv: this.mkLabelValue line: lblTok.lineno col: lblTok.colno nameId: lvName
+        no: (this.mkNamedOp
+            name: opName
+            operation: lv
+            line: lblTok.lineno
+            col: lblTok.colno
+        )
+        items.append (this.intern n: no)
+        return false
+    }
+    # objectLabelItem -- a `name: member` item. The name must not repeat one
+    # already given, the member must parse, and where the name is a reserved one
+    # it must be allowed where it stands. True when any of those was recorded.
+    objectLabelItem: function {
+        :this
+        lex: zlexer.Lexer
+        items: ListVal u32
+        names: ListVal u64
+        typeBody: bool
+    } out bool is {
+        lblTok: lex.acceptAny pool: this.ast.names
+        nm: lblTok.text
+        dup: names.contains item: nm.u64
+        if dup then {
+            items.append (this.intern n: (this.mkError
+                tok: lblTok
+                code: zast.err.badItem
+                msg: "Duplicate item name".string
+            )
+            )
+            return true
+        }
+        names.append from: nm.u64
+        opName: lblTok.text
+        mKind: unitKindForLabel id: lblTok.text unitBody: false
+        lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
+        member: this.objectBodyMember :lex unitKind: mKind
+        mErr: this.isError node: member
+        if mErr then {
+            items.append (this.intern n: member)
+            return true
+        }
+        if typeBody when (isReservedMemberName id: lblTok.text) then {
+            rerr: this.reservedMemberError :lblTok :member :mKind
+            if rerr.some then {
+                items.append (this.intern n: rerr)
+                return true
+            }
+        }
+        no: (this.mkNamedOp
+            name: opName
+            operation: member
+            line: lblTok.lineno
+            col: lblTok.colno
+        )
+        items.append (this.intern n: no)
+        return false
+    }
+    # acceptObjectItems -- the item list of an object body, in source order.
+    # True when an error was recorded and the body is finished with; false when
+    # the list simply ran out, which it does as soon as no item follows.
+    acceptObjectItems: function {
+        :this
+        lex: zlexer.Lexer
+        items: ListVal u32
+        names: ListVal u64
+        typeBody: bool
+    } out bool is {
+        for true loop {
+            for (this.atEol :lex) loop lex.advance pool: this.ast.names
+            pktt: lex.peekType
+            if pktt == zlexer.toktype.labelPreTok then {
+                if (this.objectMemberItem :lex :items :names) then return true
+                continue
+            }
+            if pktt != zlexer.toktype.labelTok then break
+            if (this.objectLabelItem :lex :items :names :typeBody) then return true
+        }
+        return false
+    }
+
+    # reservedMemberError -- a reserved member name is allowed only where it
+    # introduces a unit definition, and only under the two visibility
+    # namespaces. Some is the error to record; none means the name is allowed
+    # where it stands. The two messages differ because the namespaces are the
+    # only place the name has a legitimate use, so there the diagnostic can say
+    # what to write instead.
+    reservedMemberError: function {
+        :this
+        lblTok: zlexer.token
+        member: astnode.view
+        mKind: zast.unitkind
+    } out optionval astnode is {
+        visUnit: mKind.publicNs or mKind.privateNs
+        if visUnit when (this.isUnitDef node: member) then return (optionval.none astnode)
+        lblTxt: zast.poolTextCopy pool: this.ast.names ref: lblTok.text
+        em: "'\{lblTxt}' is a reserved member name"
+        if visUnit then em = "'\{lblTxt}:' must introduce a unit definition, e.g. `\{lblTxt}: unit { :field }`"
+        (return
+            (optionval.some (this.mkError
+                tok: lblTok
+                code: zast.err.reservedMember
+                msg: em
+            )
+            )
+        )
+    }
+
     # object-body -> "{" { item } "}". Each item is `name: value` or a
     # `:name` shorthand: a method (function), an inline unit, an inline
     # field operation, or a label-value. Inline type definitions are
@@ -2840,114 +2971,32 @@ Parser: class {
             )
             )
             return items
-        } case some then {
-            for true loop {
-                for (this.atEol :lex) loop lex.advance pool: this.ast.names
-                pktt: lex.peekType
-                if pktt == zlexer.toktype.labelPreTok then {
-                    lblTok: lex.acceptAny pool: this.ast.names
-                    nm: lblTok.text
-                    dup: names.contains item: nm.u64
-                    if dup then {
-                        items.append (this.intern n: (this.mkError
-                            tok: lblTok
-                            code: zast.err.badItem
-                            msg: "Duplicate item name".string
-                        )
-                        )
-                        return items
-                    }
-                    names.append from: nm.u64
-                    lvName: lblTok.text
-                    opName: lblTok.text
-                    lv: this.mkLabelValue line: lblTok.lineno col: lblTok.colno nameId: lvName
-                    no: (this.mkNamedOp
-                        name: opName
-                        operation: lv
-                        line: lblTok.lineno
-                        col: lblTok.colno
-                    )
-                    items.append (this.intern n: no)
-                } else {
-                    isLbl: pktt == zlexer.toktype.labelTok
-                    if isLbl then {
-                        lblTok: lex.acceptAny pool: this.ast.names
-                        nm: lblTok.text
-                        dup: names.contains item: nm.u64
-                        if dup then {
-                            items.append (this.intern n: (this.mkError
-                                tok: lblTok
-                                code: zast.err.badItem
-                                msg: "Duplicate item name".string
-                            )
-                            )
-                            return items
-                        }
-                        names.append from: nm.u64
-                        opName: lblTok.text
-                        mKind: unitKindForLabel id: lblTok.text unitBody: false
-                        lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
-                        member: this.objectBodyMember :lex unitKind: mKind
-                        mErr: this.isError node: member
-                        if mErr then {
-                            items.append (this.intern n: member)
-                            return items
-                        }
-                        if typeBody when (isReservedMemberName id: lblTok.text) then {
-                            visUnit: mKind.publicNs or mKind.privateNs
-                            allowed: false
-                            if visUnit when (this.isUnitDef node: member) then allowed = true
-                            if allowed.not then {
-                                lblTxt: zast.poolTextCopy pool: this.ast.names ref: lblTok.text
-                                em: "'\{lblTxt}' is a reserved member name"
-                                if visUnit then em = "'\{lblTxt}:' must introduce a unit definition, e.g. `\{lblTxt}: unit { :field }`"
-                                items.append (this.intern n: (this.mkError
-                                    tok: lblTok
-                                    code: zast.err.reservedMember
-                                    msg: em
-                                )
-                                )
-                                return items
-                            }
-                        }
-                        no: (this.mkNamedOp
-                            name: opName
-                            operation: member
-                            line: lblTok.lineno
-                            col: lblTok.colno
-                        )
-                        items.append (this.intern n: no)
-                    } else {
-                        break
-                    }
-                }
-            }
-            closeOpt: lex.accept tt: zlexer.toktype.braceCloseTok pool: this.ast.names
-            match (
-                closeOpt
-            ) case none then {
-                badPos: lex.peekPos
-                rwTxt: this.peekReservedWord :lex
-                if rwTxt.length > 0 then {
-                    items.append (this.intern n: (this.mkErrorAt
-                        pos: badPos
-                        code: zast.err.reservedName
-                        msg: "'\{rwTxt}' is a reserved word and cannot be used as a name"
-                    )
-                    )
-                    return items
-                }
+        } case some then null
+        if (this.acceptObjectItems :lex :items :names :typeBody) then return items
+        closeOpt: lex.accept tt: zlexer.toktype.braceCloseTok pool: this.ast.names
+        match (
+            closeOpt
+        ) case none then {
+            badPos: lex.peekPos
+            rwTxt: this.peekReservedWord :lex
+            if rwTxt.length > 0 then {
                 items.append (this.intern n: (this.mkErrorAt
                     pos: badPos
-                    code: zast.err.badObjectBlock
-                    msg: "Expected closing brace for object body".string
+                    code: zast.err.reservedName
+                    msg: "'\{rwTxt}' is a reserved word and cannot be used as a name"
                 )
                 )
-                return items
-            } case some then {
                 return items
             }
-        }
+            items.append (this.intern n: (this.mkErrorAt
+                pos: badPos
+                code: zast.err.badObjectBlock
+                msg: "Expected closing brace for object body".string
+            )
+            )
+            return items
+        } case some then null
+        return items
     }
 
     # The value of a `name:` item inside an object body: a method, an
