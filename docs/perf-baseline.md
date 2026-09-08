@@ -173,6 +173,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-09-08 | 7dcb7a15 | [the A008 >=100 band, nine splits](#r-a008band) | 0.45s | -- | 95MB / -- | 108 / 170 / 184 (total 462) | 2,263,972 | 302MB | -- | 121,190 |
 | 2026-09-08 | a3f7168f | [the copy sweep: names borrowed where nobody keeps them](#r-copysweep) | 0.44s | -- | 95MB / -- | 105 / 172 / 178 (total 455) | 2,114,742 | 300MB | -- | 121,156 |
 | 2026-09-08 | 613e97e6 | [the A008 50-99 band, part 2 so far](#r-a008band5099) | 0.45s | -- | 95MB / -- | 116 / 171 / 180 (total 467) | 2,110,794 | 300MB | -- | 121,071 |
+| 2026-09-08 | 3a374c48 | [the A008 50-99 band, part 3](#r-a008band5099c) | 0.45s | -- | 95MB / -- | 117 / 171 / 180 (total 468) | 2,116,208 | 300MB | -- | 121,604 |
 
 
 <a id="r-tokenarc"></a>
@@ -2818,3 +2819,53 @@ hand-written row reads deleted. Wall is flat at 0.45s.
 **What moved on the ratchets**: `A008 src/zemitterc.z` 137 -> 132,
 `A008 src/ztypecheck.z` 177 -> 174, `A005 src/zemitterc.z` 15 -> 13,
 `A006 src/zemitterc.z` 18 -> 11.
+
+<a id="r-a008band5099c"></a>
+
+### the A008 50-99 band, part 3 (2026-09-08, `97b4ad29` -> `3a374c48`)
+
+Eight commits: six behaviour-preserving splits across `zemitterc.z` and
+`ztypecheck.z`, one shared-report collapse, and one lint-directed borrow sweep.
+Proved as every commit in this arc is -- the emitted C for all 564 corpus
+programs and all three drivers byte-identical with both compilers over the same
+source, and for a checker change every diagnostic rendered for the 374 error
+fixtures unchanged as well.
+
+| | 97b4ad29 | 3a374c48 |
+|---|---|---|
+| allocations | 2,120,535 | 2,116,208 |
+| instructions | 5,488.3M -- 5,490.7M | 5,493.8M -- 5,494.3M |
+| wall, mean of 5 | 0.471s | 0.460s -- 0.468s |
+| peak RSS | 95.5MB | 95.5MB |
+
+(Both compilers over the SAME tree, staged in one directory under equal-length
+names. The table row is each compiler on its own source.)
+
+**Allocations fall 4,327 (-0.20%) on identical input.** Two changes earn it.
+`fnSignature` built a parameter's pointer form twice -- `"\{ct}*"` and then
+`"const \{ct}*"` over it -- and `emitOneRecord` called `memberCPrefix` once per
+USE of a field name rather than once per field; naming those as `paramCType` and
+`storedFieldC` collapsed both, and that pair alone measures -2,910. The L022
+sweep is the other -1,119: 61 of the 126 name copies the linter lists became
+borrowed views.
+
+**The 65 that did not convert are refusals, not omissions.** A view holds
+`ast.names` on shared for the binding's scope, and those bodies go on to lend
+`ast` -- or the parser's `this` -- exclusively to mint a node or intern a name.
+Each was tried and the compiler refused it by name; that refusal is why the site
+keeps its copy. Converting them needs the read moved, not the type changed.
+
+**ALLOC_BASELINE still rose, from 2,110,794 to 2,116,208, and the reason is
+source, not work.** A split adds a signature, a doc and a call; the self-compile
+then has more to parse and check. Measured per commit by running the NEW
+compiler on the OLD source: every one of the four that raised the baseline read
+back the OLD figure exactly, to the allocation. **The ratchet measures the
+compiler AND its input, so a source-growth rise and a work rise look identical
+in it -- separate them with that one run before writing a reason.**
+
+**Instructions +0.08%**, at the edge of the 0.02% run-to-run floor and
+consistent across alternating rounds. Wall is flat to slightly better.
+
+**What moved on the ratchets**: `A008 src/zemitterc.z` 132 -> 127,
+`A008 src/ztypecheck.z` 174 -> 170, `A005 src/zemitterc.z` 13 -> 10. Functions
+over the threshold tree-wide: 444 -> 435.
