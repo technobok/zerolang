@@ -23704,13 +23704,7 @@ emitFnDeclsInOrder: function {
                     fid = ztypes.tid.create from: fo
                 } case none then null
             }
-            isGenFn: false
-            if fid > 0 when (isGenericType :symtab tid: fid) when (
-                (symtab.reg.typetypeOf typeId: fid) == ztypes.ztypetype.functionType
-            ) then {
-                isGenFn = true
-            }
-            if isGenFn then {
+            if (isGenericFnTid :symtab tid: fid) then {
                 (emitFnMonoInstances
                     :ast
                     :symtab
@@ -31411,12 +31405,161 @@ emitProtocolCreateCall: function {
     return "".string
 }
 
+# isGenericFnTid -- the id names a generic FUNCTION template, whose instances
+# are emitted once per mono rather than once from the template. A generic type
+# that is not a function declares itself normally, which is why the two halves
+# are asked together.
+isGenericFnTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    if tid.isZero then return false
+    if (isGenericType :symtab :tid).not then return false
+    return (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.functionType
+}
+
+# emitUnitAsConsts -- one unit body's `as { }` constants and data blocks. A
+# record and a class carry as-block constants the same way, so one resolution
+# serves both; a data block is asked of every named definition and filters
+# itself.
+emitUnitAsConsts: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    bodyIds: zast.kidspan
+    buf: String.borrow
+} is {
+    acx: u64
+    for acx < bodyIds.count.u64 loop {
+        bmId: zast.kidAt kids: ast.kids span: bodyIds i: acx
+        acx = acx + 1
+        bm: ast.nodes.get i: bmId.u64
+        if bm.namedoperation.not then continue
+        bmOp: ast.nodes.get i: bm.operation.u64
+        nm: zast.nameTextAt :ast ref: bm.name
+        if (isRecordDef n: bmOp) or (isClassDef n: bmOp) then {
+            rid: userFnId :ast :symtab :ctx name: nm.stringView
+            if rid > 0 when (isGenericType :symtab tid: rid).not then {
+                (emitAsConsts
+                    :ast
+                    :symtab
+                    :ctx
+                    tid: rid
+                    name: nm.stringView
+                    op: bmOp
+                    :buf
+                )
+            }
+        }
+        (emitDataBlock :ast :symtab :ctx name: nm.stringView op: bmOp :buf)
+    }
+}
+
+# emitUnitDefMethods -- one unit body's method forward declarations, or its
+# method bodies. The two passes differ in nothing else, which is what
+# `declOnly` carries.
+emitUnitDefMethods: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    bodyIds: zast.kidspan
+    declOnly: bool
+    buf: String.borrow
+} is {
+    dmx: u64
+    for dmx < bodyIds.count.u64 loop {
+        bmdId: zast.kidAt kids: ast.kids span: bodyIds i: dmx
+        dmx = dmx + 1
+        bmd: ast.nodes.get i: bmdId.u64
+        emitDefMethods :ast :symtab :ctx bm: bmd :declOnly :buf
+    }
+}
+
+# emitUnitConformanceImpls -- one unit body's conformance implementations, the
+# protocol family then the facet one, for every record and class it declares.
+# The name is wanted for nothing but the lookup, so it is asked by id.
+emitUnitConformanceImpls: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    bodyIds: zast.kidspan
+    buf: String.borrow
+} is {
+    cix: u64
+    for cix < bodyIds.count.u64 loop {
+        biId: zast.kidAt kids: ast.kids span: bodyIds i: cix
+        cix = cix + 1
+        bi: ast.nodes.get i: biId.u64
+        if bi.namedoperation.not then continue
+        biOp: ast.nodes.get i: bi.operation.u64
+        if ((isClassDef n: biOp) or (isRecordDef n: biOp)).not then continue
+        iid7: userFnIdById :ast :symtab :ctx nameId: bi.name
+        if iid7 == 0 then continue
+        implT: ztypes.tid.create from: iid7
+        (emitConformanceImplsForType
+            :ast
+            :symtab
+            :ctx
+            implTid: implT
+            isFacet: false
+            :buf
+        )
+        (emitConformanceImplsForType
+            :ast
+            :symtab
+            :ctx
+            implTid: implT
+            isFacet: true
+            :buf
+        )
+    }
+}
+
+# emitUnitFnFwdDecls -- forward declarations for one unit's own bodied
+# functions, after the struct defs (so a generator function returning its synth
+# iter class resolves) and before the method bodies (a synth iterator's call
+# body may call another generator's fn). A generic function template declares
+# nothing here: its instances are emitted per mono. A definition that never
+# resolved has no id, and its forward declaration renders as `z_t0(void)` over
+# unbound parameter names -- two of them in one unit collide on return type,
+# which is broken C rather than a diagnostic. Nothing can call what did not
+# resolve, so there is nothing to declare.
+emitUnitFnFwdDecls: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    bodyIds: zast.kidspan
+    buf: String.borrow
+} is {
+    fdx: u64
+    for fdx < bodyIds.count.u64 loop {
+        bfdId: zast.kidAt kids: ast.kids span: bodyIds i: fdx
+        fdx = fdx + 1
+        bfd: ast.nodes.get i: bfdId.u64
+        if bfd.namedoperation.not then continue
+        bfdOp: ast.nodes.get i: bfd.operation.u64
+        if (ztypecheck.isFunctionDefWithBody o: bfdOp).not then continue
+        fdn: zast.nameTextAt :ast ref: bfd.name
+        fdid: userFnId :ast :symtab :ctx name: fdn.stringView
+        if fdid.isZero then continue
+        if (isGenericFnTid :symtab tid: fdid) then continue
+        fdsig: (fnSignature
+            :ast
+            :symtab
+            :ctx
+            name: fdn.stringView
+            fid: fdid
+            op: bfdOp
+        )
+        fdl: "\{fdsig};\n"
+        buf.append fdl
+    }
+}
+
 # emitRecordDefsIn -- three passes so cross-class references resolve: the
-# as-block constants and data blocks, then all method forward decls, then all
-# method bodies (a method may return/construct a class defined later in the
-# unit). Struct layout is NOT emitted here: emitUserStructsOrdered owns it, and
-# resolves the by-value ordering between user types and the monos that embed
-# them, which a per-unit walk in declaration order cannot.
+# as-block constants and data blocks, then all method forward decls and the
+# unit's own function forward decls, then all method bodies (a method may
+# return/construct a class defined later in the unit). Struct layout is NOT
+# emitted here: emitUserStructsOrdered owns it, and resolves the by-value
+# ordering between user types and the monos that embed them, which a per-unit
+# walk in declaration order cannot.
 emitRecordDefsIn: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
@@ -31426,147 +31569,18 @@ emitRecordDefsIn: function {
     buf: String.borrow
 } is {
     bodyIds: zast.unitBodyIdsAt :ast unitId: mainOpId
-    {
-        if phase == 1 then {
-            vx329: u64
-            for vx329 < bodyIds.count.u64 loop {
-                bmId: zast.kidAt kids: ast.kids span: bodyIds i: vx329
-                vx329 = vx329 + 1
-                bm: ast.nodes.get i: bmId.u64
-                if bm.namedoperation then {
-                    if (isRecordDef n: (ast.nodes.get i: bm.operation.u64)) then {
-                        nm: zast.nameTextAt :ast ref: bm.name
-                        rid: userFnId :ast :symtab :ctx name: nm.stringView
-                        if rid > 0 when (isGenericType :symtab tid: rid).not then {
-                            (emitAsConsts
-                                :ast
-                                :symtab
-                                :ctx
-                                tid: rid
-                                name: nm.stringView
-                                op: (ast.nodes.get i: bm.operation.u64)
-                                :buf
-                            )
-                        }
-                    }
-                    if (isClassDef n: (ast.nodes.get i: bm.operation.u64)) then {
-                        nmc: zast.nameTextAt :ast ref: bm.name
-                        cid: userFnId :ast :symtab :ctx name: nmc.stringView
-                        if cid > 0 when (isGenericType :symtab tid: cid).not then {
-                            (emitAsConsts
-                                :ast
-                                :symtab
-                                :ctx
-                                tid: cid
-                                name: nmc.stringView
-                                op: (ast.nodes.get i: bm.operation.u64)
-                                :buf
-                            )
-                        }
-                    }
-                    nm6: zast.nameTextAt :ast ref: bm.name
-                    (emitDataBlock
-                        :ast
-                        :symtab
-                        :ctx
-                        name: nm6.stringView
-                        op: (ast.nodes.get i: bm.operation.u64)
-                        :buf
-                    )
-                }
-            }
-        }
-        if phase == 2 then {
-            vx339: u64
-            for vx339 < bodyIds.count.u64 loop {
-                bmdId: zast.kidAt kids: ast.kids span: bodyIds i: vx339
-                vx339 = vx339 + 1
-                bmd: ast.nodes.get i: bmdId.u64
-                emitDefMethods :ast :symtab :ctx bm: bmd declOnly: true :buf
-            }
-            vx349: u64
-            for vx349 < bodyIds.count.u64 loop {
-                biId: zast.kidAt kids: ast.kids span: bodyIds i: vx349
-                vx349 = vx349 + 1
-                bi: ast.nodes.get i: biId.u64
-                if bi.namedoperation then {
-                    isImpl: (
-                        (isClassDef n: (ast.nodes.get i: bi.operation.u64)) or
-                        (isRecordDef n: (ast.nodes.get i: bi.operation.u64))
-                    )
-                    if isImpl then {
-                        nmi7: zast.nameTextAt :ast ref: bi.name
-                        iid7: userFnId :ast :symtab :ctx name: nmi7.stringView
-                        if iid7 > 0 then {
-                            (emitConformanceImplsForType
-                                :ast
-                                :symtab
-                                :ctx
-                                implTid: iid7
-                                isFacet: false
-                                :buf
-                            )
-                            (emitConformanceImplsForType
-                                :ast
-                                :symtab
-                                :ctx
-                                implTid: iid7
-                                isFacet: true
-                                :buf
-                            )
-                        }
-                    }
-                }
-            }
-            # main-unit function forward decls, after the struct defs (so a generator
-            # function returning its synth iter class resolves) and before the method
-            # bodies (a synth iterator's call body may call another generator's fn).
-            vx359: u64
-            for vx359 < bodyIds.count.u64 loop {
-                bfdId: zast.kidAt kids: ast.kids span: bodyIds i: vx359
-                vx359 = vx359 + 1
-                bfd: ast.nodes.get i: bfdId.u64
-                if bfd.namedoperation when (ztypecheck.isFunctionDefWithBody
-                    o: (ast.nodes.get i: bfd.operation.u64)
-                ) then {
-                    fdn: zast.nameTextAt :ast ref: bfd.name
-                    fdid: userFnId :ast :symtab :ctx name: fdn.stringView
-                    isGenFnFD: false
-                    if fdid > 0 when (isGenericType :symtab tid: fdid) when (
-                        (symtab.reg.typetypeOf typeId: fdid) == ztypes.ztypetype.functionType
-                    ) then {
-                        isGenFnFD = true
-                    }
-                    # a definition that never resolved has no id, and its
-                    # forward declaration renders as `z_t0(void)` over unbound
-                    # parameter names -- two of them in one unit collide on
-                    # return type, which is broken C rather than a diagnostic.
-                    # Nothing can call what did not resolve, so there is nothing
-                    # to declare.
-                    if isGenFnFD.not when fdid > 0 then {
-                        fdsig: (fnSignature
-                            :ast
-                            :symtab
-                            :ctx
-                            name: fdn.stringView
-                            fid: (ztypes.tid.create from: fdid.u64)
-                            op: (ast.nodes.get i: bfd.operation.u64)
-                        )
-                        fdl: "\{fdsig};\n"
-                        buf.append fdl
-                    }
-                }
-            }
-        }
-        if phase == 3 then {
-            vx369: u64
-            for vx369 < bodyIds.count.u64 loop {
-                bmbId: zast.kidAt kids: ast.kids span: bodyIds i: vx369
-                vx369 = vx369 + 1
-                bmb: ast.nodes.get i: bmbId.u64
-                emitDefMethods :ast :symtab :ctx bm: bmb declOnly: false :buf
-            }
-        }
+    if phase == 1 then {
+        emitUnitAsConsts :ast :symtab :ctx :bodyIds :buf
+        return
+    }
+    if phase == 2 then {
+        emitUnitDefMethods :ast :symtab :ctx :bodyIds declOnly: true :buf
+        emitUnitConformanceImpls :ast :symtab :ctx :bodyIds :buf
+        emitUnitFnFwdDecls :ast :symtab :ctx :bodyIds :buf
+        return
+    }
+    if phase == 3 then {
+        emitUnitDefMethods :ast :symtab :ctx :bodyIds declOnly: false :buf
     }
 }
 

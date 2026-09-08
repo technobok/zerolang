@@ -685,7 +685,7 @@ perf: $(PERFBIN)
 # it. The number is bit-identical run to run, so it is a sound ratchet where wall
 # and cycles are not. perf-strict fails ABOVE it; a commit that raises it states
 # the reason in its message, and one that lowers the count lowers it here.
-ALLOC_BASELINE := 2120146
+ALLOC_BASELINE := 2120443
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -850,7 +850,7 @@ emitter-guard:
 	chk "ztypecheck.resolvedByKey" "$$e1" 0; \
 	chk "ztypecheck.walkLookupTyperef" "$$e2" 5; \
 	chk "resolveTypeIdByName" "$$e3" 21; \
-	chk "userFnId" "$$e4" 31; \
+	chk "userFnId" "$$e4" 30; \
 	chk "childOwnershipText" "$$e5" 0; \
 	chk "regNameOf" "$$e6" 80; \
 	chk "ztypes.mangleVarName (both inside varCName)" "$$e7" 2; \
