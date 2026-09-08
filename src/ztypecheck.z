@@ -350,6 +350,17 @@ isImplicitZeroCreateTid: function {
     return false
 }
 
+# monoOfNativeTemplate -- the type instantiates a COMPILER-PROVIDED template,
+# so the runtime supplies its construction and the declaration tree cannot be
+# asked for it. A mono's own `create` member carries the substituted READ type
+# rather than a signature, and the template's member is resolved on demand, so
+# it reads as absent under `--eager` and as the element type without it.
+monoOfNativeTemplate: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    go: st.reg.genericOriginOf :tid
+    if go.isZero then return false
+    return (st.reg.isNativeOf tid: go)
+}
+
 # bareCtorError -- one diagnostic for a bare type name in value position
 # that cannot construct, with the shared teaching note.
 bareCtorError: function {
@@ -495,6 +506,13 @@ checkBareTypeValueAt: function {
         mi: "cannot construct '\{tn}' from its bare name: iterators are produced by their source"
         hi: "call '.iterate' / '.split' / '.codepoints' / '.lines' on the source value".string
         bareCtorError :st :nodeid :lineno :colno :width msg: mi hint: hi
+        return
+    }
+    # a collection or iterator instantiation constructs its empty value through
+    # the runtime, which declares no fields for the check below to ask about
+    if (monoOfNativeTemplate :st :tid) then {
+        icn: tid
+        st.typing.implicitCreate.set key: nodeid.u64 value: icn
         return
     }
     (forceMemberOf :st frame: st.curFrame :ast parentTypeId: tid nameId: zast.names.wkCreate)
@@ -11053,6 +11071,52 @@ aliasNamesType: function {
     return false
 }
 
+# bareNameDenotesType -- the name spelled at a site denotes the TYPE `tid`
+# rather than a value of it, so a bare occurrence in value position is the
+# zero-argument construction. The registry name answers directly when the
+# definition IS the type. A RENAMING alias does not carry that name, so the
+# alias's own shape answers instead: a container twin (`List` names `ListRef`),
+# a bare or dotted alias, or a definition whose value INSTANTIATES a generic
+# template (`Strs: (List String)`), which declares itself when it is first
+# read. A definition carrying a compile-time value is a VALUE alias
+# (`true: bool.true`) and overrules every alias shape.
+bareNameDenotesType: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    nameId: zast.nameid
+    tid: ztypes.tid
+} out bool is {
+    if nameId.isZero then return false
+    # the spelled name against the registry name, read through a view scoped
+    # to this block: the alias walk below lends ast
+    tnq: st.reg.nameOf :tid
+    named: false
+    {
+        ndNm: zast.nameTextAt :ast ref: nameId
+        named = tnq.stringView == ndNm.stringView
+        if named.not then {
+            twn: aliasedContainerTwin name: ndNm.stringView
+            if twn.length > 0 when twn == tnq.stringView then named = true
+        }
+    }
+    if named then return true
+    aad: declOfUnitDef :st :unitDecl :frame :nameId
+    if aad.isZero then return false
+    isAl: aliasNamesType :st :ast declId: aad
+    if isAl.not when (instantiatedAliasFold :ast :st declId: aad) then isAl = true
+    if isAl.not then return false
+    # Asked LAST, not first: the answer only matters once an alias shape said
+    # yes, and a pull in front of it runs the evaluator for every bare atom in
+    # every body. `ECHO: LIB` names a string constant whose own type is
+    # StringView, so the alias test sees a decl carrying a type -- and a bare
+    # StringView is an unconstructible view.
+    ecv: constValueOfMemberId :st :frame :ast :unitDecl :nameId
+    constFailClear :st
+    return ecv.kind.none
+}
+
 # nestedUnitTidOf -- the type id of the nested unit `nestedNameId` names inside the
 # unit that owns `ownerDeclId`: descend one edge of the Decl tree, ask demand
 # for it, and read the id off its declaration. 0 when the name is not a child
@@ -21517,6 +21581,7 @@ checkUnitMemberValue: function {
     dp: dpref
     cnId: zast.nameid
     un: StringView
+    memberUnit: ztypes.declid
     memberDecl: u64
     coerce: bool
 } out ztypes.tid is {
@@ -21564,33 +21629,37 @@ checkUnitMemberValue: function {
         }
     }
     # a unit-qualified TYPE member in value position is the same
-    # zero-argument construction as a bare atom (`p: unit.Conf`);
-    # the name gate keeps value aliases out, the suppress flag
-    # keeps dotted-path bases out
-    if coerce when isFn.not when st.typing.suppressBareCtor.not then {
-        tnd: st.reg.nameOf tid: (ztypes.tid.create from: memberDecl.u64)
-        if (zast.nameTextEq :ast ref: cnId s: tnd.stringView) then {
-            cdl: nodeLine n: (ast.nodes.get i: dp.child.u64)
-            cdc: nodeCol n: (ast.nodes.get i: dp.child.u64)
-            if (isImplicitZeroCreateTid
+    # zero-argument construction as a bare atom (`p: unit.Conf`), and the
+    # member's own name reaches it through an alias as readily as through the
+    # type's registry name; the suppress flag keeps dotted-path bases out
+    if coerce when isFn.not when st.typing.suppressBareCtor.not when (bareNameDenotesType
+        :ast
+        :st
+        unitDecl: memberUnit
+        frame: memberUnit
+        nameId: cnId
+        tid: (ztypes.tid.create from: memberDecl.u64)
+    ) then {
+        cdl: nodeLine n: (ast.nodes.get i: dp.child.u64)
+        cdc: nodeCol n: (ast.nodes.get i: dp.child.u64)
+        if (isImplicitZeroCreateTid
+            :ast
+            :st
+            tid: (ztypes.tid.create from: memberDecl.u64)
+        ) then {
+            icd: memberDecl
+            st.typing.implicitCreate.set key: dp.nid.u64 value: icd
+        } else {
+            cn: zast.nameTextCopy :ast ref: cnId
+            (checkBareTypeValueAt
                 :ast
                 :st
+                nodeid: dp.nid
+                lineno: cdl
+                colno: cdc
+                width: cn.length.u32.orPanic
                 tid: (ztypes.tid.create from: memberDecl.u64)
-            ) then {
-                icd: memberDecl
-                st.typing.implicitCreate.set key: dp.nid.u64 value: icd
-            } else {
-                cn: zast.nameTextCopy :ast ref: cnId
-                (checkBareTypeValueAt
-                    :ast
-                    :st
-                    nodeid: dp.nid
-                    lineno: cdl
-                    colno: cdc
-                    width: cn.length.u32.orPanic
-                    tid: (ztypes.tid.create from: memberDecl.u64)
-                )
-            }
+            )
         }
     }
     setu: result
@@ -21685,6 +21754,7 @@ checkUnitQualifiedMember: function {
                 :dp
                 :cnId
                 un: un.stringView
+                memberUnit: btUd
                 :memberDecl
                 :coerce
             )
@@ -22919,7 +22989,8 @@ refuseReadUnderPin: function {st: zenv.ZSymbolTable ast: Ast.view dp: dpref} is 
 
 # checkBareTypeValue -- a bare TYPE name in value position is zero-argument
 # construction (`p: Point`), so a synthesized create's required fields are
-# enforced here and an aliased container name resolves through its twin.
+# enforced here. The name may be the type's own, a container twin or any alias
+# of it, which is the one question bareNameDenotesType answers.
 checkBareTypeValue: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -22927,83 +22998,28 @@ checkBareTypeValue: function {
     node: atomref
     fo: u64
 } is {
-    # only an atom NAMING the type is a bare construction; a
-    # value alias typed as it (true: bool.true) is a value use.
-    # The renamed-twin aliases name their type without
-    # matching its registry name; a general typeref retry
-    # cannot stand here because a VALUE alias also resolves
-    # to its type's tid (`true` -> bool). The atom's text is
-    # read through a view scoped to this block: the alias
-    # test and the evaluator below lend ast.
-    tnq: st.reg.nameOf tid: (ztypes.tid.create from: fo.u64)
-    isTypeAtom: false
-    {
-        ndNm: zast.nameTextAt :ast ref: node.name
-        isTypeAtom = tnq.stringView == ndNm.stringView
-        if isTypeAtom.not then {
-            twn: aliasedContainerTwin name: ndNm.stringView
-            if twn.length > 0 when twn == tnq.stringView then isTypeAtom = true
-        }
-    }
-    if isTypeAtom.not then {
-        # an atom naming a TYPE alias constructs exactly as the
-        # type's own name does. The tid cannot say so -- a VALUE
-        # alias resolves to its root type's tid too -- but the
-        # alias's own shape can. Without this the atom stays
-        # unstamped and the emitter writes the alias name into
-        # the C.
-        aad: (declOfUnitDef
-            :st
-            frame: st.curFrame
-            :unitDecl
-            nameId: node.name
-        )
-        if (aliasNamesType
+    if (bareNameDenotesType
+        :ast
+        :st
+        :unitDecl
+        frame: st.curFrame
+        nameId: node.name
+        tid: (ztypes.tid.create from: fo.u64)
+    ).not then return
+    if (isImplicitZeroCreateTid
+        :ast
+        :st
+        tid: (ztypes.tid.create from: fo.u64)
+    ) then {
+        icv: fo
+        st.typing.implicitCreate.set key: node.nid.u64 value: icv
+    } else {
+        (checkBareTypeConstruction
             :st
             :ast
-            declId: aad
-        ) then {
-            # The alias test says TYPE; the CONSTANT gets to
-            # overrule it. `ECHO: LIB` names a string
-            # constant whose own type is StringView, so the
-            # test above sees a decl carrying a type -- and a
-            # bare StringView is an unconstructible view. A
-            # definition with a compile-time value is a VALUE
-            # alias, the case this leg's own comment names
-            # for `true: bool.true`.
-            # Asked SECOND, not first: the answer only
-            # matters when the alias test said yes, and a
-            # pull in front of it runs the evaluator for
-            # every bare atom in every body. An owned copy of
-            # the name: the evaluator lends ast.
-            dn: zast.nameTextCopy :ast ref: node.name
-            ecv: (constValueOfMember
-                :st
-                frame: st.curFrame
-                :ast
-                :unitDecl
-                defName: dn.stringView
-            )
-            constFailClear :st
-            if ecv.kind.none then isTypeAtom = true
-        }
-    }
-    if isTypeAtom then {
-        if (isImplicitZeroCreateTid
-            :ast
-            :st
+            :node
             tid: (ztypes.tid.create from: fo.u64)
-        ) then {
-            icv: fo
-            st.typing.implicitCreate.set key: node.nid.u64 value: icv
-        } else {
-            (checkBareTypeConstruction
-                :st
-                :ast
-                :node
-                tid: (ztypes.tid.create from: fo.u64)
-            )
-        }
+        )
     }
 }
 
