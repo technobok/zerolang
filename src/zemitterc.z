@@ -5668,10 +5668,7 @@ hoistBorrowValArg: function {
     if (isNonLvalueArg s: av).not then return "".string
     if paramTake then return "".string
     vrid: pid
-    vduo: definedInUnitOf :symtab tid: (ztypes.tid.create from: pid.u64)
-    match (
-        vduo
-    ) case none then {
+    if (definedInUnitTid :symtab tid: (ztypes.tid.create from: pid.u64)).isZero then {
         vtn: regNameOf :symtab tid: (ztypes.tid.create from: pid.u64)
         vrr: (canonTypeId
             :ast
@@ -5681,7 +5678,7 @@ hoistBorrowValArg: function {
             name: vtn.stringView
         )
         if vrr > 0 then vrid = ztypes.tid.create from: vrr.u64
-    } case some then null
+    }
     isStrH: vrid == ctx.strTid
     if isStrH.not when (symtab.reg.needsDestructor typeId: vrid).not then {
         return "".string
@@ -6033,13 +6030,10 @@ instanceMethodArgHoist: function {
         hdt = "    \{ctx.strC}_free(&\{nmH});\n"
     } else if avBor.not then {
         hrid: posParamId
-        hduo: (definedInUnitOf
+        if (definedInUnitTid
             :symtab
             tid: (ztypes.tid.create from: posParamId.u64)
-        )
-        match (
-            hduo
-        ) case none then {
+        ).isZero then {
             htn: (regNameOf
                 :symtab
                 tid: (ztypes.tid.create from: posParamId.u64)
@@ -6051,7 +6045,7 @@ instanceMethodArgHoist: function {
                 name: htn.stringView
             )
             if hrr > 0 then hrid = hrr
-        } case some then null
+        }
         if (symtab.reg.needsDestructor typeId: (ztypes.tid.create from: hrid.u64)) then {
             hcb: ctxCname :ctx tid: (ztypes.tid.create from: hrid.u64)
             hdt = "    \{hcb}_destroy(&\{nmH});\n"
@@ -9415,10 +9409,7 @@ emitByrefArg: function {
     hcty: typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: pid.u64) thisTid: ztypes.tid
     htyc: hcty.copy
     hrid: pid
-    hduo: definedInUnitOf :symtab tid: (ztypes.tid.create from: pid.u64)
-    match (
-        hduo
-    ) case none then {
+    if (definedInUnitTid :symtab tid: (ztypes.tid.create from: pid.u64)).isZero then {
         htn0: regNameOf :symtab tid: (ztypes.tid.create from: pid.u64)
         hrr: (canonTypeId
             :ast
@@ -9428,7 +9419,7 @@ emitByrefArg: function {
             name: htn0.stringView
         )
         if hrr > 0 then hrid = ztypes.tid.create from: hrr.u64
-    } case some then null
+    }
     hdt: String
     if isBorrow then null else if hrid == ctx.strTid then {
         hdt = "    \{ctx.strC}_free(&\{nmH});\n"
@@ -12452,10 +12443,7 @@ emitDottedAtomBase: function {
         # like String reached via a fresh shell id resolves to the
         # registered class whose struct + methods are emitted (mirrors
         # the typeRefC canonicalization, so method cnames match).
-        bduo: definedInUnitOf :symtab tid: bstamp0
-        match (
-            bduo
-        ) case some then null case none then {
+        if (definedInUnitTid :symtab tid: bstamp0).isZero then {
             brid: canonTypeId :ast :symtab :ctx tid: bstamp0 name: bsn0
             if brid > 0 then bstamp = ztypes.tid.create from: brid.u64
         }
@@ -27257,20 +27245,18 @@ maybePreEmitElem: function {
     if eid.isZero then return
     rid0: eid
     snm0: regNameOf :symtab tid: (ztypes.tid.create from: eid.u64)
-    sduo: definedInUnitOf :symtab tid: (ztypes.tid.create from: eid.u64)
-    match (
-        sduo
-    ) case some then null case none then {
-        if snm0.length > 0 then {
-            srid: (canonTypeId
-                :ast
-                :symtab
-                :ctx
-                tid: (ztypes.tid.create from: eid.u64)
-                name: snm0.stringView
-            )
-            if srid > 0 then rid0 = ztypes.tid.create from: srid.u64
-        }
+    if (definedInUnitTid
+        :symtab
+        tid: (ztypes.tid.create from: eid.u64)
+    ).isZero when snm0.length > 0 then {
+        srid: (canonTypeId
+            :ast
+            :symtab
+            :ctx
+            tid: (ztypes.tid.create from: eid.u64)
+            name: snm0.stringView
+        )
+        if srid > 0 then rid0 = ztypes.tid.create from: srid.u64
     }
     cid: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: rid0.u64)
     monoLk4: originTidOf :symtab tid: (ztypes.tid.create from: cid.u64)
@@ -27391,25 +27377,25 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable.view ctx: Ctx buf: String.
             gen: isGenericType :symtab tid: (ztypes.tid.create from: t.u64)
             mo: originTidOf :symtab tid: (ztypes.tid.create from: t.u64)
             if mo.isZero when gen.not then {
-                duo: definedInUnitOf :symtab tid: (ztypes.tid.create from: t.u64)
-                match (
-                    duo
-                ) case some then {
-                    if (symtab.reg.isNativeOf tid: (ztypes.tid.create from: t.u64)).not when (
-                        (isTypedefType :symtab tid: (ztypes.tid.create from: t.u64)).not
-                    ) when (isBoxTid :symtab tid: t).not then {
-                        cn: ctxCname :ctx tid: (ztypes.tid.create from: t.u64)
-                        ctx.fwdDeclaredTypes.add item: t.u64
-                        l0: "typedef struct \{cn}_t \{cn}_t;\n"
-                        buf.append l0
-                        needDtor: isUnion
-                        if (symtab.reg.needsDestructor typeId: t) then needDtor = true
-                        if needDtor then {
-                            l1: "static void \{cn}_destroy(\{cn}_t* p);\n"
-                            buf.append l1
-                        }
+                if (definedInUnitTid
+                    :symtab
+                    tid: (ztypes.tid.create from: t.u64)
+                ).isZero.not when (
+                    (symtab.reg.isNativeOf tid: (ztypes.tid.create from: t.u64)).not
+                ) when (
+                    (isTypedefType :symtab tid: (ztypes.tid.create from: t.u64)).not
+                ) when (isBoxTid :symtab tid: t).not then {
+                    cn: ctxCname :ctx tid: (ztypes.tid.create from: t.u64)
+                    ctx.fwdDeclaredTypes.add item: t.u64
+                    l0: "typedef struct \{cn}_t \{cn}_t;\n"
+                    buf.append l0
+                    needDtor: isUnion
+                    if (symtab.reg.needsDestructor typeId: t) then needDtor = true
+                    if needDtor then {
+                        l1: "static void \{cn}_destroy(\{cn}_t* p);\n"
+                        buf.append l1
                     }
-                } case none then null
+                }
             } else {
                 fwdM: false
                 if mo > 0 then {
@@ -27560,21 +27546,19 @@ buildUserTypeList: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view acc: L
         if isStruct then {
             mo: originTidOf :symtab tid: (ztypes.tid.create from: t.u64)
             gen: isGenericType :symtab tid: (ztypes.tid.create from: t.u64)
-            if mo.isZero when gen.not then {
-                duo: definedInUnitOf :symtab tid: (ztypes.tid.create from: t.u64)
-                match (
-                    duo
-                ) case some then {
-                    emOk: (
-                        (symtab.reg.isNativeOf
-                            tid: (ztypes.tid.create from: t.u64)
-                        ).not
-                    )
-                    if emOk when (typeDemandMet
-                        :ctx
+            if mo.isZero when gen.not when (definedInUnitTid
+                :symtab
+                tid: (ztypes.tid.create from: t.u64)
+            ).isZero.not then {
+                emOk: (
+                    (symtab.reg.isNativeOf
                         tid: (ztypes.tid.create from: t.u64)
-                    ) then acc.append t.u64
-                } case none then null
+                    ).not
+                )
+                if emOk when (typeDemandMet
+                    :ctx
+                    tid: (ztypes.tid.create from: t.u64)
+                ) then acc.append t.u64
             }
         }
         t = ztypes.tid.create from: (t + 1)
@@ -28005,12 +27989,9 @@ ensureFwdStruct: function {
     nmS: regNameOf :symtab :tid
     scalarCType: scalarCTypeFor :symtab name: nmS.stringView :tid
     if scalarCType.length > 0 then return
-    duo5: definedInUnitOf :symtab :tid
-    match (
-        duo5
-    ) case some then {
-        if (symtab.reg.isNativeOf tid: (ztypes.tid.create from: tid.u64)) then return
-    } case none then null
+    if (definedInUnitTid :symtab :tid).isZero.not when (symtab.reg.isNativeOf
+        tid: (ztypes.tid.create from: tid.u64)
+    ) then return
     # a typedef wrapper (Path over String) has no struct of its own -- its C
     # spelling is the wrapped type, so a forward struct tag would name nothing
     if (isTypedefType :symtab tid: (ztypes.tid.create from: tid.u64)) then return
@@ -28257,21 +28238,16 @@ emitUserProtocols: function {
         if (symtab.reg.typetypeOf typeId: tp) == ztypes.ztypetype.protocolType then {
             pgen: isGenericType :symtab tid: tp
             pmo: originTidOf :symtab tid: tp
-            if pmo.isZero when pgen.not then {
-                pduo: definedInUnitOf :symtab tid: tp
-                match (
-                    pduo
-                ) case some then {
-                    if (symtab.reg.isNativeOf tid: tp).not then {
-                        (emitUserTypeById
-                            :ast
-                            :symtab
-                            :ctx
-                            tid: (ztypes.tid.create from: tp.u64)
-                            :buf
-                        )
-                    }
-                } case none then null
+            if pmo.isZero when pgen.not when (
+                (definedInUnitTid :symtab tid: tp).isZero.not
+            ) when (symtab.reg.isNativeOf tid: tp).not then {
+                (emitUserTypeById
+                    :ast
+                    :symtab
+                    :ctx
+                    tid: (ztypes.tid.create from: tp.u64)
+                    :buf
+                )
             }
         }
         tp = ztypes.tid.create from: (tp + 1)
@@ -29164,13 +29140,7 @@ protoParamCtype: function {
     # as-is -- re-resolving "i64" by name would wrongly pick up a user shadow of
     # the scalar in the main unit. Mirrors typeRefC's none-branch shell gate.
     cpid: pid
-    pidDu: definedInUnitOf :symtab tid: (ztypes.tid.create from: pid.u64)
-    pidShell: false
-    match (
-        pidDu
-    ) case some then null case none then {
-        pidShell = true
-    }
+    pidShell: (definedInUnitTid :symtab tid: (ztypes.tid.create from: pid.u64)).isZero
     if pidShell then {
         pn: regNameOf :symtab tid: (ztypes.tid.create from: pid.u64)
         rcid: (canonTypeId
