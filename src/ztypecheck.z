@@ -18800,6 +18800,183 @@ constructionArgTid: function {
     return (ao9.or d: 0)
 }
 
+# elidedPrimaryTypeArg -- an unnamed leading argument that names a TYPE binds the
+# primary generic param (`(List String)`); a value first argument (`(box 5)`)
+# does not and is left to value inference.
+elidedPrimaryTypeArg: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    opId: zast.nodeid
+} out bool is {
+    anE: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId.u64)
+    if (isNumericLiteralNameAt :ast ref: anE) then return false
+    teo: (walkLookupTyperefById :st frame: st.curFrame :ast :unitDecl baseId: anE)
+    isType: false
+    match (
+        teo
+    ) case some then {
+        isType = true
+    } case none then null
+    return isType
+}
+
+# bindTypeArgSub -- a label naming a generic param carries its type argument
+# directly: a numeric literal spells itself into the mono suffix, anything else
+# resolves to the type id that becomes the substitution.
+bindTypeArgSub: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    opId: zast.nodeid
+    pk: zast.nameid
+    sfx: String
+    subs: (IdMapV zast.nameid v: u64)
+    boundParams: IdSet zast.nameid
+} is {
+    anId: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId.u64)
+    if (isNumericLiteralNameAt :ast ref: anId) then {
+        sfx.append s: "_"
+        sfx.append s: (zast.nameTextAt :ast ref: anId)
+        boundParams.add item: pk
+        return
+    }
+    aid9: (constructionArgTid
+        :st
+        :ast
+        :unitDecl
+        :opId
+        baseId: anId
+    )
+    if aid9 == 0 then return
+    atn: (monoValName
+        :st
+        frame: st.curFrame
+        :ast
+        tid: (ztypes.tid.create from: aid9.u64)
+    )
+    sfx.append s: "_"
+    sfx.append s: atn
+    pv2: aid9
+    subs.set key: pk value: pv2
+    boundParams.add item: pk
+}
+
+# fieldParamIndexOf -- where `name` sits in the generic-bound field-name list,
+# none when the label names no such field.
+fieldParamIndexOf: function {
+    names: (ListVal zast.nameid).view
+    name: zast.nameid
+} out optionval u64 is {
+    fi: u64
+    for fi < names.length loop {
+        if (names.get i: fi) == name then return (optionval.some fi)
+        fi = fi + 1
+    }
+    return (optionval.none u64)
+}
+
+# bindValueArgSub -- a label naming a FIELD infers that field's generic param
+# from the value it is given: the value walks, a literal materialises and
+# restamps its own node, and the first binding for a param wins.
+bindValueArgSub: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    opId: zast.nodeid
+    pk: zast.nameid
+    fNames: (ListVal zast.nameid).view
+    fParams: (ListVal zast.nameid).view
+    sfx: String
+    subs: (IdMapV zast.nameid v: u64)
+    boundParams: IdSet zast.nameid
+} is {
+    vt0: checkValueAt :st :unitDecl :ast nid: opId
+    gio: fieldParamIndexOf names: fNames name: pk
+    gidx: u64
+    gfound: false
+    match (
+        gio
+    ) case some then {
+        gidx = gio
+        gfound = true
+    } case none then null
+    if gfound.not then return
+    if vt0.isZero then return
+    mv0: materialiseLiteral :ast :st :unitDecl t: vt0
+    if mv0 != vt0 then {
+        iid0: innermostNodeId :ast n: (ast.nodes.get i: opId.u64)
+        if iid0 > 0 then {
+            setm0: mv0
+            stampGate :st nid: iid0.u64 tid: setm0
+        }
+    }
+    gp0: fParams.get i: gidx
+    already: (subs.get key: gp0).or d: 0
+    if already > 0 then return
+    vtn: monoValName :st frame: st.curFrame :ast tid: mv0
+    sfx.append s: "_"
+    sfx.append s: vtn
+    gpv: mv0
+    subs.set key: gp0 value: gpv
+    boundParams.add item: gp0
+}
+
+# inferConstructionArg -- what one construction argument binds. An unnamed
+# argument binds nothing; a label naming a generic param carries a type
+# argument, and a label naming a field infers its param from the value.
+inferConstructionArg: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    argId: zast.nodeid
+    argIdx: u64
+    primaryName: zast.nameid
+    fNames: (ListVal zast.nameid).view
+    fParams: (ListVal zast.nameid).view
+    sfx: String
+    subs: (IdMapV zast.nameid v: u64)
+    boundParams: IdSet zast.nameid
+    tk: ztypes.declid
+} is {
+    # the argument is read through a view scoped to this block: the lookups and
+    # the value walk below lend ast exclusively
+    pk: zast.nameid
+    opId: zast.nodeid
+    {
+        arg: argRefAt :ast nid: argId
+        if arg.nid.isZero then return
+        pk = arg.name
+        opId = arg.operation
+    }
+    if pk.isZero when argIdx == 0 when (elidedPrimaryTypeArg
+        :st
+        :unitDecl
+        :ast
+        :opId
+    ) when primaryName.isZero.not then pk = primaryName
+    isP: false
+    if pk.isZero.not then {
+        isP = st.reg.isGenericParamOf tdecl: tk name: pk
+    }
+    if isP then {
+        (bindTypeArgSub :st :unitDecl :ast :opId :pk :sfx :subs :boundParams)
+    } else {
+        (bindValueArgSub
+            :st
+            :unitDecl
+            :ast
+            :opId
+            :pk
+            :fNames
+            :fParams
+            :sfx
+            :subs
+            :boundParams
+        )
+    }
+}
+
 # inferConstructionSubs -- infer a generic construction's type arguments from the
 # values it is given. The value-arg walk is a DRY RUN: its ownership effects (take
 # overlays, borrow locks) are bracketed in a frame discarded whole, so the real
@@ -18818,115 +18995,27 @@ inferConstructionSubs: function {
     boundParams: IdSet zast.nameid
     tk: ztypes.declid
 } is {
-    argIdx: u64
-    # the value-arg walk below is a DRY RUN for type inference: bracket its
-    # ownership effects (take overlays, borrow locks) in a frame that is
-    # discarded whole, so the real ctor walk re-checks from a clean slate --
-    # an explicit `.take` arg otherwise collides with its own inference pass.
     st.pushDryRun
     kAiter: u64
     for kAiter < call.nargs loop {
-        argId: (zast.callArgAt :ast nid: call.nid i: kAiter).u32
+        aId9: zast.callArgAt :ast nid: call.nid i: kAiter
+        (inferConstructionArg
+            :st
+            :unitDecl
+            :ast
+            argId: aId9
+            argIdx: kAiter
+            :primaryName
+            :fNames
+            :fParams
+            :sfx
+            :subs
+            :boundParams
+            :tk
+        )
         kAiter = kAiter + 1
-        # the argument is read through a view scoped to this block: the
-        # lookups and the value walk below lend ast exclusively
-        isNamedArg: false
-        pk: zast.nameid
-        opId: zast.nodeid
-        {
-            arg: argRefAt :ast nid: (zast.nodeid.create from: argId.u32)
-            if arg.nid.isZero.not then {
-                isNamedArg = true
-                pk = arg.name
-                opId = arg.operation
-            }
-        }
-        if isNamedArg then {
-            # elided leading type arg: an unnamed first arg naming a type
-            # binds the primary generic param (`(List String)`); a value
-            # first arg (`(box 5)`) is left for value inference.
-            if pk.isZero when argIdx == 0 then {
-                anE: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId.u64)
-                if (isNumericLiteralNameAt :ast ref: anE).not then {
-                    teo: (walkLookupTyperefById :st frame: st.curFrame :ast :unitDecl baseId: anE)
-                    match (
-                        teo
-                    ) case some then {
-                        if primaryName.isZero.not then pk = primaryName
-                    } case none then null
-                }
-            }
-            isP: false
-            if pk.isZero.not then {
-                isP = st.reg.isGenericParamOf tdecl: tk name: pk
-            }
-            if isP then {
-                anId: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId.u64)
-                if (isNumericLiteralNameAt :ast ref: anId) then {
-                    sfx.append s: "_"
-                    sfx.append s: (zast.nameTextAt :ast ref: anId)
-                    boundParams.add item: pk
-                } else {
-                    aid9: (constructionArgTid
-                        :st
-                        :ast
-                        :unitDecl
-                        :opId
-                        baseId: anId
-                    )
-                    if aid9 > 0 then {
-                        atn: (monoValName
-                            :st
-                            frame: st.curFrame
-                            :ast
-                            tid: (ztypes.tid.create from: aid9.u64)
-                        )
-                        sfx.append s: "_"
-                        sfx.append s: atn
-                        pv2: aid9
-                        subs.set key: pk value: pv2
-                        boundParams.add item: pk
-                    }
-                }
-            } else {
-                vt0: checkValueAt :st :unitDecl :ast nid: opId
-                gidx: u64
-                gfound: false
-                fi: u64
-                fn2: fNames.length
-                for fi < fn2 loop {
-                    if (fNames.get i: fi) == pk when gfound.not then {
-                        gidx = fi
-                        gfound = true
-                    }
-                    fi = fi + 1
-                }
-                if gfound when vt0 > 0 then {
-                    mv0: materialiseLiteral :ast :st :unitDecl t: vt0
-                    if mv0 != vt0 then {
-                        iid0: innermostNodeId :ast n: (ast.nodes.get i: opId.u64)
-                        if iid0 > 0 then {
-                            setm0: mv0
-                            stampGate :st nid: iid0.u64 tid: setm0
-                        }
-                    }
-                    gp0: fParams.get i: gidx
-                    already: (subs.get key: gp0).or d: 0
-                    if already <= 0 then {
-                        vtn: monoValName :st frame: st.curFrame :ast tid: mv0
-                        sfx.append s: "_"
-                        sfx.append s: vtn
-                        gpv: mv0
-                        subs.set key: gp0 value: gpv
-                        boundParams.add item: gp0
-                    }
-                }
-            }
-        }
-        argIdx = argIdx + 1
     }
 }
-
 
 # inferGenericConstruction -- a generic class/record template called with
 # field-bound value arguments: labels naming generic params resolve as
