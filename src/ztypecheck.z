@@ -14193,6 +14193,151 @@ isUnitOp: function {op: astnode.view} out bool is {
     }
 }
 
+# memberIsRestricted -- the two restrictions that hold a definition back, either
+# of which is enough. A scope declaration -- a unit or a template -- is exempt
+# from both: it is a property of the DECLARATION, not a body, and a nested
+# namespace's template is reached through the scope or not at all.
+memberIsRestricted: function {
+    ast: Ast
+    opId: zast.nodeid
+    mName: StringView
+    speculative: bool
+    rootOnly: bool
+} out bool is {
+    if (isUnitOp op: (ast.nodes.get i: opId.u64)) then return false
+    if speculative when (isFunctionDefOp op: (ast.nodes.get i: opId.u64)).not then return true
+    if rootOnly when mName != "main" then return true
+    return false
+}
+
+# resolveOrdinaryMember -- a unit member that is neither a nested scope nor a
+# template: the definition itself, and the alias edge a re-export carries.
+resolveOrdinaryMember: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    ownerDeclId: ztypes.declid
+    mName: StringView
+    bmNode: argref
+    speculative: bool
+} is {
+    md: st.typing.declFindChild parentDeclId: ownerDeclId nameId: bmNode.name
+    # a `public:` block's reference entry (`:x`, `alias: x`) is an edge to a
+    # sibling of the enclosing unit, which resolves as that unit's definition,
+    # not as a member here
+    mdp: declParentIdOf :st declId: md
+    if md.isZero.not when mdp != ownerDeclId then return
+    isRx: false
+    isDone: false
+    {
+        mdo: st.typing.decls.get i: md.u64
+        if mdo.kind.reexportDecl then isRx = true
+        if mdo.defined then isDone = true
+    }
+    # A re-export whose target is a DOTTED path is resolved by following it,
+    # which is resolveAliasKey's job -- resolveDef has no leg for a dotted target
+    # naming a NESTED unit, and marking the alias DEFINED after it did nothing is
+    # what stopped a re-export of a re-export at its first hop. A bare target
+    # (`ECHO: LIB`) names a sibling of this same unit and is an ordinary
+    # definition: resolveDef is what FOLDS it, and following it instead leaves
+    # the constant unfolded.
+    if isRx when (isDottedValue
+        :ast
+        n: (ast.nodes.get i: bmNode.operation.u64)
+    ) then {
+        resolveAliasKey :st :ast declId: md
+    } else if isDone.not then {
+        (resolveDef
+            :st
+            :frame
+            :ast
+            :unitDecl
+            defName: mName
+            defnId: (zast.nodeid.create from: bmNode.operation.u32)
+        )
+    }
+    # the eager tier reaches a BARE re-export through resolveDef, not
+    # resolveAliasKey, so the value node's reference edge is recorded here as
+    # well. Both legs, one call: which of the two resolved it is not something
+    # the editor's answer should depend on.
+    if isRx then {
+        rxTid: (declTypeIdOf :st declId: md).u64
+        stampAliasValue :st :ast declId: md tid: rxTid
+    }
+    if md.isZero.not when speculative.not then {
+        st.typing.declSetDefined declId: md
+    }
+}
+
+# resolveUnitMemberAt -- one member of a unit body, dispatched by KIND. A unit
+# body that declares a generic param parses as `template`, and only
+# resolveInlineGenericUnit marks it generic, registers its params and stamps its
+# def node. `--eager` overrides the restrictions.
+resolveUnitMemberAt: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    ownerDeclId: ztypes.declid
+    ownerTid: ztypes.tid
+    memberId: zast.nodeid
+    speculative: bool
+    rootOnly: bool
+} is {
+    bmNode: argRefAt :ast nid: memberId
+    if bmNode.nid.isZero then return
+    mName: zast.nameTextCopy :ast ref: bmNode.name
+    if mName.length == 0 then return
+    if st.typing.eagerAll.not when (memberIsRestricted
+        :ast
+        opId: bmNode.operation
+        mName: mName.stringView
+        :speculative
+        :rootOnly
+    ) then return
+    if (zast.unitOpKindIs
+        :ast
+        opId: bmNode.operation
+        k: zast.unitkind.template
+    ) then {
+        # the template is a child of THIS unit: the mint funnel reaches the
+        # enclosing owner through the frame
+        (resolveInlineGenericUnit
+            :st
+            :ast
+            :unitDecl
+            defName: mName.stringView
+            parentTid: ownerTid
+            parentDeclId: ownerDeclId
+            unitOpId: bmNode.operation
+        )
+        return
+    }
+    if (isUnitOp op: (ast.nodes.get i: bmNode.operation.u64)) then {
+        (resolveNamespaceUnit
+            :st
+            :ast
+            :unitDecl
+            defName: mName.stringView
+            parentTid: ownerTid
+            parentDeclId: ownerDeclId
+            unitOpId: bmNode.operation
+        )
+        return
+    }
+    (resolveOrdinaryMember
+        :st
+        :ast
+        :unitDecl
+        :frame
+        :ownerDeclId
+        mName: mName.stringView
+        :bmNode
+        :speculative
+    )
+}
+
 # resolveUnitMembers -- resolve the definition signatures in ONE unit's body,
 # whatever kind of unit it is. A file unit, an inline `m: unit { }`, a hidden
 # subunit and a `public:` block differ only in who supplies the owner, so the
@@ -14215,125 +14360,22 @@ resolveUnitMembers: function {
     speculative: bool
     rootOnly: bool
 } is {
-    # every member resolves in the unit's own frame
-    rf: ownerDeclId
     bodyIds: zast.unitBodyIdsAt :ast unitId: unitOpId
     vx139: u64
     for vx139 < bodyIds.count.u64 loop {
         bm: zast.kidAt kids: ast.kids span: bodyIds i: vx139
         vx139 = vx139 + 1
-        bmNode: argRefAt :ast nid: (zast.nodeid.create from: bm.u32)
-        if bmNode.nid.isZero.not then {
-            mName: zast.nameTextCopy :ast ref: bmNode.name
-            if mName.length > 0 then {
-                # dispatch by KIND. A unit body that declares a generic param
-                # parses as `template`, and only resolveInlineGenericUnit marks
-                # it generic, registers its params and stamps its def node.
-                isTmpl: (zast.unitOpKindIs
-                    :ast
-                    opId: bmNode.operation
-                    k: zast.unitkind.template
-                )
-                isUnit: isUnitOp op: (ast.nodes.get i: bmNode.operation.u64)
-                # a scope declaration -- a unit or a template -- is a property
-                # of the DECLARATION, not a body: a nested namespace's template
-                # is reached through the scope or not at all, so it stays
-                # whatever the restriction. An INTERFACE was exempt here too,
-                # because a constraint facet's only reference may be the
-                # as-block marker naming it and markerTargetId merely PROBED for
-                # its target. It resolves that target now, so the marker demands
-                # the interface the way any other reference does.
-                # the two restrictions that hold a definition back, either of
-                # which is enough; --eager overrides both.
-                restricted: (
-                    (
-                        speculative and
-                        isUnit.not and
-                        (
-                            (isFunctionDefOp
-                                op: (ast.nodes.get i: bmNode.operation.u64)
-                            ).not
-                        )
-                    ) or
-                    (rootOnly and (mName.stringView != "main") and isUnit.not)
-                )
-                eager: st.typing.eagerAll or restricted.not
-                if eager then {
-                    if isTmpl then {
-                        # the template is a child of THIS unit: the mint funnel
-                        # reaches the enclosing owner through the frame
-                        (resolveInlineGenericUnit
-                            :st
-                            :ast
-                            :unitDecl
-                            defName: mName.stringView
-                            parentTid: ownerTid
-                            parentDeclId: ownerDeclId
-                            unitOpId: bmNode.operation
-                        )
-                    } else if isUnit then {
-                        (resolveNamespaceUnit
-                            :st
-                            :ast
-                            :unitDecl
-                            defName: mName.stringView
-                            parentTid: ownerTid
-                            parentDeclId: ownerDeclId
-                            unitOpId: bmNode.operation
-                        )
-                    } else {
-                        md: st.typing.declFindChild parentDeclId: ownerDeclId nameId: bmNode.name
-                        # a `public:` block's reference entry (`:x`, `alias: x`)
-                        # is an edge to a sibling of the enclosing unit, which
-                        # resolves as that unit's definition, not as a member here
-                        mdp: declParentIdOf :st declId: md
-                        if md.isZero.not when mdp != ownerDeclId then continue
-                        isRx: false
-                        isDone: false
-                        {
-                            mdo: st.typing.decls.get i: md.u64
-                            if mdo.kind.reexportDecl then isRx = true
-                            if mdo.defined then isDone = true
-                        }
-                        # A re-export whose target is a DOTTED path is resolved by
-                        # following it, which is resolveAliasKey's job -- resolveDef
-                        # has no leg for a dotted target naming a NESTED unit, and
-                        # marking the alias DEFINED after it did nothing is what
-                        # stopped a re-export of a re-export at its first hop. A bare
-                        # target (`ECHO: LIB`) names a sibling of this same unit and
-                        # is an ordinary definition: resolveDef is what FOLDS it, and
-                        # following it instead leaves the constant unfolded.
-                        if isRx when (isDottedValue
-                            :ast
-                            n: (ast.nodes.get i: bmNode.operation.u64)
-                        ) then {
-                            resolveAliasKey :st :ast declId: md
-                        } else if isDone.not then {
-                            (resolveDef
-                                :st
-                                frame: rf
-                                :ast
-                                :unitDecl
-                                defName: mName.stringView
-                                defnId: (zast.nodeid.create from: bmNode.operation.u32)
-                            )
-                        }
-                        # the eager tier reaches a BARE re-export through
-                        # resolveDef, not resolveAliasKey, so the value node's
-                        # reference edge is recorded here as well. Both legs, one
-                        # call: which of the two resolved it is not something the
-                        # editor's answer should depend on.
-                        if isRx then {
-                            rxTid: (declTypeIdOf :st declId: md).u64
-                            stampAliasValue :st :ast declId: md tid: rxTid
-                        }
-                        if md.isZero.not when speculative.not then {
-                            st.typing.declSetDefined declId: md
-                        }
-                    }
-                }
-            }
-        }
+        (resolveUnitMemberAt
+            :st
+            :ast
+            :unitDecl
+            frame: ownerDeclId
+            :ownerDeclId
+            :ownerTid
+            memberId: (zast.nodeid.create from: bm.u32)
+            :speculative
+            :rootOnly
+        )
     }
 }
 
@@ -36696,6 +36738,126 @@ constantBranchWalk: function {
     return result
 }
 
+# unitifsite -- what the compile-time `if` walk reads of its own node: whether it
+# IS one, and its else branch. The clause ids come back in the caller's list.
+unitifsite: record {
+    isIf: bool
+    elseId: zast.nodeid
+}
+
+# branchpick -- the running answer of a compile-time `if`: `first` is the type of
+# the first branch that typed, and is the fallback when the conditions did not
+# fold; `winner` is the type of the branch whose condition folded true.
+branchpick: record {
+    first: u64
+    winner: u64
+}
+
+# appendKidIds -- a node span's child ids, appended to the caller's list. The
+# list is the caller's so the ids outlive the view they were read through.
+appendKidIds: function {ast: Ast.view span: zast.kidspan ids: ListVal u32} is {
+    ix: u64
+    for ix < span.count.u64 loop {
+        ids.append from: (zast.kidAt kids: ast.kids :span i: ix)
+        ix = ix + 1
+    }
+}
+
+# readUnitIf -- the node's shape and clause ids, read through a view scoped to
+# this call because the walks that follow lend ast exclusively.
+readUnitIf: function {
+    ast: Ast.view
+    nid: zast.nodeid
+    clauseIds: ListVal u32
+} out unitifsite is {
+    n: ast.nodes.get i: nid.u64
+    if n.ifexpr.not then return (unitifsite isIf: false elseId: zast.nodeid)
+    appendKidIds :ast span: n.clauses ids: clauseIds
+    return (unitifsite isIf: true elseId: n.elseclause)
+}
+
+# readIfClause -- one clause's condition ids, and the branch it guards. A zero
+# answer means the node is not a clause: the parser interns every clause's
+# statement, so a real one never reads zero.
+readIfClause: function {
+    ast: Ast.view
+    clauseId: u32
+    condIds: ListVal u32
+} out zast.nodeid is {
+    clause: ast.nodes.get i: clauseId.u64
+    if clause.ifclause.not then return zast.nodeid
+    appendKidIds :ast span: clause.conditions ids: condIds
+    return clause.statement
+}
+
+# walkClauseConditions -- every condition operand walks through the constant
+# machinery, which is what stamps a comparison bool and coerces its literals.
+walkClauseConditions: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    condIds: (ListVal u32).view
+} is {
+    with coiter: condIds.iterate do for condId: coiter loop {
+        opId: zast.nodeid
+        {
+            cond: ast.nodes.get i: condId.u64
+            if cond.namedoperation then opId = cond.operation
+        }
+        if opId.isZero.not then {
+            constantOperandType :st :frame :ast :unitDecl nid: opId
+        }
+    }
+}
+
+# takeBranchType -- fold one walked branch into the running answer. Every branch
+# is walked and typed -- a dead branch's type errors are still type errors -- but
+# the definition takes the type of the branch that WINS, per the spec's "the type
+# of the first arm whose condition is true".
+takeBranchType: function {
+    pick: branchpick
+    bt: u64
+    stmtId: zast.nodeid
+    fb: ztyping.foldedbranch
+} out branchpick is {
+    first: pick.first
+    if first == 0 then first = bt
+    winner: pick.winner
+    if fb.known when stmtId == fb.stmt then winner = bt
+    return (branchpick :first :winner)
+}
+
+# stampUnitIfType -- the resolved type lands on the If, on its Expression
+# wrapper, and on the unit member the definition names.
+stampUnitIfType: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    defName: StringView
+    wrapperId: u32
+    nid: zast.nodeid
+    t: u64
+} is {
+    (ztyping.nodeTypeSet
+        tbl: st.typing.nodeType
+        nid: wrapperId.u64
+        tid: (ztypes.tid.create from: t.u64)
+    )
+    (ztyping.nodeTypeSet
+        tbl: st.typing.nodeType
+        nid: nid.u64
+        tid: (ztypes.tid.create from: t.u64)
+    )
+    cu: declTypeIdOf :st declId: unitDecl
+    if cu.isZero then return
+    (st.typing.setMemberType
+        parentTypeId: (ztypes.tid.create from: cu.u64)
+        nameId: (zast.poolFind pool: ast.names text: defName)
+        childTypeId: t
+    )
+}
+
 # resolveUnitIfDef -- a unit-level `if` definition (compile-time conditional):
 # conditions walk through the constant machinery (comparisons stamp bool and
 # coerce literal operands), branches walk + materialise, and the definition
@@ -36710,98 +36872,28 @@ resolveUnitIfDef: function {
     wrapperId: u32
     nid: zast.nodeid
 } is {
-    # the row is read through a view scoped to this block: the clause walks
-    # and the fold below lend ast exclusively
-    isIf: false
     clauseIds: ListVal u32
-    elseId: zast.nodeid
-    {
-        n: ast.nodes.get i: nid.u64
-        if n.ifexpr then {
-            isIf = true
-            clx909: u64
-            for clx909 < n.clauses.count.u64 loop {
-                c: zast.kidAt kids: ast.kids span: n.clauses i: clx909
-                clx909 = clx909 + 1
-                clauseIds.append from: c
-            }
-            elseId = n.elseclause
+    site: readUnitIf :ast :nid :clauseIds
+    if site.isIf.not then return
+    fb: foldIfBranch :st :frame :ast :unitDecl :nid
+    pick: branchpick first: 0 winner: 0
+    with cliter: clauseIds.iterate do for clauseId: cliter loop {
+        condIds: ListVal u32
+        stmtId: readIfClause :ast :clauseId :condIds
+        if stmtId.isZero.not then {
+            walkClauseConditions :ast :st :unitDecl :frame :condIds
+            bt: constantBranchWalk :st :frame :ast :unitDecl nid: stmtId
+            pick = takeBranchType :pick :bt :stmtId :fb
         }
     }
-    if isIf then {
-        t: u64
-        # every clause is still walked and typed -- a dead branch's type errors
-        # are still type errors -- but the definition takes the type of the
-        # branch that WINS, per the spec's "the type of the first arm whose
-        # condition is true". `w` is that type; `t` stays the first-typed
-        # fallback for an `if` whose conditions did not fold.
-        w: u64
-        fb: foldIfBranch :st :frame :ast :unitDecl :nid
-        with cliter: clauseIds.iterate do for clauseId: cliter loop {
-            # the clause and its conditions are read through views scoped to
-            # blocks: the operand walks lend ast exclusively
-            isClause: false
-            condIds: ListVal u32
-            stmtId: zast.nodeid
-            {
-                clause: ast.nodes.get i: clauseId.u64
-                if clause.ifclause then {
-                    isClause = true
-                    cox1209: u64
-                    for cox1209 < clause.conditions.count.u64 loop {
-                        c: zast.kidAt kids: ast.kids span: clause.conditions i: cox1209
-                        cox1209 = cox1209 + 1
-                        condIds.append from: c
-                    }
-                    stmtId = clause.statement
-                }
-            }
-            if isClause then {
-                with coiter: condIds.iterate do for condId: coiter loop {
-                    opId: zast.nodeid
-                    {
-                        cond: ast.nodes.get i: condId.u64
-                        if cond.namedoperation then opId = cond.operation
-                    }
-                    if opId.isZero.not then {
-                        constantOperandType :st :frame :ast :unitDecl nid: opId
-                    }
-                }
-                bt: constantBranchWalk :st :frame :ast :unitDecl nid: stmtId
-                if t == 0 then t = bt
-                if fb.known when stmtId == fb.stmt then w = bt
-            }
-        }
-        if elseId > 0 then {
-            et: constantBranchWalk :st :frame :ast :unitDecl nid: elseId
-            if t == 0 then t = et
-            if fb.known when elseId == fb.stmt then w = et
-        }
-        if fb.known when w > 0 then t = w
-        if t > 0 then {
-            (ztyping.nodeTypeSet
-                tbl: st.typing.nodeType
-                nid: wrapperId.u64
-                tid: (ztypes.tid.create from: t.u64)
-            )
-            (ztyping.nodeTypeSet
-                tbl: st.typing.nodeType
-                nid: nid.u64
-                tid: (ztypes.tid.create from: t.u64)
-            )
-            cu: (declTypeIdOf
-                :st
-                declId: unitDecl
-            )
-            if cu.isZero.not then {
-                (st.typing.setMemberType
-                    parentTypeId: (ztypes.tid.create from: cu.u64)
-                    nameId: (zast.poolFind pool: ast.names text: defName)
-                    childTypeId: t
-                )
-            }
-        }
+    if site.elseId > 0 then {
+        et: constantBranchWalk :st :frame :ast :unitDecl nid: site.elseId
+        pick = takeBranchType :pick bt: et stmtId: site.elseId :fb
     }
+    t: pick.first
+    if fb.known when pick.winner > 0 then t = pick.winner
+    if t == 0 then return
+    stampUnitIfType :ast :st :unitDecl :defName :wrapperId :nid :t
 }
 
 # --- compile-time constant evaluation ---
