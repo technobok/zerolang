@@ -172,6 +172,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-09-06 | 49cf12e9 | [`when` conjuncts narrow in turn; the nested-if collapse](#r-whennarrow) | 0.44s | -- | 101MB / -- | 131 / 170 / 173 (total 474) | 2,244,864 | 301MB | -- | 119,796 |
 | 2026-09-08 | 7dcb7a15 | [the A008 >=100 band, nine splits](#r-a008band) | 0.45s | -- | 95MB / -- | 108 / 170 / 184 (total 462) | 2,263,972 | 302MB | -- | 121,190 |
 | 2026-09-08 | a3f7168f | [the copy sweep: names borrowed where nobody keeps them](#r-copysweep) | 0.44s | -- | 95MB / -- | 105 / 172 / 178 (total 455) | 2,114,742 | 300MB | -- | 121,156 |
+| 2026-09-08 | 613e97e6 | [the A008 50-99 band, part 2 so far](#r-a008band5099) | 0.45s | -- | 95MB / -- | 116 / 171 / 180 (total 467) | 2,110,794 | 300MB | -- | 121,071 |
 
 
 <a id="r-tokenarc"></a>
@@ -2776,3 +2777,44 @@ blocks spread thin over sites that mostly return the name; `listCname`'s is
 ~33,000 behind callers that lend `ctx` exclusively; and the L022 `viewable-local`
 worklist is 32,943 blocks over 127 linter-listed sites, 116 of them in
 `ztypecheck.z`.
+
+<a id="r-a008band5099"></a>
+
+### the A008 50-99 band, part 2 so far (2026-09-08, `a3f7168f` -> `613e97e6`)
+
+Ten behaviour-preserving splits and shared lifts across `zemitterc.z` and
+`ztypecheck.z`. Every one is proved the same way: the emitted C for all 564
+corpus programs and all three drivers byte-identical, measured with both
+compilers over the same source; and for a checker change, every diagnostic
+rendered for the 374 error fixtures unchanged too.
+
+| | a3f7168f | 613e97e6 |
+|---|---|---|
+| allocations | 2,110,578 | 2,110,578 |
+| instructions | 5,447.9M -- 5,449.3M | 5,458.2M -- 5,458.4M |
+| wall, best of 5 | 0.45s | 0.44s -- 0.45s |
+| peak RSS | 94.6 -- 94.8 MB | 94.6 -- 95.5 MB |
+
+(The A/B numbers are both compilers over the same tree, staged under
+equal-length names. The table row above is each compiler on its own source,
+which is why its allocation figure differs slightly.)
+
+**Allocations are neutral, but only after a regression was found and removed.**
+`emitMonoMethodsIn` built a `ListVal` per call through `zast.kidIds`, once per
+mono per span: **+1,428 allocations**. Its sibling `scanCallsInSpan`, written the
+same afternoon, takes the SPAN for exactly this reason and says so in its
+comment. The lesson is narrow and worth keeping: **`zast.kidIds` is for a caller
+that visits the children more than once or hands them on; a walk that visits
+each child once wants the span**, or it allocates a list per node.
+
+**Instructions are +0.18%, and it is one function.** `callgrind` names it:
+`scanCallsAt` self-cost 11,131,621 (0.19% of the program), against a measured
+delta of +9.9M. That is the id-taking entry the demand walk's nineteen
+single-child descents now route through -- a call frame per descent, over every
+node in the program. It is real work, not a codegen artefact, and it is the
+price of `scanCallsInNode` going from 63 to under the threshold with nineteen
+hand-written row reads deleted. Wall is flat at 0.45s.
+
+**What moved on the ratchets**: `A008 src/zemitterc.z` 137 -> 132,
+`A008 src/ztypecheck.z` 177 -> 174, `A005 src/zemitterc.z` 15 -> 13,
+`A006 src/zemitterc.z` 18 -> 11.
