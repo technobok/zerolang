@@ -4058,6 +4058,174 @@ isCtorOwnerCall: function {
     )
 }
 
+# callMovesCollectionElement -- `append` / `insert` / `push` MOVE their element
+# into the container, so its source is zeroed like any take. The rule is for
+# container elements only: String.append BORROWS its StringLike argument and
+# copies the bytes, so it never moves one.
+callMovesCollectionElement: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+} out bool is {
+    mmnId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable.u64)
+    isMove: (
+        (mnIs :ctx id: mmnId at: mnAppend) or
+        (mnIs :ctx id: mmnId at: mnInsert) or
+        (mnIs :ctx id: mmnId at: mnPush)
+    )
+    if isMove.not then return false
+    xr: ast.nodes.get i: call.callable.u64
+    tid9: dottedReceiverStampId :ast :symtab callable: xr
+    return (chaseColMono :symtab :ctx tid: tid9) != ctx.strTid
+}
+
+# emitExplicitTakeZero -- an explicit `<atom>.take` argument: the source is
+# zeroed so its scope-exit destructor no-ops, the move having transferred
+# ownership. A HOLD parameter is the exception -- it is passed by pointer and
+# the callee never destroys it, so the caller keeps the storage and zeroing
+# here would strand the allocation. A construction owns everything it is given
+# and never holds.
+emitExplicitTakeZero: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    a: zast.namedoperationrow.view
+    ts: StringView
+    takeFnTid: ztypes.tid
+    ctorOwner: bool
+    ind: StringView
+    buf: String.borrow
+} is {
+    if ctorOwner.not when (paramIsHold
+        :ast
+        :symtab
+        ftid: takeFnTid
+        label: (zast.nameTextAt :ast ref: a.name).stringView
+    ) then return
+    tc: (takeMoveCtype
+        :ast
+        :symtab
+        :ctx
+        n: (ast.nodes.get i: a.operation.u64)
+    )
+    inv: "\{ind}\{ts} = (\{tc}){0};\n"
+    buf.append inv
+}
+
+# positionalParamIsTake -- the declared ownership of the parameter an
+# UNLABELLED argument fills. A receiver parameter takes slot 0, so the
+# positional index is offset past it.
+positionalParamIsTake: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    takeFnTid: ztypes.tid
+    posI: u64
+} out bool is {
+    pnames: List String
+    pids: ListVal u64
+    pids9Nm: ListVal u64
+    (recFieldLists
+        :ast
+        :symtab
+        tid: takeFnTid
+        names: pnames
+        ids: pids
+        nameIds: pids9Nm
+    )
+    off: u64
+    if pnames.length > 0 then {
+        firstPname: pnames.get i: 0
+        if firstPname.stringView == "this" then off = 1
+    }
+    pidx: posI + off
+    if pidx >= pnames.length then return false
+    pn: pnames.get i: pidx
+    return (symtab.typing.declOwnershipIs
+        pool: ast.names
+        parentTypeId: takeFnTid
+        name: pn.stringView
+        own: ztypes.zparamownership.takeMode
+    )
+}
+
+# argIsMovedByCall -- the call MOVES this argument's value, so its source owes
+# a zero. A construction owns everything it is given and a collection element
+# is moved in; past that the parameter's own declared ownership decides, by
+# LABEL where the argument carries one and by position where it does not. Both
+# `borrow` and `hold` say no -- a hold is passed by pointer and the callee
+# never destroys it, so zeroing its source would strand the allocation.
+argIsMovedByCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    a: zast.namedoperationrow.view
+    takeFnTid: ztypes.tid
+    posI: u64
+    ctorOwner: bool
+    collMove: bool
+} out bool is {
+    isTake: ctorOwner
+    if collMove then isTake = true
+    lbl: zast.nameTextAt :ast ref: a.name
+    if lbl.length == 0 then {
+        if (positionalParamIsTake :ast :symtab :takeFnTid :posI) then isTake = true
+        return isTake
+    }
+    if (symtab.typing.declOwnershipIs
+        pool: ast.names
+        parentTypeId: takeFnTid
+        name: lbl.stringView
+        own: ztypes.zparamownership.takeMode
+    ) then isTake = true
+    if (symtab.typing.declOwnershipIs
+        pool: ast.names
+        parentTypeId: takeFnTid
+        name: lbl.stringView
+        own: ztypes.zparamownership.borrowMode
+    ) then isTake = false
+    if (symtab.typing.declOwnershipIs
+        pool: ast.names
+        parentTypeId: takeFnTid
+        name: lbl.stringView
+        own: ztypes.zparamownership.holdMode
+    ) then isTake = false
+    return isTake
+}
+
+# emitImplicitMoveZero -- a bare owning local moved into a taking slot: the
+# source is zeroed so its scope-exit destructor no-ops. A heap-pointer
+# collection zeroes to NULL; a type with no destructor carries nothing to free
+# and needs no zero at all.
+emitImplicitMoveZero: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    a: zast.namedoperationrow.view
+    ind: StringView
+    buf: String.borrow
+} is {
+    isrc: (implicitTakeSource
+        :ast
+        :symtab
+        :ctx
+        n: (ast.nodes.get i: a.operation.u64)
+    )
+    if isrc.length == 0 then return
+    istid: (stampIdOf
+        :symtab
+        nid: (interpPartNodeId n: (ast.nodes.get i: a.operation.u64))
+    )
+    if (isHeapPtrCollection :symtab :ctx tid: istid) then {
+        iinvh: "\{ind}\{isrc} = NULL;\n"
+        buf.append iinvh
+        return
+    }
+    if (symtab.reg.needsDestructor typeId: istid).not then return
+    itc: typeRefC :ast :symtab :ctx tid: istid thisTid: ztypes.tid
+    iinv: "\{ind}\{isrc} = (\{itc}){0};\n"
+    buf.append iinv
+}
+
 # emitCallTakeInvalidations -- zero the source local of each ownership-moved arg
 # of a call so its scope-exit destructor is a no-op (the move transferred
 # ownership). An explicit `<atom>.take` uses takeStringSource; a bare owning-
@@ -4071,141 +4239,50 @@ emitCallTakeInvalidations: function {
     ind: StringView
     buf: String.borrow
 } is {
-    takeFnTid: implicitTakeFnId :ast :symtab :ctx :call
+    tfn0: implicitTakeFnId :ast :symtab :ctx :call
+    takeFnTid: ztypes.tid.create from: tfn0.u64
     ctorOwner: isCtorOwnerCall :ast :symtab :ctx :call
-    mmnId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable.u64)
-    collMove: (
-        (mnIs :ctx id: mmnId at: mnAppend) or
-        (mnIs :ctx id: mmnId at: mnInsert) or
-        (mnIs :ctx id: mmnId at: mnPush)
-    )
-    if collMove then {
-        # The collection-move rule is for container elements; String.append
-        # borrows its StringLike arg (byte copy), it never moves it.
-        xr: ast.nodes.get i: call.callable.u64
-        tid9: (dottedReceiverStampId :ast :symtab callable: xr)
-        rcm: (chaseColMono
-            :symtab
-            :ctx
-            tid: tid9
-        )
-        if rcm == ctx.strTid then collMove = false
-    }
+    collMove: callMovesCollectionElement :ast :symtab :ctx :call
     posI: u64
     arx179: u64
     for arx179 < call.arguments.count.u64 loop {
         a9Id: zast.kidAt kids: ast.kids span: call.arguments i: arx179
         arx179 = arx179 + 1
         a: ast.nodes.get i: a9Id.u64
-        if a.namedoperation then {
-            ts: takeStringSource :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
-            if ts.length > 0 then {
-                holdSkip: false
-                if ctorOwner.not then holdSkip = (paramIsHold
-                    :ast
-                    :symtab
-                    ftid: (ztypes.tid.create from: takeFnTid.u64)
-                    label: (zast.nameTextAt :ast ref: a.name).stringView
-                )
-                if holdSkip.not then {
-                    tc: (takeMoveCtype
-                        :ast
-                        :symtab
-                        :ctx
-                        n: (ast.nodes.get i: a.operation.u64)
-                    )
-                    inv: "\{ind}\{ts} = (\{tc}){0};\n"
-                    buf.append inv
-                }
-            } else {
-                isTake: ctorOwner
-                if collMove then isTake = true
-                lbl: zast.nameTextAt :ast ref: a.name
-                if lbl.length > 0 then {
-                    if (symtab.typing.declOwnershipIs
-                        pool: ast.names
-                        parentTypeId: (ztypes.tid.create from: takeFnTid.u64)
-                        name: lbl.stringView
-                        own: ztypes.zparamownership.takeMode
-                    ) then isTake = true
-                    if (symtab.typing.declOwnershipIs
-                        pool: ast.names
-                        parentTypeId: (ztypes.tid.create from: takeFnTid.u64)
-                        name: lbl.stringView
-                        own: ztypes.zparamownership.borrowMode
-                    ) then isTake = false
-                    # a hold param is passed by pointer and the CALLEE never
-                    # destroys it, so the caller keeps the storage: zeroing its
-                    # source here would strand the allocation
-                    if (symtab.typing.declOwnershipIs
-                        pool: ast.names
-                        parentTypeId: (ztypes.tid.create from: takeFnTid.u64)
-                        name: lbl.stringView
-                        own: ztypes.zparamownership.holdMode
-                    ) then isTake = false
-                } else {
-                    pnames: List String
-                    pids: ListVal u64
-                    pids9Nm: ListVal u64
-                    (recFieldLists
-                        :ast
-                        :symtab
-                        tid: (ztypes.tid.create from: takeFnTid.u64)
-                        names: pnames
-                        ids: pids
-                        nameIds: pids9Nm
-                    )
-                    off: u64
-                    if pnames.length > 0 then {
-                        firstPname: pnames.get i: 0
-                        if firstPname.stringView == "this" then off = 1
-                    }
-                    pidx: posI + off
-                    if pidx < pnames.length then {
-                        pn: pnames.get i: pidx
-                        if (symtab.typing.declOwnershipIs
-                            pool: ast.names
-                            parentTypeId: (ztypes.tid.create from: takeFnTid.u64)
-                            name: pn.stringView
-                            own: ztypes.zparamownership.takeMode
-                        ) then isTake = true
-                    }
-                }
-                if isTake then {
-                    isrc: (implicitTakeSource
-                        :ast
-                        :symtab
-                        :ctx
-                        n: (ast.nodes.get i: a.operation.u64)
-                    )
-                    if isrc.length > 0 then {
-                        istid: (stampIdOf
-                            :symtab
-                            nid: (interpPartNodeId n: (ast.nodes.get i: a.operation.u64))
-                        )
-                        if (isHeapPtrCollection :symtab :ctx tid: istid) then {
-                            iinvh: "\{ind}\{isrc} = NULL;\n"
-                            buf.append iinvh
-                        } else {
-                            if (symtab.reg.needsDestructor typeId: istid) then {
-                                itc: typeRefC :ast :symtab :ctx tid: istid thisTid: ztypes.tid
-                                iinv: "\{ind}\{isrc} = (\{itc}){0};\n"
-                                buf.append iinv
-                            }
-                        }
-                    }
-                }
-            }
-            (emitValueTakeInvalidations
+        if a.namedoperation.not then continue
+        ts: takeStringSource :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
+        if ts.length > 0 then {
+            (emitExplicitTakeZero
                 :ast
                 :symtab
                 :ctx
-                n: (ast.nodes.get i: a.operation.u64)
+                :a
+                ts: ts.stringView
+                :takeFnTid
+                :ctorOwner
                 :ind
                 :buf
             )
-            posI = posI + 1
+        } else if (argIsMovedByCall
+            :ast
+            :symtab
+            :a
+            :takeFnTid
+            :posI
+            :ctorOwner
+            :collMove
+        ) then {
+            emitImplicitMoveZero :ast :symtab :ctx :a :ind :buf
         }
+        (emitValueTakeInvalidations
+            :ast
+            :symtab
+            :ctx
+            n: (ast.nodes.get i: a.operation.u64)
+            :ind
+            :buf
+        )
+        posI = posI + 1
     }
 }
 
