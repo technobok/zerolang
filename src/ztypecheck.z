@@ -20190,6 +20190,84 @@ valueNoCoerceAt: function {
 }
 
 
+# pinProjectionBorrow -- a `.borrow` projection borrows its source in place.
+# The from-path's ROOT is the borrow origin (a bare name, or a `.borrow`
+# projection of one), and the projection never hoists.
+pinProjectionBorrow: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arg: argref
+} is {
+    pbr: rootNameIdOf :ast n: (ast.nodes.get i: arg.operation.u64)
+    if pbr.isZero then return
+    pbv2: st.lookupVarId nameId: pbr
+    match (
+        pbv2
+    ) case some then {
+        drainPendingBorrow :st
+        pinsPushOne :st nameId: pbr shared: false
+    } case none then null
+}
+
+# consumeProjectionSource -- a `create` projection COPIES its source, so a
+# trivial bare name is invalidated only where the projection consumes; a
+# non-trivial argument is hoisted instead, having no name to invalidate.
+consumeProjectionSource: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arg: argref
+    argT: ztypes.tid
+    consumes: bool
+} is {
+    if (argIsTrivial
+        :ast
+        op: (ast.nodes.get i: arg.operation.u64)
+    ).not then {
+        (hoistArg
+            :ast
+            :st
+            argId: arg.operation
+            argType: argT
+            paramType: 0
+            :consumes
+            viewParam: false
+        )
+        return
+    }
+    if consumes.not then return
+    pbn: (zast.nameTextAt
+        :ast
+        ref: (bareAtomNameId
+            :ast
+            n: (ast.nodes.get i: arg.operation.u64)
+        )
+    )
+    if pbn.length == 0 then return
+    pbv: st.lookupVarId nameId: (nameIdOf :ast name: pbn.stringView)
+    match (
+        pbv
+    ) case some then {
+        (st.invalidate
+            nameId: (nameIdOf :ast name: pbn.stringView)
+            loc: optionval.none ztypes.zsrcpos
+        )
+    } case none then null
+}
+
+# projectionCallKind -- which projection a `F.create` / `P.borrow` is: a facet
+# or a protocol, created or borrowed.
+projectionCallKind: function {
+    st: zenv.ZSymbolTable.view
+    pjId: ztypes.tid
+    borrows: bool
+} out zast.callkind is {
+    isFacet: (st.reg.typetypeOf typeId: pjId) == ztypes.ztypetype.facetType
+    if isFacet when borrows then return zast.callkind.facetBorrow
+    if isFacet then return zast.callkind.facetCreate
+    if borrows then return zast.callkind.protocolBorrow
+    return zast.callkind.protocolCreate
+}
+
 # checkProjectionCreate -- `F.create from: expr` / `P.borrow from: expr` on a
 # facet or protocol: a projection, not a call. No CALL scope; the from-argument
 # walks in the current scope (a facet copies its source -- nothing is consumed);
@@ -20209,89 +20287,27 @@ checkProjectionCreate: function {
         argId: (zast.callArgAt :ast nid: call.nid i: kAiter).u32
         kAiter = kAiter + 1
         arg: argRefAt :ast nid: (zast.nodeid.create from: argId.u32)
-        if arg.nid.isZero.not when found.not then {
-            an: zast.nameTextCopy :ast ref: arg.name
-            isFrom: false
-            if an.length == 0 then {
-                isFrom = true
-            } else {
-                if an.stringView == "from" then isFrom = true
-            }
-            if isFrom then {
-                found = true
-                pvt: (checkValueAt :st :unitDecl :ast nid: arg.operation)
-                if pvt > 0 then {
-                    if borrows then {
-                        # The from-path's root is the borrow origin (a
-                        # bare name or a `.borrow` projection) --
-                        # the projection borrows, it never hoists.
-                        pbr: rootNameIdOf :ast n: (ast.nodes.get i: arg.operation.u64)
-                        if pbr.isZero.not then {
-                            pbv2: st.lookupVarId nameId: pbr
-                            match (
-                                pbv2
-                            ) case some then {
-                                drainPendingBorrow :st
-                                pinsPushOne :st nameId: pbr shared: false
-                            } case none then null
-                        }
-                    } else {
-                        if (argIsTrivial
-                            :ast
-                            op: (ast.nodes.get i: arg.operation.u64)
-                        ) then {
-                            pbn: (zast.nameTextAt
-                                :ast
-                                ref: (bareAtomNameId
-                                    :ast
-                                    n: (ast.nodes.get i: arg.operation.u64)
-                                )
-                            )
-                            if pbn.length > 0 then {
-                                pbv: st.lookupVarId nameId: (nameIdOf :ast name: pbn.stringView)
-                                match (
-                                    pbv
-                                ) case some then {
-                                    if consumes then {
-                                        (st.invalidate
-                                            nameId: (nameIdOf :ast name: pbn.stringView)
-                                            loc: optionval.none ztypes.zsrcpos
-                                        )
-                                    }
-                                } case none then null
-                            }
-                        } else {
-                            (hoistArg
-                                :ast
-                                :st
-                                argId: arg.operation
-                                argType: pvt
-                                paramType: 0
-                                :consumes
-                                viewParam: false
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-    setpj: pjId
-    stampGate :st nid: call.nid.u64 tid: (ztypes.tid.create from: setpj.u64)
-    pjk: zast.callkind.protocolCreate
-    if (
-        (st.reg.typetypeOf typeId: (ztypes.tid.create from: pjId.u64)) == ztypes.ztypetype.facetType
-    ) then {
+        if arg.nid.isZero then continue
+        if found then continue
+        # the source is the `from:` argument, or the one unlabelled argument
+        an: zast.nameTextCopy :ast ref: arg.name
+        if an.length > 0 when (an.stringView == "from").not then continue
+        found = true
+        pvt: (checkValueAt :st :unitDecl :ast nid: arg.operation)
+        if pvt.isZero then continue
         if borrows then {
-            pjk = zast.callkind.facetBorrow
+            pinProjectionBorrow :st :ast :arg
         } else {
-            pjk = zast.callkind.facetCreate
+            consumeProjectionSource :st :ast :arg argT: pvt :consumes
         }
-    } else {
-        if borrows then pjk = zast.callkind.protocolBorrow
     }
-    st.typing.callKind.set key: call.nid.u64 value: pjk
-    return (ztypes.tid.create from: pjId)
+    pjT: ztypes.tid.create from: pjId
+    stampGate :st nid: call.nid.u64 tid: pjT
+    (st.typing.callKind.set
+        key: call.nid.u64
+        value: (projectionCallKind :st pjId: pjT :borrows)
+    )
+    return pjT
 }
 
 # metaCreateBaseId -- the base atom's node id when a callable is the dotted
