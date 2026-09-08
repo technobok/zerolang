@@ -523,24 +523,10 @@ Tokenizer: class {
         s0: this.tokpos
         for (isstrc this.atchar) loop this.accept
         if this.tokpos > s0 then {
-            return (token
-                toktype: toktype.strMidTok
-                width: (spanWidth s: s0 e: this.tokpos)
-                text: (this.tokSpanId :pool s: s0 e: this.tokpos)
-                fsno: this.fsno
-                lineno: line
-                colno: col
-            )
+            return (this.spanTok :pool tt: toktype.strMidTok s: s0 e: this.tokpos :line :col)
         }
         this.accept
-        return (token
-            toktype: toktype.errTok
-            width: 1
-            text: (this.tokSpanId :pool s: s0 e: s0 + 1)
-            fsno: this.fsno
-            lineno: line
-            colno: col
-        )
+        return (this.byteTok :pool tt: toktype.errTok s: s0 :line :col)
     }
 
     # Inside a STRINGRAW state.
@@ -566,26 +552,12 @@ Tokenizer: class {
                 # the outer dispatcher resume in the same STRINGRAW
                 # state on the next call.
                 if stringparts.length > 0 then {
-                    return (token
-                        toktype: toktype.strMidTok
-                        width: (textWidth s: stringparts)
-                        text: (pool.set s: stringparts.stringView)
-                        fsno: this.fsno
-                        lineno: line
-                        colno: col
-                    )
+                    return (this.textTok :pool tt: toktype.strMidTok s: stringparts :line :col)
                 }
                 err: String
                 err.appendByte this.atchar
                 this.accept
-                return (token
-                    toktype: toktype.errTok
-                    width: (textWidth s: err)
-                    text: (pool.set s: err.stringView)
-                    fsno: this.fsno
-                    lineno: line
-                    colno: col
-                )
+                return (this.textTok :pool tt: toktype.errTok s: err :line :col)
             }
             dline: this.lineno
             dcol: this.colno
@@ -605,31 +577,18 @@ Tokenizer: class {
                 # (or STREND directly when there is no preceding content).
                 this.statepop
                 if stringparts.length > 0 then {
-                    this.nexttok = (token
-                        toktype: toktype.strEndTok
-                        width: (textWidth s: delimparts)
-                        text: (pool.set s: delimparts.stringView)
-                        fsno: this.fsno
-                        lineno: dline
-                        colno: dcol
+                    this.nexttok = (this.textTok
+                        :pool
+                        tt: toktype.strEndTok
+                        s: delimparts
+                        line: dline
+                        col: dcol
                     )
                     this.hasnext = true
-                    return (token
-                        toktype: toktype.strMidTok
-                        width: (textWidth s: stringparts)
-                        text: (pool.set s: stringparts.stringView)
-                        fsno: this.fsno
-                        lineno: line
-                        colno: col
-                    )
+                    return (this.textTok :pool tt: toktype.strMidTok s: stringparts :line :col)
                 }
-                return (token
-                    toktype: toktype.strEndTok
-                    width: (textWidth s: delimparts)
-                    text: (pool.set s: delimparts.stringView)
-                    fsno: this.fsno
-                    lineno: dline
-                    colno: dcol
+                (return
+                    (this.textTok :pool tt: toktype.strEndTok s: delimparts line: dline col: dcol)
                 )
             }
         }
@@ -660,14 +619,7 @@ Tokenizer: class {
         if c != ascii.backslash then {
             err: String
             err.appendByte c
-            return (token
-                toktype: toktype.errTok
-                width: (textWidth s: err)
-                text: (pool.set s: err.stringView)
-                fsno: this.fsno
-                lineno: line
-                colno: col
-            )
+            return (this.textTok :pool tt: toktype.errTok s: err :line :col)
         }
         this.accept
         c = this.atchar
@@ -698,14 +650,7 @@ Tokenizer: class {
             this.accept
             sc: String
             sc.appendByte named_byte
-            return (token
-                toktype: toktype.strChrTok
-                width: (textWidth s: sc)
-                text: (pool.set s: sc.stringView)
-                fsno: this.fsno
-                lineno: line
-                colno: col
-            )
+            return (this.textTok :pool tt: toktype.strChrTok s: sc :line :col)
         }
 
         if c == ascii.lowerX then {
@@ -719,27 +664,13 @@ Tokenizer: class {
             bs: String
             bs.appendByte ascii.backslash
             this.statepush s: tokstatetype.stringexpr
-            return (token
-                toktype: toktype.strExprBegTok
-                width: (textWidth s: bs)
-                text: (pool.set s: bs.stringView)
-                fsno: this.fsno
-                lineno: line
-                colno: col
-            )
+            return (this.textTok :pool tt: toktype.strExprBegTok s: bs :line :col)
         }
 
         err: String
         err.appendByte ascii.backslash
         err.appendByte c
-        return (token
-            toktype: toktype.errTok
-            width: (textWidth s: err)
-            text: (pool.set s: err.stringView)
-            fsno: this.fsno
-            lineno: line
-            colno: col
-        )
+        return (this.textTok :pool tt: toktype.errTok s: err :line :col)
     }
 
     # Consume `n` hex digits and produce a STRCHR with the decoded
@@ -778,25 +709,11 @@ Tokenizer: class {
                     ) case some then {
                         err.appendByte db
                     } case none then {
-                        return (token
-                            toktype: toktype.errTok
-                            width: (textWidth s: err)
-                            text: (pool.set s: err.stringView)
-                            fsno: this.fsno
-                            lineno: line
-                            colno: col
-                        )
+                        return (this.textTok :pool tt: toktype.errTok s: err :line :col)
                     }
                     j = j + 1
                 }
-                return (token
-                    toktype: toktype.errTok
-                    width: (textWidth s: err)
-                    text: (pool.set s: err.stringView)
-                    fsno: this.fsno
-                    lineno: line
-                    colno: col
-                )
+                return (this.textTok :pool tt: toktype.errTok s: err :line :col)
             }
         }
 
@@ -827,34 +744,75 @@ Tokenizer: class {
 
         if specifier == ascii.lowerU then {
             if val > 1114111 then {
-                return (token
-                    toktype: toktype.errTok
-                    width: (textWidth s: err)
-                    text: (pool.set s: err.stringView)
-                    fsno: this.fsno
-                    lineno: line
-                    colno: col
-                )
+                return (this.textTok :pool tt: toktype.errTok s: err :line :col)
             }
             sc: String
             utf8_encode_append cp: val dst: sc
-            return (token
-                toktype: toktype.strChrTok
-                width: (textWidth s: sc)
-                text: (pool.set s: sc.stringView)
-                fsno: this.fsno
-                lineno: line
-                colno: col
-            )
+            return (this.textTok :pool tt: toktype.strChrTok s: sc :line :col)
         }
 
         b: val.u8.orPanic
         sc: String
         sc.appendByte b
+        return (this.textTok :pool tt: toktype.strChrTok s: sc :line :col)
+    }
+
+    # spanTok -- a token whose width and text both come from the source span
+    # `s`..`e`. The two are written together everywhere they are written at all,
+    # because a spanned token's width IS its span's.
+    spanTok: function {
+        this: this.view
+        pool: zast.StringPool
+        tt: toktype
+        s: u64
+        e: u64
+        line: u32
+        col: u32
+    } out token is {
         return (token
-            toktype: toktype.strChrTok
-            width: (textWidth s: sc)
-            text: (pool.set s: sc.stringView)
+            toktype: tt
+            width: (spanWidth :s :e)
+            text: (this.tokSpanId :pool :s :e)
+            fsno: this.fsno
+            lineno: line
+            colno: col
+        )
+    }
+
+    # byteTok -- a token that is exactly the one source byte at `s`.
+    byteTok: function {
+        this: this.view
+        pool: zast.StringPool
+        tt: toktype
+        s: u64
+        line: u32
+        col: u32
+    } out token is {
+        return (token
+            toktype: tt
+            width: 1
+            text: (this.tokSpanId :pool :s e: s + 1)
+            fsno: this.fsno
+            lineno: line
+            colno: col
+        )
+    }
+
+    # textTok -- a token whose spelling was BUILT rather than spanned, so its
+    # width comes from the text and cannot be read off the source: an escape
+    # resolves to fewer bytes than it was written in.
+    textTok: function {
+        this: this.view
+        pool: zast.StringPool
+        tt: toktype
+        s: String
+        line: u32
+        col: u32
+    } out token is {
+        return (token
+            toktype: tt
+            width: (textWidth :s)
+            text: (pool.set s: s.stringView)
             fsno: this.fsno
             lineno: line
             colno: col
@@ -931,28 +889,14 @@ Tokenizer: class {
             this.accept
             this.lineno = this.lineno + 1
             this.colno = 1
-            return (token
-                toktype: toktype.eolTok
-                width: (spanWidth s: s0 e: this.tokpos)
-                text: (this.tokSpanId :pool s: s0 e: this.tokpos)
-                fsno: this.fsno
-                lineno: line
-                colno: col
-            )
+            return (this.spanTok :pool tt: toktype.eolTok s: s0 e: this.tokpos :line :col)
         }
         if c == ascii.cr then {
             this.accept
             if this.atchar == ascii.lf then this.accept
             this.lineno = this.lineno + 1
             this.colno = 1
-            return (token
-                toktype: toktype.eolTok
-                width: (spanWidth s: s0 e: this.tokpos)
-                text: (this.tokSpanId :pool s: s0 e: this.tokpos)
-                fsno: this.fsno
-                lineno: line
-                colno: col
-            )
+            return (this.spanTok :pool tt: toktype.eolTok s: s0 e: this.tokpos :line :col)
         }
 
         # State-aware dispatch: when the top of the state stack is
@@ -980,14 +924,7 @@ Tokenizer: class {
             if c == ascii.doubleQuote then {
                 this.accept
                 this.statepop
-                return (token
-                    toktype: toktype.strEndTok
-                    width: 1
-                    text: (this.tokSpanId :pool s: s0 e: s0 + 1)
-                    fsno: this.fsno
-                    lineno: line
-                    colno: col
-                )
+                return (this.byteTok :pool tt: toktype.strEndTok s: s0 :line :col)
             }
             return (this.acceptstringtoken :pool)
         }
@@ -1044,38 +981,17 @@ Tokenizer: class {
                     colno: col + 1
                 )
                 this.hasnext = true
-                return (token
-                    toktype: toktype.strBegTok
-                    width: 1
-                    text: (this.tokSpanId :pool s: s0 e: s0 + 1)
-                    fsno: this.fsno
-                    lineno: line
-                    colno: col
-                )
+                return (this.byteTok :pool tt: toktype.strBegTok s: s0 :line :col)
             }
             if n == 1 then {
                 this.statepush s: tokstatetype.string
-                return (token
-                    toktype: toktype.strBegTok
-                    width: (spanWidth s: s0 e: this.tokpos)
-                    text: (this.tokSpanId :pool s: s0 e: this.tokpos)
-                    fsno: this.fsno
-                    lineno: line
-                    colno: col
-                )
+                return (this.spanTok :pool tt: toktype.strBegTok s: s0 e: this.tokpos :line :col)
             }
             # n >= 3: raw string. Push STRINGRAW with the delim length
             # so acceptstringrawtoken can match a closer of the same
             # size.
             this.statepush s: tokstatetype.stringraw n.u8.orPanic
-            return (token
-                toktype: toktype.strBegTok
-                width: (spanWidth s: s0 e: this.tokpos)
-                text: (this.tokSpanId :pool s: s0 e: this.tokpos)
-                fsno: this.fsno
-                lineno: line
-                colno: col
-            )
+            return (this.spanTok :pool tt: toktype.strBegTok s: s0 e: this.tokpos :line :col)
         }
 
         if c == ascii.dot then {
@@ -1085,46 +1001,18 @@ Tokenizer: class {
                 this.accept
             }
             if n == 1 then {
-                return (token
-                    toktype: toktype.dotTok
-                    width: (spanWidth s: s0 e: this.tokpos)
-                    text: (this.tokSpanId :pool s: s0 e: this.tokpos)
-                    fsno: this.fsno
-                    lineno: line
-                    colno: col
-                )
+                return (this.spanTok :pool tt: toktype.dotTok s: s0 e: this.tokpos :line :col)
             }
-            return (token
-                toktype: toktype.errTok
-                width: (spanWidth s: s0 e: this.tokpos)
-                text: (this.tokSpanId :pool s: s0 e: this.tokpos)
-                fsno: this.fsno
-                lineno: line
-                colno: col
-            )
+            return (this.spanTok :pool tt: toktype.errTok s: s0 e: this.tokpos :line :col)
         }
 
         if c == ascii.parenOpen then {
             this.accept
-            return (token
-                toktype: toktype.parenOpenTok
-                width: 1
-                text: (this.tokSpanId :pool s: s0 e: s0 + 1)
-                fsno: this.fsno
-                lineno: line
-                colno: col
-            )
+            return (this.byteTok :pool tt: toktype.parenOpenTok s: s0 :line :col)
         }
         if c == ascii.parenClose then {
             this.accept
-            return (token
-                toktype: toktype.parenCloseTok
-                width: 1
-                text: (this.tokSpanId :pool s: s0 e: s0 + 1)
-                fsno: this.fsno
-                lineno: line
-                colno: col
-            )
+            return (this.byteTok :pool tt: toktype.parenCloseTok s: s0 :line :col)
         }
         if c == ascii.braceOpen then {
             # If we are already inside an interpolation context, the `{`
@@ -1143,14 +1031,7 @@ Tokenizer: class {
             }
             this.accept
             if push_brace then this.statepush s: tokstatetype.stringexprbrace
-            return (token
-                toktype: toktype.braceOpenTok
-                width: 1
-                text: (this.tokSpanId :pool s: s0 e: s0 + 1)
-                fsno: this.fsno
-                lineno: line
-                colno: col
-            )
+            return (this.byteTok :pool tt: toktype.braceOpenTok s: s0 :line :col)
         }
         if c == ascii.braceClose then {
             # If the matching `{` was inside an interpolation, pop one
@@ -1178,25 +1059,11 @@ Tokenizer: class {
                 }
                 if pop_expr then this.statepop
             }
-            return (token
-                toktype: toktype.braceCloseTok
-                width: 1
-                text: (this.tokSpanId :pool s: s0 e: s0 + 1)
-                fsno: this.fsno
-                lineno: line
-                colno: col
-            )
+            return (this.byteTok :pool tt: toktype.braceCloseTok s: s0 :line :col)
         }
         if c == ascii.semicolon then {
             this.accept
-            return (token
-                toktype: toktype.semicolonTok
-                width: 1
-                text: (this.tokSpanId :pool s: s0 e: s0 + 1)
-                fsno: this.fsno
-                lineno: line
-                colno: col
-            )
+            return (this.byteTok :pool tt: toktype.semicolonTok s: s0 :line :col)
         }
 
         # Word branch: leading colon? +/- prefix? IDEN loop, plus
@@ -1271,24 +1138,18 @@ Tokenizer: class {
         if e_word == s_word then {
             if has_colonpre then {
                 # Lone colon: emit the colon as ERR.
-                return (token
-                    toktype: toktype.errTok
-                    width: 1
-                    text: (this.tokSpanId :pool s: s0 e: s0 + 1)
-                    fsno: this.fsno
-                    lineno: colonpre_line
-                    colno: colonpre_col
+                (return
+                    (this.byteTok
+                        :pool
+                        tt: toktype.errTok
+                        s: s0
+                        line: colonpre_line
+                        col: colonpre_col
+                    )
                 )
             }
             this.accept
-            return (token
-                toktype: toktype.errTok
-                width: 1
-                text: (this.tokSpanId :pool s: s_word e: s_word + 1)
-                fsno: this.fsno
-                lineno: line
-                colno: col
-            )
+            return (this.byteTok :pool tt: toktype.errTok s: s_word :line :col)
         }
 
         # Word is non-empty. Decide token type via the word's source
@@ -1310,22 +1171,18 @@ Tokenizer: class {
             stage_tt: toktype.labelPreTok
             if kwfound then stage_tt = toktype.errTok
             if reservedfound then stage_tt = toktype.errTok
-            this.nexttok = (token
-                toktype: stage_tt
-                width: (spanWidth s: s_word e: e_word)
-                text: (this.tokSpanId :pool s: s_word e: e_word)
-                fsno: this.fsno
-                lineno: word_line
-                colno: word_col
+            this.nexttok = (this.spanTok
+                :pool
+                tt: stage_tt
+                s: s_word
+                e: e_word
+                line: word_line
+                col: word_col
             )
             this.hasnext = true
-            return (token
-                toktype: toktype.colonTok
-                width: 1
-                text: (this.tokSpanId :pool s: s0 e: s0 + 1)
-                fsno: this.fsno
-                lineno: colonpre_line
-                colno: colonpre_col
+            (return
+                (this.byteTok :pool tt: toktype.colonTok s: s0 line: colonpre_line col: colonpre_col
+                )
             )
         }
 
@@ -1346,13 +1203,15 @@ Tokenizer: class {
             )
             this.hasnext = true
             this.accept
-            return (token
-                toktype: toktype.labelTok
-                width: (spanWidth s: s_word e: e_word)
-                text: (this.tokSpanId :pool s: s_word e: e_word)
-                fsno: this.fsno
-                lineno: word_line
-                colno: word_col
+            (return
+                (this.spanTok
+                    :pool
+                    tt: toktype.labelTok
+                    s: s_word
+                    e: e_word
+                    line: word_line
+                    col: word_col
+                )
             )
         }
 
@@ -1361,14 +1220,7 @@ Tokenizer: class {
         ret_tt: toktype.refIdTok
         if kwfound then ret_tt = kwtt
         if reservedfound then ret_tt = toktype.errTok
-        return (token
-            toktype: ret_tt
-            width: (spanWidth s: s_word e: e_word)
-            text: (this.tokSpanId :pool s: s_word e: e_word)
-            fsno: this.fsno
-            lineno: word_line
-            colno: word_col
-        )
+        return (this.spanTok :pool tt: ret_tt s: s_word e: e_word line: word_line col: word_col)
     }
 }
 
