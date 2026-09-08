@@ -7190,6 +7190,81 @@ materializeCreateParams: function {
     }
 }
 
+# aliasentry -- one `alias: member` line of a `public:` block: the name the
+# block exposes, the member it stands for, and where it is written. Five
+# parallel lists said this before, indexed in lockstep at every use.
+aliasentry: record {
+    # the name the block exposes
+    pub: zast.nameid
+    # the member that name stands for
+    internal: zast.nameid
+    # the source line of the entry
+    line: u32
+    # the source column of the entry
+    col: u32
+    # the entry's own node
+    node: u32
+}
+
+# scanPublicEntry -- one entry of a `public:` block. Every entry exports its
+# own name; an entry spelled as a bare atom whose name DIFFERS from the atom's
+# is a rename and is recorded as one. `badMsg` is what any other shape is
+# reported as, and "" means it is not an error here -- a TYPE's interface
+# admits only those two shapes, while a unit's block also holds its own
+# definitions.
+scanPublicEntry: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    nid: u32
+    pubIds: IdSet u64
+    aliases: ListVal aliasentry
+    badMsg: StringView
+} is {
+    bn: ast.nodes.get i: nid.u64
+    if bn.namedoperation.not then return
+    pubIds.add item: bn.name.u64
+    bop: ast.nodes.get i: bn.operation.u64
+    match (
+        bop
+    ) case labelvalue then null case atomid then {
+        if bn.name != bop.name then (aliases.append from: (aliasentry
+            pub: bn.name
+            internal: bop.name
+            line: bn.lineno
+            col: bn.colno
+            node: bn.nodeid.u32
+        )
+        )
+    } else {
+        if badMsg.length > 0 then (addResolveErrorH
+            :st
+            nodeid: bn.nodeid
+            lineno: bn.lineno
+            colno: bn.colno
+            e: zast.err.typeError
+            msg: badMsg.string
+            width: 1
+        )
+    }
+}
+
+# scanPublicBlock -- scanPublicEntry over every entry of one `public:` block.
+scanPublicBlock: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    body: zast.kidspan
+    pubIds: IdSet u64
+    aliases: ListVal aliasentry
+    badMsg: StringView
+} is {
+    i: u64
+    for i < body.count.u64 loop {
+        bId: zast.kidAt kids: ast.kids span: body :i
+        i = i + 1
+        scanPublicEntry :st :ast nid: bId :pubIds :aliases :badMsg
+    }
+}
+
 # scanVisibility -- one AST-only pass over a type's `public:` block filling two
 # out-lists (with-scoped iterators, no lock outlives the scan): `excl` = pool
 # ids of USER-declared members NOT in the block (empty when there is no block --
@@ -7205,11 +7280,7 @@ scanVisibility: function {
 } is {
     pubIds: IdSet u64
     memberIds: IdSet u64
-    aliasPubRef: ListVal u32
-    aliasIntRef: ListVal u32
-    aliasLine: ListVal u32
-    aliasCol: ListVal u32
-    aliasNode: ListVal u32
+    aliases: ListVal aliasentry
     pubFound: false
     kAiter: u64
     for kAiter < onode.nas loop {
@@ -7231,41 +7302,14 @@ scanVisibility: function {
             if (zast.unitOpKindIs :ast opId: an.operation k: zast.unitkind.publicNs) then {
                 pubFound = true
                 opNode: ast.nodes.get i: an.operation.u64
-                if opNode.unitdef then {
-                    box1999: u64
-                    for box1999 < opNode.body.count.u64 loop {
-                        bId: zast.kidAt kids: ast.kids span: opNode.body i: box1999
-                        box1999 = box1999 + 1
-                        bn: ast.nodes.get i: bId.u64
-                        if bn.namedoperation then {
-                            pubIds.add item: bn.name.u64
-                            bop: ast.nodes.get i: bn.operation.u64
-                            match (
-                                bop
-                            ) case labelvalue then null case atomid then {
-                                # `alias: internal` renames when the exposed
-                                # name differs from the member being exposed
-                                if bn.name != bop.name then {
-                                    aliasPubRef.append from: bn.name
-                                    aliasIntRef.append from: bop.name
-                                    aliasLine.append from: bn.lineno
-                                    aliasCol.append from: bn.colno
-                                    aliasNode.append from: bn.nodeid.u32
-                                }
-                            } else {
-                                (addResolveErrorH
-                                    :st
-                                    nodeid: bn.nodeid
-                                    lineno: bn.lineno
-                                    colno: bn.colno
-                                    e: zast.err.typeError
-                                    msg: "a public interface entry must be ':member' or 'alias: member'".string
-                                    width: 1
-                                )
-                            }
-                        }
-                    }
-                }
+                if opNode.unitdef then (scanPublicBlock
+                    :st
+                    :ast
+                    body: opNode.body
+                    :pubIds
+                    :aliases
+                    badMsg: "a public interface entry must be ':member' or 'alias: member'"
+                )
             }
         }
     }
@@ -7306,30 +7350,30 @@ scanVisibility: function {
     }
     # validate the rename aliases against the now-known member set, then install
     ax: u64
-    for ax < aliasPubRef.length loop {
-        pRef: aliasPubRef.get i: ax
-        iRef: aliasIntRef.get i: ax
+    for ax < aliases.length loop {
+        al: aliases.get i: ax
+        ax = ax + 1
         okAlias: true
-        if (memberIds.has item: iRef.u64).not then {
-            iTxt: zast.nameTextAt :ast ref: (zast.nameid.create from: iRef.u32)
+        if (memberIds.has item: al.internal.u64).not then {
+            iTxt: zast.nameTextAt :ast ref: al.internal
             (addResolveErrorH
                 :st
-                nodeid: (zast.nodeid.create from: (aliasNode.get i: ax))
-                lineno: (aliasLine.get i: ax)
-                colno: (aliasCol.get i: ax)
+                nodeid: (zast.nodeid.create from: al.node)
+                lineno: al.line
+                colno: al.col
                 e: zast.err.typeError
                 msg: "public interface exposes '\{iTxt}', which is not a member of this type"
                 width: 1
             )
             okAlias = false
         }
-        if okAlias when (memberIds.has item: pRef.u64) then {
-            pTxt: zast.nameTextAt :ast ref: (zast.nameid.create from: pRef.u32)
+        if okAlias when (memberIds.has item: al.pub.u64) then {
+            pTxt: zast.nameTextAt :ast ref: al.pub
             (addResolveErrorH
                 :st
-                nodeid: (zast.nodeid.create from: (aliasNode.get i: ax))
-                lineno: (aliasLine.get i: ax)
-                colno: (aliasCol.get i: ax)
+                nodeid: (zast.nodeid.create from: al.node)
+                lineno: al.line
+                colno: al.col
                 e: zast.err.typeError
                 msg: "public alias '\{pTxt}' collides with a member of the same name"
                 width: 1
@@ -7337,7 +7381,6 @@ scanVisibility: function {
             okAlias = false
         }
         if okAlias then st.typing.renameSeen = true
-        ax = ax + 1
     }
 }
 
@@ -7354,6 +7397,49 @@ applyGrantsPrivate: function {st: zenv.ZSymbolTable parentId: u64 grants: (ListV
     }
 }
 
+# scanUnitMember -- one top-level member of a unit, sorted into what it is: a
+# `private:` block (which cannot be redefined -- private already includes every
+# definition), a `public:` block (whose entries the interface is read from), or
+# an ordinary definition (which is a member the interface may name). Returns
+# true when it was a public block, which is what tells the caller the unit
+# declares an interface at all.
+scanUnitMember: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    nid: u32
+    pubIds: IdSet u64
+    aliases: ListVal aliasentry
+    memberIds: IdSet u64
+    memberNameList: ListVal u64
+} out bool is {
+    um: ast.nodes.get i: nid.u64
+    if um.namedoperation.not then return false
+    isPriv: zast.unitOpKindIs :ast opId: um.operation k: zast.unitkind.privateNs
+    if isPriv then {
+        (addResolveErrorH
+            :st
+            nodeid: um.nodeid
+            lineno: um.lineno
+            colno: um.colno
+            e: zast.err.typeError
+            msg: "`private:` cannot be redefined -- `private` always includes every definition of the unit".string
+            width: 7
+        )
+        return false
+    }
+    if (zast.unitOpKindIs :ast opId: um.operation k: zast.unitkind.publicNs).not then {
+        memberIds.add item: um.name.u64
+        memberNameList.append from: um.name.u64
+        return false
+    }
+    uop: ast.nodes.get i: um.operation.u64
+    if uop.unitdef.not then return false
+    # "" for badMsg: an atom naming no sibling is not a malformed entry here but
+    # a DEFINITION of the block (`MAX: 10`), which a unit's public block may hold
+    scanPublicBlock :st :ast body: uop.body :pubIds :aliases badMsg: ""
+    return true
+}
+
 # scanUnitVisibility -- restrict a file unit's public interface. A `public:`
 # block lists the exposed top-level definitions; unlisted defs become private
 # (E0101 when referenced from another unit) and `alias: internal` entries
@@ -7367,71 +7453,23 @@ scanUnitVisibility: function {
     pubIds: IdSet u64
     memberIds: IdSet u64
     memberNameList: ListVal u64
-    aliasPubRef: ListVal u32
-    aliasIntRef: ListVal u32
-    aliasLine: ListVal u32
-    aliasCol: ListVal u32
-    aliasNode: ListVal u32
+    aliases: ListVal aliasentry
     pubFound: false
     bodyIds: zast.unitBodyIdsAt :ast unitId: unitdefId
     vx49: u64
     for vx49 < bodyIds.count.u64 loop {
         umId: zast.kidAt kids: ast.kids span: bodyIds i: vx49
         vx49 = vx49 + 1
-        um: ast.nodes.get i: umId.u64
-        if um.namedoperation then {
-            isPubU: zast.unitOpKindIs :ast opId: um.operation k: zast.unitkind.publicNs
-            isPrivU: (zast.unitOpKindIs
-                :ast
-                opId: um.operation
-                k: zast.unitkind.privateNs
-            )
-            if isPrivU then {
-                (addResolveErrorH
-                    :st
-                    nodeid: um.nodeid
-                    lineno: um.lineno
-                    colno: um.colno
-                    e: zast.err.typeError
-                    msg: "`private:` cannot be redefined -- `private` always includes every definition of the unit".string
-                    width: 7
-                )
-            }
-            if isPubU then {
-                uop: ast.nodes.get i: um.operation.u64
-                if uop.unitdef then {
-                    pubFound = true
-                    box2009: u64
-                    for box2009 < uop.body.count.u64 loop {
-                        ubId: zast.kidAt kids: ast.kids span: uop.body i: box2009
-                        box2009 = box2009 + 1
-                        ubn: ast.nodes.get i: ubId.u64
-                        if ubn.namedoperation then {
-                            pubIds.add item: ubn.name.u64
-                            ubop: ast.nodes.get i: ubn.operation.u64
-                            match (
-                                ubop
-                            ) case labelvalue then null case atomid then {
-                                # `alias: member` renames a sibling; an atom
-                                # that names no sibling is a definition of the
-                                # block (`MAX: 10`), like any other shape
-                                if ubn.name != ubop.name then {
-                                    aliasPubRef.append from: ubn.name
-                                    aliasIntRef.append from: ubop.name
-                                    aliasLine.append from: ubn.lineno
-                                    aliasCol.append from: ubn.colno
-                                    aliasNode.append from: ubn.nodeid
-                                }
-                            } else null
-                        }
-                    }
-                }
-            }
-            if isPubU.not when isPrivU.not then {
-                memberIds.add item: um.name.u64
-                memberNameList.append from: um.name.u64
-            }
-        }
+        sawPub: (scanUnitMember
+            :st
+            :ast
+            nid: umId
+            :pubIds
+            :aliases
+            :memberIds
+            :memberNameList
+        )
+        if sawPub then pubFound = true
     }
     if pubFound.not then return
     emiU: u64
@@ -7441,20 +7479,20 @@ scanUnitVisibility: function {
         emiU = emiU + 1
     }
     axU: u64
-    for axU < aliasPubRef.length loop {
-        pRefU: aliasPubRef.get i: axU
-        iRefU: aliasIntRef.get i: axU
+    for axU < aliases.length loop {
+        alU: aliases.get i: axU
+        axU = axU + 1
         okU: true
         # an atom naming no sibling is not a rename but a definition of the
         # block, resolved in the block's frame like any alias
-        if (memberIds.has item: iRefU.u64).not then okU = false
-        if okU when (memberIds.has item: pRefU.u64) then {
-            pTxtU: zast.nameTextAt :ast ref: (zast.nameid.create from: pRefU.u32)
+        if (memberIds.has item: alU.internal.u64).not then okU = false
+        if okU when (memberIds.has item: alU.pub.u64) then {
+            pTxtU: zast.nameTextAt :ast ref: alU.pub
             (addResolveErrorH
                 :st
-                nodeid: (zast.nodeid.create from: (aliasNode.get i: axU))
-                lineno: (aliasLine.get i: axU)
-                colno: (aliasCol.get i: axU)
+                nodeid: (zast.nodeid.create from: alU.node)
+                lineno: alU.line
+                colno: alU.col
                 e: zast.err.typeError
                 msg: "public alias '\{pTxtU}' collides with a definition of the same name"
                 width: 1
@@ -7462,7 +7500,6 @@ scanUnitVisibility: function {
             okU = false
         }
         if okU then st.typing.renameSeen = true
-        axU = axU + 1
     }
 }
 
