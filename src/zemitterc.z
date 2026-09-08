@@ -10612,6 +10612,128 @@ emitUserFnCall: function {
     return e8
 }
 
+# isFieldwiseCtorTid -- the id names a type a bare call CONSTRUCTS field-wise:
+# a record or a class. 0 is neither, which is what the callers ask about.
+isFieldwiseCtorTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    if tid.isZero then return false
+    tt: symtab.reg.typetypeOf typeId: tid
+    return (tt == ztypes.ztypetype.recordType) or (tt == ztypes.ztypetype.classType)
+}
+
+# namedCalleeFnId -- the resolved function id a named callee stands for, 0 when
+# none. THE CALLEE'S IDENTITY COMES FROM THE CHECKER'S STAMPS, never from
+# re-resolving the name: a fn-typed LOCAL may legitimately shadow a function of
+# the same name (`addit: mulit.take` inside a unit that also declares `addit`),
+# and the name route would then emit a direct call to the function the local
+# shadows -- silently, with the wrong answer. A variable id stamped on the
+# callable atom says "this is a local", which is the fnptr leg's business, and
+# it is the same precedence implicitTakeSourceAtom keeps for the same reason.
+# The name route reads the FILE unit's members, so a callee the checker
+# resolved in the scope the call was WRITTEN in -- a namespace's sibling
+# function -- is reached instead through the id the callable atom carries. A
+# NATIVE fn (or generic native template) answers 0: it never takes the
+# resolved-cname route, and the zero sends it to the name interceptions.
+namedCalleeFnId: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    cn0: StringView
+} out ztypes.tid is {
+    cbn0: atomNodeId n: (ast.nodes.get i: call.callable.u64)
+    calleeIsLocal: (
+        ((cbn0 > 0) and (symtab.typing.atomVariableId.has key: cbn0)) or
+        (symtab.typing.atomVariableId.has key: call.callable.u64)
+    )
+    fid: ztypes.tid
+    if calleeIsLocal.not then fid = userFnId :ast :symtab :ctx name: cn0
+    if fid.isZero when cbn0 > 0 then {
+        clv: symtab.typing.atomVariableId.get key: cbn0
+        match (
+            clv
+        ) case some then null case none then {
+            cst: monoStampIdOf :symtab :ctx nid: cbn0
+            if cst.isZero then cst = stampIdOf :symtab nid: cbn0
+            if cst > 0 when (
+                (symtab.reg.typetypeOf typeId: cst) == ztypes.ztypetype.functionType
+            ) then fid = cst
+        }
+    }
+    if fid > 0 when (fnIsNativeId :symtab :fid) then return (ztypes.tid.create from: 0)
+    return fid
+}
+
+# namedCalleeCtorTid -- the type a named callee CONSTRUCTS, 0 when it
+# constructs nothing. A generic function id resolves to the mono the call was
+# stamped with. A parenthesized generic-type application
+# (`(sized t: i64 size: 10) val: 42`) leaves the callable a stamped Call with
+# no name and no function id at all, so its mono comes off the callable node's
+# own stamp.
+namedCalleeCtorTid: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    call: zast.callrow.view
+    fid: ztypes.tid
+} out ztypes.tid is {
+    if fid.isZero.not then {
+        if (isGenericType :symtab tid: fid).not then return fid
+        gmid: stampIdOf :symtab nid: call.nodeid.u64
+        if gmid > 0 then return gmid
+        return fid
+    }
+    cstid: (stampIdOf
+        :symtab
+        nid: (interpPartNodeId n: (ast.nodes.get i: call.callable.u64))
+    )
+    if cstid.isZero then return fid
+    if (originTidOf :symtab tid: cstid).isZero then return fid
+    if (isFieldwiseCtorTid :symtab tid: cstid) then return cstid
+    return fid
+}
+
+# emitStringJoinCall -- `stringJoin` is the one native whose call the emitter
+# writes out itself: the joined container comes first, addressed unless it is
+# already held as a pointer, and each separator after it passes as a
+# StringView value.
+emitStringJoinCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+} out String is {
+    needsAddM :ctx uname: "collections" memb: "coll_join"
+    sjargs: String
+    sji: u64
+    arx489: u64
+    for arx489 < call.arguments.count.u64 loop {
+        sja9Id: zast.kidAt kids: ast.kids span: call.arguments i: arx489
+        arx489 = arx489 + 1
+        sja: ast.nodes.get i: sja9Id.u64
+        if sja.namedoperation.not then continue
+        if sji > 0 then sjargs.append ", "
+        sjn: ast.nodes.get i: sja.operation.u64
+        sjv: emitExpr :ast :symtab :ctx n: sjn
+        sjq: atomVidIfPlain :ast :symtab :ctx n: sjn text: sjv.stringView
+        if sji == 0 when (isPtrVid :ctx vid: sjq).not then sjargs.append "&"
+        sjIsStr: false
+        if sji > 0 when (
+            (stampIdOf
+                :symtab
+                nid: (interpPartNodeId n: (ast.nodes.get i: sja.operation.u64))
+            ) ==
+            ctx.strTid
+        ) then sjIsStr = true
+        if sjIsStr then {
+            sjsv: svValueForm :ctx expr: sjv.stringView isStr: true vid: sjq
+            sjargs.append sjsv
+        } else {
+            sjargs.append sjv
+        }
+        sji = sji + 1
+    }
+    return "z_stringJoin(\{sjargs})"
+}
+
 # emitNamedCalleeChain -- the probe legs that need the callee's NAME or its resolved
 # function id: the constructor shapes, the user function call, and the fn-pointer
 # local. The name is consulted only after the checker's stamps have declined, and
@@ -10625,68 +10747,9 @@ emitNamedCalleeChain: function {
     cn0: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: call.callable.u64))
     ecc: emitEmptyColCreate :ast :symtab :ctx :call cn0: cn0.stringView
     if ecc.length > 0 then return ecc
-    # The callee's identity comes from the checker's stamps, never from
-    # re-resolving the name: a fn-typed LOCAL may legitimately shadow a
-    # function of the same name (`addit: mulit.take` inside a unit that also
-    # declares `addit`), and the name route would then emit a direct call to
-    # the function the local shadows -- silently, with the wrong answer. A
-    # variable id stamped on the callable atom says "this is a local", which
-    # is the fnptr leg's business. Same precedence implicitTakeSourceAtom
-    # keeps for the same reason.
-    cbn0: atomNodeId n: (ast.nodes.get i: call.callable.u64)
-    calleeIsLocal: (
-        ((cbn0 > 0) and (symtab.typing.atomVariableId.has key: cbn0)) or
-        (symtab.typing.atomVariableId.has key: call.callable.u64)
-    )
-    fid: ztypes.tid
-    if calleeIsLocal.not then fid = userFnId :ast :symtab :ctx name: cn0.stringView
-    if fid.isZero then {
-        # the name route reads the FILE unit's members; a callee the checker
-        # resolved in the scope the call was written in -- a namespace's
-        # sibling function -- is not among them, but the callable atom carries
-        # its id: the checker stamps a resolved unit FUNCTION on the callable
-        # (a fn-typed LOCAL stamps its variable id instead, and stays with
-        # the fnptr leg below)
-        cbn: atomNodeId n: (ast.nodes.get i: call.callable.u64)
-        if cbn > 0 then {
-            clv: symtab.typing.atomVariableId.get key: cbn
-            match (
-                clv
-            ) case some then null case none then {
-                cst: monoStampIdOf :symtab :ctx nid: cbn
-                if cst.isZero then cst = stampIdOf :symtab nid: cbn
-                if cst > 0 when (
-                    (symtab.reg.typetypeOf typeId: cst) == ztypes.ztypetype.functionType
-                ) then fid = cst
-            }
-        }
-    }
-    # a native fn (or generic native template) never takes the resolved-cname
-    # route; zeroing routes it to the name interceptions below.
-    if fid > 0 when (fnIsNativeId :symtab :fid) then fid = ztypes.tid.create from: 0
-    ctorTid: fid
-    if fid > 0 when (isGenericType :symtab tid: fid) then {
-        gmid: stampIdOf :symtab nid: call.nodeid.u64
-        if gmid > 0 then ctorTid = gmid
-    }
-    # parenthesized generic-type-application construction `(sized t: i64 size: 10)
-    # val: 42`: the callable is a stamped Call/Expression (cn0 empty, fid 0), so
-    # resolve the mono from the callable-node stamp and construct it.
-    if fid.isZero then {
-        cstid: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: call.callable.u64))
-        cstOrig: originTidOf :symtab tid: cstid
-        if cstid > 0 when cstOrig > 0 then {
-            cstt: symtab.reg.typetypeOf typeId: cstid
-            cstOk: (cstt == ztypes.ztypetype.recordType) or (cstt == ztypes.ztypetype.classType)
-            if cstOk then ctorTid = cstid
-        }
-    }
-    if ctorTid > 0 when (
-        (symtab.reg.typetypeOf typeId: ctorTid) == ztypes.ztypetype.recordType
-    ) then {
-        return (emitRecordCtor :ast :symtab :ctx :call tid: ctorTid)
-    }
-    if ctorTid > 0 when (symtab.reg.typetypeOf typeId: ctorTid) == ztypes.ztypetype.classType then {
+    fid: namedCalleeFnId :ast :symtab :ctx :call cn0: cn0.stringView
+    ctorTid: namedCalleeCtorTid :ast :symtab :call :fid
+    if (isFieldwiseCtorTid :symtab tid: ctorTid) then {
         return (emitRecordCtor :ast :symtab :ctx :call tid: ctorTid)
     }
     iwc: emitIoWrapperCreate :ast :symtab :ctx :call
@@ -10699,38 +10762,7 @@ emitNamedCalleeChain: function {
     if fpfc.length > 0 then return fpfc
     if fid > 0 then return (emitUserFnCall :ast :symtab :ctx :call :fid)
     if cn0.stringView == "stringJoin" then {
-        needsAddM :ctx uname: "collections" memb: "coll_join"
-        sjargs: String
-        sji: u64
-        arx489: u64
-        for arx489 < call.arguments.count.u64 loop {
-            sja9Id: zast.kidAt kids: ast.kids span: call.arguments i: arx489
-            arx489 = arx489 + 1
-            sja: ast.nodes.get i: sja9Id.u64
-            if sja.namedoperation then {
-                if sji > 0 then sjargs.append ", "
-                sjn: ast.nodes.get i: sja.operation.u64
-                sjv: emitExpr :ast :symtab :ctx n: sjn
-                sjq: atomVidIfPlain :ast :symtab :ctx n: sjn text: sjv.stringView
-                if sji == 0 when (isPtrVid :ctx vid: sjq).not then sjargs.append "&"
-                sjIsStr: false
-                if sji > 0 then {
-                    sjat: (stampIdOf
-                        :symtab
-                        nid: (interpPartNodeId n: (ast.nodes.get i: sja.operation.u64))
-                    )
-                    if sjat == ctx.strTid then sjIsStr = true
-                }
-                if sjIsStr then {
-                    sjsv: svValueForm :ctx expr: sjv.stringView isStr: true vid: sjq
-                    sjargs.append sjsv
-                } else {
-                    sjargs.append sjv
-                }
-                sji = sji + 1
-            }
-        }
-        return "z_stringJoin(\{sjargs})"
+        return (emitStringJoinCall :ast :symtab :ctx :call)
     }
     cnV: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: call.callable.u64))
     fplc: (emitFnptrLocalCall
