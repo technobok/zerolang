@@ -1877,11 +1877,9 @@ makeArmConst: function {armTid: tid armName: zast.nameid} out cval is {
 
 # --- C name mangling ---
 
-# C reserved words an emitted identifier must not collide with. A local
-# variable or a struct member whose zerolang name is one of these is
-# emitted as `v_<name>`.
-isCReserved: function {name: StringView} out bool is {
-    if name == "main" then return true
+# cControlWord -- the C statement keywords. A local named one of these would
+# be read as the statement it spells.
+cControlWord: function {name: StringView} out bool is {
     if name == "break" then return true
     if name == "continue" then return true
     if name == "return" then return true
@@ -1893,15 +1891,33 @@ isCReserved: function {name: StringView} out bool is {
     if name == "for" then return true
     if name == "while" then return true
     if name == "do" then return true
+    if name == "goto" then return true
+    return false
+}
+
+# cTypeWord -- the C type specifiers, the three aggregate introducers and the
+# two signedness words. These are what a declaration's type slot may hold.
+cTypeWord: function {name: StringView} out bool is {
     if name == "int" then return true
     if name == "float" then return true
     if name == "double" then return true
     if name == "char" then return true
     if name == "void" then return true
     if name == "bool" then return true
+    if name == "long" then return true
+    if name == "short" then return true
+    if name == "signed" then return true
+    if name == "unsigned" then return true
     if name == "struct" then return true
     if name == "union" then return true
     if name == "enum" then return true
+    return false
+}
+
+# cDeclWord -- the storage classes and qualifiers a declaration may carry,
+# `sizeof`, and the three library or entry-point names an emitted translation
+# unit already defines: `main`, `abs`, `exit`.
+cDeclWord: function {name: StringView} out bool is {
     if name == "static" then return true
     if name == "const" then return true
     if name == "auto" then return true
@@ -1910,16 +1926,21 @@ isCReserved: function {name: StringView} out bool is {
     if name == "volatile" then return true
     if name == "inline" then return true
     if name == "restrict" then return true
-    if name == "signed" then return true
-    if name == "unsigned" then return true
-    if name == "long" then return true
-    if name == "short" then return true
-    if name == "sizeof" then return true
     if name == "typedef" then return true
-    if name == "goto" then return true
+    if name == "sizeof" then return true
+    if name == "main" then return true
     if name == "abs" then return true
     if name == "exit" then return true
     return false
+}
+
+# C reserved words an emitted identifier must not collide with. A local
+# variable or a struct member whose zerolang name is one of these is
+# emitted as `v_<name>`.
+isCReserved: function {name: StringView} out bool is {
+    if cControlWord name then return true
+    if cTypeWord name then return true
+    return (cDeclWord name)
 }
 
 # `name` mangled to a C-safe local identifier, dodging C reserved words.
@@ -2106,13 +2127,16 @@ digitVal: function {b: u8} out optionval u64 is {
 # Detect an inline numeric type suffix shape (longest first) on a
 # lexeme. Diagnostic + exact-name mapping only -- parseNumber never
 # peels; inline suffixes are not part of the language.
-# numkindByName -- the numkind for an exact numeric-type-name spelling
-# ("u8", "f32", "c32"); has=false for any other text. The single source
-# of suffix spellings -- suffixInfoOf derives from this table.
-numkindByName: function {name: StringView} out suffixinfo is {
+# numkindShort -- the two-byte spellings.
+numkindShort: function {name: StringView} out suffixinfo is {
     if name == "i8" then return (suffixinfo has: true kind: numkind.i8Type len: 2)
     if name == "u8" then return (suffixinfo has: true kind: numkind.u8Type len: 2)
     if name == "c8" then return (suffixinfo has: true kind: numkind.c8Type len: 2)
+    return (suffixinfo has: false kind: numkind.i64Type len: 0)
+}
+
+# numkindWide -- the three-byte spellings, which is most of the table.
+numkindWide: function {name: StringView} out suffixinfo is {
     if name == "i16" then return (suffixinfo has: true kind: numkind.i16Type len: 3)
     if name == "i32" then return (suffixinfo has: true kind: numkind.i32Type len: 3)
     if name == "i64" then return (suffixinfo has: true kind: numkind.i64Type len: 3)
@@ -2123,9 +2147,24 @@ numkindByName: function {name: StringView} out suffixinfo is {
     if name == "f32" then return (suffixinfo has: true kind: numkind.f32Type len: 3)
     if name == "f64" then return (suffixinfo has: true kind: numkind.f64Type len: 3)
     if name == "c32" then return (suffixinfo has: true kind: numkind.c32Type len: 3)
+    return (suffixinfo has: false kind: numkind.i64Type len: 0)
+}
+
+# numkindQuad -- the four-byte spellings, all of them 128-bit.
+numkindQuad: function {name: StringView} out suffixinfo is {
     if name == "i128" then return (suffixinfo has: true kind: numkind.i128Type len: 4)
     if name == "u128" then return (suffixinfo has: true kind: numkind.u128Type len: 4)
     if name == "f128" then return (suffixinfo has: true kind: numkind.f128Type len: 4)
+    return (suffixinfo has: false kind: numkind.i64Type len: 0)
+}
+
+# numkindByName -- the numkind for an exact numeric-type-name spelling
+# ("u8", "f32", "c32"); has=false for any other text. The single source
+# of suffix spellings -- suffixInfoOf derives from this table.
+numkindByName: function {name: StringView} out suffixinfo is {
+    if name.length == 2 then return (numkindShort :name)
+    if name.length == 3 then return (numkindWide :name)
+    if name.length == 4 then return (numkindQuad :name)
     return (suffixinfo has: false kind: numkind.i64Type len: 0)
 }
 
@@ -2152,47 +2191,22 @@ rangeErr: function {value: u64 k: numkind r: NumRange.view} out String is {
     return msg
 }
 
-# Parse a numeric literal lexeme into (kind, value, error) against an
-# optional required kind (the dot-form conversion target). The lexeme is
-# consumed in its ENTIRETY -- the language has no inline type suffixes,
-# so any non-literal tail is an invalid literal. 'e'-notation is NOT
-# recognised here -- only a decimal point selects the float path, so a
-# bare `1e3` is an invalid integer.
-parseNumberWith: function {numstr: StringView hasK: bool k: numkind} out ParsedNumber is {
-    n: numstr.length
-    coreLen: n
-    hasKind: hasK
-    kind: k
+# radixform -- what a numeric lexeme's PREFIX says about the digits that
+# follow it. `0c` is in here rather than beside the numeric bases because it
+# occupies the same two leading bytes and answers the same question about where
+# the body starts.
+radixform: record {
+    # the digit base the prefix selects; 10 when there is no prefix
+    base: u64
+    # the index the body starts at, past any prefix
+    startIdx: u64
+    # whether the prefix was `0c`, which makes the body one character
+    isChar: bool
+}
 
-    hasDot: false
-    di: u64
-    for di < coreLen loop {
-        bo: numstr.byteAt di
-        match (
-            bo
-        ) case some then {
-            if bo == 46 then hasDot = true
-        } case none then null
-        di = di + 1
-    }
-
-    if hasDot then {
-        if hasKind then {
-            if (isFloatKind kind).not then {
-                return (ParsedNumber
-                    :kind
-                    isFloat: false
-                    ival: 0
-                    fval: 0.0
-                    err: "Numeric type specifier must be float for literals with decimal points".string
-                )
-            }
-        } else {
-            kind = numkind.f64Type
-            hasKind = true
-        }
-    }
-
+# lexemeRadix -- read the prefix. The probes are independent and only one can
+# match, because no two of the four spellings share their second byte.
+lexemeRadix: function {numstr: StringView} out radixform is {
     base: 10.u64
     startIdx: u64
     isChar: false
@@ -2212,106 +2226,125 @@ parseNumberWith: function {numstr: StringView hasK: bool k: numkind} out ParsedN
         isChar = true
         startIdx = 2
     }
+    return (radixform :base :startIdx :isChar)
+}
 
-    if hasKind.not then {
-        if isChar then {
-            kind = numkind.c32Type
-        } else {
-            kind = numkind.i64Type
-        }
-        hasKind = true
+# inRangeNumber -- `value` as a ParsedNumber of `kind`, or the out-of-range
+# error naming the bound it broke. Shared by the character and integer paths,
+# which ask it in the same words.
+inRangeNumber: function {value: u64 kind: numkind} out ParsedNumber is {
+    r: rangeOf kind
+    if r.has when value > r.hi then {
+        em: rangeErr :value k: kind :r
+        return (ParsedNumber :kind isFloat: false ival: value fval: 0.0 err: em)
     }
+    return (ParsedNumber :kind isFloat: false ival: value fval: 0.0 err: "".string)
+}
 
-    if isChar then {
-        bodyLen: coreLen - 2
-        if bodyLen != 1 then {
-            return (ParsedNumber
-                :kind
-                isFloat: false
-                ival: 0
-                fval: 0.0
-                err: "Character literal must be exactly one character: ".concat numstr
-            )
-        }
-        cbopt: numstr.byteAt 2.u64
-        cval: u64
-        match (
-            cbopt
-        ) case some then {
-            cval = cbopt.u64
-        } case none then null
-        rc: rangeOf kind
-        if rc.has when cval > rc.hi then {
-            em: rangeErr value: cval k: kind r: rc
-            return (ParsedNumber :kind isFloat: false ival: cval fval: 0.0 err: em)
-        }
-        return (ParsedNumber :kind isFloat: false ival: cval fval: 0.0 err: "".string)
+# charLiteralNumber -- a `0c` lexeme, whose body must be exactly one byte. The
+# byte is in range by construction, so reading it cannot fail.
+charLiteralNumber: function {numstr: StringView kind: numkind coreLen: u64} out ParsedNumber is {
+    if (coreLen - 2) != 1 then {
+        return (ParsedNumber
+            :kind
+            isFloat: false
+            ival: 0
+            fval: 0.0
+            err: "Character literal must be exactly one character: ".concat numstr
+        )
     }
+    cb: (numstr.byteAt 2.u64).or d: 0.u8
+    return (inRangeNumber value: cb.u64 :kind)
+}
 
-    if isFloatKind kind then {
-        if base != 10 then {
-            return (ParsedNumber
-                :kind
-                isFloat: true
-                ival: 0
-                fval: 0.0
-                err: "Base must be 10 for float: ".concat numstr
-            )
-        }
-        fbuf: String
-        fi: u64
-        for fi < coreLen loop {
-            fbo: numstr.byteAt fi
-            match (
-                fbo
-            ) case some then {
-                fbuf.appendByte fbo
-            } case none then null
-            fi = fi + 1
-        }
-        fres: fbuf.stringView.parseF64
-        match (
-            fres
-        ) case ok then {
-            return (ParsedNumber :kind isFloat: true ival: 0 fval: fres err: "".string)
-        } case err then {
-            return (ParsedNumber
-                :kind
-                isFloat: true
-                ival: 0
-                fval: 0.0
-                err: "Invalid numeric literal: ".concat numstr
-            )
-        }
+# floatLiteralNumber -- a lexeme with a decimal point. The whole lexeme is the
+# number, so it is parsed in place rather than copied byte by byte first.
+floatLiteralNumber: function {numstr: StringView kind: numkind base: u64} out ParsedNumber is {
+    if base != 10 then {
+        return (ParsedNumber
+            :kind
+            isFloat: true
+            ival: 0
+            fval: 0.0
+            err: "Base must be 10 for float: ".concat numstr
+        )
     }
+    fres: numstr.parseF64
+    match (
+        fres
+    ) case ok then {
+        return (ParsedNumber :kind isFloat: true ival: 0 fval: fres err: "".string)
+    } case err then {
+        return (ParsedNumber
+            :kind
+            isFloat: true
+            ival: 0
+            fval: 0.0
+            err: "Invalid numeric literal: ".concat numstr
+        )
+    }
+}
 
+# digitsRadix -- the digits of `numstr` from `startIdx` accumulated in `base`,
+# or none when any of them is not a digit of that base. `_` is a separator and
+# carries no value. The scan stops at the first bad digit: the answer past it
+# is the same error either way.
+digitsRadix: function {
+    numstr: StringView startIdx: u64 coreLen: u64 base: u64
+} out optionval u64 is {
     acc: u64
-    ok: true
     ii: startIdx
     for ii < coreLen loop {
-        ibo: numstr.byteAt ii
-        match (
-            ibo
-        ) case some then {
-            if ibo != 95 then {
-                dvo: digitVal ibo
-                match (
-                    dvo
-                ) case some then {
-                    if dvo < base then {
-                        acc = (acc * base) + dvo
-                    } else {
-                        ok = false
-                    }
-                } case none then {
-                    ok = false
-                }
-            }
-        } case none then null
+        ib: (numstr.byteAt ii).or d: 0.u8
         ii = ii + 1
+        if ib == 95 then continue
+        dvo: digitVal ib
+        match (
+            dvo
+        ) case some then {
+            if dvo >= base then return (optionval.none u64)
+            acc = (acc * base) + dvo
+        } case none then {
+            return (optionval.none u64)
+        }
     }
+    return (optionval.some acc)
+}
 
-    if ok.not then {
+# Parse a numeric literal lexeme into (kind, value, error) against an
+# optional required kind (the dot-form conversion target). The lexeme is
+# consumed in its ENTIRETY -- the language has no inline type suffixes,
+# so any non-literal tail is an invalid literal. 'e'-notation is NOT
+# recognised here -- only a decimal point selects the float path, so a
+# bare `1e3` is an invalid integer.
+parseNumberWith: function {numstr: StringView hasK: bool k: numkind} out ParsedNumber is {
+    coreLen: numstr.length
+    hasKind: hasK
+    kind: k
+    hasDot: numstr.contains "."
+    if hasDot when hasKind when (isFloatKind kind).not then {
+        return (ParsedNumber
+            :kind
+            isFloat: false
+            ival: 0
+            fval: 0.0
+            err: "Numeric type specifier must be float for literals with decimal points".string
+        )
+    }
+    if hasDot when hasKind.not then {
+        kind = numkind.f64Type
+        hasKind = true
+    }
+    r: lexemeRadix :numstr
+    if hasKind.not then {
+        kind = numkind.i64Type
+        if r.isChar then kind = numkind.c32Type
+        hasKind = true
+    }
+    if r.isChar then return (charLiteralNumber :numstr :kind :coreLen)
+    if isFloatKind kind then return (floatLiteralNumber :numstr :kind base: r.base)
+    dv: digitsRadix :numstr startIdx: r.startIdx :coreLen base: r.base
+    if dv.none then {
         return (ParsedNumber
             :kind
             isFloat: false
@@ -2320,13 +2353,7 @@ parseNumberWith: function {numstr: StringView hasK: bool k: numkind} out ParsedN
             err: "Invalid numeric literal: ".concat numstr
         )
     }
-
-    ri: rangeOf kind
-    if ri.has when acc > ri.hi then {
-        em2: rangeErr value: acc k: kind r: ri
-        return (ParsedNumber :kind isFloat: false ival: acc fval: 0.0 err: em2)
-    }
-    return (ParsedNumber :kind isFloat: false ival: acc fval: 0.0 err: "".string)
+    return (inRangeNumber value: dv :kind)
 }
 
 # Parse a numeric literal lexeme into (kind, value, error); the kind
