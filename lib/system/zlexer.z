@@ -203,6 +203,23 @@ spanWidth: function {s: u64 e: u64} out u32 is {
     return (e - s).u32.orPanic
 }
 
+# escapeErrText -- the escape as it was WRITTEN: the backslash, the specifier
+# and however many digits were read. An ERR token for a bad escape carries the
+# source form, not the value it failed to become.
+escapeErrText: function {specifier: u8 digits: String.view} out String is {
+    err: String
+    err.appendByte ascii.backslash
+    err.appendByte specifier
+    dsv: digits.stringView
+    j: u64
+    dlen: dsv.length
+    for j < dlen loop {
+        err.appendByte ((dsv.byteAt j).or d: 0.u8)
+        j = j + 1
+    }
+    return err
+}
+
 # textWidth -- a built token's byte width. A token whose text is accumulated
 # rather than sliced out of the source still owes its callers a width.
 textWidth: function {s: String} out u32 is {
@@ -530,6 +547,53 @@ Tokenizer: class {
     }
 
     # Inside a STRINGRAW state.
+    # rawRunStop -- the raw string's content run ended at a byte that cannot
+    # continue it. Whatever was accumulated becomes a STRMID; with nothing
+    # accumulated the offending byte itself is the ERR token.
+    rawRunStop: function {
+        :this
+        pool: zast.StringPool
+        stringparts: String
+        line: u32
+        col: u32
+    } out token is {
+        if stringparts.length > 0 then {
+            return (this.textTok :pool tt: toktype.strMidTok s: stringparts :line :col)
+        }
+        err: String
+        err.appendByte this.atchar
+        this.accept
+        return (this.textTok :pool tt: toktype.errTok s: err :line :col)
+    }
+
+    # rawRunClose -- the closing delimiter matched. The state pops here, and any
+    # preceding content is emitted first with the STREND stashed behind it: one
+    # call returns one token, so the close waits its turn.
+    rawRunClose: function {
+        :this
+        pool: zast.StringPool
+        stringparts: String
+        delimparts: String
+        line: u32
+        col: u32
+        dline: u32
+        dcol: u32
+    } out token is {
+        this.statepop
+        if stringparts.length > 0 then {
+            this.nexttok = (this.textTok
+                :pool
+                tt: toktype.strEndTok
+                s: delimparts
+                line: dline
+                col: dcol
+            )
+            this.hasnext = true
+            return (this.textTok :pool tt: toktype.strMidTok s: stringparts :line :col)
+        }
+        return (this.textTok :pool tt: toktype.strEndTok s: delimparts line: dline col: dcol)
+    }
+
     # acceptstringrawtoken. RAWC bytes accumulate into the content
     # buffer; a `"` run is matched against `delim_len` -- equal-length
     # run closes the string, shorter run is literal content. On close,
@@ -547,17 +611,10 @@ Tokenizer: class {
                 stringparts.appendByte this.atchar
                 this.accept
             }
+            # EOL / EOF / other non-RAWC byte: stop here and let the outer
+            # dispatcher resume in the same STRINGRAW state on the next call.
             if this.atchar != ascii.doubleQuote then {
-                # EOL / EOF / other non-RAWC byte: stop here and let
-                # the outer dispatcher resume in the same STRINGRAW
-                # state on the next call.
-                if stringparts.length > 0 then {
-                    return (this.textTok :pool tt: toktype.strMidTok s: stringparts :line :col)
-                }
-                err: String
-                err.appendByte this.atchar
-                this.accept
-                return (this.textTok :pool tt: toktype.errTok s: err :line :col)
+                return (this.rawRunStop :pool :stringparts :line :col)
             }
             dline: this.lineno
             dcol: this.colno
@@ -573,23 +630,7 @@ Tokenizer: class {
                 # short run -- literal content
                 extendraw :stringparts delim_view: delimparts.stringView
             } else {
-                # close matched. Pop state, emit STRMID + stash STREND
-                # (or STREND directly when there is no preceding content).
-                this.statepop
-                if stringparts.length > 0 then {
-                    this.nexttok = (this.textTok
-                        :pool
-                        tt: toktype.strEndTok
-                        s: delimparts
-                        line: dline
-                        col: dcol
-                    )
-                    this.hasnext = true
-                    return (this.textTok :pool tt: toktype.strMidTok s: stringparts :line :col)
-                }
-                (return
-                    (this.textTok :pool tt: toktype.strEndTok s: delimparts line: dline col: dcol)
-                )
+                return (this.rawRunClose :pool :stringparts :delimparts :line :col :dline :dcol)
             }
         }
         # unreachable -- the for-while-true loop only exits via return
@@ -696,35 +737,15 @@ Tokenizer: class {
                 this.accept
                 consumed = consumed + 1
             } else {
-                err: String
-                err.appendByte ascii.backslash
-                err.appendByte specifier
-                dsv: digits.stringView
-                j: u64
-                dlen: dsv.length
-                for j < dlen loop {
-                    db: dsv.byteAt j
-                    match (
-                        db
-                    ) case some then {
-                        err.appendByte db
-                    } case none then {
-                        return (this.textTok :pool tt: toktype.errTok s: err :line :col)
-                    }
-                    j = j + 1
-                }
-                return (this.textTok :pool tt: toktype.errTok s: err :line :col)
+                et: escapeErrText :specifier :digits
+                return (this.textTok :pool tt: toktype.errTok s: et :line :col)
             }
         }
 
-        # Walk the collected digits once: rebuild the source-form ERR
-        # text alongside the parsed codepoint value. The ERR variant
-        # is only returned for \u escapes whose value exceeds U+10FFFF;
-        # in every other path `err` falls out of scope unused.
+        # Walk the collected digits for the codepoint VALUE. The source-form
+        # text is built only where it is returned -- a \u escape whose value
+        # exceeds U+10FFFF -- rather than on every path.
         val: u64
-        err: String
-        err.appendByte ascii.backslash
-        err.appendByte specifier
         dsv: digits.stringView
         j: u64
         dlen: dsv.length
@@ -733,7 +754,6 @@ Tokenizer: class {
             match (
                 db
             ) case some then {
-                err.appendByte db
                 hv: hexvalue b: db
                 val = (val << 4) | hv.u64
             } case none then {
@@ -744,7 +764,8 @@ Tokenizer: class {
 
         if specifier == ascii.lowerU then {
             if val > 1114111 then {
-                return (this.textTok :pool tt: toktype.errTok s: err :line :col)
+                et: escapeErrText :specifier :digits
+                return (this.textTok :pool tt: toktype.errTok s: et :line :col)
             }
             sc: String
             utf8_encode_append cp: val dst: sc
@@ -1360,11 +1381,8 @@ Lexer: class {
     }
 }
 
-# Keyword and reserved-word lookups. Per-call StringView equality;
-# acceptable at this scale, can migrate to a Map later.
-kwlookup: function {sv: StringView} out kwresult is {
-    if sv == "=" then return (kwresult found: true tt: toktype.equalsTok)
-    if sv == "function" then return (kwresult found: true tt: toktype.functionTok)
+# kwControl -- the keywords that introduce or continue CONTROL FLOW.
+kwControl: function {sv: StringView} out kwresult is {
     if sv == "if" then return (kwresult found: true tt: toktype.ifTok)
     if sv == "when" then return (kwresult found: true tt: toktype.whenTok)
     if sv == "then" then return (kwresult found: true tt: toktype.thenTok)
@@ -1376,10 +1394,13 @@ kwlookup: function {sv: StringView} out kwresult is {
     if sv == "case" then return (kwresult found: true tt: toktype.caseTok)
     if sv == "match" then return (kwresult found: true tt: toktype.matchTok)
     if sv == "on" then return (kwresult found: true tt: toktype.onTok)
-    if sv == "out" then return (kwresult found: true tt: toktype.outTok)
-    if sv == "outx" then return (kwresult found: true tt: toktype.outxTok)
-    if sv == "in" then return (kwresult found: true tt: toktype.inTok)
-    if sv == "swap" then return (kwresult found: true tt: toktype.swapTok)
+    return (kwresult found: false tt: toktype.eofTok)
+}
+
+# kwDeclarator -- the keywords that introduce a DECLARATION: the five type
+# families, `data`, and the two forms that declare a body without being a type
+# of their own.
+kwDeclarator: function {sv: StringView} out kwresult is {
     if sv == "unit" then return (kwresult found: true tt: toktype.unitTok)
     if sv == "record" then return (kwresult found: true tt: toktype.recordTok)
     if sv == "class" then return (kwresult found: true tt: toktype.classTok)
@@ -1387,13 +1408,36 @@ kwlookup: function {sv: StringView} out kwresult is {
     if sv == "variant" then return (kwresult found: true tt: toktype.variantTok)
     if sv == "protocol" then return (kwresult found: true tt: toktype.protocolTok)
     if sv == "data" then return (kwresult found: true tt: toktype.dataTok)
-    if sv == "is" then return (kwresult found: true tt: toktype.isTok)
-    if sv == "as" then return (kwresult found: true tt: toktype.asTok)
-    if sv == "with" then return (kwresult found: true tt: toktype.withTok)
     if sv == "facet" then return (kwresult found: true tt: toktype.facetTok)
     if sv == "generator" then return (kwresult found: true tt: toktype.generatorTok)
     if sv == "native" then return (kwresult found: true tt: toktype.nativeTok)
     return (kwresult found: false tt: toktype.eofTok)
+}
+
+# kwClause -- the keywords that join the parts of a declaration or a call: the
+# binder, the result and argument directions, and the three that introduce a
+# body or a conformance.
+kwClause: function {sv: StringView} out kwresult is {
+    if sv == "=" then return (kwresult found: true tt: toktype.equalsTok)
+    if sv == "function" then return (kwresult found: true tt: toktype.functionTok)
+    if sv == "out" then return (kwresult found: true tt: toktype.outTok)
+    if sv == "outx" then return (kwresult found: true tt: toktype.outxTok)
+    if sv == "in" then return (kwresult found: true tt: toktype.inTok)
+    if sv == "swap" then return (kwresult found: true tt: toktype.swapTok)
+    if sv == "is" then return (kwresult found: true tt: toktype.isTok)
+    if sv == "as" then return (kwresult found: true tt: toktype.asTok)
+    if sv == "with" then return (kwresult found: true tt: toktype.withTok)
+    return (kwresult found: false tt: toktype.eofTok)
+}
+
+# Keyword lookup, by family. Per-call StringView equality; acceptable at this
+# scale, can migrate to a Map later.
+kwlookup: function {sv: StringView} out kwresult is {
+    rc: kwControl :sv
+    if rc.found then return rc
+    rd: kwDeclarator :sv
+    if rd.found then return rd
+    return (kwClause :sv)
 }
 
 # true when `sv` is a reserved word that may not be used as an identifier.

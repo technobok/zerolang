@@ -1494,8 +1494,11 @@ print('\n'.join(sorted(set(m.group(1).split()))))" "$$1"
 }
 
 grep -oE '^[A-Za-z_][A-Za-z0-9_]*:' lib/system/core.z | sed 's/:$$//' | sort -u > "$$D/core"
-sed -n '/^kwlookup: function/,/^}/p' lib/system/zlexer.z \
-  | grep -oE 'sv == "[^"]+"' | sed 's/sv == //; s/"//g' | sort -u > "$$D/lexkw.all"
+# the keyword set is read from the CONSTRUCTION rather than from a function
+# range: the table is spelled as one function per keyword family, and a guard
+# that had to name them would go stale the next time a family is added.
+grep -oE 'sv == "[^"]+" then return \(kwresult found: true' lib/system/zlexer.z \
+  | sed -E 's/sv == "([^"]+)".*/\1/' | sort -u > "$$D/lexkw.all"
 cp "$$D/lexkw.all" "$$D/lexkw"
 sed -n '/^islookupReserved: function/,/^}/p' lib/system/zlexer.z \
   | grep -oE 'sv == "[^"]+"' | sed 's/sv == //; s/"//g' | sort -u > "$$D/lexres"
