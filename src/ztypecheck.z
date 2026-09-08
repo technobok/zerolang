@@ -35323,6 +35323,82 @@ walkOwedNamespaceBodies: function {st: zenv.ZSymbolTable frame: ztypes.declid as
 #
 # Template owners are skipped: their bodies check per instantiation.
 # Deterministic: unit load order, declaration order.
+# walkLateOwnerMember -- one member the demand walk never reached. It is walked
+# only when it is an owner with method bodies AND this compile has a reason to
+# care about its dead code; the walked mark is set last, because it is what
+# emission reads and it must be earned by a walk that actually happened.
+walkLateOwnerMember: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    ownDecl: ztypes.declid
+    memId: u32
+} is {
+    swm: argRefAt :ast nid: (zast.nodeid.create from: memId)
+    if swm.nid.isZero then return
+    swd: declOfUnitDefIds :st :unitDecl nameId: swm.name
+    if (st.typing.declIsWalked declId: swd) then return
+    # the owner's definition row is read through a view scoped to this block:
+    # the walks below lend ast
+    isOwner: false
+    hasBodies: false
+    {
+        swop: ast.nodes.get i: swm.operation.u64
+        if swop.objectdef when (hasGenericParam :ast items: swop.asItems).not then isOwner = true
+        hasBodies = objectdefHasMethodBodies :ast op: swop
+    }
+    if isOwner.not then return
+    if hasBodies.not then return
+    # Whose dead code it is decides whether this compile
+    # cares. An owner in the program's OWN unit is worth
+    # reporting on: the author wrote it and can fix it. A
+    # DEPENDENCY's unreached type is not -- a build must not
+    # spend time probing definitions the program cannot
+    # reach, in code it does not own, and its body names
+    # siblings nothing demanded, so checking it reports
+    # valid references as unknown. `--eager` -- and so
+    # eager-guard, zls and `zl lint --full` -- checks
+    # everything regardless, which is the point of it.
+    # Asked HERE, not per member: resolvedByIds RESOLVES as
+    # it walks, so probing every member of every unit
+    # settles types this compile never needed.
+    if st.typing.eagerAll.not then {
+        swRo: resolvedByIds :st :ast :unitDecl name: swm.name
+        if swRo.none then return
+    }
+    # the walked mark is what emission reads, so it is earned by a walk that
+    # can happen: resolve first, and a miss marks nothing.
+    swTid: forceUnitDef :st :frame :ast unitDecl: ownDecl :memId
+    if swTid == 0 then return
+    st.typing.declSetWalked declId: swd
+    walkOwnerMethods :st :frame unitDecl: ownDecl :ast :memId nameId: swm.name
+}
+
+# walkLateOwnersInUnit -- every member of one unit. The unit's own declaration
+# is resolved ONCE here: the name belongs to the unit and not to the member, so
+# asking for it inside the member loop asked the same question five times per
+# member and got the same answer every time.
+walkLateOwnersInUnit: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    unitName: zast.nameid
+    body: zast.kidspan
+} is {
+    unitDecl: unitDeclOfName :st nameId: unitName
+    ownDecl: unitDeclOfNameOrOwn :st :frame nameId: unitName
+    i: u64
+    n: body.count.u64
+    for i < n loop {
+        memId: zast.kidAt kids: ast.kids span: body :i
+        i = i + 1
+        walkLateOwnerMember :st :frame :ast :unitDecl :ownDecl :memId
+    }
+}
+
+# walkLateResolvedOwners -- the owners a demand-driven walk left unwalked, unit
+# by unit.
 walkLateResolvedOwners: function {st: zenv.ZSymbolTable frame: ztypes.declid ast: Ast} is {
     swN: ast.units.length
     swI: u64
@@ -35332,98 +35408,7 @@ walkLateResolvedOwners: function {st: zenv.ZSymbolTable frame: ztypes.declid ast
         swu: argRefAt :ast nid: (zast.nodeid.create from: swuId.u32)
         if swu.nid.isZero.not then {
             swBody: zast.unitBodyIdsAt :ast unitId: swu.operation
-            swbi: u64
-            swbn: swBody.count.u64
-            for swbi < swbn loop {
-                swmId: zast.kidAt kids: ast.kids span: swBody i: swbi
-                swbi = swbi + 1
-                swm: argRefAt :ast nid: (zast.nodeid.create from: swmId.u32)
-                if swm.nid.isZero.not then {
-                    uq8z: (unitDeclOfName
-                        :st
-                        nameId: swu.name
-                    )
-                    swd: (declOfUnitDefIds
-                        :st
-                        unitDecl: uq8z
-                        nameId: swm.name
-                    )
-                    swWalked: st.typing.declIsWalked declId: swd
-                    if swWalked.not then {
-                        # the owner's definition row is read through a view
-                        # scoped to this block: the walks below lend ast
-                        swDo: false
-                        swHasBodies: false
-                        {
-                            swop: ast.nodes.get i: swm.operation.u64
-                            if swop.objectdef when (
-                                (hasGenericParam :ast items: swop.asItems).not
-                            ) then swDo = true
-                            swHasBodies = objectdefHasMethodBodies :ast op: swop
-                        }
-                        # Whose dead code it is decides whether this compile
-                        # cares. An owner in the program's OWN unit is worth
-                        # reporting on: the author wrote it and can fix it. A
-                        # DEPENDENCY's unreached type is not -- a build must not
-                        # spend time probing definitions the program cannot
-                        # reach, in code it does not own, and its body names
-                        # siblings nothing demanded, so checking it reports
-                        # valid references as unknown. `--eager` -- and so
-                        # eager-guard, zls and `zl lint --full` -- checks
-                        # everything regardless, which is the point of it.
-                        # Asked HERE, not per member: resolvedByIds RESOLVES as
-                        # it walks, so probing every member of every unit
-                        # settles types this compile never needed.
-                        if swDo when swHasBodies then {
-                            swKeep: st.typing.eagerAll
-                            if swKeep.not then {
-                                uq9z: (unitDeclOfName
-                                    :st
-                                    nameId: swu.name
-                                )
-                                swRo: (resolvedByIds
-                                    :st
-                                    :ast
-                                    unitDecl: uq9z
-                                    name: swm.name
-                                )
-                                match (
-                                    swRo
-                                ) case some then {
-                                    swKeep = true
-                                } case none then null
-                            }
-                            if swKeep.not then swDo = false
-                        }
-                        if swDo when swHasBodies then {
-                            # the walked mark is what emission reads, so it is
-                            # earned by a walk that can happen: resolve first,
-                            # and a miss marks nothing.
-                            ud5x: unitDeclOfNameOrOwn :st :frame nameId: swu.name
-                            swTid: (forceUnitDef
-                                :st
-                                :frame
-                                :ast
-                                unitDecl: ud5x
-                                memId: swmId
-                            )
-                            if swTid == 0 then swDo = false
-                        }
-                        if swDo when swHasBodies then {
-                            st.typing.declSetWalked declId: swd
-                            unitDecl911: (unitDeclOfNameOrOwn :st :frame nameId: swu.name)
-                            (walkOwnerMethods
-                                :st
-                                :frame
-                                unitDecl: unitDecl911
-                                :ast
-                                memId: swmId
-                                nameId: swm.name
-                            )
-                        }
-                    }
-                }
-            }
+            walkLateOwnersInUnit :st :frame :ast unitName: swu.name body: swBody
         }
     }
 }
