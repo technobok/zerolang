@@ -19213,6 +19213,190 @@ skipCapacityArg: function {
 }
 
 
+# argscan -- what reading one explicit type argument answers: the running
+# "an argument failed to resolve" flag, and the type id this argument resolved
+# to (0 when it resolved to none).
+argscan: record {
+    miss: bool
+    tid: u64
+}
+
+# explicitPrimaryArgTid -- the type an unnamed leading argument names, 0 when it
+# names none. Both spellings resolve: a bare atom through the frame's typerefs
+# (`(List zvfs.ProviderBox)`), a cross-unit dotted path through its own lookup.
+explicitPrimaryArgTid: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    opId: zast.nodeid
+} out u64 is {
+    anP: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId.u64)
+    if (isNumericLiteralNameAt :ast ref: anP) then return 0
+    pid0: ((walkLookupTyperefById
+        :st
+        frame: st.curFrame
+        :ast
+        :unitDecl
+        baseId: anP
+    ).or
+        d: 0
+    )
+    if pid0 > 0 then return pid0
+    dop: ast.nodes.get i: opId.u64
+    return (dottedTyperefId :ast :st op: dop)
+}
+
+# bindNumericTypeArg -- a numeric literal type argument spells its own value into
+# the mono suffix, and when it carries a label it binds that param's VALUE, which
+# is what a later array bound reads.
+bindNumericTypeArg: function {
+    ast: Ast
+    ref: zast.nameid
+    pk0: zast.nameid
+    opId: zast.nodeid
+    sfx: String
+    numParamNames: ListVal zast.nameid
+    numParamNodes: ListVal u32
+    valueSubs: (IdMapV zast.nameid v: u64)
+} is {
+    asfx2: "_\{zast.nameTextAt :ast :ref}"
+    sfx.append s: asfx2
+    if pk0.isZero then return
+    numParamNames.append pk0
+    numParamNodes.append opId
+    pdv0: parseDecimalU64 text: (zast.nameTextAt :ast :ref).stringView
+    match (
+        pdv0
+    ) case some then {
+        vgv0: pdv0
+        valueSubs.set key: pk0 value: vgv0
+    } case none then null
+}
+
+# bindResolvedTypeArg -- a type argument that resolves adds its mono name to the
+# suffix and, when it carries a label, becomes that param's substitution. Answers
+# the id it resolved to, 0 when it resolved to none.
+bindResolvedTypeArg: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    opId: zast.nodeid
+    baseId: zast.nameid
+    pk0: zast.nameid
+    sfx: String
+    subs: (IdMapV zast.nameid v: u64)
+} out u64 is {
+    aid: (constructionArgTid
+        :st
+        :ast
+        :unitDecl
+        :opId
+        :baseId
+    )
+    if aid == 0 then {
+        argOpNode: ast.nodes.get i: opId.u64
+        aid = dottedTyperefId :ast :st op: argOpNode
+    }
+    if aid == 0 then return 0
+    atn: (monoValName
+        :st
+        frame: st.curFrame
+        :ast
+        tid: (ztypes.tid.create from: aid.u64)
+    )
+    asfx: "_\{atn}"
+    sfx.append s: asfx
+    if pk0.isZero.not then {
+        pv: aid
+        subs.set key: pk0 value: pv
+    }
+    return aid
+}
+
+# collectTypeArgAt -- read one explicit type argument. Only generic-param labels
+# construct here; a value argument means the field-bound inference leg owns the
+# call, and says so by answering `miss`. Once an argument has missed the suffix
+# stops growing, but the arguments after it are still read.
+collectTypeArgAt: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    argId: zast.nodeid
+    argIdx: u64
+    tplId: ztypes.tid
+    primaryName: zast.nameid
+    tk0: ztypes.declid
+    sfx: String
+    subs: (IdMapV zast.nameid v: u64)
+    valueSubs: (IdMapV zast.nameid v: u64)
+    numParamNames: ListVal zast.nameid
+    numParamNodes: ListVal u32
+    miss: bool
+} out argscan is {
+    anyMiss: miss
+    # the argument is read through a view scoped to this block: the lookups
+    # below lend ast
+    pk0: zast.nameid
+    opId: zast.nodeid
+    {
+        arg: argRefAt :ast nid: argId
+        if arg.nid.isZero then return (argscan miss: anyMiss tid: 0)
+        pk0 = arg.name
+        opId = arg.operation
+    }
+    if pk0.isZero when argIdx == 0 when primaryName.isZero.not when (
+        (explicitPrimaryArgTid
+            :ast
+            :st
+            :unitDecl
+            :opId
+        ) >
+        0
+    ) then pk0 = primaryName
+    isP0: false
+    if pk0.isZero.not then {
+        isP0 = st.reg.isGenericParamOf tdecl: tk0 name: pk0
+    }
+    skipCr: (skipCapacityArg
+        :ast
+        :st
+        :unitDecl
+        argOpId: opId
+        :tplId
+        :pk0
+        :isP0
+    )
+    if isP0.not when skipCr.not then anyMiss = true
+    anId0: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId.u64)
+    if anyMiss then return (argscan miss: anyMiss tid: 0)
+    if skipCr then return (argscan miss: anyMiss tid: 0)
+    if (isNumericLiteralNameAt :ast ref: anId0) then {
+        (bindNumericTypeArg
+            :ast
+            ref: anId0
+            :pk0
+            :opId
+            :sfx
+            :numParamNames
+            :numParamNodes
+            :valueSubs
+        )
+        return (argscan miss: anyMiss tid: 0)
+    }
+    tid0: (bindResolvedTypeArg
+        :ast
+        :st
+        :unitDecl
+        :opId
+        baseId: anId0
+        :pk0
+        :sfx
+        :subs
+    )
+    if tid0 == 0 then anyMiss = true
+    return (argscan miss: anyMiss tid: tid0)
+}
+
 # collectGenericTypeArgs -- read one generic construction's arguments into the type
 # and value substitutions, building the mangled suffix that names the instance.
 collectGenericTypeArgs: function {
@@ -19232,117 +19416,28 @@ collectGenericTypeArgs: function {
 } out bool is {
     firstA: u64
     anyMiss: false
-    argIdx: u64
     kAiter: u64
     for kAiter < call.nargs loop {
-        argId: (zast.callArgAt :ast nid: call.nid i: kAiter).u32
+        aId0: zast.callArgAt :ast nid: call.nid i: kAiter
+        r0: (collectTypeArgAt
+            :ast
+            :st
+            :unitDecl
+            argId: aId0
+            argIdx: kAiter
+            :tplId
+            :primaryName
+            :tk0
+            :sfx
+            :subs
+            :valueSubs
+            :numParamNames
+            :numParamNodes
+            miss: anyMiss
+        )
+        anyMiss = r0.miss
+        if firstA == 0 then firstA = r0.tid
         kAiter = kAiter + 1
-        # the argument is read through a view scoped to this block: the
-        # lookups below lend ast
-        isNamedArg: false
-        pk0: zast.nameid
-        opId: zast.nodeid
-        {
-            arg: ast.nodes.get i: argId.u64
-            if arg.namedoperation then {
-                isNamedArg = true
-                pk0 = arg.name
-                opId = arg.operation
-            }
-        }
-        if isNamedArg then {
-            # only generic-param labels construct here; a value arg means
-            # the field-bound inference leg owns the call.
-            # An elided leading type argument (`(List zvfs.ProviderBox)`) binds
-            # the primary generic param: probe the unnamed first arg as a type
-            # (atom via walkLookupTyperef, cross-unit dotted via dottedTyperefId).
-            # Only a real type rebinds; a value first arg (`(box 5)`) keeps its
-            # empty label so the field-bound inference leg owns the call.
-            if pk0.isZero when argIdx == 0 when primaryName.isZero.not then {
-                anP: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId.u64)
-                pid0: u64
-                if (isNumericLiteralNameAt :ast ref: anP).not then {
-                    pao0: (walkLookupTyperefById
-                        :st
-                        frame: st.curFrame
-                        :ast
-                        :unitDecl
-                        baseId: anP
-                    )
-                    pid0 = pao0.or d: 0
-                    if pid0 == 0 then {
-                        dop: ast.nodes.get i: opId.u64
-                        pid0 = dottedTyperefId :ast :st op: dop
-                    }
-                }
-                if pid0 > 0 then pk0 = primaryName
-            }
-            isP0: false
-            if pk0.isZero.not then {
-                isP0 = st.reg.isGenericParamOf tdecl: tk0 name: pk0
-            }
-            skipCr: (skipCapacityArg
-                :ast
-                :st
-                :unitDecl
-                argOpId: opId
-                :tplId
-                :pk0
-                :isP0
-            )
-            if isP0.not when skipCr.not then anyMiss = true
-            anId0: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId.u64)
-            if anyMiss.not when skipCr.not then {
-                if (isNumericLiteralNameAt
-                    :ast
-                    ref: anId0
-                ) then {
-                    asfx2: "_\{zast.nameTextAt :ast ref: anId0}"
-                    sfx.append s: asfx2
-                    if pk0.isZero.not then {
-                        numParamNames.append pk0
-                        numParamNodes.append opId
-                        pdv0: parseDecimalU64 text: (zast.nameTextAt :ast ref: anId0).stringView
-                        match (
-                            pdv0
-                        ) case some then {
-                            vgv0: pdv0
-                            valueSubs.set key: pk0 value: vgv0
-                        } case none then null
-                    }
-                } else {
-                    aid: (constructionArgTid
-                        :st
-                        :ast
-                        :unitDecl
-                        :opId
-                        baseId: anId0
-                    )
-                    if aid == 0 then {
-                        argOpNode: ast.nodes.get i: opId.u64
-                        aid = dottedTyperefId :ast :st op: argOpNode
-                    }
-                    if aid > 0 then {
-                        atn: (monoValName
-                            :st
-                            frame: st.curFrame
-                            :ast
-                            tid: (ztypes.tid.create from: aid.u64)
-                        )
-                        asfx: "_\{atn}"
-                        sfx.append s: asfx
-                        if pk0.isZero.not then {
-                            pv: aid
-                            subs.set key: pk0 value: pv
-                        }
-                        if firstA == 0 then firstA = aid
-                    } else {
-                        anyMiss = true
-                    }
-                }
-            }
-        }
-        argIdx = argIdx + 1
     }
     firstOut.append firstA
     return anyMiss
