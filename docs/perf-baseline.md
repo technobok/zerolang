@@ -2706,3 +2706,50 @@ blamed `--fast-hash` for 216 of them; both numbers were that gap. **Stage every
 binary in one directory under names of equal length before comparing**, and
 invoke them the same way. The fast-hash column is free at both ends once that is
 done.
+
+## 2026-09-08 -- the copy sweep, `7dcb7a15` -> `a3f7168f`
+
+Five commits, no behaviour change: the emitted C for all 564 corpus programs and
+all three drivers is byte-identical at every step, measured with both compilers
+over the same source tree.
+
+| | 7dcb7a15 | a3f7168f | delta |
+|---|---|---|---|
+| allocations | 2,263,142 | 2,114,528 | **-148,614 (-6.57%)** |
+| bytes | 301,770,020 | 299,910,273 | -1.86 MB |
+
+`ALLOC_BASELINE` 2,263,972 -> 2,114,742 (the canonical `perf-strict` invocation
+reads a little above the staged one; see the argv[0] note in the previous row).
+
+**Where it came from.** A DHAT census attributing every block to the frame above
+the allocator put strings at 60% of all allocations and deep copies alone at 18%.
+Four helpers were handing back an owned copy of a name their caller only read:
+
+| item | blocks | what it was |
+|---|---|---|
+| `definedInUnitOf` retired | 77,340 | a registry name copy INSIDE a boxed Option, at 20 sites; ten only tested presence and now ask `definedInUnitTid`, ten read the name and now borrow it through the new `definedInUnitName` / `unitNameViewOfTid` |
+| `ctxCname` -> `ctxCnameView` | 35,100 | `typeRefC` alone copied eight names it only interpolated |
+| `regNameOf` -> `regNameView`, four more sites | 22,604 | the tail `d471b20b` deliberately left |
+| `stampNameOf` -> `stampNameView` | 13,626 | ONE binding in `emitAssignment`, held across the whole function |
+
+**The pin is the limit, and it is the finding worth keeping.** These views hold
+their table shared for the binding's scope, and an emitter function that lends
+`ctx` or `symtab` on cannot also hold one. Five of nine `ctxCname` conversions
+had to go back, each named by the typechecker at the exact line wanting the
+exclusive lend. `ctx` behaves the way `st` does in the checker, which is the same
+wall `d471b20b` stopped at.
+
+**Two shapes beat the wall.** SCOPE the view in a bare block so the pin dies
+before the lends begin, and READ IT TWICE rather than holding one across them --
+`emitAssignment` does both, and two borrows cost nothing where one copy cost an
+allocation per binding statement in the program.
+
+**A borrow pays for itself twice**: the view form made the compiler reject ten
+now-pointless `.stringView` conversions on what is already a view, at E0100, at
+the exact lines.
+
+**What is left, measured after the sweep**: `nameOf`'s remaining tail is ~98,000
+blocks spread thin over sites that mostly return the name; `listCname`'s is
+~33,000 behind callers that lend `ctx` exclusively; and the L022 `viewable-local`
+worklist is 32,943 blocks over 127 linter-listed sites, 116 of them in
+`ztypecheck.z`.
