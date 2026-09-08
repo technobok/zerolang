@@ -21438,108 +21438,134 @@ paramTypeIsPointer: function {
     return false
 }
 
-# fnSignature -- "RET cname(PARAMS)" for a user function from its
-# resolved type's children and return stamp (z_main for main).
-fnSignature: function {
+# declaredReturnC -- the C type a function's DECLARED return name spells, "" when
+# the name resolves to nothing the emitter can spell.
+declaredReturnC: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    name: StringView
+    fid: ztypes.tid
+    op: astnode.view
+    rbn: StringView
+} out String is {
+    rtid0: fnReturnTypeId :ast :symtab :op
+    if rtid0 == ctx.strTid then return "\{ctx.strC}_t"
+    if rtid0 == ctx.svTid then return "\{ctx.svC}_t"
+    rbc: cTypeOf name: rbn
+    if rbc.length > 0 then {
+        if (scalarTidIsBuiltin :symtab tid: (ztypes.tid.create from: rtid0.u64)) then return rbc
+        return (typeRefC
+            :ast
+            :symtab
+            :ctx
+            tid: (ztypes.tid.create from: rtid0.u64)
+            thisTid: ztypes.tid
+        )
+    }
+    rbi: userFnId :ast :symtab :ctx name: rbn
+    # a SELF-TYPED return is spelled as the template, so the name answers the
+    # template and its C type names a struct no instance has. The clone's own
+    # return type carries the substitution; an id compare against the by-name
+    # answer is what says it is that template's instance rather than an
+    # unrelated type.
+    rbm: fnReturnTidOf :symtab tid: fid
+    if rbi > 0 when (
+        (genericOriginTid
+            :symtab
+            tid: (ztypes.tid.create from: rbm.u64)
+        ) ==
+        rbi
+    ) then rbi = ztypes.tid.create from: rbm.u64
+    if rbi.isZero then return String
+    return (typeRefC :ast :symtab :ctx tid: rbi thisTid: ztypes.tid)
+}
+
+# stampedReturnC -- the C type the function's stamped return tid spells, "" when
+# the stamp adds nothing the declaration did not already give.
+stampedReturnC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    fid: ztypes.tid
+    current: StringView
+} out String is {
+    rto: fnReturnTidOf :symtab tid: fid
+    if rto == 0 then return String
+    rn: regNameOf :symtab tid: (ztypes.tid.create from: rto.u64)
+    rc: cTypeOf name: rn.stringView
+    if rc.length > 0 then {
+        if (scalarTidIsBuiltin :symtab tid: (ztypes.tid.create from: rto.u64)) then return rc
+        return (typeRefC
+            :ast
+            :symtab
+            :ctx
+            tid: (ztypes.tid.create from: rto.u64)
+            thisTid: ztypes.tid
+        )
+    }
+    # a non-scalar return the declared name did not resolve -- an
+    # optionval/resultval (or other) mono. typeRefC gives the mono's C type,
+    # and only while the return is still void, so a resolution from the
+    # declaration is never overridden.
+    if current != "void" then return String
+    return (typeRefC
+        :ast
+        :symtab
+        :ctx
+        tid: (ztypes.tid.create from: rto.u64)
+        thisTid: ztypes.tid
+    )
+}
+
+# fnReturnPointerC -- how a non-void return is passed back: a heap collection by
+# pointer, a ref-borrow by the borrow's pointer form.
+fnReturnPointerC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    fid: ztypes.tid
+    op: astnode.view
+    ret: StringView
+} out String is {
+    retColId: fnReturnTidOf :symtab tid: fid
+    if retColId == 0 then retColId = fnReturnTypeId :ast :symtab :op
+    out0: ret.string
+    if retColId > 0 when (isHeapPtrCollection
+        :symtab
+        :ctx
+        tid: (ztypes.tid.create from: retColId.u64)
+    ) then out0 = "\{ret}*"
+    if (fnReturnsRefBorrow
+        :ast
+        :symtab
+        :ctx
+        :fid
+        retTid: (ztypes.tid.create from: retColId.u64)
+    ) then {
+        retP: refPtrC :symtab tid: fid base: out0.stringView
+        out0 = retP
+    }
+    return out0
+}
+
+# fnReturnC -- a user function's C return type. Three sources answer in order --
+# the declared return name, the stamped return tid, the return node's own type --
+# and the first that resolves wins; the pointer forms apply last.
+fnReturnC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
     fid: ztypes.tid
     op: astnode.view
 } out String is {
-    if name == "main" then return "void z_main(void)".string
     ret: "void".string
     rbn: ztypecheck.fnReturnBaseNameOf :ast :op
     if rbn.length > 0 then {
-        rbc: cTypeOf name: rbn.stringView
-        rtid0: fnReturnTypeId :ast :symtab :op
-        if rtid0 == ctx.strTid then {
-            rs0: "\{ctx.strC}_t"
-            ret = rs0
-        } else if rtid0 == ctx.svTid then {
-            rs1: "\{ctx.svC}_t"
-            ret = rs1
-        } else if rbc.length > 0 then {
-            if (
-                (scalarTidIsBuiltin
-                    :symtab
-                    tid: (ztypes.tid.create from: rtid0.u64)
-                ).not
-            ) then {
-                ret = (typeRefC
-                    :ast
-                    :symtab
-                    :ctx
-                    tid: (ztypes.tid.create from: rtid0.u64)
-                    thisTid: ztypes.tid
-                )
-            } else {
-                ret = rbc
-            }
-        } else {
-            rbi: userFnId :ast :symtab :ctx name: rbn.stringView
-            # a SELF-TYPED return is spelled as the template, so the name
-            # answers the template and its C type names a struct no instance
-            # has. The clone's own return type carries the substitution; an id
-            # compare against the by-name answer is what says it is that
-            # template's instance rather than an unrelated type.
-            rbm: fnReturnTidOf :symtab tid: fid
-            if rbi > 0 when (
-                (genericOriginTid
-                    :symtab
-                    tid: (ztypes.tid.create from: rbm.u64)
-                ) ==
-                rbi
-            ) then rbi = ztypes.tid.create from: rbm.u64
-            if rbi > 0 then {
-                rr: typeRefC :ast :symtab :ctx tid: rbi thisTid: ztypes.tid
-                if rr.length > 0 then ret = rr
-            }
-        }
+        r0: declaredReturnC :ast :symtab :ctx :fid :op rbn: rbn.stringView
+        if r0.length > 0 then ret = r0
     }
-    {
-        rto: fnReturnTidOf :symtab tid: fid
-        if rto > 0 then {
-            {
-                rn: regNameOf :symtab tid: (ztypes.tid.create from: rto.u64)
-                rc: cTypeOf name: rn.stringView
-                if rc.length > 0 then {
-                    if (
-                        (scalarTidIsBuiltin
-                            :symtab
-                            tid: (ztypes.tid.create from: rto.u64)
-                        ).not
-                    ) then {
-                        ret = (typeRefC
-                            :ast
-                            :symtab
-                            :ctx
-                            tid: (ztypes.tid.create from: rto.u64)
-                            thisTid: ztypes.tid
-                        )
-                    } else {
-                        ret = rc
-                    }
-                } else {
-                    # a non-scalar return the rbn block didn't resolve -- e.g. an
-                    # optionval/resultval (or other) mono. Use typeRefC, which
-                    # gives the mono's C type. Only when ret is still void, so a
-                    # resolution from rbn above is never overridden.
-                    if ret.stringView == "void" then {
-                        rr2: (typeRefC
-                            :ast
-                            :symtab
-                            :ctx
-                            tid: (ztypes.tid.create from: rto.u64)
-                            thisTid: ztypes.tid
-                        )
-                        if rr2.length > 0 then ret = rr2
-                    }
-                }
-            }
-        }
-    }
+    r1: stampedReturnC :ast :symtab :ctx :fid current: ret.stringView
+    if r1.length > 0 then ret = r1
     if ret.stringView == "void" then {
         rtnid: fnReturnTypeId :ast :symtab :op
         if rtnid > 0 then {
@@ -21553,25 +21579,43 @@ fnSignature: function {
             if rtr.length > 0 then ret = rtr
         }
     }
-    if ret.stringView != "void" then {
-        retColId: fnReturnTidOf :symtab tid: fid
-        if retColId == 0 then retColId = fnReturnTypeId :ast :symtab :op
-        if retColId > 0 when (isHeapPtrCollection
-            :symtab
-            :ctx
-            tid: (ztypes.tid.create from: retColId.u64)
-        ) then ret = "\{ret}*"
-        if (fnReturnsRefBorrow
-            :ast
-            :symtab
-            :ctx
-            :fid
-            retTid: (ztypes.tid.create from: retColId.u64)
-        ) then {
-            retP: refPtrC :symtab tid: fid base: ret.stringView
-            ret = retP
-        }
-    }
+    if ret.stringView == "void" then return ret
+    return (fnReturnPointerC :ast :symtab :ctx :fid :op ret: ret.stringView)
+}
+
+# paramCType -- one parameter's C type: the pointer form where the parameter is
+# passed by reference, const-qualified when it is a view, because a view is read
+# through and never written through and the C has to say so -- the runtime
+# readers it reaches take const too, so a writer reached through a view is
+# refused by the C compiler.
+paramCType: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    fid: ztypes.tid
+    pname: StringView
+    pid: ztypes.tid
+} out String is {
+    ct: typeRefC :ast :symtab :ctx tid: pid thisTid: ztypes.tid
+    if (paramTypeIsPointer :ast :symtab :ctx :fid :pname :pid).not then return ct
+    if ct.length == 0 then return ct
+    if (symtab.typing.declOwnershipIs
+        pool: ast.names
+        parentTypeId: fid
+        name: pname
+        own: ztypes.zparamownership.viewMode
+    ) then return "const \{ct}*"
+    return "\{ct}*"
+}
+
+# fnParamsC -- a user function's C parameter list, "void" when it takes none.
+fnParamsC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    fid: ztypes.tid
+    op: astnode.view
+} out String is {
     params: String
     cIds: ListVal u64
     cNmIds: ListVal u64
@@ -21582,29 +21626,14 @@ fnSignature: function {
         pnmId: (zast.nameid.create from: (cNmIds.get i: pi))
         pnameB: zast.poolTextAt pool: ast.names ref: pnmId
         pname: pnameB.stringView
-        pid: cIds.get i: pi
-        ct: typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: pid.u64) thisTid: ztypes.tid
-        ptrp: (paramTypeIsPointer
+        ct: (paramCType
             :ast
             :symtab
             :ctx
             :fid
             :pname
-            pid: (ztypes.tid.create from: pid.u64)
+            pid: (ztypes.tid.create from: (cIds.get i: pi))
         )
-        if ptrp when ct.length > 0 then {
-            ctp: "\{ct}*"
-            # a view is read through and never written through, and the
-            # C says so: the runtime readers it reaches take const too, so
-            # a writer reached through a view is refused by the C compiler
-            if (symtab.typing.declOwnershipIs
-                pool: ast.names
-                parentTypeId: fid
-                name: pname
-                own: ztypes.zparamownership.viewMode
-            ) then ctp = "const \{ct}*"
-            ct = ctp
-        }
         if pi > 0 then params.append ", "
         if ct.length > 0 then {
             params.append ct
@@ -21618,6 +21647,22 @@ fnSignature: function {
         pi = pi + 1
     }
     if pn == 0 then params.append "void"
+    return params
+}
+
+# fnSignature -- "RET cname(PARAMS)" for a user function from its
+# resolved type's children and return stamp (z_main for main).
+fnSignature: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    name: StringView
+    fid: ztypes.tid
+    op: astnode.view
+} out String is {
+    if name == "main" then return "void z_main(void)".string
+    ret: fnReturnC :ast :symtab :ctx :fid :op
+    params: fnParamsC :ast :symtab :ctx :fid :op
     fc: ctxCnameView :ctx tid: fid
     sig: "\{ret} \{fc}(\{params})"
     return sig
@@ -27458,6 +27503,96 @@ isFwdDeclared: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
     return (ctx.fwdDeclaredTypes.has item: tid)
 }
 
+# isStructTypetype -- the three typetypes whose C is a struct the emitter writes,
+# and so the three this pass forward-declares.
+isStructTypetype: function {tt: ztypes.ztypetype} out bool is {
+    if tt == ztypes.ztypetype.recordType then return true
+    if tt == ztypes.ztypetype.unionType then return true
+    return tt == ztypes.ztypetype.classType
+}
+
+# emitDeclaredFwdDecl -- forward-declare a type a unit DECLARED. A native type
+# is skipped because the runtime owns its layout, a typedef because it is an
+# alias, and a Box because its C is its element's.
+emitDeclaredFwdDecl: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    buf: String.borrow
+} is {
+    if (definedInUnitTid :symtab :tid).isZero then return
+    if (symtab.reg.isNativeOf :tid) then return
+    if (isTypedefType :symtab :tid) then return
+    if (isBoxTid :symtab :tid) then return
+    cn: ctxCname :ctx :tid
+    ctx.fwdDeclaredTypes.add item: tid.u64
+    l0: "typedef struct \{cn}_t \{cn}_t;\n"
+    buf.append l0
+    needDtor: (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.unionType
+    if (symtab.reg.needsDestructor typeId: tid) then needDtor = true
+    if needDtor then {
+        l1: "static void \{cn}_destroy(\{cn}_t* p);\n"
+        buf.append l1
+    }
+}
+
+# monoNeedsFwdDecl -- a mono is forward-declared when its own C names a struct:
+# it owns a destructor, or it is one of the four collection families.
+monoNeedsFwdDecl: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tid: ztypes.tid
+} out bool is {
+    if (symtab.reg.needsDestructor typeId: tid) then return true
+    if (isListOriginOf :symtab :ctx :tid) then return true
+    if (isListViewOriginOf :symtab :ctx :tid) then return true
+    if (isSetOriginOf :symtab :ctx :tid) then return true
+    return (isMapOriginOf :symtab :ctx :tid)
+}
+
+# emitMonoFwdDecl -- forward-declare an instantiated type. A generic TEMPLATE
+# has no C of its own and reaches here with no origin, so it declares nothing.
+emitMonoFwdDecl: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    origin: ztypes.tid
+    buf: String.borrow
+} is {
+    if origin.isZero then return
+    if (isBoxTid :symtab :tid) then return
+    if (monoNeedsFwdDecl :symtab :ctx :tid).not then return
+    cnX: ctxCname :ctx :tid
+    ctx.fwdDeclaredTypes.add item: tid.u64
+    lx0: "typedef struct \{cnX}_t \{cnX}_t;\n"
+    buf.append lx0
+    fwdDtor: (
+        (symtab.reg.needsDestructor typeId: tid) or
+        (isMapOriginOf :symtab :ctx :tid) or
+        (isSetOriginOf :symtab :ctx :tid)
+    )
+    if fwdDtor then {
+        lx1: "static void \{cnX}_destroy(\{cnX}_t* p);\n"
+        buf.append lx1
+    }
+}
+
+# emitTypeFwdDecl -- one struct type's forward declaration, by which of the two
+# kinds it is: declared by a unit, or instantiated from a template.
+emitTypeFwdDecl: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    buf: String.borrow
+} is {
+    origin: originTidOf :symtab :tid
+    if origin.isZero when (isGenericType :symtab :tid).not then {
+        emitDeclaredFwdDecl :symtab :ctx :tid :buf
+        return
+    }
+    emitMonoFwdDecl :symtab :ctx :tid :origin :buf
+}
+
 # emitMainFwdDecls -- forward-declare every RECORD + UNION + CLASS type whose
 # body this emitter writes (named-struct typedef + a destructor prototype)
 # before the monos. The AST is a self-referential astnode union: Node_destroy +
@@ -27486,80 +27621,8 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable.view ctx: Ctx buf: String.
     last: symtab.reg.nextTypeId
     t: ztypes.tid
     for t < last loop {
-        tt: symtab.reg.typetypeOf typeId: t
-        isStructType: false
-        isUnion: false
-        if tt == ztypes.ztypetype.recordType then isStructType = true
-        if tt == ztypes.ztypetype.unionType then {
-            isStructType = true
-            isUnion = true
-        }
-        if tt == ztypes.ztypetype.classType then isStructType = true
-        if isStructType then {
-            gen: isGenericType :symtab tid: (ztypes.tid.create from: t.u64)
-            mo: originTidOf :symtab tid: (ztypes.tid.create from: t.u64)
-            if mo.isZero when gen.not then {
-                if (definedInUnitTid
-                    :symtab
-                    tid: (ztypes.tid.create from: t.u64)
-                ).isZero.not when (
-                    (symtab.reg.isNativeOf tid: (ztypes.tid.create from: t.u64)).not
-                ) when (
-                    (isTypedefType :symtab tid: (ztypes.tid.create from: t.u64)).not
-                ) when (isBoxTid :symtab tid: t).not then {
-                    cn: ctxCname :ctx tid: (ztypes.tid.create from: t.u64)
-                    ctx.fwdDeclaredTypes.add item: t.u64
-                    l0: "typedef struct \{cn}_t \{cn}_t;\n"
-                    buf.append l0
-                    needDtor: isUnion
-                    if (symtab.reg.needsDestructor typeId: t) then needDtor = true
-                    if needDtor then {
-                        l1: "static void \{cn}_destroy(\{cn}_t* p);\n"
-                        buf.append l1
-                    }
-                }
-            } else {
-                fwdM: false
-                if mo > 0 then {
-                    if (symtab.reg.needsDestructor typeId: t) then fwdM = true
-                    if (isListOriginOf
-                        :symtab
-                        :ctx
-                        tid: (ztypes.tid.create from: t.u64)
-                    ) then fwdM = true
-                    if (isListViewOriginOf
-                        :symtab
-                        :ctx
-                        tid: (ztypes.tid.create from: t.u64)
-                    ) then fwdM = true
-                    if (isSetOriginOf
-                        :symtab
-                        :ctx
-                        tid: (ztypes.tid.create from: t.u64)
-                    ) then fwdM = true
-                    if (isMapOriginOf
-                        :symtab
-                        :ctx
-                        tid: (ztypes.tid.create from: t.u64)
-                    ) then fwdM = true
-                }
-                if (isBoxTid :symtab tid: (ztypes.tid.create from: t.u64)) then fwdM = false
-                if fwdM then {
-                    cnX: ctxCname :ctx tid: (ztypes.tid.create from: t.u64)
-                    ctx.fwdDeclaredTypes.add item: t.u64
-                    lx0: "typedef struct \{cnX}_t \{cnX}_t;\n"
-                    buf.append lx0
-                    fwdDtor: (
-                        (symtab.reg.needsDestructor typeId: t) or
-                        (isMapOriginOf :symtab :ctx tid: (ztypes.tid.create from: t.u64)) or
-                        (isSetOriginOf :symtab :ctx tid: (ztypes.tid.create from: t.u64))
-                    )
-                    if fwdDtor then {
-                        lx1: "static void \{cnX}_destroy(\{cnX}_t* p);\n"
-                        buf.append lx1
-                    }
-                }
-            }
+        if (isStructTypetype tt: (symtab.reg.typetypeOf typeId: t)) then {
+            emitTypeFwdDecl :symtab :ctx tid: t :buf
         }
         t = ztypes.tid.create from: (t + 1)
     }
@@ -31791,6 +31854,171 @@ borrowedFieldIsReftypePtr: function {
     return (tt == ztypes.ztypetype.classType) or (tt == ztypes.ztypetype.unionType)
 }
 
+# storedFieldC -- the C type a field is STORED as: its own type, with a borrowed
+# reftype field lowered to a pointer into its container (a protocol-typed one
+# stays a fat pointer by value) and a heap collection to a pointer. "int64_t"
+# stands in for a type with no C spelling of its own.
+storedFieldC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    ownerTid: ztypes.tid
+    fname: String.view
+    fid: ztypes.tid
+    fnameId: zast.nameid
+} out String is {
+    fct: typeRefC :ast :symtab :ctx tid: fid thisTid: ztypes.tid
+    if fct.length == 0 then fct = "int64_t".string
+    if (symtab.typing.declIsBorrowedFieldId
+        parentTypeId: ownerTid
+        nameId: fnameId
+    ) when (borrowedFieldIsReftypePtr :ast :symtab :ctx :fid) then {
+        fctP: (storedFieldPtrC
+            :ast
+            :symtab
+            :ownerTid
+            fname: fname.stringView
+            fct: fct.stringView
+        )
+        fct = fctP
+    }
+    if (isHeapPtrCollection :symtab :ctx tid: fid) then fct = "\{fct}*"
+    return fct
+}
+
+# emitRecordStructBody -- the struct's fields, in declaration order.
+emitRecordStructBody: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    names: (List String).view
+    ids: (ListVal u64).view
+    nameIds: (ListVal u64).view
+    buf: String.borrow
+} is {
+    fi: u64
+    for fi < names.length loop {
+        fname: names.get i: fi
+        fct: (storedFieldC
+            :ast
+            :symtab
+            :ctx
+            ownerTid: tid
+            :fname
+            fid: (ztypes.tid.create from: (ids.get i: fi))
+            fnameId: (zast.nameid.create from: (nameIds.get i: fi).u32.orPanic)
+        )
+        fnameP: memberCPrefix name: fname.stringView
+        l1: "    \{fct} \{fnameP}\{fname};\n"
+        buf.append l1
+        fi = fi + 1
+    }
+}
+
+# recordCreateArgs -- the meta_create parameter list and the initialiser list it
+# fills, in field order and comma-separated in step.
+recordCreateArgs: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    names: (List String).view
+    ids: (ListVal u64).view
+    nameIds: (ListVal u64).view
+    params: String
+    inits: String
+} is {
+    fj: u64
+    for fj < names.length loop {
+        fname2: names.get i: fj
+        fct2: (storedFieldC
+            :ast
+            :symtab
+            :ctx
+            ownerTid: tid
+            fname: fname2
+            fid: (ztypes.tid.create from: (ids.get i: fj))
+            fnameId: (zast.nameid.create from: (nameIds.get i: fj).u32.orPanic)
+        )
+        if fj > 0 then {
+            params.append ", "
+            inits.append ", "
+        }
+        fname2P: memberCPrefix name: fname2.stringView
+        params.append fct2
+        params.append " "
+        params.append fname2P
+        params.append fname2
+        inits.append fname2P
+        inits.append fname2
+        fj = fj + 1
+    }
+}
+
+# aggregateEqTid -- the type whose own `_eq` a field must be compared through,
+# 0 when the field compares with C's `==`.
+aggregateEqTid: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    fid: ztypes.tid
+} out ztypes.tid is {
+    fkiC: typedefChaseTid :symtab tid: fid
+    ftn: regNameOf :symtab tid: fkiC
+    zeroTid: ztypes.tid
+    if (scalarCTypeFor :symtab name: ftn.stringView tid: fkiC).length > 0 then return zeroTid
+    frid: canonTypeId :ast :symtab :ctx tid: fkiC name: ftn.stringView
+    if frid == 0 then return zeroTid
+    ftt: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: frid.u64)
+    isAggF: (ftt == ztypes.ztypetype.recordType) or (ftt == ztypes.ztypetype.variantType)
+    if isAggF.not then return zeroTid
+    return (ztypes.tid.create from: frid.u64)
+}
+
+# emitRecordEq -- a record's structural `==`, field by field, an aggregate field
+# through its own. A class compares by identity and gets none.
+emitRecordEq: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    rc: String.view
+    names: (List String).view
+    ids: (ListVal u64).view
+    buf: String.borrow
+} is {
+    if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.classType then return
+    lq: "static bool \{rc}_eq(\{rc}_t a, \{rc}_t b) {\n"
+    buf.append lq
+    if names.length == 0 then {
+        buf.append "    (void)a; (void)b;\n"
+        buf.append "    return true;\n"
+        buf.append "}\n\n"
+        return
+    }
+    eqx: String
+    fk: u64
+    for fk < names.length loop {
+        fkn: names.get i: fk
+        if fk > 0 then eqx.append " && "
+        agg: (aggregateEqTid :ast :symtab :ctx fid: (ztypes.tid.create from: (ids.get i: fk)))
+        fknP: memberCPrefix name: fkn.stringView
+        if agg.isZero then {
+            fe2: "a.\{fknP}\{fkn} == b.\{fknP}\{fkn}"
+            eqx.append fe2
+        } else {
+            frc: ctxCname :ctx tid: agg
+            fe: "\{frc}_eq(a.\{fknP}\{fkn}, b.\{fknP}\{fkn})"
+            eqx.append fe
+        }
+        fk = fk + 1
+    }
+    lr: "    return \{eqx};\n"
+    buf.append lr
+    buf.append "}\n\n"
+}
+
 # emit one record's C struct.
 emitOneRecord: function {
     ast: Ast.view
@@ -31819,40 +32047,16 @@ emitOneRecord: function {
     } else {
         buf.append "typedef struct {\n"
     }
-    fi: u64
-    fn0: fnames.length
-    for fi < fn0 loop {
-        fname: fnames.get i: fi
-        fid: fids.get i: fi
-        fnameId: fidsNm.get i: fi
-        fct: typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: fid.u64) thisTid: ztypes.tid
-        if fct.length == 0 then fct = "int64_t".string
-        # a borrowed field borrows the container: protocol-typed -> fat pointer by
-        # value; class-typed -> a pointer to the container.
-        if (symtab.typing.declIsBorrowedFieldId
-            parentTypeId: tid
-            nameId: (zast.nameid.create from: fnameId.u32.orPanic)
-        ) when (borrowedFieldIsReftypePtr :ast :symtab :ctx fid: (ztypes.tid.create from: fid.u64)
-        ) then {
-            fctP: (storedFieldPtrC
-                :ast
-                :symtab
-                ownerTid: tid
-                fname: fname.stringView
-                fct: fct.stringView
-            )
-            fct = fctP
-        }
-        if (isHeapPtrCollection
-            :symtab
-            :ctx
-            tid: (ztypes.tid.create from: fid.u64)
-        ) then fct = "\{fct}*"
-        fnameP: memberCPrefix name: fname.stringView
-        l1: "    \{fct} \{fnameP}\{fname};\n"
-        buf.append l1
-        fi = fi + 1
-    }
+    (emitRecordStructBody
+        :ast
+        :symtab
+        :ctx
+        :tid
+        names: fnames
+        ids: fids
+        nameIds: fidsNm
+        :buf
+    )
     if (isFwdDeclared :ctx :tid) then {
         buf.append "};\n"
     } else {
@@ -31861,46 +32065,17 @@ emitOneRecord: function {
     }
     params: String
     inits: String
-    fj: u64
-    for fj < fn0 loop {
-        fname2: fnames.get i: fj
-        fid2: fids.get i: fj
-        fname2Id: fidsNm.get i: fj
-        fct2: typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: fid2.u64) thisTid: ztypes.tid
-        if fct2.length == 0 then fct2 = "int64_t".string
-        # a borrowed field's meta_create param matches the field (protocol by value).
-        if (symtab.typing.declIsBorrowedFieldId
-            parentTypeId: tid
-            nameId: (zast.nameid.create from: fname2Id.u32.orPanic)
-        ) when (borrowedFieldIsReftypePtr :ast :symtab :ctx fid: (ztypes.tid.create from: fid2.u64)
-        ) then {
-            fct2P: (storedFieldPtrC
-                :ast
-                :symtab
-                ownerTid: tid
-                fname: fname2.stringView
-                fct: fct2.stringView
-            )
-            fct2 = fct2P
-        }
-        if (isHeapPtrCollection
-            :symtab
-            :ctx
-            tid: (ztypes.tid.create from: fid2.u64)
-        ) then fct2 = "\{fct2}*"
-        if fj > 0 then {
-            params.append ", "
-            inits.append ", "
-        }
-        fname2P: memberCPrefix name: fname2.stringView
-        params.append fct2
-        params.append " "
-        params.append fname2P
-        params.append fname2
-        inits.append fname2P
-        inits.append fname2
-        fj = fj + 1
-    }
+    (recordCreateArgs
+        :ast
+        :symtab
+        :ctx
+        :tid
+        names: fnames
+        ids: fids
+        nameIds: fidsNm
+        :params
+        :inits
+    )
     l3: "static \{rc}_t \{rc}_meta_create(\{params}) {\n"
     buf.append l3
     l4: "    \{rc}_t _this = { \{inits} };\n"
@@ -31912,54 +32087,16 @@ emitOneRecord: function {
         l5: "#define \{rc}_create \{rc}_meta_create\n"
         buf.append l5
     }
-    skipEqR: false
-    if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.classType then skipEqR = true
-    if skipEqR.not then {
-        lq: "static bool \{rc}_eq(\{rc}_t a, \{rc}_t b) {\n"
-        buf.append lq
-        if fn0 == 0 then {
-            buf.append "    (void)a; (void)b;\n"
-            buf.append "    return true;\n"
-        } else {
-            eqx: String
-            fk: u64
-            for fk < fn0 loop {
-                fkn: fnames.get i: fk
-                fki: fids.get i: fk
-                if fk > 0 then eqx.append " && "
-                fkiC: typedefChaseTid :symtab tid: (ztypes.tid.create from: fki.u64)
-                ftn: regNameOf :symtab tid: fkiC
-                fscalar: scalarCTypeFor :symtab name: ftn.stringView tid: fkiC
-                fdone: false
-                if fscalar.length == 0 then {
-                    frid: canonTypeId :ast :symtab :ctx tid: fkiC name: ftn.stringView
-                    if frid > 0 then {
-                        ftt: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: frid.u64)
-                        isAggF: (
-                            (ftt == ztypes.ztypetype.recordType) or
-                            (ftt == ztypes.ztypetype.variantType)
-                        )
-                        if isAggF then {
-                            frc: ctxCname :ctx tid: (ztypes.tid.create from: frid.u64)
-                            fknP: memberCPrefix name: fkn.stringView
-                            fe: "\{frc}_eq(a.\{fknP}\{fkn}, b.\{fknP}\{fkn})"
-                            eqx.append fe
-                            fdone = true
-                        }
-                    }
-                }
-                if fdone.not then {
-                    fkn2P: memberCPrefix name: fkn.stringView
-                    fe2: "a.\{fkn2P}\{fkn} == b.\{fkn2P}\{fkn}"
-                    eqx.append fe2
-                }
-                fk = fk + 1
-            }
-            lr: "    return \{eqx};\n"
-            buf.append lr
-        }
-        buf.append "}\n\n"
-    }
+    (emitRecordEq
+        :ast
+        :symtab
+        :ctx
+        :tid
+        :rc
+        names: fnames
+        ids: fids
+        :buf
+    )
     # `needsDestructor` is a flag STAMPED at check time; for a generator's synth
     # iterator class it is computed from the parameters alone, so a class whose
     # only owned field is a promoted LOCAL carries false and its local was never
@@ -31972,7 +32109,6 @@ emitOneRecord: function {
         emitStructDestructor :ast :symtab :ctx :tid :fnames :fids :buf
     }
 }
-
 
 # emitAsConsts -- a record/class `as`-block plain constant (`as { version: 1 }`)
 # becomes a `static const` read as `Type.label` (see the Type.constlabel leg in
