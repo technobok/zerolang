@@ -11237,6 +11237,119 @@ emitDataMember: function {
     return "".string
 }
 
+# fnRefOrCallC -- the C text for a resolved function a bare atom or a dotted
+# path names: a node still stamped FUNCTION is a REFERENCE (a `.take` peel
+# delegates here) and keeps the bare cname; anything else is the zero-argument
+# CALL typecheck coerced, which fills an all-defaulted signature or spells
+# `name()`. `requireNoParams` is the atom leg's extra condition -- a function
+# with required parameters reaching it means a local binding shadows the name,
+# and the empty answer is what sends the caller to emit that local instead.
+fnRefOrCallC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    nid: zast.nodeid
+    fnTid: ztypes.tid
+    cname: StringView
+    requireNoParams: bool
+} out String is {
+    fst: stampIdOf :symtab nid: nid.u64
+    if fst > 0 when (
+        (symtab.reg.typetypeOf typeId: fst) == ztypes.ztypetype.functionType
+    ) then return cname.string
+    fad: emitAllDefaultedCall :ast :symtab :ctx :fnTid fcn: cname
+    if fad.length > 0 then return fad
+    if requireNoParams then {
+        fpi: ListVal u64
+        fpiNm: ListVal u64
+        (recFieldIds :symtab tid: fnTid ids: fpi nameIds: fpiNm)
+        if fpi.length > 0 then return "".string
+    }
+    return "\{cname}()"
+}
+
+# tagAliasArmC -- the C text for a VALUE alias naming one arm of a tagged type
+# (`NO: bool.false`). Its Decl carries the ROOT's tid, so without this the atom
+# falls through to the raw-name fallback and the C references the alias name.
+# Empty when the atom is not one, which is every other bare definition.
+tagAliasArmC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    brid: ztypes.tid
+    bdec: ztypes.declid
+} out String is {
+    if brid.isZero then return "".string
+    if bdec.isZero then return "".string
+    btt: symtab.reg.typetypeOf typeId: brid
+    isTag: (btt == ztypes.ztypetype.variantType) or (btt == ztypes.ztypetype.unionType)
+    if isTag.not then return "".string
+    atk: (ztypecheck.reexportTargetIdsOf
+        st: symtab
+        :ast
+        declId: bdec
+    )
+    if atk.unitName.u32 == 0 then return "".string
+    ctorArmName: zast.poolTextAt pool: ast.names ref: atk.defName
+    if ctorArmName.length == 0 then return "".string
+    ava: armValueC :symtab tid: brid arm: ctorArmName.stringView
+    if ava.length > 0 then return ava
+    atg: variantTag :symtab tid: brid arm: ctorArmName.stringView
+    if atg.length == 0 then return "".string
+    avc: ctxCname :ctx tid: brid
+    return "((\{avc}_t){ .tag = \{atg} })"
+}
+
+# implicitZeroValue -- the C text a stamped implicit zero-create builds for the
+# stamped type: a scalar's zero, String's empty value, a String-typedef class's
+# zero struct, a typedef's chased scalar zero, a collection instantiation's
+# empty create, and otherwise the type's own create with its field defaults
+# filled. The tid is the STAMP's value, which is what the checker decided to
+# construct; `name` is the name written at the site, and only the scalar leg
+# consults it -- a site with no name in hand passes "" and reaches the same
+# answer through the typedef chase.
+implicitZeroValue: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    name: StringView
+    tid: ztypes.tid
+} out String is {
+    zc: scalarCTypeFor :symtab :name :tid
+    if zc.length > 0 then return "((\{zc})0)"
+    if tid == ctx.strTid then return (emitExprStrZero :ctx)
+    # a String-typedef class (Path) shares the String struct: the empty value
+    # is the zero struct
+    ztb: symtab.typing.typedefBaseName.get key: tid
+    match (
+        ztb
+    ) case some then {
+        ztbId: zast.nameid
+        ztbId = ztb
+        ztbT: zast.poolTextAt pool: ast.names ref: ztbId
+        if ztbT.stringView == "String" then return (emitExprStrZero :ctx)
+    } case none then null
+    # The collection is asked BEFORE the scalar chase, and the order is not a
+    # preference: a typedef over a collection names its base `ListVal`, which
+    # is a template rather than a C scalar or a user function, and the chase
+    # panics on it. Asked in this order the chase never sees one.
+    zm: chaseColMono :symtab :ctx :tid
+    if (isCollectionOriginTid
+        :ctx
+        originTid: (originTidOf :symtab tid: (ztypes.tid.create from: zm.u64))
+    ) then {
+        zmc: ctxCname :ctx tid: (ztypes.tid.create from: zm.u64)
+        if (isListOriginOf :symtab :ctx tid: (ztypes.tid.create from: zm.u64)) then {
+            return "\{zmc}_create((uint64_t)0)"
+        }
+        return "\{zmc}_create()"
+    }
+    # a typedef over a scalar (meters -> i64) is the chased scalar's zero
+    zt: typedefChaseC :ast :symtab :ctx :tid
+    if zt.length > 0 then return "((\{zt})0)"
+    return (emitCtorDefaultsFill :ast :symtab :ctx :tid)
+}
+
 # emitDefRefAtom -- a bare atom that names a DEFINITION rather than a local: a
 # value alias for one arm of a tagged type (`NO: bool.false`), or a bare record /
 # class construction, or a function reference. Empty when the atom names none of
@@ -11249,144 +11362,65 @@ emitDefRefAtom: function {
     brid: ztypes.tid
     bdec: ztypes.declid
 } out String is {
-    # a VALUE alias (`NO: bool.false`) names one arm of a tagged type: its
-    # Decl carries the ROOT's tid, so without this the atom fell through to
-    # the raw-name fallback and the C referenced the alias name. Emit what
-    # the dotted read emits.
-    if brid > 0 when bdec.isZero.not then {
-        btt: symtab.reg.typetypeOf typeId: brid
-        isTag: (btt == ztypes.ztypetype.variantType) or (btt == ztypes.ztypetype.unionType)
-        if isTag then {
-            atk: (ztypecheck.reexportTargetIdsOf
-                st: symtab
-                :ast
-                declId: bdec
-            )
-            if atk.unitName.u32 > 0 then {
-                ctorArmName: (zast.poolTextAt pool: ast.names ref: atk.defName)
-                if ctorArmName.length > 0 then {
-                    ava: armValueC :symtab tid: brid arm: ctorArmName.stringView
-                    if ava.length > 0 then return ava
-                    atg: variantTag :symtab tid: brid arm: ctorArmName.stringView
-                    if atg.length > 0 then {
-                        avc: ctxCname :ctx tid: brid
-                        ave: "((\{avc}_t){ .tag = \{atg} })"
-                        return ave
-                    }
-                }
-            }
-        }
-    }
+    taa: tagAliasArmC :ast :symtab :ctx :brid :bdec
+    if taa.length > 0 then return taa
     if brid > 0 when (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.recordType then {
         btn: regNameOf :symtab tid: (ztypes.tid.create from: brid.u64)
+        izr: symtab.typing.implicitCreate.get key: n.nodeid.u64
+        match (
+            izr
+        ) case some then {
+            return (implicitZeroValue
+                :ast
+                :symtab
+                :ctx
+                name: btn.stringView
+                tid: (ztypes.tid.create from: izr.u64)
+            )
+        } case none then null
+        # unstamped: a scalar-name atom keeps the raw name text, any other
+        # record is its zero struct
         boundCType: (scalarCTypeFor
             :symtab
             name: btn.stringView
             tid: (ztypes.tid.create from: brid.u64)
         )
         if boundCType.length > 0 then {
-            # a stamped implicit zero-create is the scalar's zero value;
-            # an unstamped scalar-name atom keeps the raw name text
-            izo: symtab.typing.implicitCreate.get key: n.nodeid.u64
-            match (
-                izo
-            ) case some then {
-                ize: "((\{boundCType})0)"
-                return ize
-            } case none then null
             bsv: btn.stringView
             bsc: bsv.string
             return bsc
         }
-        izr: symtab.typing.implicitCreate.get key: n.nodeid.u64
-        match (
-            izr
-        ) case some then {
-            # a typedef record (meters -> i64) is the chased scalar's zero
-            ztd: typedefChaseC :ast :symtab :ctx tid: (ztypes.tid.create from: brid.u64)
-            if ztd.length > 0 then return "((\{ztd})0)"
-            return (emitCtorDefaultsFill
-                :ast
-                :symtab
-                :ctx
-                tid: (ztypes.tid.create from: brid.u64)
-            )
-        } case none then null
         brc: ctxCname :ctx tid: (ztypes.tid.create from: brid.u64)
         be0: "((\{brc}_t){0})"
         return be0
     }
     if brid > 0 when (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.classType then {
+        # no name is written for a class atom that the scalar leg could use:
+        # a class typedef over a scalar reaches its zero through the chase
         izc: symtab.typing.implicitCreate.get key: n.nodeid.u64
         match (
             izc
         ) case some then {
-            # a collection-typedef class (Bytes) constructs through its
-            # mono's create; a user class through its defaults fill;
-            # String falls through to its own empty-value leg below
-            if izc == ctx.strTid then return (emitExprStrZero :ctx)
-            ztb: symtab.typing.typedefBaseName.get key: brid
-            match (
-                ztb
-            ) case some then {
-                # a String-typedef class (Path) shares the String
-                # struct: the empty value is the zero struct
-                ztbId: zast.nameid
-                ztbId = ztb
-                ztbT: zast.poolTextAt pool: ast.names ref: ztbId
-                if ztbT.stringView == "String" then return (emitExprStrZero :ctx)
-            } case none then null
-            zmono: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: brid.u64)
-            if (isCollectionOriginTid
-                :ctx
-                originTid: (originTidOf :symtab tid: (ztypes.tid.create from: zmono.u64))
-            ) then {
-                zmc: ctxCname :ctx tid: (ztypes.tid.create from: zmono.u64)
-                ilo: (isListOriginOf
-                    :symtab
-                    :ctx
-                    tid: (ztypes.tid.create from: zmono.u64)
-                )
-                if ilo then return "\{zmc}_create((uint64_t)0)"
-                return "\{zmc}_create()"
-            }
-            return (emitCtorDefaultsFill
+            return (implicitZeroValue
                 :ast
                 :symtab
                 :ctx
-                tid: (ztypes.tid.create from: brid.u64)
+                name: ""
+                tid: (ztypes.tid.create from: izc.u64)
             )
         } case none then null
     }
     if brid > 0 when (symtab.reg.typetypeOf typeId: brid) == ztypes.ztypetype.functionType then {
-        # a bare no-arg unit fn that typecheck coerced to a CALL (its atom
-        # stamp is the RETURN type, not FUNCTION) is invoked here; a genuine
-        # fn reference (stamped FUNCTION) keeps the bare cname.
         fbcn: ctxCname :ctx tid: (ztypes.tid.create from: brid.u64)
-        fastid: stampIdOf :symtab nid: n.nodeid.u64
-        if fastid > 0 when (
-            (symtab.reg.typetypeOf typeId: fastid) == ztypes.ztypetype.functionType
-        ) then {
-            # a node still stamped FUNCTION is a genuine reference (a
-            # .take peel): the bare cname. Coerced calls carry the
-            # return-type stamp and fill below.
-            return fbcn
-        }
-        # a return-type-stamped atom is a coerced CALL: an all-defaulted
-        # fn fills its defaults; a NO-PARAM fn coerces to `name()`; a fn
-        # with required params reached here means a local binding shadows
-        # the fn name -> emit the local instead.
-        adCo: emitAllDefaultedCall :ast :symtab :ctx fnTid: brid fcn: fbcn.stringView
-        if adCo.length > 0 then return adCo
-        fpi: ListVal u64
-        fpi9Nm: ListVal u64
-        (recFieldIds
+        return (fnRefOrCallC
+            :ast
             :symtab
-            tid: (ztypes.tid.create from: brid.u64)
-            ids: fpi
-            nameIds: fpi9Nm
+            :ctx
+            nid: n.nodeid
+            fnTid: brid
+            cname: fbcn.stringView
+            requireNoParams: true
         )
-        if fpi.length == 0 then return "\{fbcn}()"
     }
     return "".string
 }
@@ -12625,6 +12659,106 @@ emitDottedAtomBase: function {
     return "".string
 }
 
+# unitFnMemberC -- `unit.fn` where the base names a FILE unit: the C text for a
+# zero-argument function member of it, which reads as a dotted path rather than
+# a call. Empty when the name is no emittable function of that unit.
+unitFnMemberC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.dottedpathrow.view
+    baseNameId: zast.nameid
+    baseName: StringView
+} out String is {
+    ud6x: ztypecheck.unitDeclOfName st: symtab nameId: baseNameId
+    dpUfo: (ztypecheck.resolvedByIdsRo
+        :ast
+        st: symtab
+        unitDecl: ud6x
+        name: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
+    )
+    fid: ztypes.tid
+    match (
+        dpUfo
+    ) case some then {
+        fid = ztypes.tid.create from: dpUfo
+    } case none then null
+    if fid.isZero then return "".string
+    # a `fold` native has no implementation to call: the compiler was to have
+    # answered it while type checking. Reaching here means the read sat where
+    # the constant evaluator never visited, and the leg below would emit the
+    # plain cname with parens -- which is how this failed before it was
+    # checked: `implicit declaration of function 'z_t12'`, a mangled name that
+    # never mentions the declaration. The path is built inside a block: the
+    # child's name is read through a view of ast.
+    {
+        dpCn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
+        dpFp: baseName.string
+        dpFp.append "."
+        dpFp.append dpCn
+        if (nativeIsFoldRow :ctx path: dpFp.stringView) then {
+            (emitFail
+                :ctx
+                what: "'\{dpFp}' is a fold native: nothing folded it, and there is no implementation to call"
+                line: n.lineno
+            )
+            return "".string
+        }
+    }
+    # only a bodied + demanded non-native fn earns the id-cname reference /
+    # auto-call route here, whichever unit declares it
+    if (stdFnRefEmittable :ast :symtab :fid).not then return "".string
+    if ((symtab.reg.typetypeOf typeId: fid) == ztypes.ztypetype.functionType).not then {
+        return "".string
+    }
+    dpUfc: ctxCname :ctx tid: fid
+    return (fnRefOrCallC
+        :ast
+        :symtab
+        :ctx
+        nid: n.nodeid
+        fnTid: fid
+        cname: dpUfc.stringView
+        requireNoParams: false
+    )
+}
+
+# nsFnMemberC -- the same read where the base names a NAMESPACE rather than a
+# file unit: its own zero-argument function member, reached by id. Empty when
+# the name is no function of that namespace.
+nsFnMemberC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.dottedpathrow.view
+    nsTid: ztypes.tid
+} out String is {
+    nfo: (symtab.typing.declChildOfId
+        parentTypeId: nsTid
+        nameId: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
+    )
+    nftid: ztypes.tid
+    match (
+        nfo
+    ) case some then {
+        nftid = ztypes.tid.create from: nfo
+    } case none then null
+    if nftid.isZero then return "".string
+    if ((symtab.reg.typetypeOf typeId: nftid) == ztypes.ztypetype.functionType).not then {
+        return "".string
+    }
+    nfcn: ctxCname :ctx tid: nftid
+    return (fnRefOrCallC
+        :ast
+        :symtab
+        :ctx
+        nid: n.nodeid
+        fnTid: nftid
+        cname: nfcn.stringView
+        requireNoParams: false
+    )
+}
+
 # emitDottedUnitRead -- a read whose BASE names a unit: another unit's constant
 # inlines its rendered C text, a unit-qualified type path constructs, and a
 # zero-argument function member of a unit or namespace auto-calls. A base naming a
@@ -12649,36 +12783,13 @@ emitDottedUnitRead: function {
         izd
     ) case some then {
         dzn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-        dzc: (scalarCTypeFor
+        return (implicitZeroValue
+            :ast
             :symtab
+            :ctx
             name: dzn.stringView
             tid: (ztypes.tid.create from: izd.u64)
         )
-        if dzc.length > 0 then return "((\{dzc})0)"
-        if izd == ctx.strTid then return (emitExprStrZero :ctx)
-        dzb: symtab.typing.typedefBaseName.get key: izd
-        match (
-            dzb
-        ) case some then {
-            dzbId: zast.nameid
-            dzbId = dzb
-            dzbT: zast.poolTextAt pool: ast.names ref: dzbId
-            if dzbT.stringView == "String" then return (emitExprStrZero :ctx)
-        } case none then null
-        dzt: typedefChaseC :ast :symtab :ctx tid: (ztypes.tid.create from: izd.u64)
-        if dzt.length > 0 then return "((\{dzt})0)"
-        dzm: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: izd.u64)
-        if (isCollectionOriginTid
-            :ctx
-            originTid: (originTidOf :symtab tid: (ztypes.tid.create from: dzm.u64))
-        ) then {
-            dzmc: ctxCname :ctx tid: (ztypes.tid.create from: dzm.u64)
-            if (isListOriginOf :symtab :ctx tid: (ztypes.tid.create from: dzm.u64)) then {
-                return "\{dzmc}_create((uint64_t)0)"
-            }
-            return "\{dzmc}_create()"
-        }
-        return (emitCtorDefaultsFill :ast :symtab :ctx tid: (ztypes.tid.create from: izd.u64))
     } case none then null
     dpUb: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
     dpUbId: atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64)
@@ -12706,97 +12817,18 @@ emitDottedUnitRead: function {
     dpNsTid: ztypes.tid
     if dpIsFile.not then dpNsTid = pathUnitTidOf :ast :symtab :ctx baseId: n.parent
     if dpIsFile when dpNsTid.isZero then {
-        ud6x: ztypecheck.unitDeclOfName st: symtab nameId: dpUbId
-        dpUfo: (ztypecheck.resolvedByIdsRo
+        ufm: (unitFnMemberC
             :ast
-            st: symtab
-            unitDecl: ud6x
-            name: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
+            :symtab
+            :ctx
+            :n
+            baseNameId: dpUbId
+            baseName: dpUb.stringView
         )
-        match (
-            dpUfo
-        ) case some then {
-            # a `fold` native has no implementation to call: the compiler was to
-            # have answered it while type checking. Reaching here means the read
-            # sat where the constant evaluator never visited, and the leg below
-            # would emit the plain cname with parens -- which is how this failed
-            # before it was checked: `implicit declaration of function 'z_t12'`,
-            # a mangled name that never mentions the declaration.
-            {
-                dpCn: (zast.nameTextAt
-                    :ast
-                    ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-                )
-                dpFp: dpUb.copy
-                dpFp.append "."
-                dpFp.append dpCn
-                if (nativeIsFoldRow :ctx path: dpFp.stringView) then {
-                    (emitFail
-                        :ctx
-                        what: "'\{dpFp}' is a fold native: nothing folded it, and there is no implementation to call"
-                        line: n.lineno
-                    )
-                    return "".string
-                }
-            }
-            # only a bodied + demanded non-native fn earns the id-cname
-            # reference / auto-call route here, whichever unit declares it
-            dpOk: (stdFnRefEmittable
-                :ast
-                :symtab
-                fid: (ztypes.tid.create from: dpUfo.u64)
-            )
-            if dpOk when (
-                (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: dpUfo.u64)) ==
-                ztypes.ztypetype.functionType
-            ) then {
-                dpUfc: ctxCname :ctx tid: (ztypes.tid.create from: dpUfo.u64)
-                # a node stamped FUNCTION is a fn REFERENCE (a .take peel
-                # delegates here): the bare cname, like the atom leg
-                dpStamp: stampIdOf :symtab nid: n.nodeid.u64
-                if dpStamp > 0 when (
-                    (symtab.reg.typetypeOf typeId: dpStamp) == ztypes.ztypetype.functionType
-                ) then {
-                    return dpUfc
-                }
-                dpAd: (emitAllDefaultedCall
-                    :ast
-                    :symtab
-                    :ctx
-                    fnTid: (ztypes.tid.create from: dpUfo.u64)
-                    fcn: dpUfc.stringView
-                )
-                if dpAd.length > 0 then return dpAd
-                return "\{dpUfc}()"
-            }
-        } case none then null
+        if ufm.length > 0 then return ufm
     }
     if dpNsTid.isZero.not then {
-        nfo: (symtab.typing.declChildOfId
-            parentTypeId: dpNsTid
-            nameId: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-        )
-        match (
-            nfo
-        ) case some then {
-            nftid: ztypes.tid.create from: nfo
-            if (symtab.reg.typetypeOf typeId: nftid) == ztypes.ztypetype.functionType then {
-                nfcn: ctxCname :ctx tid: nftid
-                nfs: stampIdOf :symtab nid: n.nodeid.u64
-                if nfs > 0 when (
-                    (symtab.reg.typetypeOf typeId: nfs) == ztypes.ztypetype.functionType
-                ) then return nfcn
-                nfad: (emitAllDefaultedCall
-                    :ast
-                    :symtab
-                    :ctx
-                    fnTid: nftid
-                    fcn: nfcn.stringView
-                )
-                if nfad.length > 0 then return nfad
-                return "\{nfcn}()"
-            }
-        } case none then null
+        return (nsFnMemberC :ast :symtab :ctx :n nsTid: dpNsTid)
     }
     return "".string
 }
