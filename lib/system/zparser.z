@@ -1377,50 +1377,49 @@ Parser: class {
         openOpt: lex.accept tt: zlexer.toktype.braceOpenTok pool: this.ast.names
         match (
             openOpt
-        ) case some then {
-            prevFilter: lex.filterEolState
-            lex.setFilterEol enabled: false pool: this.ast.names
-            statements: ListVal u32
-            for true loop {
-                for (this.atSeparator :lex) loop lex.advance pool: this.ast.names
-                la: this.blocklineLookahead :lex
-                if la then {
-                    sl: this.parseBlockline :lex
-                    slErr: this.isError node: sl
-                    if slErr then {
-                        lex.setFilterEol enabled: prevFilter pool: this.ast.names
-                        return sl
-                    }
-                    statements.append (this.intern n: sl)
-                } else {
-                    break
-                }
-            }
-            lex.setFilterEol enabled: prevFilter pool: this.ast.names
-            closeOpt: lex.accept tt: zlexer.toktype.braceCloseTok pool: this.ast.names
-            match (
-                closeOpt
-            ) case some then {
-                return (astnode.statement (zast.statementrow
-                    nodeid: this.nextId
-                    lineno: sLine
-                    colno: sCol
-                    statements: (zast.kidsAdd kids: this.ast.kids xs: statements)
-                )
-                )
-            } case none then {
-                bad: lex.acceptAny pool: this.ast.names
-                return (this.mkError
-                    tok: bad
-                    code: zast.err.badStatement
-                    msg: "Expected closing brace for statement body".string
-                )
-            }
-        } case none then {
+        ) case none then {
             return (this.mkErrorAt
                 pos: startPos
                 code: zast.err.badStatement
                 msg: "Expected opening brace for block".string
+            )
+        } case some then null
+        prevFilter: lex.filterEolState
+        lex.setFilterEol enabled: false pool: this.ast.names
+        statements: ListVal u32
+        for true loop {
+            for (this.atSeparator :lex) loop lex.advance pool: this.ast.names
+            la: this.blocklineLookahead :lex
+            if la then {
+                sl: this.parseBlockline :lex
+                slErr: this.isError node: sl
+                if slErr then {
+                    lex.setFilterEol enabled: prevFilter pool: this.ast.names
+                    return sl
+                }
+                statements.append (this.intern n: sl)
+            } else {
+                break
+            }
+        }
+        lex.setFilterEol enabled: prevFilter pool: this.ast.names
+        closeOpt: lex.accept tt: zlexer.toktype.braceCloseTok pool: this.ast.names
+        match (
+            closeOpt
+        ) case some then {
+            return (astnode.statement (zast.statementrow
+                nodeid: this.nextId
+                lineno: sLine
+                colno: sCol
+                statements: (zast.kidsAdd kids: this.ast.kids xs: statements)
+            )
+            )
+        } case none then {
+            bad: lex.acceptAny pool: this.ast.names
+            return (this.mkError
+                tok: bad
+                code: zast.err.badStatement
+                msg: "Expected closing brace for statement body".string
             )
         }
     }
@@ -2071,57 +2070,56 @@ Parser: class {
                 code: zast.err.badExpression
                 msg: "Expected with".string
             )
-        } case some then {
-            isLabel: lex.peekType == zlexer.toktype.labelTok
-            if isLabel then {
-                lblTok: lex.acceptAny pool: this.ast.names
-                nm: lblTok.text
-                vpaths: this.operationPaths :lex
-                n: vpaths.length
-                if n == 0 then {
-                    badPos: lex.peekPos
-                    return (this.mkErrorAt
-                        pos: badPos
-                        code: zast.err.expectedExp
-                        msg: "Expected operation for with value".string
-                    )
-                }
-                op: this.operationFromPaths paths: vpaths :lex
-                oErr: this.isError node: op
-                if oErr then return op
-                value: this.wrapExpression inner: op
-                doOpt: lex.accept tt: zlexer.toktype.doTok pool: this.ast.names
-                match (
-                    doOpt
-                ) case none then {
-                    badPos: lex.peekPos
-                    return (this.mkErrorAt
-                        pos: badPos
-                        code: zast.err.expectedExp
-                        msg: "Expected do after with definition".string
-                    )
-                } case some then {
-                    body: this.parseExpression :lex
-                    bErr: this.isError node: body
-                    if bErr then return body
-                    return (astnode.withexpr (zast.withrow
-                        nodeid: this.nextId
-                        lineno: wLine
-                        colno: wCol
-                        name: (zast.nameid.create from: nm.u32)
-                        value: (this.intern n: value)
-                        body: (this.intern n: body)
-                    )
-                    )
-                }
+        } case some then null
+        isLabel: lex.peekType == zlexer.toktype.labelTok
+        if isLabel then {
+            lblTok: lex.acceptAny pool: this.ast.names
+            nm: lblTok.text
+            vpaths: this.operationPaths :lex
+            n: vpaths.length
+            if n == 0 then {
+                badPos: lex.peekPos
+                return (this.mkErrorAt
+                    pos: badPos
+                    code: zast.err.expectedExp
+                    msg: "Expected operation for with value".string
+                )
             }
-            bad: lex.acceptAny pool: this.ast.names
-            return (this.mkError
-                tok: bad
-                code: zast.err.expectedDef
-                msg: "Expected label after with".string
-            )
+            op: this.operationFromPaths paths: vpaths :lex
+            oErr: this.isError node: op
+            if oErr then return op
+            value: this.wrapExpression inner: op
+            doOpt: lex.accept tt: zlexer.toktype.doTok pool: this.ast.names
+            match (
+                doOpt
+            ) case none then {
+                badPos: lex.peekPos
+                return (this.mkErrorAt
+                    pos: badPos
+                    code: zast.err.expectedExp
+                    msg: "Expected do after with definition".string
+                )
+            } case some then {
+                body: this.parseExpression :lex
+                bErr: this.isError node: body
+                if bErr then return body
+                return (astnode.withexpr (zast.withrow
+                    nodeid: this.nextId
+                    lineno: wLine
+                    colno: wCol
+                    name: (zast.nameid.create from: nm.u32)
+                    value: (this.intern n: value)
+                    body: (this.intern n: body)
+                )
+                )
+            }
         }
+        bad: lex.acceptAny pool: this.ast.names
+        return (this.mkError
+            tok: bad
+            code: zast.err.expectedDef
+            msg: "Expected label after with".string
+        )
     }
 
     # data-definition -> "data" ["is"] "{" { [label] term | label-value } "}"
