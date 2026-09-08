@@ -3500,6 +3500,28 @@ vtGet: function {xs: (List VidTid).view vid: ztypes.vid} out optionval ztypes.ti
     return (optionval.none ztypes.tid)
 }
 
+# restoreNarrow -- put back the narrowing a scope shadowed: the value and the
+# type the name carried before it, or nothing at all where it carried none. A
+# scope that narrows a name saves this pair on the way in and hands it back on
+# the way out, so no arm's narrowing outlives the arm.
+restoreNarrow: function {
+    ctx: Ctx
+    vid: ztypes.vid
+    prevVal: StringView
+    prevTid: u64
+} is {
+    if prevVal.length > 0 then {
+        vvSet xs: ctx.narrowBox :vid val: prevVal
+    } else {
+        vvRemove xs: ctx.narrowBox :vid
+    }
+    if prevTid > 0 then {
+        vtSet xs: ctx.narrowTid :vid tid: (ztypes.tid.create from: prevTid)
+    } else {
+        vtRemove xs: ctx.narrowTid :vid
+    }
+}
+
 # bind `vid` to type id `tid` in `xs`.
 vtSet: function {xs: List VidTid vid: ztypes.vid tid: ztypes.tid} is {
     if vid.isZero then return
@@ -17339,16 +17361,7 @@ emitMatchStmt: function {
         :buf
     )
     if meSeed then {
-        if mePrevV.length > 0 then {
-            vvSet xs: ctx.narrowBox vid: snameV val: mePrevV.stringView
-        } else {
-            vvRemove xs: ctx.narrowBox vid: snameV
-        }
-        if mePrevT > 0 then {
-            vtSet xs: ctx.narrowTid vid: snameV tid: (ztypes.tid.create from: mePrevT.u64)
-        } else {
-            vtRemove xs: ctx.narrowTid vid: snameV
-        }
+        restoreNarrow :ctx vid: snameV prevVal: mePrevV.stringView prevTid: mePrevT
     }
     l: "\{ind}}\n"
     buf.append l
@@ -20070,17 +20083,8 @@ emitIfClause: function {
         for ri < sN.length loop {
             rnv: sVid.get i: ri
             rv: sPrevV.get i: ri
-            if rv.length > 0 then {
-                vvSet xs: ctx.narrowBox vid: rnv val: rv.stringView
-            } else {
-                vvRemove xs: ctx.narrowBox vid: rnv
-            }
             rt: sPrevT.get i: ri
-            if rt > 0 then {
-                vtSet xs: ctx.narrowTid vid: rnv tid: (ztypes.tid.create from: rt.u64)
-            } else {
-                vtRemove xs: ctx.narrowTid vid: rnv
-            }
+            restoreNarrow :ctx vid: rnv prevVal: rv.stringView prevTid: rt
             ri = ri + 1
         }
         (restoreCondExclusions :ctx mark: xMark)
@@ -20237,17 +20241,8 @@ emitElse: function {
         for ri < sN.length loop {
             rnv: sVid.get i: ri
             rv: sPrevV.get i: ri
-            if rv.length > 0 then {
-                vvSet xs: ctx.narrowBox vid: rnv val: rv.stringView
-            } else {
-                vvRemove xs: ctx.narrowBox vid: rnv
-            }
             rt: sPrevT.get i: ri
-            if rt > 0 then {
-                vtSet xs: ctx.narrowTid vid: rnv tid: (ztypes.tid.create from: rt.u64)
-            } else {
-                vtRemove xs: ctx.narrowTid vid: rnv
-            }
+            restoreNarrow :ctx vid: rnv prevVal: rv.stringView prevTid: rt
             ri = ri + 1
         }
         xi: exN.length
@@ -20627,17 +20622,8 @@ emitBodyNode: function {
                 if (pgDead.has item: rnv0).not when (bodyReassigns :ast n: s name: rn.stringView
                 ) then {
                     rv: pgPrevV.get i: ri
-                    if rv.length > 0 then {
-                        vvSet xs: ctx.narrowBox vid: rnv0 val: rv.stringView
-                    } else {
-                        vvRemove xs: ctx.narrowBox vid: rnv0
-                    }
                     rt: pgPrevT.get i: ri
-                    if rt > 0 then {
-                        vtSet xs: ctx.narrowTid vid: rnv0 tid: (ztypes.tid.create from: rt.u64)
-                    } else {
-                        vtRemove xs: ctx.narrowTid vid: rnv0
-                    }
+                    restoreNarrow :ctx vid: rnv0 prevVal: rv.stringView prevTid: rt
                     pgDead.add item: rnv0
                 }
                 ri = ri + 1
@@ -20739,17 +20725,8 @@ emitBodyNode: function {
             znv: pgVid.get i: zi
             if (pgDead.has item: znv).not then {
                 zv: pgPrevV.get i: zi
-                if zv.length > 0 then {
-                    vvSet xs: ctx.narrowBox vid: znv val: zv.stringView
-                } else {
-                    vvRemove xs: ctx.narrowBox vid: znv
-                }
                 zt: pgPrevT.get i: zi
-                if zt > 0 then {
-                    vtSet xs: ctx.narrowTid vid: znv tid: (ztypes.tid.create from: zt.u64)
-                } else {
-                    vtRemove xs: ctx.narrowTid vid: znv
-                }
+                restoreNarrow :ctx vid: znv prevVal: zv.stringView prevTid: zt
             }
         }
     } else {
