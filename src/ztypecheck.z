@@ -1789,6 +1789,125 @@ resolveNamedType: function {
     return (resolveNamedTypeId :st :frame :ast :unitDecl :nameId :thisName :nid)
 }
 
+# literalNameTypeId -- a name that IS a numeric literal types as the literal's
+# DEFAULT scalar (system i64/f64). It is not a name reference, so a unit-local
+# scalar shadow must not capture it; pre-index (defNodeIndexBuilt false) keeps
+# the named-shell fallback. 0 when the name is no literal.
+literalNameTypeId: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    frame: ztypes.declid
+    nameId: zast.nameid
+} out u64 is {
+    # the spelling is read through a block-scoped borrow: the mint below lends
+    # the pool
+    isnum: false
+    hasDot: false
+    {
+        nT: zast.nameTextAt :ast ref: nameId
+        b0: nT.stringView.byteAt 0.u64
+        match (
+            b0
+        ) case some then {
+            if b0 >= 48 when b0 <= 57 then isnum = true
+        } case none then null
+        if nT.stringView.contains "." then hasDot = true
+    }
+    if isnum.not then return 0
+    dn7: "i64"
+    if hasDot then dn7 = "f64"
+    sid7: (descendNamed
+        :st
+        :frame
+        :ast
+        unitDecl: st.typing.systemUnitRoot
+        name: dn7
+    )
+    if sid7 > 0 then return sid7
+    return (st.reg.newType name: dn7 typetype: ztypes.ztypetype.recordType)
+}
+
+# genericParamTypeId -- the name is a generic PARAMETER of the enclosing type:
+# its canonical GENERIC_PARAM id, minted on first reference and recorded
+# against the referencing node. 0 when there is no enclosing type, or the name
+# is not one of its parameters.
+genericParamTypeId: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    nameId: zast.nameid
+    thisName: StringView
+    nid: u64
+} out u64 is {
+    if thisName.length == 0 then return 0
+    etk7: declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: thisName)
+    if (st.reg.isGenericParamOf tdecl: etk7 name: nameId).not then return 0
+    recordGenericParamRef :st :nid frame: etk7 name: nameId
+    pgo7: st.reg.genericParamTidOf tdecl: etk7 paramName: nameId
+    match (
+        pgo7
+    ) case some then {
+        return pgo7
+    } case none then null
+    ptid7: ztypes.tid
+    {
+        nT7: zast.nameTextAt :ast ref: nameId
+        ptid7 = st.reg.newType name: nT7.stringView typetype: ztypes.ztypetype.genericParam
+    }
+    st.reg.setGenericParamTid tdecl: etk7 paramName: nameId tid: ptid7
+    return ptid7
+}
+
+# aliasOrShellTypeId -- the defining unit knows the name but its definition
+# carries no typetype: an existing registration answers first, then the alias
+# followed to its target, then a definition whose value INSTANTIATES a generic
+# and so declares itself when read; failing all of them, a forward shell of
+# that name.
+aliasOrShellTypeId: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    defUnit: ztypes.declid
+    defDecl: ztypes.declid
+    aliasDecl: ztypes.declid
+    nameId: zast.nameid
+} out u64 is {
+    ex7: (resolvedByIds
+        :st
+        :ast
+        unitDecl: defUnit
+        name: nameId
+    )
+    match (
+        ex7
+    ) case some then {
+        return ex7
+    } case none then null
+    al7: resolveAliasKey :st :ast declId: defDecl
+    if al7 > 0 then return al7
+    # `Strs: (List String)` names a TYPE through a call-shaped value. It
+    # declares itself when READ, the same door a constant takes in
+    # descendNamed -- a signature mentioning it may be resolved before the pass
+    # that walks its definition.
+    if defDecl.isZero.not when (instantiatedAliasFold
+        :ast
+        :st
+        declId: defDecl
+    ) then {
+        it7: declTypeIdOf :st declId: defDecl
+        if it7.isZero.not then return it7.u64
+    }
+    # the alias RENAMES its target, so its own name is no member of the
+    # target's unit and defDecl found nothing there. The Decl the environment
+    # walk hit IS the binding; following it is what resolveAliasKey is for.
+    if aliasDecl.isZero.not when defDecl.isZero then {
+        al8: resolveAliasKey :st :ast declId: aliasDecl
+        if al8 > 0 then return al8
+    }
+    nT9: zast.nameTextAt :ast ref: nameId
+    return (st.reg.newType name: nT9.stringView typetype: ztypes.ztypetype.recordType)
+}
+
 # resolveNamedTypeId -- resolveNamedType by the name's id. The spelling is read
 # through a block-scoped borrow where a literal is classified, and copied only
 # where a type is minted or declared under it.
@@ -1830,113 +1949,21 @@ resolveNamedTypeId: function {
             typetype: ztypes.ztypetype.neverType
         )
     }
-    isnum: false
-    hasDot: false
-    {
-        nT: zast.nameTextAt :ast ref: nameId
-        b0: nT.stringView.byteAt 0.u64
-        match (
-            b0
-        ) case some then {
-            if b0 >= 48 when b0 <= 57 then isnum = true
-        } case none then null
-        if nT.stringView.contains "." then hasDot = true
-    }
-    if isnum then {
-        # A numeric-literal name types as the literal's DEFAULT scalar (system
-        # i64/f64) -- it is not a name reference, so a unit-local scalar shadow
-        # must not capture it. Pre-index (defNodeIndexBuilt false) keeps the
-        # named-shell fallback.
-        dn7: "i64"
-        if hasDot then dn7 = "f64"
-        sid7: (descendNamed
-            :st
-            :frame
-            :ast
-            unitDecl: st.typing.systemUnitRoot
-            name: dn7
-        )
-        if sid7 > 0 then return sid7
-        return (st.reg.newType name: dn7 typetype: ztypes.ztypetype.recordType)
-    }
-    if thisName.length > 0 then {
-        etk7: declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: thisName)
-        gpn7: nameId
-        if (st.reg.isGenericParamOf tdecl: etk7 name: gpn7) then {
-            recordGenericParamRef :st :nid frame: etk7 name: gpn7
-            pgo7: st.reg.genericParamTidOf tdecl: etk7 paramName: gpn7
-            match (
-                pgo7
-            ) case some then {
-                return pgo7
-            } case none then null
-            ptid7: ztypes.tid
-            {
-                nT7: zast.nameTextAt :ast ref: nameId
-                ptid7 = st.reg.newType name: nT7.stringView typetype: ztypes.ztypetype.genericParam
-            }
-            st.reg.setGenericParamTid tdecl: etk7 paramName: gpn7 tid: ptid7
-            return ptid7
-        }
-    }
+    lit7: literalNameTypeId :st :ast :frame :nameId
+    if lit7 > 0 then return lit7
+    gp7: (genericParamTypeId
+        :st
+        :ast
+        :unitDecl
+        :frame
+        :nameId
+        :thisName
+        :nid
+    )
+    if gp7 > 0 then return gp7
     site7: definingSiteForId :st :frame :ast :unitDecl :nameId
     duo7: site7.defUnit
-    if duo7.isZero.not then {
-        tto7: optionval.none ztypes.ztypetype
-        dd7: declOfUnitDef :st :frame unitDecl: duo7 :nameId
-        if dd7 > 0 then tto7 = declDefTypetype :st :ast declId: dd7
-        match (
-            tto7
-        ) case some then {
-            did7: descendNamedId :st :frame :ast unitDecl: duo7 :nameId
-            if did7 > 0 then return did7
-            return (declareCanonicalTypeId
-                :st
-                :frame
-                :ast
-                unitDecl: duo7
-                ownerNameId: zast.nameid
-                :nameId
-                typetype: tto7
-            )
-        } case none then {
-            ex7: (resolvedByIds
-                :st
-                :ast
-                unitDecl: duo7
-                name: nameId
-            )
-            match (
-                ex7
-            ) case some then {
-                return ex7
-            } case none then null
-            al7: resolveAliasKey :st :ast declId: dd7
-            if al7 > 0 then return al7
-            # `Strs: (List String)` names a TYPE through a call-shaped value.
-            # It declares itself when READ, the same door a constant takes in
-            # descendNamed -- a signature mentioning it may be resolved before
-            # the pass that walks its definition.
-            if dd7.isZero.not when (instantiatedAliasFold
-                :ast
-                :st
-                declId: dd7
-            ) then {
-                it7: declTypeIdOf :st declId: dd7
-                if it7.isZero.not then return it7.u64
-            }
-            # the alias RENAMES its target, so its own name is no member of the
-            # target's unit and dd7 found nothing there. The Decl the
-            # environment walk hit IS the binding; following it is what
-            # resolveAliasKey is for.
-            if site7.aliasDecl.isZero.not when dd7.isZero then {
-                al8: resolveAliasKey :st :ast declId: site7.aliasDecl
-                if al8 > 0 then return al8
-            }
-            nT9: zast.nameTextAt :ast ref: nameId
-            return (st.reg.newType name: nT9.stringView typetype: ztypes.ztypetype.recordType)
-        }
-    } else {
+    if duo7.isZero then {
         # the environment before a shell: a name no unit-name index places
         # but the frame's chain reaches -- a template's generic
         # parameter in its own method signature (`v: t`), which is the
@@ -1946,6 +1973,32 @@ resolveNamedTypeId: function {
         nT10: zast.nameTextAt :ast ref: nameId
         return (st.reg.newType name: nT10.stringView typetype: ztypes.ztypetype.recordType)
     }
+    tto7: optionval.none ztypes.ztypetype
+    dd7: declOfUnitDef :st :frame unitDecl: duo7 :nameId
+    if dd7 > 0 then tto7 = declDefTypetype :st :ast declId: dd7
+    match (
+        tto7
+    ) case some then {
+        did7: descendNamedId :st :frame :ast unitDecl: duo7 :nameId
+        if did7 > 0 then return did7
+        return (declareCanonicalTypeId
+            :st
+            :frame
+            :ast
+            unitDecl: duo7
+            ownerNameId: zast.nameid
+            :nameId
+            typetype: tto7
+        )
+    } case none then null
+    return (aliasOrShellTypeId
+        :st
+        :ast
+        defUnit: duo7
+        defDecl: dd7
+        aliasDecl: site7.aliasDecl
+        :nameId
+    )
 }
 
 # resolveAtomType -- resolve a type-atom name in a method/param position. `this`
@@ -17832,6 +17885,71 @@ constraintNumericMax: function {cv: StringView} out optionval u64 is {
     return (optionval.none u64)
 }
 
+# conformsToText -- the generic argument is StringLike: it IS StringView, or a
+# conformance row names it against `Text`. Conformance rows live on the
+# DECLARING type, so a mono (str_32) conforms through the generic origin it was
+# instantiated from rather than under its own id.
+conformsToText: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    argTid: ztypes.tid
+} out bool is {
+    svT: builtinTidT :st :frame :ast base: "StringView"
+    if svT > 0 when argTid == svT then return true
+    txT: builtinTidT :st :frame :ast base: "Text"
+    if txT.isZero then return false
+    probeT: argTid
+    {
+        agoo: st.reg.genericOriginOf tid: argTid
+        if agoo > 0 then probeT = agoo
+    }
+    found: false
+    with cit: st.typing.conformance.iterate do for crow: cit loop {
+        if crow.specTypeId == txT when (
+            (crow.implTypeId == argTid) or (crow.implTypeId == probeT)
+        ) then found = true
+    }
+    return found
+}
+
+# constraintHolds -- the generic argument satisfies the constraint KIND. Yes or
+# no only: the caller owns the diagnostic, and a kind with nothing to demand
+# admits everything.
+constraintHolds: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ck: ztypes.constraintkind
+    argTid: ztypes.tid
+} out bool is {
+    match (
+        ck
+    ) case valType then {
+        return (typeIsValtype :st tid: argTid)
+    } case refType then {
+        return (st.reg.isReftypeOf tid: argTid)
+    } case valHashable then {
+        if (typeIsValtype :st tid: argTid).not then return false
+        if (typeIsHashable :st :ast tid: argTid).not then return false
+        # a heap-owning value has no byte range to hash, and the synthesis
+        # cannot ask that during resolution -- a self-containing record would
+        # recurse forever before the cycle check has run
+        return (heapOwningValtypeTid :st :ast tid: argTid).not
+    } case refHashable then {
+        if (st.reg.isReftypeOf tid: argTid).not then return false
+        return (typeIsHashable :st :ast tid: argTid)
+    } case idKey then {
+        # an id key is not merely hashable: the container indexes on its BITS,
+        # so the bound admits only the scalars whose bits are an index
+        return (typeIsIdKey :st :frame :ast tid: argTid)
+    } case stringLike then {
+        return (conformsToText :ast :st :frame :argTid)
+    } else {
+        return true
+    }
+}
+
 # check that a generic argument satisfies its parameter's constraint.
 checkConstraintSat: function {
     ast: Ast
@@ -17853,83 +17971,24 @@ checkConstraintSat: function {
     # still reject it: a null key has nothing to hash.
     isNul: argTid.u64 == st.typing.nullTypeId
     if isNul.not then {
-        nn: st.reg.nameOf tid: (ztypes.tid.create from: argTid.u64)
+        nn: st.reg.nameOf tid: argTid
         if nn.stringView == "null" then isNul = true
     }
     if isNul when ck == ztypes.constraintkind.refType then return
     if isNul when ck == ztypes.constraintkind.valType then return
-    ok: true
-    if ck == ztypes.constraintkind.valType then ok = (typeIsValtype
-        :st
-        tid: (ztypes.tid.create from: argTid.u64)
-    )
-    if ck == ztypes.constraintkind.refType then {
-        ok = st.reg.isReftypeOf tid: argTid
+    if (constraintHolds :ast :st :frame :ck :argTid) then return
+    an: st.reg.nameOf tid: argTid
+    con: constraintTextOf desc: cd
+    tdn: String
+    {
+        tdo: st.typing.decls.get i: tdecl.u64
+        tdn = st.reg.nameOf tid: (ztypes.tid.create from: tdo.typeId)
+        un9x: unitNameOfTid :st tid: (ztypes.tid.create from: tdo.typeId)
+        if un9x.length > 0 then tdn = "\{un9x}.\{tdn}"
     }
-    # Hashability: one question, asked in one place (see typeIsHashable).
-    if ck == ztypes.constraintkind.valHashable then {
-        ok = false
-        if (typeIsValtype :st tid: (ztypes.tid.create from: argTid.u64)) then {
-            ok = typeIsHashable :st :ast tid: (ztypes.tid.create from: argTid.u64)
-            # a heap-owning value has no byte range to hash, and the synthesis
-            # cannot ask that during resolution -- a self-containing record
-            # would recurse forever before the cycle check has run
-            if ok when (heapOwningValtypeTid
-                :st
-                :ast
-                tid: (ztypes.tid.create from: argTid.u64)
-            ) then ok = false
-        }
-    }
-    if ck == ztypes.constraintkind.refHashable then {
-        ok = false
-        if (st.reg.isReftypeOf tid: argTid) then {
-            ok = typeIsHashable :st :ast tid: (ztypes.tid.create from: argTid.u64)
-        }
-    }
-    # an id key is not merely hashable: the container indexes on its BITS, so
-    # the bound admits only the scalars whose bits are an index
-    if ck == ztypes.constraintkind.idKey then {
-        ok = typeIsIdKey :st :frame :ast tid: (ztypes.tid.create from: argTid.u64)
-    }
-    if ck == ztypes.constraintkind.stringLike then {
-        okSL: false
-        svT: builtinTidT :st :frame :ast base: "StringView"
-        if svT > 0 when argTid == svT then okSL = true
-        if okSL.not then {
-            # conformance rows live on the declaring type; a mono (str_32)
-            # conforms through its generic origin (the str template)
-            probeT: argTid
-            {
-                agoo: st.reg.genericOriginOf tid: argTid
-                if agoo > 0 then probeT = agoo
-            }
-            txT: builtinTidT :st :frame :ast base: "Text"
-            if txT > 0 then {
-                with cit: st.typing.conformance.iterate do for crow: cit loop {
-                    if crow.specTypeId == txT then {
-                        if crow.implTypeId == argTid then okSL = true
-                        if crow.implTypeId == probeT then okSL = true
-                    }
-                }
-            }
-        }
-        ok = okSL
-    }
-    if ok.not then {
-        an: st.reg.nameOf tid: (ztypes.tid.create from: argTid.u64)
-        con: constraintTextOf desc: cd
-        tdn: String
-        {
-            tdo: st.typing.decls.get i: tdecl.u64
-            tdn = st.reg.nameOf tid: (ztypes.tid.create from: tdo.typeId)
-            un9x: unitNameOfTid :st tid: (ztypes.tid.create from: tdo.typeId)
-            if un9x.length > 0 then tdn = "\{un9x}.\{tdn}"
-        }
-        pnmT: zast.nameTextAt :ast ref: paramName
-        m: "generic argument '\{an}' does not satisfy constraint '\{con}' on parameter '\{pnmT}' of '\{tdn}'"
-        addResolveError :st e: zast.err.genericError msg: m
-    }
+    pnmT: zast.nameTextAt :ast ref: paramName
+    m: "generic argument '\{an}' does not satisfy constraint '\{con}' on parameter '\{pnmT}' of '\{tdn}'"
+    addResolveError :st e: zast.err.genericError msg: m
 }
 
 # checkAnyBounds -- `Any` is not a user-spellable bound: a generic parameter
@@ -28191,6 +28250,63 @@ dataFieldNames: function {
     }
 }
 
+# ctorParamOwnerTid -- the id whose parameters a construction must supply: a
+# body-carrying `create` declares them itself, and everything else -- a
+# generated create, a type with none -- is answered by the type's own fields.
+ctorParamOwnerTid: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    funcId: ztypes.tid
+} out ztypes.tid is {
+    (forceMemberOf
+        :st
+        frame: st.curFrame
+        :ast
+        parentTypeId: funcId
+        nameId: zast.names.wkCreate
+    )
+    crId: ((st.typing.declChildOfId parentTypeId: funcId nameId: zast.names.wkCreate).or d: 0)
+    if crId == 0 then return funcId
+    crT: ztypes.tid.create from: crId.u64
+    if ((st.reg.typetypeOf typeId: crT) == ztypes.ztypetype.functionType).not then return funcId
+    if (st.typing.funcReturnNode.has key: crId).not then return funcId
+    return crT
+}
+
+# ctorFieldIsFilled -- a construction fills this FUNCTION-typed field itself,
+# so omitting it is not an omission. Only a body-carrying fn type defaults the
+# field -- a bodyless SPEC field requires the reference -- and only a record or
+# class construction does the filling, writing the field type's symbol into the
+# slot the caller left empty.
+ctorFieldIsFilled: function {
+    st: zenv.ZSymbolTable.view
+    ownerTid: ztypes.tid
+    fieldTid: ztypes.tid
+} out bool is {
+    if ((st.reg.typetypeOf typeId: fieldTid) == ztypes.ztypetype.functionType).not then {
+        return false
+    }
+    if ((st.typing.fnHasBody.get key: fieldTid).or d: false).not then return false
+    ownTT: st.reg.typetypeOf typeId: ownerTid
+    return (ownTT == ztypes.ztypetype.recordType) or (ownTT == ztypes.ztypetype.classType)
+}
+
+# ctorArgProvided -- the caller supplied this parameter, by taking its
+# positional slot or by naming it.
+ctorArgProvided: function {
+    provided: (ListVal zast.nameid).view
+    posCount: u64
+    posI: u64
+    nameId: u64
+} out bool is {
+    if posI < posCount then return true
+    found: false
+    with piter: provided.iterate do for pv: piter loop {
+        if pv.u64 == nameId then found = true
+    }
+    return found
+}
+
 # missingCtorFields -- collect each required field/param (no default) of
 # `funcId` that the provided labels / positional count do not cover, into
 # missingNames/missingIds. A construction's body-carrying FUNCTION-typed
@@ -28209,36 +28325,9 @@ missingCtorFields: function {
     missingNames: List String
     missingIds: ListVal u64
 } is {
-    fzNat: false
-    {
-        isNative9v: st.reg.isNativeOf tid: funcId
-        if isNative9v then fzNat = true
-    }
-    if fzNat then return
+    if (st.reg.isNativeOf tid: funcId) then return
     effId: funcId
-    if isCtor then {
-        (forceMemberOf
-            :st
-            frame: st.curFrame
-            :ast
-            parentTypeId: funcId
-            nameId: zast.names.wkCreate
-        )
-        crId: ((st.typing.declChildOfId parentTypeId: funcId nameId: zast.names.wkCreate).or d: 0)
-        if crId > 0 when (
-            (st.reg.typetypeOf typeId: (ztypes.tid.create from: crId.u64)) ==
-            ztypes.ztypetype.functionType
-        ) then {
-            crBody: false
-            crn: st.typing.funcReturnNode.get key: crId
-            match (
-                crn
-            ) case some then {
-                crBody = true
-            } case none then null
-            if crBody then effId = ztypes.tid.create from: crId.u64
-        }
-    }
+    if isCtor then effId = ctorParamOwnerTid :ast :st :funcId
     ids: ListVal u64
     idsNm: ListVal u64
     # a WALK consumer: an is-block `function {..} out T` with no body is an
@@ -28264,46 +28353,19 @@ missingCtorFields: function {
         # Skipping it unconditionally credited that slot to the NEXT parameter,
         # which is how `point.sub p` -- receiver given, `a` omitted -- ran with
         # `a` at zero instead of being reported.
-        skipRecv9: false
-        if isRecv when recvImplicit then skipRecv9 = true
-        if skipRecv9.not then {
-            posI: vpos
-            vpos = vpos + 1
-            need: true
-            if isCtor when (
-                (st.reg.typetypeOf typeId: (ztypes.tid.create from: pcid.u64)) ==
-                ztypes.ztypetype.functionType
-            ) then {
-                # only a body-carrying fn type defaults the field (a bodyless
-                # SPEC field requires the reference); record and class
-                # constructions fill the omitted slot with the field type's
-                # symbol (the fnptr-field fill in the emitter's create path)
-                fhbOk: (st.typing.fnHasBody.get key: pcid).or d: false
-                effTT: st.reg.typetypeOf typeId: effId
-                ctorFill: (
-                    (effTT == ztypes.ztypetype.recordType) or (effTT == ztypes.ztypetype.classType)
-                )
-                if fhbOk when ctorFill then need = false
-            }
-            if (st.typing.declHasDefaultId
-                parentTypeId: effId
-                nameId: (zast.nameid.create from: pnameId.u32.orPanic)
-            ) then need = false
-            if need then {
-                prov: false
-                if posI < posCount then prov = true
-                with piter: provided.iterate do for pv: piter loop {
-                    if pv.u64 == pnameId then prov = true
-                }
-                if prov.not then {
-                    missingNames.append (zast.nameTextCopy
-                        :ast
-                        ref: (zast.nameid.create from: pnameId.u32.orPanic)
-                    )
-                    missingIds.append pcid
-                }
-            }
-        }
+        if isRecv when recvImplicit then continue
+        posI: vpos
+        vpos = vpos + 1
+        if isCtor when (ctorFieldIsFilled
+            :st
+            ownerTid: effId
+            fieldTid: (ztypes.tid.create from: pcid.u64)
+        ) then continue
+        pnId: zast.nameid.create from: pnameId.u32.orPanic
+        if (st.typing.declHasDefaultId parentTypeId: effId nameId: pnId) then continue
+        if (ctorArgProvided :provided :posCount :posI nameId: pnameId) then continue
+        missingNames.append (zast.nameTextCopy :ast ref: pnId)
+        missingIds.append pcid
     }
 }
 
