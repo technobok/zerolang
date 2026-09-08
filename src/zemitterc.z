@@ -8232,6 +8232,119 @@ emitVariantCtorCall: function {
     return (emitInlineVariantCtor :ast :symtab :ctx :call tid: vtid arm: mn)
 }
 
+# userCreateCallC -- a user `create` (one with a body, so an emitted function)
+# called by its OWN parameter labels. The create's parameters decide how each
+# argument is passed, as they do for any other call of it: a non-`take` user
+# class is a `T*`, so a bare local has to be addressed.
+userCreateCallC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    fid: ztypes.tid
+} out String is {
+    pnames: List String
+    pids: ListVal u64
+    pidsNm: ListVal u64
+    (recFieldLists
+        :ast
+        :symtab
+        tid: fid
+        names: pnames
+        ids: pids
+        nameIds: pidsNm
+    )
+    args: String
+    pi: u64
+    pn: pnames.length
+    for pi < pn loop {
+        pname: pnames.get i: pi
+        aNid: ctorArgNodeByLabel :ast :call label: pname.stringView
+        av: "0".string
+        if aNid > 0 then {
+            av = (userFnArgText
+                :ast
+                :symtab
+                :ctx
+                :fid
+                pinId: (pids.get i: pi)
+                pinNm: pname.stringView
+                argOpNode: (ast.nodes.get i: aNid)
+            )
+        }
+        if pi > 0 then args.append ", "
+        args.append av
+        pi = pi + 1
+    }
+    mc3: ctxCname :ctx tid: fid
+    return "\{mc3}(\{args})"
+}
+
+# emitQualRecvMethodCall -- the ordinary method emission for a type-qualified
+# call, whose RECEIVER is among the ARGUMENTS rather than reached through a
+# dot: it is the call's one unlabelled argument, or it carries the receiver
+# parameter's own declared name. Both call forms then share ONE
+# argument-placement rule and a label binds by name in either; this leg used to
+# walk the call's arguments in WRITTEN order, which silently swapped a pair of
+# reordered labels.
+#
+# THE CHECKER ANSWERED WHERE THE RECEIVER COMES FROM, and this reads the
+# answer. A call reaches here only when the walk stamped its receiver as coming
+# from the arguments; otherwise the dot supplies it and the call is
+# emitInstanceMethodCall's. Deriving it a second time -- off the base atom's
+# variable id, or off the name -- is what let the two sides disagree and emit a
+# call with the receiver slot never filled.
+emitQualRecvMethodCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    mtid: ztypes.tid
+} out String is {
+    if (symtab.typing.callRecvFromArgs.has item: call.nodeid.u64).not then return "".string
+    recvNmQ: "this".string
+    {
+        tpq: (zast.poolTextAt
+            pool: ast.names
+            ref: (symtab.reg.thisParamNameIdOf tid: mtid)
+        )
+        if tpq.length > 0 then recvNmQ = tpq.copy
+    }
+    recvExQ: String
+    recvPtrQ: false
+    posStartQ: u64
+    if (fnTypeTakesThis :symtab tid: mtid) then {
+        recvNdQ: u64
+        if (ctorHasLabel :ast :call label: recvNmQ.stringView) then {
+            recvExQ = ctorArgByLabel :ast :symtab :ctx :call label: recvNmQ.stringView
+            recvNdQ = ctorArgNodeByLabel :ast :call label: recvNmQ.stringView
+        } else {
+            recvExQ = ctorArgByPosition :ast :symtab :ctx :call idx: 0
+            recvNdQ = ctorArgNodeByPosition :ast :call idx: 0
+            posStartQ = 1
+        }
+        # a receiver already held as a pointer passes as it stands
+        if recvNdQ > 0 then {
+            recvPtrQ = (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: recvNdQ))
+        }
+        # no receiver supplied at all: the checker reports the missing
+        # argument, and the stamp keeps the dotted leg from claiming this call,
+        # so declining reports an unhandled callee rather than hoisting a
+        # zeroed temp nobody passed
+        if recvExQ.length == 0 then return "".string
+    }
+    return (emitInstanceMethodBody
+        :ast
+        :symtab
+        :ctx
+        :call
+        mco: mtid
+        recvExpr: recvExQ.stringView
+        recvIsPtr: recvPtrQ
+        posStart: posStartQ
+    )
+}
+
 # emitTypeQualCall -- `point.add a: x b: y`: a dotted callee whose base
 # resolves to a record type and whose member is a FUNCTION child; args
 # reorder to the method's param order by label.
@@ -8252,134 +8365,28 @@ emitTypeQualCall: function {
     # variant or union left out reached emitInstanceMethodCall instead, which
     # takes its receiver from the dotted base -- and that base is the type name,
     # so the emitted C named a variable that does not exist.
-    isUserObjQ: isUserStructType tt: bttq
-    if isUserObjQ.not then return "".string
+    if (isUserStructType tt: bttq).not then return "".string
     mco: symtab.typing.declChildOf pool: ast.names parentTypeId: btid name: mn
+    mtid: ztypes.tid
     match (
         mco
     ) case some then {
-        if (
-            (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: mco.u64)) ==
-            ztypes.ztypetype.functionType
-        ) then {
-            pnames: List String
-            pids: ListVal u64
-            pidsNm: ListVal u64
-            (recFieldLists
-                :ast
-                :symtab
-                tid: (ztypes.tid.create from: mco.u64)
-                names: pnames
-                ids: pids
-                nameIds: pidsNm
-            )
-            # a synthesized `create` (no body) has field-shaped params but no
-            # emitted create fn -- route it to the type's field-wise ctor, the
-            # path bare-name construction uses; a user create (a body) is called.
-            mcBody: false
-            {
-                mcrn: symtab.typing.funcReturnNode.get key: mco
-                match (
-                    mcrn
-                ) case some then {
-                    mcBody = true
-                } case none then null
-            }
-            if mn == "create" when mcBody.not then {
-                return (emitRecordCtor :ast :symtab :ctx :call tid: btid)
-            }
-            pn: pnames.length
-            if mn == "create" then {
-                # user create: args by the create's own param labels
-                args: String
-                pi: u64
-                for pi < pn loop {
-                    pname: pnames.get i: pi
-                    # the create's parameters decide how each argument is
-                    # passed, as they do for any other call of it: a non-`take`
-                    # user class is a `T*`, so a bare local has to be addressed.
-                    aNid: ctorArgNodeByLabel :ast :call label: pname.stringView
-                    av: "0".string
-                    if aNid > 0 then {
-                        av = (userFnArgText
-                            :ast
-                            :symtab
-                            :ctx
-                            fid: (ztypes.tid.create from: mco.u64)
-                            pinId: (pids.get i: pi)
-                            pinNm: pname.stringView
-                            argOpNode: (ast.nodes.get i: aNid)
-                        )
-                    }
-                    if pi > 0 then args.append ", "
-                    args.append av
-                    pi = pi + 1
-                }
-                mc3: ctxCname :ctx tid: (ztypes.tid.create from: mco.u64)
-                e7: "\{mc3}(\{args})"
-                return e7
-            }
-            # THE RECEIVER IS AMONG THE ARGUMENTS HERE, not reached through a
-            # dot: it is the call's one unlabelled argument, or it carries the
-            # receiver parameter's own declared name. Everything past that is
-            # the ordinary method emission, so the two call forms share ONE
-            # argument-placement rule and a label binds by name in both. This
-            # leg used to walk the call's arguments in WRITTEN order, which
-            # silently swapped a pair of reordered labels.
-            # THE CHECKER ANSWERED THIS, and this reads the answer. A call
-            # reaches here only when the walk stamped its receiver as coming
-            # from the ARGUMENTS; otherwise the dot supplies it and the call is
-            # emitInstanceMethodCall's. Deriving it a second time -- off the
-            # base atom's variable id, or off the name -- is what let the two
-            # sides disagree and emit a call with the receiver slot never
-            # filled. A construction asks no such question and returns above.
-            if (symtab.typing.callRecvFromArgs.has item: call.nodeid.u64).not then {
-                return "".string
-            }
-            recvNmQ: "this".string
-            {
-                tpq: (zast.poolTextAt
-                    pool: ast.names
-                    ref: (symtab.reg.thisParamNameIdOf tid: (ztypes.tid.create from: mco.u64))
-                )
-                if tpq.length > 0 then recvNmQ = tpq.copy
-            }
-            recvExQ: String
-            recvPtrQ: false
-            posStartQ: u64
-            if (fnTypeTakesThis :symtab tid: (ztypes.tid.create from: mco.u64)) then {
-                recvNdQ: u64
-                if (ctorHasLabel :ast :call label: recvNmQ.stringView) then {
-                    recvExQ = ctorArgByLabel :ast :symtab :ctx :call label: recvNmQ.stringView
-                    recvNdQ = ctorArgNodeByLabel :ast :call label: recvNmQ.stringView
-                } else {
-                    recvExQ = ctorArgByPosition :ast :symtab :ctx :call idx: 0
-                    recvNdQ = ctorArgNodeByPosition :ast :call idx: 0
-                    posStartQ = 1
-                }
-                # a receiver already held as a pointer passes as it stands
-                if recvNdQ > 0 then {
-                    recvPtrQ = (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: recvNdQ))
-                }
-                # no receiver supplied at all: the checker reports the missing
-                # argument, and the stamp keeps the dotted leg from claiming
-                # this call, so declining reports an unhandled callee rather
-                # than hoisting a zeroed temp nobody passed
-                if recvExQ.length == 0 then return "".string
-            }
-            return (emitInstanceMethodBody
-                :ast
-                :symtab
-                :ctx
-                :call
-                mco: (ztypes.tid.create from: mco.u64)
-                recvExpr: recvExQ.stringView
-                recvIsPtr: recvPtrQ
-                posStart: posStartQ
-            )
-        }
+        mtid = ztypes.tid.create from: mco
     } case none then null
-    return "".string
+    if mtid.isZero then return "".string
+    if ((symtab.reg.typetypeOf typeId: mtid) == ztypes.ztypetype.functionType).not then {
+        return "".string
+    }
+    # a synthesized `create` (no body) has field-shaped params but no emitted
+    # create fn -- route it to the type's field-wise ctor, the path bare-name
+    # construction uses; a user create (a body) is called.
+    if mn == "create" when (symtab.typing.funcReturnNode.has key: mtid).not then {
+        return (emitRecordCtor :ast :symtab :ctx :call tid: btid)
+    }
+    if mn == "create" then {
+        return (userCreateCallC :ast :symtab :ctx :call fid: mtid)
+    }
+    return (emitQualRecvMethodCall :ast :symtab :ctx :call :mtid)
 }
 
 # literalC -- a numeric literal lexeme as C text. `0b`, `0o` and `0c` are
@@ -14385,6 +14392,213 @@ emitPanicStmt: function {
     }
 }
 
+# emitPrintStringLiteral -- a string literal argument of `print`: an
+# interpolation builds its parts, a plain literal prints the pooled StringView
+# it was interned as.
+emitPrintStringLiteral: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.atomstringrow.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    if (isInterp :ast parts: n.stringparts) then {
+        emitInterpPrint :ast :symtab :ctx parts: n.stringparts :ind :tmp :buf
+        return
+    }
+    li: litIndexOf :ctx nid: n.nodeid.u64
+    if li == 0 then {
+        buf.append "    /* zemitterc: unpooled literal */\n"
+        return
+    }
+    l: "\{ind}\{ctx.svC}_print(_zs\{li});\n"
+    buf.append l
+}
+
+# emitPrintViaStringView -- an atom printed through its type's own `stringView`
+# projection: the projection is called on the value and its result printed. A
+# class held BY VALUE is addressed for that call; a pointer, a mono or a
+# valtype passes as it stands. A type declaring no such projection cannot be
+# printed, and says so where the program can see it.
+emitPrintViaStringView: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    argTid: ztypes.tid
+    name: StringView
+    vid: ztypes.vid
+    tn: StringView
+    line: u32
+    ind: StringView
+    buf: String.borrow
+} is {
+    svco: symtab.typing.declChildOfId parentTypeId: argTid nameId: zast.names.wkStringView
+    match (
+        svco
+    ) case some then {
+        mcb: ctxCname :ctx tid: (ztypes.tid.create from: svco.u64)
+        argOrig: originTidOf :symtab tid: argTid
+        usesAmp: false
+        if (
+            (symtab.reg.typetypeOf typeId: argTid) == ztypes.ztypetype.classType
+        ) when argOrig.isZero when (isPtrVid :ctx :vid).not then usesAmp = true
+        if usesAmp then {
+            lpt: "\{ind}\{ctx.svC}_print(\{mcb}(&\{name}));\n"
+            buf.append lpt
+        } else {
+            lpt2: "\{ind}\{ctx.svC}_print(\{mcb}(\{name}));\n"
+            buf.append lpt2
+        }
+    } case none then {
+        emitFail :ctx what: "unhandled print of \{name} type \{tn}" :line
+        lpu: "\{ind}/* zemitterc: unhandled print of \{name} type \{tn} */\n"
+        buf.append lpu
+    }
+}
+
+# emitPrintAtom -- a bare name argument of `print`, printed by what its stamp
+# says it holds: an owned String, a StringView, a str mono, or any other type
+# through its own stringView projection.
+emitPrintAtom: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.atomidrow.view
+    ind: StringView
+    buf: String.borrow
+} is {
+    tn: stampNameView :symtab nid: n.nodeid.u64
+    anC: zast.nameTextAt :ast ref: n.name
+    an: anC.stringView
+    anmV0: atomVid :symtab nid: n.nodeid.u64
+    anm: aliasResolve :ctx name: an vid: anmV0
+    anv: ztypes.vid
+    if anm.stringView == an then anv = anmV0
+    # anm stays the SOURCE name (the alias/narrow lookups key on it); anmE
+    # is what reaches the C
+    anmE: emitLocalAtomName :ctx name: an vid: anmV0
+    # a unit string CONSTANT reaching print by name. emitExpr answers for a
+    # constant on its own first line; print resolves atoms itself and never
+    # goes through it, so without this the NAME reaches the C undeclared.
+    # A stamped local is not a constant, so the probe is skipped for one --
+    # the same order emitExpr's atomid arm uses.
+    {
+        alo: symtab.typing.atomVariableId.get key: n.nodeid.u64
+        if alo.none then {
+            unitTid9: (unitTidOf :ast :symtab unitName: ctx.mainName.stringView)
+            cst: (memberConstStringText
+                :symtab
+                :ctx
+                unitTid: unitTid9
+                nameId: n.name
+            )
+            if cst.length > 0 then anmE = cst.copy
+        }
+    }
+    if (stampIsStr :symtab :ctx nid: n.nodeid.u64) then {
+        if (isPtrVid :ctx vid: anv) then {
+            lps: "\{ind}\{ctx.strC}_print(\{anmE});\n"
+            buf.append lps
+        } else {
+            lps2: "\{ind}\{ctx.strC}_print(&\{anmE});\n"
+            buf.append lps2
+        }
+        return
+    }
+    argTid: stampIdOf :symtab nid: n.nodeid.u64
+    if ctx.svTid == argTid then {
+        lpv: "\{ind}\{ctx.svC}_print(\{anmE});\n"
+        buf.append lpv
+        return
+    }
+    if (originIsTid :symtab tid: argTid originTid: (ctx.origins.get i: ogStr)) then {
+        lpstr: "\{ind}\{ctx.svC}_print((\{ctx.svC}_t){ .data = \{anmE}.data, .size = \{anmE}.len });\n"
+        buf.append lpstr
+        return
+    }
+    (emitPrintViaStringView
+        :symtab
+        :ctx
+        :argTid
+        name: anmE.stringView
+        vid: anv
+        :tn
+        line: n.lineno
+        :ind
+        :buf
+    )
+}
+
+# emitPrintValueExpr -- any other print argument: the expression is emitted and
+# printed by what its stamp holds. An owned String that is not an lvalue is
+# hoisted so it can be addressed and freed.
+emitPrintValueExpr: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    eid: interpPartNodeId :n
+    if (stampIsSv :symtab :ctx nid: eid) then {
+        ev: emitExpr :ast :symtab :ctx :n
+        flushArgHoists :ctx :ind :tmp :buf
+        lpe: "\{ind}\{ctx.svC}_print(\{ev});\n"
+        buf.append lpe
+        return
+    }
+    if ctx.strTid != (stampIdOf :symtab nid: eid) then {
+        emitFail :ctx what: "unhandled print argument".string line: (ztypecheck.nodeLine :n)
+        buf.append "    /* zemitterc: unhandled print argument */\n"
+        return
+    }
+    es: emitExpr :ast :symtab :ctx :n
+    flushArgHoists :ctx :ind :tmp :buf
+    if (isNonLvalueArg s: es.stringView) then {
+        hps: tmp.next
+        lsa: "\{ind}\{ctx.strC}_t _h\{hps} = \{es};\n"
+        buf.append lsa
+        lsb: "\{ind}\{ctx.strC}_print(&_h\{hps});\n"
+        buf.append lsb
+        lsf: "\{ind}\{ctx.strC}_free(&_h\{hps});\n"
+        buf.append lsf
+        return
+    }
+    lsl: "\{ind}\{ctx.strC}_print(&\{es});\n"
+    buf.append lsl
+}
+
+# emitPrintCallValue -- a call argument of `print`: a StringView result prints
+# directly, an owned String is hoisted so it can be addressed, printed and
+# freed.
+emitPrintCallValue: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    ce: emitCallValue :ast :symtab :ctx :call
+    flushArgHoists :ctx :ind :tmp :buf
+    if (stampIsSv :symtab :ctx nid: call.nodeid.u64) then {
+        lpcv: "\{ind}\{ctx.svC}_print(\{ce});\n"
+        buf.append lpcv
+        return
+    }
+    hpc: tmp.next
+    lpa: "\{ind}\{ctx.strC}_t _h\{hpc} = \{ce};\n"
+    buf.append lpa
+    lpb: "\{ind}\{ctx.strC}_print(&_h\{hpc});\n"
+    buf.append lpb
+    lpf: "\{ind}\{ctx.strC}_free(&_h\{hpc});\n"
+    buf.append lpf
+}
+
 # emit one argument of a `print` call.
 emitPrintArg: function {
     ast: Ast.view
@@ -14400,128 +14614,13 @@ emitPrintArg: function {
     ) case expression then {
         emitPrintArg :ast :symtab :ctx n: (ast.nodes.get i: n.expression.u64) :ind :tmp :buf
     } case atomstring then {
-        if (isInterp :ast parts: n.stringparts) then {
-            emitInterpPrint :ast :symtab :ctx parts: n.stringparts :ind :tmp :buf
-        } else {
-            li: litIndexOf :ctx nid: n.nodeid.u64
-            if li > 0 then {
-                l: "\{ind}\{ctx.svC}_print(_zs\{li});\n"
-                buf.append l
-            } else {
-                buf.append "    /* zemitterc: unpooled literal */\n"
-            }
-        }
+        emitPrintStringLiteral :ast :symtab :ctx :n :ind :tmp :buf
     } case atomid then {
-        tn: stampNameView :symtab nid: n.nodeid.u64
-        anC: zast.nameTextAt :ast ref: n.name
-        an: anC.stringView
-        anmV0: atomVid :symtab nid: n.nodeid.u64
-        anm: aliasResolve :ctx name: an vid: anmV0
-        anv: ztypes.vid
-        if anm.stringView == an then anv = anmV0
-        # anm stays the SOURCE name (the alias/narrow lookups key on it); anmE
-        # is what reaches the C
-        anmE: emitLocalAtomName :ctx name: an vid: anmV0
-        # a unit string CONSTANT reaching print by name. emitExpr answers for a
-        # constant on its own first line; print resolves atoms itself and never
-        # goes through it, so without this the NAME reaches the C undeclared.
-        # A stamped local is not a constant, so the probe is skipped for one --
-        # the same order emitExpr's atomid arm uses.
-        {
-            alo: symtab.typing.atomVariableId.get key: n.nodeid.u64
-            if alo.none then {
-                unitTid9: (unitTidOf :ast :symtab unitName: ctx.mainName.stringView)
-                cst: (memberConstStringText
-                    :symtab
-                    :ctx
-                    unitTid: unitTid9
-                    nameId: n.name
-                )
-                if cst.length > 0 then anmE = cst.copy
-            }
-        }
-        if (stampIsStr :symtab :ctx nid: n.nodeid.u64) then {
-            if (isPtrVid :ctx vid: anv) then {
-                lps: "\{ind}\{ctx.strC}_print(\{anmE});\n"
-                buf.append lps
-            } else {
-                lps2: "\{ind}\{ctx.strC}_print(&\{anmE});\n"
-                buf.append lps2
-            }
-        } else if ctx.svTid == (stampIdOf :symtab nid: n.nodeid.u64) then {
-            lpv: "\{ind}\{ctx.svC}_print(\{anmE});\n"
-            buf.append lpv
-        } else {
-            argTid: stampIdOf :symtab nid: n.nodeid.u64
-            if (originIsTid :symtab tid: argTid originTid: (ctx.origins.get i: ogStr)) then {
-                lpstr: "\{ind}\{ctx.svC}_print((\{ctx.svC}_t){ .data = \{anmE}.data, .size = \{anmE}.len });\n"
-                buf.append lpstr
-                return
-            }
-            svco: symtab.typing.declChildOfId parentTypeId: argTid nameId: zast.names.wkStringView
-            match (
-                svco
-            ) case some then {
-                mcb: ctxCname :ctx tid: (ztypes.tid.create from: svco.u64)
-                argOrig: originTidOf :symtab tid: argTid
-                usesAmp: false
-                if (
-                    (symtab.reg.typetypeOf typeId: argTid) == ztypes.ztypetype.classType
-                ) when argOrig.isZero when (isPtrVid :ctx vid: anv).not then usesAmp = true
-                if usesAmp then {
-                    lpt: "\{ind}\{ctx.svC}_print(\{mcb}(&\{anmE}));\n"
-                    buf.append lpt
-                } else {
-                    lpt2: "\{ind}\{ctx.svC}_print(\{mcb}(\{anmE}));\n"
-                    buf.append lpt2
-                }
-            } case none then {
-                emitFail :ctx what: "unhandled print of \{anmE} type \{tn}" line: n.lineno
-                lpu: "\{ind}/* zemitterc: unhandled print of \{anmE} type \{tn} */\n"
-                buf.append lpu
-            }
-        }
+        emitPrintAtom :ast :symtab :ctx :n :ind :buf
     } case call then {
-        ce: emitCallValue :ast :symtab :ctx call: n
-        flushArgHoists :ctx :ind :tmp :buf
-        if (stampIsSv :symtab :ctx nid: n.nodeid.u64) then {
-            lpcv: "\{ind}\{ctx.svC}_print(\{ce});\n"
-            buf.append lpcv
-        } else {
-            hpc: tmp.next
-            lpa: "\{ind}\{ctx.strC}_t _h\{hpc} = \{ce};\n"
-            buf.append lpa
-            lpb: "\{ind}\{ctx.strC}_print(&_h\{hpc});\n"
-            buf.append lpb
-            lpf: "\{ind}\{ctx.strC}_free(&_h\{hpc});\n"
-            buf.append lpf
-        }
+        emitPrintCallValue :ast :symtab :ctx call: n :ind :tmp :buf
     } else {
-        eid: interpPartNodeId :n
-        if (stampIsSv :symtab :ctx nid: eid) then {
-            ev: emitExpr :ast :symtab :ctx :n
-            flushArgHoists :ctx :ind :tmp :buf
-            lpe: "\{ind}\{ctx.svC}_print(\{ev});\n"
-            buf.append lpe
-        } else if ctx.strTid == (stampIdOf :symtab nid: eid) then {
-            es: emitExpr :ast :symtab :ctx :n
-            flushArgHoists :ctx :ind :tmp :buf
-            if (isNonLvalueArg s: es.stringView) then {
-                hps: tmp.next
-                lsa: "\{ind}\{ctx.strC}_t _h\{hps} = \{es};\n"
-                buf.append lsa
-                lsb: "\{ind}\{ctx.strC}_print(&_h\{hps});\n"
-                buf.append lsb
-                lsf: "\{ind}\{ctx.strC}_free(&_h\{hps});\n"
-                buf.append lsf
-            } else {
-                lsl: "\{ind}\{ctx.strC}_print(&\{es});\n"
-                buf.append lsl
-            }
-        } else {
-            emitFail :ctx what: "unhandled print argument".string line: (ztypecheck.nodeLine :n)
-            buf.append "    /* zemitterc: unhandled print argument */\n"
-        }
+        emitPrintValueExpr :ast :symtab :ctx :n :ind :tmp :buf
     }
 }
 
