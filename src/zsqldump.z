@@ -123,6 +123,67 @@ definedUnitOf: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out Option 
     return (Option.some nm)
 }
 
+# typeInUnit -- whether the type `tid` is DEFINED in the unit named `unm`. An
+# id past the registry, and a type with no defining unit, belong to none. The
+# canon dumps ask this per type per unit, which is why it is one question.
+typeInUnit: function {st: zenv.ZSymbolTable.view tid: ztypes.tid unm: StringView} out bool is {
+    if (tid < st.reg.typeById.length).not then return false
+    du: definedUnitOf :st :tid
+    if du.none then return false
+    return (du.stringView == unm)
+}
+
+# genericChildRow -- one `generic_child` row: the template, the edge key and
+# the child. The edge key's kind comes from the CHILD's last ordinal, so a
+# numeric value key prints its literal rather than a type name.
+genericChildRow: function {
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    ekey: u64
+    eval: u64
+} out String is {
+    pn: canonTypeName reg: st.reg :tid
+    kc: st.reg.genericArgCount specId: (ztypes.tid.create from: eval.u64)
+    kIsVal: false
+    if kc > 0 then {
+        kIsVal = (st.reg.genericArgIsValueAt
+            specId: (ztypes.tid.create from: eval.u64)
+            ordinal: kc - 1
+        )
+    }
+    kn: String
+    if kIsVal then {
+        kn = "\{ekey}"
+    } else {
+        kn = canonTypeName reg: st.reg tid: (ztypes.tid.create from: ekey.u64)
+    }
+    cn: canonTypeName reg: st.reg tid: (ztypes.tid.create from: eval.u64)
+    return "generic_child \{pn} \{kn} \{cn}"
+}
+
+# genericArgRow -- one `generic_arg` row. A VALUE argument prints its
+# literal and is flagged as one; a type argument prints its canonical name.
+genericArgRow: function {
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    ai: u64
+    av: u64
+} out String is {
+    sn: canonTypeName reg: st.reg :tid
+    iv: u64
+    vn: String
+    if (st.reg.genericArgIsValueAt
+        specId: (ztypes.tid.create from: tid.u64)
+        ordinal: ai
+    ) then {
+        iv = 1
+        vn = "\{av}"
+    } else {
+        vn = canonTypeName reg: st.reg tid: (ztypes.tid.create from: av.u64)
+    }
+    return "generic_arg \{sn} \{ai} \{vn} \{iv}"
+}
+
 # unitdefNodeId -- the nodeid of the unit row an id names (0 when the id does
 # not name a unit). The row view is scoped to the fetch.
 unitdefNodeId: function {ast: Ast.view nId: zast.nodeid} out u32 is {
@@ -671,33 +732,16 @@ ZDumper: class {
             this.acc.append s: row5
         }
         with pgit: typing.postGuardName.iterateItems do for pg: pgit loop {
-            pgt: u64
-            pgo: typing.postGuardTid.get key: pg.key
-            match (
-                pgo
-            ) case some then {
-                pgt = pgo
-            } case none then null
-            pgaId: zast.nameid
-            pgao: typing.postGuardArm.get key: pg.key
-            match (
-                pgao
-            ) case some then {
-                pgaId = pgao
-            } case none then null
+            pgt: ((typing.postGuardTid.get key: pg.key).or d: ztypes.tid).u64
+            pgaId: (typing.postGuardArm.get key: pg.key).or d: zast.nameid
             pga: zast.poolTextAt :pool ref: pgaId
             pgn: zast.poolTextAt :pool ref: pg.value
             row7: "INSERT OR IGNORE INTO post_guard VALUES (\{pg.key}, '\{pgn}', \{pgt}, '\{pga}');\n"
             this.acc.append s: row7
         }
         with tait: typing.tagAccessorName.iterateItems do for ta: tait loop {
-            tat: u64
-            tao: typing.tagAccessorTid.get key: (ztypes.tid.create from: ta.key)
-            match (
-                tao
-            ) case some then {
-                tat = tao
-            } case none then null
+            tao: (typing.tagAccessorTid.get key: (ztypes.tid.create from: ta.key))
+            tat: (tao.or d: ztypes.tid).u64
             tan: zast.poolTextAt :pool ref: ta.value
             row6: "INSERT OR IGNORE INTO tag_accessor VALUES (\{ta.key}, '\{tan}', \{tat});\n"
             this.acc.append s: row6
@@ -712,13 +756,7 @@ ZDumper: class {
             this.acc.append s: rowCg
         }
         with boit: typing.binopOwner.iterateItems do for bo: boit loop {
-            bm: u64
-            bmo: typing.binopMethod.get key: bo.key
-            match (
-                bmo
-            ) case some then {
-                bm = bmo
-            } case none then null
+            bm: ((typing.binopMethod.get key: bo.key).or d: ztypes.tid).u64
             rowBo: "INSERT OR IGNORE INTO binop_operator VALUES (0, \{bo.key}, \{bo.value}, \{bm});\n"
             this.acc.append s: rowBo
         }
@@ -727,13 +765,7 @@ ZDumper: class {
         with mbit: typing.monoBinopOwner.iterateItems do for mb: mbit loop {
             mi: mb.key.mono
             mn: mb.key.node
-            mm: u64
-            mmo: typing.monoBinopMethod.get key: mb.key
-            match (
-                mmo
-            ) case some then {
-                mm = mmo
-            } case none then null
+            mm: ((typing.monoBinopMethod.get key: mb.key).or d: ztypes.tid).u64
             rowMb: "INSERT OR IGNORE INTO binop_operator VALUES (\{mi}, \{mn}, \{mb.value}, \{mm});\n"
             this.acc.append s: rowMb
         }
@@ -764,36 +796,43 @@ ZDumper: class {
         }
     }
 
-    # appendSymbolTable -- scope / entry / variable rows from the body-walk
-    # environment. scope rows are the walk's frames in the order they were
-    # opened (depth = that index); entry rows the locals and overlay rows
-    # snapshotted when each frame closed; variable rows the per-id side
-    # tables, deduped.
-    appendSymbolTable: function {:this pool: zast.StringPool.view st: zenv.ZSymbolTable.view} is {
-        seen: IdSet u64
+    # appendScopeRows -- one `scope` row per frame declaration that is not
+    # hidden. The depth column counts the frames emitted, not the nesting: it is
+    # the order they were declared in.
+    appendScopeRows: function {:this st: zenv.ZSymbolTable.view} is {
         depth: u64
         nd: st.typing.decls.length
         di: u64
         for di < nd loop {
             d: ztypes.declid.create from: di
             di = di + 1
-            if (st.typing.declIsFrame declId: d) when (
-                (st.frameHidden.has item: d.u64).not
-            ) then {
-                lbl: frameLabelOf :st frame: d
-                kind: "BLOCK"
-                if lbl.length == 0 then kind = "CALL"
-                kindSql: sqlStr s: kind
-                nameSql: sqlStr s: lbl.stringView
-                pd: st.typing.declParentOf declId: d
-                parentSql: "NULL".string
-                if (st.typing.declIsFrame declId: pd) then parentSql = "\{pd}"
-                unreachNum: boolNum b: (st.unreachableFrames.has item: d.u64)
-                r: "INSERT OR IGNORE INTO scope VALUES (\{d}, \{parentSql}, \{kindSql}, \{nameSql}, \{depth}, \{unreachNum});\n"
-                this.acc.append s: r
-                depth = depth + 1
-            }
+            if (st.typing.declIsFrame declId: d).not then continue
+            if (st.frameHidden.has item: d.u64) then continue
+            lbl: frameLabelOf :st frame: d
+            kind: "BLOCK"
+            if lbl.length == 0 then kind = "CALL"
+            kindSql: sqlStr s: kind
+            nameSql: sqlStr s: lbl.stringView
+            pd: st.typing.declParentOf declId: d
+            parentSql: "NULL".string
+            if (st.typing.declIsFrame declId: pd) then parentSql = "\{pd}"
+            unreachNum: boolNum b: (st.unreachableFrames.has item: d.u64)
+            r: "INSERT OR IGNORE INTO scope VALUES (\{d}, \{parentSql}, \{kindSql}, \{nameSql}, \{depth}, \{unreachNum});\n"
+            this.acc.append s: r
+            depth = depth + 1
         }
+    }
+
+    # appendEntryRows -- one `entry` row per symbol-table entry, plus a
+    # `narrowed_subtype` row for the subtype it was narrowed TO and one per
+    # subtype it was narrowed AWAY from. Each entry's variable id is recorded in
+    # `seen`, which is what appendVariableRows then renders.
+    appendEntryRows: function {
+        :this
+        pool: zast.StringPool.view
+        st: zenv.ZSymbolTable.view
+        seen: IdSet u64
+    } is {
         for e: st.entryDump.iterate loop {
             varSql: vidOrNullText o: e.varId
             origSql: optTidStr o: e.originalZtypeId
@@ -816,12 +855,19 @@ ZDumper: class {
                 this.acc.append s: xr
             }
             vd: e.varId
-            match (
-                vd
-            ) case some then {
-                seen.add item: vd
-            } case none then null
+            if vd.some then seen.add item: vd
         }
+    }
+
+    # appendVariableRows -- one `variable` row per variable id an entry referred
+    # to. An id the registry does not hold is skipped: an entry may name a
+    # variable the registry never took.
+    appendVariableRows: function {
+        :this
+        pool: zast.StringPool.view
+        st: zenv.ZSymbolTable.view
+        seen: IdSet u64
+    } is {
         for vid: seen.iterate loop {
             vidT: ztypes.vid.create from: vid
             if (st.reg.hasVariable id: vidT).not then continue
@@ -841,6 +887,17 @@ ZDumper: class {
         }
     }
 
+    # appendSymbolTable -- scope / entry / variable rows from the body-walk
+    # environment. scope rows are the walk's frames in the order they were
+    # opened (depth = that index); entry rows the locals and overlay rows
+    # snapshotted when each frame closed; variable rows the per-id side
+    # tables, deduped.
+    appendSymbolTable: function {:this pool: zast.StringPool.view st: zenv.ZSymbolTable.view} is {
+        seen: IdSet u64
+        this.appendScopeRows :st
+        this.appendEntryRows :pool :st :seen
+        this.appendVariableRows :pool :st :seen
+    }
     # --- canonical (id-normalized) renderers for the dump-canon gate ---
     # Each emits a table's id-independent projection (PK ids omitted, FK ids
     # resolved to names, id-embedding cnames dropped), rows sorted, under a
@@ -941,54 +998,24 @@ ZDumper: class {
         n: st.reg.nextTypeId
         tid: ztypes.tid
         for tid < n loop {
+            # the edges are collected before any row is built: the iteration
+            # holds the registry, and canonTypeName reads it
             gkeys: ListVal u64
             gtids: ListVal u64
-            if tid < st.reg.typeById.length then {
+            if (typeInUnit :st :tid :unm) then {
                 zt: st.reg.typeById.get i: tid
-                du: definedUnitOf :st :tid
-                inUnit: false
-                match (
-                    du
-                ) case some then {
-                    if du.stringView == unm then inUnit = true
-                } case none then null
-                if inUnit then {
-                    with zit8: zt.genericChildren.iterateItems do for ze8: zit8 loop {
-                        gkeys.append ze8.key
-                        gtids.append ze8.value
-                    }
+                with zit8: zt.genericChildren.iterateItems do for ze8: zit8 loop {
+                    gkeys.append ze8.key
+                    gtids.append ze8.value
                 }
             }
-            {
-                if gkeys.length > 0 then {
-                    idx: u64
-                    gn: gkeys.length
-                    for idx < gn loop {
-                        ekey: gkeys.get i: idx
-                        eval: gtids.get i: idx
-                        pn: canonTypeName reg: st.reg :tid
-                        # the edge key's kind comes from the child's last
-                        # ordinal: a numeric VALUE key prints its literal
-                        kc: st.reg.genericArgCount specId: (ztypes.tid.create from: eval.u64)
-                        kIsVal: false
-                        if kc > 0 then {
-                            kIsVal = (st.reg.genericArgIsValueAt
-                                specId: (ztypes.tid.create from: eval.u64)
-                                ordinal: kc - 1
-                            )
-                        }
-                        kn: String
-                        if kIsVal then {
-                            kn = "\{ekey}"
-                        } else {
-                            kn = canonTypeName reg: st.reg tid: (ztypes.tid.create from: ekey.u64)
-                        }
-                        cn: canonTypeName reg: st.reg tid: (ztypes.tid.create from: eval.u64)
-                        row: "generic_child \{pn} \{kn} \{cn}"
-                        rows.append row
-                        idx = idx + 1
-                    }
-                }
+            idx: u64
+            gn: gkeys.length
+            for idx < gn loop {
+                ekey: gkeys.get i: idx
+                eval: gtids.get i: idx
+                rows.append (genericChildRow :st :tid :ekey :eval)
+                idx = idx + 1
             }
             tid = tid.next
         }
@@ -1001,49 +1028,24 @@ ZDumper: class {
         n: st.reg.nextTypeId
         tid: ztypes.tid
         for tid < n loop {
+            # collected before any row is built, as in appendGenericChildrenCanon
             cargs: ListVal u64
-            if tid < st.reg.typeById.length then {
+            if (typeInUnit :st :tid :unm) then {
                 zt: st.reg.typeById.get i: tid
-                du: definedUnitOf :st :tid
-                inUnit: false
-                match (
-                    du
-                ) case some then {
-                    if du.stringView == unm then inUnit = true
-                } case none then null
-                if inUnit then {
-                    cz: zt.genericArgs.length
-                    ci: u64
-                    for ci < cz loop {
-                        ce: zt.genericArgs.get i: ci
-                        cargs.append ce
-                        ci = ci + 1
-                    }
+                cz: zt.genericArgs.length
+                ci: u64
+                for ci < cz loop {
+                    ce: zt.genericArgs.get i: ci
+                    cargs.append ce
+                    ci = ci + 1
                 }
             }
-            {
-                if cargs.length > 0 then {
-                    an: cargs.length
-                    ai: u64
-                    for ai < an loop {
-                        av: cargs.get i: ai
-                        sn: canonTypeName reg: st.reg :tid
-                        iv: u64
-                        vn: String
-                        if (st.reg.genericArgIsValueAt
-                            specId: (ztypes.tid.create from: tid.u64)
-                            ordinal: ai
-                        ) then {
-                            iv = 1
-                            vn = "\{av}"
-                        } else {
-                            vn = canonTypeName reg: st.reg tid: (ztypes.tid.create from: av.u64)
-                        }
-                        row: "generic_arg \{sn} \{ai} \{vn} \{iv}"
-                        rows.append row
-                        ai = ai + 1
-                    }
-                }
+            an: cargs.length
+            ai: u64
+            for ai < an loop {
+                av: cargs.get i: ai
+                rows.append (genericArgRow :st :tid :ai :av)
+                ai = ai + 1
             }
             tid = tid.next
         }
@@ -1201,15 +1203,15 @@ ZDumper: class {
         this.emitSection title: "member_const" :rows
     }
 
-    # appendSymbolTableCanon -- the body-walk environment (scope / entry /
-    # variable / narrowed_subtype), id-normalized: frame and entry ids are
-    # dropped, a frame's parent named by its label, entry/variable ztype via
-    # canonTypeName. No unit filter -- the table holds only the main unit's
-    # bodies.
-    appendSymbolTableCanon: function {
-        :this pool: zast.StringPool.view st: zenv.ZSymbolTable.view
-    } is {
+    # appendScopeRowsCanon -- the `scope` projection, and the frame-id to
+    # frame-NAME map every later canon row resolves its scope through. A frame's
+    # parent is named rather than numbered, which is what makes the projection
+    # id-independent.
+    appendScopeRowsCanon: function {
+        :this
+        st: zenv.ZSymbolTable.view
         scopeName: (IdMapR u64 V: String)
+    } is {
         scopeRows: List String
         depth: u64
         nd: st.typing.decls.length
@@ -1217,34 +1219,43 @@ ZDumper: class {
         for di < nd loop {
             d: ztypes.declid.create from: di
             di = di + 1
-            if (st.typing.declIsFrame declId: d) when (
-                (st.frameHidden.has item: d.u64).not
-            ) then {
-                lbl: frameLabelOf :st frame: d
-                scopeName.set key: d.u64 value: lbl.copy
-                parentNameSql: "NULL".string
-                pd: st.typing.declParentOf declId: d
-                po: scopeName.get key: pd.u64
-                match (
-                    po
-                ) case some then {
-                    parentNameSql = sqlStr s: po.stringView
-                } case none then null
-                kind: "BLOCK"
-                if lbl.length == 0 then kind = "CALL"
-                kindSql: sqlStr s: kind
-                nameSql: sqlStr s: lbl.stringView
-                unreachNum: boolNum b: (st.unreachableFrames.has item: d.u64)
-                line: "\{parentNameSql} | \{kindSql} | \{nameSql} | \{depth} | \{unreachNum}"
-                scopeRows.append line
-                depth = depth + 1
-            }
+            if (st.typing.declIsFrame declId: d).not then continue
+            if (st.frameHidden.has item: d.u64) then continue
+            lbl: frameLabelOf :st frame: d
+            scopeName.set key: d.u64 value: lbl.copy
+            parentNameSql: "NULL".string
+            pd: st.typing.declParentOf declId: d
+            po: scopeName.get key: pd.u64
+            match (
+                po
+            ) case some then {
+                parentNameSql = sqlStr s: po.stringView
+            } case none then null
+            kind: "BLOCK"
+            if lbl.length == 0 then kind = "CALL"
+            kindSql: sqlStr s: kind
+            nameSql: sqlStr s: lbl.stringView
+            unreachNum: boolNum b: (st.unreachableFrames.has item: d.u64)
+            line: "\{parentNameSql} | \{kindSql} | \{nameSql} | \{depth} | \{unreachNum}"
+            scopeRows.append line
+            depth = depth + 1
         }
         this.emitSection title: "scope" rows: scopeRows
+    }
 
-        entryRows: List String
-        narrowedRows: List String
+    # appendEntryRowsCanon -- the `entry` projection. An entry whose scope has no
+    # name is one in a hidden frame and contributes no row, but its narrowing
+    # still does, so `narrowedRows` fills alongside and is emitted by the caller.
+    # `seen` collects the variable ids the variable projection then renders.
+    appendEntryRowsCanon: function {
+        :this
+        pool: zast.StringPool.view
+        st: zenv.ZSymbolTable.view
+        scopeName: (IdMapR u64 V: String)
         seen: IdSet u64
+        narrowedRows: List String
+    } is {
+        entryRows: List String
         for e: st.entryDump.iterate loop {
             so: scopeName.get key: e.scopeId
             match (
@@ -1256,14 +1267,7 @@ ZDumper: class {
                 ztName: canonTypeName reg: st.reg tid: e.ztypeId
                 ztSql: sqlStr s: ztName.stringView
                 defNum: boolNum b: e.isDefinition
-                hasVar: false
-                vh: e.varId
-                match (
-                    vh
-                ) case some then {
-                    hasVar = true
-                } case none then null
-                hasVarNum: boolNum b: hasVar
+                hasVarNum: boolNum b: e.varId.some
                 takNum: boolNum b: e.isTaken
                 eline: "\{scNameSql} | \{e.position} | \{enmSql} | \{ztSql} | \{defNum} | \{hasVarNum} | \{takNum}"
                 entryRows.append eline
@@ -1279,14 +1283,20 @@ ZDumper: class {
                 narrowedRows.append "\{xnmSql} | 1"
             }
             vd: e.varId
-            match (
-                vd
-            ) case some then {
-                seen.add item: vd
-            } case none then null
+            if vd.some then seen.add item: vd
         }
         this.emitSection title: "entry" rows: entryRows
+    }
 
+    # appendVariableRowsCanon -- the `variable` projection, one row per variable
+    # id an entry referred to and the registry holds. Its type is named rather
+    # than numbered, as everywhere else in the canon dump.
+    appendVariableRowsCanon: function {
+        :this
+        pool: zast.StringPool.view
+        st: zenv.ZSymbolTable.view
+        seen: IdSet u64
+    } is {
         varRows: List String
         for vid: seen.iterate loop {
             vidT: ztypes.vid.create from: vid
@@ -1303,10 +1313,24 @@ ZDumper: class {
             varRows.append vline
         }
         this.emitSection title: "variable" rows: varRows
-
-        this.emitSection title: "narrowed_subtype" rows: narrowedRows
     }
 
+    # appendSymbolTableCanon -- the body-walk environment (scope / entry /
+    # variable / narrowed_subtype), id-normalized: frame and entry ids are
+    # dropped, a frame's parent named by its label, entry/variable ztype via
+    # canonTypeName. No unit filter -- the table holds only the main unit's
+    # bodies.
+    appendSymbolTableCanon: function {
+        :this pool: zast.StringPool.view st: zenv.ZSymbolTable.view
+    } is {
+        scopeName: (IdMapR u64 V: String)
+        seen: IdSet u64
+        narrowedRows: List String
+        this.appendScopeRowsCanon :st :scopeName
+        this.appendEntryRowsCanon :pool :st :scopeName :seen :narrowedRows
+        this.appendVariableRowsCanon :pool :st :seen
+        this.emitSection title: "narrowed_subtype" rows: narrowedRows
+    }
     # emit what each call argument's ownership resolved to
     appendArgDispositionCanon: function {:this ast: Ast.view st: zenv.ZSymbolTable.view} is {
         rows: List String
@@ -1351,12 +1375,28 @@ walkExprStampsAt: function {
     return (walkExprStamps :typing :ast :n :ids :vals)
 }
 
+# stampedKind -- whether `n` carries a type stamp, and so whether the walk
+# descends through it. Three of the variant's arms do not: `program` is
+# structure rather than expression, and `error` and `placeholder` stand where a
+# node could not be built.
+stampedKind: function {n: astnode.view} out bool is {
+    if n.program then return false
+    if n.error then return false
+    if n.placeholder then return false
+    return true
+}
+
 # walkExprStamps -- an Expression wrapper's typed row shows the innermost
-# non-expression node's
-# stamp when one exists, falling back to the wrapper's own. The walk returns
-# each node's effective stamp so nested wrappers see through inner wrappers;
-# overrides are collected and applied to nodeType after the walk (check-time
-# propagation has already read the original values).
+# non-expression node's stamp when one exists, falling back to the wrapper's
+# own. The walk returns each node's effective stamp so nested wrappers see
+# through inner wrappers; overrides are collected and applied to nodeType after
+# the walk (check-time propagation has already read the original values).
+#
+# The children come from `zast.childIds`, which is the ONE enumeration the AST
+# publishes. A second one spelled out here per node kind is a list to keep in
+# step with the union: a kind added without an arm would leave its whole subtree
+# unstamped, and say nothing. The cost is a child list per node, which this walk
+# pays only under `--dump-sql`.
 walkExprStamps: function {
     typing: ztyping.ZTyping
     ast: Ast.view
@@ -1364,200 +1404,22 @@ walkExprStamps: function {
     ids: ListVal u64
     vals: ListVal u64
 } out u64 is {
-    match (
-        n
-    ) case expression then {
-        eff: walkExprStamps :typing :ast n: (ast.nodes.get i: n.expression.u64) :ids :vals
+    selfId: (zast.nodeIdOf :n).u64
+    if n.expression then {
+        eff: walkExprStampsAt :typing :ast nId: n.expression :ids :vals
         if eff > 0 then {
-            wid: n.nodeid.u64
-            ids.append wid
+            ids.append selfId
             ev: eff
             vals.append ev
             return eff
         }
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case binop then {
-        walkExprStamps :typing :ast n: (ast.nodes.get i: n.lhs.u64) :ids :vals
-        walkExprStamps :typing :ast n: (ast.nodes.get i: n.operator.u64) :ids :vals
-        walkExprStamps :typing :ast n: (ast.nodes.get i: n.rhs.u64) :ids :vals
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case atomstring then {
-        stx59: u64
-        for stx59 < n.stringparts.count.u64 loop {
-            sp: zast.kidAt kids: ast.kids span: n.stringparts i: stx59
-            stx59 = stx59 + 1
-            walkExprStamps :typing :ast n: (ast.nodes.get i: sp.u64) :ids :vals
-        }
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case dottedpath then {
-        walkExprStamps :typing :ast n: (ast.nodes.get i: n.parent.u64) :ids :vals
-        walkExprStamps :typing :ast n: (ast.nodes.get i: n.child.u64) :ids :vals
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case call then {
-        walkExprStamps :typing :ast n: (ast.nodes.get i: n.callable.u64) :ids :vals
-        arx649: u64
-        for arx649 < n.arguments.count.u64 loop {
-            arg: zast.kidAt kids: ast.kids span: n.arguments i: arx649
-            arx649 = arx649 + 1
-            walkExprStamps :typing :ast n: (ast.nodes.get i: arg.u64) :ids :vals
-        }
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case typeofexpr then {
-        walkExprStamps :typing :ast n: (ast.nodes.get i: n.source.u64) :ids :vals
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case namedoperation then {
-        walkExprStamps :typing :ast n: (ast.nodes.get i: n.operation.u64) :ids :vals
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case datablock then {
-        ei9: u64
-        for ei9 < n.elements.count.u64 loop {
-            el: zast.kidAt kids: ast.kids span: n.elements i: ei9
-            ei9 = ei9 + 1
-            walkExprStamps :typing :ast n: (ast.nodes.get i: el.u64) :ids :vals
-        }
-        walkExprStampsOptAt :typing :ast oId: n.outType :ids :vals
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case statement then {
-        stx779: u64
-        for stx779 < n.statements.count.u64 loop {
-            lnId: zast.kidAt kids: ast.kids span: n.statements i: stx779
-            stx779 = stx779 + 1
-            walkExprStamps :typing :ast n: (ast.nodes.get i: lnId.u64) :ids :vals
-        }
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case statementline then {
-        walkExprStamps :typing :ast n: (ast.nodes.get i: n.statementline.u64) :ids :vals
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case assignment then {
-        walkExprStamps :typing :ast n: (ast.nodes.get i: n.value.u64) :ids :vals
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case reassignment then {
-        walkExprStamps :typing :ast n: (ast.nodes.get i: n.topath.u64) :ids :vals
-        walkExprStamps :typing :ast n: (ast.nodes.get i: n.value.u64) :ids :vals
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case swapstmt then {
-        walkExprStamps :typing :ast n: (ast.nodes.get i: n.lhs.u64) :ids :vals
-        walkExprStamps :typing :ast n: (ast.nodes.get i: n.rhs.u64) :ids :vals
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case ifexpr then {
-        clx1099: u64
-        for clx1099 < n.clauses.count.u64 loop {
-            cl: zast.kidAt kids: ast.kids span: n.clauses i: clx1099
-            clx1099 = clx1099 + 1
-            walkExprStamps :typing :ast n: (ast.nodes.get i: cl.u64) :ids :vals
-        }
-        walkExprStampsOptAt :typing :ast oId: n.elseclause :ids :vals
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case ifclause then {
-        cox1339: u64
-        for cox1339 < n.conditions.count.u64 loop {
-            coId: zast.kidAt kids: ast.kids span: n.conditions i: cox1339
-            cox1339 = cox1339 + 1
-            walkExprStamps :typing :ast n: (ast.nodes.get i: coId.u64) :ids :vals
-        }
-        walkExprStamps :typing :ast n: (ast.nodes.get i: n.statement.u64) :ids :vals
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case forexpr then {
-        cox1349: u64
-        for cox1349 < n.conditions.count.u64 loop {
-            fc: zast.kidAt kids: ast.kids span: n.conditions i: cox1349
-            cox1349 = cox1349 + 1
-            walkExprStamps :typing :ast n: (ast.nodes.get i: fc.u64) :ids :vals
-        }
-        walkExprStampsOptAt :typing :ast oId: n.body :ids :vals
-        pox1429: u64
-        for pox1429 < n.postconditions.count.u64 loop {
-            fp: zast.kidAt kids: ast.kids span: n.postconditions i: pox1429
-            pox1429 = pox1429 + 1
-            walkExprStamps :typing :ast n: (ast.nodes.get i: fp.u64) :ids :vals
-        }
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case doexpr then {
-        walkExprStamps :typing :ast n: (ast.nodes.get i: n.statement.u64) :ids :vals
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case withexpr then {
-        walkExprStamps :typing :ast n: (ast.nodes.get i: n.value.u64) :ids :vals
-        walkExprStamps :typing :ast n: (ast.nodes.get i: n.body.u64) :ids :vals
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case caseexpr then {
-        walkExprStamps :typing :ast n: (ast.nodes.get i: n.subject.u64) :ids :vals
-        clx1109: u64
-        for clx1109 < n.clauses.count.u64 loop {
-            cc: zast.kidAt kids: ast.kids span: n.clauses i: clx1109
-            clx1109 = clx1109 + 1
-            walkExprStamps :typing :ast n: (ast.nodes.get i: cc.u64) :ids :vals
-        }
-        walkExprStampsOptAt :typing :ast oId: n.elseclause :ids :vals
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case caseclause then {
-        walkExprStamps :typing :ast n: (ast.nodes.get i: n.matcharm.u64) :ids :vals
-        walkExprStamps :typing :ast n: (ast.nodes.get i: n.statement.u64) :ids :vals
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case functiondef then {
-        walkExprStampsOptAt :typing :ast oId: n.returntype :ids :vals
-        pax1559: u64
-        for pax1559 < n.parameters.count.u64 loop {
-            pmId: zast.kidAt kids: ast.kids span: n.parameters i: pax1559
-            pax1559 = pax1559 + 1
-            pm: ast.nodes.get i: pmId.u64
-            walkExprStamps :typing :ast n: pm :ids :vals
-        }
-        walkExprStampsOptAt :typing :ast oId: n.body :ids :vals
-        asx1779: u64
-        for asx1779 < n.asItems.count.u64 loop {
-            amId: zast.kidAt kids: ast.kids span: n.asItems i: asx1779
-            asx1779 = asx1779 + 1
-            am: ast.nodes.get i: amId.u64
-            walkExprStamps :typing :ast n: am :ids :vals
-        }
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case objectdef then {
-        isx1959: u64
-        for isx1959 < n.isItems.count.u64 loop {
-            oiId: zast.kidAt kids: ast.kids span: n.isItems i: isx1959
-            isx1959 = isx1959 + 1
-            oi: ast.nodes.get i: oiId.u64
-            walkExprStamps :typing :ast n: oi :ids :vals
-        }
-        asx1789: u64
-        for asx1789 < n.asItems.count.u64 loop {
-            oaId: zast.kidAt kids: ast.kids span: n.asItems i: asx1789
-            asx1789 = asx1789 + 1
-            oa: ast.nodes.get i: oaId.u64
-            walkExprStamps :typing :ast n: oa :ids :vals
-        }
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case unitdef then {
-        box2169: u64
-        for box2169 < n.body.count.u64 loop {
-            ub: zast.kidAt kids: ast.kids span: n.body i: box2169
-            box2169 = box2169 + 1
-            ubNode: ast.nodes.get i: ub.u64
-            walkExprStamps :typing :ast n: ubNode :ids :vals
-        }
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case atomid then {
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case labelvalue then {
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } case stringchunk then {
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: n.nodeid.u64)
-    } else {
-        return 0
+        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: selfId)
     }
-}
-
-# walkExprStampsOptAt -- the id-taking entry (0 = absent).
-walkExprStampsOptAt: function {
-    typing: ztyping.ZTyping
-    ast: Ast.view
-    oId: zast.nodeid
-    ids: ListVal u64
-    vals: ListVal u64
-} is {
-    if oId.isZero then return
-    o: ast.nodes.get i: oId.u64
-    walkExprStamps :typing :ast n: o :ids :vals
+    if (stampedKind :n).not then return 0
+    with kit: (zast.childIds :ast :n).iterate do for k: kit loop {
+        walkExprStampsAt :typing :ast nId: (zast.nodeid.create from: k) :ids :vals
+    }
+    return (ztyping.nodeTypeAt tbl: typing.nodeType nid: selfId)
 }
 
 # overrideExpressionStamps -- collect the wrapper overrides across every unit,
