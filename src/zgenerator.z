@@ -624,90 +624,119 @@ crossWalk: function {ast: Ast.view gc: GenCross n: astnode.view inYieldLoop: boo
     match (
         n
     ) case functiondef then null case assignment then {
-        av: ast.nodes.get i: n.value.u64
-        crossWalk :ast :gc n: av :inYieldLoop
-        anvC: zast.poolTextAt pool: ast.names ref: n.name
-        anv: anvC.stringView
-        if (isYieldValue :ast n: av) then {
-            ybk: anv.string
-            ybv: true
-            gc.yieldBound.set key: ybk value: ybv
-        }
-        isP: (gc.params.get key: anv.string).or d: false
-        if isP.not then {
-            seen: (gc.firstDef.get key: anv.string).or d: 18446744073709551615.u64
-            if seen == 18446744073709551615.u64 then {
-                dk: anv.string
-                dv: gc.yieldCount
-                gc.firstDef.set key: dk value: dv
-            }
-            if inYieldLoop then {
-                lk: anv.string
-                lv: true
-                gc.inLoop.set key: lk value: lv
-            }
-        }
+        crossWalkDef :ast :gc :n :inYieldLoop
     } case atomid then {
-        unvC: zast.nameTextAt :ast ref: n.name
-        unv: unvC.stringView
-        seen2: (gc.firstDef.get key: unv.string).or d: 18446744073709551615.u64
-        if seen2 != 18446744073709551615.u64 then {
-            uk: unv.string
-            uv: gc.yieldCount
-            prev: (gc.maxUse.get key: unv.string).or d: 0
-            if uv > prev then {
-                gc.maxUse.set key: uk value: uv
-            }
-            if inYieldLoop then {
-                lk2: unv.string
-                lv2: true
-                gc.inLoop.set key: lk2 value: lv2
-            }
-        }
+        crossWalkUse :ast :gc :n :inYieldLoop
     } case forexpr then {
         bodyYields: (zast.yieldCountIn :ast nid: n.body) > 0
         sub: inYieldLoop
         if bodyYields then sub = true
-        cox1379: u64
-        for cox1379 < n.conditions.count.u64 loop {
-            f0: zast.kidAt kids: ast.kids span: n.conditions i: cox1379
-            cox1379 = cox1379 + 1
-            crossWalk :ast :gc n: (ast.nodes.get i: f0.u64) inYieldLoop: sub
-        }
-        if n.body > 0 then {
-            fcb: ast.nodes.get i: n.body.u64
-            crossWalk :ast :gc n: fcb inYieldLoop: sub
-        }
-        pox1449: u64
-        for pox1449 < n.postconditions.count.u64 loop {
-            p0: zast.kidAt kids: ast.kids span: n.postconditions i: pox1449
-            pox1449 = pox1449 + 1
-            crossWalk :ast :gc n: (ast.nodes.get i: p0.u64) inYieldLoop: sub
-        }
+        crossWalkSpan :ast :gc span: n.conditions inYieldLoop: sub
+        crossWalkAt :ast :gc nid: n.body inYieldLoop: sub
+        crossWalkSpan :ast :gc span: n.postconditions inYieldLoop: sub
     } case caseclause then {
         # the arm pattern is not a use of a local
-        crossWalk :ast :gc n: (ast.nodes.get i: n.statement.u64) :inYieldLoop
+        crossWalkAt :ast :gc nid: n.statement :inYieldLoop
     } case call then {
         # the callee name is not a use of a local
-        cwx99: u64
-        for cwx99 < n.arguments.count.u64 loop {
-            cwId99: zast.kidAt kids: ast.kids span: n.arguments i: cwx99
-            cwx99 = cwx99 + 1
-            crossWalk :ast :gc n: (ast.nodes.get i: cwId99.u64) :inYieldLoop
-        }
+        crossWalkSpan :ast :gc span: n.arguments :inYieldLoop
         # a suspension point advances the clock every other field is read
         # against. The operand is walked FIRST, so a local used in the yielded
         # value is recorded against the count before this yield moves it.
         if (zast.isYieldCalleeAt :ast callableId: n.callable) then gc.yieldCount = gc.yieldCount + 1
     } case binop then {
         # the operator atom is not a use of a local
-        crossWalk :ast :gc n: (ast.nodes.get i: n.lhs.u64) :inYieldLoop
-        crossWalk :ast :gc n: (ast.nodes.get i: n.rhs.u64) :inYieldLoop
+        crossWalkAt :ast :gc nid: n.lhs :inYieldLoop
+        crossWalkAt :ast :gc nid: n.rhs :inYieldLoop
     } case dottedpath then {
         # a member selector is not a use of a local
-        crossWalk :ast :gc n: (ast.nodes.get i: n.parent.u64) :inYieldLoop
+        crossWalkAt :ast :gc nid: n.parent :inYieldLoop
     } else {
         crossWalkIds :ast :gc ids: (zast.childIds :ast :n) :inYieldLoop
+    }
+}
+
+# crossWalkAt -- crossWalk on a child named by its id, so a step of the walk
+# reads as one call rather than a table lookup wrapped around one. A zero id is
+# an absent child and walks nothing.
+crossWalkAt: function {ast: Ast.view gc: GenCross nid: zast.nodeid inYieldLoop: bool} is {
+    if nid.isZero then return
+    crossWalk :ast :gc n: (ast.nodes.get i: nid.u64) :inYieldLoop
+}
+
+# crossWalkSpan -- the children of `span`, in order. The span is read in place
+# rather than through a list of its own: each child is visited once, so a list
+# would be one allocation per node for nothing.
+crossWalkSpan: function {ast: Ast.view gc: GenCross span: zast.kidspan inYieldLoop: bool} is {
+    i: u64
+    for i < span.count.u64 loop {
+        k: zast.kidAt kids: ast.kids :span :i
+        i = i + 1
+        crossWalkAt :ast :gc nid: (zast.nodeid.create from: k) :inYieldLoop
+    }
+}
+
+# noteInLoop -- record that `name` was touched inside a yielding loop, which
+# makes it a crossing local whatever the counts say: the next iteration resumes
+# past the reference.
+noteInLoop: function {gc: GenCross name: StringView inYieldLoop: bool} is {
+    if inYieldLoop.not then return
+    k: name.string
+    v: true
+    gc.inLoop.set key: k value: v
+}
+
+# crossWalkDef -- an assignment DEFINES a local. The value is walked before the
+# name is stamped, so a local read inside it is recorded against the suspension
+# count this definition sits at rather than a later one. A parameter is already
+# a field, so it earns no first-definition stamp.
+crossWalkDef: function {
+    ast: Ast.view
+    gc: GenCross
+    n: zast.assignmentrow.view
+    inYieldLoop: bool
+} is {
+    av: ast.nodes.get i: n.value.u64
+    crossWalk :ast :gc n: av :inYieldLoop
+    anvC: zast.poolTextAt pool: ast.names ref: n.name
+    anv: anvC.stringView
+    if (isYieldValue :ast n: av) then {
+        ybk: anv.string
+        ybv: true
+        gc.yieldBound.set key: ybk value: ybv
+    }
+    isP: (gc.params.get key: anv.string).or d: false
+    if isP.not then {
+        seen: (gc.firstDef.get key: anv.string).or d: 18446744073709551615.u64
+        if seen == 18446744073709551615.u64 then {
+            dk: anv.string
+            dv: gc.yieldCount
+            gc.firstDef.set key: dk value: dv
+        }
+        noteInLoop :gc name: anv :inYieldLoop
+    }
+}
+
+# crossWalkUse -- an atom USES a local, and the latest suspension count it is
+# read at is what decides whether the read crosses one. A name with no recorded
+# definition is not a local of this body and is left alone.
+crossWalkUse: function {
+    ast: Ast.view
+    gc: GenCross
+    n: zast.atomidrow.view
+    inYieldLoop: bool
+} is {
+    unvC: zast.nameTextAt :ast ref: n.name
+    unv: unvC.stringView
+    seen2: (gc.firstDef.get key: unv.string).or d: 18446744073709551615.u64
+    if seen2 != 18446744073709551615.u64 then {
+        uk: unv.string
+        uv: gc.yieldCount
+        prev: (gc.maxUse.get key: unv.string).or d: 0
+        if uv > prev then {
+            gc.maxUse.set key: uk value: uv
+        }
+        noteInLoop :gc name: unv :inYieldLoop
     }
 }
 
