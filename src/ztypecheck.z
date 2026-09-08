@@ -13301,32 +13301,11 @@ scanCallsInNode: function {
     match (
         node
     ) case call then {
-        cn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: node.callable.u64))
-        if cn.stringView == "return" then {
-            scFr: unitFrameOf :st declId: frame
-            demandDefinition :st frame: scFr nameId: zast.names.wkReturn
-            (demandDefinition
-                :st
-                frame: scFr
-                nameId: (zast.poolFind pool: ast.names text: "never")
-            )
-        } else {
-            cFr: unitFrameOf :st declId: frame
-            if cn.length > 0 then (demandDefinition
-                :st
-                frame: cFr
-                nameId: (atomNameId :ast n: (ast.nodes.get i: node.callable.u64))
-            )
-        }
+        demandCalleeName :st :frame :ast calleeId: node.callable
         # the callee then the arguments, which is childIds' order for a call,
         # walked through the node's own fields so no list is built for it
-        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.callable.u64)
-        arx129: u64
-        for arx129 < node.arguments.count.u64 loop {
-            aId9: zast.kidAt kids: ast.kids span: node.arguments i: arx129
-            arx129 = arx129 + 1
-            scanCallsInNode :st :frame :ast node: (ast.nodes.get i: aId9.u64)
-        }
+        scanCallsAt :st :frame :ast nid: node.callable
+        scanCallsInSpan :st :frame :ast span: node.arguments
     } case atomid then {
         # bare body identifiers demand main-unit definitions (unit constants,
         # data blocks); non-definition names never match a demanded def.
@@ -13341,24 +13320,19 @@ scanCallsInNode: function {
         }
     } case binop then {
         # the operator atom names a method, never a definition to demand
-        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.lhs.u64)
-        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.rhs.u64)
+        scanCallsAt :st :frame :ast nid: node.lhs
+        scanCallsAt :st :frame :ast nid: node.rhs
     } case statement then {
         # the block shapes descend through their OWN children: the generic arm
         # below builds a list per node visited, and these are most of the nodes
         # there are
-        stx99: u64
-        for stx99 < node.statements.count.u64 loop {
-            sId99: zast.kidAt kids: ast.kids span: node.statements i: stx99
-            stx99 = stx99 + 1
-            scanCallsInNode :st :frame :ast node: (ast.nodes.get i: sId99.u64)
-        }
+        scanCallsInSpan :st :frame :ast span: node.statements
     } case statementline then {
-        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.statementline.u64)
+        scanCallsAt :st :frame :ast nid: node.statementline
     } case expression then {
-        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.expression.u64)
+        scanCallsAt :st :frame :ast nid: node.expression
     } case assignment then {
-        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.value.u64)
+        scanCallsAt :st :frame :ast nid: node.value
     } case ifexpr then {
         # Deliberately branch-blind. This pass runs before resolveConstantDefs,
         # so no fold exists yet and a dead clause's names are demanded anyway.
@@ -13368,43 +13342,18 @@ scanCallsInNode: function {
         # branch that cannot run. That is why a reached `error` is reported by
         # the evaluator, which visits only the winning branch, and not by a
         # walk like this one, which sees every arm.
-        clx869: u64
-        for clx869 < node.clauses.count.u64 loop {
-            clId: zast.kidAt kids: ast.kids span: node.clauses i: clx869
-            clx869 = clx869 + 1
-            scanCallsInNode :st :frame :ast node: (ast.nodes.get i: clId.u64)
-        }
-        scanBodyAt :st :frame :ast bodyId: node.elseclause
+        scanCallsInSpan :st :frame :ast span: node.clauses
+        scanCallsAt :st :frame :ast nid: node.elseclause
     } case forexpr then {
-        fFr: unitFrameOf :st declId: frame
-        (demandDefinition
-            :st
-            frame: fFr
-            nameId: (zast.poolFind pool: ast.names text: "never")
-        )
+        demandNever :st :frame :ast
         # conditions, body, postconditions -- childIds' order for a for, walked
-        # through the node's own fields. scanBodyAt skips an absent body
+        # through the node's own fields. scanCallsAt skips an absent body
         # exactly as childIds' appendOptId omits it.
-        cox1189: u64
-        for cox1189 < node.conditions.count.u64 loop {
-            cId9: zast.kidAt kids: ast.kids span: node.conditions i: cox1189
-            cox1189 = cox1189 + 1
-            scanCallsInNode :st :frame :ast node: (ast.nodes.get i: cId9.u64)
-        }
-        scanBodyAt :st :frame :ast bodyId: node.body
-        pox1409: u64
-        for pox1409 < node.postconditions.count.u64 loop {
-            pId9: zast.kidAt kids: ast.kids span: node.postconditions i: pox1409
-            pox1409 = pox1409 + 1
-            scanCallsInNode :st :frame :ast node: (ast.nodes.get i: pId9.u64)
-        }
+        scanCallsInSpan :st :frame :ast span: node.conditions
+        scanCallsAt :st :frame :ast nid: node.body
+        scanCallsInSpan :st :frame :ast span: node.postconditions
     } case doexpr then {
-        doFr: unitFrameOf :st declId: frame
-        (demandDefinition
-            :st
-            frame: doFr
-            nameId: (zast.poolFind pool: ast.names text: "never")
-        )
+        doFr: demandNever :st :frame :ast
         if (blockHasBreak :ast n: (ast.nodes.get i: node.statement.u64)) then {
             (demandDefinition
                 :st
@@ -13412,77 +13361,56 @@ scanCallsInNode: function {
                 nameId: (zast.poolFind pool: ast.names text: "optionval")
             )
         }
-        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.statement.u64)
+        scanCallsAt :st :frame :ast nid: node.statement
     } case namedoperation then {
-        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.operation.u64)
+        scanCallsAt :st :frame :ast nid: node.operation
     } case atomstring then {
-        stx29: u64
-        for stx29 < node.stringparts.count.u64 loop {
-            sId9: zast.kidAt kids: ast.kids span: node.stringparts i: stx29
-            stx29 = stx29 + 1
-            scanCallsInNode :st :frame :ast node: (ast.nodes.get i: sId9.u64)
-        }
+        scanCallsInSpan :st :frame :ast span: node.stringparts
     } case ifclause then {
-        cox1199: u64
-        for cox1199 < node.conditions.count.u64 loop {
-            kId9: zast.kidAt kids: ast.kids span: node.conditions i: cox1199
-            cox1199 = cox1199 + 1
-            scanCallsInNode :st :frame :ast node: (ast.nodes.get i: kId9.u64)
-        }
-        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.statement.u64)
+        scanCallsInSpan :st :frame :ast span: node.conditions
+        scanCallsAt :st :frame :ast nid: node.statement
     } case caseexpr then {
-        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.subject.u64)
-        clx879: u64
-        for clx879 < node.clauses.count.u64 loop {
-            qId9: zast.kidAt kids: ast.kids span: node.clauses i: clx879
-            clx879 = clx879 + 1
-            scanCallsInNode :st :frame :ast node: (ast.nodes.get i: qId9.u64)
-        }
-        scanBodyAt :st :frame :ast bodyId: node.elseclause
+        scanCallsAt :st :frame :ast nid: node.subject
+        scanCallsInSpan :st :frame :ast span: node.clauses
+        scanCallsAt :st :frame :ast nid: node.elseclause
     } case reassignment then {
-        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.topath.u64)
-        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.value.u64)
+        scanCallsAt :st :frame :ast nid: node.topath
+        scanCallsAt :st :frame :ast nid: node.value
     } case withexpr then {
-        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.value.u64)
-        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.body.u64)
+        scanCallsAt :st :frame :ast nid: node.value
+        scanCallsAt :st :frame :ast nid: node.body
     } case swapstmt then {
-        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.lhs.u64)
-        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.rhs.u64)
+        scanCallsAt :st :frame :ast nid: node.lhs
+        scanCallsAt :st :frame :ast nid: node.rhs
     } case typeofexpr then {
-        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.source.u64)
+        scanCallsAt :st :frame :ast nid: node.source
     } case dottedpath then {
-        bn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: node.parent.u64))
-        if bn.length > 0 then {
-            pFr: unitFrameOf :st declId: frame
-            (demandDefinition
-                :st
-                frame: pFr
-                nameId: (atomNameId :ast n: (ast.nodes.get i: node.parent.u64))
-            )
-            # a unit-qualified member (io.stdout) demands exactly that member
-            isUnitQ: nameDenotesUnit :st :frame nameId: (atomNameId
-                :ast
-                n: (ast.nodes.get i: node.parent.u64)
-            )
-            if isUnitQ then {
-                mn0: (zast.nameTextAt
-                    :ast
-                    ref: (atomNameId :ast n: (ast.nodes.get i: node.child.u64))
-                )
-                if mn0.length > 0 then (demandUnitMember
-                    :st
-                    unitNameId: (atomNameId :ast n: (ast.nodes.get i: node.parent.u64))
-                    nameId: (atomNameId :ast n: (ast.nodes.get i: node.child.u64))
-                )
-            }
-        }
+        demandPathNames :st :frame :ast parentId: node.parent childId: node.child
         # the member selector is never a definition to demand
-        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.parent.u64)
+        scanCallsAt :st :frame :ast nid: node.parent
     } case caseclause then {
         # the arm pattern is never a definition to demand
-        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: node.statement.u64)
+        scanCallsAt :st :frame :ast nid: node.statement
     } case functiondef then null case objectdef then null case unitdef then null case program then null case datablock then null case labelvalue then null else {
         scanCallsIn :st :frame :ast ids: (zast.childIds :ast n: node)
+    }
+}
+
+# scanCallsInSpan -- scanCallsInNode over every child a span names, without
+# building a list to hold them. scanCallsIn is the list-taking twin, for a
+# caller that already has one; this is the shape the node walk wants, because a
+# walk that materialises a list per NODE allocates one per node.
+scanCallsInSpan: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast.view
+    span: zast.kidspan
+} is {
+    i: u64
+    for i < span.count.u64 loop {
+        c: zast.kidAt kids: ast.kids :span :i
+        i = i + 1
+        scanCallsInNode :st :frame :ast node: (ast.nodes.get i: c.u64)
     }
 }
 
@@ -13499,18 +13427,75 @@ scanCallsIn: function {
     }
 }
 
-# scanBodyAt -- scan a function body table id for call demands (0 = absent).
-scanBodyAt: function {
+# demandCalleeName -- what a CALL demands before its parts are walked. `return`
+# is the one callee that demands two things: itself, and the `never` its
+# diverging form produces. Every other callee demands the name it spells.
+demandCalleeName: function {
     st: zenv.ZSymbolTable
     frame: ztypes.declid
     ast: Ast.view
-    bodyId: zast.nodeid
+    calleeId: zast.nodeid
 } is {
-    if bodyId > 0 then (scanCallsInNode
+    nameId: atomNameId :ast n: (ast.nodes.get i: calleeId.u64)
+    cn: zast.nameTextAt :ast ref: nameId
+    fr: unitFrameOf :st declId: frame
+    if cn.stringView == "return" then {
+        demandDefinition :st frame: fr nameId: zast.names.wkReturn
+        demandDefinition :st frame: fr nameId: (zast.poolFind pool: ast.names text: "never")
+        return
+    }
+    if cn.length > 0 then demandDefinition :st frame: fr :nameId
+}
+
+# demandPathNames -- what a DOTTED PATH demands: the name its root spells, and
+# -- when that root names a unit rather than a value -- the member behind the
+# dot as well, because `io.stdout` demands exactly that member and nothing else
+# in `io`. The selector on a value is a member read and demands nothing.
+demandPathNames: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast.view
+    parentId: zast.nodeid
+    childId: zast.nodeid
+} is {
+    rootId: atomNameId :ast n: (ast.nodes.get i: parentId.u64)
+    bn: zast.nameTextAt :ast ref: rootId
+    if bn.length == 0 then return
+    fr: unitFrameOf :st declId: frame
+    demandDefinition :st frame: fr nameId: rootId
+    if (nameDenotesUnit :st :frame nameId: rootId).not then return
+    membId: atomNameId :ast n: (ast.nodes.get i: childId.u64)
+    mn: zast.nameTextAt :ast ref: membId
+    if mn.length > 0 then demandUnitMember :st unitNameId: rootId nameId: membId
+}
+
+# demandNever -- every loop can end without producing a value, so `never` is
+# demanded wherever one appears. Returns the unit frame it demanded into, which
+# a `do` loop needs again for its break type.
+demandNever: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast.view
+} out ztypes.declid is {
+    fr: unitFrameOf :st declId: frame
+    demandDefinition :st frame: fr nameId: (zast.poolFind pool: ast.names text: "never")
+    return fr
+}
+
+# scanCallsAt -- scan the node at `nid` for call demands, and nothing at all
+# when there is no node there. The id-taking entry: every arm below reaches a
+# child by id, and spelling the row read at each of them said nothing.
+scanCallsAt: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast.view
+    nid: zast.nodeid
+} is {
+    if nid > 0 then (scanCallsInNode
         :st
         :frame
         :ast
-        node: (ast.nodes.get i: bodyId.u64)
+        node: (ast.nodes.get i: nid.u64)
     )
 }
 
@@ -13526,7 +13511,7 @@ scanDefCalls: function {
     match (
         op
     ) case functiondef then {
-        scanBodyAt :st :frame :ast bodyId: op.body
+        scanCallsAt :st :frame :ast nid: op.body
     } case objectdef then {
         isx1839: u64
         for isx1839 < op.isItems.count.u64 loop {
