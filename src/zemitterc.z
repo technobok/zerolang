@@ -2477,11 +2477,13 @@ ifDiverges: function {
     }
 }
 
-# stampNameOf -- the registry name of a node's stamped type ("" unstamped).
-stampNameOf: function {symtab: zenv.ZSymbolTable.view nid: u64} out String is {
+# stampNameView -- the stamped type's name for node `nid`, BORROWED, and "" when
+# the node carries no stamp. The view pins the registry for its binding's scope;
+# It is the only form: nothing keeps this name.
+stampNameView: function {symtab: zenv.ZSymbolTable.view nid: u64} outx StringView is {
     go: ztyping.nodeTypeAt tbl: symtab.typing.nodeType :nid
-    if go > 0 then return (symtab.reg.nameOf tid: (ztypes.tid.create from: go.u64))
-    return "".string
+    if go > 0 then return (regNameView :symtab tid: (ztypes.tid.create from: go.u64))
+    return ""
 }
 
 # builtinTidInU -- builtinTid for a builtin DECLARED IN `unit`: currentUnit is
@@ -4577,9 +4579,9 @@ svArgAddr: function {
         ) case some then {
             if b0d >= 48 when b0d <= 57 then return "".string
         } case none then null
-        snm: stampNameOf :symtab nid: n.nodeid.u64
-        if (isIntName name: snm.stringView) then return "".string
-        if (isFloatName name: snm.stringView) then return "".string
+        snm: stampNameView :symtab nid: n.nodeid.u64
+        if (isIntName name: snm) then return "".string
+        if (isFloatName name: snm) then return "".string
         # an ordinal pair is a C scalar, and passes like one
         if (isOrdinalVariant
             :symtab
@@ -4598,9 +4600,9 @@ svArgAddr: function {
     } case labelvalue then {
         anlC: ast.names.texts.get i: n.name.u64
         anl: anlC.stringView
-        snl: stampNameOf :symtab nid: n.nodeid.u64
-        if (isIntName name: snl.stringView) then return "".string
-        if (isFloatName name: snl.stringView) then return "".string
+        snl: stampNameView :symtab nid: n.nodeid.u64
+        if (isIntName name: snl) then return "".string
+        if (isFloatName name: snl) then return "".string
         # an ordinal pair is a C scalar, and passes like one
         if (isOrdinalVariant
             :symtab
@@ -14244,7 +14246,7 @@ emitPrintArg: function {
             }
         }
     } case atomid then {
-        tn: stampNameOf :symtab nid: n.nodeid.u64
+        tn: stampNameView :symtab nid: n.nodeid.u64
         anC: zast.nameTextAt :ast ref: n.name
         an: anC.stringView
         anmV0: atomVid :symtab nid: n.nodeid.u64
@@ -15277,6 +15279,16 @@ emitTakeAliasBind: function {
     return handled
 }
 
+# dropStaleBorrowAlias -- a binding statement introduces a FRESH local, so a
+# borrow alias left by an earlier binding of the same name points at a C
+# variable that is out of scope here. Drop it before the binding legs
+# re-establish one; anything that is not a borrow alias is left alone.
+dropStaleBorrowAlias: function {ctx: Ctx vid: ztypes.vid} is {
+    sab: vvGet xs: ctx.aliases :vid
+    if sab.length == 0 then return
+    if (sab.stringView.startsWith prefix: "(*__borrow_") then vvRemove xs: ctx.aliases :vid
+}
+
 # bindDeclaredCType -- the C type a binding declares. The NAME says scalar; the TID
 # says whether it is the BUILTIN one -- a shadow keeps the name and loses the C
 # scalar, so it emits its struct instead. An unnamed binding takes the stamped
@@ -15335,21 +15347,18 @@ emitAssignment: function {
     buf: String.borrow
 } is {
     avn: ast.nodes.get i: n.value.u64
-    tn: stampNameOf :symtab nid: n.nodeid.u64
     btid: stampIdOf :symtab nid: n.nodeid.u64
-    ct: bindDeclaredCType :ast :symtab :ctx :n :btid tn: tn.stringView
+    ct: String
+    # the stamped name is read once and never kept, so it is borrowed -- and
+    # scoped, because the view pins `symtab` and the legs below lend it on
+    {
+        tn: stampNameView :symtab nid: n.nodeid.u64
+        ct = bindDeclaredCType :ast :symtab :ctx :n :btid :tn
+    }
     anmC: zast.poolTextAt pool: ast.names ref: n.name
     nameVid: defVid :symtab nid: n.nodeid.u64
     nm: varCName :ctx vid: nameVid name: anmC.stringView
-    # this statement introduces a fresh local: a borrow alias left by an
-    # earlier binding of the same name names a C variable that is out of
-    # scope here, so drop it before the legs below re-establish one.
-    {
-        sab: vvGet xs: ctx.aliases vid: nameVid
-        if sab.length > 0 when (sab.stringView.startsWith prefix: "(*__borrow_") then {
-            vvRemove xs: ctx.aliases vid: nameVid
-        }
-    }
+    dropStaleBorrowAlias :ctx vid: nameVid
     nbrw: bindingRhsIsBorrow :ast :symtab :ctx n: avn
     ctx.borrowedVars.set key: (defVid :symtab nid: n.nodeid.u64) value: nbrw
     if ctx.genActive when (isYieldNode :ast n: avn) then {
@@ -15460,6 +15469,10 @@ emitAssignment: function {
         )
         if dd then return
     }
+    # read the stamped name again rather than holding the first view across the
+    # legs above: two borrows cost nothing, and one pin spanning them would
+    # block every `symtab` those legs lend
+    tn: stampNameView :symtab nid: n.nodeid.u64
     (emitTypedBind
         :ast
         :symtab
@@ -15472,7 +15485,7 @@ emitAssignment: function {
         :nameVid
         ct: ct.stringView
         :ltid
-        tn: tn.stringView
+        :tn
     )
 }
 
@@ -18785,9 +18798,9 @@ emitForCond: function {
             }
         } else {
             onid: exprNodeId n: (ast.nodes.get i: n.operation.u64)
-            tn: stampNameOf :symtab nid: onid
+            tn: stampNameView :symtab nid: onid
             takeFnTid: stampIdOf :symtab nid: onid
-            ct: scalarCTypeFor :symtab name: tn.stringView tid: takeFnTid
+            ct: scalarCTypeFor :symtab name: tn tid: takeFnTid
             iv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.operation.u64)
             if ct.length > 0 then {
                 li: "\{ind}\{ct} \{lbl} = \{iv};\n"
