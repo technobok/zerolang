@@ -2268,15 +2268,7 @@ dottedTagReadTid: function {symtab: zenv.ZSymbolTable.view nid: u64} out u64 is 
 # block for a dependency unit's reference.
 dataBlockTid: function {symtab: zenv.ZSymbolTable.view nid: u64} out ztypes.tid is {
     if nid == 0 then return (ztypes.tid.create from: 0)
-    rd: ztypes.declid
-    {
-        go: symtab.typing.refDecl.get key: nid
-        match (
-            go
-        ) case some then {
-            rd = go
-        } case none then null
-    }
+    rd: (symtab.typing.refDecl.get key: nid).or d: ztypes.declid
     if rd.u64 == 0 then return (ztypes.tid.create from: 0)
     t: u64
     {
@@ -16757,7 +16749,7 @@ reassignDestroyTid: function {
     nid: u64
 } out ztypes.tid is {
     stamped: stampIdOf :symtab :nid
-    rbn: bareAtomText :ast :n
+    rbn: atomTextDeep :ast :n
     if rbn.length == 0 then return stamped
     rbv: atomVid :symtab nid: (atomNodeId :n)
     if rbv.isZero then return stamped
@@ -16782,7 +16774,7 @@ emitReassignLvalue: function {
     # payload. A write THROUGH the subject (the dotted leg below) does take the
     # alias, which is what the narrowing is for.
     {
-        rbNm: bareAtomText :ast :n
+        rbNm: atomTextDeep :ast :n
         if rbNm.length > 0 then {
             rbVid: atomVid :symtab nid: (atomNodeId :n)
             if rbVid.isZero.not when (vvGet xs: ctx.narrowBox vid: rbVid).length > 0 then {
@@ -18694,7 +18686,12 @@ rangeBoundExpr: function {
     } case call then {
         callableNode: ast.nodes.get i: n.callable.u64
         mnId: dottedChildNameIdOf :ast n: callableNode
-        if (isRangeMemberId id: mnId) then return (rangeReceiver :ast :symtab :ctx n: callableNode)
+        if (isRangeMemberId id: mnId) then return (emitDottedReceiver
+            :ast
+            :symtab
+            :ctx
+            callable: callableNode
+        )
         if isLean then return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64))
         return "".string
     } case dottedpath then {
@@ -18712,23 +18709,6 @@ rangeBoundExpr: function {
         return "".string
     } else {
         if isLean then return (emitExpr :ast :symtab :ctx :n)
-        return "".string
-    }
-}
-
-# rangeReceiver -- the C expression for the receiver of a `.iterate`
-# dotted callable.
-rangeReceiver: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    n: astnode.view
-} out String is {
-    match (
-        n
-    ) case dottedpath then {
-        return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
-    } else {
         return "".string
     }
 }
@@ -18921,7 +18901,7 @@ bodyReassigns: function {ast: Ast.view n: astnode.view name: StringView} out boo
         # a write THROUGH the subject (`s.field = x`) goes through the alias
         # and leaves it standing; only a rebind of the bare name stales it
         tpn: ast.nodes.get i: n.topath.u64
-        rb: bareAtomText :ast n: tpn
+        rb: atomTextDeep :ast n: tpn
         return rb == name
     } case ifexpr then {
         hif: false
@@ -19163,15 +19143,7 @@ truthyCondText: function {
     n: astnode.view
     raw: StringView
 } out String is {
-    fa: u64
-    {
-        fo: symtab.typing.truthyCondArm.get key: (interpPartNodeId :n)
-        match (
-            fo
-        ) case some then {
-            fa = fo
-        } case none then null
-    }
+    fa: (symtab.typing.truthyCondArm.get key: (interpPartNodeId :n)).or d: 0
     if fa == 0 then return "".string
     tid: ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: (interpPartNodeId :n)
     if tid.isZero then return "".string
@@ -19264,7 +19236,7 @@ seedCondOp: function {
             :tids
         )
     } case binop then {
-        opn: bareAtomText :ast n: (ast.nodes.get i: n.operator.u64)
+        opn: atomTextDeep :ast n: (ast.nodes.get i: n.operator.u64)
         if opn == "==" then {
             # `== true` / `== false`: the operand names one of bool's arms,
             # and which side it is comes from bool's arm ORDER.
@@ -19311,20 +19283,6 @@ seedCondOp: function {
             }
         }
     } else null
-}
-
-# bareAtomText -- the expression-unwrapped bare atom text of a node,
-# "" for any other shape; a view into the pool.
-bareAtomText: function {ast: Ast.view n: astnode.view} outx StringView is {
-    match (
-        n
-    ) case expression then {
-        return (bareAtomText :ast n: (ast.nodes.get i: n.expression.u64))
-    } case atomid then {
-        return (zast.nameTextAt :ast ref: n.name).stringView
-    } else {
-        return ""
-    }
 }
 
 # seedCondOne -- the narrowBox seeds one condition contributes, appended to the
@@ -19716,7 +19674,7 @@ classifyCondFact: function {
             neg: false
         )
     } case binop then {
-        opn: bareAtomText :ast n: (ast.nodes.get i: n.operator.u64)
+        opn: atomTextDeep :ast n: (ast.nodes.get i: n.operator.u64)
         if opn != "==" then return none9
         # `== true` / `== false`: the operand names one of bool's arms, and which
         # side it is comes from bool's arm ORDER.
@@ -20629,15 +20587,7 @@ emitBodyNode: function {
             ) then trunc = true
             pgid: postGuardStmtId :ast :symtab n: s
             if pgid > 0 then {
-                pgRawId: zast.nameid
-                {
-                    pgnO: symtab.typing.postGuardName.get key: pgid
-                    match (
-                        pgnO
-                    ) case some then {
-                        pgRawId = pgnO
-                    } case none then null
-                }
+                pgRawId: (symtab.typing.postGuardName.get key: pgid).or d: zast.nameid
                 pgRawN: zast.poolTextAt pool: ast.names ref: pgRawId
                 # the alias text is emitted C, so the receiver has to be the
                 # subject's identifier, and the narrowing tables below key on
@@ -20657,15 +20607,7 @@ emitBodyNode: function {
                         guardStampTid = ztypes.tid.create from: pgtO
                     } case none then null
                 }
-                guardStampArmId: zast.nameid
-                {
-                    pgaO: symtab.typing.postGuardArm.get key: pgid
-                    match (
-                        pgaO
-                    ) case some then {
-                        guardStampArmId = pgaO
-                    } case none then null
-                }
+                guardStampArmId: (symtab.typing.postGuardArm.get key: pgid).or d: zast.nameid
                 guardStampArm: zast.poolTextAt pool: ast.names ref: guardStampArmId
                 {
                     if pgRawN.length > 0 when pgRecv.length > 0 when guardStampTid > 0 when (
@@ -21611,8 +21553,7 @@ isListOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    if f == ogList then return true
-    return f == ogListVal
+    return ((f == ogList) or (f == ogListVal))
 }
 
 # isSetOriginOf -- the type is a Set of EITHER family. The two templates differ
@@ -21626,8 +21567,7 @@ isSetOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    if f == ogSet then return true
-    return f == ogSetVal
+    return ((f == ogSet) or (f == ogSetVal))
 }
 
 # isMapOriginOf -- the type is a Map of ANY of the four key/value families.
@@ -21637,10 +21577,7 @@ isMapOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    if f == ogMap then return true
-    if f == ogMapRV then return true
-    if f == ogMapVR then return true
-    return f == ogMapVV
+    return ((f == ogMap) or (f == ogMapRV) or (f == ogMapVR) or (f == ogMapVV))
 }
 
 # isIdMapOriginOf -- the type is an IdMap of either value family.
@@ -21650,8 +21587,7 @@ isIdMapOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    if f == ogIdMapR then return true
-    return f == ogIdMapV
+    return ((f == ogIdMapR) or (f == ogIdMapV))
 }
 
 # isIdSetOriginOf -- the type is an IdSet.
@@ -21672,9 +21608,7 @@ isIdCollectionOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    if f == ogIdMapR then return true
-    if f == ogIdMapV then return true
-    return f == ogIdSet
+    return ((f == ogIdMapR) or (f == ogIdMapV) or (f == ogIdSet))
 }
 
 # isListViewOriginOf -- the type is a ListView of either element family.
@@ -21684,8 +21618,7 @@ isListViewOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    if f == ogListView then return true
-    return f == ogListViewVal
+    return ((f == ogListView) or (f == ogListViewVal))
 }
 
 # isMapEntryOriginOf -- the type is a MapEntry of any of the four families.
@@ -21695,10 +21628,9 @@ isMapEntryOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    if f == ogMapEntry then return true
-    if f == ogMapEntryRV then return true
-    if f == ogMapEntryVR then return true
-    return f == ogMapEntryVV
+    return (
+        (f == ogMapEntry) or (f == ogMapEntryRV) or (f == ogMapEntryVR) or (f == ogMapEntryVV)
+    )
 }
 
 # isIdMapEntryOriginOf -- the type is an IdMapEntry of either value family.
@@ -21708,8 +21640,7 @@ isIdMapEntryOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    if f == ogIdMapEntryR then return true
-    return f == ogIdMapEntryV
+    return ((f == ogIdMapEntryR) or (f == ogIdMapEntryV))
 }
 
 # isCollectionOriginTid -- originTid (a genericOriginId) is one of the cached
@@ -31327,15 +31258,7 @@ armTagValueText: function {
     armNameId: u64
 } out String is {
     if armNameId == 0 then return "".string
-    dt: u64
-    {
-        d0: symtab.typing.declChildOfId parentTypeId: tid nameId: zast.names.wkTag
-        match (
-            d0
-        ) case some then {
-            dt = d0
-        } case none then null
-    }
+    dt: (symtab.typing.declChildOfId parentTypeId: tid nameId: zast.names.wkTag).or d: 0
     if dt == 0 then return "".string
     c: (symtab.typing.memberConstOf
         parentTypeId: (ztypes.tid.create from: dt.u64)
