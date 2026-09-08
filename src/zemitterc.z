@@ -12872,6 +12872,162 @@ emitDottedUnitRead: function {
     return "".string
 }
 
+# emitValtypeCopy -- a CONCRETE valtype receiver's `.copy` is the value itself,
+# copied by the assignment or the argument it feeds. An as-block `copy`
+# OVERRIDES the default, so the default may only be claimed where the type
+# declares none -- otherwise the author's method is silently skipped. Empty
+# when the receiver is not a plain valtype, declares its own copy, or owns
+# heap.
+emitValtypeCopy: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.dottedpathrow.view
+    tid: ztypes.tid
+} out String is {
+    cvvt: symtab.reg.typetypeOf typeId: tid
+    cvval: (
+        (cvvt == ztypes.ztypetype.recordType) or
+        (cvvt == ztypes.ztypetype.variantType) or
+        (cvvt == ztypes.ztypetype.facetType)
+    )
+    if cvval.not then return "".string
+    cvown: (symtab.typing.declChildOf
+        pool: ast.names
+        parentTypeId: tid
+        name: "copy"
+    )
+    match (
+        cvown
+    ) case some then {
+        return "".string
+    } case none then null
+    if (symtab.reg.needsDestructor typeId: tid) then return "".string
+    # the value itself -- but a POINTER receiver is not one yet. Asked BEFORE
+    # the expression is built so the common path keeps handing emitExpr's
+    # result straight back: binding it to a local first costs a String on every
+    # `.copy` in the program.
+    if (needsValueDeref
+        :ast
+        :symtab
+        :ctx
+        n: (ast.nodes.get i: n.parent.u64)
+        :tid
+    ) then {
+        return "(*\{emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)})"
+    }
+    return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
+}
+
+# emitResolvedCopy -- `.copy` of a receiver whose type is known: a StringView
+# reads through, a valtype owning no heap is the value itself, a String clones
+# its buffer, and a container clones per element through its own copy. Empty
+# where none of those answers, which leaves the caller's later legs their turn.
+emitResolvedCopy: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.dottedpathrow.view
+    tid: ztypes.tid
+    inGeneric: bool
+} out String is {
+    if tid == ctx.svTid then {
+        return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
+    }
+    cvtt: symtab.reg.typetypeOf typeId: tid
+    cvstr: tid == ctx.strTid
+    if (originIsTid
+        :symtab
+        :tid
+        originTid: (ctx.origins.get i: ogStr)
+    ) then cvstr = true
+    cvref: (
+        (cvtt == ztypes.ztypetype.classType) or
+        (cvtt == ztypes.ztypetype.unionType) or
+        (cvtt == ztypes.ztypetype.protocolType) or
+        cvstr
+    )
+    if cvref.not when (symtab.reg.needsDestructor typeId: tid).not then {
+        return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
+    }
+    if cvstr then {
+        cvpv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
+        if (isNonLvalueArg s: cvpv.stringView).not then {
+            cvpn: ast.nodes.get i: n.parent.u64
+            cvan2: atomTextDeep :ast n: cvpn
+            cvav: atomVid :symtab nid: (atomNodeIdDeep :ast n: cvpn)
+            if cvan2.length > 0 when (isPtrVid :ctx vid: cvav) then {
+                return "\{ctx.strC}_copy(\{cvpv})"
+            }
+            return "\{ctx.strC}_copy(&\{cvpv})"
+        }
+    }
+    if inGeneric then {
+        cvtn: ctxCname :ctx :tid
+        (emitFail
+            :ctx
+            what: "unsupported .copy of type \{cvtn} in a generic body"
+            line: n.lineno
+        )
+        return "/* zemitterc: unhandled copy */0".string
+    }
+    return "".string
+}
+
+# emitCopyConversion -- `.copy`, whose shape depends on the receiver family. A
+# receiver inside a clone body carries no concrete stamp, so the field's
+# SUBSTITUTED type is resolved through the current receiver mono -- the
+# checker's per-mono instance walk side-stamps template nodes with it. Only the
+# clone-resolved case is claimed that way; concrete receivers keep their own
+# legs. Empty when the conversion is not `.copy` at all.
+emitCopyConversion: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.dottedpathrow.view
+} out String is {
+    cvp: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64))
+    cvgen: cvp.isZero
+    if (symtab.reg.typetypeOf typeId: cvp) == ztypes.ztypetype.genericParam then cvgen = true
+    if cvgen.not when cvp > 0 then {
+        return (emitValtypeCopy :ast :symtab :ctx :n tid: cvp)
+    }
+    if cvgen.not then return "".string
+    cvms: (monoStampIdOf
+        :symtab
+        :ctx
+        nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64))
+    )
+    if cvms > 0 then {
+        return (emitResolvedCopy :ast :symtab :ctx :n tid: cvms inGeneric: true)
+    }
+    if ctx.curThisTid > 0 then {
+        (emitFail
+            :ctx
+            what: "unresolved .copy receiver in a generic body".string
+            line: n.lineno
+        )
+        return "/* zemitterc: unhandled copy */0".string
+    }
+    return "".string
+}
+
+# emitDottedStringConversion -- `.string` on a receiver that is already a view:
+# a pooled literal and a StringView both become an owned String over the same
+# bytes. Empty when the receiver is neither.
+emitDottedStringConversion: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.dottedpathrow.view
+} out String is {
+    scl: bindLitIndex :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
+    if scl > 0 then return "\{ctx.strC}_from_view(_zs\{scl})"
+    if (stampIsSv :symtab :ctx nid: n.parent.u64).not then return "".string
+    sbv0: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
+    return "\{ctx.strC}_from_view(\{sbv0})"
+}
+
 # emitDottedConversionRead -- a cross-unit bare construction, and the two deep
 # conversions `.copy` and `.string`, whose shape depends on the receiver family:
 # a String clones its buffer, a container clones per element, a valtype is a
@@ -12887,131 +13043,12 @@ emitDottedConversionRead: function {
     ccbc: emitCrossUnitBareCreate :ctx :ast :symtab parent: dps childId: mnc0Id
     if ccbc.length > 0 then return ccbc
     if (mnIs :ctx id: mnc0Id at: mnCopy) then {
-        # `.copy` on a generic-param field inside a clone body: the node
-        # carries no concrete stamp, so resolve the field's SUBSTITUTED
-        # type through the current receiver mono. Only the clone-resolved
-        # case is claimed here -- concrete receivers keep their legs.
-        cvp: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64))
-        cvgen: cvp.isZero
-        if (symtab.reg.typetypeOf typeId: cvp) == ztypes.ztypetype.genericParam then cvgen = true
-        # A CONCRETE valtype receiver takes the same lowering the resolved
-        # generic leg below gives it: the value itself, copied by the
-        # assignment or argument it feeds.
-        if cvgen.not when cvp > 0 then {
-            cvvt: symtab.reg.typetypeOf typeId: cvp
-            cvval: (
-                (cvvt == ztypes.ztypetype.recordType) or
-                (cvvt == ztypes.ztypetype.variantType) or
-                (cvvt == ztypes.ztypetype.facetType)
-            )
-            # An as-block `copy` OVERRIDES the default, so the default may
-            # only be claimed when the type declares none -- otherwise the
-            # author's method is silently skipped.
-            if cvval then {
-                cvown: (symtab.typing.declChildOf
-                    pool: ast.names
-                    parentTypeId: cvp
-                    name: "copy"
-                )
-                match (
-                    cvown
-                ) case some then {
-                    cvval = false
-                } case none then null
-            }
-            if cvval when (symtab.reg.needsDestructor typeId: cvp).not then {
-                # the value itself -- but a POINTER receiver is not one yet.
-                # Asked BEFORE the expression is built so the common path keeps
-                # handing emitExpr's result straight back: binding it to a local
-                # first costs a String on every `.copy` in the program.
-                if (needsValueDeref
-                    :ast
-                    :symtab
-                    :ctx
-                    n: (ast.nodes.get i: n.parent.u64)
-                    tid: cvp
-                ) then {
-                    cvd: "(*\{emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)})"
-                    return cvd
-                }
-                return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
-            }
-        }
-        cvres: false
-        if cvgen then {
-            # the checker's per-mono instance walk side-stamps template
-            # nodes with the substituted type
-            cvms: (monoStampIdOf
-                :symtab
-                :ctx
-                nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64))
-            )
-            if cvms > 0 then {
-                cvp = cvms
-                cvres = true
-            }
-        }
-        if cvres then {
-            if cvp == ctx.svTid then {
-                return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
-            }
-            cvtt: symtab.reg.typetypeOf typeId: cvp
-            cvstr: cvp == ctx.strTid
-            if (originIsTid
-                :symtab
-                tid: cvp
-                originTid: (ctx.origins.get i: ogStr)
-            ) then cvstr = true
-            cvref: (
-                (cvtt == ztypes.ztypetype.classType) or
-                (cvtt == ztypes.ztypetype.unionType) or
-                (cvtt == ztypes.ztypetype.protocolType) or
-                cvstr
-            )
-            if cvref.not when (symtab.reg.needsDestructor typeId: cvp).not then {
-                return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
-            }
-            if cvstr then {
-                cvpv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
-                if (isNonLvalueArg s: cvpv.stringView).not then {
-                    cvpn: ast.nodes.get i: n.parent.u64
-                    cvan2: atomTextDeep :ast n: cvpn
-                    cvav: atomVid :symtab nid: (atomNodeIdDeep :ast n: cvpn)
-                    if cvan2.length > 0 when (isPtrVid :ctx vid: cvav) then {
-                        return "\{ctx.strC}_copy(\{cvpv})"
-                    }
-                    return "\{ctx.strC}_copy(&\{cvpv})"
-                }
-            }
-            if cvgen then {
-                cvtn: ctxCname :ctx tid: cvp
-                (emitFail
-                    :ctx
-                    what: "unsupported .copy of type \{cvtn} in a generic body"
-                    line: n.lineno
-                )
-                return "/* zemitterc: unhandled copy */0".string
-            }
-        } else if cvgen when ctx.curThisTid > 0 then {
-            (emitFail
-                :ctx
-                what: "unresolved .copy receiver in a generic body".string
-                line: n.lineno
-            )
-            return "/* zemitterc: unhandled copy */0".string
-        }
+        cpc: emitCopyConversion :ast :symtab :ctx :n
+        if cpc.length > 0 then return cpc
     }
     if mnc0Id == zast.names.wkString then {
-        scl: bindLitIndex :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
-        if scl > 0 then {
-            se0: "\{ctx.strC}_from_view(_zs\{scl})"
-            return se0
-        }
-        if (stampIsSv :symtab :ctx nid: n.parent.u64) then {
-            sbv0: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
-            se1: "\{ctx.strC}_from_view(\{sbv0})"
-            return se1
-        }
+        stc: emitDottedStringConversion :ast :symtab :ctx :n
+        if stc.length > 0 then return stc
     }
     xpb: dottedBaseAtom :ast n: (ast.nodes.get i: n.parent.u64)
     xpt: dottedChildText :ast n: (ast.nodes.get i: n.parent.u64)
