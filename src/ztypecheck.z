@@ -22003,171 +22003,172 @@ checkTransferMarker: function {
     # carries the base's type; a bare-name source releases its held locks and
     # invalidates (the taken overlay propagates out of popped scopes).
     isXferMarker: (isMoveMarkerId nameId: cnId) or (isDropMarkerId nameId: cnId)
-    if isXferMarker then {
-        # a native has no reference form. The compiler supplies the body, and an
-        # inlined one -- a binop, a conversion -- has no C function whose address
-        # there is to take; even a fragment-backed one was not referenced but
-        # CALLED, and typed by a function typedef that was never written. That
-        # left the C compiler reporting a mangled name for a mistake in the path.
-        if (isMoveMarkerId nameId: cnId) when (isNativeFnTid :st tid: bt) then {
-            pth: dottedRootName :ast n: (ast.nodes.get i: dp.parent.u64)
-            mnm: dottedChildName :ast n: (ast.nodes.get i: dp.parent.u64)
-            pth.append "."
-            pth.append mnm
-            mnr: "'\{pth.stringView}' is native and has no reference form"
-            (addError
+    # nothing below is about anything else, so leave rather than nest it all
+    if isXferMarker.not then return (callleg
+        handled: false
+        tid: (ztypes.tid.create from: 0)
+    )
+    # a native has no reference form. The compiler supplies the body, and an
+    # inlined one -- a binop, a conversion -- has no C function whose address
+    # there is to take; even a fragment-backed one was not referenced but
+    # CALLED, and typed by a function typedef that was never written. That
+    # left the C compiler reporting a mangled name for a mistake in the path.
+    if (isMoveMarkerId nameId: cnId) when (isNativeFnTid :st tid: bt) then {
+        pth: dottedRootName :ast n: (ast.nodes.get i: dp.parent.u64)
+        mnm: dottedChildName :ast n: (ast.nodes.get i: dp.parent.u64)
+        pth.append "."
+        pth.append mnm
+        mnr: "'\{pth.stringView}' is native and has no reference form"
+        (addError
+            :st
+            nodeid: dp.nid
+            lineno: dp.lineno
+            colno: dp.colno
+            e: zast.err.callError
+            msg: mnr
+        )
+        stampGate :st nid: dp.nid.u64 tid: bt
+        return (callleg handled: true tid: bt)
+    }
+    # A BOUND METHOD HAS NO REFERENCE FORM EITHER. A method reference is a
+    # plain C function pointer, and a pointer has nowhere to carry the
+    # receiver -- `r.add.take` emitted the identical C to the bare `r.add`,
+    # which called the method with the receiver and none of its arguments.
+    # Take it off the TYPE instead and pass the receiver explicitly.
+    #
+    # Scoped by methodHasThisReceiver, which is what separates a method from
+    # a callable FIELD: a function-pointer field read (`p.op.take`) declares
+    # no receiver and stays legal, as fnptr_field_bare_read instructs. The
+    # base must also be a VALUE -- `point.add.take` names the type, and that
+    # is the unbound form this error points at.
+    if (isMoveMarkerId nameId: cnId) when (methodHasThisReceiver :st mid: bt) then {
+        rootNm: dottedRootName :ast n: (ast.nodes.get i: dp.parent.u64)
+        baseIsValue: false
+        if rootNm.length > 0 then {
+            rvo: st.lookupVarId nameId: (nameIdOf :ast name: rootNm.stringView)
+            match (
+                rvo
+            ) case some then baseIsValue = true case none then null
+        }
+        if baseIsValue then {
+            cn: zast.nameTextCopy :ast ref: cnId
+            mNm: dottedChildName :ast n: (ast.nodes.get i: dp.parent.u64)
+            # composed with append, not interpolation: a dotted path built
+            # inline reads to A002 as a composed table key
+            bound: rootNm.copy
+            bound.append "."
+            bound.append mNm
+            unb: st.reg.nameOf tid: (st.reg.ownerTidOf tid: bt)
+            unb.append "."
+            unb.append mNm
+            unb.append ".take"
+            bmm: "'\{bound.stringView}' is a bound method: a reference has nowhere to carry the receiver"
+            bmn: "a method reference is a plain function pointer".string
+            bmh: "take it off the type -- '\{unb.stringView}' -- and pass the receiver explicitly"
+            (addErrorH
                 :st
                 nodeid: dp.nid
                 lineno: dp.lineno
                 colno: dp.colno
                 e: zast.err.callError
-                msg: mnr
+                msg: bmm
+                note: bmn
+                hint: bmh
+                width: cn.length.u32.orPanic
             )
             stampGate :st nid: dp.nid.u64 tid: bt
             return (callleg handled: true tid: bt)
         }
-        # A BOUND METHOD HAS NO REFERENCE FORM EITHER. A method reference is a
-        # plain C function pointer, and a pointer has nowhere to carry the
-        # receiver -- `r.add.take` emitted the identical C to the bare `r.add`,
-        # which called the method with the receiver and none of its arguments.
-        # Take it off the TYPE instead and pass the receiver explicitly.
-        #
-        # Scoped by methodHasThisReceiver, which is what separates a method from
-        # a callable FIELD: a function-pointer field read (`p.op.take`) declares
-        # no receiver and stays legal, as fnptr_field_bare_read instructs. The
-        # base must also be a VALUE -- `point.add.take` names the type, and that
-        # is the unbound form this error points at.
-        if (isMoveMarkerId nameId: cnId) when (methodHasThisReceiver :st mid: bt) then {
-            rootNm: dottedRootName :ast n: (ast.nodes.get i: dp.parent.u64)
-            baseIsValue: false
-            if rootNm.length > 0 then {
-                rvo: st.lookupVarId nameId: (nameIdOf :ast name: rootNm.stringView)
-                match (
-                    rvo
-                ) case some then baseIsValue = true case none then null
-            }
-            if baseIsValue then {
-                cn: zast.nameTextCopy :ast ref: cnId
-                mNm: dottedChildName :ast n: (ast.nodes.get i: dp.parent.u64)
-                # composed with append, not interpolation: a dotted path built
-                # inline reads to A002 as a composed table key
-                bound: rootNm.copy
-                bound.append "."
-                bound.append mNm
-                unb: st.reg.nameOf tid: (st.reg.ownerTidOf tid: bt)
-                unb.append "."
-                unb.append mNm
-                unb.append ".take"
-                bmm: "'\{bound.stringView}' is a bound method: a reference has nowhere to carry the receiver"
-                bmn: "a method reference is a plain function pointer".string
-                bmh: "take it off the type -- '\{unb.stringView}' -- and pass the receiver explicitly"
-                (addErrorH
-                    :st
-                    nodeid: dp.nid
-                    lineno: dp.lineno
-                    colno: dp.colno
-                    e: zast.err.callError
-                    msg: bmm
-                    note: bmn
-                    hint: bmh
-                    width: cn.length.u32.orPanic
-                )
-                stampGate :st nid: dp.nid.u64 tid: bt
-                return (callleg handled: true tid: bt)
-            }
-        }
-        # `.drop` is a statement, not a value: it ends a lifetime and hands
-        # back nothing, so a binding, an argument or an operand has nothing to
-        # take from it. Legal only on the node that IS the statement.
-        if (isDropMarkerId nameId: cnId) when dp.nid.u64 != st.typing.stmtExprNid then {
-            mvs: "'.drop' is a statement, not a value -- it ends a lifetime and produces nothing; use '.take' to move the value into a new name".string
-            (addError
-                :st
-                nodeid: dp.nid
-                lineno: dp.lineno
-                colno: dp.colno
-                e: zast.err.ownerError
-                msg: mvs
-            )
-        }
-        mkRootId: bareAtomNameId :ast n: (ast.nodes.get i: dp.parent.u64)
-        if (isDropMarkerId nameId: cnId) when mkRootId.isZero then {
-            mrv: "'.drop' can only be applied to a variable name".string
-            (addError
-                :st
-                nodeid: dp.nid
-                lineno: dp.lineno
-                colno: dp.colno
-                e: zast.err.ownerError
-                msg: mrv
-            )
-        }
-        if mkRootId.isZero.not then {
-            mvo: st.lookupVarId nameId: mkRootId
-            match (
-                mvo
-            ) case some then {
-                mkRoot: zast.nameTextAt :ast ref: mkRootId
-                relBlocked: (checkMoveMarkerVar
-                    :st
-                    :ast
-                    :dp
-                    :cnId
-                    mkRoot: mkRoot.stringView
-                    :mvo
-                )
-                relBlocked = (checkDropMarkerVar
-                    :st
-                    :ast
-                    :dp
-                    :cnId
-                    mkRoot: mkRoot.stringView
-                    blocked: relBlocked
-                )
-                if relBlocked.not then {
-                    # a `.take` moved whole into a binding or a reassignment
-                    # keeps its locks for that site to transfer; a `.drop`,
-                    # and a take consumed anywhere else, releases them
-                    keepL: false
-                    if (isMoveMarkerId nameId: cnId
-                    ) when st.typing.takeIntoBinding then keepL = true
-                    if keepL.not then {
-                        mh: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: mvo)
-                        st.releaseHeldLocks holder: mh
-                    }
-                    st.invalidate nameId: mkRootId loc: takenHere
-                }
-            } case none then {
-                if (isDropMarkerId nameId: cnId) then {
-                    dfo: (walkLookupTyperefById
-                        :st
-                        frame: st.curFrame
-                        :ast
-                        :unitDecl
-                        baseId: mkRootId
-                    )
-                    match (
-                        dfo
-                    ) case some then {
-                        mkRoot: zast.nameTextAt :ast ref: mkRootId
-                        mtl: "Cannot drop top-level definition '\{mkRoot}'"
-                        (addError
-                            :st
-                            nodeid: dp.nid
-                            lineno: dp.lineno
-                            colno: dp.colno
-                            e: zast.err.ownerError
-                            msg: mtl
-                        )
-                    } case none then null
-                }
-            }
-        }
-        setmk: bt
-        stampGate :st nid: dp.nid.u64 tid: setmk
-        return (callleg handled: true tid: bt)
     }
-    return (callleg handled: false tid: (ztypes.tid.create from: 0))
+    # `.drop` is a statement, not a value: it ends a lifetime and hands
+    # back nothing, so a binding, an argument or an operand has nothing to
+    # take from it. Legal only on the node that IS the statement.
+    if (isDropMarkerId nameId: cnId) when dp.nid.u64 != st.typing.stmtExprNid then {
+        mvs: "'.drop' is a statement, not a value -- it ends a lifetime and produces nothing; use '.take' to move the value into a new name".string
+        (addError
+            :st
+            nodeid: dp.nid
+            lineno: dp.lineno
+            colno: dp.colno
+            e: zast.err.ownerError
+            msg: mvs
+        )
+    }
+    mkRootId: bareAtomNameId :ast n: (ast.nodes.get i: dp.parent.u64)
+    if (isDropMarkerId nameId: cnId) when mkRootId.isZero then {
+        mrv: "'.drop' can only be applied to a variable name".string
+        (addError
+            :st
+            nodeid: dp.nid
+            lineno: dp.lineno
+            colno: dp.colno
+            e: zast.err.ownerError
+            msg: mrv
+        )
+    }
+    if mkRootId.isZero.not then {
+        mvo: st.lookupVarId nameId: mkRootId
+        match (
+            mvo
+        ) case some then {
+            mkRoot: zast.nameTextAt :ast ref: mkRootId
+            relBlocked: (checkMoveMarkerVar
+                :st
+                :ast
+                :dp
+                :cnId
+                mkRoot: mkRoot.stringView
+                :mvo
+            )
+            relBlocked = (checkDropMarkerVar
+                :st
+                :ast
+                :dp
+                :cnId
+                mkRoot: mkRoot.stringView
+                blocked: relBlocked
+            )
+            if relBlocked.not then {
+                # a `.take` moved whole into a binding or a reassignment
+                # keeps its locks for that site to transfer; a `.drop`,
+                # and a take consumed anywhere else, releases them
+                keepL: false
+                if (isMoveMarkerId nameId: cnId) when st.typing.takeIntoBinding then keepL = true
+                if keepL.not then {
+                    mh: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: mvo)
+                    st.releaseHeldLocks holder: mh
+                }
+                st.invalidate nameId: mkRootId loc: takenHere
+            }
+        } case none then {
+            if (isDropMarkerId nameId: cnId) then {
+                dfo: (walkLookupTyperefById
+                    :st
+                    frame: st.curFrame
+                    :ast
+                    :unitDecl
+                    baseId: mkRootId
+                )
+                match (
+                    dfo
+                ) case some then {
+                    mkRoot: zast.nameTextAt :ast ref: mkRootId
+                    mtl: "Cannot drop top-level definition '\{mkRoot}'"
+                    (addError
+                        :st
+                        nodeid: dp.nid
+                        lineno: dp.lineno
+                        colno: dp.colno
+                        e: zast.err.ownerError
+                        msg: mtl
+                    )
+                } case none then null
+            }
+        }
+    }
+    setmk: bt
+    stampGate :st nid: dp.nid.u64 tid: setmk
+    return (callleg handled: true tid: bt)
 }
 
 # checkLiteralFits -- does literal `lit` fit `target`? A literal conversion is
@@ -28528,10 +28529,15 @@ checkNamedArgParam: function {
                     tid: (ztypes.tid.create from: ptid.u64)
                 ) then skipMM = true
                 ptt: st.reg.typetypeOf typeId: (ztypes.tid.create from: ptid.u64)
-                if ptt == ztypes.ztypetype.protocolType then skipMM = true
-                if ptt == ztypes.ztypetype.facetType then skipMM = true
-                if ptt == ztypes.ztypetype.genericParam then skipMM = true
-                if ptt == ztypes.ztypetype.functionType then skipMM = true
+                # a spec, a generic parameter and a function type each carry
+                # their own conformance rule, so the plain type compare below is
+                # not the one that decides whether the argument fits
+                if (
+                    (ptt == ztypes.ztypetype.protocolType) or
+                    (ptt == ztypes.ztypetype.facetType) or
+                    (ptt == ztypes.ztypetype.genericParam) or
+                    (ptt == ztypes.ztypetype.functionType)
+                ) then skipMM = true
                 if skipMM.not then {
                     en7: st.reg.nameOf tid: (ztypes.tid.create from: ptid.u64)
                     an7: st.reg.nameOf tid: (ztypes.tid.create from: vt.u64)
@@ -34716,182 +34722,183 @@ checkFunctionBody: function {
     # instance walk) keeps the frame it was given.
     rf: frame
     if declId.isZero.not then rf = declId
-    if fn.nid.isZero.not then {
-        # the function's own declaration, when the caller passed one whose
-        # type IS this function (a free function, a namespace member, a
-        # method), is its identity: a namespace member is not found by the
-        # unit's name, and without it the walk skipped its return-type
-        # checks. A mono instance walk passes the TEMPLATE's Decl -- its
-        # function is the mono's substituted child, found by label -- and
-        # keeps the name path.
-        fnDecl: ztypes.declid
-        fnTid: ztypes.tid
-        if st.typing.curMonoStamp == 0 then {
-            dt: declTypeIdOf :st :declId
-            if dt.isZero.not when (
-                (st.reg.typetypeOf typeId: dt) == ztypes.ztypetype.functionType
-            ) then {
-                fnDecl = declId
-                fnTid = dt
+    # a definition with no node has no body to check, and everything below is
+    # about the body
+    if fn.nid.isZero then return
+    # the function's own declaration, when the caller passed one whose
+    # type IS this function (a free function, a namespace member, a
+    # method), is its identity: a namespace member is not found by the
+    # unit's name, and without it the walk skipped its return-type
+    # checks. A mono instance walk passes the TEMPLATE's Decl -- its
+    # function is the mono's substituted child, found by label -- and
+    # keeps the name path.
+    fnDecl: ztypes.declid
+    fnTid: ztypes.tid
+    if st.typing.curMonoStamp == 0 then {
+        dt: declTypeIdOf :st :declId
+        if dt.isZero.not when (
+            (st.reg.typetypeOf typeId: dt) == ztypes.ztypetype.functionType
+        ) then {
+            fnDecl = declId
+            fnTid = dt
+        }
+    }
+    # a body is walked only once everything demanded so far has resolved:
+    # an owner or function resolved late (from a walk) queued what its
+    # bodies reference, and those must be resolved before those bodies are
+    # walked, exactly as the early ones were.
+    resolveDemandedDefs :st frame: rf :ast
+    # Claim this definition BEFORE the trigger runs. The trigger now walks
+    # a free function's body, and the body it would walk here is the one
+    # already being walked -- checkFunctionBody calls it with its OWN name.
+    # Claiming first turns the self-call into the signature scan it was
+    # always there for, and leaves the body walk to this rf.
+    {
+        sfId: defNameId
+        if sfId.isZero then sfId = zast.poolFind pool: ast.names text: defName
+        if sfId.isZero.not then {
+            sfd: fnDecl
+            if sfd.isZero then sfd = (declOfUnitDefIds
+                :st
+                :unitDecl
+                nameId: sfId
+            )
+            sfHad: st.typing.declIsWalked declId: sfd
+            st.typing.declSetWalked declId: sfd
+            if sfHad.not then {
+                (scanFnSig
+                    :st
+                    frame: rf
+                    :unitDecl
+                    :ast
+                    opId: fn.nid
+                )
             }
         }
-        # a body is walked only once everything demanded so far has resolved:
-        # an owner or function resolved late (from a walk) queued what its
-        # bodies reference, and those must be resolved before those bodies are
-        # walked, exactly as the early ones were.
-        resolveDemandedDefs :st frame: rf :ast
-        # Claim this definition BEFORE the trigger runs. The trigger now walks
-        # a free function's body, and the body it would walk here is the one
-        # already being walked -- checkFunctionBody calls it with its OWN name.
-        # Claiming first turns the self-call into the signature scan it was
-        # always there for, and leaves the body walk to this rf.
+    }
+    if defNameId.isZero.not then {
+        maybeWalkMethodsById :st :unitDecl frame: rf :ast nameId: defNameId
+    } else {
+        maybeWalkMethods :st frame: rf :unitDecl :ast name: defName
+    }
+    hasBody: fn.body > 0
+    isGenDef: false
+    # the function's own tid, off the Decl the caller passed; a defName is
+    # display only (a mono walk's owner is a registry label such as
+    # `mathops_i64`, never an interned name).
+    rgot: optionval.none u64
+    if fnTid.isZero.not then rgot = optionval.some fnTid.u64
+    match (
+        rgot
+    ) case some then {
         {
-            sfId: defNameId
-            if sfId.isZero then sfId = zast.poolFind pool: ast.names text: defName
-            if sfId.isZero.not then {
-                sfd: fnDecl
-                if sfd.isZero then sfd = (declOfUnitDefIds
+            isgeneric9v: st.reg.isGenericOf tid: (ztypes.tid.create from: rgot.u64)
+            if isgeneric9v then isGenDef = true
+        }
+    } case none then null
+    if hasBody then {
+        # A generic template body is checked ONCE, for diagnostics; the
+        # emitter re-walks the shared AST per instance, so
+        # GENERIC_PARAM-valued stamps are suppressed for the walk (and
+        # its scopes/entries stay out of the dump log).
+        prevSup: st.typing.suppressParamStamps
+        if isGenDef then st.typing.suppressParamStamps = true
+        sname: String
+        if defName.length > 0 then {
+            sname = "function:\{defName}"
+        } else {
+            # the label spells the name: read through a borrow scoped here
+            dnT: zast.nameTextAt :ast ref: defNameId
+            sname = "function:\{dnT}"
+        }
+        st.push name: sname.stringView parent: rf
+        kP: u64
+        for kP < fn.nparams loop {
+            pmId: (zast.fnParamAt :ast nid: fn.nid i: kP).u32
+            kP = kP + 1
+            pm: argRefAt :ast nid: (zast.nodeid.create from: pmId.u32)
+            if pm.nid.isZero.not then {
+                (bindFunctionParam
                     :st
                     :unitDecl
-                    nameId: sfId
-                )
-                sfHad: st.typing.declIsWalked declId: sfd
-                st.typing.declSetWalked declId: sfd
-                if sfHad.not then {
-                    (scanFnSig
-                        :st
-                        frame: rf
-                        :unitDecl
-                        :ast
-                        opId: fn.nid
-                    )
-                }
-            }
-        }
-        if defNameId.isZero.not then {
-            maybeWalkMethodsById :st :unitDecl frame: rf :ast nameId: defNameId
-        } else {
-            maybeWalkMethods :st frame: rf :unitDecl :ast name: defName
-        }
-        hasBody: fn.body > 0
-        isGenDef: false
-        # the function's own tid, off the Decl the caller passed; a defName is
-        # display only (a mono walk's owner is a registry label such as
-        # `mathops_i64`, never an interned name).
-        rgot: optionval.none u64
-        if fnTid.isZero.not then rgot = optionval.some fnTid.u64
-        match (
-            rgot
-        ) case some then {
-            {
-                isgeneric9v: st.reg.isGenericOf tid: (ztypes.tid.create from: rgot.u64)
-                if isgeneric9v then isGenDef = true
-            }
-        } case none then null
-        if hasBody then {
-            # A generic template body is checked ONCE, for diagnostics; the
-            # emitter re-walks the shared AST per instance, so
-            # GENERIC_PARAM-valued stamps are suppressed for the walk (and
-            # its scopes/entries stay out of the dump log).
-            prevSup: st.typing.suppressParamStamps
-            if isGenDef then st.typing.suppressParamStamps = true
-            sname: String
-            if defName.length > 0 then {
-                sname = "function:\{defName}"
-            } else {
-                # the label spells the name: read through a borrow scoped here
-                dnT: zast.nameTextAt :ast ref: defNameId
-                sname = "function:\{dnT}"
-            }
-            st.push name: sname.stringView parent: rf
-            kP: u64
-            for kP < fn.nparams loop {
-                pmId: (zast.fnParamAt :ast nid: fn.nid i: kP).u32
-                kP = kP + 1
-                pm: argRefAt :ast nid: (zast.nodeid.create from: pmId.u32)
-                if pm.nid.isZero.not then {
-                    (bindFunctionParam
-                        :st
-                        :unitDecl
-                        :ast
-                        :rf
-                        :pm
-                        :thisName
-                        :isGenDef
-                        :fnTid
-                    )
-                }
-            }
-            setSynthOwnerLabel :st :unitDecl :ast :defName :defNameId :thisName
-            st.typing.currentThisTid = thisTid
-            prevFn: st.typing.currentFnTid
-            st.typing.currentFnTid = fnTid
-            prevRet: st.typing.currentReturnTypeId
-            fitid: (rgot.or d: 0)
-            crt: ztypes.tid
-            if fitid > 0 then crt = ((methodReturnOf
-                :st
-                mid: (ztypes.tid.create from: fitid.u64)
-            ).or
-                d: ztypes.tid
-            )
-            st.typing.currentReturnTypeId = crt
-            # the body walk is where a user function's return type is first
-            # known: an owned result holding a reference into an input is
-            # declared `outx` or refused here
-            if crt > 0 when (st.typing.generatorCallBodies.has item: fn.nid.u64).not then {
-                pinHonestyAt :st :ast frame: st.curFrame fnode: fn retTid: crt :defName :defNameId
-            }
-            prevRb: st.typing.currentReturnsBorrow
-            st.typing.currentReturnsBorrow = ((st.typing.funcReturnsBorrow.get key: fitid).or
-                d: false
-            )
-            prevRv: st.typing.currentReturnsView
-            st.typing.currentReturnsView = ((st.typing.funcReturnsView.get key: fitid).or
-                d: false
-            )
-            prevFp: st.typing.currentFnPins
-            st.typing.currentFnPins = (st.typing.funcPins.get key: fitid).or d: false
-            # `yield` enters scope for a generator's synth `.call` body and
-            # nowhere else, the way `break`/`continue` enter a `for`. Legality
-            # stops being a syntactic depth count and becomes a resolution
-            # fact: a `yield` in an ordinary function does not resolve, and one
-            # inside a nested function literal never sees this scope because
-            # the literal pushes its own.
-            prevYi: st.typing.currentYieldInputTid
-            st.typing.currentYieldInputTid = ztypes.tid
-            if (st.typing.generatorCallBodies.has item: fn.nid.u64) then {
-                ykp: st.reg.ctlPlaceholder
-                (st.define
-                    nameId: zast.names.wkYield
-                    ztypeId: (ztypes.tid.create from: ykp.u64)
-                )
-                # what `yield` evaluates to: the per-call input, which is the
-                # SECOND parameter -- the receiver is first. Stashed rather than
-                # read off a name at the yield, because the input is not a body
-                # binding and the label it carries is the CALL SITE's.
-                st.typing.currentYieldInputTid = (yieldInputTidOf
-                    :st
                     :ast
-                    defn: fn
+                    :rf
+                    :pm
+                    :thisName
+                    :isGenDef
+                    :fnTid
                 )
             }
-            walkBodyAt :st :unitDecl :ast bodyId: fn.body
-            st.typing.currentYieldInputTid = prevYi
-            st.typing.currentReturnTypeId = prevRet
-            st.typing.currentReturnsBorrow = prevRb
-            st.typing.currentReturnsView = prevRv
-            st.typing.currentFnPins = prevFp
-            st.typing.currentFnTid = prevFn
-            (coerceImplicitReturn
+        }
+        setSynthOwnerLabel :st :unitDecl :ast :defName :defNameId :thisName
+        st.typing.currentThisTid = thisTid
+        prevFn: st.typing.currentFnTid
+        st.typing.currentFnTid = fnTid
+        prevRet: st.typing.currentReturnTypeId
+        fitid: (rgot.or d: 0)
+        crt: ztypes.tid
+        if fitid > 0 then crt = ((methodReturnOf
+            :st
+            mid: (ztypes.tid.create from: fitid.u64)
+        ).or
+            d: ztypes.tid
+        )
+        st.typing.currentReturnTypeId = crt
+        # the body walk is where a user function's return type is first
+        # known: an owned result holding a reference into an input is
+        # declared `outx` or refused here
+        if crt > 0 when (st.typing.generatorCallBodies.has item: fn.nid.u64).not then {
+            pinHonestyAt :st :ast frame: st.curFrame fnode: fn retTid: crt :defName :defNameId
+        }
+        prevRb: st.typing.currentReturnsBorrow
+        st.typing.currentReturnsBorrow = ((st.typing.funcReturnsBorrow.get key: fitid).or
+            d: false
+        )
+        prevRv: st.typing.currentReturnsView
+        st.typing.currentReturnsView = ((st.typing.funcReturnsView.get key: fitid).or
+            d: false
+        )
+        prevFp: st.typing.currentFnPins
+        st.typing.currentFnPins = (st.typing.funcPins.get key: fitid).or d: false
+        # `yield` enters scope for a generator's synth `.call` body and
+        # nowhere else, the way `break`/`continue` enter a `for`. Legality
+        # stops being a syntactic depth count and becomes a resolution
+        # fact: a `yield` in an ordinary function does not resolve, and one
+        # inside a nested function literal never sees this scope because
+        # the literal pushes its own.
+        prevYi: st.typing.currentYieldInputTid
+        st.typing.currentYieldInputTid = ztypes.tid
+        if (st.typing.generatorCallBodies.has item: fn.nid.u64) then {
+            ykp: st.reg.ctlPlaceholder
+            (st.define
+                nameId: zast.names.wkYield
+                ztypeId: (ztypes.tid.create from: ykp.u64)
+            )
+            # what `yield` evaluates to: the per-call input, which is the
+            # SECOND parameter -- the receiver is first. Stashed rather than
+            # read off a name at the yield, because the input is not a body
+            # binding and the label it carries is the CALL SITE's.
+            st.typing.currentYieldInputTid = (yieldInputTidOf
                 :st
                 :ast
                 defn: fn
-                fnTid: (ztypes.tid.create from: (rgot.or d: ztypes.tid))
             )
-            st.pop
-            st.typing.suppressParamStamps = prevSup
         }
+        walkBodyAt :st :unitDecl :ast bodyId: fn.body
+        st.typing.currentYieldInputTid = prevYi
+        st.typing.currentReturnTypeId = prevRet
+        st.typing.currentReturnsBorrow = prevRb
+        st.typing.currentReturnsView = prevRv
+        st.typing.currentFnPins = prevFp
+        st.typing.currentFnTid = prevFn
+        (coerceImplicitReturn
+            :st
+            :ast
+            defn: fn
+            fnTid: (ztypes.tid.create from: (rgot.or d: ztypes.tid))
+        )
+        st.pop
+        st.typing.suppressParamStamps = prevSup
     }
 }
 
@@ -38507,13 +38514,15 @@ resolveDottedConstantDef: function {
                 } case none then null
             }
             if known then {
-                isCtor = true
-                if ptt == ztypes.ztypetype.variantType then isCtor = false
-                if ptt == ztypes.ztypetype.unionType then isCtor = false
-                # `sub.NAME` where the parent is a UNIT reads a member
-                # of it, which is what every cross-unit re-export is;
-                # only a TYPE parent makes the read a construction.
-                if ptt == ztypes.ztypetype.unitType then isCtor = false
+                # a variant or union parent names an ARM, and a UNIT parent
+                # reads a member of it -- which is what every cross-unit
+                # re-export is. Only a plain TYPE parent makes the read a
+                # construction.
+                isCtor = (
+                    (ptt != ztypes.ztypetype.variantType) and
+                    (ptt != ztypes.ztypetype.unionType) and
+                    (ptt != ztypes.ztypetype.unitType)
+                )
             }
         }
         # ASK THE CONSTANT FIRST. `LEN: LIB.length` reads a member of
