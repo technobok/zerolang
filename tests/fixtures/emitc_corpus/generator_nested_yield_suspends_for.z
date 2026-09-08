@@ -1,0 +1,83 @@
+# generator_nested_yield_suspends_for.z -- a C-STYLE `for` binding whose only
+# suspension sits INSIDE an expression.
+#
+# `for i: 0 while i < n loop` initialises once and tests per iteration, so the
+# binding is hoisted to its own statement and promotes to a state field like
+# any other local. Without the hoist the resume `goto` re-enters the loop past
+# the initialisation, `i` is indeterminate on the second `.call`, and the loop
+# yields once and then reports itself exhausted -- the wrong answer with no
+# diagnostic that `generator_cstyle_for.z` exists to pin.
+#
+# Whether to hoist is decided by asking the body whether it suspends, and that
+# question has ONE answer: `zast.yieldCountIn`, the count the lowering sizes
+# its resume slots by and the emitter numbers its labels by. A second walk over
+# fewer node kinds answers a yield reached only through an interpolated string
+# or a dotted path as no suspension at all.
+#
+# The position has to be one nothing else lifts first. A yield bound to a local
+# that outlives it is split to a statement by the crossing promotion, which
+# hides the disagreement; `Interp` binds nothing and `Dotted` consumes its read
+# in the condition that reads it, so in both the yield is still nested when the
+# question is asked. `Plain` is the statement-level control. All three yield
+# 0, 1, 2 and then run out.
+
+Plain: generator { n: i64 } as {
+    call: function {step: i64} out i64 is {
+        for i: 0 while i < this.n loop {
+            yield i
+            i = i + 1
+        }
+    }
+}
+
+Interp: generator { n: i64 } as {
+    call: function {step: i64} out i64 is {
+        for i: 0 while i < this.n loop {
+            print "sent \{yield i}"
+            i = i + 1
+        }
+    }
+}
+
+Dotted: generator { n: i64 } as {
+    call: function {step: i64} out i64 is {
+        for i: 0 while i < this.n loop {
+            if (yield i).u32.orPanic > 100.u32 then print "high"
+            i = i + 1
+        }
+    }
+}
+
+main: function is {
+    with a: (Plain n: 3) do {
+        k: 0
+        for k < 5 loop {
+            r: a.call step: k + 100
+            match (
+                r
+            ) case some then print "plain: \{r}" case none then print "plain: (none)"
+            k = k + 1
+        }
+    }
+    with b: (Interp n: 3) do {
+        k: 0
+        for k < 5 loop {
+            r: b.call step: k + 100
+            match (
+                r
+            ) case some then print "interp: \{r}" case none then print "interp: (none)"
+            k = k + 1
+        }
+    }
+    with c: (Dotted n: 3) do {
+        k: 0
+        for k < 5 loop {
+            r: c.call step: k + 100
+            match (
+                r
+            ) case some then print "dotted: \{r}" case none then print "dotted: (none)"
+            k = k + 1
+        }
+    }
+    print "done"
+}

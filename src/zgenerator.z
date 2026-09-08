@@ -41,102 +41,6 @@ NameCtr: class {
     }
 }
 
-# bodyContainsYield -- a yield anywhere in this subtree, not descending
-# into nested function literals (their yields belong to that function).
-bodyContainsYield: function {ast: Ast.view n: astnode.view} out bool is {
-    match (
-        n
-    ) case functiondef then {
-        return false
-    } case statement then {
-        stx789: u64
-        for stx789 < n.statements.count.u64 loop {
-            s0Id: zast.kidAt kids: ast.kids span: n.statements i: stx789
-            stx789 = stx789 + 1
-            if (bodyContainsYield :ast n: (ast.nodes.get i: s0Id.u64)) then return true
-        }
-        return false
-    } case statementline then {
-        return (bodyContainsYield :ast n: (ast.nodes.get i: n.statementline.u64))
-    } case expression then {
-        return (bodyContainsYield :ast n: (ast.nodes.get i: n.expression.u64))
-    } case assignment then {
-        return (bodyContainsYield :ast n: (ast.nodes.get i: n.value.u64))
-    } case reassignment then {
-        return (bodyContainsYield :ast n: (ast.nodes.get i: n.value.u64))
-    } case ifexpr then {
-        clx1119: u64
-        for clx1119 < n.clauses.count.u64 loop {
-            cl0Id: zast.kidAt kids: ast.kids span: n.clauses i: clx1119
-            clx1119 = clx1119 + 1
-            if (bodyContainsYield :ast n: (ast.nodes.get i: cl0Id.u64)) then return true
-        }
-        return (bodyContainsYieldOptAt :ast oId: n.elseclause)
-    } case ifclause then {
-        cox1359: u64
-        for cox1359 < n.conditions.count.u64 loop {
-            c0Id: zast.kidAt kids: ast.kids span: n.conditions i: cox1359
-            cox1359 = cox1359 + 1
-            if (bodyContainsYield :ast n: (ast.nodes.get i: c0Id.u64)) then return true
-        }
-        return (bodyContainsYield :ast n: (ast.nodes.get i: n.statement.u64))
-    } case forexpr then {
-        cox1369: u64
-        for cox1369 < n.conditions.count.u64 loop {
-            f0: zast.kidAt kids: ast.kids span: n.conditions i: cox1369
-            cox1369 = cox1369 + 1
-            if (bodyContainsYield :ast n: (ast.nodes.get i: f0.u64)) then return true
-        }
-        if (bodyContainsYieldOptAt :ast oId: n.body) then return true
-        pox1439: u64
-        for pox1439 < n.postconditions.count.u64 loop {
-            p0: zast.kidAt kids: ast.kids span: n.postconditions i: pox1439
-            pox1439 = pox1439 + 1
-            if (bodyContainsYield :ast n: (ast.nodes.get i: p0.u64)) then return true
-        }
-        return false
-    } case doexpr then {
-        return (bodyContainsYield :ast n: (ast.nodes.get i: n.statement.u64))
-    } case withexpr then {
-        if (bodyContainsYield :ast n: (ast.nodes.get i: n.value.u64)) then return true
-        return (bodyContainsYield :ast n: (ast.nodes.get i: n.body.u64))
-    } case caseexpr then {
-        if (bodyContainsYield :ast n: (ast.nodes.get i: n.subject.u64)) then return true
-        clx1129: u64
-        for clx1129 < n.clauses.count.u64 loop {
-            m0: zast.kidAt kids: ast.kids span: n.clauses i: clx1129
-            clx1129 = clx1129 + 1
-            if (bodyContainsYield :ast n: (ast.nodes.get i: m0.u64)) then return true
-        }
-        return (bodyContainsYieldOptAt :ast oId: n.elseclause)
-    } case caseclause then {
-        return (bodyContainsYield :ast n: (ast.nodes.get i: n.statement.u64))
-    } case namedoperation then {
-        return (bodyContainsYield :ast n: (ast.nodes.get i: n.operation.u64))
-    } case call then {
-        if (zast.isYieldCalleeAt :ast callableId: n.callable) then return true
-        if (bodyContainsYield :ast n: (ast.nodes.get i: n.callable.u64)) then return true
-        arx659: u64
-        for arx659 < n.arguments.count.u64 loop {
-            a0: zast.kidAt kids: ast.kids span: n.arguments i: arx659
-            arx659 = arx659 + 1
-            if (bodyContainsYield :ast n: (ast.nodes.get i: a0.u64)) then return true
-        }
-        return false
-    } case binop then {
-        if (bodyContainsYield :ast n: (ast.nodes.get i: n.lhs.u64)) then return true
-        return (bodyContainsYield :ast n: (ast.nodes.get i: n.rhs.u64))
-    } else {
-        return false
-    }
-}
-
-# true when the optional body `oId` contains a `yield`.
-bodyContainsYieldOptAt: function {ast: Ast.view oId: zast.nodeid} out bool is {
-    if oId.isZero then return false
-    return (bodyContainsYield :ast n: (ast.nodes.get i: oId.u64))
-}
-
 # leafAtomName -- an atom's name (owned copy); "" for other shapes.
 leafAtomName: function {ast: Ast.view n: astnode.view} out String is {
     match (
@@ -761,7 +665,7 @@ crossWalk: function {ast: Ast.view gc: GenCross n: astnode.view inYieldLoop: boo
             }
         }
     } case forexpr then {
-        bodyYields: bodyContainsYieldOptAt :ast oId: n.body
+        bodyYields: (zast.yieldCountIn :ast nid: n.body) > 0
         sub: inYieldLoop
         if bodyYields then sub = true
         cox1379: u64
@@ -1621,7 +1525,7 @@ promoteFor: function {
     suspends: false
     if nbodyId > 0 then {
         nb: ast.nodes.get i: nbodyId.u64
-        suspends = bodyContainsYield :ast n: nb
+        suspends = (zast.yieldCountOf :ast n: nb) > 0
     }
     nconds: ListVal u32
     # a C-style binding in a suspending loop is hoisted to its own statement
