@@ -2122,6 +2122,172 @@ Parser: class {
         )
     }
 
+    # dataMemberElement -- a `name:` element with no term after it, which names a
+    # data MEMBER. Some means the duplicate-name error is the whole answer.
+    dataMemberElement: function {
+        :this
+        lex: zlexer.Lexer
+        elements: ListVal u32
+        datanames: ListVal u64
+    } out optionval astnode is {
+        lblTok: lex.acceptAny pool: this.ast.names
+        checkName: lblTok.text
+        dup: datanames.contains item: checkName.u64
+        if dup then {
+            bad: lex.acceptAny pool: this.ast.names
+            (return
+                (optionval.some (this.mkError
+                    tok: bad
+                    code: zast.err.badArgument
+                    msg: "Duplicate data member name".string
+                )
+                )
+            )
+        }
+        datanames.append from: checkName.u64
+        lvName: lblTok.text
+        opName: lblTok.text
+        lv: this.mkLabelValue line: lblTok.lineno col: lblTok.colno nameId: lvName
+        no: (this.mkNamedOp
+            name: opName
+            operation: lv
+            line: lblTok.lineno
+            col: lblTok.colno
+        )
+        elements.append (this.intern n: no)
+        return (optionval.none astnode)
+    }
+
+    # dataLabelElement -- a `name: term` element. The label must not repeat one
+    # already given, and a label with no term after it is an error rather than the
+    # end of the body.
+    dataLabelElement: function {
+        :this
+        lex: zlexer.Lexer
+        elements: ListVal u32
+        datanames: ListVal u64
+    } out optionval astnode is {
+        lblTok: lex.acceptAny pool: this.ast.names
+        checkName: lblTok.text
+        dup: datanames.contains item: checkName.u64
+        if dup then {
+            bad: lex.acceptAny pool: this.ast.names
+            (return
+                (optionval.some (this.mkError
+                    tok: bad
+                    code: zast.err.badArgument
+                    msg: "Duplicate data member name".string
+                )
+                )
+            )
+        }
+        datanames.append from: checkName.u64
+        opName: lblTok.text
+        la: this.atomLookahead :lex
+        if la.not then {
+            badPos: lex.peekPos
+            (return
+                (optionval.some (this.mkErrorAt
+                    pos: badPos
+                    code: zast.err.badData
+                    msg: "Expected term after data label".string
+                )
+                )
+            )
+        }
+        pathNode: this.parsePath :lex
+        pErr: this.isError node: pathNode
+        if pErr then return (optionval.some pathNode)
+        no: (this.mkNamedOp
+            name: opName
+            operation: pathNode
+            line: lblTok.lineno
+            col: lblTok.colno
+        )
+        elements.append (this.intern n: no)
+        return (optionval.none astnode)
+    }
+
+    # acceptDataElements -- the whole element list, in source order. Some is the
+    # error that ends the parse; none means the list is complete, which it is as
+    # soon as a bare term does not follow.
+    acceptDataElements: function {
+        :this
+        lex: zlexer.Lexer
+        elements: ListVal u32
+        datanames: ListVal u64
+    } out optionval astnode is {
+        for true loop {
+            ett: lex.peekType
+            if ett == zlexer.toktype.labelPreTok then {
+                em: this.dataMemberElement :lex :elements :datanames
+                if em.some then return (optionval.some em)
+                continue
+            }
+            if ett == zlexer.toktype.labelTok then {
+                el: this.dataLabelElement :lex :elements :datanames
+                if el.some then return (optionval.some el)
+                continue
+            }
+            la: this.atomLookahead :lex
+            if la.not then break
+            pathNode: this.parsePath :lex
+            pErr: this.isError node: pathNode
+            if pErr then return (optionval.some pathNode)
+            cp: zast.posOf n: pathNode
+            no: (this.mkNamedOp name: 0 operation: pathNode line: cp.line col: cp.col)
+            elements.append (this.intern n: no)
+        }
+        return (optionval.none astnode)
+    }
+
+    # dataBlockWithOut -- the data block itself, carrying the `out` type when one
+    # follows the body. The elements are spanned here because both answers need
+    # the span and neither needs the list afterwards.
+    dataBlockWithOut: function {
+        :this
+        lex: zlexer.Lexer
+        elements: ListVal u32
+        dLine: u32
+        dCol: u32
+    } out astnode is {
+        outOpt: lex.accept tt: zlexer.toktype.outTok pool: this.ast.names
+        match (
+            outOpt
+        ) case none then {
+            eSpan: zast.kidsAdd kids: this.ast.kids xs: elements
+            return (astnode.datablock (zast.datablockrow
+                nodeid: this.nextId
+                lineno: dLine
+                colno: dCol
+                elements: eSpan
+                outType: (zast.nodeid.create from: 0)
+            )
+            )
+        } case some then null
+        la: this.atomLookahead :lex
+        if la.not then {
+            bad: lex.acceptAny pool: this.ast.names
+            return (this.mkError
+                tok: bad
+                code: zast.err.badData
+                msg: "Expected type reference after out".string
+            )
+        }
+        typeNode: this.parsePath :lex
+        tErr: this.isError node: typeNode
+        if tErr then return typeNode
+        eSpan: zast.kidsAdd kids: this.ast.kids xs: elements
+        return (astnode.datablock (zast.datablockrow
+            nodeid: this.nextId
+            lineno: dLine
+            colno: dCol
+            elements: eSpan
+            outType: (this.intern n: typeNode)
+        )
+        )
+    }
+
     # data-definition -> "data" ["is"] "{" { [label] term | label-value } "}"
     # ["out" type]. Elements are single terms (paths): a LABEL names the
     # element, a LABELPRE is a label-value, bare terms are positional.
@@ -2140,161 +2306,43 @@ Parser: class {
                 code: zast.err.badExpression
                 msg: "Expected data".string
             )
-        } case some then {
-            lex.accept tt: zlexer.toktype.isTok pool: this.ast.names
-            openOpt: lex.accept tt: zlexer.toktype.braceOpenTok pool: this.ast.names
-            match (
-                openOpt
-            ) case none then {
-                bad: lex.acceptAny pool: this.ast.names
-                return (this.mkError
-                    tok: bad
-                    code: zast.err.badData
-                    msg: "Expected opening brace for data body".string
-                )
-            } case some then {
-                elements: ListVal u32
-                datanames: ListVal u64
-                for true loop {
-                    ett: lex.peekType
-                    if ett == zlexer.toktype.labelPreTok then {
-                        lblTok: lex.acceptAny pool: this.ast.names
-                        checkName: lblTok.text
-                        dup: datanames.contains item: checkName.u64
-                        if dup then {
-                            bad: lex.acceptAny pool: this.ast.names
-                            return (this.mkError
-                                tok: bad
-                                code: zast.err.badArgument
-                                msg: "Duplicate data member name".string
-                            )
-                        }
-                        datanames.append from: checkName.u64
-                        lvName: lblTok.text
-                        opName: lblTok.text
-                        lv: this.mkLabelValue line: lblTok.lineno col: lblTok.colno nameId: lvName
-                        no: (this.mkNamedOp
-                            name: opName
-                            operation: lv
-                            line: lblTok.lineno
-                            col: lblTok.colno
-                        )
-                        elements.append (this.intern n: no)
-                    } else {
-                        isLbl: ett == zlexer.toktype.labelTok
-                        if isLbl then {
-                            lblTok: lex.acceptAny pool: this.ast.names
-                            checkName: lblTok.text
-                            dup: datanames.contains item: checkName.u64
-                            if dup then {
-                                bad: lex.acceptAny pool: this.ast.names
-                                return (this.mkError
-                                    tok: bad
-                                    code: zast.err.badArgument
-                                    msg: "Duplicate data member name".string
-                                )
-                            }
-                            datanames.append from: checkName.u64
-                            opName: lblTok.text
-                            la: this.atomLookahead :lex
-                            if la then {
-                                pathNode: this.parsePath :lex
-                                pErr: this.isError node: pathNode
-                                if pErr then return pathNode
-                                no: (this.mkNamedOp
-                                    name: opName
-                                    operation: pathNode
-                                    line: lblTok.lineno
-                                    col: lblTok.colno
-                                )
-                                elements.append (this.intern n: no)
-                            } else {
-                                badPos: lex.peekPos
-                                return (this.mkErrorAt
-                                    pos: badPos
-                                    code: zast.err.badData
-                                    msg: "Expected term after data label".string
-                                )
-                            }
-                        } else {
-                            la: this.atomLookahead :lex
-                            if la then {
-                                pathNode: this.parsePath :lex
-                                pErr: this.isError node: pathNode
-                                if pErr then return pathNode
-                                cp: zast.posOf n: pathNode
-                                no: (this.mkNamedOp
-                                    name: 0
-                                    operation: pathNode
-                                    line: cp.line
-                                    col: cp.col
-                                )
-                                elements.append (this.intern n: no)
-                            } else {
-                                break
-                            }
-                        }
-                    }
-                }
-                closeOpt: lex.accept tt: zlexer.toktype.braceCloseTok pool: this.ast.names
-                match (
-                    closeOpt
-                ) case none then {
-                    bad: lex.acceptAny pool: this.ast.names
-                    return (this.mkError
-                        tok: bad
-                        code: zast.err.badData
-                        msg: "Expected closing brace for data body".string
-                    )
-                } case some then {
-                    eLen: elements.length
-                    if eLen == 0 then {
-                        return (this.mkErrorAt
-                            pos: startPos
-                            code: zast.err.badData
-                            msg: "data definition must have at least one element".string
-                        )
-                    }
-                    outOpt: lex.accept tt: zlexer.toktype.outTok pool: this.ast.names
-                    match (
-                        outOpt
-                    ) case some then {
-                        la: this.atomLookahead :lex
-                        if la then {
-                            typeNode: this.parsePath :lex
-                            tErr: this.isError node: typeNode
-                            if tErr then return typeNode
-                            eSpan: zast.kidsAdd kids: this.ast.kids xs: elements
-                            return (astnode.datablock (zast.datablockrow
-                                nodeid: this.nextId
-                                lineno: dLine
-                                colno: dCol
-                                elements: eSpan
-                                outType: (this.intern n: typeNode)
-                            )
-                            )
-                        } else {
-                            bad: lex.acceptAny pool: this.ast.names
-                            return (this.mkError
-                                tok: bad
-                                code: zast.err.badData
-                                msg: "Expected type reference after out".string
-                            )
-                        }
-                    } case none then {
-                        eSpan: zast.kidsAdd kids: this.ast.kids xs: elements
-                        return (astnode.datablock (zast.datablockrow
-                            nodeid: this.nextId
-                            lineno: dLine
-                            colno: dCol
-                            elements: eSpan
-                            outType: (zast.nodeid.create from: 0)
-                        )
-                        )
-                    }
-                }
-            }
+        } case some then null
+        lex.accept tt: zlexer.toktype.isTok pool: this.ast.names
+        openOpt: lex.accept tt: zlexer.toktype.braceOpenTok pool: this.ast.names
+        match (
+            openOpt
+        ) case none then {
+            bad: lex.acceptAny pool: this.ast.names
+            return (this.mkError
+                tok: bad
+                code: zast.err.badData
+                msg: "Expected opening brace for data body".string
+            )
+        } case some then null
+        elements: ListVal u32
+        datanames: ListVal u64
+        oerr: this.acceptDataElements :lex :elements :datanames
+        if oerr.some then return oerr
+        closeOpt: lex.accept tt: zlexer.toktype.braceCloseTok pool: this.ast.names
+        match (
+            closeOpt
+        ) case none then {
+            bad: lex.acceptAny pool: this.ast.names
+            return (this.mkError
+                tok: bad
+                code: zast.err.badData
+                msg: "Expected closing brace for data body".string
+            )
+        } case some then null
+        eLen: elements.length
+        if eLen == 0 then {
+            return (this.mkErrorAt
+                pos: startPos
+                code: zast.err.badData
+                msg: "data definition must have at least one element".string
+            )
         }
+        return (this.dataBlockWithOut :lex :elements :dLine :dCol)
     }
 
     # Build a reassignment from an already-parsed LHS path list (the `=`
