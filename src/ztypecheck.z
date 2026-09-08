@@ -29417,6 +29417,135 @@ walkCallArgsHoist: function {
     return pins
 }
 
+# reportBoxUnknownArgument -- the builtin Box constructs with `from:`; any
+# other label is reported, and the argument is still taken as the value so the
+# rest of the check has something to work with.
+reportBoxUnknownArgument: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arg: argref
+} is {
+    an: zast.nameTextCopy :ast ref: arg.name
+    if an.stringView == "from" then return
+    mbx7: "the builtin Box constructs with 'from:'; unknown argument '\{an}'"
+    (addError
+        :st
+        nodeid: (nodeId n: (ast.nodes.get i: arg.operation.u64))
+        lineno: (nodeLine n: (ast.nodes.get i: arg.operation.u64))
+        colno: (nodeCol n: (ast.nodes.get i: arg.operation.u64))
+        e: zast.err.callError
+        msg: mbx7
+    )
+}
+
+# consumeBoxedName -- a bare reftype name boxed by value is MOVED into the box,
+# so the name is invalidated. A readonly, pinned or borrowed source cannot be
+# moved and is refused instead, each in its own terms. This is the box's own
+# chain and not consumeBareArgOwnership's: the verb differs, and a box carries
+# no receiver and no callee pins for held locks to travel into.
+consumeBoxedName: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    name: StringView
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+} is {
+    bvo8: st.lookupVarId nameId: (nameIdOf :ast :name)
+    known: false
+    vid8: ztypes.vid
+    match (
+        bvo8
+    ) case some then {
+        known = true
+        vid8 = bvo8
+    } case none then null
+    if known.not then {
+        (st.invalidate nameId: (nameIdOf :ast :name) loc: takenHere)
+        return
+    }
+    if (nameIsReadonly :st :ast :name) then {
+        (readonlyMoveError
+            :st
+            :nodeid
+            :lineno
+            :colno
+            :name
+            verb: "into a box"
+        )
+        return
+    }
+    if (pinnedMoveError
+        :st
+        :ast
+        :nodeid
+        :lineno
+        :colno
+        :name
+        verb: "into a box"
+    ) then return
+    if (isBorrowedVar :st vid: vid8) then {
+        mb8: "Cannot move borrowed variable '\{name}' into a box — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
+        (addError
+            :st
+            :nodeid
+            :lineno
+            :colno
+            e: zast.err.ownerError
+            msg: mb8
+        )
+        return
+    }
+    (st.invalidate nameId: (nameIdOf :ast :name) loc: takenHere)
+}
+
+# bindBoxedArgument -- the box's value argument once its type is known. A
+# TRIVIAL argument (a bare name or a literal) is stamped with the boxed type at
+# its innermost node, and a bare reftype name is moved into the box; anything
+# else is hoisted, having no name to invalidate.
+bindBoxedArgument: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arg: argref
+    argT: ztypes.tid
+} is {
+    if (argIsTrivial :ast op: (ast.nodes.get i: arg.operation.u64)).not then {
+        (hoistArg
+            :ast
+            :st
+            argId: arg.operation
+            argType: argT
+            paramType: 0
+            consumes: true
+            viewParam: false
+        )
+        return
+    }
+    iid: innermostNodeId :ast n: (ast.nodes.get i: arg.operation.u64)
+    if iid > 0 then stampGate :st nid: iid.u64 tid: argT
+    if (typeIsReftype :st tid: argT).not then return
+    # an OWNED copy of the name: the move below lends ast exclusively, and a
+    # view of the pool would still be holding it
+    bn: (zast.nameTextCopy
+        :ast
+        ref: (bareAtomNameId :ast n: (ast.nodes.get i: arg.operation.u64))
+    )
+    if bn.length == 0 then return
+    # the position is read into locals first: a nested `ast.nodes` read cannot
+    # stand in an argument of a call that is already lending ast
+    bxid: nodeId n: (ast.nodes.get i: arg.operation.u64)
+    bxln: nodeLine n: (ast.nodes.get i: arg.operation.u64)
+    bxcl: nodeCol n: (ast.nodes.get i: arg.operation.u64)
+    (consumeBoxedName
+        :st
+        :ast
+        name: bn.stringView
+        nodeid: bxid
+        lineno: bxln
+        colno: bxcl
+    )
+}
+
 # boxArgumentTid -- the type a `Box` construction is given: an explicit `t:` type
 # argument, or the type of the single value it boxes. 0 when neither is present.
 boxArgumentTid: function {
@@ -29438,114 +29567,18 @@ boxArgumentTid: function {
         argId: (zast.callArgAt :ast nid: call.nid i: kAiter).u32
         kAiter = kAiter + 1
         arg: argRefAt :ast nid: (zast.nodeid.create from: argId.u32)
-        if arg.nid.isZero.not when fnd.not then {
-            an: zast.nameTextCopy :ast ref: arg.name
-            isTypeArg: false
-            if boxParam.isZero.not when arg.name == boxParam then isTypeArg = true
-            if isTypeArg.not then {
-                if an.stringView != "from" then {
-                    mbx7: "the builtin Box constructs with 'from:'; unknown argument '\{an}'"
-                    bxid7: nodeId n: (ast.nodes.get i: arg.operation.u64)
-                    bxln7: nodeLine n: (ast.nodes.get i: arg.operation.u64)
-                    bxcl7: nodeCol n: (ast.nodes.get i: arg.operation.u64)
-                    (addError
-                        :st
-                        nodeid: bxid7
-                        lineno: bxln7
-                        colno: bxcl7
-                        e: zast.err.callError
-                        msg: mbx7
-                    )
-                }
-                fnd = true
-                avt: (checkValueAt :st :unitDecl :ast nid: arg.operation)
-                vt = materialiseLiteral :ast :st :unitDecl t: avt
-                if vt > 0 then {
-                    if (argIsTrivial :ast op: (ast.nodes.get i: arg.operation.u64)) then {
-                        iid: innermostNodeId :ast n: (ast.nodes.get i: arg.operation.u64)
-                        if iid > 0 then {
-                            setbl: vt
-                            stampGate :st nid: iid.u64 tid: (ztypes.tid.create from: setbl.u64)
-                        }
-                        bn: (zast.nameTextAt
-                            :ast
-                            ref: (bareAtomNameId :ast n: (ast.nodes.get i: arg.operation.u64))
-                        )
-                        aid8b: nodeId n: (ast.nodes.get i: arg.operation.u64)
-                        aln8b: nodeLine n: (ast.nodes.get i: arg.operation.u64)
-                        acl8b: nodeCol n: (ast.nodes.get i: arg.operation.u64)
-                        if bn.length > 0 when (typeIsReftype
-                            :st
-                            tid: (ztypes.tid.create from: vt.u64)
-                        ) then {
-                            bvo8: st.lookupVarId nameId: (nameIdOf :ast name: bn.stringView)
-                            match (
-                                bvo8
-                            ) case some then {
-                                if (nameIsReadonly :st :ast name: bn.stringView) then {
-                                    (readonlyMoveError
-                                        :st
-                                        nodeid: aid8b
-                                        lineno: aln8b
-                                        colno: acl8b
-                                        name: bn.stringView
-                                        verb: "into a box"
-                                    )
-                                } else {
-                                    bpin8: (pinnedMoveError
-                                        :st
-                                        :ast
-                                        nodeid: aid8b
-                                        lineno: aln8b
-                                        colno: acl8b
-                                        name: bn.stringView
-                                        verb: "into a box"
-                                    )
-                                    if bpin8 then null else if (isBorrowedVar
-                                        :st
-                                        vid: bvo8
-                                    ) then {
-                                        mb8: "Cannot move borrowed variable '\{bn}' into a box — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
-                                        (addError
-                                            :st
-                                            nodeid: aid8b
-                                            lineno: aln8b
-                                            colno: acl8b
-                                            e: zast.err.ownerError
-                                            msg: mb8
-                                        )
-                                    } else {
-                                        (st.invalidate
-                                            nameId: (nameIdOf :ast name: bn.stringView)
-                                            loc: takenHere
-                                        )
-                                    }
-                                }
-                            } case none then {
-                                (st.invalidate
-                                    nameId: (nameIdOf :ast name: bn.stringView)
-                                    loc: takenHere
-                                )
-                            }
-                        }
-                    } else {
-                        (hoistArg
-                            :ast
-                            :st
-                            argId: arg.operation
-                            argType: vt
-                            paramType: 0
-                            consumes: true
-                            viewParam: false
-                        )
-                    }
-                }
-            }
-        }
+        if arg.nid.isZero then continue
+        if fnd then continue
+        if boxParam.isZero.not when arg.name == boxParam then continue
+        reportBoxUnknownArgument :st :ast :arg
+        fnd = true
+        avt: (checkValueAt :st :unitDecl :ast nid: arg.operation)
+        vt = materialiseLiteral :ast :st :unitDecl t: avt
+        if vt.isZero then continue
+        bindBoxedArgument :st :ast :arg argT: vt
     }
     return vt
 }
-
 
 # checkBoxConstruction -- `Box from: val`: the value's (materialised) type
 # binds t; the argument is consumed (hoisted first when non-trivial); the
