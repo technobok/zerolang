@@ -170,6 +170,8 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-09-05 | b006be2c | [D1 recovery: a node parameter is a view again](#r-nodeview) | 0.44s | -- | 101MB / -- | 98 / 176 / 179 (total 453) | 2,264,234 | 301MB | -- | 116,000 |
 | 2026-09-06 | 327b9b6c | [bool gains `and`, `or` and `not`; the disjunction sweep](#r-boollogic) | 0.45s | -- | 101MB / -- | 107 / 172 / 176 (total 455) | 2,251,883 | 301MB | -- | 120,541 |
 | 2026-09-06 | 49cf12e9 | [`when` conjuncts narrow in turn; the nested-if collapse](#r-whennarrow) | 0.44s | -- | 101MB / -- | 131 / 170 / 173 (total 474) | 2,244,864 | 301MB | -- | 119,796 |
+| 2026-09-08 | 7dcb7a15 | [the A008 >=100 band, nine splits](#r-a008band) | 0.45s | -- | 95MB / -- | 108 / 170 / 184 (total 462) | 2,263,972 | 302MB | -- | 121,190 |
+| 2026-09-08 | a3f7168f | [the copy sweep: names borrowed where nobody keeps them](#r-copysweep) | 0.44s | -- | 95MB / -- | 105 / 172 / 178 (total 455) | 2,114,742 | 300MB | -- | 121,156 |
 
 
 <a id="r-tokenarc"></a>
@@ -2645,7 +2647,9 @@ the new compiler on the OLD tree.
 **Bytes and RSS both END BELOW where the session started.** RSS is also far
 steadier: the old binary swings 101-106 MB run to run, the new one sits at 101.
 
-## 2026-09-08 -- `29995ca7` -> `7dcb7a15` (the A008 >=100 band, nine splits)
+<a id="r-a008band"></a>
+
+### the A008 >=100 band, nine splits (2026-09-08, `29995ca7` -> `7dcb7a15`)
 
 Nine behaviour-preserving splits plus one emitter defect fix. No perf work was
 intended; this row exists to say what the refactoring cost.
@@ -2695,7 +2699,7 @@ compiler.** It was ALREADY red before this session: `29995ca7` measures 2,258,30
 having 710 more lines of its own source to compile, which the A/B above isolates
 by holding the input fixed. Read the ratchet as a ratchet, not as a measurement.
 
-### The measurement trap this row paid for: argv[0] is an input
+#### The measurement trap this row paid for: argv[0] is an input
 
 `resolveRuntimeDir` derives the runtime directory from `os.exePath` when
 `--runtime` is absent, so **the path the binary is invoked by changes the
@@ -2707,7 +2711,9 @@ binary in one directory under names of equal length before comparing**, and
 invoke them the same way. The fast-hash column is free at both ends once that is
 done.
 
-## 2026-09-08 -- the copy sweep, `7dcb7a15` -> `a3f7168f`
+<a id="r-copysweep"></a>
+
+### the copy sweep: names borrowed where nobody keeps them (2026-09-08, `7dcb7a15` -> `a3f7168f`)
 
 Five commits, no behaviour change: the emitted C for all 564 corpus programs and
 all three drivers is byte-identical at every step, measured with both compilers
