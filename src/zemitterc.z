@@ -15405,6 +15405,107 @@ emitStringBind: function {
     return handled
 }
 
+# bindValueIsFnRef -- the bound value is a function REFERENCE, which is POD:
+# taking one moves nothing, so the source (a unit fn symbol, or an fnptr field)
+# is never zeroed.
+bindValueIsFnRef: function {
+    symtab: zenv.ZSymbolTable.view
+    avn: astnode.view
+} out bool is {
+    ftnid: interpPartNodeId n: avn
+    if ftnid == 0 then return false
+    ftst: stampIdOf :symtab nid: ftnid
+    if ftst.isZero then return false
+    return (symtab.reg.typetypeOf typeId: ftst) == ztypes.ztypetype.functionType
+}
+
+# bindAliasCType -- the C type a binding is declared with once ALIASING is
+# accounted for. A reference-returning callee hands back `T*`: the binding
+# aliases the source, so it is declared as a pointer and its vid registered,
+# which is what makes every later use emit `->`. Binding it by value would copy
+# the struct and silently lose writes through it. A StringView read as a String
+# is the same shape. Both are asked, in that order, because either may apply.
+bindAliasCType: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    avn: astnode.view
+    ct: StringView
+    ltid: ztypes.tid
+    nameVid: ztypes.vid
+} out String is {
+    ctB8: "\{ct}"
+    rbf8: refBorrowCalleeFid :ast :symtab :ctx n: avn
+    if rbf8 > 0 when (fnReturnsRefBorrow
+        :ast
+        :symtab
+        :ctx
+        fid: (ztypes.tid.create from: rbf8.u64)
+        retTid: ltid
+    ) then {
+        ctB8 = (refPtrC :symtab tid: (ztypes.tid.create from: rbf8.u64) base: ct)
+        ctx.ptrVids.append nameVid
+    }
+    if (isSvAsStringNode :ast :symtab :ctx n: avn) then {
+        ctB8 = "const \{ct}*"
+        ctx.ptrVids.append nameVid
+    }
+    return ctB8
+}
+
+# emitBindSourceZero -- the binding MOVED its value, so the source is zeroed:
+# its scope-exit free has to no-op now that the binding owns the heap. A field
+# take, a String take and a bare owned local each spell the zero differently. A
+# BORROW binding owns nothing, so its source keeps its value, and ownership is
+# decided from the TYPE before the source text is composed -- a scalar binding
+# moves nothing, and asking for the source costs a String.
+emitBindSourceZero: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    avn: astnode.view
+    rv: StringView
+    ct: StringView
+    ind: StringView
+    buf: String.borrow
+} is {
+    if (isFieldTake :ast n: avn) when (bindValueIsFnRef :symtab :avn).not then {
+        ftz: "\{ind}\{rv} = (\{ct}){0};\n"
+        buf.append ftz
+        return
+    }
+    bts: takeStringSource :ast :symtab :ctx n: avn
+    if bts.length > 0 then {
+        bzz: "\{ind}\{rv} = (\{ct}){0};\n"
+        buf.append bzz
+        return
+    }
+    if (isBareNameValue :ast n: avn).not then return
+    bzt: stampIdOf :symtab nid: (interpPartNodeId n: avn)
+    bzp: isHeapPtrCollection :symtab :ctx tid: bzt
+    bzo: bzp
+    if (symtab.reg.needsDestructor typeId: bzt) then bzo = true
+    if bzo.not then return
+    if (bindingRhsIsBorrow :ast :symtab :ctx n: avn) then return
+    bzs: implicitTakeSource :ast :symtab :ctx n: avn
+    if bzs.length == 0 then return
+    if bzp then {
+        bzh: "\{ind}\{bzs} = NULL;\n"
+        buf.append bzh
+        return
+    }
+    bzc: (typeRefC
+        :ast
+        :symtab
+        :ctx
+        tid: bzt
+        thisTid: ztypes.tid
+    )
+    if bzc.length == 0 then return
+    bzi: "\{ind}\{bzs} = (\{bzc}){0};\n"
+    buf.append bzi
+}
+
 # emitTypedBind -- the general binding: a declared C type and a value, plus the
 # cleanup entry the local earns. A union or a heap-owning record registers its
 # destructor; a borrow registers nothing, since the source still owns the heap.
@@ -15425,122 +15526,54 @@ emitTypedBind: function {
     avn: ast.nodes.get i: n.value.u64
     rv: emitExpr :ast :symtab :ctx n: avn
     flushArgHoists :ctx :ind :tmp :buf
-    if ct.length > 0 then {
-        # a reference-returning callee hands back `T*`: the binding ALIASES
-        # the source, so it is declared as a pointer and registered so every
-        # later use emits `->`. Binding it by value would copy the struct and
-        # silently lose writes through it.
-        ctB8: "\{ct}"
-        {
-            rbf8: refBorrowCalleeFid :ast :symtab :ctx n: avn
-            if rbf8 > 0 when (fnReturnsRefBorrow
-                :ast
-                :symtab
-                :ctx
-                fid: (ztypes.tid.create from: rbf8.u64)
-                retTid: ltid
-            ) then {
-                ctB8 = (refPtrC :symtab tid: (ztypes.tid.create from: rbf8.u64) base: ct)
-                ctx.ptrVids.append nameVid
-            }
-            if (isSvAsStringNode :ast :symtab :ctx n: avn) then {
-                ctB8 = "const \{ct}*"
-                ctx.ptrVids.append nameVid
-            }
-        }
-        rvB8: "\{rv}"
-        if ctB8.stringView == ct when (needsValueDeref
-            :ast
-            :symtab
-            :ctx
-            n: avn
-            tid: ltid
-        ) then rvB8 = "(*\{rv})"
-        la: "\{ind}\{ctB8} \{nm} = \{rvB8};\n"
-        buf.append la
-        emitValueTakeInvalidations :ast :symtab :ctx n: avn :ind :buf
-        ftFn: false
-        ftnid: interpPartNodeId n: avn
-        if ftnid > 0 then {
-            ftst: stampIdOf :symtab nid: ftnid
-            if ftst > 0 when (
-                (symtab.reg.typetypeOf typeId: ftst) == ztypes.ztypetype.functionType
-            ) then {
-                # a function reference is POD: taking it moves nothing,
-                # so the source (a unit fn symbol or an fnptr field)
-                # is never zeroed
-                ftFn = true
-            }
-        }
-        if (isFieldTake :ast n: avn) when ftFn.not then {
-            ftz: "\{ind}\{rv} = (\{ct}){0};\n"
-            buf.append ftz
-        } else {
-            bts: takeStringSource :ast :symtab :ctx n: avn
-            if bts.length > 0 then {
-                bzz: "\{ind}\{rv} = (\{ct}){0};\n"
-                buf.append bzz
-            } else {
-                # a binding from a bare owned local is a MOVE, exactly as a
-                # reassignment from one is: zero the source so its scope-exit
-                # free no-ops now that this binding owns the heap. A borrow
-                # binding owns nothing, so its source keeps its value.
-                # ownership is decided from the type BEFORE the source text
-                # is composed: a scalar binding moves nothing, and asking for
-                # the source costs a String.
-                if (isBareNameValue :ast n: avn) then {
-                    bzt: stampIdOf :symtab nid: (interpPartNodeId n: avn)
-                    bzp: isHeapPtrCollection :symtab :ctx tid: bzt
-                    bzo: bzp
-                    if (symtab.reg.needsDestructor typeId: bzt) then bzo = true
-                    if bzo when (
-                        (bindingRhsIsBorrow
-                            :ast
-                            :symtab
-                            :ctx
-                            n: avn
-                        ).not
-                    ) then {
-                        bzs: implicitTakeSource :ast :symtab :ctx n: avn
-                        if bzs.length > 0 then {
-                            if bzp then {
-                                bzh: "\{ind}\{bzs} = NULL;\n"
-                                buf.append bzh
-                            } else {
-                                bzc: (typeRefC
-                                    :ast
-                                    :symtab
-                                    :ctx
-                                    tid: bzt
-                                    thisTid: ztypes.tid
-                                )
-                                if bzc.length > 0 then {
-                                    bzi: "\{ind}\{bzs} = (\{bzc}){0};\n"
-                                    buf.append bzi
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        # an owned class/record local with heap fields is destroyed at scope
-        # exit (String/collection locals returned earlier; take-aliases too).
-        (registerScopeDestroy
-            :ast
-            :symtab
-            :ctx
-            tid: ltid
-            :nm
-            :nameVid
-            valueNode: avn
-            :tmp
-        )
-    } else {
+    if ct.length == 0 then {
         emitFail :ctx what: "unhandled binding type \{tn} for \{nm}" line: n.lineno
         lb: "\{ind}/* zemitterc: unhandled binding type \{tn} for \{nm} */\n"
         buf.append lb
+        return
     }
+    ctB8: (bindAliasCType
+        :ast
+        :symtab
+        :ctx
+        :avn
+        :ct
+        :ltid
+        :nameVid
+    )
+    rvB8: "\{rv}"
+    if ctB8.stringView == ct when (needsValueDeref
+        :ast
+        :symtab
+        :ctx
+        n: avn
+        tid: ltid
+    ) then rvB8 = "(*\{rv})"
+    la: "\{ind}\{ctB8} \{nm} = \{rvB8};\n"
+    buf.append la
+    emitValueTakeInvalidations :ast :symtab :ctx n: avn :ind :buf
+    (emitBindSourceZero
+        :ast
+        :symtab
+        :ctx
+        :avn
+        rv: rv.stringView
+        :ct
+        :ind
+        :buf
+    )
+    # an owned class/record local with heap fields is destroyed at scope
+    # exit (String/collection locals returned earlier; take-aliases too).
+    (registerScopeDestroy
+        :ast
+        :symtab
+        :ctx
+        tid: ltid
+        :nm
+        :nameVid
+        valueNode: avn
+        :tmp
+    )
 }
 
 # emitTakeAliasBind -- `x: <inst>.take` over a record or class is an ownership
