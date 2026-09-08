@@ -124,6 +124,21 @@ listCname: function {cnames: (List String).view tid: ztypes.tid} out String is {
     return got.copy
 }
 
+# listCnameView -- the C name for `tid` BORROWED rather than copied, and "" when
+# the table does not reach that far. `cnames` is built once before emission and
+# never written again, so a view into it is good for the whole run; listCname is
+# the owning twin, for a caller that keeps the String.
+listCnameView: function {cnames: (List String).view tid: ztypes.tid} outx StringView is {
+    if tid >= cnames.length then return ""
+    got: cnames.get i: tid
+    return got.stringView
+}
+
+# ctxCnameView -- listCnameView against the table the emission context carries.
+ctxCnameView: function {ctx: Ctx.view tid: ztypes.tid} outx StringView is {
+    return (listCnameView cnames: ctx.cnames :tid)
+}
+
 # ctxCname -- listCname against the table the emission context carries.
 ctxCname: function {ctx: Ctx.view tid: ztypes.tid} out String is {
     return (listCname cnames: ctx.cnames :tid)
@@ -10047,7 +10062,7 @@ emitCrossUnitTag: function {
     pc: armPayloadC :ast :symtab :ctx tid: (ztypes.tid.create from: vtid.u64) :arm
     if pc.length == 0 then {
         tg: variantTag :symtab tid: (ztypes.tid.create from: vtid.u64) :arm
-        vc: ctxCname :ctx tid: (ztypes.tid.create from: vtid.u64)
+        vc: ctxCnameView :ctx tid: (ztypes.tid.create from: vtid.u64)
         avx: (armValueC
             :symtab
             tid: (ztypes.tid.create from: vtid.u64)
@@ -11674,7 +11689,7 @@ emitResolvedMemberRead: function {
         # gate on the conformance row.)
         clab: conformanceLabelFor :symtab implTid: bstamp protoTid: mco
         if clab.stringView == mn2 then {
-            ib: ctxCname :ctx tid: bstamp
+            ib: ctxCnameView :ctx tid: bstamp
             if (isPtrVid :ctx vid: bn2v) then {
                 pj: "\{ib}_\{mn2}_create(\{bn2})"
                 return pj
@@ -21435,7 +21450,7 @@ fnSignature: function {
         pi = pi + 1
     }
     if pn == 0 then params.append "void"
-    fc: ctxCname :ctx tid: fid
+    fc: ctxCnameView :ctx tid: fid
     sig: "\{ret} \{fc}(\{params})"
     return sig
 }
@@ -21850,48 +21865,35 @@ typeRefC: function {
         return "\{bxinner}*"
     }
     if (isCollectionOriginTid :ctx originTid: (originTidOf :symtab tid: cid)) then {
-        cc: ctxCname :ctx tid: cid
+        cc: ctxCnameView :ctx tid: cid
         cTypeText: "\{cc}_t"
         return cTypeText
     }
     if (originIsTid :symtab tid: cid originTid: (ctx.origins.get i: ogArray)) then {
-        aca: ctxCname :ctx tid: cid
+        aca: ctxCnameView :ctx tid: cid
         act: "\{aca}_t"
         return act
     }
     ctt: symtab.reg.typetypeOf typeId: cid
-    if ctt == ztypes.ztypetype.recordType then {
-        rc: ctxCname :ctx tid: cid
+    # every user type family spells its C type the same way -- the struct tag
+    # the emitter minted for it -- so the kind decides only whether there is a
+    # struct at all. A function type is the one that spells a different suffix,
+    # because what it names is a function-pointer typedef and not a struct.
+    isUserStruct: (
+        (ctt == ztypes.ztypetype.recordType) or
+        (ctt == ztypes.ztypetype.variantType) or
+        (ctt == ztypes.ztypetype.classType) or
+        (ctt == ztypes.ztypetype.unionType) or
+        (ctt == ztypes.ztypetype.protocolType) or
+        (ctt == ztypes.ztypetype.facetType)
+    )
+    if isUserStruct then {
+        rc: ctxCnameView :ctx tid: cid
         rt: "\{rc}_t"
         return rt
     }
-    if ctt == ztypes.ztypetype.variantType then {
-        rc2: ctxCname :ctx tid: cid
-        rt8: "\{rc2}_t"
-        return rt8
-    }
-    if ctt == ztypes.ztypetype.classType then {
-        rc3: ctxCname :ctx tid: cid
-        rt7: "\{rc3}_t"
-        return rt7
-    }
-    if ctt == ztypes.ztypetype.unionType then {
-        rc4: ctxCname :ctx tid: cid
-        rt6: "\{rc4}_t"
-        return rt6
-    }
-    if ctt == ztypes.ztypetype.protocolType then {
-        rc5: ctxCname :ctx tid: cid
-        rt5: "\{rc5}_t"
-        return rt5
-    }
-    if ctt == ztypes.ztypetype.facetType then {
-        rc55: ctxCname :ctx tid: cid
-        rt55: "\{rc55}_t"
-        return rt55
-    }
     if ctt == ztypes.ztypetype.functionType then {
-        rcf: ctxCname :ctx tid: cid
+        rcf: ctxCnameView :ctx tid: cid
         rtf: "\{rcf}_ft"
         return rtf
     }
@@ -28123,7 +28125,7 @@ emitOneFnptrTypedef: function {
     }
     if pn == 0 then params.append "void"
     retc: fnptrRetTypeC :ast :symtab :ctx :tid
-    cb: ctxCname :ctx :tid
+    cb: ctxCnameView :ctx :tid
     line: "typedef \{retc} (*\{cb}_ft)(\{params});\n"
     buf.append line
 }
