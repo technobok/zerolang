@@ -2721,6 +2721,23 @@ over the same source tree.
 `ALLOC_BASELINE` 2,263,972 -> 2,114,742 (the canonical `perf-strict` invocation
 reads a little above the staged one; see the argv[0] note in the previous row).
 
+**The core row** (`make perf`, gcc -O1 series binary, mimalloc, own source):
+
+| | 7dcb7a15 | a3f7168f |
+|---|---|---|
+| src/*.z lines | 106,581 | 106,547 |
+| wall, best of 5 | 0.45s | 0.44s |
+| peak RSS | 94.4 -- 94.8 MB | 94.6 -- 94.7 MB |
+| parse / typecheck / emit | 108 / 170 / 184 = 462 ms | 105 / 172 / 178 = 455 ms |
+| allocations | 2,263,972 | 2,114,742 |
+| bytes | 301,843,114 | 299,931,474 |
+
+Instructions are 5,451.5M against 5,474.1M before, `perf stat -r 3` inside
+`perf-strict` on each tree's own source. Wall and RSS are flat, as a change that
+removes allocations without changing work should be: the allocator was never the
+bottleneck, and the win is in memory traffic and in what the compiler no longer
+has to free.
+
 **Where it came from.** A DHAT census attributing every block to the frame above
 the allocator put strings at 60% of all allocations and deep copies alone at 18%.
 Four helpers were handing back an owned copy of a name their caller only read:
