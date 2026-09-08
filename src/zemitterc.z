@@ -21118,6 +21118,19 @@ isListPtrParam: function {
     return (isListOriginOf :symtab :ctx tid: (ztypes.tid.create from: bt.u64))
 }
 
+# resetFnEmitState -- clear the per-FUNCTION emission state before a body is
+# written. Every one of these tables is keyed by variable id and every id space
+# restarts at the function boundary, so carrying one across would let a previous
+# body's alias, narrowing or exclusion answer for a name in this one.
+resetFnEmitState: function {ctx: Ctx} is {
+    ctx.ptrVids = ListVal ztypes.vid
+    ctx.aliases = List VidVal
+    ctx.narrowBox = List VidVal
+    ctx.narrowTid = List VidTid
+    ctx.exclArms = List VidVal
+    ctx.exclTids = List VidTid
+}
+
 # registerReftypeParams -- add a top-level function's reftype (class/union)
 # params to ctx.ptrVids, so the body reads them as `param->field` and method
 # calls pass them directly (they arrive as pointers). Caller resets ptrVids.
@@ -23146,12 +23159,7 @@ emitUnitMonoInstances: function {
                                 } else {
                                     lo: "\{sig} {\n"
                                     buf.append lo
-                                    ctx.ptrVids = ListVal ztypes.vid
-                                    ctx.aliases = List VidVal
-                                    ctx.narrowBox = List VidVal
-                                    ctx.narrowTid = List VidTid
-                                    ctx.exclArms = List VidVal
-                                    ctx.exclTids = List VidTid
+                                    resetFnEmitState :ctx
                                     (registerReftypeParams
                                         :ast
                                         :symtab
@@ -23301,12 +23309,7 @@ emitFnMonoInstances: function {
             } else {
                 lo: "\{sig} {\n"
                 buf.append lo
-                ctx.ptrVids = ListVal ztypes.vid
-                ctx.aliases = List VidVal
-                ctx.narrowBox = List VidVal
-                ctx.narrowTid = List VidTid
-                ctx.exclArms = List VidVal
-                ctx.exclTids = List VidTid
+                resetFnEmitState :ctx
                 (registerReftypeParams
                     :ast
                     :symtab
@@ -23512,12 +23515,7 @@ emitFnDeclsInOrder: function {
                 } else {
                     lo: "\{sig} {\n"
                     buf.append lo
-                    ctx.ptrVids = ListVal ztypes.vid
-                    ctx.aliases = List VidVal
-                    ctx.narrowBox = List VidVal
-                    ctx.narrowTid = List VidTid
-                    ctx.exclArms = List VidVal
-                    ctx.exclTids = List VidTid
+                    resetFnEmitState :ctx
                     (registerReftypeParams
                         :ast
                         :symtab
@@ -31908,6 +31906,82 @@ emitAsConsts: function {
 # emitClassMonoMethods -- emit every specialization's bodied methods for a
 # generic class template: the clone's FUNCTION id supplies the substituted
 # signature and the template item supplies the body (the unit-mono pattern).
+# emitMonoMethodAt -- one member of a template's body, emitted for the mono
+# `monoId`: a declaration under `declOnly` and a definition otherwise. Anything
+# that is not a method with a body, or whose declaration the mono does not
+# carry, is skipped.
+emitMonoMethodAt: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    nid: u32
+    monoId: u64
+    declOnly: bool
+    buf: String.borrow
+} is {
+    site: zast.namedSiteAt :ast :nid
+    if site.operation.isZero then return
+    opId: site.operation.u32
+    if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: opId.u64)).not then return
+    mid: u64
+    {
+        mn: zast.nameTextAt :ast ref: site.name
+        co: (symtab.typing.declChildOf
+            pool: ast.names
+            parentTypeId: (ztypes.tid.create from: monoId)
+            name: mn.stringView
+        )
+        mid = co.or d: 0
+    }
+    if mid == 0 then return
+    fid: ztypes.tid.create from: mid
+    if (symtab.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return
+    fn: regNameOf :symtab tid: fid
+    sg: (fnSignature
+        :ast
+        :symtab
+        :ctx
+        name: fn.stringView
+        :fid
+        op: (ast.nodes.get i: opId.u64)
+    )
+    if declOnly then {
+        ld: "\{sg};\n"
+        buf.append ld
+        return
+    }
+    lo: "\{sg} {\n"
+    buf.append lo
+    resetFnEmitState :ctx
+    registerReftypeParams :ast :symtab :ctx :fid op: (ast.nodes.get i: opId.u64)
+    ctx.curThisTid = ztypes.tid.create from: monoId
+    emitFnBody :ast :symtab :ctx op: (ast.nodes.get i: opId.u64) :fid :buf
+    ctx.curThisTid = ztypes.tid.create from: 0
+    buf.append "}\n\n"
+}
+
+# emitMonoMethodsIn -- emitMonoMethodAt over every member of `span`. The is
+# block and the as block of a template are asked the same question: a generator
+# keeps its methods in the one a class keeps its fields in, and that difference
+# reaches no emitted byte.
+emitMonoMethodsIn: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    span: zast.kidspan
+    monoId: u64
+    declOnly: bool
+    buf: String.borrow
+} is {
+    ids: zast.kidIds :ast :span
+    with it: ids.iterate do for amId: it loop {
+        emitMonoMethodAt :ast :symtab :ctx nid: amId :monoId :declOnly :buf
+    }
+}
+
+# emitClassMonoMethods -- every method body a template's monos need, one mono at
+# a time. A mono carries its own declaration for each of the template's methods,
+# so the C is written per mono and not per template.
 emitClassMonoMethods: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
@@ -31917,159 +31991,21 @@ emitClassMonoMethods: function {
     declOnly: bool
     buf: String.borrow
 } is {
-    if op.objectdef then {
-        last8: symtab.reg.nextTypeId
-        t8: u64
-        for t8 < last8 loop {
-            isMono8: false
-            go8opt: symtab.reg.genericOriginOf tid: (ztypes.tid.create from: t8.u64)
-            if go8opt.u64 == tplId when go8opt > 0 then isMono8 = true
-            if isMono8 then {
-                isx1889: u64
-                for isx1889 < op.isItems.count.u64 loop {
-                    am8Id: zast.kidAt kids: ast.kids span: op.isItems i: isx1889
-                    isx1889 = isx1889 + 1
-                    am8: ast.nodes.get i: am8Id.u64
-                    if am8.namedoperation when (ztypecheck.isFunctionDefWithBody
-                        o: (ast.nodes.get i: am8.operation.u64)
-                    ) then {
-                        mn8: zast.nameTextAt :ast ref: am8.name
-                        co8: (symtab.typing.declChildOf
-                            pool: ast.names
-                            parentTypeId: (ztypes.tid.create from: t8.u64)
-                            name: mn8.stringView
-                        )
-                        match (
-                            co8
-                        ) case some then {
-                            cf8: co8
-                            if (
-                                (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: cf8.u64)) ==
-                                ztypes.ztypetype.functionType
-                            ) then {
-                                fn8: (regNameOf
-                                    :symtab
-                                    tid: (ztypes.tid.create from: cf8.u64)
-                                )
-                                sg8: (fnSignature
-                                    :ast
-                                    :symtab
-                                    :ctx
-                                    name: fn8.stringView
-                                    fid: (ztypes.tid.create from: cf8.u64)
-                                    op: (ast.nodes.get i: am8.operation.u64)
-                                )
-                                if declOnly then {
-                                    ld8: "\{sg8};\n"
-                                    buf.append ld8
-                                } else {
-                                    lo8: "\{sg8} {\n"
-                                    buf.append lo8
-                                    ctx.ptrVids = ListVal ztypes.vid
-                                    ctx.aliases = List VidVal
-                                    ctx.narrowBox = List VidVal
-                                    ctx.narrowTid = List VidTid
-                                    ctx.exclArms = List VidVal
-                                    ctx.exclTids = List VidTid
-                                    (registerReftypeParams
-                                        :ast
-                                        :symtab
-                                        :ctx
-                                        fid: (ztypes.tid.create from: cf8.u64)
-                                        op: (ast.nodes.get i: am8.operation.u64)
-                                    )
-                                    ctx.curThisTid = ztypes.tid.create from: t8
-                                    (emitFnBody
-                                        :ast
-                                        :symtab
-                                        :ctx
-                                        op: (ast.nodes.get i: am8.operation.u64)
-                                        fid: (ztypes.tid.create from: cf8.u64)
-                                        :buf
-                                    )
-                                    ctx.curThisTid = ztypes.tid.create from: 0
-                                    buf.append "}\n\n"
-                                }
-                            }
-                        } case none then null
-                    }
-                }
-                asx1719: u64
-                for asx1719 < op.asItems.count.u64 loop {
-                    am8bId: zast.kidAt kids: ast.kids span: op.asItems i: asx1719
-                    asx1719 = asx1719 + 1
-                    am8b: ast.nodes.get i: am8bId.u64
-                    if am8b.namedoperation when (ztypecheck.isFunctionDefWithBody
-                        o: (ast.nodes.get i: am8b.operation.u64)
-                    ) then {
-                        mn8b: zast.nameTextAt :ast ref: am8b.name
-                        co8b: (symtab.typing.declChildOf
-                            pool: ast.names
-                            parentTypeId: (ztypes.tid.create from: t8.u64)
-                            name: mn8b.stringView
-                        )
-                        match (
-                            co8b
-                        ) case some then {
-                            cf8b: co8b
-                            if (
-                                (symtab.reg.typetypeOf
-                                    typeId: (ztypes.tid.create from: cf8b.u64)
-                                ) ==
-                                ztypes.ztypetype.functionType
-                            ) then {
-                                fn8b: (regNameOf
-                                    :symtab
-                                    tid: (ztypes.tid.create from: cf8b.u64)
-                                )
-                                sg8b: (fnSignature
-                                    :ast
-                                    :symtab
-                                    :ctx
-                                    name: fn8b.stringView
-                                    fid: (ztypes.tid.create from: cf8b.u64)
-                                    op: (ast.nodes.get i: am8b.operation.u64)
-                                )
-                                if declOnly then {
-                                    ld8b: "\{sg8b};\n"
-                                    buf.append ld8b
-                                } else {
-                                    lo8b: "\{sg8b} {\n"
-                                    buf.append lo8b
-                                    ctx.ptrVids = ListVal ztypes.vid
-                                    ctx.aliases = List VidVal
-                                    ctx.narrowBox = List VidVal
-                                    ctx.narrowTid = List VidTid
-                                    ctx.exclArms = List VidVal
-                                    ctx.exclTids = List VidTid
-                                    (registerReftypeParams
-                                        :ast
-                                        :symtab
-                                        :ctx
-                                        fid: (ztypes.tid.create from: cf8b.u64)
-                                        op: (ast.nodes.get i: am8b.operation.u64)
-                                    )
-                                    ctx.curThisTid = ztypes.tid.create from: t8
-                                    (emitFnBody
-                                        :ast
-                                        :symtab
-                                        :ctx
-                                        op: (ast.nodes.get i: am8b.operation.u64)
-                                        fid: (ztypes.tid.create from: cf8b.u64)
-                                        :buf
-                                    )
-                                    ctx.curThisTid = ztypes.tid.create from: 0
-                                    buf.append "}\n\n"
-                                }
-                            }
-                        } case none then null
-                    }
-                }
-            }
-            t8 = t8 + 1
+    if op.objectdef.not then return
+    isItems: op.isItems
+    asItems: op.asItems
+    last8: symtab.reg.nextTypeId
+    t8: u64
+    for t8 < last8 loop {
+        go8: symtab.reg.genericOriginOf tid: (ztypes.tid.create from: t8.u64)
+        if go8 > 0 when go8.u64 == tplId then {
+            emitMonoMethodsIn :ast :symtab :ctx span: isItems monoId: t8 :declOnly :buf
+            emitMonoMethodsIn :ast :symtab :ctx span: asItems monoId: t8 :declOnly :buf
         }
+        t8 = t8 + 1
     }
 }
+
 
 # emitRecordMethods -- the record's as-block functions as free C
 # functions taking the record by value (params from the method type's
@@ -32889,12 +32825,7 @@ emitOneMethod: function {
     # a CLASS method takes its `this` receiver by pointer (reference semantics):
     # the receiver param gets a `*` and its name is recorded so the body emits
     # `c->field`. Reset for this method (names must not leak into other bodies).
-    ctx.ptrVids = ListVal ztypes.vid
-    ctx.aliases = List VidVal
-    ctx.narrowBox = List VidVal
-    ctx.narrowTid = List VidTid
-    ctx.exclArms = List VidVal
-    ctx.exclTids = List VidTid
+    resetFnEmitState :ctx
     encIsClass: false
     if (symtab.reg.typetypeOf typeId: thisTid) == ztypes.ztypetype.classType then encIsClass = true
     (emitMethodParams
@@ -32929,12 +32860,7 @@ emitOneMethod: function {
         }
         buf.append "}\n\n"
     }
-    ctx.ptrVids = ListVal ztypes.vid
-    ctx.aliases = List VidVal
-    ctx.narrowBox = List VidVal
-    ctx.narrowTid = List VidTid
-    ctx.exclArms = List VidVal
-    ctx.exclTids = List VidTid
+    resetFnEmitState :ctx
 }
 
 # the C name of the program's `main`.
