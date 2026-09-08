@@ -71,6 +71,13 @@ parseU32at: function {tokens: (List String).view i: u64} out u32 is {
     }
 }
 
+# expectArgc -- refuse a verb given the wrong number of tokens. The count is
+# the WHOLE line including the verb and subverb, which is how the callers count
+# it, and `msg` names the arguments the subverb wanted.
+expectArgc: function {n: u64 want: u64 msg: StringView} is {
+    if n != want then panic msg
+}
+
 # Verb: entry <arm> [args...]. Constructs the named dentry arm with
 # the given args, appends to the table, prints the assigned id.
 dispatchEntry: function {tokens: (List String).view table: DentryTable} is {
@@ -79,13 +86,13 @@ dispatchEntry: function {tokens: (List String).view table: DentryTable} is {
     arm_str: tokens.get i: 1
     arm: arm_str.stringView
     if arm == "root" then {
-        if n != 2 then panic "entry root takes no args"
+        expectArgc :n want: 2 msg: "entry root takes no args"
         idx: table.append entry: dentry.root
         print "\{idx.u64}"
         return
     }
     if arm == "notfound" then {
-        if n != 5 then panic "entry notfound expects 3 args"
+        expectArgc :n want: 5 msg: "entry notfound expects 3 args"
         pid: fsno.create from: (parseU32at :tokens i: 2)
         prv: parseU32at :tokens i: 3
         nid: parseU32at :tokens i: 4
@@ -95,7 +102,7 @@ dispatchEntry: function {tokens: (List String).view table: DentryTable} is {
         return
     }
     if arm == "file" then {
-        if n != 5 then panic "entry file expects 3 args"
+        expectArgc :n want: 5 msg: "entry file expects 3 args"
         pid: fsno.create from: (parseU32at :tokens i: 2)
         prv: parseU32at :tokens i: 3
         nid: parseU32at :tokens i: 4
@@ -105,7 +112,7 @@ dispatchEntry: function {tokens: (List String).view table: DentryTable} is {
         return
     }
     if arm == "directory" then {
-        if n != 5 then panic "entry directory expects 3 args"
+        expectArgc :n want: 5 msg: "entry directory expects 3 args"
         pid: fsno.create from: (parseU32at :tokens i: 2)
         prv: parseU32at :tokens i: 3
         nid: parseU32at :tokens i: 4
@@ -115,7 +122,7 @@ dispatchEntry: function {tokens: (List String).view table: DentryTable} is {
         return
     }
     if arm == "mount" then {
-        if n != 6 then panic "entry mount expects 4 args"
+        expectArgc :n want: 6 msg: "entry mount expects 4 args"
         pid: fsno.create from: (parseU32at :tokens i: 2)
         first: fsno.create from: (parseU32at :tokens i: 3)
         second: fsno.create from: (parseU32at :tokens i: 4)
@@ -290,6 +297,164 @@ dispatchOpen: function {tokens: (List String).view providers: ProviderTable} is 
     printOpenResult r: r.take
 }
 
+# parseBindKind -- how a bind replaces what is already at a name. The refusal
+# text comes from the caller, so it still names the subverb that was given the
+# bad spelling.
+parseBindKind: function {kind_sv: StringView msg: StringView} out bindkind is {
+    if kind_sv == "instead" then return bindkind.instead
+    if kind_sv == "before" then return bindkind.before
+    if kind_sv == "after" then return bindkind.after
+    panic msg
+}
+
+# dispatchVfsRegister -- `register`, the only subverb that names a provider
+# KIND before its arguments. False when `sub` is some other subverb.
+dispatchVfsRegister: function {
+    tokens: (List String).view
+    vfs: ZVfs
+    n: u64
+    sub: StringView
+} out bool is {
+    if sub != "register" then return false
+    if n < 3 then panic "vfs register expects a kind"
+    kind_str: tokens.get i: 2
+    kind: kind_str.stringView
+    if kind == "null" then {
+        expectArgc :n want: 3 msg: "vfs register null takes no args"
+        did: vfs.registerNull
+        print "\{did.u64}"
+        return true
+    }
+    if kind == "string" then {
+        expectArgc :n want: 3 msg: "vfs register string takes no args"
+        did: vfs.registerString
+        print "\{did.u64}"
+        return true
+    }
+    if kind == "fs" then {
+        expectArgc :n want: 5 msg: "vfs register fs expects 2 args (rootpath parentpath)"
+        rp_str: tokens.get i: 3
+        pp_str: tokens.get i: 4
+        rp: rp_str.copy
+        pp: pp_str.copy
+        did: vfs.registerFS rootpath: rp.take parentpath: pp.take
+        print "\{did.u64}"
+        return true
+    }
+    panic "vfs register: unknown kind"
+}
+
+# dispatchVfsQuery -- the read-only subverbs: resolve a name, ask what a dentry
+# is, spell its path, open it, read a line. False when `sub` is some other
+# subverb.
+dispatchVfsQuery: function {
+    tokens: (List String).view
+    vfs: ZVfs
+    n: u64
+    sub: StringView
+} out bool is {
+    if sub == "walk" then {
+        expectArgc :n want: 4 msg: "vfs walk expects 2 args (parentid name)"
+        pid: fsno.create from: (parseU32at :tokens i: 2)
+        name_str: tokens.get i: 3
+        name_sv: name_str.stringView
+        did: vfs.walk parent: pid name: name_sv
+        print "\{did.u64}"
+        return true
+    }
+    if sub == "stat" then {
+        expectArgc :n want: 3 msg: "vfs stat expects 1 arg (dentryid)"
+        did: parseU32at :tokens i: 2
+        k: vfs.arm dentryid: did
+        match (
+            k
+        ) case dir then {
+            print "dir"
+        } case file then {
+            print "file"
+        } case notfound then {
+            print "notfound"
+        }
+        return true
+    }
+    if sub == "path" then {
+        expectArgc :n want: 3 msg: "vfs path expects 1 arg (dentryid)"
+        did: parseU32at :tokens i: 2
+        s: vfs.path dentryid: did
+        print s
+        return true
+    }
+    if sub == "pathfromprovider" then {
+        expectArgc :n want: 3 msg: "vfs pathfromprovider expects 1 arg (dentryid)"
+        did: fsno.create from: (parseU32at :tokens i: 2)
+        s: vfs.pathfromprovider dentryid: did
+        print s
+        return true
+    }
+    if sub == "open" then {
+        expectArgc :n want: 3 msg: "vfs open expects 1 arg (dentryid)"
+        did: parseU32at :tokens i: 2
+        r: vfs.open dentryid: did
+        printOpenResult r: r.take
+        return true
+    }
+    if sub == "getline" then {
+        expectArgc :n want: 4 msg: "vfs getline expects 2 args (dentryid lineno)"
+        did: parseU32at :tokens i: 2
+        ln_u32: parseU32at :tokens i: 3
+        ln: ln_u32.u64
+        opt: vfs.getline dentryid: did lineno: ln
+        match (
+            opt
+        ) case some then {
+            print "some: \{opt}"
+        } case none then {
+            print "none"
+        }
+        return true
+    }
+    return false
+}
+
+# dispatchVfsBind -- the two subverbs that layer a provider over a name:
+# `bindroot` at the root and `bind` under a parent. False when `sub` is some
+# other subverb.
+dispatchVfsBind: function {
+    tokens: (List String).view
+    vfs: ZVfs
+    n: u64
+    sub: StringView
+} out bool is {
+    if sub == "bindroot" then {
+        expectArgc :n want: 4 msg: "vfs bindroot expects 2 args (newid kind)"
+        newid: fsno.create from: (parseU32at :tokens i: 2)
+        kind_str: tokens.get i: 3
+        kind: (parseBindKind
+            kind_sv: kind_str.stringView
+            msg: "vfs bindroot: unknown kind (instead/before/after)"
+        )
+        did: vfs.bindRoot :newid :kind
+        print "\{did.u64}"
+        return true
+    }
+    if sub == "bind" then {
+        expectArgc :n want: 6 msg: "vfs bind expects 4 args (parentid name newid kind)"
+        pid: fsno.create from: (parseU32at :tokens i: 2)
+        name_str: tokens.get i: 3
+        name_sv: name_str.stringView
+        newid: fsno.create from: (parseU32at :tokens i: 4)
+        kind_str: tokens.get i: 5
+        kind: (parseBindKind
+            kind_sv: kind_str.stringView
+            msg: "vfs bind: unknown kind (instead/before/after)"
+        )
+        did: vfs.bind parentid: pid name: name_sv :newid :kind
+        print "\{did.u64}"
+        return true
+    }
+    return false
+}
+
 # Verb: vfs <subverb> [args...]. Subverbs:
 #   register null
 #   register string
@@ -308,135 +473,9 @@ dispatchVfs: function {tokens: (List String).view vfs: ZVfs} is {
     if n < 2 then panic "vfs verb expects a subverb"
     sub_str: tokens.get i: 1
     sub: sub_str.stringView
-    if sub == "register" then {
-        if n < 3 then panic "vfs register expects a kind"
-        kind_str: tokens.get i: 2
-        kind: kind_str.stringView
-        if kind == "null" then {
-            if n != 3 then panic "vfs register null takes no args"
-            did: vfs.registerNull
-            print "\{did.u64}"
-            return
-        }
-        if kind == "string" then {
-            if n != 3 then panic "vfs register string takes no args"
-            did: vfs.registerString
-            print "\{did.u64}"
-            return
-        }
-        if kind == "fs" then {
-            if n != 5 then panic "vfs register fs expects 2 args (rootpath parentpath)"
-            rp_str: tokens.get i: 3
-            pp_str: tokens.get i: 4
-            rp: rp_str.copy
-            pp: pp_str.copy
-            did: vfs.registerFS rootpath: rp.take parentpath: pp.take
-            print "\{did.u64}"
-            return
-        }
-        panic "vfs register: unknown kind"
-    }
-    if sub == "walk" then {
-        if n != 4 then panic "vfs walk expects 2 args (parentid name)"
-        pid: fsno.create from: (parseU32at :tokens i: 2)
-        name_str: tokens.get i: 3
-        name_sv: name_str.stringView
-        did: vfs.walk parent: pid name: name_sv
-        print "\{did.u64}"
-        return
-    }
-    if sub == "stat" then {
-        if n != 3 then panic "vfs stat expects 1 arg (dentryid)"
-        did: parseU32at :tokens i: 2
-        k: vfs.arm dentryid: did
-        match (
-            k
-        ) case dir then {
-            print "dir"
-        } case file then {
-            print "file"
-        } case notfound then {
-            print "notfound"
-        }
-        return
-    }
-    if sub == "path" then {
-        if n != 3 then panic "vfs path expects 1 arg (dentryid)"
-        did: parseU32at :tokens i: 2
-        s: vfs.path dentryid: did
-        print s
-        return
-    }
-    if sub == "pathfromprovider" then {
-        if n != 3 then panic "vfs pathfromprovider expects 1 arg (dentryid)"
-        did: fsno.create from: (parseU32at :tokens i: 2)
-        s: vfs.pathfromprovider dentryid: did
-        print s
-        return
-    }
-    if sub == "open" then {
-        if n != 3 then panic "vfs open expects 1 arg (dentryid)"
-        did: parseU32at :tokens i: 2
-        r: vfs.open dentryid: did
-        printOpenResult r: r.take
-        return
-    }
-    if sub == "getline" then {
-        if n != 4 then panic "vfs getline expects 2 args (dentryid lineno)"
-        did: parseU32at :tokens i: 2
-        ln_u32: parseU32at :tokens i: 3
-        ln: ln_u32.u64
-        opt: vfs.getline dentryid: did lineno: ln
-        match (
-            opt
-        ) case some then {
-            print "some: \{opt}"
-        } case none then {
-            print "none"
-        }
-        return
-    }
-    if sub == "bindroot" then {
-        if n != 4 then panic "vfs bindroot expects 2 args (newid kind)"
-        newid: fsno.create from: (parseU32at :tokens i: 2)
-        kind_str: tokens.get i: 3
-        kind_sv: kind_str.stringView
-        kind: bindkind.instead
-        if kind_sv == "instead" then {
-            kind = bindkind.instead
-        } else if kind_sv == "before" then {
-            kind = bindkind.before
-        } else if kind_sv == "after" then {
-            kind = bindkind.after
-        } else {
-            panic "vfs bindroot: unknown kind (instead/before/after)"
-        }
-        did: vfs.bindRoot :newid :kind
-        print "\{did.u64}"
-        return
-    }
-    if sub == "bind" then {
-        if n != 6 then panic "vfs bind expects 4 args (parentid name newid kind)"
-        pid: fsno.create from: (parseU32at :tokens i: 2)
-        name_str: tokens.get i: 3
-        name_sv: name_str.stringView
-        newid: fsno.create from: (parseU32at :tokens i: 4)
-        kind_str: tokens.get i: 5
-        kind_sv: kind_str.stringView
-        kind: bindkind.instead
-        if kind_sv == "instead" then {
-            kind = bindkind.instead
-        } else if kind_sv == "before" then {
-            kind = bindkind.before
-        } else if kind_sv == "after" then {
-            kind = bindkind.after
-        } else {
-            panic "vfs bind: unknown kind (instead/before/after)"
-        }
-        did: vfs.bind parentid: pid name: name_sv :newid :kind
-        print "\{did.u64}"
-        return
-    }
+    if (dispatchVfsRegister :tokens :vfs :n :sub) then return
+    if (dispatchVfsQuery :tokens :vfs :n :sub) then return
+    if (dispatchVfsBind :tokens :vfs :n :sub) then return
     panic "vfs: unknown subverb"
 }
 
