@@ -3522,6 +3522,41 @@ restoreNarrow: function {
     }
 }
 
+# pushNarrow -- point `vid` at the narrowed value `val` of type `tid`, saving
+# what the narrow tables held so restoreNarrowSeeds can put it back. The saved
+# pair is appended newest last, one per seeded vid.
+pushNarrow: function {
+    ctx: Ctx
+    vid: ztypes.vid
+    val: StringView
+    tid: ztypes.tid
+    prevV: List String
+    prevT: ListVal u64
+} is {
+    pv: vvGet xs: ctx.narrowBox :vid
+    prevV.append pv
+    prevT.append ((vtGet xs: ctx.narrowTid :vid).or d: (ztypes.tid.create from: 0))
+    vvSet xs: ctx.narrowBox :vid :val
+    vtSet xs: ctx.narrowTid :vid :tid
+}
+
+# restoreNarrowSeeds -- put back every narrowing a scope's seeds displaced, one
+# restoreNarrow per saved pair.
+restoreNarrowSeeds: function {
+    ctx: Ctx
+    svids: (ListVal ztypes.vid).view
+    prevV: (List String).view
+    prevT: (ListVal u64).view
+} is {
+    ri: u64
+    for ri < svids.length loop {
+        rv: prevV.get i: ri
+        rt: prevT.get i: ri
+        restoreNarrow :ctx vid: (svids.get i: ri) prevVal: rv.stringView prevTid: rt
+        ri = ri + 1
+    }
+}
+
 # bind `vid` to type id `tid` in `xs`.
 vtSet: function {xs: List VidTid vid: ztypes.vid tid: ztypes.tid} is {
     if vid.isZero then return
@@ -18922,6 +18957,18 @@ armAliasText: function {
     return "\{recv}\{acc}data.\{armAtP}\{arm}"
 }
 
+# armMemberTid -- the payload type `arm` names on sum type `owner`, 0 when the
+# arm is not a member of it.
+armMemberTid: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    owner: ztypes.tid
+    arm: StringView
+} out ztypes.tid is {
+    pt: (symtab.typing.declChildOf pool: ast.names parentTypeId: owner name: arm).or d: 0
+    return (ztypes.tid.create from: pt.u64)
+}
+
 # remainingArm -- the single arm of `tid` left after removing the
 # ambient exclusions recorded for variable `subjVid` (ctx.exclArms) plus the
 # `extra` space-joined arms; "" when zero or more than one remain.
@@ -19452,21 +19499,32 @@ layerCondExclusion: function {
     if f.ok.not then return
     if f.neg.not then return
     fa: zast.nameTextAt :ast ref: f.armRef
-    pv0: vvGet xs: ctx.exclArms vid: f.svid
-    ctx.exSaveVid.append f.svid
-    pvc: pv0.copy
-    ctx.exSaveV.append pvc
-    ctx.exSaveT.append ((vtGet xs: ctx.exclTids vid: f.svid).or d: (ztypes.tid.create from: 0))
+    pushExclusion :ctx vid: f.svid arm: fa owner: f.owner.u64
+}
+
+# pushExclusion -- add `arm` to the arms already excluded for `vid`, saving what
+# the exclusion tables held on ctx's stack so restoreCondExclusions can put it
+# back. The arms accumulate space-joined, which is how remainingArm reads them.
+pushExclusion: function {
+    ctx: Ctx
+    vid: ztypes.vid
+    arm: String.view
+    owner: u64
+} is {
+    pv0: vvGet xs: ctx.exclArms :vid
     nx: String
     if pv0.length > 0 then {
-        nj: "\{pv0} \{fa}"
+        nj: "\{pv0} \{arm}"
         nx = nj
     } else {
-        na0: fa.copy
+        na0: arm.copy
         nx = na0
     }
-    vvSet xs: ctx.exclArms vid: f.svid val: nx.stringView
-    vtSet xs: ctx.exclTids vid: f.svid tid: (ztypes.tid.create from: f.owner.u64)
+    ctx.exSaveVid.append vid
+    ctx.exSaveV.append pv0
+    ctx.exSaveT.append ((vtGet xs: ctx.exclTids :vid).or d: (ztypes.tid.create from: 0))
+    vvSet xs: ctx.exclArms :vid val: nx.stringView
+    vtSet xs: ctx.exclTids :vid tid: (ztypes.tid.create from: owner)
 }
 
 # restoreCondExclusions -- put back what each vid this clause layered held
@@ -19505,15 +19563,16 @@ installNarrowSeeds: function {
 } is {
     si: from
     for si < svids.length loop {
-        snv0: svids.get i: si
-        pv: vvGet xs: ctx.narrowBox vid: snv0
-        prevV.append pv
-        ptv: (vtGet xs: ctx.narrowTid vid: snv0).or d: (ztypes.tid.create from: 0)
-        prevT.append ptv
         svv: vals.get i: si
-        vvSet xs: ctx.narrowBox vid: snv0 val: svv.stringView
         stt: tids.get i: si
-        vtSet xs: ctx.narrowTid vid: snv0 tid: (ztypes.tid.create from: stt.u64)
+        (pushNarrow
+            :ctx
+            vid: (svids.get i: si)
+            val: svv.stringView
+            tid: (ztypes.tid.create from: stt.u64)
+            :prevV
+            :prevT
+        )
         si = si + 1
     }
 }
@@ -20079,15 +20138,156 @@ emitIfClause: function {
             dvF: blockDiverges :ast :symtab :ctx n: cst
             flushBlockFrees :ctx :tmp fL: fLi lL: lLi diverged: dvF :buf
         }
-        ri: u64
-        for ri < sN.length loop {
-            rnv: sVid.get i: ri
-            rv: sPrevV.get i: ri
-            rt: sPrevT.get i: ri
-            restoreNarrow :ctx vid: rnv prevVal: rv.stringView prevTid: rt
-            ri = ri + 1
-        }
+        restoreNarrowSeeds :ctx svids: sVid prevV: sPrevV prevT: sPrevT
         (restoreCondExclusions :ctx mark: xMark)
+    }
+}
+
+# layerChainExclusions -- on the else side every positive chain fact failed, so
+# each one's arm is excluded for the else body. A negated fact names the arm the
+# subject has instead, and is seeded rather than excluded.
+layerChainExclusions: function {
+    ctx: Ctx
+    svids: (ListVal ztypes.vid).view
+    arms: (List String).view
+    tids: (ListVal u64).view
+    negs: (ListVal bool).view
+} is {
+    fi: u64
+    for fi < negs.length loop {
+        if (negs.get i: fi).not then {
+            (pushExclusion
+                :ctx
+                vid: (svids.get i: fi)
+                arm: (arms.get i: fi)
+                owner: (tids.get i: fi)
+            )
+        }
+        fi = fi + 1
+    }
+}
+
+# negatedChainArm -- the arm a negated chain fact names for this subject, "" when
+# the chain never negated it. The last such fact wins, as the chain's own
+# accumulation does.
+negatedChainArm: function {
+    svids: (ListVal ztypes.vid).view
+    arms: (List String).view
+    negs: (ListVal bool).view
+    subj: ztypes.vid
+} out String is {
+    negArm: String
+    hj: u64
+    for hj < negs.length loop {
+        h2v: svids.get i: hj
+        if h2v == subj when (negs.get i: hj) then {
+            hav: arms.get i: hj
+            hac: hav.copy
+            negArm = hac
+        }
+        hj = hj + 1
+    }
+    return negArm
+}
+
+# seedElseSubject -- alias one chain subject to the arm the else side leaves it
+# with: the arm a negated fact named, or the single arm the exclusions leave.
+# Seeds nothing when the body reassigns the name -- the alias would go stale --
+# or when the arm carries no payload to alias.
+seedElseSubject: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    body: astnode.view
+    subj: StringView
+    subjVid: ztypes.vid
+    owner: ztypes.tid
+    recv: StringView
+    negArm: StringView
+    ind: StringView
+    svids: ListVal ztypes.vid
+    prevV: List String
+    prevT: ListVal u64
+    buf: String.borrow
+} is {
+    fArm: negArm.string
+    if fArm.length == 0 then {
+        rr: (remainingArm :ast :symtab :ctx :subjVid tid: owner extra: "")
+        fArm = rr
+    }
+    if fArm.length == 0 then return
+    if (bodyReassigns :ast n: body name: subj) then return
+    acc: ".".string
+    if (isPtrVid :ctx vid: subjVid) then acc = "->".string
+    aliasText: (armAliasText
+        :ast
+        :symtab
+        :ctx
+        tid: owner
+        arm: fArm.stringView
+        :recv
+        acc: acc.stringView
+    )
+    if aliasText.length == 0 then return
+    (pushNarrow
+        :ctx
+        vid: subjVid
+        val: aliasText.stringView
+        tid: (armMemberTid :ast :symtab :owner arm: fArm.stringView)
+        :prevV
+        :prevT
+    )
+    svids.append subjVid
+    cmt: "\{ind}    /* alias: \{subj} => \{aliasText} */\n"
+    buf.append cmt
+}
+
+# seedElseNarrows -- narrow every distinct chain subject for the else body. A
+# subject that several clauses tested is seeded once, from its first fact.
+seedElseNarrows: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    body: astnode.view
+    subjects: (List String).view
+    chVids: (ListVal ztypes.vid).view
+    arms: (List String).view
+    tids: (ListVal u64).view
+    negs: (ListVal bool).view
+    recvs: (List String).view
+    ind: StringView
+    svids: ListVal ztypes.vid
+    prevV: List String
+    prevT: ListVal u64
+    buf: String.borrow
+} is {
+    done: IdSet ztypes.vid
+    gi: u64
+    for gi < chVids.length loop {
+        gv: chVids.get i: gi
+        if (done.has item: gv).not then {
+            done.add item: gv
+            gs: subjects.get i: gi
+            grecv: recvs.get i: gi
+            na: negatedChainArm svids: chVids :arms :negs subj: gv
+            (seedElseSubject
+                :ast
+                :symtab
+                :ctx
+                :body
+                subj: gs.stringView
+                subjVid: gv
+                owner: (ztypes.tid.create from: (tids.get i: gi))
+                recv: grecv.stringView
+                negArm: na.stringView
+                :ind
+                :svids
+                :prevV
+                :prevT
+                :buf
+            )
+        }
+        gi = gi + 1
     }
 }
 
@@ -20108,161 +20308,59 @@ emitElse: function {
     chRecvs: (List String).view
     buf: String.borrow
 } is {
-    if oId > 0 then {
-        o: ast.nodes.get i: oId.u64
-        lh: "\{ind}} else {\n"
-        buf.append lh
-        ind2: "\{ind}    "
-        # condition-false knowledge: each positive chain fact excludes its
-        # arm for the else body (layered in ctx.exclArms so nested else-if
-        # wraps compose); a negated fact IS the arm directly.
-        exN: ListVal ztypes.vid
-        exPrevV: List String
-        exPrevT: ListVal u64
-        fi: u64
-        for fi < chSubjects.length loop {
-            if (chNegs.get i: fi).not then {
-                fv: chSubjectVids.get i: fi
-                pv0: vvGet xs: ctx.exclArms vid: fv
-                exN.append fv
-                pvc: pv0.copy
-                exPrevV.append pvc
-                exPrevT.append ((vtGet xs: ctx.exclTids vid: fv).or d: (ztypes.tid.create from: 0))
-                fa: chArms.get i: fi
-                nx: String
-                if pv0.length > 0 then {
-                    nj: "\{pv0} \{fa}"
-                    nx = nj
-                } else {
-                    na0: fa.copy
-                    nx = na0
-                }
-                vvSet xs: ctx.exclArms vid: fv val: nx.stringView
-                vtSet xs: ctx.exclTids vid: fv tid: (ztypes.tid.create from: (chTids.get i: fi))
-            }
-            fi = fi + 1
-        }
-        sN: List String
-        sVid: ListVal ztypes.vid
-        sPrevV: List String
-        sPrevT: ListVal u64
-        doneS: IdSet ztypes.vid
-        gi: u64
-        for gi < chSubjects.length loop {
-            gs: chSubjects.get i: gi
-            gv: chSubjectVids.get i: gi
-            if (doneS.has item: gv).not then {
-                doneS.add item: gv
-                gtid: chTids.get i: gi
-                negArm: String
-                hj: u64
-                for hj < chSubjects.length loop {
-                    h2v: chSubjectVids.get i: hj
-                    if h2v == gv when (chNegs.get i: hj) then {
-                        hav: chArms.get i: hj
-                        hac: hav.copy
-                        negArm = hac
-                    }
-                    hj = hj + 1
-                }
-                fArm: negArm.copy
-                if fArm.length == 0 then {
-                    rr: (remainingArm
-                        :ast
-                        :symtab
-                        :ctx
-                        subjVid: gv
-                        tid: (ztypes.tid.create from: gtid.u64)
-                        extra: ""
-                    )
-                    fArm = rr
-                }
-                if fArm.length > 0 when (bodyReassigns :ast n: o name: gs.stringView).not then {
-                    mrecv: chRecvs.get i: gi
-                    macc: ".".string
-                    if (isPtrVid :ctx vid: gv) then macc = "->".string
-                    aliasText: (armAliasText
-                        :ast
-                        :symtab
-                        :ctx
-                        tid: (ztypes.tid.create from: gtid.u64)
-                        arm: fArm.stringView
-                        recv: mrecv.stringView
-                        acc: macc.stringView
-                    )
-                    if aliasText.length > 0 then {
-                        pv: vvGet xs: ctx.narrowBox vid: gv
-                        sPrevV.append pv
-                        ptv: ((vtGet
-                            xs: ctx.narrowTid
-                            vid: gv
-                        ).or
-                            d: (ztypes.tid.create from: 0)
-                        )
-                        sPrevT.append ptv
-                        gsv: gs.copy
-                        sN.append gsv
-                        sVid.append gv
-                        vvSet xs: ctx.narrowBox vid: gv val: aliasText.stringView
-                        pt: ((symtab.typing.declChildOf
-                            pool: ast.names
-                            parentTypeId: (ztypes.tid.create from: gtid.u64)
-                            name: fArm.stringView
-                        ).or
-                            d: 0
-                        )
-                        vtSet xs: ctx.narrowTid vid: gv tid: (ztypes.tid.create from: pt.u64)
-                        cmtS: "\{ind}    /* alias: \{gs} => \{aliasText} */\n"
-                        buf.append cmtS
-                    }
-                }
-            }
-            gi = gi + 1
-        }
-        if assignTo.length > 0 then {
-            (emitBranchAssign
-                :ast
-                :symtab
-                :ctx
-                n: o
-                target: assignTo
-                ind: ind2.stringView
-                :tmp
-                :buf
-            )
-        } else {
-            fLe: tmp.frees.length
-            lLe: tmp.listFrees.length
-            emitBodyNode :ast :symtab :ctx n: o ind: ind2.stringView :tmp :buf
-            dvF: blockDiverges :ast :symtab :ctx n: o
-            flushBlockFrees :ctx :tmp fL: fLe lL: lLe diverged: dvF :buf
-        }
-        ri: u64
-        for ri < sN.length loop {
-            rnv: sVid.get i: ri
-            rv: sPrevV.get i: ri
-            rt: sPrevT.get i: ri
-            restoreNarrow :ctx vid: rnv prevVal: rv.stringView prevTid: rt
-            ri = ri + 1
-        }
-        xi: exN.length
-        for xi > 0 loop {
-            xi = xi - 1
-            xn: exN.get i: xi
-            xv: exPrevV.get i: xi
-            if xv.length > 0 then {
-                vvSet xs: ctx.exclArms vid: xn val: xv.stringView
-            } else {
-                vvRemove xs: ctx.exclArms vid: xn
-            }
-            xt: exPrevT.get i: xi
-            if xt > 0 then {
-                vtSet xs: ctx.exclTids vid: xn tid: (ztypes.tid.create from: xt.u64)
-            } else {
-                vtRemove xs: ctx.exclTids vid: xn
-            }
-        }
+    if oId.isZero then return
+    o: ast.nodes.get i: oId.u64
+    lh: "\{ind}} else {\n"
+    buf.append lh
+    ind2: "\{ind}    "
+    xMark: ctx.exSaveVid.length
+    (layerChainExclusions
+        :ctx
+        svids: chSubjectVids
+        arms: chArms
+        tids: chTids
+        negs: chNegs
+    )
+    sVid: ListVal ztypes.vid
+    sPrevV: List String
+    sPrevT: ListVal u64
+    (seedElseNarrows
+        :ast
+        :symtab
+        :ctx
+        body: o
+        subjects: chSubjects
+        chVids: chSubjectVids
+        arms: chArms
+        tids: chTids
+        negs: chNegs
+        recvs: chRecvs
+        :ind
+        svids: sVid
+        prevV: sPrevV
+        prevT: sPrevT
+        :buf
+    )
+    if assignTo.length > 0 then {
+        (emitBranchAssign
+            :ast
+            :symtab
+            :ctx
+            n: o
+            target: assignTo
+            ind: ind2.stringView
+            :tmp
+            :buf
+        )
+    } else {
+        fLe: tmp.frees.length
+        lLe: tmp.listFrees.length
+        emitBodyNode :ast :symtab :ctx n: o ind: ind2.stringView :tmp :buf
+        dvF: blockDiverges :ast :symtab :ctx n: o
+        flushBlockFrees :ctx :tmp fL: fLe lL: lLe diverged: dvF :buf
     }
+    restoreNarrowSeeds :ctx svids: sVid prevV: sPrevV prevT: sPrevT
+    restoreCondExclusions :ctx mark: xMark
 }
 
 # emitReturnOfNode -- `return <value of node vid>;` with the explicit-return
