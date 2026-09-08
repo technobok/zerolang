@@ -20687,6 +20687,186 @@ postGuardStmtId: function {
     }
 }
 
+# endReassignedAliases -- a statement that reassigns a seeded name stales its
+# alias, so put the narrowing back before that statement is emitted and mark the
+# seed dead, which is what stops the block's own restore from putting it back
+# a second time.
+endReassignedAliases: function {
+    ast: Ast.view
+    ctx: Ctx
+    n: astnode.view
+    names: (List String).view
+    svids: (ListVal ztypes.vid).view
+    prevV: (List String).view
+    prevT: (ListVal u64).view
+    dead: IdSet ztypes.vid
+} is {
+    ri: u64
+    for ri < names.length loop {
+        rn: names.get i: ri
+        rnv0: svids.get i: ri
+        if (dead.has item: rnv0).not when (bodyReassigns :ast :n name: rn.stringView) then {
+            rv: prevV.get i: ri
+            rt: prevT.get i: ri
+            restoreNarrow :ctx vid: rnv0 prevVal: rv.stringView prevTid: rt
+            dead.add item: rnv0
+        }
+        ri = ri + 1
+    }
+}
+
+# seedPostGuardAlias -- a guard statement that returns on the failing arm leaves
+# its subject narrowed for everything after it, so alias the subject to that
+# arm's payload for the rest of the block. The alias text is emitted C, so the
+# receiver is the subject's identifier and the narrowing tables key on its
+# variable. Seeds nothing when the checker recorded no complete guard.
+seedPostGuardAlias: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: astnode.view
+    ind: StringView
+    names: List String
+    svids: ListVal ztypes.vid
+    prevV: List String
+    prevT: ListVal u64
+    buf: String.borrow
+} is {
+    pgid: postGuardStmtId :ast :symtab :n
+    if pgid == 0 then return
+    pgRawId: (symtab.typing.postGuardName.get key: pgid).or d: zast.nameid
+    pgRawN: zast.poolTextAt pool: ast.names ref: pgRawId
+    if pgRawN.length == 0 then return
+    pgrv: (symtab.typing.postGuardVarId.get key: pgid).or d: (ztypes.vid.create from: 0)
+    if pgrv.isZero then return
+    pgRecv: varCName :ctx vid: pgrv name: pgRawN.stringView
+    if pgRecv.length == 0 then return
+    owner: ((symtab.typing.postGuardTid.get key: pgid).or d: (ztypes.tid.create from: 0))
+    if owner.isZero then return
+    armId: (symtab.typing.postGuardArm.get key: pgid).or d: zast.nameid
+    arm: zast.poolTextAt pool: ast.names ref: armId
+    if arm.length == 0 then return
+    acc: ".".string
+    if (isPtrVid :ctx vid: pgrv) then acc = "->".string
+    aliasText: (armAliasText
+        :ast
+        :symtab
+        :ctx
+        tid: owner
+        arm: arm.stringView
+        recv: pgRecv.stringView
+        acc: acc.stringView
+    )
+    if aliasText.length == 0 then return
+    (pushNarrow
+        :ctx
+        vid: pgrv
+        val: aliasText.stringView
+        tid: (armMemberTid :ast :symtab :owner arm: arm.stringView)
+        :prevV
+        :prevT
+    )
+    cmt: "\{ind}/* post-guard alias: \{pgRawN} => \{aliasText} */\n"
+    buf.append cmt
+    pgrn: pgRawN.copy
+    names.append pgrn
+    svids.append pgrv
+}
+
+# restoreBlockAliases -- put back the narrowings the block's post-guard seeds
+# displaced, newest first, skipping the ones a reassignment already ended.
+restoreBlockAliases: function {
+    ctx: Ctx
+    svids: (ListVal ztypes.vid).view
+    prevV: (List String).view
+    prevT: (ListVal u64).view
+    dead: IdSet ztypes.vid
+} is {
+    zi: svids.length
+    for zi > 0 loop {
+        zi = zi - 1
+        znv: svids.get i: zi
+        if (dead.has item: znv).not then {
+            zv: prevV.get i: zi
+            zt: prevT.get i: zi
+            restoreNarrow :ctx vid: znv prevVal: zv.stringView prevTid: zt
+        }
+    }
+}
+
+# emitStatementBlock -- emit a block's statements in order. The tail-return flag
+# reaches the LAST statement only, a diverging statement ends the block because
+# what follows it is unreachable, and the post-guard aliases each statement
+# seeds hold for the rest of the block and no longer.
+emitStatementBlock: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    stmts: zast.kidspan
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    trTail: ctx.tailRetActive
+    ctx.tailRetActive = false
+    pgN: List String
+    pgVid: ListVal ztypes.vid
+    pgPrevV: List String
+    pgPrevT: ListVal u64
+    pgDead: IdSet ztypes.vid
+    i: u64
+    nst: stmts.count.u64
+    for i < nst loop {
+        s9Id: zast.kidAt kids: ast.kids span: stmts :i
+        s: ast.nodes.get i: s9Id.u64
+        (endReassignedAliases
+            :ast
+            :ctx
+            n: s
+            names: pgN
+            svids: pgVid
+            prevV: pgPrevV
+            prevT: pgPrevT
+            dead: pgDead
+        )
+        tailNow: false
+        if trTail when i + 1 == nst then tailNow = true
+        handled: false
+        if tailNow then {
+            handled = emitTailStmt :ast :symtab :ctx n: s :ind :tmp :buf
+        }
+        if handled.not then emitStmt :ast :symtab :ctx n: s :ind :tmp :buf
+        trunc: false
+        if (stmtDiverges
+            :ast
+            :symtab
+            :ctx
+            sid: (zast.nodeid.create from: s9Id.u64)
+        ) then trunc = true
+        (seedPostGuardAlias
+            :ast
+            :symtab
+            :ctx
+            n: s
+            :ind
+            names: pgN
+            svids: pgVid
+            prevV: pgPrevV
+            prevT: pgPrevT
+            :buf
+        )
+        i = i + 1
+        if trunc then i = nst
+    }
+    (restoreBlockAliases
+        :ctx
+        svids: pgVid
+        prevV: pgPrevV
+        prevT: pgPrevT
+        dead: pgDead
+    )
+}
+
 # emit one statement or expression node of a body.
 emitBodyNode: function {
     ast: Ast.view
@@ -20700,133 +20880,7 @@ emitBodyNode: function {
     match (
         n
     ) case statement then {
-        trTail: ctx.tailRetActive
-        ctx.tailRetActive = false
-        pgN: List String
-        pgVid: ListVal ztypes.vid
-        pgPrevV: List String
-        pgPrevT: ListVal u64
-        pgDead: IdSet ztypes.vid
-        i: u64
-        nst: n.statements.count.u64
-        for i < nst loop {
-            s9Id: zast.kidAt kids: ast.kids span: n.statements :i
-            s: ast.nodes.get i: s9Id.u64
-            # a reassignment of a seeded name ends its post-guard alias
-            ri: u64
-            for ri < pgN.length loop {
-                rn: pgN.get i: ri
-                rnv0: pgVid.get i: ri
-                if (pgDead.has item: rnv0).not when (bodyReassigns :ast n: s name: rn.stringView
-                ) then {
-                    rv: pgPrevV.get i: ri
-                    rt: pgPrevT.get i: ri
-                    restoreNarrow :ctx vid: rnv0 prevVal: rv.stringView prevTid: rt
-                    pgDead.add item: rnv0
-                }
-                ri = ri + 1
-            }
-            tailNow: false
-            if trTail when i + 1 == nst then tailNow = true
-            handled: false
-            if tailNow then {
-                handled = emitTailStmt :ast :symtab :ctx n: s :ind :tmp :buf
-            }
-            if handled.not then emitStmt :ast :symtab :ctx n: s :ind :tmp :buf
-            trunc: false
-            if (stmtDiverges
-                :ast
-                :symtab
-                :ctx
-                sid: (zast.nodeid.create from: s9Id.u64)
-            ) then trunc = true
-            pgid: postGuardStmtId :ast :symtab n: s
-            if pgid > 0 then {
-                pgRawId: (symtab.typing.postGuardName.get key: pgid).or d: zast.nameid
-                pgRawN: zast.poolTextAt pool: ast.names ref: pgRawId
-                # the alias text is emitted C, so the receiver has to be the
-                # subject's identifier, and the narrowing tables below key on
-                # the subject's variable
-                pgRecv: String
-                pgrv: (symtab.typing.postGuardVarId.get key: pgid).or d: (ztypes.vid.create from: 0)
-                if pgrv > 0 when pgRawN.length > 0 then {
-                    pgre: varCName :ctx vid: pgrv name: pgRawN.stringView
-                    pgRecv = pgre
-                }
-                guardStampTid: ztypes.tid
-                {
-                    pgtO: symtab.typing.postGuardTid.get key: pgid
-                    match (
-                        pgtO
-                    ) case some then {
-                        guardStampTid = ztypes.tid.create from: pgtO
-                    } case none then null
-                }
-                guardStampArmId: (symtab.typing.postGuardArm.get key: pgid).or d: zast.nameid
-                guardStampArm: zast.poolTextAt pool: ast.names ref: guardStampArmId
-                {
-                    if pgRawN.length > 0 when pgRecv.length > 0 when guardStampTid > 0 when (
-                        guardStampArm.length > 0
-                    ) then {
-                        accessOp: ".".string
-                        pgv: ((symtab.typing.postGuardVarId.get key: pgid).or
-                            d: (ztypes.vid.create from: 0)
-                        )
-                        if (isPtrVid :ctx vid: pgv) then accessOp = "->".string
-                        aliasText: (armAliasText
-                            :ast
-                            :symtab
-                            :ctx
-                            tid: (ztypes.tid.create from: guardStampTid.u64)
-                            arm: guardStampArm.stringView
-                            recv: pgRecv.stringView
-                            acc: accessOp.stringView
-                        )
-                        if aliasText.length > 0 then {
-                            pv: vvGet xs: ctx.narrowBox vid: pgrv
-                            pgPrevV.append pv
-                            ptv: ((vtGet
-                                xs: ctx.narrowTid
-                                vid: pgrv
-                            ).or
-                                d: (ztypes.tid.create from: 0)
-                            )
-                            pgPrevT.append ptv
-                            vvSet xs: ctx.narrowBox vid: pgrv val: aliasText.stringView
-                            pt: ((symtab.typing.declChildOf
-                                pool: ast.names
-                                parentTypeId: guardStampTid
-                                name: guardStampArm.stringView
-                            ).or
-                                d: 0
-                            )
-                            (vtSet
-                                xs: ctx.narrowTid
-                                vid: pgrv
-                                tid: (ztypes.tid.create from: pt.u64)
-                            )
-                            cmt: "\{ind}/* post-guard alias: \{pgRawN} => \{aliasText} */\n"
-                            buf.append cmt
-                            pgrn: pgRawN.copy
-                            pgN.append pgrn
-                            pgVid.append pgrv
-                        }
-                    }
-                }
-            }
-            i = i + 1
-            if trunc then i = nst
-        }
-        zi: pgN.length
-        for zi > 0 loop {
-            zi = zi - 1
-            znv: pgVid.get i: zi
-            if (pgDead.has item: znv).not then {
-                zv: pgPrevV.get i: zi
-                zt: pgPrevT.get i: zi
-                restoreNarrow :ctx vid: znv prevVal: zv.stringView prevTid: zt
-            }
-        }
+        emitStatementBlock :ast :symtab :ctx stmts: n.statements :ind :tmp :buf
     } else {
         emitStmt :ast :symtab :ctx :n :ind :tmp :buf
     }
