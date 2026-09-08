@@ -123,6 +123,73 @@ foundMissing: function out Found is {
     return (Found kind: foundkind.missing b: false i: 0 f: 0.0 s: "".string n: 0)
 }
 
+# atStep -- one INTERIOR segment of the walk: the child of `v` that `seg`
+# names, walked on with whatever is left of the path. A container that has no
+# such child, and a scalar that has no children at all, are both missing.
+atStep: function {v: Value.view seg: String.view rest: StringView} out Found is {
+    match (
+        v
+    ) case object then {
+        child: v.entries.get key: seg
+        match (
+            child
+        ) case some then {
+            return (at v: child path: rest)
+        } case none then {
+            return foundMissing
+        }
+    } case array then {
+        kv: seg.stringView
+        ir: kv.parseU64
+        match (
+            ir
+        ) case ok then {
+            if ir < v.items.length then {
+                el: v.items.get i: ir
+                return (at v: el path: rest)
+            }
+            return foundMissing
+        } case err then {
+            return foundMissing
+        }
+    } else {
+        return foundMissing
+    }
+}
+
+# atLeaf -- the LAST segment: what the child `seg` names IS, described in place
+# rather than descended into. Takes the view, because a key is only owned where
+# the object leg needs one.
+atLeaf: function {v: Value.view seg: StringView} out Found is {
+    match (
+        v
+    ) case object then {
+        child: v.entries.get key: seg.asString
+        match (
+            child
+        ) case some then {
+            return (describeValue v: child)
+        } case none then {
+            return foundMissing
+        }
+    } case array then {
+        ir: seg.parseU64
+        match (
+            ir
+        ) case ok then {
+            if ir < v.items.length then {
+                el: v.items.get i: ir
+                return (describeValue v: el)
+            }
+            return foundMissing
+        } case err then {
+            return foundMissing
+        }
+    } else {
+        return foundMissing
+    }
+}
+
 # at -- walk `path` from `v`; the terminal's kind and payload.
 at: function {v: Value.view path: StringView} out Found is {
     io: path.splitOnce sep: "/"
@@ -137,62 +204,9 @@ at: function {v: Value.view path: StringView} out Found is {
             k = head.string
         }
         rest: path.substring from: io + 1 to: path.length
-        match (
-            v
-        ) case object then {
-            child: v.entries.get key: k
-            match (
-                child
-            ) case some then {
-                return (at v: child path: rest)
-            } case none then {
-                return foundMissing
-            }
-        } case array then {
-            kv: k.stringView
-            ir: kv.parseU64
-            match (
-                ir
-            ) case ok then {
-                if ir < v.items.length then {
-                    el: v.items.get i: ir
-                    return (at v: el path: rest)
-                }
-                return foundMissing
-            } case err then {
-                return foundMissing
-            }
-        } else {
-            return foundMissing
-        }
+        return (atStep :v seg: k :rest)
     } case none then {
-        match (
-            v
-        ) case object then {
-            child2: v.entries.get key: path.asString
-            match (
-                child2
-            ) case some then {
-                return (describeValue v: child2)
-            } case none then {
-                return foundMissing
-            }
-        } case array then {
-            ir2: path.parseU64
-            match (
-                ir2
-            ) case ok then {
-                if ir2 < v.items.length then {
-                    el2: v.items.get i: ir2
-                    return (describeValue v: el2)
-                }
-                return foundMissing
-            } case err then {
-                return foundMissing
-            }
-        } else {
-            return foundMissing
-        }
+        return (atLeaf :v seg: path)
     }
 }
 
@@ -312,31 +326,44 @@ writeValue: function {v: Value.view buf: String} is {
     } case text then {
         writeString sv: v.stringView :buf
     } case array then {
-        buf.appendByte b: 91
-        first: true
-        with it: v.items.iterate do for item: it loop {
+        writeArray a: v :buf
+    } case object then {
+        writeObject o: v :buf
+    }
+}
+
+# writeArray -- `[`, the elements separated by commas, `]`. The separator goes
+# BEFORE each element but the first, so an empty array writes `[]`.
+writeArray: function {a: Arr.view buf: String} is {
+    buf.appendByte b: 91
+    first: true
+    with it: a.items.iterate do for item: it loop {
+        if first.not then buf.appendByte b: 44
+        first = false
+        writeValue v: item :buf
+    }
+    buf.appendByte b: 93
+}
+
+# writeObject -- `{`, the members in DOCUMENT order, `}`. The keys carry the
+# order and the entries carry the values, so a key with no entry behind it
+# writes nothing and does not consume a separator.
+writeObject: function {o: Obj.view buf: String} is {
+    buf.appendByte b: 123
+    first: true
+    with kit: o.keys.iterate do for k: kit loop {
+        e: o.entries.get key: k
+        match (
+            e
+        ) case some then {
             if first.not then buf.appendByte b: 44
             first = false
-            writeValue v: item :buf
-        }
-        buf.appendByte b: 93
-    } case object then {
-        buf.appendByte b: 123
-        first: true
-        with kit: v.keys.iterate do for k: kit loop {
-            e: v.entries.get key: k
-            match (
-                e
-            ) case some then {
-                if first.not then buf.appendByte b: 44
-                first = false
-                writeString sv: k.stringView :buf
-                buf.appendByte b: 58
-                writeValue v: e :buf
-            } case none then null
-        }
-        buf.appendByte b: 125
+            writeString sv: k.stringView :buf
+            buf.appendByte b: 58
+            writeValue v: e :buf
+        } case none then null
     }
+    buf.appendByte b: 125
 }
 
 # the ASCII hex digit for a nibble `n` (0..15).
@@ -625,65 +652,85 @@ Cursor: class {
                 this.advance
                 e: this.peek
                 this.advance
-                if e == 34 then {
-                    buf.appendByte b: 34
-                } else if e == 92 then {
-                    buf.appendByte b: 92
-                } else if e == 47 then {
-                    buf.appendByte b: 47
-                } else if e == 0cb then {
-                    buf.appendByte b: 8
-                } else if e == 0cf then {
-                    buf.appendByte b: 12
-                } else if e == 0cn then {
-                    buf.appendByte b: 10
-                } else if e == 0cr then {
-                    buf.appendByte b: 13
-                } else if e == 0ct then {
-                    buf.appendByte b: 9
-                } else if e == 0cu then {
-                    cp: this.hex4
-                    if this.failed then return buf
-                    if cp >= 55296 when cp <= 56319 then {
-                        if this.peek == 92 then {
-                            this.advance
-                        } else {
-                            this.fail msg: "unpaired surrogate"
-                            return buf
-                        }
-                        if this.peek == 0cu then {
-                            this.advance
-                        } else {
-                            this.fail msg: "unpaired surrogate"
-                            return buf
-                        }
-                        lo: this.hex4
-                        if this.failed then return buf
-                        if lo >= 56320 when lo <= 57343 then {
-                            full: ((cp - 55296) << 10) + (lo - 56320) + 65536
-                            appendCodepoint :buf cp: full
-                        } else {
-                            this.fail msg: "unpaired surrogate"
-                            return buf
-                        }
-                    } else if cp >= 56320 when cp <= 57343 then {
-                        this.fail msg: "unpaired surrogate"
-                        return buf
-                    } else {
-                        appendCodepoint :buf :cp
-                    }
-                } else {
-                    this.fail msg: "bad escape"
-                    return buf
-                }
-            } else {
-                if b < 32 then {
-                    this.fail msg: "control character in string"
-                    return buf
-                }
-                buf.appendByte :b
-                this.advance
+                this.escapeBody :buf :e
+                if this.failed then return buf
+                continue
             }
+            if b < 32 then {
+                this.fail msg: "control character in string"
+                return buf
+            }
+            buf.appendByte :b
+            this.advance
+        }
+    }
+
+    # escapeBody -- what the byte after a backslash stands for, appended to
+    # `buf`. Every leg either appends or fails; the caller reads `failed`
+    # rather than a result, because a failure has to stop the whole parse and
+    # the flag already carries that.
+    escapeBody: function {:this buf: String e: u8} is {
+        if e == 34 then {
+            buf.appendByte b: 34
+        } else if e == 92 then {
+            buf.appendByte b: 92
+        } else if e == 47 then {
+            buf.appendByte b: 47
+        } else if e == 0cb then {
+            buf.appendByte b: 8
+        } else if e == 0cf then {
+            buf.appendByte b: 12
+        } else if e == 0cn then {
+            buf.appendByte b: 10
+        } else if e == 0cr then {
+            buf.appendByte b: 13
+        } else if e == 0ct then {
+            buf.appendByte b: 9
+        } else if e == 0cu then {
+            this.escapeUnicode :buf
+        } else {
+            this.fail msg: "bad escape"
+        }
+    }
+
+    # escapeUnicode -- a `\u` escape, already past the `u`. A scalar outside the
+    # surrogate range encodes as itself; a HIGH surrogate needs the low half
+    # that follows it, and a low surrogate arriving on its own is the error.
+    escapeUnicode: function {:this buf: String} is {
+        cp: this.hex4
+        if this.failed then return
+        if cp >= 55296 when cp <= 56319 then {
+            this.surrogateTail :buf hi: cp
+            return
+        }
+        if cp >= 56320 when cp <= 57343 then {
+            this.fail msg: "unpaired surrogate"
+            return
+        }
+        appendCodepoint :buf :cp
+    }
+
+    # surrogateTail -- the low half of a surrogate pair, spelled as its own
+    # `\u` escape, and the one codepoint the pair encodes. Anything else after
+    # a high surrogate leaves the pair unpaired.
+    surrogateTail: function {:this buf: String hi: u32} is {
+        if this.peek != 92 then {
+            this.fail msg: "unpaired surrogate"
+            return
+        }
+        this.advance
+        if this.peek != 0cu then {
+            this.fail msg: "unpaired surrogate"
+            return
+        }
+        this.advance
+        lo: this.hex4
+        if this.failed then return
+        if lo >= 56320 when lo <= 57343 then {
+            full: ((hi - 55296) << 10) + (lo - 56320) + 65536
+            appendCodepoint :buf cp: full
+        } else {
+            this.fail msg: "unpaired surrogate"
         }
     }
 
