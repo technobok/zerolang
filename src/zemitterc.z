@@ -2146,16 +2146,12 @@ nativeMemberKey: function {srcPath: StringView memb: StringView} out String is {
 # field called `u32` -- fails to find a row and is not treated as a conversion.
 convSrcPathOf: function {symtab: zenv.ZSymbolTable.view srcTid: ztypes.tid} out String is {
     if srcTid.isZero then return "".string
-    uo: definedInUnitOf :symtab tid: srcTid
-    match (
-        uo
-    ) case some then {
-        tn: regNameOf :symtab tid: srcTid
-        if tn.length == 0 then return "".string
-        k: "\{uo}.\{tn}"
-        return k
-    } case none then null
-    return "".string
+    uo: definedInUnitName :symtab tid: srcTid
+    if uo.length == 0 then return "".string
+    tn: regNameOf :symtab tid: srcTid
+    if tn.length == 0 then return "".string
+    k: "\{uo}.\{tn}"
+    return k
 }
 
 # binopKeyOf -- the natives.tbl path for an operator on `owner`. A declared
@@ -2175,15 +2171,11 @@ binopKeyOf: function {
     op: StringView
 } out String is {
     if isNative then {
-        uo: definedInUnitOf :symtab tid: owner
-        match (
-            uo
-        ) case some then {
-            tn: regNameView :symtab tid: owner
-            k: "\{uo}.\{tn}.\{op}"
-            return k
-        } case none then null
-        return "".string
+        uo: definedInUnitName :symtab tid: owner
+        if uo.length == 0 then return "".string
+        tn: regNameView :symtab tid: owner
+        k: "\{uo}.\{tn}.\{op}"
+        return k
     }
     tt: symtab.reg.typetypeOf typeId: owner
     # an ORDINAL PAIR is a C scalar, so it compares with `==` rather than
@@ -11900,12 +11892,7 @@ emitUserTypeMemberRead: function {
         } case none then null
     }
     if isFile then {
-        fduo: definedInUnitOf :symtab tid: bstamp
-        match (
-            fduo
-        ) case some then {
-            if fduo.stringView == "net" then isNetU = true
-        } case none then null
+        if (definedInUnitName :symtab tid: bstamp) == "net" then isNetU = true
         ffc: ctxCname :ctx tid: bstamp
         ffcc: ioCanonCname :ast :symtab :ctx canon: fbtn
         if ffcc.length > 0 then ffc = ffcc
@@ -16698,28 +16685,23 @@ genericOriginTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out 
     return (ztypes.tid.create from: g)
 }
 
-# definedInUnitOf -- the defining unit recorded for `tid`, as an OWNED option.
-# The map view lives only inside this body: a view bound at a call site would
-# hold its shared lock across symtab-passing calls and conflict.
-definedInUnitOf: function {
+# definedInUnitName -- the defining unit's name for `tid`, BORROWED, and "" when
+# the type has none (a shell, a builtin, a mono minted outside any unit). The
+# door to unitNameViewOfTid: `symtab` is already a view everywhere in the
+# emitter, so the pin sits beside the ones already held. definedInUnitTid is the
+# id form for a caller that only asks whether there is a unit at all.
+definedInUnitName: function {
     symtab: zenv.ZSymbolTable.view
     tid: ztypes.tid
-} out Option String is {
-    duO: definedInUnitTid :symtab :tid
-    if duO.isZero then return (Option.none String)
-    nm: (ztypecheck.unitNameOfTid
-        st: symtab
-        tid: (ztypes.tid.create from: tid.u64)
-    )
-    if nm.length == 0 then return (Option.none String)
-    return (Option.some nm)
+} outx StringView is {
+    return (ztypecheck.unitNameViewOfTid st: symtab tid: (ztypes.tid.create from: tid.u64))
 }
 
 # definedInUnitTid -- the id of the unit a type is DEFINED in, 0 when none (a
 # shell, a builtin, a mono minted outside any unit). The same question
-# definedInUnitOf answers, without the name: asking whether a type has a
-# defining unit at all is what most callers want, and the name form costs a
-# registry copy and a boxed Option to say yes.
+# definedInUnitName answers, without the name: asking whether a type has a
+# defining unit at all is what most callers want, and it is the cheaper half --
+# the name form has a registry read behind it and this does not.
 definedInUnitTid: function {
     symtab: zenv.ZSymbolTable.view
     tid: ztypes.tid
@@ -22685,16 +22667,14 @@ scanNativeNeed: function {
     if calleeTid.isZero then return
     if (symtab.reg.typetypeOf typeId: calleeTid) != ztypes.ztypetype.functionType then return
     if (fnIsNativeId :symtab fid: calleeTid).not then return
-    duo: definedInUnitOf :symtab tid: calleeTid
-    match (
-        duo
-    ) case some then {
+    duo: definedInUnitName :symtab tid: calleeTid
+    if duo.length > 0 then {
         # the need LISTS the member, so this leg -- and only this leg, which a
         # resolved native reaches -- spells it
         membT: zast.nameTextAt :ast ref: membId
-        needsAddM :ctx uname: duo.stringView memb: "@unit"
-        needsAddM :ctx uname: duo.stringView memb: membT.stringView
-    } case none then null
+        needsAddM :ctx uname: duo memb: "@unit"
+        needsAddM :ctx uname: duo memb: membT.stringView
+    }
 }
 
 # scanNeedsCall -- the needs a CALL declares: the string/view natives its
@@ -27262,14 +27242,12 @@ maybePreEmitElem: function {
     monoLk4: originTidOf :symtab tid: (ztypes.tid.create from: cid.u64)
     if monoLk4 > 0 then return
     if (isGenericType :symtab tid: (ztypes.tid.create from: cid.u64)) then return
-    duoPe: definedInUnitOf :symtab tid: (ztypes.tid.create from: cid.u64)
+    duoPe: definedInUnitName :symtab tid: (ztypes.tid.create from: cid.u64)
     peUnit: ctx.mainName.copy
-    match (
-        duoPe
-    ) case some then {
+    if duoPe.length > 0 then {
         if (symtab.reg.isNativeOf tid: (ztypes.tid.create from: cid.u64)) then return
-        peUnit = duoPe.copy
-    } case none then null
+        peUnit = duoPe.string
+    }
     nm: regNameOf :symtab tid: (ztypes.tid.create from: cid.u64)
     if nm.length == 0 then return
     tt: symtab.reg.typetypeOf typeId: cid
@@ -27699,18 +27677,14 @@ emitUserTypeById: function {
 } is {
     nm: regNameOf :symtab :tid
     if nm.length == 0 then return
-    duo: definedInUnitOf :symtab :tid
+    duo: definedInUnitName :symtab :tid
     sm: ctx.mainName.copy
     smD: ctx.mainUnitId
-    match (
-        duo
-    ) case some then {
-        (ctxBindMain
-            :ctx
-            name: duo.stringView
-            unitDecl: (ztypecheck.unitDeclOfTid st: symtab :tid)
-        )
-    } case none then null
+    if duo.length > 0 then (ctxBindMain
+        :ctx
+        name: duo
+        unitDecl: (ztypecheck.unitDeclOfTid st: symtab :tid)
+    )
     tt: symtab.reg.typetypeOf typeId: tid
     if tt == ztypes.ztypetype.variantType then (emitOneVariant
         :ast
@@ -27849,26 +27823,21 @@ stdFnRefEmittable: function {
     symtab: zenv.ZSymbolTable.view
     fid: ztypes.tid
 } out bool is {
-    duo: definedInUnitOf :symtab tid: fid
-    match (
-        duo
-    ) case some then {
-        if (fnIsNativeId :symtab :fid) then return false
-        # demand is recorded under the composed "unit.fn" key; read the fn
-        # name off the id-keyed registry entry to compose it
-        fnm: symtab.reg.nameOf tid: fid
-        if fnm.length == 0 then return false
-        return (stdFnUndemanded
-            :ast
-            :symtab
-            unitName: duo.stringView
-            fnName: fnm.stringView
-            ownerTid: (fnDeclScopeTid :symtab :fid)
-            wantWalked: false
-        ).not
-    } case none then {
-        return false
-    }
+    duo: definedInUnitName :symtab tid: fid
+    if duo.length == 0 then return false
+    if (fnIsNativeId :symtab :fid) then return false
+    # demand is recorded under the composed "unit.fn" key; read the fn name off
+    # the id-keyed registry entry to compose it
+    fnm: regNameView :symtab tid: fid
+    if fnm.length == 0 then return false
+    return (stdFnUndemanded
+        :ast
+        :symtab
+        unitName: duo
+        fnName: fnm
+        ownerTid: (fnDeclScopeTid :symtab :fid)
+        wantWalked: false
+    ).not
 }
 
 # fnptrTypedefEligible -- a FUNCTION type worth a `_ft` typedef: a real spec /
@@ -29938,12 +29907,13 @@ emitFileMethodCall: function {
     if (isPtrVid :ctx vid: recvV) then recvExpr = recvC
     isNet: false
     {
-        fduo: definedInUnitOf :symtab tid: (ztypes.tid.create from: fid.u64)
-        match (
-            fduo
-        ) case some then {
-            if fduo.stringView == "net" then isNet = true
-        } case none then null
+        if (
+            (definedInUnitName
+                :symtab
+                tid: (ztypes.tid.create from: fid.u64)
+            ) ==
+            "net"
+        ) then isNet = true
     }
     if isNet then {
         needsAddM :ctx uname: "net" memb: "@unit"
@@ -30220,14 +30190,9 @@ nativeNoArgOf: function {
         shT: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: sh)
         if shT != ztypes.ztypetype.unitType then return "".string
     } case none then null
-    duo: definedInUnitOf :symtab tid: calleeTid
-    match (
-        duo
-    ) case some then {
-        return duo.copy
-    } case none then {
-        return "".string
-    }
+    duo: definedInUnitName :symtab tid: calleeTid
+    if duo.length == 0 then return "".string
+    return duo.string
 }
 
 # noArgNativeRhs -- a binding RHS that is a bare zero-parameter native
@@ -30427,16 +30392,11 @@ emitNativeFreeFnCall: function {
                 fid: (ztypes.tid.create from: fid0.u64)
             ).not
         ) then return "".string
-        duo0: definedInUnitOf :symtab tid: fid0
-        match (
-            duo0
-        ) case some then {
-            bp: "\{duo0}.\{mn}"
-            if (nativeIsFragBacked :ctx path: bp.stringView).not then return "".string
-            un = duo0.copy
-        } case none then {
-            return "".string
-        }
+        duo0: definedInUnitName :symtab tid: fid0
+        if duo0.length == 0 then return "".string
+        bp: "\{duo0}.\{mn}"
+        if (nativeIsFragBacked :ctx path: bp.stringView).not then return "".string
+        un = duo0.string
         fidHint = fid0
     }
     if mn.length == 0 then return "".string
