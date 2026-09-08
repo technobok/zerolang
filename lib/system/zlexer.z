@@ -849,85 +849,200 @@ Tokenizer: class {
         return (pool.set s: piece)
     }
 
-    # the next token, advancing past it
-    nextToken: function {:this pool: zast.StringPool} out token is {
-        # Drain the lookahead slot first if a token is staged. Every field
-        # is a value now, the text included, so the staged row copies out.
-        if this.hasnext then {
-            # EOF stays staged so subsequent calls keep returning it;
-            # everything else gets cleared.
-            is_eof: false
-            match (
-                this.nexttok.toktype
-            ) case eofTok then {
-                is_eof = true
-            } else {
-                is_eof = false
-            }
-            if is_eof then {
-                # EOF's staged text is always empty
-                return (token
-                    toktype: this.nexttok.toktype
-                    width: 0
-                    text: (zast.nameid.create from: 0)
-                    fsno: this.fsno
-                    lineno: this.nexttok.lineno
-                    colno: this.nexttok.colno
-                )
-            }
-            this.hasnext = false
+    # stagedToken -- the token already in the lookahead slot. EOF stays staged,
+    # so every later call keeps returning it; anything else clears the slot. The
+    # row copies out because every field is a value now, the text included.
+    stagedToken: function {:this} out token is {
+        # EOF stays staged so subsequent calls keep returning it;
+        # everything else gets cleared.
+        is_eof: false
+        match (
+            this.nexttok.toktype
+        ) case eofTok then {
+            is_eof = true
+        } else {
+            is_eof = false
+        }
+        if is_eof then {
+            # EOF's staged text is always empty
             return (token
                 toktype: this.nexttok.toktype
-                width: this.nexttok.width
-                text: this.nexttok.text
+                width: 0
+                text: (zast.nameid.create from: 0)
                 fsno: this.fsno
                 lineno: this.nexttok.lineno
                 colno: this.nexttok.colno
             )
         }
+        this.hasnext = false
+        return (token
+            toktype: this.nexttok.toktype
+            width: this.nexttok.width
+            text: this.nexttok.text
+            fsno: this.fsno
+            lineno: this.nexttok.lineno
+            colno: this.nexttok.colno
+        )
+    }
 
-        # Prime the look-ahead on the first call (pos == 0 means
-        # `accept` has never run). After this, .atchar holds the next
-        # byte to dispatch on (or ascii.nul if the source is empty).
-        if this.pos == 0 then this.accept
-        line: this.lineno
-        col: this.colno
-        c: this.atchar
-        s0: this.tokpos
-
-        if c == ascii.nul then {
-            return (token
-                toktype: toktype.eofTok
-                width: 0
-                text: (zast.nameid.create from: 0)
+    # acceptStringOpen -- the `"` run that opens a string, and what its LENGTH
+    # means: one pushes STRING, two is the empty string (a STRBEG with the STREND
+    # stashed behind it, no push), three or more is a raw string whose delimiter
+    # length goes on the state so the inner scanner can match the closer.
+    acceptStringOpen: function {
+        :this pool: zast.StringPool s0: u64 line: u32 col: u32
+    } out token is {
+        n: u64
+        for this.atchar == ascii.doubleQuote loop {
+            n = n + 1
+            this.accept
+        }
+        if n == 2 then {
+            # Empty string: emit STRBEG with the first quote and
+            # stash a STREND with the second for the next call.
+            this.nexttok = (token
+                toktype: toktype.strEndTok
+                width: 1
+                text: (this.tokSpanId :pool s: s0 + 1 e: s0 + 2)
                 fsno: this.fsno
                 lineno: line
-                colno: col
+                colno: col + 1
             )
+            this.hasnext = true
+            return (this.byteTok :pool tt: toktype.strBegTok s: s0 :line :col)
         }
+        if n == 1 then {
+            this.statepush s: tokstatetype.string
+            return (this.spanTok :pool tt: toktype.strBegTok s: s0 e: this.tokpos :line :col)
+        }
+        # n >= 3: raw string. Push STRINGRAW with the delim length
+        # so acceptstringrawtoken can match a closer of the same
+        # size.
+        this.statepush s: tokstatetype.stringraw n.u8.orPanic
+        return (this.spanTok :pool tt: toktype.strBegTok s: s0 e: this.tokpos :line :col)
+    }
 
-        if c == ascii.lf then {
+    # acceptDotRun -- a run of `.`. One is the path separator; any longer run is
+    # not a token this language has.
+    acceptDotRun: function {:this pool: zast.StringPool s0: u64 line: u32 col: u32} out token is {
+        n: u64
+        for this.atchar == ascii.dot loop {
+            n = n + 1
             this.accept
-            this.lineno = this.lineno + 1
-            this.colno = 1
-            return (this.spanTok :pool tt: toktype.eolTok s: s0 e: this.tokpos :line :col)
         }
-        if c == ascii.cr then {
-            this.accept
-            if this.atchar == ascii.lf then this.accept
-            this.lineno = this.lineno + 1
-            this.colno = 1
-            return (this.spanTok :pool tt: toktype.eolTok s: s0 e: this.tokpos :line :col)
+        if n == 1 then {
+            return (this.spanTok :pool tt: toktype.dotTok s: s0 e: this.tokpos :line :col)
         }
+        return (this.spanTok :pool tt: toktype.errTok s: s0 e: this.tokpos :line :col)
+    }
 
-        # State-aware dispatch: when the top of the state stack is
-        # STRING, the doublequote ends the string (pop + STREND) and
-        # everything else routes to acceptstringtoken. For STRINGRAW,
-        # the close-vs-content decision lives inside
-        # acceptstringrawtoken because it depends on a multi-byte run
-        # match. EOL/EOF were handled above so the string-token paths
-        # don't need to think about either.
-        #
+    # acceptBraceOpen -- `{`. Inside an interpolation it opens a nested brace
+    # scope that has to be tracked, so the matching `}` returns to STRING rather
+    # than ending the interpolation.
+    acceptBraceOpen: function {
+        :this pool: zast.StringPool s0: u64 line: u32 col: u32
+    } out token is {
+        # If we are already inside an interpolation context, the `{`
+        # opens a nested brace scope that must be tracked so the
+        # matching `}` returns us to STRING (rather than ending the
+        # interpolation).
+        push_brace: false
+        match (
+            this.statecurrent
+        ) case stringexpr then {
+            push_brace = true
+        } case stringexprbrace then {
+            push_brace = true
+        } else {
+            push_brace = false
+        }
+        this.accept
+        if push_brace then this.statepush s: tokstatetype.stringexprbrace
+        return (this.byteTok :pool tt: toktype.braceOpenTok s: s0 :line :col)
+    }
+
+    # acceptBraceClose -- `}`. A brace opened inside an interpolation pops one
+    # STRINGEXPRBRACE, and if that was the last one under STRINGEXPR that pops
+    # too, so the next byte goes back into STRING.
+    acceptBraceClose: function {
+        :this pool: zast.StringPool s0: u64 line: u32 col: u32
+    } out token is {
+        # If the matching `{` was inside an interpolation, pop one
+        # STRINGEXPRBRACE; if that was the last brace under
+        # STRINGEXPR, pop STRINGEXPR too so the next byte goes back
+        # into STRING.
+        pop_brace: false
+        match (
+            this.statecurrent
+        ) case stringexprbrace then {
+            pop_brace = true
+        } else {
+            pop_brace = false
+        }
+        this.accept
+        if pop_brace then {
+            this.statepop
+            pop_expr: false
+            match (
+                this.statecurrent
+            ) case stringexpr then {
+                pop_expr = true
+            } else {
+                pop_expr = false
+            }
+            if pop_expr then this.statepop
+        }
+        return (this.byteTok :pool tt: toktype.braceCloseTok s: s0 :line :col)
+    }
+
+    # triviaTok -- whitespace or a comment run. The span is always the width, but
+    # the TEXT is interned only when trivia is being kept: a run the parser will
+    # discard should not put its spelling in the pool.
+    triviaTok: function {
+        this: this.view
+        pool: zast.StringPool
+        tt: toktype
+        s: u64
+        line: u32
+        col: u32
+    } out token is {
+        txt: zast.nameid
+        if this.keepTrivia then txt = this.tokSpanId :pool :s e: this.tokpos
+        return (token
+            toktype: tt
+            width: (spanWidth :s e: this.tokpos)
+            text: txt
+            fsno: this.fsno
+            lineno: line
+            colno: col
+        )
+    }
+
+    # eolToken -- an end of line, either spelling. CR consumes a following LF so
+    # CRLF is one token, and both advance the line counter; the token itself is
+    # the same either way.
+    eolToken: function {:this pool: zast.StringPool c: u8 s0: u64 line: u32 col: u32} out token is {
+        this.accept
+        if c == ascii.cr when this.atchar == ascii.lf then this.accept
+        this.lineno = this.lineno + 1
+        this.colno = 1
+        return (this.spanTok :pool tt: toktype.eolTok s: s0 e: this.tokpos :line :col)
+    }
+
+    # stringStateToken -- the token the STATE STACK dictates, if it dictates one.
+    # Under STRING the doublequote ends the string and everything else is string
+    # content; under STRINGRAW the close-versus-content decision needs a
+    # multi-byte run match and so lives in the raw scanner. None means the state
+    # has nothing to say and the byte dispatches normally. EOL and EOF are
+    # handled before this, so neither path has to think about them.
+    stringStateToken: function {
+        :this
+        pool: zast.StringPool
+        c: u8
+        s0: u64
+        line: u32
+        col: u32
+    } out optionval token is {
         kind: this.statecurrent
         in_string: false
         raw_delim: u8
@@ -945,195 +1060,90 @@ Tokenizer: class {
             if c == ascii.doubleQuote then {
                 this.accept
                 this.statepop
-                return (this.byteTok :pool tt: toktype.strEndTok s: s0 :line :col)
+                return (optionval.some (this.byteTok :pool tt: toktype.strEndTok s: s0 :line :col))
             }
-            return (this.acceptstringtoken :pool)
+            return (optionval.some (this.acceptstringtoken :pool))
         }
-        if raw_delim > 0 then return (this.acceptstringrawtoken :pool delim_len: raw_delim)
+        if raw_delim > 0 then {
+            return (optionval.some (this.acceptstringrawtoken :pool delim_len: raw_delim))
+        }
+        return (optionval.none token)
+    }
 
+    # triviaToken -- a run of whitespace or a comment, whichever `c` starts.
+    # None when it starts neither.
+    triviaToken: function {
+        :this
+        pool: zast.StringPool
+        c: u8
+        s0: u64
+        line: u32
+        col: u32
+    } out optionval token is {
         if (isws b: c) then {
             for (isws b: this.atchar) loop this.accept
-            wsText: zast.nameid
-            if this.keepTrivia then wsText = this.tokSpanId :pool s: s0 e: this.tokpos
-            return (token
-                toktype: toktype.wsTok
-                width: (spanWidth s: s0 e: this.tokpos)
-                text: wsText
-                fsno: this.fsno
-                lineno: line
-                colno: col
-            )
+            return (optionval.some (this.triviaTok :pool tt: toktype.wsTok s: s0 :line :col))
         }
-
         if c == ascii.hash then {
             for (iscommentbody b: this.atchar) loop this.accept
-            cmText: zast.nameid
-            if this.keepTrivia then cmText = this.tokSpanId :pool s: s0 e: this.tokpos
-            return (token
-                toktype: toktype.commentTok
-                width: (spanWidth s: s0 e: this.tokpos)
-                text: cmText
-                fsno: this.fsno
-                lineno: line
-                colno: col
-            )
+            return (optionval.some (this.triviaTok :pool tt: toktype.commentTok s: s0 :line :col))
         }
+        return (optionval.none token)
+    }
 
-        # String open. Counts the consecutive `"` run. 1 -> push STRING
-        # state. 2 -> empty string (STRBEG + stashed STREND, no push).
-        # 3+ -> raw string: emit STRBEG with the full run and push
-        # STRINGRAW carrying the run length so the inner scanner can
-        # match the closer.
-        if c == ascii.doubleQuote then {
-            n: u64
-            for this.atchar == ascii.doubleQuote loop {
-                n = n + 1
-                this.accept
-            }
-            if n == 2 then {
-                # Empty string: emit STRBEG with the first quote and
-                # stash a STREND with the second for the next call.
-                this.nexttok = (token
-                    toktype: toktype.strEndTok
-                    width: 1
-                    text: (this.tokSpanId :pool s: s0 + 1 e: s0 + 2)
-                    fsno: this.fsno
-                    lineno: line
-                    colno: col + 1
-                )
-                this.hasnext = true
-                return (this.byteTok :pool tt: toktype.strBegTok s: s0 :line :col)
-            }
-            if n == 1 then {
-                this.statepush s: tokstatetype.string
-                return (this.spanTok :pool tt: toktype.strBegTok s: s0 e: this.tokpos :line :col)
-            }
-            # n >= 3: raw string. Push STRINGRAW with the delim length
-            # so acceptstringrawtoken can match a closer of the same
-            # size.
-            this.statepush s: tokstatetype.stringraw n.u8.orPanic
-            return (this.spanTok :pool tt: toktype.strBegTok s: s0 e: this.tokpos :line :col)
-        }
-
-        if c == ascii.dot then {
-            n: u64
-            for this.atchar == ascii.dot loop {
-                n = n + 1
-                this.accept
-            }
-            if n == 1 then {
-                return (this.spanTok :pool tt: toktype.dotTok s: s0 e: this.tokpos :line :col)
-            }
-            return (this.spanTok :pool tt: toktype.errTok s: s0 e: this.tokpos :line :col)
-        }
-
+    # structuralToken -- the bytes that stand for themselves: the string opener,
+    # a dot run, the brackets and the statement separator. None when `c` is none
+    # of them, which leaves the word branch.
+    structuralToken: function {
+        :this
+        pool: zast.StringPool
+        c: u8
+        s0: u64
+        line: u32
+        col: u32
+    } out optionval token is {
+        if c == ascii.doubleQuote then (return
+            (optionval.some (this.acceptStringOpen :pool :s0 :line :col))
+        )
+        if c == ascii.dot then return (optionval.some (this.acceptDotRun :pool :s0 :line :col))
+        if c == ascii.braceOpen then (return
+            (optionval.some (this.acceptBraceOpen :pool :s0 :line :col))
+        )
+        if c == ascii.braceClose then (return
+            (optionval.some (this.acceptBraceClose :pool :s0 :line :col))
+        )
         if c == ascii.parenOpen then {
             this.accept
-            return (this.byteTok :pool tt: toktype.parenOpenTok s: s0 :line :col)
+            return (optionval.some (this.byteTok :pool tt: toktype.parenOpenTok s: s0 :line :col))
         }
         if c == ascii.parenClose then {
             this.accept
-            return (this.byteTok :pool tt: toktype.parenCloseTok s: s0 :line :col)
-        }
-        if c == ascii.braceOpen then {
-            # If we are already inside an interpolation context, the `{`
-            # opens a nested brace scope that must be tracked so the
-            # matching `}` returns us to STRING (rather than ending the
-            # interpolation).
-            push_brace: false
-            match (
-                this.statecurrent
-            ) case stringexpr then {
-                push_brace = true
-            } case stringexprbrace then {
-                push_brace = true
-            } else {
-                push_brace = false
-            }
-            this.accept
-            if push_brace then this.statepush s: tokstatetype.stringexprbrace
-            return (this.byteTok :pool tt: toktype.braceOpenTok s: s0 :line :col)
-        }
-        if c == ascii.braceClose then {
-            # If the matching `{` was inside an interpolation, pop one
-            # STRINGEXPRBRACE; if that was the last brace under
-            # STRINGEXPR, pop STRINGEXPR too so the next byte goes back
-            # into STRING.
-            pop_brace: false
-            match (
-                this.statecurrent
-            ) case stringexprbrace then {
-                pop_brace = true
-            } else {
-                pop_brace = false
-            }
-            this.accept
-            if pop_brace then {
-                this.statepop
-                pop_expr: false
-                match (
-                    this.statecurrent
-                ) case stringexpr then {
-                    pop_expr = true
-                } else {
-                    pop_expr = false
-                }
-                if pop_expr then this.statepop
-            }
-            return (this.byteTok :pool tt: toktype.braceCloseTok s: s0 :line :col)
+            return (optionval.some (this.byteTok :pool tt: toktype.parenCloseTok s: s0 :line :col))
         }
         if c == ascii.semicolon then {
             this.accept
-            return (this.byteTok :pool tt: toktype.semicolonTok s: s0 :line :col)
+            return (optionval.some (this.byteTok :pool tt: toktype.semicolonTok s: s0 :line :col))
         }
+        return (optionval.none token)
+    }
 
-        # Word branch: leading colon? +/- prefix? IDEN loop, plus
-        # dot-continuation when the word is number-shaped.
-        #
-
-        # Leading-colon case (LABELPRE candidate). Save the colon's
-        # position (for the returned COLON token) separately from
-        # word_line/word_col (which the staged LABELPRE / REFID
-        # tokens use -- they start one byte after the colon).
-        has_colonpre: false
-        colonpre_line: line
-        colonpre_col: col
-        if c == ascii.colon then {
-            has_colonpre = true
-            colonpre_line = this.lineno
-            colonpre_col = this.colno
+    # scanWordSpan -- consume the word at the cursor and answer where it ENDS. An
+    # optional sign leads it. A number-shaped word continues through a `.` when a
+    # digit follows; when none does, the dot is stashed for the next call with its
+    # own pre-advance position rather than joined to the word.
+    scanWordSpan: function {:this pool: zast.StringPool c: u8} out u64 is {
+        cw: c
+        if (cw == ascii.plus) or (cw == ascii.minus) then {
             this.accept
-            c = this.atchar
+            cw = this.atchar
         }
-
-        word_line: this.lineno
-        word_col: this.colno
-        s_word: this.tokpos
-
-        # Optional +/- prefix.
-        if (c == ascii.plus) or (c == ascii.minus) then {
-            this.accept
-            c = this.atchar
-        }
-
-        # Track whether the first IDEN char is a digit (for the
-        # dot-continuation rule).
+        # whether the first IDEN char is a digit, which is what the
+        # dot-continuation rule turns on
         numbershaped: false
-        if isdigit c then numbershaped = true
-
-        # IDEN body.
+        if isdigit cw then numbershaped = true
         for (isidchar this.atchar) loop this.accept
         e_word: this.tokpos
-
-        # Dot-continuation: if the word is number-shaped and the loop
-        # ended on `.`, consume the dot only if the *next* char is also
-        # a digit -- otherwise stash a ascii.dot in the lookahead slot for
-        # the parser to consume next.
         if numbershaped when this.atchar == ascii.dot then {
-            # We need to peek the byte *after* the dot. accept then
-            # check; if the post-dot char is not a digit, stash a ascii.dot
-            # (with the dot's pre-advance position) and don't append
-            # it to the word.
             dot_line: this.lineno
             dot_col: this.colno
             this.accept
@@ -1152,29 +1162,108 @@ Tokenizer: class {
                 this.hasnext = true
             }
         }
+        return e_word
+    }
 
-        # Empty word: lone `:` after colonpre becomes ERR, stray
-        # byte (we consumed nothing) emits ERR with the current
-        # byte and advances to make progress.
-        if e_word == s_word then {
-            if has_colonpre then {
-                # Lone colon: emit the colon as ERR.
-                (return
-                    (this.byteTok
-                        :pool
-                        tt: toktype.errTok
-                        s: s0
-                        line: colonpre_line
-                        col: colonpre_col
-                    )
-                )
-            }
-            this.accept
-            return (this.byteTok :pool tt: toktype.errTok s: s_word :line :col)
+    # emptyWordToken -- nothing was consumed. After a leading colon that lone
+    # colon is the error; otherwise the stray byte is, and it is consumed so the
+    # scan still makes progress.
+    emptyWordToken: function {
+        :this
+        pool: zast.StringPool
+        s0: u64
+        s_word: u64
+        has_colonpre: bool
+        colonpre_line: u32
+        colonpre_col: u32
+        line: u32
+        col: u32
+    } out token is {
+        if has_colonpre then {
+            return (this.byteTok
+                :pool
+                tt: toktype.errTok
+                s: s0
+                line: colonpre_line
+                col: colonpre_col
+            )
         }
+        this.accept
+        return (this.byteTok :pool tt: toktype.errTok s: s_word :line :col)
+    }
 
-        # Word is non-empty. Decide token type via the word's source
-        # span; the views stay scoped so no lock outlives the lookups.
+    # colonPreWordToken -- a word that FOLLOWED a colon. The colon is the token
+    # returned and the word is stashed behind it as a LABELPRE, or as an ERR when
+    # the word is a keyword or a reserved word: neither may be a label.
+    colonPreWordToken: function {
+        :this
+        pool: zast.StringPool
+        s0: u64
+        s_word: u64
+        e_word: u64
+        kwfound: bool
+        reservedfound: bool
+        word_line: u32
+        word_col: u32
+        colonpre_line: u32
+        colonpre_col: u32
+    } out token is {
+        stage_tt: toktype.labelPreTok
+        if kwfound then stage_tt = toktype.errTok
+        if reservedfound then stage_tt = toktype.errTok
+        this.nexttok = (this.spanTok
+            :pool
+            tt: stage_tt
+            s: s_word
+            e: e_word
+            line: word_line
+            col: word_col
+        )
+        this.hasnext = true
+        (return
+            (this.byteTok :pool tt: toktype.colonTok s: s0 line: colonpre_line col: colonpre_col)
+        )
+    }
+
+    # wordToken -- the word branch. A leading colon is saved separately from the
+    # word's own position, because the staged LABELPRE and REFID tokens start one
+    # byte after it. Three answers follow the scan: the colon with the word
+    # stashed, the word with a trailing colon stashed, or the word alone as a
+    # REFID, a keyword, or a reserved word read as ERR.
+    wordToken: function {
+        :this pool: zast.StringPool c: u8 s0: u64 line: u32 col: u32
+    } out token is {
+        has_colonpre: false
+        colonpre_line: line
+        colonpre_col: col
+        cw: c
+        if c == ascii.colon then {
+            has_colonpre = true
+            colonpre_line = this.lineno
+            colonpre_col = this.colno
+            this.accept
+            cw = this.atchar
+        }
+        word_line: this.lineno
+        word_col: this.colno
+        s_word: this.tokpos
+        e_word: this.scanWordSpan :pool c: cw
+        if e_word == s_word then {
+            (return
+                (this.emptyWordToken
+                    :pool
+                    :s0
+                    :s_word
+                    :has_colonpre
+                    :colonpre_line
+                    :colonpre_col
+                    :line
+                    :col
+                )
+            )
+        }
+        # the word's type comes from its source span; the views stay scoped so no
+        # lock outlives the lookups
         kwfound: false
         kwtt: toktype.errTok
         reservedfound: false
@@ -1186,31 +1275,25 @@ Tokenizer: class {
             kwtt = kw_res.tt
             reservedfound = islookupReserved sv: wv
         }
-
-        # Path 1: colonpre. Stash the word, return the colon.
         if has_colonpre then {
-            stage_tt: toktype.labelPreTok
-            if kwfound then stage_tt = toktype.errTok
-            if reservedfound then stage_tt = toktype.errTok
-            this.nexttok = (this.spanTok
-                :pool
-                tt: stage_tt
-                s: s_word
-                e: e_word
-                line: word_line
-                col: word_col
-            )
-            this.hasnext = true
             (return
-                (this.byteTok :pool tt: toktype.colonTok s: s0 line: colonpre_line col: colonpre_col
+                (this.colonPreWordToken
+                    :pool
+                    :s0
+                    :s_word
+                    :e_word
+                    :kwfound
+                    :reservedfound
+                    :word_line
+                    :word_col
+                    :colonpre_line
+                    :colonpre_col
                 )
             )
         }
-
-        # Path 2: no colonpre, trailing colon, non-keyword non-reserved.
-        # Stash the colon, return LABEL. (Keyword + trailing colon
-        # leaves the colon for the next token() call to consume via
-        # path 1.)
+        # a trailing colon on a word that is neither a keyword nor reserved makes
+        # it a LABEL, with the colon stashed. A keyword with a trailing colon
+        # leaves the colon for the next call to read as a leading one.
         labelpath: false
         if this.atchar == ascii.colon when kwfound.not when reservedfound.not then labelpath = true
         if labelpath then {
@@ -1235,13 +1318,66 @@ Tokenizer: class {
                 )
             )
         }
-
-        # Path 3: no colonpre, no trailing-colon-label. REFID, keyword,
-        # or reserved-as-ERR via a single computed `tt`.
         ret_tt: toktype.refIdTok
         if kwfound then ret_tt = kwtt
         if reservedfound then ret_tt = toktype.errTok
         return (this.spanTok :pool tt: ret_tt s: s_word e: e_word line: word_line col: word_col)
+    }
+
+    # the next token, advancing past it
+    nextToken: function {:this pool: zast.StringPool} out token is {
+        # Drain the lookahead slot first if a token is staged. Every field
+        # is a value now, the text included, so the staged row copies out.
+        if this.hasnext then return this.stagedToken
+
+        # Prime the look-ahead on the first call (pos == 0 means
+        # `accept` has never run). After this, .atchar holds the next
+        # byte to dispatch on (or ascii.nul if the source is empty).
+        if this.pos == 0 then this.accept
+        line: this.lineno
+        col: this.colno
+        c: this.atchar
+        s0: this.tokpos
+
+        if c == ascii.nul then {
+            return (token
+                toktype: toktype.eofTok
+                width: 0
+                text: (zast.nameid.create from: 0)
+                fsno: this.fsno
+                lineno: line
+                colno: col
+            )
+        }
+
+        if (c == ascii.lf) or (c == ascii.cr) then {
+            return (this.eolToken :pool :c :s0 :line :col)
+        }
+
+        # State-aware dispatch: when the top of the state stack is
+        # STRING, the doublequote ends the string (pop + STREND) and
+        # everything else routes to acceptstringtoken. For STRINGRAW,
+        # the close-vs-content decision lives inside
+        # acceptstringrawtoken because it depends on a multi-byte run
+        # match. EOL/EOF were handled above so the string-token paths
+        # don't need to think about either.
+        #
+        stok: this.stringStateToken :pool :c :s0 :line :col
+        if stok.some then return stok
+
+        ttok: this.triviaToken :pool :c :s0 :line :col
+        if ttok.some then return ttok
+
+        # String open. Counts the consecutive `"` run. 1 -> push STRING
+        # state. 2 -> empty string (STRBEG + stashed STREND, no push).
+        # 3+ -> raw string: emit STRBEG with the full run and push
+        # STRINGRAW carrying the run length so the inner scanner can
+        # match the closer.
+        xtok: this.structuralToken :pool :c :s0 :line :col
+        if xtok.some then return xtok
+
+        # the word branch, which every byte above declined
+        return (this.wordToken :pool :c :s0 :line :col)
     }
 }
 
