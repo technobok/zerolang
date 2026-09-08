@@ -2644,3 +2644,65 @@ the new compiler on the OLD tree.
 
 **Bytes and RSS both END BELOW where the session started.** RSS is also far
 steadier: the old binary swings 101-106 MB run to run, the new one sits at 101.
+
+## 2026-09-08 -- `29995ca7` -> `7dcb7a15` (the A008 >=100 band, nine splits)
+
+Nine behaviour-preserving splits plus one emitter defect fix. No perf work was
+intended; this row exists to say what the refactoring cost.
+
+**A/B on IDENTICAL input** -- both compilers run over the `29995ca7` source tree
+with the canonical `PERFARGS`, gcc `-O1`, same-session binaries.
+
+| | 29995ca7 | 7dcb7a15 | delta |
+|---|---|---|---|
+| allocations | 2,257,856 | 2,257,878 | **+22** |
+| instructions | 5,430,560,775 | 5,445,574,966 | **+0.28%** |
+| wall (best of 5) | 0.45s | 0.44s | flat |
+| peak RSS (best of 5) | 95.7 MB | 95.8 MB | flat |
+
+**The 22 allocations, bisected on identical input.** `80c64087` (zls parameter
+renderer) 0; **`bf2642c0` (the String-key pointer fix) +21** -- five Map/Set
+probe sites now ask `argIsPointerByLabel` before addressing their key, which is
+the cost of not emitting invalid C; **`26014aea` (zc main) +1** -- the ZcFlags
+object; `03e49816` 0; `56a4c870` (emitCallByDecl) **0**.
+
+**The 0.28% instructions is gcc, not the compiler.** It steps entirely at
+`26014aea` (+12.8M, reproducible across alternating rounds), and callgrind names
+it exactly: `ListVal_u32_destroy` self-cost 0 -> 7,608,920 with `free` +4,175,257
+beside it. Both emitted C files name that destructor **the same 407 times** --
+`nm` finds the symbol in the `26014aea` binary and NOT in the `bf2642c0` one, so
+gcc inlined it at 407 sites in one build and kept it out of line in the other.
+The work is identical; only where it is attributed moved. Nothing in the
+remaining 140 changed functions exceeds 1.2M.
+
+**Each compiler on its OWN tree** (the `make perf` row; the wall column moves
+with LOC and is not an A/B):
+
+| | 29995ca7 | 7dcb7a15 |
+|---|---|---|
+| src/*.z lines | 105,871 | 106,581 |
+| wall best-of-5 | 0.46s | 0.45s |
+| peak RSS | 97.9 -- 100.4 MB | **94.4 -- 94.8 MB** |
+| parse / typecheck / emit | 121 / 174 / 182 ms | 108 / 170 / 184 ms |
+| allocations | 2,258,303 | 2,263,972 |
+
+RSS ends 5% lower and far steadier: the old binary swings 97.9-100.4 MB run to
+run, the new one sits at 94.4-94.8.
+
+**`ALLOC_BASELINE` 2,258,070 -> 2,263,972 (+5,902), of which +22 is the
+compiler.** It was ALREADY red before this session: `29995ca7` measures 2,258,303,
+233 over a baseline nobody raised. The remaining ~5,650 is the self-compile
+having 710 more lines of its own source to compile, which the A/B above isolates
+by holding the input fixed. Read the ratchet as a ratchet, not as a measurement.
+
+### The measurement trap this row paid for: argv[0] is an input
+
+`resolveRuntimeDir` derives the runtime directory from `os.exePath` when
+`--runtime` is absent, so **the path the binary is invoked by changes the
+allocation count**. Two byte-identical copies of the same compiler read 2,258,303
+and 2,257,854 -- a 449 gap -- purely because one was run as `out/zc-perf` and the
+other by a long absolute path. A first pass at this row read +238 allocations and
+blamed `--fast-hash` for 216 of them; both numbers were that gap. **Stage every
+binary in one directory under names of equal length before comparing**, and
+invoke them the same way. The fast-hash column is free at both ends once that is
+done.
