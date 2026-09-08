@@ -28795,6 +28795,145 @@ classifyCollectionMono: function {
     return isColKind
 }
 
+# isSystemVariantTid -- a variant a system unit DECLARED: not an instantiation
+# and not a template, so its C is written once with the system types.
+isSystemVariantTid: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tcl: ztypes.tid
+    tt: ztypes.ztypetype
+    isMono: bool
+    gen: bool
+} out bool is {
+    if tt != ztypes.ztypetype.variantType then return false
+    if isMono then return false
+    if gen then return false
+    return (definedInNonMain :symtab :ctx tid: tcl)
+}
+
+# isUserGenericRecordMono -- a user generic record/class instantiation. The
+# collection, array, str and Box monos share those typetypes and drain from
+# their own lists, which is what the exclusions here keep out.
+isUserGenericRecordMono: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tcl: ztypes.tid
+    tt: ztypes.ztypetype
+} out bool is {
+    isRec: (tt == ztypes.ztypetype.recordType) or (tt == ztypes.ztypetype.classType)
+    if isRec.not then return false
+    if (isCollectionOriginTid
+        :ctx
+        originTid: (originTidOf :symtab tid: tcl)
+    ) then return false
+    if (originIsTid
+        :symtab
+        tid: tcl
+        originTid: (ctx.origins.get i: ogArray)
+    ) then return false
+    if (originIsTid
+        :symtab
+        tid: tcl
+        originTid: (ctx.origins.get i: ogStr)
+    ) then return false
+    return (isBoxTid :symtab tid: tcl).not
+}
+
+# isUserGenericVariantMono -- a user generic variant instantiation.
+# optionval/resultval monos are variantType and mono too and drain from wValMono
+# in their own dependency position, so isValMono is what separates the families.
+isUserGenericVariantMono: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tcl: ztypes.tid
+    tt: ztypes.ztypetype
+    isValMono: bool
+} out bool is {
+    if tt != ztypes.ztypetype.variantType then return false
+    if isValMono then return false
+    return (isCollectionOriginTid
+        :ctx
+        originTid: (originTidOf :symtab tid: tcl)
+    ).not
+}
+
+# classifyValueMono -- an optionval/resultval mono emits with the early monos
+# unless it embeds a user type, which puts it in the late pass instead.
+classifyValueMono: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    userListM: (ListVal u64).view
+    tcl: ztypes.tid
+    tv: u64
+    work: MonoWork
+} is {
+    if (monoIsLate
+        :ast
+        :symtab
+        :ctx
+        monoId: (ztypes.tid.create from: tcl.u64)
+        userList: userListM
+    ) then return
+    work.wValMono.append tv
+}
+
+# classifyMonoAt -- which worklists one registry type belongs on. A type can be
+# on several: the families are asked independently and each answers for itself.
+classifyMonoAt: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    userListM: (ListVal u64).view
+    tcl: ztypes.tid
+    work: MonoWork
+} is {
+    tv: tcl
+    tt: symtab.reg.typetypeOf typeId: tcl
+    gen: isGenericType :symtab tid: tcl
+    isMono: (originTidOf :symtab tid: tcl) > 0
+    if (originIsTid
+        :symtab
+        tid: tcl
+        originTid: (ctx.origins.get i: ogStr)
+    ) then work.wStr.append tv
+    if (isBoxTid :symtab tid: tcl) then work.wBox.append tv
+    if (isSystemVariantTid :symtab :ctx :tcl :tt :isMono :gen) then work.wSysVar.append tv
+    isValMono: (
+        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: ogOptionval)) or
+        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: ogResultval))
+    )
+    if isValMono then (classifyValueMono
+        :ast
+        :symtab
+        :ctx
+        :userListM
+        :tcl
+        :tv
+        :work
+    )
+    (classifyCollectionMono
+        :ast
+        :symtab
+        :ctx
+        :userListM
+        :tcl
+        :tv
+        :tt
+        :isMono
+        :isValMono
+        :work
+    )
+    if tt == ztypes.ztypetype.protocolType when gen.not when (definedInNonMain
+        :symtab
+        :ctx
+        tid: tcl
+    ) then work.wProto.append tv
+    if isMono.not then return
+    if (isUserGenericRecordMono :symtab :ctx :tcl :tt) then work.wUgRec.append tv
+    if (isUserGenericVariantMono :symtab :ctx :tcl :tt :isValMono) then work.wUgVar.append tv
+}
+
 # classifyMonos -- ONE sweep over the registry fills the per-category worklists the
 # emission loops then walk in the original sequence. Every predicate here reads
 # only registry and typing state, which is immutable during emission; the
@@ -28809,83 +28948,7 @@ classifyMonos: function {
     last: symtab.reg.nextTypeId
     tcl: ztypes.tid
     for tcl < last loop {
-        tv: tcl
-        tt: symtab.reg.typetypeOf typeId: tcl
-        oOrig: originTidOf :symtab tid: tcl
-        gen: isGenericType :symtab tid: tcl
-        isMono: oOrig > 0
-        if (originIsTid
-            :symtab
-            tid: tcl
-            originTid: (ctx.origins.get i: ogStr)
-        ) then work.wStr.append tv
-        if (isBoxTid :symtab tid: tcl) then work.wBox.append tv
-        if tt == ztypes.ztypetype.variantType when isMono.not when gen.not when (definedInNonMain
-            :symtab
-            :ctx
-            tid: tcl
-        ) then work.wSysVar.append tv
-        isValMono: (
-            (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: ogOptionval)) or
-            (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: ogResultval))
-        )
-        if isValMono then {
-            mil: (monoIsLate
-                :ast
-                :symtab
-                :ctx
-                monoId: (ztypes.tid.create from: tcl.u64)
-                userList: userListM
-            )
-            if mil.not then work.wValMono.append tv
-        }
-        (classifyCollectionMono
-            :ast
-            :symtab
-            :ctx
-            :userListM
-            :tcl
-            :tv
-            :tt
-            :isMono
-            :isValMono
-            :work
-        )
-        if tt == ztypes.ztypetype.protocolType when gen.not when (definedInNonMain
-            :symtab
-            :ctx
-            tid: tcl
-        ) then work.wProto.append tv
-        if isMono then {
-            ugr: (tt == ztypes.ztypetype.recordType) or (tt == ztypes.ztypetype.classType)
-            if ugr when (isCollectionOriginTid
-                :ctx
-                originTid: (originTidOf :symtab tid: tcl)
-            ) then ugr = false
-            if ugr when (originIsTid
-                :symtab
-                tid: tcl
-                originTid: (ctx.origins.get i: ogArray)
-            ) then ugr = false
-            if ugr when (originIsTid
-                :symtab
-                tid: tcl
-                originTid: (ctx.origins.get i: ogStr)
-            ) then ugr = false
-            if ugr when (isBoxTid :symtab tid: tcl) then ugr = false
-            if ugr then work.wUgRec.append tv
-            # a user generic VARIANT mono. optionval/resultval monos are
-            # variantType and isMono too and drain from wValMono in their own
-            # dependency position, so isValMono is what separates the families.
-            ugv: false
-            if tt == ztypes.ztypetype.variantType then ugv = true
-            if ugv when isValMono then ugv = false
-            if ugv when (isCollectionOriginTid
-                :ctx
-                originTid: (originTidOf :symtab tid: tcl)
-            ) then ugv = false
-            if ugv then work.wUgVar.append tv
-        }
+        classifyMonoAt :ast :symtab :ctx :userListM :tcl :work
         tcl = ztypes.tid.create from: (tcl + 1)
     }
 }
@@ -31050,53 +31113,40 @@ vtableCallC: function {
     return "\{recv}\{acc}vtable->\{(cSlotName name: mn)}(\{dargs}\{argTail})"
 }
 
-# emitProtocolDispatch -- a method call on a protocol-typed receiver routes
-# through the vtable: `r.read b: 5` -> `r.vtable->read(r.data, 5)`.
-emitProtocolDispatch: function {
+# dispatchReceiverTid -- the dispatchable type a protocol receiver stands for:
+# its own stamp when that dispatches, else the canonical type behind it.
+dispatchReceiverTid: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    call: zast.callrow.view
-} out String is {
-    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
-    if mn.length == 0 then return "".string
-    if mn == "create" then return "".string
-    if mn == "borrow" then return "".string
-    if mn == "drop" then return "".string
-    rtid: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
-    if (isDispatchableTid :symtab tid: (ztypes.tid.create from: rtid.u64)).not then {
-        rtn0: regNameOf :symtab tid: (ztypes.tid.create from: rtid.u64)
-        if rtn0.length > 0 then {
-            brid: (canonTypeId
-                :ast
-                :symtab
-                :ctx
-                tid: (ztypes.tid.create from: rtid.u64)
-                name: rtn0.stringView
-            )
-            if (isDispatchableTid
-                :symtab
-                tid: (ztypes.tid.create from: brid.u64)
-            ) then rtid = ztypes.tid.create from: brid.u64
-        }
-    }
-    if (
-        (isDispatchableTid
-            :symtab
-            tid: (ztypes.tid.create from: rtid.u64)
-        ).not
-    ) then return "".string
-    isFacetR: (symtab.reg.typetypeOf typeId: rtid) == ztypes.ztypetype.facetType
-    recv: emitDottedReceiver :ast :symtab :ctx callable: (ast.nodes.get i: call.callable.u64)
-    if recv.length == 0 then return "".string
-    acc: ".".string
-    callableNode: ast.nodes.get i: call.callable.u64
-    if (dottedReceiverIsPtr :ast :symtab :ctx callable: callableNode) then acc = "->".string
-    dargs: (vtableDataArg
-        recv: recv.stringView
-        acc: acc.stringView
-        isFacet: isFacetR
+    callable: astnode.view
+} out ztypes.tid is {
+    rtid: dottedReceiverStampId :ast :symtab :callable
+    own: ztypes.tid.create from: rtid.u64
+    if (isDispatchableTid :symtab tid: own) then return own
+    rtn0: regNameOf :symtab tid: own
+    if rtn0.length == 0 then return own
+    brid: (canonTypeId
+        :ast
+        :symtab
+        :ctx
+        tid: own
+        name: rtn0.stringView
     )
+    base: ztypes.tid.create from: brid.u64
+    if (isDispatchableTid :symtab tid: base) then return base
+    return own
+}
+
+# dispatchSlotNames -- the vtable method's parameter name ids. The receiver is
+# implicit at the call site, so it is not a slot an argument can land in;
+# filtered by id, like the match itself.
+dispatchSlotNames: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    rtid: ztypes.tid
+    mn: StringView
+} out ListVal u64 is {
     mtid: ((symtab.typing.declChildOf
         pool: ast.names
         parentTypeId: rtid
@@ -31115,8 +31165,6 @@ emitProtocolDispatch: function {
         ids: mpIds
         nameIds: mpIds9Nm
     )
-    # the receiver is implicit at the call site, so it is not a slot an
-    # argument can land in. Filtered by id, like the match itself
     vpn: ListVal u64
     vi: u64
     for vi < mpIds9Nm.length loop {
@@ -31124,83 +31172,133 @@ emitProtocolDispatch: function {
         if nmId != zast.names.wkThis.u64 then vpn.append nmId
         vi = vi + 1
     }
-    if vpn.length > 0 then {
-        slots9p: argSlotList :ast :call fpNameIds: vpn
-        valBySlot9p: (IdMapR u64 V: String)
-        ai9p: u64
-        arx609: u64
-        for arx609 < call.arguments.count.u64 loop {
-            aId: zast.kidAt kids: ast.kids span: call.arguments i: arx609
-            arx609 = arx609 + 1
-            a: ast.nodes.get i: aId.u64
-            if a.namedoperation then {
-                slot9p: slots9p.get i: ai9p
-                if slot9p < vpn.length then {
-                    av: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
-                    atid: (stampIdOf
-                        :symtab
-                        nid: (interpPartNodeId n: (ast.nodes.get i: a.operation.u64))
-                    )
-                    apfx: String
-                    chasedColTid: chaseColMono :symtab :ctx tid: atid
-                    if (chasedColTid == atid).not then apfx = "&".string
-                    if (isCollectionOriginTid
-                        :ctx
-                        originTid: (originTidOf :symtab tid: atid)
-                    ) then apfx = "&".string
-                    if (pathIsPointer
-                        :ast
-                        :symtab
-                        :ctx
-                        n: (ast.nodes.get i: a.operation.u64)
-                    ) then apfx = "".string
-                    fs9p: "\{apfx}\{av}"
-                    valBySlot9p.set key: slot9p value: fs9p
-                }
-                ai9p = ai9p + 1
-            }
-        }
-        pp9p: u64
-        ppn9p: vpn.length
-        for pp9p < ppn9p loop {
-            vo9p: valBySlot9p.get key: pp9p
-            match (
-                vo9p
-            ) case some then {
-                dargs.append ", "
-                dargs.append vo9p
-            } case none then null
-            pp9p = pp9p + 1
-        }
-    } else {
-        arx619: u64
-        for arx619 < call.arguments.count.u64 loop {
-            aId: zast.kidAt kids: ast.kids span: call.arguments i: arx619
-            arx619 = arx619 + 1
-            a: ast.nodes.get i: aId.u64
-            if a.namedoperation then {
-                av: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
-                atid: (stampIdOf
-                    :symtab
-                    nid: (interpPartNodeId n: (ast.nodes.get i: a.operation.u64))
-                )
-                apfx: String
-                chasedColTidAlt: chaseColMono :symtab :ctx tid: atid
-                if (chasedColTidAlt == atid).not then apfx = "&".string
-                if (isCollectionOriginTid :ctx originTid: (originTidOf :symtab tid: atid)) then {
-                    apfx = "&".string
-                }
-                if (pathIsPointer
+    return vpn
+}
+
+# dispatchArgText -- one dispatched argument's C text. A collection argument is
+# passed by address, unless the path already yields a pointer.
+dispatchArgText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+} out String is {
+    av: emitExpr :ast :symtab :ctx :n
+    atid: stampIdOf :symtab nid: (interpPartNodeId :n)
+    apfx: String
+    chasedColTid: chaseColMono :symtab :ctx tid: atid
+    if (chasedColTid == atid).not then apfx = "&".string
+    if (isCollectionOriginTid
+        :ctx
+        originTid: (originTidOf :symtab tid: atid)
+    ) then apfx = "&".string
+    if (pathIsPointer :ast :symtab :ctx :n) then apfx = "".string
+    return "\{apfx}\{av}"
+}
+
+# appendSlottedDispatchArgs -- the arguments in the vtable method's PARAMETER
+# order, which is what the C function expects; a label may name a later slot.
+appendSlottedDispatchArgs: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    vpn: (ListVal u64).view
+    dargs: String
+} is {
+    slots9p: argSlotList :ast :call fpNameIds: vpn
+    valBySlot9p: (IdMapR u64 V: String)
+    ai9p: u64
+    arx609: u64
+    for arx609 < call.arguments.count.u64 loop {
+        aId: zast.kidAt kids: ast.kids span: call.arguments i: arx609
+        arx609 = arx609 + 1
+        a: ast.nodes.get i: aId.u64
+        if a.namedoperation then {
+            slot9p: slots9p.get i: ai9p
+            if slot9p < vpn.length then {
+                fs9p: (dispatchArgText
                     :ast
                     :symtab
                     :ctx
                     n: (ast.nodes.get i: a.operation.u64)
-                ) then apfx = "".string
-                dargs.append ", "
-                dargs.append apfx
-                dargs.append av
+                )
+                valBySlot9p.set key: slot9p value: fs9p
             }
+            ai9p = ai9p + 1
         }
+    }
+    pp9p: u64
+    ppn9p: vpn.length
+    for pp9p < ppn9p loop {
+        vo9p: valBySlot9p.get key: pp9p
+        match (
+            vo9p
+        ) case some then {
+            dargs.append ", "
+            dargs.append vo9p
+        } case none then null
+        pp9p = pp9p + 1
+    }
+}
+
+# appendPlainDispatchArgs -- the arguments in written order, for a method whose
+# only parameter is the implicit receiver.
+appendPlainDispatchArgs: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    dargs: String
+} is {
+    arx619: u64
+    for arx619 < call.arguments.count.u64 loop {
+        aId: zast.kidAt kids: ast.kids span: call.arguments i: arx619
+        arx619 = arx619 + 1
+        a: ast.nodes.get i: aId.u64
+        if a.namedoperation then {
+            at9: (dispatchArgText
+                :ast
+                :symtab
+                :ctx
+                n: (ast.nodes.get i: a.operation.u64)
+            )
+            dargs.append ", "
+            dargs.append at9
+        }
+    }
+}
+
+# emitProtocolDispatch -- a method call on a protocol-typed receiver routes
+# through the vtable: `r.read b: 5` -> `r.vtable->read(r.data, 5)`.
+emitProtocolDispatch: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+} out String is {
+    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
+    if mn.length == 0 then return "".string
+    if mn == "create" then return "".string
+    if mn == "borrow" then return "".string
+    if mn == "drop" then return "".string
+    callableNode: ast.nodes.get i: call.callable.u64
+    rtid: dispatchReceiverTid :ast :symtab :ctx callable: callableNode
+    if (isDispatchableTid :symtab tid: rtid).not then return "".string
+    recv: emitDottedReceiver :ast :symtab :ctx callable: callableNode
+    if recv.length == 0 then return "".string
+    acc: ".".string
+    if (dottedReceiverIsPtr :ast :symtab :ctx callable: callableNode) then acc = "->".string
+    dargs: (vtableDataArg
+        recv: recv.stringView
+        acc: acc.stringView
+        isFacet: (symtab.reg.typetypeOf typeId: rtid) == ztypes.ztypetype.facetType
+    )
+    vpn: dispatchSlotNames :ast :symtab :rtid :mn
+    if vpn.length > 0 then {
+        appendSlottedDispatchArgs :ast :symtab :ctx :call :vpn :dargs
+    } else {
+        appendPlainDispatchArgs :ast :symtab :ctx :call :dargs
     }
     dslot: cSlotName name: mn
     de: "\{recv}\{acc}vtable->\{dslot}(\{dargs})"
