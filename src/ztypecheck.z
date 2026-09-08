@@ -7265,6 +7265,137 @@ scanPublicBlock: function {
     }
 }
 
+# scanTypeAsBlock -- one `as`-item that may be a visibility block. `private:`
+# cannot be redefined, because private already includes every field and method
+# of the type; `public:` names the interface, and its entries are read here.
+# Answers true when the item WAS a public block.
+scanTypeAsBlock: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    n: astnode.view
+    pubIds: IdSet u64
+    aliases: ListVal aliasentry
+} out bool is {
+    if n.namedoperation.not then return false
+    if (zast.unitOpKindIs :ast opId: n.operation k: zast.unitkind.privateNs) then {
+        (addResolveErrorH
+            :st
+            nodeid: n.nodeid
+            lineno: n.lineno
+            colno: n.colno
+            e: zast.err.typeError
+            msg: "`private:` cannot be redefined -- `private` always includes every field and method of the type".string
+            width: 7
+        )
+    }
+    if (zast.unitOpKindIs :ast opId: n.operation k: zast.unitkind.publicNs).not then return false
+    opNode: ast.nodes.get i: n.operation.u64
+    if opNode.unitdef then (scanPublicBlock
+        :st
+        :ast
+        body: opNode.body
+        :pubIds
+        :aliases
+        badMsg: "a public interface entry must be ':member' or 'alias: member'"
+    )
+    return true
+}
+
+# scanTypeField -- one declared field: it is a member, its type may carry a
+# `.private` handle grant, and a `public:` block that does not name it excludes
+# it.
+scanTypeField: function {
+    ast: Ast.view
+    n: astnode.view
+    memberIds: IdSet u64
+    grants: ListVal u64
+    excl: ListVal u64
+    pubIds: IdSet u64
+    pubFound: bool
+} is {
+    if n.namedoperation.not then return
+    memberIds.add item: n.name.u64
+    if (typeExprHasPrivate
+        :ast
+        n: (ast.nodes.get i: n.operation.u64)
+    ) then grants.append from: n.name.u64
+    if pubFound.not then return
+    if (pubIds.has item: n.name.u64).not then excl.append from: n.name.u64
+}
+
+# scanTypeAsMember -- one `as`-item that is an ordinary definition rather than a
+# visibility block: a member the interface may name, and one a `public:` block
+# that does not name it excludes.
+scanTypeAsMember: function {
+    ast: Ast.view
+    n: astnode.view
+    memberIds: IdSet u64
+    excl: ListVal u64
+    pubIds: IdSet u64
+} is {
+    if n.namedoperation.not then return
+    skip: (
+        (zast.unitOpKindIs :ast opId: n.operation k: zast.unitkind.publicNs) or
+        (zast.unitOpKindIs :ast opId: n.operation k: zast.unitkind.privateNs)
+    )
+    if skip then return
+    memberIds.add item: n.name.u64
+    if (pubIds.has item: n.name.u64).not then excl.append from: n.name.u64
+}
+
+# checkRenameAlias -- a `public:` rename must name a member this type has, and
+# must not collide with one. Answers whether the alias stands.
+checkRenameAlias: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    al: aliasentry
+    memberIds: IdSet u64
+} out bool is {
+    if (memberIds.has item: al.internal.u64).not then {
+        iTxt: zast.nameTextAt :ast ref: al.internal
+        (addResolveErrorH
+            :st
+            nodeid: (zast.nodeid.create from: al.node)
+            lineno: al.line
+            colno: al.col
+            e: zast.err.typeError
+            msg: "public interface exposes '\{iTxt}', which is not a member of this type"
+            width: 1
+        )
+        return false
+    }
+    if (memberIds.has item: al.pub.u64) then {
+        pTxt: zast.nameTextAt :ast ref: al.pub
+        (addResolveErrorH
+            :st
+            nodeid: (zast.nodeid.create from: al.node)
+            lineno: al.line
+            colno: al.col
+            e: zast.err.typeError
+            msg: "public alias '\{pTxt}' collides with a member of the same name"
+            width: 1
+        )
+        return false
+    }
+    return true
+}
+
+# installRenameAliases -- validate the renames against the now-known member set
+# and record that the type has one, which is what turns the rename machinery on.
+installRenameAliases: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    aliases: (ListVal aliasentry).view
+    memberIds: IdSet u64
+} is {
+    ax: u64
+    for ax < aliases.length loop {
+        al: aliases.get i: ax
+        ax = ax + 1
+        if (checkRenameAlias :st :ast :al :memberIds) then st.typing.renameSeen = true
+    }
+}
+
 # scanVisibility -- one AST-only pass over a type's `public:` block filling two
 # out-lists (with-scoped iterators, no lock outlives the scan): `excl` = pool
 # ids of USER-declared members NOT in the block (empty when there is no block --
@@ -7286,102 +7417,42 @@ scanVisibility: function {
     for kAiter < onode.nas loop {
         aId: (zast.objAsItemAt :ast nid: onode.nid i: kAiter).u32
         kAiter = kAiter + 1
-        an: ast.nodes.get i: aId.u64
-        if an.namedoperation then {
-            if (zast.unitOpKindIs :ast opId: an.operation k: zast.unitkind.privateNs) then {
-                (addResolveErrorH
-                    :st
-                    nodeid: an.nodeid
-                    lineno: an.lineno
-                    colno: an.colno
-                    e: zast.err.typeError
-                    msg: "`private:` cannot be redefined -- `private` always includes every field and method of the type".string
-                    width: 7
-                )
-            }
-            if (zast.unitOpKindIs :ast opId: an.operation k: zast.unitkind.publicNs) then {
-                pubFound = true
-                opNode: ast.nodes.get i: an.operation.u64
-                if opNode.unitdef then (scanPublicBlock
-                    :st
-                    :ast
-                    body: opNode.body
-                    :pubIds
-                    :aliases
-                    badMsg: "a public interface entry must be ':member' or 'alias: member'"
-                )
-            }
-        }
+        if (scanTypeAsBlock
+            :st
+            :ast
+            n: (ast.nodes.get i: aId.u64)
+            :pubIds
+            :aliases
+        ) then pubFound = true
     }
     kFiter: u64
     for kFiter < onode.nis loop {
         fId: (zast.objIsItemAt :ast nid: onode.nid i: kFiter).u32
         kFiter = kFiter + 1
-        fm: ast.nodes.get i: fId.u64
-        if fm.namedoperation then {
-            memberIds.add item: fm.name.u64
-            if (typeExprHasPrivate
-                :ast
-                n: (ast.nodes.get i: fm.operation.u64)
-            ) then grants.append from: fm.name.u64
-            if pubFound then {
-                hasF: pubIds.has item: fm.name.u64
-                if hasF.not then excl.append from: fm.name.u64
-            }
-        }
+        (scanTypeField
+            :ast
+            n: (ast.nodes.get i: fId.u64)
+            :memberIds
+            :grants
+            :excl
+            :pubIds
+            :pubFound
+        )
     }
     if pubFound.not then return
     kA2iter: u64
     for kA2iter < onode.nas loop {
         a2Id: (zast.objAsItemAt :ast nid: onode.nid i: kA2iter).u32
         kA2iter = kA2iter + 1
-        am: ast.nodes.get i: a2Id.u64
-        if am.namedoperation then {
-            skip: (
-                (zast.unitOpKindIs :ast opId: am.operation k: zast.unitkind.publicNs) or
-                (zast.unitOpKindIs :ast opId: am.operation k: zast.unitkind.privateNs)
-            )
-            if skip.not then {
-                memberIds.add item: am.name.u64
-                hasM: pubIds.has item: am.name.u64
-                if hasM.not then excl.append from: am.name.u64
-            }
-        }
+        (scanTypeAsMember
+            :ast
+            n: (ast.nodes.get i: a2Id.u64)
+            :memberIds
+            :excl
+            :pubIds
+        )
     }
-    # validate the rename aliases against the now-known member set, then install
-    ax: u64
-    for ax < aliases.length loop {
-        al: aliases.get i: ax
-        ax = ax + 1
-        okAlias: true
-        if (memberIds.has item: al.internal.u64).not then {
-            iTxt: zast.nameTextAt :ast ref: al.internal
-            (addResolveErrorH
-                :st
-                nodeid: (zast.nodeid.create from: al.node)
-                lineno: al.line
-                colno: al.col
-                e: zast.err.typeError
-                msg: "public interface exposes '\{iTxt}', which is not a member of this type"
-                width: 1
-            )
-            okAlias = false
-        }
-        if okAlias when (memberIds.has item: al.pub.u64) then {
-            pTxt: zast.nameTextAt :ast ref: al.pub
-            (addResolveErrorH
-                :st
-                nodeid: (zast.nodeid.create from: al.node)
-                lineno: al.line
-                colno: al.col
-                e: zast.err.typeError
-                msg: "public alias '\{pTxt}' collides with a member of the same name"
-                width: 1
-            )
-            okAlias = false
-        }
-        if okAlias then st.typing.renameSeen = true
-    }
+    installRenameAliases :st :ast :aliases :memberIds
 }
 
 # applyGrantsPrivate -- mark each `.private`-typed field as a friend handle.
@@ -28261,30 +28332,12 @@ checkUntypedArgLabel: function {
     if pnIdU.isZero.not when effId > 0 when (st.typing.declMemberCount ownerTid: effId) > 0 then {
         pcU: ((st.typing.declChildOfId parentTypeId: effId nameId: pnIdU).or d: 0)
         if pcU == 0 then {
-            pnU: zast.nameTextCopy :ast ref: pnIdU
-            mU: "unknown argument '\{pnU}'"
-            sugU: (suggestSimilar
+            (reportUnknownArgument
+                :st
                 :ast
-                :st
-                parentTypeId: effId
-                name: pnU.stringView
-            )
-            hU: String
-            if sugU.length > 0 then {
-                hhU: "did you mean '\{sugU}'?"
-                hU = hhU
-            }
-            enU9b: String
-            (addErrorH
-                :st
-                nodeid: arg.nid
-                lineno: arg.lineno
-                colno: arg.colno
-                e: zast.err.callError
-                msg: mU
-                note: enU9b
-                hint: hU
-                width: pnU.length.u32.orPanic
+                ownerTid: effId
+                label: pnIdU
+                :arg
             )
         }
     }
@@ -28688,9 +28741,111 @@ coerceArgToParam: function {
     if wasPos then (coercePositionalArg :st :ast :effId :vt :pnId :arg)
 }
 
+# reportUnknownArgument -- a label the callee has no parameter for, with the
+# closest name it does have as the hint.
+reportUnknownArgument: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    ownerTid: ztypes.tid
+    label: zast.nameid
+    arg: argref
+} is {
+    pn: zast.nameTextCopy :ast ref: label
+    m: "unknown argument '\{pn}'"
+    sug: suggestSimilar :ast :st parentTypeId: ownerTid name: pn.stringView
+    h: String
+    if sug.length > 0 then {
+        hh: "did you mean '\{sug}'?"
+        h = hh
+    }
+    note: String
+    (addErrorH
+        :st
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+        e: zast.err.callError
+        msg: m
+        :note
+        hint: h
+        width: pn.length.u32.orPanic
+    )
+}
+
+# argMismatchSkipped -- the argument/parameter pairs a plain type compare does
+# not decide: two numerics coerce, and a spec, a generic parameter and a
+# function type each carry their own conformance rule.
+argMismatchSkipped: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    vt: ztypes.tid
+    ptid: u64
+} out bool is {
+    if (isNumericTid
+        :st
+        frame: st.curFrame
+        :ast
+        tid: (ztypes.tid.create from: vt.u64)
+    ) when (isNumericTid
+        :st
+        frame: st.curFrame
+        :ast
+        tid: (ztypes.tid.create from: ptid.u64)
+    ) then return true
+    ptt: st.reg.typetypeOf typeId: (ztypes.tid.create from: ptid.u64)
+    return (
+        (ptt == ztypes.ztypetype.protocolType) or
+        (ptt == ztypes.ztypetype.facetType) or
+        (ptt == ztypes.ztypetype.genericParam) or
+        (ptt == ztypes.ztypetype.functionType)
+    )
+}
+
+# checkArgTypeMismatch -- the argument's type must fit the parameter it binds.
+# An unresolved or literal value is reported only when no earlier error already
+# explains it, since both would have resolved had the expected type resolved.
+checkArgTypeMismatch: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    ptid: u64
+    vt: ztypes.tid
+    pnId: zast.nameid
+    arg: argref
+} is {
+    if ptid == 0 then return
+    if vt.isZero then return
+    if (typesCompatible :ast :st a: vt b: (ztypes.tid.create from: ptid.u64)) then return
+    if (argMismatchSkipped :st :ast :vt :ptid) then return
+    en7: st.reg.nameOf tid: (ztypes.tid.create from: ptid.u64)
+    an7: st.reg.nameOf tid: (ztypes.tid.create from: vt.u64)
+    emit7: true
+    if an7.length == 0 then {
+        if st.typing.errors.length > 0 then emit7 = false
+        an7 = "an unresolved value".string
+    }
+    if (isLiteralTypeId :st tid: (ztypes.tid.create from: vt.u64)) when (
+        st.typing.errors.length > 0
+    ) then emit7 = false
+    if emit7.not then return
+    pn: zast.nameTextCopy :ast ref: pnId
+    mm7: "argument '\{pn}' type mismatch: expected \{en7}, got \{an7}"
+    en7b: String
+    eh7: String
+    (addErrorH
+        :st
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+        e: zast.err.callError
+        msg: mm7
+        note: en7b
+        hint: eh7
+        width: pn.length.u32.orPanic
+    )
+}
+
 # checkNamedArgParam -- a labelled argument must name a parameter the callee
-# has, and must not name one an earlier argument already bound. Records the
-# binding so the positional walk and the missing-argument report agree.
+# has, and its value must fit that parameter's type.
 checkNamedArgParam: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -28700,102 +28855,21 @@ checkNamedArgParam: function {
     vt: ztypes.tid
     arg: argref
 } is {
-    if pnId.isZero.not when effId > 0 when (st.typing.declMemberCount ownerTid: effId) > 0 then {
-        pco: st.typing.declChildOfId parentTypeId: effId nameId: pnId
-        pcidX: pco.or d: 0
-        if pcidX == 0 then {
-            pn: zast.nameTextCopy :ast ref: pnId
-            m2: "unknown argument '\{pn}'"
-            anid: arg.nid
-            anln: arg.lineno
-            ancl: arg.colno
-            sug2: (suggestSimilar
-                :ast
-                :st
-                parentTypeId: (ztypes.tid.create from: effId.u64)
-                name: pn.stringView
-            )
-            h2: String
-            if sug2.length > 0 then {
-                hh2: "did you mean '\{sug2}'?"
-                h2 = hh2
-            }
-            en2: String
-            (addErrorH
-                :st
-                nodeid: anid
-                lineno: anln
-                colno: ancl
-                e: zast.err.callError
-                msg: m2
-                note: en2
-                hint: h2
-                width: pn.length.u32.orPanic
-            )
-        } else {
-            ptid: pcidX
-            if ptid > 0 when vt > 0 when (
-                (typesCompatible :ast :st a: vt b: (ztypes.tid.create from: ptid.u64)).not
-            ) then {
-                skipMM: false
-                if (isNumericTid
-                    :st
-                    frame: st.curFrame
-                    :ast
-                    tid: (ztypes.tid.create from: vt.u64)
-                ) when (isNumericTid
-                    :st
-                    frame: st.curFrame
-                    :ast
-                    tid: (ztypes.tid.create from: ptid.u64)
-                ) then skipMM = true
-                ptt: st.reg.typetypeOf typeId: (ztypes.tid.create from: ptid.u64)
-                # a spec, a generic parameter and a function type each carry
-                # their own conformance rule, so the plain type compare below is
-                # not the one that decides whether the argument fits
-                if (
-                    (ptt == ztypes.ztypetype.protocolType) or
-                    (ptt == ztypes.ztypetype.facetType) or
-                    (ptt == ztypes.ztypetype.genericParam) or
-                    (ptt == ztypes.ztypetype.functionType)
-                ) then skipMM = true
-                if skipMM.not then {
-                    en7: st.reg.nameOf tid: (ztypes.tid.create from: ptid.u64)
-                    an7: st.reg.nameOf tid: (ztypes.tid.create from: vt.u64)
-                    emit7: true
-                    if an7.length == 0 then {
-                        # unresolved got-side: suppress the knock-on
-                        # when a prior error explains it, else name it
-                        if st.typing.errors.length > 0 then emit7 = false
-                        an7 = "an unresolved value".string
-                    }
-                    # a literal got-side would have COERCED had the
-                    # expected type resolved, so its mismatch is a
-                    # knock-on whenever an earlier error explains it
-                    if (isLiteralTypeId :st tid: (ztypes.tid.create from: vt.u64)) when (
-                        st.typing.errors.length > 0
-                    ) then emit7 = false
-                    if emit7 then {
-                        pn: zast.nameTextCopy :ast ref: pnId
-                        mm7: "argument '\{pn}' type mismatch: expected \{en7}, got \{an7}"
-                        en7b: String
-                        eh7: String
-                        (addErrorH
-                            :st
-                            nodeid: arg.nid
-                            lineno: arg.lineno
-                            colno: arg.colno
-                            e: zast.err.callError
-                            msg: mm7
-                            note: en7b
-                            hint: eh7
-                            width: pn.length.u32.orPanic
-                        )
-                    }
-                }
-            }
-        }
+    if pnId.isZero then return
+    if effId.isZero then return
+    if (st.typing.declMemberCount ownerTid: effId) == 0 then return
+    pcidX: (st.typing.declChildOfId parentTypeId: effId nameId: pnId).or d: 0
+    if pcidX == 0 then {
+        (reportUnknownArgument
+            :st
+            :ast
+            ownerTid: (ztypes.tid.create from: effId.u64)
+            label: pnId
+            :arg
+        )
+        return
     }
+    checkArgTypeMismatch :st :ast ptid: pcidX :vt :pnId :arg
 }
 
 # what one call argument's parameter asks of it -- taken, locked, viewed --
@@ -31878,25 +31952,12 @@ inferGenericCallSubs: function {
                         hi = hi + 1
                     }
                     if argFound.not then {
-                        an2T: zast.nameTextAt :ast ref: an2
-                        m3: "unknown argument '\{an2T}'"
-                        sug3: suggestSimilar :ast :st parentTypeId: funcId name: an2T.stringView
-                        h3: String
-                        if sug3.length > 0 then {
-                            hh3: "did you mean '\{sug3}'?"
-                            h3 = hh3
-                        }
-                        en3: String
-                        (addErrorH
+                        (reportUnknownArgument
                             :st
-                            nodeid: arg.nid
-                            lineno: arg.lineno
-                            colno: arg.colno
-                            e: zast.err.callError
-                            msg: m3
-                            note: en3
-                            hint: h3
-                            width: an2T.length.u32.orPanic
+                            :ast
+                            ownerTid: funcId
+                            label: an2
+                            :arg
                         )
                     }
                 } else {
