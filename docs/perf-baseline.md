@@ -174,6 +174,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-09-08 | a3f7168f | [the copy sweep: names borrowed where nobody keeps them](#r-copysweep) | 0.44s | -- | 95MB / -- | 105 / 172 / 178 (total 455) | 2,114,742 | 300MB | -- | 121,156 |
 | 2026-09-08 | 613e97e6 | [the A008 50-99 band, part 2 so far](#r-a008band5099) | 0.45s | -- | 95MB / -- | 116 / 171 / 180 (total 467) | 2,110,794 | 300MB | -- | 121,071 |
 | 2026-09-08 | 1d90390c | [the A008 50-99 band, part 3](#r-a008band5099c) | 0.45s | -- | 96MB / -- | 107 / 172 / 178 (total 457) | 2,119,516 | 300MB | -- | 121,794 |
+| 2026-09-08 | 91f4f805 | [the A008 50-99 band, part 4](#r-a008band5099d) | 0.45s | -- | 94MB / -- | 106 / 173 / 184 (total 463) | 2,127,824 | 301MB | -- | 122,407 |
 
 
 <a id="r-tokenarc"></a>
@@ -2871,3 +2872,69 @@ band either way.
 **What moved on the ratchets**: `A008 src/zemitterc.z` 132 -> 125,
 `A008 src/ztypecheck.z` 174 -> 168, `A005 src/zemitterc.z` 13 -> 9. Functions
 over the threshold tree-wide: 444 -> 431.
+
+<a id="r-a008band5099d"></a>
+
+### the A008 50-99 band, part 4 (2026-09-08, `a0d759d0` -> `91f4f805`)
+
+Twelve commits. One is a DEFECT fix and the rest are behaviour-preserving
+splits that finish the 50-99 band in the two scoped files: every function in it
+is now under the threshold except `collectLiterals` and `scanNeeds`, which are
+refused with their reason recorded. Functions over 15 tree-wide: 431 -> 414.
+
+Proved as every commit in this arc is -- the emitted C for all corpus programs
+and all three drivers byte-identical with both compilers over the same source,
+and for a checker change every diagnostic rendered for the 374 error fixtures
+unchanged as well.
+
+| | a0d759d0 | 91f4f805 |
+|---|---|---|
+| allocations | 2,127,608 | 2,127,608 |
+| instructions | 5,557.4M -- 5,559.7M | 5,561.9M -- 5,563.4M |
+| wall, best of 5 | 0.45s -- 0.46s | 0.44s -- 0.45s |
+| peak RSS | 94MB | 94MB |
+
+(Both compilers over the SAME tree, staged in one directory under equal-length
+names. The table row is each compiler on its own source.)
+
+**Allocations are IDENTICAL to the allocation on identical input.** That is the
+finding, and it is what makes every one of this batch's eleven baseline
+raises readable: each was measured the same way, by running the new compiler on the
+previous commit's source, and each read back the previous baseline exactly. The
+ratchet measures the compiler AND its input; the input grew by 613 lines of
+signatures, doc comments and calls, and the compiler's work did not move at
+all.
+
+**Instructions +0.08%**, consistent across alternating rounds and an order of
+magnitude above the run-to-run floor, so it is real: it is the call frames the
+splits introduce, on walks that run per node. Wall and RSS are flat.
+
+**The defect the batch opened with was found by probing the shape, not by a
+sweep.** A bare type name in value position is a zero-argument construction,
+and the compiler said so in its own diagnostic -- but only honoured it when the
+name WAS the type's registry name. An alias whose value instantiates a generic
+(`Strs: (List String)`) and any unit-qualified alias were silently accepted and
+written into the C verbatim, which gcc then rejected. Every fixture in the
+family used the one position that works, a bare name bound to a local, which a
+different emitter leg serves without a stamp. The lesson is the probe: the
+family's own table, one row per position and one column per type family, is
+what made the hole visible.
+
+**Two more defects surfaced and were fixed inside the same commit**, because
+the fix could not land without them: a collection instantiation's construction
+cannot be read from the declaration tree at all (its `create` member carries
+the substituted READ type, and the template's is resolved only on demand, so it
+reads as absent under `--eager`), and a unit-qualified read was classified as a
+BORROW, so the construction earned no cleanup entry and the list leaked.
+
+**A merge that takes one leg's ORDER verbatim can be wrong even when both legs
+are right.** Unifying the implicit zero-create moved `Bytes` in argument
+position from a working create to an emitter panic, because the dotted leg
+asked the typedef chase before the collection and a typedef over a collection
+names a base the chase cannot resolve. The corpus did not catch it: it binds
+`Bytes` and never passes it. Probing the shape did.
+
+**What moved on the ratchets**: `A008 src/zemitterc.z` 125 -> 116,
+`A008 src/ztypecheck.z` 168 -> 160, `A005 src/zemitterc.z` 9 -> 7,
+`A005 src/ztypecheck.z` 12 -> 10, `A001 src/zemitterc.z` 387 -> 386, and the
+emitter-guard's `userFnId` count 31 -> 30.
