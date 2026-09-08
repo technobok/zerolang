@@ -30058,6 +30058,184 @@ checkYieldCall: function {
     }
 }
 
+# reportReturnLabelledArg -- `return` is itself a call, so a LABELLED argument
+# binds to RETURN and not to the expression being returned: `return f a: 1`
+# hands `a: 1` to return and leaves `f` bare. Say that, and say it ONCE --
+# walking the arguments as return values instead blames the bare callee for the
+# argument it was denied and then the return type for the function value,
+# neither of which names the real mistake. True when one was reported, which is
+# the caller's cue not to walk them as values.
+reportReturnLabelledArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    call: callref
+} out bool is {
+    rLbl: false
+    kLIter: u64
+    for kLIter < call.nargs loop {
+        lArgId: (zast.callArgAt :ast nid: call.nid i: kLIter).u32
+        kLIter = kLIter + 1
+        lArg: argRefAt :ast nid: (zast.nodeid.create from: lArgId.u32)
+        if lArg.nid.isZero.not when lArg.name.isZero.not when rLbl.not then {
+            rLbl = true
+            lNm: zast.poolTextAt pool: ast.names ref: lArg.name
+            lMsg: "'return' has no argument '\{lNm}'"
+            lNote: "'return' is itself a call, so a labelled argument binds to it".string
+            lHint: "wrap the returned call in parentheses so '\{lNm}:' binds to it"
+            (addErrorH
+                :st
+                nodeid: lArg.nid
+                lineno: lArg.lineno
+                colno: lArg.colno
+                e: zast.err.callError
+                msg: lMsg
+                note: lNote
+                hint: lHint
+                width: lNm.length.u32.orPanic
+            )
+        }
+    }
+    return rLbl
+}
+
+# reportReturnedBareField -- a bare field read returned as an owned result: the
+# owner still frees it, so returning it hands the caller a second owner of the
+# same storage.
+reportReturnedBareField: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arg: argref
+} is {
+    if st.typing.currentReturnsBorrow then return
+    bfn: returnedBareFieldName :ast :st nid: arg.operation
+    if bfn.length == 0 then return
+    mbf: "Cannot return field '\{bfn}' as a bare read — the owner still frees it; return '\{bfn}.copy' (duplicate) or '\{bfn}.take' (move out)"
+    (addError
+        :st
+        nodeid: (nodeId n: (ast.nodes.get i: arg.operation.u64))
+        lineno: (nodeLine n: (ast.nodes.get i: arg.operation.u64))
+        colno: (nodeCol n: (ast.nodes.get i: arg.operation.u64))
+        e: zast.err.ownerError
+        msg: mbf
+    )
+}
+
+# recordReturnedOwnedLocal -- a returned owned local is CONSUMED: record the
+# transfer so L022 does not offer a view for it. A BORROWED source returned as
+# an owned result is refused on the way: it aliases storage the caller still
+# frees, and both bindings destroy it. Parameters borrow by default and a
+# receiver is always borrowed, so the bare name is the whole tell. A DESTRUCTOR
+# is what makes it a double free -- a StringView is a reftype too, but it is a
+# fat pointer with no owned interior, and copying one frees nothing.
+recordReturnedOwnedLocal: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arg: argref
+    argT: ztypes.tid
+} is {
+    if argT.isZero then return
+    if (typeIsReftype :st tid: argT).not then return
+    rbnId: bareAtomNameId :ast n: (ast.nodes.get i: arg.operation.u64)
+    if rbnId.isZero then return
+    rvv: st.lookupVarId nameId: rbnId
+    rvid: ztypes.vid
+    match (
+        rvv
+    ) case some then {
+        rvid = rvv
+    } case none then null
+    if rvid.isZero then return
+    if (st.reg.needsDestructor typeId: argT
+    ) when st.typing.currentReturnsBorrow.not when (isBorrowedVar
+        :st
+        vid: rvid
+    ) then {
+        rbNm: zast.nameTextAt :ast ref: rbnId
+        mbr: "Cannot return borrowed variable '\{rbNm}' as an owned result — the caller still owns it; return '\{rbNm}.copy' (duplicate), declare the source '.take' (transfer ownership in), or declare the return '.borrow'"
+        (addError
+            :st
+            nodeid: (nodeId n: (ast.nodes.get i: arg.operation.u64))
+            lineno: (nodeLine n: (ast.nodes.get i: arg.operation.u64))
+            colno: (nodeCol n: (ast.nodes.get i: arg.operation.u64))
+            e: zast.err.ownerError
+            msg: mbr
+        )
+    }
+    st.typing.variableMoved.add item: rvid
+}
+
+# checkReturnTypeMatch -- the returned value against what the enclosing
+# function declares. In a GENERATOR the declared return is the synthesised
+# `.call` wrapper, a type the program never wrote and cannot satisfy, so naming
+# it would blame the compiler's own machinery for the user's mistake -- which
+# is that a generator produces values by yielding them.
+checkReturnTypeMatch: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arg: argref
+    argT: ztypes.tid
+} is {
+    expR: st.typing.currentReturnTypeId
+    if expR.isZero then return
+    if argT.isZero then return
+    if (typesCompatible :ast :st a: argT b: expR) then return
+    en: st.reg.nameOf tid: expR
+    an: st.reg.nameOf tid: argT
+    m4: "return type mismatch: function expects \{en}, got \{an}"
+    n4: String
+    h4: String
+    if (yieldIsInScope :st) then {
+        m4 = "a generator returns no value".string
+        n4 = "the values a generator produces come from `yield`; its declared `out` type is the Iterator protocol, not the type of this expression".string
+        h4 = "yield the value instead, or use a bare `return` to end the iteration".string
+    }
+    (addErrorH
+        :st
+        nodeid: (nodeId n: (ast.nodes.get i: arg.operation.u64))
+        lineno: (nodeLine n: (ast.nodes.get i: arg.operation.u64))
+        colno: (nodeCol n: (ast.nodes.get i: arg.operation.u64))
+        e: zast.err.typeError
+        msg: m4
+        note: n4
+        hint: h4
+        width: 1
+    )
+}
+
+# checkReturnedValue -- one value handed to `return`: its own type, then every
+# question the enclosing function's declaration asks of it.
+checkReturnedValue: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    arg: argref
+} is {
+    errR: st.typing.errors.length
+    argT: (checkValueAt :st :unitDecl :ast nid: arg.operation)
+    # A returned value that typed to nothing and raised nothing is an
+    # unresolvable name -- but ONLY where this walk knows the enclosing
+    # function's return type. Some bodies reach here degenerate (zlexer's
+    # create/acceptAny: return type unknown, the local's own binding never
+    # registered a scope entry), and there the scope cannot answer whether a
+    # name is in scope. currentReturnTypeId is exactly the condition under
+    # which the return-type check below already runs.
+    if argT.u64 == 0 when st.typing.errors.length == errR when (
+        st.typing.currentReturnTypeId > 0
+    ) then {
+        (reportUnresolvedValue
+            :st
+            :unitDecl
+            :ast
+            nid: arg.operation
+        )
+    }
+    reportReturnedBareField :st :ast :arg
+    recordReturnedOwnedLocal :st :ast :arg :argT
+    checkReturnRooting :st :ast :arg :argT
+    checkReturnCarries :st :ast :arg :argT
+    checkReturnTypeMatch :st :ast :arg :argT
+}
+
 # checkControlBuiltinCall -- `return`, and the control builtins that share its
 # shape: check the value against what the enclosing function declares, and
 # stamp the call with the type it yields.
@@ -30076,157 +30254,15 @@ checkControlBuiltinCall: function {
         stampGate :st nid: calid.u64 tid: (ztypes.tid.create from: rtOpt.u64)
     } case none then null
     st.typing.callKind.set key: call.nid.u64 value: zast.callkind.returnCall
-    # `return` is itself a call, so a LABELLED argument binds to RETURN,
-    # not to the expression being returned: `return f a: 1` hands `a: 1`
-    # to return and leaves `f` bare. Say that, and say it once -- walking
-    # the arguments as return values instead blames the bare callee for
-    # the argument it was denied and then the return type for the
-    # function value, neither of which names the real mistake.
-    rLbl: false
-    {
-        kLIter: u64
-        for kLIter < call.nargs loop {
-            lArgId: (zast.callArgAt :ast nid: call.nid i: kLIter).u32
-            kLIter = kLIter + 1
-            lArg: argRefAt :ast nid: (zast.nodeid.create from: lArgId.u32)
-            if lArg.nid.isZero.not when lArg.name.isZero.not when rLbl.not then {
-                rLbl = true
-                lNm: zast.poolTextAt pool: ast.names ref: lArg.name
-                lMsg: "'return' has no argument '\{lNm}'"
-                lNote: "'return' is itself a call, so a labelled argument binds to it".string
-                lHint: "wrap the returned call in parentheses so '\{lNm}:' binds to it"
-                (addErrorH
-                    :st
-                    nodeid: lArg.nid
-                    lineno: lArg.lineno
-                    colno: lArg.colno
-                    e: zast.err.callError
-                    msg: lMsg
-                    note: lNote
-                    hint: lHint
-                    width: lNm.length.u32.orPanic
-                )
-            }
-        }
-    }
-    if rLbl.not then {
+    if (reportReturnLabelledArg :st :ast :call).not then {
         kAiter: u64
         for kAiter < call.nargs loop {
             argId: (zast.callArgAt :ast nid: call.nid i: kAiter).u32
             kAiter = kAiter + 1
             arg: argRefAt :ast nid: (zast.nodeid.create from: argId.u32)
-            if arg.nid.isZero.not then {
-                errR: st.typing.errors.length
-                argT: (checkValueAt :st :unitDecl :ast nid: arg.operation)
-                # A returned value that typed to nothing and raised nothing is
-                # an unresolvable name -- but ONLY where this walk knows the
-                # enclosing function's return type. Some bodies reach here
-                # degenerate (zlexer's create/acceptAny: return type unknown,
-                # the local's own binding never registered a scope entry), and
-                # there the scope cannot answer whether a name is in scope.
-                # currentReturnTypeId is exactly the condition under which the
-                # return-type check below already runs.
-                if argT.u64 == 0 when st.typing.errors.length == errR when (
-                    st.typing.currentReturnTypeId > 0
-                ) then {
-                    (reportUnresolvedValue
-                        :st
-                        :unitDecl
-                        :ast
-                        nid: arg.operation
-                    )
-                }
-                bfn: returnedBareFieldName :ast :st nid: arg.operation
-                if st.typing.currentReturnsBorrow then bfn = "".string
-                if bfn.length > 0 then {
-                    mbf: "Cannot return field '\{bfn}' as a bare read — the owner still frees it; return '\{bfn}.copy' (duplicate) or '\{bfn}.take' (move out)"
-                    bfid: nodeId n: (ast.nodes.get i: arg.operation.u64)
-                    bfln: nodeLine n: (ast.nodes.get i: arg.operation.u64)
-                    bfcl: nodeCol n: (ast.nodes.get i: arg.operation.u64)
-                    (addError
-                        :st
-                        nodeid: bfid
-                        lineno: bfln
-                        colno: bfcl
-                        e: zast.err.ownerError
-                        msg: mbf
-                    )
-                }
-                # a returned owned local is CONSUMED: record the
-                # transfer so L022 does not offer a view for it
-                rbnId: bareAtomNameId :ast n: (ast.nodes.get i: arg.operation.u64)
-                if rbnId.isZero.not when argT > 0 when (typeIsReftype :st tid: argT) then {
-                    rvv: st.lookupVarId nameId: rbnId
-                    match (
-                        rvv
-                    ) case some then {
-                        # a BORROWED source returned as an owned result aliases
-                        # storage the caller still frees -- both bindings destroy
-                        # it. Parameters borrow by default and a receiver is
-                        # always borrowed, so the bare name is the whole tell.
-                        # A DESTRUCTOR is what makes it a double free: a
-                        # StringView is a reftype too, but it is a fat pointer
-                        # with no owned interior, and copying one frees nothing.
-                        ownsRb: st.reg.needsDestructor typeId: argT
-                        if ownsRb when st.typing.currentReturnsBorrow.not when (isBorrowedVar
-                            :st
-                            vid: rvv
-                        ) then {
-                            rbNm: zast.nameTextAt :ast ref: rbnId
-                            mbr: "Cannot return borrowed variable '\{rbNm}' as an owned result — the caller still owns it; return '\{rbNm}.copy' (duplicate), declare the source '.take' (transfer ownership in), or declare the return '.borrow'"
-                            rbid: nodeId n: (ast.nodes.get i: arg.operation.u64)
-                            rbln: nodeLine n: (ast.nodes.get i: arg.operation.u64)
-                            rbcl: nodeCol n: (ast.nodes.get i: arg.operation.u64)
-                            (addError
-                                :st
-                                nodeid: rbid
-                                lineno: rbln
-                                colno: rbcl
-                                e: zast.err.ownerError
-                                msg: mbr
-                            )
-                        }
-                        st.typing.variableMoved.add item: rvv
-                    } case none then null
-                }
-                checkReturnRooting :st :ast :arg :argT
-                checkReturnCarries :st :ast :arg :argT
-                expR: st.typing.currentReturnTypeId
-                if expR > 0 when argT > 0 when (typesCompatible :ast :st a: argT b: expR).not then {
-                    en: st.reg.nameOf tid: expR
-                    an: st.reg.nameOf tid: argT
-                    m4: "return type mismatch: function expects \{en}, got \{an}"
-                    n4: String
-                    h4: String
-                    # in a generator the declared return is the synthesised
-                    # `.call` wrapper -- a type the program never wrote and
-                    # cannot satisfy. Naming it blames the compiler's own
-                    # machinery for the user's mistake, which is that a
-                    # generator produces values by yielding them.
-                    if (yieldIsInScope :st) then {
-                        m4 = "a generator returns no value".string
-                        n4 = "the values a generator produces come from `yield`; its declared `out` type is the Iterator protocol, not the type of this expression".string
-                        h4 = "yield the value instead, or use a bare `return` to end the iteration".string
-                    }
-                    rvid: nodeId n: (ast.nodes.get i: arg.operation.u64)
-                    rvln: nodeLine n: (ast.nodes.get i: arg.operation.u64)
-                    rvcl: nodeCol n: (ast.nodes.get i: arg.operation.u64)
-                    (addErrorH
-                        :st
-                        nodeid: rvid
-                        lineno: rvln
-                        colno: rvcl
-                        e: zast.err.typeError
-                        msg: m4
-                        note: n4
-                        hint: h4
-                        width: 1
-                    )
-                }
-            }
+            if arg.nid.isZero.not then checkReturnedValue :st :unitDecl :ast :arg
         }
     }
-
     nvOpt: walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: "never"
     match (
         nvOpt
@@ -31759,6 +31795,154 @@ checkDottedCallableCall: function {
 }
 
 
+# calleekind -- what a bare callee's resolved id turns out to be, and which of
+# the call shapes it takes.
+calleekind: record {
+    # the resolved definition id, 0 when the name resolved to nothing
+    fid: ztypes.tid
+    # a non-generic user function, or a construction
+    isUser: bool
+    # a generic callee, whose call infers a clone
+    isGen: bool
+    # a construction rather than a function call
+    isCtor: bool
+    # the registry holds no row for the id, so nothing can be said about it
+    unknown: bool
+}
+
+# checkSpecialFormCall -- the two callable SHAPES that are not a name: a
+# parenthesized construction in callable position, which re-applies its init
+# arguments so the value is the constructed type, and `meta.create` inside the
+# type's own methods. Unhandled when the callable is neither.
+checkSpecialFormCall: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    call: callref
+} out callleg is {
+    # the callable's shape, read through a view scoped to this block: the legs
+    # below lend ast
+    isWrapCall: false
+    {
+        wrapN: ast.nodes.get i: call.callable.u64
+        isWrapCall = wrapN.expression
+    }
+    if isWrapCall then {
+        wres: checkWrappedCall :st :unitDecl :ast :call
+        if wres.isZero.not then return (callleg handled: true tid: wres)
+    }
+    mcb: metaCreateBaseId :ast n: (ast.nodes.get i: call.callable.u64)
+    mcid: u32
+    match (
+        mcb
+    ) case some then {
+        mcid = mcb
+    } case none then null
+    if mcid > 0 when st.typing.currentThisTid.isZero.not then {
+        mcres: checkMetaCreateCall :st :unitDecl :ast :call :mcid
+        if mcres.isZero.not then return (callleg handled: true tid: mcres)
+    }
+    return (callleg handled: false tid: ztypes.tid)
+}
+
+# bareCalleeKind -- resolve a bare callee NAME and say what it is. The resolved
+# id names the definition wherever it lives, so a callee in another unit is
+# walked at its call site like a local one -- the name-keyed trigger it
+# replaced could only ever find same-unit definitions, because it looked the
+# name up in the unit being walked.
+bareCalleeKind: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    call: callref
+    cnId: zast.nameid
+} out calleekind is {
+    funcId: ztypes.tid
+    if cnId.isZero.not then funcId = bareCalleeTid :st :unitDecl :ast :call :cnId
+    if funcId > 0 then walkDefinitionById :st :ast tid: funcId
+    # inside a unit mono's instance walk, a bare callee naming a TEMPLATE
+    # member is the MONO's member: the same definition with the argument
+    # substitution applied to its parameters and return
+    if funcId > 0 when st.typing.curMonoStamp > 0 then {
+        funcId = (monoMemberOf
+            :st
+            templateFnTid: funcId
+            nameId: cnId
+        )
+    }
+    if funcId.isZero then {
+        return (calleekind fid: funcId isUser: false isGen: false isCtor: false unknown: false)
+    }
+    if funcId >= st.reg.typeById.length then {
+        return (calleekind fid: funcId isUser: false isGen: false isCtor: false unknown: true)
+    }
+    zo: st.reg.typeById.get i: funcId
+    if zo.isgeneric then {
+        return (calleekind fid: funcId isUser: false isGen: true isCtor: false unknown: false)
+    }
+    isCtor: zo.typetype != ztypes.ztypetype.functionType
+    return (calleekind fid: funcId isUser: true isGen: false :isCtor unknown: false)
+}
+
+# checkRegularCall -- a call that is neither `return` nor `yield`. A dotted
+# callable resolves through the dotted-path walk first; an unresolved member
+# bails with the args unwalked. A bare-name callable: a non-generic user
+# function pushes a call scope and resolves to its return type, a generic
+# callee (print) infers a clone, and an unresolvable one just has its args
+# walked -- its callable, result and mono are outside the own+system+
+# collections filter.
+checkRegularCall: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    call: callref
+    cnId: zast.nameid
+} out ztypes.tid is {
+    sleg: checkSpecialFormCall :st :unitDecl :ast :call
+    if sleg.handled then return sleg.tid
+    result: ztypes.tid
+    dro: callableDottedResultAt :st :unitDecl :ast nid: call.callable
+    match (
+        dro
+    ) case some then {
+        dleg: checkDottedCallableCall :st :unitDecl :ast :call :dro
+        if dleg.handled then return dleg.tid
+        result = dleg.tid
+    } case none then null
+    ck: bareCalleeKind :st :unitDecl :ast :call :cnId
+    if ck.unknown then return result
+    tdb0: u64
+    if ck.isCtor then tdb0 = typedefBaseOf :st tid: ck.fid
+    if tdb0 > 0 then return (checkTypedefCreate
+        :st
+        :unitDecl
+        :ast
+        :call
+        tdId: ck.fid
+    )
+    if ck.isUser then {
+        return (checkUserFnCall
+            :st
+            :unitDecl
+            :ast
+            :call
+            funcId: ck.fid
+            isCtor: ck.isCtor
+            :cnId
+        )
+    }
+    nleg: (checkNonUserCall
+        :st
+        :unitDecl
+        :ast
+        :call
+        funcId: ck.fid
+        isGen: ck.isGen
+        :cnId
+    )
+    return nleg.tid
+}
+
 # checkCall -- type a call. C1 handles the `return <value>` control-flow form:
 # stamp the callable atom with return's type, mark the call RETURN, walk the
 # return value, and resolve the call to `never`. Other call kinds land later.
@@ -31768,108 +31952,15 @@ checkCall: function {
     ast: Ast
     call: callref
 } out ztypes.tid is {
-    result: ztypes.tid
     st.typing.callKind.set key: call.nid.u64 value: zast.callkind.unknown
     cnId: atomNameId :ast n: (ast.nodes.get i: call.callable.u64)
     if cnId == zast.names.wkReturn then {
-        result = checkControlBuiltinCall :st :unitDecl :ast :call
-    } else if cnId == zast.names.wkYield when (yieldIsInScope :st) then {
-        result = checkYieldCall :st :unitDecl :ast :call
-    } else {
-        # A regular call. A dotted callable resolves through the dotted-path
-        # walk first; an unresolved member bails with the args unwalked. A
-        # bare-name callable: a non-generic user function pushes a call scope
-        # and resolves to its return type; a generic callee (e.g. print) infers
-        # a clone; an unresolvable callable just has its args walked (its
-        # callable/result/mono are out of the own+system+collections filter).
-        # A parenthesized construction in callable position re-applies its
-        # init arguments: the value is the constructed type.
-        # the callable's shape, read through a view scoped to this block:
-        # the legs below lend ast
-        isWrapCall: false
-        {
-            wrapN: ast.nodes.get i: call.callable.u64
-            isWrapCall = wrapN.expression
-        }
-        if isWrapCall then {
-            wres: checkWrappedCall :st :unitDecl :ast :call
-            if wres.isZero.not then return wres
-        }
-        mcb: metaCreateBaseId :ast n: (ast.nodes.get i: call.callable.u64)
-        mcid: u32
-        match (
-            mcb
-        ) case some then {
-            mcid = mcb
-        } case none then null
-        if mcid > 0 when st.typing.currentThisTid.isZero.not then {
-            mcres: checkMetaCreateCall :st :unitDecl :ast :call :mcid
-            if mcres.isZero.not then return mcres
-        }
-        dro: callableDottedResultAt :st :unitDecl :ast nid: call.callable
-        match (
-            dro
-        ) case some then {
-            dleg: checkDottedCallableCall :st :unitDecl :ast :call :dro
-            if dleg.handled then return dleg.tid
-            result = dleg.tid
-        } case none then null
-        funcId: ztypes.tid
-        if cnId.isZero.not then funcId = bareCalleeTid :st :unitDecl :ast :call :cnId
-        # the resolved id names the definition wherever it lives, so a callee in
-        # another unit is walked at its call site like a local one. The
-        # name-keyed trigger could only ever find same-unit definitions: it
-        # looked `cn` up in the unit being walked.
-        if funcId > 0 then walkDefinitionById :st :ast tid: funcId
-        # inside a unit mono's instance walk, a bare callee naming a TEMPLATE
-        # member is the MONO's member: the same definition with the argument
-        # substitution applied to its parameters and return
-        if funcId > 0 when st.typing.curMonoStamp > 0 then {
-            funcId = (monoMemberOf
-                :st
-                templateFnTid: funcId
-                nameId: cnId
-            )
-        }
-        isUser: false
-        isGen: false
-        isCtor: false
-        if funcId > 0 then {
-            if funcId >= st.reg.typeById.length then return result
-            zo: st.reg.typeById.get i: funcId
-            if zo.isgeneric then {
-                isGen = true
-            } else {
-                isUser = true
-                if zo.typetype != ztypes.ztypetype.functionType then isCtor = true
-            }
-        }
-        tdb0: u64
-        if isCtor then tdb0 = typedefBaseOf :st tid: funcId
-        if tdb0 > 0 then return (checkTypedefCreate
-            :st
-            :unitDecl
-            :ast
-            :call
-            tdId: funcId
-        )
-        if isUser then {
-            result = checkUserFnCall :st :unitDecl :ast :call :funcId :isCtor :cnId
-        } else {
-            nleg: (checkNonUserCall
-                :st
-                :unitDecl
-                :ast
-                :call
-                :funcId
-                :isGen
-                :cnId
-            )
-            if nleg.handled then return nleg.tid
-            result = nleg.tid
-        }
+        return (checkControlBuiltinCall :st :unitDecl :ast :call)
     }
-    return result
+    if cnId == zast.names.wkYield when (yieldIsInScope :st) then {
+        return (checkYieldCall :st :unitDecl :ast :call)
+    }
+    return (checkRegularCall :st :unitDecl :ast :call :cnId)
 }
 
 # healGenericReturn -- a generic-instance return (`out (optionval t: u64)`) has no
@@ -32005,6 +32096,107 @@ bindOneGenericParam: function {
     }
 }
 
+# holderslot -- which generic-parameter HOLDER an argument binds, and which
+# declared parameter slot it took.
+holderslot: record {
+    # the generic parameter the argument's declared type names. 0 when that
+    # type name was never interned (a minted mono like `ListRef_String`): it
+    # binds no generic parameter, which is not the same as an unknown label
+    holder: zast.nameid
+    # the declared parameter's index; the holder list's length when no
+    # parameter matched
+    slot: u64
+}
+
+# isGenericParamLabel -- the argument's label names one of the template's own
+# generic parameters, which is what makes it an explicit TYPE argument rather
+# than a value.
+isGenericParamLabel: function {
+    gparams: (ListVal zast.nameid).view
+    label: zast.nameid
+} out bool is {
+    found: false
+    tgi: gparams.iterate
+    for gp2: tgi loop {
+        if label == gp2 then found = true
+    }
+    return found
+}
+
+# bindExplicitTypeArg -- an explicit type argument binds its parameter to the
+# type its value names.
+bindExplicitTypeArg: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    arg: argref
+    subs: (IdMapV zast.nameid v: u64)
+} is {
+    tn3: (zast.nameTextCopy
+        :ast
+        ref: (atomNameId :ast n: (ast.nodes.get i: arg.operation.u64))
+    )
+    to3: (walkLookupTyperef
+        :st
+        frame: st.curFrame
+        :ast
+        :unitDecl
+        base: tn3.stringView
+    )
+    match (
+        to3
+    ) case some then {
+        sv: to3
+        subs.set key: arg.name value: sv
+    } case none then null
+}
+
+# argHolderSlot -- the declared parameter an argument binds: a LABEL names one,
+# and an unlabelled argument takes the next positional slot. A label naming no
+# parameter is reported here, which is the one place holding the owner to name
+# it against.
+argHolderSlot: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arg: argref
+    funcId: ztypes.tid
+    pNames: (ListVal zast.nameid).view
+    pHolders: (ListVal zast.nameid).view
+    pHolderIds: (ListVal u64).view
+    posIdx: u64
+} out holderslot is {
+    holder: zast.nameid
+    slotIx9: pHolderIds.length
+    if arg.name.isZero then {
+        if posIdx < pHolders.length then {
+            holder = pHolders.get i: posIdx
+            slotIx9 = posIdx
+        }
+        return (holderslot :holder slot: slotIx9)
+    }
+    argFound: false
+    hi: u64
+    hn2: pNames.length
+    for hi < hn2 loop {
+        if (pNames.get i: hi) == arg.name then {
+            holder = pHolders.get i: hi
+            slotIx9 = hi
+            argFound = true
+        }
+        hi = hi + 1
+    }
+    if argFound.not then {
+        (reportUnknownArgument
+            :st
+            :ast
+            ownerTid: funcId
+            label: arg.name
+            :arg
+        )
+    }
+    return (holderslot :holder slot: slotIx9)
+}
+
 # inferGenericCallSubs -- read one call's arguments into the generic-parameter
 # substitutions: an explicit type argument names its parameter, a value argument
 # infers from the type it walks to, and a positional one binds by index.
@@ -32026,89 +32218,45 @@ inferGenericCallSubs: function {
         argId: (zast.callArgAt :ast nid: call.nid i: kAiter).u32
         kAiter = kAiter + 1
         arg: argRefAt :ast nid: (zast.nodeid.create from: argId.u32)
-        if arg.nid.isZero.not then {
-            an2: arg.name
-            isTypeArg: false
-            tgi: gparams.iterate
-            for gp2: tgi loop {
-                if an2 == gp2 then isTypeArg = true
-            }
-            if isTypeArg then {
-                tn3: (zast.nameTextCopy
-                    :ast
-                    ref: (atomNameId :ast n: (ast.nodes.get i: arg.operation.u64))
-                )
-                to3: (walkLookupTyperef
-                    :st
-                    frame: st.curFrame
-                    :ast
-                    :unitDecl
-                    base: tn3.stringView
-                )
-                match (
-                    to3
-                ) case some then {
-                    sv: to3
-                    subs.set key: an2 value: sv
-                } case none then null
-            } else {
-                avt: (checkValueAt :st :unitDecl :ast nid: arg.operation)
-                mat: materialiseLiteral :ast :st :unitDecl t: avt
-                holder: zast.nameid
-                slotIx9: pHolderIds.length
-                # a holder of 0 is a parameter whose type name the pool never
-                # interned (a minted mono like `ListRef_String`): it binds no
-                # generic parameter, which is not the same as an unknown label
-                argFound: false
-                if an2.isZero.not then {
-                    hi: u64
-                    hn2: pNames.length
-                    for hi < hn2 loop {
-                        if (pNames.get i: hi) == an2 then {
-                            holder = pHolders.get i: hi
-                            slotIx9 = hi
-                            argFound = true
-                        }
-                        hi = hi + 1
-                    }
-                    if argFound.not then {
-                        (reportUnknownArgument
-                            :st
-                            :ast
-                            ownerTid: funcId
-                            label: an2
-                            :arg
-                        )
-                    }
-                } else {
-                    if posIdx < pHolders.length then {
-                        holder = pHolders.get i: posIdx
-                        slotIx9 = posIdx
-                    }
-                }
-                posIdx = posIdx + 1
-                # a composite parameter buries the template's parameter name one
-                # or more levels down, so there is no holder to read: unify the
-                # declared partial against the argument's own arguments instead
-                if slotIx9 < pHolderIds.length when mat > 0 then {
-                    (bindPartialParamSubs
-                        :st
-                        :ast
-                        :gparams
-                        paramTid: (pHolderIds.get i: slotIx9)
-                        argTid: mat.u64
-                        :subs
-                    )
-                }
-                if holder.isZero.not when mat > 0 then {
-                    hgot: subs.get key: holder
-                    match (
-                        hgot
-                    ) case some then null case none then {
-                        sv2: mat
-                        subs.set key: holder value: sv2
-                    }
-                }
+        if arg.nid.isZero then continue
+        if (isGenericParamLabel :gparams label: arg.name) then {
+            bindExplicitTypeArg :st :unitDecl :ast :arg :subs
+            continue
+        }
+        avt: (checkValueAt :st :unitDecl :ast nid: arg.operation)
+        mat: materialiseLiteral :ast :st :unitDecl t: avt
+        hs: (argHolderSlot
+            :st
+            :ast
+            :arg
+            :funcId
+            :pNames
+            :pHolders
+            :pHolderIds
+            :posIdx
+        )
+        posIdx = posIdx + 1
+        # a composite parameter buries the template's parameter name one or
+        # more levels down, so there is no holder to read: unify the declared
+        # partial against the argument's own arguments instead
+        if hs.slot < pHolderIds.length when mat > 0 then {
+            (bindPartialParamSubs
+                :st
+                :ast
+                :gparams
+                paramTid: (pHolderIds.get i: hs.slot)
+                argTid: mat.u64
+                :subs
+            )
+        }
+        # FIRST WRITE WINS: a parameter already bound keeps what bound it
+        if hs.holder.isZero.not when mat > 0 then {
+            hgot: subs.get key: hs.holder
+            match (
+                hgot
+            ) case some then null case none then {
+                sv2: mat
+                subs.set key: hs.holder value: sv2
             }
         }
     }
