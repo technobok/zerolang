@@ -3022,6 +3022,42 @@ Analysis: class {
         }
     }
 
+    # paramIndexByLabel -- the index of the parameter named `label` among
+    # `names`, or none.
+    paramIndexByLabel: function {
+        this: this.view
+        names: (List String).view
+        label: StringView
+    } out optionval u64 is {
+        pi: u64
+        for pi < names.length loop {
+            if (names.get i: pi).stringView == label then return (optionval.some pi)
+            pi = pi + 1
+        }
+        return (optionval.none u64)
+    }
+
+    # firstNonReceiverParam -- the index of the first parameter that is not the
+    # receiver -- `this`, or the type's recorded receiver name -- or none: the
+    # parameter an elided first label binds.
+    firstNonReceiverParam: function {
+        this: this.view
+        names: (List String).view
+        nameIds: (ListVal u64).view
+        thisPn: StringView
+    } out optionval u64 is {
+        pj: u64
+        for pj < names.length loop {
+            isRecv: (
+                ((nameIds.get i: pj) == zast.names.wkThis.u64) or
+                ((thisPn.length > 0) and (thisPn == (names.get i: pj).stringView))
+            )
+            if isRecv.not then return (optionval.some pj)
+            pj = pj + 1
+        }
+        return (optionval.none u64)
+    }
+
     # slConvCall -- L015 over one call: resolve the callee's template and
     # check each argument's conversion shape against its parameter.
     slConvCall: function {
@@ -3032,16 +3068,8 @@ Analysis: class {
         arguments: zast.kidspan
         st: zenv.ZSymbolTable
     } is {
-        isRet: false
-        {
-            ck: st.typing.callKind.get key: callNid.u64
-            match (
-                ck
-            ) case some then {
-                if ck.returnCall then isRet = true
-            } case none then null
-        }
-        if isRet then return
+        ck: st.typing.callKind.get key: callNid.u64
+        if ck.some when ck.returnCall then return
         callee: u64
         {
             cInfo: nodeInfoOf n: callable
@@ -3054,12 +3082,11 @@ Analysis: class {
             ztypes.ztypetype.functionType
         ) then return
         origin: callee
-        thisPn: String
         {
             go: st.reg.genericOriginOf tid: (ztypes.tid.create from: callee.u64)
             if go > 0 then origin = go
         }
-        thisPn = (zast.poolTextCopy
+        thisPn: (zast.poolTextAt
             pool: ast.names
             ref: (st.reg.thisParamNameIdOf tid: (ztypes.tid.create from: origin.u64))
         )
@@ -3083,55 +3110,28 @@ Analysis: class {
             aId: zast.kidAt kids: ast.kids span: arguments i: h5x9
             h5x9 = h5x9 + 1
             arg: ast.nodes.get i: aId.u64
-            if arg.namedoperation then {
-                an: zast.nameTextAt :ast ref: arg.name
-                pidx: u64
-                pfound: false
-                if an.length > 0 then {
-                    pi: u64
-                    for pi < names.length loop {
-                        if pfound.not then {
-                            pnm: names.get i: pi
-                            if pnm.stringView == an.stringView then {
-                                pidx = pi
-                                pfound = true
-                            }
-                        }
-                        pi = pi + 1
-                    }
-                } else if firstArg then {
-                    # the elided first label binds the first non-receiver param
-                    pj: u64
-                    for pj < names.length loop {
-                        if pfound.not then {
-                            pnm9b: names.get i: pj
-                            isRecv: (
-                                ((nameIds.get i: pj) == zast.names.wkThis.u64) or
-                                ((thisPn.length > 0) and (thisPn.stringView == pnm9b.stringView))
-                            )
-                            if isRecv.not then {
-                                pidx = pj
-                                pfound = true
-                            }
-                        }
-                        pj = pj + 1
-                    }
-                }
-                if pfound then {
-                    pnmc: (names.get i: pidx)
-                    (this.slConvArg
-                        :ast
-                        opId: arg.operation
-                        originTid: (ztypes.tid.create from: origin.u64)
-                        pname: pnmc.stringView
-                        ptid: (ids.get i: pidx)
-                        :strTid
-                        :svTid
-                        :st
-                    )
-                }
-                firstArg = false
+            if arg.namedoperation.not then continue
+            an: zast.nameTextAt :ast ref: arg.name
+            pidx: optionval.none u64
+            if an.length > 0 then {
+                pidx = this.paramIndexByLabel :names label: an.stringView
+            } else if firstArg then {
+                # the elided first label binds the first non-receiver param
+                pidx = this.firstNonReceiverParam :names :nameIds thisPn: thisPn.stringView
             }
+            firstArg = false
+            if pidx.none then continue
+            pnmc: (names.get i: pidx)
+            (this.slConvArg
+                :ast
+                opId: arg.operation
+                originTid: (ztypes.tid.create from: origin.u64)
+                pname: pnmc.stringView
+                ptid: (ids.get i: pidx)
+                :strTid
+                :svTid
+                :st
+            )
         }
     }
 
