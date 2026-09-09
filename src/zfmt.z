@@ -86,6 +86,16 @@ gapdocs: record {
     hasComment: bool
 }
 
+# argdoc -- what argDoc answers for one kid of a call
+argdoc: record {
+    # the argument's doc, 0 when the kid is not an argument
+    doc: u32
+    # its trailing comment doc, 0 when none
+    trailing: u32
+    # whether it forces the argument list to break
+    forced: bool
+}
+
 # a builder over one source: the tree, the token cursor and the document
 Builder: class {
     # the tree being printed
@@ -992,102 +1002,44 @@ Builder: class {
         :this id: zast.nodeid inParens: bool remaining: u32 owned: u32
     } out u32 is {
         n: this.node :id
-        callable: u32
+        if n.call.not then return 0
+        callable: (this.visitValueB
+            id: n.callable
+            slot: slotKeep
+            wrapped: false
+            :remaining
+            :owned
+        )
         args: ListVal u32
         trails: ListVal u32
         forced: false
-        match (
-            n
-        ) case call then {
-            callable = (this.visitValueB
-                id: n.callable
-                slot: slotKeep
-                wrapped: false
-                :remaining
-                :owned
-            )
-            i: u64
-            for i < n.arguments.count.u64 loop {
-                aid: this.kid span: n.arguments :i
-                i = i + 1
-                a: this.node id: aid
-                match (
-                    a
-                ) case namedoperation then {
-                    g: this.gapDocs cap: 0
-                    if i == 1 when g.marker when this.keepMarkers then forced = true
-                    if g.hasComment then forced = true
-                    trails.append g.trailing
-                    one: ListVal u32
-                    if g.lead > 0 then one.append g.lead
-                    if a.name.isZero then {
-                        one.append (this.visitValue id: a.operation slot: slotArg wrapped: false)
-                    } else {
-                        op: this.node id: a.operation
-                        match (
-                            op
-                        ) case labelvalue then {
-                            one.append (this.tokShorthand name: a.name)
-                        } else {
-                            one.append (this.tokLabel name: a.name)
-                            one.append (this.visitValue
-                                id: a.operation
-                                slot: slotArgLabelled
-                                wrapped: false
-                            )
-                        }
-                    }
-                    args.append (this.d.concat one)
-                } else null
-            }
-        } else null
+        i: u64
+        for i < n.arguments.count.u64 loop {
+            aid: this.kid span: n.arguments :i
+            i = i + 1
+            ad: this.argDoc id: aid first: i == 1
+            if ad.doc == 0 then continue
+            forced = forced or ad.forced
+            trails.append ad.trailing
+            args.append ad.doc
+        }
         if args.length == 0 then return callable
         # a lone unnamed term (`print "x"`, `List u8`) gains nothing from a
         # wrap: the pair would hold what it holds now
-        if args.length == 1 when (this.soleTermArg :n) then {
-            xs: ListVal u32
-            xs.append callable
-            t0: trails.get i: 0
-            if t0 > 0 then xs.append t0
-            xs.append this.idSpace
-            xs.append (args.get i: 0)
-            return (this.d.concat xs)
+        if args.length == 1 when (this.soleTermArg n: (this.node :id)) then {
+            return (this.joinArgs :callable :args :trails sep: this.idSpace)
         }
         # hug the last argument when it alone carries a forced break
-        hug: forced.not
-        ai: u64
-        for ai < args.length loop {
-            if (this.d.breaksAt id: (args.get i: ai)) then {
-                if ai + 1 < args.length then hug = false
-            } else if ai + 1 == args.length then hug = false
-            ai = ai + 1
-        }
-        if hug then {
-            xs: ListVal u32
-            xs.append callable
-            aj: u64
-            for aj < args.length loop {
-                t: trails.get i: aj
-                if t > 0 then xs.append t
-                xs.append this.idSpace
-                xs.append (args.get i: aj)
-                aj = aj + 1
-            }
-            return (this.d.concat xs)
+        if forced.not when (this.hugsLast :args) then {
+            return (this.joinArgs :callable :args :trails sep: this.idSpace)
         }
         body: ListVal u32
         body.append callable
-        inner: ListVal u32
-        ak: u64
-        for ak < args.length loop {
-            t: trails.get i: ak
-            if t > 0 then inner.append t
-            inner.append this.idLine
-            inner.append (args.get i: ak)
-            ak = ak + 1
-        }
-        if forced then inner.append this.idBreak
-        body.append (this.d.indent (this.d.concat inner))
+        inner: this.joinArgs callable: 0 :args :trails sep: this.idLine
+        innerXs: ListVal u32
+        innerXs.append inner
+        if forced then innerXs.append this.idBreak
+        body.append (this.d.indent (this.d.concat innerXs))
         # inside written parentheses the call is a group of its own, so it
         # stays flat when it fits however the parentheses break
         if inParens then return (this.d.group (this.d.concat body))
@@ -1097,6 +1049,73 @@ Builder: class {
         outer.append this.idSoft
         outer.append (this.d.ifBreak brk: this.idClose flat: 0)
         return (this.d.group (this.d.concat outer))
+    }
+
+    # argDoc -- one argument of a call as a doc: its lead comment, then the
+    # shorthand, or the label and the value. `doc` is 0 when the kid is not an
+    # argument at all; `forced` says the argument list has to break -- a first
+    # argument that starts a kept marker, or any argument carrying a comment.
+    argDoc: function {:this id: zast.nodeid first: bool} out argdoc is {
+        a: this.node :id
+        if a.namedoperation.not then return (argdoc doc: 0 trailing: 0 forced: false)
+        g: this.gapDocs cap: 0
+        forced: (first and g.marker and this.keepMarkers) or g.hasComment
+        one: ListVal u32
+        if g.lead > 0 then one.append g.lead
+        if a.name.isZero then {
+            one.append (this.visitValue id: a.operation slot: slotArg wrapped: false)
+        } else {
+            op: this.node id: a.operation
+            if op.labelvalue then {
+                one.append (this.tokShorthand name: a.name)
+            } else {
+                one.append (this.tokLabel name: a.name)
+                one.append (this.visitValue
+                    id: a.operation
+                    slot: slotArgLabelled
+                    wrapped: false
+                )
+            }
+        }
+        return (argdoc doc: this.d.concat one trailing: g.trailing :forced)
+    }
+
+    # hugsLast -- whether the LAST argument is the only one that breaks: then
+    # the call stays on its line and that argument breaks inside its own
+    # delimiters. False when an earlier argument breaks, or the last does not.
+    hugsLast: function {this: this.view args: (ListVal u32).view} out bool is {
+        ai: u64
+        for ai < args.length loop {
+            last: ai + 1 == args.length
+            if (this.d.breaksAt id: (args.get i: ai)) then {
+                if last.not then return false
+            } else if last then return false
+            ai = ai + 1
+        }
+        return true
+    }
+
+    # joinArgs -- the callable (0 for none) followed by each argument, each
+    # preceded by its trailing comment when it has one and by `sep`: a space
+    # for the one-line forms, a line for the one-per-line form.
+    joinArgs: function {
+        :this
+        callable: u32
+        args: (ListVal u32).view
+        trails: (ListVal u32).view
+        sep: u32
+    } out u32 is {
+        xs: ListVal u32
+        if callable > 0 then xs.append callable
+        aj: u64
+        for aj < args.length loop {
+            t: trails.get i: aj
+            if t > 0 then xs.append t
+            xs.append sep
+            xs.append (args.get i: aj)
+            aj = aj + 1
+        }
+        return (this.d.concat xs)
     }
 
     # soleTermArg -- whether the call's one argument is unnamed and a term
