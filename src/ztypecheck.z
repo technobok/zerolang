@@ -16197,6 +16197,79 @@ stampTyperefs: function {st: zenv.ZSymbolTable program: Ast} is {
     }
 }
 
+# stampResolvedTyperef -- a deferred type-ref that resolved: stamp the node,
+# refuse a literal type, and record the declaration it names (refDecl) for
+# go-to-definition; codegen-inert, since a type-annotation atom is never
+# emitted as an expression.
+stampResolvedTyperef: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    # the type-ref node
+    nid: u64
+    # the name it spells
+    pval: zast.nameid
+    # the unit the ref was written in, which labels the surface probe
+    origin: ztypes.declid
+    # what the name resolved to
+    tid: ztypes.tid
+} is {
+    ztyping.nodeTypeSet tbl: st.typing.nodeType :nid :tid
+    refuseLiteralTyperef :st :ast nid: (zast.nodeid.create from: nid) :tid
+    sfB: declSurfaceOfName :st :ast unitDecl: origin nameId: pval :tid
+    stampRefDecl :st :nid declId: sfB
+}
+
+# typerefExcused -- a deferred type-ref that resolved NOWHERE, and whether
+# that is a report. A template parameter name is exempt (its pendings feed
+# mono substitution and resolve per instantiation; a dead-signature typo that
+# collides with one is the accepted blind spot). A name whose declaration the
+# environment finds queued or mid-resolution is queued for retry: this pass
+# may run in the middle of a drain, before that declaration has resolved. A
+# name a scope claims, or that any loaded unit resolves, is known -- except
+# `Any`, which only its own unit's claim resolves. False means: report it.
+typerefExcused: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    # the type-ref node, which is what a retry queues
+    uk: u64
+    # the frame the ref was written in
+    rf: ztypes.declid
+    # the unit the ref was written in
+    origin: ztypes.declid
+    pval: zast.nameid
+    gpNames: (IdSet zast.nameid).view
+} out bool is {
+    if (gpNames.has item: pval) then return true
+    dh: envLookup :st frame: rf nameId: pval
+    if dh.declId.isZero.not then {
+        dhWait: (
+            (st.typing.declIsPending declId: dh.declId) or
+            (st.typing.declIsResolving
+                declId: dh.declId
+            )
+        )
+        if dhWait then {
+            st.typing.typerefRetry.append from: uk
+            return true
+        }
+    }
+    if (nameClaimedByScopeId :ast :st unitDecl: origin frame: rf nameId: pval) then return true
+    if (zast.nameTextEq :ast ref: pval s: "Any") then return false
+    # closure-wide: a bare name may resolve to a member of ANY loaded unit
+    # (the demand resolvers search the closure; the typeref walk does not)
+    puds: programUnitDecls :st
+    with uit: puds.iterate do for ud: uit loop {
+        uro2: (resolvedByIds
+            :st
+            :ast
+            unitDecl: (ztypes.declid.create from: ud)
+            name: pval
+        )
+        if uro2.some then return true
+    }
+    return false
+}
+
 # stampOnePendingTyperef -- resolve one deferred type-ref and stamp it. The ref
 # resolves in the frame it was WRITTEN in, not in whatever frame the drain runs
 # under; one whose declaration is still unresolved is queued for retry rather
@@ -16209,16 +16282,9 @@ stampOnePendingTyperef: function {
     pval: zast.nameid
     gpNames: (IdSet zast.nameid).view
 } is {
+    if ((st.typing.noStampNode.get key: uk).or d: false) then return
     # the type-ref resolves in the frame it was written in
-    rf: ztypes.declid
-    {
-        fo: st.typing.pendingTyperefFrame.get key: uk
-        match (
-            fo
-        ) case some then {
-            rf = fo
-        } case none then null
-    }
+    rf: (st.typing.pendingTyperefFrame.get key: uk).or d: ztypes.declid
     # the frame's unit, as the label the surface / claim probes take
     origin: unitDecl
     originId: zast.nameid
@@ -16227,121 +16293,25 @@ stampOnePendingTyperef: function {
         if our.isZero.not then originId = declNameIdOf :st declId: our
     }
     if originId.isZero.not then origin = unitDeclOfNameOrOwn :st frame: rf nameId: originId
-    skip0: false
-    {
-        sk0: st.typing.noStampNode.get key: uk
-        match (
-            sk0
-        ) case some then {
-            if sk0 then skip0 = true
-        } case none then null
+    r: walkLookupTyperefFrom :st :ast frame: rf baseId: pval
+    if r.some then {
+        stampResolvedTyperef :st :ast nid: uk :pval :origin tid: (ztypes.tid.create from: r.u64)
+        return
     }
-    if skip0.not then {
-        r: (walkLookupTyperefFrom
-            :st
-            :ast
-            frame: rf
-            baseId: pval
-        )
-        match (
-            r
-        ) case some then {
-            nid: uk
-            (ztyping.nodeTypeSet
-                tbl: st.typing.nodeType
-                :nid
-                tid: (ztypes.tid.create from: r.u64)
-            )
-            (refuseLiteralTyperef
-                :st
-                :ast
-                nid: (zast.nodeid.create from: nid)
-                tid: (ztypes.tid.create from: r.u64)
-            )
-            # every resolved type reference records the declaration it
-            # names (refDecl), for go-to-definition (bare + dotted);
-            # codegen-inert -- a type-annotation atom is never emitted
-            # as an expression.
-            sfNmB: pval
-            sfB: (declSurfaceOfName
-                :st
-                :ast
-                unitDecl: origin
-                nameId: sfNmB
-                tid: (ztypes.tid.create from: r.u64)
-            )
-            stampRefDecl :st :nid declId: sfB
-        } case none then {
-            # a signature typeref that resolves NOWHERE after every
-            # demand pass names a nonexistent type. Template param
-            # names are exempt: their pendings feed mono substitution
-            # and resolve per instantiation (a dead-signature typo
-            # that collides with some template's param name is the
-            # accepted blind spot).
-            if (gpNames.has item: pval) then return
-            # a name whose declaration the environment finds queued or
-            # mid-resolution is not unknown: this pass may run in the
-            # middle of a drain (a nested unit materialising stamps what
-            # it recorded) before the declaration has resolved. The
-            # reference stamps on a later pass, once it has.
-            dh: (envLookup
-                :st
-                frame: rf
-                nameId: pval
-            )
-            dhWait: false
-            if dh.declId.isZero.not then {
-                if (st.typing.declIsPending declId: dh.declId) then dhWait = true
-                if (st.typing.declIsResolving declId: dh.declId) then dhWait = true
-            }
-            if dhWait then {
-                st.typing.typerefRetry.append from: uk
-                return
-            }
-            urHit: (nameClaimedByScopeId :ast :st unitDecl: origin frame: rf nameId: pval)
-            if urHit.not when (zast.nameTextEq :ast ref: pval s: "Any") then {
-                # `Any` is not user-reachable through the closure:
-                # only a scope claim (its own unit defining it)
-                # resolves it, so an unclaimed `Any` reports.
-                urHit = false
-            } else if urHit.not then {
-                # closure-wide: a bare name may resolve to a member
-                # of ANY loaded unit (the demand resolvers search
-                # the closure; the typeref walk does not)
-                puds: programUnitDecls :st
-                with uit: puds.iterate do for ud: uit loop {
-                    if urHit.not then {
-                        uro2: (resolvedByIds
-                            :st
-                            :ast
-                            unitDecl: (ztypes.declid.create from: ud)
-                            name: pval
-                        )
-                        match (
-                            uro2
-                        ) case some then {
-                            urHit = true
-                        } case none then null
-                    }
-                }
-            }
-            if urHit then return
-            un: ast.nodes.get i: uk
-            pvalT: zast.nameTextAt :ast ref: pval
-            um: "Unknown type '\{pvalT}'"
-            (addResolveErrorH
-                :st
-                nodeid: (nodeId n: un)
-                lineno: (nodeLine n: un)
-                colno: (nodeCol n: un)
-                e: zast.err.badReference
-                msg: um
-                width: pvalT.length.u32.orPanic
-            )
-        }
-    }
+    if (typerefExcused :st :ast :uk :rf :origin :pval :gpNames) then return
+    un: ast.nodes.get i: uk
+    pvalT: zast.nameTextAt :ast ref: pval
+    um: "Unknown type '\{pvalT}'"
+    (addResolveErrorH
+        :st
+        nodeid: (nodeId n: un)
+        lineno: (nodeLine n: un)
+        colno: (nodeCol n: un)
+        e: zast.err.badReference
+        msg: um
+        width: pvalT.length.u32.orPanic
+    )
 }
-
 
 # stampPendingTyperefs -- stamp the type-ref nodes recorded since the last
 # call (pendingTyperef is append-only and iterates in insertion order, so a
