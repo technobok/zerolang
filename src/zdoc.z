@@ -507,6 +507,91 @@ printGroup: function {d: Doc.view p: Printer c: cmd row: docrow} is {
     p.cmds.append (cmd ind: c.ind mode: modeBreak id: row.child off: 0)
 }
 
+# fitsverdict -- what one command settled about the rest fitting on the line.
+fitsverdict: variant {
+    # nothing yet; keep measuring
+    more: null
+    # the rest fits (a break was reached, or the commands ran out)
+    fits: null
+    # it does not (the width ran out, or a group must stay flat and cannot)
+    overflows: null
+}
+
+# fitsstep -- one command's effect on the fits measurement.
+fitsstep: record {
+    verdict: fitsverdict
+    # the width still available after it
+    left: i64
+}
+
+# breakModeOf -- the mode a group's children print in: broken when the group
+# is marked so, else the enclosing mode.
+breakModeOf: function {c: cmd row: docrow} out u8 is {
+    if row.breaks then return modeBreak
+    return c.mode
+}
+
+# ifBreakPick -- the child an ifBreak prints: the break child in break mode,
+# else the alternative.
+ifBreakPick: function {c: cmd row: docrow} out u32 is {
+    if c.mode == modeBreak then return row.child
+    return row.alt
+}
+
+# bestFittingPick -- the child a bestFitting prints in mode `m`: the last (most
+# expanded) when broken, else the first.
+bestFittingPick: function {d: Doc.view row: docrow m: u8} out u32 is {
+    if m == modeBreak then return (kidAt :d span: row.kids i: row.kids.count - 1)
+    return (kidAt :d span: row.kids i: 0)
+}
+
+# fitsOne -- measure one command against the width `left`: text consumes its
+# width, a line in break mode settles it, a container pushes what it prints.
+fitsOne: function {
+    d: Doc.view
+    stack: ListVal cmd
+    c: cmd
+    row: docrow
+    left: i64
+    # a group that would break is an overflow rather than a break
+    mustBeFlat: bool
+} out fitsstep is {
+    v: fitsverdict.more
+    rest: left
+    match (
+        row.kind
+    ) case text then {
+        rest = rest - row.width.i64
+    } case line then {
+        if c.mode == modeBreak then v = fitsverdict.fits
+        rest = rest - 1
+    } case softline then {
+        if c.mode == modeBreak then v = fitsverdict.fits
+    } case hardline then {
+        v = fitsverdict.fits
+    } case group then {
+        if mustBeFlat when row.breaks then v = fitsverdict.overflows
+        stack.append (cmd ind: c.ind mode: (breakModeOf :c :row) id: row.child off: 0)
+    } case indent then {
+        stack.append (cmd ind: c.ind mode: c.mode id: row.child off: 0)
+    } case ifBreak then {
+        pick: ifBreakPick :c :row
+        if pick > 0 then stack.append (cmd ind: c.ind mode: c.mode id: pick off: 0)
+    } case lineSuffix then null case breakParent then null case fill then {
+        pushKidsOnto :d :stack :c span: row.kids from: c.off
+    } case bestFitting then {
+        if mustBeFlat when row.breaks then v = fitsverdict.overflows
+        m: breakModeOf :c :row
+        stack.append (cmd ind: c.ind mode: m id: (bestFittingPick :d :row :m) off: 0)
+    } case concat then {
+        pushKidsOnto :d :stack :c span: row.kids from: 0
+    } case verbatim then {
+        rest = rest - row.width.i64
+        if row.alt > 0 then v = fitsverdict.fits
+    }
+    return (fitsstep verdict: v left: rest)
+}
+
 # fitsCmds -- whether `stack` printed as given, followed when `useRest` by what
 # the stack holds up to the next newline, stays within `rem` columns. A
 # broken group in the rest ends the line and so fits; under `mustBeFlat` a
@@ -530,44 +615,10 @@ fitsCmds: function {
             continue
         }
         c: stack.pop
-        row: d.rows.get i: c.id.u64
-        match (
-            row.kind
-        ) case text then {
-            left = left - row.width.i64
-        } case line then {
-            if c.mode == modeBreak then return true
-            left = left - 1
-        } case softline then {
-            if c.mode == modeBreak then return true
-        } case hardline then {
-            return true
-        } case group then {
-            if mustBeFlat when row.breaks then return false
-            m: c.mode
-            if row.breaks then m = modeBreak
-            stack.append (cmd ind: c.ind mode: m id: row.child off: 0)
-        } case indent then {
-            stack.append (cmd ind: c.ind mode: c.mode id: row.child off: 0)
-        } case ifBreak then {
-            pick: row.alt
-            if c.mode == modeBreak then pick = row.child
-            if pick > 0 then stack.append (cmd ind: c.ind mode: c.mode id: pick off: 0)
-        } case lineSuffix then null case breakParent then null case fill then {
-            pushKidsOnto :d :stack :c span: row.kids from: c.off
-        } case bestFitting then {
-            if mustBeFlat when row.breaks then return false
-            m: c.mode
-            if row.breaks then m = modeBreak
-            pick: kidAt :d span: row.kids i: 0
-            if m == modeBreak then pick = kidAt :d span: row.kids i: row.kids.count - 1
-            stack.append (cmd ind: c.ind mode: m id: pick off: 0)
-        } case concat then {
-            pushKidsOnto :d :stack :c span: row.kids from: 0
-        } case verbatim then {
-            left = left - row.width.i64
-            if row.alt > 0 then return true
-        }
+        step: fitsOne :d :stack :c row: (d.rows.get i: c.id.u64) :left :mustBeFlat
+        if step.verdict.fits then return true
+        if step.verdict.overflows then return false
+        left = step.left
     }
     return false
 }
