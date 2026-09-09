@@ -4344,10 +4344,16 @@ emitCallTakeInvalidations: function {
         )
         posI = posI + 1
     }
+    # a moving call can sit under the callable: `(f xs: a).not` calls `not`
+    # on the value `f` moved `a` into
+    callableNode: ast.nodes.get i: call.callable.u64
+    emitValueTakeInvalidations :ast :symtab :ctx n: callableNode :ind :buf
 }
 
 # emitValueTakeInvalidations -- statement-level source zeroing for a value node
-# that reduces to a call (unwraps expression/statementline wrappers).
+# that reduces to a call: through expression, statementline and labelled
+# wrappers, and through a dotted path's receiver, since `(f xs: a).not` moved
+# `a` in the call under the dot, not in an argument of the outer one.
 emitValueTakeInvalidations: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -4366,6 +4372,14 @@ emitValueTakeInvalidations: function {
         emitValueTakeInvalidations :ast :symtab :ctx n: statementlineNode :ind :buf
     } case call then {
         emitCallTakeInvalidations :ast :symtab :ctx call: n :ind :buf
+    } case namedoperation then {
+        operationNode: ast.nodes.get i: n.operation.u64
+        emitValueTakeInvalidations :ast :symtab :ctx n: operationNode :ind :buf
+    } case dottedpath then {
+        if n.parent.isZero.not then {
+            parentNode: ast.nodes.get i: n.parent.u64
+            emitValueTakeInvalidations :ast :symtab :ctx n: parentNode :ind :buf
+        }
     } else null
 }
 
@@ -16657,6 +16671,7 @@ emitIfStmt: function {
     ctx.condDepth = ctx.condDepth + 1
     ifAssign: String
     first: true
+    opened: u64
     clx969: u64
     for clx969 < n.clauses.count.u64 loop {
         cId: zast.kidAt kids: ast.kids span: n.clauses i: clx969
@@ -16664,16 +16679,19 @@ emitIfStmt: function {
         isFirst: first
         first = false
         c: ast.nodes.get i: cId.u64
-        (emitIfClause
-            :ast
-            :symtab
-            :ctx
-            n: c
-            :isFirst
-            assignTo: ifAssign.stringView
-            :ind
-            :tmp
-            :buf
+        opened = (
+            opened +
+            (emitIfClause
+                :ast
+                :symtab
+                :ctx
+                n: c
+                :isFirst
+                assignTo: ifAssign.stringView
+                :ind
+                :tmp
+                :buf
+            )
         )
     }
     chS: List String
@@ -16712,6 +16730,11 @@ emitIfStmt: function {
     )
     le: "\{ind}}\n"
     buf.append le
+    # the `} else {` blocks stepped later clauses opened around themselves
+    for opened > 0 loop {
+        opened = opened - 1
+        buf.append le
+    }
     ctx.condDepth = ctx.condDepth - 1
 }
 
@@ -18447,22 +18470,26 @@ emitIfBindValue: function {
         ld: "\{ind}\{ct} \{nm};\n"
         buf.append ld
         first: true
+        opened: u64
         clx1039: u64
         for clx1039 < n.clauses.count.u64 loop {
             cId: zast.kidAt kids: ast.kids span: n.clauses i: clx1039
             clx1039 = clx1039 + 1
             isFirst: first
             first = false
-            (emitIfClause
-                :ast
-                :symtab
-                :ctx
-                n: (ast.nodes.get i: cId.u64)
-                :isFirst
-                assignTo: nm
-                :ind
-                :tmp
-                :buf
+            opened = (
+                opened +
+                (emitIfClause
+                    :ast
+                    :symtab
+                    :ctx
+                    n: (ast.nodes.get i: cId.u64)
+                    :isFirst
+                    assignTo: nm
+                    :ind
+                    :tmp
+                    :buf
+                )
             )
         }
         chS: List String
@@ -18501,6 +18528,10 @@ emitIfBindValue: function {
         )
         le: "\{ind}}\n"
         buf.append le
+        for opened > 0 loop {
+            opened = opened - 1
+            buf.append le
+        }
         return true
     } else {
         return false
@@ -20316,14 +20347,124 @@ whenCondSuspends: function {ast: Ast.view ctx: Ctx.view n: zast.ifclauserow} out
     return false
 }
 
-# emitGuardedWhenCond -- compute a clause's conditions into a GUARD when one of
-# the `when` parts suspends, and answer the guard's name for the header to test.
+# condMovesLocal -- one of these conditions holds a call that moves an owned
+# local. The zeroing a move owes is a statement, and it may run only on the
+# path where the call ran, so the header cannot carry the condition. The
+# answer is the invalidation walker's own: whatever it would write for these
+# nodes, written into a probe instead of the body.
+condMovesLocal: function {
+    # the tree the conditions are read from
+    ast: Ast.view
+    # the stamps the walker decides "moved" from
+    symtab: zenv.ZSymbolTable.view
+    # the emit context the walker names sources through
+    ctx: Ctx
+    # the clause's condition nodes
+    conds: zast.kidspan
+} out bool is {
+    probe: String
+    ci: u64
+    for ci < conds.count.u64 loop {
+        cId: zast.kidAt kids: ast.kids span: conds i: ci
+        ci = ci + 1
+        condNode: ast.nodes.get i: cId.u64
+        emitValueTakeInvalidations :ast :symtab :ctx n: condNode ind: "" buf: probe
+    }
+    return probe.length > 0
+}
+
+# clauseNeedsSteps -- this clause's conditions cannot stay in the `if` header:
+# a `when` part suspends, or a condition moves an owned local. Either way they
+# are written as statements first and the header tests the guard they leave.
+clauseNeedsSteps: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.ifclauserow
+} out bool is {
+    if (whenCondSuspends :ast :ctx :n) then return true
+    return (condMovesLocal :ast :symtab :ctx conds: n.conditions)
+}
+
+# emitSteppedConjunct -- one condition of a stepped clause: its text computed
+# into the guard, then the zeroing its moves owe. A first conjunct declares
+# the guard; a later one reassigns it inside the nesting the caller opened.
+# A `_ah` temp the text needed is declared just before the line and freed
+# just after it -- the callee borrowed it for the call alone.
+emitSteppedConjunct: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    # the condition node, a labelled operation
+    kId: u32
+    # the guard's C name
+    gvar: StringView
+    # the first conjunct declares the guard
+    first: bool
+    # the indent of this conjunct's nesting level
+    ind: StringView
+    # the free list a hoisted temp is registered on and released from
+    tmp: TmpCtr
+    # the statements append here
+    buf: String.borrow
+} is {
+    ct: String
+    appendCondText :ast :symtab :ctx :kId cond: ct
+    if ct.length == 0 then ct.append "1"
+    fL: tmp.frees.length
+    lL: tmp.listFrees.length
+    flushArgHoists :ctx :ind :tmp :buf
+    cw: condInParens cond: ct.stringView
+    if first then {
+        buf.append "\{ind}uint8_t \{gvar} = \{cw} ? 1 : 0;\n"
+    } else {
+        buf.append "\{ind}\{gvar} = \{cw} ? 1 : 0;\n"
+    }
+    flushBlockFrees :ctx :tmp :fL :lL diverged: false :buf
+    condNode: ast.nodes.get i: kId.u64
+    emitValueTakeInvalidations :ast :symtab :ctx n: condNode :ind :buf
+}
+
+# closeSteppedNesting -- the closing braces of a stepped clause's conditions,
+# one per condition after the first, innermost first.
+closeSteppedNesting: function {
+    # how many levels were opened
+    depth: u64
+    # the indent of the outermost level
+    ind: StringView
+    # the braces append here
+    buf: String.borrow
+} is {
+    lvl: depth
+    for lvl > 0 loop {
+        lvl = lvl - 1
+        indC: ind.string
+        pi: u64
+        for pi < lvl loop {
+            indC.append "    "
+            pi = pi + 1
+        }
+        buf.append "\{indC}}\n"
+    }
+}
+
+# emitSteppedCond -- a clause's conditions as statements, and the name of the
+# guard the header tests. Each condition after the first runs inside the
+# `if (g)` of the ones before it -- C's own short-circuit written out -- so a
+# suspension lands on a statement, and a move's zeroing follows the call on
+# exactly the path where it ran:
 #
-# `if a when b then` becomes `g = 0; if (a) { <suspend>; g = (b); }` and the
-# header tests `g`. That is C's own short-circuit written out: `b` still runs
-# only when `a` held, and the suspension now sits on a statement inside that
-# guard rather than inside an expression that cannot hold one.
-emitGuardedWhenCond: function {
+#     uint8_t _wc0 = (a) ? 1 : 0;
+#     <a's moves zeroed>
+#     if (_wc0) {
+#         <b's suspensions>
+#         _wc0 = (b) ? 1 : 0;
+#         <b's moves zeroed>
+#     }
+#
+# The first condition's suspensions are not hoisted here: it runs
+# unconditionally, so the statement-level hoist already reached it.
+emitSteppedCond: function {
     # the tree this clause's conditions are read from
     ast: Ast.view
     # read for the resume type of each suspension in a `when`
@@ -20332,55 +20473,127 @@ emitGuardedWhenCond: function {
     ctx: Ctx
     # the clause whose conditions these are
     n: zast.ifclauserow
-    # the indent the guard and its `if` are written at
+    # the indent the guard and the first condition are written at
     ind: StringView
+    # the free list the conjuncts' temps ride
+    tmp: TmpCtr
     # the guard declaration and its computation append here
     buf: String.borrow
 } out String is {
     gnum: ctx.whenGuardCtr
     ctx.whenGuardCtr = gnum + 1
     gvar: "_wc\{gnum}"
-    c0: String
-    (appendCondText
-        :ast
-        :symtab
-        :ctx
-        kId: (zast.kidAt kids: ast.kids span: n.conditions i: 0)
-        cond: c0
-    )
-    if c0.length == 0 then c0.append "1"
-    buf.append "\{ind}uint8_t \{gvar} = 0;\n"
-    cw0: condInParens cond: c0.stringView
-    buf.append "\{ind}if \{cw0} {\n"
-    ind2: "\{ind}    "
-    wi: 1.u64
-    for wi < n.conditions.count.u64 loop {
-        cwi: zast.kidAt kids: ast.kids span: n.conditions i: wi
-        wi = wi + 1
-        (hoistExprYields
+    if n.conditions.count.u64 == 0 then buf.append "\{ind}uint8_t \{gvar} = 1;\n"
+    indK: ind.string
+    opened: u64
+    ci: u64
+    for ci < n.conditions.count.u64 loop {
+        cId: zast.kidAt kids: ast.kids span: n.conditions i: ci
+        if ci > 0 then {
+            buf.append "\{indK}if (\{gvar}) {\n"
+            indK.append "    "
+            opened = opened + 1
+            if ctx.genActive then {
+                (hoistExprYields
+                    :ast
+                    :symtab
+                    :ctx
+                    nid: (zast.nodeid.create from: cId)
+                    ind: indK.stringView
+                    :buf
+                )
+            }
+        }
+        (emitSteppedConjunct
             :ast
             :symtab
             :ctx
-            nid: (zast.nodeid.create from: cwi)
-            ind: ind2.stringView
+            kId: cId
+            gvar: gvar.stringView
+            first: (ci == 0)
+            ind: indK.stringView
+            :tmp
             :buf
         )
+        ci = ci + 1
     }
-    rest: String
-    ri9: 1.u64
-    for ri9 < n.conditions.count.u64 loop {
-        cri: zast.kidAt kids: ast.kids span: n.conditions i: ri9
-        ri9 = ri9 + 1
-        appendCondText :ast :symtab :ctx kId: cri cond: rest
-    }
-    if rest.length == 0 then rest.append "1"
-    cwR: condInParens cond: rest.stringView
-    buf.append "\{ind2}\{gvar} = \{cwR} ? 1 : 0;\n"
-    buf.append "\{ind}}\n"
+    closeSteppedNesting depth: opened :ind :buf
     return gvar
 }
 
-# emit one if or else-if clause: its conditions, then the body they guard
+# openSteppedHead -- a stepped clause's conditions, and the header line that
+# tests their guard. A first clause writes both at the clause's indent. A later
+# clause has no `} else if` header to hold statements, so it opens `} else {`,
+# writes them one level in, and answers 1: the block its caller closes after
+# the chain, whose body it indents one level further.
+openSteppedHead: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.ifclauserow
+    # a later clause nests inside `} else {`
+    isFirst: bool
+    # the clause's own indent
+    ind: StringView
+    tmp: TmpCtr
+    # the statements and the header append here
+    buf: String.borrow
+} out u64 is {
+    # the nested indent, built only when a block is opened
+    indN: String
+    opened: u64
+    if isFirst.not then {
+        buf.append "\{ind}} else {\n"
+        indN.append ind
+        indN.append "    "
+        opened = 1
+    }
+    indH: ind
+    if opened > 0 then indH = indN.stringView
+    gv: emitSteppedCond :ast :symtab :ctx :n ind: indH :tmp :buf
+    cw: condInParens cond: gv.stringView
+    buf.append "\{indH}if \{cw} {\n"
+    return opened
+}
+
+# clauseBodyIndent -- the indent a clause's body is written at: one level in
+# from the clause, and one more when the clause opened a block around itself.
+clauseBodyIndent: function {
+    # the clause's own indent
+    ind: StringView
+    # the blocks the clause opened around itself
+    nested: u64
+} out String is {
+    ind2: "\{ind}    "
+    if nested > 0 then ind2.append "    "
+    return ind2
+}
+
+# emitPlainIfHead -- the `if (c) {` or `} else if (c) {` line of a clause whose
+# conditions stayed in the header. A first clause flushes the argument hoists
+# its condition text recorded; a later clause's header has nowhere to put them.
+emitPlainIfHead: function {
+    ctx: Ctx
+    isFirst: bool
+    # the header's condition text
+    cond: StringView
+    ind: StringView
+    tmp: TmpCtr
+    # the header line appends here
+    buf: String.borrow
+} is {
+    cw: condInParens :cond
+    if isFirst then {
+        flushArgHoists :ctx :ind :tmp :buf
+        buf.append "\{ind}if \{cw} {\n"
+    } else {
+        buf.append "\{ind}} else if \{cw} {\n"
+    }
+}
+
+# emit one if or else-if clause: its conditions, then the body they guard. The
+# answer is the number of blocks the clause opened around itself (0 or 1),
+# which the caller closes after the whole chain.
 emitIfClause: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
@@ -20391,13 +20604,12 @@ emitIfClause: function {
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
-} is {
+} out u64 is {
     if n.ifclause then {
-        # a suspending `when` cannot be built into the header text: rendering it
-        # there would put the suspension inside an expression. Compute the
-        # conditions into a guard first and let the header test that. Only the
-        # FIRST clause takes this path -- a later clause's header is
-        # `} else if (..) {`, which has nowhere to put the statements.
+        # a suspending `when`, or a condition that moves an owned local, cannot
+        # be built into the header text: a suspension has to land on a
+        # statement, and a move's zeroing is one. Such a clause computes its
+        # conditions into a guard first and lets the header test that.
         sN: List String
         sVid: ListVal ztypes.vid
         sV: List String
@@ -20405,13 +20617,11 @@ emitIfClause: function {
         sPrevV: List String
         sPrevT: ListVal u64
         xMark: ctx.exSaveVid.length
-        guarded: false
-        if isFirst when (whenCondSuspends :ast :ctx :n) then guarded = true
+        guarded: clauseNeedsSteps :ast :symtab :ctx :n
+        opened: u64
         cond: String
         if guarded then {
-            flushArgHoists :ctx :ind :tmp :buf
-            gv: emitGuardedWhenCond :ast :symtab :ctx :n :ind :buf
-            cond.append gv
+            opened = (openSteppedHead :ast :symtab :ctx :n :isFirst :ind :tmp :buf)
             (ifPredicateSeeds
                 :ast
                 :symtab
@@ -20454,17 +20664,8 @@ emitIfClause: function {
                 )
             }
         }
-        if isFirst then {
-            if guarded.not then flushArgHoists :ctx :ind :tmp :buf
-            cw: condInParens cond: cond.stringView
-            lf: "\{ind}if \{cw} {\n"
-            buf.append lf
-        } else {
-            cw9x: condInParens cond: cond.stringView
-            lg: "\{ind}} else if \{cw9x} {\n"
-            buf.append lg
-        }
-        ind2: "\{ind}    "
+        if guarded.not then emitPlainIfHead :ctx :isFirst cond: cond.stringView :ind :tmp :buf
+        ind2: clauseBodyIndent :ind nested: opened
         si: u64
         for si < sN.length loop {
             snm: sN.get i: si
@@ -20494,7 +20695,9 @@ emitIfClause: function {
         }
         restoreNarrowSeeds :ctx svids: sVid prevV: sPrevV prevT: sPrevT
         (restoreCondExclusions :ctx mark: xMark)
+        return opened
     }
+    return 0
 }
 
 # layerChainExclusions -- on the else side every positive chain fact failed, so
