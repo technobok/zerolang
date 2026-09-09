@@ -3248,6 +3248,41 @@ hoverTypeFence: function {
     return fence
 }
 
+# posLine -- the 1-based line a node sits on, from the span table; 0 when the
+# node has no recorded position. The table packs line and column into one
+# u64, line in the high bits.
+posLine: function {sp: Spans.view nid: u64} out u32 is {
+    packed: (sp.pos.get key: nid).or d: 0
+    return (packed / 1048576).u32.orPanic
+}
+
+# hoverDoc -- the `#` doc block above a definition node, "" when the node has
+# no position, sits on the first line, or carries none.
+hoverDoc: function {snap: zcheck.CheckResult sp: Spans.view nid: u64} out String is {
+    fs: zcheck.fsnoFor r: snap nodeid: nid.u32.orPanic
+    ln: posLine :sp :nid
+    none: String
+    if fs.u32 == 0 then return none
+    if ln < 2 then return none
+    return (docCommentForNode :snap fsno: fs defLine: ln)
+}
+
+# hoverSigTid -- the type whose signature a hover shows: the stamped def
+# tid when the hit is a callable or unit member (a function hovers as its
+# signature, not its return value), the instance when a generic call
+# resolved to one, the Decl's type when only the Decl layer resolved the hit,
+# and the method for an operator, whose node stamp is the binop's result.
+hoverSigTid: function {snap: zcheck.CheckResult hit: navhit} out u64 is {
+    t: nodeTypeAt o: snap.st nid: hit.nodeid
+    ud: useUnitDef o: snap.st nid: hit.nodeid
+    sigTid: t
+    if ud > 0 then sigTid = ud
+    if (isInstanceOfOpt o: snap.st tid: t tpl: ud) then sigTid = t
+    if sigTid == 0 then sigTid = hit.tid
+    if hit.kind == 7 then sigTid = hit.tid
+    return sigTid
+}
+
 # navHoverAnswer -- the hover card for a resolved hit: a code fence holding the
 # signature or the type, and the doc block above the definition it names.
 navHoverAnswer: function {
@@ -3264,24 +3299,8 @@ navHoverAnswer: function {
         udoc: unitDocComment :snap fsno: hit.unitFsno
         return (hoverMarkdown code: ub.stringView doc: udoc.stringView)
     }
-    tnid: hit.nodeid
-    t: nodeTypeAt o: snap.st nid: tnid
-    # a callable / unit-member auto-calls to its return type in value
-    # position; prefer its stamped def tid so a function hovers as its
-    # signature rather than the return value's type.
-    ud: useUnitDef o: snap.st nid: tnid
-    sigTid: t
-    if ud > 0 then sigTid = ud
-    # a generic call's callable carries the TEMPLATE's declaration; the
-    # instance the call resolved to is the stamp, and that is the
-    # signature worth showing
-    if (isInstanceOfOpt o: snap.st tid: t tpl: ud) then sigTid = t
-    # a hit only the Decl layer resolves (a public-interface entry)
-    # carries no node stamps; its Decl's type is the signature
-    if sigTid == 0 then sigTid = hit.tid
-    # an operator's node stamp is the binop's RESULT type; the signature
-    # worth showing is the method it resolved to
-    if hit.kind == 7 then sigTid = hit.tid
+    t: nodeTypeAt o: snap.st nid: hit.nodeid
+    sigTid: hoverSigTid :snap :hit
     body: (fnSigTextOpt
         vfs: snap.vfs
         prog: snap.prog
@@ -3311,91 +3330,76 @@ navHoverAnswer: function {
     dnd: declNodeOf o: snap.st declId: hit.declId
     if dnd == 0 then dnd = legacyDnd
     if dnd > 0 then {
-        dfs: zcheck.fsnoFor r: snap nodeid: dnd.u32.orPanic
-        dpg: sp.pos.get key: dnd
-        match (
-            dpg
-        ) case some then {
-            dln: (dpg / 1048576).u32.orPanic
-            if dfs > 0 when dln > 1 then {
-                doc: docCommentForNode :snap fsno: dfs defLine: dln
-                if doc.length > 0 then docBody = doc
-                if hit.owner > 0 then {
-                    tc: trailingDocOf vfs: snap.vfs fsno: dfs line1: dln
-                    if tc.length > 0 then {
-                        body.append "  # "
-                        body.append tc
-                    }
-                }
-            }
-        } case none then null
+        docBody = hoverDoc :snap :sp nid: dnd
+        if hit.owner > 0 then appendTrailingDoc :snap :sp nid: dnd :body
     }
     if docBody.length == 0 when legacyDnd > 0 when legacyDnd != dnd then {
-        lfs: zcheck.fsnoFor r: snap nodeid: legacyDnd.u32.orPanic
-        lpg: sp.pos.get key: legacyDnd
-        match (
-            lpg
-        ) case some then {
-            lln: (lpg / 1048576).u32.orPanic
-            if lfs > 0 when lln > 1 then {
-                ldoc: docCommentForNode :snap fsno: lfs defLine: lln
-                if ldoc.length > 0 then docBody = ldoc
-            }
-        } case none then null
+        docBody = hoverDoc :snap :sp nid: legacyDnd
     }
-    # call-site enrichment: hovering a callee appends inferred generic
-    # bindings (in-fence); hovering an argument appends its disposition.
-    hpos: u64
-    {
-        hp: sp.pos.get key: hit.nodeid
-        match (
-            hp
-        ) case some then {
-            hpos = hp
-        } case none then null
-    }
-    callId: sp.innerRangeOfKind curPos: hpos kind: 4 slack: 0
-    if callId > 0 then {
-        callPos: u64
-        {
-            cp9x: sp.pos.get key: callId.u64
-            match (
-                cp9x
-            ) case some then {
-                callPos = cp9x
-            } case none then null
-        }
-        if callPos == hpos then {
-            gl: inferredGenericLines o: snap.st prog: snap.prog callId: callId.u64
-            if gl.length > 0 then {
-                body.appendByte b: 10
-                body.append gl
-            }
-        } else {
-            dn9x: dispositionNote o: snap.st nid: hit.nodeid
-            if dn9x.length > 0 then {
-                if docBody.length > 0 then {
-                    docBody.appendByte b: 10
-                    docBody.appendByte b: 10
-                }
-                docBody.append dn9x
-            }
-        }
-    }
+    hoverCallNotes :snap :sp :hit :body :docBody
     ln9: (literalNote
         o: snap.st
         name: hname.stringView
         refTid: hit.tid
         nodeTid: (nodeTypeAt o: snap.st nid: hit.nodeid)
     )
-    if ln9.length > 0 then {
-        if docBody.length > 0 then {
-            docBody.appendByte b: 10
-            docBody.appendByte b: 10
-        }
-        docBody.append ln9
-    }
+    appendNote :docBody note: ln9.stringView
     return (hoverMarkdown code: body.stringView doc: docBody.stringView)
+}
+
+# appendNote -- add a paragraph to a hover's doc text: a blank line between
+# it and what is there, nothing at all when the note is empty.
+appendNote: function {docBody: String.borrow note: StringView} is {
+    if note.length == 0 then return
+    if docBody.length > 0 then {
+        docBody.appendByte b: 10
+        docBody.appendByte b: 10
+    }
+    docBody.append note
+}
+
+# appendTrailingDoc -- a member's trailing `#` comment on its definition line
+# joins the signature fence, when the definition has a line and a comment.
+appendTrailingDoc: function {
+    snap: zcheck.CheckResult
+    sp: Spans.view
+    nid: u64
+    body: String.borrow
+} is {
+    dfs: zcheck.fsnoFor r: snap nodeid: nid.u32.orPanic
+    dln: posLine :sp :nid
+    if dfs.u32 == 0 then return
+    if dln < 2 then return
+    tc: trailingDocOf vfs: snap.vfs fsno: dfs line1: dln
+    if tc.length == 0 then return
+    body.append "  # "
+    body.append tc
+}
+
+# hoverCallNotes -- the call-site enrichment: hovering a callee appends the
+# inferred generic bindings to the fence; hovering an argument appends its
+# disposition to the doc text. Nothing when the hover is not inside a call.
+hoverCallNotes: function {
+    snap: zcheck.CheckResult
+    sp: Spans.view
+    hit: navhit
+    body: String.borrow
+    docBody: String.borrow
+} is {
+    hpos: (sp.pos.get key: hit.nodeid).or d: 0
+    callId: sp.innerRangeOfKind curPos: hpos kind: 4 slack: 0
+    if callId == 0 then return
+    callPos: (sp.pos.get key: callId.u64).or d: 0
+    if callPos == hpos then {
+        gl: inferredGenericLines o: snap.st prog: snap.prog callId: callId.u64
+        if gl.length > 0 then {
+            body.appendByte b: 10
+            body.append gl
+        }
+        return
+    }
+    dn9x: dispositionNote o: snap.st nid: hit.nodeid
+    appendNote :docBody note: dn9x.stringView
 }
 
 # navDefinitionAnswer -- the Location a resolved hit points at: the file top for
