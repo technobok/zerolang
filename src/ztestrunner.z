@@ -285,6 +285,34 @@ withExtraArgs: function {argv: (List String).take file: StringView} out List Str
     return argv
 }
 
+# buildTool -- the two-step ladder every driver-building kind climbs: emit
+# `name` with the zc at `zc` into `csrc`, then compile that C to `bin` with
+# the runner's C compiler. Answers which step failed -- 0 built, 1 the emit,
+# 2 the C compile -- so a kind names the stage in its own FAIL line, as each
+# did when it carried the ladder itself.
+buildTool: function {
+    r: Runner.view
+    zc: StringView
+    name: StringView
+    srcdir: StringView
+    csrc: StringView
+    bin: StringView
+    asan: bool
+} out u64 is {
+    ea: (zcArgv :zc ccFwd: r.ccFwd.stringView :name :srcdir sys: r.sys.stringView outc: csrc)
+    if (
+        (os.spawn argv: ea cwd: "" outPath: "/dev/null" errPath: "/dev/null" timeoutSecs: 0) != 0
+    ) then return 1
+    ga: (withZlink
+        argv: (gccArgv cc: r.cc.stringView ccflags: r.ccflags.stringView :bin :csrc :asan)
+        :csrc
+    )
+    if (
+        (os.spawn argv: ga cwd: "" outPath: "/dev/null" errPath: "/dev/null" timeoutSecs: 0) != 0
+    ) then return 2
+    return 0
+}
+
 # gccArgv -- the C build command argv; `asan` selects the SANITIZED build over
 # the strict CF set. `ccflags` carries what the harness cannot infer about the
 # compiler -- tcc needs `-B <payload>` or it cannot resolve its own stddef.h,
@@ -1086,50 +1114,25 @@ runLspCases: function {r: Runner} is {
         zlsC: "\{r.tmp.stringView}/zls_bin.c"
         zlsB: "\{r.tmp.stringView}/zls_bin"
         srcD: "\{r.root.stringView}/src"
-        za: (zcArgv
+        built: false
+        stage: (buildTool
+            :r
             zc: r.zc.stringView
-            ccFwd: r.ccFwd.stringView
             name: "zls"
             srcdir: srcD.stringView
-            sys: r.sys.stringView
-            outc: zlsC.stringView
+            csrc: zlsC.stringView
+            bin: zlsB.stringView
+            asan: false
         )
-        ec: (os.spawn
-            argv: za
-            cwd: ""
-            outPath: "/dev/null"
-            errPath: "/dev/null"
-            timeoutSecs: 0
-        )
-        built: false
-        if ec != 0 then {
+        if stage == 1 then {
             print "FAIL(lsp) zls (zc)"
             r.fails = r.fails + 1
-        } else {
-            ga: (withZlink
-                argv: (gccArgv
-                    cc: r.cc.stringView
-                    ccflags: r.ccflags.stringView
-                    bin: zlsB.stringView
-                    csrc: zlsC.stringView
-                    asan: false
-                )
-                csrc: zlsC.stringView
-            )
-            bc: (os.spawn
-                argv: ga
-                cwd: ""
-                outPath: "/dev/null"
-                errPath: "/dev/null"
-                timeoutSecs: 0
-            )
-            if bc != 0 then {
-                print "FAIL(lsp) zls (cc)"
-                r.fails = r.fails + 1
-            } else {
-                built = true
-            }
         }
+        if stage == 2 then {
+            print "FAIL(lsp) zls (cc)"
+            r.fails = r.fails + 1
+        }
+        if stage == 0 then built = true
         if built then {
             names: List String
             with lit: lspLs.iterate do for fn: lit loop {
@@ -1706,84 +1709,30 @@ runDifferentialCases: function {r: Runner} is {
     zpsB: "\{r.tmp.stringView}/D_zparser.bin"
     lexOk: false
     parseOk: false
-    zlxE: (zcArgv
-        zc: r.zc.stringView
-        ccFwd: r.ccFwd.stringView
-        name: "zlexer_dump"
-        srcdir: r.unitDir.stringView
-        sys: r.sys.stringView
-        outc: zlxC.stringView
-    )
     if (
-        (os.spawn
-            argv: zlxE
-            cwd: ""
-            outPath: "/dev/null"
-            errPath: "/dev/null"
-            timeoutSecs: 0
-        ) ==
-        0
-    ) then {
-        zlxG: (withZlink
-            argv: (gccArgv
-                cc: r.cc.stringView
-                ccflags: r.ccflags.stringView
-                bin: zlxB.stringView
-                csrc: zlxC.stringView
-                asan: false
-            )
+        (buildTool
+            :r
+            zc: r.zc.stringView
+            name: "zlexer_dump"
+            srcdir: r.unitDir.stringView
             csrc: zlxC.stringView
-        )
-        if (
-            (os.spawn
-                argv: zlxG
-                cwd: ""
-                outPath: "/dev/null"
-                errPath: "/dev/null"
-                timeoutSecs: 0
-            ) ==
-            0
-        ) then lexOk = true
-    }
-    zpsE: (zcArgv
-        zc: r.zc.stringView
-        ccFwd: r.ccFwd.stringView
-        name: "zparser_dump"
-        srcdir: r.unitDir.stringView
-        sys: r.sys.stringView
-        outc: zpsC.stringView
-    )
-    if (
-        (os.spawn
-            argv: zpsE
-            cwd: ""
-            outPath: "/dev/null"
-            errPath: "/dev/null"
-            timeoutSecs: 0
+            bin: zlxB.stringView
+            asan: false
         ) ==
         0
-    ) then {
-        zpsG: (withZlink
-            argv: (gccArgv
-                cc: r.cc.stringView
-                ccflags: r.ccflags.stringView
-                bin: zpsB.stringView
-                csrc: zpsC.stringView
-                asan: false
-            )
+    ) then lexOk = true
+    if (
+        (buildTool
+            :r
+            zc: r.zc.stringView
+            name: "zparser_dump"
+            srcdir: r.unitDir.stringView
             csrc: zpsC.stringView
-        )
-        if (
-            (os.spawn
-                argv: zpsG
-                cwd: ""
-                outPath: "/dev/null"
-                errPath: "/dev/null"
-                timeoutSecs: 0
-            ) ==
-            0
-        ) then parseOk = true
-    }
+            bin: zpsB.stringView
+            asan: false
+        ) ==
+        0
+    ) then parseOk = true
     if lexOk.not then {
         print "FAIL(diff-build) zlexer"
         r.fails = r.fails + 1
@@ -1923,45 +1872,18 @@ runVfsCases: function {r: Runner} is {
     zvfC: "\{r.tmp.stringView}/D_zvfs.c"
     zvfB: "\{r.tmp.stringView}/D_zvfs.bin"
     vfsOk: false
-    zvfE: (zcArgv
-        zc: r.zc.stringView
-        ccFwd: r.ccFwd.stringView
-        name: "zvfs_script"
-        srcdir: r.unitDir.stringView
-        sys: r.sys.stringView
-        outc: zvfC.stringView
-    )
     if (
-        (os.spawn
-            argv: zvfE
-            cwd: ""
-            outPath: "/dev/null"
-            errPath: "/dev/null"
-            timeoutSecs: 0
+        (buildTool
+            :r
+            zc: r.zc.stringView
+            name: "zvfs_script"
+            srcdir: r.unitDir.stringView
+            csrc: zvfC.stringView
+            bin: zvfB.stringView
+            asan: false
         ) ==
         0
-    ) then {
-        zvfG: (withZlink
-            argv: (gccArgv
-                cc: r.cc.stringView
-                ccflags: r.ccflags.stringView
-                bin: zvfB.stringView
-                csrc: zvfC.stringView
-                asan: false
-            )
-            csrc: zvfC.stringView
-        )
-        if (
-            (os.spawn
-                argv: zvfG
-                cwd: ""
-                outPath: "/dev/null"
-                errPath: "/dev/null"
-                timeoutSecs: 0
-            ) ==
-            0
-        ) then vfsOk = true
-    }
+    ) then vfsOk = true
     if vfsOk.not then {
         print "FAIL(vfs-build) zvfs"
         r.fails = r.fails + 1
@@ -2140,45 +2062,18 @@ runFmtCases: function {r: Runner} is {
     srcs.append ":"
     srcs.append r.srcDir
     built: false
-    zfE: (zcArgv
-        zc: r.zc.stringView
-        ccFwd: r.ccFwd.stringView
-        name: "zfmt_dump"
-        srcdir: srcs.stringView
-        sys: r.sys.stringView
-        outc: zfC.stringView
-    )
     if (
-        (os.spawn
-            argv: zfE
-            cwd: ""
-            outPath: "/dev/null"
-            errPath: "/dev/null"
-            timeoutSecs: 0
+        (buildTool
+            :r
+            zc: r.zc.stringView
+            name: "zfmt_dump"
+            srcdir: srcs.stringView
+            csrc: zfC.stringView
+            bin: zfB.stringView
+            asan: false
         ) ==
         0
-    ) then {
-        zfG: (withZlink
-            argv: (gccArgv
-                cc: r.cc.stringView
-                ccflags: r.ccflags.stringView
-                bin: zfB.stringView
-                csrc: zfC.stringView
-                asan: false
-            )
-            csrc: zfC.stringView
-        )
-        if (
-            (os.spawn
-                argv: zfG
-                cwd: ""
-                outPath: "/dev/null"
-                errPath: "/dev/null"
-                timeoutSecs: 0
-            ) ==
-            0
-        ) then built = true
-    }
+    ) then built = true
     if built.not then {
         print "FAIL(fmt-build) zfmt_dump"
         r.fails = r.fails + 1
@@ -2384,45 +2279,18 @@ runSelfhostAsan: function {r: Runner} is {
         zcaC: "\{r.tmp.stringView}/zca.c"
         zcaB: "\{r.tmp.stringView}/zca.bin"
         zcaOk: false
-        ea: (zcArgv
-            zc: r.zc.stringView
-            ccFwd: r.ccFwd.stringView
-            name: "zc"
-            srcdir: r.srcDir.stringView
-            sys: r.sys.stringView
-            outc: zcaC.stringView
-        )
         if (
-            (os.spawn
-                argv: ea
-                cwd: ""
-                outPath: "/dev/null"
-                errPath: "/dev/null"
-                timeoutSecs: 0
+            (buildTool
+                :r
+                zc: r.zc.stringView
+                name: "zc"
+                srcdir: r.srcDir.stringView
+                csrc: zcaC.stringView
+                bin: zcaB.stringView
+                asan: true
             ) ==
             0
-        ) then {
-            gza: (withZlink
-                argv: (gccArgv
-                    cc: r.cc.stringView
-                    ccflags: r.ccflags.stringView
-                    bin: zcaB.stringView
-                    csrc: zcaC.stringView
-                    asan: true
-                )
-                csrc: zcaC.stringView
-            )
-            if (
-                (os.spawn
-                    argv: gza
-                    cwd: ""
-                    outPath: "/dev/null"
-                    errPath: "/dev/null"
-                    timeoutSecs: 0
-                ) ==
-                0
-            ) then zcaOk = true
-        }
+        ) then zcaOk = true
         if zcaOk.not then {
             print "FAIL(selfhost-asan-build) zc"
             r.fails = r.fails + 1
@@ -2519,37 +2387,29 @@ runFixpoint: function {r: Runner} is {
         fp1bin: "\{r.tmp.stringView}/fp1.bin"
         fp2: "\{r.tmp.stringView}/fp2.c"
         fpOk: false
-        e1: (zcArgv
-            zc: r.zc.stringView
-            ccFwd: r.ccFwd.stringView
-            name: "zc"
-            srcdir: r.srcDir.stringView
-            sys: r.sys.stringView
-            outc: fp1.stringView
-        )
         if (
-            (os.spawn
-                argv: e1
-                cwd: ""
-                outPath: "/dev/null"
-                errPath: "/dev/null"
-                timeoutSecs: 0
+            (buildTool
+                :r
+                zc: r.zc.stringView
+                name: "zc"
+                srcdir: r.srcDir.stringView
+                csrc: fp1.stringView
+                bin: fp1bin.stringView
+                asan: false
             ) ==
             0
         ) then {
-            g1: (withZlink
-                argv: (gccArgv
-                    cc: r.cc.stringView
-                    ccflags: r.ccflags.stringView
-                    bin: fp1bin.stringView
-                    csrc: fp1.stringView
-                    asan: false
-                )
-                csrc: fp1.stringView
+            e2: (zcArgv
+                zc: fp1bin.stringView
+                ccFwd: r.ccFwd.stringView
+                name: "zc"
+                srcdir: r.srcDir.stringView
+                sys: r.sys.stringView
+                outc: fp2.stringView
             )
             if (
                 (os.spawn
-                    argv: g1
+                    argv: e2
                     cwd: ""
                     outPath: "/dev/null"
                     errPath: "/dev/null"
@@ -2557,28 +2417,9 @@ runFixpoint: function {r: Runner} is {
                 ) ==
                 0
             ) then {
-                e2: (zcArgv
-                    zc: fp1bin.stringView
-                    ccFwd: r.ccFwd.stringView
-                    name: "zc"
-                    srcdir: r.srcDir.stringView
-                    sys: r.sys.stringView
-                    outc: fp2.stringView
-                )
-                if (
-                    (os.spawn
-                        argv: e2
-                        cwd: ""
-                        outPath: "/dev/null"
-                        errPath: "/dev/null"
-                        timeoutSecs: 0
-                    ) ==
-                    0
-                ) then {
-                    c1: slurp path: fp1.stringView
-                    c2: slurp path: fp2.stringView
-                    if c1.stringView == c2.stringView then fpOk = true
-                }
+                c1: slurp path: fp1.stringView
+                c2: slurp path: fp2.stringView
+                if c1.stringView == c2.stringView then fpOk = true
             }
         }
         if fpOk then {
