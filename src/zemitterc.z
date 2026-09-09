@@ -6098,29 +6098,17 @@ instanceMethodArgValue: function {
     # may appear only once in a call -- projecting `.stringView` at each site
     # would cost two temporaries.
     pnameL: posParamName
-    isLbl9b: ctorHasLabel :ast :call label: posParamName
-    iiVal: String
-    if isLbl9b then {
-        iiVal = (ctorInterpArgAt
-            :ast
-            :symtab
-            :ctx
-            aid: (ctorArgNodeByLabel :ast :call label: posParamName)
-            fid: (ztypes.tid.create from: mco.u64)
-            pname: pnameL
-            pid: posParamId
-        )
-    } else {
-        iiVal = (ctorInterpArgAt
-            :ast
-            :symtab
-            :ctx
-            aid: (ctorArgNodeByPosition :ast :call idx: positionalIdx)
-            fid: (ztypes.tid.create from: mco.u64)
-            pname: posParamName
-            pid: posParamId
-        )
-    }
+    ca: ctorArgFor :ast :call label: posParamName posIdx: positionalIdx
+    isLbl9b: ca.labelled
+    iiVal: (ctorInterpArgAt
+        :ast
+        :symtab
+        :ctx
+        aid: ca.nid
+        fid: (ztypes.tid.create from: mco.u64)
+        pname: pnameL
+        pid: posParamId
+    )
     atomVarId: String
     avBor: false
     usedInterp: false
@@ -8759,6 +8747,64 @@ emitExprStrZero: function {ctx: Ctx.view} out String is {
     return "((\{ctx.strC}_t){0})"
 }
 
+# userCreateFn -- the user-written `create` that overrides a type's field-wise
+# constructor: a function-typed `create` member with a body (a return node).
+# Zero when the type has none, and construction is field-wise.
+userCreateFn: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
+    cco: symtab.typing.declChildOfId parentTypeId: tid nameId: zast.names.wkCreate
+    if cco.none then return ztypes.tid
+    ct: ztypes.tid.create from: cco.u64
+    if ((symtab.reg.typetypeOf typeId: ct) == ztypes.ztypetype.functionType).not then {
+        return ztypes.tid
+    }
+    if (symtab.typing.funcReturnNode.get key: cco).none then return ztypes.tid
+    return ct
+}
+
+# createParamDefaultText -- a user `create` parameter the call left unsupplied:
+# its registered default, else the "0" fallback.
+createParamDefaultText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    # the constructed type, which owns the defaults
+    tid: ztypes.tid
+    # the parameter's name id (a raw pool index)
+    nameId: u64
+    # the parameter's type
+    pid: u64
+} out String is {
+    nm: zast.nameid.create from: nameId.u32.orPanic
+    if (symtab.typing.declHasDefaultId parentTypeId: tid nameId: nm).not then return "0".string
+    cdt: symtab.typing.declDefaultOfId parentTypeId: tid nameId: nm
+    return (renderDefault :ast :symtab :ctx dv: cdt targetTid: (ztypes.tid.create from: pid.u64))
+}
+
+# fieldDefaultText -- a field the construction left unsupplied: its registered
+# default, else an fnptr slot's method address, else the "0" fallback.
+fieldDefaultText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    # the field's name id (a raw pool index)
+    nameId: u64
+    # the field's type
+    fid: u64
+} out String is {
+    nm: zast.nameid.create from: nameId.u32.orPanic
+    if (symtab.typing.declHasDefaultId parentTypeId: tid nameId: nm) then {
+        cdt: symtab.typing.declDefaultOfId parentTypeId: tid nameId: nm
+        (return
+            (renderDefault :ast :symtab :ctx dv: cdt targetTid: (ztypes.tid.create from: fid.u64))
+        )
+    }
+    if (symtab.typing.declIsFnptrFieldId parentTypeId: tid nameId: nm) then {
+        return (ctxCname :ctx tid: (ztypes.tid.create from: fid.u64))
+    }
+    return "0".string
+}
+
 # emitCtorDefaultsFill -- the zero-argument construction of a record/class
 # tid: a body-carrying user create called with its param defaults, else the
 # generated field-wise create with each field's default (fnptr fields pass
@@ -8770,62 +8816,30 @@ emitCtorDefaultsFill: function {
     ctx: Ctx
     tid: ztypes.tid
 } out String is {
-    cco: symtab.typing.declChildOfId parentTypeId: tid nameId: zast.names.wkCreate
-    match (
-        cco
-    ) case some then {
-        if (
-            (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: cco.u64)) ==
-            ztypes.ztypetype.functionType
-        ) then {
-            crB: false
-            crn: symtab.typing.funcReturnNode.get key: cco
-            match (
-                crn
-            ) case some then {
-                crB = true
-            } case none then null
-            if crB then {
-                cpi: ListVal u64
-                cpiNm: ListVal u64
-                (recFieldIds
-                    :symtab
-                    tid: (ztypes.tid.create from: cco.u64)
-                    ids: cpi
-                    nameIds: cpiNm
-                )
-                cargs: String
-                ci: u64
-                ccn: cpi.length
-                for ci < ccn loop {
-                    cpid: cpi.get i: ci
-                    cpnameId: cpiNm.get i: ci
-                    ci = ci + 1
-                    cav: "0".string
-                    if (symtab.typing.declHasDefaultId
-                        parentTypeId: tid
-                        nameId: (zast.nameid.create from: cpnameId.u32.orPanic)
-                    ) then {
-                        cdt: (symtab.typing.declDefaultOfId
-                            parentTypeId: tid
-                            nameId: (zast.nameid.create from: cpnameId.u32.orPanic)
-                        )
-                        cav = (renderDefault
-                            :ast
-                            :symtab
-                            :ctx
-                            dv: cdt
-                            targetTid: (ztypes.tid.create from: cpid.u64)
-                        )
-                    }
-                    if cargs.length > 0 then cargs.append ", "
-                    cargs.append cav
-                }
-                ccb: ctxCname :ctx tid: (ztypes.tid.create from: cco.u64)
-                return "\{ccb}(\{cargs})"
-            }
+    cco: userCreateFn :symtab :tid
+    if cco.isZero.not then {
+        cpi: ListVal u64
+        cpiNm: ListVal u64
+        recFieldIds :symtab tid: cco ids: cpi nameIds: cpiNm
+        cargs: String
+        ci: u64
+        ccn: cpi.length
+        for ci < ccn loop {
+            cav: (createParamDefaultText
+                :ast
+                :symtab
+                :ctx
+                :tid
+                nameId: (cpiNm.get i: ci)
+                pid: (cpi.get i: ci)
+            )
+            ci = ci + 1
+            if cargs.length > 0 then cargs.append ", "
+            cargs.append cav
         }
-    } case none then null
+        ccb: ctxCname :ctx tid: cco
+        return "\{ccb}(\{cargs})"
+    }
     fids: ListVal u64
     fidsNm: ListVal u64
     recFieldIds :symtab :tid ids: fids nameIds: fidsNm
@@ -8833,33 +8847,8 @@ emitCtorDefaultsFill: function {
     fi: u64
     fn0: fids.length
     for fi < fn0 loop {
-        ffid: fids.get i: fi
-        fnameId: fidsNm.get i: fi
+        av: fieldDefaultText :ast :symtab :ctx :tid nameId: (fidsNm.get i: fi) fid: (fids.get i: fi)
         fi = fi + 1
-        av: "0".string
-        if (symtab.typing.declHasDefaultId
-            parentTypeId: tid
-            nameId: (zast.nameid.create from: fnameId.u32.orPanic)
-        ) then {
-            cdt1: (symtab.typing.declDefaultOfId
-                parentTypeId: tid
-                nameId: (zast.nameid.create from: fnameId.u32.orPanic)
-            )
-            av = (renderDefault
-                :ast
-                :symtab
-                :ctx
-                dv: cdt1
-                targetTid: (ztypes.tid.create from: ffid.u64)
-            )
-        } else {
-            if (symtab.typing.declIsFnptrFieldId
-                parentTypeId: tid
-                nameId: (zast.nameid.create from: fnameId.u32.orPanic)
-            ) then {
-                av = ctxCname :ctx tid: (ztypes.tid.create from: ffid.u64)
-            }
-        }
         if args.length > 0 then args.append ", "
         args.append av
     }
@@ -8867,8 +8856,110 @@ emitCtorDefaultsFill: function {
     return "\{rcb}_create(\{args})"
 }
 
+# createArgText -- one argument of a construction routed through a user
+# `create`. The create's own parameters decide how each argument is passed,
+# exactly as they do for any other call of it: a non-`take` user class is a
+# `T*`, so a bare local has to be addressed. userFnArgText is the same answer
+# the direct-call path uses -- asking it here is what keeps a `create` reached
+# by construction agreeing with one reached by name. An unsupplied parameter
+# takes its default.
+createArgText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    # the constructed type
+    tid: ztypes.tid
+    # the user create
+    cco: ztypes.tid
+    # the argument the parameter binds
+    ca: ctorarg
+    # the parameter's name id (a raw pool index)
+    nameId: u64
+    # the parameter's type
+    pid: u64
+    pname: StringView
+} out String is {
+    if ca.nid == 0 then return (createParamDefaultText :ast :symtab :ctx :tid :nameId :pid)
+    return (userFnArgText
+        :ast
+        :symtab
+        :ctx
+        fid: cco
+        pinId: pid
+        pinNm: pname
+        argOpNode: (ast.nodes.get i: ca.nid)
+    )
+}
+
+# fieldArgText -- one argument of a field-wise construction: the labelled
+# argument's text as written; an absent label binds the next positional
+# (unlabeled) argument, then the field's default, then an fnptr slot's method
+# address, else the "0" fallback.
+fieldArgText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    # the argument the field binds
+    ca: ctorarg
+    # the field's name id (a raw pool index)
+    nameId: u64
+    # the field's type
+    fid: u64
+} out String is {
+    if ca.nid > 0 then {
+        t: ctorArgTextAt :ast :symtab :ctx aid: ca.nid
+        if ca.labelled or (t.length > 0) then return t
+    }
+    if ca.labelled then return "0".string
+    return (fieldDefaultText :ast :symtab :ctx :tid :nameId :fid)
+}
+
+# userCreateCtor -- a construction routed through the user `create` `cco`:
+# args by the create's own labels, in its parameter order.
+userCreateCtor: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    tid: ztypes.tid
+    cco: ztypes.tid
+} out String is {
+    cpn: List String
+    cpi: ListVal u64
+    cpiNm: ListVal u64
+    recFieldLists :ast :symtab tid: cco names: cpn ids: cpi nameIds: cpiNm
+    cargs: String
+    ci: u64
+    ccn: cpn.length
+    cposIdx: u64
+    for ci < ccn loop {
+        cpname: cpn.get i: ci
+        ca: ctorArgFor :ast :call label: cpname.stringView posIdx: cposIdx
+        if ca.labelled.not then cposIdx = cposIdx + 1
+        cav: (createArgText
+            :ast
+            :symtab
+            :ctx
+            :tid
+            :cco
+            :ca
+            nameId: (cpiNm.get i: ci)
+            pid: (cpi.get i: ci)
+            pname: cpname.stringView
+        )
+        if ci > 0 then cargs.append ", "
+        cargs.append cav
+        ci = ci + 1
+    }
+    ccb: ctxCname :ctx tid: cco
+    return "\{ccb}(\{cargs})"
+}
+
 # emitRecordCtor -- a record construction call: args reordered to field
-# order by label, emitted through the create alias.
+# order by label, emitted through the create alias. A user-defined `create`
+# (non-empty params) overrides the field-wise ctor: bare-name construction
+# routes through it, args by the create's own labels.
 emitRecordCtor: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -8876,95 +8967,8 @@ emitRecordCtor: function {
     call: zast.callrow.view
     tid: ztypes.tid
 } out String is {
-    # a user-defined `create` (non-empty params) overrides the field-wise ctor:
-    # bare-name construction routes through it, args by the create's own labels.
-    cco: symtab.typing.declChildOfId parentTypeId: tid nameId: zast.names.wkCreate
-    match (
-        cco
-    ) case some then {
-        if (
-            (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: cco.u64)) ==
-            ztypes.ztypetype.functionType
-        ) then {
-            crB: false
-            crn: symtab.typing.funcReturnNode.get key: cco
-            match (
-                crn
-            ) case some then {
-                crB = true
-            } case none then null
-            cpn: List String
-            cpi: ListVal u64
-            cpiNm: ListVal u64
-            (recFieldLists
-                :ast
-                :symtab
-                tid: (ztypes.tid.create from: cco.u64)
-                names: cpn
-                ids: cpi
-                nameIds: cpiNm
-            )
-            if crB then {
-                cargs: String
-                ci: u64
-                ccn: cpn.length
-                cposIdx: u64
-                for ci < ccn loop {
-                    cpname: cpn.get i: ci
-                    cpnameId: cpiNm.get i: ci
-                    cpid0: cpi.get i: ci
-                    # the create's own parameters decide how each argument is
-                    # passed, exactly as they do for any other call of it: a
-                    # non-`take` user class is a `T*`, so a bare local has to be
-                    # addressed. userFnArgText is the same answer the direct-call
-                    # path uses -- asking it here is what keeps a `create`
-                    # reached by construction agreeing with one reached by name.
-                    cav: "0".string
-                    caNid: u64
-                    if (ctorHasLabel :ast :call label: cpname.stringView) then {
-                        caNid = ctorArgNodeByLabel :ast :call label: cpname.stringView
-                    } else {
-                        caNid = ctorArgNodeByPosition :ast :call idx: cposIdx
-                        cposIdx = cposIdx + 1
-                    }
-                    if caNid > 0 then {
-                        cav = (userFnArgText
-                            :ast
-                            :symtab
-                            :ctx
-                            fid: (ztypes.tid.create from: cco.u64)
-                            pinId: cpid0
-                            pinNm: cpname.stringView
-                            argOpNode: (ast.nodes.get i: caNid)
-                        )
-                    } else {
-                        if (symtab.typing.declHasDefaultId
-                            parentTypeId: tid
-                            nameId: (zast.nameid.create from: cpnameId.u32.orPanic)
-                        ) then {
-                            cdt0: (symtab.typing.declDefaultOfId
-                                parentTypeId: tid
-                                nameId: (zast.nameid.create from: cpnameId.u32.orPanic)
-                            )
-                            cav = (renderDefault
-                                :ast
-                                :symtab
-                                :ctx
-                                dv: cdt0
-                                targetTid: (ztypes.tid.create from: cpid0.u64)
-                            )
-                        }
-                    }
-                    if ci > 0 then cargs.append ", "
-                    cargs.append cav
-                    ci = ci + 1
-                }
-                ccb: ctxCname :ctx tid: (ztypes.tid.create from: cco.u64)
-                ce: "\{ccb}(\{cargs})"
-                return ce
-            }
-        }
-    } case none then null
+    cco: userCreateFn :symtab :tid
+    if cco.isZero.not then return (userCreateCtor :ast :symtab :ctx :call :tid :cco)
     fnames: List String
     fids: ListVal u64
     fidsNm: ListVal u64
@@ -8977,47 +8981,12 @@ emitRecordCtor: function {
         fname: fnames.get i: fi
         ffid0: fids.get i: fi
         fnameId: fidsNm.get i: fi
-        av: ctorArgByLabel :ast :symtab :ctx :call label: fname.stringView
-        # an absent label binds the next positional (unlabeled) arg by cursor; then a
-        # registered default; then an fnptr slot's method address; else the "0" fallback.
-        if (ctorHasLabel :ast :call label: fname.stringView).not then {
-            fposUsed: false
-            fpv: ctorArgByPosition :ast :symtab :ctx :call idx: fposIdx
-            if fpv.length > 0 then {
-                av = fpv
-                fposUsed = true
-            }
-            fposIdx = fposIdx + 1
-            if fposUsed.not then {
-                if (symtab.typing.declHasDefaultId
-                    parentTypeId: tid
-                    nameId: (zast.nameid.create from: fnameId.u32.orPanic)
-                ) then {
-                    cdt1: (symtab.typing.declDefaultOfId
-                        parentTypeId: tid
-                        nameId: (zast.nameid.create from: fnameId.u32.orPanic)
-                    )
-                    av = (renderDefault
-                        :ast
-                        :symtab
-                        :ctx
-                        dv: cdt1
-                        targetTid: (ztypes.tid.create from: ffid0.u64)
-                    )
-                } else {
-                    if (symtab.typing.declIsFnptrFieldId
-                        parentTypeId: tid
-                        nameId: (zast.nameid.create from: fnameId.u32.orPanic)
-                    ) then {
-                        av = ctxCname :ctx tid: (ztypes.tid.create from: ffid0.u64)
-                    }
-                }
-            }
-        }
+        ca: ctorArgFor :ast :call label: fname.stringView posIdx: fposIdx
+        if ca.labelled.not then fposIdx = fposIdx + 1
+        av: fieldArgText :ast :symtab :ctx :tid :ca nameId: fnameId fid: ffid0
         # a borrowed reftype field is a pointer; a source stored INLINE (the
         # receiver's own field, a field of a parameter) is passed by address
-        if (ctorHasLabel :ast :call label: fname.stringView
-        ) when (symtab.typing.declIsBorrowedFieldId
+        if ca.labelled when (symtab.typing.declIsBorrowedFieldId
             parentTypeId: tid
             nameId: (zast.nameid.create from: fnameId.u32.orPanic)
         ) when (borrowedFieldIsReftypePtr :ast :symtab :ctx fid: (ztypes.tid.create from: ffid0.u64)
@@ -9097,6 +9066,30 @@ ctorArgIsBorrowPos: function {
         }
     }
     return false
+}
+
+# ctorarg -- the argument node a constructor parameter binds.
+ctorarg: record {
+    # the argument node; 0 when the call supplies none
+    nid: u64
+    # whether the call spelled the parameter's label; otherwise the node came
+    # from the positional cursor, which the caller then advances
+    labelled: bool
+}
+
+# ctorArgFor -- the argument a constructor parameter binds: the labelled
+# argument when the call spells the label, else the positional argument at
+# `posIdx`.
+ctorArgFor: function {
+    ast: Ast.view
+    call: zast.callrow.view
+    label: StringView
+    posIdx: u64
+} out ctorarg is {
+    if (ctorHasLabel :ast :call :label) then {
+        return (ctorarg nid: (ctorArgNodeByLabel :ast :call :label) labelled: true)
+    }
+    return (ctorarg nid: (ctorArgNodeByPosition :ast :call idx: posIdx) labelled: false)
 }
 
 # the constructor-argument node matching a field label.
@@ -17379,6 +17372,37 @@ genericOwnerKey: function {
     return (ztypecheck.declOfTypeId st: symtab tid: (ztypes.tid.create from: orig.u64))
 }
 
+# dissectArmByValue -- the statement of the first case clause whose name is the
+# numeral `value`, for a generic match over a VALUE parameter; 0 when none is.
+dissectArmByValue: function {ast: Ast.view m: zast.caserow.view value: u64} out u32 is {
+    i: u64
+    for i < m.clauses.count.u64 loop {
+        cId: zast.kidAt kids: ast.kids span: m.clauses :i
+        i = i + 1
+        cnode: ast.nodes.get i: cId.u64
+        if cnode.caseclause when cnode.name != 0 then {
+            cnt: zast.poolTextAt pool: ast.names ref: cnode.name
+            pu: cnt.stringView.parseU64
+            if pu.ok when pu == value then return cnode.statement
+        }
+    }
+    return 0
+}
+
+# dissectArmByName -- the statement of the first case clause named `cnid`, for
+# a generic match over a TYPE parameter; 0 when none is (or the name is 0).
+dissectArmByName: function {ast: Ast.view m: zast.caserow.view cnid: u32} out u32 is {
+    if cnid == 0 then return 0
+    i: u64
+    for i < m.clauses.count.u64 loop {
+        cId: zast.kidAt kids: ast.kids span: m.clauses :i
+        i = i + 1
+        cnode: ast.nodes.get i: cId.u64
+        if cnode.caseclause when cnode.name.u32 == cnid then return cnode.statement
+    }
+    return 0
+}
+
 # emit the selected arm of a compile-time generic `match`.
 emitGenericDissect: function {
     ast: Ast.view
@@ -17393,69 +17417,28 @@ emitGenericDissect: function {
 } is {
     concrete: ztypes.tid
     isVal: false
+    ord: optionval.none u64
     if ownerTid > 0 then {
         tk: genericOwnerKey :symtab :ownerTid
-        if tk.isZero.not then {
-            pnames: symtab.reg.genericParamNamesOf tdecl: tk
-            found: false
-            ord: u64
-            k: u64
-            with pnit: pnames.iterate do for pn: pnit loop {
-                if found.not then {
-                    if pn == paramName then {
-                        found = true
-                        ord = k
-                    } else {
-                        k = k + 1
-                    }
-                }
-            }
-            if found then {
-                concrete = ztypes.tid.create from: (symtab.reg.genericArgAt
-                    specId: ownerTid
-                    ordinal: ord
-                )
-                isVal = symtab.reg.genericArgIsValueAt specId: ownerTid ordinal: ord
-            }
-        }
+        if tk.isZero.not then ord = symtab.reg.paramOrdinalOf tdecl: tk :paramName
+    }
+    if ord.some then {
+        concrete = ztypes.tid.create from: (symtab.reg.genericArgAt specId: ownerTid ordinal: ord)
+        isVal = symtab.reg.genericArgIsValueAt specId: ownerTid ordinal: ord
     }
     win: u32
     subjDesc: String
     if isVal then {
         subjDesc = "\{concrete}"
-        clx979: u64
-        for clx979 < m.clauses.count.u64 loop {
-            cId: zast.kidAt kids: ast.kids span: m.clauses i: clx979
-            clx979 = clx979 + 1
-            cnode: ast.nodes.get i: cId.u64
-            if cnode.caseclause when win == 0 when cnode.name != 0 then {
-                cnt: zast.poolTextAt pool: ast.names ref: cnode.name
-                pu: cnt.stringView.parseU64
-                match (
-                    pu
-                ) case ok then {
-                    if pu == concrete then win = cnode.statement
-                } case err then null
-            }
-        }
+        win = dissectArmByValue :ast :m value: concrete.u64
     } else {
-        cn0: String
-        if concrete > 0 then cn0 = (regNameOf
+        if concrete > 0 then subjDesc = (regNameOf
             :symtab
             tid: (ztypes.tid.create from: concrete.u64)
         )
         cnid: u32
-        if cn0.length > 0 then cnid = zast.poolFind pool: ast.names text: cn0.stringView
-        clx989: u64
-        for clx989 < m.clauses.count.u64 loop {
-            cId: zast.kidAt kids: ast.kids span: m.clauses i: clx989
-            clx989 = clx989 + 1
-            cnode: ast.nodes.get i: cId.u64
-            if cnode.caseclause when win == 0 when cnid != 0 when (
-                cnode.name.u32 == cnid
-            ) then win = cnode.statement
-        }
-        subjDesc = cn0
+        if subjDesc.length > 0 then cnid = zast.poolFind pool: ast.names text: subjDesc.stringView
+        win = dissectArmByName :ast :m :cnid
     }
     if win == 0 then win = m.elseclause
     if win > 0 then {
