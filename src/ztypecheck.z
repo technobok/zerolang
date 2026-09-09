@@ -612,33 +612,13 @@ methodReceiverIsView: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out 
     }
 }
 
-# isContainerReaderCall -- the container methods whose receiver lock is
-# SHARED but which cannot say so themselves. Everything a `.view` receiver
-# can express has moved to the declarations (methodReceiverIsView, ORed in at
-# every call site); what is left is what a marker cannot cover:
-#
-#   get hands out a mutable interior pointer, so its C refuses a const
-#   receiver and `.view` would let a caller write through an alias obtained
-#   from a readonly receiver;
-#   MapEntry.key / .value are projections through the entry pointer with no
-#   method declaration to mark;
-#   copy is the universal `.copy` marker, which resolves to no method either.
-#
-# Writers and user methods (opaque bodies) stay EXCLUSIVE.
-# isContainerReaderCall -- the irreducible core. Every entry left here is one a
-# DECLARATION cannot express, and the reason differs per entry:
-#
-#   Map.get / List.get  hand back a MUTABLE interior pointer
-#     (`_r.data = &_this->entries[idx].value`), so their C refuses `const` and
-#     `.view` would hand a caller a writable alias out of a readonly receiver.
-#     List.get write-back is load-bearing at 28 sites. `listView` has left:
-#     both List templates now declare a `.view` receiver, so the declaration
-#     answers through methodReceiverIsView.
-#   Map.copy / Set.copy / List.copy  are the synthesised `.copy` marker; the
-#     containers declare no `copy` member to mark.
-#
-# The String arm is gone: `String.copy` was already declared `{t: this.view}`,
-# and `String.stringView` now is, so `methodReceiverIsView` answers for both.
+# isContainerReaderCall -- the one container reader whose receiver lock is
+# SHARED but which cannot say so itself: `.copy`, the universal marker, which
+# resolves to no method a declaration could mark. Everything else a `.view`
+# receiver can express has moved to the declarations (methodReceiverIsView,
+# ORed in at every call site): every container `get` says `.view` now -- the
+# emitted C's receiver was const all along -- as `listView`, `String.copy` and
+# `String.stringView` did before it. Writers and user methods stay EXCLUSIVE.
 isContainerReaderCall: function {
     ast: Ast.view
     st: zenv.ZSymbolTable
@@ -657,9 +637,7 @@ isContainerReaderCall: function {
         (recvBaseTid == (builtinTidTRo :st frame: st.curFrame :ast base: "MapVR")) or
         (recvBaseTid == (builtinTidTRo :st frame: st.curFrame :ast base: "MapVV"))
     )
-    if isMapB then {
-        return (mnameId == zast.names.wkGet) or (zast.nameTextEq :ast ref: mnameId s: "copy")
-    }
+    if isMapB then return (zast.nameTextEq :ast ref: mnameId s: "copy")
     isSetB: (
         (recvBaseTid == (builtinTidTRo :st frame: st.curFrame :ast base: "SetRef")) or
         (recvBaseTid == (builtinTidTRo :st frame: st.curFrame :ast base: "SetVal"))
@@ -668,18 +646,11 @@ isContainerReaderCall: function {
         if (zast.nameTextEq :ast ref: mnameId s: "copy") then return true
         return false
     }
-    # BOTH List templates: they share one emitted `get`, so they share its
-    # reason for being here -- a mutable interior pointer whose C refuses a
-    # const receiver.
     isListB: (
         (recvBaseTid == (builtinTidTRo :st frame: st.curFrame :ast base: "ListRef")) or
         (recvBaseTid == (builtinTidTRo :st frame: st.curFrame :ast base: "ListVal"))
     )
-    if isListB then {
-        (return
-            (mnameId == zast.names.wkGet) or (zast.nameTextEq :ast ref: mnameId s: "copy")
-        )
-    }
+    if isListB then return (zast.nameTextEq :ast ref: mnameId s: "copy")
     return false
 }
 
