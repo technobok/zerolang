@@ -11943,6 +11943,116 @@ emitDottedNestedBase: function {
     }
 }
 
+# protocolProjectionRead -- a borrowed conformance projection: f.myreader ->
+# {Impl}_{label}_create(&f) (a borrowed fat pointer). Only an as-block
+# conformance LABEL materializes; a stored protocol field (p: SomeProto) is a
+# by-value fat pointer accessed directly, so the read is gated on the
+# conformance row. Empty when the member is not the label.
+protocolProjectionRead: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    mn2: StringView
+    bn2: StringView
+    bn2v: ztypes.vid
+    bstamp: ztypes.tid
+    # the protocol
+    mco: u64
+} out String is {
+    clab: conformanceLabelFor :symtab implTid: bstamp protoTid: mco
+    if (clab.stringView == mn2).not then return String
+    ib: ctxCnameView :ctx tid: bstamp
+    if (isPtrVid :ctx vid: bn2v) then return "\{ib}_\{mn2}_create(\{bn2})"
+    return "\{ib}_\{mn2}_create(&\{bn2})"
+}
+
+# typeNameCreateZero -- `Type.create` off a native scalar or String type name:
+# the zero value is the construction (those creates have no C symbol). Empty
+# for every other type.
+typeNameCreateZero: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx fbtn: StringView bstamp: ztypes.tid
+} out String is {
+    zsc: scalarCTypeFor :symtab name: fbtn tid: bstamp
+    if zsc.length > 0 then return "((\{zsc})0)"
+    if bstamp == ctx.strTid then return "((\{ctx.strC}_t){0})"
+    return String
+}
+
+# methodAutoCallRead -- a member read that auto-calls a method. A no-arg SV
+# native (count/hash/codepoints/lines) has no per-method C symbol and emits
+# the canonical native over the projected view. `Type.create` off the type
+# name is a constructor/static call with no receiver. A RECEIVER-TAKING
+# METHOD READ OFF THE TYPE NAME IS A REFERENCE, and there is nothing else it
+# can be: calling it needs a receiver this leg has not got, and the call form
+# (`T.f self: t rhs: 2`) never arrives here -- so `point.add.take` is the bare
+# cname, the unbound function pointer, whose `_ft` typedef already pointerizes
+# the receiver; a true zero-arg static declares no receiver and keeps its
+# call. Static-or-not is decided by the base being the TYPE NAME with no vid,
+# never by the text alone (--readable-names keeps source names). Otherwise a
+# receiver-taking method takes its receiver by pointer in both families.
+methodAutoCallRead: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    mn2: StringView
+    bn2: StringView
+    bn2v: ztypes.vid
+    bstamp: ztypes.tid
+    # the method
+    mco: u64
+    # the enclosing type's name
+    fbtn: StringView
+} out String is {
+    if (isSvNoArgNative name: mn2) when (isStringyTid :ctx tid: bstamp) then {
+        needsAddM :ctx uname: "system" memb: mn2
+        svfa: svValueForm :ctx expr: bn2 isStr: (bstamp == ctx.strTid) vid: bn2v
+        return "\{ctx.svC}_\{mn2}(&\{svfa})"
+    }
+    mt: ztypes.tid.create from: mco.u64
+    mc2: ctxCname :ctx tid: mt
+    if bn2v.isZero when bn2 == fbtn when mn2 == "create" then {
+        z: typeNameCreateZero :symtab :ctx :fbtn :bstamp
+        if z.length > 0 then return z
+    }
+    if bn2v.isZero when bn2 == fbtn then {
+        if (fnTypeTakesThis :symtab tid: mt) then return mc2
+        sda: renderedMethodDefaultArgs :ast :symtab :ctx fnTid: mt
+        if sda.length > 0 then return "\{mc2}(\{sda})"
+        return "\{mc2}()"
+    }
+    methodRecv: "\{bn2}"
+    if (calleeTakesReceiverByPtr :ast :symtab fid: mt) when (isPtrVid :ctx vid: bn2v).not then {
+        methodRecv = "&\{bn2}"
+    }
+    ida: renderedMethodDefaultArgs :ast :symtab :ctx fnTid: mt
+    if ida.length > 0 then return "\{mc2}(\{methodRecv}, \{ida})"
+    return "\{mc2}(\{methodRecv})"
+}
+
+# fnptrFieldRead -- a read of a function-pointer field: off the type name it
+# is the field's function itself; a receiver-taking one is called through
+# the field with the base as its receiver.
+fnptrFieldRead: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    mn2: StringView
+    bn2: StringView
+    bn2v: ztypes.vid
+    mco: u64
+    fbtn: StringView
+} out String is {
+    mcFp: ctxCname :ctx tid: (ztypes.tid.create from: mco.u64)
+    if bn2v.isZero when bn2 == fbtn then return mcFp
+    if (fnTypeTakesThis :symtab tid: (ztypes.tid.create from: mco.u64)).not then return String
+    accFp: ".".string
+    rcvFp: "&\{bn2}"
+    if (isPtrVid :ctx vid: bn2v) then {
+        accFp = "->".string
+        rcvFp = "\{bn2}"
+    }
+    mnFpP: memberCPrefix name: mn2
+    return "\{bn2}\{accFp}\{mnFpP}\{mn2}(\{rcvFp})"
+}
+
 # emitResolvedMemberRead -- the member resolved on the receiver's type: a protocol
 # conformance field, an fn-pointer field, a plain field, or a no-arg method that
 # auto-calls. The receiver goes by address or by value as its variable dictates.
@@ -11957,139 +12067,16 @@ emitResolvedMemberRead: function {
     mco: u64
     fbtn: StringView
 } out String is {
-    if (
-        (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: mco.u64)) ==
-        ztypes.ztypetype.protocolType
-    ) then {
-        # borrowed conformance projection: f.myreader ->
-        # {Impl}_{label}_create(&f) (a borrowed fat pointer). Only an
-        # as-block conformance LABEL materializes; a stored protocol
-        # field (p: SomeProto) is a by-value fat pointer accessed
-        # directly. (These differed by shell-ness pre-declare-before-
-        # bind; now both children are the canonical PROTOCOL id, so
-        # gate on the conformance row.)
-        clab: conformanceLabelFor :symtab implTid: bstamp protoTid: mco
-        if clab.stringView == mn2 then {
-            ib: ctxCnameView :ctx tid: bstamp
-            if (isPtrVid :ctx vid: bn2v) then {
-                pj: "\{ib}_\{mn2}_create(\{bn2})"
-                return pj
-            }
-            pj9b: "\{ib}_\{mn2}_create(&\{bn2})"
-            return pj9b
-        }
+    mtt: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: mco.u64)
+    if mtt == ztypes.ztypetype.protocolType then {
+        pj: protocolProjectionRead :symtab :ctx :mn2 :bn2 :bn2v :bstamp :mco
+        if pj.length > 0 then return pj
     }
-    if (
-        (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: mco.u64)) ==
-        ztypes.ztypetype.functionType
-    ) when (
-        (symtab.typing.declIsFnptrField
-            pool: ast.names
-            parentTypeId: bstamp
-            name: mn2
-        ).not
-    ) then {
-        # member auto-call: a CLASS method takes its receiver by
-        # pointer (&recv, or recv when already a ptrVar); a RECORD
-        # method takes it by value.
-        # no-arg SV natives (count/hash/codepoints/lines) have no
-        # per-method C symbol: emit the canonical native over
-        # the projected view (String or StringView receiver)
-        if (isSvNoArgNative name: mn2) when (isStringyTid
-            :ctx
-            tid: bstamp
-        ) then {
-            needsAddM :ctx uname: "system" memb: mn2
-            svfa: (svValueForm
-                :ctx
-                expr: bn2
-                isStr: (bstamp == ctx.strTid)
-                vid: bn2v
-            )
-            ef: "\{ctx.svC}_\{mn2}(&\{svfa})"
-            return ef
-        }
-        mc2: ctxCname :ctx tid: (ztypes.tid.create from: mco.u64)
-        # `Type.create` -- the base is the type name itself, not
-        # an instance -- is a constructor/static call and takes no
-        # receiver (fbtn is the enclosing type's name). The
-        # native scalar/String creates have no C symbol: the
-        # zero value is the construction.
-        if bn2v.isZero when bn2 == fbtn when mn2 == "create" then {
-            zsc: scalarCTypeFor :symtab name: fbtn tid: bstamp
-            if zsc.length > 0 then {
-                zse: "((\{zsc})0)"
-                return zse
-            }
-            if bstamp == ctx.strTid then {
-                zst: "((\{ctx.strC}_t){0})"
-                return zst
-            }
-        }
-        # static/type-qualified only when the base is the TYPE
-        # NAME, not a local that happens to share its spelling
-        # (--readable-names keeps source names, so the text
-        # alone cannot discriminate; a local base has a vid)
-        if bn2v.isZero when bn2 == fbtn then {
-            # A RECEIVER-TAKING METHOD READ OFF THE TYPE NAME IS A REFERENCE,
-            # and there is nothing else it can be: calling it needs a receiver
-            # this leg has not got, and the call form (`T.f self: t rhs: 2`)
-            # never arrives here. So `point.add.take` is the bare cname -- the
-            # unbound function pointer, whose `_ft` typedef already pointerizes
-            # the receiver. Emitting `z_..._add()` here would call a
-            # receiver-taking function with nothing at all.
-            #
-            # A true zero-arg static declares no receiver and keeps its call.
-            if (fnTypeTakesThis
-                :symtab
-                tid: (ztypes.tid.create from: mco.u64)
-            ) then return mc2
-            sda: (renderedMethodDefaultArgs
-                :ast
-                :symtab
-                :ctx
-                fnTid: (ztypes.tid.create from: mco.u64)
-            )
-            if sda.length > 0 then return "\{mc2}(\{sda})"
-            return "\{mc2}()"
-        }
-        # a receiver-taking method takes it by pointer in both
-        # families, so address it unless it already is one
-        methodRecv: "\{bn2}"
-        if (calleeTakesReceiverByPtr :ast :symtab fid: (ztypes.tid.create from: mco.u64)
-        ) when (isPtrVid :ctx vid: bn2v).not then methodRecv = "&\{bn2}"
-        ida: (renderedMethodDefaultArgs
-            :ast
-            :symtab
-            :ctx
-            fnTid: (ztypes.tid.create from: mco.u64)
-        )
-        if ida.length > 0 then return "\{mc2}(\{methodRecv}, \{ida})"
-        e6: "\{mc2}(\{methodRecv})"
-        return e6
+    if (mtt == ztypes.ztypetype.functionType).not then return "".string
+    if (symtab.typing.declIsFnptrField pool: ast.names parentTypeId: bstamp name: mn2) then {
+        return (fnptrFieldRead :symtab :ctx :mn2 :bn2 :bn2v :mco :fbtn)
     }
-    if (
-        (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: mco.u64)) ==
-        ztypes.ztypetype.functionType
-    ) when (symtab.typing.declIsFnptrField
-        pool: ast.names
-        parentTypeId: bstamp
-        name: mn2
-    ) then {
-        mcFp: ctxCname :ctx tid: (ztypes.tid.create from: mco.u64)
-        if bn2v.isZero when bn2 == fbtn then return mcFp
-        if (fnTypeTakesThis :symtab tid: (ztypes.tid.create from: mco.u64)) then {
-            accFp: ".".string
-            rcvFp: "&\{bn2}"
-            if (isPtrVid :ctx vid: bn2v) then {
-                accFp = "->".string
-                rcvFp = "\{bn2}"
-            }
-            mnFpP: memberCPrefix name: mn2
-            return "\{bn2}\{accFp}\{mnFpP}\{mn2}(\{rcvFp})"
-        }
-    }
-    return "".string
+    return (methodAutoCallRead :ast :symtab :ctx :mn2 :bn2 :bn2v :bstamp :mco :fbtn)
 }
 
 # sumMemberMethodRead -- a sum type's dotted read where the member is a declared
@@ -20673,6 +20660,123 @@ emitElse: function {
     restoreCondExclusions :ctx mark: xMark
 }
 
+# emitHoistedReturn -- a return whose value is materialised into a temp
+# FIRST, then the owned locals are freed, then the temp is returned. When an
+# owned local is named in the value (leakFix), ALL owned locals are freed
+# (clFull) after the moved-in call-arg sources are zeroed: a read-from local
+# is reclaimed and a moved-in local's free is a no-op.
+emitHoistedReturn: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    # the value node
+    vid: u32
+    # the value's C text and C type
+    rv: StringView
+    retCt: StringView
+    leakFix: bool
+    # the cleanup that keeps referenced locals, and the one that frees all
+    clProbe: StringView
+    clFull: StringView
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    rtmpN: tmp.next
+    retNm: "_ret\{rtmpN}"
+    buf.append "\{ind}\{retCt} \{retNm} = \{rv};\n"
+    if leakFix then {
+        emitValueTakeInvalidations :ast :symtab :ctx n: (ast.nodes.get i: vid.u64) :ind :buf
+    }
+    emitNarrowedTakeZero :ast :symtab :ctx n: (ast.nodes.get i: vid.u64) :ind :buf
+    if leakFix then buf.append clFull else buf.append clProbe
+    buf.append "\{ind}return \{retNm};\n"
+}
+
+# emitDirectReturn -- a return of the value as it stands, after the cleanup
+# that keeps referenced locals. A reference return hands back the address,
+# not a copy of the struct (without the `&` the caller writes through a
+# temporary); a pointer-held valtype is loaded.
+emitDirectReturn: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    vid: u32
+    rv: StringView
+    clProbe: StringView
+    ind: StringView
+    buf: String.borrow
+} is {
+    buf.append clProbe
+    rvOut: "\{rv}"
+    if ctx.refBorrowRet then rvOut = "&\{rv}"
+    if ctx.refBorrowRet.not when (needsValueDeref
+        :ast
+        :symtab
+        :ctx
+        n: (ast.nodes.get i: vid.u64)
+        tid: (stampIdOf :symtab nid: vid.u64)
+    ) then rvOut = "(*\{rv})"
+    buf.append "\{ind}return \{rvOut};\n"
+}
+
+# emitPlainReturn -- a return that is neither an Option box nor a String
+# value. A non-trivial value-type return may read an owned local the cleanup
+# would free -- a borrowed element or view (e.g. `container.get idx`, or a
+# StringView into a local String) -- so it is hoisted into a temp before the
+# frees. Pointer returns (protocol / Map / Set / by-ref class) arrive as bare
+# temps; hoisting a shallow pointer copy then freeing it would dangle, so
+# they keep the referenced-locals cleanup inline.
+emitPlainReturn: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    vid: u32
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    rv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: vid.u64)
+    flushArgHoists :ctx :ind :tmp :buf
+    clProbe: String
+    emitReturnCleanup :ctx :tmp retExpr: rv.stringView keepRefd: true :ind buf: clProbe
+    clFull: String
+    emitReturnCleanup :ctx :tmp retExpr: rv.stringView keepRefd: false :ind buf: clFull
+    leakFix: clFull.length > clProbe.length
+    rtid: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: vid.u64))
+    retCt: typeRefC :ast :symtab :ctx tid: rtid thisTid: ztypes.tid
+    isPtr: (ctEndsWithStar ct: retCt.stringView) or (isHeapPtrCollection :symtab :ctx tid: rtid)
+    trivial: isBareCName s: rv.stringView
+    hoist: trivial.not and isPtr.not and (retCt.length > 0) and ((clProbe.length > 0) or leakFix)
+    if hoist then {
+        (emitHoistedReturn
+            :ast
+            :symtab
+            :ctx
+            :vid
+            rv: rv.stringView
+            retCt: retCt.stringView
+            :leakFix
+            clProbe: clProbe.stringView
+            clFull: clFull.stringView
+            :ind
+            :tmp
+            :buf
+        )
+    } else {
+        (emitDirectReturn
+            :ast
+            :symtab
+            :ctx
+            :vid
+            rv: rv.stringView
+            clProbe: clProbe.stringView
+            :ind
+            :buf
+        )
+    }
+}
+
 # emitReturnOfNode -- `return <value of node vid>;` with the explicit-return
 # machinery: option-box hoist, string-return fast path, and the leak-safe
 # temp-materialization + cleanup ordering. Shared by the `return` call arm
@@ -20686,132 +20790,16 @@ emitReturnOfNode: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
-    bx: (emitOptionBoxHoist
-        :ast
-        :symtab
-        :ctx
-        n: (ast.nodes.get i: vid.u64)
-        :ind
-        :tmp
-        :buf
-    )
+    bx: emitOptionBoxHoist :ast :symtab :ctx n: (ast.nodes.get i: vid.u64) :ind :tmp :buf
     if bx.length > 0 then {
-        (emitValueTakeInvalidations
-            :ast
-            :symtab
-            :ctx
-            n: (ast.nodes.get i: vid.u64)
-            :ind
-            :buf
-        )
+        emitValueTakeInvalidations :ast :symtab :ctx n: (ast.nodes.get i: vid.u64) :ind :buf
         emitReturnCleanup :ctx :tmp retExpr: bx.stringView keepRefd: true :ind :buf
-        lrb: "\{ind}return \{bx};\n"
-        buf.append lrb
-    } else {
-        sret: (emitStringReturnValue
-            :ast
-            :symtab
-            :ctx
-            n: (ast.nodes.get i: vid.u64)
-            :ind
-            :tmp
-            :buf
-        )
-        if sret.not then {
-            rv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: vid.u64)
-            flushArgHoists :ctx :ind :tmp :buf
-            # A non-trivial value-type return may read an owned local the
-            # cleanup would free -- a borrowed element or view (e.g.
-            # `container.get idx`, or a StringView into a local String).
-            # Materialize rv into a temp FIRST, then free. When an owned
-            # local is named in rv (leakFix), free ALL owned locals
-            # (clFull) after zeroing the moved-in call-arg sources
-            # (emitValueTakeInvalidations): a read-from local is reclaimed
-            # and a moved-in local's free is a no-op. Pointer returns
-            # (protocol / Map / Set / by-ref class -- isPtr) arrive as bare
-            # temps; hoisting a shallow pointer copy then freeing it would
-            # dangle, so they keep the refsLocal (clProbe) cleanup inline.
-            clProbe: String
-            (emitReturnCleanup
-                :ctx
-                :tmp
-                retExpr: rv.stringView
-                keepRefd: true
-                :ind
-                buf: clProbe
-            )
-            clFull: String
-            (emitReturnCleanup
-                :ctx
-                :tmp
-                retExpr: rv.stringView
-                keepRefd: false
-                :ind
-                buf: clFull
-            )
-            leakFix: false
-            if clFull.length > clProbe.length then leakFix = true
-            rtid: (stampIdOf
-                :symtab
-                nid: (interpPartNodeId n: (ast.nodes.get i: vid.u64))
-            )
-            retCt: typeRefC :ast :symtab :ctx tid: rtid thisTid: ztypes.tid
-            isPtr: ctEndsWithStar ct: retCt.stringView
-            if (isHeapPtrCollection :symtab :ctx tid: rtid) then isPtr = true
-            trivial: isBareCName s: rv.stringView
-            hoist: false
-            if trivial.not when isPtr.not when retCt.length > 0 then {
-                if clProbe.length > 0 then hoist = true
-                if leakFix then hoist = true
-            }
-            if hoist then {
-                rtmpN: tmp.next
-                retNm: "_ret\{rtmpN}"
-                hdecl: "\{ind}\{retCt} \{retNm} = \{rv};\n"
-                buf.append hdecl
-                if leakFix then {
-                    (emitValueTakeInvalidations
-                        :ast
-                        :symtab
-                        :ctx
-                        n: (ast.nodes.get i: vid.u64)
-                        :ind
-                        :buf
-                    )
-                }
-                (emitNarrowedTakeZero
-                    :ast
-                    :symtab
-                    :ctx
-                    n: (ast.nodes.get i: vid.u64)
-                    :ind
-                    :buf
-                )
-                if leakFix then {
-                    buf.append clFull
-                } else {
-                    buf.append clProbe
-                }
-                hret: "\{ind}return \{retNm};\n"
-                buf.append hret
-            } else {
-                buf.append clProbe
-                # a reference return hands back the address, not a copy of the
-                # struct; without the `&` the caller writes through a temporary
-                rvOut: "\{rv}"
-                if ctx.refBorrowRet then rvOut = "&\{rv}"
-                if ctx.refBorrowRet.not when (needsValueDeref
-                    :ast
-                    :symtab
-                    :ctx
-                    n: (ast.nodes.get i: vid.u64)
-                    tid: (stampIdOf :symtab nid: vid.u64)
-                ) then rvOut = "(*\{rv})"
-                lr: "\{ind}return \{rvOut};\n"
-                buf.append lr
-            }
-        }
+        buf.append "\{ind}return \{bx};\n"
+        return
     }
+    if (emitStringReturnValue :ast :symtab :ctx n: (ast.nodes.get i: vid.u64) :ind :tmp :buf
+    ) then return
+    emitPlainReturn :ast :symtab :ctx :vid :ind :tmp :buf
 }
 
 # emitTailStmt -- the last statement of an `out`-typed function body sits in
