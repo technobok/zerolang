@@ -8100,6 +8100,20 @@ synthRecordHash: function {
             kind: ztyping.declkind.methodDecl
             childTypeId: hshR
         )
+        # a hash READS its receiver, like the synthesised comparison: the
+        # receiver is recorded `.view` so `k.hash` on a view-held key locks shared
+        hft: ztypes.tid.create from: hshR.u64
+        (st.typing.setMemberType
+            parentTypeId: hft
+            nameId: zast.names.wkThis
+            childTypeId: rid
+        )
+        (st.typing.setChildOwnershipId
+            parentTypeId: hft
+            nameId: zast.names.wkThis
+            ownership: ztypes.zparamownership.viewMode
+        )
+        st.reg.setThisParamName typeId: hft nameId: zast.names.wkThis
     }
 }
 
@@ -8151,6 +8165,15 @@ synthComparisonMember: function {
         nameId: zast.names.wkThis
         childTypeId: ownerTid
     )
+    # a comparison READS its receiver: the synthesised member says `.view`, as
+    # every declared comparison does, so the binop's receiver lock is shared
+    # and `e.kind == x` on a view-held `e` conflicts with nothing
+    (st.typing.setChildOwnershipId
+        parentTypeId: ft
+        nameId: zast.names.wkThis
+        ownership: ztypes.zparamownership.viewMode
+    )
+    st.reg.setThisParamName typeId: ft nameId: zast.names.wkThis
     (st.typing.setMemberType
         parentTypeId: ft
         nameId: zast.names.wkRhs
@@ -20559,33 +20582,42 @@ methodHasNoUserArgs: function {
     )
 }
 
-# lockAutoCallReceiver -- the receiver locks for a zero-arg auto-call's
-# duration, exactly as a written-out call does, in both families. The lock is
-# released by holder as soon as it is taken -- an auto-call opens no scope to
-# pop -- so its only effect is the conflict check against locks outstanding
-# elsewhere. `shared` is what the METHOD's receiver marker decided.
-lockAutoCallReceiver: function {
+# lockTransientReceiver -- a receiver that locks for ONE expression's duration:
+# a zero-argument auto-call, or a binop's left operand, which is the receiver
+# of the operator method (a binop is the call form of a one-argument method).
+# The lock is released by holder as soon as it is taken -- neither form opens
+# a scope to pop -- so its only effect is the conflict check against locks
+# outstanding elsewhere. `shared` is what the METHOD's receiver marker decided.
+# A lock the conflict check refused laid no row, and the release scan is
+# skipped when nothing was laid: a binop is the hottest path there is.
+lockTransientReceiver: function {
     ast: Ast.view
     st: zenv.ZSymbolTable
-    dp: dpref
+    # the receiver expression
+    recv: astnode.view
+    # the node holding the lock: the auto-call's dotted path, or the binop
+    holderId: u64
     shared: bool
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
 } is {
     atup: ListVal zast.nameid
-    appendValueTuple :ast n: (ast.nodes.get i: dp.parent.u64) dst: atup
+    appendValueTuple :ast n: recv dst: atup
     if atup.length == 0 then return
     arv: st.lookupVarId nameId: (atup.get i: 0)
     if arv.none then return
-    ashr: shared
+    before: st.entries.length
     if atup.length == 1 then {
         (lockCallArg
             :st
             pool: ast.names
             nameId: (atup.get i: 0)
-            callId: dp.nid.u64
-            shared: ashr
-            nodeid: dp.nid
-            lineno: dp.lineno
-            colno: dp.colno
+            callId: holderId
+            :shared
+            :nodeid
+            :lineno
+            :colno
         )
     } else {
         (lockCallPath
@@ -20593,18 +20625,40 @@ lockAutoCallReceiver: function {
             :ast
             pool: ast.names
             path: atup
-            callId: dp.nid.u64
-            shared: ashr
-            nodeid: dp.nid
-            lineno: dp.lineno
-            colno: dp.colno
+            callId: holderId
+            :shared
+            :nodeid
+            :lineno
+            :colno
         )
     }
+    if st.entries.length == before then return
     ahl: (ztypes.zlockholder
         kind: ztypes.zlockholderkind.callKind
-        id: dp.nid.u64
+        id: holderId
     )
     st.releaseHeldLocks holder: ahl
+}
+
+# lockAutoCallReceiver -- lockTransientReceiver for a zero-argument auto-call:
+# the receiver is the dotted path's base, the holder the path itself.
+lockAutoCallReceiver: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable
+    dp: dpref
+    shared: bool
+} is {
+    recvN: ast.nodes.get i: dp.parent.u64
+    (lockTransientReceiver
+        :ast
+        :st
+        recv: recvN
+        holderId: dp.nid.u64
+        :shared
+        nodeid: dp.nid
+        lineno: dp.lineno
+        colno: dp.colno
+    )
 }
 
 # fnAutoCallable -- a bare reference to this function is a zero-argument
@@ -26487,6 +26541,25 @@ checkBinopMethodDispatch: function {
         colno: binop.colno
     ) then return (ztypes.tid.create from: 0)
     stampBinopOp :st nid: binop.nid.u64 owner: dt method: bmid
+    # CALL == BINOP: the left operand is the receiver of the operator method,
+    # and locks for the operation's duration by that method's marker -- so a
+    # writer operator on a view-held value is refused as a writer method is.
+    # A literal left operand has no path and locks nothing; the derived `!=`
+    # and the structural-equality legs resolve no method and take no lock.
+    if bmid.isZero.not then {
+        lhsN: ast.nodes.get i: binop.lhs.u64
+        lhsShared: methodReceiverIsView :st mid: bmid
+        (lockTransientReceiver
+            :ast
+            :st
+            recv: lhsN
+            holderId: binop.nid.u64
+            shared: lhsShared
+            nodeid: binop.nid
+            lineno: binop.lineno
+            colno: binop.colno
+        )
+    }
     match (
         opo
     ) case some then {
