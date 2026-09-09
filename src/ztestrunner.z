@@ -1184,104 +1184,112 @@ runLspCases: function {r: Runner} is {
     lspCases: "\{r.root.stringView}/tests/fixtures/lsp_cases"
     lspGold: "\{r.root.stringView}/tests/fixtures/lsp_golden"
     lspLs: io.listDir path: lspCases
-    match (
-        lspLs
-    ) case ok then {
-        zlsC: "\{r.tmp.stringView}/zls_bin.c"
-        zlsB: "\{r.tmp.stringView}/zls_bin"
-        srcD: "\{r.root.stringView}/src"
-        built: false
-        stage: (buildTool
+    if lspLs.err then return
+    zlsC: "\{r.tmp.stringView}/zls_bin.c"
+    zlsB: "\{r.tmp.stringView}/zls_bin"
+    srcD: "\{r.root.stringView}/src"
+    stage: (buildTool
+        :r
+        zc: r.zc.stringView
+        name: "zls"
+        srcdir: srcD.stringView
+        csrc: zlsC.stringView
+        bin: zlsB.stringView
+        asan: false
+    )
+    if stage == 1 then {
+        print "FAIL(lsp) zls (zc)"
+        r.fails = r.fails + 1
+    }
+    if stage == 2 then {
+        print "FAIL(lsp) zls (cc)"
+        r.fails = r.fails + 1
+    }
+    if stage != 0 then return
+    names: List String
+    with lit: lspLs.iterate do for fn: lit loop {
+        keep: fn.endsWith ".msgs"
+        if fn.endsWith ".raw" then keep = true
+        if keep then names.append fn.copy
+    }
+    names.sort
+    with nit: names.iterate do for cf: nit loop {
+        (lspCase
             :r
-            zc: r.zc.stringView
-            name: "zls"
-            srcdir: srcD.stringView
-            csrc: zlsC.stringView
-            bin: zlsB.stringView
-            asan: false
+            zlsB: zlsB.stringView
+            lspCases: lspCases.stringView
+            lspGold: lspGold.stringView
+            cv: cf.stringView
         )
-        if stage == 1 then {
-            print "FAIL(lsp) zls (zc)"
+    }
+}
+
+# lspCase -- one transcript, framed (`.msgs`) or raw (`.raw`), replayed
+# through the server and its deframed output compared with the golden --
+# or written AS the golden under --regen-lsp. A missing golden is a skip.
+lspCase: function {
+    r: Runner
+    zlsB: StringView
+    lspCases: StringView
+    lspGold: StringView
+    cv: StringView
+} is {
+    isRaw: cv.endsWith ".raw"
+    ext: 5.u64
+    if isRaw then ext = 4
+    nm: cv.substring from: 0 to: cv.length - ext
+    cp: "\{lspCases}/\{cv}"
+    caseC: slurp path: cp.stringView
+    input: String
+    if isRaw then {
+        input = caseC.copy
+    } else {
+        input = frameLsp src: caseC.stringView
+    }
+    inP: "\{r.tmp.stringView}/lsp_\{nm}.in"
+    wri: io.writeText path: inP content: input
+    if wri.err then {
+        print "FAIL(lsp) \{nm} (write input)"
+        r.fails = r.fails + 1
+    }
+    outP: "\{r.tmp.stringView}/lsp_\{nm}.raw"
+    ba: List String
+    ba.append zlsB.string
+    ba.append "--replay".string
+    ba.append inP.copy
+    rc: (os.spawn
+        argv: ba
+        cwd: ""
+        outPath: outP.stringView
+        errPath: "/dev/null"
+        timeoutSecs: r.timeoutSecs
+    )
+    goldP: "\{lspGold}/\{nm}.out"
+    if r.regenLsp then {
+        rawOut: slurp path: outP.stringView
+        norm: deframeLsp raw: rawOut.stringView
+        wrg: io.writeText path: goldP content: norm
+        if wrg.err then {
+            print "FAIL(lsp) \{nm} (write golden)"
+            r.fails = r.fails + 1
+        } else {
+            print "regenerated lsp golden \{nm}"
+            r.passN = r.passN + 1
+        }
+    } else if (io.exists path: goldP).not then {
+        r.skip = r.skip + 1
+    } else {
+        rawOut: slurp path: outP.stringView
+        norm: deframeLsp raw: rawOut.stringView
+        goldC: slurp path: goldP.stringView
+        sameOut: norm.stringView == goldC.stringView
+        if sameOut when rc == 0 then {
+            r.passN = r.passN + 1
+        } else {
+            print "FAIL(lsp) \{nm}"
             r.fails = r.fails + 1
         }
-        if stage == 2 then {
-            print "FAIL(lsp) zls (cc)"
-            r.fails = r.fails + 1
-        }
-        if stage == 0 then built = true
-        if built then {
-            names: List String
-            with lit: lspLs.iterate do for fn: lit loop {
-                keep: fn.endsWith ".msgs"
-                if fn.endsWith ".raw" then keep = true
-                if keep then names.append fn.copy
-            }
-            names.sort
-            with nit: names.iterate do for cf: nit loop {
-                cv: cf.stringView
-                isRaw: cv.endsWith ".raw"
-                ext: 5.u64
-                if isRaw then ext = 4
-                nm: cv.substring from: 0 to: cv.length - ext
-                cp: "\{lspCases.stringView}/\{cv}"
-                caseC: slurp path: cp.stringView
-                input: String
-                if isRaw then {
-                    input = caseC.copy
-                } else {
-                    input = frameLsp src: caseC.stringView
-                }
-                inP: "\{r.tmp.stringView}/lsp_\{nm}.in"
-                wri: io.writeText path: inP content: input
-                match (
-                    wri
-                ) case ok then null case err then {
-                    print "FAIL(lsp) \{nm} (write input)"
-                    r.fails = r.fails + 1
-                }
-                outP: "\{r.tmp.stringView}/lsp_\{nm}.raw"
-                ba: List String
-                ba.append zlsB.copy
-                ba.append "--replay".string
-                ba.append inP.copy
-                rc: (os.spawn
-                    argv: ba
-                    cwd: ""
-                    outPath: outP.stringView
-                    errPath: "/dev/null"
-                    timeoutSecs: r.timeoutSecs
-                )
-                goldP: "\{lspGold.stringView}/\{nm}.out"
-                if r.regenLsp then {
-                    rawOut: slurp path: outP.stringView
-                    norm: deframeLsp raw: rawOut.stringView
-                    wrg: io.writeText path: goldP content: norm
-                    match (
-                        wrg
-                    ) case ok then {
-                        print "regenerated lsp golden \{nm}"
-                        r.passN = r.passN + 1
-                    } case err then {
-                        print "FAIL(lsp) \{nm} (write golden)"
-                        r.fails = r.fails + 1
-                    }
-                } else if (io.exists path: goldP).not then {
-                    r.skip = r.skip + 1
-                } else {
-                    rawOut: slurp path: outP.stringView
-                    norm: deframeLsp raw: rawOut.stringView
-                    goldC: slurp path: goldP.stringView
-                    sameOut: norm.stringView == goldC.stringView
-                    if sameOut when rc == 0 then {
-                        r.passN = r.passN + 1
-                    } else {
-                        print "FAIL(lsp) \{nm}"
-                        r.fails = r.fails + 1
-                    }
-                }
-            }
-        }
-    } case err then null
+    }
 }
 
 # knownLeakers -- the programs recorded in tests/known-leaks.txt as expected to
