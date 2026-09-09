@@ -178,6 +178,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-09-09 | 308506ef | [valtype receivers lock like class receivers](#r-valtype-receiver-lock) | 0.47s | -- | 94MB / -- | 107 / 176 / 200 (total 483) | 2,180,016 | 304MB | -- | 122,603 |
 | 2026-09-09 | 39be2d33 | [the >=40 band + the path-window allocations](#r-a008band40) | 0.48s | -- | 94MB / -- | 123 / 179 / 184 (total 486) | 2,118,706 | 302MB | -- | 122,409 |
 | 2026-09-10 | 796ffda7 | [the six emitter splits and the lowered baseline](#r-emitter-splits) | 0.46s | -- | 94MB / -- | 105 / 180 / 186 (total 471) | 2,116,927 | 302MB | -- | 122,436 |
+| 2026-09-10 | 7b0437e8 | [`.take` arguments in conditions: the stepped condition form](#r-take-in-condition) | 0.47s | -- | 94MB / -- | 112 / 180 / 184 (total 476) | 2,122,449 | 302MB | -- | 122,766 |
 
 
 <a id="r-tokenarc"></a>
@@ -2941,6 +2942,27 @@ names a base the chase cannot resolve. The corpus did not catch it: it binds
 `A008 src/ztypecheck.z` 168 -> 160, `A005 src/zemitterc.z` 9 -> 7,
 `A005 src/ztypecheck.z` 12 -> 10, `A001 src/zemitterc.z` 387 -> 386, and the
 emitter-guard's `userFnId` count 31 -> 30.
+
+<a id="r-take-in-condition"></a>
+### `.take` arguments in conditions: the stepped condition form (2026-09-10, `74486786` -> `7b0437e8`)
+
+Three emitter defects, one mechanism. An owned local handed to a `.take`
+parameter inside an `if`/`when` condition, a loop condition or a do-while
+test was moved by the checker and never zeroed by the emitter (a double
+free at scope exit); the invalidation walker never entered a call's
+callable, so a `.not` receiver was missed even in statement position; and
+the two-arm `match` route evaluated a call subject once per arm. The fix
+is `emitSteppedCond` (`2bd4468b`): the suspending `when`'s statement form,
+now one guard assignment per conjunct with the zeroes after each, shared
+by `if` clauses (a later clause nests in `} else {`), `while` heads and
+do-while tests (`02d41328`); the match route hoists a call subject to a
+temp (`7b0437e8`). Three run fixtures pin the shapes under ASan.
+
+**+5,522 blocks against the previous row, of which +167 are the
+mechanism** -- measured seed-vs-new on the same archived source (+151 the
+`if` path, +16 the loops, +0 the match) -- and the rest is the ~330 new
+emitter lines being compiled, about 14 blocks per source line. Wall,
+RSS and the phase split within noise.
 
 <a id="r-emitter-splits"></a>
 ### the six emitter splits and the lowered baseline (2026-09-10, `39be2d33` -> `796ffda7`)
