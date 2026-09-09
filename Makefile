@@ -1570,7 +1570,8 @@ highlight-guard:
 # struct is the function's own prefix, which covers self / _this / _it / _e /
 # s / a alike. VIEW_GUARD_PLACEHOLDER names the type each template placeholder
 # stands for; an unmapped placeholder names a user type or a valtype (array,
-# str, the protocol vtable, meta.create), and `.view` does not apply to either.
+# str, the protocol vtable, meta.create), whose C the guard does not read --
+# a valtype's marker is judged from the other side, below.
 # An emitter-built function names a runtime mono rather than a type the guard
 # can read, so VIEW_GUARD_EMITTED says which declaration each one backs; `-`
 # marks the ones backing no reference-type method at all (array / str value
@@ -1601,6 +1602,16 @@ highlight-guard:
 # register cannot go stale. String's comparisons are the reason the last kind
 # exists: `s1 == s2` does not call z_String_eq (which nothing calls) -- it
 # converts both sides to by-value views and calls z_StringView_eq.
+#
+# A VALTYPE native (a record / variant / facet receiver: the scalars, bool,
+# the literal types, optionval, resultval, array, str) has no C function to
+# read: its body is an expression in src/runtime/natives.tbl with the receiver
+# as the @V@ / @L@ hole. So the ROW is the proof -- a body that never writes
+# through its receiver hole cannot mutate, and one that does must not be
+# `.view`. A row with no body is compiler-built and is registered in
+# VIEW_GUARD_INLINE like any other unreadable backing, with `writes` as the
+# reason for the one that mutates (array.set); a `Type.*` entry covers every
+# member of a type, a `*.method` entry a member every scalar declares.
 
 VIEW_GUARD_PLACEHOLDER := z_List.c.tmpl=@@NAME@@:ListRef z_Map.c.tmpl=@@NAME@@:MapRR \
   z_MapIter.c.tmpl=@@NAME@@:MapRR,@@MAPKEYITER@@:MapKeyIter,@@MAPITEMITER@@:MapItemIter,@@MAPENTRY@@:MapEntry \
@@ -1679,7 +1690,12 @@ VIEW_GUARD_INLINE := Bytes.byteView:unemitted \
   String.==:StringView.== String.!=:StringView.!= String.<:StringView.< \
   String.<=:StringView.<= String.>:StringView.> String.>=:StringView.>= \
   String.compare:StringView.compare \
-  String.+:StringView.concat StringView.+:StringView.concat
+  String.+:StringView.concat StringView.+:StringView.concat \
+  array.get:inline array.length:inline array.set:writes \
+  str.length:inline str.size:inline str.string:byvalue \
+  str.stringView:inline str.substring:inline \
+  optionval.or:byvalue resultval.orPanic:byvalue resultval.or:byvalue \
+  intliteral.*:byvalue floatliteral.*:byvalue *.iterate:byvalue *.each:byvalue
 
 define VIEW_GUARD_AWK
 # Reads lib/system/*.z (declarations) and the C backings, then joins them.
@@ -1694,8 +1710,9 @@ function camel(s,   out, i, c, up) {
     return out
 }
 
-# A native method declaring a receiver, on a reference type: record whether
-# the receiver carries the .view marker.
+# A native method declaring a receiver: record whether the receiver carries
+# the .view marker. dval says whether its type is a valtype, which decides
+# which side proves the marker.
 function declEmit() {
     # the trailing boundary keeps a longer member spelt `this.take...` from
     # prefix-matching the receiver marker
@@ -1793,9 +1810,10 @@ function scanSig(sig, emitted,   fname, rest, ce, cc, p1, pty, cty, pfx, cm, ck,
 
 FNR == 1 {
     isemit = (FILENAME ~ /zemitterc\.z$$/)
+    istbl = (FILENAME ~ /natives\.tbl$$/)
     isdecl = (FILENAME ~ /\.z$$/) && !isemit
     if (isdecl) { dty = ""; grab = 0 }
-    else if (!isemit) {
+    else if (!isemit && !istbl) {
         base = FILENAME; sub(/.*\//, "", base)
         delete ph
         np = split(PH, pf, " ")
@@ -1816,9 +1834,11 @@ FNR == 1 {
 
 isdecl {
     if ($$0 ~ /^[A-Za-z][A-Za-z0-9]*: (class|union|protocol)/) {
-        dty = $$1; sub(/:.*/, "", dty); grab = 0; next
+        dty = $$1; sub(/:.*/, "", dty); dval[dty] = 0; grab = 0; next
     }
-    if ($$0 ~ /^[A-Za-z][A-Za-z0-9]*: (record|variant|facet)/) { dty = ""; grab = 0; next }
+    if ($$0 ~ /^[A-Za-z][A-Za-z0-9]*: (record|variant|facet)/) {
+        dty = $$1; sub(/:.*/, "", dty); dval[dty] = 1; grab = 0; next
+    }
     if (dty == "") next
     if (grab) {
         dacc = dacc " " $$0
@@ -1827,7 +1847,7 @@ isdecl {
         else if (dacc ~ /\bis \{/ || dlines > 14) grab = 0
         next
     }
-    if ($$0 ~ /^[ \t]+([A-Za-z_][A-Za-z0-9_]*|[=!<>+*\/%-]+): function/) {
+    if ($$0 ~ /^[ \t]+([A-Za-z_][A-Za-z0-9_]*|[=!<>+*\/%&|^-]+): function/) {
         dmeth = $$1; sub(/:$$/, "", dmeth)
         dacc = $$0; dlines = 1
         if (dacc ~ /is native/) { declEmit(); next }
@@ -1845,6 +1865,25 @@ isemit {
     lit = substr($$0, index($$0, "\"static ") + 1)
     gsub(/\\[{][^}]*[}]/, "@@", lit)
     scanSig(lit, 1)
+    next
+}
+
+# ---------------- natives.tbl: the valtype side ----------------
+# `[unit.Type.method attrs] body`. The receiver is the @V@ hole of a
+# receiver-only row and the @L@ hole of a binop; a body that assigns,
+# increments or takes the address of that hole writes through it. Only
+# valtype rows are read here -- a class's proof is its C function above.
+
+istbl {
+    if ($$0 !~ /^\[[a-z]+\.[A-Za-z0-9]+\.[^] ]+/) next
+    path = $$1; sub(/^\[/, "", path); sub(/\]$$/, "", path)
+    if (split(path, seg, ".") != 3) next
+    if (!(seg[2] in dval) || !dval[seg[2]]) next
+    key = seg[2] " " seg[3]
+    body = $$0; sub(/^\[[^]]*\]/, "", body)
+    if (body ~ /[^ \t]/) nbody[key] = 1
+    if (body ~ /@[VL]@[ \t]*(=[^=]|\+\+|--)|&@[VL]@|(\+\+|--)[ \t]*@[VL]@/) nwrites[key] = 1
+    nrow[key] = "natives.tbl [" path "]"
     next
 }
 
@@ -1905,6 +1944,41 @@ END {
             }
             continue
         }
+        if ((t in dval) && dval[t]) {
+            # a valtype: the natives.tbl body is the proof, else the register
+            # says what the emitter-built C does
+            isv = (dkind[key] == "view")
+            if (key in nbody) {
+                writes = (key in nwrites)
+                src = nrow[key]
+            } else {
+                why = ""
+                if (dot in rwhy) why = rwhy[dot]
+                else if ((t ".*") in rwhy) why = rwhy[t ".*"]
+                else if (("*." m) in rwhy) why = rwhy["*." m]
+                if (why == "") {
+                    print "view-guard FAIL: " dot " is a valtype native with no natives.tbl body and no VIEW_GUARD_INLINE entry -- say what the emitter-built C does with the receiver (writes / inline / byvalue)"
+                    bad = 1
+                    continue
+                }
+                if (why != "writes" && why != "inline" && why != "byvalue") {
+                    print "view-guard FAIL: " dot " is registered as " why ", but a valtype receiver is written (writes) or read in place (inline / byvalue)"
+                    bad = 1
+                    continue
+                }
+                writes = (why == "writes")
+                src = "the emitter-built C (" why ")"
+            }
+            nvalt++
+            if (!writes && !isv) {
+                print "view-guard FAIL: " src " never writes through the receiver but " dot " is not declared '.view' -- the marker is available and unused"
+                bad = 1
+            } else if (writes && isv) {
+                print "view-guard FAIL: " dot " is declared '.view' but " src " writes through the receiver"
+                bad = 1
+            }
+            continue
+        }
         if (!(dot in rwhy)) {
             print "view-guard FAIL: " dot " declares a receiver that reaches no C function the guard can read -- say why in VIEW_GUARD_INLINE (inline / byvalue / unemitted / ondemand / <Type.method> it delegates to)"
             bad = 1
@@ -1925,7 +1999,7 @@ END {
     }
 
     if (bad) exit 1
-    printf "view-guard OK: %d native receivers const-checked in C (%d '.view'), %d by-value, %d registered, %d internal\n", checked, nview, nval, nreg, nint
+    printf "view-guard OK: %d native receivers const-checked in C (%d '.view'), %d by-value, %d registered, %d internal, %d valtype natives judged by their natives.tbl row or register entry\n", checked, nview, nval, nreg, nint, nvalt
 }
 endef
 export VIEW_GUARD_AWK
@@ -1935,7 +2009,8 @@ view-guard:
 	  -v INTERNAL='$(VIEW_GUARD_INTERNAL)' -v EMITTED='$(VIEW_GUARD_EMITTED)' \
 	  -v INLINE='$(VIEW_GUARD_INLINE)' \
 	  "$$VIEW_GUARD_AWK" lib/system/*.z lib/system/system/*.z src/zemitterc.z \
-	  src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl
+	  src/runtime/natives/*.inc src/runtime/*.inc src/runtime/*.c.tmpl \
+	  src/runtime/natives.tbl
 
 # fallback-guard -- the emitter must never silently degrade: a construct it
 # cannot emit leaves a "/* zemitterc: unhandled ... */" marker in the C (and
@@ -2155,7 +2230,7 @@ natives-tbl-guard: bin/zc
 	NUM='^(i8|i16|i32|i64|i128|u8|u16|u32|u64|u128|c8|c32|f16|f32|f64|f128)$$'; \
 	for f in lib/system/system.z lib/system/system/*.z; do \
 	  awk -v U=system -v NUM="$$NUM" '/^[A-Za-z_][A-Za-z0-9_]*: (record|variant|class)( |$$)/ {o=$$1; sub(/:$$/,"",o)} \
-	    o ~ NUM && /^    [a-z][a-z0-9]*: function \{:this\} out .* is native/ { \
+	    o ~ NUM && /^    [a-z][a-z0-9]*: function \{(:this|t: this\.view)\} out .* is native/ { \
 	      n=$$1; sub(/:$$/,"",n); if (n ~ NUM) { k=($$0 ~ /resultval/) ? "lossy" : "safe"; print U"."o"."n" "k } }' \
 	    $$f; \
 	done | LC_ALL=C sort -u > $$d2/declkind; \
