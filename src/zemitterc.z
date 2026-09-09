@@ -13140,6 +13140,103 @@ emitDottedConversionRead: function {
     return "".string
 }
 
+# taggedArmValueC -- a tagged-construction read `Type.arm` of a null-payload
+# arm of a non-generic variant or union: the arm's value, or the tag struct.
+# Empty for a payload arm or a generic template (construction calls and
+# inference are handled by later legs).
+taggedArmValueC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    # the type the path was stamped with
+    dtp: ztypes.tid
+    # the arm's name id
+    mnc0Id: zast.nameid
+} out String is {
+    tt: symtab.reg.typetypeOf typeId: dtp
+    dtg: (tt == ztypes.ztypetype.variantType) or (tt == ztypes.ztypetype.unionType)
+    if dtg.not then return String
+    if (isGenericType :symtab tid: dtp) then return String
+    vcH: ctxCname :ctx tid: dtp
+    if vcH.length == 0 then return String
+    mnc0: zast.nameTextAt :ast ref: mnc0Id
+    if (armPayloadC :ast :symtab :ctx tid: dtp arm: mnc0.stringView).length > 0 then return String
+    avh: armValueC :symtab tid: dtp arm: mnc0.stringView
+    if avh.length > 0 then return avh
+    tgH: variantTag :symtab tid: dtp arm: mnc0.stringView
+    return "((\{vcH}_t){ .tag = \{tgH} })"
+}
+
+# receiverTagAccess -- how a receiver's `tag` field is reached: `->` through a
+# pointer-held root, `.` otherwise.
+receiverTagAccess: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    # the receiver node
+    pn: astnode.view
+} out String is {
+    rootP: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: pn)
+    if rootP.length == 0 then return ".".string
+    if (isPtrVid :ctx vid: (atomVid :symtab nid: (atomNodeId n: pn))) then return "->".string
+    return ".".string
+}
+
+# armPredicateC -- an arm predicate on a VALUE receiver (the typechecker
+# stamped dpArmPredicate): a tag test. An ordinal's discriminator IS its
+# value, so a receiver reached through a pointer is LOADED before it is
+# tested; the struct-shaped families read a `tag` FIELD instead. A bool
+# receiver is a C bool: identity for `.true`, negation for `.false`.
+armPredicateC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.dottedpathrow.view
+    # the receiver's type
+    dap: ztypes.tid
+    mnc0Id: zast.nameid
+} out String is {
+    pn: ast.nodes.get i: n.parent.u64
+    recvP: emitExpr :ast :symtab :ctx n: pn
+    valP: recvP.copy
+    if (pathIsPointer :ast :symtab :ctx n: pn) then valP = "(*\{recvP})"
+    if (isOrdinalPair :symtab tid: dap) then {
+        fa: ordinalPairFirstArmId :symtab tid: dap
+        # the arm NAME resolved through any alias, as an id
+        if fa > 0 when mnc0Id.u64 == fa then return "(!(\{valP}))"
+        return "(\{valP})"
+    }
+    mnc0P: zast.nameTextAt :ast ref: mnc0Id
+    tgP: variantTag :symtab tid: dap arm: mnc0P.stringView
+    # an ordinal IS its discriminator: compare the value, not a field
+    if (isOrdinalVariant :symtab tid: dap) then return "((\{valP}) == \{tgP})"
+    accP: receiverTagAccess :ast :symtab :ctx :pn
+    return "((\{recvP})\{accP}tag == \{tgP})"
+}
+
+# tagAccessorReadC -- an explicit tag-accessor read: the discriminator cast to
+# the declared numeric type. A bool receiver is a C bool with no tag field
+# -- the bool VALUE is its discriminator.
+tagAccessorReadC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.dottedpathrow.view
+    # the receiver's type
+    dtr: ztypes.tid
+} out String is {
+    pn: ast.nodes.get i: n.parent.u64
+    recvT: emitExpr :ast :symtab :ctx n: pn
+    tatE: (symtab.typing.tagAccessorTid.get key: dtr).or d: ztypes.tid
+    castT: typeRefC :ast :symtab :ctx tid: tatE thisTid: ztypes.tid
+    if (isOrdinalVariant :symtab tid: dtr) then {
+        if (pathIsPointer :ast :symtab :ctx n: pn) then return "((\{castT})(*\{recvT}))"
+        return "((\{castT})(\{recvT}))"
+    }
+    accT: receiverTagAccess :ast :symtab :ctx :pn
+    return "((\{castT})(\{recvT})\{accT}tag)"
+}
+
 # emitDottedTagRead -- the three tagged-type stamps the checker leaves on a dotted
 # path: a construction reference (`Type.arm`), an arm PREDICATE on a value
 # receiver (a tag test), and an explicit tag-accessor read. A bool receiver is a
@@ -13156,135 +13253,20 @@ emitDottedTagRead: function {
 } out String is {
     # tagged-construction stamp: the typechecker resolved this path as
     # `Type.arm`, so member emission wins over the name-matched legs
-    # below (io/os bases, ownership markers, numeric casts). Null-payload
-    # arms emit the tag; payload arms and generic templates fall through
-    # (construction calls and inference are handled by later legs).
+    # below (io/os bases, ownership markers, numeric casts)
     dtp: dottedTaggedTid :symtab nid: n.nodeid.u64
     if dtp > 0 then {
-        mnc0: zast.nameTextAt :ast ref: mnc0Id
-        dtg: (
-            (
-                (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: dtp.u64)) ==
-                ztypes.ztypetype.variantType
-            ) or
-            (
-                (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: dtp.u64)) ==
-                ztypes.ztypetype.unionType
-            )
-        )
-        if dtg when (
-            (isGenericType
-                :symtab
-                tid: (ztypes.tid.create from: dtp.u64)
-            ).not
-        ) then {
-            vcH: ctxCname :ctx tid: (ztypes.tid.create from: dtp.u64)
-            if vcH.length > 0 then {
-                pcH: (armPayloadC
-                    :ast
-                    :symtab
-                    :ctx
-                    tid: (ztypes.tid.create from: dtp.u64)
-                    arm: mnc0.stringView
-                )
-                if pcH.length == 0 then {
-                    tgH: (variantTag
-                        :symtab
-                        tid: (ztypes.tid.create from: dtp.u64)
-                        arm: mnc0.stringView
-                    )
-                    avh: (armValueC
-                        :symtab
-                        tid: (ztypes.tid.create from: dtp.u64)
-                        arm: mnc0.stringView
-                    )
-                    if avh.length > 0 then return avh
-                    eH: "((\{vcH}_t){ .tag = \{tgH} })"
-                    return eH
-                }
-            }
-        }
+        r: taggedArmValueC :ast :symtab :ctx dtp: (ztypes.tid.create from: dtp.u64) :mnc0Id
+        if r.length > 0 then return r
     }
-    # arm predicate on a VALUE receiver: the typechecker stamped
-    # dpArmPredicate, so the path is a tag test. A bool receiver is a
-    # C bool (no tag field): identity for `.true`, negation for
-    # `.false`.
     dap: dottedArmPredicateTid :symtab nid: n.nodeid.u64
-    if dap > 0 then {
-        recvP: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
-        # an ordinal's discriminator IS its value, so a receiver reached through a
-        # pointer is LOADED before it is tested. The struct-shaped families read a
-        # `tag` FIELD instead and chain with `->`, which is what accP is for.
-        ptrP: (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
-        valP: recvP.copy
-        if ptrP then {
-            dP: "(*\{recvP})"
-            valP = dP
-        }
-        if (isOrdinalPair :symtab tid: (ztypes.tid.create from: dap.u64)) then {
-            fa: (ordinalPairFirstArmId
-                :symtab
-                tid: (ztypes.tid.create from: dap.u64)
-            )
-            # the arm NAME resolved through any alias, as an id
-            if fa > 0 when mnc0Id.u64 == fa then return "(!(\{valP}))"
-            return "(\{valP})"
-        }
-        accP: ".".string
-        rootP: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
-        if rootP.length > 0 then {
-            rpn: atomNodeId n: (ast.nodes.get i: n.parent.u64)
-            if (isPtrVid :ctx vid: (atomVid :symtab nid: rpn)) then accP = "->".string
-        }
-        mnc0P: zast.nameTextAt :ast ref: mnc0Id
-        tgP: variantTag :symtab tid: (ztypes.tid.create from: dap.u64) arm: mnc0P.stringView
-        # an ordinal IS its discriminator: compare the value, not a field
-        if (isOrdinalVariant
-            :symtab
-            tid: (ztypes.tid.create from: dap.u64)
-        ) then return "((\{valP}) == \{tgP})"
-        eP: "((\{recvP})\{accP}tag == \{tgP})"
-        return eP
-    }
-    # explicit tag-accessor read: the discriminator cast to the declared
-    # numeric type. A bool receiver is a C bool with no tag field -- the
-    # bool VALUE is its discriminator.
+    if dap > 0 then (return
+        (armPredicateC :ast :symtab :ctx :n dap: (ztypes.tid.create from: dap.u64) :mnc0Id)
+    )
     dtr: dottedTagReadTid :symtab nid: n.nodeid.u64
-    if dtr > 0 then {
-        recvT: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
-        tatE: ztypes.tid
-        tato: symtab.typing.tagAccessorTid.get key: (ztypes.tid.create from: dtr.u64)
-        match (
-            tato
-        ) case some then {
-            tatE = ztypes.tid.create from: tato
-        } case none then null
-        castT: (typeRefC
-            :ast
-            :symtab
-            :ctx
-            tid: (ztypes.tid.create from: tatE.u64)
-            thisTid: ztypes.tid
-        )
-        if (isOrdinalVariant
-            :symtab
-            tid: (ztypes.tid.create from: dtr.u64)
-        ) then {
-            if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)) then {
-                dT: "((\{castT})(*\{recvT}))"
-                return dT
-            }
-            return "((\{castT})(\{recvT}))"
-        }
-        accT: ".".string
-        rootT: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
-        if rootT.length > 0 then {
-            rtn: atomNodeId n: (ast.nodes.get i: n.parent.u64)
-            if (isPtrVid :ctx vid: (atomVid :symtab nid: rtn)) then accT = "->".string
-        }
-        eT: "((\{castT})(\{recvT})\{accT}tag)"
-        return eT
-    }
+    if dtr > 0 then (return
+        (tagAccessorReadC :ast :symtab :ctx :n dtr: (ztypes.tid.create from: dtr.u64))
+    )
     return "".string
 }
 
@@ -31227,6 +31209,56 @@ emitParsedMethodCall: function {
     return "\{pc}_\{mn}(\{recvExpr}, &\{nameArg})"
 }
 
+# iterClassWithCall -- the class a `.call` receiver's stamp resolves to: the
+# stamp itself when it is an instance, else the canonical type its name
+# looks up, provided that one declares `call`.
+iterClassWithCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    rid0: ztypes.tid
+} out ztypes.tid is {
+    if (originTidOf :symtab tid: rid0).isZero.not then return rid0
+    rtn: regNameOf :symtab tid: rid0
+    cano: (ztypecheck.walkLookupTyperefRo
+        frame: ztypes.declid
+        :ast
+        st: symtab
+        unitDecl: ctx.mainUnitId
+        base: rtn.stringView
+    )
+    if cano.none then return rid0
+    ct: ztypes.tid.create from: cano.u64
+    if (symtab.typing.declHasMemberId parentTypeId: ct nameId: zast.names.wkCall) then return ct
+    return rid0
+}
+
+# iterCallValueArg -- the C text of `.call`'s one argument, the per-call
+# input. The resume value goes by REFERENCE when it is a reftype -- the
+# synthesised `.call` declares that parameter as a pointer. Decided by the
+# TYPE, never by the argument's spelling (a `borrow` parameter's bare-name
+# argument needs its `&` too); a `.borrow`-suffixed argument reaches the same
+# answer through argBaseAtom.
+iterCallValueArg: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    # the argument's value node
+    vop: astnode.view
+} out String is {
+    ve: emitExpr :ast :symtab :ctx n: vop
+    vbase: argBaseAtom :ast n: vop
+    if vbase.length == 0 then return ve
+    vbnid: (argBaseNodeId :ast n: vop).u64
+    if (isReftypeParam :ast :symtab :ctx tid: (stampIdOf :symtab nid: vbnid)).not then return ve
+    valueBaseVid: atomVid :symtab nid: vbnid
+    vbr: aliasResolve :ctx name: vbase vid: valueBaseVid
+    vbv: ztypes.vid
+    if vbr.stringView == vbase then vbv = valueBaseVid
+    if (isPtrVid :ctx vid: vbv) then return ve
+    return "&\{ve}"
+}
+
 # emitUserIterCall -- a manual `g.call value: X` on a user iterator class (a
 # generator's iter): `z_t{id}_{Fn}_iter_call(&g, X)`; a `.borrow` value
 # passes by address. "" for any non-user-iter `.call`.
@@ -31243,93 +31275,39 @@ emitUserIterCall: function {
     bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: call.callable.u64)
     rid0: stampIdOf :symtab nid: bnid
     if rid0.isZero then return "".string
-    iterId: rid0
-    ot0: originTidOf :symtab tid: rid0
-    if ot0.isZero then {
-        rtn: regNameOf :symtab tid: rid0
-        cano: (ztypecheck.walkLookupTyperefRo
-            frame: ztypes.declid
-            :ast
-            st: symtab
-            unitDecl: ctx.mainUnitId
-            base: rtn.stringView
-        )
-        match (
-            cano
-        ) case some then {
-            hasCallI: (symtab.typing.declHasMemberId
-                parentTypeId: (ztypes.tid.create from: cano.u64)
-                nameId: zast.names.wkCall
-            )
-            if hasCallI then iterId = ztypes.tid.create from: cano.u64
-        } case none then null
-    }
+    iterId: iterClassWithCall :ast :symtab :ctx :rid0
     if (symtab.reg.typetypeOf typeId: iterId) != ztypes.ztypetype.classType then return "".string
-    itorig: originTidOf :symtab tid: iterId
-    if itorig > 0 then return "".string
+    if (originTidOf :symtab tid: iterId) > 0 then return "".string
     itn: regNameOf :symtab tid: iterId
     if (canonFnId :ast :symtab :ctx tid: iterId name: itn.stringView) <= 0 then return "".string
     cco: symtab.typing.declChildOfId parentTypeId: iterId nameId: zast.names.wkCall
-    match (
-        cco
-    ) case some then {
-        callC: ctxCname :ctx tid: (ztypes.tid.create from: cco.u64)
-        recvVid: atomVid :symtab nid: bnid
-        recvText: aliasResolve :ctx name: bn vid: recvVid
-        recvV: ztypes.vid
-        if recvText.stringView == bn then recvV = recvVid
-        recvC: emitLocalAtomName :ctx name: bn vid: recvVid
-        recvExpr: "&\{recvC}"
-        if (isPtrVid :ctx vid: recvV) then recvExpr = recvC
-        valArg: String
-        hasVal: false
-        arx599: u64
-        for arx599 < call.arguments.count.u64 loop {
-            av9Id: zast.kidAt kids: ast.kids span: call.arguments i: arx599
-            arx599 = arx599 + 1
-            atomVarId: ast.nodes.get i: av9Id.u64
-            # `.call` takes at most ONE argument -- the per-call input --
-            # so the first one IS it, whatever the author labelled it.
-            if atomVarId.namedoperation when hasVal.not then {
-                hasVal = true
-                ve: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: atomVarId.operation.u64)
-                # The resume value goes by REFERENCE when it is a reftype --
-                # the synthesised `.call` declares that parameter as a
-                # pointer. Decided by the TYPE, never by the argument's
-                # spelling (a `borrow` parameter's bare-name argument needs
-                # its `&` too); a `.borrow`-suffixed argument reaches the same
-                # answer through argBaseAtom.
-                vop: ast.nodes.get i: atomVarId.operation.u64
-                vbase: argBaseAtom :ast n: vop
-                vbnid: (argBaseNodeId :ast n: vop).u64
-                vIsRef: false
-                if vbase.length > 0 then {
-                    tid95: (stampIdOf :symtab nid: vbnid)
-                    vIsRef = (isReftypeParam
-                        :ast
-                        :symtab
-                        :ctx
-                        tid: tid95
-                    )
-                }
-                if vIsRef then {
-                    valueBaseVid: atomVid :symtab nid: vbnid
-                    vbr: aliasResolve :ctx name: vbase vid: valueBaseVid
-                    vbv: ztypes.vid
-                    if vbr.stringView == vbase then vbv = valueBaseVid
-                    vpfx: "&".string
-                    if (isPtrVid :ctx vid: vbv) then vpfx = "".string
-                    valArg = "\{vpfx}\{ve}"
-                } else {
-                    valArg = ve
-                }
-            }
+    if cco.none then return "".string
+    callC: ctxCname :ctx tid: (ztypes.tid.create from: cco.u64)
+    recvVid: atomVid :symtab nid: bnid
+    recvText: aliasResolve :ctx name: bn vid: recvVid
+    recvV: ztypes.vid
+    if recvText.stringView == bn then recvV = recvVid
+    recvC: emitLocalAtomName :ctx name: bn vid: recvVid
+    recvExpr: "&\{recvC}"
+    if (isPtrVid :ctx vid: recvV) then recvExpr = recvC
+    # `.call` takes at most ONE argument -- the per-call input -- so the first
+    # one IS it, whatever the author labelled it.
+    arx599: u64
+    for arx599 < call.arguments.count.u64 loop {
+        av9Id: zast.kidAt kids: ast.kids span: call.arguments i: arx599
+        arx599 = arx599 + 1
+        atomVarId: ast.nodes.get i: av9Id.u64
+        if atomVarId.namedoperation then {
+            valArg: (iterCallValueArg
+                :ast
+                :symtab
+                :ctx
+                vop: (ast.nodes.get i: atomVarId.operation.u64)
+            )
+            return "\{callC}(\{recvExpr}, \{valArg})"
         }
-        if hasVal then return "\{callC}(\{recvExpr}, \{valArg})"
-        return "\{callC}(\{recvExpr})"
-    } case none then {
-        return "".string
     }
+    return "\{callC}(\{recvExpr})"
 }
 
 # isDispatchableTid -- a vtable-dispatch receiver type: protocol or facet.
