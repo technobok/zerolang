@@ -9764,110 +9764,19 @@ emitFnCallWithFid: function {
         arx439 = arx439 + 1
         a: ast.nodes.get i: a9Id.u64
         if a.namedoperation then {
-            argOpNode: ast.nodes.get i: a.operation.u64
             slot9g: slots9g.get i: ai
             if slot9g < fpNames.length then {
-                fpid: fpIds.get i: slot9g
                 fpnO: fpNames.get i: slot9g
-                iav: (emitInterpArgForParam
+                av: (userFnArgText
                     :ast
                     :symtab
                     :ctx
-                    n: (ast.nodes.get i: a.operation.u64)
                     :fid
-                    pname: fpnO.stringView
-                    pid: fpid
+                    pinId: (fpIds.get i: slot9g)
+                    pinNm: fpnO.stringView
+                    argOpNode: (ast.nodes.get i: a.operation.u64)
                 )
-                if iav.length > 0 then {
-                    valBySlot9g.set key: slot9g value: iav
-                } else {
-                    atomVarId: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
-                    avq: (atomVidIfPlain
-                        :ast
-                        :symtab
-                        :ctx
-                        n: (ast.nodes.get i: a.operation.u64)
-                        text: atomVarId.stringView
-                    )
-                    byref: false
-                    argRef: String
-                    ptra: (
-                        (paramIsReceiverName :ast :symtab :fid pname: fpnO.stringView) or
-                        (markedValtypeRefParam :ast :symtab :fid pname: fpnO.stringView pid: fpid)
-                    )
-                    if (
-                        (symtab.typing.declOwnershipIs
-                            pool: ast.names
-                            parentTypeId: fid
-                            name: fpnO.stringView
-                            own: ztypes.zparamownership.takeMode
-                        ).not
-                    ) when (isReftypeParam
-                        :ast
-                        :symtab
-                        :ctx
-                        tid: (ztypes.tid.create from: fpid.u64)
-                    ) then {
-                        ptra = true
-                    } else {
-                        if (isBorrowStringParam
-                            :ast
-                            :symtab
-                            :ctx
-                            :fid
-                            pname: fpnO.stringView
-                            pid: (ztypes.tid.create from: fpid.u64)
-                        ) then ptra = true
-                    }
-                    if ptra.not when (isListPtrParam
-                        :ast
-                        :symtab
-                        :ctx
-                        :fid
-                        pname: fpnO.stringView
-                        tid: (ztypes.tid.create from: fpid.u64)
-                    ) then ptra = true
-                    if ptra when (
-                        (argAlreadyPointer :ast :symtab :ctx n: argOpNode vid: avq).not
-                    ) then {
-                        byref = true
-                        isBorrow92: (hoistExprIsBorrowRooted :ast :symtab :ctx n: argOpNode)
-                        argRef = (emitByrefArg
-                            :ast
-                            :symtab
-                            :ctx
-                            av: atomVarId.stringView
-                            pid: (ztypes.tid.create from: fpid.u64)
-                            isBorrow: isBorrow92
-                        )
-                    }
-                    vbh9x: String
-                    if ptra.not then {
-                        isBorrow93: (hoistExprIsBorrowRooted :ast :symtab :ctx n: argOpNode)
-                        take93: (symtab.typing.declOwnershipIs
-                            pool: ast.names
-                            parentTypeId: fid
-                            name: fpnO.stringView
-                            own: ztypes.zparamownership.takeMode
-                        )
-                        vbh9x = (hoistBorrowValArg
-                            :ast
-                            :symtab
-                            :ctx
-                            av: atomVarId.stringView
-                            pid: (ztypes.tid.create from: fpid.u64)
-                            paramTake: take93
-                            isBorrow: isBorrow93
-                        )
-                    }
-                    finalS9g: atomVarId.copy
-                    if byref then {
-                        finalS9g = argRef.copy
-                    } else {
-                        if vbh9x.length > 0 then finalS9g = vbh9x.copy
-                    }
-                    valBySlot9g.set key: slot9g value: finalS9g
-                }
+                valBySlot9g.set key: slot9g value: av
             }
             ai = ai + 1
         }
@@ -16285,6 +16194,114 @@ emitReturnStmt: function {
     }
 }
 
+# reassignRhsText -- the C text of a reassignment's value: a copy hoist, an
+# interpolation statement value, else the loaded expression.
+reassignRhsText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    valueNode: astnode.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} out String is {
+    rcph: copyRvalueHoist :ast :symtab :ctx n: valueNode :ind :buf
+    if rcph.length > 0 then return rcph
+    rvi: emitInterpStmtValue :ast :symtab :ctx n: valueNode :ind :tmp :buf
+    if rvi.length > 0 then return rvi
+    return (valueExprC :ast :symtab :ctx n: valueNode)
+}
+
+# reassignTargetC -- the C type a reassignment target is held as: the String
+# struct for a String, else the type's reference, a pointer for a heap
+# collection.
+reassignTargetC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    # the target's node and (chased) type
+    rtnid: u64
+    rtsid: ztypes.tid
+} out String is {
+    if (stampIsStr :symtab :ctx nid: rtnid) then return "\{ctx.strC}_t"
+    rrt: typeRefC :ast :symtab :ctx tid: rtsid thisTid: ztypes.tid
+    if (isHeapPtrCollection :symtab :ctx tid: rtsid) then return "\{rrt}*"
+    return rrt
+}
+
+# emitReassignDestroy -- free what the target held before it is overwritten:
+# a String's buffer, a heap collection through its pointer, any other
+# destructor-bearing value by address. Nothing for a value that owns no heap.
+emitReassignDestroy: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    # the target's C lvalue
+    nm2: StringView
+    rtnid: u64
+    rtsid: ztypes.tid
+    ind: StringView
+    buf: String.borrow
+} is {
+    if (stampIsStr :symtab :ctx nid: rtnid) then {
+        buf.append "\{ind}\{ctx.strC}_free(&\{nm2});\n"
+        return
+    }
+    if (symtab.reg.needsDestructor typeId: rtsid).not then return
+    # the chased mono's registry cname is authoritative (the stamp name still
+    # says the typedef)
+    rdcb: ctxCname :ctx tid: rtsid
+    if (isHeapPtrCollection :symtab :ctx tid: rtsid) then {
+        buf.append "\{ind}\{rdcb}_destroy(\{nm2});\n"
+        return
+    }
+    buf.append "\{ind}\{rdcb}_destroy(&\{nm2});\n"
+}
+
+# movedZeroText -- what a moved-out source is overwritten with so its own
+# scope-exit free no-ops: NULL for a heap collection, the zero struct of a
+# String or of any destructor-bearing type; empty when the value owns nothing.
+movedZeroText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    # the source's node and type
+    nid: u64
+    tid: ztypes.tid
+} out String is {
+    if (isHeapPtrCollection :symtab :ctx :tid) then return "NULL".string
+    if (stampIsStr :symtab :ctx :nid) then return "(\{ctx.strC}_t){0}"
+    if (symtab.reg.needsDestructor typeId: tid).not then return String
+    zct: typeRefC :ast :symtab :ctx :tid thisTid: ztypes.tid
+    return "(\{zct}){0}"
+}
+
+# valueIsFnTyped -- whether the value node's stamp is a function type: a
+# fn-typed field is a POD reference and a take of it moves nothing.
+valueIsFnTyped: function {symtab: zenv.ZSymbolTable.view nid: u64} out bool is {
+    if nid == 0 then return false
+    st: stampIdOf :symtab :nid
+    if st.isZero then return false
+    return (symtab.reg.typetypeOf typeId: st) == ztypes.ztypetype.functionType
+}
+
+# reassignMoveSource -- the local a reassignment's value MOVES out of, empty
+# when it is not a move: a bare owned local, or an explicit `<local>.take` /
+# `.hold` (the marker form arrives as a dotted path, which implicitTakeSource
+# -- bare names only -- does not see; without this the source keeps its
+# buffer and frees it again at scope exit, after the target has).
+reassignMoveSource: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    valueNode: astnode.view
+} out String is {
+    zsrc: implicitTakeSource :ast :symtab :ctx n: valueNode
+    if zsrc.length > 0 then return zsrc
+    mmb: moveMarkerBase :ast n: valueNode
+    if mmb == 0 then return zsrc
+    return (implicitTakeSource :ast :symtab :ctx n: (ast.nodes.get i: mmb.u64))
+}
+
 # emitReassignStmt -- `x = <value>`: the old value is freed where the binding owns
 # heap, the new one is stored, and a move source is zeroed so its scope-exit free
 # becomes a no-op.
@@ -16300,95 +16317,41 @@ emitReassignStmt: function {
     topathNode: ast.nodes.get i: n.topath.u64
     valueNode: ast.nodes.get i: n.value.u64
     nm2: emitReassignLvalue :ast :symtab :ctx n: topathNode
-    rcph: copyRvalueHoist :ast :symtab :ctx n: valueNode :ind :buf
-    rv2: String
-    if rcph.length > 0 then {
-        rv2 = rcph
-    } else {
-        rvi: emitInterpStmtValue :ast :symtab :ctx n: valueNode :ind :tmp :buf
-        if rvi.length > 0 then {
-            rv2 = rvi
-        } else {
-            rv2 = valueExprC :ast :symtab :ctx n: valueNode
-        }
-    }
+    rv2: reassignRhsText :ast :symtab :ctx :valueNode :ind :tmp :buf
     # the RHS walk may have recorded _ah arg hoists: declare them HERE,
     # before the assignment line that uses them (they would otherwise
     # flush at a later statement, after -- and outside -- this scope)
     flushArgHoists :ctx :ind :tmp :buf
     rtnid: interpPartNodeId n: topathNode
-    rtsid: reassignDestroyTid :ast :symtab n: topathNode nid: rtnid
     # a collection-typedef lvalue (Bytes) stores and destroys as its
     # chased underlying mono, exactly like the binding path
-    rtch: chaseColMono :symtab :ctx tid: rtsid
-    rtChased: false
-    if rtch != rtsid then {
-        rtsid = ztypes.tid.create from: rtch
-        rtChased = true
-    }
-    rdrop: false
-    if (stampIsStr :symtab :ctx nid: rtnid) then {
-        rdrop = true
-    } else {
-        if (symtab.reg.needsDestructor typeId: rtsid) then rdrop = true
-    }
+    rtsid: ztypes.tid.create from: (chaseColMono
+        :symtab
+        :ctx
+        tid: (reassignDestroyTid :ast :symtab n: topathNode nid: rtnid)
+    )
+    rdrop: (stampIsStr :symtab :ctx nid: rtnid) or (symtab.reg.needsDestructor typeId: rtsid)
     if rdrop when (isNonLvalueArg s: rv2.stringView) then {
-        rrt: "\{ctx.strC}_t"
-        if (stampIsStr :symtab :ctx nid: rtnid).not then {
-            rrt = typeRefC :ast :symtab :ctx tid: rtsid thisTid: ztypes.tid
-            if (isHeapPtrCollection :symtab :ctx tid: rtsid) then rrt = "\{rrt}*"
-        }
+        rrt: reassignTargetC :ast :symtab :ctx :rtnid :rtsid
         rrn: tmp.next
-        rrh: "\{ind}\{rrt} _rr\{rrn} = \{rv2};\n"
-        buf.append rrh
+        buf.append "\{ind}\{rrt} _rr\{rrn} = \{rv2};\n"
         rv2 = "_rr\{rrn}"
     }
-    if (stampIsStr :symtab :ctx nid: rtnid) then {
-        rdo: "\{ind}\{ctx.strC}_free(&\{nm2});\n"
-        buf.append rdo
-    } else {
-        if (symtab.reg.needsDestructor typeId: rtsid) then {
-            rdcb: ctxCname :ctx tid: rtsid
-            # the chased mono's registry cname is authoritative (the
-            # stamp name still says the typedef)
-            if rtChased then rdcb = ctxCname :ctx tid: rtsid
-            if (isHeapPtrCollection :symtab :ctx tid: rtsid) then {
-                rdoh: "\{ind}\{rdcb}_destroy(\{nm2});\n"
-                buf.append rdoh
-            } else {
-                rdov: "\{ind}\{rdcb}_destroy(&\{nm2});\n"
-                buf.append rdov
-            }
-        }
-    }
-    lc2: "\{ind}\{nm2} = \{rv2};\n"
-    buf.append lc2
+    emitReassignDestroy :symtab :ctx nm2: nm2.stringView :rtnid :rtsid :ind :buf
+    buf.append "\{ind}\{nm2} = \{rv2};\n"
     # a `<obj>.field.take` RHS moved the field out as a shallow struct
     # copy: zero the field lvalue so the owner's destructor does not
     # double-free the payload (mirrors the binding case; fn-typed fields
     # are POD references and move nothing).
-    rftFn: false
     rftnid: interpPartNodeId n: valueNode
-    if rftnid > 0 then {
-        rftst: stampIdOf :symtab nid: rftnid
-        if rftst > 0 when (
-            (symtab.reg.typetypeOf typeId: rftst) == ztypes.ztypetype.functionType
-        ) then {
-            rftFn = true
+    if (isFieldTake :ast n: valueNode) when (valueIsFnTyped :symtab nid: rftnid).not then {
+        rftz: movedZeroText :ast :symtab :ctx nid: rtnid tid: rtsid
+        # a field that owns nothing is still zeroed, as the binding case does
+        if rftz.length == 0 then {
+            rfct: typeRefC :ast :symtab :ctx tid: rtsid thisTid: ztypes.tid
+            rftz = "(\{rfct}){0}"
         }
-    }
-    if (isFieldTake :ast n: valueNode) when rftFn.not then {
-        if (isHeapPtrCollection :symtab :ctx tid: rtsid) then {
-            rftzh: "\{ind}\{rv2} = NULL;\n"
-            buf.append rftzh
-        } else {
-            rfct: "\{ctx.strC}_t"
-            if (stampIsStr :symtab :ctx nid: rtnid).not then {
-                rfct = typeRefC :ast :symtab :ctx tid: rtsid thisTid: ztypes.tid
-            }
-            rftz: "\{ind}\{rv2} = (\{rfct}){0};\n"
-            buf.append rftz
-        }
+        buf.append "\{ind}\{rv2} = \{rftz};\n"
     }
     # args moved into a construction/call RHS (e.g. `v.f = Option.some bo`)
     # are consumed by it -- invalidate each moved source so its scope-exit
@@ -16400,43 +16363,11 @@ emitReassignStmt: function {
     # scope-exit free no-ops (the lvalue -- a local or a struct field appended
     # into a container -- now owns the heap). Scalars/valtypes have no
     # destructor and are left untouched.
-    zsrc: implicitTakeSource :ast :symtab :ctx n: valueNode
-    if zsrc.length == 0 then {
-        # an explicit `<local>.take` / `.hold` moves just as a bare name
-        # does; the marker form arrives as a dotted path, which
-        # implicitTakeSource (bare names only) does not see. Without this
-        # the source keeps its buffer and frees it again at scope exit,
-        # after the target has already freed it.
-        mmb: moveMarkerBase :ast n: valueNode
-        if mmb > 0 then {
-            zsrc = (implicitTakeSource
-                :ast
-                :symtab
-                :ctx
-                n: (ast.nodes.get i: mmb.u64)
-            )
-        }
-    }
+    zsrc: reassignMoveSource :ast :symtab :ctx :valueNode
     if zsrc.length > 0 then {
-        znid: interpPartNodeId n: valueNode
-        zid: stampIdOf :symtab nid: znid
-        if (isHeapPtrCollection :symtab :ctx tid: zid) then {
-            zinvh: "\{ind}\{zsrc} = NULL;\n"
-            buf.append zinvh
-        } else {
-            zct: String
-            if (stampIsStr :symtab :ctx nid: znid) then {
-                zct = "\{ctx.strC}_t"
-            } else {
-                if (symtab.reg.needsDestructor typeId: zid) then {
-                    zct = typeRefC :ast :symtab :ctx tid: zid thisTid: ztypes.tid
-                }
-            }
-            if zct.length > 0 then {
-                zinv: "\{ind}\{zsrc} = (\{zct}){0};\n"
-                buf.append zinv
-            }
-        }
+        zid: stampIdOf :symtab nid: rftnid
+        zt: movedZeroText :ast :symtab :ctx nid: rftnid tid: zid
+        if zt.length > 0 then buf.append "\{ind}\{zsrc} = \{zt};\n"
     }
 }
 
