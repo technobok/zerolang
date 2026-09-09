@@ -3065,6 +3065,130 @@ navhit: record {
     unitFsno: zvfs.fsno
 }
 
+# bestSpanRow -- the span row under the cursor in this document; where rows
+# overlap, the highest-ranked kind wins. -1 when no row covers the cursor.
+bestSpanRow: function {
+    snap: zcheck.CheckResult
+    sp: Spans.view
+    docRel: StringView
+    srcDir: StringView
+    l1u: u32
+    cp1: u32
+} out i64 is {
+    bestIdx: -1
+    bestKind: u8
+    nr: sp.rows.length
+    ri: u64
+    for ri < nr loop {
+        row: sp.rows.get i: ri
+        if row.line == l1u when row.colLo <= cp1 when cp1 < row.colHi then {
+            fs: zcheck.fsnoFor r: snap nodeid: row.nodeid
+            pp: snap.vfs.pathfromprovider dentryid: fs
+            outranks: (spanKindRank kind: row.kind) > (spanKindRank kind: bestKind)
+            if (pathMatches pv: pp.stringView rel: docRel :srcDir) when (
+                (bestIdx < 0) or outranks
+            ) then {
+                bestIdx = ri.i64.orPanic
+                bestKind = row.kind
+            }
+        }
+        ri = ri + 1
+    }
+    return bestIdx
+}
+
+# navtarget -- what a hit resolved to; each zero when the reference is not one.
+navtarget: record {
+    # the variable
+    vid: ztypes.vid
+    # the type
+    tid: u64
+    # the owner type of a member hit
+    owner: u64
+    # the Decl (surface: a re-export keeps its own Decl); it fills the type id
+    # for hits only the Decl layer knows (public-interface entries)
+    declId: ztypes.declid
+}
+
+# navTargetByKind -- what a hit's kind says it names: a use is a variable or a
+# unit; a member has an owner (a unit-qualified member has no owner stamp and
+# falls back to its def tid); a binding is its variable; a declaration is its
+# type, then a unit, then its own variable. The Decl comes from refDecl.
+navTargetByKind: function {snap: zcheck.CheckResult hnid: u64 kind: u8} out navtarget is {
+    refVid: ztypes.vid
+    refTid: u64
+    refOwner: u64
+    if kind == 1 then {
+        refVid = useVarId o: snap.st nid: hnid
+        if refVid.isZero then refTid = useUnitDef o: snap.st nid: hnid
+    }
+    if kind == 2 then {
+        refOwner = memberOwnerOf o: snap.st nid: hnid
+        if refOwner == 0 then refTid = useUnitDef o: snap.st nid: hnid
+    }
+    if kind == 3 then refVid = defVarIdOf o: snap.st nid: hnid
+    if kind == 6 then {
+        refTid = nodeTypeAt o: snap.st nid: hnid
+        if refTid == 0 then refTid = useUnitDef o: snap.st nid: hnid
+        if refTid == 0 then refVid = defVarIdOf o: snap.st nid: hnid
+    }
+    return (navtarget
+        vid: refVid
+        tid: refTid
+        owner: refOwner
+        declId: (refDeclOf o: snap.st nid: hnid)
+    )
+}
+
+# navTargetRefine -- the legs that need the Decl. An OPERATOR: the method the
+# checker bound carries the doc, and surfaceDeclOfType finds the declaration
+# that declares it. A generic parameter's own declaration: its table, not
+# toolRefDecl, so the `.generic` member row sharing this node id keeps
+# answering nothing. A DECLARATION whose written type is a literal type: the
+# fold rewrote the node's stamp to i64/f64, so the card named the default
+# while the doc beneath it described the literal type; the Decl is the honest
+# answer. A PINNED literal -- `65` at a u8 parameter, or the base of `65.u8`
+# -- was stamped with the type that pinned it and never wore a literal one,
+# so the fold pass had nothing to record; its lexeme is the only tell left.
+# Last, a hit only the Decl knows takes the Decl's type.
+navTargetRefine: function {
+    snap: zcheck.CheckResult
+    hnid: u64
+    # the hit's name text
+    hnm: StringView
+    kind: u8
+    base: navtarget
+} out navtarget is {
+    refTid: base.tid
+    refDeclId: base.declId
+    if kind == 7 then {
+        refTid = binopMethodOf o: snap.st nid: hnid
+        if refTid > 0 then {
+            refDeclId = (surfaceDeclOfType
+                o: snap.st
+                prog: snap.prog
+                tid: (ztypes.tid.create from: refTid)
+            )
+        }
+    }
+    if kind == 6 when refDeclId.isZero then refDeclId = genericParamDeclOf o: snap.st nid: hnid
+    if kind == 6 when refDeclId.isZero.not then {
+        dt9: declTypeIdOf o: snap.st declId: refDeclId
+        if (isLiteralTid o: snap.st tid: dt9) then refTid = dt9
+    }
+    if kind == 1 when refDeclId.isZero when (ztypecheck.isNumericLiteralName name: hnm) then {
+        refDeclId = (surfaceDeclOfType
+            o: snap.st
+            prog: snap.prog
+            tid: (nodeTypeAt o: snap.st nid: hnid)
+        )
+    }
+    if base.vid.isZero when refTid == 0 when base.owner == 0 when refDeclId > 0 then {
+        refTid = declTypeIdOf o: snap.st declId: refDeclId
+    }
+    return (navtarget vid: base.vid tid: refTid owner: base.owner declId: refDeclId)
+}
+
 # navResolve -- hit-test a cursor against the span index and resolve what it
 # landed on. The three per-mode answers below all start here, so the resolution
 # rules live in one place and cannot drift between definition, hover and
@@ -3077,109 +3201,26 @@ navResolve: function {
     l1u: u32
     cp1: u32
 } out optionval navhit is {
-    bestIdx: -1
-    bestKind: u8
-    nr: sp.rows.length
-    ri: u64
-    for ri < nr loop {
-        row: sp.rows.get i: ri
-        if row.line == l1u when row.colLo <= cp1 when cp1 < row.colHi then {
-            fs: zcheck.fsnoFor r: snap nodeid: row.nodeid
-            pp: snap.vfs.pathfromprovider dentryid: fs
-            if (pathMatches pv: pp.stringView rel: docRel :srcDir) then {
-                shouldTake: bestIdx < 0
-                if (
-                    (spanKindRank kind: row.kind) > (spanKindRank kind: bestKind)
-                ) then shouldTake = true
-                if shouldTake then {
-                    bestIdx = ri.i64.orPanic
-                    bestKind = row.kind
-                }
-            }
-        }
-        ri = ri + 1
-    }
+    bestIdx: bestSpanRow :snap :sp :docRel :srcDir :l1u :cp1
     if bestIdx < 0 then return (optionval.none navhit)
     bi: bestIdx.u64.orPanic
     hit: sp.rows.get i: bi
     hnm: sp.names.get i: bi
     w: hit.colHi - hit.colLo
     hnid: hit.nodeid.u64
-
-    # resolve the hit to a target
-    refVid: ztypes.vid
-    refTid: u64
-    refOwner: u64
-    if bestKind == 1 then {
-        refVid = useVarId o: snap.st nid: hnid
-        if refVid.isZero then refTid = useUnitDef o: snap.st nid: hnid
-    }
-    if bestKind == 2 then {
-        refOwner = memberOwnerOf o: snap.st nid: hnid
-        # a unit-qualified member has no owner stamp; fall back to its def tid
-        if refOwner == 0 then refTid = useUnitDef o: snap.st nid: hnid
-    }
-    if bestKind == 3 then refVid = defVarIdOf o: snap.st nid: hnid
-    if bestKind == 6 then {
-        refTid = nodeTypeAt o: snap.st nid: hnid
-        if refTid == 0 then refTid = useUnitDef o: snap.st nid: hnid
-        if refTid == 0 then refVid = defVarIdOf o: snap.st nid: hnid
-    }
-    # the Decl the reference resolved to (surface: a re-export keeps its
-    # own Decl); fills the type id for hits only the Decl layer knows
-    # (public-interface entries)
-    refDeclId: refDeclOf o: snap.st nid: hnid
-    # an OPERATOR: the method the checker bound is what carries the doc, and
-    # surfaceDeclOfType finds the declaration that declares it
-    if bestKind == 7 then {
-        refTid = binopMethodOf o: snap.st nid: hnid
-        if refTid > 0 then {
-            refDeclId = (surfaceDeclOfType
-                o: snap.st
-                prog: snap.prog
-                tid: (ztypes.tid.create from: refTid)
-            )
-        }
-    }
-    # a generic parameter's own declaration: its table, not toolRefDecl, so the
-    # `.generic` member row sharing this node id keeps answering nothing
-    if bestKind == 6 when refDeclId.isZero then {
-        refDeclId = genericParamDeclOf o: snap.st nid: hnid
-    }
-    # a DECLARATION whose written type is a literal type: the fold rewrote the
-    # node's stamp to i64/f64, so the card named the default while the doc
-    # beneath it described the literal type. The Decl is the honest answer.
-    if bestKind == 6 when refDeclId.isZero.not then {
-        dt9: declTypeIdOf o: snap.st declId: refDeclId
-        if (isLiteralTid o: snap.st tid: dt9) then refTid = dt9
-    }
-    # a PINNED literal -- `65` at a u8 parameter, or the base of `65.u8` -- was
-    # stamped with the type that pinned it and never wore a literal one, so the
-    # fold pass had nothing to record. Its lexeme is the only tell left.
-    if bestKind == 1 when refDeclId.isZero when (ztypecheck.isNumericLiteralName
-        name: hnm.stringView
-    ) then {
-        refDeclId = (surfaceDeclOfType
-            o: snap.st
-            prog: snap.prog
-            tid: (nodeTypeAt o: snap.st nid: hnid)
-        )
-    }
-    if refVid.isZero when refTid == 0 when refOwner == 0 when (
-        refDeclId > 0
-    ) then refTid = declTypeIdOf o: snap.st declId: refDeclId
-
+    base: navTargetByKind :snap :hnid kind: hit.kind
+    t: navTargetRefine :snap :hnid hnm: hnm.stringView kind: hit.kind :base
     unitFsno: zvfs.fsno
-    if refVid.isZero when refTid == 0 then unitFsno = unitFsnoByName :snap name: hnm.stringView
+    if t.vid.isZero when t.tid == 0 then unitFsno = unitFsnoByName :snap name: hnm.stringView
     found: (navhit
         idx: bi
-        kind: bestKind
+        kind: hit.kind
         width: w
         nodeid: hnid
-        vid: refVid
-        tid: refTid
-        owner: refOwner
-        declId: refDeclId
+        vid: t.vid
+        tid: t.tid
+        owner: t.owner
+        declId: t.declId
         :unitFsno
     )
     return (optionval.some found)
