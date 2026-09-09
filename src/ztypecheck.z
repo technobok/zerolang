@@ -8272,6 +8272,85 @@ recordTypedefBase: function {
 }
 
 
+# objAsItemsOf -- an object definition's as-block items; an empty span when
+# the node is not an objectdef.
+objAsItemsOf: function {ast: Ast nid: zast.nodeid} out zast.kidspan is {
+    od: ast.nodes.get i: nid.u64
+    if od.objectdef then return od.asItems
+    return (zast.kidspan first: 0 count: 0)
+}
+
+# recordisdecls -- which of the members the checker would otherwise
+# synthesise the record's `is` block declared itself.
+recordisdecls: record {
+    create: bool
+    eq: bool
+    ne: bool
+}
+
+# attachRecordIsItems -- each item of a record's `is` block: a method body
+# resolves as a member (a flaggable name also marks an fnptr field); anything
+# else is a field.
+attachRecordIsItems: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    defName: StringView
+    rnode: objref
+    rid: u64
+    isgen: bool
+} out recordisdecls is {
+    got: (recordisdecls create: false eq: false ne: false)
+    rt: ztypes.tid.create from: rid.u64
+    ownerNmId: nameIdOf :ast name: defName
+    kFiter: u64
+    for kFiter < rnode.nis loop {
+        fmId: (zast.objIsItemAt :ast nid: rnode.nid i: kFiter).u32
+        kFiter = kFiter + 1
+        fm: argRefAt :ast nid: (zast.nodeid.create from: fmId.u32)
+        if fm.nid.isZero.not then {
+            fname: zast.nameTextCopy :ast ref: fm.name
+            mido: (resolveMethodFnLazy
+                :st
+                :frame
+                :ast
+                :unitDecl
+                ownerNameId: ownerNmId
+                mname: fname.stringView
+                thisName: defName
+                opId: fm.operation
+                lazyOk: isgen.not
+            )
+            if mido.none then {
+                (attachRecordField
+                    :st
+                    :frame
+                    :ast
+                    :unitDecl
+                    :defName
+                    :rid
+                    :fm
+                    fname: fname.stringView
+                )
+            } else {
+                got.create = got.create or (fm.name == zast.names.wkCreate)
+                got.eq = got.eq or (fm.name == zast.names.wkOpEq)
+                got.ne = got.ne or (fm.name == zast.names.wkOpNe)
+                st.typing.setMemberType parentTypeId: rt nameId: fm.name childTypeId: mido
+                if (fnFieldFlaggableName name: fname.stringView) then {
+                    (st.typing.setChildFnptrField
+                        pool: ast.names
+                        parentTypeId: rt
+                        name: fname.stringView
+                    )
+                }
+            }
+        }
+    }
+    return got
+}
+
 # resolveRecord -- resolve a record ObjectDef into a RECORD valtype. A normal
 # record: a child per field (field name -> type-ref shell), a child per as-block
 # method, then synthesized `create`/`==`/`!=`. A typedef record (single
@@ -8294,172 +8373,72 @@ resolveRecord: function {
         name: defName
         typetype: ztypes.ztypetype.recordType
     )
-    rrid: rid
+    rt: ztypes.tid.create from: rid.u64
     # `record is native` on the TYPE: the runtime supplies the layout, so
     # routing can ask the declaration whether a type is runtime-backed instead
     # of comparing its name. Mirrors resolveClass.
-    st.reg.setNative typeId: (ztypes.tid.create from: rid.u64) value: rnode.isNative
+    st.reg.setNative typeId: rt value: rnode.isNative
     pvExcl_rrid: ListVal u64
     pvGrants_rrid: ListVal u64
     scanVisibility :st :ast onode: rnode excl: pvExcl_rrid grants: pvGrants_rrid
-    st.reg.setValtype typeId: (ztypes.tid.create from: rid.u64) value: true
-    isgen: false
-    {
-        onIsgen: ast.nodes.get i: rnode.nid.u64
-        if onIsgen.objectdef then {
-            isgen = hasGenericParam :ast items: onIsgen.asItems
-        }
-    }
-    eqOptR: false
-    {
-        onEqOptR: ast.nodes.get i: rnode.nid.u64
-        if onEqOptR.objectdef then {
-            eqOptR = eqNullOptOut :ast asItems: onEqOptR.asItems
-        }
-    }
+    st.reg.setValtype typeId: rt value: true
+    asItems: objAsItemsOf :ast nid: rnode.nid
+    isgen: hasGenericParam :ast items: asItems
+    eqOptR: eqNullOptOut :ast :asItems
     # BOTH NAMES, INDEPENDENTLY. The old gate asked about `==` alone and then
     # synthesised the pair, so a type writing only `!=` had its own operator
     # replaced by the synth shell -- and one writing only `==` got no `!=`
     # MEMBER at all, only the emitter's derived negation.
-    eqAsR: false
-    neAsR: false
-    {
-        onEqAsR: ast.nodes.get i: rnode.nid.u64
-        if onEqAsR.objectdef then {
-            eqAsR = (asDeclaresMemberId
-                :ast
-                asItems: onEqAsR.asItems
-                nameId: zast.names.wkOpEq
-            )
-            neAsR = (asDeclaresMemberId
-                :ast
-                asItems: onEqAsR.asItems
-                nameId: zast.names.wkOpNe
-            )
-        }
-    }
+    eqAsR: asDeclaresMemberId :ast :asItems nameId: zast.names.wkOpEq
+    neAsR: asDeclaresMemberId :ast :asItems nameId: zast.names.wkOpNe
     # `copy: null` strikes the default byte copy off this type. It is recorded
     # as a member carrying the null shell so the use site can tell it from a
     # type that simply never mentioned `copy`.
-    hasMemberNullOptOut33: false
-    {
-        onhasMemberNullOptOut33: ast.nodes.get i: rnode.nid.u64
-        if onhasMemberNullOptOut33.objectdef then {
-            hasMemberNullOptOut33 = (memberNullOptOut
-                :ast
-                asItems: onhasMemberNullOptOut33.asItems
-                member: "copy"
-            )
-        }
-    }
-    if hasMemberNullOptOut33 then {
-        st.typing.copyOptOut.add item: rid
-    }
+    if (memberNullOptOut :ast :asItems member: "copy") then st.typing.copyOptOut.add item: rid
     if isgen then {
-        st.reg.setGeneric typeId: (ztypes.tid.create from: rid.u64) value: true
+        st.reg.setGeneric typeId: rt value: true
         tdecl9: (declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: defName))
-        {
-            onRg: ast.nodes.get i: rnode.nid.u64
-            if onRg.objectdef then {
-                (registerGenericParams
-                    :st
-                    :ast
-                    tdecl: tdecl9
-                    items: onRg.asItems
-                )
-            }
-        }
+        registerGenericParams :st :ast tdecl: tdecl9 items: asItems
     }
     istd: recordIsTypedef :ast :rnode
     if istd then recordTypedefBase :st :frame :ast :unitDecl :rnode :rid
-    hasCreateIs: false
-    hasEqIs: false
-    hasNeIs: false
-    if istd.not then {
-        kFiter: u64
-        for kFiter < rnode.nis loop {
-            fmId: (zast.objIsItemAt :ast nid: rnode.nid i: kFiter).u32
-            kFiter = kFiter + 1
-            fm: argRefAt :ast nid: (zast.nodeid.create from: fmId.u32)
-            if fm.nid.isZero.not then {
-                fname: zast.nameTextCopy :ast ref: fm.name
-                ownerNmId: nameIdOf :ast name: defName
-                mido: (resolveMethodFnLazy
-                    :st
-                    :frame
-                    :ast
-                    :unitDecl
-                    ownerNameId: ownerNmId
-                    mname: fname.stringView
-                    thisName: defName
-                    opId: fm.operation
-                    lazyOk: isgen.not
-                )
-                match (
-                    mido
-                ) case some then {
-                    if fname.stringView == "create" then hasCreateIs = true
-                    if fm.name == zast.names.wkOpEq then hasEqIs = true
-                    if fm.name == zast.names.wkOpNe then hasNeIs = true
-                    (st.typing.setMemberType
-                        parentTypeId: (ztypes.tid.create from: rid.u64)
-                        nameId: fm.name
-                        childTypeId: mido
-                    )
-                    if (fnFieldFlaggableName name: fname.stringView) then {
-                        (st.typing.setChildFnptrField
-                            pool: ast.names
-                            parentTypeId: (ztypes.tid.create from: rid.u64)
-                            name: fname.stringView
-                        )
-                    }
-                } case none then {
-                    (attachRecordField
-                        :st
-                        :frame
-                        :ast
-                        :unitDecl
-                        :defName
-                        :rid
-                        :fm
-                        fname: fname.stringView
-                    )
-                }
-            }
-        }
-    }
+    isDecls: (recordisdecls create: false eq: false ne: false)
+    if istd.not then isDecls = (attachRecordIsItems
+        :st
+        :frame
+        :ast
+        :unitDecl
+        :defName
+        :rnode
+        :rid
+        :isgen
+    )
     hasCreateAs: (attachMethods
         :st
         :frame
         :ast
         :unitDecl
         :defName
-        parentId: (ztypes.tid.create from: rid.u64)
+        parentId: rt
         objId: rnode.nid
     )
-    hasCreate: hasCreateIs
-    if hasCreateAs then hasCreate = true
     attachMarkers :st :frame :ast :unitDecl parentId: rid objId: rnode.nid
-    if hasCreate.not then {
+    if isDecls.create.not when hasCreateAs.not then {
         createId: (st.reg.newType
             name: "create"
             ownerTid: rid
             typetype: ztypes.ztypetype.functionType
         )
         (st.typing.declSynthMemberTyped
-            parentTypeId: (ztypes.tid.create from: rid.u64)
+            parentTypeId: rt
             nameId: zast.names.wkCreate
             kind: ztyping.declkind.methodDecl
             childTypeId: createId
         )
         materializeCreateParams :st :frame :ast typeTid: rid :createId
     }
-    # resolved BEFORE the call: ast is lent for the whole argument list, and
-    # the synth path only reads it, so the minting lookup has to happen here
     # a member the SOURCE declares, by either block: the decl tree does not
     # carry them yet at this point
-    eqDeclR: eqAsR or hasEqIs
-    neDeclR: neAsR or hasNeIs
     (synthRecordMembers
         :st
         :ast
@@ -8468,11 +8447,11 @@ resolveRecord: function {
         :istd
         :isgen
         :eqOptR
-        :eqDeclR
-        :neDeclR
+        eqDeclR: (eqAsR or isDecls.eq)
+        neDeclR: (neAsR or isDecls.ne)
     )
     if pvExcl_rrid.length > 0 then st.typing.privacySeen = true
-    applyGrantsPrivate :st parentId: rrid grants: pvGrants_rrid
+    applyGrantsPrivate :st parentId: rid grants: pvGrants_rrid
 }
 
 # detectTagAccessor -- a non-function variant/union as-item of the form
@@ -9038,6 +9017,34 @@ variantTagBaseTid: function {
     return declared
 }
 
+# opIsTagRef -- whether a member's operation is a `<Base>.tag` reference.
+opIsTagRef: function {ast: Ast am: argref} out bool is {
+    opNode: ast.nodes.get i: am.operation.u64
+    if opNode.dottedpath.not then return false
+    return (atomNameId :ast n: (ast.nodes.get i: opNode.child.u64)) == zast.names.wkTag
+}
+
+# tagBaseIsU8 -- whether the base a `.tag` reference names resolves to `u8`
+# exactly: not a data block, and the same type id as the builtin.
+tagBaseIsU8: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    bn: StringView
+} out bool is {
+    rr: walkLookupTyperef :st :frame :ast :unitDecl base: bn
+    if rr.none then return false
+    if (
+        (st.reg.typetypeOf typeId: (ztypes.tid.create from: rr.u64)) == ztypes.ztypetype.dataType
+    ) then {
+        return false
+    }
+    u8t: builtinTidT :st :frame :ast base: "u8"
+    if u8t.isZero then return false
+    return rr == u8t.u64
+}
+
 # whether a variant's tag is the plain ordinal one rather than an author-
 # declared `data` tag. The truthiness rules only apply to the plain kind
 variantTagIsOrdinalPlain: function {
@@ -9047,57 +9054,20 @@ variantTagIsOrdinalPlain: function {
     frame: ztypes.declid
     objId: zast.nodeid
 } out bool is {
-    result: true
     orf: objRefAt :ast nid: objId
     kIter: u64
     for kIter < orf.nas loop {
         amId: (zast.objAsItemAt :ast nid: objId i: kIter).u32
         kIter = kIter + 1
         am: argRefAt :ast nid: (zast.nodeid.create from: amId.u32)
-        if am.nid.isZero.not then {
-            # the member's operation is read through a view scoped to this
-            # block: the lookup below lends ast
-            isTagRef: false
-            bn: String
-            {
-                opNode: ast.nodes.get i: am.operation.u64
-                if opNode.dottedpath when (
-                    (atomNameId :ast n: (ast.nodes.get i: opNode.child.u64)) == zast.names.wkTag
-                ) then isTagRef = true
-                if isTagRef then bn = dottedParentName :ast n: opNode
-            }
-            if isTagRef then {
-                if bn.length == 0 then {
-                    result = false
-                } else {
-                    rr: (walkLookupTyperef
-                        :st
-                        :frame
-                        :ast
-                        :unitDecl
-                        base: bn.stringView
-                    )
-                    match (
-                        rr
-                    ) case some then {
-                        if (
-                            (st.reg.typetypeOf typeId: (ztypes.tid.create from: rr.u64)) ==
-                            ztypes.ztypetype.dataType
-                        ) then {
-                            result = false
-                        } else {
-                            u8t: builtinTidT :st :frame :ast base: "u8"
-                            if u8t.isZero then result = false
-                            if u8t.isZero.not when rr != u8t.u64 then result = false
-                        }
-                    } case none then {
-                        result = false
-                    }
-                }
-            }
+        if am.nid.isZero.not when (opIsTagRef :ast :am) then {
+            # the base name is read before the lookup below lends ast
+            bn: dottedParentName :ast n: (ast.nodes.get i: am.operation.u64)
+            if bn.length == 0 then return false
+            if (tagBaseIsU8 :ast :st :unitDecl :frame bn: bn.stringView).not then return false
         }
     }
-    return result
+    return true
 }
 
 # dottedParentName -- the parent atom name of a `parent.child` dottedpath astnode, ""
@@ -31501,6 +31471,68 @@ checkUserFnCall: function {
     return result
 }
 
+# isContainerTemplateTid -- whether a template origin is one of the native
+# container templates, whose paren-construction arguments take no standard
+# ctor scope (each has its own native create path).
+isContainerTemplateTid: function {ast: Ast st: zenv.ZSymbolTable wgix: u64} out bool is {
+    if wgix == (builtinTidTcRo :ast :st base: "ListRef") then return true
+    if wgix == (builtinTidTcRo :ast :st base: "ListVal") then return true
+    if wgix == (builtinTidTcRo :ast :st base: "MapRR") then return true
+    if wgix == (builtinTidTcRo :ast :st base: "MapRV") then return true
+    if wgix == (builtinTidTcRo :ast :st base: "MapVR") then return true
+    if wgix == (builtinTidTcRo :ast :st base: "MapVV") then return true
+    if wgix == (builtinTidTcRo :ast :st base: "SetRef") then return true
+    return wgix == (builtinTidTcRo :ast :st base: "SetVal")
+}
+
+# wrappedCalleeIsCtorType -- a non-FUNCTION wrapped callee is the paren-mono
+# construction form, whose value args ride the standard ctor walk (call
+# scope, hoists, consumption); a container template is not.
+wrappedCalleeIsCtorType: function {ast: Ast st: zenv.ZSymbolTable wcv: ztypes.tid} out bool is {
+    if (st.reg.typetypeOf typeId: wcv) == ztypes.ztypetype.functionType then return false
+    wgi: st.reg.genericOriginOf tid: wcv
+    if wgi.isZero then return true
+    return (isContainerTemplateTid :ast :st wgix: wgi.u64).not
+}
+
+# checkWrappedCtorArgs -- the standard ctor walk over a wrapped
+# construction's arguments, in a call scope, and the type is recorded as
+# constructed.
+checkWrappedCtorArgs: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    call: callref
+    wcv: ztypes.tid
+} is {
+    wcm: st.pushCall
+    (walkCallArgsHoist
+        :st
+        :unitDecl
+        :ast
+        :call
+        funcId: wcv
+        isCtor: true
+        reportUnknown: false
+        recvImplicit: false
+    )
+    checkMissingCallArgs :ast :st :call funcId: wcv isCtor: true recvImplicit: false
+    st.popTo marker: wcm
+    st.typing.constructedTypes.set key: wcv value: true
+}
+
+# checkWrappedValueArgs -- each argument of a wrapped call checked as a value.
+checkWrappedValueArgs: function {
+    st: zenv.ZSymbolTable unitDecl: ztypes.declid ast: Ast call: callref
+} is {
+    kW: u64
+    for kW < call.nargs loop {
+        warg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: kW)
+        kW = kW + 1
+        if warg.nid.isZero.not then checkValueAt :st :unitDecl :ast nid: warg.operation
+    }
+}
+
 # checkWrappedCall -- a callable that is itself an expression (a parenthesised
 # call, or a value the walk produced): type it, then treat what it yields as
 # the thing being called. 0 when it yields nothing callable.
@@ -31515,69 +31547,15 @@ checkWrappedCall: function {
     if wcv.u64 == 0 when st.typing.errors.length == errX then {
         reportUnresolvedValue :st :unitDecl :ast nid: call.callable
     }
-    if wcv > 0 then {
-        # A non-FUNCTION wrapped callee is the paren-mono construction
-        # form: value args ride the standard ctor walk (call scope,
-        # hoists, consumption); arg-less stays a bare construction.
-        isWType: true
-        if (st.reg.typetypeOf typeId: wcv) == ztypes.ztypetype.functionType then isWType = false
-        # a container template has its own native create path, so its
-        # paren-construction arguments take no standard ctor scope.
-        wgix: u64
-        {
-            wgi: st.reg.genericOriginOf tid: wcv
-            if wgi > 0 then wgix = wgi
-        }
-        if wgix > 0 then {
-            if wgix == (builtinTidTcRo :ast :st base: "ListRef") then isWType = false
-            if wgix == (builtinTidTcRo :ast :st base: "ListVal") then isWType = false
-            if wgix == (builtinTidTcRo :ast :st base: "MapRR") then isWType = false
-            if wgix == (builtinTidTcRo :ast :st base: "MapRV") then isWType = false
-            if wgix == (builtinTidTcRo :ast :st base: "MapVR") then isWType = false
-            if wgix == (builtinTidTcRo :ast :st base: "MapVV") then isWType = false
-            if wgix == (builtinTidTcRo :ast :st base: "SetRef") then isWType = false
-            if wgix == (builtinTidTcRo :ast :st base: "SetVal") then isWType = false
-        }
-        if isWType when call.nargs > 0 then {
-            wcm: st.pushCall
-            (walkCallArgsHoist
-                :st
-                :unitDecl
-                :ast
-                :call
-                funcId: wcv
-                isCtor: true
-                reportUnknown: false
-                recvImplicit: false
-            )
-            (checkMissingCallArgs
-                :ast
-                :st
-                :call
-                funcId: wcv
-                isCtor: true
-                recvImplicit: false
-            )
-            st.popTo marker: wcm
-            wck: wcv
-            wcvv: true
-            st.typing.constructedTypes.set key: wck value: wcvv
-        } else {
-            kW: u64
-            for kW < call.nargs loop {
-                warg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: kW)
-                kW = kW + 1
-                if warg.nid.isZero.not then {
-                    checkValueAt :st :unitDecl :ast nid: warg.operation
-                }
-            }
-        }
-        setwc: wcv
-        stampGate :st nid: call.nid.u64 tid: setwc
-        stampConstructionKind :st nid: call.nid.u64 tid: wcv
-        return wcv
+    if wcv.u64 == 0 then return (ztypes.tid.create from: 0)
+    if (wrappedCalleeIsCtorType :ast :st :wcv) when call.nargs > 0 then {
+        checkWrappedCtorArgs :st :unitDecl :ast :call :wcv
+    } else {
+        checkWrappedValueArgs :st :unitDecl :ast :call
     }
-    return (ztypes.tid.create from: 0)
+    stampGate :st nid: call.nid.u64 tid: wcv
+    stampConstructionKind :st nid: call.nid.u64 tid: wcv
+    return wcv
 }
 
 # bareCalleeTid -- the function a BARE callable name resolves to: the local scope
@@ -32782,6 +32760,50 @@ checkCaseClause: function {
     return (casearmfacts empty: anyEmpty diverges: allDiverge)
 }
 
+# requiredArms -- the arms a match over a sum subject must cover. Ambient
+# narrowing relaxes the requirement: a subject already narrowed to a single
+# arm needs only that arm's case; arms the enclosing flow has excluded are
+# impossible and need none.
+requiredArms: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    subjT: ztypes.tid
+    # the subject's name, empty when it has none
+    targetName: StringView
+    into: List String
+} is {
+    arms2: sumSubtypeNames :ast :st sid: subjT
+    excl: IdSet zast.nameid
+    if targetName.length > 0 then {
+        tn: nameIdOf :ast name: targetName
+        gsn: st.narrowedArmOf nameId: tn fullTypeId: subjT
+        if gsn.isZero.not then {
+            into.append (zast.poolTextCopy pool: ast.names ref: gsn)
+            return
+        }
+        st.collectExcluded nameId: tn into: excl
+    }
+    with a0it: arms2.iterate do for an0: a0it loop {
+        anId: nameIdOf :ast name: an0.stringView
+        if (excl.has item: anId).not then into.append an0.copy
+    }
+}
+
+# missingArms -- the required arms no case covers, in the required order.
+missingArms: function {
+    required: (List String).view covered: (List String).view into: List String
+} is {
+    a2iter: required.iterate
+    for an3: a2iter loop {
+        found: false
+        c2iter: covered.iterate
+        for cn3: c2iter loop {
+            if an3.stringView == cn3.stringView then found = true
+        }
+        if found.not then into.append an3.copy
+    }
+}
+
 # caseIsExhaustive -- whether an else-less match covers every arm its subject
 # can still hold, reporting the missing ones when it does not. Narrowing and
 # construction both shrink that set, so the answer is about what the subject
@@ -32795,76 +32817,31 @@ caseIsExhaustive: function {
     targetName: StringView
     covered: (List String).view
 } out bool is {
-    exhaustive: false
-    if isSum then {
-        arms2: sumSubtypeNames :ast :st sid: subjT
-        # ambient narrowing relaxes the requirement: a subject already
-        # narrowed to a single arm needs only that arm's case; arms the
-        # enclosing flow has excluded are impossible and need none.
-        required: List String
-        nsn: String
-        if targetName.length > 0 then {
-            gsn: (st.narrowedArmOf
-                nameId: (nameIdOf :ast name: targetName)
-                fullTypeId: subjT
-            )
-            if gsn.isZero.not then {
-                nsn = zast.poolTextCopy pool: ast.names ref: gsn
-            }
-        }
-        if nsn.length > 0 then {
-            nreq: nsn.copy
-            required.append nreq
-        } else {
-            excl: IdSet zast.nameid
-            if targetName.length > 0 then {
-                (st.collectExcluded
-                    nameId: (nameIdOf :ast name: targetName)
-                    into: excl
-                )
-            }
-            with a0it: arms2.iterate do for an0: a0it loop {
-                anId: nameIdOf :ast name: an0.stringView
-                if (excl.has item: anId).not then required.append an0.copy
-            }
-        }
-        allCovered: true
-        missing: List String
-        a2iter: required.iterate
-        for an3: a2iter loop {
-            found: false
-            c2iter: covered.iterate
-            for cn3: c2iter loop {
-                if an3.stringView == cn3.stringView then found = true
-            }
-            if found.not then {
-                allCovered = false
-                missing.append an3.copy
-            }
-        }
-        exhaustive = allCovered
-        if allCovered.not then {
-            mj: String
-            mfirst: true
-            with mit: missing.iterate do for mn: mit loop {
-                if mfirst.not then mj.append ", "
-                mj.append mn
-                mfirst = false
-            }
-            (addErrorH
-                :st
-                nodeid: casenode.nid
-                lineno: casenode.lineno
-                colno: casenode.colno
-                e: zast.err.nonExhaustive
-                msg: "non-exhaustive match: missing case(s) \{mj} -- add them or an `else` clause"
-                note: "".string
-                hint: "".string
-                width: 5
-            )
-        }
+    if isSum.not then return false
+    required: List String
+    requiredArms :st :ast :subjT :targetName into: required
+    missing: List String
+    missingArms :required :covered into: missing
+    if missing.length == 0 then return true
+    mj: String
+    mfirst: true
+    with mit: missing.iterate do for mn: mit loop {
+        if mfirst.not then mj.append ", "
+        mj.append mn
+        mfirst = false
     }
-    return exhaustive
+    (addErrorH
+        :st
+        nodeid: casenode.nid
+        lineno: casenode.lineno
+        colno: casenode.colno
+        e: zast.err.nonExhaustive
+        msg: "non-exhaustive match: missing case(s) \{mj} -- add them or an `else` clause"
+        note: "".string
+        hint: "".string
+        width: 5
+    )
+    return false
 }
 
 # caseResultTid -- the value a match produces: `never` when every arm diverges,
@@ -41458,6 +41435,32 @@ walkLookupTyperefById: function {
     )
 }
 
+# typerefHitAnswer -- a frame answered the type-ref with `r`: taken as it
+# stands when no nearer frame holds the name's declaration in flight;
+# otherwise only when it IS that declaration's own id (core's re-export of
+# it), never a different definition of the same name -- the reference then
+# waits for the declaration to resolve.
+typerefHitAnswer: function {
+    st: zenv.ZSymbolTable r: u64 waitDecl: ztypes.declid
+} out optionval u64 is {
+    if waitDecl.isZero then return (optionval.some r)
+    od: declOfTypeId :st tid: (ztypes.tid.create from: r)
+    if od == waitDecl then return (optionval.some r)
+    return (optionval.none u64)
+}
+
+# frameDeclInFlight -- the declaration of `baseId` in frame `cur` when it is
+# still queued or mid-resolution; zero otherwise.
+frameDeclInFlight: function {
+    st: zenv.ZSymbolTable cur: ztypes.declid baseId: zast.nameid
+} out ztypes.declid is {
+    here: st.typing.declFindChild parentDeclId: cur nameId: baseId
+    if here.isZero then return here
+    hd: st.typing.decls.get i: here.u64
+    if hd.pending or hd.resolving then return here
+    return ztypes.declid
+}
+
 # walkLookupTyperefFrom -- the walk itself, from an explicit start frame (0:
 # the prelude alone): each enclosing unit frame outward, then core.
 walkLookupTyperefFrom: function {
@@ -41471,29 +41474,15 @@ walkLookupTyperefFrom: function {
     # the nearest frame that declares the name with a declaration still in
     # flight (queued or mid-resolution): the nearest declaration wins
     # whatever its state (envLookup's rule), so an outer frame may answer
-    # only with THAT declaration's own id -- core's re-export of it -- never
-    # with a different definition of the same name; otherwise the reference
-    # waits for the declaration to resolve
+    # only with THAT declaration's own id -- see typerefHitAnswer
     waitDecl: ztypes.declid
     for cur > 0 loop {
         if cur == st.typing.coreUnitRoot then {
             cur = ztypes.declid
         } else {
             r: probeFrameTyperef :st :ast root: cur nameId: baseId
-            if r > 0 then {
-                if waitDecl.isZero then return (optionval.some r)
-                od: declOfTypeId :st tid: (ztypes.tid.create from: r)
-                if od == waitDecl then return (optionval.some r)
-                return (optionval.none u64)
-            }
-            if waitDecl.isZero then {
-                here: st.typing.declFindChild parentDeclId: cur nameId: baseId
-                if here.isZero.not then {
-                    hd: st.typing.decls.get i: here.u64
-                    if hd.pending then waitDecl = here
-                    if hd.resolving then waitDecl = here
-                }
-            }
+            if r > 0 then return (typerefHitAnswer :st :r :waitDecl)
+            if waitDecl.isZero then waitDecl = frameDeclInFlight :st :cur :baseId
             cur = unitFrameOf :st declId: (declParentIdOf :st declId: cur)
         }
     }
@@ -41501,15 +41490,10 @@ walkLookupTyperefFrom: function {
     # or a user unit defining one) resolves it. The constraint-position gate
     # is checkAnyBounds.
     if (zast.poolTextAt pool: ast.names ref: baseId) == "Any" then return (optionval.none u64)
-    if st.typing.coreUnitRoot.isZero.not then {
-        r5: probeFrameTyperef :st :ast root: st.typing.coreUnitRoot nameId: baseId
-        if r5 > 0 then {
-            if waitDecl.isZero then return (optionval.some r5)
-            od5: declOfTypeId :st tid: (ztypes.tid.create from: r5)
-            if od5 == waitDecl then return (optionval.some r5)
-        }
-    }
-    return (optionval.none u64)
+    if st.typing.coreUnitRoot.isZero then return (optionval.none u64)
+    r5: probeFrameTyperef :st :ast root: st.typing.coreUnitRoot nameId: baseId
+    if r5 == 0 then return (optionval.none u64)
+    return (typerefHitAnswer :st r: r5 :waitDecl)
 }
 
 # shellScalarName -- a shell named like a C scalar stays a shell: the
