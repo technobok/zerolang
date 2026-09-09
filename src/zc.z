@@ -325,6 +325,49 @@ tempPath: function {uname: StringView ext: StringView} out String is {
     return r
 }
 
+# ccOnPath -- the file a bare compiler name (`cc`) resolves to through PATH,
+# the way the spawn will resolve it; a name with a directory in it is its own
+# answer. "" when nothing on PATH is that name.
+ccOnPath: function {name: StringView} out String is {
+    if (name.contains needle: "/") then return name.string
+    pe: os.env key: "PATH"
+    if pe.none then return "".string
+    with dirs: (pe.stringView.split sep: ":") do for d: dirs loop {
+        if d.length > 0 then {
+            cand: "\{d}/\{name}"
+            if (io.exists path: cand) then return cand
+        }
+    }
+    return "".string
+}
+
+# ccRealPath -- the compiler the name actually runs: PATH-resolved, then read
+# through its symlink chain (`cc` -> /etc/alternatives/cc -> gcc-15 on Debian).
+# Links are READ, never run, so ccKindArm's reason for not probing --version
+# holds here too; a wrapper script still classifies as `other`. A name that
+# resolves to nothing, or a link deeper than eight hops, answers as written.
+ccRealPath: function {name: StringView} out String is {
+    cur: ccOnPath :name
+    if cur.length == 0 then return name.string
+    hops: u64
+    for hops < 8 loop {
+        hops = hops + 1
+        rl: io.readlink path: cur
+        if rl.err then return cur
+        t: rl.take
+        if (t.stringView.startsWith "/") then {
+            cur = t
+        } else {
+            # a relative target is relative to the LINK's directory
+            dir: String
+            slash: cur.stringView.lastIndexOf needle: "/"
+            if slash.some then dir = (cur.stringView.substring from: 0 to: slash).string
+            cur = "\{dir}/\{t}"
+        }
+    }
+    return cur
+}
+
 # buildExe -- turn the emitted C into an executable, by running the C
 # compiler as a child process or by loading libtcc into this one. Debug is
 # -O0 -g; --release is -O2. cflags/ldflags split on spaces. Empty out/err
@@ -336,6 +379,9 @@ tempPath: function {uname: StringView ext: StringView} out String is {
 # COMPILE and nothing else.
 buildExe: function {
     cc: StringView
+    # the compiler family `cc` belongs to (ccKindOf): what decides which
+    # warning spellings it is handed
+    ccKind: platform.cckind
     tempC: StringView
     exe: StringView
     release: bool
@@ -368,6 +414,15 @@ buildExe: function {
         a.append from: "-g".string
     }
     a.append from: "-std=c17".string
+    # a `.view` receiver or parameter is `const` in the C, so a write through
+    # one is a discarded qualifier: the checker refuses it first, and this
+    # makes the C compiler refuse it too, should the checker ever miss one.
+    # gcc and clang spell the warning differently; tcc has no such warning and
+    # would silently accept the flag, so it is not handed one.
+    if ccKind.gcc then a.append from: "-Werror=discarded-qualifiers".string
+    if ccKind.clang then {
+        a.append from: "-Werror=incompatible-pointer-types-discards-qualifiers".string
+    }
     # tcc's runtime payload -- libtcc1.a and its own headers -- is fixed at
     # CONFIGURE time, so a tree that moved has to say where it went: without
     # -B, tcc cannot resolve stddef.h and rejects every program. Empty for
@@ -1131,8 +1186,9 @@ buildAndRun: function {
     # a tcc that is not the one this tree ships has a payload of its own.
     # `--tcc-lib` overrides when both are present.
     ccTcc: String
-    cka: ztypecheck.ccKindArm ccPath: cc
-    isTcc: cka.stringView == "tcc"
+    ccReal: ccRealPath name: cc
+    cka: ztypecheck.ccKindOf ccPath: ccReal.stringView
+    isTcc: cka.tcc
     if isTcc when (io.exists path: tccDir) then ccTcc = tccDir.string
     refuseCrossTarget targetTriple: cf.targetTriple.stringView :cc :isTcc
     inproc: ccMode == "inproc"
@@ -1145,6 +1201,7 @@ buildAndRun: function {
     )
     rc: (buildExe
         :cc
+        ccKind: cka
         tempC: tmpc.stringView
         exe: exe.stringView
         release: cf.release
