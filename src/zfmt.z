@@ -1978,75 +1978,102 @@ Builder: class {
         forced: false
         # a data block of bare elements fills its rows, the author's own row
         # breaks kept; anything else is one item per line when broken
-        filling: false
-        if kind == 3 when span.count > 1 when (this.allUnlabelled :span) then filling = true
+        filling: (kind == 3) and (span.count > 1) and (this.allUnlabelled :span)
         fillKids: ListVal u32
         prevEnd: u32
         i: u64
         for i < span.count.u64 loop {
             itemId: this.kid :span :i
             g: this.gapDocs cap: 1
-            if i == 0 when g.marker when this.keepMarkers then forced = true
-            if g.hasComment then forced = true
+            forced = forced or ((i == 0) and g.marker and this.keepMarkers) or g.hasComment
             if filling then {
-                if g.trailing > 0 then fillKids.append g.trailing
-                if i == 0 then {
-                    inner.append this.idLine
-                } else {
-                    startLine0: this.c.rawLine k: this.c.peekIndex
-                    if startLine0 > prevEnd then {
-                        fillKids.append this.idHard
-                    } else {
-                        fillKids.append this.idLine
-                    }
-                }
-                if g.lead > 0 then fillKids.append g.lead
-                fillKids.append (this.visitElement id: itemId)
-                prevEnd = this.c.rawLine k: this.c.prev
-                i = i + 1
-                continue
-            }
-            if g.trailing > 0 then inner.append g.trailing
-            if kind == 1 when i == 0 then {
-                inner.append this.idSoft
+                if i == 0 then inner.append this.idLine
+                prevEnd = this.fillItem :g :itemId first: i == 0 :prevEnd dst: fillKids
             } else {
-                inner.append this.idLine
+                forced = forced or (this.lineItem :g :itemId first: i == 0 :kind dst: inner)
             }
-            if i > 0 then this.appendBlanks xs: inner n: g.blanks
-            if g.lead > 0 then inner.append g.lead
-            startLine: this.c.rawLine k: this.c.peekIndex
-            if kind == 3 then {
-                inner.append (this.visitElement id: itemId)
-            } else if kind == 1 then {
-                inner.append (this.visitParam id: itemId)
-            } else {
-                inner.append (this.visitItem id: itemId)
-            }
-            endLine: this.c.rawLine k: this.c.prev
-            if endLine > startLine then forced = true
             i = i + 1
         }
         if filling then inner.append (this.d.fill fillKids)
         g: this.gapDocs cap: 1
-        if g.hasComment then forced = true
+        forced = forced or g.hasComment or ((span.count == 0) and g.marker and this.keepMarkers)
         if g.trailing > 0 then inner.append g.trailing
         if g.dangling > 0 then {
             inner.append this.idHard
             this.appendBlanks xs: inner n: g.blanks
             inner.append g.dangling
         }
-        if span.count == 0 when g.marker when this.keepMarkers then forced = true
         if inner.length > 0 then {
             xs.append (this.d.indent (this.d.concat inner))
-            if kind == 1 then {
-                xs.append this.idSoft
-            } else {
-                xs.append this.idLine
-            }
+            xs.append (this.itemSep :kind first: true)
         }
         if forced then xs.append this.idBreak
         xs.append (this.tok tt: zlexer.toktype.braceCloseTok)
         return (this.d.group (this.d.concat xs))
+    }
+
+    # itemSep -- the separator before an item, and before the closing brace: a
+    # parameter block's first item and its close are soft (the block may stay
+    # on its line), every other item takes a line.
+    itemSep: function {this: this.view kind: u8 first: bool} out u32 is {
+        if kind == 1 when first then return this.idSoft
+        return this.idLine
+    }
+
+    # fillItem -- one element of a filled data block: its trailing comment,
+    # a hard break when the author put it on a new row and a line otherwise,
+    # its lead comment, then the element. Answers the source line the
+    # element ended on, which is what the next element's row test reads.
+    fillItem: function {
+        :this
+        g: gapdocs
+        itemId: zast.nodeid
+        first: bool
+        prevEnd: u32
+        dst: ListVal u32
+    } out u32 is {
+        if g.trailing > 0 then dst.append g.trailing
+        if first.not then {
+            startLine0: this.c.rawLine k: this.c.peekIndex
+            if startLine0 > prevEnd then {
+                dst.append this.idHard
+            } else {
+                dst.append this.idLine
+            }
+        }
+        if g.lead > 0 then dst.append g.lead
+        dst.append (this.visitElement id: itemId)
+        return (this.c.rawLine k: this.c.prev)
+    }
+
+    # lineItem -- one item of a block laid out one per line: its trailing
+    # comment, its separator, the blank lines the author kept above it, its
+    # lead comment, then the item by the block's kind. Answers whether the
+    # item spanned lines in the source, which forces the block open.
+    lineItem: function {
+        :this
+        g: gapdocs
+        itemId: zast.nodeid
+        first: bool
+        kind: u8
+        dst: ListVal u32
+    } out bool is {
+        if g.trailing > 0 then dst.append g.trailing
+        dst.append (this.itemSep :kind :first)
+        if first.not then this.appendBlanks xs: dst n: g.blanks
+        if g.lead > 0 then dst.append g.lead
+        startLine: this.c.rawLine k: this.c.peekIndex
+        dst.append (this.visitByKind :kind id: itemId)
+        endLine: this.c.rawLine k: this.c.prev
+        return endLine > startLine
+    }
+
+    # visitByKind -- an item of a delimited block by the block's kind: an
+    # element of a data block, a parameter, or an object or unit item.
+    visitByKind: function {:this kind: u8 id: zast.nodeid} out u32 is {
+        if kind == 3 then return (this.visitElement :id)
+        if kind == 1 then return (this.visitParam :id)
+        return (this.visitItem :id)
     }
 
     # allUnlabelled -- whether every element of a data block is a bare term
