@@ -734,6 +734,9 @@ Runner: class {
     ccflags: String
     # flags forwarded THROUGH zc to the C compiler, which is not the same list
     ccFwd: String
+    # whether --cc-forward asked for `cc` to be forwarded; resolved after the
+    # whole command line is read
+    ccFwdOn: bool
     # the stdlib directory
     sys: String
     # the scratch directory; kept when saveTemps is set, removed otherwise
@@ -2421,138 +2424,34 @@ runFixpoint: function {r: Runner} is {
     }
 }
 
-# parse the flags, build a Runner, and run every case kind in turn. The exit
-# status is `fails`, nothing else
-main: function is {
-    argv: os.args
-    n: argv.length
-    zc: "out/zc".string
-    cc: "gcc".string
-    ccflags: String
-    ccFwdOn: false
-    root: ".".string
-    report: false
-    heavy: false
-    saveTemps: false
-    regenLsp: false
-    timeoutSecs: 60.i32
-    # the machine, not a number someone typed. --jobs still overrides, and the
-    # Makefile passes nproc explicitly; this is what a direct invocation gets. A
-    # default of 1 is silently serial on a 24-core box.
-    jobsMax: (os.cpuCount).u64.orPanic
-    i: 1.u64
-    for i < n loop {
-        a: argv.get :i
-        av: a.stringView
-        if av == "--zc" then {
-            i = i + 1
-            zc = (argv.get :i).copy
-        } else if av == "--cc" then {
-            i = i + 1
-            cc = (argv.get :i).copy
-        } else if av == "--ccflags" then {
-            i = i + 1
-            ccflags = (argv.get :i).copy
-        } else if av == "--cc-forward" then {
-            ccFwdOn = true
-        } else if av == "--root" then {
-            i = i + 1
-            root = (argv.get :i).copy
-        } else if av == "--report" then {
-            report = true
-        } else if av == "--heavy" then {
-            heavy = true
-        } else if av == "--save-temps" then {
-            saveTemps = true
-        } else if av == "--regen-lsp" then {
-            regenLsp = true
-        } else if av == "--jobs" then {
-            i = i + 1
-            jval: (argv.get :i)
-            jsv: jval.stringView
-            jv: jsv.parseI64
-            match (
-                jv
-            ) case ok then {
-                if jv > 0 then jobsMax = jv.u64.orPanic
-            } case err then null
-        } else if av == "--timeout" then {
-            i = i + 1
-            tval: (argv.get :i)
-            tsv: tval.stringView
-            tv: tsv.parseI64
-            match (
-                tv
-            ) case ok then {
-                timeoutSecs = tv.i32.orPanic
-            } case err then null
-        }
-        i = i + 1
-    }
-
-    # resolved after the loop, not inside the --cc-forward arm: the flags may
-    # arrive in either order, and reading `cc` early would make `--cc-forward
-    # --cc X` forward the default instead of X.
-    ccFwd: String
-    if ccFwdOn then ccFwd = cc.copy
-
-    sys: "\{root.stringView}/lib/system"
-    errors: "\{root.stringView}/tests/fixtures/errors"
-    rungold: "\{root.stringView}/tests/fixtures/run_golden"
-    runcases: "\{root.stringView}/tests/fixtures/run_cases.txt"
-    examplesDir: "\{root.stringView}/examples"
-    corpusDir: "\{root.stringView}/tests/fixtures/emitc_corpus"
-    dumpcases: "\{root.stringView}/tests/fixtures/dump_cases.txt"
-    dumpgold: "\{root.stringView}/tests/fixtures/dump_golden"
-    mypid: os.pid
-    d: "/tmp/ztr_\{mypid}"
-    io.mkdirp path: d
-    # sweep trees crashed prior runs left behind: the names are
-    # pid-scoped, and a live owner still has /proc/<pid>
-    myPidS: "\{mypid}"
-    stale: io.listDir path: "/tmp"
-    match (
-        stale
-    ) case ok then {
-        with sit: stale.iterate do for se: sit loop {
-            sv: se.stringView
-            if sv.startsWith "ztr_" then {
-                spid: sv.substring from: 4 to: sv.length
-                if spid != myPidS.stringView then {
-                    proc: "/proc/\{spid}"
-                    if (io.exists path: proc).not then {
-                        dead: "/tmp/ztr_\{spid}"
-                        io.removeTree path: dead.stringView
-                    }
-                }
-            }
-        }
-    } case err then null
-
-    r0: root.copy
-    r: (Runner
-        root: root.take
-        zc: zc.take
-        cc: cc.take
-        ccflags: ccflags.take
-        ccFwd: ccFwd.take
-        sys: sys.take
-        tmp: d.take
-        :jobsMax
-        :timeoutSecs
-        :heavy
-        :report
-        :saveTemps
-        :regenLsp
-        errors: errors.take
-        rungold: rungold.take
-        runcases: runcases.take
-        examplesDir: examplesDir.take
-        corpusDir: corpusDir.take
-        dumpcases: dumpcases.take
-        dumpgold: dumpgold.take
-        srcDir: "\{r0}/src"
-        unitDir: "\{r0}/tests/unit"
+# newRunner -- a Runner at its defaults, before the command line is read:
+# `out/zc` under the current directory, built with gcc, one job per core, a
+# minute per case. The paths under the root are derived once the root is known.
+newRunner: function out Runner is {
+    return (Runner
+        root: ".".string
+        zc: "out/zc".string
+        cc: "gcc".string
+        ccflags: String
+        ccFwd: String
+        ccFwdOn: false
+        sys: String
+        tmp: String
+        jobsMax: (os.cpuCount).u64.orPanic
+        timeoutSecs: 60
+        heavy: false
+        report: false
+        saveTemps: false
+        regenLsp: false
+        errors: String
+        rungold: String
+        runcases: String
+        examplesDir: String
+        corpusDir: String
+        dumpcases: String
+        dumpgold: String
+        srcDir: String
+        unitDir: String
         passN: 0
         leakclean: 0
         xleak: 0
@@ -2560,6 +2459,132 @@ main: function is {
         skip: 0
         fails: 0
     )
+}
+
+# takeFlag -- a bare switch: set it and answer true; false when `av` is not one.
+takeFlag: function {r: Runner av: StringView} out bool is {
+    if av == "--cc-forward" then {
+        r.ccFwdOn = true
+        return true
+    }
+    if av == "--report" then {
+        r.report = true
+        return true
+    }
+    if av == "--heavy" then {
+        r.heavy = true
+        return true
+    }
+    if av == "--save-temps" then {
+        r.saveTemps = true
+        return true
+    }
+    if av == "--regen-lsp" then {
+        r.regenLsp = true
+        return true
+    }
+    return false
+}
+
+# takeValue -- a switch that consumes the argument after it (`val`): set it and
+# answer true; false when `av` is not one. A --jobs value counts only when it
+# is a positive number; an unparsable --timeout keeps the default.
+takeValue: function {r: Runner av: StringView val: StringView} out bool is {
+    if av == "--zc" then {
+        r.zc = val.string
+        return true
+    }
+    if av == "--cc" then {
+        r.cc = val.string
+        return true
+    }
+    if av == "--ccflags" then {
+        r.ccflags = val.string
+        return true
+    }
+    if av == "--root" then {
+        r.root = val.string
+        return true
+    }
+    if av == "--jobs" then {
+        jv: val.parseI64
+        if jv.ok when jv > 0 then r.jobsMax = jv.u64.orPanic
+        return true
+    }
+    if av == "--timeout" then {
+        tv: val.parseI64
+        if tv.ok then r.timeoutSecs = tv.i32.orPanic
+        return true
+    }
+    return false
+}
+
+# parseRunnerArgs -- the command line, first argument onward, onto the Runner.
+# An unknown argument is ignored, and so is a value switch with nothing after
+# it. `ccFwd` is resolved after the loop, not inside the --cc-forward arm: the
+# flags may arrive in either order, and reading `cc` early would make
+# `--cc-forward --cc X` forward the default instead of X.
+parseRunnerArgs: function {r: Runner argv: (List String).view} is {
+    n: argv.length
+    i: 1.u64
+    for i < n loop {
+        a: argv.get :i
+        av: a.stringView
+        if (takeFlag :r :av).not when i + 1 < n then {
+            v: argv.get i: (i + 1)
+            if (takeValue :r :av val: v.stringView) then i = i + 1
+        }
+        i = i + 1
+    }
+    if r.ccFwdOn then r.ccFwd = r.cc.copy
+}
+
+# runnerPathsUnderRoot -- the stdlib, fixture and source directories, all
+# under the root the command line settled on.
+runnerPathsUnderRoot: function {r: Runner} is {
+    root: r.root.stringView
+    r.sys = "\{root}/lib/system"
+    r.errors = "\{root}/tests/fixtures/errors"
+    r.rungold = "\{root}/tests/fixtures/run_golden"
+    r.runcases = "\{root}/tests/fixtures/run_cases.txt"
+    r.examplesDir = "\{root}/examples"
+    r.corpusDir = "\{root}/tests/fixtures/emitc_corpus"
+    r.dumpcases = "\{root}/tests/fixtures/dump_cases.txt"
+    r.dumpgold = "\{root}/tests/fixtures/dump_golden"
+    r.srcDir = "\{root}/src"
+    r.unitDir = "\{root}/tests/unit"
+}
+
+# sweepStaleTmp -- remove the scratch trees crashed prior runs left behind:
+# the names are pid-scoped, and a live owner still has /proc/<pid>.
+sweepStaleTmp: function {myPidS: StringView} is {
+    stale: io.listDir path: "/tmp"
+    if stale.err then return
+    with sit: stale.iterate do for se: sit loop {
+        sv: se.stringView
+        if sv.startsWith "ztr_" then {
+            spid: sv.substring from: 4 to: sv.length
+            proc: "/proc/\{spid}"
+            if spid != myPidS when (io.exists path: proc).not then {
+                dead: "/tmp/ztr_\{spid}"
+                io.removeTree path: dead.stringView
+            }
+        }
+    }
+}
+
+# parse the flags, build a Runner, and run every case kind in turn. The exit
+# status is `fails`, nothing else
+main: function is {
+    r: newRunner
+    parseRunnerArgs :r argv: os.args
+    runnerPathsUnderRoot :r
+    mypid: os.pid
+    r.tmp = "/tmp/ztr_\{mypid}"
+    io.mkdirp path: r.tmp
+    myPidS: "\{mypid}"
+    sweepStaleTmp myPidS: myPidS.stringView
+
     runRunCases :r
     runLspCases :r
     runLeakCases :r
