@@ -13288,6 +13288,80 @@ emitDottedTagRead: function {
     return "".string
 }
 
+# borrowMarkerIsOwnership -- whether `.borrow` on a value of type `dpbT` is the
+# ownership marker rather than a member: a protocol or facet declares a real
+# `borrow` projection, and so does a type with a function-typed `borrow`
+# member. The split is drawn off the base type exactly as checkBorrowLeg
+# draws it -- one discriminator, so the two cannot disagree.
+borrowMarkerIsOwnership: function {symtab: zenv.ZSymbolTable.view dpbT: ztypes.tid} out bool is {
+    bttB: symtab.reg.typetypeOf typeId: dpbT
+    if bttB == ztypes.ztypetype.protocolType then return false
+    if bttB == ztypes.ztypetype.facetType then return false
+    bcoB: symtab.typing.declChildOfId parentTypeId: dpbT nameId: zast.names.wkBorrow
+    if bcoB.none then return true
+    return (
+        (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: bcoB.u64)) ==
+        ztypes.ztypetype.functionType
+    ).not
+}
+
+# moveMarkerMovesBase -- whether `.take`/`.hold` on this base moves a heap
+# value: a String, a union, a by-value class (a borrowed pointer-param class
+# is not a move source), or a function value.
+moveMarkerMovesBase: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    # the marker's base node id
+    pnid: u64
+} out bool is {
+    tknid: atomNodeId n: (ast.nodes.get i: pnid)
+    if tknid == 0 then tknid = pnid
+    tkt: stampIdOf :symtab nid: tknid
+    if tkt == ctx.strTid then return true
+    tt: symtab.reg.typetypeOf typeId: tkt
+    if tt == ztypes.ztypetype.unionType then return true
+    if tt == ztypes.ztypetype.functionType then return true
+    if tt == ztypes.ztypetype.classType then {
+        return (isPtrVid :ctx vid: (atomVid :symtab nid: tknid)).not
+    }
+    return false
+}
+
+# convRowKeyOf -- the native-table key of the runtime numeric conversion a
+# dotted marker `<expr>.<numtype>` names, empty when it names none. The
+# member half is asked first: it needs neither the source type nor the path
+# built from it, and a member that names no conversion is what nearly every
+# dotted marker carries. A member the RECEIVER'S OWN type declares with a
+# body the author wrote wins over any conversion its typedef chain end would
+# offer: a typedef converts as its chain end, which is where the conversions
+# themselves (`is native`) are declared, but a record over `i64.typedef`
+# that declares its own `u32` declared a method. Folded literal conversions
+# return earlier via nodeConstText.
+convRowKeyOf: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.dottedpathrow.view
+    # the member's name id
+    mn2Id: zast.nameid
+} out String is {
+    mn2c: zast.nameTextAt :ast ref: mn2Id
+    if (nativeIsConvMembOf :ctx memb: mn2c.stringView).not then return String
+    ownTid9: (stampIdOf
+        :symtab
+        nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64)).u64
+    )
+    mo9: symtab.typing.declChildOfId parentTypeId: ownTid9 nameId: mn2Id
+    if mo9.some when (fnIsNativeId :symtab fid: (ztypes.tid.create from: mo9)
+    ).not then return String
+    ncSrcP: convSrcPathOf :symtab srcTid: (typedefChaseTid :symtab tid: ownTid9)
+    if ncSrcP.length == 0 then return String
+    ncKey: nativeMemberKey srcPath: ncSrcP.stringView memb: mn2c.stringView
+    if (nativeHasRow :ctx path: ncKey.stringView).not then return String
+    return ncKey
+}
+
 # emitDottedNativeMarker -- a data block's element read, a zero-parameter native
 # that auto-calls (io.stdout, os.pid), the compile-time markers `.private` /
 # `.borrow` / `.take`, and a runtime numeric conversion. The conversion is whichever
@@ -13332,105 +13406,25 @@ emitDottedNativeMarker: function {
         return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
     }
     # `.borrow` on a value is the ownership marker, and the checker accepts it
-    # as one. A protocol or facet declares a real `borrow` projection, so the
-    # split is drawn here off the base type exactly as checkBorrowLeg draws it
-    # -- one discriminator, so the two cannot disagree.
-    if (mnIs :ctx id: mn2Id at: mnBorrow) then {
-        bmk: true
-        bttB: symtab.reg.typetypeOf typeId: dpbT
-        if bttB == ztypes.ztypetype.protocolType then bmk = false
-        if bttB == ztypes.ztypetype.facetType then bmk = false
-        if bmk then {
-            bcoB: symtab.typing.declChildOfId parentTypeId: dpbT nameId: zast.names.wkBorrow
-            match (
-                bcoB
-            ) case some then {
-                if (
-                    (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: bcoB.u64)) ==
-                    ztypes.ztypetype.functionType
-                ) then bmk = false
-            } case none then null
-        }
-        if bmk then return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
+    # as one; it emits the receiver itself.
+    if (mnIs :ctx id: mn2Id at: mnBorrow) when (borrowMarkerIsOwnership :symtab :dpbT) then {
+        return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
     }
-    # `.take` on a heap reftype (String / union / by-value class) is an
-    # ownership MOVE: emit the base value. The statement-level emitter zeroes
-    # the source after the call so its scope-exit free is a no-op (the callee
-    # now owns the heap). A borrowed pointer-param class is not a move source.
-    isMoveM: false
-    {
-        mn2b: zast.nameTextAt :ast ref: mn2Id
-        isMoveM = ztypecheck.isMoveMarker name: mn2b.stringView
+    # `.take` on a heap reftype is an ownership MOVE: emit the base value. The
+    # statement-level emitter zeroes the source after the call so its
+    # scope-exit free is a no-op (the callee now owns the heap).
+    mn2b: zast.nameTextAt :ast ref: mn2Id
+    if (ztypecheck.isMoveMarker name: mn2b.stringView) when (moveMarkerMovesBase
+        :ast
+        :symtab
+        :ctx
+        pnid: n.parent.u64
+    ) then {
+        return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
     }
-    if isMoveM then {
-        tknid: atomNodeId n: (ast.nodes.get i: n.parent.u64)
-        if tknid == 0 then tknid = n.parent.u64
-        tkt: stampIdOf :symtab nid: tknid
-        isMove: (
-            (tkt == ctx.strTid) or
-            ((symtab.reg.typetypeOf typeId: tkt) == ztypes.ztypetype.unionType)
-        )
-        if (symtab.reg.typetypeOf typeId: tkt) == ztypes.ztypetype.classType then {
-            tkv: atomVid :symtab nid: tknid
-            if (isPtrVid :ctx vid: tkv).not then isMove = true
-        }
-        if (symtab.reg.typetypeOf typeId: tkt) == ztypes.ztypetype.functionType then isMove = true
-        if isMove then return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
-    }
-    # a runtime numeric conversion `<expr>.<numtype>` is whichever member
-    # resolves to a conversion ROW on the source type -- so a user record's
-    # field merely NAMED `u32` finds nothing and takes the member legs, with
-    # no separate shadow test to keep in step. A typedef converts as its
-    # chain end, which is where the declaration lives. Folded literal
-    # conversions return earlier via nodeConstText.
-    # the member half of the conversion question first: it needs neither the
-    # source type nor the path built from it, and a member that names no
-    # conversion is what nearly every dotted marker carries
-    ncSrcP: String
-    ncKey: String
-    ncHas: false
-    isConvM: false
-    {
-        mn2c: zast.nameTextAt :ast ref: mn2Id
-        isConvM = nativeIsConvMembOf :ctx memb: mn2c.stringView
-    }
-    # a member the RECEIVER'S OWN type declares with a body the author wrote
-    # wins over any conversion its typedef chain end would offer. A typedef
-    # converts as its chain end, which is where the conversion is declared --
-    # but that is only true of the conversions THEMSELVES, which the numeric
-    # types declare `is native`. A record over `i64.typedef` that declares its
-    # own `u32` declared a method, and the chase would answer with i64's
-    # conversion instead of calling it.
-    if isConvM then {
-        ownTid9: (stampIdOf
-            :symtab
-            nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64)).u64
-        )
-        mo9: symtab.typing.declChildOfId parentTypeId: ownTid9 nameId: mn2Id
-        match (
-            mo9
-        ) case some then {
-            mf9: ztypes.tid.create from: mo9
-            if (fnIsNativeId :symtab fid: mf9).not then isConvM = false
-        } case none then null
-    }
-    if isConvM then {
-        ncChase: (typedefChaseTid
-            :symtab
-            tid: (stampIdOf
-                :symtab
-                nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64)).u64
-            )
-        )
-        ncSrcP = convSrcPathOf :symtab srcTid: ncChase
-        if ncSrcP.length > 0 then {
-            mn2v: zast.nameTextAt :ast ref: mn2Id
-            ncKey = nativeMemberKey srcPath: ncSrcP.stringView memb: mn2v.stringView
-            ncHas = nativeHasRow :ctx path: ncKey.stringView
-        }
-    }
-    if ncHas then {
-        mn2k: zast.nameTextAt :ast ref: mn2Id
+    # a runtime numeric conversion `<expr>.<numtype>`
+    ncKey: convRowKeyOf :ast :symtab :ctx :n :mn2Id
+    if ncKey.length > 0 then {
         ncVal: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
         if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)) then {
             ncDeref: "(*\{ncVal})"
@@ -13440,7 +13434,7 @@ emitDottedNativeMarker: function {
         ncRetM: chaseColMono :symtab :ctx tid: ncRet
         return (emitNumericCast
             :ctx
-            dstName: mn2k.stringView
+            dstName: mn2b.stringView
             val: ncVal.stringView
             :symtab
             retTid: (ztypes.tid.create from: ncRetM.u64)
@@ -31999,6 +31993,78 @@ checkTagStem: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid}
     }
 }
 
+# armPayloadEqText -- how the comparator compares one payload-carrying arm: a
+# record or variant payload through its own `_eq`, anything else (a scalar, a
+# pointer, an unresolved type) with `==`. A typedef arm compares as its
+# chain-end base.
+armPayloadEqText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    # the arm's name and its interned id
+    qname: StringView
+    qnameId: zast.nameid
+} out String is {
+    qnameP: memberCPrefix name: qname
+    plain: "a.data.\{qnameP}\{qname} == b.data.\{qnameP}\{qname}"
+    qco: symtab.typing.declChildOfId parentTypeId: tid nameId: qnameId
+    if qco.none then return plain
+    qcoC: typedefChaseTid :symtab tid: (ztypes.tid.create from: qco.u64)
+    qtn: regNameOf :symtab tid: qcoC
+    qsc: scalarCTypeFor :symtab name: qtn.stringView tid: qcoC
+    if qsc.length > 0 then return plain
+    qrid: canonTypeId :ast :symtab :ctx tid: qcoC name: qtn.stringView
+    if qrid == 0 then return plain
+    qtt: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: qrid.u64)
+    isAgg: (qtt == ztypes.ztypetype.recordType) or (qtt == ztypes.ztypetype.variantType)
+    if isAgg.not then return plain
+    qrc: ctxCname :ctx tid: (ztypes.tid.create from: qrid.u64)
+    return "\{qrc}_eq(a.data.\{qnameP}\{qname}, b.data.\{qnameP}\{qname})"
+}
+
+# emitVariantEq -- the variant's structural comparator: tags first, then the
+# payload of the arm both carry; a payload-less variant is its tag.
+emitVariantEq: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    # the variant's C name
+    vc: StringView
+    anames: (List String).view
+    # the arms' interned name ids, parallel to `anames`
+    aidsNm: (ListVal u64).view
+    # whether any arm carries a payload
+    haveP: bool
+    buf: String.borrow
+} is {
+    buf.append "static bool \{vc}_eq(\{vc}_t a, \{vc}_t b) {\n"
+    if haveP.not then {
+        buf.append "    return a.tag == b.tag;\n"
+        buf.append "}\n\n"
+        return
+    }
+    buf.append "    if (a.tag != b.tag) return false;\n"
+    buf.append "    switch (a.tag) {\n"
+    qk: u64
+    an: anames.length
+    for qk < an loop {
+        qname: anames.get i: qk
+        qc: armPayloadC :ast :symtab :ctx :tid arm: qname.stringView
+        if qc.length > 0 then {
+            qtg: variantTag :symtab :tid arm: qname.stringView
+            qnameId: (zast.nameid.create from: (aidsNm.get i: qk))
+            qeq: armPayloadEqText :ast :symtab :ctx :tid qname: qname.stringView :qnameId
+            buf.append "        case \{qtg}: return \{qeq};\n"
+        }
+        qk = qk + 1
+    }
+    buf.append "        default: return true;\n"
+    buf.append "    }\n"
+    buf.append "}\n\n"
+}
+
 # emitOneVariant -- tag enum + tagged struct (+ payload union when any
 # arm carries one) + the by-tag/value eq helper.
 emitOneVariant: function {
@@ -32075,60 +32141,7 @@ emitOneVariant: function {
     if haveP then buf.append "    } data;\n"
     lg: "} \{vc}_t;\n"
     buf.append lg
-    lq: "static bool \{vc}_eq(\{vc}_t a, \{vc}_t b) {\n"
-    buf.append lq
-    if haveP then {
-        buf.append "    if (a.tag != b.tag) return false;\n"
-        buf.append "    switch (a.tag) {\n"
-        qk: u64
-        for qk < an loop {
-            qname: anames.get i: qk
-            qnameId: (zast.nameid.create from: (aidsNm.get i: qk))
-            qc: armPayloadC :ast :symtab :ctx :tid arm: qname.stringView
-            if qc.length > 0 then {
-                qtg: variantTag :symtab :tid arm: qname.stringView
-                qco: symtab.typing.declChildOfId parentTypeId: tid nameId: qnameId
-                qeq: String
-                match (
-                    qco
-                ) case some then {
-                    # a typedef arm compares as its chain-end base
-                    qcoC: typedefChaseTid :symtab tid: (ztypes.tid.create from: qco.u64)
-                    qtn: regNameOf :symtab tid: qcoC
-                    qsc: scalarCTypeFor :symtab name: qtn.stringView tid: qcoC
-                    if qsc.length == 0 then {
-                        qrid: canonTypeId :ast :symtab :ctx tid: qcoC name: qtn.stringView
-                        if qrid > 0 then {
-                            qtt: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: qrid.u64)
-                            isAgg: (
-                                (qtt == ztypes.ztypetype.recordType) or
-                                (qtt == ztypes.ztypetype.variantType)
-                            )
-                            if isAgg then {
-                                qrc: ctxCname :ctx tid: (ztypes.tid.create from: qrid.u64)
-                                qnameP: memberCPrefix name: qname.stringView
-                                qe: "\{qrc}_eq(a.data.\{qnameP}\{qname}, b.data.\{qnameP}\{qname})"
-                                qeq.append qe
-                            }
-                        }
-                    }
-                } case none then null
-                if qeq.length == 0 then {
-                    qname2P: memberCPrefix name: qname.stringView
-                    qe2: "a.data.\{qname2P}\{qname} == b.data.\{qname2P}\{qname}"
-                    qeq.append qe2
-                }
-                lr: "        case \{qtg}: return \{qeq};\n"
-                buf.append lr
-            }
-            qk = qk + 1
-        }
-        buf.append "        default: return true;\n"
-        buf.append "    }\n"
-    } else {
-        buf.append "    return a.tag == b.tag;\n"
-    }
-    buf.append "}\n\n"
+    emitVariantEq :ast :symtab :ctx :tid vc: vc.stringView :anames :aidsNm :haveP :buf
 }
 
 # objectDefIsKind -- the node defines an object of that kind. The four
