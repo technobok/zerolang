@@ -12728,12 +12728,15 @@ registerAndResolveMain: function {
                 eager: uc0z == unitDecl
                 if eager then {
                     unitDecl97: (unitDeclOfNameOrOwn :st :frame nameId: nmId)
+                    # read before the call: `.not` is a receiver call on the
+                    # field, and `st` is lent to the same call
+                    rootOnly97: st.typing.eagerAll.not
                     (resolveUnitBody
                         :st
                         ast: program
                         unitDecl: unitDecl97
                         unitdefId: opId
-                        rootOnly: st.typing.eagerAll.not
+                        rootOnly: rootOnly97
                     )
                 }
             }
@@ -20557,22 +20560,19 @@ methodHasNoUserArgs: function {
 }
 
 # lockAutoCallReceiver -- the receiver locks for a zero-arg auto-call's
-# duration, exactly as a written-out call does. The lock is released by holder
-# as soon as it is taken -- an auto-call opens no scope to pop -- so its only
-# effect is the conflict check against locks outstanding elsewhere. `mid` names
-# the METHOD, which is what carries the receiver's marker and so decides whether
-# the lock is shared or exclusive.
+# duration, exactly as a written-out call does, in both families. The lock is
+# released by holder as soon as it is taken -- an auto-call opens no scope to
+# pop -- so its only effect is the conflict check against locks outstanding
+# elsewhere. `shared` is what the METHOD's receiver marker decided.
 lockAutoCallReceiver: function {
     ast: Ast.view
     st: zenv.ZSymbolTable
     dp: dpref
-    bt: ztypes.tid
     shared: bool
 } is {
     atup: ListVal zast.nameid
     appendValueTuple :ast n: (ast.nodes.get i: dp.parent.u64) dst: atup
     if atup.length == 0 then return
-    if (typeIsReftype :st tid: (ztypes.tid.create from: bt.u64)).not then return
     arv: st.lookupVarId nameId: (atup.get i: 0)
     if arv.none then return
     ashr: shared
@@ -21177,7 +21177,7 @@ checkMemberAutoCall: function {
     ) then {
         aShr: isContainerReaderCall :ast :st recvTid: bt mnameId: cnId
         if (methodReceiverIsView :st mid: (ztypes.tid.create from: mo.u64)) then aShr = true
-        lockAutoCallReceiver :ast :st :dp :bt shared: aShr
+        lockAutoCallReceiver :ast :st :dp shared: aShr
         ro: methodReturnOf :st mid: (ztypes.tid.create from: mo.u64)
         match (
             ro
@@ -22269,7 +22269,7 @@ checkResolvedMember: function {
         (st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)) !=
         ztypes.ztypetype.functionType
     ) when (st.typing.declIsMethodId parentTypeId: bt nameId: cnId) then {
-        lockAutoCallReceiver :ast :st :dp :bt shared: true
+        lockAutoCallReceiver :ast :st :dp shared: true
     }
     # A field READ of a path another variable holds an EXCLUSIVE pin on (the
     # `.borrow` input of an `outx` result) is refused: read through the holder
@@ -28586,6 +28586,8 @@ lockNonTrivialArg: function {
     isTake: bool
     isLockish: bool
     isViewArg: bool
+    # the parameter is the callee's receiver: a valtype locks like a class
+    isRecvArg: bool
     pins: List ztyping.PinPath
     # the call's result keeps the locks its arguments place
     calleePins: bool
@@ -28600,10 +28602,8 @@ lockNonTrivialArg: function {
     # written hoist would: seed the borrow side channel with
     # the real source tuple so the synth temp installs the
     # spec's SHARED-prefix + EXCLUSIVE-leaf locks on it
-    if isLockish when (typeIsReftype
-        :st
-        tid: (ztypes.tid.create from: vt.u64)
-    ) then {
+    byRef: isRecvArg or (typeIsReftype :st tid: (ztypes.tid.create from: vt.u64))
+    if isLockish when byRef then {
         lockBorrowedArgPath :st :ast :arg :isViewArg :pins :calleePins
     }
     hadPending: false
@@ -28617,8 +28617,7 @@ lockNonTrivialArg: function {
         :consumes
         viewParam: isViewArg
     )
-    if hadPending.not when isLockish when (typeIsReftype :st tid: (ztypes.tid.create from: vt.u64)
-    ) then {
+    if hadPending.not when isLockish when byRef then {
         (lockCallArg
             :st
             pool: ast.names
@@ -28644,6 +28643,8 @@ hoistTrivialArg: function {
     isTake: bool
     isLockish: bool
     isViewArg: bool
+    # the parameter is the callee's receiver: a valtype locks like a class
+    isRecvArg: bool
     pins: List ztyping.PinPath
     # the receiver a taken value moves into, zero when the call has none
     recvVid: ztypes.vid
@@ -28671,10 +28672,8 @@ hoistTrivialArg: function {
     if bnId.isZero then {
         bnId = atomNameId :ast n: (ast.nodes.get i: arg.operation.u64)
     }
-    if bnId.isZero.not when (typeIsReftype
-        :st
-        tid: (ztypes.tid.create from: vt.u64)
-    ) then {
+    byRef: isRecvArg or (typeIsReftype :st tid: (ztypes.tid.create from: vt.u64))
+    if bnId.isZero.not when byRef then {
         bvo: st.lookupVarId nameId: bnId
         match (
             bvo
@@ -28729,6 +28728,9 @@ hoistAndLockArg: function {
     isTake: bool
     isLockish: bool
     isViewArg: bool
+    # the parameter is the callee's receiver, so a valtype argument is passed
+    # by reference and locks like a dotted receiver
+    isRecvArg: bool
     pins: List ztyping.PinPath
     # the receiver a taken value moves into, zero when the call has none
     recvVid: ztypes.vid
@@ -28746,6 +28748,7 @@ hoistAndLockArg: function {
             :isTake
             :isLockish
             :isViewArg
+            :isRecvArg
             :pins
             :recvVid
             :calleePins
@@ -28761,6 +28764,7 @@ hoistAndLockArg: function {
             :isTake
             :isLockish
             :isViewArg
+            :isRecvArg
             :pins
             :calleePins
             :arg
@@ -29168,6 +29172,13 @@ checkTypedCallArg: function {
     isLockish: aow.isLockish
     isViewArg: aow.isViewArg
     pt: aow.pt
+    # the parameter IS the receiver (`Pt.shift p: a`): a valtype passed this
+    # way goes by reference like a dotted receiver, so it locks like one
+    isRecvArg: false
+    if isCtor.not when funcId > 0 when pnId.isZero.not then {
+        if pnId == zast.names.wkThis then isRecvArg = true
+        if (st.reg.thisParamNameIs tid: funcId nameId: pnId) then isRecvArg = true
+    }
     dispHit: isTake or isLockish
     if dispHit when (typeIsReftype :st tid: (ztypes.tid.create from: vt.u64)) then {
         dispVal: ztypes.zparamownership.borrowMode
@@ -29205,6 +29216,7 @@ checkTypedCallArg: function {
         :isTake
         :isLockish
         :isViewArg
+        :isRecvArg
         :pins
         :recvVid
         :calleePins
@@ -30397,8 +30409,11 @@ checkTypedefOrProjectionCall: function {
 
 # lockMethodReceiver -- the lock a method call places on its RECEIVER: a mutating
 # method takes it exclusively, a `view` receiver shares it, and a receiver that
-# is not a bare name locks the path it was reached through. Answers whether
-# that lock was SHARED -- the strength the result's pin keeps on the receiver.
+# is not a bare name locks the path it was reached through. Both families lock:
+# a valtype receiver is passed by reference exactly as a class is, so a
+# `{:this}` method on a `.view` record parameter conflicts with the parameter's
+# readonly self-lock the same way a class method does. Answers whether that
+# lock was SHARED -- the strength the result's pin keeps on the receiver.
 lockMethodReceiver: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -30417,46 +30432,25 @@ lockMethodReceiver: function {
             match (
                 rvt2
             ) case some then {
-                # A receiver-bound method locks reftype
-                # receivers; a this-less function member is a
-                # callable field -- its receiver locks
-                # unconditionally.
-                doLock: false
-                rtt: st.reg.typetypeOf typeId: (ztypes.tid.create from: rvt2.u64)
-                isFP: (rtt == ztypes.ztypetype.facetType) or (rtt == ztypes.ztypetype.protocolType)
-                if isFP then {
-                    doLock = true
-                } else {
-                    if (methodHasThisReceiver :st mid: dro) then {
-                        if (typeIsReftype
-                            :st
-                            tid: (ztypes.tid.create from: rvt2.u64)
-                        ) then doLock = true
-                    } else {
-                        doLock = true
-                    }
-                }
-                if doLock then {
-                    callableNode: ast.nodes.get i: call.callable.u64
-                    shr: (isContainerReaderCall
-                        :ast
-                        :st
-                        recvTid: rvt2
-                        mnameId: (dottedChildNameId :ast n: callableNode)
-                    )
-                    if (methodReceiverIsView :st mid: dro) then shr = true
-                    recvShared = shr
-                    (lockCallArg
-                        :st
-                        pool: ast.names
-                        nameId: rroId
-                        callId: call.nid.u64
-                        shared: shr
-                        nodeid: call.nid
-                        lineno: call.lineno
-                        colno: call.colno
-                    )
-                }
+                callableNode: ast.nodes.get i: call.callable.u64
+                shr: (isContainerReaderCall
+                    :ast
+                    :st
+                    recvTid: rvt2
+                    mnameId: (dottedChildNameId :ast n: callableNode)
+                )
+                if (methodReceiverIsView :st mid: dro) then shr = true
+                recvShared = shr
+                (lockCallArg
+                    :st
+                    pool: ast.names
+                    nameId: rroId
+                    callId: call.nid.u64
+                    shared: shr
+                    nodeid: call.nid
+                    lineno: call.lineno
+                    colno: call.colno
+                )
             } case none then null
         } case none then null
     }
@@ -30495,10 +30489,7 @@ lockNestedMethodReceiver: function {
             callableNode: ast.nodes.get i: call.callable.u64
             rpidN: dottedParentNodeId :ast n: callableNode
             rvtN: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rpidN.u64
-            if rvtN > 0 when (typeIsReftype
-                :st
-                tid: (ztypes.tid.create from: rvtN.u64)
-            ) then {
+            if rvtN > 0 then {
                 callableNode: ast.nodes.get i: call.callable.u64
                 shrN: (isContainerReaderCall
                     :ast
@@ -31052,114 +31043,16 @@ checkGenericFnCall: function {
         stampGate :st nid: call.nid.u64 tid: setgf
     }
     st.typing.callKind.set key: call.nid.u64 value: zast.callkind.regular
-    # A value receiver locks for the call's duration,
-    # exactly like the concrete-method path: a generic
-    # method's writer receiver must conflict with live
-    # views. The lock lives in its own call scope (the
-    # conflict check happens at take; the pop releases
-    # it before the next statement). A unit-member
+    # the receiver locks for the call's duration, exactly as the
+    # concrete-method path locks it -- the same function answers, so a
+    # generic method's writer receiver conflicts with live views the same
+    # way. The lock lives in its own call scope (the conflict check happens
+    # at take; the pop releases it before the next statement). A unit-member
     # callee (io.eprintln) has no value root and skips.
     mcmG: st.pushCall
     callableNode: ast.nodes.get i: call.callable.u64
     rroG: methodReceiverRootId :ast n: callableNode
-    if rroG.isZero.not then {
-        rvoG: st.lookupVarId nameId: rroG
-        match (
-            rvoG
-        ) case some then {
-            rvtG: st.lookup nameId: rroG
-            match (
-                rvtG
-            ) case some then {
-                doLockG: false
-                rttG: st.reg.typetypeOf typeId: (ztypes.tid.create from: rvtG.u64)
-                isFPG: (
-                    (rttG == ztypes.ztypetype.facetType) or (rttG == ztypes.ztypetype.protocolType)
-                )
-                if isFPG then {
-                    doLockG = true
-                } else {
-                    if (methodHasThisReceiver :st mid: dro) then {
-                        if (typeIsReftype
-                            :st
-                            tid: (ztypes.tid.create from: rvtG.u64)
-                        ) then doLockG = true
-                    } else {
-                        doLockG = true
-                    }
-                }
-                if doLockG then {
-                    callableNode: ast.nodes.get i: call.callable.u64
-                    shrG: (isContainerReaderCall
-                        :ast
-                        :st
-                        recvTid: rvtG
-                        mnameId: (dottedChildNameId :ast n: callableNode)
-                    )
-                    if (methodReceiverIsView :st mid: dro) then shrG = true
-                    (lockCallArg
-                        :st
-                        pool: ast.names
-                        nameId: rroG
-                        callId: call.nid.u64
-                        shared: shrG
-                        nodeid: call.nid
-                        lineno: call.lineno
-                        colno: call.colno
-                    )
-                }
-            } case none then null
-        } case none then null
-    }
-    if rroG.isZero then {
-        # Nested receiver (`rec.field.append ...`): the
-        # root-name block above cannot see it. Lock the
-        # full receiver tuple; the immediate receiver
-        # type drives the reader/writer kind.
-        rtupG: ListVal zast.nameid
-        callableNode: ast.nodes.get i: call.callable.u64
-        methodReceiverTuple :ast n: callableNode dst: rtupG
-        if rtupG.length > 1 then {
-            rvoNG: st.lookupVarId nameId: (rtupG.get i: 0)
-            match (
-                rvoNG
-            ) case some then {
-                callableNode: ast.nodes.get i: call.callable.u64
-                rpidNG: dottedParentNodeId :ast n: callableNode
-                rvtNG: (ztyping.nodeTypeAt
-                    tbl: st.typing.nodeType
-                    nid: rpidNG.u64
-                )
-                if rvtNG > 0 when (typeIsReftype
-                    :st
-                    tid: (ztypes.tid.create from: rvtNG.u64)
-                ) then {
-                    callableNode: ast.nodes.get i: call.callable.u64
-                    shrNG: (isContainerReaderCall
-                        :ast
-                        :st
-                        recvTid: rvtNG
-                        mnameId: (dottedChildNameId :ast n: callableNode)
-                    )
-                    if (methodReceiverIsView
-                        :st
-                        mid: dro
-                    ) then shrNG = true
-                    (lockCallPath
-                        :st
-                        :ast
-                        pool: ast.names
-                        path: rtupG
-                        callId: call.nid.u64
-                        shared: shrNG
-                        nodeid: call.nid
-                        lineno: call.lineno
-                        colno: call.colno
-                    )
-                }
-            } case none then null
-        }
-    }
+    lockMethodReceiver :st :ast :call :dro rroId: rroG
     st.popTo marker: mcmG
     return gfr
 }
@@ -42187,7 +42080,10 @@ typecheck: function {
     }
     registerAndResolveMain :st frame: rf :program
     resolveMainUnitInstantiations :st frame: rf :program
-    scanMainBodyCalls :st frame: rf :program rootOnly: st.typing.eagerAll.not
+    # read before the call: `.not` is a receiver call on the field, and `st`
+    # is lent to the same call
+    rootOnlyMain: st.typing.eagerAll.not
+    scanMainBodyCalls :st frame: rf :program rootOnly: rootOnlyMain
     demandAllDefs :st :program
     resolveDemands :st frame: rf :program
     {

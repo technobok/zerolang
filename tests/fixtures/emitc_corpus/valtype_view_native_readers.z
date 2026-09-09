@@ -1,0 +1,49 @@
+# Valtype receivers lock like reftype receivers, so every PURE native on a
+# valtype is declared `.view` -- and this is the program that would break if
+# one were not: each call below goes through a view-held receiver and takes a
+# SHARED lock that must not conflict with the parameter's readonly self-lock.
+# Prints so the run golden pins the values as well as the compile.
+point: record {
+    x: i64
+    y: i64
+} as {
+    # a `.view` method calling another `.view` method and a scalar native on a
+    # field of the view
+    norm1: function {t: this.view} out i64 is {
+        return (t.x.i64 + t.sum)
+    }
+    sum: function {t: this.view} out i64 is {
+        return (t.x + t.y)
+    }
+    # a user operator declared readonly, callable through a view
+    ==: function {t: this.view rhs: point} out bool is {
+        return (t.x == rhs.x) and (t.y == rhs.y)
+    }
+}
+
+readers: function {
+    f: bool.view
+    n: u64.view
+    o: (optionval u64).view
+    r: (resultval t: u64 e: converror).view
+    p: point.view
+} out i64 is {
+    total: i64
+    if f.not then total = total + 1
+    if n == 3 then total = total + 10
+    total = total + n.i64.orPanic
+    total = total + (n.u8.orPanic).i64
+    total = total + (o.or d: 0).i64.orPanic
+    total = total + r.orPanic.i64.orPanic
+    total = total + p.norm1
+    if p == (point x: -2 y: 5) then total = total + 100
+    return total
+}
+
+main: function is {
+    q: point x: -2 y: 5
+    n: 3.u64
+    three: 3
+    v: (readers f: false :n o: optionval.some 7.u64 r: three.u64 p: q)
+    print "\{v}"
+}
