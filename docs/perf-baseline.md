@@ -175,6 +175,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-09-08 | 613e97e6 | [the A008 50-99 band, part 2 so far](#r-a008band5099) | 0.45s | -- | 95MB / -- | 116 / 171 / 180 (total 467) | 2,110,794 | 300MB | -- | 121,071 |
 | 2026-09-08 | 1d90390c | [the A008 50-99 band, part 3](#r-a008band5099c) | 0.45s | -- | 96MB / -- | 107 / 172 / 178 (total 457) | 2,119,516 | 300MB | -- | 121,794 |
 | 2026-09-08 | 91f4f805 | [the A008 50-99 band, part 4](#r-a008band5099d) | 0.45s | -- | 94MB / -- | 106 / 173 / 184 (total 463) | 2,127,824 | 301MB | -- | 122,407 |
+| 2026-09-09 | 308506ef | [valtype receivers lock like class receivers](#r-valtype-receiver-lock) | 0.47s | -- | 94MB / -- | 107 / 176 / 200 (total 483) | 2,180,016 | 304MB | -- | 122,603 |
 
 
 <a id="r-tokenarc"></a>
@@ -2938,3 +2939,49 @@ names a base the chase cannot resolve. The corpus did not catch it: it binds
 `A008 src/ztypecheck.z` 168 -> 160, `A005 src/zemitterc.z` 9 -> 7,
 `A005 src/ztypecheck.z` 12 -> 10, `A001 src/zemitterc.z` 387 -> 386, and the
 emitter-guard's `userFnId` count 31 -> 30.
+
+<a id="r-valtype-receiver-lock"></a>
+### valtype receivers lock like class receivers (2026-09-09, `3471a5a4` -> `308506ef`)
+
+Seven commits, two of them defects found on the way. A `.view` valtype
+parameter could call a mutating method and the caller's record came back
+changed through the view: the receiver lock was skipped for every valtype in
+four places. The arc closes it under the uniform model -- a valtype receiver
+locks exactly as a class receiver does, and a binop locks its left operand as
+the operator method's receiver -- and pays for it with the 578-declaration
+native `.view` sweep it needed first, view-guard reading `natives.tbl` as the
+evidence for those, and the emitter loading a pointer-held valtype in every
+value position (the second defect, found by the arc's own fixture).
+
+Proved per commit: the emitted C for all corpus programs and the three drivers
+byte-identical with both compilers over the same source (the sweep, the
+checker commits), or different in exactly the named place (the emitter fix on
+its fixture alone; `z_fsno_op_eq`'s const receiver); every gate green.
+
+| | 3471a5a4 | 308506ef |
+|---|---|---|
+| allocations | 2,122,562 | 2,180,016 |
+| instructions | 5,597.7M | 5,637.7M |
+| wall, best of 5 | 0.45s | 0.47s |
+| peak RSS | 95MB | 94MB |
+
+(The table row is each compiler on its own source.)
+
+**Where the allocations went, both compilers on the same source each time:**
+the zenv early exits -774 blocks of input growth and none of work; the sweep
++328 of input; the emitter fix +4; **the receiver lock +26,275 (+1.24%)**, a
+lock row and its path list per valtype receiver call the self-compile makes;
+**the binop lock +27,981 (+1.3%)**, the transient row per binop whose left
+operand is a local, laid, checked and released. Instructions: the early exits
+-0.33% (the entries-list `get` the eight scans no longer call), the emitter fix
+-0.04%, the receiver lock +0.25%, the binop lock +0.21%. The cost was accepted
+before the arc began -- the ruling was "whatever it costs" -- and the row
+records what it was.
+
+**Two things the self-compile taught.** `rootOnly: st.typing.eagerAll.not`
+inside a call that also lends `st` is the rule a class receiver has always
+met (`f :o n: o.inner.xs.length` was refused before this arc), and two sites
+bind the flag first. And the synthesised structural `==`/`!=`/`hash` carried
+NO receiver ownership, so the first binop on a view-held variant took it
+exclusively -- nineteen refusals, all `e.lockType == zlockstate.exclusive`
+shaped -- until the synthesis said `.view` as every declared comparison does.
