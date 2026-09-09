@@ -1,0 +1,121 @@
+# A `.view` valtype parameter is a C POINTER, and a bare read of it in a value
+# position has to load the pointee. Five positions did -- a binding's
+# initialiser, a return, a match subject, a conversion, a dotted field -- and
+# every other one handed the pointer through: a binop operand, a condition, an
+# interpolation part, a reassignment's right side, an argument to a by-value
+# parameter, a container argument, a construction payload, an `or`/`orPanic`
+# receiver. The C compiler rejected some of those and silently accepted others
+# (`if (p)` on a pointer is always true). Every position is exercised here
+# through scalar, record, optionval and variant views, and the run golden pins
+# the values; the pointer-wanting positions -- a view parameter handed on, a
+# method receiver -- stay pointers.
+point: record {
+    x: i64
+}
+
+shape: variant {
+    empty: null
+    full: point
+}
+
+byval: function {k: u64 p: point} out u64 is {
+    return k + p.x.u64.orPanic
+}
+
+byview: function {k: u64.view} out u64 is {
+    return k
+}
+
+isFull: function {s: shape.view} out bool is {
+    if s.full then return true
+    return false
+}
+
+Holder: class {
+    k: i64
+} as {
+    isFull: function {this: this.view s: shape.view} out bool is {
+        if s.full then return true
+        return false
+    }
+    ask: function {this: this.view s: shape.view} out bool is {
+        if this.k == 1 when (this.isFull :s) then return true
+        return false
+    }
+}
+
+positions: function {n: u64.view f: bool.view p: point.view o: (optionval u64).view} out u64 is {
+    a: n
+    b: n + 1
+    c: f.not
+    d: p.x
+    e: p
+    g: (o.or d: 0)
+    print "\{n} \{a} \{b} \{c} \{d} \{e.x} \{g}"
+    if n == 3 then return 1
+    return 0
+}
+
+arguments: function {n: u64.view p: point.view} out u64 is {
+    a: byval k: n :p
+    b: byview k: n
+    c: n.i64.orPanic
+    d: n.u8
+    e: n.not
+    return a + b
+}
+
+assignments: function {n: u64.view p: point.view} out u64 is {
+    x: u64
+    x = n
+    xs: ListVal u64
+    xs.append n
+    q: point x: n.i64.orPanic
+    r: point x: 1
+    r = p
+    o: optionval.some n
+    s: "\{n} \{p.x} \{q.x} \{r.x} \{o.or d: 0}"
+    print s
+    if n == 3 then x = x + 1
+    return x
+}
+
+conditions: function {n: u64.view f: bool.view g: bool.view} out u64 is {
+    x: u64
+    if f then x = x + 1
+    if f when g then x = x + 2
+    for f loop {
+        x = x + 3
+        break
+    }
+    i: u64
+    for i < n loop {
+        i = i + 1
+    }
+    xs: ListVal u64
+    xs.append 5
+    y: xs.get i: (n - 3)
+    m: (MapVV u64 v: u64)
+    m.set key: n value: n
+    z: (m.get key: n).or d: 0
+    st: SetVal u64
+    st.add item: n
+    if (st.has item: n) then x = x + 4
+    return x + i + y + z
+}
+
+sums: function {s: shape.view} out bool is {
+    if (isFull :s) then return true
+    return false
+}
+
+main: function is {
+    q: point x: 4
+    print "\{positions n: 3.u64 f: false p: q o: optionval.some 7.u64}"
+    print "\{arguments n: 3.u64 p: q}"
+    print "\{assignments n: 3.u64 p: q}"
+    print "\{conditions n: 3.u64 f: true g: false}"
+    h: Holder k: 1
+    full: shape.full q
+    print "\{sums s: full} \{h.ask s: full}"
+}

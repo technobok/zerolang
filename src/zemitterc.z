@@ -2047,7 +2047,7 @@ ternaryClause: function {
             cox1249 = cox1249 + 1
             k: ast.nodes.get i: kId.u64
             if k.namedoperation then {
-                cv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: k.operation.u64)
+                cv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: k.operation.u64)
                 tw: (truthyCondText
                     :ast
                     :symtab
@@ -3300,6 +3300,66 @@ needsValueDeref: function {
     if (nodeIsBareAtom :ast :n).not then return false
     if (pathIsPointer :ast :symtab :ctx :n).not then return false
     return (isReftypeParam :ast :symtab :ctx :tid).not
+}
+
+# valueExprC -- an expression standing where a VALUE is wanted: a binop
+# operand, an argument to a by-value parameter, a payload, a condition, an
+# interpolation part, the right side of a reassignment. A pointer-held valtype
+# atom (a `.view` parameter, a pointer receiver) is loaded here; every other
+# expression is emitExpr's text unchanged. The positions that want the POINTER
+# -- a receiver, a dotted base, an argument to a pointer parameter -- keep
+# asking emitExpr and pathIsPointer. The cheap tests come first so the common
+# case pays no stamp read.
+valueExprC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+} out String is {
+    e: emitExpr :ast :symtab :ctx :n
+    if (ptrHeldValtype :ast :symtab :ctx :n) then return "(*\{e})"
+    return e
+}
+
+# ptrHeldValtype -- a bare atom that is a C pointer to a VALTYPE: a `.view`
+# valtype parameter, a valtype receiver. Only the valtype families load; a
+# String, StringView or container view is a pointer its own legs already
+# spell for, and a class is passed by reference, so its pointer IS the value.
+# The family is the VARIABLE's declared type, not the node's stamp: a union
+# parameter narrowed by a guard is stamped with its payload record while the
+# C still holds the union pointer. The cheap tests come first so the common
+# case pays no registry read.
+ptrHeldValtype: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+} out bool is {
+    nid: valueAtomNid :ast :n
+    if nid == 0 then return false
+    # the variable first: most atoms are not pointers, and the pointer table is
+    # the one short scan; the alias walk pathIsPointer adds runs only for one
+    vid: atomVid :symtab :nid
+    if (isPtrVid :ctx :vid).not then return false
+    if (pathIsPointer :ast :symtab :ctx :n).not then return false
+    return (symtab.reg.isValtypeOf tid: (symtab.reg.variableTypeOf id: vid))
+}
+
+# valueAtomNid -- the node id of a bare local read, through any parentheses:
+# an atom, or the `:name` argument shorthand, which is the same read spelled
+# as a label. 0 for anything else.
+valueAtomNid: function {ast: Ast.view n: astnode.view} out u64 is {
+    match (
+        n
+    ) case expression then {
+        return (valueAtomNid :ast n: (ast.nodes.get i: n.expression.u64))
+    } case atomid then {
+        return n.nodeid.u64
+    } case labelvalue then {
+        return n.nodeid.u64
+    } else {
+        return 0
+    }
 }
 
 # whether a node is a bare atom, which is what decides whether a name can be
@@ -5582,7 +5642,7 @@ nativeArgHoles: function {
         if a.namedoperation then {
             slot: slots.get i: ai
             if slot < pNames.length then {
-                av: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
+                av: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
                 valBySlot.set key: slot value: av
             }
         }
@@ -5999,6 +6059,9 @@ instargval: record {
     # its position, for the natives that map labels onto a positional C
     # signature
     posIdx: u64
+    # the argument's value node, 0 for an interpolated argument -- what a
+    # pointer parameter re-reads when the value text loaded a pointer
+    avNd: u64
 }
 
 # instargptr -- how a declared parameter takes its argument: by pointer, as a
@@ -6118,6 +6181,7 @@ instanceMethodArgValue: function {
         :usedInterp
         :avq
         posIdx: positionalIdx
+        :avNd
     )
 }
 
@@ -6301,6 +6365,16 @@ instanceMethodArg: function {
         avq: avr.avq
         :call
     )
+    # the value text LOADED a pointer-held valtype (valueExprC); a parameter
+    # that takes the pointer reads the argument as written instead
+    if ptr.ptra when ptr.byref.not when avr.avNd > 0 when (ptrHeldValtype
+        :ast
+        :symtab
+        :ctx
+        n: (ast.nodes.get i: avr.avNd)
+    ) then {
+        atomVarId = emitExpr :ast :symtab :ctx n: (ast.nodes.get i: avr.avNd)
+    }
     if ptr.byref then {
         if (isNonLvalueArg s: atomVarId.stringView) then {
             abh: (instanceMethodArgHoist
@@ -7946,7 +8020,7 @@ colArg: function {
                     :consumes
                 )
                 if ic.length > 0 then return ic
-                return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64))
+                return (valueExprC :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64))
             }
             if an.length == 0 when havePos.not then {
                 havePos = true
@@ -7961,7 +8035,7 @@ colArg: function {
                     posFirst = icp
                 } else {
                     aOpNode: ast.nodes.get i: a.operation.u64
-                    posFirst = emitExpr :ast :symtab :ctx n: aOpNode
+                    posFirst = valueExprC :ast :symtab :ctx n: aOpNode
                 }
             }
         }
@@ -7988,7 +8062,7 @@ listArg: function {
         a: ast.nodes.get i: aId.u64
         if a.namedoperation then {
             an: zast.nameTextAt :ast ref: a.name
-            if an.stringView == label then return (emitExpr
+            if an.stringView == label then return (valueExprC
                 :ast
                 :symtab
                 :ctx
@@ -7997,7 +8071,7 @@ listArg: function {
             if an.length == 0 when havePos.not then {
                 havePos = true
                 aOpNode: ast.nodes.get i: a.operation.u64
-                posFirst = emitExpr :ast :symtab :ctx n: aOpNode
+                posFirst = valueExprC :ast :symtab :ctx n: aOpNode
             }
         }
     }
@@ -8146,7 +8220,7 @@ emitInlineVariantCtor: function {
             if a.namedoperation when got.not then {
                 got = true
                 aOpNode: ast.nodes.get i: a.operation.u64
-                av = emitExpr :ast :symtab :ctx n: aOpNode
+                av = valueExprC :ast :symtab :ctx n: aOpNode
             }
         }
         armCiP: memberCPrefix name: arm
@@ -8400,9 +8474,14 @@ emitQualRecvMethodCall: function {
             recvNdQ = ctorArgNodeByPosition :ast :call idx: 0
             posStartQ = 1
         }
-        # a receiver already held as a pointer passes as it stands
+        # a receiver already held as a pointer passes as it stands -- as
+        # WRITTEN, since the construction-argument text loads a pointer-held
+        # valtype and the receiver slot wants the pointer
         if recvNdQ > 0 then {
             recvPtrQ = (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: recvNdQ))
+            if recvPtrQ when (ptrHeldValtype :ast :symtab :ctx n: (ast.nodes.get i: recvNdQ)) then {
+                recvExQ = emitExpr :ast :symtab :ctx n: (ast.nodes.get i: recvNdQ)
+            }
         }
         # no receiver supplied at all: the checker reports the missing
         # argument, and the stamp keeps the dotted leg from claiming this call,
@@ -9061,7 +9140,7 @@ ctorArgTextAt: function {
     n: ast.nodes.get i: aid
     iv: emitInterpArgExpr :ast :symtab :ctx :n
     if iv.length > 0 then return iv
-    return (emitExpr :ast :symtab :ctx :n)
+    return (valueExprC :ast :symtab :ctx :n)
 }
 
 # argAlreadyPointer -- does this argument expression already evaluate to a C
@@ -10369,6 +10448,13 @@ emitFnptrFieldCall: function {
                 :ctx
                 n: (ast.nodes.get i: a.operation.u64)
             ) then addr = false
+            # a by-value parameter is handed the VALUE of a pointer-held valtype
+            if addr.not when (ptrHeldValtype
+                :ast
+                :symtab
+                :ctx
+                n: (ast.nodes.get i: a.operation.u64)
+            ) then av = "(*\{av})"
             if ai > 0 then args.append ", "
             if addr then args.append "&"
             args.append av
@@ -10446,6 +10532,13 @@ emitFnptrLocalCall: function {
                 :ctx
                 n: (ast.nodes.get i: a.operation.u64)
             ) then addr = false
+            # a by-value parameter is handed the VALUE of a pointer-held valtype
+            if addr.not when (ptrHeldValtype
+                :ast
+                :symtab
+                :ctx
+                n: (ast.nodes.get i: a.operation.u64)
+            ) then av = "(*\{av})"
             if ai > 0 then args.append ", "
             if addr then args.append "&"
             args.append av
@@ -10592,6 +10685,9 @@ userFnArgText: function {
             isBorrow: isBorrowed
         )
     }
+    # a pointer-held valtype handed to a BY-VALUE parameter is loaded; every
+    # parameter that wants the pointer has answered above
+    if (ptrHeldValtype :ast :symtab :ctx n: argOpNode) then return "(*\{atomVarId})"
     vbh8: (hoistBorrowValArg
         :ast
         :symtab
@@ -13476,7 +13572,7 @@ emitDottedRead: function {
         isRcc: false
         if pOrig.stringView == "resultval" then isRcc = true
         if isRcc then {
-            rcRecv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
+            rcRecv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
             okTagX: variantTag :symtab tid: (ztypes.tid.create from: pMono.u64) arm: "ok"
             rcT: ctxCname :ctx tid: (ztypes.tid.create from: pMono.u64)
             return "({ \{rcT}_t _rc = (\{rcRecv.stringView}); if (_rc.tag != \{okTagX.stringView}) z_panic(\"orPanic: result is err\"); _rc.data.ok; })"
@@ -13637,9 +13733,12 @@ emitExpr: function {
         }
         return tx
     } case binop then {
-        l: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.lhs.u64)
+        # an operand is a VALUE: a Box is loaded, and so is a pointer-held
+        # valtype (valueExprC). The one leg that wants the lhs as a pointer --
+        # a user-written operator, whose receiver is one -- re-reads it.
+        l: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: n.lhs.u64)
         op: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.operator.u64))
-        r: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.rhs.u64)
+        r: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: n.rhs.u64)
         if (nodeIsAtomBox
             :ast
             :symtab
@@ -13786,17 +13885,14 @@ emitOperatorAt: function {
         )
         if vd.length > 0 then return vd
         # a body the author wrote. Its receiver is a pointer like every
-        # other method's, so address the lhs unless it already is one.
+        # other method's, so address the lhs unless it already is one -- and
+        # when it is one, the operand text was LOADED for the native legs, so
+        # the pointer is read again from the node.
         cn: ctxCname :ctx tid: call
         recvText: l.copy
-        if (
-            (pathIsPointer
-                :ast
-                :symtab
-                :ctx
-                n: (ast.nodes.get i: lhsNid)
-            ).not
-        ) then {
+        if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: lhsNid)) then {
+            recvText = emitExpr :ast :symtab :ctx n: (ast.nodes.get i: lhsNid)
+        } else {
             # `&` needs an LVALUE, and a receiver that is itself a call is
             # not one -- `&f(x)` is rejected by C. Bind it to a temp the
             # statement flush declares. A compound literal already is an
@@ -14204,7 +14300,7 @@ emitInterpPart: function {
         if tnTd0.length > 0 then tn0 = tnTd0.copy
         tn: numericFormatName :ast :symtab :ctx tn: tn0.stringView
         if di0.length > 0 then tn = di0
-        val: emitExpr :ast :symtab :ctx :n
+        val: valueExprC :ast :symtab :ctx :n
         # a call fragment may have hoisted non-lvalue args to _ah temps:
         # declare them before the fragment uses them (mirrors the direct
         # print path's flush after emitCallValue)
@@ -16220,7 +16316,7 @@ emitReassignStmt: function {
         if rvi.length > 0 then {
             rv2 = rvi
         } else {
-            rv2 = emitExpr :ast :symtab :ctx n: valueNode
+            rv2 = valueExprC :ast :symtab :ctx n: valueNode
         }
     }
     # the RHS walk may have recorded _ah arg hoists: declare them HERE,
@@ -16457,7 +16553,7 @@ emitDoWhileFor: function {
         # the checker stamps the OPERATION node, so unwrap the same way
         pkop: pk
         if pkn.namedoperation then pkop = pkn.operation
-        pcv: emitExpr :ast :symtab :ctx n: pkn
+        pcv: valueExprC :ast :symtab :ctx n: pkn
         tw8: (truthyCondText
             :ast
             :symtab
@@ -19205,7 +19301,7 @@ emitForCond: function {
         lblV7: defVid :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.operation.u64))
         lbl: varCName :ctx vid: lblV7 name: lblR7.stringView
         if lblR7.length == 0 then {
-            cv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.operation.u64)
+            cv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: n.operation.u64)
             tw7: (truthyCondText
                 :ast
                 :symtab
@@ -20252,7 +20348,7 @@ appendCondText: function {
 } is {
     k: ast.nodes.get i: kId.u64
     if k.namedoperation then {
-        cv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: k.operation.u64)
+        cv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: k.operation.u64)
         tw: (truthyCondText
             :ast
             :symtab
@@ -31167,7 +31263,7 @@ emitResultCombinator: function {
     if isP when isRes.not then return "".string
     payArm: "ok"
     if isOpt then payArm = "some"
-    recvExpr: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: bnid.u64)
+    recvExpr: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: bnid.u64)
     if recvExpr.length == 0 then return "".string
     okTag: variantTag :symtab tid: (ztypes.tid.create from: rtid.u64) arm: payArm
     rcT: ctxCname :ctx tid: (ztypes.tid.create from: rtid.u64)
@@ -31184,7 +31280,7 @@ emitResultCombinator: function {
         if a.namedoperation then opId = a.operation
     }
     if opId.isZero then return "".string
-    dExpr: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: opId.u64)
+    dExpr: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: opId.u64)
     if dExpr.length == 0 then return "".string
     ro: "({ \{rcT}_t _rc = (\{recvExpr.stringView}); (_rc.tag == \{okTag.stringView}) ? _rc.data.\{payArm} : (\{dExpr.stringView}); })"
     return ro
