@@ -285,6 +285,20 @@ withExtraArgs: function {argv: (List String).take file: StringView} out List Str
     return argv
 }
 
+# fixtureNames -- the entries of `dir` that end in `suffix`, without it, in the
+# order the directory lists them. A directory that cannot be listed is an
+# empty list: the kinds that walk one had nothing to say about that either.
+fixtureNames: function {dir: StringView suffix: StringView} out List String is {
+    names: List String
+    ls: io.listDir path: dir
+    if ls.err then return names
+    with it: ls.iterate do for ent: it loop {
+        sfx: ent.stringView.stripSuffix s: suffix
+        if sfx.some then names.append from: sfx.string
+    }
+    return names
+}
+
 # buildTool -- the two-step ladder every driver-building kind climbs: emit
 # `name` with the zc at `zc` into `csrc`, then compile that C to `bin` with
 # the runner's C compiler. Answers which step failed -- 0 built, 1 the emit,
@@ -1374,82 +1388,69 @@ runLeakCases: function {r: Runner} is {
     di: u64
     for di < leakDirs.length loop {
         ld: (leakDirs.get i: di)
-        lr: io.listDir path: ld
-        match (
-            lr
-        ) case ok then {
-            li: u64
-            for li < lr.length loop {
-                ent: (lr.get i: li)
-                sfx: ent.stringView.stripSuffix s: ".z"
-                match (
-                    sfx
-                ) case some then {
-                    nm: sfx
-                    lpath: "\{ld}/\{ent}"
-                    if (declaresMain path: lpath.stringView).not then {
-                        li = li + 1
-                        continue
-                    }
-                    lc: "\{r.tmp}/L_\{nm}.c"
-                    lb: "\{r.tmp}/L_\{nm}.bin"
-                    lerr: "\{r.tmp}/L_\{nm}.err"
-                    # the sanitized COMPILE's stderr, kept rather than dropped:
-                    # discarding it is what let a compiler reject -- or ignore --
-                    # the sanitizer flag with nobody the wiser.
-                    lcerr: "\{r.tmp}/L_\{nm}.cerr"
-                    rdir2: "\{r.tmp}/leak_\{nm}"
-                    io.mkdirp path: rdir2
-                    argsFile2: "\{r.rungold}/\{nm}.args"
-                    steps: List PoolStep
-                    za2: (zcArgv
-                        zc: r.zc.stringView
-                        ccFwd: r.ccFwd.stringView
-                        name: nm
-                        srcdir: ld.stringView
-                        sys: r.sys.stringView
-                        outc: lc.stringView
-                    )
-                    steps.append (mkStep
-                        argv: za2
-                        cwd: ""
-                        outPath: "/dev/null"
-                        errPath: "/dev/null"
-                        timeoutSecs: 0
-                        allowFail: false
-                        zlinkFrom: ""
-                    )
-                    ga2: (gccArgv
-                        cc: r.cc.stringView
-                        ccflags: r.ccflags.stringView
-                        bin: lb.stringView
-                        csrc: lc.stringView
-                        asan: true
-                    )
-                    steps.append (mkStep
-                        argv: ga2
-                        cwd: ""
-                        outPath: "/dev/null"
-                        errPath: lcerr.stringView
-                        timeoutSecs: 0
-                        allowFail: false
-                        zlinkFrom: lc.stringView
-                    )
-                    ba2: binArgv bin: lb.stringView argsFile: argsFile2.stringView
-                    steps.append (mkStep
-                        argv: ba2
-                        cwd: rdir2.stringView
-                        outPath: "/dev/null"
-                        errPath: lerr.stringView
-                        timeoutSecs: r.timeoutSecs
-                        allowFail: true
-                        zlinkFrom: ""
-                    )
-                    leakPool.append (mkJob name: nm :steps)
-                } case none then null
-                li = li + 1
+        nmNames: fixtureNames dir: ld.stringView suffix: ".z"
+        with lit: nmNames.iterate do for nmS: lit loop {
+            nm: nmS.stringView
+            lpath: "\{ld}/\{nm}.z"
+            if (declaresMain path: lpath.stringView).not then {
+                continue
             }
-        } case err then null
+            lc: "\{r.tmp}/L_\{nm}.c"
+            lb: "\{r.tmp}/L_\{nm}.bin"
+            lerr: "\{r.tmp}/L_\{nm}.err"
+            # the sanitized COMPILE's stderr, kept rather than dropped:
+            # discarding it is what let a compiler reject -- or ignore --
+            # the sanitizer flag with nobody the wiser.
+            lcerr: "\{r.tmp}/L_\{nm}.cerr"
+            rdir2: "\{r.tmp}/leak_\{nm}"
+            io.mkdirp path: rdir2
+            argsFile2: "\{r.rungold}/\{nm}.args"
+            steps: List PoolStep
+            za2: (zcArgv
+                zc: r.zc.stringView
+                ccFwd: r.ccFwd.stringView
+                name: nm
+                srcdir: ld.stringView
+                sys: r.sys.stringView
+                outc: lc.stringView
+            )
+            steps.append (mkStep
+                argv: za2
+                cwd: ""
+                outPath: "/dev/null"
+                errPath: "/dev/null"
+                timeoutSecs: 0
+                allowFail: false
+                zlinkFrom: ""
+            )
+            ga2: (gccArgv
+                cc: r.cc.stringView
+                ccflags: r.ccflags.stringView
+                bin: lb.stringView
+                csrc: lc.stringView
+                asan: true
+            )
+            steps.append (mkStep
+                argv: ga2
+                cwd: ""
+                outPath: "/dev/null"
+                errPath: lcerr.stringView
+                timeoutSecs: 0
+                allowFail: false
+                zlinkFrom: lc.stringView
+            )
+            ba2: binArgv bin: lb.stringView argsFile: argsFile2.stringView
+            steps.append (mkStep
+                argv: ba2
+                cwd: rdir2.stringView
+                outPath: "/dev/null"
+                errPath: lerr.stringView
+                timeoutSecs: r.timeoutSecs
+                allowFail: true
+                zlinkFrom: ""
+            )
+            leakPool.append (mkJob name: nm :steps)
+        }
         di = di + 1
     }
     leakStatuses: ListVal i32
@@ -1514,44 +1515,32 @@ runLeakCases: function {r: Runner} is {
 # runErrorCases -- the ERROR (negative) cases kind.
 runErrorCases: function {r: Runner} is {
     # ---------------- ERROR (negative) cases ----------------
-    er: io.listDir path: r.errors
     errPool: List PoolJob
-    match (
-        er
-    ) case ok then {
-        ei: u64
-        for ei < er.length loop {
-            ent2: (er.get i: ei)
-            esfx: ent2.stringView.stripSuffix s: ".z"
-            match (
-                esfx
-            ) case some then {
-                enm: esfx
-                epe: "\{r.tmp}/\{enm}.pe"
-                steps: List PoolStep
-                eza: (zcArgv
-                    zc: r.zc.stringView
-                    ccFwd: r.ccFwd.stringView
-                    name: enm
-                    srcdir: r.errors.stringView
-                    sys: r.sys.stringView
-                    outc: "/dev/null"
-                )
-                exf: "\{r.errors.stringView}/\{enm}.zcargs"
-                steps.append (mkStep
-                    argv: (withExtraArgs argv: eza file: exf.stringView)
-                    cwd: ""
-                    outPath: "/dev/null"
-                    errPath: epe.stringView
-                    timeoutSecs: 0
-                    allowFail: true
-                    zlinkFrom: ""
-                )
-                errPool.append (mkJob name: enm :steps)
-            } case none then null
-            ei = ei + 1
-        }
-    } case err then null
+    enmNames: fixtureNames dir: r.errors.stringView suffix: ".z"
+    with eit: enmNames.iterate do for enmS: eit loop {
+        enm: enmS.stringView
+        epe: "\{r.tmp}/\{enm}.pe"
+        steps: List PoolStep
+        eza: (zcArgv
+            zc: r.zc.stringView
+            ccFwd: r.ccFwd.stringView
+            name: enm
+            srcdir: r.errors.stringView
+            sys: r.sys.stringView
+            outc: "/dev/null"
+        )
+        exf: "\{r.errors.stringView}/\{enm}.zcargs"
+        steps.append (mkStep
+            argv: (withExtraArgs argv: eza file: exf.stringView)
+            cwd: ""
+            outPath: "/dev/null"
+            errPath: epe.stringView
+            timeoutSecs: 0
+            allowFail: true
+            zlinkFrom: ""
+        )
+        errPool.append (mkJob name: enm :steps)
+    }
     errStatuses: ListVal i32
     errFailSteps: ListVal i64
     runJobs jobs: errPool maxJobs: r.jobsMax statuses: errStatuses failSteps: errFailSteps
@@ -1741,125 +1730,92 @@ runDifferentialCases: function {r: Runner} is {
         print "FAIL(diff-build) zparser"
         r.fails = r.fails + 1
     }
-    dr: io.listDir path: r.examplesDir
-    match (
-        dr
-    ) case ok then {
-        ddi: u64
-        for ddi < dr.length loop {
-            dent: (dr.get i: ddi)
-            dsfx: dent.stringView.stripSuffix s: ".z"
-            match (
-                dsfx
-            ) case some then {
-                dnm: dsfx
-                exPath: "\{r.examplesDir}/\{dnm}.z"
-                if lexOk then {
-                    lgold: "\{lexgold}/\{dnm}.tokens"
-                    (lexGoldenCase
-                        :r
-                        dumpBin: zlxB.stringView
-                        src: exPath.stringView
-                        gold: lgold.stringView
-                        name: dnm
-                    )
-                }
-                if parseOk then {
-                    past: "\{r.tmp}/D_\{dnm}.ast"
-                    pa: List String
-                    pa.append from: zpsB.copy
-                    pa.append from: exPath.copy
-                    (os.spawn
-                        argv: pa
-                        cwd: ""
-                        outPath: past.stringView
-                        errPath: "/dev/null"
-                        timeoutSecs: r.timeoutSecs
-                    )
-                    pgold: "\{parsegold}/\{dnm}.ast"
-                    if (io.exists path: pgold) then {
-                        gP: slurp path: pgold.stringView
-                        oP: slurp path: past.stringView
-                        if oP.stringView == gP.stringView then {
-                            r.passN = r.passN + 1
-                        } else {
-                            print "FAIL(parser) \{dnm}"
-                            r.fails = r.fails + 1
-                        }
-                    }
-                }
-            } case none then null
-            ddi = ddi + 1
+    dnmNames: fixtureNames dir: r.examplesDir.stringView suffix: ".z"
+    with dit: dnmNames.iterate do for dnmS: dit loop {
+        dnm: dnmS.stringView
+        exPath: "\{r.examplesDir}/\{dnm}.z"
+        if lexOk then {
+            lgold: "\{lexgold}/\{dnm}.tokens"
+            (lexGoldenCase
+                :r
+                dumpBin: zlxB.stringView
+                src: exPath.stringView
+                gold: lgold.stringView
+                name: dnm
+            )
         }
-    } case err then null
+        if parseOk then {
+            past: "\{r.tmp}/D_\{dnm}.ast"
+            pa: List String
+            pa.append from: zpsB.copy
+            pa.append from: exPath.copy
+            (os.spawn
+                argv: pa
+                cwd: ""
+                outPath: past.stringView
+                errPath: "/dev/null"
+                timeoutSecs: r.timeoutSecs
+            )
+            pgold: "\{parsegold}/\{dnm}.ast"
+            if (io.exists path: pgold) then {
+                gP: slurp path: pgold.stringView
+                oP: slurp path: past.stringView
+                if oP.stringView == gP.stringView then {
+                    r.passN = r.passN + 1
+                } else {
+                    print "FAIL(parser) \{dnm}"
+                    r.fails = r.fails + 1
+                }
+            }
+        }
+    }
     # the lexer's edge-case fixtures, whose goldens sit beside them
     if lexOk then {
         edgeDir: "\{r.root.stringView}/tests/fixtures/zlexer_z"
-        edr: io.listDir path: edgeDir
-        match (
-            edr
-        ) case ok then {
-            with eit: edr.iterate do for ent: eit loop {
-                esfx: ent.stringView.stripSuffix s: ".z"
-                match (
-                    esfx
-                ) case some then {
-                    enm: esfx
-                    esrc: "\{edgeDir}/\{enm}.z"
-                    egold: "\{edgeDir}/\{enm}.tokens"
-                    (lexGoldenCase
-                        :r
-                        dumpBin: zlxB.stringView
-                        src: esrc.stringView
-                        gold: egold.stringView
-                        name: enm
-                    )
-                } case none then null
-            }
-        } case err then null
+        enmNames: fixtureNames dir: edgeDir.stringView suffix: ".z"
+        with eit2: enmNames.iterate do for enmS: eit2 loop {
+            enm: enmS.stringView
+            esrc: "\{edgeDir}/\{enm}.z"
+            egold: "\{edgeDir}/\{enm}.tokens"
+            (lexGoldenCase
+                :r
+                dumpBin: zlxB.stringView
+                src: esrc.stringView
+                gold: egold.stringView
+                name: enm
+            )
+        }
     }
     if parseOk then {
-        pr: io.listDir path: proggold
-        match (
-            pr
-        ) case ok then {
-            pri: u64
-            for pri < pr.length loop {
-                pent: (pr.get i: pri)
-                ptsfx: pent.stringView.stripSuffix s: ".tree"
-                match (
-                    ptsfx
-                ) case some then {
-                    ptnm: ptsfx
-                    treeDir: "\{proggold}/\{ptnm}.tree"
-                    pout: "\{r.tmp}/P_\{ptnm}.out"
-                    ppa: List String
-                    ppa.append from: zpsB.copy
-                    ppa.append from: "--program".string
-                    ppa.append from: treeDir.copy
-                    ppa.append from: "main".string
-                    (os.spawn
-                        argv: ppa
-                        cwd: ""
-                        outPath: pout.stringView
-                        errPath: "/dev/null"
-                        timeoutSecs: r.timeoutSecs
-                    )
-                    pgold2: "\{proggold}/\{ptnm}.expected"
-                    if (io.exists path: pgold2) then {
-                        gPr: slurp path: pgold2.stringView
-                        oPr: slurp path: pout.stringView
-                        if oPr.stringView == gPr.stringView then {
-                            r.passN = r.passN + 1
-                        } else {
-                            print "FAIL(program) \{ptnm}"
-                            r.fails = r.fails + 1
-                        }
-                    }
-                } case none then null
-                pri = pri + 1
+        ptnmNames: fixtureNames dir: proggold.stringView suffix: ".tree"
+        with pit: ptnmNames.iterate do for ptnmS: pit loop {
+            ptnm: ptnmS.stringView
+            treeDir: "\{proggold}/\{ptnm}.tree"
+            pout: "\{r.tmp}/P_\{ptnm}.out"
+            ppa: List String
+            ppa.append from: zpsB.copy
+            ppa.append from: "--program".string
+            ppa.append from: treeDir.copy
+            ppa.append from: "main".string
+            (os.spawn
+                argv: ppa
+                cwd: ""
+                outPath: pout.stringView
+                errPath: "/dev/null"
+                timeoutSecs: r.timeoutSecs
+            )
+            pgold2: "\{proggold}/\{ptnm}.expected"
+            if (io.exists path: pgold2) then {
+                gPr: slurp path: pgold2.stringView
+                oPr: slurp path: pout.stringView
+                if oPr.stringView == gPr.stringView then {
+                    r.passN = r.passN + 1
+                } else {
+                    print "FAIL(program) \{ptnm}"
+                    r.fails = r.fails + 1
+                }
             }
-        } case err then null
+        }
     }
 }
 
@@ -1889,53 +1845,41 @@ runVfsCases: function {r: Runner} is {
         r.fails = r.fails + 1
     }
     if vfsOk then {
-        vr: io.listDir path: vfsdir
-        match (
-            vr
-        ) case ok then {
-            vi: u64
-            for vi < vr.length loop {
-                vent: (vr.get i: vi)
-                vsfx: vent.stringView.stripSuffix s: ".script"
-                match (
-                    vsfx
-                ) case some then {
-                    vnm: vsfx
-                    scriptPath: "\{vfsdir}/\{vnm}.script"
-                    treePath: "\{vfsdir}/\{vnm}.tree"
-                    rawScript: slurp path: scriptPath.stringView
-                    subst: (rawScript.stringView.replace
-                        needle: "{ROOT}"
-                        replacement: treePath
-                    )
-                    tmpScript: "\{r.tmp}/V_\{vnm}.script"
-                    io.writeText path: tmpScript content: subst
-                    vout: "\{r.tmp}/V_\{vnm}.out"
-                    va: List String
-                    va.append from: zvfB.copy
-                    va.append from: tmpScript.copy
-                    (os.spawn
-                        argv: va
-                        cwd: ""
-                        outPath: vout.stringView
-                        errPath: "/dev/null"
-                        timeoutSecs: r.timeoutSecs
-                    )
-                    vgold: "\{vfsdir}/\{vnm}.expected"
-                    if (io.exists path: vgold) then {
-                        gV: slurp path: vgold.stringView
-                        oV: slurp path: vout.stringView
-                        if oV.stringView == gV.stringView then {
-                            r.passN = r.passN + 1
-                        } else {
-                            print "FAIL(vfs) \{vnm}"
-                            r.fails = r.fails + 1
-                        }
-                    }
-                } case none then null
-                vi = vi + 1
+        vnmNames: fixtureNames dir: vfsdir.stringView suffix: ".script"
+        with vit: vnmNames.iterate do for vnmS: vit loop {
+            vnm: vnmS.stringView
+            scriptPath: "\{vfsdir}/\{vnm}.script"
+            treePath: "\{vfsdir}/\{vnm}.tree"
+            rawScript: slurp path: scriptPath.stringView
+            subst: (rawScript.stringView.replace
+                needle: "{ROOT}"
+                replacement: treePath
+            )
+            tmpScript: "\{r.tmp}/V_\{vnm}.script"
+            io.writeText path: tmpScript content: subst
+            vout: "\{r.tmp}/V_\{vnm}.out"
+            va: List String
+            va.append from: zvfB.copy
+            va.append from: tmpScript.copy
+            (os.spawn
+                argv: va
+                cwd: ""
+                outPath: vout.stringView
+                errPath: "/dev/null"
+                timeoutSecs: r.timeoutSecs
+            )
+            vgold: "\{vfsdir}/\{vnm}.expected"
+            if (io.exists path: vgold) then {
+                gV: slurp path: vgold.stringView
+                oV: slurp path: vout.stringView
+                if oV.stringView == gV.stringView then {
+                    r.passN = r.passN + 1
+                } else {
+                    print "FAIL(vfs) \{vnm}"
+                    r.fails = r.fails + 1
+                }
             }
-        } case err then null
+        }
     }
 }
 
@@ -2079,37 +2023,25 @@ runFmtCases: function {r: Runner} is {
         r.fails = r.fails + 1
         return
     }
-    dr: io.listDir path: casesDir
-    match (
-        dr
-    ) case ok then {
-        di: u64
-        for di < dr.length loop {
-            dent: (dr.get i: di)
-            di = di + 1
-            dsfx: dent.stringView.stripSuffix s: ".z"
-            match (
-                dsfx
-            ) case some then {
-                nm: dsfx
-                src: "\{casesDir.stringView}/\{nm}.z"
-                gold: "\{goldDir.stringView}/\{nm}.z"
-                argsFile: "\{casesDir.stringView}/\{nm}.args"
-                if (io.exists path: gold).not then {
-                    r.skip = r.skip + 1
-                } else {
-                    (fmtGoldenCase
-                        :r
-                        bin: zfB.stringView
-                        src: src.stringView
-                        gold: gold.stringView
-                        argsFile: argsFile.stringView
-                        name: nm
-                    )
-                }
-            } case none then null
+    nmNames: fixtureNames dir: casesDir.stringView suffix: ".z"
+    with dit2: nmNames.iterate do for nmS: dit2 loop {
+        nm: nmS.stringView
+        src: "\{casesDir.stringView}/\{nm}.z"
+        gold: "\{goldDir.stringView}/\{nm}.z"
+        argsFile: "\{casesDir.stringView}/\{nm}.args"
+        if (io.exists path: gold).not then {
+            r.skip = r.skip + 1
+        } else {
+            (fmtGoldenCase
+                :r
+                bin: zfB.stringView
+                src: src.stringView
+                gold: gold.stringView
+                argsFile: argsFile.stringView
+                name: nm
+            )
         }
-    } case err then null
+    }
 }
 
 # fmtGoldenCase -- one fmt fixture: the source laid out must match the golden,
@@ -2306,44 +2238,32 @@ runSelfhostAsan: function {r: Runner} is {
             sdi: u64
             for sdi < saDirs.length loop {
                 sad: (saDirs.get i: sdi)
-                sar: io.listDir path: sad
-                match (
-                    sar
-                ) case ok then {
-                    sai: u64
-                    for sai < sar.length loop {
-                        sent: (sar.get i: sai)
-                        ssfx: sent.stringView.stripSuffix s: ".z"
-                        match (
-                            ssfx
-                        ) case some then {
-                            snm: ssfx
-                            (addSelfhostJob
-                                :r
-                                pool: saPool
-                                names: saNames
-                                modes: saModes
-                                errs: saErrs
-                                zcaB: zcaB.stringView
-                                name: snm
-                                srcdir: sad.stringView
-                                dumpMode: false
-                            )
-                            (addSelfhostJob
-                                :r
-                                pool: saPool
-                                names: saNames
-                                modes: saModes
-                                errs: saErrs
-                                zcaB: zcaB.stringView
-                                name: snm
-                                srcdir: sad.stringView
-                                dumpMode: true
-                            )
-                        } case none then null
-                        sai = sai + 1
-                    }
-                } case err then null
+                snmNames: fixtureNames dir: sad.stringView suffix: ".z"
+                with sit: snmNames.iterate do for snmS: sit loop {
+                    snm: snmS.stringView
+                    (addSelfhostJob
+                        :r
+                        pool: saPool
+                        names: saNames
+                        modes: saModes
+                        errs: saErrs
+                        zcaB: zcaB.stringView
+                        name: snm
+                        srcdir: sad.stringView
+                        dumpMode: false
+                    )
+                    (addSelfhostJob
+                        :r
+                        pool: saPool
+                        names: saNames
+                        modes: saModes
+                        errs: saErrs
+                        zcaB: zcaB.stringView
+                        name: snm
+                        srcdir: sad.stringView
+                        dumpMode: true
+                    )
+                }
                 sdi = sdi + 1
             }
             # pooled, like every other kind: spawning this leg serially costs
