@@ -2415,6 +2415,37 @@ Analysis: class {
         )
     }
 
+    # docBlockBody -- the comment block starting at line `from`: each line's text
+    # after its `#`, trimmed, joined by single spaces into `into`. Answers the
+    # index of the first line after the block.
+    docBlockBody: function {this: this.view from: u64 into: String.borrow} out u64 is {
+        i: from
+        n: this.lines.length
+        for i < n loop {
+            ln: this.lines.get :i
+            t: ln.stringView.trim
+            if (t.startsWith "#").not then return i
+            body: t.substring from: 1 to: t.length
+            if into.length > 0 then into.appendByte b: 32
+            into.append s: body.trim
+            i = i + 1
+        }
+        return i
+    }
+
+    # docBlockKey -- a doc body's comparison key: its words with the vocabulary
+    # of the declaration at `declAt` (the line after the block) and every
+    # width folded out, joined.
+    docBlockKey: function {this: this.view ws: List String declAt: u64} out String is {
+        vocab: List String
+        if declAt < this.lines.length then {
+            decl: (this.lines.get i: declAt).copy
+            docVocabInto s: (docStripComment ln: decl.stringView) into: vocab
+        }
+        folded: docFoldTemplate words: ws :vocab
+        return (docJoinWords xs: folded)
+    }
+
     # reportDuplicateDocs -- L025: the same doc body on more than two definitions in one
     # file. A real invariant stated at forty sites is one invariant and thirty-nine
     # copies: state it once, in the unit header, and leave the sites bare. Blocks under
@@ -2429,59 +2460,24 @@ Analysis: class {
         n: this.lines.length
         for i < n loop {
             head: this.lines.get :i
-            if (docLineIsComment ln: head.stringView).not then {
-                i = i + 1
-            } else {
+            if (docLineIsComment ln: head.stringView) then {
                 st: i
                 buf: String
-                more: true
-                for more loop {
-                    if i >= n then {
-                        more = false
-                    } else {
-                        ln: this.lines.get :i
-                        t: ln.stringView.trim
-                        if t.startsWith "#" then {
-                            body: t.substring from: 1 to: t.length
-                            if buf.length > 0 then buf.appendByte b: 32
-                            buf.append s: body.trim
-                            i = i + 1
-                        } else more = false
-                    }
-                }
+                i = this.docBlockBody from: i into: buf
                 ws: List String
                 docWordsInto s: buf.stringView into: ws
                 if ws.length >= 4 then {
-                    vocab: List String
-                    if i < n then {
-                        decl: (this.lines.get :i).copy
-                        docVocabInto s: (docStripComment ln: decl.stringView) into: vocab
-                    }
-                    folded: docFoldTemplate words: ws :vocab
-                    key: docJoinWords xs: folded
-                    c: u64
-                    cur: counts.get :key
-                    match (
-                        cur
-                    ) case some then {
-                        c = cur
-                    } case none then null
-                    counts.set key: key.copy value: (c + 1)
+                    key: this.docBlockKey :ws declAt: i
+                    counts.set key: key.copy value: (((counts.get :key).or d: 0) + 1)
                     keys.append from: key.copy
                     starts.append from: st
                 }
-            }
+            } else i = i + 1
         }
         j: u64
         for j < keys.length loop {
             k: keys.get i: j
-            c2: u64
-            cur2: counts.get key: k
-            match (
-                cur2
-            ) case some then {
-                c2 = cur2
-            } case none then null
+            c2: (counts.get key: k).or d: 0
             if c2 > 2 then {
                 s2: starts.get i: j
                 (this.warn
@@ -4098,97 +4094,79 @@ Analysis: class {
         }
     }
 
+    # viewableLocalKind -- the owning conversion kind a String local was bound
+    # from when a borrowed view would serve every use of it; empty when the
+    # local is not such a case. Mutation evidence is `variableMutated` (the
+    # lock rules) and `variableMoved` (the invalidate choke point) -- a local
+    # moved into an owner needs its allocation. A view is only equivalent while
+    # the SOURCE holds the same bytes: a root that is written -- directly, or
+    # by a callee taking it as a mutable borrow -- rebinds or frees them, so
+    # the copy is load-bearing (the save/restore idiom around a rebinding
+    # setter, and a loop whose tail reassigns the source).
+    viewableLocalKind: function {
+        :this
+        prog: Ast.view
+        st: zenv.ZSymbolTable
+        # every variable some atom reads
+        used: (IdSet u64).view
+        # the binding node and its variable
+        nid: u64
+        vid: ztypes.vid
+        # the file the unit's body lives in
+        mainFsno: zvfs.fsno
+    } out String is {
+        if (used.has item: vid).not then return String
+        if (st.typing.variableMutated.has item: vid) then return String
+        if (st.typing.variableMoved.has item: vid) then return String
+        fs: prog.fsnoForNode nodeid: nid.u32.orPanic
+        if (fs == mainFsno).not then return String
+        nodeL: prog.nodes.get i: nid.u64
+        if nodeL.assignment.not then return String
+        kind: this.owningConvKind ast: prog :st rhsId: nodeL.value
+        rvid: this.convSourceRootVid ast: prog :st rhsId: nodeL.value
+        if rvid.isZero.not when (st.typing.variableMutated.has item: rvid) then return String
+        return kind
+    }
+
     # reportViewableLocals -- L022. A String local bound from an OWNING
     # conversion that is never mutated: every use only reads it, so a borrowed
     # view serves and the allocation is avoidable (`.stringView` at the uses,
-    # `asString` at a container probe). Mutation evidence is `variableMutated`
-    # (the lock rules) and `variableMoved` (the invalidate choke point) -- a
-    # local moved into an owner needs its allocation, so it is not flagged.
+    # `asString` at a container probe).
     reportViewableLocals: function {
         :this prog: Ast.view uname: StringView st: zenv.ZSymbolTable
     } is {
-        {
-            mainOp: unitBodyOpOf :prog :uname
-            if mainOp.isZero then return
-            # the unit node itself is fsno-less; anchor on the first member's
-            # operation node, like the L013 walk does
-            mainFsno: zvfs.fsno
-            zeroFs: zvfs.fsno
-            {
-                bodyIds: zast.unitBodyIdsAt ast: prog unitId: mainOp
-                vx409: u64
-                for vx409 < bodyIds.count.u64 loop {
-                    mid: zast.kidAt kids: prog.kids span: bodyIds i: vx409
-                    vx409 = vx409 + 1
-                    if mainFsno == zeroFs then {
-                        anch: u32
-                        {
-                            m: prog.nodes.get i: mid.u64
-                            if m.namedoperation then anch = m.operation
-                        }
-                        if anch > 0 then {
-                            mainFsno = prog.fsnoForNode nodeid: anch
-                        }
-                    }
-                }
-            }
-            if mainFsno == zeroFs then return
-            used: IdSet u64
-            with uit: st.typing.atomVariableId.iterateItems do for av: uit loop (used.add
-                item: av.value
-            )
-            # the (node, variable) pairs are collected first: the conversion
-            # probes below lend st
-            dvPairs: ListVal u64
-            with dit: st.typing.defVariableId.iterateItems do for dv: dit loop {
-                dvPairs.append from: dv.key
-                dvPairs.append from: dv.value.u64
-            }
-            dpi: u64
-            for dpi < dvPairs.length loop {
-                nid: dvPairs.get i: dpi
-                vid: ztypes.vid.create from: (dvPairs.get i: (dpi + 1))
-                dpi = dpi + 2
-                if (used.has item: vid) then {
-                    mut: st.typing.variableMutated.has item: vid
-                    if mut.not then mut = st.typing.variableMoved.has item: vid
-                    if mut.not then {
-                        fs: prog.fsnoForNode nodeid: nid.u32.orPanic
-                        if fs == mainFsno then {
-                            nodeL: prog.nodes.get i: nid.u64
-                            if nodeL.assignment then {
-                                kind: this.owningConvKind ast: prog :st rhsId: nodeL.value
-                                # a view is only equivalent while the SOURCE holds
-                                # the same bytes: a root that is written -- directly,
-                                # or by a callee taking it as a mutable borrow --
-                                # rebinds or frees them, so the copy is load-bearing
-                                # (the save/restore idiom around a rebinding setter,
-                                # and a loop whose tail reassigns the source).
-                                srcMut: false
-                                {
-                                    rvid: (this.convSourceRootVid
-                                        ast: prog
-                                        :st
-                                        rhsId: nodeL.value
-                                    )
-                                    if rvid.isZero.not then {
-                                        srcMut = st.typing.variableMutated.has item: rvid
-                                    }
-                                }
-                                if kind.length > 0 when srcMut.not then {
-                                    nm: zast.poolTextAt pool: prog.names ref: nodeL.name
-                                    (this.info
-                                        code: "L022"
-                                        msg: "local '\{nm}' is an owned copy (\{kind}) that is never mutated -- a borrowed view serves every use (`.stringView`, or `asString` at a probe)"
-                                        line: nodeL.lineno
-                                        col: nodeL.colno
-                                        width: nm.length.u32.orPanic
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
+        mainOp: unitBodyOpOf :prog :uname
+        if mainOp.isZero then return
+        mainFsno: unitAnchorFsno :prog :mainOp
+        zeroFs: zvfs.fsno
+        if mainFsno == zeroFs then return
+        used: IdSet u64
+        with uit: st.typing.atomVariableId.iterateItems do for av: uit loop (used.add
+            item: av.value
+        )
+        # the (node, variable) pairs are collected first: the conversion
+        # probes below lend st
+        dvPairs: ListVal u64
+        with dit: st.typing.defVariableId.iterateItems do for dv: dit loop {
+            dvPairs.append from: dv.key
+            dvPairs.append from: dv.value.u64
+        }
+        dpi: u64
+        for dpi < dvPairs.length loop {
+            nid: dvPairs.get i: dpi
+            vid: ztypes.vid.create from: (dvPairs.get i: (dpi + 1))
+            dpi = dpi + 2
+            kind: this.viewableLocalKind :prog :st :used :nid :vid :mainFsno
+            nodeL: prog.nodes.get i: nid.u64
+            if kind.length > 0 when nodeL.assignment then {
+                nm: zast.poolTextAt pool: prog.names ref: nodeL.name
+                (this.info
+                    code: "L022"
+                    msg: "local '\{nm}' is an owned copy (\{kind}) that is never mutated -- a borrowed view serves every use (`.stringView`, or `asString` at a probe)"
+                    line: nodeL.lineno
+                    col: nodeL.colno
+                    width: nm.length.u32.orPanic
+                )
             }
         }
     }
@@ -4505,6 +4483,25 @@ unitTidOf: function {prog: Ast.view uname: StringView st: zenv.ZSymbolTable.view
     )
     if uo.isZero then return 0
     return uo.u64
+}
+
+# unitAnchorFsno -- the file a unit's body lives in. The unit node itself is
+# fsno-less, so the first member's operation node answers, like the L013
+# walk does; zero when no member carries one.
+unitAnchorFsno: function {prog: Ast.view mainOp: zast.nodeid} out zvfs.fsno is {
+    zeroFs: zvfs.fsno
+    bodyIds: zast.unitBodyIdsAt ast: prog unitId: mainOp
+    vx: u64
+    for vx < bodyIds.count.u64 loop {
+        mid: zast.kidAt kids: prog.kids span: bodyIds i: vx
+        vx = vx + 1
+        m: prog.nodes.get i: mid.u64
+        if m.namedoperation when m.operation > 0 then {
+            fs: prog.fsnoForNode nodeid: m.operation
+            if (fs == zeroFs).not then return fs
+        }
+    }
+    return zeroFs
 }
 
 # unitBodyOpOf -- the body node of the unit named `uname` in `prog`, 0 when no
