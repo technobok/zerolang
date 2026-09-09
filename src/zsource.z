@@ -5135,6 +5135,85 @@ byteAtLine: function {starts: (ListVal u64).view srcLen: u64 k: u64} out u64 is 
     return (starts.get i: k)
 }
 
+# bandpair -- where a resync landed: the next line on each side that is the same
+# text. Past the band it is the window's far edge instead, which is what makes a
+# block bounded rather than minimal.
+bandpair: record {
+    # the old side's line index
+    oldAt: u64
+    # the new side's line index
+    newAt: u64
+}
+
+# linesEqualAt -- whether the two sides hold the same line at these positions.
+# Past the end of either there is nothing to compare, so they do not.
+linesEqualAt: function {
+    oldLines: (List String).view
+    newLines: (List String).view
+    m: u64
+    n: u64
+    i: u64
+    p: u64
+} out bool is {
+    if (i >= m) or (p >= n) then return false
+    oi: oldLines.get :i
+    pj: newLines.get i: p
+    return (oi.stringView == pj.stringView)
+}
+
+# bandProbe -- the first matching pair on diagonal `t`, if the diagonal holds
+# one. The diagonal is the offsets summing to t, so probing t in increasing order
+# reaches the nearest resync first.
+bandProbe: function {
+    oldLines: (List String).view
+    newLines: (List String).view
+    m: u64
+    n: u64
+    i: u64
+    p: u64
+    t: u64
+} out optionval bandpair is {
+    a: u64
+    for a <= t loop {
+        b: t - a
+        ii: i + a
+        pp: p + b
+        a = a + 1
+        if ii < m when pp < n then {
+            oa: oldLines.get i: ii
+            pb: newLines.get i: pp
+            if oa.stringView == pb.stringView then {
+                return (optionval.some (bandpair oldAt: ii newAt: pp))
+            }
+        }
+    }
+    return (optionval.none bandpair)
+}
+
+# bandResync -- where the two sides line up again, searched by increasing
+# diagonal so the changed block is the smallest the band can find. Nothing within
+# the band means the block runs to the window's edge.
+bandResync: function {
+    oldLines: (List String).view
+    newLines: (List String).view
+    m: u64
+    n: u64
+    i: u64
+    p: u64
+} out bandpair is {
+    t: 1.u64
+    for t <= 256 loop {
+        hit: bandProbe :oldLines :newLines :m :n :i :p :t
+        if hit.some then return hit
+        t = t + 1
+    }
+    we: i + 256
+    if we > m then we = m
+    wf: p + 256
+    if wf > n then wf = n
+    return (bandpair oldAt: we newAt: wf)
+}
+
 # lineDiffEdits -- edits transforming `old` into `new`, one per changed line-block, shaped for
 # renderDiff. fmt + wrap never reorder lines, so an in-order two-pointer with a bounded diagonal-band
 # resync finds correct (within the window, minimal) blocks; applyEdits(old, result) == new.
@@ -5150,62 +5229,23 @@ lineDiffEdits: function {old: StringView new: StringView} out List zfix.Edit is 
     edits: List zfix.Edit
     i: u64
     p: u64
-    for true loop {
-        if i >= m when p >= n then break
-        matched: false
-        if i < m when p < n then {
-            oi: oldLines.get :i
-            pj: newLines.get i: p
-            if oi.stringView == pj.stringView then matched = true
-        }
-        if matched then {
+    for (i < m) or (p < n) loop {
+        if (linesEqualAt :oldLines :newLines :m :n :i :p) then {
             i = i + 1
             p = p + 1
-        } else {
-            i2: m
-            p2: n
-            found: false
-            t: 1.u64
-            for t <= 256 loop {
-                if found then break
-                a: u64
-                for a <= t loop {
-                    if found then break
-                    b: t - a
-                    ii: i + a
-                    pp: p + b
-                    if ii < m when pp < n then {
-                        oa: oldLines.get i: ii
-                        pb: newLines.get i: pp
-                        if oa.stringView == pb.stringView then {
-                            i2 = ii
-                            p2 = pp
-                            found = true
-                        }
-                    }
-                    a = a + 1
-                }
-                t = t + 1
-            }
-            if found.not then {
-                we: i + 256
-                if we > m then we = m
-                wf: p + 256
-                if wf > n then wf = n
-                i2 = we
-                p2 = wf
-            }
-            lo: byteAtLine starts: oldStarts srcLen: oldLen k: i
-            hi: byteAtLine starts: oldStarts srcLen: oldLen k: i2
-            nlo: byteAtLine starts: newStarts srcLen: newLen k: p
-            nhi: byteAtLine starts: newStarts srcLen: newLen k: p2
-            repl: String
-            zfix.appendRange buf: repl src: new lo: nlo hi: nhi
-            doEmit: (hi > lo) or (nhi > nlo)
-            if doEmit then edits.append (zfix.Edit byteLo: lo byteHi: hi replacement: repl)
-            i = i2
-            p = p2
+            continue
         }
+        at: bandResync :oldLines :newLines :m :n :i :p
+        lo: byteAtLine starts: oldStarts srcLen: oldLen k: i
+        hi: byteAtLine starts: oldStarts srcLen: oldLen k: at.oldAt
+        nlo: byteAtLine starts: newStarts srcLen: newLen k: p
+        nhi: byteAtLine starts: newStarts srcLen: newLen k: at.newAt
+        repl: String
+        zfix.appendRange buf: repl src: new lo: nlo hi: nhi
+        doEmit: (hi > lo) or (nhi > nlo)
+        if doEmit then edits.append (zfix.Edit byteLo: lo byteHi: hi replacement: repl)
+        i = at.oldAt
+        p = at.newAt
     }
     return edits
 }
