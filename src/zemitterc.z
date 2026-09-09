@@ -14148,6 +14148,86 @@ interpBaseIsOwnedStructField: function {
     }
 }
 
+# interpPartTypeName -- the type name an interpolated part formats as: the
+# deep stamp (a template node side-stamped by the checker's per-mono walk
+# when the global table suppresses it), a typedef as its chain-end base,
+# numeric names normalised, and a data-block element as its element name.
+interpPartTypeName: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+} out String is {
+    di0: dataIndexElemName :ast :symtab :ctx :n
+    if di0.length > 0 then return di0
+    tn0: stampNameDeep :ast :symtab :n
+    if tn0.length == 0 when ctx.curThisTid > 0 then {
+        msid: monoStampIdOf :symtab :ctx nid: (interpPartNodeId :n)
+        if msid > 0 then tn0 = regNameOf :symtab tid: msid
+    }
+    tnTd0: typedefChaseBaseName :ast :symtab tid: (stampIdDeep :ast :symtab :n)
+    if tnTd0.length > 0 then tn0 = tnTd0.copy
+    return (numericFormatName :ast :symtab :ctx tn: tn0.stringView)
+}
+
+# appendFormattedNum -- format a number into a stack buffer and append it: the
+# buffer declaration with its formatting statement, then the append.
+appendFormattedNum: function {
+    ctx: Ctx
+    # the string being built and the temp counter value for the buffer
+    sN: u64
+    bN: u64
+    # the C declaration of the buffer and of `_b<N>_n`, its formatted length
+    stmt: String
+    ind: StringView
+    buf: String.borrow
+} is {
+    buf.append "\{ind}\{stmt};\n"
+    buf.append "\{ind}\{ctx.strC}_append(&_s\{sN}, _b\{bN}, (uint64_t)_b\{bN}_n);\n"
+}
+
+# appendStringPart -- append a String-typed part. An atom (a borrowed String
+# param is a pointer, so isBorrowStringParam's raw name reads through `->`),
+# a map-entry deref or an owned struct field appends in place; a
+# borrow-returning call result (a shared element view) is hoisted for single
+# evaluation and appended, the container owning the storage (the MapEntry
+# exemption, generalized by the declared signature); an owned call result is
+# hoisted, appended and freed.
+appendStringPart: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+    # the part's C text
+    val: StringView
+    sN: u64
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    an0: atomTextDeep :ast :n
+    isAtomP: (
+        (an0.length > 0) or
+        (interpBaseIsMapEntry :ast :symtab :n) or
+        (interpBaseIsOwnedStructField :ast :symtab :n)
+    )
+    if isAtomP then {
+        sAcc: ".".string
+        if an0.length > 0 when (isPtrVid :ctx vid: (atomVid :symtab nid: (atomNodeIdDeep :ast :n))
+        ) then {
+            sAcc = "->".string
+        }
+        buf.append "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}\{sAcc}data, \{val}\{sAcc}size);\n"
+        return
+    }
+    hN: tmp.next
+    buf.append "\{ind}\{ctx.strC}_t _h\{hN} = \{val};\n"
+    buf.append "\{ind}\{ctx.strC}_append(&_s\{sN}, _h\{hN}.data, _h\{hN}.size);\n"
+    if (hoistExprIsBorrowRooted :ast :symtab :ctx :n).not then {
+        buf.append "\{ind}\{ctx.strC}_free(&_h\{hN});\n"
+    }
+}
+
 # emit one part of a string interpolation.
 emitInterpPart: function {
     hoistFloor: 0.u64
@@ -14161,134 +14241,99 @@ emitInterpPart: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
-    match (
-        n
-    ) case stringchunk then {
+    if n.stringchunk then {
         tv: (zast.poolTextAt pool: ast.names ref: n.text).stringView
         esc: cEscape text: tv
-        l3: "\{ind}\{ctx.strC}_append(&_s\{sN}, \"\{esc}\", sizeof(\"\{esc}\")-1);\n"
-        buf.append l3
-    } else {
-        di0: dataIndexElemName :ast :symtab :ctx :n
-        tn0: stampNameDeep :ast :symtab :n
-        # the checker's per-mono instance walk side-stamps template nodes
-        # the global table suppresses
-        if tn0.length == 0 when ctx.curThisTid > 0 then {
-            msid: monoStampIdOf :symtab :ctx nid: (interpPartNodeId :n)
-            if msid > 0 then tn0 = regNameOf :symtab tid: msid
-        }
-        # a typedef part formats as its chain-end base
-        tnTd0: typedefChaseBaseName :ast :symtab tid: (stampIdDeep :ast :symtab :n)
-        if tnTd0.length > 0 then tn0 = tnTd0.copy
-        tn: numericFormatName :ast :symtab :ctx tn: tn0.stringView
-        if di0.length > 0 then tn = di0
-        val: valueExprC :ast :symtab :ctx :n
-        # a call fragment may have hoisted non-lvalue args to _ah temps:
-        # declare them before the fragment uses them (mirrors the direct
-        # print path's flush after emitCallValue)
-        flushArgHoists :ctx :ind :tmp :buf floor: hoistFloor rawFloor: hoistRawFloor
-        bN: tmp.next
-        if tn.stringView == "i128" then {
-            needsAddM :ctx uname: "prelude" memb: "fmt_128"
-            l4a: "\{ind}char _b\{bN}[48]; int _b\{bN}_n = z_fmt_i128(_b\{bN}, (__int128)\{val});\n"
-            buf.append l4a
-            l5a: "\{ind}\{ctx.strC}_append(&_s\{sN}, _b\{bN}, (uint64_t)_b\{bN}_n);\n"
-            buf.append l5a
-        } else if tn.stringView == "u128" then {
-            needsAddM :ctx uname: "prelude" memb: "fmt_128"
-            l4b: "\{ind}char _b\{bN}[48]; int _b\{bN}_n = z_fmt_u128(_b\{bN}, (unsigned __int128)\{val});\n"
-            buf.append l4b
-            l5b: "\{ind}\{ctx.strC}_append(&_s\{sN}, _b\{bN}, (uint64_t)_b\{bN}_n);\n"
-            buf.append l5b
-        } else if (isIntName name: tn.stringView) then {
-            # u64 is the one integer width whose range does not fit in
-            # int64_t, so the signed conversion specifier turns its top half
-            # negative -- u64 max printed as -1. The family answers this, not
-            # the spelling: unsigned and 64 bits wide is the case, and i128 /
-            # u128 have already taken their own branches above.
-            conv: "%ld"
-            cast: "(long)(int64_t)"
-            if (numSigned name: tn.stringView).not when (
-                (numBits name: tn.stringView) == 64
-            ) then {
-                conv = "%lu"
-                cast = "(unsigned long)(uint64_t)"
-            }
-            l4: "\{ind}char _b\{bN}[32]; int _b\{bN}_n = snprintf(_b\{bN}, 32, \"\{conv}\", \{cast}\{val});\n"
-            buf.append l4
-            l5: "\{ind}\{ctx.strC}_append(&_s\{sN}, _b\{bN}, (uint64_t)_b\{bN}_n);\n"
-            buf.append l5
-        } else if tn.stringView == "f128" then {
-            l6q: "\{ind}char _b\{bN}[64]; int _b\{bN}_n = quadmath_snprintf(_b\{bN}, 64, \"%Qg\", \{val});\n"
-            buf.append l6q
-            l7q: "\{ind}\{ctx.strC}_append(&_s\{sN}, _b\{bN}, (uint64_t)_b\{bN}_n);\n"
-            buf.append l7q
-        } else if (isFloatName name: tn.stringView) then {
-            l6: "\{ind}char _b\{bN}[64]; int _b\{bN}_n = snprintf(_b\{bN}, 64, \"%g\", (double)\{val});\n"
-            buf.append l6
-            l7: "\{ind}\{ctx.strC}_append(&_s\{sN}, _b\{bN}, (uint64_t)_b\{bN}_n);\n"
-            buf.append l7
-        } else if tn.stringView == "StringView" then {
-            # by-value operand today; a pointer-passed SV would need the
-            # String leg's accessor treatment below
-            lsv: "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}.data, \{val}.size);\n"
-            buf.append lsv
-        } else if tn.stringView == "String" then {
-            isAtomP: false
-            an0: atomTextDeep :ast :n
-            an0v: atomVid :symtab nid: (atomNodeIdDeep :ast :n)
-            if an0.length > 0 then isAtomP = true
-            if (interpBaseIsMapEntry :ast :symtab :n) then isAtomP = true
-            if (interpBaseIsOwnedStructField :ast :symtab :n) then isAtomP = true
-            if isAtomP then {
-                # a borrowed String param is a pointer (isBorrowStringParam
-                # registers the raw name); compound bases (map-entry deref,
-                # owned struct field) have an0 == "" and keep the value form
-                sAcc: ".".string
-                if an0.length > 0 when (isPtrVid :ctx vid: an0v) then sAcc = "->".string
-                lss: "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}\{sAcc}data, \{val}\{sAcc}size);\n"
-                buf.append lss
-            } else if (hoistExprIsBorrowRooted :ast :symtab :ctx :n) then {
-                # borrow-returning call result (a shared element view): hoist
-                # for single evaluation and append -- the container owns the
-                # storage, so no free (the MapEntry exemption, generalized by
-                # the declared signature).
-                hN: tmp.next
-                lh0: "\{ind}\{ctx.strC}_t _h\{hN} = \{val};\n"
-                buf.append lh0
-                lh1: "\{ind}\{ctx.strC}_append(&_s\{sN}, _h\{hN}.data, _h\{hN}.size);\n"
-                buf.append lh1
-            } else {
-                # owned call result: hoist, append, free
-                hN: tmp.next
-                lh0: "\{ind}\{ctx.strC}_t _h\{hN} = \{val};\n"
-                buf.append lh0
-                lh1: "\{ind}\{ctx.strC}_append(&_s\{sN}, _h\{hN}.data, _h\{hN}.size);\n"
-                buf.append lh1
-                lh2: "\{ind}\{ctx.strC}_free(&_h\{hN});\n"
-                buf.append lh2
-            }
-        } else {
-            pStrId: stampIdOf :symtab nid: (interpPartNodeId :n)
-            if (originIsTid :symtab tid: pStrId originTid: (ctx.origins.get i: ogStr)) then {
-                lstri: "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}.data, \{val}.len);\n"
-                buf.append lstri
-            } else {
-                (emitFail
-                    :ctx
-                    what: "unhandled interp part type \{tn}"
-                    line: (ztypecheck.nodeLine :n)
-                )
-                l8: "\{ind}/* zemitterc: unhandled interp part type \{tn} */\n"
-                buf.append l8
-            }
-        }
-        # the part's value has been appended, so a `.take` argument inside it
-        # has been consumed: zero its source here, as the statement paths do.
-        # Without this the callee frees the moved value and the caller frees it
-        # again at scope end.
-        emitValueTakeInvalidations :ast :symtab :ctx :n :ind :buf
+        buf.append "\{ind}\{ctx.strC}_append(&_s\{sN}, \"\{esc}\", sizeof(\"\{esc}\")-1);\n"
+        return
     }
+    tn: interpPartTypeName :ast :symtab :ctx :n
+    val: valueExprC :ast :symtab :ctx :n
+    # a call fragment may have hoisted non-lvalue args to _ah temps:
+    # declare them before the fragment uses them (mirrors the direct
+    # print path's flush after emitCallValue)
+    flushArgHoists :ctx :ind :tmp :buf floor: hoistFloor rawFloor: hoistRawFloor
+    bN: tmp.next
+    tns: tn.stringView
+    if tns == "i128" then {
+        needsAddM :ctx uname: "prelude" memb: "fmt_128"
+        (appendFormattedNum
+            :ctx
+            :sN
+            :bN
+            stmt: "char _b\{bN}[48]; int _b\{bN}_n = z_fmt_i128(_b\{bN}, (__int128)\{val})"
+            :ind
+            :buf
+        )
+    } else if tns == "u128" then {
+        needsAddM :ctx uname: "prelude" memb: "fmt_128"
+        (appendFormattedNum
+            :ctx
+            :sN
+            :bN
+            stmt: "char _b\{bN}[48]; int _b\{bN}_n = z_fmt_u128(_b\{bN}, (unsigned __int128)\{val})"
+            :ind
+            :buf
+        )
+    } else if (isIntName name: tns) then {
+        # u64 is the one integer width whose range does not fit in
+        # int64_t, so the signed conversion specifier turns its top half
+        # negative -- u64 max printed as -1. The family answers this, not
+        # the spelling: unsigned and 64 bits wide is the case, and i128 /
+        # u128 have already taken their own branches above.
+        conv: "%ld"
+        cast: "(long)(int64_t)"
+        if (numSigned name: tns).not when (numBits name: tns) == 64 then {
+            conv = "%lu"
+            cast = "(unsigned long)(uint64_t)"
+        }
+        (appendFormattedNum
+            :ctx
+            :sN
+            :bN
+            stmt: "char _b\{bN}[32]; int _b\{bN}_n = snprintf(_b\{bN}, 32, \"\{conv}\", \{cast}\{val})"
+            :ind
+            :buf
+        )
+    } else if tns == "f128" then {
+        (appendFormattedNum
+            :ctx
+            :sN
+            :bN
+            stmt: "char _b\{bN}[64]; int _b\{bN}_n = quadmath_snprintf(_b\{bN}, 64, \"%Qg\", \{val})"
+            :ind
+            :buf
+        )
+    } else if (isFloatName name: tns) then {
+        (appendFormattedNum
+            :ctx
+            :sN
+            :bN
+            stmt: "char _b\{bN}[64]; int _b\{bN}_n = snprintf(_b\{bN}, 64, \"%g\", (double)\{val})"
+            :ind
+            :buf
+        )
+    } else if tns == "StringView" then {
+        # by-value operand today; a pointer-passed SV would need the
+        # String leg's accessor treatment
+        buf.append "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}.data, \{val}.size);\n"
+    } else if tns == "String" then {
+        appendStringPart :ast :symtab :ctx :n val: val.stringView :sN :ind :tmp :buf
+    } else if (originIsTid
+        :symtab
+        tid: (stampIdOf :symtab nid: (interpPartNodeId :n))
+        originTid: (ctx.origins.get i: ogStr)
+    ) then {
+        buf.append "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}.data, \{val}.len);\n"
+    } else {
+        emitFail :ctx what: "unhandled interp part type \{tn}" line: (ztypecheck.nodeLine :n)
+        buf.append "\{ind}/* zemitterc: unhandled interp part type \{tn} */\n"
+    }
+    # the part's value has been appended, so a `.take` argument inside it
+    # has been consumed: zero its source here, as the statement paths do.
+    # Without this the callee frees the moved value and the caller frees it
+    # again at scope end.
+    emitValueTakeInvalidations :ast :symtab :ctx :n :ind :buf
 }
 
 # interpPartNodeId -- the nodeid of expression-ish shapes used by interp parts.
@@ -20185,6 +20230,25 @@ chainCondFact: function {
     recvs.append rv
 }
 
+# wrappedInOneParen -- whether the text is one parenthesised group: it opens
+# with `(` and that paren closes only at the very end.
+wrappedInOneParen: function {cond: StringView} out bool is {
+    n: cond.length
+    if ((cond.byteAt 0.u64).or d: 0) != 40 then return false
+    depth: u64
+    i: u64
+    for i < n loop {
+        bo: (cond.byteAt i).or d: 0
+        if bo == 40 then depth = depth + 1
+        if bo == 41 then {
+            depth = depth - 1
+            if depth == 0 when i < (n - 1) then return false
+        }
+        i = i + 1
+    }
+    return depth == 0
+}
+
 # emit one clause of an if-expression.
 # condInParens -- a C `if`/`while` condition, wrapped in parens exactly once.
 # An emitted expression is usually already fully parenthesized (`(a == b)`);
@@ -20195,35 +20259,11 @@ chainCondFact: function {
 # leaving a block where C wants an expression, so it always takes the wrap.
 condInParens: function {cond: StringView} out String is {
     n: cond.length
-    wrapped: false
     isStmtExpr: cond.startsWith "({"
-    if n >= 2 when (cond.contains "\"").not when isStmtExpr.not then {
-        b0: cond.byteAt 0.u64
-        match (
-            b0
-        ) case some then {
-            if b0 == 40 then {
-                depth: u64
-                i: u64
-                bal: true
-                for i < n loop {
-                    bo: cond.byteAt i
-                    match (
-                        bo
-                    ) case some then {
-                        if bo == 40 then depth = depth + 1
-                        if bo == 41 then {
-                            depth = depth - 1
-                            if depth == 0 when i < (n - 1) then bal = false
-                        }
-                    } case none then null
-                    i = i + 1
-                }
-                if bal when depth == 0 then wrapped = true
-            }
-        } case none then null
+    if n >= 2 when (cond.contains "\"").not when isStmtExpr.not when (wrappedInOneParen :cond
+    ) then {
+        return cond.string
     }
-    if wrapped then return cond.string
     return "(\{cond})"
 }
 
@@ -23556,6 +23596,104 @@ isGenericTemplateUnitOp: function {ast: Ast.view opId: u32} out bool is {
     return false
 }
 
+# unitTemplateTid -- the type id of a unit template: the program root's
+# declaration of its name, else the stamp on its unit node; 0 when neither
+# answers.
+unitTemplateTid: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    templateName: StringView
+    templateUnitOpId: u32
+} out u64 is {
+    tgo: (ztypecheck.declTypeIdOf
+        st: symtab
+        declId: (symtab.typing.declFindChild
+            parentDeclId: symtab.typing.programRoot
+            nameId: (zast.poolFind pool: ast.names text: templateName)
+        )
+    )
+    if tgo.isZero.not then return tgo
+    tuo: ast.nodes.get i: templateUnitOpId.u64
+    if tuo.unitdef.not then return 0
+    return (stampIdOf :symtab nid: tuo.nodeid.u64)
+}
+
+# emitUnitMonoFn -- one function of a unit mono: its signature as a
+# declaration, or its body with the mono as the enclosing type.
+emitUnitMonoFn: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    # the mono and the function
+    t: u64
+    cfid: ztypes.tid
+    # the function's definition node
+    op: astnode.view
+    declOnly: bool
+    buf: String.borrow
+} is {
+    fnm: regNameOf :symtab tid: cfid
+    sig: fnSignature :ast :symtab :ctx name: fnm.stringView fid: cfid :op
+    if declOnly then {
+        buf.append "\{sig};\n"
+        return
+    }
+    buf.append "\{sig} {\n"
+    resetFnEmitState :ctx
+    registerReftypeParams :ast :symtab :ctx fid: cfid :op
+    ctx.curThisTid = ztypes.tid.create from: t
+    emitFnBody :ast :symtab :ctx :op fid: cfid :buf
+    ctx.curThisTid = ztypes.tid.create from: 0
+    buf.append "}\n\n"
+}
+
+# emitUnitMonoMembers -- every body-carrying function the template declares,
+# as the mono `t` substituted it.
+emitUnitMonoMembers: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    # the template's body items
+    bodyIds: zast.kidspan
+    t: u64
+    declOnly: bool
+    buf: String.borrow
+} is {
+    vx: u64
+    for vx < bodyIds.count.u64 loop {
+        fm: zast.kidAt kids: ast.kids span: bodyIds i: vx
+        vx = vx + 1
+        fm9Node: ast.nodes.get i: fm.u64
+        if fm9Node.namedoperation when (ztypecheck.isFunctionDefWithBody
+            o: (ast.nodes.get i: fm9Node.operation.u64)
+        ) then {
+            mname: zast.nameTextAt :ast ref: fm9Node.name
+            cfo: (symtab.typing.declChildOf
+                pool: ast.names
+                parentTypeId: (ztypes.tid.create from: t.u64)
+                name: mname.stringView
+            )
+            if cfo.some when (
+                (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: cfo.u64)) ==
+                (
+                    ztypes.ztypetype.functionType
+                )
+            ) then {
+                (emitUnitMonoFn
+                    :ast
+                    :symtab
+                    :ctx
+                    :t
+                    cfid: (ztypes.tid.create from: cfo.u64)
+                    op: (ast.nodes.get i: fm9Node.operation.u64)
+                    :declOnly
+                    :buf
+                )
+            }
+        }
+    }
+}
+
 # emitUnitMonoInstances -- emit the monomorphized methods of a generic file unit
 # (genmath instantiated as intmath: i64, i32math: i32). For each registry UNIT
 # type whose generic origin is this template, emit one C function per template
@@ -23572,106 +23710,16 @@ emitUnitMonoInstances: function {
     buf: String.borrow
 } is {
     bodyIds: zast.unitBodyIdsAt :ast unitId: templateUnitOpId
-    tplId: u64
-    tk: templateName
-    tgo: (ztypecheck.declTypeIdOf
-        st: symtab
-        declId: (symtab.typing.declFindChild
-            parentDeclId: symtab.typing.programRoot
-            nameId: (zast.poolFind pool: ast.names text: tk)
-        )
-    )
-    if tgo.isZero.not then tplId = tgo
-    if tplId == 0 then {
-        sgo: u64
-        rid: u32
-        {
-            tuo: ast.nodes.get i: templateUnitOpId.u64
-            if tuo.unitdef then rid = tuo.nodeid
-        }
-        if rid > 0 then sgo = stampIdOf :symtab nid: rid.u64
-        if sgo > 0 then tplId = sgo
-    }
+    tplId: unitTemplateTid :ast :symtab :templateName :templateUnitOpId
     if tplId == 0 then return
     last: symtab.reg.nextTypeId
     t: u64
     for t < last loop {
-        isMono: false
-        if (
-            (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: t.u64)) ==
-            ztypes.ztypetype.unitType
-        ) then {
-            go9opt: symtab.reg.genericOriginOf tid: (ztypes.tid.create from: t.u64)
-            if go9opt.u64 == tplId when go9opt > 0 then isMono = true
-        }
-        if isMono then {
-            {
-                vx279: u64
-                for vx279 < bodyIds.count.u64 loop {
-                    fm: zast.kidAt kids: ast.kids span: bodyIds i: vx279
-                    vx279 = vx279 + 1
-                    fm9Node: ast.nodes.get i: fm.u64
-                    if fm9Node.namedoperation when (ztypecheck.isFunctionDefWithBody
-                        o: (ast.nodes.get i: fm9Node.operation.u64)
-                    ) then {
-                        mname: zast.nameTextAt :ast ref: fm9Node.name
-                        cfo: (symtab.typing.declChildOf
-                            pool: ast.names
-                            parentTypeId: (ztypes.tid.create from: t.u64)
-                            name: mname.stringView
-                        )
-                        match (
-                            cfo
-                        ) case some then {
-                            cfid: cfo
-                            if (
-                                (symtab.reg.typetypeOf
-                                    typeId: (ztypes.tid.create from: cfid.u64)
-                                ) ==
-                                ztypes.ztypetype.functionType
-                            ) then {
-                                fnm: (regNameOf
-                                    :symtab
-                                    tid: (ztypes.tid.create from: cfid.u64)
-                                )
-                                sig: (fnSignature
-                                    :ast
-                                    :symtab
-                                    :ctx
-                                    name: fnm.stringView
-                                    fid: (ztypes.tid.create from: cfid.u64)
-                                    op: (ast.nodes.get i: fm9Node.operation.u64)
-                                )
-                                if declOnly then {
-                                    ld: "\{sig};\n"
-                                    buf.append ld
-                                } else {
-                                    lo: "\{sig} {\n"
-                                    buf.append lo
-                                    resetFnEmitState :ctx
-                                    (registerReftypeParams
-                                        :ast
-                                        :symtab
-                                        :ctx
-                                        fid: (ztypes.tid.create from: cfid.u64)
-                                        op: (ast.nodes.get i: fm9Node.operation.u64)
-                                    )
-                                    ctx.curThisTid = ztypes.tid.create from: t
-                                    (emitFnBody
-                                        :ast
-                                        :symtab
-                                        :ctx
-                                        op: (ast.nodes.get i: fm9Node.operation.u64)
-                                        fid: (ztypes.tid.create from: cfid.u64)
-                                        :buf
-                                    )
-                                    ctx.curThisTid = ztypes.tid.create from: 0
-                                    buf.append "}\n\n"
-                                }
-                            }
-                        } case none then null
-                    }
-                }
+        tt: ztypes.tid.create from: t.u64
+        if (symtab.reg.typetypeOf typeId: tt) == ztypes.ztypetype.unitType then {
+            go9opt: symtab.reg.genericOriginOf tid: tt
+            if go9opt > 0 when go9opt.u64 == tplId then {
+                emitUnitMonoMembers :ast :symtab :ctx :bodyIds :t :declOnly :buf
             }
         }
         t = t + 1
@@ -24276,6 +24324,78 @@ emitReturnCleanup: function {
     }
 }
 
+# takeParamDestroyTid -- the type whose destructor an owned `.take` parameter
+# owes at function exit, zero when it owes none. Owned .take Set/Map params
+# are skipped: declared by value, but a Set/Map _destroy frees the container
+# as a heap pointer (would need &name); none exist in the self-host. A
+# collection typedef destroys as its chased mono; a type with no destructor
+# of its own may still have a canonical one that has.
+takeParamDestroyTid: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    ppid: u64
+} out ztypes.tid is {
+    pt: ztypes.tid.create from: ppid.u64
+    if (isHeapPtrCollection :symtab :ctx tid: pt) then return ztypes.tid
+    puse: chaseColMono :symtab :ctx tid: pt
+    if (symtab.reg.needsDestructor typeId: puse).not then {
+        ptnm: regNameOf :symtab tid: pt
+        prbn: canonTypeId :ast :symtab :ctx tid: pt name: ptnm.stringView
+        if prbn > 0 then puse = ztypes.tid.create from: prbn.u64
+    }
+    if (symtab.reg.needsDestructor typeId: puse).not then return ztypes.tid
+    return puse
+}
+
+# oweTakeParamFrees -- every owned `.take` parameter is freed at function
+# exit: a String by its free, a destructor-bearing value by its destructor.
+oweTakeParamFrees: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    # the function definition
+    op: zast.functionrow.view
+    fid: ztypes.tid
+    tmp: TmpCtr
+} is {
+    pids: ListVal u64
+    pids9Nm: ListVal u64
+    recFieldIds :symtab tid: fid ids: pids nameIds: pids9Nm
+    pj: u64
+    pn: pids9Nm.length
+    for pj < pn loop {
+        ppnB: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: (pids9Nm.get i: pj))
+        ppn: ppnB.stringView
+        ppid: pids.get i: pj
+        pj = pj + 1
+        if (symtab.typing.declOwnershipIs
+            pool: ast.names
+            parentTypeId: fid
+            name: ppn
+            own: ztypes.zparamownership.takeMode
+        ) then {
+            pmnB: (paramVidIn
+                :ast
+                :symtab
+                params: op.parameters
+                nameId: (zast.nameid.create from: (pids9Nm.get i: (pj - 1)))
+            )
+            pmn: varCName :ctx vid: pmnB name: ppn
+            if ppid == ctx.strTid then {
+                tmp.oweFree name: pmn.copy vid: pmnB
+            } else {
+                puse: takeParamDestroyTid :ast :symtab :ctx :ppid
+                if puse.isZero.not then {
+                    pcb: ctxCname :ctx tid: puse
+                    pdf: "    \{pcb}_destroy(&\{pmn});\n"
+                    tmp.oweList stmt: pdf.copy name: pmn.copy vid: pmnB
+                }
+            }
+        }
+    }
+}
+
 # emit a function's body.
 emitFnBody: function {
     ast: Ast.view
@@ -24285,101 +24405,34 @@ emitFnBody: function {
     fid: ztypes.tid
     buf: String.borrow
 } is {
-    {
-        rbt: fnReturnTidOf :symtab tid: fid
-        if rbt == 0 then rbt = fnReturnTypeId :ast :symtab :op
-        ctx.refBorrowRet = (fnReturnsRefBorrow
-            :ast
-            :symtab
-            :ctx
-            :fid
-            retTid: (ztypes.tid.create from: rbt.u64)
-        )
+    rbt: fnReturnTidOf :symtab tid: fid
+    if rbt == 0 then rbt = fnReturnTypeId :ast :symtab :op
+    ctx.refBorrowRet = (fnReturnsRefBorrow
+        :ast
+        :symtab
+        :ctx
+        :fid
+        retTid: (ztypes.tid.create from: rbt.u64)
+    )
+    if op.functiondef.not then return
+    tmp: (TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree)
+    oweTakeParamFrees :ast :symtab :ctx :op :fid :tmp
+    endsRet: false
+    if op.body > 0 then {
+        opb: ast.nodes.get i: op.body.u64
+        rbnId: (ztypecheck.fnReturnBaseNameIdOf :ast op: (ast.nodes.get i: op.nodeid.u64))
+        if rbnId.isZero.not when ctx.genActive.not then ctx.tailRetActive = true
+        emitBodyNode :ast :symtab :ctx n: opb ind: "    " :tmp :buf
+        ctx.tailRetActive = false
+        endsRet = blockDiverges :ast :symtab :ctx n: opb
     }
-    if op.functiondef then {
-        tmp: (TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree)
-        pids: ListVal u64
-        pids9Nm: ListVal u64
-        recFieldIds :symtab tid: fid ids: pids nameIds: pids9Nm
-        pj: u64
-        pn: pids9Nm.length
-        for pj < pn loop {
-            ppnB: (zast.poolTextAt
-                pool: ast.names
-                ref: (zast.nameid.create from: (pids9Nm.get i: pj))
-            )
-            ppn: ppnB.stringView
-            ppid: pids.get i: pj
-            if (symtab.typing.declOwnershipIs
-                pool: ast.names
-                parentTypeId: fid
-                name: ppn
-                own: ztypes.zparamownership.takeMode
-            ) then {
-                ptnm: regNameOf :symtab tid: (ztypes.tid.create from: ppid.u64)
-                pmnB: (paramVidIn
-                    :ast
-                    :symtab
-                    params: op.parameters
-                    nameId: (zast.nameid.create from: (pids9Nm.get i: pj))
-                )
-                pmn: varCName :ctx vid: pmnB name: ppn
-                if ppid == ctx.strTid then {
-                    tmp.oweFree name: pmn.copy vid: pmnB
-                } else {
-                    # owned .take Set/Map params are skipped: declared by value, but a
-                    # Set/Map _destroy frees the container as a heap pointer (would need
-                    # &name); none exist in the self-host.
-                    if (
-                        (isHeapPtrCollection
-                            :symtab
-                            :ctx
-                            tid: (ztypes.tid.create from: ppid.u64)
-                        ).not
-                    ) then {
-                        pcm: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: ppid.u64)
-                        puse: pcm
-                        if (symtab.reg.needsDestructor typeId: pcm).not then {
-                            prbn: (canonTypeId
-                                :ast
-                                :symtab
-                                :ctx
-                                tid: (ztypes.tid.create from: ppid.u64)
-                                name: ptnm.stringView
-                            )
-                            if prbn > 0 then puse = ztypes.tid.create from: prbn.u64
-                        }
-                        if (symtab.reg.needsDestructor typeId: puse) then {
-                            pcb: ctxCname :ctx tid: (ztypes.tid.create from: puse.u64)
-                            pdf: "    \{pcb}_destroy(&\{pmn});\n"
-                            tmp.oweList stmt: pdf.copy name: pmn.copy vid: pmnB
-                        }
-                    }
-                }
-            }
-            pj = pj + 1
-        }
-        endsRet: false
-        if op.body > 0 then {
-            opb: ast.nodes.get i: op.body.u64
-            rbnId: (ztypecheck.fnReturnBaseNameIdOf :ast op: (ast.nodes.get i: op.nodeid.u64))
-            if rbnId.isZero.not when ctx.genActive.not then ctx.tailRetActive = true
-            emitBodyNode :ast :symtab :ctx n: opb ind: "    " :tmp :buf
-            ctx.tailRetActive = false
-            endsRet = blockDiverges :ast :symtab :ctx n: opb
-        }
-        # a body that diverges on every path never reaches this flush; the
-        # return/break cleanups already freed the same locals on those paths
-        if endsRet.not then {
-            fiter: tmp.frees.iterate
-            for fv: fiter loop {
-                lf: "    \{ctx.strC}_free(&\{fv.name});\n"
-                buf.append lf
-            }
-            lfi: tmp.listFrees.iterate
-            for lfs: lfi loop buf.append lfs.stmt
-        }
-    }
+    # a body that diverges on every path never reaches this flush; the
+    # return/break cleanups already freed the same locals on those paths
+    if endsRet then return
+    fiter: tmp.frees.iterate
+    for fv: fiter loop buf.append "    \{ctx.strC}_free(&\{fv.name});\n"
+    lfi: tmp.listFrees.iterate
+    for lfs: lfi loop buf.append lfs.stmt
 }
 
 # collectUnitLiterals -- pool the plain literals of every main-unit
@@ -27567,6 +27620,26 @@ ioFrag: function {
     buf.append f
 }
 
+# isIoUnitClass -- whether a type is a class (not a mono) defined by the io,
+# os or cli unit.
+isIoUnitClass: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid} out bool is {
+    if (symtab.reg.typetypeOf typeId: tid) != ztypes.ztypetype.classType then return false
+    if (originTidOf :symtab :tid).isZero.not then return false
+    duId: defUnitIdOf :ctx :tid
+    if duId == 0 then return false
+    return (duId == ctx.ioUnitDecl) or (duId == ctx.osUnitDecl) or (duId == ctx.cliUnitDecl)
+}
+
+# ioClassIsLive -- whether an io-unit class needs its conformance impls: File
+# when the program touches it, any other when its type is used.
+ioClassIsLive: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid
+} out bool is {
+    cn: regNameOf :symtab :tid
+    if cn.stringView == "File" then return (ioFileLive :ast :symtab :ctx)
+    return (typeIsUsed :ctx :tid)
+}
+
 # emitIoFileConformance -- protocol conformance helpers for every reachable io
 # class (File -> Reader/Writer/Closer/Seeker; BufWriter -> Writer; BufReader ->
 # Reader), emitted after the io natives the wrappers forward to.
@@ -27576,47 +27649,14 @@ emitIoFileConformance: function {
     ctx: Ctx
     buf: String.borrow
 } is {
-    ioUid: ctx.ioUnitDecl
-    osUid: ctx.osUnitDecl
-    cliUid: ctx.cliUnitDecl
     last: symtab.reg.nextTypeId
     ti: 1.u64
     for ti < last loop {
-        if (
-            (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: ti.u64)) ==
-            ztypes.ztypetype.classType
-        ) then {
-            cmo: originTidOf :symtab tid: (ztypes.tid.create from: ti.u64)
-            if cmo.isZero then {
-                duId: defUnitIdOf :ctx tid: (ztypes.tid.create from: ti.u64)
-                isIoC: false
-                if duId > 0 then {
-                    if duId == ioUid then isIoC = true
-                    if duId == osUid then isIoC = true
-                    if duId == cliUid then isIoC = true
-                }
-                if isIoC then {
-                    cn: regNameOf :symtab tid: (ztypes.tid.create from: ti.u64)
-                    okEmit: false
-                    if cn.stringView == "File" then {
-                        okEmit = ioFileLive :ast :symtab :ctx
-                    } else {
-                        okEmit = typeIsUsed :ctx tid: (ztypes.tid.create from: ti.u64)
-                    }
-                    if okEmit then {
-                        (emitConformanceImplsForType
-                            :ast
-                            :symtab
-                            :ctx
-                            implTid: (ztypes.tid.create from: ti.u64)
-                            isFacet: false
-                            :buf
-                        )
-                    }
-                }
-            }
-        }
+        tid: ztypes.tid.create from: ti.u64
         ti = ti + 1
+        if (isIoUnitClass :symtab :ctx :tid) when (ioClassIsLive :ast :symtab :ctx :tid) then {
+            emitConformanceImplsForType :ast :symtab :ctx implTid: tid isFacet: false :buf
+        }
     }
 }
 
@@ -33366,6 +33406,59 @@ methodReturnC: function {
     return ret
 }
 
+# classParamByPointer -- whether a CLASS method's non-receiver parameter is
+# passed by pointer: a non-TAKE class param borrows the container (LOCK/BORROW,
+# or the borrow-default whose ownership a cross-unit shell records as "none");
+# a `.take` (owning) class param stays by value, since a create/meta_create
+# moves it into the struct. A borrowed String, a marked valtype reference, a
+# List, a Set or a Map are pointers too.
+classParamByPointer: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    mid: ztypes.tid
+    pname: StringView
+    pid: u64
+} out bool is {
+    pt: ztypes.tid.create from: pid.u64
+    take: (symtab.typing.declOwnershipIs
+        pool: ast.names
+        parentTypeId: mid
+        name: pname
+        own: ztypes.zparamownership.takeMode
+    )
+    if take.not when (isReftypeParam :ast :symtab :ctx tid: pt) then return true
+    if (isBorrowStringParam :ast :symtab :ctx fid: mid :pname pid: pt) then return true
+    if (markedValtypeRefParam :ast :symtab fid: mid :pname :pid) then return true
+    if (isListPtrParam :ast :symtab :ctx fid: mid :pname tid: pt) then return true
+    return (isSetMapPtrParam :ast :symtab :ctx fid: mid :pname tid: pt)
+}
+
+# pointerParamC -- a parameter passed by pointer: its C type gains the `*`
+# (`const` for a `.view`), and its vid is registered so the body reads it
+# through `->`.
+pointerParamC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    mid: ztypes.tid
+    pname: StringView
+    # the parameter's pool index, which names its vid
+    nameId: u64
+    # the by-value C type
+    pt: StringView
+    op: astnode.view
+} out String is {
+    ctx.ptrVids.append (paramVidByNameId :ast :symtab :op nameId: (zast.nameid.create from: nameId))
+    if (symtab.typing.declOwnershipIs
+        pool: ast.names
+        parentTypeId: mid
+        name: pname
+        own: ztypes.zparamownership.viewMode
+    ) then return "const \{pt}*"
+    return "\{pt}*"
+}
+
 # emitMethodParams -- one C parameter per declared field, in declaration order:
 # the receiver by pointer for a class, then each parameter passed the way its
 # declaration says it is taken. Appends to `params`.
@@ -33382,6 +33475,14 @@ emitMethodParams: function {
     op: astnode.view
     params: String.borrow
 } is {
+    # The receiver is identified by its PARAMETER name -- `this` for the
+    # `:this` shorthand, or the spelled name for `{a: this}` -- exactly as
+    # the call site names it. Keying on the parameter's TYPE instead would
+    # also catch a same-typed sibling (`add: function {a: this b: point}`
+    # takes two points), which classes hid by making both pointers anyway.
+    recvNm: "this".string
+    tpnR: zast.poolTextAt pool: ast.names ref: (symtab.reg.thisParamNameIdOf tid: mid)
+    if tpnR.length > 0 then recvNm = tpnR.copy
     pi: u64
     pn: pnames.length
     for pi < pn loop {
@@ -33395,104 +33496,30 @@ emitMethodParams: function {
             thisTid: (ztypes.tid.create from: thisTid.u64)
         )
         if pt.length == 0 then pt = "int64_t".string
-        # The receiver is identified by its PARAMETER name -- `this` for the
-        # `:this` shorthand, or the spelled name for `{a: this}` -- exactly as
-        # the call site names it. Keying on the parameter's TYPE instead would
-        # also catch a same-typed sibling (`add: function {a: this b: point}`
-        # takes two points), which classes hid by making both pointers anyway.
-        recvNm: "this".string
-        {
-            tpnR: (zast.poolTextAt
-                pool: ast.names
-                ref: (symtab.reg.thisParamNameIdOf tid: mid)
-            )
-            if tpnR.length > 0 then recvNm = tpnR.copy
-        }
-        isRecv: false
-        if pname.stringView == recvNm.stringView then isRecv = true
         # The receiver is a reference in BOTH families: a record method acts on
         # the caller's instance, not on a copy of it. The rest of the pointer
         # rule still applies to class methods only.
-        if isRecv then {
-            pt = "\{pt}*"
-            if (symtab.typing.declOwnershipIs
-                pool: ast.names
-                parentTypeId: mid
-                name: pname.stringView
-                own: ztypes.zparamownership.viewMode
-            ) then pt = "const \{pt}"
-            pvd: (paramVidByNameId
+        isRecv: pname.stringView == recvNm.stringView
+        byPtr: isRecv
+        if isRecv.not when encIsClass when (classParamByPointer
+            :ast
+            :symtab
+            :ctx
+            :mid
+            pname: pname.stringView
+            :pid
+        ) then byPtr = true
+        if byPtr then {
+            pt = (pointerParamC
                 :ast
                 :symtab
+                :ctx
+                :mid
+                pname: pname.stringView
+                nameId: (pidsNm.get i: pi)
+                pt: pt.stringView
                 :op
-                nameId: (zast.nameid.create from: (pidsNm.get i: pi))
             )
-            ctx.ptrVids.append pvd
-        } else {
-            if encIsClass then {
-                # a non-TAKE class param borrows the container (LOCK/BORROW, or the
-                # borrow-default whose ownership a cross-unit shell records as "none")
-                # -> pass by pointer. A `.take` (owning) class param stays by value:
-                # a create/meta_create moves it into the struct.
-                giveptr: false
-                if (
-                    (symtab.typing.declOwnershipIs
-                        pool: ast.names
-                        parentTypeId: mid
-                        name: pname.stringView
-                        own: ztypes.zparamownership.takeMode
-                    ).not
-                ) when (isReftypeParam :ast :symtab :ctx tid: (ztypes.tid.create from: pid.u64)
-                ) then giveptr = true
-                ibs: (isBorrowStringParam
-                    :ast
-                    :symtab
-                    :ctx
-                    fid: mid
-                    pname: pname.stringView
-                    pid: (ztypes.tid.create from: pid.u64)
-                )
-                if ibs then giveptr = true
-                if (markedValtypeRefParam
-                    :ast
-                    :symtab
-                    fid: mid
-                    pname: pname.stringView
-                    :pid
-                ) then giveptr = true
-                if (isListPtrParam
-                    :ast
-                    :symtab
-                    :ctx
-                    fid: mid
-                    pname: pname.stringView
-                    tid: (ztypes.tid.create from: pid.u64)
-                ) then giveptr = true
-                if (isSetMapPtrParam
-                    :ast
-                    :symtab
-                    :ctx
-                    fid: mid
-                    pname: pname.stringView
-                    tid: (ztypes.tid.create from: pid.u64)
-                ) then giveptr = true
-                if giveptr then {
-                    pt = "\{pt}*"
-                    if (symtab.typing.declOwnershipIs
-                        pool: ast.names
-                        parentTypeId: mid
-                        name: pname.stringView
-                        own: ztypes.zparamownership.viewMode
-                    ) then pt = "const \{pt}"
-                    pvd9b: (paramVidByNameId
-                        :ast
-                        :symtab
-                        :op
-                        nameId: (zast.nameid.create from: (pidsNm.get i: pi))
-                    )
-                    ctx.ptrVids.append pvd9b
-                }
-            }
         }
         if pi > 0 then params.append ", "
         params.append pt
