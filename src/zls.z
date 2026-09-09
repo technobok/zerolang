@@ -4784,6 +4784,88 @@ completionItem: function {label: StringView kind: u8 detail: StringView} out Val
     return (Value.object it)
 }
 
+# backOverBlanks -- the position of the first byte of the run of spaces and
+# tabs that ends at `pos`; `pos` itself when there is none.
+backOverBlanks: function {ltv: StringView pos: u64} out u64 is {
+    p: pos
+    for p > 0 loop {
+        b: (ltv.byteAt i: p - 1).or d: 0
+        if b != 32 when b != 9 then break
+        p = p - 1
+    }
+    return p
+}
+
+# backOverIdent -- the position of the first byte of the identifier that ends
+# at `pos`; `pos` itself when no identifier byte precedes it.
+backOverIdent: function {ltv: StringView pos: u64} out u64 is {
+    p: pos
+    for p > 0 loop {
+        b: (ltv.byteAt i: p - 1).or d: 0
+        if (isIdentByte :b).not then break
+        p = p - 1
+    }
+    return p
+}
+
+# caseWordBefore -- whether the word before the blank run ending at `ps` is
+# `case`: the cursor sits where an arm name goes.
+caseWordBefore: function {ltv: StringView ps: u64} out bool is {
+    ws: backOverBlanks :ltv pos: ps
+    if ws == ps then return false
+    wb: backOverIdent :ltv pos: ws
+    return (ltv.substring from: wb to: ws) == "case"
+}
+
+# caseClauseIds -- a match's subject node index, with its clause ids appended
+# to `dst`; 0 when the node is not a caseexpr.
+caseClauseIds: function {prog: Ast.view caseId: u64 dst: ListVal u64} out u32 is {
+    cnode: prog.nodes.get i: caseId.u64
+    if cnode.caseexpr.not then return 0
+    clx: u64
+    for clx < cnode.clauses.count.u64 loop {
+        cl: zast.kidAt kids: prog.kids span: cnode.clauses i: clx
+        clx = clx + 1
+        dst.append cl.u64
+    }
+    return cnode.subject
+}
+
+# usedArmNames -- the arm names the clauses already cover, by the arm each
+# clause matches: a bare name or a label.
+usedArmNames: function {prog: Ast.view clauseIds: (ListVal u64).view dst: List String} is {
+    with cit: clauseIds.iterate do for clId: cit loop {
+        maIdx: u32
+        {
+            clNode: prog.nodes.get i: clId.u64
+            if clNode.caseclause then maIdx = clNode.matcharm
+        }
+        if maIdx == 0 then continue
+        maRef: u32
+        {
+            maNode: prog.nodes.get i: maIdx.u64
+            match (
+                maNode
+            ) case atomid then {
+                maRef = maNode.name
+            } case labelvalue then {
+                maRef = maNode.name
+            } else null
+        }
+        if maRef == 0 then continue
+        an: zast.nameTextCopy ast: prog ref: (zast.nameid.create from: maRef.u32)
+        if an.length > 0 then dst.append an
+    }
+}
+
+# namesHave -- whether `names` holds `n`.
+namesHave: function {names: (List String).view n: StringView} out bool is {
+    with it: names.iterate do for e: it loop {
+        if e.stringView == n then return true
+    }
+    return false
+}
+
 # caseArmComplete -- when the cursor sits after `case ` inside a match, append
 # the subject variant's remaining arms (sumSubtypeNames minus arms already
 # covered by other clauses) to `arr` as EnumMember items. Returns true when it
@@ -4797,41 +4879,7 @@ caseArmComplete: function {
     prefix: StringView
     cursorPos: u64
 } out bool is {
-    ws: ps
-    for ws > 0 loop {
-        wb: ltv.byteAt i: ws - 1
-        stopw: false
-        match (
-            wb
-        ) case some then {
-            if wb != 32 when wb != 9 then stopw = true
-        } case none then {
-            stopw = true
-        }
-        if stopw then break
-        ws = ws - 1
-    }
-    if ws == ps then return false
-    wb2: ws
-    for wb2 > 0 loop {
-        cb: ltv.byteAt i: wb2 - 1
-        stopc: false
-        match (
-            cb
-        ) case some then {
-            if (isIdentByte b: cb).not then stopc = true
-        } case none then {
-            stopc = true
-        }
-        if stopc then break
-        wb2 = wb2 - 1
-    }
-    isCaseKw: false
-    {
-        word: ltv.substring from: wb2 to: ws
-        if word == "case" then isCaseKw = true
-    }
-    if isCaseKw.not then return false
+    if (caseWordBefore :ltv :ps).not then return false
     sp: (Spans
         rows: ListVal spanrow
         names: List String
@@ -4842,24 +4890,8 @@ caseArmComplete: function {
     sp.walkProgram :prog
     caseId: sp.innerRangeOfKind curPos: cursorPos kind: 5 slack: 1048576
     if caseId == 0 then return false
-    # caseexpr subject index + clause ids (scoped: one node view at a time)
-    subjIdx: u32
     clauseIds: ListVal u64
-    okCase: false
-    {
-        cnode: prog.nodes.get i: caseId.u64
-        if cnode.caseexpr then {
-            subjIdx = cnode.subject
-            clx1089: u64
-            for clx1089 < cnode.clauses.count.u64 loop {
-                cl: zast.kidAt kids: prog.kids span: cnode.clauses i: clx1089
-                clx1089 = clx1089 + 1
-                clauseIds.append cl.u64
-            }
-            okCase = true
-        }
-    }
-    if okCase.not then return false
+    subjIdx: caseClauseIds :prog :caseId dst: clauseIds
     if subjIdx == 0 then return false
     subjNid: u32
     {
@@ -4868,57 +4900,14 @@ caseArmComplete: function {
     }
     subjTid: nodeTypeAt :o nid: subjNid.u64
     if subjTid == 0 then return false
-    arms: List String
-    gotArms: false
-    match (
-        o
-    ) case some then {
-        {
-            arms = ztypecheck.sumSubtypeNames ast: prog st: o sid: subjTid
-            gotArms = true
-        }
-    } case none then null
-    if gotArms.not then return false
+    if o.none then return false
+    arms: ztypecheck.sumSubtypeNames ast: prog st: o sid: subjTid
     used: List String
-    ui: u64
-    for ui < clauseIds.length loop {
-        clId: clauseIds.get i: ui
-        maIdx: u32
-        {
-            clNode: prog.nodes.get i: clId.u64
-            if clNode.caseclause then maIdx = clNode.matcharm
-        }
-        if maIdx > 0 then {
-            maRef: u32
-            {
-                maNode: prog.nodes.get i: maIdx.u64
-                match (
-                    maNode
-                ) case atomid then {
-                    maRef = maNode.name
-                } case labelvalue then {
-                    maRef = maNode.name
-                } else null
-            }
-            if maRef > 0 then {
-                {
-                    an: zast.nameTextCopy ast: prog ref: (zast.nameid.create from: maRef.u32)
-                    if an.length > 0 then used.append an
-                }
-            }
-        }
-        ui = ui + 1
-    }
+    usedArmNames :prog :clauseIds dst: used
     with ait: arms.iterate do for arm: ait loop {
-        skip: false
-        with uit: used.iterate do for u: uit loop {
-            if u.stringView == arm.stringView then skip = true
-        }
-        matchp: true
-        if prefix.length > 0 when (arm.startsWith prefix).not then matchp = false
-        if skip.not when matchp then {
-            arr.items.append (completionItem label: arm.stringView kind: 20 detail: "")
-        }
+        if (namesHave names: used n: arm.stringView) then continue
+        if prefix.length > 0 when (arm.startsWith prefix).not then continue
+        arr.items.append (completionItem label: arm.stringView kind: 20 detail: "")
     }
     return true
 }
