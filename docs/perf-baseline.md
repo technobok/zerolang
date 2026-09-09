@@ -176,6 +176,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-09-08 | 1d90390c | [the A008 50-99 band, part 3](#r-a008band5099c) | 0.45s | -- | 96MB / -- | 107 / 172 / 178 (total 457) | 2,119,516 | 300MB | -- | 121,794 |
 | 2026-09-08 | 91f4f805 | [the A008 50-99 band, part 4](#r-a008band5099d) | 0.45s | -- | 94MB / -- | 106 / 173 / 184 (total 463) | 2,127,824 | 301MB | -- | 122,407 |
 | 2026-09-09 | 308506ef | [valtype receivers lock like class receivers](#r-valtype-receiver-lock) | 0.47s | -- | 94MB / -- | 107 / 176 / 200 (total 483) | 2,180,016 | 304MB | -- | 122,603 |
+| 2026-09-09 | 39be2d33 | [the >=40 band + the path-window allocations](#r-a008band40) | 0.48s | -- | 94MB / -- | 123 / 179 / 184 (total 486) | 2,118,706 | 302MB | -- | 122,409 |
 
 
 <a id="r-tokenarc"></a>
@@ -2939,6 +2940,31 @@ names a base the chase cannot resolve. The corpus did not catch it: it binds
 `A008 src/ztypecheck.z` 168 -> 160, `A005 src/zemitterc.z` 9 -> 7,
 `A005 src/ztypecheck.z` 12 -> 10, `A001 src/zemitterc.z` 387 -> 386, and the
 emitter-guard's `userFnId` count 31 -> 30.
+
+<a id="r-a008band40"></a>
+### the >=40 band, sharing first, and the path-window allocations (2026-09-09, `308506ef` -> `39be2d33`)
+
+Thirty-odd commits in two sittings. Arc 3 first, because the lock arc had
+just made lock paths more frequent: the two whole-path copies went
+(`860e578f`, -12,804), lock paths became `ListViewVal` windows with prefixes
+as slices (`78f0bf79`, -12,678), five container `get`s said `.view`
+(`b1ef977b`), the member walk writes its outputs and `tryLock` grows the
+entry's path once (`31c91e86`, -26,459), and `.asString` at the two
+String-keyed probes (`c5e34259`, -216). Then the A008 >=40 band, sharing
+first: the runner's seven-copy build ladder and eight-copy fixture walk, the
+record constructors' one create test and one argument pick, the registry's
+own `paramOrdinalOf` where the emitter had copied the scan, and
+`userFnArgText` where the fid-call path had copied the whole argument
+decision. Two defects surfaced by the splits and fixed first: a `for` body
+ending in a bare `return` (`cf16cb46`) and a narrowed valtype payload
+handed to a `.view` parameter as a value (`39be2d33`).
+
+**-61,310 blocks, -2.8%, against the lock arc's row**, on source that grew by
+about 1,400 lines of named helpers; the self-compile is back under the
+pre-lock-arc figure (2,127,824 -> 2,118,706). Wall and RSS unmoved. The
+small per-commit deltas quoted in the commit messages before `cf16cb46`
+carry a ~219-block offset from the executable's path length (argv[0] is an
+input); the figures here were all taken from `out/zc-perf`.
 
 <a id="r-valtype-receiver-lock"></a>
 ### valtype receivers lock like class receivers (2026-09-09, `3471a5a4` -> `308506ef`)
