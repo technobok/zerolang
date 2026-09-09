@@ -419,6 +419,25 @@ resolveRuntimeDir: function {flagVal: StringView} out String is {
     return "src/runtime".string
 }
 
+# foldRowKey -- the key of a natives.tbl row head (`unit.Type.method attrs`)
+# when one of its attributes is exactly `fold`; empty otherwise.
+foldRowKey: function {head: StringView} out String is {
+    key: String
+    isFold: false
+    with fit: (head.split sep: " ") do for f: fit loop {
+        if f.length > 0 then {
+            if key.length == 0 then {
+                key = f.string
+            } else {
+                fdo: f.stripPrefix p: "fold"
+                if fdo.some when fdo.length == 0 then isFold = true
+            }
+        }
+    }
+    if isFold.not then return String
+    return key
+}
+
 # foldNativePaths -- the qualified paths natives.tbl marks `fold`: the values
 # the compiler answers itself, at compile time. The type checker needs that
 # SET -- it folds those paths and refuses to fold any other -- and the checker
@@ -437,14 +456,8 @@ resolveRuntimeDir: function {flagVal: StringView} out String is {
 foldNativePaths: function {runtimeDir: StringView into: List String} out bool is {
     tp: "\{runtimeDir}/natives.tbl"
     rd: io.readText path: tp
-    txt: String
-    match (
-        rd
-    ) case ok then {
-        txt = rd.take
-    } case err then {
-        return false
-    }
+    if rd.err then return false
+    txt: rd.take
     with lit: txt.stringView.lines do for ln: lit loop {
         t: ln.trim
         # the whole table is read to find five rows, so ask the cheap question
@@ -455,28 +468,10 @@ foldNativePaths: function {runtimeDir: StringView into: List String} out bool is
         # the full parse below, which is what actually decides.
         if (t.startsWith prefix: "[") when (t.contains needle: "fold") then {
             cb: t.indexOf needle: "]"
-            match (
-                cb
-            ) case some then {
-                head: t.substring from: 1 to: cb
-                key: String
-                isFold: false
-                with fit: (head.split sep: " ") do for f: fit loop {
-                    if f.length > 0 then {
-                        if key.length == 0 then {
-                            key = f.string
-                        } else {
-                            fdo: f.stripPrefix p: "fold"
-                            match (
-                                fdo
-                            ) case some then {
-                                if fdo.length == 0 then isFold = true
-                            } case none then null
-                        }
-                    }
-                }
-                if isFold when key.length > 0 then into.append from: key.copy
-            } case none then null
+            if cb.some then {
+                key: foldRowKey head: (t.substring from: 1 to: cb)
+                if key.length > 0 then into.append from: key.copy
+            }
         }
     }
     return true
