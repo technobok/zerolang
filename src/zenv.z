@@ -39,7 +39,7 @@ ZTyping: ztyping.ZTyping
 # name, then each field read off it.
 
 # Two lock paths are equal iff same length and every segment matches.
-pathsEqual: function {a: (ListVal zast.nameid).view b: (ListVal zast.nameid).view} out bool is {
+pathsEqual: function {a: ListViewVal zast.nameid b: ListViewVal zast.nameid} out bool is {
     if a.length != b.length then return false
     n: a.length
     i: u64
@@ -51,7 +51,7 @@ pathsEqual: function {a: (ListVal zast.nameid).view b: (ListVal zast.nameid).vie
 }
 
 # True iff `p` is a (non-strict) prefix of `whole`.
-isPrefix: function {p: (ListVal zast.nameid).view whole: (ListVal zast.nameid).view} out bool is {
+isPrefix: function {p: ListViewVal zast.nameid whole: ListViewVal zast.nameid} out bool is {
     pn: p.length
     if pn > whole.length then return false
     i: u64
@@ -64,7 +64,7 @@ isPrefix: function {p: (ListVal zast.nameid).view whole: (ListVal zast.nameid).v
 
 # Two paths overlap iff one is a (non-strict) prefix of the other:
 # compare the shared leading run.
-pathsOverlap: function {a: (ListVal zast.nameid).view b: (ListVal zast.nameid).view} out bool is {
+pathsOverlap: function {a: ListViewVal zast.nameid b: ListViewVal zast.nameid} out bool is {
     n: a.length
     if b.length < n then n = b.length
     i: u64
@@ -94,13 +94,13 @@ holderEq: function {a: ztypes.zlockholder b: ztypes.zlockholder} out bool is {
 lockAcquireConflict: function {
     existingType: ztypes.zlockstate
     existingScope: ztypes.zlockscope
-    existingPath: (ListVal zast.nameid).view
+    existingPath: ListViewVal zast.nameid
     # the outstanding lock is a VARIABLE's pin rather than a call's
     existingVarHeld: bool
     reqType: ztypes.zlockstate
     # the requested lock is a TARGET (a live use) or an INTENT prefix
     reqScope: ztypes.zlockscope
-    reqPath: (ListVal zast.nameid).view
+    reqPath: ListViewVal zast.nameid
 } out bool is {
     eq: pathsEqual a: existingPath b: reqPath
     if eq then {
@@ -202,7 +202,7 @@ zlockstateNameLower: function {t: ztypes.zlockstate} out String is {
 }
 
 # a path rendered as a dotted "a.b.c" string.
-formatPath: function {pool: zast.StringPool.view path: (ListVal zast.nameid).view} out String is {
+formatPath: function {pool: zast.StringPool.view path: ListViewVal zast.nameid} out String is {
     if path.length == 0 then return "<unknown>".string
     r: String
     i: u64
@@ -219,8 +219,8 @@ formatPath: function {pool: zast.StringPool.view path: (ListVal zast.nameid).vie
 # names the paths instead of the holder.
 formatAliasConflict: function {
     pool: zast.StringPool.view
-    reqPath: (ListVal zast.nameid).view
-    existingPath: (ListVal zast.nameid).view
+    reqPath: ListViewVal zast.nameid
+    existingPath: ListViewVal zast.nameid
     sameCall: bool
 } out String is {
     rp: formatPath :pool path: reqPath
@@ -953,10 +953,10 @@ ZSymbolTable: class {
     formatLockConflict: function {
         this: this.view
         pool: zast.StringPool.view
-        reqPath: (ListVal zast.nameid).view
+        reqPath: ListViewVal zast.nameid
         reqType: ztypes.zlockstate
         existingType: ztypes.zlockstate
-        existingPath: (ListVal zast.nameid).view
+        existingPath: ListViewVal zast.nameid
         existingHolder: ztypes.zlockholder
     } out String is {
         rootView: zast.poolTextAt :pool ref: (reqPath.get i: 0)
@@ -990,7 +990,8 @@ ZSymbolTable: class {
     tryLock: function {
         :this
         pool: zast.StringPool.view
-        path: (ListVal zast.nameid).view
+        # a WINDOW, so a prefix of a longer path is handed in without a copy
+        path: ListViewVal zast.nameid
         lockType: ztypes.zlockstate
         lockScope: ztypes.zlockscope
         holder: ztypes.zlockholder
@@ -1026,7 +1027,7 @@ ZSymbolTable: class {
                 conflict: (lockAcquireConflict
                     existingType: e.lockType
                     existingScope: e.lockScope
-                    existingPath: e.lockPath
+                    existingPath: e.lockPath.listView
                     existingVarHeld: e.lockHolder.kind.varKind
                     reqType: lockType
                     reqScope: lockScope
@@ -1041,7 +1042,7 @@ ZSymbolTable: class {
                     conflictSelf = holderEq a: e.lockHolder b: holder
                     break
                 }
-                same: pathsEqual a: e.lockPath b: path
+                same: pathsEqual a: e.lockPath.listView b: path
                 if same then {
                     eShared: e.lockType == ztypes.zlockstate.shared
                     rShared: lockType == ztypes.zlockstate.shared
@@ -1065,7 +1066,7 @@ ZSymbolTable: class {
                 return (formatAliasConflict
                     :pool
                     reqPath: path
-                    existingPath: cPath
+                    existingPath: cPath.listView
                     sameCall: conflictSelf
                 )
             }
@@ -1074,7 +1075,7 @@ ZSymbolTable: class {
                 reqPath: path
                 reqType: lockType
                 existingType: cType
-                existingPath: cPath
+                existingPath: cPath.listView
                 existingHolder: cHolder
             )
         }
@@ -1159,7 +1160,7 @@ ZSymbolTable: class {
             if e.declId == d when e.hasLock when (
                 e.lockType == ztypes.zlockstate.exclusive
             ) when e.lockHolder.kind.varKind then {
-                ov: pathsOverlap a: e.lockPath b: path
+                ov: pathsOverlap a: e.lockPath.listView b: path.listView
                 if ov then return (optionval.some e.lockHolder)
             }
             j = j - 1
@@ -1205,7 +1206,7 @@ ZSymbolTable: class {
             j2: j - 1
             e: this.entries.get i: j2
             if e.declId == d when e.hasLock when e.lockType == ztypes.zlockstate.exclusive then {
-                ov: pathsOverlap a: e.lockPath b: path
+                ov: pathsOverlap a: e.lockPath.listView b: path.listView
                 if ov then return (optionval.some e.lockHolder)
             }
             j = j - 1
@@ -1233,12 +1234,12 @@ ZSymbolTable: class {
             e: this.entries.get i: j2
             if e.declId == d when e.hasLock when e.lockType == ztypes.zlockstate.shared then {
                 blocks: (
-                    (isPrefix p: path whole: e.lockPath) or
+                    (isPrefix p: path.listView whole: e.lockPath.listView) or
                     (
                         (e.lockScope == ztypes.zlockscope.target) and
                         (isPrefix
-                            p: e.lockPath
-                            whole: path
+                            p: e.lockPath.listView
+                            whole: path.listView
                         )
                     )
                 )
@@ -1261,7 +1262,7 @@ ZSymbolTable: class {
             j2: j - 1
             e: this.entries.get i: j2
             if e.declId == d when e.hasLock then {
-                ov: pathsOverlap a: e.lockPath b: path
+                ov: pathsOverlap a: e.lockPath.listView b: path.listView
                 if ov then return true
             }
             j = j - 1
