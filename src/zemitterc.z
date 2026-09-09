@@ -17482,14 +17482,34 @@ matchSubjectCore: function {ast: Ast.view nid: u64} out u64 is {
     }
 }
 
+# pairSubjectCType -- the C type an ordinal-pair subject is held in: the
+# scalar's own where it has one (`bool`), else the pair's typedef.
+pairSubjectCType: function {
+    ctx: Ctx
+    symtab: zenv.ZSymbolTable
+    # the subject's stamped type name
+    stn: StringView
+    # the subject's type
+    tid: ztypes.tid
+} out String is {
+    sct: scalarCTypeFor :symtab name: stn :tid
+    if sct.length > 0 then return sct
+    return "\{ctxCname :ctx :tid}_t"
+}
+
 # matchOrdinalPairRoute -- an ordinal-pair subject (two ordinal variants matched
-# together) has its own emitter. True when it took the match.
+# together) has its own emitter. True when it took the match. That emitter
+# writes the subject into every arm's test (`if (s) ... else if (!s)`), so a
+# subject that is a CALL is evaluated into a temp first: it runs once, and
+# what it moved is zeroed once.
 matchOrdinalPairRoute: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     m: zast.caserow.view
     subj: StringView
+    # the subject's stamped type name
+    stn: StringView
     assignTo: StringView
     ind: StringView
     tmp: TmpCtr
@@ -17497,12 +17517,24 @@ matchOrdinalPairRoute: function {
 } out bool is {
     sTid: stampIdDeep :ast :symtab n: (ast.nodes.get i: m.subject.u64)
     if (isOrdinalPair :symtab tid: (ztypes.tid.create from: sTid.u64)) then {
+        # the temp's name, built only for a call subject
+        subjOnce: String
+        subjV: subj
+        core: ast.nodes.get i: (matchSubjectCore :ast nid: m.subject.u64)
+        if core.call then {
+            ct: pairSubjectCType :ctx :symtab :stn tid: (ztypes.tid.create from: sTid.u64)
+            mp: tmp.next
+            buf.append "\{ind}\{ct} _mp\{mp} = \{subj};\n"
+            emitCallTakeInvalidations :ast :symtab :ctx call: core :ind :buf
+            subjOnce = "_mp\{mp}"
+            subjV = subjOnce.stringView
+        }
         (emitOrdinalPairMatch
             :ast
             :symtab
             :ctx
             :m
-            :subj
+            subj: subjV
             tid: (ztypes.tid.create from: sTid.u64)
             :assignTo
             :ind
@@ -17683,6 +17715,7 @@ emitMatchStmt: function {
         :ctx
         :m
         subj: sx.stringView
+        stn: stn.stringView
         :assignTo
         :ind
         :tmp
