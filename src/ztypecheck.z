@@ -2230,6 +2230,34 @@ isLabelValue: function {op: astnode.view} out bool is {
     }
 }
 
+# anyKidMentionsName -- whether any node in `span` mentions `name`.
+anyKidMentionsName: function {ast: Ast.view span: zast.kidspan name: StringView} out bool is {
+    i: u64
+    for i < span.count.u64 loop {
+        kid: zast.kidAt kids: ast.kids :span :i
+        i = i + 1
+        if (nodeMentionsName :ast n: (ast.nodes.get i: kid.u64) :name) then return true
+    }
+    return false
+}
+
+# anyArgMentionsName -- whether any named argument's value in `span` mentions
+# `name`.
+anyArgMentionsName: function {ast: Ast.view span: zast.kidspan name: StringView} out bool is {
+    i: u64
+    for i < span.count.u64 loop {
+        argId: zast.kidAt kids: ast.kids :span :i
+        i = i + 1
+        arg: ast.nodes.get i: argId.u64
+        if arg.namedoperation when (nodeMentionsName
+            :ast
+            n: (ast.nodes.get i: arg.operation.u64)
+            :name
+        ) then return true
+    }
+    return false
+}
+
 # nodeMentionsName -- whether a subtree references a bare name (atom reads,
 # call callables, dotted bases). Drives the conformer-context gate: the
 # reference's lazy resolution only reaches a conformer the main body names.
@@ -2243,30 +2271,18 @@ nodeMentionsName: function {ast: Ast.view n: astnode.view name: StringView} out 
     } case dottedpath then {
         return (nodeMentionsName :ast n: (ast.nodes.get i: n.parent.u64) :name)
     } case call then {
-        if (nodeMentionsName :ast n: (ast.nodes.get i: n.callable.u64) :name) then return true
-        arx79: u64
-        for arx79 < n.arguments.count.u64 loop {
-            argId: zast.kidAt kids: ast.kids span: n.arguments i: arx79
-            arx79 = arx79 + 1
-            arg: ast.nodes.get i: argId.u64
-            if arg.namedoperation when (nodeMentionsName
-                :ast
-                n: (ast.nodes.get i: arg.operation.u64)
-                :name
-            ) then return true
-        }
-        return false
+        (return
+            (nodeMentionsName :ast n: (ast.nodes.get i: n.callable.u64) :name
+            ) or (anyArgMentionsName :ast span: n.arguments :name)
+        )
     } case binop then {
-        if (nodeMentionsName :ast n: (ast.nodes.get i: n.lhs.u64) :name) then return true
-        return (nodeMentionsName :ast n: (ast.nodes.get i: n.rhs.u64) :name)
+        return (nodeMentionsName :ast n: (ast.nodes.get i: n.lhs.u64) :name) or (nodeMentionsName
+            :ast
+            n: (ast.nodes.get i: n.rhs.u64)
+            :name
+        )
     } case statement then {
-        stx679: u64
-        for stx679 < n.statements.count.u64 loop {
-            smId: zast.kidAt kids: ast.kids span: n.statements i: stx679
-            stx679 = stx679 + 1
-            if (nodeMentionsName :ast n: (ast.nodes.get i: smId.u64) :name) then return true
-        }
-        return false
+        return (anyKidMentionsName :ast span: n.statements :name)
     } case statementline then {
         sln: ast.nodes.get i: n.statementline.u64
         return (nodeMentionsName :ast n: sln :name)
@@ -2275,29 +2291,25 @@ nodeMentionsName: function {ast: Ast.view n: astnode.view name: StringView} out 
     } case reassignment then {
         return (nodeMentionsName :ast n: (ast.nodes.get i: n.value.u64) :name)
     } case caseexpr then {
-        if (nodeMentionsName :ast n: (ast.nodes.get i: n.subject.u64) :name) then return true
-        clx849: u64
-        for clx849 < n.clauses.count.u64 loop {
-            cm: zast.kidAt kids: ast.kids span: n.clauses i: clx849
-            clx849 = clx849 + 1
-            if (nodeMentionsName :ast n: (ast.nodes.get i: cm.u64) :name) then return true
-        }
-        return false
+        (return
+            (nodeMentionsName :ast n: (ast.nodes.get i: n.subject.u64) :name) or (anyKidMentionsName
+                :ast
+                span: n.clauses
+                :name
+            )
+        )
     } case caseclause then {
         return (nodeMentionsName :ast n: (ast.nodes.get i: n.statement.u64) :name)
     } case ifexpr then {
-        clx859: u64
-        for clx859 < n.clauses.count.u64 loop {
-            cm2Id: zast.kidAt kids: ast.kids span: n.clauses i: clx859
-            clx859 = clx859 + 1
-            if (nodeMentionsName :ast n: (ast.nodes.get i: cm2Id.u64) :name) then return true
-        }
-        return false
+        return (anyKidMentionsName :ast span: n.clauses :name)
     } case forexpr then {
         return (nodeMentionsNameOptAt :ast oId: n.body :name)
     } case withexpr then {
-        if (nodeMentionsName :ast n: (ast.nodes.get i: n.value.u64) :name) then return true
-        return (nodeMentionsName :ast n: (ast.nodes.get i: n.body.u64) :name)
+        return (nodeMentionsName :ast n: (ast.nodes.get i: n.value.u64) :name) or (nodeMentionsName
+            :ast
+            n: (ast.nodes.get i: n.body.u64)
+            :name
+        )
     } case doexpr then {
         return (nodeMentionsName :ast n: (ast.nodes.get i: n.statement.u64) :name)
     } else {
@@ -28164,6 +28176,43 @@ hoistArg: function {
     return tname
 }
 
+# memberIsDataField -- whether a member row is stored in the type's C struct:
+# every parameter of a function type; an fnptr field; a field whose type is
+# not itself a function, is not an as-const clone, and is not one of the
+# type's conformance-marker labels (`mkIds`).
+memberIsDataField: function {
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    # the row's name id and type
+    tcNameId: u64
+    cto: u64
+    # the type is a function type: every row is a parameter
+    isFn: bool
+    # the type's conformance-marker label ids
+    mkIds: (ListVal u64).view
+} out bool is {
+    if isFn then return true
+    if (st.typing.declIsFnptrFieldId
+        parentTypeId: tid
+        nameId: (zast.nameid.create from: tcNameId.u32.orPanic)
+    ) then return true
+    if cto == 0 then return false
+    if (
+        (st.reg.typetypeOf typeId: (ztypes.tid.create from: cto.u64)) ==
+        ztypes.ztypetype.functionType
+    ) then {
+        return false
+    }
+    if ((st.typing.asConstClone.get key: cto).or d: false) then return false
+    mi: u64
+    for mi < mkIds.length loop {
+        mv: mkIds.get i: mi
+        if mv > 0 when mv == tcNameId then return false
+        mi = mi + 1
+    }
+    return true
+}
+
 # dataFieldIds -- a type's user-supplied data fields/params in order, as the
 # (name pool id, type id) pairs: for a FUNCTION, all params; for a record/class,
 # fnptr fields plus non-FUNCTION fields, excluding as-block constants
@@ -28176,8 +28225,7 @@ dataFieldIds: function {
     ids: ListVal u64
     nameIds: ListVal u64
 } is {
-    isFn: false
-    if (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.functionType then isFn = true
+    isFn: (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.functionType
     # this type's conformance-marker label ids, collected once (the per-field
     # probe below is a scan over these few ids, not the whole table)
     mkIds8: ListVal u64
@@ -28188,60 +28236,21 @@ dataFieldIds: function {
     }
     # collect the rows first: the fnptr probe below resolves a member
     # declaration, which locks the whole ZTyping this iteration is holding
-    ot_ri: tid
-    {
-        {
-            ri: u64
-            n_ri: st.typing.declRowSlots ownerTid: ot_ri
-            for ri < n_ri loop {
-                rw_ri: st.typing.declRowAt ownerTid: ot_ri membersOnly: true slot: ri
-                ri = ri + 1
-                if rw_ri.keep then {
-                    tcNameId: rw_ri.name
-                    cto: rw_ri.tid
-                    inc: false
-                    if isFn then {
-                        inc = true
-                    } else {
-                        fptr: false
-                        fptr = (st.typing.declIsFnptrFieldId
-                            parentTypeId: tid
-                            nameId: (zast.nameid.create from: tcNameId.u32.orPanic)
-                        )
-                        if fptr then {
-                            inc = true
-                        } else {
-                            if cto > 0 when (
-                                (st.reg.typetypeOf typeId: (ztypes.tid.create from: cto.u64)) !=
-                                ztypes.ztypetype.functionType
-                            ) then {
-                                isC: false
-                                aco: st.typing.asConstClone.get key: cto
-                                match (
-                                    aco
-                                ) case some then {
-                                    isC = aco
-                                } case none then null
-                                isMk8: false
-                                mi8: u64
-                                mn8: mkIds8.length
-                                for mi8 < mn8 loop {
-                                    mv8: mkIds8.get i: mi8
-                                    if mv8 > 0 when mv8 == tcNameId then isMk8 = true
-                                    mi8 = mi8 + 1
-                                }
-                                if isC.not when isMk8.not then inc = true
-                            }
-                        }
-                    }
-                    if inc then {
-                        idx0: cto
-                        ids.append idx0
-                        nid0: tcNameId
-                        nameIds.append nid0
-                    }
-                }
-            }
+    ri: u64
+    n_ri: st.typing.declRowSlots ownerTid: tid
+    for ri < n_ri loop {
+        rw_ri: st.typing.declRowAt ownerTid: tid membersOnly: true slot: ri
+        ri = ri + 1
+        if rw_ri.keep when (memberIsDataField
+            :st
+            :tid
+            tcNameId: rw_ri.name
+            cto: rw_ri.tid
+            :isFn
+            mkIds: mkIds8
+        ) then {
+            ids.append rw_ri.tid
+            nameIds.append rw_ri.name
         }
     }
 }
@@ -41775,6 +41784,54 @@ shellResolveByName: function {
     return 0
 }
 
+# memberTypeIsShell -- whether a member's recorded type may be a SHELL: a type
+# stamped by name before its declaration resolved, which the pass below
+# rebinds. A generic parameter, a mono, a unit and a unit mono's own
+# substituted functions (minted per instance with no declaration of their
+# own; resolving them by name in the template's unit would rebind them to
+# the template's methods) are not shells.
+memberTypeIsShell: function {
+    st: zenv.ZSymbolTable
+    # the owning type and the member's recorded type
+    rpt: u64
+    cto: u64
+} out bool is {
+    if cto == 0 then return false
+    ct: ztypes.tid.create from: cto.u64
+    if (st.reg.typetypeOf typeId: ct) == ztypes.ztypetype.genericParam then return false
+    if (monoOriginTidOf :st tid: ct) > 0 then return false
+    if (unitDeclOfTid :st tid: ct) > 0 then return false
+    pt: ztypes.tid.create from: rpt.u64
+    if (st.reg.typetypeOf typeId: pt) == ztypes.ztypetype.unitType when (
+        (st.reg.genericOriginOf tid: pt) > 0
+    ) then return false
+    return true
+}
+
+# shellNameToResolve -- the name a shell resolves by: the recorded type's
+# name, unless it is a scalar's, an as-const clone's or a typeof shell's
+# (those are not shells); empty then.
+shellNameToResolve: function {st: zenv.ZSymbolTable cto: u64} out String is {
+    nmNode: st.reg.nameOf tid: (ztypes.tid.create from: cto.u64)
+    if (shellScalarName name: nmNode.stringView) then return String
+    if ((st.typing.asConstClone.get key: cto).or d: false) then return String
+    if (st.typing.typeofShell.get key: cto).some then return String
+    return nmNode
+}
+
+# shellChildFrame -- where a member's shell resolves: the frame its parent
+# type is declared in. A specialisation has no declaration of its own yet
+# and keeps the frame it is given.
+shellChildFrame: function {
+    st: zenv.ZSymbolTable rpt: u64 frame: ztypes.declid
+} out ztypes.declid is {
+    pt: ztypes.tid.create from: rpt.u64
+    if (st.reg.genericOriginOf tid: pt).isZero.not then return frame
+    pdo: declOfTypeId :st tid: pt
+    if pdo.isZero then return frame
+    return pdo
+}
+
 # canonicalizeShellChildren -- rebind every member whose declared type is a
 # SHELL id (a name-minted reference with no defining unit) to the canonical
 # type, resolved in the member's parent's defining unit with the emitter's
@@ -41803,68 +41860,15 @@ canonicalizeShellChildren: function {
         rpt: owns.get i: ri
         rnm: (zast.nameid.create from: (nms.get i: ri).u32.orPanic)
         cto: ctds.get i: ri
-        ok: cto > 0
-        if ok when (
-            (st.reg.typetypeOf typeId: (ztypes.tid.create from: cto.u64)) ==
-            ztypes.ztypetype.genericParam
-        ) then {
-            ok = false
-        }
-        if ok when (
-            (monoOriginTidOf
-                :st
-                tid: (ztypes.tid.create from: cto.u64)
-            ) >
-            0
-        ) then ok = false
-        if ok when (unitDeclOfTid :st tid: (ztypes.tid.create from: cto.u64)) > 0 then ok = false
-        # a unit mono's members are its own substituted FUNCTIONS, minted per
-        # instance with no declaration of their own: not shells. Resolving them
-        # by name in the mono's defining unit -- the template's -- would rebind
-        # them to the template's methods.
-        if ok when (
-            (st.reg.typetypeOf typeId: (ztypes.tid.create from: rpt.u64)) ==
-            ztypes.ztypetype.unitType
-        ) when (st.reg.genericOriginOf tid: (ztypes.tid.create from: rpt.u64)) > 0 then ok = false
-        if ok then {
-            pu: unitDecl
-            {
-                puo: (unitDeclOfTid
-                    :st
-                    tid: (ztypes.tid.create from: rpt.u64)
-                )
-                if puo.isZero.not then pu = puo
-            }
-            # the child's name resolves where its parent type is declared. A
-            # specialisation has no declaration of its own yet and keeps the
-            # frame it is given.
-            rf: frame
-            {
-                pgo: st.reg.genericOriginOf tid: (ztypes.tid.create from: rpt.u64)
-                if pgo.isZero then {
-                    pdo: declOfTypeId :st tid: (ztypes.tid.create from: rpt.u64)
-                    if pdo.isZero.not then rf = pdo
-                }
-            }
-            nmNode: st.reg.nameOf tid: (ztypes.tid.create from: cto.u64)
-            if (shellScalarName name: nmNode.stringView) then nmNode = "".string
-            {
-                aco: st.typing.asConstClone.get key: cto
-                match (
-                    aco
-                ) case some then {
-                    if aco then nmNode = "".string
-                } case none then null
-            }
-            {
-                tso: st.typing.typeofShell.get key: cto
-                match (
-                    tso
-                ) case some then {
-                    nmNode = "".string
-                } case none then null
-            }
+        ri = ri + 1
+        if (memberTypeIsShell :st :rpt :cto) then {
+            nmNode: shellNameToResolve :st :cto
             if nmNode.length > 0 then {
+                # the child's name resolves in the unit of its parent type
+                pu: unitDecl
+                puo: unitDeclOfTid :st tid: (ztypes.tid.create from: rpt.u64)
+                if puo.isZero.not then pu = puo
+                rf: shellChildFrame :st :rpt :frame
                 rid: (shellResolveByName
                     :st
                     frame: rf
@@ -41873,16 +41877,14 @@ canonicalizeShellChildren: function {
                     name: nmNode.stringView
                 )
                 if rid > 0 when rid != cto then {
-                    setc: rid
                     (st.typing.declSetMemberType
                         parentTypeId: (ztypes.tid.create from: rpt.u64)
                         nameId: rnm
-                        typeId: (ztypes.tid.create from: setc.u64)
+                        typeId: (ztypes.tid.create from: rid.u64)
                     )
                 }
             }
         }
-        ri = ri + 1
     }
 }
 
