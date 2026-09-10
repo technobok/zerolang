@@ -4273,6 +4273,30 @@ svValueForm: function {ctx: Ctx.view expr: StringView isStr: bool vid: ztypes.vi
     }
 }
 
+# svValueFormPtr -- svValueForm for a String operand the C holds through a
+# POINTER: a borrowed String parameter, or a String read through a borrowed
+# field.
+svValueFormPtr: function {ctx: Ctx.view expr: StringView} out String is {
+    v: "((\{ctx.svC}_t){ .data = \{expr}->data, .size = \{expr}->size })"
+    return v
+}
+
+# svValueFormAt -- svValueForm asked of the operand's NODE rather than of a
+# variable: a String read through a borrowed field (`c.s`) is a pointer with
+# no variable behind it, which the vid question answers with `.`.
+svValueFormAt: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+    expr: StringView
+    isStr: bool
+    vid: ztypes.vid
+} out String is {
+    if isStr when (pathIsPointer :ast :symtab :ctx :n) then return (svValueFormPtr :ctx :expr)
+    return (svValueForm :ctx :expr :isStr :vid)
+}
+
 # dottedBaseAtom / dottedChildText -- the parent atom and member name of
 # a dotted path ("" when the shape is deeper than one segment).
 # dottedBaseAtomId -- the base atom's interned name id (0 when absent). The
@@ -4652,7 +4676,15 @@ svArgAddr: function {
                 n: (ast.nodes.get i: n.parent.u64)
                 text: pe.stringView
             )
-            sv: svValueForm :ctx expr: pe.stringView isStr: pIsStr vid: pev
+            sv: (svValueFormAt
+                :ast
+                :symtab
+                :ctx
+                n: (ast.nodes.get i: n.parent.u64)
+                expr: pe.stringView
+                isStr: pIsStr
+                vid: pev
+            )
             a3: "&\{sv}"
             return a3
         }
@@ -5825,7 +5857,24 @@ stringViewBinopOperand: function {
         if hv.length > 0 then src = hv.copy
     }
     valueVid: atomVidIfPlain :ast :symtab :ctx :n text: src.stringView
-    vf: svValueForm :ctx expr: src.stringView isStr: (tname == "String") vid: valueVid
+    isStrT: tname == "String"
+    vf: String
+    if src.stringView == expr then {
+        vfa: (svValueFormAt
+            :ast
+            :symtab
+            :ctx
+            :n
+            expr: src.stringView
+            isStr: isStrT
+            vid: valueVid
+        )
+        vf = vfa
+    } else {
+        # a hoisted operand is the temp, not the node
+        vfh: svValueForm :ctx expr: src.stringView isStr: isStrT vid: valueVid
+        vf = vfh
+    }
     r: "&\{vf}"
     return r
 }
@@ -11014,12 +11063,10 @@ emitStringMethod: function {
         if recvIsPtr then return "\{recv}->capacity"
         return "\{recv}.capacity"
     }
-    if (ztypecheck.isStringViewMember name: mn) then return (svValueForm
-        :ctx
-        expr: recv
-        isStr: true
-        vid: recvVid
-    )
+    if (ztypecheck.isStringViewMember name: mn) then {
+        if recvIsPtr then return (svValueFormPtr :ctx expr: recv)
+        return (svValueForm :ctx expr: recv isStr: true vid: recvVid)
+    }
     if mn == "shrink" then {
         if recvIsPtr then return "\{ctx.strC}_shrink(\{recv})"
         return "\{ctx.strC}_shrink(&\{recv})"
@@ -11459,7 +11506,15 @@ emitNestedStringViewBase: function {
                 n: (ast.nodes.get i: n.parent.u64)
                 text: pbv.stringView
             )
-            sv: svValueForm :ctx expr: pbv.stringView isStr: true vid: pbq
+            sv: (svValueFormAt
+                :ast
+                :symtab
+                :ctx
+                n: (ast.nodes.get i: n.parent.u64)
+                expr: pbv.stringView
+                isStr: true
+                vid: pbq
+            )
             return sv
         }
         if parentStampTid == ctx.svTid then {
@@ -13645,8 +13700,24 @@ emitOperatorAt: function {
                 n: (ast.nodes.get i: rhsNid)
                 text: r.stringView
             )
-            lf = svValueForm :ctx expr: l.stringView isStr: (lt.stringView == "String") vid: lq
-            rf = svValueForm :ctx expr: r.stringView isStr: (rt.stringView == "String") vid: rq
+            lf = (svValueFormAt
+                :ast
+                :symtab
+                :ctx
+                n: (ast.nodes.get i: lhsNid)
+                expr: l.stringView
+                isStr: (lt.stringView == "String")
+                vid: lq
+            )
+            rf = (svValueFormAt
+                :ast
+                :symtab
+                :ctx
+                n: (ast.nodes.get i: rhsNid)
+                expr: r.stringView
+                isStr: (rt.stringView == "String")
+                vid: rq
+            )
         }
     }
     # a typedef emits no helper of its own: the chain end owns it
@@ -13992,6 +14063,9 @@ appendStringPart: function {
         ) then {
             sAcc = "->".string
         }
+        # a String read through a borrowed field is a pointer with no variable
+        # behind it
+        if an0.length == 0 when (pathIsPointer :ast :symtab :ctx :n) then sAcc = "->".string
         buf.append "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}\{sAcc}data, \{val}\{sAcc}size);\n"
         return
     }
@@ -14509,6 +14583,12 @@ emitPrintValueExpr: function {
         buf.append lsb
         lsf: "\{ind}\{ctx.strC}_free(&_h\{hps});\n"
         buf.append lsf
+        return
+    }
+    # a String read through a borrowed field is already a pointer
+    if (pathIsPointer :ast :symtab :ctx :n) then {
+        lsp: "\{ind}\{ctx.strC}_print(\{es});\n"
+        buf.append lsp
         return
     }
     lsl: "\{ind}\{ctx.strC}_print(&\{es});\n"
