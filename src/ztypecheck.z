@@ -25890,6 +25890,7 @@ checkFor: function {
     fornode: forref
 } out ztypes.tid is {
     forMarker: st.pushBlock name: "for"
+    st.loopBreakMarks.append st.loopBreakTakes.length
     bk: st.reg.ctlPlaceholder
     (st.define
         nameId: zast.names.wkBreak
@@ -25924,9 +25925,28 @@ checkFor: function {
         fb: ast.nodes.get i: fornode.body.u64
         elemT = ztypes.tid.create from: (lastStmtType :st :ast block: fb)
     }
-    if st.isUnreachable then st.discardTakenInCurrentScope
+    # a body that leaves the FUNCTION never reaches the code after the loop,
+    # so its takes are dropped; one that leaves with `break` does, so they
+    # stay
+    if st.unreachableKind == zenv.divkind.exit then st.discardTakenInCurrentScope
     st.popTo marker: forMarker
+    relayBreakTakes :st
     return (forComprehensionTid :st :unitDecl :ast :fornode :elemT)
+}
+
+# relayBreakTakes -- the takes recorded on paths that left the loop with
+# `break` are laid again after it: the code after the loop sees them
+# consumed. A body-local recorded there is gone with the loop's frame, and
+# a name it shadowed must not be consumed in its place, so only a decl the
+# name still resolves to is re-laid.
+relayBreakTakes: function {st: zenv.ZSymbolTable} is {
+    mark: st.loopBreakMarks.pop
+    for st.loopBreakTakes.length > mark loop {
+        d: ztypes.declid.create from: st.loopBreakTakes.pop
+        nm: st.typing.declNameOf declId: d
+        nid: zast.nameid.create from: nm
+        if (st.findLocal nameId: nid) == d then st.invalidate nameId: nid loc: takenHere
+    }
 }
 
 # restoreTakenArm -- after a NON-diverging if arm, undo any takes of outer-scope
@@ -25944,6 +25964,23 @@ restoreTakenArm: function {st: zenv.ZSymbolTable liveBefore: (IdSet u32).view ta
             st.clearTaken nameId: (zast.nameid.create from: vn.u32)
         }
     }
+}
+
+# settleArmTakes -- an arm's takes once its walk ends. A path that leaves the
+# function or the loop never reaches the fall-through (zenv settles those);
+# any other path does, so its takes of outer locals are restored for the
+# sibling arms and collected for the single post-if invalidation. Answers the
+# arm's divergence kind, `none` for a reachable end.
+settleArmTakes: function {
+    st: zenv.ZSymbolTable
+    liveBefore: (IdSet u32).view
+    taken: IdSet u32
+} out u8 is {
+    k: st.settleDivergingTakes
+    if k == zenv.divkind.exit then return k
+    if k == zenv.divkind.brk then return k
+    restoreTakenArm :st :liveBefore :taken
+    return k
 }
 
 # invalidateTakenAcross -- after the whole if, mark every var taken in some arm as
@@ -26027,8 +26064,11 @@ checkIfClauses: function {
     pBool: u64
     flagsOut: ListVal bool
     fbr: ztyping.foldedbranch
-} is {
+} out u8 is {
     allDiverge: true
+    # the weakest of the arms' divergence kinds, since one arm reaching
+    # the loop's next iteration is enough for the whole statement to
+    kindAcc: zenv.divkind.none
     anyEmpty: false
     kC: u64
     for kC < ifnode.nclauses loop {
@@ -26053,16 +26093,9 @@ checkIfClauses: function {
         dvgC: st.isUnreachable
         btc: bt
         branchTypes.append btc
-        if st.isUnreachable then {
-            # a diverging arm transfers ownership on a path that never reaches
-            # fall-through: drop its take overlays before pop so they don't
-            # bubble into the parent scope (where post-if uses would see the
-            # variable as taken).
-            st.discardTakenInCurrentScope
-        } else {
-            allDiverge = false
-            restoreTakenArm :st :liveBefore taken: takenAcross
-        }
+        ak: settleArmTakes :st :liveBefore taken: takenAcross
+        if ak > kindAcc then kindAcc = ak
+        if ak == zenv.divkind.none then allDiverge = false
         st.popTo marker: bm
         cn1c: clause.nconds
         if cn1c == 1 when cfacts.length == 1 then {
@@ -26081,6 +26114,7 @@ checkIfClauses: function {
     }
     flagsOut.append allDiverge
     flagsOut.append anyEmpty
+    return kindAcc
 }
 
 
@@ -26120,7 +26154,7 @@ checkIf: function {
     elseDvg: false
     branchTypes: ListVal u64
     flagsOut: ListVal bool
-    (checkIfClauses
+    kindAcc: (checkIfClauses
         :st
         :unitDecl
         :ast
@@ -26156,12 +26190,9 @@ checkIf: function {
             if st.isUnreachable then elseDvg = true
             etc: et
             branchTypes.append etc
-            if st.isUnreachable then {
-                st.discardTakenInCurrentScope
-            } else {
-                allDiverge = false
-                restoreTakenArm :st :liveBefore taken: takenAcross
-            }
+            ak2: settleArmTakes :st :liveBefore taken: takenAcross
+            if ak2 > kindAcc then kindAcc = ak2
+            if ak2 == zenv.divkind.none then allDiverge = false
             st.popTo marker: ebm
         }
     } else {
@@ -26208,7 +26239,7 @@ checkIf: function {
         )
     }
     invalidateTakenAcross :st names: takenAcross
-    if allDiverge then st.markUnreachable
+    if allDiverge then st.markUnreachable kind: kindAcc
     return result
 }
 
@@ -32405,7 +32436,7 @@ checkGenericCall: function {
         ) case some then {
             csname: "function:\{mname}\{gsfx4}"
             cm2: st.pushBlock name: csname.stringView
-            if dvo then st.markUnreachable
+            if dvo then st.markUnreachable kind: zenv.divkind.exit
             st.popTo marker: cm2
         } case none then null
     }
@@ -32755,7 +32786,7 @@ checkCaseClause: function {
     }
     cn2: armName.copy
     covered.append cn2
-    if st.isUnreachable then st.discardTakenInCurrentScope
+    st.settleDivergingTakes
     st.popTo marker: armMarker
     return (casearmfacts empty: anyEmpty diverges: allDiverge)
 }
@@ -32977,7 +33008,7 @@ checkCaseElse: function {
     # read downstream as "control does not continue", so the emitter dropped
     # the enclosing arm's `break` and the switch fell through.
     if et > 0 when et == neverId then null else allDiverge = false
-    if st.isUnreachable then st.discardTakenInCurrentScope
+    st.settleDivergingTakes
     st.popTo marker: elseMarker
     return (casearmfacts empty: anyEmpty diverges: allDiverge)
 }
@@ -34208,15 +34239,25 @@ checkValueArmAt: function {
 }
 
 
+# ctlDivKind -- how a bare control name leaves the statement's frame: `return`
+# leaves the function, `break` the loop, `continue` the iteration;
+# `divkind.none` for any other name.
+ctlDivKind: function {bn: zast.nameid} out u8 is {
+    if bn == zast.names.wkReturn then return zenv.divkind.exit
+    if bn == zast.names.wkBreak then return zenv.divkind.brk
+    if bn == zast.names.wkContinue then return zenv.divkind.cont
+    return zenv.divkind.none
+}
+
 # checkStmtExpression -- an expression statement line: walk the value, stamp
-# the wrapper, and answer whether the line diverges (a return call or a
-# control builtin).
+# the wrapper, and answer how the line diverges (a `divkind`: a return call
+# or a control builtin), `none` when it does not.
 checkStmtExpression: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
     wrap: exprref
-} out bool is {
+} out u8 is {
     errE0: st.typing.errors.length
     # a `.drop` is legal on this node and nowhere else; saved and restored
     # because a statement's expression can contain nested statement blocks
@@ -34228,12 +34269,9 @@ checkStmtExpression: function {
     ckOpt0: st.typing.callKind.get key: wrap.expression.u64
     isR0: isReturnCallKind o: ckOpt0
     bn0: bareAtomNameId :ast n: (ast.nodes.get i: wrap.expression.u64)
-    ctl0: (
-        (bn0 == zast.names.wkBreak) or
-        (bn0 == zast.names.wkContinue) or
-        (bn0 == zast.names.wkReturn)
-    )
-    if ctl0 then isR0 = true
+    k0: ctlDivKind bn: bn0
+    ctl0: k0 > 0
+    if ctl0.not when isR0 then k0 = zenv.divkind.exit
     # a statement whose value resolved to nothing and raised nothing:
     # an unresolvable root name is an unknown reference (the emitter
     # would otherwise hit its unhandled-callee backstop)
@@ -34246,17 +34284,17 @@ checkStmtExpression: function {
             if ubn1.length > 0 then reportUnknownNameAt :st :ast nid: wrap.expression name: ubn1
         }
     }
-    return isR0
+    return k0
 }
 
-# checkStmtInner -- dispatch a statement line's inner row by arm. Answers
-# true when the line diverges (a return call or a control builtin).
+# checkStmtInner -- dispatch a statement line's inner row by arm. Answers how
+# the line diverges (a `divkind`), `none` when it does not.
 checkStmtInner: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
     innerId: zast.nodeid
-} out bool is {
+} out u8 is {
     arm: rowArmAt :ast nid: innerId
     match (
         arm
@@ -34273,12 +34311,12 @@ checkStmtInner: function {
             vh: st.reg.newVariable ztypeId: ztypes.tid ownership: ztypes.zownership.owned
             st.defineVar nameId: ar.name vid: vh
         }
-        return false
+        return zenv.divkind.none
     } case reassignment then {
         checkValueAt :st :unitDecl :ast nid: innerId
-        return false
+        return zenv.divkind.none
     } else {
-        return false
+        return zenv.divkind.none
     }
 }
 
@@ -34302,16 +34340,16 @@ checkStatement: function {
             sline: ast.nodes.get i: slnId.u64
             if sline.statementline then innerId = sline.statementline
         }
-        isRet: false
+        dk: zenv.divkind.none
         if innerId.isZero.not then {
-            isRet = checkStmtInner :st :unitDecl :ast :innerId
+            dk = checkStmtInner :st :unitDecl :ast :innerId
             itOpt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: innerId.u64
             if itOpt > 0 then {
                 stampGate :st nid: slnId.u64 tid: (ztypes.tid.create from: itOpt.u64)
             }
         }
         drainPendingBorrow :st
-        if isRet then st.markUnreachable
+        if dk > 0 then st.markUnreachable kind: dk
     }
 }
 

@@ -23,6 +23,7 @@
 # other top-level definitions are private to this unit.
 public: unit {
     :ZSymbolTable
+    :divkind
     :sumArmNames
     :sumArmNameIds
     :newSymbolTable
@@ -321,6 +322,14 @@ ZSymbolTable: class {
     # frames the walk proved unreachable, so nothing inside one is reported
     # twice
     unreachableFrames: IdSet u64
+    # how each such frame became unreachable, a `divkind`: the first kind
+    # recorded is the one control took
+    unreachableKinds: (IdMapV u64 v: u8)
+    # decl ids moved on a path that left its loop with `break`, every open
+    # loop's run in one list; `loopBreakMarks` holds each loop's start,
+    # innermost last, and the loop re-lays its run after itself
+    loopBreakTakes: ListVal u64
+    loopBreakMarks: ListVal u64
     # dump scaffolding: a frame's label ("function:x", "if_branch", ...), the
     # frames a diagnostics-only template walk opened (kept out of the dump),
     # and the rows snapshotted when a frame closed
@@ -787,13 +796,18 @@ ZSymbolTable: class {
         } case none then null
     }
 
-    # Drop every taken row the innermost frame laid (diverging arm). Only
-    # that frame's rows can be dropped, so only they are drained and
-    # rebuilt -- the rows below its start are left where they are.
+    # Drop every taken row the innermost frame laid (diverging arm).
     discardTakenInCurrentScope: function {:this} is {
         n: this.open.length
         if n == 0 then return
-        start: (this.open.get i: (n - 1)).start
+        this.discardTakenFrom start: (this.open.get i: (n - 1)).start
+    }
+
+    # Drop every taken row laid at or above `start`, which is never below
+    # the innermost frame's start: only that frame's rows can be dropped,
+    # so only they are drained and rebuilt -- the rows below are left where
+    # they are.
+    discardTakenFrom: function {:this start: u64} is {
         rev: List ZEntry
         for this.entries.length > start loop rev.append this.entries.pop
         for rev.length > 0 loop {
@@ -1385,7 +1399,7 @@ ZSymbolTable: class {
         }
 
         if remainIdx.length == 0 then {
-            this.markUnreachable
+            this.markUnreachable kind: divkind.exit
         } else {
             narrowedSub: zast.nameid
             if remainIdx.length == 1 then {
@@ -1500,22 +1514,71 @@ ZSymbolTable: class {
         }
     }
 
-    # mark the current frame unreachable, after a statement that diverges
-    markUnreachable: function {:this} is {
+    # mark the current frame unreachable, after a statement that diverges;
+    # the first kind recorded is the one control took
+    markUnreachable: function {:this kind: u8} is {
         this.materialiseTop
         f: this.curFrame
-        if f.isZero.not then this.unreachableFrames.add item: f.u64
+        if f.isZero then return
+        this.unreachableFrames.add item: f.u64
+        known: this.unreachableKinds.get key: f.u64
+        if known.none then this.unreachableKinds.set key: f.u64 value: kind
+    }
+
+    # how the innermost open frame became unreachable; `divkind.none` while it
+    # is reachable. The mark is the frame's own; one that has no row yet
+    # cannot carry it.
+    unreachableKind: function {this: this.view} out u8 is {
+        n: this.open.length
+        if n == 0 then return divkind.none
+        f: (this.open.get i: (n - 1)).id
+        if f.isZero then return divkind.none
+        ko: this.unreachableKinds.get key: f.u64
+        match (
+            ko
+        ) case some then {
+            return ko
+        } case none then {
+            return divkind.none
+        }
     }
 
     # whether the walk is in unreachable code, where a diagnostic would be noise
     isUnreachable: function {this: this.view} out bool is {
-        # the mark is the innermost open frame's own; one that has no row
-        # yet cannot carry it
+        return (this.unreachableKind == divkind.none).not
+    }
+
+    # the height of the scope stack, for a later `discardTakenFrom`
+    entryMark: function {this: this.view} out u64 is {
+        return this.entries.length
+    }
+
+    # settleDivergingTakes -- what the innermost frame's takes owe once its
+    # walk ends, by the kind that ended it. A path that leaves the FUNCTION
+    # drops them: it never reaches the code after. One that leaves the LOOP
+    # with `break` records them for the loop to lay again after itself --
+    # the code after the loop still sees them consumed -- and drops them
+    # here. A `continue`, or a reachable end, keeps them: the next iteration,
+    # or the code after, sees them. Answers the kind.
+    settleDivergingTakes: function {:this} out u8 is {
+        k: this.unreachableKind
+        if k == divkind.brk when this.loopBreakMarks.length > 0 then this.recordBreakTakes
+        if k == divkind.exit then this.discardTakenInCurrentScope
+        if k == divkind.brk then this.discardTakenInCurrentScope
+        return k
+    }
+
+    # recordBreakTakes -- the innermost frame's taken rows, by decl id, onto
+    # the innermost loop's run
+    recordBreakTakes: function {:this} is {
         n: this.open.length
-        if n == 0 then return false
-        f: (this.open.get i: (n - 1)).id
-        if f.isZero then return false
-        return (this.unreachableFrames.has item: f.u64)
+        if n == 0 then return
+        p: (this.open.get i: (n - 1)).start
+        for p < this.entries.length loop {
+            e: this.entries.get i: p
+            if e.isTaken then this.loopBreakTakes.append e.declId.u64
+            p = p + 1
+        }
     }
 
     # --- utility ---
@@ -1659,6 +1722,17 @@ ZSymbolTable: class {
     }
 }
 
+# divkind -- how a frame's walk ended, when it did not fall through: `exit`
+# leaves the function (`return`, `panic`), `brk` leaves the loop, `cont` ends
+# the iteration. Ordered so that the weakest for an enclosing loop -- the one
+# that still reaches its next iteration -- is the largest.
+divkind: data {
+    none: 0
+    exit: 1
+    brk: 2
+    cont: 3
+} out u8
+
 # construct a symbol table taking ownership of the type registry and
 # typing tables it will resolve against.
 newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} out ZSymbolTable is {
@@ -1667,6 +1741,9 @@ newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} o
         curFrame: ztypes.declid
         entries: List ZEntry
         unreachableFrames: IdSet u64
+        unreachableKinds: (IdMapV u64 v: u8)
+        loopBreakTakes: ListVal u64
+        loopBreakMarks: ListVal u64
         frameLabel: (IdMapR u64 V: String)
         frameHidden: IdSet u64
         entryDump: List ZEntryDumpRow
