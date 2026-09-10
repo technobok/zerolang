@@ -2971,6 +2971,37 @@ walked its body for yields (`b90b64df`). Wall 0.48s -> 0.50s and the phase
 split are within noise on a machine carrying an 8GB GPU job during the
 measurement; RSS unchanged.
 
+<a id="r-shared-reference-pins"></a>
+### the checker owns argument disposition; a live reference pins shared (2026-09-11, `825cae83` -> `56097e13`)
+
+Six commits. The typechecker decides every reftype argument's disposition
+once (`argDisposition`) and the emitter reads it, retiring the emitter's
+re-derivation -- `argIsMovedByCall` and its five helpers -- so a construction
+with a non-owned native field no longer zeroes its source (`587b43fa`); a
+String read through a borrowed native field is a pointer (`ec3666a5`); a live
+non-owned reference -- a `.borrow`/`.view` field, a `with` alias, a `.borrow`
+argument -- pins its source SHARED, the row carrying `mutable`/`alias` bits
+and two rules over them (`340d0c95`); a call holds every reference it passes,
+generic calls included, which met the binop right-operand pin leak, the bare
+StringLike native parameters and the never-bound marked generic parameter
+(`25be32d1`); `b: src.borrow` is a pinned pointer alias (`26b77c60`); docs
+(`56097e13`).
+
+| | 825cae83 | 587b43fa | 340d0c95 | 56097e13 |
+|---|---|---|---|---|
+| allocations | 2,142,598 | 2,129,828 | 2,129,747 | 2,131,114 |
+| instructions | 5,808.7M | 5,683.0M | 5,698.2M | 5,700.9M |
+
+(Every compiler on the SAME source, the `56097e13` tree; gcc -O1, equal-length
+binary names.) **-11,484 blocks (-0.54%) and -1.86% instructions end to end,
+and the disposition commit paid for all of it**: -12,770 blocks and -2.16%
+instructions, the per-argument `userFnId` / `resolveTypeIdByName` walks the
+emitter no longer makes. The shared pins cost +0.27% instructions and no
+blocks; the generic-call scopes, their argument rows and the binding aliases
++1,367 blocks with instructions flat. Cycles -3.7% (2,723.7M -> 2,623.0M);
+wall best-of-5 0.58s -> 0.57s; peak RSS 99.6MB -> 99.9MB. `ALLOC_BASELINE`
+2,138,058 -> 2,131,114, the new compiler on its own source.
+
 <a id="r-valtype-holds-values"></a>
 ### a valtype holds value data only (2026-09-10, `4bc0566e` -> `cb26d174`)
 
