@@ -849,8 +849,8 @@ emitter-guard:
 	chk "'z_t{' literals in src/zemitterc.z" "$$g2" 3; \
 	chk "ztypecheck.resolvedByKey" "$$e1" 0; \
 	chk "ztypecheck.walkLookupTyperef" "$$e2" 5; \
-	chk "resolveTypeIdByName" "$$e3" 21; \
-	chk "userFnId" "$$e4" 30; \
+	chk "resolveTypeIdByName" "$$e3" 18; \
+	chk "userFnId" "$$e4" 27; \
 	chk "childOwnershipText" "$$e5" 0; \
 	chk "regNameOf" "$$e6" 80; \
 	chk "ztypes.mangleVarName (both inside varCName)" "$$e7" 2; \

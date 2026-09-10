@@ -46,6 +46,7 @@ public: unit {
     :isFloatLiteralName
     :armSuffixSide
     :metaCreateBaseId
+    :innermostNodeId
     :methodReturnOf
     :nodeId
     :nodeLine
@@ -7235,13 +7236,49 @@ materializeCreateParams: function {
     }
     i: u64
     for i < fnameIds.length loop {
+        pnId: zast.nameid.create from: (fnameIds.get :i)
         (st.typing.setMemberType
             parentTypeId: (ztypes.tid.create from: createId.u64)
-            nameId: (zast.nameid.create from: (fnameIds.get :i))
+            nameId: pnId
             childTypeId: (ftypeIds.get :i)
+        )
+        # the parameter carries the FIELD's disposition, so a call site reads
+        # one answer whether it names the type or its create
+        (st.typing.setChildOwnershipId
+            parentTypeId: (ztypes.tid.create from: createId.u64)
+            nameId: pnId
+            ownership: (createParamOwnership
+                :st
+                ownerTid: ot_ri
+                fieldId: pnId
+                fieldTid: (ftypeIds.get :i)
+            )
         )
         i = i + 1
     }
+}
+
+# createParamOwnership -- what a synthesised create's parameter does with its
+# argument, read off the field it fills: a `.borrow` / `.view` field keeps its
+# marker, any other reftype field (unmarked, `.take`, `.hold`) owns what it is
+# given and so moves the argument in, and a valtype field copies it.
+createParamOwnership: function {
+    st: zenv.ZSymbolTable.view
+    ownerTid: ztypes.tid
+    fieldId: zast.nameid
+    fieldTid: u64
+} out ztypes.zparamownership is {
+    fo: st.typing.declOwnershipOfId parentTypeId: ownerTid nameId: fieldId
+    match (
+        fo
+    ) case some then {
+        if fo == ztypes.zparamownership.borrowMode then return fo
+        if fo == ztypes.zparamownership.viewMode then return fo
+    } case none then null
+    if (typeIsReftype :st tid: (ztypes.tid.create from: fieldTid.u64)) then {
+        return ztypes.zparamownership.takeMode
+    }
+    return ztypes.zparamownership.noneMode
 }
 
 # aliasentry -- one `alias: member` line of a `public:` block: the name the
@@ -29388,8 +29425,23 @@ checkNamedArgParam: function {
     checkArgTypeMismatch :st :ast ptid: pcidX :vt :pnId :arg
 }
 
-# what one call argument's parameter asks of it -- taken, locked, viewed --
-# resolved once and read by everything downstream
+# stampArgDisposition -- record what the call does with the argument `op`:
+# the emitter zeroes the source of a taken one after the call, and the LSP
+# words it. Keyed by the value node under its expression wrappers.
+stampArgDisposition: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    op: zast.nodeid
+    own: ztypes.zparamownership
+} is {
+    dispNid: innermostNodeId :ast n: (ast.nodes.get i: op.u64)
+    if dispNid.isZero then return
+    dispVal: own
+    st.typing.argDisposition.set key: dispNid.u64 value: dispVal
+}
+
+# what one call argument's parameter asks of it -- taken, locked, viewed,
+# held -- resolved once and read by everything downstream
 argownership: record {
     # the parameter takes ownership, so the caller's binding is spent
     isTake: bool
@@ -29397,6 +29449,8 @@ argownership: record {
     isLockish: bool
     # the parameter is `.view`, so the argument stays readable across the call
     isViewArg: bool
+    # the parameter is `.hold`: passed by pointer and never freed by the callee
+    isHold: bool
     # the parameter's type, which the argument is coerced to
     pt: u64
 }
@@ -29416,6 +29470,7 @@ argOwnershipOf: function {
     isTake: false
     isLockish: false
     isViewArg: false
+    isHold: false
     pt: u64
     if funcId > 0 when pnId.isZero.not then {
         if (isLiteralTypeId :st tid: (ztypes.tid.create from: vt.u64)) then {
@@ -29439,33 +29494,25 @@ argOwnershipOf: function {
                 isLockish = true
                 isViewArg = true
             }
+            if oo == ztypes.zparamownership.holdMode then {
+                isHold = true
+                # a `.hold` FIELD owns what it is given: the construction
+                # moves the argument in, then freezes it
+                if isCtor when (typeIsReftype :st tid: (ztypes.tid.create from: vt.u64)) then {
+                    isTake = true
+                }
+            }
         } case none then {
-            # Unrecorded ownership: the effective default is
-            # borrow (ctor field params keep their recorded flow).
-            if isCtor.not then isLockish = true
-        }
-        # a POSITIONAL constructor argument (a tagged-sum arm
-        # payload) transfers ownership exactly like its named
-        # form: the arm stores it owned
-        if funcId > 0 when pnId.isZero when isCtor when (typeIsReftype
-            :st
-            tid: (ztypes.tid.create from: vt.u64)
-        ) then isTake = true
-        if isCtor then {
-            # Field ownership flows to the constructor param:
-            # a borrowed field locks the caller's argument, any
-            # other reftype field takes it.
-            if (st.typing.declIsBorrowedFieldId parentTypeId: funcId nameId: pnId) then {
-                isLockish = true
+            # unmarked: a parameter borrows; a constructor FIELD owns what it
+            # is given, so a reftype argument moves in and a valtype one copies
+            if isCtor then {
+                if (typeIsReftype :st tid: (ztypes.tid.create from: vt.u64)) then isTake = true
             } else {
-                if (typeIsReftype
-                    :st
-                    tid: (ztypes.tid.create from: vt.u64)
-                ) then isTake = true
+                isLockish = true
             }
         }
     }
-    return (argownership :isTake :isLockish :isViewArg :pt)
+    return (argownership :isTake :isLockish :isViewArg :isHold :pt)
 }
 
 # reportPositionalNotAllowed -- a call to a function whose parameters are all
@@ -29547,6 +29594,7 @@ checkTypedCallArg: function {
     isTake: aow.isTake
     isLockish: aow.isLockish
     isViewArg: aow.isViewArg
+    isHold: aow.isHold
     pt: aow.pt
     # the parameter IS the receiver (`Pt.shift p: a`): a valtype passed this
     # way goes by reference like a dotted receiver, so it locks like one
@@ -29555,14 +29603,15 @@ checkTypedCallArg: function {
         if pnId == zast.names.wkThis then isRecvArg = true
         if (st.reg.thisParamNameIs tid: funcId nameId: pnId) then isRecvArg = true
     }
-    dispHit: isTake or isLockish
+    # the argument's disposition, decided once here: the emitter reads it to
+    # zero the source of a taken argument, the LSP to word it
+    dispHit: isTake or isLockish or isHold
     if dispHit when (typeIsReftype :st tid: (ztypes.tid.create from: vt.u64)) then {
         dispVal: ztypes.zparamownership.borrowMode
+        if isViewArg then dispVal = ztypes.zparamownership.viewMode
+        if isHold then dispVal = ztypes.zparamownership.holdMode
         if isTake then dispVal = ztypes.zparamownership.takeMode
-        dispNid: innermostNodeId :ast n: (ast.nodes.get i: arg.operation.u64)
-        if dispNid > 0 then {
-            st.typing.argDisposition.set key: dispNid.u64 value: dispVal
-        }
+        stampArgDisposition :st :ast op: arg.operation own: dispVal
     }
     # where a taken argument's locks go: the receiver when the call has one,
     # the result when the callee's result holds the value. Only a taken
@@ -31207,6 +31256,12 @@ checkGenericTypeCall: function {
                                 lineno: farg.lineno
                                 colno: farg.colno
                             )
+                            (stampArgDisposition
+                                :st
+                                :ast
+                                op: farg.operation
+                                own: ztypes.zparamownership.takeMode
+                            )
                         } case none then null
                     }
                 }
@@ -31283,6 +31338,12 @@ checkTaggedCtorArg: function {
                     nodeid: arg2.nid
                     lineno: arg2.lineno
                     colno: arg2.colno
+                )
+                (stampArgDisposition
+                    :st
+                    :ast
+                    op: arg2.operation
+                    own: ztypes.zparamownership.takeMode
                 )
             } case none then null
         }
