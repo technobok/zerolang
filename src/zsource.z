@@ -3444,11 +3444,40 @@ Analysis: class {
                 target: ""
                 foldPaths: foldPaths9
             )
-            this.lintSuffixUnit :prog :uname :st
-            this.reportUnusedDefs :prog :uname :st
-            this.reportUnusedVars :prog :uname :st
-            this.reportViewableLocals :prog :uname :st
-            if this.opts.arch then this.reportArch :prog :uname :st :srcdirs :systemdir
+            this.reportTypeErrors :st
+            # the rules below read what the typecheck STAMPED. On a failed
+            # typecheck that evidence is partial, so they would report from it
+            # rather than about it
+            if st.typing.errors.length == 0 then {
+                this.lintSuffixUnit :prog :uname :st
+                this.reportUnusedDefs :prog :uname :st
+                this.reportUnusedVars :prog :uname :st
+                this.reportViewableLocals :prog :uname :st
+                if this.opts.arch then this.reportArch :prog :uname :st :srcdirs :systemdir
+            }
+        }
+    }
+
+    # reportTypeErrors -- the typecheck's own diagnostics. This tier already
+    # runs a COMPLETE eager typecheck, because its rules read what that run
+    # stamps; these are what the same run found, and they used to be discarded.
+    # That mattered: compilation is demand-driven from `main`, so a definition
+    # nothing demands is walked by no build, and until eager-lib-guard no gate
+    # compiled a library unit under `--eager` either. `requireMain: false` is
+    # why this works on a unit that is not a program.
+    reportTypeErrors: function {:this st: zenv.ZSymbolTable.view} is {
+        with eit: st.typing.errors.iterate do for er: eit loop {
+            d: (zdiag.errorDiag
+                errv: er.err
+                fsno: er.fsno
+                lineno: er.lineno
+                colno: er.colno
+                width: er.width
+                msg: er.msg.copy
+                note: er.note.copy
+                hint: er.hint.copy
+            )
+            this.diags.append d
         }
     }
 
@@ -4183,11 +4212,15 @@ Analysis: class {
     } is {
         mainTid: unitTidOf :prog :uname :st
         if mainTid == 0 then return
-        usedE: usedDeclSet :prog :st :mainTid
         mainOp: unitBodyOpOf :prog :uname
         if mainOp.isZero then return
         memIds: unitMemberIds :prog unitOp: mainOp
-        refNames: unitAtomNames :prog :memIds
+        probe: u32
+        if memIds.length > 0 then probe = memIds.get i: 0
+        seg: unitFileSegment :prog :probe
+        um: unitMembersOf :prog :st :mainTid :memIds
+        usedE: usedDeclSet :prog :st :mainTid :seg :um
+        refNames: unitAtomNames :prog :seg :um
         ev: (UnusedEvidence :mainTid :usedE :refNames :memIds)
         this.reportUnusedUnitDefs :prog :st :ev
         this.reportUnusedTypeMembers :prog :st :ev
@@ -4463,12 +4496,92 @@ fnParamIds: function {prog: Ast.view fop: u32} out ListVal u32 is {
 UnusedEvidence: class {
     # the type id of the unit being linted
     mainTid: u64
-    # every declaration a recorded reference reaches
+    # every declaration a recorded reference reaches from OUTSIDE itself
     usedE: IdSet u64
-    # every atom name in the unit's own file segment, the syntactic fallback
+    # every atom name in the unit's own file segment that is not a definition
+    # naming itself, the syntactic fallback
     refNames: IdSet u64
     # the unit body's member nodes, in order
     memIds: ListVal u32
+}
+
+# UnitMembers -- the unit's members as three parallel columns in declaration
+# order: start line, name id, and the declaration id L012 judges. A reference
+# belongs to the LAST member whose start line is at or before it, which is what
+# lets both evidence passes tell a USE from a definition naming itself. Name
+# and declaration id are 0 for a member that has neither, so nothing matches.
+UnitMembers: class {
+    # each member's start line, ascending
+    lines: ListVal u32
+    # each member's name id, 0 when it has none
+    names: ListVal u64
+    # each member's typed declaration id, 0 when it has none
+    declIds: ListVal u64
+}
+
+# unitMembersOf -- the three columns, one row per unit body member.
+unitMembersOf: function {
+    prog: Ast.view st: zenv.ZSymbolTable.view mainTid: u64 memIds: (ListVal u32).view
+} out UnitMembers is {
+    um: (UnitMembers lines: ListVal u32 names: ListVal u64 declIds: ListVal u64)
+    mI: u64
+    for mI < memIds.length loop {
+        mid: memIds.get i: mI
+        mI = mI + 1
+        m: zast.namedSiteAt ast: prog nid: mid
+        nm9: u64
+        dc9: u64
+        if m.name.isZero.not then {
+            nm9 = m.name.u64
+            dc9 = (st.typing.declTypedMemberIdOf
+                parentTypeId: (ztypes.tid.create from: mainTid.u64)
+                nameId: m.name
+            ).u64
+        }
+        um.lines.append from: m.line
+        um.names.append from: nm9
+        um.declIds.append from: dc9
+    }
+    return um
+}
+
+# memberIndexAtLine -- the index of the last member starting at or before
+# `line`; the column length when the line precedes every member.
+memberIndexAtLine: function {um: UnitMembers.view line: u32} out u64 is {
+    n: um.lines.length
+    lo: u64
+    hi: n
+    for lo < hi loop {
+        mid: lo + ((hi - lo) / 2)
+        v: um.lines.get i: mid
+        if v <= line then {
+            lo = mid + 1
+        } else {
+            hi = mid
+        }
+    }
+    if lo == 0 then return n
+    return lo - 1
+}
+
+# selfReferenceAt -- the reference at `siteNid` names the very member it sits
+# inside. The site must be in this unit's own file segment: a use from another
+# file shares no line numbering with these extents, and dropping one would
+# report a member that IS used.
+selfReferenceAt: function {
+    prog: Ast.view seg: segrange um: UnitMembers.view siteNid: u64 declId: u64
+} out bool is {
+    if declId == 0 then return false
+    if seg.end <= seg.start then return false
+    if siteNid < seg.start.u64 then return false
+    if siteNid >= seg.end.u64 then return false
+    ln: u32
+    {
+        ln = (zast.posOf n: (prog.nodes.get i: siteNid)).line
+    }
+    k: memberIndexAtLine :um line: ln
+    if k >= um.declIds.length then return false
+    return (um.declIds.get i: k) == declId
 }
 
 # unitTidOf -- the type id of the unit named `uname`, 0 when the program declares
@@ -4534,7 +4647,13 @@ unitMemberIds: function {prog: Ast.view unitOp: zast.nodeid} out ListVal u32 is 
 # the member under its owning type, and each public alias marks the name it
 # stands for. The pairs are collected first and resolved after the walk, since
 # a member lookup through the table cannot run while its table is iterated.
-usedDeclSet: function {prog: Ast.view st: zenv.ZSymbolTable.view mainTid: u64} out IdSet u64 is {
+usedDeclSet: function {
+    prog: Ast.view
+    st: zenv.ZSymbolTable.view
+    mainTid: u64
+    seg: segrange
+    um: UnitMembers.view
+} out IdSet u64 is {
     usedE: IdSet u64
     owners: ListVal u64
     names: ListVal u64
@@ -4545,6 +4664,9 @@ usedDeclSet: function {prog: Ast.view st: zenv.ZSymbolTable.view mainTid: u64} o
             dlo: st.typing.decls.get i: e.value.u64
             dNm = dlo.name.u64
             dPar = dlo.parent
+        }
+        if (selfReferenceAt :prog :seg :um siteNid: e.key declId: e.value.u64) then {
+            dPar = 0
         }
         if dPar > 0 when dNm > 0 then {
             ownerTid: u64
@@ -4636,15 +4758,6 @@ unitFileSegment: function {prog: Ast.view probe: u32} out segrange is {
     return r
 }
 
-# atomNamesInRange -- every atom name among the nodes of `[start, end)`
-atomNamesInRange: function {prog: Ast.view start: u32 end: u32 into: IdSet u64} is {
-    ndI: start.u64
-    for ndI < end.u64 loop {
-        nd0: prog.nodes.get i: ndI.u64
-        if nd0.atomid then into.add item: nd0.name.u64
-        ndI = ndI + 1
-    }
-}
 
 # atomNamesOutsideSegments -- every atom name among the nodes no file segment
 # covers: the root parse's own, since only subunit loads append segments
@@ -4672,17 +4785,34 @@ atomNamesOutsideSegments: function {prog: Ast.view into: IdSet u64} is {
 # unit's own file segment. Stamps exist only for the bodies the demand walk
 # checked, so a private def used only inside an unchecked body (a construction
 # in a never-demanded factory) would otherwise read as dead.
-unitAtomNames: function {prog: Ast.view memIds: (ListVal u32).view} out IdSet u64 is {
+unitAtomNames: function {prog: Ast.view seg: segrange um: UnitMembers.view} out IdSet u64 is {
     names: IdSet u64
-    probe: u32
-    if memIds.length > 0 then probe = memIds.get i: 0
-    seg: unitFileSegment :prog :probe
     if seg.end > seg.start then {
-        atomNamesInRange :prog start: seg.start end: seg.end into: names
+        atomNamesOutsideSelf :prog :seg :um into: names
     } else {
         atomNamesOutsideSegments :prog into: names
     }
     return names
+}
+
+# atomNamesOutsideSelf -- every atom name in `[seg.start, seg.end)` except
+# where the atom names the member it sits inside. A self-recursive definition
+# spells its own name, and counting that as a use is what kept L012 silent
+# about two dead emitter helpers for three months.
+atomNamesOutsideSelf: function {
+    prog: Ast.view seg: segrange um: UnitMembers.view into: IdSet u64
+} is {
+    ndI: seg.start.u64
+    for ndI < seg.end.u64 loop {
+        nd0: prog.nodes.get i: ndI
+        ndI = ndI + 1
+        if nd0.atomid then {
+            k: memberIndexAtLine :um line: nd0.lineno
+            isSelf: false
+            if k < um.names.length when (um.names.get i: k) == nd0.name.u64 then isSelf = true
+            if isSelf.not then into.add item: nd0.name.u64
+        }
+    }
 }
 
 # definedTypeTidOf -- the type id a unit member defines, 0 when the member is
