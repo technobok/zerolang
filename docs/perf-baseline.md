@@ -181,6 +181,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-09-10 | 7b0437e8 | [`.take` arguments in conditions: the stepped condition form](#r-take-in-condition) | 0.47s | -- | 94MB / -- | 112 / 180 / 184 (total 476) | 2,122,449 | 302MB | -- | 122,766 |
 | 2026-09-10 | 4bc0566e | [the checker refuses a move inside a loop](#r-loop-move-refusal) | 0.48s | -- | 95MB / -- | 105 / 181 / 187 (total 473) | 2,130,358 | 305MB | -- | 123,065 |
 | 2026-09-10 | cb26d174 | [a valtype holds value data only](#r-valtype-holds-values) | 0.48s | -- | 100MB / -- | 125 / 183 / 187 (total 495) | 2,132,433 | 305MB | -- | 123,216 |
+| 2026-09-10 | b90b64df | [a loop variable survives a suspension](#r-loop-var-suspension) | 0.50s | -- | 100MB / -- | 118 / 190 / 202 (total 510) | 2,138,058 | 306MB | -- | 123,510 |
 
 
 <a id="r-tokenarc"></a>
@@ -2944,6 +2945,31 @@ names a base the chase cannot resolve. The corpus did not catch it: it binds
 `A008 src/ztypecheck.z` 168 -> 160, `A005 src/zemitterc.z` 9 -> 7,
 `A005 src/ztypecheck.z` 12 -> 10, `A001 src/zemitterc.z` 387 -> 386, and the
 emitter-guard's `userFnId` count 31 -> 30.
+
+<a id="r-loop-var-suspension"></a>
+### a loop variable survives a suspension (2026-09-10, `cb26d174` -> `b90b64df`)
+
+Seven commits. Inside a generator's `call`, a `for` over an object iterator
+bound its loop variable in a C local inside the loop, and a `yield` returned
+past it: garbage for a value payload, `free(): invalid pointer` for an owned
+one (the compiler's own per-iteration cleanup on the resume label), a dead
+pointer for a borrowed element; a bare-name iterable and a `with` value died
+the same way, and a bare-`for` with body emitted invalid C. The lowering
+could not mint the state for any of it -- it is syntactic and cannot tell a
+type name from a local or a method call from a field read -- so the checker
+now mints typed fields during the body walk (`9ff9e895`: forPayloadField,
+forIterableField, withValueField) and the emitter saves and reloads them at
+every yield by kind (`e5230683`); the lowering's `with` rebind is retired
+(`b359a0d6`) and the bare-line body promoted (`75e323c4`). One corpus program
+pins twelve shapes.
+
+**+5,625 blocks against the previous row, of which +154 are the mechanism**
+(the previous seed and the new compiler on the same source, equal-length
+binary names) and the rest the ~300 new lines being compiled. The first cut
+cost +6,150: `and` does not short-circuit, so every loop in every program
+walked its body for yields (`b90b64df`). Wall 0.48s -> 0.50s and the phase
+split are within noise on a machine carrying an 8GB GPU job during the
+measurement; RSS unchanged.
 
 <a id="r-valtype-holds-values"></a>
 ### a valtype holds value data only (2026-09-10, `4bc0566e` -> `cb26d174`)
