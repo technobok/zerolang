@@ -6926,7 +6926,10 @@ bindingRhsIsBorrow: function {
         ) case some then {
             return false
         } case none then null
-        ch: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
+        chId: atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64)
+        # a `.borrow` value is a reference by definition
+        if chId == zast.names.wkBorrow then return true
+        ch: zast.nameTextAt :ast ref: chId
         bnmV: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent.u64))
         if (vvHas xs: ctx.narrowBox vid: bnmV) then {
             # a field read off a narrowed subject is a shallow-copy borrow (it aliases
@@ -6984,6 +6987,77 @@ bindingRhsIsBorrow: function {
     } else {
         return false
     }
+}
+
+# rhsBorrowMarkerBase -- the binding RHS is `<path>.borrow` over a reftype
+# VALUE: the node of the path under the marker, 0 otherwise. A protocol or
+# facet `.borrow` is a projection call and answers 0 (its stamp is not the
+# base's).
+rhsBorrowMarkerBase: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    n: astnode.view
+} out u64 is {
+    match (
+        n
+    ) case expression then {
+        return (rhsBorrowMarkerBase :ast :symtab n: (ast.nodes.get i: n.expression.u64))
+    } case dottedpath then {
+        if (
+            (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64)) != zast.names.wkBorrow
+        ) then return 0
+        pidB: interpPartNodeId n: (ast.nodes.get i: n.parent.u64)
+        bst: stampIdOf :symtab nid: pidB
+        if bst.isZero then return 0
+        if (symtab.reg.isReftypeOf tid: bst).not then return 0
+        if (stampIdOf :symtab nid: n.nodeid.u64) != bst then return 0
+        return n.parent.u64
+    } else {
+        return 0
+    }
+}
+
+# emitBorrowAliasBind -- a `.borrow` value or a borrowed element get bound to
+# a name: the name is a POINTER to the source, aliased to its deref so every
+# use stays a value-shaped lvalue and a write through the name reaches the
+# source. No destructor and no take-invalidation: the source owns the value,
+# the container its element. Answers whether the binding was one.
+emitBorrowAliasBind: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    # the binding
+    n: zast.assignmentrow.view
+    # the binding's C name
+    nm: StringView
+    # the binding's variable
+    nameVid: ztypes.vid
+    # the value's C type
+    ct: StringView
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} out bool is {
+    avn: ast.nodes.get i: n.value.u64
+    bmb: rhsBorrowMarkerBase :ast :symtab n: avn
+    if bmb == 0 when (rhsIsBorrowGet :ast :symtab :ctx n: avn) then bmb = n.value.u64
+    if bmb == 0 then return false
+    base: ast.nodes.get i: bmb
+    rvm: emitExpr :ast :symtab :ctx n: base
+    flushArgHoists :ctx :ind :tmp :buf
+    bct: ct.string
+    if bct.length == 0 then bct = "int64_t".string
+    # a base the C already holds through a pointer (a borrowed parameter, a
+    # borrowed field) is the pointer itself
+    addr: "&"
+    if (pathIsPointer :ast :symtab :ctx n: base) then addr = ""
+    lb0: "\{ind}\{bct}* __borrow_\{nm} = \{addr}\{rvm};\n"
+    buf.append lb0
+    lb1: "\{ind}/* alias: \{nm} => (*__borrow_\{nm}) */\n"
+    buf.append lb1
+    bal: "(*__borrow_\{nm})"
+    vvSet xs: ctx.aliases vid: nameVid val: bal.stringView
+    return true
 }
 
 # rhsIsBorrowGet -- the binding RHS is a List/ListView `get` lowered by pointer,
@@ -15723,22 +15797,18 @@ emitAssignment: function {
     ltid: stampIdOf :symtab nid: n.nodeid.u64
     if ltid.isZero then ltid = stampIdOf :symtab nid: (interpPartNodeId n: avn)
     ltid = ztypes.tid.create from: (chaseColMono :symtab :ctx tid: ltid)
-    if (rhsIsBorrowGet :ast :symtab :ctx n: avn) then {
-        # a borrowed element get: bind the POINTER and alias the name to the
-        # deref, so every downstream use stays a value-shaped lvalue. No
-        # destructor and no take-invalidation: the container owns the element.
-        rvb: emitExpr :ast :symtab :ctx n: avn
-        flushArgHoists :ctx :ind :tmp :buf
-        bct: ct.copy
-        if bct.length == 0 then bct = "int64_t".string
-        lbg0: "\{ind}\{bct}* __borrow_\{nm} = &\{rvb};\n"
-        buf.append lbg0
-        lbg1: "\{ind}/* alias: \{nm} => (*__borrow_\{nm}) */\n"
-        buf.append lbg1
-        bga: "(*__borrow_\{nm})"
-        vvSet xs: ctx.aliases vid: nameVid val: bga.stringView
-        return
-    }
+    if (emitBorrowAliasBind
+        :ast
+        :symtab
+        :ctx
+        :n
+        nm: nm.stringView
+        :nameVid
+        ct: ct.stringView
+        :ind
+        :tmp
+        :buf
+    ) then return
     if (emitStringBind
         :ast
         :symtab
@@ -16676,6 +16746,19 @@ emitWithLocal: function {
     buf: String.borrow
 } is {
     wc: wct.string
+    # `with v: src.borrow`: the alias is a pointer to its source
+    bmbW: rhsBorrowMarkerBase :ast :symtab n: (ast.nodes.get i: n.value.u64)
+    if bmbW > 0 then {
+        addrW: "&"
+        if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: bmbW)) then addrW = ""
+        lw0: "\{ind}\{wc}* __borrow_\{wnm} = \{addrW}\{wv};\n"
+        buf.append lw0
+        lw1: "\{ind}/* alias: \{wnm} => (*__borrow_\{wnm}) */\n"
+        buf.append lw1
+        walias: "(*__borrow_\{wnm})"
+        vvSet xs: ctx.aliases vid: (defVid :symtab nid: n.nodeid.u64) val: walias.stringView
+        return
+    }
     wrb: refBorrowCalleeFid :ast :symtab :ctx n: (ast.nodes.get i: n.value.u64)
     if wrb > 0 when (fnReturnsRefBorrow
         :ast
