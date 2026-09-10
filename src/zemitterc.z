@@ -26384,6 +26384,21 @@ definedInNonMain: function {
     }
 }
 
+# definedInFragmentUnit -- the type is defined in one of the three units whose
+# runtime fragments name types by SOURCE name: io, cli, net. definedInNonMain
+# answers "is this a library type to emit alongside the main closure", which is
+# a different question and gives the wrong answer for exactly these three: when
+# `io.z` is itself the main unit, io's own IoError IS a main-unit type, and a
+# scan that only accepts non-main ones cannot find it -- the hole then fills
+# with nothing and the fragment declares `static z__t`.
+definedInFragmentUnit: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
+    duId: defUnitIdOf :ctx :tid
+    if duId == 0 then return false
+    return ((duId == ctx.ioUnitDecl) or (duId == ctx.cliUnitDecl)) or (
+        duId == ctx.netUnitDecl
+    )
+}
+
 # emitUnionMono -- a UNION mono (Option/Result): tag enum + { tag; void*
 # data } heap-payload struct + destroy (free the payload on non-null arms,
 # recursing into an aggregate payload's destructor first).
@@ -27716,16 +27731,12 @@ ioCanonTidAny: function {
     ti: 1.u64
     for ti < last loop {
         if found.isZero then {
-            okc: (definedInNonMain :symtab :ctx tid: (ztypes.tid.create from: ti.u64))
-            if okc.not when (
-                (originTidOf
-                    :symtab
-                    tid: (ztypes.tid.create from: ti.u64)
-                ) >
-                0
-            ) then okc = true
-            if okc when (regNameIs :symtab tid: (ztypes.tid.create from: ti.u64) name: canon
-            ) then found = ztypes.tid.create from: ti.u64
+            t9: ztypes.tid.create from: ti.u64
+            okc: (
+                (definedInNonMain :symtab :ctx tid: t9) or (definedInFragmentUnit :ctx tid: t9)
+            )
+            if okc.not when (originTidOf :symtab tid: t9) > 0 then okc = true
+            if okc when (regNameIs :symtab tid: t9 name: canon) then found = t9
         }
         ti = ti + 1
     }
@@ -27797,6 +27808,17 @@ loadIoFragment: function {
                     bv.append from: st.copy
                 } else {
                     cc: ioCanonCname :ast :symtab :ctx canon: nv
+                    # a type-name hole that resolves to nothing used to fill
+                    # with nothing, so `z_@IoError@_t` became `z__t` and the
+                    # C compiler reported it instead of zc. The TAG channel
+                    # above is where an empty fill is legitimate.
+                    if cc.length == 0 then {
+                        (emitFail
+                            :ctx
+                            what: "fragment \{path}: hole @\{nv}@ names no type in this program"
+                            line: 0
+                        )
+                    }
                     bv.append from: cc
                 }
             }
@@ -27818,6 +27840,8 @@ loadIoFragment: function {
 }
 
 # ioFileId -- the io File class type id (0 when File is not reachable).
+# Keyed on io's own unit rather than on "not the main unit": the two agree
+# for every program that OPENS io, and disagree for the one that IS io.
 ioFileId: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out u64 is {
     last: symtab.reg.nextTypeId
     ti: 1.u64
@@ -27825,8 +27849,9 @@ ioFileId: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out u64 is {
         if (
             (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: ti.u64)) ==
             ztypes.ztypetype.classType
-        ) when (regNameIs :symtab tid: (ztypes.tid.create from: ti.u64) name: "File"
-        ) when (definedInNonMain :symtab :ctx tid: (ztypes.tid.create from: ti.u64)) then return ti
+        ) when (regNameIs :symtab tid: (ztypes.tid.create from: ti.u64) name: "File") when (
+            (defUnitIdOf :ctx tid: (ztypes.tid.create from: ti.u64)) == ctx.ioUnitDecl
+        ) then return ti
         ti = ti + 1
     }
     return 0
