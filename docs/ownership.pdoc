@@ -464,13 +464,15 @@ and on the receiver, for as long as the result lives:
   [#*: #_+"Pin-all." Every non-owned input is pinned -- bare arguments and
   path-shaped ones (#~"f from: h.inner" pins #~"h.inner"), the receiver
   included. #~".take" and #~".hold" arguments are moved in and pin nothing.]
-  [#*: #_+"Strength per input." A #~".borrow" parameter and a bare #~":this"
-  receiver pin #_+"EXCLUSIVE": until the result dies the caller can neither
-  write nor read that source, and reads it through the result instead. A
-  #~".view" parameter and a #~"{t: this.view}" receiver pin #_+"SHARED": the
-  caller keeps reading. #~"listView" and #~"slice" declare that receiver on
-  both list forms; #~"get" and #~"Map.get" cannot, and are whitelisted readers
-  that pin SHARED too.]
+  [#*: #_+"Strength per input." Every non-owned #_+"argument" pins
+  #_+"SHARED", #~".borrow" and #~".view" alike: the caller keeps reading the
+  source and may not write, move or drop it while the result lives. Whether
+  the result may #_+"write" through its reference is the parameter's marker,
+  not the pin's strength. The #_+"receiver" pins at the strength the method
+  declares: a bare #~":this" #_+"EXCLUSIVE", a #~"{t: this.view}" receiver
+  #_+"SHARED". #~"listView" and #~"slice" declare that receiver on both list
+  forms; #~"get" and #~"Map.get" cannot, and are whitelisted readers that pin
+  SHARED too.]
   [#*: #_+"The result's own ownership is the marker's." #~"outx T" and
   #~"outx T.hold" are #_+"owned" results -- they carry a destructor and may be
   moved; #~"outx T.borrow" and #~"outx T.view" are references; #~".hold" and
@@ -549,7 +551,11 @@ constructor field, a list/map insert) but only have a borrowed source:
 
 Compare with #~".take" (transfer the source's ownership to the
 destination, invalidating the source) and inline #~".borrow" (alias the
-source via a lock, no allocation).
+source via a lock, no allocation). Bound to a name -- #~"b: src.borrow", or
+#~"with v: src.borrow" -- the alias is a #_+"pointer" to the source, not a
+copy: a write through #~"b" is a write to #~"src", and the source is pinned
+SHARED for as long as #~"b" lives, so its owner may read it but not write,
+move or drop it.
 
 #----: Which types have a .copy
 
@@ -738,8 +744,9 @@ the alias. Unit-level instantiation creates a compile-time alias
 
 #--: Pinning and Locks
 
-A non-owned binding or argument #_+"pins" its source: SHARED for readonly
-views, EXCLUSIVE for mutable borrows. Pinning is an orthogonal compile-time
+A non-owned binding or argument #_+"pins" its source: SHARED for every
+reference -- a #~".view" and a #~".borrow" alike -- and EXCLUSIVE only for the
+receiver of a mutating method. Pinning is an orthogonal compile-time
 mechanism that prevents aliasing and enforces mutation-safety for
 outstanding borrows, with zero runtime overhead. The machinery that
 enforces pins is called #_+"locking", and "lock" is the word compiler
@@ -756,11 +763,25 @@ detail; if the detail ever seems to say something else, these win.
   #~"this.borrow"). A field write or a swap is the same thing at statement
   scope. There is no separate rule for mutation: a mutator is simply a call
   with an exclusive receiver, and no carve-out for readers.]
+  [#*: #_+"Every other reference pins SHARED" -- a #~".borrow" or #~".view"
+  field, a #~"with" alias, a #~".borrow" parameter during its call. The owner
+  may still #_+"read" the source beside it (#~"src.length", an interpolation,
+  passing it to another call) and may not #_+"write, move or drop" it while
+  the reference lives. Whether the reference may write #_+"through itself" is
+  its own marker's business, not the pin's.]
   [#*: #_+"The pin is released on return" -- unless the function is declared
   #~"outx", in which case it transfers to the binding and lives exactly as
   long as it does.]
   [#*: #_+"Shared and shared coexist. Exclusive coexists with nothing. A
-  holder never conflicts with itself."]
+  holder never conflicts with itself." Two refinements keep the shared pins
+  honest: one value may not reach a call twice -- as two arguments, or as an
+  argument and the receiver -- when either reference may write, since the
+  callee holds both at once; and a reference a call #_+"handed back" (an
+  element #~"get", a #~".stringView", an #~"outx" result) may point
+  #_+"inside" its source, so it coexists with no reference that may write to
+  that source, whichever came first. An alias of the source's own slot -- a
+  #~"with" alias, a non-owned field, an argument, an #~"outx this" -- survives
+  writes through the other name and takes no such rule.]
 
 This is Rust's discipline applied to references, and it was chosen
 deliberately over a more permissive alternative that would have needed two
@@ -1170,8 +1191,9 @@ express this:
   }
   """
 
-The field stores a locked reference to external data. The reference is locked
-for the entire lifetime of the class instance. When the instance falls out of
+The field stores a locked reference to external data, pinned SHARED for the
+entire lifetime of the class instance: the owner keeps reading the source, and
+may not write, move or drop it while the instance lives. When the instance falls out of
 scope, the locks held by its non-owned fields are released together with the
 instance itself.
 
@@ -1670,7 +1692,8 @@ Two rules make views sound, and the compiler enforces both:
       #~".length", comparisons, method calls) is always fine.]
   [#*: #b:"A live view pins its parent." The binding holds a SHARED
       path-scoped lock on the container for its whole scope. Readers may
-      overlap; a writer may not.]
+      overlap; a writer may not -- and neither may a #~".borrow" argument
+      of the container, since the callee may grow it under the view.]
 
 The pin model is #b:"many readers or one writer"; an iterator pins with
 the strength its receiver declares:

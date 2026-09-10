@@ -459,15 +459,17 @@ conflict rule. Two lock scopes exist:</p>
 <li>Call-scoped locks -- taken on function arguments during a call.
 A call scope is pushed before argument processing. For each reftype
 argument, SHARED locks are taken on every intermediate prefix of the
-source path and EXCLUSIVE on the leaf. The receiver path locks
-identically. After the call returns, the scope is popped and all
+source path and SHARED on the leaf, the row flagged <code>mutable</code> unless
+the parameter is <code>.view</code>. The receiver path locks the same way at the
+receiver's strength: EXCLUSIVE for a <code>{:this}</code> method. After the call returns, the scope is popped and all
 call-scoped locks are released. For non-owned parameters, the leaf
 lock transfers to the return value (installed as a borrow-scoped lock
 in the parent scope).</li>
 <li>Borrow-scoped locks -- taken when <code>.borrow</code>, <code>.view</code>,
 <code>.stringView</code>, <code>.listView</code>, a <code>with</code>-binding, or a
 <code>.borrow</code>-param transfer creates a borrowed binding. SHARED entries
-are placed on each intermediate prefix and EXCLUSIVE on the leaf in
+are placed on each intermediate prefix and on the leaf (EXCLUSIVE only
+when the pin came from a <code>{:this}</code> receiver) in
 the scope where the borrow variable is defined. The locks persist
 for the lifetime of that scope (released on scope exit or explicit
 <code>.drop</code>).</li>
@@ -478,7 +480,13 @@ SHARED is intent-shared and permits any lock on descendants; a strict
 ancestor EXCLUSIVE conflicts with any descendant. Sibling paths (no
 prefix relation) never conflict. Enforcement for access / mutation
 sites uses the same prefix-overlap test: any EXCLUSIVE whose path
-prefix-overlaps the target path is a conflict.</p>
+prefix-overlaps the target path is a conflict. Two rules on top of
+the strengths: inside one call, a second row over the same value
+conflicts when either row is <code>mutable</code> (two arguments, or an
+argument and the receiver); and a row whose reference a call handed
+back (<code>alias</code> false -- it may point inside the value) conflicts
+with any other holder's <code>mutable</code> row over the same value, in
+either order.</p>
 <p>Key code: <code>tryLock</code> / <code>findExclusiveLock</code> /
 <code>lockAcquireConflict</code> in <code>src/zenv.z</code>; <code>lockCallArg</code> /
 <code>installBorrowLocks</code> and the path-tuple builders and access-check
