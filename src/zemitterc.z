@@ -5931,6 +5931,25 @@ methodOwnerId: function {
     return rtid
 }
 
+# hoistDestroyLine -- the scope-exit line that destroys a hoisted `_ah` temp
+# of type `tid`, "" when the type owns nothing. A String frees; a typedef
+# class over a collection or a string (Bytes, Path) shares its base's struct
+# and cleanup and has no destroyer of its own, so the line names the base's:
+# the binding leg already destroys such a local as its base, and a hoisted
+# argument must not call a function the alias never emits.
+hoistDestroyLine: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tid: ztypes.tid
+    nm: StringView
+} out String is {
+    dt: chaseStrTypedef :symtab :ctx tid: (chaseColMono :symtab :ctx :tid)
+    if dt == ctx.strTid then return "    \{ctx.strC}_free(&\{nm});\n"
+    if (symtab.reg.needsDestructor typeId: dt).not then return "".string
+    cb: ctxCname :ctx tid: dt
+    return "    \{cb}_destroy(&\{nm});\n"
+}
+
 # hoistBorrowValArg -- a by-value call argument that is an owned, destructible,
 # non-lvalue temporary (e.g. a `Map.get` Option result) handed to a borrow param
 # (not paramTake) is freed by neither side. Hoist it into a temp registered
@@ -5967,9 +5986,12 @@ hoistBorrowValArg: function {
     ctx.argHoistCtr = ctx.argHoistCtr + 1
     vnmh: "_ah\{vhn}"
     vcty: typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: pid.u64) thisTid: ztypes.tid
-    vcb: ctxCname :ctx tid: (ztypes.tid.create from: vrid.u64)
-    vdt: "    \{vcb}_destroy(&\{vnmh});\n"
-    if isStrH then vdt = "    \{ctx.strC}_free(&\{vnmh});\n"
+    vdt: (hoistDestroyLine
+        :symtab
+        :ctx
+        tid: (ztypes.tid.create from: vrid.u64)
+        nm: vnmh.stringView
+    )
     # a borrow-returning call result is a shared view: hoist for
     # lvalue-ness only, never destroy
     if isBorrow then vdt = "".string
@@ -6318,10 +6340,12 @@ instanceMethodArgHoist: function {
             )
             if hrr > 0 then hrid = hrr
         }
-        if (symtab.reg.needsDestructor typeId: (ztypes.tid.create from: hrid.u64)) then {
-            hcb: ctxCname :ctx tid: (ztypes.tid.create from: hrid.u64)
-            hdt = "    \{hcb}_destroy(&\{nmH});\n"
-        }
+        hdt = (hoistDestroyLine
+            :symtab
+            :ctx
+            tid: (ztypes.tid.create from: hrid.u64)
+            nm: nmH.stringView
+        )
     }
     abh: "&\{nmH}"
     ctx.argHoistVals.append atomVarId.string
@@ -7594,11 +7618,7 @@ ownedReceiverHoist: function {
     rhn: ctx.argHoistCtr
     ctx.argHoistCtr = ctx.argHoistCtr + 1
     rnm: "_ah\{rhn}"
-    rdt: "    \{ctx.strC}_free(&\{rnm});\n"
-    if (rtid == ctx.strTid).not then {
-        rcn: ctxCname :ctx tid: rtid
-        rdt = "    \{rcn}_destroy(&\{rnm});\n"
-    }
+    rdt: hoistDestroyLine :symtab :ctx tid: rtid nm: rnm.stringView
     rex: expr.string
     ctx.argHoistVals.append rex
     ctx.argHoistTypes.append rct
@@ -9745,14 +9765,7 @@ emitByrefArg: function {
         if hrr > 0 then hrid = ztypes.tid.create from: hrr.u64
     }
     hdt: String
-    if isBorrow then null else if hrid == ctx.strTid then {
-        hdt = "    \{ctx.strC}_free(&\{nmH});\n"
-    } else {
-        if (symtab.reg.needsDestructor typeId: hrid) then {
-            hcb: ctxCname :ctx tid: (ztypes.tid.create from: hrid.u64)
-            hdt = "    \{hcb}_destroy(&\{nmH});\n"
-        }
-    }
+    if isBorrow.not then hdt = hoistDestroyLine :symtab :ctx tid: hrid nm: nmH.stringView
     avc: av.string
     r: "&\{nmH}"
     ctx.argHoistVals.append avc
