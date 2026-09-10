@@ -25253,15 +25253,12 @@ emitCodeBody: function {
 } is {
     codeBuf.reserve n: nodeEstE * 8
     {
-        emitMonos ast: program :symtab :ctx :runtimeDir buf: codeBuf
-        # ahead of the runtime fragments: those dereference the layouts of the
-        # types they serve, so anything a fragment touches must already be
-        # complete, and this is the pass that orders by-value embedding in both
-        # directions (a user struct inside a mono, a mono inside a user struct)
-        emitFnptrTypedefs ast: program :symtab :ctx buf: codeBuf
-        emitUserStructsOrdered ast: program :symtab :ctx :runtimeDir buf: codeBuf
-        # File's methods are demanded by the class being REACHABLE rather than
-        # by a call, so the injection runs before any row is consulted
+        # An fd-holder class's methods are demanded by the class being
+        # REACHABLE rather than by a call: a DECLARED Reader/Writer conformance
+        # needs the native's address whether or not anything calls it, and net's
+        # `Conn` declares one that nothing in the tree constructs. Both
+        # injections run ahead of every consultation -- emitMonos asks one, for
+        # the fd structs the net fragments dereference.
         if (ioFileLive ast: program :symtab :ctx) then {
             needsAddM :ctx uname: "io" memb: "@unit"
             needsAddM :ctx uname: "io" memb: "file_close"
@@ -25270,6 +25267,16 @@ emitCodeBody: function {
             needsAddM :ctx uname: "io" memb: "file_seek"
             needsAddM :ctx uname: "io" memb: "file_flush"
         }
+        if (netUnitLive ast: program :symtab :ctx) then {
+            needsAddM :ctx uname: "net" memb: "@unit"
+        }
+        emitMonos ast: program :symtab :ctx :runtimeDir buf: codeBuf
+        # ahead of the runtime fragments: those dereference the layouts of the
+        # types they serve, so anything a fragment touches must already be
+        # complete, and this is the pass that orders by-value embedding in both
+        # directions (a user struct inside a mono, a mono inside a user struct)
+        emitFnptrTypedefs ast: program :symtab :ctx buf: codeBuf
+        emitUserStructsOrdered ast: program :symtab :ctx :runtimeDir buf: codeBuf
         # every unit's runtime, in the order the table gives. The two io
         # emitters between io and cli generate C rather than load fragments, so
         # they stay named here -- they are the one seam the rows cannot state.
@@ -27866,6 +27873,20 @@ ioFileId: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out u64 is {
 ioFileLive: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out bool is {
     calleeTid: ioFileId :symtab :ctx
     if calleeTid == 0 then return false
+    listValU8Tid: specStemTid :ast :symtab base: "ListVal" arg1: "u8" arg2: ""
+    if listValU8Tid.isZero then return false
+    listViewValU8Tid: specStemTid :ast :symtab base: "ListViewVal" arg1: "u8" arg2: ""
+    if listViewValU8Tid.isZero then return false
+    return true
+}
+
+# netUnitLive -- net's fd-holder classes are present AND the byte-buffer monos
+# their read/write fragments dereference exist. The net analogue of ioFileLive,
+# and the same order-independent gate: true exactly when the net runtime's
+# referenced monos have been demanded.
+netUnitLive: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out bool is {
+    if ctx.netConnTid == 0 then return false
+    if ctx.netListenerTid == 0 then return false
     listValU8Tid: specStemTid :ast :symtab base: "ListVal" arg1: "u8" arg2: ""
     if listValU8Tid.isZero then return false
     listViewValU8Tid: specStemTid :ast :symtab base: "ListViewVal" arg1: "u8" arg2: ""
