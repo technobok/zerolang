@@ -6,8 +6,11 @@
 # adds `call`'s implicit receiver and the option wrapper around its element
 # type, generates the `create` the `is` fields describe, and appends the fields
 # the suspension transform needs: a `state` cursor, the yield-crossing locals,
-# the loop counters, and the resume slots. The state machine itself is the
-# emitter's job; what happens here is that the class arrives at it complete.
+# the loop counters, and the resume slots. The payload a suspending loop
+# binds, the iterable it constructs and the value a `with` holds are the
+# checker's fields: it mints them during the body walk, where their types are
+# known. The state machine itself is the emitter's job; what happens here is
+# that the class arrives at it complete.
 #
 # Nothing here infers ownership. A field's marker is what the author declared,
 # and the generated `create`'s parameter follows from it -- which is the whole
@@ -1030,156 +1033,6 @@ lineIsWith: function {ast: Ast.view n: astnode.view} out bool is {
     }
 }
 
-# withValueIsOwned -- true when a `with` value is OWNED by shape alone.
-#
-# A conservative mirror of the checker's `withValueOwnership`: that one answers
-# BORROWED for a bare name bound to a runtime variable and for a plain dotted
-# path, OWNED for everything else. The runtime-variable half is a symbol-table
-# question and lowering has no symbol table, so both name-shaped arms answer
-# false here. Being wrong in that direction only leaves a binding unpromoted;
-# being wrong the other way would rebind a borrow, which the checker refuses.
-withValueIsOwned: function {ast: Ast.view n: astnode.view} out bool is {
-    match (
-        n
-    ) case expression then {
-        return (withValueIsOwned :ast n: (ast.nodes.get i: n.expression.u64))
-    } case atomid then {
-        return false
-    } case labelvalue then {
-        return false
-    } case dottedpath then {
-        return false
-    } else {
-        return true
-    }
-}
-
-# prependIntoBlock -- a statement block with `name: src` inserted as its first
-# line; 0 when the node is not a block.
-prependIntoBlock: function {
-    # the tree the block is read from, and where the synth nodes are minted
-    ast: Ast
-    # the block to prepend to
-    bodyId: u32
-    # the name the new binding introduces
-    name: zast.nameid
-    # the name it is bound to, which the header now carries
-    src: StringView
-    # the line the synth binding is reported at
-    line: u32
-    # the column the synth binding is reported at
-    col: u32
-} out u32 is {
-    lnB: u32
-    coB: u32
-    lineIds: ListVal u32
-    isStmt: false
-    {
-        b: ast.nodes.get i: bodyId.u64
-        if b.statement then {
-            isStmt = true
-            lnB = b.lineno
-            coB = b.colno
-            stx819: u64
-            for stx819 < b.statements.count.u64 loop {
-                s: zast.kidAt kids: ast.kids span: b.statements i: stx819
-                stx819 = stx819 + 1
-                lineIds.append from: s
-            }
-        }
-    }
-    if isStmt.not then return 0
-    sa2: mkAtom :ast :line :col name: src
-    ba2: (astnode.assignment (zast.assignmentrow
-        nodeid: (zast.tableReserve :ast)
-        lineno: line
-        colno: col
-        :name
-        value: (zast.tableAdd :ast n: sa2)
-    )
-    )
-    bl2: (astnode.statementline (zast.statementlinerow
-        nodeid: (zast.tableReserve :ast)
-        lineno: line
-        colno: col
-        statementline: (zast.tableAdd :ast n: ba2)
-    )
-    )
-    newLines: ListVal u32
-    newLines.append (zast.tableAdd :ast n: bl2)
-    with nit: lineIds.iterate do for s2: nit loop newLines.append from: s2
-    nb2: (astnode.statement (zast.statementrow
-        nodeid: (zast.tableReserve :ast)
-        lineno: lnB
-        colno: coB
-        statements: (zast.kidsAdd kids: ast.kids xs: newLines)
-    )
-    )
-    return (zast.tableAdd :ast n: nb2)
-}
-
-# prependBindLine -- prependIntoBlock through the `expression` and `doexpr`
-# wrappers a `with` body sits under, rebuilding them around the result.
-prependBindLine: function {
-    # the tree the body is read from, and where the synth nodes are minted
-    ast: Ast
-    # the already-promoted body to prepend to
-    bodyId: u32
-    # the name the new binding introduces
-    name: zast.nameid
-    # the name it is bound to, which the header now carries
-    src: StringView
-    # the line the synth binding is reported at
-    line: u32
-    # the column the synth binding is reported at
-    col: u32
-} out u32 is {
-    direct: prependIntoBlock :ast :bodyId :name :src :line :col
-    if direct > 0 then return direct
-    isE2: false
-    isD2: false
-    inner2: zast.nodeid
-    lnE2: u32
-    coE2: u32
-    {
-        b2: ast.nodes.get i: bodyId.u64
-        match (
-            b2
-        ) case expression then {
-            isE2 = true
-            inner2 = b2.expression
-            lnE2 = b2.lineno
-            coE2 = b2.colno
-        } case doexpr then {
-            isD2 = true
-            inner2 = b2.statement
-            lnE2 = b2.lineno
-            coE2 = b2.colno
-        } else null
-    }
-    if isE2.not when isD2.not then return bodyId
-    deep: prependBindLine :ast bodyId: inner2.u32 :name :src :line :col
-    if deep == inner2.u32 then return bodyId
-    if isD2 then {
-        rdo: (astnode.doexpr (zast.dorow
-            nodeid: (zast.tableReserve :ast)
-            lineno: lnE2
-            colno: coE2
-            statement: (zast.nodeid.create from: deep)
-        )
-        )
-        return (zast.tableAdd :ast n: rdo)
-    }
-    rew: (astnode.expression (zast.expressionrow
-        nodeid: (zast.tableReserve :ast)
-        lineno: lnE2
-        colno: coE2
-        expression: (zast.nodeid.create from: deep)
-    )
-    )
-    return (zast.tableAdd :ast n: rew)
-}
-
 # promoteWrappedBody -- promote a body that may sit under `expression`
 # wrappers, rebuilding them around the result.
 #
@@ -1299,19 +1152,17 @@ promoteBareLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out u32 is {
     return (zast.tableAdd :ast n: redo)
 }
 
-# promoteWith -- a `with` whose body suspends: re-bind the user's name inside
-# the body so the crossing analysis can see it.
+# promoteWith -- a `with` inside a suspending body: promote the body, so a
+# nested suspending loop or `with` has its own rewrite applied, and carry the
+# header's name and value across it.
 #
 # `with s: E do { .. }` emits `T s = E;` ahead of the block, and the resume
-# `goto` re-enters past that line -- so a suspending body read indeterminate
-# garbage. The name cannot be promoted where it stands: it is a nameid on the
-# `with` row, so `crossWalk` never records it and `rewriteToThis` has no shape
-# to turn it into `this.s`. Binding a fresh name in the header and re-binding
-# the user's name as the block's first statement makes it an ordinary
-# assignment, which the existing pipeline promotes and types.
-#
-# The `with` keeps its value, its scope and therefore its locks; only the
-# header's NAME changes, and the block gains one statement ahead of the rest.
+# `goto` re-enters past that line. The name cannot be promoted here: it is a
+# nameid on the `with` row, which `crossWalk` never records, and whether E is
+# owned is a symbol-table question this pass cannot ask (a dotted auto-call
+# reads as a plain path). The checker minds it: an owned value whose block
+# suspends gets a state field of the value's type, and the emitter binds the
+# name to that field for the body.
 promoteWith: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out astnode is {
     isWith: false
     lnW: u32
@@ -1334,39 +1185,15 @@ promoteWith: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out astnode is {
         empty9: (MapRV String v: bool)
         return (rewriteToThisAt :ast :nid promoted: empty9)
     }
-    # the body is promoted first, so a nested suspending loop or `with` has
-    # already had its own rewrite applied. The suspension test reads the
-    # ORIGINAL body, which is in the table and so needs no wrapper peeling.
-    suspW: false
-    if (zast.yieldCountIn :ast nid: bodyW) > 0 then suspW = true
     nbodyId: promoteWrappedBody :ast :ctr oId: bodyW
-    doRebind: false
-    if nbodyId > 0 when suspW when (zast.nameTextAt :ast ref: nameW).length > 0 then {
-        vW: ast.nodes.get i: valW.u64
-        if (withValueIsOwned :ast n: vW) then doRebind = true
-    }
     emptyA: (MapRV String v: bool)
     nval: rewriteToThisAt :ast nid: valW promoted: emptyA
     nvalId: zast.tableAdd :ast n: nval
-    nName: nameW
-    if doRebind then {
-        synthW: "_wb\{ctr.bump}"
-        swv: synthW.stringView
-        nName = zast.poolSet pool: ast.names text: swv
-        nbodyId = (prependBindLine
-            :ast
-            bodyId: nbodyId
-            name: nameW
-            src: swv
-            line: lnW
-            col: coW
-        )
-    }
     return (astnode.withexpr (zast.withrow
         nodeid: (zast.tableReserve :ast)
         lineno: lnW
         colno: coW
-        name: nName
+        name: nameW
         value: (zast.nodeid.create from: nvalId)
         body: (zast.nodeid.create from: nbodyId)
     )
@@ -2580,7 +2407,9 @@ appendResumeFields: function {
 # suspends. A `for` counter lives only in the C header, and `goto L_resume_k`
 # jumps in past the init clause, so it has to be a field like everything else
 # live across a suspension. It cannot come from the crossing analysis: a `for`
-# label is a nameid on the header's namedoperation, not an assignment.
+# label is a nameid on the header's namedoperation, not an assignment. The
+# loop's PAYLOAD and its constructed iterable are the checker's fields
+# (forPayloadField, forIterableField), minted where their types are known.
 appendForCounterFields: function {
     # the tree the resume fields are minted into
     ast: Ast

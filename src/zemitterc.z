@@ -16986,18 +16986,13 @@ emitWithStmt: function {
     # should have, so adding the destroy alone turns that program into a double
     # free. They belong together.
     emitValueTakeInvalidations :ast :symtab :ctx n: (ast.nodes.get i: n.value.u64) :ind :buf
-    # INSIDE A GENERATOR the header binds a temp and the lowering re-binds the
-    # author's name as the block's first statement, so that binding owns the
-    # value -- promoted to a field and destroyed with the instance, or an
-    # ordinary local registering its own cleanup. The temp holds nothing by the
-    # time the block starts.
-    #
-    # It could not be freed at scope exit even if it did: the free site is
-    # reachable only through a resume `goto` that jumped past the temp's
-    # declaration, so it would free an indeterminate local. That is the same
-    # rule every other name in a resumable body obeys -- a C local does not
-    # survive a suspension -- and the corpus catches it as `free(): invalid
-    # pointer` rather than as a leak.
+    # INSIDE A GENERATOR an owned value whose block suspends lives in the state
+    # field the checker minted for it (emitWithField) and is destroyed with the
+    # instance; one whose block does not suspend, or a borrowed one, is a
+    # header local that nothing may free at scope exit: the free site would be
+    # reachable through a resume `goto` that jumped past the declaration. That
+    # is the rule every other name in a resumable body obeys -- a C local does
+    # not survive a suspension.
     if ctx.genActive.not then (registerScopeDestroy
         :ast
         :symtab
