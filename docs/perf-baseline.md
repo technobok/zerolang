@@ -179,6 +179,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-09-09 | 39be2d33 | [the >=40 band + the path-window allocations](#r-a008band40) | 0.48s | -- | 94MB / -- | 123 / 179 / 184 (total 486) | 2,118,706 | 302MB | -- | 122,409 |
 | 2026-09-10 | 796ffda7 | [the six emitter splits and the lowered baseline](#r-emitter-splits) | 0.46s | -- | 94MB / -- | 105 / 180 / 186 (total 471) | 2,116,927 | 302MB | -- | 122,436 |
 | 2026-09-10 | 7b0437e8 | [`.take` arguments in conditions: the stepped condition form](#r-take-in-condition) | 0.47s | -- | 94MB / -- | 112 / 180 / 184 (total 476) | 2,122,449 | 302MB | -- | 122,766 |
+| 2026-09-10 | 4bc0566e | [the checker refuses a move inside a loop](#r-loop-move-refusal) | 0.48s | -- | 95MB / -- | 105 / 181 / 187 (total 473) | 2,130,358 | 305MB | -- | 123,065 |
 
 
 <a id="r-tokenarc"></a>
@@ -2942,6 +2943,30 @@ names a base the chase cannot resolve. The corpus did not catch it: it binds
 `A008 src/ztypecheck.z` 168 -> 160, `A005 src/zemitterc.z` 9 -> 7,
 `A005 src/ztypecheck.z` 12 -> 10, `A001 src/zemitterc.z` 387 -> 386, and the
 emitter-guard's `userFnId` count 31 -> 30.
+
+<a id="r-loop-move-refusal"></a>
+### the checker refuses a move inside a loop (2026-09-10, `cdb579f2` -> `4bc0566e`)
+
+Four commits. Every ownership move records its location (`09f93981`: six
+sites laid an unlocated take that any block's close dropped, and the
+language server's three `answered`-flag handlers relied on it); a frame's
+divergence carries its kind -- exit, break, continue -- so a move before
+`break` stays consumed after the loop and a `continue` arm's takes flow
+like a fall-through arm's (`c9660d6b`); and the rule itself (`2734e6c4`):
+after the loop's frame closes, the rows `zenv.pop` re-laid above the
+pre-loop stack height are exactly the outer locals the loop consumed on the
+fall-through path, a `continue` records its takes at the statement, and the
+iterable binding's once-only moves are exempt. Fifteen error fixtures, three
+corpus programs, the docs rewritten (`4bc0566e`).
+
+**+7,909 blocks against the previous row, of which +318 are the mechanism**
+(seed vs new on the same archived source: +0, +315, +3 for the three
+checker commits) and the rest the ~500 new lines being compiled. A first
+cut snapshotted the live owned names before and after every loop and cost
++10,000 blocks; a per-`if` list of arm kinds another +9,000; both were
+replaced before landing (the stack scan, an incremental fold). Wall, RSS
+and the phase split within noise; bytes churned +3MB from the per-frame
+kind map.
 
 <a id="r-take-in-condition"></a>
 ### `.take` arguments in conditions: the stepped condition form (2026-09-10, `74486786` -> `7b0437e8`)
