@@ -7956,91 +7956,114 @@ attachRecordField: function {
         st.typing.pendingDefaultId.set key: pdk2R.u64 value: pdiR
         handledR = true
     } case none then null
-    if handledR.not then {
-        cid: (fieldSlotTid
-            :st
-            :ast
-            :unitDecl
-            :frame
-            ownerTid: rid
-            shellOwnerId: 0
-            oId: fm.operation
-            thisName: defName
-        )
-        (refuseNullTyped
-            :st
-            tid: cid
-            nodeid: fm.nid
-            lineno: fm.lineno
-            colno: fm.colno
-            what: "field"
+    if handledR.not then (attachDeclaredField :st :frame :ast :unitDecl :defName :rid :fm :fname)
+}
+
+# attachDeclaredField -- a field declared by a type-ref rather than by a
+# sibling method: resolve its slot type, refuse what a record may not hold,
+# attach it, and record the marker and default the declaration carries.
+attachDeclaredField: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    defName: StringView
+    rid: u64
+    fm: argref
+    fname: StringView
+} is {
+    cid: (fieldSlotTid
+        :st
+        :ast
+        :unitDecl
+        :frame
+        ownerTid: rid
+        shellOwnerId: 0
+        oId: fm.operation
+        thisName: defName
+    )
+    (refuseNullTyped
+        :st
+        tid: cid
+        nodeid: fm.nid
+        lineno: fm.lineno
+        colno: fm.colno
+        what: "field"
+        name: fname
+    )
+    if (refuseReftypeMember
+        :st
+        :fm
+        owner: defName
+        tid: cid
+        what: "record field"
+        remedy: "class"
+        name: fname
+    ) then return
+    (st.typing.setMemberType
+        parentTypeId: (ztypes.tid.create from: rid.u64)
+        nameId: fm.name
+        childTypeId: cid
+    )
+    if (st.reg.typetypeOf typeId: cid) == ztypes.ztypetype.functionType then {
+        (st.typing.setChildFnptrField
+            pool: ast.names
+            parentTypeId: (ztypes.tid.create from: rid.u64)
             name: fname
         )
-        (st.typing.setMemberType
+    }
+    (recordTyperef
+        :st
+        :frame
+        :ast
+        :unitDecl
+        thisName: ""
+        nid: fm.operation
+    )
+    dcn1: (zast.nameTextAt
+        :ast
+        ref: (dottedChildNameId :ast n: (ast.nodes.get i: fm.operation.u64))
+    )
+    rdnr: (zast.nameTextAt
+        :ast
+        ref: (rootNameIdOf :ast n: (ast.nodes.get i: fm.operation.u64))
+    )
+    if (isNumericLiteralName name: rdnr.stringView) then {
+        (st.typing.declSetDefault
             parentTypeId: (ztypes.tid.create from: rid.u64)
-            nameId: fm.name
-            childTypeId: cid
+            pool: ast.names
+            name: fname
+            value: ztyping.defaultval.literal fm.operation
         )
-        if (st.reg.typetypeOf typeId: cid) == ztypes.ztypetype.functionType then {
-            (st.typing.setChildFnptrField
-                pool: ast.names
-                parentTypeId: (ztypes.tid.create from: rid.u64)
-                name: fname
-            )
-        }
-        (recordTyperef
-            :st
-            :frame
-            :ast
-            :unitDecl
-            thisName: ""
-            nid: fm.operation
-        )
-        dcn1: (zast.nameTextAt
-            :ast
-            ref: (dottedChildNameId :ast n: (ast.nodes.get i: fm.operation.u64))
-        )
-        rdnr: (zast.nameTextAt
-            :ast
-            ref: (rootNameIdOf :ast n: (ast.nodes.get i: fm.operation.u64))
-        )
-        if (isNumericLiteralName name: rdnr.stringView) then {
+    } else {
+        if dcn1.length > 0 when (isStripMarker name: dcn1.stringView).not when (
+            (nameDenotesUnit
+                :st
+                :frame
+                nameId: (nameIdOf
+                    :ast
+                    name: rdnr.stringView
+                )
+            ).not
+        ) then {
+            rArmNid: zast.poolFind pool: ast.names text: dcn1.stringView
+            rArmDecl: st.typing.declMemberIdOf parentTypeId: cid nameId: rArmNid
             (st.typing.declSetDefault
                 parentTypeId: (ztypes.tid.create from: rid.u64)
                 pool: ast.names
                 name: fname
-                value: ztyping.defaultval.literal fm.operation
+                value: ztyping.defaultval.arm rArmDecl
             )
-        } else {
-            if dcn1.length > 0 when (isStripMarker name: dcn1.stringView).not when (
-                (nameDenotesUnit
-                    :st
-                    :frame
-                    nameId: (nameIdOf
-                        :ast
-                        name: rdnr.stringView
-                    )
-                ).not
-            ) then {
-                rArmNid: zast.poolFind pool: ast.names text: dcn1.stringView
-                rArmDecl: st.typing.declMemberIdOf parentTypeId: cid nameId: rArmNid
-                (st.typing.declSetDefault
-                    parentTypeId: (ztypes.tid.create from: rid.u64)
-                    pool: ast.names
-                    name: fname
-                    value: ztyping.defaultval.arm rArmDecl
-                )
-            }
         }
-        if dcn1.length > 0 when (isStripMarker name: dcn1.stringView) then null else {
-            if dcn1.length > 0 then {
-                rdk3: nodeId n: (ast.nodes.get i: fm.operation.u64)
-                rdo3: rid
-                st.typing.pendingDefaultOwner.set key: rdk3.u64 value: rdo3
-                rdk4: nodeId n: (ast.nodes.get i: fm.operation.u64)
-                rdn4: rootNameIdOf :ast n: (ast.nodes.get i: fm.operation.u64)
-                st.typing.pendingDefaultName.set key: rdk4.u64 value: rdn4
-            }
+    }
+    if dcn1.length > 0 when (isStripMarker name: dcn1.stringView) then null else {
+        if dcn1.length > 0 then {
+            rdk3: nodeId n: (ast.nodes.get i: fm.operation.u64)
+            rdo3: rid
+            st.typing.pendingDefaultOwner.set key: rdk3.u64 value: rdo3
+            rdk4: nodeId n: (ast.nodes.get i: fm.operation.u64)
+            rdn4: rootNameIdOf :ast n: (ast.nodes.get i: fm.operation.u64)
+            st.typing.pendingDefaultName.set key: rdk4.u64 value: rdn4
         }
     }
 }
@@ -8048,8 +8071,8 @@ attachRecordField: function {
 # synthRecordHash -- `hash` is INDEPENDENT of whether `==` was synthesised -- a
 # type that declares its own `==` (every numeric does) still hashes by its
 # bytes. It exists unless the author struck it off with a null shell or wrote
-# their own, and a heap-owning value has no byte range to hash, so it gets
-# none and is simply not Hashable.
+# their own. A valtype holds value data only, so its bytes are the whole
+# value and the hash is total.
 synthRecordHash: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -8202,9 +8225,8 @@ synthComparisonPair: function {
 # synthRecordMembers -- the members a record gets without declaring them: a typedef
 # wrapper's `borrow` projection, or the byte-wise `==` and `hash` a plain record
 # carries. `hash` is INDEPENDENT of whether `==` was synthesised -- a type that
-# declares its own `==` (every numeric does) still hashes by its bytes -- and a
-# heap-owning value has no byte range to hash, so it gets none and is not
-# Hashable.
+# declares its own `==` (every numeric does) still hashes by its bytes -- and
+# a valtype holds value data only, so the bytes are the whole value.
 synthRecordMembers: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -8263,6 +8285,22 @@ recordTypedefBase: function {
     }
     tdt: objectTypedefBaseTid :st :frame :ast :unitDecl onode: rnode
     if tdt > 0 then {
+        tdn: st.reg.nameOf tid: (ztypes.tid.create from: rid.u64)
+        (refuseReftypeMember
+            :st
+            fm: (argref
+                nid: rnode.nid
+                name: zast.nameid
+                operation: zast.nodeid
+                lineno: rnode.lineno
+                colno: rnode.colno
+            )
+            owner: tdn.stringView
+            tid: (ztypes.tid.create from: tdt.u64)
+            what: "record typedef"
+            remedy: "class"
+            name: tdn.stringView
+        )
         tdk5: rid
         (st.typing.typedefBaseTid.set
             key: (ztypes.tid.create from: tdk5.u64)
@@ -8399,6 +8437,7 @@ resolveRecord: function {
         st.reg.setGeneric typeId: rt value: true
         tdecl9: (declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: defName))
         registerGenericParams :st :ast tdecl: tdecl9 items: asItems
+        refuseReftypeBounds :st :ast :unitDecl :frame tdecl: tdecl9 what: "record" items: asItems
     }
     istd: recordIsTypedef :ast :rnode
     if istd then recordTypedefBase :st :frame :ast :unitDecl :rnode :rid
@@ -8823,6 +8862,15 @@ resolveVariant: function {
                     tdecl: tdecl92
                     items: onRg.asItems
                 )
+                (refuseReftypeBounds
+                    :st
+                    :ast
+                    :unitDecl
+                    :frame
+                    tdecl: tdecl92
+                    what: "variant"
+                    items: onRg.asItems
+                )
             }
         }
     }
@@ -8871,7 +8919,6 @@ resolveVariant: function {
                 :fm
             )
             if armBadV then continue
-            ordinalArmNames.add item: fm.name.u64
             cid: (resolveTyperefShellMarked
                 :st
                 :frame
@@ -8881,6 +8928,17 @@ resolveVariant: function {
                 nid: fm.operation
                 thisName: defName
             )
+            armRefV: (refuseReftypeMember
+                :st
+                :fm
+                owner: defName
+                tid: cid
+                what: "variant arm"
+                remedy: "union"
+                name: (zast.nameTextAt :ast ref: fm.name).stringView
+            )
+            if armRefV then continue
+            ordinalArmNames.add item: fm.name.u64
             (st.typing.setMemberType
                 parentTypeId: (ztypes.tid.create from: vid.u64)
                 nameId: fm.name
@@ -9226,6 +9284,114 @@ unionCustomTagId: function {
         }
     }
     return (optionval.none u64)
+}
+
+# refuseReftypeMember -- A VALTYPE HOLDS VALUE DATA ONLY, the dual of the Box
+# rule below: a record field, a variant arm and a record typedef's base may
+# not be a reftype (a class, a union, a protocol, a heap native such as
+# String), directly or through a typedef. The declaration is refused, not the
+# use: the synthesised `==` and hash read the value's bytes, and a member
+# behind a pointer has none to read. `what` names the member kind and
+# `remedy` the reftype the author should declare instead. True when refused,
+# so the caller can skip the member the way refuseStringArmPayload's does.
+refuseReftypeMember: function {
+    st: zenv.ZSymbolTable
+    fm: argref
+    owner: StringView
+    tid: ztypes.tid
+    what: StringView
+    remedy: StringView
+    name: StringView
+} out bool is {
+    if (typeIsReftype :st :tid).not then return false
+    tn: st.reg.nameOf :tid
+    mr: "a \{what} holds valtypes; make '\{owner}' a \{remedy} to hold '\{tn}'"
+    (addResolveErrorH
+        :st
+        nodeid: fm.nid
+        lineno: fm.lineno
+        colno: fm.colno
+        e: zast.err.typeError
+        msg: mr
+        width: name.length.u32.orPanic
+    )
+    return true
+}
+
+# boundAdmitsReftype -- whether the parameter `fm` of template `tdecl` is
+# bounded by a family that admits a reftype, read from the kind registration
+# classified. `AnyRef`, `RefHashable` and `StringLike` do by kind; a bound
+# the kinds do not classify is looked up read-only (a probe cannot mint, and
+# a name that resolves to nothing is the constraint machinery's business, as
+# stampGenericBounds says) and admits one when it names a reftype. A facet
+# bound is a valtype bound.
+boundAdmitsReftype: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    tdecl: ztypes.declid
+    fm: argref
+} out bool is {
+    cd: st.reg.genericParamConstraintOf :tdecl paramName: fm.name
+    k: cd.kind
+    if k == ztypes.constraintkind.refType then return true
+    if k == ztypes.constraintkind.refHashable then return true
+    if k == ztypes.constraintkind.stringLike then return true
+    if k != ztypes.constraintkind.other then return false
+    cb: genericConstraintBase :ast n: (ast.nodes.get i: fm.operation.u64)
+    bo: (walkLookupTyperefByIdRo
+        :ast
+        :st
+        :unitDecl
+        :frame
+        baseId: (nameIdOf :ast name: cb.stringView)
+    )
+    match (
+        bo
+    ) case some then {
+        return (typeIsReftype :st tid: (ztypes.tid.create from: bo.u64))
+    } case none then null
+    return false
+}
+
+# refuseReftypeBounds -- a valtype template's parameter bound must admit
+# valtypes only: a field or arm typed by the parameter is a record field or
+# a variant arm of every mono, and refuseReftypeMember's rule reaches it
+# through the bound. The parameter stays registered; only the bound is
+# reported.
+refuseReftypeBounds: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    tdecl: ztypes.declid
+    what: StringView
+    items: zast.kidspan
+} is {
+    bi: u64
+    bn: items.count.u64
+    for bi < bn loop {
+        bid: zast.kidAt kids: ast.kids span: items i: bi
+        bi = bi + 1
+        fm: argRefAt :ast nid: (zast.nodeid.create from: bid)
+        if fm.nid.isZero.not when (isGenericParam
+            :ast
+            op: (ast.nodes.get i: fm.operation.u64)
+        ) when (boundAdmitsReftype :st :ast :unitDecl :frame :tdecl :fm) then {
+            pn: zast.nameTextAt :ast ref: fm.name
+            mb: "a \{what}'s type parameter holds valtypes; bound '\{pn}' with 'anyval.generic'"
+            (addResolveErrorH
+                :st
+                nodeid: fm.nid
+                lineno: fm.lineno
+                colno: fm.colno
+                e: zast.err.typeError
+                msg: mb
+                width: pn.length.u32.orPanic
+            )
+        }
+    }
 }
 
 # checkUnionArmIsReftype -- THE BOX RULE: a union holds reftypes. A null arm carries
@@ -17237,6 +17403,23 @@ mintMonoMember: function {
     monoNeedsDtor: false
     target: (substitutedMemberTid :ast :st :unitDecl :rf :chId :subs :idSubs)
     ctnT: st.reg.nameOf tid: (ztypes.tid.create from: chId.u64)
+    # A VALTYPE HOLDS VALUE DATA ONLY at instantiation: a bound the kinds do
+    # not classify (a facet) admits any argument, so a reftype can reach a
+    # record field or a variant arm here that refuseReftypeBounds could not
+    # see at the template. Only what the ARGUMENT brought in is judged: a
+    # member the substitution left alone (a concrete field, a conformance row
+    # such as str's `:Text`) was the declaration's business, and a native
+    # template's layout is the runtime's.
+    isVrM: (tt == ztypes.ztypetype.recordType) or (tt == ztypes.ztypetype.variantType)
+    if isVrM when target != chId when (st.reg.isNativeOf tid: templateId).not when (
+        (st.reg.typetypeOf typeId: (ztypes.tid.create from: chId.u64)) !=
+        ztypes.ztypetype.functionType
+    ) when (typeIsReftype :st tid: (ztypes.tid.create from: target.u64)) then {
+        anM: st.reg.nameOf tid: (ztypes.tid.create from: target.u64)
+        tnM: st.reg.nameOf tid: templateId
+        mgM: "generic argument '\{anM}' cannot be a record field or variant arm of '\{tnM}'"
+        addResolveError :st e: zast.err.genericError msg: mgM
+    }
     # THE BOX RULE at instantiation: a union arm whose substituted type
     # is a builtin Box mono collapses to the ELEMENT, exactly as a
     # declared (Box T) arm does. Every union arm is a malloc'd cell on
@@ -17880,11 +18063,7 @@ constraintHolds: function {
         return (st.reg.isReftypeOf tid: argTid)
     } case valHashable then {
         if (typeIsValtype :st tid: argTid).not then return false
-        if (typeIsHashable :st :ast tid: argTid).not then return false
-        # a heap-owning value has no byte range to hash, and the synthesis
-        # cannot ask that during resolution -- a self-containing record would
-        # recurse forever before the cycle check has run
-        return (heapOwningValtypeTid :st :ast tid: argTid).not
+        return (typeIsHashable :st :ast tid: argTid)
     } case refHashable then {
         if (st.reg.isReftypeOf tid: argTid).not then return false
         return (typeIsHashable :st :ast tid: argTid)
@@ -18075,45 +18254,6 @@ typeIsIdKey: function {
     if ktd == (builtinTidT :st :frame :ast base: "u64") then return true
     if ktd == (builtinTidT :st :frame :ast base: "c8") then return true
     return ktd == (builtinTidT :st :frame :ast base: "c32")
-}
-
-# heapOwningValtypeTid -- a RECORD/VARIANT that transitively owns heap
-# members (a class/union box, a destructor-carrying mono, or another owning
-# valtype): its byte-range hash and equality cannot cover them.
-heapOwningValtypeTid: function {
-    ast: Ast.view
-    st: zenv.ZSymbolTable
-    tid: ztypes.tid
-} out bool is {
-    tt: st.reg.typetypeOf typeId: tid
-    isVR: (tt == ztypes.ztypetype.recordType) or (tt == ztypes.ztypetype.variantType)
-    if isVR.not then return false
-    hcn: st.typing.declRowSlots ownerTid: tid
-    hci: u64
-    for hci < hcn loop {
-        hrow: st.typing.declRowAt ownerTid: tid membersOnly: true slot: hci
-        hci = hci + 1
-        hnid: hrow.name
-        hcto: hrow.tid
-        hctt: st.reg.typetypeOf typeId: (ztypes.tid.create from: hcto.u64)
-        hnB: ast.names.texts.get i: hnid.u64
-        if hrow.keep when hctt != ztypes.ztypetype.functionType when hnB.stringView != "tag" then {
-            if hctt == ztypes.ztypetype.classType then return true
-            if hctt == ztypes.ztypetype.unionType then return true
-            if (st.reg.needsDestructor typeId: (ztypes.tid.create from: hcto.u64)) then return true
-            if hctt == ztypes.ztypetype.recordType when (heapOwningValtypeTid
-                :st
-                :ast
-                tid: (ztypes.tid.create from: hcto.u64)
-            ) then return true
-            if hctt == ztypes.ztypetype.variantType when (heapOwningValtypeTid
-                :st
-                :ast
-                tid: (ztypes.tid.create from: hcto.u64)
-            ) then return true
-        }
-    }
-    return false
 }
 
 # completeSpecChildren -- finish a spec that the trie already carries: its generic
