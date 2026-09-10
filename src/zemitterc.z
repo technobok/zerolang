@@ -3445,18 +3445,42 @@ nodeIsRefBorrowResult: function {
     return (fnReturnsRefBorrow :ast :symtab :ctx fid: (ztypes.tid.create from: f.u64) retTid: r)
 }
 
-# ForSpill -- one counted `for` open around the statement being emitted, and
-# the state field its counter is saved to across a suspension. Keyed by C NAME
-# rather than variable id because a `for` label has neither: it is a nameid on
-# the header's namedoperation, and the checker binds it with `define` rather
-# than `defineVar`, so no node carries a variable id to look up. The C name is
-# the right key anyway -- the spill and the reload are both plain C
-# assignments, written in the loop's own scope.
+# spillkind -- how a value a suspension saved to a state field is put back
+# into its C local after the resume label.
+spillkind: variant {
+    # a plain copy both ways: a counted-for counter, a value payload
+    copy: null
+    # an owned payload: the field owns it only while suspended, so the reload
+    # zeroes the field and the local owns it again
+    owned: null
+    # a borrowed view copied by value: the saved wrapper's data pointer is
+    # dereferenced into the local
+    viewCopy: null
+    # a borrowed view bound by pointer: the saved wrapper's data pointer IS
+    # the local
+    viewPtr: null
+}
+
+# ForSpill -- one loop counter, loop payload or `with` value open around the
+# statement being emitted, and the state field it is saved to across a
+# suspension. Keyed by C NAME rather than variable id because a `for` label
+# has neither: it is a nameid on the header's namedoperation, and the checker
+# binds it with `define` rather than `defineVar`, so no node carries a
+# variable id to look up. The C name is the right key anyway -- the spill and
+# the reload are both plain C assignments, written in the loop's own scope.
 ForSpill: class {
-    # which `_fc_<slot>` field on the state class holds this counter
-    slot: u64
-    # the counter's emitted C name, as the for-header declared it
-    cname: String
+    # the state field, as a C member name (`_fc_3`, `_fp_1`)
+    field: String
+    # the C expression saved before the return: the local, or the `_iterN`
+    # wrapper a borrowed view is re-derived from
+    saved: String
+    # the C lvalue restored after the resume label
+    restored: String
+    # which reload shape
+    kind: spillkind
+    # the payload C type the view kinds cast through and the owned kind
+    # zero-fills with; "" for a plain copy
+    payC: String
 }
 
 # VidVal / VidTid -- assoc-list entries for the per-function narrowing and alias
@@ -16832,6 +16856,71 @@ registerScopeDestroy: function {
     tmp.oweList stmt: df.copy name: nm.string vid: nameVid
 }
 
+# emitWithLocal -- the header's C local for a `with` value that lives in the
+# block. A reference-returning callee hands back `T*`, so the binding ALIASES
+# its source exactly as a plain binding does; anything else is the value.
+emitWithLocal: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.withrow.view
+    wsid: u64
+    wnm: StringView
+    wct: StringView
+    wv: StringView
+    ind: StringView
+    buf: String.borrow
+} is {
+    wc: wct.string
+    wrb: refBorrowCalleeFid :ast :symtab :ctx n: (ast.nodes.get i: n.value.u64)
+    if wrb > 0 when (fnReturnsRefBorrow
+        :ast
+        :symtab
+        :ctx
+        fid: (ztypes.tid.create from: wrb.u64)
+        retTid: (ztypes.tid.create from: wsid.u64)
+    ) then {
+        wctP: (refPtrC :symtab tid: (ztypes.tid.create from: wrb.u64) base: wc.stringView)
+        wc = wctP
+        ctx.ptrVids.append (defVid :symtab nid: n.nodeid.u64)
+    }
+    if wc.length > 0 then {
+        lwv: "\{ind}\{wc} \{wnm} = \{wv};\n"
+        buf.append lwv
+    } else {
+        lwv2: "\{ind}int64_t \{wnm} = \{wv};\n"
+        buf.append lwv2
+    }
+}
+
+# emitWithField -- a `with` value that lives in the state class (the checker
+# minted the field for a value that crosses a suspension): assigned where the
+# header's local was, aliased to the binding's name for the body, destroyed
+# by the instance -- and destroyed first when a loop re-enters the header
+# with the previous value still in it.
+emitWithField: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.withrow.view
+    wsid: u64
+    wf: zast.nameid
+    wv: StringView
+    ind: StringView
+    buf: String.borrow
+} is {
+    fnm: zast.nameTextAt :ast ref: wf
+    fld: genFieldC :ctx name: fnm.stringView
+    if (structDestroyNontrivial :symtab :ctx tid: (ztypes.tid.create from: wsid.u64)) then {
+        wcb: ctxCname :ctx tid: (ztypes.tid.create from: wsid.u64)
+        ld: "\{ind}\{wcb}_destroy(&\{fld});\n"
+        buf.append ld
+    }
+    la: "\{ind}\{fld} = \{wv};\n"
+    buf.append la
+    vvSet xs: ctx.aliases vid: (defVid :symtab nid: n.nodeid.u64) val: fld.stringView
+}
+
 # emitWithStmt -- `with x: <value> do <body>`: the value is bound for the body's
 # duration and destroyed with the block it was bound in, whatever exit the body
 # takes. The binding is emitted into the ENCLOSING C block rather than braces of
@@ -16867,28 +16956,24 @@ emitWithStmt: function {
     # while that expression was built; declare it before the line that reads
     # it, as the plain-binding path does
     flushArgHoists :ctx :ind :tmp :buf
-    # a reference-returning callee hands back `T*`, so a `with` binding
-    # ALIASES its source exactly as a plain binding does
-    {
-        wrb: refBorrowCalleeFid :ast :symtab :ctx n: (ast.nodes.get i: n.value.u64)
-        if wrb > 0 when (fnReturnsRefBorrow
+    wfO: symtab.typing.withValueField.get key: n.nodeid.u64
+    match (
+        wfO
+    ) case some then {
+        emitWithField :ast :symtab :ctx :n wsid: wsid.u64 wf: wfO wv: wv.stringView :ind :buf
+    } case none then {
+        (emitWithLocal
             :ast
             :symtab
             :ctx
-            fid: (ztypes.tid.create from: wrb.u64)
-            retTid: (ztypes.tid.create from: wsid.u64)
-        ) then {
-            wctP: (refPtrC :symtab tid: (ztypes.tid.create from: wrb.u64) base: wct.stringView)
-            wct = wctP
-            ctx.ptrVids.append (defVid :symtab nid: n.nodeid.u64)
-        }
-    }
-    if wct.length > 0 then {
-        lwv: "\{ind}\{wct} \{wnm} = \{wv};\n"
-        buf.append lwv
-    } else {
-        lwv2: "\{ind}int64_t \{wnm} = \{wv};\n"
-        buf.append lwv2
+            :n
+            wsid: wsid.u64
+            wnm: wnm.stringView
+            wct: wct.stringView
+            wv: wv.stringView
+            :ind
+            :buf
+        )
     }
     # a `with` binds a value exactly as an ordinary binding does, and owes the
     # same two things -- neither of which it did. The value may be a call that
@@ -18801,6 +18886,7 @@ emitObjIterRecv: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
+    cNid: zast.nodeid
     cOp: zast.nodeid
     itid: ztypes.tid
     bareFnId: ztypes.tid
@@ -18810,6 +18896,12 @@ emitObjIterRecv: function {
     tmp: TmpCtr
     buf: String.borrow
 } out String is {
+    giO: symtab.typing.forIterableField.get key: cNid.u64
+    match (
+        giO
+    ) case some then {
+        return (emitObjIterField :ast :symtab :ctx :cOp :itid :bareFnId :itCb gi: giO :ind :buf)
+    } case none then null
     iterRecv: String
     ownGit: false
     if bareFnId > 0 then {
@@ -18857,6 +18949,41 @@ emitObjIterRecv: function {
     return iterRecv
 }
 
+# emitObjIterField -- the iterator instance of a loop whose body suspends
+# lives in the state class (the checker minted the field): assigned where the
+# C local was, destroyed by the instance, and destroyed first when an outer
+# loop re-enters the header with the previous instance still in it.
+emitObjIterField: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    cOp: zast.nodeid
+    itid: ztypes.tid
+    bareFnId: ztypes.tid
+    itCb: StringView
+    gi: zast.nameid
+    ind: StringView
+    buf: String.borrow
+} out String is {
+    fnm: zast.nameTextAt :ast ref: gi
+    recv: genFieldC :ctx name: fnm.stringView
+    if (structDestroyNontrivial :symtab :ctx tid: itid) then {
+        ld: "\{ind}\{itCb}_destroy(&\{recv});\n"
+        buf.append ld
+    }
+    ivex: String
+    if bareFnId > 0 then {
+        bcn: ctxCname :ctx tid: (ztypes.tid.create from: bareFnId.u64)
+        ivex = "\{bcn}()"
+    } else {
+        ivex = emitExpr :ast :symtab :ctx n: (ast.nodes.get i: cOp.u64)
+    }
+    la: "\{ind}\{recv} = \{ivex};\n"
+    buf.append la
+    emitValueTakeInvalidations :ast :symtab :ctx n: (ast.nodes.get i: cOp.u64) :ind :buf
+    return recv
+}
+
 # emitObjIterPayload -- binding the yielded payload to the loop variable, in the
 # three shapes a yield takes: a borrowed view (scalars copy, aggregates alias),
 # an owned heap box (move the payload out, free the box), and a plain value.
@@ -18873,7 +19000,7 @@ emitObjIterPayload: function {
     mN: u64
     ind: StringView
     buf: String.borrow
-} is {
+} out spillkind is {
     if (originIsTid
         :symtab
         tid: (ztypes.tid.create from: ovid.u64)
@@ -18909,6 +19036,7 @@ emitObjIterPayload: function {
         if payScalarC.length > 0 when payRef.not then {
             l3v: "\{ind}    \{payC} \{lbl} = *(\{payC}*)_iter\{mN}.data;\n"
             buf.append l3v
+            return spillkind.viewCopy
         } else {
             l3p: "\{ind}    \{payC}* __borrow_\{lbl} = (\{payC}*)_iter\{mN}.data;\n"
             buf.append l3p
@@ -18916,6 +19044,7 @@ emitObjIterPayload: function {
             buf.append l3pa
             av3p: "(*__borrow_\{lbl})"
             vvSet xs: ctx.aliases vid: lblV val: av3p.stringView
+            return spillkind.viewPtr
         }
     } else if (originIsTid
         :symtab
@@ -18928,9 +19057,53 @@ emitObjIterPayload: function {
         buf.append l3op
         l3of: "\{ind}    free(_iter\{mN}.data);\n"
         buf.append l3of
+        return spillkind.owned
     } else {
         l3: "\{ind}    \{payC} \{lbl} = _iter\{mN}.data.some;\n"
         buf.append l3
+        return spillkind.copy
+    }
+}
+
+# pushPayloadSpill -- a suspending loop's payload is saved to the field the
+# checker minted for it at every yield inside the loop and reloaded at the
+# label: the local for an owned or value payload, the `_iterN` wrapper for a
+# borrowed view, whose pointer or copy the reload re-derives. True when a
+# spill was pushed, so the loop's end can pop it.
+pushPayloadSpill: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    cNid: zast.nodeid
+    pk: spillkind
+    lbl: StringView
+    mN: u64
+    payC: StringView
+} out bool is {
+    if ctx.genActive.not then return false
+    pfO: symtab.typing.forPayloadField.get key: cNid.u64
+    match (
+        pfO
+    ) case some then {
+        fnm: zast.nameTextAt :ast ref: pfO
+        savedO: lbl.string
+        restoredO: lbl.string
+        if pk.viewPtr then {
+            savedO = "_iter\{mN}"
+            restoredO = "__borrow_\{lbl}"
+        }
+        if pk.viewCopy then savedO = "_iter\{mN}"
+        (ctx.genForSpills.append (ForSpill
+            field: fnm.copy
+            saved: savedO
+            restored: restoredO
+            kind: pk
+            payC: payC.string
+        )
+        )
+        return true
+    } case none then {
+        return false
     }
 }
 
@@ -18983,6 +19156,7 @@ emitObjIterLoop: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     m: zast.forrow.view
+    cNid: zast.nodeid
     cOp: zast.nodeid
     cco: ztypes.tid
     itid: ztypes.tid
@@ -19009,6 +19183,7 @@ emitObjIterLoop: function {
         :ast
         :symtab
         :ctx
+        :cNid
         :cOp
         :itid
         :bareFnId
@@ -19036,7 +19211,7 @@ emitObjIterLoop: function {
         l2: "\{ind}    if (_iter\{mN}.tag == Z_\{ovu}_TAG_NONE) break;\n"
         buf.append l2
     }
-    (emitObjIterPayload
+    pk: (emitObjIterPayload
         :ast
         :symtab
         :ctx
@@ -19050,6 +19225,7 @@ emitObjIterLoop: function {
         :ind
         :buf
     )
+    pushedO: (pushPayloadSpill :ast :symtab :ctx :cNid :pk :lbl :mN payC: payC.stringView)
     ind2: "\{ind}    "
     fLO: tmp.frees.length
     lLO: tmp.listFrees.length
@@ -19069,6 +19245,9 @@ emitObjIterLoop: function {
     l: "\{ind}}\n"
     buf.append l
     popLoopLabel :ctx id: lidO :ind :buf
+    # the payload leaves C scope with the loop, so a suspension after it must
+    # not spill it
+    if pushedO then ctx.genForSpills.pop
     return true
 }
 
@@ -19080,6 +19259,7 @@ objIterForNamed: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     m: zast.forrow.view
+    cNid: zast.nodeid
     cName: zast.nameid
     cOp: zast.nodeid
     ind: StringView
@@ -19103,6 +19283,7 @@ objIterForNamed: function {
             :symtab
             :ctx
             :m
+            :cNid
             :cOp
             cco: (ztypes.tid.create from: cco.u64)
             :itid
@@ -19144,6 +19325,7 @@ emitObjIterFor: function {
             :symtab
             :ctx
             :m
+            cNid: (zast.nodeid.create from: c0Id)
             cName: c0.name
             cOp: c0.operation
             :ind
@@ -19193,9 +19375,13 @@ emitIntRangeFor: function {
         pushed: false
         if ctx.genActive when (zast.yieldCountIn :ast nid: m.body) > 0 then {
             ctx.genForNext = ctx.genForNext + 1
+            fcF: "_fc_\{ctx.genForNext}"
             (ctx.genForSpills.append (ForSpill
-                slot: ctx.genForNext
-                cname: lbl.copy
+                field: fcF
+                saved: lbl.copy
+                restored: lbl.copy
+                kind: spillkind.copy
+                payC: String
             )
             )
             pushed = true
@@ -33634,20 +33820,68 @@ emitYieldStmt: function {
         lzv: "\{ind}\{ve} = (\{ctx.genPayC}){0};\n"
         buf.append lzv
     }
-    # a counted `for` keeps its counter in the C for-header, which this
-    # `return` destroys and the resume `goto` re-enters past. Spill each open
-    # one to its state field here and reload it at the label
-    with sit: ctx.genForSpills.iterate do for sp: sit loop {
-        lsv: "\{ind}\{ctx.genRecvC}->_fc_\{sp.slot} = \{sp.cname};\n"
-        buf.append lsv
-    }
+    # a loop keeps its counter in the C for-header and its payload in a local
+    # inside the loop, and a `with` its value in the header's local; this
+    # `return` destroys them all and the resume `goto` re-enters past them.
+    # Spill each open one to its state field here and reload it at the label
+    emitSpillSaves :ctx :ind :buf
     lr: "\{ind}return _ry_\{k};\n"
     buf.append lr
     ll: "L_resume_\{k}:;\n"
     buf.append ll
+    emitSpillReloads :ctx :ind :buf
+}
+
+# genFieldC -- a state field of the generator instance being emitted, as the
+# C lvalue `<receiver>-><field>`.
+genFieldC: function {ctx: Ctx.view name: StringView} out String is {
+    r: ctx.genRecvC.copy
+    r.append "->"
+    r.append name
+    return r
+}
+
+# emitSpillSaves -- before a suspension's `return`: every open loop counter,
+# loop payload and `with` value goes to its state field.
+emitSpillSaves: function {ctx: Ctx.view ind: StringView buf: String.borrow} is {
+    with sit: ctx.genForSpills.iterate do for sp: sit loop {
+        fS: genFieldC :ctx name: sp.field.stringView
+        lsv: "\{ind}\{fS} = \{sp.saved};\n"
+        buf.append lsv
+    }
+}
+
+# emitSpillReloads -- after a resume label: each saved value back into the C
+# local the body reads, by kind -- a copy, an owned payload the field then
+# lets go of, or a borrowed view re-derived from the saved wrapper. The
+# wrapper local is restored too: a later yield in the same iteration saves
+# it again, and the resume jumped past its declaration.
+emitSpillReloads: function {ctx: Ctx.view ind: StringView buf: String.borrow} is {
     with rit: ctx.genForSpills.iterate do for sp: rit loop {
-        lrv: "\{ind}\{sp.cname} = \{ctx.genRecvC}->_fc_\{sp.slot};\n"
-        buf.append lrv
+        f: genFieldC :ctx name: sp.field.stringView
+        match (
+            sp.kind
+        ) case copy then {
+            lc: "\{ind}\{sp.restored} = \{f};\n"
+            buf.append lc
+        } case owned then {
+            lo: "\{ind}\{sp.restored} = \{f};\n"
+            buf.append lo
+            lz: "\{ind}\{f} = (\{sp.payC}){0};\n"
+            buf.append lz
+        } case viewCopy then {
+            lw: "\{ind}\{sp.saved} = \{f};\n"
+            buf.append lw
+            cv: "*(\{sp.payC}*)"
+            lv: "\{ind}\{sp.restored} = \{cv}\{f}.data;\n"
+            buf.append lv
+        } case viewPtr then {
+            lw2: "\{ind}\{sp.saved} = \{f};\n"
+            buf.append lw2
+            cp: "(\{sp.payC}*)"
+            lp: "\{ind}\{sp.restored} = \{cp}\{f}.data;\n"
+            buf.append lp
+        }
     }
 }
 

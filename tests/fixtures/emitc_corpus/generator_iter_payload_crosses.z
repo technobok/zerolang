@@ -1,0 +1,175 @@
+# generator_iter_payload_crosses.z -- a `for` loop variable, its iterable and
+# a `with` value survive a suspension inside a generator body.
+#
+# A yield returns from `call` and the resume `goto` re-enters past whatever
+# the loop bound in a C local: the payload read garbage (`Vals`), the owned
+# payload's per-iteration cleanup freed an indeterminate String with no user
+# read at all (`OwnedNoRead`), the borrowed element read through a dead
+# pointer (`Borrowed`), a bare-name iterable died with it and the loop ended
+# after one element (`Vals` again), and a `with` value met the same return
+# (`WithBlock`, `WithValue`) -- or, written as a bare `for`, emitted invalid C
+# (`WithBare`). The checker now mints a state field for each -- typed by the
+# element, by the OptionView wrapper for a borrowed view, by the iterable or
+# by the with value -- and every yield saves to it and every resume label
+# reloads from it. `Jumps` runs the per-iteration cleanup on the reloaded
+# local from a `continue` and a `break`; `Relay` yields the owned payload
+# itself, which zeroes the local before it is saved; `abandon` in main drops
+# an iterator mid-loop so the instance destructor frees the payload it held.
+
+Three: generator as {
+    call: function out i64 is {
+        yield 1
+        yield 2
+        yield 3
+    }
+}
+
+Src: generator { n: i64 } as {
+    call: function out i64 is {
+        i: 0
+        for i < this.n loop {
+            yield i
+            i = i + 1
+        }
+    }
+}
+
+Words: generator as {
+    call: function out String is {
+        yield "ab".string
+        yield "cde".string
+    }
+}
+
+Vals: generator as {
+    call: function out i64 is {
+        for v: Three loop {
+            yield v
+            yield v * 10
+        }
+    }
+}
+
+ValsCall: generator as {
+    call: function out i64 is {
+        for v: (Src n: 2) loop {
+            yield v
+            yield v * 10
+        }
+    }
+}
+
+OwnedRead: generator as {
+    call: function out u64 is {
+        for s: Words loop {
+            yield 0.u64
+            yield s.length
+        }
+    }
+}
+
+OwnedNoRead: generator as {
+    call: function out u64 is {
+        for s: Words loop {
+            yield s.length
+        }
+    }
+}
+
+Borrowed: generator { xs: List String } as {
+    call: function out u64 is {
+        for e: this.xs.iterate loop {
+            yield 0.u64
+            yield e.length
+        }
+    }
+}
+
+BorrowedVal: generator { ns: ListVal i64 } as {
+    call: function out i64 is {
+        for x: this.ns.iterate loop {
+            yield x
+            yield x * 10
+        }
+    }
+}
+
+WithBlock: generator { xs: List String } as {
+    call: function out u64 is {
+        with it: this.xs.iterate do {
+            for e: it loop {
+                yield 0.u64
+                yield e.length
+            }
+        }
+    }
+}
+
+WithBare: generator { xs: List String } as {
+    call: function out u64 is {
+        with it: this.xs.iterate do for e: it loop {
+            yield e.length
+        }
+    }
+}
+
+WithValue: generator as {
+    call: function out i64 is {
+        with k: 5 do {
+            yield k
+            yield k + 1
+        }
+    }
+}
+
+Jumps: generator as {
+    call: function out u64 is {
+        for s: Words loop {
+            if s.length == 2 then {
+                yield 0.u64
+                continue
+            }
+            yield s.length
+            break
+        }
+    }
+}
+
+Relay: generator as {
+    call: function out String is {
+        for s: Words loop {
+            yield s
+        }
+    }
+}
+
+main: function is {
+    for a: Vals loop print "vals: \{a}"
+    for b: ValsCall loop print "valscall: \{b}"
+    for c: OwnedRead loop print "ownedread: \{c}"
+    for d: OwnedNoRead loop print "ownednoread: \{d}"
+    xs: List String
+    xs.append "ab".string
+    xs.append "cde".string
+    for e: (Borrowed xs: xs) loop print "borrowed: \{e}"
+    ns: ListVal i64
+    ns.append 7
+    ns.append 8
+    for f: (BorrowedVal ns: ns) loop print "borrowedval: \{f}"
+    ys: List String
+    ys.append "ab".string
+    ys.append "cde".string
+    for g: (WithBlock xs: ys) loop print "withblock: \{g}"
+    zs: List String
+    zs.append "ab".string
+    zs.append "cde".string
+    for h: (WithBare xs: zs) loop print "withbare: \{h}"
+    for i: WithValue loop print "withvalue: \{i}"
+    for j: Jumps loop print "jumps: \{j}"
+    for k: Relay loop print "relay: \{k}"
+    for m: OwnedRead loop {
+        print "abandon: \{m}"
+        break
+    }
+    print "done"
+}
