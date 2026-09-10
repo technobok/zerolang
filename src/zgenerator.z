@@ -930,6 +930,11 @@ cloneInner: function {ast: Ast nid: zast.nodeid} out astnode is {
 # does not survive a suspension; the synthetic local is visible to the
 # crossing analysis (the yielding-loop rule promotes it) and to the
 # typeof field machinery. Recurses into for bodies only.
+#
+# A body is always a block: the parser wraps a brace-less `for` body in a
+# one-line block, and a brace-less `with` body reaches promoteWrappedBody,
+# which routes a bare `for`/`with` line through promoteBareLine. What remains
+# here that is not a block is a leaf, cloned as a path.
 promoteIterables: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out astnode is {
     isStmt: false
     lnP: u32
@@ -1181,7 +1186,10 @@ prependBindLine: function {
 # A `for` body is a bare statement block, but a `with` body is wrapped, and
 # `promoteIterables` answers `clonePathAt` for anything that is not a
 # `statement` -- which clones PATH shapes only and silently drops a block's
-# contents. Unwrap first, promote, then put the wrappers back.
+# contents. Unwrap first, promote, then put the wrappers back. A `with` body
+# may also be a bare `for` or `with` LINE with no block at all (`with it: E
+# do for e: it loop { .. }`), which the path clone answered with a `?` atom
+# that reached the C; that line is promoted as the one line it is.
 promoteWrappedBody: function {ast: Ast ctr: NameCtr oId: zast.nodeid} out u32 is {
     if oId.isZero then return 0
     isExpr: false
@@ -1207,7 +1215,16 @@ promoteWrappedBody: function {ast: Ast ctr: NameCtr oId: zast.nodeid} out u32 is
             coY = n.colno
         }
     }
-    if isExpr.not when isDo.not then return (promoteIterablesIdAt :ast :ctr :oId)
+    if isExpr.not when isDo.not then {
+        bareLine: false
+        {
+            nB: ast.nodes.get i: oId.u64
+            if (lineIsFor :ast n: nB) then bareLine = true
+            if (lineIsWith :ast n: nB) then bareLine = true
+        }
+        if bareLine then return (promoteBareLine :ast :ctr nid: oId)
+        return (promoteIterablesIdAt :ast :ctr :oId)
+    }
     innerNew: promoteWrappedBody :ast :ctr oId: innerId
     if innerNew == 0 then return 0
     if isDo then {
@@ -1228,6 +1245,58 @@ promoteWrappedBody: function {ast: Ast ctr: NameCtr oId: zast.nodeid} out u32 is
     )
     )
     return (zast.tableAdd :ast n: wrapped)
+}
+
+# promoteBareLine -- a `with` body that is a bare `for` or `with` line rather
+# than a block: promote it as the one line it is. A hoisted iterable binding
+# needs a block to sit in ahead of the loop, so the line then becomes the
+# `do { .. }` block the author could have written -- the line under its own
+# `expression`, the block under a `doexpr`, exactly the shape a braced body
+# has, which is the shape the checker's body walk types the hoisted write
+# in. With nothing hoisted the promoted node stands alone and the caller's
+# wrappers go back around it.
+promoteBareLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out u32 is {
+    hoisted: ListVal u32
+    ni: promoteInExpr :ast :ctr :nid dst: hoisted
+    if hoisted.length == 0 then return (zast.tableAdd :ast n: ni)
+    lnB: u32
+    coB: u32
+    {
+        nP: ast.nodes.get i: nid.u64
+        pB: zast.posOf n: nP
+        lnB = pB.line
+        coB = pB.col
+    }
+    niE: (astnode.expression (zast.expressionrow
+        nodeid: (zast.tableReserve :ast)
+        lineno: lnB
+        colno: coB
+        expression: (zast.nodeid.create from: (zast.tableAdd :ast n: ni))
+    )
+    )
+    sl: (astnode.statementline (zast.statementlinerow
+        nodeid: (zast.tableReserve :ast)
+        lineno: lnB
+        colno: coB
+        statementline: (zast.tableAdd :ast n: niE)
+    )
+    )
+    hoisted.append (zast.tableAdd :ast n: sl)
+    blk: (astnode.statement (zast.statementrow
+        nodeid: (zast.tableReserve :ast)
+        lineno: lnB
+        colno: coB
+        statements: (zast.kidsAdd kids: ast.kids xs: hoisted)
+    )
+    )
+    redo: (astnode.doexpr (zast.dorow
+        nodeid: (zast.tableReserve :ast)
+        lineno: lnB
+        colno: coB
+        statement: (zast.nodeid.create from: (zast.tableAdd :ast n: blk))
+    )
+    )
+    return (zast.tableAdd :ast n: redo)
 }
 
 # promoteWith -- a `with` whose body suspends: re-bind the user's name inside
