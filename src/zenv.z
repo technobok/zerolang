@@ -325,11 +325,21 @@ ZSymbolTable: class {
     # how each such frame became unreachable, a `divkind`: the first kind
     # recorded is the one control took
     unreachableKinds: (IdMapV u64 v: u8)
-    # decl ids moved on a path that left its loop with `break`, every open
-    # loop's run in one list; `loopBreakMarks` holds each loop's start,
-    # innermost last, and the loop re-lays its run after itself
+    # the open loops' bookkeeping, innermost last: each run marks its start
+    # in the two lists below, which every open loop shares
+    loopRuns: ListVal looprun
+    # decl ids moved on a path that left its loop with `break`; the loop
+    # re-lays them after itself
     loopBreakTakes: ListVal u64
-    loopBreakMarks: ListVal u64
+    # decl ids consumed at a `continue`, which the next iteration would find
+    # consumed
+    loopContinueTakes: ListVal u64
+    # decl ids moved by a loop's iterable binding, which runs once before the
+    # loop and not per iteration
+    loopOnceTakes: ListVal u64
+    # locals already reported as moved inside a loop, so an enclosing loop
+    # does not report them again
+    loopMoveReported: IdSet u64
     # dump scaffolding: a frame's label ("function:x", "if_branch", ...), the
     # frames a diagnostics-only template walk opened (kept out of the dump),
     # and the rows snapshotted when a frame closed
@@ -1562,10 +1572,76 @@ ZSymbolTable: class {
     # or the code after, sees them. Answers the kind.
     settleDivergingTakes: function {:this} out u8 is {
         k: this.unreachableKind
-        if k == divkind.brk when this.loopBreakMarks.length > 0 then this.recordBreakTakes
+        if k == divkind.brk when this.loopRuns.length > 0 then this.recordBreakTakes
         if k == divkind.exit then this.discardTakenInCurrentScope
         if k == divkind.brk then this.discardTakenInCurrentScope
         return k
+    }
+
+    # openLoopRun -- a loop's walk begins: mark its runs, with the scope
+    # stack's height at its entry
+    openLoopRun: function {:this entryStart: u64} is {
+        (this.loopRuns.append (looprun
+            :entryStart
+            breakStart: this.loopBreakTakes.length
+            contStart: this.loopContinueTakes.length
+            onceStart: this.loopOnceTakes.length
+        )
+        )
+    }
+
+    # recordOnceTakes -- the moves an iterable binding made (the rows laid
+    # since `from`), which run once before the loop
+    recordOnceTakes: function {:this from: u64} is {
+        i: from
+        for i < this.entries.length loop {
+            d: this.takenDeclAt :i
+            i = i + 1
+            if d > 0 then this.loopOnceTakes.append d
+        }
+    }
+
+    # isOnceTake -- the decl was moved by this loop's iterable binding
+    isOnceTake: function {this: this.view run: looprun d: u64} out bool is {
+        i: run.onceStart
+        for i < this.loopOnceTakes.length loop {
+            if (this.loopOnceTakes.get :i) == d then return true
+            i = i + 1
+        }
+        return false
+    }
+
+    # forgetOnceTakes -- the loop's walk ended: drop its binding's moves
+    forgetOnceTakes: function {:this run: looprun} is {
+        for this.loopOnceTakes.length > run.onceStart loop this.loopOnceTakes.pop
+    }
+
+    # closeLoopRun -- the loop's walk ended: answer its run, whose lists the
+    # caller drains
+    closeLoopRun: function {:this} out looprun is {
+        return this.loopRuns.pop
+    }
+
+    # takenDeclAt -- the decl a scope-stack row marks as taken, 0 when the
+    # row is not a take
+    takenDeclAt: function {this: this.view i: u64} out u64 is {
+        e: this.entries.get :i
+        if e.isTaken.not then return 0
+        return e.declId.u64
+    }
+
+    # recordContinueTakes -- at a `continue`, every move made since the
+    # innermost loop opened reaches its next iteration
+    recordContinueTakes: function {:this} is {
+        n: this.loopRuns.length
+        if n == 0 then return
+        run: this.loopRuns.get i: (n - 1)
+        i: run.entryStart
+        for i < this.entries.length loop {
+            d: this.takenDeclAt :i
+            i = i + 1
+            if d > 0 then this.loopContinueTakes.append d
+        }
     }
 
     # recordBreakTakes -- the innermost frame's taken rows, by decl id, onto
@@ -1722,6 +1798,20 @@ ZSymbolTable: class {
     }
 }
 
+# looprun -- where one open loop's runs start in the symbol table's shared
+# loop lists
+looprun: record {
+    # the scope stack's height when the loop opened: a taken row above it is
+    # a move made inside the loop
+    entryStart: u64
+    # into loopBreakTakes
+    breakStart: u64
+    # into loopContinueTakes
+    contStart: u64
+    # into loopOnceTakes
+    onceStart: u64
+}
+
 # divkind -- how a frame's walk ended, when it did not fall through: `exit`
 # leaves the function (`return`, `panic`), `brk` leaves the loop, `cont` ends
 # the iteration. Ordered so that the weakest for an enclosing loop -- the one
@@ -1742,8 +1832,11 @@ newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} o
         entries: List ZEntry
         unreachableFrames: IdSet u64
         unreachableKinds: (IdMapV u64 v: u8)
+        loopRuns: ListVal looprun
         loopBreakTakes: ListVal u64
-        loopBreakMarks: ListVal u64
+        loopContinueTakes: ListVal u64
+        loopOnceTakes: ListVal u64
+        loopMoveReported: IdSet u64
         frameLabel: (IdMapR u64 V: String)
         frameHidden: IdSet u64
         entryDump: List ZEntryDumpRow

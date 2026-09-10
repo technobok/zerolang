@@ -25889,8 +25889,9 @@ checkFor: function {
     ast: Ast
     fornode: forref
 } out ztypes.tid is {
+    entryStart: st.entryMark
     forMarker: st.pushBlock name: "for"
-    st.loopBreakMarks.append st.loopBreakTakes.length
+    st.openLoopRun :entryStart
     bk: st.reg.ctlPlaceholder
     (st.define
         nameId: zast.names.wkBreak
@@ -25905,7 +25906,11 @@ checkFor: function {
     for kC < fornode.nconds loop {
         condId: zast.forCondAt :ast nid: fornode.nid i: kC
         kC = kC + 1
+        onceMark: st.entryMark
         checkForCondition :st :unitDecl :ast :condId
+        # the iterable binding runs once, before the loop: what it moved is
+        # not moved again by the next iteration
+        if (forCondBindsName :ast :condId) then st.recordOnceTakes from: onceMark
     }
     kP: u64
     for kP < fornode.nposts loop {
@@ -25914,6 +25919,7 @@ checkFor: function {
         checkForPostcondition :st :unitDecl :ast :pcId
     }
     drainPendingBorrow :st
+    bodyMark: st.entryMark
     walkBodyAt :st :unitDecl :ast bodyId: fornode.body
     elemT: ztypes.tid
     # a body whose last statement DIVERGES -- a bare `return`, a return call,
@@ -25925,13 +25931,101 @@ checkFor: function {
         fb: ast.nodes.get i: fornode.body.u64
         elemT = ztypes.tid.create from: (lastStmtType :st :ast block: fb)
     }
-    # a body that leaves the FUNCTION never reaches the code after the loop,
-    # so its takes are dropped; one that leaves with `break` does, so they
-    # stay
-    if st.unreachableKind == zenv.divkind.exit then st.discardTakenInCurrentScope
+    # a body that leaves the FUNCTION runs at most once: its own takes are
+    # dropped (the code after the loop never sees them) while a condition's
+    # survive, since the condition ran before it. One that leaves with
+    # `break` keeps everything. One that falls through reaches the next
+    # iteration, and a take of an outer local on that path is the loop-move
+    # error -- as is one at any `continue`, which the walk recorded there.
+    k: st.unreachableKind
+    if k == zenv.divkind.exit then st.discardTakenFrom start: bodyMark
     st.popTo marker: forMarker
-    relayBreakTakes :st
+    run: st.closeLoopRun
+    if k == zenv.divkind.none then reportLoopMoves :st :ast :fornode :run
+    reportContinueMoves :st :ast :fornode :run
+    relayBreakTakes :st :run
+    st.forgetOnceTakes :run
     return (forComprehensionTid :st :unitDecl :ast :fornode :elemT)
+}
+
+# forCondBindsName -- the condition is the loop's iterable binding (`x: it`),
+# which runs once before the loop, not a test run per iteration
+forCondBindsName: function {ast: Ast.view condId: zast.nodeid} out bool is {
+    k: ast.nodes.get i: condId.u64
+    if k.namedoperation.not then return false
+    return (zast.nameTextAt :ast ref: k.name).length > 0
+}
+
+# reportLoopMoves -- the outer locals a loop's conditions or body consumed on
+# the path that falls through to the next iteration, which would find them
+# already consumed. Asked after the loop's frame closed: the close re-lays a
+# take of an outer local above the stack height the loop opened at, and
+# drops everything else the loop laid, so those rows are the answer. Each
+# local is reported once, at its innermost loop; the take stays laid, so a
+# use after the loop is still refused.
+reportLoopMoves: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    fornode: forref
+    run: zenv.looprun
+} is {
+    i: run.entryStart
+    for i < st.entryMark loop {
+        d: st.takenDeclAt :i
+        i = i + 1
+        if d == 0 then continue
+        if (st.isOnceTake :run :d) then continue
+        reportLoopMove :st :ast :fornode d: (ztypes.declid.create from: d)
+    }
+}
+
+# reportContinueMoves -- the locals the loop's `continue`s found consumed,
+# drained from the loop's run. A body-local recorded there is gone with the
+# loop's frame, and a name it shadowed is not the one consumed, so only a
+# decl the name still resolves to is reported.
+reportContinueMoves: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    fornode: forref
+    run: zenv.looprun
+} is {
+    for st.loopContinueTakes.length > run.contStart loop {
+        dn: st.loopContinueTakes.pop
+        if (st.isOnceTake :run d: dn) then continue
+        d: ztypes.declid.create from: dn
+        nid: zast.nameid.create from: (st.typing.declNameOf declId: d)
+        if (st.findLocal nameId: nid) == d then reportLoopMove :st :ast :fornode :d
+    }
+}
+
+# reportLoopMove -- one local moved where the loop's next iteration would
+# find it consumed, reported once at its innermost loop
+reportLoopMove: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    fornode: forref
+    d: ztypes.declid
+} is {
+    if (st.loopMoveReported.has item: d.u64) then return
+    st.loopMoveReported.add item: d.u64
+    {
+        nid: zast.nameid.create from: (st.typing.declNameOf declId: d)
+        nm: zast.nameTextAt :ast ref: nid
+        lm: "cannot transfer ownership of '\{nm}' inside a loop (executes 0+ times; on later iterations '\{nm}' would already be consumed)"
+        ln: "'\{nm}' is declared outside the loop; move it after the loop, end the iteration that moves it with 'break' or 'return', or declare the value inside the body so each iteration owns a fresh one"
+        lh: String
+        (addErrorH
+            :st
+            nodeid: fornode.nid
+            lineno: fornode.lineno
+            colno: fornode.colno
+            e: zast.err.ownerError
+            msg: lm
+            note: ln
+            hint: lh
+            width: 3
+        )
+    }
 }
 
 # relayBreakTakes -- the takes recorded on paths that left the loop with
@@ -25939,9 +26033,8 @@ checkFor: function {
 # consumed. A body-local recorded there is gone with the loop's frame, and
 # a name it shadowed must not be consumed in its place, so only a decl the
 # name still resolves to is re-laid.
-relayBreakTakes: function {st: zenv.ZSymbolTable} is {
-    mark: st.loopBreakMarks.pop
-    for st.loopBreakTakes.length > mark loop {
+relayBreakTakes: function {st: zenv.ZSymbolTable run: zenv.looprun} is {
+    for st.loopBreakTakes.length > run.breakStart loop {
         d: ztypes.declid.create from: st.loopBreakTakes.pop
         nm: st.typing.declNameOf declId: d
         nid: zast.nameid.create from: nm
@@ -34350,6 +34443,7 @@ checkStatement: function {
         }
         drainPendingBorrow :st
         if dk > 0 then st.markUnreachable kind: dk
+        if dk == zenv.divkind.cont then st.recordContinueTakes
     }
 }
 
