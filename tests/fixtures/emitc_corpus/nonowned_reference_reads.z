@@ -1,0 +1,71 @@
+# nonowned_reference_reads.z -- A LIVE NON-OWNED REFERENCE PINS ITS SOURCE
+# SHARED. A `.borrow` field, a `with` alias and a `.borrow` argument each hold
+# a reference the owner may read past: `src.length`, an interpolation, passing
+# the source to another call. What the owner may not do while the reference
+# lives is write, move or drop it (the error fixtures beside this one). Every
+# one of these reads used to be refused as "exclusive lock held by".
+C: class {
+    s: String.borrow
+}
+
+Bag: class {
+    x: i64
+}
+
+D: class {
+    b: Bag.borrow
+}
+
+Src: class {
+    n: i64
+}
+
+W: class {
+    s: Src.borrow
+    tag: i64
+}
+
+mk: function {a: Src.borrow} outx W is {
+    return (W s: a tag: 1)
+}
+
+count: function {s: String.view} out u64 is {
+    return s.length
+}
+
+both: function {a: String.borrow n: u64} is {
+    a.append "+"
+    print "both: \{a} \{n}"
+}
+
+main: function is {
+    src: "hello".string
+    {
+        # a borrowed field: the owner reads the source beside the holder
+        c: C s: src
+        n: src.length
+        print "field: \{n} \{c.s} \{src}"
+        m: count s: src
+        print "field call: \{m}"
+    }
+    bag: Bag x: 7
+    {
+        d: D b: bag
+        v: bag.x
+        print "field valtype: \{v} \{d.b.x}"
+    }
+    with w: src.borrow do {
+        k: src.length
+        print "with: \{k} \{src} \{w}"
+    }
+    # an `outx` result over a `.borrow` argument: the owner reads the source
+    x: Src n: 3
+    {
+        w: mk a: x
+        print "outx: \{x.n} \{w.tag} \{w.s.n}"
+    }
+    # a `.borrow` argument beside a read of the same source in one call
+    both a: src n: src.length
+    both a: src n: (count s: src)
+    print "end: \{src}"
+}
