@@ -349,38 +349,58 @@ and no auto-destroy is inserted.
   # conn is invalid here
   """
 
-#----: Ownership Transfer Inside Loop Bodies
+#----: Ownership Transfer Inside Loops
 
-A #~"for" loop body executes zero or more times. Ownership transfer of a
-variable declared #_*"outside" the loop is therefore structurally always
-wrong: after the first iteration the variable is already consumed, so the
-second iteration would try to transfer an invalid value.
+A #~"for" loop runs its conditions and its body zero or more times. Moving a
+variable declared #_*"outside" the loop on a path that reaches the next
+iteration is therefore always wrong: the first iteration consumes it, and the
+next would find it already consumed.
 
-The compiler rejects #~".take", #~".drop", #~".box", or passing an
-outer-scope variable to a #~".take" parameter inside any reachable point
-of a #~"for"-loop body, with the diagnostic:
+The compiler refuses #~".take", #~".drop", #~".box", a bare reftype binding
+(#~"b: m"), a reassignment (#~"t = m"), or passing an outer-scope variable to
+a #~".take" parameter -- in a loop condition, a postcondition, or the body --
+whenever the path after the move can reach the next iteration: the body falls
+through, or ends the iteration with #~"continue". The diagnostic is:
 
 #code language=text: """
-  cannot transfer ownership of '<name>' inside a loop body
-  (executes 0+ times; on later iterations '<name>' would already be
-  consumed)
+  cannot transfer ownership of '<name>' inside a loop (executes 0+ times;
+  on later iterations '<name>' would already be consumed)
+  = note: '<name>' is declared outside the loop; move it after the loop, end
+    the iteration that moves it with 'break' or 'return', or declare the
+    value inside the body so each iteration owns a fresh one
   """
 
-Variables declared #_*"inside" the loop body are unaffected: each iteration
-produces a fresh binding, so taking the local is fine.
+The move is legal when every path after it #_*"leaves" the loop: #~"break"
+(the name stays consumed after the loop, so a later read is refused as any
+use after a move is) or #~"return" / #~"panic". A move in a condition is
+legal only when the body always leaves the loop, so the condition runs at
+most once; a postcondition move only when the body never falls through.
+
+Variables declared #_*"inside" the loop body, and the loop's own binding, are
+unaffected: each iteration produces a fresh binding, so taking the local is
+fine. The iterable binding itself (#~"for r: (G s: src) loop") runs once,
+before the loop, so a move it makes is not repeated -- unless the loop sits
+inside another loop, whose next iteration enters it again.
 
 #code language=zerolang: """
   a: Crate value: 1
   for i: 3.iterate loop {
-      a.take              # ERROR: outer-scope variable
+      a.take              # ERROR: outer-scope variable, next iteration reached
       b: Crate value: 2
       c: b.take           # OK: b is body-local
   }
+  d: Crate value: 3
+  for j: 3.iterate loop {
+      if j == 1 then {
+          e: d.take       # OK: this path leaves the loop
+          break
+      }
+  }
+  # d is consumed here: reading it is use-after-move
   """
 
-The rule fires regardless of whether the alias optimiser would otherwise
-silently elide the transfer at runtime -- the source intent is rejected at
-typecheck.
+The rule fires regardless of whether the emitter would otherwise zero the
+moved source at runtime -- the source intent is rejected at typecheck.
 
 #---: .borrow
 

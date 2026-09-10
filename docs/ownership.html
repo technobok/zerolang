@@ -510,28 +510,47 @@ if ready then {
     log "not ready"             # compiler auto-destroys conn
 }
 # conn is invalid here</code></pre>
-<h4 id="ownership-transfer-inside-loop-bodies"><a href="#ownership-transfer-inside-loop-bodies">6.1.2. Ownership Transfer Inside Loop Bodies</a></h4>
-<p>A <code>for</code> loop body executes zero or more times. Ownership transfer of a
-variable declared <em><strong>outside</strong></em> the loop is therefore structurally always
-wrong: after the first iteration the variable is already consumed, so the
-second iteration would try to transfer an invalid value.</p>
-<p>The compiler rejects <code>.take</code>, <code>.drop</code>, <code>.box</code>, or passing an
-outer-scope variable to a <code>.take</code> parameter inside any reachable point
-of a <code>for</code>-loop body, with the diagnostic:</p>
-<pre><code class="language-text">cannot transfer ownership of '&lt;name&gt;' inside a loop body
-(executes 0+ times; on later iterations '&lt;name&gt;' would already be
-consumed)</code></pre>
-<p>Variables declared <em><strong>inside</strong></em> the loop body are unaffected: each iteration
-produces a fresh binding, so taking the local is fine.</p>
+<h4 id="ownership-transfer-inside-loops"><a href="#ownership-transfer-inside-loops">6.1.2. Ownership Transfer Inside Loops</a></h4>
+<p>A <code>for</code> loop runs its conditions and its body zero or more times. Moving a
+variable declared <em><strong>outside</strong></em> the loop on a path that reaches the next
+iteration is therefore always wrong: the first iteration consumes it, and the
+next would find it already consumed.</p>
+<p>The compiler refuses <code>.take</code>, <code>.drop</code>, <code>.box</code>, a bare reftype binding
+(<code>b: m</code>), a reassignment (<code>t = m</code>), or passing an outer-scope variable to
+a <code>.take</code> parameter -- in a loop condition, a postcondition, or the body --
+whenever the path after the move can reach the next iteration: the body falls
+through, or ends the iteration with <code>continue</code>. The diagnostic is:</p>
+<pre><code class="language-text">cannot transfer ownership of '&lt;name&gt;' inside a loop (executes 0+ times;
+on later iterations '&lt;name&gt;' would already be consumed)
+= note: '&lt;name&gt;' is declared outside the loop; move it after the loop, end
+  the iteration that moves it with 'break' or 'return', or declare the
+  value inside the body so each iteration owns a fresh one</code></pre>
+<p>The move is legal when every path after it <em><strong>leaves</strong></em> the loop: <code>break</code>
+(the name stays consumed after the loop, so a later read is refused as any
+use after a move is) or <code>return</code> / <code>panic</code>. A move in a condition is
+legal only when the body always leaves the loop, so the condition runs at
+most once; a postcondition move only when the body never falls through.</p>
+<p>Variables declared <em><strong>inside</strong></em> the loop body, and the loop's own binding, are
+unaffected: each iteration produces a fresh binding, so taking the local is
+fine. The iterable binding itself (<code>for r: (G s: src) loop</code>) runs once,
+before the loop, so a move it makes is not repeated -- unless the loop sits
+inside another loop, whose next iteration enters it again.</p>
 <pre><code class="language-zerolang">a: Crate value: 1
 for i: 3.iterate loop {
-    a.take              # ERROR: outer-scope variable
+    a.take              # ERROR: outer-scope variable, next iteration reached
     b: Crate value: 2
     c: b.take           # OK: b is body-local
-}</code></pre>
-<p>The rule fires regardless of whether the alias optimiser would otherwise
-silently elide the transfer at runtime -- the source intent is rejected at
-typecheck.</p>
+}
+d: Crate value: 3
+for j: 3.iterate loop {
+    if j == 1 then {
+        e: d.take       # OK: this path leaves the loop
+        break
+    }
+}
+# d is consumed here: reading it is use-after-move</code></pre>
+<p>The rule fires regardless of whether the emitter would otherwise zero the
+moved source at runtime -- the source intent is rejected at typecheck.</p>
 <h3 id="borrow"><a href="#borrow">6.2. .borrow</a></h3>
 <p>As a parameter attribute (<code>type.borrow</code> or just <code>type</code> since borrow is
 the default for all parameters): the function borrows the argument. The
