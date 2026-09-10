@@ -161,7 +161,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint complexity-report warn-check shadow-guard emitter-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard readable-check test-tcc-heavy mode-parity ci-corpus
+ci: style-lint complexity-report warn-check shadow-guard emitter-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard readable-check test-tcc-heavy mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -1407,6 +1407,64 @@ eager-guard: bin/zc
 	  exit 1; \
 	fi; \
 	echo "eager-guard OK: examples + corpus emit AND compile under --eager ($(words $(EAGER_KNOWN)) known)"
+
+# EAGER_LIB_KNOWN -- the library / compiler units still bad under `--eager`.
+# Empty, and a name added here needs the cause written beside it. Movement in
+# either direction fails, same rule as EAGER_KNOWN.
+EAGER_LIB_KNOWN :=
+
+# eager-lib-guard -- eager-guard's other half: the same question asked of the
+# STANDARD LIBRARY and the COMPILER'S OWN SOURCE. eager-guard reads examples +
+# emitc_corpus, and for a long time that was the whole of what ran under
+# `--eager` -- so a definition in src/ or lib/system/ that nothing demands was
+# checked by nothing at all. Not the self-compile, which is demand-driven from
+# zc's own `main`; not eager-guard, pointed at another tree; not the linter,
+# whose unused-private-def evidence counts a recursive self-call as a use. Two
+# dead emitter helpers carried a wrong return type for three months that way.
+#
+# A library unit has no `main` and is judged ONLY under `--eager`: without it
+# every one of these is E0039, so there is no non-eager run to compare against
+# and the difference would not be the signal. IT COMPILES WHAT IT EMITS, for
+# eager-guard's reason -- zc exiting 0 is not the same question as the C being
+# valid.
+#
+# lib/system/system/*.z is deliberately absent. Those are SUBUNITS: their
+# natives are registered under the PARENT unit's name (i128's operators are
+# `system.i128.+`, declared in wideint.z), so a subunit compiled standalone
+# misses every one of its own rows. A subunit is reached through system.z and
+# is never a compilation root -- exempt by construction, the way a unit with no
+# `main` is exempt from case-guard.
+eager-lib-guard: bin/zc
+	@d=$$(mktemp -d); bad=""; \
+	for f in lib/system/*.z src/*.z; do \
+	  b=$$(basename $$f .z); em=$$d/$$b.c; \
+	  if ! bin/zc emit $$f --eager -o $$em >/dev/null 2>&1; then \
+	    bad="$$bad $$b"; continue; \
+	  fi; \
+	  if ! $(CC) -std=c17 -w -Werror=implicit-function-declaration \
+	       -fsyntax-only $$em >/dev/null 2>&1; then \
+	    bad="$$bad $$b"; \
+	  fi; \
+	done; \
+	rm -rf $$d; \
+	new=""; for b in $$bad; do \
+	  case " $(EAGER_LIB_KNOWN) " in *" $$b "*) ;; *) new="$$new $$b";; esac; \
+	done; \
+	gone=""; for k in $(EAGER_LIB_KNOWN); do \
+	  case " $$bad " in *" $$k "*) ;; *) gone="$$gone $$k";; esac; \
+	done; \
+	if [ -n "$$new" ]; then \
+	  echo "eager-lib-guard FAIL: bad under --eager and not known:$$new"; \
+	  echo "  A definition nothing demands is checked HERE and nowhere else."; \
+	  echo "  Fix it, do not add it to EAGER_LIB_KNOWN."; \
+	  exit 1; \
+	fi; \
+	if [ -n "$$gone" ]; then \
+	  echo "eager-lib-guard FAIL: known-bad now clean:$$gone"; \
+	  echo "  Delete the row from EAGER_LIB_KNOWN in the same commit that fixed it."; \
+	  exit 1; \
+	fi; \
+	echo "eager-lib-guard OK: lib/system + src emit AND compile under --eager ($(words $(EAGER_LIB_KNOWN)) known)"
 
 # member-guard -- ratchet against declaration-bypassing member special-cases in
 # the type checker. TWO spellings carry them and the guard counts both:
