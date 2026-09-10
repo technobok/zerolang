@@ -5277,6 +5277,21 @@ registerGenericOrReceiverParam: function {
             )
         }
     }
+    # a MARKED generic parameter (`s: T.view`) keeps its marker beside the
+    # canonical type: the ownership row is what a call's argument reads. The
+    # row needs the member laid above, and a receiver recorded its own.
+    if isRecvP.not then {
+        gOw: pathOwnership :ast n: (ast.nodes.get i: pm.operation.u64)
+        match (
+            gOw
+        ) case some then {
+            (st.typing.setChildOwnershipId
+                parentTypeId: (ztypes.tid.create from: fid.u64)
+                nameId: pm.name
+                ownership: gOw
+            )
+        } case none then null
+    }
 }
 
 
@@ -5302,6 +5317,16 @@ resolveFunctionParam: function {
         genParam: false
         fnParam: false
         ptn: atomNameId :ast n: (ast.nodes.get i: pm.operation.u64)
+        # a MARKED type (`s: T.view`) is a dotted path with no atom name; its
+        # head is the path's root, which the generic-parameter tests must see
+        # so the parameter binds `T` itself rather than a shell named after it
+        gpn: ptn
+        if gpn.isZero then {
+            pOp: ast.nodes.get i: pm.operation.u64
+            if (isStripMarkerId nameId: (dottedChildNameId :ast n: pOp)) then {
+                gpn = rootNameIdOf :ast n: pOp
+            }
+        }
         # A MARKED receiver is an alias, so its type is `this.view` rather
         # than the bare `this` an atom name reports. Ask the shared
         # predicate, which knows every marker form.
@@ -5319,20 +5344,20 @@ resolveFunctionParam: function {
             if ptn == zast.names.wkThis then skipParam = true
             if isRecvP then skipParam = true
         }
-        if skipParam.not when isgen when (st.reg.isGenericParamOf tdecl: fnDecl name: ptn) then {
+        if skipParam.not when isgen when (st.reg.isGenericParamOf tdecl: fnDecl name: gpn) then {
             skipParam = true
             fnParam = true
         }
         if skipParam.not when (st.reg.isGenericParamOf
             tdecl: receiverEnclDecl
-            name: ptn
+            name: gpn
         ) then {
             skipParam = true
             genParam = true
         }
         if skipParam then {
             # the registry stores a generic parameter's name as text
-            ptnT: zast.nameTextAt :ast ref: ptn
+            ptnT: zast.nameTextAt :ast ref: gpn
             (registerGenericOrReceiverParam
                 :st
                 :ast
@@ -5342,7 +5367,7 @@ resolveFunctionParam: function {
                 :thisName
                 :genParam
                 :fnParam
-                :ptn
+                ptn: gpn
                 ptnT: ptnT.stringView
                 :isRecvP
                 :pm
@@ -27031,6 +27056,11 @@ checkBinop: function {
             nid: binop.rhs
         )
     }
+    # both operands are consumed here and the result -- a bool, a sum, a
+    # joined String -- is a fresh value that aliases neither: a pin the right
+    # operand's projection (`b.stringView`) left pending must not reach the
+    # binding. The left operand's was dropped when the right was walked.
+    drainPendingBorrow :st
     # the operator's name id and comparison shape are read through a view
     # scoped to this block: the dispatch below lends ast
     opnId: zast.nameid
@@ -28347,8 +28377,10 @@ armPayloadReadonly: function {
 # pinnedMoveError -- a move out of a binding ANOTHER holder has locked is
 # refused: the holder reads or writes through that value, and a move frees it
 # out from under them (a StringView over a moved String reads freed memory).
-# `.drop` has refused this for a while; the move sites never asked. Reports
-# and returns true when it fires, so the caller skips its remaining legs.
+# A CALL is a holder too: `f a: src b: src.take` hands the callee a reference
+# to `src` beside the value moved out of it. `.drop` has refused this for a
+# while; the move sites never asked. Reports and returns true when it fires,
+# so the caller skips its remaining legs.
 pinnedMoveError: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -28367,16 +28399,24 @@ pinnedMoveError: function {
     plh: st.findLockHolder nameId: (zast.nameid.create from: pnid.u32)
     if plh.none then return false
     # A holder that is the binding itself is the readonly case, which
-    # readonlyMoveError words better; a call-scoped holder belongs to the
-    # statement being checked, not to a live reader.
-    if plh.kind != ztypes.zlockholderkind.varKind then return false
-    if plh.id == pvo then return false
-    phn: st.formatLockHolder pool: ast.names holder: plh
-    plsn: zenv.zlockstateNameLower t: plk
+    # readonlyMoveError words better.
+    if plh.kind.varKind when plh.id == pvo then return false
+    if plh.kind.forKind then return false
     pnm: name
     pvb: verb
-    pm: "Cannot move '\{pnm}' \{pvb}: \{plsn} lock held by '\{phn}'"
-    pht: "'\{phn}' reads '\{pnm}' -- moving it would leave '\{phn}' pointing at freed memory; end its scope first, or copy with '.copy'"
+    pm: String
+    pht: String
+    if plh.kind.callKind then {
+        # the enclosing call already holds a reference to the value: the
+        # callee would read it beside the moved-out copy
+        pm = "Cannot move '\{pnm}' \{pvb}: this call already passes '\{pnm}'"
+        pht = "the callee would hold '\{pnm}' beside the value moved out of it; bind or copy the value first"
+    } else {
+        phn: st.formatLockHolder pool: ast.names holder: plh
+        plsn: zenv.zlockstateNameLower t: plk
+        pm = "Cannot move '\{pnm}' \{pvb}: \{plsn} lock held by '\{phn}'"
+        pht = "'\{phn}' reads '\{pnm}' -- moving it would leave '\{phn}' pointing at freed memory; end its scope first, or copy with '.copy'"
+    }
     pen: String
     (addErrorH
         :st
@@ -31573,24 +31613,117 @@ checkGenericFnCall: function {
     call: callref
     dro: ztypes.tid
 } out ztypes.tid is {
+    # the arguments' locks and the receiver's live in one call scope, laid in
+    # that order exactly as the concrete-method path lays them, so a receiver
+    # that is also an argument meets the argument's row. A generic method's
+    # writer receiver conflicts with live views the same way (the conflict
+    # check happens at take; the pop releases it before the next statement).
+    # A unit-member callee (io.eprintln) has no value root and skips.
+    mcmG: st.pushCall
     gfr: checkGenericCall :st :unitDecl :ast :call funcId: dro
     if gfr > 0 then {
         setgf: gfr
         stampGate :st nid: call.nid.u64 tid: setgf
     }
     st.typing.callKind.set key: call.nid.u64 value: zast.callkind.regular
-    # the receiver locks for the call's duration, exactly as the
-    # concrete-method path locks it -- the same function answers, so a
-    # generic method's writer receiver conflicts with live views the same
-    # way. The lock lives in its own call scope (the conflict check happens
-    # at take; the pop releases it before the next statement). A unit-member
-    # callee (io.eprintln) has no value root and skips.
-    mcmG: st.pushCall
     callableNode: ast.nodes.get i: call.callable.u64
+    midG: genericCallInstance :st :ast :call
+    lockGenericCallArgs :st :ast :call mid: midG recvImplicit: true
     rroG: methodReceiverRootId :ast n: callableNode
     lockMethodReceiver :st :ast :call :dro rroId: rroG
     st.popTo marker: mcmG
     return gfr
+}
+
+# genericCallInstance -- the function instance a generic call minted, read
+# back off the callable's stamp; zero when inference failed.
+genericCallInstance: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view call: callref
+} out ztypes.tid is {
+    cnid: nodeId n: (ast.nodes.get i: call.callable.u64)
+    return (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: cnid.u64)
+}
+
+# lockGenericCallArgs -- the locks a GENERIC function's arguments take, read
+# off the minted instance's parameters (the inference walk only typed them).
+# A bare-name reftype argument at a `.take` parameter moves in; at any other
+# it locks SHARED for the call, mutable unless the parameter is `.view` --
+# exactly what a concrete call's argument does.
+lockGenericCallArgs: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    call: callref
+    # the minted instance, whose parameters carry the template's markers
+    mid: ztypes.tid
+    # whether the call's shape already supplied the receiver
+    recvImplicit: bool
+} is {
+    if mid.isZero then return
+    idx: u64
+    k: u64
+    for k < call.nargs loop {
+        argId: (zast.callArgAt :ast nid: call.nid i: k).u32
+        k = k + 1
+        arg: argRefAt :ast nid: (zast.nodeid.create from: argId.u32)
+        if arg.nid.isZero then continue
+        pnId: arg.name
+        if pnId.isZero then {
+            pnId = positionalParamNameId :st funcId: mid :idx skipRecv: recvImplicit
+            idx = idx + 1
+        }
+        if pnId.isZero then continue
+        lockGenericCallArg :st :ast :call :mid :pnId :arg
+    }
+}
+
+# lockGenericCallArg -- one argument of lockGenericCallArgs: a bare-name
+# reftype value at parameter `pnId` moves in or locks for the call; any other
+# shape places no row.
+lockGenericCallArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    call: callref
+    mid: ztypes.tid
+    pnId: zast.nameid
+    arg: argref
+} is {
+    bnId: bareAtomNameId :ast n: (ast.nodes.get i: arg.operation.u64)
+    if bnId.isZero then return
+    bvo: st.lookupVarId nameId: bnId
+    if bvo.none then return
+    bto: st.lookup nameId: bnId
+    if bto.none then return
+    if (typeIsReftype :st tid: bto).not then return
+    aow: argOwnershipOf :st funcId: mid isCtor: false :pnId vt: bto
+    if aow.isTake then {
+        bnT: zast.nameTextAt :ast ref: bnId
+        carryG: List ztyping.PinPath
+        (consumeBareArgOwnership
+            :st
+            :ast
+            name: bnT.stringView
+            vid: bvo
+            recvVid: ztypes.vid
+            calleePins: false
+            pins: carryG
+            nodeid: arg.nid
+            lineno: arg.lineno
+            colno: arg.colno
+        )
+        stampArgDisposition :st :ast op: arg.operation own: ztypes.zparamownership.takeMode
+    } else if aow.isLockish then {
+        (lockCallArg
+            :st
+            pool: ast.names
+            nameId: bnId
+            callId: call.nid.u64
+            shared: true
+            mutable: aow.isViewArg.not
+            nodeid: arg.nid
+            lineno: arg.lineno
+            colno: arg.colno
+        )
+    }
 }
 
 # checkResolvedValueCall -- the callable resolved through the dotted walk to
@@ -31798,7 +31931,11 @@ checkBareGenericCall: function {
             return (callleg handled: true tid: (ztypes.tid.create from: funcId))
         }
     }
+    mcmB: st.pushCall
     gr: checkGenericCall :st :unitDecl :ast :call :funcId
+    midB: genericCallInstance :st :ast :call
+    lockGenericCallArgs :st :ast :call mid: midB recvImplicit: false
+    st.popTo marker: mcmB
     result = gr
     st.typing.callKind.set key: call.nid.u64 value: zast.callkind.regular
     if gr > 0 then {
