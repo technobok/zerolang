@@ -180,6 +180,7 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-09-10 | 796ffda7 | [the six emitter splits and the lowered baseline](#r-emitter-splits) | 0.46s | -- | 94MB / -- | 105 / 180 / 186 (total 471) | 2,116,927 | 302MB | -- | 122,436 |
 | 2026-09-10 | 7b0437e8 | [`.take` arguments in conditions: the stepped condition form](#r-take-in-condition) | 0.47s | -- | 94MB / -- | 112 / 180 / 184 (total 476) | 2,122,449 | 302MB | -- | 122,766 |
 | 2026-09-10 | 4bc0566e | [the checker refuses a move inside a loop](#r-loop-move-refusal) | 0.48s | -- | 95MB / -- | 105 / 181 / 187 (total 473) | 2,130,358 | 305MB | -- | 123,065 |
+| 2026-09-10 | cb26d174 | [a valtype holds value data only](#r-valtype-holds-values) | 0.48s | -- | 100MB / -- | 125 / 183 / 187 (total 495) | 2,132,433 | 305MB | -- | 123,216 |
 
 
 <a id="r-tokenarc"></a>
@@ -2943,6 +2944,27 @@ names a base the chase cannot resolve. The corpus did not catch it: it binds
 `A008 src/ztypecheck.z` 168 -> 160, `A005 src/zemitterc.z` 9 -> 7,
 `A005 src/ztypecheck.z` 12 -> 10, `A001 src/zemitterc.z` 387 -> 386, and the
 emitter-guard's `userFnId` count 31 -> 30.
+
+<a id="r-valtype-holds-values"></a>
+### a valtype holds value data only (2026-09-10, `4bc0566e` -> `cb26d174`)
+
+Three commits. The checker now enforces what the docs said in five places
+(`25c106e2`): a record field, a variant arm or a record typedef's base that
+is a reftype is E0100 at the declaration and the member is skipped
+(`refuseReftypeMember`, the dual of the Box rule); a record's or variant's
+parameter bounded by a reftype family is refused at the template
+(`refuseReftypeBounds`), and a facet bound -- which admits any argument --
+is caught at the mono (`mintMonoMember`, E0400, judging only what the
+argument brought in). `heapOwningValtypeTid` and its `valhashable` leg are
+gone. Moving `bare_zero_typedef`'s wrapper to the class it should have been
+exposed the open hoisted-argument destructor defect, fixed first
+(`f59a76d9`, `hoistDestroyLine`). Five error fixtures, one corpus program,
+the docs (`cb26d174`).
+
+**+2,075 blocks against the previous row, of which +5 are the mechanism**
+(seed vs new on the same source, equal-length binary names) and the rest
+the ~170 new lines being compiled. Wall and the phase split within noise;
+peak RSS 95MB -> 100MB is the larger self-compile input.
 
 <a id="r-loop-move-refusal"></a>
 ### the checker refuses a move inside a loop (2026-09-10, `cdb579f2` -> `4bc0566e`)
