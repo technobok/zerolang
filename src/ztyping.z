@@ -555,6 +555,24 @@ ZTyping: class {
     # their per-call slots are non-owned fields no constructor sets, so the
     # honesty rule on owned returns leaves them alone
     generatorTypes: IdSet u64
+    # the generator class whose `call` body is being walked, 0 outside one. A
+    # suspending loop or `with` inside it saves what it holds in a C local to
+    # a field of this class across each suspension, and the walk is what
+    # knows the field's type
+    currentGenTid: ztypes.tid
+    # the next ordinal for a field minted on currentGenTid, so two loops in
+    # one body never share a slot
+    genSpillNext: u64
+    # the state field a suspending object-iterator loop saves its payload to,
+    # keyed by the for header's condition node id: typed by the element for
+    # an owned or value yield, by the OptionView wrapper for a borrowed one
+    forPayloadField: (IdMapV u64 v: zast.nameid)
+    # the state field the loop's iterable instance lives in, same key; absent
+    # when the iterable is an existing binding or field
+    forIterableField: (IdMapV u64 v: zast.nameid)
+    # the state field a suspending `with` body's OWNED value lives in, keyed
+    # by the with node id
+    withValueField: (IdMapV u64 v: zast.nameid)
     # inferred concrete tid per call, keyed by call node and parameter name
     callGenericBinding: (MapVV callslot v: u64)
 
@@ -2564,6 +2582,11 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         callRecvFromArgs: IdSet u64
         generatorCallBodies: IdSet u64
         generatorTypes: IdSet u64
+        currentGenTid: ztypes.tid
+        genSpillNext: 0
+        forPayloadField: (IdMapV u64 v: zast.nameid)
+        forIterableField: (IdMapV u64 v: zast.nameid)
+        withValueField: (IdMapV u64 v: zast.nameid)
         callGenericBinding: (MapVV callslot v: u64)
         binopOwner: (IdMapV u64 v: ztypes.tid)
         binopMethod: (IdMapV u64 v: ztypes.tid)
