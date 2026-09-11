@@ -1,0 +1,78 @@
+# The PARAMETER side of const_name_field_default.z, and the same rule: a
+# declaration made by a VALUE is a constant declaration, so its TYPE comes from
+# that value, through the door every other constant takes -- `constFoldDecl`,
+# "addressed by the DECLARATION alone".
+#
+# docs/spec.pdoc lists the eligible value forms once, for parameters and fields
+# together. The field side asked the fold; the parameter side did not, so a bare
+# value resolved as a TYPE named after its own text. Two shapes broke. A bare
+# arm alias recorded no default at all and left the parameter REQUIRED --
+# `enabled: false` reported "missing required arguments 'enabled' (type:
+# false)" against a caller that had supplied everything the declaration meant to
+# ask for. A bare negative numeric recorded its default and then typed the
+# parameter `-1`, emitting C the C compiler rejected -- "parameter 1 ('z_v1')
+# has incomplete type" -- which is the same defect the field side fixed by
+# knocking on this door.
+#
+# `false` and `bool.false` are the same declaration because they are the same
+# value: core binds one to the other, and a truth value is an ARM CONSTANT over
+# bool's type, bool being a variant like any other. A user's own alias of an arm
+# gets the same standing, which is what makes this a rule and not two builtins
+# special-cased.
+#
+# A DOTTED declaration is NOT folded: it carries its own type in the leaf, so
+# `w: 4.u64` is a u64 parameter and the suffix is the whole point of writing it.
+Colour: variant {
+    red: null
+    green: null
+}
+
+First: Colour.red
+
+show: function {
+    # the value declares the type: i64, and negative is not a special case
+    a: 0
+    b: -1
+    # hex and float, likewise typed by what they ARE
+    h: 0x10
+    f: 1.5
+    # a dotted suffix still names the type: u64, not i64
+    w: 4.u64
+    # the two bool spellings, which must agree
+    p: false
+    q: bool.false
+    r: true
+    # a user alias of an arm, and the qualified form of the same arm
+    e: First
+    g: Colour.red
+} is {
+    print "a=\{a} b=\{b} h=\{h} f=\{f} w=\{w}"
+    print "p=\{p} q=\{q} r=\{r}"
+    match (
+        e
+    ) case red then {
+        print "e=red"
+    } case green then {
+        print "e=green"
+    }
+    match (
+        g
+    ) case red then {
+        print "g=red"
+    } case green then {
+        print "g=green"
+    }
+}
+
+# a TYPE is still a type: no default, so the call must supply it
+typed: function {n: i64} is {
+    print "typed n=\{n}"
+}
+
+main: function is {
+    show
+
+    # an explicit argument overrides the default, in either bool spelling
+    show p: true r: false e: Colour.green
+    typed n: 7
+}

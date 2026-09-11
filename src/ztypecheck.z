@@ -4951,11 +4951,11 @@ checkReturnPins: function {
     }
 }
 
-# recordParamArmDefault -- record a parameter's arm default, unless the arm
-# CARRIES a payload: a default names an arm and cannot supply what the arm
-# holds. The field side asks the same question through recordFoldedArmDefault,
-# and docs/spec.pdoc states it once for both ("Defaulting to an arm that carries
-# a non-null payload is rejected").
+# recordParamArmDefault -- record a parameter's arm default, for the DOTTED
+# spelling, whose path names the sum and the arm directly. The refusal and the
+# stamp are recordArmDefault's, shared with the bare spelling and with the field
+# side, and docs/spec.pdoc states the rule once for all of them ("Defaulting to
+# an arm that carries a non-null payload is rejected").
 recordParamArmDefault: function {
     # where the refusal and the default are both recorded
     st: zenv.ZSymbolTable
@@ -4972,30 +4972,31 @@ recordParamArmDefault: function {
     # the arm the default named
     armNid: zast.nameid
 } is {
-    armDecl: (st.typing.declMemberIdOf
-        parentTypeId: (ztypes.tid.create from: cid.u64)
-        nameId: armNid
-    )
     pnm8: zast.nameTextCopy :ast ref: pnameId
-    if (refuseArmDefaultPayload
+    (recordArmDefault
         :st
         :ast
         what: "parameter"
+        ownerTid: fid
+        nameId: pnameId
         fname: pnm8.stringView
-        fm: pm
+        dm: pm
         armTid: (ztypes.tid.create from: cid.u64)
         armName: armNid
-    ) then return
-    (st.typing.declSetDefaultId
-        parentTypeId: (ztypes.tid.create from: fid.u64)
-        nameId: pnameId
-        value: ztyping.defaultval.arm armDecl
     )
 }
 
-# checkParamTypeShape -- report the ways a parameter's declared type can fail to
-# name a type: an unknown name, a sum ARM used where its type belongs, or a
-# unit used as a type.
+# checkParamTypeShape -- record the default a parameter's declaration carries
+# when it is not a bare name: a function reference (the head names a function
+# with a body), a suffixed numeric literal (`0.u64`), or a sum ARM
+# (`bool.false`). It reports nothing -- an unknown name is the pending-typeref
+# walk's business (stampOnePendingTyperef's E0023), reached through the
+# recordTyperef its caller lays either way.
+#
+# The BARE spellings never reach here: a bare numeric is answered by
+# registerValueParam's isNumericLiteralNameAt, and a bare name that a unit
+# declares as a constant by the fold, which is the door the field side takes for
+# the same declaration.
 checkParamTypeShape: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -5102,6 +5103,18 @@ registerValueParam: function {
         ) then return
     }
     cid: partialTid
+    # THE VALUE DECLARES THE TYPE, on a parameter exactly as on a field: one
+    # declared by a value is a constant declaration, so it takes the same door
+    # -- the fold -- and only one that names no constant falls through to the
+    # type-ref path. Asked BEFORE the shell, which is what stops a bare `false`
+    # or `-1` from minting a type named after its own text. `partialTid` is a
+    # resolved specialisation and never a value, so the fold is asked only where
+    # it could answer.
+    folded: ztypes.tid
+    if cid == 0 then {
+        folded = (foldedDeclType :st :ast ownerTid: fid dm: pm)
+        cid = folded.u64
+    }
     if cid == 0 then cid = (resolveTyperefShell
         :st
         frame: rf
@@ -5116,6 +5129,17 @@ registerValueParam: function {
         nameId: pm.name
         childTypeId: cid
     )
+    if folded.isZero.not then {
+        pnmA: zast.nameTextCopy :ast ref: pm.name
+        (recordFoldedArmDefault
+            :st
+            :ast
+            what: "parameter"
+            ownerTid: fid
+            fname: pnmA.stringView
+            dm: pm
+        )
+    }
     if (isNumericLiteralNameAt :ast ref: ptn) then {
         (st.typing.declSetDefaultId
             parentTypeId: (ztypes.tid.create from: fid.u64)
@@ -10126,46 +10150,66 @@ recordFieldDefault: function {
 }
 
 
-# foldedFieldType -- the type a field's VALUE declares, for a field declared by
-# a bare value; 0 when it declares none.
+# foldedDeclType -- the type a declaration's VALUE declares, for a field or a
+# parameter declared by a bare value; 0 when it declares none.
 #
 # This is the door every other constant takes: `constFoldDecl` folds the value
 # and registers the type that value carries, addressed by the declaration alone
 # -- "a constant's TYPE comes from its VALUE, so the fold is what declares it".
-# Reading the answer back is what lets `n: -1` be an i64 field holding -1,
-# rather than the declaration's first byte being consulted twice and the two
-# answers disagreeing.
+# Reading the answer back is what lets `n: -1` be an i64 holding -1, rather than
+# the declaration's first byte being consulted twice and the two answers
+# disagreeing.
+#
+# A FIELD AND A PARAMETER ASK THIS THE SAME WAY. Both are constant declarations
+# in the sense a unit-level `x: -1` is, docs/spec.pdoc lists their eligible
+# value forms once for the two of them, and an owner is an owner: a class's type
+# id or a function's, with the member hanging off it either way.
 #
 # ONLY FOR A BARE DECLARATION. A dotted one carries its own type in the leaf --
 # `value: 4.u64` is a u64 field, and the suffix is the entire point of writing
 # it -- so the type-ref path answers those, and folding them would flatten them
 # to the literal's own type. A bare declaration has no leaf to read, which is
 # exactly when the value has to declare the type.
-foldedFieldType: function {
+foldedDeclType: function {
     # where the fold is recorded
     st: zenv.ZSymbolTable
-    # the tree the field's value is read from
+    # the tree the declaration's value is read from
     ast: Ast
-    # the owning type's id
-    cid: u64
-    # the field's declaration
-    fm: argref
+    # the type the member hangs off: a class's, or a function's
+    ownerTid: u64
+    # the member's declaration
+    dm: argref
 } out ztypes.tid is {
     bare: false
     {
-        fop: ast.nodes.get i: fm.operation.u64
+        fop: ast.nodes.get i: dm.operation.u64
         bare = (bareAtomNameId :ast n: fop).isZero.not
     }
     if bare.not then return ztypes.tid
     fd: (st.typing.declMemberIdOf
-        parentTypeId: (ztypes.tid.create from: cid.u64)
-        nameId: fm.name
+        parentTypeId: (ztypes.tid.create from: ownerTid.u64)
+        nameId: dm.name
     )
     if fd.isZero then return ztypes.tid
     constFoldDecl :ast :st declId: fd
+    # AN ARM CONSTANT MUST NAME AN ARM SOMETHING DECLARES. A GENERIC
+    # PARAMETER'S declaration wears the same shape -- `t: anyval.generic` reads
+    # as a dotted arm of `anyval` -- and folds to an arm constant no arm answers
+    # for. Answering from it types `v: t` as the bound, `anyval`, and the
+    # template stops agreeing with itself. The arm's own declaration tells the
+    # two apart, and a name the fold cannot place belongs to the type-ref path,
+    # which knows how to resolve one.
+    cvD: constValueOfDecl :st :ast declId: fd
+    if cvD.kind.armKind then {
+        avD: (st.typing.declMemberIdOf
+            parentTypeId: cvD.armTid
+            nameId: cvD.armName
+        )
+        if avD.isZero then return ztypes.tid
+    }
     fto: (st.typing.declChildOfId
-        parentTypeId: (ztypes.tid.create from: cid.u64)
-        nameId: fm.name
+        parentTypeId: (ztypes.tid.create from: ownerTid.u64)
+        nameId: dm.name
     )
     match (
         fto
@@ -10240,45 +10284,84 @@ refuseArmDefaultPayload: function {
     return true
 }
 
-# recordFoldedArmDefault -- record the default a field's folded value names,
-# when that value is an ARM constant. This is what makes `p: false` and
+# recordArmDefault -- record that a member defaults to an ARM, once the arm is
+# known, and refuse it when that arm carries a payload. The dotted spelling
+# reads the pair off the path and the bare one reads it off the folded cval;
+# from here down they are one declaration, which is what keeps the refusal and
+# the stamp from drifting apart.
+recordArmDefault: function {
+    # the tables the stamp and any refusal land in
+    st: zenv.ZSymbolTable
+    # the tree the member's name is read from
+    ast: Ast.view
+    # the noun the refusal reports under: `field` or `parameter`
+    what: StringView
+    # the owning type's id: the class's, or the function's
+    ownerTid: u64
+    # the member's own name
+    nameId: zast.nameid
+    # that name as text, for the message
+    fname: StringView
+    # the member's declaration, for the position
+    dm: argref
+    # the sum whose arm was named
+    armTid: ztypes.tid
+    # the arm named, within that sum
+    armName: zast.nameid
+} is {
+    if (refuseArmDefaultPayload
+        :st
+        :ast
+        :what
+        :fname
+        fm: dm
+        :armTid
+        :armName
+    ) then return
+    avDecl: (st.typing.declMemberIdOf
+        parentTypeId: armTid
+        nameId: armName
+    )
+    (st.typing.declSetDefaultId
+        parentTypeId: (ztypes.tid.create from: ownerTid.u64)
+        :nameId
+        value: ztyping.defaultval.arm avDecl
+    )
+}
+
+# recordFoldedArmDefault -- record the default a declaration's folded value
+# names, when that value is an ARM constant. This is what makes `p: false` and
 # `q: bool.false` one declaration: the same cval, so the same default.
 recordFoldedArmDefault: function {
     # where the default and any diagnostic are recorded
     st: zenv.ZSymbolTable
-    # the tree the field's name is read from
+    # the tree the declaration's name is read from
     ast: Ast.view
-    # the owning type's id
-    cid: u64
-    # the field's own name
+    # the noun to report under, passed through to the refusal
+    what: StringView
+    # the owner the member hangs off: a class's type id, or a function's
+    ownerTid: u64
+    # the member's own name as text, for the message
     fname: StringView
-    # the field's declaration, for the position
-    fm: argref
+    # the member's declaration, for the position
+    dm: argref
 } is {
     fdc: (st.typing.declMemberIdOf
-        parentTypeId: (ztypes.tid.create from: cid.u64)
-        nameId: fm.name
+        parentTypeId: (ztypes.tid.create from: ownerTid.u64)
+        nameId: dm.name
     )
     cvF: constValueOfDecl :st :ast declId: fdc
     if cvF.kind.armKind.not then return
-    if (refuseArmDefaultPayload
+    (recordArmDefault
         :st
         :ast
-        what: "field"
+        :what
+        :ownerTid
+        nameId: dm.name
         :fname
-        :fm
+        :dm
         armTid: cvF.armTid
         armName: cvF.armName
-    ) then return
-    avDecl: (st.typing.declMemberIdOf
-        parentTypeId: cvF.armTid
-        nameId: cvF.armName
-    )
-    (st.typing.declSetDefault
-        parentTypeId: (ztypes.tid.create from: cid.u64)
-        pool: ast.names
-        name: fname
-        value: ztyping.defaultval.arm avDecl
     )
 }
 
@@ -10312,7 +10395,7 @@ resolveNamedFieldSlot: function {
     # declared by one is a constant declaration in the same sense a unit-level
     # `x: -1` is, so it takes the same door -- the fold -- and only a
     # declaration that names no constant falls through to the type-ref path.
-    foldTid: foldedFieldType :st :ast :cid :fm
+    foldTid: foldedDeclType :st :ast ownerTid: cid dm: fm
     cidf: foldTid
     if cidf.isZero then cidf = (fieldSlotTid
         :st
@@ -10335,7 +10418,7 @@ resolveNamedFieldSlot: function {
     # field was such a class was never destroyed
     if needsDtor.not when cidf.isZero.not when (st.reg.needsDestructor typeId: cidf
     ) then needsDtor = true
-    recordFoldedArmDefault :st :ast :cid :fname :fm
+    (recordFoldedArmDefault :st :ast what: "field" ownerTid: cid :fname dm: fm)
     if (st.reg.typetypeOf typeId: cidf) == ztypes.ztypetype.functionType then {
         (st.typing.setChildFnptrField
             pool: ast.names
