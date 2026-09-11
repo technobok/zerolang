@@ -2071,18 +2071,29 @@ view-guard:
 	  src/runtime/natives.tbl
 
 # fallback-guard -- the emitter must never silently degrade: a construct it
-# cannot emit leaves a "/* zemitterc: unhandled ... */" marker in the C (and
-# records an emitFail, so zc exits nonzero). Leg 1: no example emit outside
-# the known baseline may carry a marker (the baseline holds the known gaps
-# and shrinks to empty as they are fixed). Leg 2: the emitted driver C
+# cannot emit leaves a "/* zemitterc: ... */" marker in the C and records an
+# emitFail, so zc exits nonzero and writes nothing. Leg 1: no example emit
+# outside the known baseline may carry a marker (the baseline holds the known
+# gaps and shrinks to empty as they are fixed). Leg 2: the emitted driver C
 # (bin/zc.c, out/zl.c, out/zls.c) must carry ZERO live markers. The drivers
 # compile the emitter, so its own message strings appear there as literals;
 # those are excluded by content -- a marker opening a C string is the
 # emitter quoting itself, whereas a live one is emitted bare, either as its
 # own comment line or inline as `= /* ... */0`. Matching on the literal (not
 # on a helper's C name) keeps the leg working whichever naming scheme
-# --readable-names selects. Leg 3: a source ratchet on the
-# emitFail line count in src/zemitterc.z.
+# --readable-names selects.
+#
+# BOTH FILE LEGS MATCH THE MARKER PREFIX, NOT THE WORD "unhandled". They used
+# to grep 'zemitterc: unhandled', which five marker texts do not contain -- the
+# two 'no native implementation' legs, 'unresolved operator', the two missing-
+# fragment legs, and the yield hint that deliberately REPLACES the unhandled-
+# callee wording. Each of those could have shipped in an emission unseen.
+#
+# Leg 3: a source ratchet on the emitFail line count in src/zemitterc.z.
+# Leg 4: a source ratchet on the marker-SITE count. The file legs can only ever
+# fire for a marker whose site forgot its emitFail, since a site that records
+# one means no C is written at all -- so the count of sites is what actually
+# holds the invariant, and a new one must be deliberate.
 #
 # Two kinds of leg share that count, and they move in opposite directions. A
 # FALLBACK leg is a construct the emitter cannot render: it may only DECREASE,
@@ -2094,23 +2105,24 @@ view-guard:
 # commit message, and the guard cannot tell the two apart: the prose is the
 # check, so say which one it is.
 FALLBACK_BASELINE :=
-EMITFAIL_BASELINE := 31
+EMITFAIL_BASELINE := 33
+MARKER_BASELINE := 24
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
 	@fail=0; \
 	for f in $(EXCS); do \
-	  if grep -q 'zemitterc: unhandled' $$f; then \
+	  if grep -q '/\* zemitterc: ' $$f; then \
 	    name=$$(basename $$f .c); \
 	    case " $(FALLBACK_BASELINE) " in \
 	      *" $$name "*) ;; \
-	      *) echo "fallback-guard FAIL: $$name.c carries an unhandled-construct marker"; fail=1;; \
+	      *) echo "fallback-guard FAIL: $$name.c carries an emitter marker"; fail=1;; \
 	    esac; \
 	  fi; \
 	done; \
 	for d in bin/zc.c $(BUILDDIR)/zl.c $(BUILDDIR)/zls.c; do \
-	  n=$$(grep 'zemitterc: unhandled' $$d | grep -cv '"[[:space:]]*/\* zemitterc: unhandled'); \
+	  n=$$(grep '/\* zemitterc: ' $$d | grep -cv '"[[:space:]]*/\* zemitterc: '); \
 	  if [ "$$n" -gt 0 ]; then \
-	    echo "fallback-guard FAIL: $$d carries $$n live unhandled-construct marker(s)"; fail=1; \
+	    echo "fallback-guard FAIL: $$d carries $$n live emitter marker(s)"; fail=1; \
 	  fi; \
 	done; \
 	n=$$(grep -c 'emitFail' src/zemitterc.z); \
@@ -2119,12 +2131,20 @@ fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
 	elif [ "$$n" -lt $(EMITFAIL_BASELINE) ]; then \
 	  echo "fallback-guard: emitFail lines = $$n < baseline $(EMITFAIL_BASELINE) -- lower EMITFAIL_BASELINE"; \
 	fi; \
+	m=$$(grep -c '/\* zemitterc: ' src/zemitterc.z); \
+	if [ "$$m" -gt $(MARKER_BASELINE) ]; then \
+	  echo "fallback-guard FAIL: src/zemitterc.z marker sites = $$m (baseline $(MARKER_BASELINE))"; \
+	  echo "  A new marker site MUST record an emitFail beside it, or it degrades in"; \
+	  echo "  silence where no file leg can see it. Bump MARKER_BASELINE and say so."; fail=1; \
+	elif [ "$$m" -lt $(MARKER_BASELINE) ]; then \
+	  echo "fallback-guard: marker sites = $$m < baseline $(MARKER_BASELINE) -- lower MARKER_BASELINE"; \
+	fi; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  The emitter hit a construct it cannot emit. Fix the emission gap (or,"; \
 	  echo "  for a known example gap being tracked, add it to FALLBACK_BASELINE)."; \
 	  exit 1; \
 	fi; \
-	echo "fallback-guard OK: no unhandled-construct markers outside the baseline ($(words $(FALLBACK_BASELINE)) known; emitFail legs $$n)"
+	echo "fallback-guard OK: no emitter markers outside the baseline ($(words $(FALLBACK_BASELINE)) known; emitFail legs $$n, marker sites $$m)"
 
 clean:
 	rm -rf $(BUILDDIR) bin
