@@ -5101,16 +5101,7 @@ registerValueParam: function {
     partialTid: u64
     pm: argref
 } is {
-    {
-        pnm9: zast.nameTextCopy :ast ref: pm.name
-        if (refuseStringDefault
-            :st
-            :ast
-            what: "parameter"
-            fname: pnm9.stringView
-            fm: pm
-        ) then return
-    }
+    if (refuseStringDefault :st :ast what: "parameter" nameId: pm.name fm: pm) then return
     cid: partialTid
     # THE VALUE DECLARES THE TYPE, on a parameter exactly as on a field: one
     # declared by a value is a constant declaration, so it takes the same door
@@ -8058,7 +8049,7 @@ attachRecordField: function {
     fm: argref
     fname: StringView
 } is {
-    if (refuseStringDefault :st :ast what: "field" :fname :fm) then return
+    if (refuseStringDefault :st :ast what: "field" nameId: fm.name :fm) then return
     ftnR: fieldHeadNameId :ast n: (ast.nodes.get i: fm.operation.u64)
     # a field's type-ref can name a SIBLING method (an fn-ptr
     # slot defaulting to it), which is a member like any other
@@ -10587,13 +10578,17 @@ refuseStringDefault: function {
     ast: Ast.view
     # what was declared, for the message: `field` or `parameter`
     what: StringView
-    # the declared name, which the message names
-    fname: StringView
+    # the declared name's pool id. Read AFTER the shape test, as a view: this
+    # runs on every declaration in the tree and reports on almost none, and the
+    # copy its callers used to take was 11,922 allocations of a name nobody
+    # went on to name.
+    nameId: zast.nameid
     # the declaration, whose root is tested
     fm: argref
 } out bool is {
     fop: ast.nodes.get i: fm.operation.u64
     if (rootIsStringLiteral :ast n: fop).not then return false
+    fname: zast.nameTextAt :ast ref: nameId
     fp: zast.posOf n: fop
     md: "\{what} '\{fname}' is declared by a string literal -- a default must be a compile-time constant: a number, an arm that carries nothing, or a function reference"
     hd: "name the type instead (`\{fname}: String`) and pass the text in, or default it to a number"
@@ -10669,7 +10664,7 @@ resolveClassFieldEntry: function {
         :st
         :ast
         what: "field"
-        fname: fname.stringView
+        nameId: fm.name
         :fm
     ) then return false
     ftn: fieldHeadNameId :ast n: (ast.nodes.get i: fm.operation.u64)
