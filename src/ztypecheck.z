@@ -25164,7 +25164,20 @@ checkReassignedType: function {
                 frame: st.curFrame
                 :ast
                 tid: rvt
-            ) when (isNumericTid :st frame: st.curFrame :ast tid: chkT) then skipR = true
+            ) when (isNumericTid :st frame: st.curFrame :ast tid: chkT) then {
+                skipR = true
+                lx9r: argLiteralLexeme :ast nid: rasgn.value
+                (checkNumericCoercion
+                    :st
+                    :ast
+                    dstTid: chkT
+                    srcTid: rvt
+                    lex: lx9r.stringView
+                    nodeid: rasgn.nid
+                    lineno: rasgn.lineno
+                    colno: rasgn.colno
+                )
+            }
             lttR: st.reg.typetypeOf typeId: chkT
             if lttR == ztypes.ztypetype.protocolType then skipR = true
             if lttR == ztypes.ztypetype.facetType then skipR = true
@@ -29682,40 +29695,101 @@ argLiteralLexeme: function {ast: Ast.view nid: zast.nodeid} out String is {
     return (zast.nameTextCopy :ast ref: nmId)
 }
 
-# checkCoercedLiteralFits -- A LITERAL ARGUMENT MEETS ITS TARGET TYPE HERE, and
-# this is the third place a literal is resolved against one: the other two are
-# the suffixed forms, in a body and at unit level, and both ask checkLiteralFits
-# whether it fits. This one never did, so the coercion that makes `takes n: 5`
-# work also let `takes n: 300` through at a `u8` -- the emitter folded it to 44
-# and the program ran -- and `takes n: 2.5` through at an `i64`, truncated to 2.
+# checkNumericCoercion -- the two questions a numeric value answers at a TYPED
+# DESTINATION, wherever one appears. A LITERAL is settled against its own value:
+# this is the third place a literal is resolved against a type -- the other two
+# are the suffixed forms, in a body and at unit level, and both ask
+# checkLiteralFits -- and the one place nobody asked, so `300.u8` was refused
+# while `n: 300` at a u8 folded to 44 and RAN. A NON-literal carries no value to
+# check, so the question is the one the declarations answer: does a lossless
+# conversion exist at all?
 #
-# The same function answers here, so the rule has ONE implementation: a literal
-# conversion is settled at compile time, and a declaration can say which
-# conversions exist but not that 300 is too big for a u8.
-checkCoercedLiteralFits: function {
-    # where a literal that does not fit is reported
+# Shared by the call-argument and assignment sites, which skipped for the same
+# reason: both read any numeric as standing in for any other.
+checkNumericCoercion: function {
+    # where a value that does not survive the conversion is reported
     st: zenv.ZSymbolTable
-    # the tree the lexeme and the target's name are read from
-    ast: Ast.view
-    # the parameter's type, whose name is the conversion target
-    ptid: u64
-    # the argument's own type, which must be a literal one for this to apply
-    vt: ztypes.tid
-    # the argument, for its lexeme and its position
-    arg: argref
+    # the tree the type names are read from
+    ast: Ast
+    # the destination's type
+    dstTid: ztypes.tid
+    # the value's own type
+    srcTid: ztypes.tid
+    # the value's literal lexeme, "" when it is not written as a literal
+    lex: StringView
+    # the node the report points at
+    nodeid: zast.nodeid
+    # the line the report points at
+    lineno: u32
+    # the column the report points at
+    colno: u32
 } is {
-    if (isLiteralTypeId :st tid: vt).not then return
-    lx: argLiteralLexeme :ast nid: arg.operation
-    if lx.length == 0 then return
-    tn9: st.reg.nameOf tid: (ztypes.tid.create from: ptid.u64)
-    (checkLiteralFits
+    if dstTid.isZero then return
+    if srcTid.isZero then return
+    if (isLiteralTypeId :st tid: srcTid) then {
+        if lex.length == 0 then return
+        tn9c: st.reg.nameOf tid: dstTid
+        (checkLiteralFits
+            :st
+            :nodeid
+            :lineno
+            :colno
+            lit: lex
+            target: tn9c.stringView
+        )
+        return
+    }
+    if (isNumericTid :st frame: st.curFrame :ast tid: srcTid).not then return
+    if (isNumericTid :st frame: st.curFrame :ast tid: dstTid).not then return
+    if (losslessConvTo :st :ast from: srcTid to: dstTid) then return
+    an9n: st.reg.nameOf tid: srcTid
+    pn9n: st.reg.nameOf tid: dstTid
+    mn9n: "'\{an9n}' does not convert to '\{pn9n}' without loss, so it cannot stand in for one"
+    hn9n: "convert it where the loss is visible -- `\{pn9n}` returns a result: `v.\{pn9n}.or d: <fallback>`"
+    nn9n: String
+    (addErrorH
         :st
-        nodeid: arg.nid
-        lineno: arg.lineno
-        colno: arg.colno
-        lit: lx.stringView
-        target: tn9.stringView
+        :nodeid
+        :lineno
+        :colno
+        e: zast.err.typeError
+        msg: mn9n
+        note: nn9n
+        hint: hn9n
+        width: 1
     )
+}
+
+# losslessConvTo -- does `from` declare a LOSSLESS conversion to `to`? The
+# DECLARATION is the authority, and system.z draws the line exactly there: a
+# lossless conversion returns the target type itself (`i64.i128` is `out i128`),
+# while one that can lose data returns `(resultval t: X e: converror)` for the
+# caller to handle. 81 plain against 159 result-bearing across the fourteen
+# numeric types, so nothing here needs to know which pairs widen.
+losslessConvTo: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    from: ztypes.tid
+    to: ztypes.tid
+} out bool is {
+    if from == to then return true
+    tn9l: st.reg.nameOf tid: to
+    if tn9l.length == 0 then return false
+    nid9l: zast.poolFind pool: ast.names text: tn9l.stringView
+    if nid9l.isZero then return false
+    (forceMemberOf :st frame: st.curFrame :ast parentTypeId: from nameId: nid9l)
+    co9l: st.typing.declChildOfId parentTypeId: from nameId: nid9l
+    match (
+        co9l
+    ) case some then {
+        rt9l: methodReturnOf :st mid: (ztypes.tid.create from: co9l.u64)
+        match (
+            rt9l
+        ) case some then {
+            return rt9l.u64 == to.u64
+        } case none then null
+    } case none then null
+    return false
 }
 
 # checkArgTypeMismatch -- the argument's type must fit the parameter it binds.
@@ -29731,10 +29805,22 @@ checkArgTypeMismatch: function {
 } is {
     if ptid == 0 then return
     if vt.isZero then return
-    # BEFORE the compatibility legs, because a literal is COMPATIBLE with every
-    # numeric type -- that is what coercion means -- and the question here is
-    # not whether it may convert but whether the value survives the conversion.
-    checkCoercedLiteralFits :st :ast :ptid :vt :arg
+    # BEFORE the compatibility legs, because a numeric value is COMPATIBLE with
+    # every numeric type -- that is what coercion means -- and the question here
+    # is not whether it may convert but whether it survives the conversion.
+    {
+        lx9a: argLiteralLexeme :ast nid: arg.operation
+        (checkNumericCoercion
+            :st
+            :ast
+            dstTid: (ztypes.tid.create from: ptid.u64)
+            srcTid: vt
+            lex: lx9a.stringView
+            nodeid: arg.nid
+            lineno: arg.lineno
+            colno: arg.colno
+        )
+    }
     if (typesCompatible :ast :st a: vt b: (ztypes.tid.create from: ptid.u64)) then return
     if (argMismatchSkipped :st :ast :vt :ptid) then return
     en7: st.reg.nameOf tid: (ztypes.tid.create from: ptid.u64)
@@ -33108,7 +33194,7 @@ bindOrConflict: function {
     # where the binding and any conflict are both recorded
     st: zenv.ZSymbolTable
     # the tree the parameter and type names are read from
-    ast: Ast.view
+    ast: Ast
     # the argument doing the binding, for the position
     arg: argref
     # the substitutions this call has accumulated
@@ -33131,7 +33217,17 @@ bindOrConflict: function {
         # whether the value survives, the same question every other typed
         # position asks. `pick t: i64 n: 2.5` truncated to 2 without it.
         if (isLiteralTypeId :st tid: walkedTid) then {
-            checkCoercedLiteralFits :st :ast ptid: hgot vt: walkedTid :arg
+            lx9g: argLiteralLexeme :ast nid: arg.operation
+            (checkNumericCoercion
+                :st
+                :ast
+                dstTid: (ztypes.tid.create from: hgot.u64)
+                srcTid: walkedTid
+                lex: lx9g.stringView
+                nodeid: arg.nid
+                lineno: arg.lineno
+                colno: arg.colno
+            )
             return
         }
         (reportGenericBindingConflict
@@ -38698,8 +38794,9 @@ constValueOfMemberId: function {
     od: constOwnerDeclForId :st :frame :unitDecl :nameId
     if od.isZero then return ztypes.noConst
     # the constant's own declaration is the owner's child of that name, so the
-    # def node comes off the same walk that found the owner
-    dnode: 0
+    # def node comes off the same walk that found the owner. u32 because a node
+    # id is one, and the binding's type IS its initializer.
+    dnode: u32
     {
         cd: st.typing.declFindChild parentDeclId: od nameId: nid
         if cd.isZero.not then {
@@ -38734,7 +38831,9 @@ constValueOfMemberAt: function {
     nid: nameId
     if utid.isZero then return ztypes.noConst
     k: st.typing.memberConstKey parentTypeId: utid nameId: nid
-    evalState: 0
+    # u64 because that is what the state table holds, and a binding's type IS
+    # its initializer
+    evalState: u64
     {
         sg: st.typing.constEvalState.get key: k
         match (
@@ -40651,7 +40750,7 @@ constFoldDecl: function {
     if own.isZero then return
     nmNode: declNameIdOf :st :declId
     if nmNode.isZero then return
-    dnode: 0
+    dnode: u32
     {
         decl: st.typing.decls.get i: declId.u64
         dnode = decl.node
