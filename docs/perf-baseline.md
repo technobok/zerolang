@@ -182,7 +182,54 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-09-10 | 4bc0566e | [the checker refuses a move inside a loop](#r-loop-move-refusal) | 0.48s | -- | 95MB / -- | 105 / 181 / 187 (total 473) | 2,130,358 | 305MB | -- | 123,065 |
 | 2026-09-10 | cb26d174 | [a valtype holds value data only](#r-valtype-holds-values) | 0.48s | -- | 100MB / -- | 125 / 183 / 187 (total 495) | 2,132,433 | 305MB | -- | 123,216 |
 | 2026-09-10 | b90b64df | [a loop variable survives a suspension](#r-loop-var-suspension) | 0.50s | -- | 100MB / -- | 118 / 190 / 202 (total 510) | 2,138,058 | 306MB | -- | 123,510 |
+| 2026-09-11 | 43e533e1 | [the allocation ratchet joins ci, and the drift comes out](#r-alloc-gate-recovery) | 0.56s | -- | 100MB / -- | 141 / 226 / 211 (total 578) | 2,161,395 | 309MB | -- | 124,541 |
 
+
+<a id="r-alloc-gate-recovery"></a>
+**The allocation ratchet joins ci, and the drift comes out** (`0b773eb3` ->
+`43e533e1`, baseline 2,131,114 -> 2,161,395).
+
+perf-strict was never a ci prerequisite -- its own comment said valgrind costs
+15-25s and a shared runner cannot promise a quiet core. The first half is true;
+the second does not apply to a count that is bit-identical run to run, which is
+exactly why this gate ratchets allocations and not wall. Twenty commits passed
+without anyone running it by hand, and 83,632 allocations drifted in.
+
+**Attribution, one git worktree per commit, equal-length paths and identical
+relative argv so ARGV[0] contributes the same bytes each time.** Counts are
+deterministic, so fifteen measurements ran concurrently:
+
+| commit | delta | what |
+| --- | --- | --- |
+| `5bbe9a4f` | +12,998 | a required argument is required whatever declares it |
+| `3a543974` | +11,922 | a parameter's default is held to the rule the spec states |
+| `19d02a71` | +3,902 | a coerced literal is asked whether it fits |
+| `e12ebee9` | +52,479 | a narrowing conversion is refused wherever a numeric meets a type |
+| ten others | +2,331 | including +581 for the bare-alias parameter default |
+
+**53,575 of it was waste, and all of it was the same mistake: a String copied
+eagerly, ahead of the cheap test that almost always finds nothing to report.**
+`isNumericTid` copied a type's name before asking `numkindByName`, which is a
+length-and-bytes test over fourteen spellings that keeps nothing; the copy is
+needed only to survive `builtinTidT`, which mints, and that is reached once the
+name has already said it is one of the fourteen. `losslessConvTo` copied a name
+to hand `poolFind` its key. `refuseStringDefault` took the declared name as
+TEXT, so every declaration in the tree copied one for a message that fires on
+almost none -- it takes the pool id now and reads a view after it decides to
+report.
+
+**What stays is work the tree asked for.** 11,244 is `missingCtorFields`
+checking a NATIVE call's required arguments, priced by restoring the
+pre-`5bbe9a4f` bail and measuring. Two ways to make it cheaper were tried and
+rejected by measurement: skipping `forceAllMembers` for natives moved 65
+allocations the WRONG way, and walking the rows inline would duplicate the
+filter `dataFieldIds` exists to state once -- the one that keeps the checker's
+field list and the emitter's C struct from drifting apart.
+
+**The prediction that failed.** `losslessConvTo` looked, by reading, like the
+whole 52,479; it was 26. `isNumericTid`, two lines away, was 42,168. The
+experiment cost four minutes and the reasoning cost nothing but would have been
+wrong.
 
 <a id="r-tokenarc"></a>
 **The token arc, taken** (`556fa6f4`..`1df5eaf5`, off `5061187b`'s 4,553,926).

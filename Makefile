@@ -685,7 +685,13 @@ perf: $(PERFBIN)
 # it. The number is bit-identical run to run, so it is a sound ratchet where wall
 # and cycles are not. perf-strict fails ABOVE it; a commit that raises it states
 # the reason in its message, and one that lowers the count lowers it here.
-ALLOC_BASELINE := 2131114
+#
+# 2,131,114 was 2e582352's. The drift that followed was 83,632, of which 53,575
+# was waste and came back out (d45c3204, 43e533e1). What is left is work the
+# tree asked for: 11,244 of it is missingCtorFields checking a NATIVE call's
+# required arguments, priced by restoring the old bail and measuring, and the
+# rest is fourteen commits of new checks over 665 new lines of source.
+ALLOC_BASELINE := 2161395
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
