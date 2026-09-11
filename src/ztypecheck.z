@@ -605,10 +605,41 @@ isViewFamilyTid: function {ast: Ast st: zenv.ZSymbolTable tid: ztypes.tid} out b
     return false
 }
 
+# refBearingContainer -- a container that can hold a REFERENCE on at least one
+# side: a list of references, a map with a reference key or value, a set of
+# references, an id map with a reference value. Those six declare no `.copy`
+# and never will -- a bitwise element copy would give the reference two owners,
+# and anything else is a judgement about a layout the compiler did not write.
+# The five all-valtype containers declare one, so they resolve it as an
+# ordinary member and never reach the refusal this answers for.
+refBearingContainer: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable
+    tid: ztypes.tid
+} out bool is {
+    if tid.isZero then return false
+    baseRb: tid
+    {
+        rgRb: st.reg.genericOriginOf :tid
+        if rgRb > 0 then baseRb = rgRb
+    }
+    if baseRb == (builtinTidTRo :st frame: st.curFrame :ast base: "ListRef") then return true
+    if baseRb == (builtinTidTRo :st frame: st.curFrame :ast base: "MapRR") then return true
+    if baseRb == (builtinTidTRo :st frame: st.curFrame :ast base: "MapRV") then return true
+    if baseRb == (builtinTidTRo :st frame: st.curFrame :ast base: "MapVR") then return true
+    if baseRb == (builtinTidTRo :st frame: st.curFrame :ast base: "SetRef") then return true
+    if baseRb == (builtinTidTRo :st frame: st.curFrame :ast base: "IdMapR") then return true
+    return false
+}
+
 # methodReceiverIsView -- the method declares its receiver `.view`, so a call
 # reads the receiver instead of writing it and the receiver lock is SHARED.
-# Declared readonly-ness: unlike isContainerReaderCall it needs no name
-# whitelist and works for user types.
+# DECLARED readonly-ness, and the only question the lock sites ask: it needs no
+# name whitelist and works for user types. The whitelist that stood beside it
+# existed for `.copy` alone, "the universal marker, which resolves to no method
+# a declaration could mark" -- and now every `.copy` that is legal resolves to
+# one that marks itself `.view`, while the rest are refused before a lock is
+# ever in question.
 methodReceiverIsView: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out bool is {
     rpn: st.reg.thisParamNameIdOf tid: mid
     if rpn.isZero then return false
@@ -620,48 +651,6 @@ methodReceiverIsView: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out 
     } case none then {
         return false
     }
-}
-
-# isContainerReaderCall -- the one container reader whose receiver lock is
-# SHARED but which cannot say so itself: `.copy`, the universal marker, which
-# resolves to no method a declaration could mark. Everything else a `.view`
-# receiver can express has moved to the declarations (methodReceiverIsView,
-# ORed in at every call site): every container `get` says `.view` now -- the
-# emitted C's receiver was const all along -- as `listView`, `String.copy` and
-# `String.stringView` did before it. Writers and user methods stay EXCLUSIVE.
-isContainerReaderCall: function {
-    ast: Ast.view
-    st: zenv.ZSymbolTable
-    recvTid: u64
-    mnameId: zast.nameid
-} out bool is {
-    if recvTid == 0 then return false
-    recvBaseTid: recvTid
-    {
-        rg: st.reg.genericOriginOf tid: (ztypes.tid.create from: recvTid.u64)
-        if rg > 0 then recvBaseTid = rg
-    }
-    isMapB: (
-        (recvBaseTid == (builtinTidTRo :st frame: st.curFrame :ast base: "MapRR")) or
-        (recvBaseTid == (builtinTidTRo :st frame: st.curFrame :ast base: "MapRV")) or
-        (recvBaseTid == (builtinTidTRo :st frame: st.curFrame :ast base: "MapVR")) or
-        (recvBaseTid == (builtinTidTRo :st frame: st.curFrame :ast base: "MapVV"))
-    )
-    if isMapB then return (zast.nameTextEq :ast ref: mnameId s: "copy")
-    isSetB: (
-        (recvBaseTid == (builtinTidTRo :st frame: st.curFrame :ast base: "SetRef")) or
-        (recvBaseTid == (builtinTidTRo :st frame: st.curFrame :ast base: "SetVal"))
-    )
-    if isSetB then {
-        if (zast.nameTextEq :ast ref: mnameId s: "copy") then return true
-        return false
-    }
-    isListB: (
-        (recvBaseTid == (builtinTidTRo :st frame: st.curFrame :ast base: "ListRef")) or
-        (recvBaseTid == (builtinTidTRo :st frame: st.curFrame :ast base: "ListVal"))
-    )
-    if isListB then return (zast.nameTextEq :ast ref: mnameId s: "copy")
-    return false
 }
 
 # typesCompatible -- compare two type ids: identity, never (divergent) actual,
@@ -21373,9 +21362,10 @@ reportUnknownMember: function {
     }
 }
 
-# checkCopyMember -- `.copy` on a receiver that declares no copy member. Deep copy
-# exists for strings, containers and generic type parameters only, so the gap is a
-# hard error here rather than invalid C out of the emitter.
+# checkCopyMember -- `.copy` on a receiver that declares no copy member. A
+# valtype gets the byte copy its assignment already performs, unless its author
+# struck it off with `copy: null`; everything else is an error HERE, where the
+# type is, rather than invalid C or an emitFail out of the code generator.
 checkCopyMember: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -21383,31 +21373,21 @@ checkCopyMember: function {
     bt: ztypes.tid
     cnId: zast.nameid
 } out callleg is {
-    # `.copy` on a receiver with no copy member is a hard error: deep
-    # copy exists for strings, containers, and generic type parameters
-    # only. Without this the emitter has no clone to emit and the
-    # miss would surface as invalid C.
     if (zast.nameTextEq
         :ast
         ref: cnId
         s: "copy"
     ) when (st.reg.isTypeParamOf tid: bt).not then {
-        # per-mono instance walk: `.copy` on a template param was
-        # validated against the template (t -> t); the instance lowers
-        # it per type (valtypes/views bitwise, String deep). Only the
-        # user-reftype capability gap stays an error.
-        if st.typing.curMonoStamp > 0 then {
-            bttIw: st.reg.typetypeOf typeId: bt
-            isRefIw: (bttIw == ztypes.ztypetype.classType) or (bttIw == ztypes.ztypetype.unionType)
-            # native view classes (StringView) copy by assignment --
-            # only USER reftypes lack a lowering
-            if isRefIw when (st.reg.isNativeOf tid: bt) then isRefIw = false
-            if bt == (builtinTidTc :ast :st base: "StringView") then isRefIw = false
-            if isRefIw.not then {
-                stampGate :st nid: dp.nid.u64 tid: bt
-                return (callleg handled: true tid: bt)
-            }
-        }
+        # A MONO PRESENTS EXACTLY THE CONCRETE TYPE'S INTERFACE, so there is
+        # no per-mono leg here. The template body validated `.copy` against
+        # the parameter (t -> t); the INSTANCE is held to what the type it was
+        # given declares, by the same legs concrete code takes. The waiver
+        # that used to sit here answered three ways and every one of them
+        # offered something the concrete spelling does not: a container
+        # reached the EMITTER to fail there as an E0500 about emission, a
+        # StringView was accepted and lowered to an ALIAS of its source, and
+        # a valtype whose author wrote `copy: null` was let through because
+        # the leg returned for anything that was not a class or a union.
         btnCp: st.reg.nameOf tid: bt
         bttCp: st.reg.typetypeOf typeId: bt
         isValCp: (
@@ -21446,6 +21426,9 @@ checkCopyMember: function {
 
         if bt == (builtinTidTc :ast :st base: "StringView") then {
             mCp = "type 'StringView' has no '.copy': a view is copied by assignment; '.string' makes an owned String (allocates)".string
+        }
+        if (refBearingContainer :ast :st tid: bt) then {
+            mCp = "type '\{btnCp}' has no '.copy': a container holding REFERENCES has no duplicate to make -- each element would end up owned twice. Build a new one and move the elements with '.take', or '.copy' them one by one"
         }
         (addError
             :st
@@ -21505,8 +21488,6 @@ checkMemberAutoCall: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     dp: dpref
-    bt: ztypes.tid
-    cnId: zast.nameid
     mo: u64
     coerce: bool
     result0: ztypes.tid
@@ -21516,8 +21497,7 @@ checkMemberAutoCall: function {
         :st
         mid: (ztypes.tid.create from: mo.u64)
     ) then {
-        aShr: isContainerReaderCall :ast :st recvTid: bt mnameId: cnId
-        if (methodReceiverIsView :st mid: (ztypes.tid.create from: mo.u64)) then aShr = true
+        aShr: methodReceiverIsView :st mid: (ztypes.tid.create from: mo.u64)
         lockAutoCallReceiver :ast :st :dp shared: aShr
         ro: methodReturnOf :st mid: (ztypes.tid.create from: mo.u64)
         match (
@@ -22639,8 +22619,6 @@ checkResolvedMember: function {
         :st
         :ast
         :dp
-        :bt
-        :cnId
         :mo
         :coerce
         result0: result
@@ -31405,22 +31383,14 @@ lockMethodReceiver: function {
             match (
                 rvt2
             ) case some then {
-                callableNode: ast.nodes.get i: call.callable.u64
-                shr: (isContainerReaderCall
-                    :ast
-                    :st
-                    recvTid: rvt2
-                    mnameId: (dottedChildNameId :ast n: callableNode)
-                )
-                if (methodReceiverIsView :st mid: dro) then shr = true
-                recvShared = shr
+                recvShared = (methodReceiverIsView :st mid: dro)
                 (lockCallArg
                     :st
                     pool: ast.names
                     nameId: rroId
                     callId: call.nid.u64
-                    shared: shr
-                    mutable: shr.not
+                    shared: recvShared
+                    mutable: recvShared.not
                     nodeid: call.nid
                     lineno: call.lineno
                     colno: call.colno
@@ -31464,23 +31434,15 @@ lockNestedMethodReceiver: function {
             rpidN: dottedParentNodeId :ast n: callableNode
             rvtN: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rpidN.u64
             if rvtN > 0 then {
-                callableNode: ast.nodes.get i: call.callable.u64
-                shrN: (isContainerReaderCall
-                    :ast
-                    :st
-                    recvTid: rvtN
-                    mnameId: (dottedChildNameId :ast n: callableNode)
-                )
-                if (methodReceiverIsView :st mid: dro) then shrN = true
-                recvShared = shrN
+                recvShared = (methodReceiverIsView :st mid: dro)
                 (lockCallPath
                     :st
                     :ast
                     pool: ast.names
                     path: rtupC
                     callId: call.nid.u64
-                    shared: shrN
-                    mutable: shrN.not
+                    shared: recvShared
+                    mutable: recvShared.not
                     nodeid: call.nid
                     lineno: call.lineno
                     colno: call.colno

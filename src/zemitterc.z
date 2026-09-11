@@ -12917,10 +12917,10 @@ emitValtypeCopy: function {
     return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
 }
 
-# emitResolvedCopy -- `.copy` of a receiver whose type is known: a StringView
-# reads through, a valtype owning no heap is the value itself, a String clones
-# its buffer, and a container clones per element through its own copy. Empty
-# where none of those answers, which leaves the caller's later legs their turn.
+# emitResolvedCopy -- `.copy` of a receiver whose type is known: a valtype
+# owning no heap is the value itself, a String clones its buffer, and a
+# container that DECLARES a copy calls its own. Empty where none of those
+# answers, which leaves the caller's later legs their turn.
 emitResolvedCopy: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -12929,9 +12929,6 @@ emitResolvedCopy: function {
     tid: ztypes.tid
     inGeneric: bool
 } out String is {
-    if tid == ctx.svTid then {
-        return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
-    }
     cvtt: symtab.reg.typetypeOf typeId: tid
     cvstr: tid == ctx.strTid
     if (originIsTid
@@ -12960,6 +12957,14 @@ emitResolvedCopy: function {
             return "\{ctx.strC}_copy(&\{cvpv})"
         }
     }
+    # A CONTAINER THAT DECLARES `.copy` CALLS ITS OWN, here as concretely as
+    # it does outside a template: the mono is resolved, so the same five
+    # families answer and the same two receiver spellings apply -- a dict local
+    # IS the pointer, a list or id container gives its address. The six that
+    # declare none never arrive, because the checker refuses them at the
+    # template's own `.copy`.
+    cvcp: colCopyCall :ast :symtab :ctx :n :tid
+    if cvcp.length > 0 then return cvcp
     if inGeneric then {
         cvtn: ctxCname :ctx :tid
         (emitFail
@@ -12970,6 +12975,35 @@ emitResolvedCopy: function {
         return "/* zemitterc: unhandled copy */0".string
     }
     return "".string
+}
+
+# colCopyCall -- the `_copy` call for a container that declares one, or "" for
+# any other type. The read path and the generic-body path both need it and
+# neither may guess the family: only the five ALL-VALTYPE containers declare a
+# copy, so naming them precisely means a checker regression shows up as a
+# missing call rather than as a wrong emission on a reference family.
+colCopyCall: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.dottedpathrow.view
+    tid: ztypes.tid
+} out String is {
+    cpStack9: false
+    cpHeap9: false
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogListVal)) then cpStack9 = true
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogIdMapV)) then cpStack9 = true
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogIdSet)) then cpStack9 = true
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogSetVal)) then cpHeap9 = true
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogMapVV)) then cpHeap9 = true
+    if cpStack9.not when cpHeap9.not then return "".string
+    cpb9: ctxCname :ctx :tid
+    cpv9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
+    if cpHeap9 then return "\{cpb9}_copy(\{cpv9})"
+    cpn9: ast.nodes.get i: n.parent.u64
+    cpvid9: atomVid :symtab nid: (atomNodeIdDeep :ast n: cpn9)
+    if (isPtrVid :ctx vid: cpvid9) then return "\{cpb9}_copy(\{cpv9})"
+    return "\{cpb9}_copy(&\{cpv9})"
 }
 
 # emitCopyConversion -- `.copy`, whose shape depends on the receiver family. A
@@ -13028,8 +13062,9 @@ emitDottedStringConversion: function {
 
 # emitDottedConversionRead -- a cross-unit bare construction, and the two deep
 # conversions `.copy` and `.string`, whose shape depends on the receiver family:
-# a String clones its buffer, a container clones per element, a valtype is a
-# bitwise copy, and a generic parameter's copy is chosen per instance.
+# a String clones its buffer, an all-valtype container duplicates its storage
+# through its own declared copy, a valtype is a bitwise copy, and a generic
+# parameter's copy is chosen per instance.
 emitDottedConversionRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view

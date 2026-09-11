@@ -662,9 +662,14 @@ source is a parameter or the receiver. The escape hatch is always
 <code>.copy</code>: an owned copy holds no locks.</p>
 <h3 id="copy"><a href="#copy">6.7. .copy</a></h3>
 <p>An inline method only (not a parameter or return attribute). <code>x.copy</code>
-produces a fresh, independently-owned duplicate of <code>x</code>. The new value
-shares no heap data with <code>x</code>; mutating one does not affect the other,
-and both are freed separately at scope exit.</p>
+answers "a duplicate of the receiver, owned by the caller". What a
+duplicate <em><strong>means</strong></em> is the method's to say: <code>copy</code> is an ordinary
+member, and an author may write one that clones everything, shares a
+cache, or refuses.</p>
+<p><em><strong>Independence is therefore a claim each copy makes for itself</strong></em>, not
+one the language makes for all of them. The compiler-provided default on
+a valtype and every <code>copy</code> the standard library declares do promise it,
+each for a reason stated where it is declared -- see the roster below.</p>
 <p><code>.copy</code> is the canonical way to break a borrow chain when you need to
 hand an owned value to a destination that requires ownership (a
 constructor field, a list/map insert) but only have a borrowed source:</p>
@@ -695,9 +700,23 @@ synthesizes one. A duplicate of a reftype is a design decision -- which
 fields are cloned, which are shared, what a nested container means --
 so the author writes the method. Until one exists, <code>x.copy</code> on
 such a type is a compile error naming the type.</li>
-<li>The standard library's are ordinary methods: <code>String.copy</code>
-and the container copies are declared <code>is native</code> like any other
-member. They are not a special case in the language.</li>
+<li>The standard library's are ordinary methods, declared
+<code>is native</code> like any other member and not a special case in the
+language. Each promises independence for its own stated reason:
+<code>String.copy</code> gives a fresh heap buffer over the same bytes;
+<code>ListVal.copy</code> a fresh element buffer; <code>SetVal.copy</code> and
+<code>MapVV.copy</code> a fresh entry table and index, copied position for
+position so insertion order and the stored hashes carry over; and
+<code>IdMapV.copy</code> and <code>IdSet.copy</code> a fresh dense array and index.
+<code>Bytes</code> reaches <code>ListVal</code>'s through its typedef.
+
+The containers that declare none are the ones that can hold a
+REFERENCE -- <code>ListRef</code>, <code>MapRR</code>, <code>MapRV</code>, <code>MapVR</code>, <code>SetRef</code>,
+<code>IdMapR</code>. The rule is the family rule again, one level out: a
+container declares a copy exactly when the LANGUAGE and not the author
+already decides what happens to the elements. Where an element is a
+reference, a bitwise copy would give it two owners and anything else is
+a design decision, so there is nobody but the author to make it.</li>
 </ul>
 <p>Both defaults are overridable, and both by the same mechanism -- a
 <code>copy</code> member in the <code>as</code> block. Member lookup finds it first, so it

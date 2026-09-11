@@ -698,7 +698,11 @@ perf: $(PERFBIN)
 # calls one, so this is the declaration's price and not the body's. Six of the
 # 2,763 are the member-name id the collection read binds before testing it,
 # which the formatter's wrap of the inline form made unreadable.
-ALLOC_BASELINE := 2164158
+#
+# -181 when isContainerReaderCall went: it ran at three lock sites on every
+# auto-called member read, and every one of them already asked
+# methodReceiverIsView beside it.
+ALLOC_BASELINE := 2163977
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
