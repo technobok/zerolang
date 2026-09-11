@@ -23322,11 +23322,47 @@ typeOfBareName: function {
         # A bare no-arg non-generic FUNCTION name is a call: the
         # value is its return (an unregistered shell when out-less).
         isAutoFn: false
+        isGenFn: false
         if fo < st.reg.typeById.length then {
             fz: st.reg.typeById.get i: fo
-            if (
-                fz.typetype == ztypes.ztypetype.functionType
-            ) when fz.isgeneric.not then isAutoFn = true
+            if fz.typetype == ztypes.ztypetype.functionType then {
+                if fz.isgeneric then {
+                    isGenFn = true
+                } else {
+                    isAutoFn = true
+                }
+            }
+        }
+        # A GENERIC function's name is held to the same rule as any other, and
+        # reported in the same words: a required parameter is required, and only
+        # a defaulted one may be left out. This is the REPORT alone -- a
+        # generic's type arguments are inferred FROM its value arguments, so a
+        # bare name has nothing to instantiate from and still does not
+        # auto-call, which is why it cannot simply join the leg below.
+        # `return` / `break` / `continue` are generic builtins whose bare form IS
+        # the statement: a bare `return` leaves a void function and supplies no
+        # result on purpose, so the control names are not held to this.
+        if isGenFn when (
+            (ctlDivKind bn: node.name) == zenv.divkind.none
+        ) when st.typing.suppressFnAutoCall.not when (
+            st.typing.allowBareFnRef.not
+        ) when (
+            (fnAutoCallable :st mid: (ztypes.tid.create from: fo.u64)).not
+        ) then {
+            wdtG: u32
+            {
+                nmG: zast.nameTextAt :ast ref: node.name
+                wdtG = nmG.length.u32.orPanic
+            }
+            (bareFnRefError
+                :ast
+                :st
+                nodeid: node.nid
+                lineno: node.lineno
+                colno: node.colno
+                width: wdtG
+                fid: (ztypes.tid.create from: fo.u64)
+            )
         }
         if isAutoFn when st.typing.suppressFnAutoCall.not then {
             if (
@@ -23749,6 +23785,25 @@ checkReturnCarries: function {
     }
 }
 
+# reportMissingYieldValue -- a bare `yield`, which supplies nothing. `yield`
+# wears the control placeholder that `break` and `continue` wear, so no function
+# leg sees it; unlike those two it carries the value the consumer receives, and
+# omitting that wrote the bare name into the C for the C compiler to reject.
+reportMissingYieldValue: function {st: zenv.ZSymbolTable node: atomref} is {
+    (addErrorH
+        :st
+        nodeid: node.nid
+        lineno: node.lineno
+        colno: node.colno
+        e: zast.err.callError
+        msg: "a bare `yield` supplies no value: the iteration produces what `yield` is given".string
+        note: "`yield` is a function, and its argument is the element the consumer receives".string
+        hint: "write `yield <value>`".string
+        # the caller has already matched the name, so the caret spans `yield`
+        width: 5
+    )
+}
+
 # reportMissingReturnValue -- a bare `return` in a function that declares a
 # value: reported at the atom.
 reportMissingReturnValue: function {st: zenv.ZSymbolTable node: atomref} is {
@@ -23871,6 +23926,12 @@ checkAtomid: function {
         result = ztypes.tid.create from: vtOpt.u64
         # break/continue diverge: the atom's value is never (the scope
         # entry stays the unregistered placeholder).
+        # `yield` wears the same unregistered placeholder, and is the one of the
+        # three that is NOT valueless: its argument is the element the consumer
+        # receives, so a bare one is a call missing it.
+        if node.name.u32 == zast.names.wkYield when (yieldIsInScope :st) then {
+            reportMissingYieldValue :st :node
+        }
         isBrk: (node.name.u32 == zast.names.wkBreak) or (node.name.u32 == zast.names.wkContinue)
         if isBrk then {
             result = ztypes.tid.create from: ((walkLookupTyperef
@@ -28861,7 +28922,13 @@ ctorArgProvided: function {
 # missingCtorFields -- collect each required field/param (no default) of
 # `funcId` that the provided labels / positional count do not cover, into
 # missingNames/missingIds. A construction's body-carrying FUNCTION-typed
-# (fnptr) fields are auto-bound; native types have no required fields.
+# (fnptr) fields are auto-bound.
+#
+# A native TYPE has no user-declared fields to require, so a construction of one
+# has nothing to collect. A native FUNCTION is a different thing wearing the
+# same flag: its parameters are declared in its signature and are as required as
+# any other's. Skipping both let `ns.insert from: 1` -- `at:` omitted -- emit
+# `z_t475_insert(&z_v1, 1, 0)` and RUN, the argument silently zero.
 missingCtorFields: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -28876,7 +28943,7 @@ missingCtorFields: function {
     missingNames: List String
     missingIds: ListVal u64
 } is {
-    if (st.reg.isNativeOf tid: funcId) then return
+    if isCtor when (st.reg.isNativeOf tid: funcId) then return
     effId: funcId
     if isCtor then effId = ctorParamOwnerTid :ast :st :funcId
     ids: ListVal u64
@@ -28888,7 +28955,7 @@ missingCtorFields: function {
     dataFieldIds :st tid: effId :ids nameIds: idsNm
     pcnt: ids.length
     if pcnt == 0 then return
-    thisPnId: st.reg.thisParamNameIdOf tid: effId
+    thisPnId: receiverParamNameOf :st tid: effId
     vpos: u64
     i: u64
     for i < pcnt loop {
@@ -28918,6 +28985,36 @@ missingCtorFields: function {
         missingNames.append (zast.nameTextCopy :ast ref: pnId)
         missingIds.append pcid
     }
+}
+
+# receiverParamNameOf -- the pool id of a method's receiver-parameter name, 0
+# when it declares none. A MINTED INSTANCE carries no name of its own, so the
+# question goes to the template that declared it -- without that a named
+# receiver (`t: this.view`, which is how the natives spell theirs) reads as an
+# ordinary required parameter and is reported missing at every call that hands
+# it over through the dot.
+receiverParamNameOf: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out zast.nameid is {
+    own: st.reg.thisParamNameIdOf :tid
+    if own.isZero.not then return own
+    gorig: st.reg.genericOriginOf :tid
+    if gorig.isZero then return (zast.nameid.create from: 0)
+    return (st.reg.thisParamNameIdOf tid: (ztypes.tid.create from: gorig.u64))
+}
+
+# checkGenericCallMissingArgs -- the missing-argument report for a generic call,
+# asked of the INSTANCE because that is where the parameters carry their
+# substituted types. Nothing to ask when inference minted none. Without it a
+# generic call short of a required argument reached the emitter, and surfaced as
+# an E0500 about the emission rather than a diagnostic about the call.
+checkGenericCallMissingArgs: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    call: callref
+    mid: ztypes.tid
+    recvImplicit: bool
+} is {
+    if mid.isZero then return
+    checkMissingCallArgs :ast :st :call funcId: mid isCtor: false :recvImplicit
 }
 
 # checkMissingCallArgs -- report each required field/param (no default) a call or
@@ -31154,7 +31251,12 @@ checkResolvedMethodCall: function {
         match (
             rlo
         ) case some then null case none then {
-            recvVal = false
+            # A NUMERIC LITERAL BASE IS A VALUE BY CONSTRUCTION, as a call
+            # result and a nested path are. Its lexeme interns like a name and
+            # nothing declares it, so the lookup miss read as "names a type" and
+            # demanded the receiver as an argument: `5.iterate from: 2` was then
+            # short of `t`, which the dot had already handed over.
+            if (isNumericLiteralNameAt :ast ref: rrnId).not then recvVal = false
         }
     }
     # Calling THROUGH a function-pointer field is a field READ, not a
@@ -31633,6 +31735,7 @@ checkGenericFnCall: function {
     callableNode: ast.nodes.get i: call.callable.u64
     midG: genericCallInstance :st :ast :call
     lockGenericCallArgs :st :ast :call mid: midG recvImplicit: true
+    checkGenericCallMissingArgs :ast :st :call mid: midG recvImplicit: true
     rroG: methodReceiverRootId :ast n: callableNode
     lockMethodReceiver :st :ast :call :dro rroId: rroG
     st.popTo marker: mcmG
@@ -31939,6 +32042,7 @@ checkBareGenericCall: function {
     gr: checkGenericCall :st :unitDecl :ast :call :funcId
     midB: genericCallInstance :st :ast :call
     lockGenericCallArgs :st :ast :call mid: midB recvImplicit: false
+    checkGenericCallMissingArgs :ast :st :call mid: midB recvImplicit: false
     st.popTo marker: mcmB
     result = gr
     st.typing.callKind.set key: call.nid.u64 value: zast.callkind.regular
