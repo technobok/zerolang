@@ -702,7 +702,12 @@ perf: $(PERFBIN)
 # -181 when isContainerReaderCall went: it ran at three lock sites on every
 # auto-called member read, and every one of them already asked
 # methodReceiverIsView beside it.
-ALLOC_BASELINE := 2163977
+#
+# +372 for selfReturnOnInstance. NOT per call -- a self-compile makes tens of
+# thousands of auto-calls and this is 372 -- but downstream: a member reached on
+# a monomorphisation now answers that INSTANCE where it used to answer the
+# template, so instances materialise where a template stood in.
+ALLOC_BASELINE := 2164349
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

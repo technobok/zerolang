@@ -20259,6 +20259,32 @@ validateGenericTypeArgs: function {
     return ok
 }
 
+# selfReturnOnInstance -- A MEMBER'S SELF-TYPE RETURN ON AN INSTANCE IS THE
+# INSTANCE. A member declared `out type` names the type that DECLARES it, so one
+# reached on a monomorphisation must answer that instance and never the template
+# it was minted from: a template carries no layout, and a local given its id gets
+# a C type nothing emits.
+#
+# Nearly every instance substitutes this where it is minted. One did not, and the
+# discriminator was measured rather than reasoned: of the element types, ONLY
+# `ListVal u8` answered the template -- it is the instance `collections.z` mints
+# for `Bytes` while the standard library is still being read, and every later use
+# reuses it. `b.copy` then emitted `z_t90_ListVal_t c = z_t121_ListVal_u8_copy(&b)`
+# and the C compiler rejected the local. Asking here covers the mint whatever
+# order it happened in.
+selfReturnOnInstance: function {
+    st: zenv.ZSymbolTable.view
+    recvTid: ztypes.tid
+    ret: ztypes.tid
+} out ztypes.tid is {
+    if recvTid.isZero then return ret
+    if ret.isZero then return ret
+    roSi: st.reg.genericOriginOf tid: recvTid
+    if roSi.isZero then return ret
+    if ret == (ztypes.tid.create from: roSi.u64) then return recvTid
+    return ret
+}
+
 # methodReturnOf -- a method FUNCTION type's return type id: the synthesized
 # returnTypeId link when set, else the AST method's recorded `out T` ref node
 # (funcReturnNode) read through the post-demand stamp.
@@ -21488,6 +21514,8 @@ checkMemberAutoCall: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     dp: dpref
+    # the RECEIVER's type: a member declared `out type` answers this instance
+    bt: ztypes.tid
     mo: u64
     coerce: bool
     result0: ztypes.tid
@@ -21503,7 +21531,7 @@ checkMemberAutoCall: function {
         match (
             ro
         ) case some then {
-            result = ro
+            result = (selfReturnOnInstance :st recvTid: bt ret: ro)
             # an auto-call's only input is its receiver: the pin its result
             # keeps, if any, is the receiver path at the strength the reader
             # took. Built locally, then pushed through the full field path (a
@@ -22619,6 +22647,7 @@ checkResolvedMember: function {
         :st
         :ast
         :dp
+        :bt
         :mo
         :coerce
         result0: result
