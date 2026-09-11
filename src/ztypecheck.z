@@ -32994,6 +32994,89 @@ argHolderSlot: function {
     return (holderslot :holder slot: slotIx9)
 }
 
+# reportGenericBindingConflict -- one generic parameter bound twice, to two
+# different CONCRETE types. docs/spec.pdoc: "If both an explicit generic argument
+# and a concrete value argument are provided, they must be consistent. A conflict
+# produces a compilation error." The same holds between two value arguments: a
+# generic parameter takes ONE type, whatever bound it.
+#
+# A LITERAL-typed argument is no conflict and never reaches here -- a bare `5`
+# coerces into whatever the parameter is already bound to, which is what makes
+# `myfn t: u8 val: 5` work.
+reportGenericBindingConflict: function {
+    # where the conflict is recorded
+    st: zenv.ZSymbolTable
+    # the tree the names are read from
+    ast: Ast.view
+    # the argument that bound the parameter a second time
+    arg: argref
+    # the generic parameter bound twice
+    holder: zast.nameid
+    # the type it was bound to first
+    boundTid: ztypes.tid
+    # the type this argument would bind it to
+    argTid: ztypes.tid
+} is {
+    gpn: zast.nameTextAt :ast ref: holder
+    bn: st.reg.nameOf tid: boundTid
+    an: st.reg.nameOf tid: argTid
+    mg: "generic parameter '\{gpn}' is already bound to '\{bn}', and this argument would bind it to '\{an}' -- a generic parameter takes one type"
+    hg: "pass arguments of one type, or convert this one to '\{bn}'"
+    ng: String
+    (addErrorH
+        :st
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+        e: zast.err.typeError
+        msg: mg
+        note: ng
+        hint: hg
+        width: 1
+    )
+}
+
+# bindOrConflict -- bind a generic parameter to the type this argument infers,
+# or report the inconsistency when it already holds a different CONCRETE one.
+# FIRST WRITE WINS for the binding itself; what changed is that a later,
+# disagreeing one is no longer dropped in silence.
+bindOrConflict: function {
+    # where the binding and any conflict are both recorded
+    st: zenv.ZSymbolTable
+    # the tree the parameter and type names are read from
+    ast: Ast.view
+    # the argument doing the binding, for the position
+    arg: argref
+    # the substitutions this call has accumulated
+    subs: (IdMapV zast.nameid v: u64)
+    # the generic parameter the argument feeds
+    holder: zast.nameid
+    # the materialised type the argument would bind
+    argTid: ztypes.tid
+    # the type the argument walked to before materialisation -- a LITERAL one
+    # coerces into whatever the parameter already holds, so it never conflicts
+    walkedTid: ztypes.tid
+} is {
+    hgot: subs.get key: holder
+    match (
+        hgot
+    ) case some then {
+        if hgot == argTid.u64 then return
+        if (isLiteralTypeId :st tid: walkedTid) then return
+        (reportGenericBindingConflict
+            :st
+            :ast
+            :arg
+            :holder
+            boundTid: (ztypes.tid.create from: hgot.u64)
+            :argTid
+        )
+    } case none then {
+        sv2: argTid
+        subs.set key: holder value: sv2
+    }
+}
+
 # inferGenericCallSubs -- read one call's arguments into the generic-parameter
 # substitutions: an explicit type argument names its parameter, a value argument
 # infers from the type it walks to, and a positional one binds by index.
@@ -33046,15 +33129,16 @@ inferGenericCallSubs: function {
                 :subs
             )
         }
-        # FIRST WRITE WINS: a parameter already bound keeps what bound it
         if hs.holder.isZero.not when mat > 0 then {
-            hgot: subs.get key: hs.holder
-            match (
-                hgot
-            ) case some then null case none then {
-                sv2: mat
-                subs.set key: hs.holder value: sv2
-            }
+            (bindOrConflict
+                :st
+                :ast
+                :arg
+                :subs
+                holder: hs.holder
+                argTid: mat
+                walkedTid: avt
+            )
         }
     }
 }
