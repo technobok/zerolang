@@ -327,13 +327,22 @@ isNumericTid: function {
 } out bool is {
     if tid.isZero then return false
     if tid >= st.reg.typeById.length then return false
+    # ASK THE NAME BEFORE COPYING IT. Almost every type handed to this is not
+    # numeric, and `numkindByName` is a length-and-bytes test that keeps
+    # nothing -- so it reads a view. The copy is only needed to survive
+    # `builtinTidT`, which mints, and that is reached only once the name has
+    # already said it is one of the fourteen.
+    isNum: false
+    {
+        tv: st.reg.nameViewOf :tid
+        isNum = (ztypes.numkindByName name: tv).has
+    }
+    if isNum.not then return false
     tn: String
     {
         row: st.reg.typeById.get i: tid
         tn = row.name.copy
     }
-    si: ztypes.numkindByName name: tn.stringView
-    if si.has.not then return false
     return tid == (builtinTidT :st :frame :ast base: tn.stringView)
 }
 
@@ -29856,9 +29865,16 @@ losslessConvTo: function {
     to: ztypes.tid
 } out bool is {
     if from == to then return true
-    tn9l: st.reg.nameOf tid: to
-    if tn9l.length == 0 then return false
-    nid9l: zast.poolFind pool: ast.names text: tn9l.stringView
+    # THE NAME IS LOOKED UP, NOT KEPT, so it is a VIEW. `nameOf` copies, and
+    # this asks once per numeric argument and per numeric assignment in the
+    # tree -- 52,479 copies of a name whose only use is the pool lookup on the
+    # next line. The view pins the registry for its binding's scope, so it is
+    # scoped to die before `forceMemberOf` mints anything.
+    nid9l: zast.nameid
+    {
+        tn9l: st.reg.nameViewOf tid: to
+        if tn9l.length > 0 then nid9l = (zast.poolFind pool: ast.names text: tn9l)
+    }
     if nid9l.isZero then return false
     (forceMemberOf :st frame: st.curFrame :ast parentTypeId: from nameId: nid9l)
     co9l: st.typing.declChildOfId parentTypeId: from nameId: nid9l
