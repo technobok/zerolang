@@ -31,6 +31,7 @@ public: unit {
     :mangleVarName
     :newRegistry
     :noConst
+    :negativeLiteralFits
     :numkindByName
     :parseLiteralValue
     :deftarget
@@ -2197,8 +2198,11 @@ suffixInfoOf: function {numstr: StringView} out suffixinfo is {
     return (suffixinfo has: false kind: numkind.i64Type len: 0)
 }
 
-# the diagnostic message for a value outside kind `k`'s range `r`.
-rangeErr: function {value: u64 k: numkind r: NumRange.view} out String is {
+# the diagnostic message for a value outside kind `k`'s range `r`. The value
+# arrives as TEXT: the message only ever prints it, and a NEGATIVE literal is
+# written as its lexeme because its magnitude can sit one past what the u64 the
+# ranges are expressed in would hold. One composer for the one sentence.
+rangeErr: function {value: StringView k: numkind r: NumRange.view} out String is {
     msg: "Value \{value} out of range for \{numkindName k} (\{r.loText}..\{r.hi})"
     return msg
 }
@@ -2241,13 +2245,33 @@ lexemeRadix: function {numstr: StringView} out radixform is {
     return (radixform :base :startIdx :isChar)
 }
 
+# negativeLiteralFits -- a literal written with a leading minus, against an
+# integer target. The number readers take MAGNITUDES, so the sign is peeled here
+# and the bound applied on this side: an unsigned target admits no negative at
+# all, and a signed one reaches exactly one past its high bound, which is the
+# reason NumRange carries its low bound as TEXT. "" when the literal fits.
+negativeLiteralFits: function {lit: StringView target: StringView} out String is {
+    k9n: numkindByName name: target
+    if (isFloatKind k: k9n.kind) then return "".string
+    r9n: rangeOf k9n.kind
+    if r9n.has.not then return "".string
+    mag9n: lit.substring from: 1 to: lit.length
+    pn9n: parseNumber numstr: mag9n
+    if pn9n.err.length > 0 then return pn9n.err.copy
+    signed9n: r9n.loText.stringView.startsWith "-"
+    if signed9n.not then return (rangeErr value: lit k: k9n.kind r: r9n)
+    if pn9n.ival > (r9n.hi + 1) then return (rangeErr value: lit k: k9n.kind r: r9n)
+    return "".string
+}
+
 # inRangeNumber -- `value` as a ParsedNumber of `kind`, or the out-of-range
 # error naming the bound it broke. Shared by the character and integer paths,
 # which ask it in the same words.
 inRangeNumber: function {value: u64 kind: numkind} out ParsedNumber is {
     r: rangeOf kind
     if r.has when value > r.hi then {
-        em: rangeErr :value k: kind :r
+        vt9r: "\{value}"
+        em: rangeErr value: vt9r.stringView k: kind :r
         return (ParsedNumber :kind isFloat: false ival: value fval: 0.0 err: em)
     }
     return (ParsedNumber :kind isFloat: false ival: value fval: 0.0 err: "".string)

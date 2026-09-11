@@ -22941,6 +22941,13 @@ checkLiteralFits: function {
     if (isNumericTypeName name: target).not then return
     # a character literal carries no numeric lexeme to parse
     if lit.startsWith "0c" then return
+    if lit.startsWith "-" then {
+        em9n: ztypes.negativeLiteralFits :lit :target
+        if em9n.length > 0 then {
+            addError :st :nodeid :lineno :colno e: zast.err.typeError msg: em9n
+        }
+        return
+    }
     nk9c: ztypes.numkindByName name: target
     pn9c: ztypes.parseNumberAs numstr: lit k: nk9c.kind
     if pn9c.err.length > 0 then {
@@ -29658,6 +29665,59 @@ argMismatchSkipped: function {
     )
 }
 
+# argLiteralLexeme -- the numeric lexeme an argument is written as, through the
+# expression wrappers, or "" when the argument is not a bare numeric literal. A
+# folded expression (`(0 - 5)`) has no lexeme of its own and answers "".
+argLiteralLexeme: function {ast: Ast.view nid: zast.nodeid} out String is {
+    inner: nid
+    pw9a: u64
+    for pw9a < 2 loop {
+        wn: ast.nodes.get i: inner.u64
+        if wn.expression then inner = wn.expression
+        pw9a = pw9a + 1
+    }
+    nmId: atomNameId :ast n: (ast.nodes.get i: inner.u64)
+    if nmId.isZero then return "".string
+    if (isNumericLiteralNameAt :ast ref: nmId).not then return "".string
+    return (zast.nameTextCopy :ast ref: nmId)
+}
+
+# checkCoercedLiteralFits -- A LITERAL ARGUMENT MEETS ITS TARGET TYPE HERE, and
+# this is the third place a literal is resolved against one: the other two are
+# the suffixed forms, in a body and at unit level, and both ask checkLiteralFits
+# whether it fits. This one never did, so the coercion that makes `takes n: 5`
+# work also let `takes n: 300` through at a `u8` -- the emitter folded it to 44
+# and the program ran -- and `takes n: 2.5` through at an `i64`, truncated to 2.
+#
+# The same function answers here, so the rule has ONE implementation: a literal
+# conversion is settled at compile time, and a declaration can say which
+# conversions exist but not that 300 is too big for a u8.
+checkCoercedLiteralFits: function {
+    # where a literal that does not fit is reported
+    st: zenv.ZSymbolTable
+    # the tree the lexeme and the target's name are read from
+    ast: Ast.view
+    # the parameter's type, whose name is the conversion target
+    ptid: u64
+    # the argument's own type, which must be a literal one for this to apply
+    vt: ztypes.tid
+    # the argument, for its lexeme and its position
+    arg: argref
+} is {
+    if (isLiteralTypeId :st tid: vt).not then return
+    lx: argLiteralLexeme :ast nid: arg.operation
+    if lx.length == 0 then return
+    tn9: st.reg.nameOf tid: (ztypes.tid.create from: ptid.u64)
+    (checkLiteralFits
+        :st
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+        lit: lx.stringView
+        target: tn9.stringView
+    )
+}
+
 # checkArgTypeMismatch -- the argument's type must fit the parameter it binds.
 # An unresolved or literal value is reported only when no earlier error already
 # explains it, since both would have resolved had the expected type resolved.
@@ -29671,6 +29731,10 @@ checkArgTypeMismatch: function {
 } is {
     if ptid == 0 then return
     if vt.isZero then return
+    # BEFORE the compatibility legs, because a literal is COMPATIBLE with every
+    # numeric type -- that is what coercion means -- and the question here is
+    # not whether it may convert but whether the value survives the conversion.
+    checkCoercedLiteralFits :st :ast :ptid :vt :arg
     if (typesCompatible :ast :st a: vt b: (ztypes.tid.create from: ptid.u64)) then return
     if (argMismatchSkipped :st :ast :vt :ptid) then return
     en7: st.reg.nameOf tid: (ztypes.tid.create from: ptid.u64)
@@ -33062,7 +33126,14 @@ bindOrConflict: function {
         hgot
     ) case some then {
         if hgot == argTid.u64 then return
-        if (isLiteralTypeId :st tid: walkedTid) then return
+        # A LITERAL coerces into what the parameter already holds rather than
+        # conflicting with it -- and coercing is exactly where it must be asked
+        # whether the value survives, the same question every other typed
+        # position asks. `pick t: i64 n: 2.5` truncated to 2 without it.
+        if (isLiteralTypeId :st tid: walkedTid) then {
+            checkCoercedLiteralFits :st :ast ptid: hgot vt: walkedTid :arg
+            return
+        }
         (reportGenericBindingConflict
             :st
             :ast
