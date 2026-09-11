@@ -90775,11 +90775,11 @@ bool z_t3669(z_t1060_t* z_v10193, const z_t584_t* z_v10194, z_t79_t z_v10195, z_
         return ((bool)Z_BOOL_TAG_FALSE);
     }
     z_t2355_t z_v10206 = z_t2192(&z_v10199);
-    z_t63_t _s0 = z_t63_create((uint64_t)150);
+    z_t63_t _s0 = z_t63_create((uint64_t)176);
     z_t63_append(&_s0, z_v10195.data, z_v10195.size);
     z_t63_append(&_s0, " '", sizeof(" '")-1);
     z_t63_append(&_s0, z_v10196.data, z_v10196.size);
-    z_t63_append(&_s0, "' is declared by a string literal -- a default must be a constant numeric expression, or an arm that carries nothing", sizeof("' is declared by a string literal -- a default must be a constant numeric expression, or an arm that carries nothing")-1);
+    z_t63_append(&_s0, "' is declared by a string literal -- a default must be a compile-time constant: a number, an arm that carries nothing, or a function reference", sizeof("' is declared by a string literal -- a default must be a compile-time constant: a number, an arm that carries nothing, or a function reference")-1);
     z_t63_t z_v10207 = _s0;
     z_t63_t _s3 = z_t63_create((uint64_t)98);
     z_t63_append(&_s3, "name the type instead (`", sizeof("name the type instead (`")-1);
