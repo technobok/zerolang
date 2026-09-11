@@ -161,7 +161,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint complexity-report warn-check shadow-guard emitter-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard readable-check test-tcc-heavy mode-parity ci-corpus
+ci: style-lint complexity-report warn-check shadow-guard emitter-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard readable-check perf-strict test-tcc-heavy mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -690,6 +690,8 @@ ALLOC_BASELINE := 2131114
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
 perf-strict: $(PERFBIN)
+	@command -v valgrind >/dev/null 2>&1 \
+	  || { echo "perf-strict: valgrind is not installed -- the allocation ratchet cannot measure"; exit 1; }
 	@readelf -p .comment $(PERFBIN) | grep -qi clang \
 	  && { echo "perf-strict: $(PERFBIN) is clang-built (PERFCC=$(PERFCC)) -- refusing to measure"; exit 1; } || true
 	@sha=$$(git rev-parse --short HEAD); dirty=$$(git diff --quiet && git diff --cached --quiet && echo clean || echo DIRTY); \
@@ -709,8 +711,12 @@ perf-strict: $(PERFBIN)
 	else echo "  (perf stat unavailable -- instructions not measured)"; fi
 
 # pre-push -- what a commit must pass before it leaves the machine: the fast
-# gates plus the allocation ratchet. Not in ci: valgrind costs 15-25s and a
-# shared runner cannot promise the perf binary a quiet core.
+# gates plus the allocation ratchet, without waiting for the heavy corpus.
+# perf-strict is IN ci as well: the allocation count is bit-identical run to
+# run, so a shared runner's noisy core cannot move it -- only the advisory
+# `perf stat` line at the end of that recipe reads a clock, and it is allowed
+# to be missing. Keeping it out of ci cost 83,275 allocations of unnoticed
+# drift between 2026-09-11 00:34 and 2026-09-11 17:30.
 pre-push: check test perf-strict
 	@echo "PRE-PUSH GREEN: check + test + perf-strict (allocations <= $(ALLOC_BASELINE))"
 
