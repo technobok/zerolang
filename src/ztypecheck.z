@@ -21025,13 +21025,14 @@ baseIsPrivateCapable: function {
 }
 
 # memberStrictType -- whether `bt` should get the strict unknown-member check:
-# a concrete record/class/union/variant whose method set is fully declared
-# SOMEWHERE. A type its own unit declares answers for itself; a generic
-# INSTANCE has no unit of its own and answers through its template, since its
-# members are that template's declarations substituted. Bare shells, which no
-# unit declares, and the templates themselves stay lenient -- a shell has no
-# member set to be complete, and inside a template body a member really is
-# minted per instantiation.
+# a concrete record/class/union/variant whose member set is fully declared
+# SOMEWHERE. A type its own unit declares answers for itself; a TEMPLATE
+# declares its own member set too, and a generic INSTANCE has no unit of its
+# own and answers through that template, since its members are the template's
+# declarations substituted. What instantiation mints is each member's
+# substituted TYPE, never a new member NAME, so the names are all known here.
+# Only a bare shell, which no unit declares, stays lenient: it has no member
+# set yet for the check to be complete against.
 memberStrictType: function {st: zenv.ZSymbolTable.view bt: u64} out bool is {
     tt: st.reg.typetypeOf typeId: (ztypes.tid.create from: bt.u64)
     isConc: (
@@ -21043,7 +21044,6 @@ memberStrictType: function {st: zenv.ZSymbolTable.view bt: u64} out bool is {
     )
     if isConc.not then return false
     if (st.reg.hasType typeId: (ztypes.tid.create from: bt.u64)).not then return false
-    if (st.reg.isGenericOf tid: (ztypes.tid.create from: bt.u64)) then return false
     declTid: ztypes.tid.create from: bt.u64
     gorig: st.reg.genericOriginOf tid: (ztypes.tid.create from: bt.u64)
     if gorig > 0 then declTid = ztypes.tid.create from: gorig.u64
@@ -21135,7 +21135,9 @@ unitMemberTypeOf: function {
 }
 
 # reportUnknownMember -- an unknown member on a type whose member set is
-# complete is a hard error; memberStrictType says which types those are.
+# complete is a hard error; memberStrictType says which types those are. The
+# param-stamp suppression a template body is walked under does not gate this: a
+# member's EXISTENCE is settled by the declarations, not by what the walk stamps.
 reportUnknownMember: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -21143,7 +21145,7 @@ reportUnknownMember: function {
     bt: ztypes.tid
     cnId: zast.nameid
 } is {
-    if (memberStrictType :st :bt) when st.typing.suppressParamStamps.not then {
+    if (memberStrictType :st :bt) then {
         # demand-order safety: walk the type's methods once and
         # re-probe before declaring the member unknown
         btnMm0: st.reg.nameOf tid: bt
@@ -21156,18 +21158,18 @@ reportUnknownMember: function {
         ) case some then {
             stillMiss = false
         } case none then null
-        # A MONO reads its template's generic PARAMETERS by name: `b.cap` on a
-        # `(Buffer cap: 8)` reads the value that instance was made with, and a
-        # parameter is no member of either the mono or the template, so the
-        # parameter list is the only place that can vouch for the name.
+        # A generic PARAMETER is read by name through the type that declares
+        # it: `this.cap` in a `Buffer` body and `b.cap` on a `(Buffer cap: 8)`
+        # each read the value an instance was made with. A parameter is a
+        # member of neither the template nor the mono, so the parameter list is
+        # the only place that can vouch for the name -- and a mono holds none
+        # of its own, so the question goes to its origin.
         if stillMiss then {
+            gpOwn: ztypes.tid.create from: bt.u64
             goMm: st.reg.genericOriginOf tid: bt
-            if goMm > 0 then {
-                gpMm: (st.reg.genericParamNamesOf
-                    tdecl: (declOfTypeId :st tid: (ztypes.tid.create from: goMm.u64))
-                )
-                if (gpMm.contains item: cnId) then stillMiss = false
-            }
+            if goMm > 0 then gpOwn = ztypes.tid.create from: goMm.u64
+            gpMm: (st.reg.genericParamNamesOf tdecl: (declOfTypeId :st tid: gpOwn))
+            if (gpMm.contains item: cnId) then stillMiss = false
         }
         # a numeric-type-named member on a numeric base is a width
         # conversion; the identity form (x.T where x is already T) is
