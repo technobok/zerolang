@@ -1,0 +1,34 @@
+/* SetVal.copy / MapVV.copy -- an owned duplicate that shares no storage with
+   the source. ONE template serves both: z_Set.c.tmpl and z_Map.c.tmpl declare
+   the identical struct -- capacity, length, entries_len, entries_cap, indices,
+   entries -- and both name their entry type z_@@NAME@@_entry_t, so nothing
+   here has to know which family it is emitting for.
+
+   THE TABLE IS COPIED POSITION FOR POSITION, not rebuilt. Every key and value
+   is a valtype, so an entry's bytes are the entry; carrying the index across
+   verbatim preserves the EMPTY and DELETED sentinels, the tombstones
+   (`alive == 0`) and each entry's stored hash, which is what lets the copy
+   answer a probe without re-hashing anything. Rebuilding would also lose
+   insertion order, which the entry array defines.
+
+   The struct itself is heap-allocated and `destroy` frees it, so the copy
+   allocates its own -- returning the source's pointer would free it twice. */
+static z_@@NAME@@_t* z_@@NAME@@_copy(const z_@@NAME@@_t* _this);
+static z_@@NAME@@_t* z_@@NAME@@_copy(const z_@@NAME@@_t* _this) {
+    z_@@NAME@@_t* _out = (z_@@NAME@@_t*)z_xmalloc(sizeof(z_@@NAME@@_t));
+    *_out = (z_@@NAME@@_t){0};
+    if (!_this) return _out;
+    _out->capacity = _this->capacity;
+    _out->length = _this->length;
+    _out->entries_len = _this->entries_len;
+    _out->entries_cap = _this->entries_cap;
+    if (_this->capacity > 0 && _this->indices) {
+        _out->indices = (int64_t*)z_xmalloc((size_t)_this->capacity * sizeof(int64_t));
+        memcpy(_out->indices, _this->indices, (size_t)_this->capacity * sizeof(int64_t));
+    }
+    if (_this->entries_cap > 0 && _this->entries) {
+        _out->entries = (z_@@NAME@@_entry_t*)z_xcalloc(_this->entries_cap, sizeof(z_@@NAME@@_entry_t));
+        memcpy(_out->entries, _this->entries, (size_t)_this->entries_cap * sizeof(z_@@NAME@@_entry_t));
+    }
+    return _out;
+}

@@ -1,0 +1,68 @@
+# `.copy` on the containers that declare one: the five whose elements, keys
+# and values are ALL valtypes, so the language and not the author decides what
+# a duplicate means. Each arm writes to the COPY and then reads the SOURCE,
+# which is the only thing that proves the two share no storage.
+#
+# The reference-bearing families -- ListRef, the other three Maps, SetRef,
+# IdMapR -- declare no copy and are refused, since a bitwise element copy
+# would give a reference element two owners. tests/fixtures/errors/ holds that
+# half.
+#
+# Three shapes here are the ones a careless body gets wrong:
+#   * a SetVal with a TOMBSTONE. Deleting leaves a dead entry and a DELETED
+#     sentinel in the index; copying position for position carries both, and
+#     rebuilding instead would renumber every later entry.
+#   * an IdSet on EACH SIDE of the small-mode boundary. Below it there is no
+#     index array at all and `indices == NULL` is the discriminator every
+#     lookup reads, so a copy that allocated one would put the two containers
+#     on different code paths.
+#   * an IdMapV whose entry array is sized by the 2/3 load factor rather than
+#     by length -- a copy sized by length is reallocated out from under the
+#     next `set`.
+main: function is {
+    xs: ListVal i64
+    xs.append from: 1
+    xs.append from: 2
+    ys: xs.copy
+    ys.append from: 3
+    print "list \{xs.length} \{ys.length} \{xs.get i: 1} \{ys.get i: 2}"
+
+    s: SetVal u64
+    s.add item: 10
+    s.add item: 20
+    s.delete item: 10
+    s.add item: 30
+    t: s.copy
+    t.add item: 40
+    print "set \{s.length} \{t.length} \{s.has item: 30} \{t.has item: 40} \{s.has item: 40}"
+
+    m: (MapVV u64 v: u64)
+    m.set key: 1 value: 100
+    m.set key: 2 value: 200
+    n: m.copy
+    n.set key: 3 value: 300
+    print "map \{m.length} \{n.length} \{(m.get key: 2).or d: 0} \{(n.get key: 3).or d: 0}"
+
+    small: IdSet u32
+    small.add item: 5
+    big: IdSet u32
+    i: u32
+    for i < 40 loop {
+        big.add item: (i * 3)
+        i = i + 1
+    }
+    smallDup: small.copy
+    bigDup: big.copy
+    smallDup.add item: 6
+    print "idset \{small.length} \{smallDup.length} \{big.length} \{bigDup.length} \{bigDup.has item: 117}"
+
+    im: (IdMapV u64 v: u64)
+    j: u64
+    for j < 30 loop {
+        im.set key: (j * 5) value: (j + 1)
+        j = j + 1
+    }
+    imDup: im.copy
+    imDup.set key: 999 value: 7
+    print "idmap \{im.length} \{imDup.length} \{(im.get key: 50).or d: 0} \{(imDup.get key: 999).or d: 0} \{(im.get key: 999).or d: 0}"
+}

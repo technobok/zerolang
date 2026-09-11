@@ -691,7 +691,14 @@ perf: $(PERFBIN)
 # tree asked for: 11,244 of it is missingCtorFields checking a NATIVE call's
 # required arguments, priced by restoring the old bail and measuring, and the
 # rest is fourteen commits of new checks over 665 new lines of source.
-ALLOC_BASELINE := 2161395
+#
+# +2,763 for the five container `.copy` declarations: a stdlib member costs a
+# Decl row on its template AND on every monomorphisation of it, and a
+# self-compile mints many. The C is still emitted only for an instance that
+# calls one, so this is the declaration's price and not the body's. Six of the
+# 2,763 are the member-name id the collection read binds before testing it,
+# which the formatter's wrap of the inline form made unreadable.
+ALLOC_BASELINE := 2164158
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1708,6 +1715,8 @@ VIEW_GUARD_INTERNAL := String.cat String.print String.free String.eq String.cmp 
   IdSet.destroy IdSet.grow IdSet.find IdSet.slot IdSet.items_cap
 VIEW_GUARD_INLINE := Bytes.byteView:unemitted \
   ListRef.insert:ondemand ListRef.extend:ondemand \
+  ListVal.copy:ondemand SetVal.copy:ondemand MapVV.copy:ondemand \
+  IdMapV.copy:ondemand IdSet.copy:ondemand \
   StringView.asString:inline \
   ListVal.append:ListRef.append ListVal.insert:ListRef.insert \
   ListVal.extend:ListRef.extend ListVal.get:ListRef.get ListVal.set:ListRef.set \

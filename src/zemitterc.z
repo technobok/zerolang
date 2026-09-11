@@ -12233,6 +12233,45 @@ emitCollectionMemberRead: function {
     accB2: ".".string
     if (isPtrVid :ctx vid: bn2v) then accB2 = "->".string
     recvB2: colRecvRef :ctx bn: bn2 vid: bn2v
+    # `.copy` is declared on the five ALL-VALTYPE containers only, so each
+    # family is named precisely here rather than through the ref/val-conflating
+    # predicates the legs below use: a checker regression then surfaces as a
+    # missing leg, never as a wrong emission on a reference family whose
+    # elements would get two owners.
+    #
+    # THE RECEIVER IS SPELLED TWO WAYS because the families are held two ways.
+    # A dict is heap-held and its local already IS the pointer the body wants;
+    # a list or an id container is a stack struct, so the local's ADDRESS is.
+    mnc9: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
+    if (mnIs :ctx id: mnc9 at: mnCopy) then {
+        cpStack9: false
+        cpHeap9: false
+        if (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: ogListVal)) then {
+            cpStack9 = true
+        }
+        if (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: ogIdMapV)) then {
+            cpStack9 = true
+        }
+        if (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: ogIdSet)) then {
+            cpStack9 = true
+        }
+        if (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: ogSetVal)) then {
+            cpHeap9 = true
+        }
+        if (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: ogMapVV)) then {
+            cpHeap9 = true
+        }
+        if cpStack9 then {
+            cpcb9: ctxCname :ctx tid: bstamp
+            ecp9: "\{cpcb9}_copy(\{recvB2})"
+            return ecp9
+        }
+        if cpHeap9 then {
+            cphb9: ctxCname :ctx tid: bstamp
+            ech9: "\{cphb9}_copy(\{bn2})"
+            return ech9
+        }
+    }
     if (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: ogArray)) then {
         acba: ctxCname :ctx tid: bstamp
         if mn2 == "length" then {
@@ -25749,7 +25788,7 @@ emitBoxMono: function {
 # monoMemberUsed -- whether a USE SITE resolved this member on this mono. The
 # question a per-mono emission must ask, and not the same as declChildOfId:
 # every instance carries every template member, so that one answers yes
-# everywhere and gates nothing. emitListMethodOnDemand has always asked this;
+# everywhere and gates nothing. emitColMethodOnDemand has always asked this;
 # the members written inline beside it asked the other, and so were emitted into
 # every program that instantiated the container at all.
 monoMemberUsed: function {
@@ -25762,13 +25801,13 @@ monoMemberUsed: function {
     return (symtab.typing.usedMemberDecl.has item: md9.u64)
 }
 
-# emitListMethodOnDemand -- write one List template method, but only when the
+# emitColMethodOnDemand -- write one container template method, but only when the
 # program actually calls it on THIS instance. `usedMemberDecl` holds the member
 # declarations a use site resolved; the INSTANCE's own member is the question,
 # because refDecl records the template's and so answers for every instance at
 # once. A method nothing calls is a dead C function in every program that names
 # the collection at all.
-emitListMethodOnDemand: function {
+emitColMethodOnDemand: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     runtimeDir: StringView
@@ -25776,7 +25815,12 @@ emitListMethodOnDemand: function {
     nameId: zast.nameid
     file: StringView
     nm: StringView
-    ect: StringView
+    # the ONE hole a template needs beyond NAME, and what fills it: `ELEM_T`
+    # for a list, `ITEM_T` for an IdSet. The dict and IdMap copies name their
+    # entry type from NAME alone, so they pass "" and the substitution is
+    # skipped rather than filled with nothing
+    hole: StringView
+    holeVal: StringView
     buf: String.borrow
 } is {
     md: symtab.typing.declMemberIdOf parentTypeId: monoId :nameId
@@ -25786,7 +25830,12 @@ emitListMethodOnDemand: function {
     raw: readTemplateCached :ctx path: fp.stringView
     if raw.length == 0 then return
     f1: applyTmpl text: raw key: "NAME" val: nm
-    f2: applyTmpl text: f1 key: "ELEM_T" val: ect
+    if hole.length == 0 then {
+        buf.append f1
+        buf.append "\n"
+        return
+    }
+    f2: applyTmpl text: f1 key: hole val: holeVal
     buf.append f2
     buf.append "\n"
 }
@@ -25845,7 +25894,7 @@ emitListMono: function {
     # insert and extend are their own fragments, written only for an instance
     # that calls them. Every List instance used to carry both, and in the
     # compiler's own C half of them were never called
-    (emitListMethodOnDemand
+    (emitColMethodOnDemand
         :symtab
         :ctx
         :runtimeDir
@@ -25853,10 +25902,11 @@ emitListMono: function {
         nameId: zast.names.wkInsert
         file: "z_List_insert.c.tmpl"
         nm: nm.stringView
-        ect: ect.stringView
+        hole: "ELEM_T"
+        holeVal: ect.stringView
         :buf
     )
-    (emitListMethodOnDemand
+    (emitColMethodOnDemand
         :symtab
         :ctx
         :runtimeDir
@@ -25864,7 +25914,23 @@ emitListMono: function {
         nameId: zast.names.wkExtend
         file: "z_List_extend.c.tmpl"
         nm: nm.stringView
-        ect: ect.stringView
+        hole: "ELEM_T"
+        holeVal: ect.stringView
+        :buf
+    )
+    # `.copy` is declared on ListVal and not on ListRef, so a ListRef mono has
+    # no member here for declMemberIdOf to find and nothing is written. The
+    # family needs no test of its own
+    (emitColMethodOnDemand
+        :symtab
+        :ctx
+        :runtimeDir
+        :monoId
+        nameId: (ctx.mnames.get i: mnCopy)
+        file: "z_List_copy.c.tmpl"
+        nm: nm.stringView
+        hole: "ELEM_T"
+        holeVal: ect.stringView
         :buf
     )
     if ctx.colGetFromCode when (monoMemberUsed
@@ -26893,6 +26959,20 @@ emitSetMono: function {
         sd2: "    return z_\{nm}_delete(_this, &_k);\n}\n\n"
         buf.append sd2
     }
+    # `.copy` is declared on SetVal and not on SetRef, so a SetRef mono has no
+    # member here to find and nothing is written
+    (emitColMethodOnDemand
+        :symtab
+        :ctx
+        :runtimeDir
+        :monoId
+        nameId: (ctx.mnames.get i: mnCopy)
+        file: "z_dict_copy.c.tmpl"
+        nm: nm.stringView
+        hole: ""
+        holeVal: ""
+        :buf
+    )
 }
 
 # mapDestroyEntries / mapFreeKeyDup / mapFreeKeyDel -- String-key cleanup
@@ -27276,6 +27356,20 @@ emitMapMono: function {
         valT: valT.stringView
         :buf
     )
+    # `.copy` is declared on MapVV alone, so the other three Map families have
+    # no member here to find and nothing is written
+    (emitColMethodOnDemand
+        :symtab
+        :ctx
+        :runtimeDir
+        :monoId
+        nameId: (ctx.mnames.get i: mnCopy)
+        file: "z_dict_copy.c.tmpl"
+        nm: nm.stringView
+        hole: ""
+        holeVal: ""
+        :buf
+    )
 }
 
 # idMapDestroyEntries -- the per-entry free loop for an IdMap. There is no
@@ -27377,6 +27471,19 @@ emitIdMapMono: function {
         nm: nm.stringView
         keyT: keyT.stringView
         valT: valT.stringView
+        :buf
+    )
+    # `.copy` is declared on IdMapV and not on IdMapR
+    (emitColMethodOnDemand
+        :symtab
+        :ctx
+        :runtimeDir
+        :monoId
+        nameId: (ctx.mnames.get i: mnCopy)
+        file: "z_IdMap_copy.c.tmpl"
+        nm: nm.stringView
+        hole: ""
+        holeVal: ""
         :buf
     )
 }
@@ -27515,6 +27622,19 @@ emitIdSetMono: function {
     t6: applyTmpl text: t5 key: "OPTIONVIEW_TAG" val: ovu.stringView
     buf.append t6
     buf.append "\n"
+    # IdSet is one form only, so this writes for every instance that calls it
+    (emitColMethodOnDemand
+        :symtab
+        :ctx
+        :runtimeDir
+        :monoId
+        nameId: (ctx.mnames.get i: mnCopy)
+        file: "z_IdSet_copy.c.tmpl"
+        nm: nm.stringView
+        hole: "ITEM_T"
+        holeVal: itemT.stringView
+        :buf
+    )
 }
 
 # ioCanonTid -- the type id behind an io/cli runtime fragment's canonical stem,
