@@ -4951,6 +4951,48 @@ checkReturnPins: function {
     }
 }
 
+# recordParamArmDefault -- record a parameter's arm default, unless the arm
+# CARRIES a payload: a default names an arm and cannot supply what the arm
+# holds. The field side asks the same question through recordFoldedArmDefault,
+# and docs/spec.pdoc states it once for both ("Defaulting to an arm that carries
+# a non-null payload is rejected").
+recordParamArmDefault: function {
+    # where the refusal and the default are both recorded
+    st: zenv.ZSymbolTable
+    # the tree the parameter's name is read from
+    ast: Ast.view
+    # the parameter's declaration, for the position
+    pm: argref
+    # the parameter's own name
+    pnameId: zast.nameid
+    # the function the parameter belongs to
+    fid: u64
+    # the sum whose arm the default names
+    cid: u64
+    # the arm the default named
+    armNid: zast.nameid
+} is {
+    armDecl: (st.typing.declMemberIdOf
+        parentTypeId: (ztypes.tid.create from: cid.u64)
+        nameId: armNid
+    )
+    pnm8: zast.nameTextCopy :ast ref: pnameId
+    if (refuseArmDefaultPayload
+        :st
+        :ast
+        what: "parameter"
+        fname: pnm8.stringView
+        fm: pm
+        armTid: (ztypes.tid.create from: cid.u64)
+        armName: armNid
+    ) then return
+    (st.typing.declSetDefaultId
+        parentTypeId: (ztypes.tid.create from: fid.u64)
+        nameId: pnameId
+        value: ztyping.defaultval.arm armDecl
+    )
+}
+
 # checkParamTypeShape -- report the ways a parameter's declared type can fail to
 # name a type: an unknown name, a sum ARM used where its type belongs, or a
 # unit used as a type.
@@ -5017,14 +5059,14 @@ checkParamTypeShape: function {
                 ).not
             ) then {
                 pArmNid: zast.poolFind pool: ast.names text: pdcn.stringView
-                pArmDecl: (st.typing.declMemberIdOf
-                    parentTypeId: (ztypes.tid.create from: cid.u64)
-                    nameId: pArmNid
-                )
-                (st.typing.declSetDefaultId
-                    parentTypeId: (ztypes.tid.create from: fid.u64)
-                    nameId: pnameId
-                    value: ztyping.defaultval.arm pArmDecl
+                (recordParamArmDefault
+                    :st
+                    :ast
+                    :pm
+                    :pnameId
+                    :fid
+                    :cid
+                    armNid: pArmNid
                 )
             }
         }
@@ -5049,6 +5091,16 @@ registerValueParam: function {
     partialTid: u64
     pm: argref
 } is {
+    {
+        pnm9: zast.nameTextCopy :ast ref: pm.name
+        if (refuseStringDefault
+            :st
+            :ast
+            what: "parameter"
+            fname: pnm9.stringView
+            fm: pm
+        ) then return
+    }
     cid: partialTid
     if cid == 0 then cid = (resolveTyperefShell
         :st
@@ -7973,7 +8025,7 @@ attachRecordField: function {
     fm: argref
     fname: StringView
 } is {
-    if (refuseStringFieldDefault :st :ast :fname :fm) then return
+    if (refuseStringDefault :st :ast what: "field" :fname :fm) then return
     ftnR: fieldHeadNameId :ast n: (ast.nodes.get i: fm.operation.u64)
     # a field's type-ref can name a SIBLING method (an fn-ptr
     # slot defaulting to it), which is a member like any other
@@ -10047,6 +10099,7 @@ recordFieldDefault: function {
                 (refuseArmDefaultPayload
                     :st
                     :ast
+                    what: "field"
                     :fname
                     :fm
                     armTid: cidf
@@ -10155,11 +10208,13 @@ armCarriesPayload: function {
 refuseArmDefaultPayload: function {
     # where the refusal and the default are both recorded
     st: zenv.ZSymbolTable
-    # the tree the field's name is read from
+    # the tree the declared name is read from
     ast: Ast.view
-    # the field the default was written on
+    # what was declared, for the message: `field` or `parameter`
+    what: StringView
+    # the name the default was written on
     fname: StringView
-    # the field's declaration, for the position
+    # the declaration, for the position
     fm: argref
     # the sum whose arm was named
     armTid: ztypes.tid
@@ -10168,8 +10223,8 @@ refuseArmDefaultPayload: function {
 } out bool is {
     if (armCarriesPayload :st :armTid :armName).not then return false
     an: zast.nameTextAt :ast ref: armName
-    ma: "field '\{fname}' defaults to arm '\{an}', which carries a payload -- a default names an arm, and cannot supply what the arm holds"
-    ha: "default to an arm that carries nothing, or drop the default and let the constructor build the value".string
+    ma: "\{what} '\{fname}' defaults to arm '\{an}', which carries a payload -- a default names an arm, and cannot supply what the arm holds"
+    ha: "default to an arm that carries nothing, or drop the default and pass the value in".string
     na: String
     (addErrorH
         :st
@@ -10209,6 +10264,7 @@ recordFoldedArmDefault: function {
     if (refuseArmDefaultPayload
         :st
         :ast
+        what: "field"
         :fname
         :fm
         armTid: cvF.armTid
@@ -10419,32 +10475,35 @@ rootIsStringLiteral: function {ast: Ast.view n: astnode.view} out bool is {
     }
 }
 
-# refuseStringFieldDefault -- a field declared by VALUE carries a default, and a
-# default is a CONSTANT NUMERIC EXPRESSION: `defaultval.literal` holds a node the
-# emitter re-emits verbatim, which a String cannot be -- it needs a runtime
-# allocation. So a string literal in declaration position names no type and
-# leaves the field with none.
+# refuseStringDefault -- a field or parameter declared by VALUE carries a
+# DEFAULT, and a default is a constant numeric expression or an arm that carries
+# nothing: `defaultval.literal` holds a node the emitter re-emits verbatim, which
+# a String cannot be -- it needs a runtime allocation. So a string literal in
+# declaration position names no type and leaves the slot with none.
 #
 # It was accepted. Beside a field that did resolve, zc reported NOTHING and
 # emitted C naming an undeclared struct -- and wrote `Z_?_TAG_` into the output,
 # the unresolved type leaking through verbatim. Alone it surfaced as `missing
 # required arguments 'v' (type: ?)` against whoever later tried to CONSTRUCT the
-# type, which is neither the mistake nor the place it was made.
-refuseStringFieldDefault: function {
-    # where the field's refusal is recorded
+# type, which is neither the mistake nor the place it was made. A PARAMETER said
+# nothing at all until the call, and then said `expected ?, got StringView`.
+refuseStringDefault: function {
+    # where the string-literal refusal lands
     st: zenv.ZSymbolTable
-    # the tree the field's declaration is read from
+    # the tree the declaration is read from
     ast: Ast.view
-    # the field's own name, which the message names
+    # what was declared, for the message: `field` or `parameter`
+    what: StringView
+    # the declared name, which the message names
     fname: StringView
-    # the field's declaration, whose root is tested
+    # the declaration, whose root is tested
     fm: argref
 } out bool is {
     fop: ast.nodes.get i: fm.operation.u64
     if (rootIsStringLiteral :ast n: fop).not then return false
     fp: zast.posOf n: fop
-    md: "field '\{fname}' is declared by a string literal -- a field's default must be a constant numeric expression"
-    hd: "give the field a type (`\{fname}: String`) and let the constructor supply the text, or default it to a number"
+    md: "\{what} '\{fname}' is declared by a string literal -- a default must be a constant numeric expression, or an arm that carries nothing"
+    hd: "name the type instead (`\{fname}: String`) and pass the text in, or default it to a number"
     nd: String
     (addErrorH
         :st
@@ -10466,9 +10525,9 @@ refuseStringFieldDefault: function {
 # "expected ?, got StringView", and merely MATCHING on the sum emitted C naming
 # an undeclared struct with no diagnostic at all.
 #
-# Sibling of refuseStringFieldDefault and deliberately worded apart from it: a
-# field declared by value carries a DEFAULT, while an arm declares a payload
-# type and has no default to carry.
+# Sibling of refuseStringDefault and deliberately worded apart from it: a field
+# declared by value carries a DEFAULT, while an arm declares a payload type and
+# has no default to carry.
 refuseStringArmPayload: function {
     # where the arm's refusal is recorded
     st: zenv.ZSymbolTable
@@ -10513,7 +10572,13 @@ resolveClassFieldEntry: function {
 } out bool is {
     needsDtor: false
     fname: zast.nameTextCopy :ast ref: fm.name
-    if (refuseStringFieldDefault :st :ast fname: fname.stringView :fm) then return false
+    if (refuseStringDefault
+        :st
+        :ast
+        what: "field"
+        fname: fname.stringView
+        :fm
+    ) then return false
     ftn: fieldHeadNameId :ast n: (ast.nodes.get i: fm.operation.u64)
     # A NON-OWNED field marker (lock / borrow / view) makes the
     # slot static: it is set in the constructor, never reassigned,
