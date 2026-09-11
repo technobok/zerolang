@@ -707,7 +707,13 @@ perf: $(PERFBIN)
 # thousands of auto-calls and this is 372 -- but downstream: a member reached on
 # a monomorphisation now answers that INSTANCE where it used to answer the
 # template, so instances materialise where a template stood in.
-ALLOC_BASELINE := 2164349
+#
+# +1,087 for the iterator-construction refusal, and it is the COMPILER'S OWN
+# SOURCE, not the check: 83 more lines of src/, at the 13-17 allocations a line
+# this tree costs to compile. Measured, because the obvious theory was wrong --
+# skipping the member materialisation for monos, where the lookup answers
+# without it, cost 59 allocations MORE than it saved.
+ALLOC_BASELINE := 2165436
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

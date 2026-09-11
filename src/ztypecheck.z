@@ -470,6 +470,11 @@ checkBareTypeValueAt: function {
         bareCtorError :st :nodeid :lineno :colno :width msg: mv hint: hv
         return
     }
+    # AN ITERATOR BINDS TO WHAT IT WALKS, the way a view binds to what it views.
+    if (isNativeIteratorTid :ast :st :tid) then {
+        refuseIteratorConstruction :st :nodeid :lineno :colno :width :tn
+        return
+    }
     # a generic template has no concrete layout until its arguments apply
     isGen: false
     {
@@ -504,18 +509,6 @@ checkBareTypeValueAt: function {
     if tdb > 0 when tdb == (builtinTidT :st frame: st.curFrame :ast base: "String") then {
         ics: tid
         st.typing.implicitCreate.set key: nodeid.u64 value: ics
-        return
-    }
-    # source-produced iterators have no standalone construction
-    isIt: (
-        (tid == (builtinTidT :st frame: st.curFrame :ast base: "CpIter")) or
-        (tid == (builtinTidT :st frame: st.curFrame :ast base: "Splitter")) or
-        (tid == (builtinTidT :st frame: st.curFrame :ast base: "LinesIter"))
-    )
-    if isIt then {
-        mi: "cannot construct '\{tn}' from its bare name: iterators are produced by their source"
-        hi: "call '.iterate' / '.split' / '.codepoints' / '.lines' on the source value".string
-        bareCtorError :st :nodeid :lineno :colno :width msg: mi hint: hi
         return
     }
     # a collection or iterator instantiation constructs its empty value through
@@ -579,6 +572,89 @@ checkBareTypeValueAt: function {
     m: "cannot construct '\{tn}' from its bare name: missing required arguments \{lst}"
     eh: "provide each listed argument ('\{tn} name: value ...') or add field defaults"
     bareCtorError :st :nodeid :lineno :colno :width msg: m hint: eh
+}
+
+# isNativeIteratorTid -- a NATIVE iterator cursor. The Iterator protocol is a
+# STRUCTURAL marker and says so in its own declaration: "any class with a
+# `.call` method returning the appropriate option-wrapper of `gives` satisfies
+# the marker -- no explicit `:Iterator` conformance is required". So `call` IS
+# the test, and it needs no list of the nineteen cursor classes to stay correct
+# when a twentieth is declared.
+#
+# The NATIVE gate is what the test is for. A user's own class with a `call`, and
+# the class the compiler synthesises for a `yield` body, both have a struct the
+# emitter writes and both construct fine. A native cursor has none of its own:
+# the emitter writes one per `.iterate` SITE, so a bare name reaches the C
+# naming a type nothing emitted.
+isNativeIteratorTid: function {ast: Ast st: zenv.ZSymbolTable tid: ztypes.tid} out bool is {
+    if tid.isZero then return false
+    natIt: st.reg.isNativeOf :tid
+    if natIt.not then {
+        goIt: st.reg.genericOriginOf :tid
+        if goIt.isZero.not then {
+            natIt = st.reg.isNativeOf tid: (ztypes.tid.create from: goIt.u64)
+        }
+    }
+    if natIt.not then return false
+    # A MONO CARRIES ITS OWN MEMBERS, but a non-generic native -- CpIter,
+    # Splitter, LinesIter -- needs its members materialised before the lookup
+    # can answer. Asked for both: skipping it for monos was MEASURED and cost 59
+    # allocations MORE than it saved, because the saving was never the force.
+    (forceMemberOf
+        :st
+        frame: st.curFrame
+        :ast
+        parentTypeId: tid
+        nameId: zast.names.wkCall
+    )
+    coIt: st.typing.declChildOfId parentTypeId: tid nameId: zast.names.wkCall
+    match (
+        coIt
+    ) case some then {
+        return true
+    } case none then null
+    return false
+}
+
+# refuseIteratorConstruction -- one wording for both spellings that reach a
+# cursor in value position: the bare name (`It`, an alias of one) and the
+# instantiation written out (`(ListIter String)`). A cursor over nothing has
+# nothing to yield, and the emitter writes a cursor struct per `.iterate` SITE
+# rather than per type -- so either spelling used to reach the C naming a struct
+# that was never emitted, and the C compiler rejected the local.
+refuseIteratorConstruction: function {
+    st: zenv.ZSymbolTable
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+    width: u32
+    tn: String
+} is {
+    mi: "cannot construct '\{tn}' from its bare name: an iterator binds to the source it walks"
+    hi: "take one from the source, and keep it for the walk: `with it: xs.iterate do for e: it loop ...`".string
+    bareCtorError :st :nodeid :lineno :colno :width msg: mi hint: hi
+}
+
+# refusedIteratorInstance -- the instantiation spelling of the same refusal,
+# reported and answered in one call so its caller stays one line. True when the
+# construction was refused.
+refusedIteratorInstance: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    call: callref
+    tid: ztypes.tid
+} out bool is {
+    if (isNativeIteratorTid :ast :st :tid).not then return false
+    tnG: st.reg.nameOf :tid
+    (refuseIteratorConstruction
+        :st
+        nodeid: call.nid
+        lineno: call.lineno
+        colno: call.colno
+        width: 1
+        tn: tnG
+    )
+    return true
 }
 
 # isViewFamilyTid -- a borrowed-view type: OptionView/ListView/MapEntry monos
@@ -32274,6 +32350,13 @@ checkBareGenericCall: function {
             allowFrom: false
         )
         gres: genericTypeConstruction :ast :st :unitDecl :call tplId: funcId
+        # the instantiation written out reaches here rather than the bare-name
+        # check and constructs the same thing, so it answers to the same rule:
+        # a cursor binds to what it walks. Asked before the `> 0` leg because a
+        # zero tid is not a cursor and the question is cheaper than the nesting
+        if (refusedIteratorInstance :ast :st :call tid: gres) then {
+            return (callleg handled: true tid: gres)
+        }
         if gres > 0 then {
             stampConstructionKind :st nid: call.nid.u64 tid: gres
             return (callleg handled: true tid: gres)
