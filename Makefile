@@ -766,7 +766,7 @@ perf: $(PERFBIN)
 # allocations a line against the 13-17 this tree usually costs, which is what
 # a checker family of nested calls and table walks weighs next to an average
 # line -- the four ZTyping stamp tables that went with it are four blocks.
-ALLOC_BASELINE := 2486881
+ALLOC_BASELINE := 2486296
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

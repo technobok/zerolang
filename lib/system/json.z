@@ -233,7 +233,7 @@ describeValue: function {v: Value.view} out Found is {
 
 # textAt -- terminal string member as an owned copy.
 textAt: function {v: Value.view path: StringView} out Option String is {
-    r: (at :v :path)
+    r: at :v :path
     k: r.kind
     match (
         k
@@ -246,7 +246,7 @@ textAt: function {v: Value.view path: StringView} out Option String is {
 
 # intAt -- terminal integer member.
 intAt: function {v: Value.view path: StringView} out optionval i64 is {
-    r: (at :v :path)
+    r: at :v :path
     k: r.kind
     match (
         k
@@ -259,7 +259,7 @@ intAt: function {v: Value.view path: StringView} out optionval i64 is {
 
 # boolAt -- terminal boolean member.
 boolAt: function {v: Value.view path: StringView} out optionval bool is {
-    r: (at :v :path)
+    r: at :v :path
     k: r.kind
     match (
         k
@@ -272,7 +272,7 @@ boolAt: function {v: Value.view path: StringView} out optionval bool is {
 
 # hasAt -- whether the path resolves to any value.
 hasAt: function {v: Value.view path: StringView} out bool is {
-    r: (at :v :path)
+    r: at :v :path
     k: r.kind
     match (
         k
@@ -426,7 +426,7 @@ isDigit: function {b: u8} out bool is {
 
 # true when byte `b` is JSON insignificant whitespace.
 isWs: function {b: u8} out bool is {
-    return (b == 32) or (b == 9) or (b == 10) or (b == 13)
+    return b == 32 or (b == 9) or (b == 10) or (b == 13)
 }
 
 # appendCodepoint -- UTF-8 encode `cp` onto `buf`. Codepoints beyond
@@ -440,17 +440,17 @@ appendCodepoint: function {buf: String cp: u32} is {
     if cp < 128 then {
         buf.appendByte b: cp.u8.orPanic
     } else if cp < 2048 then {
-        buf.appendByte b: ((cp >> 6) + 192).u8.orPanic
-        buf.appendByte b: ((cp & 63) + 128).u8.orPanic
+        buf.appendByte b: (cp >> 6 + 192).u8.orPanic
+        buf.appendByte b: (cp & 63 + 128).u8.orPanic
     } else if cp < 65536 then {
-        buf.appendByte b: ((cp >> 12) + 224).u8.orPanic
-        buf.appendByte b: (((cp >> 6) & 63) + 128).u8.orPanic
-        buf.appendByte b: ((cp & 63) + 128).u8.orPanic
+        buf.appendByte b: (cp >> 12 + 224).u8.orPanic
+        buf.appendByte b: (cp >> 6 & 63 + 128).u8.orPanic
+        buf.appendByte b: (cp & 63 + 128).u8.orPanic
     } else {
-        buf.appendByte b: ((cp >> 18) + 240).u8.orPanic
-        buf.appendByte b: (((cp >> 12) & 63) + 128).u8.orPanic
-        buf.appendByte b: (((cp >> 6) & 63) + 128).u8.orPanic
-        buf.appendByte b: ((cp & 63) + 128).u8.orPanic
+        buf.appendByte b: (cp >> 18 + 240).u8.orPanic
+        buf.appendByte b: (cp >> 12 & 63 + 128).u8.orPanic
+        buf.appendByte b: (cp >> 6 & 63 + 128).u8.orPanic
+        buf.appendByte b: (cp & 63 + 128).u8.orPanic
     }
 }
 
@@ -568,7 +568,7 @@ Cursor: class {
     # a `{...}` object, keeping the keys in document order beside the map
     parseObject: function {:this} out Value is {
         this.advance
-        o: (Obj entries: (Map String V: Value) keys: List String)
+        o: Obj entries: (Map String V: Value) keys: List String
         this.skipWs
         if this.peek == 125 then {
             this.advance
@@ -609,7 +609,7 @@ Cursor: class {
     # a `[...]` array, element by element, with the nesting depth bounded
     parseArray: function {:this} out Value is {
         this.advance
-        a: (Arr items: List Value)
+        a: Arr items: List Value
         this.skipWs
         if this.peek == 93 then {
             this.advance
@@ -727,7 +727,7 @@ Cursor: class {
         lo: this.hex4
         if this.failed then return
         if lo >= 56320 when lo <= 57343 then {
-            full: ((hi - 55296) << 10) + (lo - 56320) + 65536
+            full: hi - 55296 << 10 + (lo - 56320) + 65536
             appendCodepoint :buf cp: full
         } else {
             this.fail msg: "unpaired surrogate"
@@ -751,7 +751,7 @@ Cursor: class {
                 this.fail msg: "bad unicode escape"
                 return 0
             }
-            v = (v << 4) | d
+            v = v << 4 | d
             this.advance
             i = i + 1
         }
@@ -765,7 +765,7 @@ Cursor: class {
         isFloat: false
         for true loop {
             b: this.peek
-            if (b == 45) or (b == 43) then {
+            if b == 45 or (b == 43) then {
                 this.advance
             } else if b == 46 then {
                 isFloat = true
@@ -786,7 +786,7 @@ Cursor: class {
             this.fail msg: "bad number"
             return Value.nul
         }
-        span: ((this.src.stringView).substring from: start to: this.pos).string
+        span: (this.src.stringView.substring from: start to: this.pos).string
         if isFloat then {
             fr: span.stringView.parseF64
             match (
@@ -812,12 +812,12 @@ Cursor: class {
 
 # parse -- whole-input parse; trailing non-whitespace is an error.
 parse: function {source: StringView} out ParseResult is {
-    c: (Cursor src: source.string pos: 0 depth: 0 failed: false errPos: 0 errMsg: "".string)
+    c: Cursor src: source.string pos: 0 depth: 0 failed: false errPos: 0 errMsg: "".string
     v: c.parseValue
     c.skipWs
     if c.failed.not when c.pos < c.src.length then c.fail msg: "trailing data"
     if c.failed then {
-        e: (JsonError at: c.errPos msg: c.errMsg.copy)
+        e: JsonError at: c.errPos msg: c.errMsg.copy
         return (ParseResult.err e)
     }
     return (ParseResult.ok v)

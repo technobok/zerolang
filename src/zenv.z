@@ -97,7 +97,7 @@ sameCallConflict: function {
     if (holderEq a: e.lockHolder b: holder).not then return false
     if (e.lockMutable or mutable).not then return false
     ownStep: (
-        (e.lockScope == ztypes.zlockscope.intent) and (isPrefix p: e.lockPath.listView whole: path)
+        e.lockScope == ztypes.zlockscope.intent and (isPrefix p: e.lockPath.listView whole: path)
     )
     if ownStep then return false
     return (pathsOverlap a: e.lockPath.listView b: path)
@@ -120,7 +120,7 @@ interiorConflict: function {
     if (e.lockScope == ztypes.zlockscope.target).not then return false
     if (holderEq a: e.lockHolder b: holder) then return false
     if (pathsOverlap a: e.lockPath.listView b: path).not then return false
-    return (mutable and e.lockAlias.not) or (e.lockMutable and alias.not)
+    return mutable and e.lockAlias.not or (e.lockMutable and alias.not)
 }
 
 # Multi-granularity conflict for a NEW lock acquisition. Both paths share
@@ -147,7 +147,7 @@ lockAcquireConflict: function {
     eq: pathsEqual a: existingPath b: reqPath
     if eq then {
         (return
-            (existingType == ztypes.zlockstate.exclusive) or (
+            existingType == ztypes.zlockstate.exclusive or (
                 reqType == ztypes.zlockstate.exclusive
             )
         )
@@ -159,7 +159,7 @@ lockAcquireConflict: function {
         if anc then {
             if existingType == ztypes.zlockstate.exclusive then return true
             if existingScope == ztypes.zlockscope.target then {
-                return (reqType == ztypes.zlockstate.exclusive)
+                return reqType == ztypes.zlockstate.exclusive
             }
             return false
         }
@@ -181,7 +181,8 @@ lockAcquireConflict: function {
 # data-bearing arm (not a function / data block / tag / enum member).
 isExcludableKind: function {k: ztypes.ztypetype} out bool is {
     return (
-        (k == ztypes.ztypetype.functionType) or
+        k ==
+        ztypes.ztypetype.functionType or
         (k == ztypes.ztypetype.dataType) or
         (k == ztypes.ztypetype.tagType)
     ).not
@@ -196,14 +197,14 @@ sumArmNameIds: function {
     tid: ztypes.tid
     ids: ListVal u64
 } is {
-    ot8: (ztypes.tid.create from: tid.u64)
+    ot8: ztypes.tid.create from: tid.u64
     i8: u64
     n8: ty.declRowSlots ownerTid: ot8
     for i8 < n8 loop {
         r8: ty.declRowAt ownerTid: ot8 membersOnly: true slot: i8
         i8 = i8 + 1
         if r8.keep then {
-            ctid8: (ztypes.tid.create from: r8.tid)
+            ctid8: ztypes.tid.create from: r8.tid
             if (isExcludableKind k: (reg.typetypeOf typeId: ctid8)) when (reg.isTagGenericOriginOf
                 typeId: ctid8
             ).not then ids.append r8.name
@@ -456,10 +457,10 @@ ZSymbolTable: class {
     materialiseTop: function {:this} is {
         n: this.open.length
         if n == 0 then return
-        top: this.open.get i: (n - 1)
+        top: this.open.get i: n - 1
         if top.id.isZero.not then return
         top.id = this.typing.declNewFrame parent: top.parent node: 0
-        this.open.set i: (n - 1) val: top
+        this.open.set i: n - 1 val: top
         this.curFrame = top.id
     }
 
@@ -493,7 +494,7 @@ ZSymbolTable: class {
     pop: function {:this} out u64 is {
         n: this.open.length
         if n == 0 then return 0
-        fr: this.open.get i: (n - 1)
+        fr: this.open.get i: n - 1
         top: fr.id
         start: fr.start
         if top.isZero.not then this.snapshotFrame frame: top :start
@@ -565,7 +566,7 @@ ZSymbolTable: class {
             if already.not then {
                 te: this.reg.newEntry ztypeId: (ztypes.tid.create from: (mTypes.get i: mi).u64)
                 te.isTaken = true
-                te.takenAt = (optionval.some (mLocs.get i: mi))
+                te.takenAt = optionval.some (mLocs.get i: mi)
                 this.appendRow row: te declId: d
             }
             mi = mi + 1
@@ -585,7 +586,7 @@ ZSymbolTable: class {
     popDiscard: function {:this} is {
         n: this.open.length
         if n == 0 then return
-        this.dropTail start: (this.open.get i: (n - 1)).start
+        this.dropTail start: (this.open.get i: n - 1).start
         this.open.pop
         this.curFrame = this.innermostFrame
     }
@@ -616,7 +617,7 @@ ZSymbolTable: class {
     frameBindsHere: function {this: this.view nameId: zast.nameid} out bool is {
         n: this.open.length
         if n == 0 then return false
-        fr: (this.open.get i: (n - 1)).id
+        fr: (this.open.get i: n - 1).id
         if fr.isZero then return false
         d: this.typing.declFindChild parentDeclId: fr :nameId
         return d.isZero.not
@@ -627,7 +628,7 @@ ZSymbolTable: class {
         n: this.open.length
         if n == 0 then return
         this.materialiseTop
-        top: this.open.get i: (n - 1)
+        top: this.open.get i: n - 1
         # one binding per name per frame: the namespace walks read a frame's
         # children by name and stop at the first hit, so a second edge under
         # the same name would be unreachable. The binding site reports the
@@ -642,7 +643,7 @@ ZSymbolTable: class {
             :varId
         )
         top.defs = top.defs + 1
-        this.open.set i: (n - 1) val: top
+        this.open.set i: n - 1 val: top
     }
 
     # --- name resolution ---
@@ -681,7 +682,7 @@ ZSymbolTable: class {
         r: row
         r.declId = declId
         n: this.open.length
-        if n > 0 then r.defSeq = (this.open.get i: (n - 1)).defs
+        if n > 0 then r.defSeq = (this.open.get i: n - 1).defs
         this.typing.declRowsAdd :declId delta: 1
         this.entries.append r
     }
@@ -853,7 +854,7 @@ ZSymbolTable: class {
     discardTakenInCurrentScope: function {:this} is {
         n: this.open.length
         if n == 0 then return
-        this.discardTakenFrom start: (this.open.get i: (n - 1)).start
+        this.discardTakenFrom start: (this.open.get i: n - 1).start
     }
 
     # Drop every taken row laid at or above `start`, which is never below
@@ -969,7 +970,7 @@ ZSymbolTable: class {
                 with pit: e.lockPath.iterate do for seg: pit loop p.append seg
                 dst.append (ztyping.PinPath
                     path: p
-                    shared: (e.lockType == ztypes.zlockstate.shared)
+                    shared: e.lockType == ztypes.zlockstate.shared
                     mutable: e.lockMutable
                     alias: e.lockAlias
                     carried: false
@@ -1161,7 +1162,7 @@ ZSymbolTable: class {
         if conflictFound then {
             cType: ztypes.zlockstate.exclusive
             cPath: ListVal zast.nameid
-            cHolder: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: 0)
+            cHolder: ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: 0
             {
                 ce: this.entries.get i: conflictAt
                 cType = ce.lockType
@@ -1377,7 +1378,8 @@ ZSymbolTable: class {
                 blocks: (
                     (isPrefix p: path.listView whole: e.lockPath.listView) or
                     (
-                        (e.lockScope == ztypes.zlockscope.target) and
+                        e.lockScope ==
+                        ztypes.zlockscope.target and
                         (isPrefix
                             p: e.lockPath.listView
                             whole: path.listView
@@ -1427,7 +1429,7 @@ ZSymbolTable: class {
             idx = idx + 1
         }
         if first >= this.entries.length then return
-        rev: (List ZEntry) capacity: (this.entries.length - first)
+        rev: (List ZEntry) capacity: this.entries.length - first
         for this.entries.length > first loop rev.append this.entries.pop
         for rev.length > 0 loop {
             e: rev.pop
@@ -1656,7 +1658,7 @@ ZSymbolTable: class {
     unreachableKind: function {this: this.view} out u8 is {
         n: this.open.length
         if n == 0 then return divkind.none
-        f: (this.open.get i: (n - 1)).id
+        f: (this.open.get i: n - 1).id
         if f.isZero then return divkind.none
         ko: this.unreachableKinds.get key: f.u64
         match (
@@ -1696,12 +1698,11 @@ ZSymbolTable: class {
     # openLoopRun -- a loop's walk begins: mark its runs, with the scope
     # stack's height at its entry
     openLoopRun: function {:this entryStart: u64} is {
-        (this.loopRuns.append (looprun
+        this.loopRuns.append (looprun
             :entryStart
             breakStart: this.loopBreakTakes.length
             contStart: this.loopContinueTakes.length
             onceStart: this.loopOnceTakes.length
-        )
         )
     }
 
@@ -1750,7 +1751,7 @@ ZSymbolTable: class {
     recordContinueTakes: function {:this} is {
         n: this.loopRuns.length
         if n == 0 then return
-        run: this.loopRuns.get i: (n - 1)
+        run: this.loopRuns.get i: n - 1
         i: run.entryStart
         for i < this.entries.length loop {
             d: this.takenDeclAt :i
@@ -1764,7 +1765,7 @@ ZSymbolTable: class {
     recordBreakTakes: function {:this} is {
         n: this.open.length
         if n == 0 then return
-        p: (this.open.get i: (n - 1)).start
+        p: (this.open.get i: n - 1).start
         for p < this.entries.length loop {
             e: this.entries.get i: p
             if e.isTaken then this.loopBreakTakes.append e.declId.u64

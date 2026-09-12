@@ -270,12 +270,12 @@ kwresult: record { found: bool tt: toktype }
 
 # Byte-class predicates used by the scanner dispatch.
 isws: function {b: u8} out bool is {
-    return (b == ascii.space) or (b == ascii.ht)
+    return b == ascii.space or (b == ascii.ht)
 }
 
 # true when byte `b` may appear in a comment body (anything but CR/LF/NUL).
 iscommentbody: function {b: u8} out bool is {
-    return (b != ascii.nul) and (b != ascii.lf) and (b != ascii.cr)
+    return b != ascii.nul and (b != ascii.lf) and (b != ascii.cr)
 }
 
 # Bitmask flags for the 128-element charflags table below. Each
@@ -358,9 +358,11 @@ extendraw: function {stringparts: String delim_view: StringView} is {
 # true when byte `b` is a hex digit (0-9, a-f, A-F).
 ishexdigit: function {b: u8} out bool is {
     return (
-        ((b >= ascii.zero) and (b <= ascii.nine)) or
-        ((b >= ascii.upperA) and (b <= ascii.upperF)) or
-        ((b >= ascii.lowerA) and (b <= ascii.lowerF))
+        b >=
+        ascii.zero and
+        (b <= ascii.nine) or
+        (b >= ascii.upperA and (b <= ascii.upperF)) or
+        (b >= ascii.lowerA and (b <= ascii.lowerF))
     )
 }
 
@@ -391,7 +393,7 @@ utf8_encode_append: function {cp: u64 dst: String} is {
     if cp < 65536 then {
         # 1110xxxx 10xxxxxx 10xxxxxx  (4 + 6 + 6 payload bits)
         hi: cp >> 12
-        mid: (cp >> 6) & 63
+        mid: cp >> 6 & 63
         lo: cp & 63
         dst.appendByte (hi | 224).u8.orPanic
         dst.appendByte (mid | 128).u8.orPanic
@@ -400,8 +402,8 @@ utf8_encode_append: function {cp: u64 dst: String} is {
     }
     # 11110xxx 10xxxxxx 10xxxxxx 10xxxxxx  (3 + 6 + 6 + 6 payload bits)
     hi: cp >> 18
-    mid2: (cp >> 12) & 63
-    mid1: (cp >> 6) & 63
+    mid2: cp >> 12 & 63
+    mid1: cp >> 6 & 63
     lo: cp & 63
     dst.appendByte (hi | 240).u8.orPanic
     dst.appendByte (mid2 | 128).u8.orPanic
@@ -538,7 +540,7 @@ Tokenizer: class {
         c: this.atchar
         if c == ascii.backslash then return (this.acceptcharescape :pool)
         s0: this.tokpos
-        for (isstrc this.atchar) loop this.accept
+        for isstrc this.atchar loop this.accept
         if this.tokpos > s0 then {
             return (this.spanTok :pool tt: toktype.strMidTok s: s0 e: this.tokpos :line :col)
         }
@@ -607,7 +609,7 @@ Tokenizer: class {
         col: this.colno
         stringparts: String
         for true loop {
-            for (israwc this.atchar) loop {
+            for israwc this.atchar loop {
                 stringparts.appendByte this.atchar
                 this.accept
             }
@@ -755,7 +757,7 @@ Tokenizer: class {
                 db
             ) case some then {
                 hv: hexvalue b: db
-                val = (val << 4) | hv.u64
+                val = val << 4 | hv.u64
             } case none then {
                 j = dlen
             }
@@ -1133,7 +1135,7 @@ Tokenizer: class {
     # own pre-advance position rather than joined to the word.
     scanWordSpan: function {:this pool: zast.StringPool c: u8} out u64 is {
         cw: c
-        if (cw == ascii.plus) or (cw == ascii.minus) then {
+        if cw == ascii.plus or (cw == ascii.minus) then {
             this.accept
             cw = this.atchar
         }
@@ -1141,14 +1143,14 @@ Tokenizer: class {
         # dot-continuation rule turns on
         numbershaped: false
         if isdigit cw then numbershaped = true
-        for (isidchar this.atchar) loop this.accept
+        for isidchar this.atchar loop this.accept
         e_word: this.tokpos
         if numbershaped when this.atchar == ascii.dot then {
             dot_line: this.lineno
             dot_col: this.colno
             this.accept
             if isdigit this.atchar then {
-                for (isidchar this.atchar) loop this.accept
+                for isidchar this.atchar loop this.accept
                 e_word = this.tokpos
             } else {
                 this.nexttok = (token
@@ -1350,7 +1352,7 @@ Tokenizer: class {
             )
         }
 
-        if (c == ascii.lf) or (c == ascii.cr) then {
+        if c == ascii.lf or (c == ascii.cr) then {
             return (this.eolToken :pool :c :s0 :line :col)
         }
 

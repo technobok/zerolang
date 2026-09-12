@@ -17,43 +17,29 @@ public: unit {
     :formatSource
 }
 
-# where a value sits, which decides whether its parentheses are layout
-# (removable, re-inserted when the value breaks) or part of the meaning
-slotStatement: 1.u8
+# Where a value sits, written as the LOWEST `shapeRank` that takes parentheses
+# there, so `parensRequired` is one comparison. Measured by parsing every shape
+# in every position both ways and comparing the trees: the two rankings form a
+# 4x4 lattice whose every cell is one of these four thresholds.
 
-# the right-hand side of a binding in a code block
-slotRhs: 2.u8
+# a statement, a binding value, or an interpolation hole: the line or the
+# braces end it, so no shape needs parentheses (4 is above every rank)
+slotLine: 4.u8
 
-# an `if`/`when`/`while` condition, a `for` leading condition, a `match` subject
-slotCond: 3.u8
+# closed by a following keyword or label -- a condition, a labelled argument's
+# value, a `with` value, a parameter or result type, a definition's value: only
+# a labelled call or a control-flow value can run past it
+slotClause: 3.u8
 
-# an operand of a binary operation other than the leftmost
-slotOperand: 4.u8
+# juxtaposed with a following term -- an unnamed argument, or the leftmost
+# operand of a chain: a call absorbs what follows it, a binary operation does
+# not
+slotJuxta: 2.u8
 
-# the leftmost operand of a left-deep chain
-slotLeft: 5.u8
-
-# the leftmost operand when another operand of the chain is parenthesised
-slotLeftSym: 6.u8
-
-# the unnamed argument of a call
-slotArg: 7.u8
-
-# the parent of a dotted path
-slotPathParent: 8.u8
-
-# a parameter or result type
-slotType: 9.u8
-
-# an object field's value
-slotField: 10.u8
-
-# a position whose parentheses are never touched
-slotKeep: 11.u8
-
-# a labelled argument's value, where a single-argument application needs no
-# parentheses: the label after it returns to the outer call
-slotArgLabelled: 12.u8
+# juxtaposed with a following operator, dot or label -- a non-leftmost operand,
+# a callable, a path parent, a swap side, a reassignment target, a data
+# element: anything compound runs on
+slotTight: 1.u8
 
 # the outcome of formatting one source: the text, or why it was refused
 FmtResult: class {
@@ -472,7 +458,7 @@ Builder: class {
         } case unitdef then {
             return (this.visitUnit :id)
         } else {
-            return (this.visitValue :id slot: slotField wrapped: false)
+            return (this.visitValue :id slot: slotClause wrapped: false)
         }
     }
 
@@ -632,32 +618,6 @@ Builder: class {
         return ip.found
     }
 
-    # isApplication -- a call whose only argument is unnamed and a term
-    # (`List u64`), the shape that may lose its parentheses
-    isApplication: function {this: this.view id: zast.nodeid} out bool is {
-        n: this.node id: (this.innerOf :id)
-        match (
-            n
-        ) case call then {
-            # an INFIX call also carries one unnamed argument and is NOT an
-            # application: `a + b` is a binary operation, and isBinop answers
-            # for it. Without this the two would claim the same layout rule
-            if n.infix then return false
-            if n.arguments.count != 1 then return false
-            a: this.node id: (this.kid span: n.arguments i: 0)
-            match (
-                a
-            ) case namedoperation then {
-                if a.name.isZero.not then return false
-                return (this.isTerm id: a.operation)
-            } else {
-                return false
-            }
-        } else {
-            return false
-        }
-    }
-
     # isLabelledCall -- a call with a named argument
     isLabelledCall: function {this: this.view id: zast.nodeid} out bool is {
         n: this.node id: (this.innerOf :id)
@@ -680,33 +640,52 @@ Builder: class {
         }
     }
 
-    # parenIsLayout -- whether the parentheses around `inner` in `slot` are
-    # layout only, re-inserted by the printer when the value breaks
-    parenIsLayout: function {this: this.view inner: zast.nodeid slot: u8} out bool is {
-        term: this.isTerm id: inner
-        if slot == slotCond then {
-            if term then return true
-            return (this.isBinop id: inner)
+    # isComplex -- a value the grammar cannot leave bare wherever a following
+    # token could continue it: a call carrying a labelled argument, or a form
+    # that runs to a block
+    isComplex: function {this: this.view id: zast.nodeid} out bool is {
+        if (this.isLabelledCall :id) then return true
+        n: this.node id: (this.innerOf :id)
+        match (
+            n
+        ) case ifexpr then {
+            return true
+        } case caseexpr then {
+            return true
+        } case forexpr then {
+            return true
+        } case doexpr then {
+            return true
+        } case withexpr then {
+            return true
+        } case datablock then {
+            return true
+        } case statement then {
+            return true
+        } case functiondef then {
+            return true
+        } else {
+            return false
         }
-        if slot == slotStatement then return term
-        if slot == slotRhs then {
-            if term then return true
-            if (this.isBinop id: inner) then return true
-            return (this.isApplication id: inner)
-        }
-        if slot == slotLeft then {
-            if term then return true
-            return (this.isBinop id: inner)
-        }
-        if slot == slotOperand then return term
-        if slot == slotArg then return term
-        if slot == slotArgLabelled then {
-            if term then return true
-            return (this.isApplication id: inner)
-        }
-        if slot == slotType then return (this.isApplication id: inner)
-        if slot == slotField then return (this.isApplication id: inner)
-        return false
+    }
+
+    # shapeRank -- how much delimiting a value needs, as the rank the slot
+    # thresholds compare against: 0 a term, 1 a binary operation, 2 a call with
+    # no labelled argument, 3 a call WITH one or a control-flow value. A shape
+    # none of those name ranks 2, which parenthesises it wherever a bare call
+    # would need it
+    shapeRank: function {this: this.view id: zast.nodeid} out u8 is {
+        if (this.isTerm :id) then return 0
+        if (this.isComplex :id) then return 3
+        if (this.isBinop :id) then return 1
+        return 2
+    }
+
+    # parensRequired -- whether the GRAMMAR requires parentheses around `inner`
+    # in `slot`. Not whether the author wrote them: the printed form is a
+    # function of the tree and the position, and of nothing else
+    parensRequired: function {this: this.view inner: zast.nodeid slot: u8} out bool is {
+        return (this.shapeRank id: inner) >= slot
     }
 
     # visitExprChain -- an expression wrapper: with no budget yet, the spine
@@ -746,13 +725,13 @@ Builder: class {
             # a wrapper the parser made: nothing to consume
             return (this.visitValueB id: inner :slot :wrapped remaining: remaining - 1 :owned)
         }
-        layout: this.parenIsLayout :inner :slot
+        removable: (this.parensRequired :inner :slot).not
         innerNode: this.node id: inner
         # an INFIX call is not call-shaped: its parentheses are the layout pair
         # a binary operation owns, not the pair a call fills when it breaks
         isCall: innerNode.call
         if (this.isBinop id: inner) then isCall = false
-        if layout when isCall then {
+        if removable when isCall then {
             # a call fills the pair the printer inserts when it breaks, so the
             # written pair is dropped
             this.skipTok tt: zlexer.toktype.parenOpenTok
@@ -789,7 +768,7 @@ Builder: class {
                 callShape: true
             )
         }
-        if layout then {
+        if removable then {
             return (this.parenGroup
                 :body
                 open: (this.d.ifBreak brk: this.idOpen flat: 0)
@@ -897,18 +876,6 @@ Builder: class {
             operators.append ip.operator.u32
             cur = ip.lhs
         }
-        leftId: zast.nodeid.create from: (operands.get i: operands.length - 1)
-        leftSlot: slotLeft
-        if (this.isBinop id: leftId) then {
-            if (this.sameOperators :operators inner: leftId).not then leftSlot = slotLeftSym
-            j: u64
-            for j + 1 < operands.length loop {
-                oid: zast.nodeid.create from: (operands.get i: j)
-                opnode: this.node id: oid
-                if opnode.expression when (this.isBinop id: oid) then leftSlot = slotLeftSym
-                j = j + 1
-            }
-        }
         xs: ListVal u32
         idx: operands.length
         first: true
@@ -916,12 +883,14 @@ Builder: class {
             idx = idx - 1
             oid: zast.nodeid.create from: (operands.get i: idx)
             if first then {
-                xs.append (this.visitValueB id: oid slot: leftSlot wrapped: false :remaining :owned)
+                (xs.append
+                    (this.visitValueB id: oid slot: slotJuxta wrapped: false :remaining :owned)
+                )
             } else {
                 xs.append this.idSpace
                 xs.append (this.visitValue
                     id: (zast.nodeid.create from: (operators.get i: idx))
-                    slot: slotKeep
+                    slot: slotTight
                     wrapped: false
                 )
                 if wrapped then {
@@ -929,7 +898,7 @@ Builder: class {
                 } else {
                     xs.append this.idSpace
                 }
-                xs.append (this.visitValue id: oid slot: slotOperand wrapped: false)
+                xs.append (this.visitValue id: oid slot: slotTight wrapped: false)
             }
             first = false
         }
@@ -937,62 +906,6 @@ Builder: class {
         # fits, and breaks at its operators only when it does not
         if wrapped then return (this.d.group (this.d.concat xs))
         return (this.d.concat xs)
-    }
-
-    # isAssociative -- one of the operators a left-deep chain may spell without
-    # inner parentheses
-    isAssociative: function {this: this.view name: zast.nameid} out bool is {
-        (return
-            (zast.nameTextEq ast: this.ast ref: name s: "+") or (zast.nameTextEq
-                ast: this.ast
-                ref: name
-                s: "*"
-            ) or (zast.nameTextEq ast: this.ast ref: name s: "&") or (zast.nameTextEq
-                ast: this.ast
-                ref: name
-                s: "|"
-            )
-        )
-    }
-
-    # sameOperators -- whether every operator of a chain and every operator
-    # of the parenthesised chain `inner` at its left spell the same name
-    sameOperators: function {
-        this: this.view operators: ListVal u32 inner: zast.nodeid
-    } out bool is {
-        want: zast.nameid
-        i: u64
-        for i < operators.length loop {
-            opn: this.node id: (zast.nodeid.create from: (operators.get :i))
-            i = i + 1
-            match (
-                opn
-            ) case atomid then {
-                if want.isZero then want = opn.name
-                if opn.name != want then return false
-            } else {
-                return false
-            }
-        }
-        # only an associative operator makes the grouping redundant: a
-        # comparison chain reads as a mistake without its parentheses
-        if (this.isAssociative name: want).not then return false
-        cur: this.innerOf id: inner
-        for true loop {
-            n: this.node id: cur
-            ip: zast.infixPartsOf ast: this.ast :n
-            if ip.found.not then break
-            opn: this.node id: ip.operator
-            match (
-                opn
-            ) case atomid then {
-                if opn.name != want then return false
-            } else {
-                return false
-            }
-            cur = this.innerOf id: ip.lhs
-        }
-        return true
     }
 
     # visitCall -- a callable and its arguments: flat when they fit, else one
@@ -1009,7 +922,7 @@ Builder: class {
         if n.call.not then return 0
         callable: (this.visitValueB
             id: n.callable
-            slot: slotKeep
+            slot: slotTight
             wrapped: false
             :remaining
             :owned
@@ -1063,11 +976,11 @@ Builder: class {
         a: this.node :id
         if a.namedoperation.not then return (argdoc doc: 0 trailing: 0 forced: false)
         g: this.gapDocs cap: 0
-        forced: (first and g.marker and this.keepMarkers) or g.hasComment
+        forced: first and g.marker and this.keepMarkers or g.hasComment
         one: ListVal u32
         if g.lead > 0 then one.append g.lead
         if a.name.isZero then {
-            one.append (this.visitValue id: a.operation slot: slotArg wrapped: false)
+            one.append (this.visitValue id: a.operation slot: slotJuxta wrapped: false)
         } else {
             op: this.node id: a.operation
             if op.labelvalue then {
@@ -1076,7 +989,7 @@ Builder: class {
                 one.append (this.tokLabel name: a.name)
                 one.append (this.visitValue
                     id: a.operation
-                    slot: slotArgLabelled
+                    slot: slotClause
                     wrapped: false
                 )
             }
@@ -1151,7 +1064,7 @@ Builder: class {
         ) case dottedpath then {
             xs.append (this.visitValueB
                 id: n.parent
-                slot: slotPathParent
+                slot: slotTight
                 wrapped: false
                 :remaining
                 :owned
@@ -1167,7 +1080,7 @@ Builder: class {
     # holding a newline is printed verbatim
     visitString: function {:this id: zast.nodeid} out u32 is {
         n: this.node :id
-        parts: (zast.kidspan first: 0 count: 0)
+        parts: zast.kidspan first: 0 count: 0
         match (
             n
         ) case atomstring then {
@@ -1204,7 +1117,7 @@ Builder: class {
                 if hole < parts.count.u64 then {
                     xs.append (this.visitValue
                         id: (this.kid span: parts i: hole)
-                        slot: slotKeep
+                        slot: slotLine
                         wrapped: false
                     )
                 }
@@ -1245,7 +1158,7 @@ Builder: class {
         ) case reassignment then {
             xs.append (this.visitValueB
                 id: n.topath
-                slot: slotKeep
+                slot: slotTight
                 wrapped: false
                 :remaining
                 :owned
@@ -1265,11 +1178,11 @@ Builder: class {
         match (
             n
         ) case swapstmt then {
-            xs.append (this.visitValueB id: n.lhs slot: slotKeep wrapped: false :remaining :owned)
+            xs.append (this.visitValueB id: n.lhs slot: slotTight wrapped: false :remaining :owned)
             xs.append this.idSpace
             xs.append (this.tok tt: zlexer.toktype.swapTok)
             xs.append this.idSpace
-            xs.append (this.visitValue id: n.rhs slot: slotKeep wrapped: false)
+            xs.append (this.visitValue id: n.rhs slot: slotTight wrapped: false)
         } else null
         return (this.d.concat xs)
     }
@@ -1305,12 +1218,12 @@ Builder: class {
 
     # rhsValue -- the value of a binding or a reassignment
     rhsValue: function {:this id: zast.nodeid} out u32 is {
-        return (this.wrappedValue :id slot: slotRhs synthetic: 1)
+        return (this.wrappedValue :id slot: slotLine synthetic: 1)
     }
 
     # condValue -- a condition, which its context never wraps
     condValue: function {:this id: zast.nodeid} out u32 is {
-        return (this.wrappedValue :id slot: slotCond synthetic: 0)
+        return (this.wrappedValue :id slot: slotClause synthetic: 0)
     }
 
     # ---- statements ----
@@ -1320,7 +1233,7 @@ Builder: class {
     # stays across lines
     visitBlock: function {:this id: zast.nodeid} out u32 is {
         n: this.node :id
-        stmts: (zast.kidspan first: 0 count: 0)
+        stmts: zast.kidspan first: 0 count: 0
         match (
             n
         ) case statement then {
@@ -1384,12 +1297,12 @@ Builder: class {
             ) case assignment then {
                 return (this.visitAssignment id: n.statementline)
             } else {
-                return (this.visitValue id: n.statementline slot: slotStatement wrapped: false)
+                return (this.visitValue id: n.statementline slot: slotLine wrapped: false)
             }
         } case assignment then {
             return (this.visitAssignment :id)
         } else {
-            return (this.visitValue :id slot: slotStatement wrapped: false)
+            return (this.visitValue :id slot: slotLine wrapped: false)
         }
     }
 
@@ -1591,7 +1504,7 @@ Builder: class {
             if cond.name.isZero then return (this.condValue id: cond.operation)
             xs: ListVal u32
             xs.append (this.tokLabel name: cond.name)
-            xs.append (this.visitValue id: cond.operation slot: slotKeep wrapped: false)
+            xs.append (this.visitValue id: cond.operation slot: slotClause wrapped: false)
             return (this.d.concat xs)
         } else {
             return 0
@@ -1652,7 +1565,7 @@ Builder: class {
         p: this.c.parenRun
         subj: this.node :id
         if p == 0 then {
-            core: this.visitValue :id slot: slotCond wrapped: true
+            core: this.visitValue :id slot: slotClause wrapped: true
             xs.append (this.d.ifBreak brk: this.idOpen flat: 0)
             mid: ListVal u32
             mid.append this.idSoft
@@ -1675,7 +1588,7 @@ Builder: class {
             this.c.note msg: "more parentheses than the tree holds".string
             p = k
         }
-        layout: this.parenIsLayout :inner slot: slotCond
+        removable: (this.parensRequired :inner slot: slotClause).not
         innerNode: this.node id: inner
         isCall: innerNode.call
         this.skipTok tt: zlexer.toktype.parenOpenTok
@@ -1686,7 +1599,7 @@ Builder: class {
         } else {
             core = (this.visitValueB
                 id: inner
-                slot: slotCond
+                slot: slotClause
                 wrapped: true
                 remaining: k - 1
                 owned: p - 1
@@ -1694,7 +1607,7 @@ Builder: class {
         }
         h: this.gapDocs cap: 0
         this.skipTok tt: zlexer.toktype.parenCloseTok
-        if layout when isCall.not then {
+        if removable when isCall.not then {
             xs.append (this.d.ifBreak brk: this.idOpen flat: 0)
         } else {
             xs.append this.idOpen
@@ -1712,7 +1625,7 @@ Builder: class {
         }
         xs.append (this.d.indent (this.d.concat mid))
         xs.append this.idSoft
-        if layout when isCall.not then {
+        if removable when isCall.not then {
             xs.append (this.d.ifBreak brk: this.idClose flat: 0)
         } else {
             xs.append this.idClose
@@ -1729,11 +1642,11 @@ Builder: class {
             xs.append (this.tok tt: zlexer.toktype.withTok)
             xs.append this.idSpace
             xs.append (this.tokLabel name: n.name)
-            xs.append (this.visitValue id: n.value slot: slotKeep wrapped: false)
+            xs.append (this.visitValue id: n.value slot: slotClause wrapped: false)
             xs.append this.idSpace
             xs.append (this.tok tt: zlexer.toktype.doTok)
             xs.append this.idSpace
-            xs.append (this.visitValue id: n.body slot: slotStatement wrapped: false)
+            xs.append (this.visitValue id: n.body slot: slotLine wrapped: false)
         } else null
         return (this.d.concat xs)
     }
@@ -1756,7 +1669,7 @@ Builder: class {
                 xs.append this.idSpace
                 xs.append (this.tok tt: zlexer.toktype.outTok)
                 xs.append this.idSpace
-                xs.append (this.visitValue id: n.outType slot: slotKeep wrapped: false)
+                xs.append (this.visitValue id: n.outType slot: slotClause wrapped: false)
             }
         } else null
         return (this.d.concat xs)
@@ -1787,12 +1700,12 @@ Builder: class {
                     xs.append this.idSpace
                     xs.append (this.tok tt: zlexer.toktype.outTok)
                     xs.append this.idSpace
-                    xs.append (this.visitValue id: n.returntype slot: slotType wrapped: false)
+                    xs.append (this.visitValue id: n.returntype slot: slotClause wrapped: false)
                 } else if kind == zlexer.toktype.outxTok then {
                     xs.append this.idSpace
                     xs.append (this.tok tt: zlexer.toktype.outxTok)
                     xs.append this.idSpace
-                    xs.append (this.visitValue id: n.returntype slot: slotType wrapped: false)
+                    xs.append (this.visitValue id: n.returntype slot: slotClause wrapped: false)
                 } else if kind == zlexer.toktype.isTok then {
                     xs.append this.idSpace
                     xs.append (this.tok tt: zlexer.toktype.isTok)
@@ -1982,14 +1895,14 @@ Builder: class {
         forced: false
         # a data block of bare elements fills its rows, the author's own row
         # breaks kept; anything else is one item per line when broken
-        filling: (kind == 3) and (span.count > 1) and (this.allUnlabelled :span)
+        filling: kind == 3 and (span.count > 1) and (this.allUnlabelled :span)
         fillKids: ListVal u32
         prevEnd: u32
         i: u64
         for i < span.count.u64 loop {
             itemId: this.kid :span :i
             g: this.gapDocs cap: 1
-            forced = forced or ((i == 0) and g.marker and this.keepMarkers) or g.hasComment
+            forced = forced or (i == 0 and g.marker and this.keepMarkers) or g.hasComment
             if filling then {
                 if i == 0 then inner.append this.idLine
                 prevEnd = this.fillItem :g :itemId first: i == 0 :prevEnd dst: fillKids
@@ -2000,7 +1913,7 @@ Builder: class {
         }
         if filling then inner.append (this.d.fill fillKids)
         g: this.gapDocs cap: 1
-        forced = forced or g.hasComment or ((span.count == 0) and g.marker and this.keepMarkers)
+        forced = forced or g.hasComment or (span.count == 0 and g.marker and this.keepMarkers)
         if g.trailing > 0 then inner.append g.trailing
         if g.dangling > 0 then {
             inner.append this.idHard
@@ -2111,7 +2024,7 @@ Builder: class {
             } else null
             xs: ListVal u32
             xs.append (this.tokLabel name: n.name)
-            xs.append (this.visitValue id: n.operation slot: slotType wrapped: false)
+            xs.append (this.visitValue id: n.operation slot: slotClause wrapped: false)
             return (this.d.concat xs)
         } else {
             this.c.note msg: "a parameter the formatter does not print".string
@@ -2133,12 +2046,12 @@ Builder: class {
             } else null
             if n.name.isZero then return (this.visitValue
                 id: n.operation
-                slot: slotKeep
+                slot: slotTight
                 wrapped: false
             )
             xs: ListVal u32
             xs.append (this.tokLabel name: n.name)
-            xs.append (this.visitValue id: n.operation slot: slotKeep wrapped: false)
+            xs.append (this.visitValue id: n.operation slot: slotTight wrapped: false)
             return (this.d.concat xs)
         } else {
             this.c.note msg: "a data element the formatter does not print".string
@@ -2321,12 +2234,12 @@ refused: function {msg: String.take line: u32 col: u32} out FmtResult is {
     return (FmtResult ok: false text: String :msg :line :col)
 }
 
-# formatSource -- `source` laid out at `width` columns; `collapse` ignores
-# the author's keep-open markers; `raw` copies the bytes instead (the cursor
-# proof). A file that does not parse, walks out of step with its tokens, or
-# prints to a different tree is refused untouched; `gate` false skips that
+# formatOnce -- one layout pass over `source` at `width` columns; `collapse`
+# ignores the author's keep-open markers; `raw` copies the bytes instead (the
+# cursor proof). A file that does not parse, walks out of step with its tokens,
+# or prints to a different tree is refused untouched; `gate` false skips that
 # last comparison, for looking at what a refused file would have become
-formatSource: function {
+formatOnce: function {
     source: StringView
     width: u32
     collapse: bool
@@ -2394,4 +2307,37 @@ formatSource: function {
         )
     }
     return (FmtResult ok: true :text msg: String line: 0 col: 0)
+}
+
+# formatSource -- `source` laid out until it SETTLES, which is what makes the
+# printer a canonicaliser: `zl format --check` accepts exactly the text
+# `zl fmt` writes.
+#
+# One pass is not always a fixed point. Where the layout rules drop a
+# parenthesis the grammar does not need, the chain it sat in flattens on the
+# re-parse -- `(a == b) and c` is two operands, `a == b and c` is three -- and a
+# group with more operators in it breaks at more of them. So the text a first
+# pass produces can lay out differently from the text it was produced from. The
+# cause is that a chain's operand count still depends on a wrapper the tree
+# should not be recording at all, and it goes when the wrapper does; until then
+# the printer reaches the fixed point rather than leaving it to the caller.
+#
+# Two passes have always been enough. The cap is three, and a result that has
+# not settled by then is returned as it stands rather than refused: it is
+# correct text, only not yet canonical.
+formatSource: function {
+    source: StringView
+    width: u32
+    collapse: bool
+    raw: bool
+    gate: bool
+} out FmtResult is {
+    first: formatOnce :source :width :collapse :raw :gate
+    if raw then return first
+    if first.ok.not then return first
+    if first.text.stringView == source then return first
+    second: formatOnce source: first.text.stringView :width :collapse :raw :gate
+    if second.ok.not then return second
+    if second.text.stringView == first.text then return second
+    return (formatOnce source: second.text.stringView :width :collapse :raw :gate)
 }
