@@ -656,21 +656,6 @@ singleLineBodyOf: function {ast: Ast.view clauseId: u32} out zast.nodeid is {
     }
 }
 
-# innerBinopOperator -- the operator name id of the binary operation at `id`,
-# 0 when the node is not a bare one (a parenthesised one is an `expression`).
-# An infix call IS one, and answers here like any other.
-innerBinopOperator: function {ast: Ast.view id: zast.nodeid} out zast.nameid is {
-    n: ast.nodes.get i: id.u64
-    ip: zast.infixPartsOf :ast :n
-    if ip.found then return (atomNameIdOf n: (ast.nodes.get i: ip.operator.u64))
-    return zast.nameid
-}
-
-# isLogicOp -- the name id is bool's `and` or `or`.
-isLogicOp: function {id: zast.nameid} out bool is {
-    return (id == zast.names.wkAnd) or (id == zast.names.wkOr)
-}
-
 # isElseIfWrap -- the else clause is the synthetic block an `else if` chain parses
 # to (a single statement line wrapping an `if`), not a real braced `else { ... }`.
 isElseIfWrap: function {ast: Ast.view n: astnode.view} out bool is {
@@ -1704,7 +1689,6 @@ Analysis: class {
         ipW: zast.infixPartsOf :ast :n
         if ipW.found then {
             this.checkBoolLiteralCompare :ast opId: ipW.operator lhsId: ipW.lhs rhsId: ipW.rhs
-            this.checkMixedLogicalChain :ast opId: ipW.operator lhsId: ipW.lhs
             if this.opts.arch then {
                 this.checkLiteralCompare :ast opId: ipW.operator lhsId: ipW.lhs rhsId: ipW.rhs
             }
@@ -1875,27 +1859,6 @@ Analysis: class {
             lo: xLo
             hi: litHi
             repl: "\{xText}\{suffix}"
-        )
-    }
-
-    # checkMixedLogicalChain -- L029: a binop chain mixing `and` / `or` with a
-    # different operator without parentheses. Chains fold left with no
-    # precedence, so `a or b and c` is `(a or b) and c` and `x or y == z` is
-    # `(x or y) == z`. The fold's lhs is the only place an unparenthesised
-    # inner binop can sit; a parenthesised one is an `expression` node.
-    checkMixedLogicalChain: function {:this ast: Ast.view opId: zast.nodeid lhsId: zast.nodeid} is {
-        opNm: atomNameIdOf n: (ast.nodes.get i: opId.u64)
-        innerNm: innerBinopOperator :ast id: lhsId
-        if innerNm.isZero then return
-        if innerNm == opNm then return
-        if (isLogicOp id: opNm).not when (isLogicOp id: innerNm).not then return
-        p: zast.posOf n: (ast.nodes.get i: opId.u64)
-        (this.warn
-            code: "L029"
-            msg: "a chain mixing `and` / `or` with another operator folds left with no precedence: `a or b and c` is `(a or b) and c`; parenthesise the grouping meant".string
-            line: p.line
-            col: p.col
-            width: 1
         )
     }
 
