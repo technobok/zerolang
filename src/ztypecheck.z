@@ -105,8 +105,6 @@ nodeId: function {n: astnode.view} out zast.nodeid is {
         return n.nodeid
     } case labelvalue then {
         return n.nodeid
-    } case binop then {
-        return n.nodeid
     } case dottedpath then {
         return n.nodeid
     } case expression then {
@@ -219,31 +217,6 @@ stampGate: function {st: zenv.ZSymbolTable nid: u64 tid: ztypes.tid} is {
     ztyping.nodeTypeSet tbl: st.typing.nodeType :nid :tid
 }
 
-# stampBinopOp -- record which type DECLARES a binop's operator and which method
-# the operator resolved to, so emission asks the resolution rather than the
-# operator's spelling. Routed exactly as stampGate routes a type stamp: an
-# instance walk writes the mono pair, keyed (monoId << 32 | nodeid) and
-# substituted through the instance's type args, and a template walk's own
-# generic-param answer is dropped because no template body is emitted. A `method` of 0 is the truthful record for an
-# operator no declaration was found for -- a comparison that fell back to
-# structural equality -- and the owner still stands.
-stampBinopOp: function {
-    st: zenv.ZSymbolTable
-    nid: u64
-    owner: ztypes.tid
-    method: ztypes.tid
-} is {
-    if owner.isZero then return
-    if st.typing.curMonoStamp > 0 then {
-        mk: (ztyping.monostamp mono: st.typing.curMonoStamp node: nid)
-        st.typing.monoBinopOwner.set key: mk value: (monoSubstTid :st tid: owner)
-        st.typing.monoBinopMethod.set key: mk value: method
-        return
-    }
-    if (stampParamSuppressed :st tid: owner) then return
-    st.typing.binopOwner.set key: nid value: owner
-    st.typing.binopMethod.set key: nid value: method
-}
 
 # record a diagnostic (with a note/hint) into the typing tables.
 addErrorH: function {
@@ -2349,12 +2322,6 @@ nodeMentionsName: function {ast: Ast.view n: astnode.view name: StringView} out 
         (return
             (nodeMentionsName :ast n: (ast.nodes.get i: n.callable.u64) :name
             ) or (anyArgMentionsName :ast span: n.arguments :name)
-        )
-    } case binop then {
-        return (nodeMentionsName :ast n: (ast.nodes.get i: n.lhs.u64) :name) or (nodeMentionsName
-            :ast
-            n: (ast.nodes.get i: n.rhs.u64)
-            :name
         )
     } case statement then {
         return (anyKidMentionsName :ast span: n.statements :name)
@@ -13968,10 +13935,6 @@ scanCallsInNode: function {
                 nameId: node.name
             )
         }
-    } case binop then {
-        # the operator atom names a method, never a definition to demand
-        scanCallsAt :st :frame :ast nid: node.lhs
-        scanCallsAt :st :frame :ast nid: node.rhs
     } case statement then {
         # the block shapes descend through their OWN children: the generic arm
         # below builds a list per node visited, and these are most of the nodes
@@ -27119,398 +27082,6 @@ checkIf: function {
     return result
 }
 
-# reportMissingBinopMethod -- the receiver declares no method for this operator.
-# `!=` derives from `==`, so it only errors when `==` is unavailable too, and a
-# comparison against a compatible type answers bool rather than nothing.
-reportMissingBinopMethod: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    binop: binref
-    opnId: zast.nameid
-    lt: ztypes.tid
-    dt: ztypes.tid
-    isCmp: bool
-} out ztypes.tid is {
-    opn: zast.nameTextCopy :ast ref: opnId
-    if isCmp then {
-        # `!=` derives from `==`: only error when `==` is also unavailable.
-        if opn == "!=" then {
-            (forceMemberOf
-                :st
-                frame: st.curFrame
-                :ast
-                parentTypeId: dt
-                nameId: zast.names.wkOpEq
-            )
-            eqEdge: st.typing.declChildOfId parentTypeId: dt nameId: zast.names.wkOpEq
-            if eqEdge.some then {
-                boD: builtinTidTc :ast :st base: "bool"
-                if boD > 0 then return boD
-                return (ztypes.tid.create from: lt)
-            }
-        }
-        # Ordering comparisons have no structural fallback: unlike `==` /
-        # `!=` there is no structural ordering, so the operand type must
-        # declare the operator (numerics declare all six). An undeclared
-        # `<` / `>` / `<=` / `>=` -- on a resultval or any other aggregate --
-        # is a hard error, not invalid C.
-        isOrd: (opn == "<") or (opn == ">") or (opn == "<=") or (opn == ">=")
-        if isOrd then {
-            lnOr: st.reg.nameOf tid: (ztypes.tid.create from: dt.u64)
-            mgOr: "type '\{lnOr}' has no '\{opn}' method"
-            (addError
-                :st
-                nodeid: binop.nid
-                lineno: binop.lineno
-                colno: binop.colno
-                e: zast.err.typeError
-                msg: mgOr
-            )
-            return (ztypes.tid.create from: 0)
-        }
-        # A concrete type that declares no comparison method -- a class or
-        # union without `==`, or a record/variant that opted out with
-        # `==: null` -- is a hard error rather than invalid C.
-        if (memberStrictType :st bt: dt) then {
-            lnc: st.reg.nameOf tid: (ztypes.tid.create from: dt.u64)
-            mgc: "type '\{lnc}' has no '\{opn}' method"
-            (addError
-                :st
-                nodeid: binop.nid
-                lineno: binop.lineno
-                colno: binop.colno
-                e: zast.err.typeError
-                msg: mgc
-            )
-            return (ztypes.tid.create from: 0)
-        }
-        bo: builtinTidTc :ast :st base: "bool"
-        if bo > 0 then return bo
-        return (ztypes.tid.create from: lt)
-    }
-    # A concrete aggregate (record / class / union / variant, including a
-    # generic mono like resultval) that declares no arithmetic operator is a
-    # type error rather than invalid C. Type params, protocols, facets and
-    # non-aggregates resolve elsewhere and keep the coercible lhs result.
-    aTt: st.reg.typetypeOf typeId: dt
-    aAgg: (
-        (aTt == ztypes.ztypetype.recordType) or
-        (aTt == ztypes.ztypetype.classType) or
-        (aTt == ztypes.ztypetype.unionType) or
-        (aTt == ztypes.ztypetype.variantType)
-    )
-    if aAgg then {
-        ln: st.reg.nameOf tid: (ztypes.tid.create from: dt.u64)
-        noMethodMsg: "type '\{ln}' has no '\{opn}' method"
-        (addError
-            :st
-            nodeid: binop.nid
-            lineno: binop.lineno
-            colno: binop.colno
-            e: zast.err.typeError
-            msg: noMethodMsg
-        )
-        return (ztypes.tid.create from: 0)
-    }
-    return (ztypes.tid.create from: lt)
-}
-
-# checkBinopMethodArg -- the right operand must suit the operator method's declared
-# parameter, and a comparison answers bool whatever the method's own return says.
-checkBinopMethodArg: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    binop: binref
-    lt: ztypes.tid
-    rt: ztypes.tid
-    opo: u64
-    isCmp: bool
-    ltLit: bool
-} out ztypes.tid is {
-    oParamT: ztypes.tid
-    p0n: (positionalParamNameId
-        :st
-        funcId: (ztypes.tid.create from: opo.u64)
-        idx: 0
-        skipRecv: true
-    )
-    if p0n.isZero.not then {
-        ppo: (st.typing.declChildOfId
-            parentTypeId: (ztypes.tid.create from: opo.u64)
-            nameId: p0n
-        )
-        match (
-            ppo
-        ) case some then {
-            oParamT = ztypes.tid.create from: ppo
-        } case none then null
-    }
-    if oParamT > 0 when rt > 0 when (typesCompatible :ast :st a: rt b: oParamT).not then {
-        skipA: false
-        strT9x: builtinTidTc :ast :st base: "String"
-        svT9x: builtinTidTc :ast :st base: "StringView"
-        rSty: (rt == strT9x) or (rt == svT9x)
-        pSty: (oParamT == strT9x) or (oParamT == svT9x)
-        if rSty when pSty then skipA = true
-        ptt: st.reg.typetypeOf typeId: oParamT
-        if ptt == ztypes.ztypetype.protocolType then skipA = true
-        if ptt == ztypes.ztypetype.facetType then skipA = true
-        if ptt == ztypes.ztypetype.genericParam then skipA = true
-        if ptt == ztypes.ztypetype.functionType then skipA = true
-        if skipA.not then {
-            ea: st.reg.nameOf tid: (ztypes.tid.create from: oParamT.u64)
-            aa: st.reg.nameOf tid: (ztypes.tid.create from: rt.u64)
-            # an unresolved got-side renders empty: suppress the
-            # knock-on when a prior error explains it, else name it
-            if aa.length == 0 then {
-                if st.typing.errors.length > 0 then return (ztypes.tid.create from: 0)
-                aa = "an unresolved value".string
-            }
-            mma: "argument type mismatch: expected \{ea}, got \{aa}"
-            (addError
-                :st
-                nodeid: binop.nid
-                lineno: binop.lineno
-                colno: binop.colno
-                e: zast.err.callError
-                msg: mma
-            )
-            return (ztypes.tid.create from: 0)
-        }
-    }
-    if isCmp then {
-        cb: builtinTidTc :ast :st base: "bool"
-        if cb > 0 then return cb
-        return (ztypes.tid.create from: lt)
-    }
-    if ltLit then return (ztypes.tid.create from: lt)
-    oro: methodReturnOf :st mid: (ztypes.tid.create from: opo.u64)
-    match (
-        oro
-    ) case some then {
-        return oro
-    } case none then null
-    return (ztypes.tid.create from: lt)
-}
-
-# checkBinopMethodDispatch -- resolve a binary operator as a declared method on
-# the lhs type: materialise a bare-literal lhs for dispatch, chase typedef bases
-# to the type that declares the operator, arg-check the rhs against the method's
-# first parameter, and return the result type. For a comparison (isCmp) an
-# undeclared operator falls back to bool -- structural `==`/`!=` on records and
-# variants; for arithmetic an undeclared operator on a concrete type is an error
-# and a bare-literal lhs keeps its coercible literal result. Returns 0 on an
-# emitted arg-mismatch.
-checkBinopMethodDispatch: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    binop: binref
-    opnId: zast.nameid
-    lt: ztypes.tid
-    rt: ztypes.tid
-    isCmp: bool
-} out ztypes.tid is {
-    ltLit: isLiteralTypeId :st tid: (ztypes.tid.create from: lt.u64)
-    dt: lt
-    if ltLit then dt = materialiseLiteral :ast :st :unitDecl t: lt
-    (forceMemberOf :st frame: st.curFrame :ast parentTypeId: dt nameId: opnId)
-    opo: st.typing.declChildOfId parentTypeId: dt nameId: opnId
-    # `!=` on a type that writes its own `==` is that `==` negated, and looking
-    # for it in the typedef BASE would answer with the base's raw comparison
-    # instead -- silently discarding the equality the author defined. The
-    # derived-inequality leg below owns this case, so the chase stops here and
-    # leaves it to it.
-    chase: true
-    if opo.none when opnId == zast.names.wkOpNe then {
-        (forceMemberOf :st frame: st.curFrame :ast parentTypeId: dt nameId: zast.names.wkOpEq)
-        eqHere: st.typing.declChildOfId parentTypeId: dt nameId: zast.names.wkOpEq
-        if eqHere.some then chase = false
-    }
-    if chase then {
-        for opo.none while (typedefBaseOf :st tid: (ztypes.tid.create from: dt.u64)) > 0 loop {
-            dt = typedefBaseOf :st tid: (ztypes.tid.create from: dt.u64)
-            (forceMemberOf :st frame: st.curFrame :ast parentTypeId: dt nameId: opnId)
-            opo = st.typing.declChildOfId parentTypeId: dt nameId: opnId
-        }
-    }
-    # a Box is a heap pointer around ONE valtype and declares no members of its
-    # own, so its operators are the boxed element's -- ALWAYS, not only when
-    # the Box itself resolves nothing. Under --eager every member is minted,
-    # the Box then answers the lookup with an edge of its own, and the operator
-    # would be attributed to a type that declares no operators: the same
-    # program resolved `Box i64 + i64` to i64 when demanded and to Box_i64 when
-    # eager. The element's declaration wins wherever there is one.
-    if (st.reg.isBoxOf tid: dt) when (st.reg.genericArgCount specId: dt) == 1 then {
-        bx: st.reg.genericArgAt specId: dt ordinal: 0
-        if bx > 0 then {
-            bxt: ztypes.tid.create from: bx.u64
-            (forceMemberOf :st frame: st.curFrame :ast parentTypeId: bxt nameId: opnId)
-            bxo: st.typing.declChildOfId parentTypeId: bxt nameId: opnId
-            match (
-                bxo
-            ) case some then {
-                dt = bxt
-                opo = optionval.some bxo
-            } case none then null
-        }
-    }
-    bmid: ztypes.tid
-    match (
-        opo
-    ) case some then {
-        bmid = ztypes.tid.create from: opo.u64
-    } case none then null
-    # the same refusal checkDotted makes for the named call form. An operator
-    # is the call form for a one-argument method, so an operator declared
-    # `{:this rhs: type}` on an interface is the self-typed case every time --
-    # which is why every operator on a facet hit this and no named method did
-    # until one was written to.
-    if (refuseSelfTypedMember
-        :st
-        :ast
-        recvTid: dt
-        nameId: opnId
-        nodeid: binop.nid
-        lineno: binop.lineno
-        colno: binop.colno
-    ) then return (ztypes.tid.create from: 0)
-    stampBinopOp :st nid: binop.nid.u64 owner: dt method: bmid
-    # CALL == BINOP: the left operand is the receiver of the operator method,
-    # and locks for the operation's duration by that method's marker -- so a
-    # writer operator on a view-held value is refused as a writer method is.
-    # A literal left operand has no path and locks nothing; the derived `!=`
-    # and the structural-equality legs resolve no method and take no lock.
-    if bmid.isZero.not then {
-        lhsN: ast.nodes.get i: binop.lhs.u64
-        lhsShared: methodReceiverIsView :st mid: bmid
-        (lockTransientReceiver
-            :ast
-            :st
-            recv: lhsN
-            holderId: binop.nid.u64
-            shared: lhsShared
-            nodeid: binop.nid
-            lineno: binop.lineno
-            colno: binop.colno
-        )
-    }
-    match (
-        opo
-    ) case some then {
-        return (checkBinopMethodArg
-            :st
-            :ast
-            :binop
-            :lt
-            :rt
-            :opo
-            :isCmp
-            :ltLit
-        )
-    } case none then {
-        return (reportMissingBinopMethod
-            :st
-            :ast
-            :binop
-            :opnId
-            :lt
-            :dt
-            :isCmp
-        )
-    }
-}
-
-# checkBinop -- type a binary operator expression. Both operands are walked (so
-# their nodes are stamped), then the operator resolves as a declared method on
-# the operand type via checkBinopMethodDispatch (comparisons yield bool; an
-# undeclared comparison falls back to structural equality).
-checkBinop: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    binop: binref
-} out ztypes.tid is {
-    result: ztypes.tid
-    # AN OPERATOR IS AN IDENTIFIER, and a numeric literal names no method and
-    # never can. It reaches this slot from the shape a call takes when a second
-    # argument is written without its name: `f 10 3` is three paths, and three
-    # paths are the operator form -- receiver `f`, operator `10`, argument `3`
-    # -- not two arguments. Asked BEFORE the operands are walked, because
-    # walking the lhs reports `f` as a bare function reference first and buries
-    # the mistake that produced it.
-    {
-        opLit: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: binop.operator.u64))
-        if opLit.length > 0 when (isNumericLiteralName name: opLit.stringView) then {
-            mLit: "'\{opLit}' is not an operator: an operator is an identifier"
-            hLit: "a call takes at most one unlabelled argument -- give every later argument its parameter name".string
-            nLit: String
-            opLn: nodeLine n: (ast.nodes.get i: binop.operator.u64)
-            opCl: nodeCol n: (ast.nodes.get i: binop.operator.u64)
-            (addErrorH
-                :st
-                nodeid: binop.operator
-                lineno: opLn
-                colno: opCl
-                e: zast.err.callError
-                msg: mLit
-                note: nLit
-                hint: hLit
-                width: opLit.length.u32.orPanic
-            )
-            return (ztypes.tid.create from: 0)
-        }
-    }
-    # an operand that typed to nothing and raised nothing is an unresolvable
-    # name: report it here, where the operand is consumed. Without it the 0
-    # silently disables the dispatch's own checks and the emitter writes the
-    # bare name into the C -- the same rule the argument and return legs follow.
-    errL: st.typing.errors.length
-    lt: checkValueAt :st :unitDecl :ast nid: binop.lhs
-    if lt.u64 == 0 when st.typing.errors.length == errL then {
-        (reportUnresolvedValue
-            :st
-            :unitDecl
-            :ast
-            nid: binop.lhs
-        )
-    }
-    errR: st.typing.errors.length
-    rt: checkValueAt :st :unitDecl :ast nid: binop.rhs
-    if rt.u64 == 0 when st.typing.errors.length == errR then {
-        (reportUnresolvedValue
-            :st
-            :unitDecl
-            :ast
-            nid: binop.rhs
-        )
-    }
-    # both operands are consumed here and the result -- a bool, a sum, a
-    # joined String -- is a fresh value that aliases neither: a pin the right
-    # operand's projection (`b.stringView`) left pending must not reach the
-    # binding. The left operand's was dropped when the right was walked.
-    drainPendingBorrow :st
-    # the operator's name id and comparison shape are read through a view
-    # scoped to this block: the dispatch below lends ast
-    opnId: zast.nameid
-    isCmp: false
-    {
-        opnId = atomNameId :ast n: (ast.nodes.get i: binop.operator.u64)
-        opn: zast.nameTextAt :ast ref: opnId
-        isCmp = isComparisonOp name: opn.stringView
-    }
-    result = checkBinopMethodDispatch :st :unitDecl :ast :binop :opnId :lt :rt :isCmp
-    tdb2: typedefBaseOf :st tid: result
-    if tdb2 > 0 then result = tdb2
-    # Structural pass-through: the SAME parameter on both sides flows
-    # through arithmetic as itself (the per-instance clone checks remain
-    # the arithmetic backstop); mixed operands stay untyped.
-    if result > 0 when (st.reg.isTypeParamOf tid: result) when (
-        result == rt
-    ).not then return (ztypes.tid.create from: 0)
-    if result > 0 then stampGate :st nid: binop.nid.u64 tid: result
-    return result
-}
 
 # argIsTrivial -- true when a call argument's operation is a hoisting no-op: a
 # bare atom, a labelvalue, a string literal without interpolation, or an
@@ -27729,9 +27300,9 @@ memberIsSelfTyped: function {
 }
 
 # refuseSelfTypedMember -- report and answer true when `nameId` names a member
-# of an interface-typed receiver that cannot be dispatched. Both call forms ask
-# it: a dotted call reaches it through checkDotted, an operator through
-# checkBinopMethodDispatch, and neither should be deciding this for itself.
+# of an interface-typed receiver that cannot be dispatched. checkDotted asks
+# it, and an operator reaches it the same way: the infix spelling IS a dotted
+# call, so one refusal serves both.
 refuseSelfTypedMember: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -31056,7 +30627,7 @@ unresolvedBareCallable: function {
     nid: zast.nodeid
 } out String is {
     # the row is read through a view scoped to this block (1 expression,
-    # 2 call, 3 binop, 4 atomid, 5 dottedpath, 0 anything else): the name
+    # 2 call, 3 infix, 4 atomid, 5 dottedpath, 0 anything else): the name
     # probe below lends ast exclusively
     arm: u32
     innerId: zast.nodeid
@@ -31084,10 +30655,6 @@ unresolvedBareCallable: function {
                 lhsId = ipu.lhs
                 rhsId = ipu.rhs
             }
-        } case binop then {
-            arm = 3
-            lhsId = n.lhs
-            rhsId = n.rhs
         } case atomid then {
             arm = 4
             nameId = n.name
@@ -34823,8 +34390,6 @@ checkCase: function {
 rowarm: variant {
     # the row holds a call
     call: null
-    # the row holds a binop
-    binop: null
     # the row holds an atomid
     atomid: null
     # the row holds an atomstring
@@ -34873,8 +34438,6 @@ rowArmAt: function {ast: Ast.view nid: zast.nodeid} out rowarm is {
         n
     ) case call then {
         return rowarm.call
-    } case binop then {
-        return rowarm.binop
     } case atomid then {
         return rowarm.atomid
     } case atomstring then {
@@ -35196,7 +34759,7 @@ caseClauseRefAt: function {ast: Ast.view nid: zast.nodeid} out caseclauseref is 
 # binref -- what the binary-operator walk reads of its row: the operand and
 # operator ids and the position, as plain values.
 binref: record {
-    # the binop node this was read from
+    # the node this was read from
     nid: zast.nodeid
     # the left operand
     lhs: zast.nodeid
@@ -35204,9 +34767,9 @@ binref: record {
     operator: zast.nodeid
     # the right operand
     rhs: zast.nodeid
-    # the line to report this binop against
+    # the line to report this operation against
     lineno: u32
-    # the column to report this binop against
+    # the column to report this operation against
     colno: u32
 }
 
@@ -35214,19 +34777,9 @@ binref: record {
 # other arm). AN INFIX CALL IS A BINARY OPERATION: `a op b` parses to the call
 # form, so its operands and operator live in the callable's dotted path and its
 # one unlabelled argument. Every walk that reads a binary operation reads it
-# through here, and so never learns which spelling it was written in.
+# through here, so the layout is described once rather than per walk.
 binRefAt: function {ast: Ast.view nid: zast.nodeid} out binref is {
     n: ast.nodes.get i: nid.u64
-    if n.binop then {
-        return (binref
-            :nid
-            lhs: n.lhs
-            operator: n.operator
-            rhs: n.rhs
-            lineno: n.lineno
-            colno: n.colno
-        )
-    }
     ip: zast.infixPartsOf :ast :n
     if ip.found then {
         p: zast.posOf :n
@@ -35693,9 +35246,6 @@ checkValueArmAt: function {
     } case dottedpath then {
         dr: dpRefAt :ast :nid
         return (checkDotted :st :unitDecl :ast dp: dr coerce: true)
-    } case binop then {
-        br: binRefAt :ast :nid
-        return (checkBinop :st :unitDecl :ast binop: br)
     } case atomid then {
         ar: atomRefAt :ast :nid
         return (checkAtomid :st :unitDecl :ast node: ar)
@@ -38166,16 +37716,6 @@ foldLiteralStamps: function {st: zenv.ZSymbolTable frame: ztypes.declid program:
     }
 }
 
-# isBinopNode -- kind test without narrowing (the caller keeps the astnode handle).
-isBinopNode: function {n: astnode.view} out bool is {
-    match (
-        n
-    ) case binop then {
-        return true
-    } else {
-        return false
-    }
-}
 
 # constantOperandType -- type one operand of a unit-level constant expression,
 # stamping as it walks: a numeric literal wears the pseudo id (folded to its
@@ -38190,7 +37730,7 @@ constantOperandType: function {
     nid: zast.nodeid
 } out u64 is {
     # the row is read through a view scoped to this block (1 expression,
-    # 2 atomid, 3 binop, 0 anything else): the lookups and operand walks
+    # 2 atomid, 3 infix, 0 anything else): the lookups and operand walks
     # below lend ast exclusively
     arm: u32
     innerId: zast.nodeid
@@ -38208,11 +37748,6 @@ constantOperandType: function {
         } case atomid then {
             arm = 2
             nameId = n.name
-        } case binop then {
-            arm = 3
-            lhsId = n.lhs
-            rhsId = n.rhs
-            opId = n.operator
         } else null
         # AN INFIX CALL IS THE OPERATOR SHAPE THIS WALK ALREADY UNDERSTANDS.
         # `a op b` parses to the call form, and a unit-level constant built
@@ -39148,9 +38683,7 @@ constDefIsComputed: function {ast: Ast.view n: astnode.view} out bool is {
     ) case expression then {
         return (constDefIsComputed :ast n: (ast.nodes.get i: n.expression.u64))
     } else {
-        if (isBinopNode :n) then return true
-        # `X: X + 1` computes in either spelling. Answering false here hands
-        # the resolver a silent noConst where the cycle diagnostic belongs
+        # `X: X + 1` computes, and an infix call is the only shape that does
         ip: zast.infixPartsOf :ast :n
         return ip.found
     }
@@ -40101,7 +39634,7 @@ constOfNamedBase: function {
 
 
 # constplan -- what evaluating one row needs once its view is gone: the arm
-# (1 expression, 2 atomid, 3 atomstring, 4 dottedpath, 5 binop, 6 call,
+# (1 expression, 2 atomid, 3 atomstring, 4 dottedpath, 5 infix, 6 call,
 # 7 ifexpr, 0 anything else) and the ids and scalars that arm reads.
 constplan: record {
     # the arm the constant names, when it names one
@@ -40159,8 +39692,6 @@ evalConstPlan: function {ast: Ast.view nid: zast.nodeid} out constplan is {
             childId = n.child
             ln = n.lineno
             co = n.colno
-        } case binop then {
-            arm = 5
         } case call then {
             # an INFIX call folds as the binary operation it is; every other
             # call takes the call arm, which folds string static methods only
@@ -41031,15 +40562,6 @@ resolveConstantDef: function {
             :frame
             :defName
             defn: cdr
-        )
-    } case binop then {
-        (resolveBinopConstantDef
-            :ast
-            :st
-            :unitDecl
-            :frame
-            :defName
-            :defnId
         )
     } else null
 }

@@ -713,6 +713,7 @@ perf: $(PERFBIN)
 # this tree costs to compile. Measured, because the obvious theory was wrong --
 # skipping the member materialisation for monos, where the lookup answers
 # without it, cost 59 allocations MORE than it saved.
+#
 # +337,556 for the infix form compiling as a call. `a op b` IS `a.op b`, so an
 # operator expression is now a call node, a dotted callable and an unlabelled
 # namedoperation where it was one binop row -- and it takes the call path's
@@ -739,7 +740,14 @@ perf: $(PERFBIN)
 #               excluded: `!=` on a typedef resolves to the base's raw compare,
 #               which is the one chase the emitter must not make.
 #       -4,213  the one-argument kidspan is minted without a list to carry it.
-ALLOC_BASELINE := 2502992
+#
+# -16,111 for retiring the dead binop legs. Nothing here is a check that
+# stopped running: the self-compile's INPUT is the compiler's own source, and
+# this commit takes 754 lines out of src/ and lib/system/. That is 21
+# allocations a line against the 13-17 this tree usually costs, which is what
+# a checker family of nested calls and table walks weighs next to an average
+# line -- the four ZTyping stamp tables that went with it are four blocks.
+ALLOC_BASELINE := 2486881
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

@@ -1415,25 +1415,6 @@ Spans: class {
         } case labelvalue then {
             nLb: zast.nameTextAt :ast ref: n.name
             this.addRow id: n.nodeid line: n.lineno col: n.colno name: nLb.stringView kind: 1
-        } case binop then {
-            # the OPERATOR is a row of its own, carrying the BINOP's node id
-            # rather than its own: the method it resolved to is stamped against
-            # the binop, so a row keyed by the operator atom resolves to nothing.
-            this.walk :ast n: (ast.nodes.get i: n.lhs.u64)
-            this.walk :ast n: (ast.nodes.get i: n.rhs.u64)
-            bnid: n.nodeid
-            opn: ast.nodes.get i: n.operator.u64
-            if opn.atomid then {
-                opNm: zast.nameTextAt :ast ref: opn.name
-                (this.addRow
-                    id: bnid
-                    line: opn.lineno
-                    col: opn.colno
-                    name: opNm.stringView
-                    kind: 7
-                )
-            }
-            return
         } case dottedpath then {
             # the member selector is a row of its own, not a node walk
             this.walk :ast n: (ast.nodes.get i: n.parent.u64)
@@ -1565,23 +1546,6 @@ useVarId: function {o: (Option zenv.ZSymbolTable).view nid: u64} out ztypes.vid 
     } case none then {
         return (ztypes.vid.create from: 0)
     }
-}
-
-# the METHOD a binop's operator resolved to, by the BINOP's node id -- which is
-# what stampBinopOp keys on. An operator is a method here, so this is the only
-# thing a hover over `+` can resolve to; the operand's type is not it.
-binopMethodOf: function {o: (Option zenv.ZSymbolTable).view nid: u64} out u64 is {
-    match (
-        o
-    ) case some then {
-        g: o.typing.binopMethod.get key: nid
-        match (
-            g
-        ) case some then {
-            return g.u64
-        } case none then null
-    } case none then null
-    return 0
 }
 
 # the unit-definition type id referenced at node `nid` (the referenced
@@ -3178,16 +3142,6 @@ navTargetRefine: function {
 } out navtarget is {
     refTid: base.tid
     refDeclId: base.declId
-    if kind == 7 then {
-        refTid = binopMethodOf o: snap.st nid: hnid
-        if refTid > 0 then {
-            refDeclId = (surfaceDeclOfType
-                o: snap.st
-                prog: snap.prog
-                tid: (ztypes.tid.create from: refTid)
-            )
-        }
-    }
     if kind == 6 when refDeclId.isZero then refDeclId = genericParamDeclOf o: snap.st nid: hnid
     if kind == 6 when refDeclId.isZero.not then {
         dt9: declTypeIdOf o: snap.st declId: refDeclId
@@ -3328,8 +3282,7 @@ hoverDoc: function {snap: zcheck.CheckResult sp: Spans.view nid: u64} out String
 # hoverSigTid -- the type whose signature a hover shows: the stamped def
 # tid when the hit is a callable or unit member (a function hovers as its
 # signature, not its return value), the instance when a generic call
-# resolved to one, the Decl's type when only the Decl layer resolved the hit,
-# and the method for an operator, whose node stamp is the binop's result.
+# resolved to one, and the Decl's type when only the Decl layer resolved the hit.
 hoverSigTid: function {snap: zcheck.CheckResult hit: navhit} out u64 is {
     t: nodeTypeAt o: snap.st nid: hit.nodeid
     ud: useUnitDef o: snap.st nid: hit.nodeid
@@ -3337,7 +3290,6 @@ hoverSigTid: function {snap: zcheck.CheckResult hit: navhit} out u64 is {
     if ud > 0 then sigTid = ud
     if (isInstanceOfOpt o: snap.st tid: t tpl: ud) then sigTid = t
     if sigTid == 0 then sigTid = hit.tid
-    if hit.kind == 7 then sigTid = hit.tid
     return sigTid
 }
 

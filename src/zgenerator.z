@@ -137,8 +137,6 @@ pathShape: function {n: astnode.view} out bool is {
         return true
     } case namedoperation then {
         return true
-    } case binop then {
-        return true
     } case atomstring then {
         return true
     } case stringchunk then {
@@ -220,16 +218,6 @@ clonePathArm: function {
             colno: n.colno
             name: n.name
             operation: (zast.nodeid.create from: (cloned.get i: 0))
-        )
-        )
-    } case binop then {
-        return (astnode.binop (zast.binoprow
-            nodeid: myId
-            lineno: n.lineno
-            colno: n.colno
-            lhs: (zast.nodeid.create from: (cloned.get i: 0))
-            operator: (zast.nodeid.create from: (cloned.get i: 1))
-            rhs: (zast.nodeid.create from: (cloned.get i: 2))
         )
         )
     } case atomstring then {
@@ -637,10 +625,6 @@ crossWalk: function {ast: Ast.view gc: GenCross n: astnode.view inYieldLoop: boo
         # against. The operand is walked FIRST, so a local used in the yielded
         # value is recorded against the count before this yield moves it.
         if (zast.isYieldCalleeAt :ast callableId: n.callable) then gc.yieldCount = gc.yieldCount + 1
-    } case binop then {
-        # the operator atom is not a use of a local
-        crossWalkAt :ast :gc nid: n.lhs :inYieldLoop
-        crossWalkAt :ast :gc nid: n.rhs :inYieldLoop
     } case dottedpath then {
         # a member selector is not a use of a local
         crossWalkAt :ast :gc nid: n.parent :inYieldLoop
@@ -1531,14 +1515,14 @@ ensureExpr: function {
 
 # rwplan -- what rewriting one row needs once its view is gone. mode: 0 =
 # not a rewrite shape (clonePath copies it whole), 1 = rewrite every child,
-# 2 = dottedpath (the child is a field label: it clones), 3 = binop (the
-# operator clones), 4 = caseclause (the arm pattern clones). special: 0 =
-# none, 1 = atomid, 2 = labelvalue, 3 = assignment; promotedName says the
-# special arm names a promoted local (nameId, at ln:co).
+# 2 = dottedpath (the child is a field label or an operator: it clones),
+# 3 = caseclause (the arm pattern clones). special: 0 = none, 1 = atomid,
+# 2 = labelvalue, 3 = assignment; promotedName says the special arm names a
+# promoted local (nameId, at ln:co).
 rwplan: record {
     # how the row is rewritten: 0 copies it whole, 1 rewrites every child, 2 is
-    # a dottedpath whose child is a field label, 3 a binop whose operator
-    # clones, 4 a caseclause whose arm pattern clones
+    # a dottedpath whose child is a field label or an operator, 3 a caseclause
+    # whose arm pattern clones
     mode: u32
     # which special arm it is: 0 none, 1 atomid, 2 labelvalue, 3 assignment
     special: u32
@@ -1594,10 +1578,8 @@ rewritePlan: function {
         isP = (promoted.get key: anv.string).or d: false
     } case dottedpath then {
         mode = 2
-    } case binop then {
-        mode = 3
     } case caseclause then {
-        mode = 4
+        mode = 3
     } case error then {
         mode = 0
     } case typeofexpr then {
@@ -1636,9 +1618,7 @@ rewriteKids: function {
     for ki < kn loop {
         kid: zast.nodeid.create from: (kids.get i: ki)
         cloneOnly: (
-            ((mode == 2) and (ki == 1)) or
-            ((mode == 3) and (ki == 1)) or
-            ((mode == 4) and (ki == 0))
+            ((mode == 2) and (ki == 1)) or ((mode == 3) and (ki == 0))
         )
         if cloneOnly then {
             c0: clonePathAt :ast nid: kid
@@ -1738,16 +1718,6 @@ rewriteArm: function {
             colno: n.colno
             name: n.name
             operation: (zast.nodeid.create from: (cloned.get i: 0))
-        )
-        )
-    } case binop then {
-        return (astnode.binop (zast.binoprow
-            nodeid: myId
-            lineno: n.lineno
-            colno: n.colno
-            lhs: (zast.nodeid.create from: (cloned.get i: 0))
-            operator: (zast.nodeid.create from: (cloned.get i: 1))
-            rhs: (zast.nodeid.create from: (cloned.get i: 2))
         )
         )
     } case statement then {

@@ -12,7 +12,6 @@ public: unit {
     :Ast
     :atomidrow
     :atomstringrow
-    :binoprow
     :callrow
     :caseclauserow
     :caserow
@@ -318,8 +317,6 @@ astnode: variant {
     labelvalue: labelvaluerow
     # one piece of a string literal: literal text, or an interpolation hole
     stringchunk: stringchunkrow
-    # `lhs op rhs`, with no precedence -- left-associative as written
-    binop: binoprow
     # a string literal, as its ordered chunks
     atomstring: atomstringrow
     # `a.b`, before anything decides whether it calls
@@ -1116,27 +1113,6 @@ stringchunkrow: record {
     chunkKind: u8
 }
 
-# Binary-operation node payload: three astnode children for the
-# left-hand operand, operator, and right-hand operand. Arm-
-# specific child-type constraints (e.g. operator must be an
-# AtomId) live in the typechecker.
-binoprow: record {
-    # this binop's own row in the node table
-    nodeid: nodeid
-    # the line this binop starts on
-    lineno: u32
-    # the column this binop starts at
-    colno: u32
-    # the left operand
-    lhs: nodeid
-    # the operator, itself a node -- an operator is an identifier here, not a
-    # token kind
-    operator: nodeid
-    # the right operand. Binops do not associate by precedence, so nesting is
-    # exactly what was written
-    rhs: nodeid
-}
-
 # Interpolated-string-literal payload: an ordered list of astnode
 # children representing the literal text chunks and embedded
 # interpolation expressions.
@@ -1705,7 +1681,7 @@ printPoolName: function {ast: Ast.view ref: nameid} is {
 
 # Source position (line, column) of a node. A valtype so it copies
 # out freely; the parser reads it to position synthesised parent
-# nodes (BinOp, Call, NamedOperation) at their first child.
+# nodes (Call, NamedOperation) at their first child.
 nodepos: record {
     # the 1-based source line
     line: u32
@@ -1722,8 +1698,6 @@ posOf: function {n: astnode.view} out nodepos is {
     } case atomid then {
         return (nodepos line: n.lineno col: n.colno)
     } case labelvalue then {
-        return (nodepos line: n.lineno col: n.colno)
-    } case binop then {
         return (nodepos line: n.lineno col: n.colno)
     } case atomstring then {
         return (nodepos line: n.lineno col: n.colno)
@@ -1843,7 +1817,7 @@ printKidsWith: function {ast: Ast.view span: kidspan withId: bool} is {
 
 # Print one line per astnode in the form
 #   "<nodeid>: <arm> @<lineno>:<colno>"
-# Recursive arms (binop, atomstring) descend into their children.
+# Recursive arms descend into their children.
 # printNodeWith -- one AST node in the dump format the goldens pin. `withId`
 # picks the form: the full dump prefixes every line with the node's id, and
 # the canonical dump -- what the parser goldens compare -- carries no ids at
@@ -1869,11 +1843,6 @@ printNodeWith: function {ast: Ast.view n: astnode.view withId: bool} is {
     } case stringchunk then {
         ctx9: poolTextAt pool: ast.names ref: n.text
         print "\{idp}stringchunk @\{n.lineno}:\{n.colno} text=\{ctx9} chunkKind=\{n.chunkKind}"
-    } case binop then {
-        print "\{idp}binop @\{n.lineno}:\{n.colno}"
-        printNodeWith :ast :withId n: (ast.nodes.get i: n.lhs.u64)
-        printNodeWith :ast :withId n: (ast.nodes.get i: n.operator.u64)
-        printNodeWith :ast :withId n: (ast.nodes.get i: n.rhs.u64)
     } case atomstring then {
         print "\{idp}atomstring @\{n.lineno}:\{n.colno} parts=\{n.stringparts.count.u64}"
         printKidsWith :ast span: n.stringparts :withId
@@ -2074,11 +2043,7 @@ childIds: function {ast: Ast.view n: astnode.view} out ListVal u32 is {
 childIdsInto: function {ast: Ast.view n: astnode.view acc: ListVal u32} is {
     match (
         n
-    ) case binop then {
-        acc.append from: n.lhs.u32
-        acc.append from: n.operator.u32
-        acc.append from: n.rhs.u32
-    } case atomstring then {
+    ) case atomstring then {
         appendSpan kids: ast.kids :acc span: n.stringparts
     } case dottedpath then {
         acc.append from: n.parent.u32
@@ -2493,8 +2458,8 @@ kidIds: function {ast: Ast.view span: kidspan} out ListVal u32 is {
 }
 
 # The three ids an `a op b` expression is made of. `found` is false for every
-# other node, so a walk that used to match a binop arm asks for these instead
-# and reads exactly the same three children.
+# other node, so one walk reads the receiver, the operator and the argument
+# of an infix expression wherever it meets one.
 infixparts: record {
     # true when the node IS an infix call and the three ids below are real
     found: bool
@@ -2628,8 +2593,6 @@ nodeIdOf: function {n: astnode.view} out nodeid is {
         return n.nodeid
     } case stringchunk then {
         return n.nodeid
-    } case binop then {
-        return n.nodeid
     } case atomstring then {
         return n.nodeid
     } case dottedpath then {
@@ -2713,8 +2676,6 @@ armName: function {n: astnode.view} out StringView is {
         return "labelvalue"
     } case stringchunk then {
         return "stringchunk"
-    } case binop then {
-        return "binop"
     } case atomstring then {
         return "atomstring"
     } case dottedpath then {

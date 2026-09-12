@@ -1941,9 +1941,6 @@ collectLiterals: function {ast: Ast.view n: astnode.view ids: ListVal u64 texts:
         }
     } case dottedpath then {
         collectLiterals :ast n: (ast.nodes.get i: n.parent.u64) :ids :texts
-    } case binop then {
-        collectLiterals :ast n: (ast.nodes.get i: n.lhs.u64) :ids :texts
-        collectLiterals :ast n: (ast.nodes.get i: n.rhs.u64) :ids :texts
     } case assignment then {
         collectLiterals :ast n: (ast.nodes.get i: n.value.u64) :ids :texts
     } case reassignment then {
@@ -2170,45 +2167,6 @@ monoStampIdOf: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view nid: u64} 
     } case none then {
         return (ztypes.tid.create from: 0)
     }
-}
-
-# binopStampAt -- the operator stamp a binop node carries: the instance table
-# first when an instance walk is emitting, then the plain one. The owner and
-# the method are two columns of one answer, so one walk reads either.
-binopStampAt: function {
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    nid: u64
-    # read the resolved METHOD rather than the declaring owner
-    wantMethod: bool
-} out ztypes.tid is {
-    if ctx.curThisTid > 0 then {
-        mk: (ztyping.monostamp mono: ctx.curThisTid.u64 node: nid)
-        mo: symtab.typing.monoBinopOwner.get key: mk
-        if wantMethod then mo = symtab.typing.monoBinopMethod.get key: mk
-        if mo.some then return (ztypes.tid.create from: mo)
-    }
-    go: symtab.typing.binopOwner.get key: nid
-    if wantMethod then go = symtab.typing.binopMethod.get key: nid
-    return (go.or d: ztypes.tid)
-}
-
-# binopOwnerAt / binopMethodAt -- the operator resolution the type checker
-# recorded for a binop node: the type that DECLARES the operator, and the
-# method it resolved to (0 where none was declared). The instance-walk answer
-# comes first, because a monomorphised body re-walks the TEMPLATE's nodes --
-# the flat table holds nothing for them, and one template node carries a
-# different answer per instance. Both facts read through one accessor each so
-# that no caller can consult one table and forget the other; consulting only
-# the flat one is exactly what makes stampIdDeep blind inside a generic body.
-binopOwnerAt: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view nid: u64} out ztypes.tid is {
-    return (binopStampAt :symtab :ctx :nid wantMethod: false)
-}
-
-# the method a binary operator resolved to, read from the stamp rather than
-# re-resolved
-binopMethodAt: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view nid: u64} out ztypes.tid is {
-    return (binopStampAt :symtab :ctx :nid wantMethod: true)
 }
 
 # nativeMemberKey -- the natives.tbl path of a MEMBER on a native receiver:
@@ -5046,9 +5004,9 @@ emitSvNativeInfix: function {
         bfs: svValueForm :ctx expr: l isStr: true vid: lv
         recvS = bfs.copy
     }
-    # ASK THE CONSTANT FIRST. The binop leg emits its operands before it knows
-    # what the operator resolved to, so a literal argument has ALREADY been
-    # folded to a `_zcsN` static by the time this runs. Recomputing the argument
+    # ASK THE CONSTANT FIRST. The operands are emitted before the operator's
+    # resolution is known, so a literal argument has ALREADY been folded to a
+    # `_zcsN` static by the time this runs. Recomputing the argument
     # from the node would mint the pooled literal instead and leave that static
     # referenced by nothing -- a `defined but not used` warning, which
     # warn-check reads as a failure. The folded static is a StringView; its
@@ -5330,7 +5288,8 @@ dottedReceiverIsPtr: function {
 # emitNativeArgMethod -- a native method that takes ARGUMENTS, emitted from its
 # own natives.tbl row. The receiver-only rows reach `emitNumericCast`, which
 # binds one hole and knows nothing of arguments; the operator rows reach
-# `emitBinop`, which binds two and is spelled for a binop. A row that names an
+# `emitOperatorAt`, which binds two and is spelled for an operator. A row that
+# names an
 # argument hole had no way in at all, and every bodied row on a scalar was a
 # conversion, `bits` or `not` because of it.
 #
@@ -6443,9 +6402,8 @@ operatorOwnerId: function {
 
 # emitOperatorCallForm -- `a.+ rhs: b` through the same emitter the infix form
 # uses. "" when this is not a one-argument operator call, which leaves the
-# caller on its ordinary legs. The operands are prepared exactly as the binop
-# arm prepares them, an atom box dereferenced alike, because from here down the
-# two forms are one. A word-named member (`a.or rhs: b`) is an operator call
+# caller on its ordinary legs. Both forms prepare their operands as VALUES,
+# an atom box dereferenced alike, because from here down they are one call. A word-named member (`a.or rhs: b`) is an operator call
 # when it resolves to a NATIVE method whose natives.tbl row binds the operator
 # holes -- the row is the authority, not the spelling.
 emitOperatorCallForm: function {
@@ -6460,12 +6418,11 @@ emitOperatorCallForm: function {
     mnId9: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     owner: u64
     method: ztypes.tid
-    # THE CHECKER ALREADY RESOLVED THIS ONE. The binop leg read a stamp and did
-    # no lookup at all; re-deriving the receiver type, the declaring type and
-    # the method from the decl tree for EVERY operator in the program is what
-    # made the call path cost what it costs. The call path stamps the resolved
-    # declaration against the callable, so read that, and derive only when it
-    # says nothing.
+    # THE CHECKER ALREADY RESOLVED THIS ONE. Re-deriving the receiver type, the
+    # declaring type and the method from the decl tree for EVERY operator in the
+    # program is what this path would otherwise cost, and it is millions of
+    # allocations. The call path stamps the resolved declaration against the
+    # callable, so read that, and derive only when it says nothing.
     {
         rdo9: symtab.typing.refDecl.get key: call.callable.u64
         match (
@@ -6573,10 +6530,9 @@ emitOperatorCallForm: function {
     }
     if rhsNid == 0 then return "".string
     # AN OPERAND IS A VALUE, which is what valueExprC gives and emitExpr does
-    # not: a Box is loaded, and so is a pointer-held valtype. This doc comment
-    # already claimed the operands were prepared as the binop arm prepares
-    # them; with plain emitExpr a `.view` valtype parameter reached the C as
-    # its POINTER and `z_v2 + 1ULL` added one to an address.
+    # not: a Box is loaded, and so is a pointer-held valtype. With plain
+    # emitExpr a `.view` valtype parameter reaches the C as its POINTER and
+    # `z_v2 + 1ULL` adds one to an address.
     l: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: lhsNid)
     r: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: rhsNid)
     if (nodeIsAtomBox :ast :symtab :ctx n: (ast.nodes.get i: lhsNid)) then l = "(*\{l})"
@@ -12825,8 +12781,8 @@ emitDottedAtomBase: function {
     # the plain table, so a member read on it resolved the TEMPLATE's member and
     # named a function that is never emitted -- only the per-instance clones
     # are. The instance walk records the mono's own stamp for this very node;
-    # ask that first while one is emitting, as binopStampAt does for an
-    # operator's owner. A zero-arg method auto-call arrives HERE, through the
+    # ask that first while one is emitting. A zero-arg method auto-call
+    # arrives HERE, through the
     # member-read path, not through emitInstanceMethodCall.
     bstamp0: monoStampIdOf :symtab :ctx nid: bnid2.u64
     if bstamp0.isZero then bstamp0 = stampIdOf :symtab nid: bnid2
@@ -13759,26 +13715,6 @@ emitExpr: function {
             dk = dk + 1
         }
         return tx
-    } case binop then {
-        # an operand is a VALUE: a Box is loaded, and so is a pointer-held
-        # valtype (valueExprC). The one leg that wants the lhs as a pointer --
-        # a user-written operator, whose receiver is one -- re-reads it.
-        l: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: n.lhs.u64)
-        op: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.operator.u64))
-        r: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: n.rhs.u64)
-        if (nodeIsAtomBox
-            :ast
-            :symtab
-            :ctx
-            n: (ast.nodes.get i: n.lhs.u64)
-        ) then l = "(*\{l})"
-        if (nodeIsAtomBox
-            :ast
-            :symtab
-            :ctx
-            n: (ast.nodes.get i: n.rhs.u64)
-        ) then r = "(*\{r})"
-        return (emitBinop :ast :symtab :ctx binop: n :l :r op: op.stringView)
     } case call then {
         return (emitCallValue :ast :symtab :ctx call: n)
     } else {
@@ -13787,10 +13723,10 @@ emitExpr: function {
     }
 }
 
-# emitBinop -- emit a binary operator by asking what it RESOLVED to, never
-# what it was spelled. The type checker recorded the type that declares the
-# operator and the method it found; from those the operator is one of three
-# things, and the operator's text is a lookup key rather than a branch:
+# emitOperatorAt -- emit a binary operator by asking what it RESOLVED to,
+# never what it was spelled. The type checker recorded the type that declares
+# the operator and the method it found; from those the operator is one of
+# three things, and the operator's text is a lookup key rather than a branch:
 #
 #   the author wrote it   -- an ordinary method call, negated for an inequality
 #                            derived from a declared equality
@@ -13800,35 +13736,6 @@ emitExpr: function {
 #
 # The receiver-shape derivations stay here because they choose WHICH row
 # applies and what its operands look like; the C itself lives in the table.
-emitBinop: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    binop: zast.binoprow.view
-    l: String
-    r: String
-    op: StringView
-} out String is {
-    ow9: binopOwnerAt :symtab :ctx nid: binop.nodeid.u64
-    mt9: binopMethodAt :symtab :ctx nid: binop.nodeid.u64
-    oi9: atomNameIdOf :ast n: (ast.nodes.get i: binop.operator.u64)
-    return (emitOperatorAt
-        :ast
-        :symtab
-        :ctx
-        lineno: binop.lineno
-        opId: oi9
-        owner: ow9
-        method: mt9
-        lhsNid: binop.lhs.u64
-        rhsNid: binop.rhs.u64
-        :l
-        :r
-        :op
-    )
-}
-
-# emitOperatorAt -- emitBinop's body, driven by ids rather than by a binoprow.
 # The infix form and the call form (`a.+ rhs: b`) are the SAME one-argument
 # method, so they emit through here alike; only the node ids differ.
 emitOperatorAt: function {
@@ -14511,8 +14418,6 @@ interpPartNodeId: function {n: astnode.view} out u64 is {
     } case labelvalue then {
         return n.nodeid.u64
     } case call then {
-        return n.nodeid.u64
-    } case binop then {
         return n.nodeid.u64
     } case dottedpath then {
         return n.nodeid.u64
@@ -21595,9 +21500,6 @@ emitTailStmt: function {
         if (zast.nameTextEq :ast ref: n.name s: "null") then return false
         emitReturnOfNode :ast :symtab :ctx vid: n.nodeid :ind :tmp :buf
         return true
-    } case binop then {
-        emitReturnOfNode :ast :symtab :ctx vid: n.nodeid :ind :tmp :buf
-        return true
     } case atomstring then {
         emitReturnOfNode :ast :symtab :ctx vid: n.nodeid :ind :tmp :buf
         return true
@@ -24108,9 +24010,6 @@ scanNeeds: function {
         scanNeedsCall :ast :symtab :ctx :unitName :n
     } case dottedpath then {
         scanNeedsDotted :ast :symtab :ctx :unitName :n
-    } case binop then {
-        scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: n.lhs.u64)
-        scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: n.rhs.u64)
     } case assignment then {
         scanNeeds :ast :symtab :ctx :unitName n: (ast.nodes.get i: n.value.u64)
     } case reassignment then {
@@ -32213,7 +32112,7 @@ vtableAutoCallC: function {
 
 # emitBinopVtableCall -- a binary operator whose RECEIVER is an interface,
 # dispatched through the vtable. "" when the receiver is not one, which leaves
-# emitBinop on its ordinary leg.
+# emitOperatorAt on its ordinary leg.
 #
 # The receiver's spelling is inverted from that leg: there `pathIsPointer`
 # decides whether to ADD an `&`, here it decides `.` against `->`, and
@@ -32263,10 +32162,10 @@ emitBinopVtableCall: function {
 
 # vtableCallC -- the dispatch itself: `recv.vtable->slot(dataArg, args...)`.
 # Four plain values and a ready-made argument tail, so every call form can
-# reach it. emitProtocolDispatch builds a tail out of a callrow's arguments; a
-# binop's one operand is already emitted by the time emitBinop runs, so it
-# passes that. A binop is the call form for a one-argument method and it now
-# dispatches through the same three spellings the slot, the wrapper and the
+# reach it. emitProtocolDispatch builds a tail out of a callrow's arguments; an
+# operator's one operand is already emitted by the time emitOperatorAt runs, so
+# it passes that. An operator IS the call form for a one-argument method, and
+# it dispatches through the same three spellings the slot, the wrapper and the
 # vtable row come from.
 vtableCallC: function {
     recv: StringView
