@@ -148,7 +148,7 @@ projectUnitReads: function {dir: StringView uname: StringView into: Set String} 
     ) case ok then {
         with eit: ents.iterate do for e: eit loop {
             ev: e.stringView
-            if (ev.endsWith suffix: ".z") when ev != own.stringView then {
+            if (ev.endsWith suffix: ".z") when ev != own then {
                 fp: "\{dir}/\{ev}"
                 rd: io.readText path: fp
                 match (
@@ -662,17 +662,14 @@ singleLineBodyOf: function {ast: Ast.view clauseId: u32} out zast.nodeid is {
     }
 }
 
-# innerBinopOperator -- the operator name id of the binop at `id`, 0 when the
-# node is not a bare binop (a parenthesised one is an `expression`).
+# innerBinopOperator -- the operator name id of the binary operation at `id`,
+# 0 when the node is not a bare one (a parenthesised one is an `expression`).
+# An infix call IS one, and answers here like any other.
 innerBinopOperator: function {ast: Ast.view id: zast.nodeid} out zast.nameid is {
     n: ast.nodes.get i: id.u64
-    match (
-        n
-    ) case binop then {
-        return (atomNameIdOf n: (ast.nodes.get i: n.operator.u64))
-    } else {
-        return zast.nameid
-    }
+    ip: zast.infixPartsOf :ast :n
+    if ip.found then return (atomNameIdOf n: (ast.nodes.get i: ip.operator.u64))
+    return zast.nameid
 }
 
 # isLogicOp -- the name id is bool's `and` or `or`.
@@ -1707,6 +1704,17 @@ Analysis: class {
     # walk -- the parse-tier rule visitor: the arms a rule reads are spelled,
     # then every child is visited through zast.childIds.
     walk: function {:this ast: Ast.view n: astnode.view} is {
+        # AN INFIX CALL IS THE OPERATOR SHAPE THESE RULES ARE WRITTEN FOR.
+        # Read ahead of the match: an arm narrows `n` to its own row, and the
+        # call arm cannot ask the node it came from.
+        ipW: zast.infixPartsOf :ast :n
+        if ipW.found then {
+            this.checkBoolLiteralCompare :ast opId: ipW.operator lhsId: ipW.lhs rhsId: ipW.rhs
+            this.checkMixedLogicalChain :ast opId: ipW.operator lhsId: ipW.lhs
+            if this.opts.arch then {
+                this.checkLiteralCompare :ast opId: ipW.operator lhsId: ipW.lhs rhsId: ipW.rhs
+            }
+        }
         match (
             n
         ) case error then {
@@ -1721,12 +1729,6 @@ Analysis: class {
                 hint: (zast.poolTextCopy pool: ast.names ref: n.hint)
             )
             this.diags.append d
-        } case binop then {
-            this.checkBoolLiteralCompare :ast opId: n.operator lhsId: n.lhs rhsId: n.rhs
-            this.checkMixedLogicalChain :ast opId: n.operator lhsId: n.lhs
-            if this.opts.arch then {
-                this.checkLiteralCompare :ast opId: n.operator lhsId: n.lhs rhsId: n.rhs
-            }
         } case call then {
             (this.checkElide
                 :ast
@@ -1865,7 +1867,9 @@ Analysis: class {
             return
         }
         xText: (srcv.substring from: xLo to: xHi).string
-        if lhsN.binop then xText = "(\{xText})"
+        # an unparenthesised operand keeps its grouping in the fix text
+        ipF: zast.infixPartsOf :ast n: lhsN
+        if ipF.found then xText = "(\{xText})"
         suffix: ".not"
         if neg.not then suffix = ""
         (this.warnFix
@@ -2812,7 +2816,7 @@ Analysis: class {
             if isStr then ctext = "string".string
             expect: "\{ptext}.\{ctext}"
             actual: srcv.substring from: lo to: hi
-            if actual != expect.stringView then return
+            if actual != expect then return
             wm: "zero/empty initializer: write the bare type name `\{repl}`"
             (this.warnFix
                 code: "L011"
@@ -2907,7 +2911,7 @@ Analysis: class {
         vs: operandSuffix :ast n: value
         if vs.tname.length > 0 then {
             tn: typeNameOfNode n: topath :st
-            if tn.length > 0 when tn.stringView == vs.tname.stringView then {
+            if tn.length > 0 when tn.stringView == vs.tname then {
                 this.emitSuf ln: vs.line col: vs.col tname: vs.tname.stringView
             }
         }
@@ -3046,7 +3050,7 @@ Analysis: class {
         for pj < names.length loop {
             isRecv: (
                 ((nameIds.get i: pj) == zast.names.wkThis.u64) or
-                ((thisPn.length > 0) and (thisPn == (names.get i: pj).stringView))
+                ((thisPn.length > 0) and (thisPn == (names.get i: pj)))
             )
             if isRecv.not then return (optionval.some pj)
             pj = pj + 1
@@ -3172,7 +3176,7 @@ Analysis: class {
                         pto
                     ) case some then {
                         ptn: (st.reg.nameOf tid: (ztypes.tid.create from: pto.u64))
-                        if ptn.stringView == s.tname.stringView then {
+                        if ptn.stringView == s.tname then {
                             this.emitSuf ln: s.line col: s.col tname: s.tname.stringView
                         }
                     } case none then null
@@ -3261,20 +3265,24 @@ Analysis: class {
         st: zenv.ZSymbolTable
         funcretId: zast.nodeid
     } is {
+        {
+            ipS: zast.infixPartsOf :ast :n
+            if ipS.found then {
+                blS: ast.nodes.get i: ipS.lhs.u64
+                brS: ast.nodes.get i: ipS.rhs.u64
+                bopS: atomName :ast n: (ast.nodes.get i: ipS.operator.u64)
+                (this.sufBinop
+                    :ast
+                    lhs: blS
+                    rhs: brS
+                    isCmp: (ztypecheck.isComparisonOp name: bopS.stringView)
+                    :st
+                )
+            }
+        }
         match (
             n
-        ) case binop then {
-            bl: ast.nodes.get i: n.lhs.u64
-            br: ast.nodes.get i: n.rhs.u64
-            bop: atomName :ast n: (ast.nodes.get i: n.operator.u64)
-            (this.sufBinop
-                :ast
-                lhs: bl
-                rhs: br
-                isCmp: (ztypecheck.isComparisonOp name: bop.stringView)
-                :st
-            )
-        } case call then {
+        ) case call then {
             (this.sufCall
                 :ast
                 callNid: n.nodeid
@@ -3648,13 +3656,16 @@ Analysis: class {
     archWalk: function {:this ast: Ast.view nId: zast.nodeid namedIds: (IdSet u64).view} is {
         n: ast.nodes.get i: nId.u64
         kids: zast.childIds :ast :n
-        if n.binop then {
-            op: atomName :ast n: (ast.nodes.get i: n.operator.u64)
-            isCmp: op.stringView == "=="
-            if op.stringView == "!=" then isCmp = true
-            if isCmp then {
-                this.archNamedLiteral :ast id: n.lhs :namedIds
-                this.archNamedLiteral :ast id: n.rhs :namedIds
+        {
+            ipA: zast.infixPartsOf :ast :n
+            if ipA.found then {
+                opA: atomName :ast n: (ast.nodes.get i: ipA.operator.u64)
+                isCmpA: opA.stringView == "=="
+                if opA.stringView == "!=" then isCmpA = true
+                if isCmpA then {
+                    this.archNamedLiteral :ast id: ipA.lhs :namedIds
+                    this.archNamedLiteral :ast id: ipA.rhs :namedIds
+                }
             }
         }
         with kit: kids.iterate do for c: kit loop {
@@ -5285,7 +5296,7 @@ linesEqualAt: function {
     if (i >= m) or (p >= n) then return false
     oi: oldLines.get :i
     pj: newLines.get i: p
-    return (oi.stringView == pj.stringView)
+    return (oi.stringView == pj)
 }
 
 # bandProbe -- the first matching pair on diagonal `t`, if the diagonal holds
@@ -5309,7 +5320,7 @@ bandProbe: function {
         if ii < m when pp < n then {
             oa: oldLines.get i: ii
             pb: newLines.get i: pp
-            if oa.stringView == pb.stringView then {
+            if oa.stringView == pb then {
                 return (optionval.some (bandpair oldAt: ii newAt: pp))
             }
         }

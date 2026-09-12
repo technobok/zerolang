@@ -5698,7 +5698,7 @@ methodOwnerId: function {
     t: ztypes.tid
     for t < last loop {
         tn: regNameOf :symtab tid: (ztypes.tid.create from: t.u64)
-        if tn.stringView == rn.stringView then {
+        if tn.stringView == rn then {
             co: symtab.typing.declChildOf pool: ast.names parentTypeId: t name: mn
             match (
                 co
@@ -6285,7 +6285,7 @@ emitInstanceMethodBody: function {
         posParamName: posParamNameB.stringView
         posParamId: pids.get i: pi
         if pi > 0 then args.append ", "
-        if posParamName == recvNm.stringView then {
+        if posParamName == recvNm then {
             if recvIsPtr then {
                 args.append recvExpr
             } else {
@@ -6355,6 +6355,92 @@ wordOperatorRowBinds: function {
     return (body.stringView.contains needle: "@L@")
 }
 
+# opPairPartnerId -- the OTHER half of the comparison pair, 0 for any other
+# operator. `==` and `!=` are ONE pair: a type that writes only one of them
+# answers for both, through the derived-comparison leg that negates the one it
+# has. Asked by NAME ID, never by spelling.
+opPairPartnerId: function {nameId: zast.nameid} out zast.nameid is {
+    if nameId == zast.names.wkOpEq then return zast.names.wkOpNe
+    if nameId == zast.names.wkOpNe then return zast.names.wkOpEq
+    return zast.nameid
+}
+
+# derivedComparisonHere -- `mnId` is one half of the comparison pair and `owner`
+# DECLARES the other half, so this operator is that one negated. No lookup past
+# `owner` may answer for it: a typedef base's raw comparison would silently
+# replace the equality the author defined.
+derivedComparisonHere: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    owner: ztypes.tid
+    mnId: zast.nameid
+} out bool is {
+    pid9: opPairPartnerId nameId: mnId
+    if pid9.isZero then return false
+    pnm9: zast.nameTextAt :ast ref: pid9
+    oo9: (symtab.typing.declChildOf
+        pool: ast.names
+        parentTypeId: owner
+        name: pnm9.stringView
+    )
+    return oo9.some
+}
+
+# operatorReceiverTid -- the type an operator call DISPATCHES on. Three rules,
+# each one the checker also makes, so the emitter reaches the type the operator
+# was resolved against: the receiver's own stamp; the MONO's where the call
+# sits inside a template instance, because the flat stamp still names the type
+# parameter and a parameter declares no operator; and the boxed ELEMENT where
+# the receiver is a Box, which is a heap pointer around one valtype and
+# declares no operators of its own.
+operatorReceiverTid: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+} out ztypes.tid is {
+    rt0: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
+    {
+        cbm9: ast.nodes.get i: call.callable.u64
+        if cbm9.dottedpath then {
+            rms9: (monoStampIdOf
+                :symtab
+                :ctx
+                nid: (interpPartNodeId n: (ast.nodes.get i: cbm9.parent.u64))
+            )
+            if rms9.isZero.not then rt0 = rms9
+        }
+    }
+    rtc: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: rt0.u64)
+    bxT9: ztypes.tid.create from: rtc.u64
+    if (symtab.reg.isBoxOf tid: bxT9) when (
+        (symtab.reg.genericArgCount specId: bxT9) == 1
+    ) then {
+        bxE9: symtab.reg.genericArgAt specId: bxT9 ordinal: 0
+        if bxE9 > 0 then rtc = ztypes.tid.create from: bxE9.u64
+    }
+    return (ztypes.tid.create from: rtc.u64)
+}
+
+# operatorOwnerId -- the type that DECLARES the operator, or the one declaring
+# its comparison partner. Giving up here is what left `f != 3` on a facet as an
+# unhandled callee: the derived-comparison leg that would have answered is
+# reached through this owner, so the owner has to be found first.
+operatorOwnerId: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    rtid: ztypes.tid
+    mn: StringView
+    mnId: zast.nameid
+} out u64 is {
+    own9: methodOwnerId :ast :symtab :rtid :mn
+    if own9 > 0 then return own9
+    pid9: opPairPartnerId nameId: mnId
+    if pid9.isZero then return 0
+    pnm9: zast.nameTextAt :ast ref: pid9
+    return (methodOwnerId :ast :symtab :rtid mn: pnm9.stringView)
+}
+
 # emitOperatorCallForm -- `a.+ rhs: b` through the same emitter the infix form
 # uses. "" when this is not a one-argument operator call, which leaves the
 # caller on its ordinary legs. The operands are prepared exactly as the binop
@@ -6371,12 +6457,42 @@ emitOperatorCallForm: function {
     mnO: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if mnO.length == 0 then return "".string
     if call.arguments.count.u64 != 1 then return "".string
-    rt0: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
-    rtc: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: rt0.u64)
-    owner: methodOwnerId :ast :symtab rtid: (ztypes.tid.create from: rtc.u64) mn: mnO
-    if owner == 0 then return "".string
+    mnId9: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable.u64)
+    owner: u64
     method: ztypes.tid
+    # THE CHECKER ALREADY RESOLVED THIS ONE. The binop leg read a stamp and did
+    # no lookup at all; re-deriving the receiver type, the declaring type and
+    # the method from the decl tree for EVERY operator in the program is what
+    # made the call path cost what it costs. The call path stamps the resolved
+    # declaration against the callable, so read that, and derive only when it
+    # says nothing.
     {
+        rdo9: symtab.typing.refDecl.get key: call.callable.u64
+        match (
+            rdo9
+        ) case some then {
+            rd9: symtab.typing.decls.get i: rdo9.u64
+            # NEVER FOR THE COMPARISON PAIR. `==` and `!=` are one pair with a
+            # derived half, and the checker resolves `!=` on a typedef to the
+            # BASE's raw comparison -- which is exactly the chase the
+            # derivation below refuses to make, because it would discard the
+            # equality the author defined. Every other operator is whatever
+            # the checker said it was.
+            sameName9: (zast.nameid.create from: rd9.name) == mnId9
+            notPair9: (opPairPartnerId nameId: mnId9).isZero
+            if rd9.parent.isZero.not when sameName9 when notPair9 then {
+                pt9: (symtab.typing.decls.get i: rd9.parent.u64).typeId
+                if pt9.isZero.not then {
+                    owner = pt9.u64
+                    method = rd9.typeId
+                }
+            }
+        } case none then null
+    }
+    if owner == 0 then {
+        rtc: operatorReceiverTid :ast :symtab :ctx :call
+        owner = operatorOwnerId :ast :symtab rtid: rtc mn: mnO mnId: mnId9
+        if owner == 0 then return "".string
         mo9: (symtab.typing.declChildOf
             pool: ast.names
             parentTypeId: (ztypes.tid.create from: owner.u64)
@@ -6388,7 +6504,52 @@ emitOperatorCallForm: function {
             method = ztypes.tid.create from: mo9.u64
         } case none then null
     }
-    if method.isZero then return "".string
+    # A TYPEDEF MEMBER THAT ISN'T ON THE WRAPPER DELEGATES TO THE BASE -- the
+    # same chase checkDotted makes, so the emitter reaches what the checker
+    # resolved. `declid` declares `==` and inherits `!=`, `<` and `>=` from
+    # the u64 it wraps.
+    if method.isZero then {
+        # A DERIVED COMPARISON STOPS THE CHASE: `parity` calls 1 and 3 equal
+        # and the u64 it wraps does not, so reading the base's raw comparison
+        # would discard the equality the author defined.
+        tb9: optionval.none ztypes.tid
+        if (derivedComparisonHere
+            :ast
+            :symtab
+            owner: (ztypes.tid.create from: owner.u64)
+            mnId: mnId9
+        ).not then {
+            tb9 = symtab.typing.typedefBaseTid.get key: (ztypes.tid.create from: owner.u64)
+        }
+        match (
+            tb9
+        ) case some then {
+            bow9: (methodOwnerId
+                :ast
+                :symtab
+                rtid: (ztypes.tid.create from: tb9.u64)
+                mn: mnO
+            )
+            if bow9 > 0 then {
+                mb9: (symtab.typing.declChildOf
+                    pool: ast.names
+                    parentTypeId: (ztypes.tid.create from: bow9.u64)
+                    name: mnO
+                )
+                match (
+                    mb9
+                ) case some then {
+                    method = ztypes.tid.create from: mb9.u64
+                    owner = bow9
+                } case none then null
+            }
+        } case none then null
+    }
+    # A DERIVED COMPARISON HAS NO METHOD OF ITS OWN. `!=` on a type declaring
+    # only `==` resolves no member here, and emitOperatorAt's derived leg is
+    # what answers it -- that leg reads `call.isZero` explicitly. Every other
+    # operator still needs a method before there is anything to emit.
+    if method.isZero when (opPairPartnerId nameId: mnId9).isZero then return "".string
     if (isOperatorName name: mnO).not when (
         (wordOperatorRowBinds
             :ast
@@ -6411,8 +6572,13 @@ emitOperatorCallForm: function {
         if a0.namedoperation then rhsNid = a0.operation.u64
     }
     if rhsNid == 0 then return "".string
-    l: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: lhsNid)
-    r: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: rhsNid)
+    # AN OPERAND IS A VALUE, which is what valueExprC gives and emitExpr does
+    # not: a Box is loaded, and so is a pointer-held valtype. This doc comment
+    # already claimed the operands were prepared as the binop arm prepares
+    # them; with plain emitExpr a `.view` valtype parameter reached the C as
+    # its POINTER and `z_v2 + 1ULL` added one to an address.
+    l: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: lhsNid)
+    r: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: rhsNid)
     if (nodeIsAtomBox :ast :symtab :ctx n: (ast.nodes.get i: lhsNid)) then l = "(*\{l})"
     if (nodeIsAtomBox :ast :symtab :ctx n: (ast.nodes.get i: rhsNid)) then r = "(*\{r})"
     oid9: zast.poolFind pool: ast.names text: mnO
@@ -6487,8 +6653,16 @@ emitInstanceMethodCall: function {
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if mn.length == 0 then return "".string
     callableNode: ast.nodes.get i: call.callable.u64
-    recvExpr: emitDottedReceiver :ast :symtab :ctx callable: callableNode
-    if recvExpr.length == 0 then return "".string
+    # THE RECEIVER IS EMITTED ONLY ONCE THIS LEG HAS COMMITTED. Emitting it to
+    # decide whether to answer left the emission behind on every decline: an
+    # orphaned hoist the C compiler warns about, and -- because the leg that
+    # DID answer emitted it again -- a receiver expression EVALUATED TWICE.
+    # `a.or rhs: b` with a call for a receiver called that call twice. What the
+    # emission stood in for is the shape test below, which costs nothing.
+    {
+        cbShape: ast.nodes.get i: call.callable.u64
+        if cbShape.dottedpath.not then return "".string
+    }
     # the other side of the same stamp: a receiver the checker said comes from
     # the arguments is not reached through the dot, whatever the base emits to
     if (symtab.typing.callRecvFromArgs.has item: call.nodeid.u64) then return "".string
@@ -6534,6 +6708,8 @@ emitInstanceMethodCall: function {
             (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: mco.u64)) ==
             ztypes.ztypetype.functionType
         ) then {
+            recvExpr: emitDottedReceiver :ast :symtab :ctx callable: callableNode
+            if recvExpr.length == 0 then return "".string
             rIsPtr: dottedReceiverIsPtr :ast :symtab :ctx callable: callableNode
             return (emitInstanceMethodBody
                 :ast
@@ -8623,8 +8799,7 @@ renderedMethodDefaultArgs: function {
         pnjId: pidlNm.get i: j
         j = j + 1
         isRecv: (
-            (pnjId == zast.names.wkThis.u64) or
-            ((thisPn.length > 0) and (thisPn.stringView == pnj.stringView))
+            (pnjId == zast.names.wkThis.u64) or ((thisPn.length > 0) and (thisPn.stringView == pnj))
         )
         if isRecv.not then {
             userSeen = true
@@ -9359,7 +9534,7 @@ cvalStrText: function {symtab: zenv.ZSymbolTable.view ctx: Ctx v: ztypes.cval} o
     for i < n loop {
         if hit == 0 then {
             e: ctx.constLits.get :i
-            if e.stringView == t.stringView then hit = i + 1
+            if e.stringView == t then hit = i + 1
         }
         i = i + 1
     }
@@ -10222,7 +10397,7 @@ emitFnptrFieldCall: function {
                 pjn: pNames.length
                 for pj < pjn loop {
                     pnm: pNames.get i: pj
-                    if pnm.stringView == anm.stringView when (paramTypeIsPointer
+                    if pnm.stringView == anm when (paramTypeIsPointer
                         :ast
                         :symtab
                         :ctx
@@ -10306,7 +10481,7 @@ emitFnptrLocalCall: function {
                 pjn: pNames.length
                 for pj < pjn loop {
                     pnm: pNames.get i: pj
-                    if pnm.stringView == anm.stringView when (paramTypeIsPointer
+                    if pnm.stringView == anm when (paramTypeIsPointer
                         :ast
                         :symtab
                         :ctx
@@ -11050,6 +11225,22 @@ emitCallValue: function {
     } case none then null
     # A SYNTHESISED OPERATOR HAS NO BODY TO CALL, so it must reach the
     # structural emitter before the by-decl leg claims it as an ordinary method.
+    # AN OPERATOR CALL REACHES THE OPERATOR EMITTER WHATEVER ELSE IT PASSES.
+    # It used to be asked LAST, at the end of the named-callee chain: every
+    # operator walked every probe -- each building names, keys and receiver
+    # text -- to discover what its own shape already said. Now that the infix
+    # form IS a call, that chain runs for every operator in the program, and a
+    # self-compile paid millions of allocations for the walk. Asked here, both
+    # spellings still reach one emitter, and a call this declines falls through
+    # to exactly the legs it fell through to before.
+    {
+        eopN9: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
+        if call.arguments.count.u64 == 1 when eopN9.length > 0 when (isOperatorName name: eopN9
+        ) then {
+            eopc: emitOperatorCallForm :ast :symtab :ctx :call
+            if eopc.length > 0 then return eopc
+        }
+    }
     sopc: emitSynthOperatorCallForm :ast :symtab :ctx :call
     if sopc.length > 0 then return sopc
     cbd: emitCallByDecl :ast :symtab :ctx :call
@@ -13433,7 +13624,7 @@ emitDottedRead: function {
     # substitution means the base binding is not what is being read, so the
     # vid stays 0 and bn2 becomes the substituted text.
     bn2v: ztypes.vid
-    if bn2a.stringView == bn2r.stringView then {
+    if bn2a.stringView == bn2r then {
         bn2v = (atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent.u64)))
     }
     bn2: emitLocalAtomName :ctx name: bn2r.stringView vid: baseAtomVid
@@ -15706,7 +15897,7 @@ emitTakeAliasBind: function {
                 # has no `_destroy`: it rides the scope's String free list
                 # like any other owned String local.
                 ldcbC: ctxCname :ctx tid: (ztypes.tid.create from: ntO.u64)
-                if ldcbC.stringView == ctx.strC.stringView then {
+                if ldcbC.stringView == ctx.strC then {
                     tmp.oweFree name: nm.string vid: nameVid
                 } else {
                     if (symtab.reg.needsDestructor typeId: ntO) then {
@@ -19891,6 +20082,55 @@ truthyCondText: function {
 
 # seed a condition's operator so the branch emit can read it without re-
 # resolving
+# seedEqualityCond -- `== true` / `== false` seeds exactly what the ARM it
+# names seeds, and answers whether it did. The comparison is an infix call, so
+# its operands are read through the one seam that knows that layout; which side
+# is which comes from bool's arm ORDER, never from the spelling of the operand.
+seedEqualityCond: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: astnode.view
+    body: astnode.view
+    names: List String
+    svids: ListVal ztypes.vid
+    vals: List String
+    tids: ListVal u64
+} out bool is {
+    ipS: zast.infixPartsOf :ast :n
+    if ipS.found.not then return false
+    # the operator node is read ONCE: as a repeated subexpression it is emitted
+    # per use, and the hoisted temporaries the uses it loses leave behind are a
+    # warn-check failure
+    opNS: ast.nodes.get i: ipS.operator.u64
+    if (atomTextDeep :ast n: opNS) != "==" then return false
+    lsdS: boolArmSideOf :ast :symtab n: (ast.nodes.get i: ipS.lhs.u64)
+    rsdS: boolArmSideOf :ast :symtab n: (ast.nodes.get i: ipS.rhs.u64)
+    if rsdS.truthy then {
+        blS: ast.nodes.get i: ipS.lhs.u64
+        seedFromPredicate :ast :symtab :ctx n: blS :body :names :svids :vals :tids
+        return true
+    }
+    if rsdS.falsy then {
+        lnS: ast.nodes.get i: ipS.lhs.u64
+        seedNegatedFromPredicate :ast :symtab :ctx n: lnS :body :names :svids :vals :tids
+        return true
+    }
+    if lsdS.truthy then {
+        brS: ast.nodes.get i: ipS.rhs.u64
+        seedFromPredicate :ast :symtab :ctx n: brS :body :names :svids :vals :tids
+        return true
+    }
+    if lsdS.falsy then {
+        rnS: ast.nodes.get i: ipS.rhs.u64
+        seedNegatedFromPredicate :ast :symtab :ctx n: rnS :body :names :svids :vals :tids
+        return true
+    }
+    return false
+}
+
+# seed a condition's operator so the branch emit can read it without re-
+# resolving
 seedCondOp: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
@@ -19925,6 +20165,7 @@ seedCondOp: function {
             return
         }
     }
+    if (seedEqualityCond :ast :symtab :ctx :n :body :names :svids :vals :tids) then return
     match (
         n
     ) case expression then {
@@ -19965,53 +20206,6 @@ seedCondOp: function {
             :vals
             :tids
         )
-    } case binop then {
-        opn: atomTextDeep :ast n: (ast.nodes.get i: n.operator.u64)
-        if opn == "==" then {
-            # `== true` / `== false`: the operand names one of bool's arms,
-            # and which side it is comes from bool's arm ORDER.
-            lsd: boolArmSideOf :ast :symtab n: (ast.nodes.get i: n.lhs.u64)
-            rsd: boolArmSideOf :ast :symtab n: (ast.nodes.get i: n.rhs.u64)
-            if rsd.truthy then {
-                bl: ast.nodes.get i: n.lhs.u64
-                seedFromPredicate :ast :symtab :ctx n: bl :body :names :svids :vals :tids
-                return
-            }
-            if rsd.falsy then {
-                lhsNode: ast.nodes.get i: n.lhs.u64
-                (seedNegatedFromPredicate
-                    :ast
-                    :symtab
-                    :ctx
-                    n: lhsNode
-                    :body
-                    :names
-                    :svids
-                    :vals
-                    :tids
-                )
-                return
-            }
-            if lsd.truthy then {
-                br: ast.nodes.get i: n.rhs.u64
-                seedFromPredicate :ast :symtab :ctx n: br :body :names :svids :vals :tids
-                return
-            }
-            if lsd.falsy then {
-                rhsNode: ast.nodes.get i: n.rhs.u64
-                (seedNegatedFromPredicate
-                    :ast
-                    :symtab
-                    :ctx
-                    n: rhsNode
-                    :body
-                    :names
-                    :svids
-                    :vals
-                    :tids
-                )
-            }
-        }
     } else null
 }
 
@@ -20360,6 +20554,54 @@ classifyInnerFact: function {
 # legs the chain facts have always used: the bare stamped form, a `.true` /
 # `.false` suffix whose side comes from the arm ORDER, and `== true` / `== false`
 # against bool. Answers without building any text.
+# eqcondfact -- classifyEqualityCond's answer: whether the condition WAS an
+# equality against a bool arm, and the fact it classifies to if so.
+eqcondfact: record {
+    # true when the condition is `== true` / `== false` and `fact` is its answer
+    handled: bool
+    # the arm fact, which may itself be `ok: false` when the operand names none
+    fact: condarmfact
+}
+
+# classifyEqualityCond -- `== true` / `== false` classifies as the ARM it names.
+# The comparison is an infix call, so its operands are read through the one seam
+# that knows that layout; which side is which comes from bool's arm ORDER.
+classifyEqualityCond: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    n: astnode.view
+} out eqcondfact is {
+    miss: (eqcondfact handled: false fact: noArmFact)
+    ipC: zast.infixPartsOf :ast :n
+    if ipC.found.not then return miss
+    # read ONCE, as in seedEqualityCond
+    opNC: ast.nodes.get i: ipC.operator.u64
+    if (atomTextDeep :ast n: opNC) != "==" then return miss
+    lsdC: boolArmSideOf :ast :symtab n: (ast.nodes.get i: ipC.lhs.u64)
+    rsdC: boolArmSideOf :ast :symtab n: (ast.nodes.get i: ipC.rhs.u64)
+    if rsdC.truthy then return (eqcondfact
+        handled: true
+        fact: (classifyInnerFact :ast :symtab n: (ast.nodes.get i: ipC.lhs.u64) neg: false)
+    )
+    if rsdC.falsy then return (eqcondfact
+        handled: true
+        fact: (classifyInnerFact :ast :symtab n: (ast.nodes.get i: ipC.lhs.u64) neg: true)
+    )
+    if lsdC.truthy then return (eqcondfact
+        handled: true
+        fact: (classifyInnerFact :ast :symtab n: (ast.nodes.get i: ipC.rhs.u64) neg: false)
+    )
+    if lsdC.falsy then return (eqcondfact
+        handled: true
+        fact: (classifyInnerFact :ast :symtab n: (ast.nodes.get i: ipC.rhs.u64) neg: true)
+    )
+    return (eqcondfact handled: true fact: noArmFact)
+}
+
+# classifyCondFact -- one condition operation as an arm predicate, by the same
+# legs the chain facts have always used: the bare stamped form, a `.true` /
+# `.false` suffix whose side comes from the arm ORDER, and `== true` / `== false`
+# against bool. Answers without building any text.
 classifyCondFact: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -20383,6 +20625,10 @@ classifyCondFact: function {
                 neg: false
             )
         }
+    }
+    {
+        eqC: classifyEqualityCond :ast :symtab :n
+        if eqC.handled then return eqC.fact
     }
     match (
         n
@@ -20415,26 +20661,6 @@ classifyCondFact: function {
             armRef: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
             neg: false
         )
-    } case binop then {
-        opn: atomTextDeep :ast n: (ast.nodes.get i: n.operator.u64)
-        if opn != "==" then return none9
-        # `== true` / `== false`: the operand names one of bool's arms, and which
-        # side it is comes from bool's arm ORDER.
-        lsd: boolArmSideOf :ast :symtab n: (ast.nodes.get i: n.lhs.u64)
-        rsd: boolArmSideOf :ast :symtab n: (ast.nodes.get i: n.rhs.u64)
-        if rsd.truthy then {
-            return (classifyInnerFact :ast :symtab n: (ast.nodes.get i: n.lhs.u64) neg: false)
-        }
-        if rsd.falsy then {
-            return (classifyInnerFact :ast :symtab n: (ast.nodes.get i: n.lhs.u64) neg: true)
-        }
-        if lsd.truthy then {
-            return (classifyInnerFact :ast :symtab n: (ast.nodes.get i: n.rhs.u64) neg: false)
-        }
-        if lsd.falsy then {
-            return (classifyInnerFact :ast :symtab n: (ast.nodes.get i: n.rhs.u64) neg: true)
-        }
-        return none9
     } else {
         return none9
     }
@@ -24032,7 +24258,7 @@ stdFnUndemanded: function {
     # stamps a body, so being walked is the honest question. The main unit is
     # walked in full and keeps no such mark.
     if wantWalked.not then return false
-    if unitName == symtab.reg.regMainUnit.stringView then return false
+    if unitName == symtab.reg.regMainUnit then return false
     ud10x: (ztypecheck.unitDeclOfName
         st: symtab
         nameId: (zast.poolFind pool: ast.names text: unitName)
@@ -24441,7 +24667,7 @@ collectFnDecls: function {
                     :ownerTid
                     wantWalked: true
                 ) or
-                ((nm.stringView == "main") and (ctx.mainName.stringView != ctx.realMain.stringView))
+                ((nm.stringView == "main") and (ctx.mainName.stringView != ctx.realMain))
             )
             if skipDepMain.not then {
                 dv: di
@@ -28188,10 +28414,10 @@ emitUnorderedUnits: function {
         skip: false
         if u.stringView == "prelude" then skip = true
         with oit: ctx.unitOrder.iterate do for o: oit loop {
-            if o.stringView == u.stringView then skip = true
+            if o.stringView == u then skip = true
         }
         with dit: done.iterate do for d: dit loop {
-            if d.stringView == u.stringView then skip = true
+            if d.stringView == u then skip = true
         }
         if skip.not then {
             done.append from: u.copy
@@ -29194,7 +29420,7 @@ emitOneFnptrTypedef: function {
             isRecv: (
                 (rpn == "this") or
                 (rtn.stringView == "this") or
-                (rtn.stringView == ownNm.stringView) or
+                (rtn.stringView == ownNm) or
                 (rpv == ownT)
             )
             if isRecv then rpv = ownT
@@ -34142,7 +34368,7 @@ emitMethodParams: function {
         # The receiver is a reference in BOTH families: a record method acts on
         # the caller's instance, not on a copy of it. The rest of the pointer
         # rule still applies to class methods only.
-        isRecv: pname.stringView == recvNm.stringView
+        isRecv: pname.stringView == recvNm
         byPtr: isRecv
         if isRecv.not when encIsClass when (classParamByPointer
             :ast

@@ -1,0 +1,87 @@
+# THE INFIX FORM IS THE CALL FORM, INCLUDING ITS OWNERSHIP AND ITS RESULT.
+# `a op b` compiles as `a.op b`, so a one-argument method reached infix gets
+# the same treatment a dotted call gets -- and the two things the equivalence
+# fixture cannot host are here: a member that CONSUMES its argument, and a
+# member that returns nothing.
+#
+# Both used to diverge. The infix leg stamped only the operator's owner,
+# method and result and never ran the argument's take/lock/view treatment at
+# all, so `k put s` transferred nothing and freed the same String twice while
+# `k.put item: s` was correctly refused. And a void member written infix in
+# statement position emitted an assignment from a void call, which zc accepted
+# and the C compiler rejected.
+#
+# This program is in the corpus, so the leak gate runs it under the sanitizers
+# on every build: the double free is a regression test with no assertion to
+# maintain.
+
+Sink: class {
+    held: String
+    n: i64
+} as {
+    # CONSUMES its argument. The infix call must move `item` into the field,
+    # which is what makes the source unusable afterwards.
+    put: function {:this item: String.take} out i64 is {
+        this.held = item
+        this.n = this.n + 1
+        return this.n
+    }
+    # RETURNS NOTHING, and is written infix in statement position below
+    bump: function {:this by: i64} is {
+        this.n = this.n + by
+    }
+    # a symbolic operator over the same take parameter: the spelling of the
+    # member name changes nothing about the ownership
+    <<: function {:this item: String.take} out i64 is {
+        this.held = item
+        this.n = this.n + 1
+        return this.n
+    }
+}
+
+main: function is {
+    k: Sink held: "z".string n: 0
+
+    # a take parameter reached INFIX: the argument moves, exactly as the
+    # dotted spelling moves it
+    a: "one".string
+    r1: k put a
+    print "put r=\{r1} held=\{k.held}"
+
+    # the same through a symbolic operator
+    b: "two".string
+    r2: k << b
+    print "shl r=\{r2} held=\{k.held}"
+
+    # a VOID member infix in STATEMENT position: nothing is assigned, because
+    # there is nothing to assign
+    k bump 5
+    print "after bump n=\{k.n}"
+
+    # the dotted spelling of the same three, for the side-by-side comparison
+    c: "three".string
+    r3: k.put item: c
+    print "dotted put r=\{r3} held=\{k.held}"
+    k.bump by: 2
+    print "dotted bump n=\{k.n}"
+
+    # THE CONTAINER TAKE MEMBERS, which are where fixing the emitter alone
+    # would have turned a clear compile error into a silent double free
+    l: List String
+    d: "elem".string
+    l append d
+    print "list len=\{l.length} first=\{l.get i: 0}"
+
+    s: Set String
+    e: "member".string
+    s add e
+    probe: "member".string
+    print "set len=\{s.length} has=\{s has probe}"
+
+    # a container native reached infix on a NON-String element, the case the
+    # arc was opened for
+    li: ListVal i64
+    li.append 3
+    li.append 4
+    print "contains=\{li contains 3} get=\{li get 1}"
+}

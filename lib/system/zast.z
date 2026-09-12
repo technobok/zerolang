@@ -52,8 +52,11 @@ public: unit {
     :objectkindname
     :errname
     :isErrorAt
+    :infixparts
+    :infixPartsOf
     :kidspan
     :kidsAdd
+    :kidsAdd1
     :kidsAddWindow
     :kidAt
     :kidIds
@@ -1177,6 +1180,10 @@ callrow: record {
     callable: nodeid
     # the arguments, each a namedoperation carrying its label
     arguments: kidspan
+    # written INFIX (`a op b`) rather than dotted (`a.op b`). The two spellings
+    # are ONE call and compile through one path; this records only how it was
+    # written, so the printer puts back what the author wrote
+    infix: bool
 }
 
 # typeof-expression payload (compiler-synthesised): the operation
@@ -2432,6 +2439,16 @@ stringPartAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 # appendIds -- append every id in `ids` to `acc`. A walk collects a node's
 # children through one accumulator rather than a fresh list per visit, which is
 # where the per-visit lists went.
+# kidsAdd1 -- ONE kid, with no list to carry it. The infix fold mints a call
+# per operator in the program and every one of them has exactly one argument,
+# so building a one-element list just to copy it out cost a heap block for
+# every operator a self-compile sees.
+kidsAdd1: function {kids: ListVal u32 x: u32} out kidspan is {
+    f: kids.length.u32.orPanic
+    kids.append from: x
+    return (kidspan first: f count: 1)
+}
+
 # kidsAdd -- copy `xs` into the child arena and answer the span naming it. The
 # copy is what makes a span contiguous: the parser builds a node's children
 # while parsing grandchildren that are appending here too, so the window can
@@ -2473,6 +2490,59 @@ kidIds: function {ast: Ast.view span: kidspan} out ListVal u32 is {
         i = i + 1
     }
     return ids
+}
+
+# The three ids an `a op b` expression is made of. `found` is false for every
+# other node, so a walk that used to match a binop arm asks for these instead
+# and reads exactly the same three children.
+infixparts: record {
+    # true when the node IS an infix call and the three ids below are real
+    found: bool
+    # the receiver -- the left operand
+    lhs: nodeid
+    # the operator, itself a node: an operator is an identifier, not a token kind
+    operator: nodeid
+    # the argument -- the right operand
+    rhs: nodeid
+}
+
+# infixPartsOf -- destructure an INFIX call back into receiver, operator and
+# argument. `a op b` IS `a.op b`, so the receiver and the operator are the
+# callable's dotted path and the right operand is the call's one unlabelled
+# argument. THIS IS THE ONE PLACE THAT KNOWS THAT LAYOUT: every walk that
+# reads an operator expression comes through here, so the shape is described
+# once rather than re-derived per consumer.
+infixPartsOf: function {ast: Ast.view n: astnode.view} out infixparts is {
+    absent: (infixparts found: false lhs: nodeid operator: nodeid rhs: nodeid)
+    match (
+        n
+    ) case call then {
+        if n.infix.not then return absent
+        if n.arguments.count.u64 != 1 then return absent
+        cb: ast.nodes.get i: n.callable.u64
+        match (
+            cb
+        ) case dottedpath then {
+            aId: kidAt kids: ast.kids span: n.arguments i: 0
+            an: ast.nodes.get i: aId.u64
+            match (
+                an
+            ) case namedoperation then {
+                return (infixparts
+                    found: true
+                    lhs: cb.parent
+                    operator: cb.child
+                    rhs: an.operation
+                )
+            } else {
+                return absent
+            }
+        } else {
+            return absent
+        }
+    } else {
+        return absent
+    }
 }
 
 # objItemIds -- every member node of an object definition, its `is` items then

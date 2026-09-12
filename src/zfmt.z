@@ -553,6 +553,10 @@ Builder: class {
         } case binop then {
             return (this.visitBinop :id :wrapped :remaining :owned)
         } case call then {
+            # printed in the spelling it was written in: the operator sits
+            # between its operands and the dot was never typed, so the dotted
+            # printer would both invent a `.` and desync the token cursor
+            if n.infix then return (this.visitBinop :id :wrapped :remaining :owned)
             return (this.visitCall :id inParens: false :remaining :owned)
         } case dottedpath then {
             return (this.visitPath :id :remaining :owned)
@@ -623,10 +627,14 @@ Builder: class {
         }
     }
 
-    # isBinop -- a binop below its wrappers
+    # isBinop -- a binary operation below its wrappers, in EITHER spelling. An
+    # infix call is one: `a op b` parses to the call form, so every layout rule
+    # keyed on this predicate reads the two spellings alike
     isBinop: function {this: this.view id: zast.nodeid} out bool is {
         n: this.node id: (this.innerOf :id)
-        return n.binop
+        if n.binop then return true
+        ip: zast.infixPartsOf ast: this.ast :n
+        return ip.found
     }
 
     # isApplication -- a call whose only argument is unnamed and a term
@@ -636,6 +644,10 @@ Builder: class {
         match (
             n
         ) case call then {
+            # an INFIX call also carries one unnamed argument and is NOT an
+            # application: `a + b` is a binary operation, and isBinop answers
+            # for it. Without this the two would claim the same layout rule
+            if n.infix then return false
             if n.arguments.count != 1 then return false
             a: this.node id: (this.kid span: n.arguments i: 0)
             match (
@@ -741,7 +753,10 @@ Builder: class {
         }
         layout: this.parenIsLayout :inner :slot
         innerNode: this.node id: inner
+        # an INFIX call is not call-shaped: its parentheses are the layout pair
+        # a binary operation owns, not the pair a call fills when it breaks
         isCall: innerNode.call
+        if (this.isBinop id: inner) then isCall = false
         if layout when isCall then {
             # a call fills the pair the printer inserts when it breaks, so the
             # written pair is dropped
@@ -878,16 +893,14 @@ Builder: class {
         cur: id
         for true loop {
             n: this.node id: cur
-            match (
-                n
-            ) case binop then {
-                operands.append n.rhs.u32
-                operators.append n.operator.u32
-                cur = n.lhs
-            } else {
+            ip: zast.infixPartsOf ast: this.ast :n
+            if ip.found.not then {
                 operands.append cur.u32
                 break
             }
+            operands.append ip.rhs.u32
+            operators.append ip.operator.u32
+            cur = ip.lhs
         }
         leftId: zast.nodeid.create from: (operands.get i: operands.length - 1)
         leftSlot: slotLeft
@@ -972,21 +985,17 @@ Builder: class {
         cur: this.innerOf id: inner
         for true loop {
             n: this.node id: cur
+            ip: zast.infixPartsOf ast: this.ast :n
+            if ip.found.not then break
+            opn: this.node id: ip.operator
             match (
-                n
-            ) case binop then {
-                opn: this.node id: n.operator
-                match (
-                    opn
-                ) case atomid then {
-                    if opn.name != want then return false
-                } else {
-                    return false
-                }
-                cur = this.innerOf id: n.lhs
+                opn
+            ) case atomid then {
+                if opn.name != want then return false
             } else {
-                break
+                return false
             }
+            cur = this.innerOf id: ip.lhs
         }
         return true
     }
@@ -2256,6 +2265,17 @@ sameFacts: function {
         ) case objectdef then {
             if xa.isNative != xb.isNative then return false
             return xa.kind == xb.kind
+        } else {
+            return false
+        }
+    } case call then {
+        # THE SPELLING IS A FACT. An infix call and a dotted call are the same
+        # method, so every other field matches; only this says which one was
+        # written, and the round-trip is what holds the printer to it
+        match (
+            xb
+        ) case call then {
+            return xa.infix == xb.infix
         } else {
             return false
         }

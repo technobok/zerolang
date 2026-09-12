@@ -412,10 +412,13 @@ Parser: class {
     }
 
     # True when `node` is an arm valid as a call's first unnamed argument.
+    # A CALL IS ONE: an infix operand folds to the call form (`a + 1` IS
+    # `(a).+ 1`), so an argument written as an operation arrives as a call and
+    # dropping it left `return a + 1` emitting a bare `return`.
     isOperationArm: function {node: astnode.view} out bool is {
         match (
             node
-        ) case binop then {
+        ) case call then {
             return true
         } case dottedpath then {
             return true
@@ -930,7 +933,7 @@ Parser: class {
     # arrives in source order; the two reversals this used to do existed only
     # to intern in that order, and the paths are interned as they are parsed now
     mkCall: function {
-        :this callable: u32 arguments: (ListVal u32).take line: u32 col: u32
+        :this callable: u32 arguments: (ListVal u32).take line: u32 col: u32 infix: false
     } out astnode is {
         argIds: arguments
         return (astnode.call (zast.callrow
@@ -939,6 +942,49 @@ Parser: class {
             colno: col
             callable: (zast.nodeid.create from: callable)
             arguments: (zast.kidsAdd kids: this.ast.kids xs: argIds)
+            :infix
+        )
+        )
+    }
+
+    # mkInfixCall -- the INFIX spelling of a one-argument method call. `a op b`
+    # and `a.op b` are one call: the receiver and the operator are the dotted
+    # callable, and the right operand is the call's one unlabelled argument.
+    # Every operand is interned already, so the ids move in as they are.
+    mkInfixCall: function {
+        :this recv: u32 operator: u32 rhs: u32 line: u32 col: u32
+    } out astnode is {
+        dp: (astnode.dottedpath (zast.dottedpathrow
+            nodeid: this.nextId
+            lineno: line
+            colno: col
+            parent: (zast.nodeid.create from: recv)
+            child: (zast.nodeid.create from: operator)
+        )
+        )
+        rp: zast.posOf n: (this.ast.nodes.get i: rhs.u64)
+        uarg: (astnode.namedoperation (zast.namedoperationrow
+            nodeid: this.nextId
+            lineno: rp.line
+            colno: rp.col
+            name: (zast.nameid.create from: 0)
+            operation: (zast.nodeid.create from: rhs)
+        )
+        )
+        # the ARGUMENT interns first, as it did when this built its call through
+        # mkCall: the ids a node gets are the order they are minted in, and the
+        # parser goldens pin them
+        agId9: (this.intern n: uarg).u32
+        cbId9: (this.intern n: dp).u32
+        nid9: this.nextId
+        spn9: zast.kidsAdd1 kids: this.ast.kids x: agId9
+        return (astnode.call (zast.callrow
+            nodeid: nid9
+            lineno: line
+            colno: col
+            callable: (zast.nodeid.create from: cbId9)
+            arguments: spn9
+            infix: true
         )
         )
     }
@@ -993,9 +1039,11 @@ Parser: class {
         return (this.foldBinopTail :stack :acc line: sp.line col: sp.col :lex)
     }
 
-    # collapse the operand/operator stack into a left-nested binop chain. Binops
-    # have NO precedence here, so the fold is purely left to right and the shape
-    # is exactly what was written
+    # collapse the operand/operator stack into a left-nested CALL chain: the
+    # infix form is the call form, so the fold builds what `a.op b` builds and
+    # records only that it was written infix. Operators have NO precedence
+    # here, so the fold is purely left to right and the shape is exactly what
+    # was written
     foldBinopTail: function {
         :this stack: (ListVal u32).take acc: u32 line: u32 col: u32 lex: zlexer.Lexer.view
     } out astnode is {
@@ -1011,7 +1059,7 @@ Parser: class {
                 )
             }
             rhs: stack.pop
-            nb: this.mkBinop lhs: acc operator: op :rhs :line :col
+            nb: this.mkInfixCall recv: acc operator: op :rhs :line :col
             return (this.foldBinopTail :stack acc: (this.intern n: nb).u32 :line :col :lex)
         } else {
             return (this.mkErrorAt
@@ -3831,7 +3879,7 @@ Parser: class {
                 if rErr then {
                     nf: this.isFileNotFound node: res
                     if nf then {
-                        if name.stringView == mainUnitName.stringView then {
+                        if name.stringView == mainUnitName then {
                             return (this.errorTree e: (astnode.error (zast.errorrow
                                 nodeid: this.nextId
                                 lineno: 0

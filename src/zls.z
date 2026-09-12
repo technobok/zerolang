@@ -977,9 +977,9 @@ Server: class {
                 pv: paths.get i: ri
                 hit: false
                 if drel.length > 0 then {
-                    if pv.stringView == drel.stringView then hit = true
-                    if pv.stringView == dfs.stringView then hit = true
-                    if pv.stringView == dov.stringView then hit = true
+                    if pv.stringView == drel then hit = true
+                    if pv.stringView == dfs then hit = true
+                    if pv.stringView == dov then hit = true
                 }
                 if hit then {
                     row: rows.get i: ri
@@ -1335,7 +1335,14 @@ Spans: class {
 
     # innerRangeOfKind -- the innermost recorded range of `kind` whose
     # [startPos, endPos + slack] contains `curPos` (line*1048576+col), or 0.
-    innerRangeOfKind: function {t: this.view curPos: u64 kind: u8 slack: u64} out u32 is {
+    innerRangeOfKind: function {
+        t: this.view
+        curPos: u64
+        kind: u8
+        slack: u64
+        prog: Ast.view
+        wantFsno: zvfs.fsno
+    } out u32 is {
         best: u32
         bestStart: u64
         ri: u64
@@ -1344,6 +1351,13 @@ Spans: class {
             hit: rr.kind == kind
             if rr.startPos > curPos then hit = false
             if curPos > (rr.endPos + slack) then hit = false
+            # THE WALK SPANS EVERY UNIT and a position is line*2^20+col, so a
+            # range in ANOTHER file at the same line and a later column reads
+            # as the innermost one. Every operator is a call now, so those
+            # ranges are everywhere and the collision stopped being rare.
+            if hit when wantFsno.u64 > 0 when (
+                (prog.fsnoForNode nodeid: rr.nodeid) != wantFsno
+            ) then hit = false
             if hit then {
                 shouldTake: (best == 0) or (rr.startPos > bestStart)
                 if shouldTake then {
@@ -1526,10 +1540,10 @@ pathMatches: function {pv: StringView rel: StringView srcDir: StringView} out bo
     if rel.length == 0 then return false
     if pv == rel then return true
     fs: zcheck.joinPath a: srcDir b: rel
-    if pv == fs.stringView then return true
+    if pv == fs then return true
     ov: "/".string
     ov.append rel
-    if pv == ov.stringView then return true
+    if pv == ov then return true
     return false
 }
 
@@ -3431,7 +3445,13 @@ hoverCallNotes: function {
     docBody: String.borrow
 } is {
     hpos: (sp.pos.get key: hit.nodeid).or d: 0
-    callId: sp.innerRangeOfKind curPos: hpos kind: 4 slack: 0
+    callId: (sp.innerRangeOfKind
+        curPos: hpos
+        kind: 4
+        slack: 0
+        prog: snap.prog
+        wantFsno: zvfs.fsno
+    )
     if callId == 0 then return
     callPos: (sp.pos.get key: callId.u64).or d: 0
     if callPos == hpos then {
@@ -3527,7 +3547,7 @@ navReferencesAnswer: function {
             (memberOwnerOf o: snap.st nid: n2) == hit.owner
         ) then {
             nm2: sp.names.get i: rj
-            if nm2.stringView == hname.stringView then add = true
+            if nm2.stringView == hname then add = true
         }
         if add then {
             lv2: (locationValue
@@ -4932,7 +4952,13 @@ caseArmComplete: function {
         lastPos: 0
     )
     sp.walkProgram :prog
-    caseId: sp.innerRangeOfKind curPos: cursorPos kind: 5 slack: 1048576
+    caseId: (sp.innerRangeOfKind
+        curPos: cursorPos
+        kind: 5
+        slack: 1048576
+        :prog
+        wantFsno: zvfs.fsno
+    )
     if caseId == 0 then return false
     clauseIds: ListVal u64
     subjIdx: caseClauseIds :prog :caseId dst: clauseIds
@@ -5026,6 +5052,21 @@ bareCalleeFuncId: function {
     cursorPos: u64
     sp: Spans.view
 } out u64 is {
+    leaf9: cursorLeafNid :ltv :ws :cursorPos :sp
+    if leaf9 == 0 then return 0
+    return (resolveCalleeFuncId :o nid: leaf9.u64)
+}
+
+# cursorLeafNid -- the node id of the identifier immediately before the
+# trailing whitespace at the cursor, or 0. The walk spans every unit and span
+# rows carry no file id, so a same-line/column row from ANOTHER file can
+# collide; the identifier text disambiguates.
+cursorLeafNid: function {
+    ltv: StringView
+    ws: u64
+    cursorPos: u64
+    sp: Spans.view
+} out u32 is {
     scan: ws
     for scan > 0 loop {
         ib: ltv.byteAt i: scan - 1
@@ -5072,7 +5113,7 @@ bareCalleeFuncId: function {
         rix = rix + 1
     }
     if found.not then return 0
-    return (resolveCalleeFuncId :o nid: leafNid.u64)
+    return leafNid
 }
 
 # emitLabels -- append `funcId`'s parameter labels (minus the receiver and any
@@ -5111,7 +5152,7 @@ emitLabels: function {
         pn: pnames.get i: ri
         isSupp: false
         with sit: supplied.iterate do for su: sit loop {
-            if su.stringView == pn.stringView then isSupp = true
+            if su.stringView == pn then isSupp = true
         }
         matchp: true
         if prefix.length > 0 when (pn.startsWith prefix).not then matchp = false
@@ -5180,7 +5221,20 @@ argLabelComplete: function {
         lastPos: 0
     )
     sp.walkProgram :prog
-    callId: sp.innerRangeOfKind curPos: cursorPos kind: 4 slack: 1048576
+    # the cursor's OWN file: the leaf just before it names the unit whose call
+    # this must be, and without that a same-line call in any other unit wins
+    wantFs9: zvfs.fsno
+    {
+        lf9: cursorLeafNid :ltv :ws :cursorPos :sp
+        if lf9 > 0 then wantFs9 = prog.fsnoForNode nodeid: lf9
+    }
+    callId: (sp.innerRangeOfKind
+        curPos: cursorPos
+        kind: 4
+        slack: 1048576
+        :prog
+        wantFsno: wantFs9
+    )
     supplied: List String
     # a bare function/method name (no label yet) has no call node; on a fresh
     # arg position (empty prefix) resolve the identifier just before the cursor

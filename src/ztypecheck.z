@@ -171,7 +171,7 @@ atomNameId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
 addResolveError: function {st: zenv.ZSymbolTable e: zast.err msg: String} is {
     dup: false
     with eit: st.typing.errors.iterate do for pe: eit loop {
-        if pe.msg.stringView == msg.stringView then dup = true
+        if pe.msg.stringView == msg then dup = true
     }
     if dup.not then {
         en: String
@@ -259,7 +259,7 @@ addErrorH: function {
 } is {
     dup: false
     with it: st.typing.errors.iterate do for prev: it loop {
-        if prev.lineno == lineno when prev.msg.stringView == msg.stringView then dup = true
+        if prev.lineno == lineno when prev.msg.stringView == msg then dup = true
     }
     if dup.not then {
         st.typing.errors.append (zast.ErrorData
@@ -4465,7 +4465,7 @@ refuseLiteralTyperef: function {
     written9: false
     {
         wt9: zast.nameTextAt :ast ref: wn9
-        written9 = wt9.stringView == ltn.stringView
+        written9 = wt9.stringView == ltn
     }
     if written9.not then return
     dflt: "i64"
@@ -7981,7 +7981,7 @@ requiredLibs: function {
             if lib9x.length > 0 then {
                 dup9w: false
                 with dit9w: libs9w.iterate do for e9w: dit9w loop {
-                    if e9w.stringView == lib9x.stringView then dup9w = true
+                    if e9w.stringView == lib9x then dup9w = true
                 }
                 if dup9w.not then libs9w.append from: lib9x.copy
             }
@@ -8057,7 +8057,7 @@ applyUnitVisibility: function {
                     )
                     # the entry `main` of the primary unit must stay public:
                     # a `public:` block that omits it hides the entry point
-                    if nmV.stringView == program.mainUnitName.stringView when (declMemberIsPrivate
+                    if nmV.stringView == program.mainUnitName when (declMemberIsPrivate
                         :st
                         tid: (ztypes.tid.create from: utidV.u64)
                         nameId: (program.names.find s: "main")
@@ -11570,10 +11570,10 @@ bareNameDenotesType: function {
     named: false
     {
         ndNm: zast.nameTextAt :ast ref: nameId
-        named = tnq.stringView == ndNm.stringView
+        named = tnq.stringView == ndNm
         if named.not then {
             twn: aliasedContainerTwin name: ndNm.stringView
-            if twn.length > 0 when twn == tnq.stringView then named = true
+            if twn.length > 0 when twn == tnq then named = true
         }
     }
     if named then return true
@@ -22562,6 +22562,41 @@ checkMoveMarkerVar: function {
     return relBlocked
 }
 
+# derivedInequalityMember -- `!=` resolved to the declared `==` it negates, or
+# none for every other member and for a `!=` the author wrote.
+#
+# A type whose `!=` is only the STRUCTURAL SYNTH -- or absent entirely, as on a
+# facet -- but which DECLARES `==` takes its inequality from that `==`. The
+# argument then binds the parameter the author wrote, and the emitter negates
+# at the dispatch site as it already does. Without this a declared `==` taking
+# anything but the owner's own type (`==: function {p: this rhs: u64}`) had its
+# partner demand the owner's type, so `a != 3` asked for a `pt` and got a
+# literal.
+derivedInequalityMember: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    bt: ztypes.tid
+    cnId: zast.nameid
+    mo: optionval u64
+} out optionval u64 is {
+    if cnId != zast.names.wkOpNe then return (optionval.none u64)
+    neSynthetic: true
+    match (
+        mo
+    ) case some then {
+        neSynthetic = st.typing.synthCmpTids.has item: mo.u64
+    } case none then null
+    if neSynthetic.not then return (optionval.none u64)
+    (forceMemberOf :st frame: st.curFrame :ast parentTypeId: bt nameId: zast.names.wkOpEq)
+    eqM9: st.typing.declChildOfId parentTypeId: bt nameId: zast.names.wkOpEq
+    match (
+        eqM9
+    ) case some then {
+        if (st.typing.synthCmpTids.has item: eqM9.u64).not then return (optionval.some eqM9)
+    } case none then null
+    return (optionval.none u64)
+}
+
 # checkUnresolvedMember -- the member did not resolve on the base type. `.copy` is
 # an ownership primitive rather than a constrained member, so a generic-param
 # receiver still types it t -> t; everything else is diagnosed here.
@@ -22578,6 +22613,15 @@ checkUnresolvedMember: function {
         # every instantiation copies, so a generic-param receiver types
         # it t -> t (the per-instance clone emits the concrete copy).
         if (zast.nameTextEq :ast ref: cnId s: "copy") then {
+            stampGate :st nid: dp.nid.u64 tid: bt
+            return bt
+        }
+        # AN OPERATOR ON A TYPE PARAMETER RESOLVES AT INSTANTIATION, not in the
+        # template: `add: function {a: t b: t} out t is { return a + b }` is
+        # checked against each concrete t by the per-instance clone. An operator
+        # is spelled in punctuation, so the name itself says which members these
+        # are, and the template keeps the coercible lhs result.
+        if (isOperatorName name: cn.stringView) then {
             stampGate :st nid: dp.nid.u64 tid: bt
             return bt
         }
@@ -23329,6 +23373,22 @@ dottedBaseTid: function {
             }
         }
     }
+    # A BOX IS A HEAP POINTER AROUND ONE VALTYPE and declares no operators of
+    # its own, so its OPERATORS are the boxed element's -- always, not only
+    # when the Box resolves nothing: under --eager every member is minted and
+    # the Box would answer with an edge of its own, attributing the operator to
+    # a type that declares none. Named members stay the Box's (`b.take` is the
+    # Box's); only punctuation delegates.
+    {
+        cnmB: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: dp.child.u64))
+        isOpB: isOperatorName name: cnmB.stringView
+        if isOpB when (st.reg.isBoxOf tid: bt) when (
+            (st.reg.genericArgCount specId: bt) == 1
+        ) then {
+            bxE: st.reg.genericArgAt specId: bt ordinal: 0
+            if bxE > 0 then bt = ztypes.tid.create from: bxE.u64
+        }
+    }
     return bt
 }
 
@@ -23449,6 +23509,14 @@ checkDotted: function {
                 mo = st.typing.declChildOfId parentTypeId: bt nameId: cnId
             }
         }
+    }
+    {
+        dn9: derivedInequalityMember :st :ast :bt :cnId :mo
+        match (
+            dn9
+        ) case some then {
+            mo = optionval.some dn9
+        } case none then null
     }
     match (
         mo
@@ -24370,6 +24438,69 @@ truthyCondArmOf: function {st: zenv.ZSymbolTable.view nid: u64} out u64 is {
 # predFactOf -- recognize an if-condition operation as an arm predicate:
 # bare `x.a`, trailing-bool `x.a.true` / `x.a.false`, or the comparison
 # `(x.a) == true` / `(x.a) == false`. none otherwise.
+# equalityArmFact -- the arm fact `== true` / `== false` states, in EITHER
+# spelling. binRefAt answers for the infix call and for the binop alike, so the
+# comparison is read through one seam and this walk never learns which way it
+# was written. The operand names one of bool's arms, and WHICH SIDE it is comes
+# from bool's arm order rather than from the spelling; `boolId` is the
+# canonical id the clause check already resolved.
+equalityArmFact: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    n: astnode.view
+    boolId: u64
+} out Option ArmPredFact is {
+    br0: binRefAt :ast nid: (nodeId :n)
+    if br0.operator.isZero then return (Option.none ArmPredFact)
+    opn0: (zast.nameTextAt
+        :ast
+        ref: (bareAtomNameId :ast n: (ast.nodes.get i: br0.operator.u64))
+    )
+    if opn0.stringView != "==" then return (Option.none ArmPredFact)
+    lsd0: (ztyping.armSideOfName
+        ty: st.typing
+        typeId: boolId
+        nameId: (bareAtomNameId :ast n: (ast.nodes.get i: br0.lhs.u64)).u64
+    )
+    rsd0: (ztyping.armSideOfName
+        ty: st.typing
+        typeId: boolId
+        nameId: (bareAtomNameId :ast n: (ast.nodes.get i: br0.rhs.u64)).u64
+    )
+    if rsd0.truthy then return (predDottedFact
+        :st
+        :ast
+        n: (ast.nodes.get i: br0.lhs.u64)
+        :boolId
+        negated: false
+    )
+    if rsd0.falsy then return (predDottedFact
+        :st
+        :ast
+        n: (ast.nodes.get i: br0.lhs.u64)
+        :boolId
+        negated: true
+    )
+    if lsd0.truthy then return (predDottedFact
+        :st
+        :ast
+        n: (ast.nodes.get i: br0.rhs.u64)
+        :boolId
+        negated: false
+    )
+    if lsd0.falsy then return (predDottedFact
+        :st
+        :ast
+        n: (ast.nodes.get i: br0.rhs.u64)
+        :boolId
+        negated: true
+    )
+    return (Option.none ArmPredFact)
+}
+
+# predFactOf -- recognize an if-condition operation as an arm predicate:
+# bare `x.a`, trailing-bool `x.a.true` / `x.a.false`, or the comparison
+# `(x.a) == true` / `(x.a) == false`. none otherwise.
 predFactOf: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
@@ -24395,6 +24526,14 @@ predFactOf: function {
                 )
             }
         }
+    }
+    {
+        ef0: equalityArmFact :ast :st :n :boolId
+        match (
+            ef0
+        ) case some then {
+            return (Option.some ef0)
+        } case none then null
     }
     match (
         n
@@ -24433,52 +24572,6 @@ predFactOf: function {
             :boolId
             negated: false
         )
-    } case binop then {
-        opn: zast.nameTextAt :ast ref: (bareAtomNameId :ast n: (ast.nodes.get i: n.operator.u64))
-        if opn.stringView == "==" then {
-            # `== true` / `== false`: the operand names one of bool's arms,
-            # and which side it is comes from bool's arm ORDER. boolId is the
-            # canonical id the clause check already resolved.
-            lsd: (ztyping.armSideOfName
-                ty: st.typing
-                typeId: boolId
-                nameId: (bareAtomNameId :ast n: (ast.nodes.get i: n.lhs.u64)).u64
-            )
-            rsd: (ztyping.armSideOfName
-                ty: st.typing
-                typeId: boolId
-                nameId: (bareAtomNameId :ast n: (ast.nodes.get i: n.rhs.u64)).u64
-            )
-            if rsd.truthy then return (predDottedFact
-                :st
-                :ast
-                n: (ast.nodes.get i: n.lhs.u64)
-                :boolId
-                negated: false
-            )
-            if rsd.falsy then return (predDottedFact
-                :st
-                :ast
-                n: (ast.nodes.get i: n.lhs.u64)
-                :boolId
-                negated: true
-            )
-            if lsd.truthy then return (predDottedFact
-                :st
-                :ast
-                n: (ast.nodes.get i: n.rhs.u64)
-                :boolId
-                negated: false
-            )
-            if lsd.falsy then return (predDottedFact
-                :st
-                :ast
-                n: (ast.nodes.get i: n.rhs.u64)
-                :boolId
-                negated: true
-            )
-        }
-        return (Option.none ArmPredFact)
     } else {
         return (Option.none ArmPredFact)
     }
@@ -28857,7 +28950,7 @@ checkWriteLock: function {st: zenv.ZSymbolTable ast: Ast.view n: astnode.view ve
     if rh.none then return
     rn: st.formatLockHolder pool: ast.names holder: rh
     ppc: pp
-    selfRo: rn.stringView == wr.stringView
+    selfRo: rn.stringView == wr
     mr: "Cannot \{verb} '\{ppc}': shared lock held by '\{rn}'"
     if selfRo then mr = "Cannot \{verb} '\{ppc}': '\{wr}' is readonly here"
     rht: String
@@ -28884,6 +28977,59 @@ checkWriteLock: function {st: zenv.ZSymbolTable ast: Ast.view n: astnode.view ve
         hint: rht
         width: wr.length.u32.orPanic
     )
+}
+
+# isLiteralTypeId -- a literal-typed value: one of the registry's two reserved
+# literal rows. Bare numeric literals and data-block elements wear them.
+# isOperatorName -- an operator is spelled in PUNCTUATION, so the name itself
+# says which members these are. A word-named member is never one, whatever it
+# does: `bool.or` is an operator by its natives.tbl row, not by its spelling.
+isOperatorName: function {name: StringView} out bool is {
+    b0: name.byteAt 0.u64
+    match (
+        b0
+    ) case some then {
+        return (((b0 >= 97) and (b0 <= 122)) or ((b0 >= 65) and (b0 <= 90)) or (b0 == 95)).not
+    } case none then null
+    return false
+}
+
+# literalTidOfLiteralOperand -- the literal pseudo-type a left operand carries
+# by its SPELLING, or 0 when it carries none. The node's stamp cannot answer:
+# an operand that is the receiver of an operator has been materialised for the
+# member lookup and restamped at the concrete default, so a hex constant above
+# i64 reads back as i64 and the operation answers i64 where the literal itself
+# would have fit u64.
+#
+# The walk follows the left-nested chain, because that is the shape the rule is
+# about: `0xff.. + 1 - 1` is an operation whose left operand is an operation
+# whose left operand is a literal, and every step of it keeps the literal
+# result. A COMPARISON breaks the chain -- it answers bool, never a literal.
+literalTidOfLiteralOperand: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    nid: u64
+} out u64 is {
+    n: ast.nodes.get i: nid
+    if n.expression then {
+        return (literalTidOfLiteralOperand :st :ast nid: n.expression.u64)
+    }
+    {
+        ipL: zast.infixPartsOf :ast :n
+        if ipL.found then {
+            opT: (zast.nameTextAt
+                :ast
+                ref: (bareAtomNameId :ast n: (ast.nodes.get i: ipL.operator.u64))
+            )
+            if (isComparisonOp name: opT.stringView) then return 0
+            return (literalTidOfLiteralOperand :st :ast nid: ipL.lhs.u64)
+        }
+    }
+    if n.atomid.not then return 0
+    txt: zast.nameTextAt :ast ref: n.name
+    if (isNumericLiteralName name: txt.stringView).not then return 0
+    if (isFloatLiteralName name: txt.stringView) then return st.reg.literalFloatTid.u64
+    return st.reg.literalIntTid.u64
 }
 
 # isLiteralTypeId -- a literal-typed value: one of the registry's two reserved
@@ -29680,8 +29826,12 @@ hoistAndLockArg: function {
 }
 
 # coercePositionalArg -- a positional argument takes the parameter at its own
-# index: check the value against that parameter's type, and coerce a literal to
-# the parameter's width rather than letting it keep its own default.
+# index, and is then THE SAME CHECK a labelled argument gets.
+#
+# It used to be a hand-copied one with its own skip list, and the lists had
+# drifted: this one skipped every numeric/numeric pair outright, so a lossy
+# width never got the coercion question and `5 < big.i128` was ACCEPTED while
+# `5.< rhs: big.i128` was refused. One call form, one argument check.
 coercePositionalArg: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -29692,58 +29842,8 @@ coercePositionalArg: function {
     arg: argref
 } is {
     cpidP: ((st.typing.declChildOfId parentTypeId: effId nameId: pnId).or d: 0)
-    if cpidP > 0 then {
-        ptidP: cpidP
-        if ptidP > 0 when vt > 0 when (
-            (typesCompatible :ast :st a: vt b: (ztypes.tid.create from: ptidP.u64)).not
-        ) then {
-            skipP: false
-            if (isNumericTid
-                :st
-                frame: st.curFrame
-                :ast
-                tid: (ztypes.tid.create from: vt.u64)
-            ) when (isNumericTid
-                :st
-                frame: st.curFrame
-                :ast
-                tid: (ztypes.tid.create from: ptidP.u64)
-            ) then skipP = true
-            pttP: st.reg.typetypeOf typeId: (ztypes.tid.create from: ptidP.u64)
-            if pttP == ztypes.ztypetype.protocolType then skipP = true
-            if pttP == ztypes.ztypetype.facetType then skipP = true
-            if pttP == ztypes.ztypetype.genericParam then skipP = true
-            if pttP == ztypes.ztypetype.functionType then skipP = true
-            if skipP.not then {
-                enP: (st.reg.nameOf tid: (ztypes.tid.create from: ptidP.u64))
-                anP: st.reg.nameOf tid: (ztypes.tid.create from: vt.u64)
-                emitP: true
-                if anP.length == 0 then {
-                    # unresolved got-side: suppress the knock-on
-                    # when a prior error explains it, else name it
-                    if st.typing.errors.length > 0 then emitP = false
-                    anP = "an unresolved value".string
-                }
-                if emitP then {
-                    pn: zast.nameTextAt :ast ref: pnId
-                    tmmP: "argument type mismatch: expected \{enP}, got \{anP}"
-                    enP9b: String
-                    ehP: String
-                    (addErrorH
-                        :st
-                        nodeid: arg.nid
-                        lineno: arg.lineno
-                        colno: arg.colno
-                        e: zast.err.callError
-                        msg: tmmP
-                        note: enP9b
-                        hint: ehP
-                        width: pn.length.u32.orPanic
-                    )
-                }
-            }
-        }
-    }
+    if cpidP == 0 then return
+    checkArgTypeMismatch :st :ast ptid: cpidP :vt :pnId :arg
 }
 
 # coerceArgToParam -- check a named argument against the parameter it binds to:
@@ -29908,6 +30008,44 @@ checkNumericCoercion: function {
             target: tn9c.stringView
         )
         return
+    }
+    # A FOLDED CONSTANT IS SETTLED BY ITS VALUE, exactly as a written literal
+    # is. The compiler already computed `(0 - 24)`, so asking whether i64
+    # converts to i32 asks the wrong question: the VALUE is what has to fit,
+    # and it is known here. This is why an operator expression at a narrow
+    # destination reads the same whichever way it was spelled.
+    {
+        # the report points at the ARGUMENT; the folded value sits on the value
+        # it carries, under the wrappers a parenthesised operand adds
+        vn9: nodeid
+        {
+            wn9: ast.nodes.get i: vn9.u64
+            if wn9.namedoperation then vn9 = wn9.operation
+        }
+        pw9: u64
+        for pw9 < 2 loop {
+            wb9: ast.nodes.get i: vn9.u64
+            if wb9.expression then vn9 = wb9.expression
+            pw9 = pw9 + 1
+        }
+        cf9: st.typing.nodeConst.get key: vn9.u64
+        match (
+            cf9
+        ) case some then {
+            if cf9.kind.ivalKind then {
+                lv9: "\{cf9.ival}"
+                tn9f: st.reg.nameOf tid: dstTid
+                (checkLiteralFits
+                    :st
+                    :nodeid
+                    :lineno
+                    :colno
+                    lit: lv9.stringView
+                    target: tn9f.stringView
+                )
+                return
+            }
+        } case none then null
     }
     if (isNumericTid :st frame: st.curFrame :ast tid: srcTid).not then return
     if (isNumericTid :st frame: st.curFrame :ast tid: dstTid).not then return
@@ -30850,6 +30988,12 @@ unresolvedBareName: function {
     nameId: zast.nameid
 } out String is {
     if nameId.isZero then return "".string
+    # A NUMERIC LITERAL IS NOT A NAME and can never resolve to one, so it is
+    # never the unresolvable name a report should print. It reaches here from
+    # an operand walk: `k bump 5` on a member that returns nothing types to
+    # nothing correctly, and naming `5` as an unknown reference reported the
+    # statement as broken when what it did was return no value.
+    if (isNumericLiteralNameAt :ast ref: nameId) then return "".string
     # `meta` is the enclosing type's raw allocator base (meta.create):
     # contextual, never a unit-resolvable name
     if (zast.nameTextEq :ast ref: nameId s: "meta") then return "".string
@@ -30923,6 +31067,10 @@ unresolvedBareCallable: function {
     nameId: zast.nameid
     {
         n: ast.nodes.get i: nid.u64
+        # an INFIX call hides the unresolvable name in EITHER operand
+        # (`1 + ghost`), and the callable alone reaches only the left one.
+        # Read ahead of the match: an arm narrows `n` to its own row.
+        ipu: zast.infixPartsOf :ast :n
         match (
             n
         ) case expression then {
@@ -30931,6 +31079,11 @@ unresolvedBareCallable: function {
         } case call then {
             arm = 2
             callableId = n.callable
+            if ipu.found then {
+                arm = 3
+                lhsId = ipu.lhs
+                rhsId = ipu.rhs
+            }
         } case binop then {
             arm = 3
             lhsId = n.lhs
@@ -31621,8 +31774,14 @@ checkResolvedMethodCall: function {
     # is a call result or a nested path is a value by construction --
     # reading an ABSENT name as "not a value" made `(mk n: 2).plus n: 3`
     # demand a receiver the dot had already handed over.
+    # AN INFIX LEFT OPERAND IS A VALUE EXPRESSION. `a op b` evaluates `a` the
+    # way any value position does -- a function auto-calls, a bare type name
+    # constructs -- so the receiver always arrives through the dot. Only the
+    # DOTTED spelling reads its left as a path, where a bare type name is
+    # type-qualified dispatch and hands the receiver to the arguments.
     recvVal: true
     rrnId: rootNameIdOf :ast n: (ast.nodes.get i: call.callable.u64)
+    if call.infix then rrnId = zast.nameid
     if rrnId.isZero.not then {
         rlo: st.lookup nameId: rrnId
         match (
@@ -31684,6 +31843,40 @@ checkResolvedMethodCall: function {
         setmr: mres
         stampGate :st nid: call.nid.u64 tid: (ztypes.tid.create from: setmr.u64)
     } case none then null
+    # A BARE-LITERAL LEFT OPERAND KEEPS ITS COERCIBLE LITERAL RESULT. `(0 - 24)`
+    # at an i32 destination still narrows, exactly as it does written any other
+    # way, because the operation answers with the literal type rather than the
+    # method's concrete return. A COMPARISON is not that: it answers bool
+    # whatever its operands were.
+    if call.infix when mres.isZero.not then {
+        bpl: u64
+        isCmpL: false
+        {
+            cbl: ast.nodes.get i: call.callable.u64
+            if cbl.dottedpath then bpl = cbl.parent.u64
+            cnL: dottedChildNameId :ast n: (ast.nodes.get i: call.callable.u64)
+            if cnL.isZero.not then {
+                opnL: zast.nameTextAt :ast ref: cnL
+                isCmpL = isComparisonOp name: opnL.stringView
+            }
+        }
+        if bpl > 0 when isCmpL.not then {
+            ltl: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: bpl
+            # ASK THE SPELLING, NOT ONLY THE STAMP. A bare numeric literal that
+            # is the receiver of an operator has already been MATERIALISED for
+            # the member lookup, and dottedBaseTid restamped the node at the
+            # concrete default -- so a literal too wide for that default (a hex
+            # constant above i64) reads back as i64 and the operation answered
+            # i64 where the literal itself would have fit u64.
+            if (isLiteralTypeId :st tid: (ztypes.tid.create from: ltl.u64)).not then {
+                ltl = ztypes.tid.create from: (literalTidOfLiteralOperand :st :ast nid: bpl)
+            }
+            if ltl > 0 when (isLiteralTypeId :st tid: (ztypes.tid.create from: ltl.u64)) then {
+                mres = ztypes.tid.create from: ltl
+                stampGate :st nid: call.nid.u64 tid: (ztypes.tid.create from: ltl.u64)
+            }
+        }
+    }
     # A synthesized `create` has no recorded return: explicit
     # `.create` constructs, so the result is the base type.
     if mres.isZero then {
@@ -33068,6 +33261,39 @@ checkCall: function {
     call: callref
 } out ztypes.tid is {
     st.typing.callKind.set key: call.nid.u64 value: zast.callkind.unknown
+    # AN OPERATOR IS AN IDENTIFIER, and a numeric literal names no method and
+    # never can. This reaches the infix form from the shape a call takes when a
+    # second argument is written without its name: `f 10 3` is three paths, and
+    # three paths are the operator form -- receiver `f`, operator `10`,
+    # argument `3` -- not two arguments. Asked BEFORE the callable or the
+    # operands are walked, because walking the receiver reports `f` as a bare
+    # function reference first and buries the mistake that produced it.
+    if call.infix then {
+        opLit: (zast.nameTextAt
+            :ast
+            ref: (dottedChildNameId :ast n: (ast.nodes.get i: call.callable.u64))
+        )
+        if opLit.length > 0 when (isNumericLiteralName name: opLit.stringView) then {
+            opN9: ast.nodes.get i: call.callable.u64
+            oCh9: zast.nodeid
+            if opN9.dottedpath then oCh9 = opN9.child
+            mLit: "'\{opLit}' is not an operator: an operator is an identifier"
+            hLit: "a call takes at most one unlabelled argument -- give every later argument its parameter name".string
+            nLit: String
+            (addErrorH
+                :st
+                nodeid: oCh9
+                lineno: (nodeLine n: (ast.nodes.get i: oCh9.u64))
+                colno: (nodeCol n: (ast.nodes.get i: oCh9.u64))
+                e: zast.err.callError
+                msg: mLit
+                note: nLit
+                hint: hLit
+                width: opLit.length.u32.orPanic
+            )
+            return (ztypes.tid.create from: 0)
+        }
+    }
     cnId: atomNameId :ast n: (ast.nodes.get i: call.callable.u64)
     if cnId == zast.names.wkReturn then {
         return (checkControlBuiltinCall :st :unitDecl :ast :call)
@@ -34082,7 +34308,7 @@ missingArms: function {
         found: false
         c2iter: covered.iterate
         for cn3: c2iter loop {
-            if an3.stringView == cn3.stringView then found = true
+            if an3.stringView == cn3 then found = true
         }
         if found.not then into.append an3.copy
     }
@@ -34984,7 +35210,11 @@ binref: record {
     colno: u32
 }
 
-# binRefAt -- the binop row `nid` as plain values (all zero for any other arm).
+# binRefAt -- a binary operation at `nid` as plain values (all zero for any
+# other arm). AN INFIX CALL IS A BINARY OPERATION: `a op b` parses to the call
+# form, so its operands and operator live in the callable's dotted path and its
+# one unlabelled argument. Every walk that reads a binary operation reads it
+# through here, and so never learns which spelling it was written in.
 binRefAt: function {ast: Ast.view nid: zast.nodeid} out binref is {
     n: ast.nodes.get i: nid.u64
     if n.binop then {
@@ -34995,6 +35225,18 @@ binRefAt: function {ast: Ast.view nid: zast.nodeid} out binref is {
             rhs: n.rhs
             lineno: n.lineno
             colno: n.colno
+        )
+    }
+    ip: zast.infixPartsOf :ast :n
+    if ip.found then {
+        p: zast.posOf :n
+        return (binref
+            :nid
+            lhs: ip.lhs
+            operator: ip.operator
+            rhs: ip.rhs
+            lineno: p.line
+            colno: p.col
         )
     }
     zn: zast.nodeid
@@ -35098,6 +35340,10 @@ callref: record {
     lineno: u32
     # the column to report this call against
     colno: u32
+    # written INFIX (`a op b`). The two spellings differ in the RECEIVER:
+    # infix evaluates its left operand as a VALUE expression, where the
+    # dotted form reads it as a path segment
+    infix: bool
 }
 
 # callRefOf -- the call row `call` as plain values.
@@ -35108,6 +35354,7 @@ callRefOf: function {call: zast.callrow.view} out callref is {
         nargs: call.arguments.count.u64
         lineno: call.lineno
         colno: call.colno
+        infix: call.infix
     )
 }
 
@@ -35116,7 +35363,7 @@ callRefAt: function {ast: Ast.view nid: zast.nodeid} out callref is {
     n: ast.nodes.get i: nid.u64
     if n.call then return (callRefOf call: n)
     zn: zast.nodeid
-    return (callref nid: zn callable: zn nargs: 0 lineno: 0 colno: 0)
+    return (callref nid: zn callable: zn nargs: 0 lineno: 0 colno: 0 infix: false)
 }
 
 # fnref -- what a function walk reads of its definition row: the return-type
@@ -37967,6 +38214,18 @@ constantOperandType: function {
             rhsId = n.rhs
             opId = n.operator
         } else null
+        # AN INFIX CALL IS THE OPERATOR SHAPE THIS WALK ALREADY UNDERSTANDS.
+        # `a op b` parses to the call form, and a unit-level constant built
+        # from one folds exactly as the same expression written any other way.
+        if arm == 0 then {
+            ip: zast.infixPartsOf :ast :n
+            if ip.found then {
+                arm = 3
+                lhsId = ip.lhs
+                rhsId = ip.rhs
+                opId = ip.operator
+            }
+        }
     }
     if arm == 1 then return (constantOperandType :st :frame :ast :unitDecl nid: innerId)
     if arm == 2 then return (constantAtomType :st :frame :ast :unitDecl :nid :nameId)
@@ -38889,7 +39148,11 @@ constDefIsComputed: function {ast: Ast.view n: astnode.view} out bool is {
     ) case expression then {
         return (constDefIsComputed :ast n: (ast.nodes.get i: n.expression.u64))
     } else {
-        return (isBinopNode :n)
+        if (isBinopNode :n) then return true
+        # `X: X + 1` computes in either spelling. Answering false here hands
+        # the resolver a silent noConst where the cycle diagnostic belongs
+        ip: zast.infixPartsOf :ast :n
+        return ip.found
     }
 }
 
@@ -39295,7 +39558,7 @@ constValEq: function {st: zenv.ZSymbolTable.view a: ztypes.cval b: ztypes.cval} 
         constStr: constStringAt :st id: a.strId
         bs: constStringAt :st id: b.strId
         r: 0.0
-        if constStr.stringView == bs.stringView then r = 1.0
+        if constStr.stringView == bs then r = 1.0
         return (ffoldval has: true val: r)
     }
     return (ffoldval has: false val: 0.0)
@@ -39545,7 +39808,7 @@ constOfBinopFold: function {
     if lv.kind.svalKind when rv.kind.svalKind then {
         ls: constStringAt :st id: lv.strId
         rs: constStringAt :st id: rv.strId
-        eq: ls.stringView == rs.stringView
+        eq: ls.stringView == rs
         if op == "==" then return (boolConst :st :frame :ast v: eq)
         if op == "!=" then return (boolConst :st :frame :ast v: eq.not)
         # `+` BUILDS, so the folded value is the joined text, interned like
@@ -39594,24 +39857,13 @@ constOfBinop: function {
 } out ztypes.cval is {
     # the operand and operator ids are read through a view scoped to this
     # block: the operand evaluations lend ast exclusively
-    isBinop: false
-    lhsId: zast.nodeid
-    rhsId: zast.nodeid
-    opId: zast.nodeid
-    ln: u32
-    co: u32
-    {
-        n: ast.nodes.get i: nid.u64
-        if n.binop then {
-            isBinop = true
-            lhsId = n.lhs
-            rhsId = n.rhs
-            opId = n.operator
-            ln = n.lineno
-            co = n.colno
-        }
-    }
-    if isBinop.not then return ztypes.noConst
+    br: binRefAt :ast :nid
+    if br.operator.isZero then return ztypes.noConst
+    lhsId: br.lhs
+    rhsId: br.rhs
+    opId: br.operator
+    ln: br.lineno
+    co: br.colno
     lv: evalConstNode :st :frame :ast :unitDecl nid: lhsId
     if lv.kind.none then return ztypes.noConst
     rv: evalConstNode :st :frame :ast :unitDecl nid: rhsId
@@ -39910,7 +40162,10 @@ evalConstPlan: function {ast: Ast.view nid: zast.nodeid} out constplan is {
         } case binop then {
             arm = 5
         } case call then {
+            # an INFIX call folds as the binary operation it is; every other
+            # call takes the call arm, which folds string static methods only
             arm = 6
+            if n.infix then arm = 5
         } case ifexpr then {
             arm = 7
         } else null
@@ -40678,6 +40933,24 @@ resolveConstantDef: function {
     defName: StringView
     defnId: zast.nodeid
 } is {
+    # AN INFIX CALL IS A BINARY OPERATION, NOT A CONSTRUCTION. `COMBINED:
+    # OFFSET + SCALE` folds like the same expression written any other way,
+    # and the call arm below would report it as a construction instead.
+    {
+        dnI: ast.nodes.get i: defnId.u64
+        ipI: zast.infixPartsOf :ast n: dnI
+        if ipI.found then {
+            (resolveBinopConstantDef
+                :ast
+                :st
+                :unitDecl
+                :frame
+                :defName
+                :defnId
+            )
+            return
+        }
+    }
     arm: rowArmAt :ast nid: defnId
     match (
         arm
@@ -41296,7 +41569,7 @@ targetIsHost: function {triple: StringView} out bool is {
     if a9h.length == 0 then return true
     ho: os.hostOsName
     ha: os.hostArchName
-    return (o9h.stringView == ho.stringView) and (a9h.stringView == ha.stringView)
+    return (o9h.stringView == ho) and (a9h.stringView == ha)
 }
 
 # seedFoldNatives -- answer the compile-time values THIS TABLE names.

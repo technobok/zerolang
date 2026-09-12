@@ -713,7 +713,33 @@ perf: $(PERFBIN)
 # this tree costs to compile. Measured, because the obvious theory was wrong --
 # skipping the member materialisation for monos, where the lookup answers
 # without it, cost 59 allocations MORE than it saved.
-ALLOC_BASELINE := 2165436
+# +337,556 for the infix form compiling as a call. `a op b` IS `a.op b`, so an
+# operator expression is now a call node, a dotted callable and an unlabelled
+# namedoperation where it was one binop row -- and it takes the call path's
+# argument binding, positional coercion and ownership disposition, which is the
+# whole reason the infix form no longer transfers an argument without saying so.
+#
+# MEASURED AT ~4 ALLOCATIONS PER OPERATOR INSTANCE by two probes that agree:
+# 500 operators in a flat function cost 1,984 over the same file without them
+# (3.97 each), and 1,200 operator instances through ten instantiations of one
+# generic cost 5,029 (4.19 each). It is LINEAR in operator INSTANCES --
+# monomorphisation does not amplify the rate -- so the self-compile's number is
+# that rate over the operators the compiler and stdlib contain once
+# monomorphised, around 82,000 of them.
+#
+# It was 8,800,686 before two things were measured and kept, and the emitted C
+# of all 435 corpus programs, every example and the zl/zls drivers is
+# byte-identical across both:
+#   -6,631,000  the operator emitter is asked BEFORE the named-callee probe
+#               chain instead of at the end of it, and reads the declaration
+#               THE CHECKER ALREADY RESOLVED rather than re-deriving the
+#               receiver type, the declaring type and the method for every
+#               operator in the program. The binop leg read a stamp and did no
+#               lookup at all; this restores that. The comparison pair is
+#               excluded: `!=` on a typedef resolves to the base's raw compare,
+#               which is the one chase the emitter must not make.
+#       -4,213  the one-argument kidspan is minted without a list to carry it.
+ALLOC_BASELINE := 2502992
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
