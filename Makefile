@@ -90,7 +90,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard test-tcc test-tcc-heavy mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
+.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard fmt-raw-guard test-tcc test-tcc-heavy mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -161,7 +161,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint complexity-report warn-check shadow-guard emitter-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard readable-check perf-strict test-tcc-heavy mode-parity ci-corpus
+ci: style-lint complexity-report warn-check shadow-guard emitter-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check perf-strict test-tcc-heavy mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -457,6 +457,25 @@ regen-fmt-goldens: out/zfmt
 		$(BUILDDIR)/zfmt $$f $$args > tests/fixtures/fmt_golden/$$name.z; \
 	done
 	@echo "regenerated fmt goldens via $(BUILDDIR)/zfmt"
+
+# fmt-raw-guard -- the cursor's round-trip proof, gated. RAW mode lays out
+# nothing: it replays every token and its trivia straight from the cursor, so
+# the output is the input byte for byte unless the walk lost something. That is
+# what makes it the check that SURVIVES a change to the layout rules, which the
+# fmt goldens cannot be, since those record what the rules currently print.
+fmt-raw-guard: out/zfmt
+	@bad=0; n=0; \
+	for f in $(FMTSCOPE); do \
+	  n=$$(($$n + 1)); \
+	  if ! $(BUILDDIR)/zfmt $$f --raw 2>/dev/null | cmp -s - $$f; then \
+	    echo "  $$f"; bad=$$(($$bad + 1)); \
+	  fi; \
+	done; \
+	if [ $$bad -gt 0 ]; then \
+	  echo "fmt-raw-guard FAIL: $$bad of $$n file(s) do not survive a RAW round trip"; \
+	  exit 1; \
+	fi; \
+	echo "fmt-raw-guard OK: $$n file(s) byte-identical through a RAW round trip"
 
 # regen-lsp-goldens -- rewrite tests/fixtures/lsp_golden/*.out from the
 # language server's current answers. A full runner pass, since the runner

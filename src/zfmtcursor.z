@@ -15,14 +15,6 @@ public: unit {
     :gapinfo
 }
 
-# the lexing state the cursor mirrors: reading string content, or reading the
-# code of an interpolation hole
-stateString: 1.u8
-
-# the lexing state of an interpolation hole, whose braces are counted so the
-# one that closes the hole is known
-stateHole: 2.u8
-
 # what lies between the last consumed significant token and the next one
 gapinfo: record {
     # whether the gap begins with a newline before any comment: the author's
@@ -202,10 +194,6 @@ Cursor: class {
     hasPrev: bool
     # the raw index up to which trivia was reported to the builder
     reported: u64
-    # the lexing states open at the cursor: string content, or a hole
-    states: ListVal u8
-    # the brace depth of each open hole, parallel to states
-    depths: ListVal u32
     # every reported comment's raw index, end to end
     gapComments: ListVal u64
     # the newlines before each reported comment, parallel to gapComments
@@ -237,8 +225,6 @@ Cursor: class {
             prev: 0
             hasPrev: false
             reported: 0
-            states: ListVal u8
-            depths: ListVal u32
             gapComments: ListVal u64
             gapEols: ListVal u32
             lostComments: 0
@@ -290,14 +276,6 @@ Cursor: class {
         return (this.toks.get i: k).lineno
     }
 
-    # inContent -- whether the next raw token is string content, where a
-    # newline is a chunk and not trivia
-    inContent: function {this: this.view} out bool is {
-        n: this.states.length
-        if n == 0 then return false
-        return (this.states.get i: n - 1) == stateString
-    }
-
     # skipTrivia -- move past the trivia before the next significant token
     skipTrivia: function {:this} is {
         n: this.toks.length
@@ -324,22 +302,6 @@ Cursor: class {
     peekText: function {:this} out zast.nameid is {
         this.skipTrivia
         return (this.toks.get i: this.i).text
-    }
-
-    # peekKindAhead -- the kind of the significant token `ahead` places after
-    # the next one; EOF past the end
-    peekKindAhead: function {:this ahead: u64} out zlexer.toktype is {
-        this.skipTrivia
-        k: this.i
-        n: this.toks.length
-        left: ahead
-        for left > 0 loop {
-            if k + 1 >= n then return zlexer.toktype.eofTok
-            k = k + 1
-            tt: (this.toks.get i: k).toktype
-            if (isTrivia :tt).not then left = left - 1
-        }
-        return (this.toks.get i: k).toktype
     }
 
     # parenRun -- how many `(` in a row open at the next significant token
@@ -373,57 +335,13 @@ Cursor: class {
         this.failMsg = msg
     }
 
-    # consume -- the raw token at the cursor, as its index, mirroring the
-    # lexing state it opens or closes
+    # consume -- the raw token at the cursor, as its index
     consume: function {:this} out u64 is {
         k: this.i
         n: this.toks.length
         if k + 1 >= n then return n
-        tt: (this.toks.get i: k).toktype
-        match (
-            tt
-        ) case strBegTok then {
-            this.states.append stateString
-            this.depths.append 0
-        } case strEndTok then {
-            this.popState
-        } case strExprBegTok then {
-            this.states.append stateHole
-            this.depths.append 0
-        } case braceOpenTok then {
-            if this.inHole then this.bumpHole delta: 1
-        } case braceCloseTok then {
-            if this.inHole then {
-                this.bumpHole delta: 0 - 1
-                d: this.depths.get i: this.depths.length - 1
-                if d == 0 then this.popState
-            }
-        } else null
         this.i = k + 1
         return k
-    }
-
-    # inHole -- whether the cursor is inside an interpolation hole's code
-    inHole: function {this: this.view} out bool is {
-        n: this.states.length
-        if n == 0 then return false
-        return (this.states.get i: n - 1) == stateHole
-    }
-
-    # bumpHole -- the innermost hole's brace depth moved by `delta`
-    bumpHole: function {:this delta: i64} is {
-        n: this.depths.length
-        d: (this.depths.get i: n - 1).i64 + delta
-        if d < 0 then d = 0
-        this.depths.set i: n - 1 val: d.u32.orPanic
-    }
-
-    # popState -- leave the innermost lexing state
-    popState: function {:this} is {
-        if this.states.length > 0 then {
-            this.states.pop
-            this.depths.pop
-        }
     }
 
     # takeRaw -- consume the next raw token whatever it is, for the string
