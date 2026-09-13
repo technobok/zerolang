@@ -812,7 +812,11 @@ perf: $(PERFBIN)
 # type model: over the old source the new compiler allocates 11,774 more -- each
 # container mono's counters are produced and cloned from the template's
 # declarations where a u64 was stamped -- and the input allocates 1,371 fewer.
-ALLOC_BASELINE := 2523338
+#
+# +744 when a surplus unlabelled argument to a receiver-only method became an
+# error: over the same source the old and new compilers allocate identically, and
+# it is the input, the compiler's own source 29 lines longer.
+ALLOC_BASELINE := 2524082
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
