@@ -469,9 +469,7 @@ Builder: class {
     # visitDefinition -- the value of a definition: a function, a type, a
     # unit, or a bare operation
     visitDefinition: function {:this id: zast.nodeid} out u32 is {
-        # if, match and data arrive WRAPPED from the unit-level parse; function,
-        # object and unit definitions arrive bare. Peel before asking which
-        n: this.node id: (this.innerOf :id)
+        n: this.node :id
         match (
             n
         ) case functiondef then {
@@ -514,13 +512,12 @@ Builder: class {
         }
         this.c.openParens = this.c.openParens + opened
         mine: entry + opened
-        inner: this.innerOf :id
-        needed: this.parensRequired :inner :slot
-        innerNode: this.node id: inner
+        needed: this.parensRequired inner: id :slot
+        innerNode: this.node :id
         # an INFIX call is not call-shaped: its parentheses are the layout pair
         # a binary operation owns, not the pair a call fills when it breaks
         isCall: innerNode.call
-        if (this.isBinop id: inner) then isCall = false
+        if (this.isBinop :id) then isCall = false
         # trivia inside a written pair belongs to that pair. Where none was
         # written the surrounding gaps already own it, and asking here would
         # take it from them -- but a closer landing at this level has to be
@@ -529,7 +526,7 @@ Builder: class {
         # operators rather than inside its operands. Whether a pair is coming
         # is known before the body is built, so the body is told
         onBreak: false
-        if (this.isBinop id: inner) then onBreak = pairsOnBreak :slot
+        if (this.isBinop :id) then onBreak = pairsOnBreak :slot
         paired: needed
         if paired.not then paired = onBreak
         inPair: wrapped
@@ -538,9 +535,9 @@ Builder: class {
         if opened > 0 then g = this.gapDocs cap: 0
         body: u32
         if isCall then {
-            body = this.visitCall id: inner inParens: needed
+            body = this.visitCall :id inParens: needed
         } else {
-            body = this.visitValueArm id: inner wrapped: inPair
+            body = this.visitValueArm :id wrapped: inPair
         }
         # A closer is consumed by whichever value ENDS where it sits, which is
         # not always the value that skipped the opener: in
@@ -639,25 +636,9 @@ Builder: class {
         }
     }
 
-    # innerOf -- the node below every expression wrapper
-    innerOf: function {this: this.view id: zast.nodeid} out zast.nodeid is {
-        cur: id
-        for true loop {
-            n: this.node id: cur
-            match (
-                n
-            ) case expression then {
-                cur = n.expression
-            } else {
-                return cur
-            }
-        }
-        return cur
-    }
-
     # isTerm -- an atom, a path, a string or a shorthand
     isTerm: function {this: this.view id: zast.nodeid} out bool is {
-        n: this.node id: (this.innerOf :id)
+        n: this.node :id
         match (
             n
         ) case atomid then {
@@ -673,18 +654,18 @@ Builder: class {
         }
     }
 
-    # isBinop -- a binary operation below its wrappers, in EITHER spelling. An
+    # isBinop -- a binary operation, in EITHER spelling. An
     # infix call is one: `a op b` parses to the call form, so every layout rule
     # keyed on this predicate reads the two spellings alike
     isBinop: function {this: this.view id: zast.nodeid} out bool is {
-        n: this.node id: (this.innerOf :id)
+        n: this.node :id
         ip: zast.infixPartsOf ast: this.ast :n
         return ip.found
     }
 
     # isLabelledCall -- a call with a named argument
     isLabelledCall: function {this: this.view id: zast.nodeid} out bool is {
-        n: this.node id: (this.innerOf :id)
+        n: this.node :id
         match (
             n
         ) case call then {
@@ -709,7 +690,7 @@ Builder: class {
     # that runs to a block
     isComplex: function {this: this.view id: zast.nodeid} out bool is {
         if (this.isLabelledCall :id) then return true
-        n: this.node id: (this.innerOf :id)
+        n: this.node :id
         match (
             n
         ) case ifexpr then {
@@ -1485,17 +1466,16 @@ Builder: class {
         }
         this.c.openParens = this.c.openParens + opened
         mine: entry + opened
-        inner: this.innerOf :id
-        needed: this.parensRequired :inner slot: slotClause
-        innerNode: this.node id: inner
+        needed: this.parensRequired inner: id slot: slotClause
+        innerNode: this.node :id
         isCall: innerNode.call
         g: emptyGap
         if opened > 0 then g = this.gapDocs cap: 0
         core: u32
         if isCall then {
-            core = this.visitCall id: inner inParens: true
+            core = this.visitCall :id inParens: true
         } else {
-            core = this.visitValueArm id: inner wrapped: true
+            core = this.visitValueArm :id wrapped: true
         }
         # A closer is consumed by whichever value ENDS where it sits, which is
         # not always the value that skipped the opener: in
@@ -1994,18 +1974,15 @@ firstError: function {ast: zast.Ast.view} out zast.nodeid is {
 }
 
 # treesEqual -- whether two nodes print the same program: the same arm, the
-# same names and flags, and the same children pairwise, expression wrappers
-# ignored on both sides
+# same names and flags, and the same children pairwise
 treesEqual: function {
     a: zast.Ast.view
     ida: zast.nodeid
     b: zast.Ast.view
     idb: zast.nodeid
 } out bool is {
-    na: unwrapped ast: a id: ida
-    nb: unwrapped ast: b id: idb
-    xa: a.nodes.get i: na.u64
-    xb: b.nodes.get i: nb.u64
+    xa: a.nodes.get i: ida.u64
+    xb: b.nodes.get i: idb.u64
     if (zast.armName n: xa) != (zast.armName n: xb) then return false
     if (sameFacts :a :xa :b :xb).not then return false
     ka: zast.childIds ast: a n: xa
@@ -2022,22 +1999,6 @@ treesEqual: function {
         if (treesEqual :a ida: ca :b idb: cb).not then return false
     }
     return true
-}
-
-# unwrapped -- `id` below every expression wrapper
-unwrapped: function {ast: zast.Ast.view id: zast.nodeid} out zast.nodeid is {
-    cur: id
-    for cur.isZero.not loop {
-        n: ast.nodes.get i: cur.u64
-        match (
-            n
-        ) case expression then {
-            cur = n.expression
-        } else {
-            return cur
-        }
-    }
-    return cur
 }
 
 # sameFacts -- the per-arm facts a child walk does not cover: names by text,
@@ -2148,12 +2109,15 @@ refused: function {msg: String.take line: u32 col: u32} out FmtResult is {
     return (FmtResult ok: false text: String :msg :line :col)
 }
 
-# formatOnce -- one layout pass over `source` at `width` columns; `collapse`
-# ignores the author's keep-open markers; `raw` copies the bytes instead (the
-# cursor proof). A file that does not parse, walks out of step with its tokens,
-# or prints to a different tree is refused untouched; `gate` false skips that
-# last comparison, for looking at what a refused file would have become
-formatOnce: function {
+# formatSource -- `source` laid out at `width` columns; `collapse` ignores the
+# author's keep-open markers; `raw` copies the bytes instead (the cursor proof).
+# A file that does not parse, walks out of step with its tokens, or prints to a
+# different tree is refused untouched; `gate` false skips that last comparison,
+# for looking at what a refused file would have become. One pass is a fixed
+# point: the tree records grouping by its shape alone, so the text it prints
+# parses back to the same layout, which is what lets `zl format --check` accept
+# exactly the text `zl fmt` writes.
+formatSource: function {
     source: StringView
     width: u32
     collapse: bool
@@ -2221,37 +2185,4 @@ formatOnce: function {
         )
     }
     return (FmtResult ok: true :text msg: String line: 0 col: 0)
-}
-
-# formatSource -- `source` laid out until it SETTLES, which is what makes the
-# printer a canonicaliser: `zl format --check` accepts exactly the text
-# `zl fmt` writes.
-#
-# One pass is not always a fixed point. Where the layout rules drop a
-# parenthesis the grammar does not need, the chain it sat in flattens on the
-# re-parse -- `(a == b) and c` is two operands, `a == b and c` is three -- and a
-# group with more operators in it breaks at more of them. So the text a first
-# pass produces can lay out differently from the text it was produced from. The
-# cause is that a chain's operand count still depends on a wrapper the tree
-# should not be recording at all, and it goes when the wrapper does; until then
-# the printer reaches the fixed point rather than leaving it to the caller.
-#
-# Two passes have always been enough. The cap is three, and a result that has
-# not settled by then is returned as it stands rather than refused: it is
-# correct text, only not yet canonical.
-formatSource: function {
-    source: StringView
-    width: u32
-    collapse: bool
-    raw: bool
-    gate: bool
-} out FmtResult is {
-    first: formatOnce :source :width :collapse :raw :gate
-    if raw then return first
-    if first.ok.not then return first
-    if first.text.stringView == source then return first
-    second: formatOnce source: first.text.stringView :width :collapse :raw :gate
-    if second.ok.not then return second
-    if second.text.stringView == first.text then return second
-    return (formatOnce source: second.text.stringView :width :collapse :raw :gate)
 }

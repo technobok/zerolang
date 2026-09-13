@@ -21,7 +21,6 @@ public: unit {
     :ErrorData
     :errorrow
     :errorDataOf
-    :expressionrow
     :FileSeg
     :forrow
     :functionrow
@@ -332,7 +331,7 @@ astnode: variant {
     datablock: datablockrow
     # a block of statements
     statement: statementrow
-    # one statement, wrapped because EOL is a statement boundary
+    # one statement: EOL is a statement boundary
     statementline: statementlinerow
     # a binding that DECLARES a name
     assignment: assignmentrow
@@ -340,8 +339,6 @@ astnode: variant {
     reassignment: reassignmentrow
     # an exchange of two values, neither left invalid in between
     swapstmt: swapstmtrow
-    # parentheses, kept because they are what overrides the EOL boundary
-    expression: expressionrow
     # an if with its clauses
     ifexpr: ifrow
     # one if or else-if: conditions and the body they guard
@@ -1225,8 +1222,8 @@ statementrow: record {
     statements: kidspan
 }
 
-# StatementLine payload: one line of a block, wrapping exactly one of
-# assignment / reassignment / swapstmt / expression.
+# StatementLine payload: one line of a block, holding exactly one of an
+# assignment, a reassignment, a swap, or the value the line computes.
 statementlinerow: record {
     # this statement line's own row in the node table
     nodeid: nodeid
@@ -1284,24 +1281,6 @@ swapstmtrow: record {
     # the other. A swap moves both ways at once, so neither side is left invalid
     # in between
     rhs: nodeid
-}
-
-# Expression payload: wraps the single operation/control-flow node that forms an
-# expression. NOT a record of the parentheses the author wrote: `parseExpression`
-# wraps unconditionally wherever it is the entry point, so a binding's right side
-# carries one wrapper with nothing written around it while a condition carries
-# none. The count is the parentheses plus a per-position constant.
-expressionrow: record {
-    # this expression's own row in the node table
-    nodeid: nodeid
-    # the line the WRAPPED node starts on, not the parenthesis
-    lineno: u32
-    # the column the WRAPPED node starts at, not the parenthesis
-    colno: u32
-    # what is wrapped. The wrapper survives parsing because it is what overrides
-    # the EOL statement boundary, and because an `atomstring`'s parts list tells
-    # an interpolation hole from a `stringchunk` by finding one here
-    expression: nodeid
 }
 
 # If payload: ordered if/when clauses plus an optional else statement.
@@ -1717,8 +1696,6 @@ posOf: function {n: astnode.view} out nodepos is {
         return (nodepos line: n.lineno col: n.colno)
     } case typeofexpr then {
         return (nodepos line: n.lineno col: n.colno)
-    } case expression then {
-        return (nodepos line: n.lineno col: n.colno)
     } case datablock then {
         return (nodepos line: n.lineno col: n.colno)
     } case stringchunk then {
@@ -1896,9 +1873,6 @@ printNodeWith: function {ast: Ast.view n: astnode.view withId: bool} is {
         print "\{idp}swapstmt @\{n.lineno}:\{n.colno}"
         printNodeWith :ast :withId n: (ast.nodes.get i: n.lhs.u64)
         printNodeWith :ast :withId n: (ast.nodes.get i: n.rhs.u64)
-    } case expression then {
-        print "\{idp}expression @\{n.lineno}:\{n.colno}"
-        printNodeWith :ast :withId n: (ast.nodes.get i: n.expression.u64)
     } case ifexpr then {
         print "\{idp}ifexpr @\{n.lineno}:\{n.colno} clauses=\{n.clauses.count.u64}"
         printKidsWith :ast span: n.clauses :withId
@@ -2078,8 +2052,6 @@ childIdsInto: function {ast: Ast.view n: astnode.view acc: ListVal u32} is {
     } case swapstmt then {
         acc.append from: n.lhs.u32
         acc.append from: n.rhs.u32
-    } case expression then {
-        acc.append from: n.expression.u32
     } case ifexpr then {
         appendSpan kids: ast.kids :acc span: n.clauses
         appendOptId :acc id: n.elseclause
@@ -2248,18 +2220,16 @@ isYieldCalleeAt: function {ast: Ast.view callableId: nodeid} out bool is {
     }
 }
 
-# yieldCallIdAt -- the id of the yield CALL at `nid`, peeling the expression
-# wrappers a statement position puts around it; 0 when there is no yield call
-# there. Callers hold the wrapper, not the call, so the peel belongs here
-# rather than at each of them.
+# yieldCallIdAt -- the id of the yield CALL at `nid`, peeling the statement line
+# a statement position puts around it; 0 when there is no yield call there.
+# Callers hold the line, not the call, so the peel belongs here rather than at
+# each of them.
 yieldCallIdAt: function {ast: Ast.view nid: nodeid} out nodeid is {
     if nid.isZero then return (nodeid.create from: 0)
     n: ast.nodes.get i: nid.u64
     match (
         n
-    ) case expression then {
-        return (yieldCallIdAt :ast nid: n.expression)
-    } case statementline then {
+    ) case statementline then {
         return (yieldCallIdAt :ast nid: n.statementline)
     } case call then {
         if (isYieldCalleeAt :ast callableId: n.callable) then return nid
@@ -2623,8 +2593,6 @@ nodeIdOf: function {n: astnode.view} out nodeid is {
         return n.nodeid
     } case swapstmt then {
         return n.nodeid
-    } case expression then {
-        return n.nodeid
     } case ifexpr then {
         return n.nodeid
     } case ifclause then {
@@ -2706,8 +2674,6 @@ armName: function {n: astnode.view} out StringView is {
         return "reassignment"
     } case swapstmt then {
         return "swapstmt"
-    } case expression then {
-        return "expression"
     } case ifexpr then {
         return "ifexpr"
     } case ifclause then {
@@ -2734,17 +2700,15 @@ armName: function {n: astnode.view} out StringView is {
 }
 
 # isGenericParamOp -- true when `opId` declares a generic parameter --
-# `<constraint>.generic`, `.valtype` or `.reftype` -- unwrapping the expression
-# and call wrappers the form can carry. The parser marks a unit body holding one
+# `<constraint>.generic`, `.valtype` or `.reftype` -- unwrapping the call the
+# form can carry. The parser marks a unit body holding one
 # as a template; the typechecker asks the same question of a type body.
 isGenericParamOp: function {ast: Ast.view opId: u32} out bool is {
     if opId == 0 then return false
     n: ast.nodes.get i: opId.u64
     match (
         n
-    ) case expression then {
-        return (isGenericParamOp :ast opId: n.expression)
-    } case call then {
+    ) case call then {
         return (isGenericParamOp :ast opId: n.callable)
     } case dottedpath then {
         c: ast.nodes.get i: n.child.u64
@@ -2792,17 +2756,14 @@ itemsHaveGenericParam: function {ast: Ast.view items: zast.kidspan} out bool is 
     return false
 }
 
-# True when node `opId` is a unit definition of kind `k`, unwrapping an
-# `expression` wrapper the way indexDeclDef and resolveDef do. False when the
+# True when node `opId` is a unit definition of kind `k`. False when the
 # node is not a unit definition at all.
 unitOpKindIs: function {ast: Ast.view opId: u32 k: unitkind} out bool is {
     if opId == 0 then return false
     n: ast.nodes.get i: opId.u64
     match (
         n
-    ) case expression then {
-        return (unitOpKindIs :ast opId: n.expression :k)
-    } case unitdef then {
+    ) case unitdef then {
         return n.kind.tag == k.tag
     } else {
         return false
@@ -2832,10 +2793,6 @@ unitOpDeclaresUnit: function {ast: Ast.view opId: u32} out bool is {
 # fetch so the caller may lend the table exclusively afterwards; the ids are
 # values, so the returned list is independent of the table. An id that does
 # not name a unit yields an empty list.
-# True when `opId` declares a generic parameter -- `<constraint>.generic`,
-# `.valtype` or `.reftype` -- unwrapping the expression and call wrappers the
-# form can carry. The parser marks a unit body holding one as a template; the
-# typechecker asks the same question of a type body.
 unitBodyIdsAt: function {ast: Ast.view unitId: u32} out kidspan is {
     u: ast.nodes.get i: unitId.u64
     if u.unitdef then return u.body

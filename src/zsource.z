@@ -243,8 +243,6 @@ lineLeavesBlock: function {ast: Ast.view id: u32} out bool is {
             n
         ) case statementline then {
             cur = n.statementline.u32
-        } case expression then {
-            cur = n.expression.u32
         } case call then {
             cur = n.callable.u32
         } case atomid then {
@@ -283,8 +281,7 @@ bodyKeyInto: function {ast: Ast.view id: u32 buf: String.borrow} is {
 # bodyIsOneMatch -- the body is a single statement and that statement is a
 # `match` over TWO OR MORE arms: a dispatcher, whose length is the number of
 # arms it names. A one-arm match is a guard that unwraps its subject, not a
-# dispatcher, and the body it guards is as long as it reads. The match sits
-# under the line's expression wrapper, so the wrappers are peeled.
+# dispatcher, and the body it guards is as long as it reads.
 bodyIsOneMatch: function {ast: Ast.view bodyId: zast.nodeid} out bool is {
     if (zast.stmtLineCount :ast nid: bodyId) != 1 then return false
     id: zast.stmtLineAt :ast nid: bodyId i: 0
@@ -295,8 +292,6 @@ bodyIsOneMatch: function {ast: Ast.view bodyId: zast.nodeid} out bool is {
             n
         ) case statementline then {
             id = n.statementline
-        } case expression then {
-            id = n.expression
         } case caseexpr then {
             return n.clauses.count.u64 > 1
         } else return false
@@ -313,8 +308,7 @@ CcState: class {
 }
 
 # soleIfOf -- the `if` a body holds when it is exactly one `if` statement (an
-# `else if`), 0 otherwise. The if sits under the line's expression wrapper,
-# so the wrappers are peeled.
+# `else if`), 0 otherwise.
 soleIfOf: function {ast: Ast.view bodyId: zast.nodeid} out zast.nodeid is {
     zero: zast.nodeid
     if bodyId.isZero then return zero
@@ -327,8 +321,6 @@ soleIfOf: function {ast: Ast.view bodyId: zast.nodeid} out zast.nodeid is {
             n
         ) case statementline then {
             id = n.statementline
-        } case expression then {
-            id = n.expression
         } case ifexpr then {
             return id
         } else return zero
@@ -592,14 +584,12 @@ stmtPos: function {n: astnode.view} out zast.nodepos is {
     }
 }
 
-# isIfArm -- the node is an `if` (through an `expression` wrapper).
-isIfArm: function {ast: Ast.view n: astnode.view} out bool is {
+# isIfArm -- the node is an `if`.
+isIfArm: function {n: astnode.view} out bool is {
     match (
         n
     ) case ifexpr then {
         return true
-    } case expression then {
-        return (isIfArm :ast n: (ast.nodes.get i: n.expression.u64))
     } else {
         return false
     }
@@ -610,7 +600,7 @@ slIsIf: function {ast: Ast.view sl: astnode.view} out bool is {
     match (
         sl
     ) case statementline then {
-        return (isIfArm :ast n: (ast.nodes.get i: sl.statementline.u64))
+        return (isIfArm n: (ast.nodes.get i: sl.statementline.u64))
     } else {
         return false
     }
@@ -623,16 +613,14 @@ flagbind: record {
     lit: zast.nameid
 }
 
-# innerNodeIdOf -- `id` with its statement-line and expression wrappers peeled:
-# the node a statement line actually holds.
+# innerNodeIdOf -- `id` with its statement line peeled: the node a statement
+# line actually holds.
 innerNodeIdOf: function {ast: Ast.view id: zast.nodeid} out zast.nodeid is {
     n: ast.nodes.get i: id.u64
     match (
         n
     ) case statementline then {
         return (innerNodeIdOf :ast id: n.statementline)
-    } case expression then {
-        return (innerNodeIdOf :ast id: n.expression)
     } else {
         return id
     }
@@ -1025,8 +1013,8 @@ docLineIsComment: function {ln: StringView} out bool is {
 # `.valtype` or `.reftype`, which name a kind rather than a type and so carry
 # no case to compare -- a shape the parser accepts and the typechecker rejects
 # (`Unknown type 'reftype'`), so the arm is defensive, not reachable from a
-# program that compiles. It unwraps the same expression and call wrappers
-# `zast.isGenericParamOp` does, and must keep doing so: a reader that unwrapped
+# program that compiles. It unwraps the same call `zast.isGenericParamOp`
+# does, and must keep doing so: a reader that unwrapped
 # fewer would report the shapes it never looked at as conformant, and the
 # parenthesised form is the one parameter in the tree that would go unseen.
 genericBoundBase: function {ast: Ast.view opId: u32} out String is {
@@ -1034,9 +1022,7 @@ genericBoundBase: function {ast: Ast.view opId: u32} out String is {
     n: ast.nodes.get i: opId.u64
     match (
         n
-    ) case expression then {
-        return (genericBoundBase :ast opId: n.expression)
-    } case call then {
+    ) case call then {
         return (genericBoundBase :ast opId: n.callable)
     } case dottedpath then {
         c: ast.nodes.get i: n.child.u64
@@ -1928,7 +1914,7 @@ Analysis: class {
     }
 
     # boolLiteralAt -- the pool id of `true` / `false` when the node at `id`, its
-    # wrappers peeled, is that literal; 0 otherwise.
+    # statement line peeled, is that literal; 0 otherwise.
     boolLiteralAt: function {this: this.view ast: Ast.view id: zast.nodeid} out zast.nameid is {
         nm: atomNameIdOf n: (ast.nodes.get i: (innerNodeIdOf :ast :id).u64)
         if nm.isZero then return nm
@@ -2741,9 +2727,7 @@ Analysis: class {
     tryBareZeroInit: function {:this ast: Ast.view value: astnode.view} is {
         match (
             value
-        ) case expression then {
-            this.tryBareZeroInit :ast value: (ast.nodes.get i: value.expression.u64)
-        } case statementline then {
+        ) case statementline then {
             this.tryBareZeroInit :ast value: (ast.nodes.get i: value.statementline.u64)
         } case statement then {
             if value.statements.count.u64 == 1 then {
@@ -2930,17 +2914,12 @@ Analysis: class {
             paramName: (zast.poolFind pool: ast.names text: gpn.stringView)
         )
         if (cd.kind == ztypes.constraintkind.stringLike).not then return
-        dpId: opId
-        {
-            opn: ast.nodes.get i: dpId.u64
-            if opn.expression then dpId = opn.expression
-        }
         cn: String
         cln: u32
         ccl: u32
         bnid: u64
         {
-            dpn: ast.nodes.get i: dpId.u64
+            dpn: ast.nodes.get i: opId.u64
             if dpn.dottedpath then {
                 chn: ast.nodes.get i: dpn.child.u64
                 cn = atomName :ast n: chn
@@ -3979,16 +3958,14 @@ Analysis: class {
     # old String, so an alias of the field would dangle. The owned copy is
     # load-bearing there, and L022 leaves it alone.
     srcIsFieldRead: function {
-        :this
+        this: this.view
         ast: Ast.view
         st: zenv.ZSymbolTable
         n: astnode.view
     } out bool is {
         match (
             n
-        ) case expression then {
-            return (this.srcIsFieldRead :ast :st n: (ast.nodes.get i: n.expression.u64))
-        } case dottedpath then {
+        ) case dottedpath then {
             fcn: atomName :ast n: (ast.nodes.get i: n.child.u64)
             if fcn.length == 0 then return false
             fpn: ast.nodes.get i: n.parent.u64
@@ -4022,7 +3999,7 @@ Analysis: class {
     # StringView base, `.copy` on a String base, or a nameTextCopy/poolTextCopy
     # call. Returns the spelling for the message, "" otherwise.
     owningConvKind: function {
-        :this
+        this: this.view
         ast: Ast.view
         st: zenv.ZSymbolTable
         rhsId: u32
@@ -4031,9 +4008,7 @@ Analysis: class {
         rn: ast.nodes.get i: rhsId.u64
         match (
             rn
-        ) case expression then {
-            return (this.owningConvKind :ast :st rhsId: rn.expression)
-        } case dottedpath then {
+        ) case dottedpath then {
             chn: ast.nodes.get i: rn.child.u64
             cn: atomName :ast n: chn
             if cn.length == 0 then return "".string
@@ -4080,9 +4055,7 @@ Analysis: class {
         rn: ast.nodes.get i: rhsId.u64
         match (
             rn
-        ) case expression then {
-            return (this.convSourceRootVid :ast :st rhsId: rn.expression)
-        } case dottedpath then {
+        ) case dottedpath then {
             return (this.convSourceRootVid :ast :st rhsId: rn.parent)
         } case call then {
             return (this.convSourceRootVid :ast :st rhsId: rn.callable)
@@ -4893,14 +4866,12 @@ SufRec: class {
     col: u32
 }
 
-# operandSuffix -- peel an `expression` wrapper and report whether the operand is a redundant
-# -suffix dotted path, with the type token's position.
+# operandSuffix -- report whether the operand is a redundant-suffix dotted path,
+# with the type token's position.
 operandSuffix: function {ast: Ast.view n: astnode.view} out SufRec is {
     match (
         n
-    ) case expression then {
-        return (operandSuffix :ast n: (ast.nodes.get i: n.expression.u64))
-    } case dottedpath then {
+    ) case dottedpath then {
         cn: atomName :ast n: (ast.nodes.get i: n.child.u64)
         if (ztypecheck.isNumericTypeName name: cn.stringView).not then {
             return (SufRec tname: "".string line: 0 col: 0)
@@ -4951,9 +4922,7 @@ typeNameOfOptAt: function {
 litShapedSuf: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
-    ) case expression then {
-        return (litShapedSuf :ast n: (ast.nodes.get i: n.expression.u64))
-    } case atomid then {
+    ) case atomid then {
         an: zast.nameTextAt :ast ref: n.name
         d: false
         b: an.stringView.byteAt 0

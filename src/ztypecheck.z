@@ -46,7 +46,6 @@ public: unit {
     :isFloatLiteralName
     :armSuffixSide
     :metaCreateBaseId
-    :innermostNodeId
     :methodReturnOf
     :nodeId
     :nodeLine
@@ -106,8 +105,6 @@ nodeId: function {n: astnode.view} out zast.nodeid is {
     } case labelvalue then {
         return n.nodeid
     } case dottedpath then {
-        return n.nodeid
-    } case expression then {
         return n.nodeid
     } case call then {
         return n.nodeid
@@ -1007,17 +1004,6 @@ indexDeclDef: function {
             node: nopNodeId
         )
         indexDeclDataInner :st :ast declId: did0 dataNodeId: opNodeId
-    } case expression then {
-        # unwrap: dispatch on the inner node, keep this def's name/node
-        wrap: exprRefAt :ast nid: opNid
-        return (indexDeclDef
-            :st
-            :ast
-            :parentDeclId
-            :nameRef
-            :nopNodeId
-            opNodeId: wrap.expression.u32
-        )
     } case functiondef then {
         did0 = (st.typing.declNew
             name: nameRef
@@ -1325,16 +1311,7 @@ indexDeclAsMember: function {
     opNode: ast.nodes.get i: opNodeId.u64
     match (
         opNode
-    ) case expression then {
-        (indexDeclAsMember
-            :st
-            :ast
-            :parentDeclId
-            :nameRef
-            :nopNodeId
-            opNodeId: opNode.expression
-        )
-    } case functiondef then {
+    ) case functiondef then {
         md: (st.typing.declNew
             name: nameRef
             parent: parentDeclId
@@ -1462,7 +1439,6 @@ linkDeclTypeId: function {
 # resolveDef's dispatch. None for nodes that mint no canonical type here (dotted-
 # path aliases, the null/never empty types, enums/generics in later slices).
 defTypetypeOf: function {
-    ast: Ast.view
     defn: astnode.view
     name: StringView
 } out optionval ztypes.ztypetype is {
@@ -1470,8 +1446,6 @@ defTypetypeOf: function {
         defn
     ) case functiondef then {
         return (optionval.some ztypes.ztypetype.functionType)
-    } case expression then {
-        return (defTypetypeOf :ast defn: (ast.nodes.get i: defn.expression.u64) :name)
     } case datablock then {
         return (optionval.some ztypes.ztypetype.dataType)
     } case objectdef then {
@@ -1758,9 +1732,7 @@ declareCanonicalTypeId: function {
 dottedDefTargetIds: function {ast: Ast.view n: astnode.view} out ztypes.deftarget is {
     match (
         n
-    ) case expression then {
-        return (dottedDefTargetIds :ast n: (ast.nodes.get i: n.expression.u64))
-    } case dottedpath then {
+    ) case dottedpath then {
         pid: atomNameId :ast n: (ast.nodes.get i: n.parent.u64)
         cid: atomNameId :ast n: (ast.nodes.get i: n.child.u64)
         if pid.isZero then return ztypes.noDefTarget
@@ -1771,15 +1743,12 @@ dottedDefTargetIds: function {ast: Ast.view n: astnode.view} out ztypes.deftarge
     }
 }
 
-# bareDefTargetNameId -- the name id a BARE alias value names (`Same: Holder`),
-# through any expression wrapper; the zero id when the value is not a bare
-# name. The dotted twin is dottedDefTargetIds.
-bareDefTargetNameId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
+# bareDefTargetNameId -- the name id a BARE alias value names (`Same: Holder`);
+# the zero id when the value is not a bare name. The dotted twin is dottedDefTargetIds.
+bareDefTargetNameId: function {n: astnode.view} out zast.nameid is {
     match (
         n
-    ) case expression then {
-        return (bareDefTargetNameId :ast n: (ast.nodes.get i: n.expression.u64))
-    } case atomid then {
+    ) case atomid then {
         return n.name
     } else {
         return (zast.nameid.create from: 0)
@@ -2205,15 +2174,13 @@ isMoveMarker: function {name: StringView} out bool is {
     return name == "take" or (name == "hold")
 }
 
-# valueIsHold -- true when a bound value carries the `.hold` marker, through any
-# `expression` wrapper. `hold` is owned and readonly, so the binding both moves
+# valueIsHold -- true when a bound value carries the `.hold` marker. `hold` is
+# owned and readonly, so the binding both moves
 # the source away and freezes itself.
 valueIsHold: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
-    ) case expression then {
-        return (valueIsHold :ast n: (ast.nodes.get i: n.expression.u64))
-    } case dottedpath then {
+    ) case dottedpath then {
         cnh: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.child.u64))
         return cnh.stringView == "hold"
     } else {
@@ -2315,8 +2282,6 @@ nodeMentionsName: function {ast: Ast.view n: astnode.view name: StringView} out 
         n
     ) case atomid then {
         return (zast.nameTextEq :ast ref: n.name s: name)
-    } case expression then {
-        return (nodeMentionsName :ast n: (ast.nodes.get i: n.expression.u64) :name)
     } case dottedpath then {
         return (nodeMentionsName :ast n: (ast.nodes.get i: n.parent.u64) :name)
     } case call then {
@@ -2453,13 +2418,11 @@ isBareGenericParam: function {ast: Ast.view op: astnode.view} out bool is {
 
 # isGenericParam -- true when a type-expr is a generic-parameter constraint
 # (`Any.generic` / `u64.generic` / `anyval.generic`): a dottedpath whose leaf is
-# `generic` or `valtype`, peeling an `expression` / parameterized `call` wrapper.
+# `generic` or `valtype`, peeling a parameterized `call` around it.
 isGenericParam: function {ast: Ast.view op: astnode.view} out bool is {
     match (
         op
-    ) case expression then {
-        return (isGenericParam :ast op: (ast.nodes.get i: op.expression.u64))
-    } case call then {
+    ) case call then {
         return (isGenericParam :ast op: (ast.nodes.get i: op.callable.u64))
     } case dottedpath then {
         leaf: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: op.child.u64))
@@ -2586,9 +2549,7 @@ registerGenericParamOne: function {
 genericConstraintKind: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
-    ) case expression then {
-        return (genericConstraintKind :ast n: (ast.nodes.get i: n.expression.u64))
-    } case dottedpath then {
+    ) case dottedpath then {
         nameCount: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.child.u64))
         if nameCount.stringView == "valtype" then return nameCount.copy
         if nameCount.stringView == "reftype" then return nameCount.copy
@@ -2603,9 +2564,7 @@ genericConstraintKind: function {ast: Ast.view n: astnode.view} out String is {
 genericConstraintBase: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
-    ) case expression then {
-        return (genericConstraintBase :ast n: (ast.nodes.get i: n.expression.u64))
-    } case dottedpath then {
+    ) case dottedpath then {
         return (atomName :ast n: (ast.nodes.get i: n.parent.u64))
     } else {
         return "".string
@@ -2692,9 +2651,7 @@ baseTypeNameId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
 genericApplHeadId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
     match (
         n
-    ) case expression then {
-        return (genericApplHeadId :ast n: (ast.nodes.get i: n.expression.u64))
-    } case call then {
+    ) case call then {
         return (atomNameId :ast n: (ast.nodes.get i: n.callable.u64))
     } else {
         return (zast.nameid.create from: 0)
@@ -2865,7 +2822,7 @@ resolveDottedArgTid: function {
 # resolveMonoRefInline -- resolve a call-shaped parameterized type ref at the
 # point it is recorded: resolve the template and every argument now (nested
 # parameterized args recurse; the descent pulls unresolved defs), then dedup /
-# materialize through getOrMintSpec and stamp the wrapper node. Numeric size
+# materialize through getOrMintSpec and stamp node `nid`. Numeric size
 # literals join the instance name only (const values, not type refs). Returns
 # 0 -- recording nothing -- when the callable is empty or any argument is
 # unresolvable (a template-internal generic-param name stays a shell).
@@ -2879,20 +2836,16 @@ resolveMonoRefInline: function {
     opNid: zast.nodeid
     nid: u32
 } out u64 is {
-    # the row is read through a view scoped to this block (1 expression,
-    # 2 call, 0 anything else): the resolution below lends ast exclusively
+    # the row is read through a view scoped to this block (2 call, 0 anything
+    # else): the resolution below lends ast exclusively
     arm: u32
-    innerId: zast.nodeid
     callableId: zast.nodeid
     argIds: ListVal u32
     {
         op: ast.nodes.get i: opNid.u64
         match (
             op
-        ) case expression then {
-            arm = 1
-            innerId = op.expression
-        } case call then {
+        ) case call then {
             arm = 2
             callableId = op.callable
             arx89: u64
@@ -2902,18 +2855,6 @@ resolveMonoRefInline: function {
                 argIds.append from: a
             }
         } else null
-    }
-    if arm == 1 then {
-        return (resolveMonoRefInline
-            :st
-            :frame
-            :ast
-            :unitDecl
-            :thisName
-            :enclDecl
-            opNid: innerId
-            :nid
-        )
     }
     if arm == 2 then {
         return (resolveMonoRefParts
@@ -3513,11 +3454,10 @@ recordTyperef: function {
     thisName: StringView
     nid: zast.nodeid
 } is {
-    # the row is read through a view scoped to this block (1 expression,
-    # 2 call, 3 dottedpath, 4 atomid, 5 labelvalue, 0 anything else): the
-    # recordings below lend ast exclusively
+    # the row is read through a view scoped to this block (2 call, 3 dottedpath,
+    # 4 atomid, 5 labelvalue, 0 anything else): the recordings below lend ast
+    # exclusively
     arm: u32
-    innerId: zast.nodeid
     callableId: zast.nodeid
     argIds: ListVal u32
     nameId: zast.nameid
@@ -3525,10 +3465,7 @@ recordTyperef: function {
         node: ast.nodes.get i: nid.u64
         match (
             node
-        ) case expression then {
-            arm = 1
-            innerId = node.expression
-        } case call then {
+        ) case call then {
             arm = 2
             callableId = node.callable
             arx99: u64
@@ -3546,20 +3483,6 @@ recordTyperef: function {
             arm = 5
             nameId = node.name
         } else null
-    }
-    if arm == 1 then {
-        (resolveMonoRefInline
-            :st
-            :frame
-            :ast
-            :unitDecl
-            :thisName
-            enclDecl: ztypes.declid
-            opNid: innerId
-            nid: nid.u32
-        )
-        recordTyperef :st :frame :ast :unitDecl :thisName nid: innerId
-        return
     }
     if arm == 2 then {
         # a parameterized type ref resolves to its mono now, and the call
@@ -3650,7 +3573,7 @@ returnParamTid: function {
 # when it is PARTIAL (an argument named a generic param); a fully-concrete
 # composite stays 0, preserving the caller's eager-path behavior.
 # `stampNid` is the OUTERMOST typeref node and stays fixed while `nid` descends
-# through wrappers and markers -- the same split recordTyperef makes. It has to
+# through markers -- the same split recordTyperef makes. It has to
 # be carried: a generator's synthesised wrapper return collapses `Option` to
 # `optionval` over a valtype element, and that collapse is keyed on this very
 # node. Resolving without it re-mints `Option i64`, which its own AnyRef
@@ -3667,18 +3590,7 @@ partialTyperefTid: function {
     arm: rowArmAt :ast :nid
     match (
         arm
-    ) case expression then {
-        wrap: exprRefAt :ast :nid
-        return (partialTyperefTid
-            :st
-            :frame
-            :ast
-            :unitDecl
-            :enclDecl
-            nid: wrap.expression
-            :stampNid
-        )
-    } case dottedpath then {
+    ) case dottedpath then {
         dr: dpRefAt :ast :nid
         # the child's name is read through a view scoped to this block: the
         # walk below lends ast
@@ -4000,14 +3912,6 @@ demandTyperefNames: function {
                 nameId: typeExpr.name
             )
         }
-    } case expression then {
-        (demandTyperefNames
-            :st
-            :frame
-            :ast
-            :unitDecl
-            typeExpr: (ast.nodes.get i: typeExpr.expression.u64)
-        )
     } case call then {
         hn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: typeExpr.callable.u64))
         if hn.length > 0 then {
@@ -4059,9 +3963,7 @@ typeArgSuffixName: function {
 } out String is {
     match (
         op
-    ) case expression then {
-        return (typeArgSuffixName :st :frame :ast op: (ast.nodes.get i: op.expression.u64))
-    } case dottedpath then {
+    ) case dottedpath then {
         if (nameDenotesUnit
             :frame
             :st
@@ -4197,7 +4099,7 @@ resolveTyperefAtomShell: function {
 # resolveTyperefShell -- register a SHALLOW named shell for a referenced type
 # (e.g. the `i64` in `n: i64`), routing atom names through resolveAtomType so
 # `this`/numeric-default atoms resolve correctly. A parenthesized parameterized
-# type `(T arg: N)` (an expression wrapping a call) mangles to a `T_N` shell.
+# type `(T arg: N)` (a call) mangles to a `T_N` shell.
 # Source-type rows never include these shells (they fall outside `defined_in_unit`),
 # but a `type_children` row joins to the shell's name. Returns the shell's type id.
 resolveTyperefShell: function {
@@ -4209,11 +4111,10 @@ resolveTyperefShell: function {
     thisName: StringView
 } out u64 is {
     # the row is read through a view scoped to this block (1 atomid,
-    # 2 labelvalue, 3 expression, 4 call, 5 dottedpath, 0 anything else): the
-    # resolutions below lend ast exclusively
+    # 2 labelvalue, 4 call, 5 dottedpath, 0 anything else): the resolutions
+    # below lend ast exclusively
     arm: u32
     nameId: zast.nameid
-    innerId: zast.nodeid
     callableId: zast.nodeid
     argIds: ListVal u32
     {
@@ -4226,9 +4127,6 @@ resolveTyperefShell: function {
         } case labelvalue then {
             arm = 2
             nameId = typeExpr.name
-        } case expression then {
-            arm = 3
-            innerId = typeExpr.expression
         } case call then {
             arm = 4
             callableId = typeExpr.callable
@@ -4262,7 +4160,6 @@ resolveTyperefShell: function {
         demand: false
         nid: nid.u64
     )
-    if arm == 3 then return (resolveTyperefShell :st :frame :ast :unitDecl nid: innerId :thisName)
     if arm == 4 then return (resolveTyperefCallShell
         :st
         :frame
@@ -4400,10 +4297,7 @@ typeofSourceType: function {
     arm: rowArmAt :ast :nid
     match (
         arm
-    ) case expression then {
-        wrap: exprRefAt :ast :nid
-        return (typeofSourceType :st :frame :ast :unitDecl :ownerId nid: wrap.expression)
-    } case atomid then {
+    ) case atomid then {
         if ownerId == 0 then return 0
         ar: atomRefAt :ast :nid
         co: (st.typing.declChildOfId
@@ -4591,20 +4485,14 @@ nameIsInUnitReftypeId: function {
 # receiver for the result binding's scope; they differ only in how strongly
 # (returnHasViewMarker picks that apart).
 returnHasBorrowMarkerNode: function {ast: Ast.view n: astnode.view} out bool is {
+    rbo: pathOwnership :ast :n
     match (
-        n
-    ) case expression then {
-        return (returnHasBorrowMarkerNode :ast n: (ast.nodes.get i: n.expression.u64))
-    } else {
-        rbo: pathOwnership :ast :n
-        match (
-            rbo
-        ) case some then {
-            if rbo == ztypes.zparamownership.borrowMode then return true
-            return rbo == ztypes.zparamownership.viewMode
-        } case none then {
-            return false
-        }
+        rbo
+    ) case some then {
+        if rbo == ztypes.zparamownership.borrowMode then return true
+        return rbo == ztypes.zparamownership.viewMode
+    } case none then {
+        return false
     }
 }
 
@@ -4612,19 +4500,13 @@ returnHasBorrowMarkerNode: function {ast: Ast.view n: astnode.view} out bool is 
 # hands back is READONLY (`out T.view`), so the pin it leaves on the receiver
 # is shared: several such references may be live at once.
 returnHasViewMarkerNode: function {ast: Ast.view n: astnode.view} out bool is {
+    rvo: pathOwnership :ast :n
     match (
-        n
-    ) case expression then {
-        return (returnHasViewMarkerNode :ast n: (ast.nodes.get i: n.expression.u64))
-    } else {
-        rvo: pathOwnership :ast :n
-        match (
-            rvo
-        ) case some then {
-            return rvo == ztypes.zparamownership.viewMode
-        } case none then {
-            return false
-        }
+        rvo
+    ) case some then {
+        return rvo == ztypes.zparamownership.viewMode
+    } case none then {
+        return false
     }
 }
 
@@ -4641,19 +4523,13 @@ returnHasViewMarker: function {ast: Ast.view oId: zast.nodeid} out bool is {
 # destructor -- so it is kept apart from returnHasViewMarker, which freezes a
 # binding because the binding IS the reference the callee handed back.
 returnHasFrozenMarkerNode: function {ast: Ast.view n: astnode.view} out bool is {
+    rfo: pathOwnership :ast :n
     match (
-        n
-    ) case expression then {
-        return (returnHasFrozenMarkerNode :ast n: (ast.nodes.get i: n.expression.u64))
-    } else {
-        rfo: pathOwnership :ast :n
-        match (
-            rfo
-        ) case some then {
-            return rfo == ztypes.zparamownership.holdMode
-        } case none then {
-            return false
-        }
+        rfo
+    ) case some then {
+        return rfo == ztypes.zparamownership.holdMode
+    } case none then {
+        return false
     }
 }
 
@@ -4677,9 +4553,7 @@ returnHasBorrowMarker: function {ast: Ast.view oId: zast.nodeid} out bool is {
 paramIsThisReceiver: function {ast: Ast.view op: astnode.view} out bool is {
     match (
         op
-    ) case expression then {
-        return (paramIsThisReceiver :ast op: (ast.nodes.get i: op.expression.u64))
-    } case atomid then {
+    ) case atomid then {
         return op.name.u32 == zast.names.wkThis
     } case dottedpath then {
         return (atomNameId :ast n: (ast.nodes.get i: op.parent.u64)) == zast.names.wkThis
@@ -4697,7 +4571,7 @@ paramIsThisReceiverId: function {ast: Ast.view opId: u32} out bool is {
 # the base type name of parameter operation `op`.
 # paramTypeBaseNameId -- the base type name of a (possibly parameterized) param
 # type expression, as its name id: an atom name directly, or the callable of a
-# parenthesized `(List of: i64)` form (an expression wrapping a call). Zero for
+# parenthesized `(List of: i64)` form (a call). Zero for
 # anything else.
 paramTypeBaseNameId: function {ast: Ast.view op: astnode.view} out zast.nameid is {
     match (
@@ -4706,8 +4580,6 @@ paramTypeBaseNameId: function {ast: Ast.view op: astnode.view} out zast.nameid i
         return op.name
     } case labelvalue then {
         return op.name
-    } case expression then {
-        return (paramTypeBaseNameId :ast op: (ast.nodes.get i: op.expression.u64))
     } case call then {
         return (atomNameId :ast n: (ast.nodes.get i: op.callable.u64))
     } else {
@@ -6931,9 +6803,7 @@ dataElemParts: function {ast: Ast.view opId: zast.nodeid} out dataelem is {
     n: ast.nodes.get i: opId.u64
     match (
         n
-    ) case expression then {
-        return (dataElemParts :ast opId: n.expression)
-    } case dottedpath then {
+    ) case dottedpath then {
         pt: atomName :ast n: (ast.nodes.get i: n.parent.u64)
         if (isNumericLiteralName name: pt.stringView).not then return miss
         return (dataelem litId: n.parent tagId: n.child ok: true)
@@ -9339,9 +9209,7 @@ variantTagIsOrdinalPlain: function {
 dottedParentName: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
-    ) case expression then {
-        return (dottedParentName :ast n: (ast.nodes.get i: n.expression.u64))
-    } case dottedpath then {
+    ) case dottedpath then {
         return (atomName :ast n: (ast.nodes.get i: n.parent.u64))
     } else {
         return "".string
@@ -9356,9 +9224,7 @@ dottedParentName: function {ast: Ast.view n: astnode.view} out String is {
 dottedTyperefId: function {ast: Ast.view st: zenv.ZSymbolTable op: astnode.view} out u64 is {
     match (
         op
-    ) case expression then {
-        return (dottedTyperefId :ast :st op: (ast.nodes.get i: op.expression.u64))
-    } case dottedpath then {
+    ) case dottedpath then {
         pnId: atomNameId :ast n: (ast.nodes.get i: op.parent.u64)
         cnId: atomNameId :ast n: (ast.nodes.get i: op.child.u64)
         if (nameDenotesUnit :st frame: st.curFrame nameId: pnId) then {
@@ -9416,8 +9282,7 @@ unionCustomTagOfArm: function {
                         match (
                             tgo
                         ) case some then {
-                            tnid0: (innermostNodeId
-                                :ast
+                            tnid0: (nodeId
                                 n: (ast.nodes.get i: am.operation.u64)
                             )
                             (ztyping.nodeTypeSet
@@ -9441,7 +9306,7 @@ unionCustomTagOfArm: function {
                 uk: uid
                 st.typing.pendingCustomTag.set key: uk value: pnId
                 uk2: uid
-                pnid: innermostNodeId :ast n: (ast.nodes.get i: am.operation.u64)
+                pnid: nodeId n: (ast.nodes.get i: am.operation.u64)
                 pnv: pnid.u64
                 st.typing.pendingCustomTagNode.set key: uk2 value: pnv
             }
@@ -9659,17 +9524,6 @@ attachUnionArm: function {
     )
     armTe: fm.operation
     armOpId: fm.operation
-    armW: true
-    for armW loop {
-        armW = false
-        {
-            awn: ast.nodes.get i: armOpId.u64
-            if awn.expression then {
-                armOpId = awn.expression
-                armW = true
-            }
-        }
-    }
     # the arm's call shape is read as plain values: the lookup below lends ast
     isBoxCall: false
     acr: callRefAt :ast nid: armOpId
@@ -10235,7 +10089,7 @@ foldedDeclType: function {
     bare: false
     {
         fop: ast.nodes.get i: dm.operation.u64
-        bare = (bareAtomNameId :ast n: fop).isZero.not
+        bare = (bareAtomNameId n: fop).isZero.not
     }
     if bare.not then return ztypes.tid
     fd: (st.typing.declMemberIdOf
@@ -10601,8 +10455,6 @@ rootIsStringLiteral: function {ast: Ast.view n: astnode.view} out bool is {
         n
     ) case atomstring then {
         return true
-    } case expression then {
-        return (rootIsStringLiteral :ast n: (ast.nodes.get i: n.expression.u64))
     } case dottedpath then {
         return (rootIsStringLiteral :ast n: (ast.nodes.get i: n.parent.u64))
     } else {
@@ -11450,7 +11302,6 @@ declDefTypetype: function {
     if nop.namedoperation then {
         nmNode: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: dname.u32)
         return (defTypetypeOf
-            :ast
             defn: (ast.nodes.get i: nop.operation.u64)
             name: nmNode.stringView
         )
@@ -11475,7 +11326,7 @@ reexportTargetIdsOf: function {
             if dk.unitName.u32 > 0 then return dk
             # a BARE alias names a target in its OWN unit, so the missing
             # segment is the enclosing unit's name -- the Decl's parent.
-            bid: bareDefTargetNameId :ast n: vn
+            bid: bareDefTargetNameId n: vn
             if bid.isZero.not then {
                 puid: zast.nameid
                 pdo: st.typing.decls.get i: decl.parent.u64
@@ -11502,7 +11353,7 @@ aliasIsBareForm: function {
         bnp: ast.nodes.get i: bdo.node.u64
         if bnp.namedoperation then {
             bvn: ast.nodes.get i: bnp.operation.u64
-            bnid: bareDefTargetNameId :ast n: bvn
+            bnid: bareDefTargetNameId n: bvn
             return bnid.isZero.not
         }
     }
@@ -12591,9 +12442,8 @@ resolveObjectDef: function {
 
 
 # resolveDef -- dispatch a main-unit definition by kind. Resolves functions, data
-# blocks, records, variants, unions, classes, facets and protocols; a top-level data
-# block parses as an `expression` wrapping a `datablock`, so unwrap one level and
-# re-dispatch. Enums and generics arrive in later slices.
+# blocks, records, variants, unions, classes, facets and protocols. Enums and
+# generics arrive in later slices.
 resolveDef: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -12654,24 +12504,6 @@ resolveDef: function {
             nid: defnId.u64
             tid: (ztypes.tid.create from: fid.u64)
         )
-    } case expression then {
-        wrap: exprRefAt :ast nid: defnId
-        resolveDef :st frame: rf :ast :unitDecl :defName defnId: wrap.expression
-        exprid: (resolvedByIds
-            :st
-            :ast
-            :unitDecl
-            name: (zast.poolFind pool: ast.names text: defName)
-        )
-        match (
-            exprid
-        ) case some then {
-            (ztyping.nodeTypeSet
-                tbl: st.typing.nodeType
-                nid: defnId.u64
-                tid: (ztypes.tid.create from: exprid.u64)
-            )
-        } case none then null
     } case datablock then {
         dr: dataRefAt :ast nid: defnId
         resolveData :st frame: rf :ast :unitDecl :defName dnode: dr
@@ -13960,8 +13792,6 @@ scanCallsInNode: function {
         scanCallsInSpan :st :frame :ast span: node.statements
     } case statementline then {
         scanCallsAt :st :frame :ast nid: node.statementline
-    } case expression then {
-        scanCallsAt :st :frame :ast nid: node.expression
     } case assignment then {
         scanCallsAt :st :frame :ast nid: node.value
     } case ifexpr then {
@@ -14287,9 +14117,7 @@ resolveDemands: function {
 instCallablePath: function {ast: Ast.view op: astnode.view segs: ListVal u64} is {
     match (
         op
-    ) case expression then {
-        instCallablePath :ast op: (ast.nodes.get i: op.expression.u64) :segs
-    } case dottedpath then {
+    ) case dottedpath then {
         instCallablePath :ast op: (ast.nodes.get i: op.parent.u64) :segs
         segs.append (atomNameId :ast n: (ast.nodes.get i: op.child.u64)).u64
     } case atomid then {
@@ -14299,16 +14127,13 @@ instCallablePath: function {ast: Ast.view op: astnode.view segs: ListVal u64} is
     }
 }
 
-# callableInstPath -- the path of a binding whose value is a (possibly
-# expression-wrapped) call. Empty for anything else, which is what says a
+# callableInstPath -- the path of a binding whose value is a call. Empty for anything else, which is what says a
 # binding is not an instantiation. The whole path, not a single atom name: a
 # dotted callable names another unit's template.
 callableInstPath: function {ast: Ast.view op: astnode.view segs: ListVal u64} is {
     match (
         op
-    ) case expression then {
-        callableInstPath :ast op: (ast.nodes.get i: op.expression.u64) :segs
-    } case call then {
+    ) case call then {
         instCallablePath :ast op: (ast.nodes.get i: op.callable.u64) :segs
     } else null
 }
@@ -14475,8 +14300,6 @@ InstReq: class {
     # its type (argNames); a call-shaped argument -- itself a specialisation,
     # `(Box t: i64)` -- has no name and resolves from this node
     argNodeIds: ListVal u64
-    # the expression wrapper the request was written inside, when there is one
-    exprId: u64
     # the call node that requested the instantiation
     callId: u64
     # that call's callable, which is the template being named
@@ -14488,10 +14311,7 @@ InstReq: class {
 instFillIds: function {ast: Ast.view r: InstReq op: astnode.view} is {
     match (
         op
-    ) case expression then {
-        r.exprId = op.nodeid.u64
-        instFillIds :ast :r op: (ast.nodes.get i: op.expression.u64)
-    } case call then {
+    ) case call then {
         r.callId = op.nodeid.u64
         instFillCallable :r op: (ast.nodes.get i: op.callable.u64)
     } else null
@@ -14509,12 +14329,10 @@ instFillCallable: function {r: InstReq op: astnode.view} is {
 }
 
 # the atom id of an instantiation-call argument.
-instArgAtomId: function {ast: Ast.view op: astnode.view} out u64 is {
+instArgAtomId: function {op: astnode.view} out u64 is {
     match (
         op
-    ) case expression then {
-        return (instArgAtomId :ast op: (ast.nodes.get i: op.expression.u64))
-    } case atomid then {
+    ) case atomid then {
         return op.nodeid.u64
     } else {
         return 0
@@ -14527,9 +14345,7 @@ instArgAtomId: function {ast: Ast.view op: astnode.view} out u64 is {
 fillUnitArgs: function {ast: Ast.view r: InstReq op: astnode.view} is {
     match (
         op
-    ) case expression then {
-        fillUnitArgs :ast :r op: (ast.nodes.get i: op.expression.u64)
-    } case call then {
+    ) case call then {
         arx139: u64
         for arx139 < op.arguments.count.u64 loop {
             a9Id: zast.kidAt kids: ast.kids span: op.arguments i: arx139
@@ -14537,7 +14353,7 @@ fillUnitArgs: function {ast: Ast.view r: InstReq op: astnode.view} is {
             a: ast.nodes.get i: a9Id.u64
             if a.namedoperation then {
                 anm: atomName :ast n: (ast.nodes.get i: a.operation.u64)
-                aid: instArgAtomId :ast op: (ast.nodes.get i: a.operation.u64)
+                aid: instArgAtomId op: (ast.nodes.get i: a.operation.u64)
                 r.argLabels.append a.name
                 r.argNames.append anm
                 r.argAtomIds.append aid
@@ -14606,7 +14422,6 @@ collectMainInstantiations: function {
                             argNames: List String
                             argAtomIds: ListVal u64
                             argNodeIds: ListVal u64
-                            exprId: 0
                             callId: 0
                             calId: 0
                         )
@@ -14766,7 +14581,6 @@ resolveOrdinaryMember: function {
     # definition: resolveDef is what FOLDS it, and following it instead leaves
     # the constant unfolded.
     if isRx when (isDottedValue
-        :ast
         n: (ast.nodes.get i: bmNode.operation.u64)
     ) then {
         resolveAliasKey :st :ast declId: md
@@ -15795,7 +15609,6 @@ completeOneInstance: function {
     rbId: r.bindId
     rtId: r.tmplId
     ru: r.declUnit
-    re: r.exprId
     rc: r.callId
     rl: r.calId
     rtu: r.tmplUnit
@@ -15896,14 +15709,6 @@ completeOneInstance: function {
         :memberIdAt
         :subs
     )
-    if re > 0 then {
-        ev: memberIdAt
-        (ztyping.nodeTypeSet
-            tbl: st.typing.nodeType
-            nid: re
-            tid: (ztypes.tid.create from: ev.u64)
-        )
-    }
     if rc > 0 then {
         cv: memberIdAt
         (ztyping.nodeTypeSet
@@ -19498,7 +19303,7 @@ bindValueArgSub: function {
     if vt0.isZero then return
     mv0: materialiseLiteral :ast :st :unitDecl t: vt0
     if mv0 != vt0 then {
-        iid0: innermostNodeId :ast n: (ast.nodes.get i: opId.u64)
+        iid0: nodeId n: (ast.nodes.get i: opId.u64)
         if iid0 > 0 then {
             setm0: mv0
             stampGate :st nid: iid0.u64 tid: setm0
@@ -20117,7 +19922,7 @@ genericTypeConstruction: function {
     }
     # Only a bare-atom callable restamps to the instance; a dotted callable
     # (the .str conversion form) leaves the path unstamped.
-    gcb: zast.nameTextAt :ast ref: (bareAtomNameId :ast n: (ast.nodes.get i: call.callable.u64))
+    gcb: zast.nameTextAt :ast ref: (bareAtomNameId n: (ast.nodes.get i: call.callable.u64))
     gcal: nodeId n: (ast.nodes.get i: call.callable.u64)
     if gcal > 0 when gcb.length > 0 then {
         setga: mid
@@ -20451,8 +20256,6 @@ rootNameIdOf: function {ast: Ast.view n: astnode.view} out zast.nameid is {
         n
     ) case atomid then {
         return n.name
-    } case expression then {
-        return (rootNameIdOf :ast n: (ast.nodes.get i: n.expression.u64))
     } case dottedpath then {
         return (rootNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
     } else {
@@ -20467,8 +20270,6 @@ rootNameOf: function {ast: Ast.view n: astnode.view} out String is {
         n
     ) case atomid then {
         return (zast.nameTextCopy :ast ref: n.name)
-    } case expression then {
-        return (rootNameOf :ast n: (ast.nodes.get i: n.expression.u64))
     } case dottedpath then {
         return (rootNameOf :ast n: (ast.nodes.get i: n.parent.u64))
     } else {
@@ -20508,9 +20309,7 @@ unionCreateArmName: function {
 } out String is {
     match (
         n
-    ) case expression then {
-        return (unionCreateArmName :ast :st n: (ast.nodes.get i: n.expression.u64))
-    } case dottedpath then {
+    ) case dottedpath then {
         dgot: st.typing.dpTaggedParent.get key: n.nodeid.u64
         match (
             dgot
@@ -20555,15 +20354,7 @@ valueNoCoerceAt: function {
     arm: rowArmAt :ast :nid
     match (
         arm
-    ) case expression then {
-        wrap: exprRefAt :ast :nid
-        ev: valueNoCoerceAt :st :unitDecl :ast nid: wrap.expression
-        if ev > 0 then {
-            sete: ev
-            stampGate :st nid: wrap.nid.u64 tid: (ztypes.tid.create from: sete.u64)
-        }
-        return ev
-    } case dottedpath then {
+    ) case dottedpath then {
         dr: dpRefAt :ast :nid
         return (checkDotted :st :unitDecl :ast dp: dr coerce: false)
     } else {
@@ -20620,7 +20411,6 @@ consumeProjectionSource: function {
     pbn: (zast.nameTextAt
         :ast
         ref: (bareAtomNameId
-            :ast
             n: (ast.nodes.get i: arg.operation.u64)
         )
     )
@@ -20777,7 +20567,7 @@ consumeCastFromArg: function {
     if (argIsTrivial :ast op: (ast.nodes.get i: aOpId.u64)) then {
         bn: (zast.nameTextAt
             :ast
-            ref: (bareAtomNameId :ast n: (ast.nodes.get i: aOpId.u64))
+            ref: (bareAtomNameId n: (ast.nodes.get i: aOpId.u64))
         )
         if bn.length > 0 then {
             bvo: st.lookupVarId nameId: (nameIdOf :ast name: bn.stringView)
@@ -21677,7 +21467,7 @@ checkMemberProjections: function {
     if rmtt == ztypes.ztypetype.protocolType then {
         pjroot: (zast.nameTextAt
             :ast
-            ref: (bareAtomNameId :ast n: (ast.nodes.get i: dp.parent.u64))
+            ref: (bareAtomNameId n: (ast.nodes.get i: dp.parent.u64))
         )
         if pjroot.length > 0 then {
             pjvo: st.lookupVarId nameId: (nameIdOf :ast name: pjroot.stringView)
@@ -23051,7 +22841,7 @@ checkTransferMarker: function {
             msg: mvs
         )
     }
-    mkRootId: bareAtomNameId :ast n: (ast.nodes.get i: dp.parent.u64)
+    mkRootId: bareAtomNameId n: (ast.nodes.get i: dp.parent.u64)
     if (isDropMarkerId nameId: cnId) when mkRootId.isZero then {
         mrv: "'.drop' can only be applied to a variable name".string
         (addError
@@ -23222,14 +23012,8 @@ checkNumericSuffixCast: function {
     # Numeric dotted suffix (`1.u8`, `(2.5).f32`): when the child names a
     # non-function type, the path is a typed-literal cast -- the parent atom
     # coerces to the suffix type and the path carries it. Parens around the
-    # literal are the same conversion (peel expression wrappers).
+    # literal are the same conversion: they leave no row of their own.
     castBaseId: dp.parent
-    pw9c: u64
-    for pw9c < 2 loop {
-        cbn: ast.nodes.get i: castBaseId.u64
-        if cbn.expression then castBaseId = cbn.expression
-        pw9c = pw9c + 1
-    }
     castBaseNm: atomNameId :ast n: (ast.nodes.get i: castBaseId.u64)
     if (isNumericLiteralNameAt :ast ref: castBaseNm) then {
         castBase: zast.nameTextCopy :ast ref: castBaseNm
@@ -23779,14 +23563,12 @@ pinsAllParamRooted: function {st: zenv.ZSymbolTable.view} out bool is {
     return true
 }
 
-# callNodeIdOf -- the call under expression wrappers; zero for any other shape.
-callNodeIdOf: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
+# callNodeIdOf -- the id of a call; zero for any other shape.
+callNodeIdOf: function {n: astnode.view} out zast.nodeid is {
     match (
         n
     ) case call then {
         return n.nodeid
-    } case expression then {
-        return (callNodeIdOf :ast n: (ast.nodes.get i: n.expression.u64))
     } else {
         return zast.nodeid
     }
@@ -23818,7 +23600,7 @@ checkReturnRooting: function {
     argT: ztypes.tid
 } is {
     if argT.isZero then return
-    cid: callNodeIdOf :ast n: (ast.nodes.get i: arg.operation.u64)
+    cid: callNodeIdOf n: (ast.nodes.get i: arg.operation.u64)
     if st.typing.currentReturnsBorrow then {
         okRef: false
         if cid.isZero.not then {
@@ -23877,7 +23659,7 @@ checkReturnRooting: function {
             nameId: fa.name
         ) then {
             srcOk: false
-            fcid: callNodeIdOf :ast n: (ast.nodes.get i: fa.operation.u64)
+            fcid: callNodeIdOf n: (ast.nodes.get i: fa.operation.u64)
             if fcid.isZero.not then {
                 # a call's result references what its own rules allow
                 srcOk = true
@@ -23993,7 +23775,7 @@ checkReturnCarries: function {
     if argT.isZero then return
     if (typeIsReftype :st tid: argT).not then return
     an: ast.nodes.get i: arg.operation.u64
-    rbn: bareAtomNameId :ast n: an
+    rbn: bareAtomNameId n: an
     if rbn.isZero.not then {
         rvo: st.lookupVarId nameId: rbn
         match (
@@ -24052,7 +23834,7 @@ checkReturnCarries: function {
         return
     }
     # a returned call: its pending pins are what the result keeps locked
-    if (callNodeIdOf :ast n: an).isZero then return
+    if (callNodeIdOf n: an).isZero then return
     if st.typing.currentFnPins then return
     if st.typing.currentReturnsBorrow then return
     if st.typing.pendingPins.length == 0 then return
@@ -24335,7 +24117,6 @@ ArmPredFact: class {
 # (`x.a` carrying a dpArmPredicate stamp on a non-bool receiver with a
 # bare-variable subject), or none.
 predDottedCore: function {
-    ast: Ast.view
     st: zenv.ZSymbolTable.view
     nid: u64
     parent: astnode.view
@@ -24346,7 +24127,7 @@ predDottedCore: function {
     ptid: (st.typing.dpArmPredicate.get key: nid).or d: ztypes.tid
     if ptid.isZero then return (Option.none ArmPredFact)
     if ptid.u64 == boolId then return (Option.none ArmPredFact)
-    sn: bareAtomNameId :ast n: parent
+    sn: bareAtomNameId n: parent
     if sn.isZero then return (Option.none ArmPredFact)
     if childName.isZero then return (Option.none ArmPredFact)
     return (Option.some (ArmPredFact
@@ -24358,7 +24139,7 @@ predDottedCore: function {
     )
 }
 
-# predDottedFact -- predDottedCore over a astnode (expression wrappers peeled).
+# predDottedFact -- predDottedCore over an astnode.
 predDottedFact: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
@@ -24368,21 +24149,12 @@ predDottedFact: function {
 } out Option ArmPredFact is {
     match (
         n
-    ) case expression then {
-        return (predDottedFact
-            :ast
-            :st
-            n: (ast.nodes.get i: n.expression.u64)
-            :boolId
-            :negated
-        )
-    } case dottedpath then {
+    ) case dottedpath then {
         return (predDottedCore
-            :ast
             :st
             nid: n.nodeid.u64
             parent: (ast.nodes.get i: n.parent.u64)
-            childName: (bareAtomNameId :ast n: (ast.nodes.get i: n.child.u64))
+            childName: (bareAtomNameId n: (ast.nodes.get i: n.child.u64))
             :boolId
             :negated
         )
@@ -24442,18 +24214,18 @@ equalityArmFact: function {
     if br0.operator.isZero then return (Option.none ArmPredFact)
     opn0: (zast.nameTextAt
         :ast
-        ref: (bareAtomNameId :ast n: (ast.nodes.get i: br0.operator.u64))
+        ref: (bareAtomNameId n: (ast.nodes.get i: br0.operator.u64))
     )
     if opn0.stringView != "==" then return (Option.none ArmPredFact)
     lsd0: (ztyping.armSideOfName
         ty: st.typing
         typeId: boolId
-        nameId: (bareAtomNameId :ast n: (ast.nodes.get i: br0.lhs.u64)).u64
+        nameId: (bareAtomNameId n: (ast.nodes.get i: br0.lhs.u64)).u64
     )
     rsd0: (ztyping.armSideOfName
         ty: st.typing
         typeId: boolId
-        nameId: (bareAtomNameId :ast n: (ast.nodes.get i: br0.rhs.u64)).u64
+        nameId: (bareAtomNameId n: (ast.nodes.get i: br0.rhs.u64)).u64
     )
     if rsd0.truthy then return (predDottedFact
         :st
@@ -24502,7 +24274,7 @@ predFactOf: function {
     {
         ta0: truthyCondArmOf :st nid: (nodeId :n).u64
         if ta0 > 0 then {
-            sj0: bareAtomNameId :ast :n
+            sj0: bareAtomNameId :n
             ft0: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: (nodeId :n).u64
             if sj0.isZero.not when ft0.isZero.not then {
                 return (Option.some (ArmPredFact
@@ -24525,9 +24297,7 @@ predFactOf: function {
     }
     match (
         n
-    ) case expression then {
-        return (predFactOf :ast :st n: (ast.nodes.get i: n.expression.u64) :boolId)
-    } case dottedpath then {
+    ) case dottedpath then {
         # `.true` / `.false` on a predicate: which side it is comes from the
         # stamped type's arm ORDER, never from the spelling of the segment.
         sd: (armSuffixSide
@@ -24552,11 +24322,10 @@ predFactOf: function {
             negated: true
         )
         return (predDottedCore
-            :ast
             :st
             nid: n.nodeid.u64
             parent: (ast.nodes.get i: n.parent.u64)
-            childName: (bareAtomNameId :ast n: (ast.nodes.get i: n.child.u64))
+            childName: (bareAtomNameId n: (ast.nodes.get i: n.child.u64))
             :boolId
             negated: false
         )
@@ -24930,7 +24699,7 @@ checkReadonlyBindSource: function {
     # binding may not be moved out of whether or not its type owns heap,
     # and without a destructor the emitter builds a value from a pointer
     # and gcc rejects the C.
-    rn5: zast.nameTextAt :ast ref: (bareAtomNameId :ast n: (ast.nodes.get i: asgn.value.u64))
+    rn5: zast.nameTextAt :ast ref: (bareAtomNameId n: (ast.nodes.get i: asgn.value.u64))
     roMv5: false
     if rn5.length > 0 when (typeIsReftype :st tid: vt) then {
         if (nameIsReadonly :st :ast name: rn5.stringView) then {
@@ -25250,7 +25019,7 @@ moveLocksToTarget: function {
     match (
         tvo
     ) case some then {
-        bareT: (bareAtomNameId :ast n: (ast.nodes.get i: rasgn.topath.u64)).isZero.not
+        bareT: (bareAtomNameId n: (ast.nodes.get i: rasgn.topath.u64)).isZero.not
         if bareT then {
             st.releaseHeldLocks holder: (ztypes.zlockholder
                 kind: ztypes.zlockholderkind.varKind
@@ -25280,7 +25049,7 @@ invalidateMovedSource: function {
 } is {
     # A bare-name reftype RHS is a move: the source invalidates (the symtab
     # appends its taken overlay entry).
-    rn: zast.nameTextAt :ast ref: (bareAtomNameId :ast n: (ast.nodes.get i: rasgn.value.u64))
+    rn: zast.nameTextAt :ast ref: (bareAtomNameId n: (ast.nodes.get i: rasgn.value.u64))
     if rn.length > 0 when rvt > 0 when (typeIsReftype :st tid: rvt) then {
         vo: st.lookupVarId nameId: (nameIdOf :ast name: rn.stringView)
         match (
@@ -25657,12 +25426,11 @@ checkReassignment: function {
         return
     }
     resolveTypeofTarget :st :unitDecl :ast :rasgn :lvt :rvt
-    # A literal RHS at a concretely-typed target coerces: restamp the RHS's
-    # innermost node (wrappers derive through the dump's descent). A
+    # A literal RHS at a concretely-typed target coerces: restamp the RHS. A
     # literal-typed target (a literal-init loop binding) keeps the pseudo.
     if lvt > 0 when rvt > 0 when (isLiteralTypeId :st tid: rvt) when (isLiteralTypeId :st tid: lvt
     ).not then {
-        iid: innermostNodeId :ast n: (ast.nodes.get i: rasgn.value.u64)
+        iid: nodeId n: (ast.nodes.get i: rasgn.value.u64)
         if iid > 0 then {
             setc: lvt
             stampGate :st nid: iid.u64 tid: setc
@@ -25717,7 +25485,7 @@ consumeReassignPins: function {
 }
 
 # checkSwap -- `lhs swap rhs`: resolve both operand paths (stamping them). The swap
-# carries no type (the expression wrapper is null, like reassignment) and does no
+# carries no type (like reassignment) and does no
 # narrowing. Operand ownership/lock/type-match validation produces no dump rows -- deferred.
 checkSwap: function {
     st: zenv.ZSymbolTable
@@ -25742,9 +25510,7 @@ withValueOwnership: function {
 } out ztypes.zownership is {
     match (
         v
-    ) case expression then {
-        return (withValueOwnership :ast :st v: (ast.nodes.get i: v.expression.u64))
-    } case atomid then {
+    ) case atomid then {
         vNm: ast.names.texts.get i: v.name.u64
         vo: st.lookupVarId nameId: (nameIdOf :ast name: vNm.stringView)
         match (
@@ -25900,8 +25666,6 @@ blockHasBreak: function {ast: Ast.view n: astnode.view} out bool is {
         return false
     } case statementline then {
         return (blockHasBreak :ast n: (ast.nodes.get i: n.statementline.u64))
-    } case expression then {
-        return (blockHasBreak :ast n: (ast.nodes.get i: n.expression.u64))
     } case atomid then {
         return n.name.u32 == zast.names.wkBreak
     } case ifexpr then {
@@ -26038,14 +25802,13 @@ checkDo: function {
     return (ztypes.tid.create from: result)
 }
 
-# isCallNode -- the node is a (possibly expression-wrapped) call.
-isCallNode: function {ast: Ast.view n: astnode.view} out bool is {
+# isCallNode -- a call test that keeps the caller's un-narrowed handle, where a
+# `match` would narrow it to the call row.
+isCallNode: function {n: astnode.view} out bool is {
     match (
         n
     ) case call then {
         return true
-    } case expression then {
-        return (isCallNode :ast n: (ast.nodes.get i: n.expression.u64))
     } else {
         return false
     }
@@ -26284,8 +26047,8 @@ mintForSpillFields: function {
     fresh: facId > 0
     {
         op: ast.nodes.get i: cond.operation.u64
-        if (isCallNode :ast n: op) then fresh = true
-        if (st.typing.implicitCreate.has key: (innermostNodeId :ast n: op).u64) then fresh = true
+        if (isCallNode n: op) then fresh = true
+        if (st.typing.implicitCreate.has key: (nodeId n: op).u64) then fresh = true
     }
     if fresh.not then return
     itT: vt
@@ -26321,7 +26084,7 @@ bindForIteration: function {
     # A call-shaped iterator init probes its per-iteration call
     # in an empty call scope; gated on the value being an iterator
     # wrapper.
-    if (isCallNode :ast n: (ast.nodes.get i: cond.operation.u64)) then {
+    if (isCallNode n: (ast.nodes.get i: cond.operation.u64)) then {
         probeForCallIteration :st :unitDecl :ast :vt
     }
     fe: forElementOf :st :unitDecl :ast :vt
@@ -26471,7 +26234,7 @@ checkForCondition: function {
     # A bare 0-arg function returning an iterator class auto-invokes:
     # its walk runs in a call scope and the atom keeps the FUNCTION
     # stamp rather than the auto-call's coerced return.
-    fbnId: bareAtomNameId :ast n: (ast.nodes.get i: cond.operation.u64)
+    fbnId: bareAtomNameId n: (ast.nodes.get i: cond.operation.u64)
     facId: forFactoryTid :st :unitDecl :ast :fbnId
     vt: ztypes.tid
     errC: st.typing.errors.length
@@ -26492,7 +26255,7 @@ checkForCondition: function {
         fcm: st.pushCall
         vt = checkValueAt :st :unitDecl :ast nid: cond.operation
         st.popTo marker: fcm
-        fiid: innermostNodeId :ast n: (ast.nodes.get i: cond.operation.u64)
+        fiid: nodeId n: (ast.nodes.get i: cond.operation.u64)
         if fiid > 0 then {
             setff: facId
             stampGate :st nid: fiid.u64 tid: (ztypes.tid.create from: setff.u64)
@@ -27136,17 +26899,6 @@ argIsTrivial: function {ast: Ast.view op: astnode.view} out bool is {
             }
         }
         return true
-    } case expression then {
-        opx: ast.nodes.get i: op.expression.u64
-        match (
-            opx
-        ) case atomid then {
-            return true
-        } case labelvalue then {
-            return true
-        } else {
-            return false
-        }
     } else {
         return false
     }
@@ -27170,27 +26922,13 @@ typeIsValtype: function {
     return (st.reg.isValtypeOf :tid)
 }
 
-# innermostNodeId -- the node id of a value with its expression wrappers
-# stripped (the node the dump's descent reads first); 0 for uncovered kinds.
-innermostNodeId: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
-    match (
-        n
-    ) case expression then {
-        return (innermostNodeId :ast n: (ast.nodes.get i: n.expression.u64))
-    } else {
-        return (nodeId :n)
-    }
-}
-
 
 # taggedRecvIsValue -- the dotted receiver denotes a VALUE (a variable at
 # the path root, or a call result), not a type/unit reference.
 taggedRecvIsValue: function {ast: Ast.view st: zenv.ZSymbolTable.view n: astnode.view} out bool is {
     match (
         n
-    ) case expression then {
-        return (taggedRecvIsValue :ast :st n: (ast.nodes.get i: n.expression.u64))
-    } case call then {
+    ) case call then {
         return true
     } else {
         rn0: rootNameIdOf :ast :n
@@ -27206,28 +26944,24 @@ taggedRecvIsValue: function {ast: Ast.view st: zenv.ZSymbolTable.view n: astnode
     }
 }
 
-# bareAtomNameId -- the interned name id of an expression-unwrapped bare atom,
+# bareAtomNameId -- the interned name id of a bare atom,
 # 0 for any other shape. The id twin of bareAtomName.
-bareAtomNameId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
+bareAtomNameId: function {n: astnode.view} out zast.nameid is {
     match (
         n
-    ) case expression then {
-        return (bareAtomNameId :ast n: (ast.nodes.get i: n.expression.u64))
-    } case atomid then {
+    ) case atomid then {
         return n.name
     } else {
         return (zast.nameid.create from: 0)
     }
 }
 
-# bareAtomName -- the (expression-unwrapped) bare atom name of a value node,
+# bareAtomName -- the bare atom name of a value node,
 # or "" when the value is any other shape.
 bareAtomName: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
-    ) case expression then {
-        return (bareAtomName :ast n: (ast.nodes.get i: n.expression.u64))
-    } case atomid then {
+    ) case atomid then {
         return (zast.nameTextCopy :ast ref: n.name)
     } else {
         return "".string
@@ -27252,7 +26986,7 @@ methodReceiverRootId: function {ast: Ast.view n: astnode.view} out zast.nameid i
     match (
         n
     ) case dottedpath then {
-        return (bareAtomNameId :ast n: (ast.nodes.get i: n.parent.u64))
+        return (bareAtomNameId n: (ast.nodes.get i: n.parent.u64))
     } else {
         return zast.nameid
     }
@@ -27692,9 +27426,7 @@ consumeBareArgOwnership: function {
 appendValueTuple: function {ast: Ast.view n: astnode.view dst: ListVal zast.nameid} is {
     match (
         n
-    ) case expression then {
-        appendValueTuple :ast n: (ast.nodes.get i: n.expression.u64) :dst
-    } case atomid then {
+    ) case atomid then {
         dst.append n.name
     } case dottedpath then {
         appendValueTuple :ast n: (ast.nodes.get i: n.parent.u64) :dst
@@ -27875,8 +27607,6 @@ pathLeafIsTake: function {ast: Ast.view n: astnode.view} out bool is {
         n
     ) case dottedpath then {
         return (atomNameId :ast n: (ast.nodes.get i: n.child.u64)) == zast.names.wkTake
-    } case expression then {
-        return (pathLeafIsTake :ast n: (ast.nodes.get i: n.expression.u64))
     } else {
         return false
     }
@@ -28613,15 +28343,12 @@ literalTidOfLiteralOperand: function {
     nid: u64
 } out u64 is {
     n: ast.nodes.get i: nid
-    if n.expression then {
-        return (literalTidOfLiteralOperand :st :ast nid: n.expression.u64)
-    }
     {
         ipL: zast.infixPartsOf :ast :n
         if ipL.found then {
             opT: (zast.nameTextAt
                 :ast
-                ref: (bareAtomNameId :ast n: (ast.nodes.get i: ipL.operator.u64))
+                ref: (bareAtomNameId n: (ast.nodes.get i: ipL.operator.u64))
             )
             if (isComparisonOp name: opT.stringView) then return 0
             return (literalTidOfLiteralOperand :st :ast nid: ipL.lhs.u64)
@@ -28668,19 +28395,10 @@ hoistArg: function {
         co = nodeCol n: argNode
     }
     assignId: zast.tableReserve :ast
-    exprId: zast.tableReserve :ast
     atomId: zast.tableReserve :ast
     st.typing.synthNodes.append (ztyping.SynthNode
         nodeid: assignId
         kind: "Assignment"
-        ownerUnit: st.typing.synthOwnerUnit
-        ownerName: st.typing.synthOwnerName
-        lineno: ln
-        colno: co
-    )
-    st.typing.synthNodes.append (ztyping.SynthNode
-        nodeid: exprId
-        kind: "Expression"
         ownerUnit: st.typing.synthOwnerUnit
         ownerName: st.typing.synthOwnerName
         lineno: ln
@@ -28696,8 +28414,6 @@ hoistArg: function {
     )
     seta: argType
     stampGate :st nid: assignId.u64 tid: (ztypes.tid.create from: seta.u64)
-    sete: argType
-    stampGate :st nid: exprId.u64 tid: (ztypes.tid.create from: sete.u64)
     atomT: argType
     if paramType > 0 then atomT = ztypes.tid.create from: paramType.u64
     setm: atomT
@@ -29311,7 +29027,7 @@ hoistTrivialArg: function {
     # A trivial literal argument coerces in place at the
     # parameter boundary (no hoist: restamp its bare node).
     if pt > 0 then {
-        iid2: innermostNodeId :ast n: (ast.nodes.get i: arg.operation.u64)
+        iid2: nodeId n: (ast.nodes.get i: arg.operation.u64)
         if iid2 > 0 then {
             seta2: pt
             stampGate :st nid: iid2.u64 tid: (ztypes.tid.create from: seta2.u64)
@@ -29324,7 +29040,7 @@ hoistTrivialArg: function {
     # identically: a take parameter consumes it, a lock/borrow
     # parameter locks it (see docs/typechecker.pdoc, `:name` at
     # the argument site).
-    bnId: bareAtomNameId :ast n: (ast.nodes.get i: arg.operation.u64)
+    bnId: bareAtomNameId n: (ast.nodes.get i: arg.operation.u64)
     if bnId.isZero then {
         bnId = atomNameId :ast n: (ast.nodes.get i: arg.operation.u64)
     }
@@ -29563,18 +29279,11 @@ argMismatchSkipped: function {
     )
 }
 
-# argLiteralLexeme -- the numeric lexeme an argument is written as, through the
-# expression wrappers, or "" when the argument is not a bare numeric literal. A
-# folded expression (`(0 - 5)`) has no lexeme of its own and answers "".
+# argLiteralLexeme -- the numeric lexeme an argument is written as, or "" when
+# the argument is not a bare numeric literal. A folded expression (`(0 - 5)`)
+# has no lexeme of its own and answers "".
 argLiteralLexeme: function {ast: Ast.view nid: zast.nodeid} out String is {
-    inner: nid
-    pw9a: u64
-    for pw9a < 2 loop {
-        wn: ast.nodes.get i: inner.u64
-        if wn.expression then inner = wn.expression
-        pw9a = pw9a + 1
-    }
-    nmId: atomNameId :ast n: (ast.nodes.get i: inner.u64)
+    nmId: atomNameId :ast n: (ast.nodes.get i: nid.u64)
     if nmId.isZero then return "".string
     if (isNumericLiteralNameAt :ast ref: nmId).not then return "".string
     return (zast.nameTextCopy :ast ref: nmId)
@@ -29636,12 +29345,6 @@ checkNumericCoercion: function {
         {
             wn9: ast.nodes.get i: vn9.u64
             if wn9.namedoperation then vn9 = wn9.operation
-        }
-        pw9: u64
-        for pw9 < 2 loop {
-            wb9: ast.nodes.get i: vn9.u64
-            if wb9.expression then vn9 = wb9.expression
-            pw9 = pw9 + 1
         }
         cf9: st.typing.nodeConst.get key: vn9.u64
         match (
@@ -29811,14 +29514,14 @@ checkNamedArgParam: function {
 
 # stampArgDisposition -- record what the call does with the argument `op`:
 # the emitter zeroes the source of a taken one after the call, and the LSP
-# words it. Keyed by the value node under its expression wrappers.
+# words it. Keyed by the value node.
 stampArgDisposition: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     op: zast.nodeid
     own: ztypes.zparamownership
 } is {
-    dispNid: innermostNodeId :ast n: (ast.nodes.get i: op.u64)
+    dispNid: nodeId n: (ast.nodes.get i: op.u64)
     if dispNid.isZero then return
     dispVal: own
     st.typing.argDisposition.set key: dispNid.u64 value: dispVal
@@ -30151,8 +29854,7 @@ walkOneCallArg: function {
             vt = ztypes.tid.create from: (valueNoCoerceAt :st :unitDecl :ast nid: arg.operation)
         } else {
             caPrev: st.typing.callArgNode
-            st.typing.callArgNode = (innermostNodeId
-                :ast
+            st.typing.callArgNode = (nodeId
                 n: (ast.nodes.get i: arg.operation.u64)
             ).u64
             vt = checkValueAt :st :unitDecl :ast nid: arg.operation
@@ -30359,14 +30061,14 @@ bindBoxedArgument: function {
         )
         return
     }
-    iid: innermostNodeId :ast n: (ast.nodes.get i: arg.operation.u64)
+    iid: nodeId n: (ast.nodes.get i: arg.operation.u64)
     if iid > 0 then stampGate :st nid: iid.u64 tid: argT
     if (typeIsReftype :st tid: argT).not then return
     # an OWNED copy of the name: the move below lends ast exclusively, and a
     # view of the pool would still be holding it
     bn: (zast.nameTextCopy
         :ast
-        ref: (bareAtomNameId :ast n: (ast.nodes.get i: arg.operation.u64))
+        ref: (bareAtomNameId n: (ast.nodes.get i: arg.operation.u64))
     )
     if bn.length == 0 then return
     # the position is read into locals first: a nested `ast.nodes` read cannot
@@ -30546,10 +30248,7 @@ returnedBareFieldName: function {
     arm: rowArmAt :ast :nid
     match (
         arm
-    ) case expression then {
-        wrap: exprRefAt :ast :nid
-        return (returnedBareFieldName :ast :st nid: wrap.expression)
-    } case dottedpath then {
+    ) case dottedpath then {
         dr: dpRefAt :ast :nid
         bfcId: atomNameId :ast n: (ast.nodes.get i: dr.child.u64)
         if bfcId.isZero then return "".string
@@ -30641,20 +30340,16 @@ dottedRootName: function {ast: Ast.view n: astnode.view} out String is {
         n
     ) case dottedpath then {
         return (dottedRootName :ast n: (ast.nodes.get i: n.parent.u64))
-    } case expression then {
-        return (dottedRootName :ast n: (ast.nodes.get i: n.expression.u64))
     } else {
         return (atomName :ast :n)
     }
 }
 
-# isDottedValue -- the node under any expression wrappers is a dotted path.
-isDottedValue: function {ast: Ast.view n: astnode.view} out bool is {
+# isDottedValue -- the node is a dotted path.
+isDottedValue: function {n: astnode.view} out bool is {
     match (
         n
-    ) case expression then {
-        return (isDottedValue :ast n: (ast.nodes.get i: n.expression.u64))
-    } case dottedpath then {
+    ) case dottedpath then {
         return true
     } else {
         return false
@@ -30671,11 +30366,10 @@ unresolvedBareCallable: function {
     unitDecl: ztypes.declid
     nid: zast.nodeid
 } out String is {
-    # the row is read through a view scoped to this block (1 expression,
-    # 2 call, 3 infix, 4 atomid, 5 dottedpath, 0 anything else): the name
-    # probe below lends ast exclusively
+    # the row is read through a view scoped to this block (2 call, 3 infix,
+    # 4 atomid, 5 dottedpath, 0 anything else): the name probe below lends ast
+    # exclusively
     arm: u32
-    innerId: zast.nodeid
     callableId: zast.nodeid
     lhsId: zast.nodeid
     rhsId: zast.nodeid
@@ -30689,10 +30383,7 @@ unresolvedBareCallable: function {
         ipu: zast.infixPartsOf :ast :n
         match (
             n
-        ) case expression then {
-            arm = 1
-            innerId = n.expression
-        } case call then {
+        ) case call then {
             arm = 2
             callableId = n.callable
             if ipu.found then {
@@ -30708,7 +30399,6 @@ unresolvedBareCallable: function {
             parentId = n.parent
         } else null
     }
-    if arm == 1 then return (unresolvedBareCallable :ast :st :unitDecl nid: innerId)
     if arm == 2 then {
         ubc: zast.nameid
         ubr0: zast.nameid
@@ -30758,7 +30448,7 @@ reportUnresolvedValue: function {
     eCo: u32
     {
         vnode: ast.nodes.get i: nid.u64
-        isDotted = isDottedValue :ast n: vnode
+        isDotted = isDottedValue n: vnode
         if isDotted then ubD = rootNameIdOf :ast n: vnode
         eLn = nodeLine n: vnode
         eCo = nodeCol n: vnode
@@ -31017,7 +30707,7 @@ recordReturnedOwnedLocal: function {
 } is {
     if argT.isZero then return
     if (typeIsReftype :st tid: argT).not then return
-    rbnId: bareAtomNameId :ast n: (ast.nodes.get i: arg.operation.u64)
+    rbnId: bareAtomNameId n: (ast.nodes.get i: arg.operation.u64)
     if rbnId.isZero then return
     rvv: st.lookupVarId nameId: rbnId
     rvid: ztypes.vid
@@ -31785,8 +31475,7 @@ checkTaggedCtorArg: function {
         # payload type (restamp the bare node).
         if (isLiteralTypeId :st tid: uvt) then {
             if uparmid > 0 then {
-                uiid: (innermostNodeId
-                    :ast
+                uiid: (nodeId
                     n: (ast.nodes.get i: arg2.operation.u64)
                 )
                 if uiid > 0 then {
@@ -31980,7 +31669,7 @@ lockGenericCallArg: function {
     pnId: zast.nameid
     arg: argref
 } is {
-    bnId: bareAtomNameId :ast n: (ast.nodes.get i: arg.operation.u64)
+    bnId: bareAtomNameId n: (ast.nodes.get i: arg.operation.u64)
     if bnId.isZero then return
     bvo: st.lookupVarId nameId: bnId
     if bvo.none then return
@@ -33575,14 +33264,12 @@ checkGenericCall: function {
 }
 
 # subjectAtomName -- a match subject's bare-atom name (narrowing requires a
-# simple addressable name): unwrap expression wrappers, "" for dotted/complex
+# simple addressable name): "" for dotted/complex
 # subjects and numeric atoms.
 subjectAtomName: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
-    ) case expression then {
-        return (subjectAtomName :ast n: (ast.nodes.get i: n.expression.u64))
-    } case atomid then {
+    ) case atomid then {
         saB: ast.names.texts.get i: n.name.u64
         if (isNumericLiteralName name: saB.stringView) then {
             return "".string
@@ -34329,7 +34016,7 @@ rejectGenericValueMatch: function {
     # over a VALUE whose type is the generic parameter has no per-
     # instance arm dispatch (the template body is shared), so it is
     # rejected rather than silently taking the else path.
-    gvid: innermostNodeId :ast n: (ast.nodes.get i: casenode.subject.u64)
+    gvid: nodeId n: (ast.nodes.get i: casenode.subject.u64)
     gvav: st.typing.atomVariableId.get key: gvid.u64
     match (
         gvav
@@ -34482,8 +34169,6 @@ rowarm: variant {
     reassignment: null
     # the row holds a swapstmt
     swapstmt: null
-    # the row holds an expression
-    expression: null
     # the row holds an assignment
     assignment: null
     # the row holds a stringchunk
@@ -34530,8 +34215,6 @@ rowArmAt: function {ast: Ast.view nid: zast.nodeid} out rowarm is {
         return rowarm.reassignment
     } case swapstmt then {
         return rowarm.swapstmt
-    } case expression then {
-        return rowarm.expression
     } case assignment then {
         return rowarm.assignment
     } case stringchunk then {
@@ -34704,30 +34387,6 @@ reportUnknownNameAt: function {
         hint: eh
         width: name.length.u32.orPanic
     )
-}
-
-# exprref -- what a walk reads of an expression wrapper row: the wrapped
-# value id and the position, as plain values.
-exprref: record {
-    # the parenthesised expression node this was read from
-    nid: zast.nodeid
-    # what the parentheses wrap
-    expression: zast.nodeid
-    # the line to report this parenthesised expression against
-    lineno: u32
-    # the column to report this parenthesised expression against
-    colno: u32
-}
-
-# exprRefAt -- the expression row `nid` as plain values (all zero for any
-# other arm).
-exprRefAt: function {ast: Ast.view nid: zast.nodeid} out exprref is {
-    n: ast.nodes.get i: nid.u64
-    if n.expression then {
-        return (exprref :nid expression: n.expression lineno: n.lineno colno: n.colno)
-    }
-    zn: zast.nodeid
-    return (exprref nid: zn expression: zn lineno: 0 colno: 0)
 }
 
 # asgnref -- what the binding walk reads of its row: the bound name, the
@@ -35348,11 +35007,6 @@ checkValueArmAt: function {
     } case labelvalue then {
         lvr: labelRefAt :ast :nid
         return (checkLabelValueAt :st :ast lv: lvr)
-    } case expression then {
-        wrap: exprRefAt :ast :nid
-        t: checkValueAt :st :unitDecl :ast nid: wrap.expression
-        if t > 0 then stampGate :st nid: wrap.nid.u64 tid: t
-        return t
     } else {
         return (ztypes.tid.create from: 0)
     }
@@ -35391,7 +35045,7 @@ checkStmtExpression: function {
     if et0 > 0 then stampGate :st nid: lineId.u64 tid: et0
     ckOpt0: st.typing.callKind.get key: valueId.u64
     isR0: isReturnCallKind o: ckOpt0
-    bn0: bareAtomNameId :ast n: (ast.nodes.get i: valueId.u64)
+    bn0: bareAtomNameId n: (ast.nodes.get i: valueId.u64)
     k0: ctlDivKind bn: bn0
     ctl0: k0 > 0
     if ctl0.not when isR0 then k0 = zenv.divkind.exit
@@ -37807,11 +37461,10 @@ constantOperandType: function {
     frame: ztypes.declid
     nid: zast.nodeid
 } out u64 is {
-    # the row is read through a view scoped to this block (1 expression,
-    # 2 atomid, 3 infix, 0 anything else): the lookups and operand walks
-    # below lend ast exclusively
+    # the row is read through a view scoped to this block (2 atomid, 3 infix,
+    # 0 anything else): the lookups and operand walks below lend ast
+    # exclusively
     arm: u32
-    innerId: zast.nodeid
     nameId: zast.nameid
     lhsId: zast.nodeid
     rhsId: zast.nodeid
@@ -37820,10 +37473,7 @@ constantOperandType: function {
         n: ast.nodes.get i: nid.u64
         match (
             n
-        ) case expression then {
-            arm = 1
-            innerId = n.expression
-        } case atomid then {
+        ) case atomid then {
             arm = 2
             nameId = n.name
         } else null
@@ -37840,7 +37490,6 @@ constantOperandType: function {
             }
         }
     }
-    if arm == 1 then return (constantOperandType :st :frame :ast :unitDecl nid: innerId)
     if arm == 2 then return (constantAtomType :st :frame :ast :unitDecl :nid :nameId)
     if arm == 3 then return (constantBinopType :st :frame :ast :unitDecl :nid :lhsId :rhsId :opId)
     return 0
@@ -37938,7 +37587,7 @@ constantCompareType: function {
     if lLit.not when lt > 0 then conc = lt
     if conc == 0 when rLit.not when rt > 0 then conc = rt
     if lLit when conc > 0 then {
-        lid: innermostNodeId :ast n: (ast.nodes.get i: lhsId.u64)
+        lid: nodeId n: (ast.nodes.get i: lhsId.u64)
         if lid > 0 then {
             (ztyping.nodeTypeSet
                 tbl: st.typing.nodeType
@@ -37948,7 +37597,7 @@ constantCompareType: function {
         }
     }
     if rLit when conc > 0 then {
-        rid: innermostNodeId :ast n: (ast.nodes.get i: rhsId.u64)
+        rid: nodeId n: (ast.nodes.get i: rhsId.u64)
         if rid > 0 then {
             setr: conc
             (ztyping.nodeTypeSet
@@ -37974,8 +37623,8 @@ constantCompareType: function {
 }
 
 # constantLineType -- one statement line of a unit-level-if branch: the
-# expression's constant type, stamped on the line, its expression wrapper
-# and its atom; a literal result materialises to its default (i64/f64).
+# expression's constant type, stamped on the line and its value; a literal
+# result materialises to its default (i64/f64).
 # 0 when the line has no constant type.
 constantLineType: function {
     st: zenv.ZSymbolTable
@@ -38007,14 +37656,6 @@ constantLineType: function {
                 tid: (ztypes.tid.create from: mt0.u64)
             )
         }
-        iid0: innermostNodeId :ast n: (ast.nodes.get i: innerId.u64)
-        if iid0 > 0 then {
-            (ztyping.nodeTypeSet
-                tbl: st.typing.nodeType
-                nid: iid0.u64
-                tid: (ztypes.tid.create from: mt0.u64)
-            )
-        }
         return mt0
     } else {
         if bt0 > 0 then {
@@ -38031,8 +37672,7 @@ constantLineType: function {
 
 # constantBranchWalk -- walk one unit-level-if branch block: each statement's
 # expression types through the constant walk; literal results materialise to
-# their defaults (i64/f64) on the statement, its expression wrapper, and the
-# atom. Returns the (materialised) last-statement type.
+# their defaults (i64/f64) on the statement and its value. Returns the (materialised) last-statement type.
 constantBranchWalk: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -38750,15 +38390,9 @@ constOwnerDeclForId: function {
 # the constant sense: a ring of aliases is an alias cycle, and the resolver
 # already reports that with its own diagnostic and its own wording.
 constDefIsComputed: function {ast: Ast.view n: astnode.view} out bool is {
-    match (
-        n
-    ) case expression then {
-        return (constDefIsComputed :ast n: (ast.nodes.get i: n.expression.u64))
-    } else {
-        # `X: X + 1` computes, and an infix call is the only shape that does
-        ip: zast.infixPartsOf :ast :n
-        return ip.found
-    }
+    # `X: X + 1` computes, and an infix call is the only shape that does
+    ip: zast.infixPartsOf :ast :n
+    return ip.found
 }
 
 # constValueOfMemberTidId -- the memoised compile-time value of a member of the
@@ -39707,12 +39341,12 @@ constOfNamedBase: function {
 
 
 # constplan -- what evaluating one row needs once its view is gone: the arm
-# (1 expression, 2 atomid, 3 atomstring, 4 dottedpath, 5 infix, 6 call,
-# 7 ifexpr, 0 anything else) and the ids and scalars that arm reads.
+# (2 atomid, 3 atomstring, 4 dottedpath, 5 infix, 6 call, 7 ifexpr, 0 anything
+# else) and the ids and scalars that arm reads.
 constplan: record {
     # the arm the constant names, when it names one
     arm: u32
-    # the inner node the plan folds
+    # a one-part string's single part
     innerId: zast.nodeid
     # the name being folded
     nameId: zast.nameid
@@ -39743,10 +39377,7 @@ evalConstPlan: function {ast: Ast.view nid: zast.nodeid} out constplan is {
         n: ast.nodes.get i: nid.u64
         match (
             n
-        ) case expression then {
-            arm = 1
-            innerId = n.expression
-        } case atomid then {
+        ) case atomid then {
             arm = 2
             nameId = n.name
         } case atomstring then {
@@ -39955,7 +39586,6 @@ evalConstNode: function {
     # answer for the wrong binding. The checker has already recorded which
     # atoms read a variable -- the two guards below are that record, one for a
     # bare name and one for the root of a path.
-    if plan.arm == 1 then return (evalConstNode :st :frame :ast :unitDecl nid: plan.innerId)
     if plan.arm == 2 then {
         if (st.typing.atomVariableId.has key: nid.u64) then return ztypes.noConst
         # a literal never needs an OWNED name, and every numeric literal in the
@@ -40036,7 +39666,6 @@ stampConstAt: function {
         if (st.typing.nodeConst.has key: br.lhs.u64).not then return
         if (st.typing.nodeConst.has key: br.rhs.u64).not then return
     }
-    if plan.arm == 1 when (st.typing.nodeConst.has key: plan.innerId.u64).not then return
     # A CALL AND AN `if` ARE NOT ASKED AT A USE SITE. The call arm folds string
     # static methods and records a reached `error`; the first changes nothing a
     # body emits and the second is a diagnostic this walk must never raise. The
@@ -40556,18 +40185,7 @@ resolveConstantDef: function {
     arm: rowArmAt :ast nid: defnId
     match (
         arm
-    ) case expression then {
-        wrap: exprRefAt :ast nid: defnId
-        (resolveUnitIfDef
-            :st
-            :frame
-            :ast
-            :unitDecl
-            :defName
-            nid: wrap.expression
-        )
-        resolveConstantDef :st :frame :ast :unitDecl :defName defnId: wrap.expression
-    } case ifexpr then {
+    ) case ifexpr then {
         # a compile-time conditional: its branches decide the constant's type
         (resolveUnitIfDef
             :st
@@ -40746,13 +40364,6 @@ instantiatedAliasFold: function {
     {
         nop: ast.nodes.get i: dnode.u64
         if nop.namedoperation then opId = nop.operation
-    }
-    if opId.isZero then return false
-    {
-        o: ast.nodes.get i: opId.u64
-        match (
-            o
-        ) case expression then opId = o.expression else null
     }
     if opId.isZero then return false
     isCall: false

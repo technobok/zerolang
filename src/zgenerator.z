@@ -131,8 +131,6 @@ pathShape: function {n: astnode.view} out bool is {
         return true
     } case dottedpath then {
         return true
-    } case expression then {
-        return true
     } case call then {
         return true
     } case namedoperation then {
@@ -191,14 +189,6 @@ clonePathArm: function {
             colno: n.colno
             parent: (zast.nodeid.create from: (cloned.get i: 0))
             child: (zast.nodeid.create from: (cloned.get i: 1))
-        )
-        )
-    } case expression then {
-        return (astnode.expression (zast.expressionrow
-            nodeid: myId
-            lineno: n.lineno
-            colno: n.colno
-            expression: (zast.nodeid.create from: (cloned.get i: 0))
         )
         )
     } case call then {
@@ -278,9 +268,7 @@ givesFromOp: function {ast: Ast nid: zast.nodeid dst: GivesParts} is {
         n: ast.nodes.get i: nid.u64
         match (
             n
-        ) case expression then {
-            innerId = n.expression
-        } case dottedpath then {
+        ) case dottedpath then {
             isDotted = true
             parentId = n.parent
         } else null
@@ -410,8 +398,6 @@ typePathIsReference: function {ast: Ast.view nid: zast.nodeid} out bool is {
         lid: leafAtomNameId :ast n: (ast.nodes.get i: n.child.u64)
         if lid == zast.names.wkBorrow then return true
         return lid == zast.names.wkView
-    } case expression then {
-        return (typePathIsReference :ast nid: n.expression)
     } else {
         return false
     }
@@ -523,14 +509,12 @@ buildWrapper: function {
 }
 
 
-# isYieldValue -- the assignment RHS is a yield expression (through
-# expression wrappers): the expression-form `name: yield E`.
+# isYieldValue -- the assignment RHS is a yield expression: the expression-form
+# `name: yield E`.
 isYieldValue: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
-    ) case expression then {
-        return (isYieldValue :ast n: (ast.nodes.get i: n.expression.u64))
-    } case call then {
+    ) case call then {
         return (zast.isYieldCalleeAt :ast callableId: n.callable)
     } else {
         return false
@@ -806,8 +790,6 @@ firstRhsScan: function {
         }
     } case statementline then {
         kids.append from: n.statementline.u32
-    } case expression then {
-        kids.append from: n.expression.u32
     } case ifexpr then {
         clx1139: u64
         for clx1139 < n.clauses.count.u64 loop {
@@ -855,7 +837,7 @@ firstRhsDescend: function {
             already = true
         } case none then null
         if already.not then {
-            rc: cloneInner :ast nid: rhsId
+            rc: clonePathAt :ast nid: rhsId
             dst.base = optionval.some rc
         }
         return
@@ -877,19 +859,6 @@ firstRhsOfOpt: function {
     ) case some then {
         firstRhsOf :ast n: o :name :dst
     } case none then null
-}
-
-# cloneInner -- clone the inside of an expression wrapper (the typeof
-# field embeds the bare operation). The unwrap continues by id; the view
-# dies before the clone lends `ast`.
-cloneInner: function {ast: Ast nid: zast.nodeid} out astnode is {
-    inner: nid
-    {
-        n: ast.nodes.get i: nid.u64
-        if n.expression then inner = n.expression
-    }
-    if inner == nid then return (clonePathAt :ast :nid)
-    return (cloneInner :ast nid: inner)
 }
 
 # promoteIterables -- clone the body, and for each top-level `for` whose
@@ -963,9 +932,9 @@ promoteLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid dst: ListVal u32} 
             innerId = n.statementline
             lnQ = n.lineno
             coQ = n.colno
-            isFor = lineIsFor :ast n: (ast.nodes.get i: n.statementline.u64)
+            isFor = lineIsFor n: (ast.nodes.get i: n.statementline.u64)
             if isFor.not then {
-                isFor = lineIsWith :ast n: (ast.nodes.get i: n.statementline.u64)
+                isFor = lineIsWith n: (ast.nodes.get i: n.statementline.u64)
             }
         }
     }
@@ -986,12 +955,10 @@ promoteLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid dst: ListVal u32} 
 }
 
 # true when node `n` is a with-statement line.
-lineIsWith: function {ast: Ast.view n: astnode.view} out bool is {
+lineIsWith: function {n: astnode.view} out bool is {
     match (
         n
-    ) case expression then {
-        return (lineIsWith :ast n: (ast.nodes.get i: n.expression.u64))
-    } case withexpr then {
+    ) case withexpr then {
         return true
     } else {
         return false
@@ -1026,8 +993,8 @@ promoteWrappedBody: function {ast: Ast ctr: NameCtr oId: zast.nodeid} out u32 is
         bareLine: false
         {
             nB: ast.nodes.get i: oId.u64
-            if (lineIsFor :ast n: nB) then bareLine = true
-            if (lineIsWith :ast n: nB) then bareLine = true
+            if (lineIsFor n: nB) then bareLine = true
+            if (lineIsWith n: nB) then bareLine = true
         }
         if bareLine then return (promoteBareLine :ast :ctr nid: oId)
         return (promoteIterablesIdAt :ast :ctr :oId)
@@ -1133,12 +1100,10 @@ promoteWith: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out astnode is {
 }
 
 # true when node `n` is a for-statement line.
-lineIsFor: function {ast: Ast.view n: astnode.view} out bool is {
+lineIsFor: function {n: astnode.view} out bool is {
     match (
         n
-    ) case expression then {
-        return (lineIsFor :ast n: (ast.nodes.get i: n.expression.u64))
-    } case forexpr then {
+    ) case forexpr then {
         return true
     } else {
         return false
@@ -1265,7 +1230,6 @@ promoteForCond: function {
         if c0.namedoperation then {
             cn0: zast.nameTextAt :ast ref: c0.name
             if cn0.length > 0 when suspends when (condIsTrivial
-                :ast
                 n: (ast.nodes.get i: c0.operation.u64)
             ).not then doHoist = true
             if doHoist then {
@@ -1391,12 +1355,10 @@ promoteFor: function {
 }
 
 # true when condition `n` is a trivial always-true form.
-condIsTrivial: function {ast: Ast.view n: astnode.view} out bool is {
+condIsTrivial: function {n: astnode.view} out bool is {
     match (
         n
-    ) case expression then {
-        return (condIsTrivial :ast n: (ast.nodes.get i: n.expression.u64))
-    } case atomid then {
+    ) case atomid then {
         return true
     } else {
         return false
@@ -1581,14 +1543,6 @@ rewriteArm: function {
             colno: n.colno
             parent: (zast.nodeid.create from: (cloned.get i: 0))
             child: (zast.nodeid.create from: (cloned.get i: 1))
-        )
-        )
-    } case expression then {
-        return (astnode.expression (zast.expressionrow
-            nodeid: myId
-            lineno: n.lineno
-            colno: n.colno
-            expression: (zast.nodeid.create from: (cloned.get i: 0))
         )
         )
     } case call then {

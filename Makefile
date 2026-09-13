@@ -777,7 +777,12 @@ perf: $(PERFBIN)
 #           field types at ~17 allocations each. The emitted C is byte-identical.
 #   -1,959  the input: 98 fewer lines of src/ and lib/system/.
 # The bytes allocated fall by 2.6 MB: the wrapper rows themselves.
-ALLOC_BASELINE := 2486698
+#
+# -28,966 when the `expression` arm and every name reading it were deleted, and
+# it is the INPUT: over the same source the old and new compilers differ by 6
+# allocations, while the compiler's own source is 933 lines shorter. The bytes
+# fall 5.2 MB, 3.3 MB of it the compiler's own over that same source.
+ALLOC_BASELINE := 2457732
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

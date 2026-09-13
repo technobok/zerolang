@@ -463,7 +463,7 @@ ZDumper: class {
         }
     }
 
-    # the same, unwrapping each child's expression wrapper first
+    # the same, unwrapping each child's namedoperation first
     walkUnwrappedIds: function {:this ast: Ast.view ids: zast.kidspan nameSql: StringView} is {
         h2x9: u64
         for h2x9 < ids.count.u64 loop {
@@ -1354,96 +1354,6 @@ ZDumper: class {
     }
 }
 
-# walkExprStampsAt -- the id-taking entry: the row view is this frame's, so a
-# caller can lend the table exclusively.
-walkExprStampsAt: function {
-    typing: ztyping.ZTyping
-    ast: Ast.view
-    nId: zast.nodeid
-    ids: ListVal u64
-    vals: ListVal u64
-} out u64 is {
-    n: ast.nodes.get i: nId.u64
-    return (walkExprStamps :typing :ast :n :ids :vals)
-}
-
-# stampedKind -- whether `n` carries a type stamp, and so whether the walk
-# descends through it. Three of the variant's arms do not: `program` is
-# structure rather than expression, and `error` and `placeholder` stand where a
-# node could not be built.
-stampedKind: function {n: astnode.view} out bool is {
-    if n.program then return false
-    if n.error then return false
-    if n.placeholder then return false
-    return true
-}
-
-# walkExprStamps -- an Expression wrapper's typed row shows the innermost
-# non-expression node's stamp when one exists, falling back to the wrapper's
-# own. The walk returns each node's effective stamp so nested wrappers see
-# through inner wrappers; overrides are collected and applied to nodeType after
-# the walk (check-time propagation has already read the original values).
-#
-# The children come from `zast.childIds`, which is the ONE enumeration the AST
-# publishes. A second one spelled out here per node kind is a list to keep in
-# step with the union: a kind added without an arm would leave its whole subtree
-# unstamped, and say nothing. The cost is a child list per node, which this walk
-# pays only under `--dump-sql`.
-walkExprStamps: function {
-    typing: ztyping.ZTyping
-    ast: Ast.view
-    n: astnode.view
-    ids: ListVal u64
-    vals: ListVal u64
-} out u64 is {
-    selfId: (zast.nodeIdOf :n).u64
-    if n.expression then {
-        eff: walkExprStampsAt :typing :ast nId: n.expression :ids :vals
-        if eff > 0 then {
-            ids.append selfId
-            ev: eff
-            vals.append ev
-            return eff
-        }
-        return (ztyping.nodeTypeAt tbl: typing.nodeType nid: selfId)
-    }
-    if (stampedKind :n).not then return 0
-    with kit: (zast.childIds :ast :n).iterate do for k: kit loop {
-        walkExprStampsAt :typing :ast nId: (zast.nodeid.create from: k) :ids :vals
-    }
-    return (ztyping.nodeTypeAt tbl: typing.nodeType nid: selfId)
-}
-
-# overrideExpressionStamps -- collect the wrapper overrides across every unit,
-# then rewrite nodeType so appendTypedNodes emits the descended values.
-overrideExpressionStamps: function {typing: ztyping.ZTyping program: Ast.view} is {
-    ids: ListVal u64
-    vals: ListVal u64
-    uCnt9d: program.units.length
-    uIdx9d: u64
-    for uIdx9d < uCnt9d loop {
-        uId: zast.nodeid.create from: (program.units.get i: uIdx9d)
-        uIdx9d = uIdx9d + 1
-        (walkExprStampsAt
-            :typing
-            ast: program
-            nId: (zast.nodeid.create from: uId)
-            :ids
-            :vals
-        )
-    }
-    i: u64
-    cnt: ids.length
-    for i < cnt loop {
-        k: ids.get :i
-        v: vals.get :i
-        setk: k
-        setv: v
-        ztyping.nodeTypeSet tbl: typing.nodeType nid: setk tid: (ztypes.tid.create from: setv.u64)
-        i = i + 1
-    }
-}
-
 # --- entry point ---
 
 # dumpSql -- the full dump: schema, then files, ast_nodes and unit rows.
@@ -1457,7 +1367,6 @@ dumpSql: function {program: Ast.view vfs: zvfs.ZVfs symtab: zenv.ZSymbolTable} o
     d.appendDecls ast: program typing: symtab.typing
     d.appendGenericChildren st: symtab
     d.appendGenericArgs st: symtab
-    overrideExpressionStamps typing: symtab.typing :program
     d.appendTypedNodes typing: symtab.typing
     d.appendAtomStamps typing: symtab.typing pool: program.names
     d.appendMemberConst typing: symtab.typing
