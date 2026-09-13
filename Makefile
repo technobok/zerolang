@@ -787,7 +787,12 @@ perf: $(PERFBIN)
 # refusal, and it is the INPUT: over the same source (and the same argv[0]) the
 # old and new compilers allocate identically, while the compiler's own source is
 # 528 lines longer -- the walk that says why a constant has no value.
-ALLOC_BASELINE := 2470698
+#
+# +12,578 when a swap and a reassignment target became checked (unknown names,
+# addressability, borrowed names, one type), and it is the INPUT again: over the
+# same source and argv[0] the old and new compilers allocate identically, while
+# the compiler's own source is 272 lines longer.
+ALLOC_BASELINE := 2483276
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
