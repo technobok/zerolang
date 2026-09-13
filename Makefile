@@ -803,7 +803,11 @@ perf: $(PERFBIN)
 # +3,487 when the emitter started writing a narrowed name as the whole variable:
 # over the old source the new compiler allocates 20 more, and the rest is the
 # input, the compiler's own source being 74 lines longer.
-ALLOC_BASELINE := 2511782
+#
+# +1,153 when a container construction's arguments became `create`'s: over the
+# old source the new compiler allocates 27 more (the call walk the arguments now
+# take), and the rest is the input, 70 more source lines.
+ALLOC_BASELINE := 2512935
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

@@ -17383,7 +17383,8 @@ collapseBoxArm: function {
 
 # elidedArgFallbackTid -- with the leading type argument elided, a member whose
 # own type still names the template parameter takes the single argument that
-# was given. Answers the type the member should carry.
+# was given. Answers the type the member should carry; a function member keeps
+# its own.
 elidedArgFallbackTid: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -17391,12 +17392,12 @@ elidedArgFallbackTid: function {
     tplUnit: ztypes.declid
     fallbackArg: u64
     ctnT: StringView
-    childIsGeneric: bool
+    childIsFunction: bool
     chId: u64
     argTid: u64
 } out u64 is {
     target: argTid
-    if fallbackArg > 0 when (ctnT == "null").not when target == chId when childIsGeneric.not then {
+    if fallbackArg > 0 when (ctnT == "null").not when target == chId when childIsFunction.not then {
         cko: (walkLookupTyperef
             :st
             frame: rf
@@ -17490,15 +17491,17 @@ mintMonoMember: function {
     # narrowing, the destructor cast and the native io fragments'
     # layout on the element -- a Box value IS the cell pointer.
     target = collapseBoxArm :st :tt argTid: target
-    # Generic FUNCTION children are clone candidates: the elided-arg
-    # fallback must not swallow them (a method child's dotted name never
-    # resolves, so the lookup-miss leg would replace the method with the
-    # element type).
-    childIsGeneric: false
-    if (
+    # A FUNCTION child is never the elided argument: its own name never
+    # resolves as a type, so the fallback's lookup-miss leg would replace the
+    # method -- generic or not -- with the element type, and a container
+    # mono's `create` became its first type argument. Generic function
+    # children are the clone candidates below.
+    childIsFunction: (
         (st.reg.typetypeOf typeId: (ztypes.tid.create from: chId.u64)) ==
         ztypes.ztypetype.functionType
-    ) then {
+    )
+    childIsGeneric: false
+    if childIsFunction then {
         childIsGeneric = st.reg.isGenericOf tid: (ztypes.tid.create from: chId.u64)
     }
     target = (elidedArgFallbackTid
@@ -17508,7 +17511,7 @@ mintMonoMember: function {
         :tplUnit
         :fallbackArg
         ctnT: ctnT.stringView
-        :childIsGeneric
+        :childIsFunction
         :chId
         argTid: target
     )
@@ -19590,11 +19593,13 @@ templateTakesCapacity: function {
 # skipCapacityArg -- `capacity:` on a builtin container is a create argument riding
 # the construction sugar: it must not reach the spec key or the substitutions, and
 # failing it over to field inference would type the whole call wrong. A skipped
-# argument is still a VALUE, so it is walked here for its atoms' stamps.
+# argument is still a VALUE, and still create's argument: it is walked for its
+# atoms' stamps and checked as a call's argument is.
 skipCapacityArg: function {
     ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
+    argId: zast.nodeid
     argOpId: zast.nodeid
     tplId: ztypes.tid
     pk0: zast.nameid
@@ -19603,12 +19608,37 @@ skipCapacityArg: function {
     skipCr: false
     if isP0.not when pk0 == zast.names.wkCapacity when (templateTakesCapacity :st :ast :tplId
     ) then skipCr = true
-    # a skipped capacity: arg is still a value: check it so its
-    # atoms stamp (atomVariableId / refDecl) like any arg
-    if skipCr then {
-        checkValueAt :st :unitDecl :ast nid: argOpId
-    }
+    if skipCr then checkCapacityArg :st :unitDecl :ast :argId :argOpId
     return skipCr
+}
+
+# checkCapacityArg -- `capacity:` written inside a container's type application is
+# create's argument, so it is checked as one: a name nothing declares, and a
+# value that does not fit create's `capacity: u64`, are the call's diagnostics.
+checkCapacityArg: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    argId: zast.nodeid
+    argOpId: zast.nodeid
+} is {
+    errC: st.typing.errors.length
+    vt: checkValueAt :st :unitDecl :ast nid: argOpId
+    if st.typing.errors.length != errC then return
+    if vt.isZero then {
+        ubn: unresolvedBareCallable :ast :st :unitDecl nid: argOpId
+        if ubn.length > 0 then reportUnknownNameAt :st :ast nid: argOpId name: ubn
+        return
+    }
+    u64t: builtinTidT :st frame: st.curFrame :ast base: "u64"
+    (checkArgTypeMismatch
+        :st
+        :ast
+        ptid: u64t.u64
+        :vt
+        pnId: zast.names.wkCapacity
+        arg: (argRefAt :ast nid: argId)
+    )
 }
 
 
@@ -19760,6 +19790,7 @@ collectTypeArgAt: function {
         :ast
         :st
         :unitDecl
+        :argId
         argOpId: opId
         :tplId
         :pk0
@@ -32641,28 +32672,59 @@ checkUserFnCall: function {
     return result
 }
 
-# isContainerTemplateTid -- whether a template origin is one of the native
-# container templates, whose paren-construction arguments take no standard
-# ctor scope (each has its own native create path).
-isContainerTemplateTid: function {ast: Ast st: zenv.ZSymbolTable wgix: u64} out bool is {
-    if wgix == (builtinTidTcRo :ast :st base: "ListRef") then return true
-    if wgix == (builtinTidTcRo :ast :st base: "ListVal") then return true
-    if wgix == (builtinTidTcRo :ast :st base: "MapRR") then return true
-    if wgix == (builtinTidTcRo :ast :st base: "MapRV") then return true
-    if wgix == (builtinTidTcRo :ast :st base: "MapVR") then return true
-    if wgix == (builtinTidTcRo :ast :st base: "MapVV") then return true
-    if wgix == (builtinTidTcRo :ast :st base: "SetRef") then return true
-    return wgix == (builtinTidTcRo :ast :st base: "SetVal")
+# wrappedCalleeIsContainer -- the wrapped callee is a mono of a native container
+# family: its construction is a call of its declared `create`, not a field walk.
+wrappedCalleeIsContainer: function {ast: Ast st: zenv.ZSymbolTable wcv: ztypes.tid} out bool is {
+    wgi: st.reg.genericOriginOf tid: wcv
+    if wgi.isZero then return false
+    return (templateTakesCapacity :ast :st tplId: wgi)
 }
 
 # wrappedCalleeIsCtorType -- a non-FUNCTION wrapped callee is the paren-mono
 # construction form, whose value args ride the standard ctor walk (call
-# scope, hoists, consumption); a container template is not.
+# scope, hoists, consumption); a container family is not.
 wrappedCalleeIsCtorType: function {ast: Ast st: zenv.ZSymbolTable wcv: ztypes.tid} out bool is {
     if (st.reg.typetypeOf typeId: wcv) == ztypes.ztypetype.functionType then return false
-    wgi: st.reg.genericOriginOf tid: wcv
-    if wgi.isZero then return true
-    return (isContainerTemplateTid :ast :st wgix: wgi.u64).not
+    return (wrappedCalleeIsContainer :ast :st :wcv).not
+}
+
+# checkContainerCreateArgs -- a container construction's arguments ARE its
+# `create`'s: `(ListVal t: i64) capacity: 8` is `(ListVal t: i64).create
+# capacity: 8`, so they are walked and checked as a call of the family's declared
+# create -- a wrong type, a name nothing declares, a label create does not have
+# and a missing required argument are that call's diagnostics. The signature is
+# the TEMPLATE's: every family declares the same `create: function {capacity:
+# 0.u64}`, whose parameters no type argument substitutes, while a mono's own
+# `create` may be the parameterless one a construction synthesises.
+checkContainerCreateArgs: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    call: callref
+    wcv: ztypes.tid
+} is {
+    tpl: st.reg.genericOriginOf tid: wcv
+    forceMemberOf :st frame: st.curFrame :ast parentTypeId: tpl nameId: zast.names.wkCreate
+    cr: (st.typing.declChildOfId parentTypeId: tpl nameId: zast.names.wkCreate).or d: 0
+    crt: ztypes.tid.create from: cr.u64
+    crFn: cr > 0 and ((st.reg.typetypeOf typeId: crt) == ztypes.ztypetype.functionType)
+    if crFn.not then {
+        checkWrappedValueArgs :st :unitDecl :ast :call
+        return
+    }
+    cm: st.pushCall
+    (walkCallArgsHoist
+        :st
+        :unitDecl
+        :ast
+        :call
+        funcId: crt
+        isCtor: false
+        reportUnknown: true
+        recvImplicit: false
+    )
+    checkMissingCallArgs :ast :st :call funcId: crt isCtor: false recvImplicit: false
+    st.popTo marker: cm
 }
 
 # checkWrappedCtorArgs -- the standard ctor walk over a wrapped
@@ -32718,7 +32780,9 @@ checkWrappedCall: function {
         reportUnresolvedValue :st :unitDecl :ast nid: call.callable
     }
     if wcv.u64 == 0 then return (ztypes.tid.create from: 0)
-    if (wrappedCalleeIsCtorType :ast :st :wcv) when call.nargs > 0 then {
+    if call.nargs > 0 when (wrappedCalleeIsContainer :ast :st :wcv) then {
+        checkContainerCreateArgs :st :unitDecl :ast :call :wcv
+    } else if (wrappedCalleeIsCtorType :ast :st :wcv) when call.nargs > 0 then {
         checkWrappedCtorArgs :st :unitDecl :ast :call :wcv
     } else {
         checkWrappedValueArgs :st :unitDecl :ast :call
