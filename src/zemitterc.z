@@ -5134,12 +5134,21 @@ emitDottedCall: function {
     call: zast.callrow.view
 } out String is {
     bn0: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
+    # a base atom that names a FUNCTION auto-calls: its value is the receiver,
+    # emitted as an expression like any other call base
+    baseIsCall: false
+    {
+        dcn: ast.nodes.get i: call.callable.u64
+        if dcn.dottedpath then {
+            baseIsCall = baseAtomNamesFunction :symtab n: (ast.nodes.get i: dcn.parent.u64)
+        }
+    }
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     btid: ztypes.tid
     dcbV: ztypes.vid
     # the receiver's C text: the expression's, or the base atom's local name
     bn: String
-    if bn0.length == 0 then {
+    if bn0.length == 0 or baseIsCall then {
         # nested/projected base ((zast.poolTextAt pool: ast.names ref: el.text).stringView.stripPrefix): no base atom, but
         # the base is a stamped String/StringView -- emit it as an expression (a
         # compound-literal lvalue, so the `&base` SV-native legs stay valid C).
@@ -8370,10 +8379,8 @@ emitVariantCtorCall: function {
     # is a heap box handled by emitOptionBoxHoist at the statement site.
     smid: stampIdOf :symtab nid: call.nodeid.u64
     sInline: (
-        (
-            (originIsTid :symtab tid: smid originTid: (ctx.origins.get i: ogOptionval)) and
-            (bn == "optionval")
-        ) or
+        (originIsTid :symtab tid: smid originTid: (ctx.origins.get i: ogOptionval)) and
+        (bn == "optionval") or
         (
             (originIsTid :symtab tid: smid originTid: (ctx.origins.get i: ogResultval)) and
             (bn == "resultval")
@@ -13563,6 +13570,29 @@ emitDottedNativeMarker: function {
 }
 
 
+# baseAtomNamesFunction -- a bare atom that is not a local and whose reference
+# resolves to a FUNCTION definition: in value position it is a call.
+baseAtomNamesFunction: function {symtab: zenv.ZSymbolTable.view n: astnode.view} out bool is {
+    anid: atomNodeId :n
+    if anid == 0 then return false
+    avo: symtab.typing.atomVariableId.get key: anid
+    match (
+        avo
+    ) case some then {
+        return false
+    } case none then null
+    rdo: symtab.typing.refDecl.get key: anid
+    match (
+        rdo
+    ) case some then {
+        rd: symtab.typing.decls.get i: rdo.u64
+        rdt: ztypes.tid.create from: rd.typeId
+        return (symtab.reg.typetypeOf typeId: rdt) == ztypes.ztypetype.functionType
+    } case none then {
+        return false
+    }
+}
+
 # emitDottedRead -- the C text of a dotted PATH read (the call form is
 # emitDottedCall). The legs run in the order the checker's stamps settle them:
 # built-in combinators, unit-qualified reads, the conversions, the tagged-type
@@ -13615,6 +13645,10 @@ emitDottedRead: function {
         bn2v = atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent.u64))
     }
     bn2: emitLocalAtomName :ctx name: bn2r.stringView vid: baseAtomVid
+    # a base atom that names a FUNCTION auto-calls, so the receiver is what the
+    # call returns (`mkList.length`), not a local to address: it takes the legs
+    # a call base takes, exactly as the parenthesised `(mkList).length` does
+    if (baseAtomNamesFunction :symtab n: (ast.nodes.get i: n.parent.u64)) then bn2 = "".string
     # a base with no atom NAME still has a stamped type. Every native leg
     # below sits behind `bn2.length > 0`, so a projection ((zast.poolTextAt pool: ast.names ref: h.text).stringView)
     # or a call (s.trim, (mk s: s)) skipped the lot and fell through to the
@@ -14438,7 +14472,9 @@ emitInterpPart: function {
     emitValueTakeInvalidations :ast :symtab :ctx :n :ind :buf
 }
 
-# interpPartNodeId -- the nodeid of expression-ish shapes used by interp parts.
+# interpPartNodeId -- the nodeid of a value shape, the id its stamp is keyed on:
+# a path, a call, a literal, or a control-flow value held in place (an `if`
+# written as an interpolation hole). 0 for a node that is not a value.
 interpPartNodeId: function {n: astnode.view} out u64 is {
     match (
         n
@@ -14453,6 +14489,30 @@ interpPartNodeId: function {n: astnode.view} out u64 is {
     } case dottedpath then {
         return n.nodeid.u64
     } case atomstring then {
+        return n.nodeid.u64
+    } else {
+        return (controlValueNodeId :n)
+    }
+}
+
+# controlValueNodeId -- the nodeid of a control-flow or block value (if, match,
+# for, with, a bare block, a data block), 0 for any other shape. These are
+# values wherever an operand may be parenthesised, and a parenthesis leaves no
+# row of its own to carry the stamp.
+controlValueNodeId: function {n: astnode.view} out u64 is {
+    match (
+        n
+    ) case ifexpr then {
+        return n.nodeid.u64
+    } case caseexpr then {
+        return n.nodeid.u64
+    } case forexpr then {
+        return n.nodeid.u64
+    } case withexpr then {
+        return n.nodeid.u64
+    } case statement then {
+        return n.nodeid.u64
+    } case datablock then {
         return n.nodeid.u64
     } else {
         return 0
@@ -14939,6 +14999,8 @@ stringviewOfBaseNid: function {
     } case dottedpath then {
         mn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
         if (ztypecheck.isStringViewMember name: mn.stringView) then {
+            # a base atom naming a FUNCTION is a call, whose String has no name
+            if (baseAtomNamesFunction :symtab n: (ast.nodes.get i: n.parent.u64)) then return 0
             bnid: atomNodeId n: (ast.nodes.get i: n.parent.u64)
             sid: stampIdOf :symtab nid: bnid
             if sid.u64 == (builtinTid :ast :symtab base: "String") then return bnid
@@ -19642,17 +19704,10 @@ emitForCond: function {
     }
 }
 
-# the node id of expression `n`.
+# exprNodeId -- the node id of value `n`, whatever its shape: the id its stamp
+# is keyed on. 0 for a node that is not a value.
 exprNodeId: function {n: astnode.view} out u64 is {
-    match (
-        n
-    ) case expression then {
-        return n.nodeid.u64
-    } case atomid then {
-        return n.nodeid.u64
-    } else {
-        return 0
-    }
+    return (interpPartNodeId :n)
 }
 
 # sumArmNamesInto -- the arm names of a sum type, in declaration order (the

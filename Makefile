@@ -766,7 +766,18 @@ perf: $(PERFBIN)
 # allocations a line against the 13-17 this tree usually costs, which is what
 # a checker family of nested calls and table walks weighs next to an average
 # line -- the four ZTyping stamp tables that went with it are four blocks.
-ALLOC_BASELINE := 2486189
+#
+# +509 when the parser stopped minting the `expression` wrapper, and it is two
+# measured movements (valgrind, the old and new compiler over the same input):
+#   +2,468  every call-shaped TYPE reference resolves its mono where it is
+#           recorded. A parenthesised field type `rows: (List Row)` always did;
+#           the bare `rows: List Row` did not, because only the wrapper's arm
+#           resolved inline. Without the wrapper the two spellings are one tree
+#           and take one path, and the compiler's own source holds 143 bare
+#           field types at ~17 allocations each. The emitted C is byte-identical.
+#   -1,959  the input: 98 fewer lines of src/ and lib/system/.
+# The bytes allocated fall by 2.6 MB: the wrapper rows themselves.
+ALLOC_BASELINE := 2486698
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

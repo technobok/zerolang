@@ -411,32 +411,6 @@ Parser: class {
         }
     }
 
-    # True when `node` is an arm valid as a call's first unnamed argument.
-    # A CALL IS ONE: an infix operand folds to the call form (`a + 1` IS
-    # `(a).+ 1`), so an argument written as an operation arrives as a call and
-    # dropping it left `return a + 1` emitting a bare `return`.
-    isOperationArm: function {node: astnode.view} out bool is {
-        match (
-            node
-        ) case call then {
-            return true
-        } case dottedpath then {
-            return true
-        } case atomid then {
-            return true
-        } case atomstring then {
-            return true
-        } case expression then {
-            return true
-        } case namedoperation then {
-            return true
-        } case labelvalue then {
-            return true
-        } else {
-            return false
-        }
-    }
-
     # True when `tok` is a named-argument label (LABEL) or label shorthand
     # (LABELPRE), which forces a single-path operation to parse as a call.
     ttIsLabel: function {tt: zlexer.toktype} out bool is {
@@ -589,8 +563,8 @@ Parser: class {
 
     # atomexpr: filled in by the next stage.
     # atomexpr -> "(" expression ")". EOLs are filtered inside the parens
-    # (a parenthesised expression may span lines). Returns the inner
-    # Expression node (bare), or an error.
+    # (a parenthesised expression may span lines). Returns the node inside
+    # the parentheses, or an error: grouping is recorded by the tree's shape.
     parseAtomExpr: function {:this lex: zlexer.Lexer} out astnode is {
         firstPos: lex.peekPos
         openOpt: lex.accept tt: zlexer.toktype.parenOpenTok pool: this.ast.names
@@ -1104,17 +1078,14 @@ Parser: class {
             argNode: this.foldStack :stack :lex
             argIsErr: this.isError node: argNode
             if argIsErr then return argNode
-            argIsOp: this.isOperationArm node: argNode
-            if argIsOp then {
-                ap: zast.posOf n: argNode
-                uarg: (this.mkNamedOp
-                    name: 0
-                    operation: argNode
-                    line: ap.line
-                    col: ap.col
-                )
-                args.append (this.intern n: uarg).u32
-            }
+            ap: zast.posOf n: argNode
+            uarg: (this.mkNamedOp
+                name: 0
+                operation: argNode
+                line: ap.line
+                col: ap.col
+            )
+            args.append (this.intern n: uarg).u32
         }
         argNames: ListVal u64
         for true loop {
@@ -1211,10 +1182,10 @@ Parser: class {
     # parseTyperefOperation -- a parameter / return type parsed as a grammar
     # `operation` (doc/grammar.pdoc: `in`/`out` types are operations, not bare
     # paths). The `(term binop)` unnamed-argument form (e.g. `List u8`)
-    # materialises as a Call; wrap it in an Expression so it matches the
-    # parenthesised `(List u8)` shape the type checker already resolves.
-    # Named-argument generics (`Map u8 value: u32`) are calls, not operations,
-    # so operationPaths stops at the label and they still need parentheses.
+    # materialises as a Call, the same node the parenthesised `(List u8)`
+    # parses to. Named-argument generics (`Map u8 value: u32`) are calls, not
+    # operations, so operationPaths stops at the label and they still need
+    # parentheses.
     parseTyperefOperation: function {:this lex: zlexer.Lexer} out astnode is {
         paths: this.operationPaths :lex
         n: paths.length
@@ -1226,21 +1197,15 @@ Parser: class {
                 msg: "Expected type reference".string
             )
         }
-        isCall: n & 1 == 0
-        node: this.operationFromPaths :paths :lex
-        nerr: this.isError :node
-        if nerr then return node
-        if isCall then return (this.wrapExpression inner: node)
-        return node
+        return (this.operationFromPaths :paths :lex)
     }
 
     # operation-or-call: the top-level entry that also accepts named
     # arguments. Dispatch on the pre-parsed path count: (count == 1 and
     # the next token is a label) or count is even -> call; else binop.
     # Bare core of operation-or-call dispatch: a non-empty path list maps
-    # to a call (named args allowed) or a binop, returning the bare astnode.
-    # parseExpression needs the bare result to wrap it in an Expression
-    # without moving it out of an Option.
+    # to a call (named args allowed) or a binop, returning the bare astnode
+    # rather than an Option, which parseExpression would have to move it out of.
     operationOrCallFromPaths: function {
         :this paths: (ListVal u32).take lex: zlexer.Lexer
     } out astnode is {
@@ -1290,19 +1255,6 @@ Parser: class {
         } else {
             return (this.atomLookahead :lex)
         }
-    }
-
-    # Wrap an operation/block node in an Expression carrier, positioned at
-    # its inner node.
-    wrapExpression: function {:this inner: astnode} out astnode is {
-        ip: zast.posOf n: inner
-        return (astnode.expression (zast.expressionrow
-            nodeid: this.nextId
-            lineno: ip.line
-            colno: ip.col
-            expression: (this.intern n: inner)
-        )
-        )
     }
 
     # True for a block-line separator token (EOL or ';').
@@ -2135,7 +2087,6 @@ Parser: class {
             op: this.operationFromPaths paths: vpaths :lex
             oErr: this.isError node: op
             if oErr then return op
-            value: this.wrapExpression inner: op
             doOpt: lex.accept tt: zlexer.toktype.doTok pool: this.ast.names
             match (
                 doOpt
@@ -2155,7 +2106,7 @@ Parser: class {
                     lineno: wLine
                     colno: wCol
                     name: (zast.nameid.create from: nm.u32)
-                    value: (this.intern n: value)
+                    value: (this.intern n: op)
                     body: (this.intern n: body)
                 )
                 )
@@ -3077,7 +3028,7 @@ Parser: class {
 
     # type-definition dispatcher: unit / function / the six item-definition
     # kinds (record/class/variant/union/protocol/facet) / the if/match/data
-    # expression forms (wrapped as an Expression) / else a bare operation.
+    # expression forms / else a bare operation.
     # Returns a bare astnode; an absent definition becomes an EXPECTEDTYPEDEF
     # error node.
     acceptTypeDefinition: function {
@@ -3106,20 +3057,11 @@ Parser: class {
         } case generatorTok then {
             return (this.parseItemDefinition :lex :startPos kind: zast.objectkind.generatorDef)
         } case ifTok then {
-            ifn: this.acceptIfExpression :lex
-            iErr: this.isError node: ifn
-            if iErr then return ifn
-            return (this.wrapExpression inner: ifn)
+            return (this.acceptIfExpression :lex)
         } case matchTok then {
-            mexpr: this.acceptMatchExpression :lex
-            mErr: this.isError node: mexpr
-            if mErr then return mexpr
-            return (this.wrapExpression inner: mexpr)
+            return (this.acceptMatchExpression :lex)
         } case dataTok then {
-            dn: this.acceptDataDefinition :lex
-            dErr: this.isError node: dn
-            if dErr then return dn
-            return (this.wrapExpression inner: dn)
+            return (this.acceptDataDefinition :lex)
         } else {
             paths: this.operationPaths :lex
             n: paths.length
@@ -3504,40 +3446,19 @@ Parser: class {
         match (
             lex.peekType
         ) case ifTok then {
-            ifn: this.acceptIfExpression :lex
-            iErr: this.isError node: ifn
-            if iErr then return ifn
-            return (this.wrapExpression inner: ifn)
+            return (this.acceptIfExpression :lex)
         } case forTok then {
-            forn: this.acceptForExpression :lex
-            fErr: this.isError node: forn
-            if fErr then return forn
-            return (this.wrapExpression inner: forn)
+            return (this.acceptForExpression :lex)
         } case matchTok then {
-            mexpr: this.acceptMatchExpression :lex
-            mErr: this.isError node: mexpr
-            if mErr then return mexpr
-            return (this.wrapExpression inner: mexpr)
+            return (this.acceptMatchExpression :lex)
         } case dataTok then {
-            dn: this.acceptDataDefinition :lex
-            dErr: this.isError node: dn
-            if dErr then return dn
-            return (this.wrapExpression inner: dn)
+            return (this.acceptDataDefinition :lex)
         } case withTok then {
-            wn: this.acceptWithExpression :lex
-            wErr: this.isError node: wn
-            if wErr then return wn
-            return (this.wrapExpression inner: wn)
+            return (this.acceptWithExpression :lex)
         } case braceOpenTok then {
-            blk: this.acceptBareblock :lex
-            bErr: this.isError node: blk
-            if bErr then return blk
-            return (this.wrapExpression inner: blk)
+            return (this.acceptBareblock :lex)
         } else {
-            op: this.parseOperation :lex
-            oErr: this.isError node: op
-            if oErr then return op
-            return (this.wrapExpression inner: op)
+            return (this.parseOperation :lex)
         }
     }
 

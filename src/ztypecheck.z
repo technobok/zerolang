@@ -3446,8 +3446,8 @@ recordDottedTyperef: function {
 # inner TYPE-ref (e.g. the `u32` in `(optionval t: u32)`), but skip
 # numeric-literal size args (the `16` in `(str to: 16)`) -- they are const
 # values, not type references -- then the head atom, so go-to-definition /
-# hover resolve the template (the wrapper expression carries the instance
-# stamp, recorded by the enclosing expression arm).
+# hover resolve the template (the call itself carries the instance stamp,
+# recorded by recordTyperef before it gets here).
 recordTyperefArgs: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -3495,8 +3495,8 @@ recordTyperefArgs: function {
         }
     }
     # the head atom is itself a type reference: record it so
-    # go-to-definition / hover resolve the template (the wrapper
-    # expression still carries the instance stamp)
+    # go-to-definition / hover resolve the template (the call still
+    # carries the instance stamp)
     recordTyperef :st :frame :ast :unitDecl :thisName nid: callableId
 }
 
@@ -3562,6 +3562,18 @@ recordTyperef: function {
         return
     }
     if arm == 2 then {
+        # a parameterized type ref resolves to its mono now, and the call
+        # carries the instance stamp
+        (resolveMonoRefInline
+            :st
+            :frame
+            :ast
+            :unitDecl
+            :thisName
+            enclDecl: ztypes.declid
+            opNid: nid
+            nid: nid.u32
+        )
         recordTyperefArgs :st :frame :ast :unitDecl :thisName :callableId :argIds
         return
     }
@@ -13390,25 +13402,13 @@ blockEndsInReturn: function {ast: Ast.view block: astnode.view} out bool is {
             match (
                 last
             ) case statementline then {
-                return (stmtExprIsReturn :ast op: (ast.nodes.get i: last.statementline.u64))
+                return (exprCallIsReturn :ast op: (ast.nodes.get i: last.statementline.u64))
             } else {
                 return false
             }
         } else {
             return false
         }
-    } else {
-        return false
-    }
-}
-
-# stmtExprIsReturn -- an expression statement whose inner call's callable is
-# the `return` builtin.
-stmtExprIsReturn: function {ast: Ast.view op: astnode.view} out bool is {
-    match (
-        op
-    ) case expression then {
-        return (exprCallIsReturn :ast op: (ast.nodes.get i: op.expression.u64))
     } else {
         return false
     }
@@ -32525,9 +32525,9 @@ checkWrappedValueArgs: function {
     }
 }
 
-# checkWrappedCall -- a callable that is itself an expression (a parenthesised
-# call, or a value the walk produced): type it, then treat what it yields as
-# the thing being called. 0 when it yields nothing callable.
+# checkWrappedCall -- a callable that is itself a value (a parenthesised call,
+# or a value the walk produced): type it, then treat what it yields as the
+# thing being called. 0 when it yields nothing callable.
 checkWrappedCall: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -32734,6 +32734,25 @@ calleekind: record {
     unknown: bool
 }
 
+# callableIsNamePath -- a callable that NAMES what is called: an atom, a label
+# value, a string literal or a dotted path. Anything else in callable position
+# was parenthesised, and is a value that yields the thing being called.
+callableIsNamePath: function {n: astnode.view} out bool is {
+    match (
+        n
+    ) case atomid then {
+        return true
+    } case labelvalue then {
+        return true
+    } case atomstring then {
+        return true
+    } case dottedpath then {
+        return true
+    } else {
+        return false
+    }
+}
+
 # checkSpecialFormCall -- the two callable SHAPES that are not a name: a
 # parenthesized construction in callable position, which re-applies its init
 # arguments so the value is the constructed type, and `meta.create` inside the
@@ -32746,12 +32765,12 @@ checkSpecialFormCall: function {
 } out callleg is {
     # the callable's shape, read through a view scoped to this block: the legs
     # below lend ast
-    isWrapCall: false
+    isValueCallable: false
     {
-        wrapN: ast.nodes.get i: call.callable.u64
-        isWrapCall = wrapN.expression
+        cN: ast.nodes.get i: call.callable.u64
+        isValueCallable = (callableIsNamePath n: cN).not
     }
-    if isWrapCall then {
+    if isValueCallable then {
         wres: checkWrappedCall :st :unitDecl :ast :call
         if wres.isZero.not then return (callleg handled: true tid: wres)
     }
@@ -35351,25 +35370,28 @@ ctlDivKind: function {bn: zast.nameid} out u8 is {
 }
 
 # checkStmtExpression -- an expression statement line: walk the value, stamp
-# the wrapper, and answer how the line diverges (a `divkind`: a return call
-# or a control builtin), `none` when it does not.
+# the LINE with what the walk answered, and answer how the line diverges (a
+# `divkind`: a return call or a control builtin), `none` when it does not. The
+# value keeps its own stamp: a `with` is stamped with its bound value's type
+# and answers its body's.
 checkStmtExpression: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
-    wrap: exprref
+    valueId: zast.nodeid
+    lineId: zast.nodeid
 } out u8 is {
     errE0: st.typing.errors.length
     # a `.drop` is legal on this node and nowhere else; saved and restored
     # because a statement's expression can contain nested statement blocks
     outerStmt0: st.typing.stmtExprNid
-    st.typing.stmtExprNid = wrap.expression.u64
-    et0: checkValueAt :st :unitDecl :ast nid: wrap.expression
+    st.typing.stmtExprNid = valueId.u64
+    et0: checkValueAt :st :unitDecl :ast nid: valueId
     st.typing.stmtExprNid = outerStmt0
-    if et0 > 0 then stampGate :st nid: wrap.nid.u64 tid: et0
-    ckOpt0: st.typing.callKind.get key: wrap.expression.u64
+    if et0 > 0 then stampGate :st nid: lineId.u64 tid: et0
+    ckOpt0: st.typing.callKind.get key: valueId.u64
     isR0: isReturnCallKind o: ckOpt0
-    bn0: bareAtomNameId :ast n: (ast.nodes.get i: wrap.expression.u64)
+    bn0: bareAtomNameId :ast n: (ast.nodes.get i: valueId.u64)
     k0: ctlDivKind bn: bn0
     ctl0: k0 > 0
     if ctl0.not when isR0 then k0 = zenv.divkind.exit
@@ -35377,32 +35399,32 @@ checkStmtExpression: function {
     # an unresolvable root name is an unknown reference (the emitter
     # would otherwise hit its unhandled-callee backstop)
     if st.typing.errors.length == errE0 when ctl0.not then {
-        eto0: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: wrap.nid.u64
+        eto0: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: lineId.u64
         unkn0: true
         if eto0 > 0 then unkn0 = false
         if unkn0 then {
-            ubn1: unresolvedBareCallable :ast :st :unitDecl nid: wrap.expression
-            if ubn1.length > 0 then reportUnknownNameAt :st :ast nid: wrap.expression name: ubn1
+            ubn1: unresolvedBareCallable :ast :st :unitDecl nid: valueId
+            if ubn1.length > 0 then reportUnknownNameAt :st :ast nid: valueId name: ubn1
         }
     }
     return k0
 }
 
-# checkStmtInner -- dispatch a statement line's inner row by arm. Answers how
-# the line diverges (a `divkind`), `none` when it does not.
+# checkStmtInner -- dispatch a statement line's inner row by arm, and stamp the
+# line: a binding and a reassignment each have their own walk and lend the line
+# their own type, and every other row is the value the line computes. Answers
+# how the line diverges (a `divkind`), `none` when it does not.
 checkStmtInner: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
     innerId: zast.nodeid
+    lineId: zast.nodeid
 } out u8 is {
     arm: rowArmAt :ast nid: innerId
     match (
         arm
-    ) case expression then {
-        wrap: exprRefAt :ast nid: innerId
-        return (checkStmtExpression :st :unitDecl :ast :wrap)
-    } case assignment then {
+    ) case assignment then {
         ar: asgnRefAt :ast nid: innerId
         checkAssignment :st :unitDecl :ast asgn: ar
         # a binding whose value failed still binds its name, typeless: the
@@ -35412,12 +35434,22 @@ checkStmtInner: function {
             vh: st.reg.newVariable ztypeId: ztypes.tid ownership: ztypes.zownership.owned
             st.defineVar nameId: ar.name vid: vh
         }
+        stampLineFrom :st :lineId :innerId
         return zenv.divkind.none
     } case reassignment then {
         checkValueAt :st :unitDecl :ast nid: innerId
+        stampLineFrom :st :lineId :innerId
         return zenv.divkind.none
     } else {
-        return zenv.divkind.none
+        return (checkStmtExpression :st :unitDecl :ast valueId: innerId :lineId)
+    }
+}
+
+# stampLineFrom -- a statement line carries its inner row's type.
+stampLineFrom: function {st: zenv.ZSymbolTable lineId: zast.nodeid innerId: zast.nodeid} is {
+    itOpt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: innerId.u64
+    if itOpt > 0 then {
+        stampGate :st nid: lineId.u64 tid: (ztypes.tid.create from: itOpt.u64)
     }
 }
 
@@ -35434,8 +35466,8 @@ checkStatement: function {
     for k < nLines loop {
         slnId: zast.stmtLineAt :ast nid: blockId i: k
         k = k + 1
-        # the line wrapper carries its inner node's type; the wrapper row is
-        # read through a view scoped to this block: the inner walk lends ast
+        # the line row is read through a view scoped to this block: the inner
+        # walk lends ast
         innerId: zast.nodeid
         {
             sline: ast.nodes.get i: slnId.u64
@@ -35443,11 +35475,7 @@ checkStatement: function {
         }
         dk: zenv.divkind.none
         if innerId.isZero.not then {
-            dk = checkStmtInner :st :unitDecl :ast :innerId
-            itOpt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: innerId.u64
-            if itOpt > 0 then {
-                stampGate :st nid: slnId.u64 tid: (ztypes.tid.create from: itOpt.u64)
-            }
+            dk = checkStmtInner :st :unitDecl :ast :innerId lineId: slnId
         }
         drainPendingBorrow :st
         if dk > 0 then st.markUnreachable kind: dk
@@ -38134,22 +38162,16 @@ takeBranchType: function {
     return (branchpick :first :winner)
 }
 
-# stampUnitIfType -- the resolved type lands on the If, on its Expression
-# wrapper, and on the unit member the definition names.
+# stampUnitIfType -- the resolved type lands on the If and on the unit member
+# the definition names.
 stampUnitIfType: function {
     ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     defName: StringView
-    wrapperId: u32
     nid: zast.nodeid
     t: u64
 } is {
-    (ztyping.nodeTypeSet
-        tbl: st.typing.nodeType
-        nid: wrapperId.u64
-        tid: (ztypes.tid.create from: t.u64)
-    )
     (ztyping.nodeTypeSet
         tbl: st.typing.nodeType
         nid: nid.u64
@@ -38167,15 +38189,14 @@ stampUnitIfType: function {
 # resolveUnitIfDef -- a unit-level `if` definition (compile-time conditional):
 # conditions walk through the constant machinery (comparisons stamp bool and
 # coerce literal operands), branches walk + materialise, and the definition
-# resolves to the first branch's type -- stamped on the If, its Expression
-# wrapper, and resolved[unit.name].
+# resolves to the first branch's type -- stamped on the If and on the unit
+# member the definition names.
 resolveUnitIfDef: function {
     ast: Ast
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     frame: ztypes.declid
     defName: StringView
-    wrapperId: u32
     nid: zast.nodeid
 } is {
     clauseIds: ListVal u32
@@ -38199,7 +38220,7 @@ resolveUnitIfDef: function {
     t: pick.first
     if fb.known when pick.winner > 0 then t = pick.winner
     if t == 0 then return
-    stampUnitIfType :ast :st :unitDecl :defName :wrapperId :nid :t
+    stampUnitIfType :ast :st :unitDecl :defName :nid :t
 }
 
 # --- compile-time constant evaluation ---
@@ -40503,10 +40524,9 @@ resolveCalledConstantDef: function {
 }
 
 
-# resolveConstantDef -- one definition: an (expression-wrapped) numeric-literal
-# atomid is a unit constant, recorded as the literal's concrete default (i64 /
-# f64, which materialiseLiteral demands). The definition's own nodes stay
-# unstamped.
+# resolveConstantDef -- one definition: a numeric-literal atomid is a unit
+# constant, recorded as the literal's concrete default (i64 / f64, which
+# materialiseLiteral demands). The definition's own nodes stay unstamped.
 resolveConstantDef: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -40544,10 +40564,19 @@ resolveConstantDef: function {
             :ast
             :unitDecl
             :defName
-            wrapperId: defnId
             nid: wrap.expression
         )
         resolveConstantDef :st :frame :ast :unitDecl :defName defnId: wrap.expression
+    } case ifexpr then {
+        # a compile-time conditional: its branches decide the constant's type
+        (resolveUnitIfDef
+            :st
+            :frame
+            :ast
+            :unitDecl
+            :defName
+            nid: defnId
+        )
     } case dottedpath then {
         # a width-suffixed numeric literal (`1.u32`) is a dotted path over the
         # literal, not an atom: the child names the constant's type
