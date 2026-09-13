@@ -20136,6 +20136,120 @@ createDottedBaseId: function {ast: Ast.view n: astnode.view} out optionval u32 i
     return (optionval.none u32)
 }
 
+# dottedBaseIsValue -- whether the base of the dotted path `n` is a VALUE rather
+# than a TYPE: the one question both a member's namespace and a call's receiver
+# are settled by, and settled by what the base NAMES, never by its shape. A call
+# result is a value unless the call is a type application (`(ListVal i64).create`);
+# a name or a path is a value unless it resolves to a type. Reading every name
+# the local lookup missed as a type made `(mk).plus n: 3` -- a call of `mk` --
+# demand a receiver the dot had already handed over.
+dottedBaseIsValue: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    n: astnode.view
+} out bool is {
+    baseId: zast.nodeid
+    callableId: zast.nodeid
+    match (
+        n
+    ) case dottedpath then {
+        baseId = n.parent
+    } else null
+    if baseId.isZero then return true
+    {
+        bn: ast.nodes.get i: baseId.u64
+        if bn.call then callableId = bn.callable
+    }
+    if callableId.isZero.not then return (nodeNamesType :st :ast :unitDecl nid: callableId).not
+    return (nodeNamesType :st :ast :unitDecl nid: baseId).not
+}
+
+# nodeNamesType -- the name or path at `nid` resolves to a TYPE: a bare name no
+# open frame defines that the environment finds as a type, or a path whose member
+# is a type declaration (`other.T`). A local of the same name shadows the type,
+# and a numeric literal interns like a name but names nothing.
+nodeNamesType: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+} out bool is {
+    nameId: zast.nameid
+    isPath: false
+    {
+        nn: ast.nodes.get i: nid.u64
+        match (
+            nn
+        ) case atomid then {
+            nameId = nn.name
+        } case dottedpath then {
+            isPath = true
+        } else null
+    }
+    if isPath then return (pathNamesType :st :ast :nid)
+    if nameId.isZero then return false
+    if (st.isLocalName :nameId) then return false
+    if (isNumericLiteralNameAt :ast ref: nameId) then return false
+    return (nameNamesType :st :ast :unitDecl :nameId)
+}
+
+# pathNamesType -- a path names a type when its member resolved to a type
+# declaration, or to a re-export of something that is not a function. A path
+# rooted at a local is a value however it continues.
+pathNamesType: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} out bool is {
+    rr: rootNameIdOf :ast n: (ast.nodes.get i: nid.u64)
+    if rr.isZero.not when (st.isLocalName nameId: rr) then return false
+    rd: (st.typing.refDecl.get key: nid.u64).or d: ztypes.declid
+    if rd.isZero then return false
+    isType: false
+    isReexport: false
+    {
+        rdd: st.typing.decls.get i: rd.u64
+        isType = rdd.kind.typeDecl
+        isReexport = rdd.kind.reexportDecl
+    }
+    if isReexport.not then return isType
+    pst: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: nid.u64
+    if pst.isZero then return false
+    return (st.reg.typetypeOf typeId: pst) != ztypes.ztypetype.functionType
+}
+
+# nameNamesType -- a bare name no open frame defines names a type. Asked without
+# resolving anything -- the base has been walked already, and a resolver that
+# demanded here would reorder the checks the program sees. The declaration the
+# name finds answers by its kind: a type or a unit names one, a re-export when
+# its alias denotes a type rather than a value (`true: bool.true` is a value),
+# and a template's own type parameter is a type.
+nameNamesType: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    nameId: zast.nameid
+} out bool is {
+    dd: declOfUnitDef :st :unitDecl frame: st.curFrame :nameId
+    if dd.isZero when st.typing.coreUnitRoot.isZero.not then {
+        dd = st.typing.declFindChild parentDeclId: st.typing.coreUnitRoot :nameId
+    }
+    if dd.isZero.not then {
+        ddk: st.typing.decls.get i: dd.u64
+        if ddk.kind.typeDecl or ddk.kind.unitDecl then return true
+        if ddk.kind.reexportDecl then return (aliasNamesType :st :ast declId: dd)
+        return false
+    }
+    to: walkLookupTyperefByIdRo :st frame: st.curFrame :ast :unitDecl baseId: nameId
+    match (
+        to
+    ) case some then {
+        return (
+            (st.reg.typetypeOf typeId: (ztypes.tid.create from: to.u64)) ==
+            ztypes.ztypetype.genericParam
+        )
+    } case none then {
+        return false
+    }
+}
+
 # rootNameIdOf -- rootNameOf as an interned name id, for a caller that compares
 # the root rather than printing it.
 rootNameIdOf: function {ast: Ast.view n: astnode.view} out zast.nameid is {
@@ -22327,6 +22441,140 @@ checkUnresolvedMember: function {
     return (ztypes.tid.create from: 0)
 }
 
+# checkMemberNamespace -- a type's members and an instance's are two namespaces.
+# A function declared with no receiver -- `create`, a shared function of the `as`
+# section -- belongs to the TYPE, so it is not reached through an instance. A
+# function field of the `is` section belongs to each INSTANCE, so it is not
+# reached through the type. Both were read as the other: `p.helper n: 3` dropped
+# its receiver, and `T.first p` called an instance's field without an instance.
+# false once it has reported.
+checkMemberNamespace: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+    mo: u64
+    # the read is in value position, where a method auto-calls
+    coerce: bool
+} out bool is {
+    if bt.isZero then return true
+    if (
+        (st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)) !=
+        ztypes.ztypetype.functionType
+    ) then {
+        return true
+    }
+    # an interface's members are the conformer's methods, reached through a value
+    btt: st.reg.typetypeOf typeId: bt
+    if btt == ztypes.ztypetype.protocolType or (btt == ztypes.ztypetype.facetType) then return true
+    isValue: dottedBaseIsValue :st :ast :unitDecl n: (ast.nodes.get i: dp.nid.u64)
+    if (st.typing.declIsFnptrFieldId parentTypeId: bt nameId: cnId) then {
+        if isValue then return true
+        reportMemberNamespace :st :ast :dp :bt :cnId instanceMember: true
+        return false
+    }
+    if isValue.not then return (checkTypeReadSuppliesReceiver :st :ast :dp :bt :cnId :mo :coerce)
+    if (memberDeclaresReceiver :st :bt :cnId :mo) then return true
+    isCreate: cnId == zast.names.wkCreate
+    if isCreate.not when (st.typing.declMemberIsSynth parentTypeId: bt nameId: cnId
+    ) then return true
+    reportMemberNamespace :st :ast :dp :bt :cnId instanceMember: false
+    return false
+}
+
+# reportMemberNamespace -- the E0100 for a member reached through the namespace
+# it does not live in: an instance's function field through the type, or a type's
+# static member through an instance.
+reportMemberNamespace: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+    # the member is a function field of each instance, reached through the type
+    instanceMember: bool
+} is {
+    cn: zast.nameTextCopy :ast ref: cnId
+    tn: st.reg.nameOf tid: bt
+    msg: "'\{cn}' belongs to the type '\{tn}', not to an instance"
+    hint: "call it through the type '\{tn}' instead"
+    if instanceMember then {
+        msg = "'\{cn}' is a function field of each '\{tn}' instance, not a member of the type"
+        hint = "call it through an instance: `value.\{cn}`"
+    }
+    (addErrorH
+        :st
+        nodeid: dp.nid
+        lineno: dp.lineno
+        colno: dp.colno
+        e: zast.err.typeError
+        :msg
+        note: "".string
+        :hint
+        width: cn.length.u32.orPanic
+    )
+}
+
+# checkTypeReadSuppliesReceiver -- a method read through the TYPE in value position
+# auto-calls with nothing to hand it: the type supplies no receiver, and there are
+# no arguments to supply one. `T.first` reached the C as a function pointer bound
+# to its result. A call (`T.first p`) is the call walk's to check, and a
+# reference (`.take`) calls nothing. false once it has reported.
+checkTypeReadSuppliesReceiver: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+    mo: u64
+    coerce: bool
+} out bool is {
+    if coerce.not or st.typing.suppressFnAutoCall then return true
+    if (memberDeclaresReceiver :st :bt :cnId :mo).not then return true
+    rpn: receiverParamNameOf :st tid: (ztypes.tid.create from: mo.u64)
+    if rpn.isZero then rpn = zast.names.wkThis
+    rn: zast.nameTextAt :ast ref: rpn
+    tn: st.reg.nameOf tid: bt
+    mr: "missing required argument '\{rn}' (type: \{tn})"
+    cn: zast.nameTextCopy :ast ref: cnId
+    (addErrorH
+        :st
+        nodeid: dp.nid
+        lineno: dp.lineno
+        colno: dp.colno
+        e: zast.err.callError
+        msg: mr
+        note: "".string
+        hint: "a method read through its type is handed its receiver as an argument".string
+        width: cn.length.u32.orPanic
+    )
+    return false
+}
+
+# memberDeclaresReceiver -- the function member `cnId` of `bt` takes a receiver. A
+# member a mono MINTS for itself carries no parameter rows, so the question goes
+# to the template's declaration of it.
+memberDeclaresReceiver: function {
+    st: zenv.ZSymbolTable
+    bt: ztypes.tid
+    cnId: zast.nameid
+    mo: u64
+} out bool is {
+    if (methodHasThisReceiver :st mid: (ztypes.tid.create from: mo.u64)) then return true
+    gorig: st.reg.genericOriginOf tid: bt
+    if gorig.isZero then return false
+    tmo: st.typing.declChildOfId parentTypeId: gorig nameId: cnId
+    match (
+        tmo
+    ) case some then {
+        return (methodHasThisReceiver :st mid: (ztypes.tid.create from: tmo.u64))
+    } case none then {
+        return false
+    }
+}
+
 # checkResolvedMember -- the member resolved on the base type. Stamps the owner for
 # tooling and the emitter, then runs the legs in order: tagged-type construction
 # or arm predicate, the as-const clone, the projection legs, the auto-call, and
@@ -22362,6 +22610,8 @@ checkResolvedMember: function {
             if ownD.isZero.not then st.typing.usedMemberDecl.add item: ownD.u64
         }
     }
+    if (checkMemberNamespace :st :ast :unitDecl :dp :bt :cnId :mo :coerce
+    ).not then return (ztypes.tid.create from: 0)
     tgleg: (checkTaggedMemberPath
         :st
         :unitDecl
@@ -31567,49 +31817,19 @@ checkResolvedMethodCall: function {
     mcm: st.pushCall
     # A DOTTED BASE THAT NAMES A TYPE leaves the receiver to the
     # arguments (`Counter.increment c`); every other base passes it
-    # through the dot. Only a bare NAME can name a type, so a base that
-    # is a call result or a nested path is a value by construction --
-    # reading an ABSENT name as "not a value" made `(mk n: 2).plus n: 3`
-    # demand a receiver the dot had already handed over.
+    # through the dot.
     # AN INFIX LEFT OPERAND IS A VALUE EXPRESSION. `a op b` evaluates `a` the
     # way any value position does -- a function auto-calls, a bare type name
     # constructs -- so the receiver always arrives through the dot. Only the
     # DOTTED spelling reads its left as a path, where a bare type name is
     # type-qualified dispatch and hands the receiver to the arguments.
     recvVal: true
-    rrnId: rootNameIdOf :ast n: (ast.nodes.get i: call.callable.u64)
-    if call.infix then rrnId = zast.nameid
-    if rrnId.isZero.not then {
-        rlo: st.lookup nameId: rrnId
-        match (
-            rlo
-        ) case some then null case none then {
-            # A NUMERIC LITERAL BASE IS A VALUE BY CONSTRUCTION, as a call
-            # result and a nested path are. Its lexeme interns like a name and
-            # nothing declares it, so the lookup miss read as "names a type" and
-            # demanded the receiver as an argument: `5.iterate from: 2` was then
-            # short of `t`, which the dot had already handed over.
-            if (isNumericLiteralNameAt :ast ref: rrnId).not then recvVal = false
-        }
-    }
-    # Calling THROUGH a function-pointer field is a field READ, not a
-    # method dispatch: the dot reaches the slot, so the receiver the
-    # slot's signature names is passed as an ordinary argument.
-    if recvVal then {
-        bp9: u64
-        {
-            cq9: ast.nodes.get i: call.callable.u64
-            if cq9.dottedpath then bp9 = cq9.parent.u64
-        }
-        cn9: dottedChildNameId :ast n: (ast.nodes.get i: call.callable.u64)
-        if bp9 > 0 when cn9.isZero.not then {
-            bt9: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: bp9
-            if bt9 > 0 when (st.typing.declIsFnptrFieldId
-                parentTypeId: (ztypes.tid.create from: bt9.u64)
-                nameId: cn9
-            ) then recvVal = false
-        }
-    }
+    if call.infix.not then recvVal = (dottedBaseIsValue
+        :st
+        :ast
+        :unitDecl
+        n: (ast.nodes.get i: call.callable.u64)
+    )
     # the ONE place this question is answered. The emitter reads the stamp
     # rather than asking again: two derivations of one question is what let
     # a type-qualified call be emitted with its receiver slot never filled.

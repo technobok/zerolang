@@ -10220,7 +10220,9 @@ emitCrossUnitTag: function {
 
 # emitFnptrFieldCall -- a call through a record/class fnptr field
 # (`c.op a: 100 b: 200` -> `c.op(100, 200)`). "" when the callee member is not
-# a flagged fnptr field. Explicit args only (slot params carry no `this`).
+# a flagged fnptr field. A slot that declares a receiver is handed the instance
+# the dot reached it through (`p.plus n: 1` -> `p.plus(&p, 1)`), exactly as the
+# no-argument read `p.first` is.
 emitFnptrFieldCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -10309,9 +10311,22 @@ emitFnptrFieldCall: function {
             ai = ai + 1
         }
     }
-    mnFfP: memberCPrefix name: mn
-    r: "\{recvExpr}\{acc}\{mnFfP}\{mn}(\{args})"
-    return r
+    callArgs: args.copy
+    if fnTid > 0 when (fnTypeTakesThis :symtab tid: fnTid) then {
+        callArgs = "&".string
+        if rptr then callArgs = "".string
+        callArgs.append recvExpr
+        if args.length > 0 then {
+            callArgs.append ", "
+            callArgs.append args
+        }
+    }
+    return (fnptrSlotCallC
+        base: recvExpr.stringView
+        acc: acc.stringView
+        :mn
+        recv: callArgs.stringView
+    )
 }
 
 # emitFnptrLocalCall -- a call through a bare local/param of FUNCTION type

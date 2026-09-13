@@ -821,7 +821,12 @@ perf: $(PERFBIN)
 # function value had to match the signature it fills: over the same source the
 # old and new compilers allocate identically, and it is the input, the
 # compiler's own source 169 lines longer.
-ALLOC_BASELINE := 2528494
+#
+# +5,492 when a type's static members and an instance's function fields became
+# two namespaces: over the new source the new compiler allocates 10 fewer than the
+# old (the old source itself is refused by the new rule, so it cannot be the
+# common input), and it is the input, the compiler's own source longer.
+ALLOC_BASELINE := 2533986
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
