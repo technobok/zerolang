@@ -2061,6 +2061,42 @@ exits the scope — drop out of the requirement, and a subject whose arm
 is known exactly needs only that arm's case. Reassignment resets all
 narrowing (and re-narrows when the new value is a specific subtype).
 
+#------: A write ends narrowing wherever it can reach
+
+Narrowing describes the value a name holds, so a write to the name -- a
+reassignment, or either side of a #~"swap" -- ends every narrowing of it for
+every point the write can reach, not only for the rest of its own block:
+
+#ul:
+  [#*: A write inside a nested scope -- an #>"if" branch, a #>"match" arm, a
+  #>"with" body, a block -- ends the narrowing an enclosing scope established,
+  for the rest of that enclosing scope too.]
+  [#*: A write anywhere in a loop -- its conditions, its body, a scope nested in
+  either -- ends the name's narrowing for the whole loop, before the write as
+  much as after it, since the next iteration reads what this one wrote; and for
+  the code after the loop.]
+  [#*: A write in a branch that leaves the function (#~"return", a #~"panic")
+  ends nothing after the branch: that path never reaches it.]
+  [#*: A write in one arm of an #>"if" or a #>"match" does not end the
+  narrowing in a sibling arm, which runs only when this one did not; it ends it
+  after the statement.]
+  [#*: A binding that shadows the name inside the loop or block makes a write
+  after it a write to the new binding, which ends nothing outside.]
+
+After the narrowing ends, the name has its declared type again, and a #>"match"
+over it must cover every arm the type has.
+
+#code language=zerolang: """
+  match (
+      o
+  ) case some then {
+      if retry then {
+          o = Opt.none
+      }
+      n: o.length       # error: o may no longer hold `some`; it is `Opt` here
+  } case none then null
+  """
+
 An #~"else" clause of a #~"match" sees the union/variant type with all explicit
 #~"case" subtypes excluded; when exactly one payload arm remains, the
 subject collapses to that payload — the bare name reads it in the else

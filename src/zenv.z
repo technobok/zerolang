@@ -385,6 +385,11 @@ ZSymbolTable: class {
     # locals already reported as moved inside a loop, so an enclosing loop
     # does not report them again
     loopMoveReported: IdSet u64
+    # decl ids whose narrowing a NON-diverging arm's write ended, held until the
+    # statement the arms belong to finishes: a sibling arm runs only when this
+    # one did not, so it keeps the narrowing, while the code after the
+    # statement runs after either
+    armNarrowingEnds: ListVal u64
     # dump scaffolding: a frame's label ("function:x", "if_branch", ...), the
     # frames a diagnostics-only template walk opened (kept out of the dump),
     # and the rows snapshotted when a frame closed
@@ -503,13 +508,18 @@ ZSymbolTable: class {
         start: fr.start
         if top.isZero.not then this.snapshotFrame frame: top :start
         endIdx: this.entries.length
-        # takes of enclosing frames' locals survive the close
+        # takes of enclosing frames' locals survive the close, and so do the
+        # narrowing ends a write laid over them
         mDecls: ListVal ztypes.declid
         mTypes: ListVal u64
         mLocs: ListVal ztypes.zsrcpos
+        mEnds: ListVal ztypes.declid
         p2: start
         for p2 < endIdx loop {
             e: this.entries.get i: p2
+            if e.endsNarrowing when (this.typing.declParentOf declId: e.declId) != top then {
+                mEnds.append e.declId
+            }
             if e.isTaken then {
                 taOpt: e.takenAt
                 match (
@@ -575,6 +585,8 @@ ZSymbolTable: class {
             }
             mi = mi + 1
         }
+        # laid last, so no row re-laid above narrows the local again
+        with meit: mEnds.iterate do for md: meit loop this.layNarrowingEnd declId: md
         return top.u64
     }
 
@@ -1568,6 +1580,130 @@ ZSymbolTable: class {
         this.appendRow row: re declId: d
     }
 
+    # endNarrowingByWrite -- a write replaced the local's value, so no narrowing
+    # of it stands: lay the row that restores its declared type. When the local
+    # WAS narrowed the row is marked, and the frames carry it outward -- a
+    # narrowing an enclosing scope established described the value the write
+    # replaced, in every scope the write can reach.
+    endNarrowingByWrite: function {:this nameId: zast.nameid} is {
+        d: this.findLocal :nameId
+        if d.isZero then return
+        re: this.reg.newEntry ztypeId: (this.typing.declLocalTypeOf declId: d)
+        re.endsNarrowing = this.isNarrowedDecl declId: d
+        this.appendRow row: re declId: d
+    }
+
+    # endNarrowingIfNarrowed -- a marked end over `nameId` when, and only when,
+    # the local is narrowed: a loop ends the narrowing of the names it writes
+    # at its entry, and a name that is not narrowed needs no row.
+    endNarrowingIfNarrowed: function {:this nameId: zast.nameid} is {
+        d: this.findLocal :nameId
+        if d.isZero then return
+        if (this.isNarrowedDecl declId: d) then this.layNarrowingEnd declId: d
+    }
+
+    # layNarrowingEnd -- the marked row itself: the declared type, and no
+    # narrowing.
+    layNarrowingEnd: function {:this declId: ztypes.declid} is {
+        re: this.reg.newEntry ztypeId: (this.typing.declLocalTypeOf :declId)
+        re.endsNarrowing = true
+        this.appendRow row: re :declId
+    }
+
+    # isNarrowedDecl -- whether the local's newest row narrows it: to an arm, to
+    # an arm's payload, or by ruling arms out.
+    isNarrowedDecl: function {this: this.view declId: ztypes.declid} out bool is {
+        ro: this.rowOf :declId
+        if ro.none then return false
+        e: this.entries.get i: ro
+        if e.narrowedSubtype.isZero.not then return true
+        if e.originalZtypeId.none.not then return true
+        return e.excludedSubtypes.length > 0
+    }
+
+    # anyNarrowed -- whether any open frame narrows any local. Asked before a
+    # walk that exists only to end narrowings, which has nothing to do when
+    # nothing is narrowed -- the common case.
+    anyNarrowed: function {this: this.view} out bool is {
+        with eit: this.entries.iterate do for e: eit loop {
+            if e.narrowedSubtype.isZero.not then return true
+            if e.originalZtypeId.none.not then return true
+            if e.excludedSubtypes.length > 0 then return true
+        }
+        return false
+    }
+
+    # discardNarrowingEndsInCurrentScope -- a frame whose walk left the
+    # function drops the narrowing ends it holds: the code after never runs on
+    # that path, so the narrowing still describes the value it reaches.
+    discardNarrowingEndsInCurrentScope: function {:this} is {
+        n: this.open.length
+        if n == 0 then return
+        if (this.holdsNarrowingEnd from: (this.open.get i: n - 1).start).not then return
+        rev: List ZEntry
+        for this.entries.length > (this.open.get i: n - 1).start loop rev.append this.entries.pop
+        for rev.length > 0 loop {
+            e: rev.pop
+            if e.endsNarrowing then {
+                this.typing.declRowsAdd declId: e.declId delta: -1
+            } else {
+                this.entries.append e
+            }
+        }
+    }
+
+    # holdsNarrowingEnd -- whether a row at or above `from` is a narrowing end.
+    # Asked before a rebuild of the rows, which nearly every frame can skip.
+    holdsNarrowingEnd: function {this: this.view from: u64} out bool is {
+        i: from
+        for i < this.entries.length loop {
+            if (this.entries.get :i).endsNarrowing then return true
+            i = i + 1
+        }
+        return false
+    }
+
+    # openArmNarrowingEnds -- a statement with arms begins: the mark its
+    # collected narrowing ends are held above.
+    openArmNarrowingEnds: function {this: this.view} out u64 is {
+        return this.armNarrowingEnds.length
+    }
+
+    # collectArmNarrowingEnds -- a non-diverging arm finished: take the
+    # narrowing ends its frame holds for locals of ENCLOSING frames off the
+    # stack, so its close does not carry them into the sibling arms, and hold
+    # them for the statement's end.
+    collectArmNarrowingEnds: function {:this} is {
+        n: this.open.length
+        if n == 0 then return
+        if (this.holdsNarrowingEnd from: (this.open.get i: n - 1).start).not then return
+        top: (this.open.get i: n - 1).id
+        rev: List ZEntry
+        for this.entries.length > (this.open.get i: n - 1).start loop rev.append this.entries.pop
+        for rev.length > 0 loop {
+            e: rev.pop
+            if e.endsNarrowing when (this.typing.declParentOf declId: e.declId) != top then {
+                this.armNarrowingEnds.append e.declId.u64
+                this.typing.declRowsAdd declId: e.declId delta: -1
+            } else {
+                this.entries.append e
+            }
+        }
+    }
+
+    # closeArmNarrowingEnds -- the statement the arms belong to finished: every
+    # narrowing an arm's write ended is ended over what the statement left
+    # behind. A local that died with the statement, or a name now resolving to
+    # a different local, is not the one written, so only a decl its name still
+    # resolves to is ended.
+    closeArmNarrowingEnds: function {:this marker: u64} is {
+        for this.armNarrowingEnds.length > marker loop {
+            d: ztypes.declid.create from: this.armNarrowingEnds.pop
+            nid: zast.nameid.create from: (this.typing.declNameOf declId: d)
+            if (this.findLocal nameId: nid) == d then this.layNarrowingEnd declId: d
+        }
+    }
+
     # whether an arm has been ruled out for a name, which is what lets a later
     # match need fewer arms
     isExcluded: function {
@@ -1694,6 +1830,7 @@ ZSymbolTable: class {
         k: this.unreachableKind
         if k == divkind.brk when this.loopRuns.length > 0 then this.recordBreakTakes
         if k == divkind.exit then this.discardTakenInCurrentScope
+        if k == divkind.exit then this.discardNarrowingEndsInCurrentScope
         if k == divkind.brk then this.discardTakenInCurrentScope
         return k
     }
@@ -1956,6 +2093,7 @@ newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} o
         loopContinueTakes: ListVal u64
         loopOnceTakes: ListVal u64
         loopMoveReported: IdSet u64
+        armNarrowingEnds: ListVal u64
         frameLabel: (IdMapR u64 V: String)
         frameHidden: IdSet u64
         entryDump: List ZEntryDumpRow

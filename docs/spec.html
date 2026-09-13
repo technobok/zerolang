@@ -1956,6 +1956,36 @@ by enclosing flow &#x2014; an <a href="#if">if</a> arm-predicate guard, a <code>
 exits the scope &#x2014; drop out of the requirement, and a subject whose arm
 is known exactly needs only that arm's case. Reassignment resets all
 narrowing (and re-narrows when the new value is a specific subtype).</p>
+<h6 id="a-write-ends-narrowing-wherever-it-can-reach">A write ends narrowing wherever it can reach</h6>
+<p>Narrowing describes the value a name holds, so a write to the name -- a
+reassignment, or either side of a <code>swap</code> -- ends every narrowing of it for
+every point the write can reach, not only for the rest of its own block:</p>
+<ul>
+<li>A write inside a nested scope -- an <a href="#if">if</a> branch, a <a href="#match">match</a> arm, a
+  <a href="#with">with</a> body, a block -- ends the narrowing an enclosing scope established,
+  for the rest of that enclosing scope too.</li>
+<li>A write anywhere in a loop -- its conditions, its body, a scope nested in
+  either -- ends the name's narrowing for the whole loop, before the write as
+  much as after it, since the next iteration reads what this one wrote; and for
+  the code after the loop.</li>
+<li>A write in a branch that leaves the function (<code>return</code>, a <code>panic</code>)
+  ends nothing after the branch: that path never reaches it.</li>
+<li>A write in one arm of an <a href="#if">if</a> or a <a href="#match">match</a> does not end the
+  narrowing in a sibling arm, which runs only when this one did not; it ends it
+  after the statement.</li>
+<li>A binding that shadows the name inside the loop or block makes a write
+  after it a write to the new binding, which ends nothing outside.</li>
+</ul>
+<p>After the narrowing ends, the name has its declared type again, and a <a href="#match">match</a>
+over it must cover every arm the type has.</p>
+<pre><code class="language-zerolang">match (
+    o
+) case some then {
+    if retry then {
+        o = Opt.none
+    }
+    n: o.length       # error: o may no longer hold `some`; it is `Opt` here
+} case none then null</code></pre>
 <p>An <code>else</code> clause of a <code>match</code> sees the union/variant type with all explicit
 <code>case</code> subtypes excluded; when exactly one payload arm remains, the
 subject collapses to that payload &#x2014; the bare name reads it in the else

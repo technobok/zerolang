@@ -25234,7 +25234,7 @@ checkNarrowedTargetWrite: function {
 } is {
     nmId: atomNameId :ast n: (ast.nodes.get i: rasgn.topath.u64)
     if nmId.isZero then return
-    st.resetNarrowing nameId: nmId
+    st.endNarrowingByWrite nameId: nmId
     (refuseBorrowedWrite
         :st
         :ast
@@ -25627,7 +25627,7 @@ checkSwapSide: function {
 # resetSwapNarrowing -- a swap writes a bare name, so narrowing on it ends.
 resetSwapNarrowing: function {st: zenv.ZSymbolTable ast: Ast.view side: zast.nodeid} is {
     nmId: atomNameId :ast n: (ast.nodes.get i: side.u64)
-    if nmId.isZero.not then st.resetNarrowing nameId: nmId
+    if nmId.isZero.not then st.endNarrowingByWrite nameId: nmId
 }
 
 # swapTypesAgree -- the two sides of a swap hold one type: the same type, or a
@@ -26693,6 +26693,7 @@ checkFor: function {
     entryStart: st.entryMark
     forMarker: st.pushBlock name: "for"
     st.openLoopRun :entryStart
+    endLoopWriteNarrowing :st :ast :fornode
     bk: st.reg.ctlPlaceholder
     (st.define
         nameId: zast.names.wkBreak
@@ -26756,6 +26757,194 @@ checkFor: function {
     relayBreakTakes :st :run
     st.forgetOnceTakes :run
     return (forComprehensionTid :st :unitDecl :ast :fornode :elemT)
+}
+
+# endLoopWriteNarrowing -- a name the loop writes, anywhere in its conditions or
+# its body, holds on each iteration what the previous one may have written, so
+# its narrowing ends at the loop's entry: every read in the loop -- before the
+# write as much as after it -- and the code after the loop see the declared
+# type. The walk is skipped when nothing is narrowed, which is almost always.
+endLoopWriteNarrowing: function {st: zenv.ZSymbolTable ast: Ast.view fornode: forref} is {
+    if st.anyNarrowed.not then return
+    if (loopWritesNarrowedName :st :ast :fornode).not then return
+    written: ListVal u32
+    bound: IdSet u32
+    collectOuterWrites :ast nid: fornode.nid.u32 :bound names: written
+    with wit: written.iterate do for nm: wit loop {
+        st.endNarrowingIfNarrowed nameId: (zast.nameid.create from: nm)
+    }
+}
+
+# loopWritesNarrowedName -- whether any write in the loop targets a bare name
+# that resolves to a narrowed local. A quick question before the exact walk,
+# asked of every loop inside a narrowing: one worklist and no shadowing, since
+# a name the answer wrongly includes only sends the loop to the walk that
+# decides it.
+loopWritesNarrowedName: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    fornode: forref
+} out bool is {
+    # sized for a typical loop body: growing the list is the walk's only cost
+    work: ListVal u32 capacity: 128
+    work.append fornode.nid.u32
+    wi: u64
+    for wi < work.length loop {
+        wid: work.get i: wi
+        wi = wi + 1
+        if (nodeWritesNarrowedName :st :ast nid: wid :work) then return true
+    }
+    return false
+}
+
+# nodeWritesNarrowedName -- one node of that walk: whether it writes a narrowed
+# local's bare name, its children queued unless it is a nested function.
+nodeWritesNarrowedName: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    nid: u32
+    work: ListVal u32
+} out bool is {
+    if nid == 0 then return false
+    t1: zast.nameid
+    t2: zast.nameid
+    {
+        wn: ast.nodes.get i: nid.u64
+        if wn.functiondef then return false
+        if wn.reassignment then t1 = atomNameId :ast n: (ast.nodes.get i: wn.topath.u64)
+        if wn.swapstmt then {
+            t1 = atomNameId :ast n: (ast.nodes.get i: wn.lhs.u64)
+            t2 = atomNameId :ast n: (ast.nodes.get i: wn.rhs.u64)
+        }
+        zast.childIdsInto :ast n: wn acc: work
+    }
+    if (nameIsNarrowedLocal :st nameId: t1) then return true
+    return (nameIsNarrowedLocal :st nameId: t2)
+}
+
+# nameIsNarrowedLocal -- whether `nameId` resolves to a local its newest row
+# narrows.
+nameIsNarrowedLocal: function {st: zenv.ZSymbolTable.view nameId: zast.nameid} out bool is {
+    if nameId.isZero then return false
+    d: st.findLocal :nameId
+    if d.isZero then return false
+    narrowed: st.isNarrowedDecl declId: d
+    return narrowed
+}
+
+# collectOuterWrites -- the names the writes under `nid` target that still mean
+# the local OUTSIDE it: a reassignment's bare target and each bare side of a
+# swap, unless a binding the walk has passed shadows the name there -- a
+# binding earlier in an enclosing block, a loop's binding over its body, a
+# `with` name over its body. A binder this walk does not know leaves the name
+# unshadowed, which only ends a narrowing that could have stood. A nested
+# function is its own scope and is not walked.
+collectOuterWrites: function {
+    ast: Ast.view
+    nid: u32
+    # the names shadowed where `nid` sits
+    bound: IdSet u32
+    # the written names, appended
+    names: ListVal u32
+} is {
+    if nid == 0 then return
+    kids: ListVal u32
+    inner: bound.copy
+    scope: readWriteScope :ast :nid :bound :names :inner :kids
+    if scope.walk.not then return
+    if scope.block then {
+        collectBlockWrites :ast :kids bound: inner :names
+        return
+    }
+    # a loop's and a `with`'s bindings shadow their names in the body only
+    with kit: kids.iterate do for k: kit loop {
+        if k == scope.body when scope.body > 0 then {
+            collectOuterWrites :ast nid: k bound: inner :names
+        } else {
+            collectOuterWrites :ast nid: k :bound :names
+        }
+    }
+}
+
+# writescope -- what collectOuterWrites needs of one node: whether to walk into
+# it at all, whether it is a block, and the body its own bindings cover.
+writescope: record {
+    # false for a nested function, which is its own scope
+    walk: bool
+    # a block, whose bindings shadow the lines after them
+    block: bool
+    # the body a loop's or a `with`'s bindings shadow, 0 for none
+    body: u32
+}
+
+# readWriteScope -- read one node: record the writes it makes, add the names it
+# binds over its body to `inner`, and hand its children to `kids`.
+readWriteScope: function {
+    ast: Ast.view
+    nid: u32
+    bound: (IdSet u32).view
+    names: ListVal u32
+    inner: IdSet u32
+    kids: ListVal u32
+} out writescope is {
+    n: ast.nodes.get i: nid.u64
+    if n.functiondef then return (writescope walk: false block: false body: 0)
+    if n.reassignment then addOuterWrite :ast target: n.topath :bound :names
+    if n.swapstmt then {
+        addOuterWrite :ast target: n.lhs :bound :names
+        addOuterWrite :ast target: n.rhs :bound :names
+    }
+    zast.childIdsInto :ast :n acc: kids
+    if n.statement then return (writescope walk: true block: true body: 0)
+    if n.withexpr then {
+        inner.add item: n.name.u32
+        return (writescope walk: true block: false body: n.body.u32)
+    }
+    if n.forexpr.not then return (writescope walk: true block: false body: 0)
+    cx: u64
+    for cx < n.conditions.count.u64 loop {
+        cn: ast.nodes.get i: (zast.kidAt kids: ast.kids span: n.conditions i: cx).u64
+        cx = cx + 1
+        if cn.namedoperation when cn.name.isZero.not then inner.add item: cn.name.u32
+    }
+    return (writescope walk: true block: false body: n.body.u32)
+}
+
+# collectBlockWrites -- a block's lines in order: a binding shadows its name for
+# the lines after it.
+collectBlockWrites: function {
+    ast: Ast.view
+    kids: (ListVal u32).view
+    bound: IdSet u32
+    names: ListVal u32
+} is {
+    with kit: kids.iterate do for k: kit loop {
+        collectOuterWrites :ast nid: k :bound :names
+        bn: bindingNameOfLine :ast nid: k
+        if bn > 0 then bound.add item: bn
+    }
+}
+
+# addOuterWrite -- a write's target, when it is a bare name nothing shadows.
+addOuterWrite: function {
+    ast: Ast.view
+    target: zast.nodeid
+    bound: (IdSet u32).view
+    names: ListVal u32
+} is {
+    nm: atomNameId :ast n: (ast.nodes.get i: target.u64)
+    if nm.isZero then return
+    if (bound.has item: nm.u32).not then names.append nm.u32
+}
+
+# bindingNameOfLine -- the name a block line binds (`name: value`), 0 when it
+# binds none.
+bindingNameOfLine: function {ast: Ast.view nid: u32} out u32 is {
+    line: ast.nodes.get i: nid.u64
+    if line.statementline.not then return 0
+    inner: ast.nodes.get i: line.statementline.u64
+    if inner.assignment then return inner.name.u32
+    return 0
 }
 
 # forCondBindsName -- the condition is the loop's iterable binding (`x: it`),
@@ -26999,6 +27188,7 @@ checkIfClauses: function {
         ak: settleArmTakes :st :liveBefore taken: takenAcross
         if ak > kindAcc then kindAcc = ak
         if ak == zenv.divkind.none then allDiverge = false
+        if ak == zenv.divkind.none then st.collectArmNarrowingEnds
         st.popTo marker: bm
         cn1c: clause.nconds
         if cn1c == 1 when cfacts.length == 1 then {
@@ -27047,6 +27237,7 @@ checkIf: function {
     skipDead: false
     if fbr.known when st.typing.eagerAll.not then skipDead = true
     ifMarker: st.pushBlock name: "if"
+    armEnds: st.openArmNarrowingEnds
     liveBefore: st.getLiveOwnedVars
     takenAcross: IdSet u32
     nvId: (walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: "never").or d: 0
@@ -27096,6 +27287,7 @@ checkIf: function {
             ak2: settleArmTakes :st :liveBefore taken: takenAcross
             if ak2 > kindAcc then kindAcc = ak2
             if ak2 == zenv.divkind.none then allDiverge = false
+            if ak2 == zenv.divkind.none then st.collectArmNarrowingEnds
             st.popTo marker: ebm
         }
     } else {
@@ -27142,6 +27334,9 @@ checkIf: function {
         )
     }
     invalidateTakenAcross :st names: takenAcross
+    # after the guard facts: a write in an arm that completes wins over what a
+    # diverging arm let the rest of the scope assume
+    st.closeArmNarrowingEnds marker: armEnds
     if allDiverge then st.markUnreachable kind: kindAcc
     return result
 }
@@ -33861,7 +34056,8 @@ checkCaseClause: function {
     }
     cn2: armName.copy
     covered.append cn2
-    st.settleDivergingTakes
+    ak: st.settleDivergingTakes
+    if ak == zenv.divkind.none then st.collectArmNarrowingEnds
     st.popTo marker: armMarker
     return (casearmfacts empty: anyEmpty diverges: allDiverge)
 }
@@ -34083,7 +34279,8 @@ checkCaseElse: function {
     # read downstream as "control does not continue", so the emitter dropped
     # the enclosing arm's `break` and the switch fell through.
     if et > 0 when et == neverId then null else allDiverge = false
-    st.settleDivergingTakes
+    ek: st.settleDivergingTakes
+    if ek == zenv.divkind.none then st.collectArmNarrowingEnds
     st.popTo marker: elseMarker
     return (casearmfacts empty: anyEmpty diverges: allDiverge)
 }
@@ -34214,6 +34411,7 @@ checkCaseArms: function {
     } case none then null
     nullId: (walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: "null").or d: 0
     anyEmpty: false
+    armEnds: st.openArmNarrowingEnds
     st.pushBlock name: "match_body"
     if targetName.length > 0 then st.resetNarrowing nameId: (nameIdOf
         :ast
@@ -34254,7 +34452,7 @@ checkCaseArms: function {
         if ef.empty then anyEmpty = true
         if ef.diverges.not then allDiverge = false
     }
-    return (finishCaseMatch
+    result: (finishCaseMatch
         :st
         :ast
         :casenode
@@ -34271,6 +34469,10 @@ checkCaseArms: function {
         :diverging
         :armTypes
     )
+    # after the exclusions the diverging arms left: a write in an arm that
+    # completes wins over them
+    st.closeArmNarrowingEnds marker: armEnds
+    return result
 }
 
 # rejectGenericValueMatch -- report a match over a VALUE whose type is a generic

@@ -792,7 +792,14 @@ perf: $(PERFBIN)
 # addressability, borrowed names, one type), and it is the INPUT again: over the
 # same source and argv[0] the old and new compilers allocate identically, while
 # the compiler's own source is 272 lines longer.
-ALLOC_BASELINE := 2483276
+#
+# +25,019 when a write started ending narrowing in every scope it reaches.
+# Measured with valgrind, old and new compiler from one argv[0]: over the old
+# source the new compiler allocates 1,145 more -- one pre-sized worklist per loop
+# walked while something is narrowed, the quick question of whether the loop
+# writes a narrowed name at all -- and the rest is the input, the compiler's own
+# source being 346 lines longer.
+ALLOC_BASELINE := 2508295
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
