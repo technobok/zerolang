@@ -41,6 +41,27 @@ slotJuxta: 2.u8
 # element: anything compound runs on
 slotTight: 1.u8
 
+# a string interpolation hole. Above every shape rank, like slotLine, so the
+# grammar asks for nothing; distinct from it because the BRACES delimit a break
+# here and no pair has to be inserted for one
+slotHole: 5.u8
+
+# a value that is already a definition form in its own right -- a `data` block
+# at unit level. Above every shape rank, so the grammar asks for nothing, and
+# above slotHole so no break asks either: the block's braces end it, and the
+# next line is a new definition whether parentheses are there or not. Measured:
+# `data` alone behaves this way; a labelled call, an if, a match, a with, a for
+# and a bare block all need parentheses in a definition's value
+slotBare: 6.u8
+
+# pairsOnBreak -- whether a break at this position would leave the value
+# undelimited. Every position would, except a hole: EOL ends a statement and a
+# binding, a keyword or label follows a clause, and a term follows an argument.
+# Only the hole already has delimiters on both sides.
+pairsOnBreak: function {slot: u8} out bool is {
+    return slot < slotHole
+}
+
 # the outcome of formatting one source: the text, or why it was refused
 FmtResult: class {
     # whether `text` holds the formatted source
@@ -448,7 +469,9 @@ Builder: class {
     # visitDefinition -- the value of a definition: a function, a type, a
     # unit, or a bare operation
     visitDefinition: function {:this id: zast.nodeid} out u32 is {
-        n: this.node :id
+        # if, match and data arrive WRAPPED from the unit-level parse; function,
+        # object and unit definitions arrive bare. Peel before asking which
+        n: this.node id: (this.innerOf :id)
         match (
             n
         ) case functiondef then {
@@ -457,6 +480,8 @@ Builder: class {
             return (this.visitObject :id)
         } case unitdef then {
             return (this.visitUnit :id)
+        } case datablock then {
+            return (this.visitValue :id slot: slotBare wrapped: false)
         } else {
             return (this.visitValue :id slot: slotClause wrapped: false)
         }
@@ -464,84 +489,123 @@ Builder: class {
 
     # ---- values ----
 
-    # visitValue -- any value node, by its arm, starting a fresh parenthesis
-    # budget at the cursor
+    # visitValue -- any value node in `slot`, inside the parentheses that
+    # position needs and no others. THE ONLY PLACE PARENTHESES ARE DECIDED.
+    #
+    # Written parentheses are neither counted against the tree nor attributed to
+    # a wrapper. They are skipped on the way in and consumed on the way out by
+    # whichever value ENDS where the closer sits, which need not be the value
+    # that skipped the opener: in `b: (source.byteAt :i).or d: 0` the `(` waits
+    # at the binding's value but closes at the end of the dotted path's parent,
+    # before the dot. Brackets nest, so a depth counter keeps the two in step.
+    #
+    # Two pairs can be called for. The grammar asks for one whenever
+    # `parensRequired` says so, and it is written flat or broken alike. A BREAK
+    # asks for one around a binary operation, which is the only shape a line
+    # ending leaves undelimited -- a call inserts its own, and an if, match,
+    # for, with, block or data block carries braces. That pair shows only when
+    # the value breaks, and never inside an interpolation hole.
     visitValue: function {:this id: zast.nodeid slot: u8 wrapped: bool} out u32 is {
-        return (this.visitValueB :id :slot :wrapped remaining: 0 owned: 0)
-    }
-
-    # spineCount -- the expression wrappers on the first-child spine from `id`
-    # down (the node included): a parenthesis at the cursor belongs to one of
-    # them, the innermost first
-    spineCount: function {this: this.view id: zast.nodeid} out u32 is {
-        k: u32
-        cur: id
-        for cur.isZero.not loop {
-            n: this.node id: cur
-            match (
-                n
-            ) case expression then {
-                k = k + 1
-                cur = n.expression
-            } case call then {
-                cur = n.callable
-            } case dottedpath then {
-                cur = n.parent
-            } case reassignment then {
-                cur = n.topath
-            } case swapstmt then {
-                cur = n.lhs
-            } else {
-                break
-            }
+        entry: this.c.openParens
+        opened: u32
+        for (this.peekIs tt: zlexer.toktype.parenOpenTok) loop {
+            this.skipTok tt: zlexer.toktype.parenOpenTok
+            opened = opened + 1
         }
-        return k
-    }
-
-    # outerIsBare -- whether the value at the cursor, below the `synthetic`
-    # wrappers its context always adds, opens with no parenthesis of its own:
-    # the node there is not a wrapper, or is one the parentheses at the cursor
-    # do not reach
-    outerIsBare: function {:this id: zast.nodeid synthetic: u32} out bool is {
-        k: this.spineCount :id
-        p: this.c.parenRun
-        cur: id
-        d: u32
-        for d < synthetic loop {
-            n: this.node id: cur
-            match (
-                n
-            ) case expression then {
-                cur = n.expression
-            } else {
-                return true
-            }
-            d = d + 1
+        this.c.openParens = this.c.openParens + opened
+        mine: entry + opened
+        inner: this.innerOf :id
+        needed: this.parensRequired :inner :slot
+        innerNode: this.node id: inner
+        # an INFIX call is not call-shaped: its parentheses are the layout pair
+        # a binary operation owns, not the pair a call fills when it breaks
+        isCall: innerNode.call
+        if (this.isBinop id: inner) then isCall = false
+        # trivia inside a written pair belongs to that pair. Where none was
+        # written the surrounding gaps already own it, and asking here would
+        # take it from them -- but a closer landing at this level has to be
+        # asked for, or the comments in front of it are reported by nobody
+        # a value inside a pair is a group of its own: a chain breaks at its
+        # operators rather than inside its operands. Whether a pair is coming
+        # is known before the body is built, so the body is told
+        onBreak: false
+        if (this.isBinop id: inner) then onBreak = pairsOnBreak :slot
+        paired: needed
+        if paired.not then paired = onBreak
+        inPair: wrapped
+        if paired then inPair = true
+        g: emptyGap
+        if opened > 0 then g = this.gapDocs cap: 0
+        body: u32
+        if isCall then {
+            body = this.visitCall id: inner inParens: needed
+        } else {
+            body = this.visitValueArm id: inner wrapped: inPair
         }
-        n: this.node id: cur
-        if n.expression.not then return true
-        return p < (k - synthetic)
+        # A closer is consumed by whichever value ENDS where it sits, which is
+        # not always the value that skipped the opener: in
+        # `out (Result (Box u64) E: IoError)` the last argument ends at the
+        # closer and takes it. So by the time this level exits, its own opener
+        # can be gone -- and asking for a gap then scans PAST the closer and
+        # swallows what follows, which is the next member's doc comment. Ask
+        # only while the opener is still standing.
+        stolen: this.c.openParens < mine
+        willClose: false
+        if this.c.openParens > 0 then willClose = this.peekIs tt: zlexer.toktype.parenCloseTok
+        takeH: opened > 0
+        if takeH.not then takeH = willClose
+        if stolen then takeH = false
+        h: emptyGap
+        if takeH then h = this.gapDocs cap: 0
+        this.closeParens
+        if needed then {
+            return (this.parenGroup
+                :body
+                open: this.idOpen
+                close: this.idClose
+                marker: g.marker
+                before: g
+                after: h
+                callShape: isCall
+            )
+        }
+        if onBreak.not then return (this.withComments :body before: g after: h)
+        return (this.parenGroup
+            :body
+            open: (this.d.ifBreak brk: this.idOpen flat: 0)
+            close: (this.d.ifBreak brk: this.idClose flat: 0)
+            marker: g.marker
+            before: g
+            after: h
+            callShape: false
+        )
     }
 
-    # visitValueB -- visitValue with the parenthesis budget of an enclosing
-    # chain: `remaining` wrappers lie on the spine from here, and the innermost
-    # `owned` of them own a `(` each
-    visitValueB: function {
-        :this id: zast.nodeid slot: u8 wrapped: bool remaining: u32 owned: u32
-    } out u32 is {
+    # closeParens -- consume the closers belonging to openers already skipped,
+    # as many as sit at the cursor
+    closeParens: function {:this} is {
+        for (this.peekIs tt: zlexer.toktype.parenCloseTok) loop {
+            if this.c.openParens == 0 then break
+            this.skipTok tt: zlexer.toktype.parenCloseTok
+            this.c.openParens = this.c.openParens - 1
+        }
+    }
+
+    # visitValueArm -- a value below every wrapper, by its arm. It needs no slot:
+    # the slot decides parentheses and nothing else, and visitValue has already
+    # settled those before it calls here
+    visitValueArm: function {:this id: zast.nodeid wrapped: bool} out u32 is {
         n: this.node :id
         match (
             n
-        ) case expression then {
-            return (this.visitExprChain :id :slot :wrapped :remaining :owned)
-        } case call then {
+        ) case call then {
             # printed in the spelling it was written in: the operator sits
             # between its operands and the dot was never typed, so the dotted
             # printer would both invent a `.` and desync the token cursor
-            if n.infix then return (this.visitBinop :id :wrapped :remaining :owned)
-            return (this.visitCall :id inParens: false :remaining :owned)
+            if n.infix then return (this.visitBinop :id :wrapped)
+            return (this.visitCall :id inParens: false)
         } case dottedpath then {
-            return (this.visitPath :id :remaining :owned)
+            return (this.visitPath :id)
         } case atomid then {
             return (this.tok tt: zlexer.toktype.refIdTok)
         } case labelvalue then {
@@ -561,9 +625,9 @@ Builder: class {
         } case datablock then {
             return (this.visitData :id)
         } case reassignment then {
-            return (this.visitReassign :id :remaining :owned)
+            return (this.visitReassign :id)
         } case swapstmt then {
-            return (this.visitSwap :id :remaining :owned)
+            return (this.visitSwap :id)
         } case functiondef then {
             return (this.visitFunction :id)
         } case error then {
@@ -688,108 +752,6 @@ Builder: class {
         return (this.shapeRank id: inner) >= slot
     }
 
-    # visitExprChain -- an expression wrapper: with no budget yet, the spine
-    # below it is counted and the parentheses at the cursor are given to the
-    # innermost wrappers
-    visitExprChain: function {
-        :this id: zast.nodeid slot: u8 wrapped: bool remaining: u32 owned: u32
-    } out u32 is {
-        rem: remaining
-        own: owned
-        if rem == 0 then {
-            rem = this.spineCount :id
-            own = this.c.parenRun
-            if own > rem then {
-                this.c.note msg: "more parentheses than the tree holds".string
-                own = rem
-            }
-        }
-        return (this.visitWrapper :id remaining: rem owned: own :slot :wrapped)
-    }
-
-    # visitWrapper -- one wrapper of a chain: it owns a `(` when it is among
-    # the innermost `owned` of the `remaining` wrappers on the spine
-    visitWrapper: function {
-        :this id: zast.nodeid remaining: u32 owned: u32 slot: u8 wrapped: bool
-    } out u32 is {
-        n: this.node :id
-        inner: zast.nodeid
-        match (
-            n
-        ) case expression then {
-            inner = n.expression
-        } else {
-            return (this.visitValueB :id :slot :wrapped :remaining :owned)
-        }
-        if owned < remaining then {
-            # a wrapper the parser made: nothing to consume
-            return (this.visitValueB id: inner :slot :wrapped remaining: remaining - 1 :owned)
-        }
-        removable: (this.parensRequired :inner :slot).not
-        innerNode: this.node id: inner
-        # an INFIX call is not call-shaped: its parentheses are the layout pair
-        # a binary operation owns, not the pair a call fills when it breaks
-        isCall: innerNode.call
-        if (this.isBinop id: inner) then isCall = false
-        if removable when isCall then {
-            # a call fills the pair the printer inserts when it breaks, so the
-            # written pair is dropped
-            this.skipTok tt: zlexer.toktype.parenOpenTok
-            g: this.gapDocs cap: 0
-            body: this.visitCall id: inner inParens: false remaining: remaining - 1 owned: owned - 1
-            h: this.gapDocs cap: 0
-            this.skipTok tt: zlexer.toktype.parenCloseTok
-            return (this.withComments :body before: g after: h)
-        }
-        this.skipTok tt: zlexer.toktype.parenOpenTok
-        g: this.gapDocs cap: 0
-        body: u32
-        if isCall then {
-            body = this.visitCall id: inner inParens: true remaining: remaining - 1 owned: owned - 1
-        } else {
-            body = (this.visitValueB
-                id: inner
-                :slot
-                wrapped: true
-                remaining: remaining - 1
-                owned: owned - 1
-            )
-        }
-        h: this.gapDocs cap: 0
-        this.skipTok tt: zlexer.toktype.parenCloseTok
-        if isCall then {
-            return (this.parenGroup
-                :body
-                open: this.idOpen
-                close: this.idClose
-                marker: g.marker
-                before: g
-                after: h
-                callShape: true
-            )
-        }
-        if removable then {
-            return (this.parenGroup
-                :body
-                open: (this.d.ifBreak brk: this.idOpen flat: 0)
-                close: (this.d.ifBreak brk: this.idClose flat: 0)
-                marker: g.marker
-                before: g
-                after: h
-                callShape: false
-            )
-        }
-        return (this.parenGroup
-            :body
-            open: this.idOpen
-            close: this.idClose
-            marker: g.marker
-            before: g
-            after: h
-            callShape: false
-        )
-    }
-
     # parenGroup -- `open body close` as a group that breaks inside: the body
     # one step in, the closer on its own line; a call-shaped body already
     # carries its own indent
@@ -859,9 +821,7 @@ Builder: class {
     # (unwrapped) the chain never breaks. The leftmost operand continues the
     # parenthesis budget of the chain; its own parentheses are redundant only
     # when every operator inside and outside them is the same one
-    visitBinop: function {
-        :this id: zast.nodeid wrapped: bool remaining: u32 owned: u32
-    } out u32 is {
+    visitBinop: function {:this id: zast.nodeid wrapped: bool} out u32 is {
         operands: ListVal u32
         operators: ListVal u32
         cur: id
@@ -883,9 +843,7 @@ Builder: class {
             idx = idx - 1
             oid: zast.nodeid.create from: (operands.get i: idx)
             if first then {
-                (xs.append
-                    (this.visitValueB id: oid slot: slotJuxta wrapped: false :remaining :owned)
-                )
+                xs.append (this.visitValue id: oid slot: slotJuxta wrapped: false)
             } else {
                 xs.append this.idSpace
                 xs.append (this.visitValue
@@ -915,18 +873,10 @@ Builder: class {
     # on its own (an expanded construction, a block) is hugged: the call stays
     # on its line and the argument breaks inside its own delimiters. The
     # callable continues the parenthesis budget of the chain
-    visitCall: function {
-        :this id: zast.nodeid inParens: bool remaining: u32 owned: u32
-    } out u32 is {
+    visitCall: function {:this id: zast.nodeid inParens: bool} out u32 is {
         n: this.node :id
         if n.call.not then return 0
-        callable: (this.visitValueB
-            id: n.callable
-            slot: slotTight
-            wrapped: false
-            :remaining
-            :owned
-        )
+        callable: this.visitValue id: n.callable slot: slotTight wrapped: false
         args: ListVal u32
         trails: ListVal u32
         forced: false
@@ -941,9 +891,14 @@ Builder: class {
             args.append ad.doc
         }
         if args.length == 0 then return callable
-        # a lone unnamed term (`print "x"`, `List u8`) gains nothing from a
-        # wrap: the pair would hold what it holds now
-        if args.length == 1 when (this.soleTermArg n: (this.node :id)) then {
+        # A LONE UNNAMED ARGUMENT CARRIES THE PAIR. A call that breaks has to
+        # be delimited, and when its one argument is unnamed the argument is
+        # already the thing that breaks -- so the pair goes round the argument
+        # and the call takes none: `return (Res\n  a: 1\n)`, not
+        # `(return (Res\n  a: 1\n))`. A LABELLED argument cannot take it
+        # (`f (k: 1)` does not parse), and neither can two arguments, so those
+        # keep the call's own pair below.
+        if args.length == 1 when (this.soleUnnamedArg n: (this.node :id)) then {
             return (this.joinArgs :callable :args :trails sep: this.idSpace)
         }
         # hug the last argument when it alone carries a forced break
@@ -956,9 +911,11 @@ Builder: class {
         innerXs: ListVal u32
         innerXs.append inner
         if forced then innerXs.append this.idBreak
-        body.append (this.d.indent (this.d.concat innerXs))
+        body.append (this.d.indent (this.d.concat innerXs
         # inside written parentheses the call is a group of its own, so it
         # stays flat when it fits however the parentheses break
+        )
+        )
         if inParens then return (this.d.group (this.d.concat body))
         outer: ListVal u32
         outer.append (this.d.ifBreak brk: this.idOpen flat: 0)
@@ -1035,8 +992,9 @@ Builder: class {
         return (this.d.concat xs)
     }
 
-    # soleTermArg -- whether the call's one argument is unnamed and a term
-    soleTermArg: function {this: this.view n: zast.astnode} out bool is {
+    # soleUnnamedArg -- whether the call's one argument carries no label, and
+    # so can hold the pair the call would otherwise need when it breaks
+    soleUnnamedArg: function {this: this.view n: zast.astnode} out bool is {
         match (
             n
         ) case call then {
@@ -1045,8 +1003,7 @@ Builder: class {
             match (
                 a
             ) case namedoperation then {
-                if a.name.isZero.not then return false
-                return (this.isTerm id: a.operation)
+                return a.name.isZero
             } else {
                 return false
             }
@@ -1056,19 +1013,13 @@ Builder: class {
     }
 
     # visitPath -- `parent.child`, never broken
-    visitPath: function {:this id: zast.nodeid remaining: u32 owned: u32} out u32 is {
+    visitPath: function {:this id: zast.nodeid} out u32 is {
         n: this.node :id
         xs: ListVal u32
         match (
             n
         ) case dottedpath then {
-            xs.append (this.visitValueB
-                id: n.parent
-                slot: slotTight
-                wrapped: false
-                :remaining
-                :owned
-            )
+            xs.append (this.visitValue id: n.parent slot: slotTight wrapped: false)
             xs.append (this.tok tt: zlexer.toktype.dotTok)
             xs.append (this.tok tt: zlexer.toktype.refIdTok)
         } else null
@@ -1117,7 +1068,7 @@ Builder: class {
                 if hole < parts.count.u64 then {
                     xs.append (this.visitValue
                         id: (this.kid span: parts i: hole)
-                        slot: slotLine
+                        slot: slotHole
                         wrapped: false
                     )
                 }
@@ -1143,26 +1094,20 @@ Builder: class {
         i: from
         for i < parts.count.u64 loop {
             p: this.node id: (this.kid span: parts :i)
-            if p.expression then return i
+            if p.stringchunk.not then return i
             i = i + 1
         }
         return parts.count.u64
     }
 
     # visitReassign -- `path = value`
-    visitReassign: function {:this id: zast.nodeid remaining: u32 owned: u32} out u32 is {
+    visitReassign: function {:this id: zast.nodeid} out u32 is {
         n: this.node :id
         xs: ListVal u32
         match (
             n
         ) case reassignment then {
-            xs.append (this.visitValueB
-                id: n.topath
-                slot: slotTight
-                wrapped: false
-                :remaining
-                :owned
-            )
+            xs.append (this.visitValue id: n.topath slot: slotTight wrapped: false)
             xs.append this.idSpace
             xs.append (this.tok tt: zlexer.toktype.equalsTok)
             xs.append this.idSpace
@@ -1172,13 +1117,13 @@ Builder: class {
     }
 
     # visitSwap -- `path swap path`
-    visitSwap: function {:this id: zast.nodeid remaining: u32 owned: u32} out u32 is {
+    visitSwap: function {:this id: zast.nodeid} out u32 is {
         n: this.node :id
         xs: ListVal u32
         match (
             n
         ) case swapstmt then {
-            xs.append (this.visitValueB id: n.lhs slot: slotTight wrapped: false :remaining :owned)
+            xs.append (this.visitValue id: n.lhs slot: slotTight wrapped: false)
             xs.append this.idSpace
             xs.append (this.tok tt: zlexer.toktype.swapTok)
             xs.append this.idSpace
@@ -1187,43 +1132,14 @@ Builder: class {
         return (this.d.concat xs)
     }
 
-    # wrappedValue -- a value whose context adds `synthetic` wrappers: bare,
-    # a binary operation gets parentheses the printer inserts only when it
-    # breaks; a call carries its own; anything else prints as it is
-    wrappedValue: function {:this id: zast.nodeid slot: u8 synthetic: u32} out u32 is {
-        inner: this.innerOf :id
-        bare: this.outerIsBare :id :synthetic
-        if bare when (this.isBinop id: inner) then {
-            body: this.visitValue :id :slot wrapped: true
-            empty: (gapdocs
-                trailing: 0
-                lead: 0
-                dangling: 0
-                blanks: 0
-                marker: false
-                hasComment: false
-            )
-            return (this.parenGroup
-                :body
-                open: (this.d.ifBreak brk: this.idOpen flat: 0)
-                close: (this.d.ifBreak brk: this.idClose flat: 0)
-                marker: false
-                before: empty
-                after: empty
-                callShape: false
-            )
-        }
-        return (this.visitValue :id :slot wrapped: false)
-    }
-
     # rhsValue -- the value of a binding or a reassignment
     rhsValue: function {:this id: zast.nodeid} out u32 is {
-        return (this.wrappedValue :id slot: slotLine synthetic: 1)
+        return (this.visitValue :id slot: slotLine wrapped: false)
     }
 
     # condValue -- a condition, which its context never wraps
     condValue: function {:this id: zast.nodeid} out u32 is {
-        return (this.wrappedValue :id slot: slotClause synthetic: 0)
+        return (this.visitValue :id slot: slotClause wrapped: false)
     }
 
     # ---- statements ----
@@ -1561,56 +1477,48 @@ Builder: class {
     # parentheses are layout only, and written when it needs them; a call
     # keeps its callable on the opener's line
     matchSubject: function {:this xs: ListVal u32 id: zast.nodeid} is {
-        k: this.spineCount :id
-        p: this.c.parenRun
-        subj: this.node :id
-        if p == 0 then {
-            core: this.visitValue :id slot: slotClause wrapped: true
-            xs.append (this.d.ifBreak brk: this.idOpen flat: 0)
-            mid: ListVal u32
-            mid.append this.idSoft
-            mid.append core
-            xs.append (this.d.indent (this.d.concat mid))
-            xs.append this.idSoft
-            xs.append (this.d.ifBreak brk: this.idClose flat: 0)
-            return
+        entry: this.c.openParens
+        opened: u32
+        for (this.peekIs tt: zlexer.toktype.parenOpenTok) loop {
+            this.skipTok tt: zlexer.toktype.parenOpenTok
+            opened = opened + 1
         }
-        inner: zast.nodeid
-        match (
-            subj
-        ) case expression then {
-            inner = subj.expression
-        } else {
-            this.c.note msg: "a parenthesis the tree does not hold".string
-            return
-        }
-        if p > k then {
-            this.c.note msg: "more parentheses than the tree holds".string
-            p = k
-        }
-        removable: (this.parensRequired :inner slot: slotClause).not
+        this.c.openParens = this.c.openParens + opened
+        mine: entry + opened
+        inner: this.innerOf :id
+        needed: this.parensRequired :inner slot: slotClause
         innerNode: this.node id: inner
         isCall: innerNode.call
-        this.skipTok tt: zlexer.toktype.parenOpenTok
-        g: this.gapDocs cap: 0
+        g: emptyGap
+        if opened > 0 then g = this.gapDocs cap: 0
         core: u32
         if isCall then {
-            core = this.visitCall id: inner inParens: true remaining: k - 1 owned: p - 1
+            core = this.visitCall id: inner inParens: true
         } else {
-            core = (this.visitValueB
-                id: inner
-                slot: slotClause
-                wrapped: true
-                remaining: k - 1
-                owned: p - 1
-            )
+            core = this.visitValueArm id: inner wrapped: true
         }
-        h: this.gapDocs cap: 0
-        this.skipTok tt: zlexer.toktype.parenCloseTok
-        if removable when isCall.not then {
-            xs.append (this.d.ifBreak brk: this.idOpen flat: 0)
-        } else {
+        # A closer is consumed by whichever value ENDS where it sits, which is
+        # not always the value that skipped the opener: in
+        # `out (Result (Box u64) E: IoError)` the last argument ends at the
+        # closer and takes it. So by the time this level exits, its own opener
+        # can be gone -- and asking for a gap then scans PAST the closer and
+        # swallows what follows, which is the next member's doc comment. Ask
+        # only while the opener is still standing.
+        stolen: this.c.openParens < mine
+        willClose: false
+        if this.c.openParens > 0 then willClose = this.peekIs tt: zlexer.toktype.parenCloseTok
+        takeH: opened > 0
+        if takeH.not then takeH = willClose
+        if stolen then takeH = false
+        h: emptyGap
+        if takeH then h = this.gapDocs cap: 0
+        this.closeParens
+        hard: needed
+        if isCall then hard = true
+        if hard then {
             xs.append this.idOpen
+        } else {
+            xs.append (this.d.ifBreak brk: this.idOpen flat: 0)
         }
         if g.marker when this.keepMarkers then xs.append this.idBreak
         if g.trailing > 0 then xs.append g.trailing
@@ -1625,10 +1533,10 @@ Builder: class {
         }
         xs.append (this.d.indent (this.d.concat mid))
         xs.append this.idSoft
-        if removable when isCall.not then {
-            xs.append (this.d.ifBreak brk: this.idClose flat: 0)
-        } else {
+        if hard then {
             xs.append this.idClose
+        } else {
+            xs.append (this.d.ifBreak brk: this.idClose flat: 0)
         }
     }
 
@@ -2058,6 +1966,12 @@ Builder: class {
             return 0
         }
     }
+}
+
+# emptyGap -- a gap carrying nothing, for a position whose trivia belongs to
+# someone else
+emptyGap: function out gapdocs is {
+    return (gapdocs trailing: 0 lead: 0 dangling: 0 blanks: 0 marker: false hasComment: false)
 }
 
 # capped -- `n` no higher than `cap`
