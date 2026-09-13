@@ -1,0 +1,130 @@
+# A WRITE TO A NARROWED NAME WRITES THE WHOLE VARIABLE. Inside a narrowing the
+# bare name reads as the arm's payload; a reassignment or a swap of that name
+# replaces the whole union or variant, and every read after it -- in the same
+# block, after the nested scope that wrote, after the loop that wrote -- reads
+# the whole value again. Each shape below emitted C that assigned a union to
+# its payload, or read a replaced value through the payload's alias. The last
+# binds unions to a payload-less arm and then writes a payload into them, by
+# reassignment and by swap, which must still be freed.
+U: union {
+    some: String
+    none: null
+}
+
+V: variant {
+    num: i64
+    nothing: null
+}
+
+show: function {label: StringView o: U.borrow} is {
+    match (
+        o
+    ) case some then print "\{label}: some \{o}" case none then print "\{label}: none"
+}
+
+inArm: function is {
+    o: U.some "first".string
+    match (
+        o
+    ) case some then {
+        n: o.length
+        print "arm read before write: \{n}"
+        o = U.none
+    } case none then null
+    show label: "arm reassign" :o
+}
+
+swapInArm: function is {
+    o: U.some "held".string
+    spare: U.none
+    match (
+        o
+    ) case some then {
+        o swap spare
+    } case none then null
+    show label: "arm swap o" :o
+    show label: "arm swap spare" o: spare
+}
+
+inPredicate: function is {
+    o: U.some "pred".string
+    if o.some then {
+        print "predicate read: \{o}"
+        o = U.some "replaced".string
+    }
+    show label: "predicate reassign" :o
+}
+
+afterGuard: function {o: U.take} is {
+    if o.none then return
+    print "guard read: \{o}"
+    spare: U.some "swapped in".string
+    o swap spare
+    show label: "guard swap o" :o
+    show label: "guard swap spare" o: spare
+}
+
+nestedWrite: function {flip: bool} is {
+    o: U.some "nested".string
+    match (
+        o
+    ) case some then {
+        if flip then {
+            o = U.none
+        } else {
+            print "else still reads the payload: \{o}"
+        }
+        show label: "after nested write" :o
+    } case none then null
+}
+
+loopWrite: function is {
+    o: U.some "loop".string
+    k: 0
+    match (
+        o
+    ) case some then {
+        for k < 2 loop {
+            show label: "loop iteration" :o
+            o = U.none
+            k = k + 1
+        }
+    } case none then null
+    show label: "after loop" :o
+}
+
+variantArm: function is {
+    v: V.num 5
+    w: V.nothing
+    match (
+        v
+    ) case num then {
+        print "variant read: \{v}"
+        v = w
+    } case nothing then null
+    match (
+        v
+    ) case num then print "variant after: num" case nothing then print "variant after: nothing"
+}
+
+payloadIntoNone: function is {
+    e: U.none
+    e = U.some "now owned".string
+    show label: "payload into none" o: e
+    f: U.none
+    g: U.some "swapped into none".string
+    f swap g
+    show label: "swap into none" o: f
+}
+
+main: function is {
+    inArm
+    swapInArm
+    inPredicate
+    afterGuard o: (U.some "guarded".string)
+    nestedWrite flip: true
+    nestedWrite flip: false
+    loopWrite
+    variantArm
+    payloadIntoNone
+}

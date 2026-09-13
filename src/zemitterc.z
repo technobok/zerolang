@@ -173,14 +173,14 @@ atomVidIfPlain: function {
     ) case atomid then {
         at: zast.nameTextAt :ast ref: n.name
         atomVarId: atomVid :symtab nid: n.nodeid.u64
-        ae: emitLocalAtomName :ctx name: at.stringView vid: atomVarId
+        ae: emitLocalAtomNameAt :symtab :ctx nid: n.nodeid.u64 name: at.stringView vid: atomVarId
         if ae.stringView != text then return (ztypes.vid.create from: 0)
         return atomVarId
     } case labelvalue then {
         # the `:name` shorthand names a binding just as a bare atom does
         lv: zast.nameTextAt :ast ref: n.name
         lvv: atomVid :symtab nid: n.nodeid.u64
-        le: emitLocalAtomName :ctx name: lv.stringView vid: lvv
+        le: emitLocalAtomNameAt :symtab :ctx nid: n.nodeid.u64 name: lv.stringView vid: lvv
         if le.stringView != text then return (ztypes.vid.create from: 0)
         return lvv
     } case dottedpath then {
@@ -190,7 +190,8 @@ atomVidIfPlain: function {
         db: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: dbn)
         if db.length == 0 then return (ztypes.vid.create from: 0)
         dbv: atomVid :symtab nid: (atomNodeId n: dbn)
-        de: emitLocalAtomName :ctx name: db.stringView vid: dbv
+        dbn9: (atomNodeId n: dbn).u64
+        de: emitLocalAtomNameAt :symtab :ctx nid: dbn9 name: db.stringView vid: dbv
         if de.stringView != text then return (ztypes.vid.create from: 0)
         return dbv
     } else {
@@ -3329,13 +3330,15 @@ pathIsPointer: function {
         anP: ast.names.texts.get i: n.name.u64
         rnV0: atomVid :symtab nid: n.nodeid.u64
         rnv: ztypes.vid
-        if (aliasResolvesToSelf :ctx name: anP.stringView vid: rnV0) then rnv = rnV0
+        selfA: aliasResolvesToSelfAt :symtab :ctx nid: n.nodeid.u64 name: anP.stringView vid: rnV0
+        if selfA then rnv = rnV0
         return (isPtrVid :ctx vid: rnv)
     } case labelvalue then {
         lnP: ast.names.texts.get i: n.name.u64
         rlnV0: atomVid :symtab nid: n.nodeid.u64
         rlv: ztypes.vid
-        if (aliasResolvesToSelf :ctx name: lnP.stringView vid: rlnV0) then rlv = rlnV0
+        selfL: aliasResolvesToSelfAt :symtab :ctx nid: n.nodeid.u64 name: lnP.stringView vid: rlnV0
+        if selfL then rlv = rlnV0
         return (isPtrVid :ctx vid: rlv)
     } case call then {
         # a reference-returning call yields `T*`. The arm narrows `n` to
@@ -4540,7 +4543,7 @@ svArgAddr: function {
         ) then return "".string
         # A String arg to a StringLike param projects to a by-value view.
         anV: atomVid :symtab nid: n.nodeid.u64
-        anE: emitLocalAtomName :ctx name: an vid: anV
+        anE: emitLocalAtomNameAt :symtab :ctx nid: n.nodeid.u64 name: an vid: anV
         if (stampIsStr :symtab :ctx nid: n.nodeid.u64) then {
             svs: svValueForm :ctx expr: anE.stringView isStr: true vid: anV
             a2s: "&\{svs}"
@@ -4560,7 +4563,7 @@ svArgAddr: function {
             tid: (stampIdOf :symtab nid: n.nodeid.u64)
         ) then return "".string
         anlV: atomVid :symtab nid: n.nodeid.u64
-        anlE: emitLocalAtomName :ctx name: anl vid: anlV
+        anlE: emitLocalAtomNameAt :symtab :ctx nid: n.nodeid.u64 name: anl vid: anlV
         if (stampIsStr :symtab :ctx nid: n.nodeid.u64) then {
             svl: svValueForm :ctx expr: anlE.stringView isStr: true vid: anlV
             a2ls: "&\{svl}"
@@ -5095,9 +5098,9 @@ emitDottedCall: function {
         # in scope substitutes for it, and then no variable is being read -- so
         # the pointer question below has nothing to ask about.
         baseVid: atomVid :symtab nid: bnid
-        bnA: aliasResolve :ctx name: bn0 vid: baseVid
+        bnA: aliasResolveAt :symtab :ctx nid: bnid.u64 name: bn0 vid: baseVid
         if bnA.stringView == bn0 then dcbV = atomVid :symtab nid: bnid
-        bn = emitLocalAtomName :ctx name: bn0 vid: baseVid
+        bn = emitLocalAtomNameAt :symtab :ctx nid: bnid.u64 name: bn0 vid: baseVid
     }
     btIsStr: btid == ctx.strTid
     bnv: bn.stringView
@@ -11240,6 +11243,77 @@ emitLocalAtomName: function {ctx: Ctx.view name: StringView vid: ztypes.vid} out
     return (varCName :ctx :vid :name)
 }
 
+# narrowingEndedAt -- whether the read at `nid` sees the WHOLE local although a
+# narrowing aliases its name to a payload: a write ended the narrowing before
+# this read -- in this block, in a scope nested before it, in the loop around
+# it -- and the checker stamped the read with the local's declared type. The
+# alias stays for the reads the narrowing still covers, and each read is told
+# apart by its own stamp, so the emitter never has to re-derive where a
+# narrowing ends.
+narrowingEndedAt: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    nid: u64
+    vid: ztypes.vid
+} out bool is {
+    if (vvHas xs: ctx.narrowBox :vid).not then return false
+    stamped: stampIdOf :symtab :nid
+    if stamped.isZero then return false
+    return stamped == (symtab.reg.variableTypeOf id: vid)
+}
+
+# wholeLocalName -- the local's own storage: a take alias where one stands,
+# never the payload a narrowing aliased it to.
+wholeLocalName: function {ctx: Ctx.view name: StringView vid: ztypes.vid} out String is {
+    al: vvFind xs: ctx.aliases :vid
+    if al > 0 then return (ctx.aliases.get i: al - 1).val.copy
+    return (varCName :ctx :vid :name)
+}
+
+# emitLocalAtomNameAt -- emitLocalAtomName for the read at `nid`, which sees the
+# whole local once a write ended its narrowing.
+emitLocalAtomNameAt: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    nid: u64
+    name: StringView
+    vid: ztypes.vid
+} out String is {
+    if (narrowingEndedAt :symtab :ctx :nid :vid) then return (wholeLocalName :ctx :name :vid)
+    return (emitLocalAtomName :ctx :name :vid)
+}
+
+# aliasResolveAt -- aliasResolve for the read at `nid`: past a narrowing a
+# write ended, only a take alias substitutes for the name.
+aliasResolveAt: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    nid: u64
+    name: StringView
+    vid: ztypes.vid
+} out String is {
+    if (narrowingEndedAt :symtab :ctx :nid :vid).not then return (aliasResolve :ctx :name :vid)
+    al: vvFind xs: ctx.aliases :vid
+    if al > 0 then return (ctx.aliases.get i: al - 1).val.copy
+    return name.string
+}
+
+# aliasResolvesToSelfAt -- aliasResolvesToSelf for the read at `nid`.
+aliasResolvesToSelfAt: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    nid: u64
+    name: StringView
+    vid: ztypes.vid
+} out bool is {
+    if (narrowingEndedAt :symtab :ctx :nid :vid).not then {
+        return (aliasResolvesToSelf :ctx :name :vid)
+    }
+    al: vvFind xs: ctx.aliases :vid
+    if al == 0 then return true
+    return (ctx.aliases.get i: al - 1).val.stringView == name
+}
+
 # emitDataMember -- a data block's element read through `n`, whose base is the
 # block `dbt`: a label (`codes.ht`), an ordinal (`primes.0`), `.length`, or
 # `.array` (the whole block copied into an array temp). "" for any other member.
@@ -11525,6 +11599,9 @@ emitAtom: function {
     match (
         avo
     ) case some then {
+        if (narrowingEndedAt :symtab :ctx nid: n.nodeid.u64 vid: avo) then {
+            return (wholeLocalName :ctx name: av vid: avo)
+        }
         return (emitLocalAtomName :ctx name: av vid: avo)
     } case none then null
     # a name written inside a namespace resolves against that namespace
@@ -11598,7 +11675,13 @@ emitAtom: function {
     ) case some then {
         if iso == ctx.strTid then return (emitExprStrZero :ctx)
     } case none then null
-    return (emitLocalAtomName :ctx name: av vid: (atomVid :symtab nid: n.nodeid.u64))
+    return (emitLocalAtomNameAt
+        :symtab
+        :ctx
+        nid: n.nodeid.u64
+        name: av
+        vid: (atomVid :symtab nid: n.nodeid.u64)
+    )
 }
 
 # emitNestedStringViewBase -- `.stringView` on a nested String/StringView base
@@ -13530,8 +13613,9 @@ emitDottedRead: function {
     )
     if dtg.length > 0 then return dtg
     bn2r: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
-    baseAtomVid: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent.u64))
-    bn2a: aliasResolve :ctx name: bn2r.stringView vid: baseAtomVid
+    baseAtomNid: (atomNodeId n: (ast.nodes.get i: n.parent.u64)).u64
+    baseAtomVid: atomVid :symtab nid: baseAtomNid
+    bn2a: aliasResolveAt :symtab :ctx nid: baseAtomNid name: bn2r.stringView vid: baseAtomVid
     # the receiver's variable, for the pointer-access checks below. An alias
     # substitution means the base binding is not what is being read, so the
     # vid stays 0 and bn2 becomes the substituted text.
@@ -13539,7 +13623,7 @@ emitDottedRead: function {
     if bn2a.stringView == bn2r then {
         bn2v = atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent.u64))
     }
-    bn2: emitLocalAtomName :ctx name: bn2r.stringView vid: baseAtomVid
+    bn2: emitLocalAtomNameAt :symtab :ctx nid: baseAtomNid name: bn2r.stringView vid: baseAtomVid
     # a base atom that names a FUNCTION auto-calls, so the receiver is what the
     # call returns (`mkList.length`), not a local to address: it takes the legs
     # a call base takes, exactly as the parenthesised `(mkList).length` does
@@ -13635,7 +13719,7 @@ emitExpr: function {
     } case labelvalue then {
         lvC: ast.names.texts.get i: n.name.u64
         lvv: atomVid :symtab nid: n.nodeid.u64
-        return (emitLocalAtomName :ctx name: lvC.stringView vid: lvv)
+        return (emitLocalAtomNameAt :symtab :ctx nid: n.nodeid.u64 name: lvC.stringView vid: lvv)
     } case dottedpath then {
         return (emitDottedRead :ast :symtab :ctx :n)
     } case atomstring then {
@@ -14671,12 +14755,12 @@ emitPrintAtom: function {
     anC: zast.nameTextAt :ast ref: n.name
     an: anC.stringView
     anmV0: atomVid :symtab nid: n.nodeid.u64
-    anm: aliasResolve :ctx name: an vid: anmV0
+    anm: aliasResolveAt :symtab :ctx nid: n.nodeid.u64 name: an vid: anmV0
     anv: ztypes.vid
     if anm.stringView == an then anv = anmV0
     # anm stays the SOURCE name (the alias/narrow lookups key on it); anmE
     # is what reaches the C
-    anmE: emitLocalAtomName :ctx name: an vid: anmV0
+    anmE: emitLocalAtomNameAt :symtab :ctx nid: n.nodeid.u64 name: an vid: anmV0
     # a unit string CONSTANT reaching print by name. emitExpr answers for a
     # constant on its own first line; print resolves atoms itself and never
     # goes through it, so without this the NAME reaches the C undeclared.
@@ -16799,7 +16883,12 @@ registerScopeDestroy: function {
     # the block's pending-cleanup lists
     tmp: TmpCtr
 } is {
-    if (bindingRhsIsBorrow :ast :symtab :ctx n: valueNode) then return
+    if (bindingRhsIsBorrow :ast :symtab :ctx n: valueNode) then {
+        # an arm named as a value CONSTRUCTS its tag and holds nothing, so it
+        # owes nothing -- until a write gives the local a payload to free
+        if (valueIsArmTag :symtab n: valueNode).not then return
+        if (symtab.typing.variableRebound.has item: nameVid).not then return
+    }
     if tid == ctx.strTid then {
         tmp.oweFree name: nm.string vid: nameVid
         return
@@ -16816,6 +16905,16 @@ registerScopeDestroy: function {
     if (isBoxTid :symtab :tid) then dref = nm.string
     df: "    \{dcb}_destroy(\{dref});\n"
     tmp.oweList stmt: df.copy name: nm.string vid: nameVid
+}
+
+# valueIsArmTag -- the value names a sum type's arm (`U.none`): the checker
+# resolved the path to the arm's declaration.
+valueIsArmTag: function {symtab: zenv.ZSymbolTable.view n: astnode.view} out bool is {
+    if n.dottedpath.not then return false
+    ad: (symtab.typing.refDecl.get key: n.nodeid.u64).or d: ztypes.declid
+    if ad.isZero then return false
+    ado: symtab.typing.decls.get i: ad.u64
+    return ado.kind.armDecl
 }
 
 # emitWithLocal -- the header's C local for a `with` value that lives in the
@@ -17430,10 +17529,11 @@ emitReassignLvalue: function {
             name: memFp.stringView
         ) then {
             recvFp: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
-            rfv: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent.u64))
+            rfn: (atomNodeId n: (ast.nodes.get i: n.parent.u64)).u64
+            rfv: atomVid :symtab nid: rfn
             accFpL: ".".string
             if (isPtrVid :ctx vid: rfv) then accFpL = "->".string
-            recvFpC: emitLocalAtomName :ctx name: recvFp.stringView vid: rfv
+            recvFpC: emitLocalAtomNameAt :symtab :ctx nid: rfn name: recvFp.stringView vid: rfv
             memFpP: memberCPrefix name: memFp.stringView
             return "\{recvFpC}\{accFpL}\{memFpP}\{memFp}"
         }
@@ -17710,12 +17810,7 @@ matchElseNarrowing: function {
         }
     }
     if remME == 1 then {
-        mre: false
-        if m.elseclause > 0 then {
-            mec: ast.nodes.get i: m.elseclause.u64
-            mre = bodyReassigns :ast n: mec name: sname
-        }
-        if mre.not then {
+        {
             mrecv: "_m\{mN}"
             # the residual arm's text is spelled into the alias: one copy, here
             armMET: zast.poolTextAt pool: ast.names ref: armME
@@ -18229,6 +18324,21 @@ emitMatchClause: function {
                     co
                 ) case some then {
                     vtSet xs: ctx.narrowTid vid: snameVid tid: (ztypes.tid.create from: co.u64)
+                } case none then null
+                didSeed = true
+            } else if (bodyReassigns :ast n: (ast.nodes.get i: c.statement.u64) name: sname) then {
+                # a body that WRITES the subject must reach the variable, which a
+                # shadowing local of the same C name would hide: the payload is
+                # aliased instead, and each read picks the alias or the variable
+                # by its stamp
+                armMV: memberCPrefix name: arm
+                nbvV: "_m\{mN}.data.\{armMV}\{arm}"
+                vvSet xs: ctx.narrowBox vid: snameVid val: nbvV.stringView
+                cov: symtab.typing.declChildOf pool: ast.names parentTypeId: vtid name: arm
+                match (
+                    cov
+                ) case some then {
+                    vtSet xs: ctx.narrowTid vid: snameVid tid: (ztypes.tid.create from: cov.u64)
                 } case none then null
                 didSeed = true
             } else {
@@ -19631,6 +19741,10 @@ bodyReassigns: function {ast: Ast.view n: astnode.view name: StringView} out boo
         tpn: ast.nodes.get i: n.topath.u64
         rb: atomTextOf :ast n: tpn
         return rb == name
+    } case swapstmt then {
+        sl: atomTextOf :ast n: (ast.nodes.get i: n.lhs.u64)
+        sr: atomTextOf :ast n: (ast.nodes.get i: n.rhs.u64)
+        return sl == name or (sr == name)
     } case ifexpr then {
         hif: false
         clx1049: u64
@@ -19679,7 +19793,6 @@ seedFromPredicate: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: astnode.view
-    body: astnode.view
     names: List String
     svids: ListVal ztypes.vid
     vals: List String
@@ -19697,7 +19810,6 @@ seedFromPredicate: function {
             tid: tid92
             parent: (ast.nodes.get i: n.parent.u64)
             childName: arm0.stringView
-            :body
             :names
             :svids
             :vals
@@ -19715,7 +19827,6 @@ seedPositiveCore: function {
     tid: ztypes.tid
     parent: astnode.view
     childName: StringView
-    body: astnode.view
     names: List String
     svids: ListVal ztypes.vid
     vals: List String
@@ -19725,7 +19836,6 @@ seedPositiveCore: function {
     if (isOrdinalVariant :symtab :tid) then return
     subj: atomTextOf :ast n: parent
     if subj.length == 0 then return
-    if (bodyReassigns :ast n: body name: subj) then return
     recvText: emitExpr :ast :symtab :ctx n: parent
     accessOp: ".".string
     if (isPtrVid
@@ -19763,7 +19873,6 @@ seedNegatedFromPredicate: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     n: astnode.view
-    body: astnode.view
     names: List String
     svids: ListVal ztypes.vid
     vals: List String
@@ -19788,7 +19897,6 @@ seedNegatedFromPredicate: function {
             extra: ctorArmName.stringView
         )
         if rem.length == 0 then return
-        if (bodyReassigns :ast n: body name: subj) then return
         recvText: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
         accessOp: ".".string
         if (isPtrVid :ctx vid: snv) then accessOp = "->".string
@@ -19888,7 +19996,6 @@ seedEqualityCond: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     n: astnode.view
-    body: astnode.view
     names: List String
     svids: ListVal ztypes.vid
     vals: List String
@@ -19905,22 +20012,22 @@ seedEqualityCond: function {
     rsdS: boolArmSideOf :symtab n: (ast.nodes.get i: ipS.rhs.u64)
     if rsdS.truthy then {
         blS: ast.nodes.get i: ipS.lhs.u64
-        seedFromPredicate :ast :symtab :ctx n: blS :body :names :svids :vals :tids
+        seedFromPredicate :ast :symtab :ctx n: blS :names :svids :vals :tids
         return true
     }
     if rsdS.falsy then {
         lnS: ast.nodes.get i: ipS.lhs.u64
-        seedNegatedFromPredicate :ast :symtab :ctx n: lnS :body :names :svids :vals :tids
+        seedNegatedFromPredicate :ast :symtab :ctx n: lnS :names :svids :vals :tids
         return true
     }
     if lsdS.truthy then {
         brS: ast.nodes.get i: ipS.rhs.u64
-        seedFromPredicate :ast :symtab :ctx n: brS :body :names :svids :vals :tids
+        seedFromPredicate :ast :symtab :ctx n: brS :names :svids :vals :tids
         return true
     }
     if lsdS.falsy then {
         rnS: ast.nodes.get i: ipS.rhs.u64
-        seedNegatedFromPredicate :ast :symtab :ctx n: rnS :body :names :svids :vals :tids
+        seedNegatedFromPredicate :ast :symtab :ctx n: rnS :names :svids :vals :tids
         return true
     }
     return false
@@ -19933,7 +20040,6 @@ seedCondOp: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     n: astnode.view
-    body: astnode.view
     names: List String
     svids: ListVal ztypes.vid
     vals: List String
@@ -19953,7 +20059,6 @@ seedCondOp: function {
                 tid: tid93
                 parent: n
                 childName: an0.stringView
-                :body
                 :names
                 :svids
                 :vals
@@ -19962,7 +20067,7 @@ seedCondOp: function {
             return
         }
     }
-    if (seedEqualityCond :ast :symtab :ctx :n :body :names :svids :vals :tids) then return
+    if (seedEqualityCond :ast :symtab :ctx :n :names :svids :vals :tids) then return
     match (
         n
     ) case dottedpath then {
@@ -19980,12 +20085,12 @@ seedCondOp: function {
         )
         if sd.truthy then {
             dpp: ast.nodes.get i: n.parent.u64
-            seedFromPredicate :ast :symtab :ctx n: dpp :body :names :svids :vals :tids
+            seedFromPredicate :ast :symtab :ctx n: dpp :names :svids :vals :tids
             return
         }
         if sd.falsy then {
             dpq: ast.nodes.get i: n.parent.u64
-            seedNegatedFromPredicate :ast :symtab :ctx n: dpq :body :names :svids :vals :tids
+            seedNegatedFromPredicate :ast :symtab :ctx n: dpq :names :svids :vals :tids
             return
         }
         tid94: ztypes.tid.create from: (dottedArmPredicateTid :symtab nid: n.nodeid.u64)
@@ -19996,7 +20101,6 @@ seedCondOp: function {
             tid: tid94
             parent: (ast.nodes.get i: n.parent.u64)
             childName: cn.stringView
-            :body
             :names
             :svids
             :vals
@@ -20013,7 +20117,6 @@ seedCondOne: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     condId: u32
-    bodyId: zast.nodeid
     names: List String
     svids: ListVal ztypes.vid
     vals: List String
@@ -20026,7 +20129,6 @@ seedCondOne: function {
             :symtab
             :ctx
             n: (ast.nodes.get i: k.operation.u64)
-            body: (ast.nodes.get i: bodyId.u64)
             :names
             :svids
             :vals
@@ -20044,7 +20146,6 @@ seedAndLayerCond: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     condId: u32
-    bodyId: zast.nodeid
     names: List String
     svids: ListVal ztypes.vid
     vals: List String
@@ -20058,7 +20159,6 @@ seedAndLayerCond: function {
         :symtab
         :ctx
         :condId
-        :bodyId
         :names
         :svids
         :vals
@@ -20173,13 +20273,11 @@ ifPredicateSeeds: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     conds: zast.kidspan
-    bodyId: zast.nodeid
     names: List String
     svids: ListVal ztypes.vid
     vals: List String
     tids: ListVal u64
 } is {
-    body: ast.nodes.get i: bodyId.u64
     h2x9: u64
     for h2x9 < conds.count.u64 loop {
         k9Id: zast.kidAt kids: ast.kids span: conds i: h2x9
@@ -20191,7 +20289,6 @@ ifPredicateSeeds: function {
                 :symtab
                 :ctx
                 n: (ast.nodes.get i: k.operation.u64)
-                :body
                 :names
                 :svids
                 :vals
@@ -20910,7 +21007,6 @@ emitIfClause: function {
                 :symtab
                 :ctx
                 conds: n.conditions
-                bodyId: n.statement
                 names: sN
                 svids: sVid
                 vals: sV
@@ -20937,7 +21033,6 @@ emitIfClause: function {
                     :symtab
                     :ctx
                     condId: kId
-                    bodyId: n.statement
                     names: sN
                     svids: sVid
                     vals: sV
@@ -21032,13 +21127,11 @@ negatedChainArm: function {
 
 # seedElseSubject -- alias one chain subject to the arm the else side leaves it
 # with: the arm a negated fact named, or the single arm the exclusions leave.
-# Seeds nothing when the body reassigns the name -- the alias would go stale --
-# or when the arm carries no payload to alias.
+# Seeds nothing when the arm carries no payload to alias.
 seedElseSubject: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    body: astnode.view
     subj: StringView
     subjVid: ztypes.vid
     owner: ztypes.tid
@@ -21056,7 +21149,6 @@ seedElseSubject: function {
         fArm = rr
     }
     if fArm.length == 0 then return
-    if (bodyReassigns :ast n: body name: subj) then return
     acc: ".".string
     if (isPtrVid :ctx vid: subjVid) then acc = "->".string
     aliasText: (armAliasText
@@ -21088,7 +21180,6 @@ seedElseNarrows: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    body: astnode.view
     subjects: (List String).view
     chVids: (ListVal ztypes.vid).view
     arms: (List String).view
@@ -21114,7 +21205,6 @@ seedElseNarrows: function {
                 :ast
                 :symtab
                 :ctx
-                :body
                 subj: gs.stringView
                 subjVid: gv
                 owner: (ztypes.tid.create from: (tids.get i: gi))
@@ -21168,7 +21258,6 @@ emitElse: function {
         :ast
         :symtab
         :ctx
-        body: o
         subjects: chSubjects
         chVids: chSubjectVids
         arms: chArms
@@ -21514,34 +21603,6 @@ postGuardStmtId: function {
     }
 }
 
-# endReassignedAliases -- a statement that reassigns a seeded name stales its
-# alias, so put the narrowing back before that statement is emitted and mark the
-# seed dead, which is what stops the block's own restore from putting it back
-# a second time.
-endReassignedAliases: function {
-    ast: Ast.view
-    ctx: Ctx
-    n: astnode.view
-    names: (List String).view
-    svids: (ListVal ztypes.vid).view
-    prevV: (List String).view
-    prevT: (ListVal u64).view
-    dead: IdSet ztypes.vid
-} is {
-    ri: u64
-    for ri < names.length loop {
-        rn: names.get i: ri
-        rnv0: svids.get i: ri
-        if (dead.has item: rnv0).not when (bodyReassigns :ast :n name: rn.stringView) then {
-            rv: prevV.get i: ri
-            rt: prevT.get i: ri
-            restoreNarrow :ctx vid: rnv0 prevVal: rv.stringView prevTid: rt
-            dead.add item: rnv0
-        }
-        ri = ri + 1
-    }
-}
-
 # seedPostGuardAlias -- a guard statement that returns on the failing arm leaves
 # its subject narrowed for everything after it, so alias the subject to that
 # arm's payload for the rest of the block. The alias text is emitted C, so the
@@ -21601,23 +21662,20 @@ seedPostGuardAlias: function {
 }
 
 # restoreBlockAliases -- put back the narrowings the block's post-guard seeds
-# displaced, newest first, skipping the ones a reassignment already ended.
+# displaced, newest first. A write inside the block does not end a seed early:
+# each read after it is told apart by its own stamp.
 restoreBlockAliases: function {
     ctx: Ctx
     svids: (ListVal ztypes.vid).view
     prevV: (List String).view
     prevT: (ListVal u64).view
-    dead: IdSet ztypes.vid
 } is {
     zi: svids.length
     for zi > 0 loop {
         zi = zi - 1
-        znv: svids.get i: zi
-        if (dead.has item: znv).not then {
-            zv: prevV.get i: zi
-            zt: prevT.get i: zi
-            restoreNarrow :ctx vid: znv prevVal: zv.stringView prevTid: zt
-        }
+        zv: prevV.get i: zi
+        zt: prevT.get i: zi
+        restoreNarrow :ctx vid: (svids.get i: zi) prevVal: zv.stringView prevTid: zt
     }
 }
 
@@ -21640,22 +21698,11 @@ emitStatementBlock: function {
     pgVid: ListVal ztypes.vid
     pgPrevV: List String
     pgPrevT: ListVal u64
-    pgDead: IdSet ztypes.vid
     i: u64
     nst: stmts.count.u64
     for i < nst loop {
         s9Id: zast.kidAt kids: ast.kids span: stmts :i
         s: ast.nodes.get i: s9Id.u64
-        (endReassignedAliases
-            :ast
-            :ctx
-            n: s
-            names: pgN
-            svids: pgVid
-            prevV: pgPrevV
-            prevT: pgPrevT
-            dead: pgDead
-        )
         tailNow: false
         if trTail when i + 1 == nst then tailNow = true
         handled: false
@@ -21690,7 +21737,6 @@ emitStatementBlock: function {
         svids: pgVid
         prevV: pgPrevV
         prevT: pgPrevT
-        dead: pgDead
     )
 }
 
@@ -31113,10 +31159,10 @@ emitFileMethodCall: function {
         if fcc.length > 0 then fc = fcc
     }
     recvV0: atomVid :symtab nid: bnid
-    recv: aliasResolve :ctx name: bn vid: recvV0
+    recv: aliasResolveAt :symtab :ctx nid: bnid.u64 name: bn vid: recvV0
     recvV: ztypes.vid
     if recv.stringView == bn then recvV = recvV0
-    recvC: emitLocalAtomName :ctx name: bn vid: recvV0
+    recvC: emitLocalAtomNameAt :symtab :ctx nid: bnid.u64 name: bn vid: recvV0
     recvExpr: "&\{recvC}"
     if (isPtrVid :ctx vid: recvV) then recvExpr = recvC
     isNet: false
@@ -31247,13 +31293,13 @@ wrapperCreateArg: function {
                         n: (ast.nodes.get i: a.operation.u64)
                     ).u64
                     abrV0: atomVid :symtab nid: abnid
-                    abr: aliasResolve :ctx name: ab vid: abrV0
+                    abr: aliasResolveAt :symtab :ctx nid: abnid.u64 name: ab vid: abrV0
                     abtid: stampIdOf :symtab nid: abnid
                     abcb: ctxCname :ctx tid: abtid
                     ablab: conformanceLabelFor :symtab implTid: abtid protoTid: prtid
                     abv: ztypes.vid
                     if abr.stringView == ab then abv = atomVid :symtab nid: abnid
-                    abrC: emitLocalAtomName :ctx name: ab vid: abrV0
+                    abrC: emitLocalAtomNameAt :symtab :ctx nid: abnid.u64 name: ab vid: abrV0
                     abpfx: "&".string
                     if (isPtrVid :ctx vid: abv) then abpfx = "".string
                     return "\{abcb}_\{ablab}_create(\{abpfx}\{abrC})"
@@ -31264,11 +31310,12 @@ wrapperCreateArg: function {
                 ) then {
                     a2op: ast.nodes.get i: a.operation.u64
                     ab2: argBaseAtom :ast n: a2op
-                    argBaseVid: atomVid :symtab nid: (argBaseNodeId :ast n: a2op).u64
-                    abr2: aliasResolve :ctx name: ab2 vid: argBaseVid
+                    abn2: (argBaseNodeId :ast n: a2op).u64
+                    argBaseVid: atomVid :symtab nid: abn2
+                    abr2: aliasResolveAt :symtab :ctx nid: abn2 name: ab2 vid: argBaseVid
                     ab2v: ztypes.vid
                     if abr2.stringView == ab2 then ab2v = argBaseVid
-                    abr2C: emitLocalAtomName :ctx name: ab2 vid: argBaseVid
+                    abr2C: emitLocalAtomNameAt :symtab :ctx nid: abn2 name: ab2 vid: argBaseVid
                     ab2pfx: "&".string
                     if (isPtrVid :ctx vid: ab2v) then ab2pfx = "".string
                     return "\{ab2pfx}\{abr2C}"
@@ -31831,10 +31878,10 @@ emitParsedMethodCall: function {
     if pcn.stringView != "Parsed" then return "".string
     pc: ctxCname :ctx tid: (ztypes.tid.create from: pid.u64)
     recvV0: atomVid :symtab nid: bnid
-    recv: aliasResolve :ctx name: bn vid: recvV0
+    recv: aliasResolveAt :symtab :ctx nid: bnid.u64 name: bn vid: recvV0
     recvV: ztypes.vid
     if recv.stringView == bn then recvV = recvV0
-    recvC: emitLocalAtomName :ctx name: bn vid: recvV0
+    recvC: emitLocalAtomNameAt :symtab :ctx nid: bnid.u64 name: bn vid: recvV0
     recvExpr: "&\{recvC}"
     if (isPtrVid :ctx vid: recvV) then recvExpr = recvC
     needsAddM :ctx uname: "cli" memb: "@unit"
@@ -31886,7 +31933,7 @@ iterCallValueArg: function {
     vbnid: (argBaseNodeId :ast n: vop).u64
     if (isReftypeParam :ast :symtab :ctx tid: (stampIdOf :symtab nid: vbnid)).not then return ve
     valueBaseVid: atomVid :symtab nid: vbnid
-    vbr: aliasResolve :ctx name: vbase vid: valueBaseVid
+    vbr: aliasResolveAt :symtab :ctx nid: vbnid name: vbase vid: valueBaseVid
     vbv: ztypes.vid
     if vbr.stringView == vbase then vbv = valueBaseVid
     if (isPtrVid :ctx vid: vbv) then return ve
@@ -31918,10 +31965,10 @@ emitUserIterCall: function {
     if cco.none then return "".string
     callC: ctxCname :ctx tid: (ztypes.tid.create from: cco.u64)
     recvVid: atomVid :symtab nid: bnid
-    recvText: aliasResolve :ctx name: bn vid: recvVid
+    recvText: aliasResolveAt :symtab :ctx nid: bnid.u64 name: bn vid: recvVid
     recvV: ztypes.vid
     if recvText.stringView == bn then recvV = recvVid
-    recvC: emitLocalAtomName :ctx name: bn vid: recvVid
+    recvC: emitLocalAtomNameAt :symtab :ctx nid: bnid.u64 name: bn vid: recvVid
     recvExpr: "&\{recvC}"
     if (isPtrVid :ctx vid: recvV) then recvExpr = recvC
     # `.call` takes at most ONE argument -- the per-call input -- so the first

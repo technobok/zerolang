@@ -25234,6 +25234,18 @@ checkNarrowedTargetWrite: function {
 } is {
     nmId: atomNameId :ast n: (ast.nodes.get i: rasgn.topath.u64)
     if nmId.isZero then return
+    markVarRebound :st nameId: nmId
+    # a narrowed name is written as its WHOLE declared type, and the emitter
+    # spells the write's temporary and the destroy of the old value from the
+    # target's stamp -- the payload's would assign a union to its payload
+    if (st.isShadowNarrowed nameId: nmId) then {
+        dto: st.declaredTypeOf nameId: nmId
+        match (
+            dto
+        ) case some then {
+            stampGate :st nid: rasgn.topath.u64 tid: dto
+        } case none then null
+    }
     st.endNarrowingByWrite nameId: nmId
     (refuseBorrowedWrite
         :st
@@ -25627,7 +25639,9 @@ checkSwapSide: function {
 # resetSwapNarrowing -- a swap writes a bare name, so narrowing on it ends.
 resetSwapNarrowing: function {st: zenv.ZSymbolTable ast: Ast.view side: zast.nodeid} is {
     nmId: atomNameId :ast n: (ast.nodes.get i: side.u64)
-    if nmId.isZero.not then st.endNarrowingByWrite nameId: nmId
+    if nmId.isZero then return
+    markVarRebound :st nameId: nmId
+    st.endNarrowingByWrite nameId: nmId
 }
 
 # swapTypesAgree -- the two sides of a swap hold one type: the same type, or a
@@ -27693,6 +27707,14 @@ markVarMutated: function {st: zenv.ZSymbolTable nameId: zast.nameid} is {
         mk: vo
         st.typing.variableMutated.add item: mk
     } case none then null
+}
+
+# markVarRebound -- record that a reassignment or a swap rebinds the variable
+# `nameId` names.
+markVarRebound: function {st: zenv.ZSymbolTable nameId: zast.nameid} is {
+    vo: st.lookupVarId :nameId
+    if vo.none then return
+    st.typing.variableRebound.add item: vo
 }
 
 # lockCallArg -- the call-scoped lock a parameter or receiver takes on its

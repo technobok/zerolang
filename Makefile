@@ -799,7 +799,11 @@ perf: $(PERFBIN)
 # walked while something is narrowed, the quick question of whether the loop
 # writes a narrowed name at all -- and the rest is the input, the compiler's own
 # source being 346 lines longer.
-ALLOC_BASELINE := 2508295
+#
+# +3,487 when the emitter started writing a narrowed name as the whole variable:
+# over the old source the new compiler allocates 20 more, and the rest is the
+# input, the compiler's own source being 74 lines longer.
+ALLOC_BASELINE := 2511782
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
