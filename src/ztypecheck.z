@@ -3262,7 +3262,6 @@ resolveMonoRefParts: function {
                 monoId: memberIdAt
                 templateId: (ztypes.tid.create from: tplId.u64)
                 elemArg: firstA
-                valArg: ztypes.tid
             )
         }
         if nid > 0 then {
@@ -9935,16 +9934,10 @@ resolveClassMethodDecl: function {
                 prodM4 = true
             } else {
                 # Flipped collection families resolve their native
-                # method decls like user template methods. create is
-                # special-cased; length/capacity stay field children
-                # (their C surface is a struct read, not a method).
+                # method decls like user template methods; create is
+                # special-cased.
                 if unitDecl == st.typing.collectionsUnitRoot then {
-                    prodSkipL: (
-                        fm.name ==
-                        zast.names.wkCreate or
-                        (fm.name == zast.names.wkLength) or
-                        (fm.name == zast.names.wkCapacity)
-                    )
+                    prodSkipL: fm.name == zast.names.wkCreate
                     if prodSkipL.not then prodM4 = true
                 }
             }
@@ -10698,12 +10691,7 @@ resolveClassAsMethods: function {
             if isgen then {
                 if fnNativeP4 then {
                     if unitDecl == st.typing.collectionsUnitRoot then {
-                        skipA4: (
-                            amP4.name ==
-                            zast.names.wkCreate or
-                            (amP4.name == zast.names.wkLength) or
-                            (amP4.name == zast.names.wkCapacity)
-                        )
+                        skipA4: amP4.name == zast.names.wkCreate
                         if skipA4.not then prodA4 = true
                     }
                 } else {
@@ -18337,9 +18325,9 @@ completeSpecChildren: function {
     # a trie-keyed concrete specialization mints its chain family and
     # collection children here with def-order args; name-keyed mints
     # (sized records, empty-subs chains) keep their caller-side
-    # invocations, which carry the elem/val ids this path cannot derive
+    # invocations, which carry the elem id this path cannot derive
     # elem = the first TYPE key (a sized record's leading value key is
-    # not an element); val = the second key only when it is a type
+    # not an element)
     elemTid: u64
     ei3: u64
     en3: keys8.length
@@ -18347,10 +18335,6 @@ completeSpecChildren: function {
         if elemTid == 0 when (keyIsVal8.get i: ei3).not then elemTid = keys8.get i: ei3
         ei3 = ei3 + 1
     }
-    valC3: ztypes.tid
-    if keys8.length > 1 when (keyIsVal8.get i: 1).not then valC3 = (ztypes.tid.create
-        from: (keys8.get i: 1)
-    )
     {
         (mintCollectionChildren
             :st
@@ -18359,7 +18343,6 @@ completeSpecChildren: function {
             monoId: (ztypes.tid.create from: mid8.u64)
             :templateId
             elemArg: elemTid
-            valArg: (ztypes.tid.create from: valC3.u64)
         )
     }
 }
@@ -18806,7 +18789,6 @@ mintEntryAndSizedChildren: function {
     monoId: ztypes.tid
     templateId: ztypes.tid
     elemArg: u64
-    u64id: u64
 } is {
     strTid: builtinTidT :st frame: rf :ast base: "str"
     arrayTid: builtinTidT :st frame: rf :ast base: "array"
@@ -18824,7 +18806,6 @@ mintEntryAndSizedChildren: function {
         st.reg.setReturnType typeId: (ztypes.tid.create from: agId.u64) value: elemArg
         asId: mintCollectionMethod :st :ast :monoId m: "set"
         st.reg.setReturnType typeId: (ztypes.tid.create from: asId.u64) value: elemArg
-        st.typing.setMemberType parentTypeId: monoId nameId: zast.names.wkLength childTypeId: u64id
         mintCollectionMethod :st :ast :monoId m: "create"
         aeqId: mintCollectionMethod :st :ast :monoId m: "=="
         st.reg.setReturnType typeId: (ztypes.tid.create from: aeqId.u64) value: boolid
@@ -18832,8 +18813,6 @@ mintEntryAndSizedChildren: function {
         st.reg.setReturnType typeId: (ztypes.tid.create from: aneId.u64) value: boolid
     }
     if templateId == strTid then {
-        st.typing.setMemberType parentTypeId: monoId nameId: zast.names.wkLength childTypeId: u64id
-        st.typing.setMemberType parentTypeId: monoId nameId: zast.names.wkSize childTypeId: u64id
         tstId: mintCollectionMethod :st :ast :monoId m: "string"
         sgid: (builtinTidT :st frame: rf :ast base: "String").u64
         if sgid > 0 then (st.reg.setReturnType
@@ -18939,114 +18918,31 @@ templateIsCollection: function {
     return isColl
 }
 
-# mintCounterFields -- stamp a collection mono's `length`, and for the forms
-# that have one its `capacity`, with the canonical u64. Every collection family
-# below wants the same pair, so the pair is written once.
-mintCounterFields: function {
-    st: zenv.ZSymbolTable
-    monoId: ztypes.tid
-    u64id: u64
-    withCapacity: bool
-} is {
-    (st.typing.setMemberType
-        parentTypeId: monoId
-        nameId: zast.names.wkLength
-        childTypeId: u64id
-    )
-    if withCapacity then {
-        (st.typing.setMemberType
-            parentTypeId: monoId
-            nameId: zast.names.wkCapacity
-            childTypeId: u64id
-        )
-    }
-}
-
-# mintCollectionCounters -- the members a collection instance needs that its
-# template's own methods do not supply: the length/capacity counters (the
-# canonical u64) and the `create` child. Every other member is produced and
+# mintCollectionCreate -- the `create` child a ListView, Set or iterator
+# instance needs, once per mono: its template's `create` is not produced. Every
+# other member -- the `length`/`capacity` counters included -- is produced and
 # cloned from the template, its composite returns healed by respecialize.
-mintCollectionCounters: function {
+mintCollectionCreate: function {
     ast: Ast
     st: zenv.ZSymbolTable
     rf: ztypes.declid
     monoId: ztypes.tid
     templateId: ztypes.tid
-    valArg: ztypes.tid
-    u64id: u64
     isIter: bool
 } is {
     listViewTid: builtinTidT :st frame: rf :ast base: "ListView"
     listViewValTid: builtinTidT :st frame: rf :ast base: "ListViewVal"
     setTid: builtinTidT :st frame: rf :ast base: "SetRef"
     setValTid: builtinTidT :st frame: rf :ast base: "SetVal"
-    mapTid: builtinTidT :st frame: rf :ast base: "MapRR"
-    mapRVTid: builtinTidT :st frame: rf :ast base: "MapRV"
-    mapVRTid: builtinTidT :st frame: rf :ast base: "MapVR"
-    mapVVTid: builtinTidT :st frame: rf :ast base: "MapVV"
-    idMapRTid: builtinTidT :st frame: rf :ast base: "IdMapR"
-    idMapVTid: builtinTidT :st frame: rf :ast base: "IdMapV"
-    idSetTid: builtinTidT :st frame: rf :ast base: "IdSet"
-    # ListView children come from the produced template method (get); the
-    # length field (the canonical u64) and the create child materialize here,
-    # once per mono (post-memo: this arm mints).
     isLViewTpl: templateId == listViewTid or (templateId == listViewValTid)
-    if isLViewTpl then {
-        mintCounterFields :st :monoId :u64id withCapacity: false
-        mintCollectionMethod :st :ast :monoId m: "create"
-        return
-    }
-    # Set children come from the produced template methods (returns healed
-    # by respecialize); the length/capacity fields (the canonical u64) and
-    # the create child materialize here, once per mono.
     isSetTpl: templateId == setTid or (templateId == setValTid)
-    if isSetTpl then {
-        mintCounterFields :st :monoId :u64id withCapacity: true
-        mintCollectionMethod :st :ast :monoId m: "create"
-        return
-    }
-    # Iterator families: call is produced+cloned (its OptionView return
-    # healed by respecialize); only the create child mints here, once per
-    # mono.
-    if isIter then {
-        mintCollectionMethod :st :ast :monoId m: "create"
-        return
-    }
-    # Every Map form declares its real returns -- an `optionval` for a valtype
-    # value, an `OptionView`/`Option` for a reference one -- so the clone pass
-    # heals get/remove like any other composite return and only the
-    # length/capacity fields materialize here.
-    isMapTpl: (
-        templateId ==
-        mapTid or
-        (templateId == mapRVTid) or
-        (templateId == mapVRTid) or
-        (templateId == mapVVTid)
-    )
-    if isMapTpl when valArg > 0 then {
-        mintCounterFields :st :monoId :u64id withCapacity: true
-        return
-    }
-    # the id-keyed pair, for the same reason the Map forms are here: their
-    # real returns are declared and the clone pass heals them, so only the
-    # length/capacity counters need their canonical u64 stamped on the mono.
-    # IdSet has no value parameter, so it is tested on its own.
-    isIdMapTpl: templateId == idMapRTid or (templateId == idMapVTid)
-    if isIdMapTpl when valArg > 0 then {
-        mintCounterFields :st :monoId :u64id withCapacity: true
-        return
-    }
-    if templateId == idSetTid then {
-        mintCounterFields :st :monoId :u64id withCapacity: true
-        return
-    }
+    if isLViewTpl or isSetTpl or isIter then mintCollectionMethod :st :ast :monoId m: "create"
 }
 
 
 # mintCollectionChildren -- the per-instance collection children the
-# produced templates cannot express: length/capacity u64 value children,
-# the create child (except List and Map, which have their own create
-# paths), the Map get/remove value-kind wrapper returns, MapEntry's
+# produced templates cannot express: the create child (except List and Map,
+# which have their own create paths), the Map get/remove value-kind wrapper returns, MapEntry's
 # key/value accessors, and the sized str/array member tables. Method
 # signatures and composite returns come from the cloned template methods
 # (healed by respecialize). No-op for other templates or when the
@@ -19058,7 +18954,6 @@ mintCollectionChildren: function {
     monoId: ztypes.tid
     templateId: ztypes.tid
     elemArg: u64
-    valArg: ztypes.tid
 } is {
     # a specialisation's members resolve in the TEMPLATE's frame, with the
     # argument substitution -- lexical scoping; the instantiating unit is
@@ -19076,28 +18971,10 @@ mintCollectionChildren: function {
     listValTid: builtinTidT :st frame: rf :ast base: "ListVal"
     strTid: builtinTidT :st frame: rf :ast base: "str"
     arrayTid: builtinTidT :st frame: rf :ast base: "array"
-    # List children come from the produced template methods cloned per
-    # instance (composite returns healed by respecialize); only the
-    # length/capacity u64 children materialize here. Runs on every naming.
+    # every List child comes from the produced template methods cloned per
+    # instance (composite returns healed by respecialize)
     isListTpl: templateId == listTid or (templateId == listValTid)
-    if isListTpl then {
-        # system's u64, whichever unit instantiates the collection: a user
-        # unit may shadow the name
-        u64L: (builtinTidT :st frame: rf :ast base: "u64").u64
-        if u64L > 0 then {
-            (st.typing.setMemberType
-                parentTypeId: monoId
-                nameId: zast.names.wkLength
-                childTypeId: u64L
-            )
-            (st.typing.setMemberType
-                parentTypeId: monoId
-                nameId: zast.names.wkCapacity
-                childTypeId: u64L
-            )
-        }
-        return
-    }
+    if isListTpl then return
     # One build per instance: a spec can reach this arm from several mint
     # paths, and the str/array rebuild below would mint fresh member types
     # per invocation (their instances copy template children at mint time,
@@ -19105,25 +18982,7 @@ mintCollectionChildren: function {
     if (st.typing.collectionChildrenBuilt.has item: monoId) then return
     bk0: monoId
     st.typing.collectionChildrenBuilt.add item: bk0
-    u64id: (declareCanonicalType
-        :st
-        frame: rf
-        :ast
-        unitDecl: st.typing.systemUnitRoot
-        ownerNameId: zast.nameid
-        name: "u64"
-        typetype: ztypes.ztypetype.recordType
-    )
-    (mintCollectionCounters
-        :ast
-        :st
-        :rf
-        :monoId
-        :templateId
-        :valArg
-        :u64id
-        :isIter
-    )
+    mintCollectionCreate :ast :st :rf :monoId :templateId :isIter
     isSized: (
         templateId ==
         strTid or
@@ -19136,8 +18995,7 @@ mintCollectionChildren: function {
             # produce+clone has nothing to substitute. Their templates resolve from source (record
             # attachMethods runs regardless of genericity) and copy their children
             # at mint time; the branches below REPLACE the value-dependent members
-            # in place (setMemberType keeps positions) -- fresh const-clone size fields,
-            # element-typed get/set returns, String-returning string, and the ==/!=
+            # in place (setMemberType keeps positions) -- element-typed get/set returns, String-returning string, and the ==/!=
             # that resolveRecord and mintMono both skip for sized records. The
             # emitter builds the structs from the z_str/z_array tmpls by name-parsed
             # size and reads only the == child's presence. The dedup guard below
@@ -19152,7 +19010,6 @@ mintCollectionChildren: function {
         :monoId
         :templateId
         :elemArg
-        :u64id
     )
 }
 
@@ -19948,7 +19805,6 @@ genericTypeConstruction: function {
             monoId: mid
             templateId: (ztypes.tid.create from: tplId.u64)
             elemArg: firstA
-            valArg: ztypes.tid
         )
     }
     # Only a bare-atom callable restamps to the instance; a dotted callable
@@ -22185,7 +22041,6 @@ checkDataBlockMember: function {
                             monoId: amid
                             templateId: (ztypes.tid.create from: ato.u64)
                             elemArg: elo
-                            valArg: ztypes.tid
                         )
                         setar: amid
                         stampGate :st nid: dp.nid.u64 tid: setar
@@ -22537,21 +22392,6 @@ checkResolvedMember: function {
         :coerce
     )
     if prleg.handled then return prleg.tid
-    # A member DECLARED as a method but materialised as a plain scalar --
-    # a collection's `length`/`capacity`, which emit as a struct field read
-    # -- resolves to its RETURN type, so everything keyed on "is this a
-    # method?" skipped it, the auto-call receiver lock included. It is still
-    # a call, and collapsing is only sound for a READ of the receiver, so it
-    # takes the SHARED lock a reader takes. Without this `xs.length` inside
-    # an exclusively-pinned iteration was accepted while `xs.contains item:
-    # x` beside it was refused -- both readers, and under the locking model
-    # a reader takes SHARED for its duration.
-    if coerce when (
-        (st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)) !=
-        ztypes.ztypetype.functionType
-    ) when (st.typing.declIsMethodId parentTypeId: bt nameId: cnId) then {
-        lockAutoCallReceiver :ast :st :dp shared: true
-    }
     # A field READ of a path another variable holds an EXCLUSIVE pin on (the
     # `.borrow` input of an `outx` result) is refused: read through the holder
     # instead. Asked of the OUTERMOST path only (a base walk sets
@@ -22561,7 +22401,7 @@ checkResolvedMember: function {
     if st.typing.inAssignTarget.not when st.typing.suppressBareCtor.not when (
         (st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)) !=
         ztypes.ztypetype.functionType
-    ) when (st.typing.declIsMethodId parentTypeId: bt nameId: cnId).not then {
+    ) then {
         argVal: false
         if dp.nid.u64 == st.typing.callArgNode when (typeIsReftype
             :st

@@ -807,7 +807,12 @@ perf: $(PERFBIN)
 # +1,153 when a container construction's arguments became `create`'s: over the
 # old source the new compiler allocates 27 more (the call walk the arguments now
 # take), and the rest is the input, 70 more source lines.
-ALLOC_BASELINE := 2512935
+#
+# +10,403 when a container's `length`, `capacity` and `size` became methods in the
+# type model: over the old source the new compiler allocates 11,774 more -- each
+# container mono's counters are produced and cloned from the template's
+# declarations where a u64 was stamped -- and the input allocates 1,371 fewer.
+ALLOC_BASELINE := 2523338
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

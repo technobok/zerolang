@@ -11730,17 +11730,55 @@ emitNestedStringViewBase: function {
     return "".string
 }
 
+# nestedCounterRead -- a container's `length` or `capacity` reached through a
+# FIELD. The counters are METHODS that read a field of the runtime's struct, so
+# they lower to that read wherever the receiver came from, as the atom legs do.
+# An array's length is its size parameter, which the struct does not store: the
+# mono's `_length` constant spells it. "" for any other member.
+nestedCounterRead: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    mnId: zast.nameid
+    nlid: ztypes.tid
+    baseAtom: StringView
+    recvIsPtr: bool
+} out String is {
+    isLength: mnId == zast.names.wkLength
+    if isLength when (originIsTid :symtab tid: nlid originTid: (ctx.origins.get i: ogArray)) then {
+        acnb: ctxCname :ctx tid: nlid
+        return "\{acnb}_length"
+    }
+    isCounted: (
+        (isListOriginOf :symtab :ctx tid: nlid) or
+        (isListViewOriginOf :symtab :ctx tid: nlid) or
+        (isSetOriginOf :symtab :ctx tid: nlid) or
+        (isMapOriginOf :symtab :ctx tid: nlid) or
+        (isIdCollectionOriginOf :symtab :ctx tid: nlid)
+    )
+    if isCounted.not then return "".string
+    accN: ".".string
+    if recvIsPtr then accN = "->".string
+    if isLength then return "\{baseAtom}\{accN}length"
+    if mnId == zast.names.wkCapacity then return "\{baseAtom}\{accN}capacity"
+    return "".string
+}
+
 # emitNestedCollectionBase -- a str or collection mono reached through a FIELD.
 # Set and Map are heap pointers and pass directly; the id-keyed pair are stack
-# structs and go by address.
+# structs and go by address. `recvIsPtr` is whether the base expression is
+# already a pointer, which picks the accessor a counter reads through.
 emitNestedCollectionBase: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     mn2: StringView
+    mnId: zast.nameid
     nlid: ztypes.tid
     baseAtom: StringView
     bs9vid: ztypes.vid
+    recvIsPtr: bool
 } out String is {
+    eCt: nestedCounterRead :symtab :ctx :mnId :nlid :baseAtom :recvIsPtr
+    if eCt.length > 0 then return eCt
     if (originIsTid :symtab tid: nlid originTid: (ctx.origins.get i: ogStr)) then {
         nstrcb: ctxCname :ctx tid: nlid
         if mn2 == "length" then return "\{baseAtom}.len"
@@ -11949,13 +11987,19 @@ emitDottedNestedBase: function {
     nlid: monoStampIdOf :symtab :ctx nid: nnid9.u64
     if nlid.isZero then nlid = stampIdOf :symtab nid: nnid9
     nlid = ztypes.tid.create from: (chaseColMono :symtab :ctx tid: nlid)
+    # a Map/Set-typed base is a heap pointer regardless of how it was
+    # reached (a field path fails pathIsPointer's lock-field test)
+    nstPtr: pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
+    if nstPtr.not then nstPtr = isHeapPtrCollection :symtab :ctx tid: nlid
     eCo: (emitNestedCollectionBase
         :symtab
         :ctx
         :mn2
+        mnId: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
         :nlid
         baseAtom: baseAtom.stringView
         :bs9vid
+        recvIsPtr: nstPtr
     )
     if eCo.length > 0 then return eCo
     eMo: (emitNestedMonoMethodBase
@@ -11969,8 +12013,6 @@ emitDottedNestedBase: function {
         :bs9vid
     )
     if eMo.length > 0 then return eMo
-    # a Map/Set-typed base is a heap pointer regardless of how it was
-    # reached (a field path fails pathIsPointer's lock-field test)
     nsumT: symtab.reg.typetypeOf typeId: nlid
     isSum9: nsumT == ztypes.ztypetype.variantType or (nsumT == ztypes.ztypetype.unionType)
     if isSum9 then {
@@ -11985,8 +12027,6 @@ emitDottedNestedBase: function {
         )
         if eSmN.length > 0 then return eSmN
     }
-    nstPtr: pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
-    if nstPtr.not then nstPtr = isHeapPtrCollection :symtab :ctx tid: nlid
     mnNbP: memberCPrefix name: mn2
     if nstPtr then {
         ep: "\{baseAtom}->\{mnNbP}\{mn2}"
