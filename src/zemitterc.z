@@ -11834,6 +11834,10 @@ emitNestedMonoMethodBase: function {
     baseAtom: StringView
     bs9vid: ztypes.vid
 } out String is {
+    readIsRef: (
+        (symtab.reg.typetypeOf typeId: (stampIdOf :symtab nid: n.nodeid.u64)) ==
+        ztypes.ztypetype.functionType
+    )
     if nlid > 0 then {
         nrtt: symtab.reg.typetypeOf typeId: nlid
         # a protocol/facet-typed base reached through a FIELD dispatches
@@ -11855,6 +11859,35 @@ emitNestedMonoMethodBase: function {
             )
         }
         nDisp: nrtt == ztypes.ztypetype.classType or (nrtt == ztypes.ztypetype.recordType)
+        # a FUNCTION FIELD is the instance's own slot: a read calls through it
+        # (or, stamped as the field's function, is the field), never the
+        # function the declaration wrote as its default
+        if nDisp when (symtab.typing.declIsFnptrField pool: ast.names parentTypeId: nlid name: mn2
+        ) then {
+            if readIsRef then return "".string
+            nfbase: baseAtom.string
+            nfacc: ".".string
+            nfrcv: "&\{baseAtom}"
+            if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)) then {
+                nfacc = "->".string
+                nfrcv = baseAtom.string
+            } else if (isNonLvalueArg s: baseAtom) then {
+                # a call's result is read through ONE hoisted temporary: the
+                # slot and the receiver it is handed are the same value
+                nfrcv = emitByrefArg :ast :symtab :ctx av: baseAtom pid: nlid isBorrow: false
+                nfbase = "(\{nfrcv})"
+                nfacc = "->".string
+            }
+            nfco: (symtab.typing.declChildOf pool: ast.names parentTypeId: nlid name: mn2).or d: 0
+            if (fnTypeTakesThis :symtab tid: (ztypes.tid.create from: nfco.u64)
+            ).not then nfrcv = "".string
+            return (fnptrSlotCallC
+                base: nfbase.stringView
+                acc: nfacc.stringView
+                mn: mn2
+                recv: nfrcv.stringView
+            )
+        }
         if nDisp then {
             nlidM: methodOwnerId :ast :symtab rtid: nlid mn: mn2
             nmco: (symtab.typing.declChildOf
@@ -12123,8 +12156,10 @@ methodAutoCallRead: function {
 }
 
 # fnptrFieldRead -- a read of a function-pointer field: off the type name it
-# is the field's function itself; a receiver-taking one is called through
-# the field with the base as its receiver.
+# is the field's function itself; otherwise the read is a CALL through the
+# field -- with the base as its receiver when the field declares one -- unless
+# the checker stamped the read as the field's function (`.take` of it), which
+# is the field itself.
 fnptrFieldRead: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -12133,18 +12168,37 @@ fnptrFieldRead: function {
     bn2v: ztypes.vid
     mco: u64
     fbtn: StringView
+    # the checker stamped this read as the field's function, so it is not called
+    readIsRef: bool
 } out String is {
     mcFp: ctxCname :ctx tid: (ztypes.tid.create from: mco.u64)
     if bn2v.isZero when bn2 == fbtn then return mcFp
-    if (fnTypeTakesThis :symtab tid: (ztypes.tid.create from: mco.u64)).not then return String
+    takesThis: fnTypeTakesThis :symtab tid: (ztypes.tid.create from: mco.u64)
+    if readIsRef when takesThis.not then return String
     accFp: ".".string
     rcvFp: "&\{bn2}"
     if (isPtrVid :ctx vid: bn2v) then {
         accFp = "->".string
         rcvFp = "\{bn2}"
     }
-    mnFpP: memberCPrefix name: mn2
-    return "\{bn2}\{accFp}\{mnFpP}\{mn2}(\{rcvFp})"
+    if takesThis.not then rcvFp = "".string
+    return (fnptrSlotCallC base: bn2 acc: accFp.stringView mn: mn2 recv: rcvFp.stringView)
+}
+
+# fnptrSlotCallC -- the C call through a function field: the field of `base`
+# called with its receiver `recv`, or with no argument when `recv` is empty.
+fnptrSlotCallC: function {
+    # the instance the field is read from
+    base: StringView
+    # `.` or `->`, as the base is a value or a pointer
+    acc: StringView
+    # the field's name
+    mn: StringView
+    # the receiver argument, empty for a field that takes none
+    recv: StringView
+} out String is {
+    pfx: memberCPrefix name: mn
+    return "\{base}\{acc}\{pfx}\{mn}(\{recv})"
 }
 
 # emitResolvedMemberRead -- the member resolved on the receiver's type: a protocol
@@ -12160,6 +12214,8 @@ emitResolvedMemberRead: function {
     bstamp: ztypes.tid
     mco: u64
     fbtn: StringView
+    # the read is the member's own function (a `.take` of it), not a call
+    readIsRef: bool
 } out String is {
     mtt: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: mco.u64)
     if mtt == ztypes.ztypetype.protocolType then {
@@ -12168,7 +12224,7 @@ emitResolvedMemberRead: function {
     }
     if (mtt == ztypes.ztypetype.functionType).not then return "".string
     if (symtab.typing.declIsFnptrField pool: ast.names parentTypeId: bstamp name: mn2) then {
-        return (fnptrFieldRead :symtab :ctx :mn2 :bn2 :bn2v :mco :fbtn)
+        return (fnptrFieldRead :symtab :ctx :mn2 :bn2 :bn2v :mco :fbtn :readIsRef)
     }
     return (methodAutoCallRead :ast :symtab :ctx :mn2 :bn2 :bn2v :bstamp :mco :fbtn)
 }
@@ -12214,6 +12270,7 @@ sumMemberMethodRead: function {
             :bstamp
             :mco
             fbtn: ""
+            readIsRef: false
         )
     } case none then null
     return "".string
@@ -12230,6 +12287,8 @@ emitUserTypeMemberRead: function {
     bn2: StringView
     bn2v: ztypes.vid
     bstamp: ztypes.tid
+    # handed to emitResolvedMemberRead: the read names the function, not its call
+    readIsRef: bool
 } out String is {
     fbtn: regNameView :symtab tid: bstamp
     if bstamp == ctx.strTid then {
@@ -12302,6 +12361,7 @@ emitUserTypeMemberRead: function {
             :bstamp
             :mco
             :fbtn
+            :readIsRef
         )
         if rmr.length > 0 then return rmr
     } case none then null
@@ -12756,6 +12816,8 @@ dottedAtomRecClsBase: function {
     bn2v: ztypes.vid
     bstamp: ztypes.tid
     rtt: ztypes.ztypetype
+    # handed to emitUserTypeMemberRead: whether the read is a function reference
+    readIsRef: bool
 } out String is {
     isRecOrCls: false
     # array/str monos are RECORD typetype but keep their own legs
@@ -12781,6 +12843,7 @@ dottedAtomRecClsBase: function {
             :bn2
             :bn2v
             :bstamp
+            :readIsRef
         )
         if utm.length > 0 then return utm
     }
@@ -12865,7 +12928,11 @@ emitDottedAtomBase: function {
             isFacet: rtt == ztypes.ztypetype.facetType
         )
     }
-    eRc: dottedAtomRecClsBase :ast :symtab :ctx :bn2 :mn2 :bn2v :bstamp :rtt
+    readIsRef: (
+        (symtab.reg.typetypeOf typeId: (stampIdOf :symtab nid: n.nodeid.u64)) ==
+        ztypes.ztypetype.functionType
+    )
+    eRc: dottedAtomRecClsBase :ast :symtab :ctx :bn2 :mn2 :bn2v :bstamp :rtt :readIsRef
     if eRc.length > 0 then return eRc
     # a UNION reads its payload through legs further down, but the question of
     # whether the member is a METHOD at all is the same one the variant leg asks
@@ -17575,11 +17642,20 @@ emitReassignLvalue: function {
             name: memFp.stringView
         ) then {
             recvFp: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
-            rfn: (atomNodeId n: (ast.nodes.get i: n.parent.u64)).u64
-            rfv: atomVid :symtab nid: rfn
             accFpL: ".".string
-            if (isPtrVid :ctx vid: rfv) then accFpL = "->".string
-            recvFpC: emitLocalAtomNameAt :symtab :ctx nid: rfn name: recvFp.stringView vid: rfv
+            recvFpC: String
+            if recvFp.length > 0 then {
+                rfn: (atomNodeId n: (ast.nodes.get i: n.parent.u64)).u64
+                rfv: atomVid :symtab nid: rfn
+                if (isPtrVid :ctx vid: rfv) then accFpL = "->".string
+                recvFpC = emitLocalAtomNameAt :symtab :ctx nid: rfn name: recvFp.stringView vid: rfv
+            } else {
+                # a field reached through a path (`this.inner.zero`): the path
+                # itself, through `->` when it resolves to a pointer
+                recvFpC = emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
+                if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
+                ) then accFpL = "->".string
+            }
             memFpP: memberCPrefix name: memFp.stringView
             return "\{recvFpC}\{accFpL}\{memFpP}\{memFp}"
         }

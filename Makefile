@@ -816,7 +816,12 @@ perf: $(PERFBIN)
 # +744 when a surplus unlabelled argument to a receiver-only method became an
 # error: over the same source the old and new compilers allocate identically, and
 # it is the input, the compiler's own source 29 lines longer.
-ALLOC_BASELINE := 2524082
+#
+# +4,412 when a function field became each instance's own writable slot and a
+# function value had to match the signature it fills: over the same source the
+# old and new compilers allocate identically, and it is the input, the
+# compiler's own source 169 lines longer.
+ALLOC_BASELINE := 2528494
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

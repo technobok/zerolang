@@ -1,0 +1,61 @@
+# A FUNCTION FIELD WRITTEN WITH A BODY IS STILL EACH INSTANCE'S OWN SLOT: the
+# body is only its default. The field is replaced on the instance -- through a
+# local, a field path or `this` -- and every read calls the instance's current
+# function, a field reached through another field included. All of these were
+# refused as "not an addressable location", and a read through a nested path
+# called the default rather than the slot.
+seven: function out i64 is {
+    return 7
+}
+
+mul: function {a: i64 b: i64} out i64 is {
+    return a * b
+}
+
+Inner: class {
+    zero: function out i64 is {
+        return 0
+    }
+}
+
+Meter: record {
+    op: function {a: i64 b: i64} out i64 is {
+        return a + b
+    }
+}
+
+Panel: class {
+    level: i64
+    inner: Inner
+    zero: function out i64 is {
+        return 1
+    }
+    base: function {t: this} out i64 is {
+        return t.level + 1
+    }
+    rewire: function {:this} is {
+        this.zero = seven.take
+        this.inner.zero = seven.take
+    }
+    total: function {:this} out i64 is {
+        return this.inner.zero + this.zero
+    }
+} as {
+    tenfold: function {t: this} out i64 is {
+        return t.level * 10
+    }
+}
+
+main: function is {
+    p: Panel level: 5 inner: (Inner)
+    before: p.zero
+    held: p.zero.take
+    print "\{before} \{p.base} \{p.inner.zero} \{p.total}"
+    p.base = Panel.tenfold
+    p.rewire
+    print "\{p.zero} \{p.base} \{p.inner.zero} \{p.total}"
+    m: Meter
+    print "\{m.op a: 3 b: 4}"
+    m.op = mul.take
+    print "\{m.op a: 3 b: 4}"
+}

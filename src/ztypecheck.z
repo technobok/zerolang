@@ -22409,13 +22409,21 @@ checkResolvedMember: function {
         ) then argVal = true
         if argVal.not then refuseReadUnderPin :st :ast :dp
     }
+    # A FUNCTION FIELD NAMED AS A WRITE TARGET is the slot, not a call of it:
+    # `h.zero = other.take` replaces the function, where auto-calling typed the
+    # target as the function's result. Asked of the OUTERMOST path only.
+    callIt: coerce
+    if st.typing.inAssignTarget when st.typing.suppressBareCtor.not when (st.typing.declIsFnptrFieldId
+        parentTypeId: bt
+        nameId: cnId
+    ) then callIt = false
     result = (checkMemberAutoCall
         :st
         :ast
         :dp
         :bt
         :mo
-        :coerce
+        coerce: callIt
         result0: result
     )
     # The THIRD value position for a bare function reference. checkUnitMemberValue
@@ -25075,7 +25083,14 @@ checkReassignedType: function {
             if lttR == ztypes.ztypetype.protocolType then skipR = true
             if lttR == ztypes.ztypetype.facetType then skipR = true
             if lttR == ztypes.ztypetype.genericParam then skipR = true
-            if lttR == ztypes.ztypetype.functionType then skipR = true
+            if lttR == ztypes.ztypetype.functionType when (functionSignaturesMatch
+                :ast
+                :st
+                a: rvt
+                b: chkT
+            ) then {
+                skipR = true
+            }
             tsoR: st.typing.typeofShell.get key: chkT
             if tsoR.some then skipR = true
             if skipR.not then {
@@ -25306,7 +25321,15 @@ checkReassignment: function {
     }
     checkWriteLock :st :ast n: (ast.nodes.get i: rasgn.topath.u64) verb: "assign to"
     errR0: st.typing.errors.length
-    rvt: checkMovedValueAt :st :unitDecl :ast nid: rasgn.value
+    # a FUNCTION-typed target takes a method REFERENCE, exactly as the same
+    # field's constructor argument does: its value walks without the
+    # value-position auto-call
+    rvt: ztypes.tid
+    if lvt > 0 when (st.reg.typetypeOf typeId: lvt) == ztypes.ztypetype.functionType then {
+        rvt = ztypes.tid.create from: (valueNoCoerceAt :st :unitDecl :ast nid: rasgn.value)
+    } else {
+        rvt = checkMovedValueAt :st :unitDecl :ast nid: rasgn.value
+    }
     # a value that resolved to nothing and raised nothing: an unresolvable
     # root name is an unknown reference, as at a binding
     if rvt.isZero when st.typing.errors.length == errR0 then {
@@ -25579,49 +25602,43 @@ isAddressableTarget: function {
             isLocal: st.isLocalName :nameId
             return isLocal
         }
-        isSlot: isNumericLiteralNameAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: childId.u64))
-        if isSlot.not then {
-            md: (st.typing.refDecl.get key: cur.u64).or d: ztypes.declid
-            if md.isZero then return false
-            isSlot = memberIsSlot :ast :st declId: md
-        }
-        if isSlot.not then return false
+        if (pathStepIsSlot :ast :st step: cur :childId isLeaf: cur == nid).not then return false
         cur = parentId
     }
     return false
 }
 
-# memberIsSlot -- whether a member declaration is storage an instance holds: a
-# field, or a function-pointer field -- a signature with no body, or a field
-# defaulting to a method, which the spec makes a swappable hook. A method
-# written with a body occupies a function slot in the emitted struct too, but
-# it is the type's code, not the instance's data, and is not written.
-memberIsSlot: function {
+# pathStepIsSlot -- one step of a write target's path names storage: an array
+# element (a numeric child), or a member that is a slot. A function field is
+# storage only as the path's LEAF: in the middle of one it is called, and its
+# result is a temporary.
+pathStepIsSlot: function {
     ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    step: zast.nodeid
+    childId: zast.nodeid
+    isLeaf: bool
+} out bool is {
+    if (isNumericLiteralNameAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: childId.u64))
+    ) then return true
+    md: (st.typing.refDecl.get key: step.u64).or d: ztypes.declid
+    if md.isZero then return false
+    if (memberIsSlot :st declId: md).not then return false
+    if isLeaf then return true
+    return (st.typing.decls.get i: md.u64).fnptrField.not
+}
+
+# memberIsSlot -- whether a member declaration is storage an instance holds: a
+# field, or a function field of the `is` section. A function field is each
+# instance's own slot whether or not it is written with a body -- the body is
+# only its default -- so it can be replaced on the instance with a function of
+# the same signature.
+memberIsSlot: function {
     st: zenv.ZSymbolTable.view
     declId: ztypes.declid
 } out bool is {
-    isField: false
-    isFnptr: false
-    dnode: u32
-    {
-        mo: st.typing.decls.get i: declId.u64
-        isField = mo.kind.fieldDecl
-        isFnptr = mo.fnptrField
-        dnode = mo.node
-    }
-    if isField then return true
-    if isFnptr.not then return false
-    if dnode == 0 then return true
-    hasBody: false
-    {
-        dn: ast.nodes.get i: dnode.u64
-        if dn.namedoperation then {
-            op: ast.nodes.get i: dn.operation.u64
-            if op.functiondef when op.body.isZero.not then hasBody = true
-        }
-    }
-    return hasBody.not
+    mo: st.typing.decls.get i: declId.u64
+    return mo.kind.fieldDecl or mo.fnptrField
 }
 
 # reportNotAddressable -- the E0100 for a write target that names no storage.
@@ -29630,13 +29647,103 @@ argMismatchSkipped: function {
         tid: (ztypes.tid.create from: ptid.u64)
     ) then return true
     ptt: st.reg.typetypeOf typeId: (ztypes.tid.create from: ptid.u64)
+    if ptt == ztypes.ztypetype.functionType then {
+        return (functionSignaturesMatch :ast :st a: vt b: (ztypes.tid.create from: ptid.u64))
+    }
     return (
         ptt ==
         ztypes.ztypetype.protocolType or
         (ptt == ztypes.ztypetype.facetType) or
-        (ptt == ztypes.ztypetype.genericParam) or
-        (ptt == ztypes.ztypetype.functionType)
+        (ptt == ztypes.ztypetype.genericParam)
     )
+}
+
+# functionSignaturesMatch -- a function value `a` fits a place typed by the
+# function type `b`: the same parameters in order, with the same names, types and
+# ownership, and the same return. Specs and functions are structurally typed, so
+# this is the whole of the rule; it was not asked at all, and a function of any
+# signature stored in a function field or passed for a function parameter
+# reached the C as an incompatible pointer. A generic parameter on either side
+# matches, as it does wherever types are compared before instantiation.
+functionSignaturesMatch: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    a: ztypes.tid
+    b: ztypes.tid
+} out bool is {
+    if a == b then return true
+    if (st.reg.typetypeOf typeId: a) != ztypes.ztypetype.functionType then return false
+    an: ListVal u64
+    at: ListVal u64
+    bn: ListVal u64
+    bt: ListVal u64
+    collectParamRows :st fnTid: a names: an tids: at
+    collectParamRows :st fnTid: b names: bn tids: bt
+    if an.length != bn.length then return false
+    i: u64
+    for i < an.length loop {
+        if (an.get :i) != (bn.get :i) then return false
+        if (paramTypesMatch
+            :ast
+            :st
+            a: (ztypes.tid.create from: (at.get :i))
+            b: (ztypes.tid.create from: (bt.get :i))
+        ).not then {
+            return false
+        }
+        pnm: zast.nameid.create from: (an.get :i).u32.orPanic
+        ao: st.typing.declOwnershipOfId parentTypeId: a nameId: pnm
+        bo: st.typing.declOwnershipOfId parentTypeId: b nameId: pnm
+        if ao != bo then return false
+        i = i + 1
+    }
+    ar: methodReturnOf :st mid: a
+    br: methodReturnOf :st mid: b
+    if ar.none != br.none then return false
+    match (
+        ar
+    ) case some then {
+        match (
+            br
+        ) case some then {
+            return (paramTypesMatch :ast :st a: ar b: br)
+        } case none then null
+    } case none then null
+    return true
+}
+
+# collectParamRows -- a function type's parameters in declaration order: their
+# interned names and resolved types.
+collectParamRows: function {
+    st: zenv.ZSymbolTable
+    fnTid: ztypes.tid
+    names: ListVal u64
+    tids: ListVal u64
+} is {
+    ns: st.typing.declRowSlots ownerTid: fnTid
+    k: u64
+    for k < ns loop {
+        row: st.typing.declRowAt ownerTid: fnTid membersOnly: true slot: k
+        k = k + 1
+        if row.keep then {
+            names.append row.name
+            tids.append row.tid
+        }
+    }
+}
+
+# paramTypesMatch -- two types in matching signature positions agree: the same
+# type, a generic parameter on either side, or compatible either way round.
+paramTypesMatch: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    a: ztypes.tid
+    b: ztypes.tid
+} out bool is {
+    if a == b then return true
+    if (st.reg.typetypeOf typeId: a) == ztypes.ztypetype.genericParam then return true
+    if (st.reg.typetypeOf typeId: b) == ztypes.ztypetype.genericParam then return true
+    return (typesCompatible :ast :st :a :b)
 }
 
 # argLiteralLexeme -- the numeric lexeme an argument is written as, or "" when
