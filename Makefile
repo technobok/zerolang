@@ -782,7 +782,12 @@ perf: $(PERFBIN)
 # it is the INPUT: over the same source the old and new compilers differ by 6
 # allocations, while the compiler's own source is 933 lines shorter. The bytes
 # fall 5.2 MB, 3.3 MB of it the compiler's own over that same source.
-ALLOC_BASELINE := 2457732
+#
+# +12,966 when a unit-level constant expression that does not fold became a
+# refusal, and it is the INPUT: over the same source (and the same argv[0]) the
+# old and new compilers allocate identically, while the compiler's own source is
+# 528 lines longer -- the walk that says why a constant has no value.
+ALLOC_BASELINE := 2470698
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

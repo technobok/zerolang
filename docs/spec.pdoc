@@ -5975,6 +5975,19 @@ folds to the #~"bool" it always means. An expression the compiler cannot
 evaluate in constant position is an error (#~"E0600"), not a silent fall
 back to run time.
 
+A unit-level definition built from an operator or an #~"if" is such a
+position, and the error names the first part of it that has no value. A
+name that does not exist is #~"E0023", as it is in a body. A call, a name
+that is not a compile-time value (a function, a type, a numeric generic
+parameter -- which becomes a run-time field), and an operator outside the
+list above (#~"<<", #~"|", #~"&", #~"%") over values that do fold are
+#~"E0600":
+
+#code language=zerolang: """
+  FLAGS: 1 << 3        # E0600: '<<' has no compile-time value for i64 and i64
+  LIMIT: GHOST + 1     # E0023: Unknown reference 'GHOST'
+  """
+
 Named constants propagate: if #~"a: 1" and #~"b: a + 2" are defined at
 unit level, then #~"b" has a compile time constant value of #~"3". Chains
 of constant definitions are fully resolved. Float constants propagate the
@@ -6006,16 +6019,29 @@ inside it — an error in a branch whose condition is statically false may
 go unreported until that condition becomes true. A new scope is created
 for the emitted branch code.
 
-An #~"if" may be used as a definition at the unit level. Each clause's
-condition must evaluate to a compile-time constant. Each arm may produce
-a value of a different type — the result type is the type of the first
-arm whose condition is true. Branch blocks must be delimited with curly
-braces at the unit level.
+An #~"if" may be used as a definition at the unit level, and its value is
+required at compile time. The clauses are evaluated in order: every
+condition of a clause must fold to a #~"bool" or a 2-arm sum type, and the
+first clause whose conditions all hold selects its branch, with the else
+branch as the fallback. A condition that does not fold is an error
+(#~"E0600", or #~"E0023" when it names something that does not exist), and
+so is a condition that folds to any other value (#~"E0100"). A selected
+branch that does not fold is #~"E0600", as is an #~"if" that selects no
+branch at all -- every condition false and no else. Clauses after the
+selected one are never evaluated, and neither is a branch that is not
+selected, so like a body's dead branch they may name what does not exist.
+
+Each arm may produce a value of a different type — the result type is the
+type of the selected arm, never the type of an arm that was not selected.
+Branch blocks must be delimited with curly braces at the unit level.
 
 #code language=zerolang: """
   A: 10
   # unit-level if: selects branch at compile time
   x: if A > 5 then { A } else { 0 }
+  # the first branch is never evaluated, so GHOST need not exist, and y is
+  # the selected branch's StringView
+  y: if A > 50 then { GHOST } else { "small" }
   """
 
 #---: Compile-Time Error

@@ -37452,8 +37452,9 @@ foldLiteralStamps: function {st: zenv.ZSymbolTable frame: ztypes.declid program:
 # constantOperandType -- type one operand of a unit-level constant expression,
 # stamping as it walks: a numeric literal wears the pseudo id (folded to its
 # visible default later), a name reads an already-materialised constant from
-# resolved (body order), and a binop takes the first concretely-typed operand
-# (else the literal pseudo). 0 = not a constant shape.
+# resolved (body order), a binop takes the first concretely-typed operand
+# (else the literal pseudo), and a compile-time `if` -- the value of an
+# `else if` -- its selected branch's type. 0 = not a constant shape.
 constantOperandType: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -37476,6 +37477,8 @@ constantOperandType: function {
         ) case atomid then {
             arm = 2
             nameId = n.name
+        } case ifexpr then {
+            arm = 4
         } else null
         # AN INFIX CALL IS THE OPERATOR SHAPE THIS WALK ALREADY UNDERSTANDS.
         # `a op b` parses to the call form, and a unit-level constant built
@@ -37492,6 +37495,7 @@ constantOperandType: function {
     }
     if arm == 2 then return (constantAtomType :st :frame :ast :unitDecl :nid :nameId)
     if arm == 3 then return (constantBinopType :st :frame :ast :unitDecl :nid :lhsId :rhsId :opId)
+    if arm == 4 then return (constantIfType :st :frame :ast :unitDecl :nid)
     return 0
 }
 
@@ -37719,14 +37723,6 @@ unitifsite: record {
     elseId: zast.nodeid
 }
 
-# branchpick -- the running answer of a compile-time `if`: `first` is the type of
-# the first branch that typed, and is the fallback when the conditions did not
-# fold; `winner` is the type of the branch whose condition folded true.
-branchpick: record {
-    first: u64
-    winner: u64
-}
-
 # appendKidIds -- a node span's child ids, appended to the caller's list. The
 # list is the caller's so the ids outlive the view they were read through.
 appendKidIds: function {ast: Ast.view span: zast.kidspan ids: ListVal u32} is {
@@ -37785,38 +37781,31 @@ walkClauseConditions: function {
     }
 }
 
-# takeBranchType -- fold one walked branch into the running answer. Every branch
-# is walked and typed -- a dead branch's type errors are still type errors -- but
-# the definition takes the type of the branch that WINS, per the spec's "the type
-# of the first arm whose condition is true".
+# takeBranchType -- the running answer after one walked branch. Every branch is
+# walked and typed -- a dead branch's type errors are still type errors -- but
+# the definition takes the type of the branch that WINS and of no other, per the
+# spec's "the type of the first arm whose condition is true". A dead branch's
+# type never stands in for a winner the walk could not type: a string winner
+# after an f64 branch is a string, typed from the value it yields.
 takeBranchType: function {
-    pick: branchpick
+    winner: u64
     bt: u64
     stmtId: zast.nodeid
     fb: ztyping.foldedbranch
-} out branchpick is {
-    first: pick.first
-    if first == 0 then first = bt
-    winner: pick.winner
-    if fb.known when stmtId == fb.stmt then winner = bt
-    return (branchpick :first :winner)
+} out u64 is {
+    if fb.known when stmtId == fb.stmt then return bt
+    return winner
 }
 
-# stampUnitIfType -- the resolved type lands on the If and on the unit member
-# the definition names.
+# stampUnitIfType -- the resolved type lands on the unit member the definition
+# names.
 stampUnitIfType: function {
-    ast: Ast
+    ast: Ast.view
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     defName: StringView
-    nid: zast.nodeid
     t: u64
 } is {
-    (ztyping.nodeTypeSet
-        tbl: st.typing.nodeType
-        nid: nid.u64
-        tid: (ztypes.tid.create from: t.u64)
-    )
     cu: declTypeIdOf :st declId: unitDecl
     if cu.isZero then return
     (st.typing.setMemberType
@@ -37826,11 +37815,12 @@ stampUnitIfType: function {
     )
 }
 
-# resolveUnitIfDef -- a unit-level `if` definition (compile-time conditional):
-# conditions walk through the constant machinery (comparisons stamp bool and
-# coerce literal operands), branches walk + materialise, and the definition
-# resolves to the first branch's type -- stamped on the If and on the unit
-# member the definition names.
+# resolveUnitIfDef -- a unit-level `if` definition (compile-time conditional)
+# resolves to the type of the branch the fold selects, stamped on the If and on
+# the unit member the definition names. A selected branch the walk does not
+# type -- a string, an arm -- types as the value it yields. Nothing is
+# registered when the fold selects nothing: the definition is refused on its
+# door.
 resolveUnitIfDef: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -37839,28 +37829,77 @@ resolveUnitIfDef: function {
     defName: StringView
     nid: zast.nodeid
 } is {
+    t: constantIfType :st :frame :ast :unitDecl :nid
+    if t == 0 then {
+        t = selectedValueType :st :frame :ast :unitDecl :nid
+        if t > 0 then {
+            (ztyping.nodeTypeSet
+                tbl: st.typing.nodeType
+                nid: nid.u64
+                tid: (ztypes.tid.create from: t.u64)
+            )
+        }
+    }
+    if t == 0 then return
+    stampUnitIfType :ast :st :unitDecl :defName :t
+}
+
+# selectedValueType -- the type of the value a DEFINITION's compile-time `if`
+# yields, read off the fold. Asked of the definition alone and never of an `if`
+# nested in one of its branches: evaluating a branch the fold did not select
+# would reach an `error` the spec promises stays silent.
+selectedValueType: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    nid: zast.nodeid
+} out u64 is {
+    fb: foldIfBranch :st :frame :ast :unitDecl :nid
+    if fb.known.not then return 0
+    if fb.stmt.isZero then return 0
+    v: constBlockValue :st :frame :ast :unitDecl nid: fb.stmt
+    return (constValueTid :st :frame :ast :v)
+}
+
+# constantIfType -- the constant type of a compile-time `if`: conditions walk
+# through the constant machinery (comparisons stamp bool and coerce literal
+# operands), every branch walks and materialises, and the answer is the type
+# of the branch the fold selects, stamped on the If. 0 when the fold selects
+# nothing or the selected branch is a shape the walk does not type.
+constantIfType: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    nid: zast.nodeid
+} out u64 is {
     clauseIds: ListVal u32
     site: readUnitIf :ast :nid :clauseIds
-    if site.isIf.not then return
+    if site.isIf.not then return 0
     fb: foldIfBranch :st :frame :ast :unitDecl :nid
-    pick: branchpick first: 0 winner: 0
+    t: u64
     with cliter: clauseIds.iterate do for clauseId: cliter loop {
         condIds: ListVal u32
         stmtId: readIfClause :ast :clauseId :condIds
         if stmtId.isZero.not then {
             walkClauseConditions :ast :st :unitDecl :frame :condIds
             bt: constantBranchWalk :st :frame :ast :unitDecl nid: stmtId
-            pick = takeBranchType :pick :bt :stmtId :fb
+            t = takeBranchType winner: t :bt :stmtId :fb
         }
     }
     if site.elseId > 0 then {
         et: constantBranchWalk :st :frame :ast :unitDecl nid: site.elseId
-        pick = takeBranchType :pick bt: et stmtId: site.elseId :fb
+        t = takeBranchType winner: t bt: et stmtId: site.elseId :fb
     }
-    t: pick.first
-    if fb.known when pick.winner > 0 then t = pick.winner
-    if t == 0 then return
-    stampUnitIfType :ast :st :unitDecl :defName :nid :t
+    if t > 0 then {
+        (ztyping.nodeTypeSet
+            tbl: st.typing.nodeType
+            nid: nid.u64
+            tid: (ztypes.tid.create from: t.u64)
+        )
+    }
+    return t
 }
 
 # --- compile-time constant evaluation ---
@@ -39931,8 +39970,9 @@ resolveDottedConstantDef: function {
 }
 
 # resolveBinopConstantDef -- a unit-level constant whose value is a binary
-# expression folds here, and a fold that fails is reported: a definition at unit
-# level is required to be a compile-time constant.
+# expression registers the type its operand walk gives it. The value is the
+# evaluator's, and a definition that yields none is refused on its door:
+# resolveConstantMember asks diagnoseUnfoldedConstant why.
 resolveBinopConstantDef: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -40321,25 +40361,29 @@ constRegisterValueTypeAt: function {
         eo: st.typing.declChildOfId parentTypeId: utid nameId: nid
         if eo.none.not then return
     }
-    if v.kind.armKind then {
-        if v.armTid.isZero then return
-        (st.typing.setMemberType
-            parentTypeId: utid
-            nameId: nid
-            childTypeId: v.armTid.u64
-        )
-        return
-    }
+    vt: constValueTid :st :frame :ast :v
+    if vt > 0 then st.typing.setMemberType parentTypeId: utid nameId: nid childTypeId: vt
+}
+
+# constValueTid -- the type a compile-time value carries: an arm its owning
+# type, a number i64 or f64, a string StringView. 0 for no value.
+constValueTid: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    v: ztypes.cval
+} out u64 is {
+    if v.kind.armKind then return v.armTid.u64
     recvBaseTid: ""
     if v.kind.ivalKind then recvBaseTid = "i64"
     if v.kind.fvalKind then recvBaseTid = "f64"
     if v.kind.svalKind then recvBaseTid = "StringView"
-    if recvBaseTid.length == 0 then return
+    if recvBaseTid.length == 0 then return 0
     # the constant's type is a reference to a system type: it resolves on
     # discovery, like every other reference, so the registration never depends
     # on some other reference having resolved the type first
     bo: descendNamed :st :frame :ast unitDecl: st.typing.systemUnitRoot name: recvBaseTid
-    if bo > 0 then st.typing.setMemberType parentTypeId: utid nameId: nid childTypeId: bo.u64
+    return bo.u64
 }
 
 # instantiatedAliasFold -- the alias-shaped door into constFoldDecl. A
@@ -40431,6 +40475,25 @@ constFoldDecl: function {
         v: valFound
     )
     reportPendingConstFail :st
+    # a nested unit's constant is reached through this door alone, so a
+    # definition that must fold and did not is asked why here as well
+    if valFound.kind.none then {
+        opId: zast.nodeid
+        {
+            dn: ast.nodes.get i: dnode.u64
+            if dn.namedoperation then opId = dn.operation
+        }
+        if opId.isZero.not then {
+            (diagnoseUnfoldedConstant
+                :st
+                :ast
+                unitDecl: unm
+                ownerDecl: own
+                nameId: nmNode
+                defnId: opId
+            )
+        }
+    }
 }
 
 # resolveConstantMember -- one unit-level definition's constant channels, both
@@ -40458,6 +40521,466 @@ resolveConstantMember: function {
     cvv: constValueOfMember :st :frame :ast :unitDecl :defName
     constRegisterValueType :st :frame :ast :unitDecl :defName v: cvv
     reportPendingConstFail :st
+    if cvv.kind.none when (isComputedConstantDef :ast nid: defnId) then {
+        (diagnoseUnfoldedConstant
+            :st
+            :ast
+            :unitDecl
+            ownerDecl: (constOwnerDeclFor :st :frame :ast :unitDecl :defName)
+            nameId: (zast.poolFind pool: ast.names text: defName)
+            :defnId
+        )
+    }
+}
+
+# diagnoseUnfoldedConstant -- a unit-level definition built from an operator or
+# an `if` is REQUIRED to fold, and when it yields no value the evaluator has
+# often recorded no reason: an unknown name, a call, an operator it does not
+# fold, a condition that is not a bool all answer "no value" and say nothing.
+# Accepted silently, the emitter spelled the definition's TYPE where its value
+# belonged. The walk below follows the fold -- the conditions it reaches, the
+# branch it selects, an operator's operands -- and reports the first node with
+# no value. Other definitions (a literal, an alias, a construction) are the
+# shape pass's business and are not asked. Both constant doors ask, and each
+# definition is asked once: the stand-in type below looks names up, a lookup
+# demands the definition it finds, and a ring of constants would ask forever.
+diagnoseUnfoldedConstant: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    # the unit that owns the member: the value was evaluated in its frame, and
+    # the walk re-evaluates in the same one
+    ownerDecl: ztypes.declid
+    nameId: zast.nameid
+    defnId: zast.nodeid
+} is {
+    if ownerDecl.isZero then return
+    if (isComputedConstantDef :ast nid: defnId).not then return
+    if (st.typing.constsDiagnosed.has item: defnId.u64) then return
+    st.typing.constsDiagnosed.add item: defnId.u64
+    visiting: ListVal u32
+    visiting.append from: defnId.u32
+    unfoldedWhy :st frame: ownerDecl :ast :unitDecl nid: defnId :visiting
+    standInConstantType :st :ast :unitDecl :ownerDecl :nameId nid: defnId
+}
+
+# standInConstantType -- a REFUSED computed constant still needs a type, or
+# every use of its name is a second report of the same mistake. A nested
+# unit's constant gets its type from its value alone, and a unit-level `if`
+# gets only its selected branch's, so when the owner has no member type for
+# the name one stands in: the first `if` branch that types, or an operator's
+# operand-walk type. Reached only after a refusal -- a definition with a value
+# never gets here.
+standInConstantType: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ownerDecl: ztypes.declid
+    nameId: zast.nameid
+    nid: zast.nodeid
+} is {
+    cu: declTypeIdOf :st declId: ownerDecl
+    if cu.isZero then return
+    {
+        eo: st.typing.declChildOfId parentTypeId: cu :nameId
+        if eo.none.not then return
+    }
+    isIf: false
+    {
+        n: ast.nodes.get i: nid.u64
+        if n.ifexpr then isIf = true
+    }
+    t: u64
+    if isIf then {
+        t = firstBranchType :st :ast :unitDecl frame: ownerDecl :nid
+    } else {
+        t = operandConstantType :st :ast :unitDecl frame: ownerDecl :nid
+    }
+    if t == 0 then return
+    st.typing.setMemberType parentTypeId: cu :nameId childTypeId: t
+}
+
+# firstBranchType -- the type of the first branch of a compile-time `if` that
+# types, the else branch last. 0 when none does.
+firstBranchType: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    nid: zast.nodeid
+} out u64 is {
+    clauseIds: ListVal u32
+    site: readUnitIf :ast :nid :clauseIds
+    t: u64
+    with cliter: clauseIds.iterate do for clauseId: cliter loop {
+        if t == 0 then {
+            condIds: ListVal u32
+            stmtId: readIfClause :ast :clauseId :condIds
+            if stmtId.isZero.not then t = constantBranchWalk :st :frame :ast :unitDecl nid: stmtId
+        }
+    }
+    if t == 0 when site.elseId > 0 then {
+        t = constantBranchWalk :st :frame :ast :unitDecl nid: site.elseId
+    }
+    return t
+}
+
+# operandConstantType -- an operator constant's type from the operand walk, a
+# literal result materialised to its default (i64/f64). 0 when it has none.
+operandConstantType: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    nid: zast.nodeid
+} out u64 is {
+    t: constantOperandType :st :frame :ast :unitDecl :nid
+    litBase: ""
+    if t == st.reg.literalIntTid then litBase = "i64"
+    if t == st.reg.literalFloatTid then litBase = "f64"
+    if litBase.length == 0 then return t
+    lt: (walkLookupTyperef :st :frame :ast :unitDecl base: litBase).or d: 0
+    return lt
+}
+
+# isComputedConstantDef -- the definition COMPUTES its value: an operator or a
+# compile-time `if`. These are the shapes whose missing value is a refusal.
+isComputedConstantDef: function {ast: Ast.view nid: zast.nodeid} out bool is {
+    n: ast.nodes.get i: nid.u64
+    if n.ifexpr then return true
+    return (zast.infixPartsOf :ast :n).found
+}
+
+# unfoldedWhy -- why `nid` has no compile-time value: true once the walk has
+# found the reason, false when the node has a value after all. A node whose
+# evaluation RECORDS a reason -- a division by zero, a cycle, a reached
+# `error` -- ends the walk without a report: that reason is the evaluator's to
+# render, and it was rendered where the value was first pulled. Every report
+# goes through addErrorH, which drops a repeat, because one definition can be
+# asked about from its own door and from a constant that reads it.
+unfoldedWhy: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    nid: zast.nodeid
+    # the computed definitions on the walk's path, so a cycle ends it
+    visiting: ListVal u32
+} out bool is {
+    constFailClear :st
+    v: evalConstNode :st :frame :ast :unitDecl :nid
+    recorded: st.typing.constFail.kind.none.not
+    constFailClear :st
+    if v.kind.none.not then return false
+    if recorded then return true
+    plan: evalConstPlan :ast :nid
+    if plan.arm == 7 then return (unfoldedIfWhy :st :frame :ast :unitDecl :nid :visiting)
+    if plan.arm == 5 then return (unfoldedBinopWhy :st :frame :ast :unitDecl :nid :visiting)
+    if plan.arm == 2 then {
+        return (unfoldedNameWhy :st :frame :ast :unitDecl :nid nameId: plan.nameId :visiting)
+    }
+    msg: "not a compile-time constant".string
+    hint: "a unit constant is built from literals, other constants, operators and `if`".string
+    if plan.arm == 6 then {
+        msg = "a call has no compile-time value".string
+        hint = "only `error` and the string constant methods are evaluated at compile time".string
+    }
+    reportUnfolded :st :ast :nid width: 1 :msg :hint
+    return true
+}
+
+# unfoldedIfWhy -- a compile-time `if` with no value. The clauses are asked in
+# order, every condition of a clause as the fold asks them: one with no value,
+# or one whose value is not a truth, is the reason. The first clause whose
+# conditions all hold selects its branch, and the else branch is the fallback.
+# A clause after the selected one, and every branch not selected, is never
+# evaluated -- which is what lets a dead branch name what does not exist.
+unfoldedIfWhy: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    nid: zast.nodeid
+    visiting: ListVal u32
+} out bool is {
+    clauseIds: ListVal u32
+    site: readUnitIf :ast :nid :clauseIds
+    if site.isIf.not then return false
+    verdict: u32
+    with cliter: clauseIds.iterate do for clauseId: cliter loop {
+        if verdict == 0 then {
+            verdict = unfoldedClauseWhy :st :frame :ast :unitDecl :clauseId :visiting
+        }
+    }
+    if verdict == 1 then return true
+    if verdict == 2 then return false
+    if site.elseId > 0 then {
+        return (unfoldedBranchWhy :st :frame :ast :unitDecl nid: site.elseId :visiting)
+    }
+    (reportUnfolded
+        :st
+        :ast
+        :nid
+        width: 2
+        msg: "no branch of this `if` is selected, so it has no value".string
+        hint: "give a unit-level `if` an else branch".string
+    )
+    return true
+}
+
+# unfoldedClauseWhy -- one clause of a compile-time `if`: 0 = it does not
+# select its branch, so the next clause is asked; 1 = the reason was found in
+# it; 2 = it selects a branch that has a value after all.
+unfoldedClauseWhy: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    clauseId: u32
+    visiting: ListVal u32
+} out u32 is {
+    condIds: ListVal u32
+    stmtId: readIfClause :ast :clauseId :condIds
+    if stmtId.isZero then return 0
+    held: unfoldedCondsWhy :st :frame :ast :unitDecl :condIds :visiting
+    if held == 0 then return 1
+    if held == 2 then return 0
+    if (unfoldedBranchWhy :st :frame :ast :unitDecl nid: stmtId :visiting) then return 1
+    return 2
+}
+
+# unfoldedCondsWhy -- every condition of one clause, asked the way the fold asks
+# them, all of them: 0 = the reason was found in one, 1 = all hold, 2 = one
+# does not.
+unfoldedCondsWhy: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    condIds: (ListVal u32).view
+    visiting: ListVal u32
+} out u32 is {
+    found: false
+    allTrue: true
+    with coiter: condIds.iterate do for condId: coiter loop {
+        if found.not then {
+            cw: unfoldedCondWhy :st :frame :ast :unitDecl :condId :visiting
+            if cw == 0 then found = true
+            if cw == 2 then allTrue = false
+        }
+    }
+    if found then return 0
+    if allTrue then return 1
+    return 2
+}
+
+# unfoldedCondWhy -- one condition of a compile-time `if`, as foldIfCond asks it:
+# 0 = the reason was found here (reported, or recorded by the evaluator),
+# 1 = it holds, 2 = it does not, 3 = not a named condition, which says nothing.
+unfoldedCondWhy: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    condId: u32
+    visiting: ListVal u32
+} out u32 is {
+    isNamed: false
+    opId: zast.nodeid
+    {
+        cond: ast.nodes.get i: condId.u64
+        if cond.namedoperation then {
+            isNamed = true
+            opId = cond.operation
+        }
+    }
+    if isNamed.not then return 3
+    held: foldIfCond :st :frame :ast :unitDecl :condId
+    if held == 1 or (held == 2) then return held
+    if (unfoldedWhy :st :frame :ast :unitDecl nid: opId :visiting) then return 0
+    # the operand has a value, and it is not a truth: the body's own refusal
+    # for a condition that is not a bool, in the body's own words
+    constFailClear :st
+    cv: evalConstNode :st :frame :ast :unitDecl nid: opId
+    constFailClear :st
+    ctnm: constKindName :st v: cv
+    (reportUnfoldedAs
+        :st
+        :ast
+        nid: opId
+        width: 1
+        e: zast.err.typeError
+        msg: "condition must be bool or a 2-arm sum type, got '\{ctnm}'"
+        hint: "".string
+    )
+    return 0
+}
+
+# unfoldedBranchWhy -- the selected branch of a compile-time `if` has no value:
+# a branch yields its last statement's, the way constBlockValue reads it.
+unfoldedBranchWhy: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    nid: zast.nodeid
+    visiting: ListVal u32
+} out bool is {
+    lastId: branchValueLine :ast :nid
+    if lastId.isZero.not then return (unfoldedWhy :st :frame :ast :unitDecl nid: lastId :visiting)
+    (reportUnfolded
+        :st
+        :ast
+        :nid
+        width: 1
+        msg: "the selected branch of this `if` has no value".string
+        hint: "a branch's value is its last statement".string
+    )
+    return true
+}
+
+# branchValueLine -- the expression a branch block yields: its last statement's.
+# Zero when the node is not a block or holds no statement line.
+branchValueLine: function {ast: Ast.view nid: zast.nodeid} out zast.nodeid is {
+    lastLine: u32
+    {
+        block: ast.nodes.get i: nid.u64
+        if block.statement when block.statements.count > 0 then {
+            lastLine = (zast.kidAt
+                kids: ast.kids
+                span: block.statements
+                i: block.statements.count.u64 - 1
+            )
+        }
+    }
+    if lastLine == 0 then return zast.nodeid
+    s: ast.nodes.get i: lastLine.u64
+    if s.statementline then return s.statementline
+    return zast.nodeid
+}
+
+# unfoldedBinopWhy -- an operator with no value: an operand with none is the
+# reason, and when both have one the operator does not fold over them.
+unfoldedBinopWhy: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    nid: zast.nodeid
+    visiting: ListVal u32
+} out bool is {
+    br: binRefAt :ast :nid
+    if (unfoldedWhy :st :frame :ast :unitDecl nid: br.lhs :visiting) then return true
+    if (unfoldedWhy :st :frame :ast :unitDecl nid: br.rhs :visiting) then return true
+    constFailClear :st
+    lv: evalConstNode :st :frame :ast :unitDecl nid: br.lhs
+    rv: evalConstNode :st :frame :ast :unitDecl nid: br.rhs
+    constFailClear :st
+    lk: constKindName :st v: lv
+    rk: constKindName :st v: rv
+    opn: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: br.operator.u64))
+    (reportUnfolded
+        :st
+        :ast
+        nid: br.operator
+        width: opn.length.u32.orPanic
+        msg: "'\{opn}' has no compile-time value for \{lk} and \{rk}"
+        hint: "constants fold + - * / and comparisons on numbers, + == != on strings, and == != and or on arms".string
+    )
+    return true
+}
+
+# unfoldedNameWhy -- a bare name with no value. A name nothing declares is the
+# body's unknown reference. A constant computed from others is asked in turn,
+# so the report lands where the reason is written; any other declaration -- a
+# function, a type, a generic parameter -- is not a compile-time value.
+unfoldedNameWhy: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    nid: zast.nodeid
+    nameId: zast.nameid
+    visiting: ListVal u32
+} out bool is {
+    nameText: zast.nameTextCopy :ast ref: nameId
+    od: constOwnerDeclForId :st :frame :unitDecl :nameId
+    cd: st.typing.declFindChild parentDeclId: od :nameId
+    if cd.isZero then {
+        tr: (walkLookupTyperefById :st :frame :ast :unitDecl baseId: nameId).or d: 0
+        if tr == 0 then {
+            reportUnknownNameAt :st :ast :nid name: nameText
+            return true
+        }
+    } else {
+        defOp: zast.nodeid
+        {
+            cdo: st.typing.decls.get i: cd.u64
+            dn: ast.nodes.get i: cdo.node.u64
+            if dn.namedoperation then defOp = dn.operation
+        }
+        if defOp.isZero.not when (isComputedConstantDef :ast nid: defOp) then {
+            # a ring of constants is a cycle, which the evaluator reports
+            if (visiting.contains item: defOp.u32) then return true
+            visiting.append from: defOp.u32
+            return (unfoldedWhy :st frame: od :ast :unitDecl nid: defOp :visiting)
+        }
+    }
+    (reportUnfolded
+        :st
+        :ast
+        :nid
+        width: nameText.length.u32.orPanic
+        msg: "'\{nameText}' has no compile-time value"
+        hint: "a unit constant reads only literals and other unit constants".string
+    )
+    return true
+}
+
+# constKindName -- the type a folded value carries, named for a diagnostic.
+constKindName: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out String is {
+    if v.kind.ivalKind then return "i64".string
+    if v.kind.fvalKind then return "f64".string
+    if v.kind.svalKind then return "StringView".string
+    if v.kind.armKind then return (st.reg.nameOf tid: v.armTid)
+    return "no value".string
+}
+
+# reportUnfolded -- one E0600 for a unit constant with no value, at `nid`.
+reportUnfolded: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    nid: zast.nodeid
+    width: u32
+    msg: String
+    hint: String
+} is {
+    reportUnfoldedAs :st :ast :nid :width e: zast.err.constError :msg :hint
+}
+
+# reportUnfoldedAs -- the report under a chosen code, through the error sink
+# that drops a repeat of the same message on the same line.
+reportUnfoldedAs: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    nid: zast.nodeid
+    width: u32
+    e: zast.err
+    msg: String
+    hint: String
+} is {
+    n: ast.nodes.get i: nid.u64
+    (addErrorH
+        :st
+        nodeid: nid
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        :e
+        :msg
+        note: "a unit constant is evaluated at compile time".string
+        :hint
+        :width
+    )
 }
 
 # resolve a unit's compile-time constant definitions.

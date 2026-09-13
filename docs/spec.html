@@ -5180,6 +5180,15 @@ the arm name -- never by rendered text. The predicate form <code>value.arm</code
 folds to the <code>bool</code> it always means. An expression the compiler cannot
 evaluate in constant position is an error (<code>E0600</code>), not a silent fall
 back to run time.</p>
+<p>A unit-level definition built from an operator or an <code>if</code> is such a
+position, and the error names the first part of it that has no value. A
+name that does not exist is <code>E0023</code>, as it is in a body. A call, a name
+that is not a compile-time value (a function, a type, a numeric generic
+parameter -- which becomes a run-time field), and an operator outside the
+list above (<code>&lt;&lt;</code>, <code>|</code>, <code>&amp;</code>, <code>%</code>) over values that do fold are
+<code>E0600</code>:</p>
+<pre><code class="language-zerolang">FLAGS: 1 &lt;&lt; 3        # E0600: '&lt;&lt;' has no compile-time value for i64 and i64
+LIMIT: GHOST + 1     # E0023: Unknown reference 'GHOST'</code></pre>
 <p>Named constants propagate: if <code>a: 1</code> and <code>b: a + 2</code> are defined at
 unit level, then <code>b</code> has a compile time constant value of <code>3</code>. Chains
 of constant definitions are fully resolved. Float constants propagate the
@@ -5204,14 +5213,26 @@ parse, but the compiler does not promise to resolve names or check types
 inside it &#x2014; an error in a branch whose condition is statically false may
 go unreported until that condition becomes true. A new scope is created
 for the emitted branch code.</p>
-<p>An <code>if</code> may be used as a definition at the unit level. Each clause's
-condition must evaluate to a compile-time constant. Each arm may produce
-a value of a different type &#x2014; the result type is the type of the first
-arm whose condition is true. Branch blocks must be delimited with curly
-braces at the unit level.</p>
+<p>An <code>if</code> may be used as a definition at the unit level, and its value is
+required at compile time. The clauses are evaluated in order: every
+condition of a clause must fold to a <code>bool</code> or a 2-arm sum type, and the
+first clause whose conditions all hold selects its branch, with the else
+branch as the fallback. A condition that does not fold is an error
+(<code>E0600</code>, or <code>E0023</code> when it names something that does not exist), and
+so is a condition that folds to any other value (<code>E0100</code>). A selected
+branch that does not fold is <code>E0600</code>, as is an <code>if</code> that selects no
+branch at all -- every condition false and no else. Clauses after the
+selected one are never evaluated, and neither is a branch that is not
+selected, so like a body's dead branch they may name what does not exist.</p>
+<p>Each arm may produce a value of a different type &#x2014; the result type is the
+type of the selected arm, never the type of an arm that was not selected.
+Branch blocks must be delimited with curly braces at the unit level.</p>
 <pre><code class="language-zerolang">A: 10
 # unit-level if: selects branch at compile time
-x: if A &gt; 5 then { A } else { 0 }</code></pre>
+x: if A &gt; 5 then { A } else { 0 }
+# the first branch is never evaluated, so GHOST need not exist, and y is
+# the selected branch's StringView
+y: if A &gt; 50 then { GHOST } else { "small" }</code></pre>
 <h3 id="compile-time-error"><a href="#compile-time-error">12.3. Compile-Time Error</a></h3>
 <p>The <code>error</code> builtin produces a compile-time error. When the compiler
 can prove that an <code>error</code> call is reachable, compilation fails and the
