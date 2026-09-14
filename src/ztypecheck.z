@@ -16692,7 +16692,7 @@ completeUnitInstantiations: function {
         mgo: optionval.none u64
         tnId: u32
         {
-            if rtdecl.isZero.not then {
+            if rtdecl.isZero.not when r.tmplOpId > 0 then {
                 keysC: ListVal u64
                 isValC: ListVal bool
                 if (instMonoKeys
@@ -17023,9 +17023,11 @@ resolveMainUnitInstantiations: function {
             }
         }
         # a request without a template Decl is no instantiation (a unit-level
-        # constant CALL the collector also gathers); the template's Decl was
-        # found at collection through the instantiation's own scope
-        if r.tmplDeclId.isZero.not then {
+        # constant CALL the collector also gathers), and neither is one whose
+        # template is no generic unit (`B8: (Buffer cap: 8)` names a class
+        # instance); the template's Decl was found at collection through the
+        # instantiation's own scope
+        if r.tmplDeclId.isZero.not when r.tmplOpId > 0 then {
             {
                 mintUnitMonoOf :st :frame ast: program :r
                 (scanTemplateBodyDemands
@@ -21644,7 +21646,7 @@ nameNamesType: function {
             if ddk.kind.typeDecl or ddk.kind.unitDecl then return true
             isReexport = ddk.kind.reexportDecl
         }
-        if isReexport.not then return false
+        if isReexport.not then return (declNamesInstantiation :st :ast declId: dd)
         if (aliasNamesType :st :ast declId: dd).not then return false
         # an alias of a CONSTANT (`SAME: GREETING`, `NAME: strs.NAME`) has a type
         # alias's shape and denotes a value. Asked last, as bareNameDenotesType
@@ -21664,6 +21666,27 @@ nameNamesType: function {
     } case none then {
         return false
     }
+}
+
+# declNamesInstantiation -- a unit-level definition whose value instantiates a
+# generic template (`B8: (Buffer cap: 8)`): it names the instance, a type. Read
+# off what resolution already recorded -- the definition's type is the instance
+# -- so nothing is resolved to answer.
+declNamesInstantiation: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    declId: ztypes.declid
+} out bool is {
+    dt: ztypes.tid
+    isCall: false
+    {
+        ddo: st.typing.decls.get i: declId.u64
+        dt = ztypes.tid.create from: ddo.typeId.u64
+        dn: ast.nodes.get i: ddo.node.u64
+        if dn.namedoperation then isCall = (ast.nodes.get i: dn.operation.u64).call
+    }
+    if isCall.not or dt.isZero then return false
+    return (st.reg.genericOriginOf tid: dt).isZero.not
 }
 
 # rootNameIdOf -- rootNameOf as an interned name id, for a caller that compares
@@ -44901,23 +44924,10 @@ resolveCalledConstantDef: function {
             if crv.kind.svalKind then cbu = true
         }
         if cbu.not then {
-            ckn: false
-            ctpl: u64
-            {
-                cko: (walkLookupTyperef
-                    :st
-                    :frame
-                    :ast
-                    :unitDecl
-                    base: cbn.stringView
-                )
-                match (
-                    cko
-                ) case some then {
-                    ckn = true
-                    ctpl = cko
-                } case none then null
-            }
+            # found the way a type reference finds its template: a name the
+            # CURRENT unit defines wins even before it is declared
+            ctpl: (monoRefTemplateTid :st :frame :ast :unitDecl name: cbn.stringView).u64
+            ckn: ctpl > 0
             # a GENERIC template is the one callee shape that can be
             # INSTANTIATED rather than constructed, so `Strs: (List String)`
             # is a type alias while `origin: Point.create x: 0` stays a
@@ -44929,6 +44939,7 @@ resolveCalledConstantDef: function {
                     ctr: st.reg.typeById.get i: ctpl
                     cgen = ctr.isgeneric
                 }
+                errA: st.typing.errors.length
                 if cgen when (resolveInstantiatedAlias
                     :ast
                     :st
@@ -44937,6 +44948,8 @@ resolveCalledConstantDef: function {
                     :defName
                     :defn
                 ) then cbu = true
+                # an instantiation refused for its arguments is reported there
+                if cgen when st.typing.errors.length > errA then cbu = true
             }
             if ckn.not then {
                 crm: "Unknown reference '\{cbn}'"
