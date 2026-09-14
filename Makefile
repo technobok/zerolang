@@ -845,7 +845,11 @@ perf: $(PERFBIN)
 # block used as a value, were refused: over the same source the new compiler
 # allocates exactly as the old, and it is the input, the compiler's own source
 # longer.
-ALLOC_BASELINE := 2556593
+#
+# +3,126 when a call whose view is read for its data and its size was bound to a
+# temp and evaluated once: over the same source the new compiler allocates
+# exactly as the old, and it is the input, the compiler's own source longer.
+ALLOC_BASELINE := 2559719
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

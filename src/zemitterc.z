@@ -5479,8 +5479,14 @@ emitStringArgMethod: function {
             rapps: "\{ctx.strC}_append(\{recvAddr}, (\{argval})\{aacc}data, (\{argval})\{aacc}size)"
             return rapps
         }
-        rapp: "\{ctx.strC}_append(\{recvAddr}, (\{argval}).data, (\{argval}).size)"
-        return rapp
+        return (stringAppendViewText
+            :ast
+            :symtab
+            :ctx
+            recvAddr: recvAddr.stringView
+            argval: argval.stringView
+            argTid: (ztypes.tid.create from: argTid.u64)
+        )
     }
     r: "\{ctx.strC}_\{nativeM}(\{recvAddr}, \{argval})"
     return r
@@ -5510,6 +5516,59 @@ isNonLvalueArg: function {s: StringView} out bool is {
         }
     } case none then null
     return (s.contains needle: "(") and (s.startsWith prefix: "(*").not
+}
+
+# stringAppendViewText -- `recv.append arg` for an argument that is not an owned
+# String: a StringView, read twice for its data and its size, so a call is bound
+# to a temp the statement flush declares and runs once.
+stringAppendViewText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    recvAddr: StringView
+    argval: StringView
+    argTid: ztypes.tid
+} out String is {
+    if argTid == ctx.svTid when (singleReadNeedsTemp s: argval) then {
+        ah: hoistLvalue :ast :symtab :ctx av: argval tid: argTid
+        rh: "\{ctx.strC}_append(\{recvAddr}, (\{ah}).data, (\{ah}).size)"
+        return rh
+    }
+    r: "\{ctx.strC}_append(\{recvAddr}, (\{argval}).data, (\{argval}).size)"
+    return r
+}
+
+# singleReadNeedsTemp -- an emitted StringView expression that is read twice (its
+# data and its size) must be bound to a temp first: a call, or a conditional
+# holding one, whose second spelling would run it again. A compound literal
+# over a name (`((T){ .data = s.data, ... })`) runs nothing however often it is
+# spelled; a literal, a local and a deref projection are names.
+singleReadNeedsTemp: function {s: StringView} out bool is {
+    if (isCompoundLiteralText :s) then return false
+    return (isNonLvalueArg :s)
+}
+
+# isCompoundLiteralText -- the emitted text is one parenthesised compound
+# literal, `((T){ ... })`: a type name in the inner parentheses, then a brace.
+isCompoundLiteralText: function {s: StringView} out bool is {
+    if (s.startsWith prefix: "((").not then return false
+    i: 2.u64
+    for i < s.length loop {
+        c: (s.byteAt :i).or d: 0
+        if c == 41 then return ((s.byteAt i: i + 1).or d: 0) == 123
+        if (isCNameByte :c).not then return false
+        i = i + 1
+    }
+    return false
+}
+
+# isCNameByte -- a byte a C identifier may hold: a letter, a digit or `_`.
+isCNameByte: function {c: u8} out bool is {
+    if c == 95 then return true
+    if c >= 48 when c <= 57 then return true
+    if c >= 65 when c <= 90 then return true
+    if c >= 97 when c <= 122 then return true
+    return false
 }
 
 # flushArgHoists -- emit the `String_t _ahN = <rvalue>;` declarations recorded by
@@ -5771,13 +5830,11 @@ hoistLvalue: function {
 }
 
 # stringViewBinopOperand -- the `&view` form of one string operand of `+`. A plain
-# atom or a pooled literal addresses directly. An owned String that is not an
-# lvalue -- the inner `+` of a chain -- must HOIST first: svValueForm reads its
-# expression twice, once for `.data` and once for `.size`, and a concat spelled
-# twice allocates twice and leaks both. A non-lvalue StringView is the shape the
-# sv-native call path already cannot address (`a.trim.concat other: b` reports
-# the same `lvalue required` today), so it is left to say so rather than given a
-# second answer here.
+# atom or a pooled literal addresses directly. An operand that is not an lvalue
+# must HOIST first: `&` needs one, and svValueForm reads an owned String's
+# expression twice, once for `.data` and once for `.size`, so a concat spelled
+# twice allocates twice and leaks both. A StringView call (`sv + "!"`) binds to
+# a temp the statement flush declares.
 stringViewBinopOperand: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -5800,8 +5857,11 @@ stringViewBinopOperand: function {
         )
         if hv.length > 0 then src = hv.copy
     }
-    valueVid: atomVidIfPlain :ast :symtab :ctx :n text: src.stringView
     isStrT: tname == "String"
+    if isStrT.not when (singleReadNeedsTemp s: src.stringView) then {
+        src = hoistLvalue :ast :symtab :ctx av: expr tid: ctx.svTid
+    }
+    valueVid: atomVidIfPlain :ast :symtab :ctx :n text: src.stringView
     vf: String
     if src.stringView == expr then {
         vfa: (svValueFormAt
@@ -7214,6 +7274,23 @@ emitStrConvCall: function {
     rnm: cbaseNoPrefix :ctx tid: (ztypes.tid.create from: rid.u64)
     pv: emitDottedReceiver :ast :symtab :ctx callable: (ast.nodes.get i: call.callable.u64)
     ptid: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
+    # the receiver is read twice, for data and length. An owned String call is
+    # bound to a temp the statement flush frees, a view call to a plain one
+    if ptid == ctx.strTid when (isNonLvalueArg s: pv.stringView) then {
+        sh: (hoistBorrowValArg
+            :ast
+            :symtab
+            :ctx
+            av: pv.stringView
+            pid: ptid
+            paramTake: false
+            isBorrow: false
+        )
+        if sh.length > 0 then pv = sh.copy
+    }
+    if ptid == ctx.svTid when (singleReadNeedsTemp s: pv.stringView) then {
+        pv = hoistLvalue :ast :symtab :ctx av: pv.stringView tid: ptid
+    }
     lenAcc: "len".string
     if ptid == ctx.strTid then lenAcc = "size".string
     if ptid == ctx.svTid then lenAcc = "size".string
@@ -14529,6 +14606,28 @@ appendFormattedNum: function {
     buf.append "\{ind}\{ctx.strC}_append(&_s\{sN}, _b\{bN}, (uint64_t)_b\{bN}_n);\n"
 }
 
+# appendViewPart -- append a StringView-typed part, a by-value operand (a
+# pointer-passed view would need the String leg's accessor treatment). The
+# value is read twice, for its data and its size, so a call is bound to a temp
+# first and runs once.
+appendViewPart: function {
+    ctx: Ctx.view
+    # the part's C text
+    val: StringView
+    sN: u64
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    if (singleReadNeedsTemp s: val) then {
+        svh: tmp.next
+        buf.append "\{ind}\{ctx.svC}_t _h\{svh} = \{val};\n"
+        buf.append "\{ind}\{ctx.strC}_append(&_s\{sN}, _h\{svh}.data, _h\{svh}.size);\n"
+        return
+    }
+    buf.append "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}.data, \{val}.size);\n"
+}
+
 # appendStringPart -- append a String-typed part. An atom (a borrowed String
 # param is a pointer, so isBorrowStringParam's raw name reads through `->`),
 # a map-entry deref or an owned struct field appends in place; a
@@ -14549,9 +14648,11 @@ appendStringPart: function {
     buf: String.borrow
 } is {
     an0: atomTextOf :ast :n
+    # an atom naming a FUNCTION is a call, whose String is a temporary
+    localAtom: an0.length > 0
+    if localAtom when (baseAtomNamesFunction :symtab :n) then localAtom = false
     isAtomP: (
-        an0.length >
-        0 or
+        localAtom or
         (interpBaseIsMapEntry :ast :symtab :n) or
         (interpBaseIsOwnedStructField :ast :symtab :n)
     )
@@ -14660,9 +14761,7 @@ emitInterpPart: function {
             :buf
         )
     } else if tns == "StringView" then {
-        # by-value operand today; a pointer-passed SV would need the
-        # String leg's accessor treatment
-        buf.append "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}.data, \{val}.size);\n"
+        appendViewPart :ctx val: val.stringView :sN :ind :tmp :buf
     } else if tns == "String" then {
         appendStringPart :ast :symtab :ctx :n val: val.stringView :sN :ind :tmp :buf
     } else if (originIsTid
@@ -15139,6 +15238,11 @@ emitPrintArg: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
+    # a name that calls a function prints what the call returns
+    if (baseAtomNamesFunction :symtab :n) then {
+        emitPrintValueExpr :ast :symtab :ctx :n :ind :tmp :buf
+        return
+    }
     match (
         n
     ) case atomstring then {
