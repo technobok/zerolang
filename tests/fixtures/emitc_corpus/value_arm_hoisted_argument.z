@@ -1,0 +1,86 @@
+# AN ARM DECLARES WHAT ITS VALUE HOISTS. A value `if` or `match` arm whose value
+# is a call with an argument hoisted to a temp -- a String built for a `.view`
+# parameter -- emitted the temp's declaration after the whole statement, so the
+# arm used `_ah0` before C declared it: invalid C. The temp is now declared in
+# the arm, built only when that arm runs, and freed at its end.
+Mode: variant {
+    fast: null
+    slow: null
+}
+
+size: function {s: String.view} out u64 is {
+    return s.length
+}
+
+echo: function {s: String.view} out String is {
+    return s.copy
+}
+
+# single-value arms of a match and of an if
+matched: function {m: Mode} out u64 is {
+    r: match m case fast then size s: "abc".string case slow then size s: "de".string
+    return r
+}
+
+branched: function {c: bool} out u64 is {
+    r: if c then size s: "abc".string else size s: "de".string
+    return r
+}
+
+# block arms whose last line hoists
+blocks: function {m: Mode} out u64 is {
+    r: match (
+        m
+    ) case fast then {
+        print "fast block"
+        size s: "abcd".string
+    } case slow then {
+        print "slow block"
+        size s: "d".string
+    }
+    return r
+}
+
+# an owned result, and a nested match
+owned: function {m: Mode} out String is {
+    r: match m case fast then echo s: "echo fast".string case slow then echo s: "echo slow".string
+    return r
+}
+
+nested: function {m: Mode k: Mode} out u64 is {
+    r: match (
+        m
+    ) case fast then {
+        match k case fast then size s: "abc".string case slow then size s: "de".string
+    } case slow then 0.u64
+    return r
+}
+
+# a folded condition, and interpolated arguments in a loop
+FAST: true
+
+folded: function out u64 is {
+    r: if FAST then size s: "abcde".string else size s: "de".string
+    return r
+}
+
+looped: function is {
+    i: 0
+    for i < 3 loop {
+        m: Mode.fast
+        if i == 1 then m = Mode.slow
+        r: match m case fast then size s: "n\{i}" case slow then size s: "long \{i}"
+        print "loop \{r}"
+        i = i + 1
+    }
+}
+
+main: function is {
+    print "\{matched m: Mode.fast} \{matched m: Mode.slow}"
+    print "\{branched c: true} \{branched c: false}"
+    print "\{blocks m: Mode.fast} \{blocks m: Mode.slow}"
+    print "\{owned m: Mode.fast} \{owned m: Mode.slow}"
+    print "\{nested m: Mode.fast k: Mode.slow} \{nested m: Mode.slow k: Mode.fast}"
+    print "\{folded}"
+    looped
+}

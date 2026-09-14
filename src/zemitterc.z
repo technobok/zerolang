@@ -19294,6 +19294,7 @@ emitIfBindValue: function {
                 bwn: ast.nodes.get i: bwb.u64
                 if (isSimpleValueNode :ast n: bwn) then {
                     bvx: emitExpr :ast :symtab :ctx n: bwn
+                    flushArgHoists :ctx :ind :tmp :buf
                     lbf: "\{ind}\{ct} \{nm} = \{bvx};\n"
                     buf.append lbf
                     emitArmTakeZero :ast :symtab :ctx n: bwn rv: bvx.stringView :ind :buf
@@ -22306,10 +22307,16 @@ emitBranchAssign: function {
             return
         }
         vx2: emitExpr :ast :symtab :ctx :n
+        # an argument the value hoisted is declared in the arm, which runs it
+        # only when selected, and freed at the arm's end
+        fL2: tmp.frees.length
+        lL2: tmp.listFrees.length
+        flushArgHoists :ctx :ind :tmp :buf
         la2: "\{ind}\{target} = \{vx2};\n"
         buf.append la2
         emitArmTakeZero :ast :symtab :ctx :n rv: vx2.stringView :ind :buf
         emitValueTakeInvalidations :ast :symtab :ctx :n :ind :buf
+        flushBlockFrees :ctx :tmp fL: fL2 lL: lL2 diverged: false :buf
     }
 }
 
@@ -22336,6 +22343,9 @@ emitBranchLastAssign: function {
     }
     if (emitNestedMatchAssign :ast :symtab :ctx line: sx :target :ind :tmp :buf) then return false
     vx: emitExpr :ast :symtab :ctx n: sx
+    # an argument the value hoisted is declared here, inside the branch; the
+    # block's flush frees it
+    flushArgHoists :ctx :ind :tmp :buf
     la: "\{ind}\{target} = \{vx};\n"
     buf.append la
     emitArmTakeZero :ast :symtab :ctx n: sx rv: vx.stringView :ind :buf
