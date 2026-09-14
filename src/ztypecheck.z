@@ -16719,7 +16719,6 @@ printableNumericName: function {name: StringView} out bool is {
 printableInterpTid: function {
     ast: Ast
     st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
     tid: ztypes.tid
 } out bool is {
     if tid.isZero then return true
@@ -16738,15 +16737,6 @@ printableInterpTid: function {
     tt: st.reg.typetypeOf typeId: t
     if tt == ztypes.ztypetype.genericParam then return true
     if tt == ztypes.ztypetype.tagType then return true
-    if tt == ztypes.ztypetype.functionType then {
-        ro: methodReturnOf :st mid: (ztypes.tid.create from: t.u64)
-        match (
-            ro
-        ) case some then {
-            return (printableInterpTid :ast :st :unitDecl tid: ro)
-        } case none then null
-        return true
-    }
     tn: st.reg.nameOf tid: t
     if (printableNumericName name: tn.stringView) then return true
     if tn.stringView == "String" then return true
@@ -16755,6 +16745,55 @@ printableInterpTid: function {
     go: st.reg.genericOriginOf tid: t
     if strO > 0 when go.u64 == strO then return true
     return false
+}
+
+# checkInterpPart -- one interpolated sub-expression: walked and stamped, reported
+# when it resolves to nothing, and refused when its type is not one the string
+# machinery can splice.
+checkInterpPart: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    partId: zast.nodeid
+} is {
+    en0: st.typing.errors.length
+    ptid: checkValueAt :st :unitDecl :ast nid: partId
+    if st.typing.errors.length != en0 then return
+    if ptid.isZero then {
+        reportUnresolvedValue :st :unitDecl :ast nid: partId
+        return
+    }
+    # a FUNCTION value is not printable, but a LOCAL holding one after an earlier
+    # error is most often that error's residue -- a refused `.take` still binds
+    # its local -- so a bare name is reported only on a clean slate
+    isFn: (st.reg.typetypeOf typeId: ptid) == ztypes.ztypetype.functionType
+    isBare: false
+    {
+        pn: ast.nodes.get i: partId.u64
+        isBare = pn.atomid
+    }
+    if isFn when isBare when st.typing.errors.length > 0 then return
+    if (printableInterpTid :ast :st tid: ptid) then return
+    pLn: u32
+    pCo: u32
+    {
+        part: ast.nodes.get i: partId.u64
+        pLn = nodeLine n: part
+        pCo = nodeCol n: part
+    }
+    ptn: st.reg.nameOf tid: ptid
+    pm: "type '\{ptn}' is not printable in an interpolation"
+    (addErrorH
+        :st
+        nodeid: partId
+        lineno: pLn
+        colno: pCo
+        e: zast.err.typeError
+        msg: pm
+        note: "an interpolated value must be numeric, bool, String or StringView".string
+        hint: "unwrap or format the value first: match on it or use an accessor that yields a printable type".string
+        width: 1
+    )
 }
 
 # checkString -- a non-interpolated string literal types as StringView; an
@@ -16777,38 +16816,7 @@ checkString: function {
             arm
         ) case stringchunk then null else {
             hasInterp = true
-            en0: st.typing.errors.length
-            ptid: checkValueAt :st :unitDecl :ast nid: partId
-            if ptid.isZero when st.typing.errors.length == en0 then {
-                reportUnresolvedValue :st :unitDecl :ast nid: partId
-            }
-            if st.typing.errors.length == en0 when (printableInterpTid
-                :ast
-                :st
-                :unitDecl
-                tid: ptid
-            ).not then {
-                pLn: u32
-                pCo: u32
-                {
-                    part: ast.nodes.get i: partId.u64
-                    pLn = nodeLine n: part
-                    pCo = nodeCol n: part
-                }
-                ptn: st.reg.nameOf tid: ptid
-                pm: "type '\{ptn}' is not printable in an interpolation"
-                (addErrorH
-                    :st
-                    nodeid: partId
-                    lineno: pLn
-                    colno: pCo
-                    e: zast.err.typeError
-                    msg: pm
-                    note: "an interpolated value must be numeric, bool, String or StringView".string
-                    hint: "unwrap or format the value first: match on it or use an accessor that yields a printable type".string
-                    width: 1
-                )
-            }
+            checkInterpPart :st :unitDecl :ast :partId
         }
     }
     # the runtime value is always the SYSTEM String/StringView (the interp
@@ -22460,19 +22468,19 @@ checkMemberNamespace: function {
     coerce: bool
 } out bool is {
     if bt.isZero then return true
+    # an interface's members are the conformer's methods, reached through a value
+    btt: st.reg.typetypeOf typeId: bt
+    if btt == ztypes.ztypetype.protocolType or (btt == ztypes.ztypetype.facetType) then return true
     if (
         (st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)) !=
         ztypes.ztypetype.functionType
     ) then {
-        return true
+        return (checkDataMemberNamespace :st :ast :unitDecl :dp :bt :cnId :mo)
     }
-    # an interface's members are the conformer's methods, reached through a value
-    btt: st.reg.typetypeOf typeId: bt
-    if btt == ztypes.ztypetype.protocolType or (btt == ztypes.ztypetype.facetType) then return true
     isValue: dottedBaseIsValue :st :ast :unitDecl n: (ast.nodes.get i: dp.nid.u64)
     if (st.typing.declIsFnptrFieldId parentTypeId: bt nameId: cnId) then {
         if isValue then return true
-        reportMemberNamespace :st :ast :dp :bt :cnId instanceMember: true
+        reportMemberNamespace :st :ast :dp :bt :cnId instanceMember: true functionMember: true
         return false
     }
     if isValue.not then return (checkTypeReadSuppliesReceiver :st :ast :dp :bt :cnId :mo :coerce)
@@ -22480,7 +22488,36 @@ checkMemberNamespace: function {
     isCreate: cnId == zast.names.wkCreate
     if isCreate.not when (st.typing.declMemberIsSynth parentTypeId: bt nameId: cnId
     ) then return true
-    reportMemberNamespace :st :ast :dp :bt :cnId instanceMember: false
+    reportMemberNamespace :st :ast :dp :bt :cnId instanceMember: false functionMember: true
+    return false
+}
+
+# checkDataMemberNamespace -- the two namespaces for a member that is not a
+# function. A field is each instance's data, so it is not reached through the
+# type: `T.x` reached the C as a read of a name it does not have. A constant of
+# the `as` section is the type's, so it is not reached through an instance:
+# `p.LIMIT` reached the C as a struct field the instance does not store.
+checkDataMemberNamespace: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+    mo: u64
+} out bool is {
+    md: st.typing.declMemberIdOf parentTypeId: bt nameId: cnId
+    if md.isZero then return true
+    isField: false
+    {
+        mdd: st.typing.decls.get i: md.u64
+        isField = mdd.kind.fieldDecl
+    }
+    if isField.not then return true
+    isConst: st.typing.isAsConstClone typeId: (ztypes.tid.create from: mo.u64)
+    isValue: dottedBaseIsValue :st :ast :unitDecl n: (ast.nodes.get i: dp.nid.u64)
+    if isConst == isValue.not then return true
+    reportMemberNamespace :st :ast :dp :bt :cnId instanceMember: isConst.not functionMember: false
     return false
 }
 
@@ -22493,16 +22530,23 @@ reportMemberNamespace: function {
     dp: dpref
     bt: ztypes.tid
     cnId: zast.nameid
-    # the member is a function field of each instance, reached through the type
+    # the member belongs to each instance and was reached through the type;
+    # otherwise it belongs to the type and was reached through an instance
     instanceMember: bool
+    # the member is a function (called) rather than data (read)
+    functionMember: bool
 } is {
     cn: zast.nameTextCopy :ast ref: cnId
     tn: st.reg.nameOf tid: bt
+    verb: "read"
+    if functionMember then verb = "call"
     msg: "'\{cn}' belongs to the type '\{tn}', not to an instance"
-    hint: "call it through the type '\{tn}' instead"
+    hint: "\{verb} it through the type '\{tn}' instead"
     if instanceMember then {
-        msg = "'\{cn}' is a function field of each '\{tn}' instance, not a member of the type"
-        hint = "call it through an instance: `value.\{cn}`"
+        what: "field"
+        if functionMember then what = "function field"
+        msg = "'\{cn}' is a \{what} of each '\{tn}' instance, not a member of the type"
+        hint = "\{verb} it through an instance: `value.\{cn}`"
     }
     (addErrorH
         :st
@@ -36764,6 +36808,60 @@ setSynthOwnerLabel: function {
 # parameter as a runtime variable, walks the body, then pops (the pop snapshots
 # the scope's entries + unreachable flag for the SQL dump).
 checkFunctionBody: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    defName: StringView
+    # the definition's name id when the caller holds one -- zero when `defName`
+    # is a composed label (`Type.method`), which no id spells
+    defNameId: zast.nameid
+    fn: fnref
+    thisName: StringView
+    thisTid: ztypes.tid
+    ast: Ast
+    declId: ztypes.declid
+} is {
+    # A BODY IS ITS OWN EXPRESSION SCOPE. A body walked on demand is reached from
+    # inside some other expression, and that expression's position flags --
+    # a dotted base's suppressions, a write target, a call's callable or
+    # argument -- are about the TRIGGERING reference, not this body. Leaked in,
+    # `(mk).val` walked `mk` with bare construction suppressed, so `i: Inner`
+    # was never checked and reached the C as the type's name.
+    prevBare: st.typing.suppressBareCtor
+    prevFn: st.typing.suppressFnAutoCall
+    prevTarget: st.typing.inAssignTarget
+    prevBareRef: st.typing.allowBareFnRef
+    prevCallee: st.typing.calleeDottedNid
+    prevArg: st.typing.callArgNode
+    st.typing.suppressBareCtor = false
+    st.typing.suppressFnAutoCall = false
+    st.typing.inAssignTarget = false
+    st.typing.allowBareFnRef = false
+    st.typing.calleeDottedNid = 0
+    st.typing.callArgNode = 0
+    (checkFunctionBodyIn
+        :st
+        :unitDecl
+        :frame
+        :defName
+        :defNameId
+        :fn
+        :thisName
+        :thisTid
+        :ast
+        :declId
+    )
+    st.typing.suppressBareCtor = prevBare
+    st.typing.suppressFnAutoCall = prevFn
+    st.typing.inAssignTarget = prevTarget
+    st.typing.allowBareFnRef = prevBareRef
+    st.typing.calleeDottedNid = prevCallee
+    st.typing.callArgNode = prevArg
+}
+
+# checkFunctionBodyIn -- checkFunctionBody's walk, once the expression position
+# it was reached from has been set aside.
+checkFunctionBodyIn: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     frame: ztypes.declid

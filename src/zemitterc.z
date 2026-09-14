@@ -8475,8 +8475,17 @@ emitTypeQualCall: function {
 } out String is {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
-    if bn.length == 0 then return "".string
-    btid: userFnId :ast :symtab :ctx name: bn
+    btid: ztypes.tid
+    if bn.length > 0 then btid = userFnId :ast :symtab :ctx name: bn
+    # a type reached through its unit (`other.T.helper`) has no bare base name:
+    # the checker stamped the call type-qualified, and the base path its type
+    if btid.isZero when (symtab.typing.callRecvFromArgs.has item: call.nodeid.u64) then {
+        cq: ast.nodes.get i: call.callable.u64
+        if cq.dottedpath then btid = (stampIdOf
+            :symtab
+            nid: (interpPartNodeId n: (ast.nodes.get i: cq.parent.u64))
+        )
+    }
     if btid.isZero then return "".string
     bttq: symtab.reg.typetypeOf typeId: btid
     # a receiver's family decides how it is CARRIED, never how the call is
@@ -12143,6 +12152,8 @@ methodAutoCallRead: function {
     mco: u64
     # the enclosing type's name
     fbtn: StringView
+    # the read names the method itself, a `.take` of it, rather than its call
+    readIsRef: bool
 } out String is {
     if (isSvNoArgNative name: mn2) when (isStringyTid :ctx tid: bstamp) then {
         needsAddM :ctx uname: "system" memb: mn2
@@ -12156,7 +12167,7 @@ methodAutoCallRead: function {
         if z.length > 0 then return z
     }
     if bn2v.isZero when bn2 == fbtn then {
-        if (fnTypeTakesThis :symtab tid: mt) then return mc2
+        if readIsRef or (fnTypeTakesThis :symtab tid: mt) then return mc2
         sda: renderedMethodDefaultArgs :ast :symtab :ctx fnTid: mt
         if sda.length > 0 then return "\{mc2}(\{sda})"
         return "\{mc2}()"
@@ -12241,7 +12252,7 @@ emitResolvedMemberRead: function {
     if (symtab.typing.declIsFnptrField pool: ast.names parentTypeId: bstamp name: mn2) then {
         return (fnptrFieldRead :symtab :ctx :mn2 :bn2 :bn2v :mco :fbtn :readIsRef)
     }
-    return (methodAutoCallRead :ast :symtab :ctx :mn2 :bn2 :bn2v :bstamp :mco :fbtn)
+    return (methodAutoCallRead :ast :symtab :ctx :mn2 :bn2 :bn2v :bstamp :mco :fbtn :readIsRef)
 }
 
 # sumMemberMethodRead -- a sum type's dotted read where the member is a declared

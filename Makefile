@@ -826,7 +826,12 @@ perf: $(PERFBIN)
 # two namespaces: over the new source the new compiler allocates 10 fewer than the
 # old (the old source itself is refused by the new rule, so it cannot be the
 # common input), and it is the input, the compiler's own source longer.
-ALLOC_BASELINE := 2533986
+#
+# +2,101 when a body walked on demand set aside the expression position it was
+# reached from, and fields and constants joined the two namespaces: over the
+# same source the new compiler allocates 3 more, and the rest is the input, the
+# compiler's own source longer.
+ALLOC_BASELINE := 2536087
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
