@@ -1,7 +1,8 @@
 /* Splitter / linesiter state. Classes are declared `is native`
    with no user fields; the runtime supplies the real layout,
    stack-allocated value type (48 bytes). Both iterators share
-   the same struct — linesiter leaves sep NULL. */
+   the same struct — linesiter leaves sep NULL — under a name of
+   its own, so either type can be the only one a program uses. */
 typedef struct {
     const char* src;
     uint64_t    src_len;
@@ -9,5 +10,5 @@ typedef struct {
     uint64_t    sep_len;
     uint64_t    cursor;
     bool        done;
-} z_@Splitter@_t;
+} z_sv_iter_t;
 

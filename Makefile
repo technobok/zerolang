@@ -840,7 +840,12 @@ perf: $(PERFBIN)
 # of its methods was checked as a body checks it: over the same source the new
 # compiler allocates exactly as the old, and it is the input, the compiler's own
 # source longer.
-ALLOC_BASELINE := 2552932
+#
+# +3,661 when an ownership marker on a literal, a constant or data, and a data
+# block used as a value, were refused: over the same source the new compiler
+# allocates exactly as the old, and it is the input, the compiler's own source
+# longer.
+ALLOC_BASELINE := 2556593
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

@@ -22809,6 +22809,66 @@ checkResolvedMember: function {
     return result
 }
 
+# refuseMarkerWithoutStorage -- an ownership marker (`.take`, `.borrow`, `.hold`)
+# on a value that names no storage: a literal, a unit constant, a data block or
+# one of its elements, an arm. A marker moves, lends or freezes a variable or a
+# field; such a value is read where it is written, so the marker would do
+# nothing while saying it does something. A function carries its own reference
+# form, and a protocol, a facet or a type declaring the name as a function its
+# `.borrow` projection, so none of them is asked.
+# The addressability question is the one a write target answers. True when it
+# reported; the marked value then has no type, so a binding of it is not refused
+# a second time for what it would have held.
+refuseMarkerWithoutStorage: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+} out bool is {
+    isMarker: (isMoveMarkerId nameId: cnId) or (cnId == zast.names.wkBorrow)
+    if isMarker.not then return false
+    btt: st.reg.typetypeOf typeId: bt
+    if btt == ztypes.ztypetype.functionType then return false
+    if btt == ztypes.ztypetype.protocolType or (btt == ztypes.ztypetype.facetType) then return false
+    if (isAddressableTarget :ast :st nid: dp.parent) then return false
+    # a type that DECLARES the name as a function -- a typedef wrapper's
+    # `ByteView.borrow from: ...` -- is calling it, not marking anything
+    forceMemberOf :st frame: st.curFrame :ast parentTypeId: bt nameId: cnId
+    declared: (st.typing.declChildOfId parentTypeId: bt nameId: cnId).or d: 0
+    if declared > 0 when (
+        (st.reg.typetypeOf typeId: (ztypes.tid.create from: declared.u64)) ==
+        ztypes.ztypetype.functionType
+    ) then return false
+    tp: ListVal zast.nameid
+    appendValueTuple :ast n: (ast.nodes.get i: dp.parent.u64) dst: tp
+    what: "this value".string
+    hint: "write the value without a marker".string
+    if (ast.nodes.get i: dp.parent.u64).atomstring then {
+        what = "a string literal".string
+        hint = "write the literal without a marker".string
+    }
+    if tp.length > 0 then {
+        pp: zenv.formatPath pool: ast.names path: tp.listView
+        what = "'\{pp}'"
+        hint = "write the value without a marker: '\{pp}'"
+        if btt == ztypes.ztypetype.dataType then hint = "copy a data block with '\{pp}.array'"
+    }
+    cn: zast.nameTextAt :ast ref: cnId
+    (addErrorH
+        :st
+        nodeid: dp.nid
+        lineno: dp.lineno
+        colno: dp.colno
+        e: zast.err.typeError
+        msg: "\{what} names no storage: '.\{cn}' applies to a variable or a field"
+        note: "a literal, a constant and a data block are values, not places".string
+        :hint
+        width: 1
+    )
+    return true
+}
+
 # checkMarkerMember -- the access and conversion markers a dotted path can name
 # instead of a member: `.private` / `.public` carry the base's own type,
 # `.stringView` and `.str` convert between the two string forms, and `.borrow` is
@@ -23073,7 +23133,9 @@ checkTransferMarker: function {
         )
     }
     mkRootId: bareAtomNameId n: (ast.nodes.get i: dp.parent.u64)
-    if (isDropMarkerId nameId: cnId) when mkRootId.isZero then {
+    # a numeric literal is an atom too, and names no variable
+    notVariable: mkRootId.isZero or (isNumericLiteralNameAt :ast ref: mkRootId)
+    if (isDropMarkerId nameId: cnId) when notVariable then {
         mrv: "'.drop' can only be applied to a variable name".string
         (addError
             :st
@@ -23430,6 +23492,7 @@ checkDotted: function {
         lineno: dp.lineno
         colno: dp.colno
     ) then return (ztypes.tid.create from: 0)
+    if (refuseMarkerWithoutStorage :st :ast :dp :bt :cnId) then return (ztypes.tid.create from: 0)
     mkm: checkMarkerMember :st :unitDecl :ast :dp :bt :cnId
     if mkm.handled then return mkm.tid
     xfm: checkTransferMarker :st :unitDecl :ast :dp :bt :cnId
@@ -25073,6 +25136,43 @@ checkMovedValueAt: function {
     return vt
 }
 
+# refuseDataBlockValue -- a data block used whole where a value is wanted: bound
+# to a name, by a `with` or a `for` header, or written as a statement. A block is compile-time data
+# with no runtime object of its own -- its elements and its length fold to
+# constants, and only `.array` and `.index` put it in the program -- so it has no
+# value to bind. True when `vt`, the value's type, is a block and was refused.
+refuseDataBlockValue: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    vt: ztypes.tid
+    nid: zast.nodeid
+} out bool is {
+    if vt.isZero then return false
+    if (st.reg.typetypeOf typeId: vt) != ztypes.ztypetype.dataType then return false
+    tp: ListVal zast.nameid
+    appendValueTuple :ast n: (ast.nodes.get i: nid.u64) dst: tp
+    pp: zenv.formatPath pool: ast.names path: tp.listView
+    ln: u32
+    co: u32
+    {
+        vn: ast.nodes.get i: nid.u64
+        ln = nodeLine n: vn
+        co = nodeCol n: vn
+    }
+    (addErrorH
+        :st
+        nodeid: nid
+        lineno: ln
+        colno: co
+        e: zast.err.typeError
+        msg: "'\{pp}' is a data block, not a value"
+        note: "a data block's elements and length are constants; the block has no runtime object".string
+        hint: "read an element or its '.length', or copy it with '\{pp}.array'"
+        width: pp.length.u32.orPanic
+    )
+    return true
+}
+
 # checkAssignment -- a local binding `name: value`: walk the value, materialise a
 # literal-typed value to its concrete default (the binding takes i64, unlike a
 # for-loop binding which keeps the pseudo id), define the local (owned for a plain
@@ -25116,6 +25216,7 @@ checkAssignment: function {
         )
         return
     }
+    if (refuseDataBlockValue :st :ast :vt nid: asgn.value) then return
     if vt > 0 then {
         bpins: List ztyping.PinPath
         takePendingPins :st dst: bpins
@@ -26083,6 +26184,7 @@ checkWith: function {
     withMarker: st.pushBlock name: "with"
     errW: st.typing.errors.length
     vt: checkValueAt :st :unitDecl :ast nid: withnode.value
+    if (refuseDataBlockValue :st :ast :vt nid: withnode.value) then vt = ztypes.tid
     if vt.u64 == 0 when st.typing.errors.length == errW then {
         (reportUnresolvedValue
             :st
@@ -26802,6 +26904,7 @@ checkForCondition: function {
         vt = checkValueAt :st :unitDecl :ast nid: cond.operation
     }
     st.typing.allowBareFnRef = bfrFor
+    if (refuseDataBlockValue :st :ast :vt nid: cond.operation) then vt = ztypes.tid
     # a condition that typed to nothing and raised nothing is an
     # unresolvable name -- the same rule the binding and operand sites
     # follow. Without it the emitter writes the bare name into the C.
@@ -36076,6 +36179,7 @@ checkStmtExpression: function {
     st.typing.stmtExprNid = valueId.u64
     et0: checkValueAt :st :unitDecl :ast nid: valueId
     st.typing.stmtExprNid = outerStmt0
+    refuseDataBlockValue :st :ast vt: et0 nid: valueId
     if et0 > 0 then stampGate :st nid: lineId.u64 tid: et0
     ckOpt0: st.typing.callKind.get key: valueId.u64
     isR0: isReturnCallKind o: ckOpt0

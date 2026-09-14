@@ -13616,6 +13616,24 @@ moveMarkerMovesBase: function {
     return false
 }
 
+# markerReadsFieldValue -- the base of a move marker is a field path whose
+# value is not a function: what the marker hands on is the field's value.
+markerReadsFieldValue: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    pnid: u64
+} out bool is {
+    isPath: false
+    {
+        pn: ast.nodes.get i: pnid
+        isPath = pn.dottedpath
+    }
+    if isPath.not then return false
+    pt: stampIdOf :symtab nid: pnid
+    if pt.isZero then return false
+    return (symtab.reg.typetypeOf typeId: pt) != ztypes.ztypetype.functionType
+}
+
 # convRowKeyOf -- the native-table key of the runtime numeric conversion a
 # dotted marker `<expr>.<numtype>` names, empty when it names none. The
 # member half is asked first: it needs neither the source type nor the path
@@ -13706,6 +13724,17 @@ emitDottedNativeMarker: function {
         :ast
         :symtab
         :ctx
+        pnid: n.parent.u64
+    ) then {
+        return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
+    }
+    # `.take` / `.hold` on a FIELD holding a value -- a number, a record --
+    # moves nothing off the heap: the value is the field's own, read in place
+    # (the binding zeroes the field after it). Spelling the marker as a member
+    # read one the struct does not have.
+    if (ztypecheck.isMoveMarker name: mn2b.stringView) when (markerReadsFieldValue
+        :ast
+        :symtab
         pnid: n.parent.u64
     ) then {
         return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
