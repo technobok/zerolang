@@ -1,0 +1,84 @@
+# A TAKE IN ONE `match` ARM IS THAT ARM'S. Arms took an outer local as if in
+# sequence: the take in the first arm made a sibling's read, a sibling's own
+# take, and a take inside a block in an arm "cannot use after ownership
+# transfer". Each arm now starts from the locals live before the match, as an
+# `if` arm does; the local is consumed after the match if any arm took it. The
+# arm that runs moves the value, and the scope's destroy is a no-op on it.
+Mode: variant {
+    fast: null
+    slow: null
+    idle: null
+}
+
+Box: class {
+    n: i64
+}
+
+Val: union {
+    text: String
+    none: null
+}
+
+run: function {m: Mode} is {
+    s: "s".string
+    match (
+        m
+    ) case fast then {
+        t: s.take
+        print "fast took \{t}"
+    } case slow then {
+        print "slow read \{s}"
+    } case idle then {
+        u: s.take
+        print "idle took \{u}"
+    }
+    b: Box n: 4
+    match (
+        m
+    ) case fast then {
+        {
+            c: b.take
+            print "block took \{c.n}"
+        }
+    } else {
+        print "else read \{b.n}"
+    }
+    xs: ListRef String
+    xs.append "item".string
+    match (
+        m
+    ) case slow then {
+        ys: xs.take
+        print "list took \{ys.length}"
+    } else {
+        print "list kept \{xs.length}"
+    }
+    v: Val.text "v".string
+    match (
+        m
+    ) case idle then {
+        w: v.take
+        match (
+            w
+        ) case text then {
+            print "union took \{w}"
+        } case none then null
+    } else {
+        print "union kept"
+    }
+    k: "k".string
+    match (
+        m
+    ) case fast then {
+        kk: k.take
+        print "diverging took \{kk}"
+        return
+    } else null
+    print "after \{k}"
+}
+
+main: function is {
+    run m: Mode.fast
+    run m: Mode.slow
+    run m: Mode.idle
+}

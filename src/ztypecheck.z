@@ -29169,11 +29169,13 @@ relayBreakTakes: function {st: zenv.ZSymbolTable run: zenv.looprun} is {
 # String). A take is an overlay over a persisting entry, so clearTaken alone
 # restores (no redefine).
 restoreTakenArm: function {st: zenv.ZSymbolTable liveBefore: (IdSet u64).view taken: IdSet u64} is {
-    liveAfter: st.getLiveOwnedVars
+    # a local live before the arm is still in scope and still owned: only a
+    # take row laid in the arm can have changed it
     for vn: liveBefore.iterate loop {
-        if (liveAfter.has item: vn).not then {
+        vd: ztypes.declid.create from: vn
+        if (st.hasTakenRow declId: vd) then {
             taken.add item: vn
-            st.clearTakenDecl declId: (ztypes.declid.create from: vn)
+            st.clearTakenDecl declId: vd
         }
     }
 }
@@ -36854,6 +36856,9 @@ checkCaseClause: function {
     covered: List String
     diverging: List String
     armTypes: ListVal u64
+    # the owned locals live before the match, and those an arm took
+    liveBefore: (IdSet u64).view
+    takenAcross: IdSet u64
 } out casearmfacts is {
     anyEmpty: false
     allDiverge: true
@@ -36918,7 +36923,7 @@ checkCaseClause: function {
     }
     cn2: armName.copy
     covered.append cn2
-    ak: st.settleDivergingTakes
+    ak: settleArmTakes :st :liveBefore taken: takenAcross
     if ak == zenv.divkind.none then st.collectArmNarrowingEnds
     st.popTo marker: armMarker
     return (casearmfacts empty: anyEmpty diverges: allDiverge)
@@ -37112,6 +37117,9 @@ checkCaseElse: function {
     neverId: u64
     covered: List String
     armTypes: ListVal u64
+    # the owned locals live before the match, and those an arm took
+    liveBefore: (IdSet u64).view
+    takenAcross: IdSet u64
 } out casearmfacts is {
     anyEmpty: false
     allDiverge: true
@@ -37141,7 +37149,7 @@ checkCaseElse: function {
     # read downstream as "control does not continue", so the emitter dropped
     # the enclosing arm's `break` and the switch fell through.
     if et > 0 when et == neverId then null else allDiverge = false
-    ek: st.settleDivergingTakes
+    ek: settleArmTakes :st :liveBefore taken: takenAcross
     if ek == zenv.divkind.none then st.collectArmNarrowingEnds
     st.popTo marker: elseMarker
     return (casearmfacts empty: anyEmpty diverges: allDiverge)
@@ -37162,6 +37170,8 @@ walkCaseClauses: function {
     covered: List String
     diverging: List String
     armTypes: ListVal u64
+    liveBefore: (IdSet u64).view
+    takenAcross: IdSet u64
 } out casearmfacts is {
     anyEmpty: false
     allDiverge: true
@@ -37183,6 +37193,8 @@ walkCaseClauses: function {
                 :covered
                 :diverging
                 :armTypes
+                :liveBefore
+                :takenAcross
             )
             if cf.empty then anyEmpty = true
             if cf.diverges.not then allDiverge = false
@@ -37274,6 +37286,10 @@ checkCaseArms: function {
     nullId: (walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: "null").or d: 0
     anyEmpty: false
     armEnds: st.openArmNarrowingEnds
+    # a take in one arm is restored for its siblings and consumes the local once
+    # the match is done, as an `if` arm's does
+    liveBefore: st.getLiveOwnedVars
+    takenAcross: IdSet u64
     st.pushBlock name: "match_body"
     if targetName.length > 0 then st.resetNarrowing nameId: (nameIdOf
         :ast
@@ -37295,6 +37311,8 @@ checkCaseArms: function {
         :covered
         :diverging
         :armTypes
+        :liveBefore
+        :takenAcross
     )
     if cf0.empty then anyEmpty = true
     if cf0.diverges.not then allDiverge = false
@@ -37310,6 +37328,8 @@ checkCaseArms: function {
             :neverId
             :covered
             :armTypes
+            :liveBefore
+            :takenAcross
         )
         if ef.empty then anyEmpty = true
         if ef.diverges.not then allDiverge = false
@@ -37334,6 +37354,7 @@ checkCaseArms: function {
     # after the exclusions the diverging arms left: a write in an arm that
     # completes wins over them
     st.closeArmNarrowingEnds marker: armEnds
+    invalidateTakenAcross :st decls: takenAcross
     return result
 }
 
