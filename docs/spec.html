@@ -2079,6 +2079,15 @@ constant, or an expression of constants (<code>(myrec size: N * 2)</code>,
 value stands in for the constraint type as a body argument does: an untyped
 constant must lie in its range, so a negative value is accepted only by a signed
 constraint, and a typed constant must convert to it without loss.</p>
+<p>Inside the template the parameter is a compile-time constant of the constraint
+type, whose value each instantiation supplies. It is read bare (<code>cap</code>),
+through <code>this</code> or any value of the type (<code>b.cap</code>), or through a unit
+instance (<code>four.cap</code>) -- the one static member a value reaches, since the
+value's type fixes it -- and it is never written. A condition over it folds per
+instantiation, so an <code>error</code> it guards is triggered or eliminated there (see
+<a href="#compile-time-error">Compile-Time Error</a>), and a <code>match</code> over it
+dissects. A read from a call's result (<code>(make).cap</code>) is refused: folding the
+read would not make the call.</p>
 <p>When a numeric generic parameter is monomorphized, it becomes a runtime field in
 the concrete type with the constraint as its type and the value as its default.
 If the user has already declared a field referencing the numeric parameter, only
@@ -5505,24 +5514,23 @@ main: function is {
 <p>This interacts naturally with numeric generic parameters. When a generic
 type is monomorphised with a concrete numeric value, the condition becomes
 a compile-time constant and the error is either triggered or eliminated.</p>
-<pre><code class="language-zerolang">buffer: record {
+<pre><code class="language-zerolang">Buffer: class {
     used: u32
+    check: function {:this} is {
+        if cap == 0 then {
+            error "buffer capacity must not be zero"
+        }
+    }
 } as {
     cap: u32.generic
 }
 
-fill: function {b: buffer} is {
-    if b.cap == 0 then {
-        error "buffer capacity must not be zero"
-    }
-}
-
 main: function is {
-    ok: (buffer cap: 8)
-    fill ok                     # compiles: 8 != 0
+    ok: (Buffer cap: 8) used: 0
+    ok.check                    # compiles: 8 != 0
 
-    # bad: (buffer cap: 0)
-    # fill bad                  # would fail: "buffer capacity must not be zero"
+    # bad: (Buffer cap: 0) used: 0
+    # bad.check                 # would fail: "buffer capacity must not be zero"
 }</code></pre>
 <p>A <code>match</code> never dissects a plain value or a named constant. Its subject
 must be a union, variant, enum, or generic parameter, and each <code>case</code>

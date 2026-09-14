@@ -2419,7 +2419,7 @@ ifDiverges: function {
         # a chain whose every condition folds emits ONE branch, so only that
         # branch decides -- the arms the emitter dropped cannot run. Mirrors the
         # fold in emitStmt's ifexpr case.
-        ffb: foldedBranchOf :symtab nid: n.nodeid.u64
+        ffb: foldedBranchOf :symtab :ctx nid: n.nodeid.u64
         if ffb.known then {
             # every branch folded away: nothing is emitted, so nothing diverges
             if ffb.stmt.isZero then return false
@@ -9617,15 +9617,12 @@ cvalStrText: function {symtab: zenv.ZSymbolTable.view ctx: Ctx v: ztypes.cval} o
 # `if` or a `match`. `known` false means the conditions did not all fold, so a
 # runtime branch must be emitted; `known` true with a zero stmt means nothing
 # was selected and nothing is emitted at all.
-foldedBranchOf: function {symtab: zenv.ZSymbolTable.view nid: u64} out ztyping.foldedbranch is {
-    go: symtab.typing.foldedBranch.get key: nid
-    match (
-        go
-    ) case some then {
-        return go
-    } case none then {
-        return (ztyping.foldedbranch known: false stmt: zast.nodeid)
-    }
+foldedBranchOf: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    nid: u64
+} out ztyping.foldedbranch is {
+    return (symtab.typing.foldedBranchIn mono: ctx.curThisTid.u64 :nid)
 }
 
 # nodeConstText -- the C literal for a node carrying a compile-time const
@@ -9651,21 +9648,15 @@ nodeConstText: function {
     nid: zast.nodeid
 } out String is {
     if nid.isZero then return "".string
-    g: symtab.typing.nodeConst.get key: nid.u64
-    match (
-        g
-    ) case some then {
-        if g.kind.fvalKind then return "".string
-        tv: ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: nid.u64
-        if g.kind.svalKind when (chaseStrTypedef :symtab :ctx tid: tv) == ctx.strTid then {
-            return "".string
-        }
-        sc: cvalText :ast :symtab :ctx tid: tv v: g
-        if sc.length > 0 then return sc
-        return (cvalStrText :symtab :ctx v: g)
-    } case none then {
+    g: symtab.typing.nodeConstIn mono: ctx.curThisTid.u64 nid: nid.u64
+    if g.kind.none or g.kind.fvalKind then return "".string
+    tv: ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: nid.u64
+    if g.kind.svalKind when (chaseStrTypedef :symtab :ctx tid: tv) == ctx.strTid then {
         return "".string
     }
+    sc: cvalText :ast :symtab :ctx tid: tv v: g
+    if sc.length > 0 then return sc
+    return (cvalStrText :symtab :ctx v: g)
 }
 
 # memberConstTid -- the declared type of a unit constant, 0 when it has none.
@@ -14107,7 +14098,7 @@ emitExpr: function {
         # value alone. spec.pdoc, Conditional Compilation, promises the false
         # branch is not emitted, and that promise is not limited to statement
         # position.
-        vfb: foldedBranchOf :symtab nid: n.nodeid.u64
+        vfb: foldedBranchOf :symtab :ctx nid: n.nodeid.u64
         if vfb.known when vfb.stmt.isZero.not then {
             return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: vfb.stmt.u64))
         }
@@ -14287,7 +14278,8 @@ emitOperatorAt: function {
     # the stamp is asked FIRST: it is a plain id lookup, where reaching the
     # table means building a key from a view. Most operands are not constants,
     # and those never touch the table at all.
-    if (symtab.typing.nodeConst.has key: rhsNid) then {
+    rhsConst: symtab.typing.nodeConstIn mono: ctx.curThisTid.u64 nid: rhsNid
+    if rhsConst.kind.none.not then {
         cbody: nativeConstImplOf :ctx path: key.stringView
         if cbody.length > 0 then {
             cpos: nativeConstPosOf :ctx path: key.stringView
@@ -17217,7 +17209,7 @@ emitIfStmt: function {
     # constant guards: when every clause folds at emit time, only the
     # winning body is emitted -- provably-dead branches (including dead
     # `error` arms) are eliminated from the C.
-    efb: foldedBranchOf :symtab nid: n.nodeid.u64
+    efb: foldedBranchOf :symtab :ctx nid: n.nodeid.u64
     if efb.known then {
         ewb: efb.stmt
         if ewb.isZero.not then {
@@ -17543,7 +17535,7 @@ emitCaseStmt: function {
 } is {
     # constant subject over literal arms: emit only the matching arm, as
     # the typechecker resolved it.
-    mfb: foldedBranchOf :symtab nid: n.nodeid.u64
+    mfb: foldedBranchOf :symtab :ctx nid: n.nodeid.u64
     if mfb.known then {
         mwb: mfb.stmt
         if mwb.isZero.not then {
@@ -19175,7 +19167,7 @@ emitIfBindValue: function {
     ) case ifexpr then {
         # every condition folds: declare the local and assign the one live
         # branch, rather than emitting a runtime if whose other arms are dead
-        bfb: foldedBranchOf :symtab nid: n.nodeid.u64
+        bfb: foldedBranchOf :symtab :ctx nid: n.nodeid.u64
         if bfb.known then {
             bwb: bfb.stmt
             if bwb.isZero.not then {

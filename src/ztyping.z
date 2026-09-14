@@ -448,6 +448,16 @@ ZTyping: class {
     # argument node: the type-reference shell the refusal leaves behind is not a
     # second mistake to report
     numericArgsRefused: IdSet u64
+    # a use site's compile-time value from one mono's walk, where it differs
+    # from the value the walks share: a numeric generic parameter read in a
+    # template body folds to each mono's own argument
+    monoNodeConst: (MapVV monostamp v: ztypes.cval)
+    # the branch a fold selected in one mono's walk, where it differs from the
+    # shared one
+    monoFoldedBranch: (MapVV monostamp v: foldedbranch)
+    # the use sites that read a numeric generic parameter, bare or through a
+    # value or a type, to the parameter's name
+    numericParamRead: (IdMapV u64 v: zast.nameid)
     # the generic template ops whose method bodies have been scanned for
     # demands from the template's own frame (once per template)
     templateBodiesScanned: IdSet u64
@@ -2072,6 +2082,68 @@ ZTyping: class {
         this.nodeConst.set key: nid.u64 :value
     }
 
+    # setNodeConstIn -- a use site's value from the walk of `mono` (0 for a walk
+    # of no mono). A template body is walked once per mono, and a value that
+    # differs between monos -- a numeric generic parameter's -- is kept per
+    # mono; the first value any walk finds is the shared one.
+    setNodeConstIn: function {:this mono: u64 nid: zast.nodeid value: ztypes.cval} is {
+        if mono > 0 then {
+            shared: this.nodeConst.get key: nid.u64
+            match (
+                shared
+            ) case some then {
+                if shared == value then return
+                this.monoNodeConst.set key: (monostamp :mono node: nid.u64) :value
+                return
+            } case none then null
+        }
+        this.nodeConst.set key: nid.u64 :value
+    }
+
+    # nodeConstIn -- a use site's value as the walk of `mono` sees it: the
+    # mono's own, else the shared one; `none` when it has neither.
+    nodeConstIn: function {t: this.view mono: u64 nid: u64} out ztypes.cval is {
+        if mono > 0 then {
+            mg: t.monoNodeConst.get key: (monostamp :mono node: nid)
+            match (
+                mg
+            ) case some then {
+                return mg
+            } case none then null
+        }
+        return ((t.nodeConst.get key: nid).or d: ztypes.noConst)
+    }
+
+    # setFoldedBranchIn -- the branch a fold selected in the walk of `mono`, kept
+    # the way setNodeConstIn keeps a value.
+    setFoldedBranchIn: function {:this mono: u64 nid: u64 value: foldedbranch} is {
+        if mono > 0 then {
+            shared: this.foldedBranch.get key: nid
+            match (
+                shared
+            ) case some then {
+                if shared == value then return
+                this.monoFoldedBranch.set key: (monostamp :mono node: nid) :value
+                return
+            } case none then null
+        }
+        this.foldedBranch.set key: nid :value
+    }
+
+    # foldedBranchIn -- the branch a fold selected as the walk of `mono` sees it;
+    # `known` false when no fold decided one.
+    foldedBranchIn: function {t: this.view mono: u64 nid: u64} out foldedbranch is {
+        if mono > 0 then {
+            mg: t.monoFoldedBranch.get key: (monostamp :mono node: nid)
+            match (
+                mg
+            ) case some then {
+                return mg
+            } case none then null
+        }
+        return ((t.foldedBranch.get key: nid).or d: (foldedbranch known: false stmt: zast.nodeid))
+    }
+
     # memberConstOf -- that value, or `none` when the member has none.
     memberConstOf: function {
         t: this.view
@@ -2600,6 +2672,9 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         nsConstsWalked: IdSet u64
         constsDiagnosed: IdSet u64
         numericArgsRefused: IdSet u64
+        monoNodeConst: (MapVV monostamp v: ztypes.cval)
+        monoFoldedBranch: (MapVV monostamp v: foldedbranch)
+        numericParamRead: (IdMapV u64 v: zast.nameid)
         templateBodiesScanned: IdSet u64
         monoParamSubst: (IdMapV ztypes.tid v: ztypes.tid)
         curMonoStamp: 0

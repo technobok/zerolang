@@ -274,6 +274,15 @@ schemaSql: function {} out String is {
     (acc.append
         s: "CREATE TABLE IF NOT EXISTS mono_node_type (mono_id INTEGER NOT NULL, node_id INTEGER NOT NULL, type_id INTEGER NOT NULL, PRIMARY KEY (mono_id, node_id));\n"
     )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS mono_node_const (mono_id INTEGER NOT NULL, node_id INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (mono_id, node_id));\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS mono_folded_branch (mono_id INTEGER NOT NULL, node_id INTEGER NOT NULL, known INTEGER NOT NULL, stmt_id INTEGER NOT NULL, PRIMARY KEY (mono_id, node_id));\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS numeric_param_read (node_id INTEGER PRIMARY KEY, name_id INTEGER NOT NULL);\n"
+    )
     return acc
 }
 
@@ -760,6 +769,24 @@ ZDumper: class {
         with mnit: typing.monoNodeType.iterateItems do for mn: mnit loop {
             rowMn: "INSERT OR IGNORE INTO mono_node_type VALUES (\{mn.key.mono}, \{mn.key.node}, \{mn.value.u64});\n"
             this.acc.append s: rowMn
+        }
+        # a numeric generic parameter's read folds to each mono's own argument,
+        # so a value or branch that differs from the shared one is kept per mono
+        with mcit: typing.monoNodeConst.iterateItems do for mc: mcit loop {
+            rowMc: "INSERT OR IGNORE INTO mono_node_const VALUES (\{mc.key.mono}, \{mc.key.node}, '\{(constValueText
+                v: mc.value
+            )}');\n"
+            this.acc.append s: rowMc
+        }
+        with mbit: typing.monoFoldedBranch.iterateItems do for mb: mbit loop {
+            kn: 0
+            if mb.value.known then kn = 1
+            rowMb: "INSERT OR IGNORE INTO mono_folded_branch VALUES (\{mb.key.mono}, \{mb.key.node}, \{kn}, \{mb.value.stmt.u64});\n"
+            this.acc.append s: rowMb
+        }
+        with npit: typing.numericParamRead.iterateItems do for np: npit loop {
+            rowNp: "INSERT OR IGNORE INTO numeric_param_read VALUES (\{np.key}, \{np.value.u64});\n"
+            this.acc.append s: rowNp
         }
     }
 
