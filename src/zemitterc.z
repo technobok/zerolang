@@ -3077,6 +3077,11 @@ Ctx: class {
     argHoistRaw: List String
     # the next `_ah` number
     argHoistCtr: u64
+    # the lowest temp number the function being emitted has not handed out,
+    # across every counter a statement expression in it keeps. A temp declared
+    # inside a statement expression counts on from it, so it never shadows a
+    # temp the code around it still reads through an alias
+    tmpHigh: u64
     # the next `_wc` number: the guard a suspending `when` condition computes
     # into, since its value has to outlive the `if` that computes it
     whenGuardCtr: u64
@@ -5714,6 +5719,15 @@ flushArgHoists: function {
         ctx.argHoistDtors.pop
     }
     for ctx.argHoistRaw.length > rawFloor loop ctx.argHoistRaw.pop
+}
+
+# tmpNext -- the next temp number of the function being emitted, from `tmp` or
+# from a statement expression's own counter, whichever has counted further.
+tmpNext: function {ctx: Ctx tmp: TmpCtr} out u64 is {
+    if ctx.tmpHigh > tmp.n then tmp.n = ctx.tmpHigh
+    v: tmp.next
+    ctx.tmpHigh = tmp.n
+    return v
 }
 
 # pushLoopLabel -- allocate a unique break-target label for a loop and push it.
@@ -14525,7 +14539,7 @@ emitInterpBuild: function {
         }
         if isC.not then est = est + 16
     }
-    sN: tmp.next
+    sN: tmpNext :ctx :tmp
     l0: "\{ind}\{ctx.strC}_t _s\{sN} = \{ctx.strC}_create((uint64_t)\{est});\n"
     buf.append l0
     h6x9: u64
@@ -14761,7 +14775,7 @@ appendFormattedNum: function {
 # value is read twice, for its data and its size, so a call is bound to a temp
 # first and runs once.
 appendViewPart: function {
-    ctx: Ctx.view
+    ctx: Ctx
     # the part's C text
     val: StringView
     sN: u64
@@ -14770,7 +14784,7 @@ appendViewPart: function {
     buf: String.borrow
 } is {
     if (singleReadNeedsTemp s: val) then {
-        svh: tmp.next
+        svh: tmpNext :ctx :tmp
         buf.append "\{ind}\{ctx.svC}_t _h\{svh} = \{val};\n"
         buf.append "\{ind}\{ctx.strC}_append(&_s\{sN}, _h\{svh}.data, _h\{svh}.size);\n"
         return
@@ -14817,7 +14831,7 @@ appendStringPart: function {
         buf.append "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}\{sAcc}data, \{val}\{sAcc}size);\n"
         return
     }
-    hN: tmp.next
+    hN: tmpNext :ctx :tmp
     buf.append "\{ind}\{ctx.strC}_t _h\{hN} = \{val};\n"
     buf.append "\{ind}\{ctx.strC}_append(&_s\{sN}, _h\{hN}.data, _h\{hN}.size);\n"
     if (hoistExprIsBorrowRooted :ast :symtab :ctx :n).not then {
@@ -14850,7 +14864,7 @@ emitInterpPart: function {
     # declare them before the fragment uses them (mirrors the direct
     # print path's flush after emitCallValue)
     flushArgHoists :ctx :ind :tmp :buf floor: hoistFloor rawFloor: hoistRawFloor
-    bN: tmp.next
+    bN: tmpNext :ctx :tmp
     tns: tn.stringView
     if tns == "i128" then {
         needsAddM :ctx uname: "prelude" memb: "fmt_128"
@@ -15331,7 +15345,7 @@ emitPrintValueExpr: function {
     es: emitExpr :ast :symtab :ctx :n
     flushArgHoists :ctx :ind :tmp :buf
     if (isNonLvalueArg s: es.stringView) then {
-        hps: tmp.next
+        hps: tmpNext :ctx :tmp
         lsa: "\{ind}\{ctx.strC}_t _h\{hps} = \{es};\n"
         buf.append lsa
         lsb: "\{ind}\{ctx.strC}_print(&_h\{hps});\n"
@@ -15369,7 +15383,7 @@ emitPrintCallValue: function {
         buf.append lpcv
         return
     }
-    hpc: tmp.next
+    hpc: tmpNext :ctx :tmp
     lpa: "\{ind}\{ctx.strC}_t _h\{hpc} = \{ce};\n"
     buf.append lpa
     lpb: "\{ind}\{ctx.strC}_print(&_h\{hpc});\n"
@@ -15613,7 +15627,7 @@ emitOptionBoxHoist: function {
         vc: ctxCname :ctx tid: mid
         payC: armPayloadC :ast :symtab :ctx tid: mid arm: "some"
         tg: variantTag :symtab tid: mid arm: "some"
-        bN: tmp.next
+        bN: tmpNext :ctx :tmp
         b0: "\{ind}\{vc}_t _c\{bN} = {0};\n"
         buf.append b0
         b1: "\{ind}_c\{bN}.tag = \{tg};\n"
@@ -15702,7 +15716,7 @@ emitDiscardedResult: function {
         if dctt == ztypes.ztypetype.unionType then dcdrop = true
     }
     if dcdrop when (isNonLvalueArg s: ce) then {
-        dctn: tmp.next
+        dctn: tmpNext :ctx :tmp
         dctnm: "_c\{dctn}"
         dcct: "\{ctx.strC}_t"
         dcfree: "\{ind}\{ctx.strC}_free(&\{dctnm});\n"
@@ -17012,7 +17026,7 @@ emitReassignStmt: function {
     rdrop: (stampIsStr :symtab :ctx nid: rtnid) or (symtab.reg.needsDestructor typeId: rtsid)
     if rdrop when (isNonLvalueArg s: rv2.stringView) then {
         rrt: reassignTargetC :ast :symtab :ctx :rtnid :rtsid
-        rrn: tmp.next
+        rrn: tmpNext :ctx :tmp
         buf.append "\{ind}\{rrt} _rr\{rrn} = \{rv2};\n"
         rv2 = "_rr\{rrn}"
     }
@@ -17696,7 +17710,7 @@ emitSwapStmt: function {
         pmsg6: "zemitterc: unspellable swap operand type id \{lsid}"
         panic pmsg6
     }
-    sN: tmp.next
+    sN: tmpNext :ctx :tmp
     s0: "\{ind}{\n"
     buf.append s0
     s1: "\{ind}    \{lct} _sw\{sN} = \{lx};\n"
@@ -18260,7 +18274,7 @@ matchOrdinalPairRoute: function {
         core: ast.nodes.get i: m.subject.u64
         if core.call then {
             ct: pairSubjectCType :ctx :symtab :stn tid: (ztypes.tid.create from: sTid.u64)
-            mp: tmp.next
+            mp: tmpNext :ctx :tmp
             buf.append "\{ind}\{ct} _mp\{mp} = \{subj};\n"
             emitCallTakeInvalidations :ast :symtab :ctx call: core :ind :buf
             subjOnce = "_mp\{mp}"
@@ -18488,7 +18502,7 @@ emitMatchStmt: function {
         return
     }
     vc: ctxCname :ctx tid: (ztypes.tid.create from: vtid.u64)
-    mN: tmp.next
+    mN: tmpNext :ctx :tmp
     sxM: "\{sx}"
     if (needsValueDeref
         :ast
@@ -19867,7 +19881,7 @@ emitObjIterLoop: function {
     ovu: cUpperOf text: ovn.stringView
     payC: armPayloadC :ast :symtab :ctx tid: (ztypes.tid.create from: ovid.u64) arm: "some"
     oovorig: monoOriginName :symtab tid: (ztypes.tid.create from: ovid.u64)
-    mN: tmp.next
+    mN: tmpNext :ctx :tmp
     itCb: ctxCname :ctx tid: itid
     iterRecv: (emitObjIterRecv
         :ast
@@ -21947,7 +21961,7 @@ emitHoistedReturn: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
-    rtmpN: tmp.next
+    rtmpN: tmpNext :ctx :tmp
     retNm: "_ret\{rtmpN}"
     buf.append "\{ind}\{retCt} \{retNm} = \{rv};\n"
     if leakFix then {
@@ -22100,7 +22114,7 @@ emitTailValue: function {
     }
     rtid: stampIdOf :symtab nid: vid.u64
     ct: typeRefC :ast :symtab :ctx tid: rtid thisTid: ztypes.tid
-    trn: tmp.next
+    trn: tmpNext :ctx :tmp
     nm: "_tr\{trn}"
     bound: (emitControlBindValue
         :ast
@@ -25761,6 +25775,10 @@ emitFnBody: function {
     )
     if op.functiondef.not then return
     tmp: TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree
+    # temp numbers are the function's: a body emitted while another is under
+    # way counts from zero and hands the outer one's count back
+    outerTmpHigh: ctx.tmpHigh
+    ctx.tmpHigh = 0
     oweTakeParamFrees :ast :symtab :ctx :op :fid :tmp
     endsRet: false
     if op.body > 0 then {
@@ -25773,6 +25791,7 @@ emitFnBody: function {
         ctx.tailRetActive = false
         endsRet = ctx.tailReturned or (blockDiverges :ast :symtab :ctx n: opb)
     }
+    ctx.tmpHigh = outerTmpHigh
     # a body that diverges on every path never reaches this flush; the
     # return/break cleanups already freed the same locals on those paths
     if endsRet then return
@@ -26404,6 +26423,7 @@ emitC: function {
         argHoistDtors: List String
         argHoistRaw: List String
         argHoistCtr: 0
+        tmpHigh: 0
         whenGuardCtr: 0
         breakLabels: ListVal u64
         breakLabelIsDo: ListVal bool
