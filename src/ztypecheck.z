@@ -29,6 +29,7 @@ public: unit {
     :targetExeSuffix
     :targetTripleError
     :blockHasBreak
+    :armLeaves
     :builtinTidTRo
     :dataFieldIds
     :dataFieldNames
@@ -26938,7 +26939,12 @@ checkAssignment: function {
 } is {
     drainPendingBorrow :st
     errA0: st.typing.errors.length
+    # an `if` or a `match` that is the whole value runs as statements, so its
+    # arms may leave
+    outerForm: st.typing.formValueNid
+    st.typing.formValueNid = asgn.value.u64
     vt: checkMovedValueAt :st :unitDecl :ast nid: asgn.value
+    st.typing.formValueNid = outerForm
     mvt: materialiseLiteral :ast :st :unitDecl t: vt
     vt = mvt
     if vt.isZero when st.typing.errors.length == errA0 then {
@@ -28086,6 +28092,115 @@ blockHasBreak: function {ast: Ast.view n: astnode.view} out bool is {
     } else {
         return false
     }
+}
+
+# armLeaves -- an arm of this `if` or `match` holds a `return`, a `break` or a
+# `continue` that leaves the construct. The walk descends blocks, nested
+# if/match/with bodies and binding values; a `break` or `continue` inside a
+# nested loop or `do` binds to it and stays inside, while a `return` leaves from
+# any depth.
+armLeaves: function {ast: Ast.view n: astnode.view inLoop: bool} out bool is {
+    match (
+        n
+    ) case statement then {
+        return (statementsLeave :ast span: n.statements :inLoop)
+    } case statementline then {
+        return (armLeaves :ast n: (ast.nodes.get i: n.statementline.u64) :inLoop)
+    } case atomid then {
+        if n.name.u32 == zast.names.wkReturn then return true
+        if inLoop then return false
+        return n.name.u32 == zast.names.wkBreak or (n.name.u32 == zast.names.wkContinue)
+    } case ifexpr then {
+        return (clauseArmsLeave :ast clauses: n.clauses elseId: n.elseclause :inLoop)
+    } case caseexpr then {
+        return (clauseArmsLeave :ast clauses: n.clauses elseId: n.elseclause :inLoop)
+    } case withexpr then {
+        return (armLeaves :ast n: (ast.nodes.get i: n.body.u64) :inLoop)
+    } case forexpr then {
+        if n.body.isZero then return false
+        return (armLeaves :ast n: (ast.nodes.get i: n.body.u64) inLoop: true)
+    } case doexpr then {
+        return (armLeaves :ast n: (ast.nodes.get i: n.statement.u64) inLoop: true)
+    } case assignment then {
+        return (armLeaves :ast n: (ast.nodes.get i: n.value.u64) :inLoop)
+    } case reassignment then {
+        return (armLeaves :ast n: (ast.nodes.get i: n.value.u64) :inLoop)
+    } else {
+        return (exprCallIsReturn :ast op: n)
+    }
+}
+
+# statementsLeave -- armLeaves over a block's statements.
+statementsLeave: function {ast: Ast.view span: zast.kidspan inLoop: bool} out bool is {
+    sx: u64
+    for sx < span.count.u64 loop {
+        sId: zast.kidAt kids: ast.kids :span i: sx
+        sx = sx + 1
+        if (armLeaves :ast n: (ast.nodes.get i: sId.u64) :inLoop) then return true
+    }
+    return false
+}
+
+# clauseArmsLeave -- armLeaves over an if's or a match's arms and its else.
+clauseArmsLeave: function {
+    ast: Ast.view
+    clauses: zast.kidspan
+    elseId: zast.nodeid
+    inLoop: bool
+} out bool is {
+    cx: u64
+    for cx < clauses.count.u64 loop {
+        cId: zast.kidAt kids: ast.kids span: clauses i: cx
+        cx = cx + 1
+        if (clauseArmLeaves :ast cl: (ast.nodes.get i: cId.u64) :inLoop) then return true
+    }
+    if elseId.isZero then return false
+    return (armLeaves :ast n: (ast.nodes.get i: elseId.u64) :inLoop)
+}
+
+# clauseArmLeaves -- armLeaves over one `if` or `case` clause's body.
+clauseArmLeaves: function {ast: Ast.view cl: astnode.view inLoop: bool} out bool is {
+    match (
+        cl
+    ) case ifclause then {
+        return (armLeaves :ast n: (ast.nodes.get i: cl.statement.u64) :inLoop)
+    } case caseclause then {
+        return (armLeaves :ast n: (ast.nodes.get i: cl.statement.u64) :inLoop)
+    } else {
+        return false
+    }
+}
+
+# refuseLeavingArm -- an `if` or a `match` inside an expression (an argument,
+# an operand, an interpolation part, a condition, a returned value) whose arm
+# leaves with `return`, `break` or `continue`. The arms run where the
+# expression is evaluated, among values the enclosing statement is still
+# building, and leaving from there would skip releasing them. A statement, and
+# the whole value of a binding, may leave from an arm.
+refuseLeavingArm: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    nid: u64
+    lineno: u32
+    colno: u32
+    # how the construct is named in the message, and its keyword's width
+    form: StringView
+    width: u32
+} is {
+    if st.typing.stmtExprNid == nid then return
+    if st.typing.formValueNid == nid then return
+    if (armLeaves :ast n: (ast.nodes.get i: nid) inLoop: false).not then return
+    (addErrorH
+        :st
+        nodeid: (zast.nodeid.create from: nid)
+        :lineno
+        :colno
+        e: zast.err.typeError
+        msg: "an arm of \{form} used inside an expression leaves it with `return`, `break` or `continue`"
+        note: "".string
+        hint: "bind the value to a local first, then use the local".string
+        :width
+    )
 }
 
 # wrapDoBreakValue -- the value type of a do-block that can BREAK: an early
@@ -29600,6 +29715,15 @@ consumedIfTid: function {
     # a branch is empty, so the `if` yields null and consuming it is refused
     anyEmpty: bool
 } out ztypes.tid is {
+    (refuseLeavingArm
+        :st
+        :ast
+        nid: ifnode.nid.u64
+        lineno: ifnode.lineno
+        colno: ifnode.colno
+        form: "an `if`"
+        width: 2
+    )
     if allDiverge or anyEmpty then return result
     if st.typing.stmtExprNid == ifnode.nid.u64 then return result
     if hasElse then return (valueArmsTid :st :ast nid: ifnode.nid first: result)
@@ -37553,6 +37677,15 @@ consumedCaseTid: function {
     casenode: caseref
     arms: ztypes.tid
 } out ztypes.tid is {
+    (refuseLeavingArm
+        :st
+        :ast
+        nid: casenode.nid.u64
+        lineno: casenode.lineno
+        colno: casenode.colno
+        form: "a `match`"
+        width: 5
+    )
     if st.typing.stmtExprNid == casenode.nid.u64 then return arms
     if arms.isZero or (arms.u64 == st.typing.nullTypeId) then return arms
     if (st.reg.typetypeOf typeId: arms) == ztypes.ztypetype.neverType then return arms

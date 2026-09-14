@@ -1,0 +1,144 @@
+# A `match` STANDS ANYWHERE A VALUE DOES. One used inside an expression -- an
+# argument, an operand, an interpolation part, a condition, a returned value --
+# was "unhandled expr" (E0500), and so was an `if` there whose arms are blocks.
+# Each is now emitted in place as a statement expression, so its arms run where
+# the expression is evaluated: a loop condition re-runs it at every test.
+Mode: variant {
+    fast: null
+    slow: null
+}
+
+Shape: union {
+    text: String
+    none: null
+}
+
+twice: function {n: i64} out i64 is {
+    return n * 2
+}
+
+size: function {s: String.view} out u64 is {
+    return s.length
+}
+
+both: function {a: String.view b: u64} out u64 is {
+    return a.length + b
+}
+
+tick: function {n: i64} out i64 is {
+    print "tick \{n}"
+    return n
+}
+
+# a returned value, and a match inside a call that is returned
+picked: function {m: Mode} out i64 is {
+    return (match m case fast then 1 case slow then 2)
+}
+
+wrapped: function {m: Mode} out i64 is {
+    return (twice n: (match m case fast then 3 case slow then 4))
+}
+
+# reassigned from a match whose arms hoist, then returned from one
+reassigned: function {m: Mode} out u64 is {
+    r: u64
+    r = match m case fast then size s: "abc".string case slow then size s: "de".string
+    return (match m case fast then r + 10 case slow then r + 20)
+}
+
+main: function is {
+    m: Mode.fast
+    k: Mode.slow
+    # labelled and positional arguments, an operand, a nested match
+    print "\{twice n: (match m case fast then 1 case slow then 2)} \{twice (
+        match k case fast then 1 case slow then 2
+    )}"
+    print "\{10 + (match k case fast then 1 case slow then 2)}"
+    print "\{twice n: (
+        match (
+            m
+        ) case fast then {
+            match k case fast then 1 case slow then 2
+        } case slow then 3
+    )}"
+    print "\{picked m: Mode.fast} \{wrapped m: Mode.slow} \{reassigned m: Mode.fast} \{(reassigned
+        m: Mode.slow
+    )}"
+    # an interpolation part, and String arms through a view argument and a method
+    print "mode \{match m case fast then "fast" case slow then "slow"}"
+    print "\{match k case fast then "a".string case slow then "bb".string}!"
+    n: size s: (match m case fast then "abc".string case slow then "de".string)
+    l: (match k case fast then "abc".string case slow then "defg".string).length
+    print "\{n} \{l}"
+    # arms that call
+    print "\{twice n: (match m case fast then tick n: 10 case slow then tick n: 20)}"
+    # a condition, a when conjunct, a with header
+    if (match m case fast then true case slow then false) then print "fast" else print "slow"
+    c: true
+    if c when (
+        match k case fast then true case slow then false
+    ) then print "when fast" else print "when slow"
+    with v: (match m case fast then 7 case slow then 8) do print "with \{v}"
+    # a loop condition runs its match at every test
+    i: 0
+    mode: Mode.fast
+    for i < (match mode case fast then 3 case slow then 1) loop {
+        if i == 1 then mode = Mode.slow
+        print "loop \{i}"
+        i = i + 1
+    }
+    # a block arm, and a loop inside an arm whose break stays in it
+    print "\{twice n: (
+        match (
+            m
+        ) case fast then {
+            print "block arm"
+            5
+        } case slow then 6
+    )}"
+    found: size s: (
+        match (
+            m
+        ) case fast then {
+            j: 0
+            for j < 10 loop {
+                if j == 2 then break
+                j = j + 1
+            }
+            if j == 2 then "two".string else "other".string
+        } case slow then "slow".string
+    )
+    print "found \{found}"
+    # an argument hoisted beside an arm's own hoist
+    print "\{(both
+        a: "outer".string
+        b: (match m case fast then size s: "abc".string case slow then 1.u64)
+    )}"
+    # a narrowed subject read in an inner match's arms, and a take arm
+    u: Shape.text "hello".string
+    match (
+        u
+    ) case text then {
+        h: size s: (match k case fast then u.copy case slow then u.copy)
+        print "narrowed \{h}"
+    } case none then print "none"
+    o: "taken".string
+    t: size s: (match m case fast then o.take case slow then "slow".string)
+    print "take \{t}"
+    # an if whose arms are blocks: as an argument, and as a String binding
+    s: if c then {
+        print "then block"
+        "then".string
+    } else {
+        "else".string
+    }
+    w: size s: (
+        if c.not then {
+            "x".string
+        } else {
+            print "else block"
+            "yz".string
+        }
+    )
+    print "\{s} \{w}"
+}

@@ -1,0 +1,47 @@
+# AN ARM INSIDE AN EXPRESSION CANNOT LEAVE. An `if` or a `match` used inside an
+# expression runs among values the statement is still building, so an arm that
+# returns, breaks or continues there is refused by name (it was "unhandled"
+# E0500, or no error at all when a nested block hid it). A statement, or the
+# whole value of a binding, may still leave from an arm.
+Mode: variant {
+    fast: null
+    slow: null
+}
+
+twice: function {n: i64} out i64 is {
+    return n * 2
+}
+
+returns: function {m: Mode c: bool} out i64 is {
+    a: twice n: (match m case fast then 1 else return 0)
+    b: twice n: (if c then 1 else return 0)
+    # the whole value of a binding may leave
+    d: match m case fast then 1 else return 0
+    return a + b + d
+}
+
+loops: function {m: Mode} is {
+    i: 0
+    for i < 3 loop {
+        i = i + 1
+        r: twice n: (
+            match (
+                m
+            ) case fast then {
+                if i == 2 then break
+                i
+            } case slow then 0
+        )
+        s: twice n: (
+            if i == 1 then {
+                continue
+            } else i
+        )
+        print "\{r} \{s}"
+    }
+}
+
+main: function is {
+    print "\{returns m: Mode.fast c: true}"
+    loops m: Mode.fast
+}

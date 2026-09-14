@@ -3082,6 +3082,11 @@ Ctx: class {
     # inside a statement expression counts on from it, so it never shadows a
     # temp the code around it still reads through an alias
     tmpHigh: u64
+    # how many argument hoists were pending when the innermost statement
+    # expression began: they belong to the statement around it, which declares
+    # them, so a statement inside flushes only the hoists it added
+    argHoistFloor: u64
+    argHoistRawFloor: u64
     # the next `_wc` number: the guard a suspending `when` condition computes
     # into, since its value has to outlive the `if` that computes it
     whenGuardCtr: u64
@@ -5690,7 +5695,12 @@ flushArgHoists: function {
     floor: 0.u64
     rawFloor: 0.u64
 } is {
-    i: floor
+    # a statement expression being built keeps the hoists pending around it
+    fl: floor
+    if ctx.argHoistFloor > fl then fl = ctx.argHoistFloor
+    rfl: rawFloor
+    if ctx.argHoistRawFloor > rfl then rfl = ctx.argHoistRawFloor
+    i: fl
     n: ctx.argHoistNames.length
     for i < n loop {
         nmo: ctx.argHoistNames.get :i
@@ -5704,7 +5714,7 @@ flushArgHoists: function {
         }
         i = i + 1
     }
-    ri: rawFloor
+    ri: rfl
     rn: ctx.argHoistRaw.length
     for ri < rn loop {
         rdo: ctx.argHoistRaw.get i: ri
@@ -5712,13 +5722,13 @@ flushArgHoists: function {
         ri = ri + 1
     }
     # drop what was just emitted, back to the floor -- not to empty
-    for ctx.argHoistNames.length > floor loop {
+    for ctx.argHoistNames.length > fl loop {
         ctx.argHoistNames.pop
         ctx.argHoistVals.pop
         ctx.argHoistTypes.pop
         ctx.argHoistDtors.pop
     }
-    for ctx.argHoistRaw.length > rawFloor loop ctx.argHoistRaw.pop
+    for ctx.argHoistRaw.length > rfl loop ctx.argHoistRaw.pop
 }
 
 # tmpNext -- the next temp number of the function being emitted, from `tmp` or
@@ -14220,6 +14230,11 @@ emitExpr: function {
         if vfb.known when vfb.stmt.isZero.not then {
             return (armValueExpr :ast :symtab :ctx n: (ast.nodes.get i: vfb.stmt.u64))
         }
+        if (ifIsTernary :ast n: (ast.nodes.get i: n.nodeid.u64)).not then {
+            icx: emitControlExpr :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64)
+            if icx.length > 0 then return icx
+            return (unhandledExpr :ctx line: n.lineno)
+        }
         tx: String
         depth: u64
         clx959: u64
@@ -14241,10 +14256,91 @@ emitExpr: function {
         return tx
     } case call then {
         return (emitCallValue :ast :symtab :ctx call: n)
+    } case caseexpr then {
+        mcx: emitControlExpr :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64)
+        if mcx.length > 0 then return mcx
+        return (unhandledExpr :ctx line: n.lineno)
     } else {
-        emitFail :ctx what: "unhandled expr".string line: (ztypecheck.nodeLine :n)
-        return "/* zemitterc: unhandled expr */0".string
+        return (unhandledExpr :ctx line: (ztypecheck.nodeLine :n))
     }
+}
+
+# unhandledExpr -- the backstop for an expression no leg emits.
+unhandledExpr: function {ctx: Ctx line: u32} out String is {
+    emitFail :ctx what: "unhandled expr".string :line
+    return "/* zemitterc: unhandled expr */0".string
+}
+
+# ifIsTernary -- an `if` a C ternary spells: every arm is one value that stays
+# inside the expression.
+ifIsTernary: function {ast: Ast.view n: astnode.view} out bool is {
+    match (
+        n
+    ) case ifexpr then {
+        clx: u64
+        for clx < n.clauses.count.u64 loop {
+            clId: zast.kidAt kids: ast.kids span: n.clauses i: clx
+            clx = clx + 1
+            cl: ast.nodes.get i: clId.u64
+            if cl.ifclause when (isSimpleValueNode :ast n: (ast.nodes.get i: cl.statement.u64)
+            ).not then return false
+        }
+        if n.elseclause.isZero.not when (isSimpleValueNode
+            :ast
+            n: (ast.nodes.get i: n.elseclause.u64)
+        ).not then return false
+    } else null
+    return (ztypecheck.armLeaves :ast :n inLoop: false).not
+}
+
+# emitControlExpr -- an `if` or a `match` used inside an expression (an
+# argument, an operand, an interpolation part, a condition, a returned value)
+# that no C expression spells: a match, or an if whose arms are blocks. Its arms
+# run where the expression is evaluated -- at every loop test, only past a short
+# circuit, after the operands to its left -- so it is emitted in place as a
+# statement expression that declares the value, runs the if or the match
+# assigning it, releases what that owed, and yields the value. Its temps count
+# on from the function's, and the argument hoists already pending around it stay
+# pending for the statement that declares them.
+emitControlExpr: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+} out String is {
+    nid: zast.nodeIdOf :n
+    # a generic body's value is typed by the instance being emitted
+    vt: bindingStampOf :symtab :ctx nid: nid.u64
+    ct: typeRefC :ast :symtab :ctx tid: vt thisTid: ztypes.tid
+    # "" when there is no C type, or when an arm leaves from here, which the
+    # checker refuses: its cleanup could not reach the values the enclosing
+    # statement is building
+    if ct.length == 0 or (ztypecheck.armLeaves :ast :n inLoop: false) then return "".string
+    ltmp: TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree
+    cvN: tmpNext :ctx tmp: ltmp
+    cv: "_cv\{cvN}"
+    lbuf: String
+    outerFloor: ctx.argHoistFloor
+    outerRawFloor: ctx.argHoistRawFloor
+    ctx.argHoistFloor = ctx.argHoistNames.length
+    ctx.argHoistRawFloor = ctx.argHoistRaw.length
+    (emitControlBindValue
+        :ast
+        :symtab
+        :ctx
+        vid: nid
+        rtid: vt
+        nm: cv.stringView
+        ct: ct.stringView
+        ind: " "
+        tmp: ltmp
+        buf: lbuf
+    )
+    flushBlockFrees :ctx tmp: ltmp fL: 0 lL: 0 diverged: false buf: lbuf
+    ctx.argHoistFloor = outerFloor
+    ctx.argHoistRawFloor = outerRawFloor
+    r: "({\{lbuf} \{cv}; })"
+    return r
 }
 
 # emitOperatorAt -- emit a binary operator by asking what it RESOLVED to,
@@ -16047,15 +16143,24 @@ emitStringMatchBind: function {
     isStr: btid == ctx.strTid
     if isStr.not when btid != ctx.svTid then return false
     isMatch: false
+    isIf: false
     {
         vn: ast.nodes.get i: n.value.u64
         isMatch = vn.caseexpr
+        isIf = vn.ifexpr
     }
-    if isMatch.not then return false
+    # an if a ternary spells stays on the expression path
+    if isIf then isIf = (ifIsTernary :ast n: (ast.nodes.get i: n.value.u64)).not
+    if isMatch.not when isIf.not then return false
     avn: ast.nodes.get i: n.value.u64
     smT: "\{ctx.svC}_t"
     if isStr then smT = "\{ctx.strC}_t"
-    bound: emitMatchBindValue :ast :symtab :ctx n: avn :nm ct: smT.stringView :ind :tmp :buf
+    bound: false
+    if isIf then {
+        bound = emitIfBindValue :ast :symtab :ctx n: avn :nm ct: smT.stringView :ind :tmp :buf
+    } else {
+        bound = emitMatchBindValue :ast :symtab :ctx n: avn :nm ct: smT.stringView :ind :tmp :buf
+    }
     if bound.not then return false
     if isStr then tmp.oweFree name: nm.string vid: nameVid
     return true
@@ -26424,6 +26529,8 @@ emitC: function {
         argHoistRaw: List String
         argHoistCtr: 0
         tmpHigh: 0
+        argHoistFloor: 0
+        argHoistRawFloor: 0
         whenGuardCtr: 0
         breakLabels: ListVal u64
         breakLabelIsDo: ListVal bool
