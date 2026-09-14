@@ -16298,6 +16298,15 @@ dropStaleBorrowAlias: function {ctx: Ctx vid: ztypes.vid} is {
     if (sab.stringView.startsWith prefix: "(*__borrow_") then vvRemove xs: ctx.aliases :vid
 }
 
+# bindingStampOf -- the type a binding was stamped with, as the body being
+# emitted sees it: a generic body is walked once per instantiation, and the
+# instance's own stamp is the binding's type there.
+bindingStampOf: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view nid: u64} out ztypes.tid is {
+    ms: monoStampIdOf :symtab :ctx :nid
+    if ms.isZero.not then return ms
+    return (stampIdOf :symtab :nid)
+}
+
 # bindDeclaredCType -- the C type a binding declares. The NAME says scalar; the TID
 # says whether it is the BUILTIN one -- a shadow keeps the name and loses the C
 # scalar, so it emits its struct instead. An unnamed binding takes the stamped
@@ -16319,6 +16328,9 @@ bindDeclaredCType: function {
     }
     if ct.length == 0 then {
         tgo: ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: n.nodeid.u64
+        # the binding's own stamp as the body being emitted sees it comes first:
+        # an instance's differs from the shared one
+        if btid > 0 then tgo = btid
         if tgo > 0 then {
             ct = (typeRefC
                 :ast
@@ -16356,12 +16368,12 @@ emitAssignment: function {
     buf: String.borrow
 } is {
     avn: ast.nodes.get i: n.value.u64
-    btid: stampIdOf :symtab nid: n.nodeid.u64
+    btid: bindingStampOf :symtab :ctx nid: n.nodeid.u64
     ct: String
     # the stamped name is read once and never kept, so it is borrowed -- and
     # scoped, because the view pins `symtab` and the legs below lend it on
     {
-        tn: stampNameView :symtab nid: n.nodeid.u64
+        tn: regNameView :symtab tid: btid
         ct = bindDeclaredCType :ast :symtab :ctx :n :btid :tn
     }
     anmC: zast.poolTextAt pool: ast.names ref: n.name
