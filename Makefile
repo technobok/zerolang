@@ -859,7 +859,12 @@ perf: $(PERFBIN)
 # compiler allocates exactly as the old (the old source itself is refused by the
 # new rule -- core.z re-exported the two undeclared builtins), and it is the
 # input, the compiler's own source longer.
-ALLOC_BASELINE := 2574704
+#
+# +10,727 when a type's `as` constants joined the unit-constant channel and a
+# default became any compile-time scalar: over the same source the new compiler
+# allocates exactly as the old, and it is the input, the compiler's own source
+# longer.
+ALLOC_BASELINE := 2585431
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

@@ -1146,9 +1146,10 @@ and #~"borrower v: m" read exactly alike.
 When a function parameter has a default value, the caller may omit that
 argument and the default value is used in place of the missing one. The
 eligible forms are listed once, for parameters and fields together, under
-[#> to=default-values: Default values] — a numeric constant, a null-payload
-variant or union subtype, or a function / method reference. Anything else,
-a string literal in particular, is refused at the declaration. Bare numeric
+[#> to=default-values: Default values] — a numeric constant or compile-time
+scalar expression, a null-payload variant or union subtype, or a function /
+method reference. Anything else, a string literal or string constant in
+particular, is refused at the declaration. Bare numeric
 defaults follow the literal default rules described in
 [#> to=numeric-defaults: Numeric defaults] —
 decimal integers default to i64, non-decimal to u64, floats to f64.
@@ -5259,7 +5260,8 @@ The #~"as" section contains type-level static members:
   [#*: Numeric constants — integer and float (immutable, accessed via #~"TypeName.const_name")]
   [#*: String constants (static, immutable — e.g., #~'name: "hello"')]
   [#*: Computed constant expressions (e.g., #~"max: 2 * 1024")]
-  [#*: References to other definitions (e.g., #~"alias: some_constant")]
+  [#*: Compile-time #~"if" expressions (e.g., #~"mode: if max > 10 then { 1 } else { 2 }")]
+  [#*: References to other constants (e.g., #~"alias: some_constant")]
   [#*: Protocol/facet conformance labels]
   [#*: Visibility declarations (#~"public", #~"private")]
 
@@ -5288,21 +5290,45 @@ shared by all instances. They are called via #~"TypeName.method instance":
   }
   """
 
-Integer constants in the #~"as" section are type-level immutable values:
+Constants in the #~"as" section are type-level values, evaluated at compile
+time exactly as [#> to=unit-level-definitions: unit-level] constants are: a
+literal, a string, an operator expression, a compile-time #~"if", or another
+constant. A constant's type is its value's, and every read is the value itself,
+so it is used wherever a value is: an interpolation, a binding, an argument, a
+condition, a default, or another constant, in this unit
+(#~"TypeName.name") or another (#~"unit.TypeName.name").
+
+An #~"as" item is classified by what its value is. A value is a constant; a
+protocol or facet names a conformance label; a #~".generic" constraint is a
+generic parameter. A plain type name (#~"extra: i64") is none of these and is
+refused: a field belongs in the #~"is" section.
+
+The names in a constant are looked up in the type's own members first -- its
+#~"is" and #~"as" sections are one scope, forward references included -- and
+only then in the enclosing unit, so a constant of the type hides a unit
+constant of the same name. A name found there with no compile-time value, a
+field or a method, is an error rather than a fall through to the unit.
 
 #code language=zerolang: """
   page_size: 4096
+  max_val: 1
   config: record { x: i64 } as {
       max_val: 100
       pi: 3.14159
-      buffer_size: 16 * 1024      # computed constant expression
+      buffer_size: 16 * 1024       # computed constant expression
       limit: page_size             # reference to unit-level constant
+      doubled: later + 1           # forward reference to a sibling
+      later: max_val * 2           # the type's max_val, not the unit's
+      mode: if max_val > 10 then { 1 } else { 2 }
+      greeting: "hello"
+      # extra: i64                 # compile error: a field belongs in `is`
   }
   main: function is {
-      print "\{config.max_val}"   # prints 100
-      print "\{config.pi}"        # prints 3.14159
-      print "\{config.buffer_size}" # prints 16384
-      # config.max_val = 200      # compile error: cannot reassign static constant
+      print "\{config.max_val}"    # prints 100
+      print "\{config.pi}"         # prints 3.14159
+      print "\{config.doubled}"    # prints 201
+      n: config.greeting.length    # 5
+      # config.max_val = 200       # compile error: not an addressable location
   }
   """
 
@@ -5362,6 +5388,13 @@ type name there is a compile error.)
     separate type / value namespace is introduced. A bare name
     that is #-em "not" such an alias still cannot stand in for a
     subtype; use the qualified #~"<Type>.<subtype>" form.]
+  [#*: #_b:"Compile-time scalar constant" -- a named constant
+    (#~"n: LIMIT"), a constant of the type itself or of another type
+    (#~"n: CAP", #~"n: cfg.K"), or an operator expression or a
+    compile-time #~"if" built from them (#~"n: 2 * 3"). The member's
+    type is the value's. A default is re-emitted at every call and
+    construction, so it must stay a scalar: a number or a bool. A
+    string constant is refused, as a string literal is.]
 
 A generic parameter's default #_*"type" (#~"name: (<constraint>.generic
 default: <T>)" in an #~"as" block) is #-em "not" one of these forms and is
@@ -5377,6 +5410,15 @@ default type, while a reftype VALUE is never a valid default. See
 #code language=zerolang: """
   # Numeric parameter default
   inc: function {a: 0} out i64 is { return a + 1 }
+
+  # Compile-time constant defaults
+  LIMIT: 9
+  scaled: function {n: LIMIT m: 2 * 3} out i64 is { return n * m }
+  buffer: record {
+      size: CAP * 2
+  } as {
+      CAP: 512
+  }
 
   # Function-reference default (callback)
   add: function {a: i64 b: i64} out i64 is { return a + b }

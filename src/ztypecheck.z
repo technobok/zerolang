@@ -4995,7 +4995,7 @@ checkParamTypeShape: function {
                 :st
                 frame: rf
                 nameId: (nameIdOf :ast name: prn.stringView)
-            ).not then {
+            ).not when (pathNamesTypeConstant :st :ast ownerTid: fid node: pm.operation).not then {
                 pArmNid: zast.poolFind pool: ast.names text: pdcn.stringView
                 (recordParamArmDefault
                     :st
@@ -5038,10 +5038,12 @@ registerValueParam: function {
     # or `-1` from minting a type named after its own text. `partialTid` is a
     # resolved specialisation and never a value, so the fold is asked only where
     # it could answer.
+    # a partial specialisation answers only for a typeref; a value that folds
+    # (`n: 2 * 3`) is no typeref, whatever shell the partial walk made of it
     folded: ztypes.tid
-    if cid == 0 then {
+    if cid == 0 or (valueDeclares :ast node: pm.operation) then {
         folded = foldedDeclType :st :ast ownerTid: fid dm: pm
-        cid = folded.u64
+        if folded.isZero.not then cid = folded.u64
     }
     if cid == 0 then cid = (resolveTyperefShell
         :st
@@ -5067,6 +5069,7 @@ registerValueParam: function {
             fname: pnmA.stringView
             dm: pm
         )
+        recordFoldedScalarDefault :st :ast what: "parameter" ownerTid: fid dm: pm
     }
     if (isNumericLiteralNameAt :ast ref: ptn) then {
         (st.typing.declSetDefaultId
@@ -6512,6 +6515,116 @@ eqNullOptOut: function {ast: Ast.view asItems: zast.kidspan} out bool is {
     return result
 }
 
+# attachAsConstant -- an `as`-section member that is not a function is a constant
+# of the type when its value folds: a literal, a string, an expression, an `if`,
+# another constant. One that does not fold is still a constant, never a field,
+# unless its value may name a type. The type owns it as a unit owns its constants -- folded
+# through the same channel, keyed on the type -- so the member's type is the
+# value's. A generic parameter, the tag spec, a conformance label and an
+# opt-out (`create: null`) are not values and are not asked.
+attachAsConstant: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    parentId: ztypes.tid
+    item: argref
+} is {
+    if item.operation.isZero then return
+    if item.name == zast.names.wkTag then return
+    notValue: false
+    {
+        op: ast.nodes.get i: item.operation.u64
+        notValue = (isBareGenericParam :ast :op) or (isLabelValue :op)
+        if notValue.not then notValue = isNullName :st :ast nameId: (bareAtomNameId n: op)
+    }
+    if notValue then return
+    md: st.typing.declMemberIdOf parentTypeId: parentId nameId: item.name
+    if md.isZero then return
+    constFoldDecl :ast :st declId: md
+    folded: constValueOfDecl :st :ast declId: md
+    if folded.kind.none then {
+        reported: reportAsMemberNotConstant :st :ast :parentId :item
+        # attachMarkers classifies a bare name or a path, which may name a
+        # conformance or a type
+        if reported.not when (valueMayNameType :ast node: item.operation) then return
+    }
+    st.typing.markAsConstDecl declId: md
+}
+
+# valueMayNameType -- a declaration's value spelled as a bare name or a path,
+# the only forms a type or a conformance can take.
+valueMayNameType: function {ast: Ast.view node: zast.nodeid} out bool is {
+    n: ast.nodes.get i: node.u64
+    if n.dottedpath then return true
+    return (bareAtomNameId :n).isZero.not
+}
+
+# reportAsMemberNotConstant -- an `as` item whose value is a bare name the type's
+# own scope declares as something with no value -- a field, a method: the E0600
+# a constant reading a run-time value gets. Such a name is found in the type's
+# scope and stops there, so it is no conformance label and no type either.
+# True when it reported.
+reportAsMemberNotConstant: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    parentId: ztypes.tid
+    item: argref
+} out bool is {
+    vnId: zast.nameid
+    ln: u32
+    co: u32
+    {
+        vn: ast.nodes.get i: item.operation.u64
+        vnId = bareAtomNameId n: vn
+        ln = nodeLine n: vn
+        co = nodeCol n: vn
+    }
+    if vnId.isZero or (vnId == item.name) then return false
+    ownDecl: declOfTypeId :st tid: parentId
+    if (st.typing.declFindChild parentDeclId: ownDecl nameId: vnId).isZero then return false
+    vt: zast.nameTextAt :ast ref: vnId
+    (addErrorH
+        :st
+        nodeid: item.operation
+        lineno: ln
+        colno: co
+        e: zast.err.constError
+        msg: "'\{vt}' has no compile-time value"
+        note: "an `as` constant is evaluated at compile time; a field or a method has no value there".string
+        hint: "".string
+        width: vt.length.u32.orPanic
+    )
+    return true
+}
+
+# isNullName -- the name is `null`'s own, compared by id with the name the null
+# type was registered under: an opt-out's value (`create: null`) resolves to
+# nothing worth demanding.
+isNullName: function {st: zenv.ZSymbolTable.view ast: Ast.view nameId: zast.nameid} out bool is {
+    if nameId.isZero or (st.typing.nullTypeId == 0) then return false
+    nn: st.reg.nameViewOf tid: (ztypes.tid.create from: st.typing.nullTypeId)
+    return (zast.poolFind pool: ast.names text: nn) == nameId
+}
+
+# attachInterfaceAsConstants -- a protocol's or a facet's `as` constants. An
+# interface declares its specs in the `is` block, so nothing else walks its
+# `as` items; each one that is not a function is asked as any type's is.
+attachInterfaceAsConstants: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    parentId: ztypes.tid
+    fnode: objref
+} is {
+    k: u64
+    for k < fnode.nas loop {
+        itemId: zast.objAsItemAt :ast nid: fnode.nid i: k
+        k = k + 1
+        item: argRefAt :ast nid: itemId
+        if item.nid.isZero or item.operation.isZero then continue
+        if (ast.nodes.get i: item.operation.u64).functiondef then continue
+        attachAsConstant :st :ast :parentId :item
+    }
+}
+
 # attachMethods -- resolve an as-block's method items (namedoperation -> functiondef)
 # as children of `parentId`, returning whether one is named `create` (so the caller
 # skips the synth create). Takes the item list by value so its iterator's lock is
@@ -6586,26 +6699,7 @@ attachMethods: function {
                     isgen: agen
                 )
             } case none then {
-                cn: (zast.nameTextAt
-                    :ast
-                    ref: (atomNameId :ast n: (ast.nodes.get i: am.operation.u64))
-                )
-                if (isNumericLiteralName name: cn.stringView) then {
-                    # A static constant's child is a per-constant NULL-unit
-                    # clone of the literal's default type: named through the
-                    # type_children join, filtered from typed_nodes.
-                    clname: "i64"
-                    if (isFloatLiteralName name: cn.stringView) then clname = "f64"
-                    cid: st.reg.newType name: clname typetype: ztypes.ztypetype.recordType
-                    (st.typing.setMemberType
-                        parentTypeId: parentId
-                        nameId: am.name
-                        childTypeId: cid
-                    )
-                    st.typing.markAsConstClone typeId: cid
-                    cnid3: nodeId n: (ast.nodes.get i: am.operation.u64)
-                    ztyping.nodeTypeSet tbl: st.typing.nodeType nid: cnid3.u64 tid: cid
-                }
+                attachAsConstant :st :ast :parentId item: am
             }
         }
     }
@@ -6646,6 +6740,121 @@ recordConformance: function {
     }
 }
 
+# asItemIsNoMarker -- an `as` item that is not a conformance marker although it
+# may name a type: one already folded to a constant of the type, or one whose
+# bare value names a member of the type's own scope.
+asItemIsNoMarker: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    parentId: u64
+    item: zast.nameid
+    op: zast.nodeid
+} out bool is {
+    ptid: ztypes.tid.create from: parentId.u64
+    itemDecl: st.typing.declMemberIdOf parentTypeId: ptid nameId: item
+    if (st.typing.isAsConstDecl declId: itemDecl) then return true
+    vnId: bareAtomNameId n: (ast.nodes.get i: op.u64)
+    # `tag: tag` names the tag type, not the item itself
+    if vnId.isZero or (vnId == item) then return false
+    ownDecl: declOfTypeId :st tid: ptid
+    return (st.typing.declFindChild parentDeclId: ownDecl nameId: vnId).isZero.not
+}
+
+# asItemMarkerTarget -- the facet or protocol an `as` item names as a
+# conformance, or none. An item naming any other type is refused here as no
+# member an `as` section holds (asItemNamesPlainType, asItemTypeNameRefused), so
+# it is no marker either.
+asItemMarkerTarget: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    unitDecl: ztypes.declid
+    ast: Ast
+    parentId: u64
+    item: zast.nameid
+    op: zast.nodeid
+} out optionval u64 is {
+    mtid: markerTargetId :st :frame :unitDecl :ast opNid: op
+    refused: false
+    match (
+        mtid
+    ) case some then {
+        refused = asItemNamesPlainType :st :ast :parentId :item target: mtid
+    } case none then {
+        if (isLabelValue op: (ast.nodes.get i: op.u64)).not then {
+            asItemTypeNameRefused :st :frame :ast :unitDecl :parentId :item :op
+        }
+    }
+    if refused then return (optionval.none u64)
+    return mtid
+}
+
+# asItemNamesPlainType -- an `as` item naming a type that is neither a
+# conformance (a facet, a protocol) nor the tag spec: `extra: i64`,
+# `Elem: String`. An `as` member is a constant, a conformance or a generic
+# parameter, and a field belongs in the type's body -- reported here. True when
+# it reported.
+asItemNamesPlainType: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    parentId: u64
+    item: zast.nameid
+    target: u64
+} out bool is {
+    if item == zast.names.wkTag then return false
+    tt: st.reg.typetypeOf typeId: (ztypes.tid.create from: target.u64)
+    if tt == ztypes.ztypetype.facetType or (tt == ztypes.ztypetype.protocolType) then return false
+    reportAsItemTypeName :st :ast :parentId :item
+    return true
+}
+
+# asItemTypeNameRefused -- an `as` item no marker target answered for, whose bare
+# value still names a type: a class (`Elem: String`) or a native record the
+# marker walk does not reach (`extra: i64`) is refused as asItemNamesPlainType
+# refuses the rest.
+asItemTypeNameRefused: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    parentId: u64
+    item: zast.nameid
+    op: zast.nodeid
+} is {
+    vnId: bareAtomNameId n: (ast.nodes.get i: op.u64)
+    if vnId.isZero then return
+    if (isNumericLiteralNameAt :ast ref: vnId) then return
+    # `create: null` opts out of a member; null is no type an item declares
+    if (isNullName :st :ast nameId: vnId) then return
+    tto: (walkLookupTyperefById :st :frame :ast :unitDecl baseId: vnId).or d: 0
+    if tto == 0 then return
+    asItemNamesPlainType :st :ast :parentId :item target: tto
+}
+
+# reportAsItemTypeName -- the E0100 for an `as` item whose value is a type name
+# that is no conformance.
+reportAsItemTypeName: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    parentId: u64
+    item: zast.nameid
+} is {
+    md: st.typing.declMemberIdOf parentTypeId: (ztypes.tid.create from: parentId.u64) nameId: item
+    if md.isZero then return
+    ar: argRefAt :ast nid: (zast.nodeid.create from: (st.typing.decls.get i: md.u64).node)
+    it: zast.nameTextAt :ast ref: item
+    (addErrorH
+        :st
+        nodeid: ar.nid
+        lineno: ar.lineno
+        colno: ar.colno
+        e: zast.err.typeError
+        msg: "'\{it}' names a type: an `as` member is a constant, a conformance or a generic parameter"
+        note: "".string
+        hint: "a field belongs in the type's body".string
+        width: it.length.u32.orPanic
+    )
+}
+
 # attachMarkers -- resolve an as-block's facet/protocol conformance markers
 # (`m: measurable` / `myreader: Reader`) as children of `parentId`, run AFTER the
 # methods so markers take later positions. Returns whether any marker target owns a
@@ -6682,6 +6891,12 @@ attachMarkers: function {
                 )
             }
         }
+        # a member already folded to a constant of the type is no marker, and
+        # neither is a name the type's own scope declares -- reported as having
+        # no value where the constant was asked for
+        if isMarker when (asItemIsNoMarker :st :ast :parentId item: mmName op: mmOp) then {
+            isMarker = false
+        }
         if isMarker then {
             # `tag: tag` is not a field of the numeric record that carries it:
             # it designates the discriminator STORAGE type so a sum type can
@@ -6703,12 +6918,14 @@ attachMarkers: function {
                 )
             }
             mtid: optionval.none u64
-            if lazyTag.not then mtid = (markerTargetId
+            if lazyTag.not then mtid = (asItemMarkerTarget
                 :st
                 :frame
                 :unitDecl
                 :ast
-                opNid: mmOp
+                :parentId
+                item: mmName
+                op: mmOp
             )
             match (
                 mtid
@@ -7186,7 +7403,7 @@ typeExprHasPrivate: function {ast: Ast.view n: astnode.view} out bool is {
 # the type's data field, in declaration order, so the create method carries the
 # signature the construction sugar validates and dispatches against. Mirrors
 # dataFieldNames' field filter (fnptr fields + non-FUNCTION fields, excluding
-# as-block const clones and conformance markers), and resolves exactly what
+# `as` constants and conformance markers), and resolves exactly what
 # that filter reads. The synth create keeps no
 # funcReturnNode, so emission still routes it field-wise.
 materializeCreateParams: function {
@@ -7237,13 +7454,12 @@ materializeCreateParams: function {
                             (st.reg.typetypeOf typeId: (ztypes.tid.create from: cto.u64)) !=
                             ztypes.ztypetype.functionType
                         ) then {
-                            isC: false
-                            aco: st.typing.asConstClone.get key: cto
-                            match (
-                                aco
-                            ) case some then {
-                                isC = aco
-                            } case none then null
+                            isC: (st.typing.isAsConstDecl
+                                declId: (st.typing.declMemberIdOf
+                                    parentTypeId: (ztypes.tid.create from: typeTid.u64)
+                                    nameId: (zast.nameid.create from: tcNameId.u32.orPanic)
+                                )
+                            )
                             isMk8: false
                             mi8: u64
                             mn8: mkIds8.length
@@ -8038,7 +8254,9 @@ attachDeclaredField: function {
     fm: argref
     fname: StringView
 } is {
-    cid: (fieldSlotTid
+    folded: foldedDeclType :st :ast ownerTid: rid dm: fm
+    cid: folded
+    if cid.isZero then cid = (fieldSlotTid
         :st
         :ast
         :unitDecl
@@ -8078,7 +8296,10 @@ attachDeclaredField: function {
             name: fname
         )
     }
-    (recordTyperef
+    # an expression, or a name the type's own scope declares, is no type-ref to
+    # stamp; a name the unit declares (`p: false`) still navigates as one
+    stampsTyperef: valueStampsTyperef :st :ast ownerTid: rid :folded node: fm.operation
+    if stampsTyperef then (recordTyperef
         :st
         :frame
         :ast
@@ -8109,7 +8330,7 @@ attachDeclaredField: function {
                 :ast
                 name: rdnr.stringView
             )
-        ).not then {
+        ).not when (pathNamesTypeConstant :st :ast ownerTid: rid node: fm.operation).not then {
             rArmNid: zast.poolFind pool: ast.names text: dcn1.stringView
             rArmDecl: st.typing.declMemberIdOf parentTypeId: cid nameId: rArmNid
             (st.typing.declSetDefault
@@ -8120,6 +8341,7 @@ attachDeclaredField: function {
             )
         }
     }
+    recordFoldedScalarDefault :st :ast what: "field" ownerTid: rid dm: fm
     if dcn1.length > 0 when (isStripMarker name: dcn1.stringView) then null else {
         if dcn1.length > 0 then {
             rdk3: nodeId n: (ast.nodes.get i: fm.operation.u64)
@@ -8765,6 +8987,7 @@ attachVariantMethods: function {
                         armNames: ordinalArmNames
                         :am
                     )
+                    attachAsConstant :st :ast parentId: (ztypes.tid.create from: vid.u64) item: am
                 }
             }
         }
@@ -9680,6 +9903,7 @@ attachUnionMethods: function {
                         armNames: ordinalArmNames
                         :am
                     )
+                    attachAsConstant :st :ast parentId: (ztypes.tid.create from: uid.u64) item: am
                 }
             }
         }
@@ -10015,7 +10239,7 @@ recordFieldDefault: function {
                 :ast
                 name: rdnc.stringView
             )
-        ).not then {
+        ).not when (pathNamesTypeConstant :st :ast ownerTid: cid node: fm.operation).not then {
             cArmNid: zast.poolFind pool: ast.names text: dcn0.stringView
             cArmDecl: (st.typing.declMemberIdOf
                 parentTypeId: cidf
@@ -10065,11 +10289,11 @@ recordFieldDefault: function {
 # value forms once for the two of them, and an owner is an owner: a class's type
 # id or a function's, with the member hanging off it either way.
 #
-# ONLY FOR A BARE DECLARATION. A dotted one carries its own type in the leaf --
-# `value: 4.u64` is a u64 field, and the suffix is the entire point of writing
-# it -- so the type-ref path answers those, and folding them would flatten them
-# to the literal's own type. A bare declaration has no leaf to read, which is
-# exactly when the value has to declare the type.
+# ONLY WHERE THE VALUE HAS NO TYPE OF ITS OWN TO SAY (valueDeclares): a bare
+# name, an operator, an `if`. A dotted declaration carries its own type in the
+# leaf -- `value: 4.u64` is a u64 field, and the suffix is the entire point of
+# writing it -- so the type-ref path answers those, and folding them would
+# flatten them to the literal's own type.
 foldedDeclType: function {
     # where the fold is recorded
     st: zenv.ZSymbolTable
@@ -10080,11 +10304,7 @@ foldedDeclType: function {
     # the member's declaration
     dm: argref
 } out ztypes.tid is {
-    bare: false
-    {
-        fop: ast.nodes.get i: dm.operation.u64
-        bare = (bareAtomNameId n: fop).isZero.not
-    }
+    bare: declaredByValue :st :ast :ownerTid node: dm.operation
     if bare.not then return ztypes.tid
     fd: (st.typing.declMemberIdOf
         parentTypeId: (ztypes.tid.create from: ownerTid.u64)
@@ -10229,6 +10449,135 @@ recordArmDefault: function {
     )
 }
 
+# declaredByValue -- a field or parameter declaration whose value may fold and so
+# declare the member's type (valueDeclares), or a path naming a type's constant.
+declaredByValue: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    ownerTid: u64
+    node: zast.nodeid
+} out bool is {
+    if (valueDeclares :ast :node) then return true
+    return (pathNamesTypeConstant :st :ast :ownerTid :node)
+}
+
+# pathNamesTypeConstant -- a two-segment path in declaration position that names
+# an `as` constant of a type the owner's unit declares (`n: cfg.LIMIT`): a value,
+# where any other path there is a type. Read off the declarations, so nothing
+# resolves to answer.
+pathNamesTypeConstant: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    ownerTid: u64
+    node: zast.nodeid
+} out bool is {
+    rootId: zast.nameid
+    leafId: zast.nameid
+    {
+        n: ast.nodes.get i: node.u64
+        if n.dottedpath then {
+            rootId = bareAtomNameId n: (ast.nodes.get i: n.parent.u64)
+            leafId = bareAtomNameId n: (ast.nodes.get i: n.child.u64)
+        }
+    }
+    if rootId.isZero or leafId.isZero then return false
+    ownerDecl: declOfTypeId :st tid: (ztypes.tid.create from: ownerTid.u64)
+    td: st.typing.declFindChild parentDeclId: (unitRootOfDecl :st declId: ownerDecl) nameId: rootId
+    if (declIsType :st declId: td).not then return false
+    md: st.typing.declFindChild parentDeclId: td nameId: leafId
+    if md.isZero then return false
+    mdNode: (st.typing.decls.get i: md.u64).node
+    return (typeMemberHoldsConstant :st :ast typeDecl: td defNode: mdNode)
+}
+
+# valueStampsTyperef -- whether a field declaration's value is stamped as a
+# type-ref: always when nothing folded; when a value folded, only for a bare
+# name the enclosing scopes declare (`p: false`, `n: LIMIT`, `x: 0.0`), which
+# navigation reads. An expression names nothing, and a name the type's own
+# scope declares (`n: CAP`) is no type the drain could resolve.
+valueStampsTyperef: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    ownerTid: u64
+    folded: ztypes.tid
+    node: zast.nodeid
+} out bool is {
+    if folded.isZero then return true
+    vnId: bareAtomNameId n: (ast.nodes.get i: node.u64)
+    if vnId.isZero then return false
+    own: declOfTypeId :st tid: (ztypes.tid.create from: ownerTid.u64)
+    return (st.typing.declFindChild parentDeclId: own nameId: vnId).isZero
+}
+
+# valueDeclares -- a field or parameter declaration whose value, when it folds,
+# declares the member's type: a bare name (`n: LIMIT`, `p: false`), an operator
+# (`n: 2 * 3`) or a compile-time `if`. A path is a TYPE in declaration position
+# (`zast.astnode.view`, `T.typedef`), and its value forms -- a suffixed literal,
+# an arm -- have paths of their own.
+valueDeclares: function {ast: Ast.view node: zast.nodeid} out bool is {
+    n: ast.nodes.get i: node.u64
+    if (bareAtomNameId :n).isZero.not then return true
+    if n.ifexpr then return true
+    return (zast.infixPartsOf :ast :n).found
+}
+
+# recordFoldedScalarDefault -- record the default a declaration's folded value
+# is, when that value is a compile-time SCALAR written as a name or an
+# expression (`n: LIMIT`, `n: 2 * 3`, `n: CAP + 1`). A default is re-emitted
+# at every call and construction, so it must stay a scalar: a number or a bool
+# is one, and a string -- literal or constant -- is refused as a string
+# literal is. A literal and an arm keep their own kinds of default.
+recordFoldedScalarDefault: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    # the noun to report under: `field` or `parameter`
+    what: StringView
+    # the owner the member hangs off
+    ownerTid: u64
+    # the member's declaration
+    dm: argref
+} is {
+    rootName: rootNameIdOf :ast n: (ast.nodes.get i: dm.operation.u64)
+    if (isNumericLiteralNameAt :ast ref: rootName) then return
+    fdc: (st.typing.declMemberIdOf
+        parentTypeId: (ztypes.tid.create from: ownerTid.u64)
+        nameId: dm.name
+    )
+    cv: constValueOfDecl :st :ast declId: fdc
+    if cv.kind.svalKind then reportStringConstantDefault :st :ast :what :dm
+    # a refused string keeps its default, so the member is not required as well
+    if cv.kind.ivalKind or cv.kind.fvalKind or cv.kind.svalKind then {
+        (st.typing.declSetDefaultId
+            parentTypeId: (ztypes.tid.create from: ownerTid.u64)
+            nameId: dm.name
+            value: ztyping.defaultval.constant fdc
+        )
+    }
+}
+
+# reportStringConstantDefault -- a field or parameter defaulted to a string
+# constant: refused as a string literal default is, since a default must stay a
+# compile-time scalar.
+reportStringConstantDefault: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    what: StringView
+    dm: argref
+} is {
+    fname: zast.nameTextAt :ast ref: dm.name
+    (addErrorH
+        :st
+        nodeid: dm.nid
+        lineno: dm.lineno
+        colno: dm.colno
+        e: zast.err.typeError
+        msg: "\{what} '\{fname}' is defaulted to a string constant -- a default must be a compile-time constant: a number, an arm that carries nothing, or a function reference"
+        note: "".string
+        hint: "name the type instead (`\{fname}: String`) and pass the text in, or default it to a number"
+        width: fname.length.u32.orPanic
+    )
+}
+
 # recordFoldedArmDefault -- record the default a declaration's folded value
 # names, when that value is an ARM constant. This is what makes `p: false` and
 # `q: bool.false` one declaration: the same cval, so the same default.
@@ -10331,6 +10680,7 @@ resolveNamedFieldSlot: function {
     if needsDtor.not when cidf.isZero.not when (st.reg.needsDestructor typeId: cidf
     ) then needsDtor = true
     recordFoldedArmDefault :st :ast what: "field" ownerTid: cid :fname dm: fm
+    recordFoldedScalarDefault :st :ast what: "field" ownerTid: cid dm: fm
     if (st.reg.typetypeOf typeId: cidf) == ztypes.ztypetype.functionType then {
         (st.typing.setChildFnptrField
             pool: ast.names
@@ -10348,7 +10698,10 @@ resolveNamedFieldSlot: function {
             ownership: fieldOwn
         )
     } case none then null
-    (recordTyperef
+    # an expression, or a name the type's own scope declares, is no type-ref to
+    # stamp; a name the unit declares (`p: false`) still navigates as one
+    stampsTyperef: valueStampsTyperef :st :ast ownerTid: cid folded: foldTid node: fm.operation
+    if stampsTyperef then (recordTyperef
         :st
         :frame
         :ast
@@ -10997,6 +11350,7 @@ resolveFacet: function {
     pvGrants_ffid: ListVal u64
     scanVisibility :st :ast onode: fnode excl: pvExcl_ffid grants: pvGrants_ffid
     st.reg.setValtype typeId: (ztypes.tid.create from: fid.u64) value: true
+    attachInterfaceAsConstants :st :ast parentId: (ztypes.tid.create from: fid.u64) :fnode
     isgen: false
     {
         onIsgen: ast.nodes.get i: fnode.nid.u64
@@ -11102,6 +11456,7 @@ resolveProtocol: function {
     pvGrants_ppid: ListVal u64
     scanVisibility :st :ast onode: fnode excl: pvExcl_ppid grants: pvGrants_ppid
     st.reg.setValtype typeId: (ztypes.tid.create from: pid.u64) value: false
+    attachInterfaceAsConstants :st :ast parentId: (ztypes.tid.create from: pid.u64) :fnode
     isgen: false
     {
         onIsgen: ast.nodes.get i: fnode.nid.u64
@@ -22712,7 +23067,7 @@ checkMemberNamespace: function {
         (st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)) !=
         ztypes.ztypetype.functionType
     ) then {
-        return (checkDataMemberNamespace :st :ast :unitDecl :dp :bt :cnId :mo)
+        return (checkDataMemberNamespace :st :ast :unitDecl :dp :bt :cnId)
     }
     isValue: dottedBaseIsValue :st :ast :unitDecl n: (ast.nodes.get i: dp.nid.u64)
     if (st.typing.declIsFnptrFieldId parentTypeId: bt nameId: cnId) then {
@@ -22741,7 +23096,6 @@ checkDataMemberNamespace: function {
     dp: dpref
     bt: ztypes.tid
     cnId: zast.nameid
-    mo: u64
 } out bool is {
     md: st.typing.declMemberIdOf parentTypeId: bt nameId: cnId
     if md.isZero then return true
@@ -22751,7 +23105,7 @@ checkDataMemberNamespace: function {
         isField = mdd.kind.fieldDecl
     }
     if isField.not then return true
-    isConst: st.typing.isAsConstClone typeId: (ztypes.tid.create from: mo.u64)
+    isConst: st.typing.isAsConstDecl declId: md
     isValue: dottedBaseIsValue :st :ast :unitDecl n: (ast.nodes.get i: dp.nid.u64)
     if isConst == isValue.not then return true
     reportMemberNamespace :st :ast :dp :bt :cnId instanceMember: isConst.not functionMember: false
@@ -22858,7 +23212,7 @@ memberDeclaresReceiver: function {
 
 # checkResolvedMember -- the member resolved on the base type. Stamps the owner for
 # tooling and the emitter, then runs the legs in order: tagged-type construction
-# or arm predicate, the as-const clone, the projection legs, the auto-call, and
+# or arm predicate, the `as` constant, the projection legs, the auto-call, and
 # finally the public-interface gate.
 checkResolvedMember: function {
     st: zenv.ZSymbolTable
@@ -22893,6 +23247,14 @@ checkResolvedMember: function {
     }
     if (checkMemberNamespace :st :ast :unitDecl :dp :bt :cnId :mo :coerce
     ).not then return (ztypes.tid.create from: 0)
+    # a type's `as` constant reads as its value, typed by it
+    memberDecl: st.typing.declMemberIdOf parentTypeId: bt nameId: cnId
+    if (st.typing.isAsConstDecl declId: memberDecl) then {
+        acv: st.typing.memberConstOf parentTypeId: bt nameId: cnId
+        if acv.kind.none.not then st.typing.setNodeConst nid: dp.nid value: acv
+        stampGate :st nid: dp.nid.u64 tid: (ztypes.tid.create from: mo.u64)
+        return (ztypes.tid.create from: mo)
+    }
     tgleg: (checkTaggedMemberPath
         :st
         :unitDecl
@@ -22904,11 +23266,6 @@ checkResolvedMember: function {
         :aliasViaX
     )
     if tgleg.handled then return tgleg.tid
-    if (st.typing.isAsConstClone typeId: (ztypes.tid.create from: mo.u64)) then {
-        setcc: mo
-        stampGate :st nid: dp.nid.u64 tid: (ztypes.tid.create from: setcc.u64)
-        return (ztypes.tid.create from: mo)
-    }
     rm: mo
     result: ztypes.tid
     result = ztypes.tid.create from: rm.u64
@@ -29505,7 +29862,7 @@ hoistArg: function {
 
 # memberIsDataField -- whether a member row is stored in the type's C struct:
 # every parameter of a function type; an fnptr field; a field whose type is
-# not itself a function, is not an as-const clone, and is not one of the
+# not itself a function, is not an `as` constant, and is not one of the
 # type's conformance-marker labels (`mkIds`).
 memberIsDataField: function {
     st: zenv.ZSymbolTable.view
@@ -29530,7 +29887,12 @@ memberIsDataField: function {
     ) then {
         return false
     }
-    if ((st.typing.asConstClone.get key: cto).or d: false) then return false
+    if (st.typing.isAsConstDecl
+        declId: (st.typing.declMemberIdOf
+            parentTypeId: tid
+            nameId: (zast.nameid.create from: tcNameId.u32.orPanic)
+        )
+    ) then return false
     mi: u64
     for mi < mkIds.length loop {
         mv: mkIds.get i: mi
@@ -29543,7 +29905,7 @@ memberIsDataField: function {
 # dataFieldIds -- a type's user-supplied data fields/params in order, as the
 # (name pool id, type id) pairs: for a FUNCTION, all params; for a record/class,
 # fnptr fields plus non-FUNCTION fields, excluding as-block constants
-# (asConstClone) and conformance markers. dataFieldNames is this plus the texts,
+# (asConstDecls) and conformance markers. dataFieldNames is this plus the texts,
 # so what counts as a data field is decided in one place; a caller that only
 # needs the ids takes this one and pays for no text at all.
 dataFieldIds: function {
@@ -37129,6 +37491,24 @@ refuseNullTyped: function {
     return true
 }
 
+# foldedParamTid -- the type of a parameter declared by a value that folded
+# (`n: 2 * 3`, `n: cfg.K`), which has no type-ref of its own: the type the fold
+# registered on the function. 0 for any other parameter.
+foldedParamTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    fnTid: ztypes.tid
+    pm: argref
+} out u64 is {
+    if fnTid.isZero then return 0
+    if (declaredByValue :st :ast ownerTid: fnTid.u64 node: pm.operation).not then return 0
+    pmd: st.typing.declMemberIdOf parentTypeId: fnTid nameId: pm.name
+    pvd: constValueOfDecl :st :ast declId: pmd
+    if pvd.kind.none then return 0
+    fvo: (st.typing.declChildOfId parentTypeId: fnTid nameId: pm.name).or d: 0
+    return fvo
+}
+
 # bindFunctionParam -- bind one declared parameter into the body's scope: its type,
 # its ownership (a receiver may be `borrow` or `view` only -- an object cannot own
 # itself), its locks, and the readonly and privacy gates its type expression
@@ -37182,6 +37562,8 @@ bindFunctionParam: function {
             } case none then null
         } case none then null
     }
+    fpt: foldedParamTid :st :ast :fnTid :pm
+    if fpt > 0 then ptid = fpt
     if ptid > 0 then {
         (refuseNullTyped
             :st
@@ -39757,6 +40139,12 @@ constOwnerDeclForId: function {
     frame: ztypes.declid
     nameId: zast.nameid
 } out ztypes.declid is {
+    # A TYPE IS A SCOPE for the expressions written at its level -- an `as`
+    # constant, a field's default. Its `as` and `is` members are one scope,
+    # asked before the scopes enclosing it, and a member written later is found
+    # as a unit's later constant is.
+    if (declIsType :st declId: frame) when (st.typing.declFindChild parentDeclId: frame :nameId
+    ).isZero.not then return frame
     # the frames innermost outward from `frame`: a constant written inside
     # a unit is keyed on THAT unit, and on each unit enclosing it before the
     # file unit. Asking only the innermost left a constant of an enclosing
@@ -39884,6 +40272,12 @@ constValueOfMemberId: function {
             dnode = cdo.node
         }
     }
+    # a type member found in the type's scope is a value only when it is an
+    # `as` item holding one; a field or a method stops the search with none
+    if (declIsType :st declId: od) then {
+        holds: typeMemberHoldsConstant :st :ast typeDecl: od defNode: dnode
+        if holds.not then return ztypes.noConst
+    }
     return (constValueOfMemberAt
         :st
         :ast
@@ -39892,6 +40286,47 @@ constValueOfMemberId: function {
         nameId: nid
         defNodeId: dnode
     )
+}
+
+# declIsType -- the declaration is a type definition.
+declIsType: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out bool is {
+    if declId.isZero then return false
+    d: st.typing.decls.get i: declId.u64
+    return d.kind.typeDecl
+}
+
+# typeMemberHoldsConstant -- the member written at `defNode` is one of the type's
+# `as` items holding a value: the only member of a type a constant can read. An
+# `is` field belongs to each instance; a method, a generic parameter, a
+# conformance label, the tag spec and an opt-out (`create: null`) are no value.
+typeMemberHoldsConstant: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    typeDecl: ztypes.declid
+    defNode: u32
+} out bool is {
+    objId: zast.nodeid
+    {
+        td: st.typing.decls.get i: typeDecl.u64
+        nop: ast.nodes.get i: td.node.u64
+        if nop.namedoperation then objId = nop.operation
+    }
+    if objId.isZero then return false
+    orf: objRefAt :ast nid: objId
+    i: u64
+    for i < orf.nas loop {
+        itemId: zast.objAsItemAt :ast nid: objId :i
+        i = i + 1
+        if itemId.u32 == defNode then {
+            item: argRefAt :ast nid: itemId
+            if item.name == zast.names.wkTag then return false
+            op: ast.nodes.get i: item.operation.u64
+            if op.functiondef then return false
+            if (isBareGenericParam :ast :op) or (isLabelValue :op) then return false
+            return (isNullName :st :ast nameId: (bareAtomNameId n: op)).not
+        }
+    }
+    return false
 }
 
 # constValueOfMemberAt -- the fold itself, addressed by the OWNER's declaration.
@@ -40206,6 +40641,15 @@ constArmRead: function {
     if ptt == ztypes.ztypetype.dataType then {
         return (constDataMember :st :frame :ast dataTid: ptid nameId: armNameId)
     }
+    # another type's `as` constant (`cfg.LIMIT`), folded where it is declared
+    ptd: declOfTypeId :st tid: ptid
+    pmd: st.typing.declFindChild parentDeclId: ptd nameId: armNameId
+    if pmd.isZero.not when (typeMemberHoldsConstant
+        :st
+        :ast
+        typeDecl: ptd
+        defNode: (st.typing.decls.get i: pmd.u64).node
+    ) then return (constValueOfMemberTidId :ast :st unitTid: ptid nameId: armNameId)
     isSum: ptt == ztypes.ztypetype.variantType or (ptt == ztypes.ztypetype.unionType)
     if isSum.not then return ztypes.noConst
     anm: armNameId
@@ -44784,8 +45228,8 @@ shellScalarName: function {name: StringView} out bool is {
 
 # canonShellTid -- the canonical id for a SHELL stamp value, 0 to leave
 # the stamp alone. Mirrors canonicalizeShellChildren's shell detection
-# (no defining unit, not a generic param / scalar shell / as-const clone
-# / typeof shell); memoized per shell id.
+# (no defining unit, not a generic param / scalar shell / typeof shell);
+# memoized per shell id.
 canonShellTid: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -44813,12 +45257,6 @@ canonShellTid: function {
     if ok then {
         nmNode: st.reg.nameOf :tid
         if (shellScalarName name: nmNode.stringView) then nmNode = "".string
-        aco: st.typing.asConstClone.get key: tid
-        match (
-            aco
-        ) case some then {
-            if aco then nmNode = "".string
-        } case none then null
         tso: st.typing.typeofShell.get key: tid
         match (
             tso
@@ -45070,12 +45508,11 @@ memberTypeIsShell: function {
 }
 
 # shellNameToResolve -- the name a shell resolves by: the recorded type's
-# name, unless it is a scalar's, an as-const clone's or a typeof shell's
+# name, unless it is a scalar's or a typeof shell's
 # (those are not shells); empty then.
 shellNameToResolve: function {st: zenv.ZSymbolTable cto: u64} out String is {
     nmNode: st.reg.nameOf tid: (ztypes.tid.create from: cto.u64)
     if (shellScalarName name: nmNode.stringView) then return String
-    if ((st.typing.asConstClone.get key: cto).or d: false) then return String
     if (st.typing.typeofShell.get key: cto).some then return String
     return nmNode
 }

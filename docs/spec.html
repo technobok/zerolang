@@ -1157,9 +1157,10 @@ and <code>borrower v: m</code> read exactly alike.</p>
 <p>When a function parameter has a default value, the caller may omit that
 argument and the default value is used in place of the missing one. The
 eligible forms are listed once, for parameters and fields together, under
-<a href="#default-values">Default values</a> &#x2014; a numeric constant, a null-payload
-variant or union subtype, or a function / method reference. Anything else,
-a string literal in particular, is refused at the declaration. Bare numeric
+<a href="#default-values">Default values</a> &#x2014; a numeric constant or compile-time
+scalar expression, a null-payload variant or union subtype, or a function /
+method reference. Anything else, a string literal or string constant in
+particular, is refused at the declaration. Bare numeric
 defaults follow the literal default rules described in
 <a href="#numeric-defaults">Numeric defaults</a> &#x2014;
 decimal integers default to i64, non-decimal to u64, floats to f64.
@@ -4605,7 +4606,8 @@ single namespace -- the same name cannot appear in both sections.</p>
 <li>Numeric constants &#x2014; integer and float (immutable, accessed via <code>TypeName.const_name</code>)</li>
 <li>String constants (static, immutable &#x2014; e.g., <code></code>'name: "hello"')</li>
 <li>Computed constant expressions (e.g., <code>max: 2 * 1024</code>)</li>
-<li>References to other definitions (e.g., <code>alias: some_constant</code>)</li>
+<li>Compile-time <code>if</code> expressions (e.g., <code>mode: if max &gt; 10 then { 1 } else { 2 }</code>)</li>
+<li>References to other constants (e.g., <code>alias: some_constant</code>)</li>
 <li>Protocol/facet conformance labels</li>
 <li>Visibility declarations (<code>public</code>, <code>private</code>)</li>
 </ul>
@@ -4626,19 +4628,41 @@ shared by all instances. They are called via <code>TypeName.method instance</cod
         return (p.x * p.x) + (p.y * p.y)
     }
 }</code></pre>
-<p>Integer constants in the <code>as</code> section are type-level immutable values:</p>
+<p>Constants in the <code>as</code> section are type-level values, evaluated at compile
+time exactly as <a href="#unit-level-definitions">unit-level</a> constants are: a
+literal, a string, an operator expression, a compile-time <code>if</code>, or another
+constant. A constant's type is its value's, and every read is the value itself,
+so it is used wherever a value is: an interpolation, a binding, an argument, a
+condition, a default, or another constant, in this unit
+(<code>TypeName.name</code>) or another (<code>unit.TypeName.name</code>).</p>
+<p>An <code>as</code> item is classified by what its value is. A value is a constant; a
+protocol or facet names a conformance label; a <code>.generic</code> constraint is a
+generic parameter. A plain type name (<code>extra: i64</code>) is none of these and is
+refused: a field belongs in the <code>is</code> section.</p>
+<p>The names in a constant are looked up in the type's own members first -- its
+<code>is</code> and <code>as</code> sections are one scope, forward references included -- and
+only then in the enclosing unit, so a constant of the type hides a unit
+constant of the same name. A name found there with no compile-time value, a
+field or a method, is an error rather than a fall through to the unit.</p>
 <pre><code class="language-zerolang">page_size: 4096
+max_val: 1
 config: record { x: i64 } as {
     max_val: 100
     pi: 3.14159
-    buffer_size: 16 * 1024      # computed constant expression
+    buffer_size: 16 * 1024       # computed constant expression
     limit: page_size             # reference to unit-level constant
+    doubled: later + 1           # forward reference to a sibling
+    later: max_val * 2           # the type's max_val, not the unit's
+    mode: if max_val &gt; 10 then { 1 } else { 2 }
+    greeting: "hello"
+    # extra: i64                 # compile error: a field belongs in `is`
 }
 main: function is {
-    print "\{config.max_val}"   # prints 100
-    print "\{config.pi}"        # prints 3.14159
-    print "\{config.buffer_size}" # prints 16384
-    # config.max_val = 200      # compile error: cannot reassign static constant
+    print "\{config.max_val}"    # prints 100
+    print "\{config.pi}"         # prints 3.14159
+    print "\{config.doubled}"    # prints 201
+    n: config.greeting.length    # 5
+    # config.max_val = 200       # compile error: not an addressable location
 }</code></pre>
 <h3 id="default-values"><a href="#default-values">11.5. Default values</a></h3>
 <p>Default values may be supplied on function/method parameters and on
@@ -4690,6 +4714,13 @@ subtype, so the field-type context is unambiguous -- no
 separate type / value namespace is introduced. A bare name
 that is not such an alias still cannot stand in for a
 subtype; use the qualified <code>&lt;Type&gt;.&lt;subtype&gt;</code> form.</li>
+<li>Compile-time scalar constant -- a named constant
+(<code>n: LIMIT</code>), a constant of the type itself or of another type
+(<code>n: CAP</code>, <code>n: cfg.K</code>), or an operator expression or a
+compile-time <code>if</code> built from them (<code>n: 2 * 3</code>). The member's
+type is the value's. A default is re-emitted at every call and
+construction, so it must stay a scalar: a number or a bool. A
+string constant is refused, as a string literal is.</li>
 </ul>
 <p>A generic parameter's default <em><strong>type</strong></em> (<code>name: (&lt;constraint&gt;.generic
 default: &lt;T&gt;)</code> in an <code>as</code> block) is not one of these forms and is
@@ -4702,6 +4733,15 @@ default type, while a reftype VALUE is never a valid default. See
 <p><strong>Examples.</strong></p>
 <pre><code class="language-zerolang">  # Numeric parameter default
   inc: function {a: 0} out i64 is { return a + 1 }
+
+  # Compile-time constant defaults
+  LIMIT: 9
+  scaled: function {n: LIMIT m: 2 * 3} out i64 is { return n * m }
+  buffer: record {
+      size: CAP * 2
+  } as {
+      CAP: 512
+  }
 
   # Function-reference default (callback)
   add: function {a: i64 b: i64} out i64 is { return a + b }

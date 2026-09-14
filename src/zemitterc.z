@@ -8631,7 +8631,8 @@ literalC: function {lex: StringView} out String is {
 }
 
 # renderDefault -- a member's recorded default as a C expression. A literal
-# re-renders from its expression node; a function default is the target
+# re-renders from its expression node; a constant renders the member's folded
+# value; a function default is the target
 # FUNCTION type's symbol (the parameter IS that function); an arm default is a
 # tag-only struct literal of the target.
 renderDefault: function {
@@ -8649,6 +8650,26 @@ renderDefault: function {
             lc: literalC lex: lt.stringView
             if lc.length > 0 then return lc
             return lt
+        }
+    }
+    {
+        dk: dv
+        if dk.constant then {
+            # a named or computed scalar: the member's own folded value
+            kName: zast.nameid
+            kOwner: ztypes.declid
+            {
+                ko: symtab.typing.decls.get i: dk.u64
+                kName = zast.nameid.create from: ko.name
+                kOwner = ko.parent
+            }
+            return (memberConstText
+                :ast
+                :symtab
+                :ctx
+                unitTid: (ztypecheck.declTypeIdOf st: symtab declId: kOwner)
+                nameId: kName
+            )
         }
     }
     {
@@ -12800,31 +12821,25 @@ dottedAtomNumericBase: function {
     return "".string
 }
 
-# dottedAtomConstCloneBase -- `Unit.CONST` where the base names a function-like
-# declaration carrying an `as`-const clone: the member reads as that constant.
-dottedAtomConstCloneBase: function {
+# dottedTypeConstRead -- `Type.CONST` or `unit.Type.CONST` naming one of the
+# type's `as` constants: the read is the constant's value. An integer, a string
+# or an arm is already the node's own folded value; a float is rendered here,
+# from the member's declared type, which a folded value cannot say.
+dottedTypeConstRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    bn2: StringView
-    mn2: StringView
+    ctx: Ctx
+    n: zast.dottedpathrow.view
 } out String is {
-    btC12: userFnId :ast :symtab :ctx name: bn2
-    if btC12 > 0 then {
-        ccoC12: (symtab.typing.declChildOf
-            pool: ast.names
-            parentTypeId: btC12
-            name: mn2
-        )
-        match (
-            ccoC12
-        ) case some then {
-            if (symtab.typing.isAsConstClone typeId: (ztypes.tid.create from: ccoC12.u64)) then {
-                return (cnameOf tid: btC12 ownerName: bn2 name: mn2)
-            }
-        } case none then null
-    }
-    return "".string
+    bt: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64))
+    if bt.isZero then return "".string
+    cid: atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64)
+    if (symtab.typing.isAsConstDecl
+        declId: (symtab.typing.declMemberIdOf parentTypeId: bt nameId: cid)
+    ).not then return "".string
+    ct: memberConstText :ast :symtab :ctx unitTid: bt nameId: cid
+    if ct.length > 0 then return ct
+    return (memberConstStringText :symtab :ctx unitTid: bt nameId: cid)
 }
 
 # emitSvAtomBase -- a StringView base: `.length`, the pointer/one-past ends, the
@@ -13017,8 +13032,6 @@ emitDottedAtomBase: function {
     eNum: dottedAtomNumericBase :bn2 :mn2
     if eNum.length > 0 then return eNum
     bnid2: interpPartNodeId n: (ast.nodes.get i: n.parent.u64)
-    eCc: dottedAtomConstCloneBase :ast :symtab :ctx :bn2 :mn2
-    if eCc.length > 0 then return eCc
     bareTid: chaseStrTypedef :symtab :ctx tid: (stampIdOf :symtab nid: bnid2)
     bareSv: bareTid == ctx.svTid
     bareStr: bareTid == ctx.strTid
@@ -13929,6 +13942,8 @@ emitDottedRead: function {
         mnc0Id: (aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child)
     )
     if dtg.length > 0 then return dtg
+    dtc: dottedTypeConstRead :ast :symtab :ctx :n
+    if dtc.length > 0 then return dtc
     bn2r: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
     baseAtomNid: (atomNodeId n: (ast.nodes.get i: n.parent.u64)).u64
     baseAtomVid: atomVid :symtab nid: baseAtomNid
@@ -32710,11 +32725,10 @@ isGenericFnTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bo
     return (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.functionType
 }
 
-# emitUnitAsConsts -- one unit body's `as { }` constants and data blocks. A
-# record and a class carry as-block constants the same way, so one resolution
-# serves both; a data block is asked of every named definition and filters
-# itself.
-emitUnitAsConsts: function {
+# emitUnitDataBlocks -- one unit body's data blocks. A block is asked of every
+# named definition and filters itself; a type's `as` constants are not emitted,
+# every read of one is its value.
+emitUnitDataBlocks: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -32727,23 +32741,7 @@ emitUnitAsConsts: function {
         acx = acx + 1
         bm: ast.nodes.get i: bmId.u64
         if bm.namedoperation.not then continue
-        bmOp: ast.nodes.get i: bm.operation.u64
-        nm: zast.nameTextAt :ast ref: bm.name
-        if (isRecordDef n: bmOp) or (isClassDef n: bmOp) then {
-            rid: userFnId :ast :symtab :ctx name: nm.stringView
-            if rid > 0 when (isGenericType :symtab tid: rid).not then {
-                (emitAsConsts
-                    :ast
-                    :symtab
-                    :ctx
-                    tid: rid
-                    name: nm.stringView
-                    op: bmOp
-                    :buf
-                )
-            }
-        }
-        emitDataBlock :ast :symtab :ctx op: bmOp :buf
+        emitDataBlock :ast :symtab :ctx op: (ast.nodes.get i: bm.operation.u64) :buf
     }
 }
 
@@ -32865,7 +32863,7 @@ emitRecordDefsIn: function {
 } is {
     bodyIds: zast.unitBodyIdsAt :ast unitId: mainOpId
     if phase == 1 then {
-        emitUnitAsConsts :ast :symtab :ctx :bodyIds :buf
+        emitUnitDataBlocks :ast :symtab :ctx :bodyIds :buf
         return
     }
     if phase == 2 then {
@@ -33572,64 +33570,6 @@ emitOneRecord: function {
     )
     if wantDtor then {
         emitStructDestructor :ast :symtab :ctx :tid :fnames :fids :buf
-    }
-}
-
-# emitAsConsts -- a record/class `as`-block plain constant (`as { version: 1 }`)
-# becomes a `static const` read as `Type.label` (see the Type.constlabel leg in
-# emitExpr). Const items are the markAsConstClone children; methods/markers skip.
-emitAsConsts: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    tid: ztypes.tid
-    name: StringView
-    op: astnode.view
-    buf: String.borrow
-} is {
-    if op.objectdef then {
-        asx1709: u64
-        for asx1709 < op.asItems.count.u64 loop {
-            amId: zast.kidAt kids: ast.kids span: op.asItems i: asx1709
-            asx1709 = asx1709 + 1
-            am: ast.nodes.get i: amId.u64
-            if am.namedoperation then {
-                albl: zast.nameTextAt :ast ref: am.name
-                cco: (symtab.typing.declChildOf
-                    pool: ast.names
-                    parentTypeId: tid
-                    name: albl.stringView
-                )
-                match (
-                    cco
-                ) case some then {
-                    if (symtab.typing.isAsConstClone typeId: (ztypes.tid.create from: cco.u64)
-                    ) then {
-                        cv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: am.operation.u64)
-                        if cv.length > 0 then {
-                            ctA: "int64_t".string
-                            vtidA: (stampIdOf
-                                :symtab
-                                nid: (interpPartNodeId n: (ast.nodes.get i: am.operation.u64))
-                            )
-                            if vtidA > 0 then {
-                                vtnA: regNameOf :symtab tid: vtidA
-                                vtcA: (scalarCTypeFor
-                                    :symtab
-                                    name: vtnA.stringView
-                                    tid: vtidA
-                                )
-                                if vtcA.length > 0 then ctA = vtcA
-                            }
-                            qnA: "\{name}.\{albl}"
-                            csymA: cnameOf :tid ownerName: "" name: qnA.stringView
-                            lA: "static const \{ctA} \{csymA} = \{cv};\n"
-                            buf.append lA
-                        }
-                    }
-                } case none then null
-            }
-        }
     }
 }
 

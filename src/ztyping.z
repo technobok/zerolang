@@ -223,8 +223,9 @@ nsbody: record {
 }
 
 # defaultval -- a member's default value. `literal` carries the default-expression
-# nodeid (re-emitted verbatim); `function`/`arm` carry the target DeclId; `none`
-# means no default.
+# nodeid (re-emitted verbatim); `function`/`arm` carry the target DeclId;
+# `constant` carries the member's own DeclId, whose folded value is the default;
+# `none` means no default.
 defaultval: variant {
     # the parameter has no default
     none: null
@@ -234,6 +235,9 @@ defaultval: variant {
     func: ztypes.declid
     # a default that names a sum arm
     arm: ztypes.declid
+    # a default that is a compile-time scalar written as a name or an expression
+    # (`n: LIMIT`, `n: 2 * 3`): the member's own declaration, whose value it is
+    constant: ztypes.declid
 } as { tag: u8.tag }
 
 # One declaration: a named definition site in the program. `name` is the
@@ -462,11 +466,10 @@ ZTyping: class {
     renameSeen: bool
     # true once any member has been marked private (gates cross-unit checks)
     privacySeen: bool
-    # nodes cloned for a constant evaluation, so the clone is not mistaken for
-    # the original
-    asConstClone: (IdMapV u64 v: bool
+    # the `as`-section members that are constants of their type, by declaration:
+    # a type-level value, reached through the type and folded like a unit constant
+    asConstDecls: IdSet u64
     # types synthesised to carry a generator's state
-    )
     generatorWrapper: (IdMapV u64 v: bool
     # the shallow shell a `typeof` minted, which resolves later than the
     # expression it was taken from
@@ -2114,25 +2117,16 @@ ZTyping: class {
         }
     }
 
-    # mark a type as a clone made for a constant evaluation, so nothing
-    # downstream mistakes it for the original
-    markAsConstClone: function {:this typeId: ztypes.tid} is {
-        tk: typeId
-        mv2: true
-        this.asConstClone.set key: tk value: mv2
+    # markAsConstDecl -- record that an `as`-section member declaration is a
+    # constant of its type, which is never a field
+    markAsConstDecl: function {:this declId: ztypes.declid} is {
+        this.asConstDecls.add item: declId.u64
     }
 
-    # whether the type is such a clone
-    isAsConstClone: function {this: this.view typeId: ztypes.tid} out bool is {
-        tk2: typeId
-        r: this.asConstClone.get key: tk2
-        match (
-            r
-        ) case some then {
-            return r
-        } case none then {
-            return false
-        }
+    # isAsConstDecl -- whether a member declaration is such a constant
+    isAsConstDecl: function {this: this.view declId: ztypes.declid} out bool is {
+        if declId.isZero then return false
+        return (this.asConstDecls.has item: declId.u64)
     }
 
     # record that a member holds a function pointer
@@ -2192,6 +2186,10 @@ ZTyping: class {
         {
             dl: dv
             if dl.literal then return "literal node \{dl}"
+        }
+        {
+            dk: dv
+            if dk.constant then return "constant \{name}"
         }
         tgt: ztypes.declid
         {
@@ -2604,7 +2602,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         builtinTidMemo: (IdMapV u64 v: ztypes.tid)
         renameSeen: false
         privacySeen: false
-        asConstClone: (IdMapV u64 v: bool)
+        asConstDecls: IdSet u64
         generatorWrapper: (IdMapV u64 v: bool)
         typeofShell: (IdMapV u64 v: u32)
         noStampNode: (IdMapV u64 v: bool)
