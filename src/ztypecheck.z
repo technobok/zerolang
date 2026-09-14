@@ -39962,10 +39962,31 @@ foldIfBranch: function {
     return fb
 }
 
+# constDataMember -- a data block's element or length as a value, from the
+# constants the block recorded as it resolved. An element is a value only when
+# the block's elements are a builtin number: `out byteid` makes each element a
+# byteid, whose own `==` a fold of the bare integer would bypass. The length is
+# a count, never an element, and is always one.
+constDataMember: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    dataTid: ztypes.tid
+    nameId: zast.nameid
+} out ztypes.cval is {
+    if nameId != zast.names.wkLength then {
+        eo: (st.typing.declChildOfId parentTypeId: dataTid :nameId).or d: 0
+        numeric: isNumericTid :ast :st :frame tid: (ztypes.tid.create from: eo)
+        if numeric.not then return ztypes.noConst
+    }
+    return (st.typing.memberConstOf parentTypeId: dataTid :nameId)
+}
+
 # constArmRead -- `<typeName>.<armName>` looked up from `lookupUnit`, as a
 # value. The parent's FAMILY decides, the same test resolveConstantDef uses to
 # tell an arm read from a construction: variant or union means the child is an
-# arm, and anything else is a member read a constant cannot hold.
+# arm, a data block means an element or the block's length (constDataMember),
+# and anything else is a member read a constant cannot hold.
 constArmRead: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -40003,6 +40024,9 @@ constArmRead: function {
     if ptu == 0 then return ztypes.noConst
     ptid: ztypes.tid.create from: ptu.u64
     ptt: st.reg.typetypeOf typeId: ptid
+    if ptt == ztypes.ztypetype.dataType then {
+        return (constDataMember :st :frame :ast dataTid: ptid nameId: armNameId)
+    }
     isSum: ptt == ztypes.ztypetype.variantType or (ptt == ztypes.ztypetype.unionType)
     if isSum.not then return ztypes.noConst
     anm: armNameId
@@ -40986,11 +41010,13 @@ evalConstPlan: function {ast: Ast.view nid: zast.nodeid} out constplan is {
     return (constplan :arm :innerId :nameId :parts :parentId :childId :ln :co)
 }
 
-# evalConstString -- a string literal's value: one chunk and nothing else is
-# a plain literal. An INTERPOLATION has a value only at run time, and a
-# unit-level definition is required to be a compile-time constant, so this is
-# a case where the value was genuinely required and could not be produced --
-# it reports rather than falling silent the way an unrecognised shape does.
+# evalConstString -- a string literal's value: text chunks and nothing else are
+# a plain literal. An escape is a chunk of its own, already decoded, so
+# `"a\nb"` is three chunks and one value. An INTERPOLATION has a value only at
+# run time, and a unit-level definition is required to be a compile-time
+# constant, so this is a case where the value was genuinely required and could
+# not be produced -- it reports rather than falling silent the way an
+# unrecognised shape does.
 evalConstString: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -41011,6 +41037,25 @@ evalConstString: function {
         }
     }
     if parts == 0 then return (ztypes.makeStrConst (constInternString :st text: ""))
+    joined: String
+    plain: true
+    {
+        sn: ast.nodes.get i: nid.u64
+        if sn.atomstring then {
+            pi: u64
+            for pi < parts loop {
+                pId: zast.kidAt kids: ast.kids span: sn.stringparts i: pi
+                pi = pi + 1
+                pn: ast.nodes.get i: pId.u64
+                if pn.stringchunk then {
+                    joined.append (zast.poolTextAt pool: ast.names ref: pn.text)
+                } else {
+                    plain = false
+                }
+            }
+        }
+    }
+    if plain then return (ztypes.makeStrConst (constInternString :st text: joined.stringView))
     (constFailRecord
         :st
         kind: ztypes.constfailkind.interp
@@ -41276,46 +41321,59 @@ stampConstAt: function {
     if nid.isZero then return
     plan: evalConstPlan :ast :nid
     if plan.arm == 0 then return
-    # A BINOP FOLDS ONLY IF BOTH OPERANDS DO, and the walk reached both of them
-    # before it reached this. Asking the stamps rather than re-walking the
-    # subtree is what keeps the cost linear in the tree instead of linear in
-    # its depth at every node.
-    if plan.arm == 5 then {
-        br: binRefAt :ast :nid
-        if (st.typing.nodeConst.has key: br.lhs.u64).not then return
-        if (st.typing.nodeConst.has key: br.rhs.u64).not then return
-    }
-    # A CALL AND AN `if` ARE NOT ASKED AT A USE SITE. The call arm folds string
-    # static methods and records a reached `error`; the first changes nothing a
-    # body emits and the second is a diagnostic this walk must never raise. The
-    # `if` arm folds a branch the emitter already reads its own channel for.
-    # Measured on a self-compile, the two together allocate for every call and
-    # every `if` in the program and move not one byte of emitted C.
-    #
-    # A METHOD ON A STRING CONSTANT IS THE EXCEPTION, to both: `GREETING.length`
-    # and `(GREETING.substring from: 0 to: 5)` fold, and the ask is made only
-    # where the receiver atom already folded to a string -- a stamp read, which
-    # every other call and path answers no to without allocating.
-    if plan.arm == 6 when (callOnFoldedString :st :ast :nid).not then return
-    if plan.arm == 7 then return
-    # A PATH IS ASKED ONLY WHERE IT CAN BE A LITERAL. `1.u32` is a dotted path
-    # and its value is the point of this walk; `zast.nodeid` is a dotted path
-    # too, and asking costs two owned name copies to be told there is no value.
-    # A unit constant reached through a path is inlined by memberConst already.
-    if plan.arm == 4 when (atomFoldedToString :st :ast nid: plan.parentId).not then {
-        pnLit: false
-        {
-            pv: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: plan.parentId.u64))
-            pnLit = isNumericLiteralName name: pv.stringView
-        }
-        if pnLit.not then return
-    }
+    if (useSiteAsks :st :ast :nid :plan).not then return
     held: st.typing.constFail
     constFailClear :st
     cv: evalConstNode :st :unitDecl frame: st.curFrame :ast :nid
     st.typing.constFail = held
     if cv.kind.none then return
     st.typing.setNodeConst :nid value: cv
+}
+
+# useSiteAsks -- whether a use site's row is worth asking the evaluator about.
+# Every ask that cannot fold allocates for nothing, so each arm is asked only
+# where it can answer.
+#
+# A BINOP FOLDS ONLY IF BOTH OPERANDS DO, and the walk reached both of them
+# before it reached this. Asking the stamps rather than re-walking the subtree
+# is what keeps the cost linear in the tree instead of linear in its depth at
+# every node.
+#
+# A CALL AND AN `if` ARE NOT ASKED. The call arm folds string static methods and
+# records a reached `error`; the first changes nothing a body emits and the
+# second is a diagnostic this walk must never raise. The `if` arm folds a branch
+# the emitter already reads its own channel for. Measured on a self-compile, the
+# two together allocate for every call and every `if` in the program and move
+# not one byte of emitted C. A METHOD ON A STRING CONSTANT is the exception:
+# `(GREETING.substring from: 0 to: 5)` folds, and it is asked only where the
+# receiver atom already folded to a string -- a stamp read.
+#
+# AN ESCAPED LITERAL IS NOT ASKED either: joining its chunks allocates, and the
+# literal pool already spells it in the body's C.
+#
+# A PATH IS ASKED ONLY WHERE IT CAN BE A LITERAL OR A STRING CONSTANT'S METHOD.
+# `1.u32` is a dotted path and its value is the point of this walk; `zast.nodeid`
+# is a dotted path too, and asking costs two owned name copies to be told there
+# is no value. A unit constant reached through a path is inlined by memberConst
+# already.
+useSiteAsks: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    nid: zast.nodeid
+    plan: constplan
+} out bool is {
+    if plan.arm == 5 then {
+        br: binRefAt :ast :nid
+        if (st.typing.nodeConst.has key: br.lhs.u64).not then return false
+        return (st.typing.nodeConst.has key: br.rhs.u64)
+    }
+    if plan.arm == 6 then return (callOnFoldedString :st :ast :nid)
+    if plan.arm == 7 then return false
+    if plan.arm == 3 then return plan.parts < 2
+    if plan.arm != 4 then return true
+    if (atomFoldedToString :st :ast nid: plan.parentId) then return true
+    pv: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: plan.parentId.u64))
+    return (isNumericLiteralName name: pv.stringView)
 }
 
 # reportUnitConstantShape -- the diagnostic for a unit-level definition whose
@@ -41374,6 +41432,46 @@ reportUnitConstantRef: function {
         hint: eh
     )
     st.typing.isError = true
+}
+
+# dataConstantIsConstruction -- a unit-level constant reading a data block's
+# element or length (`ONE: primes.1`). A member the block does not have is the
+# body's report for the same read. True when the element is not a builtin
+# number -- `out byteid` makes each one a byteid -- so the read builds a value
+# rather than naming a constant, and is refused as a construction is.
+dataConstantIsConstruction: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    defn: dpref
+    # the block's name
+    sfLit: StringView
+    # the member read off it
+    sfTy: StringView
+} out bool is {
+    dto: walkLookupTyperef :st :frame :ast :unitDecl base: sfLit
+    if dto.none then return false
+    dtid: ztypes.tid.create from: dto
+    mid: nameIdOf :ast name: sfTy
+    member: st.typing.declChildOfId parentTypeId: dtid nameId: mid
+    if member.none then {
+        m: "type '\{sfLit}' has no member '\{sfTy}'"
+        (addErrorH
+            :st
+            nodeid: defn.nid
+            lineno: defn.lineno
+            colno: defn.colno
+            e: zast.err.typeError
+            msg: m
+            note: "".string
+            hint: "".string
+            width: sfLit.length.u32.orPanic
+        )
+        return false
+    }
+    if mid == zast.names.wkLength then return false
+    return (isNumericTid :ast :st :frame tid: (ztypes.tid.create from: member)).not
 }
 
 # resolveDottedConstantDef -- a unit-level constant whose value is a dotted path.
@@ -41448,16 +41546,20 @@ resolveDottedConstantDef: function {
                 } case none then null
             }
             if known then {
-                # a variant or union parent names an ARM, and a UNIT parent
-                # reads a member of it -- which is what every cross-unit
-                # re-export is. Only a plain TYPE parent makes the read a
-                # construction.
+                # a variant or union parent names an ARM, a data block parent
+                # an element or its length, and a UNIT parent reads a member of
+                # it -- which is what every cross-unit re-export is. Only a
+                # plain TYPE parent makes the read a construction.
                 isCtor = (
                     ptt !=
                     ztypes.ztypetype.variantType and
                     (ptt != ztypes.ztypetype.unionType) and
-                    (ptt != ztypes.ztypetype.unitType)
+                    (ptt != ztypes.ztypetype.unitType) and
+                    (ptt != ztypes.ztypetype.dataType)
                 )
+            }
+            if known when ptt == ztypes.ztypetype.dataType then {
+                isCtor = dataConstantIsConstruction :st :frame :ast :unitDecl :defn :sfLit :sfTy
             }
         }
         # ASK THE CONSTANT FIRST. `LEN: LIB.length` reads a member of
