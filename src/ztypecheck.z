@@ -39835,6 +39835,11 @@ renderConstFail: function {st: zenv.ZSymbolTable f: ztypes.constfail} is {
             hintText = "the result does not fit the \{ovt} the left-hand operand gives it"
         }
     }
+    if f.kind.floatOverflow then {
+        fot: constStringAt :st id: f.strId
+        noMethodMsg = "constant float operation overflows \{fot}"
+        hintText = "the result is not finite, and an infinity has no literal a constant could inline".string
+    }
     if f.kind.lossyConversion then {
         lct: constStringAt :st id: f.strId
         noMethodMsg = "the conversion from \{lct} can lose data, so it has no compile-time value"
@@ -39892,7 +39897,8 @@ constLiteralValue: function {name: StringView} out ztypes.cval is {
     if pv.ok.not then return ztypes.noConst
     if pv.isFloat then {
         fv: pv.fval
-        if neg then fv = 0.0 - fv
+        # a product keeps the sign of `-0.0`, which `0.0 - fv` drops
+        if neg then fv = fv * (0.0 - 1.0)
         return (ztypes.makeFloatConst fv)
     }
     # the most negative i64 cannot be read and then negated -- its magnitude
@@ -40091,7 +40097,7 @@ constOfTypedFold: function {
     gk: numKindOfTid :st tid: gov
     if gk.has.not then return ztypes.noConst
     if (ztypes.isFloatKind k: gk.kind) then {
-        return (constOfTypedFloatFold :st :frame :ast :lv :rv :op :gov k: gk.kind)
+        return (constOfTypedFloatFold :st :frame :ast :lv :rv :op :gov k: gk.kind :nid :ln :co)
     }
     if lv.kind.ivalKind.not or rv.kind.ivalKind.not then return ztypes.noConst
     if (isComparisonOp name: op) then return (constCompareInt
@@ -40132,6 +40138,9 @@ constOfTypedFloatFold: function {
     op: StringView
     gov: ztypes.tid
     k: ztypes.numkind
+    nid: zast.nodeid
+    ln: u32
+    co: u32
 } out ztypes.cval is {
     lf: constFloatOf v: lv
     rf: constFloatOf v: rv
@@ -40145,7 +40154,16 @@ constOfTypedFloatFold: function {
         b: rf.val
     )
     if k.f64Type then {
-        r64: constArithFloat op: (arithOpOf :op) a: lf.val b: rf.val
+        r64: (constOfFloatArith
+            :st
+            :nid
+            :ln
+            :co
+            op: (arithOpOf :op)
+            a: lf.val
+            b: rf.val
+            typeName: "f64"
+        )
         if r64.kind.none then return r64
         return (ztypes.typedConst c: r64 numTid: gov)
     }
@@ -40161,8 +40179,71 @@ constOfTypedFloatFold: function {
     if aop.sub then r = a - b
     if aop.mul then r = a * b
     if aop.div then r = a / b
+    if (constFloatFolds :st :nid :ln :co op: aop b: rf.val r: r.f64 typeName: "f32").not then {
+        return ztypes.noConst
+    }
     folded: ztypes.makeFloatConst r.f64
     return (ztypes.typedConst c: folded numTid: gov)
+}
+
+# constOfFloatArith -- an f64 operation over two constants, as a value only when
+# it has one (constFloatFolds).
+constOfFloatArith: function {
+    st: zenv.ZSymbolTable
+    nid: zast.nodeid
+    ln: u32
+    co: u32
+    op: arithop
+    a: f64
+    b: f64
+    # the type the result is reported against
+    typeName: StringView
+} out ztypes.cval is {
+    r: constArithFloat :op :a :b
+    if r.kind.none then return r
+    if (constFloatFolds :st :nid :ln :co :op :b r: r.fval :typeName).not then return ztypes.noConst
+    return r
+}
+
+# constFloatFolds -- whether a float operation over constants produces a value
+# a constant can hold: not a division by zero, and a finite result, since
+# neither an infinity nor a NaN has a literal to inline. The failure is
+# recorded.
+constFloatFolds: function {
+    st: zenv.ZSymbolTable
+    nid: zast.nodeid
+    ln: u32
+    co: u32
+    op: arithop
+    # the divisor, for a division
+    b: f64
+    # the result
+    r: f64
+    # the type the result is computed in
+    typeName: StringView
+} out bool is {
+    if op.div when b == 0.0 then {
+        (constFailRecord
+            :st
+            kind: ztypes.constfailkind.divZero
+            nodeid: nid
+            lineno: ln
+            colno: co
+            width: 1
+        )
+        return false
+    }
+    if r.bits >> 52 & 2047 != 2047 then return true
+    (constFailRecord
+        :st
+        kind: ztypes.constfailkind.floatOverflow
+        nodeid: nid
+        lineno: ln
+        colno: co
+        width: 1
+        strId: (constInternString :st text: typeName)
+    )
+    return false
 }
 
 # constOfConversion -- a numeric conversion of a folded number: `5.u8`,
@@ -40647,8 +40728,8 @@ constCompareFloat: function {
     return ztypes.noConst
 }
 
-# fold arithmetic on two float constants. Floats fold in f64 whatever the
-# target width, the narrowing being the materialiser's business
+# fold arithmetic on two f64 constants; constOfFloatArith asks whether the result
+# is one a constant can hold
 constArithFloat: function {op: arithop a: f64 b: f64} out ztypes.cval is {
     if op.add then return (ztypes.makeFloatConst a + b)
     if op.sub then return (ztypes.makeFloatConst a - b)
@@ -41859,7 +41940,16 @@ constOfBinopFold: function {
         if (isComparisonOp name: op) then {
             return (constCompareFloat :st :frame :ast :op a: lf.val b: rf.val)
         }
-        return (constArithFloat op: (arithOpOf :op) a: lf.val b: rf.val)
+        return (constOfFloatArith
+            :st
+            :nid
+            :ln
+            :co
+            op: (arithOpOf :op)
+            a: lf.val
+            b: rf.val
+            typeName: "f64"
+        )
     }
     return ztypes.noConst
 }

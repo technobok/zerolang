@@ -9494,6 +9494,47 @@ narrowConstToName: function {v: i64 name: StringView} out i64 is {
     return v
 }
 
+# floatConstText -- the C literal a folded float renders as: a hexadecimal
+# floating constant, exact for every finite value an f64 holds, where a decimal
+# rendering would round it. A float of the `f32` type carries the `f` suffix, so
+# the arithmetic it joins stays f32. "" for a value no literal spells -- an
+# infinity or a NaN -- which the typechecker never folds.
+floatConstText: function {v: f64 name: StringView} out String is {
+    bits: v.bits
+    expo: bits >> 52 & 2047
+    if expo == 2047 then return "".string
+    r: String
+    if bits >> 63 == 1 then r.append "-"
+    r.append (hexFloatMagnitude :expo mant: bits & 4503599627370495)
+    probe: " \{name} "
+    mf32: " f32 "
+    if (mf32.contains needle: probe) then r.append "f"
+    return r
+}
+
+# hexFloatMagnitude -- `0x1.<13 hex digits>p<exponent>` for a finite f64's
+# exponent field and mantissa. A subnormal has no implicit leading one and a
+# fixed exponent.
+hexFloatMagnitude: function {expo: u64 mant: u64} out String is {
+    if expo == 0 when mant == 0 then return "0x0p+0".string
+    lead: "1"
+    e: expo.i64.orPanic - 1023
+    if expo == 0 then {
+        lead = "0"
+        e = 0 - 1022
+    }
+    r: "0x\{lead}."
+    shift: 48.u64
+    for shift <= 48 loop {
+        nib: (mant >> shift & 15).u8.orPanic
+        if nib < 10 then r.appendByte b: nib + 48 else r.appendByte b: nib + 87
+        if shift == 0 then break
+        shift = shift - 4
+    }
+    r.append "p\{e}"
+    return r
+}
+
 # cvalText -- the C literal for a compile-time value the typechecker folded.
 # "" for a kind this emitter cannot render yet, which leaves the caller on its
 # ordinary path rather than emitting something wrong.
@@ -9519,8 +9560,8 @@ cvalText: function {
         return r
     }
     if v.kind.fvalKind then {
-        fv: v.fval
-        return "\{fv}"
+        tnF: constScalarNameForTid :ast :symtab :tid
+        return (floatConstText v: v.fval name: tnF.stringView)
     }
     if v.kind.armKind then {
         if v.armTid.isZero then return "".string

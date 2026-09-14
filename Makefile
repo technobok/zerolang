@@ -873,7 +873,11 @@ perf: $(PERFBIN)
 # +4,990 when a unit-level `match` came to fold: over the same source the new
 # compiler allocates exactly as the old, and it is the input, the compiler's
 # own source longer.
-ALLOC_BASELINE := 2596333
+#
+# +3,249 when a float constant came to be emitted exactly and refused when not
+# finite: over the same source the new compiler allocates exactly as the old,
+# and it is the input, the compiler's own source longer.
+ALLOC_BASELINE := 2599582
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
