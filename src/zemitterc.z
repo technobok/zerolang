@@ -2932,6 +2932,8 @@ Ctx: class {
     # whether the statement being emitted is in tail position, where a return
     # needs no jump
     tailRetActive: bool
+    # the body's last statement was emitted as a `return`, so nothing after it runs
+    tailReturned: bool
     # which unit each definition came from
     defUnitId: (IdMapV u64 v: u64
     # the four stdlib units the emitter names outright, resolved once
@@ -21843,6 +21845,96 @@ emitReturnOfNode: function {
     emitPlainReturn :ast :symtab :ctx :vid :ind :tmp :buf
 }
 
+# emitTailValue -- a tail value the atom, string and block arms leave, in return
+# position: the value ztypecheck.implicitReturnValue answers for the line, the
+# one the checker checked as a return. A call, a path or an operator returns
+# through the explicit-return machinery; an `if`, a `match` or a list
+# comprehension, which `return` cannot take, binds a return local the way a
+# binding of it does, and that local is returned. False when the line yields no
+# value.
+emitTailValue: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    lineId: zast.nodeid
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} out bool is {
+    vid: ztypecheck.implicitReturnValue st: symtab :ast :lineId
+    if vid.isZero then return false
+    isBlock: false
+    isCtl: false
+    {
+        vn: ast.nodes.get i: vid.u64
+        isBlock = vn.withexpr or vn.doexpr
+        isCtl = vn.ifexpr or vn.caseexpr or vn.forexpr
+    }
+    if isBlock then return false
+    ctx.tailReturned = true
+    if isCtl.not then {
+        emitReturnOfNode :ast :symtab :ctx vid: vid.u32 :ind :tmp :buf
+        return true
+    }
+    rtid: stampIdOf :symtab nid: vid.u64
+    ct: typeRefC :ast :symtab :ctx tid: rtid thisTid: ztypes.tid
+    trn: tmp.next
+    nm: "_tr\{trn}"
+    bound: (emitControlBindValue
+        :ast
+        :symtab
+        :ctx
+        :vid
+        :rtid
+        nm: nm.stringView
+        ct: ct.stringView
+        :ind
+        :tmp
+        :buf
+    )
+    if bound.not then return false
+    cl: String
+    emitReturnCleanup :ctx :tmp retExpr: nm.stringView keepRefd: false :ind buf: cl
+    buf.append cl
+    buf.append "\{ind}return \{nm};\n"
+    return true
+}
+
+# emitControlBindValue -- bind the value of an `if`, a `match` or a list
+# comprehension to the local `nm`, as a binding of it is emitted.
+emitControlBindValue: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    vid: zast.nodeid
+    rtid: ztypes.tid
+    nm: StringView
+    ct: StringView
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} out bool is {
+    vn: ast.nodes.get i: vid.u64
+    if (emitIfBindValue :ast :symtab :ctx n: vn :nm :ct :ind :tmp :buf) then return true
+    if (emitMatchBindValue :ast :symtab :ctx n: vn :nm :ct :ind :tmp :buf) then return true
+    if (forexprValue n: vn).not then return false
+    lcb: ctxCname :ctx tid: rtid
+    lc0: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)0);\n"
+    buf.append lc0
+    (emitListComprehension
+        :ast
+        :symtab
+        :ctx
+        forNode: vn
+        listCb: lcb.stringView
+        listVar: nm
+        :ind
+        :tmp
+        :buf
+    )
+    return true
+}
+
 # emitTailStmt -- the last statement of an `out`-typed function body sits in
 # return position: a bare value expression becomes `return <expr>;`, and a
 # with/do block forwards return position into its own final statement. False
@@ -21859,7 +21951,7 @@ emitTailStmt: function {
     match (
         n
     ) case statementline then {
-        return (emitTailStmt
+        if (emitTailStmt
             :ast
             :symtab
             :ctx
@@ -21867,16 +21959,19 @@ emitTailStmt: function {
             :ind
             :tmp
             :buf
-        )
+        ) then return true
+        return (emitTailValue :ast :symtab :ctx lineId: n.nodeid :ind :tmp :buf)
     } case atomid then {
         if n.name.u32 == zast.names.wkReturn then return false
         if n.name.u32 == zast.names.wkBreak then return false
         if n.name.u32 == zast.names.wkContinue then return false
         if (zast.nameTextEq :ast ref: n.name s: "null") then return false
         emitReturnOfNode :ast :symtab :ctx vid: n.nodeid :ind :tmp :buf
+        ctx.tailReturned = true
         return true
     } case atomstring then {
         emitReturnOfNode :ast :symtab :ctx vid: n.nodeid :ind :tmp :buf
+        ctx.tailReturned = true
         return true
     } case withexpr then {
         # an owned copy: the with-binding's emission below lends ast
@@ -25319,11 +25414,13 @@ emitFnBody: function {
     endsRet: false
     if op.body > 0 then {
         opb: ast.nodes.get i: op.body.u64
-        rbnId: ztypecheck.fnReturnBaseNameIdOf :ast op: (ast.nodes.get i: op.nodeid.u64)
-        if rbnId.isZero.not when ctx.genActive.not then ctx.tailRetActive = true
+        # a declared result puts the last statement in return position, whatever
+        # form the type is written in -- `u8` and `(ListVal u64)` alike
+        if op.returntype.isZero.not when ctx.genActive.not then ctx.tailRetActive = true
+        ctx.tailReturned = false
         emitBodyNode :ast :symtab :ctx n: opb ind: "    " :tmp :buf
         ctx.tailRetActive = false
-        endsRet = blockDiverges :ast :symtab :ctx n: opb
+        endsRet = ctx.tailReturned or (blockDiverges :ast :symtab :ctx n: opb)
     }
     # a body that diverges on every path never reaches this flush; the
     # return/break cleanups already freed the same locals on those paths
@@ -25879,6 +25976,7 @@ emitC: function {
         usedLits: IdSet u64
         constLits: List String
         tailRetActive: false
+        tailReturned: false
         defUnitId: (IdMapV u64 v: u64)
         ioUnitDecl: 0
         osUnitDecl: 0

@@ -36,6 +36,7 @@ public: unit {
     :fnReturnBaseNameOf
     :fnReturnBaseNameIdOf
     :isBareGenericParam
+    :implicitReturnValue
     :isComparisonOp
     :isGenericParam
     :isListViewMember
@@ -37694,31 +37695,123 @@ bindFunctionParam: function {
     st.reg.setVariableOrigin id: vid2 origin: ztypes.zvarorigin.param
 }
 
-# coerceImplicitReturn -- a literal-typed last statement takes the function's
-# concrete return type, stamped on the statement line.
-coerceImplicitReturn: function {
+# checkImplicitReturn -- the value an `out`-typed function body ends on IS its
+# return, as the value handed to `return` is: it is asked every question a
+# returned value is, and a literal takes the declared type on the line. A body
+# that ends on a binding, a write, or an expression with no value returns
+# nothing it declared. A control construct with no value of its own is not
+# judged here: whether every path through it returns is not this walk's to
+# answer.
+checkImplicitReturn: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    defn: fnref
+    # the error count before the body walk: a tail that already failed has no
+    # value because of that failure, which is not a second one to report
+    bodyErrs: u64
+} is {
+    expR: st.typing.currentReturnTypeId
+    if expR.isZero or defn.body.isZero then return
+    # a generator's body yields its values; its synthesised `.call` returns none
+    if (st.typing.generatorCallBodies.has item: defn.nid.u64) then return
+    lsid: lastStmtLineIdAt :ast oId: defn.body
+    valId: zast.nodeid
+    if lsid.isZero.not then valId = implicitReturnValue :st :ast lineId: lsid
+    if valId.isZero then {
+        if lsid.isZero.not when (tailIsControl :st :ast lineId: lsid) then return
+        if st.typing.errors.length == bodyErrs then reportNoTailValue :st :ast :defn :lsid :expR
+        return
+    }
+    argT: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: valId.u64
+    vn: ast.nodes.get i: valId.u64
+    arg: (argref
+        nid: valId
+        name: zast.nameid
+        operation: valId
+        lineno: (nodeLine n: vn)
+        colno: (nodeCol n: vn)
+    )
+    reportReturnedBareField :st :ast :arg
+    recordReturnedOwnedLocal :st :ast :arg :argT
+    checkReturnRooting :st :ast :arg :argT
+    checkReturnCarries :st :ast :arg :argT
+    checkReturnTypeMatch :st :ast :arg :argT
+    if (isLiteralTypeId :st tid: argT) then stampGate :st nid: lsid.u64 tid: expR
+}
+
+# implicitReturnValue -- the expression an `out`-typed function body's last line
+# hands back: the line's own expression when it yields a value. 0 for a line
+# that yields none -- a binding, a write, an exchange, an expression with no
+# type -- and for one that diverges, which leaves on every path itself. The
+# emitter reads the same answer, so what is checked as a return is what is
+# emitted as one.
+implicitReturnValue: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    lineId: zast.nodeid
+} out zast.nodeid is {
+    innerId: zast.nodeid
+    {
+        ln: ast.nodes.get i: lineId.u64
+        if ln.statementline then innerId = ln.statementline
+    }
+    if innerId.isZero then return innerId
+    arm: rowArmAt :ast nid: innerId
+    if arm.assignment or arm.reassignment or arm.swapstmt then return zast.nodeid
+    # a bare `return`, `break` or `continue` leaves rather than yields
+    ctl: ctlDivKind bn: (bareAtomNameId n: (ast.nodes.get i: innerId.u64))
+    if ctl > 0 then return zast.nodeid
+    lt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: lineId.u64
+    if lt.isZero then return zast.nodeid
+    if (st.reg.typetypeOf typeId: lt) == ztypes.ztypetype.neverType then return zast.nodeid
+    return innerId
+}
+
+# tailIsControl -- the last line is a control construct (an `if`, a `match`, a
+# loop, a `with` or `do` block) or a bare control word, whose paths may each
+# return on their own.
+tailIsControl: function {st: zenv.ZSymbolTable.view ast: Ast.view lineId: zast.nodeid} out bool is {
+    innerId: zast.nodeid
+    {
+        ln: ast.nodes.get i: lineId.u64
+        if ln.statementline then innerId = ln.statementline
+    }
+    if innerId.isZero then return false
+    arm: rowArmAt :ast nid: innerId
+    if arm.ifexpr or arm.caseexpr or arm.forexpr or arm.withexpr or arm.doexpr then return true
+    lt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: lineId.u64
+    ltt: st.reg.typetypeOf typeId: lt
+    if lt.isZero.not when ltt == ztypes.ztypetype.neverType then return true
+    return (ctlDivKind bn: (bareAtomNameId n: (ast.nodes.get i: innerId.u64))) > 0
+}
+
+# reportNoTailValue -- an `out`-typed function body that ends on no value.
+reportNoTailValue: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     defn: fnref
-    fnTid: ztypes.tid
+    lsid: zast.nodeid
+    expR: ztypes.tid
 } is {
-    # Implicit-return coercion: a literal-typed last statement takes
-    # the function's concrete return type, stamped on the statement
-    # line.
-    ftid: fnTid
-    if ftid > 0 then {
-        ro: methodReturnOf :st mid: ftid
-        match (
-            ro
-        ) case some then {
-            lsid: lastStmtLineIdAt :ast oId: defn.body
-            if lsid > 0 then {
-                cur: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: lsid.u64
-                if cur > 0 when (isLiteralTypeId :st tid: (ztypes.tid.create from: cur.u64)
-                ) then stampGate :st nid: lsid.u64 tid: ro
-            }
-        } case none then null
+    en: st.reg.nameOf tid: expR
+    ln: defn.lineno
+    co: defn.colno
+    if lsid.isZero.not then {
+        lnode: ast.nodes.get i: lsid.u64
+        ln = nodeLine n: lnode
+        co = nodeCol n: lnode
     }
+    (addErrorH
+        :st
+        nodeid: defn.nid
+        lineno: ln
+        colno: co
+        e: zast.err.typeError
+        msg: "missing return value: function expects '\{en}', and its body ends on no value"
+        note: "".string
+        hint: "end the body on the value it returns, or `return` it".string
+        width: 1
+    )
 }
 
 # setSynthOwnerLabel -- synth rows carry the unit member's dump label: a method's
@@ -38007,7 +38100,9 @@ checkFunctionBodyIn: function {
                 defn: fn
             )
         }
+        bodyErrs: st.typing.errors.length
         walkBodyAt :st :unitDecl :ast bodyId: fn.body
+        checkImplicitReturn :st :ast defn: fn :bodyErrs
         st.typing.currentYieldInputTid = prevYi
         st.typing.currentGenTid = prevGen
         st.typing.genSpillNext = prevSpill
@@ -38016,12 +38111,6 @@ checkFunctionBodyIn: function {
         st.typing.currentReturnsView = prevRv
         st.typing.currentFnPins = prevFp
         st.typing.currentFnTid = prevFn
-        (coerceImplicitReturn
-            :st
-            :ast
-            defn: fn
-            fnTid: (ztypes.tid.create from: (rgot.or d: ztypes.tid))
-        )
         st.pop
         st.typing.suppressParamStamps = prevSup
     }
