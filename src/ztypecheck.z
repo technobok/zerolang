@@ -29162,18 +29162,18 @@ relayBreakTakes: function {st: zenv.ZSymbolTable run: zenv.looprun} is {
 }
 
 # restoreTakenArm -- after a NON-diverging if arm, undo any takes of outer-scope
-# owned vars (clearTaken) so the next arm + the restore see them live, recording
-# them in `taken` for a single post-if invalidate. Without this a take in one arm
+# owned locals (by declaration, clearTakenDecl) so the next arm + the restore see
+# them live, recording them in `taken` for a single post-if invalidate. Without this a take in one arm
 # propagates (via popTo) into the sibling arm, which then sees the var as gone and
 # never stamps its type (e.g. an else-arm's `childpath.take` emitting `.take` on a
 # String). A take is an overlay over a persisting entry, so clearTaken alone
 # restores (no redefine).
-restoreTakenArm: function {st: zenv.ZSymbolTable liveBefore: (IdSet u32).view taken: IdSet u32} is {
+restoreTakenArm: function {st: zenv.ZSymbolTable liveBefore: (IdSet u64).view taken: IdSet u64} is {
     liveAfter: st.getLiveOwnedVars
     for vn: liveBefore.iterate loop {
         if (liveAfter.has item: vn).not then {
             taken.add item: vn
-            st.clearTaken nameId: (zast.nameid.create from: vn.u32)
+            st.clearTakenDecl declId: (ztypes.declid.create from: vn)
         }
     }
 }
@@ -29185,8 +29185,8 @@ restoreTakenArm: function {st: zenv.ZSymbolTable liveBefore: (IdSet u32).view ta
 # arm's divergence kind, `none` for a reachable end.
 settleArmTakes: function {
     st: zenv.ZSymbolTable
-    liveBefore: (IdSet u32).view
-    taken: IdSet u32
+    liveBefore: (IdSet u64).view
+    taken: IdSet u64
 } out u8 is {
     k: st.settleDivergingTakes
     if k == zenv.divkind.exit then return k
@@ -29195,12 +29195,12 @@ settleArmTakes: function {
     return k
 }
 
-# invalidateTakenAcross -- after the whole if, mark every var taken in some arm as
-# taken in the enclosing scope (it is consumed on at least one path, so a later use
-# is use-after-take).
-invalidateTakenAcross: function {st: zenv.ZSymbolTable names: (IdSet u32).view} is {
-    for vn: names.iterate loop {
-        st.invalidate nameId: (zast.nameid.create from: vn.u32) loc: takenHere
+# invalidateTakenAcross -- after the whole if, mark every local taken in some arm
+# as taken in the enclosing scope (it is consumed on at least one path, so a later
+# use is use-after-take), by declaration.
+invalidateTakenAcross: function {st: zenv.ZSymbolTable decls: (IdSet u64).view} is {
+    for vd: decls.iterate loop {
+        st.invalidateDecl declId: (ztypes.declid.create from: vd) loc: takenHere
     }
 }
 
@@ -29270,8 +29270,8 @@ checkIfClauses: function {
     accFacts: List ArmPredFact
     guardFacts: List ArmPredFact
     branchTypes: ListVal u64
-    liveBefore: (IdSet u32).view
-    takenAcross: IdSet u32
+    liveBefore: (IdSet u64).view
+    takenAcross: IdSet u64
     skipDead: bool
     pBool: u64
     flagsOut: ListVal bool
@@ -29657,7 +29657,7 @@ checkIf: function {
     ifMarker: st.pushBlock name: "if"
     armEnds: st.openArmNarrowingEnds
     liveBefore: st.getLiveOwnedVars
-    takenAcross: IdSet u32
+    takenAcross: IdSet u64
     nvId: (walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: "never").or d: 0
     nullId: (walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: "null").or d: 0
     pBool: (walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: "bool").or d: 0
@@ -29752,7 +29752,7 @@ checkIf: function {
             fullTid: (ztypes.tid.create from: pgTid.u64)
         )
     }
-    invalidateTakenAcross :st names: takenAcross
+    invalidateTakenAcross :st decls: takenAcross
     # after the guard facts: a write in an arm that completes wins over what a
     # diverging arm let the rest of the scope assume
     st.closeArmNarrowingEnds marker: armEnds

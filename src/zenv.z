@@ -767,7 +767,15 @@ ZSymbolTable: class {
     # mark a name unusable after an ownership transfer, so a later use is an
     # error rather than a use-after-move
     invalidate: function {:this nameId: zast.nameid loc: optionval ztypes.zsrcpos} out bool is {
-        d: this.findLocal :nameId
+        return (this.invalidateDecl declId: (this.findLocal :nameId) :loc)
+    }
+
+    # invalidateDecl -- the same for a local named by its declaration, which a
+    # shadow of its name cannot hide
+    invalidateDecl: function {
+        :this declId: ztypes.declid loc: optionval ztypes.zsrcpos
+    } out bool is {
+        d: declId
         if d.isZero then return false
         zt: this.currentTypeOf declId: d
         v: this.typing.declLocalVarOf declId: d
@@ -825,7 +833,12 @@ ZSymbolTable: class {
 
     # Index of the newest taken row for `name`, or none.
     takenIndex: function {this: this.view nameId: zast.nameid} out optionval u64 is {
-        d: this.findLocal :nameId
+        return (this.takenIndexDecl declId: (this.findLocal :nameId))
+    }
+
+    # takenIndexDecl -- the same for a local named by its declaration.
+    takenIndexDecl: function {this: this.view declId: ztypes.declid} out optionval u64 is {
+        d: declId
         if d.isZero then return (optionval.none u64)
         ne: this.entries.length
         j: ne
@@ -858,7 +871,12 @@ ZSymbolTable: class {
 
     # Remove the newest taken row for `name` (match/case restore).
     clearTaken: function {:this nameId: zast.nameid} is {
-        kOpt: this.takenIndex :nameId
+        this.clearTakenDecl declId: (this.findLocal :nameId)
+    }
+
+    # clearTakenDecl -- the same for a local named by its declaration.
+    clearTakenDecl: function {:this declId: ztypes.declid} is {
+        kOpt: this.takenIndexDecl :declId
         match (
             kOpt
         ) case some then {
@@ -1955,38 +1973,33 @@ ZSymbolTable: class {
         return false
     }
 
-    # Live (defined, not taken) variable names whose declared type needs a
-    # destructor -- owned resources to snapshot before if/match arms. Each
-    # name's liveness is decided by its innermost binding, so a take of the
-    # binding in scope wins over an outer definition of the same name; a
-    # narrowing laid over the binding does not hide a take under it.
-    getLiveOwnedVars: function {this: this.view} out IdSet u32 is {
-        names: IdSet u32
-        seen: IdSet u32
+    # Live (defined, not taken) owned locals, by DECLARATION -- owned resources
+    # to snapshot before if/match arms. Each declaration's liveness is its own
+    # taken row's, so a shadow of a name inside an arm neither hides the outer
+    # local nor lends it the shadow's state; a narrowing laid over a binding is
+    # a row of the same declaration and does not hide a take under it.
+    getLiveOwnedVars: function {this: this.view} out IdSet u64 is {
+        decls: IdSet u64
         cur: this.curFrame
         for cur > 0 loop {
-            if (this.typing.declIsFrame declId: cur).not then return names
+            if (this.typing.declIsFrame declId: cur).not then return decls
             kn: this.typing.declChildSlots declId: cur
             ki: kn
             for ki > 0 loop {
                 ki = ki - 1
                 kd: this.typing.declChildAt declId: cur index: ki
-                nm: this.typing.declNameOf declId: kd
-                if (seen.has item: nm).not then {
-                    seen.add item: nm
-                    # the take scan is the costly test: ask it last, of the
-                    # few locals that are owned resources at all
-                    v: this.typing.declLocalVarOf declId: kd
-                    if v.isZero.not then {
-                        dt: this.typing.declLocalTypeOf declId: kd
-                        if (this.reg.needsDestructor typeId: dt) when (this.hasTakenRow declId: kd
-                        ).not then names.add item: nm
-                    }
+                # the take scan is the costly test: ask it last, of the few
+                # locals that are owned resources at all
+                v: this.typing.declLocalVarOf declId: kd
+                if v.isZero.not then {
+                    dt: this.typing.declLocalTypeOf declId: kd
+                    if (this.reg.needsDestructor typeId: dt) when (this.hasTakenRow declId: kd
+                    ).not then decls.add item: kd.u64
                 }
             }
             cur = this.typing.declParentOf declId: cur
         }
-        return names
+        return decls
     }
 
     # --- dump ---
