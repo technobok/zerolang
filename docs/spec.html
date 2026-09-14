@@ -530,6 +530,7 @@ type. No explicit dotted-method suffix is required.</p>
 </thead>
 <tbody>
 <tr><td>call argument</td><td><code>f val: 100</code>  (parameter <code>val: u32</code>)</td></tr>
+<tr><td>return value</td><td><code>f: function out u32 is { return 100 }</code></td></tr>
 <tr><td>function implicit return</td><td><code>f: function out u32 is { 100 }</code></td></tr>
 <tr><td>reassignment RHS</td><td><code>a: 10.u8 ; a = 200 + 100 - 250</code></td></tr>
 <tr><td>record/class field initialiser</td><td><code>Foo count: 100</code>  (field <code>count: u8</code>)</td></tr>
@@ -539,6 +540,14 @@ type. No explicit dotted-method suffix is required.</p>
 <p>Bare-name construction (<code>Foo count: 100</code>) is equivalent to a
 <code>.create</code> call (<code>Foo.create count: 100</code>) &#x2014; both routes type-check
 arguments against the corresponding field's declared type.</p>
+<p>A named constant built only from bare numeric literals (<code>N: 5</code>,
+<code>SUM: 2 + 3</code>) is an <em><strong>untyped</strong></em> literal as well: it coerces at every one
+of these sites exactly as its value written in place would, and <code>N.u8</code>
+converts as <code>5.u8</code> does. A suffixed literal is not untyped. <code>7.u32</code> is a
+<code>u32</code>, so it stands in for a <code>u8</code> no more than a <code>u32</code> variable does:
+<code>a + 7.u32</code> with <code>a: u8</code> is refused, as is <code>f c: 8.i64</code> for a <code>u64</code>
+parameter. A constant built on a suffixed literal or on another typed
+constant has that type (<code>L: 5.u8</code> makes <code>Q: L + 1</code> a <code>u8</code>).</p>
 <p>The rules for "lossless" are:</p>
 <ul>
 <li><em><strong>integer literal &#x2192; integer target</strong></em>: the value must lie in the
@@ -5330,16 +5339,30 @@ all candidates for folding.</p>
 semantics). Float (<code>f64</code>) division produces a float result without
 truncation. Comparisons produce <code>bool</code> values (<code>true</code>/<code>false</code>), and
 on <code>bool</code> constants <code>and</code>, <code>or</code> and <code>.not</code> fold as well.</p>
-<p>Division by a constant zero is a compile time error (for both integer
-and float types). If the result of a constant integer operation overflows
-the target type, a compile time error is reported.</p>
-<p><code>f32</code> operations are not folded. The evaluator works in <code>i64</code> and
-<code>f64</code>, so folding <code>f32</code> arithmetic could produce a result that differs
-from the same computation performed natively on the target.</p>
-<p>Integer overflow is checked against that <code>i64</code> evaluation range rather
-than against the target type: a value carries no target type until it is
-materialized, so a result that fits <code>i64</code> but not the narrower type it is
-assigned to is caught where that assignment is checked, not here.</p>
+<p><strong>Width.</strong> A folded value carries its type. A suffixed literal has its
+suffix's type and a named constant its definition's; a comparison is
+<code>bool</code>; an arithmetic operator takes its left-hand operand's type, and a
+bare literal on the left takes its default (<code>i64</code> or <code>f64</code>) when the
+right-hand operand has a type, as in a body. The right-hand operand must
+convert into that type without loss, and a literal operand must fit it, so
+with <code>L: 5.u8</code> both <code>L + 7.u16</code> and <code>L &gt; 300</code> are errors. An
+expression built only from bare literals is <em><strong>untyped</strong></em>: it folds in
+<code>i64</code> (<code>f64</code> for floats) and coerces by value wherever it lands (see
+<a href="#numeric-literal-coercion-at-typed-locations">Numeric literal
+coercion at typed locations</a>). A lossless conversion of a constant
+(<code>L.u32</code>) folds to its target type; one that can lose data (<code>L.i8</code>)
+yields a result to handle, not a value. A string constant's <code>length</code> is a
+<code>u64</code>, as the method declares.</p>
+<p>An integer result is checked against its own type: <code>250.u8 + 10</code>
+overflows <code>u8</code>, not merely <code>i64</code>. <code>f32</code> arithmetic folds in <code>f32</code>
+itself, so the value is the one the target computes; <code>f16</code> and <code>f128</code>
+arithmetic does not fold, since the evaluator holds an <code>f64</code>, which is
+neither.</p>
+<p>Where a value is required -- a unit-level definition, a type's <code>as</code>
+constant, a <code>require:</code> block -- division by a constant integer zero and an
+integer result outside its type are compile-time errors (<code>E0600</code>). In a
+body a fold is an optimisation: an operation over constant operands that
+does not fold runs, and wraps, as the same arithmetic on variables does.</p>
 <p>Strings, <code>bool</code> values and variant arms are compile-time values too. A
 string literal folds, two compare by text, and an arm read
 (<code>platform.oskind.linux</code>) compares by arm identity -- the owning type and

@@ -370,6 +370,7 @@ Coercion sites currently include:
 #table cols="2 2":
   Site                          | Example
   call argument                 | #~"f val: 100"  (parameter #~"val: u32")
+  return value                  | #~"f: function out u32 is { return 100 }"
   function implicit return      | #~"f: function out u32 is { 100 }"
   reassignment RHS              | #~"a: 10.u8 ; a = 200 + 100 - 250"
   record/class field initialiser| #~"Foo count: 100"  (field #~"count: u8")
@@ -378,6 +379,15 @@ Coercion sites currently include:
 Bare-name construction (#~"Foo count: 100") is equivalent to a
 #~".create" call (#~"Foo.create count: 100") — both routes type-check
 arguments against the corresponding field's declared type.
+
+A named constant built only from bare numeric literals (#~"N: 5",
+#~"SUM: 2 + 3") is an #_*"untyped" literal as well: it coerces at every one
+of these sites exactly as its value written in place would, and #~"N.u8"
+converts as #~"5.u8" does. A suffixed literal is not untyped. #~"7.u32" is a
+#~"u32", so it stands in for a #~"u8" no more than a #~"u32" variable does:
+#~"a + 7.u32" with #~"a: u8" is refused, as is #~"f c: 8.i64" for a #~"u64"
+parameter. A constant built on a suffixed literal or on another typed
+constant has that type (#~"L: 5.u8" makes #~"Q: L + 1" a #~"u8").
 
 The rules for "lossless" are:
 
@@ -6144,18 +6154,32 @@ semantics). Float (#~"f64") division produces a float result without
 truncation. Comparisons produce #~"bool" values (#~"true"/#~"false"), and
 on #~"bool" constants #~"and", #~"or" and #~".not" fold as well.
 
-Division by a constant zero is a compile time error (for both integer
-and float types). If the result of a constant integer operation overflows
-the target type, a compile time error is reported.
+#b:"Width." A folded value carries its type. A suffixed literal has its
+suffix's type and a named constant its definition's; a comparison is
+#~"bool"; an arithmetic operator takes its left-hand operand's type, and a
+bare literal on the left takes its default (#~"i64" or #~"f64") when the
+right-hand operand has a type, as in a body. The right-hand operand must
+convert into that type without loss, and a literal operand must fit it, so
+with #~"L: 5.u8" both #~"L + 7.u16" and #~"L > 300" are errors. An
+expression built only from bare literals is #_*"untyped": it folds in
+#~"i64" (#~"f64" for floats) and coerces by value wherever it lands (see
+[#> to=numeric-literal-coercion-at-typed-locations: Numeric literal
+coercion at typed locations]). A lossless conversion of a constant
+(#~"L.u32") folds to its target type; one that can lose data (#~"L.i8")
+yields a result to handle, not a value. A string constant's #~"length" is a
+#~"u64", as the method declares.
 
-#~"f32" operations are not folded. The evaluator works in #~"i64" and
-#~"f64", so folding #~"f32" arithmetic could produce a result that differs
-from the same computation performed natively on the target.
+An integer result is checked against its own type: #~"250.u8 + 10"
+overflows #~"u8", not merely #~"i64". #~"f32" arithmetic folds in #~"f32"
+itself, so the value is the one the target computes; #~"f16" and #~"f128"
+arithmetic does not fold, since the evaluator holds an #~"f64", which is
+neither.
 
-Integer overflow is checked against that #~"i64" evaluation range rather
-than against the target type: a value carries no target type until it is
-materialized, so a result that fits #~"i64" but not the narrower type it is
-assigned to is caught where that assignment is checked, not here.
+Where a value is required -- a unit-level definition, a type's #~"as"
+constant, a #~"require:" block -- division by a constant integer zero and an
+integer result outside its type are compile-time errors (#~"E0600"). In a
+body a fold is an optimisation: an operation over constant operands that
+does not fold runs, and wraps, as the same arithmetic on variables does.
 
 Strings, #~"bool" values and variant arms are compile-time values too. A
 string literal folds, two compare by text, and an arm read

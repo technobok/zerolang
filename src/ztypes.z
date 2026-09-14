@@ -22,6 +22,7 @@ public: unit {
     :cval
     :floatFitsFloat
     :intFitsFloat
+    :intValueFits
     :isFloatKind
     :makeArmConst
     :makeFloatConst
@@ -38,7 +39,11 @@ public: unit {
     :noDefTarget
     :parseNumber
     :parseNumberAs
+    :rangeErr
+    :rangeOf
     :suffixInfoOf
+    :suffixinfo
+    :typedConst
     :zconstkind
     :zconstkindName
     :zcontrolkind
@@ -206,7 +211,8 @@ constfailkind: variant {
     none: null
     # an interpolation, which cannot be folded because it builds at runtime
     interp: null
-    # the arithmetic left the range the evaluator works in
+    # the arithmetic left the range of the type it is computed in; strId names
+    # that type, 0 for an untyped literal's i64
     overflow: null
     # a division by zero, caught HERE rather than trapping at runtime as the
     # emitted form would
@@ -220,6 +226,13 @@ constfailkind: variant {
     unsupportedMethod: null
     # a substring whose bounds fall outside the string
     substringRange: null
+    # a number that cannot stand where it is taken: an operand that does not
+    # convert into the governing one without loss, or a literal outside the
+    # type it lands in; strId holds the report, the body's own words
+    mismatch: null
+    # a conversion of a typed constant that can lose data, which yields a result
+    # to handle rather than a value; strId holds the conversion's source type
+    lossyConversion: null
 } as { tag: u8.tag }
 
 # One recorded evaluation failure. A VALTYPE for the reason cval is: it copies
@@ -621,6 +634,10 @@ cval: record {
     # the arm's name-pool id, the other half. Not an ordinal: an ordinal would
     # rot the first time an arm was inserted
     armName: zast.nameid
+    # the numeric type a number carries: its suffix's, its constant's, its
+    # governing operand's. 0 for an UNTYPED literal, which reads as i64 or f64
+    # by kind and coerces by value wherever a typed position takes it
+    numTid: tid
 }
 
 # how a runtime variable came to be: a parameter, a local binding, or one the
@@ -1860,7 +1877,15 @@ noConst: function out cval is {
         strId: 0
         armTid: (tid.create from: 0)
         armName: (zast.nameid.create from: 0)
+        numTid: (tid.create from: 0)
     )
+}
+
+# typedConst -- the number `c` carrying the numeric type `numTid`.
+typedConst: function {c: cval numTid: tid} out cval is {
+    r: c
+    r.numTid = numTid
+    return r
 }
 
 # a cval holding the integer value `v`.
@@ -2050,10 +2075,41 @@ rangeOf: function {k: numkind} out NumRange is {
     }
 }
 
+# intValueFits -- `v` lies in integer kind `k`'s range, which rangeOf spells for
+# a message. Every i64 is an i64 and an i128; a float kind is not asked.
+intValueFits: function {v: i64 k: numkind} out bool is {
+    match (
+        k
+    ) case i8Type then {
+        return v >= (0 - 128) and (v <= 127)
+    } case i16Type then {
+        return v >= (0 - 32768) and (v <= 32767)
+    } case i32Type then {
+        return v >= (0 - 2147483648) and (v <= 2147483647)
+    } case u8Type then {
+        return v >= 0 and (v <= 255)
+    } case c8Type then {
+        return v >= 0 and (v <= 255)
+    } case u16Type then {
+        return v >= 0 and (v <= 65535)
+    } case u32Type then {
+        return v >= 0 and (v <= 4294967295)
+    } case c32Type then {
+        return v >= 0 and (v <= 4294967295)
+    } case u64Type then {
+        return v >= 0
+    } case u128Type then {
+        return v >= 0
+    } else {
+        return true
+    }
+}
+
 # the absolute value of `v` as a u64 (handles i64 min without overflow).
 absI64: function {v: i64} out u64 is {
-    if v < 0 then return (0 - v).u64.orPanic
-    return v.u64.orPanic
+    if v >= 0 then return v.u64.orPanic
+    # `v + 1` keeps the most negative i64's magnitude in range until it is u64
+    return (0 - (v + 1)).u64.orPanic + 1
 }
 
 # the number of significant bits in `v` (0 for 0).
