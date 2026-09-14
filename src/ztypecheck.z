@@ -28146,6 +28146,301 @@ checkIfClauses: function {
 }
 
 
+# armvalue -- one arm of a value-producing `if` or `match`: the node its value
+# is, the type it yields, and whether that value is an untyped literal, which
+# the other arms' type governs.
+armvalue: record {
+    # the value's node, 0 when the arm yields none or diverges
+    nid: zast.nodeid
+    # the type the arm yields
+    tid: ztypes.tid
+    # whether the value is an untyped literal constant
+    untyped: bool
+}
+
+# isControlValue -- the node is an `if` or a `match`, whose value is its arms'.
+isControlValue: function {ast: Ast.view nid: zast.nodeid} out bool is {
+    n: ast.nodes.get i: nid.u64
+    return n.ifexpr or n.caseexpr
+}
+
+# controlArmBlocks -- the bodies of an `if`'s clauses and else, or a `match`'s
+# arms and else, in order.
+controlArmBlocks: function {ast: Ast.view nid: zast.nodeid into: ListVal u32} is {
+    n: ast.nodes.get i: nid.u64
+    elseId: zast.nodeid
+    if n.ifexpr then {
+        k: u64
+        for k < n.clauses.count.u64 loop {
+            cl: ifClauseRefAt :ast nid: (zast.ifClauseAt :ast :nid i: k)
+            k = k + 1
+            if cl.statement.isZero.not then into.append from: cl.statement.u32
+        }
+        elseId = n.elseclause
+    }
+    if n.caseexpr then {
+        k: u64
+        for k < n.clauses.count.u64 loop {
+            cc: caseClauseRefAt :ast nid: (zast.caseClauseAt :ast :nid i: k)
+            k = k + 1
+            if cc.statement.isZero.not then into.append from: cc.statement.u32
+        }
+        elseId = n.elseclause
+    }
+    if elseId.isZero.not then into.append from: elseId.u32
+}
+
+# armValueOf -- the value an arm's body yields: its last line's, or the body
+# itself when it is a bare expression. A nested `if` or `match` yields the type
+# its own arms agree on.
+armValueOf: function {st: zenv.ZSymbolTable ast: Ast blockId: zast.nodeid} out armvalue is {
+    none: armvalue nid: zast.nodeid tid: ztypes.tid untyped: false
+    if blockId.isZero then return none
+    valId: blockId
+    lineId: blockId
+    isBlock: false
+    {
+        bn: ast.nodes.get i: blockId.u64
+        isBlock = bn.statement
+    }
+    if isBlock then {
+        lineId = lastStmtLineIdAt :ast oId: blockId
+        if lineId.isZero then return none
+        valId = implicitReturnValue :st :ast :lineId
+        if valId.isZero then return none
+    }
+    vt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: lineId.u64
+    if (isControlValue :ast nid: valId) then vt = valueArmsTid :st :ast nid: valId first: vt
+    if vt.isZero or ((st.reg.typetypeOf typeId: vt) == ztypes.ztypetype.neverType) then return none
+    cf: (st.typing.nodeConst.get key: valId.u64).or d: ztypes.noConst
+    num: cf.kind.ivalKind or cf.kind.fvalKind
+    return (armvalue nid: valId tid: vt untyped: num and cf.numTid.isZero)
+}
+
+# valueArmsTid -- the one type a value-producing `if` or `match` yields, which
+# every arm yielding a value must agree on: the spec gives an `if` or a `match`
+# used as an expression one result type. A typed arm governs an untyped literal
+# one, whose value must then fit it (checkNumericCoercion); untyped arms alone
+# yield what the first of them does, or the float one's type when one is a
+# float; two arms of different types are refused. The node is restamped with
+# the answer; `first` -- the first arm's type -- when no arm yields a value.
+valueArmsTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    nid: zast.nodeid
+    first: ztypes.tid
+} out ztypes.tid is {
+    blocks: ListVal u32
+    controlArmBlocks :ast :nid into: blocks
+    arms: ListVal armvalue
+    with bit: blocks.iterate do for blk: bit loop {
+        av: armValueOf :st :ast blockId: (zast.nodeid.create from: blk)
+        if av.nid.isZero.not then arms.append from: av
+    }
+    governing: typedArmsAgree :st :ast :nid :arms
+    if governing.untyped then return governing.tid
+    if governing.nid.isZero then {
+        loose: looseArm :st :arms
+        if loose.nid.isZero then return first
+        # literal arms alone: an integer one beside a float one must be exactly
+        # a float
+        if (isFloatLiteralTid :st tid: loose.tid) then checkArmsFitFloat :st :ast :arms float: loose
+        stampGate :st nid: nid.u64 tid: loose.tid
+        return loose.tid
+    }
+    coerceLiteralArms :st :ast :nid :arms :governing
+    stampGate :st nid: nid.u64 tid: governing.tid
+    return governing.tid
+}
+
+# looseArm -- among untyped literal arms, the one whose type they take: a float
+# one when there is one, else the first.
+looseArm: function {st: zenv.ZSymbolTable.view arms: (ListVal armvalue).view} out armvalue is {
+    loose: armvalue nid: zast.nodeid tid: ztypes.tid untyped: false
+    with lit: arms.iterate do for av: lit loop {
+        if av.untyped then {
+            if loose.nid.isZero then loose = av
+            if (isFloatLiteralTid :st tid: av.tid) then loose = av
+        }
+    }
+    return loose
+}
+
+# coerceLiteralArms -- each untyped literal arm lands in the typed arms' type: a
+# number must fit it, and a type that is no number takes no literal at all.
+coerceLiteralArms: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    nid: zast.nodeid
+    arms: (ListVal armvalue).view
+    governing: armvalue
+} is {
+    numeric: isNumericTid :st frame: st.curFrame :ast tid: governing.tid
+    with cit: arms.iterate do for av: cit loop {
+        if av.untyped when numeric.not then reportArmTypes :st :ast :nid a: governing b: av
+        if av.untyped when numeric then {
+            an: ast.nodes.get i: av.nid.u64
+            (checkNumericCoercion
+                :st
+                :ast
+                dstTid: governing.tid
+                srcTid: av.tid
+                valueNid: av.nid
+                nodeid: av.nid
+                lineno: (nodeLine n: an)
+                colno: (nodeCol n: an)
+            )
+        }
+    }
+}
+
+# typedArmsAgree -- the first typed arm, which the other typed arms must agree
+# with. A disagreement is reported, and answered with `untyped` set as the
+# caller's signal to stop; no typed arm answers with a zero node.
+typedArmsAgree: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    nid: zast.nodeid
+    arms: (ListVal armvalue).view
+} out armvalue is {
+    governing: armvalue nid: zast.nodeid tid: ztypes.tid untyped: false
+    with ait: arms.iterate do for av: ait loop {
+        if av.untyped.not then {
+            if governing.nid.isZero then {
+                governing = av
+            } else {
+                if (armTypesAgree :st :ast a: governing.tid b: av.tid).not then {
+                    reportArmTypes :st :ast :nid a: governing b: av
+                    governing.untyped = true
+                    return governing
+                }
+            }
+        }
+    }
+    return governing
+}
+
+# checkArmsFitFloat -- the integer literal arms beside a float literal one,
+# each of which must be exactly a float.
+checkArmsFitFloat: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arms: (ListVal armvalue).view
+    float: armvalue
+} is {
+    with ait: arms.iterate do for av: ait loop {
+        if (isFloatLiteralTid :st tid: av.tid).not then {
+            an: ast.nodes.get i: av.nid.u64
+            (checkNumericCoercion
+                :st
+                :ast
+                dstTid: float.tid
+                srcTid: av.tid
+                valueNid: av.nid
+                nodeid: av.nid
+                lineno: (nodeLine n: an)
+                colno: (nodeCol n: an)
+            )
+        }
+    }
+}
+
+# isFloatLiteralTid -- the type an untyped float literal carries: the float
+# literal type before it materialises, a float after.
+isFloatLiteralTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    if tid == st.reg.literalFloatTid then return true
+    k: numKindOfTid :st :tid
+    return k.has and (ztypes.isFloatKind k: k.kind)
+}
+
+# armTypesAgree -- two arms yield the same type: the same numeric kind (a
+# scalar can be reached under more than one id), or types that each stand in for
+# the other.
+armTypesAgree: function {st: zenv.ZSymbolTable ast: Ast a: ztypes.tid b: ztypes.tid} out bool is {
+    if a == b then return true
+    ka: numKindOfTid :st tid: a
+    kb: numKindOfTid :st tid: b
+    if ka.has or kb.has then {
+        if ka.has.not or kb.has.not then return false
+        an: st.reg.nameViewOf tid: a
+        bn: st.reg.nameViewOf tid: b
+        return an == bn
+    }
+    return (typesCompatible :ast :st :a :b) and (typesCompatible :ast :st a: b b: a)
+}
+
+# reportArmTypes -- two arms of a value-producing `if` or `match` yield
+# different types.
+reportArmTypes: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    nid: zast.nodeid
+    a: armvalue
+    b: armvalue
+} is {
+    what: "an `if`"
+    if (ast.nodes.get i: nid.u64).caseexpr then what = "a `match`"
+    an: st.reg.nameOf tid: a.tid
+    bn: st.reg.nameOf tid: b.tid
+    bnode: ast.nodes.get i: b.nid.u64
+    (addErrorH
+        :st
+        nodeid: b.nid
+        lineno: (nodeLine n: bnode)
+        colno: (nodeCol n: bnode)
+        e: zast.err.typeError
+        msg: "the arms of \{what} yield '\{an}' and '\{bn}', and \{what} used as a value yields one type"
+        note: "".string
+        hint: "make every arm yield the same type, converting where the loss is visible".string
+        width: 1
+    )
+}
+
+# consumedIfTid -- an `if` whose value is consumed yields one type from every
+# arm, and yields nothing at all when no condition holds and there is no else.
+# An `if` standing as a statement discards its value and is asked neither.
+consumedIfTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    ifnode: ifref
+    hasElse: bool
+    result: ztypes.tid
+    # every branch diverges, so the `if` yields `never` and no value is asked of it
+    allDiverge: bool
+    # a branch is empty, so the `if` yields null and consuming it is refused
+    anyEmpty: bool
+} out ztypes.tid is {
+    if allDiverge or anyEmpty then return result
+    if st.typing.stmtExprNid == ifnode.nid.u64 then return result
+    if hasElse then return (valueArmsTid :st :ast nid: ifnode.nid first: result)
+    reportValueIfWithoutElse :st :ifnode
+    return result
+}
+
+# reportValueIfWithoutElse -- an `if` whose value is consumed has no else, so
+# it yields nothing when no condition holds.
+reportValueIfWithoutElse: function {st: zenv.ZSymbolTable ifnode: ifref} is {
+    (addErrorH
+        :st
+        nodeid: ifnode.nid
+        lineno: ifnode.lineno
+        colno: ifnode.colno
+        e: zast.err.typeError
+        msg: "an `if` used as a value needs an else: it yields nothing when no condition holds".string
+        note: "".string
+        hint: "add an `else` branch with the value to yield".string
+        width: 2
+    )
+}
+
+# textListHas -- `list` holds `text`.
+textListHas: function {list: (List String).view text: StringView} out bool is {
+    with lit: list.iterate do for e: lit loop {
+        if e.stringView == text then return true
+    }
+    return false
+}
+
 # checkIf -- walk an if: push the `if` scope, then a `if_branch` scope per clause
 # and an `if_else` scope for the else; when every branch diverges (returns) the
 # if resolves to never and marks the enclosing scope unreachable.
@@ -28238,6 +28533,7 @@ checkIf: function {
         :nvId
         :nullId
     )
+    result = consumedIfTid :st :ast :ifnode :hasElse :result :allDiverge :anyEmpty
     st.popTo marker: ifMarker
     # post-guard flow typing: a diverging clause's condition was FALSE for
     # the remainder of the enclosing scope; a diverging else of a single-
@@ -30837,22 +31133,12 @@ checkNumericCoercion: function {
         wn9: ast.nodes.get i: vn9.u64
         if wn9.namedoperation then vn9 = wn9.operation
     }
-    {
-        cf9: (st.typing.nodeConst.get key: vn9.u64).or d: ztypes.noConst
-        num9: cf9.kind.ivalKind or cf9.kind.fvalKind
-        if num9 when cf9.numTid.isZero then {
-            fm9: untypedFitsMessage :st v: cf9 target: dstTid
-            if fm9.length > 0 then (addError
-                :st
-                :nodeid
-                :lineno
-                :colno
-                e: zast.err.typeError
-                msg: fm9
-            )
-            return
-        }
+    # an `if` or a `match` lands each arm's value in the destination
+    if (isControlValue :ast nid: vn9) then {
+        checkArmsCoercion :st :ast :dstTid nid: vn9
+        return
     }
+    if (checkUntypedConstFits :st :dstTid valueNid: vn9 :nodeid :lineno :colno) then return
     if (isLiteralTypeId :st tid: srcTid) then {
         lex: argLiteralLexeme :ast nid: vn9
         if lex.length == 0 then return
@@ -30886,6 +31172,52 @@ checkNumericCoercion: function {
         hint: hn9n
         width: 1
     )
+}
+
+# checkArmsCoercion -- each arm of the `if` or `match` at `nid` lands its value
+# in the destination, as checkNumericCoercion lands one value.
+checkArmsCoercion: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dstTid: ztypes.tid
+    nid: zast.nodeid
+} is {
+    armIds: ListVal u32
+    controlArmBlocks :ast :nid into: armIds
+    with ait: armIds.iterate do for armBlock: ait loop {
+        av: armValueOf :st :ast blockId: (zast.nodeid.create from: armBlock)
+        if av.nid.isZero.not then {
+            an: ast.nodes.get i: av.nid.u64
+            (checkNumericCoercion
+                :st
+                :ast
+                :dstTid
+                srcTid: av.tid
+                valueNid: av.nid
+                nodeid: av.nid
+                lineno: (nodeLine n: an)
+                colno: (nodeCol n: an)
+            )
+        }
+    }
+}
+
+# checkUntypedConstFits -- an untyped folded constant at `valueNid` is settled by
+# its value, which must fit the destination; true when the value was one.
+checkUntypedConstFits: function {
+    st: zenv.ZSymbolTable
+    dstTid: ztypes.tid
+    valueNid: zast.nodeid
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+} out bool is {
+    cf: (st.typing.nodeConst.get key: valueNid.u64).or d: ztypes.noConst
+    num: cf.kind.ivalKind or cf.kind.fvalKind
+    if num.not or cf.numTid.isZero.not then return false
+    fm: untypedFitsMessage :st v: cf target: dstTid
+    if fm.length > 0 then addError :st :nodeid :lineno :colno e: zast.err.typeError msg: fm
+    return true
 }
 
 # losslessConvTo -- does `from` declare a LOSSLESS conversion to `to`? The
@@ -35313,6 +35645,16 @@ checkCaseClause: function {
     } else {
         allDiverge = false
     }
+    if (textListHas list: covered text: armName.stringView) then {
+        (addError
+            :st
+            nodeid: clause.nid
+            lineno: clause.lineno
+            colno: clause.colno
+            e: zast.err.typeError
+            msg: "arm '\{armName}' is matched twice"
+        )
+    }
     cn2: armName.copy
     covered.append cn2
     ak: st.settleDivergingTakes
@@ -35818,8 +36160,7 @@ checkCase: function {
     foldCaseArm :st :ast :unitDecl n: casenode
     constFailClear :st
     matchMarker: st.pushBlock name: "match"
-    subjT: checkValueAt :st :unitDecl :ast nid: casenode.subject
-    if subjT.isZero then subjT = caseGenericSubjectTid :st :unitDecl :ast :casenode
+    subjT: caseSubjectTid :st :unitDecl :ast :casenode
     # per-mono instance walk: a subject that is a bare TYPE name (resolved
     # by the instance's scope define, not a value) is a compile-time
     # dissection -- template-time checking validated it and the emitter
@@ -35872,7 +36213,40 @@ checkCase: function {
             msg: smsg
         )
     }
-    return (checkCaseArms :st :unitDecl :ast :casenode :subjT :isSum :matchMarker)
+    arms: checkCaseArms :st :unitDecl :ast :casenode :subjT :isSum :matchMarker
+    return (consumedCaseTid :st :ast :casenode :arms)
+}
+
+# caseSubjectTid -- type a match's subject. A subject that types to nothing and
+# raised nothing is an unresolvable name, reported where the match reads it.
+caseSubjectTid: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    casenode: caseref
+} out ztypes.tid is {
+    errS: st.typing.errors.length
+    subjT: checkValueAt :st :unitDecl :ast nid: casenode.subject
+    if subjT.isZero then subjT = caseGenericSubjectTid :st :unitDecl :ast :casenode
+    if subjT.isZero when st.typing.errors.length == errS then {
+        reportUnresolvedValue :st :unitDecl :ast nid: casenode.subject
+    }
+    return subjT
+}
+
+# consumedCaseTid -- a `match` whose value is consumed yields one type from every
+# arm; one standing as a statement, one yielding no value and one that diverges
+# are asked nothing.
+consumedCaseTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    casenode: caseref
+    arms: ztypes.tid
+} out ztypes.tid is {
+    if st.typing.stmtExprNid == casenode.nid.u64 then return arms
+    if arms.isZero or (arms.u64 == st.typing.nullTypeId) then return arms
+    if (st.reg.typetypeOf typeId: arms) == ztypes.ztypetype.neverType then return arms
+    return (valueArmsTid :st :ast nid: casenode.nid first: arms)
 }
 
 # rowarm -- which arm a value or statement row holds: the dispatch tag that
@@ -37723,6 +38097,7 @@ checkImplicitReturn: function {
         return
     }
     argT: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: valId.u64
+    if (isControlValue :ast nid: valId) then argT = valueArmsTid :st :ast nid: valId first: argT
     vn: ast.nodes.get i: valId.u64
     arg: (argref
         nid: valId

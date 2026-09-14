@@ -881,7 +881,11 @@ perf: $(PERFBIN)
 # +5,117 when a function's last expression came to be checked and emitted as
 # its result: over the same source the new compiler allocates exactly as the
 # old, and it is the input, the compiler's own source longer.
-ALLOC_BASELINE := 2604699
+#
+# +12,904 when the arms of an `if` or `match` used as a value came to agree on
+# one type: over the same source the new compiler allocates exactly as the old,
+# and it is the input, the compiler's own source longer.
+ALLOC_BASELINE := 2617603
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
