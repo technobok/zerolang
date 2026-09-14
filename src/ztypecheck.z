@@ -10378,6 +10378,9 @@ foldedDeclType: function {
     # the member's declaration
     dm: argref
 } out ztypes.tid is {
+    refuseNumericParamName :st :ast :ownerTid :dm
+    npT: numericParamFieldType :st :ast :ownerTid :dm
+    if npT.isZero.not then return npT
     bare: declaredByValue :st :ast :ownerTid node: dm.operation
     if bare.not then return ztypes.tid
     fd: (st.typing.declMemberIdOf
@@ -10411,6 +10414,100 @@ foldedDeclType: function {
         return (ztypes.tid.create from: fto)
     } case none then null
     return ztypes.tid
+}
+
+# refuseNumericParamName -- a field or parameter named like a numeric generic
+# parameter of its owner. The owner's `as` and body are one scope, and a read of
+# the name through a value would mean two things.
+refuseNumericParamName: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    ownerTid: u64
+    dm: argref
+} is {
+    if (isGenericParam :ast op: (ast.nodes.get i: dm.operation.u64)) then return
+    tdecl: declOfTypeId :st tid: (ztypes.tid.create from: ownerTid.u64)
+    if (st.reg.genericParamConstraintOf :tdecl paramName: dm.name).numKind.has.not then return
+    pn: zast.nameTextAt :ast ref: dm.name
+    tn: st.reg.nameOf tid: (ztypes.tid.create from: ownerTid.u64)
+    (addErrorH
+        :st
+        nodeid: dm.nid
+        lineno: dm.lineno
+        colno: dm.colno
+        e: zast.err.typeError
+        msg: "'\{pn}' is a numeric generic parameter of '\{tn}', so a member cannot have its name"
+        note: String
+        hint: "rename the member; the parameter is read as `\{pn}`, or through a value of the type"
+        width: pn.length.u32.orPanic
+    )
+}
+
+# numericParamFieldType -- a field (or parameter) whose value is a numeric
+# generic parameter of its owner (`stored: cap`): the bound's type, with a
+# default each mono supplies from its own argument (recordNumericFieldDefaults).
+# 0 for any other declaration.
+numericParamFieldType: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    ownerTid: u64
+    dm: argref
+} out ztypes.tid is {
+    vnId: bareAtomNameId n: (ast.nodes.get i: dm.operation.u64)
+    if vnId.isZero then return ztypes.tid
+    tdecl: declOfTypeId :st tid: (ztypes.tid.create from: ownerTid.u64)
+    cd: st.reg.genericParamConstraintOf :tdecl paramName: vnId
+    if cd.numKind.has.not then return ztypes.tid
+    bound: numericBoundTid :ast :st frame: st.curFrame :cd
+    if bound.isZero then return ztypes.tid
+    fd: (st.typing.declMemberIdOf
+        parentTypeId: (ztypes.tid.create from: ownerTid.u64)
+        nameId: dm.name
+    )
+    if fd.isZero then return ztypes.tid
+    st.typing.numericParamDefault.set key: fd.u64 value: vnId
+    (st.typing.declSetDefaultId
+        parentTypeId: (ztypes.tid.create from: ownerTid.u64)
+        nameId: dm.name
+        value: ztyping.defaultval.constant fd
+    )
+    return bound
+}
+
+# recordNumericFieldDefaults -- each field of a fresh mono that its template
+# defaults to a numeric generic parameter: the mono's argument is the field's
+# value and its default.
+recordNumericFieldDefaults: function {
+    st: zenv.ZSymbolTable
+    monoId: ztypes.tid
+    templateId: ztypes.tid
+} is {
+    if st.typing.numericParamDefault.length == 0 then return
+    slots: st.typing.declRowSlots ownerTid: templateId
+    si: u64
+    for si < slots loop {
+        row: st.typing.declRowAt ownerTid: templateId membersOnly: true slot: si
+        si = si + 1
+        if row.keep then {
+            fname: zast.nameid.create from: row.name.u32.orPanic
+            tmd: st.typing.declMemberIdOf parentTypeId: templateId nameId: fname
+            po: st.typing.numericParamDefault.get key: tmd.u64
+            match (
+                po
+            ) case some then {
+                v: st.typing.memberConstOf parentTypeId: monoId nameId: po
+                if v.kind.none.not then {
+                    st.typing.setMemberConst parentTypeId: monoId nameId: fname value: v
+                    mmd: st.typing.declMemberIdOf parentTypeId: monoId nameId: fname
+                    (st.typing.declSetDefaultId
+                        parentTypeId: monoId
+                        nameId: fname
+                        value: ztyping.defaultval.constant mmd
+                    )
+                }
+            } case none then null
+        }
+    }
 }
 
 # armCarriesPayload -- the arm a field defaults to carries a payload, so
@@ -18236,7 +18333,8 @@ mintMonoMember: function {
 
 # mintMonoRecordShape -- give a monomorphised RECORD the shape its template
 # declares: the ordinal arms of a variant-like record, the tag width, and the
-# per-instance constructor the emitter fills.
+# per-instance constructor the emitter fills. A numeric generic parameter is
+# no field of it: its value is a constant the mono records.
 mintMonoRecordShape: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -18244,7 +18342,6 @@ mintMonoRecordShape: function {
     templateId: ztypes.tid
     mid: u64
     tt: ztypes.ztypetype
-    tplUnit: ztypes.declid
 } is {
     if tt == ztypes.ztypetype.recordType then {
         isSized: (
@@ -18252,50 +18349,6 @@ mintMonoRecordShape: function {
             (builtinTidT :st frame: rf :ast base: "str") or
             (templateId == (builtinTidT :st frame: rf :ast base: "array"))
         )
-        tk: declOfTypeId :st tid: templateId
-        pNames: st.reg.genericParamNamesOf tdecl: tk
-        pi: u64
-        pn0: pNames.length
-        for pi < pn0 loop {
-            pname: pNames.get i: pi
-            cdx: st.reg.genericParamConstraintOf tdecl: tk paramName: pname
-            # A NUMERIC bound is what synthesizes a field (`size: u64.generic`
-            # becomes a real `size` field). Written as a denylist -- everything
-            # except `any` and `none` -- this also claimed the FAMILY bounds and
-            # StringLike, which are type constraints with nothing to store; it
-            # only ever saw numeric/any/none because the family bounds were
-            # spelled `Any.generic` until the val/ref rename. Ask the question
-            # the comment above states.
-            isNum: cdx.kind == ztypes.constraintkind.numeric
-            if isNum then {
-                exo: (st.typing.declChildOfId
-                    parentTypeId: (ztypes.tid.create from: mid.u64)
-                    nameId: pname
-                )
-                match (
-                    exo
-                ) case some then null case none then {
-                    pcon: constraintTextOf desc: cdx
-                    cno: (walkLookupTyperef
-                        :st
-                        frame: rf
-                        :ast
-                        unitDecl: tplUnit
-                        base: pcon.stringView
-                    )
-                    match (
-                        cno
-                    ) case some then {
-                        (st.typing.setMemberType
-                            parentTypeId: (ztypes.tid.create from: mid.u64)
-                            nameId: pname
-                            childTypeId: cno
-                        )
-                    } case none then null
-                }
-            }
-            pi = pi + 1
-        }
         if isSized.not then {
             crId: (st.reg.newType
                 name: "create"
@@ -18598,12 +18651,9 @@ mintMono: function {
     ).not then {
         st.reg.setNeedsDestructor typeId: (ztypes.tid.create from: mid.u64)
     }
-    # RECORD instances: numeric-param fields synthesize from their declared
-    # constraint (size: u64.generic -> a u64 child) when no field references
-    # them; then the meta-create requalifies to the instance and ==/!=
-    # synthesize -- except str/array, whose branches own those members
-    # (their u64 `to` child comes from THIS synth; the branches add none).
-    mintMonoRecordShape :ast :st :rf :templateId :mid :tt :tplUnit
+    # RECORD instances: the meta-create requalifies to the instance and ==/!=
+    # synthesize -- except str/array, whose branches own those members.
+    mintMonoRecordShape :ast :st :rf :templateId :mid :tt
     mintMonoTagShape :st :mid :tt :name
 }
 
@@ -19480,6 +19530,7 @@ getOrMintSpec: function {
             :keys8
             :keyIsVal8
         )
+        recordNumericFieldDefaults :st monoId: mid8 :templateId
     }
     st.reg.specWasFresh = true
     return (ztypes.tid.create from: mid8)
@@ -20592,8 +20643,6 @@ bindNumericTypeArg: function {
     pk0: zast.nameid
     opId: zast.nodeid
     sfx: String
-    numParamNames: ListVal zast.nameid
-    numParamNodes: ListVal u32
     valueSubs: (IdMapV zast.nameid v: u64)
 } out bool is {
     na: (numericGenericArg
@@ -20609,8 +20658,6 @@ bindNumericTypeArg: function {
     if na.state.refused then return false
     cd: st.reg.genericParamConstraintOf :tdecl paramName: pk0
     appendNumericArgSuffix :sfx bits: na.bits :cd
-    numParamNames.append pk0
-    numParamNodes.append opId
     valueSubs.set key: pk0 value: na.bits
     return true
 }
@@ -20671,8 +20718,6 @@ collectTypeArgAt: function {
     sfx: String
     subs: (IdMapV zast.nameid v: u64)
     valueSubs: (IdMapV zast.nameid v: u64)
-    numParamNames: ListVal zast.nameid
-    numParamNodes: ListVal u32
     miss: bool
 } out argscan is {
     anyMiss: miss
@@ -20722,8 +20767,6 @@ collectTypeArgAt: function {
             :pk0
             :opId
             :sfx
-            :numParamNames
-            :numParamNodes
             :valueSubs
         ).not then anyMiss = true
         return (argscan miss: anyMiss tid: 0)
@@ -20759,8 +20802,6 @@ collectGenericTypeArgs: function {
     sfx: String
     subs: (IdMapV zast.nameid v: u64)
     valueSubs: (IdMapV zast.nameid v: u64)
-    numParamNames: ListVal zast.nameid
-    numParamNodes: ListVal u32
     tk0: ztypes.declid
     firstOut: ListVal u64
 } out bool is {
@@ -20781,8 +20822,6 @@ collectGenericTypeArgs: function {
             :sfx
             :subs
             :valueSubs
-            :numParamNames
-            :numParamNodes
             miss: anyMiss
         )
         anyMiss = r0.miss
@@ -20812,8 +20851,6 @@ genericTypeConstruction: function {
     sfx: String
     subs: IdMapV zast.nameid v: u64
     valueSubs: IdMapV zast.nameid v: u64
-    numParamNames: ListVal zast.nameid
-    numParamNodes: ListVal u32
     primaryName: firstGenericParamId :st templateId: (ztypes.tid.create from: tplId.u64)
     firstOut: ListVal u64
     anyMiss: (collectGenericTypeArgs
@@ -20826,8 +20863,6 @@ genericTypeConstruction: function {
         :sfx
         :subs
         :valueSubs
-        :numParamNames
-        :numParamNodes
         :tk0
         :firstOut
     )
@@ -20846,22 +20881,6 @@ genericTypeConstruction: function {
         fallbackArg: firstA
     )
     if mid.isZero then return (ztypes.tid.create from: 0)
-    npi: u64
-    npn: numParamNames.length
-    for npi < npn loop {
-        npId: numParamNames.get i: npi
-        npNode: numParamNodes.get i: npi
-        # a literal re-renders from its own node; any other argument renders
-        # the value the mono records for its parameter
-        dv: ztyping.defaultval.literal npNode
-        npLit: isNumericLiteralNameAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: npNode.u64))
-        if npLit.not then {
-            npMember: st.typing.declMemberIdOf parentTypeId: mid nameId: npId
-            dv = ztyping.defaultval.constant npMember
-        }
-        st.typing.declSetDefaultId parentTypeId: mid nameId: npId value: dv
-        npi = npi + 1
-    }
     isSized: tname.stringView == "str" or (tname.stringView == "array")
     if isSized then {
         (mintCollectionChildren
@@ -23522,6 +23541,11 @@ checkNumericParamMember: function {
         )
     }
     stampGate :st nid: dp.nid.u64 tid: bound
+    (stampRefDecl
+        :st
+        nid: dp.nid.u64
+        declId: (st.typing.declFindChild parentDeclId: tdecl nameId: cnId)
+    )
     st.typing.numericParamRead.set key: dp.nid.u64 value: cnId
     return (callleg handled: true tid: bound)
 }
@@ -27263,7 +27287,8 @@ isAddressableTarget: function {
 }
 
 # pathStepIsSlot -- one step of a write target's path names storage: an array
-# element (a numeric child), or a member that is a slot. A function field is
+# element (a numeric child), or a member that is a slot, which a numeric generic
+# parameter read through a value is not. A function field is
 # storage only as the path's LEAF: in the middle of one it is called, and its
 # result is a temporary.
 pathStepIsSlot: function {
@@ -27275,6 +27300,9 @@ pathStepIsSlot: function {
 } out bool is {
     if (isNumericLiteralNameAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: childId.u64))
     ) then return true
+    # a numeric generic parameter is fixed by the type: its declaration is the
+    # parameter's, and no instance stores it
+    if (st.typing.numericParamRead.has key: step.u64) then return false
     md: (st.typing.refDecl.get key: step.u64).or d: ztypes.declid
     if md.isZero then return false
     if (memberIsSlot :st declId: md).not then return false
