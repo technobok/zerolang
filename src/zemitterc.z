@@ -11537,11 +11537,7 @@ emitDataMember: function {
             tid: (ztypes.tid.create from: daid.u64)
             thisTid: ztypes.tid
         )
-        daMn: regNameOf :symtab tid: (ztypes.tid.create from: daid.u64)
-        daEid: listElemType :symtab monoId: (ztypes.tid.create from: daid.u64)
-        daEln: regNameOf :symtab tid: (ztypes.tid.create from: daEid.u64)
-        daPfx: daEln.length + 7
-        daLen: monoElemName full: daMn prefixLen: daPfx
+        daLen: monoLengthText :symtab monoId: (ztypes.tid.create from: daid.u64)
         daN: ctx.argHoistCtr
         ctx.argHoistCtr = ctx.argHoistCtr + 1
         daNm: "_da\{daN}"
@@ -18017,6 +18013,8 @@ genericOwnerKey: function {
 
 # dissectArmByValue -- the statement of the first case clause whose name is the
 # numeral `value`, for a generic match over a VALUE parameter; 0 when none is.
+# `value` is the argument's two's-complement bits, so a negative or hex numeral
+# compares as the same bits.
 dissectArmByValue: function {ast: Ast.view m: zast.caserow.view value: u64} out u32 is {
     i: u64
     for i < m.clauses.count.u64 loop {
@@ -18025,11 +18023,25 @@ dissectArmByValue: function {ast: Ast.view m: zast.caserow.view value: u64} out 
         cnode: ast.nodes.get i: cId.u64
         if cnode.caseclause when cnode.name != 0 then {
             cnt: zast.poolTextAt pool: ast.names ref: cnode.name
-            pu: cnt.stringView.parseU64
-            if pu.ok when pu == value then return cnode.statement
+            if (
+                (numeralBits text: cnt.stringView) == (optionval.some value)
+            ) then return cnode.statement
         }
     }
     return 0
+}
+
+# numeralBits -- an integer numeral's two's-complement bits (`-5`, `0x10`), none
+# for any other text.
+numeralBits: function {text: StringView} out optionval u64 is {
+    neg: text.startsWith "-"
+    skip: u64
+    if neg then skip = 1
+    pv: ztypes.parseLiteralValue numstr: (text.substring from: skip to: text.length)
+    if pv.ok.not or pv.isFloat then return (optionval.none u64)
+    bits: pv.ival
+    if neg when bits > 0 then bits = 18446744073709551615.u64 - bits + 1
+    return (optionval.some bits)
 }
 
 # dissectArmByName -- the statement of the first case clause named `cnid`, for
@@ -26434,14 +26446,11 @@ emitArrayMono: function {
     monoId: ztypes.tid
     buf: String.borrow
 } is {
-    mn: regNameOf :symtab tid: monoId
     nm: cbaseNoPrefix :ctx tid: monoId
     eid: listElemType :symtab :monoId
-    eln: regNameOf :symtab tid: (ztypes.tid.create from: eid.u64)
     ect0: typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: eid.u64) thisTid: ztypes.tid
     ect: ctypeOrI64 s: ect0.stringView
-    lenPfx: eln.length + 7
-    lenStr: monoElemName full: mn prefixLen: lenPfx
+    lenStr: monoLengthText :symtab :monoId
     createBody: "    z_\{nm}_t _this = {0};"
     eqBody: String
     eqo: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkOpEq
@@ -26465,28 +26474,36 @@ emitArrayMono: function {
 
 # capLenT -- the C length-field type for a str mono of the given capacity:
 # uint8/16/32 by capacity, keeping small str monos compact.
-capLenT: function {cap: StringView} out String is {
-    v: u64
+capLenT: function {cap: u64} out String is {
+    if cap <= 255 then return "uint8_t".string
+    if cap <= 65535 then return "uint16_t".string
+    return "uint32_t".string
+}
+
+# monoLengthValue / monoLengthText -- a sized mono's element count or byte
+# capacity (array/str `to`): the value its numeric generic argument recorded,
+# never a spelling read back out of its name.
+monoLengthValue: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid} out u64 is {
+    n: symtab.reg.genericArgCount specId: monoId
     i: u64
-    n: cap.length
     for i < n loop {
-        bo: cap.byteAt :i
-        match (
-            bo
-        ) case some then {
-            v = v * 10 + (bo - 48).u64
-        } case none then null
+        if (symtab.reg.genericArgIsValueAt specId: monoId ordinal: i) then {
+            return (symtab.reg.genericArgAt specId: monoId ordinal: i)
+        }
         i = i + 1
     }
-    if v <= 255 then return "uint8_t".string
-    if v <= 65535 then return "uint16_t".string
-    return "uint32_t".string
+    return 0
+}
+
+# the same count as C text.
+monoLengthText: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid} out String is {
+    return "\{monoLengthValue :symtab :monoId}"
 }
 
 # emitStrMono -- a str valtype mono (fixed-capacity inline string). Substitutes
 # z_str.c.tmpl (struct + create + .string + String_to_<name>). Read via
 # loadFragment so the template's canonical z_String becomes ctx.strC.
-# Capacity is the trailing segment of the mono name (str_<cap>), prefix "str_"=4.
+# Capacity is the mono's recorded `to` argument.
 emitStrMono: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -26494,10 +26511,10 @@ emitStrMono: function {
     monoId: ztypes.tid
     buf: String.borrow
 } is {
-    mn: regNameOf :symtab tid: monoId
     nm: cbaseNoPrefix :ctx tid: monoId
-    capStr: monoElemName full: mn prefixLen: 4
-    lenT: capLenT cap: capStr.stringView
+    capV: monoLengthValue :symtab :monoId
+    capStr: "\{capV}"
+    lenT: capLenT cap: capV
     eqBody: String
     eqo: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkOpEq
     match (

@@ -893,7 +893,7 @@ perf: $(PERFBIN)
 # +71 when a function of no arguments returning a collection came to be called
 # where bound by its bare name: over the same source the new compiler allocates
 # exactly as the old, and it is the input, the compiler's own source longer.
-ALLOC_BASELINE := 2628943
+ALLOC_BASELINE := 2643911
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

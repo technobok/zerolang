@@ -21,9 +21,13 @@ public: unit {
     :constraintkind
     :cval
     :floatFitsFloat
+    :absI64
+    :bitsI64
+    :i64Bits
     :intFitsFloat
     :intValueFits
     :isFloatKind
+    :isSignedIntKind
     :makeArmConst
     :makeFloatConst
     :makeIntConst
@@ -858,8 +862,8 @@ ZEntry: class {
 # the type checker and the emitter read type metadata by id. ---
 
 # A generic parameter's declared constraint, classified once at registration
-# so the checks compare a tag rather than the text. numericMax carries the
-# integer bound for NUMERIC; it is none for every other kind.
+# so the checks compare a tag rather than the text. numKind names the integer
+# type of a NUMERIC bound; it is absent for every other kind.
 constraintkind: variant {
     # no bound at all
     none: null
@@ -871,7 +875,7 @@ constraintkind: variant {
     refType: null
     # anything that presents bytes as a string
     stringLike: null
-    # a numeric type, with numericMax bounding it
+    # an integer type, which numKind names
     numeric: null
     # a named bound the kinds above do not classify
     other: null
@@ -885,12 +889,13 @@ constraintkind: variant {
 } as { tag: u8.tag }
 
 # a generic parameter's constraint: its kind plus, for a numeric-bound
-# parameter, the maximum value it admits.
+# parameter, the integer type whose range and signedness it admits.
 constraintdesc: record {
     # which family the bound admits
     kind: constraintkind
-    # the integer bound for a NUMERIC constraint; none for every other kind
-    numericMax: optionval u64
+    # the integer type of a NUMERIC constraint; `has` is false for every other
+    # kind
+    numKind: suffixinfo
 }
 
 # ParamDesc / ParamList -- a template's generic parameters in declaration
@@ -1709,7 +1714,7 @@ ZTypeRegistry: class {
     # declare one generic parameter on a template, with its constraint
     # classified now so later checks compare an arm
     addGenericParam: function {
-        :this tdecl: declid paramName: zast.nameid kind: constraintkind numericMax: optionval u64
+        :this tdecl: declid paramName: zast.nameid kind: constraintkind numKind: suffixinfo
     } is {
         found: false
         {
@@ -1729,7 +1734,7 @@ ZTypeRegistry: class {
                 if has.not then {
                     plo.params.append (ParamDesc
                         name: paramName
-                        constraint: (constraintdesc :kind :numericMax)
+                        constraint: (constraintdesc :kind :numKind)
                         paramTid: tid
                     )
                 }
@@ -1739,7 +1744,7 @@ ZTypeRegistry: class {
             np: ParamList params: List ParamDesc
             np.params.append (ParamDesc
                 name: paramName
-                constraint: (constraintdesc :kind :numericMax)
+                constraint: (constraintdesc :kind :numKind)
                 paramTid: tid
             )
             this.genericParams.set key: tdecl value: np
@@ -1783,13 +1788,16 @@ ZTypeRegistry: class {
                 if pdx.name == paramName then {
                     return (constraintdesc
                         kind: pdx.constraint.kind
-                        numericMax: pdx.constraint.numericMax
+                        numKind: pdx.constraint.numKind
                     )
                 }
                 i = i + 1
             }
         } case none then null
-        return (constraintdesc kind: constraintkind.none numericMax: optionval.none u64)
+        return (constraintdesc
+            kind: constraintkind.none
+            numKind: (suffixinfo has: false kind: numkind.i64Type len: 0)
+        )
     }
 
     # genericParamCountOf -- how many generic parameters the declaration owns, 0
@@ -2109,6 +2117,40 @@ intValueFits: function {v: i64 k: numkind} out bool is {
     } else {
         return true
     }
+}
+
+# isSignedIntKind -- whether integer kind `k` admits negative values.
+isSignedIntKind: function {k: numkind} out bool is {
+    match (
+        k
+    ) case i8Type then {
+        return true
+    } case i16Type then {
+        return true
+    } case i32Type then {
+        return true
+    } case i64Type then {
+        return true
+    } case i128Type then {
+        return true
+    } else {
+        return false
+    }
+}
+
+# i64Bits / bitsI64 -- an i64's two's-complement bits as a u64, and back: the
+# registry keeps every numeric generic argument as u64 bits, read by its
+# bound's signedness.
+i64Bits: function {v: i64} out u64 is {
+    if v >= 0 then return v.u64.orPanic
+    # `v + 1` keeps the most negative i64's magnitude in range
+    return 18446744073709551615.u64 - (0 - (v + 1)).u64.orPanic
+}
+
+# the i64 whose two's-complement bits are `b`.
+bitsI64: function {b: u64} out i64 is {
+    if b <= 9223372036854775807 then return b.i64.orPanic
+    return 0 - (18446744073709551615.u64 - b).i64.orPanic - 1
 }
 
 # the absolute value of `v` as a u64 (handles i64 min without overflow).

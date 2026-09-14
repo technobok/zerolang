@@ -2513,11 +2513,12 @@ registerGenericParamOne: function {
         cf9x: cb.copy
         if ckx.length > 0 then cf9x = "\{cb}.\{ckx}"
         k: constraintKindFor text: cf9x.stringView
-        mx: optionval.none u64
-        if k == ztypes.constraintkind.numeric then {
-            mx = constraintNumericMax cv: cf9x.stringView
-        }
-        st.reg.addGenericParam :tdecl paramName: m.name kind: k numericMax: mx
+        (st.reg.addGenericParam
+            :tdecl
+            paramName: m.name
+            kind: k
+            numKind: (constraintIntKind cv: cf9x.stringView)
+        )
         # the BOUND names a real declaration -- `anyval`, a protocol -- but
         # everything above reads it as TEXT and maps it to a constraint kind,
         # because that is all the compiler needs from it. Nothing then stamps
@@ -3000,6 +3001,8 @@ collectMonoRefArgs: function {
     frame: ztypes.declid
     thisName: StringView
     enclDecl: ztypes.declid
+    # the template the arguments are written for
+    tdecl: ztypes.declid
     arguments: (ListVal u32).view
     sfx: String
     typeSubs: (IdMapV zast.nameid v: u64)
@@ -3015,16 +3018,27 @@ collectMonoRefArgs: function {
         arg: argRefAt :ast nid: (zast.nodeid.create from: arg9Id.u32)
         if arg.nid.isZero.not then {
             an: atomName :ast n: (ast.nodes.get i: arg.operation.u64)
-            if (isNumericLiteralName name: an.stringView) then {
+            cdR: st.reg.genericParamConstraintOf :tdecl paramName: arg.name
+            if arg.name.isZero.not when cdR.numKind.has then {
+                naR: (numericGenericArg
+                    :ast
+                    :st
+                    :unitDecl
+                    :frame
+                    :tdecl
+                    param: arg.name
+                    argOp: arg.operation
+                    inBody: false
+                )
+                if naR.state.refused then {
+                    allOk = false
+                } else {
+                    appendNumericArgSuffix :sfx bits: naR.bits cd: cdR
+                    valSubsR.set key: arg.name value: naR.bits
+                }
+            } else if (isNumericLiteralName name: an.stringView) then {
                 sfx.append s: "_"
                 sfx.append s: an
-                pdv: parseDecimalU64 text: an.stringView
-                match (
-                    pdv
-                ) case some then {
-                    vsv: pdv
-                    valSubsR.set key: arg.name value: vsv
-                } case none then null
             } else {
                 okOut: ListVal bool
                 aid: (monoRefArgTid
@@ -3113,6 +3127,45 @@ validateMonoRefLabels: function {
     }
 }
 
+# monoRefTemplateTid -- the template a mono type-reference names: a name the
+# CURRENT unit defines wins even when not yet declared, then the ladder, then
+# the defining unit. 0 when none is found.
+monoRefTemplateTid: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    name: StringView
+} out ztypes.tid is {
+    tplId: ztypes.tid
+    tduo: (definingSiteFor :st :frame :ast :unitDecl :name).defUnit
+    if tduo == unitDecl then tplId = descendNamed :st :frame :ast unitDecl: tduo :name
+    if tplId.isZero then {
+        tplO: walkLookupTyperef :st :frame :ast :unitDecl base: name
+        tplId = ztypes.tid.create from: (tplO.or d: 0)
+    }
+    if tplId.isZero when tduo.isZero.not then tplId = (descendNamed
+        :st
+        :frame
+        :ast
+        unitDecl: tduo
+        :name
+    )
+    return tplId
+}
+
+# anyLabelledArg -- whether any of a call-shaped reference's arguments carries a
+# label.
+anyLabelledArg: function {ast: Ast.view arguments: (ListVal u32).view} out bool is {
+    ai: u64
+    for ai < arguments.length loop {
+        arg: argRefAt :ast nid: (zast.nodeid.create from: (arguments.get i: ai).u32)
+        if arg.name.isZero.not then return true
+        ai = ai + 1
+    }
+    return false
+}
+
 # resolveMonoRefParts -- resolveMonoRefInline's call-shaped core, taking the
 # callable and argument list directly so narrowed call subjects can feed it.
 resolveMonoRefParts: function {
@@ -3135,6 +3188,16 @@ resolveMonoRefParts: function {
             tname = zast.nameTextCopy :ast ref: (atomNameId :ast n: callable)
         }
         if tname.length == 0 then return 0
+        # a LABELLED argument may be a numeric parameter's, read as a value of
+        # the parameter's bound, which only the template knows: the template is
+        # found first then. Otherwise it is found only once the arguments
+        # resolve, as a type reference that does not settle is common while
+        # definitions are still resolving
+        tplId: ztypes.tid
+        if (anyLabelledArg :ast :arguments) then {
+            tplId = monoRefTemplateTid :st :frame :ast :unitDecl name: tname.stringView
+            if tplId.isZero then return 0
+        }
         sfx: String
         typeSubs: IdMapV zast.nameid v: u64
         valSubsR: IdMapV zast.nameid v: u64
@@ -3146,6 +3209,7 @@ resolveMonoRefParts: function {
             :frame
             :thisName
             :enclDecl
+            tdecl: (declOfTypeId :st tid: tplId)
             :arguments
             :sfx
             :typeSubs
@@ -3155,30 +3219,13 @@ resolveMonoRefParts: function {
         firstA: ztypes.tid.create from: (firstOut.get i: 0)
         if allOk.not then return 0
         if sfx.length == 0 then return 0
-        tplId: ztypes.tid
-        tduo: (definingSiteFor :st :frame :ast :unitDecl name: tname.stringView).defUnit
-        if tduo == unitDecl then {
-            tplId = (descendNamed
-                :st
-                :frame
-                :ast
-                unitDecl: tduo
-                name: tname.stringView
-            )
-        }
-        if tplId.isZero then {
-            tplO: walkLookupTyperef :st :frame :ast :unitDecl base: tname.stringView
-            tplId = ztypes.tid.create from: (tplO.or d: 0)
-        }
-        if tplId.isZero when tduo.isZero.not then {
-            tplId = (descendNamed
-                :st
-                :frame
-                :ast
-                unitDecl: tduo
-                name: tname.stringView
-            )
-        }
+        if tplId.isZero then tplId = (monoRefTemplateTid
+            :st
+            :frame
+            :ast
+            :unitDecl
+            name: tname.stringView
+        )
         if tplId.isZero then return 0
         validateMonoRefLabels :ast :st :arguments :tplId
         # generator wrapper collapse: the synth `.call` return's Option over a
@@ -4182,6 +4229,42 @@ resolveTyperefShell: function {
     return (st.reg.newType name: "?" typetype: ztypes.ztypetype.recordType)
 }
 
+# shellHeadIsGeneric -- whether a type-reference shell's head names a generic
+# template, found the way resolveMonoRefParts finds it: a name the CURRENT unit
+# defines wins over a same-named one up the ladder.
+shellHeadIsGeneric: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    name: StringView
+} out bool is {
+    hid9: ztypes.tid
+    du9: (definingSiteFor :st :frame :ast :unitDecl :name).defUnit
+    if du9 == unitDecl then hid9 = descendNamed :st :frame :ast unitDecl: du9 :name
+    if hid9.isZero then {
+        hw9: walkLookupTyperef :st :frame :ast :unitDecl base: name
+        hid9 = ztypes.tid.create from: (hw9.or d: 0)
+    }
+    if hid9.isZero then return false
+    return (st.reg.isGenericOf tid: hid9)
+}
+
+# anyNumericArgRefused -- whether a type reference's arguments include a numeric
+# generic argument already refused.
+anyNumericArgRefused: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    argIds: (ListVal u32).view
+} out bool is {
+    with ait: argIds.iterate do for argId: ait loop {
+        arg: ast.nodes.get i: argId.u64
+        if arg.namedoperation when (st.typing.numericArgsRefused.has item: arg.operation.u64
+        ) then return true
+    }
+    return false
+}
+
 # resolveTyperefCallShell -- a parameterized type ref: the mono it names
 # when resolution knows one, else a fresh record shell named by the head
 # and its argument suffixes, each argument's type names demanded on the way.
@@ -4213,6 +4296,7 @@ resolveTyperefCallShell: function {
         frame: frame94
         nameId: (atomNameId :ast n: (ast.nodes.get i: callableId.u64))
     )
+    argRefused: anyNumericArgRefused :st :ast :argIds
     with ait: argIds.iterate do for argId: ait loop {
         # the argument is read through a view scoped to this block
         opId: zast.nodeid
@@ -4250,19 +4334,8 @@ resolveTyperefCallShell: function {
         hc9 = nodeCol n: cn9
     }
     hdG9: false
-    if hn9.length > 0 then {
-        # the head is found the way resolveMonoRefParts finds it: a name the
-        # CURRENT unit defines wins over a same-named one up the ladder
-        hid9: ztypes.tid
-        du9: (definingSiteFor :st :frame :ast :unitDecl name: hn9.stringView).defUnit
-        if du9 == unitDecl then {
-            hid9 = descendNamed :st :frame :ast unitDecl: du9 name: hn9.stringView
-        }
-        if hid9.isZero then {
-            hw9: walkLookupTyperef :st :frame :ast :unitDecl base: hn9.stringView
-            hid9 = ztypes.tid.create from: (hw9.or d: 0)
-        }
-        if hid9.isZero.not when (st.reg.isGenericOf tid: hid9) then hdG9 = true
+    if hn9.length > 0 when argRefused.not then {
+        hdG9 = shellHeadIsGeneric :st :frame :ast :unitDecl name: hn9.stringView
     }
     if hdG9 then {
         m9: "type argument of generic type '\{hn9}' does not name a type here"
@@ -16032,13 +16105,9 @@ resolveInstArgSubs: function {
         lblR: r.argLabels.get i: aiR
         anmR: r.argNames.get i: aiR
         aidR: r.argAtomIds.get i: aiR
-        if (isNumericLiteralName name: anmR.stringView) then {
-            pvR: parseDecimalU64 text: anmR.stringView
-            match (
-                pvR
-            ) case some then {
-                valSubs.set key: lblR value: pvR
-            } case none then null
+        if (instNumericParam :st :r label: lblR) then {
+            naR9: instNumericArg :st frame: rf ast: program :r i: aiR
+            if naR9.state.value then valSubs.set key: lblR value: naR9.bits
         } else {
             aoR: optionval.none u64
             {
@@ -16380,17 +16449,16 @@ instMonoKeys: function {
         for ai < r.argLabels.length loop {
             lbl: r.argLabels.get i: ai
             if lbl == pnm then {
-                an: r.argNames.get i: ai
-                if (isNumericLiteralName name: an.stringView) then {
-                    pv: parseDecimalU64 text: an.stringView
-                    match (
-                        pv
-                    ) case some then {
+                if (instNumericParam :st :r label: lbl) then {
+                    rfK: frame
+                    if r.scopeDeclId.isZero.not then rfK = r.scopeDeclId
+                    naK: instNumericArg :st frame: rfK :ast :r i: ai
+                    if naK.state.value then {
                         # a value key may be 0 (`sized cap: 0`)
-                        k = pv
+                        k = naK.bits
                         valFound = true
                         found = true
-                    } case none then null
+                    }
                 } else {
                     k = instArgTypeOf :st :frame :ast :r i: ai
                     if k > 0 then found = true
@@ -16488,6 +16556,7 @@ instArgTypeOf: function {
 } out u64 is {
     anm: r.argNames.get :i
     if (isNumericLiteralName name: anm.stringView) then return 0
+    if (instNumericParam :st :r label: (r.argLabels.get :i)) then return 0
     rf: frame
     if r.scopeDeclId.isZero.not then rf = r.scopeDeclId
     result: u64
@@ -16521,22 +16590,27 @@ instArgTypeOf: function {
 }
 
 # instMonoLabel -- the mono's label: the template's name and one component per
-# argument, a bare atom's own text or, for a call-shaped argument, the label of
-# the specialisation it names. The same request derives the same label in
-# every pass, which is what the two-pass mint relies on.
+# argument: a numeric parameter's value, a bare atom's own text or, for a
+# call-shaped argument, the label of the specialisation it names.
 instMonoLabel: function {
     st: zenv.ZSymbolTable
     frame: ztypes.declid
     ast: Ast
     r: InstReq.view
+    # the mono's keys in parameter order, where a numeric argument's value is
+    keys: (ListVal u64).view
 } out String is {
     mn: zast.poolTextCopy pool: ast.names ref: r.tmplId
     na: r.argNames.length
+    pn: st.reg.genericParamNamesOf tdecl: r.tmplDeclId
     i: u64
     for i < na loop {
         mn.append "_"
         an: r.argNames.get :i
-        if an.length > 0 then {
+        lbl: r.argLabels.get :i
+        if (instNumericParam :st :r label: lbl) then {
+            appendInstNumericLabel :st :r :keys :pn :lbl :mn
+        } else if an.length > 0 then {
             mn.append an
         } else {
             at: instArgTypeOf :st :frame :ast :r :i
@@ -16550,6 +16624,27 @@ instMonoLabel: function {
         i = i + 1
     }
     return mn
+}
+
+# appendInstNumericLabel -- a numeric argument's label component: the value
+# keyed at its parameter's ordinal.
+appendInstNumericLabel: function {
+    st: zenv.ZSymbolTable.view
+    r: InstReq.view
+    keys: (ListVal u64).view
+    pn: (ListVal zast.nameid).view
+    lbl: zast.nameid
+    mn: String
+} is {
+    cd: st.reg.genericParamConstraintOf tdecl: r.tmplDeclId paramName: lbl
+    signed: ztypes.isSignedIntKind k: cd.numKind.kind
+    pi: u64
+    for pi < pn.length loop {
+        if (pn.get i: pi) == lbl when pi < keys.length then {
+            mn.append (numericArgText bits: (keys.get i: pi) :signed)
+        }
+        pi = pi + 1
+    }
 }
 
 # resolveMainUnitInstantiations -- resolve generic-unit instantiation bindings
@@ -16567,11 +16662,6 @@ resolveMainUnitInstantiations: function {
     i: u64
     for i < reqs.length loop {
         r: reqs.get :i
-        rmL0: String
-        {
-            rmL0 = instMonoLabel :st :frame ast: program :r
-        }
-        rm: rmL0.stringView
         rtId: r.tmplId
         # the template has to be RESOLVED before a mono is minted from it:
         # createUnitMono reads the template's id -- for an inline one, the stamp
@@ -16609,7 +16699,7 @@ resolveMainUnitInstantiations: function {
         # found at collection through the instantiation's own scope
         if r.tmplDeclId.isZero.not then {
             {
-                mintUnitMonoOf :st :frame ast: program :r label: rm
+                mintUnitMonoOf :st :frame ast: program :r
                 (scanTemplateBodyDemands
                     :st
                     :frame
@@ -16633,7 +16723,6 @@ mintUnitMonoOf: function {
     frame: ztypes.declid
     ast: Ast
     r: InstReq.view
-    label: StringView
 } is {
     demandInstArgs :st :frame :ast :r
     resolveDemandedDefs :st :frame :ast
@@ -16651,16 +16740,63 @@ mintUnitMonoOf: function {
     ) case some then {
         return
     } case none then null
+    label: instMonoLabel :st :frame :ast :r :keys
     mono: (createUnitMono
         :st
         :ast
-        monoName: label
+        monoName: label.stringView
         tmplDeclId: r.tmplDeclId
         tplTid: templateTid
         templateOpId: (zast.nodeid.create from: r.tmplOpId.u32.orPanic)
     )
-    tplT9: zast.poolTextAt pool: ast.names ref: r.tmplId
-    unitMonoJoinTrie :st tplTid: templateTid tplName: tplT9.stringView :keys monoId: mono
+    {
+        tplT9: zast.poolTextAt pool: ast.names ref: r.tmplId
+        unitMonoJoinTrie :st tplTid: templateTid tplName: tplT9.stringView :keys monoId: mono
+    }
+    # the numeric arguments are recorded where they are keyed: a constant of the
+    # instance may be read before its completion pass records the rest
+    ki: u64
+    for ki < keys.length loop {
+        if (isVal.get i: ki) then {
+            st.reg.appendGenericArgValue specId: mono value: (keys.get i: ki)
+        } else {
+            st.reg.appendGenericArg specId: mono arg: (keys.get i: ki)
+        }
+        ki = ki + 1
+    }
+    recordNumericArgConsts :ast :st :frame monoId: mono tdecl: r.tmplDeclId
+}
+
+# instNumericParam -- whether an instantiation argument's label names a
+# numeric generic parameter of its template.
+instNumericParam: function {
+    st: zenv.ZSymbolTable.view
+    r: InstReq.view
+    label: zast.nameid
+} out bool is {
+    if label.isZero then return false
+    return (st.reg.genericParamConstraintOf tdecl: r.tmplDeclId paramName: label).numKind.has
+}
+
+# instNumericArg -- an instantiation's numeric argument read to its value where
+# the instantiation is written.
+instNumericArg: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    r: InstReq.view
+    i: u64
+} out numarg is {
+    return (numericGenericArg
+        :ast
+        :st
+        unitDecl: r.declUnit
+        :frame
+        tdecl: r.tmplDeclId
+        param: (r.argLabels.get :i)
+        argOp: (zast.nodeid.create from: (r.argNodeIds.get :i).u32.orPanic)
+        inBody: false
+    )
 }
 
 # reportUnresolvedInstArgs -- E0023 at every instantiation argument that names
@@ -16677,6 +16813,8 @@ reportUnresolvedInstArgs: function {
         an: r.argNames.get :i
         nid: r.argNodeIds.get :i
         i = i + 1
+        # a numeric argument is read, and refused, by its own reader
+        if (instNumericParam :st :r label: (r.argLabels.get i: i - 1)) then continue
         if (isNumericLiteralName name: an.stringView) then continue
         if nid == 0 then continue
         rt: u64
@@ -18579,27 +18717,8 @@ constraintKindFor: function {text: StringView} out ztypes.constraintkind is {
     if text == "StringLike" then return ztypes.constraintkind.stringLike
     if text == "Any" then return ztypes.constraintkind.any
     if text.length == 0 then return ztypes.constraintkind.none
-    nmNode: constraintNumericMax cv: text
-    match (
-        nmNode
-    ) case some then {
-        return ztypes.constraintkind.numeric
-    } case none then null
+    if (constraintIntKind cv: text).has then return ztypes.constraintkind.numeric
     return ztypes.constraintkind.other
-}
-
-# constraintNumericName -- the integer-scalar name for a numeric bound, for
-# diagnostics; the exact inverse of constraintNumericMax.
-constraintNumericName: function {max: u64} out String is {
-    if max == 255 then return "u8".string
-    if max == 65535 then return "u16".string
-    if max == 4294967295 then return "u32".string
-    if max == 18446744073709551615.u64 then return "u64".string
-    if max == 127 then return "i8".string
-    if max == 32767 then return "i16".string
-    if max == 2147483647 then return "i32".string
-    if max == 9223372036854775807 then return "i64".string
-    return "".string
 }
 
 # constraintTextOf -- reconstruct a constraint's declared text from its tag
@@ -18612,30 +18731,24 @@ constraintTextOf: function {desc: ztypes.constraintdesc} out String is {
     if desc.kind == ztypes.constraintkind.idKey then return "idkey".string
     if desc.kind == ztypes.constraintkind.stringLike then return "StringLike".string
     if desc.kind == ztypes.constraintkind.any then return "Any".string
-    if desc.kind == ztypes.constraintkind.numeric then {
-        nmx7: desc.numericMax
-        match (
-            nmx7
-        ) case some then {
-            return (constraintNumericName max: nmx7)
-        } case none then null
+    if desc.kind == ztypes.constraintkind.numeric when desc.numKind.has then {
+        return (ztypes.numkindName k: desc.numKind.kind)
     }
     return "".string
 }
 
-# constraintNumericMax -- the largest value an integer-scalar generic-param
-# constraint admits; none when the constraint is not an integer scalar (a
-# numeric argument on such a parameter stays on the name-keyed path).
-constraintNumericMax: function {cv: StringView} out optionval u64 is {
-    if cv == "u8" then return (optionval.some 255.u64)
-    if cv == "u16" then return (optionval.some 65535.u64)
-    if cv == "u32" then return (optionval.some 4294967295.u64)
-    if cv == "u64" then return (optionval.some 18446744073709551615.u64)
-    if cv == "i8" then return (optionval.some 127.u64)
-    if cv == "i16" then return (optionval.some 32767.u64)
-    if cv == "i32" then return (optionval.some 2147483647.u64)
-    if cv == "i64" then return (optionval.some 9223372036854775807.u64)
-    return (optionval.none u64)
+# constraintIntKind -- the integer type an integer-scalar generic-param
+# constraint names (`u32`, `i64`, `c8`); `has` false for any other constraint,
+# a float or a 128-bit type included (a numeric argument on such a parameter
+# stays on the name-keyed path).
+constraintIntKind: function {cv: StringView} out ztypes.suffixinfo is {
+    nk: ztypes.numkindByName name: cv
+    if nk.has.not then return nk
+    if (ztypes.isFloatKind k: nk.kind) then nk.has = false
+    if (
+        nk.kind == ztypes.numkind.i128Type or (nk.kind == ztypes.numkind.u128Type)
+    ) then nk.has = false
+    return nk
 }
 
 # conformsToText -- the generic argument is StringLike: it IS StringView, or a
@@ -19029,20 +19142,13 @@ buildSpecTrieKeys: function {
                 # a numeric literal keys its trie level by VALUE; per-level
                 # kind is fixed by the parameter, so values and type ids
                 # cannot collide
+                # the value was read and range-checked where it is written
+                # (numericGenericArg)
                 cd8: st.reg.genericParamConstraintOf tdecl: tk8 paramName: pn8
-                nmx8: cd8.numericMax
-                match (
-                    nmx8
-                ) case some then {
-                    if vgot8 > nmx8 then {
-                        cvn8: constraintTextOf desc: cd8
-                        tkNum8: tk8 + 0
-                        m8v: "numeric argument \{vgot8} exceeds constraint '\{cvn8}' on parameter '\{pn8}' of '\{tkNum8}'"
-                        addResolveError :st e: zast.err.genericError msg: m8v
-                    }
+                if cd8.numKind.has then {
                     keys8.append vgot8
                     keyIsVal8.append true
-                } case none then {
+                } else {
                     trieOk8 = false
                 }
             } case none then {
@@ -19130,6 +19236,48 @@ registerSpecOnTrie: function {
             st.reg.appendGenericArg specId: mid8 arg: av
         }
         ka = ka + 1
+    }
+}
+
+# recordNumericArgConsts -- each numeric generic argument of a mono recorded as
+# the compile-time value of its parameter on the mono, typed by the bound: the
+# value channel a read of the parameter through the mono answers from.
+recordNumericArgConsts: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    monoId: ztypes.tid
+    tdecl: ztypes.declid
+} is {
+    # most monos key on types alone, and the name list allocates
+    hasValue: false
+    ac: st.reg.genericArgCount specId: monoId
+    ai: u64
+    for ai < ac loop {
+        if (st.reg.genericArgIsValueAt specId: monoId ordinal: ai) then hasValue = true
+        ai = ai + 1
+    }
+    if hasValue.not then return
+    pn: st.reg.genericParamNamesOf :tdecl
+    pi: u64
+    for pi < pn.length loop {
+        if (st.reg.genericArgIsValueAt specId: monoId ordinal: pi) then {
+            pnm: pn.get i: pi
+            cd: st.reg.genericParamConstraintOf :tdecl paramName: pnm
+            bt: numericBoundTid :ast :st :frame :cd
+            if bt.isZero.not then {
+                bits: st.reg.genericArgAt specId: monoId ordinal: pi
+                (st.typing.setMemberConst
+                    parentTypeId: monoId
+                    nameId: pnm
+                    value: (ztypes.typedConst
+                        c: (ztypes.makeIntConst v: (ztypes.bitsI64 b: bits))
+                        numTid: bt
+                    )
+                )
+            }
+        }
+        pi = pi + 1
     }
 }
 
@@ -19300,6 +19448,7 @@ getOrMintSpec: function {
             :keys8
             :keyIsVal8
         )
+        recordNumericArgConsts :ast :st :frame monoId: mid8 tdecl: tk8
     }
     # The children are built LAST, and the trie path above is why. Building
     # them respecializes, which re-enters this function for this very
@@ -19656,9 +19805,11 @@ elidedPrimaryTypeArg: function {
     return isType
 }
 
-# bindTypeArgSub -- a label naming a generic param carries its type argument
-# directly: a numeric literal spells itself into the mono suffix, anything else
-# resolves to the type id that becomes the substitution.
+# bindTypeArgSub -- a label naming a generic param carries its argument
+# directly: a numeric parameter's value spells itself into the mono suffix and
+# binds the parameter's value, anything else resolves to the type id that
+# becomes the substitution. A refused numeric argument is bound with no value,
+# which is how the caller knows it was refused.
 bindTypeArgSub: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -19667,8 +19818,28 @@ bindTypeArgSub: function {
     pk: zast.nameid
     sfx: String
     subs: (IdMapV zast.nameid v: u64)
+    valueSubs: (IdMapV zast.nameid v: u64)
     boundParams: IdSet zast.nameid
+    tk: ztypes.declid
 } is {
+    cdB: st.reg.genericParamConstraintOf tdecl: tk paramName: pk
+    if cdB.numKind.has then {
+        boundParams.add item: pk
+        naB: (numericGenericArg
+            :ast
+            :st
+            :unitDecl
+            frame: st.curFrame
+            tdecl: tk
+            param: pk
+            argOp: opId
+            inBody: true
+        )
+        if naB.state.refused then return
+        appendNumericArgSuffix :sfx bits: naB.bits cd: cdB
+        valueSubs.set key: pk value: naB.bits
+        return
+    }
     anId: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId.u64)
     if (isNumericLiteralNameAt :ast ref: anId) then {
         sfx.append s: "_"
@@ -19771,6 +19942,7 @@ inferConstructionArg: function {
     fParams: (ListVal zast.nameid).view
     sfx: String
     subs: (IdMapV zast.nameid v: u64)
+    valueSubs: (IdMapV zast.nameid v: u64)
     boundParams: IdSet zast.nameid
     tk: ztypes.declid
 } is {
@@ -19795,7 +19967,7 @@ inferConstructionArg: function {
         isP = st.reg.isGenericParamOf tdecl: tk name: pk
     }
     if isP then {
-        bindTypeArgSub :st :unitDecl :ast :opId :pk :sfx :subs :boundParams
+        bindTypeArgSub :st :unitDecl :ast :opId :pk :sfx :subs :valueSubs :boundParams :tk
     } else {
         (bindValueArgSub
             :st
@@ -19827,6 +19999,7 @@ inferConstructionSubs: function {
     fParams: (ListVal zast.nameid).view
     sfx: String
     subs: (IdMapV zast.nameid v: u64)
+    valueSubs: (IdMapV zast.nameid v: u64)
     boundParams: IdSet zast.nameid
     tk: ztypes.declid
 } is {
@@ -19845,6 +20018,7 @@ inferConstructionSubs: function {
             :fParams
             :sfx
             :subs
+            :valueSubs
             :boundParams
             :tk
         )
@@ -19902,6 +20076,7 @@ inferGenericConstruction: function {
     }
     sfx: String
     subs: IdMapV zast.nameid v: u64
+    valueSubs: IdMapV zast.nameid v: u64
     boundParams: IdSet zast.nameid
     primaryName: firstGenericParamId :st templateId: (ztypes.tid.create from: tplId.u64)
     (inferConstructionSubs
@@ -19914,6 +20089,7 @@ inferGenericConstruction: function {
         :fParams
         :sfx
         :subs
+        :valueSubs
         :boundParams
         :tk
     )
@@ -19963,7 +20139,16 @@ inferGenericConstruction: function {
         return (ztypes.tid.create from: 0)
     }
     if sfx.length == 0 then return (ztypes.tid.create from: 0)
-    vsD: IdMapV zast.nameid v: u64
+    # a numeric parameter bound with no value was refused, and is reported
+    {
+        pvi: u64
+        for pvi < pmn loop {
+            pvName: paramsM.get i: pvi
+            pvi = pvi + 1
+            pvNumeric: (st.reg.genericParamConstraintOf tdecl: tk paramName: pvName).numKind.has
+            if pvNumeric when (valueSubs.has key: pvName).not then return ztypes.tid
+        }
+    }
     mid: (getOrMintSpec
         :st
         frame: st.curFrame
@@ -19972,7 +20157,7 @@ inferGenericConstruction: function {
         sfx: sfx.stringView
         templateId: (ztypes.tid.create from: tplId.u64)
         :subs
-        valSubs: vsD
+        valSubs: valueSubs
         fallbackArg: 0
     )
     if mid.isZero then return (ztypes.tid.create from: 0)
@@ -20109,31 +20294,325 @@ explicitPrimaryArgTid: function {
     return (dottedTyperefId :ast :st op: dop)
 }
 
-# bindNumericTypeArg -- a numeric literal type argument spells its own value into
-# the mono suffix, and when it carries a label it binds that param's VALUE, which
-# is what a later array bound reads.
+# numargstate -- what reading a numeric generic argument found.
+numargstate: variant {
+    # a compile-time integer that stands in for the parameter's type
+    value: null
+    # no value, and the reason is reported
+    refused: null
+} as { tag: u8.tag }
+
+# numarg -- one numeric generic argument, read.
+numarg: record {
+    # whether it has a value
+    state: numargstate
+    # the value as two's-complement bits, read by the bound's signedness
+    bits: u64
+}
+
+# numericGenericArg -- the value written for numeric generic parameter `param`
+# of the template `tdecl`: the ONE reader every instantiation path asks, which
+# remembers a refused argument's node. The value is numericGenericArgRead's.
+numericGenericArg: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    tdecl: ztypes.declid
+    param: zast.nameid
+    argOp: zast.nodeid
+    # the argument is written in a body, where a name can read a local
+    inBody: bool
+} out numarg is {
+    na: numericGenericArgRead :ast :st :unitDecl :frame :tdecl :param :argOp :inBody
+    if na.state.refused then st.typing.numericArgsRefused.add item: argOp.u64
+    return na
+}
+
+# numericGenericArgRead -- the value written for numeric generic parameter
+# `param` of the template `tdecl`. The
+# argument is any compile-time integer -- a literal, a constant, an expression
+# of constants -- read through the constant evaluator, and it stands in for the
+# parameter's integer type as a body argument would: an untyped literal by its
+# value, a typed constant without loss. Anything else is refused here, naming
+# the parameter; a refusal is reported once, however many paths ask.
+numericGenericArgRead: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    tdecl: ztypes.declid
+    param: zast.nameid
+    argOp: zast.nodeid
+    # the argument is written in a body, where a name can read a local
+    inBody: bool
+} out numarg is {
+    refused: numarg state: numargstate.refused bits: 0
+    cd: st.reg.genericParamConstraintOf :tdecl paramName: param
+    if cd.numKind.has.not then return refused
+    nameId: zast.nameid
+    {
+        an: ast.nodes.get i: argOp.u64
+        nameId = atomNameId :ast n: an
+    }
+    v: ztypes.noConst
+    if nameId.isZero.not when (isNumericLiteralNameAt :ast ref: nameId) then {
+        {
+            lt: zast.nameTextAt :ast ref: nameId
+            v = constLiteralValue name: lt.stringView
+        }
+        big: numericBigLiteral :ast :nameId :cd :v
+        match (
+            big
+        ) case some then {
+            return (numarg state: numargstate.value bits: big)
+        } case none then null
+    } else {
+        fold: numericArgFold :ast :st :unitDecl :frame :tdecl :param :argOp :nameId :inBody
+        if fold.reported then return refused
+        v = fold.v
+    }
+    if (numericArgHasInteger :ast :st :unitDecl :frame :tdecl :param :argOp :nameId :v
+    ).not then return refused
+    if (numericArgStandsIn :ast :st :frame :tdecl :param :argOp :cd :v).not then return refused
+    return (numarg state: numargstate.value bits: (ztypes.i64Bits v: v.ival))
+}
+
+# numericBigLiteral -- a u64 literal above the most positive i64, which has no
+# i64 constant: its decimal spelling is its value. none for any other literal.
+numericBigLiteral: function {
+    ast: Ast.view
+    nameId: zast.nameid
+    cd: ztypes.constraintdesc
+    # the literal's value as an i64 constant, none when it has none
+    v: ztypes.cval
+} out optionval u64 is {
+    if v.kind.none.not then return (optionval.none u64)
+    if cd.numKind.kind != ztypes.numkind.u64Type then return (optionval.none u64)
+    lt: zast.nameTextAt :ast ref: nameId
+    return (parseDecimalU64 text: lt.stringView)
+}
+
+# argfold -- a non-literal numeric generic argument evaluated: its value, or
+# that its refusal is already reported.
+argfold: record {
+    # the value; none when it has none
+    v: ztypes.cval
+    # a reason for no value was reported
+    reported: bool
+}
+
+# numericArgFold -- a numeric generic argument that is not a literal, evaluated.
+# In a body a bare name that reads a local is a run-time value, and any other
+# expression is walked first, so a local inside it is known for one and an
+# unknown name is the walk's to report.
+numericArgFold: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    tdecl: ztypes.declid
+    param: zast.nameid
+    argOp: zast.nodeid
+    nameId: zast.nameid
+    inBody: bool
+} out argfold is {
+    if inBody when nameId.isZero.not when (st.findLocal :nameId).isZero.not then {
+        reportNumericArg :ast :st :tdecl :param :argOp :nameId why: "is a run-time value"
+        return (argfold v: ztypes.noConst reported: true)
+    }
+    errBefore: st.typing.errors.length
+    if inBody when nameId.isZero then checkValueAt :st :unitDecl :ast nid: argOp
+    if st.typing.errors.length > errBefore then return (argfold v: ztypes.noConst reported: true)
+    held: st.typing.constFail
+    constFailClear :st
+    v: evalConstNode :st :unitDecl :frame :ast nid: argOp
+    f: st.typing.constFail
+    st.typing.constFail = held
+    if v.kind.none when f.kind.none.not then {
+        renderConstFail :st :f
+        return (argfold v: ztypes.noConst reported: true)
+    }
+    return (argfold :v reported: false)
+}
+
+# numericArgHasInteger -- whether the argument's value is an integer, reporting
+# why when it is not: a name nothing declares, no value at all, or a value of
+# another kind.
+numericArgHasInteger: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    tdecl: ztypes.declid
+    param: zast.nameid
+    argOp: zast.nodeid
+    nameId: zast.nameid
+    v: ztypes.cval
+} out bool is {
+    if v.kind.ivalKind then return true
+    if v.kind.none.not then {
+        reportNumericArg :ast :st :tdecl :param :argOp :nameId why: "is not an integer"
+        return false
+    }
+    known: walkLookupTyperefById :st :frame :ast :unitDecl baseId: nameId
+    if nameId.isZero.not when known.none then {
+        nt: zast.nameTextCopy :ast ref: nameId
+        reportUnknownNameAt :st :ast nid: argOp name: nt
+        return false
+    }
+    reportNumericArg :ast :st :tdecl :param :argOp :nameId why: "has no compile-time value"
+    return false
+}
+
+# numericArgStandsIn -- whether the integer `v` stands in for the parameter's
+# bound as a body argument would, reporting the body's words when it does not.
+numericArgStandsIn: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    tdecl: ztypes.declid
+    param: zast.nameid
+    argOp: zast.nodeid
+    cd: ztypes.constraintdesc
+    v: ztypes.cval
+} out bool is {
+    # an untyped literal is settled by its value against the bound's kind; only
+    # a typed constant needs the bound's type to ask about loss
+    if v.numTid.isZero when (ztypes.intValueFits v: v.ival k: cd.numKind.kind) then return true
+    boundTid: numericBoundTid :ast :st :frame :cd
+    if boundTid.isZero then return true
+    sm: constStandsInMessage :ast :st :v target: boundTid
+    if sm.length == 0 then return true
+    pn: zast.nameTextAt :ast ref: param
+    tn: st.reg.nameOf tid: (declTypeIdOf :st declId: tdecl)
+    n: ast.nodes.get i: argOp.u64
+    (addErrorH
+        :st
+        nodeid: (nodeId :n)
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.typeError
+        msg: sm
+        note: "the argument of generic parameter '\{pn}' of '\{tn}'"
+        hint: String
+        width: 1
+    )
+    return false
+}
+
+# numericBoundTid -- the scalar type a numeric generic parameter's bound names,
+# 0 when it names none.
+numericBoundTid: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    cd: ztypes.constraintdesc
+} out ztypes.tid is {
+    if cd.numKind.has.not then return ztypes.tid
+    bn: ztypes.numkindName k: cd.numKind.kind
+    return (scalarTidOf :st :frame :ast nameId: (nameIdOf :ast name: bn.stringView))
+}
+
+# reportNumericArg -- the E0600 for a numeric generic argument that is not a
+# compile-time integer: what the argument is, and the parameter it was written
+# for.
+reportNumericArg: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable
+    tdecl: ztypes.declid
+    param: zast.nameid
+    argOp: zast.nodeid
+    # the argument's name when it is a bare name, else 0
+    nameId: zast.nameid
+    why: StringView
+} is {
+    pn: zast.nameTextAt :ast ref: param
+    tn: st.reg.nameOf tid: (declTypeIdOf :st declId: tdecl)
+    what: "the argument".string
+    w: 1.u32
+    if nameId.isZero.not then {
+        at: zast.nameTextAt :ast ref: nameId
+        what = "'\{at}'"
+        w = at.length.u32.orPanic
+    }
+    n: ast.nodes.get i: argOp.u64
+    (addErrorH
+        :st
+        nodeid: (nodeId :n)
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.constError
+        msg: "\{what} \{why}: generic parameter '\{pn}' of '\{tn}' takes a compile-time integer"
+        note: String
+        hint: "write a literal, a constant, or an expression of constants".string
+        width: w
+    )
+}
+
+# bindNumericArg -- a read numeric generic argument bound: its suffix component
+# and its value substitution. false when it was refused.
+bindNumericArg: function {
+    sfx: String
+    valSubs: (IdMapV zast.nameid v: u64)
+    param: zast.nameid
+    na: numarg
+    cd: ztypes.constraintdesc
+} out bool is {
+    if na.state.refused then return false
+    appendNumericArgSuffix :sfx bits: na.bits :cd
+    valSubs.set key: param value: na.bits
+    return true
+}
+
+# appendNumericArgSuffix -- a numeric generic argument's `_value` component of a
+# mono's suffix.
+appendNumericArgSuffix: function {sfx: String bits: u64 cd: ztypes.constraintdesc} is {
+    sfx.append s: "_"
+    sfx.append s: (numericArgText :bits signed: (ztypes.isSignedIntKind k: cd.numKind.kind))
+}
+
+# numericArgText -- a numeric generic argument's value as it spells a mono's
+# name: its decimal digits, a negative one's magnitude after `neg`.
+numericArgText: function {bits: u64 signed: bool} out String is {
+    if signed when bits > 9223372036854775807 then {
+        return "neg\{ztypes.absI64 v: (ztypes.bitsI64 b: bits)}"
+    }
+    return "\{bits}"
+}
+
+# bindNumericTypeArg -- a numeric generic parameter's argument read to its
+# value, which spells itself into the mono suffix and binds that param's VALUE:
+# what the trie keys and a later array bound reads. false when it was refused.
 bindNumericTypeArg: function {
     ast: Ast
-    ref: zast.nameid
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    tdecl: ztypes.declid
     pk0: zast.nameid
     opId: zast.nodeid
     sfx: String
     numParamNames: ListVal zast.nameid
     numParamNodes: ListVal u32
     valueSubs: (IdMapV zast.nameid v: u64)
-} is {
-    asfx2: "_\{zast.nameTextAt :ast :ref}"
-    sfx.append s: asfx2
-    if pk0.isZero then return
+} out bool is {
+    na: (numericGenericArg
+        :ast
+        :st
+        :unitDecl
+        frame: st.curFrame
+        :tdecl
+        param: pk0
+        argOp: opId
+        inBody: true
+    )
+    if na.state.refused then return false
+    cd: st.reg.genericParamConstraintOf :tdecl paramName: pk0
+    appendNumericArgSuffix :sfx bits: na.bits :cd
     numParamNames.append pk0
     numParamNodes.append opId
-    pdv0: parseDecimalU64 text: (zast.nameTextAt :ast :ref).stringView
-    match (
-        pdv0
-    ) case some then {
-        vgv0: pdv0
-        valueSubs.set key: pk0 value: vgv0
-    } case none then null
+    valueSubs.set key: pk0 value: na.bits
+    return true
 }
 
 # bindResolvedTypeArg -- a type argument that resolves adds its mono name to the
@@ -20234,17 +20713,24 @@ collectTypeArgAt: function {
     anId0: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId.u64)
     if anyMiss then return (argscan miss: anyMiss tid: 0)
     if skipCr then return (argscan miss: anyMiss tid: 0)
-    if (isNumericLiteralNameAt :ast ref: anId0) then {
-        (bindNumericTypeArg
+    if isP0 when (st.reg.genericParamConstraintOf tdecl: tk0 paramName: pk0).numKind.has then {
+        if (bindNumericTypeArg
             :ast
-            ref: anId0
+            :st
+            :unitDecl
+            tdecl: tk0
             :pk0
             :opId
             :sfx
             :numParamNames
             :numParamNodes
             :valueSubs
-        )
+        ).not then anyMiss = true
+        return (argscan miss: anyMiss tid: 0)
+    }
+    if (isNumericLiteralNameAt :ast ref: anId0) then {
+        sfx.append s: "_"
+        sfx.append s: (zast.nameTextAt :ast ref: anId0)
         return (argscan miss: anyMiss tid: 0)
     }
     tid0: (bindResolvedTypeArg
@@ -20363,14 +20849,17 @@ genericTypeConstruction: function {
     npi: u64
     npn: numParamNames.length
     for npi < npn loop {
-        npName: zast.nameTextAt :ast ref: (numParamNames.get i: npi)
+        npId: numParamNames.get i: npi
         npNode: numParamNodes.get i: npi
-        (st.typing.declSetDefault
-            parentTypeId: mid
-            pool: ast.names
-            name: npName.stringView
-            value: ztyping.defaultval.literal npNode
-        )
+        # a literal re-renders from its own node; any other argument renders
+        # the value the mono records for its parameter
+        dv: ztyping.defaultval.literal npNode
+        npLit: isNumericLiteralNameAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: npNode.u64))
+        if npLit.not then {
+            npMember: st.typing.declMemberIdOf parentTypeId: mid nameId: npId
+            dv = ztyping.defaultval.constant npMember
+        }
+        st.typing.declSetDefaultId parentTypeId: mid nameId: npId value: dv
         npi = npi + 1
     }
     isSized: tname.stringView == "str" or (tname.stringView == "array")
@@ -33741,7 +34230,9 @@ checkBareGenericCall: function {
         # diagnosed) never drives field-bound inference; the
         # single-diagnostic template resolution below stands
         gmid: ztypes.tid
-        if vok then {
+        # a refused argument is reported; inference would only report it again
+        # as a parameter it cannot infer
+        if vok when st.typing.errors.length == errB then {
             gmid = (inferGenericConstruction
                 :st
                 :unitDecl
@@ -35047,7 +35538,11 @@ inferGenericCallSubs: function {
         arg: argRefAt :ast nid: (zast.nodeid.create from: argId.u32)
         if arg.nid.isZero then continue
         if (isGenericParamLabel :gparams label: arg.name) then {
-            bindExplicitTypeArg :st :unitDecl :ast :arg :subs
+            # a numeric parameter's value is read where the mono is keyed
+            fnDecl: declOfTypeId :st tid: funcId
+            argBound: st.reg.genericParamConstraintOf tdecl: fnDecl paramName: arg.name
+            argNumeric: argBound.numKind.has
+            if argNumeric.not then bindExplicitTypeArg :st :unitDecl :ast :arg :subs
             continue
         }
         avt: checkValueAt :st :unitDecl :ast nid: arg.operation
@@ -35088,6 +35583,51 @@ inferGenericCallSubs: function {
             )
         }
     }
+}
+
+# genericCallNumericArg -- the value a generic function call writes for its
+# numeric parameter `param`. A numeric parameter is not inferred from the other
+# arguments, so an unwritten one is refused.
+genericCallNumericArg: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    call: callref
+    tdecl: ztypes.declid
+    param: zast.nameid
+} out numarg is {
+    kAiter: u64
+    for kAiter < call.nargs loop {
+        argId: zast.callArgAt :ast nid: call.nid i: kAiter
+        kAiter = kAiter + 1
+        arg: argRefAt :ast nid: argId
+        if arg.nid.isZero.not when arg.name == param then {
+            return (numericGenericArg
+                :ast
+                :st
+                :unitDecl
+                frame: st.curFrame
+                :tdecl
+                :param
+                argOp: arg.operation
+                inBody: true
+            )
+        }
+    }
+    pn: zast.nameTextAt :ast ref: param
+    tn: st.reg.nameOf tid: (declTypeIdOf :st declId: tdecl)
+    (addErrorH
+        :st
+        nodeid: call.nid
+        lineno: call.lineno
+        colno: call.colno
+        e: zast.err.callError
+        msg: "missing required argument '\{pn}': generic parameter '\{pn}' of '\{tn}' takes a compile-time integer, which is never inferred"
+        note: String
+        hint: String
+        width: 0
+    )
+    return (numarg state: numargstate.refused bits: 0)
 }
 
 # substituteGenericReturn -- the mono's return type, from the template's return
@@ -35242,8 +35782,24 @@ checkGenericCall: function {
     gsfx4: String
     allOk: true
     gtk4: declOfTypeId :st tid: funcId
+    vsI: IdMapV zast.nameid v: u64
     genericParamIter: gparams.iterate
     for gp3: genericParamIter loop {
+        cd4: st.reg.genericParamConstraintOf tdecl: gtk4 paramName: gp3
+        if cd4.numKind.has then {
+            # a numeric parameter is never inferred: its argument is written
+            nv4: (genericCallNumericArg
+                :st
+                :unitDecl
+                :ast
+                :call
+                tdecl: gtk4
+                param: gp3
+            )
+            bound4: bindNumericArg sfx: gsfx4 valSubs: vsI param: gp3 na: nv4 cd: cd4
+            allOk = allOk and bound4
+            continue
+        }
         ggot: subs.get key: gp3
         match (
             ggot
@@ -35270,7 +35826,6 @@ checkGenericCall: function {
     }
     if allOk.not then return (ztypes.tid.create from: 0)
     if gparams.length == 0 then return (ztypes.tid.create from: 0)
-    vsI: IdMapV zast.nameid v: u64
     mid: (getOrMintSpec
         :st
         frame: st.curFrame
