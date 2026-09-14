@@ -5157,11 +5157,26 @@ emitDataIndexCall: function {
     return "".string
 }
 
+# argumentsAreCreates -- a construction's arguments are its `create`'s rather than
+# its type's: after a parenthesised type application, and in an explicit
+# `T.create`.
+argumentsAreCreates: function {ast: Ast.view callable: astnode.view} out bool is {
+    if callable.call then return true
+    match (
+        callable
+    ) case dottedpath then {
+        return (atomNameIdOf :ast n: (ast.nodes.get i: callable.child.u64)) == zast.names.wkCreate
+    } else {
+        return false
+    }
+}
+
 # listCapArg -- the capacity: argument of a container construction value, or
-# "0" when absent. After a parenthesised type the arguments are `create`'s, whose
-# first parameter is `capacity`, so the call's one unlabelled argument -- which
-# binds the first declared parameter -- is the capacity as much as a labelled
-# one is. In a bare type application the unlabelled argument is the type's.
+# "0" when absent. After a parenthesised type, and in an explicit `T.create`, the
+# arguments are `create`'s, whose first parameter is `capacity`, so the call's
+# one unlabelled argument -- which binds the first declared parameter -- is the
+# capacity as much as a labelled one is. In a bare type application the
+# unlabelled argument is the type's.
 listCapArg: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -5171,7 +5186,7 @@ listCapArg: function {
     match (
         n
     ) case call then {
-        afterType: (ast.nodes.get i: n.callable.u64).call
+        afterType: argumentsAreCreates :ast callable: (ast.nodes.get i: n.callable.u64)
         arx259: u64
         for arx259 < n.arguments.count.u64 loop {
             aId: zast.kidAt kids: ast.kids span: n.arguments i: arx259
@@ -5650,6 +5665,8 @@ hoistDestroyLine: function {
     if dt == ctx.strTid then return "    \{ctx.strC}_free(&\{nm});\n"
     if (symtab.reg.needsDestructor typeId: dt).not then return "".string
     cb: ctxCname :ctx tid: dt
+    # a Map or Set temp already IS the pointer its destroy takes
+    if (isHeapPtrCollection :symtab :ctx tid: dt) then return "    \{cb}_destroy(\{nm});\n"
     return "    \{cb}_destroy(&\{nm});\n"
 }
 
@@ -5689,6 +5706,9 @@ hoistBorrowValArg: function {
     ctx.argHoistCtr = ctx.argHoistCtr + 1
     vnmh: "_ah\{vhn}"
     vcty: typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: pid.u64) thisTid: ztypes.tid
+    # a Map or Set value is held through its heap pointer
+    if (isHeapPtrCollection :symtab :ctx tid: (ztypes.tid.create from: pid.u64)
+    ) then vcty.append "*"
     vdt: (hoistDestroyLine
         :symtab
         :ctx
@@ -7565,6 +7585,8 @@ ownedReceiverHoist: function {
     if (bindingRhsIsBorrow :ast :symtab :ctx :n) then return "".string
     rct: typeRefC :ast :symtab :ctx tid: rtid thisTid: ztypes.tid
     if rct.length == 0 then return "".string
+    # a Map or Set value is held through its heap pointer
+    if (isHeapPtrCollection :symtab :ctx tid: rtid) then rct.append "*"
     rhn: ctx.argHoistCtr
     ctx.argHoistCtr = ctx.argHoistCtr + 1
     rnm: "_ah\{rhn}"
@@ -11508,14 +11530,29 @@ implicitZeroValue: function {
     # is a template rather than a C scalar or a user function, and the chase
     # panics on it. Asked in this order the chase never sees one.
     zm: chaseColMono :symtab :ctx :tid
+    # a sized str or array is built by its parameterless runtime create
+    {
+        zso: originTidOf :symtab tid: (ztypes.tid.create from: zm.u64)
+        isSized: zso == (ctx.origins.get i: ogStr) or (zso == (ctx.origins.get i: ogArray))
+        if isSized when zso.isZero.not then {
+            zsc: ctxCname :ctx tid: (ztypes.tid.create from: zm.u64)
+            return "\{zsc}_create()"
+        }
+    }
     if (isCollectionOriginTid
         :ctx
         originTid: (originTidOf :symtab tid: (ztypes.tid.create from: zm.u64))
     ) then {
         zmc: ctxCname :ctx tid: (ztypes.tid.create from: zm.u64)
-        if (isListOriginOf :symtab :ctx tid: (ztypes.tid.create from: zm.u64)) then {
-            return "\{zmc}_create((uint64_t)0)"
-        }
+        zmt: ztypes.tid.create from: zm.u64
+        # every family whose `create` takes a capacity is built with none
+        takesCap: (
+            (isListOriginOf :symtab :ctx tid: zmt) or
+            (isSetOriginOf :symtab :ctx tid: zmt) or
+            (isMapOriginOf :symtab :ctx tid: zmt) or
+            (isIdCollectionOriginOf :symtab :ctx tid: zmt)
+        )
+        if takesCap then return "\{zmc}_create((uint64_t)0)"
         return "\{zmc}_create()"
     }
     # a typedef over a scalar (meters -> i64) is the chased scalar's zero

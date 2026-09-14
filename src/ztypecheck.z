@@ -8497,6 +8497,7 @@ resolveRecord: function {
     # as a member carrying the null shell so the use site can tell it from a
     # type that simply never mentioned `copy`.
     if (memberNullOptOut :ast :asItems member: "copy") then st.typing.copyOptOut.add item: rid
+    if (memberNullOptOut :ast :asItems member: "create") then st.typing.createOptOut.add item: rid
     if isgen then {
         st.reg.setGeneric typeId: rt value: true
         tdecl9: declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: defName)
@@ -10306,6 +10307,18 @@ resolveNamedFieldSlot: function {
         oId: fm.operation
         thisName: defName
     )
+    # `null` is no runtime value, in a class exactly as in a record: `create:
+    # null` in the BODY would otherwise be a field of no type every
+    # construction then demands
+    if (refuseNullTyped
+        :st
+        tid: cidf
+        nodeid: fm.nid
+        lineno: fm.lineno
+        colno: fm.colno
+        what: "field"
+        name: fname
+    ) then return needsDtor
     (st.typing.setMemberType
         parentTypeId: (ztypes.tid.create from: cid.u64)
         nameId: fm.name
@@ -10843,6 +10856,12 @@ finishClassDef: function {
 } is {
     needsDtor: needsDtorIn
     resolveClassAsMethods :st :ast :unitDecl :frame :defName :cid :isgen :cnode
+    {
+        cobj: ast.nodes.get i: cnode.nid.u64
+        if cobj.objectdef when (memberNullOptOut :ast asItems: cobj.asItems member: "create") then {
+            st.typing.createOptOut.add item: cid
+        }
+    }
     if (resolveClassCreate
         :st
         :ast
@@ -22390,6 +22409,22 @@ checkUnresolvedMember: function {
     bt: ztypes.tid
     cnId: zast.nameid
 } out ztypes.tid is {
+    # `T.create` on a type whose `create` is `null`: the construction is refused
+    # in the words every other spelling of it uses, not as a missing member
+    if cnId == zast.names.wkCreate when (typeDefinesConstruction :st tid: bt).not then {
+        tnc: st.reg.nameOf tid: bt
+        mdc: "cannot construct '\{tnc}': the type does not define construction (create: null)"
+        (bareCtorError
+            :st
+            nodeid: dp.nid
+            lineno: dp.lineno
+            colno: dp.colno
+            width: 1
+            msg: mdc
+            hint: "use the type's own factory functions".string
+        )
+        return (ztypes.tid.create from: 0)
+    }
     if (st.reg.isTypeParamOf tid: bt) then {
         cn: zast.nameTextAt :ast ref: cnId
         # `.copy` is an ownership primitive, not a constrained member:
@@ -23465,6 +23500,18 @@ checkDotted: function {
         ) case some then {
             mo = optionval.some dn9
         } case none then null
+    }
+    # a native container's `create` is its TEMPLATE's: every family declares the
+    # one `create: function {capacity: 0.u64}`, which no type argument
+    # substitutes, and an instance need not carry a copy of it -- under --eager
+    # none does, and `(ListVal t: i64).create` was "no member"
+    if mo.none when cnId == zast.names.wkCreate when (monoOfNativeTemplate :st tid: bt) then {
+        ctpl: st.reg.genericOriginOf tid: bt
+        # resolved by its declaration: the eager tier resolves no native create,
+        # and forceMemberOf defers to it
+        cmd: st.typing.declMemberIdOf parentTypeId: ctpl nameId: cnId
+        if cmd.isZero.not then forceMemberDecl :st frame: st.curFrame :ast memberDeclId: cmd
+        mo = st.typing.declChildOfId parentTypeId: ctpl nameId: cnId
     }
     match (
         mo
@@ -32546,6 +32593,18 @@ checkResolvedValueCall: function {
         dctt: st.reg.typetypeOf typeId: dro
         isCtorT: dctt == ztypes.ztypetype.classType or (dctt == ztypes.ztypetype.recordType)
         if isCtorT then {
+            if call.nargs > 0 when (pathNamesType :st :ast nid: call.callable) then {
+                dct: (checkTypeConstruction
+                    :st
+                    :unitDecl
+                    :ast
+                    :call
+                    tid: (ztypes.tid.create from: dro)
+                )
+                return (callleg handled: true tid: dct)
+            }
+            # a record-typed callable that names no type -- a data block's
+            # `.index` -- walks its arguments as that record's and stays untyped
             if call.nargs > 0 then {
                 dcm: st.pushCall
                 (walkCallArgsHoist
@@ -32787,7 +32846,8 @@ checkNonUserCall: function {
 
 # checkUserFnCall -- a call to a user-declared function or constructor: walk its
 # arguments against the declared parameters, then decide what the RESULT pins.
-# A borrow-returning call keeps its source locked for the binding's life.
+# A borrow-returning call keeps its source locked for the binding's life. A
+# construction is checkTypeConstruction's.
 checkUserFnCall: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -32797,23 +32857,21 @@ checkUserFnCall: function {
     isCtor: bool
     cnId: zast.nameid
 } out ztypes.tid is {
-    result: ztypes.tid
     calid: nodeId n: (ast.nodes.get i: call.callable.u64)
     setc: funcId
     stampGate :st nid: calid.u64 tid: setc
-    # tooling: a bare callable resolving to a unit FUNCTION is a
-    # def reference like any bare read (constructors excluded)
-    if isCtor.not then {
-        nameId97: cnId
-        sfG: (declSurfaceOfName
-            :st
-            :ast
-            :unitDecl
-            nameId: nameId97
-            tid: funcId
-        )
-        stampRefDecl :st nid: calid.u64 declId: sfG
-    }
+    if isCtor then return (checkTypeConstruction :st :unitDecl :ast :call tid: funcId)
+    result: ztypes.tid
+    # tooling: a bare callable resolving to a unit FUNCTION is a def reference
+    # like any bare read
+    sfG: (declSurfaceOfName
+        :st
+        :ast
+        :unitDecl
+        nameId: cnId
+        tid: funcId
+    )
+    stampRefDecl :st nid: calid.u64 declId: sfG
     cm: st.pushCall
     pins: (walkCallArgsHoist
         :st
@@ -32821,93 +32879,181 @@ checkUserFnCall: function {
         :ast
         :call
         :funcId
-        :isCtor
+        isCtor: false
         reportUnknown: true
         recvImplicit: false
     )
-    checkMissingCallArgs :ast :st :call :funcId :isCtor recvImplicit: false
+    checkMissingCallArgs :ast :st :call :funcId isCtor: false recvImplicit: false
     st.popTo marker: cm
-    if isCtor then {
-        # bare-name `T args...` inside T's own create. Reported, not returned
-        # on: the walk finishes as it would have, so one offending construction
-        # raises exactly one diagnostic.
-        (ctorSelfRecursionAt
-            :st
-            nodeid: call.nid
-            lineno: call.lineno
-            colno: call.colno
-            width: 1
-            ctorTid: funcId
-        )
-        # a type in callable position constructs: the call's value is
-        # the type itself.
-        ctk: funcId
-        ctv: true
-        st.typing.constructedTypes.set key: ctk value: ctv
-        result = ztypes.tid.create from: funcId.u64
-        setr2: result
-        stampGate :st nid: call.nid.u64 tid: setr2
-        ctt: st.reg.typetypeOf typeId: funcId
-        if ctt == ztypes.ztypetype.recordType then {
-            st.typing.callKind.set key: call.nid.u64 value: zast.callkind.recordCreate
+    st.typing.callKind.set key: call.nid.u64 value: zast.callkind.regular
+    rnOpt: st.typing.funcReturnNode.get key: funcId
+    match (
+        rnOpt
+    ) case some then {
+        rtOpt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rnOpt
+        if rtOpt > 0 then {
+            result = ztypes.tid.create from: rtOpt.u64
+            setr: result
+            stampGate :st nid: call.nid.u64 tid: setr
         }
-        if ctt == ztypes.ztypetype.classType then {
-            st.typing.callKind.set key: call.nid.u64 value: zast.callkind.classCreate
-        }
-        if ctt == ztypes.ztypetype.unionType then {
-            st.typing.callKind.set key: call.nid.u64 value: zast.callkind.unionCreate
-        }
-        # a construction pins its sources exactly as a direct call of the same
-        # `create` does. `outx this` is a statement about what the RESULT holds
-        # -- a reference into an argument -- so which spelling reached the
-        # create, the bare type name or `T.create`, cannot change it. The
-        # binding stays owned; only the sources are pinned.
-        cxO: st.typing.declChildOfId parentTypeId: funcId nameId: zast.names.wkCreate
+    } case none then null
+    # the result's pins: every borrow/view argument at the strength the
+    # call took on it (a free function has no receiver). Argument
+    # evaluation residue drains first (owning calls consume it).
+    noRecvF: ListVal zast.nameid
+    pinCallResult :st :funcId :pins recvPath: noRecvF recvShared: true
+    return result
+}
+
+# checkTypeConstruction -- a construction of the user record or class `tid`, in
+# whichever spelling reached it: `T args`, `(T) args`, `T.create args`. Each is a
+# call of the type's `create`, synthesised or written, so each is checked the same
+# way: a type whose `create` is `null` constructs in none of them, the arguments
+# are walked as the construction's, and the call's value is the type.
+checkTypeConstruction: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    call: callref
+    tid: ztypes.tid
+} out ztypes.tid is {
+    funcId: tid
+    if (refuseDisabledConstruction :st :call :tid) then {
+        # the arguments are still values, and still stamp
+        checkWrappedValueArgs :st :unitDecl :ast :call
+        return (ztypes.tid.create from: 0)
+    }
+    result: ztypes.tid
+    # a `create` the type WRITES -- a body or a native -- is called as the function
+    # it is, its parameters' ownership included; the synthesised one takes each
+    # field as the field declares it
+    walkFn: funcId
+    walkAsCtor: true
+    {
+        forceMemberOf :st frame: st.curFrame :ast parentTypeId: funcId nameId: zast.names.wkCreate
+        wco: st.typing.declChildOfId parentTypeId: funcId nameId: zast.names.wkCreate
         match (
-            cxO
+            wco
         ) case some then {
-            noRecvC: ListVal zast.nameid
-            cxPins: (st.typing.funcPins.get key: cxO).or d: false
-            if cxPins.not when (typeHasNonOwnedField :st tid: funcId) then {
-                # a create that does not say `outx this` on a type declaring a
-                # non-owned field is the SYNTHESISED one (a written one is
-                # refused): the construction pins as `outx this` would
-                pinConstructionResult :st :pins
-            } else {
-                (pinCallResult
-                    :st
-                    funcId: (ztypes.tid.create from: cxO.u64)
-                    :pins
-                    recvPath: noRecvC
-                    recvShared: true
-                )
-            }
-        } case none then {
-            # no `create` written: the construction IS the constructor, and a
-            # type declaring a non-owned field is built `outx this` -- every
-            # borrowed-field argument stays pinned under the result
-            if (typeHasNonOwnedField :st tid: funcId) then pinConstructionResult :st :pins
-        }
-    } else {
-        st.typing.callKind.set key: call.nid.u64 value: zast.callkind.regular
-        rnOpt: st.typing.funcReturnNode.get key: funcId
-        match (
-            rnOpt
-        ) case some then {
-            rtOpt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rnOpt
-            if rtOpt > 0 then {
-                result = ztypes.tid.create from: rtOpt.u64
-                setr: result
-                stampGate :st nid: call.nid.u64 tid: setr
+            wct: ztypes.tid.create from: wco.u64
+            isFn: (st.reg.typetypeOf typeId: wct) == ztypes.ztypetype.functionType
+            if isFn when (st.typing.declMemberIsSynth
+                parentTypeId: funcId
+                nameId: zast.names.wkCreate
+            ).not then {
+                walkFn = wct
+                walkAsCtor = false
             }
         } case none then null
-        # the result's pins: every borrow/view argument at the strength the
-        # call took on it (a free function has no receiver). Argument
-        # evaluation residue drains first (owning calls consume it).
-        noRecvF: ListVal zast.nameid
-        pinCallResult :st :funcId :pins recvPath: noRecvF recvShared: true
+    }
+    cm: st.pushCall
+    pins: (walkCallArgsHoist
+        :st
+        :unitDecl
+        :ast
+        :call
+        funcId: walkFn
+        isCtor: walkAsCtor
+        reportUnknown: true
+        recvImplicit: false
+    )
+    checkMissingCallArgs :ast :st :call funcId: walkFn isCtor: walkAsCtor recvImplicit: false
+    st.popTo marker: cm
+    # bare-name `T args...` inside T's own create. Reported, not returned
+    # on: the walk finishes as it would have, so one offending construction
+    # raises exactly one diagnostic.
+    (ctorSelfRecursionAt
+        :st
+        nodeid: call.nid
+        lineno: call.lineno
+        colno: call.colno
+        width: 1
+        ctorTid: funcId
+    )
+    # a type in callable position constructs: the call's value is
+    # the type itself.
+    ctk: funcId
+    ctv: true
+    st.typing.constructedTypes.set key: ctk value: ctv
+    result = ztypes.tid.create from: funcId.u64
+    setr2: result
+    stampGate :st nid: call.nid.u64 tid: setr2
+    ctt: st.reg.typetypeOf typeId: funcId
+    if ctt == ztypes.ztypetype.recordType then {
+        st.typing.callKind.set key: call.nid.u64 value: zast.callkind.recordCreate
+    }
+    if ctt == ztypes.ztypetype.classType then {
+        st.typing.callKind.set key: call.nid.u64 value: zast.callkind.classCreate
+    }
+    if ctt == ztypes.ztypetype.unionType then {
+        st.typing.callKind.set key: call.nid.u64 value: zast.callkind.unionCreate
+    }
+    # a construction pins its sources exactly as a direct call of the same
+    # `create` does. `outx this` is a statement about what the RESULT holds
+    # -- a reference into an argument -- so which spelling reached the
+    # create, the bare type name or `T.create`, cannot change it. The
+    # binding stays owned; only the sources are pinned.
+    cxO: st.typing.declChildOfId parentTypeId: funcId nameId: zast.names.wkCreate
+    match (
+        cxO
+    ) case some then {
+        noRecvC: ListVal zast.nameid
+        cxPins: (st.typing.funcPins.get key: cxO).or d: false
+        if cxPins.not when (typeHasNonOwnedField :st tid: funcId) then {
+            # a create that does not say `outx this` on a type declaring a
+            # non-owned field is the SYNTHESISED one (a written one is
+            # refused): the construction pins as `outx this` would
+            pinConstructionResult :st :pins
+        } else {
+            (pinCallResult
+                :st
+                funcId: (ztypes.tid.create from: cxO.u64)
+                :pins
+                recvPath: noRecvC
+                recvShared: true
+            )
+        }
+    } case none then {
+        # no `create` written: the construction IS the constructor, and a
+        # type declaring a non-owned field is built `outx this` -- every
+        # borrowed-field argument stays pinned under the result
+        if (typeHasNonOwnedField :st tid: funcId) then pinConstructionResult :st :pins
     }
     return result
+}
+
+# refuseDisabledConstruction -- a user record or class that defines no `create`
+# function -- `create: null` -- cannot be constructed, whether the construction
+# names it bare, applies it to arguments or calls `create` on it. Only the bare
+# name was refused; `Secret value: 4` built one anyway. true once reported.
+refuseDisabledConstruction: function {
+    st: zenv.ZSymbolTable
+    call: callref
+    tid: ztypes.tid
+} out bool is {
+    if (typeDefinesConstruction :st :tid) then return false
+    tn: st.reg.nameOf :tid
+    md: "cannot construct '\{tn}': the type does not define construction (create: null)"
+    (bareCtorError
+        :st
+        nodeid: call.nid
+        lineno: call.lineno
+        colno: call.colno
+        width: 1
+        msg: md
+        hint: "use the type's own factory functions".string
+    )
+    return true
+}
+
+# typeDefinesConstruction -- the type constructs: only one whose `as` block
+# strikes `create` off with `null` does not, and an instance of a generic type
+# answers as its template does.
+typeDefinesConstruction: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    if (st.typing.createOptOut.has item: tid) then return false
+    org: st.reg.genericOriginOf :tid
+    if org.isZero then return true
+    return (st.typing.createOptOut.has item: org).not
 }
 
 # wrappedCalleeIsContainer -- the wrapped callee is a mono of a native container
@@ -32942,7 +33088,10 @@ checkContainerCreateArgs: function {
     wcv: ztypes.tid
 } is {
     tpl: st.reg.genericOriginOf tid: wcv
-    forceMemberOf :st frame: st.curFrame :ast parentTypeId: tpl nameId: zast.names.wkCreate
+    # resolved by its declaration, in either tier: the eager one resolves no
+    # native create, and forceMemberOf defers to it
+    crd: st.typing.declMemberIdOf parentTypeId: tpl nameId: zast.names.wkCreate
+    if crd.isZero.not then forceMemberDecl :st frame: st.curFrame :ast memberDeclId: crd
     cr: (st.typing.declChildOfId parentTypeId: tpl nameId: zast.names.wkCreate).or d: 0
     crt: ztypes.tid.create from: cr.u64
     crFn: cr > 0 and ((st.reg.typetypeOf typeId: crt) == ztypes.ztypetype.functionType)
@@ -32975,6 +33124,10 @@ checkWrappedCtorArgs: function {
     call: callref
     wcv: ztypes.tid
 } is {
+    if (refuseDisabledConstruction :st :call tid: wcv) then {
+        checkWrappedValueArgs :st :unitDecl :ast :call
+        return
+    }
     wcm: st.pushCall
     (walkCallArgsHoist
         :st
@@ -33139,6 +33292,64 @@ checkMetaCreateCall: function {
     return (ztypes.tid.create from: 0)
 }
 
+# checkExplicitConstruction -- `T.create args` on a TYPE is the construction
+# `T args` spells: one call of the type's `create`, checked by the same walk. It
+# took the method-call walk instead: a user type's function fields were demanded
+# as arguments though their bodies are defaults, and a container's `create` was
+# walked as its mono's -- typed as the template and emitted with no route. A
+# generic template named without its arguments is refused, as its bare name is.
+checkExplicitConstruction: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    call: callref
+} out callleg is {
+    unhandled: callleg handled: false tid: (ztypes.tid.create from: 0)
+    baseId: zast.nodeid
+    {
+        cq: ast.nodes.get i: call.callable.u64
+        if cq.dottedpath when (
+            (atomNameId :ast n: (ast.nodes.get i: cq.child.u64)) == zast.names.wkCreate
+        ) then {
+            baseId = cq.parent
+        }
+    }
+    if baseId.isZero then return unhandled
+    if (dottedBaseIsValue :st :ast :unitDecl n: (ast.nodes.get i: call.callable.u64)
+    ) then return unhandled
+    bt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: baseId.u64
+    if bt.isZero then return unhandled
+    if (st.reg.isGenericOf tid: bt) then {
+        tn: st.reg.nameOf tid: bt
+        mg: "cannot construct '\{tn}': a generic type needs type arguments"
+        (bareCtorError
+            :st
+            nodeid: call.nid
+            lineno: call.lineno
+            colno: call.colno
+            width: 1
+            msg: mg
+            hint: "apply type arguments first, e.g. '(ListVal t: u8).create'".string
+        )
+        checkWrappedValueArgs :st :unitDecl :ast :call
+        return (callleg handled: true tid: (ztypes.tid.create from: 0))
+    }
+    if (wrappedCalleeIsContainer :ast :st wcv: bt) then {
+        checkContainerCreateArgs :st :unitDecl :ast :call wcv: bt
+        stampGate :st nid: call.nid.u64 tid: bt
+        stampConstructionKind :st nid: call.nid.u64 tid: bt
+        return (callleg handled: true tid: bt)
+    }
+    btt: st.reg.typetypeOf typeId: bt
+    if btt != ztypes.ztypetype.recordType when (
+        btt != ztypes.ztypetype.classType
+    ) then return unhandled
+    if (st.reg.isNativeOf tid: bt) then return unhandled
+    # a typedef constructs from its base, which is its own call's business
+    if (typedefBaseOf :st tid: bt) > 0 then return unhandled
+    return (callleg handled: true tid: (checkTypeConstruction :st :unitDecl :ast :call tid: bt))
+}
+
 # checkDottedCallableCall -- the callable resolved through a dotted path.
 # An unresolved one (a data block's `.index`) still walks its arguments so
 # their atoms stamp; a resolved one dispatches as a method or a value call.
@@ -33149,6 +33360,8 @@ checkDottedCallableCall: function {
     call: callref
     dro: ztypes.tid
 } out callleg is {
+    eleg: checkExplicitConstruction :st :unitDecl :ast :call
+    if eleg.handled then return eleg
     result: ztypes.tid
     if dro.isZero then {
         # unresolved dotted callable (a data block's `.index`): the
