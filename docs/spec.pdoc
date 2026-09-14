@@ -3010,13 +3010,19 @@ things, decided by the shape of its value:
   [#*: a #b:"type", #b:"function" or #b:"unit" definition -- the value is a
     body (#~"record {...}", #~"function ... is {...}", #~"unit as {...}").]
   [#*: a #b:"constant" -- the value is a literal numeric
-    (#~"LIMIT: 64", #~"WIDTH: 8.u32") or a constant expression over
-    them (#~"TOTAL: LIMIT + WIDTH"). Unit constants inline their literal
+    (#~"LIMIT: 64", #~"WIDTH: 8.u32"), a string literal
+    (#~"NAME: \"zerolang\""), or a constant expression over them
+    (#~"TOTAL: LIMIT + WIDTH", #~"FULL: NAME + \" compiler\"",
+    #~"HEAD: (NAME.substring from: 0 to: 4)"). Unit constants inline their literal
     at every reference; they hold no runtime object, so a construction
     (#~"origin: Point.create x: 0") is refused -- construct it inside a
     function, or make the member a function that returns the value. A
     parenthesised value whose callee names a #b:"generic template" is not a
-    construction but an instantiation, and is the type-alias form above.]
+    construction but an instantiation, and is the type-alias form above.
+    At unit level a label starts the next definition, even on the same
+    line, so a call with labelled arguments is written in parentheses:
+    #~"HEAD: NAME.substring from: 0 to: 4" is #~"HEAD: NAME.substring"
+    beside two constants named #~"from" and #~"to".]
   [#*: a #b:"type alias" -- the value NAMES a type, dotted
     (#~"Nd: zast.Node"), bare (#~"Same: Holder", #~"Text: String",
     #~"tally: u64"), or a generic #b:"instantiation"
@@ -6111,6 +6117,29 @@ list above (#~"<<", #~"|", #~"&", #~"%") over values that do fold are
 #code language=zerolang: """
   FLAGS: 1 << 3        # E0600: '<<' has no compile-time value for i64 and i64
   LIMIT: GHOST + 1     # E0023: Unknown reference 'GHOST'
+  """
+
+A string constant is a #~"StringView" receiver like any other. Five of its
+methods fold: #~"length", #~"startsWith", #~"endsWith", #~"contains" and
+#~"substring". Each answer is computed by calling the same method the program
+would call at run time, so the two cannot disagree. In a body, any other
+method (#~"count", #~"split", #~"toUpperAscii") runs at run time on the
+constant's static view. In a unit-level definition the call is checked
+against the method's declaration exactly as a body checks it, so a missing,
+unknown or surplus argument, or an argument of the wrong type, is the error
+the body reports (#~"E0300", or #~"E0100" for a method #~"StringView" does not
+declare). A complete call to a method that does not fold is #~"E0600".
+
+#code language=zerolang: """
+  NAME: "zerolang"
+  N: NAME.length                         # folded to 8
+  HEAD: (NAME.substring from: 0 to: 4)   # folded to "zero"
+  TAIL: (NAME.substring from: 4)         # E0300: missing required argument 'to' (type: u64)
+  WIDE: NAME.count                       # E0600: 'count' has no compile-time value
+
+  main: function is {
+      c: NAME.count                      # run time, on the constant's static view
+  }
   """
 
 Named constants propagate: if #~"a: 1" and #~"b: a + 2" are defined at

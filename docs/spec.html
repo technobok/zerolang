@@ -2723,13 +2723,19 @@ things, decided by the shape of its value:</p>
 <li>a <strong>type</strong>, <strong>function</strong> or <strong>unit</strong> definition -- the value is a
     body (<code>record {...}</code>, <code>function ... is {...}</code>, <code>unit as {...}</code>).</li>
 <li>a <strong>constant</strong> -- the value is a literal numeric
-    (<code>LIMIT: 64</code>, <code>WIDTH: 8.u32</code>) or a constant expression over
-    them (<code>TOTAL: LIMIT + WIDTH</code>). Unit constants inline their literal
+    (<code>LIMIT: 64</code>, <code>WIDTH: 8.u32</code>), a string literal
+    (<code>NAME: "zerolang"</code>), or a constant expression over them
+    (<code>TOTAL: LIMIT + WIDTH</code>, <code>FULL: NAME + " compiler"</code>,
+    <code>HEAD: (NAME.substring from: 0 to: 4)</code>). Unit constants inline their literal
     at every reference; they hold no runtime object, so a construction
     (<code>origin: Point.create x: 0</code>) is refused -- construct it inside a
     function, or make the member a function that returns the value. A
     parenthesised value whose callee names a <strong>generic template</strong> is not a
-    construction but an instantiation, and is the type-alias form above.</li>
+    construction but an instantiation, and is the type-alias form above.
+    At unit level a label starts the next definition, even on the same
+    line, so a call with labelled arguments is written in parentheses:
+    <code>HEAD: NAME.substring from: 0 to: 4</code> is <code>HEAD: NAME.substring</code>
+    beside two constants named <code>from</code> and <code>to</code>.</li>
 <li>a <strong>type alias</strong> -- the value NAMES a type, dotted
     (<code>Nd: zast.Node</code>), bare (<code>Same: Holder</code>, <code>Text: String</code>,
     <code>tally: u64</code>), or a generic <strong>instantiation</strong>
@@ -5294,6 +5300,25 @@ list above (<code>&lt;&lt;</code>, <code>|</code>, <code>&amp;</code>, <code>%</
 <code>E0600</code>:</p>
 <pre><code class="language-zerolang">FLAGS: 1 &lt;&lt; 3        # E0600: '&lt;&lt;' has no compile-time value for i64 and i64
 LIMIT: GHOST + 1     # E0023: Unknown reference 'GHOST'</code></pre>
+<p>A string constant is a <code>StringView</code> receiver like any other. Five of its
+methods fold: <code>length</code>, <code>startsWith</code>, <code>endsWith</code>, <code>contains</code> and
+<code>substring</code>. Each answer is computed by calling the same method the program
+would call at run time, so the two cannot disagree. In a body, any other
+method (<code>count</code>, <code>split</code>, <code>toUpperAscii</code>) runs at run time on the
+constant's static view. In a unit-level definition the call is checked
+against the method's declaration exactly as a body checks it, so a missing,
+unknown or surplus argument, or an argument of the wrong type, is the error
+the body reports (<code>E0300</code>, or <code>E0100</code> for a method <code>StringView</code> does not
+declare). A complete call to a method that does not fold is <code>E0600</code>.</p>
+<pre><code class="language-zerolang">NAME: "zerolang"
+N: NAME.length                         # folded to 8
+HEAD: (NAME.substring from: 0 to: 4)   # folded to "zero"
+TAIL: (NAME.substring from: 4)         # E0300: missing required argument 'to' (type: u64)
+WIDE: NAME.count                       # E0600: 'count' has no compile-time value
+
+main: function is {
+    c: NAME.count                      # run time, on the constant's static view
+}</code></pre>
 <p>Named constants propagate: if <code>a: 1</code> and <code>b: a + 2</code> are defined at
 unit level, then <code>b</code> has a compile time constant value of <code>3</code>. Chains
 of constant definitions are fully resolved. Float constants propagate the

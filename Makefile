@@ -835,7 +835,12 @@ perf: $(PERFBIN)
 # +5,910 when every spelling of a construction became one call of the type's
 # `create`: over the same source the new compiler allocates 4 fewer, and it is the
 # input, the compiler's own source longer.
-ALLOC_BASELINE := 2541997
+#
+# +10,935 when a string constant became a method receiver and a unit-level call
+# of its methods was checked as a body checks it: over the same source the new
+# compiler allocates exactly as the old, and it is the input, the compiler's own
+# source longer.
+ALLOC_BASELINE := 2552932
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

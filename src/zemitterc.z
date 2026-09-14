@@ -5060,13 +5060,14 @@ emitDottedCall: function {
     call: zast.callrow.view
 } out String is {
     bn0: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
-    # a base atom that names a FUNCTION auto-calls: its value is the receiver,
-    # emitted as an expression like any other call base
+    # a base atom that names a FUNCTION auto-calls, and a string constant is its
+    # static: either value is the receiver, emitted as an expression like any
+    # other call base
     baseIsCall: false
     {
         dcn: ast.nodes.get i: call.callable.u64
         if dcn.dottedpath then {
-            baseIsCall = baseAtomNamesFunction :symtab n: (ast.nodes.get i: dcn.parent.u64)
+            baseIsCall = baseAtomReadsAsValue :symtab n: (ast.nodes.get i: dcn.parent.u64)
         }
     }
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
@@ -9497,6 +9498,11 @@ foldedBranchOf: function {symtab: zenv.ZSymbolTable.view nid: u64} out ztyping.f
 # whole of it -- the ordinary path emits the arithmetic and the program keeps
 # its own precision. The integer, string and arm domains are exact and are
 # rendered.
+#
+# A STRING VALUE ON A `String` NODE IS REFUSED TOO. The `_zcsN` static is a
+# StringView of program memory, and a `String` node -- `"ab" + "cd"` in a body
+# -- is an owned buffer its binding frees. The ordinary path builds that buffer,
+# and its operands still render as their statics.
 nodeConstText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -9510,6 +9516,9 @@ nodeConstText: function {
     ) case some then {
         if g.kind.fvalKind then return "".string
         tv: ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: nid.u64
+        if g.kind.svalKind when (chaseStrTypedef :symtab :ctx tid: tv) == ctx.strTid then {
+            return "".string
+        }
         sc: cvalText :ast :symtab :ctx tid: tv v: g
         if sc.length > 0 then return sc
         return (cvalStrText :symtab :ctx v: g)
@@ -13747,6 +13756,32 @@ baseAtomNamesFunction: function {symtab: zenv.ZSymbolTable.view n: astnode.view}
     }
 }
 
+# baseAtomIsFoldedString -- a bare atom that is not a local and that the
+# checker folded to a STRING value: a string constant. It names no storage, so
+# as a receiver it is its `_zcsN` static, emitted as an expression the way a
+# call base is -- spelling the constant's own name would read a variable no
+# program declares.
+baseAtomIsFoldedString: function {symtab: zenv.ZSymbolTable.view n: astnode.view} out bool is {
+    anid: atomNodeId :n
+    if anid == 0 then return false
+    if (symtab.typing.atomVariableId.has key: anid) then return false
+    g: symtab.typing.nodeConst.get key: anid
+    match (
+        g
+    ) case some then {
+        return g.kind.svalKind
+    } case none then {
+        return false
+    }
+}
+
+# baseAtomReadsAsValue -- a bare atom whose receiver is a VALUE with no storage
+# of its own: a function it calls, or a string constant's static.
+baseAtomReadsAsValue: function {symtab: zenv.ZSymbolTable.view n: astnode.view} out bool is {
+    if (baseAtomNamesFunction :symtab :n) then return true
+    return (baseAtomIsFoldedString :symtab :n)
+}
+
 # emitDottedRead -- the C text of a dotted PATH read (the call form is
 # emitDottedCall). The legs run in the order the checker's stamps settle them:
 # built-in combinators, unit-qualified reads, the conversions, the tagged-type
@@ -13801,9 +13836,10 @@ emitDottedRead: function {
     }
     bn2: emitLocalAtomNameAt :symtab :ctx nid: baseAtomNid name: bn2r.stringView vid: baseAtomVid
     # a base atom that names a FUNCTION auto-calls, so the receiver is what the
-    # call returns (`mkList.length`), not a local to address: it takes the legs
-    # a call base takes, exactly as the parenthesised `(mkList).length` does
-    if (baseAtomNamesFunction :symtab n: (ast.nodes.get i: n.parent.u64)) then bn2 = "".string
+    # call returns (`mkList.length`), and a string constant is its static: neither
+    # is a local to address, so each takes the legs a call base takes, exactly as
+    # the parenthesised `(mkList).length` does
+    if (baseAtomReadsAsValue :symtab n: (ast.nodes.get i: n.parent.u64)) then bn2 = "".string
     # a base with no atom NAME still has a stamped type. Every native leg
     # below sits behind `bn2.length > 0`, so a projection ((zast.poolTextAt pool: ast.names ref: h.text).stringView)
     # or a call (s.trim, (mk s: s)) skipped the lot and fell through to the
