@@ -3772,6 +3772,24 @@ isFieldTake: function {ast: Ast.view n: astnode.view} out bool is {
     }
 }
 
+# isLocalTake -- true iff `n` reduces to `<local>.take`: a move out of a variable,
+# which a binding of a collection must zero as it does a bare move.
+isLocalTake: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.view} out bool is {
+    match (
+        n
+    ) case statementline then {
+        return (isLocalTake :ast :symtab n: (ast.nodes.get i: n.statementline.u64))
+    } case dottedpath then {
+        cn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
+        if (ztypecheck.isMoveMarker name: cn.stringView).not then return false
+        pn: ast.nodes.get i: n.parent.u64
+        if pn.atomid.not then return false
+        return (symtab.typing.atomVariableId.has key: pn.nodeid.u64)
+    } else {
+        return false
+    }
+}
+
 # emitNarrowedTakeZero -- before a return's scope cleanup, zero the payload box of
 # every narrowed-subject `.take` reachable in the return value (a bare take, or a take
 # passed as a construction/call arg). The un-shadowed narrowed subject is freed by the
@@ -15830,9 +15848,9 @@ emitListBind: function {
                         buf.append lzi0
                     }
                 }
-                # a take out of a FIELD moves the buffer the same way:
-                # the field is zeroed so the holder's destroy no-ops
-                if (isFieldTake :ast n: avn) then {
+                # a take out of a FIELD or a local moves the buffer the same
+                # way: the source is zeroed so its owner's destroy no-ops
+                if (isFieldTake :ast n: avn) or (isLocalTake :ast :symtab n: avn) then {
                     lzf0: "\{ind}\{lvr0} = (\{lcb}_t){0};\n"
                     buf.append lzf0
                 }
@@ -15883,9 +15901,9 @@ emitHeapColBind: function {
                 buf.append hzi0
             }
         }
-        # a take out of a FIELD moves the allocation the same way: the
-        # field is cleared so the holder's destroy no-ops
-        if (isFieldTake :ast n: avn) then {
+        # a take out of a FIELD or a local moves the allocation the same
+        # way: the source is cleared so its owner's destroy no-ops
+        if (isFieldTake :ast n: avn) or (isLocalTake :ast :symtab n: avn) then {
             hzf0: "\{ind}\{hvr} = NULL;\n"
             buf.append hzf0
         }
