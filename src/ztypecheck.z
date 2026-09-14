@@ -11201,6 +11201,24 @@ resolveClassField: function {
     return needsDtor
 }
 
+# attachGenericAsConstants -- a generic class's `as` constants: a concrete class
+# attaches them with its methods, which a template does not.
+attachGenericAsConstants: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    cid: u64
+    cnode: objref
+} is {
+    k: u64
+    for k < cnode.nas loop {
+        item: argRefAt :ast nid: (zast.objAsItemAt :ast nid: cnode.nid i: k)
+        k = k + 1
+        if item.nid.isZero or item.operation.isZero then continue
+        if (isFunctionDefOp op: (ast.nodes.get i: item.operation.u64)) then continue
+        attachAsConstant :st :ast parentId: (ztypes.tid.create from: cid.u64) :item
+    }
+}
+
 # resolveClassAsMethods -- resolve the methods a class declares in its `as`
 # block: each signature, and the member entry that makes it reachable from the
 # type. Native declarations in a generic collection family resolve like a
@@ -11215,6 +11233,7 @@ resolveClassAsMethods: function {
     isgen: bool
     cnode: objref
 } is {
+    if isgen then attachGenericAsConstants :st :ast :cid :cnode
     kAiterP4: u64
     for kAiterP4 < cnode.nas loop {
         amP4Id: (zast.objAsItemAt :ast nid: cnode.nid i: kAiterP4).u32
@@ -23125,6 +23144,10 @@ checkUnitQualifiedMember: function {
         match (
             memberDecl
         ) case some then {
+            if (refuseTemplateOnlyConstant :st :ast :dp :bt :cnId) then return (callleg
+                handled: true
+                tid: ztypes.tid
+            )
             return (callleg handled: true tid: (checkUnitMemberValue
                 :st
                 :ast
@@ -23137,12 +23160,7 @@ checkUnitQualifiedMember: function {
             )
             )
         } case none then {
-            # an instance's numeric generic parameter is read through it as
-            # through a type
-            npU: checkNumericParamMember :st :ast :dp :bt :cnId
-            if npU.handled then return npU
-            reportUnknownUnitMember :st :ast :dp :bt :cnId un: un.stringView
-            return (callleg handled: true tid: (ztypes.tid.create from: 0))
+            return (checkUnitUndeclaredMember :st :ast :dp :bt :cnId un: un.stringView)
         }
     }
     return (callleg handled: false tid: (ztypes.tid.create from: 0))
@@ -23469,6 +23487,178 @@ derivedInequalityMember: function {
         if (st.typing.synthCmpTids.has item: eqM9.u64).not then return (optionval.some eqM9)
     } case none then null
     return (optionval.none u64)
+}
+
+# refuseTemplateOnlyConstant -- a generic template's constant that reads one of
+# its numeric generic parameters, read through the template itself where no
+# instance is being walked: it has a value only in an instance. True when it
+# reported.
+refuseTemplateOnlyConstant: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+} out bool is {
+    if (st.reg.genericOriginOf tid: bt).isZero.not then return false
+    tdecl: declOfTypeId :st tid: bt
+    if (st.reg.genericParamCountOf :tdecl) == 0 then return false
+    if (activeConstMono :st ownerDecl: tdecl).isZero.not then return false
+    # inside the template each instance's walk values it
+    if (frameWithinDecl :st frame: st.curFrame decl: tdecl) then return false
+    cd: st.typing.declFindChild parentDeclId: tdecl nameId: cnId
+    if cd.isZero then return false
+    opId: zast.nodeid
+    {
+        cdo: st.typing.decls.get i: cd.u64
+        dn: ast.nodes.get i: cdo.node.u64
+        if dn.namedoperation then opId = dn.operation
+    }
+    if opId.isZero then return false
+    if (constReadsNumericParam :st :ast owner: tdecl :opId).not then return false
+    cn: zast.nameTextAt :ast ref: cnId
+    tn: st.reg.nameOf tid: bt
+    (addErrorH
+        :st
+        nodeid: dp.nid
+        lineno: dp.lineno
+        colno: dp.colno
+        e: zast.err.constError
+        msg: "'\{cn}' reads a numeric generic parameter of '\{tn}', which only an instance has a value for"
+        note: String
+        hint: "read it through an instance of '\{tn}'"
+        width: cn.length.u32.orPanic
+    )
+    return true
+}
+
+# frameWithinDecl -- whether `frame` is `decl` or nested inside it.
+frameWithinDecl: function {
+    st: zenv.ZSymbolTable.view frame: ztypes.declid decl: ztypes.declid
+} out bool is {
+    cur: frame
+    for cur > 0 loop {
+        if cur == decl then return true
+        cur = st.typing.declParentOf declId: cur
+    }
+    return false
+}
+
+# constReadsNumericParam -- whether a constant's value expression names a
+# numeric generic parameter of `owner`, through an operator, an `if` or a
+# `match` as the constant fold reaches it.
+constReadsNumericParam: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    owner: ztypes.declid
+    opId: zast.nodeid
+} out bool is {
+    if opId.isZero then return false
+    kids: ListVal u32
+    nameId: zast.nameid
+    {
+        n: ast.nodes.get i: opId.u64
+        nameId = bareAtomNameId :n
+        ip: zast.infixPartsOf :ast :n
+        if ip.found then {
+            kids.append from: ip.lhs.u32
+            kids.append from: ip.rhs.u32
+        }
+    }
+    if nameId.isZero.not then return (numericParamOwnerFrom :st frame: owner :nameId).isZero.not
+    with kit: kids.iterate do for k: kit loop {
+        if (constReadsNumericParam :st :ast :owner opId: (zast.nodeid.create from: k)
+        ) then return true
+    }
+    return (constBranchReadsNumericParam :st :ast :owner :opId)
+}
+
+# constBranchReadsNumericParam -- constReadsNumericParam over an `if`'s
+# conditions and branch values, the forms a unit-level `if` folds.
+constBranchReadsNumericParam: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    owner: ztypes.declid
+    opId: zast.nodeid
+} out bool is {
+    clauseIds: ListVal u32
+    site: readUnitIf :ast nid: opId :clauseIds
+    with cit: clauseIds.iterate do for clauseId: cit loop {
+        condIds: ListVal u32
+        stmtId: readIfClause :ast :clauseId :condIds
+        with dit: condIds.iterate do for condId: dit loop {
+            if (constReadsNumericParam :st :ast :owner opId: (zast.nodeid.create from: condId)
+            ) then return true
+        }
+        if stmtId.isZero.not when (constReadsNumericParam :st :ast :owner opId: stmtId
+        ) then return true
+    }
+    if site.elseId > 0 then return (constReadsNumericParam :st :ast :owner opId: site.elseId)
+    return false
+}
+
+# checkUnitUndeclaredMember -- `unit.name` naming no member the unit declares: an
+# instance's numeric generic parameter, or a constant of its template, both read
+# through it as through a type; anything else is unknown.
+checkUnitUndeclaredMember: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+    un: StringView
+} out callleg is {
+    npU: checkNumericParamMember :st :ast :dp :bt :cnId
+    if npU.handled then return npU
+    icU: checkInstanceConstant :st :ast :dp :bt :cnId
+    if icU.handled then return icU
+    reportUnknownUnitMember :st :ast :dp :bt :cnId :un
+    return (callleg handled: true tid: ztypes.tid)
+}
+
+# checkInstanceConstant -- a template's constant read through an instantiation
+# (`a.LIMIT`, `a.BIG` on a unit instance): the template declares it, and it is
+# evaluated for the instantiation, whose numeric generic parameters it may read.
+checkInstanceConstant: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+} out callleg is {
+    miss: callleg handled: false tid: ztypes.tid
+    origin: st.reg.genericOriginOf tid: bt
+    if origin.isZero then return miss
+    tdecl: declOfTypeId :st tid: (ztypes.tid.create from: origin.u64)
+    cd: st.typing.declFindChild parentDeclId: tdecl nameId: cnId
+    if cd.isZero then return miss
+    dnode: u32
+    {
+        cdo: st.typing.decls.get i: cd.u64
+        dnode = cdo.node
+    }
+    prevMono: st.typing.constMono
+    st.typing.constMono = bt.u64
+    v: (constValueOfMemberAt
+        :st
+        :ast
+        unitDecl: (unitRootOfDecl :st declId: cd)
+        ownerDecl: tdecl
+        nameId: cnId
+        defNodeId: dnode
+    )
+    st.typing.constMono = prevMono
+    if v.kind.none then return miss
+    vt: constNumTidOf :ast :st frame: st.curFrame :v
+    if vt.isZero then {
+        vto: st.typing.declChildOfId parentTypeId: (ztypes.tid.create from: origin.u64) nameId: cnId
+        vt = ztypes.tid.create from: (vto.or d: 0)
+    }
+    if vt.isZero then return miss
+    st.typing.setNodeConstIn mono: st.typing.curMonoStamp nid: dp.nid value: v
+    stampGate :st nid: dp.nid.u64 tid: vt
+    stampRefDecl :st nid: dp.nid.u64 declId: cd
+    return (callleg handled: true tid: vt)
 }
 
 # baseRunsCall -- whether reading a dotted base runs a call: a call, or a bare
@@ -23846,12 +24036,16 @@ checkResolvedMember: function {
     # a type's `as` constant reads as its value, typed by it
     memberDecl: st.typing.declMemberIdOf parentTypeId: bt nameId: cnId
     if (st.typing.isAsConstDecl declId: memberDecl) then {
-        acv: st.typing.memberConstOf parentTypeId: bt nameId: cnId
+        # an instantiation's constant is folded for it when first read: its
+        # template's value may read a numeric generic parameter
+        acv: constValueOfMemberTidId :ast :st unitTid: bt nameId: cnId
         if acv.kind.none.not then (st.typing.setNodeConstIn
             mono: st.typing.curMonoStamp
             nid: dp.nid
             value: acv
         )
+        if acv.kind.none when (refuseTemplateOnlyConstant :st :ast :dp :bt :cnId
+        ) then return ztypes.tid
         stampGate :st nid: dp.nid.u64 tid: (ztypes.tid.create from: mo.u64)
         return (ztypes.tid.create from: mo)
     }
@@ -25538,8 +25732,10 @@ checkUnboundAtom: function {
         isLit = isNumericLiteralName name: ndNm.stringView
     }
     if isLit then return (checkLiteralAtom :st :ast :node)
-    result: typeOfBareName :st :unitDecl :ast :node
-    if result.isZero then result = checkNumericParamAtom :st :ast :node
+    # the parameter is the innermost scope's: a unit template declares it as a
+    # member, where a type lookup would find it as a name
+    result: checkNumericParamAtom :st :ast :node
+    if result.isZero then result = typeOfBareName :st :unitDecl :ast :node
     return result
 }
 
@@ -25570,13 +25766,23 @@ checkNumericParamAtom: function {
 # numericParamOwner -- the declaration, enclosing the current frame, whose
 # numeric generic parameter `nameId` is; 0 when none is.
 numericParamOwner: function {st: zenv.ZSymbolTable.view nameId: zast.nameid} out ztypes.declid is {
-    cur: st.curFrame
+    return (numericParamOwnerFrom :st frame: st.curFrame :nameId)
+}
+
+# numericParamOwnerFrom -- the declaration at or enclosing `frame` whose numeric
+# generic parameter `nameId` is; 0 when none is.
+numericParamOwnerFrom: function {
+    st: zenv.ZSymbolTable.view
+    frame: ztypes.declid
+    nameId: zast.nameid
+} out ztypes.declid is {
+    cur: frame
     for cur > 0 loop {
         if (st.reg.genericParamConstraintOf tdecl: cur paramName: nameId
         ).numKind.has then return cur
         cur = st.typing.declParentOf declId: cur
     }
-    return ztypes.declid
+    return (ztypes.declid.create from: 0)
 }
 
 # isFloatLiteralName -- a numeric-literal atom carrying a decimal point (the
@@ -36950,13 +37156,36 @@ caseSubjectTid: function {
     # a numeric generic parameter is dissected per mono, never matched as the
     # number it reads as
     if (st.typing.numericParamRead.has key: casenode.subject.u64) then {
-        return (caseGenericSubjectTid :st :unitDecl :ast :casenode)
+        gs: caseGenericSubjectTid :st :unitDecl :ast :casenode
+        if gs.isZero then gs = unitParamSubjectTid :st :unitDecl :ast :casenode
+        return gs
     }
     if subjT.isZero then subjT = caseGenericSubjectTid :st :unitDecl :ast :casenode
     if subjT.isZero when st.typing.errors.length == errS then {
         reportUnresolvedValue :st :unitDecl :ast nid: casenode.subject
     }
     return subjT
+}
+
+# unitParamSubjectTid -- a bare match subject naming a generic UNIT's parameter:
+# the unit declares it as a member, and the type it names there is the
+# parameter's GENERIC_PARAM type, which checkCase dissects. 0 for any other.
+unitParamSubjectTid: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    casenode: caseref
+} out ztypes.tid is {
+    nameId: bareAtomNameId n: (ast.nodes.get i: casenode.subject.u64)
+    if nameId.isZero then return ztypes.tid
+    ro: walkLookupTyperefById :st frame: st.curFrame :ast :unitDecl baseId: nameId
+    match (
+        ro
+    ) case some then {
+        rt: ztypes.tid.create from: ro.u64
+        if (st.reg.isTypeParamOf tid: rt) then return rt
+    } case none then null
+    return ztypes.tid
 }
 
 # consumedCaseTid -- a `match` whose value is consumed yields one type from every
@@ -40513,12 +40742,20 @@ constantAtomType: function {
             result = st.reg.literalIntTid
         }
     } else {
-        ro: walkLookupTyperef :st :frame :ast :unitDecl base: trN.stringView
-        match (
-            ro
-        ) case some then {
-            result = ro
-        } case none then null
+        # a template's numeric generic parameter types by its bound, where a
+        # lookup would find its declaration as a name
+        npOwn: numericParamOwnerFrom :st :frame :nameId
+        if npOwn.isZero.not then {
+            cdN: st.reg.genericParamConstraintOf tdecl: npOwn paramName: nameId
+            result = (numericBoundTid :ast :st :frame cd: cdN).u64
+        } else {
+            ro: walkLookupTyperef :st :frame :ast :unitDecl base: trN.stringView
+            match (
+                ro
+            ) case some then {
+                result = ro
+            } case none then null
+        }
     }
     if result > 0 then {
         (ztyping.nodeTypeSet
@@ -42022,12 +42259,19 @@ constValueOfMemberTidId: function {
     if unitTid.isZero then return ztypes.noConst
     nid: nameId
     if nid.isZero then return ztypes.noConst
-    k: st.typing.memberConstKey parentTypeId: unitTid nameId: nid
+    # a template's constant read while one of its instantiations is walked is
+    # that instantiation's (activeConstMono); the memo and the value are its
+    readTid: unitTid
+    if (st.reg.genericParamCountOf tdecl: (declOfTypeId :st tid: unitTid)) > 0 then {
+        am: activeConstMono :st ownerDecl: (declOfTypeId :st tid: unitTid)
+        if am.isZero.not then readTid = am
+    }
+    k: st.typing.memberConstKey parentTypeId: readTid nameId: nid
     sg: st.typing.constEvalState.get key: k
     match (
         sg
     ) case some then {
-        if sg == 2 then return (st.typing.memberConstOf parentTypeId: unitTid nameId: nid)
+        if sg == 2 then return (st.typing.memberConstOf parentTypeId: readTid nameId: nid)
     } case none then null
     # not folded yet -- READING a constant is what folds it, so descend into
     # the owner's declaration and fold there, then read back. Without this a
@@ -42039,7 +42283,7 @@ constValueOfMemberTidId: function {
     cd: st.typing.declFindChild parentDeclId: od nameId: nid
     if cd.isZero then return ztypes.noConst
     constFoldDecl :st :ast declId: cd
-    return (st.typing.memberConstOf parentTypeId: unitTid nameId: nid)
+    return (st.typing.memberConstOf parentTypeId: readTid nameId: nid)
 }
 
 # constValueOfMember -- the compile-time value of `unitDecl.defName`, evaluated
@@ -42156,6 +42400,10 @@ constValueOfMemberAt: function {
     utid: declTypeIdOf :st declId: ownerDecl
     nid: nameId
     if utid.isZero then return ztypes.noConst
+    # a template's constant is evaluated, and kept, for the instantiation it is
+    # read for: its numeric generic parameters have that instantiation's values
+    evalMono: activeConstMono :st :ownerDecl
+    if evalMono.isZero.not then utid = evalMono
     k: st.typing.memberConstKey parentTypeId: utid nameId: nid
     # u64 because that is what the state table holds, and a binding's type IS
     # its initializer
@@ -42209,6 +42457,8 @@ constValueOfMemberAt: function {
     st.typing.constEvalState.set key: k value: 1.u8
     # the value is evaluated in the frame of the unit that owns the member --
     # the owner itself, which the caller already holds
+    prevMono: st.typing.constMono
+    if evalMono.isZero.not then st.typing.constMono = evalMono.u64
     valFound: (evalConstNode
         :st
         frame: ownerDecl
@@ -42216,11 +42466,41 @@ constValueOfMemberAt: function {
         :unitDecl
         nid: (zast.nodeid.create from: opid)
     )
+    st.typing.constMono = prevMono
     st.typing.constEvalState.set key: k value: 2.u8
     if valFound.kind.none.not then {
         st.typing.setMemberConst parentTypeId: utid nameId: nid value: valFound
     }
     return valFound
+}
+
+# activeConstMono -- the instantiation a constant of `ownerDecl` is evaluated
+# for: the owner's own type when that is an instantiation, else the one a read
+# is for (constMono) or the one being walked (curMonoStamp), when its template
+# is the owner. 0 when the constant is the template's alone.
+activeConstMono: function {st: zenv.ZSymbolTable.view ownerDecl: ztypes.declid} out ztypes.tid is {
+    own: declTypeIdOf :st declId: ownerDecl
+    if own.isZero then return ztypes.tid
+    if (st.reg.genericOriginOf tid: own).isZero.not then return own
+    if (st.reg.genericParamCountOf tdecl: ownerDecl) == 0 then return ztypes.tid
+    if (monoOfTemplate :st mono: st.typing.constMono :ownerDecl) then {
+        return (ztypes.tid.create from: st.typing.constMono)
+    }
+    if (monoOfTemplate :st mono: st.typing.curMonoStamp :ownerDecl) then {
+        return (ztypes.tid.create from: st.typing.curMonoStamp)
+    }
+    return ztypes.tid
+}
+
+# monoOfTemplate -- whether `mono` is an instantiation of the template
+# `ownerDecl` declares.
+monoOfTemplate: function {
+    st: zenv.ZSymbolTable.view mono: u64 ownerDecl: ztypes.declid
+} out bool is {
+    if mono == 0 then return false
+    origin: st.reg.genericOriginOf tid: (ztypes.tid.create from: mono)
+    if origin.isZero then return false
+    return (declOfTypeId :st tid: (ztypes.tid.create from: origin.u64)) == ownerDecl
 }
 
 # constBlockValue -- the value a branch block yields: its LAST statement's,
@@ -43720,7 +44000,7 @@ evalConstNode: function {
         }
         if noName then return ztypes.noConst
         if isLit then return litVal
-        if st.typing.curMonoStamp > 0 then {
+        if st.typing.constMono > 0 or (st.typing.curMonoStamp > 0) then {
             gv: monoNumericParamValue :st nameId: plan.nameId
             if gv.kind.none.not then return gv
         }
@@ -43801,7 +44081,9 @@ numericParamThroughValue: function {
 monoNumericParamValue: function {
     st: zenv.ZSymbolTable.view nameId: zast.nameid
 } out ztypes.cval is {
-    mono: ztypes.tid.create from: st.typing.curMonoStamp
+    m: st.typing.constMono
+    if m == 0 then m = st.typing.curMonoStamp
+    mono: ztypes.tid.create from: m
     origin: st.reg.genericOriginOf tid: mono
     if origin.isZero then return ztypes.noConst
     tdecl: declOfTypeId :st tid: (ztypes.tid.create from: origin.u64)
@@ -45157,6 +45439,9 @@ unfoldedNameWhy: function {
     nameId: zast.nameid
     visiting: ListVal u32
 } out bool is {
+    # a template's constant over its numeric generic parameter has a value in
+    # each instantiation, and none of its own
+    if (numericParamOwnerFrom :st :frame :nameId).isZero.not then return true
     nameText: zast.nameTextCopy :ast ref: nameId
     od: constOwnerDeclForId :st :frame :unitDecl :nameId
     cd: st.typing.declFindChild parentDeclId: od :nameId
