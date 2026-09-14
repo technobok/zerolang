@@ -3020,22 +3020,20 @@ collectMonoRefArgs: function {
             an: atomName :ast n: (ast.nodes.get i: arg.operation.u64)
             cdR: st.reg.genericParamConstraintOf :tdecl paramName: arg.name
             if arg.name.isZero.not when cdR.numKind.has then {
-                naR: (numericGenericArg
-                    :ast
+                if (collectNumericMonoRefArg
                     :st
+                    :ast
                     :unitDecl
                     :frame
+                    :thisName
+                    :enclDecl
                     :tdecl
-                    param: arg.name
-                    argOp: arg.operation
-                    inBody: false
-                )
-                if naR.state.refused then {
-                    allOk = false
-                } else {
-                    appendNumericArgSuffix :sfx bits: naR.bits cd: cdR
-                    valSubsR.set key: arg.name value: naR.bits
-                }
+                    :arg
+                    an: an.stringView
+                    :sfx
+                    :typeSubs
+                    :valSubsR
+                ).not then allOk = false
             } else if (isNumericLiteralName name: an.stringView) then {
                 sfx.append s: "_"
                 sfx.append s: an
@@ -3125,6 +3123,147 @@ validateMonoRefLabels: function {
             }
         }
     }
+}
+
+# reportDependentTypeArg -- a type reference's numeric argument computed from a
+# generic parameter (`(array t: i64 to: cap + 1)`): an instance completes a
+# reference over the parameter itself, not over an expression of it.
+reportDependentTypeArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    tdecl: ztypes.declid
+    param: zast.nameid
+    argOp: zast.nodeid
+} is {
+    st.typing.numericArgsRefused.add item: argOp.u64
+    pn: zast.nameTextAt :ast ref: param
+    tn: st.reg.nameOf tid: (declTypeIdOf :st declId: tdecl)
+    n: ast.nodes.get i: argOp.u64
+    (addErrorH
+        :st
+        nodeid: (nodeId :n)
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.constError
+        msg: "generic parameter '\{pn}' of '\{tn}' is computed from a generic parameter in a type: only the parameter itself completes per instance there"
+        note: String
+        hint: "name the parameter (`\{pn}: cap`), or build the value in the body, where an expression of it is allowed"
+        width: 1
+    )
+}
+
+# bareArgNamesNothing -- a type reference's argument that is a bare name no type
+# and no constant in scope declares.
+bareArgNamesNothing: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    arg: argref
+} out bool is {
+    nameId: bareAtomNameId n: (ast.nodes.get i: arg.operation.u64)
+    if nameId.isZero or (isNumericLiteralNameAt :ast ref: nameId) then return false
+    if (walkLookupTyperefById :st :frame :ast :unitDecl baseId: nameId).some then return false
+    od: constOwnerDeclForId :st :frame :unitDecl :nameId
+    return (st.typing.declFindChild parentDeclId: od :nameId).isZero
+}
+
+# collectNumericMonoRefArg -- a type reference's argument for a numeric generic
+# parameter: the enclosing template's own parameter makes the reference a
+# partial each instance completes; any other compile-time integer is its value.
+# false when the reference does not settle here.
+collectNumericMonoRefArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    thisName: StringView
+    enclDecl: ztypes.declid
+    tdecl: ztypes.declid
+    arg: argref
+    an: StringView
+    sfx: String
+    typeSubs: (IdMapV zast.nameid v: u64)
+    valSubsR: (IdMapV zast.nameid v: u64)
+} out bool is {
+    depR: numericParamRefTid :st :ast :unitDecl :frame :thisName :enclDecl :arg
+    if depR.isZero.not then {
+        sfx.append s: "_"
+        sfx.append s: an
+        typeSubs.set key: arg.name value: depR.u64
+        return true
+    }
+    # re-resolved without its enclosing declaration (a recorded signature ref):
+    # a template's parameter is not visible here, and the resolution that has
+    # the declaration answers
+    if enclDecl.isZero when (bareArgNamesNothing :st :ast :unitDecl :frame :arg) then return false
+    naR: (numericGenericArg
+        :ast
+        :st
+        :unitDecl
+        :frame
+        :tdecl
+        param: arg.name
+        argOp: arg.operation
+        inBody: false
+    )
+    if naR.state.dependent then {
+        reportDependentTypeArg :st :ast :tdecl param: arg.name argOp: arg.operation
+        return false
+    }
+    if naR.state.refused then return false
+    (appendNumericArgSuffix
+        :sfx
+        bits: naR.bits
+        cd: (st.reg.genericParamConstraintOf :tdecl paramName: arg.name)
+    )
+    valSubsR.set key: arg.name value: naR.bits
+    return true
+}
+
+# numericParamRefTid -- a type reference's numeric argument that is a bare name
+# of a numeric generic parameter of the declaration enclosing it: that
+# parameter's GENERIC_PARAM type, which makes the reference a partial each
+# instance completes with its own value. 0 for any other argument.
+numericParamRefTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    # the frame the reference is resolved in, whose enclosing template is asked
+    # when no enclosing declaration is given
+    frame: ztypes.declid
+    # the enclosing type's name, asked last: a signature's reference is
+    # recorded with its owner's name and no declaration
+    thisName: StringView
+    enclDecl: ztypes.declid
+    arg: argref
+} out ztypes.tid is {
+    nameId: bareAtomNameId n: (ast.nodes.get i: arg.operation.u64)
+    if nameId.isZero then return ztypes.tid
+    owner: enclDecl
+    if owner.isZero then owner = numericParamOwnerFrom :st :frame :nameId
+    if owner.isZero when thisName.length > 0 then {
+        tto: walkLookupTyperef :st :frame :ast :unitDecl base: thisName
+        match (
+            tto
+        ) case some then {
+            owner = declOfTypeId :st tid: (ztypes.tid.create from: tto.u64)
+        } case none then null
+    }
+    if owner.isZero then return ztypes.tid
+    if (st.reg.genericParamConstraintOf tdecl: owner paramName: nameId
+    ).numKind.has.not then return ztypes.tid
+    recordGenericParamRef :st nid: arg.operation.u64 frame: owner name: nameId
+    po: st.reg.genericParamTidOf tdecl: owner paramName: nameId
+    match (
+        po
+    ) case some then {
+        return (ztypes.tid.create from: po.u64)
+    } case none then null
+    pnt: zast.nameTextCopy :ast ref: nameId
+    pt: st.reg.newType name: pnt.stringView typetype: ztypes.ztypetype.genericParam
+    st.reg.setGenericParamTid tdecl: owner paramName: nameId tid: pt
+    return pt
 }
 
 # monoRefTemplateTid -- the template a mono type-reference names: a name the
@@ -15738,6 +15877,60 @@ registerMonoFnParams: function {
     }
 }
 
+# completeUnitMonoPartial -- a partial parameter type of a unit template's
+# function, completed with the instance's arguments; the partial itself when
+# nothing substitutes.
+completeUnitMonoPartial: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    rf: ztypes.declid
+    partialTid: u64
+    idSubs: (IdMapV u64 v: u64)
+} out u64 is {
+    rsp: (respecialize
+        :st
+        frame: rf
+        :ast
+        unitDecl: (unitRootOfDecl :st declId: rf)
+        specTid: partialTid
+        :idSubs
+    )
+    if rsp > 0 then return rsp
+    return partialTid
+}
+
+# unitMonoIdSubs -- a unit instance's arguments keyed by its template's
+# GENERIC_PARAM ids, as a spec's are: a type's id, or a numeric value.
+unitMonoIdSubs: function {
+    st: zenv.ZSymbolTable.view
+    tdecl: ztypes.declid
+    monoId: ztypes.tid
+    subs: (IdMapV zast.nameid v: u64).view
+    idSubs: (IdMapV u64 v: u64)
+} is {
+    pn: st.reg.genericParamNamesOf :tdecl
+    pi: u64
+    for pi < pn.length loop {
+        pnm: pn.get i: pi
+        po: st.reg.genericParamTidOf :tdecl paramName: pnm
+        match (
+            po
+        ) case some then {
+            if (st.reg.genericArgIsValueAt specId: monoId ordinal: pi) then {
+                idSubs.set key: po value: (st.reg.genericArgAt specId: monoId ordinal: pi)
+            } else {
+                sg: subs.get key: pnm
+                match (
+                    sg
+                ) case some then {
+                    idSubs.set key: po value: sg
+                } case none then null
+            }
+        } case none then null
+        pi = pi + 1
+    }
+}
+
 # fillMonoMethodSignature -- copy a template method's parameters and return type
 # into the mono's method, with the instantiation's arguments substituted for the
 # generic parameters the template names.
@@ -15751,8 +15944,14 @@ fillMonoMethodSignature: function {
     newFnId: ztypes.tid
     subs: (IdMapV zast.nameid v: u64).view
     gpNames: (IdMapV zast.nameid v: bool).view
+    # the unit instance and its template, whose arguments complete a partial
+    # parameter type
+    monoId: ztypes.tid
+    tplId: ztypes.tid
 } is {
     otBm: ztypes.tid.create from: srcId.u64
+    idSubs: IdMapV u64 v: u64
+    idSubsBuilt: false
     ci: u64
     cn3: st.typing.declRowSlots ownerTid: otBm
     for ci < cn3 loop {
@@ -15762,6 +15961,17 @@ fillMonoMethodSignature: function {
             chName: zast.nameid.create from: rwBm.name.u32.orPanic
             chId: rwBm.tid
             target: chId
+            if (st.reg.isPartialOf tid: (ztypes.tid.create from: chId.u64)) then {
+                if idSubsBuilt.not then (unitMonoIdSubs
+                    :st
+                    tdecl: (declOfTypeId :st tid: tplId)
+                    :monoId
+                    :subs
+                    :idSubs
+                )
+                idSubsBuilt = true
+                target = completeUnitMonoPartial :st :ast :rf partialTid: chId :idSubs
+            }
             ctnT: st.reg.nameOf tid: (ztypes.tid.create from: chId.u64)
             ctn: nameIdOf :ast name: ctnT.stringView
             cgo: gpNames.get key: ctn
@@ -15932,6 +16142,8 @@ buildUnitMonoMember: function {
                 :newFnId
                 :subs
                 :gpNames
+                :monoId
+                :tplId
             )
         }
         (registerMonoFnParams
@@ -17989,16 +18201,13 @@ respecialize: function {
     for mi < an loop {
         mp: pn.get i: mi
         mv: mapped.get i: mi
-        sfx.append s: "_"
-        if (st.reg.genericArgIsValueAt
-            specId: (ztypes.tid.create from: specTid.u64)
-            ordinal: mi
-        ) then {
+        cdm: st.reg.genericParamConstraintOf tdecl: tk paramName: mp
+        if cdm.numKind.has then {
             vv9r: mv
             rvSubs.set key: mp value: vv9r
-            nvs: "\{mv}"
-            sfx.append s: nvs
+            appendNumericArgSuffix :sfx bits: mv cd: cdm
         } else {
+            sfx.append s: "_"
             sv: mv
             typeSubs.set key: mp value: sv
             vn: monoValName :st :frame :ast tid: (ztypes.tid.create from: mv.u64)
@@ -19350,13 +19559,59 @@ recordNumericArgConsts: function {
     }
 }
 
+# numericLevelKeyedByParam -- whether a spec's keys put a generic parameter's
+# type at a numeric parameter's level: a reference inside a template over its
+# own numeric parameter.
+numericLevelKeyedByParam: function {
+    st: zenv.ZSymbolTable.view
+    tk8: ztypes.declid
+    pnames8: (ListVal zast.nameid).view
+    keyIsVal8: (ListVal bool).view
+} out bool is {
+    pi: u64
+    for pi < pnames8.length loop {
+        if pi < keyIsVal8.length when (keyIsVal8.get i: pi
+        ).not when (st.reg.genericParamConstraintOf
+            tdecl: tk8
+            paramName: (pnames8.get i: pi)
+        ).numKind.has then return true
+        pi = pi + 1
+    }
+    return false
+}
+
+# mintValuePartialSpec -- the partial such a reference is: the template's
+# arguments recorded, a generic parameter among them, and no trie entry.
+mintValuePartialSpec: function {
+    st: zenv.ZSymbolTable
+    templateId: ztypes.tid
+    sfx: StringView
+    keys8: (ListVal u64).view
+    keyIsVal8: (ListVal bool).view
+} out ztypes.tid is {
+    mn: "\{st.reg.nameOf tid: templateId}\{sfx}"
+    mid: st.reg.newType name: mn.stringView typetype: ztypes.ztypetype.genericParam
+    st.reg.setGenericOrigin typeId: mid value: templateId.u64
+    st.reg.setPartial typeId: mid value: true
+    ki: u64
+    for ki < keys8.length loop {
+        if (keyIsVal8.get i: ki) then {
+            st.reg.appendGenericArgValue specId: mid value: (keys8.get i: ki)
+        } else {
+            st.reg.appendGenericArg specId: mid arg: (keys8.get i: ki)
+        }
+        ki = ki + 1
+    }
+    st.reg.specWasFresh = true
+    return mid
+}
+
 # buildSpecIdSubs -- the same substitutions the trie keys carry, keyed by the
 # template's generic-parameter DECLARATION ids rather than by name.
 buildSpecIdSubs: function {
     st: zenv.ZSymbolTable.view
     pnames8: (ListVal zast.nameid).view
     keys8: (ListVal u64).view
-    keyIsVal8: (ListVal bool).view
     idSubs8: (IdMapV u64 v: u64)
     tk8: ztypes.declid
 } is {
@@ -19368,11 +19623,11 @@ buildSpecIdSubs: function {
         match (
             pto8
         ) case some then {
-            if (keyIsVal8.get i: pi8).not then {
-                kv8: keys8.get i: pi8
-                pk8: pto8
-                idSubs8.set key: pk8 value: kv8
-            }
+            # a numeric parameter's value substitutes too: a reference over the
+            # parameter inside the template completes with it
+            kv8: keys8.get i: pi8
+            pk8: pto8
+            idSubs8.set key: pk8 value: kv8
         } case none then null
         pi8 = pi8 + 1
     }
@@ -19445,6 +19700,11 @@ getOrMintSpec: function {
         :keys8
         :keyIsVal8
     )
+    # a numeric level keyed by a generic parameter is a partial that stays off
+    # the trie, where a value and a type id could coincide
+    if trieOk8 when (numericLevelKeyedByParam :st :tk8 :pnames8 :keyIsVal8) then {
+        return (mintValuePartialSpec :st :templateId :sfx :keys8 :keyIsVal8)
+    }
     if trieOk8 then {
         cur8: templateId
         ki8: u64
@@ -19472,7 +19732,7 @@ getOrMintSpec: function {
     # decided once, where the spec is minted
     mn8: "\{st.reg.nameOf tid: templateId}\{sfx}"
     idSubs8: IdMapV u64 v: u64
-    if trieOk8 then buildSpecIdSubs :st :pnames8 :keys8 :keyIsVal8 :idSubs8 :tk8
+    if trieOk8 then buildSpecIdSubs :st :pnames8 :keys8 :idSubs8 :tk8
     # A generic-parameter argument makes the spec partial -- and so does a
     # nested PARTIAL argument, which wears the same tag. Both readings are
     # wanted here and the tag is what carries both: narrowing this to
@@ -20370,6 +20630,9 @@ numargstate: variant {
     value: null
     # no value, and the reason is reported
     refused: null
+    # no value in this walk, because the argument reads a numeric generic
+    # parameter of the template being walked: each instance's walk has one
+    dependent: null
 } as { tag: u8.tag }
 
 # numarg -- one numeric generic argument, read.
@@ -20441,6 +20704,9 @@ numericGenericArgRead: function {
         fold: numericArgFold :ast :st :unitDecl :frame :tdecl :param :argOp :nameId :inBody
         if fold.reported then return refused
         v = fold.v
+        if v.kind.none when (constReadsNumericParam :st :ast owner: frame opId: argOp) then {
+            return (numarg state: numargstate.dependent bits: 0)
+        }
     }
     if (numericArgHasInteger :ast :st :unitDecl :frame :tdecl :param :argOp :nameId :v
     ).not then return refused
@@ -20675,6 +20941,10 @@ bindNumericTypeArg: function {
         inBody: true
     )
     if na.state.refused then return false
+    if na.state.dependent then {
+        st.typing.numericArgDependent = true
+        return true
+    }
     cd: st.reg.genericParamConstraintOf :tdecl paramName: pk0
     appendNumericArgSuffix :sfx bits: na.bits :cd
     valueSubs.set key: pk0 value: na.bits
@@ -20872,6 +21142,8 @@ genericTypeConstruction: function {
     valueSubs: IdMapV zast.nameid v: u64
     primaryName: firstGenericParamId :st templateId: (ztypes.tid.create from: tplId.u64)
     firstOut: ListVal u64
+    prevDep: st.typing.numericArgDependent
+    st.typing.numericArgDependent = false
     anyMiss: (collectGenericTypeArgs
         :ast
         :st
@@ -20885,7 +21157,10 @@ genericTypeConstruction: function {
         :tk0
         :firstOut
     )
+    dependent: st.typing.numericArgDependent
+    st.typing.numericArgDependent = prevDep
     if anyMiss then return (ztypes.tid.create from: 0)
+    if dependent then return (valuePartialConstruction :st :ast :call :tplId)
     firstA: firstOut.get i: 0
     if sfx.length == 0 then return (ztypes.tid.create from: 0)
     mid: (getOrMintSpec
@@ -20921,6 +21196,33 @@ genericTypeConstruction: function {
     }
     setgt: mid
     stampGate :st nid: call.nid.u64 tid: setgt
+    st.typing.callKind.set key: call.nid.u64 value: zast.callkind.classCreate
+    return mid
+}
+
+# valuePartialConstruction -- a construction whose numeric generic argument
+# reads a parameter of the template being walked, in the walk with no instance:
+# a partial of the template, one per construction, which its members are read
+# through. Each instance's walk has the value and mints the concrete type.
+valuePartialConstruction: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    call: callref
+    tplId: ztypes.tid
+} out ztypes.tid is {
+    mid: (st.typing.valuePartialAt.get key: call.nid.u64).or d: ztypes.tid
+    if mid.isZero then {
+        mid = (st.reg.newType
+            name: (st.reg.nameViewOf tid: tplId)
+            typetype: ztypes.ztypetype.genericParam
+        )
+        st.reg.setGenericOrigin typeId: mid value: tplId.u64
+        st.reg.setPartial typeId: mid value: true
+        st.typing.valuePartialAt.set key: call.nid.u64 value: mid
+    }
+    gcal: nodeId n: (ast.nodes.get i: call.callable.u64)
+    if gcal > 0 then stampGate :st nid: gcal.u64 tid: mid
+    stampGate :st nid: call.nid.u64 tid: mid
     st.typing.callKind.set key: call.nid.u64 value: zast.callkind.classCreate
     return mid
 }
@@ -24922,6 +25224,9 @@ checkDotted: function {
                 bt = ztypes.tid.create from: pob9.u64
                 forceMemberOf :st frame: st.curFrame :ast parentTypeId: bt nameId: cnId
                 mo = st.typing.declChildOfId parentTypeId: bt nameId: cnId
+                # an element read by index (`a.1`) is no member the template
+                # declares: the per-instance walk types it on the completed spec
+                if mo.none when (isNumericLiteralNameAt :ast ref: cnId) then return ztypes.tid
             }
         }
     }
@@ -35635,6 +35940,13 @@ bindPartialParamSubs: function {
     for i9 < n9 loop {
         pa9: st.reg.genericArgAt specId: (ztypes.tid.create from: paramTid.u64) ordinal: i9
         aa9: st.reg.genericArgAt specId: (ztypes.tid.create from: argTid.u64) ordinal: i9
+        # a numeric argument binds no parameter: a numeric parameter is written,
+        # never inferred
+        if (st.reg.genericArgIsValueAt specId: (ztypes.tid.create from: argTid.u64) ordinal: i9
+        ) then {
+            i9 = i9 + 1
+            continue
+        }
         if (st.reg.isPartialOf tid: (ztypes.tid.create from: pa9.u64)) then {
             bindPartialParamSubs :st :ast :gparams paramTid: pa9 argTid: aa9 :subs
         } else {

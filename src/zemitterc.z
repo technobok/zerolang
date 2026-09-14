@@ -2107,7 +2107,7 @@ atomNodeId: function {n: astnode.view} out u64 is {
 
 # the stamp id recorded for node `nid`.
 stampIdOf: function {symtab: zenv.ZSymbolTable.view nid: u64} out ztypes.tid is {
-    return (ztypes.tid.create from: (ztyping.nodeTypeAt tbl: symtab.typing.nodeType :nid))
+    return (symtab.typing.nodeTypeFor :nid)
 }
 
 # stampIsStr / stampIsSv -- the type the checker stamped on `nid` IS String
@@ -2465,7 +2465,7 @@ ifDiverges: function {
 # the node carries no stamp. The view pins the registry for its binding's scope;
 # It is the only form: nothing keeps this name.
 stampNameView: function {symtab: zenv.ZSymbolTable.view nid: u64} outx StringView is {
-    go: ztyping.nodeTypeAt tbl: symtab.typing.nodeType :nid
+    go: symtab.typing.nodeTypeFor :nid
     if go > 0 then return (regNameView :symtab tid: (ztypes.tid.create from: go.u64))
     return ""
 }
@@ -7363,7 +7363,11 @@ emitEmptyColCreate: function {
     cn0: StringView
 } out String is {
     if cn0 == "array" then {
-        amid0: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: call.callable.u64))
+        amid0: (bindingStampOf
+            :symtab
+            :ctx
+            nid: (interpPartNodeId n: (ast.nodes.get i: call.callable.u64))
+        )
         amid: chaseColMono :symtab :ctx tid: amid0
         if (originIsTid
             :symtab
@@ -7375,7 +7379,11 @@ emitEmptyColCreate: function {
         }
     }
     if cn0 == "str" then {
-        smid0: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: call.callable.u64))
+        smid0: (bindingStampOf
+            :symtab
+            :ctx
+            nid: (interpPartNodeId n: (ast.nodes.get i: call.callable.u64))
+        )
         smid: chaseColMono :symtab :ctx tid: smid0
         if (originIsTid
             :symtab
@@ -9650,7 +9658,7 @@ nodeConstText: function {
     if nid.isZero then return "".string
     g: symtab.typing.nodeConstIn mono: ctx.curThisTid.u64 nid: nid.u64
     if g.kind.none or g.kind.fvalKind then return "".string
-    tv: ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: nid.u64
+    tv: symtab.typing.nodeTypeFor nid: nid.u64
     if g.kind.svalKind when (chaseStrTypedef :symtab :ctx tid: tv) == ctx.strTid then {
         return "".string
     }
@@ -16327,7 +16335,7 @@ bindDeclaredCType: function {
         ct = typeRefC :ast :symtab :ctx tid: btid thisTid: ztypes.tid
     }
     if ct.length == 0 then {
-        tgo: ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: n.nodeid.u64
+        tgo: symtab.typing.nodeTypeFor nid: n.nodeid.u64
         # the binding's own stamp as the body being emitted sees it comes first:
         # an instance's differs from the shared one
         if btid > 0 then tgo = btid
@@ -16340,7 +16348,7 @@ bindDeclaredCType: function {
                 thisTid: ztypes.tid
             )
         } else {
-            vgo: ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: (interpPartNodeId n: avn)
+            vgo: symtab.typing.nodeTypeFor nid: (interpPartNodeId n: avn)
             if vgo > 0 then {
                 ct = (typeRefC
                     :ast
@@ -18187,14 +18195,18 @@ matchGenericRoute: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     m: zast.caserow.view
-    stn: StringView
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
 } out bool is {
-    subjSid: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: m.subject.u64))
+    # the SHARED stamp says the subject is a generic parameter; an instance's
+    # own stamp is the type it was bound to, which is what dissection selects on
+    subjSid: (ztyping.nodeTypeAt
+        tbl: symtab.typing.nodeType
+        nid: (interpPartNodeId n: (ast.nodes.get i: m.subject.u64))
+    )
     if subjSid > 0 when (symtab.reg.isTypeParamOf tid: subjSid) then {
-        paramName9: zast.poolFind pool: ast.names text: stn
+        paramName9: zast.poolFind pool: ast.names text: (regNameView :symtab tid: subjSid)
         (emitGenericDissect
             :ast
             :symtab
@@ -18356,7 +18368,7 @@ emitMatchStmt: function {
         tid: (stampIdDeep :symtab n: (ast.nodes.get i: m.subject.u64))
         name: stn.stringView
     )
-    if (matchGenericRoute :ast :symtab :ctx :m stn: stn.stringView :ind :tmp :buf) then return
+    if (matchGenericRoute :ast :symtab :ctx :m :ind :tmp :buf) then return
     isVar: false
     isUni: false
     if vtid > 0 then {
@@ -20460,7 +20472,7 @@ armSideAtNode: function {
     nameId: zast.nameid
 } out ztyping.armside is {
     if nameId.isZero then return ztyping.armside.none
-    st: ztyping.nodeTypeAt tbl: symtab.typing.nodeType :nid
+    st: symtab.typing.nodeTypeFor :nid
     return (ztyping.armSideOfName ty: symtab.typing typeId: st.u64 nameId: nameId.u64)
 }
 
@@ -20495,7 +20507,7 @@ truthyCondText: function {
 } out String is {
     fa: (symtab.typing.truthyCondArm.get key: (interpPartNodeId :n)).or d: 0
     if fa == 0 then return "".string
-    tid: ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: (interpPartNodeId :n)
+    tid: symtab.typing.nodeTypeFor nid: (interpPartNodeId :n)
     if tid.isZero then return "".string
     if (isOrdinalPair :symtab :tid) then return "".string
     an: zast.nameTextAt :ast ref: (zast.nameid.create from: fa.u32.orPanic)
@@ -20575,7 +20587,7 @@ seedCondOp: function {
         ta0: ztypecheck.truthyCondArmOf st: symtab nid: (interpPartNodeId :n)
         if ta0 > 0 then {
             an0: zast.nameTextAt :ast ref: (zast.nameid.create from: ta0.u32.orPanic)
-            tid93: ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: (interpPartNodeId :n)
+            tid93: symtab.typing.nodeTypeFor nid: (interpPartNodeId :n)
             (seedPositiveCore
                 :ast
                 :symtab
@@ -21029,8 +21041,7 @@ classifyCondFact: function {
             return (classifyFactCore
                 :ast
                 :symtab
-                owner: (ztyping.nodeTypeAt tbl: symtab.typing.nodeType nid: (interpPartNodeId :n)
-                ).u64
+                owner: (symtab.typing.nodeTypeFor nid: (interpPartNodeId :n)).u64
                 # the subject here is `n` itself. classifyFactCore answers ok
                 # only when that node is an atomid (atomTextOf names nothing
                 # else), and interpPartNodeId of an atomid IS its own id, so
@@ -24861,7 +24872,9 @@ emitUnitMonoFn: function {
     resetFnEmitState :ctx
     registerReftypeParams :ast :symtab :ctx fid: cfid :op
     ctx.curThisTid = ztypes.tid.create from: t
+    symtab.typing.emitMono = t
     emitFnBody :ast :symtab :ctx :op fid: cfid :buf
+    symtab.typing.emitMono = 0
     ctx.curThisTid = ztypes.tid.create from: 0
     buf.append "}\n\n"
 }
@@ -25072,6 +25085,7 @@ emitFnMonoInstances: function {
                     op: templateFnOp
                 )
                 ctx.curThisTid = ztypes.tid.create from: t.u64
+                symtab.typing.emitMono = t.u64
                 (emitFnBody
                     :ast
                     :symtab
@@ -25080,6 +25094,7 @@ emitFnMonoInstances: function {
                     fid: (ztypes.tid.create from: t.u64)
                     :buf
                 )
+                symtab.typing.emitMono = 0
                 ctx.curThisTid = ztypes.tid.create from: 0
                 buf.append "}\n\n"
             }
@@ -33995,7 +34010,9 @@ emitMonoMethodAt: function {
     resetFnEmitState :ctx
     registerReftypeParams :ast :symtab :ctx :fid op: (ast.nodes.get i: opId.u64)
     ctx.curThisTid = ztypes.tid.create from: monoId
+    symtab.typing.emitMono = monoId
     emitFnBody :ast :symtab :ctx op: (ast.nodes.get i: opId.u64) :fid :buf
+    symtab.typing.emitMono = 0
     ctx.curThisTid = ztypes.tid.create from: 0
     buf.append "}\n\n"
 }
@@ -34922,7 +34939,11 @@ emitOneMethod: function {
         isGen: setupGenCtx :ast :symtab :ctx :mid :op
         if isGen then emitGenPrologue :ctx :buf
         ctx.curThisTid = ztypes.tid.create from: thisTid
+        if (symtab.reg.genericOriginOf tid: (ztypes.tid.create from: thisTid)).isZero.not then {
+            symtab.typing.emitMono = thisTid
+        }
         emitFnBody :ast :symtab :ctx :op fid: mid :buf
+        symtab.typing.emitMono = 0
         ctx.curThisTid = ztypes.tid.create from: 0
         if isGen then {
             emitGenEpilogue :ctx :buf

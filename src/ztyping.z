@@ -462,6 +462,14 @@ ZTyping: class {
     # cap`), by the field's declaration: the parameter, whose value each mono's
     # field defaults to
     numericParamDefault: (IdMapV u64 v: zast.nameid)
+    # a construction whose numeric generic argument reads a parameter of the
+    # template the walk is in, walked without an instance: the partial type the
+    # template walk gives it, by the construction's node. Each instance's walk
+    # mints the concrete one
+    valuePartialAt: (IdMapV u64 v: ztypes.tid)
+    # set while a construction's arguments are read, when one depends on an
+    # enclosing numeric generic parameter the walk has no value for
+    numericArgDependent: bool
     # the generic template ops whose method bodies have been scanned for
     # demands from the template's own frame (once per template)
     templateBodiesScanned: IdSet u64
@@ -476,6 +484,9 @@ ZTyping: class {
     # through one (`a.BIG` on a unit instance); 0 otherwise. A template's
     # constant over a numeric generic parameter has a value per instantiation
     constMono: u64
+    # the instantiation whose body the emitter is emitting, 0 outside one: a
+    # node's type there is the instance walk's stamp (nodeTypeFor)
+    emitMono: u64
     # the function type being walked inside that instantiation
     curMonoFnTid: ztypes.tid
 
@@ -2113,6 +2124,21 @@ ZTyping: class {
         this.nodeConst.set key: nid.u64 :value
     }
 
+    # nodeTypeFor -- a node's type as the body being emitted sees it: inside an
+    # instantiation's body (emitMono) the instance walk's stamp, which a generic
+    # body's shared stamp cannot be; else the shared stamp.
+    nodeTypeFor: function {t: this.view nid: u64} out ztypes.tid is {
+        if t.emitMono > 0 then {
+            mg: t.monoNodeType.get key: (monostamp mono: t.emitMono node: nid)
+            match (
+                mg
+            ) case some then {
+                return mg
+            } case none then null
+        }
+        return (nodeTypeAt tbl: t.nodeType :nid)
+    }
+
     # nodeConstIn -- a use site's value as the walk of `mono` sees it: the
     # mono's own, else the shared one; `none` when it has neither.
     nodeConstIn: function {t: this.view mono: u64 nid: u64} out ztypes.cval is {
@@ -2689,10 +2715,13 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         monoFoldedBranch: (MapVV monostamp v: foldedbranch)
         numericParamRead: (IdMapV u64 v: zast.nameid)
         numericParamDefault: (IdMapV u64 v: zast.nameid)
+        valuePartialAt: (IdMapV u64 v: ztypes.tid)
+        numericArgDependent: false
         templateBodiesScanned: IdSet u64
         monoParamSubst: (IdMapV ztypes.tid v: ztypes.tid)
         curMonoStamp: 0
         constMono: 0
+        emitMono: 0
         curMonoFnTid: ztypes.tid
         builtinTidMemo: (IdMapV u64 v: ztypes.tid)
         renameSeen: false
