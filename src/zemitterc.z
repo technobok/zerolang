@@ -2044,7 +2044,7 @@ ternaryClause: function {
                 }
             }
         }
-        vx: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: c.statement.u64)
+        vx: armValueExpr :ast :symtab :ctx n: (ast.nodes.get i: c.statement.u64)
         t0: "((\{cond}) ? (\{vx}) : "
         return t0
     } else {
@@ -2060,7 +2060,7 @@ ternaryElse: function {
     oId: zast.nodeid
 } out String is {
     if oId > 0 then {
-        ev: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: oId.u64)
+        ev: armValueExpr :ast :symtab :ctx n: (ast.nodes.get i: oId.u64)
         e0: "(\{ev})"
         return e0
     } else {
@@ -3788,6 +3788,84 @@ isLocalTake: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.v
     } else {
         return false
     }
+}
+
+# armTakeLeaf -- the `.take` node an if or match arm yields when its value is an
+# explicit take of a local or of a field, looking through a one-line block and a
+# statement line; 0 for any other value.
+armTakeLeaf: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.view} out u64 is {
+    match (
+        n
+    ) case statement then {
+        if n.statements.count.u64 == 1 then {
+            s0Id: zast.kidAt kids: ast.kids span: n.statements i: 0
+            return (armTakeLeaf :ast :symtab n: (ast.nodes.get i: s0Id.u64))
+        }
+        return 0
+    } case statementline then {
+        return (armTakeLeaf :ast :symtab n: (ast.nodes.get i: n.statementline.u64))
+    } else {
+        if (isFieldTake :ast :n) or (isLocalTake :ast :symtab :n) then return (zast.nodeIdOf :n).u64
+        return 0
+    }
+}
+
+# armTakeZeroC -- the value a taken source of type `tid` is zeroed to: NULL for a
+# heap-pointer collection, `(T){0}` for any other type with something to
+# destroy, "" for a type that owns nothing.
+armTakeZeroC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+} out String is {
+    if (isHeapPtrCollection :symtab :ctx :tid) then return "NULL".string
+    if (symtab.reg.needsDestructor typeId: tid).not then return "".string
+    zc: typeRefC :ast :symtab :ctx :tid thisTid: ztypes.tid
+    if zc.length == 0 then return "".string
+    zv: "(\{zc}){0}"
+    return zv
+}
+
+# armValueExpr -- an if arm's value as one C expression. An arm that takes a
+# local or a field moves the value out of its source, and only when that arm
+# runs: the source is zeroed inside the expression, so its scope-exit destroy
+# no-ops after this arm and still frees the value after an arm that did not.
+armValueExpr: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+} out String is {
+    vx: emitExpr :ast :symtab :ctx :n
+    tn: armTakeLeaf :ast :symtab :n
+    if tn == 0 then return vx
+    tt: stampIdOf :symtab nid: tn
+    tz: armTakeZeroC :ast :symtab :ctx tid: tt
+    if tz.length == 0 then return vx
+    tc: typeRefC :ast :symtab :ctx tid: tt thisTid: ztypes.tid
+    mv: "({ \{tc} _mv = \{vx}; \{vx} = \{tz}; _mv; })"
+    return mv
+}
+
+# emitArmTakeZero -- after an arm assigned its value `rv` to the target: an arm
+# that took a local or a field zeroes the source, as armValueExpr does inside an
+# expression.
+emitArmTakeZero: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+    rv: StringView
+    ind: StringView
+    buf: String.borrow
+} is {
+    tn: armTakeLeaf :ast :symtab :n
+    if tn == 0 then return
+    tz: armTakeZeroC :ast :symtab :ctx tid: (stampIdOf :symtab nid: tn)
+    if tz.length == 0 then return
+    zl: "\{ind}\{rv} = \{tz};\n"
+    buf.append zl
 }
 
 # emitNarrowedTakeZero -- before a return's scope cleanup, zero the payload box of
@@ -14126,7 +14204,7 @@ emitExpr: function {
         # position.
         vfb: foldedBranchOf :symtab :ctx nid: n.nodeid.u64
         if vfb.known when vfb.stmt.isZero.not then {
-            return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: vfb.stmt.u64))
+            return (armValueExpr :ast :symtab :ctx n: (ast.nodes.get i: vfb.stmt.u64))
         }
         tx: String
         depth: u64
@@ -19218,6 +19296,7 @@ emitIfBindValue: function {
                     bvx: emitExpr :ast :symtab :ctx n: bwn
                     lbf: "\{ind}\{ct} \{nm} = \{bvx};\n"
                     buf.append lbf
+                    emitArmTakeZero :ast :symtab :ctx n: bwn rv: bvx.stringView :ind :buf
                     return true
                 }
                 # a multi-statement live branch: declare, then run the body
@@ -22229,6 +22308,7 @@ emitBranchAssign: function {
         vx2: emitExpr :ast :symtab :ctx :n
         la2: "\{ind}\{target} = \{vx2};\n"
         buf.append la2
+        emitArmTakeZero :ast :symtab :ctx :n rv: vx2.stringView :ind :buf
         emitValueTakeInvalidations :ast :symtab :ctx :n :ind :buf
     }
 }
@@ -22258,6 +22338,7 @@ emitBranchLastAssign: function {
     vx: emitExpr :ast :symtab :ctx n: sx
     la: "\{ind}\{target} = \{vx};\n"
     buf.append la
+    emitArmTakeZero :ast :symtab :ctx n: sx rv: vx.stringView :ind :buf
     emitValueTakeInvalidations :ast :symtab :ctx n: sx :ind :buf
     zeroBranchLocalMove :ast :symtab :ctx line: sx :fL :lL :ind :tmp :buf
     return false

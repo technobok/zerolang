@@ -1,0 +1,170 @@
+# AN ARM THAT YIELDS A TAKE MOVES OUT OF ITS SOURCE. A value `if` or `match`
+# whose arm was `o.take` (a local or a field) copied the value into the target
+# and left the source holding it, so the source's scope-exit destroy freed the
+# buffer the target owned: a double free on every arm that took. The arm that
+# runs now zeroes its source -- after the assignment in a statement arm, inside
+# the C expression in a ternary -- and an arm that did not take leaves the
+# source for its scope-exit destroy.
+Mode: variant {
+    fast: null
+    slow: null
+}
+
+Box: class {
+    s: String
+} as {
+    grab: function {:this c: bool} out String is {
+        r: if c then this.s.take else "field kept".string
+        return r
+    }
+}
+
+Shape: union {
+    text: String
+    none: null
+}
+
+# a ternary binding
+bound: function {c: bool} out String is {
+    o: "bound".string
+    r: if c then o.take else "other".string
+    return r
+}
+
+# a reassignment
+reassigned: function {c: bool} out String is {
+    o: "reassigned".string
+    r: "a".string
+    r = if c then o.take else "other".string
+    return r
+}
+
+# a take of a field
+fieldTake: function {c: bool} out String is {
+    b: Box s: "field".string
+    r: if c then b.s.take else "other".string
+    return r
+}
+
+# a take of a whole class value
+classTake: function {c: bool} out Box is {
+    b: Box s: "class".string
+    d: if c then b.take else Box s: "other".string
+    return d
+}
+
+# a match whose arms are blocks, then a statement after it
+matched: function {m: Mode} out String is {
+    o: "matched".string
+    r: match (
+        m
+    ) case fast then {
+        o.take
+    } case slow then {
+        "slow".string
+    }
+    print "matched ran"
+    return r
+}
+
+# arms that take two different locals, nested in a match arm
+nested: function {m: Mode c: bool} out String is {
+    o: "nested o".string
+    p: "nested p".string
+    r: match (
+        m
+    ) case fast then {
+        if c then o.take else p.take
+    } case slow then {
+        p.take
+    }
+    return r
+}
+
+# a returned value and an argument
+measure: function {s: String.take} out u64 is {
+    return s.length
+}
+
+returned: function {c: bool} out String is {
+    o: "returned".string
+    return (if c then o.take else "other".string)
+}
+
+argument: function {c: bool} out u64 is {
+    o: "xy".string
+    n: measure s: (if c then o.take else "zzz".string)
+    return n
+}
+
+# an interpolation part
+interpolated: function {c: bool} is {
+    o: "interpolated".string
+    print "\{if c then o.take else "other".string}"
+}
+
+# a union value and a narrowed subject's payload
+unionTake: function {c: bool} out Shape is {
+    u: Shape.text "union".string
+    r: if c then u.take else Shape.none
+    return r
+}
+
+payload: function {c: bool} out String is {
+    u: Shape.none
+    if c then u = Shape.text "payload".string
+    r: match (
+        u
+    ) case text then {
+        u.take
+    } case none then {
+        "no payload".string
+    }
+    return r
+}
+
+# a condition that folds, and a take in a loop
+FOLDED: true
+
+folded: function is {
+    o: "folded".string
+    r: if FOLDED then o.take else "other".string
+    print r
+}
+
+looped: function is {
+    i: 0
+    for i < 3 loop {
+        o: "loop \{i}"
+        r: if i == 1 then o.take else "loop kept".string
+        print r
+        i = i + 1
+    }
+}
+
+main: function is {
+    print "\{bound c: true} \{bound c: false}"
+    print "\{reassigned c: true} \{reassigned c: false}"
+    print "\{fieldTake c: true} \{fieldTake c: false}"
+    ct: classTake c: true
+    cf: classTake c: false
+    print "\{ct.s} \{cf.s}"
+    print "\{matched m: Mode.fast} \{matched m: Mode.slow}"
+    print "\{nested m: Mode.fast c: true} \{nested m: Mode.fast c: false} \{(nested
+        m: Mode.slow
+        c: true
+    )}"
+    print "\{returned c: true} \{returned c: false}"
+    print "\{argument c: true} \{argument c: false}"
+    interpolated c: true
+    interpolated c: false
+    u: unionTake c: true
+    match u case text then print u case none then print "none"
+    print "\{payload c: true} \{payload c: false}"
+    b: Box s: "method".string
+    print "\{b.grab c: true}"
+    k: Box s: "kept".string
+    print "\{k.grab c: false} \{k.s}"
+    folded
+    looped
+}
