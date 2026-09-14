@@ -15904,6 +15904,56 @@ emitHeapColBind: function {
     }
 }
 
+# emitStringLikeBind -- a String or StringView binding: a `match` value, then
+# every other value.
+emitStringLikeBind: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.assignmentrow.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+    nm: StringView
+    nameVid: ztypes.vid
+    btid: ztypes.tid
+} out bool is {
+    if (emitStringMatchBind :ast :symtab :ctx :n :ind :tmp :buf :nm :nameVid :btid) then return true
+    return (emitStringBind :ast :symtab :ctx :n :ind :tmp :buf :nm :nameVid :btid)
+}
+
+# emitStringMatchBind -- a String or StringView binding whose value is a `match`:
+# declared, then assigned per arm as a binding of any other type is. An owned
+# String joins the scope's cleanup list.
+emitStringMatchBind: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    n: zast.assignmentrow.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+    nm: StringView
+    nameVid: ztypes.vid
+    btid: ztypes.tid
+} out bool is {
+    isStr: btid == ctx.strTid
+    if isStr.not when btid != ctx.svTid then return false
+    isMatch: false
+    {
+        vn: ast.nodes.get i: n.value.u64
+        isMatch = vn.caseexpr
+    }
+    if isMatch.not then return false
+    avn: ast.nodes.get i: n.value.u64
+    smT: "\{ctx.svC}_t"
+    if isStr then smT = "\{ctx.strC}_t"
+    bound: emitMatchBindValue :ast :symtab :ctx n: avn :nm ct: smT.stringView :ind :tmp :buf
+    if bound.not then return false
+    if isStr then tmp.oweFree name: nm.string vid: nameVid
+    return true
+}
+
 # emitStringBind -- binding a StringView or a String. A view aliases its source and
 # frees nothing; an owned String joins the scope's cleanup list unless the binding
 # is a borrow.
@@ -16382,7 +16432,7 @@ emitAssignment: function {
         :tmp
         :buf
     ) then return
-    if (emitStringBind
+    if (emitStringLikeBind
         :ast
         :symtab
         :ctx
@@ -18496,9 +18546,17 @@ emitOrdinalPairMatch: function {
             buf.append lhB
             indB: "\{ind}    "
             if assignTo.length > 0 then {
-                vxB: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: c.statement.u64)
-                laB: "\{ind}    \{assignTo} = \{vxB};\n"
-                buf.append laB
+                aInd5: "\{ind}    "
+                (emitBranchAssign
+                    :ast
+                    :symtab
+                    :ctx
+                    n: (ast.nodes.get i: c.statement.u64)
+                    target: assignTo
+                    ind: aInd5.stringView
+                    :tmp
+                    :buf
+                )
             } else {
                 fLB: tmp.frees.length
                 lLB: tmp.listFrees.length
@@ -18533,9 +18591,17 @@ emitBoolElse: function {
         buf.append leB
         indE: "\{ind}    "
         if assignTo.length > 0 then {
-            veB: emitExpr :ast :symtab :ctx n: o
-            laE: "\{ind}    \{assignTo} = \{veB};\n"
-            buf.append laE
+            aInd4: "\{ind}    "
+            (emitBranchAssign
+                :ast
+                :symtab
+                :ctx
+                n: o
+                target: assignTo
+                ind: aInd4.stringView
+                :tmp
+                :buf
+            )
         } else {
             fLE: tmp.frees.length
             lLE: tmp.listFrees.length
@@ -18678,9 +18744,17 @@ emitScalarClause: function {
         ind3: "\{ind}    "
         dv: false
         if assignTo.length > 0 then {
-            vx: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: c.statement.u64)
-            la: "\{ind}    \{assignTo} = \{vx};\n"
-            buf.append la
+            aInd1: "\{ind}    "
+            (emitBranchAssign
+                :ast
+                :symtab
+                :ctx
+                n: (ast.nodes.get i: c.statement.u64)
+                target: assignTo
+                ind: aInd1.stringView
+                :tmp
+                :buf
+            )
         } else {
             fL: tmp.frees.length
             lL: tmp.listFrees.length
@@ -18769,9 +18843,17 @@ emitMatchClause: function {
         }
         dv: false
         if assignTo.length > 0 then {
-            vx: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: c.statement.u64)
-            la: "\{ind}    \{assignTo} = \{vx};\n"
-            buf.append la
+            aInd2: "\{ind}    "
+            (emitBranchAssign
+                :ast
+                :symtab
+                :ctx
+                n: (ast.nodes.get i: c.statement.u64)
+                target: assignTo
+                ind: aInd2.stringView
+                :tmp
+                :buf
+            )
         } else {
             fL: tmp.frees.length
             lL: tmp.listFrees.length
@@ -18813,9 +18895,17 @@ emitMatchElse: function {
         ind3: "\{ind}    "
         dv8: false
         if assignTo.length > 0 then {
-            vx8: emitExpr :ast :symtab :ctx n: o
-            la8: "\{ind}    \{assignTo} = \{vx8};\n"
-            buf.append la8
+            aInd3: "\{ind}    "
+            (emitBranchAssign
+                :ast
+                :symtab
+                :ctx
+                n: o
+                target: assignTo
+                ind: aInd3.stringView
+                :tmp
+                :buf
+            )
         } else {
             fLe: tmp.frees.length
             lLe: tmp.listFrees.length
@@ -19027,7 +19117,10 @@ emitMatchBindValue: function {
     ) case caseexpr then {
         ld: "\{ind}\{ct} \{nm};\n"
         buf.append ld
+        # each arm runs only when selected, as a statement match's arms do
+        ctx.condDepth = ctx.condDepth + 1
         emitMatchStmt :ast :symtab :ctx m: n assignTo: nm :ind :tmp :buf
+        ctx.condDepth = ctx.condDepth - 1
         return true
     } else {
         return false
@@ -19105,6 +19198,8 @@ emitIfBindValue: function {
         }
         ld: "\{ind}\{ct} \{nm};\n"
         buf.append ld
+        # each branch runs only when selected, as a statement if's branches do
+        ctx.condDepth = ctx.condDepth + 1
         first: true
         opened: u64
         clx1039: u64
@@ -19168,6 +19263,7 @@ emitIfBindValue: function {
             opened = opened - 1
             buf.append le
         }
+        ctx.condDepth = ctx.condDepth - 1
         return true
     } else {
         return false
@@ -22036,7 +22132,8 @@ emitTailStmt: function {
 
 # emitBranchAssign -- emit an if/match branch whose final value assigns
 # to a target: a block emits all but its last statement normally, the
-# last as `target = <value>`; a single node assigns directly.
+# last as `target = <value>`; a single node assigns directly. A branch that
+# ends by leaving assigns nothing.
 emitBranchAssign: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
@@ -22050,27 +22147,140 @@ emitBranchAssign: function {
     match (
         n
     ) case statement then {
+        # a local the branch declares is freed at the branch's end, where it is
+        # still in C scope
+        fL: tmp.frees.length
+        lL: tmp.listFrees.length
         cnt: n.statements.count.u64
         si: u64
-        for si < cnt loop {
+        for si + 1 < cnt loop {
             sxId: zast.kidAt kids: ast.kids span: n.statements i: si
-            sx: ast.nodes.get i: sxId.u64
-            if si + 1 == cnt then {
-                vx: emitExpr :ast :symtab :ctx n: sx
-                la: "\{ind}\{target} = \{vx};\n"
-                buf.append la
-                emitValueTakeInvalidations :ast :symtab :ctx n: sx :ind :buf
-            } else {
-                emitStmt :ast :symtab :ctx n: sx :ind :tmp :buf
-            }
+            emitStmt :ast :symtab :ctx n: (ast.nodes.get i: sxId.u64) :ind :tmp :buf
             si = si + 1
         }
+        dv: false
+        if cnt > 0 then {
+            lastId: zast.kidAt kids: ast.kids span: n.statements i: cnt - 1
+            dv = (emitBranchLastAssign
+                :ast
+                :symtab
+                :ctx
+                lineId: lastId.u64
+                :target
+                :fL
+                :lL
+                :ind
+                :tmp
+                :buf
+            )
+        }
+        flushBlockFrees :ctx :tmp :fL :lL diverged: dv :buf
     } else {
+        if (matchDiverges :symtab nid: (zast.nodeIdOf :n).u64) then {
+            emitStmt :ast :symtab :ctx :n :ind :tmp :buf
+            return
+        }
         vx2: emitExpr :ast :symtab :ctx :n
         la2: "\{ind}\{target} = \{vx2};\n"
         buf.append la2
         emitValueTakeInvalidations :ast :symtab :ctx :n :ind :buf
     }
+}
+
+# emitBranchLastAssign -- a branch block's last line: assigned to the target when
+# it yields, run as the statement it is when it leaves -- a return, a panic, a
+# reached `error`, a break or a continue. True when it leaves.
+emitBranchLastAssign: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    lineId: u64
+    target: StringView
+    # the branch's frees as it began, which a moved local is looked for past
+    fL: u64
+    lL: u64
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} out bool is {
+    sx: ast.nodes.get i: lineId
+    if (stmtDiverges :ast :symtab :ctx sid: (zast.nodeid.create from: lineId)) then {
+        emitStmt :ast :symtab :ctx n: sx :ind :tmp :buf
+        return true
+    }
+    if (emitNestedMatchAssign :ast :symtab :ctx line: sx :target :ind :tmp :buf) then return false
+    vx: emitExpr :ast :symtab :ctx n: sx
+    la: "\{ind}\{target} = \{vx};\n"
+    buf.append la
+    emitValueTakeInvalidations :ast :symtab :ctx n: sx :ind :buf
+    zeroBranchLocalMove :ast :symtab :ctx line: sx :fL :lL :ind :tmp :buf
+    return false
+}
+
+# emitNestedMatchAssign -- a branch whose value is itself a `match` assigns the
+# target from that match's arms, which no single C expression can spell; false
+# for any other value.
+emitNestedMatchAssign: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    line: astnode.view
+    target: StringView
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} out bool is {
+    if line.statementline.not then return false
+    mn: ast.nodes.get i: line.statementline.u64
+    match (
+        mn
+    ) case caseexpr then {
+        ctx.condDepth = ctx.condDepth + 1
+        emitMatchStmt :ast :symtab :ctx m: mn assignTo: target :ind :tmp :buf
+        ctx.condDepth = ctx.condDepth - 1
+        return true
+    } else {
+        return false
+    }
+}
+
+# zeroBranchLocalMove -- a branch's value that is a local the branch itself
+# declared moves into the target: the local is zeroed so the free the branch
+# end owes it no-ops.
+zeroBranchLocalMove: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    line: astnode.view
+    fL: u64
+    lL: u64
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    # a branch that declared nothing owed is the common case, and asks nothing
+    if tmp.frees.length == fL when tmp.listFrees.length == lL then return
+    if line.statementline.not then return
+    vn: ast.nodes.get i: line.statementline.u64
+    src: implicitTakeSource :ast :symtab :ctx n: vn
+    if src.length == 0 then return
+    owed: false
+    fi: fL
+    for fi < tmp.frees.length loop {
+        if (tmp.frees.get i: fi).name.stringView == src then owed = true
+        fi = fi + 1
+    }
+    li: lL
+    for li < tmp.listFrees.length loop {
+        if (tmp.listFrees.get i: li).name.stringView == src then owed = true
+        li = li + 1
+    }
+    if owed.not then return
+    mtid: stampIdOf :symtab nid: (zast.nodeIdOf n: vn).u64
+    mc: typeRefC :ast :symtab :ctx tid: mtid thisTid: ztypes.tid
+    if mc.length == 0 then return
+    mz: "\{ind}\{src} = (\{mc}){0};\n"
+    buf.append mz
 }
 
 # postGuardStmtId -- the node id of a guarding if/match statement that
