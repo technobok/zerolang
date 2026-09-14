@@ -11860,6 +11860,52 @@ stampAliasValue: function {
     stampRefDecl :st nid: opNid declId: td
 }
 
+# aliasValueSite -- where a unit-level definition's VALUE is written, which is
+# what a report about its target points at: the node, its line and its column.
+aliasValueSite: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    adecl: ztypes.declid
+} out argref is {
+    ar: argRefAt :ast nid: (zast.nodeid.create from: (st.typing.decls.get i: adecl.u64).node)
+    if ar.operation.isZero then return ar
+    vn: ast.nodes.get i: ar.operation.u64
+    return (argref
+        nid: ar.operation
+        name: ar.name
+        operation: ar.operation
+        lineno: (nodeLine n: vn)
+        colno: (nodeCol n: vn)
+    )
+}
+
+# reportUnknownBareAliasTarget -- a bare alias (`X: Nope`) whose target names
+# nothing in any scope: the body's E0023 for the same name, at the definition.
+# True when it reported.
+reportUnknownBareAliasTarget: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    adecl: ztypes.declid
+    unitDecl: ztypes.declid
+    nameId: zast.nameid
+} out bool is {
+    unknown: unresolvedBareName :ast :st :unitDecl :nameId
+    if unknown.length == 0 then return false
+    at: aliasValueSite :st :ast :adecl
+    (addErrorH
+        :st
+        nodeid: at.nid
+        lineno: at.lineno
+        colno: at.colno
+        e: zast.err.badReference
+        msg: "Unknown reference '\{unknown}'"
+        note: "".string
+        hint: "".string
+        width: unknown.length.u32.orPanic
+    )
+    return true
+}
+
 # aliasTargetTid -- the type a re-export alias stands for, when neither the nested-
 # unit scope nor the file-unit index answered. It may be reached through the
 # target unit's own root, or be TYPE-ROOTED -- a member of a type rather than of a
@@ -11954,9 +12000,16 @@ aliasTargetTid: function {
             rootedOut.append typeRooted
             return (ztypes.tid.create from: 0)
         }
-        st.typing.declSetResolving declId: adecl mark: true
         nameId94: declNameIdOf :st declId: (unitRootOfDecl :st declId: adecl)
         hUnitDecl: unitDeclOfNameOrOwn :st :frame nameId: nameId94
+        # a name that resolves nowhere is not a forward reference: resolving it
+        # would mint a shell of that name, and every use would then report the
+        # shell -- "cannot construct 'Nope'" -- instead of the name
+        if (reportUnknownBareAliasTarget :st :ast :adecl unitDecl: hUnitDecl nameId: tnId) then {
+            rootedOut.append typeRooted
+            return (ztypes.tid.create from: 0)
+        }
+        st.typing.declSetResolving declId: adecl mark: true
         bat: (resolveAtomType
             :st
             :frame
@@ -11972,6 +12025,129 @@ aliasTargetTid: function {
     return atid
 }
 
+
+# reportMissingAliasTarget -- a unit-level alias whose target the chase could not
+# resolve, when the declarations say the target does not exist: a unit or a sum
+# type with no member of that name, or a root that names nothing. A missing
+# target is not a transient answer -- declarations are indexed before anything
+# resolves -- and without a report every read of the alias typed to nothing and
+# reached the emitter. The report is the body's for the same reference, placed
+# at the definition.
+reportMissingAliasTarget: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    adecl: ztypes.declid
+    aParent: ztypes.declid
+    target: ztypes.deftarget
+} is {
+    what: missingAliasTargetKind :st :frame :ast :adecl :aParent :target
+    if what == 0 then return
+    root: zast.nameTextAt :ast ref: target.unitName
+    member: zast.nameTextAt :ast ref: target.defName
+    msg: "Unknown reference '\{root}'"
+    code: zast.err.badReference
+    if what == 1 then msg = "unit '\{root}' has no member '\{member}'"
+    if what == 2 then msg = "type '\{root}' has no member '\{member}'"
+    if what != 3 then code = zast.err.typeError
+    at: aliasValueSite :st :ast :adecl
+    (addErrorH
+        :st
+        nodeid: at.nid
+        lineno: at.lineno
+        colno: at.colno
+        e: code
+        :msg
+        note: "".string
+        hint: "".string
+        width: root.length.u32.orPanic
+    )
+}
+
+# aliasroot -- what the root of a dotted alias names, as far as a missing target
+# is concerned.
+aliasroot: record {
+    # the unit it names, 0 when it names no unit
+    unitDecl: ztypes.declid
+    # it is declared in the alias's own scope as neither a unit nor a type
+    other: bool
+}
+
+# aliasRootScope -- the unit a dotted alias's root names: a subunit of the
+# alias's own scope first, as a name written there resolves, then a file unit.
+# A root the scope declares as a type is left to the type check; one it declares
+# as anything else -- a constant -- is marked `other`.
+aliasRootScope: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    aParent: ztypes.declid
+    nameId: zast.nameid
+} out aliasroot is {
+    none: ztypes.declid
+    local: st.typing.declFindChild parentDeclId: aParent :nameId
+    if local.isZero.not then {
+        localUnit: aliasroot unitDecl: local other: false
+        if (declDeclaresUnit :st :ast declId: local) then return localUnit
+        isType: false
+        {
+            ld: st.typing.decls.get i: local.u64
+            isType = ld.kind.typeDecl
+        }
+        if isType.not then return (aliasroot unitDecl: none other: true)
+        return (aliasroot unitDecl: none other: false)
+    }
+    if (nameDenotesUnit :st :frame :nameId) then {
+        return (aliasroot unitDecl: (unitDeclOfNameOrOwn :st :frame :nameId) other: false)
+    }
+    return (aliasroot unitDecl: none other: false)
+}
+
+# missingAliasTargetKind -- what a dotted alias's target lacks: 1 a unit without
+# the member, 2 a sum type without the arm, 3 a root that names nothing, 0 when
+# it is none of those. A bare alias resolves elsewhere; a root declared in the
+# alias's own scope as something other than a unit -- a constant, whose member
+# reads the value channel reports -- or a root type that is not a sum, whose
+# member is no alias target at all, is another check's; and a target that
+# exists but did not resolve is the chase's to explain. A generic parameter's
+# marker (`t: anyval.generic`) names no member.
+missingAliasTargetKind: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    adecl: ztypes.declid
+    aParent: ztypes.declid
+    target: ztypes.deftarget
+} out u32 is {
+    if (aliasIsBareForm :st :ast declId: adecl) then return 0
+    # `t: anyval.generic` declares a generic parameter: the leaf is a marker
+    ar: argRefAt :ast nid: (zast.nodeid.create from: (st.typing.decls.get i: adecl.u64).node)
+    if ar.operation.isZero then return 0
+    if (isBareGenericParam :ast op: (ast.nodes.get i: ar.operation.u64)) then return 0
+    root: aliasRootScope :st :frame :ast :aParent nameId: target.unitName
+    if root.other then return 0
+    scope: root.unitDecl
+    if scope.isZero.not then {
+        member: st.typing.declFindChild parentDeclId: scope nameId: target.defName
+        if member.isZero.not then return 0
+        return 1
+    }
+    rootTid: ((walkLookupTyperefById
+        :st
+        :frame
+        :ast
+        unitDecl: (unitRootOfDecl :st declId: adecl)
+        baseId: target.unitName
+    ).or
+        d: 0
+    )
+    if rootTid == 0 then return 3
+    rt: ztypes.tid.create from: rootTid
+    rtt: st.reg.typetypeOf typeId: rt
+    if rtt != ztypes.ztypetype.variantType when rtt != ztypes.ztypetype.unionType then return 0
+    if (st.typing.declChildOfId parentTypeId: rt nameId: target.defName).none.not then return 0
+    return 2
+}
 
 # chase an alias to the declaration it finally names, so callers compare one
 # key rather than a chain
@@ -12054,7 +12230,10 @@ resolveAliasKeyIn: function {
         defNameId: altK.defName
     )
     typeRooted: rootedOut.get i: 0
-    if atid.isZero then return 0
+    if atid.isZero then {
+        reportMissingAliasTarget :st :frame :ast :adecl :aParent target: altK
+        return 0
+    }
     # the alias is a member of the unit it is WRITTEN in, which is that unit's
     # own id whether it is a file unit or a nested one -- both carry it on the
     # Decl the alias hangs under.
@@ -40030,6 +40209,8 @@ constArmRead: function {
     isSum: ptt == ztypes.ztypetype.variantType or (ptt == ztypes.ztypetype.unionType)
     if isSum.not then return ztypes.noConst
     anm: armNameId
+    # an arm the type does not declare is no value of it
+    if (st.typing.declChildOfId parentTypeId: ptid nameId: anm).none then return ztypes.noConst
     if (armCarriesPayload :st armTid: ptid armName: anm) then return ztypes.noConst
     return (ztypes.makeArmConst armTid: ptid armName: anm)
 }
@@ -42178,6 +42359,7 @@ constFoldDecl: function {
     # a nested unit's constant is reached through this door alone, so a
     # definition that must fold and did not is asked why here as well
     if valFound.kind.none when opId.isZero.not then {
+        reportMissingQualifiedMember :st frame: own :ast defnId: opId
         (diagnoseUnfoldedConstant
             :st
             :ast
@@ -42187,6 +42369,69 @@ constFoldDecl: function {
             defnId: opId
         )
     }
+}
+
+# reportMissingQualifiedMember -- a unit-level definition with no value whose
+# value names `unit.Type.member`, when the unit has no such type or the type --
+# a sum or a data block, whose members are values -- has no such member. It
+# typed to nothing and raised nothing, so every read reached the emitter; the
+# report is the body's for the same read.
+reportMissingQualifiedMember: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    defnId: zast.nodeid
+} is {
+    unitId: zast.nameid
+    typeId: zast.nameid
+    memberId: zast.nameid
+    ln: u32
+    co: u32
+    {
+        dn: ast.nodes.get i: defnId.u64
+        ln = nodeLine n: dn
+        co = nodeCol n: dn
+        if dn.dottedpath then {
+            memberId = atomNameId :ast n: (ast.nodes.get i: dn.child.u64)
+            pn: ast.nodes.get i: dn.parent.u64
+            if pn.dottedpath then {
+                unitId = atomNameId :ast n: (ast.nodes.get i: pn.parent.u64)
+                typeId = atomNameId :ast n: (ast.nodes.get i: pn.child.u64)
+            }
+        }
+    }
+    if unitId.isZero or typeId.isZero or memberId.isZero then return
+    if (nameDenotesUnit :st :frame nameId: unitId).not then return
+    ud: unitDeclOfNameOrOwn :st :frame nameId: unitId
+    missing: typeId
+    owner: unitId
+    if (st.typing.declFindChild parentDeclId: ud nameId: typeId).isZero.not then {
+        tt: (walkLookupTyperefById :st :frame :ast unitDecl: ud baseId: typeId).or d: 0
+        if tt == 0 then return
+        typeTid: ztypes.tid.create from: tt
+        ttt: st.reg.typetypeOf typeId: typeTid
+        valued: ttt == ztypes.ztypetype.variantType or (ttt == ztypes.ztypetype.unionType)
+        if valued.not when ttt != ztypes.ztypetype.dataType then return
+        declared: st.typing.declChildOfId parentTypeId: typeTid nameId: memberId
+        if declared.none.not then return
+        missing = memberId
+        owner = typeId
+    }
+    ownerName: zast.nameTextAt :ast ref: owner
+    missingName: zast.nameTextAt :ast ref: missing
+    kind: "type"
+    if owner == unitId then kind = "unit"
+    (addErrorH
+        :st
+        nodeid: defnId
+        lineno: ln
+        colno: co
+        e: zast.err.typeError
+        msg: "\{kind} '\{ownerName}' has no member '\{missingName}'"
+        note: "".string
+        hint: "".string
+        width: ownerName.length.u32.orPanic
+    )
 }
 
 # resolveConstantMember -- one unit-level definition's constant channels, both
@@ -42222,6 +42467,7 @@ resolveConstantMember: function {
         unfolded: cvv.kind.none
     ) then constFailClear :st
     reportPendingConstFail :st
+    if cvv.kind.none then reportMissingQualifiedMember :st :frame :ast :defnId
     if cvv.kind.none when (isComputedConstantDef :ast nid: defnId) then {
         (diagnoseUnfoldedConstant
             :st
