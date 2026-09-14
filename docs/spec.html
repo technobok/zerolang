@@ -1436,8 +1436,8 @@ used as a statement &#x2014; its value is discarded &#x2014; the arms need not s
 empty body for that arm. A <code>match</code> containing a null (or empty <code>{}</code>) arm
 body yields no value and can only stand as a statement &#x2014; consuming it as a
 value is a compile-time error.</p>
-<p>When the match subject is a compile-time constant (a named constant, numeric
-literal, or numeric generic parameter value), the match is evaluated statically.
+<p>When the match subject is a compile-time constant (a named arm constant, or a
+numeric generic parameter value), the match is evaluated statically.
 Only the matching arm is emitted in the generated C code; dead arms are
 eliminated. See <a href="#compile-time-error">Compile-Time Error</a> for how this
 interacts with the <code>error</code> builtin.</p>
@@ -4615,7 +4615,7 @@ single namespace -- the same name cannot appear in both sections.</p>
 <li>Numeric constants &#x2014; integer and float (immutable, accessed via <code>TypeName.const_name</code>)</li>
 <li>String constants (static, immutable &#x2014; e.g., <code></code>'name: "hello"')</li>
 <li>Computed constant expressions (e.g., <code>max: 2 * 1024</code>)</li>
-<li>Compile-time <code>if</code> expressions (e.g., <code>mode: if max &gt; 10 then { 1 } else { 2 }</code>)</li>
+<li>Compile-time <code>if</code> and <code>match</code> expressions (e.g., <code>mode: if max &gt; 10 then { 1 } else { 2 }</code>)</li>
 <li>References to other constants (e.g., <code>alias: some_constant</code>)</li>
 <li>Protocol/facet conformance labels</li>
 <li>Visibility declarations (<code>public</code>, <code>private</code>)</li>
@@ -4639,8 +4639,8 @@ shared by all instances. They are called via <code>TypeName.method instance</cod
 }</code></pre>
 <p>Constants in the <code>as</code> section are type-level values, evaluated at compile
 time exactly as <a href="#unit-level-definitions">unit-level</a> constants are: a
-literal, a string, an operator expression, a compile-time <code>if</code>, or another
-constant. A constant's type is its value's, and every read is the value itself,
+literal, a string, an operator expression, a compile-time <code>if</code> or <code>match</code>,
+or another constant. A constant's type is its value's, and every read is the value itself,
 so it is used wherever a value is: an interpolation, a binding, an argument, a
 condition, a default, or another constant, in this unit
 (<code>TypeName.name</code>) or another (<code>unit.TypeName.name</code>).</p>
@@ -4726,7 +4726,7 @@ subtype; use the qualified <code>&lt;Type&gt;.&lt;subtype&gt;</code> form.</li>
 <li>Compile-time scalar constant -- a named constant
 (<code>n: LIMIT</code>), a constant of the type itself or of another type
 (<code>n: CAP</code>, <code>n: cfg.K</code>), or an operator expression or a
-compile-time <code>if</code> built from them (<code>n: 2 * 3</code>). The member's
+compile-time <code>if</code> or <code>match</code> built from them (<code>n: 2 * 3</code>). The member's
 type is the value's. A default is re-emitted at every call and
 construction, so it must stay a scalar: a number or a bool. A
 string constant is refused, as a string literal is.</li>
@@ -5370,8 +5370,8 @@ the arm name -- never by rendered text. The predicate form <code>value.arm</code
 folds to the <code>bool</code> it always means. An expression the compiler cannot
 evaluate in constant position is an error (<code>E0600</code>), not a silent fall
 back to run time.</p>
-<p>A unit-level definition built from an operator or an <code>if</code> is such a
-position, and the error names the first part of it that has no value. A
+<p>A unit-level definition built from an operator, an <code>if</code> or a <code>match</code> is
+such a position, and the error names the first part of it that has no value. A
 name that does not exist is <code>E0023</code>, as it is in a body. A call, a name
 that is not a compile-time value (a function, a type, a numeric generic
 parameter -- which becomes a run-time field), and an operator outside the
@@ -5379,6 +5379,16 @@ list above (<code>&lt;&lt;</code>, <code>|</code>, <code>&amp;</code>, <code>%</
 <code>E0600</code>:</p>
 <pre><code class="language-zerolang">FLAGS: 1 &lt;&lt; 3        # E0600: '&lt;&lt;' has no compile-time value for i64 and i64
 LIMIT: GHOST + 1     # E0023: Unknown reference 'GHOST'</code></pre>
+<p>A compile-time <code>match</code> folds as a compile-time <code>if</code> does. Its subject
+must be an arm constant (<code>M: mode.slow</code>, <code>ON: 3 &gt; 2</code>), and its value is
+the selected arm's, typed by that arm; an arm that is not selected is never
+evaluated, so its <code>error</code> goes unreported. The arms are checked as a body
+checks them: each names an arm of the subject's type, and names it once, and
+a match with no <code>else</code> covers every arm (<code>E0036</code>). A number or a string
+is no subject, as it is not in a body.</p>
+<pre><code class="language-zerolang">mode: variant { fast: null  slow: null }
+M: mode.slow
+SIZE: match (M) case fast then { 64 } else { 32 }   # folded to 32</code></pre>
 <p>A string constant is a <code>StringView</code> receiver like any other. Five of its
 methods fold: <code>length</code>, <code>startsWith</code>, <code>endsWith</code>, <code>contains</code> and
 <code>substring</code>. Each answer is computed by calling the same method the program

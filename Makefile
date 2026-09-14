@@ -869,7 +869,11 @@ perf: $(PERFBIN)
 # by 12,175 allocations, and over the same source the new compiler allocates
 # 6,321 fewer -- a coercion check reads an argument's literal lexeme only when
 # no folded value settles it, where every argument copied it.
-ALLOC_BASELINE := 2591343
+#
+# +4,990 when a unit-level `match` came to fold: over the same source the new
+# compiler allocates exactly as the old, and it is the input, the compiler's
+# own source longer.
+ALLOC_BASELINE := 2596333
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

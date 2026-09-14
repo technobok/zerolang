@@ -1456,8 +1456,8 @@ empty body for that arm. A #~"match" containing a null (or empty #~"{}") arm
 body yields no value and can only stand as a statement — consuming it as a
 value is a compile-time error.
 
-When the match subject is a compile-time constant (a named constant, numeric
-literal, or numeric generic parameter value), the match is evaluated statically.
+When the match subject is a compile-time constant (a named arm constant, or a
+numeric generic parameter value), the match is evaluated statically.
 Only the matching arm is emitted in the generated C code; dead arms are
 eliminated. See [#> to=compile-time-error: Compile-Time Error] for how this
 interacts with the #~"error" builtin.
@@ -5270,7 +5270,7 @@ The #~"as" section contains type-level static members:
   [#*: Numeric constants — integer and float (immutable, accessed via #~"TypeName.const_name")]
   [#*: String constants (static, immutable — e.g., #~'name: "hello"')]
   [#*: Computed constant expressions (e.g., #~"max: 2 * 1024")]
-  [#*: Compile-time #~"if" expressions (e.g., #~"mode: if max > 10 then { 1 } else { 2 }")]
+  [#*: Compile-time #~"if" and #~"match" expressions (e.g., #~"mode: if max > 10 then { 1 } else { 2 }")]
   [#*: References to other constants (e.g., #~"alias: some_constant")]
   [#*: Protocol/facet conformance labels]
   [#*: Visibility declarations (#~"public", #~"private")]
@@ -5302,8 +5302,8 @@ shared by all instances. They are called via #~"TypeName.method instance":
 
 Constants in the #~"as" section are type-level values, evaluated at compile
 time exactly as [#> to=unit-level-definitions: unit-level] constants are: a
-literal, a string, an operator expression, a compile-time #~"if", or another
-constant. A constant's type is its value's, and every read is the value itself,
+literal, a string, an operator expression, a compile-time #~"if" or #~"match",
+or another constant. A constant's type is its value's, and every read is the value itself,
 so it is used wherever a value is: an interpolation, a binding, an argument, a
 condition, a default, or another constant, in this unit
 (#~"TypeName.name") or another (#~"unit.TypeName.name").
@@ -5401,7 +5401,7 @@ type name there is a compile error.)
   [#*: #_b:"Compile-time scalar constant" -- a named constant
     (#~"n: LIMIT"), a constant of the type itself or of another type
     (#~"n: CAP", #~"n: cfg.K"), or an operator expression or a
-    compile-time #~"if" built from them (#~"n: 2 * 3"). The member's
+    compile-time #~"if" or #~"match" built from them (#~"n: 2 * 3"). The member's
     type is the value's. A default is re-emitted at every call and
     construction, so it must stay a scalar: a number or a bool. A
     string constant is refused, as a string literal is.]
@@ -6189,8 +6189,8 @@ folds to the #~"bool" it always means. An expression the compiler cannot
 evaluate in constant position is an error (#~"E0600"), not a silent fall
 back to run time.
 
-A unit-level definition built from an operator or an #~"if" is such a
-position, and the error names the first part of it that has no value. A
+A unit-level definition built from an operator, an #~"if" or a #~"match" is
+such a position, and the error names the first part of it that has no value. A
 name that does not exist is #~"E0023", as it is in a body. A call, a name
 that is not a compile-time value (a function, a type, a numeric generic
 parameter -- which becomes a run-time field), and an operator outside the
@@ -6200,6 +6200,20 @@ list above (#~"<<", #~"|", #~"&", #~"%") over values that do fold are
 #code language=zerolang: """
   FLAGS: 1 << 3        # E0600: '<<' has no compile-time value for i64 and i64
   LIMIT: GHOST + 1     # E0023: Unknown reference 'GHOST'
+  """
+
+A compile-time #~"match" folds as a compile-time #~"if" does. Its subject
+must be an arm constant (#~"M: mode.slow", #~"ON: 3 > 2"), and its value is
+the selected arm's, typed by that arm; an arm that is not selected is never
+evaluated, so its #~"error" goes unreported. The arms are checked as a body
+checks them: each names an arm of the subject's type, and names it once, and
+a match with no #~"else" covers every arm (#~"E0036"). A number or a string
+is no subject, as it is not in a body.
+
+#code language=zerolang: """
+  mode: variant { fast: null  slow: null }
+  M: mode.slow
+  SIZE: match (M) case fast then { 64 } else { 32 }   # folded to 32
   """
 
 A string constant is a #~"StringView" receiver like any other. Five of its

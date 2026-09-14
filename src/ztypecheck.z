@@ -10511,13 +10511,13 @@ valueStampsTyperef: function {
 
 # valueDeclares -- a field or parameter declaration whose value, when it folds,
 # declares the member's type: a bare name (`n: LIMIT`, `p: false`), an operator
-# (`n: 2 * 3`) or a compile-time `if`. A path is a TYPE in declaration position
+# (`n: 2 * 3`) or a compile-time `if` or `match`. A path is a TYPE in declaration position
 # (`zast.astnode.view`, `T.typedef`), and its value forms -- a suffixed literal,
 # an arm -- have paths of their own.
 valueDeclares: function {ast: Ast.view node: zast.nodeid} out bool is {
     n: ast.nodes.get i: node.u64
     if (bareAtomNameId :n).isZero.not then return true
-    if n.ifexpr then return true
+    if n.ifexpr or n.caseexpr then return true
     return (zast.infixPartsOf :ast :n).found
 }
 
@@ -37580,7 +37580,9 @@ bindFunctionParam: function {
 } is {
     rgot: optionval.none u64
     if fnTid.isZero.not then rgot = optionval.some fnTid.u64
-    pnid: nodeId n: (ast.nodes.get i: pm.operation.u64)
+    # every value form a parameter may be declared by, an `if` or a `match`
+    # included, keys the parameter's variable
+    pnid: zast.nodeIdOf n: (ast.nodes.get i: pm.operation.u64)
     ptid: paramTypeId :st :ast :unitDecl opNid: pm.operation
     if st.typing.curMonoFnTid > 0 then {
         # per-mono instance walk: the mono FUNCTION child
@@ -39766,6 +39768,21 @@ reportPendingConstFail: function {st: zenv.ZSymbolTable} is {
 
 # renderConstFail -- report one recorded failure.
 renderConstFail: function {st: zenv.ZSymbolTable f: ztypes.constfail} is {
+    if f.kind.nonExhaustive then {
+        mj: constStringAt :st id: f.strId
+        (addErrorH
+            :st
+            nodeid: f.nodeid
+            lineno: f.lineno
+            colno: f.colno
+            e: zast.err.nonExhaustive
+            msg: "non-exhaustive match: missing case(s) \{mj} -- add them or an `else` clause"
+            note: String
+            hint: String
+            width: f.width
+        )
+        return
+    }
     if f.kind.mismatch then {
         # the body's own words, and so the body's code: a number that cannot
         # stand where it is taken is a type error wherever it is written
@@ -40265,6 +40282,123 @@ literalDefaultTid: function {
     dflt: zast.poolFind pool: ast.names text: "i64"
     if v.kind.fvalKind then dflt = zast.poolFind pool: ast.names text: "f64"
     return (scalarTidOf :st :frame :ast nameId: dflt)
+}
+
+# constOfMatch -- a compile-time `match`: the subject folds to an arm constant
+# and the value is the selected arm's, as an `if`'s is its selected branch's,
+# typed by that arm alone. The arms are checked as a body checks them, and only
+# the selected arm is evaluated, so a dead one may reach an `error` the program
+# never runs. A refusal is RECORDED for the caller that required the value: a
+# use site never asks.
+constOfMatch: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+} out ztypes.cval is {
+    cr: caseRefAt :ast :nid
+    if cr.nid.isZero then return ztypes.noConst
+    sv: evalConstNode :st :frame :ast :unitDecl nid: cr.subject
+    if sv.kind.none then return ztypes.noConst
+    if sv.kind.armKind.not then {
+        stn: st.reg.nameOf tid: (ztypes.tid.create from: (constValueTid :st :frame :ast v: sv))
+        sm: "match subject must be a union, variant, or generic parameter, got '\{stn}'"
+        sn: ast.nodes.get i: cr.subject.u64
+        (constFailMismatch
+            :st
+            nid: cr.subject
+            ln: (nodeLine n: sn)
+            co: (nodeCol n: sn)
+            msg: sm.stringView
+        )
+        return ztypes.noConst
+    }
+    stmt: constMatchArm :st :ast :cr subject: sv
+    if stmt.isZero then return ztypes.noConst
+    return (constBlockValue :st :frame :ast :unitDecl nid: stmt)
+}
+
+# constMatchArm -- the arm a compile-time `match` selects, its arms checked on
+# the way: each names an arm of the subject's type, and names it once, and a
+# match with no else covers them all. 0 when one is refused, the refusal
+# recorded.
+constMatchArm: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    cr: caseref
+    subject: ztypes.cval
+} out zast.nodeid is {
+    covered: IdSet zast.nameid
+    stmt: zast.nodeid
+    k: u64
+    for k < cr.nclauses loop {
+        cl: caseClauseRefAt :ast nid: (zast.caseClauseAt :ast nid: cr.nid i: k)
+        k = k + 1
+        armId: cl.name
+        refusal: constArmRefusal :st :ast subjTid: subject.armTid :armId :covered
+        if refusal.length > 0 then {
+            constFailMismatch :st nid: cl.nid ln: cl.lineno co: cl.colno msg: refusal.stringView
+            return zast.nodeid
+        }
+        covered.add item: armId
+        if stmt.isZero when armId == subject.armName then stmt = cl.statement
+    }
+    if cr.elseclause.isZero.not then {
+        if stmt.isZero then stmt = cr.elseclause
+        return stmt
+    }
+    missing: constMissingArms :st :ast subjTid: subject.armTid :covered
+    if missing.length == 0 then return stmt
+    (constFailRecord
+        :st
+        kind: ztypes.constfailkind.nonExhaustive
+        nodeid: cr.nid
+        lineno: cr.lineno
+        colno: cr.colno
+        width: 5
+        strId: (constInternString :st text: missing.stringView)
+    )
+    return zast.nodeid
+}
+
+# constArmRefusal -- why a compile-time `match` arm cannot stand: it names no
+# arm of the subject's type, or one an earlier arm already named. "" when it
+# can.
+constArmRefusal: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    subjTid: ztypes.tid
+    armId: zast.nameid
+    covered: (IdSet zast.nameid).view
+} out String is {
+    an: zast.nameTextAt :ast ref: armId
+    declared: st.typing.declFindChild parentDeclId: (declOfTypeId :st tid: subjTid) nameId: armId
+    if declared.isZero then {
+        stn: st.reg.nameOf tid: subjTid
+        return "type '\{stn}' has no arm '\{an}'"
+    }
+    if (covered.has item: armId) then return "arm '\{an}' is matched twice"
+    return "".string
+}
+
+# constMissingArms -- the arms of `subjTid` no case covers, joined for the
+# report; "" when every arm is covered.
+constMissingArms: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    subjTid: ztypes.tid
+    covered: (IdSet zast.nameid).view
+} out String is {
+    missing: String
+    arms: sumSubtypeNames :ast :st sid: subjTid.u64
+    with ait: arms.iterate do for arm: ait loop {
+        if (covered.has item: (zast.poolFind pool: ast.names text: arm.stringView)).not then {
+            if missing.length > 0 then missing.append ", "
+            missing.append arm
+        }
+    }
+    return missing
 }
 
 # constStringLength -- a string constant's `length`: its byte count, typed u64
@@ -42013,8 +42147,8 @@ constOfNamedBase: function {
 
 
 # constplan -- what evaluating one row needs once its view is gone: the arm
-# (2 atomid, 3 atomstring, 4 dottedpath, 5 infix, 6 call, 7 ifexpr, 0 anything
-# else) and the ids and scalars that arm reads.
+# (2 atomid, 3 atomstring, 4 dottedpath, 5 infix, 6 call, 7 ifexpr, 8 caseexpr,
+# 0 anything else) and the ids and scalars that arm reads.
 constplan: record {
     # the arm the constant names, when it names one
     arm: u32
@@ -42075,6 +42209,8 @@ evalConstPlan: function {ast: Ast.view nid: zast.nodeid} out constplan is {
             if n.infix then arm = 5
         } case ifexpr then {
             arm = 7
+        } case caseexpr then {
+            arm = 8
         } else null
     }
     return (constplan :arm :innerId :nameId :parts :parentId :childId :ln :co)
@@ -42336,6 +42472,7 @@ evalConstNode: function {
         if fb.stmt.isZero then return ztypes.noConst
         return (constBlockValue :st :frame :ast :unitDecl nid: fb.stmt)
     }
+    if plan.arm == 8 then return (constOfMatch :st :frame :ast :unitDecl :nid)
     return ztypes.noConst
 }
 
@@ -42421,10 +42558,11 @@ stampConstAt: function {
 # is what keeps the cost linear in the tree instead of linear in its depth at
 # every node.
 #
-# A CALL AND AN `if` ARE NOT ASKED. The call arm folds string static methods and
-# records a reached `error`; the first changes nothing a body emits and the
-# second is a diagnostic this walk must never raise. The `if` arm folds a branch
-# the emitter already reads its own channel for. Measured on a self-compile, the
+# A CALL, AN `if` AND A `match` ARE NOT ASKED. The call arm folds string static
+# methods and records a reached `error`; the first changes nothing a body emits
+# and the second is a diagnostic this walk must never raise. The `if` arm folds
+# a branch the emitter already reads its own channel for, and a body's `match`
+# is decided by foldCaseArm. Measured on a self-compile, the
 # two together allocate for every call and every `if` in the program and move
 # not one byte of emitted C. A METHOD ON A STRING CONSTANT is the exception:
 # `(GREETING.substring from: 0 to: 5)` folds, and it is asked only where the
@@ -42433,7 +42571,8 @@ stampConstAt: function {
 # AN ESCAPED LITERAL IS NOT ASKED either: joining its chunks allocates, and the
 # literal pool already spells it in the body's C.
 #
-# A PATH IS ASKED ONLY WHERE IT CAN BE A LITERAL OR A STRING CONSTANT'S METHOD.
+# A PATH IS ASKED ONLY WHERE IT CAN BE A LITERAL, A CONVERSION OF A FOLDED
+# INTEGER OR A STRING CONSTANT'S METHOD.
 # `1.u32` is a dotted path and its value is the point of this walk; `zast.nodeid`
 # is a dotted path too, and asking costs two owned name copies to be told there
 # is no value. A unit constant reached through a path is inlined by memberConst
@@ -42450,7 +42589,7 @@ useSiteAsks: function {
         return (st.typing.nodeConst.has key: br.rhs.u64)
     }
     if plan.arm == 6 then return (callOnFoldedString :st :ast :nid)
-    if plan.arm == 7 then return false
+    if plan.arm == 7 or (plan.arm == 8) then return false
     if plan.arm == 3 then return plan.parts < 2
     if plan.arm != 4 then return true
     if (atomFoldedToString :st :ast nid: plan.parentId) then return true
@@ -43396,10 +43535,11 @@ operandConstantType: function {
 }
 
 # isComputedConstantDef -- the definition COMPUTES its value: an operator or a
-# compile-time `if`. These are the shapes whose missing value is a refusal.
+# compile-time `if` or `match`. These are the shapes whose missing value is a
+# refusal.
 isComputedConstantDef: function {ast: Ast.view nid: zast.nodeid} out bool is {
     n: ast.nodes.get i: nid.u64
-    if n.ifexpr then return true
+    if n.ifexpr or n.caseexpr then return true
     return (zast.infixPartsOf :ast :n).found
 }
 
@@ -43427,6 +43567,7 @@ unfoldedWhy: function {
     if recorded then return true
     plan: evalConstPlan :ast :nid
     if plan.arm == 7 then return (unfoldedIfWhy :st :frame :ast :unitDecl :nid :visiting)
+    if plan.arm == 8 then return (unfoldedMatchWhy :st :frame :ast :unitDecl :nid :visiting)
     if plan.arm == 5 then return (unfoldedBinopWhy :st :frame :ast :unitDecl :nid :visiting)
     if plan.arm == 2 then {
         return (unfoldedNameWhy :st :frame :ast :unitDecl :nid nameId: plan.nameId :visiting)
@@ -43440,7 +43581,7 @@ unfoldedWhy: function {
         unfolded: true
     ) then return true
     msg: "not a compile-time constant".string
-    hint: "a unit constant is built from literals, other constants, operators and `if`".string
+    hint: "a unit constant is built from literals, other constants, operators, `if` and `match`".string
     if plan.arm == 6 then {
         msg = "a call has no compile-time value".string
         hint = "only `error` and the string constant methods are evaluated at compile time".string
@@ -43574,6 +43715,28 @@ unfoldedCondWhy: function {
         hint: "".string
     )
     return 0
+}
+
+# unfoldedMatchWhy -- a compile-time `match` with no value. A refused arm or a
+# missing case is recorded by the evaluator and rendered where the value was
+# pulled; what is left is a subject with no value, or a selected arm whose body
+# has none.
+unfoldedMatchWhy: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    nid: zast.nodeid
+    visiting: ListVal u32
+} out bool is {
+    cr: caseRefAt :ast :nid
+    if cr.nid.isZero then return false
+    if (unfoldedWhy :st :frame :ast :unitDecl nid: cr.subject :visiting) then return true
+    sv: evalConstNode :st :frame :ast :unitDecl nid: cr.subject
+    stmt: constMatchArm :st :ast :cr subject: sv
+    constFailClear :st
+    if stmt.isZero then return true
+    return (unfoldedBranchWhy :st :frame :ast :unitDecl nid: stmt :visiting)
 }
 
 # unfoldedBranchWhy -- the selected branch of a compile-time `if` has no value:

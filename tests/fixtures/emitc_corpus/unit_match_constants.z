@@ -1,0 +1,52 @@
+# A COMPILE-TIME `match` IS A CONSTANT, as a compile-time `if` is: its subject
+# folds to an arm constant and its value is the selected arm's, typed by that
+# arm. Only the selected arm is evaluated, so a dead one may hold an `error`. A
+# unit-level match reached the emitter from every read ("unhandled interp part
+# type"); in a type's `as` section, and as a field or parameter default, a
+# `match` -- and on a parameter an `if` too -- did not parse.
+mode: variant {
+    fast: null
+    slow: null
+    eco: null
+}
+
+M: mode.slow
+PICK: match (M) case fast then { 1 } case slow then { 2 } else { 3 }
+DIRECT: match (mode.eco) case eco then { 10 } else { 20 }
+ON: 3 > 2
+TRUTH: match (ON) case false then { 0 } case true then { 1 }
+LABEL: match (M) case fast then { "fast" } else { "other" }
+NARROW: match (M) case slow then { 5.u8 } else { 6.u8 }
+NEXT: match (M) case fast then { mode.slow } else { mode.eco }
+DEAD: match (M) case fast then { error "never selected" } else { 4 }
+NESTED: match (M) case fast then { 1 } case slow then { match (M) case slow then { 20 } else { 30 } } else { 3 }
+WINNER: match (M) case slow then { 7 } else { "a string arm the fold does not select" }
+AFTER: PICK + 1
+
+cfg: record {
+    x: i64
+} as {
+    SIDE: match (M) case slow then { 64 } else { 32 }
+}
+
+Rec: record {
+    n: match (M) case slow then { 9 } else { 0 }
+}
+
+take: function {n: match (M) case slow then { 8 } else { 0 } k: if ON then { 5.u8 } else { 6.u8 }} is {
+    v: k
+    v = v - 6
+    print "take \{n} \{v}"
+}
+
+main: function is {
+    print "\{PICK} \{DIRECT} \{TRUTH} \{LABEL} \{DEAD} \{NESTED} \{WINNER} \{AFTER}"
+    narrow: NARROW
+    narrow = narrow - 6
+    same: NEXT == mode.eco
+    r: Rec
+    print "\{narrow} \{same} \{cfg.SIDE} \{r.n}"
+    take
+    take n: 1 k: 7
+    if PICK == 2 then print "folded" else print "not folded"
+}

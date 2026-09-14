@@ -2471,8 +2471,12 @@ Parser: class {
                         names.append from: nm.u64
                         opName: lblTok.text
                         la: this.atomLookahead :lex
-                        if la then {
-                            pathNode: this.parseTyperefOperation :lex
+                        # a compile-time `if` or `match` declares by value, as
+                        # it does on a field
+                        vtt: lex.peekType
+                        isCond: vtt == zlexer.toktype.ifTok or (vtt == zlexer.toktype.matchTok)
+                        if la or isCond then {
+                            pathNode: this.parameterValue :lex :isCond
                             pErr: Parser.isError node: pathNode
                             if pErr then {
                                 params.append (this.intern n: pathNode)
@@ -2986,8 +2990,16 @@ Parser: class {
         return items
     }
 
+    # parameterValue -- what a parameter's label is followed by: a type
+    # reference, or a compile-time `if` or `match` that declares it by value.
+    parameterValue: function {:this lex: zlexer.Lexer isCond: bool} out astnode is {
+        if isCond.not then return (this.parseTyperefOperation :lex)
+        if lex.peekType == zlexer.toktype.ifTok then return (this.acceptIfExpression :lex)
+        return (this.acceptMatchExpression :lex)
+    }
+
     # The value of a `name:` item inside an object body: a method, an
-    # inline unit, a compile-time `if`, or a field operation (no named
+    # inline unit, a compile-time `if` or `match`, or a field operation (no named
     # arguments). Inline type definitions (record / class / ...) are rejected.
     # Returns a bare astnode.
     objectBodyMember: function {:this lex: zlexer.Lexer unitKind: zast.unitkind} out astnode is {
@@ -3002,8 +3014,9 @@ Parser: class {
             :startPos
             kind: unitKind
         )
-        # a compile-time `if` is a value, as it is at unit level
+        # a compile-time `if` or `match` is a value, as it is at unit level
         if tt == zlexer.toktype.ifTok then return (this.acceptIfExpression :lex)
+        if tt == zlexer.toktype.matchTok then return (this.acceptMatchExpression :lex)
         inlineTypedef: isInlineTypedefTok :tt
         if inlineTypedef then {
             bad: lex.acceptAny pool: this.ast.names
