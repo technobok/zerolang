@@ -933,7 +933,14 @@ perf: $(PERFBIN)
 # source ~12 lines longer.
 #
 # +103 when a box came to be built in place: the source a few lines longer.
-ALLOC_BASELINE := 2670132
+#
+# +36,630 when a user function's arguments came to be evaluated in written order:
+# +28,172 over the same source, the ordered temps zc's own calls now read their
+# arguments into (7,084 of them in zc.c: a name, its declaration and its C type
+# each), and +8,378 the source longer. The first cut allocated +146k; building
+# a temp only once a later part follows the last one, and assembling the
+# assignments without a string per piece, took that out.
+ALLOC_BASELINE := 2706762
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

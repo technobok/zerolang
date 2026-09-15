@@ -3202,6 +3202,23 @@ Ctx: class {
     argHoistRaw: List String
     # the next `_ah` number
     argHoistCtr: u64
+    # the parts of the calls being built, in the order they are evaluated: the
+    # assignments that run ahead of each call, and, per call, the part last read
+    # that is not constant and not yet given a temp -- its text, the slot it
+    # fills, and the function, parameter type and parameter name its temp's C
+    # type is spelled from. A call keeps the stretch above the marks it took.
+    orderPieceVals: List String
+    orderPieceNames: List String
+    orderPieceTemps: ListVal u64
+    orderPendText: List String
+    orderPendSlot: ListVal u64
+    orderPendFid: ListVal u64
+    orderPendPid: ListVal u64
+    orderPendName: ListVal u64
+    # the next `_o` number, the function's own
+    orderCtr: u64
+    # whether the argument just built was passed by pointer
+    lastArgByPtr: bool
     # the lowest temp number the function being emitted has not handed out,
     # across every counter a statement expression in it keeps. A temp declared
     # inside a statement expression counts on from it, so it never shadows a
@@ -5868,6 +5885,220 @@ isCNameByte: function {c: u8} out bool is {
     return false
 }
 
+# orderstate -- where one call's parts began in the evaluation-order lists,
+# whether a part that is not constant has been seen, and whether the last such
+# part is still waiting for a temp.
+orderstate: record {
+    pieceMark: u64
+    live: bool
+    pending: bool
+}
+
+# orderBegin -- a call's parts are about to be built, in written order.
+orderBegin: function {ctx: Ctx.view} out orderstate is {
+    return (orderstate pieceMark: ctx.orderPieceVals.length live: false pending: false)
+}
+
+# orderPart -- one part of a call, just built from `mark`, placed in evaluation
+# order. Parts are evaluated in the order they are written, so once a part that
+# is not constant has been seen, anything evaluated after it -- a later part's
+# hoists, a later part that is not constant -- runs in place, after it, and that
+# part is read into an ordered temp first. A part that is not constant waits for
+# its temp until something follows it: the last one stays in the call. The first
+# such part's hoists stay where the statement declares them: nothing is
+# evaluated before them.
+orderPart: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    st: orderstate.borrow
+    # where the pending hoists stood before the part was built
+    mark: hoistmark
+    text: String.take
+    # a literal, a folded constant, or an address no part can move
+    constant: bool
+    # the function and parameter a temp's C type is spelled from
+    fid: ztypes.tid
+    pid: u64
+    pname: zast.nameid
+    # the parameter slot the part fills
+    slot: u64
+    vals: (IdMapR u64 V: String).borrow
+} is {
+    if st.live then {
+        follows: constant.not or (hoistsWithValues :ctx :mark)
+        if follows then orderSettle :ast :symtab :ctx :st :vals
+        i: mark.names
+        for i < ctx.argHoistNames.length loop {
+            if (ctx.argHoistVals.get :i).length > 0 then {
+                ctx.orderPieceNames.append (ctx.argHoistNames.get :i).copy
+                ctx.orderPieceTemps.append 0
+                ctx.orderPieceVals.append (ctx.argHoistVals.set :i val: String)
+            }
+            i = i + 1
+        }
+    }
+    if constant then {
+        vals.set key: slot value: text
+        return
+    }
+    st.live = true
+    st.pending = true
+    ctx.orderPendText.append text
+    ctx.orderPendSlot.append slot
+    ctx.orderPendFid.append fid.u64
+    ctx.orderPendPid.append pid
+    ctx.orderPendName.append pname.u64
+}
+
+# hoistsWithValues -- whether a part built from `mark` recorded a hoist that is
+# still initialised where the statement declares it.
+hoistsWithValues: function {ctx: Ctx.view mark: hoistmark} out bool is {
+    i: mark.names
+    for i < ctx.argHoistNames.length loop {
+        if (ctx.argHoistVals.get :i).length > 0 then return true
+        i = i + 1
+    }
+    return false
+}
+
+# orderSettle -- something is evaluated after the waiting part: read it into its
+# ordered temp here, declared zero by the statement. A part whose type has no C
+# spelling stays in the call.
+orderSettle: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    st: orderstate.borrow
+    vals: (IdMapR u64 V: String).borrow
+} is {
+    if st.pending.not then return
+    st.pending = false
+    text: ctx.orderPendText.pop
+    slot: ctx.orderPendSlot.pop
+    fid: ztypes.tid.create from: ctx.orderPendFid.pop
+    pid: ztypes.tid.create from: ctx.orderPendPid.pop
+    pn: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: ctx.orderPendName.pop)
+    ct: paramCType :ast :symtab :ctx :fid pname: pn.stringView :pid
+    if ct.length == 0 then {
+        vals.set key: slot value: text
+        return
+    }
+    tnum: ctx.orderCtr
+    ctx.orderCtr = ctx.orderCtr + 1
+    tn: "_o\{tnum}"
+    ctx.orderPieceNames.append String
+    ctx.orderPieceTemps.append tnum + 1
+    ctx.orderPieceVals.append text
+    ctx.argHoistNames.append tn.copy
+    ctx.argHoistVals.append String
+    ctx.argHoistTypes.append ct
+    ctx.argHoistDtors.append String
+    vals.set key: slot value: tn
+}
+
+# orderFinish -- a call's parts are built: the opening of the comma expression
+# whose assignments run ahead of it -- `(a = x, b = y, ` -- or "" when there are
+# none (orderClose completes it). A part still waiting for a temp is the last
+# evaluated and stays in the call.
+orderFinish: function {ctx: Ctx st: orderstate vals: (IdMapR u64 V: String).borrow} out String is {
+    if st.pending then {
+        vals.set key: ctx.orderPendSlot.pop value: ctx.orderPendText.pop
+        ctx.orderPendFid.pop
+        ctx.orderPendPid.pop
+        ctx.orderPendName.pop
+    }
+    prefix: String
+    if ctx.orderPieceVals.length == st.pieceMark then return prefix
+    prefix.append "("
+    i: st.pieceMark
+    for i < ctx.orderPieceVals.length loop {
+        tnum: ctx.orderPieceTemps.get :i
+        if tnum > 0 then {
+            prefix.append "_o"
+            appendDecimal buf: prefix n: tnum - 1
+        } else {
+            prefix.append (ctx.orderPieceNames.get :i)
+        }
+        prefix.append " = "
+        prefix.append (ctx.orderPieceVals.get :i)
+        prefix.append ", "
+        i = i + 1
+    }
+    for ctx.orderPieceVals.length > st.pieceMark loop {
+        ctx.orderPieceVals.pop
+        ctx.orderPieceNames.pop
+        ctx.orderPieceTemps.pop
+    }
+    return prefix
+}
+
+# appendDecimal -- `n` in decimal digits, written onto `buf` without a string of
+# its own.
+appendDecimal: function {buf: String.borrow n: u64} is {
+    p: 1.u64
+    for n / p >= 10 loop p = p * 10
+    for p > 0 loop {
+        dig: n / p % 10
+        buf.appendByte b: ((48.u64 + dig).u8.or d: 48)
+        p = p / 10
+    }
+}
+
+# orderClose -- a call's C text, `callee(args)`, after the assignments orderFinish
+# opened ahead of it.
+orderClose: function {prefix: String.take callee: StringView args: StringView} out String is {
+    opened: prefix.length > 0
+    r: prefix
+    r.append callee
+    r.append "("
+    r.append args
+    r.append ")"
+    if opened then r.append ")"
+    return r
+}
+
+# orderConstant -- a part whose evaluation no other part can observe or affect:
+# a literal or a folded constant, an address of a plain place, or a pointer a
+# pointer parameter is handed on.
+orderConstant: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+    text: StringView
+    # the parameter takes the part by pointer
+    byPtr: bool
+} out bool is {
+    cv: symtab.typing.nodeConstIn mono: ctx.curThisTid.u64 nid: (interpPartNodeId :n)
+    if cv.kind.none.not then return true
+    if n.atomstring when (litIndexOf :ctx nid: n.nodeid.u64) > 0 then return true
+    if text.startsWith "&" then {
+        addr: text.substring from: 1 to: text.length
+        if (isPlainCPath s: addr) then return true
+    }
+    if byPtr.not then return false
+    return (isPlainCPath s: text)
+}
+
+# isPlainCPath -- C text that names a place and reads nothing through a pointer a
+# call could replace: an identifier, and member reads `.` and `->` off it.
+isPlainCPath: function {s: StringView} out bool is {
+    if s.length == 0 then return false
+    i: u64
+    for i < s.length loop {
+        c: (s.byteAt :i).or d: 0
+        if c == 46 then {
+            i = i + 1
+        } else if c == 45 when ((s.byteAt i: i + 1).or d: 0) == 62 then {
+            i = i + 2
+        } else {
+            if (isCNameByte :c).not then return false
+            i = i + 1
+        }
+    }
+    return true
+}
+
 # flushArgHoists -- emit the `String_t _ahN = <rvalue>;` declarations recorded by
 # emitInstanceMethodCall for borrow-String args that needed `&` on a non-lvalue.
 # Called at statement level (which holds ind/tmp/buf) right after the call
@@ -5896,11 +6127,17 @@ flushArgHoists: function {
         vlo: ctx.argHoistVals.get :i
         cty: ctx.argHoistTypes.get :i
         # a hoist assigned where its part runs has no initialiser: it starts zero
+        buf.append ind
+        buf.append cty
+        buf.append " "
+        buf.append nmo
+        buf.append " = "
         if vlo.length == 0 then {
-            buf.append "\{ind}\{cty} \{nmo} = {0};\n"
+            buf.append "{0}"
         } else {
-            buf.append "\{ind}\{cty} \{nmo} = \{vlo};\n"
+            buf.append vlo
         }
+        buf.append ";\n"
         dto: ctx.argHoistDtors.get :i
         if dto.length > 0 then tmp.oweTemp stmt: dto.copy name: nmo.copy
         i = i + 1
@@ -10375,6 +10612,7 @@ emitFnCallWithFid: function {
     recFieldLists :ast :symtab tid: fid names: fpNames ids: fpIds nameIds: fpIds9Nm
     slots9g: argSlotList :ast :call fpNameIds: fpIds9Nm
     valBySlot9g: IdMapR u64 V: String
+    ord: orderBegin :ctx
     ai: u64
     arx439: u64
     for arx439 < call.arguments.count.u64 loop {
@@ -10385,20 +10623,24 @@ emitFnCallWithFid: function {
             slot9g: slots9g.get i: ai
             if slot9g < fpNames.length then {
                 fpnO: fpNames.get i: slot9g
-                av: (userFnArgText
+                (orderUserFnArg
                     :ast
                     :symtab
                     :ctx
                     :fid
                     pinId: (fpIds.get i: slot9g)
                     pinNm: fpnO.stringView
+                    pname: (zast.nameid.create from: (fpIds9Nm.get i: slot9g))
                     argOpNode: (ast.nodes.get i: a.operation.u64)
+                    slot: slot9g
+                    :ord
+                    vals: valBySlot9g
                 )
-                valBySlot9g.set key: slot9g value: av
             }
             ai = ai + 1
         }
     }
+    oprefix9g: orderFinish :ctx st: ord vals: valBySlot9g
     argTids: String
     emitted9g: u64
     pp9g: u64
@@ -10414,8 +10656,7 @@ emitFnCallWithFid: function {
         } case none then null
         pp9g = pp9g + 1
     }
-    e: "\{fc}(\{argTids})"
-    return e
+    return (orderClose prefix: oprefix9g callee: fc.stringView args: argTids.stringView)
 }
 
 # emitUnitMethodCall -- a generic-unit-instance method call (intmath.add a: 3
@@ -11133,6 +11374,7 @@ userFnArgText: function {
     pinNm: StringView
     argOpNode: astnode.view
 } out String is {
+    ctx.lastArgByPtr = false
     iavb: (emitInterpArgForParam
         :ast
         :symtab
@@ -11182,7 +11424,16 @@ userFnArgText: function {
         own: ztypes.zparamownership.takeMode
     )
     isBorrowed: hoistExprIsBorrowRooted :ast :symtab :ctx n: argOpNode
-    if (userFnParamByPointer :ast :symtab :ctx :fid pname: pinNm pid: pinId take: pTake8) then {
+    ctx.lastArgByPtr = (userFnParamByPointer
+        :ast
+        :symtab
+        :ctx
+        :fid
+        pname: pinNm
+        pid: pinId
+        take: pTake8
+    )
+    if ctx.lastArgByPtr then {
         if (argAlreadyPointer :ast :symtab :ctx n: argOpNode vid: avq) then return atomVarId
         return (emitByrefArg
             :ast
@@ -11225,6 +11476,7 @@ emitUserFnCall: function {
     recFieldIds :symtab tid: fid ids: fpIds nameIds: fpIdsNm
     slots: argSlotList :ast :call fpNameIds: fpIdsNm
     valBySlot: IdMapR u64 V: String
+    ord: orderBegin :ctx
     ai8: u64
     arx479: u64
     for arx479 < call.arguments.count.u64 loop {
@@ -11239,19 +11491,24 @@ emitUserFnCall: function {
                     pool: ast.names
                     ref: (zast.nameid.create from: (fpIdsNm.get i: slot9b))
                 )
-                valBySlot.set key: slot9b value: (userFnArgText
+                (orderUserFnArg
                     :ast
                     :symtab
                     :ctx
                     :fid
                     pinId: (fpIds.get i: slot9b)
                     pinNm: pinNmB.stringView
+                    pname: (zast.nameid.create from: (fpIdsNm.get i: slot9b))
                     :argOpNode
+                    slot: slot9b
+                    :ord
+                    vals: valBySlot
                 )
             }
             ai8 = ai8 + 1
         }
     }
+    oprefix: orderFinish :ctx st: ord vals: valBySlot
     args: String
     emitted: u64
     pp: u64
@@ -11289,8 +11546,48 @@ emitUserFnCall: function {
         }
         pp = pp + 1
     }
-    e8: "\{fc}(\{args})"
-    return e8
+    return (orderClose prefix: oprefix callee: fc.stringView args: args.stringView)
+}
+
+# orderUserFnArg -- one written argument of a user-function call, built and
+# placed in evaluation order, its text filling its parameter's slot.
+orderUserFnArg: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    fid: ztypes.tid
+    pinId: u64
+    pinNm: StringView
+    # the parameter's name id, which a temp's C type is spelled from
+    pname: zast.nameid
+    argOpNode: astnode.view
+    slot: u64
+    ord: orderstate.borrow
+    vals: (IdMapR u64 V: String).borrow
+} is {
+    mk: pendingHoistMark :ctx
+    txt: userFnArgText :ast :symtab :ctx :fid :pinId :pinNm :argOpNode
+    constant: (orderConstant
+        :symtab
+        :ctx
+        n: argOpNode
+        text: txt.stringView
+        byPtr: ctx.lastArgByPtr
+    )
+    (orderPart
+        :ast
+        :symtab
+        :ctx
+        st: ord
+        mark: mk
+        text: txt
+        :constant
+        :fid
+        pid: pinId
+        :pname
+        :slot
+        :vals
+    )
 }
 
 # isFieldwiseCtorTid -- the id names a type a bare call CONSTRUCTS field-wise:
@@ -26342,6 +26639,8 @@ emitFnBody: function {
     # way counts from zero and hands the outer one's count back
     outerTmpHigh: ctx.tmpHigh
     ctx.tmpHigh = 0
+    outerOrderCtr: ctx.orderCtr
+    ctx.orderCtr = 0
     oweTakeParamFrees :ast :symtab :ctx :op :fid :tmp
     endsRet: false
     if op.body > 0 then {
@@ -26355,6 +26654,7 @@ emitFnBody: function {
         endsRet = ctx.tailReturned or (blockDiverges :ast :symtab :ctx n: opb)
     }
     ctx.tmpHigh = outerTmpHigh
+    ctx.orderCtr = outerOrderCtr
     # a body that diverges on every path never reaches this flush; the
     # return/break cleanups already freed the same locals on those paths
     if endsRet then return
@@ -26986,6 +27286,16 @@ emitC: function {
         argHoistDtors: List String
         argHoistRaw: List String
         argHoistCtr: 0
+        orderPieceVals: List String
+        orderPieceNames: List String
+        orderPieceTemps: ListVal u64
+        orderPendText: List String
+        orderPendSlot: ListVal u64
+        orderPendFid: ListVal u64
+        orderPendPid: ListVal u64
+        orderPendName: ListVal u64
+        orderCtr: 0
+        lastArgByPtr: false
         tmpHigh: 0
         argHoistFloor: 0
         argHoistRawFloor: 0
