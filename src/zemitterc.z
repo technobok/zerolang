@@ -2028,13 +2028,15 @@ ternaryClause: function {
     # the first clause's first condition runs whenever the ternary does; every
     # other condition, and every arm, only on some paths
     isFirst: bool
+    # the chain is a reference: the arm yields an address (armRefLeaf)
+    ref: false
 } out String is {
     match (
         c
     ) case ifclause then {
         cond: ternaryConds :ast :symtab :ctx :c :isFirst
         if cond.length == 0 then return cond
-        vx: armInPlace :ast :symtab :ctx n: (ast.nodes.get i: c.statement.u64)
+        vx: armInPlace :ast :symtab :ctx n: (ast.nodes.get i: c.statement.u64) :ref
         if vx.length == 0 then return vx
         t0: "((\{cond}) ? (\{vx}) : "
         return t0
@@ -2100,11 +2102,18 @@ armInPlace: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: astnode.view
+    # the arm of a reference chain: its address is the answer (armRefLeaf)
+    ref: false
 } out String is {
     mk: openInPlace :ctx
     vx: armValueExpr :ast :symtab :ctx :n
-    if (hoistsGrew :ctx mark: mk) then return (assignInPlace :ctx mark: mk text: vx.stringView)
+    if (hoistsGrew :ctx mark: mk) then {
+        av: assignInPlace :ctx mark: mk text: vx.stringView
+        if ref.not or (av.length == 0) then return av
+        return (armRefLeaf :ast :symtab :ctx :n text: av.stringView)
+    }
     closeInPlace :ctx mark: mk
+    if ref then return (armRefLeaf :ast :symtab :ctx :n text: vx.stringView)
     return vx
 }
 
@@ -2115,6 +2124,8 @@ emitTernaryChain: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: zast.ifrow.view
+    # a reference chain: every arm yields an address (emitControlRef)
+    ref: false
 } out String is {
     tx: String
     depth: u64
@@ -2123,7 +2134,7 @@ emitTernaryChain: function {
     for clx959 < n.clauses.count.u64 loop {
         cId: zast.kidAt kids: ast.kids span: n.clauses i: clx959
         c9r: ast.nodes.get i: cId.u64
-        cx: ternaryClause :ast :symtab :ctx c: c9r isFirst: clx959 == 0
+        cx: ternaryClause :ast :symtab :ctx c: c9r isFirst: clx959 == 0 :ref
         clx959 = clx959 + 1
         if cx.length == 0 then return (ternaryAsStatements
             :ast
@@ -2131,12 +2142,20 @@ emitTernaryChain: function {
             :ctx
             nid: n.nodeid.u64
             mark: tm
+            :ref
         )
         tx.append cx
         depth = depth + 1
     }
-    ex: ternaryElse :ast :symtab :ctx oId: n.elseclause
-    if ex.length == 0 then return (ternaryAsStatements :ast :symtab :ctx nid: n.nodeid.u64 mark: tm)
+    ex: ternaryElse :ast :symtab :ctx oId: n.elseclause :ref
+    if ex.length == 0 then return (ternaryAsStatements
+        :ast
+        :symtab
+        :ctx
+        nid: n.nodeid.u64
+        mark: tm
+        :ref
+    )
     tx.append ex
     dk: u64
     for dk < depth loop {
@@ -2169,8 +2188,11 @@ ternaryAsStatements: function {
     nid: u64
     # where the pending hoists stood before the ternary began
     mark: hoistmark
+    # the chain was a reference: so is the statement expression
+    ref: false
 } out String is {
     dropHoistsTo :ctx :mark
+    if ref then return (emitControlPtrExpr :ast :symtab :ctx n: (ast.nodes.get i: nid))
     icx: emitControlExpr :ast :symtab :ctx n: (ast.nodes.get i: nid)
     if icx.length > 0 then return icx
     return (unhandledExpr :ctx line: (ztypecheck.nodeLine n: (ast.nodes.get i: nid)))
@@ -2182,9 +2204,11 @@ ternaryElse: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     oId: zast.nodeid
+    # the arm of a reference chain (armRefLeaf)
+    ref: false
 } out String is {
     if oId > 0 then {
-        ev: armInPlace :ast :symtab :ctx n: (ast.nodes.get i: oId.u64)
+        ev: armInPlace :ast :symtab :ctx n: (ast.nodes.get i: oId.u64) :ref
         if ev.length == 0 then return ev
         e0: "(\{ev})"
         return e0
@@ -3240,6 +3264,16 @@ Ctx: class {
     # them, so a statement inside flushes only the hoists it added
     argHoistFloor: u64
     argHoistRawFloor: u64
+    # inside a control value emitted as a reference (emitControlPtrExpr): one
+    # more than the number of the `_cv` pointer its arms assign, 0 outside one
+    armRefCv: u64
+    # the reference control values being built as statements, innermost last:
+    # a temporary an arm parks its value in waits here until the outermost one
+    # is done, since the statement around it declares and releases it
+    armRefDepth: u64
+    armParkNames: List String
+    armParkTypes: List String
+    armParkDtors: List String
     # the next `_wc` number: the guard a suspending `when` condition computes
     # into, since its value has to outlive the `if` that computes it
     whenGuardCtr: u64
@@ -4570,6 +4604,12 @@ svValueFormAt: function {
             isBorrow: (hoistExprIsBorrowRooted :ast :symtab :ctx :n)
         )
         if hv.length > 0 then return (svValueForm :ctx expr: hv.stringView :isStr vid: ztypes.vid)
+    }
+    # a reference control value (`(*p)`) runs its arms where it is spelt: it is
+    # read once, into a temp that owns nothing
+    if isStr when (singleReadNeedsTemp s: expr) then {
+        rv: hoistLvalue :ast :symtab :ctx av: expr tid: ctx.strTid
+        return (svValueForm :ctx expr: rv.stringView :isStr vid: ztypes.vid)
     }
     return (svValueForm :ctx :expr :isStr :vid)
 }
@@ -6017,6 +6057,8 @@ stringAppendViewText: function {
 # spelled; a literal, a local and a deref projection are names.
 singleReadNeedsTemp: function {s: StringView} out bool is {
     if (isCompoundLiteralText :s) then return false
+    # a reference control value's pointer runs its conditions and arms
+    if (s.startsWith prefix: "(*") when (s.contains needle: "?") then return true
     return (isNonLvalueArg :s)
 }
 
@@ -7983,6 +8025,10 @@ hoistExprIsBorrowRooted: function {
         return (callRhsIsBorrow :ast :symtab :ctx call: n)
     } case dottedpath then {
         return (hoistExprIsBorrowRooted :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
+    } case ifexpr then {
+        return (controlValueIsReference :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64))
+    } case caseexpr then {
+        return (controlValueIsReference :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64))
     } else {
         return false
     }
@@ -15867,6 +15913,9 @@ emitExpr: function {
         if vfb.known when vfb.stmt.isZero.not then {
             return (armValueExpr :ast :symtab :ctx n: (ast.nodes.get i: vfb.stmt.u64))
         }
+        if (controlValueIsReference :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64)) then {
+            return (emitControlRef :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64))
+        }
         if (ifIsTernary :ast n: (ast.nodes.get i: n.nodeid.u64)).not then {
             icx: emitControlExpr :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64)
             if icx.length > 0 then return icx
@@ -15876,6 +15925,9 @@ emitExpr: function {
     } case call then {
         return (emitCallValue :ast :symtab :ctx call: n)
     } case caseexpr then {
+        if (controlValueIsReference :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64)) then {
+            return (emitControlRef :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64))
+        }
         mcx: emitControlExpr :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64)
         if mcx.length > 0 then return mcx
         return (unhandledExpr :ctx line: n.lineno)
@@ -15910,6 +15962,258 @@ ifIsTernary: function {ast: Ast.view n: astnode.view} out bool is {
         ).not then return false
     } else null
     return (ztypecheck.armLeaves :ast :n inLoop: false).not
+}
+
+# controlValueIsReference -- an `if` or a `match` used as a value whose type owns
+# something and one of whose arms is a place (armLeafIsPlace): what it yields is
+# storage something else owns on that arm's path, so it is emitted as a reference
+# to the arm's value (emitControlRef) rather than as a value of its own, which
+# every use would free.
+controlValueIsReference: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    n: astnode.view
+} out bool is {
+    isCtl: n.ifexpr or n.caseexpr
+    if isCtl.not then return false
+    nid: zast.nodeIdOf :n
+    vt: bindingStampOf :symtab :ctx nid: nid.u64
+    if vt.isZero then return false
+    owns: vt == ctx.strTid
+    if owns.not then owns = isHeapPtrCollection :symtab :ctx tid: vt
+    if owns.not then owns = symtab.reg.needsDestructor typeId: vt
+    if owns.not then return false
+    blocks: ListVal u32
+    ztypecheck.controlArmBlocks :ast :nid into: blocks
+    place: false
+    with bit: blocks.iterate do for blk: bit loop {
+        lf: armLeafNode :ast :symtab blockId: (zast.nodeid.create from: blk)
+        if lf > 0 when (armLeafIsPlace :ast :symtab :ctx n: (ast.nodes.get i: lf)) then place = true
+    }
+    return place
+}
+
+# armLeafNode -- the node the arm body `blockId` yields: its last line's value, or
+# the body itself when it is an expression; 0 for an arm that yields nothing.
+armLeafNode: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    # the arm body
+    blockId: zast.nodeid
+} out u64 is {
+    isBlock: false
+    {
+        bn: ast.nodes.get i: blockId.u64
+        isBlock = bn.statement
+    }
+    if isBlock.not then return blockId.u64
+    lineId: ztypecheck.lastStmtLineIdAt :ast oId: blockId
+    if lineId.isZero then return 0
+    return (ztypecheck.implicitReturnValue st: symtab :ast :lineId).u64
+}
+
+# armLeafIsPlace -- an arm's value reads storage something else owns: a local or a
+# parameter the arm does not move, a field, an element a call hands back, or a
+# nested control value that is itself a reference.
+armLeafIsPlace: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    n: astnode.view
+} out bool is {
+    match (
+        n
+    ) case statementline then {
+        return (armLeafIsPlace :ast :symtab :ctx n: (ast.nodes.get i: n.statementline.u64))
+    } case statement then {
+        if n.statements.count.u64 != 1 then return false
+        s0Id: zast.kidAt kids: ast.kids span: n.statements i: 0
+        return (armLeafIsPlace :ast :symtab :ctx n: (ast.nodes.get i: s0Id.u64))
+    } case atomid then {
+        # a local the checker moved into where the value lands is the arm's own
+        if (symtab.typing.armLeafMoves.has item: n.nodeid.u64) then return false
+        return (symtab.typing.atomVariableId.has key: n.nodeid.u64)
+    } case ifexpr then {
+        return (controlValueIsReference :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64))
+    } case caseexpr then {
+        return (controlValueIsReference :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64))
+    } else {
+        if (armTakeLeaf :ast :symtab :n) > 0 then return false
+        return (bindingRhsIsBorrow :ast :symtab :ctx :n)
+    }
+}
+
+# armValueNode -- the value node an arm written as a one-line block or a statement
+# line holds; the node itself otherwise.
+armValueNode: function {ast: Ast.view n: astnode.view} out u64 is {
+    match (
+        n
+    ) case statementline then {
+        return (armValueNode :ast n: (ast.nodes.get i: n.statementline.u64))
+    } case statement then {
+        if n.statements.count.u64 != 1 then return n.nodeid.u64
+        s0Id: zast.kidAt kids: ast.kids span: n.statements i: 0
+        return (armValueNode :ast n: (ast.nodes.get i: s0Id.u64))
+    } else {
+        return (zast.nodeIdOf :n).u64
+    }
+}
+
+# emitControlRef -- a reference control value (controlValueIsReference): `(*p)`,
+# where `p` is the address of the value the arm that ran yields -- a chain of
+# ternaries when every arm is one value, a statement expression otherwise.
+emitControlRef: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+} out String is {
+    ptr: String
+    match (
+        n
+    ) case ifexpr then {
+        if (ifIsTernary :ast n: (ast.nodes.get i: n.nodeid.u64)) then {
+            ptr = emitTernaryChain :ast :symtab :ctx :n ref: true
+        }
+    } else null
+    if ptr.length == 0 then ptr = emitControlPtrExpr :ast :symtab :ctx :n
+    if ptr.length == 0 then return (unhandledExpr :ctx line: (ztypecheck.nodeLine :n))
+    # a Set or Map value already is the pointer to what it holds
+    vt: bindingStampOf :symtab :ctx nid: (zast.nodeIdOf :n).u64
+    if (isHeapPtrCollection :symtab :ctx tid: vt) then return ptr
+    r: "(*\{ptr})"
+    return r
+}
+
+# armRefLeaf -- an arm of a reference control value, as the address its pointer
+# takes: a place arm's own address (a pointer local already is one), or a zeroed
+# temporary the statement releases, assigned the arm's value, and its address.
+# The address is cast to the value's plain pointer type, so a place read through a
+# readonly pointer and a temporary meet in one type.
+armRefLeaf: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+    text: StringView
+} out String is {
+    lf: armValueNode :ast :n
+    lt: bindingStampOf :symtab :ctx nid: (interpPartNodeId n: (ast.nodes.get i: lf))
+    ct: typeRefC :ast :symtab :ctx tid: lt thisTid: ztypes.tid
+    # a Set or Map value is its own reference: a place arm yields the pointer, an
+    # owned one parks it
+    heap: isHeapPtrCollection :symtab :ctx tid: lt
+    if heap then ct = "\{ct}*"
+    if heap when (armLeafIsPlace :ast :symtab :ctx :n) then return text.string
+    if (armLeafIsPlace :ast :symtab :ctx :n) then {
+        pv: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: lf))
+        if pv.isZero.not when (isPtrVid :ctx vid: pv) then {
+            pa: "((\{ct}*)(\{text}))"
+            return pa
+        }
+        ra: "((\{ct}*)&(\{text}))"
+        return ra
+    }
+    hn: ctx.argHoistCtr
+    ctx.argHoistCtr = ctx.argHoistCtr + 1
+    nm: "_ah\{hn}"
+    dt: hoistDestroyLine :symtab :ctx tid: lt nm: nm.stringView
+    if ctx.armRefDepth > 0 then {
+        ctx.armParkNames.append nm.copy
+        ctx.armParkTypes.append ct.copy
+        ctx.armParkDtors.append dt
+    } else {
+        ctx.argHoistNames.append nm.copy
+        ctx.argHoistVals.append String
+        ctx.argHoistTypes.append ct.copy
+        ctx.argHoistDtors.append dt
+    }
+    if heap then {
+        ho: "(\{nm} = \{text}, \{nm})"
+        return ho
+    }
+    oa: "(\{nm} = \{text}, &\{nm})"
+    return oa
+}
+
+# appendArmAssign -- an arm's value assigned to the local its control value binds,
+# `target = v;` -- or, when the target is the pointer a reference control value
+# builds (emitControlPtrExpr), the arm's address (armRefLeaf).
+appendArmAssign: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+    target: StringView
+    vx: StringView
+    ind: StringView
+    buf: String.borrow
+} is {
+    if ctx.armRefCv > 0 then {
+        rn: "_cv\{ctx.armRefCv - 1}"
+        if target == rn then {
+            ra: armRefLeaf :ast :symtab :ctx :n text: vx
+            buf.append "\{ind}\{target} = \{ra};\n"
+            return
+        }
+    }
+    buf.append "\{ind}\{target} = \{vx};\n"
+}
+
+# emitControlPtrExpr -- a reference control value built as a statement expression:
+# a pointer local its arms assign with addresses (appendArmAssign), yielded. The
+# temporaries its arms park values in are declared by the statement around the
+# outermost one, which releases them at its end.
+emitControlPtrExpr: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+} out String is {
+    nid: zast.nodeIdOf :n
+    vt: bindingStampOf :symtab :ctx nid: nid.u64
+    ct: typeRefC :ast :symtab :ctx tid: vt thisTid: ztypes.tid
+    if ct.length == 0 or (ztypecheck.armLeaves :ast :n inLoop: false) then return "".string
+    ltmp: TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree
+    cvN: tmpNext :ctx tmp: ltmp
+    cv: "_cv\{cvN}"
+    pct: "\{ct}*"
+    lbuf: String
+    outerFloor: ctx.argHoistFloor
+    outerRawFloor: ctx.argHoistRawFloor
+    outerCv: ctx.armRefCv
+    ctx.argHoistFloor = ctx.argHoistNames.length
+    ctx.argHoistRawFloor = ctx.argHoistRaw.length
+    ctx.armRefCv = cvN + 1
+    ctx.armRefDepth = ctx.armRefDepth + 1
+    (emitControlBindValue
+        :ast
+        :symtab
+        :ctx
+        vid: nid
+        rtid: vt
+        nm: cv.stringView
+        ct: pct.stringView
+        ind: " "
+        tmp: ltmp
+        buf: lbuf
+    )
+    flushBlockFrees :ctx tmp: ltmp fL: 0 lL: 0 diverged: false buf: lbuf
+    ctx.armRefDepth = ctx.armRefDepth - 1
+    ctx.armRefCv = outerCv
+    ctx.argHoistFloor = outerFloor
+    ctx.argHoistRawFloor = outerRawFloor
+    if ctx.armRefDepth == 0 then {
+        for ctx.armParkNames.length > 0 loop {
+            ctx.argHoistNames.append ctx.armParkNames.pop
+            ctx.argHoistVals.append String
+            ctx.argHoistTypes.append ctx.armParkTypes.pop
+            ctx.argHoistDtors.append ctx.armParkDtors.pop
+        }
+    }
+    r: "({\{lbuf} \{cv}; })"
+    return r
 }
 
 # emitControlExpr -- an `if` or a `match` used inside an expression (an
@@ -24449,8 +24753,7 @@ emitBranchAssign: function {
         fL2: tmp.frees.length
         lL2: tmp.listFrees.length
         flushArgHoists :ctx :ind :tmp :buf
-        la2: "\{ind}\{target} = \{vx2};\n"
-        buf.append la2
+        appendArmAssign :ast :symtab :ctx :n :target vx: vx2.stringView :ind :buf
         emitArmTakeZero :ast :symtab :ctx :n rv: vx2.stringView :ind :buf
         emitValueTakeInvalidations :ast :symtab :ctx :n :ind :buf
         flushBlockFrees :ctx :tmp fL: fL2 lL: lL2 diverged: false :buf
@@ -24483,8 +24786,7 @@ emitBranchLastAssign: function {
     # an argument the value hoisted is declared here, inside the branch; the
     # block's flush frees it
     flushArgHoists :ctx :ind :tmp :buf
-    la: "\{ind}\{target} = \{vx};\n"
-    buf.append la
+    appendArmAssign :ast :symtab :ctx n: sx :target vx: vx.stringView :ind :buf
     emitArmTakeZero :ast :symtab :ctx n: sx rv: vx.stringView :ind :buf
     emitValueTakeInvalidations :ast :symtab :ctx n: sx :ind :buf
     zeroBranchLocalMove :ast :symtab :ctx line: sx :fL :lL :ind :tmp :buf
@@ -28585,6 +28887,11 @@ emitC: function {
         tmpHigh: 0
         argHoistFloor: 0
         argHoistRawFloor: 0
+        armRefCv: 0
+        armRefDepth: 0
+        armParkNames: List String
+        armParkTypes: List String
+        armParkDtors: List String
         whenGuardCtr: 0
         breakLabels: ListVal u64
         breakLabelIsDo: ListVal bool

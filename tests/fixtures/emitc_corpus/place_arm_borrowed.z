@@ -1,0 +1,100 @@
+# An `if` or a `match` whose arm reads storage something else owns -- a local, a
+# field, an element, a borrowed parameter -- is, where its value is only
+# borrowed, a reference to that storage on that arm's path: the view or borrow
+# parameter, the interpolation part, the receiver, the operand and `print` read
+# it and nothing frees it. An arm that yields a value of its own is a temporary
+# released at the statement's end. Each condition and arm runs once.
+Holder: class {
+    p: String
+    q: String
+}
+
+Box2: class {
+    s: String
+}
+
+Shape: union {
+    name: String
+    other: String
+}
+
+Mode: variant {
+    a: null
+    b: null
+    c: null
+}
+
+peek: function {s: String.view} out u64 is {
+    return s.length
+}
+
+peekBorrow: function {s: String} out u64 is {
+    return s.length
+}
+
+peekBox: function {b: Box2} out u64 is {
+    return b.s.length
+}
+
+peekShape: function {u: Shape.view} out u64 is {
+    match (u) case name then return u.length case other then return 100
+}
+
+peekMap: function {m: (Map String V: String)} out u64 is {
+    return m.length
+}
+
+tick: function {c: bool tag: StringView} out bool is {
+    print "tick \{tag}"
+    return c
+}
+
+mks: function {tag: StringView} out String is {
+    print "mks \{tag}"
+    return "\{tag}"
+}
+
+places: function {f: bool v: String} is {
+    h: Holder p: "hp".string q: "hq".string
+    o: "local".string
+    l: List String
+    l.append from: "el".string
+    print "view \{peek s: (if f then o else h.q)} borrow \{peekBorrow s: (if f then v else (mks tag: "own"))}"
+    print "part \{if f then (l.get i: 0) else h.p} recv \{(if f then h.p else (mks tag: "rv")).length}"
+    same: (if f then h.p else (mks tag: "op")) == (if f then h.q else o)
+    print "same \{same}"
+    print (if f then o else (mks tag: "pr"))
+    print "after \{o} \{h.p} \{h.q} \{v} \{l.length}"
+}
+
+shapes: function {m: Mode f: bool} is {
+    h: Holder p: "hp".string q: "hq".string
+    b1: Box2 s: "box".string
+    u1: Shape.name "uname".string
+    m1: (Map String V: String)
+    m1.set key: "a".string value: "b".string
+    n: peek s: (match (m) case a then h.p case b then (mks tag: "mb") case c then h.q)
+    print "match \{n}"
+    k: peek s: (if (tick c: f tag: "c1") then h.p else if (tick c: f.not tag: "c2") then (mks tag: "e") else h.q)
+    print "elseif \{k}"
+    j: peek s: (if f then {
+        print "arm1"
+        h.p
+    } else {
+        print "arm2"
+        mks tag: "blk"
+    })
+    print "block \{j}"
+    print "nested \{match (m) case a then (if f then h.p else (mks tag: "in")) case b then h.q case c then (mks tag: "c")}"
+    print "class \{peekBox b: (if f then b1 else (Box2 s: "fresh".string))} union \{peekShape u: (if f then u1 else (Shape.other "o".string))} map \{peekMap m: (if f then m1 else (Map String V: String))}"
+    print "kept \{b1.s} \{m1.length}"
+}
+
+main: function is {
+    v: "param".string
+    places f: true :v
+    places f: false :v
+    shapes m: Mode.a f: true
+    shapes m: Mode.b f: false
+    shapes m: Mode.c f: true
+}

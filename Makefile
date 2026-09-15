@@ -1002,7 +1002,10 @@ perf: $(PERFBIN)
 #
 # +3,771 when a borrowed value moved into storage that owns what it holds came to
 # be refused: +0 over the same source, the source longer.
-ALLOC_BASELINE := 2796346
+#
+# +9,171 when an `if` or a `match` with a place arm came to be a reference where
+# its value is borrowed: +0 over the same source, the source longer.
+ALLOC_BASELINE := 2805517
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
