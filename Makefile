@@ -931,7 +931,9 @@ perf: $(PERFBIN)
 #
 # +302 when a take Box parameter came to be released through its pointer: the
 # source ~12 lines longer.
-ALLOC_BASELINE := 2670029
+#
+# +103 when a box came to be built in place: the source a few lines longer.
+ALLOC_BASELINE := 2670132
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

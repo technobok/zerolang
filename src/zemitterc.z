@@ -6141,7 +6141,7 @@ hoistDestroyLine: function {
     cb: ctxCname :ctx tid: dt
     # a Map or Set temp already IS the pointer its destroy takes
     if (isHeapPtrCollection :symtab :ctx tid: dt) then return "    \{cb}_destroy(\{nm});\n"
-    return "    \{cb}_destroy(&\{nm});\n"
+    return "    \{cb}_destroy(\{destroyOperand :symtab tid: dt :nm});\n"
 }
 
 # hoistBorrowValArg -- a by-value call argument that is an owned, destructible,
@@ -7772,8 +7772,11 @@ allDigits: function {s: StringView} out bool is {
 }
 
 # emitBoxCreate -- `Box from: x`: heap-alloc a cell for the element and store x.
-# Gated on the BOX_CREATE callKind stamp; hoists the alloc+store and returns the
-# pointer temp.
+# Gated on the BOX_CREATE callKind stamp. The cell is assigned where the box is
+# built, `(_BoxN = alloc, *_BoxN = x, _BoxN)`, so it runs in order with what is
+# around it; the value is not an lvalue, so a parameter that only borrows it
+# binds it to a temporary that releases the box, and a binding or a taking
+# parameter owns it as any owned value.
 emitBoxCreate: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -7797,9 +7800,12 @@ emitBoxCreate: function {
     bN: ctx.argHoistCtr
     ctx.argHoistCtr = ctx.argHoistCtr + 1
     bnm: "_Box\{bN}"
-    braw: "    \{binner}* \{bnm} = (\{binner}*)z_xmalloc(sizeof(\{binner}));\n    *\{bnm} = \{bval};\n"
-    ctx.argHoistRaw.append braw
-    return bnm
+    # declared zero by the enclosing statement, assigned here
+    ctx.argHoistNames.append bnm.copy
+    ctx.argHoistVals.append String
+    ctx.argHoistTypes.append "\{binner}*"
+    ctx.argHoistDtors.append String
+    return "(\{bnm} = (\{binner}*)z_xmalloc(sizeof(\{binner})), *\{bnm} = \{bval}, \{bnm})"
 }
 
 # emitEmptyColCreate -- an empty collection construction `(List of: T)` /
