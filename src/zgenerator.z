@@ -907,6 +907,228 @@ promoteIterables: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out astnode 
 }
 
 
+# spillBeforeYields -- in every block of a generator body, a line whose
+# expression suspends part-way through: each part written before the first part
+# that holds a yield is bound to a synthetic local ahead of the line, and the
+# line reads the local instead. The emitter lifts that yield out of the
+# expression and suspends ahead of the line, so a part left in place would run
+# only after the resume; the local crosses the suspension and becomes a field
+# like any other.
+spillBeforeYields: function {ast: Ast ctr: NameCtr nid: zast.nodeid} is {
+    if nid.isZero then return
+    kids: ListVal u32
+    lines: ListVal u32
+    {
+        n: ast.nodes.get i: nid.u64
+        if n.functiondef or n.objectdef or n.unitdef then return
+        if (zast.yieldCountOf :ast :n) == 0 then return
+        zast.childIdsInto :ast :n acc: kids
+        if n.statement then {
+            li: u64
+            for li < n.statements.count.u64 loop {
+                lines.append (zast.kidAt kids: ast.kids span: n.statements i: li)
+                li = li + 1
+            }
+        }
+    }
+    with kit: kids.iterate do for k: kit loop {
+        spillBeforeYields :ast :ctr nid: (zast.nodeid.create from: k)
+    }
+    if lines.length == 0 then return
+    newLines: ListVal u32
+    with lit: lines.iterate do for l: lit loop {
+        inner: zast.nodeid
+        {
+            ln: ast.nodes.get i: l.u64
+            if ln.statementline then inner = ln.statementline
+        }
+        spillIn :ast :ctr nid: inner dst: newLines
+        newLines.append l
+    }
+    if newLines.length == lines.length then return
+    span: zast.kidsAdd kids: ast.kids xs: newLines
+    bm: ast.nodes.getMut i: nid.u64
+    if bm.statement then bm.statements = span
+}
+
+# spillIn -- the parts of expression `nid` evaluated before its last yield, each
+# spilled into `dst` in the order it is written. The walk follows evaluation down
+# to the yields: a binding's value, the first condition of an `if` (the one part
+# of it that runs unconditionally), a member read's receiver, a yield's operand,
+# and a call's receiver and then its arguments. A call's part that holds a yield
+# is spilled whole when a later part holds one too, so what lies between the two
+# runs between the suspensions; the call's last such part is walked in turn.
+spillIn: function {ast: Ast ctr: NameCtr nid: zast.nodeid dst: ListVal u32} is {
+    if nid.isZero then return
+    if (zast.yieldCountIn :ast :nid) == 0 then return
+    parts: ListVal u32
+    holders: ListVal u32
+    next: spillStep :ast :nid :parts :holders
+    if next.isZero.not then {
+        spillIn :ast :ctr nid: next :dst
+        return
+    }
+    spillCallParts :ast :ctr :parts :holders :dst
+}
+
+# spillStep -- where evaluation of `nid` goes next on the way to its yields: the
+# node to walk, or zero for a call, whose receiver and arguments are appended to
+# `parts` in written order beside the node holding each (`holders`).
+spillStep: function {
+    ast: Ast.view
+    nid: zast.nodeid
+    parts: ListVal u32
+    holders: ListVal u32
+} out zast.nodeid is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case assignment then {
+        return n.value
+    } case reassignment then {
+        return n.value
+    } case namedoperation then {
+        return n.operation
+    } case dottedpath then {
+        return n.parent
+    } case ifexpr then {
+        return (firstConditionOf :ast clauses: n.clauses)
+    } case call then {
+        # a yield's operand runs before it suspends
+        if (zast.isYieldCalleeAt :ast callableId: n.callable) then {
+            return (zast.yieldCallOperandAt :ast :nid)
+        }
+        cb: ast.nodes.get i: n.callable.u64
+        if cb.dottedpath then {
+            parts.append cb.parent.u32
+            holders.append n.callable.u32
+        }
+        ai: u64
+        for ai < n.arguments.count.u64 loop {
+            aId: zast.kidAt kids: ast.kids span: n.arguments i: ai
+            ai = ai + 1
+            a: ast.nodes.get i: aId.u64
+            if a.namedoperation then {
+                parts.append a.operation.u32
+                holders.append aId
+            }
+        }
+        return zast.nodeid
+    } else {
+        return zast.nodeid
+    }
+}
+
+# firstConditionOf -- an `if`'s first clause's first condition, the one part of
+# it that runs unconditionally; zero when it has none.
+firstConditionOf: function {ast: Ast.view clauses: zast.kidspan} out zast.nodeid is {
+    if clauses.count.u64 == 0 then return zast.nodeid
+    c0: ast.nodes.get i: (zast.kidAt kids: ast.kids span: clauses i: 0).u64
+    if c0.ifclause when c0.conditions.count.u64 > 0 then {
+        return (zast.nodeid.create from: (zast.kidAt kids: ast.kids span: c0.conditions i: 0))
+    }
+    return zast.nodeid
+}
+
+# spillCallParts -- a call's parts, in written order: each one before the last
+# part that holds a yield is spilled, unless it stays put and holds none; the
+# last such part is walked in turn.
+spillCallParts: function {
+    ast: Ast
+    ctr: NameCtr
+    parts: (ListVal u32).view
+    holders: (ListVal u32).view
+    dst: ListVal u32
+} is {
+    last: parts.length
+    pi: u64
+    for pi < parts.length loop {
+        if (partHoldsYield :ast part: (parts.get i: pi)) then last = pi
+        pi = pi + 1
+    }
+    if last == parts.length then return
+    pi = 0
+    for pi < last loop {
+        part: parts.get i: pi
+        if (partHoldsYield :ast :part) or (spillStaysPut :ast nid: part).not then {
+            spillPart :ast :ctr :part holder: (holders.get i: pi) :dst
+        }
+        pi = pi + 1
+    }
+    spillIn :ast :ctr nid: (zast.nodeid.create from: (parts.get i: last)) :dst
+}
+
+# partHoldsYield -- a yield is written somewhere inside `part`.
+partHoldsYield: function {ast: Ast.view part: u32} out bool is {
+    return (zast.yieldCountIn :ast nid: (zast.nodeid.create from: part)) > 0
+}
+
+# spillStaysPut -- a part that reads the same after the resume as before the
+# suspension: a literal, a name, and a member read through names. Nothing else
+# runs in the body while it is suspended, and a name bound to a synthetic local
+# would borrow what it names.
+spillStaysPut: function {ast: Ast.view nid: u32} out bool is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case atomid then {
+        return true
+    } case labelvalue then {
+        return true
+    } case atomstring then {
+        pi: u64
+        for pi < n.stringparts.count.u64 loop {
+            p: ast.nodes.get i: (zast.kidAt kids: ast.kids span: n.stringparts i: pi).u64
+            if p.stringchunk.not then return false
+            pi = pi + 1
+        }
+        return true
+    } case dottedpath then {
+        return (spillStaysPut :ast nid: n.parent.u32)
+    } else {
+        return false
+    }
+}
+
+# spillPart -- bind `part` to a synthetic `_partN` on a line of its own, appended
+# to `dst` after the part's own spills, and read the local where the part stood:
+# as the argument `holder` carries, or as the receiver of the member read
+# `holder` is.
+spillPart: function {ast: Ast ctr: NameCtr part: u32 holder: u32 dst: ListVal u32} is {
+    spillIn :ast :ctr nid: (zast.nodeid.create from: part) :dst
+    ln: u32
+    co: u32
+    {
+        pp: zast.posOf n: (ast.nodes.get i: part.u64)
+        ln = pp.line
+        co = pp.col
+    }
+    synthN: "_part\{ctr.bump}"
+    snid: zast.poolSet pool: ast.names text: synthN.stringView
+    sa: astnode.assignment (zast.assignmentrow
+        nodeid: (zast.tableReserve :ast)
+        lineno: ln
+        colno: co
+        name: snid
+        value: (zast.nodeid.create from: part)
+    )
+    sl: astnode.statementline (zast.statementlinerow
+        nodeid: (zast.tableReserve :ast)
+        lineno: ln
+        colno: co
+        statementline: (zast.tableAdd :ast n: sa)
+    )
+    dst.append (zast.tableAdd :ast n: sl)
+    at: mkAtom :ast line: ln col: co name: synthN.stringView
+    atId: zast.nodeid.create from: (zast.tableAdd :ast n: at)
+    hm: ast.nodes.getMut i: holder.u64
+    if hm.namedoperation then {
+        hm.operation = atId
+    } else if hm.dottedpath then {
+        hm.parent = atId
+    }
+}
+
 # promoteIterablesIdAt -- promote and intern a loop body (0 = absent).
 promoteIterablesIdAt: function {
     ast: Ast
@@ -2348,6 +2570,7 @@ lowerDeclared: function {
 
     dst.wrapperNodeId = wrapDeclaredCallReturn :ast :callFnId :line :col
     injectCallReceiver :ast :callFnId :line :col
+    spillBeforeYields :ast :ctr nid: bodyId
     # the suspension transform, on the body the author wrote
     newBodyId: promoteIterablesIdAt :ast :ctr oId: bodyId
     if newBodyId > 0 then {

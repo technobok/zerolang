@@ -1,0 +1,82 @@
+# A yield written inside an expression suspends where it is written: what is
+# written before it runs before the generator suspends, and what is written
+# after it runs once the call that resumes it supplies the value. Each resume
+# prints `resume N` first, so every tick shows which call ran it.
+tick: function {n: i64} out i64 is {
+    print "t\{n}"
+    return n
+}
+
+mks: function {n: i64} out String is {
+    print "t\{n}"
+    return "m\{n}"
+}
+
+pair: function {a: i64 b: i64} out i64 is {
+    return a + b
+}
+
+trio: function {a: i64 b: i64 c: i64} out i64 is {
+    return a + b + c
+}
+
+keep: function {s: String.take n: i64} out i64 is {
+    return s.length.i64.orPanic + n
+}
+
+peek: function {s: String.view n: i64} out i64 is {
+    return s.length.i64.orPanic + n
+}
+
+Acc: class {
+    total: i64
+} as {
+    add: function {:this x: i64} out i64 is {
+        this.total = this.total + x
+        return this.total
+    }
+}
+
+mkAcc: function {n: i64} out Acc is {
+    print "t\{n}"
+    return (Acc total: n)
+}
+
+Gen: generator { limit: i64 } as {
+    call: function {v: i64} out i64 is {
+        a: pair a: (tick n: 1) b: (yield 1)
+        print "a=\{a}"
+        b: (tick n: 2) + (yield 2)
+        print "b=\{b}"
+        c: pair a: (tick n: 3) b: (pair a: (tick n: 4) b: (yield 3))
+        print "c=\{c}"
+        d: trio a: (yield 4) b: (tick n: 5) c: (yield 5)
+        print "d=\{d}"
+        e: (mkAcc n: 6).add x: (yield 6)
+        print "e=\{e}"
+        f: keep s: (mks n: 7) n: (yield 7)
+        g: peek s: (mks n: 8) n: (yield 8)
+        print "f=\{f} g=\{g}"
+        if (tick n: 9) < (yield 9) then print "less"
+        i: 0
+        for i < 2 loop {
+            if i >= 0 then {
+                h: pair a: (tick n: 10 + i) b: (yield 10 + i)
+                print "h=\{h}"
+            }
+            i = i + 1
+        }
+    }
+}
+
+main: function is {
+    with g: (Gen limit: 0) do {
+        r: 0
+        for r < 13 loop {
+            print "resume \{r}"
+            got: g.call v: r * 100
+            match got case some then print "yield \{got}" case none then print "done"
+            r = r + 1
+        }
+    }
+}
