@@ -990,7 +990,10 @@ perf: $(PERFBIN)
 #
 # +552 when a value with a destructor bound from an `if` or a `match` came to be
 # destroyed: +0 over the same source, the source longer.
-ALLOC_BASELINE := 2791167
+#
+# +533 when `.take` on a value that owns nothing came to hand on the value in
+# every position: +0 over the same source, the source longer.
+ALLOC_BASELINE := 2791700
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

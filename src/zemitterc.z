@@ -15497,6 +15497,39 @@ markerReadsFieldValue: function {
     return (symtab.reg.typetypeOf typeId: pt) != ztypes.ztypetype.functionType
 }
 
+# markerHandsOnBase -- a move marker on this base emits the base itself.
+# - `.take` on a heap reftype is an ownership MOVE: the statement-level emitter
+#   zeroes the source after the call so its scope-exit free is a no-op (the
+#   callee now owns the heap).
+# - `.take` / `.hold` on a FIELD holding a value -- a number, a record -- moves
+#   nothing off the heap: the value is the field's own, read in place (the
+#   binding zeroes the field after it).
+# - on any other value that owns nothing -- a number, a truth value, a record of
+#   such, in a local or computed -- the move is a copy.
+# Spelling the marker instead reads a member the value does not have.
+markerHandsOnBase: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    # the marker's base node id
+    pnid: u64
+} out bool is {
+    if (moveMarkerMovesBase :ast :symtab :ctx :pnid) then return true
+    if (markerReadsFieldValue :ast :symtab :pnid) then return true
+    return (markerCopiesValue :symtab :ctx :pnid)
+}
+
+# markerCopiesValue -- the base of a move marker is a value whose type owns
+# nothing to hand over: not a function, nothing to destroy, not a heap
+# collection. Moving it is copying it.
+markerCopiesValue: function {symtab: zenv.ZSymbolTable.view ctx: Ctx pnid: u64} out bool is {
+    pt: stampIdOf :symtab nid: pnid
+    if pt.isZero then return false
+    if (symtab.reg.typetypeOf typeId: pt) == ztypes.ztypetype.functionType then return false
+    if (symtab.reg.needsDestructor typeId: pt) then return false
+    return (isHeapPtrCollection :symtab :ctx tid: pt).not
+}
+
 # convRowKeyOf -- the native-table key of the runtime numeric conversion a
 # dotted marker `<expr>.<numtype>` names, empty when it names none. The
 # member half is asked first: it needs neither the source type nor the path
@@ -15579,25 +15612,12 @@ emitDottedNativeMarker: function {
     if (mnIs :ctx id: mn2Id at: mnBorrow) when (borrowMarkerIsOwnership :symtab :dpbT) then {
         return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
     }
-    # `.take` on a heap reftype is an ownership MOVE: emit the base value. The
-    # statement-level emitter zeroes the source after the call so its
-    # scope-exit free is a no-op (the callee now owns the heap).
+    # `.take` / `.hold` hands on the base itself (markerHandsOnBase)
     mn2b: zast.nameTextAt :ast ref: mn2Id
-    if (ztypecheck.isMoveMarker name: mn2b.stringView) when (moveMarkerMovesBase
+    if (ztypecheck.isMoveMarker name: mn2b.stringView) when (markerHandsOnBase
         :ast
         :symtab
         :ctx
-        pnid: n.parent.u64
-    ) then {
-        return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
-    }
-    # `.take` / `.hold` on a FIELD holding a value -- a number, a record --
-    # moves nothing off the heap: the value is the field's own, read in place
-    # (the binding zeroes the field after it). Spelling the marker as a member
-    # read one the struct does not have.
-    if (ztypecheck.isMoveMarker name: mn2b.stringView) when (markerReadsFieldValue
-        :ast
-        :symtab
         pnid: n.parent.u64
     ) then {
         return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
