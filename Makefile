@@ -909,7 +909,13 @@ perf: $(PERFBIN)
 # temporaries where they run: over the same source the new compiler allocates
 # exactly as the old, and it is the input, the compiler's own source 133 lines
 # longer.
-ALLOC_BASELINE := 2663203
+#
+# +2,056 when a String no name holds came to be bound once under a view, and a
+# call's value receiver once under a vtable or a function field: +115 over the
+# same source (the temporaries the pool-text views in zc's own source now bind,
+# which also stops calling each pool read twice), +1,941 the source 122 lines
+# longer.
+ALLOC_BASELINE := 2665259
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

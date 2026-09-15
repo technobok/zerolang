@@ -1116,24 +1116,28 @@ owned, it is destroyed (reftypes) or forgotten (valtypes).
 
 #---: Temporary Expressions in Lock Context
 
-The compiler rejects #~".borrow", #~".stringView", #~".listView", and
-any non-owned marker on temporary expressions (i.e. expressions whose result
-has no named variable) -- a temporary has no scope to pin against. The
-programmer must assign the value to a variable
-first:
+A value no name holds -- a call's result -- is a #_+"temporary". An ownership
+marker on one (#~".borrow", #~".take", #~".hold") is refused: a marker states
+what happens to a named place, and a temporary's disposition is already fixed.
+
+A view of a temporary, or any call whose result keeps its receiver locked,
+reads the temporary as an #_+"unnamed local" of the enclosing scope: the
+temporary is evaluated once, held, and released when the block ends, exactly
+as if it had been bound to a name on the line before. Every lock rule that
+judges a named local judges it -- a view of it cannot be returned (it dies with
+the call), and a diagnostic calls it "a temporary".
 
 #code language=zerolang: """
-  # ERROR: cannot create view from temporary expression
-  # v: "hello".string.stringView
+  v: (mks n: 1).stringView       # the String mks returned lives to block end
+  n: len a: (mks n: 2).stringView
 
-  # OK: assign first, then view
-  s: "hello".string
+  # the same as
+  s: mks n: 1
   v: s.stringView
   """
 
-A future version of the compiler may support automatic temporary
-variable creation to keep lock-context expressions alive, but for
-now explicit naming is required.
+A temporary whose result was itself borrowed -- #~"(list.get i: 0).stringView"
+-- has no storage of its own: the view keeps the container locked instead.
 
 
 #---: Binding Aliases

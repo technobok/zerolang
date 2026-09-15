@@ -2138,6 +2138,18 @@ emitTernaryChain: function {
     return tx
 }
 
+# dropHoistsTo -- forget the hoists recorded since `mark`: the text that would
+# have read them is not being emitted.
+dropHoistsTo: function {ctx: Ctx mark: hoistmark} is {
+    for ctx.argHoistNames.length > mark.names loop {
+        ctx.argHoistNames.pop
+        ctx.argHoistVals.pop
+        ctx.argHoistTypes.pop
+        ctx.argHoistDtors.pop
+    }
+    for ctx.argHoistRaw.length > mark.raw loop ctx.argHoistRaw.pop
+}
+
 # ternaryAsStatements -- an if whose arm recorded a hoist no expression can hold:
 # the hoists its ternary text recorded are dropped, and it is built as the
 # statement expression a block-armed if is.
@@ -2150,13 +2162,7 @@ ternaryAsStatements: function {
     # where the pending hoists stood before the ternary began
     mark: hoistmark
 } out String is {
-    for ctx.argHoistNames.length > mark.names loop {
-        ctx.argHoistNames.pop
-        ctx.argHoistVals.pop
-        ctx.argHoistTypes.pop
-        ctx.argHoistDtors.pop
-    }
-    for ctx.argHoistRaw.length > mark.raw loop ctx.argHoistRaw.pop
+    dropHoistsTo :ctx :mark
     icx: emitControlExpr :ast :symtab :ctx n: (ast.nodes.get i: nid)
     if icx.length > 0 then return icx
     return (unhandledExpr :ctx line: (ztypecheck.nodeLine n: (ast.nodes.get i: nid)))
@@ -4430,6 +4436,21 @@ svValueFormAt: function {
     vid: ztypes.vid
 } out String is {
     if isStr when (pathIsPointer :ast :symtab :ctx :n) then return (svValueFormPtr :ctx :expr)
+    # the view reads a String operand twice, for its data and its size: one that
+    # is not an lvalue -- a call's result -- is bound to a temp first, so the
+    # call runs once, and an owned result is released
+    if isStr when (isNonLvalueArg s: expr) then {
+        hv: (hoistBorrowValArg
+            :ast
+            :symtab
+            :ctx
+            av: expr
+            pid: ctx.strTid
+            paramTake: false
+            isBorrow: (hoistExprIsBorrowRooted :ast :symtab :ctx :n)
+        )
+        if hv.length > 0 then return (svValueForm :ctx expr: hv.stringView :isStr vid: ztypes.vid)
+    }
     return (svValueForm :ctx :expr :isStr :vid)
 }
 
@@ -4860,7 +4881,15 @@ emitSvCompareCall: function {
                     n: (ast.nodes.get i: ca.operation.u64)
                     text: cae.stringView
                 )
-                caf: svValueForm :ctx expr: cae.stringView isStr: caIsStr vid: cav
+                caf: (svValueFormAt
+                    :ast
+                    :symtab
+                    :ctx
+                    n: (ast.nodes.get i: ca.operation.u64)
+                    expr: cae.stringView
+                    isStr: caIsStr
+                    vid: cav
+                )
                 if cargs.length == 0 then cargs.append caf
             }
         }
@@ -5323,8 +5352,49 @@ emitDottedCall: function {
         bn = emitLocalAtomNameAt :symtab :ctx nid: bnid.u64 name: bn0 vid: baseVid
     }
     btIsStr: btid == ctx.strTid
-    bnv: bn.stringView
-    mnv: mn
+    # the view legs read a String receiver more than once, for its data and its
+    # size: one that is a call's result is bound once, and dropped again when no
+    # leg takes the call
+    rmark: pendingHoistMark :ctx
+    if btIsStr when dcbV.isZero when (isNonLvalueArg s: bn.stringView) then {
+        bn = (receiverOnce
+            :ast
+            :symtab
+            :ctx
+            callable: (ast.nodes.get i: call.callable.u64)
+            text: bn.stringView
+            tid: btid
+        )
+    }
+    sv: (emitSvCallLegs
+        :ast
+        :symtab
+        :ctx
+        :call
+        bnv: bn.stringView
+        mnv: mn
+        :btid
+        :btIsStr
+        :dcbV
+    )
+    if sv.length == 0 then dropHoistsTo :ctx mark: rmark
+    return sv
+}
+
+# emitSvCallLegs -- the view-native legs of a method call on a String or
+# StringView receiver, tried in turn; "" when none takes it.
+emitSvCallLegs: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    # the receiver's C text
+    bnv: StringView
+    mnv: StringView
+    btid: ztypes.tid
+    btIsStr: bool
+    dcbV: ztypes.vid
+} out String is {
     eCmp: emitSvCompareCall :ast :symtab :ctx :call :bnv :mnv :btid :btIsStr :dcbV
     if eCmp.length > 0 then return eCmp
     eSub: emitSvSubstringCall :ast :symtab :ctx :call :bnv :mnv :btid :btIsStr :dcbV
@@ -6140,6 +6210,44 @@ lvalueForm: function {
     t: hoistLvalue :ast :symtab :ctx :av :tid
     if t.length > 0 then return t
     return av.string
+}
+
+# receiverOnce -- a receiver a call spells more than once: a vtable call reads
+# both its table and its data through it, a function field is read through it
+# and passed it. One that is not an lvalue -- a call's result -- is bound to a
+# temp first, so it runs once; an owned result is released with the temp.
+receiverOnce: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    # the call's dotted callable, whose parent is the receiver
+    callable: astnode.view
+    text: StringView
+    tid: ztypes.tid
+} out String is {
+    if (isNonLvalueArg s: text).not then return text.string
+    borrowed: false
+    match (
+        callable
+    ) case dottedpath then {
+        borrowed = (hoistExprIsBorrowRooted
+            :ast
+            :symtab
+            :ctx
+            n: (ast.nodes.get i: callable.parent.u64)
+        )
+    } else null
+    hv: (hoistBorrowValArg
+        :ast
+        :symtab
+        :ctx
+        av: text
+        pid: tid
+        paramTake: false
+        isBorrow: borrowed
+    )
+    if hv.length > 0 then return hv
+    return (hoistLvalue :ast :symtab :ctx av: text :tid)
 }
 
 # hoistLvalue -- bind an expression to a temp so its ADDRESS can be taken. The
@@ -10756,8 +10864,17 @@ emitFnptrFieldCall: function {
         name: mn
     ).not then return "".string
     callableNode: ast.nodes.get i: call.callable.u64
-    recvExpr: emitDottedReceiver :ast :symtab :ctx callable: callableNode
-    if recvExpr.length == 0 then return "".string
+    recvText: emitDottedReceiver :ast :symtab :ctx callable: callableNode
+    if recvText.length == 0 then return "".string
+    # the slot is read through the receiver and the receiver is passed to it
+    recvExpr: (receiverOnce
+        :ast
+        :symtab
+        :ctx
+        callable: callableNode
+        text: recvText.stringView
+        tid: rtid
+    )
     rptr: dottedReceiverIsPtr :ast :symtab :ctx callable: (ast.nodes.get i: call.callable.u64)
     acc: ".".string
     if rptr then acc = "->".string
@@ -19942,6 +20059,9 @@ emitObjIterRecv: function {
         # `&` of it. The TEXT settles it -- anything an address cannot be taken
         # of is hoisted to the same owned temp a call already gets.
         )
+        # what the iterable's own arguments hoisted is declared ahead of it,
+        # before the loop label like the instance
+        flushArgHoists :ctx :ind :tmp :buf
         hoistIt: isForIterCall :ast n: (ast.nodes.get i: cOp.u64)
         if hoistIt.not then hoistIt = isNonLvalueArg s: ivex.stringView
         if hoistIt then {
@@ -33481,8 +33601,10 @@ emitProtocolDispatch: function {
     callableNode: ast.nodes.get i: call.callable.u64
     rtid: dispatchReceiverTid :ast :symtab :ctx callable: callableNode
     if (isDispatchableTid :symtab tid: rtid).not then return "".string
-    recv: emitDottedReceiver :ast :symtab :ctx callable: callableNode
-    if recv.length == 0 then return "".string
+    recvText: emitDottedReceiver :ast :symtab :ctx callable: callableNode
+    if recvText.length == 0 then return "".string
+    # the table and the data are both read through the receiver
+    recv: receiverOnce :ast :symtab :ctx callable: callableNode text: recvText.stringView tid: rtid
     acc: ".".string
     if (dottedReceiverIsPtr :ast :symtab :ctx callable: callableNode) then acc = "->".string
     dargs: (vtableDataArg

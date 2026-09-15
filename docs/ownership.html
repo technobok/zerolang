@@ -1159,20 +1159,23 @@ holds on other variables are
 released. If the variable is borrowed, the borrow ends. If the variable is
 owned, it is destroyed (reftypes) or forgotten (valtypes).</p>
 <h3 id="temporary-expressions-in-lock-context"><a href="#temporary-expressions-in-lock-context">8.8. Temporary Expressions in Lock Context</a></h3>
-<p>The compiler rejects <code>.borrow</code>, <code>.stringView</code>, <code>.listView</code>, and
-any non-owned marker on temporary expressions (i.e. expressions whose result
-has no named variable) -- a temporary has no scope to pin against. The
-programmer must assign the value to a variable
-first:</p>
-<pre><code class="language-zerolang"># ERROR: cannot create view from temporary expression
-# v: "hello".string.stringView
+<p>A value no name holds -- a call's result -- is a temporary. An ownership
+marker on one (<code>.borrow</code>, <code>.take</code>, <code>.hold</code>) is refused: a marker states
+what happens to a named place, and a temporary's disposition is already fixed.</p>
+<p>A view of a temporary, or any call whose result keeps its receiver locked,
+reads the temporary as an unnamed local of the enclosing scope: the
+temporary is evaluated once, held, and released when the block ends, exactly
+as if it had been bound to a name on the line before. Every lock rule that
+judges a named local judges it -- a view of it cannot be returned (it dies with
+the call), and a diagnostic calls it "a temporary".</p>
+<pre><code class="language-zerolang">v: (mks n: 1).stringView       # the String mks returned lives to block end
+n: len a: (mks n: 2).stringView
 
-# OK: assign first, then view
-s: "hello".string
+# the same as
+s: mks n: 1
 v: s.stringView</code></pre>
-<p>A future version of the compiler may support automatic temporary
-variable creation to keep lock-context expressions alive, but for
-now explicit naming is required.</p>
+<p>A temporary whose result was itself borrowed -- <code>(list.get i: 0).stringView</code>
+-- has no storage of its own: the view keeps the container locked instead.</p>
 <h3 id="binding-aliases"><a href="#binding-aliases">8.9. Binding Aliases</a></h3>
 <p>Certain bindings do not produce a new storage location at all &#x2014; the
 compiler emits the new name as an alias for the source expression. The
