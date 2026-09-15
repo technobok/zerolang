@@ -1,0 +1,100 @@
+# A field moved into a taking argument is gone only for the rest of THAT call.
+# Sibling fields, another owner, a read written before the move, a call that
+# completed, and the owner after the statement all stay legal; the owner reads
+# the moved field empty.
+Inner: class {
+    p: String
+}
+
+Holder: class {
+    p: String
+    q: String
+    inner: Inner
+} as {
+    useWith: function {:this s: String.take} out u64 is {
+        return s.length + this.p.length
+    }
+    peekWith: function {this: this.view s: String.take} out u64 is {
+        return s.length + this.p.length
+    }
+}
+
+both: function {s: String.take h: Holder} out u64 is {
+    return s.length + h.p.length
+}
+
+bothView: function {s: String.take h: Holder.view} out u64 is {
+    return s.length + h.p.length
+}
+
+bothTaken: function {s: String.take h: Holder.take} out u64 is {
+    return s.length + h.p.length
+}
+
+bothInner: function {s: String.take i: Inner} out u64 is {
+    return s.length + i.p.length
+}
+
+two: function {s: String.take t: String.take} out u64 is {
+    return s.length + t.length
+}
+
+withLength: function {s: String.take n: u64} out u64 is {
+    return s.length + n
+}
+
+withText: function {s: String.take t: String} out u64 is {
+    return s.length + t.length
+}
+
+ownerFirst: function {h: Holder s: String.take} out u64 is {
+    return s.length + h.p.length
+}
+
+keep: function {s: String.take} out u64 is {
+    return s.length
+}
+
+outer: function {h: Holder n: u64} out u64 is {
+    return h.p.length + n
+}
+
+mk: function {} out Holder is {
+    return (Holder p: "abc".string q: "de".string inner: (Inner p: "in".string))
+}
+
+siblings: function is {
+    h: mk
+    print "sibling \{withText s: h.p t: h.q}"
+    g: mk
+    print "sibling \{two s: g.q t: g.inner.p}"
+    k: mk
+    print "sibling \{bothInner s: k.p i: k.inner}"
+}
+
+otherOwner: function is {
+    h: mk
+    other: mk
+    print "other \{both s: h.p h: other}"
+    print "other \{both s: h.inner.p h: other}"
+    print "after '\{h.p}' '\{h.inner.p}' '\{h.q}'"
+}
+
+readBeforeMove: function is {
+    h: mk
+    n: withLength n: h.p.length s: h.p
+    print "before \{n} '\{h.p}'"
+}
+
+completedCall: function is {
+    h: mk
+    print "completed \{withLength s: h.q n: (keep s: h.p)}"
+    print "after '\{h.p}' '\{h.q}'"
+}
+
+main: function is {
+    siblings
+    otherOwner
+    readBeforeMove
+    completedCall
+}

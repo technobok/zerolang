@@ -972,7 +972,11 @@ perf: $(PERFBIN)
 #
 # +7,426 when a generator line's parts written before a yield came to be bound
 # ahead of it: the source ~190 lines longer; zc itself declares no generator.
-ALLOC_BASELINE := 2773605
+#
+# +7,375 when a field moved into an argument came to be gone for the rest of the
+# call: +9 over the same source (zc moves no field while its call reads the
+# owner, so the read check never runs), +7,364 the source longer.
+ALLOC_BASELINE := 2780980
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

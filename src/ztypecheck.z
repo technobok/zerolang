@@ -25097,7 +25097,11 @@ dottedBaseTid: function {
     if baseIsName then st.typing.suppressBareCtor = true
     supFnPrev: st.typing.suppressFnAutoCall
     if childIsTake then st.typing.suppressFnAutoCall = true
+    # a name-shaped base is read as part of the whole path, not on its own
+    mrbPrev: st.movedReadInBase
+    if baseIsName then st.movedReadInBase = true
     bt: checkValueAt :st :unitDecl :ast nid: dp.parent
+    st.movedReadInBase = mrbPrev
     st.typing.suppressFnAutoCall = supFnPrev
     st.typing.suppressBareCtor = supPrev
     if bt.isZero then {
@@ -25984,20 +25988,71 @@ reportMissingReturnValue: function {st: zenv.ZSymbolTable node: atomref} is {
 # reportTakenNameUse -- a read of a name whose value was moved out earlier.
 reportTakenNameUse: function {st: zenv.ZSymbolTable ast: Ast.view node: atomref} is {
     ndNm: zast.nameTextAt :ast ref: node.name
-    eh5: String
-    m5: "cannot use '\{ndNm}' after ownership transfer"
-    nt5: "this name no longer owns a value; it was moved earlier".string
-    (addErrorH
+    (reportTakenUseAt
         :st
         nodeid: node.nid
         lineno: node.lineno
         colno: node.colno
+        name: ndNm.stringView
+        width: ndNm.length.u32.orPanic
+    )
+}
+
+# reportTakenUseAt -- a read of `name` after its value was moved out: a name, or
+# a field an earlier argument of the same call moved.
+reportTakenUseAt: function {
+    st: zenv.ZSymbolTable
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+    name: StringView
+    width: u32
+} is {
+    eh5: String
+    m5: "cannot use '\{name}' after ownership transfer"
+    nt5: "this name no longer owns a value; it was moved earlier".string
+    (addErrorH
+        :st
+        :nodeid
+        :lineno
+        :colno
         e: zast.err.ownerError
         msg: m5
         note: nt5
         hint: eh5
-        width: ndNm.length.u32.orPanic
+        :width
     )
+}
+
+# reportMovedArgRead -- a part of a call that reads `path` when an earlier
+# argument of a call still open moved a field overlapping it: the callee would
+# hold the field beside the value moved out of it, exactly as it would a name
+# passed after it moved. A call that has completed is not open, so what it
+# moved reads empty afterwards.
+reportMovedArgRead: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    path: (ListVal zast.nameid).view
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+} is {
+    if path.length == 0 then return
+    mo: st.movedArgOverlapping path: path.listView
+    match (
+        mo
+    ) case some then {
+        mt: st.formatMovedArg pool: ast.names i: mo
+        rt: zenv.formatPath pool: ast.names path: path.listView
+        (reportTakenUseAt
+            :st
+            :nodeid
+            :lineno
+            :colno
+            name: mt.stringView
+            width: rt.length.u32.orPanic
+        )
+    } case none then null
 }
 
 # checkLiteralAtom -- a numeric literal atom types as its literal pseudo-type.
@@ -27603,7 +27658,7 @@ checkReassignment: function {
             } case none then null
         } case none then null
     }
-    checkWriteLock :st :ast n: (ast.nodes.get i: rasgn.topath.u64) verb: "assign to"
+    checkWriteLock :st :ast n: (ast.nodes.get i: rasgn.topath.u64) verb: "assign to" moving: false
     errR0: st.typing.errors.length
     # a FUNCTION-typed target takes a method REFERENCE, exactly as the same
     # field's constructor argument does: its value walks without the
@@ -27789,7 +27844,7 @@ checkSwapSide: function {
         return none
     }
     errW: st.typing.errors.length
-    checkWriteLock :st :ast n: (ast.nodes.get i: side.u64) verb: "swap"
+    checkWriteLock :st :ast n: (ast.nodes.get i: side.u64) verb: "swap" moving: false
     if st.typing.errors.length != errW then return none
     if (refuseBorrowedWrite
         :st
@@ -31501,7 +31556,7 @@ readonlyMoveError: function {
 # name moved whole is not a field and answers to the move rules for names.
 checkFieldMove: function {st: zenv.ZSymbolTable ast: Ast.view n: astnode.view} is {
     if (movedFieldPath :st :ast :n).not then return
-    checkWriteLock :st :ast :n verb: "move"
+    checkWriteLock :st :ast :n verb: "move" moving: true
 }
 
 # movedFieldPath -- `n`, less a move marker, is a field read through names:
@@ -31587,11 +31642,49 @@ checkFrozenWrite: function {
     )
 }
 
+# reportCallPassesRoot -- a write to `path` while a call still open passes its
+# root: the callee would hold the root beside what the write took from it. The
+# words are those a move of a name the call passes gets (pinnedMoveError).
+reportCallPassesRoot: function {
+    st: zenv.ZSymbolTable
+    n: astnode.view
+    verb: StringView
+    # the write moves the value out
+    moving: bool
+    path: StringView
+    root: StringView
+} is {
+    cm: "Cannot \{verb} '\{path}': this call already passes '\{root}'"
+    ch: String
+    if moving then {
+        ch = "the callee would hold '\{root}' beside the value moved out of it; bind or copy the value first"
+    }
+    cn: String
+    (addErrorH
+        :st
+        nodeid: (nodeId :n)
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.ownerError
+        msg: cm
+        note: cn
+        hint: ch
+        width: root.length.u32.orPanic
+    )
+}
+
 # checkWriteLock -- a write is rejected while an EXCLUSIVE lock overlapping its
 # target path is outstanding: the holder reaches through that path, so the write
 # would invalidate what it points at. Sibling paths do not overlap, so a lock on
 # one field leaves the others writable.
-checkWriteLock: function {st: zenv.ZSymbolTable ast: Ast.view n: astnode.view verb: StringView} is {
+checkWriteLock: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    n: astnode.view
+    verb: StringView
+    # the write moves the value out, which the call-holder refusal's hint names
+    moving: bool
+} is {
     wp: ListVal zast.nameid
     appendValueTuple :ast :n dst: wp
     if wp.length == 0 then return
@@ -31617,6 +31710,10 @@ checkWriteLock: function {st: zenv.ZSymbolTable ast: Ast.view n: astnode.view ve
     pp: zenv.formatPath pool: ast.names path: wp.listView
     wh: st.findExclusiveLock path: wp
     if wh.none.not then {
+        if wh.kind.callKind then {
+            reportCallPassesRoot :st :n :verb :moving path: pp.stringView root: wr.stringView
+            return
+        }
         hn: st.formatLockHolder pool: ast.names holder: wh
         mw: "Cannot \{verb} '\{pp}': exclusive lock held by '\{hn}'"
         wht: String
@@ -31639,6 +31736,10 @@ checkWriteLock: function {st: zenv.ZSymbolTable ast: Ast.view n: astnode.view ve
     }
     rh: st.findReadBlocker path: wp
     if rh.none then return
+    if rh.kind.callKind then {
+        reportCallPassesRoot :st :n :verb :moving path: pp.stringView root: wr.stringView
+        return
+    }
     rn: st.formatLockHolder pool: ast.names holder: rh
     ppc: pp
     selfRo: rn.stringView == wr
@@ -33225,9 +33326,16 @@ checkTypedCallArg: function {
     }
     # a field handed to a taking parameter is moved out of: `.take` on it was
     # checked where the marker is
+    # and what the rest of the call reads of that field is refused
     if dispHit when isTake then {
         opN: ast.nodes.get i: arg.operation.u64
+        errM: st.typing.errors.length
         if (isMarkedMove :ast n: opN).not then checkFieldMove :st :ast n: opN
+        if st.typing.errors.length == errM when (movedFieldPath :st :ast n: opN) then {
+            mvp: ListVal zast.nameid
+            appendValueTuple :ast n: opN dst: mvp
+            st.recordMovedArg path: mvp.listView
+        }
     }
     # where a taken argument's locks go: the receiver when the call has one,
     # the result when the callee's result holds the value. Only a taken
@@ -34494,6 +34602,16 @@ lockMethodReceiver: function {
     rroId: zast.nameid
 } out bool is {
     recvShared: true
+    # the receiver is passed by reference, so a field an argument moved out of
+    # it is refused as a later argument's read of that field is
+    if st.movedArgDepths.length > 0 then {
+        mrr: ListVal zast.nameid
+        {
+            calM: ast.nodes.get i: call.callable.u64
+            methodReceiverTuple :ast n: calM dst: mrr
+        }
+        reportMovedArgRead :st :ast path: mrr nodeid: call.nid lineno: call.lineno colno: call.colno
+    }
     if rroId.isZero.not then {
         rvo2: st.lookupVarId nameId: rroId
         match (
@@ -38884,9 +39002,15 @@ checkValueArmAt: function {
         cr: callRefAt :ast :nid
         return (checkCall :st :unitDecl :ast call: cr)
     } case dottedpath then {
+        if st.movedArgDepths.length > 0 when st.movedReadInBase.not then {
+            checkMovedArgReadAt :st :ast :nid
+        }
         dr: dpRefAt :ast :nid
         return (checkDotted :st :unitDecl :ast dp: dr coerce: true)
     } case atomid then {
+        if st.movedArgDepths.length > 0 when st.movedReadInBase.not then {
+            checkMovedArgReadAt :st :ast :nid
+        }
         ar: atomRefAt :ast :nid
         return (checkAtomid :st :unitDecl :ast node: ar)
     } case atomstring then {
@@ -38917,10 +39041,40 @@ checkValueArmAt: function {
         return (checkFor :st :unitDecl :ast fornode: frr)
     } case labelvalue then {
         lvr: labelRefAt :ast :nid
+        if st.movedArgDepths.length > 0 then {
+            mlp: ListVal zast.nameid
+            mlp.append lvr.name
+            (reportMovedArgRead
+                :st
+                :ast
+                path: mlp
+                nodeid: lvr.nid
+                lineno: lvr.lineno
+                colno: lvr.colno
+            )
+        }
         return (checkLabelValueAt :st :ast lv: lvr)
     } else {
         return (ztypes.tid.create from: 0)
     }
+}
+
+# checkMovedArgReadAt -- a name or a field path read, whole, while a call that
+# moved a field out of an argument is still open: refused when the two paths
+# overlap. The base of a path is not read on its own (`h` in `h.q`).
+checkMovedArgReadAt: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} is {
+    mrp: ListVal zast.nameid
+    n: ast.nodes.get i: nid.u64
+    if (rootNameIdOf :ast :n).isZero then return
+    appendValueTuple :ast :n dst: mrp
+    (reportMovedArgRead
+        :st
+        :ast
+        path: mrp
+        nodeid: (nodeId :n)
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+    )
 }
 
 

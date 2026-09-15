@@ -390,6 +390,14 @@ ZSymbolTable: class {
     # one did not, so it keeps the narrowing, while the code after the
     # statement runs after either
     armNarrowingEnds: ListVal u64
+    # the field paths moved into a taking argument of a call still open, run
+    # together root first: `movedArgEnds` closes each one, and `movedArgDepths`
+    # is how many frames were open when it moved, so it leaves with its call
+    movedArgPaths: ListVal zast.nameid
+    movedArgEnds: ListVal u64
+    movedArgDepths: ListVal u64
+    # the walk is inside the base of a dotted path, which the whole path reads
+    movedReadInBase: bool
     # dump scaffolding: a frame's label ("function:x", "if_branch", ...), the
     # frames a diagnostics-only template walk opened (kept out of the dump),
     # and the rows snapshotted when a frame closed
@@ -566,6 +574,7 @@ ZSymbolTable: class {
         }
         this.dropTail :start
         this.open.pop
+        if this.movedArgDepths.length > 0 then this.dropMovedArgs
         this.curFrame = this.innermostFrame
         for mLocks.length > 0 loop {
             le2: mLocks.pop
@@ -604,6 +613,7 @@ ZSymbolTable: class {
         if n == 0 then return
         this.dropTail start: (this.open.get i: n - 1).start
         this.open.pop
+        if this.movedArgDepths.length > 0 then this.dropMovedArgs
         this.curFrame = this.innermostFrame
     }
 
@@ -701,6 +711,59 @@ ZSymbolTable: class {
         if n > 0 then r.defSeq = (this.open.get i: n - 1).defs
         this.typing.declRowsAdd :declId delta: 1
         this.entries.append r
+    }
+
+    # recordMovedArg -- a field moved into a taking argument of the innermost
+    # open call: what the rest of that call reads of it is refused, and the
+    # record closes with the call's frame.
+    recordMovedArg: function {:this path: ListViewVal zast.nameid} is {
+        this.movedArgPaths.extendView from: path
+        this.movedArgEnds.append this.movedArgPaths.length
+        this.movedArgDepths.append this.open.length
+    }
+
+    # movedArgOverlapping -- the record of a field moved by a call still open
+    # whose path overlaps `path`, the one path a prefix of the other; none
+    # when no such field moved.
+    movedArgOverlapping: function {
+        this: this.view path: ListViewVal zast.nameid
+    } out optionval u64 is {
+        start: u64
+        i: u64
+        n: this.movedArgEnds.length
+        for i < n loop {
+            end: this.movedArgEnds.get :i
+            if (pathsOverlap a: (this.movedArgPaths.slice from: start to: end) b: path) then {
+                return (optionval.some i)
+            }
+            start = end
+            i = i + 1
+        }
+        return (optionval.none u64)
+    }
+
+    # formatMovedArg -- the dotted text of moved-field record `i`.
+    formatMovedArg: function {this: this.view pool: zast.StringPool.view i: u64} out String is {
+        start: u64
+        if i > 0 then start = this.movedArgEnds.get i: i - 1
+        return (formatPath
+            :pool
+            path: (this.movedArgPaths.slice from: start to: (this.movedArgEnds.get :i))
+        )
+    }
+
+    # dropMovedArgs -- forget the moved fields of calls whose frames have closed.
+    dropMovedArgs: function {:this} is {
+        n: this.open.length
+        for this.movedArgDepths.length > 0 loop {
+            dl: this.movedArgDepths.length
+            if (this.movedArgDepths.get i: dl - 1) <= n then return
+            this.movedArgDepths.pop
+            this.movedArgEnds.pop
+            kept: u64
+            if dl > 1 then kept = this.movedArgEnds.get i: dl - 2
+            for this.movedArgPaths.length > kept loop this.movedArgPaths.pop
+        }
     }
 
     # dropTail -- drop the rows from `start` up, keeping the locals' counts.
@@ -2109,6 +2172,10 @@ newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} o
         loopOnceTakes: ListVal u64
         loopMoveReported: IdSet u64
         armNarrowingEnds: ListVal u64
+        movedArgPaths: ListVal zast.nameid
+        movedArgEnds: ListVal u64
+        movedArgDepths: ListVal u64
+        movedReadInBase: false
         frameLabel: (IdMapR u64 V: String)
         frameHidden: IdSet u64
         entryDump: List ZEntryDumpRow
