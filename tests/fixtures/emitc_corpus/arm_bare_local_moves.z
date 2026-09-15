@@ -1,0 +1,99 @@
+# An `if` or `match` arm whose value is a bare local moves that local into
+# where the value lands -- a binding, a reassignment, a parameter that takes it,
+# a return -- on that arm's path only: the local is left empty for its own
+# scope end when that arm ran, and still owns its value when another did. A
+# sibling arm may read it.
+Mode: variant {
+    fast: null
+    slow: null
+}
+
+keep: function {s: String.take} out u64 is {
+    return s.length
+}
+
+bound: function {c: bool} out String is {
+    o: "if".string
+    r: if c then o else "else".string
+    return r
+}
+
+matched: function {m: Mode} out String is {
+    o: "fast".string
+    r: match (m) case fast then o case slow then "slow".string
+    return r
+}
+
+nested: function {m: Mode c: bool} out String is {
+    o: "inner".string
+    r: match (m) case fast then {
+        if c then o else "other".string
+    } case slow then {
+        t: "block".string
+        t
+    }
+    return r
+}
+
+bothLocals: function {c: bool} out String is {
+    a: "a".string
+    b: "b".string
+    r: if c then a else b
+    return r
+}
+
+siblingReads: function {c: bool} out String is {
+    o: "o".string
+    r: if c then o else o.copy
+    return r
+}
+
+reassigned: function {c: bool} out String is {
+    o: "new".string
+    r: "old".string
+    r = if c then o else "kept".string
+    return r
+}
+
+taken: function {m: Mode} out u64 is {
+    o: "take".string
+    z: "zz".string
+    n: keep s: (if m == Mode.fast then o else z)
+    y: "yyy".string
+    return n + (keep s: (match (m) case fast then "f".string case slow then y))
+}
+
+returned: function {c: bool} out String is {
+    o: "ret".string
+    return (if c then o else "no".string)
+}
+
+tail: function {c: bool} out String is {
+    o: "tail".string
+    if c then o else "none".string
+}
+
+looped: function {} out u64 is {
+    n: u64
+    i: u64
+    for i < 3 loop {
+        o: "x\{i}"
+        r: if i == 1 then o else "yy".string
+        n = n + r.length
+        i = i + 1
+    }
+    return n
+}
+
+main: function is {
+    print "bound \{bound c: true} \{bound c: false}"
+    print "matched \{matched m: Mode.fast} \{matched m: Mode.slow}"
+    print "nested \{nested m: Mode.fast c: true} \{nested m: Mode.fast c: false} \{nested m: Mode.slow c: true}"
+    print "both \{bothLocals c: true} \{bothLocals c: false}"
+    print "sibling \{siblingReads c: true} \{siblingReads c: false}"
+    print "reassigned \{reassigned c: true} \{reassigned c: false}"
+    print "taken \{taken m: Mode.fast} \{taken m: Mode.slow}"
+    print "returned \{returned c: true} \{returned c: false}"
+    print "tail \{tail c: true} \{tail c: false}"
+    print "looped \{looped}"
+}

@@ -26784,6 +26784,107 @@ materialiseLiteral: function {
     return (ztypes.tid.create from: t)
 }
 
+# armLocalLeaves -- the atoms of the bare names the arms of the value `if` or
+# `match` at `nid` yield, through nested ones: what a destination that takes
+# the value moves, arm by arm.
+armLocalLeaves: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid into: ListVal u32} is {
+    if (isControlValue :ast :nid).not then return
+    blocks: ListVal u32
+    controlArmBlocks :ast :nid into: blocks
+    with bit: blocks.iterate do for blk: bit loop {
+        av: armValueOf :st :ast blockId: (zast.nodeid.create from: blk)
+        if av.nid.isZero.not then {
+            if (isControlValue :ast nid: av.nid) then {
+                armLocalLeaves :st :ast nid: av.nid :into
+            } else if (bareAtomNameId n: (ast.nodes.get i: av.nid.u64)).isZero.not then {
+                into.append from: av.nid.u32
+            }
+        }
+    }
+}
+
+# armLeafLocal -- the variable an arm's bare-name value reads, when its name still
+# resolves to that variable where the value lands; zero for a local the arm
+# declared itself, which has left scope and which the arm's own end moves.
+armLeafLocal: function {st: zenv.ZSymbolTable ast: Ast.view nid: u32} out ztypes.vid is {
+    none: ztypes.vid
+    av: st.typing.atomVariableId.get key: nid.u64
+    if av.none then return none
+    cur: st.lookupVarId nameId: (bareAtomNameId n: (ast.nodes.get i: nid.u64))
+    if cur.none then return none
+    if (cur == av).not then return none
+    return cur
+}
+
+# moveArmLeavesIntoBinding -- `b: if c then w else ..`: an arm that yields a bare
+# local moves it into the binding on that arm's path, as `b: w` does, refused
+# the same way when the local is readonly, pinned or borrowed. The local is
+# spent after the `if`; a sibling arm still reads it.
+moveArmLeavesIntoBinding: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    asgn: asgnref
+    vid2: ztypes.vid
+} is {
+    if (isControlValue :ast nid: asgn.value).not then return
+    leaves: ListVal u32
+    armLocalLeaves :st :ast nid: asgn.value into: leaves
+    with lit: leaves.iterate do for lf: lit loop {
+        from: armLeafLocal :st :ast nid: lf
+        if from.isZero.not then moveArmLeafIntoBinding :st :ast nid: lf :from to: vid2
+    }
+}
+
+# moveArmLeafIntoBinding -- one arm's bare local `from` moving into the binding
+# `to`.
+moveArmLeafIntoBinding: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    # the arm value's atom
+    nid: u32
+    from: ztypes.vid
+    to: ztypes.vid
+} is {
+    lt: st.reg.variableTypeOf id: from
+    if (typeIsReftype :st tid: lt).not then return
+    lid: zast.nodeid.create from: nid
+    ln: nodeLine n: (ast.nodes.get i: nid.u64)
+    co: nodeCol n: (ast.nodes.get i: nid.u64)
+    nm: zast.nameTextAt :ast ref: (bareAtomNameId n: (ast.nodes.get i: nid.u64))
+    if (nameIsReadonly :st :ast name: nm.stringView) then {
+        (readonlyMoveError
+            :st
+            nodeid: lid
+            lineno: ln
+            colno: co
+            name: nm.stringView
+            verb: "into an owned binding"
+        )
+        return
+    }
+    if (pinnedMoveError
+        :st
+        :ast
+        nodeid: lid
+        lineno: ln
+        colno: co
+        name: nm.stringView
+        verb: "into an owned binding"
+    ) then return
+    if (st.reg.needsDestructor typeId: lt).not then return
+    (moveBindSource
+        :st
+        :ast
+        nodeid: lid
+        lineno: ln
+        colno: co
+        name: nm.stringView
+        :from
+        :to
+    )
+    st.typing.armLeafMoves.add item: nid.u64
+}
+
 # moveBindSource -- `b: w`: the bare reftype source moves into the binding.
 # A borrowed source cannot move; an owned one moves with its locks and is
 # then spent.
@@ -26792,8 +26893,10 @@ moveBindSource: function {
     st: zenv.ZSymbolTable
     # the tree the names are spelt in
     ast: Ast.view
-    # the binding
-    asgn: asgnref
+    # where the source is written
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
     # the source's name
     name: StringView
     # the source's variable
@@ -26805,9 +26908,9 @@ moveBindSource: function {
         mb5: "Cannot move borrowed variable '\{name}' into an owned binding — borrowed names stay bound to their source for the full scope"
         (addError
             :st
-            nodeid: asgn.nid
-            lineno: asgn.lineno
-            colno: asgn.colno
+            :nodeid
+            :lineno
+            :colno
             e: zast.err.ownerError
             msg: mb5
         )
@@ -26819,9 +26922,9 @@ moveBindSource: function {
         :from
         :to
         verb: "into an owned binding"
-        nodeid: asgn.nid
-        lineno: asgn.lineno
-        colno: asgn.colno
+        :nodeid
+        :lineno
+        :colno
     )
     (st.invalidate
         nameId: (nameIdOf :ast :name)
@@ -26913,7 +27016,16 @@ checkReadonlyBindSource: function {
         match (
             vo5
         ) case some then {
-            moveBindSource :st :ast :asgn name: rn5.stringView from: vo5 to: vid2
+            (moveBindSource
+                :st
+                :ast
+                nodeid: asgn.nid
+                lineno: asgn.lineno
+                colno: asgn.colno
+                name: rn5.stringView
+                from: vo5
+                to: vid2
+            )
         } case none then null
     }
     transferTakeIntoBinding :st :ast :asgn :vt :vid2
@@ -27171,6 +27283,7 @@ checkAssignment: function {
             :vt
             :vid2
         )
+        moveArmLeavesIntoBinding :st :ast :asgn :vid2
         instX: own == ztypes.zownership.borrowed or (pboX and (bpins.length > 0))
         st.typing.pendingBorrowOwned = false
         if instX then {
@@ -27279,46 +27392,89 @@ invalidateMovedSource: function {
         match (
             vo
         ) case some then {
-            if (nameIsReadonly :st :ast name: rn.stringView) then {
-                (readonlyMoveError
-                    :st
-                    nodeid: rasgn.nid
-                    lineno: rasgn.lineno
-                    colno: rasgn.colno
-                    name: rn.stringView
-                    verb: "by reassignment"
-                )
-            } else {
-                rpin: (pinnedMoveError
-                    :st
-                    :ast
-                    nodeid: rasgn.nid
-                    lineno: rasgn.lineno
-                    colno: rasgn.colno
-                    name: rn.stringView
-                    verb: "by reassignment"
-                )
-                if rpin then null else if (isBorrowedVar :st vid: vo) then {
-                    mc: "Cannot move borrowed variable '\{rn}' by reassignment — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
-                    (addError
-                        :st
-                        nodeid: rasgn.nid
-                        lineno: rasgn.lineno
-                        colno: rasgn.colno
-                        e: zast.err.ownerError
-                        msg: mc
-                    )
-                } else {
-                    moveLocksToTarget :st :ast :rasgn from: vo
-                    (st.invalidate
-                        nameId: (nameIdOf :ast name: rn.stringView)
-                        loc: takenHere
-                    )
-                }
-            }
+            (moveNameByReassignment
+                :st
+                :ast
+                :rasgn
+                name: rn.stringView
+                from: vo
+                nodeid: rasgn.nid
+                lineno: rasgn.lineno
+                colno: rasgn.colno
+            )
         } case none then null
     }
     moveTakeLocksToTarget :st :ast :rasgn :rvt
+}
+
+# moveNameByReassignment -- the local `from`, written `name` at the given place,
+# moves into the reassignment's target: refused when it is readonly, pinned or
+# borrowed; otherwise its locks follow it and it is spent.
+moveNameByReassignment: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    rasgn: reasgref
+    name: StringView
+    from: ztypes.vid
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+} is {
+    if (nameIsReadonly :st :ast :name) then {
+        readonlyMoveError :st :nodeid :lineno :colno :name verb: "by reassignment"
+        return
+    }
+    if (pinnedMoveError
+        :st
+        :ast
+        :nodeid
+        :lineno
+        :colno
+        :name
+        verb: "by reassignment"
+    ) then return
+    if (isBorrowedVar :st vid: from) then {
+        mc: "Cannot move borrowed variable '\{name}' by reassignment — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
+        (addError
+            :st
+            :nodeid
+            :lineno
+            :colno
+            e: zast.err.ownerError
+            msg: mc
+        )
+        return
+    }
+    moveLocksToTarget :st :ast :rasgn :from
+    (st.invalidate
+        nameId: (nameIdOf :ast :name)
+        loc: takenHere
+    )
+}
+
+# moveArmLeavesByReassignment -- `r = if c then w else ..`: an arm that yields a
+# bare local moves it into the target on that arm's path, as `r = w` does.
+moveArmLeavesByReassignment: function {st: zenv.ZSymbolTable ast: Ast rasgn: reasgref} is {
+    if (isControlValue :ast nid: rasgn.value).not then return
+    leaves: ListVal u32
+    armLocalLeaves :st :ast nid: rasgn.value into: leaves
+    with lit: leaves.iterate do for lf: lit loop {
+        from: armLeafLocal :st :ast nid: lf
+        if from.isZero.not when (typeIsReftype :st tid: (st.reg.variableTypeOf id: from)) then {
+            nm: zast.nameTextAt :ast ref: (bareAtomNameId n: (ast.nodes.get i: lf.u64))
+            (moveNameByReassignment
+                :st
+                :ast
+                :rasgn
+                name: nm.stringView
+                :from
+                nodeid: (zast.nodeid.create from: lf)
+                lineno: (nodeLine n: (ast.nodes.get i: lf.u64))
+                colno: (nodeCol n: (ast.nodes.get i: lf.u64))
+            )
+            st.typing.armLeafMoves.add item: lf.u64
+        }
+    }
 }
 
 # checkMethodRefTarget -- reassigning through a dotted target whose root is a
@@ -27717,6 +27873,7 @@ checkReassignment: function {
     checkNarrowedTargetWrite :st :ast :rasgn
     checkMethodRefTarget :st :ast :rasgn
     invalidateMovedSource :st :ast :rasgn :rvt
+    moveArmLeavesByReassignment :st :ast :rasgn
 }
 
 # consumeReassignPins -- a pinning call on the right of `x = ...` keeps its
@@ -32573,6 +32730,44 @@ hoistTrivialArg: function {
 }
 
 
+# moveArmLeavesIntoArgument -- `f s: (if c then w else ..)` with a taking `s`:
+# an arm that yields a bare local moves it into the argument on that arm's
+# path, as `f s: w` does, its locks following it where that move sends them.
+moveArmLeavesIntoArgument: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arg: argref
+    # the receiver the value moves into, zero when the call has none
+    recvVid: ztypes.vid
+    # the call's result holds the value
+    calleePins: bool
+    # the call's pins, which the moved value's locks join
+    pins: List ztyping.PinPath
+} is {
+    if (isControlValue :ast nid: arg.operation).not then return
+    leaves: ListVal u32
+    armLocalLeaves :st :ast nid: arg.operation into: leaves
+    with lit: leaves.iterate do for lf: lit loop {
+        from: armLeafLocal :st :ast nid: lf
+        if from.isZero.not when (typeIsReftype :st tid: (st.reg.variableTypeOf id: from)) then {
+            nm: zast.nameTextAt :ast ref: (bareAtomNameId n: (ast.nodes.get i: lf.u64))
+            (consumeBareArgOwnership
+                :st
+                :ast
+                name: nm.stringView
+                vid: from
+                :recvVid
+                :calleePins
+                :pins
+                nodeid: (zast.nodeid.create from: lf)
+                lineno: (nodeLine n: (ast.nodes.get i: lf.u64))
+                colno: (nodeCol n: (ast.nodes.get i: lf.u64))
+            )
+            st.typing.armLeafMoves.add item: lf.u64
+        }
+    }
+}
+
 # hoistAndLockArg -- what the CALL does to the argument's source: hoist a
 # non-trivial value to a temp, take ownership of it, or place the lock a
 # borrowed parameter holds for the call's duration. A locked source joins
@@ -33356,6 +33551,7 @@ checkTypedCallArg: function {
             } case none then null
         }
     }
+    if isTake then moveArmLeavesIntoArgument :st :ast :arg :recvVid :calleePins :pins
     (hoistAndLockArg
         :st
         :ast
@@ -34344,6 +34540,22 @@ recordReturnedOwnedLocal: function {
 } is {
     if argT.isZero then return
     if (typeIsReftype :st tid: argT).not then return
+    if (isControlValue :ast nid: arg.operation) then {
+        # an arm that yields a bare local returns it on that arm's path
+        leaves: ListVal u32
+        armLocalLeaves :st :ast nid: arg.operation into: leaves
+        with lit: leaves.iterate do for lf: lit loop {
+            from: armLeafLocal :st :ast nid: lf
+            if from.isZero.not then {
+                lt: st.reg.variableTypeOf id: from
+                if (typeIsReftype :st tid: lt) then {
+                    returnOwnedLocal :st :ast nid: lf vid: from tid: lt
+                    st.typing.armLeafMoves.add item: lf.u64
+                }
+            }
+        }
+        return
+    }
     rbnId: bareAtomNameId n: (ast.nodes.get i: arg.operation.u64)
     if rbnId.isZero then return
     rvv: st.lookupVarId nameId: rbnId
@@ -34354,23 +34566,32 @@ recordReturnedOwnedLocal: function {
         rvid = rvv
     } case none then null
     if rvid.isZero then return
-    if (st.reg.needsDestructor typeId: argT
-    ) when st.typing.currentReturnsBorrow.not when (isBorrowedVar
-        :st
-        vid: rvid
-    ) then {
-        rbNm: zast.nameTextAt :ast ref: rbnId
+    returnOwnedLocal :st :ast nid: arg.operation.u32 vid: rvid tid: argT
+}
+
+# returnOwnedLocal -- the local `vid` of type `tid`, read by the atom `nid`,
+# returned as an owned result.
+returnOwnedLocal: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    nid: u32
+    vid: ztypes.vid
+    tid: ztypes.tid
+} is {
+    if (st.reg.needsDestructor typeId: tid
+    ) when st.typing.currentReturnsBorrow.not when (isBorrowedVar :st :vid) then {
+        rbNm: zast.nameTextAt :ast ref: (bareAtomNameId n: (ast.nodes.get i: nid.u64))
         mbr: "Cannot return borrowed variable '\{rbNm}' as an owned result — the caller still owns it; return '\{rbNm}.copy' (duplicate), declare the source '.take' (transfer ownership in), or declare the return '.borrow'"
         (addError
             :st
-            nodeid: (nodeId n: (ast.nodes.get i: arg.operation.u64))
-            lineno: (nodeLine n: (ast.nodes.get i: arg.operation.u64))
-            colno: (nodeCol n: (ast.nodes.get i: arg.operation.u64))
+            nodeid: (nodeId n: (ast.nodes.get i: nid.u64))
+            lineno: (nodeLine n: (ast.nodes.get i: nid.u64))
+            colno: (nodeCol n: (ast.nodes.get i: nid.u64))
             e: zast.err.ownerError
             msg: mbr
         )
     }
-    st.typing.variableMoved.add item: rvid
+    st.typing.variableMoved.add item: vid
 }
 
 # numberLandsInNumber -- a number where a number is declared: the value a

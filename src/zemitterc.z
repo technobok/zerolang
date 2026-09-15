@@ -3953,9 +3953,10 @@ isLocalTake: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.v
     }
 }
 
-# armTakeLeaf -- the `.take` node an if or match arm yields when its value is an
-# explicit take of a local or of a field, looking through a one-line block and a
-# statement line; 0 for any other value.
+# armTakeLeaf -- the node an if or match arm yields when its value moves out of
+# its source: an explicit take of a local or of a field, or a bare local the
+# value's destination takes; looking through a one-line block and a statement
+# line; 0 for any other value.
 armTakeLeaf: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.view} out u64 is {
     match (
         n
@@ -3968,7 +3969,10 @@ armTakeLeaf: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.v
     } case statementline then {
         return (armTakeLeaf :ast :symtab n: (ast.nodes.get i: n.statementline.u64))
     } else {
-        if (isFieldTake :ast :n) or (isLocalTake :ast :symtab :n) then return (zast.nodeIdOf :n).u64
+        leaf: (zast.nodeIdOf :n).u64
+        if (isFieldTake :ast :n) or (isLocalTake :ast :symtab :n) then return leaf
+        # a bare local the checker moved into where the value lands
+        if (symtab.typing.armLeafMoves.has item: leaf) then return leaf
         return 0
     }
 }
