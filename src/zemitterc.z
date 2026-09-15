@@ -5731,6 +5731,71 @@ flushArgHoists: function {
     for ctx.argHoistRaw.length > rfl loop ctx.argHoistRaw.pop
 }
 
+# hoistmark -- where the pending argument hoists and their floors stood when a
+# condition began building its text in place.
+hoistmark: record {
+    names: u64
+    raw: u64
+    floor: u64
+    rawFloor: u64
+}
+
+# openInPlace -- begin a condition evaluated where it is written: a `when`
+# conjunct past the first, a loop's test, a do-while's trailing test. The
+# hoists pending around it stay pending; the ones its text records are its own,
+# and closeInPlace or wrapInPlace ends it.
+openInPlace: function {ctx: Ctx} out hoistmark is {
+    mk: (hoistmark
+        names: ctx.argHoistNames.length
+        raw: ctx.argHoistRaw.length
+        floor: ctx.argHoistFloor
+        rawFloor: ctx.argHoistRawFloor
+    )
+    ctx.argHoistFloor = mk.names
+    ctx.argHoistRawFloor = mk.raw
+    return mk
+}
+
+# hoistsGrew -- whether the condition begun at `mark` recorded a hoist of its own.
+hoistsGrew: function {ctx: Ctx.view mark: hoistmark} out bool is {
+    if ctx.argHoistNames.length > mark.names then return true
+    return ctx.argHoistRaw.length > mark.raw
+}
+
+# closeInPlace -- end what openInPlace began, for a condition that recorded no
+# hoist of its own: the pending hoists around it are the enclosing statement's.
+closeInPlace: function {ctx: Ctx mark: hoistmark} is {
+    ctx.argHoistFloor = mark.floor
+    ctx.argHoistRawFloor = mark.rawFloor
+}
+
+# appendInPlaceCond -- end the condition begun at `mark` and append it: its
+# text, or the statement expression that runs its own hoists.
+appendInPlaceCond: function {ctx: Ctx mark: hoistmark text: StringView dst: String.borrow} is {
+    if (hoistsGrew :ctx :mark) then {
+        dst.append (wrapInPlace :ctx :mark cond: text)
+        return
+    }
+    closeInPlace :ctx :mark
+    dst.append text
+}
+
+# wrapInPlace -- end what openInPlace began, for a condition that recorded
+# hoists: they run where the condition is evaluated -- past a short circuit, at
+# every loop test -- as a statement expression that declares them, computes the
+# test, releases what they owed and yields the test.
+wrapInPlace: function {ctx: Ctx mark: hoistmark cond: StringView} out String is {
+    ltmp: TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree
+    ccN: tmpNext :ctx tmp: ltmp
+    lbuf: String
+    flushArgHoists :ctx ind: " " tmp: ltmp buf: lbuf
+    cw: condInParens :cond
+    lbuf.append " bool _cc\{ccN} = \{cw};"
+    flushBlockFrees :ctx tmp: ltmp fL: 0 lL: 0 diverged: false buf: lbuf
+    closeInPlace :ctx :mark
+    return "({\{lbuf} _cc\{ccN}; })"
+}
+
 # tmpNext -- the next temp number of the function being emitted, from `tmp` or
 # from a statement expression's own counter, whichever has counted further.
 tmpNext: function {ctx: Ctx tmp: TmpCtr} out u64 is {
@@ -17205,6 +17270,9 @@ emitForStmt: function {
     # `goto` back into the loop body still lands correctly on resume.
     suspends: forCondSuspends :ast :ctx :n
     stepped: condsNeedSteps :ast :symtab :ctx :suspends conds: n.conditions
+    # a named condition is an initialiser, run once before the loop: emitted
+    # ahead of the loop's mark, so a `break` does not free what it hoisted
+    emitForNamedInits :ast :symtab :ctx :n :ind :tmp :buf
     lidW: pushLoopLabel :ctx :tmp isDo: false
     ind2: "\{ind}    "
     if stepped then {
@@ -17219,7 +17287,7 @@ emitForStmt: function {
             :buf
         )
     } else {
-        emitPlainWhileHead :ast :symtab :ctx :n :ind :buf
+        emitPlainWhileHead :ast :symtab :ctx :n :ind :tmp :buf
     }
     fLw: tmp.frees.length
     lLw: tmp.listFrees.length
@@ -17235,6 +17303,28 @@ emitForStmt: function {
     buf.append lwc
     popLoopLabel :ctx id: lidW :ind :buf
     ctx.condDepth = ctx.condDepth - 1
+}
+
+# emitForNamedInits -- the initialisers a loop's named conditions declare, once,
+# before the loop.
+emitForNamedInits: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.forrow.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    named: String
+    ci: u64
+    for ci < n.conditions.count.u64 loop {
+        kcId: zast.kidAt kids: ast.kids span: n.conditions i: ci
+        ci = ci + 1
+        if (forCondIsNamed :ast kId: kcId) then {
+            emitForCond :ast :symtab :ctx n: (ast.nodes.get i: kcId.u64) cond: named :ind :tmp :buf
+        }
+    }
 }
 
 # emitDoWhileFor -- `for loop { .. } while C`: no pre-conditions and at
@@ -17312,6 +17402,8 @@ doWhileCondText: function {
         # the checker stamps the OPERATION node, so unwrap the same way
         pkop: pk
         if pkn.namedoperation then pkop = pkn.operation
+        # the trailing test runs at every iteration, so it is evaluated in place
+        mk8: openInPlace :ctx
         pcv: valueExprC :ast :symtab :ctx n: pkn
         tw8: (truthyCondText
             :ast
@@ -17320,12 +17412,9 @@ doWhileCondText: function {
             n: (ast.nodes.get i: pkop.u64)
             raw: pcv.stringView
         )
+        if tw8.length > 0 then pcv = tw8
         if pcond.length > 0 then pcond.append " && "
-        if tw8.length > 0 then {
-            pcond.append tw8
-        } else {
-            pcond.append pcv
-        }
+        appendInPlaceCond :ctx mark: mk8 text: pcv.stringView dst: pcond
     }
     if pcond.length == 0 then pcond.append "0"
     return pcond
@@ -17344,6 +17433,8 @@ emitPlainWhileHead: function {
     n: zast.forrow.view
     # the indent the loop is written at
     ind: StringView
+    # the free list the tests' temps ride
+    tmp: TmpCtr
     # the `while (c) {` line appends here
     buf: String.borrow
 } is {
@@ -17352,8 +17443,9 @@ emitPlainWhileHead: function {
     for cox1259 < n.conditions.count.u64 loop {
         kId: zast.kidAt kids: ast.kids span: n.conditions i: cox1259
         cox1259 = cox1259 + 1
-        k9r: ast.nodes.get i: kId.u64
-        emitForCond :ast :symtab :ctx n: k9r :cond :ind :buf
+        if (forCondIsNamed :ast :kId).not then {
+            emitForCond :ast :symtab :ctx n: (ast.nodes.get i: kId.u64) :cond :ind :tmp :buf
+        }
     }
     # `for loop { ... }` -- no conditions, no postconditions: an unconditional
     # loop that exits via break/return.
@@ -17404,15 +17496,6 @@ emitSteppedWhileHead: function {
     # the loop opening, the conditions and the break test all append here
     buf: String.borrow
 } is {
-    named: String
-    cox1279: u64
-    for cox1279 < n.conditions.count.u64 loop {
-        kcId: zast.kidAt kids: ast.kids span: n.conditions i: cox1279
-        cox1279 = cox1279 + 1
-        if (forCondIsNamed :ast kId: kcId) then {
-            emitForCond :ast :symtab :ctx n: (ast.nodes.get i: kcId.u64) cond: named :ind :buf
-        }
-    }
     buf.append "\{ind}while (1) {\n"
     gv: newCondGuard :ctx ind: ind2 :buf
     (emitSteppedCond
@@ -20338,6 +20421,8 @@ emitForCond: function {
     n: astnode.view
     cond: String.borrow
     ind: StringView
+    # the free list an initialiser's hoisted temps ride
+    tmp: TmpCtr
     buf: String.borrow
 } is {
     if n.namedoperation then {
@@ -20345,6 +20430,8 @@ emitForCond: function {
         lblV7: defVid :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.operation.u64))
         lbl: varCName :ctx vid: lblV7 name: lblR7.stringView
         if lblR7.length == 0 then {
+            # a loop's test runs at every iteration, so it is evaluated in place
+            mk7: openInPlace :ctx
             cv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: n.operation.u64)
             tw7: (truthyCondText
                 :ast
@@ -20353,18 +20440,18 @@ emitForCond: function {
                 n: (ast.nodes.get i: n.operation.u64)
                 raw: cv.stringView
             )
+            if tw7.length > 0 then cv = tw7
             if cond.length > 0 then cond.append " && "
-            if tw7.length > 0 then {
-                cond.append tw7
-            } else {
-                cond.append cv
-            }
+            appendInPlaceCond :ctx mark: mk7 text: cv.stringView dst: cond
         } else {
             onid: exprNodeId n: (ast.nodes.get i: n.operation.u64)
             tn: stampNameView :symtab nid: onid
             takeFnTid: stampIdOf :symtab nid: onid
             ct: scalarCTypeFor :symtab name: tn tid: takeFnTid
             iv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.operation.u64)
+            # the initialiser runs once, before the loop: its temps are declared
+            # there, ahead of the loop's own frees
+            flushArgHoists :ctx :ind :tmp :buf
             if ct.length > 0 then {
                 li: "\{ind}\{ct} \{lbl} = \{iv};\n"
                 buf.append li
@@ -21392,6 +21479,9 @@ appendCondText: function {
     k: ast.nodes.get i: kId.u64
     opId: kId
     if k.namedoperation then opId = k.operation
+    # a conjunct past the first runs only when the ones before it held
+    guarded: cond.length > 0
+    mk: openInPlace :ctx
     {
         cv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: opId.u64)
         tw: (truthyCondText
@@ -21401,10 +21491,12 @@ appendCondText: function {
             n: (ast.nodes.get i: opId.u64)
             raw: cv.stringView
         )
-        if cond.length > 0 then cond.append " && "
-        if tw.length > 0 then {
-            cond.append tw
+        if tw.length > 0 then cv = tw
+        if guarded then {
+            cond.append " && "
+            appendInPlaceCond :ctx mark: mk text: cv.stringView dst: cond
         } else {
+            closeInPlace :ctx mark: mk
             cond.append cv
         }
     }
