@@ -984,7 +984,10 @@ perf: $(PERFBIN)
 # +5,911 when an `if` or `match` arm yielding a bare local came to move it into
 # a binding, a reassignment, a taking parameter or a return: +0 over the same
 # source (zc binds no such value), +5,911 the source longer.
-ALLOC_BASELINE := 2787334
+#
+# +3,281 when a List, Set or Map bound from an `if`, a `match` or a do block came
+# to get the value its arm yields: +0 over the same source, the source longer.
+ALLOC_BASELINE := 2790615
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

@@ -4011,6 +4011,7 @@ armValueExpr: function {
     tz: armTakeZeroC :ast :symtab :ctx tid: tt
     if tz.length == 0 then return vx
     tc: typeRefC :ast :symtab :ctx tid: tt thisTid: ztypes.tid
+    if (isHeapPtrCollection :symtab :ctx tid: tt) then tc = "\{tc}*"
     mv: "({ \{tc} _mv = \{vx}; \{vx} = \{tz}; _mv; })"
     return mv
 }
@@ -15910,6 +15911,7 @@ emitControlExpr: function {
     # a generic body's value is typed by the instance being emitted
     vt: bindingStampOf :symtab :ctx nid: nid.u64
     ct: typeRefC :ast :symtab :ctx tid: vt thisTid: ztypes.tid
+    if ct.length > 0 when (isHeapPtrCollection :symtab :ctx tid: vt) then ct = "\{ct}*"
     # "" when there is no C type, or when an arm leaves from here, which the
     # checker refuses: its cleanup could not reach the values the enclosing
     # statement is building
@@ -17634,12 +17636,17 @@ emitCollectionBind: function {
     ltid: stampIdOf :symtab nid: n.nodeid.u64
     if ltid.isZero then ltid = stampIdOf :symtab nid: (interpPartNodeId n: avn)
     ltid = ztypes.tid.create from: (chaseColMono :symtab :ctx tid: ltid)
-    if (isListOriginOf :symtab :ctx tid: ltid) then {
+    isList: isListOriginOf :symtab :ctx tid: ltid
+    isHeap: isSetOriginOf :symtab :ctx tid: ltid
+    if (isMapOriginOf :symtab :ctx tid: ltid) then isHeap = true
+    if isList or isHeap when (controlValueOwnsArms :ast :symtab :ctx n: avn) then {
+        emitControlCollectionBind :ast :symtab :ctx :avn :ind :tmp :buf :nm :nameVid :ltid :isHeap
+        return true
+    }
+    if isList then {
         emitListBind :ast :symtab :ctx :avn :ind :tmp :buf :nm :nameVid :ltid :nbrw
         return true
     }
-    isHeap: isSetOriginOf :symtab :ctx tid: ltid
-    if (isMapOriginOf :symtab :ctx tid: ltid) then isHeap = true
     if isHeap then {
         hcb: ctxCname :ctx tid: ltid
         (emitHeapColBind
@@ -17658,6 +17665,121 @@ emitCollectionBind: function {
         return true
     }
     return false
+}
+
+# emitControlCollectionBind -- a List, Set or Map bound from an `if`, a `match` or
+# a do block whose arms own their values: the arms assign the local as any
+# control binding does, and the local earns the cleanup entry a construction
+# would.
+emitControlCollectionBind: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    avn: astnode.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+    nm: StringView
+    nameVid: ztypes.vid
+    ltid: ztypes.tid
+    # a Set or Map, held and destroyed through its pointer
+    isHeap: bool
+} is {
+    cb: ctxCname :ctx tid: ltid
+    ct: "\{cb}_t"
+    free: "    \{cb}_destroy(&\{nm});\n"
+    if isHeap then {
+        ct = "\{cb}_t*"
+        free = "    \{cb}_destroy(\{nm});\n"
+    }
+    isDo: false
+    match (
+        avn
+    ) case doexpr then {
+        isDo = true
+        # the do block's own leg registers the cleanup
+        (emitDoBindValue
+            :ast
+            :symtab
+            :ctx
+            n: (ast.nodes.get i: avn.nodeid.u64)
+            :nm
+            nmVid: nameVid
+            ct: ct.stringView
+            tid: ltid
+            :ind
+            :tmp
+            :buf
+        )
+    } else null
+    if isDo then return
+    (emitControlBindValue
+        :ast
+        :symtab
+        :ctx
+        vid: (zast.nodeIdOf n: avn)
+        rtid: ltid
+        :nm
+        ct: ct.stringView
+        :ind
+        :tmp
+        :buf
+    )
+    tmp.oweList stmt: free.copy name: nm.string vid: nameVid
+}
+
+# controlValueOwnsArms -- an `if`, a `match` or a breakless do block used as a
+# value, none of whose arms yields a borrowed read (a field, an element view):
+# every arm hands over a value of its own. False for any other node.
+controlValueOwnsArms: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    n: astnode.view
+} out bool is {
+    match (
+        n
+    ) case doexpr then {
+        if (ztypecheck.blockHasBreak :ast n: (ast.nodes.get i: n.statement.u64)) then return false
+        return (armValueOwned :ast :symtab :ctx blockId: n.statement)
+    } case ifexpr then null case caseexpr then null else {
+        return false
+    }
+    blocks: ListVal u32
+    ztypecheck.controlArmBlocks :ast nid: (zast.nodeIdOf :n) into: blocks
+    owned: true
+    with bit: blocks.iterate do for blk: bit loop {
+        armOwned: armValueOwned :ast :symtab :ctx blockId: (zast.nodeid.create from: blk)
+        if armOwned.not then owned = false
+    }
+    return owned
+}
+
+# armValueOwned -- the value the arm body `blockId` yields is not a borrowed
+# read: its last line's value, or the body itself when it is an expression. An
+# arm that yields nothing (it leaves) hands over nothing to borrow.
+armValueOwned: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    blockId: zast.nodeid
+} out bool is {
+    valId: blockId
+    isBlock: false
+    {
+        bn: ast.nodes.get i: blockId.u64
+        isBlock = bn.statement
+    }
+    if isBlock then {
+        lineId: ztypecheck.lastStmtLineIdAt :ast oId: blockId
+        if lineId.isZero then return true
+        valId = ztypecheck.implicitReturnValue st: symtab :ast :lineId
+        if valId.isZero then return true
+    }
+    vn: ast.nodes.get i: valId.u64
+    nested: vn.ifexpr or vn.caseexpr or vn.doexpr
+    if nested then return (controlValueOwnsArms :ast :symtab :ctx n: vn)
+    return (bindingRhsIsBorrow :ast :symtab :ctx n: vn).not
 }
 
 # emitListBind -- the List leg of emitCollectionBind: a no-argument native's
@@ -21075,11 +21197,8 @@ emitDoBindValue: function {
         } else {
             # an owned destructible block value is destroyed at scope exit
             # (the binding path returns before its own registration).
-            if (symtab.reg.needsDestructor typeId: tid) then {
-                pdcb: ctxCname :ctx :tid
-                pldf: "    \{pdcb}_destroy(&\{nm});\n"
-                tmp.oweList stmt: pldf.copy name: nm.string vid: nmVid
-            }
+            pldf: hoistDestroyLine :symtab :ctx :tid :nm
+            if pldf.length > 0 then tmp.oweList stmt: pldf.copy name: nm.string vid: nmVid
             l3: "\{ind}{\n"
             buf.append l3
             ind3: "\{ind}    "
@@ -23956,6 +24075,34 @@ emitPlainReturn: function {
         (retCt.length > 0) and
         (clProbe.length > 0 or leakFix or (moved.length > 0))
     )
+    # a heap collection an `if` or `match` yields from arms that own their
+    # values: an arm that yields a local moved it, so the pointer is bound first
+    # and every owned local is freed after -- the local on a path whose arm did
+    # not take it included
+    if retCt.length > 0 when (isHeapPtrCollection :symtab :ctx tid: rtid) when (controlValueOwnsArms
+        :ast
+        :symtab
+        :ctx
+        n: (ast.nodes.get i: vid.u64)
+    ) then {
+        hpc: "\{retCt}*"
+        (emitHoistedReturn
+            :ast
+            :symtab
+            :ctx
+            :vid
+            rv: rv.stringView
+            retCt: hpc.stringView
+            moved: moved.stringView
+            leakFix: true
+            clProbe: clProbe.stringView
+            clFull: clFull.stringView
+            :ind
+            :tmp
+            :buf
+        )
+        return
+    }
     if hoist then {
         (emitHoistedReturn
             :ast
@@ -24044,6 +24191,7 @@ emitTailValue: function {
     }
     rtid: stampIdOf :symtab nid: vid.u64
     ct: typeRefC :ast :symtab :ctx tid: rtid thisTid: ztypes.tid
+    if (isHeapPtrCollection :symtab :ctx tid: rtid) then ct = "\{ct}*"
     trn: tmpNext :ctx :tmp
     nm: "_tr\{trn}"
     bound: (emitControlBindValue
@@ -24361,6 +24509,8 @@ zeroBranchLocalMove: function {
     mc: typeRefC :ast :symtab :ctx tid: mtid thisTid: ztypes.tid
     if mc.length == 0 then return
     mz: "\{ind}\{src} = (\{mc}){0};\n"
+    # a heap collection is held through its pointer
+    if (isHeapPtrCollection :symtab :ctx tid: mtid) then mz = "\{ind}\{src} = NULL;\n"
     buf.append mz
 }
 
