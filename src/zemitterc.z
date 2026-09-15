@@ -2017,39 +2017,149 @@ ternaryClause: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     c: astnode.view
+    # the first clause's first condition runs whenever the ternary does; every
+    # other condition, and every arm, only on some paths
+    isFirst: bool
 } out String is {
     match (
         c
     ) case ifclause then {
-        cond: String
-        cox1249: u64
-        for cox1249 < c.conditions.count.u64 loop {
-            kId: zast.kidAt kids: ast.kids span: c.conditions i: cox1249
-            cox1249 = cox1249 + 1
-            k: ast.nodes.get i: kId.u64
-            if k.namedoperation then {
-                cv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: k.operation.u64)
-                tw: (truthyCondText
-                    :ast
-                    :symtab
-                    :ctx
-                    n: (ast.nodes.get i: k.operation.u64)
-                    raw: cv.stringView
-                )
-                if cond.length > 0 then cond.append " && "
-                if tw.length > 0 then {
-                    cond.append tw
-                } else {
-                    cond.append cv
-                }
-            }
-        }
-        vx: armValueExpr :ast :symtab :ctx n: (ast.nodes.get i: c.statement.u64)
+        cond: ternaryConds :ast :symtab :ctx :c :isFirst
+        if cond.length == 0 then return cond
+        vx: armInPlace :ast :symtab :ctx n: (ast.nodes.get i: c.statement.u64)
+        if vx.length == 0 then return vx
         t0: "((\{cond}) ? (\{vx}) : "
         return t0
     } else {
         return "(0 ? 0 : ".string
     }
+}
+
+# ternaryConds -- a ternary clause's conditions as one `&&` chain; "" when one
+# of them records a hoist that cannot be assigned where it runs.
+ternaryConds: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    c: zast.ifclauserow
+    isFirst: bool
+} out String is {
+    cond: String
+    cox1249: u64
+    for cox1249 < c.conditions.count.u64 loop {
+        kId: zast.kidAt kids: ast.kids span: c.conditions i: cox1249
+        guarded: isFirst.not or (cox1249 > 0)
+        cox1249 = cox1249 + 1
+        k: ast.nodes.get i: kId.u64
+        if k.namedoperation then {
+            cv: ternaryCondPart :ast :symtab :ctx op: k.operation :guarded
+            if cv.length == 0 then return cv
+            if cond.length > 0 then cond.append " && "
+            cond.append cv
+        }
+    }
+    return cond
+}
+
+# ternaryCondPart -- one condition of a ternary clause. A guarded one -- a later
+# clause's, or one past the first -- assigns its hoists where it runs; "" when
+# one of them cannot be.
+ternaryCondPart: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    # the condition's operation node
+    op: zast.nodeid
+    guarded: bool
+} out String is {
+    mk: openInPlace :ctx
+    cv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: op.u64)
+    tw: truthyCondText :ast :symtab :ctx n: (ast.nodes.get i: op.u64) raw: cv.stringView
+    if tw.length > 0 then cv = tw
+    if guarded when (hoistsGrew :ctx mark: mk) then return (assignInPlace
+        :ctx
+        mark: mk
+        text: cv.stringView
+    )
+    closeInPlace :ctx mark: mk
+    return cv
+}
+
+# armInPlace -- a ternary arm's value, its hoists assigned where the arm runs;
+# "" when one of them cannot be.
+armInPlace: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+} out String is {
+    mk: openInPlace :ctx
+    vx: armValueExpr :ast :symtab :ctx :n
+    if (hoistsGrew :ctx mark: mk) then return (assignInPlace :ctx mark: mk text: vx.stringView)
+    closeInPlace :ctx mark: mk
+    return vx
+}
+
+# emitTernaryChain -- an if used as a value whose arms are single values, as a
+# chain of C ternaries.
+emitTernaryChain: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.ifrow.view
+} out String is {
+    tx: String
+    depth: u64
+    tm: pendingHoistMark :ctx
+    clx959: u64
+    for clx959 < n.clauses.count.u64 loop {
+        cId: zast.kidAt kids: ast.kids span: n.clauses i: clx959
+        c9r: ast.nodes.get i: cId.u64
+        cx: ternaryClause :ast :symtab :ctx c: c9r isFirst: clx959 == 0
+        clx959 = clx959 + 1
+        if cx.length == 0 then return (ternaryAsStatements
+            :ast
+            :symtab
+            :ctx
+            nid: n.nodeid.u64
+            mark: tm
+        )
+        tx.append cx
+        depth = depth + 1
+    }
+    ex: ternaryElse :ast :symtab :ctx oId: n.elseclause
+    if ex.length == 0 then return (ternaryAsStatements :ast :symtab :ctx nid: n.nodeid.u64 mark: tm)
+    tx.append ex
+    dk: u64
+    for dk < depth loop {
+        tx.append ")"
+        dk = dk + 1
+    }
+    return tx
+}
+
+# ternaryAsStatements -- an if whose arm recorded a hoist no expression can hold:
+# the hoists its ternary text recorded are dropped, and it is built as the
+# statement expression a block-armed if is.
+ternaryAsStatements: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    # the if's node id
+    nid: u64
+    # where the pending hoists stood before the ternary began
+    mark: hoistmark
+} out String is {
+    for ctx.argHoistNames.length > mark.names loop {
+        ctx.argHoistNames.pop
+        ctx.argHoistVals.pop
+        ctx.argHoistTypes.pop
+        ctx.argHoistDtors.pop
+    }
+    for ctx.argHoistRaw.length > mark.raw loop ctx.argHoistRaw.pop
+    icx: emitControlExpr :ast :symtab :ctx n: (ast.nodes.get i: nid)
+    if icx.length > 0 then return icx
+    return (unhandledExpr :ctx line: (ztypecheck.nodeLine n: (ast.nodes.get i: nid)))
 }
 
 # emit the else-arm of a C ternary expression.
@@ -2060,7 +2170,8 @@ ternaryElse: function {
     oId: zast.nodeid
 } out String is {
     if oId > 0 then {
-        ev: armValueExpr :ast :symtab :ctx n: (ast.nodes.get i: oId.u64)
+        ev: armInPlace :ast :symtab :ctx n: (ast.nodes.get i: oId.u64)
+        if ev.length == 0 then return ev
         e0: "(\{ev})"
         return e0
     } else {
@@ -5706,8 +5817,12 @@ flushArgHoists: function {
         nmo: ctx.argHoistNames.get :i
         vlo: ctx.argHoistVals.get :i
         cty: ctx.argHoistTypes.get :i
-        decl: "\{ind}\{cty} \{nmo} = \{vlo};\n"
-        buf.append decl
+        # a hoist assigned where its part runs has no initialiser: it starts zero
+        if vlo.length == 0 then {
+            buf.append "\{ind}\{cty} \{nmo} = {0};\n"
+        } else {
+            buf.append "\{ind}\{cty} \{nmo} = \{vlo};\n"
+        }
         dto: ctx.argHoistDtors.get :i
         if dto.length > 0 then {
             tmp.oweList stmt: dto.copy name: nmo.copy vid: (ztypes.vid.create from: 0)
@@ -5740,17 +5855,22 @@ hoistmark: record {
     rawFloor: u64
 }
 
-# openInPlace -- begin a condition evaluated where it is written: a `when`
-# conjunct past the first, a loop's test, a do-while's trailing test. The
-# hoists pending around it stay pending; the ones its text records are its own,
-# and closeInPlace or wrapInPlace ends it.
-openInPlace: function {ctx: Ctx} out hoistmark is {
-    mk: (hoistmark
+# pendingHoistMark -- where the pending hoists and their floors stand now.
+pendingHoistMark: function {ctx: Ctx.view} out hoistmark is {
+    return (hoistmark
         names: ctx.argHoistNames.length
         raw: ctx.argHoistRaw.length
         floor: ctx.argHoistFloor
         rawFloor: ctx.argHoistRawFloor
     )
+}
+
+# openInPlace -- begin a condition evaluated where it is written: a `when`
+# conjunct past the first, a loop's test, a do-while's trailing test. The
+# hoists pending around it stay pending; the ones its text records are its own,
+# and closeInPlace or wrapInPlace ends it.
+openInPlace: function {ctx: Ctx} out hoistmark is {
+    mk: pendingHoistMark :ctx
     ctx.argHoistFloor = mk.names
     ctx.argHoistRawFloor = mk.raw
     return mk
@@ -5778,6 +5898,37 @@ appendInPlaceCond: function {ctx: Ctx mark: hoistmark text: StringView dst: Stri
     }
     closeInPlace :ctx :mark
     dst.append text
+}
+
+# assignInPlace -- end what openInPlace began, for a part of a C expression that
+# runs only on some paths (an arm of a ternary, a condition past the first) and
+# recorded hoists: each is still declared by the enclosing statement, zeroed, and
+# assigned where the part is evaluated -- `(_ahN = v, part)` -- so a path that
+# skips the part leaves it zero, which its release ignores. A raw hoist is a
+# statement no expression can hold; the answer is then "" and the caller builds
+# the whole construct as statements instead.
+assignInPlace: function {ctx: Ctx mark: hoistmark text: StringView} out String is {
+    if ctx.argHoistRaw.length > mark.raw then {
+        closeInPlace :ctx :mark
+        return "".string
+    }
+    r: "(".string
+    i: mark.names
+    for i < ctx.argHoistNames.length loop {
+        # an inner part already assigns its own hoists where it runs, and left
+        # no initialiser
+        if (ctx.argHoistVals.get :i).length > 0 then {
+            nm: ctx.argHoistNames.get :i
+            vl: ctx.argHoistVals.set :i val: String
+            r.append "\{nm} = \{vl}, "
+        }
+        i = i + 1
+    }
+    closeInPlace :ctx :mark
+    if r.length == 1 then return text.string
+    r.append text
+    r.append ")"
+    return r
 }
 
 # wrapInPlace -- end what openInPlace began, for a condition that recorded
@@ -14300,25 +14451,7 @@ emitExpr: function {
             if icx.length > 0 then return icx
             return (unhandledExpr :ctx line: n.lineno)
         }
-        tx: String
-        depth: u64
-        clx959: u64
-        for clx959 < n.clauses.count.u64 loop {
-            cId: zast.kidAt kids: ast.kids span: n.clauses i: clx959
-            clx959 = clx959 + 1
-            c9r: ast.nodes.get i: cId.u64
-            cx: ternaryClause :ast :symtab :ctx c: c9r
-            tx.append cx
-            depth = depth + 1
-        }
-        ex: ternaryElse :ast :symtab :ctx oId: n.elseclause
-        tx.append ex
-        dk: u64
-        for dk < depth loop {
-            tx.append ")"
-            dk = dk + 1
-        }
-        return tx
+        return (emitTernaryChain :ast :symtab :ctx :n)
     } case call then {
         return (emitCallValue :ast :symtab :ctx call: n)
     } case caseexpr then {

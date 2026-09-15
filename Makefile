@@ -904,7 +904,12 @@ perf: $(PERFBIN)
 # trailing test came to build their temporaries in place: +668 over the same
 # source (the statement expression each such condition in zc's own source now
 # is), the rest the source ~100 lines longer.
-ALLOC_BASELINE := 2659489
+#
+# +3,714 when a ternary arm and a later ternary condition came to assign their
+# temporaries where they run: over the same source the new compiler allocates
+# exactly as the old, and it is the input, the compiler's own source 133 lines
+# longer.
+ALLOC_BASELINE := 2663203
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
