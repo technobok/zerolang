@@ -24797,6 +24797,7 @@ checkTransferMarker: function {
             msg: mvs
         )
     }
+    if (isMoveMarkerId nameId: cnId) then checkFieldMove :st :ast n: (ast.nodes.get i: dp.nid.u64)
     mkRootId: bareAtomNameId n: (ast.nodes.get i: dp.parent.u64)
     # a numeric literal is an atom too, and names no variable
     notVariable: mkRootId.isZero or (isNumericLiteralNameAt :ast ref: mkRootId)
@@ -31495,6 +31496,71 @@ readonlyMoveError: function {
     )
 }
 
+# checkFieldMove -- a move out of a field leaves the field empty, which is a write
+# to it: refused, as any write is, through a readonly root or a locked path. A
+# name moved whole is not a field and answers to the move rules for names.
+checkFieldMove: function {st: zenv.ZSymbolTable ast: Ast.view n: astnode.view} is {
+    if (movedFieldPath :st :ast :n).not then return
+    checkWriteLock :st :ast :n verb: "move"
+}
+
+# movedFieldPath -- `n`, less a move marker, is a field read through names:
+# `h.p`, `h.p.take`, `this.a.b` -- and not a method or a constant reached the
+# same way, such as `name.copy`.
+movedFieldPath: function {st: zenv.ZSymbolTable.view ast: Ast.view n: astnode.view} out bool is {
+    match (
+        n
+    ) case dottedpath then {
+        p: ast.nodes.get i: n.parent.u64
+        cid: atomNameId :ast n: (ast.nodes.get i: n.child.u64)
+        if (isMoveMarkerId nameId: cid) then return (movedFieldPath :st :ast n: p)
+        if (memberReadIsField :st parentNid: n.parent.u64 nameId: cid).not then return false
+        if p.atomid then return true
+        return (movedFieldPath :st :ast n: p)
+    } else {
+        return false
+    }
+}
+
+# memberReadIsField -- the member `nameId` read off the node `parentNid` is a
+# field its owner stores: not a function, which a read calls, and not an `as`
+# constant.
+memberReadIsField: function {
+    st: zenv.ZSymbolTable.view
+    parentNid: u64
+    nameId: zast.nameid
+} out bool is {
+    if nameId.isZero then return false
+    pt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: parentNid
+    if pt.isZero then return false
+    mo: st.typing.declChildOfId parentTypeId: pt :nameId
+    match (
+        mo
+    ) case some then {
+        if (
+            (st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)) ==
+            ztypes.ztypetype.functionType
+        ) then {
+            return false
+        }
+        md: st.typing.declMemberIdOf parentTypeId: pt :nameId
+        return (st.typing.isAsConstDecl declId: md).not
+    } case none then {
+        return false
+    }
+}
+
+# isMarkedMove -- `n` ends in a move marker.
+isMarkedMove: function {ast: Ast.view n: astnode.view} out bool is {
+    match (
+        n
+    ) case dottedpath then {
+        return (isMoveMarkerId nameId: (atomNameId :ast n: (ast.nodes.get i: n.child.u64)))
+    } else {
+        return false
+    }
+}
+
 # checkFrozenWrite -- reject a mutation reaching through a readonly field.
 checkFrozenWrite: function {
     st: zenv.ZSymbolTable
@@ -33156,6 +33222,12 @@ checkTypedCallArg: function {
         if isHold then dispVal = ztypes.zparamownership.holdMode
         if isTake then dispVal = ztypes.zparamownership.takeMode
         stampArgDisposition :st :ast op: arg.operation own: dispVal
+    }
+    # a field handed to a taking parameter is moved out of: `.take` on it was
+    # checked where the marker is
+    if dispHit when isTake then {
+        opN: ast.nodes.get i: arg.operation.u64
+        if (isMarkedMove :ast n: opN).not then checkFieldMove :st :ast n: opN
     }
     # where a taken argument's locks go: the receiver when the call has one,
     # the result when the callee's result holds the value. Only a taken

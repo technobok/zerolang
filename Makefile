@@ -966,7 +966,10 @@ perf: $(PERFBIN)
 # +2,674 when a field moved into a parameter that takes it came to be zeroed:
 # +551 over the same source (a return that moves one binds its value first),
 # +2,123 the source longer.
-ALLOC_BASELINE := 2764053
+#
+# +2,126 when a move out of a field came to be checked as a write: +7 over the
+# same source, +2,119 the source longer.
+ALLOC_BASELINE := 2766179
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
