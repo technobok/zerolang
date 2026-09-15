@@ -27856,6 +27856,7 @@ checkReassignment: function {
         if ubnR0.length > 0 then reportUnknownNameAt :st :ast nid: rasgn.value name: ubnR0
     }
     if hbVid > 0 then retakeHoldLock :st :ast :rasgn :hbVid :hbNmId
+    refuseBorrowedReassign :st :ast :rasgn targetNameId: hbNmId :rvt
     consumeReassignPins :st :ast :rasgn :hbNmId :rvt
     mrv0: materialiseLiteral :ast :st :unitDecl t: rvt
     if mrv0 > 0 when (st.reg.typetypeOf typeId: mrv0) == ztypes.ztypetype.nullType then {
@@ -27898,6 +27899,135 @@ checkReassignment: function {
     checkMethodRefTarget :st :ast :rasgn
     invalidateMovedSource :st :ast :rasgn :rvt
     moveArmLeavesByReassignment :st :ast :rasgn
+}
+
+# exprTextOf -- the spelling of a value built from names, member reads and calls
+# with their arguments (`l.get i: 0`), appended to `dst` for a report; any other
+# part reads `(...)`.
+exprTextOf: function {ast: Ast.view n: astnode.view dst: String} is {
+    match (
+        n
+    ) case atomid then {
+        dst.append (zast.nameTextAt :ast ref: n.name)
+    } case dottedpath then {
+        exprTextOf :ast n: (ast.nodes.get i: n.parent.u64) :dst
+        dst.append "."
+        exprTextOf :ast n: (ast.nodes.get i: n.child.u64) :dst
+    } case call then {
+        exprTextOf :ast n: (ast.nodes.get i: n.callable.u64) :dst
+        k: u64
+        for k < n.arguments.count.u64 loop {
+            argId: zast.kidAt kids: ast.kids span: n.arguments i: k
+            k = k + 1
+            argTextOf :ast arg: (argRefAt :ast nid: (zast.nodeid.create from: argId)) :dst
+        }
+    } else {
+        dst.append "(...)"
+    }
+}
+
+# argTextOf -- one argument of a call as exprTextOf spells it: ` label: value`,
+# a nested call in parentheses.
+argTextOf: function {ast: Ast.view arg: argref dst: String} is {
+    dst.append " "
+    if arg.name.isZero.not then {
+        dst.append (zast.nameTextAt :ast ref: arg.name)
+        dst.append ": "
+    }
+    nested: (ast.nodes.get i: arg.operation.u64).call
+    if nested then dst.append "("
+    exprTextOf :ast n: (ast.nodes.get i: arg.operation.u64) :dst
+    if nested then dst.append ")"
+}
+
+# borrowedValueText -- the spelling of `n` when it is read out of storage
+# something else owns -- a field read through names (`h.p`), or a value a call
+# hands back pinned to its source (`l.get i: 0`) -- and its type has something to
+# destroy; "" otherwise. Moving such a value gives its storage a second owner.
+borrowedValueText: function {
+    st: zenv.ZSymbolTable ast: Ast.view n: astnode.view vt: ztypes.tid
+} out String is {
+    none: String
+    if vt.isZero then return none
+    if (typeIsReftype :st tid: vt).not then return none
+    if (st.reg.needsDestructor typeId: vt).not then return none
+    if (isMarkedMove :ast :n) then return none
+    txt: String
+    if (localFieldPath :st :ast :n) then {
+        exprTextOf :ast :n dst: txt
+        return txt
+    }
+    if st.typing.pendingPins.length == 0 then return none
+    if st.typing.pendingBorrowOwned then return none
+    exprTextOf :ast :n dst: txt
+    return txt
+}
+
+# localFieldPath -- `n` is a field read through names rooted in a local
+# (movedFieldPath): not an arm or a constant reached through a type.
+localFieldPath: function {st: zenv.ZSymbolTable ast: Ast.view n: astnode.view} out bool is {
+    if (movedFieldPath :st :ast :n).not then return false
+    root: rootNameIdOf :ast :n
+    if root.isZero then return false
+    return (st.lookupVarId nameId: root).none.not
+}
+
+# refuseBorrowedReassign -- `r = v` into a target that owns what it holds -- an
+# owned local, a field -- refuses a borrowed `v` (refuseBorrowedMove). A borrowed
+# local target rebinds its reference instead.
+refuseBorrowedReassign: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    rasgn: reasgref
+    # the target's bare name, zero when the target is a path
+    targetNameId: zast.nameid
+    # the assigned value's type
+    rvt: ztypes.tid
+} is {
+    if targetNameId.isZero.not then {
+        tvo: st.lookupVarId nameId: targetNameId
+        if tvo.none.not when (isBorrowedVar :st vid: tvo) then return
+    }
+    (refuseBorrowedMove
+        :st
+        :ast
+        n: (ast.nodes.get i: rasgn.value.u64)
+        vt: rvt
+        verb: "by reassignment"
+    )
+}
+
+# refuseBorrowedTake -- a value pinned to storage something else owns cannot be
+# taken by a parameter (refuseBorrowedMove); a field read through names moves out
+# of its field instead.
+refuseBorrowedTake: function {
+    st: zenv.ZSymbolTable ast: Ast.view n: astnode.view vt: ztypes.tid
+} is {
+    if (movedFieldPath :st :ast :n) then return
+    refuseBorrowedMove :st :ast :n :vt verb: "into a taking argument"
+}
+
+# refuseBorrowedMove -- a borrowed value (borrowedValueText) moved `verb` into
+# storage that owns what it holds is refused, as moving a borrowed name is.
+refuseBorrowedMove: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    n: astnode.view
+    vt: ztypes.tid
+    verb: StringView
+} out bool is {
+    bt: borrowedValueText :st :ast :n :vt
+    if bt.length == 0 then return false
+    mbv: "Cannot move borrowed variable '\{bt}' \{verb} — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
+    (addError
+        :st
+        nodeid: (nodeId :n)
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.ownerError
+        msg: mbv
+    )
+    return true
 }
 
 # consumeReassignPins -- a pinning call on the right of `x = ...` keeps its
@@ -33548,6 +33678,7 @@ checkTypedCallArg: function {
     # and what the rest of the call reads of that field is refused
     if dispHit when isTake then {
         opN: ast.nodes.get i: arg.operation.u64
+        refuseBorrowedTake :st :ast n: opN :vt
         errM: st.typing.errors.length
         if (isMarkedMove :ast n: opN).not then checkFieldMove :st :ast n: opN
         if st.typing.errors.length == errM when (movedFieldPath :st :ast n: opN) then {
