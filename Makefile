@@ -957,7 +957,12 @@ perf: $(PERFBIN)
 # (a literal's String and an arm without a payload are constants, which takes
 # out more ordered temps than the collection calls add: 10,210 in zc.c against
 # 10,684), +4,952 the source longer.
-ALLOC_BASELINE := 2752422
+#
+# +8,957 when an operator's operands came to be evaluated in written order:
+# +5,311 over the same source (1,717 more ordered temps in zc.c, a scalar one
+# typed from its stamp only once it is needed -- typing every operand up front
+# cost +25k), +3,646 the source longer.
+ALLOC_BASELINE := 2761379
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

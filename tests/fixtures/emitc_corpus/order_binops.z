@@ -1,0 +1,122 @@
+# An operator's operands are evaluated as they are written, left then right,
+# whichever way the operator is implemented: a natives.tbl row, a String or
+# StringView native, a method the author wrote, one reached through a facet's
+# vtable, and the call form `a.+ rhs: b`. An operand read by value is its value
+# at that point. Every line prints its ticks ascending.
+tick: function {n: i64} out i64 is {
+    print "t\{n}"
+    return n
+}
+
+utick: function {n: u64} out u64 is {
+    print "t\{n}"
+    return n
+}
+
+ftick: function {n: i64 f: f64} out f64 is {
+    print "t\{n}"
+    return f
+}
+
+btick: function {n: i64 b: bool} out bool is {
+    print "t\{n}"
+    return b
+}
+
+mks: function {n: i64} out String is {
+    print "t\{n}"
+    return "m\{n}"
+}
+
+mkv: function {n: i64 s: StringView} out StringView is {
+    print "t\{n}"
+    return s
+}
+
+V: record {
+    x: i64
+} as {
+    +: function {:this rhs: V} out V is {
+        return (V x: this.x + rhs.x)
+    }
+    <: function {:this rhs: V} out bool is {
+        return this.x < rhs.x
+    }
+}
+
+mkV: function {n: i64} out V is {
+    print "t\{n}"
+    return (V x: n)
+}
+
+# a V whose argument is a borrowed temporary, which is bound before the call
+lenV: function {n: i64 s: String.view} out V is {
+    print "t\{n}"
+    return (V x: s.length.i64.orPanic)
+}
+
+Counter: class {
+    count: i64
+}
+
+bump: function {c: Counter} out i64 is {
+    c.count = c.count + 100
+    return c.count
+}
+
+comparable: facet {
+    ==: function {:this rhs: u64} out bool
+}
+
+pt: record {
+    x: u64
+} as {
+    m: comparable
+    ==: function {p: this rhs: u64} out bool is {
+        return p.x == rhs
+    }
+}
+
+facetOf: function {n: i64 p: pt} out comparable is {
+    print "t\{n}"
+    return (comparable.create from: p)
+}
+
+main: function is {
+    print "native"
+    a: (tick n: 1) + (tick n: 2)
+    b: (tick n: 1) + (tick n: 2) * (tick n: 3)
+    c: (tick n: 1) < (tick n: 2)
+    d: (utick n: 1) << (utick n: 2)
+    e: (ftick n: 1 f: 1.0) / (ftick n: 2 f: 4.0)
+    f: (tick n: 1) == (tick n: 2) or ((tick n: 3) != (tick n: 4))
+    g: (btick n: 1 b: true) and (btick n: 2 b: false)
+    print "\{a} \{b} \{c} \{d} \{e} \{f} \{g}"
+
+    print "string"
+    h: (mks n: 1) + (mks n: 2)
+    i: (mks n: 1) == (mks n: 2)
+    j: (mkv n: 1 s: "a") < (mkv n: 2 s: "b")
+    k: (mks n: 1) startsWith (mks n: 2)
+    l: (mkv n: 1 s: "ab") + (mkv n: 2 s: "cd")
+    print "\{h} \{i} \{j} \{k} \{l}"
+
+    print "declared"
+    m: (mkV n: 1) + (mkV n: 2)
+    n: (mkV n: 1) < (mkV n: 2)
+    o: (mkV n: 1).+ rhs: (mkV n: 2)
+    p: (mkV n: 1) + (lenV n: 3 s: (mks n: 2))
+    print "\{m.x} \{n} \{o.x} \{p.x}"
+
+    print "facet"
+    q: pt x: 3
+    r: (facetOf n: 1 p: q) == (utick n: 2)
+    s: (facetOf n: 1 p: q) != (utick n: 2)
+    print "\{r} \{s}"
+
+    print "by value"
+    cc: Counter count: 1
+    t: cc.count + (bump c: cc)
+    u: (bump c: cc) + cc.count
+    print "\{t} \{u}"
+}

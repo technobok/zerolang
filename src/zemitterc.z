@@ -3224,6 +3224,8 @@ Ctx: class {
     orderPendFid: ListVal u64
     orderPendPid: ListVal u64
     orderPendName: ListVal u64
+    # the value node a waiting scalar part's temp is typed from, 0 for none
+    orderPendNid: ListVal u64
     # the next `_o` number, the function's own
     orderCtr: u64
     # whether the argument just built was passed by pointer
@@ -5136,20 +5138,7 @@ emitSvArgNativeCall: function {
         tid: (ztypes.tid.create from: btid.u64)
     ) when (isSvArgNative name: mnv) then {
         needsAddM :ctx uname: "system" memb: mnv
-        argx: String
-        arx209: u64
-        for arx209 < call.arguments.count.u64 loop {
-            a9Id: zast.kidAt kids: ast.kids span: call.arguments i: arx209
-            arx209 = arx209 + 1
-            a: ast.nodes.get i: a9Id.u64
-            if a.namedoperation then {
-                aOpNode: ast.nodes.get i: a.operation.u64
-                if argx.length == 0 then {
-                    afrag: svNativeArgFrag :ast :symtab :ctx n: aOpNode addrAlways: false
-                    argx.append afrag
-                }
-            }
-        }
+        # the argument is built once, as the native takes it
         if mnv == "byteAt" then {
             barg: String
             arx219: u64
@@ -5170,6 +5159,20 @@ emitSvArgNativeCall: function {
                 args: bargs.stringView
             )
             return eb
+        }
+        argx: String
+        arx209: u64
+        for arx209 < call.arguments.count.u64 loop {
+            a9Id: zast.kidAt kids: ast.kids span: call.arguments i: arx209
+            arx209 = arx209 + 1
+            a: ast.nodes.get i: a9Id.u64
+            if a.namedoperation then {
+                aOpNode: ast.nodes.get i: a.operation.u64
+                if argx.length == 0 then {
+                    afrag: svNativeArgFrag :ast :symtab :ctx n: aOpNode addrAlways: false
+                    argx.append afrag
+                }
+            }
         }
         aargs: ", \{argx}"
         ea: (svNativeCall
@@ -5250,34 +5253,41 @@ emitSvNativeInfix: function {
     owner: ztypes.tid
     lhsNid: u64
     rhsNid: u64
-    l: StringView
-    r: StringView
     op: StringView
 } out String is {
     if (isStringyTid :ctx tid: owner).not then return "".string
     if (isSvSimpleNative name: op).not then return "".string
     needsAddM :ctx uname: "system" memb: op
+    ord: orderBegin :ctx slots: 2
+    mk: pendingHoistMark :ctx
     # a String receiver projects to a view value; a StringView already is one
-    recvS: l.string
+    recv: operandValueC :ast :symtab :ctx nid: lhsNid
     if owner == ctx.strTid then {
-        lv: atomVid :symtab nid: lhsNid
-        bfs: svValueForm :ctx expr: l isStr: true vid: lv
-        recvS = bfs.copy
+        rf: (svValueFormAt
+            :ast
+            :symtab
+            :ctx
+            n: (ast.nodes.get i: lhsNid)
+            expr: recv.stringView
+            isStr: true
+            vid: (atomVid :symtab nid: lhsNid)
+        )
+        recv = rf
     }
-    # ASK THE CONSTANT FIRST. The operands are emitted before the operator's
-    # resolution is known, so a literal argument has ALREADY been folded to a
-    # `_zcsN` static by the time this runs. Recomputing the argument
-    # from the node would mint the pooled literal instead and leave that static
-    # referenced by nothing -- a `defined but not used` warning, which
-    # warn-check reads as a failure. The folded static is a StringView; its
-    # address is exactly what the native wants.
+    orderArgAt :ast :symtab :ctx st: ord mark: mk text: recv nid: lhsNid byPtr: false slot: 0
+    mkA: pendingHoistMark :ctx
+    # a folded string constant is a static view, and its address is what the
+    # native takes
     afrag: String
     {
         cg: symtab.typing.nodeConst.get key: rhsNid
         match (
             cg
         ) case some then {
-            if cg.kind.svalKind then afrag = "&\{r}"
+            if cg.kind.svalKind then {
+                cv: operandValueC :ast :symtab :ctx nid: rhsNid
+                afrag = "&\{cv}"
+            }
         } case none then null
     }
     if afrag.length == 0 then {
@@ -5289,8 +5299,17 @@ emitSvNativeInfix: function {
             addrAlways: false
         )
     }
-    aargs: ", \{afrag}"
-    return (svNativeCall :ctx m: op recv: recvS.stringView args: aargs.stringView)
+    orderArgAt :ast :symtab :ctx st: ord mark: mkA text: afrag nid: rhsNid byPtr: true slot: 1
+    oprefix: orderFinish :ctx st: ord
+    aargs: ", \{orderSlotText t: ctx st: ord slot: 1}"
+    ecall: (svNativeCall
+        :ctx
+        m: op
+        recv: (orderSlotText t: ctx st: ord slot: 0)
+        args: aargs.stringView
+    )
+    orderEnd :ctx st: ord
+    return (orderWrap prefix: oprefix call: ecall)
 }
 
 # emitScalarIterateCall -- the VALUE form of a numeric `iterate` / `each`.
@@ -6005,6 +6024,8 @@ orderPart: function {
     ctype: StringView
     # the parameter slot the part fills
     slot: u64
+    # the node whose value the text is, which types a scalar's temp; 0 for none
+    valueNid: 0.u64
 } is {
     if st.live then {
         follows: constant.not or (hoistsWithValues :ctx :mark)
@@ -6031,6 +6052,7 @@ orderPart: function {
     ctx.orderPendFid.append fid.u64
     ctx.orderPendPid.append pid
     ctx.orderPendName.append pname.u64
+    ctx.orderPendNid.append valueNid
 }
 
 # hoistsWithValues -- whether a part built from `mark` recorded a hoist that is
@@ -6061,9 +6083,14 @@ orderSettle: function {
     fid: ztypes.tid.create from: ctx.orderPendFid.pop
     pid: ztypes.tid.create from: ctx.orderPendPid.pop
     pn: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: ctx.orderPendName.pop)
+    vnid: ctx.orderPendNid.pop
     # a part no declared parameter types is typed as its own expression, read
-    # through a comma so a `const` source still gives an assignable temp
-    ct: "__typeof__(((void)0, \{text}))"
+    # through a comma so a `const` source still gives an assignable temp. A
+    # scalar is spelled with its C type: typed as its own expression, the
+    # operand of a chain would repeat the whole chain before it
+    ct: String
+    if vnid > 0 then ct = operandScalarC :symtab n: (ast.nodes.get i: vnid)
+    if ct.length == 0 then ct = "__typeof__(((void)0, \{text}))"
     if fid.isZero.not then ct = paramCType :ast :symtab :ctx :fid pname: pn.stringView :pid
     if given.length > 0 then ct = given
     if ct.length == 0 then {
@@ -6096,6 +6123,7 @@ orderFinish: function {ctx: Ctx st: orderstate} out String is {
         ctx.orderPendFid.pop
         ctx.orderPendPid.pop
         ctx.orderPendName.pop
+        ctx.orderPendNid.pop
     }
     prefix: String
     if ctx.orderPieceVals.length == st.pieceMark then return prefix
@@ -6161,6 +6189,8 @@ orderConstant: function {
 } out bool is {
     cv: symtab.typing.nodeConstIn mono: ctx.curThisTid.u64 nid: (interpPartNodeId :n)
     if cv.kind.none.not then return true
+    # a constant a unit or a data block names reaches the C as its literal
+    if (isCNumberLiteral s: text) then return true
     if n.atomstring when (litIndexOf :ctx nid: n.nodeid.u64) > 0 then return true
     if n.dottedpath then {
         # an arm without a payload named on its type, and a literal's own String
@@ -6176,6 +6206,29 @@ orderConstant: function {
     }
     if byPtr.not then return false
     return (isPlainCPath s: text)
+}
+
+# isCNumberLiteral -- C text that is one number literal: a digit first, after an
+# optional sign, then digits, letters and points, with a sign only where an
+# exponent allows one.
+isCNumberLiteral: function {s: StringView} out bool is {
+    i: u64
+    if ((s.byteAt i: 0).or d: 0) == 45 then i = 1
+    first: (s.byteAt :i).or d: 0
+    if first < 48 or (first > 57) then return false
+    prev: first
+    for i < s.length loop {
+        c: (s.byteAt :i).or d: 0
+        sign: c == 43 or (c == 45)
+        if sign then {
+            if (prev == 101 or (prev == 69) or (prev == 112) or (prev == 80)).not then return false
+        } else if c != 46 when (isCNameByte :c).not then {
+            return false
+        }
+        prev = c
+        i = i + 1
+    }
+    return true
 }
 
 # isPlainCPath -- C text that names a place and reads nothing through a pointer a
@@ -7404,8 +7457,8 @@ operatorOwnerId: function {
 
 # emitOperatorCallForm -- `a.+ rhs: b` through the same emitter the infix form
 # uses. "" when this is not a one-argument operator call, which leaves the
-# caller on its ordinary legs. Both forms prepare their operands as VALUES,
-# an atom box dereferenced alike, because from here down they are one call. A word-named member (`a.or rhs: b`) is an operator call
+# caller on its ordinary legs. Both forms hand on their operand nodes, because
+# from here down they are one call. A word-named member (`a.or rhs: b`) is an operator call
 # when it resolves to a NATIVE method whose natives.tbl row binds the operator
 # holes -- the row is the authority, not the spelling.
 emitOperatorCallForm: function {
@@ -7529,14 +7582,6 @@ emitOperatorCallForm: function {
         if a0.namedoperation then rhsNid = a0.operation.u64
     }
     if rhsNid == 0 then return "".string
-    # AN OPERAND IS A VALUE, which is what valueExprC gives and emitExpr does
-    # not: a Box is loaded, and so is a pointer-held valtype. With plain
-    # emitExpr a `.view` valtype parameter reaches the C as its POINTER and
-    # `z_v2 + 1ULL` adds one to an address.
-    l: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: lhsNid)
-    r: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: rhsNid)
-    if (nodeIsAtomBox :symtab n: (ast.nodes.get i: lhsNid)) then l = "(*\{l})"
-    if (nodeIsAtomBox :symtab n: (ast.nodes.get i: rhsNid)) then r = "(*\{r})"
     oid9: zast.poolFind pool: ast.names text: mnO
     return (emitOperatorAt
         :ast
@@ -7548,8 +7593,6 @@ emitOperatorCallForm: function {
         :method
         :lhsNid
         :rhsNid
-        :l
-        :r
         op: mnO
     )
 }
@@ -9015,7 +9058,7 @@ emitColInterpArg: function {
     sx: emitInterpArgExpr :ast :symtab :ctx :n
     if sx.length == 0 then {
         if consumes then return "".string
-        if ((stampTidDeep :symtab :n) == ctx.strTid).not then return "".string
+        if ((stampIdDeep :symtab :n) == ctx.strTid).not then return "".string
         ex: emitExpr :ast :symtab :ctx :n
         if (isNonLvalueArg s: ex.stringView).not then return "".string
         sx = ex
@@ -15827,7 +15870,9 @@ emitControlExpr: function {
 # The receiver-shape derivations stay here because they choose WHICH row
 # applies and what its operands look like; the C itself lives in the table.
 # The infix form and the call form (`a.+ rhs: b`) are the SAME one-argument
-# method, so they emit through here alike; only the node ids differ.
+# method, so they emit through here alike; only the node ids differ. The leg
+# that answers builds the operands, because it decides their form, and builds
+# them in the order they are written.
 emitOperatorAt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -15838,8 +15883,6 @@ emitOperatorAt: function {
     method: ztypes.tid
     lhsNid: u64
     rhsNid: u64
-    l: String
-    r: String
     op: StringView
 } out String is {
     if owner.isZero then {
@@ -15888,47 +15931,17 @@ emitOperatorAt: function {
         )
     }
     if call > 0 when isNat.not when isSyn.not then {
-        # AN INTERFACE RECEIVER DISPATCHES. A binop is the call form for a
-        # one-argument method, and taking the C name of the method it
-        # resolves to would name the SPEC member for an interface, a
-        # declaration with no body. The named call form on the same facet
-        # emits `f.vtable->near(&f.data, a)`; a cname here calls a symbol
-        # that does not exist.
-        vd: (emitBinopVtableCall
+        return (emitDeclaredOperator
             :ast
             :symtab
             :ctx
-            :lhsNid
             :owner
+            :call
             :callName
-            lhs: l.stringView
-            rhs: r.stringView
+            :lhsNid
+            :rhsNid
             :neg
         )
-        if vd.length > 0 then return vd
-        # a body the author wrote. Its receiver is a pointer like every
-        # other method's, so address the lhs unless it already is one -- and
-        # when it is one, the operand text was LOADED for the native legs, so
-        # the pointer is read again from the node.
-        cn: ctxCname :ctx tid: call
-        recvText: l.copy
-        if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: lhsNid)) then {
-            recvText = emitExpr :ast :symtab :ctx n: (ast.nodes.get i: lhsNid)
-        } else {
-            # `&` needs an LVALUE, and a receiver that is itself a call is
-            # not one -- `&f(x)` is rejected by C. Bind it to a temp the
-            # statement flush declares. A compound literal already is an
-            # lvalue and must not pay for a temp.
-            lhsText: lvalueForm :ast :symtab :ctx av: l.stringView tid: owner
-            amp: "&\{lhsText}"
-            recvText = amp
-        }
-        if neg then {
-            u1: "!\{cn}(\{recvText}, \{r})"
-            return u1
-        }
-        u2: "\{cn}(\{recvText}, \{r})"
-        return u2
     }
     # A NATIVE NAMED METHOD IS NOT AN OPERATOR. The table holds inline bodies
     # for operators; a fragment-backed native like `startsWith` has none, so
@@ -15936,17 +15949,7 @@ emitOperatorAt: function {
     # implemented. Emit the ordinary method call instead -- the mirror of
     # emitOperatorCallForm, which routes the other direction.
     if call > 0 when isNat then {
-        eNi: (emitSvNativeInfix
-            :ast
-            :symtab
-            :ctx
-            :owner
-            :lhsNid
-            :rhsNid
-            l: l.stringView
-            r: r.stringView
-            :op
-        )
+        eNi: emitSvNativeInfix :ast :symtab :ctx :owner :lhsNid :rhsNid :op
         if eNi.length > 0 then return eNi
     }
     key: binopKeyOf :ast :symtab :owner isNative: isNat :op
@@ -15972,65 +15975,10 @@ emitOperatorAt: function {
     }
     nd: nativeNeedOf :ctx path: key.stringView
     if nd.length > 0 then needsAddM :ctx uname: "system" memb: nd.stringView
-    # String and StringView reach one native: both project to a view, by value
-    # for the compares and as an lvalue for the row that takes pointers.
-    lf: l.copy
-    rf: r.copy
-    if (isStringyTid :ctx tid: owner) then {
-        lt: stampNameDeep :symtab n: (ast.nodes.get i: lhsNid)
-        rt: stampNameDeep :symtab n: (ast.nodes.get i: rhsNid)
-        if (nativePtrArgsOf :ctx path: key.stringView) then {
-            lf = (stringViewBinopOperand
-                :ast
-                :symtab
-                :ctx
-                n: (ast.nodes.get i: lhsNid)
-                expr: l.stringView
-                tname: lt.stringView
-            )
-            rf = (stringViewBinopOperand
-                :ast
-                :symtab
-                :ctx
-                n: (ast.nodes.get i: rhsNid)
-                expr: r.stringView
-                tname: rt.stringView
-            )
-        } else {
-            lq: (atomVidIfPlain
-                :ast
-                :symtab
-                :ctx
-                n: (ast.nodes.get i: lhsNid)
-                text: l.stringView
-            )
-            rq: (atomVidIfPlain
-                :ast
-                :symtab
-                :ctx
-                n: (ast.nodes.get i: rhsNid)
-                text: r.stringView
-            )
-            lf = (svValueFormAt
-                :ast
-                :symtab
-                :ctx
-                n: (ast.nodes.get i: lhsNid)
-                expr: l.stringView
-                isStr: lt.stringView == "String"
-                vid: lq
-            )
-            rf = (svValueFormAt
-                :ast
-                :symtab
-                :ctx
-                n: (ast.nodes.get i: rhsNid)
-                expr: r.stringView
-                isStr: rt.stringView == "String"
-                vid: rq
-            )
-        }
-    }
+    ord: orderBegin :ctx slots: 2
+    orderRowOperand :ast :symtab :ctx :owner key: key.stringView nid: lhsNid slot: 0 :ord
+    orderRowOperand :ast :symtab :ctx :owner key: key.stringView nid: rhsNid slot: 1 :ord
+    oprefix: orderFinish :ctx st: ord
     # a typedef emits no helper of its own: the chain end owns it
     tcn: ctxCname :ctx tid: owner
     tdb: typedefChaseBaseName :ast :symtab tid: owner
@@ -16046,10 +15994,11 @@ emitOperatorAt: function {
     rn: List String
     rv: List String
     rn.append from: "L".string
-    rv.append from: lf.copy
+    rv.append from: (orderSlotText t: ctx st: ord slot: 0).string
     rn.append from: "R".string
-    rv.append from: rf.copy
-    return (fillHolesForCtx
+    rv.append from: (orderSlotText t: ctx st: ord slot: 1).string
+    orderEnd :ctx st: ord
+    filled: (fillHolesForCtx
         :ctx
         text: body
         path: key.stringView
@@ -16058,6 +16007,176 @@ emitOperatorAt: function {
         rawNames: rn
         rawVals: rv
     )
+    return (orderWrap prefix: oprefix call: filled)
+}
+
+# operandValueC -- an operator's operand as a VALUE, which is what valueExprC
+# gives and emitExpr does not: a Box is loaded, and so is a pointer-held valtype.
+# With plain emitExpr a `.view` valtype parameter reaches the C as its POINTER and
+# `z_v2 + 1ULL` adds one to an address.
+operandValueC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    nid: u64
+} out String is {
+    n: ast.nodes.get i: nid
+    v: valueExprC :ast :symtab :ctx :n
+    if (nodeIsAtomBox :symtab :n) then return "(*\{v})"
+    return v
+}
+
+# orderRowOperand -- one operand of an operator's natives.tbl row, in the form
+# the row takes it, placed in evaluation order into `slot`. String and
+# StringView reach one native: both project to a view, by value for the
+# compares and as an lvalue for the row that takes pointers.
+orderRowOperand: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    owner: ztypes.tid
+    # the row's path
+    key: StringView
+    nid: u64
+    slot: u64
+    ord: orderstate.borrow
+} is {
+    mk: pendingHoistMark :ctx
+    v: operandValueC :ast :symtab :ctx :nid
+    n: ast.nodes.get i: nid
+    if (isStringyTid :ctx tid: owner).not then {
+        constant: orderConstant :ast :symtab :ctx :n text: v.stringView byPtr: false
+        (orderPart
+            :ast
+            :symtab
+            :ctx
+            st: ord
+            mark: mk
+            text: v
+            :constant
+            fid: ztypes.tid
+            pid: 0
+            pname: zast.nameid
+            ctype: ""
+            :slot
+            valueNid: nid
+        )
+        return
+    }
+    tname: stampNameDeep :symtab :n
+    if (nativePtrArgsOf :ctx path: key) then {
+        pf: stringViewBinopOperand :ast :symtab :ctx :n expr: v.stringView tname: tname.stringView
+        v = pf
+    } else {
+        q: atomVidIfPlain :ast :symtab :ctx :n text: v.stringView
+        vf: (svValueFormAt
+            :ast
+            :symtab
+            :ctx
+            :n
+            expr: v.stringView
+            isStr: tname.stringView == "String"
+            vid: q
+        )
+        v = vf
+    }
+    orderArgAt :ast :symtab :ctx st: ord mark: mk text: v :nid byPtr: false :slot
+}
+
+# operandScalarC -- the C type of an operand whose stamp is a builtin scalar or
+# an ordinal variant; "" for anything else, a Box or a generic parameter among
+# them.
+operandScalarC: function {symtab: zenv.ZSymbolTable.view n: astnode.view} out String is {
+    st: stampIdDeep :symtab :n
+    if st.isZero then return "".string
+    return (scalarCTypeFor :symtab name: (regNameView :symtab tid: st) tid: st)
+}
+
+# emitDeclaredOperator -- an operator whose body the author wrote: the method
+# called on the lhs, which it takes by pointer like every other method, negated
+# when the method is the comparison partner. AN INTERFACE RECEIVER DISPATCHES:
+# the C name of the method resolved for an interface names the SPEC member, a
+# declaration with no body, so the call goes through the vtable the named call
+# form uses. The lhs is built before the rhs and handed on by address, so the
+# body sees it as it is once the rhs has run.
+emitDeclaredOperator: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    owner: ztypes.tid
+    call: ztypes.tid
+    callName: zast.nameid
+    lhsNid: u64
+    rhsNid: u64
+    neg: bool
+} out String is {
+    ord: orderBegin :ctx slots: 2
+    mk: pendingHoistMark :ctx
+    recv: String
+    if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: lhsNid)) then {
+        recv = emitExpr :ast :symtab :ctx n: (ast.nodes.get i: lhsNid)
+    } else {
+        # `&` needs an LVALUE, and a receiver that is itself a call is not one --
+        # `&f(x)` is rejected by C. lvalueForm binds it to a temp the statement
+        # flush declares; a compound literal already is an lvalue.
+        lv: operandValueC :ast :symtab :ctx nid: lhsNid
+        lf: lvalueForm :ast :symtab :ctx av: lv.stringView tid: owner
+        recv = "&\{lf}"
+    }
+    orderArgAt :ast :symtab :ctx st: ord mark: mk text: recv nid: lhsNid byPtr: true slot: 0
+    mkR: pendingHoistMark :ctx
+    rv: operandValueC :ast :symtab :ctx nid: rhsNid
+    orderArgAt :ast :symtab :ctx st: ord mark: mkR text: rv nid: rhsNid byPtr: false slot: 1
+    r: orderFinish :ctx st: ord
+    opened: r.length > 0
+    if neg then r.append "!"
+    if (isDispatchableTid :symtab tid: owner) then {
+        isFacet: (symtab.reg.typetypeOf typeId: owner) == ztypes.ztypetype.facetType
+        mn: zast.nameTextAt :ast ref: callName
+        (appendVtableOperator
+            buf: r
+            recv: (orderSlotText t: ctx st: ord slot: 0)
+            arg: (orderSlotText t: ctx st: ord slot: 1)
+            mn: mn.stringView
+            :isFacet
+        )
+    } else {
+        cn: ctxCname :ctx tid: call
+        r.append cn
+        r.append "("
+        r.append (orderSlotText t: ctx st: ord slot: 0)
+        r.append ", "
+        r.append (orderSlotText t: ctx st: ord slot: 1)
+        r.append ")"
+    }
+    if opened then r.append ")"
+    orderEnd :ctx st: ord
+    return r
+}
+
+# appendVtableOperator -- an operator dispatched through an interface's vtable,
+# whose receiver arrives as an address: `&place` is read through the place, any
+# other pointer through `->`. The slot is named by the member that resolved, not
+# by the operator as written: a derived `!=` dispatches `==`.
+appendVtableOperator: function {
+    buf: String.borrow
+    recv: StringView
+    arg: StringView
+    mn: StringView
+    isFacet: bool
+} is {
+    place: String
+    acc: "->"
+    if recv.startsWith "&" then {
+        place.append (recv.substring from: 1 to: recv.length)
+        acc = "."
+    } else {
+        place.append "("
+        place.append recv
+        place.append ")"
+    }
+    tail: ", \{arg}"
+    buf.append (vtableCallC recv: place.stringView :acc :mn :isFacet argTail: tail.stringView)
 }
 
 # emitInterpPrint -- the interpolated-print temp chain: create, per-part
@@ -16590,34 +16709,25 @@ stampNameDeep: function {
     symtab: zenv.ZSymbolTable.view
     n: astnode.view
 } out String is {
-    sid: stampTidDeep :symtab :n
-    if sid.isZero then return "".string
-    return (regNameOf :symtab tid: sid)
-}
-
-# stampTidDeep -- a node's stamped type, unwrapping a value-position FUNCTION
-# stamp to its return type; zero when the node has none.
-stampTidDeep: function {
-    symtab: zenv.ZSymbolTable.view
-    n: astnode.view
-} out ztypes.tid is {
     nid: interpPartNodeId :n
     sid: stampIdOf :symtab :nid
-    if sid.isZero then return sid
-    # a value-position FUNCTION stamp is an auto-call; its value type is the
-    # method's return.
-    if (symtab.reg.typetypeOf typeId: sid) == ztypes.ztypetype.functionType then {
-        rto: fnReturnTidOf :symtab tid: sid
-        if rto > 0 then return (ztypes.tid.create from: rto.u64)
-        rno: symtab.typing.funcReturnNode.get key: sid
-        match (
-            rno
-        ) case some then {
-            rrt: stampIdOf :symtab nid: rno
-            if rrt > 0 then return rrt
-        } case none then null
+    if sid > 0 then {
+        # a value-position FUNCTION stamp is an auto-call; its value
+        # type is the method's return.
+        if (symtab.reg.typetypeOf typeId: sid) == ztypes.ztypetype.functionType then {
+            rto: fnReturnTidOf :symtab tid: sid
+            if rto > 0 then return (regNameOf :symtab tid: (ztypes.tid.create from: rto.u64))
+            rno: symtab.typing.funcReturnNode.get key: sid
+            match (
+                rno
+            ) case some then {
+                rrt: stampIdOf :symtab nid: rno
+                if rrt > 0 then return (regNameOf :symtab tid: rrt)
+            } case none then null
+        }
+        return (regNameOf :symtab tid: sid)
     }
-    return sid
+    return "".string
 }
 
 # emitPrintStmt -- a statement-position print call.
@@ -16685,6 +16795,7 @@ emitErrorStmt: function {
     ctx: Ctx
     call: zast.callrow.view
     ind: StringView
+    tmp: TmpCtr
     buf: String.borrow
 } is {
     av: String
@@ -16705,6 +16816,7 @@ emitErrorStmt: function {
     okArg: false
     if got when (av.stringView.startsWith prefix: "/*").not then okArg = true
     if okArg then {
+        flushArgHoists :ctx :ind :tmp :buf
         el: "\{ind}z_panic((const char*)\{av}.data);\n"
         buf.append el
     } else {
@@ -16727,6 +16839,7 @@ emitPanicStmt: function {
     ctx: Ctx
     call: zast.callrow.view
     ind: StringView
+    tmp: TmpCtr
     buf: String.borrow
 } is {
     av: String
@@ -16745,6 +16858,7 @@ emitPanicStmt: function {
     okArg: false
     if got when (av.stringView.startsWith prefix: "/*").not then okArg = true
     if okArg then {
+        flushArgHoists :ctx :ind :tmp :buf
         pl: "\{ind}z_panic((const char*)\{av}.data);\n"
         buf.append pl
     } else {
@@ -17353,11 +17467,11 @@ emitCallStmt: function {
         return
     }
     if (mnIs :ctx id: sfnId at: mnPanic) then {
-        emitPanicStmt :ast :symtab :ctx :call :ind :buf
+        emitPanicStmt :ast :symtab :ctx :call :ind :tmp :buf
         return
     }
     if (mnIs :ctx id: sfnId at: mnError) then {
-        emitErrorStmt :ast :symtab :ctx :call :ind :buf
+        emitErrorStmt :ast :symtab :ctx :call :ind :tmp :buf
         return
     }
     if sfnId == zast.names.wkReturn then {
@@ -17525,6 +17639,7 @@ emitListBind: function {
                 }
             } else {
                 lcap: listCapArg :ast :symtab :ctx n: avn
+                flushArgHoists :ctx :ind :tmp :buf
                 lb1: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)\{lcap});\n"
                 buf.append lb1
             }
@@ -17578,6 +17693,7 @@ emitHeapColBind: function {
         }
     } else {
         hcap: listCapArg :ast :symtab :ctx n: avn
+        flushArgHoists :ctx :ind :tmp :buf
         hb0: "\{ind}\{cb}_t* \{nm} = \{cb}_create((uint64_t)\{hcap});\n"
         buf.append hb0
     }
@@ -21269,7 +21385,19 @@ emitObjIterRecv: function {
     match (
         giO
     ) case some then {
-        return (emitObjIterField :ast :symtab :ctx :cOp :itid :bareFnId :itCb gi: giO :ind :buf)
+        return (emitObjIterField
+            :ast
+            :symtab
+            :ctx
+            :cOp
+            :itid
+            :bareFnId
+            :itCb
+            gi: giO
+            :ind
+            :tmp
+            :buf
+        )
     } case none then null
     iterRecv: String
     ownGit: false
@@ -21336,6 +21464,7 @@ emitObjIterField: function {
     itCb: StringView
     gi: zast.nameid
     ind: StringView
+    tmp: TmpCtr
     buf: String.borrow
 } out String is {
     fnm: zast.nameTextAt :ast ref: gi
@@ -21351,6 +21480,7 @@ emitObjIterField: function {
     } else {
         ivex = emitExpr :ast :symtab :ctx n: (ast.nodes.get i: cOp.u64)
     }
+    flushArgHoists :ctx :ind :tmp :buf
     la: "\{ind}\{recv} = \{ivex};\n"
     buf.append la
     emitValueTakeInvalidations :ast :symtab :ctx n: (ast.nodes.get i: cOp.u64) :ind :buf
@@ -24380,6 +24510,7 @@ emitComprehensionNode: function {
             st: ast.nodes.get i: stId.u64
             if si == (cnt - 1) then {
                 av: emitExpr :ast :symtab :ctx n: st
+                flushArgHoists :ctx :ind :tmp :buf
                 la: "\{ind}\{listCb}_append(&\{listVar}, (\{av}));\n"
                 buf.append la
             } else {
@@ -24389,6 +24520,7 @@ emitComprehensionNode: function {
         }
     } else {
         av2: emitExpr :ast :symtab :ctx :n
+        flushArgHoists :ctx :ind :tmp :buf
         la2: "\{ind}\{listCb}_append(&\{listVar}, (\{av2}));\n"
         buf.append la2
     }
@@ -28158,6 +28290,7 @@ emitC: function {
         orderPendFid: ListVal u64
         orderPendPid: ListVal u64
         orderPendName: ListVal u64
+        orderPendNid: ListVal u64
         orderCtr: 0
         lastArgByPtr: false
         tmpHigh: 0
@@ -34670,56 +34803,6 @@ vtableAutoCallC: function {
     isFacet: bool
 } out String is {
     return (vtableCallC :recv :acc :mn :isFacet argTail: "")
-}
-
-# emitBinopVtableCall -- a binary operator whose RECEIVER is an interface,
-# dispatched through the vtable. "" when the receiver is not one, which leaves
-# emitOperatorAt on its ordinary leg.
-#
-# The receiver's spelling is inverted from that leg: there `pathIsPointer`
-# decides whether to ADD an `&`, here it decides `.` against `->`, and
-# vtableDataArg puts the `&` back for a facet -- whose impl is inline in a
-# union rather than behind a pointer. The lvalue hoist is kept for the same
-# reason it exists there: `&someCall().data` is not an lvalue either.
-#
-# The slot comes from callName, not from the operator as written: a `!=` the
-# checker derived resolves to `==` and is negated here, so the name that
-# resolved is the name that must be dispatched.
-emitBinopVtableCall: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    lhsNid: u64
-    owner: ztypes.tid
-    callName: zast.nameid
-    lhs: StringView
-    rhs: StringView
-    neg: bool
-} out String is {
-    if (isDispatchableTid :symtab tid: owner).not then return "".string
-    isFacet: (symtab.reg.typetypeOf typeId: owner) == ztypes.ztypetype.facetType
-    acc: ".".string
-    recvText: lhs.string
-    if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: lhsNid)) then {
-        acc = "->".string
-    } else {
-        recvText = lvalueForm :ast :symtab :ctx av: lhs tid: owner
-    }
-    mn: zast.nameTextAt :ast ref: callName
-    if mn.length == 0 then return "".string
-    tail: ", \{rhs}"
-    d: (vtableCallC
-        recv: recvText.stringView
-        acc: acc.stringView
-        mn: mn.stringView
-        :isFacet
-        argTail: tail.stringView
-    )
-    if neg then {
-        nd: "!\{d}"
-        return nd
-    }
-    return d
 }
 
 # vtableCallC -- the dispatch itself: `recv.vtable->slot(dataArg, args...)`.
