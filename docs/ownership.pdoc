@@ -302,6 +302,16 @@ what the result is:
 A reference return (#~".borrow" / #~".view") always keeps its source locked, so
 it is always #~"outx". See #>"outx" below for what a pin is.
 
+A view value -- a #~"StringView", a #~"ListView" -- keeps the storage it reads
+locked in the same way, and so does a view derived from it (#~"substring",
+#~"trim", #~"slice"): the derived view reads the first one's source. Returned,
+a view hands the caller a reference into that storage, so the storage must
+outlive the call. A view of a local, of a field of one, or of a value no name
+holds (#~"(mks n: 1).stringView") points at storage that dies with the call,
+and returning it is refused (#~"E0200") whether the function is #~"out" or
+#~"outx". A view of a parameter or of the receiver is returned through
+#~"outx".
+
 #_+"A receiver is #~".borrow" or #~".view", and nothing else." An object cannot
 own itself, so #~".take" and #~".hold" are meaningless there. A bare #~":this"
 receiver is #~".borrow"; marking one requires an alias, as in
@@ -1884,6 +1894,7 @@ the direct form.
   #~"outx" with nothing to pin                               |#~"outx" pins nothing here: no parameter or receiver is #~".borrow" or #~".view" |Write #~"out", or mark the source the result reads through (e.g. #~"t: this.view")
   #~"out W" where #~"W" has a non-owned field                |an owned #~"out" result whose type declares a non-owned field must be #~"outx" |Declare #~"outx W" (or #~"outx this")
   #~"out T.borrow" / #~"out T.view"                          |a reference return keeps its sources locked            |Write #~"outx T.borrow" / #~"outx T.view"
+  #~"return s.stringView" where #~"s" is a local             |Cannot return this value: it keeps 's' locked, which dies with this call |Return an owned copy (#~".string"), or a view of a parameter through #~"outx"
   #~"return (W s: loc)" from an #~"outx" function            |the returned #~"W" stores 'loc' in its non-owned field 's', but 'loc' is not a #~".borrow"/#~".view" parameter |Fill the field from a parameter or the receiver
   #~"x = w" where #~"x" outlives what #~"w" locks             |Cannot move 'w' by reassignment: it holds locks on 'a', and 'x' outlives 'a' |Keep 'x' inside 'a's scope, or #~"w.copy"
   non-owned field on a record                               |non-owned fields only allowed on classes              |Change the enclosing type from #~"record" to #~"class"

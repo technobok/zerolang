@@ -22811,7 +22811,7 @@ reportPrivateMember: function {
 # routes the pins its result keeps. Answers the path's type.
 checkMemberAutoCall: function {
     st: zenv.ZSymbolTable
-    ast: Ast.view
+    ast: Ast
     dp: dpref
     # the RECEIVER's type: a member declared `out type` answers this instance
     bt: ztypes.tid
@@ -22837,11 +22837,20 @@ checkMemberAutoCall: function {
             # field list passed as an argument is a non-owning shallow copy).
             tup: ListVal zast.nameid
             appendValueTuple :ast n: (ast.nodes.get i: dp.parent.u64) dst: tup
-            noArgs: List ztyping.PinPath
+            recvPins: List ztyping.PinPath
+            (valueReceiverPins
+                :st
+                :ast
+                funcId: (ztypes.tid.create from: mo.u64)
+                recvNid: dp.parent
+                recvT: bt
+                path: tup
+                pins: recvPins
+            )
             (pinCallResult
                 :st
                 funcId: (ztypes.tid.create from: mo.u64)
-                pins: noArgs
+                pins: recvPins
                 recvPath: tup
                 recvShared: aShr
             )
@@ -25753,6 +25762,61 @@ checkBorrowResultSource: function {
     )
 }
 
+# reportReturnKeepsDyingStorage -- a returned value keeps its pending pins
+# locked for the caller, so a pin rooted at a local or a temporary points at a
+# value that dies with this call, `out` or `outx` alike. A construction's
+# fields are judged by the rooting check. Answers whether it reported.
+reportReturnKeepsDyingStorage: function {
+    # where the refusal is reported
+    st: zenv.ZSymbolTable
+    # the tree that names the storage a pin is rooted at
+    ast: Ast.view
+    # the returned argument
+    arg: argref
+    # its operation node
+    an: astnode.view
+} out bool is {
+    if (returnedValueIsConstruction :st :ast :an) then return false
+    roots: ListVal zast.nameid
+    with dit: st.typing.pendingPins.iterate do for p: dit loop roots.append (p.path.get i: 0)
+    deadNm: zast.nameid
+    with rit: roots.iterate do for rn: rit loop {
+        if deadNm.isZero when (pinRootDiesWithCall :st nameId: rn depth: 0) then deadNm = rn
+    }
+    if deadNm.isZero then return false
+    dn: lockRootPhrase :st :ast nameId: deadNm
+    m4: "Cannot return this value: it keeps \{dn} locked, which dies with this call"
+    (addError
+        :st
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+        e: zast.err.ownerError
+        msg: m4
+    )
+    return true
+}
+
+# returnedValueIsConstruction -- the returned value builds an instance: a
+# class, record or union construction, or `meta.create`.
+returnedValueIsConstruction: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view an: astnode.view
+} out bool is {
+    cid: callNodeIdOf n: an
+    if cid.isZero then return false
+    cko: st.typing.callKind.get key: cid.u64
+    match (
+        cko
+    ) case some then {
+        if cko.classCreate then return true
+        if cko.unionCreate then return true
+        if cko.recordCreate then return true
+    } case none then null
+    cr: callRefAt :ast nid: cid
+    mcb: metaCreateBaseId :ast n: (ast.nodes.get i: cr.callable.u64)
+    return mcb.some
+}
+
 # checkReturnCarries -- what a returned value keeps locked. A local that
 # holds locks may be returned only through an `outx` function, and only when
 # every lock is on a parameter or the receiver -- what the caller still owns
@@ -25786,10 +25850,10 @@ checkReturnCarries: function {
             )
             if held.length > 0 then {
                 wn: zast.nameTextAt :ast ref: rbn
-                src0: zast.nameTextAt :ast ref: (pinRootAt pins: held i: 0)
+                src0: lockRootPhrase :st :ast nameId: (pinRootAt pins: held i: 0)
                 if st.typing.currentFnPins.not then {
                     fnNm: st.reg.nameOf tid: st.typing.currentFnTid
-                    m1: "Cannot return '\{wn}': it holds locks on '\{src0}', which the caller cannot see because '\{fnNm}' is `out`, not `outx`"
+                    m1: "Cannot return '\{wn}': it holds locks on \{src0}, which the caller cannot see because '\{fnNm}' is `out`, not `outx`"
                     (addError
                         :st
                         nodeid: arg.nid
@@ -25807,8 +25871,8 @@ checkReturnCarries: function {
                         svo
                     ) case some then {
                         if (st.reg.variableOriginOf id: svo) != ztypes.zvarorigin.param then {
-                            sn: zast.nameTextAt :ast ref: srcNm
-                            m2: "Cannot return '\{wn}': it holds locks on '\{sn}', which dies with this call"
+                            sn: lockRootPhrase :st :ast nameId: srcNm
+                            m2: "Cannot return '\{wn}': it holds locks on \{sn}, which dies with this call"
                             (addError
                                 :st
                                 nodeid: arg.nid
@@ -25831,6 +25895,7 @@ checkReturnCarries: function {
         } case none then null
         return
     }
+    if (reportReturnKeepsDyingStorage :st :ast :arg :an) then return
     # a returned call: its pending pins are what the result keeps locked
     if (callNodeIdOf n: an).isZero then return
     if st.typing.currentFnPins then return
@@ -30669,6 +30734,60 @@ pinsRoot: function {st: zenv.ZSymbolTable.view} out zast.nameid is {
     return (p0.path.get i: 0)
 }
 
+# pinRootDiesWithCall -- whether a returned value's pin rooted at `nameId` points
+# at storage that dies with this call. An owned local or temporary does and a
+# parameter does not; a borrowed local does only when what it borrows does --
+# the locks it holds, else the source it was borrowed from.
+pinRootDiesWithCall: function {st: zenv.ZSymbolTable nameId: zast.nameid depth: u64} out bool is {
+    if depth > 16 then return false
+    vo: st.lookupVarId :nameId
+    if vo.none then return false
+    vid: vo
+    if (st.reg.variableOriginOf id: vid) == ztypes.zvarorigin.param then return false
+    if (st.reg.variableOwnershipOf id: vid) != ztypes.zownership.borrowed then return true
+    held: List ztyping.PinPath
+    (st.heldLockPaths
+        holder: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: vid.u64)
+        dst: held
+    )
+    if held.length > 0 then return (heldRootsDieWithCall :st :held :depth)
+    bo: st.reg.variableBorrowOriginOf id: vid
+    if bo.isZero or (bo == nameId) then return false
+    return (pinRootDiesWithCall :st nameId: bo depth: depth + 1)
+}
+
+# heldRootsDieWithCall -- whether any lock a borrowed local holds is rooted at
+# storage that dies with this call.
+heldRootsDieWithCall: function {
+    st: zenv.ZSymbolTable
+    held: (List ztyping.PinPath).view
+    depth: u64
+} out bool is {
+    roots: ListVal zast.nameid
+    with hit: held.iterate do for hp: hit loop roots.append (hp.path.get i: 0)
+    with rit: roots.iterate do for r: rit loop {
+        if (pinRootDiesWithCall :st nameId: r depth: depth + 1) then return true
+    }
+    return false
+}
+
+# nameIsSynthVariable -- the name is a variable the checker made (an unnamed
+# local), which a diagnostic calls "a temporary" rather than by name.
+nameIsSynthVariable: function {st: zenv.ZSymbolTable.view nameId: zast.nameid} out bool is {
+    vo: st.lookupVarId :nameId
+    if vo.none then return false
+    return (st.reg.variableOriginOf id: vo) == ztypes.zvarorigin.synth
+}
+
+# lockRootPhrase -- how a diagnostic names the root of a lock: the variable
+# quoted, or "a temporary" for an unnamed local no source line declares.
+lockRootPhrase: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view nameId: zast.nameid
+} out String is {
+    if (nameIsSynthVariable :st :nameId) then return "a temporary".string
+    return "'\{zast.nameTextAt :ast ref: nameId}'"
+}
+
 # pinRootAt -- the root of pin `i` of a local pin list.
 pinRootAt: function {pins: (List ztyping.PinPath).view i: u64} out zast.nameid is {
     if i >= pins.length then return zast.nameid
@@ -30762,6 +30881,138 @@ pinConstructionResult: function {st: zenv.ZSymbolTable pins: (List ztyping.PinPa
         pinsPush :st path: p.path shared: p.shared mutable: p.mutable alias: true
     }
     if pins.length > 0 then st.typing.pendingBorrowOwned = true
+}
+
+# resultPins -- whether a call's result keeps its inputs locked: an `outx`
+# result or a reference return.
+resultPins: function {st: zenv.ZSymbolTable.view funcId: ztypes.tid} out bool is {
+    if ((st.typing.funcPins.get key: funcId).or d: false) then return true
+    return ((st.typing.funcReturnsBorrow.get key: funcId).or d: false)
+}
+
+# captureValueReceiver -- a call whose result pins, on a receiver that is a
+# value rather than a variable: the receiver is evaluated before the arguments,
+# so the pins its own borrowed result left are taken now, before the argument
+# walk drains them. Answers the receiver's type when it left none, for the
+# unnamed local the result will keep; zero otherwise.
+captureValueReceiver: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    call: callref
+    funcId: ztypes.tid
+    # receives the pins a borrowed receiver left
+    pins: List ztyping.PinPath
+} out ztypes.tid is {
+    if (resultPins :st :funcId).not then return ztypes.tid
+    rvTup: ListVal zast.nameid
+    methodReceiverTuple :ast n: (ast.nodes.get i: call.callable.u64) dst: rvTup
+    rvIsVar: false
+    if rvTup.length > 0 then rvIsVar = (st.lookupVarId nameId: (rvTup.get i: 0)).none.not
+    if rvIsVar then return ztypes.tid
+    rpid: dottedParentNodeId :ast n: (ast.nodes.get i: call.callable.u64)
+    if rpid.isZero or (receiverIsValue :st :ast nid: rpid).not then return ztypes.tid
+    takePendingPins :st dst: pins
+    if pins.length > 0 then return ztypes.tid
+    return (ztypes.tid.create from: (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rpid.u64))
+}
+
+# receiverIsValue -- whether a dotted base is a value no variable holds: a call,
+# a function a bare name or a path auto-calls, or any other expression (a
+# literal, an interpolation, a value if). A name for a variable, a unit or a
+# type is not one.
+receiverIsValue: function {st: zenv.ZSymbolTable.view ast: Ast.view nid: zast.nodeid} out bool is {
+    isName: false
+    isPath: false
+    {
+        bn: ast.nodes.get i: nid.u64
+        isName = bn.atomid
+        isPath = bn.dottedpath
+    }
+    if isName then return (baseRunsCall :st :ast :nid)
+    if isPath.not then return true
+    rdo: st.typing.refDecl.get key: nid.u64
+    if rdo.none then return false
+    return (
+        (st.reg.typetypeOf typeId: (declTypeIdOf :st declId: rdo)) == ztypes.ztypetype.functionType
+    )
+}
+
+# joinValueReceiver -- after a call's scope pops, what captureValueReceiver
+# found becomes the result's receiver input: the unnamed local, or the pins the
+# receiver's borrowed result left, joined to the argument pins.
+joinValueReceiver: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    # the receiver's type, zero when no unnamed local is made
+    rvT: ztypes.tid
+    # the pins a borrowed receiver left
+    rvPins: (List ztyping.PinPath).view
+    # receives the unnamed local's path
+    path: ListVal zast.nameid
+    # the call's argument pins
+    pins: List ztyping.PinPath
+} is {
+    if rvT.isZero.not then unnamedReceiverLocal :st :ast recvT: rvT dst: path
+    with rpit: rvPins.iterate do for rp: rpit loop (pinsAppend
+        :pins
+        path: rp.path
+        shared: rp.shared
+        mutable: rp.mutable
+        alias: rp.alias
+        carried: rp.carried
+    )
+}
+
+# valueReceiverPins -- an auto-call whose result pins, read on a receiver that
+# is a value rather than a variable: the path becomes the unnamed local, or the
+# pins the receiver's own borrowed result left are taken in its place.
+valueReceiverPins: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    funcId: ztypes.tid
+    # the receiver node
+    recvNid: zast.nodeid
+    recvT: ztypes.tid
+    # the receiver tuple, replaced when its root is not a variable
+    path: ListVal zast.nameid
+    # receives the pins a borrowed receiver left
+    pins: List ztyping.PinPath
+} is {
+    if (resultPins :st :funcId).not then return
+    if path.length > 0 when (st.lookupVarId nameId: (path.get i: 0)).none.not then return
+    if (receiverIsValue :st :ast nid: recvNid).not then return
+    for path.length > 0 loop path.pop
+    if st.typing.pendingPins.length > 0 then {
+        takePendingPins :st dst: pins
+        return
+    }
+    unnamedReceiverLocal :st :ast :recvT dst: path
+}
+
+# unnamedReceiverLocal -- a pinning call's receiver that is a value rather than
+# a variable and owns its storage is an unnamed local of the enclosing scope,
+# and the result keeps that local locked. A view value (a StringView, a
+# ListView) points at storage it does not own, and a receiver whose own result
+# was borrowed hands on the pins it left instead, so neither makes one.
+unnamedReceiverLocal: function {
+    # the symbol table the local is defined in
+    st: zenv.ZSymbolTable
+    # the tree whose name pool names it
+    ast: Ast
+    # the receiver's type
+    recvT: ztypes.tid
+    # receives the local's path
+    dst: ListVal zast.nameid
+} is {
+    if recvT.isZero then return
+    if (isViewFamilyTid :ast :st tid: recvT) then return
+    tn: st.typing.nextTempId
+    st.typing.nextTempId = tn + 1
+    tname: "_t\{tn}"
+    vid: st.reg.newVariable ztypeId: recvT ownership: ztypes.zownership.owned
+    tnId: zast.poolSet pool: ast.names text: tname.stringView
+    st.defineVar nameId: tnId :vid
+    dst.append tnId
 }
 
 # pinCallResult -- what a call's result keeps locked. An `outx` result and a
@@ -34294,6 +34545,11 @@ checkResolvedMethodCall: function {
     # rather than asking again: two derivations of one question is what let
     # a type-qualified call be emitted with its receiver slot never filled.
     if recvVal.not then st.typing.callRecvFromArgs.add item: call.nid.u64
+    # a receiver that is not a variable is evaluated before the arguments: what
+    # its value keeps locked is taken now, before the argument walk drains it
+    rvPins: List ztyping.PinPath
+    rvT: ztypes.tid
+    if recvVal then rvT = captureValueReceiver :st :ast :call funcId: dro pins: rvPins
     pins: (walkCallArgsHoist
         :st
         :unitDecl
@@ -34389,6 +34645,7 @@ checkResolvedMethodCall: function {
         rvbP: st.lookupVarId nameId: (rtupP.get i: 0)
         if rvbP.none then for rtupP.length > 0 loop rtupP.pop
     }
+    if rtupP.length == 0 then joinValueReceiver :st :ast :rvT :rvPins path: rtupP :pins
     pinCallResult :st funcId: dro :pins recvPath: rtupP recvShared: recvShr
     st.typing.callKind.set key: call.nid.u64 value: zast.callkind.regular
     return (ztypes.tid.create from: mres)

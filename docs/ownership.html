@@ -475,6 +475,15 @@ what the result is:</p>
 </table>
 <p>A reference return (<code>.borrow</code> / <code>.view</code>) always keeps its source locked, so
 it is always <code>outx</code>. See <a href="#outx">outx</a> below for what a pin is.</p>
+<p>A view value -- a <code>StringView</code>, a <code>ListView</code> -- keeps the storage it reads
+locked in the same way, and so does a view derived from it (<code>substring</code>,
+<code>trim</code>, <code>slice</code>): the derived view reads the first one's source. Returned,
+a view hands the caller a reference into that storage, so the storage must
+outlive the call. A view of a local, of a field of one, or of a value no name
+holds (<code>(mks n: 1).stringView</code>) points at storage that dies with the call,
+and returning it is refused (<code>E0200</code>) whether the function is <code>out</code> or
+<code>outx</code>. A view of a parameter or of the receiver is returned through
+<code>outx</code>.</p>
 <p>A receiver is #~.borrow" or #~".view", and nothing else." An object cannot
 own itself, so <code>.take</code> and <code>.hold</code> are meaningless there. A bare <code>:this</code>
 receiver is <code>.borrow</code>; marking one requires an alias, as in
@@ -1797,6 +1806,7 @@ the direct form.</p>
 <tr><td><code>outx</code> with nothing to pin</td><td><code>outx</code> pins nothing here: no parameter or receiver is <code>.borrow</code> or <code>.view</code></td><td>Write <code>out</code>, or mark the source the result reads through (e.g. <code>t: this.view</code>)</td></tr>
 <tr><td><code>out W</code> where <code>W</code> has a non-owned field</td><td>an owned <code>out</code> result whose type declares a non-owned field must be <code>outx</code></td><td>Declare <code>outx W</code> (or <code>outx this</code>)</td></tr>
 <tr><td><code>out T.borrow</code> / <code>out T.view</code></td><td>a reference return keeps its sources locked</td><td>Write <code>outx T.borrow</code> / <code>outx T.view</code></td></tr>
+<tr><td><code>return s.stringView</code> where <code>s</code> is a local</td><td>Cannot return this value: it keeps 's' locked, which dies with this call</td><td>Return an owned copy (<code>.string</code>), or a view of a parameter through <code>outx</code></td></tr>
 <tr><td><code>return (W s: loc)</code> from an <code>outx</code> function</td><td>the returned <code>W</code> stores 'loc' in its non-owned field 's', but 'loc' is not a <code>.borrow</code>/<code>.view</code> parameter</td><td>Fill the field from a parameter or the receiver</td></tr>
 <tr><td><code>x = w</code> where <code>x</code> outlives what <code>w</code> locks</td><td>Cannot move 'w' by reassignment: it holds locks on 'a', and 'x' outlives 'a'</td><td>Keep 'x' inside 'a's scope, or <code>w.copy</code></td></tr>
 <tr><td>non-owned field on a record</td><td>non-owned fields only allowed on classes</td><td>Change the enclosing type from <code>record</code> to <code>class</code></td></tr>

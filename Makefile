@@ -893,7 +893,13 @@ perf: $(PERFBIN)
 # +71 when a function of no arguments returning a collection came to be called
 # where bound by its bare name: over the same source the new compiler allocates
 # exactly as the old, and it is the input, the compiler's own source longer.
-ALLOC_BASELINE := 2647506
+#
+# +8,788 when a returned view came to be judged by what it keeps locked: over the
+# same source the new compiler allocates ~900 more (the unnamed local a pinning
+# call's value receiver becomes -- its name, its pool entry, its row), and the old
+# compiler allocates +7,698 more over the new source, which is 271 lines of checks
+# longer; the `outx` slicing natives and the view `print` cost ~200.
+ALLOC_BASELINE := 2656294
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
