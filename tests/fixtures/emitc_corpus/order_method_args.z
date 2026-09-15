@@ -1,0 +1,96 @@
+# A method's receiver is evaluated first, then its arguments as they are written,
+# whatever the order of the parameters -- through a method, a function held in
+# a field or a local, or a protocol's vtable. A call through a function field or
+# local also bound its arguments in written order rather than by label, so
+# `h.op b: 1 a: 10` passed a=1 b=10. Every line prints its ticks ascending.
+tick: function {n: i64} out i64 is {
+    print "t\{n}"
+    return n
+}
+
+sub: function {a: i64 b: i64} out i64 is {
+    print "sub a=\{a} b=\{b}"
+    return a - b
+}
+
+Holder: class {
+    k: i64
+    op: function {a: i64 b: i64} out i64 is {
+        print "op a=\{a} b=\{b}"
+        return a - b
+    }
+    meth: function {:this a: i64 b: i64} out i64 is {
+        print "meth k=\{this.k} a=\{a} b=\{b}"
+        return a + b
+    }
+}
+
+Acc: class {
+    total: i64
+} as {
+    plus: function {:this x: i64 y: i64} out i64 is {
+        return this.total + (x * 10) + y
+    }
+    bump: function {:this} out i64 is {
+        print "bump"
+        this.total = this.total + 1
+        return this.total
+    }
+    pairUp: function {:this a: i64 b: i64} out i64 is {
+        print "pairUp a=\{a} b=\{b}"
+        return a
+    }
+    selfOrder: function {:this} out i64 is {
+        return (this.pairUp a: this.total b: this.bump)
+    }
+}
+
+mkacc: function {n: i64} out Acc is {
+    print "acc\{n}"
+    return (Acc total: n)
+}
+
+Sink: protocol {
+    put: function {:this a: i64 b: i64} out i64
+}
+
+MySink: class {
+    base: i64
+} as {
+    mysink: Sink
+    put: function {s: this a: i64 b: i64} out i64 is {
+        print "put a=\{a} b=\{b}"
+        return s.base + a + b
+    }
+}
+
+mksink: function {n: i64} out Sink is {
+    print "sink\{n}"
+    f: MySink base: n
+    return (Sink.create from: f.take)
+}
+
+main: function is {
+    a: Acc total: 0
+    print "method, reversed labels"
+    r1: a.plus y: (tick n: 1) x: (tick n: 2)
+    print "receiver before arguments"
+    r2: (mkacc n: 3).plus y: (tick n: 4) x: (tick n: 5)
+    print "value read before a later call"
+    r3: a.selfOrder
+    print "function field"
+    h: Holder k: 7
+    r4: h.op b: 1 a: 10
+    r5: h.op b: (tick n: 6) a: (tick n: 7)
+    r6: h.meth b: (tick n: 8) a: (tick n: 9)
+    print "function local"
+    f: sub.take
+    r7: f b: 1 a: 10
+    r8: f b: (tick n: 10) a: (tick n: 11)
+    print "protocol"
+    m: MySink base: 100
+    s: m.mysink
+    r9: s.put b: (tick n: 12) a: (tick n: 13)
+    r10: (mksink n: 14).put a: (tick n: 15) b: (tick n: 16)
+    print "\{r1} \{r2} \{r3} \{r4} \{r5} \{r6} \{r7} \{r8} \{r9} \{r10}"
+}

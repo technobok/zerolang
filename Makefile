@@ -940,7 +940,14 @@ perf: $(PERFBIN)
 # each), and +8,378 the source longer. The first cut allocated +146k; building
 # a temp only once a later part follows the last one, and assembling the
 # assignments without a string per piece, took that out.
-ALLOC_BASELINE := 2706762
+#
+# +26,299 when a method's, a function field's or local's, and a vtable call's
+# arguments came to be evaluated in written order: +17,368 over the same source
+# (2,134 more ordered temps in zc.c, and the positions a method call's
+# arguments are built in), +8,914 the source longer. Argument slots and
+# positions ride stacks on the emit context; a per-call id map and three small
+# lists had cost +42k.
+ALLOC_BASELINE := 2733061
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
