@@ -947,7 +947,11 @@ perf: $(PERFBIN)
 # arguments are built in), +8,914 the source longer. Argument slots and
 # positions ride stacks on the emit context; a per-call id map and three small
 # lists had cost +42k.
-ALLOC_BASELINE := 2733061
+#
+# +17,703 when a construction's arguments came to be evaluated in written order:
+# +9,824 over the same source (1,395 more ordered temps in zc.c), +7,863 the
+# source longer.
+ALLOC_BASELINE := 2750764
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

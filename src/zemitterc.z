@@ -3219,6 +3219,7 @@ Ctx: class {
     orderPosAt: ListVal u64
     orderDone: ListVal bool
     orderPendText: List String
+    orderPendType: List String
     orderPendSlot: ListVal u64
     orderPendFid: ListVal u64
     orderPendPid: ListVal u64
@@ -5954,6 +5955,8 @@ orderPart: function {
     fid: ztypes.tid
     pid: u64
     pname: zast.nameid
+    # the temp's C type when the caller spells it, "" to spell it from the above
+    ctype: StringView
     # the parameter slot the part fills
     slot: u64
 } is {
@@ -5977,6 +5980,7 @@ orderPart: function {
     st.live = true
     st.pending = true
     ctx.orderPendText.append text
+    ctx.orderPendType.append ctype.string
     ctx.orderPendSlot.append slot
     ctx.orderPendFid.append fid.u64
     ctx.orderPendPid.append pid
@@ -6006,6 +6010,7 @@ orderSettle: function {
     if st.pending.not then return
     st.pending = false
     text: ctx.orderPendText.pop
+    given: ctx.orderPendType.pop
     slot: ctx.orderPendSlot.pop
     fid: ztypes.tid.create from: ctx.orderPendFid.pop
     pid: ztypes.tid.create from: ctx.orderPendPid.pop
@@ -6013,6 +6018,7 @@ orderSettle: function {
     # a part no declared parameter types is typed as its own expression
     ct: "__typeof__(\{text})"
     if fid.isZero.not then ct = paramCType :ast :symtab :ctx :fid pname: pn.stringView :pid
+    if given.length > 0 then ct = given
     if ct.length == 0 then {
         orderSetSlot :ctx :st :slot :text
         return
@@ -6038,6 +6044,7 @@ orderFinish: function {ctx: Ctx st: orderstate} out String is {
     if st.pending then {
         pslot: ctx.orderPendSlot.pop
         ptext: ctx.orderPendText.pop
+        ctx.orderPendType.pop
         orderSetSlot :ctx :st slot: pslot text: ptext
         ctx.orderPendFid.pop
         ctx.orderPendPid.pop
@@ -7168,6 +7175,7 @@ orderMethodParam: function {
         fid: mco
         :pid
         :pname
+        ctype: ""
         :slot
     )
 }
@@ -9384,30 +9392,55 @@ userCreateCallC: function {
         ids: pids
         nameIds: pidsNm
     )
-    args: String
-    pi: u64
     pn: pnames.length
-    for pi < pn loop {
+    # the arguments are built in the order they are written
+    wbase: ctx.orderWrit.length
+    (ctorArgPositions
+        :ast
+        :call
+        names: pnames
+        labelsOnly: true
+        writ: ctx.orderWrit
+        posAt: ctx.orderPosAt
+    )
+    for ctx.orderDone.length < (wbase + pn) loop ctx.orderDone.append false
+    ord: orderBegin :ctx slots: pn
+    k: u64
+    for k < pn loop {
+        pi: nextWrittenParam writ: ctx.orderWrit done: ctx.orderDone base: wbase
+        ctx.orderDone.set i: wbase + pi val: true
+        k = k + 1
         pname: pnames.get i: pi
         aNid: ctorArgNodeByLabel :ast :call label: pname.stringView
-        av: "0".string
         if aNid > 0 then {
-            av = (userFnArgText
+            (orderUserFnArg
                 :ast
                 :symtab
                 :ctx
                 :fid
                 pinId: (pids.get i: pi)
                 pinNm: pname.stringView
+                pname: (zast.nameid.create from: (pidsNm.get i: pi))
                 argOpNode: (ast.nodes.get i: aNid)
+                slot: pi
+                :ord
             )
+        } else {
+            orderSetSlot :ctx st: ord slot: pi text: "0".string
         }
-        if pi > 0 then args.append ", "
-        args.append av
-        pi = pi + 1
     }
+    orderDropPositions :ctx base: wbase
+    oprefix: orderFinish :ctx st: ord
+    args: String
+    pi2: u64
+    for pi2 < pn loop {
+        if pi2 > 0 then args.append ", "
+        args.append (orderSlotText t: ctx st: ord slot: pi2)
+        pi2 = pi2 + 1
+    }
+    orderEnd :ctx st: ord
     mc3: ctxCname :ctx tid: fid
-    return "\{mc3}(\{args})"
+    return (orderClose prefix: oprefix callee: mc3.stringView args: args.stringView)
 }
 
 # emitQualRecvMethodCall -- the ordinary method emission for a type-qualified
@@ -9948,14 +9981,32 @@ userCreateCtor: function {
     cpi: ListVal u64
     cpiNm: ListVal u64
     recFieldLists :ast :symtab tid: cco names: cpn ids: cpi nameIds: cpiNm
-    cargs: String
-    ci: u64
     ccn: cpn.length
-    cposIdx: u64
-    for ci < ccn loop {
+    # the arguments are built in the order they are written
+    wbase: ctx.orderWrit.length
+    (ctorArgPositions
+        :ast
+        :call
+        names: cpn
+        labelsOnly: false
+        writ: ctx.orderWrit
+        posAt: ctx.orderPosAt
+    )
+    for ctx.orderDone.length < (wbase + ccn) loop ctx.orderDone.append false
+    ord: orderBegin :ctx slots: ccn
+    k: u64
+    for k < ccn loop {
+        ci: nextWrittenParam writ: ctx.orderWrit done: ctx.orderDone base: wbase
+        ctx.orderDone.set i: wbase + ci val: true
+        k = k + 1
         cpname: cpn.get i: ci
-        ca: ctorArgFor :ast :call label: cpname.stringView posIdx: cposIdx
-        if ca.labelled.not then cposIdx = cposIdx + 1
+        mk: pendingHoistMark :ctx
+        ca: (ctorArgFor
+            :ast
+            :call
+            label: cpname.stringView
+            posIdx: (ctx.orderPosAt.get i: wbase + ci)
+        )
         cav: (createArgText
             :ast
             :symtab
@@ -9967,12 +10018,44 @@ userCreateCtor: function {
             pid: (cpi.get i: ci)
             pname: cpname.stringView
         )
-        if ci > 0 then cargs.append ", "
-        cargs.append cav
-        ci = ci + 1
+        wr: ctx.orderWrit.get i: wbase + ci
+        constant: true
+        if wr > 0 then {
+            constant = (orderConstant
+                :symtab
+                :ctx
+                n: (ast.nodes.get i: (writtenArgNode :ast :call pos: wr - 1))
+                text: cav.stringView
+                byPtr: cav.stringView.startsWith "&"
+            )
+        }
+        (orderPart
+            :ast
+            :symtab
+            :ctx
+            st: ord
+            mark: mk
+            text: cav
+            :constant
+            fid: cco
+            pid: (cpi.get i: ci)
+            pname: (zast.nameid.create from: (cpiNm.get i: ci))
+            ctype: ""
+            slot: ci
+        )
     }
+    orderDropPositions :ctx base: wbase
+    oprefix: orderFinish :ctx st: ord
+    cargs: String
+    ci2: u64
+    for ci2 < ccn loop {
+        if ci2 > 0 then cargs.append ", "
+        cargs.append (orderSlotText t: ctx st: ord slot: ci2)
+        ci2 = ci2 + 1
+    }
+    orderEnd :ctx st: ord
     ccb: ctxCname :ctx tid: cco
-    return "\{ccb}(\{cargs})"
+    return (orderClose prefix: oprefix callee: ccb.stringView args: cargs.stringView)
 }
 
 # emitRecordCtor -- a record construction call: args reordered to field
@@ -9992,41 +10075,180 @@ emitRecordCtor: function {
     fids: ListVal u64
     fidsNm: ListVal u64
     recFieldLists :ast :symtab :tid names: fnames ids: fids nameIds: fidsNm
-    args: String
-    fi: u64
     fn0: fnames.length
-    fposIdx: u64
-    for fi < fn0 loop {
+    # the fields' arguments are built in the order they are written
+    wbase: ctx.orderWrit.length
+    (ctorArgPositions
+        :ast
+        :call
+        names: fnames
+        labelsOnly: false
+        writ: ctx.orderWrit
+        posAt: ctx.orderPosAt
+    )
+    for ctx.orderDone.length < (wbase + fn0) loop ctx.orderDone.append false
+    ord: orderBegin :ctx slots: fn0
+    k: u64
+    for k < fn0 loop {
+        fi: nextWrittenParam writ: ctx.orderWrit done: ctx.orderDone base: wbase
+        ctx.orderDone.set i: wbase + fi val: true
+        k = k + 1
         fname: fnames.get i: fi
-        ffid0: fids.get i: fi
-        fnameId: fidsNm.get i: fi
-        ca: ctorArgFor :ast :call label: fname.stringView posIdx: fposIdx
-        if ca.labelled.not then fposIdx = fposIdx + 1
-        av: fieldArgText :ast :symtab :ctx :tid :ca nameId: fnameId fid: ffid0
-        # a borrowed reftype field is a pointer; a source stored INLINE (the
-        # receiver's own field, a field of a parameter) is passed by address
-        if ca.labelled when (symtab.typing.declIsBorrowedFieldId
-            parentTypeId: tid
-            nameId: (zast.nameid.create from: fnameId.u32.orPanic)
-        ) when (borrowedFieldIsReftypePtr :ast :symtab :ctx fid: (ztypes.tid.create from: ffid0.u64)
-        ) when (argIsPointerByLabel :ast :symtab :ctx :call label: fname.stringView).not then {
-            avP: (emitByrefArg
-                :ast
-                :symtab
-                :ctx
-                av: av.stringView
-                pid: (ztypes.tid.create from: ffid0.u64)
-                isBorrow: true
-            )
-            av = avP
-        }
-        if fi > 0 then args.append ", "
-        args.append av
-        fi = fi + 1
+        (orderRecordField
+            :ast
+            :symtab
+            :ctx
+            :call
+            :tid
+            fname: fname.stringView
+            ffid: (fids.get i: fi)
+            fnameId: (fidsNm.get i: fi)
+            posIdx: (ctx.orderPosAt.get i: wbase + fi)
+            written: (ctx.orderWrit.get i: wbase + fi)
+            slot: fi
+            :ord
+        )
     }
+    orderDropPositions :ctx base: wbase
+    oprefix: orderFinish :ctx st: ord
+    args: String
+    fi2: u64
+    for fi2 < fn0 loop {
+        if fi2 > 0 then args.append ", "
+        args.append (orderSlotText t: ctx st: ord slot: fi2)
+        fi2 = fi2 + 1
+    }
+    orderEnd :ctx st: ord
     rc: ctxCname :ctx :tid
-    e0: "\{rc}_create(\{args})"
-    return e0
+    rc.append "_create"
+    return (orderClose prefix: oprefix callee: rc.stringView args: args.stringView)
+}
+
+# orderRecordField -- one field of a field-wise construction, its argument built
+# in evaluation order into the field's slot: a borrowed reftype field takes the
+# source's address.
+orderRecordField: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    tid: ztypes.tid
+    fname: StringView
+    # the field's type and name id
+    ffid: u64
+    fnameId: u64
+    # the positional cursor the field's argument is read with
+    posIdx: u64
+    # where its argument is written, from 1; 0 for none
+    written: u64
+    slot: u64
+    ord: orderstate.borrow
+} is {
+    mk: pendingHoistMark :ctx
+    ca: ctorArgFor :ast :call label: fname :posIdx
+    av: fieldArgText :ast :symtab :ctx :tid :ca nameId: fnameId fid: ffid
+    # a borrowed reftype field is a pointer; a source stored INLINE (the
+    # receiver's own field, a field of a parameter) is passed by address
+    # the field is a pointer: whatever passes it hands on an address
+    byref: fieldIsReftypePtr :ast :symtab :ctx owner: tid :fnameId :ffid
+    if byref when ca.labelled when (argIsPointerByLabel :ast :symtab :ctx :call label: fname
+    ).not then {
+        av = (emitByrefArg
+            :ast
+            :symtab
+            :ctx
+            av: av.stringView
+            pid: (ztypes.tid.create from: ffid.u64)
+            isBorrow: true
+        )
+    }
+    constant: true
+    if written > 0 then {
+        constant = (orderConstant
+            :symtab
+            :ctx
+            n: (ast.nodes.get i: (writtenArgNode :ast :call pos: written - 1))
+            text: av.stringView
+            byPtr: byref
+        )
+    }
+    ct: String
+    if constant.not then {
+        ct = typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: ffid.u64) thisTid: ztypes.tid
+        heap: isHeapPtrCollection :symtab :ctx tid: (ztypes.tid.create from: ffid.u64)
+        if byref or heap when ct.length > 0 then ct.append "*"
+    }
+    (orderPart
+        :ast
+        :symtab
+        :ctx
+        st: ord
+        mark: mk
+        text: av
+        :constant
+        fid: ztypes.tid
+        pid: 0
+        pname: zast.nameid
+        ctype: ct.stringView
+        :slot
+    )
+}
+
+# fieldIsReftypePtr -- a borrowed field of a reftype, which the C holds as a
+# pointer.
+fieldIsReftypePtr: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    owner: ztypes.tid
+    fnameId: u64
+    ffid: u64
+} out bool is {
+    if (symtab.typing.declIsBorrowedFieldId
+        parentTypeId: owner
+        nameId: (zast.nameid.create from: fnameId.u32.orPanic)
+    ).not then return false
+    return (borrowedFieldIsReftypePtr :ast :symtab :ctx fid: (ztypes.tid.create from: ffid.u64))
+}
+
+# ctorArgPositions -- for each parameter of a construction, in declaration
+# order: where its argument is written (from 1, 0 for none) and the positional
+# cursor it is read with. With `labelsOnly` only a label binds an argument.
+ctorArgPositions: function {
+    ast: Ast.view
+    call: zast.callrow.view
+    names: (List String).view
+    labelsOnly: bool
+    writ: ListVal u64
+    posAt: ListVal u64
+} is {
+    positionalIdx: u64
+    i: u64
+    for i < names.length loop {
+        nm: names.get :i
+        posAt.append positionalIdx
+        if labelsOnly then {
+            writ.append (writtenArgPosition
+                :ast
+                :call
+                nid: (ctorArgNodeByLabel :ast :call label: nm.stringView)
+            )
+        } else {
+            ca: ctorArgFor :ast :call label: nm.stringView posIdx: positionalIdx
+            writ.append (writtenArgPosition :ast :call nid: ca.nid)
+            if ca.labelled.not then positionalIdx = positionalIdx + 1
+        }
+        i = i + 1
+    }
+}
+
+# orderDropPositions -- a call's parameter positions are read: release them.
+orderDropPositions: function {ctx: Ctx base: u64} is {
+    for ctx.orderWrit.length > base loop {
+        ctx.orderWrit.pop
+        ctx.orderPosAt.pop
+        ctx.orderDone.pop
+    }
 }
 
 # ctorArgIsBorrow / ctorArgIsBorrowPos -- bindingRhsIsBorrow over the
@@ -10676,86 +10898,173 @@ emitMetaCreateCall: function {
         fids: ListVal u64
         fidsNm: ListVal u64
         recFieldLists :ast :symtab tid: et names: fnames ids: fids nameIds: fidsNm
-        args: String
-        fi: u64
         fn0: fnames.length
-        for fi < fn0 loop {
+        # the fields' arguments are built in the order they are written
+        wbase: ctx.orderWrit.length
+        (ctorArgPositions
+            :ast
+            :call
+            names: fnames
+            labelsOnly: true
+            writ: ctx.orderWrit
+            posAt: ctx.orderPosAt
+        )
+        for ctx.orderDone.length < (wbase + fn0) loop ctx.orderDone.append false
+        ord: orderBegin :ctx slots: fn0
+        k: u64
+        for k < fn0 loop {
+            fi: nextWrittenParam writ: ctx.orderWrit done: ctx.orderDone base: wbase
+            ctx.orderDone.set i: wbase + fi val: true
+            k = k + 1
             fname: fnames.get i: fi
-            av: String
-            if (ctorHasLabel :ast :call label: fname.stringView) then {
-                av = ctorArgByLabel :ast :symtab :ctx :call label: fname.stringView
-                # a borrowed reftype field is a pointer; a source stored INLINE
-                # (the receiver's own field, a field of a parameter) is passed
-                # by address
-                ffidL: fids.get i: fi
-                if (symtab.typing.declIsBorrowedField
-                    pool: ast.names
-                    parentTypeId: et
-                    name: fname.stringView
-                ) when (borrowedFieldIsReftypePtr
-                    :ast
+            wr: ctx.orderWrit.get i: wbase + fi
+            mk: pendingHoistMark :ctx
+            av: metaCreateFieldText :ast :symtab :ctx :call :et fname: fname.stringView :fids :fi
+            ptrField: (fieldIsReftypePtr
+                :ast
+                :symtab
+                :ctx
+                owner: et
+                fnameId: (fidsNm.get i: fi)
+                ffid: (fids.get i: fi)
+            )
+            constant: true
+            ct: String
+            if wr > 0 then {
+                constant = (orderConstant
                     :symtab
                     :ctx
-                    fid: (ztypes.tid.create from: ffidL.u64)
-                ) when (argIsPointerByLabel :ast :symtab :ctx :call label: fname.stringView
-                ).not then {
-                    avM: (emitByrefArg
+                    n: (ast.nodes.get i: (writtenArgNode :ast :call pos: wr - 1))
+                    text: av.stringView
+                    byPtr: ptrField
+                )
+                if constant.not then {
+                    ct = (typeRefC
                         :ast
                         :symtab
                         :ctx
-                        av: av.stringView
-                        pid: (ztypes.tid.create from: ffidL.u64)
-                        isBorrow: true
+                        tid: (ztypes.tid.create from: (fids.get i: fi))
+                        thisTid: ztypes.tid
                     )
-                    av = avM
-                }
-            } else {
-                # a field absent from the meta.create args (a generator's promoted
-                # local: an inner iterator struct or a loop counter) is value-
-                # initialized; a typed zero compiles for both scalars and structs.
-                ffid: fids.get i: fi
-                ffct: (typeRefC
-                    :ast
-                    :symtab
-                    :ctx
-                    tid: (ztypes.tid.create from: ffid.u64)
-                    thisTid: ztypes.tid
-                )
-                if ffct.length == 0 then {
-                    pmsg7: "zemitterc: unspellable field type id \{ffid}"
-                    panic pmsg7
-                }
-                if (symtab.typing.declIsBorrowedField
-                    pool: ast.names
-                    parentTypeId: et
-                    name: fname.stringView
-                ) when (borrowedFieldIsReftypePtr
-                    :ast
-                    :symtab
-                    :ctx
-                    fid: (ztypes.tid.create from: ffid.u64)
-                ) then {
-                    ffctP: (storedFieldPtrC
-                        :ast
+                    heapM: (isHeapPtrCollection
                         :symtab
-                        ownerTid: et
-                        fname: fname.stringView
-                        fct: ffct.stringView
+                        :ctx
+                        tid: (ztypes.tid.create from: (fids.get i: fi))
                     )
-                    ffct = ffctP
+                    if ptrField or heapM when ct.length > 0 then ct.append "*"
                 }
-                av = "(\{ffct}){0}"
             }
-            if fi > 0 then args.append ", "
-            args.append av
-            fi = fi + 1
+            (orderPart
+                :ast
+                :symtab
+                :ctx
+                st: ord
+                mark: mk
+                text: av
+                :constant
+                fid: ztypes.tid
+                pid: 0
+                pname: zast.nameid
+                ctype: ct.stringView
+                slot: fi
+            )
         }
+        orderDropPositions :ctx base: wbase
+        oprefix: orderFinish :ctx st: ord
+        args: String
+        fi2: u64
+        for fi2 < fn0 loop {
+            if fi2 > 0 then args.append ", "
+            args.append (orderSlotText t: ctx st: ord slot: fi2)
+            fi2 = fi2 + 1
+        }
+        orderEnd :ctx st: ord
         ecb: ctxCname :ctx tid: et
-        e0: "\{ecb}_meta_create(\{args})"
-        return e0
+        ecb.append "_meta_create"
+        return (orderClose prefix: oprefix callee: ecb.stringView args: args.stringView)
     } case none then {
         return "".string
     }
+}
+
+# metaCreateFieldText -- one field of a `meta.create`: its labelled argument, a
+# borrowed reftype field taking the source's address, or the typed zero of a
+# field the call leaves out.
+metaCreateFieldText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    et: ztypes.tid
+    fname: StringView
+    fids: (ListVal u64).view
+    fi: u64
+} out String is {
+    av: String
+    if (ctorHasLabel :ast :call label: fname) then {
+        av = ctorArgByLabel :ast :symtab :ctx :call label: fname
+        # a borrowed reftype field is a pointer; a source stored INLINE
+        # (the receiver's own field, a field of a parameter) is passed
+        # by address
+        ffidL: fids.get i: fi
+        if (symtab.typing.declIsBorrowedField
+            pool: ast.names
+            parentTypeId: et
+            name: fname
+        ) when (borrowedFieldIsReftypePtr
+            :ast
+            :symtab
+            :ctx
+            fid: (ztypes.tid.create from: ffidL.u64)
+        ) when (argIsPointerByLabel :ast :symtab :ctx :call label: fname).not then {
+            avM: (emitByrefArg
+                :ast
+                :symtab
+                :ctx
+                av: av.stringView
+                pid: (ztypes.tid.create from: ffidL.u64)
+                isBorrow: true
+            )
+            av = avM
+        }
+    } else {
+        # a field absent from the meta.create args (a generator's promoted
+        # local: an inner iterator struct or a loop counter) is value-
+        # initialized; a typed zero compiles for both scalars and structs.
+        ffid: fids.get i: fi
+        ffct: (typeRefC
+            :ast
+            :symtab
+            :ctx
+            tid: (ztypes.tid.create from: ffid.u64)
+            thisTid: ztypes.tid
+        )
+        if ffct.length == 0 then {
+            pmsg7: "zemitterc: unspellable field type id \{ffid}"
+            panic pmsg7
+        }
+        if (symtab.typing.declIsBorrowedField
+            pool: ast.names
+            parentTypeId: et
+            name: fname
+        ) when (borrowedFieldIsReftypePtr
+            :ast
+            :symtab
+            :ctx
+            fid: (ztypes.tid.create from: ffid.u64)
+        ) then {
+            ffctP: (storedFieldPtrC
+                :ast
+                :symtab
+                ownerTid: et
+                :fname
+                fct: ffct.stringView
+            )
+            ffct = ffctP
+        }
+        av = "(\{ffct}){0}"
+    }
+    return av
 }
 
 # emitByrefArg -- an argument passed BY REFERENCE. A non-lvalue has no address
@@ -11497,6 +11806,7 @@ orderFnptrArg: function {
         fid: fnTid
         :pid
         pname: pnm
+        ctype: ""
         :slot
     )
 }
@@ -11874,6 +12184,7 @@ orderUserFnArg: function {
         :fid
         pid: pinId
         :pname
+        ctype: ""
         :slot
     )
 }
@@ -16635,6 +16946,8 @@ emitOptionBoxHoist: function {
         vc: ctxCname :ctx tid: mid
         payC: armPayloadC :ast :symtab :ctx tid: mid arm: "some"
         tg: variantTag :symtab tid: mid arm: "some"
+        # what the payload hoisted is declared ahead of the box
+        flushArgHoists :ctx :ind :tmp :buf
         bN: tmpNext :ctx :tmp
         b0: "\{ind}\{vc}_t _c\{bN} = {0};\n"
         buf.append b0
@@ -20209,6 +20522,7 @@ emitBranchAssignOptional: function {
             sx: ast.nodes.get i: sxId.u64
             if si + 1 == cnt then {
                 vx: emitExpr :ast :symtab :ctx n: sx
+                flushArgHoists :ctx :ind :tmp :buf
                 emitOptionalAssign :target :someTag :payC vx: vx.stringView :ind :buf
                 emitValueTakeInvalidations :ast :symtab :ctx n: sx :ind :buf
             } else {
@@ -20228,6 +20542,7 @@ emitBranchAssignOptional: function {
         }
     } else {
         vx2: emitExpr :ast :symtab :ctx :n
+        flushArgHoists :ctx :ind :tmp :buf
         emitOptionalAssign :target :someTag :payC vx: vx2.stringView :ind :buf
         emitValueTakeInvalidations :ast :symtab :ctx :n :ind :buf
     }
@@ -27582,6 +27897,7 @@ emitC: function {
         orderPosAt: ListVal u64
         orderDone: ListVal bool
         orderPendText: List String
+        orderPendType: List String
         orderPendSlot: ListVal u64
         orderPendFid: ListVal u64
         orderPendPid: ListVal u64
@@ -34347,6 +34663,7 @@ orderDispatchArg: function {
         fid: ztypes.tid
         pid: 0
         pname: zast.nameid
+        ctype: ""
         :slot
     )
 }
@@ -35924,6 +36241,10 @@ emitYieldStmt: function {
     yx: ast.nodes.get i: yopId.u64
     ve: emitInterpArgExpr :ast :symtab :ctx n: yx
     if ve.length == 0 then ve = emitExpr :ast :symtab :ctx n: yx
+    # what the value hoisted is declared ahead of it and released once the value
+    # is in the box, before the suspension
+    ytmp: TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree
+    flushArgHoists :ctx :ind tmp: ytmp :buf
     ls: "\{ind}\{ctx.genRecvC}->state = \{k};\n"
     buf.append ls
     lw: "\{ind}\{ctx.genWrap} _ry_\{k} = {0};\n"
@@ -35937,6 +36258,7 @@ emitYieldStmt: function {
         :ind
         :buf
     )
+    flushBlockFrees :ctx tmp: ytmp fL: 0 lL: 0 diverged: false :buf
     # a boxed yield MOVES an lvalue operand (a promoted local `this->x`):
     # zero the source so the instance destructor does not double-free it
     if ctx.genPayC.length > 0 when (isNonLvalueArg s: ve.stringView).not then {
