@@ -31015,6 +31015,25 @@ unnamedReceiverLocal: function {
     dst.append tnId
 }
 
+# adoptPinnedArgTemps -- the argument temps a pinning call's result keeps locked
+# died with the call's scope: each is defined again, owned, as an unnamed local
+# of the scope the call is in, so the pin names a live variable.
+adoptPinnedArgTemps: function {st: zenv.ZSymbolTable pins: (List ztyping.PinPath).view} is {
+    roots: ListVal zast.nameid
+    with pit: pins.iterate do for p: pit loop roots.append (p.path.get i: 0)
+    with rit: roots.iterate do for r: rit loop {
+        # a temp's name is unique to the run, so an entry is never asked twice
+        ato: st.typing.pinnedArgTemps.get key: r
+        if ato.some when (st.lookupVarId nameId: r).none then {
+            vid: (st.reg.newVariable
+                ztypeId: (ztypes.tid.create from: ato)
+                ownership: ztypes.zownership.owned
+            )
+            st.defineVar nameId: r :vid
+        }
+    }
+}
+
 # pinCallResult -- what a call's result keeps locked. An `outx` result and a
 # reference return
 # (`.borrow`/`.view`) pin the receiver and every borrow/view argument, each
@@ -31049,6 +31068,7 @@ pinCallResult: function {
         if rt9.isZero.not when rt9 == (st.reg.ownerTidOf tid: funcId) then retThis = true
     }
     if doPins then {
+        adoptPinnedArgTemps :st :pins
         pinsPush :st path: recvPath shared: recvShared mutable: recvShared.not alias: retThis
         with pit: pins.iterate do for p: pit loop {
             pinsPush :st path: p.path shared: p.shared mutable: p.mutable alias: retThis
@@ -32264,6 +32284,16 @@ lockNonTrivialArg: function {
         :consumes
         viewParam: isViewArg
     )
+    # an owned value no name holds, lent to a call whose result keeps it locked:
+    # the result pins the temp, which outlives the call as an unnamed local
+    if calleePins when isLockish when byRef when hadPending.not when (rootNameIdOf
+        :ast
+        n: (ast.nodes.get i: arg.operation.u64)
+    ).isZero then {
+        tnId: nameIdOf :ast name: tnm.stringView
+        pinsAppendOne :pins nameId: tnId shared: isViewArg mutable: isViewArg.not alias: false
+        st.typing.pinnedArgTemps.set key: tnId value: vt.u64
+    }
     if hadPending.not when isLockish when byRef then {
         (lockCallArg
             :st

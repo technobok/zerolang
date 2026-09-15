@@ -915,7 +915,12 @@ perf: $(PERFBIN)
 # same source (the temporaries the pool-text views in zc's own source now bind,
 # which also stops calling each pool read twice), +1,941 the source 122 lines
 # longer.
-ALLOC_BASELINE := 2665259
+#
+# +1,574 when an owned argument a pinning call keeps locked came to be an unnamed
+# local: the adopted temps and their pins over the same source, and the source
+# 35 lines longer. (A tid-valued id map was a new instantiation that cost
+# +1,400 more; the u64-valued one the checker already mints carries the tid.)
+ALLOC_BASELINE := 2666833
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
