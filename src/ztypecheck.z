@@ -27104,6 +27104,27 @@ checkReadonlyBindSource: function {
 }
 
 
+# pinBoundField -- `b: h.p`, a reftype field read bound whole: a field is always
+# borrowed, whatever owns its parent, so the binding is a second name for it and
+# pins the path as `b: h.p.borrow` does -- a write to the field, or a move out of
+# it, is refused while `b` lives.
+pinBoundField: function {st: zenv.ZSymbolTable ast: Ast.view vt: ztypes.tid nid: zast.nodeid} is {
+    if st.typing.pendingPins.length > 0 then return
+    if (typeIsReftype :st tid: vt).not then return
+    fp: ListVal zast.nameid
+    {
+        vn: ast.nodes.get i: nid.u64
+        if (isMarkedMove :ast n: vn) then return
+        if (movedFieldPath :st :ast n: vn).not then return
+        appendValueTuple :ast n: vn dst: fp
+    }
+    if fp.length < 2 then return
+    if (st.lookupVarId nameId: (fp.get i: 0)).none then return
+    # through a readonly root the second name is readonly too
+    mw: (pathIsReadonly :st path: fp).not
+    pinsPush :st path: fp shared: true mutable: mw alias: true
+}
+
 # checkMovedValueAt -- type the value of a binding or a reassignment. A
 # `w.take` written as the whole value keeps its locks for the site to
 # transfer rather than releasing them, which the take marker reads off
@@ -27212,6 +27233,7 @@ checkAssignment: function {
     }
     if (refuseDataBlockValue :st :ast :vt nid: asgn.value) then return
     if vt > 0 then {
+        pinBoundField :st :ast :vt nid: asgn.value
         bpins: List ztyping.PinPath
         takePendingPins :st dst: bpins
         own: ztypes.zownership.owned
