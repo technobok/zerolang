@@ -4169,6 +4169,72 @@ implicitTakeSource: function {
     }
 }
 
+# fieldMoveNode -- the field an argument moves out of: `h.p.take`, or `h.p` handed
+# to a slot that takes it (`isTake`). 0 unless the field is read through names,
+# the one shape with a place to zero.
+fieldMoveNode: function {ast: Ast.view n: astnode.view isTake: bool} out u64 is {
+    match (
+        n
+    ) case dottedpath then {
+        src: n.nodeid.u64
+        {
+            cn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
+            if (ztypecheck.isMoveMarker name: cn.stringView) then {
+                src = n.parent.u64
+            } else if isTake.not then {
+                return 0
+            }
+        }
+        if (pathThroughNames :ast nid: src).not then return 0
+        return src
+    } else {
+        return 0
+    }
+}
+
+# pathThroughNames -- a member read whose receivers are all names: `h.p`,
+# `this.items.first`.
+pathThroughNames: function {ast: Ast.view nid: u64} out bool is {
+    n: ast.nodes.get i: nid
+    match (
+        n
+    ) case dottedpath then {
+        p: ast.nodes.get i: n.parent.u64
+        if p.atomid then return true
+        return (pathThroughNames :ast nid: n.parent.u64)
+    } else {
+        return false
+    }
+}
+
+# emitFieldMoveZero -- a field moved into a slot that takes it: the field is
+# zeroed so its owner's destructor finds nothing to free. A heap-pointer
+# collection zeroes to NULL; a type with no destructor needs no zero.
+emitFieldMoveZero: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    # the field's member-read node
+    nid: u64
+    ind: StringView
+    buf: String.borrow
+} is {
+    fn: ast.nodes.get i: nid
+    ftid: stampIdOf :symtab nid: (interpPartNodeId n: fn)
+    heap: isHeapPtrCollection :symtab :ctx tid: ftid
+    if heap.not when (symtab.reg.needsDestructor typeId: ftid).not then return
+    place: emitExpr :ast :symtab :ctx n: fn
+    if (isPlainCPath s: place.stringView).not then return
+    if heap then {
+        zh: "\{ind}\{place} = NULL;\n"
+        buf.append zh
+        return
+    }
+    ftc: typeRefC :ast :symtab :ctx tid: ftid thisTid: ztypes.tid
+    zf: "\{ind}\{place} = (\{ftc}){0};\n"
+    buf.append zf
+}
+
 # emitExplicitTakeZero -- an explicit `<atom>.take` argument: the source is
 # zeroed so its scope-exit destructor no-ops, the move having transferred
 # ownership. The caller has already excused a HOLD parameter, which is passed
@@ -4262,10 +4328,13 @@ emitCallTakeInvalidations: function {
             } case none then null
         }
         ts: takeStringSource :ast :symtab :ctx n: opNode
+        fieldSrc: fieldMoveNode :ast n: opNode :isTake
         if ts.length > 0 then {
             if isHold.not then {
                 emitExplicitTakeZero :ast :symtab :ctx :a ts: ts.stringView :ind :buf
             }
+        } else if fieldSrc > 0 then {
+            if isHold.not then emitFieldMoveZero :ast :symtab :ctx nid: fieldSrc :ind :buf
         } else if isTake then {
             emitImplicitMoveZero :ast :symtab :ctx :a :ind :buf
         }
@@ -23776,10 +23845,10 @@ emitElse: function {
 }
 
 # emitHoistedReturn -- a return whose value is materialised into a temp
-# FIRST, then the owned locals are freed, then the temp is returned. When an
-# owned local is named in the value (leakFix), ALL owned locals are freed
-# (clFull) after the moved-in call-arg sources are zeroed: a read-from local
-# is reclaimed and a moved-in local's free is a no-op.
+# FIRST, then the sources it moved out of are zeroed, then the owned locals are
+# freed, then the temp is returned. When an owned local is named in the value
+# (leakFix), ALL owned locals are freed (clFull): a read-from local is reclaimed
+# and a moved-in local's free is a no-op.
 emitHoistedReturn: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -23789,6 +23858,8 @@ emitHoistedReturn: function {
     # the value's C text and C type
     rv: StringView
     retCt: StringView
+    # the zeroing of the sources the value moved out of
+    moved: StringView
     leakFix: bool
     # the cleanup that keeps referenced locals, and the one that frees all
     clProbe: StringView
@@ -23800,9 +23871,7 @@ emitHoistedReturn: function {
     rtmpN: tmpNext :ctx :tmp
     retNm: "_ret\{rtmpN}"
     buf.append "\{ind}\{retCt} \{retNm} = \{rv};\n"
-    if leakFix then {
-        emitValueTakeInvalidations :ast :symtab :ctx n: (ast.nodes.get i: vid.u64) :ind :buf
-    }
+    buf.append moved
     emitNarrowedTakeZero :ast :symtab :ctx n: (ast.nodes.get i: vid.u64) :ind :buf
     if leakFix then buf.append clFull else buf.append clProbe
     buf.append "\{ind}return \{retNm};\n"
@@ -23862,7 +23931,15 @@ emitPlainReturn: function {
     retCt: typeRefC :ast :symtab :ctx tid: rtid thisTid: ztypes.tid
     isPtr: (ctEndsWithStar ct: retCt.stringView) or (isHeapPtrCollection :symtab :ctx tid: rtid)
     trivial: isBareCName s: rv.stringView
-    hoist: trivial.not and isPtr.not and (retCt.length > 0) and (clProbe.length > 0 or leakFix)
+    # the sources the value moves out of, zeroed once the value is in its temp
+    moved: String
+    emitValueTakeInvalidations :ast :symtab :ctx n: (ast.nodes.get i: vid.u64) :ind buf: moved
+    hoist: (
+        trivial.not and
+        isPtr.not and
+        (retCt.length > 0) and
+        (clProbe.length > 0 or leakFix or (moved.length > 0))
+    )
     if hoist then {
         (emitHoistedReturn
             :ast
@@ -23871,6 +23948,7 @@ emitPlainReturn: function {
             :vid
             rv: rv.stringView
             retCt: retCt.stringView
+            moved: moved.stringView
             :leakFix
             clProbe: clProbe.stringView
             clFull: clFull.stringView
@@ -36623,6 +36701,8 @@ emitYieldStmt: function {
         :buf
     )
     flushBlockFrees :ctx tmp: ytmp fL: 0 lL: 0 diverged: false :buf
+    # what the value moved out of is zeroed before the suspension returns
+    emitValueTakeInvalidations :ast :symtab :ctx n: yx :ind :buf
     # a boxed yield MOVES an lvalue operand (a promoted local `this->x`):
     # zero the source so the instance destructor does not double-free it
     if ctx.genPayC.length > 0 when (isNonLvalueArg s: ve.stringView).not then {

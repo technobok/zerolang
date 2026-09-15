@@ -962,7 +962,11 @@ perf: $(PERFBIN)
 # +5,311 over the same source (1,717 more ordered temps in zc.c, a scalar one
 # typed from its stamp only once it is needed -- typing every operand up front
 # cost +25k), +3,646 the source longer.
-ALLOC_BASELINE := 2761379
+#
+# +2,674 when a field moved into a parameter that takes it came to be zeroed:
+# +551 over the same source (a return that moves one binds its value first),
+# +2,123 the source longer.
+ALLOC_BASELINE := 2764053
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
