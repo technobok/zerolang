@@ -20763,26 +20763,54 @@ emitForCond: function {
             if cond.length > 0 then cond.append " && "
             appendInPlaceCond :ctx mark: mk7 text: cv.stringView dst: cond
         } else {
-            onid: exprNodeId n: (ast.nodes.get i: n.operation.u64)
-            tn: stampNameView :symtab nid: onid
-            takeFnTid: stampIdOf :symtab nid: onid
-            ct: scalarCTypeFor :symtab name: tn tid: takeFnTid
-            iv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.operation.u64)
-            # the initialiser runs once, before the loop: its temps are declared
-            # there, ahead of the loop's own frees
-            flushArgHoists :ctx :ind :tmp :buf
-            if ct.length > 0 then {
-                li: "\{ind}\{ct} \{lbl} = \{iv};\n"
-                buf.append li
-            } else {
-                li2: "\{ind}int64_t \{lbl} = \{iv};\n"
-                buf.append li2
-            }
-            # the initialiser is a binding: what it moved is zeroed after it
-            opNode: ast.nodes.get i: n.operation.u64
-            emitValueTakeInvalidations :ast :symtab :ctx n: opNode :ind :buf
+            (emitForInitialiser
+                :ast
+                :symtab
+                :ctx
+                op: n.operation
+                lbl: lbl.stringView
+                nameVid: lblV7
+                :ind
+                :tmp
+                :buf
+            )
         }
     }
+}
+
+# emitForInitialiser -- a for condition that names a binding: its declaration,
+# once, before the loop.
+emitForInitialiser: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    # the value it binds
+    op: zast.nodeid
+    # the binding's C name
+    lbl: StringView
+    nameVid: ztypes.vid
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    onid: exprNodeId n: (ast.nodes.get i: op.u64)
+    tn: stampNameView :symtab nid: onid
+    takeFnTid: stampIdOf :symtab nid: onid
+    ct: scalarCTypeFor :symtab name: tn tid: takeFnTid
+    iv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: op.u64)
+    # the initialiser runs once, before the loop: its temps are declared there,
+    # ahead of the loop's own frees
+    flushArgHoists :ctx :ind :tmp :buf
+    # a value that is not a scalar has the C type any binding of it has
+    if ct.length == 0 then ct = typeRefC :ast :symtab :ctx tid: takeFnTid thisTid: ztypes.tid
+    if ct.length > 0 when (isHeapPtrCollection :symtab :ctx tid: takeFnTid) then ct.append "*"
+    if ct.length == 0 then ct = "int64_t".string
+    buf.append "\{ind}\{ct} \{lbl} = \{iv};\n"
+    # a binding: what it moved is zeroed after it, and what it owns is released
+    # with the block around the loop
+    opNode: ast.nodes.get i: op.u64
+    emitValueTakeInvalidations :ast :symtab :ctx n: opNode :ind :buf
+    registerScopeDestroy :ast :symtab :ctx tid: takeFnTid nm: lbl :nameVid valueNode: opNode :tmp
 }
 
 # exprNodeId -- the node id of value `n`, whatever its shape: the id its stamp

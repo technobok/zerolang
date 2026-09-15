@@ -925,7 +925,10 @@ perf: $(PERFBIN)
 # statement: over the same source the new compiler allocates 152 fewer (a release
 # is emitted once after its statement instead of on every return path), and the
 # source is 96 lines longer.
-ALLOC_BASELINE := 2669139
+#
+# +588 when a for initialiser of a type that is not a scalar came to be declared
+# with its C type and released: the source ~30 lines longer.
+ALLOC_BASELINE := 2669727
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
