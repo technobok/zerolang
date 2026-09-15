@@ -3274,6 +3274,9 @@ Ctx: class {
     armParkNames: List String
     armParkTypes: List String
     armParkDtors: List String
+    # the temporaries the statement being emitted declares live as long as the
+    # binding it builds, not as long as the statement
+    hoistsToBlock: bool
     # the next `_wc` number: the guard a suspending `when` condition computes
     # into, since its value has to outlive the `if` that computes it
     whenGuardCtr: u64
@@ -6416,7 +6419,11 @@ flushArgHoists: function {
         }
         buf.append ";\n"
         dto: ctx.argHoistDtors.get :i
-        if dto.length > 0 then tmp.oweTemp stmt: dto.copy name: nmo.copy
+        if dto.length > 0 when ctx.hoistsToBlock then {
+            tmp.oweList stmt: dto.copy name: nmo.copy vid: (ztypes.vid.create from: 0)
+        } else if dto.length > 0 then {
+            tmp.oweTemp stmt: dto.copy name: nmo.copy
+        }
         i = i + 1
     }
     ri: rfl
@@ -8208,6 +8215,10 @@ bindingRhsIsBorrow: function {
     ) case statementline then {
         sln: ast.nodes.get i: n.statementline.u64
         return (bindingRhsIsBorrow :ast :symtab :ctx n: sln)
+    } case ifexpr then {
+        return (controlValueIsReference :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64))
+    } case caseexpr then {
+        return (controlValueIsReference :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64))
     } case call then {
         return (callRhsIsBorrow :ast :symtab :ctx call: n)
     } case dottedpath then {
@@ -16033,14 +16044,15 @@ armLeafIsPlace: function {
     } case atomid then {
         # a local the checker moved into where the value lands is the arm's own
         if (symtab.typing.armLeafMoves.has item: n.nodeid.u64) then return false
-        return (symtab.typing.atomVariableId.has key: n.nodeid.u64)
+        return (symtab.typing.armLeafPlaces.has item: n.nodeid.u64)
     } case ifexpr then {
         return (controlValueIsReference :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64))
     } case caseexpr then {
         return (controlValueIsReference :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64))
     } else {
         if (armTakeLeaf :ast :symtab :n) > 0 then return false
-        return (bindingRhsIsBorrow :ast :symtab :ctx :n)
+        if (symtab.typing.armLeafMoves.has item: (zast.nodeIdOf :n).u64) then return false
+        return (symtab.typing.armLeafPlaces.has item: (zast.nodeIdOf :n).u64)
     }
 }
 
@@ -18750,6 +18762,17 @@ emitAssignment: function {
         )
         return
     }
+    if (emitReferenceBind
+        :ast
+        :symtab
+        :ctx
+        :avn
+        :ind
+        :tmp
+        :buf
+        nm: nm.stringView
+        ct: ct.stringView
+    ) then return
     if (emitTakeAliasBind
         :ast
         :symtab
@@ -18799,50 +18822,20 @@ emitAssignment: function {
         :nameVid
         :btid
     ) then return
-    if ct.length > 0 then {
-        dm: (emitMatchBindValue
-            :ast
-            :symtab
-            :ctx
-            n: avn
-            nm: nm.stringView
-            ct: ct.stringView
-            :ind
-            :tmp
-            :buf
-        )
-        if dm.not then {
-            dm = (emitIfBindValue
-                :ast
-                :symtab
-                :ctx
-                n: avn
-                nm: nm.stringView
-                ct: ct.stringView
-                :ind
-                :tmp
-                :buf
-            )
-        }
-        if dm then {
-            oweControlBinding :ast :symtab :ctx :avn tid: btid nm: nm.stringView :nameVid :tmp
-            return
-        }
-        dd: (emitDoBindValue
-            :ast
-            :symtab
-            :ctx
-            n: avn
-            nm: nm.stringView
-            nmVid: nameVid
-            ct: ct.stringView
-            tid: ltid
-            :ind
-            :tmp
-            :buf
-        )
-        if dd then return
-    }
+    if (emitControlBind
+        :ast
+        :symtab
+        :ctx
+        :avn
+        nm: nm.stringView
+        ct: ct.stringView
+        :btid
+        :ltid
+        :nameVid
+        :ind
+        :tmp
+        :buf
+    ) then return
     # read the stamped name again rather than holding the first view across the
     # legs above: two borrows cost nothing, and one pin spanning them would
     # block every `symtab` those legs lend
@@ -18879,6 +18872,76 @@ oweControlBinding: function {
     if (controlValueOwnsArms :ast :symtab :ctx n: avn).not then return
     dl: hoistDestroyLine :symtab :ctx :tid :nm
     if dl.length > 0 then tmp.oweList stmt: dl.copy name: nm.string vid: nameVid
+}
+
+# emitControlBind -- a local bound from an `if`, a `match` or a do block: the arms
+# assign it, and it earns the cleanup its type's binding owes
+# (oweControlBinding); the do block's own leg registers its. True when it handled
+# the binding.
+emitControlBind: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    avn: astnode.view
+    nm: StringView
+    ct: StringView
+    # the binding's stamp, and the value's chased collection type
+    btid: ztypes.tid
+    ltid: ztypes.tid
+    nameVid: ztypes.vid
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} out bool is {
+    if ct.length == 0 then return false
+    dm: emitMatchBindValue :ast :symtab :ctx n: avn :nm :ct :ind :tmp :buf
+    if dm.not then dm = emitIfBindValue :ast :symtab :ctx n: avn :nm :ct :ind :tmp :buf
+    if dm then {
+        oweControlBinding :ast :symtab :ctx :avn tid: btid :nm :nameVid :tmp
+        return true
+    }
+    return (emitDoBindValue
+        :ast
+        :symtab
+        :ctx
+        n: avn
+        :nm
+        nmVid: nameVid
+        :ct
+        tid: ltid
+        :ind
+        :tmp
+        :buf
+    )
+}
+
+# emitReferenceBind -- a local bound from an `if` or a `match` with a place arm
+# (controlValueIsReference): the binding is a second name for the storage the arm
+# that ran yields, as `r: h.p` is, so it is declared from the reference and frees
+# nothing. An arm that yields a value of its own parks it in a temporary that
+# lives as long as the binding, not as long as the statement. True when it
+# handled the binding.
+emitReferenceBind: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    avn: astnode.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+    nm: StringView
+    ct: StringView
+} out bool is {
+    if ct.length == 0 then return false
+    if (controlValueIsReference :ast :symtab :ctx n: avn).not then return false
+    prevBlock: ctx.hoistsToBlock
+    ctx.hoistsToBlock = true
+    rv: emitExpr :ast :symtab :ctx n: avn
+    flushArgHoists :ctx :ind :tmp :buf
+    ctx.hoistsToBlock = prevBlock
+    lr: "\{ind}\{ct} \{nm} = \{rv};\n"
+    buf.append lr
+    return true
 }
 
 # emitDottedAutoCallStmt -- a no-argument METHOD auto-call in statement position
@@ -28892,6 +28955,7 @@ emitC: function {
         armParkNames: List String
         armParkTypes: List String
         armParkDtors: List String
+        hoistsToBlock: false
         whenGuardCtr: 0
         breakLabels: ListVal u64
         breakLabelIsDo: ListVal bool

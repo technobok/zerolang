@@ -26786,10 +26786,9 @@ materialiseLiteral: function {
     return (ztypes.tid.create from: t)
 }
 
-# armLocalLeaves -- the atoms of the bare names the arms of the value `if` or
-# `match` at `nid` yield, through nested ones: what a destination that takes
-# the value moves, arm by arm.
-armLocalLeaves: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid into: ListVal u32} is {
+# armValueLeaves -- the values the arms of the `if` or `match` at `nid` yield,
+# through nested ones: what a destination sees, arm by arm.
+armValueLeaves: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid into: ListVal u32} is {
     if (isControlValue :ast :nid).not then return
     blocks: ListVal u32
     controlArmBlocks :ast :nid into: blocks
@@ -26797,11 +26796,56 @@ armLocalLeaves: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid into: 
         av: armValueOf :st :ast blockId: (zast.nodeid.create from: blk)
         if av.nid.isZero.not then {
             if (isControlValue :ast nid: av.nid) then {
-                armLocalLeaves :st :ast nid: av.nid :into
-            } else if (bareAtomNameId n: (ast.nodes.get i: av.nid.u64)).isZero.not then {
+                armValueLeaves :st :ast nid: av.nid :into
+            } else {
                 into.append from: av.nid.u32
             }
         }
+    }
+}
+
+# armLocalLeaves -- the arm values that are bare names: what a destination that
+# takes the value moves.
+armLocalLeaves: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid into: ListVal u32} is {
+    all: ListVal u32
+    armValueLeaves :st :ast :nid into: all
+    with ait: all.iterate do for lf: ait loop {
+        if (bareAtomNameId n: (ast.nodes.get i: lf.u64)).isZero.not then into.append from: lf
+    }
+}
+
+# armBorrowedLeaves -- the arm values read out of storage something else owns: a
+# field read through names rooted in a local, or a value a call hands back pinned
+# to its source. A destination that owns what it holds refuses them, one by one.
+armBorrowedLeaves: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid into: ListVal u32} is {
+    all: ListVal u32
+    armValueLeaves :st :ast :nid into: all
+    with ait: all.iterate do for lf: ait loop {
+        n: ast.nodes.get i: lf.u64
+        if (bareAtomNameId :n).isZero then into.append from: lf
+    }
+}
+
+# refuseBorrowedArms -- every arm of the control value at `nid` that reads storage
+# something else owns is refused `verb`, as the same value written alone is.
+refuseBorrowedArms: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    nid: zast.nodeid
+    verb: StringView
+} is {
+    if (isControlValue :ast :nid).not then return
+    leaves: ListVal u32
+    armBorrowedLeaves :st :ast :nid into: leaves
+    with lit: leaves.iterate do for lf: lit loop {
+        ln: ast.nodes.get i: lf.u64
+        (refuseBorrowedMove
+            :st
+            :ast
+            n: ln
+            vt: (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: lf.u64)
+            :verb
+        )
     }
 }
 
@@ -26809,7 +26853,7 @@ armLocalLeaves: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid into: 
 # resolves to that variable where the value lands; zero for a local the arm
 # declared itself, which has left scope and which the arm's own end moves.
 armLeafLocal: function {st: zenv.ZSymbolTable ast: Ast.view nid: u32} out ztypes.vid is {
-    none: ztypes.vid
+    none: ztypes.vid.create from: 0
     av: st.typing.atomVariableId.get key: nid.u64
     if av.none then return none
     cur: st.lookupVarId nameId: (bareAtomNameId n: (ast.nodes.get i: nid.u64))
@@ -27118,11 +27162,24 @@ pinBoundField: function {st: zenv.ZSymbolTable ast: Ast.view vt: ztypes.tid nid:
         if (movedFieldPath :st :ast n: vn).not then return
         appendValueTuple :ast n: vn dst: fp
     }
+    # (an `if` or a `match` pins the field each arm reads: pinBoundFieldArms)
     if fp.length < 2 then return
     if (st.lookupVarId nameId: (fp.get i: 0)).none then return
     # through a readonly root the second name is readonly too
     mw: (pathIsReadonly :st path: fp).not
     pinsPush :st path: fp shared: true mutable: mw alias: true
+}
+
+# pinBoundFieldArms -- `b: if c then h.p else ..`: each arm that reads a field
+# pins it as the whole value read alone would (pinBoundField), so the binding is
+# a second name for whichever the arm that ran yields.
+pinBoundFieldArms: function {st: zenv.ZSymbolTable ast: Ast vt: ztypes.tid nid: zast.nodeid} is {
+    if (isControlValue :ast :nid).not then return
+    leaves: ListVal u32
+    armBorrowedLeaves :st :ast :nid into: leaves
+    with lit: leaves.iterate do for lf: lit loop {
+        pinBoundField :st :ast :vt nid: (zast.nodeid.create from: lf)
+    }
 }
 
 # checkMovedValueAt -- type the value of a binding or a reassignment. A
@@ -27234,6 +27291,7 @@ checkAssignment: function {
     if (refuseDataBlockValue :st :ast :vt nid: asgn.value) then return
     if vt > 0 then {
         pinBoundField :st :ast :vt nid: asgn.value
+        pinBoundFieldArms :st :ast :vt nid: asgn.value
         bpins: List ztyping.PinPath
         takePendingPins :st dst: bpins
         own: ztypes.zownership.owned
@@ -27857,6 +27915,7 @@ checkReassignment: function {
     }
     if hbVid > 0 then retakeHoldLock :st :ast :rasgn :hbVid :hbNmId
     refuseBorrowedReassign :st :ast :rasgn targetNameId: hbNmId :rvt
+    refuseBorrowedArms :st :ast nid: rasgn.value verb: "by reassignment"
     consumeReassignPins :st :ast :rasgn :hbNmId :rvt
     mrv0: materialiseLiteral :ast :st :unitDecl t: rvt
     if mrv0 > 0 when (st.reg.typetypeOf typeId: mrv0) == ztypes.ztypetype.nullType then {
@@ -27957,10 +28016,51 @@ borrowedValueText: function {
         exprTextOf :ast :n dst: txt
         return txt
     }
+    if (callHandsBackBorrow :st :ast :n) then {
+        exprTextOf :ast :n dst: txt
+        return txt
+    }
     if st.typing.pendingPins.length == 0 then return none
     if st.typing.pendingBorrowOwned then return none
     exprTextOf :ast :n dst: txt
     return txt
+}
+
+# callHandsBackBorrow -- the call `n` hands back a value pinned to its source,
+# because its callee's return carries `.borrow` (an element read off a
+# container). Asked of a value whose pins are no longer pending: an arm of an
+# `if` or a `match` is walked long before the destination sees it.
+callHandsBackBorrow: function {st: zenv.ZSymbolTable ast: Ast.view n: astnode.view} out bool is {
+    match (
+        n
+    ) case call then {
+        cal: ast.nodes.get i: n.callable.u64
+        ft: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: (nodeId n: cal).u64
+        if ft > 0 when ((st.typing.funcReturnsBorrow.get
+            key: (ztypes.tid.create from: ft.u64)
+        ).or
+            d: false
+        ) then return true
+        ch: dottedChildNameId :ast n: cal
+        if ch.isZero then return false
+        rt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: (dottedParentNodeId :ast n: cal).u64
+        if rt.isZero then return false
+        mo: (st.typing.declChildOfId
+            parentTypeId: (ztypes.tid.create from: rt.u64)
+            nameId: ch
+        )
+        match (
+            mo
+        ) case some then {
+            return ((st.typing.funcReturnsBorrow.get key: (ztypes.tid.create from: mo.u64)).or
+                d: false
+            )
+        } case none then {
+            return false
+        }
+    } else {
+        return false
+    }
 }
 
 # localFieldPath -- `n` is a field read through names rooted in a local
@@ -29987,7 +30087,31 @@ valueArmsTid: function {
     }
     coerceLiteralArms :st :ast :nid :arms :governing
     stampGate :st nid: nid.u64 tid: governing.tid
+    recordControlPlaceLeaves :st :ast :nid
     return governing.tid
+}
+
+# recordControlPlaceLeaves -- the arms of a value `if` or `match` that read
+# storage something else owns -- a local of an enclosing scope, a field, an
+# element a call hands back -- by the node id of the arm's value. The emitter
+# reads them: such a value is a reference to that storage on that arm's path,
+# not a value of its own. A local the arm itself declared is the arm's own value
+# and is not one of these; nor is a leaf a destination moves (armLeafMoves).
+recordControlPlaceLeaves: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} is {
+    leaves: ListVal u32
+    armValueLeaves :st :ast :nid into: leaves
+    with lit: leaves.iterate do for lf: lit loop {
+        ln: ast.nodes.get i: lf.u64
+        place: false
+        if (bareAtomNameId n: ln).isZero.not then {
+            place = (armLeafLocal :st :ast nid: lf).isZero.not
+        } else if (localFieldPath :st :ast n: ln) then {
+            place = true
+        } else if (callHandsBackBorrow :st :ast n: ln) then {
+            place = true
+        }
+        if place then st.typing.armLeafPlaces.add item: lf.u64
+    }
 }
 
 # looseArm -- among untyped literal arms, the one whose type they take: a float
@@ -32899,6 +33023,7 @@ moveArmLeavesIntoArgument: function {
     pins: List ztyping.PinPath
 } is {
     if (isControlValue :ast nid: arg.operation).not then return
+    moveArmFieldLeaves :st :ast nid: arg.operation
     leaves: ListVal u32
     armLocalLeaves :st :ast nid: arg.operation into: leaves
     with lit: leaves.iterate do for lf: lit loop {
@@ -32918,6 +33043,31 @@ moveArmLeavesIntoArgument: function {
                 colno: (nodeCol n: (ast.nodes.get i: lf.u64))
             )
             st.typing.armLeafMoves.add item: lf.u64
+        }
+    }
+}
+
+# moveArmFieldLeaves -- an arm of a taken value that reads a field moves out of it
+# on that arm's path, as `f s: h.p` does: the write is checked where the field is
+# read, the emitter zeroes it there, and the rest of the call may not read it. An
+# arm that reads storage no field of a local owns is refused instead.
+moveArmFieldLeaves: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} is {
+    leaves: ListVal u32
+    armBorrowedLeaves :st :ast :nid into: leaves
+    with lit: leaves.iterate do for lf: lit loop {
+        ln: ast.nodes.get i: lf.u64
+        lt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: lf.u64
+        if (localFieldPath :st :ast n: ln).not then {
+            refuseBorrowedMove :st :ast n: ln vt: lt verb: "into a taking argument"
+        } else if (typeIsReftype :st tid: lt) when (st.reg.needsDestructor typeId: lt) then {
+            errF: st.typing.errors.length
+            checkFieldMove :st :ast n: ln
+            if st.typing.errors.length == errF then {
+                mvp: ListVal zast.nameid
+                appendValueTuple :ast n: ln dst: mvp
+                st.recordMovedArg path: mvp.listView
+                st.typing.armLeafMoves.add item: lf.u64
+            }
         }
     }
 }
@@ -34696,6 +34846,7 @@ recordReturnedOwnedLocal: function {
     if argT.isZero then return
     if (typeIsReftype :st tid: argT).not then return
     if (isControlValue :ast nid: arg.operation) then {
+        refuseReturnedArms :st :ast nid: arg.operation
         # an arm that yields a bare local returns it on that arm's path
         leaves: ListVal u32
         armLocalLeaves :st :ast nid: arg.operation into: leaves
@@ -34722,6 +34873,33 @@ recordReturnedOwnedLocal: function {
     } case none then null
     if rvid.isZero then return
     returnOwnedLocal :st :ast nid: arg.operation.u32 vid: rvid tid: argT
+}
+
+# refuseReturnedArms -- an arm that yields a field read is refused as a returned
+# bare field read is, and one that yields storage a call pinned to its source as a
+# returned borrowed name is: the owner still frees what the return hands back.
+refuseReturnedArms: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} is {
+    if st.typing.currentReturnsBorrow then return
+    leaves: ListVal u32
+    armBorrowedLeaves :st :ast :nid into: leaves
+    with lit: leaves.iterate do for lf: lit loop {
+        ln: ast.nodes.get i: lf.u64
+        lt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: lf.u64
+        if (st.reg.needsDestructor typeId: lt) then {
+            la: (argref
+                nid: (zast.nodeid.create from: lf)
+                name: zast.nameid
+                operation: (zast.nodeid.create from: lf)
+                lineno: (nodeLine n: ln)
+                colno: (nodeCol n: ln)
+            )
+            errR: st.typing.errors.length
+            reportReturnedBareField :st :ast arg: la
+            if st.typing.errors.length == errR then {
+                refuseBorrowedMove :st :ast n: ln vt: lt verb: "as an owned result"
+            }
+        }
+    }
 }
 
 # returnOwnedLocal -- the local `vid` of type `tid`, read by the atom `nid`,
