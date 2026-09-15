@@ -4691,6 +4691,18 @@ aliasOrChildId: function {
     return (atomNameIdOf :ast n: (ast.nodes.get i: childId.u64))
 }
 
+# dottedParentNodeId -- the node a dotted path `n` reads its member of, 0 when
+# `n` is not a dotted path.
+dottedParentNodeId: function {n: astnode.view} out u64 is {
+    match (
+        n
+    ) case dottedpath then {
+        return n.parent.u64
+    } else {
+        return 0
+    }
+}
+
 # the base node id of dotted-path node `n`.
 dottedBaseNodeId: function {ast: Ast.view n: astnode.view} out u64 is {
     match (
@@ -4767,14 +4779,19 @@ svNativeCall: function {
     recv: StringView
     args: StringView
 } out String is {
-    addressable: (isNonLvalueArg s: recv).not
-    if (recv.startsWith prefix: "((") then addressable = true
-    if addressable then {
+    if (svRecvAddressable :recv) then {
         direct: "\{ctx.svC}_\{m}(&\{recv}\{args})"
         return direct
     }
     wrapped: "({ \{ctx.svC}_t _svr = \{recv}; \{ctx.svC}_\{m}(&_svr\{args}); })"
     return wrapped
+}
+
+# svRecvAddressable -- a view receiver `&` applies to: anything but a call, and a
+# compound literal.
+svRecvAddressable: function {recv: StringView} out bool is {
+    if (recv.startsWith prefix: "((") then return true
+    return (isNonLvalueArg s: recv).not
 }
 
 # svArgAddr -- the &-form of a StringView native argument (pooled
@@ -4947,33 +4964,41 @@ emitSvSubstringCall: function {
     dcbV: ztypes.vid
 } out String is {
     if mnv == "substring" then {
-        fromA: ctorArgByLabel :ast :symtab :ctx :call label: "from"
-        toA: ctorArgByLabel :ast :symtab :ctx :call label: "to"
-        if fromA.length > 0 when toA.length > 0 then {
-            recvp: String
-            if btid == ctx.svTid then {
-                recvp = bnv.string
+        recvp: String
+        if btid == ctx.svTid then {
+            recvp = bnv.string
+        } else {
+            if btIsStr then {
+                bfs: svValueForm :ctx expr: bnv isStr: true vid: dcbV
+                recvp = bfs.copy
             } else {
-                if btIsStr then {
-                    bfs: svValueForm :ctx expr: bnv isStr: true vid: dcbV
-                    recvp = bfs.copy
-                } else {
-                    sacc: ".".string
-                    if (isPtrVid :ctx vid: dcbV) then sacc = "->".string
-                    recvp = "((\{ctx.svC}_t){ .data = \{bnv}\{sacc}data, .size = \{bnv}\{sacc}len })"
-                }
+                sacc: ".".string
+                if (isPtrVid :ctx vid: dcbV) then sacc = "->".string
+                recvp = "((\{ctx.svC}_t){ .data = \{bnv}\{sacc}data, .size = \{bnv}\{sacc}len })"
             }
-            if recvp.length > 0 then {
-                needsAddM :ctx uname: "system" memb: "substring"
-                sargs: ", \{fromA}, \{toA}"
-                esb: (svNativeCall
-                    :ctx
-                    m: "substring"
-                    recv: recvp.stringView
-                    args: sargs.stringView
-                )
-                return esb
-            }
+        }
+        if recvp.length > 0 then {
+            needsAddM :ctx uname: "system" memb: "substring"
+            # a receiver that is a call is bound first, as svNativeCall binds it
+            addressable: svRecvAddressable recv: recvp.stringView
+            lead: "&_svr".string
+            if addressable then lead = "&\{recvp}"
+            svc: ctx.svC.copy
+            esb: (emitOrderedPair
+                :ast
+                :symtab
+                :ctx
+                :call
+                cb: svc.stringView
+                m: "substring"
+                lead: lead.stringView
+                a: "from"
+                aForm: argform.labelled
+                b: "to"
+                bForm: argform.labelled
+            )
+            if addressable then return esb
+            return "({ \{ctx.svC}_t _svr = \{recvp}; \{esb}; })"
         }
     }
     return "".string
@@ -5592,14 +5617,15 @@ dottedReceiverIsPtr: function {
 # own natives.tbl row. The receiver-only rows reach `emitNumericCast`, which
 # binds one hole and knows nothing of arguments; the operator rows reach
 # `emitOperatorAt`, which binds two and is spelled for an operator. A row that
-# names an
-# argument hole had no way in at all, and every bodied row on a scalar was a
-# conversion, `bits` or `not` because of it.
+# names an argument hole had no way in at all, and every bodied row on a scalar
+# was a conversion, `bits` or `not` because of it.
 #
 # @V@ is the receiver and @A1@, @A2@, ... the arguments -- 1-BASED WITH THE
 # RECEIVER EXCLUDED, the same numbering `const=` uses, so one convention
-# answers for both. Arguments fill in DECLARED order, not written order:
-# argSlotList maps the labels the way every other call form does.
+# answers for both. A hole is named by its parameter's DECLARED position:
+# argSlotList maps the labels the way every other call form does. The receiver
+# and then the arguments are evaluated in the order they are written, ahead of
+# the body, which may spell a hole anywhere.
 #
 # The row is the authority. Nothing here compares a member name, so a native
 # gaining an argument is a declaration and a row, as it should be.
@@ -5629,6 +5655,7 @@ emitNativeArgMethod: function {
     body: nativeImplOf :ctx path: key.stringView
     if body.length == 0 then return "".string
     if (body.stringView.contains needle: "@A1@").not then return "".string
+    mk: pendingHoistMark :ctx
     recv: emitDottedReceiver :ast :symtab :ctx callable: (ast.nodes.get i: call.callable.u64)
     if recv.length == 0 then return "".string
     if (dottedReceiverIsPtr
@@ -5648,16 +5675,27 @@ emitNativeArgMethod: function {
         d: 0
     )
     if mtid.isZero then return "".string
+    pNames: List String
+    pIds: ListVal u64
+    pNameIds: ListVal u64
+    recFieldLists :ast :symtab tid: mtid names: pNames ids: pIds nameIds: pNameIds
+    if pNames.length < 2 then return "".string
+    # the receiver is evaluated first, then the arguments as written
+    ord: orderBegin :ctx slots: pNames.length
+    recvNid: dottedParentNodeId n: (ast.nodes.get i: call.callable.u64)
+    orderArgAt :ast :symtab :ctx st: ord mark: mk text: recv nid: recvNid byPtr: true slot: 0
+    orderNativeArgs :ast :symtab :ctx :call fpNameIds: pNameIds :ord
+    oprefix: orderFinish :ctx st: ord
     rn: List String
     rv: List String
-    rn.append from: "V".string
-    rv.append from: recv.copy
-    if (nativeArgHoles :ast :symtab :ctx :call fid: mtid names: rn vals: rv).not then {
-        return "".string
-    }
+    filledAll: nativeHoleValues t: ctx st: ord count: pNames.length names: rn vals: rv
+    orderEnd :ctx st: ord
+    # a slot no argument fills leaves the caller on its ordinary path rather than
+    # emitting a body with a hole still in it
+    if filledAll.not then return "".string
     bn: List String
     bv: List String
-    return (fillHolesForCtx
+    filled: (fillHolesForCtx
         :ctx
         text: body
         path: key.stringView
@@ -5666,60 +5704,68 @@ emitNativeArgMethod: function {
         rawNames: rn
         rawVals: rv
     )
+    return (orderWrap prefix: oprefix call: filled)
 }
 
-# nativeArgHoles -- append @A1@, @A2@, ... and their values to a hole list, in
-# DECLARED order. The receiver is the first parameter, so a parameter's slot
-# index IS its hole number: slot 0 is the receiver and fills @V@, slot 1 fills
-# @A1@. False when a slot has no argument, which leaves the caller on its
-# ordinary path rather than emitting a body with a hole still in it.
-nativeArgHoles: function {
+# nativeHoleValues -- @V@, @A1@, @A2@, ... and the texts in the slots of the call
+# `st` opened that fill them; false when a slot is empty.
+nativeHoleValues: function {
+    t: Ctx.view
+    st: orderstate
+    count: u64
+    names: List String
+    vals: List String
+} out bool is {
+    filledAll: true
+    hi: u64
+    for hi < count loop {
+        hv: orderSlotText :t :st slot: hi
+        if hv.length == 0 then filledAll = false
+        if hi == 0 then names.append "V".string else names.append "A\{hi}"
+        vals.append hv.string
+        hi = hi + 1
+    }
+    return filledAll
+}
+
+# orderNativeArgs -- a native row's arguments, built in the order they are
+# written into the slots of the parameters they bind. The receiver is the first
+# parameter, so a parameter's slot index IS its hole number: slot 1 fills @A1@.
+orderNativeArgs: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
-    fid: ztypes.tid
-    names: List String
-    vals: List String
-} out bool is {
-    pNames: List String
-    pIds: ListVal u64
-    pNameIds: ListVal u64
-    recFieldLists :ast :symtab tid: fid names: pNames ids: pIds nameIds: pNameIds
-    if pNames.length < 2 then return false
-    slots: argSlotList :ast :call fpNameIds: pNameIds
-    valBySlot: IdMapR u64 V: String
+    fpNameIds: (ListVal u64).view
+    ord: orderstate.borrow
+} is {
+    slots: argSlotList :ast :call :fpNameIds
     ai: u64
-    arx269: u64
-    for arx269 < call.arguments.count.u64 loop {
-        aId: zast.kidAt kids: ast.kids span: call.arguments i: arx269
-        arx269 = arx269 + 1
+    ax: u64
+    for ax < call.arguments.count.u64 loop {
+        aId: zast.kidAt kids: ast.kids span: call.arguments i: ax
+        ax = ax + 1
         a: ast.nodes.get i: aId.u64
         if a.namedoperation then {
             slot: slots.get i: ai
-            if slot < pNames.length then {
+            if slot > 0 when slot < fpNameIds.length then {
+                mk: pendingHoistMark :ctx
                 av: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
-                valBySlot.set key: slot value: av
+                (orderArgAt
+                    :ast
+                    :symtab
+                    :ctx
+                    st: ord
+                    mark: mk
+                    text: av
+                    nid: a.operation.u64
+                    byPtr: false
+                    :slot
+                )
             }
         }
         ai = ai + 1
     }
-    missing: false
-    hi: 1.u64
-    for hi < pNames.length loop {
-        g: valBySlot.get key: hi
-        match (
-            g
-        ) case some then {
-            hn: "A\{hi}"
-            names.append hn
-            vals.append g.copy
-        } case none then {
-            missing = true
-        }
-        hi = hi + 1
-    }
-    return missing.not
 }
 
 # emitStringArgMethod -- a String mutating method WITH an arg (appendByte /
@@ -6015,8 +6061,9 @@ orderSettle: function {
     fid: ztypes.tid.create from: ctx.orderPendFid.pop
     pid: ztypes.tid.create from: ctx.orderPendPid.pop
     pn: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: ctx.orderPendName.pop)
-    # a part no declared parameter types is typed as its own expression
-    ct: "__typeof__(\{text})"
+    # a part no declared parameter types is typed as its own expression, read
+    # through a comma so a `const` source still gives an assignable temp
+    ct: "__typeof__(((void)0, \{text}))"
     if fid.isZero.not then ct = paramCType :ast :symtab :ctx :fid pname: pn.stringView :pid
     if given.length > 0 then ct = given
     if ct.length == 0 then {
@@ -6104,6 +6151,7 @@ orderClose: function {prefix: String.take callee: StringView args: StringView} o
 # a literal or a folded constant, an address of a plain place, or a pointer a
 # pointer parameter is handed on.
 orderConstant: function {
+    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: astnode.view
@@ -6114,6 +6162,14 @@ orderConstant: function {
     cv: symtab.typing.nodeConstIn mono: ctx.curThisTid.u64 nid: (interpPartNodeId :n)
     if cv.kind.none.not then return true
     if n.atomstring when (litIndexOf :ctx nid: n.nodeid.u64) > 0 then return true
+    if n.dottedpath then {
+        # an arm without a payload named on its type, and a literal's own String
+        if (dottedTaggedTid :symtab nid: n.nodeid.u64) > 0 then return true
+        mid: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
+        if mid == zast.names.wkString then {
+            return (bindLitIndex :ast :ctx n: (ast.nodes.get i: n.parent.u64)) > 0
+        }
+    }
     if text.startsWith "&" then {
         addr: text.substring from: 1 to: text.length
         if (isPlainCPath s: addr) then return true
@@ -7031,8 +7087,7 @@ emitInstanceMethodBody: function {
     k: u64
     pi: u64
     for k < pn loop {
-        pi = nextWrittenParam writ: ctx.orderWrit done: ctx.orderDone base: wbase
-        ctx.orderDone.set i: wbase + pi val: true
+        pi = orderNextParam :ctx base: wbase
         k = k + 1
         isR: false
         {
@@ -7056,19 +7111,9 @@ emitInstanceMethodBody: function {
             :ord
         )
     }
-    for ctx.orderWrit.length > wbase loop {
-        ctx.orderWrit.pop
-        ctx.orderPosAt.pop
-        ctx.orderDone.pop
-    }
+    orderDropPositions :ctx base: wbase
     oprefix: orderFinish :ctx st: ord
-    args: String
-    pi = 0
-    for pi < pn loop {
-        if pi > 0 then args.append ", "
-        args.append (orderSlotText t: ctx st: ord slot: pi)
-        pi = pi + 1
-    }
+    args: orderJoinSlots :ctx st: ord count: pn
     orderEnd :ctx st: ord
     return (orderClose prefix: oprefix callee: mcn.stringView args: args.stringView)
 }
@@ -7156,6 +7201,7 @@ orderMethodParam: function {
         )
         if written > 0 then {
             constant = (orderConstant
+                :ast
                 :symtab
                 :ctx
                 n: (ast.nodes.get i: (writtenArgNode :ast :call pos: written - 1))
@@ -8434,10 +8480,19 @@ emitListMethodCall: function {
         return e1m
     }
     if mnId == zast.names.wkSlice then {
-        vf9: listArg :ast :symtab :ctx :call label: "from"
-        vt9: listArg :ast :symtab :ctx :call label: "to"
-        e1s: "\{cb}_slice(\{recvR}, \{vf9}, \{vt9})"
-        return e1s
+        return (emitOrderedPair
+            :ast
+            :symtab
+            :ctx
+            :call
+            cb: cb.stringView
+            m: "slice"
+            lead: recvR.stringView
+            a: "from"
+            aForm: argform.value
+            b: "to"
+            bForm: argform.value
+        )
     }
     if mnId == zast.names.wkExtendView then {
         vw9: listArg :ast :symtab :ctx :call label: "from"
@@ -8445,20 +8500,38 @@ emitListMethodCall: function {
         return e1e
     }
     if mnId == zast.names.wkSet then {
-        vi: listArg :ast :symtab :ctx :call label: "i"
-        vv: listArg :ast :symtab :ctx :call label: "val"
-        e2: "\{cb}_set(\{recvR}, \{vi}, \{vv})"
-        return e2
+        return (emitOrderedPair
+            :ast
+            :symtab
+            :ctx
+            :call
+            cb: cb.stringView
+            m: "set"
+            lead: recvR.stringView
+            a: "i"
+            aForm: argform.value
+            b: "val"
+            bForm: argform.value
+        )
     }
     if (mnIs :ctx id: mnId at: mnPop) then {
         e3: "\{cb}_pop(\{recvR})"
         return e3
     }
     if (mnIs :ctx id: mnId at: mnInsert) then {
-        vf: listArg :ast :symtab :ctx :call label: "from"
-        va: listArg :ast :symtab :ctx :call label: "at"
-        e4: "\{cb}_insert(\{recvR}, \{vf}, \{va})"
-        return e4
+        return (emitOrderedPair
+            :ast
+            :symtab
+            :ctx
+            :call
+            cb: cb.stringView
+            m: "insert"
+            lead: recvR.stringView
+            a: "from"
+            aForm: argform.value
+            b: "at"
+            bForm: argform.value
+        )
     }
     if (mnIs :ctx id: mnId at: mnExtend) then {
         eaa: listTakeArgBase :ast :call label: "from"
@@ -8504,10 +8577,20 @@ emitArrayMethodCall: function {
         return "\{cb}_getMut(\{bn}, \{viM})"
     }
     if mnId == zast.names.wkSet then {
-        vi: listArg :ast :symtab :ctx :call label: "i"
-        vv: listArg :ast :symtab :ctx :call label: "item"
         recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
-        return "\{cb}_set(\{recvR}, \{vi}, \{vv})"
+        return (emitOrderedPair
+            :ast
+            :symtab
+            :ctx
+            :call
+            cb: cb.stringView
+            m: "set"
+            lead: recvR.stringView
+            a: "i"
+            aForm: argform.value
+            b: "item"
+            bForm: argform.value
+        )
     }
     return "".string
 }
@@ -8671,10 +8754,19 @@ emitMapMethodCall: function {
 } out String is {
     cb: ctxCname :ctx tid: (ztypes.tid.create from: bt.u64)
     if mnId == zast.names.wkSet then {
-        vk: colArg :ast :symtab :ctx :call label: "key" consumes: true
-        vv: colArg :ast :symtab :ctx :call label: "value" consumes: true
-        e0: "\{cb}_set(\{bn}, \{vk}, \{vv})"
-        return e0
+        return (emitOrderedPair
+            :ast
+            :symtab
+            :ctx
+            :call
+            cb: cb.stringView
+            m: "set"
+            lead: bn.stringView
+            a: "key"
+            aForm: argform.moved
+            b: "value"
+            bForm: argform.moved
+        )
     }
     if mnId == zast.names.wkGet then {
         vkv: colArgAsStringViewExpr :ast :symtab :ctx :call label: "key"
@@ -8746,10 +8838,19 @@ emitIdMapMethodCall: function {
     cb: ctxCname :ctx tid: (ztypes.tid.create from: bt.u64)
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
     if mnId == zast.names.wkSet then {
-        vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
-        vv: colArg :ast :symtab :ctx :call label: "value" consumes: true
-        e0: "\{cb}_set(\{recvR}, \{vk}, \{vv})"
-        return e0
+        return (emitOrderedPair
+            :ast
+            :symtab
+            :ctx
+            :call
+            cb: cb.stringView
+            m: "set"
+            lead: recvR.stringView
+            a: "key"
+            aForm: argform.read
+            b: "value"
+            bForm: argform.moved
+        )
     }
     if mnId == zast.names.wkGet then {
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
@@ -9070,6 +9171,131 @@ listArg: function {
     # `xs.get i2` -> the `i` param.
     if havePos then return posFirst
     return "0".string
+}
+
+# argform -- how a native leg spells one of its labelled arguments.
+argform: variant {
+    # the value, bound by its label or else by the first unlabelled argument
+    value: null
+    # a collection argument the method takes over: an interpolation is built
+    # into a temp the call moves in
+    moved: null
+    # a collection argument the method reads: an interpolation's temp is freed
+    # with the statement
+    read: null
+    # the value, bound by its label only
+    labelled: null
+    # the address of the argument bound by its label, unless it is a pointer
+    # already
+    addressed: null
+}
+
+# emitOrderedPair -- `<cb>_<m>(lead, a, b)`: a native leg whose two labelled
+# arguments are built in the order they are written, after the assignments that
+# run ahead of the call.
+emitOrderedPair: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    cb: StringView
+    m: StringView
+    lead: StringView
+    a: StringView
+    aForm: argform
+    b: StringView
+    bForm: argform
+} out String is {
+    na: labelArgNode :ast :call label: a form: aForm
+    nb: labelArgNode :ast :call label: b form: bForm
+    bFirst: (writtenArgPosition :ast :call nid: nb) < (writtenArgPosition :ast :call nid: na)
+    ord: orderBegin :ctx slots: 2
+    if bFirst then orderLabelArg :ast :symtab :ctx :call label: b form: bForm nid: nb slot: 1 :ord
+    orderLabelArg :ast :symtab :ctx :call label: a form: aForm nid: na slot: 0 :ord
+    if bFirst.not then (orderLabelArg
+        :ast
+        :symtab
+        :ctx
+        :call
+        label: b
+        form: bForm
+        nid: nb
+        slot: 1
+        :ord
+    )
+    r: orderFinish :ctx st: ord
+    opened: r.length > 0
+    r.append cb
+    r.append "_"
+    r.append m
+    r.append "("
+    r.append lead
+    r.append ", "
+    r.append (orderSlotText t: ctx st: ord slot: 0)
+    r.append ", "
+    r.append (orderSlotText t: ctx st: ord slot: 1)
+    r.append ")"
+    if opened then r.append ")"
+    orderEnd :ctx st: ord
+    return r
+}
+
+# orderLabelArg -- one labelled argument of a native leg, spelled as `form` says
+# and placed in evaluation order into `slot`.
+orderLabelArg: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    label: StringView
+    form: argform
+    # the argument's value node, 0 when the call writes none
+    nid: u64
+    slot: u64
+    ord: orderstate.borrow
+} is {
+    mk: pendingHoistMark :ctx
+    text: labelArgText :ast :symtab :ctx :call :label :form
+    orderArgAt :ast :symtab :ctx st: ord mark: mk :text :nid byPtr: false :slot
+}
+
+# labelArgText -- a native leg's labelled argument, spelled as `form` says.
+labelArgText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    label: StringView
+    form: argform
+} out String is {
+    match (
+        form
+    ) case value then {
+        return (listArg :ast :symtab :ctx :call :label)
+    } case moved then {
+        return (colArg :ast :symtab :ctx :call :label consumes: true)
+    } case read then {
+        return (colArg :ast :symtab :ctx :call :label consumes: false)
+    } case labelled then {
+        return (ctorArgByLabel :ast :symtab :ctx :call :label)
+    } case addressed then {
+        av: ctorArgByLabel :ast :symtab :ctx :call :label
+        if (argIsPointerByLabel :ast :symtab :ctx :call :label) then return av
+        return "&\{av}"
+    }
+}
+
+# labelArgNode -- the value node of the argument `form` binds to `label`, 0 when
+# the call writes none.
+labelArgNode: function {
+    ast: Ast.view call: zast.callrow.view label: StringView form: argform
+} out u64 is {
+    byLabel: ctorArgNodeByLabel :ast :call :label
+    if byLabel > 0 then return byLabel
+    match (
+        form
+    ) case labelled then return 0 case addressed then return 0 case value then null case moved then null case read then null
+    return (ctorArgNodeByPosition :ast :call idx: 0)
 }
 
 # listTakeArgBaseNid -- listTakeArgBase as an interned name id, for a caller
@@ -9393,22 +9619,11 @@ userCreateCallC: function {
         nameIds: pidsNm
     )
     pn: pnames.length
-    # the arguments are built in the order they are written
-    wbase: ctx.orderWrit.length
-    (ctorArgPositions
-        :ast
-        :call
-        names: pnames
-        labelsOnly: true
-        writ: ctx.orderWrit
-        posAt: ctx.orderPosAt
-    )
-    for ctx.orderDone.length < (wbase + pn) loop ctx.orderDone.append false
+    wbase: orderPositions :ast :ctx :call names: pnames labelsOnly: true
     ord: orderBegin :ctx slots: pn
     k: u64
     for k < pn loop {
-        pi: nextWrittenParam writ: ctx.orderWrit done: ctx.orderDone base: wbase
-        ctx.orderDone.set i: wbase + pi val: true
+        pi: orderNextParam :ctx base: wbase
         k = k + 1
         pname: pnames.get i: pi
         aNid: ctorArgNodeByLabel :ast :call label: pname.stringView
@@ -9431,13 +9646,7 @@ userCreateCallC: function {
     }
     orderDropPositions :ctx base: wbase
     oprefix: orderFinish :ctx st: ord
-    args: String
-    pi2: u64
-    for pi2 < pn loop {
-        if pi2 > 0 then args.append ", "
-        args.append (orderSlotText t: ctx st: ord slot: pi2)
-        pi2 = pi2 + 1
-    }
+    args: orderJoinSlots :ctx st: ord count: pn
     orderEnd :ctx st: ord
     mc3: ctxCname :ctx tid: fid
     return (orderClose prefix: oprefix callee: mc3.stringView args: args.stringView)
@@ -9982,22 +10191,11 @@ userCreateCtor: function {
     cpiNm: ListVal u64
     recFieldLists :ast :symtab tid: cco names: cpn ids: cpi nameIds: cpiNm
     ccn: cpn.length
-    # the arguments are built in the order they are written
-    wbase: ctx.orderWrit.length
-    (ctorArgPositions
-        :ast
-        :call
-        names: cpn
-        labelsOnly: false
-        writ: ctx.orderWrit
-        posAt: ctx.orderPosAt
-    )
-    for ctx.orderDone.length < (wbase + ccn) loop ctx.orderDone.append false
+    wbase: orderPositions :ast :ctx :call names: cpn labelsOnly: false
     ord: orderBegin :ctx slots: ccn
     k: u64
     for k < ccn loop {
-        ci: nextWrittenParam writ: ctx.orderWrit done: ctx.orderDone base: wbase
-        ctx.orderDone.set i: wbase + ci val: true
+        ci: orderNextParam :ctx base: wbase
         k = k + 1
         cpname: cpn.get i: ci
         mk: pendingHoistMark :ctx
@@ -10022,6 +10220,7 @@ userCreateCtor: function {
         constant: true
         if wr > 0 then {
             constant = (orderConstant
+                :ast
                 :symtab
                 :ctx
                 n: (ast.nodes.get i: (writtenArgNode :ast :call pos: wr - 1))
@@ -10046,13 +10245,7 @@ userCreateCtor: function {
     }
     orderDropPositions :ctx base: wbase
     oprefix: orderFinish :ctx st: ord
-    cargs: String
-    ci2: u64
-    for ci2 < ccn loop {
-        if ci2 > 0 then cargs.append ", "
-        cargs.append (orderSlotText t: ctx st: ord slot: ci2)
-        ci2 = ci2 + 1
-    }
+    cargs: orderJoinSlots :ctx st: ord count: ccn
     orderEnd :ctx st: ord
     ccb: ctxCname :ctx tid: cco
     return (orderClose prefix: oprefix callee: ccb.stringView args: cargs.stringView)
@@ -10077,21 +10270,11 @@ emitRecordCtor: function {
     recFieldLists :ast :symtab :tid names: fnames ids: fids nameIds: fidsNm
     fn0: fnames.length
     # the fields' arguments are built in the order they are written
-    wbase: ctx.orderWrit.length
-    (ctorArgPositions
-        :ast
-        :call
-        names: fnames
-        labelsOnly: false
-        writ: ctx.orderWrit
-        posAt: ctx.orderPosAt
-    )
-    for ctx.orderDone.length < (wbase + fn0) loop ctx.orderDone.append false
+    wbase: orderPositions :ast :ctx :call names: fnames labelsOnly: false
     ord: orderBegin :ctx slots: fn0
     k: u64
     for k < fn0 loop {
-        fi: nextWrittenParam writ: ctx.orderWrit done: ctx.orderDone base: wbase
-        ctx.orderDone.set i: wbase + fi val: true
+        fi: orderNextParam :ctx base: wbase
         k = k + 1
         fname: fnames.get i: fi
         (orderRecordField
@@ -10111,13 +10294,7 @@ emitRecordCtor: function {
     }
     orderDropPositions :ctx base: wbase
     oprefix: orderFinish :ctx st: ord
-    args: String
-    fi2: u64
-    for fi2 < fn0 loop {
-        if fi2 > 0 then args.append ", "
-        args.append (orderSlotText t: ctx st: ord slot: fi2)
-        fi2 = fi2 + 1
-    }
+    args: orderJoinSlots :ctx st: ord count: fn0
     orderEnd :ctx st: ord
     rc: ctxCname :ctx :tid
     rc.append "_create"
@@ -10165,6 +10342,7 @@ orderRecordField: function {
     constant: true
     if written > 0 then {
         constant = (orderConstant
+            :ast
             :symtab
             :ctx
             n: (ast.nodes.get i: (writtenArgNode :ast :call pos: written - 1))
@@ -10240,6 +10418,90 @@ ctorArgPositions: function {
         }
         i = i + 1
     }
+}
+
+# orderPositions -- a call's parameters, `names` in declared order, are about to
+# be built in the order their arguments are written: where each argument is
+# written and the positional cursor it is read with, recorded from the returned
+# base.
+orderPositions: function {
+    ast: Ast.view
+    ctx: Ctx
+    call: zast.callrow.view
+    names: (List String).view
+    labelsOnly: bool
+} out u64 is {
+    wbase: ctx.orderWrit.length
+    (ctorArgPositions
+        :ast
+        :call
+        :names
+        :labelsOnly
+        writ: ctx.orderWrit
+        posAt: ctx.orderPosAt
+    )
+    for ctx.orderDone.length < (wbase + names.length) loop ctx.orderDone.append false
+    return wbase
+}
+
+# orderNextParam -- the parameter to build next, marked built.
+orderNextParam: function {ctx: Ctx base: u64} out u64 is {
+    i: nextWrittenParam writ: ctx.orderWrit done: ctx.orderDone :base
+    ctx.orderDone.set i: base + i val: true
+    return i
+}
+
+# orderJoinSlots -- the first `count` argument slots of the call `st` opened,
+# comma separated.
+orderJoinSlots: function {ctx: Ctx.view st: orderstate count: u64} out String is {
+    args: String
+    i: u64
+    for i < count loop {
+        if i > 0 then args.append ", "
+        args.append (orderSlotText t: ctx :st slot: i)
+        i = i + 1
+    }
+    return args
+}
+
+# orderArgAt -- an argument whose value is node `nid` (0 for none), just built
+# from `mark`, placed in evaluation order into `slot`. A temp is typed as its own
+# expression.
+orderArgAt: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    st: orderstate.borrow
+    mark: hoistmark
+    text: String.take
+    nid: u64
+    # the parameter takes the argument by pointer
+    byPtr: bool
+    slot: u64
+} is {
+    constant: true
+    if nid > 0 then constant = (orderConstant
+        :ast
+        :symtab
+        :ctx
+        n: (ast.nodes.get i: nid)
+        text: text.stringView
+        :byPtr
+    )
+    (orderPart
+        :ast
+        :symtab
+        :ctx
+        :st
+        :mark
+        :text
+        :constant
+        fid: ztypes.tid
+        pid: 0
+        pname: zast.nameid
+        ctype: ""
+        :slot
+    )
 }
 
 # orderDropPositions -- a call's parameter positions are read: release them.
@@ -10900,21 +11162,11 @@ emitMetaCreateCall: function {
         recFieldLists :ast :symtab tid: et names: fnames ids: fids nameIds: fidsNm
         fn0: fnames.length
         # the fields' arguments are built in the order they are written
-        wbase: ctx.orderWrit.length
-        (ctorArgPositions
-            :ast
-            :call
-            names: fnames
-            labelsOnly: true
-            writ: ctx.orderWrit
-            posAt: ctx.orderPosAt
-        )
-        for ctx.orderDone.length < (wbase + fn0) loop ctx.orderDone.append false
+        wbase: orderPositions :ast :ctx :call names: fnames labelsOnly: true
         ord: orderBegin :ctx slots: fn0
         k: u64
         for k < fn0 loop {
-            fi: nextWrittenParam writ: ctx.orderWrit done: ctx.orderDone base: wbase
-            ctx.orderDone.set i: wbase + fi val: true
+            fi: orderNextParam :ctx base: wbase
             k = k + 1
             fname: fnames.get i: fi
             wr: ctx.orderWrit.get i: wbase + fi
@@ -10932,6 +11184,7 @@ emitMetaCreateCall: function {
             ct: String
             if wr > 0 then {
                 constant = (orderConstant
+                    :ast
                     :symtab
                     :ctx
                     n: (ast.nodes.get i: (writtenArgNode :ast :call pos: wr - 1))
@@ -10971,13 +11224,7 @@ emitMetaCreateCall: function {
         }
         orderDropPositions :ctx base: wbase
         oprefix: orderFinish :ctx st: ord
-        args: String
-        fi2: u64
-        for fi2 < fn0 loop {
-            if fi2 > 0 then args.append ", "
-            args.append (orderSlotText t: ctx st: ord slot: fi2)
-            fi2 = fi2 + 1
-        }
+        args: orderJoinSlots :ctx st: ord count: fn0
         orderEnd :ctx st: ord
         ecb: ctxCname :ctx tid: et
         ecb.append "_meta_create"
@@ -11794,7 +12041,7 @@ orderFnptrArg: function {
         pid: (ztypes.tid.create from: pid)
         isBorrow: true
     )
-    constant: orderConstant :symtab :ctx n: op text: av.stringView byPtr: addr
+    constant: orderConstant :ast :symtab :ctx n: op text: av.stringView byPtr: addr
     (orderPart
         :ast
         :symtab
@@ -12167,6 +12414,7 @@ orderUserFnArg: function {
     mk: pendingHoistMark :ctx
     txt: userFnArgText :ast :symtab :ctx :fid :pinId :pinNm :argOpNode
     constant: (orderConstant
+        :ast
         :symtab
         :ctx
         n: argOpNode
@@ -33560,16 +33808,34 @@ emitFileMethodCall: function {
         return "\{fc}_write(\{recvExpr}, &\{fvc})"
     }
     if mn == "read" then {
-        iv: ctorArgByLabel :ast :symtab :ctx :call label: "into"
-        mv: ctorArgByLabel :ast :symtab :ctx :call label: "max"
-        ivptr: argIsPointerByLabel :ast :symtab :ctx :call label: "into"
-        if ivptr then return "\{fc}_read(\{recvExpr}, \{iv}, \{mv})"
-        return "\{fc}_read(\{recvExpr}, &\{iv}, \{mv})"
+        return (emitOrderedPair
+            :ast
+            :symtab
+            :ctx
+            :call
+            cb: fc.stringView
+            m: "read"
+            lead: recvExpr.stringView
+            a: "into"
+            aForm: argform.addressed
+            b: "max"
+            bForm: argform.labelled
+        )
     }
     if mn == "seek" then {
-        tv: ctorArgByLabel :ast :symtab :ctx :call label: "to"
-        ov: ctorArgByLabel :ast :symtab :ctx :call label: "from"
-        return "\{fc}_seek(\{recvExpr}, \{tv}, \{ov})"
+        return (emitOrderedPair
+            :ast
+            :symtab
+            :ctx
+            :call
+            cb: fc.stringView
+            m: "seek"
+            lead: recvExpr.stringView
+            a: "to"
+            aForm: argform.labelled
+            b: "from"
+            bForm: argform.labelled
+        )
     }
     if mn == "writeLine" then {
         wlv: ctorArgByLabel :ast :symtab :ctx :call label: "from"
@@ -33732,27 +33998,34 @@ emitIoWrapperCreate: function {
         ids: pids
         nameIds: pidsNm
     )
-    args: String
-    pi: u64
     pn: pnames.length
-    for pi < pn loop {
+    wbase: orderPositions :ast :ctx :call names: pnames labelsOnly: true
+    ord: orderBegin :ctx slots: pn
+    k: u64
+    for k < pn loop {
+        pi: orderNextParam :ctx base: wbase
+        k = k + 1
         pnm: pnames.get i: pi
-        ptid: pids.get i: pi
+        mk: pendingHoistMark :ctx
         astr: (wrapperCreateArg
             :ast
             :symtab
             :ctx
             :call
             label: pnm.stringView
-            ptid: (ztypes.tid.create from: ptid.u64)
+            ptid: (ztypes.tid.create from: (pids.get i: pi))
         )
-        if pi > 0 then args.append ", "
-        args.append astr
-        pi = pi + 1
+        anid: ctorArgNodeByLabel :ast :call label: pnm.stringView
+        orderArgAt :ast :symtab :ctx st: ord mark: mk text: astr nid: anid byPtr: false slot: pi
     }
+    orderDropPositions :ctx base: wbase
+    oprefix: orderFinish :ctx st: ord
+    args: orderJoinSlots :ctx st: ord count: pn
+    orderEnd :ctx st: ord
     wcn: ctxCname :ctx tid: (ztypes.tid.create from: wid.u64)
     typeUseAdd :ctx tid: (ztypes.tid.create from: wid.u64)
-    return "\{wcn}_create(\{args})"
+    wcn.append "_create"
+    return (orderClose prefix: oprefix callee: wcn.stringView args: args.stringView)
 }
 
 # nativeNoArgOf -- the unit that DECLARES `base.memb` when the member is a
@@ -34051,46 +34324,37 @@ emitNativeFreeFnCall: function {
     pidl: ListVal u64
     pidlNm: ListVal u64
     recFieldLists :ast :symtab tid: fid names: pn ids: pidl nameIds: pidlNm
-    args: String
     m: pn.length
-    j: u64
-    positionalIdx: u64
-    for j < m loop {
+    wbase: orderPositions :ast :ctx :call names: pn labelsOnly: false
+    ord: orderBegin :ctx slots: m
+    k: u64
+    for k < m loop {
+        j: orderNextParam :ctx base: wbase
+        k = k + 1
         pname: pn.get i: j
-        pid: pidl.get i: j
-        j = j + 1
-        hasL: ctorHasLabel :ast :call label: pname.stringView
-        av: String
-        if hasL then {
-            av = (emitNativeArg
-                :ast
-                :symtab
-                :ctx
-                :call
-                :fid
-                pname: pname.stringView
-                pid: (ztypes.tid.create from: pid.u64)
-                usePos: false
-                posIdx: 0
-            )
-        } else {
-            av = (emitNativeArg
-                :ast
-                :symtab
-                :ctx
-                :call
-                :fid
-                pname: pname.stringView
-                pid: (ztypes.tid.create from: pid.u64)
-                usePos: true
-                posIdx: positionalIdx
-            )
-            positionalIdx = positionalIdx + 1
-        }
-        if args.length > 0 then args.append ", "
-        args.append av
+        mk: pendingHoistMark :ctx
+        av: (emitNativeArg
+            :ast
+            :symtab
+            :ctx
+            :call
+            :fid
+            pname: pname.stringView
+            pid: (ztypes.tid.create from: (pidl.get i: j))
+            usePos: (ctorHasLabel :ast :call label: pname.stringView).not
+            posIdx: (ctx.orderPosAt.get i: wbase + j)
+        )
+        wr: ctx.orderWrit.get i: wbase + j
+        anid: u64
+        if wr > 0 then anid = writtenArgNode :ast :call pos: wr - 1
+        orderArgAt :ast :symtab :ctx st: ord mark: mk text: av nid: anid byPtr: false slot: j
     }
-    return "z_\{un}_\{mn}(\{args})"
+    orderDropPositions :ctx base: wbase
+    oprefix: orderFinish :ctx st: ord
+    args: orderJoinSlots :ctx st: ord count: m
+    orderEnd :ctx st: ord
+    callee: "z_\{un}_\{mn}"
+    return (orderClose prefix: oprefix callee: callee.stringView args: args.stringView)
 }
 
 # cliCreateClass -- the class name X of a `cli.X.create` callable, else "".
@@ -34149,20 +34413,28 @@ emitCliSpecCreate: function {
         ids: pids
         nameIds: pidsNm
     )
-    args: String
-    pi: u64
     pn: pnames.length
-    for pi < pn loop {
+    wbase: orderPositions :ast :ctx :call names: pnames labelsOnly: true
+    ord: orderBegin :ctx slots: pn
+    k: u64
+    for k < pn loop {
+        pi: orderNextParam :ctx base: wbase
+        k = k + 1
         pnm: pnames.get i: pi
+        mk: pendingHoistMark :ctx
         astr: ctorArgByLabel :ast :symtab :ctx :call label: pnm.stringView
-        if pi > 0 then args.append ", "
-        args.append astr
-        pi = pi + 1
+        anid: ctorArgNodeByLabel :ast :call label: pnm.stringView
+        orderArgAt :ast :symtab :ctx st: ord mark: mk text: astr nid: anid byPtr: false slot: pi
     }
+    orderDropPositions :ctx base: wbase
+    oprefix: orderFinish :ctx st: ord
+    args: orderJoinSlots :ctx st: ord count: pn
+    orderEnd :ctx st: ord
     needsAddM :ctx uname: "cli" memb: "@unit"
     needsAddM :ctx uname: "cli" memb: "spec_create"
     ccb: ctxCname :ctx tid: (ztypes.tid.create from: cid.u64)
-    return "\{ccb}_create(\{args})"
+    ccb.append "_create"
+    return (orderClose prefix: oprefix callee: ccb.stringView args: args.stringView)
 }
 
 # emitResultCombinator -- inline lowering of the built-in combinators `.orPanic`
@@ -34646,6 +34918,7 @@ orderDispatchArg: function {
     mk: pendingHoistMark :ctx
     txt: dispatchArgText :ast :symtab :ctx n: op
     constant: (orderConstant
+        :ast
         :symtab
         :ctx
         n: op

@@ -1,0 +1,116 @@
+# A collection method's, a native row's and a native function's arguments are
+# evaluated as they are written, whatever the order of the parameters they bind;
+# a native row's receiver comes first. Every line prints its ticks ascending.
+tick: function {n: i64} out i64 is {
+    print "t\{n}"
+    return n
+}
+
+# at -- tick `n`, answering the position `i`
+at: function {n: i64 i: u64} out u64 is {
+    print "t\{n}"
+    return i
+}
+
+itick: function {n: i32} out i32 is {
+    print "t\{n}"
+    return n
+}
+
+stick: function {n: i64} out String is {
+    print "t\{n}"
+    return "s\{n}"
+}
+
+vtick: function {n: i64 s: StringView} out StringView is {
+    print "t\{n}"
+    return s
+}
+
+Rect: record { w: i64 h: i64 }
+
+Shape: variant {
+    rect: Rect
+    dot: i64
+}
+
+Slot: record { i: u64 v: i64 }
+
+# a read through a view parameter is copied into an assignable temp
+fillFrom: function {l: (ListVal i64).borrow p: Slot.view} is {
+    l.set i: p.i val: p.v
+    l.insert from: p.v at: p.i
+}
+
+main: function is {
+    print "map"
+    m: MapVV k: i64 v: i64
+    m.set key: (tick n: 1) value: (tick n: 2)
+    m.set value: (tick n: 3) key: (tick n: 4)
+    ms: Map K: String V: String
+    ms.set key: (stick n: 1) value: (stick n: 2)
+    ms.set value: (stick n: 3) key: (stick n: 4)
+    ms.set value: "v\{tick n: 5}" key: "k\{tick n: 6}"
+    ids: IdMapV u64 v: i64
+    ids.set value: (tick n: 1) key: (at n: 2 i: 7)
+    print "\{m.length} \{ms.length} \{ids.length}"
+
+    print "list"
+    l: ListVal i64
+    l.append from: 0
+    l.append from: 0
+    was: l.set val: (tick n: 1) i: (at n: 2 i: 1)
+    was2: l.set i: (at n: 3 i: 0) val: (tick n: 4)
+    l.insert at: (at n: 5 i: 0) from: (tick n: 6)
+    l.insert from: (tick n: 7) at: (at n: 8 i: 1)
+    ls: List String
+    ls.insert at: (at n: 9 i: 0) from: (stick n: 10)
+    ls.insert from: (stick n: 11) at: (at n: 12 i: 0)
+    {
+        part: l.slice to: (at n: 13 i: 3) from: (at n: 14 i: 1)
+        part2: l.slice from: (at n: 15 i: 0) to: (at n: 16 i: 2)
+        print "\{was} \{was2} \{l.length} \{part.length} \{part2.length} \{ls.length}"
+    }
+
+    print "array"
+    a: array t: i64 to: 4
+    old: a.set item: (tick n: 1) i: (tick n: 2)
+    again: a.set i: (tick n: 3) item: (tick n: 4)
+    print "\{old} \{again}"
+
+    print "substring"
+    s: "abcdef".string
+    s1: s.substring to: (at n: 1 i: 3) from: (at n: 2 i: 1)
+    sv: s.stringView
+    s2: sv.substring from: (at n: 3 i: 2) to: (at n: 4 i: 5)
+    print "\{s1} \{s2}"
+
+    print "value arm"
+    c: l.length > 0
+    x: if c then l.set val: (tick n: 1) i: (at n: 2 i: 0) else 0
+    y: if c then ms.has key: "k\{tick n: 3}" else false
+    print "\{x} \{y}"
+
+    print "variant"
+    sh: Shape.rect (Rect h: (tick n: 1) w: (tick n: 2))
+    match (
+        sh
+    ) case rect then print "\{sh.w} \{sh.h}" case dot then print "dot"
+
+    print "native"
+    f: 1.5.f64
+    g: (f.scaleB n: (itick n: 1)).scaleB n: (itick n: 2)
+    r: os.setEnv value: (vtick n: 3 s: "on") key: (vtick n: 4 s: "Z_ORDER_ARGS")
+    r2: os.setEnv key: (vtick n: 5 s: "Z_ORDER_ARGS") value: (vtick n: 6 s: "on")
+    match (
+        r
+    ) case ok then print "\{g} ok" case err then print "\{g} err"
+    match (
+        r2
+    ) case ok then print "ok" case err then print "err"
+
+    print "view source"
+    p: Slot i: 0 v: 9
+    fillFrom :l :p
+    print "\{l.get i: 0} \{l.length}"
+}
