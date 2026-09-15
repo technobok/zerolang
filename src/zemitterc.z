@@ -4207,32 +4207,42 @@ pathThroughNames: function {ast: Ast.view nid: u64} out bool is {
     }
 }
 
-# emitFieldMoveZero -- a field moved into a slot that takes it: the field is
-# zeroed so its owner's destructor finds nothing to free. A heap-pointer
-# collection zeroes to NULL; a type with no destructor needs no zero.
-emitFieldMoveZero: function {
+# fieldMoveInPlace -- an argument that moves a field out -- `h.p.take`, or `h.p`
+# handed to a slot that takes it -- as one C expression that reads the field and
+# zeroes it where the move is written, so its owner's destructor finds nothing
+# to free and whatever runs after the move in the same statement reads the
+# field empty: a later argument of an enclosing call, the other operand, the
+# next interpolation part. "" for any other node, and for a field whose type
+# owns nothing.
+fieldMoveInPlace: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    # the field's member-read node
-    nid: u64
-    ind: StringView
-    buf: String.borrow
-} is {
-    fn: ast.nodes.get i: nid
+    n: astnode.view
+} out String is {
+    none: String
+    disp: symtab.typing.argDisposition.get key: (ztypecheck.nodeId :n).u64
+    if disp.none then return none
+    if disp == ztypes.zparamownership.holdMode then return none
+    fs: fieldMoveNode :ast :n isTake: disp == ztypes.zparamownership.takeMode
+    if fs == 0 then return none
+    fn: ast.nodes.get i: fs
     ftid: stampIdOf :symtab nid: (interpPartNodeId n: fn)
-    heap: isHeapPtrCollection :symtab :ctx tid: ftid
-    if heap.not when (symtab.reg.needsDestructor typeId: ftid).not then return
-    place: emitExpr :ast :symtab :ctx n: fn
-    if (isPlainCPath s: place.stringView).not then return
-    if heap then {
-        zh: "\{ind}\{place} = NULL;\n"
-        buf.append zh
-        return
-    }
-    ftc: typeRefC :ast :symtab :ctx tid: ftid thisTid: ztypes.tid
-    zf: "\{ind}\{place} = (\{ftc}){0};\n"
-    buf.append zf
+    # a field whose type owns nothing has nothing to zero, asked before any text
+    owns: symtab.reg.needsDestructor typeId: ftid
+    if owns.not then owns = isHeapPtrCollection :symtab :ctx tid: ftid
+    if owns.not then return none
+    place: String
+    match (
+        fn
+    ) case dottedpath then {
+        place = emitDottedRead :ast :symtab :ctx n: fn
+    } else null
+    if (isPlainCPath s: place.stringView).not then return none
+    zero: armTakeZeroC :ast :symtab :ctx tid: ftid
+    if zero.length == 0 then return none
+    mv: "({ __typeof__(\{place}) _mv = \{place}; \{place} = \{zero}; _mv; })"
+    return mv
 }
 
 # emitExplicitTakeZero -- an explicit `<atom>.take` argument: the source is
@@ -4334,7 +4344,7 @@ emitCallTakeInvalidations: function {
                 emitExplicitTakeZero :ast :symtab :ctx :a ts: ts.stringView :ind :buf
             }
         } else if fieldSrc > 0 then {
-            if isHold.not then emitFieldMoveZero :ast :symtab :ctx nid: fieldSrc :ind :buf
+            # zeroed where the move is written (fieldMoveInPlace)
         } else if isTake then {
             emitImplicitMoveZero :ast :symtab :ctx :a :ind :buf
         }
@@ -15812,6 +15822,8 @@ emitExpr: function {
         lvv: atomVid :symtab nid: n.nodeid.u64
         return (emitLocalAtomNameAt :symtab :ctx nid: n.nodeid.u64 name: lvC.stringView vid: lvv)
     } case dottedpath then {
+        fmv: fieldMoveInPlace :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64)
+        if fmv.length > 0 then return fmv
         return (emitDottedRead :ast :symtab :ctx :n)
     } case atomstring then {
         li: litIndexOf :ctx nid: n.nodeid.u64

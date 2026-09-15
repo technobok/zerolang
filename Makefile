@@ -976,7 +976,11 @@ perf: $(PERFBIN)
 # +7,375 when a field moved into an argument came to be gone for the rest of the
 # call: +9 over the same source (zc moves no field while its call reads the
 # owner, so the read check never runs), +7,364 the source longer.
-ALLOC_BASELINE := 2780980
+#
+# +443 when a field moved into an argument came to be zeroed where the move is
+# written: +0 over the same source (whether a field owns anything is asked
+# before any text is built), the source longer.
+ALLOC_BASELINE := 2781423
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
