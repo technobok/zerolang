@@ -31012,6 +31012,7 @@ unnamedReceiverLocal: function {
     vid: st.reg.newVariable ztypeId: recvT ownership: ztypes.zownership.owned
     tnId: zast.poolSet pool: ast.names text: tname.stringView
     st.defineVar nameId: tnId :vid
+    st.typing.lineUnnamedLocals.append tnId
     dst.append tnId
 }
 
@@ -31030,6 +31031,7 @@ adoptPinnedArgTemps: function {st: zenv.ZSymbolTable pins: (List ztyping.PinPath
                 ownership: ztypes.zownership.owned
             )
             st.defineVar nameId: r :vid
+            st.typing.lineUnnamedLocals.append r
         }
     }
 }
@@ -38966,13 +38968,32 @@ checkStatement: function {
             if sline.statementline then innerId = sline.statementline
         }
         dk: zenv.divkind.none
+        ul0: st.typing.lineUnnamedLocals.length
         if innerId.isZero.not then {
             dk = checkStmtInner :st :unitDecl :ast :innerId lineId: slnId
         }
+        recordTempHoldingLine :st lineId: slnId from: ul0
         drainPendingBorrow :st
         if dk > 0 then st.markUnreachable kind: dk
         if dk == zenv.divkind.cont then st.recordContinueTakes
     }
+}
+
+# recordTempHoldingLine -- a statement line that made unnamed locals ends: one a
+# binding still locks keeps its temporary to the end of the block, so the line
+# is recorded; the others are released with the statement. The names are
+# dropped either way.
+recordTempHoldingLine: function {st: zenv.ZSymbolTable lineId: zast.nodeid from: u64} is {
+    held: false
+    i: from
+    for i < st.typing.lineUnnamedLocals.length loop {
+        p: ListVal zast.nameid
+        p.append (st.typing.lineUnnamedLocals.get :i)
+        if (st.isPathLocked path: p) then held = true
+        i = i + 1
+    }
+    if held then st.typing.tempHoldingLines.add item: lineId.u64
+    for st.typing.lineUnnamedLocals.length > from loop st.typing.lineUnnamedLocals.pop
 }
 
 # walkBodyAt -- walk a function body by its table id (0 = a spec method, no body).

@@ -29,6 +29,9 @@ OwedFree: class {
     stmt: String
     # the variable the local binds, 0 for a temp
     vid: ztypes.vid
+    # an argument's temporary, released at the end of its statement rather
+    # than of the block
+    temp: bool
 }
 
 # TmpCtr -- per-function temp name counter, and the destructors owed at the
@@ -52,12 +55,17 @@ TmpCtr: class {
 
     # oweFree -- a String local to free at block end
     oweFree: function {:this name: String.take vid: ztypes.vid} is {
-        this.frees.append (OwedFree :name stmt: String :vid)
+        this.frees.append (OwedFree :name stmt: String :vid temp: false)
     }
 
     # oweList -- a collection or class local to destroy at block end
     oweList: function {:this stmt: String.take name: String.take vid: ztypes.vid} is {
-        this.listFrees.append (OwedFree :name :stmt :vid)
+        this.listFrees.append (OwedFree :name :stmt :vid temp: false)
+    }
+
+    # oweTemp -- an argument's temporary to destroy at the end of its statement
+    oweTemp: function {:this stmt: String.take name: String.take} is {
+        this.listFrees.append (OwedFree :name :stmt vid: (ztypes.vid.create from: 0) temp: true)
     }
 }
 
@@ -5894,9 +5902,7 @@ flushArgHoists: function {
             buf.append "\{ind}\{cty} \{nmo} = \{vlo};\n"
         }
         dto: ctx.argHoistDtors.get :i
-        if dto.length > 0 then {
-            tmp.oweList stmt: dto.copy name: nmo.copy vid: (ztypes.vid.create from: 0)
-        }
+        if dto.length > 0 then tmp.oweTemp stmt: dto.copy name: nmo.copy
         i = i + 1
     }
     ri: rfl
@@ -18205,6 +18211,66 @@ emitDoStmt: function {
 
 # emitStmt -- one statement of a function body.
 emitStmt: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    tL: tmp.listFrees.length
+    emitStmtParts :ast :symtab :ctx :n :ind :tmp :buf
+    releaseStatementTemps :ast :symtab :ctx :n :tmp from: tL :buf
+}
+
+# releaseStatementTemps -- the temporaries a statement line's arguments needed
+# end with the statement: their releases are emitted after it, and dropped from
+# the block's. A line the checker records as holding one -- a binding still
+# locks it -- keeps them to the end of the block, and a line that diverges has
+# released them already, on its way out.
+releaseStatementTemps: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    n: astnode.view
+    tmp: TmpCtr
+    # the block's releases owed before the statement began
+    from: u64
+    buf: String.borrow
+} is {
+    if tmp.listFrees.length <= from then return
+    anyTemp: false
+    i: from
+    for i < tmp.listFrees.length loop {
+        if (tmp.listFrees.get :i).temp then anyTemp = true
+        i = i + 1
+    }
+    if anyTemp.not then return
+    lineId: u64
+    match (
+        n
+    ) case statementline then {
+        lineId = n.nodeid.u64
+    } else {
+        return
+    }
+    if (symtab.typing.tempHoldingLines.has item: lineId) then return
+    live: (stmtDiverges :ast :symtab :ctx sid: (zast.nodeid.create from: lineId)).not
+    kept: List OwedFree
+    for tmp.listFrees.length > from loop {
+        o: tmp.listFrees.pop
+        if o.temp then {
+            if live then buf.append o.stmt
+        } else {
+            kept.append o
+        }
+    }
+    for kept.length > 0 loop tmp.listFrees.append kept.pop
+}
+
+# emitStmtParts -- one statement, whatever its shape.
+emitStmtParts: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx

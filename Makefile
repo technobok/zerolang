@@ -920,7 +920,12 @@ perf: $(PERFBIN)
 # local: the adopted temps and their pins over the same source, and the source
 # 35 lines longer. (A tid-valued id map was a new instantiation that cost
 # +1,400 more; the u64-valued one the checker already mints carries the tid.)
-ALLOC_BASELINE := 2666833
+#
+# +2,306 when an argument's temporary came to be released at the end of its
+# statement: over the same source the new compiler allocates 152 fewer (a release
+# is emitted once after its statement instead of on every return path), and the
+# source is 96 lines longer.
+ALLOC_BASELINE := 2669139
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
