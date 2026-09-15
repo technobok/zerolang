@@ -1,0 +1,83 @@
+# A value with something to destroy -- a class, a union, an IdSet or IdMapV --
+# bound from an `if` or a `match` is destroyed at its scope end like any other
+# binding: whichever arm ran, constructed, moved from a local or yielded by a
+# block. A String stays freed once.
+Box2: class {
+    s: String
+}
+
+Shape: union {
+    name: String
+    other: String
+}
+
+Mode: variant {
+    a: null
+    b: null
+}
+
+classIf: function {c: bool} out u64 is {
+    d: if c then (Box2 s: "a".string) else (Box2 s: "bb".string)
+    return d.s.length
+}
+
+classMatch: function {m: Mode} out u64 is {
+    d: match (m) case a then (Box2 s: "a".string) case b then (Box2 s: "bb".string)
+    return d.s.length
+}
+
+classLocal: function {c: bool} out u64 is {
+    o: Box2 s: "local".string
+    d: if c then o else (Box2 s: "bb".string)
+    return d.s.length
+}
+
+classBlock: function {c: bool} out u64 is {
+    d: if c then {
+        x: Box2 s: "blk".string
+        x
+    } else (Box2 s: "bb".string)
+    return d.s.length
+}
+
+unionIf: function {c: bool} out u64 is {
+    t: if c then (Shape.name "abc".string) else (Shape.other "de".string)
+    match (t) case name then return t.length case other then return 0
+}
+
+unionLocal: function {c: bool} out u64 is {
+    u: Shape.name "local".string
+    t: if c then u else (Shape.other "de".string)
+    match (t) case name then return t.length case other then return 0
+}
+
+idSet: function {c: bool} out u64 is {
+    m: IdSet u64
+    m.add item: 3
+    r: if c then m.take else (IdSet u64)
+    return r.length
+}
+
+idMap: function {m: Mode} out u64 is {
+    s: (IdMapV u64 v: u64)
+    s.set key: 1 value: 2
+    r: match (m) case a then s.take case b then (IdMapV u64 v: u64)
+    return r.length
+}
+
+stringOnce: function {c: bool} out u64 is {
+    s: if c then "abc".string else "de".string
+    return s.length
+}
+
+main: function is {
+    print "classIf \{classIf c: true} \{classIf c: false}"
+    print "classMatch \{classMatch m: Mode.a} \{classMatch m: Mode.b}"
+    print "classLocal \{classLocal c: true} \{classLocal c: false}"
+    print "classBlock \{classBlock c: true} \{classBlock c: false}"
+    print "unionIf \{unionIf c: true} \{unionIf c: false}"
+    print "unionLocal \{unionLocal c: true} \{unionLocal c: false}"
+    print "idSet \{idSet c: true} \{idSet c: false}"
+    print "idMap \{idMap m: Mode.a} \{idMap m: Mode.b}"
+    print "stringOnce \{stringOnce c: true} \{stringOnce c: false}"
+}
