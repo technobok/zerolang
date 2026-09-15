@@ -8511,7 +8511,7 @@ emitListMethodCall: function {
             a: "i"
             aForm: argform.value
             b: "val"
-            bForm: argform.value
+            bForm: argform.moved
         )
     }
     if (mnIs :ctx id: mnId at: mnPop) then {
@@ -8528,7 +8528,7 @@ emitListMethodCall: function {
             m: "insert"
             lead: recvR.stringView
             a: "from"
-            aForm: argform.value
+            aForm: argform.moved
             b: "at"
             bForm: argform.value
         )
@@ -8541,7 +8541,7 @@ emitListMethodCall: function {
         return e5
     }
     if mnId == zast.names.wkContains then {
-        vc: listArg :ast :symtab :ctx :call label: "item"
+        vc: colArg :ast :symtab :ctx :call label: "item" consumes: false
         e6: "\{cb}_contains(\{recvR}, \{vc})"
         return e6
     }
@@ -9015,8 +9015,7 @@ emitColInterpArg: function {
     sx: emitInterpArgExpr :ast :symtab :ctx :n
     if sx.length == 0 then {
         if consumes then return "".string
-        tn: stampNameDeep :symtab :n
-        if tn.stringView != "String" then return "".string
+        if ((stampTidDeep :symtab :n) == ctx.strTid).not then return "".string
         ex: emitExpr :ast :symtab :ctx :n
         if (isNonLvalueArg s: ex.stringView).not then return "".string
         sx = ex
@@ -16591,25 +16590,34 @@ stampNameDeep: function {
     symtab: zenv.ZSymbolTable.view
     n: astnode.view
 } out String is {
+    sid: stampTidDeep :symtab :n
+    if sid.isZero then return "".string
+    return (regNameOf :symtab tid: sid)
+}
+
+# stampTidDeep -- a node's stamped type, unwrapping a value-position FUNCTION
+# stamp to its return type; zero when the node has none.
+stampTidDeep: function {
+    symtab: zenv.ZSymbolTable.view
+    n: astnode.view
+} out ztypes.tid is {
     nid: interpPartNodeId :n
     sid: stampIdOf :symtab :nid
-    if sid > 0 then {
-        # a value-position FUNCTION stamp is an auto-call; its value
-        # type is the method's return.
-        if (symtab.reg.typetypeOf typeId: sid) == ztypes.ztypetype.functionType then {
-            rto: fnReturnTidOf :symtab tid: sid
-            if rto > 0 then return (regNameOf :symtab tid: (ztypes.tid.create from: rto.u64))
-            rno: symtab.typing.funcReturnNode.get key: sid
-            match (
-                rno
-            ) case some then {
-                rrt: stampIdOf :symtab nid: rno
-                if rrt > 0 then return (regNameOf :symtab tid: rrt)
-            } case none then null
-        }
-        return (regNameOf :symtab tid: sid)
+    if sid.isZero then return sid
+    # a value-position FUNCTION stamp is an auto-call; its value type is the
+    # method's return.
+    if (symtab.reg.typetypeOf typeId: sid) == ztypes.ztypetype.functionType then {
+        rto: fnReturnTidOf :symtab tid: sid
+        if rto > 0 then return (ztypes.tid.create from: rto.u64)
+        rno: symtab.typing.funcReturnNode.get key: sid
+        match (
+            rno
+        ) case some then {
+            rrt: stampIdOf :symtab nid: rno
+            if rrt > 0 then return rrt
+        } case none then null
     }
-    return "".string
+    return sid
 }
 
 # emitPrintStmt -- a statement-position print call.
