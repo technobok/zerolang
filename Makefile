@@ -928,7 +928,10 @@ perf: $(PERFBIN)
 #
 # +588 when a for initialiser of a type that is not a scalar came to be declared
 # with its C type and released: the source ~30 lines longer.
-ALLOC_BASELINE := 2669727
+#
+# +302 when a take Box parameter came to be released through its pointer: the
+# source ~12 lines longer.
+ALLOC_BASELINE := 2670029
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
