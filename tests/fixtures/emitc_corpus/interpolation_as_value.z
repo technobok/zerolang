@@ -1,0 +1,75 @@
+# An interpolated string is an owned String value, built where it is evaluated,
+# wherever a value can stand -- not only as a binding or an argument. As the
+# receiver of a member or method, as an operand, as an `if` or `match` arm, as a
+# loop condition, inside another interpolation and in a generator, each was
+# refused by the emitter. Only the chosen arm is built, a receiver is built
+# before its arguments, and every temporary is released (the loop builds a
+# thousand).
+Counter: class {
+    n: i64
+}
+
+tick: function {c: Counter label: StringView} out i64 is {
+    print "\{label} at \{c.n}"
+    c.n = c.n + 1
+    return c.n
+}
+
+keep: function {s: String.take} out u64 is {
+    return s.length
+}
+
+lengthOf: function {s: String} out u64 is {
+    return s.length
+}
+
+Nums: generator { n: i64 } as {
+    call: function out u64 is {
+        yield "\{this.n}".length
+        yield "\{this.n}\{this.n}".length
+    }
+}
+
+main: function is {
+    x: 5
+    n: "\{x}".length
+    print "member \{n}, nested \{"\{x}\{x}".length}"
+    starts: "\{x}".startsWith prefix: "5"
+    view: "\{x}".stringView
+    print "method \{starts}, view \{view}"
+    same: "\{x}" == "5"
+    if "\{x}" == "5" then print "operand \{same}"
+
+    c: (Counter n: 0)
+    pick: false
+    chosen: if pick then "\{tick :c label: "then"}" else "\{tick :c label: "else"}"
+    print "if arm \{chosen}"
+    b: "\{tick :c label: "receiver"}".startsWith prefix: (if (tick :c label: "argument") > 0 then "2" else "x")
+    print "ordered \{b}"
+    m: match (x > 3) case true then "\{x} big" case false then "\{x} small"
+    print "match arm \{m}"
+    s: "a".string
+    s = if pick then "\{1}" else "\{2}"
+    print "reassigned \{s}"
+    print "moved \{keep s: (if pick then "\{1}" else "\{22}")}, borrowed \{lengthOf s: (if pick then "\{1}" else "\{333}")}"
+    words: List String
+    words.append (if x > 3 then "\{x} appended" else "\{x} small")
+    for w: words.iterate loop {
+        print w
+    }
+
+    i: 0
+    total: 0.u64
+    for i < 1000 loop {
+        total = total + "item \{i}".length
+        i = i + 1
+    }
+    k: 0
+    for "\{k}".length < 2 loop {
+        k = k + 3
+    }
+    print "loops \{total} \{k}"
+    for v: (Nums n: 42) loop {
+        print "generator \{v}"
+    }
+}
