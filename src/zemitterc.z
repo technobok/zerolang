@@ -32460,7 +32460,8 @@ monoDependsOnUser: function {
     return false
 }
 
-# monoIsLate -- the mono embeds a user type by value (a fresh seen per query).
+# monoIsLate -- the mono embeds a user type by value (a fresh seen per query), or
+# holds another collection.
 monoIsLate: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -32469,7 +32470,26 @@ monoIsLate: function {
     userList: (ListVal u64).view
 } out bool is {
     seen: ListVal u64
-    return (monoDependsOnUser :ast :symtab :ctx :monoId :userList :seen)
+    if (monoDependsOnUser :ast :symtab :ctx :monoId :userList :seen) then return true
+    return (monoHoldsCollection :symtab :ctx :monoId)
+}
+
+# monoHoldsCollection -- an element, key or value of the mono is itself a
+# collection mono. The early passes write one family at a time, so that element
+# can come after the container bodies that index it (a ListView's iterator is
+# written before the List family); the late group orders the pair instead.
+monoHoldsCollection: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view monoId: ztypes.tid
+} out bool is {
+    elems: ListVal u64
+    monoElemIdsOf :symtab :ctx :monoId acc: elems
+    ei: u64
+    for ei < elems.length loop {
+        ce: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: (elems.get i: ei))
+        if (isCollectionOriginTid :ctx originTid: (originTidOf :symtab tid: ce)) then return true
+        ei = ei + 1
+    }
+    return false
 }
 
 # userDefnRefsUnemitted -- does the user type have a by-value field whose type is
