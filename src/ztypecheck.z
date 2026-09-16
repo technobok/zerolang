@@ -22468,6 +22468,9 @@ baseIsPrivateCapable: function {
 # Only a bare shell, which no unit declares, stays lenient: it has no member
 # set yet for the check to be complete against.
 memberStrictType: function {st: zenv.ZSymbolTable.view bt: u64} out bool is {
+    # `null` -- what a function without an `out` returns -- declares nothing, so
+    # its member set is complete and empty
+    if bt > 0 when bt == st.typing.nullTypeId then return true
     tt: st.reg.typetypeOf typeId: (ztypes.tid.create from: bt.u64)
     isConc: (
         tt ==
@@ -22671,12 +22674,16 @@ checkCopyMember: function {
     bt: ztypes.tid
     cnId: zast.nameid
 } out callleg is {
-    # a FUNCTION value declines here so it takes the same refusal every other
-    # member read on one takes: "no default copy -- define a 'copy' method" is
-    # advice a function cannot follow, because nothing declares members on it
-    if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.functionType then {
-        return (callleg handled: false tid: (ztypes.tid.create from: 0))
-    }
+    # a FUNCTION value and `null` decline here so they take the same refusal
+    # every other member read on them takes: "no default copy -- define a
+    # 'copy' method" is advice neither can follow, because nothing declares
+    # members on them
+    noMembers: (
+        (st.reg.typetypeOf typeId: bt) ==
+        ztypes.ztypetype.functionType or
+        (bt.isZero.not and (bt.u64 == st.typing.nullTypeId))
+    )
+    if noMembers then return (callleg handled: false tid: (ztypes.tid.create from: 0))
     if (zast.nameTextEq
         :ast
         ref: cnId
