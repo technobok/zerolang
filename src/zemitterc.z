@@ -16688,7 +16688,17 @@ operandValueC: function {
 } out String is {
     n: ast.nodes.get i: nid
     v: valueExprC :ast :symtab :ctx :n
-    if (nodeIsAtomBox :symtab :n) then return "(*\{v})"
+    if (nodeIsAtomBox :ast :symtab :ctx :n) then {
+        # a by-pointer PARAMETER holds the box through a second pointer, so its
+        # value is two derefs away: one for the parameter, one for the box. With
+        # one, `b + 0` added to an address and `b == 7` compared one.
+        if (isPtrVid :ctx vid: (atomVid :symtab :nid)) then {
+            bpv: "(*(*\{v}))"
+            return bpv
+        }
+        bxv: "(*\{v})"
+        return bxv
+    }
     return v
 }
 
@@ -26232,15 +26242,31 @@ isBoxTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is 
 
 # nodeIsAtomBox -- n is a bare atom whose type is a builtin Box (a heap pointer),
 # so an arithmetic/compare operand must auto-deref (`b` -> `(*b)`).
+#
+# The stamp is asked first and then CANONICALISED, because a PARAMETER's type is
+# a fresh shell id named after the real one: a Box local answered here and a Box
+# parameter did not, so `b + 0` added one to an address and `b == 7` compared
+# the address. typeRefC canonicalises before the same question for the same
+# reason.
 nodeIsAtomBox: function {
+    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
     n: astnode.view
 } out bool is {
     match (
         n
     ) case atomid then {
         bxt: stampIdOf :symtab nid: n.nodeid.u64
-        return (isBoxTid :symtab tid: bxt)
+        if (isBoxTid :symtab tid: bxt) then return true
+        if bxt.isZero then return false
+        bxc: u64
+        {
+            bxn: regNameView :symtab tid: bxt
+            bxc = canonTypeId :ast :symtab :ctx tid: bxt name: bxn
+        }
+        if bxc == 0 then return false
+        return (isBoxTid :symtab tid: (ztypes.tid.create from: bxc.u64))
     } else {
         return false
     }

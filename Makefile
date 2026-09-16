@@ -1036,7 +1036,10 @@ perf: $(PERFBIN)
 #
 # +140 when a `.take` Set/Map parameter became the pointer it always was: +0
 # over the same source (no program in the tree had one), the source longer.
-ALLOC_BASELINE := 2816821
+#
+# +451 when a Box PARAMETER's operand came to deref twice: +0 over the same
+# source (the compiler boxes nothing), the source longer.
+ALLOC_BASELINE := 2817271
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
