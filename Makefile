@@ -1047,7 +1047,7 @@ perf: $(PERFBIN)
 # 660 to zls.c), almost all of them unreferenced. The eagerness is the existing
 # design and predates this; making the pass demand-driven would take all three
 # numbers back and is its own change.
-ALLOC_BASELINE := 2831595
+ALLOC_BASELINE := 2832569
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

@@ -14506,7 +14506,7 @@ emitUserTypeMemberRead: function {
         ffcc: ioCanonCname :ast :symtab :ctx canon: fbtn
         if ffcc.length > 0 then ffc = ffcc
         if isNetU then {
-            needsAddM :ctx uname: "net" memb: "@unit"
+            demandNetMember :ctx tid: bstamp.u64 member: mn2
         } else {
             needsAddM :ctx uname: "io" memb: "@unit"
             ffm: "file_\{mn2}"
@@ -29002,8 +29002,11 @@ emitCodeBody: function {
             needsAddM :ctx uname: "io" memb: "file_seek"
             needsAddM :ctx uname: "io" memb: "file_flush"
         }
-        if (netUnitLive ast: program :symtab :ctx) then {
-            needsAddM :ctx uname: "net" memb: "@unit"
+        if (netListenerLive ast: program :symtab :ctx) then {
+            typeUseAdd :ctx tid: (ztypes.tid.create from: ctx.netListenerTid)
+        }
+        if (netConnLive ast: program :symtab :ctx) then {
+            typeUseAdd :ctx tid: (ztypes.tid.create from: ctx.netConnTid)
         }
         emitMonos ast: program :symtab :ctx :runtimeDir buf: codeBuf
         # ahead of the runtime fragments: those dereference the layouts of the
@@ -31758,18 +31761,36 @@ ioFileLive: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx.view
     return true
 }
 
-# netUnitLive -- net's fd-holder classes are present AND the byte-buffer monos
-# their read/write fragments dereference exist. The net analogue of ioFileLive,
-# and the same order-independent gate: true exactly when the net runtime's
-# referenced monos have been demanded.
-netUnitLive: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out bool is {
-    if ctx.netConnTid == 0 then return false
-    if ctx.netListenerTid == 0 then return false
+# netListenerLive / netConnLive -- a net fd-holder type is in the program: the
+# Result its constructor hands back has been minted, which only a listen, an
+# accept or a connect does. The net analogue of ioFileLive, and the same
+# order-independent gate. A Conn's read and write fragments also dereference the
+# byte-buffer monos, so a Conn is live only once those exist too.
+netListenerLive: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out bool is {
+    return (netResultOf :ast :symtab tid: ctx.netListenerTid).isZero.not
+}
+
+# netConnLive -- see netListenerLive.
+netConnLive: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out bool is {
+    if (netResultOf :ast :symtab tid: ctx.netConnTid).isZero then return false
     listValU8Tid: specStemTid :ast :symtab base: "ListVal" arg1: "u8" arg2: ""
     if listValU8Tid.isZero then return false
     listViewValU8Tid: specStemTid :ast :symtab base: "ListViewVal" arg1: "u8" arg2: ""
     if listViewValU8Tid.isZero then return false
     return true
+}
+
+# netResultOf -- the `Result <T> E: IoError` instance over net type `tid`, 0 when
+# the program never minted it (or `tid` is absent). The net type is passed by id:
+# an unqualified name lookup does not reach the net unit.
+netResultOf: function {ast: Ast.view symtab: zenv.ZSymbolTable.view tid: u64} out ztypes.tid is {
+    if tid == 0 then return (ztypes.tid.create from: 0)
+    return (specTidArgs
+        :symtab
+        templateTid: (builtinTid :ast :symtab base: "Result")
+        a1: tid
+        a2: (builtinTid :ast :symtab base: "IoError")
+    )
 }
 
 # cliClassTypeId -- the type id of a cli-unit CLASS named `name` (0 absent).
@@ -32033,13 +32054,15 @@ emitIoFileClass: function {ctx: Ctx buf: String.borrow} is {
 }
 
 # emitNetFdClass -- one net fd-holder class ({ int32_t fd; bool closed } + a
-# close-once destructor), the net analogue of emitIoFileClass. The net runtime
-# fragments dereference the fields, so the body is pre-emitted here and the
-# type marked in ctx.emittedUserTypes so the ordered user-struct pass skips it
-# (that pass runs after the fragments -- too late).
+# close-once destructor) when the program made one, the net analogue of
+# emitIoFileClass. The net runtime fragments dereference the fields, so the
+# body is pre-emitted here and the type marked in ctx.emittedUserTypes so the
+# ordered user-struct pass skips it (that pass runs after the fragments -- too
+# late).
 emitNetFdClass: function {ctx: Ctx tid: u64 buf: String.borrow} is {
     fid: ztypes.tid.create from: tid
     if fid.isZero then return
+    if (typeIsUsed :ctx tid: fid).not then return
     if (ctx.emittedUserTypes.has item: fid) then return
     ctx.emittedUserTypes.add item: fid.u64
     fc: ctxCname :ctx tid: fid
@@ -32054,11 +32077,19 @@ emitNetFdClass: function {ctx: Ctx tid: u64 buf: String.borrow} is {
     buf.append l1
 }
 
-# emitNetClasses -- the net fd-holder value reps (Listener/Conn), need-gated.
+# emitNetClasses -- the net fd-holder value reps (Listener/Conn).
 emitNetClasses: function {ctx: Ctx buf: String.borrow} is {
-    if (needsHasM :ctx uname: "net" memb: "@unit").not then return
     emitNetFdClass :ctx tid: ctx.netListenerTid :buf
     emitNetFdClass :ctx tid: ctx.netConnTid :buf
+}
+
+# demandNetMember -- load the fragment of a Listener's native method, demanded as
+# `listener_<name>`. A Conn's methods load on the Conn itself (netConnLive), so a
+# Conn call demands nothing here.
+demandNetMember: function {ctx: Ctx tid: u64 member: StringView} is {
+    if tid != ctx.netListenerTid then return
+    lm: "listener_\{member}"
+    needsAddM :ctx uname: "net" memb: lm.stringView
 }
 
 # maybePreEmitElem -- a user type (variant/record/class/union) used as a
@@ -34923,7 +34954,7 @@ emitFileMethodCall: function {
         ) then isNet = true
     }
     if isNet then {
-        needsAddM :ctx uname: "net" memb: "@unit"
+        demandNetMember :ctx tid: fid.u64 member: mn
     } else {
         needsAddM :ctx uname: "io" memb: "@unit"
         fmm: "file_\{mn}"
