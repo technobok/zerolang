@@ -22503,7 +22503,8 @@ memberStrictType: function {st: zenv.ZSymbolTable.view bt: u64} out bool is {
         (tt == ztypes.ztypetype.classType) or
         (tt == ztypes.ztypetype.unionType) or
         (tt == ztypes.ztypetype.variantType) or
-        (tt == ztypes.ztypetype.dataType)
+        (tt == ztypes.ztypetype.dataType) or
+        (tt == ztypes.ztypetype.functionType)
     )
     if isConc.not then return false
     if (st.reg.hasType typeId: (ztypes.tid.create from: bt.u64)).not then return false
@@ -22623,6 +22624,10 @@ reportUnknownMember: function {
         ) case some then {
             stillMiss = false
         } case none then null
+        # a function's PARAMETERS are its declared children, but a parameter is
+        # not a member of the function VALUE: only a CALL reaches one, and it
+        # reaches it by label. So a function base misses whatever was found.
+        if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.functionType then stillMiss = true
         # A generic PARAMETER is read by name through the type that declares
         # it: `this.cap` in a `Buffer` body and `b.cap` on a `(Buffer cap: 8)`
         # each read the value an instance was made with. A parameter is a
@@ -22694,6 +22699,12 @@ checkCopyMember: function {
     bt: ztypes.tid
     cnId: zast.nameid
 } out callleg is {
+    # a FUNCTION value declines here so it takes the same refusal every other
+    # member read on one takes: "no default copy -- define a 'copy' method" is
+    # advice a function cannot follow, because nothing declares members on it
+    if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.functionType then {
+        return (callleg handled: false tid: (ztypes.tid.create from: 0))
+    }
     if (zast.nameTextEq
         :ast
         ref: cnId
@@ -24183,6 +24194,13 @@ checkMemberNamespace: function {
     # an interface's members are the conformer's methods, reached through a value
     btt: st.reg.typetypeOf typeId: bt
     if btt == ztypes.ztypetype.protocolType or (btt == ztypes.ztypetype.facetType) then return true
+    # a function VALUE has no members: its parameters are its declared children,
+    # so a read of one RESOLVED and reached the C as a field of a function
+    # pointer. One rule, reported where the missing case is reported.
+    if btt == ztypes.ztypetype.functionType then {
+        reportUnknownMember :st :ast :dp :bt :cnId
+        return false
+    }
     if (
         (st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)) !=
         ztypes.ztypetype.functionType

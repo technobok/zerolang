@@ -1025,7 +1025,11 @@ perf: $(PERFBIN)
 # -275 when sixteen bindings that only renamed their source were removed: each
 # was a local the emitter built and a pin the checker installed, for a name used
 # once or twice right below it.
-ALLOC_BASELINE := 2814853
+#
+# +440 when a member read on a FUNCTION VALUE came to be refused: +0 over the
+# same source -- the legs run only where a member is read off a function, which
+# is now an error -- and +440 the source longer.
+ALLOC_BASELINE := 2815293
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
