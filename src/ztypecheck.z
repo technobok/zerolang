@@ -206,15 +206,18 @@ stampParamSuppressed: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out 
 }
 
 # stampGate -- a body-walk node stamp, routed: an instance walk writes the
-# mono table under the substituted tid, a template walk drops a param answer,
-# and every other walk writes the plain node type.
+# mono table under the substituted tid, a template walk keeps a param answer to
+# itself, and every other walk writes the plain node type.
 stampGate: function {st: zenv.ZSymbolTable nid: u64 tid: ztypes.tid} is {
     if st.typing.curMonoStamp > 0 then {
         mk: ztyping.monostamp mono: st.typing.curMonoStamp node: nid
         st.typing.monoNodeType.set key: mk value: (monoSubstTid :st :tid)
         return
     }
-    if (stampParamSuppressed :st :tid) then return
+    if (stampParamSuppressed :st :tid) then {
+        st.templateStamps.set key: nid value: tid
+        return
+    }
     ztyping.nodeTypeSet tbl: st.typing.nodeType :nid :tid
 }
 
@@ -21592,7 +21595,7 @@ pathNamesType: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} out bo
         isReexport = rdd.kind.reexportDecl
     }
     if isReexport.not then return isType
-    pst: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: nid.u64
+    pst: walkTypeOf :st nid: nid.u64
     if pst.isZero then return false
     return (st.reg.typetypeOf typeId: pst) != ztypes.ztypetype.functionType
 }
@@ -22446,7 +22449,7 @@ baseIsPrivateCapable: function {
         if cnm.stringView == "private" then return true
         pbNode: ast.nodes.get i: baseNode.parent.u64
         pbNid: nodeId n: pbNode
-        pbType: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: pbNid.u64
+        pbType: walkTypeOf :st nid: pbNid.u64
         if pbType > 0 when (st.typing.declGrantsPrivate
             pool: ast.names
             parentTypeId: (ztypes.tid.create from: pbType.u64)
@@ -26452,7 +26455,7 @@ predFactOf: function {
         ta0: truthyCondArmOf :st nid: (nodeId :n).u64
         if ta0 > 0 then {
             sj0: bareAtomNameId :n
-            ft0: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: (nodeId :n).u64
+            ft0: walkTypeOf :st nid: (nodeId :n).u64
             if sj0.isZero.not when ft0.isZero.not then {
                 return (Option.some (ArmPredFact
                     subject: sj0
@@ -26734,7 +26737,7 @@ lastStmtType: function {st: zenv.ZSymbolTable.view ast: Ast.view block: astnode.
             lastId: zast.kidAt kids: ast.kids span: block.statements i: ne - 1
             last: ast.nodes.get i: lastId.u64
             if last.statementline then {
-                lst: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: last.nodeid.u64
+                lst: walkTypeOf :st nid: last.nodeid.u64
                 if lst > 0 then result = lst
             }
         }
@@ -26743,7 +26746,7 @@ lastStmtType: function {st: zenv.ZSymbolTable.view ast: Ast.view block: astnode.
         # value on its own node.
         bid: nodeId n: block
         if bid > 0 then {
-            bst: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: bid.u64
+            bst: walkTypeOf :st nid: bid.u64
             if bst > 0 then result = bst
         }
     }
@@ -26837,7 +26840,7 @@ refuseBorrowedArms: function {
             :st
             :ast
             n: ln
-            vt: (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: lf.u64)
+            vt: (walkTypeOf :st nid: lf.u64)
             :verb
         )
     }
@@ -28002,7 +28005,7 @@ callHandsBackBorrow: function {st: zenv.ZSymbolTable ast: Ast.view n: astnode.vi
         n
     ) case call then {
         cal: ast.nodes.get i: n.callable.u64
-        ft: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: (nodeId n: cal).u64
+        ft: walkTypeOf :st nid: (nodeId n: cal).u64
         if ft > 0 when ((st.typing.funcReturnsBorrow.get
             key: (ztypes.tid.create from: ft.u64)
         ).or
@@ -28010,7 +28013,7 @@ callHandsBackBorrow: function {st: zenv.ZSymbolTable ast: Ast.view n: astnode.vi
         ) then return true
         ch: dottedChildNameId :ast n: cal
         if ch.isZero then return false
-        rt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: (dottedParentNodeId :ast n: cal).u64
+        rt: walkTypeOf :st nid: (dottedParentNodeId :ast n: cal).u64
         if rt.isZero then return false
         mo: (st.typing.declChildOfId
             parentTypeId: (ztypes.tid.create from: rt.u64)
@@ -30010,7 +30013,7 @@ armValueOf: function {st: zenv.ZSymbolTable ast: Ast blockId: zast.nodeid} out a
         valId = implicitReturnValue :st :ast :lineId
         if valId.isZero then return none
     }
-    vt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: lineId.u64
+    vt: walkTypeOf :st nid: lineId.u64
     if (isControlValue :ast nid: valId) then vt = valueArmsTid :st :ast nid: valId first: vt
     if vt.isZero or ((st.reg.typetypeOf typeId: vt) == ztypes.ztypetype.neverType) then return none
     cf: st.typing.nodeConstIn mono: st.typing.curMonoStamp nid: valId.u64
@@ -31349,7 +31352,7 @@ captureValueReceiver: function {
     if rpid.isZero or (receiverIsValue :st :ast nid: rpid).not then return ztypes.tid
     takePendingPins :st dst: pins
     if pins.length > 0 then return ztypes.tid
-    return (ztypes.tid.create from: (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rpid.u64))
+    return (ztypes.tid.create from: (walkTypeOf :st nid: rpid.u64))
 }
 
 # receiverIsValue -- whether a dotted base is a value no variable holds: a call,
@@ -31962,7 +31965,7 @@ memberReadIsField: function {
     nameId: zast.nameid
 } out bool is {
     if nameId.isZero then return false
-    pt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: parentNid
+    pt: walkTypeOf :st nid: parentNid
     if pt.isZero then return false
     mo: st.typing.declChildOfId parentTypeId: pt :nameId
     match (
@@ -32996,7 +32999,7 @@ moveArmFieldLeaves: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} i
     armBorrowedLeaves :st :ast :nid into: leaves
     with lit: leaves.iterate do for lf: lit loop {
         ln: ast.nodes.get i: lf.u64
-        lt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: lf.u64
+        lt: walkTypeOf :st nid: lf.u64
         if (localFieldPath :st :ast n: ln).not then {
             refuseBorrowedMove :st :ast n: ln vt: lt verb: "into a taking argument"
         } else if (typeIsReftype :st tid: lt) when (st.reg.needsDestructor typeId: lt) then {
@@ -34331,7 +34334,7 @@ returnedBareFieldName: function {
         bfcId: atomNameId :ast n: (ast.nodes.get i: dr.child.u64)
         if bfcId.isZero then return "".string
         if (isStripMarkerId nameId: bfcId) then return "".string
-        bft: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: dr.parent.u64
+        bft: walkTypeOf :st nid: dr.parent.u64
         if bft.isZero then return "".string
         (forceMemberOf
             :st
@@ -34824,7 +34827,7 @@ refuseReturnedArms: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} i
     armBorrowedLeaves :st :ast :nid into: leaves
     with lit: leaves.iterate do for lf: lit loop {
         ln: ast.nodes.get i: lf.u64
-        lt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: lf.u64
+        lt: walkTypeOf :st nid: lf.u64
         if (st.reg.needsDestructor typeId: lt) then {
             la: (argref
                 nid: (zast.nodeid.create from: lf)
@@ -35026,7 +35029,7 @@ checkTypedefOrProjectionCall: function {
     tdcid: u32
     isBorrowForm: bool
 } out callleg is {
-    tdo: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: tdcid.u64
+    tdo: walkTypeOf :st nid: tdcid.u64
     isTd: (
         (typedefBaseOf :st tid: (ztypes.tid.create from: tdo.u64)) >
         0 or
@@ -35164,7 +35167,7 @@ lockNestedMethodReceiver: function {
         ) case some then {
             callableNode: ast.nodes.get i: call.callable.u64
             rpidN: dottedParentNodeId :ast n: callableNode
-            rvtN: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rpidN.u64
+            rvtN: walkTypeOf :st nid: rpidN.u64
             if rvtN > 0 then {
                 recvShared = methodReceiverIsView :st mid: dro
                 (lockCallPath
@@ -35218,7 +35221,7 @@ checkResolvedMethodCall: function {
     # synthesized-create leg below makes. The borrow form (`T.borrow`)
     # shares `tdcid` and is not a construction.
     if tdcid > 0 when isBorrowForm.not then {
-        sctid: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: tdcid.u64
+        sctid: walkTypeOf :st nid: tdcid.u64
         if sctid > 0 then {
             (ctorSelfRecursionAt
                 :st
@@ -35310,7 +35313,7 @@ checkResolvedMethodCall: function {
             }
         }
         if bpl > 0 when isCmpL.not then {
-            ltl: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: bpl
+            ltl: walkTypeOf :st nid: bpl
             # ASK THE SPELLING, NOT ONLY THE STAMP. A bare numeric literal that
             # is the receiver of an operator has already been MATERIALISED for
             # the member lookup, and dottedBaseTid restamped the node at the
@@ -35337,7 +35340,7 @@ checkResolvedMethodCall: function {
             cdbid = cdb
         } case none then null
         if cdbid > 0 then {
-            btid: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: cdbid.u64
+            btid: walkTypeOf :st nid: cdbid.u64
             if btid > 0 then {
                 mres = ztypes.tid.create from: btid
                 setmr2: mres
@@ -35770,7 +35773,7 @@ genericCallInstance: function {
     st: zenv.ZSymbolTable.view ast: Ast.view call: callref
 } out ztypes.tid is {
     cnid: nodeId n: (ast.nodes.get i: call.callable.u64)
-    return (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: cnid.u64)
+    return (walkTypeOf :st nid: cnid.u64)
 }
 
 # lockGenericCallArgs -- the locks a GENERIC function's arguments take, read
@@ -36131,7 +36134,7 @@ reportValueCalledWithArgs: function {st: zenv.ZSymbolTable ast: Ast.view call: c
     if call.nargs == 0 then return
     cn: ast.nodes.get i: call.callable.u64
     nameId: dottedChildNameId :ast n: cn
-    vt: ztypes.tid.create from: (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: call.callable.u64)
+    vt: ztypes.tid.create from: (walkTypeOf :st nid: call.callable.u64)
     if nameId.isZero then {
         nameId = bareAtomNameId n: cn
         vt = ztypes.tid.create from: 0
@@ -36139,7 +36142,10 @@ reportValueCalledWithArgs: function {st: zenv.ZSymbolTable ast: Ast.view call: c
         if vo.some then vt = st.reg.variableTypeOf id: vo
     }
     if vt.isZero or nameId.isZero then return
-    if (st.reg.typetypeOf typeId: vt) == ztypes.ztypetype.functionType then return
+    # a generic parameter's members are its instance's, which a template walk
+    # does not know
+    vtt: st.reg.typetypeOf typeId: vt
+    if vtt == ztypes.ztypetype.functionType or (vtt == ztypes.ztypetype.genericParam) then return
     if (st.typing.declChildOfId parentTypeId: vt nameId: zast.names.wkCall).some then return
     arg0: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: 0)
     if arg0.nid.isZero then return
@@ -36701,7 +36707,7 @@ checkExplicitConstruction: function {
     if baseId.isZero then return unhandled
     if (dottedBaseIsValue :st :ast :unitDecl n: (ast.nodes.get i: call.callable.u64)
     ) then return unhandled
-    bt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: baseId.u64
+    bt: walkTypeOf :st nid: baseId.u64
     if bt.isZero then return unhandled
     if (st.reg.isGenericOf tid: bt) then {
         tn: st.reg.nameOf tid: bt
@@ -39504,6 +39510,26 @@ dataRefAt: function {ast: Ast.view nid: zast.nodeid} out dataref is {
     return (dataref nid: zn nelems: 0 outType: zn lineno: 0 colno: 0)
 }
 
+# walkTypeOf -- the type the walk in progress stamped on body node `nid`. An
+# instance walk stamps only its own table, and a template walk keeps its
+# generic-parameter answers to itself (stampGate), so a read of a node the walk
+# has just checked asks there first; otherwise, the shared stamp.
+walkTypeOf: function {st: zenv.ZSymbolTable.view nid: u64} out ztypes.tid is {
+    # routed as stampGate writes: an instance walk's own table first
+    if st.typing.curMonoStamp > 0 then {
+        return (st.typing.nodeTypeIn mono: st.typing.curMonoStamp :nid)
+    }
+    if st.typing.suppressParamStamps then {
+        ts: st.templateStamps.get key: nid
+        match (
+            ts
+        ) case some then {
+            return ts
+        } case none then null
+    }
+    return (ztyping.nodeTypeAt tbl: st.typing.nodeType :nid)
+}
+
 # checkValueAt -- type the value row `nid`, then record what it evaluates to.
 # The two channels are written in that order because the value channel renders
 # through the type one: a node with no type stamp has nothing to render a
@@ -39652,7 +39678,7 @@ checkStmtExpression: function {
     # an unresolvable root name is an unknown reference (the emitter
     # would otherwise hit its unhandled-callee backstop)
     if st.typing.errors.length == errE0 when ctl0.not then {
-        eto0: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: lineId.u64
+        eto0: walkTypeOf :st nid: lineId.u64
         unkn0: true
         if eto0 > 0 then unkn0 = false
         if unkn0 then {
@@ -39700,7 +39726,7 @@ checkStmtInner: function {
 
 # stampLineFrom -- a statement line carries its inner row's type.
 stampLineFrom: function {st: zenv.ZSymbolTable lineId: zast.nodeid innerId: zast.nodeid} is {
-    itOpt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: innerId.u64
+    itOpt: walkTypeOf :st nid: innerId.u64
     if itOpt > 0 then {
         stampGate :st nid: lineId.u64 tid: (ztypes.tid.create from: itOpt.u64)
     }
@@ -40606,7 +40632,7 @@ checkImplicitReturn: function {
         if st.typing.errors.length == bodyErrs then reportNoTailValue :st :ast :defn :lsid :expR
         return
     }
-    argT: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: valId.u64
+    argT: walkTypeOf :st nid: valId.u64
     if (isControlValue :ast nid: valId) then argT = valueArmsTid :st :ast nid: valId first: argT
     vn: ast.nodes.get i: valId.u64
     arg: (argref
@@ -40646,7 +40672,7 @@ implicitReturnValue: function {
     # a bare `return`, `break` or `continue` leaves rather than yields
     ctl: ctlDivKind bn: (bareAtomNameId n: (ast.nodes.get i: innerId.u64))
     if ctl > 0 then return zast.nodeid
-    lt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: lineId.u64
+    lt: walkTypeOf :st nid: lineId.u64
     if lt.isZero then return zast.nodeid
     if (st.reg.typetypeOf typeId: lt) == ztypes.ztypetype.neverType then return zast.nodeid
     return innerId
@@ -40664,7 +40690,7 @@ tailIsControl: function {st: zenv.ZSymbolTable.view ast: Ast.view lineId: zast.n
     if innerId.isZero then return false
     arm: rowArmAt :ast nid: innerId
     if arm.ifexpr or arm.caseexpr or arm.forexpr or arm.withexpr or arm.doexpr then return true
-    lt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: lineId.u64
+    lt: walkTypeOf :st nid: lineId.u64
     ltt: st.reg.typetypeOf typeId: lt
     if lt.isZero.not when ltt == ztypes.ztypetype.neverType then return true
     return (ctlDivKind bn: (bareAtomNameId n: (ast.nodes.get i: innerId.u64))) > 0

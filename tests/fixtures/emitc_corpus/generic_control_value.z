@@ -1,0 +1,68 @@
+# An `if` or a `match` whose value is typed by a generic parameter. The checker
+# reads back the arms it has just walked to settle the value's one type, and it
+# read them from the shared stamp table -- which an instance walk does not write
+# (it keeps its own), and which a template walk leaves without the parameter's
+# answer. So the value had no type: a binding of it had no C type, and a match
+# yielding it was refused by the emitter, in a generic function, a generic
+# unit's function and a generic class's method alike. The walk now reads its own
+# stamps.
+pickg: function as { t: anyval.generic } in { v: t w: t c: bool } out t is {
+    r: if c then v else w
+    q: match (c) case true then w case false then v
+    s: if c then {
+        tmp: v
+        tmp
+    } else if r == q then w else v
+    return (if c then (match (c) case true then r case false then q) else s)
+}
+
+mathops: unit as {
+    t: anyval.generic
+    pick: function {a: t b: t c: bool} out t is {
+        r: if c then a else b
+        s: match (c) case true then b case false then a
+        return (if c then r else s)
+    }
+}
+
+ints: (mathops t: i64)
+
+Pair: record {
+    a: t
+    b: t
+} as {
+    t: anyval.generic
+    pick: function {:this c: bool} out t is {
+        return (match (c) case true then this.a case false then this.b)
+    }
+}
+
+Stack: class {
+    items: (ListVal t: t)
+} as {
+    t: anyval.generic
+    topOr: function {:this d: t} out t is {
+        n: this.items.length
+        r: if n > 0 then (this.items.get i: n - 1) else d
+        return r
+    }
+}
+
+pickRef: function as { T: AnyRef.generic } in { v: T.take w: T.take c: bool } out T is {
+    r: if c then v else w
+    return r
+}
+
+main: function is {
+    print "function \{pickg t: i64 v: 5 w: 6 c: true} \{pickg t: f64 v: 1.5 w: 2.5 c: false}"
+    print "unit function \{ints.pick a: 1 b: 2 c: true} \{ints.pick a: 1 b: 2 c: false}"
+    p: (Pair t: u8 a: 3 b: 4)
+    print "record method \{p.pick c: true} \{p.pick c: false}"
+    st: (Stack t: i64 items: (ListVal t: i64))
+    print "class method \{st.topOr d: 7}"
+    st.items.append from: 9
+    print "class method \{st.topOr d: 7}"
+    a: "a".string
+    b: "bb".string
+    print "reference \{pickRef T: String v: a.take w: b.take c: false}"
+}
