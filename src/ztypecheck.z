@@ -3450,7 +3450,6 @@ resolveMonoRefParts: function {
                 :ast
                 monoId: memberIdAt
                 templateId: (ztypes.tid.create from: tplId.u64)
-                elemArg: firstA
             )
         }
         if nid > 0 then {
@@ -19283,40 +19282,23 @@ typeIsIdKey: function {
     return ktd == (builtinTidT :st :frame :ast base: "c32")
 }
 
-# completeSpecChildren -- finish a spec that the trie already carries: its generic
-# argument rows, its members, and the walks its members demand.
+# completeSpecChildren -- finish a spec that the trie already carries: the
+# per-instance collection children its template cannot express. Name-keyed
+# mints (sized records, empty-subs chains) make the same call themselves.
 completeSpecChildren: function {
     ast: Ast
     st: zenv.ZSymbolTable
     frame: ztypes.declid
     templateId: ztypes.tid
     mid8: ztypes.tid
-    keys8: (ListVal u64).view
-    keyIsVal8: (ListVal bool).view
 } is {
-    # a trie-keyed concrete specialization mints its chain family and
-    # collection children here with def-order args; name-keyed mints
-    # (sized records, empty-subs chains) keep their caller-side
-    # invocations, which carry the elem id this path cannot derive
-    # elem = the first TYPE key (a sized record's leading value key is
-    # not an element)
-    elemTid: u64
-    ei3: u64
-    en3: keys8.length
-    for ei3 < en3 loop {
-        if elemTid == 0 when (keyIsVal8.get i: ei3).not then elemTid = keys8.get i: ei3
-        ei3 = ei3 + 1
-    }
-    {
-        (mintCollectionChildren
-            :st
-            :frame
-            :ast
-            monoId: (ztypes.tid.create from: mid8.u64)
-            :templateId
-            elemArg: elemTid
-        )
-    }
+    (mintCollectionChildren
+        :st
+        :frame
+        :ast
+        monoId: (ztypes.tid.create from: mid8.u64)
+        :templateId
+    )
 }
 
 # mintSpecUnderTemplate -- build the spec's children, LAST, and the trie edge laid
@@ -19810,8 +19792,6 @@ getOrMintSpec: function {
             :frame
             :templateId
             :mid8
-            :keys8
-            :keyIsVal8
         )
         recordNumericFieldDefaults :st monoId: mid8 :templateId
     }
@@ -19848,7 +19828,6 @@ mintEntryAndSizedChildren: function {
     rf: ztypes.declid
     monoId: ztypes.tid
     templateId: ztypes.tid
-    elemArg: u64
 } is {
     strTid: builtinTidT :st frame: rf :ast base: "str"
     arrayTid: builtinTidT :st frame: rf :ast base: "array"
@@ -19862,10 +19841,6 @@ mintEntryAndSizedChildren: function {
         boolid = bo
     } case none then null
     if templateId == arrayTid then {
-        agId: mintCollectionMethod :st :ast :monoId m: "get"
-        st.reg.setReturnType typeId: (ztypes.tid.create from: agId.u64) value: elemArg
-        asId: mintCollectionMethod :st :ast :monoId m: "set"
-        st.reg.setReturnType typeId: (ztypes.tid.create from: asId.u64) value: elemArg
         mintCollectionMethod :st :ast :monoId m: "create"
         aeqId: mintCollectionMethod :st :ast :monoId m: "=="
         st.reg.setReturnType typeId: (ztypes.tid.create from: aeqId.u64) value: boolid
@@ -20013,7 +19988,6 @@ mintCollectionChildren: function {
     frame: ztypes.declid
     monoId: ztypes.tid
     templateId: ztypes.tid
-    elemArg: u64
 } is {
     # a specialisation's members resolve in the TEMPLATE's frame, with the
     # argument substitution -- lexical scoping; the instantiating unit is
@@ -20069,7 +20043,6 @@ mintCollectionChildren: function {
         :rf
         :monoId
         :templateId
-        :elemArg
     )
 }
 
@@ -21187,7 +21160,6 @@ genericTypeConstruction: function {
             :ast
             monoId: mid
             templateId: (ztypes.tid.create from: tplId.u64)
-            elemArg: firstA
         )
     }
     # Only a bare-atom callable restamps to the instance; a dotted callable
@@ -23616,7 +23588,6 @@ checkDataBlockMember: function {
                             :ast
                             monoId: amid
                             templateId: (ztypes.tid.create from: ato.u64)
-                            elemArg: elo
                         )
                         setar: amid
                         stampGate :st nid: dp.nid.u64 tid: setar
