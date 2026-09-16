@@ -1021,7 +1021,11 @@ perf: $(PERFBIN)
 # reassigned it). The rule itself is CHEAPER than what it replaced -- -818 over
 # the same source, because a borrow installs a pin where a move transferred
 # every held lock and laid a taken row.
-ALLOC_BASELINE := 2815128
+#
+# -275 when sixteen bindings that only renamed their source were removed: each
+# was a local the emitter built and a pin the checker installed, for a name used
+# once or twice right below it.
+ALLOC_BASELINE := 2814853
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

@@ -2464,7 +2464,6 @@ declOfFnDef: function {
         nameId: (nameIdOf :ast name: defName)
     )
     mown: declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: thisName)
-    mnm: defName
     if ownerNameId.isZero.not when (zast.poolTextEq
         pool: ast.names
         ref: (zast.nameid.create from: ownerNameId.u32)
@@ -2481,7 +2480,7 @@ declOfFnDef: function {
     if mown.u64 == 0 then return (ztypes.declid.create from: 0)
     return (st.typing.declFindChild
         parentDeclId: mown
-        nameId: (zast.poolFind pool: ast.names text: mnm)
+        nameId: (zast.poolFind pool: ast.names text: defName)
     )
 }
 
@@ -22430,13 +22429,12 @@ dataElemTypeOf: function {
         match (
             eno
         ) case some then {
-            den: eno
             elo: (walkLookupTyperef
                 :st
                 frame: st.curFrame
                 :ast
                 :unitDecl
-                base: den
+                base: eno
             )
             match (
                 elo
@@ -23544,13 +23542,12 @@ checkDataBlockMember: function {
             match (
                 eno
             ) case some then {
-                den: eno
                 elo: (walkLookupTyperef
                     :st
                     frame: st.curFrame
                     :ast
                     :unitDecl
-                    base: den
+                    base: eno
                 )
                 match (
                     elo
@@ -23566,7 +23563,7 @@ checkDataBlockMember: function {
                     match (
                         ato
                     ) case some then {
-                        amn: "_\{den}_\{ecnt}"
+                        amn: "_\{eno}_\{ecnt}"
                         # `array` declares its element parameter then its
                         # count; asking the template for both names keeps
                         # this site correct across a rename. Two names or
@@ -30922,8 +30919,7 @@ consumeBareArgOwnership: function {
             verb: "into a taking argument"
         )
         if apin7 then null else if (isBorrowedVar :st :vid) then {
-            bnc7: name
-            mb7: "Cannot move borrowed variable '\{bnc7}' into a taking argument — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
+            mb7: "Cannot move borrowed variable '\{name}' into a taking argument — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
             (addError
                 :st
                 :nodeid
@@ -31904,20 +31900,18 @@ pinnedMoveError: function {
     # readonlyMoveError words better.
     if plh.kind.varKind when plh.id == pvo then return false
     if plh.kind.forKind then return false
-    pnm: name
-    pvb: verb
     pm: String
     pht: String
     if plh.kind.callKind then {
         # the enclosing call already holds a reference to the value: the
         # callee would read it beside the moved-out copy
-        pm = "Cannot move '\{pnm}' \{pvb}: this call already passes '\{pnm}'"
-        pht = "the callee would hold '\{pnm}' beside the value moved out of it; bind or copy the value first"
+        pm = "Cannot move '\{name}' \{verb}: this call already passes '\{name}'"
+        pht = "the callee would hold '\{name}' beside the value moved out of it; bind or copy the value first"
     } else {
         phn: st.formatLockHolder pool: ast.names holder: plh
         plsn: zenv.zlockstateNameLower t: plk
-        pm = "Cannot move '\{pnm}' \{pvb}: \{plsn} lock held by '\{phn}'"
-        pht = "'\{phn}' reads '\{pnm}' -- moving it would leave '\{phn}' pointing at freed memory; end its scope first, or copy with '.copy'"
+        pm = "Cannot move '\{name}' \{verb}: \{plsn} lock held by '\{phn}'"
+        pht = "'\{phn}' reads '\{name}' -- moving it would leave '\{phn}' pointing at freed memory; end its scope first, or copy with '.copy'"
     }
     pen: String
     (addErrorH
@@ -31946,9 +31940,7 @@ readonlyMoveError: function {
     name: StringView
     verb: StringView
 } is {
-    rmn: name
-    rmv: verb
-    rmm: "Cannot move readonly variable '\{rmn}' \{rmv} — a readonly binding may only be read; copy with '.copy' to keep the source"
+    rmm: "Cannot move readonly variable '\{name}' \{verb} — a readonly binding may only be read; copy with '.copy' to keep the source"
     (addError
         :st
         :nodeid
@@ -32149,10 +32141,9 @@ checkWriteLock: function {
         return
     }
     rn: st.formatLockHolder pool: ast.names holder: rh
-    ppc: pp
     selfRo: rn.stringView == wr
-    mr: "Cannot \{verb} '\{ppc}': shared lock held by '\{rn}'"
-    if selfRo then mr = "Cannot \{verb} '\{ppc}': '\{wr}' is readonly here"
+    mr: "Cannot \{verb} '\{pp}': shared lock held by '\{rn}'"
+    if selfRo then mr = "Cannot \{verb} '\{pp}': '\{wr}' is readonly here"
     rht: String
     if rh.kind == ztypes.zlockholderkind.varKind when selfRo.not then {
         rht = "'\{rn}' reads this path -- writing it would invalidate what '\{rn}' points at; end its scope first"
@@ -38511,9 +38502,8 @@ rejectGenericValueMatch: function {
         gvav
         gsub0: ast.nodes.get i: casenode.subject.u64
         gtn0: st.reg.nameOf tid: subjT
-        gtnc0: gtn0
-        gm: "cannot match over a value of generic parameter type '\{gtnc0}'"
-        gh: "dissect the type parameter itself (`match \{gtnc0}`), or move the value dispatch outside the generic"
+        gm: "cannot match over a value of generic parameter type '\{gtn0}'"
+        gh: "dissect the type parameter itself (`match \{gtn0}`), or move the value dispatch outside the generic"
         gn: String
         (addErrorH
             :st
@@ -41988,12 +41978,11 @@ stampMonoTemplateUnit: function {
 } is {
     tplId: u64
     {
-        tk: templateName
         tgo: (declTypeIdOf
             :st
             declId: (st.typing.declFindChild
                 parentDeclId: st.typing.programRoot
-                nameId: (nameIdOf :ast name: tk)
+                nameId: (nameIdOf :ast name: templateName)
             )
         )
         if tgo.isZero.not then tplId = tgo
