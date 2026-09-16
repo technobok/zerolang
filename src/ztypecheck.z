@@ -1840,19 +1840,7 @@ genericParamTypeId: function {
     etk7: declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: thisName)
     if (st.reg.isGenericParamOf tdecl: etk7 name: nameId).not then return 0
     recordGenericParamRef :st :nid frame: etk7 name: nameId
-    pgo7: st.reg.genericParamTidOf tdecl: etk7 paramName: nameId
-    match (
-        pgo7
-    ) case some then {
-        return pgo7
-    } case none then null
-    ptid7: ztypes.tid
-    {
-        nT7: zast.nameTextAt :ast ref: nameId
-        ptid7 = st.reg.newType name: nT7.stringView typetype: ztypes.ztypetype.genericParam
-    }
-    st.reg.setGenericParamTid tdecl: etk7 paramName: nameId tid: ptid7
-    return ptid7
+    return (genericParamTidMint :st :ast tdecl: etk7 :nameId)
 }
 
 # aliasOrShellTypeId -- the defining unit knows the name but its definition
@@ -2930,25 +2918,14 @@ monoRefArgTid: function {
                     frame: enclDecl
                     name: (nameIdOf :ast name: anc.stringView)
                 )
-                epo: (st.reg.genericParamTidOf
-                    tdecl: enclDecl
-                    paramName: (nameIdOf :ast name: anc.stringView)
-                )
-                match (
-                    epo
-                ) case some then {
-                    aid = ztypes.tid.create from: epo
-                } case none then {
-                    aid = (st.reg.newType
-                        name: anc.stringView
-                        typetype: ztypes.ztypetype.genericParam
-                    )
-                    (st.reg.setGenericParamTid
+                aid = (ztypes.tid.create
+                    from: (genericParamTidMint
+                        :st
+                        :ast
                         tdecl: enclDecl
-                        paramName: (nameIdOf :ast name: anc.stringView)
-                        tid: aid
+                        nameId: (nameIdOf :ast name: anc.stringView)
                     )
-                }
+                )
             }
             # written in a body, where no enclosing declaration is passed: a
             # parameter of any template around the frame
@@ -3272,16 +3249,7 @@ numericParamRefTid: function {
     if (st.reg.genericParamConstraintOf tdecl: owner paramName: nameId
     ).numKind.has.not then return ztypes.tid
     recordGenericParamRef :st nid: arg.operation.u64 frame: owner name: nameId
-    po: st.reg.genericParamTidOf tdecl: owner paramName: nameId
-    match (
-        po
-    ) case some then {
-        return (ztypes.tid.create from: po.u64)
-    } case none then null
-    pnt: zast.nameTextCopy :ast ref: nameId
-    pt: st.reg.newType name: pnt.stringView typetype: ztypes.ztypetype.genericParam
-    st.reg.setGenericParamTid tdecl: owner paramName: nameId tid: pt
-    return pt
+    return (ztypes.tid.create from: (genericParamTidMint :st :ast tdecl: owner :nameId))
 }
 
 # monoRefTemplateTid -- the template a mono type-reference names: a name the
@@ -3750,20 +3718,7 @@ returnParamTid: function {
     if bnId.isZero then bnId = markerPeeledBaseId :ast n: o
     if (st.reg.isGenericParamOf tdecl: enclDecl name: bnId) then {
         recordGenericParamRef :st nid: oId.u64 frame: enclDecl name: bnId
-        po: st.reg.genericParamTidOf tdecl: enclDecl paramName: bnId
-        match (
-            po
-        ) case some then {
-            return po
-        } case none then null
-        # a fresh generic-parameter type is minted under its spelling, read here
-        rpt7: ztypes.tid
-        {
-            bnT: zast.nameTextAt :ast ref: bnId
-            rpt7 = st.reg.newType name: bnT.stringView typetype: ztypes.ztypetype.genericParam
-        }
-        st.reg.setGenericParamTid tdecl: enclDecl paramName: bnId tid: rpt7
-        return rpt7
+        return (genericParamTidMint :st :ast tdecl: enclDecl nameId: bnId)
     }
 
     return 0
@@ -4007,24 +3962,7 @@ stampGenericParamRef: function {
     # matching recordTyperef's convention for concrete marked returns.
     if bnId.isZero then bnId = markerPeeledBaseId :ast n: o
     if (st.reg.isGenericParamOf tdecl: enclDecl name: bnId) then {
-        gpt3: u64
-        gpo3: st.reg.genericParamTidOf tdecl: enclDecl paramName: bnId
-        match (
-            gpo3
-        ) case some then {
-            gpt3 = gpo3
-        } case none then {
-            # the stamp mints the parameter type under its spelling, read here
-            {
-                bnT: zast.nameTextAt :ast ref: bnId
-                gpt3 = st.reg.newType name: bnT.stringView typetype: ztypes.ztypetype.genericParam
-            }
-            (st.reg.setGenericParamTid
-                tdecl: enclDecl
-                paramName: bnId
-                tid: (ztypes.tid.create from: gpt3.u64)
-            )
-        }
+        gpt3: genericParamTidMint :st :ast tdecl: enclDecl nameId: bnId
         gnid3: nodeId n: o
         (ztyping.nodeTypeSet
             tbl: st.typing.nodeType
@@ -5367,10 +5305,10 @@ registerValueParam: function {
 # every reference in the signature resolves to the same type.
 registerFnGenericParam: function {
     st: zenv.ZSymbolTable
+    ast: Ast.view
     fid: u64
     fnDecl: ztypes.declid
     ptn: zast.nameid
-    ptnT: StringView
     fnParam: bool
     pm: argref
 } is {
@@ -5381,26 +5319,7 @@ registerFnGenericParam: function {
         # No node stamp (fn monos re-walk the SHARED template
         # AST) and no typeref/demand recording (a user type
         # coincidentally named like the param must not bind).
-        fpt: u64
-        fpo: (st.reg.genericParamTidOf
-            tdecl: fnDecl
-            paramName: ptn
-        )
-        match (
-            fpo
-        ) case some then {
-            fpt = fpo
-        } case none then {
-            fpt = (st.reg.newType
-                name: ptnT
-                typetype: ztypes.ztypetype.genericParam
-            )
-            (st.reg.setGenericParamTid
-                tdecl: fnDecl
-                paramName: ptn
-                tid: (ztypes.tid.create from: fpt.u64)
-            )
-        }
+        fpt: genericParamTidMint :st :ast tdecl: fnDecl nameId: ptn
         (st.typing.setMemberType
             parentTypeId: (ztypes.tid.create from: fid.u64)
             nameId: pm.name
@@ -5422,7 +5341,6 @@ registerGenericOrReceiverParam: function {
     genParam: bool
     fnParam: bool
     ptn: zast.nameid
-    ptnT: StringView
     isRecvP: bool
     pm: argref
 } is {
@@ -5458,10 +5376,10 @@ registerGenericOrReceiverParam: function {
     }
     (registerFnGenericParam
         :st
+        :ast
         :fid
         :fnDecl
         :ptn
-        :ptnT
         :fnParam
         :pm
     )
@@ -5480,26 +5398,7 @@ registerGenericOrReceiverParam: function {
         # canonical per-(enclosing,param) tid (get-or-mint). No
         # member type -- unit template methods stay childless (emit
         # `(void)`); unit bodies clone, so the stamp is per-clone.
-        gpt2: u64
-        gpo2: (st.reg.genericParamTidOf
-            tdecl: receiverEnclDecl
-            paramName: ptn
-        )
-        match (
-            gpo2
-        ) case some then {
-            gpt2 = gpo2
-        } case none then {
-            gpt2 = (st.reg.newType
-                name: ptnT
-                typetype: ztypes.ztypetype.genericParam
-            )
-            (st.reg.setGenericParamTid
-                tdecl: receiverEnclDecl
-                paramName: ptn
-                tid: (ztypes.tid.create from: gpt2.u64)
-            )
-        }
+        gpt2: genericParamTidMint :st :ast tdecl: receiverEnclDecl nameId: ptn
         pnid2: nodeId n: (ast.nodes.get i: pm.operation.u64)
         (ztyping.nodeTypeSet
             tbl: st.typing.nodeType
@@ -5594,8 +5493,6 @@ resolveFunctionParam: function {
             genParam = true
         }
         if skipParam then {
-            # the registry stores a generic parameter's name as text
-            ptnT: zast.nameTextAt :ast ref: gpn
             (registerGenericOrReceiverParam
                 :st
                 :ast
@@ -5606,7 +5503,6 @@ resolveFunctionParam: function {
                 :genParam
                 :fnParam
                 ptn: gpn
-                ptnT: ptnT.stringView
                 :isRecvP
                 :pm
             )
@@ -13481,26 +13377,9 @@ registerUnitGenericParams: function {
                 op: (ast.nodes.get i: gm.operation.u64)
             ) then {
                 gpn0: zast.nameTextAt :ast ref: gm.name
-                gtid0: ztypes.tid
-                gpo0: (st.reg.genericParamTidOf
-                    tdecl: urd0
-                    paramName: (nameIdOf :ast name: gpn0.stringView)
+                gtid0: (ztypes.tid.create
+                    from: (genericParamTidMint :st :ast tdecl: urd0 nameId: gm.name)
                 )
-                match (
-                    gpo0
-                ) case some then {
-                    gtid0 = ztypes.tid.create from: gpo0
-                } case none then {
-                    gtid0 = (st.reg.newType
-                        name: gpn0.stringView
-                        typetype: ztypes.ztypetype.genericParam
-                    )
-                    (st.reg.setGenericParamTid
-                        tdecl: urd0
-                        paramName: (nameIdOf :ast name: gpn0.stringView)
-                        tid: gtid0
-                    )
-                }
                 (linkDeclType
                     :st
                     :frame
@@ -15720,27 +15599,7 @@ resolveInlineGenericUnit: function {
                     :ast
                     op: (ast.nodes.get i: gm.operation.u64)
                 ) then {
-                    gpn5: zast.nameTextAt :ast ref: gm.name
-                    gtid5: u64
-                    gpo5: (st.reg.genericParamTidOf
-                        tdecl: tdl5
-                        paramName: (nameIdOf :ast name: gpn5.stringView)
-                    )
-                    match (
-                        gpo5
-                    ) case some then {
-                        gtid5 = gpo5
-                    } case none then {
-                        gtid5 = (st.reg.newType
-                            name: gpn5.stringView
-                            typetype: ztypes.ztypetype.genericParam
-                        )
-                        (st.reg.setGenericParamTid
-                            tdecl: tdl5
-                            paramName: (nameIdOf :ast name: gpn5.stringView)
-                            tid: (ztypes.tid.create from: gtid5.u64)
-                        )
-                    }
+                    gtid5: genericParamTidMint :st :ast tdecl: tdl5 nameId: gm.name
                     gpnid: nodeId n: (ast.nodes.get i: gm.operation.u64)
                     (ztyping.nodeTypeSet
                         tbl: st.typing.nodeType
@@ -37905,27 +37764,9 @@ genericParamSubjectTid: function {
     gdecl: ztypes.declid
     gsn: StringView
 } out ztypes.tid is {
-    subjT: ztypes.tid
-    pgo: (st.reg.genericParamTidOf
-        tdecl: gdecl
-        paramName: (nameIdOf :ast name: gsn)
+    subjT: (ztypes.tid.create
+        from: (genericParamTidMint :st :ast tdecl: gdecl nameId: (nameIdOf :ast name: gsn))
     )
-    match (
-        pgo
-    ) case some then {
-        subjT = ztypes.tid.create from: pgo.u64
-    } case none then {
-        ptid: (st.reg.newType
-            name: gsn
-            typetype: ztypes.ztypetype.genericParam
-        )
-        (st.reg.setGenericParamTid
-            tdecl: gdecl
-            paramName: (nameIdOf :ast name: gsn)
-            tid: ptid
-        )
-        subjT = ptid
-    }
     gsnid: nodeId n: (ast.nodes.get i: casenode.subject.u64)
     if gsnid > 0 when subjT > 0 then {
         # direct write, NOT stampGate: this genericParam stamp IS
