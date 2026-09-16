@@ -1,0 +1,72 @@
+# `getMut` on a list of collections hands back a REFERENCE to the stored
+# element. A copy of a collection's header shares its buffer, so a write
+# through a copy was lost, and an append that grew the copy's buffer freed the
+# element's own -- a use-after-free on the next write. Writes through a
+# binding, through a parenthesised receiver, through a parameter that borrows,
+# and two levels deep all land in the list; the growing loop is the shape that
+# freed memory. The element is still reached before the argument is evaluated.
+fill: function {l: (ListVal i64).borrow} is {
+    l.append from: 7
+}
+
+Counter: class {
+    n: u64
+}
+
+tick: function {c: Counter label: StringView} out u64 is {
+    print "\{label} runs at \{c.n}"
+    c.n = c.n + 1
+    return c.n
+}
+
+main: function is {
+    lists: List (ListVal i64)
+    first: ListVal i64
+    first.append from: 1
+    lists.append from: first.take
+    (lists.getMut i: 0).append from: 2
+    {
+        e: lists.getMut i: 0
+        e.append from: 3
+    }
+    fill l: (lists.getMut i: 0)
+    i: 0
+    for i < 20 loop {
+        (lists.getMut i: 0).append from: i
+        i = i + 1
+    }
+    for l: lists.iterate loop {
+        print "list of lists: \{l.length} elements"
+    }
+
+    names: List (List String)
+    names.append from: (List String)
+    (names.getMut i: 0).append "x".string
+    {
+        n: names.getMut i: 0
+        n.append "y".string
+    }
+    for l: names.iterate loop {
+        print "list of string lists: \{l.length} elements"
+    }
+
+    grid: List (List (ListVal i64))
+    grid.append from: (List (ListVal i64))
+    inner: ListVal i64
+    inner.append from: 5
+    (grid.getMut i: 0).append from: inner.take
+    ((grid.getMut i: 0).getMut i: 0).append from: 6
+    for row: grid.iterate loop {
+        for c: row.iterate loop {
+            print "two levels: \{c.length} elements"
+        }
+    }
+
+    counter: (Counter n: 0)
+    ordered: List (ListVal u64)
+    ordered.append from: (ListVal u64)
+    (ordered.getMut i: (tick c: counter label: "index") - 1).append from: (tick c: counter label: "value")
+    for o: ordered.iterate loop {
+        print "in order: \{o.length} element"
+    }
+}

@@ -6813,7 +6813,8 @@ receiverOnce: function {
 # has no other owner, so `own` gives the temp the destroy its type asks for.
 # The caller decides addressability; a compound literal already is one and must
 # not come here (it would cost a temp for nothing, and every program emitting
-# one would move).
+# one would move). A value that is a POINTER to storage someone else owns binds
+# as that pointer, owning nothing, and the caller derefs the temp.
 hoistLvalue: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -6822,11 +6823,14 @@ hoistLvalue: function {
     tid: ztypes.tid
     # the temp is the value's only owner, so it carries the scope's destroy
     own: false
+    # the value is a `T*` into storage the temp does not own
+    ptr: false
 } out String is {
     vhn: ctx.argHoistCtr
     ctx.argHoistCtr = ctx.argHoistCtr + 1
     vnm: "_ah\{vhn}"
     vcty: typeRefC :ast :symtab :ctx :tid thisTid: ztypes.tid
+    if ptr then vcty.append "*"
     vdt: String
     if own then vdt = hoistDestroyLine :symtab :ctx :tid nm: vnm.stringView
     ctx.argHoistVals.append av.string
@@ -8468,9 +8472,10 @@ emitBorrowAliasBind: function {
     return true
 }
 
-# rhsIsBorrowGet -- the binding RHS is a List/ListView `get` lowered by pointer,
-# so the local must ALIAS the element storage rather than snapshot it. Shares
-# callRhsIsBorrow's receiver derivation, so the receiver text cannot diverge.
+# rhsIsBorrowGet -- the binding RHS is a List/ListView `get` or `getMut` lowered
+# by pointer, so the local must ALIAS the element storage rather than snapshot
+# it. Shares callRhsIsBorrow's receiver derivation, so the receiver text cannot
+# diverge.
 rhsIsBorrowGet: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -8483,15 +8488,26 @@ rhsIsBorrowGet: function {
         return (rhsIsBorrowGet :ast :symtab :ctx n: (ast.nodes.get i: n.statementline.u64))
     } case call then {
         cbl: ast.nodes.get i: n.callable.u64
-        ch: aliasChildName :ast :symtab n: cbl
-        isG: ch == "get" or (ch == "getMut")
-        if isG.not then return false
+        chId: aliasChildNameId :ast :symtab n: cbl
+        isMut: chId == zast.names.wkGetMut
+        if isMut.not when (chId == zast.names.wkGet).not then return false
         bt: chaseColMono :symtab :ctx tid: (dottedReceiverStampId :ast :symtab callable: cbl)
         isC: (
             (isListOriginOf :symtab :ctx tid: (ztypes.tid.create from: bt.u64)) or
             (isListViewOriginOf :symtab :ctx tid: (ztypes.tid.create from: bt.u64))
         )
         if isC.not then return false
+        if isMut then {
+            return (
+                ctx.colGetFromCode and
+                (elemRefByPtr
+                    :ast
+                    :symtab
+                    :ctx
+                    tid: (listElemType :symtab monoId: (ztypes.tid.create from: bt.u64))
+                )
+            )
+        }
         return (listGetIsPtr :ast :symtab :ctx monoId: (ztypes.tid.create from: bt.u64))
     } else {
         return false
@@ -8830,6 +8846,22 @@ emitCollectionMethodCall: function {
         ) case some then {
             if rck9 == zast.callkind.classCreate then rcvIsCreate = true
         } case none then null
+    }
+    # a reference-returning receiver (`getMut` over a compound element) is a
+    # pointer into storage the container owns: bound first like any other call
+    # receiver, so it still runs before the arguments, and addressed through
+    # its deref
+    recvNode: ast.nodes.get i: (dottedParentNodeId n: (ast.nodes.get i: call.callable.u64))
+    if (nodeIsRefBorrowResult :ast :symtab :ctx n: recvNode) then {
+        bp9: (hoistLvalue
+            :ast
+            :symtab
+            :ctx
+            av: bn.stringView
+            tid: (ztypes.tid.create from: bt.u64)
+            ptr: true
+        )
+        bn = "(*\{bp9})"
     }
     if rcvIsCreate.not when (svRecvAddressable recv: bn.stringView).not then {
         bh9: (hoistLvalue
@@ -25603,9 +25635,12 @@ elemBorrowsByPtr: function {
 # pointer into the storage. Everything `elemBorrowsByPtr` covers, plus a
 # COMPOUND valtype: a record or variant has children, and mutating them in
 # place is exactly what `getMut` is for, so handing back a copy loses the
-# write. It is deliberately NOT the same question as `elemBorrowsByPtr`, which
-# also answers "what calling convention does this type use" for the declared
-# hash/`==` dispatch, where a record is still passed BY VALUE.
+# write. A collection element is one too: a copy of its header shares the
+# buffer, so a write through the copy is lost and a growing append frees the
+# stored element's buffer. It is deliberately NOT the same question as
+# `elemBorrowsByPtr`, which also answers "what calling convention does this type
+# use" for the declared hash/`==` dispatch, where a record is still passed BY
+# VALUE.
 elemRefByPtr: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -25613,6 +25648,8 @@ elemRefByPtr: function {
     tid: ztypes.tid
 } out bool is {
     if (elemBorrowsByPtr :ast :symtab :ctx :tid) then return true
+    ce: chaseColMono :symtab :ctx :tid
+    if (isCollectionOriginTid :ctx originTid: (originTidOf :symtab tid: ce)) then return true
     tt: symtab.reg.typetypeOf typeId: tid
     if tt == ztypes.ztypetype.recordType then return true
     return tt == ztypes.ztypetype.variantType
