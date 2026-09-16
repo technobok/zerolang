@@ -12013,13 +12013,13 @@ bareNameDenotesType: function {
     tid: ztypes.tid
 } out bool is {
     if nameId.isZero then return false
-    # the spelled name against the registry name, read through a view scoped
-    # to this block: the alias walk below lends ast
-    tnq: st.reg.nameOf :tid
+    # the spelled name against the registry name, both read through views
+    # scoped to this block: the alias walk below lends ast and the table
     named: false
     {
+        tnq: st.reg.nameViewOf :tid
         ndNm: zast.nameTextAt :ast ref: nameId
-        named = tnq.stringView == ndNm
+        named = tnq == ndNm
         if named.not then {
             twn: aliasedContainerTwin name: ndNm.stringView
             if twn.length > 0 when twn == tnq then named = true
@@ -32619,19 +32619,7 @@ checkUntypedArgLabel: function {
             )
         }
     }
-    if reportUnknown when isCtor.not when pnIdU.isZero when funcId > 0 when (
-        (st.typing.declMemberCount ownerTid: funcId) == 0
-    ) when (st.reg.typetypeOf typeId: funcId) == ztypes.ztypetype.functionType then {
-        tmU: "too many arguments: function takes no parameters".string
-        (addError
-            :st
-            nodeid: arg.nid
-            lineno: arg.lineno
-            colno: arg.colno
-            e: zast.err.callError
-            msg: tmU
-        )
-    }
+    if reportUnknown when isCtor.not when funcId > 0 then reportNoParameters :st :ast :funcId :arg
     if pnIdU.isZero then {
         pnIdU = positionalParamNameId :st funcId: effId idx: argIdx skipRecv: recvImplicit
     }
@@ -33578,16 +33566,19 @@ argOwnershipOf: function {
     return (argownership :isTake :isLockish :isViewArg :isHold :pt)
 }
 
-# reportPositionalNotAllowed -- a call to a function whose parameters are all
-# named cannot pass one positionally; say so at the argument.
-reportPositionalNotAllowed: function {
+# reportNoParameters -- an argument, labelled or not, to a function that
+# declares no parameters: say so at the argument. A function whose definition
+# writes a parameter the check refused has no member for it, and is not
+# reported again here.
+reportNoParameters: function {
     st: zenv.ZSymbolTable
+    ast: Ast.view
     funcId: ztypes.tid
     arg: argref
 } is {
     if (st.typing.declMemberCount ownerTid: funcId) == 0 when (
         (st.reg.typetypeOf typeId: funcId) == ztypes.ztypetype.functionType
-    ) then {
+    ) when (fnDefinitionWritesParameters :st :ast :funcId).not then {
         tmm: "too many arguments: function takes no parameters".string
         (addError
             :st
@@ -33600,11 +33591,28 @@ reportPositionalNotAllowed: function {
     }
 }
 
+# fnDefinitionWritesParameters -- the function's own definition writes at least
+# one parameter, whether or not the check accepted it.
+fnDefinitionWritesParameters: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    funcId: ztypes.tid
+} out bool is {
+    fd: declOfTypeId :st tid: funcId
+    if fd.isZero then return false
+    fop: zast.nodeid.create from: (st.typing.decls.get i: fd.u64).node
+    {
+        dn: ast.nodes.get i: fop.u64
+        if dn.namedoperation then fop = dn.operation
+    }
+    return (fnRefAt :ast nid: fop).nparams > 0
+}
+
 # reportSurplusPositional -- an unlabelled argument whose slot binds no parameter.
 # A method whose only parameter is its receiver has no slot for one once the dot
 # has supplied the receiver, and the argument was dropped without a word -- or,
 # on a native, reached the emitter as a callee it could not spell. A callee that
-# declares no parameter rows at all is reportPositionalNotAllowed's to answer.
+# declares no parameter rows at all is reportNoParameters's to answer.
 reportSurplusPositional: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -33660,9 +33668,7 @@ checkTypedCallArg: function {
         :vt
         :arg
     )
-    if reportUnknown when isCtor.not when pnId.isZero when funcId > 0 then {
-        reportPositionalNotAllowed :st :funcId :arg
-    }
+    if reportUnknown when isCtor.not when funcId > 0 then reportNoParameters :st :ast :funcId :arg
     wasPos: false
     if pnId.isZero then {
         wasPos = true
@@ -35999,14 +36005,14 @@ checkResolvedValueCall: function {
                 )
                 return (callleg handled: true tid: dct)
             }
-            # a field read off a local is a value, whatever its type
-            rootL: rootNameIdOf :ast n: (ast.nodes.get i: call.callable.u64)
-            if call.nargs > 0 when rootL.isZero.not when (st.isLocalName nameId: rootL) then {
-                reportValueCalledWithArgs :st :ast :call
+            # a record-typed callable that names no type is read off a
+            # receiver: off a data block it is `.index`, which walks its
+            # arguments as that record's and stays untyped; off anything else
+            # it is a value, whatever its type
+            if call.nargs > 0 when (callableReadsDataBlock :st :ast :call).not then {
+                reportValueCalledWithArgs :st :unitDecl :ast :call
                 return (callleg handled: true tid: (ztypes.tid.create from: 0))
             }
-            # a record-typed callable that names no type -- a data block's
-            # `.index` -- walks its arguments as that record's and stays untyped
             if call.nargs > 0 then {
                 dcm: st.pushCall
                 (walkCallArgsHoist
@@ -36042,6 +36048,18 @@ checkResolvedValueCall: function {
         }
     }
     return (callleg handled: false tid: result)
+}
+
+# callableReadsDataBlock -- the call's callable is a member read off a data
+# block (`tab.index`).
+callableReadsDataBlock: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view call: callref
+} out bool is {
+    dr: dpRefAt :ast nid: call.callable
+    if dr.nid.isZero then return false
+    rt: walkTypeOf :st nid: dr.parent.u64
+    if rt.isZero then return false
+    return (st.reg.typetypeOf typeId: rt) == ztypes.ztypetype.dataType
 }
 
 # checkBareGenericCall -- a bare-name call to a GENERIC function: infer its type
@@ -36178,31 +36196,65 @@ checkBareGenericCall: function {
 }
 
 # reportValueCalledWithArgs -- a call with arguments whose callee is a VALUE: a
-# local, a field read, an arm predicate. A value takes no parameters, so the
+# local, a field read, an arm predicate, a unit constant, a literal, or any
+# expression written in callee position. A value takes no parameters, so the
 # first argument is refused where it stands. A type that declares `call` is not
 # refused here.
-reportValueCalledWithArgs: function {st: zenv.ZSymbolTable ast: Ast.view call: callref} is {
+reportValueCalledWithArgs: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    call: callref
+} is {
     if call.nargs == 0 then return
-    cn: ast.nodes.get i: call.callable.u64
-    nameId: dottedChildNameId :ast n: cn
-    vt: ztypes.tid.create from: (walkTypeOf :st nid: call.callable.u64)
-    if nameId.isZero then {
-        nameId = bareAtomNameId n: cn
-        vt = ztypes.tid.create from: 0
-        vo: st.lookupVarId :nameId
-        if vo.some then vt = st.reg.variableTypeOf id: vo
+    nameId: zast.nameid
+    vt: ztypes.tid
+    {
+        cn: ast.nodes.get i: call.callable.u64
+        nameId = dottedChildNameId :ast n: cn
+        vt = ztypes.tid.create from: (walkTypeOf :st nid: call.callable.u64)
+        if nameId.isZero then {
+            nameId = bareAtomNameId n: cn
+            vt = ztypes.tid.create from: 0
+            vo: st.lookupVarId :nameId
+            if vo.some then vt = st.reg.variableTypeOf id: vo
+        }
     }
-    if vt.isZero or nameId.isZero then return
-    # a generic parameter's members are its instance's, which a template walk
-    # does not know
+    # a callee the walk has not typed -- a literal, a constant, a parenthesised
+    # value -- is typed here, by the walk any other value gets. A walk that
+    # reports its own error says all there is to say about the callee.
+    if vt.isZero then {
+        errC: st.typing.errors.length
+        vt = ztypes.tid.create from: (checkValueAt :st :unitDecl :ast nid: call.callable)
+        if st.typing.errors.length != errC then return
+    }
+    refuseValueCallArgs :st :unitDecl :ast :call :vt :nameId
+}
+
+# refuseValueCallArgs -- refuse the arguments of a call whose callee is a value
+# of type `vt`, spelled `nameId` (0 when the callee is not a name). A function
+# value and a type declaring `call` take arguments; a generic parameter's
+# members are its instance's, which a template walk does not know.
+refuseValueCallArgs: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    call: callref
+    vt: ztypes.tid
+    nameId: zast.nameid
+} is {
+    if call.nargs == 0 or vt.isZero then return
     vtt: st.reg.typetypeOf typeId: vt
     if vtt == ztypes.ztypetype.functionType or (vtt == ztypes.ztypetype.genericParam) then return
     if (st.typing.declChildOfId parentTypeId: vt nameId: zast.names.wkCall).some then return
     arg0: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: 0)
     if arg0.nid.isZero then return
-    nm: zast.nameTextAt :ast ref: nameId
-    tn: st.reg.nameOf tid: vt
-    msg: "too many arguments: '\{nm}' is a value of type '\{tn}', not a function"
+    tn: st.reg.nameOf tid: (materialiseLiteral :ast :st :unitDecl t: vt)
+    msg: "too many arguments: the callee is a value of type '\{tn}', not a function"
+    if nameId.isZero.not then {
+        nm: zast.nameTextAt :ast ref: nameId
+        msg = "too many arguments: '\{nm}' is a value of type '\{tn}', not a function"
+    }
     (addError
         :st
         nodeid: arg0.nid
@@ -36257,7 +36309,7 @@ checkNonUserCall: function {
         # misspelled call into a constant 0 (mirrors the assignment
         # path's unresolved-value report)
         ubcn: unresolvedBareCallable :ast :st :unitDecl nid: call.nid
-        if ubcn.length == 0 then reportValueCalledWithArgs :st :ast :call
+        if ubcn.length == 0 then reportValueCalledWithArgs :st :unitDecl :ast :call
         if ubcn.length > 0 then {
             ubm0: "Unknown reference '\{ubcn}'"
             # `yield` resolves like any other name, so a yield in an
@@ -36505,6 +36557,18 @@ wrappedCalleeIsContainer: function {ast: Ast st: zenv.ZSymbolTable wcv: ztypes.t
     return (templateTakesCapacity :ast :st tplId: wgi)
 }
 
+# wrappedCalleeIsCallResult -- the parenthesised callee is an ordinary call, so
+# what it yields is a value the outer arguments cannot construct.
+wrappedCalleeIsCallResult: function {st: zenv.ZSymbolTable.view call: callref} out bool is {
+    ck: st.typing.callKind.get key: call.callable.u64
+    match (
+        ck
+    ) case some then {
+        return ck == zast.callkind.regular
+    } case none then null
+    return false
+}
+
 # wrappedCalleeIsCtorType -- a non-FUNCTION wrapped callee is the paren-mono
 # construction form, whose value args ride the standard ctor walk (call
 # scope, hoists, consumption); a container family is not.
@@ -36612,7 +36676,10 @@ checkWrappedCall: function {
         reportUnresolvedValue :st :unitDecl :ast nid: call.callable
     }
     if wcv.u64 == 0 then return (ztypes.tid.create from: 0)
-    if call.nargs > 0 when (wrappedCalleeIsContainer :ast :st :wcv) then {
+    if call.nargs > 0 when (wrappedCalleeIsCallResult :st :call) then {
+        refuseValueCallArgs :st :unitDecl :ast :call vt: wcv nameId: zast.nameid
+        checkWrappedValueArgs :st :unitDecl :ast :call
+    } else if call.nargs > 0 when (wrappedCalleeIsContainer :ast :st :wcv) then {
         checkContainerCreateArgs :st :unitDecl :ast :call :wcv
     } else if (wrappedCalleeIsCtorType :ast :st :wcv) when call.nargs > 0 then {
         checkWrappedCtorArgs :st :unitDecl :ast :call :wcv
@@ -36988,6 +37055,19 @@ checkRegularCall: function {
     } case none then null
     ck: bareCalleeKind :st :unitDecl :ast :call :cnId
     if ck.unknown then return result
+    # the name resolved to a type it does not NAME, so it names a VALUE of that
+    # type -- a unit constant, a value alias -- and a value takes no arguments
+    if ck.isCtor when call.nargs > 0 when (bareNameDenotesType
+        :ast
+        :st
+        :unitDecl
+        frame: st.curFrame
+        nameId: cnId
+        tid: ck.fid
+    ).not then {
+        reportValueCalledWithArgs :st :unitDecl :ast :call
+        return (ztypes.tid.create from: 0)
+    }
     tdb0: u64
     if ck.isCtor then tdb0 = typedefBaseOf :st tid: ck.fid
     if tdb0 > 0 then return (checkTypedefCreate
