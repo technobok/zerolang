@@ -1039,7 +1039,15 @@ perf: $(PERFBIN)
 #
 # +451 when a Box PARAMETER's operand came to deref twice: +0 over the same
 # source (the compiler boxes nothing), the source longer.
-ALLOC_BASELINE := 2817271
+#
+# +11,414 when `bool` stopped disqualifying a signature from the fnptr-typedef
+# pass: +11,363 over the same source and +51 the source longer. The pass is
+# EAGER -- one typedef per eligible function, referenced or not -- so admitting
+# every bool-mentioning function adds 848 typedef lines to zc.c (651 to zl.c,
+# 660 to zls.c), almost all of them unreferenced. The eagerness is the existing
+# design and predates this; making the pass demand-driven would take all three
+# numbers back and is its own change.
+ALLOC_BASELINE := 2828685
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
