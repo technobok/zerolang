@@ -8320,11 +8320,14 @@ rhsBorrowMarkerBase: function {
     }
 }
 
-# emitBorrowAliasBind -- a `.borrow` value or a borrowed element get bound to
-# a name: the name is a POINTER to the source, aliased to its deref so every
-# use stays a value-shaped lvalue and a write through the name reaches the
-# source. No destructor and no take-invalidation: the source owns the value,
-# the container its element. Answers whether the binding was one.
+# emitBorrowAliasBind -- a borrowing binding of a BY-VALUE reftype -- a
+# `.borrow` value, a borrowed element get, or a plain field read -- bound to a
+# name: the name is a POINTER to the source, aliased to its deref so every use
+# stays a value-shaped lvalue and a write through the name reaches the source.
+# No destructor and no take-invalidation: the source owns the value, the
+# container its element. A Set or a Map answers false -- its local already IS
+# the pointer, so emitCollectionBind's copy of it is the reference already.
+# Answers whether the binding was one.
 emitBorrowAliasBind: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -8344,9 +8347,34 @@ emitBorrowAliasBind: function {
     avn: ast.nodes.get i: n.value.u64
     bmb: rhsBorrowMarkerBase :ast :symtab n: avn
     if bmb == 0 when (rhsIsBorrowGet :ast :symtab :ctx n: avn) then bmb = n.value.u64
+    fieldLeg: false
+    if bmb == 0 when (rhsIsBorrowedFieldRead :ast :symtab :ctx n: avn) then {
+        bmb = n.value.u64
+        fieldLeg = true
+    }
+    # the type questions come AFTER the shape ones: a binding that borrows
+    # nothing is the common case, and it leaves here without paying for them
     if bmb == 0 then return false
+    btid: bindChasedTid :symtab :ctx :n :avn
+    # a Set and a Map live on the heap and their local IS the pointer, so the
+    # pointer copy emitCollectionBind writes is the reference already
+    if (isSetOriginOf :symtab :ctx tid: btid) then return false
+    if (isMapOriginOf :symtab :ctx tid: btid) then return false
+    # a VALTYPE field read is a real copy -- the binding is its own value, and
+    # aliasing it would make a write through it reach the field
+    if fieldLeg when (symtab.reg.isReftypeOf tid: btid).not then return false
     base: ast.nodes.get i: bmb
+    hmk: pendingHoistMark :ctx
     rvm: emitExpr :ast :symtab :ctx n: base
+    # a member read that lowers to a CALL names no storage: a protocol or facet
+    # field builds a fat pointer out of its base rather than reading a place, so
+    # there is no address to alias and the binding owns what it gets. Only the
+    # field leg can reach one -- the other two shapes are a marker on a value and
+    # an element the container hands back by pointer, both already lvalues.
+    if fieldLeg when (isNonLvalueArg s: rvm.stringView) then {
+        dropHoistsTo :ctx mark: hmk
+        return false
+    }
     flushArgHoists :ctx :ind :tmp :buf
     bct: ct.string
     if bct.length == 0 then bct = "int64_t".string
@@ -8354,8 +8382,19 @@ emitBorrowAliasBind: function {
     # borrowed field) is the pointer itself
     addr: "&"
     if (pathIsPointer :ast :symtab :ctx n: base) then addr = ""
-    lb0: "\{ind}\{bct}* __borrow_\{nm} = \{addr}\{rvm};\n"
-    buf.append lb0
+    # a field read takes its pointer type from the STORAGE rather than from the
+    # binding's declared type: a field reached through a `.view` root is `const`
+    # in the C (paramCType says so, so that a writer through a view is refused),
+    # and the declared type does not carry that. The other two shapes keep the
+    # declared type -- their bases are a marker on a value and an element the
+    # container hands back, neither of which a view qualifies.
+    if fieldLeg then {
+        lbF: "\{ind}__typeof__(\{addr}\{rvm}) __borrow_\{nm} = \{addr}\{rvm};\n"
+        buf.append lbF
+    } else {
+        lb0: "\{ind}\{bct}* __borrow_\{nm} = \{addr}\{rvm};\n"
+        buf.append lb0
+    }
     lb1: "\{ind}/* alias: \{nm} => (*__borrow_\{nm}) */\n"
     buf.append lb1
     bal: "(*__borrow_\{nm})"
@@ -8388,6 +8427,88 @@ rhsIsBorrowGet: function {
         )
         if isC.not then return false
         return (listGetIsPtr :ast :symtab :ctx monoId: (ztypes.tid.create from: bt.u64))
+    } else {
+        return false
+    }
+}
+
+# bindChasedTid -- the type a binding holds, collection typedefs chased (Bytes
+# reads as its ListVal): the statement's own stamp, or the value's when the
+# statement carries none. Every leg that asks what storage class a binding is
+# asks here, so the three cannot drift apart.
+bindChasedTid: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    n: zast.assignmentrow.view
+    avn: astnode.view
+} out ztypes.tid is {
+    bt: stampIdOf :symtab nid: n.nodeid.u64
+    if bt.isZero then bt = stampIdOf :symtab nid: (interpPartNodeId n: avn)
+    return (ztypes.tid.create from: (chaseColMono :symtab :ctx tid: bt))
+}
+
+# pathRootsAtVariable -- the dotted path bottoms out in a name that resolves to
+# a VARIABLE, so every step of it names storage whose address the C can take. A
+# type name (`Value.nul` constructs), a unit constant, a literal and a call all
+# answer false: what each yields is a value with no place of its own, and the
+# binding owns it rather than aliasing it.
+pathRootsAtVariable: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    n: astnode.view
+} out bool is {
+    match (
+        n
+    ) case atomid then {
+        return (atomVid :symtab nid: n.nodeid.u64).isZero.not
+    } case labelvalue then {
+        return (atomVid :symtab nid: n.nodeid.u64).isZero.not
+    } case dottedpath then {
+        return (pathRootsAtVariable :ast :symtab n: (ast.nodes.get i: n.parent.u64))
+    } else {
+        return false
+    }
+}
+
+# rhsIsBorrowedFieldRead -- the binding RHS is a plain member READ off a value
+# (`h.items`): the storage belongs to the base, so the binding is a second name
+# for it and must alias rather than snapshot it -- a snapshot of a reftype
+# shares the source's buffer and both grow and free it independently. A zero-arg
+# method auto-call reads as a dotted path too and answers FALSE: it returns a
+# value of its own. The borrow decision itself stays bindingRhsIsBorrow's.
+rhsIsBorrowedFieldRead: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    n: astnode.view
+} out bool is {
+    match (
+        n
+    ) case statementline then {
+        sfr: ast.nodes.get i: n.statementline.u64
+        return (rhsIsBorrowedFieldRead :ast :symtab :ctx n: sfr)
+    } case dottedpath then {
+        dn: ast.nodes.get i: n.nodeid.u64
+        rtn: ast.nodes.get i: n.parent.u64
+        if (pathRootsAtVariable :ast :symtab n: rtn).not then return false
+        if (bindingRhsIsBorrow :ast :symtab :ctx n: dn).not then return false
+        fch: aliasChildName :ast :symtab n: dn
+        fpid: interpPartNodeId n: (ast.nodes.get i: n.parent.u64)
+        fco: (symtab.typing.declChildOf
+            pool: ast.names
+            parentTypeId: (stampIdOf :symtab nid: fpid)
+            name: fch
+        )
+        match (
+            fco
+        ) case some then {
+            return (
+                (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: fco.u64)) !=
+                ztypes.ztypetype.functionType
+            )
+        } case none then {
+            return false
+        }
     } else {
         return false
     }
@@ -17972,9 +18093,7 @@ emitCollectionBind: function {
 } out bool is {
     avn: ast.nodes.get i: n.value.u64
     nbrw: bindingRhsIsBorrow :ast :symtab :ctx n: avn
-    ltid: stampIdOf :symtab nid: n.nodeid.u64
-    if ltid.isZero then ltid = stampIdOf :symtab nid: (interpPartNodeId n: avn)
-    ltid = ztypes.tid.create from: (chaseColMono :symtab :ctx tid: ltid)
+    ltid: bindChasedTid :symtab :ctx :n :avn
     isList: isListOriginOf :symtab :ctx tid: ltid
     isHeap: isSetOriginOf :symtab :ctx tid: ltid
     if (isMapOriginOf :symtab :ctx tid: ltid) then isHeap = true
@@ -18784,20 +18903,6 @@ emitAssignment: function {
         nm: nm.stringView
         :nameVid
     ) then return
-    if (emitCollectionBind
-        :ast
-        :symtab
-        :ctx
-        :n
-        :ind
-        :tmp
-        :buf
-        nm: nm.stringView
-        :nameVid
-    ) then return
-    ltid: stampIdOf :symtab nid: n.nodeid.u64
-    if ltid.isZero then ltid = stampIdOf :symtab nid: (interpPartNodeId n: avn)
-    ltid = ztypes.tid.create from: (chaseColMono :symtab :ctx tid: ltid)
     if (emitBorrowAliasBind
         :ast
         :symtab
@@ -18810,6 +18915,18 @@ emitAssignment: function {
         :tmp
         :buf
     ) then return
+    if (emitCollectionBind
+        :ast
+        :symtab
+        :ctx
+        :n
+        :ind
+        :tmp
+        :buf
+        nm: nm.stringView
+        :nameVid
+    ) then return
+    ltid: bindChasedTid :symtab :ctx :n :avn
     if (emitStringLikeBind
         :ast
         :symtab

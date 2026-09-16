@@ -1,0 +1,95 @@
+# A borrowing binding of a collection is a REFERENCE to it, not a snapshot of
+# its header. The by-value families (List, ListVal, IdMapV, IdMapR, IdSet, and
+# Bytes over ListVal) are a struct the C copies by assignment, so binding one
+# by `.borrow`, off a field, or out of a block used to hand back a copy that
+# shared the source's buffer: an append grew the COPY's length, the source
+# never changed, and past the initial capacity the realloc left the source
+# pointing at freed memory -- a leak on the small path and an invalid free on
+# the large one. Every append below is read back through the SOURCE.
+#
+# Set and Map are the control: they live on the heap and their local IS the
+# pointer, so a pointer copy was already the reference and their C must not
+# move. `.copy` is the other control -- it must still be independent.
+Holder: class {
+    items: (ListVal u64)
+    names: List String
+    ids: (IdMapV u64 v: u64)
+    seen: (IdSet u64)
+    raw: Bytes
+}
+
+fill: function {l: (ListVal u64).borrow} is {
+    k: u64
+    for k < 40 loop {
+        l.append from: (k + 100)
+        k = k + 1
+    }
+}
+
+main: function is {
+    # `.borrow` on a local: the append lands in the source
+    a: ListVal u64
+    a.append from: 1.u64
+    b: a.borrow
+    b.append from: 2.u64
+    print "borrow=\{a.length},\{b.length}"
+
+    # past the initial capacity the buffer reallocs: the source must follow it
+    big: ListVal u64
+    fill l: big.borrow
+    print "grown=\{big.length}"
+
+    h: Holder items: (ListVal u64) names: (List String) ids: (IdMapV u64 v: u64) seen: (IdSet u64) raw: Bytes
+
+    # a field read binds the field itself. Each binding pins its path for its
+    # own scope, so every one below lives in a block of its own
+    {
+        fi: h.items
+        fi.append from: 7.u64
+    }
+    print "field=\{h.items.length}"
+    # the same field with the marker spelled out
+    {
+        fb: h.items.borrow
+        fb.append from: 8.u64
+    }
+    print "marker=\{h.items.length}"
+    # a reference-element List, an IdMapV, an IdSet and a Bytes field
+    {
+        fn: h.names
+        fn.append from: "one".string
+    }
+    {
+        fd: h.ids
+        fd.set key: 1.u64 value: 5.u64
+    }
+    {
+        fs: h.seen
+        fs.add item: 3.u64
+    }
+    {
+        fr: h.raw
+        fr.append from: 65.u8
+    }
+    print "families=\{h.names.length},\{h.ids.length},\{h.seen.length},\{h.raw.length}"
+
+    # what a borrow released at a block's end wrote is still there
+    h.items.append from: 10.u64
+    print "block=\{h.items.length}"
+
+    # the Set and Map control: already references, and still are
+    s: (Set String)
+    s.add item: "k".string
+    sb: s.borrow
+    sb.add item: "j".string
+    m: (Map String V: String)
+    m.set key: "a".string value: "1".string
+    mb: m.borrow
+    mb.set key: "b".string value: "2".string
+    print "heap=\{s.length},\{sb.length},\{m.length},\{mb.length}"
+
+    # `.copy` is NOT a reference: the copy grows alone
+    c: a.copy
+    c.append from: 3.u64
+    print "copy=\{a.length},\{c.length}"
+}

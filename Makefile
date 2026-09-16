@@ -1008,7 +1008,11 @@ perf: $(PERFBIN)
 #
 # +6,888 when the arms of a bound or consumed `if` or `match` came to answer as
 # the same read written alone does: +0 over the same source, the source longer.
-ALLOC_BASELINE := 2812405
+#
+# +2,267 when a borrowing binding of a by-value reftype came to be a reference:
+# +17 over the same source (the shape and type questions the alias gate asks per
+# binding), +2,250 the source longer.
+ALLOC_BASELINE := 2814672
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

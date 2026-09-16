@@ -1242,21 +1242,35 @@ saves the copy.</p>
 (<code>with a: c.take do ...</code>).</li>
 <li>Inline <code>.take</code> or <code>.borrow</code> in a plain assignment
   (<code>d: c.take</code>, <code>y: r.f.borrow</code>).</li>
+<li>A reftype read out of a field (<code>r: h.items</code>, <code>r: h.p</code>) or out
+  of a container (<code>e: l.get i: 0</code>). The binding is a second name for
+  that storage, so a write through it reaches the field or the element.
+  Binding it by value instead would copy the struct and share its heap
+  with the owner: an append through the copy grew the copy's length and
+  left the owner's buffer stale, and past its capacity the realloc left
+  the owner pointing at freed memory.</li>
 </ul>
 <p>Aliasing does NOT apply to:</p>
 <ul>
 <li>Call or constructor right-hand sides -- the returned value must
-  materialize into a real local.</li>
-<li>Dotted paths that dereference a reftype pointer at any step
-  (e.g. <code>b.label</code> where <code>b</code> is a class) -- keeping the local pins
-  the pointer in a register so the programmer's load-once intent is
-  preserved.</li>
+  materialize into a real local. A member read that LOWERS to a call is
+  one of these: a protocol- or facet-typed field builds a fat pointer
+  out of its base rather than naming a place.</li>
+<li>A path rooted at anything but a variable -- a type name
+  (<code>Value.nul</code> constructs), a unit constant, a literal. What each
+  yields is a value with no place of its own.</li>
+<li>A <code>Set</code> or a <code>Map</code>. Both live on the heap and the local IS
+  the pointer, so the pointer is already the reference and there is no
+  address to take.</li>
 <li>Plain <code>x: y</code> assignments without <code>.take</code> or <code>.borrow</code> --
   these retain their existing copy-or-transfer semantics.</li>
 </ul>
 <p>The generated C contains <code>/* alias: name =&gt; source */</code> comments at
 the substitution site for readability; references to the alias name in
-the body emit as the source expression directly.</p>
+the body emit as the source expression directly. A field read takes its
+pointer type from the storage rather than from the binding's declared
+type, because a field reached through a <code>.view</code> root is <code>const</code> in
+the C and the declared type does not say so.</p>
 <h2 id="borrow-escape-rules"><a href="#borrow-escape-rules">9. Borrow Escape Rules</a></h2>
 <p>Borrowed values cannot escape into positions that require ownership.
 The type-checker rejects these statically with a hint pointing at the

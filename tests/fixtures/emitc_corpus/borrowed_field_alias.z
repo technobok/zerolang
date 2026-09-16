@@ -1,0 +1,98 @@
+# The same rule as borrowed_collection_alias, for every OTHER by-value reftype:
+# a binding read out of a field is a second name for that field, not a snapshot
+# of it. A String, a class, a union and a generic instance are all a struct the
+# C copies by assignment, so the old snapshot shared the field's heap -- an
+# append through the binding reallocated the shared buffer and left the field
+# dangling (a use-after-free, reproduced under ASan), and a field write through
+# a bound class landed in the copy and was lost.
+#
+# A field read through a `.view` root is the readonly case: the C holds it
+# `const`, so the alias has to carry that qualifier rather than the binding's
+# own declared type, and a write through it is refused by the checker.
+Inner: class {
+    n: u64
+    tag: String
+}
+
+Pair: class {
+    a: u64
+    b: u64
+} as { t: anyval.generic }
+
+Shape: union {
+    dot: String
+    line: String
+}
+
+Holder: class {
+    p: String
+    q: String
+    i: Inner
+    u: Shape
+    g: (Pair t: u64)
+}
+
+readonlyRoot: function {h: Holder.view} out u64 is {
+    r: h.p
+    return r.length
+}
+
+main: function is {
+    h: (Holder
+        p: "hp".string
+        q: "hq".string
+        i: (Inner n: 1 tag: "one".string)
+        u: (Shape.dot "dot".string)
+        g: (Pair t: u64 a: 1.u64 b: 2.u64)
+    )
+
+    # a String field: the append reaches the field, and past its capacity the
+    # realloc has to move the FIELD's pointer, not a copy's
+    {
+        r: h.p
+        r.append "!"
+        r.append "-and-more-than-fits-in-the-original"
+    }
+    print "string=\{h.p}"
+
+    # a class field: the write lands in the holder's instance
+    {
+        r: h.i
+        r.n = 41
+        r.tag = "changed".string
+    }
+    print "class=\{h.i.n},\{h.i.tag}"
+
+    # a generic instance field takes the same lowering
+    {
+        r: h.g
+        r.a = 9.u64
+    }
+    print "generic=\{h.g.a}"
+
+    # a union field read: the binding sees the arm the holder holds
+    {
+        r: h.u
+        print "union=\{r.dot}"
+    }
+
+    # two bindings of ONE field are two names for it, so a write through either
+    # is visible through the other
+    {
+        r1: h.p
+        r2: h.p
+        r1.append "+"
+        print "twice=\{r1.length},\{r2.length}"
+    }
+
+    # a sibling field stays writable while a binding pins its neighbour
+    {
+        r: h.p
+        h.q = "new q".string
+        print "sibling=\{r.length},\{h.q}"
+    }
+
+    # the field is writable again once the binding's block has ended
+    h.p = "fresh".string
+    print "after=\{h.p} ro=\{readonlyRoot :h}"
+}
