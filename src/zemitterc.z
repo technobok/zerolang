@@ -4290,7 +4290,9 @@ fieldMoveInPlace: function {
 # emitExplicitTakeZero -- an explicit `<atom>.take` argument: the source is
 # zeroed so its scope-exit destructor no-ops, the move having transferred
 # ownership. The caller has already excused a HOLD parameter, which is passed
-# by pointer and never destroyed by the callee.
+# by pointer and never destroyed by the callee. A heap-pointer collection
+# zeroes to NULL, as emitImplicitMoveZero does for the unmarked spelling: the
+# value IS the pointer, and a struct zero does not fit one.
 emitExplicitTakeZero: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -4300,6 +4302,15 @@ emitExplicitTakeZero: function {
     ind: StringView
     buf: String.borrow
 } is {
+    etid: (stampIdOf
+        :symtab
+        nid: (interpPartNodeId n: (ast.nodes.get i: a.operation.u64))
+    )
+    if (isHeapPtrCollection :symtab :ctx tid: etid) then {
+        invh: "\{ind}\{ts} = NULL;\n"
+        buf.append invh
+        return
+    }
     tc: (takeMoveCtype
         :ast
         :symtab
@@ -6679,7 +6690,7 @@ hoistDestroyLine: function {
     cb: ctxCname :ctx tid: dt
     # a Map or Set temp already IS the pointer its destroy takes
     if (isHeapPtrCollection :symtab :ctx tid: dt) then return "    \{cb}_destroy(\{nm});\n"
-    return "    \{cb}_destroy(\{destroyOperand :symtab tid: dt :nm});\n"
+    return "    \{cb}_destroy(\{destroyOperand :symtab :ctx tid: dt :nm});\n"
 }
 
 # hoistBorrowValArg -- a by-value call argument that is an owned, destructible,
@@ -25642,9 +25653,14 @@ isBorrowStringParam: function {
     return false
 }
 
-# isSetMapPtrParam -- a non-TAKE Set/Map param. Set/Map are heap pointers, so the
-# param is passed BY POINTER (Set_t*) and its arg (a Set/Map local/field, also a
-# pointer) is passed directly -- unlike a by-value List param which needs &.
+# isSetMapPtrParam -- a Set/Map param, WHATEVER its ownership. Set/Map live on
+# the heap and the value IS the pointer, so the param is passed BY POINTER
+# (Set_t*) and its arg (a Set/Map local or field, also a pointer) is passed
+# directly -- unlike a by-value List param which needs &.
+#
+# `.take` is not an exception: what it takes is the POINTER, and there is no
+# by-value form of one of these to move. Excluding it declared the parameter as
+# a struct while the body still read it with `->`, which gcc rejected.
 isSetMapPtrParam: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -25653,12 +25669,9 @@ isSetMapPtrParam: function {
     pname: StringView
     tid: ztypes.tid
 } out bool is {
-    if (symtab.typing.declOwnershipIs
-        pool: ast.names
-        parentTypeId: fid
-        name: pname
-        own: ztypes.zparamownership.takeMode
-    ) then return false
+    ast
+    fid
+    pname
     # the param's own origin (a typedef wrapper chases to its base mono)
     # against the cached Set/Map template ids
     bt: chaseColMono :symtab :ctx :tid
@@ -26197,11 +26210,16 @@ isTypedefType: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out boo
 }
 
 # destroyOperand -- what a value's destroy is handed: its address, or the value
-# itself for a box, which already is the pointer the destroy frees.
+# itself where the value already IS the pointer the destroy frees -- a box, and
+# a Set or Map, which live on the heap.
 destroyOperand: function {
-    symtab: zenv.ZSymbolTable.view tid: ztypes.tid nm: StringView
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tid: ztypes.tid
+    nm: StringView
 } out String is {
     if (isBoxTid :symtab :tid) then return nm.string
+    if (isHeapPtrCollection :symtab :ctx :tid) then return nm.string
     return "&\{nm}"
 }
 
@@ -28413,9 +28431,11 @@ emitReturnCleanup: function {
 }
 
 # takeParamDestroyTid -- the type whose destructor an owned `.take` parameter
-# owes at function exit, zero when it owes none. Owned .take Set/Map params
-# are skipped: declared by value, but a Set/Map _destroy frees the container
-# as a heap pointer (would need &name); none exist in the self-host. A
+# owes at function exit, zero when it owes none. A Set or a Map owes one like
+# any other owned parameter: it arrives as the heap pointer it is, and
+# destroyOperand spells the call for that. (It was skipped while such a
+# parameter was declared BY VALUE, which no destructor fits -- the declaration
+# is the pointer now, so the skip would leak what the callee took.) A
 # collection typedef destroys as its chased mono; a type with no destructor
 # of its own may still have a canonical one that has.
 takeParamDestroyTid: function {
@@ -28425,7 +28445,6 @@ takeParamDestroyTid: function {
     ppid: u64
 } out ztypes.tid is {
     pt: ztypes.tid.create from: ppid.u64
-    if (isHeapPtrCollection :symtab :ctx tid: pt) then return ztypes.tid
     puse: chaseColMono :symtab :ctx tid: pt
     if (symtab.reg.needsDestructor typeId: puse).not then {
         ptnm: regNameOf :symtab tid: pt
@@ -28478,6 +28497,7 @@ oweTakeParamFrees: function {
                     pcb: ctxCname :ctx tid: puse
                     pdf: "    \{pcb}_destroy(\{(destroyOperand
                         :symtab
+                        :ctx
                         tid: puse
                         nm: pmn.stringView
                     )});\n"

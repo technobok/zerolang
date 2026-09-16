@@ -1033,7 +1033,10 @@ perf: $(PERFBIN)
 # +1,388 when a call's result came to be bound before its address is taken:
 # +0 over the same source -- the legs fire only where the C did not compile
 # before -- and +1,388 the source longer.
-ALLOC_BASELINE := 2816681
+#
+# +140 when a `.take` Set/Map parameter became the pointer it always was: +0
+# over the same source (no program in the tree had one), the source longer.
+ALLOC_BASELINE := 2816821
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
