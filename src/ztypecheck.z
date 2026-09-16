@@ -20868,6 +20868,21 @@ bindNumericTypeArg: function {
     return true
 }
 
+# typeArgTid -- the type a construction's type argument names, spelled `baseId`
+# when it is a bare name: an instantiation, a name, or a unit-qualified path.
+# 0 when it names none.
+typeArgTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    opId: zast.nodeid
+    baseId: zast.nameid
+} out u64 is {
+    aid: constructionArgTid :st :ast :unitDecl :opId :baseId
+    if aid > 0 then return aid
+    return (dottedTyperefId :ast :st op: (ast.nodes.get i: opId.u64))
+}
+
 # bindResolvedTypeArg -- a type argument that resolves adds its mono name to the
 # suffix and, when it carries a label, becomes that param's substitution. Answers
 # the id it resolved to, 0 when it resolved to none.
@@ -20881,17 +20896,7 @@ bindResolvedTypeArg: function {
     sfx: String
     subs: (IdMapV zast.nameid v: u64)
 } out u64 is {
-    aid: (constructionArgTid
-        :st
-        :ast
-        :unitDecl
-        :opId
-        :baseId
-    )
-    if aid == 0 then {
-        argOpNode: ast.nodes.get i: opId.u64
-        aid = dottedTyperefId :ast :st op: argOpNode
-    }
+    aid: typeArgTid :st :ast :unitDecl :opId :baseId
     if aid == 0 then return 0
     atn: (monoValName
         :st
@@ -33893,6 +33898,7 @@ walkOneCallArg: function {
             vt = checkValueAt :st :unitDecl :ast nid: arg.operation
             st.typing.suppressBareCtor = sbPrev
             st.typing.callArgNode = caPrev
+            if isTypeArg when vt.isZero.not then refuseValueTypeArg :st :unitDecl :ast :arg :vt
         }
         if vt.u64 == 0 when st.typing.errors.length == errV then {
             (reportUnresolvedValue
@@ -33950,6 +33956,33 @@ ctorArgIsTypeArg: function {st: zenv.ZSymbolTable.view tplId: ztypes.tid arg: ar
     tk: declOfTypeId :st tid: tpl
     if (st.reg.isGenericParamOf tdecl: tk name: arg.name).not then return false
     return (st.reg.genericParamConstraintOf tdecl: tk paramName: arg.name).numKind.has.not
+}
+
+# refuseValueTypeArg -- a construction's type argument that the walk typed as
+# the value `vt` and that names no type: refused at the argument.
+refuseValueTypeArg: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    arg: argref
+    vt: ztypes.tid
+} is {
+    baseId: paramTypeBaseNameId :ast op: (ast.nodes.get i: arg.operation.u64)
+    if (typeArgTid :st :ast :unitDecl opId: arg.operation :baseId) > 0 then return
+    tn: st.reg.nameOf tid: (materialiseLiteral :ast :st :unitDecl t: vt)
+    msg: "the type argument is a value of type '\{tn}', not a type"
+    if baseId.isZero.not then {
+        nm: zast.nameTextAt :ast ref: baseId
+        msg = "'\{nm}' is a value of type '\{tn}', not a type"
+    }
+    (addError
+        :st
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+        e: zast.err.genericError
+        :msg
+    )
 }
 
 # ctorTypeArgParamTid -- the type of a construction's type argument when it
