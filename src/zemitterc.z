@@ -29687,18 +29687,17 @@ emitListMono: function {
         holeVal: ect.stringView
         :buf
     )
-    if ctx.colGetFromCode when (monoMemberUsed
-        :symtab
-        :monoId
-        nameId: zast.names.wkGet
-    ) then {
+    useGet: monoMemberUsed :symtab :monoId nameId: zast.names.wkGet
+    useMut: monoMemberUsed :symtab :monoId nameId: zast.names.wkGetMut
+    if ctx.colGetFromCode when useGet or useMut then {
         (emitColGet
             nm: nm.stringView
             ect: ect.stringView
             kind: "List"
             ptr: (elemBorrowsByPtr :ast :symtab :ctx tid: (ztypes.tid.create from: eid.u64))
             mutPtr: (elemRefByPtr :ast :symtab :ctx tid: (ztypes.tid.create from: eid.u64))
-            hasMut: (monoMemberUsed :symtab :monoId nameId: zast.names.wkGetMut)
+            hasGet: useGet
+            hasMut: useMut
             :buf
         )
     }
@@ -29752,14 +29751,17 @@ emitListMono: function {
 # so every value context stays value-shaped. `kind` only spells the panic
 # message. One emitter for both templates, so List.listView cannot hand out a
 # view that disagrees with its source. The return type and its forward
-# declaration come from one string and cannot diverge. `hasMut` says the mono
-# declares a `getMut` child: the view templates are readonly and get none.
+# declaration come from one string and cannot diverge. `hasGet` and `hasMut`
+# say which of `get` and `getMut` a use site resolved on this mono; each is
+# written on its own demand, and the readonly view templates never ask for
+# `getMut`.
 emitColGet: function {
     nm: StringView
     ect: StringView
     kind: StringView
     ptr: bool
     mutPtr: bool
+    hasGet: bool
     hasMut: bool
     buf: String.borrow
 } is {
@@ -29779,13 +29781,15 @@ emitColGet: function {
     guard.append b2
     guard.append "        z_panic(_zp_buf);\n"
     guard.append "    }\n"
-    s0: "static \{rt} z_\{nm}_get(const z_\{nm}_t* _this, uint64_t _idx);\n"
-    buf.append s0
-    s1: "static \{rt} z_\{nm}_get(const z_\{nm}_t* _this, uint64_t _idx) {\n"
-    buf.append s1
-    buf.append guard
-    buf.append rv
-    buf.append "}\n\n"
+    if hasGet then {
+        s0: "static \{rt} z_\{nm}_get(const z_\{nm}_t* _this, uint64_t _idx);\n"
+        buf.append s0
+        s1: "static \{rt} z_\{nm}_get(const z_\{nm}_t* _this, uint64_t _idx) {\n"
+        buf.append s1
+        buf.append guard
+        buf.append rv
+        buf.append "}\n\n"
+    }
     # `getMut` answers a DIFFERENT question from `get`: a valtype element copies
     # out of `get` (cheap, cannot alias) but must come back BY REFERENCE from
     # `getMut`, or a write to the referenced element's children lands on the
@@ -30065,7 +30069,8 @@ emitListViewMono: function {
             kind: "ListView"
             ptr: (elemBorrowsByPtr :ast :symtab :ctx tid: (ztypes.tid.create from: eid.u64))
             mutPtr: (elemRefByPtr :ast :symtab :ctx tid: (ztypes.tid.create from: eid.u64))
-            hasMut: (monoMemberUsed :symtab :monoId nameId: zast.names.wkGetMut)
+            hasGet: true
+            hasMut: false
             :buf
         )
     }
