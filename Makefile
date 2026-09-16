@@ -1012,7 +1012,10 @@ perf: $(PERFBIN)
 # +2,267 when a borrowing binding of a by-value reftype came to be a reference:
 # +17 over the same source (the shape and type questions the alias gate asks per
 # binding), +2,250 the source longer.
-ALLOC_BASELINE := 2814672
+#
+# -12 when three bare bindings that MOVE came to spell the move `.take`: the
+# marker is read instead of the bind-move rule being reached. C is identical.
+ALLOC_BASELINE := 2814660
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
