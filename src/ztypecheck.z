@@ -33874,14 +33874,10 @@ walkOneCallArg: function {
         if isCtor then useNC = ctorArgTakesFnRef :st :ast :effId :arg
         vt: ztypes.tid
         errV: st.typing.errors.length
+        # a type argument names a type: it constructs nothing
+        isTypeArg: isCtor and (ctorArgIsTypeArg :st tplId: funcId :arg)
         tpa: ztypes.tid
-        if isCtor when useNC.not then tpa = (ctorTypeArgParamTid
-            :st
-            :ast
-            :unitDecl
-            tplId: funcId
-            :arg
-        )
+        if isTypeArg when useNC.not then tpa = ctorTypeArgParamTid :st :ast :unitDecl :arg
         if useNC then {
             vt = ztypes.tid.create from: (valueNoCoerceAt :st :unitDecl :ast nid: arg.operation)
         } else if tpa.isZero.not then {
@@ -33889,10 +33885,13 @@ walkOneCallArg: function {
             stampGate :st nid: arg.operation.u64 tid: vt
         } else {
             caPrev: st.typing.callArgNode
+            sbPrev: st.typing.suppressBareCtor
             st.typing.callArgNode = (nodeId
                 n: (ast.nodes.get i: arg.operation.u64)
             ).u64
+            st.typing.suppressBareCtor = isTypeArg
             vt = checkValueAt :st :unitDecl :ast nid: arg.operation
+            st.typing.suppressBareCtor = sbPrev
             st.typing.callArgNode = caPrev
         }
         if vt.u64 == 0 when st.typing.errors.length == errV then {
@@ -33953,20 +33952,17 @@ ctorArgIsTypeArg: function {st: zenv.ZSymbolTable.view tplId: ztypes.tid arg: ar
     return (st.reg.genericParamConstraintOf tdecl: tk paramName: arg.name).numKind.has.not
 }
 
-# ctorTypeArgParamTid -- the type of a construction argument that carries a
-# type PARAMETER of the template being walked (`(Cell t: t val: v)`), as the
-# instance being walked sees it. 0 for every other argument, which walks as a
-# value -- including a type argument that names a concrete type, since a type
-# name is a value the walk resolves. A parameter is not: no lookup finds it,
-# and the walk reported the name as unresolvable.
+# ctorTypeArgParamTid -- the type of a construction's type argument when it
+# names a type PARAMETER of the template being walked (`(Cell t: t val: v)`),
+# as the instance being walked sees it. 0 for a type argument naming anything
+# else, which walks as a value that constructs nothing: a type name resolves
+# there, and a parameter does not -- the walk reported it as unresolvable.
 ctorTypeArgParamTid: function {
     st: zenv.ZSymbolTable
     ast: Ast
     unitDecl: ztypes.declid
-    tplId: ztypes.tid
     arg: argref
 } out ztypes.tid is {
-    if (ctorArgIsTypeArg :st :tplId :arg).not then return ztypes.tid
     pn: paramTypeBaseNameId :ast op: (ast.nodes.get i: arg.operation.u64)
     if (genericParamInScope :st :ast frame: st.curFrame nameId: pn nid: 0) == 0 then {
         return ztypes.tid
