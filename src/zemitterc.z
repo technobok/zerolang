@@ -8863,6 +8863,9 @@ emitCollectionMethodCall: function {
         )
         bn = "(*\{bp9})"
     }
+    # the temp owns the receiver only when the call handed over a new value; an
+    # element or other borrow still belongs to its container. A Set or a Map is
+    # held as its pointer.
     if rcvIsCreate.not when (svRecvAddressable recv: bn.stringView).not then {
         bh9: (hoistLvalue
             :ast
@@ -8870,7 +8873,8 @@ emitCollectionMethodCall: function {
             :ctx
             av: bn.stringView
             tid: (ztypes.tid.create from: bt.u64)
-            own: true
+            own: (hoistExprIsBorrowRooted :ast :symtab :ctx n: recvNode).not
+            ptr: (isHeapPtrCollection :symtab :ctx tid: (ztypes.tid.create from: bt.u64))
         )
         bn = bh9.copy
     }
@@ -25648,6 +25652,8 @@ elemRefByPtr: function {
     tid: ztypes.tid
 } out bool is {
     if (elemBorrowsByPtr :ast :symtab :ctx :tid) then return true
+    # a Set or a Map element is already a pointer, so a copy of it IS the reference
+    if (isHeapPtrCollection :symtab :ctx :tid) then return false
     ce: chaseColMono :symtab :ctx :tid
     if (isCollectionOriginTid :ctx originTid: (originTidOf :symtab tid: ce)) then return true
     tt: symtab.reg.typetypeOf typeId: tid
@@ -26465,7 +26471,21 @@ cTypeForNameTid: function {
 } out String is {
     sc: scalarCTypeFor :symtab :name :tid
     if sc.length > 0 then return sc
-    return (typeRefC :ast :symtab :ctx :tid thisTid: ztypes.tid)
+    return (slotCType :ast :symtab :ctx :tid)
+}
+
+# slotCType -- the C type a container stores a `tid` value as: its C type, and a
+# pointer for a heap collection (a Set or a Map), whose value IS that pointer
+# wherever it is held -- a local, a field, a parameter, an element.
+slotCType: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+} out String is {
+    ct: typeRefC :ast :symtab :ctx :tid thisTid: ztypes.tid
+    if (isHeapPtrCollection :symtab :ctx :tid) then ct.append "*"
+    return ct
 }
 
 # cTypeForName -- the C type for a type NAME: scalar via cTypeOf, else
@@ -26722,7 +26742,33 @@ armValueC: function {
     return avr
 }
 
-# armPayloadC -- an arm's payload C type ("" for null arms).
+# emitArmPayloadDestroy -- the destructor call for a union arm's boxed payload,
+# nothing when the payload owns nothing. The box holds the payload as it is
+# stored (`pc`), and a Set or a Map payload is stored as its pointer, so that
+# one is destroyed through what the box holds.
+emitArmPayloadDestroy: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    arm: StringView
+    pc: StringView
+    buf: String.borrow
+} is {
+    pdtr: payloadDestructor :ast :symtab :ctx :tid :arm
+    if pdtr.length == 0 then return
+    co: symtab.typing.declChildOf pool: ast.names parentTypeId: tid name: arm
+    if (isHeapPtrCollection :symtab :ctx tid: (ztypes.tid.create from: (co.or d: 0))) then {
+        ldh: "            \{pdtr}(*(\{pc}*)u->data);\n"
+        buf.append ldh
+    } else {
+        ldd: "            \{pdtr}((\{pc}*)u->data);\n"
+        buf.append ldd
+    }
+}
+
+# armPayloadC -- an arm's payload C type ("" for null arms), as the arm stores
+# it: a heap collection is its pointer (slotCType).
 armPayloadC: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -26736,13 +26782,7 @@ armPayloadC: function {
     ) case some then {
         pn: regNameView :symtab tid: (ztypes.tid.create from: co.u64)
         if pn == "null" then return "".string
-        return (typeRefC
-            :ast
-            :symtab
-            :ctx
-            tid: (ztypes.tid.create from: co.u64)
-            thisTid: ztypes.tid
-        )
+        return (slotCType :ast :symtab :ctx tid: (ztypes.tid.create from: co.u64))
     } case none then {
         return "".string
     }
@@ -29634,6 +29674,35 @@ emitColMethodOnDemand: function {
     buf.append "\n"
 }
 
+# listElemsDestroyC -- the loop a List's destructor runs over its elements, empty
+# when they own nothing. A String frees its buffer, a Set or a Map element is
+# destroyed through the pointer it is, and anything else with a destructor
+# through its address. A collection typedef (Bytes) is destroyed as the
+# collection it wraps, which is the only one with a destructor of its own.
+listElemsDestroyC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    eid: ztypes.tid
+} out String is {
+    if eid == ctx.strTid then {
+        return "    for (uint64_t _di = 0; _di < p->length; _di++) {\n        \{ctx.strC}_free(&p->data[_di]);\n    }\n"
+    }
+    ecid: chaseColMono :symtab :ctx tid: eid
+    if (isHeapPtrCollection :symtab :ctx tid: eid) then {
+        hcb: ctxCname :ctx tid: ecid
+        return "    for (uint64_t _di = 0; _di < p->length; _di++) {\n        \{hcb}_destroy(p->data[_di]);\n    }\n"
+    }
+    if (symtab.reg.needsDestructor typeId: ecid).not then {
+        eln: regNameOf :symtab tid: eid
+        rbn: canonTypeId :ast :symtab :ctx tid: eid name: eln.stringView
+        if rbn > 0 then ecid = ztypes.tid.create from: rbn.u64
+    }
+    if (symtab.reg.needsDestructor typeId: ecid).not then return "".string
+    ecb: ctxCname :ctx tid: ecid
+    return "    for (uint64_t _di = 0; _di < p->length; _di++) {\n        \{ecb}_destroy(&p->data[_di]);\n    }\n"
+}
+
 # emitListMono -- substitute z_List.c.tmpl for a List instance + the
 # linear-scan contains companion (scalar element equality).
 emitListMono: function {
@@ -29646,12 +29715,11 @@ emitListMono: function {
 } is {
     nm: cbaseNoPrefix :ctx tid: monoId
     eid: listElemType :symtab :monoId
-    eln: regNameOf :symtab tid: (ztypes.tid.create from: eid.u64)
     isStrEl: false
     if eid == ctx.strTid then isStrEl = true
     isSvEl: false
     if eid == ctx.svTid then isSvEl = true
-    ect0: typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: eid.u64) thisTid: ztypes.tid
+    ect0: slotCType :ast :symtab :ctx tid: (ztypes.tid.create from: eid.u64)
     ect: ctypeOrI64 s: ect0.stringView
     p: "\{runtimeDir}/z_List.c.tmpl"
     raw: readTemplateCached :ctx path: p.stringView
@@ -29659,26 +29727,7 @@ emitListMono: function {
     {
         t1: applyTmpl text: raw key: "NAME" val: nm.stringView
         t2: applyTmpl text: t1 key: "ELEM_T" val: ect.stringView
-        delems: String
-        if isStrEl then {
-            delems = "    for (uint64_t _di = 0; _di < p->length; _di++) {\n        \{ctx.strC}_free(&p->data[_di]);\n    }\n"
-        } else {
-            ecid: eid
-            if (symtab.reg.needsDestructor typeId: ecid).not then {
-                rbn: (canonTypeId
-                    :ast
-                    :symtab
-                    :ctx
-                    tid: (ztypes.tid.create from: eid.u64)
-                    name: eln.stringView
-                )
-                if rbn > 0 then ecid = ztypes.tid.create from: rbn.u64
-            }
-            if (symtab.reg.needsDestructor typeId: ecid) then {
-                ecb: ctxCname :ctx tid: (ztypes.tid.create from: ecid.u64)
-                delems = "    for (uint64_t _di = 0; _di < p->length; _di++) {\n        \{ecb}_destroy(&p->data[_di]);\n    }\n"
-            }
-        }
+        delems: listElemsDestroyC :ast :symtab :ctx :eid
         t3: applyTmpl text: t2 key: "DESTROY_ELEMS" val: delems.stringView
         lvm: listviewMethods :ctx :symtab :monoId nm: nm.stringView ect: ect.stringView
         t4: applyTmpl text: t3 key: "LISTVIEW_METHODS" val: lvm.stringView
@@ -30088,7 +30137,7 @@ emitListViewMono: function {
 } is {
     nm: cbaseNoPrefix :ctx tid: monoId
     eid: listElemType :symtab :monoId
-    ect0: typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: eid.u64) thisTid: ztypes.tid
+    ect0: slotCType :ast :symtab :ctx tid: (ztypes.tid.create from: eid.u64)
     ect: ctypeOrI64 s: ect0.stringView
     p: "\{runtimeDir}/z_ListView.c.tmpl"
     raw: readTemplateCached :ctx path: p.stringView
@@ -30349,11 +30398,15 @@ emitUnionMono: function {
             ptg: variantTag :symtab :tid arm: pname.stringView
             lcase: "        case \{ptg}:\n"
             buf.append lcase
-            pdtr: payloadDestructor :ast :symtab :ctx :tid arm: pname.stringView
-            if pdtr.length > 0 then {
-                ldd: "            \{pdtr}((\{pc}*)u->data);\n"
-                buf.append ldd
-            }
+            (emitArmPayloadDestroy
+                :ast
+                :symtab
+                :ctx
+                :tid
+                arm: pname.stringView
+                pc: pc.stringView
+                :buf
+            )
             buf.append "            free(u->data);\n"
             buf.append "            break;\n"
         }

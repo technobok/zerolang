@@ -1,0 +1,95 @@
+# A Set or a Map is held through a pointer: its local, a field and a parameter
+# are that pointer. Held INSIDE another value it is the same pointer -- a list
+# element, a map value, a union arm -- so the container stores, reads and
+# destroys it as one. Each was spelled as the collection's struct instead: the
+# list took the element by value, the map's value and the union's box were
+# sized for the struct and destroyed as if they held one. A list of Bytes, a
+# typedef over a list, is destroyed as the list it wraps.
+Holder: union {
+    many: SetVal i64
+    none: null
+}
+
+Keeper: class {
+    maps: List (MapVV k: i64 v: i64)
+}
+
+main: function is {
+    sets: List (SetVal i64)
+    a: SetVal i64
+    a.add item: 1
+    a.add item: 2
+    sets.append from: a.take
+    b: SetVal i64
+    b.add item: 3
+    sets.append from: b.take
+    for s: sets.iterate loop {
+        print "set of \{s.length}, has 3: \{s.has item: 3}"
+    }
+    {
+        g: sets.get i: 0
+        print "get \{g.length}"
+    }
+    {
+        w: sets.getMut i: 1
+        w.add item: 4
+    }
+    (sets.getMut i: 0).add item: 9
+    for s: sets.iterate loop {
+        print "after writes \{s.length}"
+    }
+    c: SetVal i64
+    old: sets.set i: 0 val: c.take
+    print "replaced a set of \{old.length}"
+    last: sets.pop
+    print "popped a set of \{last.length}, \{sets.length} left"
+    view: sets.listView
+    print "view of \{view.length}"
+
+    outer: (MapRR K: String V: (MapRR K: String V: String))
+    inner: (MapRR K: String V: String)
+    inner.set key: "x".string value: "y".string
+    outer.set key: "o".string value: inner.take
+    k: "o".string
+    {
+        got: outer.get key: k
+        match (got) case some then print "inner map of \{got.length}" case none then print "none"
+    }
+    replacement: (MapRR K: String V: String)
+    outer.set key: "o".string value: replacement.take
+    with it: outer.iterateItems do for e: it loop print "entry \{e.key} holds \{e.value.length}"
+    r: outer.remove key: k
+    match (r) case some then print "removed a map of \{r.length}" case none then print "none"
+
+    ids: (IdMapR u64 V: (SetVal i64))
+    idSet: SetVal i64
+    idSet.add item: 5
+    ids.set key: 1 value: idSet.take
+    {
+        iw: ids.getMut key: 1
+        match (iw) case some then iw.add item: 6 case none then null
+    }
+    iv: ids.get key: 1
+    match (iv) case some then print "id-keyed set of \{iv.length}" case none then print "none"
+
+    kp: (Keeper maps: (List (MapVV k: i64 v: i64)))
+    mv: (MapVV k: i64 v: i64)
+    (mv.set key: 1 value: 2)
+    kp.maps.append from: mv.take
+    print "class field list of \{kp.maps.length}"
+
+    arm: SetVal i64
+    arm.add item: 4
+    h: Holder.many arm.take
+    match (h) case many then print "union arm set of \{h.length}, has 4: \{h.has item: 4}" case none then print "none"
+
+    bytes: List Bytes
+    bytes.append from: Bytes
+    {
+        bb: bytes.getMut i: 0
+        bb.append from: 65.u8
+    }
+    for bv: bytes.iterate loop {
+        print "bytes of \{bv.length}"
+    }
+}
