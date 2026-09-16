@@ -1,0 +1,72 @@
+# An instance of a generic record or variant has the generated `==`, `!=` and
+# `hash` a plain one has, on its template's terms: a comparison or hash the
+# template writes is kept, and its partner is generated from it. The instance
+# was given bare `==`/`!=` shells with no receiver, no parameter and no result
+# type, and no `hash`, so a comparison worked only as an `if` condition --
+# bound, interpolated or written as a call it had no type -- and an instance
+# could not key a map or a set. A template's own operator was dropped as if it
+# were a generated one.
+Pair: record {
+    a: t
+    b: t
+} as { t: anyval.generic }
+
+Loose: record {
+    a: t
+    b: t
+} as {
+    t: anyval.generic
+    ==: function {:this rhs: Loose} out bool is {
+        return this.a == rhs.a
+    }
+}
+
+Never: record {
+    a: t
+} as {
+    t: anyval.generic
+    !=: function {:this rhs: Never} out bool is {
+        return false
+    }
+}
+
+slot: variant {
+    full: t
+    empty: null
+} as { t: anyval.generic }
+
+main: function is {
+    r: Pair t: i64 a: 1 b: 2
+    s: Pair t: i64 a: 1 b: 2
+    u: Pair t: i64 a: 1 b: 3
+    same: r == s
+    ne: r != u
+    print "record: \{same} \{ne} \{r == u} \{r.== rhs: s}"
+
+    x: Loose t: i64 a: 1 b: 2
+    y: Loose t: i64 a: 1 b: 3
+    print "declared ==: \{x == y} \{x != y}"
+    p: Never t: i64 a: 1
+    q: Never t: i64 a: 2
+    print "declared !=: \{p == q} \{p != q}"
+
+    a: (slot t: i64).full 4
+    b: (slot t: i64).full 4
+    c: (slot t: i64).full 5
+    e: (slot t: i64).empty
+    print "variant: \{a == b} \{a == c} \{a != e}"
+
+    three: (optionval t: i64).some 3
+    alsoThree: (optionval t: i64).some 3
+    absent: (optionval t: i64).none
+    print "optionval: \{three == alsoThree} \{three == absent}"
+
+    m: (MapVV k: (Pair t: u32) v: i64)
+    (m.set key: (Pair t: u32 a: 1 b: 2) value: 10)
+    (m.set key: (Pair t: u32 a: 1 b: 2) value: 20)
+    (m.set key: (Pair t: u32 a: 2 b: 1) value: 30)
+    keys: SetVal (Pair t: u8)
+    keys.add item: (Pair t: u8 a: 1 b: 1)
+    keys.add item: (Pair t: u8 a: 1 b: 1)
+    print "keyed: \{m.length} \{keys.length} \{keys.has item: (Pair t: u8 a: 1 b: 1)}"
+}

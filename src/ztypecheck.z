@@ -8601,29 +8601,32 @@ synthRecordHash: function {
             )
         }
     }
-    if isgen.not when hshOptR.not when hshAsR.not then {
-        hshR: st.reg.newType name: "hash" ownerTid: rid typetype: ztypes.ztypetype.functionType
-        (st.typing.declSynthMemberTyped
-            parentTypeId: (ztypes.tid.create from: rid.u64)
-            nameId: zast.names.wkHash
-            kind: ztyping.declkind.methodDecl
-            childTypeId: hshR
-        )
-        # a hash READS its receiver, like the synthesised comparison: the
-        # receiver is recorded `.view` so `k.hash` on a view-held key locks shared
-        hft: ztypes.tid.create from: hshR.u64
-        (st.typing.setMemberType
-            parentTypeId: hft
-            nameId: zast.names.wkThis
-            childTypeId: rid
-        )
-        (st.typing.setChildOwnershipId
-            parentTypeId: hft
-            nameId: zast.names.wkThis
-            ownership: ztypes.zparamownership.viewMode
-        )
-        st.reg.setThisParamName typeId: hft nameId: zast.names.wkThis
-    }
+    if isgen.not when hshOptR.not when hshAsR.not then synthHashMember :st :rid
+}
+
+# synthHashMember -- the byte `hash` a value type carries by default, as a real
+# member of `rid`. A hash READS its receiver, like the synthesised comparison:
+# the receiver is recorded `.view` so `k.hash` on a view-held key locks shared.
+synthHashMember: function {st: zenv.ZSymbolTable rid: u64} is {
+    hshR: st.reg.newType name: "hash" ownerTid: rid typetype: ztypes.ztypetype.functionType
+    (st.typing.declSynthMemberTyped
+        parentTypeId: (ztypes.tid.create from: rid.u64)
+        nameId: zast.names.wkHash
+        kind: ztyping.declkind.methodDecl
+        childTypeId: hshR
+    )
+    hft: ztypes.tid.create from: hshR.u64
+    (st.typing.setMemberType
+        parentTypeId: hft
+        nameId: zast.names.wkThis
+        childTypeId: rid
+    )
+    (st.typing.setChildOwnershipId
+        parentTypeId: hft
+        nameId: zast.names.wkThis
+        ownership: ztypes.zparamownership.viewMode
+    )
+    st.reg.setThisParamName typeId: hft nameId: zast.names.wkThis
 }
 
 # synthComparisonMember -- ONE structural comparison member (`==` or `!=`) as a
@@ -18267,7 +18270,7 @@ cloneGenericMemberInto: function {
     idSubs: (IdMapV u64 v: u64)
 } out bool is {
     deep5: false
-    isSynth: chName == "create" or (chName == "borrow") or (chName == "==") or (chName == "!=")
+    isSynth: chName == "create" or (chName == "borrow")
     if isSynth.not then {
         skip5: false
         # List's contains/sort exist only for eligible element
@@ -18599,51 +18602,6 @@ mintMonoRecordShape: function {
                 nameId: zast.names.wkCreate
                 childTypeId: crId
             )
-            (forceMemberOf
-                :st
-                frame: rf
-                :ast
-                parentTypeId: (ztypes.tid.create from: mid.u64)
-                nameId: zast.names.wkOpEq
-            )
-            eqo: (st.typing.declChildOfId
-                parentTypeId: (ztypes.tid.create from: mid.u64)
-                nameId: zast.names.wkOpEq
-            )
-            match (
-                eqo
-            ) case some then null case none then {
-                reqId: (st.reg.newType
-                    name: "=="
-                    ownerTid: mid
-                    typetype: ztypes.ztypetype.functionType
-                )
-                (st.typing.declSynthMember
-                    parentTypeId: (ztypes.tid.create from: mid.u64)
-                    nameId: zast.names.wkOpEq
-                    kind: ztyping.declkind.methodDecl
-                )
-                (st.typing.setMemberType
-                    parentTypeId: (ztypes.tid.create from: mid.u64)
-                    nameId: zast.names.wkOpEq
-                    childTypeId: reqId
-                )
-                rneId: (st.reg.newType
-                    name: "!="
-                    ownerTid: mid
-                    typetype: ztypes.ztypetype.functionType
-                )
-                (st.typing.declSynthMember
-                    parentTypeId: (ztypes.tid.create from: mid.u64)
-                    nameId: zast.names.wkOpNe
-                    kind: ztyping.declkind.methodDecl
-                )
-                (st.typing.setMemberType
-                    parentTypeId: (ztypes.tid.create from: mid.u64)
-                    nameId: zast.names.wkOpNe
-                    childTypeId: rneId
-                )
-            }
         }
     }
 }
@@ -18697,30 +18655,6 @@ mintMonoTagShape: function {
             parentTypeId: (ztypes.tid.create from: mid.u64)
             nameId: zast.names.wkTag
             childTypeId: tagId
-        )
-    }
-    if tt == ztypes.ztypetype.variantType then {
-        eqId: st.reg.newType name: "==" ownerTid: mid typetype: ztypes.ztypetype.functionType
-        (st.typing.declSynthMember
-            parentTypeId: (ztypes.tid.create from: mid.u64)
-            nameId: zast.names.wkOpEq
-            kind: ztyping.declkind.methodDecl
-        )
-        (st.typing.setMemberType
-            parentTypeId: (ztypes.tid.create from: mid.u64)
-            nameId: zast.names.wkOpEq
-            childTypeId: eqId
-        )
-        neId: st.reg.newType name: "!=" ownerTid: mid typetype: ztypes.ztypetype.functionType
-        (st.typing.declSynthMember
-            parentTypeId: (ztypes.tid.create from: mid.u64)
-            nameId: zast.names.wkOpNe
-            kind: ztyping.declkind.methodDecl
-        )
-        (st.typing.setMemberType
-            parentTypeId: (ztypes.tid.create from: mid.u64)
-            nameId: zast.names.wkOpNe
-            childTypeId: neId
         )
     }
 }
@@ -18885,10 +18819,61 @@ mintMono: function {
     ).not then {
         st.reg.setNeedsDestructor typeId: (ztypes.tid.create from: mid.u64)
     }
-    # RECORD instances: the meta-create requalifies to the instance and ==/!=
-    # synthesize -- except str/array, whose branches own those members.
+    # RECORD instances: the meta-create requalifies to the instance -- except
+    # str/array, whose branches own their members.
     mintMonoRecordShape :ast :st :rf :templateId :mid :tt
     mintMonoTagShape :st :mid :tt :name
+    synthInstanceValueMembers :ast :st :rf :templateId :mid :tt
+}
+
+# synthInstanceValueMembers -- the comparison pair and the `hash` an instance of
+# a generic record or variant carries. The template itself is given none -- its
+# fields have no types yet -- so the instance takes them on the template's
+# terms: `==: null` strikes the pair, a member the template writes keeps its
+# own, and `hash: null` strikes the hash. str and array own theirs.
+synthInstanceValueMembers: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    rf: ztypes.declid
+    templateId: ztypes.tid
+    mid: u64
+    tt: ztypes.ztypetype
+} is {
+    isRec: tt == ztypes.ztypetype.recordType
+    if isRec.not when tt != ztypes.ztypetype.variantType then return
+    if isRec when (
+        templateId ==
+        (builtinTidT :st frame: rf :ast base: "str") or
+        (templateId == (builtinTidT :st frame: rf :ast base: "array"))
+    ) then return
+    mt: ztypes.tid.create from: mid.u64
+    forceMemberOf :st frame: rf :ast parentTypeId: mt nameId: zast.names.wkOpEq
+    forceMemberOf :st frame: rf :ast parentTypeId: mt nameId: zast.names.wkOpNe
+    forceMemberOf :st frame: rf :ast parentTypeId: mt nameId: zast.names.wkHash
+    items: templateAsItems :st :ast :templateId
+    if (eqNullOptOut :ast asItems: items).not then (synthComparisonPair
+        :st
+        ownerTid: mid
+        eqDecl: false
+        neDecl: false
+    )
+    if (st.typing.declChildOfId parentTypeId: mt nameId: zast.names.wkHash).some then return
+    if (memberNullOptOut :ast asItems: items member: "hash") then return
+    synthHashMember :st rid: mid
+}
+
+# templateAsItems -- the as-block items a template's own declaration writes,
+# empty when there is no declaration to read.
+templateAsItems: function {
+    st: zenv.ZSymbolTable.view ast: Ast templateId: ztypes.tid
+} out zast.kidspan is {
+    none: zast.kidspan first: 0 count: 0
+    td: declOfTypeId :st tid: templateId
+    if td.isZero then return none
+    dn: zast.nodeid.create from: (st.typing.decls.get i: td.u64).node
+    ar: argRefAt :ast nid: dn
+    if ar.nid.isZero then return (objAsItemsOf :ast nid: dn)
+    return (objAsItemsOf :ast nid: ar.operation)
 }
 
 
