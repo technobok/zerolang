@@ -35965,6 +35965,12 @@ checkResolvedValueCall: function {
                 )
                 return (callleg handled: true tid: dct)
             }
+            # a field read off a local is a value, whatever its type
+            rootL: rootNameIdOf :ast n: (ast.nodes.get i: call.callable.u64)
+            if call.nargs > 0 when rootL.isZero.not when (st.isLocalName nameId: rootL) then {
+                reportValueCalledWithArgs :st :ast :call
+                return (callleg handled: true tid: (ztypes.tid.create from: 0))
+            }
             # a record-typed callable that names no type -- a data block's
             # `.index` -- walks its arguments as that record's and stays untyped
             if call.nargs > 0 then {
@@ -36137,6 +36143,39 @@ checkBareGenericCall: function {
     return (callleg handled: false tid: result)
 }
 
+# reportValueCalledWithArgs -- a call with arguments whose callee is a VALUE: a
+# local, a field read, an arm predicate. A value takes no parameters, so the
+# first argument is refused where it stands. A type that declares `call` is not
+# refused here.
+reportValueCalledWithArgs: function {st: zenv.ZSymbolTable ast: Ast.view call: callref} is {
+    if call.nargs == 0 then return
+    cn: ast.nodes.get i: call.callable.u64
+    nameId: dottedChildNameId :ast n: cn
+    vt: ztypes.tid.create from: (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: call.callable.u64)
+    if nameId.isZero then {
+        nameId = bareAtomNameId n: cn
+        vt = ztypes.tid.create from: 0
+        vo: st.lookupVarId :nameId
+        if vo.some then vt = st.reg.variableTypeOf id: vo
+    }
+    if vt.isZero or nameId.isZero then return
+    if (st.reg.typetypeOf typeId: vt) == ztypes.ztypetype.functionType then return
+    if (st.typing.declChildOfId parentTypeId: vt nameId: zast.names.wkCall).some then return
+    arg0: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: 0)
+    if arg0.nid.isZero then return
+    nm: zast.nameTextAt :ast ref: nameId
+    tn: st.reg.nameOf tid: vt
+    msg: "too many arguments: '\{nm}' is a value of type '\{tn}', not a function"
+    (addError
+        :st
+        nodeid: arg0.nid
+        lineno: arg0.lineno
+        colno: arg0.colno
+        e: zast.err.callError
+        :msg
+    )
+}
+
 # checkNonUserCall -- a callable that is not a user function: a builtin, a
 # generic instantiation, a shell the walk could not place, or a name that
 # resolves to nothing. Answers whether the leg handled the call, and its type.
@@ -36181,6 +36220,7 @@ checkNonUserCall: function {
         # misspelled call into a constant 0 (mirrors the assignment
         # path's unresolved-value report)
         ubcn: unresolvedBareCallable :ast :st :unitDecl nid: call.nid
+        if ubcn.length == 0 then reportValueCalledWithArgs :st :ast :call
         if ubcn.length > 0 then {
             ubm0: "Unknown reference '\{ubcn}'"
             # `yield` resolves like any other name, so a yield in an
