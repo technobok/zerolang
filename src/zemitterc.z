@@ -32461,7 +32461,7 @@ monoDependsOnUser: function {
 }
 
 # monoIsLate -- the mono embeds a user type by value (a fresh seen per query), or
-# holds another collection.
+# holds a mono the collection pass writes.
 monoIsLate: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -32471,14 +32471,15 @@ monoIsLate: function {
 } out bool is {
     seen: ListVal u64
     if (monoDependsOnUser :ast :symtab :ctx :monoId :userList :seen) then return true
-    return (monoHoldsCollection :symtab :ctx :monoId)
+    return (monoHoldsCollectionPassMono :symtab :ctx :monoId)
 }
 
-# monoHoldsCollection -- an element, key or value of the mono is itself a
-# collection mono. The early passes write one family at a time, so that element
+# monoHoldsCollectionPassMono -- an element, key or value of the mono is written
+# by the collection pass. That pass writes one family at a time, so the element
 # can come after the container bodies that index it (a ListView's iterator is
-# written before the List family); the late group orders the pair instead.
-monoHoldsCollection: function {
+# written before the List family, a user generic instance after every
+# collection); the late group orders the pair instead.
+monoHoldsCollectionPassMono: function {
     symtab: zenv.ZSymbolTable.view ctx: Ctx.view monoId: ztypes.tid
 } out bool is {
     elems: ListVal u64
@@ -32486,10 +32487,27 @@ monoHoldsCollection: function {
     ei: u64
     for ei < elems.length loop {
         ce: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: (elems.get i: ei))
-        if (isCollectionOriginTid :ctx originTid: (originTidOf :symtab tid: ce)) then return true
+        if (isCollectionPassMono :symtab :ctx tid: ce) then return true
         ei = ei + 1
     }
     return false
+}
+
+# isCollectionPassMono -- a mono whose C the collection pass writes: a collection,
+# or a user generic record or variant instance.
+isCollectionPassMono: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid
+} out bool is {
+    co: originTidOf :symtab :tid
+    if co.isZero then return false
+    if (isCollectionOriginTid :ctx originTid: co) then return true
+    tt: symtab.reg.typetypeOf typeId: tid
+    if (isUserGenericRecordMono :symtab :ctx tcl: tid :tt) then return true
+    isValMono: (
+        (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogOptionval)) or
+        (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogResultval))
+    )
+    return (isUserGenericVariantMono :symtab :ctx tcl: tid :tt :isValMono)
 }
 
 # userDefnRefsUnemitted -- does the user type have a by-value field whose type is
