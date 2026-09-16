@@ -29390,8 +29390,10 @@ ctypeOrI64: function {s: StringView} out String is {
 }
 
 # emitArrayMono -- the array instance's runtime substitution, emitListMono's
-# twin: the element mono supplies both the C element type and the `==` companion
-# a linear scan needs.
+# twin: the element mono supplies both the C element type and the `==` companion.
+# An array's generated `==` answers "the same bytes": a scalar element array is
+# one memcmp, and a compound element is compared through its own generated `==`,
+# which answers the same question without reading padding.
 emitArrayMono: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -29411,7 +29413,13 @@ emitArrayMono: function {
     match (
         eqo
     ) case some then {
-        eqBody = "static bool z_\{nm}_eq(z_\{nm}_t a, z_\{nm}_t b) {\n    for (int _i = 0; _i < \{lenStr.stringView}; _i++) { if (a.data[_i] != b.data[_i]) return false; }\n    return true;\n}\n"
+        agg: aggregateEqTid :ast :symtab :ctx fid: (ztypes.tid.create from: eid.u64)
+        if agg.isZero then {
+            eqBody = "static bool z_\{nm}_eq(z_\{nm}_t a, z_\{nm}_t b) {\n    return memcmp(a.data, b.data, sizeof(a.data)) == 0;\n}\n"
+        } else {
+            erc: ctxCname :ctx tid: agg
+            eqBody = "static bool z_\{nm}_eq(z_\{nm}_t a, z_\{nm}_t b) {\n    for (int _i = 0; _i < \{lenStr.stringView}; _i++) { if (!\{erc}_eq(a.data[_i], b.data[_i])) return false; }\n    return true;\n}\n"
+        }
     } case none then null
     p: "\{runtimeDir}/z_array.c.tmpl"
     raw: readTemplateCached :ctx path: p.stringView
@@ -32198,13 +32206,16 @@ emitDeclaredFwdDecl: function {
 }
 
 # monoNeedsFwdDecl -- a mono is forward-declared when its own C names a struct:
-# it owns a destructor, or it is one of the four collection families.
+# it owns a destructor, or it is an array or one of the four collection
+# families. An array over a user type is emitted after the user structs, and a
+# function signature naming it can come first.
 monoNeedsFwdDecl: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
     if (symtab.reg.needsDestructor typeId: tid) then return true
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogArray)) then return true
     if (isListOriginOf :symtab :ctx :tid) then return true
     if (isListViewOriginOf :symtab :ctx :tid) then return true
     if (isSetOriginOf :symtab :ctx :tid) then return true
@@ -32306,17 +32317,23 @@ monoMapKV: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid acc: List
 }
 
 # monoElemIdsOf -- the type ids a collection/wrapper mono references by its
-# element/key/value (List/ListView/Set/Map) or arm payloads (optionval/resultval/
-# Option/Result/OptionView), or its fields for a user-generic record/class mono.
-# Used by the early/late split to find which monos embed a user type.
+# element/key/value (array/List/ListView/Set/Map) or arm payloads (optionval/
+# resultval/Option/Result/OptionView), or its fields for a user-generic
+# record/class mono. Used by the early/late split to find which monos embed a
+# user type. An array declares no data field, so its element is read through
+# `get` like a list's.
 monoElemIdsOf: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     monoId: ztypes.tid
     acc: ListVal u64
 } is {
-    isLV: (isListOriginOf :symtab :ctx tid: monoId) or (isListViewOriginOf :symtab :ctx tid: monoId)
-    if isLV then {
+    byGet: (
+        (isListOriginOf :symtab :ctx tid: monoId) or
+        (isListViewOriginOf :symtab :ctx tid: monoId) or
+        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: ogArray))
+    )
+    if byGet then {
         e: listElemType :symtab :monoId
         if e > 0 then acc.append e
         return
@@ -33112,6 +33129,7 @@ collectLateGroup: function {
     last: u64
 } is {
     fams: ListVal u64
+    fams.append (ctx.origins.get i: ogArray).u64
     fams.append (ctx.origins.get i: ogOptionval).u64
     fams.append (ctx.origins.get i: ogResultval).u64
     fams.append (ctx.origins.get i: ogListView).u64

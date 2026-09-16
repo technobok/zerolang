@@ -1,0 +1,60 @@
+# An array's generated `==` answers "the same bytes". A scalar element array is
+# compared whole; a compound element -- a record, a str, another array -- is
+# compared through its own generated `==`, which gives the same answer without
+# reading a record's padding. Floats compare by their bytes here: a NaN element
+# equals itself, and +0.0 and -0.0 differ, while a bare float `==` stays IEEE.
+# Array `==` is reached through a record holding the array.
+row: record {
+    n: i64
+    tag: u8
+}
+
+rows: record {
+    rs: (array t: row to: 2)
+}
+
+floats: record {
+    xs: (array t: f64 to: 2)
+}
+
+texts: record {
+    ss: (array t: (str to: 4) to: 2)
+}
+
+nested: record {
+    m: (array t: (array t: i64 to: 2) to: 2)
+}
+
+main: function is {
+    a: (rows rs: (array t: row to: 2))
+    b: (rows rs: (array t: row to: 2))
+    a.rs.set i: 1 item: (row n: 5 tag: 1)
+    b.rs.set i: 1 item: (row n: 5 tag: 1)
+    print "padded records equal: \{a == b}"
+    b.rs.set i: 0 item: (row n: 1 tag: 0)
+    print "one element differs: \{a == b}"
+
+    z: 0.0
+    nan: z / z
+    f: (floats xs: (array t: f64 to: 2))
+    f.xs.set i: 0 item: nan
+    g: f
+    print "NaN element equals its copy: \{f == g}, bare NaN: \{nan == nan}"
+    pz: (floats xs: (array t: f64 to: 2))
+    nz: (floats xs: (array t: f64 to: 2))
+    nz.xs.set i: 1 item: 0.0 * (0.0 - 1.0)
+    print "+0.0 against -0.0: \{pz == nz}, bare: \{0.0 == (0.0 * (0.0 - 1.0))}"
+
+    s: (texts ss: (array t: (str to: 4) to: 2))
+    t: (texts ss: (array t: (str to: 4) to: 2))
+    print "str elements equal: \{s == t}"
+
+    m: (nested m: (array t: (array t: i64 to: 2) to: 2))
+    n: (nested m: (array t: (array t: i64 to: 2) to: 2))
+    inner: (array t: i64 to: 2)
+    inner.set i: 0 item: 3
+    m.m.set i: 1 item: inner
+    print "nested differ: \{m == n}"
+    n.m.set i: 1 item: inner
+    print "nested equal: \{m == n}"
+}
