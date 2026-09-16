@@ -1361,9 +1361,11 @@ Parser: class {
         )
     }
 
-    # block -> "{" { sep } { blockline { sep } } "}" | blockline. EOL
-    # filtering is disabled inside the braces so newlines separate lines.
-    # Duplicate-definition detection is deferred to the typechecker.
+    # block -> "{" [ blockline ] { sep [ blockline ] } "}", sep -> EOL | ";".
+    # EOL filtering is disabled inside the braces so newlines separate lines,
+    # and a line ends at a separator or the closing brace: anything else after
+    # it is an error there. Duplicate-definition detection is deferred to the
+    # typechecker.
     # Returns a bare Statement node.
     acceptBlock: function {:this lex: zlexer.Lexer} out astnode is {
         startPos: lex.peekPos
@@ -1393,6 +1395,17 @@ Parser: class {
                     return sl
                 }
                 statements.append (this.intern n: sl)
+                if (this.atSeparator :lex).not when (
+                    lex.peekType != zlexer.toktype.braceCloseTok
+                ) then {
+                    lex.setFilterEol enabled: prevFilter pool: this.ast.names
+                    extra: lex.acceptAny pool: this.ast.names
+                    return (this.mkError
+                        tok: extra
+                        code: zast.err.badStatement
+                        msg: "Expected ';', a new line or '}' after a statement".string
+                    )
+                }
             } else {
                 break
             }
