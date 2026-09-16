@@ -1,0 +1,69 @@
+# Every site that passes a value BY ADDRESS has to ask whether the value has
+# one. A call's result does not -- `&f(x)` is not C -- so it binds to a temp
+# first. Four sites did not ask, each emitting C that gcc rejects:
+#
+#   - a collection method whose receiver is a call     `&names(1)`
+#   - a view native given a view-returning call        passed by VALUE, wrong type
+#   - a facet projection of a call                     `create(&)` with no operand
+#   - any of the above given a ZERO-ARGUMENT call      `&fn`, the function's own name
+#
+# The last one is the same question one step earlier: a bare name that denotes
+# no variable is a call, not a place, so it is called before it is addressed.
+sizer: facet {
+    size: function {:this b: i64} out i64
+}
+
+pt: record {
+    x: i64
+} as {
+    m: sizer
+    size: function {p: this b: i64} out i64 is {
+        return p.x + b
+    }
+}
+
+names: function {n: i64} out List String is {
+    l: List String
+    l.append from: "alpha".string
+    l.append from: "beta".string
+    return l
+}
+
+mkPt: function {n: i64} out pt is {
+    return (pt x: n)
+}
+
+mkPtZero: function {} out pt is {
+    return (pt x: 2)
+}
+
+mkView: function {n: i64} out StringView is {
+    return "alp"
+}
+
+mkViewZero: function {} out StringView is {
+    return "bet"
+}
+
+main: function is {
+    # a collection receiver that is a call
+    e: ((names n: 1).get i: 0).copy
+    print "elem=\{e}"
+    print "len=\{(names n: 1).length}"
+
+    # a view native whose argument is a call, with and without arguments
+    print "with=\{"alpha".startsWith prefix: (mkView n: 1)}"
+    print "zero=\{"beta".startsWith prefix: mkViewZero}"
+
+    # a facet projection of a call, with and without arguments
+    f: sizer.create from: (mkPt n: 5)
+    print "facet=\{f.size b: 10}"
+    g: sizer.create from: mkPtZero
+    print "facetzero=\{g.size b: 10}"
+
+    # the control: a place still passes as a place. (A construction used as a
+    # receiver is the other control and container_construction_values holds it:
+    # it must keep building exactly one container, not a hoisted second.)
+    v: "alp"
+    print "place=\{"alpha".startsWith prefix: v}"
+}

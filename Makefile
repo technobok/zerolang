@@ -1029,7 +1029,11 @@ perf: $(PERFBIN)
 # +440 when a member read on a FUNCTION VALUE came to be refused: +0 over the
 # same source -- the legs run only where a member is read off a function, which
 # is now an error -- and +440 the source longer.
-ALLOC_BASELINE := 2815293
+#
+# +1,388 when a call's result came to be bound before its address is taken:
+# +0 over the same source -- the legs fire only where the C did not compile
+# before -- and +1,388 the source longer.
+ALLOC_BASELINE := 2816681
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
