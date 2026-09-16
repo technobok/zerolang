@@ -1,0 +1,96 @@
+# A field whose type is generic is returned bare when no instance can hold a
+# reftype there, exactly as a concrete valtype field is: anything inside a
+# record, and a class field whose parameter is bounded to values. Every such
+# return was refused as though the parameter might be a reftype the owner
+# still frees; generic_field_return_refused.z keeps the ones that might.
+
+holder: record {
+    val: t
+} as {
+    t: anyval.generic
+    peek: function {h: this} out t is {
+        return h.val
+    }
+}
+
+pt: record {
+    x: 0
+    y: 0
+}
+
+# a field of another generic record, and a field read through it
+outer: record {
+    inner: (holder :t)
+} as {
+    t: anyval.generic
+    innerVal: function {o: this} out t is {
+        return o.inner.val
+    }
+    whole: function {o: this} out (holder :t) is {
+        return o.inner
+    }
+}
+
+# the parameter is the function's own, the field the record's
+valOf: function as { t: anyval.generic } in {h: (holder :t)} out t is {
+    return h.val
+}
+
+# class fields bounded to values
+Box: class {
+    val: t
+} as {
+    t: anyval.generic
+    peek: function {b: this} out t is {
+        return b.val
+    }
+}
+
+Keyed: class {
+    key: k
+} as {
+    k: valhashable.generic
+    peek: function {b: this} out k is {
+        return b.key
+    }
+}
+
+# a facet bound is a valtype bound
+sizer: facet {
+    size: function {:this} out i64
+}
+
+point: record {
+    x: 0
+} as {
+    :sizer
+    size: function {p: this} out i64 is {
+        return p.x
+    }
+}
+
+Sized: class {
+    val: t
+} as {
+    t: sizer.generic
+    peek: function {b: this} out t is {
+        return b.val
+    }
+}
+
+main: function is {
+    h: holder t: i64 val: 7
+    print "\{h.peek} \{valOf t: i64 :h}"
+    hp: holder t: pt val: (pt x: 3 y: 4)
+    p: hp.peek
+    print "\{p.x} \{p.y}"
+    o: outer t: i64 inner: (holder t: i64 val: 9)
+    w: o.whole
+    print "\{o.innerVal} \{w.val}"
+    b: Box t: i64 val: 5
+    k: Keyed k: u32 key: 6
+    print "\{b.peek} \{k.peek}"
+    s: Sized t: point val: (point x: 8)
+    sp: s.peek
+    print "\{sp.size}"
+}

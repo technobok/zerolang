@@ -34300,10 +34300,9 @@ callableDottedResultAt: function {
 }
 
 # returnedBareFieldName -- `return <base>.<field>` where the member is a
-# non-FUNCTION field whose type is a reftype or a generic param: the bare
-# read escapes a shallow copy of storage the owner still frees (and a
-# generic param may instantiate to one). Returns the field name for the
-# diagnostic; "" when the return shape is fine.
+# non-FUNCTION field whose type is a reftype, or generic and may instantiate to
+# one: the bare read escapes a shallow copy of storage the owner still frees.
+# Returns the field name for the diagnostic; "" when the return shape is fine.
 returnedBareFieldName: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -34341,7 +34340,13 @@ returnedBareFieldName: function {
                 (st.reg.typetypeOf typeId: (ztypes.tid.create from: bfo.u64)) ==
                 ztypes.ztypetype.genericParam
             ) then {
-                return (zast.nameTextCopy :ast ref: bfcId)
+                if (genericFieldMayBeReftype
+                    :ast
+                    :st
+                    ownerTid: (ztypes.tid.create from: bft.u64)
+                    fieldTid: (ztypes.tid.create from: bfo.u64)
+                ) then return (zast.nameTextCopy :ast ref: bfcId)
+                return "".string
             }
             if (typeIsReftype
                 :st
@@ -34354,6 +34359,69 @@ returnedBareFieldName: function {
     } else {
         return "".string
     }
+}
+
+# genericFieldMayBeReftype -- whether a field whose type is generic -- a type
+# parameter, or a specialization over one -- may hold a reftype in some
+# instance. Never inside a valtype, whose every instance holds value data only.
+# A specialization answers as its template does; a parameter as its bound,
+# read off the declaration around the walk that owns it. A parameter no
+# enclosing declaration owns may be anything.
+genericFieldMayBeReftype: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    ownerTid: ztypes.tid
+    fieldTid: ztypes.tid
+} out bool is {
+    if (typeIsValtype :st tid: (partialTemplateOf :st tid: ownerTid)) then return false
+    if (st.reg.isPartialOf tid: fieldTid) then {
+        return (typeIsReftype :st tid: (partialTemplateOf :st tid: fieldTid))
+    }
+    cur: st.curFrame
+    for cur > 0 loop {
+        pn: st.reg.genericParamNameOfTid tdecl: cur ptid: fieldTid
+        if pn.isZero.not then return (boundMayBeReftype :ast :st tdecl: cur paramName: pn)
+        cur = st.typing.declParentOf declId: cur
+    }
+    return true
+}
+
+# partialTemplateOf -- the template a partial specialization was taken from;
+# any other type is itself.
+partialTemplateOf: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
+    if (st.reg.isPartialOf :tid).not then return tid
+    og: st.reg.genericOriginOf :tid
+    if og.isZero then return tid
+    return og
+}
+
+# boundMayBeReftype -- whether `tdecl`'s type parameter `paramName` may be
+# instantiated with a reftype: `Any` admits one, and so does every bound
+# boundAdmitsReftype says does. A parameter whose declaration cannot be found
+# may be anything.
+boundMayBeReftype: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    tdecl: ztypes.declid
+    paramName: zast.nameid
+} out bool is {
+    k: (st.reg.genericParamConstraintOf :tdecl :paramName).kind
+    if k == ztypes.constraintkind.any or (k == ztypes.constraintkind.none) then return true
+    pd: st.typing.declFindChild parentDeclId: tdecl nameId: paramName
+    if pd.isZero then return true
+    fm: (argRefAt
+        :ast
+        nid: (zast.nodeid.create from: (st.typing.decls.get i: pd.u64).node)
+    )
+    if fm.nid.isZero then return true
+    return (boundAdmitsReftype
+        :st
+        :ast
+        unitDecl: (unitRootOfDecl :st declId: tdecl)
+        frame: tdecl
+        :tdecl
+        :fm
+    )
 }
 
 # unresolvedBareName -- prove a bare name resolves NOWHERE in value
