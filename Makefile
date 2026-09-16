@@ -1047,7 +1047,7 @@ perf: $(PERFBIN)
 # 660 to zls.c), almost all of them unreferenced. The eagerness is the existing
 # design and predates this; making the pass demand-driven would take all three
 # numbers back and is its own change.
-ALLOC_BASELINE := 2833564
+ALLOC_BASELINE := 2829651
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1217,10 +1217,10 @@ emitter-guard:
 	chk "'z_t{' literals in src/zemitterc.z" "$$g2" 3; \
 	chk "ztypecheck.resolvedByKey" "$$e1" 0; \
 	chk "ztypecheck.walkLookupTyperef" "$$e2" 5; \
-	chk "resolveTypeIdByName" "$$e3" 18; \
-	chk "userFnId" "$$e4" 27; \
+	chk "resolveTypeIdByName" "$$e3" 17; \
+	chk "userFnId" "$$e4" 23; \
 	chk "childOwnershipText" "$$e5" 0; \
-	chk "regNameOf" "$$e6" 80; \
+	chk "regNameOf" "$$e6" 74; \
 	chk "ztypes.mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 3; \
 	chk "monoOriginName" "$$e9" 7; \

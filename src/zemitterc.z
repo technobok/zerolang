@@ -9912,151 +9912,48 @@ emitInlineVariantCtor: function {
     }
 }
 
-# emitUnionCtor -- a main-unit user union arm construction (`U.arm payload`):
-# a GCC statement-expression building the heap-payload union value (tag + a
-# malloc'd box for the payload, or NULL data for a payload-less arm). Generic
-# monos (Option/Result) keep their own emission paths.
-emitUnionCtor: function {
+# emitArmCtorCall -- a sum ARM built by a call: `T.arm payload`, an alias of an
+# instance, or the instance written in place (`(Option T: String).some s`). The
+# call node's stamp is the sum type being built, so nothing is read off how the
+# type was spelled. A variant -- optionval and resultval included -- is a value
+# and builds as a compound literal; a union -- Option and Result included --
+# boxes its payload on the heap, and a payload-less union arm carries no box.
+emitArmCtorCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
 } out String is {
-    bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
-    if bn.length == 0 then return "".string
-    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
-    if mn.length == 0 then return "".string
-    smid0: stampIdOf :symtab nid: call.nodeid.u64
-    smOrig: originTidOf :symtab tid: smid0
-    # system union monos (optionval/resultval/Option/Result) are built by
-    # emitVariantCtorCall; only USER generic union monos are built here.
-    if smOrig > 0 then {
-        sysU: (
-            (originIsTid :symtab tid: smid0 originTid: (ctx.origins.get i: ogOptionval)) or
-            (originIsTid :symtab tid: smid0 originTid: (ctx.origins.get i: ogResultval)) or
-            (originIsTid :symtab tid: smid0 originTid: (ctx.origins.get i: ogOption)) or
-            (originIsTid :symtab tid: smid0 originTid: (ctx.origins.get i: ogResult))
-        )
-        if sysU then return "".string
+    arm: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
+    if arm.length == 0 then return "".string
+    stid: stampIdOf :symtab nid: call.nodeid.u64
+    if stid.isZero then return "".string
+    tt: symtab.reg.typetypeOf typeId: stid
+    if tt == ztypes.ztypetype.variantType then {
+        return (emitInlineVariantCtor :ast :symtab :ctx :call tid: stid :arm)
     }
-    utid: resolveTypeIdByName :ast :symtab :ctx name: bn
-    if utid == 0 then return "".string
-    if (
-        (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: utid.u64)) !=
-        ztypes.ztypetype.unionType
-    ) then return "".string
-    # build from the mono (smid0) for a user generic union; else the named template
-    ctid: utid
-    if smOrig > 0 when (symtab.reg.typetypeOf typeId: smid0) == ztypes.ztypetype.unionType then {
-        ctid = smid0
+    if tt != ztypes.ztypetype.unionType then return "".string
+    vc: ctxCname :ctx tid: stid
+    tg: variantTag :symtab tid: stid :arm
+    payC: armPayloadC :ast :symtab :ctx tid: stid :arm
+    if payC.length == 0 then {
+        en: "((\{vc}_t){ .tag = \{tg}, .data = NULL })"
+        return en
     }
-    vc: ctxCname :ctx tid: (ztypes.tid.create from: ctid.u64)
-    tg: variantTag :symtab tid: (ztypes.tid.create from: ctid.u64) arm: mn
-    payC: armPayloadC :ast :symtab :ctx tid: (ztypes.tid.create from: ctid.u64) arm: mn
-    if payC.length > 0 then {
-        av: String
-        got: false
-        arx349: u64
-        for arx349 < call.arguments.count.u64 loop {
-            aId: zast.kidAt kids: ast.kids span: call.arguments i: arx349
-            arx349 = arx349 + 1
-            a: ast.nodes.get i: aId.u64
-            if a.namedoperation when got.not then {
-                got = true
-                # an interpolated payload builds via a self-contained
-                # statement expression (emitExpr cannot emit the chain)
-                aOpNode: ast.nodes.get i: a.operation.u64
-                av = emitInterpArgExpr :ast :symtab :ctx n: aOpNode
-                if av.length == 0 then {
-                    aOpNode: ast.nodes.get i: a.operation.u64
-                    av = emitExpr :ast :symtab :ctx n: aOpNode
-                }
-            }
+    av: "0".string
+    got: false
+    arx349: u64
+    for arx349 < call.arguments.count.u64 loop {
+        aId: zast.kidAt kids: ast.kids span: call.arguments i: arx349
+        arx349 = arx349 + 1
+        a: ast.nodes.get i: aId.u64
+        if a.namedoperation when got.not then {
+            got = true
+            av = emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
         }
-        e: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; \{payC}* _b = (\{payC}*)z_xmalloc(sizeof(\{payC})); *_b = \{av}; _u.data = _b; _u; })"
-        return e
-    } else {
-        e2: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; _u.data = NULL; _u; })"
-        return e2
     }
-}
-
-# emitVariantCtorCall -- `result.ok 42`: a dotted callee whose base is a
-# variant type and whose member is a payload arm; emits a designated
-# compound literal.
-emitVariantCtorCall: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    call: zast.callrow.view
-} out String is {
-    bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
-    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
-    if bn.length == 0 then return "".string
-    # system monos (optionval/resultval inline, Option none) -- the call node is
-    # stamped with the concrete mono id (userFnId fails for these). Option.some
-    # is a heap box handled by emitOptionBoxHoist at the statement site.
-    smid: stampIdOf :symtab nid: call.nodeid.u64
-    sInline: (
-        (originIsTid :symtab tid: smid originTid: (ctx.origins.get i: ogOptionval)) and
-        (bn == "optionval") or
-        (
-            (originIsTid :symtab tid: smid originTid: (ctx.origins.get i: ogResultval)) and
-            (bn == "resultval")
-        )
-    )
-    if sInline then return (emitInlineVariantCtor
-        :ast
-        :symtab
-        :ctx
-        :call
-        tid: smid
-        arm: mn
-    )
-    if (originIsTid :symtab tid: smid originTid: (ctx.origins.get i: ogOption)) then {
-        ovc: ctxCname :ctx tid: smid
-        if mn == "none" then {
-            otg: variantTag :symtab tid: smid arm: "none"
-            en: "((\{ovc}_t){ .tag = \{otg}, .data = NULL })"
-            return en
-        }
-        if mn == "some" then {
-            otg9s: variantTag :symtab tid: smid arm: "some"
-            opayC: armPayloadC :ast :symtab :ctx tid: smid arm: "some"
-            if opayC.length == 0 then return "".string
-            oav: "0".string
-            ogot: false
-            arx359: u64
-            for arx359 < call.arguments.count.u64 loop {
-                oa9Id: zast.kidAt kids: ast.kids span: call.arguments i: arx359
-                arx359 = arx359 + 1
-                oa: ast.nodes.get i: oa9Id.u64
-                if oa.namedoperation when ogot.not then {
-                    ogot = true
-                    # an interpolated payload builds via a self-contained
-                    # statement expression (emitExpr cannot emit the chain)
-                    oaOpNode: ast.nodes.get i: oa.operation.u64
-                    oav = emitInterpArgExpr :ast :symtab :ctx n: oaOpNode
-                    if oav.length == 0 then {
-                        oaOpNode: ast.nodes.get i: oa.operation.u64
-                        oav = emitExpr :ast :symtab :ctx n: oaOpNode
-                    }
-                }
-            }
-            es: "({ \{ovc}_t _u = {0}; _u.tag = \{otg9s}; \{opayC}* _b = (\{opayC}*)z_xmalloc(sizeof(\{opayC})); *_b = \{oav}; _u.data = _b; _u; })"
-            return es
-        }
-        return "".string
-    }
-    vtid: userFnId :ast :symtab :ctx name: bn
-    if vtid.isZero then return "".string
-    if (symtab.reg.typetypeOf typeId: vtid) != ztypes.ztypetype.variantType then return "".string
-    # a generic variant's arm is WRITTEN against the template (`Slot.full`), so
-    # the name resolves to the template and its cname and tags name a struct no
-    # instance has. The mono the binding holds is on the call node's stamp; an
-    # id compare against the template is what says the stamp is its instance.
-    if (genericOriginTid :symtab tid: smid) == vtid then vtid = smid
-    return (emitInlineVariantCtor :ast :symtab :ctx :call tid: vtid arm: mn)
+    e: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; \{payC}* _b = (\{payC}*)z_xmalloc(sizeof(\{payC})); *_b = \{av}; _u.data = _b; _u; })"
+    return e
 }
 
 # userCreateCallC -- a user `create` (one with a body, so an emitted function)
@@ -13295,11 +13192,7 @@ emitCtorDeclCall: function {
     call: zast.callrow.view
     isArm: bool
 } out String is {
-    if isArm then {
-        rvc: emitVariantCtorCall :ast :symtab :ctx :call
-        if rvc.length > 0 then return rvc
-        return (emitUnionCtor :ast :symtab :ctx :call)
-    }
+    if isArm then return (emitArmCtorCall :ast :symtab :ctx :call)
     return (emitCrossUnitCtor :ast :symtab :ctx :call)
 }
 
