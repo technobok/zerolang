@@ -8320,6 +8320,42 @@ rhsBorrowMarkerBase: function {
     }
 }
 
+# aliasbase -- the node a borrowing binding is a second name for, and whether
+# that node names a PLACE (storage whose own pointer type the alias must take).
+aliasbase: record {
+    node: u64
+    place: bool
+}
+
+# aliasBaseOf -- which node's storage this binding aliases, 0 for none. Four
+# shapes name one and they are asked in this order: a `.borrow` marker (the path
+# UNDER it), a borrow-returning element get, a member read off a value, and a
+# bare name the CHECKER made a borrow. The last two are PLACES -- the binding is
+# a second name for storage that already exists, and the alias takes its pointer
+# type from that storage. The bare-name rule is the checker's and is read off the
+# binding's own variable, never re-derived here, so the two halves cannot
+# disagree about what a binding is.
+aliasBaseOf: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.assignmentrow.view
+    avn: astnode.view
+} out aliasbase is {
+    bmb: rhsBorrowMarkerBase :ast :symtab n: avn
+    if bmb > 0 then return (aliasbase node: bmb place: false)
+    if (rhsIsBorrowGet :ast :symtab :ctx n: avn) then {
+        return (aliasbase node: n.value.u64 place: false)
+    }
+    if (rhsIsBorrowedFieldRead :ast :symtab :ctx n: avn) then {
+        return (aliasbase node: n.value.u64 place: true)
+    }
+    if (nodeIsBareAtom n: avn) when (bindingVarIsBorrowed :symtab :n) then {
+        return (aliasbase node: n.value.u64 place: true)
+    }
+    return (aliasbase node: 0 place: false)
+}
+
 # emitBorrowAliasBind -- a borrowing binding of a BY-VALUE reftype -- a
 # `.borrow` value, a borrowed element get, or a plain field read -- bound to a
 # name: the name is a POINTER to the source, aliased to its deref so every use
@@ -8345,25 +8381,20 @@ emitBorrowAliasBind: function {
     buf: String.borrow
 } out bool is {
     avn: ast.nodes.get i: n.value.u64
-    bmb: rhsBorrowMarkerBase :ast :symtab n: avn
-    if bmb == 0 when (rhsIsBorrowGet :ast :symtab :ctx n: avn) then bmb = n.value.u64
-    fieldLeg: false
-    if bmb == 0 when (rhsIsBorrowedFieldRead :ast :symtab :ctx n: avn) then {
-        bmb = n.value.u64
-        fieldLeg = true
-    }
-    # the type questions come AFTER the shape ones: a binding that borrows
+    ab: aliasBaseOf :ast :symtab :ctx :n :avn
+    # the type questions come AFTER the shape one: a binding that borrows
     # nothing is the common case, and it leaves here without paying for them
-    if bmb == 0 then return false
+    if ab.node == 0 then return false
+    placeLeg: ab.place
     btid: bindChasedTid :symtab :ctx :n :avn
     # a Set and a Map live on the heap and their local IS the pointer, so the
     # pointer copy emitCollectionBind writes is the reference already
     if (isSetOriginOf :symtab :ctx tid: btid) then return false
     if (isMapOriginOf :symtab :ctx tid: btid) then return false
-    # a VALTYPE field read is a real copy -- the binding is its own value, and
-    # aliasing it would make a write through it reach the field
-    if fieldLeg when (symtab.reg.isReftypeOf tid: btid).not then return false
-    base: ast.nodes.get i: bmb
+    # a VALTYPE place read is a real copy -- the binding is its own value, and
+    # aliasing it would make a write through it reach the source
+    if placeLeg when (symtab.reg.isReftypeOf tid: btid).not then return false
+    base: ast.nodes.get i: ab.node
     hmk: pendingHoistMark :ctx
     rvm: emitExpr :ast :symtab :ctx n: base
     # a member read that lowers to a CALL names no storage: a protocol or facet
@@ -8371,7 +8402,7 @@ emitBorrowAliasBind: function {
     # there is no address to alias and the binding owns what it gets. Only the
     # field leg can reach one -- the other two shapes are a marker on a value and
     # an element the container hands back by pointer, both already lvalues.
-    if fieldLeg when (isNonLvalueArg s: rvm.stringView) then {
+    if placeLeg when (isNonLvalueArg s: rvm.stringView) then {
         dropHoistsTo :ctx mark: hmk
         return false
     }
@@ -8382,13 +8413,14 @@ emitBorrowAliasBind: function {
     # borrowed field) is the pointer itself
     addr: "&"
     if (pathIsPointer :ast :symtab :ctx n: base) then addr = ""
-    # a field read takes its pointer type from the STORAGE rather than from the
-    # binding's declared type: a field reached through a `.view` root is `const`
-    # in the C (paramCType says so, so that a writer through a view is refused),
-    # and the declared type does not carry that. The other two shapes keep the
-    # declared type -- their bases are a marker on a value and an element the
-    # container hands back, neither of which a view qualifies.
-    if fieldLeg then {
+    # a binding that names a PLACE takes its pointer type from the storage
+    # rather than from its declared type: a field or a name reached through a
+    # `.view` root is `const` in the C (paramCType says so, so that a writer
+    # through a view is refused), and the declared type does not carry that. The
+    # marker and element shapes keep the declared type -- their bases are a
+    # marker on a value and an element the container hands back, neither of
+    # which a view qualifies.
+    if placeLeg then {
         lbF: "\{ind}__typeof__(\{addr}\{rvm}) __borrow_\{nm} = \{addr}\{rvm};\n"
         buf.append lbF
     } else {
@@ -8468,6 +8500,34 @@ pathRootsAtVariable: function {
     } else {
         return false
     }
+}
+
+# bindBorrows -- the binding owns nothing, so it registers no cleanup and zeroes
+# no source. Two ways to be one: the value's SHAPE says so (a field read, an
+# element, a `.borrow` marker), or the CHECKER made the variable a borrow -- a
+# bare name is only the second, because its shape alone cannot tell a borrow
+# from a move. Both legs that ask ask here.
+bindBorrows: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    n: zast.assignmentrow.view
+    avn: astnode.view
+} out bool is {
+    if (bindingRhsIsBorrow :ast :symtab :ctx n: avn) then return true
+    return (bindingVarIsBorrowed :symtab :n)
+}
+
+# bindingVarIsBorrowed -- the CHECKER made this binding a borrow. Read off the
+# binding's own variable, which is where the rule was decided: a bare name, a
+# field read and a marker all land here, and none of them is re-judged.
+bindingVarIsBorrowed: function {
+    symtab: zenv.ZSymbolTable.view
+    n: zast.assignmentrow.view
+} out bool is {
+    bv: defVid :symtab nid: n.nodeid.u64
+    if bv.isZero then return false
+    return (symtab.reg.variableOwnershipOf id: bv) == ztypes.zownership.borrowed
 }
 
 # rhsIsBorrowedFieldRead -- the binding RHS is a plain member READ off a value
@@ -18092,7 +18152,7 @@ emitCollectionBind: function {
     nameVid: ztypes.vid
 } out bool is {
     avn: ast.nodes.get i: n.value.u64
-    nbrw: bindingRhsIsBorrow :ast :symtab :ctx n: avn
+    nbrw: bindBorrows :ast :symtab :ctx :n :avn
     ltid: bindChasedTid :symtab :ctx :n :avn
     isList: isListOriginOf :symtab :ctx tid: ltid
     isHeap: isSetOriginOf :symtab :ctx tid: ltid
@@ -18288,8 +18348,9 @@ emitListBind: function {
                 emitValueTakeInvalidations :ast :symtab :ctx n: avn :ind :buf
                 # a binding from a bare owned local is a MOVE: zero the
                 # source so its scope-exit free no-ops now that this
-                # binding owns the buffer
-                if (isBareNameValue n: avn) then {
+                # binding owns the buffer. A BORROW takes the alias leg
+                # before reaching here, and must never zero its source.
+                if nbrw.not when (isBareNameValue n: avn) then {
                     lzs0: implicitTakeSource :ast :symtab :ctx n: avn
                     if lzs0.length > 0 then {
                         lzi0: "\{ind}\{lzs0} = (\{lcb}_t){0};\n"
@@ -18342,8 +18403,9 @@ emitHeapColBind: function {
         emitValueTakeInvalidations :ast :symtab :ctx n: avn :ind :buf
         # a heap collection binding from a bare owned local is a MOVE:
         # clear the source so its scope-exit destroy no-ops now that
-        # this binding owns the allocation
-        if (isBareNameValue n: avn) then {
+        # this binding owns the allocation. A BORROW of one is a second
+        # pointer to the same allocation and must leave the source standing.
+        if nbrw.not when (isBareNameValue n: avn) then {
             hzs0: implicitTakeSource :ast :symtab :ctx n: avn
             if hzs0.length > 0 then {
                 hzi0: "\{ind}\{hzs0} = NULL;\n"
@@ -18865,7 +18927,7 @@ emitAssignment: function {
     nameVid: defVid :symtab nid: n.nodeid.u64
     nm: varCName :ctx vid: nameVid name: anmC.stringView
     dropStaleBorrowAlias :ctx vid: nameVid
-    nbrw: bindingRhsIsBorrow :ast :symtab :ctx n: avn
+    nbrw: bindBorrows :ast :symtab :ctx :n :avn
     ctx.borrowedVars.set key: (defVid :symtab nid: n.nodeid.u64) value: nbrw
     if ctx.genActive when (isYieldNode :ast n: avn) then {
         (emitExprFormYield
@@ -20786,7 +20848,6 @@ matchOrdinalPairRoute: function {
     if (isOrdinalPair :symtab tid: (ztypes.tid.create from: sTid.u64)) then {
         # the temp's name, built only for a call subject
         subjOnce: String
-        subjV: subj
         core: ast.nodes.get i: m.subject.u64
         if core.call then {
             ct: pairSubjectCType :ctx :symtab :stn tid: (ztypes.tid.create from: sTid.u64)
@@ -20794,8 +20855,9 @@ matchOrdinalPairRoute: function {
             buf.append "\{ind}\{ct} _mp\{mp} = \{subj};\n"
             emitCallTakeInvalidations :ast :symtab :ctx call: core :ind :buf
             subjOnce = "_mp\{mp}"
-            subjV = subjOnce.stringView
         }
+        # the temp stands in for the subject exactly when one was built
+        subjV: if subjOnce.length > 0 then subjOnce.stringView else subj
         (emitOrdinalPairMatch
             :ast
             :symtab
@@ -24132,8 +24194,7 @@ openSteppedHead: function {
         indN.append "    "
         opened = 1
     }
-    indH: ind
-    if opened > 0 then indH = indN.stringView
+    indH: if opened > 0 then indN.stringView else ind
     gv: newCondGuard :ctx ind: indH :buf
     (emitSteppedCond
         :ast

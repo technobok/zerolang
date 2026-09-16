@@ -559,11 +559,13 @@ list still owns is refused with the words that read gets alone.</p>
 variable declared <em><strong>outside</strong></em> the loop on a path that reaches the next
 iteration is therefore always wrong: the first iteration consumes it, and the
 next would find it already consumed.</p>
-<p>The compiler refuses <code>.take</code>, <code>.drop</code>, <code>.box</code>, a bare reftype binding
-(<code>b: m</code>), a reassignment (<code>t = m</code>), or passing an outer-scope variable to
-a <code>.take</code> parameter -- in a loop condition, a postcondition, or the body --
-whenever the path after the move can reach the next iteration: the body falls
-through, or ends the iteration with <code>continue</code>. The diagnostic is:</p>
+<p>The compiler refuses <code>.take</code>, <code>.drop</code>, <code>.box</code>, a reassignment
+(<code>t = m</code>), or passing an outer-scope variable to a <code>.take</code> parameter -- in
+a loop condition, a postcondition, or the body -- whenever the path after the
+move can reach the next iteration: the body falls through, or ends the
+iteration with <code>continue</code>. A bare binding (<code>b: m</code>) is not among them: it
+borrows, so each iteration takes a fresh reference and consumes nothing. The
+diagnostic is:</p>
 <pre><code class="language-text">cannot transfer ownership of '&lt;name&gt;' inside a loop (executes 0+ times;
 on later iterations '&lt;name&gt;' would already be consumed)
 = note: '&lt;name&gt;' is declared outside the loop; move it after the loop, end
@@ -1249,6 +1251,11 @@ saves the copy.</p>
   with the owner: an append through the copy grew the copy's length and
   left the owner's buffer stale, and past its capacity the realloc left
   the owner pointing at freed memory.</li>
+<li>A reftype bound from a bare name (<code>b: a</code>). The binding borrows,
+  so it is a second name for the source's storage and aliases it as
+  <code>b: a.borrow</code> does. A VALTYPE copies, and a bare name that resolves
+  to a type or a function constructs or calls rather than naming
+  storage.</li>
 </ul>
 <p>Aliasing does NOT apply to:</p>
 <ul>
@@ -1262,15 +1269,14 @@ saves the copy.</p>
 <li>A <code>Set</code> or a <code>Map</code>. Both live on the heap and the local IS
   the pointer, so the pointer is already the reference and there is no
   address to take.</li>
-<li>Plain <code>x: y</code> assignments without <code>.take</code> or <code>.borrow</code> --
-  these retain their existing copy-or-transfer semantics.</li>
 </ul>
 <p>The generated C contains <code>/* alias: name =&gt; source */</code> comments at
 the substitution site for readability; references to the alias name in
-the body emit as the source expression directly. A field read takes its
-pointer type from the storage rather than from the binding's declared
-type, because a field reached through a <code>.view</code> root is <code>const</code> in
-the C and the declared type does not say so.</p>
+the body emit as the source expression directly. A binding that names a
+PLACE -- a field read or a bare name -- takes its pointer type from the
+storage rather than from its declared type, because storage reached
+through a <code>.view</code> root is <code>const</code> in the C and the declared type
+does not say so.</p>
 <h2 id="borrow-escape-rules"><a href="#borrow-escape-rules">9. Borrow Escape Rules</a></h2>
 <p>Borrowed values cannot escape into positions that require ownership.
 The type-checker rejects these statically with a hint pointing at the

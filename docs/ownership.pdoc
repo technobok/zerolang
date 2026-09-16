@@ -405,11 +405,13 @@ variable declared #_*"outside" the loop on a path that reaches the next
 iteration is therefore always wrong: the first iteration consumes it, and the
 next would find it already consumed.
 
-The compiler refuses #~".take", #~".drop", #~".box", a bare reftype binding
-(#~"b: m"), a reassignment (#~"t = m"), or passing an outer-scope variable to
-a #~".take" parameter -- in a loop condition, a postcondition, or the body --
-whenever the path after the move can reach the next iteration: the body falls
-through, or ends the iteration with #~"continue". The diagnostic is:
+The compiler refuses #~".take", #~".drop", #~".box", a reassignment
+(#~"t = m"), or passing an outer-scope variable to a #~".take" parameter -- in
+a loop condition, a postcondition, or the body -- whenever the path after the
+move can reach the next iteration: the body falls through, or ends the
+iteration with #~"continue". A bare binding (#~"b: m") is not among them: it
+borrows, so each iteration takes a fresh reference and consumes nothing. The
+diagnostic is:
 
 #code language=text: """
   cannot transfer ownership of '<name>' inside a loop (executes 0+ times;
@@ -1220,6 +1222,11 @@ Aliasing applies to:
   with the owner: an append through the copy grew the copy's length and
   left the owner's buffer stale, and past its capacity the realloc left
   the owner pointing at freed memory.]
+  [#*: A reftype bound from a bare name (#~"b: a"). The binding borrows,
+  so it is a second name for the source's storage and aliases it as
+  #~"b: a.borrow" does. A VALTYPE copies, and a bare name that resolves
+  to a type or a function constructs or calls rather than naming
+  storage.]
 
 Aliasing does NOT apply to:
 
@@ -1234,15 +1241,14 @@ Aliasing does NOT apply to:
   [#*: A #~"Set" or a #~"Map". Both live on the heap and the local IS
   the pointer, so the pointer is already the reference and there is no
   address to take.]
-  [#*: Plain #~"x: y" assignments without #~".take" or #~".borrow" --
-  these retain their existing copy-or-transfer semantics.]
 
 The generated C contains #~"/* alias: name => source */" comments at
 the substitution site for readability; references to the alias name in
-the body emit as the source expression directly. A field read takes its
-pointer type from the storage rather than from the binding's declared
-type, because a field reached through a #~".view" root is #~"const" in
-the C and the declared type does not say so.
+the body emit as the source expression directly. A binding that names a
+PLACE -- a field read or a bare name -- takes its pointer type from the
+storage rather than from its declared type, because storage reached
+through a #~".view" root is #~"const" in the C and the declared type
+does not say so.
 
 
 #--: Borrow Escape Rules

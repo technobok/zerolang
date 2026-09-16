@@ -1015,7 +1015,13 @@ perf: $(PERFBIN)
 #
 # -12 when three bare bindings that MOVE came to spell the move `.take`: the
 # marker is read instead of the bind-move rule being reached. C is identical.
-ALLOC_BASELINE := 2814660
+#
+# +468 when a local binding of a reftype came to BORROW: the source is longer
+# (the pin, the alias leg and the six sites that bound a name and then
+# reassigned it). The rule itself is CHEAPER than what it replaced -- -818 over
+# the same source, because a borrow installs a pin where a move transferred
+# every held lock and laid a taken row.
+ALLOC_BASELINE := 2815128
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

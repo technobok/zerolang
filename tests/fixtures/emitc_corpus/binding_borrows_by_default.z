@@ -1,0 +1,80 @@
+# A local binding of a reftype BORROWS its source. `b: a` is a second name for
+# what `a` names, not a transfer of it: both names stay readable, a write
+# through either is visible through the other, and only the source is
+# destroyed -- the binding owns nothing, so nothing is freed twice. `.take` is
+# the one spelling that moves and `.copy` the one that duplicates.
+#
+# The pin lasts the binding's scope, which is why each case has a block of its
+# own: while `b` lives, `a` may be read but not written (see
+# binding_borrow_locks_source).
+Box: class {
+    s: String
+}
+
+Shape: union {
+    dot: String
+    line: String
+}
+
+main: function is {
+    # a String: both names read the same bytes, and an append through the
+    # binding reaches the source -- past its capacity too, where a copy would
+    # have reallocated and stranded the original
+    {
+        a: "one".string
+        b: a
+        b.append "-and-then-some-more-than-fits"
+        print "string=\{a}"
+    }
+    # a class: a field write through the binding lands in the source's instance
+    {
+        a: Box s: "x".string
+        b: a
+        b.s = "changed".string
+        print "class=\{a.s},\{b.s}"
+    }
+    # a union: the binding sees the arm the source holds
+    {
+        a: Shape.dot "d".string
+        b: a
+        print "union=\{b.dot}"
+    }
+    # a List and a Map: an append or a set through the binding is the source's
+    {
+        a: List String
+        a.append from: "x".string
+        b: a
+        b.append from: "y".string
+        print "list=\{a.length},\{b.length}"
+    }
+    {
+        a: (Map String V: String)
+        a.set key: "k".string value: "v".string
+        b: a
+        b.set key: "j".string value: "w".string
+        print "map=\{a.length},\{b.length}"
+    }
+    # the borrow is released at its block's end: the source is writable again
+    {
+        a: "one".string
+        {
+            b: a
+            print "block=\{b}"
+        }
+        a.append "!"
+        print "after=\{a}"
+    }
+    # `.take` MOVES: the binding owns the heap and the source is spent
+    {
+        a: "one".string
+        b: a.take
+        print "take=\{b}"
+    }
+    # `.copy` DUPLICATES: the two are independent
+    {
+        a: "one".string
+        c: a.copy
+        c.append "!"
+        print "copy=\{a},\{c}"
+    }
+}

@@ -27012,12 +27012,11 @@ transferTakeIntoBinding: function {
     )
 }
 
-# checkReadonlyBindSource -- binding FROM a readonly source. The test runs outside
-# the destructor gate: a frozen binding may not be moved out of whether or not its
-# type owns heap, and without a destructor the emitter builds a value from a
-# pointer and gcc rejects the C. Readonly is also DEEP -- a reftype read out of a
-# readonly path is itself readonly and takes the same self-lock, or the binding
-# would be a laundering step.
+# checkReadonlyBindSource -- the readonly and take bookkeeping a binding's SOURCE
+# earns. Readonly is DEEP: a reftype read out of a readonly path is itself
+# readonly and takes the same self-lock, or the binding would be a laundering
+# step -- and a bare name launders exactly as a path does, which is why the
+# rule asks about a one-segment path too.
 checkReadonlyBindSource: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -27025,55 +27024,6 @@ checkReadonlyBindSource: function {
     vt: ztypes.tid
     vid2: ztypes.vid
 } is {
-    # The readonly test runs OUTSIDE the destructor gate below: a frozen
-    # binding may not be moved out of whether or not its type owns heap,
-    # and without a destructor the emitter builds a value from a pointer
-    # and gcc rejects the C.
-    rn5: zast.nameTextAt :ast ref: (bareAtomNameId n: (ast.nodes.get i: asgn.value.u64))
-    roMv5: false
-    if rn5.length > 0 when (typeIsReftype :st tid: vt) then {
-        if (nameIsReadonly :st :ast name: rn5.stringView) then {
-            roMv5 = true
-            (readonlyMoveError
-                :st
-                nodeid: asgn.nid
-                lineno: asgn.lineno
-                colno: asgn.colno
-                name: rn5.stringView
-                verb: "into an owned binding"
-            )
-        } else {
-            if (pinnedMoveError
-                :st
-                :ast
-                nodeid: asgn.nid
-                lineno: asgn.lineno
-                colno: asgn.colno
-                name: rn5.stringView
-                verb: "into an owned binding"
-            ) then roMv5 = true
-        }
-    }
-    if rn5.length > 0 when roMv5.not when (typeIsReftype
-        :st
-        tid: vt
-    ) when (st.reg.needsDestructor typeId: vt) then {
-        vo5: st.lookupVarId nameId: (nameIdOf :ast name: rn5.stringView)
-        match (
-            vo5
-        ) case some then {
-            (moveBindSource
-                :st
-                :ast
-                nodeid: asgn.nid
-                lineno: asgn.lineno
-                colno: asgn.colno
-                name: rn5.stringView
-                from: vo5
-                to: vid2
-            )
-        } case none then null
-    }
     transferTakeIntoBinding :st :ast :asgn :vt :vid2
     # Readonly is deep: a reftype read out of a readonly path is itself
     # readonly, and takes the same self-lock. Without this the binding is
@@ -27082,7 +27032,7 @@ checkReadonlyBindSource: function {
     roPath: ListVal zast.nameid
     appendValueTuple :ast n: (ast.nodes.get i: asgn.value.u64) dst: roPath
     roDeep: false
-    if roPath.length > 1 when (typeIsReftype :st tid: vt) when (pathLeafIsMethod :st path: roPath
+    if roPath.length > 0 when (typeIsReftype :st tid: vt) when (pathLeafIsMethod :st path: roPath
     ).not when (pathIsReadonly :st path: roPath) then roDeep = true
     if roDeep when (valueIsHold :ast n: (ast.nodes.get i: asgn.value.u64)).not then {
         rop: ListVal zast.nameid
@@ -27168,6 +27118,28 @@ pinBoundField: function {st: zenv.ZSymbolTable ast: Ast.view vt: ztypes.tid nid:
     # through a readonly root the second name is readonly too
     mw: (pathIsReadonly :st path: fp).not
     pinsPush :st path: fp shared: true mutable: mw alias: true
+}
+
+# pinBoundName -- `b: a`, a bare reftype name bound whole: the binding is a
+# SECOND NAME for what `a` names, not a transfer of it, so it pins the source
+# exactly as `b: a.borrow` does. A write to `a`, a move out of it or a mutating
+# method on it is refused while `b` lives, and `b` cannot escape as owned.
+# `.take` is the one spelling that moves. Through a readonly root the second
+# name is readonly too, which is what keeps a rename from laundering a borrow
+# into an owned value.
+pinBoundName: function {st: zenv.ZSymbolTable ast: Ast.view vt: ztypes.tid nid: zast.nodeid} is {
+    if st.typing.pendingPins.length > 0 then return
+    if (typeIsReftype :st tid: vt).not then return
+    # a TYPE name or a zero-arg function resolves to no variable: those
+    # construct or call rather than naming storage, and the binding owns what
+    # they hand back
+    bn: bareAtomNameId n: (ast.nodes.get i: nid.u64)
+    if bn.isZero then return
+    if (st.lookupVarId nameId: bn).none then return
+    np: ListVal zast.nameid
+    np.append bn
+    mw: (pathIsReadonly :st path: np).not
+    pinsPush :st path: np shared: true mutable: mw alias: true
 }
 
 # pinBoundFieldArms -- `b: if c then h.p else ..`: each arm that reads a field
@@ -27291,6 +27263,7 @@ checkAssignment: function {
     if (refuseDataBlockValue :st :ast :vt nid: asgn.value) then return
     if vt > 0 then {
         pinBoundField :st :ast :vt nid: asgn.value
+        pinBoundName :st :ast :vt nid: asgn.value
         pinBoundFieldArms :st :ast :vt nid: asgn.value
         bpins: List ztyping.PinPath
         takePendingPins :st dst: bpins
@@ -40739,10 +40712,12 @@ setSynthOwnerLabel: function {
     lblUnit: zast.poolTextAt pool: ast.names ref: (unitNameIdOf :st :unitDecl)
     # the definition's spelling: the label's, else the interned name's
     dnT: zast.nameTextAt :ast ref: defNameId
-    dnv: defName
-    if defName.length == 0 then dnv = dnT.stringView
-    lbl: "\{lblUnit}.\{dnv}"
-    if thisName.length > 0 then lbl = "\{lblUnit}.\{thisName}"
+    # the spelling is chosen first and composed once: a method's own name wins,
+    # then the label's, then the interned one
+    lblName: if thisName.length > 0 then thisName else if (
+        defName.length == 0
+    ) then dnT.stringView else defName
+    lbl: "\{lblUnit}.\{lblName}"
     st.typing.synthLabel = lbl
     # the same pair as ids: a method's owner is its TYPE, everything
     # else owns itself. checkCase reads this instead of splitting the
@@ -42889,8 +42864,9 @@ constLiteralValue: function {name: StringView} out ztypes.cval is {
     # the sign is the lexeme's, not the parser's: parseNumber reads a
     # MAGNITUDE, so `-1` is parsed as `1` and negated here
     neg: name.startsWith "-"
-    mag: name
-    if neg then mag = name.substring from: 1 to: name.length
+    magFrom: u64
+    if neg then magFrom = 1
+    mag: name.substring from: magFrom to: name.length
     # read to the UNBOUNDED magnitude: the range that matters here is i64's,
     # and the most negative i64 has a magnitude one past it
     pv: ztypes.parseLiteralValue numstr: mag
@@ -47216,7 +47192,7 @@ resolveConstantDefsIn: function {
 # compiler will not fire for it. `tcc` is tested before `cc` and `clang` before
 # `gcc`, since the shorter spelling is a substring of paths naming the longer.
 ccKindOf: function {ccPath: StringView} out platform.cckind is {
-    b: ccPath
+    cut: u64
     i: ccPath.length
     for i > 0 loop {
         i = i - 1
@@ -47225,11 +47201,12 @@ ccKindOf: function {ccPath: StringView} out platform.cckind is {
             ch
         ) case some then {
             if ch == 47 then {
-                b = ccPath.substring from: i + 1 to: ccPath.length
+                cut = i + 1
                 i = 0
             }
         } case none then null
     }
+    b: ccPath.substring from: cut to: ccPath.length
     if (b.contains needle: "tcc") then return platform.cckind.tcc
     if (b.contains needle: "clang") then return platform.cckind.clang
     if (b.contains needle: "gcc") then return platform.cckind.gcc
