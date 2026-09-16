@@ -1,0 +1,119 @@
+# A type application written in a generic body names the enclosing template's
+# parameter: `(ListVal t: t)`, `ListVal t`, `(holder t: t val: v)`. The template
+# walk resolves the parameter to its own type, and each instance's walk to that
+# instance's argument, so every instance builds its own specialization. The
+# argument was looked up as a type name, which a parameter is not, and every
+# such application was "cannot infer type arguments".
+
+holder: record {
+    val: t
+} as {
+    t: anyval.generic
+}
+
+pt: record {
+    x: i64
+}
+
+# labelled, unlabelled and in type position, one function per instance
+listed: function as { t: anyval.generic } in {v: t} out u64 is {
+    a: ListVal :t
+    a.append from: v
+    b: ListVal t
+    b.append from: v
+    c: ListVal t
+    c.append from: v
+    return a.length + b.length + c.length
+}
+
+# a parameter used only in the body
+emptyCount: function as { t: anyval.generic } in {} out u64 is {
+    l: ListVal t
+    return l.length
+}
+
+# a user template, built with its type argument alone and with a field too
+holderOf: function as { t: anyval.generic } in {v: t} out t is {
+    c: (holder :t) val: v
+    d: holder :t val: c.val
+    return d.val
+}
+
+# nested applications and a keyed container
+nested: function as { t: anyval.generic } in {v: t} out u64 is {
+    l: ListVal (holder :t)
+    l.append from: (holder :t val: v)
+    m: MapVV u64 v: (holder :t)
+    m.set key: 1 value: (holder :t val: v)
+    return l.length + m.length
+}
+
+# two parameters, and a reference element
+twoParams: function as { t: anyval.generic u: anyval.generic } in {a: t b: u} out u64 is {
+    l: ListVal t
+    l.append from: a
+    k: ListVal u
+    k.append from: b
+    k.append from: b
+    return l.length + k.length
+}
+
+refs: function as { T: AnyRef.generic } in {v: T.view} out u64 is {
+    l: ListRef T
+    l.append from: v.copy
+    return l.length
+}
+
+# a loop body builds a fresh one each pass
+perPass: function as { t: anyval.generic } in {v: t n: u64} out u64 is {
+    total: u64
+    i: u64
+    for i < n loop {
+        l: ListVal t
+        l.append from: v
+        total = total + l.length
+        i = i + 1
+    }
+    return total
+}
+
+# a class template's method and a generic unit's function
+Reg: class {
+    n: u64
+} as {
+    k: valhashable.generic
+    fill: function {r: this key: k} out u64 is {
+        m: MapVV k v: u64
+        m.set :key value: 1
+        s: SetVal k
+        s.add item: key
+        return m.length + s.length
+    }
+}
+
+ops: unit as {
+    t: anyval.generic
+    wrap: function {v: t} out u64 is {
+        l: ListVal t
+        l.append from: v
+        return l.length
+    }
+}
+
+intOps: (ops t: i64)
+floatOps: (ops t: f64)
+
+main: function is {
+    print "\{listed t: i64 v: 5} \{listed t: f64 v: 2.5} \{listed t: pt v: (pt x: 1)}"
+    print "\{emptyCount t: i64}"
+    print "\{holderOf t: i64 v: 5} \{holderOf t: u8 v: 7}"
+    print "\{nested t: i64 v: 5}"
+    print "\{twoParams t: i64 u: f64 a: 5 b: 1.5}"
+    s: "ab".string
+    print "\{refs T: String v: s}"
+    passes: 3.u64
+    print "\{perPass t: i64 v: 5 n: passes}"
+    r: Reg k: i64
+    print "\{r.fill key: 5}"
+    print "\{intOps.wrap v: 5} \{floatOps.wrap v: 1.5}"
+}

@@ -2950,6 +2950,19 @@ monoRefArgTid: function {
                     )
                 }
             }
+            # written in a body, where no enclosing declaration is passed: a
+            # parameter of any template around the frame
+            if aid.isZero when enclDecl.isZero then {
+                aid = (ztypes.tid.create
+                    from: (genericParamInScope
+                        :st
+                        :ast
+                        :frame
+                        nameId: (atomNameId :ast n: (ast.nodes.get i: arg.operation.u64))
+                        nid: arg.operation.u64
+                    )
+                )
+            }
             # a name the CURRENT unit defines wins even when
             # not yet declared -- the ladder walk sees only
             # declared defs and would fall through to a
@@ -20074,9 +20087,104 @@ constructionArgTid: function {
         opNid: opId
         nid: 0
     )
-    if inl9 > 0 then return inl9
-    ao9: walkLookupTyperefById :st frame: st.curFrame :ast :unitDecl :baseId
-    return (ao9.or d: 0)
+    if inl9 > 0 then return (instanceTypeOf :st :ast :unitDecl tid: inl9)
+    return (instanceTypeOf
+        :st
+        :ast
+        :unitDecl
+        tid: (bodyTypeNameTid :st :ast :unitDecl nameId: baseId nid: opId.u64)
+    )
+}
+
+# bodyTypeNameTid -- the type a bare name denotes as a type argument written in
+# a body: a type parameter of a declaration enclosing the body first, since it
+# shadows any type of that name, then a type the frame reaches. 0 when it
+# denotes none.
+bodyTypeNameTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    nameId: zast.nameid
+    nid: u64
+} out u64 is {
+    gp: genericParamInScope :st :ast frame: st.curFrame :nameId :nid
+    if gp > 0 then return gp
+    return ((walkLookupTyperefById :st frame: st.curFrame :ast :unitDecl baseId: nameId).or d: 0)
+}
+
+# genericParamInScope -- the GENERIC_PARAM type a bare name denotes when it is a
+# type parameter of a declaration at or enclosing `frame`, recorded against node
+# `nid`. 0 when no enclosing declaration has a parameter of that name, and for a
+# numeric parameter, which is a value.
+genericParamInScope: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    frame: ztypes.declid
+    nameId: zast.nameid
+    nid: u64
+} out u64 is {
+    if nameId.isZero then return 0
+    cur: frame
+    for cur > 0 loop {
+        if (st.reg.isGenericParamOf tdecl: cur name: nameId) then {
+            if (st.reg.genericParamConstraintOf tdecl: cur paramName: nameId
+            ).numKind.has then return 0
+            recordGenericParamRef :st :nid frame: cur name: nameId
+            return (genericParamTidMint :st :ast tdecl: cur :nameId)
+        }
+        cur = st.typing.declParentOf declId: cur
+    }
+    return 0
+}
+
+# genericParamTidMint -- the canonical GENERIC_PARAM type of `tdecl`'s parameter
+# `nameId`, minted on first ask.
+genericParamTidMint: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    tdecl: ztypes.declid
+    nameId: zast.nameid
+} out u64 is {
+    po: st.reg.genericParamTidOf :tdecl paramName: nameId
+    match (
+        po
+    ) case some then {
+        return po
+    } case none then null
+    pt: ztypes.tid
+    {
+        nT: zast.nameTextAt :ast ref: nameId
+        pt = st.reg.newType name: nT.stringView typetype: ztypes.ztypetype.genericParam
+    }
+    st.reg.setGenericParamTid :tdecl paramName: nameId tid: pt
+    return pt.u64
+}
+
+# instanceTypeOf -- a type a body walk resolved, as the instance being walked
+# sees it: a generic parameter is the instance's argument, and a specialization
+# over one specializes again with it. The type itself outside an instance walk.
+instanceTypeOf: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    tid: u64
+} out u64 is {
+    if tid == 0 then return 0
+    if st.typing.curMonoStamp == 0 then return tid
+    flat: monoSubstTid :st tid: (ztypes.tid.create from: tid)
+    if flat.u64 != tid then return flat.u64
+    if (st.reg.genericArgCount specId: flat) == 0 then return tid
+    subs: IdMapV u64 v: u64
+    si: u64
+    for si < st.typing.monoParamSubst.length loop {
+        sk: st.typing.monoParamSubst.keyAt i: si
+        sv: (st.typing.monoParamSubst.valueAt i: si).or d: sk
+        subs.set key: sk.u64 value: sv.u64
+        si = si + 1
+    }
+    rsp: respecialize :st frame: st.curFrame :ast :unitDecl specTid: tid idSubs: subs
+    if rsp > 0 then return rsp
+    return tid
 }
 
 # elidedPrimaryTypeArg -- an unnamed leading argument that names a TYPE binds the
@@ -20090,14 +20198,7 @@ elidedPrimaryTypeArg: function {
 } out bool is {
     anE: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId.u64)
     if (isNumericLiteralNameAt :ast ref: anE) then return false
-    teo: walkLookupTyperefById :st frame: st.curFrame :ast :unitDecl baseId: anE
-    isType: false
-    match (
-        teo
-    ) case some then {
-        isType = true
-    } case none then null
-    return isType
+    return (bodyTypeNameTid :st :ast :unitDecl nameId: anE nid: opId.u64) > 0
 }
 
 # bindTypeArgSub -- a label naming a generic param carries its argument
@@ -20575,15 +20676,7 @@ explicitPrimaryArgTid: function {
 } out u64 is {
     anP: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId.u64)
     if (isNumericLiteralNameAt :ast ref: anP) then return 0
-    pid0: ((walkLookupTyperefById
-        :st
-        frame: st.curFrame
-        :ast
-        :unitDecl
-        baseId: anP
-    ).or
-        d: 0
-    )
+    pid0: bodyTypeNameTid :st :ast :unitDecl nameId: anP nid: opId.u64
     if pid0 > 0 then return pid0
     dop: ast.nodes.get i: opId.u64
     return (dottedTyperefId :ast :st op: dop)
@@ -33916,8 +34009,19 @@ walkOneCallArg: function {
         if isCtor then useNC = ctorArgTakesFnRef :st :ast :effId :arg
         vt: ztypes.tid
         errV: st.typing.errors.length
+        tpa: ztypes.tid
+        if isCtor when useNC.not then tpa = (ctorTypeArgParamTid
+            :st
+            :ast
+            :unitDecl
+            tplId: funcId
+            :arg
+        )
         if useNC then {
             vt = ztypes.tid.create from: (valueNoCoerceAt :st :unitDecl :ast nid: arg.operation)
+        } else if tpa.isZero.not then {
+            vt = tpa
+            stampGate :st nid: arg.operation.u64 tid: vt
         } else {
             caPrev: st.typing.callArgNode
             st.typing.callArgNode = (nodeId
@@ -33970,6 +34074,41 @@ walkOneCallArg: function {
             :arg
         )
     }
+}
+
+# ctorArgIsTypeArg -- a construction argument whose label names a type
+# parameter of the template being built: it carries a type, not a value.
+ctorArgIsTypeArg: function {st: zenv.ZSymbolTable.view tplId: ztypes.tid arg: argref} out bool is {
+    if arg.name.isZero then return false
+    tpl: tplId
+    og: st.reg.genericOriginOf tid: tplId
+    if og > 0 then tpl = og
+    tk: declOfTypeId :st tid: tpl
+    if (st.reg.isGenericParamOf tdecl: tk name: arg.name).not then return false
+    return (st.reg.genericParamConstraintOf tdecl: tk paramName: arg.name).numKind.has.not
+}
+
+# ctorTypeArgParamTid -- the type of a construction argument that carries a
+# type PARAMETER of the template being walked (`(Cell t: t val: v)`), as the
+# instance being walked sees it. 0 for every other argument, which walks as a
+# value -- including a type argument that names a concrete type, since a type
+# name is a value the walk resolves. A parameter is not: no lookup finds it,
+# and the walk reported the name as unresolvable.
+ctorTypeArgParamTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    tplId: ztypes.tid
+    arg: argref
+} out ztypes.tid is {
+    if (ctorArgIsTypeArg :st :tplId :arg).not then return ztypes.tid
+    pn: paramTypeBaseNameId :ast op: (ast.nodes.get i: arg.operation.u64)
+    if (genericParamInScope :st :ast frame: st.curFrame nameId: pn nid: 0) == 0 then {
+        return ztypes.tid
+    }
+    return (ztypes.tid.create
+        from: (constructionArgTid :st :ast :unitDecl opId: arg.operation baseId: pn)
+    )
 }
 
 # walkCallArgsHoist -- the user-call argument walk: type each argument, then
@@ -47893,11 +48032,19 @@ lowerDeclaredGenerators: function {st: zenv.ZSymbolTable program: Ast} is {
 
 # stampConstructionKind -- record what a call CONSTRUCTS, derived from the type
 # it answers. The three families are the three the emitter renders differently;
-# anything else is an ordinary call and says so.
+# anything else is an ordinary call and says so. A partial specialization -- a
+# construction over a parameter of the template being walked -- constructs
+# what its template does, so the template walk and each instance walk of a body
+# record the same kind on the node they share.
 stampConstructionKind: function {st: zenv.ZSymbolTable nid: u64 tid: ztypes.tid} is {
     if nid == 0 then return
     if tid.isZero then return
-    tt: st.reg.typetypeOf typeId: tid
+    kt: tid
+    if (st.reg.isPartialOf :tid) then {
+        og: st.reg.genericOriginOf :tid
+        if og > 0 then kt = og
+    }
+    tt: st.reg.typetypeOf typeId: kt
     ck: zast.callkind.regular
     if tt == ztypes.ztypetype.recordType then ck = zast.callkind.recordCreate
     if tt == ztypes.ztypetype.classType then ck = zast.callkind.classCreate
