@@ -1126,7 +1126,10 @@ perf: $(PERFBIN)
 # the same source compiles with the same count, all of it is the source longer
 # (a first cut listed every function type's parameters to ask whether one names
 # a template, +10,696 over the same source).
-ALLOC_BASELINE := 2908474
+#
+# -498 when an `Any` bound came to be reported at the atom that spells it: the
+# same source compiles with the same count, all of it is the source shorter.
+ALLOC_BASELINE := 2907976
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1207,10 +1210,10 @@ perf-elision: bin/zc.c
 # Both are ratchets: they may only DECREASE. Enforced here rather than in the
 # typechecker because generic-param registration has no unit name in hand.
 any-guard:
-	@u=$$(grep -rn 'Any\.generic' --include=*.z src examples tests | grep -vE ':[0-9]+: *#' | grep -vE 'any_bound_retired\.z|any_shadow_bound\.z' | wc -l); \
+	@u=$$(grep -rn 'Any\.generic' --include=*.z src examples tests | grep -vE ':[0-9]+: *#' | grep -vE 'any_bound_retired\.z|any_bound_position\.z|any_shadow_bound\.z' | wc -l); \
 	if [ "$$u" -gt 0 ]; then \
 	  echo "any-guard FAIL: $$u use(s) of Any.generic in user source"; \
-	  grep -rn 'Any\.generic' --include=*.z src examples tests | grep -vE ':[0-9]+: *#' | grep -vE 'any_bound_retired\.z|any_shadow_bound\.z'; \
+	  grep -rn 'Any\.generic' --include=*.z src examples tests | grep -vE ':[0-9]+: *#' | grep -vE 'any_bound_retired\.z|any_bound_position\.z|any_shadow_bound\.z'; \
 	  echo "  A generic must name the family it takes: anyval.generic or AnyRef.generic."; \
 	  exit 1; \
 	fi; \

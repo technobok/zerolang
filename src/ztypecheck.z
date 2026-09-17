@@ -2628,31 +2628,21 @@ nestedTemplateUnit: function {
 
 # registerUnitParamsOn -- a type nested in a generic unit takes the unit's
 # parameters as its own, their parameter types included, so its members'
-# references to them are its parameters and its instances bind them.
+# references to them are its parameters and its instances bind them. Copied
+# from the unit's own registration, not re-read from its source: a re-read
+# records the unit's bounds again under the type, and each is then reported
+# twice.
 registerUnitParamsOn: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     tdecl: ztypes.declid
     unitTmpl: ztypes.declid
 } is {
-    un: u64
-    {
-        ud: st.typing.decls.get i: unitTmpl.u64
-        un = ud.node.u64
-    }
-    if un == 0 then return
-    uop: u32
-    {
-        unn: ast.nodes.get i: un
-        if unn.namedoperation then uop = unn.operation.u32
-    }
-    if uop == 0 then return
-    registerGenericParams :st :ast :tdecl items: (zast.unitBodyIdsAt :ast unitId: uop)
     with pit: (st.reg.genericParamNamesOf tdecl: unitTmpl).iterate do for pn: pit loop {
+        cd: st.reg.genericParamConstraintOf tdecl: unitTmpl paramName: pn
+        st.reg.addGenericParam :tdecl paramName: pn kind: cd.kind numKind: cd.numKind
         ut: genericParamTidMint :st :ast tdecl: unitTmpl nameId: pn
-        if (st.reg.paramOrdinalOf :tdecl paramName: pn).some then {
-            st.reg.setGenericParamTid :tdecl paramName: pn tid: (ztypes.tid.create from: ut)
-        }
+        st.reg.setGenericParamTid :tdecl paramName: pn tid: (ztypes.tid.create from: ut)
     }
 }
 
@@ -19329,64 +19319,54 @@ constraintUnmetText: function {
 # names the family it takes (AnyRef/anyval, a hashable bound, StringLike or a
 # numeric width). The spelling still maps to constraintkind.any at
 # registration, where the declaring unit is not known, so the gate runs once
-# after resolution: a kind-`any` parameter whose declaring unit does not
-# itself define `Any` reports the standard unknown-type error. system.z
-# defines `Any`, so its residual bounds pass; a user unit passes only by
-# defining its own `Any`.
+# after resolution: each bound atom spelling `Any` whose declaring unit does
+# not itself define `Any` reports the standard unknown-type error, at that
+# atom. system.z defines `Any`, so its residual bounds pass; a user unit
+# passes only by defining its own `Any`.
 checkAnyBounds: function {ast: Ast.view st: zenv.ZSymbolTable} is {
     anyNid: zast.poolFind pool: ast.names text: "Any"
     if anyNid.isZero then return
-    # the declaration nodes to report, collected while the parameter table is
-    # read and reported after: the report lends st
-    anyNodes: ListVal u32
-    with git: st.reg.genericParams.iterateItems do for ge: git loop {
-        hasAny: false
-        with pit: ge.value.params.iterate do for pd: pit loop {
-            if pd.constraint.kind == ztypes.constraintkind.any then hasAny = true
-        }
-        if hasAny then {
-            tdecl: ge.key
-            unitDecl: ztypes.declid
-            declNode: u32
-            d: tdecl
-            for d > 0 loop {
-                decl: st.typing.decls.get i: d.u64
-                if declNode == 0 then declNode = decl.node
-                match (
-                    decl.kind
-                ) case unitDecl then {
-                    unitDecl = d
-                    d = ztypes.declid
-                } else {
-                    d = decl.parent
-                }
-            }
-            defined: false
-            if unitDecl.isZero.not then {
-                # declFindChild reads the pre-resolution def index, so a
-                # defined-but-never-demanded `Any` still counts.
-                if (st.typing.declFindChild parentDeclId: unitDecl nameId: anyNid) > 0 then {
-                    defined = true
-                }
-            } else {
-                defined = true
-            }
-            if defined.not when declNode > 0 then anyNodes.append from: declNode
+    # the bound nodes to report, collected while the bound table is read and
+    # reported after: the report lends st
+    anyNodes: ListVal u64
+    with bit: st.typing.genericBoundName.iterateItems do for be: bit loop {
+        if be.value == anyNid then {
+            frame: (st.typing.genericBoundFrame.get key: be.key).or d: ztypes.declid
+            if (unitDefinesAny :st :frame :anyNid).not then anyNodes.append from: be.key
         }
     }
-    with rit: anyNodes.iterate do for dn: rit loop {
-        tn: ast.nodes.get i: dn.u64
-        m: "Unknown type 'Any'".string
+    with rit: anyNodes.iterate do for bn: rit loop {
+        tn: ast.nodes.get i: bn
         (addResolveErrorH
             :st
             nodeid: (nodeId n: tn)
             lineno: (nodeLine n: tn)
             colno: (nodeCol n: tn)
             e: zast.err.badReference
-            msg: m
+            msg: "Unknown type 'Any'".string
             width: 3
         )
     }
+}
+
+# unitDefinesAny -- the unit enclosing declaration `frame` defines its own `Any`;
+# true for a frame in no unit.
+unitDefinesAny: function {
+    st: zenv.ZSymbolTable.view
+    frame: ztypes.declid
+    anyNid: zast.nameid
+} out bool is {
+    d: frame
+    for d > 0 loop {
+        decl: st.typing.decls.get i: d.u64
+        if decl.kind.unitDecl then {
+            # declFindChild reads the pre-resolution def index, so a
+            # defined-but-never-demanded `Any` still counts
+            return (st.typing.declFindChild parentDeclId: d nameId: anyNid) > 0
+        }
+        d = decl.parent
+    }
+    return true
 }
 
 # typeIsHashable -- the type has both `hash` and `==`, so it may key a Map or
