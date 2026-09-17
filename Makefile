@@ -1117,7 +1117,11 @@ perf: $(PERFBIN)
 # +456 when a generic sum's tag accessor and tag storage came to be its
 # instances': +14 over the same source (the templates' `as` items are read for
 # a tag), about +440 the source longer.
-ALLOC_BASELINE := 2891915
+#
+# +2,677 when generic instances came to be written after the instances they
+# embed, and a sum's arm over its own parameter to resolve: the same source
+# compiles with the same count, all of it is the source longer.
+ALLOC_BASELINE := 2894592
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

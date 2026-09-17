@@ -34163,24 +34163,117 @@ emitCollectionMonos: function {
         )
         tsp = tsp + 1
     }
-    # user generic VARIANT monos (e.g. Slot<i64>): tag enum + tagged struct via
-    # emitOneVariant, the same emitter the system variant monos use. Valtypes a
-    # user record can embed by value, so ahead of wUgRec.
-    tugv: u64
-    for tugv < work.wUgVar.length loop {
-        ugvId: work.wUgVar.get i: tugv
-        emitOneVariant :ast :symtab :ctx tid: (ztypes.tid.create from: ugvId.u64) :buf
-        tugv = tugv + 1
+    emitUserGenericInstances :ast :symtab :ctx :work :buf
+}
+
+# emitUserGenericInstances -- user generic VARIANT monos (e.g. slot_i64, through
+# emitOneVariant as the system variant monos are) and RECORD/CLASS monos (e.g.
+# Box_i64, through emitOneRecord), each after the instances it embeds by value:
+# `Box: record { inner: (Cell t: t) }` holds a Cell_i64, which the type-id order
+# can put second. A cycle -- which only a boxed member could close -- falls back
+# to the listed order.
+emitUserGenericInstances: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    work: MonoWork.view
+    buf: String.borrow
+} is {
+    order: ListVal u64
+    pending: IdSet u64
+    with vit: work.wUgVar.iterate do for vv: vit loop {
+        order.append from: vv
+        pending.add item: vv
     }
-    # user generic class/record monos (e.g. Box<i64>): RECORD/CLASS monos whose
-    # origin is a user generic type. The collection / array / str / option / box
-    # monos are handled by their own worklists; emit the rest via emitOneRecord.
-    tug: u64
-    for tug < work.wUgRec.length loop {
-        ugId: work.wUgRec.get i: tug
-        emitOneRecord :ast :symtab :ctx tid: (ztypes.tid.create from: ugId.u64) :buf
-        tug = tug + 1
+    with rit: work.wUgRec.iterate do for rv: rit loop {
+        order.append from: rv
+        pending.add item: rv
     }
+    emitted: IdSet u64
+    left: order.length
+    for left > 0 loop {
+        done: emitReadyInstances :ast :symtab :ctx :order :pending :emitted :buf
+        if done == 0 then {
+            # a cycle: the first still pending goes as listed
+            fb: firstNotIn :order set: emitted
+            emitUserGenericInstance :ast :symtab :ctx tid: (ztypes.tid.create from: fb) :buf
+            emitted.add item: fb
+            done = 1
+        }
+        left = left - done
+    }
+}
+
+# emitReadyInstances -- one pass of emitUserGenericInstances: every instance of
+# `order` not yet emitted that embeds nothing still pending. Answers how many.
+emitReadyInstances: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    order: (ListVal u64).view
+    pending: (IdSet u64).view
+    emitted: IdSet u64
+    buf: String.borrow
+} out u64 is {
+    done: u64
+    with oit: order.iterate do for ov: oit loop {
+        if (emitted.has item: ov).not when (ugEmbedsPending
+            :symtab
+            tid: (ztypes.tid.create from: ov)
+            :pending
+            :emitted
+        ).not then {
+            emitUserGenericInstance :ast :symtab :ctx tid: (ztypes.tid.create from: ov) :buf
+            emitted.add item: ov
+            done = done + 1
+        }
+    }
+    return done
+}
+
+# firstNotIn -- the first id of `order` that `set` lacks, 0 when none.
+firstNotIn: function {order: (ListVal u64).view set: (IdSet u64).view} out u64 is {
+    with fit: order.iterate do for fv: fit loop {
+        if (set.has item: fv).not then return fv
+    }
+    return 0
+}
+
+# emitUserGenericInstance -- one user generic instance, by its family.
+emitUserGenericInstance: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    buf: String.borrow
+} is {
+    if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.variantType then {
+        emitOneVariant :ast :symtab :ctx :tid :buf
+        return
+    }
+    emitOneRecord :ast :symtab :ctx :tid :buf
+}
+
+# ugEmbedsPending -- the user generic instance `tid` holds, as a field or an arm,
+# an instance of `pending` not yet `emitted`.
+ugEmbedsPending: function {
+    symtab: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    pending: (IdSet u64).view
+    emitted: (IdSet u64).view
+} out bool is {
+    ids: ListVal u64
+    nms: ListVal u64
+    if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.variantType then {
+        variantArmIds :symtab :tid :ids nameIds: nms
+    } else {
+        recFieldIds :symtab :tid :ids nameIds: nms
+    }
+    with iit: ids.iterate do for iv: iit loop {
+        if iv != tid.u64 when (pending.has item: iv) when (emitted.has item: iv
+        ).not then return true
+    }
+    return false
 }
 
 # emitOptionMonos -- the option and result families, before the collections whose
