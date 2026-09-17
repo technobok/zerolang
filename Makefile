@@ -1060,7 +1060,10 @@ perf: $(PERFBIN)
 #
 # -206 when array and str `==` became the generated pair every value type has:
 # +0 over the same source, -206 the source shorter.
-ALLOC_BASELINE := 2852042
+#
+# -82 when the floats lost their `hash`: the compiler is unchanged, and f32
+# and f64 no longer mint a synthesised one.
+ALLOC_BASELINE := 2851960
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
