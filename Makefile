@@ -1137,7 +1137,11 @@ perf: $(PERFBIN)
 # +4,356 when a user function's String or List `.borrow` return came to be a
 # reference: +214 over the same source (each call and path asks whether it is
 # one), about +4,140 the source longer.
-ALLOC_BASELINE := 2913044
+#
+# +520 when an argument moved out of another call's result came to run that
+# call once: the same source compiles with the same count, all of it is the
+# source longer.
+ALLOC_BASELINE := 2913564
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

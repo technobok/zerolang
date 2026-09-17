@@ -4289,15 +4289,24 @@ fieldMoveInPlace: function {
     owns: symtab.reg.needsDestructor typeId: ftid
     if owns.not then owns = isHeapPtrCollection :symtab :ctx tid: ftid
     if owns.not then return none
+    # the path is spelled here to ask whether it is a place; when it is not,
+    # the caller spells it again, so what this spelling hoisted is dropped
+    hmk: pendingHoistMark :ctx
     place: String
     match (
         fn
     ) case dottedpath then {
         place = emitDottedRead :ast :symtab :ctx n: fn
     } else null
-    if (isPlainCPath s: place.stringView).not then return none
+    if (isPlainCPath s: place.stringView).not then {
+        dropHoistsTo :ctx mark: hmk
+        return none
+    }
     zero: armTakeZeroC :ast :symtab :ctx tid: ftid
-    if zero.length == 0 then return none
+    if zero.length == 0 then {
+        dropHoistsTo :ctx mark: hmk
+        return none
+    }
     mv: "({ __typeof__(\{place}) _mv = \{place}; \{place} = \{zero}; _mv; })"
     return mv
 }
@@ -18120,16 +18129,37 @@ stringCopyLitIndex: function {
     }
 }
 
+# copyReceiverTemp -- the temp a `.copy` of a String rvalue `pv` (node `n`)
+# reads: a hoist after the ones spelling `pv` registered, freed with the
+# statement unless the value is a borrow its owner keeps (`list.get`).
+copyReceiverTemp: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+    pv: StringView
+} out String is {
+    hn: ctx.argHoistCtr
+    ctx.argHoistCtr = ctx.argHoistCtr + 1
+    tnm: "_cpv\{hn}"
+    dt: String
+    if (hoistExprIsBorrowRooted :ast :symtab :ctx :n
+    ).not then dt = "    \{ctx.strC}_free(&\{tnm});\n"
+    ctx.argHoistVals.append pv.string
+    ctx.argHoistTypes.append "\{ctx.strC}_t"
+    ctx.argHoistDtors.append dt
+    ctx.argHoistNames.append tnm.copy
+    return tnm
+}
+
 # copyRvalueHoist -- `<rvalue>.copy` over a String (e.g. `(list.get i: n).copy`):
-# the receiver is a non-lvalue, so hoist it to a borrowed temp (`list.get` returns
-# a shallow view -- never freed) and return `String_copy(&temp)`. "" otherwise.
+# the receiver is a non-lvalue, so hoist it to a temp (copyReceiverTemp) and
+# return `String_copy(&temp)`. "" otherwise.
 copyRvalueHoist: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: astnode.view
-    ind: StringView
-    buf: String.borrow
 } out String is {
     match (
         n
@@ -18146,11 +18176,13 @@ copyRvalueHoist: function {
             dropHoistsTo :ctx mark: hmk
             return "".string
         }
-        hn: ctx.argHoistCtr
-        ctx.argHoistCtr = ctx.argHoistCtr + 1
-        tnm: "_cpv\{hn}"
-        th: "\{ind}\{ctx.strC}_t \{tnm} = \{pv};\n"
-        buf.append th
+        tnm: (copyReceiverTemp
+            :ast
+            :symtab
+            :ctx
+            n: (ast.nodes.get i: n.parent.u64)
+            pv: pv.stringView
+        )
         return "\{ctx.strC}_copy(&\{tnm})"
     } else {
         return "".string
@@ -18201,11 +18233,14 @@ emitStringBindValue: function {
                 pv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
                 if (isNonLvalueArg s: pv.stringView).not then dropHoistsTo :ctx mark: hmk
                 if (isNonLvalueArg s: pv.stringView) then {
-                    hn: ctx.argHoistCtr
-                    ctx.argHoistCtr = ctx.argHoistCtr + 1
-                    tnm: "_cpv\{hn}"
-                    th: "\{ind}\{ctx.strC}_t \{tnm} = \{pv};\n"
-                    buf.append th
+                    tnm: (copyReceiverTemp
+                        :ast
+                        :symtab
+                        :ctx
+                        n: (ast.nodes.get i: n.parent.u64)
+                        pv: pv.stringView
+                    )
+                    flushArgHoists :ctx :ind :tmp :buf
                     lc: "\{ind}\{ctx.strC}_t \{nm} = \{ctx.strC}_copy(&\{tnm});\n"
                     buf.append lc
                     tmp.oweFree name: nm.string vid: nmVid
@@ -19735,7 +19770,7 @@ reassignRhsText: function {
     tmp: TmpCtr
     buf: String.borrow
 } out String is {
-    rcph: copyRvalueHoist :ast :symtab :ctx n: valueNode :ind :buf
+    rcph: copyRvalueHoist :ast :symtab :ctx n: valueNode
     if rcph.length > 0 then return rcph
     rvi: emitInterpStmtValue :ast :symtab :ctx n: valueNode :ind :tmp :buf
     if rvi.length > 0 then return rvi
