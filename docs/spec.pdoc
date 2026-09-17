@@ -2363,7 +2363,8 @@ A generic bound names the family it takes: #~"AnyRef.generic" admits any
 reference type (class, union, protocol, #~"String"), #~"anyval.generic" any
 value type (record, variant, numeric, #~"str", #~"array"), and the hashed
 positions use #~"RefHashable.generic" / #~"valhashable.generic", which also
-require #~"hash" and #~"==". The bare #~"Any" bound is not user-writable --
+require #~"hash" and #~"==" -- for a value type, a #~"hash" that agrees with
+its #~"==" (see [#> to=auto-generated-equality: Auto-Generated Equality]). The bare #~"Any" bound is not user-writable --
 the build rejects it; it survives only inside #~"system" on parameters that
 are never consulted and on the two types that deliberately span both
 families (#~"Iterator", #~"OptionView").
@@ -3218,7 +3219,8 @@ Compiler created union type that contains all types except itself. Can
 (classes, unions, protocols, strings, the reftype containers).
 #~"anyval.generic" constrains it to value types (records, variants,
 numerics). #~"RefHashable.generic" / #~"valhashable.generic" additionally
-require #~"hash" and #~"==" for hashed positions. These are used by the
+require #~"hash" and #~"==" for hashed positions; a value type's generated
+#~"hash" counts only where it agrees with its #~"==". These are used by the
 system #~"Option" (reftype only), #~"optionval" (valtype only), and the
 container families.
 
@@ -6190,6 +6192,26 @@ error:
 #code language=zerolang: """
   opaque: record { val: i64 } as { ==: null }
   # opaque == opaque  --> error: type 'opaque' has no member '=='
+  """
+
+#b: Hash.
+A value type's #~"hash" follows its #~"==". The generated #~"hash" combines
+the parts' own hashes -- the author's where one is written -- and so exists
+only beside a generated #~"==" (or the runtime's, as a number's is) and only
+when every part has a hash. A type that writes #~"==" must write #~"hash" to
+be a Map key or a Set element, and #~"hash: null" strikes the generated one
+off. The generated one is a member like any other: #~"r.hash" answers, equal
+for equal values. A float has no #~"hash" (a NaN is unequal to itself), so
+neither does anything holding one:
+
+#code language=zerolang: """
+  lower: function {c: u8} out u8 is { if c >= 65 when c <= 90 then return c + 32 else return c }
+  letter: record { code: u8 } as {
+      ==: function {:this rhs: letter} out bool is { return (lower c: this.code) == (lower c: rhs.code) }
+      hash: function {t: this.view} out u64 is { return (lower c: t.code).u64 }
+  }
+  entry: record { l: letter  n: i64 }   # generated == and hash, built from letter's
+  # (MapVV entry v: i64) finds an entry stored under 'A' when asked for 'a'
   """
 
 #b: Floats.

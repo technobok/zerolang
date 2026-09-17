@@ -1510,14 +1510,16 @@ Text: protocol {
 StringLike: union { :StringView :Text }
 
 # valhashable -- a valtype usable as a Map key or Set element. The compiler
-# synthesises `hash` (a byte hash over the contents) and `==` (a byte compare)
-# for every valtype -- a valtype holds value data only, so its bytes are the
-# whole value -- and conformance is implicit and needs no declaration.
-# Declaring either member overrides the default; `==: null` / `hash: null`
-# strikes it off and the type stops being hashable.
+# generates `==` and `hash` for every valtype from its parts -- each part's
+# own, never its bytes -- and conformance is implicit and needs no declaration.
+# The two must agree, so a generated `hash` counts only beside a generated `==`
+# (or the runtime's, as a number's is) whose parts all hash; a type that
+# writes its `==` writes its `hash` too. `==: null` / `hash: null` strikes one
+# off and the type stops being hashable, and so does every type holding it.
+# A float has no `hash`.
 valhashable: facet {
-    # the value hash a Map or Set keys on. A valtype IS a byte range, so this
-    # one can be synthesised -- which is the whole reason the facet exists
+    # the value hash a Map or Set keys on, generated from the parts' hashes
+    # unless the type writes its own
     hash: function {t: this.view} out u64
     # value equality, and it travels with hash: two values that compare equal
     # must hash alike or a Map will lose one of them
@@ -1541,7 +1543,9 @@ RefHashable: protocol {
 
 # idkey -- the key of an IdMap or IdSet: an unsigned scalar id. Those
 # containers index on the key's own bits instead of on a hash of them, so the
-# bound says which keys may be indexed that way. Signed types are excluded --
+# bound says which keys may be indexed that way. For such a key identity IS
+# the bits: a typedef that writes its own `==` still lands in the slot its
+# bits name, so its `==` must agree with them (the compiler's ids' do). Signed types are excluded --
 # an id space is an unsigned count, and masking a negative number is not an
 # index -- and so is every reference: a pointer's low bits are alignment
 # padding, which would collapse the index. A typedef over one of these is one

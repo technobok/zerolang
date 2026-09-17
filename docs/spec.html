@@ -2198,7 +2198,8 @@ type will fail to compile.</p>
 reference type (class, union, protocol, <code>String</code>), <code>anyval.generic</code> any
 value type (record, variant, numeric, <code>str</code>, <code>array</code>), and the hashed
 positions use <code>RefHashable.generic</code> / <code>valhashable.generic</code>, which also
-require <code>hash</code> and <code>==</code>. The bare <code>Any</code> bound is not user-writable --
+require <code>hash</code> and <code>==</code> -- for a value type, a <code>hash</code> that agrees with
+its <code>==</code> (see <a href="#auto-generated-equality">Auto-Generated Equality</a>). The bare <code>Any</code> bound is not user-writable --
 the build rejects it; it survives only inside <code>system</code> on parameters that
 are never consulted and on the two types that deliberately span both
 families (<code>Iterator</code>, <code>OptionView</code>).</p>
@@ -2896,7 +2897,8 @@ z: if y == 0 then break else y</code></pre>
 (classes, unions, protocols, strings, the reftype containers).
 <code>anyval.generic</code> constrains it to value types (records, variants,
 numerics). <code>RefHashable.generic</code> / <code>valhashable.generic</code> additionally
-require <code>hash</code> and <code>==</code> for hashed positions. These are used by the
+require <code>hash</code> and <code>==</code> for hashed positions; a value type's generated
+<code>hash</code> counts only where it agrees with its <code>==</code>. These are used by the
 system <code>Option</code> (reftype only), <code>optionval</code> (valtype only), and the
 container families.</p>
 <h4 id="type"><a href="#type">5.4.4. type</a></h4>
@@ -5384,6 +5386,22 @@ Attempting to compare such a type, or any value holding one, is a typecheck
 error:</p>
 <pre><code class="language-zerolang">opaque: record { val: i64 } as { ==: null }
 # opaque == opaque  --&gt; error: type 'opaque' has no member '=='</code></pre>
+<p><strong>Hash.</strong></p>
+<p>A value type's <code>hash</code> follows its <code>==</code>. The generated <code>hash</code> combines
+the parts' own hashes -- the author's where one is written -- and so exists
+only beside a generated <code>==</code> (or the runtime's, as a number's is) and only
+when every part has a hash. A type that writes <code>==</code> must write <code>hash</code> to
+be a Map key or a Set element, and <code>hash: null</code> strikes the generated one
+off. The generated one is a member like any other: <code>r.hash</code> answers, equal
+for equal values. A float has no <code>hash</code> (a NaN is unequal to itself), so
+neither does anything holding one:</p>
+<pre><code class="language-zerolang">lower: function {c: u8} out u8 is { if c &gt;= 65 when c &lt;= 90 then return c + 32 else return c }
+letter: record { code: u8 } as {
+    ==: function {:this rhs: letter} out bool is { return (lower c: this.code) == (lower c: rhs.code) }
+    hash: function {t: this.view} out u64 is { return (lower c: t.code).u64 }
+}
+entry: record { l: letter  n: i64 }   # generated == and hash, built from letter's
+# (MapVV entry v: i64) finds an entry stored under 'A' when asked for 'a'</code></pre>
 <p><strong>Floats.</strong></p>
 <p>A float part is compared with the float's own <code>==</code>, which is IEEE 754 --
 in a record field, a variant payload and an array element alike: a NaN is

@@ -1,0 +1,99 @@
+# A VALUE'S HASH FOLLOWS ITS `==`. A key is hashed and compared with its own
+# members, never by its bytes: `letter` says 'A' equals 'a' and hashes them
+# alike, so an `entry` holding one -- whose generated `==` and `hash` are
+# built from `letter`'s -- finds the key it was stored under by the other
+# case. Byte hashing used to put the two in different buckets, and read the
+# padding after a record's last field besides.
+#
+# A generated `hash` is a member like any other: `r.hash` answers, equal for
+# equal values, on records, variants and integers. Arrays and strs key a Set;
+# a str hashes only the bytes it holds, and an optionval with nothing in it
+# hashes its tag alone.
+letter: record {
+    code: u8
+} as {
+    ==: function {:this rhs: letter} out bool is {
+        return (fold c: this.code) == (fold c: rhs.code)
+    }
+    hash: function {t: this.view} out u64 is {
+        return (fold c: t.code).u64
+    }
+}
+
+fold: function {c: u8} out u8 is {
+    if c >= 65 when c <= 90 then return c + 32
+    return c
+}
+
+entry: record {
+    l: letter
+    n: i64
+}
+
+row: record {
+    n: i64
+    tag: u8
+}
+
+pick: variant {
+    one: i64
+    two: row
+    none: null
+}
+
+junk: function out u64 is {
+    xs: (array t: u64 to: 16)
+    i: 0
+    for i < 16 loop {
+        xs.set i: i item: 81985529216486895
+        i = i + 1
+    }
+    return (xs.get i: 3)
+}
+
+rowOf: function {n: i64 tag: u8} out row is {
+    r: (row n: 0 tag: 0)
+    r.n = n
+    r.tag = tag
+    return r
+}
+
+main: function is {
+    m: (MapVV entry v: i64)
+    m.set key: (entry l: (letter code: 65) n: 1) value: 10
+    got: m.get key: (entry l: (letter code: 97) n: 1)
+    match (got) case some then print "found by the other case: \{got}" case none then print "MISS"
+    print "entries: \{m.length}"
+    m.set key: (entry l: (letter code: 97) n: 1) value: 11
+    print "entries after setting 'a': \{m.length}"
+
+    a: row n: 1 tag: 2
+    b: row n: 1 tag: 2
+    c: row n: 1 tag: 3
+    print "row hash: \{a.hash == b.hash} \{a.hash == c.hash}"
+    p: pick.two a
+    q: pick.two b
+    print "variant hash: \{p.hash == q.hash} \{(pick.one 1).hash == (pick.one 1).hash}"
+    x: 7
+    print "integer hash: \{x.hash == 7.hash}"
+
+    rows: (SetVal row)
+    rows.add item: (row n: 5 tag: 1)
+    j: junk
+    print "padded key built apart: \{rows.has item: (rowOf n: 5 tag: 1)} \{j > 0}"
+
+    arrays: (SetVal (array t: i64 to: 2))
+    arrays.add item: (array t: i64 to: 2)
+    print "array key: \{arrays.has item: (array t: i64 to: 2)}"
+
+    strs: (SetVal (str to: 8))
+    long: "abcdefg".str to: 8
+    cut: long.substring from: 0 to: 2
+    strs.add item: (cut.str to: 8)
+    print "str key: \{strs.has item: ("ab".str to: 8)} \{strs.length}"
+
+    opts: (SetVal (optionval t: u64))
+    empty: (MapVV u64 v: u64)
+    opts.add item: (empty.get key: 1)
+    print "none key: \{opts.has item: (empty.get key: 2)}"
+}

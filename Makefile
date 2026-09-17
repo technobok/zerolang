@@ -1063,7 +1063,11 @@ perf: $(PERFBIN)
 #
 # -82 when the floats lost their `hash`: the compiler is unchanged, and f32
 # and f64 no longer mint a synthesised one.
-ALLOC_BASELINE := 2851960
+#
+# +24,168 when a key came to be hashed and compared with its own members: +377
+# over the same source (the part gates at every hashed position, the generated
+# hashes' prototypes and definitions) and +23,791 the source longer.
+ALLOC_BASELINE := 2876128
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

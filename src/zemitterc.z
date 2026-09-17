@@ -3128,6 +3128,10 @@ Ctx: class {
     # one, so a C `_eq`
     eqAsked: IdSet u64
     eqHasBody: IdSet u64
+    # the types whose generated `_hash` is written, in the order they were
+    # demanded
+    hashAsked: IdSet u64
+    hashOrder: ListVal u64
     # the generated helpers that call a method the author wrote: their bodies,
     # written after every function prototype
     lateDefs: String
@@ -14406,7 +14410,31 @@ emitResolvedMemberRead: function {
     if (symtab.typing.declIsFnptrField pool: ast.names parentTypeId: bstamp name: mn2) then {
         return (fnptrFieldRead :symtab :ctx :mn2 :bn2 :bn2v :mco :fbtn :readIsRef)
     }
+    sh: synthHashRead :ast :symtab :ctx :bn2 :bn2v :bstamp :mco :fbtn :readIsRef
+    if sh.length > 0 then return sh
     return (methodAutoCallRead :ast :symtab :ctx :mn2 :bn2 :bn2v :bstamp :mco :fbtn :readIsRef)
+}
+
+# synthHashRead -- a read of a generated `hash` off a value: its type's hash of
+# the VALUE, since a literal receiver has no address to hand a method. "" for
+# any other read.
+synthHashRead: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    bn2: StringView
+    bn2v: ztypes.vid
+    bstamp: ztypes.tid
+    mco: u64
+    fbtn: StringView
+    readIsRef: bool
+} out String is {
+    if readIsRef then return String
+    if bn2v.isZero when bn2 == fbtn then return String
+    if (synthHashOf :symtab owner: bstamp :mco).not then return String
+    hv: "(\{bn2})"
+    if (isPtrVid :ctx vid: bn2v) then hv = "(*\{bn2})"
+    return (hashExprC :ast :symtab :ctx tid: bstamp v: hv.stringView)
 }
 
 # sumMemberMethodRead -- a sum type's dotted read where the member is a declared
@@ -28757,12 +28785,24 @@ assembleEmitOutput: function {
             :buf
         )
     }
-    buf.reserve n: poolBuf.length + codeBuf.length + fnsBuf.length + ctx.lateDefs.length + 4096
+    hashDefs: String
+    emitHashDefs ast: program :symtab :ctx buf: hashDefs
+    (buf.reserve
+        n: (
+            poolBuf.length +
+            codeBuf.length +
+            fnsBuf.length +
+            ctx.lateDefs.length +
+            hashDefs.length +
+            4096
+        )
+    )
     buf.append poolBuf
     buf.append "\n"
     buf.append codeBuf
     buf.append fnsBuf
     buf.append ctx.lateDefs
+    buf.append hashDefs
     buf.append "int main(int argc, char* argv[]) {\n"
     if (needsHasM :ctx uname: "os" memb: "args") then {
         buf.append "    z_os_argc_g = argc;\n"
@@ -29165,6 +29205,8 @@ emitC: function {
         emittedUserTypes: IdSet u64
         eqAsked: IdSet u64
         eqHasBody: IdSet u64
+        hashAsked: IdSet u64
+        hashOrder: ListVal u64
         lateDefs: String
         tagStems: (MapRV String v: u64)
         fwdDeclaredTypes: IdSet u64
@@ -29441,7 +29483,7 @@ arrayEqBody: function {
         body.append "    return memcmp(a.data, b.data, sizeof(a.data)) == 0;\n}\n"
     } else {
         body.append "    for (int _i = 0; _i < \{lenStr}; _i++) { if (!("
-        partEqC :ast :symtab :ctx tid: elemId sel: ".data[_i]" dest: body
+        partEqC :ast :symtab :ctx tid: elemId lhs: "a" rhs: "b" sel: ".data[_i]" dest: body
         body.append ")) return false; }\n"
         body.append "    return true;\n}\n"
     }
@@ -30675,10 +30717,16 @@ emitSetMono: function {
     si: cbaseNoPrefix :ctx tid: (ztypes.tid.create from: siId.u64)
     hashBody: setHashBody kind: ekind fast: ctx.fastHash
     eqBody: setEqBody kind: ekind
+    ek: ztypes.tid.create from: elemTid.u64
+    valElem: isValKey :symtab key: ek kind: ekind
+    if valElem then {
+        hashBody = valKeyHashBody :ast :symtab :ctx key: ek keyT: itemT.stringView :buf
+        eqBody = valKeyEqBody :ast :symtab :ctx key: ek keyT: itemT.stringView :buf
+    }
     {
         dh: String
         de: String
-        if ekind == 0 then {
+        if ekind == 0 when valElem.not then {
             dh = (declaredKeyFnC
                 :ast
                 :symtab
@@ -30995,6 +31043,12 @@ emitMapMono: function {
     keyIsStr: kkind == 1
     hashKeyBody: setHashBody kind: kkind fast: ctx.fastHash
     keysEqBody: setEqBody kind: kkind
+    kk: ztypes.tid.create from: keyTid.u64
+    valKey: isValKey :symtab key: kk kind: kkind
+    if valKey then {
+        hashKeyBody = valKeyHashBody :ast :symtab :ctx key: kk keyT: keyT.stringView :buf
+        keysEqBody = valKeyEqBody :ast :symtab :ctx key: kk keyT: keyT.stringView :buf
+    }
     {
         # Only the FALLTHROUGH kind. String (1), StringView (2) and the
         # by-value structs (3) already have their own bodies, and String's
@@ -31002,7 +31056,7 @@ emitMapMono: function {
         # them by emitted name links to nothing.
         dhm: String
         dem: String
-        if kkind == 0 then {
+        if kkind == 0 when valKey.not then {
             dhm = (declaredKeyFnC
                 :ast
                 :symtab
@@ -34021,6 +34075,9 @@ emitRecordDefs: function {
         # structs, then every unit's fwd-decls, then every unit's method bodies.
         ph: 1.u64
         for ph <= 3 loop {
+            # the generated hashes every method body may call are declared once
+            # every struct they take is
+            if ph == 3 then emitHashPrototypes ast: program :symtab :ctx :buf
             uCnt9h: program.units.length
             uIdx9h: u64
             for uIdx9h < uCnt9h loop {
@@ -36567,6 +36624,8 @@ writeVariantEq: function {
                 :symtab
                 :ctx
                 tid: (ztypes.tid.create from: qco)
+                lhs: "a"
+                rhs: "b"
                 sel: qsel.stringView
                 :dest
             )
@@ -36966,17 +37025,19 @@ partHasEq: function {
     return (eqGenerated :ast :symtab :ctx tid: (typedefChaseTid :symtab :tid))
 }
 
-# partEqC -- appends the C comparison of one part, `a` against `b` reached
-# through `sel` (`.x`, `.data.arm`, `.data[_i]`), made with that part's own
-# `==`: the author's method (negated when only `!=` is written), C `==` for a
-# scalar or a function pointer, and the `_eq` of a str or of a generated `==`
-# otherwise. A method takes its receiver's address, so `a` + `sel` is an
-# lvalue.
+# partEqC -- appends the C comparison of one part, `lhs` against `rhs`, each
+# reached through `sel` (`.x`, `.data.arm`, `.data[_i]`, or nothing), made with
+# that part's own `==`: the author's method (negated when only `!=` is written),
+# C `==` for a scalar or a function pointer, and the `_eq` of a str or of a
+# generated `==` otherwise. A method takes its receiver's address, so `lhs` +
+# `sel` is an lvalue.
 partEqC: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     tid: ztypes.tid
+    lhs: StringView
+    rhs: StringView
     sel: StringView
     dest: String.borrow
 } is {
@@ -36990,26 +37051,427 @@ partEqC: function {
         owner: ztypecheck.valOpOwner st: symtab :tid nameId: zast.names.wkOpEq
         fo: symtab.typing.declChildOfId parentTypeId: owner nameId: opId
         dest.append (ctxCname :ctx tid: (ztypes.tid.create from: (fo.or d: 0)))
-        dest.append "(&a"
+        dest.append "(&"
+        dest.append lhs
         dest.append sel
-        dest.append ", b"
+        dest.append ", "
+        dest.append rhs
         dest.append sel
         dest.append ")"
         return
     }
     if (partIsCScalar :symtab :tid) then {
-        dest.append "a"
+        dest.append lhs
         dest.append sel
-        dest.append " == b"
+        dest.append " == "
+        dest.append rhs
         dest.append sel
         return
     }
     dest.append (ctxCname :ctx tid: (typedefChaseTid :symtab :tid))
-    dest.append "_eq(a"
+    dest.append "_eq("
+    dest.append lhs
     dest.append sel
-    dest.append ", b"
+    dest.append ", "
+    dest.append rhs
     dest.append sel
     dest.append ")"
+}
+
+# partHashWords -- the 64-bit words one part contributes to a generated hash,
+# `v` being the part's C value: the author's `hash` of it; for a scalar, its
+# value itself (two words for a 128-bit one) -- the words are hashed together
+# afterwards, so equal values give equal words; for a function pointer, its
+# address; and the generated `_hash` of a str or an aggregate otherwise.
+partHashWords: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    v: StringView
+    words: List String
+} is {
+    src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.names.wkHash
+    if src.written then {
+        owner: ztypecheck.valOpOwner st: symtab :tid nameId: zast.names.wkHash
+        fo: symtab.typing.declChildOfId parentTypeId: owner nameId: zast.names.wkHash
+        fc: ctxCname :ctx tid: (ztypes.tid.create from: (fo.or d: 0))
+        wr: String
+        wr.append fc
+        wr.append "(&"
+        wr.append v
+        wr.append ")"
+        words.append wr
+        return
+    }
+    base: typedefChaseTid :symtab :tid
+    if (symtab.reg.typetypeOf typeId: base) == ztypes.ztypetype.functionType then {
+        wf: "(uint64_t)(uintptr_t)\{v}"
+        words.append wf
+        return
+    }
+    if (partIsCScalar :symtab tid: base) then {
+        ws: "(uint64_t)\{v}"
+        words.append ws
+        if (numBits name: (regNameView :symtab tid: base)) == 128 then {
+            wh: "(uint64_t)((unsigned __int128)\{v} >> 64)"
+            words.append wh
+        }
+        return
+    }
+    hashFnDemand :ast :symtab :ctx tid: base
+    wg: "\{ctxCname :ctx tid: base}_hash(\{v})"
+    words.append wg
+}
+
+# hashExprC -- the `u64` hash of a value `v` of type `tid`: the author's `hash`,
+# the integer mixer over a scalar's words, or the generated `_hash`.
+hashExprC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    v: StringView
+} out String is {
+    words: List String
+    partHashWords :ast :symtab :ctx :tid :v :words
+    if words.length == 0 then return "0".string
+    w0: words.get i: 0
+    if words.length == 2 then {
+        w1: words.get i: 1
+        return "z_hash_u64(\{w0} ^ z_hash_u64(\{w1}))"
+    }
+    src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.names.wkHash
+    base: typedefChaseTid :symtab :tid
+    if src.written.not when (partIsCScalar :symtab tid: base) then return "z_hash_u64(\{w0})"
+    if (symtab.reg.typetypeOf typeId: base) == ztypes.ztypetype.functionType then {
+        return "z_hash_u64(\{w0})"
+    }
+    return w0.copy
+}
+
+# hashFnDemand -- `tid` needs its generated `_hash` written: a str, or an
+# aggregate whose `hash` is generated. Its parts' are demanded with it.
+hashFnDemand: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+} is {
+    if (ctx.hashAsked.has item: tid.u64) then return
+    tt: symtab.reg.typetypeOf typeId: tid
+    isAgg: tt == ztypes.ztypetype.recordType or (tt == ztypes.ztypetype.variantType)
+    if isAgg.not then return
+    if (partIsCScalar :symtab :tid) then return
+    ctx.hashAsked.add item: tid.u64
+    ctx.hashOrder.append tid.u64
+    if (ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.names.wkHash
+    ).generated.not then return
+    parts: ListVal u64
+    ztypecheck.valPartTids :ast st: symtab :tid :parts
+    i: u64
+    for i < parts.length loop {
+        p: ztypes.tid.create from: (parts.get :i)
+        i = i + 1
+        if (ztypecheck.valOpSource :ast st: symtab tid: p nameId: zast.names.wkHash
+        ).written.not then {
+            hashFnDemand :ast :symtab :ctx tid: (typedefChaseTid :symtab tid: p)
+        }
+    }
+}
+
+# hashDefC -- the definition of `tid`'s generated `_hash`. A record's and a
+# variant's part words are gathered and hashed together, a variant's led by
+# its tag; a str hashes its bytes up to its length; an array of integers hashes
+# its bytes, any other array folds its elements' hashes in order.
+hashDefC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    dest: String.borrow
+} is {
+    cn: ctxCname :ctx :tid
+    bytesFn: "z_siphash_bytes".string
+    if ctx.fastHash then bytesFn = "z_fasthash_bytes".string
+    dest.append "static uint64_t \{cn}_hash(\{cn}_t a) {\n"
+    if (ztypecheck.valIsMonoOf :ast st: symtab :tid base: "str") then {
+        dest.append "    return \{bytesFn}(a.data, a.len);\n}\n\n"
+        return
+    }
+    if (ztypecheck.valIsMonoOf :ast st: symtab :tid base: "array") then {
+        arrayHashBody :ast :symtab :ctx :tid bytesFn: bytesFn.stringView :dest
+        return
+    }
+    if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.variantType then {
+        variantHashBody :ast :symtab :ctx :tid bytesFn: bytesFn.stringView :dest
+        return
+    }
+    words: List String
+    names: List String
+    ids: ListVal u64
+    nameIds: ListVal u64
+    recFieldLists :ast :symtab :tid :names :ids :nameIds
+    fk: u64
+    for fk < names.length loop {
+        fkn: names.get i: fk
+        fknP: memberCPrefix name: fkn.stringView
+        fv: "a.\{fknP}\{fkn}"
+        (partHashWords
+            :ast
+            :symtab
+            :ctx
+            tid: (ztypes.tid.create from: (ids.get i: fk))
+            v: fv.stringView
+            :words
+        )
+        fk = fk + 1
+    }
+    dest.append "    uint64_t _h[] = { "
+    if words.length == 0 then dest.append "0"
+    wi: u64
+    for wi < words.length loop {
+        if wi > 0 then dest.append ", "
+        dest.append (words.get i: wi)
+        wi = wi + 1
+    }
+    dest.append " };\n"
+    dest.append "    return \{bytesFn}(_h, sizeof(_h));\n}\n\n"
+}
+
+# variantHashBody -- a variant's generated `_hash`: its tag, then the words of
+# the payload of the arm it holds, and zero for the words it does not use.
+variantHashBody: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    bytesFn: StringView
+    dest: String.borrow
+} is {
+    anames: List String
+    aids: ListVal u64
+    aidsNm: ListVal u64
+    variantArms :ast :symtab :tid names: anames ids: aids nameIds: aidsNm
+    cases: String
+    width: u64
+    qk: u64
+    for qk < anames.length loop {
+        qname: anames.get i: qk
+        qk = qk + 1
+        qco: symtab.typing.declChildOf pool: ast.names parentTypeId: tid name: qname.stringView
+        qc: armPayloadC :ast :symtab :ctx :tid arm: qname.stringView
+        if qc.length > 0 when qco.some then {
+            qnameP: memberCPrefix name: qname.stringView
+            qv: "a.data.\{qnameP}\{qname}"
+            words: List String
+            (partHashWords
+                :ast
+                :symtab
+                :ctx
+                tid: (ztypes.tid.create from: qco)
+                v: qv.stringView
+                :words
+            )
+            if words.length > width then width = words.length
+            cases.append "        case \{variantTag :symtab :tid arm: qname.stringView}:"
+            wi: u64
+            for wi < words.length loop {
+                cases.append " _h[\{wi + 1}] = \{words.get i: wi};"
+                wi = wi + 1
+            }
+            cases.append " break;\n"
+        }
+    }
+    dest.append "    uint64_t _h[\{width + 1}] = { 0 };\n"
+    dest.append "    _h[0] = (uint64_t)a.tag;\n"
+    if cases.length > 0 then {
+        dest.append "    switch (a.tag) {\n"
+        dest.append cases
+        dest.append "        default: break;\n    }\n"
+    }
+    dest.append "    return \{bytesFn}(_h, sizeof(_h));\n}\n\n"
+}
+
+# arrayHashBody -- an array's generated `_hash`: its bytes when the element's
+# `==` is its bytes, otherwise its elements' hashes folded in order.
+arrayHashBody: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    bytesFn: StringView
+    dest: String.borrow
+} is {
+    elem: ztypecheck.arrayElemTid st: symtab :tid
+    if (elemEqIsBytes :ast :symtab tid: elem) then {
+        dest.append "    return \{bytesFn}(a.data, sizeof(a.data));\n}\n\n"
+        return
+    }
+    len: monoLengthText :symtab monoId: tid
+    eh: hashExprC :ast :symtab :ctx tid: elem v: "a.data[_i]"
+    dest.append "    uint64_t _h = \{len};\n"
+    dest.append "    for (int _i = 0; _i < \{len}; _i++) _h = z_hash_combine(_h, \{eh});\n"
+    dest.append "    return _h;\n}\n\n"
+}
+
+# synthHashOf -- `mco` is the generated `hash` member of `owner`.
+synthHashOf: function {symtab: zenv.ZSymbolTable.view owner: ztypes.tid mco: u64} out bool is {
+    fo: symtab.typing.declChildOfId parentTypeId: owner nameId: zast.names.wkHash
+    if (fo.or d: 0) != mco then return false
+    return (symtab.typing.declMemberIsSynth parentTypeId: owner nameId: zast.names.wkHash)
+}
+
+# hashMemberRead -- the generated `hash` member of `tid` that a program reads,
+# which the emitter then writes as a call of the type's `_hash`; zero when
+# there is none to write.
+hashMemberRead: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+} out ztypes.tid is {
+    if (ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.names.wkHash).generated.not then {
+        return ztypes.tid
+    }
+    fo: symtab.typing.declChildOfId parentTypeId: tid nameId: zast.names.wkHash
+    fid: ztypes.tid.create from: (fo.or d: 0)
+    if fid.isZero then return fid
+    md: symtab.typing.declMemberIdOf parentTypeId: tid nameId: zast.names.wkHash
+    if (symtab.typing.usedMemberDecl.has item: md.u64).not then return ztypes.tid
+    return fid
+}
+
+# valKeyHashBody -- a value-type key's hash for a Set or Map mono, `_key`
+# being the key: the key's own `hash`, whatever wrote it. The functions it
+# calls are declared here, ahead of the mono that calls them.
+valKeyHashBody: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    key: ztypes.tid
+    keyT: StringView
+    buf: String.borrow
+} out String is {
+    src: ztypecheck.valOpSource :ast st: symtab tid: key nameId: zast.names.wkHash
+    if src.written then {
+        owner: ztypecheck.valOpOwner st: symtab tid: key nameId: zast.names.wkHash
+        fo: symtab.typing.declChildOfId parentTypeId: owner nameId: zast.names.wkHash
+        fid: ztypes.tid.create from: (fo.or d: 0)
+        buf.append "static uint64_t "
+        buf.append (ctxCname :ctx tid: fid)
+        buf.append "("
+        buf.append (keyFnParamConstC :ast :symtab :fid index: 0)
+        buf.append keyT
+        buf.append "*);\n"
+    }
+    base: typedefChaseTid :symtab tid: key
+    if src.written.not when (partIsCScalar :symtab tid: base).not then {
+        bc: ctxCname :ctx tid: base
+        buf.append "static uint64_t \{bc}_hash(\{bc}_t a);\n"
+    }
+    return (hashExprC :ast :symtab :ctx tid: key v: "_key")
+}
+
+# valKeyEqBody -- a value-type key's equality for a Set or Map mono, `_a` and
+# `_b` being the keys: the key's own `==`, whatever wrote it.
+valKeyEqBody: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    key: ztypes.tid
+    keyT: StringView
+    buf: String.borrow
+} out String is {
+    src: ztypecheck.valOpSource :ast st: symtab tid: key nameId: zast.names.wkOpEq
+    if src.written or src.negated then {
+        opId: zast.names.wkOpEq
+        if src.negated then opId = zast.names.wkOpNe
+        owner: ztypecheck.valOpOwner st: symtab tid: key nameId: zast.names.wkOpEq
+        fo: symtab.typing.declChildOfId parentTypeId: owner nameId: opId
+        fid: ztypes.tid.create from: (fo.or d: 0)
+        buf.append "static bool "
+        buf.append (ctxCname :ctx tid: fid)
+        buf.append "("
+        buf.append (keyFnParamConstC :ast :symtab :fid index: 0)
+        buf.append keyT
+        buf.append "*, "
+        buf.append keyT
+        buf.append ");\n"
+    }
+    body: String
+    partEqC :ast :symtab :ctx tid: key lhs: "_a" rhs: "_b" sel: "" dest: body
+    return body
+}
+
+# isValKey -- a Set element or Map key hashed and compared with its own
+# members (valKeyHashBody, valKeyEqBody): a value type. A String and a
+# StringView keep their native pair, a reference its declared one.
+isValKey: function {symtab: zenv.ZSymbolTable.view key: ztypes.tid kind: u64} out bool is {
+    if kind == 1 or (kind == 2) then return false
+    return (symtab.reg.isValtypeOf tid: key)
+}
+
+# emitHashPrototypes -- the prototypes of every generated `_hash` the program
+# needs, and of the member each `hash` read calls: written ahead of the method
+# bodies that call them, their definitions after everything (emitHashDefs).
+emitHashPrototypes: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    buf: String.borrow
+} is {
+    with hit: symtab.typing.hashUsed.iterate do for hu: hit loop {
+        h: ztypes.tid.create from: hu
+        if (ztypecheck.valOpSource :ast st: symtab tid: h nameId: zast.names.wkHash
+        ).written.not then {
+            hashFnDemand :ast :symtab :ctx tid: (typedefChaseTid :symtab tid: h)
+        }
+    }
+    oi: u64
+    for oi < ctx.hashOrder.length loop {
+        cn: ctxCname :ctx tid: (ztypes.tid.create from: (ctx.hashOrder.get i: oi))
+        buf.append "static uint64_t \{cn}_hash(\{cn}_t a);\n"
+        oi = oi + 1
+    }
+    with rit: symtab.typing.hashUsed.iterate do for ru: rit loop {
+        r: ztypes.tid.create from: ru
+        fid: hashMemberRead :ast :symtab tid: r
+        if fid.isZero.not then {
+            rt: cTypeForNameTid :ast :symtab :ctx name: (regNameView :symtab tid: r) tid: r
+            buf.append "static uint64_t \{ctxCname :ctx tid: fid}(const \{rt}* _t);\n"
+        }
+    }
+}
+
+# emitHashDefs -- the definitions emitHashPrototypes declared: each generated
+# `_hash`, and each read `hash` member as a call of its type's.
+emitHashDefs: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    buf: String.borrow
+} is {
+    with rit: symtab.typing.hashUsed.iterate do for ru: rit loop {
+        r: ztypes.tid.create from: ru
+        fid: hashMemberRead :ast :symtab tid: r
+        if fid.isZero.not then {
+            rt: cTypeForNameTid :ast :symtab :ctx name: (regNameView :symtab tid: r) tid: r
+            he: hashExprC :ast :symtab :ctx tid: r v: "(*_t)"
+            buf.append "static uint64_t \{ctxCname :ctx tid: fid}(const \{rt}* _t) {\n"
+            buf.append "    return \{he};\n}\n\n"
+        }
+    }
+    oi: u64
+    for oi < ctx.hashOrder.length loop {
+        (hashDefC
+            :ast
+            :symtab
+            :ctx
+            tid: (ztypes.tid.create from: (ctx.hashOrder.get i: oi))
+            dest: buf
+        )
+        oi = oi + 1
+    }
 }
 
 # partCallsWritten -- comparing a `tid` part calls a method the author wrote,
@@ -37109,6 +37571,8 @@ writeRecordEq: function {
             :symtab
             :ctx
             tid: (ztypes.tid.create from: (ids.get i: fk))
+            lhs: "a"
+            rhs: "b"
             sel: fsel.stringView
             :dest
         )

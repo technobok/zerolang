@@ -209,3 +209,10 @@ static uint64_t z_hash_u64(uint64_t x) {
     return x;
 }
 
+/* z_hash_combine -- fold one more 64-bit hash into a running one, in order:
+   an array whose elements are not compared by their bytes hashes each and
+   folds the results, so equal arrays fold equal hashes in the same order. */
+static uint64_t z_hash_combine(uint64_t h, uint64_t v) {
+    return z_hash_u64(h ^ (v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2)));
+}
+

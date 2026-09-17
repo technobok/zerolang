@@ -81,6 +81,8 @@ public: unit {
     :valPartTids
     :valOpSource
     :valOpOwner
+    :valIsMonoOf
+    :arrayElemTid
     :resolveUnitChildRo
     :resolvedByIdsRo
 }
@@ -8483,11 +8485,11 @@ attachDeclaredField: function {
     }
 }
 
-# synthRecordHash -- `hash` is INDEPENDENT of whether `==` was synthesised -- a
-# type that declares its own `==` (every numeric does) still hashes by its
-# bytes. It exists unless the author struck it off with a null shell or wrote
-# their own. A valtype holds value data only, so its bytes are the whole
-# value and the hash is total.
+# synthRecordHash -- the generated `hash` member, unless the author struck it
+# off with a null shell or wrote their own. Whether a program may USE it is
+# decided where it is used (valHashMissingPart): it hashes the parts, so it
+# agrees with `==` only when `==` is generated too -- or is the runtime's, as a
+# number's is -- and every part has a hash of its own.
 synthRecordHash: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -8516,8 +8518,8 @@ synthRecordHash: function {
     if isgen.not when hshOptR.not when hshAsR.not then synthHashMember :st :rid
 }
 
-# synthHashMember -- the byte `hash` a value type carries by default, as a real
-# member of `rid`. A hash READS its receiver, like the synthesised comparison:
+# synthHashMember -- the generated `hash` a value type carries by default, as a
+# real member of `rid`. A hash READS its receiver, like the synthesised comparison:
 # the receiver is recorded `.view` so `k.hash` on a view-held key locks shared.
 synthHashMember: function {st: zenv.ZSymbolTable rid: u64} is {
     hshR: st.reg.newType name: "hash" ownerTid: rid typetype: ztypes.ztypetype.functionType
@@ -8641,10 +8643,9 @@ synthComparisonPair: function {
 }
 
 # synthRecordMembers -- the members a record gets without declaring them: a typedef
-# wrapper's `borrow` projection, or the byte-wise `==` and `hash` a plain record
-# carries. `hash` is INDEPENDENT of whether `==` was synthesised -- a type that
-# declares its own `==` (every numeric does) still hashes by its bytes -- and
-# a valtype holds value data only, so the bytes are the whole value.
+# wrapper's `borrow` projection, or the generated `==` and `hash` a plain record
+# carries. `hash` is minted whether or not `==` was; valHashMissingPart decides
+# at the use whether the two agree.
 synthRecordMembers: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -9002,15 +9003,7 @@ synthVariantEqHash: function {
             )
         }
     }
-    if isgen.not when hshOptV.not when hshAsV.not then {
-        hshV: st.reg.newType name: "hash" ownerTid: vid typetype: ztypes.ztypetype.functionType
-        (st.typing.declSynthMemberTyped
-            parentTypeId: (ztypes.tid.create from: vid.u64)
-            nameId: zast.names.wkHash
-            kind: ztyping.declkind.methodDecl
-            childTypeId: hshV
-        )
-    }
+    if isgen.not when hshOptV.not when hshAsV.not then synthHashMember :st rid: vid
 }
 
 # sumMethodNameRejected -- a variant or union as-block method whose name cannot
@@ -18941,7 +18934,10 @@ constraintHolds: function {
         return (st.reg.isReftypeOf tid: argTid)
     } case valHashable then {
         if (typeIsValtype :st tid: argTid).not then return false
-        return (typeIsHashable :st :ast tid: argTid)
+        forceValParts :st :ast tid: argTid depth: 0
+        if (typeIsHashable :st :ast tid: argTid).not then return false
+        st.typing.hashUsed.add item: argTid.u64
+        return true
     } case refHashable then {
         if (st.reg.isReftypeOf tid: argTid).not then return false
         return (typeIsHashable :st :ast tid: argTid)
@@ -19091,11 +19087,12 @@ typeIsHashable: function {
     st: zenv.ZSymbolTable.view
     tid: ztypes.tid
 } out bool is {
-    ast
-    st
     if tid.isZero then return false
-    # a typedef synthesises no hash/== of its own: the question chases to
-    # the chain-end base (a typedef over a hashable type is hashable)
+    if (st.reg.isValtypeOf :tid) then {
+        if (valEqMissingPart :ast :st :tid depth: 0).isZero.not then return false
+        return (valHashMissingPart :ast :st :tid depth: 0).isZero
+    }
+    # a reference type declares both itself; a typedef over one asks its base
     htd: tid
     for true loop {
         bo: st.typing.typedefBaseTid.get key: htd
@@ -19266,6 +19263,14 @@ valPartTids: function {
     tid: ztypes.tid
     parts: ListVal u64
 } is {
+    # a typedef is its base: a member generated on it is built from the base's
+    tdb: st.typing.typedefBaseTid.get key: tid
+    match (
+        tdb
+    ) case some then {
+        parts.append tdb.u64
+        return
+    } case none then null
     if (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.variantType then {
         variantPayloadTids :st :tid :parts
         return
@@ -19274,6 +19279,9 @@ valPartTids: function {
         parts.append (arrayElemTid :st :tid).u64
         return
     }
+    # a native record's layout is the runtime's: its as-block items (a number's
+    # `tag`) are not parts, whatever they resolve to
+    if (st.reg.isNativeOf :tid) then return
     names: ListVal u64
     dataFieldIds :st :tid ids: parts nameIds: names
 }
@@ -19359,6 +19367,36 @@ valEqMissingPart: function {
     return ztypes.tid
 }
 
+# valHashMissingPart -- the first part of `tid` that leaves it with no usable
+# `hash`, or `tid` itself; zero when it has one. The author's `hash` and the
+# runtime's always count. A generated one hashes the parts, so it agrees with
+# `==` only when `==` is generated too -- or is the runtime's, as a number's is
+# -- and every part has a hash: a type that writes its `==` must write its
+# `hash` to be a key.
+valHashMissingPart: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    depth: u64
+} out ztypes.tid is {
+    src: valOpSource :ast :st :tid nameId: zast.names.wkHash
+    if src.none then return tid
+    if src.generated.not then return ztypes.tid
+    eqSrc: valOpSource :ast :st :tid nameId: zast.names.wkOpEq
+    if (eqSrc.generated or eqSrc.builtin).not then return tid
+    if depth > 64 then return tid
+    owner: valOpOwner :st :tid nameId: zast.names.wkHash
+    parts: ListVal u64
+    valPartTids :ast :st tid: owner :parts
+    i: u64
+    for i < parts.length loop {
+        p: ztypes.tid.create from: (parts.get :i)
+        i = i + 1
+        if (valHashMissingPart :ast :st tid: p depth: depth + 1).isZero.not then return p
+    }
+    return ztypes.tid
+}
+
 # forceValParts -- resolve the fields a generated `==` of `tid` is built from,
 # all the way down, so valEqMissingPart reads complete declarations. A field
 # that has not been resolved carries no type and would read as a part with none.
@@ -19380,6 +19418,57 @@ forceValParts: function {
         i = i + 1
         forceValParts :st :ast tid: p depth: depth + 1
     }
+}
+
+# refuseHashWithoutPartHash -- a generated `hash` read on a type whose `==` is
+# not generated, or one of whose parts has no hash: the type has no `hash`, and
+# the read is the ordinary unknown-member error. Otherwise the read is
+# recorded, so the emitter writes the hash, and the member is given its `u64`
+# result here: minting `u64` where the member itself is minted would pull it
+# ahead of the demand order. True when it reported.
+refuseHashWithoutPartHash: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: dpref
+    bt: ztypes.tid
+    mo: u64
+} out bool is {
+    if (st.reg.isPartialOf tid: bt) then return false
+    forceValParts :st :ast tid: bt depth: 0
+    miss: valHashMissingPart :ast :st tid: bt depth: 0
+    if miss.isZero then {
+        st.typing.hashUsed.add item: bt.u64
+        (st.reg.setReturnType
+            typeId: (ztypes.tid.create from: mo.u64)
+            value: (builtinTidT :st frame: st.curFrame :ast base: "u64").u64
+        )
+        return false
+    }
+    btn: st.reg.nameOf tid: bt
+    m: "type '\{btn}' has no member 'hash'"
+    h: String
+    if miss != bt then {
+        mn: st.reg.nameOf tid: miss
+        hm: "its part of type '\{mn}' has no 'hash'"
+        h = hm
+    }
+    eqSrc: valOpSource :ast :st tid: bt nameId: zast.names.wkOpEq
+    if miss == bt when eqSrc.written or eqSrc.negated then {
+        h = "its `==` is written by hand, and a generated `hash` would not agree with it".string
+    }
+    cn2: ast.nodes.get i: dp.child.u64
+    (addErrorH
+        :st
+        nodeid: (nodeId n: cn2)
+        lineno: (nodeLine n: cn2)
+        colno: (nodeCol n: cn2)
+        e: zast.err.typeError
+        msg: m
+        note: "".string
+        hint: h
+        width: 4
+    )
+    return true
 }
 
 # refuseEqWithoutPartEq -- a generated `==` or `!=` read on a type one of
@@ -20008,12 +20097,13 @@ mintEntryAndSizedChildren: function {
 } is {
     strTid: builtinTidT :st frame: rf :ast base: "str"
     arrayTid: builtinTidT :st frame: rf :ast base: "array"
-    # `==` and `!=` are the generated pair every value type has: a receiver and
-    # an `rhs` of this very instance, so an array of another length or element
-    # type is refused as an argument like any other mismatch
+    # `==`, `!=` and `hash` are the generated members every value type has: a
+    # receiver and an `rhs` of this very instance, so an array of another length
+    # or element type is refused as an argument like any other mismatch
     if templateId == arrayTid then {
         mintCollectionMethod :st :ast :monoId m: "create"
         synthComparisonPair :st ownerTid: monoId.u64 eqDecl: false neDecl: false
+        synthHashMember :st rid: monoId.u64
     }
     if templateId == strTid then {
         tstId: mintCollectionMethod :st :ast :monoId m: "string"
@@ -20024,6 +20114,7 @@ mintEntryAndSizedChildren: function {
         )
         mintCollectionMethod :st :ast :monoId m: "create"
         synthComparisonPair :st ownerTid: monoId.u64 eqDecl: false neDecl: false
+        synthHashMember :st rid: monoId.u64
     }
 }
 
@@ -24617,6 +24708,10 @@ checkResolvedMember: function {
     # a generated comparison exists only when every part has one
     isSynthCmp: st.typing.synthCmpTids.has item: mo
     if isSynthCmp when (refuseEqWithoutPartEq :st :ast :dp :bt :cnId) then return ztypes.tid
+    isSynthHash: (
+        cnId == zast.names.wkHash and (st.typing.declMemberIsSynth parentTypeId: bt nameId: cnId)
+    )
+    if isSynthHash when (refuseHashWithoutPartHash :st :ast :dp :bt :mo) then return ztypes.tid
     # a type's `as` constant reads as its value, typed by it
     memberDecl: st.typing.declMemberIdOf parentTypeId: bt nameId: cnId
     if (st.typing.isAsConstDecl declId: memberDecl) then {
