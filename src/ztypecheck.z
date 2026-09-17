@@ -18240,36 +18240,23 @@ collapseBoxArm: function {
 }
 
 # elidedArgFallbackTid -- with the leading type argument elided, a member whose
-# own type still names the template parameter takes the single argument that
-# was given. Answers the type the member should carry; a function member keeps
-# its own.
+# own type is one of the template's parameters and was left unsubstituted takes
+# the single argument that was given. Answers the type the member should carry;
+# any other member -- a function, a concrete type, an instance of another
+# generic -- keeps its own.
 elidedArgFallbackTid: function {
-    ast: Ast
     st: zenv.ZSymbolTable
-    rf: ztypes.declid
-    tplUnit: ztypes.declid
+    templateId: ztypes.tid
     fallbackArg: u64
-    ctnT: StringView
-    childIsFunction: bool
     chId: u64
     argTid: u64
 } out u64 is {
-    target: argTid
-    if fallbackArg > 0 when (ctnT == "null").not when target == chId when childIsFunction.not then {
-        cko: (walkLookupTyperef
-            :st
-            frame: rf
-            :ast
-            unitDecl: tplUnit
-            base: ctnT
-        )
-        match (
-            cko
-        ) case some then null case none then {
-            target = fallbackArg
-        }
-    }
-    return target
+    if fallbackArg == 0 or (argTid != chId) then return argTid
+    tdecl: declOfTypeId :st tid: templateId
+    if tdecl.isZero then return argTid
+    pn: st.reg.genericParamNameOfTid :tdecl ptid: (ztypes.tid.create from: chId)
+    if pn.isZero then return argTid
+    return fallbackArg
 }
 
 # substitutedMemberTid -- the type a template member resolves to for this
@@ -18313,7 +18300,6 @@ mintMonoMember: function {
     templateId: ztypes.tid
     mid: u64
     tt: ztypes.ztypetype
-    tplUnit: ztypes.declid
     fallbackArg: u64
     subs: (IdMapV zast.nameid v: u64).view
     idSubs: (IdMapV u64 v: u64)
@@ -18322,7 +18308,6 @@ mintMonoMember: function {
 } out bool is {
     monoNeedsDtor: false
     target: substitutedMemberTid :ast :st :unitDecl :rf :chId :subs :idSubs
-    ctnT: st.reg.nameOf tid: (ztypes.tid.create from: chId.u64
     # A VALTYPE HOLDS VALUE DATA ONLY at instantiation: a bound the kinds do
     # not classify (a facet) admits any argument, so a reftype can reach a
     # record field or a variant arm here that refuseReftypeBounds could not
@@ -18330,7 +18315,6 @@ mintMonoMember: function {
     # member the substitution left alone (a concrete field, a conformance row
     # such as str's `:Text`) was the declaration's business, and a native
     # template's layout is the runtime's.
-    )
     isVrM: tt == ztypes.ztypetype.recordType or (tt == ztypes.ztypetype.variantType)
     if isVrM when target != chId when (st.reg.isNativeOf tid: templateId).not when (
         (st.reg.typetypeOf typeId: (ztypes.tid.create from: chId.u64)) !=
@@ -18348,11 +18332,7 @@ mintMonoMember: function {
     # narrowing, the destructor cast and the native io fragments'
     # layout on the element -- a Box value IS the cell pointer.
     target = collapseBoxArm :st :tt argTid: target
-    # A FUNCTION child is never the elided argument: its own name never
-    # resolves as a type, so the fallback's lookup-miss leg would replace the
-    # method -- generic or not -- with the element type, and a container
-    # mono's `create` became its first type argument. Generic function
-    # children are the clone candidates below.
+    # generic function children are the clone candidates below
     childIsFunction: (
         (st.reg.typetypeOf typeId: (ztypes.tid.create from: chId.u64)) ==
         ztypes.ztypetype.functionType
@@ -18361,17 +18341,7 @@ mintMonoMember: function {
     if childIsFunction then {
         childIsGeneric = st.reg.isGenericOf tid: (ztypes.tid.create from: chId.u64)
     }
-    target = (elidedArgFallbackTid
-        :ast
-        :st
-        :rf
-        :tplUnit
-        :fallbackArg
-        ctnT: ctnT.stringView
-        :childIsFunction
-        :chId
-        argTid: target
-    )
+    target = elidedArgFallbackTid :st :templateId :fallbackArg :chId argTid: target
     deep5: false
     if target == chId when childIsGeneric when (cloneGenericMemberInto
         :ast
@@ -18499,7 +18469,6 @@ mintMonoMembers: function {
     templateId: ztypes.tid
     mid: u64
     tt: ztypes.ztypetype
-    tplUnit: ztypes.declid
     fallbackArg: u64
     subs: (IdMapV zast.nameid v: u64).view
     idSubs: (IdMapV u64 v: u64)
@@ -18534,7 +18503,6 @@ mintMonoMembers: function {
             :templateId
             :mid
             :tt
-            :tplUnit
             :fallbackArg
             :subs
             :idSubs
@@ -18574,11 +18542,6 @@ mintMono: function {
         td: declOfTypeId :st tid: templateId
         if td.isZero.not then rf = td
     }
-    # the template's names -- a child's type, a constraint's type -- resolve
-    # in the TEMPLATE's unit (the frame is the template), not the
-    # instantiating unit's, which may shadow them
-    tplUnit: unitDeclOfTid :st tid: templateId
-    if tplUnit.isZero then tplUnit = unitDecl
     tt: ztypes.ztypetype.recordType
     vto: optionval.none bool
     tplNative: false
@@ -18633,7 +18596,6 @@ mintMono: function {
         :templateId
         :mid
         :tt
-        :tplUnit
         :fallbackArg
         :subs
         :idSubs
