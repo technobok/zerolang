@@ -18132,48 +18132,25 @@ cloneGenericMemberInto: function {
     mid: u64
     chName: StringView
     chId: u64
-    fallbackArg: u64
-    listRefTid: ztypes.tid
-    subs: (IdMapV zast.nameid v: u64).view
     idSubs: (IdMapV u64 v: u64)
 } out bool is {
     deep5: false
     isSynth: chName == "create" or (chName == "borrow")
+    # a list's `contains`, `==`, `!=` and `sort` exist on every instance and
+    # are checked where they are called (refuseListMemberWithoutElemOp)
     if isSynth.not then {
-        skip5: false
-        # List's sort exists only for eligible element kinds (use-site
-        # parity with the materializer gate). `contains` exists on every
-        # instance and is checked where it is called.
-        if templateId == listRefTid when listRefTid > 0 when chName == "sort" then {
-            elemTid: (subs.get key: (firstGenericParamId :st :templateId)).or d: 0
-            if elemTid == 0 then elemTid = fallbackArg
-            ok5: false
-            if elemTid > 0 then {
-                ok5 = (isSortEligibleTid
-                    :st
-                    frame: rf
-                    :ast
-                    tid: (ztypes.tid.create from: elemTid.u64)
-                )
-            }
-            if ok5.not then skip5 = true
-        }
-        if skip5 then {
-            deep5 = true
-        } else {
-            (cloneMethodInto
-                :st
-                frame: rf
-                :ast
-                :unitDecl
-                specId: (ztypes.tid.create from: mid.u64)
-                tplClassId: templateId
-                m: chName
-                tplFnId: chId
-                :idSubs
-            )
-            deep5 = true
-        }
+        (cloneMethodInto
+            :st
+            frame: rf
+            :ast
+            :unitDecl
+            specId: (ztypes.tid.create from: mid.u64)
+            tplClassId: templateId
+            m: chName
+            tplFnId: chId
+            :idSubs
+        )
+        deep5 = true
     }
     return deep5
 }
@@ -18335,7 +18312,6 @@ mintMonoMember: function {
     mid: u64
     tt: ztypes.ztypetype
     tplUnit: ztypes.declid
-    listRefTid: ztypes.tid
     fallbackArg: u64
     subs: (IdMapV zast.nameid v: u64).view
     idSubs: (IdMapV u64 v: u64)
@@ -18404,9 +18380,6 @@ mintMonoMember: function {
         :mid
         :chName
         :chId
-        :fallbackArg
-        :listRefTid
-        :subs
         :idSubs
     ) then deep5 = true
     if deep5.not then {
@@ -18546,7 +18519,6 @@ mintMonoMembers: function {
             }
         }
     }
-    listRefTid: builtinTidT :st frame: rf :ast base: "ListRef"
     monoNeedsDtor: false
     ci: u64
     cn3: cNames.length
@@ -18561,7 +18533,6 @@ mintMonoMembers: function {
             :mid
             :tt
             :tplUnit
-            :listRefTid
             :fallbackArg
             :subs
             :idSubs
@@ -18731,22 +18702,6 @@ templateAsItems: function {
     return (objAsItemsOf :ast nid: ar.operation)
 }
 
-
-# isSortEligibleTid -- element types List.sort supports (the hardcoded
-# ordering dispatch): numerics and the String/StringView/str family.
-isSortEligibleTid: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    frame: ztypes.declid
-    tid: ztypes.tid
-} out bool is {
-    if tid.isZero then return false
-    if (isNumericTid :st :frame :ast :tid) then return true
-    if tid == (builtinTidT :st :frame :ast base: "String") then return true
-    if tid == (builtinTidT :st :frame :ast base: "StringView") then return true
-    if tid == (builtinTidT :st :frame :ast base: "str") then return true
-    return false
-}
 
 # mintCollectionMethod -- one synthesized `{mono}.{m}` FUNCTION child; returns
 # the method's type id so callers can link its return type.
@@ -19395,12 +19350,13 @@ forceValParts: function {
     }
 }
 
-# refuseListMemberWithoutEq -- `contains`, `==` or `!=` read on a list whose
-# element type has no `==` of its own: the members compare elements with it,
-# so for such an element they do not exist, and the read is the ordinary
-# unknown-member error. Checked where the member is used, as a generated
-# `==` is: the list instance itself is legal. True when it reported.
-refuseListMemberWithoutEq: function {
+# refuseListMemberWithoutElemOp -- `contains`, `==` or `!=` read on a list
+# whose element type has no `==` of its own, or `sort` on one whose element
+# type has no `compare`: the members use the element's, so for such an
+# element they do not exist, and the read is the ordinary unknown-member
+# error. Checked where the member is used, as a generated `==` is: the list
+# instance itself is legal. True when it reported.
+refuseListMemberWithoutElemOp: function {
     st: zenv.ZSymbolTable
     ast: Ast
     dp: dpref
@@ -19410,7 +19366,8 @@ refuseListMemberWithoutEq: function {
     isCmp: (
         cnId == zast.names.wkContains or (cnId == zast.names.wkOpEq) or (cnId == zast.names.wkOpNe)
     )
-    if isCmp.not then return false
+    isSort: cnId == zast.names.wkSort
+    if isCmp.not when isSort.not then return false
     if (st.reg.isPartialOf tid: bt) then return false
     org: st.reg.genericOriginOf tid: bt
     if org.isZero then return false
@@ -19420,12 +19377,14 @@ refuseListMemberWithoutEq: function {
     elem: arrayElemTid :st tid: bt
     if elem.isZero then return false
     if (st.reg.typetypeOf typeId: elem) == ztypes.ztypetype.genericParam then return false
-    if (listElemHasEq :st :ast :elem) then return false
+    if isCmp when (listElemHasEq :st :ast :elem) then return false
+    if isSort when (listElemHasCompare :st :ast :elem) then return false
     cn: zast.nameTextAt :ast ref: cnId
     btn: st.reg.nameOf tid: bt
     en: st.reg.nameOf tid: elem
     m: "type '\{btn}' has no member '\{cn}'"
     h: "its element type '\{en}' has no '=='"
+    if isSort then h = "its element type '\{en}' has no 'compare'"
     cn2: ast.nodes.get i: dp.child.u64
     (addErrorH
         :st
@@ -19439,6 +19398,26 @@ refuseListMemberWithoutEq: function {
         width: cn.length.u32.orPanic
     )
     return true
+}
+
+# listElemHasCompare -- a list element type that has a `compare` of its own:
+# the runtime's (an integer, a char, bool, str, String) or the author's. None
+# is generated -- an order is the author's to choose -- and a float has none.
+listElemHasCompare: function {st: zenv.ZSymbolTable ast: Ast elem: ztypes.tid} out bool is {
+    if (st.reg.isValtypeOf tid: elem) then {
+        src: valOpSource :ast :st tid: elem nameId: zast.names.wkCompare
+        return src.builtin or src.written
+    }
+    et: elem
+    for true loop {
+        bo: st.typing.typedefBaseTid.get key: et
+        match (
+            bo
+        ) case some then {
+            et = ztypes.tid.create from: bo
+        } case none then break
+    }
+    return (st.typing.declIsMethodId parentTypeId: et nameId: zast.names.wkCompare)
 }
 
 # listElemHasEq -- a list element type that has an `==` of its own: a value
@@ -20155,7 +20134,31 @@ mintEntryAndSizedChildren: function {
         mintCollectionMethod :st :ast :monoId m: "create"
         synthComparisonPair :st ownerTid: monoId.u64 eqDecl: false neDecl: false
         synthHashMember :st rid: monoId.u64
+        mintStrCompare :ast :st :rf :monoId
     }
+}
+
+# mintStrCompare -- a str instance's native `compare`, taking an `rhs` of this
+# very instance. The template's is a native, which is not cloned per instance,
+# so its `rhs: type` would still name the template.
+mintStrCompare: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    rf: ztypes.declid
+    monoId: ztypes.tid
+} is {
+    cmpId: mintCollectionMethod :st :ast :monoId m: "compare"
+    cft: ztypes.tid.create from: cmpId.u64
+    st.typing.setMemberType parentTypeId: cft nameId: zast.names.wkThis childTypeId: monoId
+    (st.typing.setChildOwnershipId
+        parentTypeId: cft
+        nameId: zast.names.wkThis
+        ownership: ztypes.zparamownership.viewMode
+    )
+    st.reg.setThisParamName typeId: cft nameId: zast.names.wkThis
+    st.typing.setMemberType parentTypeId: cft nameId: zast.names.wkRhs childTypeId: monoId
+    i32id: (builtinTidT :st frame: rf :ast base: "i32").u64
+    if i32id > 0 then st.reg.setReturnType typeId: cft value: i32id
 }
 
 # templateIsCollection -- whether a template is one of the builtin collection
@@ -24748,7 +24751,7 @@ checkResolvedMember: function {
     # a generated comparison exists only when every part has one
     isSynthCmp: st.typing.synthCmpTids.has item: mo
     if isSynthCmp when (refuseEqWithoutPartEq :st :ast :dp :bt :cnId) then return ztypes.tid
-    if (refuseListMemberWithoutEq :st :ast :dp :bt :cnId) then return ztypes.tid
+    if (refuseListMemberWithoutElemOp :st :ast :dp :bt :cnId) then return ztypes.tid
     isSynthHash: (
         cnId == zast.names.wkHash and (st.typing.declMemberIsSynth parentTypeId: bt nameId: cnId)
     )

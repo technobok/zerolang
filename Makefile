@@ -1073,7 +1073,12 @@ perf: $(PERFBIN)
 # members, and about -6,700 the source: roughly +7,000 of new code, and -14,000
 # for two `a != b` on tids rewritten as `(a == b).not` -- a derived `!=` on a
 # type with a written `==` costs ~7,300 allocations to compile (N33).
-ALLOC_BASELINE := 2875222
+#
+# +2,749 when `sort` came to need the element's own `compare`: +1,240 over the
+# same source and library (each str instance's native `compare`, the sort
+# check), about +150 for the new native members, and about +1,350 the source
+# longer.
+ALLOC_BASELINE := 2877971
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

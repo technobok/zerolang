@@ -5834,7 +5834,12 @@ emitNativeArgMethod: function {
     if isArgM.not then return "".string
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if mn.length == 0 then return "".string
-    srcP: convSrcPathOf :symtab srcTid: ownerTid
+    # a str instance's members are declared on its template
+    srcT: ownerTid
+    if (originIsTid :symtab tid: ownerTid originTid: (ctx.origins.get i: ogStr)) then {
+        srcT = originTidOf :symtab tid: ownerTid
+    }
+    srcP: convSrcPathOf :symtab srcTid: srcT
     key: nativeMemberKey srcPath: srcP.stringView memb: mn
     if key.length == 0 then return "".string
     body: nativeImplOf :ctx path: key.stringView
@@ -29921,13 +29926,14 @@ emitListMono: function {
     )
     if (monoMemberUsed :symtab :monoId nameId: zast.names.wkSort) then {
         (emitListSort
+            :ast
+            :symtab
+            :ctx
             nm: nm.stringView
             ect: ect.stringView
+            elem: elemT
             isStr: isStrEl
             isSv: isSvEl
-            isStruct: (keyHashKind :symtab :ctx tid: (ztypes.tid.create from: eid.u64)) == 3
-            strC: ctx.strC.stringView
-            svC: ctx.svC.stringView
             :buf
         )
     }
@@ -30029,6 +30035,39 @@ emitListEq: function {
     } else {
         buf.append body
     }
+}
+
+# sortCallsWritten -- ordering `elem` calls a `compare` the author wrote.
+sortCallsWritten: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view elem: ztypes.tid
+} out bool is {
+    if (symtab.reg.isValtypeOf tid: elem).not then return true
+    return (ztypecheck.valOpSource :ast st: symtab tid: elem nameId: zast.names.wkCompare).written
+}
+
+# sortLessC -- `_a` sorts before `_b`, by the element's own `compare`: a
+# scalar's C `<`, a str's bytes up to the shorter length and then the
+# lengths, and otherwise the author's `compare` below zero. The checker has
+# refused a `sort` whose element has none.
+sortLessC: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx elem: ztypes.tid
+} out String is {
+    if (sortCallsWritten :ast :symtab :elem).not then {
+        if (ztypecheck.valIsMonoOf :ast st: symtab tid: elem base: "str") then {
+            return "memcmp(_a.data, _b.data, _a.len < _b.len ? _a.len : _b.len) < 0 || (memcmp(_a.data, _b.data, _a.len < _b.len ? _a.len : _b.len) == 0 && _a.len < _b.len)".string
+        }
+        return "_a < _b".string
+    }
+    owner: typedefChaseTid :symtab tid: elem
+    rhs: "_b"
+    if (symtab.reg.isValtypeOf tid: elem) then {
+        owner = ztypecheck.valOpOwner st: symtab tid: elem nameId: zast.names.wkCompare
+    } else if (elemBorrowsByPtr :ast :symtab :ctx tid: elem) then {
+        rhs = "&_b"
+    }
+    fo: symtab.typing.declChildOfId parentTypeId: owner nameId: zast.names.wkCompare
+    fc: ctxCname :ctx tid: (ztypes.tid.create from: (fo.or d: 0))
+    return "\{fc}(&_a, \{rhs}) < 0"
 }
 
 # emitColGet -- the element `get` for a List / ListView mono. The declared
@@ -30263,31 +30302,29 @@ emitListIter: function {
 
 # emitListSort -- stable in-place mergesort companion (scalar `<`).
 emitListSort: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
     nm: StringView
     ect: StringView
+    # the element type, whose `compare` orders the list
+    elem: ztypes.tid
     isStr: bool
     isSv: bool
-    isStruct: bool
-    strC: StringView
-    svC: StringView
     buf: String.borrow
 } is {
+    s0: "static int z_\{nm}_sort_lt(\{ect} _a, \{ect} _b)"
+    lt: String
+    if isStr.not when isSv.not then lt = sortLessC :ast :symtab :ctx :elem
     if isStr then {
-        s0s: "static int z_\{nm}_sort_lt(\{ect} _a, \{ect} _b) { return \{strC}_cmp(&_a, &_b) < 0; }\n"
-        buf.append s0s
+        buf.append "\{s0} { return \{ctx.strC}_cmp(&_a, &_b) < 0; }\n"
     } else if isSv then {
-        s0v: "static int z_\{nm}_sort_lt(\{ect} _a, \{ect} _b) { return \{svC}_cmp(_a, _b) < 0; }\n"
-        buf.append s0v
-    } else if isStruct then {
-        # a by-value STRUCT element has no C ordering. Byte order is a total
-        # order and deterministic, which is what `sort` needs; an element that
-        # wants a MEANINGFUL order declares `<`, and dispatching to it is the
-        # same shape as the declared `==` the containers already honour.
-        s0r: "static int z_\{nm}_sort_lt(\{ect} _a, \{ect} _b) { return memcmp(&_a, &_b, sizeof(_a)) < 0; }\n"
-        buf.append s0r
+        buf.append "\{s0} { return \{ctx.svC}_cmp(_a, _b) < 0; }\n"
+    } else if (sortCallsWritten :ast :symtab :elem) then {
+        buf.append "\{s0};\n"
+        ctx.lateDefs.append "\{s0} { return \{lt}; }\n\n"
     } else {
-        s0: "static int z_\{nm}_sort_lt(\{ect} _a, \{ect} _b) { return _a < _b; }\n"
-        buf.append s0
+        buf.append "\{s0} { return \{lt}; }\n"
     }
     s1: "static void z_\{nm}_sort_merge(\{ect}* data, \{ect}* scratch, uint64_t lo, uint64_t mid, uint64_t hi) {\n"
     buf.append s1
