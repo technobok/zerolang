@@ -29421,9 +29421,11 @@ emitArrayMono: function {
 }
 
 # arrayEqBody -- an array's generated `==`: its elements one at a time, each
-# with the element's own `==`, or one memcmp over a scalar element, whose `==`
-# is its bytes. A body that calls a written method goes after the method
-# prototypes, leaving its prototype in the template's place.
+# with the element's own `==`, or one memcmp over an integer, char or bool
+# element, whose `==` answers exactly what its bytes do. A float's does not
+# (NaN, the two zeros), so a float element is compared one at a time too. A
+# body that calls a written method goes after the method prototypes, leaving
+# its prototype in the template's place.
 arrayEqBody: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -29435,8 +29437,7 @@ arrayEqBody: function {
 } is {
     nm: cbaseNoPrefix :ctx tid: monoId
     body: "static bool z_\{nm}_eq(z_\{nm}_t a, z_\{nm}_t b) {\n"
-    elemSrc: ztypecheck.valOpSource :ast st: symtab tid: elemId nameId: zast.names.wkOpEq
-    if elemSrc.builtin when (partIsCScalar :symtab tid: elemId) then {
+    if (elemEqIsBytes :ast :symtab tid: elemId) then {
         body.append "    return memcmp(a.data, b.data, sizeof(a.data)) == 0;\n}\n"
     } else {
         body.append "    for (int _i = 0; _i < \{lenStr}; _i++) { if (!("
@@ -29450,6 +29451,15 @@ arrayEqBody: function {
     }
     zn: "z_\{nm}"
     emitEqLate :ctx cname: zn.stringView :body buf: dest
+}
+
+# elemEqIsBytes -- the runtime's `==` for this element is a compare of its
+# bytes: an integer, a char, a bool, a function pointer. Not a float.
+elemEqIsBytes: function {ast: Ast.view symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.names.wkOpEq
+    if src.builtin.not then return false
+    if (partIsCScalar :symtab :tid).not then return false
+    return (isFloatName name: (regNameView :symtab tid: (typedefChaseTid :symtab :tid))).not
 }
 
 # capLenT -- the C length-field type for a str mono of the given capacity:

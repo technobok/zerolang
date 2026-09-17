@@ -1057,7 +1057,10 @@ perf: $(PERFBIN)
 # source (no `_eq` for a type whose `==` is written or struck off; a definition
 # is built apart only when it must follow the methods it calls) and +1,563 the
 # source longer.
-ALLOC_BASELINE := 2852248
+#
+# -206 when array and str `==` became the generated pair every value type has:
+# +0 over the same source, -206 the source shorter.
+ALLOC_BASELINE := 2852042
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
