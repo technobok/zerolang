@@ -7439,6 +7439,10 @@ orderMethodParam: function {
                 isBorrow: false
             )
         }
+    } else if written == 0 when (symtab.typing.declHasDefaultId parentTypeId: mco nameId: pname
+    ) then {
+        # a parameter the call leaves out is its declared default
+        one.append (paramDefaultText :ast :symtab :ctx cco: mco nameId: pname.u64 :pid)
     } else {
         pnB: zast.poolTextAt pool: ast.names ref: pname
         (instanceMethodArg
@@ -10167,7 +10171,7 @@ userCreateCallC: function {
                 :ctx
                 st: ord
                 slot: pi
-                text: (createParamDefaultText
+                text: (paramDefaultText
                     :ast
                     :symtab
                     :ctx
@@ -10575,13 +10579,13 @@ userCreateFn: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out ztyp
     return ct
 }
 
-# createParamDefaultText -- a user `create` parameter the call left unsupplied:
-# its registered default, else the "0" fallback.
-createParamDefaultText: function {
+# paramDefaultText -- a parameter the call left unsupplied: its registered
+# default, else the "0" fallback.
+paramDefaultText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    # the user create, whose parameters own their defaults
+    # the function, whose parameters own their defaults
     cco: ztypes.tid
     # the parameter's name id (a raw pool index)
     nameId: u64
@@ -10638,7 +10642,7 @@ emitCtorDefaultsFill: function {
         ci: u64
         ccn: cpi.length
         for ci < ccn loop {
-            cav: (createParamDefaultText
+            cav: (paramDefaultText
                 :ast
                 :symtab
                 :ctx
@@ -10690,7 +10694,7 @@ createArgText: function {
     pid: u64
     pname: StringView
 } out String is {
-    if ca.nid == 0 then return (createParamDefaultText :ast :symtab :ctx :cco :nameId :pid)
+    if ca.nid == 0 then return (paramDefaultText :ast :symtab :ctx :cco :nameId :pid)
     return (userFnArgText
         :ast
         :symtab
@@ -11908,6 +11912,57 @@ fnIsNativeId: function {symtab: zenv.ZSymbolTable.view fid: ztypes.tid} out bool
     return (symtab.reg.isNativeOf tid: fid)
 }
 
+# appendSlotOrDefault -- one parameter slot of a call, appended to `args`: the
+# argument written into it, else the parameter's declared default; a slot with
+# neither is left out.
+appendSlotOrDefault: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    fid: ztypes.tid
+    ord: orderstate.borrow
+    slot: u64
+    # the parameter's name id (a raw pool index) and type
+    nameId: u64
+    pid: u64
+    args: String.borrow
+} is {
+    {
+        vo: orderSlotText t: ctx st: ord :slot
+        if vo.length > 0 then {
+            if args.length > 0 then args.append ", "
+            args.append vo
+            return
+        }
+    }
+    nm: zast.nameid.create from: nameId.u32.orPanic
+    if (symtab.typing.declHasDefaultId parentTypeId: fid nameId: nm).not then return
+    if args.length > 0 then args.append ", "
+    args.append (paramDefaultText :ast :symtab :ctx cco: fid :nameId :pid)
+}
+
+# receiverCallText -- `callee(recv)` for a method called with its receiver
+# alone, its other parameters filled with their declared defaults.
+receiverCallText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    callee: StringView
+    recv: StringView
+    fnTid: ztypes.tid
+} out String is {
+    r: callee.string
+    r.append "("
+    r.append recv
+    da: renderedMethodDefaultArgs :ast :symtab :ctx :fnTid
+    if da.length > 0 then {
+        r.append ", "
+        r.append da
+    }
+    r.append ")"
+    return r
+}
+
 # emitFnCallWithFid -- the argument work a call shares once its callee is
 # known: the parameter lists, the slot each written argument fills, and per
 # argument the pointer / byref / borrow-hoist question the parameter's own
@@ -11959,11 +12014,17 @@ emitFnCallWithFid: function {
     pp9g: u64
     ppn9g: fpNames.length
     for pp9g < ppn9g loop {
-        vo9g: orderSlotText t: ctx st: ord slot: pp9g
-        if vo9g.length > 0 then {
-            if argTids.length > 0 then argTids.append ", "
-            argTids.append vo9g
-        }
+        (appendSlotOrDefault
+            :ast
+            :symtab
+            :ctx
+            :fid
+            :ord
+            slot: pp9g
+            nameId: (fpIds9Nm.get i: pp9g)
+            pid: (fpIds.get i: pp9g)
+            args: argTids
+        )
         pp9g = pp9g + 1
     }
     orderEnd :ctx st: ord
@@ -14308,7 +14369,14 @@ emitNestedMonoMethodBase: function {
                             )
                         }
                     }
-                    return "\{nmc}(\{nmrecv})"
+                    return (receiverCallText
+                        :ast
+                        :symtab
+                        :ctx
+                        callee: nmc.stringView
+                        recv: nmrecv.stringView
+                        fnTid: (ztypes.tid.create from: nmco.u64)
+                    )
                 }
             } case none then null
         }

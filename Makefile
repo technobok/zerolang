@@ -1141,7 +1141,11 @@ perf: $(PERFBIN)
 # +520 when an argument moved out of another call's result came to run that
 # call once: the same source compiles with the same count, all of it is the
 # source longer.
-ALLOC_BASELINE := 2913564
+#
+# +3,103 when a parameter a call leaves out came to be its declared default
+# whatever declares it: +1,417 over the same source (every generic clone copies
+# its parameters' defaults), about +1,690 the source longer.
+ALLOC_BASELINE := 2916667
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
