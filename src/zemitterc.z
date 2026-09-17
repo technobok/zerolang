@@ -32847,19 +32847,36 @@ monoHoldsCollectionPassMono: function {
     for ei < elems.length loop {
         ce: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: (elems.get i: ei))
         if (isCollectionPassMono :symtab :ctx tid: ce) then return true
+        # a value sum embeds its payload, so one over such a mono is ordered
+        # with it (a sum cannot hold itself by value, so this ends)
+        if (isValueSumMono :symtab :ctx tid: ce) when (monoHoldsCollectionPassMono
+            :symtab
+            :ctx
+            monoId: ce
+        ) then return true
         ei = ei + 1
     }
     return false
 }
 
+# isValueSumMono -- an optionval or resultval instance.
+isValueSumMono: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid
+} out bool is {
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogOptionval)) then return true
+    return (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogResultval))
+}
+
 # isCollectionPassMono -- a mono whose C the collection pass writes: a collection,
-# or a user generic record or variant instance.
+# an array (the pass writes those first), or a user generic record or variant
+# instance.
 isCollectionPassMono: function {
     symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid
 } out bool is {
     co: originTidOf :symtab :tid
     if co.isZero then return false
     if (isCollectionOriginTid :ctx originTid: co) then return true
+    if (originFamilyOf :ctx originTid: co) == ogArray then return true
     tt: symtab.reg.typetypeOf typeId: tid
     if (isUserGenericRecordMono :symtab :ctx tcl: tid :tt) then return true
     isValMono: (

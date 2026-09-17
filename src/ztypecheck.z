@@ -35954,6 +35954,43 @@ checkResolvedMethodCall: function {
     return (ztypes.tid.create from: mres)
 }
 
+# refuseUninferredArmParam -- an arm constructed without the type's arguments
+# binds only the parameter its payload names (`resultval.ok 5` binds `t`); a
+# second type parameter is inferred from nothing, as the language infers no
+# expected type. A one-parameter type takes its payload's type whole. True once
+# reported.
+refuseUninferredArmParam: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    call: callref
+    dtp: u64
+    subs: (IdMapV zast.nameid v: u64).view
+} out bool is {
+    tdecl: declOfTypeId :st tid: (ztypes.tid.create from: dtp)
+    if (st.reg.genericParamCountOf :tdecl) < 2 then return false
+    pnames: st.reg.genericParamNamesOf :tdecl
+    with pit: pnames.iterate do for pn: pit loop {
+        numeric: (st.reg.genericParamConstraintOf :tdecl paramName: pn).numKind.has
+        if numeric.not when (subs.has key: pn).not then {
+            pnT: zast.nameTextAt :ast ref: pn
+            tname: st.reg.nameOf tid: (ztypes.tid.create from: dtp)
+            (addErrorH
+                :st
+                nodeid: call.nid
+                lineno: call.lineno
+                colno: call.colno
+                e: zast.err.genericError
+                msg: "cannot infer generic parameter '\{pnT}' for '\{tname}'"
+                note: String
+                hint: String
+                width: 0
+            )
+            return true
+        }
+    }
+    return false
+}
+
 # mintSumArmInstance -- constructing a generic sum's ARM infers the whole type's
 # argument from the payload given: mint that instance and answer its id.
 mintSumArmInstance: function {
@@ -35975,6 +36012,9 @@ mintSumArmInstance: function {
             key: (nameIdOf :ast name: pn0)
             value: pv2
         )
+    }
+    if (refuseUninferredArmParam :st :ast :call :dtp subs: subs2) then {
+        return (callleg handled: true tid: ztypes.tid)
     }
     vsH: IdMapV zast.nameid v: u64
     mintedT: (getOrMintSpec
@@ -36053,29 +36093,16 @@ checkGenericTypeCall: function {
             if farg.nid.isZero.not when argFound.not then {
                 argFound = true
                 if isNullPay then {
+                    # the argument names the payload type: a name, a
+                    # unit-qualified path (optionval.none ztypes.zlockstate) or
+                    # an instantiation ((array t: i64 to: 2)) as a whole
                     etn: (paramTypeBaseNameId
                         :ast
                         op: (ast.nodes.get i: farg.operation.u64)
                     )
-                    subT = ztypes.tid.create from: ((walkLookupTyperefById
-                        :st
-                        frame: st.curFrame
-                        :ast
-                        :unitDecl
-                        baseId: etn
-                    ).or
-                        d: 0
+                    subT = (ztypes.tid.create
+                        from: (typeArgTid :st :ast :unitDecl opId: farg.operation baseId: etn)
                     )
-                    if subT.isZero then {
-                        # a cross-unit type arg (optionval.none ztypes.zlockstate):
-                        # paramTypeBaseNameId/walkLookupTyperefById miss a dotted ref, resolve cross-unit.
-                        fargOpNode: ast.nodes.get i: farg.operation.u64
-                        subT = ztypes.tid.create from: (dottedTyperefId
-                            :ast
-                            :st
-                            op: fargOpNode
-                        )
-                    }
                 } else {
                     avt2: checkValueAt :st :unitDecl :ast nid: farg.operation
                     mvt2: materialiseLiteral :ast :st :unitDecl t: avt2

@@ -1104,7 +1104,11 @@ perf: $(PERFBIN)
 # rules: -820 over the same source (the check names the type only when it
 # reports, which also cheapened the bare-name check), about +1,850 the source
 # longer.
-ALLOC_BASELINE := 2887349
+#
+# +1,361 when an optionval/resultval came to carry an instance and an arm's
+# uninferred parameter was refused: the same source compiles with the same
+# count, all of it is the source longer.
+ALLOC_BASELINE := 2888710
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
