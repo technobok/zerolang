@@ -1067,7 +1067,13 @@ perf: $(PERFBIN)
 # +24,168 when a key came to be hashed and compared with its own members: +377
 # over the same source (the part gates at every hashed position, the generated
 # hashes' prototypes and definitions) and +23,791 the source longer.
-ALLOC_BASELINE := 2876128
+#
+# -906 when a list's `contains`, `==` and `!=` came to use the element's own
+# `==`: +1,337 over the same source and library, +4,441 for ListVal's two new
+# members, and about -6,700 the source: roughly +7,000 of new code, and -14,000
+# for two `a != b` on tids rewritten as `(a == b).not` -- a derived `!=` on a
+# type with a written `==` costs ~7,300 allocations to compile (N33).
+ALLOC_BASELINE := 2875222
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2085,6 +2091,7 @@ VIEW_GUARD_INTERNAL := String.cat String.print String.free String.eq String.cmp 
 VIEW_GUARD_INLINE := Bytes.byteView:unemitted \
   ListRef.insert:ondemand ListRef.extend:ondemand \
   ListVal.copy:ondemand SetVal.copy:ondemand MapVV.copy:ondemand \
+  ListVal.==:ondemand ListVal.!=:ondemand \
   IdMapV.copy:ondemand IdSet.copy:ondemand \
   StringView.asString:inline \
   ListVal.append:ListRef.append ListVal.insert:ListRef.insert \
@@ -2660,8 +2667,9 @@ generic-param-guard: bin/zl
 # leg and by nothing else. It reads both blocks now.
 natives-tbl-guard: bin/zc
 	@fail=0; d=$$(mktemp -d); \
-	for f in lib/system/system.z lib/system/system/*.z; do \
-	  awk -v U=system '/^[A-Za-z_][A-Za-z0-9_]*: (record|variant|class)( |$$)/ {o=$$1; sub(/:$$/,"",o)} \
+	for f in lib/system/system.z lib/system/system/*.z lib/system/collections.z; do \
+	  u=system; case "$$f" in *collections.z) u=collections;; esac; \
+	  awk -v U=$$u '/^[A-Za-z_][A-Za-z0-9_]*: (record|variant|class)( |$$)/ {o=$$1; sub(/:$$/,"",o)} \
 	    o != "" && /^    [-+*\/%&<>=!|^]+: function .*is native/ {op=$$1; sub(/:$$/,"",op); print U"."o"."op}' \
 	    $$f; \
 	done | LC_ALL=C sort -u > $$d/decl; \

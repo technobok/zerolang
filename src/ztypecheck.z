@@ -18141,35 +18141,22 @@ cloneGenericMemberInto: function {
     isSynth: chName == "create" or (chName == "borrow")
     if isSynth.not then {
         skip5: false
-        # List's contains/sort exist only for eligible element
-        # kinds (use-site parity with the materializer gate).
-        if templateId == listRefTid when listRefTid > 0 then {
-            csM5: chName == "contains" or (chName == "sort")
-            if csM5 then {
-                elemTid: (subs.get key: (firstGenericParamId :st :templateId)).or d: 0
-                if elemTid == 0 then elemTid = fallbackArg
-                ok5: false
-                if elemTid > 0 then {
-                    csel5: false
-                    if chName == "contains" then {
-                        csel5 = (isContainsEligibleTid
-                            :st
-                            frame: rf
-                            :ast
-                            tid: (ztypes.tid.create from: elemTid.u64)
-                        )
-                    } else {
-                        csel5 = (isSortEligibleTid
-                            :st
-                            frame: rf
-                            :ast
-                            tid: (ztypes.tid.create from: elemTid.u64)
-                        )
-                    }
-                    if csel5 then ok5 = true
-                }
-                if ok5.not then skip5 = true
+        # List's sort exists only for eligible element kinds (use-site
+        # parity with the materializer gate). `contains` exists on every
+        # instance and is checked where it is called.
+        if templateId == listRefTid when listRefTid > 0 when chName == "sort" then {
+            elemTid: (subs.get key: (firstGenericParamId :st :templateId)).or d: 0
+            if elemTid == 0 then elemTid = fallbackArg
+            ok5: false
+            if elemTid > 0 then {
+                ok5 = (isSortEligibleTid
+                    :st
+                    frame: rf
+                    :ast
+                    tid: (ztypes.tid.create from: elemTid.u64)
+                )
             }
+            if ok5.not then skip5 = true
         }
         if skip5 then {
             deep5 = true
@@ -18745,20 +18732,8 @@ templateAsItems: function {
 }
 
 
-# isContainsEligibleTid / isSortEligibleTid -- element types List.contains /
-# List.sort support (the hardcoded equality / ordering dispatch): numerics +
-# bool + the String/StringView/str family; sort excludes bool (no ordering).
-isContainsEligibleTid: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    frame: ztypes.declid
-    tid: ztypes.tid
-} out bool is {
-    if tid == (builtinTidT :st :frame :ast base: "bool") then return true
-    return (isSortEligibleTid :st :frame :ast :tid)
-}
-
-# true when type `tid` is eligible for the sort-support machinery.
+# isSortEligibleTid -- element types List.sort supports (the hardcoded
+# ordering dispatch): numerics and the String/StringView/str family.
 isSortEligibleTid: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -19420,6 +19395,71 @@ forceValParts: function {
     }
 }
 
+# refuseListMemberWithoutEq -- `contains`, `==` or `!=` read on a list whose
+# element type has no `==` of its own: the members compare elements with it,
+# so for such an element they do not exist, and the read is the ordinary
+# unknown-member error. Checked where the member is used, as a generated
+# `==` is: the list instance itself is legal. True when it reported.
+refuseListMemberWithoutEq: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+} out bool is {
+    isCmp: (
+        cnId == zast.names.wkContains or (cnId == zast.names.wkOpEq) or (cnId == zast.names.wkOpNe)
+    )
+    if isCmp.not then return false
+    if (st.reg.isPartialOf tid: bt) then return false
+    org: st.reg.genericOriginOf tid: bt
+    if org.isZero then return false
+    isList: org == (builtinTidT :st frame: st.curFrame :ast base: "ListVal")
+    if isList.not then isList = org == (builtinTidT :st frame: st.curFrame :ast base: "ListRef")
+    if isList.not then return false
+    elem: arrayElemTid :st tid: bt
+    if elem.isZero then return false
+    if (st.reg.typetypeOf typeId: elem) == ztypes.ztypetype.genericParam then return false
+    if (listElemHasEq :st :ast :elem) then return false
+    cn: zast.nameTextAt :ast ref: cnId
+    btn: st.reg.nameOf tid: bt
+    en: st.reg.nameOf tid: elem
+    m: "type '\{btn}' has no member '\{cn}'"
+    h: "its element type '\{en}' has no '=='"
+    cn2: ast.nodes.get i: dp.child.u64
+    (addErrorH
+        :st
+        nodeid: (nodeId n: cn2)
+        lineno: (nodeLine n: cn2)
+        colno: (nodeCol n: cn2)
+        e: zast.err.typeError
+        msg: m
+        note: "".string
+        hint: h
+        width: cn.length.u32.orPanic
+    )
+    return true
+}
+
+# listElemHasEq -- a list element type that has an `==` of its own: a value
+# type by the generated-`==` rule, a reference type by declaring one.
+listElemHasEq: function {st: zenv.ZSymbolTable ast: Ast elem: ztypes.tid} out bool is {
+    if (st.reg.isValtypeOf tid: elem) then {
+        forceValParts :st :ast tid: elem depth: 0
+        return (valEqMissingPart :ast :st tid: elem depth: 0).isZero
+    }
+    et: elem
+    for true loop {
+        bo: st.typing.typedefBaseTid.get key: et
+        match (
+            bo
+        ) case some then {
+            et = ztypes.tid.create from: bo
+        } case none then break
+    }
+    return (st.typing.declIsMethodId parentTypeId: et nameId: zast.names.wkOpEq)
+}
+
 # refuseHashWithoutPartHash -- a generated `hash` read on a type whose `==` is
 # not generated, or one of whose parts has no hash: the type has no `hash`, and
 # the read is the ordinary unknown-member error. Otherwise the read is
@@ -19447,7 +19487,7 @@ refuseHashWithoutPartHash: function {
     btn: st.reg.nameOf tid: bt
     m: "type '\{btn}' has no member 'hash'"
     h: String
-    if miss != bt then {
+    if (miss == bt).not then {
         mn: st.reg.nameOf tid: miss
         hm: "its part of type '\{mn}' has no 'hash'"
         h = hm
@@ -19498,7 +19538,7 @@ refuseEqWithoutPartEq: function {
     btn: st.reg.nameOf tid: bt
     m: "type '\{btn}' has no member '\{cn}'"
     h: String
-    if miss != bt then {
+    if (miss == bt).not then {
         mn: st.reg.nameOf tid: miss
         hm: "its part of type '\{mn}' has no '=='"
         h = hm
@@ -24708,6 +24748,7 @@ checkResolvedMember: function {
     # a generated comparison exists only when every part has one
     isSynthCmp: st.typing.synthCmpTids.has item: mo
     if isSynthCmp when (refuseEqWithoutPartEq :st :ast :dp :bt :cnId) then return ztypes.tid
+    if (refuseListMemberWithoutEq :st :ast :dp :bt :cnId) then return ztypes.tid
     isSynthHash: (
         cnId == zast.names.wkHash and (st.typing.declMemberIsSynth parentTypeId: bt nameId: cnId)
     )

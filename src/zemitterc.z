@@ -9016,7 +9016,7 @@ emitListMethodCall: function {
         return e5
     }
     if mnId == zast.names.wkContains then {
-        vc: colArg :ast :symtab :ctx :call label: "item" consumes: false
+        vc: containsNeedleC :ast :symtab :ctx :call
         e6: "\{cb}_contains(\{recvR}, \{vc})"
         return e6
     }
@@ -9025,6 +9025,46 @@ emitListMethodCall: function {
         return e7
     }
     return "".string
+}
+
+# containsNeedleC -- the needle a list's `contains` takes by value: a String
+# or a class held by pointer -- a parameter -- is read through it.
+containsNeedleC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+} out String is {
+    vc: colArg :ast :symtab :ctx :call label: "item" consumes: false
+    if (colArgHeldByPtr :ast :symtab :ctx :call label: "item") then return "(*\{vc})"
+    return vc
+}
+
+# colArgHeldByPtr -- the collection argument named `label` (or the first
+# positional one) is a reference held by pointer, which colArg spells as the
+# pointer itself; a valtype one colArg already reads through.
+colArgHeldByPtr: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    label: StringView
+} out bool is {
+    ax: u64
+    for ax < call.arguments.count.u64 loop {
+        aId: zast.kidAt kids: ast.kids span: call.arguments i: ax
+        ax = ax + 1
+        a: ast.nodes.get i: aId.u64
+        if a.namedoperation then {
+            an: zast.nameTextAt :ast ref: a.name
+            if an.stringView == label or (an.length == 0) then {
+                op: ast.nodes.get i: a.operation.u64
+                if (pathIsPointer :ast :symtab :ctx n: op).not then return false
+                return (ptrHeldValtype :ast :symtab :ctx n: op).not
+            }
+        }
+    }
+    return false
 }
 
 # emitArrayMethodCall -- `.get i:` / `.set i: item:` on a fixed-size array mono
@@ -16564,6 +16604,17 @@ emitOperatorAt: function {
             nameId: callName
         )
     }
+    if (isListCompare :symtab :ctx :owner :opId) then {
+        return (emitListEqOperator
+            :ast
+            :symtab
+            :ctx
+            :owner
+            :lhsNid
+            :rhsNid
+            neg: opId == zast.names.wkOpNe
+        )
+    }
     if call > 0 when isNat.not when isSyn.not then {
         return (emitDeclaredOperator
             :ast
@@ -16796,6 +16847,68 @@ emitDeclaredOperator: function {
     if opened then r.append ")"
     orderEnd :ctx st: ord
     return r
+}
+
+# isListCompare -- `==` or `!=` on a ListVal, which its mono's generated
+# comparator answers.
+isListCompare: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    owner: ztypes.tid
+    opId: zast.nameid
+} out bool is {
+    isCmp: opId == zast.names.wkOpEq or (opId == zast.names.wkOpNe)
+    if isCmp.not then return false
+    return (originIsTid :symtab tid: owner originTid: (ctx.origins.get i: ogListVal))
+}
+
+# emitListEqOperator -- a ListVal `==` (or its negation): the mono's `_eq`
+# over the two lists' addresses.
+emitListEqOperator: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    owner: ztypes.tid
+    lhsNid: u64
+    rhsNid: u64
+    neg: bool
+} out String is {
+    ord: orderBegin :ctx slots: 2
+    mk: pendingHoistMark :ctx
+    la: listOperandAddr :ast :symtab :ctx nid: lhsNid tid: owner
+    orderArgAt :ast :symtab :ctx st: ord mark: mk text: la nid: lhsNid byPtr: true slot: 0
+    mkR: pendingHoistMark :ctx
+    ra: listOperandAddr :ast :symtab :ctx nid: rhsNid tid: owner
+    orderArgAt :ast :symtab :ctx st: ord mark: mkR text: ra nid: rhsNid byPtr: true slot: 1
+    r: orderFinish :ctx st: ord
+    opened: r.length > 0
+    if neg then r.append "!"
+    r.append (ctxCname :ctx tid: owner)
+    r.append "_eq("
+    r.append (orderSlotText t: ctx st: ord slot: 0)
+    r.append ", "
+    r.append (orderSlotText t: ctx st: ord slot: 1)
+    r.append ")"
+    if opened then r.append ")"
+    orderEnd :ctx st: ord
+    return r
+}
+
+# listOperandAddr -- the address of a list operand; a list already held by
+# pointer is its own.
+listOperandAddr: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    nid: u64
+    tid: ztypes.tid
+} out String is {
+    if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: nid)) then {
+        return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: nid))
+    }
+    lv: operandValueC :ast :symtab :ctx :nid
+    lf: lvalueForm :ast :symtab :ctx av: lv.stringView :tid
+    return "&\{lf}"
 }
 
 # appendVtableOperator -- an operator dispatched through an interface's vtable,
@@ -29780,27 +29893,32 @@ emitListMono: function {
             :buf
         )
     }
+    elemT: ztypes.tid.create from: eid.u64
     if (monoMemberUsed :symtab :monoId nameId: zast.names.wkContains) then {
-        c0: "static bool z_\{nm}_contains(const z_\{nm}_t* _this, \{ect} _needle);\n"
-        buf.append c0
-        c1: "static bool z_\{nm}_contains(const z_\{nm}_t* _this, \{ect} _needle) {\n"
-        buf.append c1
-        buf.append "    for (uint64_t i = 0; i < _this->length; i++) {\n"
-        if isStrEl then {
-            buf.append "        if (_this->data[i].size == _needle.size && memcmp(_this->data[i].data, _needle.data, _needle.size) == 0) return true;\n"
-        } else if isSvEl then {
-            buf.append "        if (_this->data[i].size == _needle.size && memcmp(_this->data[i].data, _needle.data, _needle.size) == 0) return true;\n"
-        } else if (keyHashKind :symtab :ctx tid: (ztypes.tid.create from: eid.u64)) == 3 then {
-            # a by-value STRUCT element: C `==` does not apply to it. Same
-            # byte comparison Set already uses for its elements.
-            buf.append "        if (memcmp(&_this->data[i], &_needle, sizeof(_needle)) == 0) return true;\n"
-        } else {
-            buf.append "        if (_this->data[i] == _needle) return true;\n"
-        }
-        buf.append "    }\n"
-        buf.append "    return false;\n"
-        buf.append "}\n\n"
+        (emitListContains
+            :ast
+            :symtab
+            :ctx
+            nm: nm.stringView
+            ect: ect.stringView
+            elem: elemT
+            strLike: isStrEl or isSvEl
+            :buf
+        )
     }
+    eqUsed: (
+        (monoMemberUsed :symtab :monoId nameId: zast.names.wkOpEq) or
+        (monoMemberUsed :symtab :monoId nameId: zast.names.wkOpNe)
+    )
+    if eqUsed then (emitListEq
+        :ast
+        :symtab
+        :ctx
+        nm: nm.stringView
+        ect: ect.stringView
+        elem: elemT
+        :buf
+    )
     if (monoMemberUsed :symtab :monoId nameId: zast.names.wkSort) then {
         (emitListSort
             nm: nm.stringView
@@ -29822,6 +29940,95 @@ emitListMono: function {
         :buf
     )
     emitListIter :ctx :symtab :monoId nm: nm.stringView ect: ect.stringView :buf
+}
+
+# emitListContains -- a list's linear `contains`, comparing each element with
+# the needle by the element's own `==`: a String's or StringView's bytes, a
+# scalar's C `==`, the author's method, a generated `_eq`. A definition that
+# calls a written method comes after every method prototype.
+emitListContains: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    nm: StringView
+    ect: StringView
+    elem: ztypes.tid
+    strLike: bool
+    buf: String.borrow
+} is {
+    proto: "static bool z_\{nm}_contains(const z_\{nm}_t* _this, \{ect} _needle)"
+    body: "\{proto} {\n"
+    body.append "    for (uint64_t i = 0; i < _this->length; i++) {\n"
+    late: false
+    if strLike then {
+        body.append "        if (_this->data[i].size == _needle.size && memcmp(_this->data[i].data, _needle.data, _needle.size) == 0) return true;\n"
+    } else if (symtab.reg.isValtypeOf tid: elem).not then {
+        # a reference element compares with the `==` its type declares, by
+        # address, as a Set's element does
+        late = true
+        fo: (symtab.typing.declChildOfId
+            parentTypeId: (typedefChaseTid :symtab tid: elem)
+            nameId: zast.names.wkOpEq
+        )
+        body.append "        { \{ect} _e = _this->data[i]; if ("
+        body.append (ctxCname :ctx tid: (ztypes.tid.create from: (fo.or d: 0)))
+        body.append "(&_e, "
+        if (elemBorrowsByPtr :ast :symtab :ctx tid: elem) then body.append "&"
+        body.append "_needle)) return true; }\n"
+    } else if (partIsCScalar :symtab tid: elem) when (partCallsWritten :ast :symtab tid: elem
+    ).not then {
+        body.append "        if (_this->data[i] == _needle) return true;\n"
+    } else {
+        late = partCallsWritten :ast :symtab tid: elem
+        body.append "        { \{ect} _e = _this->data[i]; if ("
+        partEqC :ast :symtab :ctx tid: elem lhs: "_e" rhs: "_needle" sel: "" dest: body
+        body.append ") return true; }\n"
+    }
+    body.append "    }\n"
+    body.append "    return false;\n"
+    body.append "}\n\n"
+    buf.append "\{proto};\n"
+    if late then {
+        ctx.lateDefs.append body
+    } else {
+        buf.append body
+    }
+}
+
+# emitListEq -- a ListVal's `==`: the same length, and each element equal to
+# its counterpart by the element's own `==` -- one memcmp when that `==` is
+# the element's bytes.
+emitListEq: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    nm: StringView
+    ect: StringView
+    elem: ztypes.tid
+    buf: String.borrow
+} is {
+    proto: "static bool z_\{nm}_eq(const z_\{nm}_t* a, const z_\{nm}_t* b)"
+    body: "\{proto} {\n"
+    body.append "    if (a->length != b->length) return false;\n"
+    if (elemEqIsBytes :ast :symtab tid: elem) then {
+        body.append "    return a->length == 0 || memcmp(a->data, b->data, a->length * sizeof(*a->data)) == 0;\n"
+    } else {
+        body.append "    for (uint64_t _i = 0; _i < a->length; _i++) {\n"
+        body.append "        \{ect} _x = a->data[_i];\n"
+        body.append "        \{ect} _y = b->data[_i];\n"
+        body.append "        if (!("
+        partEqC :ast :symtab :ctx tid: elem lhs: "_x" rhs: "_y" sel: "" dest: body
+        body.append ")) return false;\n"
+        body.append "    }\n"
+        body.append "    return true;\n"
+    }
+    body.append "}\n\n"
+    buf.append "\{proto};\n"
+    if (partCallsWritten :ast :symtab tid: elem) then {
+        ctx.lateDefs.append body
+    } else {
+        buf.append body
+    }
 }
 
 # emitColGet -- the element `get` for a List / ListView mono. The declared

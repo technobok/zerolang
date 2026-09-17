@@ -1,0 +1,69 @@
+# A LIST COMPARES ITS ELEMENTS BY THE ELEMENT'S OWN `==`. ListVal has `==`
+# and `!=` -- the same length, and each element equal to its counterpart --
+# and `contains` walks with the same `==`. So a list of floats holding a NaN
+# is unequal even to its own copy, a list of `letter`s (whose `==` ignores case)
+# finds 'a' when it holds 'A', and a ListRef of a class that writes `==`
+# finds an equal instance it never held. `contains` used to compare a record
+# element's bytes, and a class element had no `contains` at all.
+#
+# `contains` takes its needle by value, so a String parameter -- held by
+# pointer -- is read through: that emitted invalid C.
+letter: record {
+    code: u8
+} as {
+    ==: function {:this rhs: letter} out bool is {
+        return (fold c: this.code) == (fold c: rhs.code)
+    }
+}
+
+fold: function {c: u8} out u8 is {
+    if c >= 65 when c <= 90 then return c + 32
+    return c
+}
+
+Cell: class {
+    n: i64
+} as {
+    ==: function {a: this rhs: Cell} out bool is {
+        return a.n == rhs.n
+    }
+}
+
+hasName: function {names: (List String).view name: String.view} out bool is {
+    return (names.contains item: name)
+}
+
+main: function is {
+    a: ListVal u64
+    b: ListVal u64
+    a.append from: 1
+    a.append from: 2
+    b.append from: 1
+    print "prefix: \{a == b} \{a != b}"
+    b.append from: 2
+    print "same: \{a == b} \{(a.== rhs: b)} \{a != b}"
+    b.set i: 1 val: 3
+    print "one differs: \{a == b}"
+
+    z: 0.0
+    fs: ListVal f64
+    fs.append from: z / z
+    gs: fs.copy
+    print "NaN list against its copy: \{fs == gs}"
+
+    ls: ListVal letter
+    ls.append from: (letter code: 65)
+    ms: ListVal letter
+    ms.append from: (letter code: 97)
+    print "letters: \{ls.contains item: (letter code: 97)} \{ls.contains item: (letter code: 66)} \{ls == ms}"
+
+    cells: List Cell
+    cells.append (Cell n: 4)
+    probe: Cell n: 4
+    print "cells: \{cells.contains item: probe}"
+
+    names: List String
+    names.append "ann".string
+    who: "ann".string
+    print "names: \{hasName :names name: who}"
+}
