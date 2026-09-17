@@ -5293,6 +5293,7 @@ registerValueParam: function {
         recordFoldedScalarDefault :st :ast what: "parameter" ownerTid: fid dm: pm
     }
     if (isNumericLiteralNameAt :ast ref: ptn) then {
+        refuseWideDefault :st :ast nid: pm.operation
         (st.typing.declSetDefaultId
             parentTypeId: (ztypes.tid.create from: fid.u64)
             nameId: pm.name
@@ -8520,6 +8521,7 @@ attachDeclaredField: function {
         ref: (rootNameIdOf :ast n: (ast.nodes.get i: fm.operation.u64))
     )
     if (isNumericLiteralName name: rdnr.stringView) then {
+        refuseWideDefault :st :ast nid: fm.operation
         (st.typing.declSetDefault
             parentTypeId: (ztypes.tid.create from: rid.u64)
             pool: ast.names
@@ -10435,6 +10437,43 @@ resolveClassMethodDecl: function {
     }
 }
 
+# refuseWideDefault -- a default written as a bare integer literal is an i64, as
+# the declaration's own type is, so one outside i64 is refused where it is
+# written: past u64 no type can take it, and a decimal past i64 needs its
+# conversion written (`18446744073709551615.u64`).
+refuseWideDefault: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} is {
+    isAtom: false
+    {
+        da: ast.nodes.get i: nid.u64
+        isAtom = da.atomid
+    }
+    if isAtom.not then return
+    dn: ast.nodes.get i: nid.u64
+    lex: zast.nameTextAt :ast ref: (atomNameId :ast n: dn)
+    if lex.length < 19 then return
+    k: ztypes.numkind.i64Type
+    if (ztypes.literalBeyondU64 numstr: lex.stringView) then {
+        k = ztypes.numkind.u64Type
+    } else if (isDecimalLexeme lex: lex.stringView).not then {
+        return
+    } else if (ztypes.literalBeyondI64 numstr: lex.stringView).not then {
+        return
+    }
+    h: String
+    if k.i64Type then h = "a default written as a bare literal is an i64: write `\{lex}.u64` for a u64"
+    (addErrorH
+        :st
+        nodeid: (nodeId n: dn)
+        lineno: (nodeLine n: dn)
+        colno: (nodeCol n: dn)
+        e: zast.err.typeError
+        msg: (ztypes.rangeErr value: lex.stringView :k r: (ztypes.rangeOf :k))
+        note: String
+        hint: h
+        width: lex.length.u32.orPanic
+    )
+}
+
 # recordFieldDefault -- record the default a field declares: a numeric literal
 # folds to the field's own type, a named one waits for the type it references
 # to resolve, and a marker-suffixed one is not a default at all.
@@ -10456,6 +10495,7 @@ recordFieldDefault: function {
         ref: (rootNameIdOf :ast n: (ast.nodes.get i: fm.operation.u64))
     )
     if (isNumericLiteralName name: rdnc.stringView) then {
+        refuseWideDefault :st :ast nid: fm.operation
         (st.typing.declSetDefault
             parentTypeId: (ztypes.tid.create from: cid.u64)
             pool: ast.names
@@ -26900,10 +26940,111 @@ checkLiteralAtom: function {st: zenv.ZSymbolTable ast: Ast.view node: atomref} o
         result = st.reg.literalFloatTid
     } else {
         result = st.reg.literalIntTid
+        noteWideLiteral :st :node lex: ndNm.stringView
     }
     setl: result
     stampGate :st nid: node.nid.u64 tid: setl
     return result
+}
+
+# noteWideLiteral -- an integer literal the compile-time evaluator cannot hold.
+# Past u64 no type can take it yet, and it is refused here; a DECIMAL one past
+# i64 fits only a u64 slot, which checkWideLiterals settles once the walk has
+# typed where it lands. A hex, octal or binary literal spells bits, which an
+# i64 holds whatever their pattern. Nineteen characters is the shortest lexeme
+# either question can be asked of.
+noteWideLiteral: function {st: zenv.ZSymbolTable node: atomref lex: StringView} is {
+    if lex.length < 19 then return
+    if (ztypes.literalBeyondU64 numstr: lex) then {
+        (addErrorH
+            :st
+            nodeid: node.nid
+            lineno: node.lineno
+            colno: node.colno
+            e: zast.err.typeError
+            msg: (ztypes.rangeErr
+                value: lex
+                k: ztypes.numkind.u64Type
+                r: (ztypes.rangeOf k: ztypes.numkind.u64Type)
+            )
+            note: String
+            hint: "a literal is read in 64 bits".string
+            width: lex.length.u32.orPanic
+        )
+        return
+    }
+    if (isDecimalLexeme :lex).not then return
+    if (ztypes.literalBeyondI64 numstr: lex).not then return
+    st.typing.wideLiteralNodes.append from: node.nid.u64
+    st.typing.wideLiteralMonos.append from: st.typing.curMonoStamp
+}
+
+# isDecimalLexeme -- the integer lexeme is written in decimal: no `0x`, `0o`,
+# `0b` or `0c` prefix after its sign.
+isDecimalLexeme: function {lex: StringView} out bool is {
+    b: u64
+    if lex.startsWith "-" then b = 1
+    if ((lex.byteAt i: b).or d: 0) != 48 then return true
+    c: (lex.byteAt i: b + 1).or d: 0
+    return c < 65
+}
+
+# checkWideLiterals -- each decimal literal past i64 (noteWideLiteral), settled
+# against the type its walk gave it, as any literal at a typed destination is:
+# a u64 slot takes a value up to u64's maximum, and an untyped literal is an
+# i64. A literal typed by a generic parameter is its instances' to settle.
+checkWideLiterals: function {ast: Ast.view st: zenv.ZSymbolTable} is {
+    i: u64
+    for i < st.typing.wideLiteralNodes.length loop {
+        nid: st.typing.wideLiteralNodes.get :i
+        t: st.typing.nodeTypeIn mono: (st.typing.wideLiteralMonos.get :i) :nid
+        i = i + 1
+        if (st.reg.typetypeOf typeId: t) != ztypes.ztypetype.genericParam then {
+            tn: wideLiteralTarget :st :t
+            ln: ast.nodes.get i: nid
+            reportWideLiteral :st :ast n: ln target: tn.stringView
+        }
+    }
+}
+
+# wideLiteralTarget -- the numeric type a literal stamped `t` lands in: its
+# typedef's base, or i64 for a literal nothing typed.
+wideLiteralTarget: function {st: zenv.ZSymbolTable.view t: ztypes.tid} out String is {
+    if t.isZero or (t == st.reg.literalIntTid) then return "i64".string
+    b: t
+    for (typedefBaseTidOf :st tid: b).isZero.not loop {
+        b = typedefBaseTidOf :st tid: b
+    }
+    return (st.reg.nameOf tid: b)
+}
+
+# reportWideLiteral -- the literal at `n` against the type it lands in, reported
+# where it is written when it does not fit.
+reportWideLiteral: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    n: astnode.view
+    target: StringView
+} is {
+    lex: zast.nameTextAt :ast ref: (atomNameId :ast :n)
+    m: literalFitsMessage lit: lex.stringView :target
+    if m.length == 0 then return
+    h: String
+    tk: ztypes.numkindByName name: target
+    if tk.has when tk.kind.i64Type when (lex.stringView.startsWith "-").not then {
+        h = "an i64 cannot hold it: write `\{lex}.u64` where a u64 is meant"
+    }
+    (addErrorH
+        :st
+        nodeid: (nodeId :n)
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.typeError
+        msg: m
+        note: String
+        hint: h
+        width: lex.length.u32.orPanic
+    )
 }
 
 # checkAtomid -- type a bare name: a scope entry (break/continue diverge),
@@ -35889,6 +36030,9 @@ checkReturnTypeMatch: function {
             lineno: arg.lineno
             colno: arg.colno
         )
+        # a returned literal is the declared type, as an argument is its
+        # parameter's
+        if (isLiteralTypeId :st tid: argT) then stampGate :st nid: arg.operation.u64 tid: expR
         return
     }
     if (typesCompatible :ast :st a: argT b: expR) then return
@@ -48108,6 +48252,7 @@ resolveConstantMember: function {
     ) then constFailClear :st
     reportPendingConstFail :st
     if cvv.kind.none then reportMissingQualifiedMember :st :frame :ast :defnId
+    if cvv.kind.none then refuseWideConstant :st :ast :defnId
     if cvv.kind.none when (isComputedConstantDef :ast nid: defnId) then {
         (diagnoseUnfoldedConstant
             :st
@@ -48118,6 +48263,35 @@ resolveConstantMember: function {
             :defnId
         )
     }
+}
+
+# refuseWideConstant -- a unit constant written as an integer literal, bare or
+# converted (`1.u64`), whose value lies outside i64: the compile-time evaluator
+# holds an i64, so the definition has no value -- and a definition without one
+# would be spelled as its type.
+refuseWideConstant: function {st: zenv.ZSymbolTable ast: Ast.view defnId: zast.nodeid} is {
+    if defnId.isZero then return
+    litId: defnId
+    {
+        dn: ast.nodes.get i: defnId.u64
+        if dn.dottedpath then litId = dn.parent
+    }
+    ln: ast.nodes.get i: litId.u64
+    nm: atomNameId :ast n: ln
+    if nm.isZero then return
+    if (isNumericLiteralNameAt :ast ref: nm).not then return
+    lex: zast.nameTextAt :ast ref: nm
+    if (ztypes.literalBeyondU64 numstr: lex.stringView) then return
+    if (ztypes.literalBeyondI64 numstr: lex.stringView).not then return
+    (reportConstError
+        :st
+        nodeid: (nodeId n: ln)
+        lineno: (nodeLine n: ln)
+        colno: (nodeCol n: ln)
+        width: lex.length.u32.orPanic
+        msg: "constant \{lex} is outside i64"
+        hint: "the compile-time evaluator works in i64; a constant beyond it has no value yet".string
+    )
 }
 
 # diagnoseUnfoldedConstant -- a unit-level definition built from an operator or
@@ -51076,6 +51250,7 @@ typecheck: function {
             unitDecl: canonUd9
         )
         checkAnyBounds ast: program :st
+        checkWideLiterals ast: program :st
         stampAliasValues :st ast: program
         stampGenericBounds :st ast: program
         stampGenericParams :st ast: program

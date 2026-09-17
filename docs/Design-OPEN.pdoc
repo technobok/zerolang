@@ -152,21 +152,41 @@ What is true today, measured rather than assumed:
 #ul:
   [#*: the compile-time value of an integer constant is an #~"i64" -- one signed
     slot on #~"cval" -- so a magnitude above #~"2^63-1" has nowhere to live. The
-    evaluator answers "not a constant" for it, and a definition that yields no
-    value is not one: it takes the ALIAS chase instead and is emitted as the name
-    of its own type. #~"k: 18446744073709551615" emits #~"i64" into the C.]
+    evaluator answers "not a constant" for it. A unit constant such as
+    #~"k: 18446744073709551615" is therefore refused (below) rather than
+    defined.]
   [#*: the limit is already admitted in a user-facing message -- the
     #~"constant integer operation overflows" hint reads "the compile-time
-    evaluator works in i64; this result does not fit" -- but it does not always
-    fire: #~"9223372036854775807 + 1" folds to #~"-9223372036854775808" silently.]
+    evaluator works in i64; this result does not fit". It is rendered only where
+    a value is REQUIRED. In a body, #~"9223372036854775807 + 1" is an
+    optimisation that did not fold: the operation reaches C, which wraps it as
+    #~"-fwrapv" defines (#~"const_fold_body_runtime" pins this).]
   [#*: #~"i128" and #~"u128" are real numeric types whose literals cannot express
-    their own range. #~"340282366920938463463374607431768211455.u128" evaluates
-    to #~"18446744073709551615" -- truncated to u64 -- with no diagnostic.]
+    their own range: every literal is read in 64 bits, so
+    #~"340282366920938463463374607431768211455.u128" is refused.]
   [#*: #~"examples/arbprec_constants.z" states that constant arithmetic folds at
     unbounded precision. It does not: #~"0xffffffffffffffff + 1 - 1" is not
     folded at all, it survives as C arithmetic text and agrees only because
     unsigned C wraps. Bound to a local it prints #~"-1". The example passes
     because the value is never observed.]
+
+#-----: until then: an unrepresentable literal is refused
+
+Until the evaluator is arbitrary precision, an integer literal that cannot be
+represented where it lands is an error, never a wrapped value:
+
+#ul:
+  [#*: a literal past u64's maximum is refused wherever it is written.]
+  [#*: a decimal literal past i64 -- above its maximum, or negated below its
+    minimum -- is accepted only where a slot wide enough takes it: a u64
+    parameter, target, comparison, return or #~".u64" conversion. An untyped
+    literal is an #~"i64", so #~"x: 18446744073709551615" is refused, and so is
+    the same literal as a field or parameter default. A hex, octal or binary
+    literal spells bits and is not asked this.]
+  [#*: a unit constant outside i64, whatever its radix or conversion, is
+    refused: "the compile-time evaluator works in i64".]
+  [#*: an accepted literal past i64 is written into the C with its #~"ULL"
+    suffix.]
 
 Widening the slot is not the answer. #~"i128" would move the wall rather than
 remove it, and the wall has to be somewhere a constant expression can reach:

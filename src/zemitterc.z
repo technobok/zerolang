@@ -635,6 +635,27 @@ numLitSuffix: function {name: StringView} out String is {
     return "".string
 }
 
+# literalDefaultC -- a literal default's C text: a decimal past i64 with its
+# unsigned suffix, a prefixed literal decoded, anything else as written.
+literalDefaultC: function {lex: StringView} out String is {
+    wl: wideLiteralC :lex
+    if wl.length > 0 then return wl
+    lc: literalC :lex
+    if lc.length > 0 then return lc
+    return lex.string
+}
+
+# wideLiteralC -- a decimal literal past i64 as C. The checker admits one only
+# where a u64 takes it, and C reads an unsuffixed one as a signed type it does
+# not fit. "" for any other text; a name is told apart by its first byte.
+wideLiteralC: function {lex: StringView} out String is {
+    if lex.length < 19 then return "".string
+    b0: (lex.byteAt i: 0).or d: 0
+    if b0 < 49 or (b0 > 57) then return "".string
+    if (ztypes.literalBeyondI64 numstr: lex).not then return "".string
+    return "\{lex}ULL"
+}
+
 # castLitVal -- val with the unsigned C suffix appended when it is a bare decimal
 # literal cast to an unsigned type, so large u64 constants don't warn as signed.
 castLitVal: function {val: StringView dstName: StringView} out String is {
@@ -10361,9 +10382,7 @@ renderDefault: function {
         if dl.literal then {
             if dl == 0 then return "".string
             lt: ztypecheck.rootNameOf :ast n: (ast.nodes.get i: dl.u64)
-            lc: literalC lex: lt.stringView
-            if lc.length > 0 then return lc
-            return lt
+            return (literalDefaultC lex: lt.stringView)
         }
     }
     {
@@ -14023,6 +14042,8 @@ emitAtom: function {
             return "/* zemitterc: unhandled numeric literal \{av} */0"
         }
     }
+    wl: wideLiteralC lex: av
+    if wl.length > 0 then return wl
     # stamped variable use first: the local, alias-resolved and C-mangled
     # -- a stamped atom is a LOCAL, so the module-constant probe (an owned
     # key alloc + hash) never runs for it

@@ -1145,7 +1145,13 @@ perf: $(PERFBIN)
 # +3,103 when a parameter a call leaves out came to be its declared default
 # whatever declares it: +1,417 over the same source (every generic clone copies
 # its parameters' defaults), about +1,690 the source longer.
-ALLOC_BASELINE := 2916667
+#
+# +8,549 when an integer literal that cannot be represented where it lands
+# came to be refused: +54 over the same source (each literal of nineteen
+# characters or more is read for its width), about +8,500 the source longer (a
+# first cut kept the wide literals in a `ListVal monostamp`, which the compiler
+# then instantiates for itself: +1,900 more).
+ALLOC_BASELINE := 2925216
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

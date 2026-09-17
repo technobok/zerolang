@@ -39,6 +39,8 @@ public: unit {
     :negativeLiteralFits
     :numkindByName
     :parseLiteralValue
+    :literalBeyondI64
+    :literalBeyondU64
     :deftarget
     :noDefTarget
     :parseNumber
@@ -698,6 +700,8 @@ ParsedNumber: class {
     fval: f64
     # why the parse failed, empty when it did not
     err: String
+    # the magnitude passed u64, so `ival` holds nothing
+    beyond: false
 }
 
 # A protocol/facet conformance: an impl type satisfying a spec type
@@ -2387,7 +2391,11 @@ negativeLiteralFits: function {lit: StringView target: StringView} out String is
     if r9n.has.not then return "".string
     mag9n: lit.substring from: 1 to: lit.length
     pn9n: parseNumber numstr: mag9n
-    if pn9n.err.length > 0 then return pn9n.err.copy
+    # the magnitude is read as an i64 and may pass it: the bound below is the
+    # sign-aware one, so only an unreadable magnitude answers here
+    if pn9n.beyond then return (rangeErr value: lit k: k9n.kind r: r9n)
+    if pn9n.err.length > 0 when (pn9n.err.stringView.contains "out of range"
+    ).not then return pn9n.err.copy
     signed9n: r9n.loText.stringView.startsWith "-"
     if signed9n.not then return (rangeErr value: lit k: k9n.kind r: r9n)
     if pn9n.ival > (r9n.hi + 1) then return (rangeErr value: lit k: k9n.kind r: r9n)
@@ -2451,14 +2459,25 @@ floatLiteralNumber: function {numstr: StringView kind: numkind base: u64} out Pa
     }
 }
 
-# digitsRadix -- the digits of `numstr` from `startIdx` accumulated in `base`,
-# or none when any of them is not a digit of that base. `_` is a separator and
-# carries no value. The scan stops at the first bad digit: the answer past it
-# is the same error either way.
-digitsRadix: function {
-    numstr: StringView startIdx: u64 coreLen: u64 base: u64
-} out optionval u64 is {
+# digitscan -- what reading a literal's digits found.
+digitscan: record {
+    # the value the digits spell; meaningful only when neither flag is set
+    value: u64
+    # a byte that is not a digit of the base
+    bad: bool
+    # the value is above u64's range, where a literal's magnitude is read
+    over: bool
+}
+
+# digitsRadix -- the digits of `numstr` from `startIdx` accumulated in `base`.
+# `_` is a separator and carries no value. The scan stops at the first bad
+# digit: the answer past it is the same error either way. A value that passes
+# u64 is reported as such rather than wrapped, and the scan goes on to find a
+# bad digit, which is the report that wins.
+digitsRadix: function {numstr: StringView startIdx: u64 coreLen: u64 base: u64} out digitscan is {
     acc: u64
+    over: false
+    umax: 18446744073709551615.u64
     ii: startIdx
     for ii < coreLen loop {
         ib: (numstr.byteAt ii).or d: 0.u8
@@ -2468,13 +2487,14 @@ digitsRadix: function {
         match (
             dvo
         ) case some then {
-            if dvo >= base then return (optionval.none u64)
-            acc = acc * base + dvo
+            if dvo >= base then return (digitscan value: 0 bad: true :over)
+            if acc > (umax - dvo / base) then over = true
+            if over.not then acc = acc * base + dvo
         } case none then {
-            return (optionval.none u64)
+            return (digitscan value: 0 bad: true :over)
         }
     }
-    return (optionval.some acc)
+    return (digitscan value: acc bad: false :over)
 }
 
 # Parse a numeric literal lexeme into (kind, value, error) against an
@@ -2510,7 +2530,7 @@ parseNumberWith: function {numstr: StringView hasK: bool k: numkind} out ParsedN
     if r.isChar then return (charLiteralNumber :numstr :kind :coreLen)
     if isFloatKind kind then return (floatLiteralNumber :numstr :kind base: r.base)
     dv: digitsRadix :numstr startIdx: r.startIdx :coreLen base: r.base
-    if dv.none then {
+    if dv.bad then {
         return (ParsedNumber
             :kind
             isFloat: false
@@ -2519,7 +2539,40 @@ parseNumberWith: function {numstr: StringView hasK: bool k: numkind} out ParsedN
             err: "Invalid numeric literal: ".concat numstr
         )
     }
-    return (inRangeNumber value: dv :kind)
+    if dv.over then return (beyondU64Number :numstr :kind)
+    return (inRangeNumber value: dv.value :kind)
+}
+
+# beyondU64Number -- a literal whose magnitude passes u64, where every literal
+# is read: out of range for u64, whatever the target, until constants are
+# arbitrary precision.
+beyondU64Number: function {numstr: StringView kind: numkind} out ParsedNumber is {
+    em: rangeErr value: numstr k: numkind.u64Type r: (rangeOf k: numkind.u64Type)
+    return (ParsedNumber :kind isFloat: false ival: 0 fval: 0.0 err: em beyond: true)
+}
+
+# literalBeyondU64 -- the integer literal's magnitude (its sign aside) passes
+# u64, so no type can take it yet.
+literalBeyondU64: function {numstr: StringView} out bool is {
+    return (parseNumber numstr: (literalMagnitude :numstr)).beyond
+}
+
+# literalBeyondI64 -- the integer literal parses, and its value lies outside
+# i64: a magnitude above i64's maximum, or, negated, below its minimum. Only a
+# u64 (or wider) slot can take it; the compile-time evaluator cannot hold it.
+literalBeyondI64: function {numstr: StringView} out bool is {
+    p: parseNumber numstr: (literalMagnitude :numstr)
+    if p.err.length > 0 when (p.err.stringView.contains "out of range").not then return false
+    if p.isFloat or p.beyond then return p.beyond
+    imax: 9223372036854775807.u64
+    if numstr.startsWith "-" then return p.ival > (imax + 1)
+    return p.ival > imax
+}
+
+# literalMagnitude -- a numeric lexeme without its sign.
+literalMagnitude: function {numstr: StringView} outx StringView is {
+    if numstr.startsWith "-" then return (numstr.substring from: 1 to: numstr.length)
+    return numstr
 }
 
 # Parse a numeric literal lexeme into (kind, value, error); the kind
@@ -2540,6 +2593,8 @@ parseNumberAs: function {numstr: StringView k: numkind} out ParsedNumber is {
 # ok=false only for an unparseable lexeme.
 parseLiteralValue: function {numstr: StringView} out parsedval is {
     p: parseNumber numstr
+    # a magnitude past u64 has no value to flow anywhere
+    if p.beyond then return (parsedval ok: false isFloat: false ival: 0 fval: 0.0)
     hasErr: p.err.length > 0
     if hasErr when p.ival == 0 when (p.err.stringView.contains "out of range").not then {
         return (parsedval ok: false isFloat: false ival: 0 fval: 0.0)

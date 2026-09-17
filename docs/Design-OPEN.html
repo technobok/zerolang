@@ -208,21 +208,39 @@ lattice cannot name a value the evaluator cannot carry.</p>
 <ul>
 <li>the compile-time value of an integer constant is an <code>i64</code> -- one signed
     slot on <code>cval</code> -- so a magnitude above <code>2^63-1</code> has nowhere to live. The
-    evaluator answers "not a constant" for it, and a definition that yields no
-    value is not one: it takes the ALIAS chase instead and is emitted as the name
-    of its own type. <code>k: 18446744073709551615</code> emits <code>i64</code> into the C.</li>
+    evaluator answers "not a constant" for it. A unit constant such as
+    <code>k: 18446744073709551615</code> is therefore refused (below) rather than
+    defined.</li>
 <li>the limit is already admitted in a user-facing message -- the
     <code>constant integer operation overflows</code> hint reads "the compile-time
-    evaluator works in i64; this result does not fit" -- but it does not always
-    fire: <code>9223372036854775807 + 1</code> folds to <code>-9223372036854775808</code> silently.</li>
+    evaluator works in i64; this result does not fit". It is rendered only where
+    a value is REQUIRED. In a body, <code>9223372036854775807 + 1</code> is an
+    optimisation that did not fold: the operation reaches C, which wraps it as
+    <code>-fwrapv</code> defines (<code>const_fold_body_runtime</code> pins this).</li>
 <li><code>i128</code> and <code>u128</code> are real numeric types whose literals cannot express
-their own range. <code>340282366920938463463374607431768211455.u128</code> evaluates
-to <code>18446744073709551615</code> -- truncated to u64 -- with no diagnostic.</li>
+their own range: every literal is read in 64 bits, so
+<code>340282366920938463463374607431768211455.u128</code> is refused.</li>
 <li><code>examples/arbprec_constants.z</code> states that constant arithmetic folds at
 unbounded precision. It does not: <code>0xffffffffffffffff + 1 - 1</code> is not
 folded at all, it survives as C arithmetic text and agrees only because
 unsigned C wraps. Bound to a local it prints <code>-1</code>. The example passes
 because the value is never observed.</li>
+</ul>
+<h5 id="until-then-an-unrepresentable-literal-is-refused">until then: an unrepresentable literal is refused</h5>
+<p>Until the evaluator is arbitrary precision, an integer literal that cannot be
+represented where it lands is an error, never a wrapped value:</p>
+<ul>
+<li>a literal past u64's maximum is refused wherever it is written.</li>
+<li>a decimal literal past i64 -- above its maximum, or negated below its
+    minimum -- is accepted only where a slot wide enough takes it: a u64
+    parameter, target, comparison, return or <code>.u64</code> conversion. An untyped
+    literal is an <code>i64</code>, so <code>x: 18446744073709551615</code> is refused, and so is
+    the same literal as a field or parameter default. A hex, octal or binary
+    literal spells bits and is not asked this.</li>
+<li>a unit constant outside i64, whatever its radix or conversion, is
+    refused: "the compile-time evaluator works in i64".</li>
+<li>an accepted literal past i64 is written into the C with its <code>ULL</code>
+    suffix.</li>
 </ul>
 <p>Widening the slot is not the answer. <code>i128</code> would move the wall rather than
 remove it, and the wall has to be somewhere a constant expression can reach:
