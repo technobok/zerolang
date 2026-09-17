@@ -17842,6 +17842,16 @@ cloneMethodParams: function {
     }
 }
 
+# returnNamesSelf -- a return typeref that names the type declaring the method:
+# `this`, or the type's own name, bare or marked.
+returnNamesSelf: function {ast: Ast.view nid: u64 templateName: StringView} out bool is {
+    bid: rootNameIdOf :ast n: (ast.nodes.get i: nid)
+    if bid.isZero then return false
+    if bid == zast.names.wkThis then return true
+    bt: zast.nameTextAt :ast ref: bid
+    return bt.stringView == templateName
+}
+
 # cloneMethodReturn -- the clone's return type: the template's, with the
 # specialisation's arguments substituted. A composite return that still mentions a
 # generic parameter respecializes rather than being copied through.
@@ -17876,6 +17886,12 @@ cloneMethodReturn: function {
             nt5: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rn5
             if nt5 > 0 then rto5 = ztypes.tid.create from: nt5
         }
+        # an instance minted before the template's returns resolved (through
+        # an alias) still knows a return that names the type itself
+        if rto5.isZero when rn5 > 0 when (returnNamesSelf :ast nid: rn5 :templateName) then {
+            st.reg.setReturnType typeId: fid5 value: specId
+            return
+        }
     }
     if rto5 > 0 then {
         rt5: rto5
@@ -17901,6 +17917,21 @@ cloneMethodReturn: function {
         if (st.reg.typetypeOf typeId: rt5) != ztypes.ztypetype.genericParam then {
             st.reg.setReturnType typeId: fid5 value: rt5
         }
+    }
+}
+
+# cloneParamDefaults -- the defaults the template method's parameters carry,
+# copied onto its clone's parameters of the same names.
+cloneParamDefaults: function {
+    st: zenv.ZSymbolTable
+    from: u64
+    to: ztypes.tid
+    names: (ListVal u64).view
+} is {
+    with dit: names.iterate do for dn: dit loop {
+        dnid: zast.nameid.create from: dn.u32.orPanic
+        dft: st.typing.declDefaultOfId parentTypeId: (ztypes.tid.create :from) nameId: dnid
+        if dft.none.not then st.typing.declSetDefaultId parentTypeId: to nameId: dnid value: dft
     }
 }
 
@@ -18029,6 +18060,9 @@ cloneMethodInto: function {
         :tplClassId
         tpn0: tpn0.stringView
     )
+    # a `create`'s parameter defaults: a construction fills them from the
+    # clone (a method call on an instance does not fill defaults yet)
+    if m == "create" then cloneParamDefaults :st from: tplFnId to: fid5 names: cNid5
     (cloneMethodReturn
         :ast
         :st
@@ -18164,7 +18198,12 @@ cloneGenericMemberInto: function {
     idSubs: (IdMapV u64 v: u64)
 } out bool is {
     deep5: false
-    isSynth: chName == "create" or (chName == "borrow")
+    # a `create` the template writes is cloned like any method; the synthesised
+    # one is the instance's own (mintMonoRecordShape)
+    isSynth: chName == "borrow"
+    if chName == "create" then {
+        isSynth = st.typing.declMemberIsSynth parentTypeId: templateId nameId: zast.names.wkCreate
+    }
     # a list's `contains`, `==`, `!=` and `sort` exist on every instance and
     # are checked where they are called (refuseListMemberWithoutElemOp)
     if isSynth.not then {
@@ -18185,9 +18224,9 @@ cloneGenericMemberInto: function {
 }
 
 # copyMemberMarkers -- a marker belongs to the MEMBER, and every use site asks
-# the INSTANCE about it, so ownership and lock-field marks are copied from the
-# template's member onto the mono's. True when the member's own type gives the
-# mono a destructor.
+# the INSTANCE about it, so ownership and lock-field marks and the default are
+# copied from the template's member onto the mono's. True when the member's own
+# type gives the mono a destructor.
 copyMemberMarkers: function {
     ast: Ast.view
     st: zenv.ZSymbolTable
@@ -18197,13 +18236,21 @@ copyMemberMarkers: function {
     target: u64
 } out bool is {
     monoNeedsDtor: false
+    chNameId: zast.poolFind pool: ast.names text: chName
     # A marker belongs to the MEMBER, and every use site asks the
     # INSTANCE type about it -- so it has to be copied onto the clone
     # or it is enforced on the template alone, which nothing checks.
-    cho: (st.typing.declOwnershipOfId
-        parentTypeId: templateId
-        nameId: (zast.poolFind pool: ast.names text: chName)
-    )
+    # So does a default: a field the template gives one is optional in
+    # every instance's construction.
+    cho: st.typing.declOwnershipOfId parentTypeId: templateId nameId: chNameId
+    dft: st.typing.declDefaultOfId parentTypeId: templateId nameId: chNameId
+    if dft.none.not then {
+        (st.typing.declSetDefaultId
+            parentTypeId: (ztypes.tid.create from: mid.u64)
+            nameId: chNameId
+            value: dft
+        )
+    }
     match (
         cho
     ) case some then {
@@ -18395,10 +18442,11 @@ mintMonoMember: function {
     return monoNeedsDtor
 }
 
-# mintMonoRecordShape -- give a monomorphised RECORD the shape its template
-# declares: the ordinal arms of a variant-like record, the tag width, and the
-# per-instance constructor the emitter fills. A numeric generic parameter is
-# no field of it: its value is a constant the mono records.
+# mintMonoRecordShape -- give a monomorphised user RECORD or CLASS the
+# field-wise constructor its template does not write, which the emitter fills
+# as it fills a plain type's. A `create` the template writes was cloned onto the
+# instance already and is kept. A numeric generic parameter is no field of it:
+# its value is a constant the mono records.
 mintMonoRecordShape: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -18407,13 +18455,18 @@ mintMonoRecordShape: function {
     mid: u64
     tt: ztypes.ztypetype
 } is {
-    if tt == ztypes.ztypetype.recordType then {
+    isUserClass: tt == ztypes.ztypetype.classType and (st.reg.isNativeOf tid: templateId).not
+    if tt == ztypes.ztypetype.recordType or isUserClass then {
         isSized: (
             templateId ==
             (builtinTidT :st frame: rf :ast base: "str") or
             (templateId == (builtinTidT :st frame: rf :ast base: "array"))
         )
-        if isSized.not then {
+        written: (st.typing.declChildOfId
+            parentTypeId: (ztypes.tid.create from: mid.u64)
+            nameId: zast.names.wkCreate
+        ).some
+        if isSized.not when written.not then {
             crId: (st.reg.newType
                 name: "create"
                 ownerTid: mid
@@ -18429,6 +18482,7 @@ mintMonoRecordShape: function {
                 nameId: zast.names.wkCreate
                 childTypeId: crId
             )
+            materializeCreateParams :st frame: rf :ast typeTid: mid createId: crId.u64
         }
     }
 }
@@ -34365,6 +34419,9 @@ walkOneCallArg: function {
                 :arg
             )
         }
+        # a label naming the template's own parameter supplies that parameter,
+        # not one of the constructor's
+        if isCtor when (ctorArgNamesTemplateParam :st tplId: funcId :arg) then return
         (checkTypedCallArg
             :st
             :ast
@@ -34382,6 +34439,19 @@ walkOneCallArg: function {
             :arg
         )
     }
+}
+
+# ctorArgNamesTemplateParam -- a construction argument whose label names a
+# generic parameter, type or numeric, of the template being built.
+ctorArgNamesTemplateParam: function {
+    st: zenv.ZSymbolTable.view
+    tplId: ztypes.tid
+    arg: argref
+} out bool is {
+    if arg.name.isZero then return false
+    og: st.reg.genericOriginOf tid: tplId
+    if og.isZero then return false
+    return (st.reg.isGenericParamOf tdecl: (declOfTypeId :st tid: og) name: arg.name)
 }
 
 # ctorArgIsTypeArg -- a construction argument whose label names a type

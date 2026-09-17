@@ -10057,7 +10057,19 @@ userCreateCallC: function {
                 :ord
             )
         } else {
-            orderSetSlot :ctx st: ord slot: pi text: "0".string
+            (orderSetSlot
+                :ctx
+                st: ord
+                slot: pi
+                text: (createParamDefaultText
+                    :ast
+                    :symtab
+                    :ctx
+                    cco: fid
+                    nameId: (pidsNm.get i: pi)
+                    pid: (pids.get i: pi)
+                )
+            )
         }
     }
     orderDropPositions :ctx base: wbase
@@ -10138,6 +10150,18 @@ emitQualRecvMethodCall: function {
     )
 }
 
+# callKindIsCreate -- the checker stamped call `nid` as the construction of a
+# user record or class.
+callKindIsCreate: function {symtab: zenv.ZSymbolTable.view nid: u64} out bool is {
+    ck: symtab.typing.callKind.get key: nid
+    match (
+        ck
+    ) case some then {
+        return ck == zast.callkind.recordCreate or (ck == zast.callkind.classCreate)
+    } case none then null
+    return false
+}
+
 # emitTypeQualCall -- `point.add a: x b: y`: a dotted callee whose base
 # resolves to a record type and whose member is a FUNCTION child; args
 # reorder to the method's param order by label.
@@ -10159,6 +10183,12 @@ emitTypeQualCall: function {
             :symtab
             nid: (interpPartNodeId n: (ast.nodes.get i: cq.parent.u64))
         )
+    }
+    # a type written as an application (`(Pair t: u64).create`) has no bare
+    # name either: the checker stamped the construction with the instance
+    isCreate: mn == "create"
+    if btid.isZero when isCreate when (callKindIsCreate :symtab nid: call.nodeid.u64) then {
+        btid = stampIdOf :symtab nid: call.nodeid.u64
     }
     if btid.isZero then return "".string
     bttq: symtab.reg.typetypeOf typeId: btid
@@ -10182,10 +10212,10 @@ emitTypeQualCall: function {
     # a synthesized `create` (no body) has field-shaped params but no emitted
     # create fn -- route it to the type's field-wise ctor, the path bare-name
     # construction uses; a user create (a body) is called.
-    if mn == "create" when (symtab.typing.funcReturnNode.has key: mtid).not then {
+    if isCreate when (symtab.typing.funcReturnNode.has key: mtid).not then {
         return (emitRecordCtor :ast :symtab :ctx :call tid: btid)
     }
-    if mn == "create" then {
+    if isCreate then {
         return (userCreateCallC :ast :symtab :ctx :call fid: mtid)
     }
     return (emitQualRecvMethodCall :ast :symtab :ctx :call :mtid)
@@ -10445,16 +10475,16 @@ createParamDefaultText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    # the constructed type, which owns the defaults
-    tid: ztypes.tid
+    # the user create, whose parameters own their defaults
+    cco: ztypes.tid
     # the parameter's name id (a raw pool index)
     nameId: u64
     # the parameter's type
     pid: u64
 } out String is {
     nm: zast.nameid.create from: nameId.u32.orPanic
-    if (symtab.typing.declHasDefaultId parentTypeId: tid nameId: nm).not then return "0".string
-    cdt: symtab.typing.declDefaultOfId parentTypeId: tid nameId: nm
+    if (symtab.typing.declHasDefaultId parentTypeId: cco nameId: nm).not then return "0".string
+    cdt: symtab.typing.declDefaultOfId parentTypeId: cco nameId: nm
     return (renderDefault :ast :symtab :ctx dv: cdt targetTid: (ztypes.tid.create from: pid.u64))
 }
 
@@ -10506,7 +10536,7 @@ emitCtorDefaultsFill: function {
                 :ast
                 :symtab
                 :ctx
-                :tid
+                :cco
                 nameId: (cpiNm.get i: ci)
                 pid: (cpi.get i: ci)
             )
@@ -10544,8 +10574,6 @@ createArgText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    # the constructed type
-    tid: ztypes.tid
     # the user create
     cco: ztypes.tid
     # the argument the parameter binds
@@ -10556,7 +10584,7 @@ createArgText: function {
     pid: u64
     pname: StringView
 } out String is {
-    if ca.nid == 0 then return (createParamDefaultText :ast :symtab :ctx :tid :nameId :pid)
+    if ca.nid == 0 then return (createParamDefaultText :ast :symtab :ctx :cco :nameId :pid)
     return (userFnArgText
         :ast
         :symtab
@@ -10599,7 +10627,6 @@ userCreateCtor: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
-    tid: ztypes.tid
     cco: ztypes.tid
 } out String is {
     cpn: List String
@@ -10625,7 +10652,6 @@ userCreateCtor: function {
             :ast
             :symtab
             :ctx
-            :tid
             :cco
             :ca
             nameId: (cpiNm.get i: ci)
@@ -10679,7 +10705,7 @@ emitRecordCtor: function {
     tid: ztypes.tid
 } out String is {
     cco: userCreateFn :symtab :tid
-    if cco.isZero.not then return (userCreateCtor :ast :symtab :ctx :call :tid :cco)
+    if cco.isZero.not then return (userCreateCtor :ast :symtab :ctx :call :cco)
     fnames: List String
     fids: ListVal u64
     fidsNm: ListVal u64
