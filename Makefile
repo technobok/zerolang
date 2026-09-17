@@ -1108,7 +1108,12 @@ perf: $(PERFBIN)
 # +1,361 when an optionval/resultval came to carry an instance and an arm's
 # uninferred parameter was refused: the same source compiles with the same
 # count, all of it is the source longer.
-ALLOC_BASELINE := 2888710
+#
+# +2,749 when a sum over a generic parameter came to be matched and narrowed
+# in its generic body: the same source compiles with the same count, all of it
+# is the source longer (a first cut compared two tids with `!=` and cost
+# +9,758 -- N33).
+ALLOC_BASELINE := 2891459
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

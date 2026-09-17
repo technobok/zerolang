@@ -1,0 +1,94 @@
+# A SUM OVER A GENERIC PARAMETER IS A SUM IN THE GENERIC BODY. An `optionval_t`
+# built in a generic function or unit is matched, tested with `.some`, guarded
+# and narrowed like any optionval: its arms are its template's, and an arm the
+# template types by its own parameter carries the body's argument for it. It
+# used to be refused as "match subject must be a union, variant, or generic
+# parameter" and its predicate typed as the payload.
+pick: variant {
+    one: t
+    none: null
+} as { t: anyval.generic }
+
+wrap: function as { t: anyval.generic } in { v: t } out bool is {
+    o: optionval.some v
+    match o case some then return true case none then return false
+}
+
+held: function as { t: anyval.generic } in { o: (optionval t: t) } out bool is {
+    match o case some then return true case none then return false
+}
+
+tested: function as { t: anyval.generic } in { v: t } out bool is {
+    o: (optionval t: t).some v
+    if o.some then return true
+    return false
+}
+
+said: function as { t: anyval.generic } in { v: t } out bool is {
+    o: optionval.some v
+    return o.some
+}
+
+first: function as { t: anyval.generic } in { v: t d: t } out t is {
+    o: optionval.some v
+    match o case some then return o case none then return d
+}
+
+counted: function as { t: anyval.generic } in { v: t } out i64 is {
+    o: optionval.some v
+    k: match o case some then 1 case none then 0
+    match o case none then return 0 else return k + 10
+}
+
+guarded: function as { t: anyval.generic } in { v: t d: t } out t is {
+    o: optionval.some v
+    if o.none then return d
+    return o
+}
+
+nested: function as { t: anyval.generic } in { v: t } out bool is {
+    o: optionval.some (optionval.some v)
+    match o case some then return o.some case none then return false
+}
+
+named: function as { T: AnyRef.generic } in { v: T.take } out String is {
+    o: Option.some v
+    match o case some then return "some".string case none then return "none".string
+}
+
+twice: function as { t: anyval.generic } in { v: t } out t is {
+    o: (pick t: t).one v
+    match o case one then return o + o case none then return v
+}
+
+errOf: function as { t: anyval.generic } in { v: t } out bool is {
+    r: (resultval t: t e: bool).ok v
+    if r.ok then return true
+    return r
+}
+
+checks: unit as {
+    t: anyval.generic
+    firstOr: function {v: t d: t} out t is {
+        o: optionval.some v
+        if o.none then return d
+        return o
+    }
+    kind: function {v: t} out i64 is {
+        o: optionval.some v
+        match o case some then return 1 case none then return 0
+    }
+}
+
+ci: (checks t: i64)
+cf: (checks t: f64)
+
+main: function is {
+    print "\{wrap t: i64 v: 5} \{wrap t: f64 v: 1.0} \{wrap t: u8 v: 5}"
+    print "\{held t: i64 o: (optionval.some 5)} \{tested t: i64 v: 5} \{said t: u8 v: 1}"
+    print "\{first t: i64 v: 5 d: 0} \{first t: f64 v: 2.5 d: 0.0} \{counted t: u8 v: 5}"
+    print "\{guarded t: i64 v: 7 d: 0} \{nested t: i64 v: 5} \{twice t: i64 v: 21}"
+    print (named T: String v: "x".string)
+    print "\{errOf t: i64 v: 1}"
+    print "\{ci.firstOr v: 3 d: 0} \{cf.firstOr v: 1.5 d: 0.0} \{ci.kind v: 2} \{cf.kind v: 2.0}"
+}

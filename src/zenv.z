@@ -199,7 +199,12 @@ sumArmNameIds: function {
     tid: ztypes.tid
     ids: ListVal u64
 } is {
+    # a partial carries no rows of its own: its template's arms are its arms
     ot8: ztypes.tid.create from: tid.u64
+    if (reg.isPartialOf :tid) then {
+        po8: reg.genericOriginOf :tid
+        if po8.isZero.not then ot8 = po8
+    }
     i8: u64
     n8: ty.declRowSlots ownerTid: ot8
     for i8 < n8 loop {
@@ -401,6 +406,10 @@ ZSymbolTable: class {
     # the generic-parameter answers a TEMPLATE walk keeps out of the shared stamp
     # table, by node, so that walk can still read what it just checked
     templateStamps: (IdMapV u64 v: ztypes.tid)
+    # the arm predicates a TEMPLATE walk found on a partial (`o.some` on an
+    # `optionval_t`), by node: the if-narrowing reads them there, and the shared
+    # dpArmPredicate the emitter reads keeps each instance's own
+    templateArmPreds: (IdMapV u64 v: ztypes.tid)
     # dump scaffolding: a frame's label ("function:x", "if_branch", ...), the
     # frames a diagnostics-only template walk opened (kept out of the dump),
     # and the rows snapshotted when a frame closed
@@ -2180,6 +2189,7 @@ newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} o
         movedArgDepths: ListVal u64
         movedReadInBase: false
         templateStamps: (IdMapV u64 v: ztypes.tid)
+        templateArmPreds: (IdMapV u64 v: ztypes.tid)
         frameLabel: (IdMapR u64 V: String)
         frameHidden: IdSet u64
         entryDump: List ZEntryDumpRow

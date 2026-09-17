@@ -23501,6 +23501,20 @@ checkTaggedMemberPath: function {
                 isgeneric9v: st.reg.isGenericOf tid: bt
                 if isgeneric9v then gtpl = true
             }
+            # a value whose type is a partial of the template (`optionval_t` in
+            # a generic body) tests its arm as any value does; each instance
+            # walk stamps the concrete predicate the emitter reads
+            ptb: walkTypeOf :st nid: dp.parent.u64
+            if isArm when gtpl when (st.reg.isPartialOf tid: ptb) then {
+                pbool: ((walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: "bool").or
+                    d: 0
+                )
+                if pbool > 0 then {
+                    st.templateArmPreds.set key: dp.nid.u64 value: ptb
+                    stampGate :st nid: dp.nid.u64 tid: (ztypes.tid.create from: pbool.u64)
+                    return (callleg handled: true tid: (ztypes.tid.create from: pbool))
+                }
+            }
             if isArm when gtpl.not then {
                 boolId: ((walkLookupTyperef
                     :st
@@ -26726,6 +26740,10 @@ predDottedCore: function {
     negated: bool
 } out Option ArmPredFact is {
     ptid: (st.typing.dpArmPredicate.get key: nid).or d: ztypes.tid
+    # a template walk reads its own, which a partial's predicate is kept in
+    if st.typing.suppressParamStamps when st.typing.curMonoStamp == 0 then {
+        ptid = (st.templateArmPreds.get key: nid).or d: ptid
+    }
     if ptid.isZero then return (Option.none ArmPredFact)
     if ptid.u64 == boolId then return (Option.none ArmPredFact)
     sn: bareAtomNameId n: parent
@@ -26948,10 +26966,7 @@ shadowCollapseIfSingle: function {
 } is {
     arm: st.narrowedArmOf nameId: name fullTypeId: fullTid
     if arm.isZero then return
-    po: (st.typing.declChildOfId
-        parentTypeId: (ztypes.tid.create from: fullTid.u64)
-        nameId: arm
-    )
+    po: sumArmTid :st sumTid: (ztypes.tid.create from: fullTid.u64) armId: arm
     match (
         po
     ) case some then {
@@ -26985,10 +27000,7 @@ shadowCollapseIfSingle: function {
 applyPredFact: function {ast: Ast.view st: zenv.ZSymbolTable f: ArmPredFact.view holds: bool} is {
     doNarrow: holds != f.negated
     if doNarrow then {
-        po: (st.typing.declChildOfId
-            parentTypeId: f.fullTid
-            nameId: f.armName
-        )
+        po: sumArmTid :st sumTid: f.fullTid armId: f.armName
         match (
             po
         ) case some then {
@@ -27028,6 +27040,17 @@ postGuardRecord: function {
     fullTid: ztypes.tid
 } is {
     if (st.isShadowNarrowed nameId: subject).not then return
+    # the emitter reads these per statement, so each instance walk records its
+    # own; a template walk's partial names no type the emitter writes. A
+    # template walk after them (a generic unit's) re-binds the name, so the
+    # variable it names is the one the emitter will find.
+    if (st.reg.isPartialOf tid: fullTid) then {
+        if (st.typing.postGuardTid.has key: stmtNid.u64) then {
+            pgt: (st.lookupVarId nameId: subject).or d: (ztypes.vid.create from: 0)
+            st.typing.postGuardVarId.set key: stmtNid.u64 value: pgt
+        }
+        return
+    }
     arm: st.getSubtypeName nameId: subject
     if arm.isZero then return
     po: (st.typing.declChildOfId
@@ -36040,6 +36063,28 @@ mintSumArmInstance: function {
     return (callleg handled: false tid: ztypes.tid)
 }
 
+# writtenPartialBase -- the partial of template `dtp` that an arm construction's
+# base application names (`(resultval t: t e: bool)` in a generic body); 0 when
+# the base is no application or its type is no such partial.
+writtenPartialBase: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    call: callref
+    dtp: u64
+} out ztypes.tid is {
+    none: ztypes.tid
+    baseId: zast.nodeid
+    {
+        cq: ast.nodes.get i: call.callable.u64
+        if cq.dottedpath when (ast.nodes.get i: cq.parent.u64).call then baseId = cq.parent
+    }
+    if baseId.isZero then return none
+    bt: walkTypeOf :st nid: baseId.u64
+    if (st.reg.isPartialOf tid: bt).not then return none
+    if (st.reg.genericOriginOf tid: bt).u64 != dtp then return none
+    return bt
+}
+
 # checkGenericTypeCall -- the callable named a GENERIC type, so the call is an
 # instantiation: bind the type arguments, mint the mono, and answer its id.
 checkGenericTypeCall: function {
@@ -36145,6 +36190,14 @@ checkGenericTypeCall: function {
                     }
                 }
             }
+        }
+        # the type written with its arguments, one still a parameter
+        # (`(resultval t: t e: bool).ok v`), is the partial its application built
+        appT: writtenPartialBase :st :ast :call :dtp
+        if appT > 0 then {
+            stampGate :st nid: call.nid.u64 tid: appT
+            st.typing.callKind.set key: call.nid.u64 value: zast.callkind.unionCreate
+            return (callleg handled: true tid: appT)
         }
         if subT > 0 when subT > 0 then {
             sleg: (mintSumArmInstance
@@ -38762,6 +38815,30 @@ checkSumArmName: function {
 }
 
 
+# sumArmTid -- the payload type of arm `armId` of the sum `sumTid`. A partial
+# (`optionval_t` in a generic body) has its template's arms, and an arm the
+# template types by one of its own parameters takes the partial's argument for
+# it; an arm typed some other way keeps the template's type.
+sumArmTid: function {
+    st: zenv.ZSymbolTable.view
+    sumTid: ztypes.tid
+    armId: zast.nameid
+} out optionval u64 is {
+    if (st.reg.isPartialOf tid: sumTid).not then {
+        return (st.typing.declChildOfId parentTypeId: sumTid nameId: armId)
+    }
+    tpl: partialTemplateOf :st tid: sumTid
+    ao: st.typing.declChildOfId parentTypeId: tpl nameId: armId
+    if ao.none then return ao
+    arm: ao
+    tdecl: declOfTypeId :st tid: tpl
+    pn: st.reg.genericParamNameOfTid :tdecl ptid: (ztypes.tid.create from: arm)
+    if pn.isZero then return (optionval.some arm)
+    ord: st.reg.paramOrdinalOf :tdecl paramName: pn
+    if ord.some then return (optionval.some (st.reg.genericArgAt specId: sumTid ordinal: ord))
+    return (optionval.some arm)
+}
+
 # checkCaseClause -- type one `case` arm: bind what the arm narrows to, walk
 # its body, and report what the arm contributes to the match -- whether it is
 # empty and whether it diverges. Its arm name and value type are appended to
@@ -38801,8 +38878,14 @@ checkCaseClause: function {
     armMarker: st.pushBlock name: asname.stringView
     # Every arm of a sum subject must name one of its declared arms.
     armo: optionval.none u64
-    forceMemberOf :st frame: st.curFrame :ast parentTypeId: subjT nameId: armId
-    if subjT > 0 then armo = st.typing.declChildOfId parentTypeId: subjT nameId: armId
+    (forceMemberOf
+        :st
+        frame: st.curFrame
+        :ast
+        parentTypeId: (partialTemplateOf :st tid: subjT)
+        nameId: armId
+    )
+    if subjT > 0 then armo = sumArmTid :st sumTid: subjT :armId
     if isSum when subjT > 0 when isSum when subjT > 0 then {
         (checkSumArmName
             :st
@@ -39591,7 +39674,8 @@ checkCase: function {
     }
     isSum: false
     if subjT > 0 then {
-        stt: st.reg.typetypeOf typeId: subjT
+        # a partial of a sum (`optionval_t` in a generic body) is a sum
+        stt: st.reg.typetypeOf typeId: (partialTemplateOf :st tid: subjT)
         if stt == ztypes.ztypetype.unionType then isSum = true
         if stt == ztypes.ztypetype.variantType then isSum = true
     }
