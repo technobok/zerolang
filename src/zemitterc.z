@@ -8085,6 +8085,14 @@ hoistExprIsBorrowRooted: function {
     } case call then {
         return (callRhsIsBorrow :ast :symtab :ctx call: n)
     } case dottedpath then {
+        # a dotted path that is itself a zero-arg auto-call answers for its own
+        # result, whatever its base: an owned return (`(l.get i: 0).copy`) is a
+        # temp to free, a declared `.borrow`/`.view` return (`c.label`) is not.
+        # A field or arm read is rooted where its base is.
+        mfid: dottedCalleeFid :symtab nid: n.nodeid.u64
+        if mfid.isZero.not then return (funcBorrowFlag :symtab tid: mfid)
+        rbf: refBorrowCalleeFid :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64)
+        if rbf > 0 then return true
         return (hoistExprIsBorrowRooted :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
     } case ifexpr then {
         return (controlValueIsReference :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64))
@@ -8092,6 +8100,24 @@ hoistExprIsBorrowRooted: function {
         return (controlValueIsReference :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64))
     } else {
         return false
+    }
+}
+
+# dottedCalleeFid -- the function type a dotted path auto-calls, when the
+# checker resolved the path to a method or a free function; 0 for a field or
+# arm read, and for a path the checker left unstamped.
+dottedCalleeFid: function {symtab: zenv.ZSymbolTable.view nid: u64} out ztypes.tid is {
+    none: ztypes.tid
+    rdo: symtab.typing.refDecl.get key: nid
+    match (
+        rdo
+    ) case some then {
+        rd: symtab.typing.decls.get i: rdo.u64
+        if rd.kind.methodDecl then return (ztypes.tid.create from: rd.typeId)
+        if rd.kind.funcDecl then return (ztypes.tid.create from: rd.typeId)
+        return none
+    } case none then {
+        return none
     }
 }
 

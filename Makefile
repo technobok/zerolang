@@ -1129,7 +1129,11 @@ perf: $(PERFBIN)
 #
 # -498 when an `Any` bound came to be reported at the atom that spells it: the
 # same source compiles with the same count, all of it is the source shorter.
-ALLOC_BASELINE := 2907976
+#
+# +712 when a dotted zero-arg call came to answer for its own result where it is
+# hoisted: the same source compiles with the same count, all of it is the
+# source longer.
+ALLOC_BASELINE := 2908688
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
