@@ -5576,14 +5576,29 @@ recordFunctionReturn: function {
         # composites answer 0 here and keep the caller's eager-path behaviour,
         # so this asks every unit: collection templates were only ever the
         # first callers, never the rule.
-        prt4: (partialReturnTid
-            :st
-            frame: rf
-            :ast
-            :unitDecl
-            enclDecl: receiverEnclDecl
-            oId: fnode.returntype
-        )
+        # a generic function's own parameters are declared on it, an enclosing
+        # type's on the receiver's declaration
+        prt4: u64
+        if isgen then {
+            prt4 = (partialReturnTid
+                :st
+                frame: rf
+                :ast
+                :unitDecl
+                enclDecl: fnDecl
+                oId: fnode.returntype
+            )
+        }
+        if prt4 == 0 then {
+            prt4 = (partialReturnTid
+                :st
+                frame: rf
+                :ast
+                :unitDecl
+                enclDecl: receiverEnclDecl
+                oId: fnode.returntype
+            )
+        }
         if prt4 > 0 then st.reg.setReturnType typeId: (ztypes.tid.create from: fid.u64) value: prt4
     }
     if (returnHasBorrowMarker :ast oId: fnode.returntype) then {
@@ -15872,6 +15887,18 @@ fillMonoMethodSignature: function {
     rto: st.reg.returnTypeOf tid: (ztypes.tid.create from: srcId.u64)
     if rto > 0 then {
         rtv: rto
+        if (st.reg.isPartialOf tid: rto) then {
+            if idSubsBuilt.not then (unitMonoIdSubs
+                :st
+                tdecl: (declOfTypeId :st tid: tplId)
+                :monoId
+                :subs
+                :idSubs
+            )
+            idSubsBuilt = true
+            rtFull: completeUnitMonoPartial :st :ast :rf partialTid: rto.u64 :idSubs
+            rtv = ztypes.tid.create from: rtFull
+        }
         rtnT: st.reg.nameOf tid: rtv
         rtn: nameIdOf :ast name: rtnT.stringView
         rgo: gpNames.get key: rtn
@@ -35395,6 +35422,9 @@ checkReturnTypeMatch: function {
     expR: st.typing.currentReturnTypeId
     if expR.isZero then return
     if argT.isZero then return
+    # an instance over a template's parameters is checked per instance, as a
+    # bare parameter is: the template cannot say which instance it is
+    if (st.reg.isPartialOf tid: expR) then return
     # a returned number lands in the declared type as an argument lands in its
     # parameter: a literal or an untyped constant must fit it, a typed value
     # must convert without loss
@@ -37593,23 +37623,41 @@ checkCall: function {
     return (checkRegularCall :st :unitDecl :ast :call :cnId)
 }
 
-# healGenericReturn -- a generic-instance return (`out (optionval t: u64)`) has no
-# bare pendingTyperef name, so the substitution path leaves the mono's return
-# unset, and a native template has no body walk to heal it later. Heal from the
-# template's resolved return type, respecializing a spec that mentions generic
-# params -- the same treatment the generic-class method path gets.
+# callParamIdSubs -- a generic call's substitutions keyed by the function's
+# parameter ids rather than their names: the key respecialize maps an
+# instance's arguments by.
+callParamIdSubs: function {
+    st: zenv.ZSymbolTable.view
+    funcId: ztypes.tid
+    gparams: (ListVal zast.nameid).view
+    subs: (IdMapV zast.nameid v: u64).view
+} out (IdMapV u64 v: u64) is {
+    idSubs: IdMapV u64 v: u64
+    fdecl: declOfTypeId :st tid: funcId
+    if fdecl.isZero then return idSubs
+    with git: gparams.iterate do for gp: git loop {
+        ptid: (st.reg.genericParamTidOf tdecl: fdecl paramName: gp).or d: 0
+        bound: (subs.get key: gp).or d: 0
+        if ptid > 0 when bound > 0 then idSubs.set key: ptid value: bound
+    }
+    return idSubs
+}
+
+# healGenericReturn -- a generic-instance return (`out (optionval t: u64)`,
+# `out (ListVal t: t)`) has no bare pendingTyperef name, so the substitution
+# path leaves the mono's return unset, and a native template has no body walk to
+# heal it later. Heal from the template's resolved return type, respecialized
+# with the call's own substitutions (keyed by the function's parameter ids) --
+# the same treatment the generic-class method path gets.
 healGenericReturn: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
     funcId: ztypes.tid
     mid: ztypes.tid
+    gparams: (ListVal zast.nameid).view
+    subs: (IdMapV zast.nameid v: u64).view
 } is {
-    # A generic-instance return (`out (optionval t: u64)`) has no bare
-    # pendingTyperef name, so the sub/name path above leaves the mono's
-    # return unset -- a native template has no body walk to heal it later.
-    # Heal from the template's resolved return type, respecializing a spec
-    # that mentions generic params (mirrors the generic-class method path).
     rhas: false
     {
         rmo: st.reg.returnTypeOf tid: mid
@@ -37631,7 +37679,7 @@ healGenericReturn: function {
             if tro > 0 then rto = tro
         }
         if rto > 0 then {
-            respecIdSubs: IdMapV u64 v: u64
+            respecIdSubs: callParamIdSubs :st :funcId :gparams :subs
             rr: (respecialize
                 :st
                 frame: st.curFrame
@@ -38306,7 +38354,7 @@ checkGenericCall: function {
         :mid
         :subs
     )
-    healGenericReturn :st :unitDecl :ast :funcId :mid
+    healGenericReturn :st :unitDecl :ast :funcId :mid :gparams :subs
     if wasNew then {
         dvo: st.typing.fnBodyDiverges.get key: funcId
         match (
@@ -41761,6 +41809,15 @@ checkFunctionBodyIn: function {
         # declared `outx` or refused here
         if crt > 0 when (st.typing.generatorCallBodies.has item: fn.nid.u64).not then {
             pinHonestyAt :st :ast frame: st.curFrame fnode: fn retTid: crt :defName :defNameId
+        }
+        # an instance walk returns what the instance it checks returns
+        if crt.isZero when st.typing.curMonoFnTid.isZero.not then {
+            st.typing.currentReturnTypeId = ((methodReturnOf
+                :st
+                mid: st.typing.curMonoFnTid
+            ).or
+                d: ztypes.tid
+            )
         }
         prevRb: st.typing.currentReturnsBorrow
         st.typing.currentReturnsBorrow = ((st.typing.funcReturnsBorrow.get key: fitid).or

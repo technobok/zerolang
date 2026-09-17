@@ -1091,7 +1091,11 @@ perf: $(PERFBIN)
 # +1,017 when a generic function's concrete parameters came to be checked
 # against their arguments: the same source compiles with the same count, all
 # of it is the source longer.
-ALLOC_BASELINE := 2881579
+#
+# +1,804 when a generic function's instance return came to be specialised and
+# checked: +199 over the same source (the instance walks check returns), about
+# +1,600 the source longer.
+ALLOC_BASELINE := 2883383
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
