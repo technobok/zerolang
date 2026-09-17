@@ -1172,7 +1172,12 @@ perf: $(PERFBIN)
 # +354 when a `.typedef` marker written as a unit definition came to be refused
 # whether or not it is parenthesised: the same source compiles with the same
 # count, all of it is the source longer.
-ALLOC_BASELINE := 2574022
+#
+# +733 when a report of a type came to spell what the author WROTE -- the Box
+# hint's arm type and the reftype-member refusal's -- rather than the name the
+# compiler minted: the same source compiles with the same count, all of it is
+# the source longer.
+ALLOC_BASELINE := 2574755
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

@@ -8475,6 +8475,7 @@ attachDeclaredField: function {
     )
     if (refuseReftypeMember
         :st
+        :ast
         :fm
         owner: defName
         tid: cid
@@ -8775,6 +8776,7 @@ recordTypedefBase: function {
         tdn: st.reg.nameOf tid: (ztypes.tid.create from: rid.u64)
         (refuseReftypeMember
             :st
+            :ast
             fm: (argref
                 nid: rnode.nid
                 name: zast.nameid
@@ -9436,6 +9438,7 @@ resolveVariant: function {
             )
             armRefV: (refuseReftypeMember
                 :st
+                :ast
                 :fm
                 owner: defName
                 tid: cid
@@ -9790,6 +9793,24 @@ unionCustomTagId: function {
     return (optionval.none u64)
 }
 
+# typeExprText -- a type expression as it is WRITTEN (exprTextOf),
+# parenthesised when it is a call, so a report names what the author wrote and
+# not the name the compiler minted for it. "" when the node spells nothing.
+typeExprText: function {ast: Ast.view nid: u64} out String is {
+    if nid == 0 then return "".string
+    isCall: false
+    {
+        n9t: ast.nodes.get i: nid
+        isCall = n9t.call
+    }
+    r: String
+    if isCall then r.append "("
+    exprTextOf :ast n: (ast.nodes.get i: nid) dst: r
+    if isCall then r.append ")"
+    if r.stringView == "(...)" then return "".string
+    return r
+}
+
 # refuseReftypeMember -- A VALTYPE HOLDS VALUE DATA ONLY, the dual of the Box
 # rule below: a record field, a variant arm and a record typedef's base may
 # not be a reftype (a class, a union, a protocol, a heap native such as
@@ -9800,6 +9821,7 @@ unionCustomTagId: function {
 # so the caller can skip the member the way refuseStringArmPayload's does.
 refuseReftypeMember: function {
     st: zenv.ZSymbolTable
+    ast: Ast.view
     fm: argref
     owner: StringView
     tid: ztypes.tid
@@ -9808,7 +9830,10 @@ refuseReftypeMember: function {
     name: StringView
 } out bool is {
     if (typeIsReftype :st :tid).not then return false
-    tn: st.reg.nameOf :tid
+    # the type the author WROTE: a mono's minted name (`ListRef_String`) is
+    # not a name the program spells anywhere
+    tn: typeExprText :ast nid: fm.operation.u64
+    if tn.length == 0 then tn = st.reg.nameOf :tid
     mr: "a \{what} holds valtypes; make '\{owner}' a \{remedy} to hold '\{tn}'"
     (addResolveErrorH
         :st
@@ -9918,7 +9943,10 @@ checkUnionArmIsReftype: function {
     # vetted valtype. What remains must be a reftype.
     if an != "null" when armTe == fm.operation when armMk.not when (typeIsValtype :st tid: cid
     ) then {
-        bxv: atomName :ast n: (ast.nodes.get i: armTe.u64)
+        # the arm's type as it is WRITTEN: an array, a nested application or a
+        # dotted name spells no atom, and the hint read `(Box )`
+        bxv: typeExprText :ast nid: armTe.u64
+        if bxv.length == 0 then bxv = atomName :ast n: (ast.nodes.get i: armTe.u64)
         mbv: "a union arm holds reftypes; box the valtype: '\{aname}: (Box \{bxv})'"
         (addResolveErrorH
             :st
