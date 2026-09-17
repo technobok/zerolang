@@ -1099,7 +1099,12 @@ perf: $(PERFBIN)
 # +2,940 when a generic instance came to have its own `create`: +106 over the
 # same source (class instances' field-wise create and its parameters), about
 # +2,830 the source longer.
-ALLOC_BASELINE := 2886323
+#
+# +1,026 when a type application came to answer the bare-name construction
+# rules: -820 over the same source (the check names the type only when it
+# reports, which also cheapened the bare-name check), about +1,850 the source
+# longer.
+ALLOC_BASELINE := 2887349
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
