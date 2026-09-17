@@ -1168,7 +1168,11 @@ perf: $(PERFBIN)
 # same source compiles with the same count, all of it is the source longer
 # (the demand points no longer take the caller's frame at all, which is most of
 # what the report's own helpers cost back).
-ALLOC_BASELINE := 2573668
+#
+# +354 when a `.typedef` marker written as a unit definition came to be refused
+# whether or not it is parenthesised: the same source compiles with the same
+# count, all of it is the source longer.
+ALLOC_BASELINE := 2574022
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
