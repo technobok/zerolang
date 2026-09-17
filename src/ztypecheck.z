@@ -57,6 +57,7 @@ public: unit {
     :nodeLine
     :paramIsThisReceiverId
     :declOfTypeId
+    :tagAccessorOwner
     :surfaceDeclOfTypeId
     :declTypeIdOf
     :publicNsOf
@@ -9101,22 +9102,49 @@ attachVariantMethods: function {
                     )
                 }
             } else {
-                if isgen.not then {
-                    (detectTagAccessor
-                        :st
-                        :frame
-                        :ast
-                        :unitDecl
-                        :defName
-                        ownerId: vid
-                        armNames: ordinalArmNames
-                        :am
-                    )
-                    attachAsConstant :st :ast parentId: (ztypes.tid.create from: vid.u64) item: am
-                }
+                # a generic template's tag accessor is its instances'
+                (detectTagAccessor
+                    :st
+                    :frame
+                    :ast
+                    :unitDecl
+                    :defName
+                    ownerId: vid
+                    armNames: ordinalArmNames
+                    :am
+                )
+                if isgen.not then (attachAsConstant
+                    :st
+                    :ast
+                    parentId: (ztypes.tid.create from: vid.u64)
+                    item: am
+                )
             }
         }
     }
+}
+
+# recordTagBase -- the storage a variant or union's `as` block declares for its
+# discriminator (`k: u16.tag`), for the backend to honour.
+recordTagBase: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    objId: zast.nodeid
+    ownerId: u64
+} is {
+    tb: variantTagBaseTid :st :frame :ast :unitDecl :objId
+    if tb != 18446744073709551615.u64 then st.typing.variantTagBase.set key: ownerId value: tb
+}
+
+# tagAccessorOwner -- the type whose tag accessor `tid` answers with: its own,
+# else, for an instance, its template's.
+tagAccessorOwner: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
+    if (st.typing.tagAccessorName.has key: tid.u64) then return tid
+    og: st.reg.genericOriginOf :tid
+    if og.isZero then return tid
+    return og
 }
 
 # attachVariantTag -- the discriminator member a concrete variant carries: the
@@ -9156,20 +9184,6 @@ attachVariantTag: function {
         nameId: zast.names.wkTag
         childTypeId: tagId
     )
-    # the discriminator's declared storage, so a backend can honour it
-    {
-        tbV: (variantTagBaseTid
-            :st
-            :frame
-            :ast
-            :unitDecl
-            objId: vnode.nid
-        )
-        if tbV != 18446744073709551615.u64 then (st.typing.variantTagBase.set
-            key: vid.u64
-            value: tbV
-        )
-    }
     # the shape, for whatever backend reads it: every arm written `null`,
     # so the value is an ordinal and nothing needs a tagged struct -- and a
     # discriminator whose values ARE those ordinals.
@@ -9374,6 +9388,9 @@ resolveVariant: function {
         st.typing.sumPairFirstArm.set key: vid.u64 value: firstArmV
         st.typing.sumPairSecondArm.set key: vid.u64 value: secondArmV
     }
+    # the discriminator's declared storage, so a backend can honour it; a
+    # generic template's is its instances'
+    recordTagBase :st :frame :ast :unitDecl objId: vnode.nid ownerId: vid
     if isgen.not then {
         (attachVariantTag
             :st
@@ -10017,19 +10034,23 @@ attachUnionMethods: function {
                     )
                 }
             } else {
-                if isgen.not then {
-                    (detectTagAccessor
-                        :st
-                        :frame
-                        :ast
-                        :unitDecl
-                        :defName
-                        ownerId: uid
-                        armNames: ordinalArmNames
-                        :am
-                    )
-                    attachAsConstant :st :ast parentId: (ztypes.tid.create from: uid.u64) item: am
-                }
+                # a generic template's tag accessor is its instances'
+                (detectTagAccessor
+                    :st
+                    :frame
+                    :ast
+                    :unitDecl
+                    :defName
+                    ownerId: uid
+                    armNames: ordinalArmNames
+                    :am
+                )
+                if isgen.not then (attachAsConstant
+                    :st
+                    :ast
+                    parentId: (ztypes.tid.create from: uid.u64)
+                    item: am
+                )
             }
         }
     }
@@ -10131,21 +10152,10 @@ resolveUnion: function {
         st.typing.sumPairFirstArm.set key: uid.u64 value: firstArmU
         st.typing.sumPairSecondArm.set key: uid.u64 value: secondArmU
     }
+    # the discriminator's declared storage, so a backend can honour it; a
+    # generic template's is its instances'
+    recordTagBase :st :frame :ast :unitDecl objId: vnode.nid ownerId: uid
     if isgen.not then {
-        # the discriminator's declared storage, so a backend can honour it
-        {
-            tbU: (variantTagBaseTid
-                :st
-                :frame
-                :ast
-                :unitDecl
-                objId: vnode.nid
-            )
-            if tbU != 18446744073709551615.u64 then (st.typing.variantTagBase.set
-                key: uid.u64
-                value: tbU
-            )
-        }
         customTag: unionCustomTagId :st :frame :ast :unitDecl :uid objId: vnode.nid
         tagId: u64
         match (
@@ -23554,8 +23564,9 @@ checkTagAccessor: function {
     isSum: btt5 == ztypes.ztypetype.variantType or (btt5 == ztypes.ztypetype.unionType)
     if isSum when (dottedBaseIsValue :st :ast :unitDecl n: (ast.nodes.get i: dp.nid.u64)) then {
         tagHit: false
+        tob: tagAccessorOwner :st tid: bt
         {
-            tan5: st.typing.tagAccessorName.get key: bt
+            tan5: st.typing.tagAccessorName.get key: tob
             match (
                 tan5
             ) case some then {
@@ -23581,7 +23592,7 @@ checkTagAccessor: function {
                 )
                 return (callleg handled: true tid: (ztypes.tid.create from: 0))
             }
-            tat5: (st.typing.tagAccessorTid.get key: bt).or d: ztypes.tid
+            tat5: (st.typing.tagAccessorTid.get key: tob).or d: ztypes.tid
             if tat5 > 0 then {
                 st.typing.dpTagRead.set key: dp.nid.u64 value: bt
                 mD5: (declMemberOf
