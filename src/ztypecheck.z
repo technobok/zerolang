@@ -2495,11 +2495,25 @@ registerGenericParamOne: function {
         cf9x: cb.copy
         if ckx.length > 0 then cf9x = "\{cb}.\{ckx}"
         k: constraintKindFor text: cf9x.stringView
+        # a bound no kind classifies is a DECLARATION, and what it admits is
+        # that declaration's business: its name is kept so the check can find it
+        bn: zast.nameid
+        bq: zast.nameid
+        if k == ztypes.constraintkind.other then {
+            bn = atomNameId :ast n: (ast.nodes.get i: (genericBoundAtomId
+                :ast
+                n: (ast.nodes.get i: m.operation.u64)
+            )
+            )
+            bq = genericBoundQualifierId :ast n: (ast.nodes.get i: m.operation.u64)
+        }
         (st.reg.addGenericParam
             :tdecl
             paramName: m.name
             kind: k
             numKind: (constraintIntKind cv: cf9x.stringView)
+            boundName: bn
+            boundQual: bq
         )
         # the BOUND names a real declaration -- `anyval`, a protocol -- but
         # everything above reads it as TEXT and maps it to a constraint kind,
@@ -2705,7 +2719,14 @@ registerUnitParamsOn: function {
 } is {
     with pit: (st.reg.genericParamNamesOf tdecl: unitTmpl).iterate do for pn: pit loop {
         cd: st.reg.genericParamConstraintOf tdecl: unitTmpl paramName: pn
-        st.reg.addGenericParam :tdecl paramName: pn kind: cd.kind numKind: cd.numKind
+        (st.reg.addGenericParam
+            :tdecl
+            paramName: pn
+            kind: cd.kind
+            numKind: cd.numKind
+            boundName: cd.boundName
+            boundQual: cd.boundQual
+        )
         ut: genericParamTidMint :st :ast tdecl: unitTmpl nameId: pn
         st.reg.setGenericParamTid :tdecl paramName: pn tid: (ztypes.tid.create from: ut)
     }
@@ -19421,9 +19442,152 @@ checkConstraintSat: function {
     }
     if isNul when ck == ztypes.constraintkind.refType then return
     if isNul when ck == ztypes.constraintkind.valType then return
+    if ck == ztypes.constraintkind.other then {
+        if (namedBoundAdmits :ast :st :frame :cd :argTid) then return
+        m9: constraintUnmetText :ast :st :tdecl :paramName :argTid
+        addResolveError :st e: zast.err.genericError msg: m9
+        return
+    }
     if (constraintHolds :ast :st :frame :ck :argTid) then return
     m: constraintUnmetText :ast :st :tdecl :paramName :argTid
     addResolveError :st e: zast.err.genericError msg: m
+}
+
+# namedBoundAdmits -- a bound that names a DECLARATION admits what that
+# declaration says: a protocol or facet admits its conformers, a union a
+# member's own type or a conformer of a protocol/facet member, and a variant
+# exactly its arms' payload types. A bound that names nothing is
+# checkGenericBounds's report, not this one, and admits everything here so the
+# same mistake is not reported twice.
+namedBoundAdmits: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    cd: ztypes.constraintdesc
+    argTid: ztypes.tid
+} out bool is {
+    bt: namedBoundTid :ast :st :frame :cd
+    if bt.isZero then return true
+    if bt == argTid then return true
+    tt: st.reg.typetypeOf typeId: bt
+    if tt == ztypes.ztypetype.protocolType or (tt == ztypes.ztypetype.facetType) then {
+        return (typeConformsTo :st impl: argTid spec: bt)
+    }
+    if tt == ztypes.ztypetype.unionType then return (sumBoundAdmits :st :bt :argTid conform: true)
+    if tt == ztypes.ztypetype.variantType then {
+        return (sumBoundAdmits :st :bt :argTid conform: false)
+    }
+    return true
+}
+
+# namedBoundTid -- the type a named bound resolves to, 0 when it names none.
+namedBoundTid: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    cd: ztypes.constraintdesc
+} out ztypes.tid is {
+    if cd.boundName.isZero then return ztypes.tid
+    ud: unitRootOfDecl :st declId: frame
+    if cd.boundQual.isZero.not then {
+        qu: unitDeclOfName :st nameId: cd.boundQual
+        if qu.isZero then return ztypes.tid
+        ud = qu
+    }
+    # the DEF INDEX first: a bound may name a definition nothing has demanded
+    # yet, and a type-ref walk answers only for ids resolution minted
+    d: declOfUnitDefIds :st unitDecl: ud nameId: cd.boundName
+    if d.isZero when st.typing.coreUnitRoot.isZero.not then {
+        d = declOfUnitDefIds :st unitDecl: st.typing.coreUnitRoot nameId: cd.boundName
+    }
+    if d.isZero.not then {
+        dt: declTypeIdOf :st declId: d
+        if dt.isZero.not then return dt
+        fd: forceUnitDefMemberTid :st :ast declId: d
+        if fd.isZero.not then return fd
+    }
+    r: (walkLookupTyperefById :st :frame :ast unitDecl: ud baseId: cd.boundName).or d: 0
+    return (ztypes.tid.create from: r.u64)
+}
+
+# forceUnitDefMemberTid -- resolve the TYPE definition `declId` now and answer
+# its type id: a bound may name a definition written after its use, which
+# nothing has demanded when the bound is checked.
+forceUnitDefMemberTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    declId: ztypes.declid
+} out ztypes.tid is {
+    dn: u32
+    {
+        dd: st.typing.decls.get i: declId.u64
+        dn = dd.node
+    }
+    if dn == 0 then return ztypes.tid
+    ud: unitRootOfDecl :st :declId
+    if ud.isZero then return ztypes.tid
+    r: forceUnitDef :st :ast unitDecl: ud frame: ud memId: dn
+    return (ztypes.tid.create from: r.u64)
+}
+
+# sumBoundAdmits -- a union or variant bound: the argument IS one of its# sumBoundAdmits -- a union or variant bound: the argument IS one of its
+# members' types, or -- for a union, whose members may be protocols or facets --
+# conforms to one.
+sumBoundAdmits: function {
+    st: zenv.ZSymbolTable
+    bt: ztypes.tid
+    argTid: ztypes.tid
+    conform: bool
+} out bool is {
+    n: st.typing.declRowSlots ownerTid: bt
+    i: u64
+    for i < n loop {
+        row: st.typing.declRowAt ownerTid: bt membersOnly: true slot: i
+        i = i + 1
+        if row.keep when (sumMemberAdmits
+            :st
+            member: (ztypes.tid.create from: row.tid)
+            :argTid
+            :conform
+        ) then {
+            return true
+        }
+    }
+    return false
+}
+
+# sumMemberAdmits -- one member of a sum bound: the argument IS its type, or --
+# for a union, whose members may be protocols or facets -- conforms to it.
+sumMemberAdmits: function {
+    st: zenv.ZSymbolTable
+    member: ztypes.tid
+    argTid: ztypes.tid
+    conform: bool
+} out bool is {
+    if member == argTid then return true
+    if conform.not then return false
+    mtt: st.reg.typetypeOf typeId: member
+    if mtt != ztypes.ztypetype.protocolType when mtt != ztypes.ztypetype.facetType then {
+        return false
+    }
+    return (typeConformsTo :st impl: argTid spec: member)
+}
+
+# typeConformsTo -- a conformance row names `impl` (or the template it was
+# instantiated from) against `spec`.
+typeConformsTo: function {
+    st: zenv.ZSymbolTable.view impl: ztypes.tid spec: ztypes.tid
+} out bool is {
+    og: st.reg.genericOriginOf tid: impl
+    found: false
+    with cit: st.typing.conformance.iterate do for crow: cit loop {
+        if crow.specTypeId == spec.u64 when (
+            crow.implTypeId == impl.u64 or (og > 0 and (crow.implTypeId == og.u64))
+        ) then {
+            found = true
+        }
+    }
+    return found
 }
 
 # constraintUnmetText -- the message for a generic argument its parameter's
@@ -19436,7 +19600,12 @@ constraintUnmetText: function {
     argTid: ztypes.tid
 } out String is {
     an: st.reg.nameOf tid: argTid
-    con: constraintTextOf desc: (st.reg.genericParamConstraintOf :tdecl :paramName)
+    cdx: st.reg.genericParamConstraintOf :tdecl :paramName
+    con: constraintTextOf desc: cdx
+    # a bound no kind classifies is spelled by its own name
+    if con.length == 0 when cdx.boundName.isZero.not then {
+        con = zast.nameTextCopy :ast ref: cdx.boundName
+    }
     tdn: String
     {
         tdo: st.typing.decls.get i: tdecl.u64

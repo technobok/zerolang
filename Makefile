@@ -1181,7 +1181,11 @@ perf: $(PERFBIN)
 # +5,165 when a generic bound came to name a type the program declares, and one
 # that HAS a `.generic`: +7 over the same source (the bound atoms are walked
 # once after resolution, as `Any`'s are), about +5,160 the source longer.
-ALLOC_BASELINE := 2579920
+#
+# +4,317 when a bound that names a declaration came to admit what that
+# declaration says: the same source compiles with the same count, all of it is
+# the source longer.
+ALLOC_BASELINE := 2584237
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
