@@ -1,0 +1,68 @@
+# a user function's `outx (List ...).borrow` hands back the list it names, not
+# a copy of its header: appends and pops through the result -- bound, as a
+# receiver, as a borrowed argument -- reach the owner. Every use runs the
+# function once.
+Box: class {
+    xs: ListVal i64
+    hits: i64
+}
+Box2: class {
+    rows: List (ListVal i64)
+} as {
+    rowsMut: function {this: this.borrow} outx (List (ListVal i64)).borrow is {
+        return this.rows
+    }
+}
+Grid: class {
+    grid: List (List String)
+}
+xsOf: function {b: Box.borrow} outx (ListVal i64).borrow is {
+    b.hits = b.hits + 1
+    return b.xs
+}
+gridOf: function {g: Grid.borrow} outx (List (List String)).borrow is {
+    return g.grid
+}
+push: function {l: ListVal i64} is {
+    l.append from: 100
+}
+total: function {l: ListVal i64} out i64 is {
+    t: 0
+    with it: l.iterate do for e: it loop {
+        t = t + e
+    }
+    return t
+}
+main: function is {
+    b: Box xs: (ListVal i64) hits: 0
+    {
+        r: xsOf b: b
+        r.append from: 1
+    }
+    (xsOf b: b).append from: 2
+    push l: (xsOf b: b)
+    t: total l: (xsOf b: b)
+    g: (xsOf b: b).get i: 1
+    p: (xsOf b: b).pop
+    print "\{b.xs.length} \{t} \{g} \{p} \{(xsOf b: b).length} \{b.hits}"
+    b2: Box2 rows: (List (ListVal i64))
+    w: ListVal i64
+    w.append from: 7
+    b2.rowsMut.append from: w.copy
+    (b2.rowsMut).append from: w.copy
+    {
+        r2: b2.rowsMut
+        r2.append from: w.copy
+    }
+    print "\{b2.rows.length} \{b2.rowsMut.length}"
+    g0: List (List String)
+    g0.append from: (List String)
+    g0.append from: (List String)
+    gr: Grid grid: g0
+    {
+        gg: gridOf g: gr
+        (gg.getMut i: 0).append from: "a".string
+    }
+    x: (gridOf g: gr).pop
+    print "\{gr.grid.length} \{(gr.grid.get i: 0).length} \{x.length}"
+}

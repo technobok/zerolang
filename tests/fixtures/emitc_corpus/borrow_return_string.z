@@ -1,0 +1,78 @@
+# a user function's `outx String.borrow` hands back the String it names, not a
+# copy of its header: a write through the result -- bound, as a receiver, as a
+# borrowed argument, in a `with` -- reaches the owner even when it reallocates,
+# and a reference forwarded through another function or returned past owned
+# locals is the same reference. Every use runs the function once.
+Item: class {
+    label: String
+    alt: String
+    hits: i64
+}
+Box3: class {
+    s: String
+} as {
+    sMut: function {this: this.borrow} outx String.borrow is {
+        return this.s
+    }
+}
+peek: function {b: Item.borrow} outx String.borrow is {
+    b.hits = b.hits + 1
+    return b.label
+}
+fwd: function {s: String.borrow} outx String.borrow is {
+    return s
+}
+pass: function {b: Item.borrow} outx String.borrow is {
+    return (peek b: b)
+}
+pick: function {b: Item.borrow first: bool} outx String.borrow is {
+    tmp: "scratch".string
+    if first then return b.label
+    tmp.append "x"
+    return b.alt
+}
+say: function {s: String} is {
+    print s
+}
+grow: function {s: String.borrow} is {
+    s.append "-grown"
+}
+main: function is {
+    it: Item label: "ab".string alt: "zz".string hits: 0
+    {
+        r: peek b: it
+        r.append "-bound-with-a-suffix-long-enough-to-reallocate"
+    }
+    print "\{it.label} \{it.hits}"
+    b: Box3 s: "ab".string
+    b.sMut.append "c"
+    (b.sMut).append "d"
+    with w: b.sMut do {
+        w.append "e"
+    }
+    print b.s
+    grow s: (peek b: it)
+    say s: (peek b: it)
+    {
+        q: pass b: it
+        q.append "!"
+    }
+    {
+        f: fwd s: it.alt
+        f.append "y"
+    }
+    {
+        p: pick b: it first: false
+        p.append "w"
+    }
+    print "\{it.label} \{it.alt} \{it.hits}"
+    it.hits = 0
+    if (peek b: it) == "ab-bound-with-a-suffix-long-enough-to-reallocate-grown!" then print "eq"
+    n: (peek b: it).length
+    c: (peek b: it).copy
+    s: "x".string
+    s.append (peek b: it)
+    if (peek b: it).startsWith "ab" then print "sw"
+    print (peek b: it)
+    print "\{n} \{c.length} \{s.length} \{it.hits}"
+}
