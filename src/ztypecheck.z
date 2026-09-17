@@ -37934,6 +37934,25 @@ bindOrConflict: function {
     }
 }
 
+# checkConcreteGenericArg -- an argument to a parameter of a generic function
+# whose declared type names none of its generic parameters is checked as any
+# call's is. A parameter typed through them (a bare parameter, an instance over
+# one) is checked where its binding is inferred.
+checkConcreteGenericArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arg: argref
+    ptid: u64
+    pnId: zast.nameid
+    vt: ztypes.tid
+} is {
+    if ptid == 0 then return
+    pt: ztypes.tid.create from: ptid
+    if (st.reg.typetypeOf typeId: pt) == ztypes.ztypetype.genericParam then return
+    if (st.reg.isGenericOf tid: pt) then return
+    checkArgTypeMismatch :st :ast :ptid :vt :pnId :arg
+}
+
 # inferGenericCallSubs -- read one call's arguments into the generic-parameter
 # substitutions: an explicit type argument names its parameter, a value argument
 # infers from the type it walks to, and a positional one binds by index.
@@ -37977,30 +37996,50 @@ inferGenericCallSubs: function {
             :posIdx
         )
         posIdx = posIdx + 1
-        # a composite parameter buries the template's parameter name one or
-        # more levels down, so there is no holder to read: unify the declared
-        # partial against the argument's own arguments instead
-        if hs.slot < pHolderIds.length when mat > 0 then {
-            (bindPartialParamSubs
-                :st
-                :ast
-                :gparams
-                paramTid: (pHolderIds.get i: hs.slot)
-                argTid: mat.u64
-                :subs
-            )
-        }
-        if hs.holder.isZero.not when mat > 0 then {
-            (bindOrConflict
+        if hs.slot < pHolderIds.length then {
+            (bindValueArg
                 :st
                 :ast
                 :arg
+                :gparams
                 :subs
                 holder: hs.holder
-                argTid: mat
-                walkedTid: avt
+                ptid: (pHolderIds.get i: hs.slot)
+                pnId: (pNames.get i: hs.slot)
+                :avt
+                :mat
             )
         }
+    }
+}
+
+# bindValueArg -- what one value argument says about the call's generic
+# parameters, through the parameter `pnId` it binds (declared `ptid`, spelled
+# `holder`): a parameter declared as one of the function's own generic
+# parameters binds it, an instance over them unifies against the argument's
+# own arguments, and any other parameter binds nothing and checks the argument.
+bindValueArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arg: argref
+    gparams: (ListVal zast.nameid).view
+    subs: (IdMapV zast.nameid v: u64)
+    holder: zast.nameid
+    ptid: u64
+    pnId: zast.nameid
+    avt: ztypes.tid
+    mat: ztypes.tid
+} is {
+    # a composite parameter buries the template's parameter name one or more
+    # levels down, so there is no holder to read: unify the declared partial
+    # against the argument's own arguments instead
+    if mat > 0 then bindPartialParamSubs :st :ast :gparams paramTid: ptid argTid: mat.u64 :subs
+    if (isGenericParamLabel :gparams label: holder).not then {
+        checkConcreteGenericArg :st :ast :arg :ptid :pnId vt: avt
+        return
+    }
+    if mat > 0 then {
+        bindOrConflict :st :ast :arg :subs :holder argTid: mat walkedTid: avt
     }
 }
 
