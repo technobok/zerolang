@@ -1047,7 +1047,12 @@ perf: $(PERFBIN)
 # 660 to zls.c), almost all of them unreferenced. The eagerness is the existing
 # design and predates this; making the pass demand-driven would take all three
 # numbers back and is its own change.
-ALLOC_BASELINE := 2832982
+#
+# +18,224 when a generated `==` came to need an `==` on every part: +76 over the
+# same source (the checker's gate, answered once per type, and the emitter's
+# once-per-type test of whether a C `_eq` can be written at all) and +18,148
+# the source longer, 15,828 of it the checker's new functions.
+ALLOC_BASELINE := 2851206
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

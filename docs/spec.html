@@ -5328,9 +5328,10 @@ include the usual mathematical operator names eg. <code>+ - / *</code>, and a wo
 operator name too: <code>and</code> and <code>or</code> on <code>bool</code>.</p>
 <h3 id="auto-generated-equality"><a href="#auto-generated-equality">11.11. Auto-Generated Equality</a></h3>
 <p>All value types (records, variants, arrays, str) automatically receive
-<code>==</code> and <code>!=</code> operators. This is structural equality: records compare
-all fields, variants compare the discriminator tag and then the payload,
-arrays compare elements, and str compares bytes.</p>
+<code>==</code> and <code>!=</code> operators, built from their parts: a record compares its
+fields one at a time, a variant compares the discriminator tag and then the
+payload of the arm both hold, an array compares its elements, and a str
+compares its content.</p>
 <p>Either operator may be declared, and the one you leave out is generated from
 the one you write: declare <code>==</code> and <code>!=</code> is its negation; declare <code>!=</code>
 and <code>==</code> is its negation. A declared operator always beats the generated
@@ -5341,10 +5342,20 @@ so each is reachable by name: <code>a.== rhs: b</code> is the same method as
 <code>a == b</code> and gives the same answer.</p>
 <p>Requirements for auto-generation:</p>
 <ul>
-<li>All fields (records) or subtypes (variants) must themselves support <code>==</code>.</li>
+<li>Every part -- each field of a record, each payload of a variant, the
+      element of an array -- must have an <code>==</code> of its own. A part that has
+      none leaves the type holding it with none, and so on outward: a part
+      struck off with <code>==: null</code>, a facet, or a type whose written <code>==</code>
+      compares it with something other than itself.</li>
 <li>Function pointer fields are compared by address.</li>
 <li>Generic types receive <code>==</code> when monomorphized with concrete types that support it.</li>
 </ul>
+<p>A type left with no <code>==</code> this way is an ordinary value in every other
+respect. Only comparing it is an error, and it is the error any missing
+member gives:</p>
+<pre><code class="language-zerolang">opaque: record { val: i64 } as { ==: null }
+holder: record { o: opaque  n: i64 }
+# h == h  --&gt; error: type 'holder' has no member '=='</code></pre>
 <p><strong>User Override.</strong></p>
 <p>Define <code>==</code> or <code>!=</code> in the <code>as</code> section to replace the auto-generated
 version. The other is generated as its negation:</p>
@@ -5363,9 +5374,10 @@ span: record { lo: i64  hi: i64 } as {
 <p><strong>Opt-Out.</strong></p>
 <p>Use <code>==: null</code> (or <code>!=: null</code>) in the <code>as</code> section to remove <code>==</code>
 and <code>!=</code> entirely -- the same shape as the <code>create: null</code> opt-out.
-Attempting to compare such a type is a typecheck error:</p>
+Attempting to compare such a type, or any value holding one, is a typecheck
+error:</p>
 <pre><code class="language-zerolang">opaque: record { val: i64 } as { ==: null }
-# opaque == opaque  --&gt; error: type 'opaque' has no '==' method</code></pre>
+# opaque == opaque  --&gt; error: type 'opaque' has no member '=='</code></pre>
 <p><strong>Float Fields.</strong></p>
 <p>Records containing float fields (<code>f32</code>, <code>f64</code>) use IEEE 754 comparison:
 <code>NaN != NaN</code>. This matches the behaviour of C, Rust, and Go.</p>

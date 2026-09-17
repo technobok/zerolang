@@ -6120,9 +6120,10 @@ operator name too: #~"and" and #~"or" on #~"bool".
 #---: Auto-Generated Equality
 
 All value types (records, variants, arrays, str) automatically receive
-#~"==" and #~"!=" operators. This is structural equality: records compare
-all fields, variants compare the discriminator tag and then the payload,
-arrays compare elements, and str compares bytes.
+#~"==" and #~"!=" operators, built from their parts: a record compares its
+fields one at a time, a variant compares the discriminator tag and then the
+payload of the arm both hold, an array compares its elements, and a str
+compares its content.
 
 Either operator may be declared, and the one you leave out is generated from
 the one you write: declare #~"==" and #~"!=" is its negation; declare #~"!="
@@ -6137,9 +6138,23 @@ so each is reachable by name: #~"a.== rhs: b" is the same method as
 Requirements for auto-generation:
 
 #ul:
-  #*: All fields (records) or subtypes (variants) must themselves support #~"==".
+  [#*: Every part -- each field of a record, each payload of a variant, the
+      element of an array -- must have an #~"==" of its own. A part that has
+      none leaves the type holding it with none, and so on outward: a part
+      struck off with #~"==: null", a facet, or a type whose written #~"=="
+      compares it with something other than itself.]
   #*: Function pointer fields are compared by address.
   #*: Generic types receive #~"==" when monomorphized with concrete types that support it.
+
+A type left with no #~"==" this way is an ordinary value in every other
+respect. Only comparing it is an error, and it is the error any missing
+member gives:
+
+#code language=zerolang: """
+  opaque: record { val: i64 } as { ==: null }
+  holder: record { o: opaque  n: i64 }
+  # h == h  --> error: type 'holder' has no member '=='
+  """
 
 #b: User Override.
 Define #~"==" or #~"!=" in the #~"as" section to replace the auto-generated
@@ -6163,11 +6178,12 @@ version. The other is generated as its negation:
 #b: Opt-Out.
 Use #~"==: null" (or #~"!=: null") in the #~"as" section to remove #~"=="
 and #~"!=" entirely -- the same shape as the #~"create: null" opt-out.
-Attempting to compare such a type is a typecheck error:
+Attempting to compare such a type, or any value holding one, is a typecheck
+error:
 
 #code language=zerolang: """
   opaque: record { val: i64 } as { ==: null }
-  # opaque == opaque  --> error: type 'opaque' has no '==' method
+  # opaque == opaque  --> error: type 'opaque' has no member '=='
   """
 
 #b: Float Fields.

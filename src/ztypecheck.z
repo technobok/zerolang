@@ -78,6 +78,8 @@ public: unit {
     :typecheck
     :walkLookupTyperefRo
     :walkLookupTyperefByIdRo
+    :valPartTids
+    :valOpSource
     :resolveUnitChildRo
     :resolvedByIdsRo
 }
@@ -19112,6 +19114,320 @@ typeIsHashable: function {
     )
 }
 
+# valopsrc -- where a value type's `==`, `hash` or `compare` comes from. A
+# generated member is built out of the parts' own, so the question is asked of
+# every part as well as of the container.
+valopsrc: variant {
+    # the type has none: struck off with `null`, never declared, or the type is
+    # a reference type, a facet or a generic parameter
+    none: null
+    # the runtime supplies it: a numeric, bool, str, a function pointer
+    builtin: null
+    # the author wrote it
+    written: null
+    # the author wrote only `!=`, and `==` is its negation
+    negated: null
+    # the compiler generates it from the parts
+    generated: null
+} as { tag: u8.tag }
+
+# valOpOwner -- the type in `tid`'s typedef chain that carries member `nameId`,
+# or the last type of the chain when none does. A `null` shell is a member: it
+# stops the chase, so a typedef that strikes `==` off does not take its base's.
+valOpOwner: function {
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    nameId: zast.nameid
+} out ztypes.tid is {
+    t: tid
+    for t.isZero.not loop {
+        if (st.typing.declMemberIdOf parentTypeId: t :nameId).isZero.not then return t
+        bo: st.typing.typedefBaseTid.get key: t
+        match (
+            bo
+        ) case some then {
+            t = ztypes.tid.create from: bo
+        } case none then return t
+    }
+    return t
+}
+
+# valOpSource -- where `tid`'s member `nameId` (`==`, `hash` or `compare`)
+# comes from. Read from the DECLARATIONS alone, and no member is forced: this
+# runs while members are still resolving, and resolving a signature here would
+# mint its types out of demand order.
+valOpSource: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    nameId: zast.nameid
+} out valopsrc is {
+    t: valOpOwner :st :tid :nameId
+    if t.isZero then return valopsrc.none
+    tt: st.reg.typetypeOf typeId: t
+    if tt == ztypes.ztypetype.functionType then return valopsrc.builtin
+    isVal: tt == ztypes.ztypetype.recordType or (tt == ztypes.ztypetype.variantType)
+    if isVal.not then return valopsrc.none
+    md: st.typing.declMemberIdOf parentTypeId: t :nameId
+    if md.isZero then return valopsrc.none
+    # a str compares and hashes its content, which the runtime does
+    if (valIsMonoOf :ast :st tid: t base: "str") then return valopsrc.builtin
+    # a `null` shell is a member that is not a method
+    if (st.typing.declIsMethodId parentTypeId: t :nameId).not then return valopsrc.none
+    if (st.typing.declMemberIsSynth parentTypeId: t :nameId).not then {
+        return (valDeclaredSource :ast :st owner: t :nameId memberDecl: md)
+    }
+    if nameId == zast.names.wkOpEq then {
+        neWritten: valOpWritten :ast :st owner: t nameId: zast.names.wkOpNe
+        if neWritten then return valopsrc.negated
+    }
+    return valopsrc.generated
+}
+
+# valDeclaredSource -- where a member the declarations carry for `owner` itself
+# comes from: the runtime or the author. A written comparison counts only when
+# it compares the type with itself -- `pt ==` taking a u64 answers a different
+# question.
+valDeclaredSource: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    owner: ztypes.tid
+    nameId: zast.nameid
+    memberDecl: ztypes.declid
+} out valopsrc is {
+    fnode: valMemberFnNode :ast :st :memberDecl
+    if (functiondefIsNative op: (ast.nodes.get i: fnode.u64)) then return valopsrc.builtin
+    if nameId == zast.names.wkHash then return valopsrc.written
+    if (valRhsIsOwner :ast :st :owner :fnode) then return valopsrc.written
+    return valopsrc.none
+}
+
+# valMemberFnNode -- the function a member declaration names; zero when it
+# names none.
+valMemberFnNode: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    memberDecl: ztypes.declid
+} out zast.nodeid is {
+    fnode: zast.nodeid
+    {
+        dn: ast.nodes.get i: (st.typing.decls.get i: memberDecl.u64).node.u64
+        if dn.namedoperation then fnode = dn.operation
+    }
+    return fnode
+}
+
+# valOpWritten -- the author wrote member `nameId` of `owner`, as a method that
+# compares the type with itself.
+valOpWritten: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    owner: ztypes.tid
+    nameId: zast.nameid
+} out bool is {
+    md: st.typing.declMemberIdOf parentTypeId: owner :nameId
+    if md.isZero then return false
+    if (st.typing.declIsMethodId parentTypeId: owner :nameId).not then return false
+    if (st.typing.declMemberIsSynth parentTypeId: owner :nameId) then return false
+    return (valRhsIsOwner :ast :st :owner fnode: (valMemberFnNode :ast :st memberDecl: md))
+}
+
+# valRhsIsOwner -- the second parameter of function `fnode` names the type that
+# declares it: its own name, `type` or `this`. A mono's member is its
+# template's, and so is the name the mono's declaration carries.
+valRhsIsOwner: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    owner: ztypes.tid
+    fnode: zast.nodeid
+} out bool is {
+    if fnode.isZero then return false
+    pm: zast.fnParamAt :ast nid: fnode i: 1
+    if pm.isZero then return false
+    rn: zast.nameid
+    {
+        pn: ast.nodes.get i: pm.u64
+        if pn.namedoperation then rn = rootNameIdOf :ast n: (ast.nodes.get i: pn.operation.u64)
+    }
+    if rn.isZero then return false
+    if rn == zast.names.wkThis then return true
+    if (zast.nameTextEq :ast ref: rn s: "type") then return true
+    od: st.typing.declIdOfType typeId: owner
+    if od.isZero then return false
+    return rn.u64 == (st.typing.decls.get i: od.u64).name.u64
+}
+
+# valPartTids -- the parts a generated member of `tid` is built from: a
+# record's fields, a variant's payloads, an array's element.
+valPartTids: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    parts: ListVal u64
+} is {
+    if (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.variantType then {
+        variantPayloadTids :st :tid :parts
+        return
+    }
+    if (valIsMonoOf :ast :st :tid base: "array") then {
+        parts.append (arrayElemTid :st :tid).u64
+        return
+    }
+    names: ListVal u64
+    dataFieldIds :st :tid ids: parts nameIds: names
+}
+
+# variantPayloadTids -- the payload types of `tid`'s arms in declaration order;
+# an arm that carries nothing contributes none.
+variantPayloadTids: function {st: zenv.ZSymbolTable.view tid: ztypes.tid parts: ListVal u64} is {
+    od: st.typing.declIdOfType typeId: tid
+    if od.isZero then return
+    n: st.typing.declChildSlots declId: od
+    i: u64
+    for i < n loop {
+        did: st.typing.declChildAt declId: od index: i
+        i = i + 1
+        pt: u64
+        if did.isZero.not then {
+            dr: st.typing.decls.get i: did.u64
+            if dr.kind.armDecl then pt = dr.typeId.u64
+        }
+        if pt > 0 when pt != st.typing.nullTypeId then parts.append pt
+    }
+}
+
+# arrayElemTid -- an array instance's element type: its first argument that is
+# a type rather than a value.
+arrayElemTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
+    n: st.reg.genericArgCount specId: tid
+    i: u64
+    for i < n loop {
+        if (st.reg.genericArgIsValueAt specId: tid ordinal: i).not then {
+            return (ztypes.tid.create from: (st.reg.genericArgAt specId: tid ordinal: i))
+        }
+        i = i + 1
+    }
+    return ztypes.tid
+}
+
+# valIsMonoOf -- `tid` is an instance of the builtin template named `base`.
+valIsMonoOf: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    base: StringView
+} out bool is {
+    org: st.reg.genericOriginOf :tid
+    if org.isZero then return false
+    ak: zast.poolFind pool: ast.names text: base
+    if ak.isZero then return false
+    at: st.typing.builtinTidMemo.get key: ak.u64
+    match (
+        at
+    ) case some then {
+        return org == at
+    } case none then {
+        return false
+    }
+}
+
+# valEqMissingPart -- the first part of `tid` that leaves it with no `==`, or
+# `tid` itself when its own is struck off; zero when the type has one. A
+# generated `==` compares the parts with their own, so it exists only when every
+# part has one. A valtype cannot hold itself, so `depth` only bounds a
+# malformed chain.
+valEqMissingPart: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    depth: u64
+} out ztypes.tid is {
+    src: valOpSource :ast :st :tid nameId: zast.names.wkOpEq
+    if src.none then return tid
+    if src.generated.not then return ztypes.tid
+    if depth > 64 then return tid
+    owner: valOpOwner :st :tid nameId: zast.names.wkOpEq
+    parts: ListVal u64
+    valPartTids :ast :st tid: owner :parts
+    i: u64
+    for i < parts.length loop {
+        p: ztypes.tid.create from: (parts.get :i)
+        i = i + 1
+        if (valEqMissingPart :ast :st tid: p depth: depth + 1).isZero.not then return p
+    }
+    return ztypes.tid
+}
+
+# forceValParts -- resolve the fields a generated `==` of `tid` is built from,
+# all the way down, so valEqMissingPart reads complete declarations. A field
+# that has not been resolved carries no type and would read as a part with none.
+forceValParts: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tid: ztypes.tid
+    depth: u64
+} is {
+    if depth > 64 then return
+    if (valOpSource :ast :st :tid nameId: zast.names.wkOpEq).generated.not then return
+    owner: valOpOwner :st :tid nameId: zast.names.wkOpEq
+    forceAllFields :st frame: st.curFrame :ast tid: owner
+    parts: ListVal u64
+    valPartTids :ast :st tid: owner :parts
+    i: u64
+    for i < parts.length loop {
+        p: ztypes.tid.create from: (parts.get :i)
+        i = i + 1
+        forceValParts :st :ast tid: p depth: depth + 1
+    }
+}
+
+# refuseEqWithoutPartEq -- a generated `==` or `!=` read on a type one of
+# whose parts has no `==` of its own. The type has none either, and the read is
+# the ordinary unknown-member error. True when it reported.
+refuseEqWithoutPartEq: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+} out bool is {
+    if (st.reg.isPartialOf tid: bt) then return false
+    miss: ztypes.tid
+    known: st.typing.valEqMissing.get key: bt
+    match (
+        known
+    ) case some then {
+        miss = known
+    } case none then {
+        forceValParts :st :ast tid: bt depth: 0
+        miss = valEqMissingPart :ast :st tid: bt depth: 0
+        st.typing.valEqMissing.set key: bt value: miss
+    }
+    if miss.isZero then return false
+    cn: zast.nameTextAt :ast ref: cnId
+    btn: st.reg.nameOf tid: bt
+    m: "type '\{btn}' has no member '\{cn}'"
+    h: String
+    if miss != bt then {
+        mn: st.reg.nameOf tid: miss
+        hm: "its part of type '\{mn}' has no '=='"
+        h = hm
+    }
+    cn2: ast.nodes.get i: dp.child.u64
+    (addErrorH
+        :st
+        nodeid: (nodeId n: cn2)
+        lineno: (nodeLine n: cn2)
+        colno: (nodeCol n: cn2)
+        e: zast.err.typeError
+        msg: m
+        note: "".string
+        hint: h
+        width: cn.length.u32.orPanic
+    )
+    return true
+}
+
 # typeIsIdKey -- the type is one of the six unsigned scalars an IdMap / IdSet
 # may index on. Asked of the chain-end base, exactly as typeIsHashable is: an
 # id space is a typedef over an unsigned scalar (`declid` over u64, `nameid`
@@ -24309,6 +24625,9 @@ checkResolvedMember: function {
     }
     if (checkMemberNamespace :st :ast :unitDecl :dp :bt :cnId :mo :coerce
     ).not then return (ztypes.tid.create from: 0)
+    # a generated comparison exists only when every part has one
+    isSynthCmp: st.typing.synthCmpTids.has item: mo
+    if isSynthCmp when (refuseEqWithoutPartEq :st :ast :dp :bt :cnId) then return ztypes.tid
     # a type's `as` constant reads as its value, typed by it
     memberDecl: st.typing.declMemberIdOf parentTypeId: bt nameId: cnId
     if (st.typing.isAsConstDecl declId: memberDecl) then {

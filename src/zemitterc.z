@@ -3124,6 +3124,10 @@ Ctx: class {
     # the user types whose struct is already out, so a second demand does not
     # emit it twice
     emittedUserTypes: IdSet u64
+    # the types whose C `_eq` has been asked about, and those it can be written
+    # for
+    eqAsked: IdSet u64
+    eqWritable: IdSet u64
     # each sum's tag stem, so its arms' tags agree
     tagStems: (MapRV String v: u64
     # the types already forward-declared. Asking whether a FORWARD exists is not
@@ -29155,6 +29159,8 @@ emitC: function {
         genHasValue: false
         curThisTid: ztypes.tid
         emittedUserTypes: IdSet u64
+        eqAsked: IdSet u64
+        eqWritable: IdSet u64
         tagStems: (MapRV String v: u64)
         fwdDeclaredTypes: IdSet u64
         tmplCache: (Map String V: String)
@@ -29390,6 +29396,7 @@ emitArrayMono: function {
     createBody: "    z_\{nm}_t _this = {0};"
     eqBody: String
     eqo: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkOpEq
+    if (eqBodyWritable :ast :symtab :ctx tid: monoId).not then eqo = optionval.none u64
     match (
         eqo
     ) case some then {
@@ -36605,7 +36612,9 @@ emitOneVariant: function {
     if haveP then buf.append "    } data;\n"
     lg: "} \{vc}_t;\n"
     buf.append lg
-    emitVariantEq :ast :symtab :ctx :tid vc: vc.stringView :anames :aidsNm :haveP :buf
+    if (eqBodyWritable :ast :symtab :ctx :tid) then {
+        emitVariantEq :ast :symtab :ctx :tid vc: vc.stringView :anames :aidsNm :haveP :buf
+    }
 }
 
 # objectDefIsKind -- the node defines an object of that kind. The four
@@ -36895,6 +36904,64 @@ aggregateEqTid: function {
     return (ztypes.tid.create from: frid.u64)
 }
 
+# eqBodyWritable -- a C `_eq` can be written for `tid`: every part is a scalar,
+# a function pointer, a str, or an aggregate whose own `_eq` can be written. A
+# facet part has nothing C can compare, so neither the type holding it nor
+# anything holding that type gets one; the checker has already refused every
+# comparison that would reach it. Answered once per type.
+eqBodyWritable: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+} out bool is {
+    if (ctx.eqAsked.has item: tid.u64) then return (ctx.eqWritable.has item: tid.u64)
+    parts: ListVal u64
+    ztypecheck.valPartTids :ast st: symtab :tid :parts
+    return (eqBodyWritableWith :ast :symtab :ctx :tid :parts)
+}
+
+# eqBodyWritableWith -- eqBodyWritable over parts the caller already holds.
+eqBodyWritableWith: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    parts: (ListVal u64).view
+} out bool is {
+    if (ctx.eqAsked.has item: tid.u64) then return (ctx.eqWritable.has item: tid.u64)
+    # a valtype cannot hold itself; asking first keeps a malformed chain finite
+    ctx.eqAsked.add item: tid.u64
+    ok: true
+    i: u64
+    for i < parts.length while ok loop {
+        p: typedefChaseTid :symtab tid: (ztypes.tid.create from: (parts.get :i))
+        i = i + 1
+        ok = eqPartWritable :ast :symtab :ctx tid: p
+    }
+    if ok then ctx.eqWritable.add item: tid.u64
+    return ok
+}
+
+# eqPartWritable -- one part of a type C can compare: a function pointer, a
+# runtime-compared value, or an aggregate whose own `_eq` can be written.
+eqPartWritable: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+} out bool is {
+    tt: symtab.reg.typetypeOf typeId: tid
+    if tt == ztypes.ztypetype.functionType then return true
+    isAgg: tt == ztypes.ztypetype.recordType or (tt == ztypes.ztypetype.variantType)
+    if isAgg.not then return false
+    src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.names.wkOpEq
+    if src.builtin then return true
+    pr: canonTypeId :ast :symtab :ctx :tid name: (regNameView :symtab :tid)
+    if pr == 0 then return false
+    return (eqBodyWritable :ast :symtab :ctx tid: (ztypes.tid.create from: pr.u64))
+}
+
 # emitRecordEq -- a record's structural `==`, field by field, an aggregate field
 # through its own. A class compares by identity and gets none.
 emitRecordEq: function {
@@ -37006,7 +37073,7 @@ emitOneRecord: function {
         l5: "#define \{rc}_create \{rc}_meta_create\n"
         buf.append l5
     }
-    (emitRecordEq
+    if (eqBodyWritableWith :ast :symtab :ctx :tid parts: fids) then (emitRecordEq
         :ast
         :symtab
         :ctx
