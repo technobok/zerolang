@@ -1,0 +1,110 @@
+# A GENERATED `==` COMPARES EACH PART WITH THAT PART'S OWN `==`. `point` says
+# two points are equal when their `x` agree, so every holder below must say so
+# too, however the point is held: a field, a variant payload, an array
+# element, a generic argument, optionval, two levels down, and from another
+# unit. The generated comparison used to walk the part's bytes instead, so
+# `a.p == b.p` was true while `a == b` was false.
+#
+# A part that writes only `!=` is compared through it, negated; a typedef whose
+# `==` is not its bytes (`parity`) is compared through that `==`; a generic
+# template's written `==` is its instances', even when nothing calls it
+# directly. Each written method is defined after the generated helpers that
+# call it.
+point: record {
+    x: i64
+    y: i64
+} as {
+    ==: function {a: this rhs: point} out bool is {
+        return a.x == rhs.x
+    }
+}
+
+span: record {
+    lo: i64
+    hi: i64
+} as {
+    !=: function {a: this rhs: span} out bool is {
+        return (a.hi - a.lo) != (rhs.hi - rhs.lo)
+    }
+}
+
+parity: record { val: u64.typedef } as {
+    ==: function {t: this.view rhs: parity} out bool is {
+        return (t.u64 % 2) == (rhs.u64 % 2)
+    }
+}
+
+Loose: record {
+    a: t
+    b: t
+} as {
+    t: anyval.generic
+    ==: function {:this rhs: Loose} out bool is {
+        return this.a == rhs.a
+    }
+}
+
+wrap: record {
+    p: point
+    n: i64
+}
+
+pick: variant {
+    one: point
+    none: null
+}
+
+row: record {
+    ps: (array t: point to: 2)
+}
+
+Pair: record {
+    a: t
+} as {
+    t: anyval.generic
+}
+
+outer: record {
+    w: wrap
+}
+
+spans: record {
+    s: span
+}
+
+parities: record {
+    p: parity
+}
+
+loosely: record {
+    l: (Loose t: i64)
+}
+
+remote: record {
+    p: xunit_eqpart.rpoint
+}
+
+main: function is {
+    p1: point x: 1 y: 2
+    p2: point x: 1 y: 3
+    print "direct \{p1 == p2}"
+    print "field \{(wrap p: p1 n: 0) == (wrap p: p2 n: 0)} \{(wrap p: p1 n: 0) == (wrap p: p2 n: 1)}"
+    print "payload \{(pick.one p1) == (pick.one p2)} \{(pick.one p1) != (pick.one p2)}"
+    r1: row ps: (array t: point to: 2)
+    r2: row ps: (array t: point to: 2)
+    r2.ps.set i: 1 item: (point x: 0 y: 9)
+    print "element \{r1 == r2}"
+    r2.ps.set i: 1 item: (point x: 4 y: 9)
+    print "element \{r1 == r2}"
+    print "argument \{(Pair t: point a: p1) == (Pair t: point a: p2)}"
+    print "optionval \{((optionval t: point).some p1) == ((optionval t: point).some p2)}"
+    o1: outer w: (wrap p: p1 n: 5)
+    o2: outer w: (wrap p: p2 n: 5)
+    print "nested \{o1 == o2}"
+    print "only != \{(spans s: (span lo: 0 hi: 2)) == (spans s: (span lo: 5 hi: 7))} \{(spans s: (span lo: 0 hi: 2)) == (spans s: (span lo: 0 hi: 3))}"
+    print "typedef \{(parities p: (parity from: 1)) == (parities p: (parity from: 3))} \{(parities p: (parity from: 1)) == (parities p: (parity from: 2))}"
+    print "template \{(loosely l: (Loose t: i64 a: 1 b: 2)) == (loosely l: (Loose t: i64 a: 1 b: 3))}"
+    q1: xunit_eqpart.rpoint x: 7 y: 1
+    q2: xunit_eqpart.rpoint x: 7 y: 2
+    print "remote \{(remote p: q1) == (remote p: q2)}"
+}

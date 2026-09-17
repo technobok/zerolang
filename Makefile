@@ -1052,7 +1052,12 @@ perf: $(PERFBIN)
 # same source (the checker's gate, answered once per type, and the emitter's
 # once-per-type test of whether a C `_eq` can be written at all) and +18,148
 # the source longer, 15,828 of it the checker's new functions.
-ALLOC_BASELINE := 2851206
+#
+# +1,042 when a generated `==` came to call each part's own: -521 over the same
+# source (no `_eq` for a type whose `==` is written or struck off; a definition
+# is built apart only when it must follow the methods it calls) and +1,563 the
+# source longer.
+ALLOC_BASELINE := 2852248
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

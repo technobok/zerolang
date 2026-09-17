@@ -3124,10 +3124,13 @@ Ctx: class {
     # the user types whose struct is already out, so a second demand does not
     # emit it twice
     emittedUserTypes: IdSet u64
-    # the types whose C `_eq` has been asked about, and those it can be written
-    # for
+    # the types whose generated `==` has been asked about, and those that have
+    # one, so a C `_eq`
     eqAsked: IdSet u64
-    eqWritable: IdSet u64
+    eqHasBody: IdSet u64
+    # the generated helpers that call a method the author wrote: their bodies,
+    # written after every function prototype
+    lateDefs: String
     # each sum's tag stem, so its arms' tags agree
     tagStems: (MapRV String v: u64
     # the types already forward-declared. Asking whether a FORWARD exists is not
@@ -28754,11 +28757,12 @@ assembleEmitOutput: function {
             :buf
         )
     }
-    buf.reserve n: poolBuf.length + codeBuf.length + fnsBuf.length + 4096
+    buf.reserve n: poolBuf.length + codeBuf.length + fnsBuf.length + ctx.lateDefs.length + 4096
     buf.append poolBuf
     buf.append "\n"
     buf.append codeBuf
     buf.append fnsBuf
+    buf.append ctx.lateDefs
     buf.append "int main(int argc, char* argv[]) {\n"
     if (needsHasM :ctx uname: "os" memb: "args") then {
         buf.append "    z_os_argc_g = argc;\n"
@@ -29160,7 +29164,8 @@ emitC: function {
         curThisTid: ztypes.tid
         emittedUserTypes: IdSet u64
         eqAsked: IdSet u64
-        eqWritable: IdSet u64
+        eqHasBody: IdSet u64
+        lateDefs: String
         tagStems: (MapRV String v: u64)
         fwdDeclaredTypes: IdSet u64
         tmplCache: (Map String V: String)
@@ -29376,10 +29381,8 @@ ctypeOrI64: function {s: StringView} out String is {
 }
 
 # emitArrayMono -- the array instance's runtime substitution, emitListMono's
-# twin: the element mono supplies both the C element type and the `==` companion.
-# An array's generated `==` answers "the same bytes": a scalar element array is
-# one memcmp, and a compound element is compared through its own generated `==`,
-# which answers the same question without reading padding.
+# twin: the element mono supplies both the C element type and the `==` companion
+# (arrayEqBody).
 emitArrayMono: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -29395,19 +29398,15 @@ emitArrayMono: function {
     lenStr: monoLengthText :symtab :monoId
     createBody: "    z_\{nm}_t _this = {0};"
     eqBody: String
-    eqo: symtab.typing.declChildOfId parentTypeId: monoId nameId: zast.names.wkOpEq
-    if (eqBodyWritable :ast :symtab :ctx tid: monoId).not then eqo = optionval.none u64
-    match (
-        eqo
-    ) case some then {
-        agg: aggregateEqTid :ast :symtab :ctx fid: (ztypes.tid.create from: eid.u64)
-        if agg.isZero then {
-            eqBody = "static bool z_\{nm}_eq(z_\{nm}_t a, z_\{nm}_t b) {\n    return memcmp(a.data, b.data, sizeof(a.data)) == 0;\n}\n"
-        } else {
-            erc: ctxCname :ctx tid: agg
-            eqBody = "static bool z_\{nm}_eq(z_\{nm}_t a, z_\{nm}_t b) {\n    for (int _i = 0; _i < \{lenStr.stringView}; _i++) { if (!\{erc}_eq(a.data[_i], b.data[_i])) return false; }\n    return true;\n}\n"
-        }
-    } case none then null
+    if (eqGenerated :ast :symtab :ctx tid: monoId) then (arrayEqBody
+        :ast
+        :symtab
+        :ctx
+        :monoId
+        elemId: (ztypes.tid.create from: eid.u64)
+        :lenStr
+        dest: eqBody
+    )
     p: "\{runtimeDir}/z_array.c.tmpl"
     raw: readTemplateCached :ctx path: p.stringView
     if raw.length > 0 then {
@@ -29419,6 +29418,38 @@ emitArrayMono: function {
         buf.append t5
         buf.append "\n"
     }
+}
+
+# arrayEqBody -- an array's generated `==`: its elements one at a time, each
+# with the element's own `==`, or one memcmp over a scalar element, whose `==`
+# is its bytes. A body that calls a written method goes after the method
+# prototypes, leaving its prototype in the template's place.
+arrayEqBody: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    monoId: ztypes.tid
+    elemId: ztypes.tid
+    lenStr: String.view
+    dest: String.borrow
+} is {
+    nm: cbaseNoPrefix :ctx tid: monoId
+    body: "static bool z_\{nm}_eq(z_\{nm}_t a, z_\{nm}_t b) {\n"
+    elemSrc: ztypecheck.valOpSource :ast st: symtab tid: elemId nameId: zast.names.wkOpEq
+    if elemSrc.builtin when (partIsCScalar :symtab tid: elemId) then {
+        body.append "    return memcmp(a.data, b.data, sizeof(a.data)) == 0;\n}\n"
+    } else {
+        body.append "    for (int _i = 0; _i < \{lenStr}; _i++) { if (!("
+        partEqC :ast :symtab :ctx tid: elemId sel: ".data[_i]" dest: body
+        body.append ")) return false; }\n"
+        body.append "    return true;\n}\n"
+    }
+    if (partCallsWritten :ast :symtab tid: elemId).not then {
+        dest.append body
+        return
+    }
+    zn: "z_\{nm}"
+    emitEqLate :ctx cname: zn.stringView :body buf: dest
 }
 
 # capLenT -- the C length-field type for a str mono of the given capacity:
@@ -36464,38 +36495,9 @@ checkTagStem: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid}
     }
 }
 
-# armPayloadEqText -- how the comparator compares one payload-carrying arm: a
-# record or variant payload through its own `_eq`, anything else (a scalar, a
-# pointer, an unresolved type) with `==`. A typedef arm compares as its
-# chain-end base.
-armPayloadEqText: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    tid: ztypes.tid
-    # the arm's name and its interned id
-    qname: StringView
-    qnameId: zast.nameid
-} out String is {
-    qnameP: memberCPrefix name: qname
-    plain: "a.data.\{qnameP}\{qname} == b.data.\{qnameP}\{qname}"
-    qco: symtab.typing.declChildOfId parentTypeId: tid nameId: qnameId
-    if qco.none then return plain
-    qcoC: typedefChaseTid :symtab tid: (ztypes.tid.create from: qco.u64)
-    qtn: regNameOf :symtab tid: qcoC
-    qsc: scalarCTypeFor :symtab name: qtn.stringView tid: qcoC
-    if qsc.length > 0 then return plain
-    qrid: canonTypeId :ast :symtab :ctx tid: qcoC name: qtn.stringView
-    if qrid == 0 then return plain
-    qtt: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: qrid.u64)
-    isAgg: qtt == ztypes.ztypetype.recordType or (qtt == ztypes.ztypetype.variantType)
-    if isAgg.not then return plain
-    qrc: ctxCname :ctx tid: (ztypes.tid.create from: qrid.u64)
-    return "\{qrc}_eq(a.data.\{qnameP}\{qname}, b.data.\{qnameP}\{qname})"
-}
-
-# emitVariantEq -- the variant's structural comparator: tags first, then the
-# payload of the arm both carry; a payload-less variant is its tag.
+# emitVariantEq -- the variant's generated comparator: tags first, then the
+# payload of the arm both carry, with that payload's own `==`; a payload-less
+# variant is its tag.
 emitVariantEq: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -36504,36 +36506,66 @@ emitVariantEq: function {
     # the variant's C name
     vc: StringView
     anames: (List String).view
-    # the arms' interned name ids, parallel to `anames`
-    aidsNm: (ListVal u64).view
+    # the arms' payload ids, parallel to `anames`
+    aids: (ListVal u64).view
     # whether any arm carries a payload
     haveP: bool
     buf: String.borrow
 } is {
-    buf.append "static bool \{vc}_eq(\{vc}_t a, \{vc}_t b) {\n"
-    if haveP.not then {
-        buf.append "    return a.tag == b.tag;\n"
-        buf.append "}\n\n"
+    if (partsCallWritten :ast :symtab ids: aids).not then {
+        writeVariantEq :ast :symtab :ctx :tid :vc :anames :haveP dest: buf
         return
     }
-    buf.append "    if (a.tag != b.tag) return false;\n"
-    buf.append "    switch (a.tag) {\n"
+    body: String
+    writeVariantEq :ast :symtab :ctx :tid :vc :anames :haveP dest: body
+    emitEqLate :ctx cname: vc :body :buf
+}
+
+# writeVariantEq -- emitVariantEq's definition, written to `dest`.
+writeVariantEq: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    vc: StringView
+    anames: (List String).view
+    haveP: bool
+    dest: String.borrow
+} is {
+    dest.append "static bool \{vc}_eq(\{vc}_t a, \{vc}_t b) {\n"
+    if haveP.not then {
+        dest.append "    return a.tag == b.tag;\n"
+        dest.append "}\n\n"
+        return
+    }
+    dest.append "    if (a.tag != b.tag) return false;\n"
+    dest.append "    switch (a.tag) {\n"
     qk: u64
     an: anames.length
     for qk < an loop {
         qname: anames.get i: qk
-        qc: armPayloadC :ast :symtab :ctx :tid arm: qname.stringView
-        if qc.length > 0 then {
-            qtg: variantTag :symtab :tid arm: qname.stringView
-            qnameId: zast.nameid.create from: (aidsNm.get i: qk)
-            qeq: armPayloadEqText :ast :symtab :ctx :tid qname: qname.stringView :qnameId
-            buf.append "        case \{qtg}: return \{qeq};\n"
-        }
         qk = qk + 1
+        qco: symtab.typing.declChildOf pool: ast.names parentTypeId: tid name: qname.stringView
+        qc: armPayloadC :ast :symtab :ctx :tid arm: qname.stringView
+        if qc.length > 0 when qco.some then {
+            qtg: variantTag :symtab :tid arm: qname.stringView
+            qnameP: memberCPrefix name: qname.stringView
+            qsel: ".data.\{qnameP}\{qname}"
+            dest.append "        case \{qtg}: return "
+            (partEqC
+                :ast
+                :symtab
+                :ctx
+                tid: (ztypes.tid.create from: qco)
+                sel: qsel.stringView
+                :dest
+            )
+            dest.append ";\n"
+        }
     }
-    buf.append "        default: return true;\n"
-    buf.append "    }\n"
-    buf.append "}\n\n"
+    dest.append "        default: return true;\n"
+    dest.append "    }\n"
+    dest.append "}\n\n"
 }
 
 # emitOneVariant -- tag enum + tagged struct (+ payload union when any
@@ -36612,8 +36644,8 @@ emitOneVariant: function {
     if haveP then buf.append "    } data;\n"
     lg: "} \{vc}_t;\n"
     buf.append lg
-    if (eqBodyWritable :ast :symtab :ctx :tid) then {
-        emitVariantEq :ast :symtab :ctx :tid vc: vc.stringView :anames :aidsNm :haveP :buf
+    if (eqGenerated :ast :symtab :ctx :tid) then {
+        emitVariantEq :ast :symtab :ctx :tid vc: vc.stringView :anames :aids :haveP :buf
     }
 }
 
@@ -36884,125 +36916,196 @@ recordCreateArgs: function {
     }
 }
 
-# aggregateEqTid -- the type whose own `_eq` a field must be compared through,
-# 0 when the field compares with C's `==`.
-aggregateEqTid: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    fid: ztypes.tid
-} out ztypes.tid is {
-    fkiC: typedefChaseTid :symtab tid: fid
-    ftn: regNameOf :symtab tid: fkiC
-    zeroTid: ztypes.tid
-    if (scalarCTypeFor :symtab name: ftn.stringView tid: fkiC).length > 0 then return zeroTid
-    frid: canonTypeId :ast :symtab :ctx tid: fkiC name: ftn.stringView
-    if frid == 0 then return zeroTid
-    ftt: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: frid.u64)
-    isAggF: ftt == ztypes.ztypetype.recordType or (ftt == ztypes.ztypetype.variantType)
-    if isAggF.not then return zeroTid
-    return (ztypes.tid.create from: frid.u64)
-}
-
-# eqBodyWritable -- a C `_eq` can be written for `tid`: every part is a scalar,
-# a function pointer, a str, or an aggregate whose own `_eq` can be written. A
-# facet part has nothing C can compare, so neither the type holding it nor
-# anything holding that type gets one; the checker has already refused every
-# comparison that would reach it. Answered once per type.
-eqBodyWritable: function {
+# eqGenerated -- `tid` has a generated `==` and so a C `_eq`: its own `==` is
+# generated and every part has an `==` of its own. The checker refused every
+# comparison of a type this answers false for. Answered once per type.
+eqGenerated: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     tid: ztypes.tid
 } out bool is {
-    if (ctx.eqAsked.has item: tid.u64) then return (ctx.eqWritable.has item: tid.u64)
-    parts: ListVal u64
-    ztypecheck.valPartTids :ast st: symtab :tid :parts
-    return (eqBodyWritableWith :ast :symtab :ctx :tid :parts)
-}
-
-# eqBodyWritableWith -- eqBodyWritable over parts the caller already holds.
-eqBodyWritableWith: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    tid: ztypes.tid
-    parts: (ListVal u64).view
-} out bool is {
-    if (ctx.eqAsked.has item: tid.u64) then return (ctx.eqWritable.has item: tid.u64)
+    if (ctx.eqAsked.has item: tid.u64) then return (ctx.eqHasBody.has item: tid.u64)
     # a valtype cannot hold itself; asking first keeps a malformed chain finite
     ctx.eqAsked.add item: tid.u64
+    src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.names.wkOpEq
+    if src.generated.not then return false
+    parts: ListVal u64
+    ztypecheck.valPartTids :ast st: symtab :tid :parts
     ok: true
     i: u64
     for i < parts.length while ok loop {
-        p: typedefChaseTid :symtab tid: (ztypes.tid.create from: (parts.get :i))
+        ok = partHasEq :ast :symtab :ctx tid: (ztypes.tid.create from: (parts.get :i))
         i = i + 1
-        ok = eqPartWritable :ast :symtab :ctx tid: p
     }
-    if ok then ctx.eqWritable.add item: tid.u64
+    if ok then ctx.eqHasBody.add item: tid.u64
     return ok
 }
 
-# eqPartWritable -- one part of a type C can compare: a function pointer, a
-# runtime-compared value, or an aggregate whose own `_eq` can be written.
-eqPartWritable: function {
+# partHasEq -- a part a generated `==` can compare: its own `==` is the
+# runtime's or the author's, or generated with a body of its own.
+partHasEq: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     tid: ztypes.tid
 } out bool is {
-    tt: symtab.reg.typetypeOf typeId: tid
-    if tt == ztypes.ztypetype.functionType then return true
-    isAgg: tt == ztypes.ztypetype.recordType or (tt == ztypes.ztypetype.variantType)
-    if isAgg.not then return false
     src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.names.wkOpEq
-    if src.builtin then return true
-    pr: canonTypeId :ast :symtab :ctx :tid name: (regNameView :symtab :tid)
-    if pr == 0 then return false
-    return (eqBodyWritable :ast :symtab :ctx tid: (ztypes.tid.create from: pr.u64))
+    if src.none then return false
+    if src.generated.not then return true
+    return (eqGenerated :ast :symtab :ctx tid: (typedefChaseTid :symtab :tid))
 }
 
-# emitRecordEq -- a record's structural `==`, field by field, an aggregate field
-# through its own. A class compares by identity and gets none.
+# partEqC -- appends the C comparison of one part, `a` against `b` reached
+# through `sel` (`.x`, `.data.arm`, `.data[_i]`), made with that part's own
+# `==`: the author's method (negated when only `!=` is written), C `==` for a
+# scalar or a function pointer, and the `_eq` of a str or of a generated `==`
+# otherwise. A method takes its receiver's address, so `a` + `sel` is an
+# lvalue.
+partEqC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    sel: StringView
+    dest: String.borrow
+} is {
+    src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.names.wkOpEq
+    if src.written or src.negated then {
+        opId: zast.names.wkOpEq
+        if src.negated then {
+            opId = zast.names.wkOpNe
+            dest.append "!"
+        }
+        owner: ztypecheck.valOpOwner st: symtab :tid nameId: zast.names.wkOpEq
+        fo: symtab.typing.declChildOfId parentTypeId: owner nameId: opId
+        dest.append (ctxCname :ctx tid: (ztypes.tid.create from: (fo.or d: 0)))
+        dest.append "(&a"
+        dest.append sel
+        dest.append ", b"
+        dest.append sel
+        dest.append ")"
+        return
+    }
+    if (partIsCScalar :symtab :tid) then {
+        dest.append "a"
+        dest.append sel
+        dest.append " == b"
+        dest.append sel
+        return
+    }
+    dest.append (ctxCname :ctx tid: (typedefChaseTid :symtab :tid))
+    dest.append "_eq(a"
+    dest.append sel
+    dest.append ", b"
+    dest.append sel
+    dest.append ")"
+}
+
+# partCallsWritten -- comparing a `tid` part calls a method the author wrote,
+# whose definition comes after every generated helper.
+partCallsWritten: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+} out bool is {
+    src: ztypecheck.valOpSource :ast st: symtab :tid nameId: zast.names.wkOpEq
+    return src.written or src.negated
+}
+
+# partsCallWritten -- partCallsWritten for any of `ids`.
+partsCallWritten: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ids: (ListVal u64).view
+} out bool is {
+    i: u64
+    for i < ids.length loop {
+        p: ztypes.tid.create from: (ids.get :i)
+        i = i + 1
+        if (partCallsWritten :ast :symtab tid: p) then return true
+    }
+    return false
+}
+
+# partIsCScalar -- a part C compares with `==`: a scalar, or a function
+# pointer. Asked after the author's own `==`, which always comes first.
+partIsCScalar: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    base: typedefChaseTid :symtab :tid
+    if (symtab.reg.typetypeOf typeId: base) == ztypes.ztypetype.functionType then return true
+    return (scalarCTypeFor :symtab name: (regNameView :symtab tid: base) tid: base).length > 0
+}
+
+# emitEqLate -- a generated `_eq` that calls a method the author wrote: its
+# prototype in place and its definition after every function prototype, since
+# the generated helpers are written ahead of the methods they call.
+emitEqLate: function {
+    ctx: Ctx
+    cname: StringView
+    body: String.view
+    buf: String.borrow
+} is {
+    buf.append "static bool \{cname}_eq(\{cname}_t a, \{cname}_t b);\n"
+    ctx.lateDefs.append body
+}
+
+# emitRecordEq -- a record's generated `==`: its fields one at a time, each with
+# that field's own `==`.
 emitRecordEq: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    tid: ztypes.tid
     rc: String.view
     names: (List String).view
     ids: (ListVal u64).view
     buf: String.borrow
 } is {
-    if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.classType then return
-    lq: "static bool \{rc}_eq(\{rc}_t a, \{rc}_t b) {\n"
-    buf.append lq
-    if names.length == 0 then {
-        buf.append "    (void)a; (void)b;\n"
-        buf.append "    return true;\n"
-        buf.append "}\n\n"
+    if (partsCallWritten :ast :symtab :ids).not then {
+        writeRecordEq :ast :symtab :ctx :rc :names :ids dest: buf
         return
     }
-    eqx: String
+    body: String
+    writeRecordEq :ast :symtab :ctx :rc :names :ids dest: body
+    emitEqLate :ctx cname: rc.stringView :body :buf
+}
+
+# writeRecordEq -- emitRecordEq's definition, written to `dest`.
+writeRecordEq: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    rc: String.view
+    names: (List String).view
+    ids: (ListVal u64).view
+    dest: String.borrow
+} is {
+    lq: "static bool \{rc}_eq(\{rc}_t a, \{rc}_t b) {\n"
+    dest.append lq
+    if names.length == 0 then {
+        dest.append "    (void)a; (void)b;\n"
+        dest.append "    return true;\n"
+        dest.append "}\n\n"
+        return
+    }
+    dest.append "    return "
     fk: u64
     for fk < names.length loop {
         fkn: names.get i: fk
-        if fk > 0 then eqx.append " && "
-        agg: aggregateEqTid :ast :symtab :ctx fid: (ztypes.tid.create from: (ids.get i: fk))
+        if fk > 0 then dest.append " && "
         fknP: memberCPrefix name: fkn.stringView
-        if agg.isZero then {
-            fe2: "a.\{fknP}\{fkn} == b.\{fknP}\{fkn}"
-            eqx.append fe2
-        } else {
-            frc: ctxCname :ctx tid: agg
-            fe: "\{frc}_eq(a.\{fknP}\{fkn}, b.\{fknP}\{fkn})"
-            eqx.append fe
-        }
+        fsel: ".\{fknP}\{fkn}"
+        (partEqC
+            :ast
+            :symtab
+            :ctx
+            tid: (ztypes.tid.create from: (ids.get i: fk))
+            sel: fsel.stringView
+            :dest
+        )
         fk = fk + 1
     }
-    lr: "    return \{eqx};\n"
-    buf.append lr
-    buf.append "}\n\n"
+    dest.append ";\n"
+    dest.append "}\n\n"
 }
 
 # emit one record's C struct.
@@ -37073,11 +37176,10 @@ emitOneRecord: function {
         l5: "#define \{rc}_create \{rc}_meta_create\n"
         buf.append l5
     }
-    if (eqBodyWritableWith :ast :symtab :ctx :tid parts: fids) then (emitRecordEq
+    if (eqGenerated :ast :symtab :ctx :tid) then (emitRecordEq
         :ast
         :symtab
         :ctx
-        :tid
         :rc
         names: fnames
         ids: fids
