@@ -1121,7 +1121,12 @@ perf: $(PERFBIN)
 # +2,677 when generic instances came to be written after the instances they
 # embed, and a sum's arm over its own parameter to resolve: the same source
 # compiles with the same count, all of it is the source longer.
-ALLOC_BASELINE := 2894592
+#
+# +13,882 when a type a generic unit declares came to be each instance's own:
+# the same source compiles with the same count, all of it is the source longer
+# (a first cut listed every function type's parameters to ask whether one names
+# a template, +10,696 over the same source).
+ALLOC_BASELINE := 2908474
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

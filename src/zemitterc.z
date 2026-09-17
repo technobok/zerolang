@@ -27895,6 +27895,28 @@ emitUnitMonoFn: function {
     buf.append "}\n\n"
 }
 
+# emitUnitNestedMethods -- the methods of the unit mono `t`'s own copy of a type
+# its template declares.
+emitUnitNestedMethods: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    member: astnode.view
+    t: u64
+    declOnly: bool
+    buf: String.borrow
+} is {
+    if member.namedoperation.not then return
+    op: ast.nodes.get i: member.operation.u64
+    if op.objectdef.not then return
+    io: symtab.typing.declChildOfId parentTypeId: (ztypes.tid.create from: t) nameId: member.name
+    inst: io.or d: 0
+    if inst == 0 then return
+    if (symtab.reg.genericOriginOf tid: (ztypes.tid.create from: inst)).isZero then return
+    emitMonoMethodsIn :ast :symtab :ctx span: op.isItems monoId: inst :declOnly :buf
+    emitMonoMethodsIn :ast :symtab :ctx span: op.asItems monoId: inst :declOnly :buf
+}
+
 # emitUnitMonoMembers -- every body-carrying function the template declares,
 # as the mono `t` substituted it.
 emitUnitMonoMembers: function {
@@ -27912,6 +27934,7 @@ emitUnitMonoMembers: function {
         fm: zast.kidAt kids: ast.kids span: bodyIds i: vx
         vx = vx + 1
         fm9Node: ast.nodes.get i: fm.u64
+        emitUnitNestedMethods :ast :symtab :ctx member: fm9Node :t :declOnly :buf
         if fm9Node.namedoperation when (ztypecheck.isFunctionDefWithBody
             o: (ast.nodes.get i: fm9Node.operation.u64)
         ) then {
@@ -33149,7 +33172,34 @@ fnptrTypedefEligible: function {
     if (isGenericType :symtab :tid) then return false
     mo: originTidOf :symtab :tid
     if mo > 0 then return false
+    if (signatureNamesTemplate :symtab :tid) then return false
     return (stdFnRefEmittable :ast :symtab fid: (ztypes.tid.create from: tid.u64))
+}
+
+# signatureNamesTemplate -- a function whose return or a parameter is a generic
+# TEMPLATE (a generic unit's function over a type the unit declares) is the
+# template's own; its instances carry the concrete signature.
+signatureNamesTemplate: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    rt: symtab.reg.returnTypeOf :tid
+    {
+        rno: symtab.typing.funcReturnNode.get key: tid
+        match (
+            rno
+        ) case some then {
+            rs: stampIdOf :symtab nid: rno
+            if rs.isZero.not then rt = rs
+        } case none then null
+    }
+    if rt.isZero.not when (isGenericType :symtab tid: rt) then return true
+    pi: u64
+    pn: symtab.typing.declRowSlots ownerTid: tid
+    for pi < pn loop {
+        pr: symtab.typing.declRowAt ownerTid: tid membersOnly: true slot: pi
+        pi = pi + 1
+        if pr.keep when (isGenericType :symtab tid: (ztypes.tid.create from: pr.tid)
+        ) then return true
+    }
+    return false
 }
 
 # fnRegReturnId -- a FUNCTION type's registered return type id (0 when none).

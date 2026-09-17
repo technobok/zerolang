@@ -2584,6 +2584,78 @@ registerGenericParams: function {
     }
 }
 
+# unitNestedSelf -- a bare name, inside a generic unit, of a type that unit
+# declares means this unit instance's own copy of it: the instance on an
+# instance walk, the template itself on the template's walk. 0 for any other
+# type or place.
+unitNestedSelf: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid
+} out ztypes.tid is {
+    none: ztypes.tid
+    if (st.reg.isGenericOf :tid).not then return none
+    td: declOfTypeId :st :tid
+    if td.isZero then return none
+    ud: declParentIdOf :st declId: td
+    if ud.isZero then return none
+    if (declDeclaresTemplate :st :ast declId: ud).not then return none
+    cur: st.curFrame
+    for cur.isZero.not loop {
+        if cur == ud then return (monoSubstTid :st :tid)
+        cur = st.typing.declParentOf declId: cur
+    }
+    return none
+}
+
+# nestedTemplateUnit -- the generic unit template a type definition is written
+# in: a type inside `cells: unit as { t: anyval.generic ... }` is generic over the
+# unit's parameters, and every instance of the unit has its own. 0 for a type
+# written anywhere else.
+nestedTemplateUnit: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    frame: ztypes.declid
+    unitDecl: ztypes.declid
+    nameId: zast.nameid
+} out ztypes.declid is {
+    none: ztypes.declid
+    td: declOfUnitDef :st :unitDecl :frame :nameId
+    if td.isZero then return none
+    pd: declParentIdOf :st declId: td
+    if pd.isZero then return none
+    if (declDeclaresTemplate :st :ast declId: pd) then return pd
+    return none
+}
+
+# registerUnitParamsOn -- a type nested in a generic unit takes the unit's
+# parameters as its own, their parameter types included, so its members'
+# references to them are its parameters and its instances bind them.
+registerUnitParamsOn: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    tdecl: ztypes.declid
+    unitTmpl: ztypes.declid
+} is {
+    un: u64
+    {
+        ud: st.typing.decls.get i: unitTmpl.u64
+        un = ud.node.u64
+    }
+    if un == 0 then return
+    uop: u32
+    {
+        unn: ast.nodes.get i: un
+        if unn.namedoperation then uop = unn.operation.u32
+    }
+    if uop == 0 then return
+    registerGenericParams :st :ast :tdecl items: (zast.unitBodyIdsAt :ast unitId: uop)
+    with pit: (st.reg.genericParamNamesOf tdecl: unitTmpl).iterate do for pn: pit loop {
+        ut: genericParamTidMint :st :ast tdecl: unitTmpl nameId: pn
+        if (st.reg.paramOrdinalOf :tdecl paramName: pn).some then {
+            st.reg.setGenericParamTid :tdecl paramName: pn tid: (ztypes.tid.create from: ut)
+        }
+    }
+}
+
 # unitDefIsGeneric -- a unit definition is generic when its body declares a generic
 # param. Mirrors objectdefIsGeneric; gates dep-signature-stamp suppression off generic
 # units, whose template signatures resolve differently.
@@ -6757,6 +6829,22 @@ attachInterfaceAsConstants: function {
     }
 }
 
+# methodsAreTemplate -- the methods of `objId` belong to a generic template: its
+# `as` block declares a generic parameter, or it is a type a generic unit
+# declares, generic over the unit's parameters.
+methodsAreTemplate: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    objId: zast.nodeid
+    parentId: ztypes.tid
+} out bool is {
+    {
+        onA: ast.nodes.get i: objId.u64
+        if onA.objectdef when (hasGenericParam :ast items: onA.asItems) then return true
+    }
+    return (st.reg.isGenericOf tid: parentId)
+}
+
 # attachMethods -- resolve an as-block's method items (namedoperation -> functiondef)
 # as children of `parentId`, returning whether one is named `create` (so the caller
 # skips the synth create). Takes the item list by value so its iterator's lock is
@@ -6773,13 +6861,7 @@ attachMethods: function {
     hasCreate: false
     # a generic template's methods are cloned BY ID into every instance
     # (mintMono reads a member list), so a template's signatures resolve eagerly
-    agen: false
-    {
-        onA: ast.nodes.get i: objId.u64
-        if onA.objectdef then {
-            agen = hasGenericParam :ast items: onA.asItems
-        }
-    }
+    agen: methodsAreTemplate :st :ast :objId :parentId
     orf: objRefAt :ast nid: objId
     # a generator instance carries per-call slots no constructor sets; the
     # honesty rule on owned returns reads this set to leave them alone
@@ -8842,6 +8924,8 @@ resolveRecord: function {
     st.reg.setValtype typeId: rt value: true
     asItems: objAsItemsOf :ast nid: rnode.nid
     isgen: hasGenericParam :ast items: asItems
+    unitTmpl: nestedTemplateUnit :st :ast :frame :unitDecl nameId: (nameIdOf :ast name: defName)
+    if unitTmpl.isZero.not then isgen = true
     eqOptR: eqNullOptOut :ast :asItems
     # BOTH NAMES, INDEPENDENTLY. The old gate asked about `==` alone and then
     # synthesised the pair, so a type writing only `!=` had its own operator
@@ -8858,6 +8942,7 @@ resolveRecord: function {
         st.reg.setGeneric typeId: rt value: true
         tdecl9: declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: defName)
         registerGenericParams :st :ast tdecl: tdecl9 items: asItems
+        if unitTmpl.isZero.not then registerUnitParamsOn :st :ast tdecl: tdecl9 :unitTmpl
         refuseReftypeBounds :st :ast :unitDecl :frame tdecl: tdecl9 what: "record" items: asItems
     }
     istd: recordIsTypedef :ast :rnode
@@ -9237,6 +9322,8 @@ resolveVariant: function {
             isgen = hasGenericParam :ast items: onIsgen.asItems
         }
     }
+    unitTmplV: nestedTemplateUnit :st :ast :frame :unitDecl nameId: (nameIdOf :ast name: defName)
+    if unitTmplV.isZero.not then isgen = true
     eqOptV: false
     {
         onEqOptV: ast.nodes.get i: vnode.nid.u64
@@ -9286,6 +9373,12 @@ resolveVariant: function {
                     :ast
                     tdecl: tdecl92
                     items: onRg.asItems
+                )
+                if unitTmplV.isZero.not then (registerUnitParamsOn
+                    :st
+                    :ast
+                    tdecl: tdecl92
+                    unitTmpl: unitTmplV
                 )
                 (refuseReftypeBounds
                     :st
@@ -10098,6 +10191,8 @@ resolveUnion: function {
             isgen = hasGenericParam :ast items: onIsgen.asItems
         }
     }
+    unitTmplU: nestedTemplateUnit :st :ast :frame :unitDecl nameId: (nameIdOf :ast name: defName)
+    if unitTmplU.isZero.not then isgen = true
     if isgen then {
         st.reg.setGeneric typeId: (ztypes.tid.create from: uid.u64) value: true
         tdecl93: declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: defName)
@@ -10112,6 +10207,12 @@ resolveUnion: function {
                 )
             }
         }
+        if unitTmplU.isZero.not then (registerUnitParamsOn
+            :st
+            :ast
+            tdecl: tdecl93
+            unitTmpl: unitTmplU
+        )
     }
     allNull: true
     armCountU: u64
@@ -11533,6 +11634,8 @@ resolveClass: function {
             isgen = hasGenericParam :ast items: onIsgen.asItems
         }
     }
+    unitTmplC: nestedTemplateUnit :st :ast :frame :unitDecl nameId: (nameIdOf :ast name: defName)
+    if unitTmplC.isZero.not then isgen = true
     if isgen then {
         st.reg.setGeneric typeId: (ztypes.tid.create from: cid.u64) value: true
         tdecl94: declOfUnitDef :st :frame :unitDecl nameId: (nameIdOf :ast name: defName)
@@ -11547,6 +11650,12 @@ resolveClass: function {
                 )
             }
         }
+        if unitTmplC.isZero.not then (registerUnitParamsOn
+            :st
+            :ast
+            tdecl: tdecl94
+            unitTmpl: unitTmplC
+        )
     }
     istd: recordIsTypedef :ast rnode: cnode
     if istd when (resolveClassTypedefBase :st :ast :unitDecl :frame :cid :cnode
@@ -12006,6 +12115,22 @@ aliasNamesType: function {
     return false
 }
 
+# unitNestedCopyNamed -- `tid` is an instance of a type a generic unit declares,
+# and `nameId` is that type's name.
+unitNestedCopyNamed: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    tid: ztypes.tid
+    nameId: zast.nameid
+} out bool is {
+    og: st.reg.genericOriginOf :tid
+    if og.isZero then return false
+    td: declOfTypeId :st tid: og
+    if td.isZero then return false
+    if ((declNameIdOf :st declId: td) == nameId).not then return false
+    return (declDeclaresTemplate :st :ast declId: (declParentIdOf :st declId: td))
+}
+
 # bareNameDenotesType -- the name spelled at a site denotes the TYPE `tid`
 # rather than a value of it, so a bare occurrence in value position is the
 # zero-argument construction. The registry name answers directly when the
@@ -12037,6 +12162,9 @@ bareNameDenotesType: function {
         }
     }
     if named then return true
+    # a unit instance's copy of a type its generic unit declares is named as
+    # the type is
+    if (unitNestedCopyNamed :st :ast :tid :nameId) then return true
     aad: declOfUnitDef :st :unitDecl :frame :nameId
     if aad.isZero then return false
     isAl: aliasNamesType :st :ast declId: aad
@@ -15678,12 +15806,38 @@ resolveInlineGenericUnit: function {
                         nameId: bmNode.name
                         childTypeId: mido
                     )
-                } case none then null
+                } case none then {
+                    # a type the unit declares is a template over its parameters
+                    resolveUnitNestedType :st :ast :unitDecl frame: rf :bmNode
+                }
             }
         }
     }
 }
 
+
+# resolveUnitNestedType -- a type definition in a generic unit's body resolves
+# once, in the unit's frame, as a template over the unit's parameters.
+resolveUnitNestedType: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    bmNode: argref
+} is {
+    isObj: false
+    {
+        op: ast.nodes.get i: bmNode.operation.u64
+        isObj = op.objectdef
+    }
+    if isObj.not then return
+    td: st.typing.declFindChild parentDeclId: frame nameId: bmNode.name
+    if td.isZero then return
+    if (st.typing.declIsDefined declId: td) then return
+    tn: zast.nameTextCopy :ast ref: bmNode.name
+    resolveDef :st :frame :ast :unitDecl defName: tn.stringView defnId: bmNode.operation
+    st.typing.declSetDefined declId: td
+}
 
 # createUnitMono -- mint a mono UNIT with JOIN-only function-shell children
 # from a template unit body, then seed return/never demand. Identity is the
@@ -15880,6 +16034,17 @@ fillMonoMethodSignature: function {
                 nameId: chName
                 childTypeId: target
             )
+            # and the parameter's ownership: a `.take` parameter of the
+            # instance takes its argument as the template's does
+            pown: (st.typing.declOwnershipOfId
+                parentTypeId: (ztypes.tid.create from: srcId.u64)
+                nameId: chName
+            )
+            if pown.some then (st.typing.setChildOwnershipId
+                parentTypeId: newFnId
+                nameId: chName
+                ownership: pown
+            )
         }
     }
     rto: st.reg.returnTypeOf tid: (ztypes.tid.create from: srcId.u64)
@@ -16059,6 +16224,145 @@ buildUnitMonoMember: function {
 }
 
 
+# mintUnitNestedInstances -- each type a generic unit declares, instantiated
+# with the unit instance's arguments: the instance's own member of that name, and
+# the substitution its signatures take for the name.
+mintUnitNestedInstances: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    rf: ztypes.declid
+    tmplUnitName: ztypes.declid
+    monoId: ztypes.tid
+    bodyIds: zast.kidspan
+    allSubs: (IdMapV zast.nameid v: u64)
+    gpNames: (IdMapV zast.nameid v: bool)
+} is {
+    copies: IdMapV u64 v: u64
+    vi: u64
+    for vi < bodyIds.count.u64 loop {
+        nm: (argRefAt
+            :ast
+            nid: (zast.nodeid.create from: (zast.kidAt kids: ast.kids span: bodyIds i: vi).u32)
+        )
+        vi = vi + 1
+        if nm.nid.isZero.not then {
+            inst: unitNestedInstance :st :ast :rf :tmplUnitName bmNode: nm subs: allSubs
+            if inst.isZero.not then {
+                (st.typing.declSynthMember
+                    parentTypeId: monoId
+                    nameId: nm.name
+                    kind: ztyping.declkind.typeDecl
+                )
+                st.typing.setMemberType parentTypeId: monoId nameId: nm.name childTypeId: inst
+                allSubs.set key: nm.name value: inst.u64
+                gpNames.set key: nm.name value: true
+                copies.set key: (st.reg.genericOriginOf tid: inst).u64 value: inst.u64
+            }
+        }
+    }
+    with cit: copies.iterateItems do for ce: cit loop {
+        retargetNestedSignatures :st instTid: (ztypes.tid.create from: ce.value) :copies
+    }
+}
+
+# retargetNestedSignatures -- a copy's methods, cloned before its siblings
+# existed, name a sibling type by its template: they name this unit instance's
+# copy of it instead.
+retargetNestedSignatures: function {
+    st: zenv.ZSymbolTable
+    instTid: ztypes.tid
+    copies: (IdMapV u64 v: u64).view
+} is {
+    fns: ListVal u64
+    ri: u64
+    rn: st.typing.declRowSlots ownerTid: instTid
+    for ri < rn loop {
+        rw: st.typing.declRowAt ownerTid: instTid membersOnly: true slot: ri
+        ri = ri + 1
+        if rw.keep when (
+            (st.reg.typetypeOf typeId: (ztypes.tid.create from: rw.tid)) ==
+            ztypes.ztypetype.functionType
+        ) then fns.append from: rw.tid
+    }
+    with fit: fns.iterate do for fv: fit loop {
+        fid: ztypes.tid.create from: fv
+        rt: methodReturnOf :st mid: fid
+        if rt.some then {
+            rc: (copies.get key: rt.u64).or d: 0
+            if rc > 0 then st.reg.setReturnType typeId: fid value: (ztypes.tid.create from: rc)
+        }
+        retargetNestedParams :st :fid :copies
+    }
+}
+
+# retargetNestedParams -- retargetNestedSignatures over one method's parameters.
+retargetNestedParams: function {
+    st: zenv.ZSymbolTable
+    fid: ztypes.tid
+    copies: (IdMapV u64 v: u64).view
+} is {
+    pi: u64
+    pn: st.typing.declRowSlots ownerTid: fid
+    for pi < pn loop {
+        pr: st.typing.declRowAt ownerTid: fid membersOnly: true slot: pi
+        pi = pi + 1
+        pc: (copies.get key: pr.tid).or d: 0
+        if pr.keep when pc > 0 then {
+            (st.typing.setMemberType
+                parentTypeId: fid
+                nameId: (zast.nameid.create from: pr.name.u32.orPanic)
+                childTypeId: pc
+            )
+        }
+    }
+}
+
+# unitNestedInstance -- the instance of the type `bmNode` defines in a generic
+# unit's body, over the unit instance's arguments; 0 when it defines none.
+unitNestedInstance: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    rf: ztypes.declid
+    tmplUnitName: ztypes.declid
+    bmNode: argref
+    subs: (IdMapV zast.nameid v: u64).view
+} out ztypes.tid is {
+    none: ztypes.tid
+    isObj: false
+    {
+        op: ast.nodes.get i: bmNode.operation.u64
+        isObj = op.objectdef
+    }
+    if isObj.not then return none
+    resolveUnitNestedType :st :ast unitDecl: tmplUnitName frame: rf :bmNode
+    td: st.typing.declFindChild parentDeclId: rf nameId: bmNode.name
+    tpl: declTypeIdOf :st declId: td
+    if tpl.isZero or (st.reg.isGenericOf tid: tpl).not then return none
+    sfx: String
+    with pit: (st.reg.genericParamNamesOf tdecl: td).iterate do for pn: pit loop {
+        av: (subs.get key: pn).or d: 0
+        if av > 0 then {
+            sfx.append s: "_"
+            sfx.append s: (monoValName :st frame: rf :ast tid: (ztypes.tid.create from: av))
+        }
+    }
+    vs: IdMapV zast.nameid v: u64
+    own: IdMapV zast.nameid v: u64
+    with sit: subs.iterateItems do for se: sit loop own.set key: se.key value: se.value
+    mid: (getOrMintSpec
+        :st
+        frame: rf
+        :ast
+        unitDecl: tmplUnitName
+        sfx: sfx.stringView
+        templateId: tpl
+        subs: own
+        valSubs: vs
+        fallbackArg: 0
+    )
+    return mid
+}
+
 # buildUnitMono -- unit-mono completion: substituted method
 # children ({mono}.{fn} FUNCTION types whose generic-param-named child types
 # and return are replaced by the instantiation arg). Bodies are walked once,
@@ -16086,6 +16390,10 @@ buildUnitMono: function {
     }
     bodyIds: zast.unitBodyIdsAt :ast unitId: templateOpId
     gpNames: IdMapV zast.nameid v: bool
+    # the substitutions the instance's signatures take: its arguments, and each
+    # type the unit declares as this instance's own copy of it
+    allSubs: IdMapV zast.nameid v: u64
+    with sit: subs.iterateItems do for se: sit loop allSubs.set key: se.key value: se.value
     {
         vx169: u64
         for vx169 < bodyIds.count.u64 loop {
@@ -16098,6 +16406,7 @@ buildUnitMono: function {
                 gpNames.set key: gm.name value: gv
             }
         }
+        mintUnitNestedInstances :st :ast :rf :tmplUnitName :monoId :bodyIds :allSubs :gpNames
         vx179: u64
         for vx179 < bodyIds.count.u64 loop {
             fm: zast.kidAt kids: ast.kids span: bodyIds i: vx179
@@ -16113,7 +16422,7 @@ buildUnitMono: function {
                     :monoId
                     :tplId
                     :fmNode
-                    :subs
+                    subs: allSubs
                     :gpNames
                 )
             }
@@ -17840,6 +18149,26 @@ cloneMethodParams: function {
     }
 }
 
+# unitSiblingReturn -- the template a method's return typeref names by its bare
+# name, when the method's type is itself declared in a generic unit; 0 otherwise.
+unitSiblingReturn: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tplClassId: ztypes.tid
+    rn: u64
+} out ztypes.tid is {
+    none: ztypes.tid
+    td: declOfTypeId :st tid: tplClassId
+    if td.isZero then return none
+    ud: declParentIdOf :st declId: td
+    if ud.isZero or (declDeclaresTemplate :st :ast declId: ud).not then return none
+    bn: baseTypeNameId :ast n: (ast.nodes.get i: rn)
+    if bn.isZero then return none
+    sib: st.typing.declFindChild parentDeclId: ud nameId: bn
+    if sib.isZero then return none
+    return (declTypeIdOf :st declId: sib)
+}
+
 # returnNamesSelf -- a return typeref that names the type declaring the method:
 # `this`, or the type's own name, bare or marked.
 returnNamesSelf: function {ast: Ast.view nid: u64 templateName: StringView} out bool is {
@@ -17890,6 +18219,15 @@ cloneMethodReturn: function {
             st.reg.setReturnType typeId: fid5 value: specId
             return
         }
+        # a type a generic unit declares, cloned before its method's return was
+        # stamped (the eager order), names a sibling type the unit resolved
+        # already; the unit instance retargets it to its own copy
+        if rto5.isZero when rn5 > 0 then rto5 = (unitSiblingReturn
+            :st
+            :ast
+            :tplClassId
+            rn: rn5
+        )
     }
     if rto5 > 0 then {
         rt5: rto5
@@ -18460,10 +18798,16 @@ mintMonoRecordShape: function {
             (builtinTidT :st frame: rf :ast base: "str") or
             (templateId == (builtinTidT :st frame: rf :ast base: "array"))
         )
-        written: (st.typing.declChildOfId
-            parentTypeId: (ztypes.tid.create from: mid.u64)
-            nameId: zast.names.wkCreate
-        ).some
+        # a `create` the TEMPLATE writes was cloned onto the instance; a record
+        # template's synthesised one names the template's own field types and
+        # is replaced
+        written: (st.typing.declChildOfId parentTypeId: templateId nameId: zast.names.wkCreate).some
+        if written then {
+            written = (st.typing.declMemberIsSynth
+                parentTypeId: templateId
+                nameId: zast.names.wkCreate
+            ).not
+        }
         # `create: null` on the template: its instances construct in no spelling
         optOut: (typeDefinesConstruction :st tid: templateId).not
         if isSized.not when written.not when optOut.not then {
@@ -23520,7 +23864,10 @@ checkTaggedMemberPath: function {
             # a generic body) tests its arm as any value does; each instance
             # walk stamps the concrete predicate the emitter reads
             ptb: walkTypeOf :st nid: dp.parent.u64
-            if isArm when gtpl when (st.reg.isPartialOf tid: ptb) then {
+            # a value of a partial of the template, or of a type its generic
+            # unit declares, tests its arm as any value does
+            ptSelf: (st.reg.isPartialOf tid: ptb) or ((unitNestedSelf :st :ast tid: ptb) == ptb)
+            if isArm when gtpl when ptSelf then {
                 pbool: ((walkLookupTyperef :st frame: st.curFrame :ast :unitDecl base: "bool").or
                     d: 0
                 )
@@ -25835,6 +26182,14 @@ checkBareTypeValue: function {
         nameId: node.name
         tid: (ztypes.tid.create from: fo.u64)
     ).not then return
+    # a type its generic unit declares is that instance's copy: checked as the
+    # instance, and not at all on the template's own walk
+    nsv: unitNestedSelf :st :ast tid: (ztypes.tid.create from: fo.u64)
+    if nsv.u64 == fo then return
+    if nsv.isZero.not then {
+        checkBareTypeValue :st :unitDecl :ast :node fo: nsv.u64
+        return
+    }
     if (isImplicitZeroCreateTid
         :ast
         :st
@@ -33638,6 +33993,11 @@ argMismatchSkipped: function {
     if ptt == ztypes.ztypetype.functionType then {
         return (functionSignaturesMatch :ast :st a: vt b: (ztypes.tid.create from: ptid.u64))
     }
+    # a template walk's place typed by a generic template itself takes any
+    # specialisation of it
+    if (st.reg.isGenericOf tid: (ztypes.tid.create from: ptid.u64)) when (
+        (st.reg.genericOriginOf tid: vt).u64 == ptid
+    ) then return true
     return (
         ptt ==
         ztypes.ztypetype.protocolType or
@@ -35521,6 +35881,9 @@ checkReturnTypeMatch: function {
     # an instance over a template's parameters is checked per instance, as a
     # bare parameter is: the template cannot say which instance it is
     if (st.reg.isPartialOf tid: expR) then return
+    # a generic unit's own type, returned on the template's walk, is any
+    # specialisation of it
+    if (st.reg.isGenericOf tid: expR) when (st.reg.genericOriginOf tid: argT) == expR then return
     # a returned number lands in the declared type as an argument lands in its
     # parameter: a literal or an untyped constant must fit it, a typed value
     # must convert without loss
@@ -36817,6 +37180,13 @@ checkBareGenericCall: function {
 } out callleg is {
     result: ztypes.tid
     gtt: st.reg.typetypeOf typeId: funcId
+    nself: unitNestedSelf :st :ast tid: funcId
+    if nself.isZero.not when gtt != ztypes.ztypetype.functionType then {
+        return (callleg
+            handled: true
+            tid: (checkTypeConstruction :st :unitDecl :ast :call tid: nself)
+        )
+    }
     if gtt != ztypes.ztypetype.functionType then {
         errB: st.typing.errors.length
         vok: (validateGenericTypeArgs
@@ -43156,6 +43526,25 @@ stampMonoTemplateUnit: function {
     }
 }
 
+# bindUnitNestedTypes -- a unit instance's walk reads each type the unit
+# declares as the instance's own copy of it.
+bindUnitNestedTypes: function {st: zenv.ZSymbolTable monoId: ztypes.tid} is {
+    ri: u64
+    rn: st.typing.declRowSlots ownerTid: monoId
+    for ri < rn loop {
+        rw: st.typing.declRowAt ownerTid: monoId membersOnly: true slot: ri
+        ri = ri + 1
+        if rw.keep then {
+            org: st.reg.genericOriginOf tid: (ztypes.tid.create from: rw.tid)
+            if org.isZero.not when (
+                (st.reg.typetypeOf typeId: org) != ztypes.ztypetype.functionType
+            ) then {
+                st.typing.monoParamSubst.set key: org value: (ztypes.tid.create from: rw.tid)
+            }
+        }
+    }
+}
+
 # stampOneUnitMono -- the instance walk: bind the mono's type args (scope
 # defines + monoParamSubst), then re-check each template method body with
 # curMonoStamp routing stamps into the side table.
@@ -43176,6 +43565,7 @@ stampOneUnitMono: function {
     st.typing.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     {
         bindMonoParams :st :monoId
+        bindUnitNestedTypes :st :monoId
     }
     idxs: ListVal u64
     {
@@ -43245,6 +43635,45 @@ stampOneUnitMono: function {
     st.typing.suppressParamStamps = prevSup
     st.typing.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     st.pop
+    # the methods of this instance's own copy of each type the unit declares
+    stampUnitNestedMethods :st :ast :unitDecl :frame :bodyIds :monoId
+}
+
+# stampUnitNestedMethods -- the instance walk of the methods each type a generic
+# unit declares carries, over the unit instance `monoId`'s copy of it.
+stampUnitNestedMethods: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    frame: ztypes.declid
+    bodyIds: zast.kidspan
+    monoId: ztypes.tid
+} is {
+    vi: u64
+    for vi < bodyIds.count.u64 loop {
+        bm: (argRefAt
+            :ast
+            nid: (zast.nodeid.create from: (zast.kidAt kids: ast.kids span: bodyIds i: vi).u32)
+        )
+        vi = vi + 1
+        if bm.nid.isZero.not when (objectdefHasMethodBodies
+            :ast
+            op: (ast.nodes.get i: bm.operation.u64)
+        ) then {
+            inst: (st.typing.declChildOfId parentTypeId: monoId nameId: bm.name).or d: 0
+            if inst > 0 when (st.reg.genericOriginOf tid: (ztypes.tid.create from: inst)
+            ).isZero.not then {
+                (stampOneClassMono
+                    :st
+                    :ast
+                    :unitDecl
+                    :frame
+                    clsOpId: bm.operation.u32
+                    monoId: (ztypes.tid.create from: inst)
+                )
+            }
+        }
+    }
 }
 
 # recordLiteralDecl -- name the literal type a node WORE, for tooling, in the

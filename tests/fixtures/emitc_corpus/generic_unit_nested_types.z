@@ -1,0 +1,129 @@
+# A TYPE DECLARED IN A GENERIC UNIT IS EACH INSTANCE'S OWN. `Cell` inside
+# `cells: unit as { t: anyval.generic ... }` is a template over the unit's
+# parameters: inside the unit its bare name is the instance's copy -- as a
+# parameter, a return, a construction, a field of another such type, and in
+# its own methods -- and outside it is reached through the instance
+# (`ic.Cell`). Every instance has its own copy, a type that never mentions `t`
+# included. It used to be "Unknown type 'Cell'", and a non-generic `Box` in
+# such a unit resolved to core's Box.
+cells: unit as {
+    t: anyval.generic
+    Cell: record {
+        val: t
+        n: i64
+    } as {
+        get: function {c: this} out t is {
+            return c.val
+        }
+    }
+    Box: record {
+        val: i64
+    }
+    peek: function {c: Cell} out t is {
+        return c.val
+    }
+    make: function {v: t} out Cell is {
+        return (Cell val: v n: 1)
+    }
+    roundTrip: function {v: t} out t is {
+        c: Cell val: v n: 2
+        return (peek :c)
+    }
+    boxed: function {v: t} out Box is {
+        return (Box val: 1)
+    }
+}
+
+pairs: unit as {
+    t: anyval.generic
+    Cell: record {
+        val: t
+    }
+    Pair: record {
+        a: Cell
+        b: Cell
+    } as {
+        first: function {p: this} out Cell is {
+            return p.a
+        }
+    }
+    both: function {x: t y: t} out Pair is {
+        return (Pair a: (Cell val: x) b: (Cell val: y))
+    }
+}
+
+kinds: unit as {
+    t: anyval.generic
+    Slot: variant {
+        full: t
+        empty: null
+    }
+    Holder: class {
+        val: t
+        name: String
+    } as {
+        create: function {v: t} out this is {
+            return (meta.create val: v name: "made".string)
+        }
+    }
+    full: function {v: t} out Slot is {
+        return (Slot.full v)
+    }
+    keep: function {v: t} out Holder is {
+        return (Holder v: v)
+    }
+    has: function {s: Slot} out bool is {
+        return s.full
+    }
+}
+
+boxes: unit as {
+    T: AnyRef.generic
+    Opt: union {
+        some: T
+        none: null
+    }
+    wrap: function {v: T.take} out Opt is {
+        return (Opt.some v)
+    }
+}
+
+bufs: unit as {
+    cap: u64.generic
+    Buf: record {
+        used: u64
+    }
+    size: function {b: Buf} out u64 is {
+        return b.used + cap
+    }
+    fresh: function out Buf is {
+        return (Buf used: 1)
+    }
+}
+
+ic: (cells t: i64)
+fc: (cells t: f64)
+pi: (pairs t: i64)
+pf: (pairs t: f64)
+ki: (kinds t: i64)
+bs: (boxes T: String)
+b8: (bufs cap: 8)
+
+main: function is {
+    print "\{ic.roundTrip v: 5} \{fc.roundTrip v: 2.5}"
+    c: ic.make v: 5
+    d: fc.make v: 1.5
+    print "\{ic.peek :c} \{fc.peek c: d} \{c.n} \{c.get} \{d.get}"
+    o: ic.Cell val: 7 n: 3
+    print "\{o.val} \{(ic.boxed v: 9).val}"
+    p: pi.both x: 3 y: 4
+    q: pf.both x: 1.5 y: 2.5
+    print "\{p.a.val} \{p.b.val} \{p.first.val} \{q.first.val}"
+    s: ki.full v: 4
+    h: ki.keep v: 7
+    print "\{ki.has :s} \{h.val} \{h.name}"
+    w: bs.wrap v: "x".string
+    match w case some then print "some \{w}" case none then print "none"
+    b: b8.fresh
+    print "\{b8.size :b}"
+}
