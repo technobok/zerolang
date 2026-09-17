@@ -1151,7 +1151,11 @@ perf: $(PERFBIN)
 # characters or more is read for its width), about +8,500 the source longer (a
 # first cut kept the wide literals in a `ListVal monostamp`, which the compiler
 # then instantiates for itself: +1,900 more).
-ALLOC_BASELINE := 2925216
+#
+# +1,121 when a value receiver's pins came to be its own and held locked across
+# the call's arguments: +2 over the same source, about +1,120 the source longer
+# (a first cut asked every method call for its receiver tuple: +15,800).
+ALLOC_BASELINE := 2926337
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

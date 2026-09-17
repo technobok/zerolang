@@ -32276,11 +32276,13 @@ resultPins: function {st: zenv.ZSymbolTable.view funcId: ztypes.tid} out bool is
     return ((st.typing.funcReturnsBorrow.get key: funcId).or d: false)
 }
 
-# captureValueReceiver -- a call whose result pins, on a receiver that is a
-# value rather than a variable: the receiver is evaluated before the arguments,
-# so the pins its own borrowed result left are taken now, before the argument
-# walk drains them. Answers the receiver's type when it left none, for the
-# unnamed local the result will keep; zero otherwise.
+# captureValueReceiver -- a call on a receiver that is a value rather than a
+# variable: the receiver is evaluated before the arguments, so the pins its own
+# borrowed result left are taken now, before the argument walk. They are the
+# receiver's, never an argument's, and the caller holds them locked while the
+# arguments are walked. When the call's result pins too, the answer is the
+# receiver's type when it left none, for the unnamed local the result will
+# keep; zero otherwise.
 captureValueReceiver: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -32289,17 +32291,57 @@ captureValueReceiver: function {
     # receives the pins a borrowed receiver left
     pins: List ztyping.PinPath
 } out ztypes.tid is {
-    if (resultPins :st :funcId).not then return ztypes.tid
-    rvTup: ListVal zast.nameid
-    methodReceiverTuple :ast n: (ast.nodes.get i: call.callable.u64) dst: rvTup
-    rvIsVar: false
-    if rvTup.length > 0 then rvIsVar = (st.lookupVarId nameId: (rvTup.get i: 0)).none.not
-    if rvIsVar then return ztypes.tid
+    if (resultPins :st :funcId).not then {
+        if st.typing.pendingPins.length == 0 then return ztypes.tid
+        rpv: dottedParentNodeId :ast n: (ast.nodes.get i: call.callable.u64)
+        if rpv.isZero or (receiverIsValue :st :ast nid: rpv).not then return ztypes.tid
+        # the result keeps nothing, so the flags that describe what it would
+        # keep go with the pins
+        takePendingPins :st dst: pins
+        drainPendingBorrow :st
+        return ztypes.tid
+    }
+    if (receiverRootIsVar :st :ast :call) then return ztypes.tid
     rpid: dottedParentNodeId :ast n: (ast.nodes.get i: call.callable.u64)
     if rpid.isZero or (receiverIsValue :st :ast nid: rpid).not then return ztypes.tid
     takePendingPins :st dst: pins
     if pins.length > 0 then return ztypes.tid
     return (ztypes.tid.create from: (walkTypeOf :st nid: rpid.u64))
+}
+
+# receiverRootIsVar -- the method call's receiver path is rooted in a variable.
+receiverRootIsVar: function {st: zenv.ZSymbolTable ast: Ast.view call: callref} out bool is {
+    rvTup: ListVal zast.nameid
+    methodReceiverTuple :ast n: (ast.nodes.get i: call.callable.u64) dst: rvTup
+    if rvTup.length == 0 then return false
+    return (st.lookupVarId nameId: (rvTup.get i: 0)).none.not
+}
+
+# lockReceiverPins -- what a value receiver's borrowed result keeps locked
+# stays locked while the call's arguments are walked, in the call's scope: an
+# argument that writes the same storage (`(grid.getMut i: 0).append from:
+# (grid.pop).pop`) is refused as it is when the receiver is bound to a name
+# first.
+lockReceiverPins: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    call: callref
+    pins: (List ztyping.PinPath).view
+} is {
+    with pit: pins.iterate do for p: pit loop {
+        (lockCallPath
+            :st
+            :ast
+            pool: ast.names
+            path: p.path
+            callId: call.nid.u64
+            shared: p.shared
+            mutable: p.mutable
+            nodeid: call.nid
+            lineno: call.lineno
+            colno: call.colno
+        )
+    }
 }
 
 # receiverIsValue -- whether a dotted base is a value no variable holds: a call,
@@ -36390,6 +36432,11 @@ checkResolvedMethodCall: function {
     rvPins: List ztyping.PinPath
     rvT: ztypes.tid
     if recvVal then rvT = captureValueReceiver :st :ast :call funcId: dro pins: rvPins
+    # a receiver rooted in a variable is locked through that root after the
+    # arguments; any other holds its pins locked across them
+    if rvPins.length > 0 when (receiverRootIsVar :st :ast :call).not then {
+        lockReceiverPins :st :ast :call pins: rvPins
+    }
     pins: (walkCallArgsHoist
         :st
         :unitDecl
