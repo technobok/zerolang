@@ -20869,54 +20869,10 @@ genericOwnerKey: function {
     return (ztypecheck.declOfTypeId st: symtab tid: (ztypes.tid.create from: orig.u64))
 }
 
-# dissectArmByValue -- the statement of the first case clause whose name is the
-# numeral `value`, for a generic match over a VALUE parameter; 0 when none is.
-# `value` is the argument's two's-complement bits, so a negative or hex numeral
-# compares as the same bits.
-dissectArmByValue: function {ast: Ast.view m: zast.caserow.view value: u64} out u32 is {
-    i: u64
-    for i < m.clauses.count.u64 loop {
-        cId: zast.kidAt kids: ast.kids span: m.clauses :i
-        i = i + 1
-        cnode: ast.nodes.get i: cId.u64
-        if cnode.caseclause when cnode.name != 0 then {
-            cnt: zast.poolTextAt pool: ast.names ref: cnode.name
-            if (
-                (numeralBits text: cnt.stringView) == (optionval.some value)
-            ) then return cnode.statement
-        }
-    }
-    return 0
-}
-
-# numeralBits -- an integer numeral's two's-complement bits (`-5`, `0x10`), none
-# for any other text.
-numeralBits: function {text: StringView} out optionval u64 is {
-    neg: text.startsWith "-"
-    skip: u64
-    if neg then skip = 1
-    pv: ztypes.parseLiteralValue numstr: (text.substring from: skip to: text.length)
-    if pv.ok.not or pv.isFloat then return (optionval.none u64)
-    bits: pv.ival
-    if neg when bits > 0 then bits = 18446744073709551615.u64 - bits + 1
-    return (optionval.some bits)
-}
-
-# dissectArmByName -- the statement of the first case clause named `cnid`, for
-# a generic match over a TYPE parameter; 0 when none is (or the name is 0).
-dissectArmByName: function {ast: Ast.view m: zast.caserow.view cnid: u32} out u32 is {
-    if cnid == 0 then return 0
-    i: u64
-    for i < m.clauses.count.u64 loop {
-        cId: zast.kidAt kids: ast.kids span: m.clauses :i
-        i = i + 1
-        cnode: ast.nodes.get i: cId.u64
-        if cnode.caseclause when cnode.name.u32 == cnid then return cnode.statement
-    }
-    return 0
-}
-
-# emit the selected arm of a compile-time generic `match`.
+# emitGenericDissect -- compile-time `match` on a generic parameter. The arm
+# the current instance (ctx.curThisTid) selects is emitted inline and every
+# other arm is dropped (no runtime switch); a value match assigns the arm's
+# value to `assignTo`. No matching arm and no `else` is a compile error.
 emitGenericDissect: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -20924,43 +20880,46 @@ emitGenericDissect: function {
     m: zast.caserow.view
     ownerTid: ztypes.tid
     paramName: zast.nameid
+    assignTo: StringView
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
 } is {
-    concrete: ztypes.tid
-    isVal: false
-    ord: optionval.none u64
-    if ownerTid > 0 then {
-        tk: genericOwnerKey :symtab :ownerTid
-        if tk.isZero.not then ord = symtab.reg.paramOrdinalOf tdecl: tk :paramName
-    }
-    if ord.some then {
-        concrete = ztypes.tid.create from: (symtab.reg.genericArgAt specId: ownerTid ordinal: ord)
-        isVal = symtab.reg.genericArgIsValueAt specId: ownerTid ordinal: ord
-    }
-    win: u32
-    subjDesc: String
-    if isVal then {
-        subjDesc = "\{concrete}"
-        win = dissectArmByValue :ast :m value: concrete.u64
-    } else {
-        if concrete > 0 then subjDesc = (regNameOf
-            :symtab
-            tid: (ztypes.tid.create from: concrete.u64)
-        )
-        cnid: u32
-        if subjDesc.length > 0 then cnid = zast.poolFind pool: ast.names text: subjDesc.stringView
-        win = dissectArmByName :ast :m :cnid
-    }
-    if win == 0 then win = m.elseclause
+    darg: ztypecheck.dissectedArgOf st: symtab :ownerTid :paramName
+    win: ztypecheck.dissectedArmOf st: symtab :ast :m :darg
     if win > 0 then {
         buf.append ind
         buf.append "{\n"
-        emitBodyNode :ast :symtab :ctx n: (ast.nodes.get i: win.u64) :ind :tmp :buf
+        if assignTo.length > 0 then {
+            (emitBranchAssign
+                :ast
+                :symtab
+                :ctx
+                n: (ast.nodes.get i: win.u64)
+                target: assignTo
+                :ind
+                :tmp
+                :buf
+            )
+        } else {
+            # a local the arm declares is freed at the arm's end, where it is
+            # still in C scope
+            fL: tmp.frees.length
+            lL: tmp.listFrees.length
+            wst: ast.nodes.get i: win.u64
+            emitBodyNode :ast :symtab :ctx n: wst :ind :tmp :buf
+            dv: blockDiverges :ast :symtab :ctx n: wst
+            flushBlockFrees :ctx :tmp :fL :lL diverged: dv :buf
+        }
         buf.append ind
         buf.append "}\n"
     } else {
+        subjDesc: String
+        if darg.isVal then {
+            subjDesc = "\{darg.concrete}"
+        } else if darg.concrete > 0 then {
+            subjDesc = regNameOf :symtab tid: (ztypes.tid.create from: darg.concrete)
+        }
         pnmT: zast.poolTextAt pool: ast.names ref: paramName
         cnm: "generic match on '\{pnmT}' has no case for '\{subjDesc}' and no else"
         ctx.emitErrors.append from: cnm.copy
@@ -21041,6 +21000,7 @@ matchGenericRoute: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     m: zast.caserow.view
+    assignTo: StringView
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -21060,6 +21020,7 @@ matchGenericRoute: function {
             :m
             ownerTid: ctx.curThisTid
             paramName: paramName9
+            :assignTo
             :ind
             :tmp
             :buf
@@ -21086,6 +21047,7 @@ matchGenericRoute: function {
                         :m
                         ownerTid: downer
                         paramName: dleafId
+                        :assignTo
                         :ind
                         :tmp
                         :buf
@@ -21177,12 +21139,6 @@ matchElseNarrowing: function {
 
 # emitMatchStmt -- a variant-subject match as a tag switch over a temp;
 # payload arms shadow the subject name with the payload value.
-# emitGenericDissect -- compile-time `match` on a generic parameter. The concrete
-# type bound to the parameter for the current mono instance (ctx.curThisTid) is
-# resolved through the registry's generic-argument trie; the arm whose label
-# names that type is emitted
-# inline and every other arm is dropped (no runtime switch). No matching arm and
-# no `else` emits nothing (the caller-level no-match check is a compile error).
 emitMatchStmt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -21214,7 +21170,7 @@ emitMatchStmt: function {
         tid: (stampIdDeep :symtab n: (ast.nodes.get i: m.subject.u64))
         name: stn.stringView
     )
-    if (matchGenericRoute :ast :symtab :ctx :m :ind :tmp :buf) then return
+    if (matchGenericRoute :ast :symtab :ctx :m :assignTo :ind :tmp :buf) then return
     isVar: false
     isUni: false
     if vtid > 0 then {

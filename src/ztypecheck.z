@@ -30,6 +30,8 @@ public: unit {
     :targetTripleError
     :blockHasBreak
     :armLeaves
+    :dissectedArgOf
+    :dissectedArmOf
     :builtinTidTRo
     :dataFieldIds
     :dataFieldNames
@@ -39132,10 +39134,212 @@ rejectGenericValueMatch: function {
     return false
 }
 
+# dissectArmByValue -- the statement of the first case clause whose name is the
+# numeral `value`, for a generic match over a VALUE parameter; 0 when none is.
+# `value` is the argument's two's-complement bits, so a negative or hex numeral
+# compares as the same bits.
+dissectArmByValue: function {ast: Ast.view m: zast.caserow.view value: u64} out u32 is {
+    i: u64
+    for i < m.clauses.count.u64 loop {
+        cId: zast.kidAt kids: ast.kids span: m.clauses :i
+        i = i + 1
+        cnode: ast.nodes.get i: cId.u64
+        if cnode.caseclause when cnode.name != 0 then {
+            cnt: zast.poolTextAt pool: ast.names ref: cnode.name
+            if (
+                (numeralBits text: cnt.stringView) == (optionval.some value)
+            ) then return cnode.statement
+        }
+    }
+    return 0
+}
+
+# numeralBits -- an integer numeral's two's-complement bits (`-5`, `0x10`), none
+# for any other text.
+numeralBits: function {text: StringView} out optionval u64 is {
+    neg: text.startsWith "-"
+    skip: u64
+    if neg then skip = 1
+    pv: ztypes.parseLiteralValue numstr: (text.substring from: skip to: text.length)
+    if pv.ok.not or pv.isFloat then return (optionval.none u64)
+    bits: pv.ival
+    if neg when bits > 0 then bits = 18446744073709551615.u64 - bits + 1
+    return (optionval.some bits)
+}
+
+# dissectArmByName -- the statement of the first case clause named `cnid`, for
+# a generic match over a TYPE parameter; 0 when none is (or the name is 0).
+dissectArmByName: function {ast: Ast.view m: zast.caserow.view cnid: u32} out u32 is {
+    if cnid == 0 then return 0
+    i: u64
+    for i < m.clauses.count.u64 loop {
+        cId: zast.kidAt kids: ast.kids span: m.clauses :i
+        i = i + 1
+        cnode: ast.nodes.get i: cId.u64
+        if cnode.caseclause when cnode.name.u32 == cnid then return cnode.statement
+    }
+    return 0
+}
+
+# dissectarg -- what an instance bound a generic parameter to: a type id, or
+# for a value parameter the argument's bits.
+dissectarg: record {
+    # the bound type id, or the value parameter's bits
+    concrete: u64
+    # whether the parameter takes a value rather than a type
+    isVal: bool
+}
+
+# dissectedArgOf -- what the instance `ownerTid` bound its template's generic
+# parameter `paramName` to; zero when the owner is no instance of a template
+# declaring that parameter.
+dissectedArgOf: function {
+    st: zenv.ZSymbolTable.view
+    ownerTid: ztypes.tid
+    paramName: zast.nameid
+} out dissectarg is {
+    concrete: u64
+    isVal: false
+    if ownerTid.isZero then return (dissectarg :concrete :isVal)
+    orig: st.reg.genericOriginOf tid: ownerTid
+    if orig.isZero then return (dissectarg :concrete :isVal)
+    tk: declOfTypeId :st tid: orig
+    if tk.isZero then return (dissectarg :concrete :isVal)
+    ord: st.reg.paramOrdinalOf tdecl: tk :paramName
+    if ord.some then {
+        concrete = st.reg.genericArgAt specId: ownerTid ordinal: ord
+        isVal = st.reg.genericArgIsValueAt specId: ownerTid ordinal: ord
+    }
+    return (dissectarg :concrete :isVal)
+}
+
+# dissectedArmOf -- the statement a compile-time `match` over a generic
+# parameter runs for `darg`: the first case naming the bound type (for a value
+# parameter, the bound numeral), else the else arm, else 0. The checker's
+# instance walk and the emitter both ask here, so the arm that is checked is the
+# arm that is written.
+dissectedArmOf: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    m: zast.caserow.view
+    darg: dissectarg
+} out u32 is {
+    win: u32
+    if darg.isVal then {
+        win = dissectArmByValue :ast :m value: darg.concrete
+    } else if darg.concrete > 0 then {
+        cnm: st.reg.nameViewOf tid: (ztypes.tid.create from: darg.concrete)
+        win = dissectArmByName :ast :m cnid: (zast.poolFind pool: ast.names text: cnm)
+    }
+    if win == 0 then win = m.elseclause
+    return win
+}
+
+# rebindOuterUses -- the arms an instance walk skips keep the variable ids of
+# the walk that last checked them, while a name declared outside them is bound
+# afresh on every walk. Their uses of such a name are pointed at this walk's
+# variable, so the arm another instance selects names what this walk declared.
+rebindOuterUses: function {st: zenv.ZSymbolTable ast: Ast.view root: u32} is {
+    work: ListVal u32
+    work.append from: root
+    wi: u64
+    for wi < work.length loop {
+        wid: work.get i: wi
+        wi = wi + 1
+        wn: ast.nodes.get i: wid.u64
+        zast.childIdsInto :ast n: wn acc: work
+        if wn.atomid when (st.typing.atomVariableId.has key: wid.u64) then {
+            outer: st.lookupVarId nameId: wn.name
+            if outer.some then st.typing.atomVariableId.set key: wid.u64 value: outer
+        }
+    }
+}
+
+# rebindSkippedArms -- rebindOuterUses over every arm of the match but `win`.
+rebindSkippedArms: function {st: zenv.ZSymbolTable ast: Ast.view casenode: caseref win: u32} is {
+    skipped: ListVal u32
+    ci: u64
+    for ci < casenode.nclauses loop {
+        clause: caseClauseRefAt :ast nid: (zast.caseClauseAt :ast nid: casenode.nid i: ci)
+        ci = ci + 1
+        if clause.statement.u32 != win then skipped.append from: clause.statement.u32
+    }
+    els: casenode.elseclause.u32
+    if els != win when els != 0 then skipped.append from: els
+    with sit: skipped.iterate do for sk: sit loop rebindOuterUses :st :ast root: sk
+}
+
+# refuseMissingDissectArm -- an instance that bound the parameter to something
+# no case names, in a match with no else.
+refuseMissingDissectArm: function {
+    st: zenv.ZSymbolTable
+    casenode: caseref
+    darg: dissectarg
+    pname: StringView
+} is {
+    desc: String
+    if darg.isVal then {
+        desc = "\{darg.concrete}"
+    } else if darg.concrete > 0 then {
+        desc = st.reg.nameOf tid: (ztypes.tid.create from: darg.concrete)
+    }
+    (addError
+        :st
+        nodeid: casenode.nid
+        lineno: casenode.lineno
+        colno: casenode.colno
+        e: zast.err.genericError
+        msg: "generic match on '\{pname}' has no case for '\{desc}' and no else"
+    )
+}
+
+# checkDissectedArm -- an instance walk's compile-time `match` over a type
+# parameter: only the arm this instance selects is walked -- the others need
+# not type for it -- and that arm's value is the match's value here.
+checkDissectedArm: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    casenode: caseref
+} out ztypes.tid is {
+    none: ztypes.tid.create from: 0
+    win: u32
+    darg: dissectarg concrete: 0 isVal: false
+    pname: String
+    {
+        mn: ast.nodes.get i: casenode.nid.u64
+        if mn.caseexpr then {
+            pname = subjectAtomName :ast n: (ast.nodes.get i: mn.subject.u64)
+            darg = (dissectedArgOf
+                :st
+                ownerTid: (ztypes.tid.create from: st.typing.curMonoStamp)
+                paramName: (nameIdOf :ast name: pname.stringView)
+            )
+            win = dissectedArmOf :st :ast m: mn :darg
+        }
+    }
+    rebindSkippedArms :st :ast :casenode :win
+    if win == 0 then {
+        refuseMissingDissectArm :st :casenode :darg pname: pname.stringView
+        return none
+    }
+    armBlock: zast.nodeid.create from: win
+    armMarker: st.pushBlock name: "arm:dissected"
+    checkStatement :st :unitDecl :ast blockId: armBlock
+    at: ztypes.tid.create from: (lastStmtType :st :ast block: (ast.nodes.get i: win.u64))
+    st.popTo marker: armMarker
+    if st.typing.stmtExprNid == casenode.nid.u64 then return at
+    if at.isZero or (at.u64 == st.typing.nullTypeId) then return at
+    if (st.reg.typetypeOf typeId: at) == ztypes.ztypetype.neverType then return at
+    av: armValueOf :st :ast blockId: armBlock
+    if av.nid.isZero or av.untyped then return at
+    stampGate :st nid: casenode.nid.u64 tid: av.tid
+    return av.tid
+}
+
 # monoDissectionHandled -- on a per-mono instance walk, a subject that is a bare
-# TYPE name is a compile-time dissection: template-time checking validated it
-# and the emitter dispatches one arm per mono, so there is nothing to stamp.
-# True when the match was handled that way and needs no further walk.
+# TYPE name is a compile-time dissection: the match scope is closed and only the
+# selected arm is walked (checkDissectedArm). True when the subject is one.
 monoDissectionHandled: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -39176,12 +39380,11 @@ checkCase: function {
     subjT: caseSubjectTid :st :unitDecl :ast :casenode
     # per-mono instance walk: a subject that is a bare TYPE name (resolved
     # by the instance's scope define, not a value) is a compile-time
-    # dissection -- template-time checking validated it and the emitter
-    # dispatches one arm per mono; there is nothing to stamp here
+    # dissection -- only the arm this instance selects is walked
     if st.typing.curMonoStamp > 0 when subjT > 0 when st.typing.curMonoStamp > 0 when (
         subjT > 0
     ) when (monoDissectionHandled :st :ast :casenode :matchMarker) then {
-        return (ztypes.tid.create from: 0)
+        return (checkDissectedArm :st :unitDecl :ast :casenode)
     }
     if subjT > 0 when (st.reg.isTypeParamOf tid: subjT) then {
         # a genericParam subject IS a compile-time dissection: write the

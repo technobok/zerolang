@@ -1078,7 +1078,12 @@ perf: $(PERFBIN)
 # same source and library (each str instance's native `compare`, the sort
 # check), about +150 for the new native members, and about +1,350 the source
 # longer.
-ALLOC_BASELINE := 2877971
+#
+# +4,705 when an instance walk came to check the arm its compile-time `match`
+# selects: the same source compiles with the same count, all of it is the
+# source longer (the arm selection, now shared with the emitter, and the
+# instance walk of that arm).
+ALLOC_BASELINE := 2882676
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
