@@ -2509,31 +2509,68 @@ registerGenericParamOne: function {
         # type had one. Recorded here and resolved at the end, for TOOLING
         # only: this must not resolve as a type-ref, or a retired bound would
         # start reporting an unknown type and the stamp would reach emission.
-        bnid9: u64
-        {
-            op9: ast.nodes.get i: m.operation.u64
-            if op9.dottedpath then {
-                pn9: ast.nodes.get i: op9.parent.u64
-                bnid9 = (nodeId n: pn9).u64
-            }
-        }
-        if bnid9 > 0 then {
-            st.typing.genericBoundName.set key: bnid9 value: (nameIdOf :ast name: cb.stringView)
-            st.typing.genericBoundFrame.set key: bnid9 value: tdecl
-        }
+        (recordGenericBoundAtom
+            :ast
+            :st
+            :tdecl
+            op: (ast.nodes.get i: m.operation.u64)
+            base: cb.stringView
+        )
         # and the parameter itself, keyed to the OPERATION node -- what
         # Spans keys a declaration's own row to.
         recordGenericParamRef :st nid: m.operation.u64 frame: tdecl name: m.name
     }
 }
 
-# genericConstraintKind -- the value-kind leaf of a constraint declaration
+# recordGenericBoundAtom -- the node a bound is SPELLED at, and the unit a
+# qualified one resolves in, recorded for the passes that report on bounds
+# (checkAnyBounds, checkGenericBounds) and for tooling. This must not resolve
+# as a type-ref: resolution here would reach emission.
+recordGenericBoundAtom: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable
+    tdecl: ztypes.declid
+    op: astnode.view
+    base: StringView
+} is {
+    bnid: genericBoundAtomId :ast n: op
+    if bnid == 0 then return
+    bnm: atomNameId :ast n: (ast.nodes.get i: bnid)
+    if bnm.isZero then bnm = nameIdOf :ast name: base
+    st.typing.genericBoundName.set key: bnid value: bnm
+    st.typing.genericBoundFrame.set key: bnid value: tdecl
+    qn: genericBoundQualifierId :ast n: op
+    if qn.isZero.not then st.typing.genericBoundQual.set key: bnid value: qn
+}
+
+# genericBoundQualifierId -- the name a qualified bound is reached through
+# (`io` in `io.Reader.generic`), 0 for a bare one.
+genericBoundQualifierId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
+    match (
+        n
+    ) case call then {
+        return (genericBoundQualifierId :ast n: (ast.nodes.get i: n.callable.u64))
+    } case dottedpath then {
+        r: zast.nameid
+        {
+            pn: ast.nodes.get i: n.parent.u64
+            if pn.dottedpath then r = atomNameId :ast n: (ast.nodes.get i: pn.parent.u64)
+        }
+        return r
+    } else {
+        return (zast.nameid.create from: 0)
+    }
+}
+
+# genericConstraintKind -- the value-kind leaf of a constraint declaration# genericConstraintKind -- the value-kind leaf of a constraint declaration
 # (`Any.valtype` -> "valtype", `Any.reftype` -> "reftype"), "" for plain
 # `.generic` bounds.
 genericConstraintKind: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
-    ) case dottedpath then {
+    ) case call then {
+        return (genericConstraintKind :ast n: (ast.nodes.get i: n.callable.u64))
+    } case dottedpath then {
         nameCount: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.child.u64))
         if nameCount.stringView == "valtype" then return nameCount.copy
         if nameCount.stringView == "reftype" then return nameCount.copy
@@ -2544,14 +2581,44 @@ genericConstraintKind: function {ast: Ast.view n: astnode.view} out String is {
 }
 
 # genericConstraintBase -- the constraint name of a `u64.generic`-style param
-# declaration (the dotted parent), "" otherwise.
+# declaration: the dotted parent, spelled whole when it is itself a path
+# (`io.Reader`). A DEFAULTED bound is a call over the same path -- `(T.generic
+# default: i64)` -- and answers for its callable; the call form used to answer
+# nothing, so the bound registered as no constraint at all.
 genericConstraintBase: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
-    ) case dottedpath then {
-        return (atomName :ast n: (ast.nodes.get i: n.parent.u64))
+    ) case call then {
+        return (genericConstraintBase :ast n: (ast.nodes.get i: n.callable.u64))
+    } case dottedpath then {
+        pn: ast.nodes.get i: n.parent.u64
+        an: atomName :ast n: pn
+        if an.length > 0 then return an
+        return (typeExprText :ast nid: n.parent.u64)
     } else {
         return "".string
+    }
+}
+
+# genericBoundAtomId -- the node the bound is SPELLED at, for a report: the
+# dotted parent, or its own leaf when the parent is itself a path. 0 when the
+# declaration spells no bound.
+genericBoundAtomId: function {ast: Ast.view n: astnode.view} out u64 is {
+    match (
+        n
+    ) case call then {
+        return (genericBoundAtomId :ast n: (ast.nodes.get i: n.callable.u64))
+    } case dottedpath then {
+        pid: n.parent.u64
+        leaf: u64
+        {
+            pn: ast.nodes.get i: pid
+            if pn.dottedpath then leaf = pn.child.u64
+        }
+        if leaf > 0 then return leaf
+        return pid
+    } else {
+        return 0
     }
 }
 
@@ -19222,15 +19289,11 @@ constraintKindFor: function {text: StringView} out ztypes.constraintkind is {
     if text == "valhashable" then return ztypes.constraintkind.valHashable
     if text == "RefHashable" then return ztypes.constraintkind.refHashable
     if text == "idkey" then return ztypes.constraintkind.idKey
-    # the pre-rename casings, mapped for the same reason as Any.valtype below
-    if text == "AnyVal" then return ztypes.constraintkind.valType
-    if text == "ValHashable" then return ztypes.constraintkind.valHashable
-    # the pre-rename spellings. They still MAP rather than being removed:
-    # an unmapped constraint falls through to `other`, which checkConstraintSat
-    # treats as satisfied, so deleting these would silently unconstrain any
-    # declaration still using them instead of rejecting it.
-    if text == "Any.valtype" then return ztypes.constraintkind.valType
-    if text == "Any.reftype" then return ztypes.constraintkind.refType
+    # The pre-rename spellings -- `AnyVal`, `ValHashable`, `Any.valtype`,
+    # `Any.reftype` -- are GONE. They were mapped because an unmapped
+    # constraint fell through to `other`, which constrained nothing at all;
+    # checkGenericBounds now refuses a bound that names no type, so the
+    # retired spellings report as the unknown names they are.
     if text == "StringLike" then return ztypes.constraintkind.stringLike
     if text == "Any" then return ztypes.constraintkind.any
     if text.length == 0 then return ztypes.constraintkind.none
@@ -19419,6 +19482,139 @@ checkAnyBounds: function {ast: Ast.view st: zenv.ZSymbolTable} is {
         )
     }
 }
+
+# checkGenericBounds -- a bound names a type the program declares, and one that
+# HAS a `.generic`: the spec gives it to a union, a variant, a protocol, a facet
+# and a numeric type. A name the kinds classify (`anyval`, `RefHashable`, a
+# width) is a family and answers for itself; anything else was taken on trust,
+# so `T: Bogus.generic` constrained nothing and `T: Pt.generic` -- a record --
+# constrained nothing either. Demand-driven, like checkAnyBounds: a declaration
+# nothing reaches is not checked.
+checkGenericBounds: function {ast: Ast.view st: zenv.ZSymbolTable} is {
+    # collected while the bound table is read and reported after: the report
+    # lends st
+    keys: ListVal u64
+    with bit: st.typing.genericBoundName.iterateItems do for be: bit loop {
+        keys.append from: be.key
+    }
+    bad: ListVal u64
+    msgs: List String
+    with kit: keys.iterate do for k: kit loop {
+        nm: (st.typing.genericBoundName.get key: k).or d: zast.nameid
+        fr: (st.typing.genericBoundFrame.get key: k).or d: ztypes.declid
+        m: boundRefusalText :ast :st nid: k nameId: nm frame: fr
+        if m.length > 0 then {
+            bad.append from: k
+            msgs.append m
+        }
+    }
+    bi: u64
+    for bi < bad.length loop {
+        tn: ast.nodes.get i: (bad.get i: bi)
+        bnm: zast.nameTextAt :ast ref: (atomNameId :ast n: tn)
+        (addResolveErrorH
+            :st
+            nodeid: (nodeId n: tn)
+            lineno: (nodeLine n: tn)
+            colno: (nodeCol n: tn)
+            e: zast.err.badReference
+            msg: (msgs.get i: bi).copy
+            width: bnm.length.u32.orPanic
+        )
+        bi = bi + 1
+    }
+}
+
+# boundRefusalText -- why the bound spelled at `nid` cannot bound anything, ""
+# when it can. A bound the kinds classify is a family (`anyval`, `RefHashable`,
+# a width) and answers for itself; anything else must name a declaration, and
+# only a union, a variant, a protocol, a facet or a numeric type HAS a
+# `.generic` (spec). A qualified bound (`io.Reader`) is looked up in the unit
+# its qualifier names.
+boundRefusalText: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    nid: u64
+    nameId: zast.nameid
+    frame: ztypes.declid
+} out String is {
+    if nameId.isZero then return "".string
+    bt: zast.nameTextAt :ast ref: nameId
+    if (constraintKindFor text: bt.stringView) != ztypes.constraintkind.other then {
+        return "".string
+    }
+    qn: (st.typing.genericBoundQual.get key: nid).or d: zast.nameid
+    if qn.isZero.not then {
+        qual: unitDeclOfName :st nameId: qn
+        # the qualifier names no unit, so it is what does not exist
+        if qual.isZero then return (unknownBoundText bt: (zast.nameTextAt :ast ref: qn).stringView)
+        qd: declOfUnitDefIds :st unitDecl: qual :nameId
+        if qd.isZero then return (unknownBoundText bt: bt.stringView)
+        return (boundFamilyRefusal :ast :st declId: qd bt: bt.stringView)
+    }
+    # a unit is a declaration like any other, and names no type to bound with
+    if (unitDeclOfName :st :nameId).isZero.not then {
+        return (boundHasNoGenericText bt: bt.stringView what: "unit")
+    }
+    ud: unitRootOfDecl :st declId: frame
+    d0: declOfUnitDefIds :st unitDecl: ud :nameId
+    if d0.isZero.not then return (boundFamilyRefusal :ast :st declId: d0 bt: bt.stringView)
+    to: walkLookupTyperefByIdRo :ast :st unitDecl: ud :frame baseId: nameId
+    if to.some then {
+        return (boundTypeRefusal :st tid: (ztypes.tid.create from: to.u64) bt: bt.stringView)
+    }
+    if st.typing.coreUnitRoot.isZero.not then {
+        dc: declOfUnitDefIds :st unitDecl: st.typing.coreUnitRoot :nameId
+        if dc.isZero.not then return (boundFamilyRefusal :ast :st declId: dc bt: bt.stringView)
+    }
+    return (unknownBoundText bt: bt.stringView)
+}
+
+# unknownBoundText -- the report a bound naming no declaration earns.
+unknownBoundText: function {bt: StringView} out String is {
+    return "Unknown type '\{bt}'"
+}
+
+# boundHasNoGenericText -- the report a bound naming a declaration of a family
+# that has no `.generic` earns; `what` names that family.
+boundHasNoGenericText: function {bt: StringView what: StringView} out String is {
+    return "a \{what} has no '.generic': '\{bt}' cannot bound a parameter"
+}
+
+# boundFamilyRefusal -- the refusal a bound naming declaration `declId` earns,
+# from the family that declaration declares.
+boundFamilyRefusal: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    declId: ztypes.declid
+    bt: StringView
+} out String is {
+    tt: declDefTypetype :st :ast :declId
+    match (
+        tt
+    ) case some then {
+        return (boundTypetypeRefusal :tt :bt)
+    } case none then {
+        return "".string
+    }
+}
+
+# boundTypeRefusal -- the same question asked of a resolved type id.
+boundTypeRefusal: function {
+    st: zenv.ZSymbolTable.view tid: ztypes.tid bt: StringView
+} out String is {
+    return (boundTypetypeRefusal tt: (st.reg.typetypeOf typeId: tid) :bt)
+}
+
+# boundTypetypeRefusal -- the families that have no `.generic`.
+boundTypetypeRefusal: function {tt: ztypes.ztypetype bt: StringView} out String is {
+    if tt == ztypes.ztypetype.classType then return (boundHasNoGenericText :bt what: "class")
+    if tt == ztypes.ztypetype.unitType then return (boundHasNoGenericText :bt what: "unit")
+    if tt == ztypes.ztypetype.dataType then return (boundHasNoGenericText :bt what: "data block")
+    if tt == ztypes.ztypetype.recordType then return (boundHasNoGenericText :bt what: "record")
+    return "".string
+}
+
 
 # unitDefinesAny -- the unit enclosing declaration `frame` defines its own `Any`;
 # true for a frame in no unit.
@@ -51440,6 +51636,7 @@ typecheck: function {
             unitDecl: canonUd9
         )
         checkAnyBounds ast: program :st
+        checkGenericBounds ast: program :st
         checkWideLiterals ast: program :st
         stampAliasValues :st ast: program
         stampGenericBounds :st ast: program
