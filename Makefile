@@ -1155,7 +1155,14 @@ perf: $(PERFBIN)
 # +1,121 when a value receiver's pins came to be its own and held locked across
 # the call's arguments: +2 over the same source, about +1,120 the source longer
 # (a first cut asked every method call for its receiver tuple: +15,800).
-ALLOC_BASELINE := 2926337
+#
+# -353,613 when a typedef's `!=` came to be the `==` its author wrote, negated:
+# -297,948 over the same source (the emitter reads the declaration the checker
+# resolved for the pair, so the scan that copied EVERY registered type's name
+# to find the owner is gone -- and where it still runs it compares the names
+# through a view), -55,665 the source shorter (five comparisons of a typedef id
+# against a raw value, which the rule now refuses, spell the conversion).
+ALLOC_BASELINE := 2572724
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

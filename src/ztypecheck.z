@@ -26054,7 +26054,9 @@ checkDotted: function {
         cnId = intNmX
         aliasViaX = true
     }
-    bt = typedefMemberOwner :st :ast :bt :cnId
+    if (declaresOwnInequality :st :ast :bt :cnId).not then {
+        bt = typedefMemberOwner :st :ast :bt :cnId
+    }
     tacc: checkTagAccessor :st :unitDecl :ast :dp :bt :cnId
     if tacc.handled then return tacc.tid
     # A cross-unit narrowed match-arm base can be a SHELL whose member
@@ -26135,7 +26137,23 @@ checkDotted: function {
     }
 }
 
-# typedefMemberOwner -- the type a member read resolves on: the base itself, or
+# declaresOwnInequality -- the member read is a `!=` this type answers itself,
+# through the `==` its author wrote (derivedInequalityMember). Asked BEFORE the
+# base a typedef delegates to, whose raw comparison takes the BASE's type: `a
+# != 7.u64` was accepted where `a == 7.u64` is refused.
+declaresOwnInequality: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    bt: ztypes.tid
+    cnId: zast.nameid
+} out bool is {
+    if cnId != zast.names.wkOpNe then return false
+    forceMemberOf :st frame: st.curFrame :ast parentTypeId: bt nameId: cnId
+    mo: st.typing.declChildOfId parentTypeId: bt nameId: cnId
+    return (derivedInequalityMember :st :ast :bt :cnId :mo).some
+}
+
+# typedefMemberOwner -- the type a member read resolves on: the base itself, or# typedefMemberOwner -- the type a member read resolves on: the base itself, or
 # the base a typedef delegates a member it does not carry to (Bytes.append is
 # List_u8.append).
 typedefMemberOwner: function {
@@ -27605,7 +27623,7 @@ checkClauseCondition: function {
     # ... and so is any other 2-arm sum type: it has a falsy arm
     # and a truthy one, which is all a condition needs. Which arm
     # is which comes from the order the author wrote them.
-    if ctv > 0 when boolId > 0 when ctv != boolId then {
+    if ctv > 0 when boolId > 0 when ctv.u64 != boolId then {
         ctt: st.reg.typetypeOf typeId: ctv
         isPair: ztyping.isSumPair ty: st.typing reg: st.reg tid: ctv
         if isPair then {
@@ -39983,7 +40001,7 @@ dissectArmByValue: function {ast: Ast.view m: zast.caserow.view value: u64} out 
         cId: zast.kidAt kids: ast.kids span: m.clauses :i
         i = i + 1
         cnode: ast.nodes.get i: cId.u64
-        if cnode.caseclause when cnode.name != 0 then {
+        if cnode.caseclause when cnode.name.isZero.not then {
             cnt: zast.poolTextAt pool: ast.names ref: cnode.name
             if (
                 (numeralBits text: cnt.stringView) == (optionval.some value)
@@ -46089,7 +46107,7 @@ foldCaseArm: function {
         if known then {
             cl: caseClauseRefAt :ast nid: (zast.nodeid.create from: clId.u32)
             if cl.nid.isZero.not then {
-                if cl.name != 0 then {
+                if cl.name.isZero.not then {
                     known = false
                 } else {
                     av: (evalConstNode

@@ -6703,13 +6703,15 @@ methodOwnerId: function {
     ) case some then {
         return rtid
     } case none then null
-    rn: regNameOf :symtab tid: (ztypes.tid.create from: rtid.u64)
+    # the names are compared, never kept: the scan asks every registered type
+    # and a copy of each name is what made one miss cost thousands of blocks
+    rn: regNameView :symtab tid: (ztypes.tid.create from: rtid.u64)
     if rn.length == 0 then return rtid
     last: symtab.reg.nextTypeId
     t: ztypes.tid
     for t < last loop {
-        tn: regNameOf :symtab tid: (ztypes.tid.create from: t.u64)
-        if tn.stringView == rn then {
+        tn: regNameView :symtab tid: (ztypes.tid.create from: t.u64)
+        if tn == rn then {
             co: symtab.typing.declChildOf pool: ast.names parentTypeId: t name: mn
             match (
                 co
@@ -7709,20 +7711,32 @@ emitOperatorCallForm: function {
             rdo9
         ) case some then {
             rd9: symtab.typing.decls.get i: rdo9.u64
-            # NEVER FOR THE COMPARISON PAIR. `==` and `!=` are one pair with a
-            # derived half, and the checker resolves `!=` on a typedef to the
-            # BASE's raw comparison -- which is exactly the chase the
-            # derivation below refuses to make, because it would discard the
-            # equality the author defined. Every other operator is whatever
-            # the checker said it was.
+            # NOT FOR THE PAIR'S OWN HALF: `==` on a native container is
+            # declared by the TEMPLATE, and the instance is what has the C. A
+            # DERIVED `!=` is taken, though -- the checker resolved it to the
+            # `==` it negates, whose owner is the type that declares it.
             sameName9: (zast.nameid.create from: rd9.name) == mnId9
             notPair9: (opPairPartnerId nameId: mnId9).isZero
+            partner9: (opPairPartnerId nameId: mnId9) == (zast.nameid.create from: rd9.name)
             if rd9.parent.isZero.not when sameName9 when notPair9 then {
                 pt9: (symtab.typing.decls.get i: rd9.parent.u64).typeId
                 if pt9.isZero.not then {
                     owner = pt9.u64
                     method = rd9.typeId
                 }
+            } else if rd9.parent.isZero.not when partner9 then {
+                # the checker resolved this half of the pair to the other half,
+                # which it does only for a WRITTEN `==`: the owner is the type
+                # that declares it and emitOperatorAt's derived leg negates. A
+                # native's or a template's half is reached through its instance,
+                # which the derivation below resolves.
+                ptd9: (symtab.typing.decls.get i: rd9.parent.u64).typeId
+                okd9: ptd9.isZero.not
+                if okd9 when (symtab.reg.isGenericOf tid: (ztypes.tid.create from: ptd9.u64)) then {
+                    okd9 = false
+                }
+                if okd9 when (symtab.reg.isNativeOf tid: rd9.typeId) then okd9 = false
+                if okd9 then owner = ptd9.u64
             }
         } case none then null
     }
@@ -35009,7 +35023,7 @@ specMemberIsSelfTyped: function {
         isRecv: (
             (pidsNm.get i: pi) ==
             zast.names.wkThis.u64 or
-            (rpn != 0 and ((pidsNm.get i: pi) == rpn.u64))
+            (rpn.isZero.not and ((pidsNm.get i: pi) == rpn.u64))
         )
         if isRecv.not when (pids.get i: pi) == ifaceTid.u64 then found = true
         pi = pi + 1
@@ -35091,7 +35105,7 @@ emitOneFacet: function {
             # parameter IS the receiver rather than matching on `this`
             {
                 rpnV: symtab.reg.thisParamNameIdOf tid: (ztypes.tid.create from: smid.u64)
-                if rpnV != 0 when (pidsNm.get i: pi) == rpnV.u64 then isThis = true
+                if rpnV.isZero.not when (pidsNm.get i: pi) == rpnV.u64 then isThis = true
             }
             if isThis.not then {
                 pct: (protoParamCtype
@@ -35198,7 +35212,7 @@ emitOneProtocol: function {
             )
             {
                 rpnV: symtab.reg.thisParamNameIdOf tid: (ztypes.tid.create from: smid.u64)
-                if rpnV != 0 when (pidsNm.get i: pi) == rpnV.u64 then isThis = true
+                if rpnV.isZero.not when (pidsNm.get i: pi) == rpnV.u64 then isThis = true
             }
             if isThis.not then {
                 pct: (protoParamCtype
@@ -35337,7 +35351,7 @@ emitProtocolImpl: function {
             )
             {
                 rpnW: symtab.reg.thisParamNameIdOf tid: (ztypes.tid.create from: smid.u64)
-                if rpnW != 0 when (pidsNm.get i: pi) == rpnW.u64 then isThis = true
+                if rpnW.isZero.not when (pidsNm.get i: pi) == rpnW.u64 then isThis = true
             }
             if isThis.not then {
                 pct: (protoParamCtype
@@ -35488,7 +35502,7 @@ emitFacetImpl: function {
             # the same one methodReceiverIsView asks.
             {
                 rpnW: symtab.reg.thisParamNameIdOf tid: (ztypes.tid.create from: smid.u64)
-                if rpnW != 0 when (pidsNm.get i: pi) == rpnW.u64 then isThis = true
+                if rpnW.isZero.not when (pidsNm.get i: pi) == rpnW.u64 then isThis = true
             }
             if isThis.not then {
                 pct: (protoParamCtype
