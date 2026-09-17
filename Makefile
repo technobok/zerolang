@@ -1162,7 +1162,13 @@ perf: $(PERFBIN)
 # to find the owner is gone -- and where it still runs it compares the names
 # through a view), -55,665 the source shorter (five comparisons of a typedef id
 # against a raw value, which the rule now refuses, spell the conversion).
-ALLOC_BASELINE := 2572724
+#
+# +944 when a member's signature came to resolve in the declaration that owns
+# it, and a report of two same-named types came to name each one's unit: the
+# same source compiles with the same count, all of it is the source longer
+# (the demand points no longer take the caller's frame at all, which is most of
+# what the report's own helpers cost back).
+ALLOC_BASELINE := 2573668
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

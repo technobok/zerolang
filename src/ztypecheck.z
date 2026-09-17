@@ -507,7 +507,7 @@ checkBareTypeValueAt: function {
         st.typing.implicitCreate.set key: nodeid.u64 value: icn
         return
     }
-    forceMemberOf :st frame: st.curFrame :ast parentTypeId: tid nameId: zast.names.wkCreate
+    forceMemberOf :st :ast parentTypeId: tid nameId: zast.names.wkCreate
     crO: st.typing.declChildOfId parentTypeId: tid nameId: zast.names.wkCreate
     hasCr: false
     match (
@@ -593,7 +593,6 @@ isNativeIteratorTid: function {ast: Ast st: zenv.ZSymbolTable tid: ztypes.tid} o
     # allocations MORE than it saved, because the saving was never the force.
     (forceMemberOf
         :st
-        frame: st.curFrame
         :ast
         parentTypeId: tid
         nameId: zast.names.wkCall
@@ -1614,7 +1613,6 @@ declareCanonicalTypeId: function {
         if cudq.isZero.not then {
             (forceMemberOf
                 :st
-                :frame
                 :ast
                 parentTypeId: (ztypes.tid.create from: cudq.u64)
                 nameId: ownerNameId
@@ -4904,7 +4902,6 @@ pinHonestyAt: function {
     # the tree whose function row carries the `out`/`outx` and its marker
     ast: Ast
     # the frame the members are forced in
-    frame: ztypes.declid
     # the declaration whose return clause is judged
     fnode: fnref
     # the resolved return type
@@ -4925,7 +4922,7 @@ pinHonestyAt: function {
     # members demands every conversion it declares, which is how a program
     # came to reach the wide-integer and half-float units it never named
     if (typeIsReftype :st tid: probe).not then return
-    if (st.typing.declRowSlots ownerTid: probe) == 0 then forceAllMembers :st :frame :ast tid: probe
+    if (st.typing.declRowSlots ownerTid: probe) == 0 then forceAllMembers :st :ast tid: probe
     checkPinHonesty :st :ast :fnode :retTid :defName :defNameId
 }
 
@@ -6112,7 +6109,6 @@ stampMemberSignature: function {
 # owner is still resolving is not the owner's back-edge.
 forceMemberDecl: function {
     st: zenv.ZSymbolTable
-    frame: ztypes.declid
     ast: Ast
     memberDeclId: ztypes.declid
 } out optionval u64 is {
@@ -6153,10 +6149,16 @@ forceMemberDecl: function {
     mn: zast.nameTextCopy :ast ref: (zast.nameid.create from: mnm)
     st.typing.declSetResolving declId: memberDeclId mark: true
     memberIdAt: optionval.none u64
+    # THE SIGNATURE IS THE OWNER'S, NOT THE CALLER'S. A member's types are
+    # written where the member is, so they resolve in the declaration that owns
+    # it: a caller in another unit that declares a same-named type of its own
+    # otherwise had the parameter resolve to ITS type, and `q1 == q2` was
+    # refused as "expected point, got point".
+    sigFrame: par
     if isM then {
         memberIdAt = (resolveMethodFn
             :st
-            :frame
+            frame: sigFrame
             :ast
             unitDecl: unD
             ownerNameId: (zast.nameid.create from: onm)
@@ -6168,7 +6170,7 @@ forceMemberDecl: function {
         # an as-block MARKER designates a type rather than declaring a field
         memberIdAt = (markerTargetId
             :st
-            :frame
+            frame: sigFrame
             unitDecl: unD
             :ast
             opNid: (zast.nodeid.create from: opId)
@@ -6184,7 +6186,7 @@ forceMemberDecl: function {
     ) case some then {
         if isM then (stampMemberSignature
             :st
-            :frame
+            frame: sigFrame
             :ast
             unitDecl: unD
             thisName: tn.stringView
@@ -6329,7 +6331,6 @@ stampForcedTyperef: function {
 # sits in front of a lookup, never inside one.
 forceMemberOf: function {
     st: zenv.ZSymbolTable
-    frame: ztypes.declid
     ast: Ast
     parentTypeId: ztypes.tid
     nameId: zast.nameid
@@ -6338,7 +6339,7 @@ forceMemberOf: function {
     if nameId.isZero then return
     md: st.typing.declMemberIdOf :parentTypeId :nameId
     if md.isZero then return
-    forceMemberDecl :st :frame :ast memberDeclId: md
+    forceMemberDecl :st :ast memberDeclId: md
 }
 
 # forceUnitDefMember -- force `unit.def.member` from ids. Body checking reaches
@@ -6348,7 +6349,6 @@ forceUnitDefMember: function {
     st: zenv.ZSymbolTable
     ast: Ast
     unitDecl: ztypes.declid
-    frame: ztypes.declid
     defId: zast.nameid
     memberId: zast.nameid
 } is {
@@ -6357,7 +6357,7 @@ forceUnitDefMember: function {
     if dd.isZero then return
     md: st.typing.declFindChild parentDeclId: dd nameId: memberId
     if md.isZero then return
-    forceMemberDecl :st :frame :ast memberDeclId: md
+    forceMemberDecl :st :ast memberDeclId: md
 }
 
 # forceUnitDef -- resolve ONE top-level TYPE definition of a unit now, and
@@ -6437,7 +6437,6 @@ forceUnitDef: function {
 # member carries no type so declChildWalk skips it silently.
 forceAllMembers: function {
     st: zenv.ZSymbolTable
-    frame: ztypes.declid
     ast: Ast
     tid: ztypes.tid
 } is {
@@ -6450,7 +6449,7 @@ forceAllMembers: function {
         did: st.typing.declChildAt declId: od index: i
         i = i + 1
         if did.isZero.not then {
-            forceMemberDecl :st :frame :ast memberDeclId: did
+            forceMemberDecl :st :ast memberDeclId: did
         }
     }
 }
@@ -6465,7 +6464,6 @@ forceAllMembers: function {
 # does with the type 0 an unresolved member carries.
 forceAllFields: function {
     st: zenv.ZSymbolTable
-    frame: ztypes.declid
     ast: Ast
     tid: ztypes.tid
 } is {
@@ -6484,7 +6482,7 @@ forceAllFields: function {
                 if memberDecl.kind.methodDecl when memberDecl.fnptrField.not then want = false
             }
             if want then {
-                forceMemberDecl :st :frame :ast memberDeclId: did
+                forceMemberDecl :st :ast memberDeclId: did
             }
         }
     }
@@ -6917,7 +6915,6 @@ attachMethods: function {
 # wrapper) are the emitter's and stay empty here.
 recordConformance: function {
     st: zenv.ZSymbolTable
-    frame: ztypes.declid
     ast: Ast
     implTypeId: u64
     specTypeId: u64
@@ -6941,7 +6938,7 @@ recordConformance: function {
         # the vtable wrapper names every member the spec names, and it is
         # emitted from the conformance row rather than from a use site, so
         # nothing else would ever demand the impl's signatures
-        forceAllMembers :st :frame :ast tid: (ztypes.tid.create from: implTypeId.u64)
+        forceAllMembers :st :ast tid: (ztypes.tid.create from: implTypeId.u64)
     }
 }
 
@@ -7145,7 +7142,6 @@ attachMarkers: function {
                 ) then needsDtor = true
                 (recordConformance
                     :st
-                    :frame
                     :ast
                     implTypeId: parentId
                     specTypeId: mtid
@@ -7180,7 +7176,6 @@ attachMarkers: function {
                     # member, and the vtable wrapper is emitted from this row
                     (forceAllMembers
                         :st
-                        :frame
                         :ast
                         tid: (ztypes.tid.create from: parentId.u64)
                     )
@@ -7613,7 +7608,6 @@ typeExprHasPrivate: function {ast: Ast.view n: astnode.view} out bool is {
 # funcReturnNode, so emission still routes it field-wise.
 materializeCreateParams: function {
     st: zenv.ZSymbolTable
-    frame: ztypes.declid
     ast: Ast
     typeTid: u64
     createId: u64
@@ -7624,7 +7618,7 @@ materializeCreateParams: function {
     # parameter, and forcing one only to drop it resolved every signature in
     # the member block: `StringView` reached `parseF16`/`parseF128` that way,
     # and through them f16 and f128, in every program ever compiled.
-    forceAllFields :st :frame :ast tid: (ztypes.tid.create from: typeTid.u64
+    forceAllFields :st :ast tid: (ztypes.tid.create from: typeTid.u64
     # every field edge is written by now -- only the synthesized borrow / == /
     # != follow this call -- so settle the type here rather than waiting for
     # resolveDef's settle, which lands after the parameter order is decided
@@ -8404,7 +8398,6 @@ attachRecordField: function {
     )
     (forceMemberOf
         :st
-        :frame
         :ast
         parentTypeId: (ztypes.tid.create from: rid.u64)
         nameId: ftnR
@@ -8972,7 +8965,7 @@ resolveRecord: function {
             kind: ztyping.declkind.methodDecl
             childTypeId: createId
         )
-        materializeCreateParams :st :frame :ast typeTid: rid :createId
+        materializeCreateParams :st :ast typeTid: rid :createId
     }
     # a member the SOURCE declares, by either block: the decl tree does not
     # carry them yet at this point
@@ -11323,7 +11316,6 @@ resolveClassFieldEntry: function {
     } case none then null
     (forceMemberOf
         :st
-        :frame
         :ast
         parentTypeId: (ztypes.tid.create from: cid.u64)
         nameId: ftn
@@ -11527,7 +11519,7 @@ resolveClassCreate: function {
             kind: ztyping.declkind.methodDecl
             childTypeId: createId
         )
-        materializeCreateParams :st :frame :ast typeTid: cid :createId
+        materializeCreateParams :st :ast typeTid: cid :createId
     }
     if istd then {
         borrowId: (st.reg.newType
@@ -18867,7 +18859,7 @@ mintMonoRecordShape: function {
                 nameId: zast.names.wkCreate
                 childTypeId: crId
             )
-            materializeCreateParams :st frame: rf :ast typeTid: mid createId: crId.u64
+            materializeCreateParams :st :ast typeTid: mid createId: crId.u64
         }
     }
 }
@@ -18941,7 +18933,7 @@ mintMonoMembers: function {
 } out bool is {
     cNames: List String
     cIds: ListVal u64
-    forceAllMembers :st frame: rf :ast tid: templateId
+    forceAllMembers :st :ast tid: templateId
     {
         mmq: u64
         mmn: st.typing.declRowSlots ownerTid: templateId
@@ -19103,9 +19095,9 @@ synthInstanceValueMembers: function {
         (templateId == (builtinTidT :st frame: rf :ast base: "array"))
     ) then return
     mt: ztypes.tid.create from: mid.u64
-    forceMemberOf :st frame: rf :ast parentTypeId: mt nameId: zast.names.wkOpEq
-    forceMemberOf :st frame: rf :ast parentTypeId: mt nameId: zast.names.wkOpNe
-    forceMemberOf :st frame: rf :ast parentTypeId: mt nameId: zast.names.wkHash
+    forceMemberOf :st :ast parentTypeId: mt nameId: zast.names.wkOpEq
+    forceMemberOf :st :ast parentTypeId: mt nameId: zast.names.wkOpNe
+    forceMemberOf :st :ast parentTypeId: mt nameId: zast.names.wkHash
     items: templateAsItems :st :ast :templateId
     if (eqNullOptOut :ast asItems: items).not then (synthComparisonPair
         :st
@@ -19759,7 +19751,7 @@ forceValParts: function {
     if depth > 64 then return
     if (valOpSource :ast :st :tid nameId: zast.names.wkOpEq).generated.not then return
     owner: valOpOwner :st :tid nameId: zast.names.wkOpEq
-    forceAllFields :st frame: st.curFrame :ast tid: owner
+    forceAllFields :st :ast tid: owner
     parts: ListVal u64
     valPartTids :ast :st tid: owner :parts
     i: u64
@@ -21275,7 +21267,7 @@ inferGenericConstruction: function {
         fallbackArg: 0
     )
     if mid.isZero then return (ztypes.tid.create from: 0)
-    forceMemberOf :st frame: st.curFrame :ast parentTypeId: mid nameId: zast.names.wkCreate
+    forceMemberOf :st :ast parentTypeId: mid nameId: zast.names.wkCreate
     cro: st.typing.declChildOfId parentTypeId: mid nameId: zast.names.wkCreate
     match (
         cro
@@ -22280,7 +22272,7 @@ iterWrapperElem: function {
     ) case some then {
         if origin == wo then isWrapper = true
     } case none then null
-    forceMemberOf :st frame: st.curFrame :ast parentTypeId: wid nameId: zast.names.wkSome
+    forceMemberOf :st :ast parentTypeId: wid nameId: zast.names.wkSome
     if isWrapper then return (st.typing.declChildOfId parentTypeId: wid nameId: zast.names.wkSome)
     return (optionval.none u64)
 }
@@ -23195,7 +23187,7 @@ dataElemTypeOf: function {
     unitDecl: ztypes.declid
     dataTid: ztypes.tid
 } out ztypes.tid is {
-    forceMemberOf :st frame: st.curFrame :ast parentTypeId: dataTid nameId: zast.names.wkTag
+    forceMemberOf :st :ast parentTypeId: dataTid nameId: zast.names.wkTag
     tgo: st.typing.declChildOfId parentTypeId: dataTid nameId: zast.names.wkTag
     match (
         tgo
@@ -23395,7 +23387,7 @@ reportUnknownMember: function {
         # re-probe before declaring the member unknown
         btnMm0: st.reg.nameOf tid: bt
         walkDefinitionById :st :ast tid: bt
-        forceMemberOf :st frame: st.curFrame :ast parentTypeId: bt nameId: cnId
+        forceMemberOf :st :ast parentTypeId: bt nameId: cnId
         moMm: st.typing.declChildOfId parentTypeId: bt nameId: cnId
         stillMiss: true
         match (
@@ -24345,7 +24337,7 @@ checkDataBlockMember: function {
     if (zast.nameTextEq :ast ref: cnId s: "array") when (
         (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.dataType
     ) then {
-        forceMemberOf :st frame: st.curFrame :ast parentTypeId: bt nameId: zast.names.wkTag
+        forceMemberOf :st :ast parentTypeId: bt nameId: zast.names.wkTag
         tgo: st.typing.declChildOfId parentTypeId: bt nameId: zast.names.wkTag
         match (
             tgo
@@ -24453,7 +24445,7 @@ checkArrayIndexMember: function {
             if gn8.stringView == "array" then isArr = true
         }
         if isArr then {
-            forceMemberOf :st frame: st.curFrame :ast parentTypeId: bt nameId: zast.names.wkGet
+            forceMemberOf :st :ast parentTypeId: bt nameId: zast.names.wkGet
             go8: st.typing.declChildOfId parentTypeId: bt nameId: zast.names.wkGet
             match (
                 go8
@@ -24625,7 +24617,7 @@ derivedInequalityMember: function {
         neSynthetic = st.typing.synthCmpTids.has item: mo.u64
     } case none then null
     if neSynthetic.not then return (optionval.none u64)
-    forceMemberOf :st frame: st.curFrame :ast parentTypeId: bt nameId: zast.names.wkOpEq
+    forceMemberOf :st :ast parentTypeId: bt nameId: zast.names.wkOpEq
     eqM9: st.typing.declChildOfId parentTypeId: bt nameId: zast.names.wkOpEq
     match (
         eqM9
@@ -25325,7 +25317,7 @@ refuseMarkerWithoutStorage: function {
     if (isAddressableTarget :ast :st nid: dp.parent) then return false
     # a type that DECLARES the name as a function -- a typedef wrapper's
     # `ByteView.borrow from: ...` -- is calling it, not marking anything
-    forceMemberOf :st frame: st.curFrame :ast parentTypeId: bt nameId: cnId
+    forceMemberOf :st :ast parentTypeId: bt nameId: cnId
     declared: (st.typing.declChildOfId parentTypeId: bt nameId: cnId).or d: 0
     if declared > 0 when (
         (st.reg.typetypeOf typeId: (ztypes.tid.create from: declared.u64)) ==
@@ -25467,7 +25459,6 @@ checkMarkerMember: function {
         if isMk then {
             (forceMemberOf
                 :st
-                frame: st.curFrame
                 :ast
                 parentTypeId: bt
                 nameId: zast.names.wkBorrow
@@ -25767,7 +25758,7 @@ literalConvTarget: function {
     # bare declChildOfId on a type nothing has reached yet answers none -- and
     # the literal types are reached by literals, not by name.
     )
-    forceMemberOf :st frame: st.curFrame :ast parentTypeId: tid :nameId
+    forceMemberOf :st :ast parentTypeId: tid :nameId
     co: st.typing.declChildOfId parentTypeId: tid :nameId
     match (
         co
@@ -26063,7 +26054,7 @@ checkDotted: function {
     # children are not registered (cross-unit demand mints a shell id distinct
     # from the canonical defining-unit id); on a member miss retarget the base
     # to a same-named type in another unit's resolved scope that has the member.
-    forceMemberOf :st frame: st.curFrame :ast parentTypeId: bt nameId: cnId
+    forceMemberOf :st :ast parentTypeId: bt nameId: cnId
     mo: st.typing.declChildOfId parentTypeId: bt nameId: cnId
     preHas: false
     match (
@@ -26077,7 +26068,7 @@ checkDotted: function {
             cb: canonicalChildBase :ast :st :bt childId: cnId
             if cb > 0 then {
                 bt = ztypes.tid.create from: cb.u64
-                forceMemberOf :st frame: st.curFrame :ast parentTypeId: bt nameId: cnId
+                forceMemberOf :st :ast parentTypeId: bt nameId: cnId
                 mo = st.typing.declChildOfId parentTypeId: bt nameId: cnId
             }
         }
@@ -26090,7 +26081,7 @@ checkDotted: function {
             pob9: st.reg.genericOriginOf tid: bt
             if pob9 > 0 then {
                 bt = ztypes.tid.create from: pob9.u64
-                forceMemberOf :st frame: st.curFrame :ast parentTypeId: bt nameId: cnId
+                forceMemberOf :st :ast parentTypeId: bt nameId: cnId
                 mo = st.typing.declChildOfId parentTypeId: bt nameId: cnId
                 # an element read by index (`a.1`) is no member the template
                 # declares: the per-instance walk types it on the completed spec
@@ -26115,7 +26106,7 @@ checkDotted: function {
         # resolved by its declaration: the eager tier resolves no native create,
         # and forceMemberOf defers to it
         cmd: st.typing.declMemberIdOf parentTypeId: ctpl nameId: cnId
-        if cmd.isZero.not then forceMemberDecl :st frame: st.curFrame :ast memberDeclId: cmd
+        if cmd.isZero.not then forceMemberDecl :st :ast memberDeclId: cmd
         mo = st.typing.declChildOfId parentTypeId: ctpl nameId: cnId
     }
     match (
@@ -26148,7 +26139,7 @@ declaresOwnInequality: function {
     cnId: zast.nameid
 } out bool is {
     if cnId != zast.names.wkOpNe then return false
-    forceMemberOf :st frame: st.curFrame :ast parentTypeId: bt nameId: cnId
+    forceMemberOf :st :ast parentTypeId: bt nameId: cnId
     mo: st.typing.declChildOfId parentTypeId: bt nameId: cnId
     return (derivedInequalityMember :st :ast :bt :cnId :mo).some
 }
@@ -26162,7 +26153,7 @@ typedefMemberOwner: function {
     bt: ztypes.tid
     cnId: zast.nameid
 } out ztypes.tid is {
-    forceMemberOf :st frame: st.curFrame :ast parentTypeId: bt nameId: cnId
+    forceMemberOf :st :ast parentTypeId: bt nameId: cnId
     if (st.typing.declChildOfId parentTypeId: bt nameId: cnId).some then return bt
     tdd: typedefBaseTidOf :st tid: bt
     if tdd.isZero then tdd = typedefBaseOf :st tid: bt
@@ -29885,7 +29876,6 @@ probeForCallIteration: function {
     } case none then {
         (forceMemberOf
             :st
-            frame: st.curFrame
             :ast
             parentTypeId: vt
             nameId: zast.names.wkCall
@@ -29941,7 +29931,6 @@ forElementOf: function {
     } else {
         (forceMemberOf
             :st
-            frame: st.curFrame
             :ast
             parentTypeId: vt
             nameId: zast.names.wkCall
@@ -30104,7 +30093,6 @@ forFactoryTid: function {
                     if (st.reg.typetypeOf typeId: fro) == ztypes.ztypetype.classType then {
                         (forceMemberOf
                             :st
-                            frame: st.curFrame
                             :ast
                             parentTypeId: fro
                             nameId: zast.names.wkCall
@@ -30150,7 +30138,6 @@ checkBareForCondition: function {
     {
         (forceMemberOf
             :st
-            frame: st.curFrame
             :ast
             parentTypeId: vt
             nameId: zast.names.wkCall
@@ -33445,7 +33432,6 @@ ctorParamOwnerTid: function {
 } out ztypes.tid is {
     (forceMemberOf
         :st
-        frame: st.curFrame
         :ast
         parentTypeId: funcId
         nameId: zast.names.wkCreate
@@ -33524,7 +33510,7 @@ missingCtorFields: function {
     # a WALK consumer: an is-block `function {..} out T` with no body is an
     # fn-ptr FIELD, and an unresolved member carries no type, so it is
     # invisible here rather than reported missing
-    forceAllMembers :st frame: st.curFrame :ast tid: effId
+    forceAllMembers :st :ast tid: effId
     dataFieldIds :st tid: effId :ids nameIds: idsNm
     pcnt: ids.length
     if pcnt == 0 then return
@@ -34450,7 +34436,7 @@ losslessConvTo: function {
         if tn9l.length > 0 then nid9l = zast.poolFind pool: ast.names text: tn9l
     }
     if nid9l.isZero then return false
-    forceMemberOf :st frame: st.curFrame :ast parentTypeId: from nameId: nid9l
+    forceMemberOf :st :ast parentTypeId: from nameId: nid9l
     co9l: st.typing.declChildOfId parentTypeId: from nameId: nid9l
     match (
         co9l
@@ -34506,6 +34492,20 @@ checkArgTypeMismatch: function {
         st.typing.errors.length > 0
     ) then emit7 = false
     if emit7.not then return
+    # two types of the same name say nothing to the reader: each is spelled
+    # with the unit that declares it
+    if en7 == an7 then {
+        qp7: (qualifiedTypePair
+            :st
+            expected: (ztypes.tid.create from: ptid.u64)
+            got: vt
+            name: en7.stringView
+        )
+        if qp7.ok then {
+            en7 = qp7.expected.copy
+            an7 = qp7.got.copy
+        }
+    }
     pn: zast.nameTextAt :ast ref: pnId
     mm7: "argument '\{pn}' type mismatch: expected \{en7}, got \{an7}"
     en7b: String
@@ -34857,7 +34857,6 @@ ctorEffectiveTid: function {
     if isMetaC.not then {
         (forceMemberOf
             :st
-            frame: st.curFrame
             :ast
             parentTypeId: funcId
             nameId: zast.names.wkCreate
@@ -35111,7 +35110,7 @@ walkCallArgsHoist: function {
     boundArgIds: ListVal u64
     effId: funcId
     if isCtor then effId = ctorEffectiveTid :st :ast :call :funcId
-    forceAllMembers :st frame: st.curFrame :ast tid: effId
+    forceAllMembers :st :ast tid: effId
     # whether the call's result keeps its arguments' locks -- a construction,
     # an `outx` or reference-returning callee -- is one fact for every argument
     calleePins: isCtor
@@ -35358,7 +35357,7 @@ checkBoxConstruction: function {
             if rwB2.keep then {
                 chi: rwB2.tid
                 chnId: zast.nameid.create from: rwB2.name
-                forceMemberOf :st frame: st.curFrame :ast parentTypeId: mid nameId: chnId
+                forceMemberOf :st :ast parentTypeId: mid nameId: chnId
                 ext: st.typing.declChildOfId parentTypeId: mid nameId: chnId
                 match (
                     ext
@@ -35441,7 +35440,6 @@ returnedBareFieldName: function {
         if bft.isZero then return "".string
         (forceMemberOf
             :st
-            frame: st.curFrame
             :ast
             parentTypeId: (ztypes.tid.create from: bft.u64)
             nameId: bfcId
@@ -36693,7 +36691,6 @@ checkGenericTypeCall: function {
     )
     (forceMemberOf
         :st
-        frame: st.curFrame
         :ast
         parentTypeId: (ztypes.tid.create from: dtp.u64)
         nameId: armnId
@@ -37670,7 +37667,7 @@ checkTypeConstruction: function {
     walkFn: funcId
     walkAsCtor: true
     {
-        forceMemberOf :st frame: st.curFrame :ast parentTypeId: funcId nameId: zast.names.wkCreate
+        forceMemberOf :st :ast parentTypeId: funcId nameId: zast.names.wkCreate
         wco: st.typing.declChildOfId parentTypeId: funcId nameId: zast.names.wkCreate
         match (
             wco
@@ -37843,7 +37840,7 @@ checkContainerCreateArgs: function {
     # resolved by its declaration, in either tier: the eager one resolves no
     # native create, and forceMemberOf defers to it
     crd: st.typing.declMemberIdOf parentTypeId: tpl nameId: zast.names.wkCreate
-    if crd.isZero.not then forceMemberDecl :st frame: st.curFrame :ast memberDeclId: crd
+    if crd.isZero.not then forceMemberDecl :st :ast memberDeclId: crd
     cr: (st.typing.declChildOfId parentTypeId: tpl nameId: zast.names.wkCreate).or d: 0
     crt: ztypes.tid.create from: cr.u64
     crFn: cr > 0 and ((st.reg.typetypeOf typeId: crt) == ztypes.ztypetype.functionType)
@@ -39466,7 +39463,6 @@ checkCaseClause: function {
     armo: optionval.none u64
     (forceMemberOf
         :st
-        frame: st.curFrame
         :ast
         parentTypeId: (partialTemplateOf :st tid: subjT)
         nameId: armId
@@ -41883,7 +41879,6 @@ checkMethodBodies: function {
                     hDefId2: typeNameId
                     (forceUnitDefMember
                         :st
-                        :frame
                         :ast
                         :unitDecl
                         defId: hDefId2
@@ -41933,7 +41928,6 @@ checkMethodBodies: function {
                     hDefId: typeNameId
                     (forceUnitDefMember
                         :st
-                        :frame
                         :ast
                         :unitDecl
                         defId: hDefId
@@ -42617,7 +42611,7 @@ checkFunctionBodyIn: function {
         # known: an owned result holding a reference into an input is
         # declared `outx` or refused here
         if crt > 0 when (st.typing.generatorCallBodies.has item: fn.nid.u64).not then {
-            pinHonestyAt :st :ast frame: st.curFrame fnode: fn retTid: crt :defName :defNameId
+            pinHonestyAt :st :ast fnode: fn retTid: crt :defName :defNameId
         }
         # an instance walk returns what the instance it checks returns
         if crt.isZero when st.typing.curMonoFnTid.isZero.not then {
@@ -46369,7 +46363,7 @@ checkConstantMethodCall: function {
     st.typing.constFail = held
     if rv.kind.svalKind.not then return
     svT: builtinTidT :ast :st :frame base: "StringView"
-    forceMemberOf :st :frame :ast parentTypeId: svT nameId: methodId
+    forceMemberOf :st :ast parentTypeId: svT nameId: methodId
     if (st.typing.declMemberIdOf parentTypeId: svT nameId: methodId).isZero then {
         reportConstantNoMember :st :ast :svT :methodId nodeid: site.childId :ln :co
         return
@@ -49785,6 +49779,90 @@ unitNameViewOfTid: function {
     if utid == 0 then return ""
     return (st.reg.nameViewOf tid: (ztypes.tid.create from: utid.u64))
 }
+
+# QualifiedPair -- two spellings of one name, and whether they say anything.
+QualifiedPair: class {
+    # the expected type's spelling
+    expected: String
+    # the value's own
+    got: String
+    # both name a unit, and the two differ: only then is the pair worth
+    # printing. One side qualified and the other not reads as two unrelated
+    # types, and a shell that names no unit qualifies neither
+    ok: bool
+}
+
+# qualifiedTypePair -- the two types of a report that share `name`, each
+# spelled with the unit that declares it.
+qualifiedTypePair: function {
+    st: zenv.ZSymbolTable.view
+    expected: ztypes.tid
+    got: ztypes.tid
+    name: StringView
+} out QualifiedPair is {
+    eq: qualifiedTypeName :st tid: expected :name
+    aq: qualifiedTypeName :st tid: got :name
+    good: false
+    if eq.stringView != name when aq.stringView != name when (
+        eq != aq
+    ) then good = true
+    return (QualifiedPair expected: eq.copy got: aq.copy ok: good)
+}
+
+# qualifiedTypeName -- `name` prefixed with the unit that declares the type,# qualifiedTypeName -- `name` prefixed with the unit that declares the type,
+# for a report where the bare name would appear twice and name two types.
+qualifiedTypeName: function {
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    name: StringView
+} out String is {
+    un: nearestUnitNameOfTid :st :tid
+    if un.length > 0 then {
+        r: un.copy
+        r.append "."
+        r.append name
+        return r
+    }
+    # an instance is minted in no unit: what tells two of them apart is the
+    # argument each was minted with
+    if (st.reg.genericArgCount specId: tid) > 0 then {
+        a0: ztypes.tid.create from: (st.reg.genericArgAt specId: tid ordinal: 0).u64
+        au: nearestUnitNameOfTid :st tid: a0
+        if au.length > 0 then {
+            r2: name.string
+            r2.append " over "
+            r2.append au
+            r2.append "."
+            r2.append (st.reg.nameOf tid: a0)
+            return r2
+        }
+    }
+    return name.string
+}
+
+# nearestUnitNameOfTid -- the name of the INNERMOST unit that declares `tid`: a
+# subunit says its own name, where unitDeclOfTid answers the file unit both
+# such types share and the report would name one unit twice.
+nearestUnitNameOfTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out String is {
+    cur: st.reg.defOf :tid
+    for cur > 0 loop {
+        par: ztypes.declid
+        isU: false
+        selfT: u64
+        {
+            decl: st.typing.decls.get i: cur.u64
+            par = decl.parent
+            isU = decl.kind.unitDecl
+            selfT = decl.typeId
+        }
+        if isU when selfT > 0 when (selfT == tid.u64).not then {
+            return (st.reg.nameOf tid: (ztypes.tid.create from: selfT.u64))
+        }
+        cur = par
+    }
+    return "".string
+}
+
 
 # unitNameOfTid -- the defining unit's name for type `tid`, read off the
 # Decl parent chain; "" when the type has no declaration. The display /
