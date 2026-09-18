@@ -1249,7 +1249,12 @@ perf: $(PERFBIN)
 # +6,631 when a type a unit instance declares came to be nameable through the
 # instance in any type position (`ic.Cell`), the instance built on demand: the
 # same source compiles with the same count, all of it is the source longer.
-ALLOC_BASELINE := 2550772
+#
+# +8,506 when a generic unit applied in place came to be its instance -- in a
+# body, a signature, a unit-level definition -- and a unit bound as a value came
+# to be refused: the same source compiles with the same count, all of it is the
+# source longer.
+ALLOC_BASELINE := 2559278
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

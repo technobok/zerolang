@@ -3573,6 +3573,8 @@ resolveMonoRefParts: function {
             }
         }
         mainName: st.typing.mainUnitRoot
+        uat: unitAppliedTypeRef :st :frame :ast :tplId :typeSubs :valSubsR :tn :sfx :nid
+        if uat > 0 then return uat
 
         # firstA rides as the fallback: when a template's param name differs
         # from the call label (Option's `t` vs the conventional `of:`), the
@@ -4397,16 +4399,18 @@ instanceTyperefMember: function {
     if (isStripMarkerId nameId: cId) then return ztypes.tid
     if (isNumericTypeNameAt :ast ref: cId) then return ztypes.tid
     # a qualifier that is itself a path (`lib.ic`) binds in another unit, and
-    # only resolving it says what it is
-    if (dottedQualifier :ast :nid).not then {
+    # one that is an application (`(cells t: i64)`) is one: only resolving it
+    # says what it is
+    if (compoundQualifier :ast :nid).not then {
         if (isUnitNameDecl :st nameId: pId) then return ztypes.tid
         if (qualifierMayBeInstance :st :ast :frame nameId: pId).not then return ztypes.tid
     }
     return (unitInstanceMemberTid :st :frame :ast :unitDecl :nid memberId: cId)
 }
 
-# dottedQualifier -- the dotted type-ref `nid` is qualified by a path.
-dottedQualifier: function {ast: Ast.view nid: zast.nodeid} out bool is {
+# compoundQualifier -- the dotted type-ref `nid` is qualified by a path or by an
+# application rather than by a name.
+compoundQualifier: function {ast: Ast.view nid: zast.nodeid} out bool is {
     parentId: zast.nodeid
     {
         node: ast.nodes.get i: nid.u64
@@ -4414,7 +4418,7 @@ dottedQualifier: function {ast: Ast.view nid: zast.nodeid} out bool is {
     }
     if parentId.isZero then return false
     pn: ast.nodes.get i: parentId.u64
-    return pn.dottedpath
+    return pn.dottedpath or pn.call
 }
 
 # qualifierMayBeInstance -- the name a dotted type-ref is qualified by may bind a
@@ -4499,12 +4503,28 @@ unitInstanceOfTyperef: function {
     thisName: StringView
 } out ztypes.tid is {
     isRef: false
+    isApp: false
     {
         pn: ast.nodes.get i: nid.u64
         isRef = pn.atomid or pn.dottedpath
+        isApp = pn.call
     }
-    if isRef.not then return ztypes.tid
-    pt: resolveTyperefShell :st :frame :ast :unitDecl :nid :thisName
+    pt: u64
+    if isApp then {
+        pt = (resolveMonoRefInline
+            :st
+            :frame
+            :ast
+            :unitDecl
+            :thisName
+            enclDecl: ztypes.declid
+            opNid: nid
+            nid: nid.u32
+        )
+    } else {
+        if isRef.not then return ztypes.tid
+        pt = resolveTyperefShell :st :frame :ast :unitDecl :nid :thisName
+    }
     ptid: ztypes.tid.create from: pt
     if (st.reg.typetypeOf typeId: ptid) != ztypes.ztypetype.unitType then return ztypes.tid
     if (st.reg.genericOriginOf tid: ptid).isZero then return ztypes.tid
@@ -4565,6 +4585,137 @@ bindingIsUnitInstance: function {
     if bt.isZero then return false
     if (st.reg.typetypeOf typeId: bt) != ztypes.ztypetype.unitType then return false
     return (st.reg.genericOriginOf tid: bt).isZero.not
+}
+
+# unitAppliedTypeRef -- a unit applied in a type-ref is that unit's instance,
+# stamped on the ref's node; 0 when the template is not a unit or its instance
+# does not settle here, which leaves the ref to the ordinary mint.
+unitAppliedTypeRef: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    tplId: ztypes.tid
+    typeSubs: (IdMapV zast.nameid v: u64).view
+    valSubsR: (IdMapV zast.nameid v: u64).view
+    # the template's name and the argument suffix, the instance's label
+    tn: String
+    sfx: String
+    nid: u32
+} out u64 is {
+    if (st.reg.typetypeOf typeId: tplId) != ztypes.ztypetype.unitType then return 0
+    ium: (ensureUnitInstanceMono
+        :st
+        :frame
+        :ast
+        :tplId
+        tdecl: (declOfTypeId :st tid: tplId)
+        subs: typeSubs
+        valSubs: valSubsR
+        label: "\{tn}\{sfx}"
+    )
+    if ium.isZero.not when nid > 0 then {
+        ztyping.nodeTypeSet tbl: st.typing.nodeType nid: nid.u64 tid: ium
+    }
+    return ium.u64
+}
+
+# unitInstanceKeys -- an instance's trie keys in the template's parameter order,
+# a type id or a numeric value each; false when an argument is missing or is a
+# generic parameter (a template walk).
+unitInstanceKeys: function {
+    st: zenv.ZSymbolTable.view
+    tdecl: ztypes.declid
+    subs: (IdMapV zast.nameid v: u64).view
+    valSubs: (IdMapV zast.nameid v: u64).view
+    keys: ListVal u64
+    isVal: ListVal bool
+} out bool is {
+    pn: st.reg.genericParamNamesOf :tdecl
+    pj: u64
+    for pj < pn.length loop {
+        pnm: pn.get i: pj
+        pj = pj + 1
+        vv: valSubs.get key: pnm
+        if vv.some then {
+            keys.append vv
+            isVal.append true
+            continue
+        }
+        tv: (subs.get key: pnm).or d: 0
+        if tv == 0 then return false
+        if (
+            (st.reg.typetypeOf typeId: (ztypes.tid.create from: tv)) ==
+            ztypes.ztypetype.genericParam
+        ) then {
+            return false
+        }
+        keys.append tv
+        isVal.append false
+    }
+    return true
+}
+
+# ensureUnitInstanceMono -- the instance of the unit template `tplId` for these
+# arguments, built: found on the trie, where a unit-level binding with the same
+# arguments put it, or minted and joined there as that binding's is. 0 when an
+# argument is a generic parameter -- a template walk, whose instances are
+# settled per instance.
+ensureUnitInstanceMono: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    tplId: ztypes.tid
+    tdecl: ztypes.declid
+    subs: (IdMapV zast.nameid v: u64).view
+    valSubs: (IdMapV zast.nameid v: u64).view
+    label: String
+} out ztypes.tid is {
+    if tdecl.isZero then return ztypes.tid
+    keys: ListVal u64
+    isVal: ListVal bool
+    if (unitInstanceKeys :st :tdecl :subs :valSubs :keys :isVal).not then return ztypes.tid
+    mono: ztypes.tid
+    got: unitMonoOnTrie :st tplTid: tplId :keys
+    match (
+        got
+    ) case some then {
+        mono = ztypes.tid.create from: got
+    } case none then {
+        opId: zast.nodeid
+        {
+            tnode: (st.typing.decls.get i: tdecl.u64).node
+            nn: ast.nodes.get i: tnode.u64
+            if nn.namedoperation then opId = nn.operation
+        }
+        if opId.isZero then return ztypes.tid
+        mono = (createUnitMono
+            :st
+            :ast
+            monoName: label.stringView
+            tmplDeclId: tdecl
+            tplTid: tplId
+            templateOpId: opId
+        )
+        (unitMonoJoinTrie
+            :st
+            tplTid: tplId
+            tplName: (st.reg.nameViewOf tid: tplId)
+            :keys
+            monoId: mono
+        )
+        ki: u64
+        for ki < keys.length loop {
+            if (isVal.get i: ki) then {
+                st.reg.appendGenericArgValue specId: mono value: (keys.get i: ki)
+            } else {
+                st.reg.appendGenericArg specId: mono arg: (keys.get i: ki)
+            }
+            ki = ki + 1
+        }
+        recordNumericArgConsts :ast :st :frame monoId: mono :tdecl
+    }
+    ensureUnitMonoBuilt :st :frame :ast monoId: mono
+    return mono
 }
 
 # ensureUnitMonoBuilt -- a unit instance's members, built now when its completion
@@ -12522,9 +12673,60 @@ aliasNamesType: function {
                 frame: st.curFrame
                 nameId: ntk.unitName
             )
+            # a member of a unit applied in place (`(cells t: i64).Cell`): what
+            # it resolved to says whether it is a type
+            if (valueAppliesUnitTemplate :st :ast frame: st.curFrame valueNid: nnp.operation) then {
+                return (isNamedTypeFamily :st tid: (declTypeIdOf :st :declId))
+            }
         }
     }
     return false
+}
+
+# valueAppliesUnitTemplate -- the definition value `valueNid` is a member of a
+# generic UNIT applied in place (`(cells t: i64).Cell`): a dotted path whose
+# qualifier is a call naming a unit template, looked up as the instantiation
+# collector looks one up.
+valueAppliesUnitTemplate: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    frame: ztypes.declid
+    valueNid: zast.nodeid
+} out bool is {
+    callableNid: zast.nodeid
+    {
+        vn: ast.nodes.get i: valueNid.u64
+        if vn.dottedpath then {
+            pn: ast.nodes.get i: vn.parent.u64
+            match (
+                pn
+            ) case call then {
+                callableNid = pn.callable
+            } else null
+        }
+    }
+    if callableNid.isZero then return false
+    segs: ListVal u64
+    instCallablePath :ast op: (ast.nodes.get i: callableNid.u64) :segs
+    td: instTemplateDecl :st scopeDeclId: (unitFrameOf :st declId: frame) :segs
+    if td.isZero then return false
+    return (st.typing.decls.get i: td.u64).kind.unitDecl
+}
+
+# isNamedTypeFamily -- `tid` is a type a definition names (a record, class,
+# variant, union, protocol or facet), not a function or a value's type.
+isNamedTypeFamily: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    if tid.isZero then return false
+    tt: st.reg.typetypeOf typeId: tid
+    return (
+        tt ==
+        ztypes.ztypetype.recordType or
+        (tt == ztypes.ztypetype.classType) or
+        (tt == ztypes.ztypetype.variantType) or
+        (tt == ztypes.ztypetype.unionType) or
+        (tt == ztypes.ztypetype.protocolType) or
+        (tt == ztypes.ztypetype.facetType)
+    )
 }
 
 # unitNestedCopyNamed -- `tid` is an instance of a type a generic unit declares,
@@ -12752,8 +12954,60 @@ resolveAliasKey: function {
     cvA: constValueOfDecl :st :ast :declId
     if cvA.kind.none.not then return (declTypeIdOf :st :declId).u64
     r: resolveAliasKeyIn :st frame: aframe :ast :declId
+    if r == 0 then r = (resolveAppliedMemberAlias :st :ast frame: aframe :declId).u64
     refuseArmAliasPayload :st :ast :declId tid: (ztypes.tid.create from: r)
     return r
+}
+
+# resolveAppliedMemberAlias -- `C5: (cells t: i64).Cell`: a unit-level alias of a
+# member of a unit applied in place, which has no unit name for the target pair
+# to carry. It resolves as the same type-ref would -- the application's instance,
+# that instance's copy of the type -- and is recorded on the Decl and the unit's
+# member index as the other alias forms are. 0 when the value is not that shape.
+resolveAppliedMemberAlias: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    frame: ztypes.declid
+    declId: ztypes.declid
+} out ztypes.tid is {
+    vid: zast.nodeid
+    nm: u32
+    {
+        decl: st.typing.decls.get i: declId.u64
+        nm = decl.name
+        if decl.kind.reexportDecl then {
+            nop: ast.nodes.get i: decl.node.u64
+            if nop.namedoperation then {
+                vn: ast.nodes.get i: nop.operation.u64
+                if vn.dottedpath then {
+                    pn: ast.nodes.get i: vn.parent.u64
+                    if pn.call then vid = nop.operation
+                }
+            }
+        }
+    }
+    if vid.isZero then return ztypes.tid
+    if (valueAppliesUnitTemplate :st :ast :frame valueNid: vid).not then return ztypes.tid
+    rt: (dottedTyperefShell
+        :st
+        :ast
+        unitDecl: (unitRootOfDecl :st :declId)
+        :frame
+        nid: vid
+        thisName: ""
+    )
+    if rt == 0 then return ztypes.tid
+    rtid: ztypes.tid.create from: rt
+    st.typing.declSetType :declId typeId: rtid
+    ownTid: declTypeIdOf :st declId: frame
+    if ownTid.isZero.not then {
+        (st.typing.setMemberType
+            parentTypeId: ownTid
+            nameId: (zast.nameid.create from: nm)
+            childTypeId: rtid
+        )
+    }
+    return rtid
 }
 
 # refuseArmAliasPayload -- a definition whose value NAMES AN ARM resolves to the
@@ -22612,6 +22866,22 @@ genericTypeConstruction: function {
     if dependent then return (valuePartialConstruction :st :ast :call :tplId)
     firstA: firstOut.get i: 0
     if sfx.length == 0 then return (ztypes.tid.create from: 0)
+    # a UNIT applied in place is that unit's instance -- the same one a
+    # unit-level binding with these arguments names -- not a value to construct
+    if (st.reg.typetypeOf typeId: tplId) == ztypes.ztypetype.unitType then {
+        um: (ensureUnitInstanceMono
+            :st
+            frame: st.curFrame
+            :ast
+            :tplId
+            tdecl: tk0
+            :subs
+            valSubs: valueSubs
+            label: "\{tname}\{sfx}"
+        )
+        if um.isZero.not then stampGate :st nid: call.nid.u64 tid: um
+        return um
+    }
     mid: (getOrMintSpec
         :st
         frame: st.curFrame
@@ -28830,6 +29100,52 @@ checkMovedValueAt: function {
     return vt
 }
 
+# refuseNonValue -- a data block or a unit used whole where a value is wanted.
+# True when `vt`, the value's type, is one and was refused.
+refuseNonValue: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    vt: ztypes.tid
+    nid: zast.nodeid
+} out bool is {
+    if (refuseDataBlockValue :st :ast :vt :nid) then return true
+    return (refuseUnitValue :st :ast :vt :nid)
+}
+
+# refuseUnitValue -- a unit -- a file unit, a nested one, a generic unit's
+# instance, or an instantiation written in place -- used whole where a value is
+# wanted. A unit is a namespace of definitions with no runtime object of its
+# own, so it has no value to bind; its members are reached through it.
+refuseUnitValue: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    vt: ztypes.tid
+    nid: zast.nodeid
+} out bool is {
+    if vt.isZero then return false
+    if (st.reg.typetypeOf typeId: vt) != ztypes.ztypetype.unitType then return false
+    ut: typeExprText :ast nid: nid.u64
+    ln: u32
+    co: u32
+    {
+        vn: ast.nodes.get i: nid.u64
+        ln = nodeLine n: vn
+        co = nodeCol n: vn
+    }
+    (addErrorH
+        :st
+        nodeid: nid
+        lineno: ln
+        colno: co
+        e: zast.err.typeError
+        msg: "'\{ut}' is a unit, not a value"
+        note: "a unit is a namespace of definitions; it has no runtime object".string
+        hint: "name one of its members through it".string
+        width: ut.length.u32.orPanic
+    )
+    return true
+}
+
 # refuseDataBlockValue -- a data block used whole where a value is wanted: bound
 # to a name, by a `with` or a `for` header, or written as a statement. A block is compile-time data
 # with no runtime object of its own -- its elements and its length fold to
@@ -28915,7 +29231,7 @@ checkAssignment: function {
         )
         return
     }
-    if (refuseDataBlockValue :st :ast :vt nid: asgn.value) then return
+    if (refuseNonValue :st :ast :vt nid: asgn.value) then return
     if vt > 0 then {
         pinBoundField :st :ast :vt nid: asgn.value
         pinBoundName :st :ast :vt nid: asgn.value
@@ -30101,7 +30417,7 @@ checkWith: function {
     withMarker: st.pushBlock name: "with"
     errW: st.typing.errors.length
     vt: checkValueAt :st :unitDecl :ast nid: withnode.value
-    if (refuseDataBlockValue :st :ast :vt nid: withnode.value) then vt = ztypes.tid
+    if (refuseNonValue :st :ast :vt nid: withnode.value) then vt = ztypes.tid
     if vt.u64 == 0 when st.typing.errors.length == errW then {
         (reportUnresolvedValue
             :st
@@ -30926,7 +31242,7 @@ checkForCondition: function {
         vt = checkValueAt :st :unitDecl :ast nid: cond.operation
     }
     st.typing.allowBareFnRef = bfrFor
-    if (refuseDataBlockValue :st :ast :vt nid: cond.operation) then vt = ztypes.tid
+    if (refuseNonValue :st :ast :vt nid: cond.operation) then vt = ztypes.tid
     # a condition that typed to nothing and raised nothing is an
     # unresolvable name -- the same rule the binding and operand sites
     # follow. Without it the emitter writes the bare name into the C.
@@ -42045,7 +42361,7 @@ checkStmtExpression: function {
     st.typing.stmtExprNid = valueId.u64
     et0: checkValueAt :st :unitDecl :ast nid: valueId
     st.typing.stmtExprNid = outerStmt0
-    refuseDataBlockValue :st :ast vt: et0 nid: valueId
+    refuseNonValue :st :ast vt: et0 nid: valueId
     if et0 > 0 then stampGate :st nid: lineId.u64 tid: et0
     ckOpt0: st.typing.callKind.get key: valueId.u64
     isR0: isReturnCallKind o: ckOpt0

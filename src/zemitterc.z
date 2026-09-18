@@ -14584,6 +14584,37 @@ emitNestedMonoMethodBase: function {
     return "".string
 }
 
+# unitInstanceMemberRead -- a zero-argument function of a unit applied in place
+# (`(sized n: 4).cap`): the instance's own function, called. A unit has no
+# runtime value, so its base is not emitted; a read naming the function (a
+# `.take` of it) is its C name. "" when the base is no unit instance.
+unitInstanceMemberRead: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.dottedpathrow.view
+} out String is {
+    bst: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64))
+    if (symtab.reg.typetypeOf typeId: bst) != ztypes.ztypetype.unitType then return "".string
+    if (originTidOf :symtab tid: bst).isZero then return "".string
+    cid: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
+    fid: (ztypes.tid.create
+        from: ((symtab.typing.declChildOfId parentTypeId: bst nameId: cid).or d: 0)
+    )
+    if (symtab.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return "".string
+    cn: ctxCname :ctx tid: fid
+    if (
+        (symtab.reg.typetypeOf typeId: (stampIdOf :symtab nid: n.nodeid.u64)) ==
+        ztypes.ztypetype.functionType
+    ) then {
+        return cn
+    }
+    cn.append "("
+    cn.append (renderedMethodDefaultArgs :ast :symtab :ctx fnTid: fid)
+    cn.append ")"
+    return cn
+}
+
 # emitDottedNestedBase -- a read whose base is itself a path (`it.target.a`,
 # `this.field.pop`): emit the base expression, then chain `.` or `->` by whether
 # the base resolves to a pointer. The collection legs repeat here because the
@@ -14599,6 +14630,8 @@ emitDottedNestedBase: function {
     # field access (matches the simple-base svValueForm path).
     eSv: emitNestedStringViewBase :ast :symtab :ctx :n :mn2
     if eSv.length > 0 then return eSv
+    eUi: unitInstanceMemberRead :ast :symtab :ctx :n
+    if eUi.length > 0 then return eUi
     # a nested base (e.g. it.target.a): emit the base expression, then chain
     # `.`/`->` by whether the base resolves to a pointer (ptrVar / lock field).
     baseAtom: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
