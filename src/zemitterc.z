@@ -12164,6 +12164,22 @@ dottedMemberTidOf: function {
     return ztypes.tid
 }
 
+# calledInstanceOf -- the function a call to `fid` runs. The checker stamps
+# the callable of a generic template's call with the instance it runs, so the
+# template is answered by that instance; a native template has no emitted
+# instance, and any other call runs `fid` itself.
+calledInstanceOf: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    call: zast.callrow.view
+    fid: ztypes.tid
+} out ztypes.tid is {
+    sf: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: call.callable.u64))
+    if (originIsTid :symtab tid: sf originTid: fid).not then return fid
+    if (fnIsNativeId :symtab fid: sf) then return fid
+    return sf
+}
+
 # emitCrossUnitFnCall -- a cross-unit free-function call `unit.fn args`
 # (e.g. zparser calling a zast/zlexer helper). The callee is a dottedpath whose
 # base is a unit name; the function's shared id lives in resolved["{unit}.{fn}"],
@@ -12178,7 +12194,13 @@ emitCrossUnitFnCall: function {
     fid: dottedMemberTidOf :ast :symtab :ctx callableId: call.callable
     if fid.isZero then return "".string
     if (symtab.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return "".string
-    return (emitFnCallWithFid :ast :symtab :ctx :call :fid)
+    return (emitFnCallWithFid
+        :ast
+        :symtab
+        :ctx
+        :call
+        fid: (calledInstanceOf :ast :symtab :call :fid)
+    )
 }
 
 
