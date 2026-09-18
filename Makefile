@@ -1202,7 +1202,11 @@ perf: $(PERFBIN)
 # +53 when an explicit type argument written inside an instance's walk came to
 # name the instance's type: the same source compiles with the same count, all
 # of it is the source longer.
-ALLOC_BASELINE := 2587369
+#
+# +2,048 when a generic instance holding a mono that embeds a user type came to
+# be placed in the late group rather than at the tail of the collection pass:
+# the same source compiles with the same count, all of it is the source longer.
+ALLOC_BASELINE := 2589417
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

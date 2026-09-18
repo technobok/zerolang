@@ -33105,7 +33105,8 @@ monoElemIdsOf: function {
         (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: ogResultval)) or
         (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: ogOption)) or
         (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: ogResult)) or
-        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: ogOptionView))
+        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: ogOptionView)) or
+        ((symtab.reg.typetypeOf typeId: monoId) == ztypes.ztypetype.variantType)
     )
     if isWrap then {
         aids: ListVal u64
@@ -33982,6 +33983,23 @@ collectLateGroup: function {
     }
 }
 
+# collectLateInstances -- the user instances the late group places, in type-id
+# order.
+collectLateInstances: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    userList: (ListVal u64).view
+    acc: ListVal u64
+    last: u64
+} is {
+    tm: ztypes.tid
+    for tm < last loop {
+        if (isLateUserInstance :ast :symtab :ctx tcl: tm :userList) then acc.append tm.u64
+        tm = ztypes.tid.create from: tm + 1
+    }
+}
+
 # closeLateGroup -- the membership id-set mirroring lateGroup (the list keeps
 # emission order), then the closure: a user struct embedding a late-group
 # member by value is late too, to a fixpoint.
@@ -34049,6 +34067,53 @@ emitEarlyUserStructs: function {
     }
 }
 
+# lateMemberIsMono -- a late-group member its mono family writes: a mono that is
+# not a user instance.
+lateMemberIsMono: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid
+} out bool is {
+    if (originTidOf :symtab :tid).isZero then return false
+    return (isUserInstance :symtab :ctx tcl: tid).not
+}
+
+# lateMemberReady -- a late-group member can be written once every member it
+# holds by value is: a mono through its elements, a user type or a user
+# instance through its fields or arms.
+lateMemberReady: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tid: ztypes.tid
+    group: IdSet u64
+    emitted: IdSet u64
+} out bool is {
+    if (lateMemberIsMono :symtab :ctx :tid) then {
+        seen: ListVal u64
+        return (monoLateDepsMet :ast :symtab :ctx monoId: tid :group :emitted :seen)
+    }
+    return (userDefnRefsUnemitted :symtab :ctx typeId: tid :group :emitted).not
+}
+
+# emitLateMember -- write one late-group member by its kind.
+emitLateMember: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    runtimeDir: StringView
+    tid: ztypes.tid
+    buf: String.borrow
+} is {
+    if (lateMemberIsMono :symtab :ctx :tid) then {
+        emitMonoById :ast :symtab :ctx :runtimeDir monoId: tid :buf
+        return
+    }
+    if (isUserInstance :symtab :ctx tcl: tid) then {
+        emitUserGenericInstance :ast :symtab :ctx :tid :buf
+        return
+    }
+    emitUserTypeById :ast :symtab :ctx :tid :buf
+}
+
 # emitLateGroupOrdered -- the late monos and late-user structs in dependency
 # order, by fixpoint; whatever the fixpoint cannot place is emitted in list
 # order rather than dropped.
@@ -34072,45 +34137,25 @@ emitLateGroupOrdered: function {
         pn: lateGroup.length
         for pi < pn loop {
             x: lateGroup.get i: pi
-            if (emittedSet.has item: x).not then {
-                xorigin: originTidOf :symtab tid: (ztypes.tid.create from: x.u64)
-                if xorigin > 0 then {
-                    seen: ListVal u64
-                    if (monoLateDepsMet
-                        :ast
-                        :symtab
-                        :ctx
-                        monoId: (ztypes.tid.create from: x.u64)
-                        group: lateSet
-                        emitted: emittedSet
-                        :seen
-                    ) then {
-                        (emitMonoById
-                            :ast
-                            :symtab
-                            :ctx
-                            :runtimeDir
-                            monoId: (ztypes.tid.create from: x.u64)
-                            :buf
-                        )
-                        emittedSet.add item: x
-                        emittedCount = emittedCount + 1
-                        progressed = true
-                    }
-                } else {
-                    if (userDefnRefsUnemitted
-                        :symtab
-                        :ctx
-                        typeId: (ztypes.tid.create from: x.u64)
-                        group: lateSet
-                        emitted: emittedSet
-                    ).not then {
-                        emitUserTypeById :ast :symtab :ctx tid: (ztypes.tid.create from: x.u64) :buf
-                        emittedSet.add item: x
-                        emittedCount = emittedCount + 1
-                        progressed = true
-                    }
-                }
+            if (emittedSet.has item: x).not when (lateMemberReady
+                :ast
+                :symtab
+                :ctx
+                tid: (ztypes.tid.create from: x.u64)
+                group: lateSet
+                emitted: emittedSet
+            ) then {
+                (emitLateMember
+                    :ast
+                    :symtab
+                    :ctx
+                    :runtimeDir
+                    tid: (ztypes.tid.create from: x.u64)
+                    :buf
+                )
+                emittedSet.add item: x
+                emittedCount = emittedCount + 1
+                progressed = true
             }
             pi = pi + 1
         }
@@ -34129,19 +34174,14 @@ emitLateGroupOrdered: function {
         for f0 < f1 loop {
             x2: lateGroup.get i: f0
             if (emittedSet.has item: x2).not then {
-                xo2: originTidOf :symtab tid: (ztypes.tid.create from: x2.u64)
-                if xo2 > 0 then {
-                    (emitMonoById
-                        :ast
-                        :symtab
-                        :ctx
-                        :runtimeDir
-                        monoId: (ztypes.tid.create from: x2.u64)
-                        :buf
-                    )
-                } else {
-                    emitUserTypeById :ast :symtab :ctx tid: (ztypes.tid.create from: x2.u64) :buf
-                }
+                (emitLateMember
+                    :ast
+                    :symtab
+                    :ctx
+                    :runtimeDir
+                    tid: (ztypes.tid.create from: x2.u64)
+                    :buf
+                )
                 emittedSet.add item: x2
             }
             f0 = f0 + 1
@@ -34170,6 +34210,7 @@ emitUserStructsOrdered: function {
     emitUserProtocols :ast :symtab :ctx :last :buf
     lateGroup: ListVal u64
     collectLateGroup :ast :symtab :ctx :userList acc: lateGroup :last
+    collectLateInstances :ast :symtab :ctx :userList acc: lateGroup :last
     lateSet: IdSet u64
     closeLateGroup :symtab :ctx :userList :lateGroup :lateSet
     emitEarlyUserStructs :ast :symtab :ctx :userList :lateSet :buf
@@ -34439,8 +34480,39 @@ classifyMonoAt: function {
         tid: tcl
     ) then work.wProto.append tv
     if isMono.not then return
+    if (isLateUserInstance :ast :symtab :ctx :tcl userList: userListM) then return
     if (isUserGenericRecordMono :symtab :ctx :tcl :tt) then work.wUgRec.append tv
     if (isUserGenericVariantMono :symtab :ctx :tcl :tt :isValMono) then work.wUgVar.append tv
+}
+
+# isUserInstance -- a user generic record, class or variant instance: the
+# instances the collection pass or the late group writes through
+# emitUserGenericInstance.
+isUserInstance: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view tcl: ztypes.tid
+} out bool is {
+    if (originTidOf :symtab tid: tcl).isZero then return false
+    tt: symtab.reg.typetypeOf typeId: tcl
+    if (isUserGenericRecordMono :symtab :ctx :tcl :tt) then return true
+    isValMono: (
+        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: ogOptionval)) or
+        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: ogResultval))
+    )
+    return (isUserGenericVariantMono :symtab :ctx :tcl :tt :isValMono)
+}
+
+# isLateUserInstance -- a user instance that holds a user type or a mono the
+# collection pass writes: it is placed in the late group, after what it holds,
+# as a late mono is, rather than at the tail of the collection pass.
+isLateUserInstance: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tcl: ztypes.tid
+    userList: (ListVal u64).view
+} out bool is {
+    if (isUserInstance :symtab :ctx :tcl).not then return false
+    return (monoIsLate :ast :symtab :ctx monoId: tcl :userList)
 }
 
 # classifyMonos -- ONE sweep over the registry fills the per-category worklists the
