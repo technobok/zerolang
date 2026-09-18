@@ -20152,6 +20152,22 @@ reassignMoveSource: function {
     return (implicitTakeSource :ast :symtab :ctx n: (ast.nodes.get i: mmb.u64))
 }
 
+# emitMovedArgZeroing -- args moved into a construction/call RHS (e.g.
+# `v.f = Option.some bo`) are consumed by it: each moved source is invalidated
+# so its scope-exit free no-ops (mirrors the binding case; disjoint from the
+# bare-local move, which a construction RHS never matches).
+emitMovedArgZeroing: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+    ind: StringView
+    buf: String.borrow
+} is {
+    emitValueTakeInvalidations :ast :symtab :ctx :n :ind :buf
+    emitNarrowedTakeZero :ast :symtab :ctx :n :ind :buf
+}
+
 # emitReassignStmt -- `x = <value>`: the old value is freed where the binding owns
 # heap, the new one is stored, and a move source is zeroed so its scope-exit free
 # becomes a no-op.
@@ -20181,11 +20197,17 @@ emitReassignStmt: function {
         tid: (reassignDestroyTid :ast :symtab n: topathNode nid: rtnid)
     )
     rdrop: (stampIsStr :symtab :ctx nid: rtnid) or (symtab.reg.needsDestructor typeId: rtsid)
+    ran: false
     if rdrop when (isNonLvalueArg s: rv2.stringView) then {
         rrt: reassignTargetC :ast :symtab :ctx :rtnid :rtsid
         rrn: tmpNext :ctx :tmp
         buf.append "\{ind}\{rrt} _rr\{rrn} = \{rv2};\n"
         rv2 = "_rr\{rrn}"
+        # the value has run: the sources it moved out of are zeroed now, before
+        # the target's old value is freed -- a source may BE the target
+        # (`a = (wrap s: a.take)`), whose buffer the value now holds
+        emitMovedArgZeroing :ast :symtab :ctx n: valueNode :ind :buf
+        ran = true
     }
     emitReassignDestroy :symtab :ctx nm2: nm2.stringView :rtnid :rtsid :ind :buf
     buf.append "\{ind}\{nm2} = \{rv2};\n"
@@ -20203,12 +20225,7 @@ emitReassignStmt: function {
         }
         buf.append "\{ind}\{rv2} = \{rftz};\n"
     }
-    # args moved into a construction/call RHS (e.g. `v.f = Option.some bo`)
-    # are consumed by it -- invalidate each moved source so its scope-exit
-    # free no-ops (mirrors the binding case; disjoint from the bare-local
-    # move below, which a construction RHS never matches).
-    emitValueTakeInvalidations :ast :symtab :ctx n: valueNode :ind :buf
-    emitNarrowedTakeZero :ast :symtab :ctx n: valueNode :ind :buf
+    if ran.not then emitMovedArgZeroing :ast :symtab :ctx n: valueNode :ind :buf
     # a reassignment from a bare owned local is a MOVE: zero the source so its
     # scope-exit free no-ops (the lvalue -- a local or a struct field appended
     # into a container -- now owns the heap). Scalars/valtypes have no

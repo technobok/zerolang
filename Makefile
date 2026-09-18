@@ -1226,7 +1226,11 @@ perf: $(PERFBIN)
 # reads it and loaded where a by-value parameter takes it, and a discarded
 # statement came to declare the temps it hoists: the same source compiles with
 # the same count, all of it is the source longer.
-ALLOC_BASELINE := 2596026
+#
+# +311 when a reassignment whose value has run came to zero the sources it
+# moved out of before freeing the target's old value: the same source compiles
+# with the same count, all of it is the source longer.
+ALLOC_BASELINE := 2596337
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
