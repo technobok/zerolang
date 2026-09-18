@@ -45771,7 +45771,7 @@ reportConstError: function {
     msg: String
     hint: String
 } is {
-    nameCount: "a unit constant is evaluated at compile time".string
+    nameCount: "a constant expression is evaluated at compile time, wherever it is written".string
     st.typing.errors.append (zast.ErrorData
         :nodeid
         :lineno
@@ -48777,10 +48777,14 @@ callOnFoldedString: function {
 # stampConstAt -- record what a USE SITE evaluates to, when it evaluates to
 # anything. The value walk asks this of every row the evaluator recognises, so
 # the ask is SPECULATIVE: a row that does not fold is an ordinary run-time
-# expression, not a mistake. The pending failure the evaluator records on the
-# way is therefore restored rather than rendered -- only a caller that REQUIRED
-# a value renders one, and a fold is an optimisation that must never turn a
-# legal program into an error.
+# expression, not a mistake, and the pending failure the evaluator records on
+# the way is restored rather than rendered.
+#
+# Two failures are not "does not fold" but "has no value": a constant integer
+# operation that overflows, and a division by a constant zero. Their operands
+# are constants wherever they are written, so the run time has nothing to add
+# -- C would wrap the one and trap on the other. They are refused here as a
+# unit-level definition refuses them: constant folding is the same everywhere.
 stampConstAt: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -48794,9 +48798,52 @@ stampConstAt: function {
     held: st.typing.constFail
     constFailClear :st
     cv: evalConstNode :st :unitDecl frame: st.curFrame :ast :nid
+    got: st.typing.constFail
     st.typing.constFail = held
-    if cv.kind.none then return
+    if cv.kind.none then {
+        hasNone: got.kind.overflow and (overflowIsReal :st :ast f: got)
+        if got.kind.divZero then hasNone = integerDivision :st :ast f: got
+        if hasNone then renderConstFail :st f: got
+        return
+    }
     st.typing.setNodeConstIn mono: st.typing.curMonoStamp :nid value: cv
+}
+
+# overflowIsReal -- an overflow the evaluator recorded belongs to the operation
+# when it was checked against the operation's own type (the failure names it),
+# or when that type lies inside i64, the range the evaluator works in. A u64,
+# i128 or u128 operation the evaluator cannot hold may still fit its type --
+# `9223372036854775807.u64 + 1.u64` does -- and that is the evaluator's limit,
+# not the program's: the operation is left to run.
+overflowIsReal: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view f: ztypes.constfail
+} out bool is {
+    if f.strId > 0 then return true
+    br: binRefAt :ast nid: f.nodeid
+    if br.nid.isZero then return true
+    mono: st.typing.curMonoStamp
+    if (constBeyondI64 :st v: (st.typing.nodeConstIn :mono nid: br.lhs.u64)) then return false
+    return (constBeyondI64 :st v: (st.typing.nodeConstIn :mono nid: br.rhs.u64)).not
+}
+
+# integerDivision -- the recorded division by zero divides integers. A float
+# one is IEEE's to answer -- an infinity or a NaN -- and runs.
+integerDivision: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view f: ztypes.constfail
+} out bool is {
+    br: binRefAt :ast nid: f.nodeid
+    if br.nid.isZero then return true
+    mono: st.typing.curMonoStamp
+    return (st.typing.nodeConstIn :mono nid: br.lhs.u64).kind.ivalKind
+}
+
+# constBeyondI64 -- a folded number typed u64, i128 or u128: a type whose range
+# the evaluator's i64 does not cover.
+constBeyondI64: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out bool is {
+    if v.numTid.isZero then return false
+    k: numKindOfTid :st tid: v.numTid
+    if k.has.not then return false
+    return k.kind.u64Type or k.kind.u128Type or k.kind.i128Type
 }
 
 # useSiteAsks -- whether a use site's row is worth asking the evaluator about.
