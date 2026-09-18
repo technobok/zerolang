@@ -6322,10 +6322,19 @@ results of arithmetic and comparison operations on constant operands are
 all candidates for folding.
 
 Supported operations: #~"+" #~"-" #~"*" #~"/" #~"<" #~">" #~"<=" #~">="
-#~"==" #~"!=". Integer division uses truncation toward zero (matching C
-semantics). Float (#~"f64") division produces a float result without
-truncation. Comparisons produce #~"bool" values (#~"true"/#~"false"), and
-on #~"bool" constants #~"and", #~"or" and #~".not" fold as well.
+#~"==" #~"!=" on numbers, and every integer operator besides: #~"%" #~"&"
+#~"|" #~"^" #~"<<" #~">>" and #~".not". Integer division uses truncation
+toward zero (matching C semantics), and so the remainder takes the dividend's
+sign (#~"-7 % 3" is #~"-1"). Float (#~"f64") division produces a float result
+without truncation. Comparisons produce #~"bool" values
+(#~"true"/#~"false"), and on #~"bool" constants #~"and", #~"or" and
+#~".not" fold as well.
+
+A shift folds to what the operator computes at run time in the operand's
+width: a count of the width or more shifts every bit out -- #~"0", or the
+sign for a signed #~">>" -- and a left shift keeps the low bits, so
+#~"1.u8 << 8" is #~"0" and #~"1 << 63" is #~"i64"'s minimum. The bits a
+shift discards are not an overflow.
 
 #b:"Width." A folded value carries its type. A suffixed literal has its
 suffix's type and a named constant its definition's; a comparison is
@@ -6348,11 +6357,11 @@ itself, so the value is the one the target computes; #~"f16" and #~"f128"
 arithmetic does not fold, since the evaluator holds an #~"f64", which is
 neither.
 
-An integer result outside its type and an integer division by a constant
-zero are compile-time errors (#~"E0600") wherever they are written: in a body
-as in a unit-level definition, a type's #~"as" constant or a #~"require:"
-block. Their operands are constants, so the run time has nothing to add -- C
-would wrap the one and trap on the other. Where a value is required, a float
+An integer result outside its type and an integer division or remainder by a
+constant zero are compile-time errors (#~"E0600") wherever they are written:
+in a body as in a unit-level definition, a type's #~"as" constant or a
+#~"require:" block. Their operands are constants, so the run time has nothing
+to add -- C would wrap the one and trap on the other. Where a value is required, a float
 result that is not finite is an error too, since an infinity or a NaN has no
 literal a constant could inline; in a body it is IEEE's answer, and runs.
 
@@ -6375,12 +6384,13 @@ A unit-level definition built from an operator, an #~"if" or a #~"match" is
 such a position, and the error names the first part of it that has no value. A
 name that does not exist is #~"E0023", as it is in a body. A call, a name
 that is not a compile-time value (a function, a type, a numeric generic
-parameter where no instance supplies it), and an operator outside the
-list above (#~"<<", #~"|", #~"&", #~"%") over values that do fold are
+parameter where no instance supplies it), and an operator over values it
+does not fold -- a float #~"%", a comparison of a number with a string -- are
 #~"E0600":
 
 #code language=zerolang: """
-  FLAGS: 1 << 3        # E0600: '<<' has no compile-time value for i64 and i64
+  FLAGS: 1 << 3        # 8
+  FREM: 7.5 % 2.0      # E0600: '%' has no compile-time value for f64 and f64
   LIMIT: GHOST + 1     # E0023: Unknown reference 'GHOST'
   """
 

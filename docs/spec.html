@@ -5487,10 +5487,18 @@ Numeric literals (integer and <code>f64</code>), named numeric constants, and th
 results of arithmetic and comparison operations on constant operands are
 all candidates for folding.</p>
 <p>Supported operations: <code>+</code> <code>-</code> <code>*</code> <code>/</code> <code>&lt;</code> <code>&gt;</code> <code>&lt;=</code> <code>&gt;=</code>
-<code>==</code> <code>!=</code>. Integer division uses truncation toward zero (matching C
-semantics). Float (<code>f64</code>) division produces a float result without
-truncation. Comparisons produce <code>bool</code> values (<code>true</code>/<code>false</code>), and
-on <code>bool</code> constants <code>and</code>, <code>or</code> and <code>.not</code> fold as well.</p>
+<code>==</code> <code>!=</code> on numbers, and every integer operator besides: <code>%</code> <code>&amp;</code>
+<code>|</code> <code>^</code> <code>&lt;&lt;</code> <code>&gt;&gt;</code> and <code>.not</code>. Integer division uses truncation
+toward zero (matching C semantics), and so the remainder takes the dividend's
+sign (<code>-7 % 3</code> is <code>-1</code>). Float (<code>f64</code>) division produces a float result
+without truncation. Comparisons produce <code>bool</code> values
+(<code>true</code>/<code>false</code>), and on <code>bool</code> constants <code>and</code>, <code>or</code> and
+<code>.not</code> fold as well.</p>
+<p>A shift folds to what the operator computes at run time in the operand's
+width: a count of the width or more shifts every bit out -- <code>0</code>, or the
+sign for a signed <code>&gt;&gt;</code> -- and a left shift keeps the low bits, so
+<code>1.u8 &lt;&lt; 8</code> is <code>0</code> and <code>1 &lt;&lt; 63</code> is <code>i64</code>'s minimum. The bits a
+shift discards are not an overflow.</p>
 <p><strong>Width.</strong> A folded value carries its type. A suffixed literal has its
 suffix's type and a named constant its definition's; a comparison is
 <code>bool</code>; an arithmetic operator takes its left-hand operand's type, and a
@@ -5510,11 +5518,11 @@ overflows <code>u8</code>, not merely <code>i64</code>. <code>f32</code> arithme
 itself, so the value is the one the target computes; <code>f16</code> and <code>f128</code>
 arithmetic does not fold, since the evaluator holds an <code>f64</code>, which is
 neither.</p>
-<p>An integer result outside its type and an integer division by a constant
-zero are compile-time errors (<code>E0600</code>) wherever they are written: in a body
-as in a unit-level definition, a type's <code>as</code> constant or a <code>require:</code>
-block. Their operands are constants, so the run time has nothing to add -- C
-would wrap the one and trap on the other. Where a value is required, a float
+<p>An integer result outside its type and an integer division or remainder by a
+constant zero are compile-time errors (<code>E0600</code>) wherever they are written:
+in a body as in a unit-level definition, a type's <code>as</code> constant or a
+<code>require:</code> block. Their operands are constants, so the run time has nothing
+to add -- C would wrap the one and trap on the other. Where a value is required, a float
 result that is not finite is an error too, since an infinity or a NaN has no
 literal a constant could inline; in a body it is IEEE's answer, and runs.</p>
 <p>An operation over constant operands that does not fold for another reason
@@ -5534,10 +5542,11 @@ back to run time.</p>
 such a position, and the error names the first part of it that has no value. A
 name that does not exist is <code>E0023</code>, as it is in a body. A call, a name
 that is not a compile-time value (a function, a type, a numeric generic
-parameter where no instance supplies it), and an operator outside the
-list above (<code>&lt;&lt;</code>, <code>|</code>, <code>&amp;</code>, <code>%</code>) over values that do fold are
+parameter where no instance supplies it), and an operator over values it
+does not fold -- a float <code>%</code>, a comparison of a number with a string -- are
 <code>E0600</code>:</p>
-<pre><code class="language-zerolang">FLAGS: 1 &lt;&lt; 3        # E0600: '&lt;&lt;' has no compile-time value for i64 and i64
+<pre><code class="language-zerolang">FLAGS: 1 &lt;&lt; 3        # 8
+FREM: 7.5 % 2.0      # E0600: '%' has no compile-time value for f64 and f64
 LIMIT: GHOST + 1     # E0023: Unknown reference 'GHOST'</code></pre>
 <p>A compile-time <code>match</code> folds as a compile-time <code>if</code> does. Its subject
 must be an arm constant (<code>M: mode.slow</code>, <code>ON: 3 &gt; 2</code>), and its value is

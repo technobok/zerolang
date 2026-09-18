@@ -1301,7 +1301,11 @@ perf: $(PERFBIN)
 # +1,601 when a typedef came to be constructed only from exactly its base type:
 # the same source compiles with the same count, all of it is the source's own
 # thirty-one conversions to u32 at the name and node ids it built from u64s.
-ALLOC_BASELINE := 2571139
+#
+# +5,428 when every integer operator came to fold over constant operands, and
+# the arithmetic operators to be routed by well-known name id: the same source
+# compiles with the same count, all of it is the source longer.
+ALLOC_BASELINE := 2576567
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

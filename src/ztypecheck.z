@@ -46195,6 +46195,8 @@ constOfTypedFold: function {
     lv: ztypes.cval
     rv: ztypes.cval
     op: StringView
+    # the operator's name id
+    opnId: zast.nameid
     nid: zast.nodeid
     ln: u32
     co: u32
@@ -46211,7 +46213,20 @@ constOfTypedFold: function {
     gk: numKindOfTid :st tid: gov
     if gk.has.not then return ztypes.noConst
     if (ztypes.isFloatKind k: gk.kind) then {
-        return (constOfTypedFloatFold :st :frame :ast :lv :rv :op :gov k: gk.kind :nid :ln :co)
+        return (constOfTypedFloatFold
+            :st
+            :frame
+            :ast
+            :lv
+            :rv
+            :op
+            :opnId
+            :gov
+            k: gk.kind
+            :nid
+            :ln
+            :co
+        )
     }
     if lv.kind.ivalKind.not or rv.kind.ivalKind.not then return ztypes.noConst
     if (isComparisonOp name: op) then return (constCompareInt
@@ -46222,7 +46237,11 @@ constOfTypedFold: function {
         a: lv.ival
         b: rv.ival
     )
-    r: constArithInt :st nodeid: nid lineno: ln colno: co op: (arithOpOf :op) a: lv.ival b: rv.ival
+    aop: arithOpOf :opnId
+    if aop.shl or aop.shr then {
+        return (constTypedShift op: aop a: lv.ival b: rv.ival k: gk.kind numTid: gov)
+    }
+    r: constArithInt :st nodeid: nid lineno: ln colno: co op: aop a: lv.ival b: rv.ival
     if r.kind.none then return r
     if (ztypes.intValueFits v: r.ival k: gk.kind).not then {
         gn: st.reg.nameOf tid: gov
@@ -46240,6 +46259,32 @@ constOfTypedFold: function {
     return (ztypes.typedConst c: r numTid: gov)
 }
 
+# constTypedShift -- a shift of a typed integer constant, in that type's width.
+# A 128-bit shift is left to run: the evaluator holds 64 bits.
+constTypedShift: function {
+    op: arithop a: i64 b: i64 k: ztypes.numkind numTid: ztypes.tid
+} out ztypes.cval is {
+    bits: ztypes.intKindBits :k
+    if bits == 0 or (bits > 64) then return ztypes.noConst
+    sh: constShiftInt :op :a :b :bits signed: (ztypes.isSignedIntKind :k)
+    if sh.none then return ztypes.noConst
+    return (ztypes.typedConst c: ztypes.makeIntConst sh :numTid)
+}
+
+# constIntNot -- `not` on an integer constant: its bits inverted, in its own
+# width when it has a type and in i64 when it has none. A 128-bit one is left
+# to run.
+constIntNot: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out ztypes.cval is {
+    if v.numTid.isZero then return (ztypes.makeIntConst v.ival.not)
+    k: numKindOfTid :st tid: v.numTid
+    if k.has.not then return ztypes.noConst
+    bits: ztypes.intKindBits k: k.kind
+    if bits == 0 or (bits > 64) then return ztypes.noConst
+    w: wrapToWidth v: v.ival.not :bits signed: (ztypes.isSignedIntKind k: k.kind)
+    if w.none then return ztypes.noConst
+    return (ztypes.typedConst c: ztypes.makeIntConst w numTid: v.numTid)
+}
+
 # constOfTypedFloatFold -- the float half of constOfTypedFold: f64 as the
 # evaluator always has, f32 in f32 itself so the value is the one the target
 # computes, and no other width.
@@ -46250,6 +46295,8 @@ constOfTypedFloatFold: function {
     lv: ztypes.cval
     rv: ztypes.cval
     op: StringView
+    # the operator's name id
+    opnId: zast.nameid
     gov: ztypes.tid
     k: ztypes.numkind
     nid: zast.nodeid
@@ -46273,7 +46320,7 @@ constOfTypedFloatFold: function {
             :nid
             :ln
             :co
-            op: (arithOpOf :op)
+            op: (arithOpOf :opnId)
             a: lf.val
             b: rf.val
             typeName: "f64"
@@ -46286,8 +46333,8 @@ constOfTypedFloatFold: function {
     # untyped one by constStandsInMessage
     a: lf.val.f32.or d: 0.0.f32
     b: rf.val.f32.or d: 0.0.f32
-    aop: arithOpOf :op
-    if aop.other then return ztypes.noConst
+    aop: arithOpOf :opnId
+    if (arithIsFloat op: aop).not then return ztypes.noConst
     r: a
     if aop.add then r = a + b
     if aop.sub then r = a - b
@@ -46612,21 +46659,72 @@ constStringLength: function {
 # arithop -- the arithmetic operator a constant fold computes, read off its
 # spelling once so each width's arithmetic switches on the kind.
 arithop: variant {
-    # none of the four
+    # none of these
     other: null
     add: null
     sub: null
     mul: null
     div: null
+    # the integer remainder, `%`: C's, whose sign is the dividend's
+    rem: null
+    # the bitwise `&`, `|` and `^`
+    band: null
+    bor: null
+    bxor: null
+    # the shifts `<<` and `>>`
+    shl: null
+    shr: null
 } as { tag: u8.tag }
 
-# arithOpOf -- the arithmetic operator `op` spells.
-arithOpOf: function {op: StringView} out arithop is {
-    if op == "+" then return arithop.add
-    if op == "-" then return arithop.sub
-    if op == "*" then return arithop.mul
-    if op == "/" then return arithop.div
+# arithOpOf -- the arithmetic operator the name `opnId` spells.
+arithOpOf: function {opnId: zast.nameid} out arithop is {
+    if opnId == zast.names.wkOpAdd then return arithop.add
+    if opnId == zast.names.wkOpSub then return arithop.sub
+    if opnId == zast.names.wkOpMul then return arithop.mul
+    if opnId == zast.names.wkOpDiv then return arithop.div
+    if opnId == zast.names.wkOpRem then return arithop.rem
+    if opnId == zast.names.wkOpAnd then return arithop.band
+    if opnId == zast.names.wkOpOr then return arithop.bor
+    if opnId == zast.names.wkOpXor then return arithop.bxor
+    if opnId == zast.names.wkOpShl then return arithop.shl
+    if opnId == zast.names.wkOpShr then return arithop.shr
     return arithop.other
+}
+
+# arithIsFloat -- an operator a float constant folds: the four arithmetic ones.
+arithIsFloat: function {op: arithop} out bool is {
+    return op.add or op.sub or op.mul or op.div
+}
+
+# wrapToWidth -- `v` as an integer of `bits` bits, signed or not, holds it: the
+# low bits kept, read back with the type's sign. none when the result is a u64
+# the evaluator's i64 cannot hold.
+wrapToWidth: function {v: i64 bits: u64 signed: bool} out optionval i64 is {
+    if bits >= 64 then {
+        if signed.not when v < 0 then return (optionval.none i64)
+        return (optionval.some v)
+    }
+    span: 1 << bits.i64.orPanic
+    u: v & (span - 1)
+    if signed when u >= (span >> 1) then u = u - span
+    return (optionval.some u)
+}
+
+# constShiftInt -- `a << b` or `a >> b` in an integer of `bits` bits, as the
+# runtime computes it: a count the type reads as `bits` or more shifts
+# everything out (0, or the sign for a signed `>>`), and a left shift keeps the
+# low bits. none when the result is a u64 the evaluator cannot hold.
+constShiftInt: function {op: arithop a: i64 b: i64 bits: u64 signed: bool} out optionval i64 is {
+    past: b < 0 or (b >= bits.i64.orPanic)
+    if op.shl then {
+        if past then return (optionval.some 0)
+        return (wrapToWidth v: a << b :bits :signed)
+    }
+    if past then {
+        if signed when a < 0 then return (optionval.some 0 - 1)
+        return (optionval.some 0)
+    }
+    return (optionval.some a >> b)
 }
 
 # constArithInt -- fold an arithmetic operator over two integers. Reports the
@@ -46700,6 +46798,30 @@ constArithInt: function {
             return ztypes.noConst
         }
         return (ztypes.makeIntConst a / b)
+    }
+    if op.rem then {
+        if b == 0 then {
+            (constFailRecord
+                :st
+                kind: ztypes.constfailkind.divZero
+                :nodeid
+                :lineno
+                :colno
+                width: 1
+            )
+            return ztypes.noConst
+        }
+        # the remainder is 0 whatever C makes of MIN % -1
+        if b == (0 - 1) then return (ztypes.makeIntConst 0)
+        return (ztypes.makeIntConst a % b)
+    }
+    if op.band then return (ztypes.makeIntConst a & b)
+    if op.bor then return (ztypes.makeIntConst a | b)
+    if op.bxor then return (ztypes.makeIntConst a ^ b)
+    if op.shl or op.shr then {
+        sh: constShiftInt :op :a :b bits: 64 signed: true
+        if sh.none then return ztypes.noConst
+        return (ztypes.makeIntConst sh)
     }
     return ztypes.noConst
 }
@@ -48082,7 +48204,7 @@ constOfBinopFold: function {
         return ztypes.noConst
     }
     if lv.numTid.isZero.not or rv.numTid.isZero.not then {
-        return (constOfTypedFold :st :frame :ast :lv :rv :op :nid :ln :co)
+        return (constOfTypedFold :st :frame :ast :lv :rv :op :opnId :nid :ln :co)
     }
     if lv.kind.ivalKind when rv.kind.ivalKind then {
         if (isComparisonOp name: op) then {
@@ -48093,7 +48215,7 @@ constOfBinopFold: function {
             nodeid: nid
             lineno: ln
             colno: co
-            op: (arithOpOf :op)
+            op: (arithOpOf :opnId)
             a: lv.ival
             b: rv.ival
         )
@@ -48109,7 +48231,7 @@ constOfBinopFold: function {
             :nid
             :ln
             :co
-            op: (arithOpOf :op)
+            op: (arithOpOf :opnId)
             a: lf.val
             b: rf.val
             typeName: "f64"
@@ -48375,6 +48497,7 @@ constOfNamedBase: function {
                 colno: atCol
             )
         }
+        if pcv.kind.ivalKind when ncId == zast.names.wkNot then return (constIntNot :st v: pcv)
         if pcv.kind.ivalKind or pcv.kind.fvalKind then {
             return (constOfConversion
                 :st
@@ -48639,6 +48762,7 @@ evalConstDotted: function {
             colno: co
         )
     }
+    if pv.kind.ivalKind when ncId == zast.names.wkNot then return (constIntNot :st v: pv)
     if pv.kind.ivalKind or pv.kind.fvalKind then {
         return (constOfConversion :st :frame :ast v: pv targetId: ncId :nid :ln :co)
     }
@@ -50198,7 +50322,7 @@ unfoldedBinopWhy: function {
         nid: br.operator
         width: opn.length.u32.orPanic
         msg: "'\{opn}' has no compile-time value for \{lk} and \{rk}"
-        hint: "constants fold + - * / and comparisons on numbers, + == != on strings, and == != and or on arms".string
+        hint: "constants fold + - * / and comparisons on numbers, % & | ^ << >> on integers, + == != on strings, and == != and or on arms".string
     )
     return true
 }
