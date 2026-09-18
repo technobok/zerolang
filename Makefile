@@ -1210,7 +1210,13 @@ perf: $(PERFBIN)
 # +2,822 when a type a nested unit declares came to have its method bodies
 # checked and emitted, at any depth: the same source compiles with the same
 # count, all of it is the source longer.
-ALLOC_BASELINE := 2592239
+#
+# +1,170 when a typedef reached through its unit came to be constructed as the
+# cast the bare spelling is, and a typedef's cast came to check its value: +326
+# over the same source (a typed number of another width is still cast, which
+# asks both types whether they are numbers; an exact match asks nothing), about
+# +840 the source longer.
+ALLOC_BASELINE := 2593409
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

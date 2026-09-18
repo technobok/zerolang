@@ -23239,6 +23239,7 @@ checkTypedefCreate: function {
                     :vt
                     errMark: errT0
                 )
+                checkCastFromType :st :ast :tdId :vt :arg
                 if vt > 0 then consumeCastFromArg :st :ast aOpId: arg.operation :vt
             }
         }
@@ -23247,6 +23248,31 @@ checkTypedefCreate: function {
     stampGate :st nid: call.nid.u64 tid: (ztypes.tid.create from: settd.u64)
     st.typing.callKind.set key: call.nid.u64 value: zast.callkind.typedefCreate
     return (ztypes.tid.create from: tdId)
+}
+
+# checkCastFromType -- a typedef's cast takes a value of its base type, which
+# is checked as any argument typed that way is -- a literal must fit it -- with
+# one exception: a typed number of another width is cast, narrowing as it
+# widens, which is what the construction is.
+checkCastFromType: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tdId: u64
+    vt: ztypes.tid
+    arg: argref
+} is {
+    base: typedefBaseOf :st tid: (ztypes.tid.create from: tdId)
+    if base.isZero then return
+    if vt.isZero then return
+    if vt == base then return
+    if (isLiteralTypeId :st tid: vt).not when (isNumericTid :ast :st frame: st.curFrame tid: vt
+    ) when (isNumericTid
+        :ast
+        :st
+        frame: st.curFrame
+        tid: base
+    ) then return
+    checkArgTypeMismatch :st :ast ptid: base.u64 :vt pnId: (nameIdOf :ast name: "from") :arg
 }
 
 # checkTypedefBorrow -- `T.borrow from: expr` on a typedef: a borrowed
@@ -37583,6 +37609,14 @@ checkResolvedValueCall: function {
         dctt: st.reg.typetypeOf typeId: dro
         isCtorT: dctt == ztypes.ztypetype.classType or (dctt == ztypes.ztypetype.recordType)
         if isCtorT then {
+            # a typedef's construction is a cast, however the type is reached
+            if call.nargs > 0 when (typedefBaseOf :st tid: (ztypes.tid.create from: dro)
+            ).isZero.not then {
+                return (callleg
+                    handled: true
+                    tid: (checkTypedefCreate :st :unitDecl :ast :call tdId: dro)
+                )
+            }
             if call.nargs > 0 when (pathNamesType :st :ast nid: call.callable) then {
                 dct: (checkTypeConstruction
                     :st
