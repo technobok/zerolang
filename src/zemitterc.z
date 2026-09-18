@@ -37118,14 +37118,15 @@ emitUnitConformanceImpls: function {
 # functions, after the struct defs (so a generator function returning its synth
 # iter class resolves) and before the method bodies (a synth iterator's call
 # body may call another generator's fn). A generic function template declares
-# nothing here: its instances are emitted per mono. A definition that never
+# its instances instead, since a method body may call one; their definitions
+# come later, with the functions. A definition that never
 # resolved has no id, and its forward declaration renders as `z_t0(void)` over
 # unbound parameter names -- two of them in one unit collide on return type,
 # which is broken C rather than a diagnostic. Nothing can call what did not
 # resolve, so there is nothing to declare.
 emitUnitFnFwdDecls: function {
     ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
+    symtab: zenv.ZSymbolTable
     ctx: Ctx
     bodyIds: zast.kidspan
     buf: String.borrow
@@ -37141,7 +37142,18 @@ emitUnitFnFwdDecls: function {
         fdn: zast.nameTextAt :ast ref: bfd.name
         fdid: userFnId :ast :symtab :ctx name: fdn.stringView
         if fdid.isZero then continue
-        if (isGenericFnTid :symtab tid: fdid) then continue
+        if (isGenericFnTid :symtab tid: fdid) then {
+            (emitFnMonoInstances
+                :ast
+                :symtab
+                :ctx
+                templateFnId: fdid
+                templateFnOp: bfdOp
+                declOnly: true
+                :buf
+            )
+            continue
+        }
         fdsig: (fnSignature
             :ast
             :symtab

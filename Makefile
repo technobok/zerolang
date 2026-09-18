@@ -1189,7 +1189,11 @@ perf: $(PERFBIN)
 # +384 when a generic function of another unit, called `unit.fn`, came to run
 # the instance its call is stamped with rather than the template: the same
 # source compiles with the same count, all of it is the source longer.
-ALLOC_BASELINE := 2584621
+#
+# +62 when a generic function's instances came to be declared before the
+# method bodies that may call them: the same source compiles with the same
+# count, all of it is the source longer.
+ALLOC_BASELINE := 2584683
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
