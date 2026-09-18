@@ -3607,6 +3607,18 @@ pathIsPointer: function {
     }
 }
 
+# refValtypeResult -- the node is a reference-returning call whose result is a
+# VALTYPE: a `T*` in the C, where a by-value position wants the `T`.
+refValtypeResult: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+} out bool is {
+    if (nodeIsRefBorrowResult :ast :symtab :ctx :n).not then return false
+    return (symtab.reg.isValtypeOf tid: (stampIdOf :symtab nid: (interpPartNodeId :n)))
+}
+
 # nodeIsRefBorrowResult -- the node evaluates to a reference-returning call's
 # result, i.e. a `T*` in the emitted C. A String or List reference is not one:
 # emitExpr spells it loaded (valueStructRefNode).
@@ -7292,25 +7304,89 @@ instanceMethodArg: function {
             args.append ab
         }
     } else {
-        vbhm: String
-        if ptr.ptra.not when avr.usedInterp.not then {
-            vbhm = (hoistBorrowValArg
-                :ast
-                :symtab
-                :ctx
-                av: atomVarId.stringView
-                pid: (ztypes.tid.create from: posParamId.u64)
-                paramTake: ptr.pTake
-                isBorrow: avr.avBor
-            )
-        }
-        if vbhm.length > 0 then {
-            args.append vbhm
-        } else {
-            args.append atomVarId
-        }
+        (appendArgValue
+            :ast
+            :symtab
+            :ctx
+            :ptr
+            avNd: avr.avNd
+            usedInterp: avr.usedInterp
+            avBor: avr.avBor
+            :posParamId
+            av: atomVarId.stringView
+            :args
+        )
     }
     return avr.posIdx
+}
+
+# appendArgValue -- a method argument passed as its value (not addressed): a
+# by-value parameter handed a reference-returning call's valtype result takes
+# the value it points at, and a borrow of a value is hoisted where it must be.
+appendArgValue: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    ptr: instargptr
+    avNd: u64
+    usedInterp: bool
+    avBor: bool
+    posParamId: u64
+    av: StringView
+    args: String.borrow
+} is {
+    if ptr.ptra.not when avNd > 0 when (refValtypeResult
+        :ast
+        :symtab
+        :ctx
+        n: (ast.nodes.get i: avNd)
+    ) then {
+        ld: "(*\{av})"
+        (appendArgValueText
+            :ast
+            :symtab
+            :ctx
+            :ptr
+            :usedInterp
+            :avBor
+            :posParamId
+            av: ld.stringView
+            :args
+        )
+        return
+    }
+    appendArgValueText :ast :symtab :ctx :ptr :usedInterp :avBor :posParamId :av :args
+}
+
+# appendArgValueText -- appendArgValue's text, hoisted when a borrow of the value
+# has to be.
+appendArgValueText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    ptr: instargptr
+    usedInterp: bool
+    avBor: bool
+    posParamId: u64
+    av: StringView
+    args: String.borrow
+} is {
+    if ptr.ptra.not when usedInterp.not then {
+        vbhm: (hoistBorrowValArg
+            :ast
+            :symtab
+            :ctx
+            :av
+            pid: (ztypes.tid.create from: posParamId.u64)
+            paramTake: ptr.pTake
+            isBorrow: avBor
+        )
+        if vbhm.length > 0 then {
+            args.append vbhm
+            return
+        }
+    }
+    args.append av
 }
 
 # emitInstanceMethodBody -- the call text for a resolved user-object method:
@@ -12990,9 +13066,11 @@ userFnArgText: function {
             isBorrow: isBorrowed
         )
     }
-    # a pointer-held valtype handed to a BY-VALUE parameter is loaded; every
-    # parameter that wants the pointer has answered above
+    # a pointer-held valtype handed to a BY-VALUE parameter is loaded, and so
+    # is a reference-returning call's valtype result; every parameter that
+    # wants the pointer has answered above
     if (ptrHeldValtype :ast :symtab :ctx n: argOpNode) then return "(*\{atomVarId})"
+    if (refValtypeResult :ast :symtab :ctx n: argOpNode) then return "(*\{atomVarId})"
     vbh8: (hoistBorrowValArg
         :ast
         :symtab
@@ -14277,6 +14355,15 @@ nestedCounterRead: function {
     return "".string
 }
 
+# stackCollectionTid -- a List or an id container: a stack struct whose methods
+# take its address.
+stackCollectionTid: function {
+    symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid
+} out bool is {
+    if (isListOriginOf :symtab :ctx :tid) then return true
+    return (isIdCollectionOriginOf :symtab :ctx :tid)
+}
+
 # emitNestedCollectionBase -- a str or collection mono reached through a FIELD.
 # Set and Map are heap pointers and pass directly; the id-keyed pair are stack
 # structs and go by address. `recvIsPtr` is whether the base expression is
@@ -14558,6 +14645,21 @@ emitDottedNestedBase: function {
     # reached (a field path fails pathIsPointer's lock-field test)
     nstPtr: pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
     if nstPtr.not then nstPtr = isHeapPtrCollection :symtab :ctx tid: nlid
+    # a reference-returning base (`getMut` over a compound element) is a pointer
+    # into storage the container owns, and a stack collection's legs take the
+    # receiver's address: it is bound first -- still running before anything
+    # after it -- and read through its deref, as a method call's receiver is
+    if (stackCollectionTid :symtab :ctx tid: nlid) when (nodeIsRefBorrowResult
+        :ast
+        :symtab
+        :ctx
+        n: (ast.nodes.get i: n.parent.u64)
+    ) then {
+        brp: hoistLvalue :ast :symtab :ctx av: baseAtom.stringView tid: nlid ptr: true
+        baseAtom = "(*\{brp})"
+        bs9vid = ztypes.vid
+        nstPtr = false
+    }
     eCo: (emitNestedCollectionBase
         :symtab
         :ctx
@@ -19741,6 +19843,7 @@ emitDottedAutoCallStmt: function {
         return
     }
     de: emitExpr :ast :symtab :ctx :n
+    flushArgHoists :ctx :ind :tmp :buf
     if (de.stringView.startsWith prefix: "/*") then {
         emitFail :ctx what: "unhandled statement".string line: (ztypecheck.nodeLine :n)
         lud: "\{ind}/* zemitterc: unhandled statement */\n"
@@ -19851,6 +19954,7 @@ emitContinueStmt: function {
         }
     } else {
         ue: emitExpr :ast :symtab :ctx :n
+        flushArgHoists :ctx :ind :tmp :buf
         if (ue.stringView.startsWith prefix: "/*") then {
             (emitFail
                 :ctx
@@ -19901,6 +20005,7 @@ emitReturnStmt: function {
     ffid: userFnId :ast :symtab :ctx name: fcs
     if ffid > 0 when (symtab.reg.typetypeOf typeId: ffid) == ztypes.ztypetype.functionType then {
         fce: emitExpr :ast :symtab :ctx :n
+        flushArgHoists :ctx :ind :tmp :buf
         if (fce.stringView.startsWith prefix: "/*").not then {
             artid: stampIdOf :symtab nid: (interpPartNodeId :n)
             isBorrow911: bindingRhsIsBorrow :ast :symtab :ctx :n

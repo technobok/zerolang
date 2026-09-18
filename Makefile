@@ -1221,7 +1221,12 @@ perf: $(PERFBIN)
 # call passes it, and `.copy` of an all-valtype container came to be one call
 # for every receiver shape: the same source compiles with the same count, all
 # of it is the source longer.
-ALLOC_BASELINE := 2594247
+#
+# +1,779 when a `getMut` element came to be bound before a collection method
+# reads it and loaded where a by-value parameter takes it, and a discarded
+# statement came to declare the temps it hoists: the same source compiles with
+# the same count, all of it is the source longer.
+ALLOC_BASELINE := 2596026
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

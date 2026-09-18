@@ -37,7 +37,7 @@ static z_@String@_t z_@String@_from_f64(double n) {
     return z_@String@_new(buf);
 }
 
-static void z_@String@_print(z_@String@_t* s) {
+static void z_@String@_print(const z_@String@_t* s) {
     printf("%.*s\n", (int)s->size, s->data);
 }
 
