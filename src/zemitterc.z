@@ -14830,7 +14830,10 @@ methodAutoCallRead: function {
     }
     methodRecv: "\{bn2}"
     if (calleeTakesReceiverByPtr :ast :symtab fid: mt) when (isPtrVid :ctx vid: bn2v).not then {
-        methodRecv = "&\{bn2}"
+        # a base that is not an lvalue -- an arm constant (`Dir.up`), a call's
+        # result -- has no address: it is hoisted into the `_ah` temp an
+        # argument gets, and a name still emits as `&name`
+        methodRecv = emitByrefArg :ast :symtab :ctx av: bn2 pid: bstamp isBorrow: false
     }
     ida: renderedMethodDefaultArgs :ast :symtab :ctx fnTid: mt
     if ida.length > 0 then return "\{mc2}(\{methodRecv}, \{ida})"
@@ -21515,7 +21518,9 @@ pairSubjectCType: function {
 # together) has its own emitter. True when it took the match. That emitter
 # writes the subject into every arm's test (`if (s) ... else if (!s)`), so a
 # subject that is a CALL is evaluated into a temp first: it runs once, and
-# what it moved is zeroed once.
+# what it moved is zeroed once. A subject held through a pointer -- a `this`
+# or `.view` parameter -- is loaded, as the tag switch loads it: the test is of
+# the value, and a pointer tested is never null.
 matchOrdinalPairRoute: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -21540,6 +21545,14 @@ matchOrdinalPairRoute: function {
             buf.append "\{ind}\{ct} _mp\{mp} = \{subj};\n"
             emitCallTakeInvalidations :ast :symtab :ctx call: core :ind :buf
             subjOnce = "_mp\{mp}"
+        } else if (needsValueDeref
+            :ast
+            :symtab
+            :ctx
+            n: core
+            tid: (ztypes.tid.create from: sTid.u64)
+        ) then {
+            subjOnce = "(*\{subj})"
         }
         # the temp stands in for the subject exactly when one was built
         subjV: if subjOnce.length > 0 then subjOnce.stringView else subj

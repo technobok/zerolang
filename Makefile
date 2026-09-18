@@ -1267,7 +1267,11 @@ perf: $(PERFBIN)
 # native`: -1,410 over the same source (the one Box test compares the
 # registered name in place where three copies read it out), -148 the source
 # shorter.
-ALLOC_BASELINE := 2559242
+#
+# +302 when a match on an ordinal variant held through a pointer came to test
+# the value and a receiver with no address came to be hoisted: the same source
+# compiles with the same count, all of it is the source longer.
+ALLOC_BASELINE := 2559544
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
