@@ -41747,10 +41747,14 @@ checkStmtInner: function {
         checkAssignment :st :unitDecl :ast asgn: ar
         # a binding whose value failed still binds its name, typeless: the
         # failure is reported once, at the value, and a later read of the name
-        # is not a second unknown reference
+        # is not a second unknown reference. The binding names that variable
+        # too: a generic unit's template walk runs after its instances' and
+        # re-binds every read, so a binding left naming an instance walk's
+        # variable would disagree with its own reads.
         if (st.frameBindsHere nameId: ar.name).not then {
             vh: st.reg.newVariable ztypeId: ztypes.tid ownership: ztypes.zownership.owned
             st.defineVar nameId: ar.name vid: vh
+            st.typing.defVariableId.set key: ar.nid.u64 value: vh
         }
         stampLineFrom :st :lineId :innerId
         return zenv.divkind.none
@@ -43673,6 +43677,9 @@ stampOneFnMono: function {
     fnOpId: u32
     monoId: ztypes.tid
 } is {
+    if (firstInstanceWalk :st :ast monoId: monoId.u64 opId: (zast.nodeid.create from: fnOpId)
+    ).not then return
+    minted: st.reg.nextTypeId
     monoNm: st.reg.nameOf tid: monoId
     prevSup: st.typing.suppressParamStamps
     st.typing.suppressParamStamps = true
@@ -43712,6 +43719,7 @@ stampOneFnMono: function {
     st.typing.suppressParamStamps = prevSup
     st.typing.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     st.pop
+    recordMintedBy :st monoId: monoId.u64 :minted
 }
 
 # stampMonoTemplateClass -- resolve one generic class/record template and
@@ -43789,6 +43797,9 @@ stampOneClassMono: function {
     clsOpId: u32
     monoId: ztypes.tid
 } is {
+    if (firstInstanceWalk :st :ast monoId: monoId.u64 opId: (zast.nodeid.create from: clsOpId)
+    ).not then return
+    minted: st.reg.nextTypeId
     monoNm: st.reg.nameOf tid: monoId
     prevSup: st.typing.suppressParamStamps
     st.typing.suppressParamStamps = true
@@ -43873,6 +43884,7 @@ stampOneClassMono: function {
     st.typing.suppressParamStamps = prevSup
     st.typing.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     st.pop
+    recordMintedBy :st monoId: monoId.u64 :minted
 }
 
 # stampUnitMonoMembers -- the generic templates a unit's body declares, at any
@@ -44002,13 +44014,90 @@ stampUnitMonoMembers: function {
 # emitter's per-instance template re-walk reads the table (monoStampIdOf)
 # where the global table is param-suppressed. Runs under suppressParamStamps
 # so its scopes/entries stay out of the dump log; skipped when diagnostics
-# exist (nothing will be emitted).
+# exist (nothing will be emitted). An instance walk can mint an instance of a
+# template this sweep has already enumerated -- a generic function called from
+# a generic body with the body's own parameter -- so the sweep repeats until a
+# round mints nothing; each instance is walked once (firstInstanceWalk).
 stampUnitMonoTemplates: function {
     st: zenv.ZSymbolTable
     frame: ztypes.declid
     program: Ast
 } is {
-    if st.typing.errors.length > 0 then return
+    more: st.typing.errors.length == 0
+    for more loop {
+        minted: st.reg.nextTypeId
+        stampUnitMonoRound :st :frame :program
+        more = st.reg.nextTypeId > minted and (st.typing.errors.length == 0)
+    }
+}
+
+# firstInstanceWalk -- true the first time the sweep reaches an instance, which
+# it records: walking one twice would re-bind its names. An instance minted by
+# a chain of walks that already passed through its template
+# instanceRepeatLimit times is a template instantiating itself at ever larger
+# type arguments -- `f t: (wrap t: t)` inside `f` -- which no number of rounds
+# ends: it is refused once, at the template's definition, and not walked.
+firstInstanceWalk: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    monoId: u64
+    opId: zast.nodeid
+} out bool is {
+    if (st.typing.monosWalked.has item: monoId) then return false
+    st.typing.monosWalked.add item: monoId
+    if (templateRepeatsInMints :st :monoId) < instanceRepeatLimit then return true
+    org: st.reg.genericOriginOf tid: (ztypes.tid.create from: monoId)
+    if (st.typing.monoRecursionReported.has item: org.u64) then return false
+    st.typing.monoRecursionReported.add item: org.u64
+    tn: st.reg.nameOf tid: org
+    mn: st.reg.nameOf tid: (ztypes.tid.create from: monoId)
+    m: "instantiating '\{tn}' does not end: each instance instantiates it again, at a larger type argument ('\{mn}')"
+    opn: ast.nodes.get i: opId.u64
+    (addError
+        :st
+        nodeid: opId
+        lineno: (nodeLine n: opn)
+        colno: (nodeCol n: opn)
+        e: zast.err.genericError
+        msg: m
+    )
+    return false
+}
+
+# instanceRepeatLimit -- how many times a template may recur in the chain of
+# walks that minted one of its instances.
+instanceRepeatLimit: 8
+
+# templateRepeatsInMints -- how many of the instances whose walks minted
+# `monoId`, one inside the other, share its template.
+templateRepeatsInMints: function {st: zenv.ZSymbolTable.view monoId: u64} out u64 is {
+    org: st.reg.genericOriginOf tid: (ztypes.tid.create from: monoId)
+    n: u64
+    p: (st.typing.monoMintedBy.get key: monoId).or d: 0
+    for p > 0 loop {
+        if (st.reg.genericOriginOf tid: (ztypes.tid.create from: p)) == org then n = n + 1
+        p = (st.typing.monoMintedBy.get key: p).or d: 0
+    }
+    return n
+}
+
+# recordMintedBy -- every type id minted since `minted` was minted by the walk
+# of `monoId`.
+recordMintedBy: function {st: zenv.ZSymbolTable monoId: u64 minted: u64} is {
+    t: minted
+    last: st.reg.nextTypeId
+    for t < last loop {
+        st.typing.monoMintedBy.set key: t value: monoId
+        t = t + 1
+    }
+}
+
+# stampUnitMonoRound -- one round of the post-sweep over every file unit.
+stampUnitMonoRound: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    program: Ast
+} is {
     {
         uCnt: program.units.length
         uIdx: u64
@@ -44143,6 +44232,8 @@ stampOneUnitMono: function {
     unitOpId: zast.nodeid
     monoId: ztypes.tid
 } is {
+    if (firstInstanceWalk :st :ast monoId: monoId.u64 opId: unitOpId).not then return
+    minted: st.reg.nextTypeId
     bodyIds: zast.unitBodyIdsAt :ast unitId: unitOpId
     monoNm: st.reg.nameOf tid: monoId
     prevSup: st.typing.suppressParamStamps
@@ -44224,6 +44315,7 @@ stampOneUnitMono: function {
     st.pop
     # the methods of this instance's own copy of each type the unit declares
     stampUnitNestedMethods :st :ast :unitDecl :frame :bodyIds :monoId
+    recordMintedBy :st monoId: monoId.u64 :minted
 }
 
 # stampUnitNestedMethods -- the instance walk of the methods each type a generic

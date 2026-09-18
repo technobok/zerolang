@@ -1193,7 +1193,12 @@ perf: $(PERFBIN)
 # +62 when a generic function's instances came to be declared before the
 # method bodies that may call them: the same source compiles with the same
 # count, all of it is the source longer.
-ALLOC_BASELINE := 2584683
+#
+# +2,633 when an instance minted inside another instance's walk came to be
+# walked -- the post-sweep repeats until a round mints nothing, and refuses a
+# template that instantiates itself without end: the same source compiles with
+# the same count, all of it is the source longer.
+ALLOC_BASELINE := 2587316
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

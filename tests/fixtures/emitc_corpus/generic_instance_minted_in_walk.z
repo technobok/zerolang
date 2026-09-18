@@ -1,0 +1,79 @@
+# an instance of a generic template reached only from inside another
+# instance's body -- a generic function called with the caller's own
+# parameter -- is walked and emitted whichever is declared first: a chain of
+# functions, a class method called from a function, a function called from a
+# class method, and a unit's function calling a function declared before or
+# after it.
+mk: function as { t: anyval.generic } in { a: t } out (ListVal t: t) is {
+    l: (ListVal t: t)
+    l.append from: a
+    return l
+}
+grow: function as { t: anyval.generic } in { a: t } out (ListVal t: t) is {
+    l: mk t: t a: a
+    l.append from: a
+    return l
+}
+grow2: function as { t: anyval.generic } in { a: t } out (ListVal t: t) is {
+    l: grow t: t a: a
+    l.append from: a
+    return l
+}
+same: function as { t: anyval.generic } in { a: t } out t is {
+    return (same2 t: t a: a)
+}
+same2: function as { t: anyval.generic } in { a: t } out t is {
+    return a
+}
+outer: function as { t: anyval.generic } in { a: t } out t is {
+    return (same t: t a: a)
+}
+Box: class {
+    v: t
+} as {
+    t: anyval.generic
+    many: function {h: this} out (ListVal t: t) is {
+        l: mk t: t a: h.v
+        l.append from: h.v
+        return l
+    }
+}
+boxed: function as { t: anyval.generic } in { a: t } out u64 is {
+    b: Box t: t v: a
+    l: b.many
+    return l.length
+}
+Early: unit as {
+    t: anyval.generic
+    count: function {a: t} out u64 is {
+        l: mk a: a
+        return l.length
+    }
+}
+Late: unit as {
+    t: anyval.generic
+    count: function {a: t} out u64 is {
+        l: later a: a
+        return l.length
+    }
+    countMore: function {a: t} out u64 is {
+        l: later a: a
+        l.append from: a
+        return l.length
+    }
+}
+ei: (Early t: i64)
+li: (Late t: u8)
+later: function as { t: anyval.generic } in { a: t } out (ListVal t: t) is {
+    l: (ListVal t: t)
+    l.append from: a
+    l.append from: a
+    return l
+}
+main: function is {
+    g: grow2 t: i64 a: 2
+    h: grow2 t: u8 a: 3
+    print "chain: \{g.length} \{h.length} \{outer t: i64 a: 7}"
+    print "class: \{boxed t: i64 a: 2} \{boxed t: u8 a: 3}"
+    print "unit: \{ei.count a: 4} \{li.count a: 5} \{li.countMore a: 6}"
+}
