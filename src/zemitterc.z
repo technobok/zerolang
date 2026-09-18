@@ -3163,6 +3163,14 @@ Ctx: class {
     # invalid C
     )
     fwdDeclaredTypes: IdSet u64
+    # the function types whose `_ft` typedef the program needs: every one a
+    # written signature names before the typedef pass, and every one a field,
+    # parameter, variable or return declares
+    fnptrDemand: IdSet u64
+    # the function types whose `_ft` typedef the pass wrote
+    fnptrWritten: IdSet u64
+    # the typedef pass has run: a function type met after it must be one it wrote
+    fnptrPassDone: bool
     # runtime templates already substituted, keyed by their instantiation
     tmplCache: (Map String V: String
     # each io canonical stem's C name
@@ -27223,11 +27231,28 @@ typeRefC: function {
         return rt
     }
     if ctt == ztypes.ztypetype.functionType then {
+        noteFnptrUse :ctx tid: cid
         rcf: ctxCnameView :ctx tid: cid
         rtf: "\{rcf}_ft"
         return rtf
     }
     return "".string
+}
+
+# noteFnptrUse -- a C spelling of the function type `tid` (its `_ft` typedef):
+# before the typedef pass it is a demand the pass answers; after it, the
+# typedef must be one the pass wrote, or the C names a type that does not exist.
+noteFnptrUse: function {ctx: Ctx tid: ztypes.tid} is {
+    if ctx.fnptrPassDone.not then {
+        ctx.fnptrDemand.add item: tid.u64
+        return
+    }
+    if (ctx.fnptrWritten.has item: tid.u64) then return
+    (emitFail
+        :ctx
+        what: "a function type spelled after its typedefs were written, and not among them".string
+        line: 0
+    )
 }
 
 # variantArmIds -- variantArms without the names: the arm payload ids and name
@@ -29872,6 +29897,9 @@ emitC: function {
         lateDefs: String
         tagStems: (MapRV String v: u64)
         fwdDeclaredTypes: IdSet u64
+        fnptrDemand: IdSet u64
+        fnptrWritten: IdSet u64
+        fnptrPassDone: false
         tmplCache: (Map String V: String)
         ioCanonC: (Map String V: String)
         nativeTbl: (Map String V: String)
@@ -34015,6 +34043,7 @@ emitOneFnptrTypedef: function {
     }
     if pn == 0 then params.append "void"
     retc: fnptrRetTypeC :ast :symtab :ctx :tid
+    ctx.fnptrWritten.add item: tid.u64
     cb: ctxCnameView :ctx :tid
     line: "typedef \{retc} (*\{cb}_ft)(\{params});\n"
     buf.append line
@@ -34064,14 +34093,17 @@ emitFnptrTypedefs: function {
                     (fpt0 == ztypes.ztypetype.facetType)
                 )
                 if isObj then fnOwner.set key: fco value: fp0
+                seedDeclaredFnptr :ast :symtab :ctx owner: fp0 name: (fowN0.get i: fk0 - 1) tid: fco
             }
         }
     }
+    seedFnptrValues :ast :symtab :ctx
     t0: ztypes.tid
     for t0 < last loop {
         if (
             (symtab.reg.typetypeOf typeId: t0) == ztypes.ztypetype.functionType
-        ) when (fnptrTypedefEligible :ast :symtab tid: t0) then {
+        ) when (ctx.fnptrDemand.has item: t0.u64) when (fnptrTypedefEligible :ast :symtab tid: t0
+        ) then {
             (emitOneFnptrTypedef
                 :ast
                 :symtab
@@ -34083,6 +34115,55 @@ emitFnptrTypedefs: function {
             )
         }
         t0 = ztypes.tid.create from: t0 + 1
+    }
+    ctx.fnptrPassDone = true
+}
+
+# seedDeclaredFnptr -- a member row that holds a function value demands its type's
+# typedef: a function's parameter of a function type, or a type's fn-pointer
+# field. A method row is the type's own function, not a value it holds. The type
+# is spelled through typeRefC, which records the demand under the id it names.
+seedDeclaredFnptr: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    owner: u64
+    name: u64
+    tid: u64
+} is {
+    ot: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: owner)
+    isParam: ot == ztypes.ztypetype.functionType
+    if isParam.not when (symtab.typing.declIsFnptrFieldId
+        parentTypeId: (ztypes.tid.create from: owner)
+        nameId: (zast.nameid.create from: name)
+    ).not then return
+    typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: tid) thisTid: ztypes.tid
+}
+
+# seedFnptrValues -- a variable of a function type, and a function returning one,
+# demand its typedef: their C spelling may be written after the pass (a method
+# body, a struct field).
+seedFnptrValues: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx} is {
+    vi: u64
+    vn: symtab.reg.variableCount
+    for vi < vn loop {
+        vt: symtab.reg.variableTypeOf id: (ztypes.vid.create from: vi)
+        vi = vi + 1
+        if (symtab.reg.typetypeOf typeId: vt) == ztypes.ztypetype.functionType then {
+            typeRefC :ast :symtab :ctx tid: vt thisTid: ztypes.tid
+        }
+    }
+    ft: ztypes.tid
+    for ft < symtab.reg.nextTypeId loop {
+        if (symtab.reg.typetypeOf typeId: ft) == ztypes.ztypetype.functionType then {
+            rt: symtab.reg.returnTypeOf tid: ft
+            if rt.isZero.not when (
+                (symtab.reg.typetypeOf typeId: rt) == ztypes.ztypetype.functionType
+            ) then {
+                typeRefC :ast :symtab :ctx tid: rt thisTid: ztypes.tid
+            }
+        }
+        ft = ztypes.tid.create from: ft + 1
     }
 }
 

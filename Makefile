@@ -1230,7 +1230,13 @@ perf: $(PERFBIN)
 # +311 when a reassignment whose value has run came to zero the sources it
 # moved out of before freeing the target's old value: the same source compiles
 # with the same count, all of it is the source longer.
-ALLOC_BASELINE := 2596337
+#
+# -53,285 when a function type's `_ft` typedef came to be written only for a
+# type the program spells -- a field, parameter, variable or return holding a
+# function value, or a signature naming one: -55,329 over the same source (the
+# compiler's own C carried 2,791 such typedefs and referenced none), about
+# +2,040 the source longer.
+ALLOC_BASELINE := 2543052
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2659,7 +2665,7 @@ view-guard:
 # commit message, and the guard cannot tell the two apart: the prose is the
 # check, so say which one it is.
 FALLBACK_BASELINE :=
-EMITFAIL_BASELINE := 33
+EMITFAIL_BASELINE := 34
 MARKER_BASELINE := 24
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
