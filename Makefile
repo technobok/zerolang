@@ -1262,7 +1262,12 @@ perf: $(PERFBIN)
 # +236 when a generic class's construction came to pin the source of a
 # borrowed field, as a non-generic one does: the same source compiles with the
 # same count, all of it is the source longer.
-ALLOC_BASELINE := 2560800
+#
+# -1,558 when a record or class came to need a field and Box came to be `is
+# native`: -1,410 over the same source (the one Box test compares the
+# registered name in place where three copies read it out), -148 the source
+# shorter.
+ALLOC_BASELINE := 2559242
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

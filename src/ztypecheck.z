@@ -13936,20 +13936,30 @@ resolveDottedDef: function {
 # emitter writes no struct for one (an empty struct is not C), so every use of
 # it as a value produced C the compiler rejected while zc exited 0.
 #
+# A record or a class holds its data in fields, so members alone do not make
+# one: with none it has no layout, members or generic parameters or not. The
+# other kinds -- a generator, a union or variant (arms), a protocol, facet or
+# unit (members) -- declare what they are through their `as` block.
+#
 # `is native` is the exception, and the only one: the runtime owns those
 # layouts, and the markers the compiler declares this way -- `null`, `never`,
-# `anyval`, `Any` -- are deliberately empty. `null` and `never` parse as empty
-# records, which is why the marker and not the shape has to be the test.
+# `anyval`, `Any`, `Box` -- are deliberately empty. `null` and `never` parse as
+# empty records, which is why the marker and not the shape has to be the test.
 refuseEmptyObjectDef: function {
     st: zenv.ZSymbolTable
     defName: StringView
     defn: objref
 } out bool is {
     if defn.nis > 0 then return false
-    if defn.nas > 0 then return false
     if defn.isNative then return false
+    holdsData: defn.kind == zast.objectkind.recordDef or (defn.kind == zast.objectkind.classDef)
+    if defn.nas > 0 when holdsData.not then return false
     em9o: "'\{defName}' is an empty object definition — it declares no fields and no members"
     eh9o: "give it a field, give it a member, or mark it `is native` when the runtime owns its layout".string
+    if defn.nas > 0 then {
+        em9o = "'\{defName}' declares no fields — a record or class holds its data in fields"
+        eh9o = "give it a field, or mark it `is native` when the runtime owns its layout".string
+    }
     en9o: String
     (addErrorH
         :st
@@ -19312,17 +19322,7 @@ collapseBoxArm: function {
             bxo5: st.reg.genericOriginOf tid: (ztypes.tid.create from: target.u64)
             if bxo5 > 0 then bxg5 = bxo5
         }
-        # the builtin-Box discriminator mirrors checkBoxConstruction's
-        # call gate (name + classType + empty body); comparing by name
-        # avoids RESOLVING Box here, which would mint its tid earlier
-        # than before and renumber every later type id.
-        isBoxed: false
-        if bxg5 > 0 then {
-            bxn5: st.reg.nameOf tid: (ztypes.tid.create from: bxg5.u64)
-            if bxn5.stringView == "Box" when (
-                (st.reg.typetypeOf typeId: bxg5) == ztypes.ztypetype.classType
-            ) when (st.typing.declMemberCount ownerTid: bxg5) == 0 then isBoxed = true
-        }
+        isBoxed: isBoxTemplate :st tid: bxg5
         if isBoxed when (
             (st.reg.genericArgCount specId: (ztypes.tid.create from: target.u64)) == 1
         ) then {
@@ -19464,6 +19464,16 @@ mintMonoMember: function {
     return monoNeedsDtor
 }
 
+# isBoxTemplate -- `tid` is the system Box template: a class named `Box`
+# declaring no members. Compared by name, never resolved: resolving Box would
+# mint its tid earlier than before and renumber every later type id.
+isBoxTemplate: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    if tid.isZero then return false
+    if ((st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.classType).not then return false
+    if (st.reg.nameIs :tid name: "Box").not then return false
+    return (st.typing.declMemberCount ownerTid: tid) == 0
+}
+
 # mintMonoRecordShape -- give a monomorphised user RECORD or CLASS the
 # field-wise constructor its template does not write, which the emitter fills
 # as it fills a plain type's. A `create` the template writes was cloned onto the
@@ -19477,7 +19487,13 @@ mintMonoRecordShape: function {
     mid: u64
     tt: ztypes.ztypetype
 } is {
-    isUserClass: tt == ztypes.ztypetype.classType and (st.reg.isNativeOf tid: templateId).not
+    # the system Box is `is native` -- the runtime owns its layout, a pointer --
+    # but is constructed like a user class: its instances take the one element
+    isUserClass: (
+        tt ==
+        ztypes.ztypetype.classType and
+        ((st.reg.isNativeOf tid: templateId).not or (isBoxTemplate :st tid: templateId))
+    )
     if tt == ztypes.ztypetype.recordType or isUserClass then {
         isSized: (
             templateId ==
@@ -20963,12 +20979,7 @@ mintSpecUnderTemplate: function {
         # typeRefC's bare-pointer rendering and the destructor plumbing. The
         # member copy stays with construction -- nothing reads members off
         # an un-constructed Box.
-        isBxM8: false
-        bxmn8: st.reg.nameOf tid: templateId
-        if bxmn8.stringView == "Box" when (
-            (st.reg.typetypeOf typeId: templateId) == ztypes.ztypetype.classType
-        ) when (st.typing.declMemberCount ownerTid: templateId) == 0 then isBxM8 = true
-        if isBxM8 then {
+        if (isBoxTemplate :st tid: templateId) then {
             st.reg.setIsBox typeId: mid8
             st.reg.setIsHeapAllocated typeId: mid8
         }
@@ -38635,14 +38646,7 @@ checkNonUserCall: function {
     result: ztypes.tid
     # `Box from: val` -- the system box (empty generic class body)
     # constructs through its own leg: t inferred from the value.
-    isBox: false
-    if isGen when (st.reg.typetypeOf typeId: funcId) == ztypes.ztypetype.classType then {
-        bxn: st.reg.nameOf tid: funcId
-        if bxn.stringView == "Box" when (
-            (st.typing.declMemberCount ownerTid: funcId) == 0
-        ) then isBox = true
-    }
-    if isBox then {
+    if isGen when (isBoxTemplate :st tid: funcId) then {
         bres: checkBoxConstruction :st :unitDecl :ast :call tplId: funcId
         if bres > 0 then return (callleg handled: true tid: bres)
     }
