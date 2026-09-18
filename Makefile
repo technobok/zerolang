@@ -1254,7 +1254,11 @@ perf: $(PERFBIN)
 # body, a signature, a unit-level definition -- and a unit bound as a value came
 # to be refused: the same source compiles with the same count, all of it is the
 # source longer.
-ALLOC_BASELINE := 2559278
+#
+# +1,286 when a generic type that writes its `create` came to be constructed
+# with that create's parameters, each keeping its own ownership: +12 over the
+# same source, +1,274 the source longer.
+ALLOC_BASELINE := 2560564
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

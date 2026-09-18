@@ -22062,6 +22062,54 @@ inferConstructionSubs: function {
     }
 }
 
+# writtenTemplateCreate -- the `create` a template WRITES (its function type), 0
+# when its create is synthesised or it has none.
+writtenTemplateCreate: function {
+    st: zenv.ZSymbolTable.view templateId: ztypes.tid
+} out ztypes.tid is {
+    co: (st.typing.declChildOfId parentTypeId: templateId nameId: zast.names.wkCreate).or d: 0
+    if co == 0 then return ztypes.tid
+    if (st.typing.declMemberIsSynth parentTypeId: templateId nameId: zast.names.wkCreate) then {
+        return ztypes.tid
+    }
+    return (ztypes.tid.create from: co)
+}
+
+# stageRowsOf -- the names and types of the member rows of `ownerTid` (none when
+# 0).
+stageRowsOf: function {
+    st: zenv.ZSymbolTable.view
+    ownerTid: ztypes.tid
+    names: ListVal zast.nameid
+    tids: ListVal u64
+} is {
+    if ownerTid.isZero then return
+    ri: u64
+    rn: st.typing.declRowSlots :ownerTid
+    for ri < rn loop {
+        rw: st.typing.declRowAt :ownerTid membersOnly: true slot: ri
+        ri = ri + 1
+        if rw.keep then {
+            names.append (zast.nameid.create from: rw.name.u32.orPanic)
+            tids.append rw.tid
+        }
+    }
+}
+
+# appendRowNames -- the names of the member rows of `ownerTid` (none when 0).
+appendRowNames: function {
+    st: zenv.ZSymbolTable.view ownerTid: ztypes.tid dst: ListVal zast.nameid
+} is {
+    if ownerTid.isZero then return
+    ri: u64
+    rn: st.typing.declRowSlots :ownerTid
+    for ri < rn loop {
+        rw: st.typing.declRowAt :ownerTid membersOnly: true slot: ri
+        ri = ri + 1
+        if rw.keep then dst.append (zast.nameid.create from: rw.name.u32.orPanic)
+    }
+}
+
 # inferGenericConstruction -- a generic class/record template called with
 # field-bound value arguments: labels naming generic params resolve as
 # explicit type args; other args walk as values and bind their field's
@@ -22084,18 +22132,16 @@ inferGenericConstruction: function {
     # GENERIC_PARAM typetype).
     childNames: ListVal zast.nameid
     cIds3: ListVal u64
-    {
-        igi: u64
-        ign: st.typing.declRowSlots ownerTid: tplId
-        for igi < ign loop {
-            rwIg: st.typing.declRowAt ownerTid: tplId membersOnly: true slot: igi
-            igi = igi + 1
-            if rwIg.keep then {
-                childNames.append (zast.nameid.create from: rwIg.name.u32.orPanic)
-                cIds3.append rwIg.tid
-            }
-        }
-    }
+    # a create the template writes is what its construction calls, so its
+    # parameters infer first; the fields still do, so a field label written
+    # against it mints the instance whose call reports the label
+    (stageRowsOf
+        :st
+        ownerTid: (writtenTemplateCreate :st templateId: tplId)
+        names: childNames
+        tids: cIds3
+    )
+    stageRowsOf :st ownerTid: tplId names: childNames tids: cIds3
     fNames: ListVal zast.nameid
     fParams: ListVal zast.nameid
     ci3: u64
@@ -23087,6 +23133,9 @@ validateGenericTypeArgs: function {
             }
         }
     }
+    # a create the template writes: its parameters are the construction's
+    # labels, not type arguments
+    appendRowNames :st ownerTid: (writtenTemplateCreate :st templateId: tplId) dst: childNames
     primaryName: firstGenericParamId :st templateId: (ztypes.tid.create from: tplId.u64)
     fromId: nameIdOf :ast name: "from"
     seen: IdSet zast.nameid
@@ -35799,7 +35848,19 @@ checkTypedCallArg: function {
         :wasPos
         :arg
     )
-    aow: argOwnershipOf :st :funcId :isCtor :pnId :vt
+    # a `create` the type WRITES binds its own parameters, so their ownership
+    # is the function's, as a direct call of it reads it; only the synthesised
+    # one takes each field as the field declares it
+    ownFn: funcId
+    ownCtor: isCtor
+    if isCtor when (effId == funcId).not when (st.typing.declMemberIsSynth
+        parentTypeId: funcId
+        nameId: zast.names.wkCreate
+    ).not then {
+        ownFn = effId
+        ownCtor = false
+    }
+    aow: argOwnershipOf :st funcId: ownFn isCtor: ownCtor :pnId :vt
     isTake: aow.isTake
     isLockish: aow.isLockish
     isViewArg: aow.isViewArg
