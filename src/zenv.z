@@ -1259,11 +1259,20 @@ ZSymbolTable: class {
                     conflictRef = true
                     break
                 }
+                # a shared lock already on the same path covers this one while
+                # it lasts at least as long. Another BINDING's may not: a
+                # binding ends early when it is dropped or moved, and this
+                # holder -- unless it is a call, over before any binding
+                # could end -- would be left pointing at an unlocked path
                 same: pathsEqual a: e.lockPath.listView b: path
                 if same then {
                     eShared: e.lockType == ztypes.zlockstate.shared
                     rShared: lockType == ztypes.zlockstate.shared
-                    if eShared when rShared then idempotent = true
+                    endsFirst: (
+                        e.lockHolder.kind.varKind and (holderEq a: e.lockHolder b: holder).not
+                    )
+                    if endsFirst when holder.kind.callKind then endsFirst = false
+                    if eShared when rShared when endsFirst.not then idempotent = true
                 }
             }
             j = j - 1

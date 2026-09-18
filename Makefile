@@ -1284,7 +1284,12 @@ perf: $(PERFBIN)
 # +1,310 when a constant integer operation that overflows, or divides by a
 # constant zero, came to be refused in a body as at unit level: the same source
 # compiles with the same count, all of it is the source longer.
-ALLOC_BASELINE := 2562907
+#
+# +2,064 when a binding's shared lock on a path another binding already locks
+# came to be recorded as its own, since the two can end apart: +1,887 over the
+# same source (the rows the compiler's own aliases now lay), +177 the source
+# longer.
+ALLOC_BASELINE := 2564971
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
