@@ -3231,6 +3231,9 @@ Ctx: class {
     # and stays one: nothing here joins the halves, and nothing splits them.
     )
     fragUnits: List String
+    # the table rows already written: a unit whose types a function type's
+    # typedef spells is written ahead of the typedefs, and not again after
+    rowsWritten: IdSet u64
     # the members fragments were emitted for
     fragMembs: List String
     # their names, parallel to fragMembs
@@ -29744,6 +29747,16 @@ emitCodeBody: function {
             typeUseAdd :ctx tid: (ztypes.tid.create from: ctx.netConnTid)
         }
         emitMonos ast: program :symtab :ctx :runtimeDir buf: codeBuf
+        # the split / lines iterator types, ahead of the typedefs of the function
+        # types that spell them; they reach nothing the passes below write
+        (emitRuntimeUnit
+            ast: program
+            :symtab
+            :ctx
+            :runtimeDir
+            uname: "sviter"
+            buf: codeBuf
+        )
         # ahead of the runtime fragments: those dereference the layouts of the
         # types they serve, so anything a fragment touches must already be
         # complete, and this is the pass that orders by-value embedding in both
@@ -29913,6 +29926,7 @@ emitC: function {
         nativeConvMemb: (MapRV String v: bool)
         nativeArgMemb: (MapRV String v: bool)
         fragUnits: List String
+        rowsWritten: IdSet u64
         fragMembs: List String
         fragNames: List String
         fragTypeNames: List String
@@ -32815,7 +32829,8 @@ emitRuntimeUnit: function {
             u: ctx.fragUnits.get :i
             isU = u.stringView == uname
         }
-        if isU when (rowDemandFired :ctx :i) then {
+        if isU when (rowDemandFired :ctx :i) when (ctx.rowsWritten.has item: i).not then {
+            ctx.rowsWritten.add item: i
             fl: (ctx.fragNames.get :i).copy
             with fit: (fl.stringView.split sep: ",") do for fr: fit loop {
                 if fr.length > 0 then {
@@ -33879,6 +33894,14 @@ ensureFwdStruct: function {
         if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogArray)) then isStruct = false
     }
     if isStruct when (ctx.fwdDeclaredTypes.has item: tid).not then {
+        # a mono is declared on the terms its own pass declares it: an iterator
+        # cursor is an anonymous typedef no forward declaration can name, and a
+        # Box is a pointer
+        mo: originTidOf :symtab :tid
+        if mo.isZero.not then {
+            emitMonoFwdDecl :symtab :ctx :tid origin: mo :buf
+            return
+        }
         cn: ctxCname :ctx :tid
         ctx.fwdDeclaredTypes.add item: tid.u64
         l0: "typedef struct \{cn}_t \{cn}_t;\n"

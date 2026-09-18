@@ -1236,7 +1236,12 @@ perf: $(PERFBIN)
 # function value, or a signature naming one: -55,329 over the same source (the
 # compiler's own C carried 2,791 such typedefs and referenced none), about
 # +2,040 the source longer.
-ALLOC_BASELINE := 2543052
+#
+# +354 when an iterator cursor came to be declared on its mono's terms and the
+# split / lines iterator types came to be written ahead of the function types
+# spelling them: +14 over the same source (the written-row set), +340 the
+# source longer.
+ALLOC_BASELINE := 2543406
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1407,9 +1412,9 @@ emitter-guard:
 	chk "ztypecheck.resolvedByKey" "$$e1" 0; \
 	chk "ztypecheck.walkLookupTyperef" "$$e2" 5; \
 	chk "resolveTypeIdByName" "$$e3" 17; \
-	chk "userFnId" "$$e4" 23; \
+	chk "userFnId" "$$e4" 21; \
 	chk "childOwnershipText" "$$e5" 0; \
-	chk "regNameOf" "$$e6" 74; \
+	chk "regNameOf" "$$e6" 70; \
 	chk "ztypes.mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 3; \
 	chk "monoOriginName" "$$e9" 7; \
