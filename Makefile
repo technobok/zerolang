@@ -1216,7 +1216,12 @@ perf: $(PERFBIN)
 # over the same source (a typed number of another width is still cast, which
 # asks both types whether they are numbers; an exact match asks nothing), about
 # +840 the source longer.
-ALLOC_BASELINE := 2593409
+#
+# +838 when a record's or variant's method came to take a parameter the way a
+# call passes it, and `.copy` of an all-valtype container came to be one call
+# for every receiver shape: the same source compiles with the same count, all
+# of it is the source longer.
+ALLOC_BASELINE := 2594247
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

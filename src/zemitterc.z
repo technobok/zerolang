@@ -7149,14 +7149,18 @@ instanceMethodArgPtr: function {
     # bare local answers through its vid; a PATH -- a non-owned reftype field,
     # a reference-returning call -- has no vid, and only the argument's own
     # expression answers for it. Asking one half hands the callee a `T**`.
-    # The path walk runs only when the cheap test has already said no
-    if ptra when (isPtrVid :ctx vid: avq).not when (argIsPointerByLabel
-        :ast
-        :symtab
-        :ctx
-        :call
-        label: posParamName
-    ).not then byref = true
+    # The path walk runs only when the cheap test has already said no, and a
+    # pointer-held variable read as a narrowed valtype payload is the payload's
+    # value, which is addressed like any value
+    if ptra then {
+        held: isPtrVid :ctx vid: avq
+        if held then {
+            held = (argNarrowedByLabel :ast :symtab :call label: posParamName vid: avq).not
+        } else {
+            held = argIsPointerByLabel :ast :symtab :ctx :call label: posParamName
+        }
+        if held.not then byref = true
+    }
     return (instargptr
         :ptra
         :isStrBorrow
@@ -11287,6 +11291,33 @@ argIsPointerByLabel: function {
     return false
 }
 
+# argNarrowedByLabel -- the arg at `label` reads the pointer-held variable `vid`
+# as a narrowed valtype payload: its value, not the pointer the variable is held
+# through.
+argNarrowedByLabel: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    call: zast.callrow.view
+    label: StringView
+    vid: ztypes.vid
+} out bool is {
+    arx401: u64
+    for arx401 < call.arguments.count.u64 loop {
+        aId: zast.kidAt kids: ast.kids span: call.arguments i: arx401
+        arx401 = arx401 + 1
+        a: ast.nodes.get i: aId.u64
+        if a.namedoperation then {
+            an: zast.nameTextAt :ast ref: a.name
+            if an.stringView == label then return (narrowedValtypePayload
+                :symtab
+                n: (ast.nodes.get i: a.operation.u64)
+                :vid
+            )
+        }
+    }
+    return false
+}
+
 # ctorArgNodeByPosition -- ctorArgByPosition's node id rather than its C text,
 # for a caller that must look the argument up again instead of printing it.
 # 0 when there is no positional argument at that index.
@@ -14262,6 +14293,19 @@ emitNestedCollectionBase: function {
 } out String is {
     eCt: nestedCounterRead :symtab :ctx :mnId :nlid :baseAtom :recvIsPtr
     if eCt.length > 0 then return eCt
+    if (mnIs :ctx id: mnId at: mnCopy) then {
+        fam: copyFamilyOf :symtab :ctx tid: nlid
+        if fam > 0 then {
+            crv: colRecvRef :ctx bn: baseAtom vid: bs9vid
+            return (containerCopyText
+                :ctx
+                tid: nlid
+                :fam
+                stackRecv: crv.stringView
+                heapRecv: baseAtom
+            )
+        }
+    }
     if (originIsTid :symtab tid: nlid originTid: (ctx.origins.get i: ogStr)) then {
         nstrcb: ctxCname :ctx tid: nlid
         if mn2 == "length" then return "\{baseAtom}.len"
@@ -15017,33 +15061,14 @@ emitCollectionMemberRead: function {
     # a list or an id container is a stack struct, so the local's ADDRESS is.
     mnc9: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
     if (mnIs :ctx id: mnc9 at: mnCopy) then {
-        cpStack9: false
-        cpHeap9: false
-        if (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: ogListVal)) then {
-            cpStack9 = true
-        }
-        if (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: ogIdMapV)) then {
-            cpStack9 = true
-        }
-        if (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: ogIdSet)) then {
-            cpStack9 = true
-        }
-        if (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: ogSetVal)) then {
-            cpHeap9 = true
-        }
-        if (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: ogMapVV)) then {
-            cpHeap9 = true
-        }
-        if cpStack9 then {
-            cpcb9: ctxCname :ctx tid: bstamp
-            ecp9: "\{cpcb9}_copy(\{recvB2})"
-            return ecp9
-        }
-        if cpHeap9 then {
-            cphb9: ctxCname :ctx tid: bstamp
-            ech9: "\{cphb9}_copy(\{bn2})"
-            return ech9
-        }
+        fam9: copyFamilyOf :symtab :ctx tid: bstamp
+        if fam9 > 0 then return (containerCopyText
+            :ctx
+            tid: bstamp
+            fam: fam9
+            stackRecv: recvB2.stringView
+            heapRecv: bn2
+        )
     }
     if (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: ogArray)) then {
         acba: ctxCname :ctx tid: bstamp
@@ -15763,21 +15788,50 @@ colCopyCall: function {
     n: zast.dottedpathrow.view
     tid: ztypes.tid
 } out String is {
-    cpStack9: false
-    cpHeap9: false
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogListVal)) then cpStack9 = true
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogIdMapV)) then cpStack9 = true
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogIdSet)) then cpStack9 = true
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogSetVal)) then cpHeap9 = true
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogMapVV)) then cpHeap9 = true
-    if cpStack9.not when cpHeap9.not then return "".string
-    cpb9: ctxCname :ctx :tid
+    fam9: copyFamilyOf :symtab :ctx :tid
+    if fam9 == 0 then return "".string
     cpv9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
-    if cpHeap9 then return "\{cpb9}_copy(\{cpv9})"
     cpn9: ast.nodes.get i: n.parent.u64
     cpvid9: atomVid :symtab nid: (atomNodeId n: cpn9)
-    if (isPtrVid :ctx vid: cpvid9) then return "\{cpb9}_copy(\{cpv9})"
-    return "\{cpb9}_copy(&\{cpv9})"
+    cpa9: "&\{cpv9}"
+    if (isPtrVid :ctx vid: cpvid9) then cpa9 = cpv9.copy
+    return (containerCopyText
+        :ctx
+        :tid
+        fam: fam9
+        stackRecv: cpa9.stringView
+        heapRecv: cpv9.stringView
+    )
+}
+
+# copyFamilyOf -- how a container that declares `.copy` is held, which decides
+# how its copy is called: 1 for a stack struct (a list, an id container), 2 for
+# a heap-held dict, 0 for any other type. Only the five ALL-VALTYPE containers
+# declare a copy, and they are named precisely: a checker regression then shows
+# up as a missing call, never as a wrong emission on a reference family whose
+# elements would get two owners.
+copyFamilyOf: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid} out u64 is {
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogListVal)) then return 1
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogIdMapV)) then return 1
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogIdSet)) then return 1
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogSetVal)) then return 2
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogMapVV)) then return 2
+    return 0
+}
+
+# containerCopyText -- the `_copy` call of a container of copy family `fam`: a
+# stack struct is copied from its ADDRESS, `stackRecv`; a dict is heap-held,
+# and its local already IS the pointer, `heapRecv`.
+containerCopyText: function {
+    ctx: Ctx.view
+    tid: ztypes.tid
+    fam: u64
+    stackRecv: StringView
+    heapRecv: StringView
+} out String is {
+    cb: ctxCname :ctx :tid
+    if fam == 2 then return "\{cb}_copy(\{heapRecv})"
+    return "\{cb}_copy(\{stackRecv})"
 }
 
 # emitCopyConversion -- `.copy`, whose shape depends on the receiver family. A
@@ -39431,15 +39485,14 @@ pointerParamC: function {
 }
 
 # emitMethodParams -- one C parameter per declared field, in declaration order:
-# the receiver by pointer for a class, then each parameter passed the way its
-# declaration says it is taken. Appends to `params`.
+# the receiver by pointer, then each parameter passed the way its declaration
+# says it is taken. Appends to `params`.
 emitMethodParams: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     mid: ztypes.tid
     thisTid: ztypes.tid
-    encIsClass: bool
     pnames: (List String).view
     pids: (ListVal u64).view
     pidsNm: (ListVal u64).view
@@ -39468,11 +39521,11 @@ emitMethodParams: function {
         )
         if pt.length == 0 then pt = "int64_t".string
         # The receiver is a reference in BOTH families: a record method acts on
-        # the caller's instance, not on a copy of it. The rest of the pointer
-        # rule still applies to class methods only.
+        # the caller's instance, not on a copy of it. The other parameters are
+        # passed as a call passes them, whatever the receiver's family.
         isRecv: pname.stringView == recvNm
         byPtr: isRecv
-        if isRecv.not when encIsClass when (classParamByPointer
+        if isRecv.not when (classParamByPointer
             :ast
             :symtab
             :ctx
@@ -39529,19 +39582,16 @@ emitOneMethod: function {
     pids: ListVal u64
     pidsNm: ListVal u64
     recFieldLists :ast :symtab tid: mid names: pnames ids: pids nameIds: pidsNm
-    # a CLASS method takes its `this` receiver by pointer (reference semantics):
-    # the receiver param gets a `*` and its name is recorded so the body emits
+    # a method takes its receiver by pointer (reference semantics): the
+    # receiver param gets a `*` and its name is recorded so the body emits
     # `c->field`. Reset for this method (names must not leak into other bodies).
     resetFnEmitState :ctx
-    encIsClass: false
-    if (symtab.reg.typetypeOf typeId: thisTid) == ztypes.ztypetype.classType then encIsClass = true
     (emitMethodParams
         :ast
         :symtab
         :ctx
         :mid
         :thisTid
-        :encIsClass
         :pnames
         :pids
         :pidsNm
