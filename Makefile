@@ -1241,7 +1241,11 @@ perf: $(PERFBIN)
 # split / lines iterator types came to be written ahead of the function types
 # spelling them: +14 over the same source (the written-row set), +340 the
 # source longer.
-ALLOC_BASELINE := 2543406
+#
+# +735 when a borrow of a fresh value at the end of a variable's path came to
+# keep that value alive, as a call's result is kept: the same source compiles
+# with the same count, all of it is the source longer.
+ALLOC_BASELINE := 2544141
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

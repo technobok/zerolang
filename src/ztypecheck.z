@@ -32725,12 +32725,32 @@ captureValueReceiver: function {
         drainPendingBorrow :st
         return ztypes.tid
     }
-    if (receiverRootIsVar :st :ast :call) then return ztypes.tid
     rpid: dottedParentNodeId :ast n: (ast.nodes.get i: call.callable.u64)
+    if (receiverRootIsVar :st :ast :call) when (receiverIsFreshValue :st :ast nid: rpid
+    ).not then return ztypes.tid
     if rpid.isZero or (receiverIsValue :st :ast nid: rpid).not then return ztypes.tid
     takePendingPins :st dst: pins
     if pins.length > 0 then return ztypes.tid
     return (ztypes.tid.create from: (walkTypeOf :st nid: rpid.u64))
+}
+
+# receiverIsFreshValue -- a receiver path rooted in a variable that still ends
+# in a fresh value: an auto-call returning what it owns, not a view into its
+# base (`grid.pop`, not `b.rowsMut`). What its result borrows is that value,
+# which nothing names, so it is an unnamed local as a call's result is.
+receiverIsFreshValue: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} out bool is {
+    if nid.isZero then return false
+    isPath: false
+    {
+        bn: ast.nodes.get i: nid.u64
+        isPath = bn.dottedpath
+    }
+    if isPath.not then return false
+    rdo: st.typing.refDecl.get key: nid.u64
+    if rdo.none then return false
+    fid: declTypeIdOf :st declId: rdo
+    if (st.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return false
+    return (resultPins :st funcId: fid).not
 }
 
 # receiverRootIsVar -- the method call's receiver path is rooted in a variable.
@@ -36967,6 +36987,9 @@ checkResolvedMethodCall: function {
         rvbP: st.lookupVarId nameId: (rtupP.get i: 0)
         if rvbP.none then for rtupP.length > 0 loop rtupP.pop
     }
+    # a fresh value at the end of a variable's path is the unnamed local, not
+    # the path
+    if rvT.isZero.not then for rtupP.length > 0 loop rtupP.pop
     if rtupP.length == 0 then joinValueReceiver :st :ast :rvT :rvPins path: rtupP :pins
     pinCallResult :st funcId: dro :pins recvPath: rtupP recvShared: recvShr
     st.typing.callKind.set key: call.nid.u64 value: zast.callkind.regular
