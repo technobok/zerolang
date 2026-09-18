@@ -2859,8 +2859,35 @@ stampNestedTyperef: function {
         nestedNameId: unitId
         defName: memberId
     )
+    if mt.isZero when (qualifierMayBeInstance :st :ast :frame nameId: unitId) then {
+        mt = unitInstanceMemberTid :st :frame :ast :unitDecl :nid :memberId
+    }
     if mt.isZero then return
     ztyping.nodeTypeSet tbl: st.typing.nodeType nid: nid.u64 tid: mt
+}
+
+# unitInstanceMemberTid -- the type `memberId` a dotted type-ref names through a
+# unit instance (`ic.Cell`): that instance's own copy, built on demand; 0 when
+# the qualifier names no instance or the instance has no such type.
+unitInstanceMemberTid: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+    memberId: zast.nameid
+} out ztypes.tid is {
+    parentId: zast.nodeid
+    {
+        node: ast.nodes.get i: nid.u64
+        if node.dottedpath then parentId = node.parent
+    }
+    if parentId.isZero then return ztypes.tid
+    ui: unitInstanceOfTyperef :st :frame :ast :unitDecl nid: parentId thisName: ""
+    if ui.isZero then return ztypes.tid
+    ensureUnitMonoBuilt :st :frame :ast monoId: ui
+    mo: (st.typing.declChildOfId parentTypeId: ui nameId: memberId).or d: 0
+    return (ztypes.tid.create from: mo)
 }
 
 # recordResolvedName -- record (nid -> name) for post-demand resolution; the `this` and
@@ -3619,6 +3646,10 @@ recordDottedTyperef: function {
         pnId = atomNameId :ast n: pNode
     }
     if (nameDenotesUnit :st :frame nameId: pnId) then {
+        # a unit INSTANCE's member type names the instance's own copy, which
+        # the instance's frame does not hold by name: stamped here
+        if (stampInstanceTyperef :st :frame :ast :unitDecl :nid qualId: pnId memberId: cnId
+        ) then return
         # cross-unit qualified type ref (zlexer.token): record the MEMBER under
         # its DEFINING unit (the parent) so stampTyperefs bridges this node.
         # The member resolves in the qualifier's frame, not the writer's.
@@ -4292,6 +4323,10 @@ dottedTyperefShell: function {
     # owned copies: the resolutions below lend ast
     pId: atomNameId :ast n: (ast.nodes.get i: parentId.u64)
     cId: atomNameId :ast n: (ast.nodes.get i: childId.u64)
+    # a unit INSTANCE's member type (`ic.Cell` with `ic: (cells t: i64)`) names
+    # that instance's own copy
+    uim: instanceTyperefMember :st :frame :ast :unitDecl :nid :pId :cId
+    if uim.isZero.not then return uim.u64
     if (nameDenotesUnit :frame :st nameId: pId) then {
         demandUnitMember :st unitNameId: pId nameId: cId
         ud8: unitDeclOfNameOrOwn :st :frame nameId: pId
@@ -4343,6 +4378,245 @@ dottedTyperefShell: function {
     }
 }
 
+
+# instanceTyperefMember -- the member `cId` a dotted type-ref names through a unit
+# instance, 0 when the qualifier `pId` names none. A signature can name one
+# before the instance's completion pass has typed the binding or built the
+# instance, so the qualifier is resolved and the instance built here: peeling
+# to the parent handed the slot the unit's own type. The cheap refusals come
+# first -- a file unit, an ownership marker, a numeric suffix.
+instanceTyperefMember: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+    pId: zast.nameid
+    cId: zast.nameid
+} out ztypes.tid is {
+    if (isStripMarkerId nameId: cId) then return ztypes.tid
+    if (isNumericTypeNameAt :ast ref: cId) then return ztypes.tid
+    # a qualifier that is itself a path (`lib.ic`) binds in another unit, and
+    # only resolving it says what it is
+    if (dottedQualifier :ast :nid).not then {
+        if (isUnitNameDecl :st nameId: pId) then return ztypes.tid
+        if (qualifierMayBeInstance :st :ast :frame nameId: pId).not then return ztypes.tid
+    }
+    return (unitInstanceMemberTid :st :frame :ast :unitDecl :nid memberId: cId)
+}
+
+# dottedQualifier -- the dotted type-ref `nid` is qualified by a path.
+dottedQualifier: function {ast: Ast.view nid: zast.nodeid} out bool is {
+    parentId: zast.nodeid
+    {
+        node: ast.nodes.get i: nid.u64
+        if node.dottedpath then parentId = node.parent
+    }
+    if parentId.isZero then return false
+    pn: ast.nodes.get i: parentId.u64
+    return pn.dottedpath
+}
+
+# qualifierMayBeInstance -- the name a dotted type-ref is qualified by may bind a
+# unit instance: it does, or it is a definition whose value is a call -- the
+# instantiation -- that nothing has typed yet.
+qualifierMayBeInstance: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    frame: ztypes.declid
+    nameId: zast.nameid
+} out bool is {
+    if (isUnitNameDecl :st :nameId) then return false
+    if (bindingIsUnitInstance :st :frame :nameId) then return true
+    if (nameDenotesUnit :frame :st :nameId) then return false
+    if (qualifierSettledNotInstance :st :frame :nameId) then return false
+    return (qualifierValueIsCall :st :ast :frame :nameId)
+}
+
+# qualifierValueIsCall -- the declaration `nameId` names in scope is a definition
+# whose value is a call: the one shape an instantiation takes.
+qualifierValueIsCall: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    frame: ztypes.declid
+    nameId: zast.nameid
+} out bool is {
+    h: envLookup :st :frame :nameId
+    if h.declId.isZero then return false
+    dn: u32
+    {
+        hd: st.typing.decls.get i: h.declId.u64
+        dn = hd.node
+    }
+    if dn == 0 then return false
+    isCall: false
+    {
+        nn: ast.nodes.get i: dn.u64
+        if nn.namedoperation then {
+            vn: ast.nodes.get i: nn.operation.u64
+            isCall = vn.call
+        }
+    }
+    return isCall
+}
+
+# qualifierSettledNotInstance -- the name a dotted type-ref is qualified by is
+# known not to bind a unit instance without resolving it: it declares a type, a
+# function, a data block or a unit (a nested unit or subunit), or its declaration
+# is typed as anything but a unit.
+qualifierSettledNotInstance: function {
+    st: zenv.ZSymbolTable.view frame: ztypes.declid nameId: zast.nameid
+} out bool is {
+    h: envLookup :st :frame :nameId
+    if h.declId.isZero then return false
+    isDef: false
+    {
+        hd: st.typing.decls.get i: h.declId.u64
+        isDef = (
+            hd.kind.unitDecl or
+            hd.kind.typeDecl or
+            hd.kind.funcDecl or
+            hd.kind.dataDecl or
+            hd.kind.publicNs
+        )
+    }
+    if isDef then return true
+    bt: declTypeIdOf :st declId: h.declId
+    if bt.isZero then return false
+    return (st.reg.typetypeOf typeId: bt) != ztypes.ztypetype.unitType
+}
+
+# unitInstanceOfTyperef -- the unit instance a dotted type-ref's qualifier names
+# (a binding of an instantiated unit, here or through its unit), 0 when it names
+# anything else. Only a name or a path is asked: a binding is the one qualifier
+# that can be an instance.
+unitInstanceOfTyperef: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+    thisName: StringView
+} out ztypes.tid is {
+    isRef: false
+    {
+        pn: ast.nodes.get i: nid.u64
+        isRef = pn.atomid or pn.dottedpath
+    }
+    if isRef.not then return ztypes.tid
+    pt: resolveTyperefShell :st :frame :ast :unitDecl :nid :thisName
+    ptid: ztypes.tid.create from: pt
+    if (st.reg.typetypeOf typeId: ptid) != ztypes.ztypetype.unitType then return ztypes.tid
+    if (st.reg.genericOriginOf tid: ptid).isZero then return ztypes.tid
+    return ptid
+}
+
+# unitInstanceMemberNamed -- the type `memberId` of the unit instance the name
+# `qualId` binds, built on demand; 0 when `qualId` binds no instance or the
+# instance has no such type.
+unitInstanceMemberNamed: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    qualId: zast.nameid
+    memberId: zast.nameid
+} out ztypes.tid is {
+    # a file unit's member is the ordinary alias, found before this is asked
+    if (isUnitNameDecl :st nameId: qualId) then return ztypes.tid
+    qt: (ztypes.tid.create
+        from: (resolveAtomType :st :ast :unitDecl :frame nameId: qualId thisName: "")
+    )
+    if (st.reg.typetypeOf typeId: qt) != ztypes.ztypetype.unitType then return ztypes.tid
+    if (st.reg.genericOriginOf tid: qt).isZero then return ztypes.tid
+    ensureUnitMonoBuilt :st :frame :ast monoId: qt
+    mo: (st.typing.declChildOfId parentTypeId: qt nameId: memberId).or d: 0
+    return (ztypes.tid.create from: mo)
+}
+
+# stampInstanceTyperef -- stamp a dotted type-ref whose qualifier binds a unit
+# instance with that instance's member; false when it binds none, or the
+# instance has no such type.
+stampInstanceTyperef: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+    qualId: zast.nameid
+    memberId: zast.nameid
+} out bool is {
+    if (isUnitNameDecl :st nameId: qualId) then return false
+    if (bindingIsUnitInstance :st :frame nameId: qualId).not then return false
+    mt: unitInstanceMemberTid :st :frame :ast :unitDecl :nid :memberId
+    if mt.isZero then return false
+    ztyping.nodeTypeSet tbl: st.typing.nodeType nid: nid.u64 tid: mt
+    return true
+}
+
+# bindingIsUnitInstance -- `nameId` is a binding in scope whose declared type is
+# an instantiated unit (a unit mono).
+bindingIsUnitInstance: function {
+    st: zenv.ZSymbolTable.view frame: ztypes.declid nameId: zast.nameid
+} out bool is {
+    h: envLookup :st :frame :nameId
+    if h.declId.isZero then return false
+    bt: declTypeIdOf :st declId: h.declId
+    if bt.isZero then return false
+    if (st.reg.typetypeOf typeId: bt) != ztypes.ztypetype.unitType then return false
+    return (st.reg.genericOriginOf tid: bt).isZero.not
+}
+
+# ensureUnitMonoBuilt -- a unit instance's members, built now when its completion
+# pass has not reached it yet. What the build takes is read off the mono and its
+# template: the template's declaration and unit, the arguments by parameter.
+ensureUnitMonoBuilt: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    monoId: ztypes.tid
+} is {
+    if (st.typing.collectionChildrenBuilt.has item: monoId) then return
+    tplId: st.reg.genericOriginOf tid: monoId
+    if tplId.isZero then return
+    tdecl: declOfTypeId :st tid: tplId
+    if tdecl.isZero then return
+    tnode: u32
+    tname: u32
+    {
+        d: st.typing.decls.get i: tdecl.u64
+        tnode = d.node
+        tname = d.name
+    }
+    if tnode == 0 then return
+    opId: zast.nodeid
+    {
+        nn: ast.nodes.get i: tnode.u64
+        if nn.namedoperation then opId = nn.operation
+    }
+    if opId.isZero then return
+    subs: IdMapV zast.nameid v: u64
+    pn: st.reg.genericParamNamesOf :tdecl
+    pj: u64
+    for pj < pn.length loop {
+        if (st.reg.genericArgIsValueAt specId: monoId ordinal: pj).not then {
+            av: st.reg.genericArgAt specId: monoId ordinal: pj
+            if av > 0 then subs.set key: (pn.get i: pj) value: av
+        }
+        pj = pj + 1
+    }
+    (buildUnitMono
+        :st
+        :frame
+        :ast
+        tmplUnitName: (unitDeclOfTid :st tid: tplId)
+        tmplNameId: (zast.nameid.create from: tname)
+        :monoId
+        :tplId
+        :subs
+        templateOpId: opId
+    )
+}
 
 # resolve a type reference to its shell type id, deferring member resolution.
 # resolveTyperefAtomShell -- a bare atom (or label) type ref: the name
@@ -13091,6 +13365,15 @@ resolveAliasKeyIn: function {
         :ast
         unitDecl: hUnitDecl
         nameId: altK.defName
+    )
+    # a unit INSTANCE's member (`ICell: ic.Cell`): the instance's own copy
+    if atid.isZero then atid = (unitInstanceMemberNamed
+        :st
+        :frame
+        :ast
+        unitDecl: (unitRootOfDecl :st declId: adecl)
+        qualId: altK.unitName
+        memberId: altK.defName
     )
     st.typing.declSetResolving declId: adecl mark: false
     rootedOut: ListVal bool
