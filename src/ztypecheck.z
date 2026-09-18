@@ -19018,18 +19018,7 @@ cloneMethodInto: function {
         nameId: (zast.nameid.create from: tpn0id.u32)
     )
     tpn0: zast.nameTextCopy :ast ref: (zast.nameid.create from: tpn0id.u32)
-    if ((st.typing.funcReturnsView.get key: tplFnId).or d: false) then {
-        st.typing.funcReturnsView.set key: fid5 value: true
-    }
-    if ((st.typing.funcPins.get key: tplFnId).or d: false) then {
-        st.typing.funcPins.set key: fid5 value: true
-    }
-    if ((st.typing.funcReturnsFrozen.get key: tplFnId).or d: false) then {
-        st.typing.funcReturnsFrozen.set key: fid5 value: true
-    }
-    if ((st.typing.funcReturnsBorrow.get key: tplFnId).or d: false) then {
-        st.typing.funcReturnsBorrow.set key: fid5 value: true
-    }
+    copyReturnMarkers :st fromFn: (ztypes.tid.create from: tplFnId) toFn: fid5
     frn0: (st.typing.funcReturnNode.get key: tplFnId).or d: 0
     if frn0 > 0 then st.typing.funcReturnNode.set key: fid5 value: frn0
     cN5: List String
@@ -19642,6 +19631,25 @@ mintMonoMembers: function {
 }
 
 
+# copyReturnMarkers -- the markers a function's signature records about what it
+# returns -- `.borrow`, `.view`, a frozen result, `outx` -- carried onto a copy
+# of it: a generic function's instance, a generic type's method clone. Each
+# answers the call site and its own body's return checks as the function does.
+copyReturnMarkers: function {st: zenv.ZSymbolTable fromFn: ztypes.tid toFn: ztypes.tid} is {
+    if ((st.typing.funcReturnsView.get key: fromFn).or d: false) then {
+        st.typing.funcReturnsView.set key: toFn value: true
+    }
+    if ((st.typing.funcPins.get key: fromFn).or d: false) then {
+        st.typing.funcPins.set key: toFn value: true
+    }
+    if ((st.typing.funcReturnsFrozen.get key: fromFn).or d: false) then {
+        st.typing.funcReturnsFrozen.set key: toFn value: true
+    }
+    if ((st.typing.funcReturnsBorrow.get key: fromFn).or d: false) then {
+        st.typing.funcReturnsBorrow.set key: toFn value: true
+    }
+}
+
 # mintMono -- populate one generic-instance type: the template's typetype and
 # valtype flag, genericOriginId linking back, and the instance's children -- the template's children with generic-param targets
 # substituted (matched by arg name; fallbackArg substitutes every child, the
@@ -19686,6 +19694,11 @@ mintMono: function {
     } case none then null
     st.reg.setGenericOrigin typeId: (ztypes.tid.create from: mid.u64) value: templateId
     declMonoType :st monoTid: mid :templateId
+    # a function's instance returns what its template says it returns, a
+    # reference or not, as a method's clone does
+    if tt == ztypes.ztypetype.functionType then {
+        copyReturnMarkers :st fromFn: templateId toFn: (ztypes.tid.create from: mid.u64)
+    }
     st.reg.setNative typeId: (ztypes.tid.create from: mid.u64) value: tplNative
     if tt == ztypes.ztypetype.classType then (st.reg.setIsHeapAllocated
         typeId: (ztypes.tid.create from: mid.u64
@@ -38112,11 +38125,12 @@ checkGenericFnCall: function {
     st.typing.callKind.set key: call.nid.u64 value: zast.callkind.regular
     callableNode: ast.nodes.get i: call.callable.u64
     midG: genericCallInstance :st :ast :call
-    lockGenericCallArgs :st :ast :call mid: midG recvImplicit: true
+    pinsG: lockGenericCallArgs :st :ast :call mid: midG recvImplicit: true
     checkGenericCallMissingArgs :ast :st :call mid: midG recvImplicit: true
     rroG: methodReceiverRootId :ast n: callableNode
     lockMethodReceiver :st :ast :call :dro rroId: rroG
     st.popTo marker: mcmG
+    pinGenericCallResult :st mid: midG pins: pinsG
     return gfr
 }
 
@@ -38133,7 +38147,9 @@ genericCallInstance: function {
 # off the minted instance's parameters (the inference walk only typed them).
 # A bare-name reftype argument at a `.take` parameter moves in; at any other
 # it locks SHARED for the call, mutable unless the parameter is `.view` --
-# exactly what a concrete call's argument does.
+# exactly what a concrete call's argument does. When the instance's result
+# keeps its inputs (`outx`, a `.borrow`/`.view` return), each lock is also a
+# pin the result holds, answered as a concrete call's pins are.
 lockGenericCallArgs: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -38142,8 +38158,10 @@ lockGenericCallArgs: function {
     mid: ztypes.tid
     # whether the call's shape already supplied the receiver
     recvImplicit: bool
-} is {
-    if mid.isZero then return
+} out List ztyping.PinPath is {
+    pins: List ztyping.PinPath
+    if mid.isZero then return pins
+    calleePins: resultPins :st funcId: mid
     idx: u64
     k: u64
     for k < call.nargs loop {
@@ -38157,8 +38175,19 @@ lockGenericCallArgs: function {
             idx = idx + 1
         }
         if pnId.isZero then continue
-        lockGenericCallArg :st :ast :call :mid :pnId :arg
+        lockGenericCallArg :st :ast :call :mid :pnId :arg :pins :calleePins
     }
+    return pins
+}
+
+# pinGenericCallResult -- what a generic call's result keeps locked: the pins
+# its arguments collected, answered by the instance's return markers.
+pinGenericCallResult: function {
+    st: zenv.ZSymbolTable mid: ztypes.tid pins: (List ztyping.PinPath).view
+} is {
+    if mid.isZero then return
+    noRecv: ListVal zast.nameid
+    pinCallResult :st funcId: mid :pins recvPath: noRecv recvShared: true
 }
 
 # lockGenericCallArg -- one argument of lockGenericCallArgs: a bare-name
@@ -38171,6 +38200,9 @@ lockGenericCallArg: function {
     mid: ztypes.tid
     pnId: zast.nameid
     arg: argref
+    pins: List ztyping.PinPath
+    # the instance's result keeps its inputs
+    calleePins: bool
 } is {
     bnId: bareAtomNameId n: (ast.nodes.get i: arg.operation.u64)
     if bnId.isZero then return
@@ -38182,15 +38214,14 @@ lockGenericCallArg: function {
     aow: argOwnershipOf :st funcId: mid isCtor: false :pnId vt: bto
     if aow.isTake then {
         bnT: zast.nameTextAt :ast ref: bnId
-        carryG: List ztyping.PinPath
         (consumeBareArgOwnership
             :st
             :ast
             name: bnT.stringView
             vid: bvo
             recvVid: ztypes.vid
-            calleePins: false
-            pins: carryG
+            :calleePins
+            :pins
             nodeid: arg.nid
             lineno: arg.lineno
             colno: arg.colno
@@ -38208,6 +38239,9 @@ lockGenericCallArg: function {
             lineno: arg.lineno
             colno: arg.colno
         )
+        if calleePins then {
+            pinsAppendOne :pins nameId: bnId shared: true mutable: aow.isViewArg.not alias: true
+        }
     }
 }
 
@@ -38528,9 +38562,10 @@ checkBareGenericCall: function {
     mcmB: st.pushCall
     gr: checkGenericCall :st :unitDecl :ast :call :funcId
     midB: genericCallInstance :st :ast :call
-    lockGenericCallArgs :st :ast :call mid: midB recvImplicit: false
+    pinsB: lockGenericCallArgs :st :ast :call mid: midB recvImplicit: false
     checkGenericCallMissingArgs :ast :st :call mid: midB recvImplicit: false
     st.popTo marker: mcmB
+    pinGenericCallResult :st mid: midB pins: pinsB
     result = gr
     st.typing.callKind.set key: call.nid.u64 value: zast.callkind.regular
     if gr > 0 then {
@@ -43597,6 +43632,16 @@ checkFunctionBody: function {
     st.typing.callArgNode = prevArg
 }
 
+# walkedFnFlag -- a marker the walked function's signature recorded (`.borrow`
+# or `.view` on its return, `outx`): its own, or for an instance walk that
+# reached the body without it, the instance's.
+walkedFnFlag: function {tbl: (IdMapV u64 v: bool).view fitid: u64 mono: ztypes.tid} out bool is {
+    own: tbl.get key: fitid
+    if own.some then return own
+    if mono.isZero then return false
+    return ((tbl.get key: mono.u64).or d: false)
+}
+
 # checkFunctionBodyIn -- checkFunctionBody's walk, once the expression position
 # it was reached from has been set aside.
 checkFunctionBodyIn: function {
@@ -43753,16 +43798,14 @@ checkFunctionBodyIn: function {
                 d: ztypes.tid
             )
         }
+        # so do the markers on what it returns
+        mono: st.typing.curMonoFnTid
         prevRb: st.typing.currentReturnsBorrow
-        st.typing.currentReturnsBorrow = ((st.typing.funcReturnsBorrow.get key: fitid).or
-            d: false
-        )
+        st.typing.currentReturnsBorrow = walkedFnFlag tbl: st.typing.funcReturnsBorrow :fitid :mono
         prevRv: st.typing.currentReturnsView
-        st.typing.currentReturnsView = ((st.typing.funcReturnsView.get key: fitid).or
-            d: false
-        )
+        st.typing.currentReturnsView = walkedFnFlag tbl: st.typing.funcReturnsView :fitid :mono
         prevFp: st.typing.currentFnPins
-        st.typing.currentFnPins = (st.typing.funcPins.get key: fitid).or d: false
+        st.typing.currentFnPins = walkedFnFlag tbl: st.typing.funcPins :fitid :mono
         # `yield` enters scope for a generator's synth `.call` body and
         # nowhere else, the way `break`/`continue` enter a `for`. Legality
         # stops being a syntactic depth count and becomes a resolution

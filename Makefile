@@ -1271,7 +1271,12 @@ perf: $(PERFBIN)
 # +302 when a match on an ordinal variant held through a pointer came to test
 # the value and a receiver with no address came to be hoisted: the same source
 # compiles with the same count, all of it is the source longer.
-ALLOC_BASELINE := 2559544
+#
+# +1,252 when a generic function's instance came to carry its template's return
+# markers, a generic body's instance walk to read them, and a generic call's
+# reference result to pin what it points into: the same source compiles with
+# the same count, all of it is the source longer.
+ALLOC_BASELINE := 2560796
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
