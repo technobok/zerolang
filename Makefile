@@ -1297,7 +1297,11 @@ perf: $(PERFBIN)
 # +3,570 when a `.drop` that releases the last borrow of a temporary came to
 # destroy it there, and a temporary nothing holds on a held line to end with its
 # statement: +3 over the same source, +3,567 the source longer.
-ALLOC_BASELINE := 2569538
+#
+# +1,601 when a typedef came to be constructed only from exactly its base type:
+# the same source compiles with the same count, all of it is the source's own
+# thirty-one conversions to u32 at the name and node ids it built from u64s.
+ALLOC_BASELINE := 2571139
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

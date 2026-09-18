@@ -3539,7 +3539,7 @@ resolveMonoRefParts: function {
                 gwn: ast.nodes.get i: nid.u64
                 (addError
                     :st
-                    nodeid: (zast.nodeid.create from: nid.u64)
+                    nodeid: (zast.nodeid.create from: nid)
                     lineno: (nodeLine n: gwn)
                     colno: (nodeCol n: gwn)
                     e: zast.err.ownerError
@@ -8193,7 +8193,7 @@ materializeCreateParams: function {
     }
     i: u64
     for i < fnameIds.length loop {
-        pnId: zast.nameid.create from: (fnameIds.get :i)
+        pnId: zast.nameid.create from: (fnameIds.get :i).u32.orPanic
         (st.typing.setMemberType
             parentTypeId: (ztypes.tid.create from: createId.u64)
             nameId: pnId
@@ -8509,7 +8509,7 @@ applyGrantsPrivate: function {st: zenv.ZSymbolTable parentId: u64 grants: (ListV
     for gi < gn loop {
         (st.typing.setChildGrantsPrivateId
             parentTypeId: (ztypes.tid.create from: parentId.u64)
-            nameId: (zast.nameid.create from: (grants.get i: gi))
+            nameId: (zast.nameid.create from: (grants.get i: gi).u32.orPanic)
         )
         gi = gi + 1
     }
@@ -18346,7 +18346,7 @@ stampResolvedTyperef: function {
     tid: ztypes.tid
 } is {
     ztyping.nodeTypeSet tbl: st.typing.nodeType :nid :tid
-    refuseLiteralTyperef :st :ast nid: (zast.nodeid.create from: nid) :tid
+    refuseLiteralTyperef :st :ast nid: (zast.nodeid.create from: nid.u32.orPanic) :tid
     sfB: declSurfaceOfName :st :ast unitDecl: origin nameId: pval :tid
     stampRefDecl :st :nid declId: sfB
 }
@@ -23876,10 +23876,11 @@ checkTypedefCreate: function {
     return (ztypes.tid.create from: tdId)
 }
 
-# checkCastFromType -- a typedef's cast takes a value of its base type, which
-# is checked as any argument typed that way is -- a literal must fit it -- with
-# one exception: a typed number of another width is cast, narrowing as it
-# widens, which is what the construction is.
+# checkCastFromType -- a typedef is constructed from exactly its base type, or
+# from a value of itself, which it takes unchanged. A literal lands in the base
+# type and must fit it, as it must fit any slot of that type. Any other typed
+# value is refused, another width of the same number included: the
+# construction never converts, so a narrowing it performed was silent.
 checkCastFromType: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -23891,14 +23892,24 @@ checkCastFromType: function {
     if base.isZero then return
     if vt.isZero then return
     if vt == base then return
-    if (isLiteralTypeId :st tid: vt).not when (isNumericTid :ast :st frame: st.curFrame tid: vt
-    ) when (isNumericTid
-        :ast
+    if vt.u64 == tdId then return
+    if (isLiteralTypeId :st tid: vt) then {
+        checkArgTypeMismatch :st :ast ptid: base.u64 :vt pnId: (nameIdOf :ast name: "from") :arg
+        return
+    }
+    en: st.reg.nameOf tid: base
+    an: st.reg.nameOf tid: vt
+    (addErrorH
         :st
-        frame: st.curFrame
-        tid: base
-    ) then return
-    checkArgTypeMismatch :st :ast ptid: base.u64 :vt pnId: (nameIdOf :ast name: "from") :arg
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+        e: zast.err.callError
+        msg: "argument 'from' type mismatch: expected \{en}, got \{an}"
+        note: "a typedef is constructed from exactly its base type".string
+        hint: "convert the value to \{en} first"
+        width: 1
+    )
 }
 
 # checkTypedefBorrow -- `T.borrow from: expr` on a typedef: a borrowed
@@ -30743,7 +30754,7 @@ refuseLeavingArm: function {
     if (armLeaves :ast n: (ast.nodes.get i: nid) inLoop: false).not then return
     (addErrorH
         :st
-        nodeid: (zast.nodeid.create from: nid)
+        nodeid: (zast.nodeid.create from: nid.u32.orPanic)
         :lineno
         :colno
         e: zast.err.typeError
@@ -36486,7 +36497,7 @@ checkBoxConstruction: function {
             bi = bi + 1
             if rwB2.keep then {
                 chi: rwB2.tid
-                chnId: zast.nameid.create from: rwB2.name
+                chnId: zast.nameid.create from: rwB2.name.u32.orPanic
                 forceMemberOf :st :ast parentTypeId: mid nameId: chnId
                 ext: st.typing.declChildOfId parentTypeId: mid nameId: chnId
                 match (
@@ -42621,7 +42632,7 @@ noteDropReleasedTemps: function {st: zenv.ZSymbolTable dropNid: zast.nodeid} is 
     for st.typing.heldTemps.length > 0 loop {
         nm: st.typing.heldTemps.pop
         p: ListVal zast.nameid
-        p.append (zast.nameid.create from: nm)
+        p.append (zast.nameid.create from: nm.u32.orPanic)
         if (st.isPathLocked path: p) then {
             kept.append nm
         } else {
