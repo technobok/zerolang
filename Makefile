@@ -1293,7 +1293,11 @@ perf: $(PERFBIN)
 # +997 when `.drop` came to end a readonly name and a borrowed parameter came to
 # be dropped without destroying what its caller owns: the same source compiles
 # with the same count, all of it is the source longer.
-ALLOC_BASELINE := 2565968
+#
+# +3,570 when a `.drop` that releases the last borrow of a temporary came to
+# destroy it there, and a temporary nothing holds on a held line to end with its
+# statement: +3 over the same source, +3,567 the source longer.
+ALLOC_BASELINE := 2569538
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

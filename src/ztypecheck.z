@@ -26706,6 +26706,7 @@ checkTransferMarker: function {
                 if keepL.not then {
                     mh: ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: mvo
                     st.releaseHeldLocks holder: mh
+                    if (isDropMarkerId nameId: cnId) then noteDropReleasedTemps :st dropNid: dp.nid
                 }
                 st.invalidate nameId: mkRootId loc: takenHere
             }
@@ -33490,6 +33491,8 @@ joinValueReceiver: function {
     ast: Ast
     # the receiver's type, zero when no unnamed local is made
     rvT: ztypes.tid
+    # the receiver node, whose value the unnamed local is
+    recvNid: u64
     # the pins a borrowed receiver left
     rvPins: (List ztyping.PinPath).view
     # receives the unnamed local's path
@@ -33497,7 +33500,7 @@ joinValueReceiver: function {
     # the call's argument pins
     pins: List ztyping.PinPath
 } is {
-    if rvT.isZero.not then unnamedReceiverLocal :st :ast recvT: rvT dst: path
+    if rvT.isZero.not then unnamedReceiverLocal :st :ast recvT: rvT :recvNid dst: path
     with rpit: rvPins.iterate do for rp: rpit loop (pinsAppend
         :pins
         path: rp.path
@@ -33531,7 +33534,7 @@ valueReceiverPins: function {
         takePendingPins :st dst: pins
         return
     }
-    unnamedReceiverLocal :st :ast :recvT dst: path
+    unnamedReceiverLocal :st :ast :recvT recvNid: recvNid.u64 dst: path
 }
 
 # unnamedReceiverLocal -- a pinning call's receiver that is a value rather than
@@ -33546,6 +33549,8 @@ unnamedReceiverLocal: function {
     ast: Ast
     # the receiver's type
     recvT: ztypes.tid
+    # the receiver node whose value the local is
+    recvNid: u64
     # receives the local's path
     dst: ListVal zast.nameid
 } is {
@@ -33558,6 +33563,7 @@ unnamedReceiverLocal: function {
     tnId: zast.poolSet pool: ast.names text: tname.stringView
     st.defineVar nameId: tnId :vid
     st.typing.lineUnnamedLocals.append tnId
+    st.typing.unnamedLocalOfNode.set key: recvNid value: tnId.u64
     dst.append tnId
 }
 
@@ -37675,7 +37681,15 @@ checkResolvedMethodCall: function {
     # a fresh value at the end of a variable's path is the unnamed local, not
     # the path
     if rvT.isZero.not then for rtupP.length > 0 loop rtupP.pop
-    if rtupP.length == 0 then joinValueReceiver :st :ast :rvT :rvPins path: rtupP :pins
+    if rtupP.length == 0 then (joinValueReceiver
+        :st
+        :ast
+        :rvT
+        recvNid: (dottedParentNodeId :ast n: (ast.nodes.get i: call.callable.u64)).u64
+        :rvPins
+        path: rtupP
+        :pins
+    )
     pinCallResult :st funcId: dro :pins recvPath: rtupP recvShared: recvShr
     st.typing.callKind.set key: call.nid.u64 value: zast.callkind.regular
     return (ztypes.tid.create from: mres)
@@ -42599,6 +42613,25 @@ checkStatement: function {
     }
 }
 
+# noteDropReleasedTemps -- a `.drop` released its binding's holds: an unnamed
+# local a binding held that nothing holds now dies at the drop, for a
+# temporary belongs to the borrows of it and lives no longer than they do.
+noteDropReleasedTemps: function {st: zenv.ZSymbolTable dropNid: zast.nodeid} is {
+    kept: ListVal u64
+    for st.typing.heldTemps.length > 0 loop {
+        nm: st.typing.heldTemps.pop
+        p: ListVal zast.nameid
+        p.append (zast.nameid.create from: nm)
+        if (st.isPathLocked path: p) then {
+            kept.append nm
+        } else {
+            st.typing.dropTempNodes.append dropNid.u64
+            st.typing.dropTempNames.append nm
+        }
+    }
+    for kept.length > 0 loop st.typing.heldTemps.append kept.pop
+}
+
 # recordTempHoldingLine -- a statement line that made unnamed locals ends: one a
 # binding still locks keeps its temporary to the end of the block, so the line
 # is recorded; the others are released with the statement. The names are
@@ -42607,9 +42640,15 @@ recordTempHoldingLine: function {st: zenv.ZSymbolTable lineId: zast.nodeid from:
     held: false
     i: from
     for i < st.typing.lineUnnamedLocals.length loop {
+        nm: st.typing.lineUnnamedLocals.get :i
         p: ListVal zast.nameid
-        p.append (st.typing.lineUnnamedLocals.get :i)
-        if (st.isPathLocked path: p) then held = true
+        p.append nm
+        if (st.isPathLocked path: p) then {
+            held = true
+            st.typing.heldTemps.append nm.u64
+        } else {
+            st.typing.unheldTemps.add item: nm.u64
+        }
         i = i + 1
     }
     if held then st.typing.tempHoldingLines.add item: lineId.u64

@@ -32,6 +32,12 @@ OwedFree: class {
     # an argument's temporary, released at the end of its statement rather
     # than of the block
     temp: bool
+    # the checker's unnamed local the temporary realises (its name id), 0 for
+    # none: a `.drop` that releases the last borrow of it destroys it there
+    tag: 0.u64
+    # the statement that zeroes the temporary, which an early destroy leaves
+    # behind so the block's own destroy of it is a no-op
+    zero: String
 }
 
 # TmpCtr -- per-function temp name counter, and the destructors owed at the
@@ -55,17 +61,23 @@ TmpCtr: class {
 
     # oweFree -- a String local to free at block end
     oweFree: function {:this name: String.take vid: ztypes.vid} is {
-        this.frees.append (OwedFree :name stmt: String :vid temp: false)
+        this.frees.append (OwedFree :name stmt: String :vid temp: false zero: String)
     }
 
     # oweList -- a collection or class local to destroy at block end
     oweList: function {:this stmt: String.take name: String.take vid: ztypes.vid} is {
-        this.listFrees.append (OwedFree :name :stmt :vid temp: false)
+        this.listFrees.append (OwedFree :name :stmt :vid temp: false zero: String)
     }
 
     # oweTemp -- an argument's temporary to destroy at the end of its statement
     oweTemp: function {:this stmt: String.take name: String.take} is {
-        this.listFrees.append (OwedFree :name :stmt vid: (ztypes.vid.create from: 0) temp: true)
+        this.listFrees.append (OwedFree
+            :name
+            :stmt
+            vid: (ztypes.vid.create from: 0)
+            temp: true
+            zero: String
+        )
     }
 }
 
@@ -3231,6 +3243,9 @@ Ctx: class {
     # and stays one: nothing here joins the halves, and nothing splits them.
     )
     fragUnits: List String
+    # the hoists that realise one of the checker's unnamed locals: the local's
+    # name id by hoist name; flushing a hoist moves it onto the temporary it owes
+    hoistTags: (MapRV String v: u64)
     # the table rows already written: a unit whose types a function type's
     # typedef spells is written ahead of the typedefs, and not again after
     rowsWritten: IdSet u64
@@ -6502,6 +6517,7 @@ flushArgHoists: function {
     if ctx.argHoistFloor > fl then fl = ctx.argHoistFloor
     rfl: rawFloor
     if ctx.argHoistRawFloor > rfl then rfl = ctx.argHoistRawFloor
+    lf0: tmp.listFrees.length
     i: fl
     n: ctx.argHoistNames.length
     for i < n loop {
@@ -6528,6 +6544,7 @@ flushArgHoists: function {
         }
         i = i + 1
     }
+    tagOwedTemps :ctx :tmp from: lf0
     ri: rfl
     rn: ctx.argHoistRaw.length
     for ri < rn loop {
@@ -6901,12 +6918,15 @@ hoistLvalue: function {
     own: false
     # the value is a `T*` into storage the temp does not own
     ptr: false
+    # the checker's unnamed local this temp realises, 0 for none
+    tag: 0.u64
 } out String is {
     vhn: ctx.argHoistCtr
     ctx.argHoistCtr = ctx.argHoistCtr + 1
     vnm: "_ah\{vhn}"
     vcty: typeRefC :ast :symtab :ctx :tid thisTid: ztypes.tid
     if ptr then vcty.append "*"
+    if tag > 0 when own then ctx.hoistTags.set key: vnm.copy value: tag
     vdt: String
     if own then vdt = hoistDestroyLine :symtab :ctx :tid nm: vnm.stringView
     ctx.argHoistVals.append av.string
@@ -6914,6 +6934,24 @@ hoistLvalue: function {
     ctx.argHoistDtors.append vdt
     ctx.argHoistNames.append vnm.copy
     return vnm
+}
+
+# tagOwedTemps -- the statement temporaries just owed from `from` on that
+# realise one of the checker's unnamed locals carry its name id, and the
+# statement that zeroes them once destroyed early.
+tagOwedTemps: function {ctx: Ctx tmp: TmpCtr from: u64} is {
+    k: from
+    for k < tmp.listFrees.length loop {
+        o: tmp.listFrees.getMut i: k
+        k = k + 1
+        if o.temp then {
+            tg: (ctx.hoistTags.remove key: o.name).or d: 0
+            if tg > 0 then {
+                o.tag = tg
+                o.zero = "memset(&\{o.name}, 0, sizeof(\{o.name}));"
+            }
+        }
+    }
 }
 
 # stringViewBinopOperand -- the `&view` form of one string operand of `+`. A plain
@@ -9122,6 +9160,9 @@ emitCollectionMethodCall: function {
             tid: (ztypes.tid.create from: bt.u64)
             own: (hoistExprIsBorrowRooted :ast :symtab :ctx n: recvNode).not
             ptr: (isHeapPtrCollection :symtab :ctx tid: (ztypes.tid.create from: bt.u64))
+            tag: ((symtab.typing.unnamedLocalOfNode.get key: (zast.nodeIdOf n: recvNode).u64).or
+                d: 0
+            )
         )
         bn = bh9.copy
     }
@@ -19858,7 +19899,10 @@ emitDottedAutoCallStmt: function {
         if (
             (symtab.reg.variableOwnershipOf id: rcvKey) == ztypes.zownership.borrowed
         ) then rbrw = true
-        if rbrw then return
+        if rbrw then {
+            emitDropReleasedTemps :symtab :tmp dropNid: (zast.nodeIdOf :n).u64 :ind :buf
+            return
+        }
         rcvV: emitDottedReceiver :ast :symtab :ctx callable: n
         if rrid == ctx.strTid then {
             rdf: "\{ind}\{ctx.strC}_free(&\{rcvV});\n"
@@ -21063,7 +21107,10 @@ releaseStatementTemps: function {
     } else {
         return
     }
-    if (symtab.typing.tempHoldingLines.has item: lineId) then return
+    if (symtab.typing.tempHoldingLines.has item: lineId) then {
+        releaseUnheldTemps :symtab :tmp :from :buf
+        return
+    }
     live: (stmtDiverges :ast :symtab :ctx sid: (zast.nodeid.create from: lineId)).not
     kept: List OwedFree
     for tmp.listFrees.length > from loop {
@@ -21075,6 +21122,54 @@ releaseStatementTemps: function {
         }
     }
     for kept.length > 0 loop tmp.listFrees.append kept.pop
+}
+
+# releaseUnheldTemps -- a line a binding holds keeps its temporaries past the
+# statement, but only the ones something holds: a temporary the checker
+# recorded as unheld still ends with its statement. An untagged one is kept,
+# as every temporary of a held line used to be.
+releaseUnheldTemps: function {
+    symtab: zenv.ZSymbolTable.view
+    tmp: TmpCtr
+    from: u64
+    buf: String.borrow
+} is {
+    kept: List OwedFree
+    for tmp.listFrees.length > from loop {
+        o: tmp.listFrees.pop
+        if o.temp when o.tag > 0 when (symtab.typing.unheldTemps.has item: o.tag) then {
+            buf.append o.stmt
+        } else {
+            kept.append o
+        }
+    }
+    for kept.length > 0 loop tmp.listFrees.append kept.pop
+}
+
+# emitDropReleasedTemps -- a `.drop` of a binding that released the last borrow
+# of a temporary destroys it there, and leaves it zero so the block's own
+# destroy of it does nothing.
+emitDropReleasedTemps: function {
+    symtab: zenv.ZSymbolTable.view
+    tmp: TmpCtr
+    dropNid: u64
+    ind: StringView
+    buf: String.borrow
+} is {
+    di: u64
+    for di < symtab.typing.dropTempNodes.length loop {
+        if (symtab.typing.dropTempNodes.get i: di) == dropNid then {
+            tg: symtab.typing.dropTempNames.get i: di
+            with fit: tmp.listFrees.iterate do for o: fit loop {
+                if o.tag == tg when o.zero.length > 0 then {
+                    buf.append o.stmt
+                    zl: "\{ind}\{o.zero}\n"
+                    buf.append zl
+                }
+            }
+        }
+        di = di + 1
+    }
 }
 
 # emitStmtParts -- one statement, whatever its shape.
@@ -29977,6 +30072,7 @@ emitC: function {
         nativeConvMemb: (MapRV String v: bool)
         nativeArgMemb: (MapRV String v: bool)
         fragUnits: List String
+        hoistTags: (MapRV String v: u64)
         rowsWritten: IdSet u64
         fragMembs: List String
         fragNames: List String
