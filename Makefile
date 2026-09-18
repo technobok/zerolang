@@ -1206,7 +1206,11 @@ perf: $(PERFBIN)
 # +2,048 when a generic instance holding a mono that embeds a user type came to
 # be placed in the late group rather than at the tail of the collection pass:
 # the same source compiles with the same count, all of it is the source longer.
-ALLOC_BASELINE := 2589417
+#
+# +2,822 when a type a nested unit declares came to have its method bodies
+# checked and emitted, at any depth: the same source compiles with the same
+# count, all of it is the source longer.
+ALLOC_BASELINE := 2592239
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

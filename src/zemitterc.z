@@ -3384,10 +3384,11 @@ canonTypeId: function {
     # no name-index entry to find it by -- but the id in hand is already that
     # type. Accept it when it names a real aggregate, so a field typed through
     # a subunit compares field-wise instead of falling through to a C `==` on
-    # two structs.
+    # two structs, and a class resolves to the conformances it declares.
     tt: symtab.reg.typetypeOf typeId: tid
     if tt == ztypes.ztypetype.recordType then return tid
     if tt == ztypes.ztypetype.variantType then return tid
+    if tt == ztypes.ztypetype.classType then return tid
     return 0
 }
 
@@ -34946,6 +34947,7 @@ emitDefMethods: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     bm: astnode.view
+    ownerTid: ztypes.tid
     declOnly: bool
     buf: String.borrow
 } is {
@@ -34967,13 +34969,12 @@ emitDefMethods: function {
             (isUnionDef n: opn9)
         )
         if hasMethods then {
-            nm: zast.nameTextAt :ast ref: bm.name
-            rid: userFnId :ast :symtab :ctx name: nm.stringView
+            rid: unitMemberTid :ast :symtab :ctx :ownerTid nameId: bm.name
             if rid > 0 then (emitRecordMethods
                 :ast
                 :symtab
                 :ctx
-                tid: (ztypes.tid.create from: rid.u64)
+                tid: rid
                 op: opn9
                 :declOnly
                 :buf
@@ -37134,6 +37135,7 @@ emitUnitDefMethods: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     bodyIds: zast.kidspan
+    ownerTid: ztypes.tid
     declOnly: bool
     buf: String.borrow
 } is {
@@ -37142,7 +37144,7 @@ emitUnitDefMethods: function {
         bmdId: zast.kidAt kids: ast.kids span: bodyIds i: dmx
         dmx = dmx + 1
         bmd: ast.nodes.get i: bmdId.u64
-        emitDefMethods :ast :symtab :ctx bm: bmd :declOnly :buf
+        emitDefMethods :ast :symtab :ctx bm: bmd :ownerTid :declOnly :buf
     }
 }
 
@@ -37154,6 +37156,7 @@ emitUnitConformanceImpls: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     bodyIds: zast.kidspan
+    ownerTid: ztypes.tid
     buf: String.borrow
 } is {
     cix: u64
@@ -37164,9 +37167,8 @@ emitUnitConformanceImpls: function {
         if bi.namedoperation.not then continue
         biOp: ast.nodes.get i: bi.operation.u64
         if ((isClassDef n: biOp) or (isRecordDef n: biOp)).not then continue
-        iid7: userFnIdById :ast :symtab :ctx nameId: bi.name
-        if iid7 == 0 then continue
-        implT: ztypes.tid.create from: iid7
+        implT: unitMemberTid :ast :symtab :ctx :ownerTid nameId: bi.name
+        if implT.isZero then continue
         (emitConformanceImplsForType
             :ast
             :symtab
@@ -37201,6 +37203,7 @@ emitUnitFnFwdDecls: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     bodyIds: zast.kidspan
+    ownerTid: ztypes.tid
     buf: String.borrow
 } is {
     fdx: u64
@@ -37212,7 +37215,7 @@ emitUnitFnFwdDecls: function {
         bfdOp: ast.nodes.get i: bfd.operation.u64
         if (ztypecheck.isFunctionDefWithBody o: bfdOp).not then continue
         fdn: zast.nameTextAt :ast ref: bfd.name
-        fdid: userFnId :ast :symtab :ctx name: fdn.stringView
+        fdid: unitMemberTid :ast :symtab :ctx :ownerTid nameId: bfd.name
         if fdid.isZero then continue
         if (isGenericFnTid :symtab tid: fdid) then {
             (emitFnMonoInstances
@@ -37255,19 +37258,83 @@ emitRecordDefsIn: function {
     buf: String.borrow
 } is {
     bodyIds: zast.unitBodyIdsAt :ast unitId: mainOpId
-    if phase == 1 then {
-        emitUnitDataBlocks :ast :symtab :ctx :bodyIds :buf
-        return
-    }
+    emitRecordDefsInBody :ast :symtab :ctx :bodyIds ownerTid: ztypes.tid :phase :buf
+}
+
+# emitRecordDefsInBody -- one unit body's share of a phase, then the share of
+# each unit nested in it. `ownerTid` is the nested unit whose body this is, 0
+# for a file unit: a nested unit's definitions are its children, not the file
+# unit's, and a method emitted from one is at any depth, called from anywhere.
+emitRecordDefsInBody: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    bodyIds: zast.kidspan
+    ownerTid: ztypes.tid
+    phase: u64
+    buf: String.borrow
+} is {
+    if phase == 1 then emitUnitDataBlocks :ast :symtab :ctx :bodyIds :buf
     if phase == 2 then {
-        emitUnitDefMethods :ast :symtab :ctx :bodyIds declOnly: true :buf
-        emitUnitConformanceImpls :ast :symtab :ctx :bodyIds :buf
-        emitUnitFnFwdDecls :ast :symtab :ctx :bodyIds :buf
-        return
+        emitUnitDefMethods :ast :symtab :ctx :bodyIds :ownerTid declOnly: true :buf
+        emitUnitConformanceImpls :ast :symtab :ctx :bodyIds :ownerTid :buf
+        emitUnitFnFwdDecls :ast :symtab :ctx :bodyIds :ownerTid :buf
     }
-    if phase == 3 then {
-        emitUnitDefMethods :ast :symtab :ctx :bodyIds declOnly: false :buf
+    if phase == 3 then emitUnitDefMethods :ast :symtab :ctx :bodyIds :ownerTid declOnly: false :buf
+    emitNestedRecordDefs :ast :symtab :ctx :bodyIds :ownerTid :phase :buf
+}
+
+# emitNestedRecordDefs -- each non-generic unit nested in one unit body, with
+# ctx.nsTid set to it while its body is emitted (a generic unit's instances are
+# emitted per mono).
+emitNestedRecordDefs: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable
+    ctx: Ctx
+    bodyIds: zast.kidspan
+    ownerTid: ztypes.tid
+    phase: u64
+    buf: String.borrow
+} is {
+    ni: u64
+    for ni < bodyIds.count.u64 loop {
+        nmId: zast.kidAt kids: ast.kids span: bodyIds i: ni
+        ni = ni + 1
+        nm: ast.nodes.get i: nmId.u64
+        if nm.namedoperation.not then continue
+        nOp: nm.operation
+        if (zast.unitOpDeclaresUnit :ast opId: nOp).not then continue
+        if (isGenericTemplateUnitOp :ast opId: nOp) then continue
+        nsTid: unitMemberTid :ast :symtab :ctx :ownerTid nameId: nm.name
+        if nsTid.isZero then continue
+        sns: ctx.nsTid
+        ctx.nsTid = nsTid
+        (emitRecordDefsInBody
+            :ast
+            :symtab
+            :ctx
+            bodyIds: (zast.unitBodyIdsAt :ast unitId: nOp)
+            ownerTid: nsTid
+            :phase
+            :buf
+        )
+        ctx.nsTid = sns
     }
+}
+
+# unitMemberTid -- the type id a unit body's definition `nameId` names: a file
+# unit's member when `ownerTid` is 0, else a child of the nested unit `ownerTid`.
+unitMemberTid: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    ownerTid: ztypes.tid
+    nameId: zast.nameid
+} out ztypes.tid is {
+    if ownerTid.isZero then return (ztypes.tid.create from: (userFnIdById :ast :symtab :ctx :nameId)
+    )
+    co: (symtab.typing.declChildOfId parentTypeId: ownerTid :nameId).or d: 0
+    return (ztypes.tid.create from: co)
 }
 
 # emitDataBlock -- `name: data { e0 e1 ... } out T`: a static const array

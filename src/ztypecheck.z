@@ -42127,6 +42127,9 @@ walkOwnerMethods: function {
     memId: u32
     # the owner type's name, interned
     nameId: zast.nameid
+    # the owner's type when the caller already holds it -- a type a namespace
+    # declares, which the file unit's definitions do not reach; 0 resolves it
+    knownTid: 0.u64
 } is {
     mem: argRefAt :ast nid: (zast.nodeid.create from: memId.u32)
     if mem.nid.isZero.not then {
@@ -42141,7 +42144,8 @@ walkOwnerMethods: function {
         # walked ahead of its owner binds `this` to notype, and every check that
         # hangs off the receiver -- member reads, the declared return type --
         # silently stops asking.
-        owTid: (forceUnitDef
+        owTid: knownTid
+        if owTid == 0 then owTid = (forceUnitDef
             :st
             :frame
             :ast
@@ -43267,6 +43271,10 @@ checkNamespaceBodies: function {
                     :unitDecl
                     unitdefId: bm.operation
                 )
+            } else if (objectdefHasMethodBodies :ast op: (ast.nodes.get i: bm.operation.u64)) then {
+                # a type's methods, which walkDeclaredDef leaves to this walk
+                # for a namespace member as it does a function
+                walkNamespaceOwner :st :ast :unitDecl :nsDecl memId: bm.nid nameId: bm.name
             } else {
                 defNameText: zast.nameTextCopy :ast ref: bm.name
                 bmDecl9: st.typing.declFindChild parentDeclId: nsDecl nameId: bm.name
@@ -43286,6 +43294,37 @@ checkNamespaceBodies: function {
             }
         }
     }
+}
+
+# walkNamespaceOwner -- the method bodies of a type a namespace declares, once,
+# in the frame of the type's own declaration.
+walkNamespaceOwner: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    nsDecl: ztypes.declid
+    memId: zast.nodeid
+    nameId: zast.nameid
+} is {
+    od: st.typing.declFindChild parentDeclId: nsDecl :nameId
+    if od.isZero then return
+    otid: declTypeIdOf :st declId: od
+    # a type nothing resolved is not emitted either
+    if otid.isZero then return
+    if (st.typing.declIsWalked declId: od) then return
+    st.typing.declSetWalked declId: od
+    prevMono: st.typing.curMonoStamp
+    st.typing.curMonoStamp = 0
+    (walkOwnerMethods
+        :st
+        frame: od
+        :unitDecl
+        :ast
+        memId: memId.u32
+        :nameId
+        knownTid: otid.u64
+    )
+    st.typing.curMonoStamp = prevMono
 }
 
 # checkUnitBodies -- walk every function definition with a body in one unit.
@@ -43732,6 +43771,7 @@ stampMonoTemplateClass: function {
     frame: ztypes.declid
     clsName: StringView
     clsOpId: u32
+    ownerTid: ztypes.tid
 } is {
     isCand: false
     {
@@ -43741,20 +43781,13 @@ stampMonoTemplateClass: function {
     if isCand.not then return
     if (objectdefIsGeneric :ast o: (ast.nodes.get i: clsOpId.u64)).not then return
     if (objectdefHasMethodBodies :ast op: (ast.nodes.get i: clsOpId.u64)).not then return
-    templateTid: u64
-    {
-        tro: (resolvedByIds
-            :st
-            :ast
-            :unitDecl
-            name: (zast.poolFind pool: ast.names text: clsName)
-        )
-        match (
-            tro
-        ) case some then {
-            templateTid = tro
-        } case none then null
-    }
+    templateTid: (unitBodyMemberTid
+        :st
+        :ast
+        :unitDecl
+        :ownerTid
+        nameId: (zast.poolFind pool: ast.names text: clsName)
+    )
     if templateTid == 0 then return
     last: st.reg.nextTypeId
     t: 1.u64
@@ -43887,6 +43920,24 @@ stampOneClassMono: function {
     recordMintedBy :st monoId: monoId.u64 :minted
 }
 
+# unitBodyMemberTid -- the type id a unit body's definition `nameId` names: the
+# file unit's member when `ownerTid` is 0, else a child of the nested unit
+# `ownerTid`. 0 when it names none.
+unitBodyMemberTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    ownerTid: ztypes.tid
+    nameId: zast.nameid
+} out u64 is {
+    if ownerTid.isZero.not then return ((st.typing.declChildOfId parentTypeId: ownerTid :nameId).or
+        d: 0
+    )
+    uq: unitDeclOfName :st nameId: (unitNameIdOf :st :unitDecl)
+    ro: resolvedByIds :st :ast unitDecl: uq name: nameId
+    return (ro.or d: 0)
+}
+
 # stampUnitMonoMembers -- the generic templates a unit's body declares, at any
 # depth. A unit is a scope, and a scope nests: a template declared inside a
 # plain unit inside another one is still a template, so a non-generic member
@@ -43899,6 +43950,9 @@ stampUnitMonoMembers: function {
     unitDecl: ztypes.declid
     frame: ztypes.declid
     unitOpId: zast.nodeid
+    # the nested unit whose body this is, 0 for the file unit: a nested unit's
+    # templates are its children, not the file unit's
+    ownerTid: ztypes.tid
 } is {
     ibody: zast.unitBodyIdsAt ast: program unitId: unitOpId
     ibn: ibody.count.u64
@@ -43952,27 +44006,31 @@ stampUnitMonoMembers: function {
                     unitOpId: imOp
                 )
             } else {
-                stampUnitMonoMembers :st :frame :program :unitDecl unitOpId: imOp
+                (stampUnitMonoMembers
+                    :st
+                    :frame
+                    :program
+                    :unitDecl
+                    unitOpId: imOp
+                    ownerTid: (ztypes.tid.create from: (unitBodyMemberTid
+                        :st
+                        ast: program
+                        :unitDecl
+                        :ownerTid
+                        nameId: (nameIdOf ast: program name: imNm.stringView)
+                    )
+                    )
+                )
             }
         }
         if fnOp > 0 then {
-            fnTid: u64
-            {
-                fuUid: unitNameIdOf :st :unitDecl
-                fnNmId: nameIdOf ast: program name: fnNm.stringView
-                uq10z: unitDeclOfName :st nameId: fuUid
-                fro: (resolvedByIds
-                    :st
-                    ast: program
-                    unitDecl: uq10z
-                    name: fnNmId
-                )
-                match (
-                    fro
-                ) case some then {
-                    fnTid = fro
-                } case none then null
-            }
+            fnTid: (unitBodyMemberTid
+                :st
+                ast: program
+                :unitDecl
+                :ownerTid
+                nameId: (nameIdOf ast: program name: fnNm.stringView)
+            )
             isGenFn: false
             if fnTid > 0 when (
                 (st.reg.typetypeOf typeId: (ztypes.tid.create from: fnTid.u64)) ==
@@ -44002,6 +44060,7 @@ stampUnitMonoMembers: function {
                 :unitDecl
                 clsName: clsNm.stringView
                 clsOpId: clsOp
+                :ownerTid
             )
         }
     }
@@ -44135,6 +44194,7 @@ stampUnitMonoRound: function {
                         :program
                         unitDecl: uDecl9
                         unitOpId: uOp
+                        ownerTid: ztypes.tid
                     )
                 }
             }

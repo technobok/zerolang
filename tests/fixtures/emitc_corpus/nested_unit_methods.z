@@ -1,0 +1,62 @@
+# a type declared in a nested unit -- a hidden subunit, an inline unit, one
+# two levels down -- has its methods checked and emitted like a file unit's:
+# called from outside the unit and from inside it, an operator `==`, a method
+# returning its own type, a generic record, a variant, a class mutating
+# itself, a method calling its unit's own function, and a class converted to
+# a protocol it conforms to.
+Reader: protocol {
+    read: function {:this n: u32} out u32
+}
+inl: unit {
+    twice: function {n: i64} out i64 is {
+        return n * 2
+    }
+    pt: record {
+        x: i64
+    } as {
+        dbl: function {a: this} out i64 is {
+            return (twice n: a.x)
+        }
+    }
+    Counter: class {
+        n: i64
+    } as {
+        bump: function {this: this.borrow} is {
+            this.n = this.n + 1
+        }
+    }
+    Impl: class {
+        base: u32
+    } as {
+        :Reader
+        read: function {:this n: u32} out u32 is { return (this.base + n) }
+    }
+    deeper: unit {
+        shape: variant {
+            sq: i64
+            rect: i64
+        } as {
+            area: function {s: this} out i64 is {
+                match (s) case sq then return s * s case rect then return s * 2
+            }
+        }
+    }
+}
+main: function is {
+    p: geo.pt x: 3 y: 4
+    q: geo.pt x: 3 y: 4
+    r: p.bump
+    print "geo: \{p.sum} \{r.y} \{p == q} \{p == r} \{geo.total x: 5 y: 6}"
+    b: geo.box t: i64 v: 5
+    c: geo.box t: u8 v: 3
+    print "box: \{b.twice} \{c.twice}"
+    d: inl.pt x: 5
+    k: inl.Counter n: 1
+    k.bump
+    k.bump
+    s: inl.deeper.shape.sq 4
+    print "inl: \{d.dbl} \{k.n} \{s.area}"
+    im: inl.Impl base: 10
+    rd: Reader.create from: im.take
+    print "reader: \{rd.read n: 5}"
+}
