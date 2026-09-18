@@ -1258,7 +1258,11 @@ perf: $(PERFBIN)
 # +1,286 when a generic type that writes its `create` came to be constructed
 # with that create's parameters, each keeping its own ownership: +12 over the
 # same source, +1,274 the source longer.
-ALLOC_BASELINE := 2560564
+#
+# +236 when a generic class's construction came to pin the source of a
+# borrowed field, as a non-generic one does: the same source compiles with the
+# same count, all of it is the source longer.
+ALLOC_BASELINE := 2560800
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

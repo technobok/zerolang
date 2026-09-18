@@ -38436,7 +38436,7 @@ fieldBoundGenericConstruction: function {
             stampGate :st nid: calid.u64 tid: setc
         }
         cm: st.pushCall
-        (walkCallArgsHoist
+        gPins: (walkCallArgsHoist
             :st
             :unitDecl
             :ast
@@ -38455,6 +38455,7 @@ fieldBoundGenericConstruction: function {
             recvImplicit: false
         )
         st.popTo marker: cm
+        pinConstructionSources :st tid: gmid pins: gPins
         ctk: gmid
         ctv: true
         st.typing.constructedTypes.set key: ctk value: ctv
@@ -38835,18 +38836,26 @@ checkTypeConstruction: function {
     if ctt == ztypes.ztypetype.unionType then {
         st.typing.callKind.set key: call.nid.u64 value: zast.callkind.unionCreate
     }
-    # a construction pins its sources exactly as a direct call of the same
-    # `create` does. `outx this` is a statement about what the RESULT holds
-    # -- a reference into an argument -- so which spelling reached the
-    # create, the bare type name or `T.create`, cannot change it. The
-    # binding stays owned; only the sources are pinned.
-    cxO: st.typing.declChildOfId parentTypeId: funcId nameId: zast.names.wkCreate
+    pinConstructionSources :st :tid :pins
+    return result
+}
+
+# pinConstructionSources -- a construction of `tid` pins its sources exactly as
+# a direct call of the same `create` does. `outx this` is a statement about what
+# the RESULT holds -- a reference into an argument -- so which spelling reached
+# the create, the bare type name, `T.create`, or a generic type's applied or
+# inferred instance, cannot change it. The binding stays owned; only the sources
+# are pinned.
+pinConstructionSources: function {
+    st: zenv.ZSymbolTable tid: ztypes.tid pins: (List ztyping.PinPath).view
+} is {
+    cxO: st.typing.declChildOfId parentTypeId: tid nameId: zast.names.wkCreate
     match (
         cxO
     ) case some then {
         noRecvC: ListVal zast.nameid
         cxPins: (st.typing.funcPins.get key: cxO).or d: false
-        if cxPins.not when (typeHasNonOwnedField :st tid: funcId) then {
+        if cxPins.not when (typeHasNonOwnedField :st :tid) then {
             # a create that does not say `outx this` on a type declaring a
             # non-owned field is the SYNTHESISED one (a written one is
             # refused): the construction pins as `outx this` would
@@ -38864,9 +38873,8 @@ checkTypeConstruction: function {
         # no `create` written: the construction IS the constructor, and a
         # type declaring a non-owned field is built `outx this` -- every
         # borrowed-field argument stays pinned under the result
-        if (typeHasNonOwnedField :st tid: funcId) then pinConstructionResult :st :pins
+        if (typeHasNonOwnedField :st :tid) then pinConstructionResult :st :pins
     }
-    return result
 }
 
 # refuseDisabledConstruction -- a user record or class that defines no `create`
@@ -38988,7 +38996,7 @@ checkWrappedCtorArgs: function {
         return
     }
     wcm: st.pushCall
-    (walkCallArgsHoist
+    wPins: (walkCallArgsHoist
         :st
         :unitDecl
         :ast
@@ -39000,6 +39008,7 @@ checkWrappedCtorArgs: function {
     )
     checkMissingCallArgs :ast :st :call funcId: wcv isCtor: true recvImplicit: false
     st.popTo marker: wcm
+    pinConstructionSources :st tid: wcv pins: wPins
     st.typing.constructedTypes.set key: wcv value: true
 }
 
