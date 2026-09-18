@@ -1289,7 +1289,11 @@ perf: $(PERFBIN)
 # came to be recorded as its own, since the two can end apart: +1,887 over the
 # same source (the rows the compiler's own aliases now lay), +177 the source
 # longer.
-ALLOC_BASELINE := 2564971
+#
+# +997 when `.drop` came to end a readonly name and a borrowed parameter came to
+# be dropped without destroying what its caller owns: the same source compiles
+# with the same count, all of it is the source longer.
+ALLOC_BASELINE := 2565968
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

@@ -25551,19 +25551,20 @@ checkDropMarkerVar: function {
                 width: mkRoot.length.u32.orPanic
             )
         } case none then null
-        rlk: st.findLock nameId: (nameIdOf :ast name: mkRoot)
+        # the name's own locks -- the readonly lock a `.view` result, a `view`
+        # parameter or a `hold` binding keeps on itself -- end with it; only a
+        # lock something else holds on it stops the drop
+        selfH: (ztypes.zlockholder
+            kind: ztypes.zlockholderkind.varKind
+            id: ((st.lookupVarId nameId: (nameIdOf :ast name: mkRoot)).or d: ztypes.vid).u64
+        )
+        rlk: st.findLockHeldByOther nameId: (nameIdOf :ast name: mkRoot) self: selfH
         match (
             rlk
         ) case some then {
             relBlocked = true
-            rhn: String
-            rlhh: st.findLockHolder nameId: (nameIdOf :ast name: mkRoot)
-            match (
-                rlhh
-            ) case some then {
-                rhn = st.formatLockHolder pool: ast.names holder: rlhh
-            } case none then null
-            lsn: zenv.zlockstateNameLower t: rlk
+            rhn: st.formatLockHolder pool: ast.names holder: rlk.holder
+            lsn: zenv.zlockstateNameLower t: rlk.state
             mrel: "Cannot drop '\{mkRoot}': \{lsn} lock held by '\{rhn}'"
             (addError
                 :st

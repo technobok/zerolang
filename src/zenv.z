@@ -337,6 +337,14 @@ ZEntryDumpRow: class {
     excludedSubtypes: ListVal u32
 }
 
+# heldlock -- one lock row's strength and holder, read off the overlay.
+heldlock: record {
+    # the lock's strength
+    state: ztypes.zlockstate
+    # who holds it
+    holder: ztypes.zlockholder
+}
+
 # The body walk's environment. Frames and locals are declarations in the
 # typing's Decl tree -- a frame is a blockDecl whose parent is the frame or
 # declaration enclosing it, a local a localDecl under the frame it is written
@@ -1378,6 +1386,28 @@ ZSymbolTable: class {
             j = j - 1
         }
         return (optionval.none ztypes.zlockstate)
+    }
+
+    # The innermost lock on `name` that a holder other than `self` holds: what
+    # stops `name.drop`. A binding's own locks -- the readonly lock it holds on
+    # itself -- end with it, so they stop nothing.
+    findLockHeldByOther: function {
+        this: this.view
+        nameId: zast.nameid
+        self: ztypes.zlockholder
+    } out optionval heldlock is {
+        d: this.findLocal :nameId
+        if d.isZero then return (optionval.none heldlock)
+        if (this.typing.declRowsOf declId: d) == 0 then return (optionval.none heldlock)
+        j: this.entries.length
+        for j > 0 loop {
+            j = j - 1
+            e: this.entries.get i: j
+            if e.declId == d when e.hasLock when (holderEq a: e.lockHolder b: self).not then {
+                return (optionval.some (heldlock state: e.lockType holder: e.lockHolder))
+            }
+        }
+        return (optionval.none heldlock)
     }
 
     # Holder of the innermost lock on `name` (for the .drop-of-locked check).
