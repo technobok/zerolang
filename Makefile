@@ -1276,7 +1276,11 @@ perf: $(PERFBIN)
 # markers, a generic body's instance walk to read them, and a generic call's
 # reference result to pin what it points into: the same source compiles with
 # the same count, all of it is the source longer.
-ALLOC_BASELINE := 2560796
+#
+# +801 when a field-path argument to a generic call whose result keeps its
+# inputs came to be pinned by the result: the same source compiles with the
+# same count, all of it is the source longer.
+ALLOC_BASELINE := 2561597
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

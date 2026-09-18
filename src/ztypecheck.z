@@ -38205,7 +38205,10 @@ lockGenericCallArg: function {
     calleePins: bool
 } is {
     bnId: bareAtomNameId n: (ast.nodes.get i: arg.operation.u64)
-    if bnId.isZero then return
+    if bnId.isZero then {
+        if calleePins then pinGenericPathArg :st :ast :mid :pnId :arg :pins
+        return
+    }
     bvo: st.lookupVarId nameId: bnId
     if bvo.none then return
     bto: st.lookup nameId: bnId
@@ -38243,6 +38246,29 @@ lockGenericCallArg: function {
             pinsAppendOne :pins nameId: bnId shared: true mutable: aow.isViewArg.not alias: true
         }
     }
+}
+
+# pinGenericPathArg -- a field-path argument (`h.xs`) at a locking parameter of
+# a generic call whose result keeps its inputs: the path is a pin the result
+# holds, as a plain call's path argument's is.
+pinGenericPathArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    mid: ztypes.tid
+    pnId: zast.nameid
+    arg: argref
+    pins: List ztyping.PinPath
+} is {
+    an: ast.nodes.get i: arg.operation.u64
+    vt: walkTypeOf :st nid: (nodeId n: an).u64
+    if (typeIsReftype :st tid: vt).not then return
+    aow: argOwnershipOf :st funcId: mid isCtor: false :pnId :vt
+    if aow.isLockish.not then return
+    src: ListVal zast.nameid
+    appendValueTuple :ast n: an dst: src
+    if src.length == 0 then return
+    if (st.lookupVarId nameId: (src.get i: 0)).none then return
+    pinsAppend :pins path: src shared: true mutable: aow.isViewArg.not alias: true carried: false
 }
 
 # checkDottedTypeApplication -- a generic type reached through a dotted path and
