@@ -90,7 +90,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard fmt-raw-guard test-tcc test-tcc-heavy mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
+.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard lifetime-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard fmt-raw-guard test-tcc test-tcc-heavy mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -161,7 +161,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint complexity-report warn-check shadow-guard emitter-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check perf-strict test-tcc-heavy mode-parity ci-corpus
+ci: style-lint complexity-report warn-check shadow-guard emitter-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check perf-strict test-tcc-heavy mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -1578,6 +1578,35 @@ emitter-guard:
 	  exit 1; \
 	fi; \
 	echo "emitter-guard OK: resolvedByKey=$$e1 walkLookup=$$e2 resolveByName=$$e3 userFnId=$$e4 ownText=$$e5 nameOf=$$e6 mangleVar=$$e7 readText=$$e8 monoOrigin=$$e9 mangleMember=$$e10"
+
+# lifetime-guard -- ratchet on the emitter's own decisions about what dies when:
+# the checker records every scope end's and every exit's destroy list, with each
+# variable's state (scopeDestroy, exitDestroy), and the emitter comes to print
+# them. Each count here is a place the emitter still re-derives a lifetime --
+# registering a scope destroy, deciding whether a local is referenced by a
+# return, guessing an lvalue from C text, reading a binding's borrow off its
+# shape, spelling an argument hoist -- and each falls to zero as the stage that
+# replaces it lands. A rising count is a new re-derivation.
+lifetime-guard:
+	@l1=$$(grep -c 'registerScopeDestroy' src/zemitterc.z); \
+	l2=$$(grep -c 'refsLocal' src/zemitterc.z); \
+	l3=$$(grep -c 'isNonLvalueArg' src/zemitterc.z); \
+	l4=$$(grep -c 'bindingRhsIsBorrow' src/zemitterc.z); \
+	l5=$$(grep -cF '_ah\{' src/zemitterc.z); \
+	fail=0; \
+	chk() { if [ "$$2" -gt "$$3" ]; then echo "lifetime-guard FAIL: $$1 = $$2 (baseline $$3)"; fail=1; \
+	  elif [ "$$2" -lt "$$3" ]; then echo "lifetime-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
+	chk "registerScopeDestroy" "$$l1" 6; \
+	chk "refsLocal" "$$l2" 6; \
+	chk "isNonLvalueArg" "$$l3" 30; \
+	chk "bindingRhsIsBorrow" "$$l4" 18; \
+	chk "'_ah{' argument hoists" "$$l5" 9; \
+	if [ "$$fail" = "1" ]; then \
+	  echo "  The emitter decided a lifetime on its own again. Read the checker's destroy"; \
+	  echo "  lists (scopeDestroy, exitDestroy) and the variable's recorded state instead."; \
+	  exit 1; \
+	fi; \
+	echo "lifetime-guard OK: registerScopeDestroy=$$l1 refsLocal=$$l2 isNonLvalueArg=$$l3 bindingRhsIsBorrow=$$l4 argHoists=$$l5"
 
 # deadcode-guard -- emitted statements that no path can reach. clang's
 # -Wunreachable-code family is the oracle; gcc accepts the flag but never warns.
