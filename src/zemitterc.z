@@ -20700,7 +20700,16 @@ emitIfStmt: function {
             ewn: ast.nodes.get i: ewb.u64
             emitBodyNode :ast :symtab :ctx n: ewn ind: indE.stringView :tmp :buf
             dvF: blockDiverges :ast :symtab :ctx n: ewn
-            flushBlockFrees :ctx :tmp fL: fLE lL: lLE diverged: dvF :buf
+            (closeScopeBlock
+                :symtab
+                :ctx
+                :tmp
+                fL: fLE
+                lL: lLE
+                diverged: dvF
+                node: (branchScopeOf :ast clauses: n.clauses elseclause: n.elseclause stmt: ewb.u64)
+                :buf
+            )
             lfc: "\{ind}}\n"
             buf.append lfc
         }
@@ -21081,7 +21090,16 @@ emitCaseStmt: function {
             mwn: ast.nodes.get i: mwb.u64
             emitBodyNode :ast :symtab :ctx n: mwn ind: indM.stringView :tmp :buf
             dvF: blockDiverges :ast :symtab :ctx n: mwn
-            flushBlockFrees :ctx :tmp fL: fLM lL: lLM diverged: dvF :buf
+            (closeScopeBlock
+                :symtab
+                :ctx
+                :tmp
+                fL: fLM
+                lL: lLM
+                diverged: dvF
+                node: (branchScopeOf :ast clauses: n.clauses elseclause: n.elseclause stmt: mwb.u64)
+                :buf
+            )
             lmc: "\{ind}}\n"
             buf.append lmc
         }
@@ -21692,7 +21710,7 @@ emitGenericDissect: function {
             wst: ast.nodes.get i: win.u64
             emitBodyNode :ast :symtab :ctx n: wst :ind :tmp :buf
             dv: blockDiverges :ast :symtab :ctx n: wst
-            flushBlockFrees :ctx :tmp :fL :lL diverged: dv :buf
+            closeScopeBlock :symtab :ctx :tmp :fL :lL diverged: dv node: win.u64 :buf
         }
         buf.append ind
         buf.append "}\n"
@@ -22187,7 +22205,16 @@ emitOrdinalPairMatch: function {
                 cstB: ast.nodes.get i: c.statement.u64
                 emitBodyNode :ast :symtab :ctx n: cstB ind: indB.stringView :tmp :buf
                 dvF: blockDiverges :ast :symtab :ctx n: cstB
-                flushBlockFrees :ctx :tmp fL: fLB lL: lLB diverged: dvF :buf
+                (closeScopeBlock
+                    :symtab
+                    :ctx
+                    :tmp
+                    fL: fLB
+                    lL: lLB
+                    diverged: dvF
+                    node: c.nodeid.u64
+                    :buf
+                )
             }
             lcB: "\{ind}}\n"
             buf.append lcB
@@ -22231,7 +22258,7 @@ emitBoolElse: function {
             lLE: tmp.listFrees.length
             emitBodyNode :ast :symtab :ctx n: o ind: indE.stringView :tmp :buf
             dvF: blockDiverges :ast :symtab :ctx n: o
-            flushBlockFrees :ctx :tmp fL: fLE lL: lLE diverged: dvF :buf
+            closeScopeBlock :symtab :ctx :tmp fL: fLE lL: lLE diverged: dvF node: oId.u64 :buf
         }
         lceB: "\{ind}}\n"
         buf.append lceB
@@ -22344,6 +22371,30 @@ emitRowsSince: function {
             fr.vid.isZero == temps
         ) when fr.spent.not then buf.append "    \{ctx.strC}_free(&\{fr.name});\n"
     }
+}
+
+# branchScopeOf -- the checker scope of the `if` or `match` branch whose body
+# is `stmt`: the clause among `clauses` it belongs to, or the else body itself.
+branchScopeOf: function {
+    ast: Ast.view clauses: zast.kidspan elseclause: zast.nodeid stmt: u64
+} out u64 is {
+    if elseclause.u64 == stmt then return stmt
+    i: u64
+    for i < clauses.count.u64 loop {
+        cId: zast.kidAt kids: ast.kids span: clauses :i
+        i = i + 1
+        c: ast.nodes.get i: cId.u64
+        body: u64
+        match (
+            c
+        ) case ifclause then {
+            body = c.statement.u64
+        } case caseclause then {
+            body = c.statement.u64
+        } else null
+        if body == stmt then return cId.u64
+    }
+    return 0
 }
 
 # emitScopeDestroy -- what the checker recorded the end of scope `node` destroys
@@ -22523,7 +22574,7 @@ emitScalarClause: function {
             cst: ast.nodes.get i: c.statement.u64
             emitBodyNode :ast :symtab :ctx n: cst ind: ind3.stringView :tmp :buf
             dv = blockDiverges :ast :symtab :ctx n: cst
-            flushBlockFrees :ctx :tmp :fL :lL diverged: dv :buf
+            closeScopeBlock :symtab :ctx :tmp :fL :lL diverged: dv node: c.nodeid.u64 :buf
         }
         if dv.not then {
             l5: "\{ind}    break;\n"
@@ -22622,7 +22673,7 @@ emitMatchClause: function {
             cst: ast.nodes.get i: c.statement.u64
             emitBodyNode :ast :symtab :ctx n: cst ind: ind3.stringView :tmp :buf
             dv = blockDiverges :ast :symtab :ctx n: cst
-            flushBlockFrees :ctx :tmp :fL :lL diverged: dv :buf
+            closeScopeBlock :symtab :ctx :tmp :fL :lL diverged: dv node: c.nodeid.u64 :buf
         }
         if didSeed then {
             vvRemove xs: ctx.narrowBox vid: snameVid
@@ -22673,7 +22724,7 @@ emitMatchElse: function {
             lLe: tmp.listFrees.length
             emitBodyNode :ast :symtab :ctx n: o ind: ind3.stringView :tmp :buf
             dv8 = blockDiverges :ast :symtab :ctx n: o
-            flushBlockFrees :ctx :tmp fL: fLe lL: lLe diverged: dv8 :buf
+            closeScopeBlock :symtab :ctx :tmp fL: fLe lL: lLe diverged: dv8 node: oId.u64 :buf
         }
         if dv8.not then {
             l8: "\{ind}    break;\n"
