@@ -219,7 +219,13 @@ stampParamSuppressed: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out 
 # itself, and every other walk writes the plain node type.
 stampGate: function {st: zenv.ZSymbolTable nid: u64 tid: ztypes.tid} is {
     if st.typing.curMonoStamp > 0 then {
-        mk: ztyping.monostamp mono: st.typing.curMonoStamp node: nid
+        # a node of the instance's own copy of the body is the instance's alone
+        wm: st.typing.walkMonoOf :nid
+        if wm == 0 then {
+            ztyping.nodeTypeSet tbl: st.typing.nodeType :nid tid: (monoSubstTid :st :tid)
+            return
+        }
+        mk: ztyping.monostamp mono: wm node: nid
         st.typing.monoNodeType.set key: mk value: (monoSubstTid :st :tid)
         return
     }
@@ -41716,6 +41722,27 @@ checkDissectedArm: function {
     return av.tid
 }
 
+# markInstanceDissection -- the subject of a compile-time `match` in an
+# instance's own copy of a body carries the generic parameter it names, as the
+# template's subject does: the emitter dissects on it (matchGenericRoute), and
+# the copy has no template walk to mark it.
+markInstanceDissection: function {st: zenv.ZSymbolTable ast: Ast.view casenode: caseref} is {
+    sn: nodeId n: (ast.nodes.get i: casenode.subject.u64)
+    if sn.isZero then return
+    if (st.typing.walkMonoOf nid: sn.u64) > 0 then return
+    dsn: subjectAtomName :ast n: (ast.nodes.get i: casenode.subject.u64)
+    if dsn.length == 0 then return
+    orig: st.reg.genericOriginOf tid: (ztypes.tid.create from: st.typing.curMonoStamp)
+    if orig.isZero then return
+    tk: declOfTypeId :st tid: orig
+    if tk.isZero then return
+    ptid: ((st.reg.genericParamTidOf tdecl: tk paramName: (nameIdOf :ast name: dsn.stringView)).or
+        d: 0
+    )
+    if ptid == 0 then return
+    ztyping.nodeTypeSet tbl: st.typing.nodeType nid: sn.u64 tid: (ztypes.tid.create from: ptid)
+}
+
 # monoDissectionHandled -- on a per-mono instance walk, a subject that is a bare
 # TYPE name is a compile-time dissection: the match scope is closed and only the
 # selected arm is walked (checkDissectedArm). True when the subject is one.
@@ -41763,6 +41790,7 @@ checkCase: function {
     if st.typing.curMonoStamp > 0 when subjT > 0 when st.typing.curMonoStamp > 0 when (
         subjT > 0
     ) when (monoDissectionHandled :st :ast :casenode :matchMarker) then {
+        markInstanceDissection :st :ast :casenode
         return (checkDissectedArm :st :unitDecl :ast :casenode)
     }
     if subjT > 0 when (st.reg.isTypeParamOf tid: subjT) then {
@@ -42689,7 +42717,7 @@ dataRefAt: function {ast: Ast.view nid: zast.nodeid} out dataref is {
 walkTypeOf: function {st: zenv.ZSymbolTable.view nid: u64} out ztypes.tid is {
     # routed as stampGate writes: an instance walk's own table first
     if st.typing.curMonoStamp > 0 then {
-        return (st.typing.nodeTypeIn mono: st.typing.curMonoStamp :nid)
+        return (st.typing.nodeTypeIn mono: (st.typing.walkMonoOf :nid) :nid)
     }
     if st.typing.suppressParamStamps then {
         ts: st.templateStamps.get key: nid
@@ -44828,7 +44856,7 @@ stampOneFnMono: function {
     prevT: st.typing.currentThisTid
     tplDecl29Org: st.reg.genericOriginOf tid: monoId
     fnTemplateDecl: declOfTypeId :st tid: tplDecl29Org
-    cfbFr: fnRefAt :ast nid: (zast.nodeid.create from: fnOpId.u32)
+    cfbFr: fnRefAt :ast nid: (instanceBodyAt :st :ast mono: monoId.u64 opId: fnOpId)
     (checkFunctionBody
         :st
         :scope
@@ -44985,7 +45013,7 @@ stampOneClassMono: function {
         q: "\{monoNm}.\{mnm}"
         tplDecl39Org: st.reg.genericOriginOf tid: monoId
         classTemplateDecl: declOfTypeId :st tid: tplDecl39Org
-        cfbFr: fnRefAt :ast nid: (zast.nodeid.create from: mop.u32)
+        cfbFr: fnRefAt :ast nid: (instanceBodyAt :st :ast mono: monoId.u64 opId: mop)
         (checkFunctionBody
             :st
             :scope
@@ -45214,6 +45242,62 @@ firstInstanceWalk: function {
     return false
 }
 
+# instanceBodyAt -- the function node instance `mono` walks for template
+# function `opId`: the template's signature over the instance's own copy of the
+# body, made at the instance's first walk of it (zast.cloneTreeAt). The instance
+# is checked and emitted from it and never from the template's body, so no body
+# node carries another instance's answer. The signature is the template's: the
+# instance's types are its FUNCTION's substituted children, and what its walk
+# binds on a parameter stays the instance's own (walkMonoOf).
+instanceBodyAt: function {st: zenv.ZSymbolTable ast: Ast mono: u64 opId: u32} out zast.nodeid is {
+    k: ztyping.monostamp :mono node: opId.u64
+    have: st.typing.instanceBody.get key: k
+    match (
+        have
+    ) case some then {
+        return (zast.nodeid.create from: have.u32.orPanic)
+    } case none then null
+    bodyId: zast.nodeid
+    {
+        fv: ast.nodes.get i: opId.u64
+        if fv.functiondef then bodyId = fv.body
+    }
+    if bodyId.isZero then return (zast.nodeid.create from: opId)
+    start: ast.nodes.length
+    bc: zast.cloneTreeAt :ast nid: bodyId
+    bcId: zast.tableAdd :ast n: bc
+    myId: zast.tableReserve :ast
+    row: astnode.placeholder
+    {
+        fv: ast.nodes.get i: opId.u64
+        if fv.functiondef then {
+            row = astnode.functiondef (zast.functionrow
+                nodeid: myId
+                lineno: fv.lineno
+                colno: fv.colno
+                returntype: fv.returntype
+                parameters: fv.parameters
+                body: bcId
+                isNative: fv.isNative
+                pins: fv.pins
+                asItems: fv.asItems
+            )
+        }
+    }
+    cid: zast.tableAdd :ast n: row
+    st.typing.instanceBodyRanges.append start
+    st.typing.instanceBodyRanges.append ast.nodes.length
+    # a copy reports from the file its template was written in
+    fs: ast.fsnoForNode nodeid: opId
+    if fs.u64 > 0 then ast.fileSegs.append (zast.FileSeg
+        startId: start.u32.orPanic
+        endId: ast.nodes.length.u32.orPanic
+        fsno: fs
+    )
+    st.typing.instanceBody.set key: k value: cid.u64
+    return cid
+}
+
 # instanceRepeatLimit -- how many times a template may recur in the chain of
 # walks that minted one of its instances.
 instanceRepeatLimit: 8
@@ -45439,7 +45523,10 @@ stampOneUnitMono: function {
             }
             tplDecl49Org: st.reg.genericOriginOf tid: monoId
             unitTemplateDecl: declOfTypeId :st tid: tplDecl49Org
-            cfbFr: fnRefAt :ast nid: (zast.nodeid.create from: bm2.operation.u32)
+            cfbFr: (fnRefAt
+                :ast
+                nid: (instanceBodyAt :st :ast mono: monoId.u64 opId: bm2.operation.u32)
+            )
             (checkFunctionBody
                 :st
                 :scope

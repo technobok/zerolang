@@ -1380,7 +1380,11 @@ perf: $(PERFBIN)
 #
 # -2,587 when the lowering's two copiers became one deep copy in zast: all of
 # it the source.
-ALLOC_BASELINE := 2564879
+#
+# +5,360 when each generic instance came to walk and emit its own copy of the
+# body: +1 the behaviour (the self-compile has no instance), the rest the
+# source, which the per-instance routing's retirement returns.
+ALLOC_BASELINE := 2570239
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

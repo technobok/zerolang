@@ -28693,9 +28693,11 @@ emitUnitMonoFn: function {
 } is {
     fnm: regNameOf :symtab tid: cfid
     # the whole function is the instance's: its parameters are the variables
-    # the instance walk bound, in the signature as in the body
+    # the instance walk bound, in the signature as in the body, and the body is
+    # its own copy
     symtab.typing.emitMono = t
-    sig: fnSignature :ast :symtab :ctx name: fnm.stringView fid: cfid :op
+    iop: ast.nodes.get i: (instanceOpAt :symtab mono: t op: (zast.nodeIdOf n: op).u64)
+    sig: fnSignature :ast :symtab :ctx name: fnm.stringView fid: cfid op: iop
     if declOnly then {
         buf.append "\{sig};\n"
         symtab.typing.emitMono = 0
@@ -28703,9 +28705,9 @@ emitUnitMonoFn: function {
     }
     buf.append "\{sig} {\n"
     resetFnEmitState :ctx
-    registerReftypeParams :ast :symtab :ctx fid: cfid :op
+    registerReftypeParams :ast :symtab :ctx fid: cfid op: iop
     ctx.curThisTid = ztypes.tid.create from: t
-    emitFnBody :ast :symtab :ctx :op fid: cfid :buf
+    emitFnBody :ast :symtab :ctx op: iop fid: cfid :buf
     symtab.typing.emitMono = 0
     ctx.curThisTid = ztypes.tid.create from: 0
     buf.append "}\n\n"
@@ -28892,6 +28894,13 @@ emitFns: function {
     emitFnsPass :program :symtab :ctx declOnly: false :buf
 }
 
+# instanceOpAt -- the function node instance `mono` is emitted from: its own
+# copy of the template function `op`, which its instance walk checked
+# (instanceBody); `op` itself when the instance has none.
+instanceOpAt: function {symtab: zenv.ZSymbolTable.view mono: u64 op: u64} out u64 is {
+    return ((symtab.typing.instanceBody.get key: (ztyping.monostamp :mono node: op)).or d: op)
+}
+
 # emitFnMonoInstances -- emit the monomorphized instances of a generic free
 # function (identity_i64, identity_f64, first_i64_f64, ...). Each instance was
 # minted by the typechecker (mintMono, params already substituted); emit one C
@@ -28917,15 +28926,19 @@ emitFnMonoInstances: function {
         }
         if isMono then {
             fnm: regNameOf :symtab tid: t
-            # the whole function is the instance's (emitUnitMonoFn)
+            # the whole function is the instance's (emitUnitMonoFn), and so is
+            # the body it is emitted from
             symtab.typing.emitMono = t.u64
+            iop: (ast.nodes.get
+                i: (instanceOpAt :symtab mono: t.u64 op: (zast.nodeIdOf n: templateFnOp).u64)
+            )
             sig: (fnSignature
                 :ast
                 :symtab
                 :ctx
                 name: fnm.stringView
                 fid: (ztypes.tid.create from: t.u64)
-                op: templateFnOp
+                op: iop
             )
             if declOnly then {
                 ld: "\{sig};\n"
@@ -28939,14 +28952,14 @@ emitFnMonoInstances: function {
                     :symtab
                     :ctx
                     fid: (ztypes.tid.create from: t.u64)
-                    op: templateFnOp
+                    op: iop
                 )
                 ctx.curThisTid = ztypes.tid.create from: t.u64
                 (emitFnBody
                     :ast
                     :symtab
                     :ctx
-                    op: templateFnOp
+                    op: iop
                     fid: (ztypes.tid.create from: t.u64)
                     :buf
                 )
@@ -29581,6 +29594,20 @@ collectUnitLiterals: function {
                 )
             }
         }
+    }
+    # every generic instance's own copy of a body, in the order they were made:
+    # the copy's function row is the last of its range
+    rgs: symtab.typing.instanceBodyRanges.listView
+    ri: u64
+    for ri + 1 < rgs.length loop {
+        fnv: program.nodes.get i: (rgs.get i: ri + 1) - 1
+        ri = ri + 2
+        if fnv.functiondef when fnv.body > 0 then (collectLiterals
+            ast: program
+            n: (program.nodes.get i: fnv.body.u64)
+            :ids
+            :texts
+        )
     }
 }
 
@@ -39139,8 +39166,9 @@ emitMonoMethodAt: function {
 } is {
     site: zast.namedSiteAt :ast :nid
     if site.operation.isZero then return
-    opId: site.operation.u32
-    if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: opId.u64)).not then return
+    if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: site.operation.u64)).not then return
+    # the instance's own copy of the method
+    opId: instanceOpAt :symtab mono: monoId op: site.operation.u64
     mid: u64
     {
         mn: zast.nameTextAt :ast ref: site.name
@@ -40079,9 +40107,24 @@ emitOneMethod: function {
     buf: String.borrow
 } is {
     mc: ctxCname :ctx tid: mid
-    # a method of an instance is the instance's whole (emitUnitMonoFn)
+    # a method of an instance is the instance's whole (emitUnitMonoFn), and it
+    # is emitted from the instance's own copy
     if (symtab.reg.genericOriginOf tid: (ztypes.tid.create from: thisTid)).isZero.not then {
         symtab.typing.emitMono = thisTid
+        iopId: instanceOpAt :symtab mono: thisTid.u64 op: (zast.nodeIdOf n: op).u64
+        if iopId != (zast.nodeIdOf n: op).u64 then {
+            (emitOneMethod
+                :ast
+                :symtab
+                :ctx
+                :mid
+                :thisTid
+                op: (ast.nodes.get i: iopId)
+                :declOnly
+                :buf
+            )
+            return
+        }
     }
     ret: methodReturnC :ast :symtab :ctx :mid :thisTid :op
     params: String

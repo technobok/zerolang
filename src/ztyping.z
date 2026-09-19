@@ -471,10 +471,19 @@ ZTyping: class {
     # monoParamSubst maps the CURRENT mono's generic-param tids to its args
     # (flat substitution at stamp time); live only during the instance walk.
     monoNodeType: (MapVV monostamp v: ztypes.tid
+    # each generic instance's own copy of a template function it walks, keyed
+    # by (instance, template function node): the instance is checked and
+    # emitted from the copy, so no node carries another instance's answer
+    )
+    instanceBody: (MapVV monostamp v: u64
+    # the node id ranges those copies occupy, start and end (exclusive) in
+    # turn: what an instance walk records on a node inside one is that
+    # instance's alone, so it goes to the plain tables
+    )
+    instanceBodyRanges: ListVal u64
     # namespace / subunit bodies the demand path owes a walk, and the unit
     # ops already walked -- a subunit of the MAIN unit is walked by the main
     # tree walk and must not be walked twice.
-    )
     nsBodiesOwed: ListVal nsbody
     # the unit bodies already walked, so a demand-driven walk does not repeat
     # one
@@ -2262,7 +2271,7 @@ ZTyping: class {
         (setMonoVariable
             perMono: this.monoAtomVariableId
             shared: this.atomVariableId
-            mono: this.curMonoStamp
+            mono: (this.walkMonoOf :nid)
             :nid
             :vid
         )
@@ -2273,7 +2282,7 @@ ZTyping: class {
         (setMonoVariable
             perMono: this.monoDefVariableId
             shared: this.defVariableId
-            mono: this.curMonoStamp
+            mono: (this.walkMonoOf :nid)
             :nid
             :vid
         )
@@ -2285,7 +2294,7 @@ ZTyping: class {
         (setMonoVariable
             perMono: this.monoPostGuardVarId
             shared: this.postGuardVarId
-            mono: this.curMonoStamp
+            mono: (this.walkMonoOf :nid)
             :nid
             :vid
         )
@@ -2296,6 +2305,30 @@ ZTyping: class {
     # body's shared stamp cannot be; else the shared stamp.
     nodeTypeFor: function {t: this.view nid: u64} out ztypes.tid is {
         return (t.nodeTypeIn mono: t.emitMono :nid)
+    }
+
+    # nodeInInstanceBody -- `nid` lies inside an instance's own copy of a
+    # template function (instanceBody).
+    nodeInInstanceBody: function {t: this.view nid: u64} out bool is {
+        i: u64
+        n: t.instanceBodyRanges.length
+        for i + 1 < n loop {
+            if nid >= (t.instanceBodyRanges.get :i) when (
+                nid < (t.instanceBodyRanges.get i: i + 1)
+            ) then return true
+            i = i + 2
+        }
+        return false
+    }
+
+    # walkMonoOf -- the instance whose own table an answer the walk records on
+    # `nid` goes to: the instance being walked, unless the node lies in its own
+    # copy of the body, whose answers are the plain tables'. 0 outside an
+    # instance walk.
+    walkMonoOf: function {t: this.view nid: u64} out u64 is {
+        if t.curMonoStamp == 0 then return 0
+        if (t.nodeInInstanceBody :nid) then return 0
+        return t.curMonoStamp
     }
 
     # nodeTypeIn -- a node's type as the walk of `mono` stamped it: the mono's
@@ -2882,6 +2915,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         pendingBorrowOwned: false
         pendingBorrowFrozen: false
         monoNodeType: (MapVV monostamp v: ztypes.tid)
+        instanceBody: (MapVV monostamp v: u64)
+        instanceBodyRanges: ListVal u64
         nsBodiesOwed: ListVal nsbody
         nsBodiesWalked: IdSet u64
         nsConstsWalked: IdSet u64
