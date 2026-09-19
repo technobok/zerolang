@@ -1387,7 +1387,10 @@ perf: $(PERFBIN)
 #
 # -1,403 when an atom's and a guard's variables stopped being kept per
 # instance: all of it the source. A signature's stamps stay per instance.
-ALLOC_BASELINE := 2568836
+#
+# +8,494 when the checker came to record what each scope's end destroys: +492
+# the behaviour (the self-compile's own lists), the rest the source.
+ALLOC_BASELINE := 2577330
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

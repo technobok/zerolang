@@ -416,6 +416,8 @@ ZSymbolTable: class {
     # scope, and each leaves with the scope that bound it
     genBorrowNames: ListVal zast.nameid
     genBorrowDepths: ListVal u64
+    # how many dry runs are open: nothing a dry run walks is recorded
+    dryRunDepth: u64
     # the generic-parameter answers a TEMPLATE walk keeps out of the shared stamp
     # table, by node, so that walk can still read what it just checked
     templateStamps: (IdMapV u64 v: ztypes.tid)
@@ -529,12 +531,14 @@ ZSymbolTable: class {
         top: fr.id
         start: fr.start
         if top.isZero.not then this.snapshotScope scope: top :start
+        this.recordScopeDestroy :fr
         endIdx: this.entries.length
         # takes of enclosing scopes' locals survive the close, and so do the
         # narrowing ends a write laid over them
         mDecls: ListVal ztypes.declid
         mTypes: ListVal u64
         mLocs: ListVal ztypes.zsrcpos
+        mMaybe: ListVal bool
         mEnds: ListVal ztypes.declid
         p2: start
         for p2 < endIdx loop {
@@ -553,6 +557,7 @@ ZSymbolTable: class {
                         mDecls.append e.declId
                         mTypes.append zt
                         mLocs.append taOpt
+                        mMaybe.append e.takenMaybe
                     }
                 } case none then null
             }
@@ -604,6 +609,7 @@ ZSymbolTable: class {
                 te: this.reg.newEntry ztypeId: (ztypes.tid.create from: (mTypes.get i: mi).u64)
                 te.isTaken = true
                 te.takenAt = optionval.some (mLocs.get i: mi)
+                te.takenMaybe = mMaybe.get i: mi
                 this.appendRow row: te declId: d
             }
             mi = mi + 1
@@ -618,6 +624,7 @@ ZSymbolTable: class {
     pushDryRun: function {:this} is {
         f: this.pushScope parent: this.curScope node: zast.nodeid
         this.scopeHidden.add item: f.u64
+        this.dryRunDepth = this.dryRunDepth + 1
     }
 
     # popDiscard -- close the innermost scope and drop every row it laid,
@@ -629,6 +636,7 @@ ZSymbolTable: class {
         this.open.pop
         if this.genBorrowDepths.length > 0 then this.dropGenBorrows
         this.curScope = this.innermostScope
+        if this.dryRunDepth > 0 then this.dryRunDepth = this.dryRunDepth - 1
     }
 
     # close every scope back to `marker`, dumping the entries as they go
@@ -648,6 +656,13 @@ ZSymbolTable: class {
     # registry's variableById).
     defineVar: function {:this nameId: zast.nameid vid: ztypes.vid} is {
         this.defineLocal :nameId ztypeId: (this.reg.variableTypeOf id: vid) varId: vid
+    }
+
+    # defineTemp -- a binding for one of the checker's own temporaries, which no
+    # destroy point lists (tempVars).
+    defineTemp: function {:this nameId: zast.nameid vid: ztypes.vid} is {
+        this.typing.tempVars.add item: vid.u64
+        this.defineVar :nameId :vid
     }
 
     # scopeBindsHere -- does the INNERMOST open scope already bind `nameId`?
@@ -816,6 +831,14 @@ ZSymbolTable: class {
     invalidateDecl: function {
         :this declId: ztypes.declid loc: optionval ztypes.zsrcpos
     } out bool is {
+        return (this.invalidateDeclAs :declId :loc maybe: false)
+    }
+
+    # invalidateDeclAs -- invalidateDecl, saying whether the move happened on
+    # every path to here or only on some (`maybe`, D3).
+    invalidateDeclAs: function {
+        :this declId: ztypes.declid loc: optionval ztypes.zsrcpos maybe: bool
+    } out bool is {
         d: declId
         if d.isZero then return false
         zt: this.currentTypeOf declId: d
@@ -824,8 +847,76 @@ ZSymbolTable: class {
         te: this.reg.newEntry ztypeId: zt
         te.isTaken = true
         te.takenAt = loc
+        te.takenMaybe = maybe
         this.appendRow row: te declId: d
         return true
+    }
+
+    # --- destruction ---
+
+    # stateOfDecl -- the state a destroy point here records the local `declId`
+    # in (destroyitem): 0 it holds its value, 1 it was moved on every path here,
+    # 2 on some.
+    stateOfDecl: function {this: this.view declId: ztypes.declid} out u8 is {
+        ro: this.rowOf :declId
+        match (
+            ro
+        ) case some then {
+            e: this.entries.get i: ro
+            if e.isTaken when e.takenMaybe then return 2
+            if e.isTaken then return 1
+        } case none then null
+        return 0
+    }
+
+    # ownsDestroy -- `vid` is a variable a destroy point lists: one that owns
+    # what it holds and whose type can own something (D14), and not one of the
+    # checker's own temporaries.
+    ownsDestroy: function {this: this.view vid: ztypes.vid} out bool is {
+        if vid.isZero then return false
+        if (this.typing.tempVars.has item: vid.u64) then return false
+        if (this.reg.variableOwnershipOf id: vid) != ztypes.zownership.owned then return false
+        return (this.reg.isReftypeOf tid: (this.reg.variableTypeOf id: vid))
+    }
+
+    # recording -- whether what the walk passes is recorded for the emitter:
+    # not in a dry run, and not in a generic template's walk, whose body only an
+    # instance's copy of it is emitted from.
+    recording: function {this: this.view} out bool is {
+        if this.dryRunDepth > 0 then return false
+        return (this.typing.suppressParamStamps and (this.typing.curMonoStamp == 0)).not
+    }
+
+    # appendOwnedOf -- the variables `scope` binds that a destroy point lists,
+    # newest first, each in the state it is in here.
+    appendOwnedOf: function {:this scope: ztypes.declid} is {
+        ki: this.typing.declChildSlots declId: scope
+        for ki > 0 loop {
+            ki = ki - 1
+            kd: this.typing.declChildAt declId: scope index: ki
+            v: this.typing.declLocalVarOf declId: kd
+            if (this.ownsDestroy vid: v) then {
+                vs: this.stateOfDecl declId: kd
+                this.typing.destroyItems.append (ztyping.destroyitem vid: v state: vs)
+                if vs == 2 then this.typing.zeroOnMove.add item: v.u64
+            }
+        }
+    }
+
+    # recordScopeDestroy -- what the end of the closing scope `fr` destroys, when
+    # the walk falls through to it (scopeDestroy).
+    recordScopeDestroy: function {:this fr: openscope} is {
+        if fr.id.isZero or fr.node.isZero then return
+        if this.recording.not then return
+        if (this.unreachableScopes.has item: fr.id.u64) then return
+        start: this.typing.destroyItems.length
+        this.appendOwnedOf scope: fr.id
+        n: this.typing.destroyItems.length - start
+        if n == 0 then return
+        (this.typing.scopeDestroy.set
+            key: fr.node.u64
+            value: (ztyping.destroyrange start: start.u32.orPanic len: n.u32.orPanic)
+        )
     }
 
     # currentTypeOf -- the local's type as its newest row has it.
@@ -2183,6 +2274,7 @@ newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} o
         armNarrowingEnds: ListVal u64
         genBorrowNames: ListVal zast.nameid
         genBorrowDepths: ListVal u64
+        dryRunDepth: 0
         templateStamps: (IdMapV u64 v: ztypes.tid)
         templateArmPreds: (IdMapV u64 v: ztypes.tid)
         scopeHidden: IdSet u64

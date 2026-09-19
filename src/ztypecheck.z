@@ -31783,14 +31783,33 @@ reportLoopMove: function {
 # `break` are laid again after it: the code after the loop sees them
 # consumed. A body-local recorded there is gone with the loop's scope, and
 # a name it shadowed must not be consumed in its place, so only a decl the
-# name still resolves to is re-laid.
+# name still resolves to is re-laid. The loop may end without that break,
+# so each is moved only maybe (D3).
 relayBreakTakes: function {st: zenv.ZSymbolTable run: zenv.looprun} is {
     for st.loopBreakTakes.length > run.breakStart loop {
         d: ztypes.declid.create from: st.loopBreakTakes.pop
         nm: st.typing.declNameOf declId: d
         nid: zast.nameid.create from: nm
-        if (st.findLocal nameId: nid) == d then st.invalidate nameId: nid loc: takenHere
+        if (st.findLocal nameId: nid) == d then (st.invalidateDeclAs
+            declId: d
+            loc: takenHere
+            maybe: true
+        )
     }
+}
+
+# ArmTakes -- what the arms of an `if` or a `match` moved of the locals live
+# before it: every such local, consumed after the statement on at least one
+# path, and how many of the arms that reach the statement's end moved each. A
+# local every reaching arm of an exhaustive statement moved is moved; any other
+# only maybe (D3).
+ArmTakes: class {
+    # every local some arm moved
+    taken: IdSet u64
+    # how many reaching arms moved each
+    counts: (IdMapV u64 v: u64)
+    # how many arms reach the statement's end
+    reached: u64
 }
 
 # restoreTakenArm -- after a NON-diverging if arm, undo any takes of outer-scope
@@ -31815,26 +31834,39 @@ restoreTakenArm: function {st: zenv.ZSymbolTable liveBefore: (IdSet u64).view ta
 # settleArmTakes -- an arm's takes once its walk ends. A path that leaves the
 # function or the loop never reaches the fall-through (zenv settles those);
 # any other path does, so its takes of outer locals are restored for the
-# sibling arms and collected for the single post-if invalidation. Answers the
-# arm's divergence kind, `none` for a reachable end.
+# sibling arms and collected for the single post-if invalidation, and an arm
+# that reaches the end is counted with what it moved. Answers the arm's
+# divergence kind, `none` for a reachable end.
 settleArmTakes: function {
     st: zenv.ZSymbolTable
     liveBefore: (IdSet u64).view
-    taken: IdSet u64
+    taken: ArmTakes
 } out u8 is {
     k: st.settleDivergingTakes
     if k == zenv.divkind.exit then return k
     if k == zenv.divkind.brk then return k
-    restoreTakenArm :st :liveBefore :taken
+    armTook: IdSet u64
+    restoreTakenArm :st :liveBefore taken: armTook
+    for vn: armTook.iterate loop {
+        taken.taken.add item: vn
+        if k == zenv.divkind.none then (taken.counts.set
+            key: vn
+            value: ((taken.counts.get key: vn).or d: 0) + 1
+        )
+    }
+    if k == zenv.divkind.none then taken.reached = taken.reached + 1
     return k
 }
 
 # invalidateTakenAcross -- after the whole if, mark every local taken in some arm
 # as taken in the enclosing scope (it is consumed on at least one path, so a later
-# use is use-after-take), by declaration.
-invalidateTakenAcross: function {st: zenv.ZSymbolTable decls: (IdSet u64).view} is {
-    for vd: decls.iterate loop {
-        st.invalidateDecl declId: (ztypes.declid.create from: vd) loc: takenHere
+# use is use-after-take), by declaration: moved when every arm reaching the end of
+# an `exhaustive` statement moved it, else maybe.
+invalidateTakenAcross: function {st: zenv.ZSymbolTable decls: ArmTakes.view exhaustive: bool} is {
+    for vd: decls.taken.iterate loop {
+        c: (decls.counts.get key: vd).or d: 0
+        every: exhaustive and (decls.reached > 0) and (c == decls.reached)
+        st.invalidateDeclAs declId: (ztypes.declid.create from: vd) loc: takenHere maybe: every.not
     }
 }
 
@@ -31905,7 +31937,7 @@ checkIfClauses: function {
     guardFacts: List ArmPredFact
     branchTypes: ListVal u64
     liveBefore: (IdSet u64).view
-    takenAcross: IdSet u64
+    takenAcross: ArmTakes
     skipDead: bool
     pBool: u64
     flagsOut: ListVal bool
@@ -32324,7 +32356,7 @@ checkIf: function {
     ifMarker: st.pushBlock node: ifnode.nid
     armEnds: st.openArmNarrowingEnds
     liveBefore: st.getLiveOwnedVars
-    takenAcross: IdSet u64
+    takenAcross: ArmTakes taken: IdSet u64 counts: (IdMapV u64 v: u64) reached: 0
     nvId: (walkLookupTyperef :st scope: st.curScope :ast :unitDecl base: "never").or d: 0
     nullId: (walkLookupTyperef :st scope: st.curScope :ast :unitDecl base: "null").or d: 0
     pBool: (walkLookupTyperef :st scope: st.curScope :ast :unitDecl base: "bool").or d: 0
@@ -32419,7 +32451,7 @@ checkIf: function {
             fullTid: (ztypes.tid.create from: pgTid.u64)
         )
     }
-    invalidateTakenAcross :st decls: takenAcross
+    invalidateTakenAcross :st decls: takenAcross exhaustive: hasElse
     # after the guard facts: a write in an arm that completes wins over what a
     # diverging arm let the rest of the scope assume
     st.closeArmNarrowingEnds marker: armEnds
@@ -33581,7 +33613,7 @@ unnamedReceiverLocal: function {
     tname: "_t\{tn}"
     vid: st.reg.newVariable ztypeId: recvT ownership: ztypes.zownership.owned
     tnId: zast.poolSet pool: ast.names text: tname.stringView
-    st.defineVar nameId: tnId :vid
+    st.defineTemp nameId: tnId :vid
     st.typing.lineUnnamedLocals.append tnId
     st.typing.unnamedLocalOfNode.set key: recvNid value: tnId.u64
     dst.append tnId
@@ -34429,7 +34461,7 @@ hoistArg: function {
         origin: (pinRootAt pins: hpins i: 0)
     )
     tnId: zast.poolSet pool: ast.names text: tname.stringView
-    st.defineVar nameId: tnId :vid
+    st.defineTemp nameId: tnId :vid
     # the hoisted temp is the user-written hoist made explicit: it borrows
     # its source path for the call scope (SHARED prefixes, leaf kind from
     # the side channel), so aliasing between arguments -- or with a live
@@ -38499,7 +38531,7 @@ pinGenericTempArg: function {
     tname: "_t\{tn}"
     tnId: zast.poolSet pool: ast.names text: tname.stringView
     vid: st.reg.newVariable ztypeId: vt ownership: ztypes.zownership.owned
-    st.defineVar nameId: tnId :vid
+    st.defineTemp nameId: tnId :vid
     pinsAppendOne :pins nameId: tnId shared: aow.isViewArg mutable: aow.isViewArg.not alias: false
     st.typing.pinnedArgTemps.set key: tnId value: vid
 }
@@ -40973,7 +41005,7 @@ checkCaseClause: function {
     armTypes: ListVal u64
     # the owned locals live before the match, and those an arm took
     liveBefore: (IdSet u64).view
-    takenAcross: IdSet u64
+    takenAcross: ArmTakes
 } out casearmfacts is {
     anyEmpty: false
     allDiverge: true
@@ -41238,7 +41270,7 @@ checkCaseElse: function {
     armTypes: ListVal u64
     # the owned locals live before the match, and those an arm took
     liveBefore: (IdSet u64).view
-    takenAcross: IdSet u64
+    takenAcross: ArmTakes
 } out casearmfacts is {
     anyEmpty: false
     allDiverge: true
@@ -41290,7 +41322,7 @@ walkCaseClauses: function {
     diverging: List String
     armTypes: ListVal u64
     liveBefore: (IdSet u64).view
-    takenAcross: IdSet u64
+    takenAcross: ArmTakes
 } out casearmfacts is {
     anyEmpty: false
     allDiverge: true
@@ -41408,7 +41440,7 @@ checkCaseArms: function {
     # a take in one arm is restored for its siblings and consumes the local once
     # the match is done, as an `if` arm's does
     liveBefore: st.getLiveOwnedVars
-    takenAcross: IdSet u64
+    takenAcross: ArmTakes taken: IdSet u64 counts: (IdMapV u64 v: u64) reached: 0
     st.pushBlock node: zast.nodeid
     if targetName.length > 0 then st.resetNarrowing nameId: (nameIdOf
         :ast
@@ -41473,7 +41505,8 @@ checkCaseArms: function {
     # after the exclusions the diverging arms left: a write in an arm that
     # completes wins over them
     st.closeArmNarrowingEnds marker: armEnds
-    invalidateTakenAcross :st decls: takenAcross
+    # a match is exhaustive, or refused (caseIsExhaustive)
+    invalidateTakenAcross :st decls: takenAcross exhaustive: true
     return result
 }
 

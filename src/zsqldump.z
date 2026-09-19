@@ -121,6 +121,25 @@ canonScopeNode: function {
     return txt
 }
 
+# canonNodeText -- a node in the dump as its kind and position (`call@12:5`),
+# which no id renumbering moves.
+canonNodeText: function {ast: Ast.view nid: u64} out String is {
+    n: ast.nodes.get i: nid
+    pos: zast.posOf :n
+    txt: String
+    txt.append (zast.armName :n)
+    txt.append "@\{pos.line}"
+    txt.append ":\{pos.col}"
+    return txt
+}
+
+# destroyStateText -- a destroy item's state as the dump spells it.
+destroyStateText: function {state: u8} out StringView is {
+    if state == 1 then return "moved"
+    if state == 2 then return "maybe"
+    return "owned"
+}
+
 # scopeKindText -- CALL for a scope over a call, BLOCK for any other.
 scopeKindText: function {
     ast: Ast.view st: zenv.ZSymbolTable.view scope: ztypes.declid
@@ -278,6 +297,9 @@ schemaSql: function {} out String is {
     )
     (acc.append
         s: "CREATE TABLE IF NOT EXISTS generator_local (variable_id INTEGER PRIMARY KEY, field TEXT NOT NULL);\n"
+    )
+    (acc.append
+        s: "CREATE TABLE IF NOT EXISTS destroy (site_kind TEXT NOT NULL, node_id INTEGER NOT NULL, position INTEGER NOT NULL, variable_id INTEGER NOT NULL, state INTEGER NOT NULL);\n"
     )
     (acc.append
         s: "CREATE TABLE IF NOT EXISTS implicit_create (node_id INTEGER PRIMARY KEY, type_id INTEGER NOT NULL);\n"
@@ -752,6 +774,16 @@ ZDumper: class {
         with avit: typing.atomVariableId.iterateItems do for av: avit loop {
             row: "INSERT OR IGNORE INTO atom_variable VALUES (\{av.key}, \{av.value});\n"
             this.acc.append s: row
+        }
+        # what each scope's end destroys, in order
+        with sdit: typing.scopeDestroy.iterateItems do for sd: sdit loop {
+            sdi: u64
+            for sdi < sd.value.len.u64 loop {
+                it: typing.destroyItems.get i: sd.value.start.u64 + sdi
+                rowsd: "INSERT INTO destroy VALUES ('scope', \{sd.key}, \{sdi}, \{it.vid}, \{it.state});\n"
+                this.acc.append s: rowsd
+                sdi = sdi + 1
+            }
         }
         # the field each generator local is kept in
         with glit: typing.genLocalFieldOf.iterateItems do for gl: glit loop {
@@ -1389,6 +1421,36 @@ ZDumper: class {
         this.appendEntryRowsCanon pool: ast.names :st :scopeName :seen :narrowedRows
         this.appendVariableRowsCanon pool: ast.names :st :seen
         this.emitSection title: "narrowed_subtype" rows: narrowedRows
+        this.appendDestroyCanon :ast :st
+    }
+
+    # appendDestroyCanon -- what each destroy point destroys: the site's kind and
+    # node, each item's place in its order, the variable by name and its state.
+    appendDestroyCanon: function {:this ast: Ast.view st: zenv.ZSymbolTable.view} is {
+        names: IdMapV u64 v: u32
+        di: u64
+        for di < st.typing.decls.length loop {
+            dd: ztypes.declid.create from: di
+            dv: st.typing.declLocalVarOf declId: dd
+            if dv.isZero.not then names.set key: dv.u64 value: (st.typing.declNameOf declId: dd)
+            di = di + 1
+        }
+        rows: List String
+        with sdit: st.typing.scopeDestroy.iterateItems do for sd: sdit loop {
+            nt: canonNodeText :ast nid: sd.key
+            sdi: u64
+            for sdi < sd.value.len.u64 loop {
+                it: st.typing.destroyItems.get i: sd.value.start.u64 + sdi
+                vni: (names.get key: it.vid.u64).or d: 0
+                vn: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: vni)
+                vnSql: sqlStr s: vn.stringView
+                rows.append "scope | \{nt} | \{sdi} | \{vnSql} | \{(destroyStateText
+                    state: it.state
+                )}"
+                sdi = sdi + 1
+            }
+        }
+        this.emitSection title: "destroy" :rows
     }
     # emit what each call argument's ownership resolved to
     appendArgDispositionCanon: function {:this ast: Ast.view st: zenv.ZSymbolTable.view} is {

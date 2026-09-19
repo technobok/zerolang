@@ -21,6 +21,8 @@ public: unit {
     :foldedbranch
     :callslot
     :monostamp
+    :destroyitem
+    :destroyrange
     :nsbody
     :declkind
     :declkindName
@@ -209,6 +211,24 @@ monostamp: record {
     # the node inside it. The pair keys a stamp that differs per instantiation,
     # which a node id alone could not
     node: u64
+}
+
+# destroyitem -- one variable a destroy point destroys, in the state the walk
+# reached it in there (D3): 0 it holds its value, 1 it was moved on every path
+# to the point, 2 it was moved on some path and not others.
+destroyitem: record {
+    # the variable
+    vid: ztypes.vid
+    # 0 owned, 1 moved, 2 maybe
+    state: u8
+}
+
+# destroyrange -- one destroy point's items: a run of destroyItems.
+destroyrange: record {
+    # the first item
+    start: u32
+    # how many
+    len: u32
 }
 
 # monoVariableIn -- node `nid`'s variable as the walk of `mono` bound it: that
@@ -744,6 +764,21 @@ ZTyping: class {
     # (it may not be in scope at a yield), nor a `yield` value (it lives in the
     # resume slot)
     genLocalFieldOf: (IdMapV u64 v: zast.nameid)
+    # --- destruction (D3, D4, D5) ---
+    # every destroy point's items, run after run
+    destroyItems: ListVal destroyitem
+    # what the fall-through end of a scope destroys, keyed by the node the scope
+    # brackets: its owned locals, newest first. A scope whose end the walk
+    # cannot reach, or that owns nothing, has none
+    scopeDestroy: (IdMapV u64 v: destroyrange
+    # the variables a destroy point sees maybe moved: a move of one of them
+    # zeroes what it moved out of, so the destroy that runs anyway frees
+    # nothing (D3)
+    )
+    zeroOnMove: IdSet u64
+    # the checker's own temporaries: the emitter keeps its own until they
+    # become the checker's (stage 7), so no destroy point lists them
+    tempVars: IdSet u64
     # the generator class whose `call` body is being walked, 0 outside one. A
     # suspending loop or `with` inside it saves what it holds in a C local to
     # a field of this class across each suspension, and the walk is what
@@ -2966,6 +3001,10 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         aliasCyclesReported: IdSet u64
         generatorTypes: IdSet u64
         genLocalFieldOf: (IdMapV u64 v: zast.nameid)
+        destroyItems: ListVal destroyitem
+        scopeDestroy: (IdMapV u64 v: destroyrange)
+        zeroOnMove: IdSet u64
+        tempVars: IdSet u64
         currentGenTid: ztypes.tid
         genSpillNext: 0
         forPayloadField: (IdMapV u64 v: zast.nameid)
