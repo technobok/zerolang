@@ -38616,7 +38616,11 @@ checkGenericFnCall: function {
     # check happens at take; the pop releases it before the next statement).
     # A unit-member callee (io.eprintln) has no value root and skips.
     mcmG: st.pushCall node: call.nid
-    gfr: checkGenericCall :st :unitDecl :ast :call funcId: dro
+    # the locks the call's result may keep: a hoisted argument's temporary
+    # joins them AS IT IS MINTED, in argument order, so the walk and the
+    # instance's own pass write to one list
+    pinsG: List ztyping.PinPath
+    gfr: checkGenericCall :st :unitDecl :ast :call funcId: dro pins: pinsG
     if gfr > 0 then {
         setgf: gfr
         stampGate :st nid: call.nid.u64 tid: setgf
@@ -38624,7 +38628,7 @@ checkGenericFnCall: function {
     st.typing.callKind.set key: call.nid.u64 value: zast.callkind.regular
     callableNode: ast.nodes.get i: call.callable.u64
     midG: genericCallInstance :st :ast :call
-    pinsG: lockGenericCallArgs :st :ast :call mid: midG recvImplicit: true
+    lockGenericCallArgs :st :ast :call mid: midG recvImplicit: true pins: pinsG
     checkGenericCallMissingArgs :ast :st :call mid: midG recvImplicit: true
     rroG: methodReceiverRootId :ast n: callableNode
     lockMethodReceiver :st :ast :call :dro rroId: rroG
@@ -38656,9 +38660,12 @@ lockGenericCallArgs: function {
     mid: ztypes.tid
     # whether the call's shape already supplied the receiver
     recvImplicit: bool
-} out List ztyping.PinPath is {
+    # the call's pins, which the ARGUMENT WALK has already added the hoisted
+    # arguments' temporaries to (lockGenericValueArg); the bare names left
+    # join them here
     pins: List ztyping.PinPath
-    if mid.isZero then return pins
+} is {
+    if mid.isZero then return
     calleePins: resultPins :st funcId: mid
     idx: u64
     k: u64
@@ -38675,7 +38682,6 @@ lockGenericCallArgs: function {
         if pnId.isZero then continue
         lockGenericCallArg :st :ast :mid :pnId :arg :pins :calleePins
     }
-    return pins
 }
 
 # pinGenericCallResult -- what a generic call's result keeps locked: the pins
@@ -38703,10 +38709,9 @@ lockGenericCallArg: function {
     calleePins: bool
 } is {
     bnId: atomNameId :ast n: (ast.nodes.get i: arg.operation.u64)
-    if bnId.isZero then {
-        if calleePins then pinGenericPathArg :st :ast :mid :pnId :arg :pins
-        return
-    }
+    # a source that is no bare name was hoisted as the arguments were walked,
+    # and its temporary already joined `pins` (lockGenericValueArg)
+    if bnId.isZero then return
     bvo: st.lookupVarId nameId: bnId
     if bvo.none then {
         # a name that is no variable -- a function it auto-calls, a type it
@@ -38738,33 +38743,6 @@ lockGenericCallArg: function {
     }
 }
 
-# pinGenericPathArg -- a field-path argument (`h.xs`) at a locking parameter of
-# a generic call whose result keeps its inputs: the path is a pin the result
-# holds, as a plain call's path argument's is.
-pinGenericPathArg: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    mid: ztypes.tid
-    pnId: zast.nameid
-    arg: argref
-    pins: List ztyping.PinPath
-} is {
-    an: ast.nodes.get i: arg.operation.u64
-    vt: walkTypeOf :st nid: (nodeId n: an).u64
-    if (typeIsReftype :st tid: vt).not then return
-    aow: argOwnershipOf :st funcId: mid isCtor: false :pnId :vt
-    if aow.isLockish.not then return
-    src: ListVal zast.nameid
-    appendValueTuple :ast n: an dst: src
-    # a call's result, or any value no variable roots, is a temporary
-    rootsVar: false
-    if src.length > 0 then rootsVar = (st.lookupVarId nameId: (src.get i: 0)).some
-    if rootsVar.not then {
-        if an.call then pinGenericTempArg :st :ast :mid :pnId :arg :pins
-        return
-    }
-    pinsAppend :pins path: src shared: true mutable: aow.isViewArg.not alias: true carried: false
-}
 
 # pinGenericTempArg -- an argument that is a TEMPORARY (a call's result, a
 # function a bare name auto-calls, a type it constructs) at a locking parameter
@@ -39109,9 +39087,10 @@ checkBareGenericCall: function {
         if fb.handled then return fb
     }
     mcmB: st.pushCall node: call.nid
-    gr: checkGenericCall :st :unitDecl :ast :call :funcId
+    pinsB: List ztyping.PinPath
+    gr: checkGenericCall :st :unitDecl :ast :call :funcId pins: pinsB
     midB: genericCallInstance :st :ast :call
-    pinsB: lockGenericCallArgs :st :ast :call mid: midB recvImplicit: false
+    lockGenericCallArgs :st :ast :call mid: midB recvImplicit: false pins: pinsB
     checkGenericCallMissingArgs :ast :st :call mid: midB recvImplicit: false
     st.popTo marker: mcmB
     pinGenericCallResult :st mid: midB pins: pinsB
@@ -40501,10 +40480,15 @@ lockGenericValueArg: function {
     # the pending pins before this argument was walked: those past it are the
     # ones its own walk left
     pinMark: u64
+    # the locks the call's result may keep
+    pins: List ztyping.PinPath
 } is {
     if pnId.isZero then return
     if (typeIsReftype :st tid: vt).not then return
     aow: argOwnershipOf :st :funcId isCtor: false :pnId :vt
+    # the TEMPLATE answers: `copyReturnMarkers` gives the instance the same
+    # `outx` / borrow-return markers when it is minted
+    calleePins: resultPins :st :funcId
     opN: ast.nodes.get i: arg.operation.u64
     bnId: atomNameId :ast n: opN
     if aow.isTake then {
@@ -40527,85 +40511,34 @@ lockGenericValueArg: function {
         )
         return
     }
-    # a projection -- a view, a slice, a borrowed element -- reaches into what
-    # its walk pinned; a fresh value (an interpolation, `s.copy`, a call that
-    # returns one) pinned nothing, and is held by a TEMPORARY of the call's,
-    # exactly as a concrete call's argument is. Without one the only owner of
-    # `buf.append "\{n}"`'s argument was a temp the emitter invented, and the
-    # checker had no name for the value it frees.
-    if (movedFieldPath :st :ast n: opN).not then {
-        # A TRIVIAL argument is not hoisted, exactly as `hoistAndLockArg`
-        # splits it on the concrete path: a string literal is a view over
-        # static program memory, and a temporary that owned one would free it.
-        # The channel must also be EMPTY, not merely unchanged by this
-        # argument: `hoistArg` drains all of it, so a receiver's or an earlier
-        # argument's residue would be read as this value's sources and mint a
-        # BORROWED temp for an owned one. Both fall to the projection leg.
-        trivialG: argIsTrivial :ast op: opN
-        if st.typing.pendingPins.length == 0 when trivialG.not then {
-            (hoistArg
-                :ast
-                :st
-                argId: arg.operation
-                argType: vt
-                paramType: aow.pt
-                consumes: false
-                viewParam: aow.isViewArg
-            )
-        } else {
-            lockProjectionPins :st :ast :call :arg :pinMark
-        }
-        return
-    }
-    src: ListVal zast.nameid
-    appendValueTuple :ast n: opN dst: src
-    if (st.lookupVarId nameId: (src.get i: 0)).none then return
-    (lockCallArgPath
+    # Everything the argument's source is not a bare name -- a projection (a
+    # view, a slice, a borrowed element), a field path, an interpolation, a
+    # call's result -- is HELD BY A TEMPORARY of the call's and locks through
+    # it, which is what `lockNonTrivialArg` does for a concrete call. It
+    # reaches into what the walk pinned, and the pins land on the temporary
+    # that owns or borrows the value rather than loose on the call, so the
+    # value has a name for as long as the lock on its source does.
+    #
+    # `pinMark` is not consulted: `hoistArg` takes the whole pin channel, and
+    # the temp installs only the paths rooted in THIS argument.
+    (lockNonTrivialArg
         :st
-        pool: ast.names
-        path: src
-        callId: call.nid.u64
-        mutable: aow.isViewArg.not
-        nodeid: arg.nid
-        lineno: arg.lineno
-        colno: arg.colno
+        :ast
+        :call
+        :vt
+        pt: aow.pt
+        isTake: false
+        isLockish: true
+        isViewArg: aow.isViewArg
+        # a generic call's parameter list excludes the receiver
+        # (genericCallHolders), so no argument slot can be one
+        isRecvArg: false
+        :pins
+        :calleePins
+        :arg
     )
 }
 
-# lockProjectionPins -- a generic call's argument that reaches into its source
-# through a call -- `s.stringView`, `xs.getMut i: 0` -- holds what that call
-# pinned for the call's duration, as the concrete call's argument temp does.
-lockProjectionPins: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    call: callref
-    arg: argref
-    pinMark: u64
-} is {
-    k: pinMark
-    for k < st.typing.pendingPins.length loop {
-        pth: ListVal zast.nameid
-        mut: false
-        {
-            pp: st.typing.pendingPins.get i: k
-            mut = pp.mutable
-            with pit: pp.path.iterate do for seg: pit loop pth.append seg
-        }
-        k = k + 1
-        if pth.length == 0 then continue
-        if (st.lookupVarId nameId: (pth.get i: 0)).none then continue
-        (lockCallArgPath
-            :st
-            pool: ast.names
-            path: pth
-            callId: call.nid.u64
-            mutable: mut
-            nodeid: arg.nid
-            lineno: arg.lineno
-            colno: arg.colno
-        )
-    }
-}
 
 # moveGenericFieldArg -- a path handed to a generic call's taking parameter: a
 # field is refused as a borrowed value, and one that owns nothing moves through
@@ -40633,6 +40566,9 @@ inferGenericCallSubs: function {
     unitDecl: ztypes.declid
     ast: Ast
     call: callref
+    # the locks the call's result may keep; a hoisted argument's temporary
+    # joins them where it is minted
+    pins: List ztyping.PinPath
     gparams: (ListVal zast.nameid).view
     pNames: (ListVal zast.nameid).view
     subs: (IdMapV zast.nameid v: u64)
@@ -40692,6 +40628,7 @@ inferGenericCallSubs: function {
                 :arg
                 vt: avt
                 :pinMark
+                :pins
             )
             (bindValueArg
                 :st
@@ -40906,6 +40843,8 @@ checkGenericCall: function {
     ast: Ast
     call: callref
     funcId: ztypes.tid
+    # the locks the call's result may keep, which the argument walk adds to
+    pins: List ztyping.PinPath
 } out ztypes.tid is {
     pNames: ListVal zast.nameid
     pHolderIds: ListVal u64
@@ -40924,6 +40863,7 @@ checkGenericCall: function {
         :unitDecl
         :ast
         :call
+        :pins
         :gparams
         :pNames
         :subs
