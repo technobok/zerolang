@@ -1363,7 +1363,14 @@ perf: $(PERFBIN)
 # source (the self-compile promotes none).
 #
 # -782 when a generic call stopped making a divergence scope only the dump read.
-ALLOC_BASELINE := 2590426
+#
+# +3,109 when a generator's borrow came to be refused at a yield and a yielded
+# value came to be checked against the element type: all of it the source.
+#
+# -13,630 when a generator's locals came to be the checker's: all of it the
+# source (the lowering's crossing analysis and its rewrite of the whole body are
+# gone; the self-compile has no generator).
+ALLOC_BASELINE := 2579905
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

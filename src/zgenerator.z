@@ -5,11 +5,10 @@
 # author's, so this unit synthesises nothing the author already wrote -- it
 # adds `call`'s implicit receiver and the option wrapper around its element
 # type, generates the `create` the `is` fields describe, and appends the fields
-# the suspension transform needs: a `state` cursor, the yield-crossing locals,
-# the loop counters, and the resume slots. The payload a suspending loop
-# binds, the iterable it constructs and the value a `with` holds are the
-# checker's fields: it mints them during the body walk, where their types are
-# known. The state machine itself is the emitter's job; what happens here is
+# the suspension transform needs: a `state` cursor, the loop counters, and the
+# resume slots. The body's locals, the payload a suspending loop binds, the
+# iterable it constructs and the value a `with` holds are the checker's fields:
+# it mints them during the body walk, where their types are known. The state machine itself is the emitter's job; what happens here is
 # that the class arrives at it complete.
 #
 # Nothing here infers ownership. A field's marker is what the author declared,
@@ -85,25 +84,12 @@ pathLeafName: function {ast: Ast.view n: astnode.view} out String is {
     }
 }
 
-# clonePath -- deep-copy a type-path subtree (atom / labelvalue / dotted /
-# expression / call / namedoperation shapes), minting fresh nodeids. The
-# synth wrapper and field types embed clones because a node owns exactly
-# one parent. `n` may be a detached node; its children are table rows,
-# cloned and interned by id (clonePathAt) before the clone's own slot is
-# reserved, so nothing lends ast while a row view is live.
-clonePath: function {ast: Ast n: astnode.view} out astnode is {
-    kids: ListVal u32
-    if (pathShape :n) then kids = zast.childIds :ast :n
-    cloned: clonePathKids :ast :kids
-    myId: zast.tableReserve :ast
-    built: clonePathArm :n :myId :cloned kids: ast.kids
-    if built.placeholder then return (clonePathUnsupported :ast :myId)
-    return built
-}
-
-# clonePathAt -- clonePath of the row `nid` names. Each row view is scoped
-# to a block that lends nothing: the children go first (by id), then the
-# clone's slot, then the arm is built from the row's scalars.
+# clonePathAt -- deep-copy the type-path subtree the row `nid` names (atom /
+# labelvalue / dotted / call / namedoperation / string shapes), minting fresh
+# nodeids and keeping positions. The synth wrapper and field types embed copies
+# because a node owns exactly one parent. Each row view is scoped to a block
+# that lends nothing: the children go first (by id), then the copy's slot, then
+# the arm is built from the row's scalars.
 clonePathAt: function {ast: Ast nid: zast.nodeid} out astnode is {
     kids: ListVal u32
     {
@@ -121,7 +107,7 @@ clonePathAt: function {ast: Ast nid: zast.nodeid} out astnode is {
     return built
 }
 
-# pathShape -- `n` is a shape clonePath copies structurally.
+# pathShape -- `n` is a shape clonePathAt copies structurally.
 pathShape: function {n: astnode.view} out bool is {
     match (
         n
@@ -156,7 +142,7 @@ clonePathKids: function {ast: Ast kids: (ListVal u32).view} out ListVal u32 is {
 
 # clonePathArm -- the clone of `n`'s arm under `myId`, its children the
 # interned clones in `cloned` (canonical childIds order); the placeholder
-# arm for any shape clonePath does not copy. Reads the view only.
+# arm for any shape clonePathAt does not copy. Reads the view only.
 clonePathArm: function {
     kids: ListVal u32
     n: astnode.view
@@ -406,7 +392,7 @@ typePathIsReference: function {ast: Ast.view nid: zast.nodeid} out bool is {
 # buildCreateMethod -- `create: function {<param-clones>} out this is {
 # return (meta.create state: 0 p1: :p1 ...) }`, `outx this` when a captured
 # field is a reference: captured parameters forward by label-value shorthand;
-# promoted locals are reserved fields the body's first write initialises.
+# every other field starts zero, until the body writes it.
 buildCreateMethod: function {
     ast: Ast
     line: u32
@@ -521,353 +507,32 @@ isYieldValue: function {ast: Ast.view n: astnode.view} out bool is {
     }
 }
 
-# GenCross -- the crossing-locals walk state: yields passed so far, each
-# local's first-definition yield count, its maximum-use yield count, and
-# whether any reference sits inside a yielding loop (next iteration
-# resumes past the suspension, so reuse crosses implicitly).
-GenCross: class {
-    # how many yields the walk has passed, which is the clock every other field
-    # is measured against
-    yieldCount: u64
-    # each local's first-definition yield count
-    firstDef: (MapRV String v: u64
-    # each local's last-use yield count. A local whose use count exceeds its
-    # definition count CROSSES a suspension and must live in the state class
-    )
-    maxUse: (MapRV String v: u64
-    # whether any reference sits inside a yielding loop. It crosses implicitly
-    # there, the next iteration resuming past the suspension
-    )
-    inLoop: (MapRV String v: bool
-    # which names are parameters, since a parameter crosses whatever the counts
-    # say
-    )
-    params: (MapRV String v: bool
-    # `name: yield E` resume-input bindings: per-call borrowed aliases into
-    # the caller's storage -- NEVER promoted (a stored pointer would dangle
-    # across calls; the liveness rule already confines each to one window).
-    )
-    yieldBound: (MapRV String v: bool)
-}
-
-# yieldSlotsOpt -- the suspension count of an optional body, which is how many
-# resume slots the state class needs. Reads through a view: the body is still
-# needed afterwards.
-yieldSlotsOpt: function {ast: Ast.view o: (optionval astnode).view} out u64 is {
-    match (
-        o
-    ) case some then {
-        return (zast.yieldCountOf :ast n: o)
-    } case none then {
-        return 0
-    }
-}
-
-# forCounterSlotsOpt -- how many loop-counter fields the state class needs: one
-# per label-bound `for` whose body suspends. Counted by the SAME function the
-# emitter draws its counters from. Reads through a view, like yieldSlotsOpt.
-forCounterSlotsOpt: function {ast: Ast.view o: (optionval astnode).view} out u64 is {
-    match (
-        o
-    ) case some then {
-        return (zast.suspendingForCountOf :ast n: o)
-    } case none then {
-        return 0
-    }
-}
-
-# recurse a node, recording locals that cross a yield-loop boundary.
-crossWalk: function {ast: Ast.view gc: GenCross n: astnode.view inYieldLoop: bool} is {
+# bindsYieldValue -- the body binds `yield`'s own value somewhere (`a: yield e`),
+# outside a nested function literal.
+bindsYieldValue: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
-    ) case functiondef then null case assignment then {
-        crossWalkDef :ast :gc :n :inYieldLoop
-    } case atomid then {
-        crossWalkUse :ast :gc :n :inYieldLoop
-    } case forexpr then {
-        bodyYields: (zast.yieldCountIn :ast nid: n.body) > 0
-        sub: inYieldLoop
-        if bodyYields then sub = true
-        crossWalkSpan :ast :gc span: n.conditions inYieldLoop: sub
-        crossWalkAt :ast :gc nid: n.body inYieldLoop: sub
-        crossWalkSpan :ast :gc span: n.postconditions inYieldLoop: sub
-    } case caseclause then {
-        # the arm pattern is not a use of a local
-        crossWalkAt :ast :gc nid: n.statement :inYieldLoop
-    } case call then {
-        # the callee name is not a use of a local
-        crossWalkSpan :ast :gc span: n.arguments :inYieldLoop
-        # a suspension point advances the clock every other field is read
-        # against. The operand is walked FIRST, so a local used in the yielded
-        # value is recorded against the count before this yield moves it.
-        if (zast.isYieldCalleeAt :ast callableId: n.callable) then gc.yieldCount = gc.yieldCount + 1
-    } case dottedpath then {
-        # a member selector is not a use of a local
-        crossWalkAt :ast :gc nid: n.parent :inYieldLoop
-    } else {
-        crossWalkIds :ast :gc ids: (zast.childIds :ast :n) :inYieldLoop
-    }
-}
-
-# crossWalkAt -- crossWalk on a child named by its id, so a step of the walk
-# reads as one call rather than a table lookup wrapped around one. A zero id is
-# an absent child and walks nothing.
-crossWalkAt: function {ast: Ast.view gc: GenCross nid: zast.nodeid inYieldLoop: bool} is {
-    if nid.isZero then return
-    crossWalk :ast :gc n: (ast.nodes.get i: nid.u64) :inYieldLoop
-}
-
-# crossWalkSpan -- the children of `span`, in order. The span is read in place
-# rather than through a list of its own: each child is visited once, so a list
-# would be one allocation per node for nothing.
-crossWalkSpan: function {ast: Ast.view gc: GenCross span: zast.kidspan inYieldLoop: bool} is {
-    i: u64
-    for i < span.count.u64 loop {
-        k: zast.kidAt kids: ast.kids :span :i
-        i = i + 1
-        crossWalkAt :ast :gc nid: (zast.nodeid.create from: k) :inYieldLoop
-    }
-}
-
-# noteInLoop -- record that `name` was touched inside a yielding loop, which
-# makes it a crossing local whatever the counts say: the next iteration resumes
-# past the reference.
-noteInLoop: function {gc: GenCross name: StringView inYieldLoop: bool} is {
-    if inYieldLoop.not then return
-    k: name.string
-    v: true
-    gc.inLoop.set key: k value: v
-}
-
-# crossWalkDef -- an assignment DEFINES a local. The value is walked before the
-# name is stamped, so a local read inside it is recorded against the suspension
-# count this definition sits at rather than a later one. A parameter is already
-# a field, so it earns no first-definition stamp.
-crossWalkDef: function {
-    ast: Ast.view
-    gc: GenCross
-    n: zast.assignmentrow.view
-    inYieldLoop: bool
-} is {
-    av: ast.nodes.get i: n.value.u64
-    crossWalk :ast :gc n: av :inYieldLoop
-    anvC: zast.poolTextAt pool: ast.names ref: n.name
-    anv: anvC.stringView
-    if (isYieldValue :ast n: av) then {
-        ybk: anv.string
-        ybv: true
-        gc.yieldBound.set key: ybk value: ybv
-    }
-    isP: (gc.params.get key: anv.string).or d: false
-    if isP.not then {
-        seen: (gc.firstDef.get key: anv.string).or d: 18446744073709551615.u64
-        if seen == 18446744073709551615.u64 then {
-            dk: anv.string
-            dv: gc.yieldCount
-            gc.firstDef.set key: dk value: dv
-        }
-        noteInLoop :gc name: anv :inYieldLoop
-    }
-}
-
-# crossWalkUse -- an atom USES a local, and the latest suspension count it is
-# read at is what decides whether the read crosses one. A name with no recorded
-# definition is not a local of this body and is left alone.
-crossWalkUse: function {
-    ast: Ast.view
-    gc: GenCross
-    n: zast.atomidrow.view
-    inYieldLoop: bool
-} is {
-    unvC: zast.nameTextAt :ast ref: n.name
-    unv: unvC.stringView
-    seen2: (gc.firstDef.get key: unv.string).or d: 18446744073709551615.u64
-    if seen2 != 18446744073709551615.u64 then {
-        uk: unv.string
-        uv: gc.yieldCount
-        prev: (gc.maxUse.get key: unv.string).or d: 0
-        if uv > prev then {
-            gc.maxUse.set key: uk value: uv
-        }
-        noteInLoop :gc name: unv :inYieldLoop
-    }
-}
-
-# crossWalkIds -- walk a list of children carrying the crossing state through
-# them in order. `inYieldLoop` stays set once entered, because a reference
-# inside a yielding loop crosses a suspension implicitly: the next iteration
-# resumes past it.
-crossWalkIds: function {ast: Ast.view gc: GenCross ids: (ListVal u32).view inYieldLoop: bool} is {
-    with it: ids.iterate do for c: it loop {
-        crossWalk :ast :gc n: (ast.nodes.get i: c.u64) :inYieldLoop
-    }
-}
-
-# crossWalk over an optional node.
-crossWalkOpt: function {
-    ast: Ast.view
-    gc: GenCross
-    o: (optionval astnode).view
-    inYieldLoop: bool
-} is {
-    match (
-        o
-    ) case some then {
-        crossWalk :ast :gc n: o :inYieldLoop
-    } case none then null
-}
-
-# crossingLocals -- EVERY generator-body local promotes: a resumable body
-# has no persistent stack frame, so a local surviving to any later flush
-# (scope exit, fn exit) would free garbage on a fresh frame. Fields live on
-# the instance; the synth class's auto-destructor owns their cleanup.
-# (Historically only yield-crossing/looped locals promoted -- the
-# non-crossing remainder was the fresh-frame free family.)
-crossingLocals: function {gc: GenCross.view dst: List String} is {
-    with kit: gc.firstDef.iterate do for k0: kit loop {
-        kv0: k0.stringView
-        yb0: (gc.yieldBound.get key: kv0.string).or d: false
-        if yb0.not then {
-            kc0: kv0.string
-            dst.append kc0
-        }
-    }
-}
-
-# firstRhsOf -- the first `name: <rhs>` assignment's INNER rhs (a clone),
-# feeding the promoted local's typeof field. The root may be a detached
-# node (a promoted body not yet interned); its children are table rows and
-# the search continues by id.
-firstRhsOf: function {
-    ast: Ast
-    n: astnode.view
-    name: StringView
-    dst: GivesParts
-} is {
-    kids: ListVal u32
-    rhsId: firstRhsScan :ast :n :name :kids
-    firstRhsDescend :ast :rhsId :kids :name :dst
-}
-
-# firstRhsOfAt -- the id-taking search: the row view is this frame's and
-# dies at the block close, before the clone or the recursion lends `ast`.
-firstRhsOfAt: function {
-    ast: Ast
-    nid: zast.nodeid
-    name: StringView
-    dst: GivesParts
-} is {
-    kids: ListVal u32
-    rhsId: zast.nodeid
-    {
-        n: ast.nodes.get i: nid.u64
-        rhsId = firstRhsScan :ast :n :name :kids
-    }
-    firstRhsDescend :ast :rhsId :kids :name :dst
-}
-
-# firstRhsScan -- read-only: the assignment's value id when `n` is
-# `name: <rhs>` (zero otherwise), and the children the search descends
-# into. A function body is opaque, an assignment's value is not searched,
-# and a for/with descends into its body only.
-firstRhsScan: function {
-    ast: Ast.view
-    n: astnode.view
-    name: StringView
-    kids: ListVal u32
-} out zast.nodeid is {
-    rhs: zast.nodeid
-    match (
-        n
-    ) case functiondef then null case assignment then {
-        if (zast.nameTextEq :ast ref: n.name s: name) then rhs = n.value
-    } case statement then {
-        stx799: u64
-        for stx799 < n.statements.count.u64 loop {
-            s0Id: zast.kidAt kids: ast.kids span: n.statements i: stx799
-            stx799 = stx799 + 1
-            kids.append from: s0Id
-        }
-    } case statementline then {
-        kids.append from: n.statementline.u32
-    } case ifexpr then {
-        clx1139: u64
-        for clx1139 < n.clauses.count.u64 loop {
-            cl0Id: zast.kidAt kids: ast.kids span: n.clauses i: clx1139
-            clx1139 = clx1139 + 1
-            kids.append from: cl0Id
-        }
-        if n.elseclause > 0 then kids.append from: n.elseclause.u32
-    } case ifclause then {
-        kids.append from: n.statement.u32
-    } case forexpr then {
-        if n.body > 0 then kids.append from: n.body.u32
-    } case doexpr then {
-        kids.append from: n.statement.u32
-    } case withexpr then {
-        kids.append from: n.body.u32
-    } case caseexpr then {
-        clx1149: u64
-        for clx1149 < n.clauses.count.u64 loop {
-            m0: zast.kidAt kids: ast.kids span: n.clauses i: clx1149
-            clx1149 = clx1149 + 1
-            kids.append from: m0
-        }
-        if n.elseclause > 0 then kids.append from: n.elseclause.u32
-    } case caseclause then {
-        kids.append from: n.statement.u32
+    ) case functiondef then {
+        return false
+    } case assignment then {
+        if (isYieldValue :ast n: (ast.nodes.get i: n.value.u64)) then return true
     } else null
-    return rhs
-}
-
-# firstRhsDescend -- clone the found rhs into `dst` (the first match wins),
-# otherwise continue the search by id through `kids`.
-firstRhsDescend: function {
-    ast: Ast
-    rhsId: zast.nodeid
-    kids: (ListVal u32).view
-    name: StringView
-    dst: GivesParts
-} is {
-    if rhsId.isZero.not then {
-        already: false
-        match (
-            dst.base
-        ) case some then {
-            already = true
-        } case none then null
-        if already.not then {
-            rc: clonePathAt :ast nid: rhsId
-            dst.base = optionval.some rc
-        }
-        return
+    kids: zast.childIds :ast :n
+    i: u64
+    for i < kids.length loop {
+        if (bindsYieldValue :ast n: (ast.nodes.get i: (kids.get :i).u64)) then return true
+        i = i + 1
     }
-    with it: kids.iterate do for k: it loop {
-        firstRhsOfAt :ast nid: (zast.nodeid.create from: k) :name :dst
-    }
-}
-
-# the first right-hand-side node under an optional node (for promotion).
-firstRhsOfOpt: function {
-    ast: Ast
-    o: (optionval astnode).view
-    name: StringView
-    dst: GivesParts
-} is {
-    match (
-        o
-    ) case some then {
-        firstRhsOf :ast n: o :name :dst
-    } case none then null
+    return false
 }
 
 # promoteIterables -- clone the body, and for each top-level `for` whose
 # loop body suspends, hoist every non-trivial named iterable into a
 # synthetic `_iterN: <expr>` binding before the loop (the loop references
 # `_iterN`). Without this, the iterable would be a C-stack local that
-# does not survive a suspension; the synthetic local is visible to the
-# crossing analysis (the yielding-loop rule promotes it) and to the
-# typeof field machinery. Recurses into for bodies only.
+# does not survive a suspension; the synthetic local is an ordinary local,
+# which the checker keeps in the instance like any other. Recurses into for
+# bodies only.
 #
 # A body is always a block: the parser wraps a brace-less `for` body in a
 # one-line block, and a brace-less `with` body reaches promoteWrappedBody,
@@ -1141,8 +806,8 @@ promoteIterablesIdAt: function {
 }
 
 # promoteLine -- one statement line: a for-statement transforms (possibly
-# appending synthetic bindings first); anything else passes through as a
-# rewrite-clone (the rewrite with no promotions is a faithful deep copy).
+# appending synthetic bindings first); anything else passes through as a deep
+# copy (cloneTreeAt).
 promoteLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid dst: ListVal u32} is {
     isFor: false
     innerId: zast.nodeid
@@ -1161,17 +826,19 @@ promoteLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid dst: ListVal u32} 
         }
     }
     if isFor then {
-        ni: promoteInExpr :ast :ctr nid: innerId :dst
+        # what is hoisted ahead of the loop sits in a block of its own with the
+        # loop (promoteBareLine), scoped as the loop's header was: two loops in
+        # one block may bind the same name
+        pr: promoteBareLine :ast :ctr nid: innerId
         nl: astnode.statementline (zast.statementlinerow
             nodeid: (zast.tableReserve :ast)
             lineno: lnQ
             colno: coQ
-            statementline: (zast.tableAdd :ast n: ni)
+            statementline: (zast.nodeid.create from: pr)
         )
         dst.append (zast.tableAdd :ast n: nl)
     } else {
-        empty: MapRV String v: bool
-        nc: rewriteToThisAt :ast :nid promoted: empty
+        nc: cloneTreeAt :ast :nid
         dst.append (zast.tableAdd :ast n: nc)
     }
 }
@@ -1232,13 +899,12 @@ promoteWrappedBody: function {ast: Ast ctr: NameCtr oId: zast.nodeid} out u32 is
     return (zast.tableAdd :ast n: redo)
 }
 
-# promoteBareLine -- a `with` body that is a bare `for` or `with` line rather
-# than a block: promote it as the one line it is. A hoisted iterable binding
-# needs a block to sit in ahead of the loop, so the line then becomes the
-# `do { .. }` block the author could have written -- the line a statement of
-# its own, the block under a `doexpr`, exactly the shape a braced body has,
-# which is the shape the checker's body walk types the hoisted write in. With
-# nothing hoisted the promoted node stands alone.
+# promoteBareLine -- one `for` or `with` line, promoted: a line of a block, or a
+# `with` body that is a bare line rather than a block. A binding hoisted ahead
+# of the loop needs a block to sit in, scoped as the loop's header was, so the
+# line then becomes the `do { .. }` block the author could have written -- the
+# line a statement of its own, the block under a `doexpr`, exactly the shape a
+# braced body has. With nothing hoisted the promoted node stands alone.
 promoteBareLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out u32 is {
     hoisted: ListVal u32
     ni: promoteInExpr :ast :ctr :nid dst: hoisted
@@ -1274,16 +940,14 @@ promoteBareLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out u32 is {
 }
 
 # promoteWith -- a `with` inside a suspending body: promote the body, so a
-# nested suspending loop or `with` has its own rewrite applied, and carry the
+# nested suspending loop or `with` has its own iterables hoisted, and carry the
 # header's name and value across it.
 #
 # `with s: E do { .. }` emits `T s = E;` ahead of the block, and the resume
-# `goto` re-enters past that line. The name cannot be promoted here: it is a
-# nameid on the `with` row, which `crossWalk` never records, and whether E is
-# owned is a symbol-table question this pass cannot ask (a dotted auto-call
-# reads as a plain path). The checker minds it: an owned value whose block
-# suspends gets a state field of the value's type, and the emitter binds the
-# name to that field for the body.
+# `goto` re-enters past that line. Whether E is owned is a symbol-table question
+# this pass cannot ask (a dotted auto-call reads as a plain path), so the checker
+# minds it: an owned value whose block suspends gets a state field of the value's
+# type, and the emitter binds the name to that field for the body.
 promoteWith: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out astnode is {
     isWith: false
     lnW: u32
@@ -1303,12 +967,10 @@ promoteWith: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out astnode is {
         }
     }
     if isWith.not then {
-        empty9: MapRV String v: bool
-        return (rewriteToThisAt :ast :nid promoted: empty9)
+        return (cloneTreeAt :ast :nid)
     }
     nbodyId: promoteWrappedBody :ast :ctr oId: bodyW
-    emptyA: MapRV String v: bool
-    nval: rewriteToThisAt :ast nid: valW promoted: emptyA
+    nval: cloneTreeAt :ast nid: valW
     nvalId: zast.tableAdd :ast n: nval
     return (astnode.withexpr (zast.withrow
         nodeid: (zast.tableReserve :ast)
@@ -1332,7 +994,8 @@ lineIsFor: function {n: astnode.view} out bool is {
     }
 }
 
-# promote yield-crossing locals to state fields within an expression.
+# promoteInExpr -- a `for` or `with` line of a suspending body, with its
+# iterables hoisted (promoteFor, promoteWith).
 promoteInExpr: function {
     ast: Ast
     ctr: NameCtr
@@ -1348,16 +1011,15 @@ promoteInExpr: function {
     return (promoteFor :ast :ctr :nid :dst)
 }
 
-# promoteForInit -- hoist a C-STYLE for-binding out of its header, so the
-# crossing analysis can see it.
+# promoteForInit -- hoist a C-STYLE for-binding out of its header, so it is an
+# ordinary local.
 #
 # `for i: 0 while i < n loop` initialises `i` once and tests it per iteration;
 # the binding lives only in the emitted `int64_t i = 0;` ahead of the `while`,
 # and `goto L_resume_k` re-enters the loop past it, so a suspending body read
 # indeterminate garbage and the loop yielded once. Rewriting it to `i: 0`
 # followed by `for while i < n loop` is the same program -- and `i` is then an
-# ordinary assignment, which `crossWalk` records and `crossingLocals` promotes
-# to a state field, typed by the shell-and-swap the other promoted locals use.
+# ordinary local, which the checker keeps in a field of the instance.
 #
 # Only the BINDING moves; the condition it shared the header with stays put.
 promoteForInit: function {
@@ -1384,8 +1046,7 @@ promoteForInit: function {
         }
     }
     if opId.isZero then return
-    empty8: MapRV String v: bool
-    rhs1: rewriteToThisAt :ast nid: opId promoted: empty8
+    rhs1: cloneTreeAt :ast nid: opId
     sa1: astnode.assignment (zast.assignmentrow
         nodeid: (zast.tableReserve :ast)
         lineno: hl1
@@ -1430,8 +1091,8 @@ forInitIdx: function {ast: Ast.view condIds: (ListVal u32).view} out u64 is {
 # promoteForCond -- one condition of a for-loop being promoted: a
 # suspending loop's non-trivial named iterable moves into a synthetic
 # `_iterN` binding (appended to `dst`, ahead of the loop) and the condition
-# then names `_iterN`; any other condition is a rewrite-clone. The rewritten
-# condition's id goes to `nconds`.
+# then names `_iterN`; any other condition is a deep copy. The new condition's id
+# goes to `nconds`.
 promoteForCond: function {
     ast: Ast
     ctr: NameCtr
@@ -1466,8 +1127,7 @@ promoteForCond: function {
     }
     if doHoist then {
         synthN: "_iter\{ctr.bump}"
-        empty7: MapRV String v: bool
-        rhs0: rewriteToThisAt :ast nid: opId promoted: empty7
+        rhs0: cloneTreeAt :ast nid: opId
         snv0: synthN.stringView
         snid0: zast.poolSet pool: ast.names text: snv0
         sa0: astnode.assignment (zast.assignmentrow
@@ -1491,13 +1151,15 @@ promoteForCond: function {
         nc0: mkNamedOp :ast line: hl0 col: hc0 name: cn1.stringView op: na0
         nconds.append (zast.tableAdd :ast n: nc0)
     } else {
-        empty6: MapRV String v: bool
-        cc0: rewriteToThisAt :ast nid: (zast.nodeid.create from: c0Id) promoted: empty6
+        cc0: cloneTreeAt :ast nid: (zast.nodeid.create from: c0Id)
         nconds.append (zast.tableAdd :ast n: cc0)
     }
 }
 
-# promote yield-crossing locals across a for-loop boundary.
+# promoteFor -- a `for` line of a suspending body: its body promoted first, then
+# each named iterable of a loop whose body suspends hoisted ahead of it
+# (promoteForCond), and a C-style binding hoisted to its own statement
+# (promoteForInit).
 promoteFor: function {
     ast: Ast
     ctr: NameCtr
@@ -1532,8 +1194,7 @@ promoteFor: function {
         }
     }
     if isFor.not then {
-        empty4: MapRV String v: bool
-        return (rewriteToThisAt :ast :nid promoted: empty4)
+        return (cloneTreeAt :ast :nid)
     }
     # recurse into the loop body first (nested suspending fors)
     nbodyId: promoteIterablesIdAt :ast :ctr oId: bodyId
@@ -1560,8 +1221,7 @@ promoteFor: function {
     nposts: ListVal u32
     piter: postIds.iterate
     for p0Id: piter loop {
-        empty5: MapRV String v: bool
-        pp0: rewriteToThisAt :ast nid: (zast.nodeid.create from: p0Id) promoted: empty5
+        pp0: cloneTreeAt :ast nid: (zast.nodeid.create from: p0Id)
         nposts.append (zast.tableAdd :ast n: pp0)
     }
     return (astnode.forexpr (zast.forrow
@@ -1586,70 +1246,16 @@ condIsTrivial: function {n: astnode.view} out bool is {
     }
 }
 
-# rwplan -- what rewriting one row needs once its view is gone. mode: 0 =
-# not a rewrite shape (clonePath copies it whole), 1 = rewrite every child,
-# 2 = dottedpath (the child is a field label or an operator: it clones),
-# 3 = caseclause (the arm pattern clones). special: 0 = none, 1 = atomid,
-# 2 = labelvalue, 3 = assignment; promotedName says the special arm names a
-# promoted local (nameId, at ln:co).
-rwplan: record {
-    # how the row is rewritten: 0 copies it whole, 1 rewrites every child, 2 is
-    # a dottedpath whose child is a field label or an operator, 3 a caseclause
-    # whose arm pattern clones
-    mode: u32
-    # which special arm it is: 0 none, 1 atomid, 2 labelvalue, 3 assignment
-    special: u32
-    # whether that special arm names a local promoted into the state class
-    promotedName: bool
-    # the promoted local's name, when it names one
-    nameId: zast.nameid
-    # the line to report it at
-    ln: u32
-    # the column to report it at
-    co: u32
-}
-
-# rewritePlan -- read-only: the plan for `n`, and its child ids (canonical
-# order) appended to `kids` when it is a rewrite shape.
-rewritePlan: function {
-    ast: Ast.view
-    n: astnode.view
-    promoted: (MapRV String v: bool)
-    kids: ListVal u32
-} out rwplan is {
+# clonePlanOf -- read-only: how `n` copies, with its child ids (canonical order)
+# appended to `kids` when it copies child by child. 0 copies the row whole as a
+# path (clonePathAt); 1 copies every child; 2 is a dottedpath, whose child is a
+# field label or an operator and copies as a path; 3 is a caseclause, whose arm
+# pattern copies as a path.
+clonePlanOf: function {ast: Ast.view n: astnode.view kids: ListVal u32} out u32 is {
     mode: 1.u32
-    special: u32
-    isP: false
-    nameId: zast.nameid
-    ln: u32
-    co: u32
     match (
         n
-    ) case atomid then {
-        special = 1
-        nameId = n.name
-        ln = n.lineno
-        co = n.colno
-        anvC: zast.nameTextAt :ast ref: n.name
-        anv: anvC.stringView
-        isP = (promoted.get key: anv.string).or d: false
-    } case labelvalue then {
-        special = 2
-        nameId = n.name
-        ln = n.lineno
-        co = n.colno
-        lnvC: zast.nameTextAt :ast ref: n.name
-        lnv: lnvC.stringView
-        isP = (promoted.get key: lnv.string).or d: false
-    } case assignment then {
-        special = 3
-        nameId = n.name
-        ln = n.lineno
-        co = n.colno
-        anvC: zast.nameTextAt :ast ref: n.name
-        anv: anvC.stringView
-        isP = (promoted.get key: anv.string).or d: false
-    } case dottedpath then {
+    ) case dottedpath then {
         mode = 2
     } case caseclause then {
         mode = 3
@@ -1674,30 +1280,25 @@ rewritePlan: function {
         ids: zast.childIds :ast :n
         with it: ids.iterate do for i: it loop kids.append from: i
     }
-    return (rwplan :mode :special promotedName: isP :nameId :ln :co)
+    return mode
 }
 
-# rewriteKids -- rewrite (or, at the plan's clone-only positions, copy) each
-# child by id and intern the results, in order.
-rewriteKids: function {
-    ast: Ast
-    kids: (ListVal u32).view
-    mode: u32
-    promoted: (MapRV String v: bool)
-} out ListVal u32 is {
+# cloneTreeKids -- copy each child by id (as a path at the plan's path-only
+# positions) and intern the copies, in order.
+cloneTreeKids: function {ast: Ast kids: (ListVal u32).view mode: u32} out ListVal u32 is {
     cloned: ListVal u32
     ki: u64
     kn: kids.length
     for ki < kn loop {
         kid: zast.nodeid.create from: (kids.get i: ki)
-        cloneOnly: (
+        pathOnly: (
             mode == 2 and (ki == 1) or (mode == 3 and (ki == 0))
         )
-        if cloneOnly then {
+        if pathOnly then {
             c0: clonePathAt :ast nid: kid
             cloned.append (zast.tableAdd :ast n: c0)
         } else {
-            r0: rewriteToThisAt :ast nid: kid :promoted
+            r0: cloneTreeAt :ast nid: kid
             cloned.append (zast.tableAdd :ast n: r0)
         }
         ki = ki + 1
@@ -1705,35 +1306,32 @@ rewriteKids: function {
     return cloned
 }
 
-# rewritePromoted -- the promoted-name rewrite when the plan names one (an
-# atom/labelvalue becomes `this.<name>`; an assignment a reassignment
-# through it, its value the already-interned child), else the placeholder
-# arm. Mints.
-rewritePromoted: function {
-    ast: Ast
-    plan: rwplan
-    cloned: (ListVal u32).view
-} out astnode is {
-    if plan.promotedName.not then return astnode.placeholder
-    nm: zast.nameTextCopy :ast ref: plan.nameId
-    if plan.special == 3 then {
-        topath: mkThisDotted :ast line: plan.ln col: plan.co name: nm.stringView
-        return (astnode.reassignment (zast.reassignmentrow
-            nodeid: (zast.tableReserve :ast)
-            lineno: plan.ln
-            colno: plan.co
-            topath: (zast.tableAdd :ast n: topath)
-            value: (zast.nodeid.create from: (cloned.get i: 0))
-        )
-        )
+# cloneTreeAt -- a deep copy of the row `nid` names, keeping every position. Each
+# row view is scoped to a block that lends nothing: the plan is read first, the
+# children are copied next (by id), then the copy's slot is reserved, then the
+# arm is built from the row.
+cloneTreeAt: function {ast: Ast nid: zast.nodeid} out astnode is {
+    kids: ListVal u32
+    mode: u32
+    {
+        n: ast.nodes.get i: nid.u64
+        mode = clonePlanOf :ast :n :kids
     }
-    return (mkThisDotted :ast line: plan.ln col: plan.co name: nm.stringView)
+    if mode == 0 then return (clonePathAt :ast :nid)
+    cloned: cloneTreeKids :ast :kids :mode
+    myId: zast.tableReserve :ast
+    built: astnode.placeholder
+    {
+        n: ast.nodes.get i: nid.u64
+        built = cloneTreeArm :n :myId :cloned kids: ast.kids
+    }
+    return built
 }
 
-# rewriteArm -- the rewrite of `n`'s arm under `myId`, its children the
-# interned results in `cloned` (canonical childIds order; an absent optional
-# child is simply not there). Reads the view only.
-rewriteArm: function {
+# cloneTreeArm -- the copy of `n`'s arm under `myId`, its children the interned
+# copies in `cloned` (canonical childIds order; an absent optional child is simply
+# not there). Reads the view only.
+cloneTreeArm: function {
     kids: ListVal u32
     n: astnode.view
     myId: zast.nodeid
@@ -1932,98 +1530,6 @@ rewriteArm: function {
     } else {
         return astnode.placeholder
     }
-}
-
-# rewriteToThis -- deep-clone the body, rewriting every promoted-name
-# reference to `this.<name>`: atoms and labelvalues in value position
-# become the dotted path, dotted HEADS rewrite (children are field
-# labels), and an assignment to a promoted name becomes a reassignment
-# through `this` (the field was reserved at create time). `n` may be a
-# detached node; its children are table rows, rewritten and interned by
-# id (rewriteToThisAt) before the clone's own slot is reserved, so nothing
-# lends ast while a row view is live.
-rewriteToThis: function {
-    ast: Ast
-    n: astnode.view
-    promoted: (MapRV String v: bool)
-} out astnode is {
-    kids: ListVal u32
-    plan: rewritePlan :ast :n :promoted :kids
-    if plan.mode == 0 then return (clonePath :ast :n)
-    cloned: rewriteKids :ast :kids mode: plan.mode :promoted
-    special: rewritePromoted :ast :plan :cloned
-    if special.placeholder.not then return special
-    myId: zast.tableReserve :ast
-    return (rewriteArm :n :myId :cloned kids: ast.kids)
-}
-
-# rewriteToThisAt -- rewriteToThis of the row `nid` names. Each row view is
-# scoped to a block that lends nothing: the plan is read first, the children
-# go next (by id), then the clone's slot, then the arm is built from the row.
-rewriteToThisAt: function {
-    ast: Ast
-    nid: zast.nodeid
-    promoted: (MapRV String v: bool)
-} out astnode is {
-    kids: ListVal u32
-    plan: (rwplan
-        mode: 0
-        special: 0
-        promotedName: false
-        nameId: (zast.nameid.create from: 0)
-        ln: 0
-        co: 0
-    )
-    {
-        n: ast.nodes.get i: nid.u64
-        plan = rewritePlan :ast :n :promoted :kids
-    }
-    if plan.mode == 0 then return (clonePathAt :ast :nid)
-    cloned: rewriteKids :ast :kids mode: plan.mode :promoted
-    special: rewritePromoted :ast :plan :cloned
-    if special.placeholder.not then return special
-    myId: zast.tableReserve :ast
-    built: astnode.placeholder
-    {
-        n: ast.nodes.get i: nid.u64
-        built = rewriteArm :n :myId :cloned kids: ast.kids
-    }
-    return built
-}
-
-# rewrite an optional node's local references to `this.<field>` for the lowered class.
-rewriteOptToThis: function {
-    ast: Ast
-    o: (optionval astnode).view
-    promoted: (MapRV String v: bool)
-} out optionval astnode is {
-    match (
-        o
-    ) case some then {
-        r: rewriteToThis :ast n: o :promoted
-        return (optionval.some r)
-    } case none then {
-        return (optionval.none astnode)
-    }
-}
-
-# build a `this.<name>` dotted-path node and return its id.
-mkThisDotted: function {
-    ast: Ast
-    line: u32
-    col: u32
-    name: StringView
-} out astnode is {
-    thisAtom: mkAtom :ast :line :col name: "this"
-    childAtom: mkAtom :ast :line :col :name
-    return (astnode.dottedpath (zast.dottedpathrow
-        nodeid: (zast.tableReserve :ast)
-        lineno: line
-        colno: col
-        parent: (zast.tableAdd :ast n: thisAtom)
-        child: (zast.tableAdd :ast n: childAtom)
-    )
-    )
 }
 
 # i64TypePath -- the `system.i64` type path the state cursor and the loop
@@ -2348,50 +1854,6 @@ readDeclaredParts: function {
     }
 }
 
-# appendCrossingFields -- one `typeof`-typed field per local live across a
-# suspension, typed from its FIRST assignment: a promoted local has no
-# declaration to read a type from, and the first write is what gives it one.
-appendCrossingFields: function {
-    # the tree the typeof fields are minted into
-    ast: Ast
-    # the line a promoted local's field is attributed to
-    line: u32
-    # the column likewise
-    col: u32
-    # the locals live across a suspension, in first-assignment order
-    crossing: (List String).view
-    # the body their first assignments are read from
-    pBody: (optionval astnode).view
-    # the field list the typeof fields join
-    addFields: ListVal u32
-    # the same fields again, the ones the checker treats as the locals they store
-    localFields: ListVal u32
-} is {
-    with cit2: crossing.iterate do for l3: cit2 loop {
-        l3v: l3.stringView
-        rhsCar: (GivesParts
-            base: optionval.none astnode
-            leaf: "".string
-        )
-        firstRhsOfOpt :ast o: pBody name: l3v dst: rhsCar
-        rc3: rhsCar.base
-        match (
-            rc3
-        ) case some then {
-            tof3: astnode.typeofexpr (zast.typeofexprrow
-                nodeid: (zast.tableReserve :ast)
-                lineno: line
-                colno: col
-                source: (zast.tableAdd :ast n: rc3)
-            )
-            nf4: mkNamedOp :ast :line :col name: l3v op: tof3
-            fid: zast.tableAdd :ast n: nf4
-            addFields.append fid
-            localFields.append fid
-        } case none then null
-    }
-}
-
 # appendResumeFields -- the resume slots and the input store, for a `call` that
 # declares a per-call input. A yield hoisted out of expression position leaves
 # its resumed value in one of these, not in a C local: the suspension RETURNS
@@ -2428,9 +1890,9 @@ appendResumeFields: function {
 # appendForCounterFields -- one counter field per label-bound `for` whose body
 # suspends. A `for` counter lives only in the C header, and `goto L_resume_k`
 # jumps in past the init clause, so it has to be a field like everything else
-# live across a suspension. It cannot come from the crossing analysis: a `for`
-# label is a nameid on the header's namedoperation, not an assignment. The
-# loop's PAYLOAD and its constructed iterable are the checker's fields
+# live across a suspension. It is not a local the checker binds: a `for` label
+# is a nameid on the header's namedoperation, not an assignment. The loop's
+# PAYLOAD and its constructed iterable are the checker's fields
 # (forPayloadField, forIterableField), minted where their types are known.
 appendForCounterFields: function {
     # the tree the resume fields are minted into
@@ -2454,23 +1916,6 @@ appendForCounterFields: function {
     }
 }
 
-# promotedSet -- the crossing locals as the name set rewriteToThis rewrites
-# through `this`. A declared generator promotes ONLY these: its `is` fields are
-# already read as `this.x` because the author wrote them that way.
-promotedSet: function {
-    # the locals live across a suspension
-    crossing: (List String).view
-    # filled with one entry per name
-    dst: (MapRV String v: bool)
-} is {
-    with cit: crossing.iterate do for ce: cit loop {
-        cev: ce.stringView
-        ck: cev.string
-        cv: true
-        dst.set key: ck value: cv
-    }
-}
-
 # GenDeclared -- what preparing a declared `generator` leaves the checker to
 # record: the `call` whose body `yield` is legal in, and the wrapper node whose
 # Option collapses to `optionval` over a valtype element. Both are node ids the
@@ -2483,9 +1928,6 @@ GenDeclared: class {
     # the body binds `yield`'s own value while `call` declares no input to
     # receive: the binding names a value nothing can ever supply
     readsAbsentInput: bool
-    # the node ids of the fields made for the body's locals: each is a local to
-    # the programmer, which the instance stores across suspensions
-    localFields: ListVal u32
 }
 
 # createParamPath -- the generated `create`'s parameter type for one `is` field.
@@ -2535,8 +1977,8 @@ createParamPath: function {
 # its `call` is a written method, so this pass adds only what the suspension
 # transform needs and nothing that the author already said. `call` gains the
 # receiver it is declared to have implicitly and the option wrapper around its
-# ELEMENT type; the state cursor, the yield-crossing locals, the loop counters
-# and the resume slots are appended as fields.
+# ELEMENT type; the state cursor, the loop counters and the resume slots are
+# appended as fields.
 #
 # The captured-parameter half of `lowerOne` has no counterpart here, and that is
 # the point of the form: an `is` field is read as `this.x` because the author
@@ -2584,51 +2026,31 @@ lowerDeclared: function {
         if cfm3.functiondef then cfm3.body = zast.nodeid.create from: newBodyId
     }
     bodyId2: callBodyIdOf :ast :callFnId
-    # the body is TAKEN out of the table for the analysis: read in place it
-    # holds a shared lock on `ast.nodes`, and every helper below wants `ast`
-    # exclusively to mint into it. lowerOne is lock-free here for the same
-    # reason -- it owns the whole functiondef.
-    pBody: optionval.some (zast.tableTake :ast id: bodyId2.u32)
-    gc: (GenCross
-        yieldCount: 0
-        firstDef: (MapRV String v: u64)
-        maxUse: (MapRV String v: u64)
-        inLoop: (MapRV String v: bool)
-        params: (MapRV String v: bool)
-        yieldBound: (MapRV String v: bool)
-    )
-    crossWalkOpt :ast :gc o: pBody inYieldLoop: false
-    # one resume SLOT per suspension point, counted by the SAME function the
-    # emitter numbers its resume labels with. An out-only generator has none:
-    # the slots hold the value a suspension is RESUMED with, and nothing resumes
-    # one with a value.
-    yieldSlots: yieldSlotsOpt :ast o: pBody
-    forSlots: forCounterSlotsOpt :ast o: pBody
-    crossing: List String
-    crossingLocals :gc dst: crossing
-    # `a: yield e` binds the value the NEXT call supplies. With no input
-    # declared there is no next value, so the binding is a read of something
-    # that cannot exist -- reported by the checker, which holds the errors.
-    if parts.inputTypeId.isZero when gc.yieldBound.length > 0 then dst.readsAbsentInput = true
-    promoted: MapRV String v: bool
-    promotedSet :crossing dst: promoted
+    # one resume SLOT per suspension point and one counter per suspending loop,
+    # counted by the SAME functions the emitter numbers its resume labels and
+    # draws its counters with. An out-only generator has no slots: they hold the
+    # value a suspension is RESUMED with, and nothing resumes one with a value.
+    yieldSlots: u64
+    forSlots: u64
+    {
+        body: ast.nodes.get i: bodyId2.u64
+        yieldSlots = zast.yieldCountOf :ast n: body
+        forSlots = zast.suspendingForCountOf :ast n: body
+        # `a: yield e` binds the value the NEXT call supplies. With no input
+        # declared there is no next value, so the binding is a read of something
+        # that cannot exist -- reported by the checker, which holds the errors.
+        if parts.inputTypeId.isZero when (bindsYieldValue :ast n: body
+        ) then dst.readsAbsentInput = true
+    }
 
-    # the fields the transform needs, appended to the ones the author declared
+    # the fields the transform needs, appended to the ones the author declared.
+    # The body's locals are the checker's: it keeps each in a field of its own.
     addFields: ListVal u32
     {
         stTy: i64TypePath :ast :line :col
         stField: mkNamedOp :ast :line :col name: "state" op: stTy
         addFields.append (zast.tableAdd :ast n: stField)
     }
-    appendCrossingFields :ast :line :col :crossing :pBody :addFields localFields: dst.localFields
-    newBodyOpt: rewriteOptToThis :ast o: pBody :promoted
-    match (
-        newBodyOpt
-    ) case some then {
-        nbId: zast.tableAdd :ast n: newBodyOpt
-        cfm4: ast.nodes.getMut i: callFnId.u64
-        if cfm4.functiondef then cfm4.body = zast.nodeid.create from: nbId
-    } case none then null
     appendForCounterFields :ast :line :col :forSlots :addFields
     if parts.inputTypeId.isZero.not then (appendResumeFields
         :ast

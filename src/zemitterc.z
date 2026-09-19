@@ -12989,7 +12989,7 @@ emitFnptrLocalCall: function {
     if (symtab.reg.typetypeOf typeId: cTid) != ztypes.ztypetype.functionType then return "".string
     stn: regNameOf :symtab tid: cTid
     if stn.stringView == cn0 then return "".string
-    fcm: varCName :ctx vid: cnVid name: cn0
+    fcm: wholeLocalName :ctx vid: cnVid name: cn0
     # THE SLOT'S OWN PARAMETER LIST DECIDES HOW EACH ARGUMENT IS PASSED, the
     # same question emitFnptrFieldCall asks of a fn-pointer FIELD. It matters
     # here as soon as an unbound METHOD reference can reach a local: a receiver
@@ -19811,6 +19811,13 @@ emitAssignment: function {
         )
         return
     }
+    gfO: symtab.typing.genLocalFieldOf.get key: nameVid.u64
+    match (
+        gfO
+    ) case some then {
+        emitGenLocalBind :ast :symtab :ctx :n :nameVid field: gfO :ind :tmp :buf
+        return
+    } case none then null
     if (emitReferenceBind
         :ast
         :symtab
@@ -20401,13 +20408,7 @@ emitReassignStmt: function {
     buf: String.borrow
 } is {
     topathNode: ast.nodes.get i: n.topath.u64
-    valueNode: ast.nodes.get i: n.value.u64
     nm2: emitReassignLvalue :ast :symtab :ctx n: topathNode
-    rv2: reassignRhsText :ast :symtab :ctx :valueNode :ind :tmp :buf
-    # the RHS walk may have recorded _ah arg hoists: declare them HERE,
-    # before the assignment line that uses them (they would otherwise
-    # flush at a later statement, after -- and outside -- this scope)
-    flushArgHoists :ctx :ind :tmp :buf
     rtnid: interpPartNodeId n: topathNode
     # a collection-typedef lvalue (Bytes) stores and destroys as its
     # chased underlying mono, exactly like the binding path
@@ -20416,6 +20417,42 @@ emitReassignStmt: function {
         :ctx
         tid: (reassignDestroyTid :ast :symtab n: topathNode nid: rtnid)
     )
+    (emitStoreTo
+        :ast
+        :symtab
+        :ctx
+        nm2: nm2.stringView
+        :rtnid
+        :rtsid
+        valueNode: (ast.nodes.get i: n.value.u64)
+        :ind
+        :tmp
+        :buf
+    )
+}
+
+# emitStoreTo -- store a value into the C lvalue `nm2`, replacing what it held:
+# the value runs first (into a temporary when it is no lvalue and the target
+# owns heap), the old value is freed, the new one written, and every source the
+# value moved out of is zeroed so its own free no-ops. `rtnid` and `rtsid` are
+# the target's stamped node and chased type.
+emitStoreTo: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    nm2: StringView
+    rtnid: u64
+    rtsid: ztypes.tid
+    valueNode: astnode.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    rv2: reassignRhsText :ast :symtab :ctx :valueNode :ind :tmp :buf
+    # the RHS walk may have recorded _ah arg hoists: declare them HERE,
+    # before the assignment line that uses them (they would otherwise
+    # flush at a later statement, after -- and outside -- this scope)
+    flushArgHoists :ctx :ind :tmp :buf
     rdrop: (stampIsStr :symtab :ctx nid: rtnid) or (symtab.reg.needsDestructor typeId: rtsid)
     ran: false
     if rdrop when (isNonLvalueArg s: rv2.stringView) then {
@@ -20429,7 +20466,7 @@ emitReassignStmt: function {
         emitMovedArgZeroing :ast :symtab :ctx n: valueNode :ind :buf
         ran = true
     }
-    emitReassignDestroy :symtab :ctx nm2: nm2.stringView :rtnid :rtsid :ind :buf
+    emitReassignDestroy :symtab :ctx :nm2 :rtnid :rtsid :ind :buf
     buf.append "\{ind}\{nm2} = \{rv2};\n"
     # a `<obj>.field.take` RHS -- a generator's local, the one field that
     # moves -- moved it out as a shallow struct copy: zero the field lvalue so
@@ -21005,6 +21042,44 @@ emitWithField: function {
     la: "\{ind}\{fld} = \{wv};\n"
     buf.append la
     vvSet xs: ctx.aliases vid: (defVid :symtab nid: n.nodeid.u64) val: fld.stringView
+}
+
+# emitGenLocalBind -- a generator body's local, bound. The checker keeps it in a
+# field of the instance (genLocalFieldOf), so the binding stores into that field
+# as a reassignment of it would -- freeing the old value, which a loop body left
+# on its previous pass -- and every later spelling of the local is the field.
+# The instance's destructor frees what the field holds last.
+emitGenLocalBind: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.assignmentrow.view
+    nameVid: ztypes.vid
+    field: zast.nameid
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    fnm: zast.nameTextAt :ast ref: field
+    fld: genFieldC :ctx name: fnm.stringView
+    rtsid: ztypes.tid.create from: (chaseColMono
+        :symtab
+        :ctx
+        tid: (symtab.reg.variableTypeOf id: nameVid)
+    )
+    (emitStoreTo
+        :ast
+        :symtab
+        :ctx
+        nm2: fld.stringView
+        rtnid: n.nodeid.u64
+        :rtsid
+        valueNode: (ast.nodes.get i: n.value.u64)
+        :ind
+        :tmp
+        :buf
+    )
+    vvSet xs: ctx.aliases vid: nameVid val: fld.stringView
 }
 
 # emitWithStmt -- `with x: <value> do <body>`: the value is bound for the body's
@@ -21611,7 +21686,7 @@ emitReassignLvalue: function {
         if rbNm.length > 0 then {
             rbVid: atomVid :symtab nid: (atomNodeId :n)
             if rbVid.isZero.not when (vvGet xs: ctx.narrowBox vid: rbVid).length > 0 then {
-                return (varCName :ctx vid: rbVid name: rbNm)
+                return (wholeLocalName :ctx vid: rbVid name: rbNm)
             }
         }
     }
@@ -26123,7 +26198,7 @@ seedPostGuardAlias: function {
         d: (ztypes.vid.create from: 0)
     )
     if pgrv.isZero then return
-    pgRecv: varCName :ctx vid: pgrv name: pgRawN.stringView
+    pgRecv: wholeLocalName :ctx vid: pgrv name: pgRawN.stringView
     if pgRecv.length == 0 then return
     owner: (symtab.typing.postGuardTid.get key: pgid).or d: (ztypes.tid.create from: 0)
     if owner.isZero then return

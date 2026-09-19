@@ -95,7 +95,7 @@ Table of Contents</div>
 <ul>
 <li><a href="#what-the-pass-adds">What the pass adds</a>
 </li>
-<li><a href="#liveness-which-locals-get-promoted">Liveness (which locals get promoted)</a>
+<li><a href="#body-locals">Body locals</a>
 </li>
 <li><a href="#state-machine-codegen">State-machine codegen</a>
 </li>
@@ -262,15 +262,15 @@ only what the suspension transform needs. For</p>
 <pre><code class="language-zerolang">  G: generator {
       f1: T1                   # the author's fields, untouched
       state: i64               # state-machine cursor, appended
-      &lt;crossing-locals&gt;: ...   # locals whose live range crosses a yield
       _fc_N: i64               # one per suspending counted `for`
       _yv_N: K                 # one resume slot per suspension point
       _resume_input: K         # only when `call` declares an input
+      &lt;local&gt;_N: T             # one per body local, minted by the checker
   } as {
       call: function {:this in: K} out (option-wrapper-for-E) is {
-          # the author's body, references to promoted names rewritten to
-          # this.&lt;n&gt;, with its yields intact -- the state machine is the
-          # emitter's job
+          # the author's body with its yields intact and the iterables of
+          # its suspending loops hoisted into locals -- the state machine
+          # is the emitter's job
       }
       create: function {f1: T1.take ...} outx this is {
           return meta.create state: 0 :f1 ...
@@ -282,25 +282,26 @@ following the field it fills. The pass runs BEFORE the definitions are indexed,
 because it appends fields to a definition the author wrote and indexing binds a
 definition's members where it stands.
 Numeric suffix on collision.</p>
-<h3 id="liveness-which-locals-get-promoted"><a href="#liveness-which-locals-get-promoted">6.2. Liveness (which locals get promoted)</a></h3>
-<p>A local must become a class field iff its live range crosses a yield --
-otherwise its C-stack slot in <code>.call</code> is gone between invocations.
-<code>crossingLocals</code> in <code>src/zgenerator.z</code>
-runs a structural traversal applying two rules:</p>
-<ul>
-<li><strong>Yield-count rule</strong> -- track a running yield counter
-(pre-bump for the yield's own expr). For each local, record
-<code>first_def_yc</code> and <code>max_use_yc</code>. If
-<code>max_use_yc &gt; first_def_yc</code>, the def-to-use path crosses
-a suspension.</li>
-<li><strong>Yielding-loop rule</strong> -- any reference to a local inside the
-body of a <code>for</code> loop whose body contains a yield is treated as
-crossing (the next iteration's read sits "after" the previous
-iteration's yield).</li>
-</ul>
-<p>Parameters are always promoted (the factory captures them into the
-synth class). Non-crossing locals stay as ordinary C locals inside the
-generated <code>.call</code> body.</p>
+<h3 id="body-locals"><a href="#body-locals">6.2. Body locals</a></h3>
+<p>The body resumes in a later call, so nothing it keeps may live on the C stack
+of <code>.call</code>. The pass rewrites no local: to the checker a body local is an
+ordinary local, with its own variable, scope, moves and invalidation, and only
+where it is stored differs. Binding a local in a generator's <code>call</code> body, the
+checker mints a field of the instance for it -- one per variable, named
+<code>&lt;name&gt;_N</code> so it collides with nothing else the instance holds, typed by the
+variable's own type (<code>bindGenLocal</code> and <code>mintGenField</code> in
+<code>src/ztypecheck.z</code>) -- and records it in <code>genLocalFieldOf</code>. The emitter
+stores into the field where the local is bound and spells every later use of
+the local as the field (<code>emitGenLocalBind</code> in <code>src/zemitterc.z</code>). A binding
+frees what the field held before -- a loop body binds its locals afresh on
+every pass -- and the instance's destructor frees what the field holds last.</p>
+<p>Two kinds of local are not kept. A <code>yield</code> value (<code>a: yield e</code>) lives in
+its resume slot. A borrow of a place -- another local, a field, an element --
+is a pointer into it, stays a C local, and may not be in scope at a yield
+(<code>reportBorrowsAtYield</code>). A view is a value like any other, and is kept. The
+payload a suspending loop binds, the iterable it constructs and the owned value
+of a suspending <code>with</code> are the checker's fields as well
+(<code>mintForSpillFields</code>, <code>withValueField</code>).</p>
 <h3 id="state-machine-codegen"><a href="#state-machine-codegen">6.3. State-machine codegen</a></h3>
 <p>The emitter (<code>src/zemitterc.z</code>) routes any function whose
 <code>synthOrigin == "generator-call"</code> through a dedicated state-machine
