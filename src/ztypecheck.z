@@ -2976,7 +2976,9 @@ resolveDottedArgTid: function {
             return (descendNamed :st :frame :ast unitDecl: ud name: cq.stringView)
         }
     }
-    return 0
+    # `rem.point`, `rem.deeper.tag`: a unit a unit declares, however deep
+    cqId: atomNameId :ast n: (ast.nodes.get i: dr.child.u64)
+    return (nestedQualifiedTid :st :frame :ast qualNid: dr.parent memberId: cqId).u64
 }
 
 
@@ -10185,7 +10187,7 @@ dottedParentName: function {ast: Ast.view n: astnode.view} out String is {
 # resolved through the defining unit's scope. Bare-name visibility covers only
 # main+system, so a dep element misses there; this bridges via the unit probe
 # plus resolved. 0 when not a dotted ref or unresolved.
-dottedTyperefId: function {ast: Ast.view st: zenv.ZSymbolTable op: astnode.view} out u64 is {
+dottedTyperefId: function {ast: Ast st: zenv.ZSymbolTable op: astnode.view} out u64 is {
     match (
         op
     ) case dottedpath then {
@@ -10200,11 +10202,75 @@ dottedTyperefId: function {ast: Ast.view st: zenv.ZSymbolTable op: astnode.view}
                 name: cnId
             )
             return (ro.or d: 0)
-        } else {
-            return 0
         }
+        return (nestedQualifiedTid :st frame: st.curFrame :ast qualNid: op.parent memberId: cnId
+        ).u64
     } else {
         return 0
+    }
+}
+
+# nestedQualifiedTid -- `sub.Member` where the qualifier `qualNid` names a unit
+# declared inside another (inline, a hidden subunit, `rem.deeper`) rather than
+# a file unit: the member of that unit's own declaration, 0 when the qualifier
+# names no such unit.
+nestedQualifiedTid: function {
+    st: zenv.ZSymbolTable
+    frame: ztypes.declid
+    ast: Ast
+    qualNid: zast.nodeid
+    memberId: zast.nameid
+} out ztypes.tid is {
+    if memberId.isZero then return (ztypes.tid.create from: 0)
+    ud: qualifierUnitDecl :st :frame :ast nid: qualNid
+    if ud.isZero then return (ztypes.tid.create from: 0)
+    owner: declParentIdOf :st declId: ud
+    if owner == st.typing.programRoot then return (ztypes.tid.create from: 0)
+    return (nestedUnitMemberTid
+        :st
+        :frame
+        :ast
+        ownerDeclId: owner
+        nestedNameId: (zast.nameid.create from: (st.typing.declNameOf declId: ud))
+        defName: memberId
+    )
+}
+
+# qualifierUnitDecl -- the unit declaration a qualifier path names: a bare name
+# through the environment (a file unit, or a unit a unit declares), each further
+# segment a unit its predecessor declares. 0 when a segment names no unit.
+qualifierUnitDecl: function {
+    st: zenv.ZSymbolTable.view
+    frame: ztypes.declid
+    ast: Ast.view
+    nid: zast.nodeid
+} out ztypes.declid is {
+    none: ztypes.declid.create from: 0
+    if nid.isZero then return none
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case atomid then {
+        fu: unitDeclOfName :st nameId: n.name
+        if fu.isZero.not then return fu
+        return (nestedUnitDeclNamed :st :frame nameId: n.name)
+    } case dottedpath then {
+        pd: qualifierUnitDecl :st :frame :ast nid: n.parent
+        if pd.isZero then return none
+        cd: (st.typing.declFindChild
+            parentDeclId: pd
+            nameId: (atomNameId :ast n: (ast.nodes.get i: n.child.u64))
+        )
+        if cd.isZero then return none
+        isUd: false
+        {
+            cdo: st.typing.decls.get i: cd.u64
+            if cdo.kind.unitDecl then isUd = true
+        }
+        if isUd then return cd
+        return none
+    } else {
+        return none
     }
 }
 

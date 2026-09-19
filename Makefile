@@ -1329,7 +1329,10 @@ perf: $(PERFBIN)
 #
 # +865 when a data block a nested unit declares came to be readable: all of it
 # the source.
-ALLOC_BASELINE := 2586143
+#
+# +1,566 when a type a nested unit declares came to be a type argument: all of
+# it the source.
+ALLOC_BASELINE := 2587709
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
