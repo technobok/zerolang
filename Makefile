@@ -2047,7 +2047,11 @@ fwd-shape-guard: bin/zc
 #
 # Movement in EITHER direction fails: a new name means a regression, a lost one
 # means it was fixed and the row must go in the same commit.
-EAGER_KNOWN :=
+#
+# unused_definition_not_demanded is bad under `--eager` BY DESIGN: it pins that
+# an unused definition is never checked, so its unused definitions are wrong
+# (each names itself), and `--eager` checks every definition and refuses them.
+EAGER_KNOWN := unused_definition_not_demanded
 
 eager-guard: bin/zc
 	@d=$$(mktemp -d); bad=""; \
