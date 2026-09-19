@@ -1332,7 +1332,10 @@ perf: $(PERFBIN)
 #
 # +1,566 when a type a nested unit declares came to be a type argument: all of
 # it the source.
-ALLOC_BASELINE := 2587709
+#
+# +623 when a class came to free the Box it holds: +36 of it the destroy
+# operand a reassignment now spells through destroyOperand, the rest the source.
+ALLOC_BASELINE := 2588332
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

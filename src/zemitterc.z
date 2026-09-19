@@ -20199,7 +20199,7 @@ reassignTargetC: function {
 }
 
 # emitReassignDestroy -- free what the target held before it is overwritten:
-# a String's buffer, a heap collection through its pointer, any other
+# a String's buffer, a heap collection or a box through its pointer, any other
 # destructor-bearing value by address. Nothing for a value that owns no heap.
 emitReassignDestroy: function {
     symtab: zenv.ZSymbolTable.view
@@ -20219,11 +20219,9 @@ emitReassignDestroy: function {
     # the chased mono's registry cname is authoritative (the stamp name still
     # says the typedef)
     rdcb: ctxCname :ctx tid: rtsid
-    if (isHeapPtrCollection :symtab :ctx tid: rtsid) then {
-        buf.append "\{ind}\{rdcb}_destroy(\{nm2});\n"
-        return
-    }
-    buf.append "\{ind}\{rdcb}_destroy(&\{nm2});\n"
+    # a heap collection and a box ARE the pointer their destroy takes
+    rdop: destroyOperand :symtab :ctx tid: rtsid nm: nm2
+    buf.append "\{ind}\{rdcb}_destroy(\{rdop});\n"
 }
 
 # movedZeroText -- what a moved-out source is overwritten with so its own
@@ -38132,6 +38130,7 @@ structDestroyNontrivial: function {
             nameId: (zast.nameid.create from: fnameId.u32.orPanic)
         ).not then {
             if fid == ctx.strTid then return true
+            if (fieldIsBox :symtab fid: (ztypes.tid.create from: fid.u64)) > 0 then return true
             fmid: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: fid.u64)
             if (symtab.reg.needsDestructor typeId: fmid) then return true
             if (isHeapPtrCollection
@@ -38143,6 +38142,14 @@ structDestroyNontrivial: function {
         fi = fi + 1
     }
     return false
+}
+
+# fieldIsBox -- a field's type is a builtin Box: its mono id, else 0. A field's
+# type is the mono its declaration minted, flagged as a box where it was minted.
+fieldIsBox: function {symtab: zenv.ZSymbolTable.view fid: ztypes.tid} out u64 is {
+    if fid.isZero then return 0
+    if (isBoxTid :symtab tid: fid) then return fid
+    return 0
 }
 
 # emitStructDestructor -- a record/class destructor freeing each heap-owning
@@ -38175,10 +38182,17 @@ emitStructDestructor: function {
             parentTypeId: tid
             name: fname.stringView
         ).not then {
+            bxF: fieldIsBox :symtab fid: (ztypes.tid.create from: fid.u64)
             if fid == ctx.strTid then {
                 dsP: memberCPrefix name: fname.stringView
                 ds: "    \{ctx.strC}_free(&p->\{dsP}\{fname});\n"
                 buf.append ds
+            } else if bxF > 0 then {
+                # a Box field IS the cell's pointer: its destroy takes the value
+                bxC: ctxCname :ctx tid: (ztypes.tid.create from: bxF.u64)
+                bxP: memberCPrefix name: fname.stringView
+                dbx: "    \{bxC}_destroy(p->\{bxP}\{fname});\n"
+                buf.append dbx
             } else {
                 fmid: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: fid.u64)
                 fneeds: (
