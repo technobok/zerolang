@@ -1309,7 +1309,12 @@ perf: $(PERFBIN)
 # +3,706 when a generic call's arguments came to lock what they reference while
 # they are walked: +324 of it is the call locks themselves (the old source,
 # compiled by both compilers), the rest the source's own new lock and move legs.
-ALLOC_BASELINE := 2580273
+#
+# +2,013 when a field argument's lock came to be held by the call and a call's
+# pinning result to hold its pins: +1,278 of it is those locks (the new source,
+# compiled by both compilers -- the old compiler reads it, the new one refuses
+# the old source's two views into the registry), the rest the source.
+ALLOC_BASELINE := 2582286
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

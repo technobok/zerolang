@@ -4696,10 +4696,12 @@ ensureUnitInstanceMono: function {
             tplTid: tplId
             templateOpId: opId
         )
+        # a copy: the join grows the registry the name would be a view into
+        tplNm: st.reg.nameOf tid: tplId
         (unitMonoJoinTrie
             :st
             tplTid: tplId
-            tplName: (st.reg.nameViewOf tid: tplId)
+            tplName: tplNm.stringView
             :keys
             monoId: mono
         )
@@ -23000,8 +23002,11 @@ valuePartialConstruction: function {
 } out ztypes.tid is {
     mid: (st.typing.valuePartialAt.get key: call.nid.u64).or d: ztypes.tid
     if mid.isZero then {
+        # a copy: a view into the registry cannot be handed to the call that
+        # grows it
+        tplNm: st.reg.nameOf tid: tplId
         mid = (st.reg.newType
-            name: (st.reg.nameViewOf tid: tplId)
+            name: tplNm.stringView
             typetype: ztypes.ztypetype.genericParam
         )
         st.reg.setGenericOrigin typeId: mid value: tplId.u64
@@ -34130,8 +34135,9 @@ movedFieldPath: function {st: zenv.ZSymbolTable.view ast: Ast.view n: astnode.vi
 }
 
 # memberReadIsField -- the member `nameId` read off the node `parentNid` is a
-# field its owner stores: not a function, which a read calls, and not an `as`
-# constant.
+# field its owner stores: not a function, which a read calls, not an `as`
+# constant, and not a conformance label (`fr.Closer` converts the owner to the
+# protocol; it reads no field).
 memberReadIsField: function {
     st: zenv.ZSymbolTable.view
     parentNid: u64
@@ -34140,6 +34146,11 @@ memberReadIsField: function {
     if nameId.isZero then return false
     pt: walkTypeOf :st nid: parentNid
     if pt.isZero then return false
+    isLabel: false
+    with cfit: st.typing.conformance.iterate do for crow: cfit loop {
+        if crow.implTypeId == pt when crow.labelNameId == nameId.u64 then isLabel = true
+    }
+    if isLabel then return false
     mo: st.typing.declChildOfId parentTypeId: pt :nameId
     match (
         mo
@@ -34463,7 +34474,13 @@ hoistArg: function {
     # receiver locks under a temp holder
     if hown == ztypes.zownership.borrowed then {
         hrt: rootNameIdOf :ast n: (ast.nodes.get i: argId.u64)
-        if hrt.isZero.not then {
+        # a CALL's result pins exactly what that call left: every call drains
+        # the side channel before it pushes its own (pinCallResult), so no
+        # residue can stand in for this argument's -- `(s.substring from: 0
+        # to: 4)` and `(pick :l i: 0)` hold their sources as `s.stringView`
+        # does, and a later argument moving or writing them meets the temp
+        isCallArg: (ast.nodes.get i: argId.u64).call
+        if hrt.isZero.not or isCallArg then {
             # A `.view` parameter only reads its argument, so the hoisted temp
             # locks the source SHARED -- exactly as the bare-name leg already
             # did via `isViewArg`. Without this a PATH-shaped argument
@@ -34948,6 +34965,35 @@ lockBorrowedArgPath: function {
     }
 }
 
+# lockFieldArgForCall -- a field read through names (`o.it`) handed to a
+# locking parameter is also held by the CALL for its duration, so the
+# one-appearance rule sees it: the field's owner or the same field passed
+# again in this call is the same value twice. The hoisted temp's own lock is
+# held by the temp, which another argument's lock never meets as the call's.
+lockFieldArgForCall: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    call: callref
+    arg: argref
+    isViewArg: bool
+} is {
+    opN: ast.nodes.get i: arg.operation.u64
+    if (movedFieldPath :st :ast n: opN).not then return
+    src: ListVal zast.nameid
+    appendValueTuple :ast n: opN dst: src
+    if (st.lookupVarId nameId: (src.get i: 0)).none then return
+    (lockCallArgPath
+        :st
+        pool: ast.names
+        path: src
+        callId: call.nid.u64
+        mutable: isViewArg.not
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+    )
+}
+
 # lockNonTrivialArg -- an argument the call cannot hoist to a temp keeps its
 # source: take it, or lock the path it reads through for the call's duration.
 # A locked path joins `pins`, the locks the call's result may keep.
@@ -34979,6 +35025,7 @@ lockNonTrivialArg: function {
     byRef: isRecvArg or (typeIsReftype :st tid: (ztypes.tid.create from: vt.u64))
     if isLockish when byRef then {
         lockBorrowedArgPath :st :ast :arg :isViewArg :pins :calleePins
+        lockFieldArgForCall :st :ast :call :arg :isViewArg
     }
     hadPending: false
     if st.typing.pendingPins.length > 0 then hadPending = true

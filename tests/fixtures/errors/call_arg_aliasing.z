@@ -1,0 +1,92 @@
+# E0200: a reftype appears once in a call, argument against argument as well as
+# against the receiver, however the argument reaches it. A field read through
+# names took its lock under the argument's temp, which another argument's lock
+# never met as the call's: a field and its owner (`a: c.it :c`, either order)
+# or one field twice was accepted, the callee holding two references to one
+# value. A call's result that points into its input -- `(s.substring from: 0
+# to: 4)`, an `outx` function's -- held nothing at all, so a later argument
+# moved or wrote what it pointed into, and the callee read freed memory. Two
+# fields of one value, two views of one field, and a copy pass
+# (call_arg_fields).
+Item: class {
+    v: i64
+}
+
+Crate: class {
+    it: Item
+}
+
+Holder: class {
+    s: String
+}
+
+both: function {a: Item c: Crate} is {
+    print "\{a.v}"
+}
+
+bothRev: function {c: Crate a: Item} is {
+    print "\{a.v}"
+}
+
+twice: function {a: Item b: Item} is {
+    print "\{a.v} \{b.v}"
+}
+
+viewTake: function {a: StringView t: String.take} is {
+    t.drop
+    print a
+}
+
+viewWrite: function {a: StringView h: Holder} is {
+    h.s = "replaced".string
+    print a
+}
+
+pick: function {l: (List String).view i: u64} outx String.view is {
+    return (l.get :i)
+}
+
+elemTake: function {a: String.view l: (List String).take} is {
+    l.drop
+    print a
+}
+
+fieldAndOwner: function is {
+    c: Crate it: (Item v: 1)
+    both a: c.it :c
+}
+
+ownerAndField: function is {
+    c: Crate it: (Item v: 1)
+    bothRev :c a: c.it
+}
+
+fieldTwice: function is {
+    c: Crate it: (Item v: 1)
+    twice a: c.it b: c.it
+}
+
+substringThenTake: function is {
+    s: "a heap string".string
+    viewTake a: (s.substring from: 0 to: 4) t: s.take
+}
+
+substringBesideOwner: function is {
+    h: Holder s: "a heap string".string
+    viewWrite a: (h.s.substring from: 0 to: 4) :h
+}
+
+outxThenTake: function is {
+    l: List String
+    l.append "a heap string".string
+    elemTake a: (pick :l i: 0) l: l.take
+}
+
+main: function is {
+    fieldAndOwner
+    ownerAndField
+    fieldTwice
+    substringThenTake
+    substringBesideOwner
+    outxThenTake
+}
