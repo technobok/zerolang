@@ -1307,22 +1307,26 @@ perf: $(PERFBIN)
 # compiles with the same count, all of it is the source longer.
 #
 # +3,706 when a generic call's arguments came to lock what they reference while
-# they are walked: +324 of it is the call locks themselves (the old source,
+# they are walked: +84 of it is the call locks themselves (the old source,
 # compiled by both compilers), the rest the source's own new lock and move legs.
 #
 # +2,013 when a field argument's lock came to be held by the call and a call's
-# pinning result to hold its pins: +1,278 of it is those locks (the new source,
+# pinning result to hold its pins: +1,038 of it is those locks (the new source,
 # compiled by both compilers -- the old compiler reads it, the new one refuses
 # the old source's two views into the registry), the rest the source.
 #
 # +1,114 when a definition whose value names itself came to be reported rather
-# than followed down the stack: +240 of it is the open-definition mark each
-# alias-shaped fold pushes, the rest the source.
+# than followed down the stack: all of it the source; the compiler's own source
+# compiles with the same count.
 #
-# +197 when generator lowering came to walk every unit a unit declares: the
-# compiler's own `public:` blocks are walked too, as checkNamespaceBodies walks
-# them.
-ALLOC_BASELINE := 2583459
+# +197 when generator lowering came to walk every unit a unit declares: all of
+# it the source; the compiler's own source compiles with the same count.
+#
+# +1,819 when a generator's `call` came to refuse a written receiver: all of it
+# the source. (The splits above were first measured with the two compilers at
+# paths of different lengths, which alone moves the count by 240 -- argv[0] is
+# an input; they are corrected here.)
+ALLOC_BASELINE := 2585278
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

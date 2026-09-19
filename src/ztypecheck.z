@@ -51283,8 +51283,8 @@ resolveConstantDefs: function {
 validateGeneratorDef: function {
     # where the diagnostics are recorded
     st: zenv.ZSymbolTable
-    # the tree the definition is read from
-    ast: Ast.view
+    # the tree the definition is read from; a written receiver is dropped from it
+    ast: Ast
     # the generator's own name, which every message here names
     defName: StringView
     # the generator definition to check
@@ -51339,28 +51339,102 @@ validateGeneratorDef: function {
             )
         }
         if callId.isZero.not then {
+            np: refuseCallReceiver :st :ast :defName :callId
             cf: ast.nodes.get i: callId.u64
-            if cf.functiondef then {
-                np: cf.parameters.count.u64
-                if np > 1 then {
-                    m1: "'\{defName}' declares \{np} parameters on `call` -- a generator receives at most one value per call"
-                    h1: "keep the one the call sites hand it; read it as `yield`'s own value, not as a binding".string
-                    n1: String
-                    (addErrorH
-                        :st
-                        nodeid: cf.nodeid
-                        lineno: cf.lineno
-                        colno: cf.colno
-                        e: zast.err.typeError
-                        msg: m1
-                        note: n1
-                        hint: h1
-                        width: 4
-                    )
-                }
+            if cf.functiondef when np > 1 then {
+                m1: "'\{defName}' declares \{np} parameters on `call` -- a generator receives at most one value per call"
+                h1: "keep the one the call sites hand it; read it as `yield`'s own value, not as a binding".string
+                n1: String
+                (addErrorH
+                    :st
+                    nodeid: cf.nodeid
+                    lineno: cf.lineno
+                    colno: cf.colno
+                    e: zast.err.typeError
+                    msg: m1
+                    note: n1
+                    hint: h1
+                    width: 4
+                )
             }
         }
     }
+}
+
+# paramNamesReceiver -- the parameter `pId` of a function definition names its
+# receiver: `:this`, or any name typed `this`, `this.view` or `this.borrow`.
+paramNamesReceiver: function {ast: Ast.view pId: u32} out bool is {
+    pm: ast.nodes.get i: pId.u64
+    match (
+        pm
+    ) case namedoperation then {
+        if pm.name == zast.names.wkThis then return true
+        return (paramIsThisReceiverId :ast opId: pm.operation.u32)
+    } case labelvalue then {
+        return pm.name == zast.names.wkThis
+    } else {
+        return false
+    }
+}
+
+# refuseCallReceiver -- a generator's `call` has an implicit receiver, and its
+# parameter list declares only the per-call input: a parameter that names the
+# receiver (`:this`, `g: this`, `this: this.borrow`) is refused, then dropped,
+# so the lowering reads the list as the author meant it rather than taking the
+# receiver for the input. Answers how many parameters are left.
+refuseCallReceiver: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    defName: StringView
+    callId: zast.nodeid
+} out u64 is {
+    params: zast.kidspan first: 0 count: 0
+    {
+        cf: ast.nodes.get i: callId.u64
+        if cf.functiondef.not then return 0
+        params = cf.parameters
+    }
+    kept: ListVal u32
+    dropped: false
+    pi: u64
+    for pi < params.count.u64 loop {
+        pId: zast.kidAt kids: ast.kids span: params i: pi
+        pi = pi + 1
+        pNid: zast.nodeid
+        pLine: u32
+        pCol: u32
+        {
+            pm: ast.nodes.get i: pId.u64
+            pNid = nodeId n: pm
+            pLine = nodeLine n: pm
+            pCol = nodeCol n: pm
+        }
+        if (paramNamesReceiver :ast :pId) then {
+            dropped = true
+            mr: "'\{defName}' writes `call`'s receiver -- a generator's `call` has an implicit receiver, never written in its parameter list"
+            hr: "delete the parameter: the fields are read as `this.x`, and the list declares only the per-call input".string
+            nr: String
+            (addErrorH
+                :st
+                nodeid: pNid
+                lineno: pLine
+                colno: pCol
+                e: zast.err.typeError
+                msg: mr
+                note: nr
+                hint: hr
+                width: 4
+            )
+        } else {
+            kept.append pId.u32
+        }
+    }
+    if dropped then {
+        ks: zast.kidsAdd kids: ast.kids xs: kept
+        cfm: ast.nodes.getMut i: callId.u64
+        if cfm.functiondef then cfm.parameters = ks
+    }
+    return kept.length
 }
 
 # lowerDeclaredGeneratorsInUnit -- prepare every `generator` definition in the
