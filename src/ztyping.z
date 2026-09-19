@@ -211,6 +211,41 @@ monostamp: record {
     node: u64
 }
 
+# monoVariableIn -- node `nid`'s variable as the walk of `mono` bound it: that
+# instance's own answer (`perMono`), else the one every other walk shares.
+monoVariableIn: function {
+    perMono: (MapVV monostamp v: ztypes.vid).view
+    shared: (IdMapV u64 v: ztypes.vid).view
+    mono: u64
+    nid: u64
+} out optionval ztypes.vid is {
+    if mono > 0 then {
+        mg: perMono.get key: (monostamp :mono node: nid)
+        match (
+            mg
+        ) case some then {
+            return (optionval.some mg)
+        } case none then null
+    }
+    return (shared.get key: nid)
+}
+
+# setMonoVariable -- record node `nid`'s variable for the walk of `mono`: an
+# instance walk in its own map, every other walk in the shared one.
+setMonoVariable: function {
+    perMono: (MapVV monostamp v: ztypes.vid)
+    shared: (IdMapV u64 v: ztypes.vid)
+    mono: u64
+    nid: u64
+    vid: ztypes.vid
+} is {
+    if mono > 0 then {
+        perMono.set key: (monostamp :mono node: nid) value: vid
+        return
+    }
+    shared.set key: nid value: vid
+}
+
 # nsbody -- a namespace or hidden subunit whose member BODIES are owed a walk.
 # The demand path resolves its signatures where it finds it; the bodies are
 # walked at the top-level drain, because a body walk inside a resolver runs in
@@ -766,7 +801,15 @@ ZTyping: class {
     funcReturnNode: (IdMapV u64 v: u64
     # the variable a definition owns, where it owns one
     )
-    defVariableId: (IdMapV u64 v: ztypes.vid
+    defVariableId: (IdMapV u64 v: ztypes.vid)
+    # what an INSTANCE walk bound, by instance and node: the variable an atom
+    # names, the variable a definition owns, and the variable a diverging guard
+    # narrows. Every instance walk mints its own variables for the template's
+    # nodes, so the answer is per instance, as monoNodeType's is; the shared
+    # maps hold every other walk's (monoVariableIn)
+    monoAtomVariableId: (MapVV monostamp v: ztypes.vid)
+    monoDefVariableId: (MapVV monostamp v: ztypes.vid)
+    monoPostGuardVarId: (MapVV monostamp v: ztypes.vid)
     # --- compile-time constant values ---
     # The value domain, keyed two ways. nodeConst answers "what does this
     # node evaluate to" for a use site; memberConst answers it for a named
@@ -774,7 +817,6 @@ ZTyping: class {
     # two cannot disagree about what a constant is. Both are sparse -- a few
     # dozen nodes out of a couple hundred thousand -- so a map, not the dense
     # ListVal nodeType uses.
-    )
     nodeConst: (IdMapV u64 v: ztypes.cval
     # each type's compile-time constant members, keyed by owner and name
     )
@@ -2200,6 +2242,55 @@ ZTyping: class {
         this.nodeConst.set key: nid.u64 :value
     }
 
+    # atomVariableIn / defVariableIn / postGuardVarIn -- the variable the atom
+    # `nid` names, the variable the definition `nid` owns, and the variable the
+    # diverging guard statement `nid` narrows, as the walk of `mono` bound them
+    # (monoVariableIn). The checker asks for the walk in progress
+    # (curMonoStamp), the emitter for the body it is emitting (emitMono).
+    atomVariableIn: function {t: this.view mono: u64 nid: u64} out optionval ztypes.vid is {
+        return (monoVariableIn perMono: t.monoAtomVariableId shared: t.atomVariableId :mono :nid)
+    }
+
+    defVariableIn: function {t: this.view mono: u64 nid: u64} out optionval ztypes.vid is {
+        return (monoVariableIn perMono: t.monoDefVariableId shared: t.defVariableId :mono :nid)
+    }
+
+    postGuardVarIn: function {t: this.view mono: u64 nid: u64} out optionval ztypes.vid is {
+        return (monoVariableIn perMono: t.monoPostGuardVarId shared: t.postGuardVarId :mono :nid)
+    }
+
+    # setAtomVariable / setDefVariable / setPostGuardVar -- record them for the
+    # walk in progress (setMonoVariable).
+    setAtomVariable: function {:this nid: u64 vid: ztypes.vid} is {
+        (setMonoVariable
+            perMono: this.monoAtomVariableId
+            shared: this.atomVariableId
+            mono: this.curMonoStamp
+            :nid
+            :vid
+        )
+    }
+
+    setDefVariable: function {:this nid: u64 vid: ztypes.vid} is {
+        (setMonoVariable
+            perMono: this.monoDefVariableId
+            shared: this.defVariableId
+            mono: this.curMonoStamp
+            :nid
+            :vid
+        )
+    }
+
+    setPostGuardVar: function {:this nid: u64 vid: ztypes.vid} is {
+        (setMonoVariable
+            perMono: this.monoPostGuardVarId
+            shared: this.postGuardVarId
+            mono: this.curMonoStamp
+            :nid
+            :vid
+        )
+    }
+
     # nodeTypeFor -- a node's type as the body being emitted sees it: inside an
     # instantiation's body (emitMono) the instance walk's stamp, which a generic
     # body's shared stamp cannot be; else the shared stamp.
@@ -2888,6 +2979,9 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         implicitCreate: (IdMapV u64 v: u64)
         funcReturnNode: (IdMapV u64 v: u64)
         defVariableId: (IdMapV u64 v: ztypes.vid)
+        monoAtomVariableId: (MapVV monostamp v: ztypes.vid)
+        monoDefVariableId: (MapVV monostamp v: ztypes.vid)
+        monoPostGuardVarId: (MapVV monostamp v: ztypes.vid)
         nodeConst: (IdMapV u64 v: ztypes.cval)
         memberConst: (MapVV constslot v: ztypes.cval)
         constEvalState: (MapVV constslot v: u8)

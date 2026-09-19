@@ -301,6 +301,9 @@ schemaSql: function {} out String is {
         s: "CREATE TABLE IF NOT EXISTS mono_node_type (mono_id INTEGER NOT NULL, node_id INTEGER NOT NULL, type_id INTEGER NOT NULL, PRIMARY KEY (mono_id, node_id));\n"
     )
     (acc.append
+        s: "CREATE TABLE IF NOT EXISTS mono_atom_variable (mono_id INTEGER NOT NULL, node_id INTEGER NOT NULL, variable_id INTEGER NOT NULL, PRIMARY KEY (mono_id, node_id));\n"
+    )
+    (acc.append
         s: "CREATE TABLE IF NOT EXISTS mono_node_const (mono_id INTEGER NOT NULL, node_id INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (mono_id, node_id));\n"
     )
     (acc.append
@@ -790,11 +793,25 @@ ZDumper: class {
             rowCg: "INSERT OR IGNORE INTO call_generic_binding VALUES (\{cg.key.call}, \{cg.key.param}, \{cg.value});\n"
             this.acc.append s: rowCg
         }
-        # a template node stamps once per instantiation, so the monostamp's
-        # two ids are the two columns that tell those answers apart
+        this.appendMonoStamps :typing
+        with npit: typing.numericParamRead.iterateItems do for np: npit loop {
+            rowNp: "INSERT OR IGNORE INTO numeric_param_read VALUES (\{np.key}, \{np.value.u64});\n"
+            this.acc.append s: rowNp
+        }
+    }
+
+    # appendMonoStamps -- the answers an instance walk keeps per instance: a
+    # template node stamps once per instantiation, so the monostamp's two ids
+    # are the two columns that tell those answers apart.
+    appendMonoStamps: function {:this typing: ztyping.ZTyping} is {
         with mnit: typing.monoNodeType.iterateItems do for mn: mnit loop {
             rowMn: "INSERT OR IGNORE INTO mono_node_type VALUES (\{mn.key.mono}, \{mn.key.node}, \{mn.value.u64});\n"
             this.acc.append s: rowMn
+        }
+        # an instance walk binds its own variables for the template's atoms
+        with mvit: typing.monoAtomVariableId.iterateItems do for mv: mvit loop {
+            rowMv: "INSERT OR IGNORE INTO mono_atom_variable VALUES (\{mv.key.mono}, \{mv.key.node}, \{mv.value});\n"
+            this.acc.append s: rowMv
         }
         # a numeric generic parameter's read folds to each mono's own argument,
         # so a value or branch that differs from the shared one is kept per mono
@@ -809,10 +826,6 @@ ZDumper: class {
             if mb.value.known then kn = 1
             rowMb: "INSERT OR IGNORE INTO mono_folded_branch VALUES (\{mb.key.mono}, \{mb.key.node}, \{kn}, \{mb.value.stmt.u64});\n"
             this.acc.append s: rowMb
-        }
-        with npit: typing.numericParamRead.iterateItems do for np: npit loop {
-            rowNp: "INSERT OR IGNORE INTO numeric_param_read VALUES (\{np.key}, \{np.value.u64});\n"
-            this.acc.append s: rowNp
         }
     }
 

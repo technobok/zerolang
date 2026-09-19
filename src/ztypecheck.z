@@ -26032,7 +26032,9 @@ baseRunsCall: function {st: zenv.ZSymbolTable.view ast: Ast.view nid: zast.nodei
         isAtom = bn.atomid
     }
     if isCall then return true
-    if isAtom.not or (st.typing.atomVariableId.has key: nid.u64) then return false
+    if (
+        isAtom.not or (st.typing.atomVariableIn mono: st.typing.curMonoStamp nid: nid.u64).none.not
+    ) then return false
     rdo: st.typing.refDecl.get key: nid.u64
     match (
         rdo
@@ -28330,7 +28332,7 @@ checkAtomid: function {
             avo
         ) case some then {
             setav: avo
-            st.typing.atomVariableId.set key: node.nid.u64 value: setav
+            st.typing.setAtomVariable nid: node.nid.u64 vid: setav
         } case none then null
     } case none then {
         result = checkUnboundAtom :st :unitDecl :ast :node
@@ -28791,7 +28793,7 @@ postGuardRecord: function {
     if (st.reg.isPartialOf tid: fullTid) then {
         if (st.typing.postGuardTid.has key: stmtNid.u64) then {
             pgt: (st.lookupVarId nameId: subject).or d: (ztypes.vid.create from: 0)
-            st.typing.postGuardVarId.set key: stmtNid.u64 value: pgt
+            st.typing.setPostGuardVar nid: stmtNid.u64 vid: pgt
         }
         return
     }
@@ -28810,7 +28812,7 @@ postGuardRecord: function {
         ) then return
         st.typing.postGuardName.set key: stmtNid.u64 value: subject
         pgv: (st.lookupVarId nameId: subject).or d: (ztypes.vid.create from: 0)
-        st.typing.postGuardVarId.set key: stmtNid.u64 value: pgv
+        st.typing.setPostGuardVar nid: stmtNid.u64 vid: pgv
         st.typing.postGuardTid.set key: stmtNid.u64 value: fullTid
         st.typing.postGuardArm.set key: stmtNid.u64 value: arm
     } case none then null
@@ -29039,7 +29041,7 @@ refuseBorrowedArms: function {
 # declared itself, which has left scope and which the arm's own end moves.
 armLeafLocal: function {st: zenv.ZSymbolTable ast: Ast.view nid: u32} out ztypes.vid is {
     none: ztypes.vid.create from: 0
-    av: st.typing.atomVariableId.get key: nid.u64
+    av: st.typing.atomVariableIn mono: st.typing.curMonoStamp nid: nid.u64
     if av.none then return none
     cur: st.lookupVarId nameId: (bareAtomNameId n: (ast.nodes.get i: nid.u64))
     if cur.none then return none
@@ -29544,7 +29546,7 @@ checkAssignment: function {
         }
         st.defineVar nameId: asgn.name :vid
         vid2: vid
-        st.typing.defVariableId.set key: asgn.nid.u64 value: vid2
+        st.typing.setDefVariable nid: asgn.nid.u64 vid: vid2
         st.reg.setVariableOrigin id: vid2 origin: ztypes.zvarorigin.local
         setk: vt
         stampGate :st nid: asgn.nid.u64 tid: setk
@@ -30747,7 +30749,7 @@ checkWith: function {
         )
         st.defineVar nameId: withnode.name :vid
         vid2: vid
-        st.typing.defVariableId.set key: withnode.nid.u64 value: vid2
+        st.typing.setDefVariable nid: withnode.nid.u64 vid: vid2
         if (withValueCrossesSuspension :st :ast :withnode :own) then {
             # a literal value's type is the literal placeholder until a slot
             # asks for a width; a field is such a slot
@@ -31085,7 +31087,7 @@ bindForBorrowedElement: function {
     nmId: cond.name
     st.defineVar nameId: nmId :vid
     condNid: nodeId n: (ast.nodes.get i: cond.operation.u64)
-    st.typing.defVariableId.set key: condNid.u64 value: vid
+    st.typing.setDefVariable nid: condNid.u64 :vid
     # `for x: xs.iterate` has no iterator binding to carry
     # the container's lock, so the element carries it: the
     # reference the loop hands out points into the
@@ -34707,7 +34709,7 @@ hoistArg: function {
             )
         }
     }
-    st.typing.defVariableId.set key: assignId.u64 value: vid
+    st.typing.setDefVariable nid: assignId.u64 :vid
     if consumes then (st.invalidate
         nameId: (nameIdOf :ast name: tname.stringView)
         loc: takenHere
@@ -39523,7 +39525,7 @@ bareCalleeTid: function {
                     cvo
                 ) case some then {
                     setcv: cvo
-                    st.typing.atomVariableId.set key: call.callable.u64 value: setcv
+                    st.typing.setAtomVariable nid: call.callable.u64 vid: setcv
                 } case none then null
             }
         } case none then null
@@ -41650,7 +41652,7 @@ rejectGenericValueMatch: function {
     # instance arm dispatch (the template body is shared), so it is
     # rejected rather than silently taking the else path.
     gvid: nodeId n: (ast.nodes.get i: casenode.subject.u64)
-    gvav: st.typing.atomVariableId.get key: gvid.u64
+    gvav: st.typing.atomVariableIn mono: st.typing.curMonoStamp nid: gvid.u64
     match (
         gvav
     ) case some then {
@@ -41790,9 +41792,10 @@ rebindOuterUses: function {st: zenv.ZSymbolTable ast: Ast.view root: u32} is {
         wi = wi + 1
         wn: ast.nodes.get i: wid.u64
         zast.childIdsInto :ast n: wn acc: work
-        if wn.atomid when (st.typing.atomVariableId.has key: wid.u64) then {
+        if wn.atomid when (st.typing.atomVariableIn mono: st.typing.curMonoStamp nid: wid.u64
+        ).none.not then {
             outer: st.lookupVarId nameId: wn.name
-            if outer.some then st.typing.atomVariableId.set key: wid.u64 value: outer
+            if outer.some then st.typing.setAtomVariable nid: wid.u64 vid: outer
         }
     }
 }
@@ -42788,7 +42791,7 @@ checkLabelValueAt: function {
             lvv
         ) case some then {
             setlvv: lvv
-            st.typing.atomVariableId.set key: lv.nid.u64 value: setlvv
+            st.typing.setAtomVariable nid: lv.nid.u64 vid: setlvv
         } case none then null
         return (ztypes.tid.create from: lvo)
     } case none then {
@@ -43050,7 +43053,7 @@ checkStmtInner: function {
         if (st.scopeBindsHere nameId: ar.name).not then {
             vh: st.reg.newVariable ztypeId: ztypes.tid ownership: ztypes.zownership.owned
             st.defineVar nameId: ar.name vid: vh
-            st.typing.defVariableId.set key: ar.nid.u64 value: vh
+            st.typing.setDefVariable nid: ar.nid.u64 vid: vh
         }
         stampLineFrom :st :lineId :innerId
         return zenv.divkind.none
@@ -43939,7 +43942,7 @@ bindFunctionParam: function {
     pnId: pm.name
     st.defineVar nameId: pnId vid: vid2
     if isRoP then lockReadonlyParam :st :ast :pm :pnid :pnId :vid2
-    st.typing.defVariableId.set key: pnid.u64 value: vid2
+    st.typing.setDefVariable nid: pnid.u64 vid: vid2
     st.reg.setVariableOrigin id: vid2 origin: ztypes.zvarorigin.param
 }
 
@@ -49259,7 +49262,8 @@ evalConstNode: function {
     # atoms read a variable -- the two guards below are that record, one for a
     # bare name and one for the root of a path.
     if plan.arm == 2 then {
-        if (st.typing.atomVariableId.has key: nid.u64) then return ztypes.noConst
+        if (st.typing.atomVariableIn mono: st.typing.curMonoStamp nid: nid.u64
+        ).none.not then return ztypes.noConst
         # a literal never needs an OWNED name, and every numeric literal in the
         # program reaches this arm. The member pull below takes the id.
         isLit: false
@@ -49295,7 +49299,8 @@ evalConstNode: function {
     if plan.arm == 4 then {
         vp: numericParamThroughValue :st :ast parentId: plan.parentId childId: plan.childId
         if vp.kind.none.not then return vp
-        if (st.typing.atomVariableId.has key: plan.parentId.u64) then return ztypes.noConst
+        if (st.typing.atomVariableIn mono: st.typing.curMonoStamp nid: plan.parentId.u64
+        ).none.not then return ztypes.noConst
         return (evalConstDotted
             :st
             :scope

@@ -168,12 +168,16 @@ ctxCname: function {ctx: Ctx.view tid: ztypes.tid} out String is {
 
 # atomVid -- the variable a reference node resolves to, or 0.
 atomVid: function {symtab: zenv.ZSymbolTable.view nid: u64} out ztypes.vid is {
-    return ((symtab.typing.atomVariableId.get key: nid).or d: (ztypes.vid.create from: 0))
+    return ((symtab.typing.atomVariableIn mono: symtab.typing.emitMono :nid).or
+        d: (ztypes.vid.create from: 0)
+    )
 }
 
 # defVid -- the variable a binding node introduces, or 0.
 defVid: function {symtab: zenv.ZSymbolTable.view nid: u64} out ztypes.vid is {
-    return ((symtab.typing.defVariableId.get key: nid).or d: (ztypes.vid.create from: 0))
+    return ((symtab.typing.defVariableIn mono: symtab.typing.emitMono :nid).or
+        d: (ztypes.vid.create from: 0)
+    )
 }
 
 # atomVidIfPlain -- the variable an already-emitted value expression names, but
@@ -4067,7 +4071,8 @@ isLocalTake: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.v
         if (ztypecheck.isMoveMarker name: cn.stringView).not then return false
         pn: ast.nodes.get i: n.parent.u64
         if pn.atomid.not then return false
-        return (symtab.typing.atomVariableId.has key: pn.nodeid.u64)
+        return (symtab.typing.atomVariableIn mono: symtab.typing.emitMono nid: pn.nodeid.u64
+        ).none.not
     } else {
         return false
     }
@@ -4230,7 +4235,7 @@ implicitTakeSourceAtom: function {
     nid: u64
     nm: StringView
 } out String is {
-    avo: symtab.typing.atomVariableId.get key: nid
+    avo: symtab.typing.atomVariableIn mono: symtab.typing.emitMono :nid
     match (
         avo
     ) case some then {
@@ -8188,7 +8193,7 @@ collectionValueCallRhs: function {
         # move -- and one naming a FUNCTION is the call it auto-makes. A bare
         # TYPE atom (`Bytes`, `ByteView`) is a construction, so the variable
         # stamp and the function name are what separate them.
-        cav: symtab.typing.atomVariableId.get key: n.nodeid.u64
+        cav: symtab.typing.atomVariableIn mono: symtab.typing.emitMono nid: n.nodeid.u64
         match (
             cav
         ) case some then {
@@ -13366,13 +13371,13 @@ namedCalleeFnId: function {
     calleeIsLocal: (
         cbn0 >
         0 and
-        (symtab.typing.atomVariableId.has key: cbn0) or
-        (symtab.typing.atomVariableId.has key: call.callable.u64)
+        (symtab.typing.atomVariableIn mono: symtab.typing.emitMono nid: cbn0).none.not or
+        (symtab.typing.atomVariableIn mono: symtab.typing.emitMono nid: call.callable.u64).none.not
     )
     fid: ztypes.tid
     if calleeIsLocal.not then fid = userFnId :ast :symtab :ctx name: cn0
     if fid.isZero when cbn0 > 0 then {
-        clv: symtab.typing.atomVariableId.get key: cbn0
+        clv: symtab.typing.atomVariableIn mono: symtab.typing.emitMono nid: cbn0
         match (
             clv
         ) case some then null case none then {
@@ -13689,7 +13694,8 @@ emitSiblingFnCall: function {
 } out String is {
     rcal: ast.nodes.get i: call.callable.u64
     if rcal.atomid.not then return "".string
-    if (symtab.typing.atomVariableId.has key: call.callable.u64) then return "".string
+    if (symtab.typing.atomVariableIn mono: symtab.typing.emitMono nid: call.callable.u64
+    ).none.not then return "".string
     mfid: monoStampIdOf :symtab :ctx nid: call.callable.u64
     if mfid.isZero then mfid = rtid
     return (emitUserFnCall :ast :symtab :ctx :call fid: mfid)
@@ -14311,7 +14317,7 @@ emitAtom: function {
     # stamped variable use first: the local, alias-resolved and C-mangled
     # -- a stamped atom is a LOCAL, so the module-constant probe (an owned
     # key alloc + hash) never runs for it
-    avo: symtab.typing.atomVariableId.get key: n.nodeid.u64
+    avo: symtab.typing.atomVariableIn mono: symtab.typing.emitMono nid: n.nodeid.u64
     match (
         avo
     ) case some then {
@@ -16553,7 +16559,7 @@ emitDottedNativeMarker: function {
 baseAtomNamesFunction: function {symtab: zenv.ZSymbolTable.view n: astnode.view} out bool is {
     anid: atomNodeId :n
     if anid == 0 then return false
-    avo: symtab.typing.atomVariableId.get key: anid
+    avo: symtab.typing.atomVariableIn mono: symtab.typing.emitMono nid: anid
     match (
         avo
     ) case some then {
@@ -16579,7 +16585,8 @@ baseAtomNamesFunction: function {symtab: zenv.ZSymbolTable.view n: astnode.view}
 baseAtomIsFoldedString: function {symtab: zenv.ZSymbolTable.view n: astnode.view} out bool is {
     anid: atomNodeId :n
     if anid == 0 then return false
-    if (symtab.typing.atomVariableId.has key: anid) then return false
+    if (symtab.typing.atomVariableIn mono: symtab.typing.emitMono nid: anid
+    ).none.not then return false
     g: symtab.typing.nodeConst.get key: anid
     match (
         g
@@ -18383,7 +18390,7 @@ emitPrintAtom: function {
     # A stamped local is not a constant, so the probe is skipped for one --
     # the same order emitExpr's atomid arm uses.
     {
-        alo: symtab.typing.atomVariableId.get key: n.nodeid.u64
+        alo: symtab.typing.atomVariableIn mono: symtab.typing.emitMono nid: n.nodeid.u64
         if alo.none then {
             unitTid9: unitTidOf :ast :symtab unitName: ctx.mainName.stringView
             cst: (memberConstStringText
@@ -26112,7 +26119,9 @@ seedPostGuardAlias: function {
     pgRawId: (symtab.typing.postGuardName.get key: pgid).or d: zast.nameid
     pgRawN: zast.poolTextAt pool: ast.names ref: pgRawId
     if pgRawN.length == 0 then return
-    pgrv: (symtab.typing.postGuardVarId.get key: pgid).or d: (ztypes.vid.create from: 0)
+    pgrv: ((symtab.typing.postGuardVarIn mono: symtab.typing.emitMono nid: pgid).or
+        d: (ztypes.vid.create from: 0)
+    )
     if pgrv.isZero then return
     pgRecv: varCName :ctx vid: pgrv name: pgRawN.stringView
     if pgRecv.length == 0 then return
@@ -28710,16 +28719,19 @@ emitUnitMonoFn: function {
     buf: String.borrow
 } is {
     fnm: regNameOf :symtab tid: cfid
+    # the whole function is the instance's: its parameters are the variables
+    # the instance walk bound, in the signature as in the body
+    symtab.typing.emitMono = t
     sig: fnSignature :ast :symtab :ctx name: fnm.stringView fid: cfid :op
     if declOnly then {
         buf.append "\{sig};\n"
+        symtab.typing.emitMono = 0
         return
     }
     buf.append "\{sig} {\n"
     resetFnEmitState :ctx
     registerReftypeParams :ast :symtab :ctx fid: cfid :op
     ctx.curThisTid = ztypes.tid.create from: t
-    symtab.typing.emitMono = t
     emitFnBody :ast :symtab :ctx :op fid: cfid :buf
     symtab.typing.emitMono = 0
     ctx.curThisTid = ztypes.tid.create from: 0
@@ -28932,6 +28944,8 @@ emitFnMonoInstances: function {
         }
         if isMono then {
             fnm: regNameOf :symtab tid: t
+            # the whole function is the instance's (emitUnitMonoFn)
+            symtab.typing.emitMono = t.u64
             sig: (fnSignature
                 :ast
                 :symtab
@@ -28955,7 +28969,6 @@ emitFnMonoInstances: function {
                     op: templateFnOp
                 )
                 ctx.curThisTid = ztypes.tid.create from: t.u64
-                symtab.typing.emitMono = t.u64
                 (emitFnBody
                     :ast
                     :symtab
@@ -28964,10 +28977,10 @@ emitFnMonoInstances: function {
                     fid: (ztypes.tid.create from: t.u64)
                     :buf
                 )
-                symtab.typing.emitMono = 0
                 ctx.curThisTid = ztypes.tid.create from: 0
                 buf.append "}\n\n"
             }
+            symtab.typing.emitMono = 0
         }
         t = ztypes.tid.create from: t + 1
     }
@@ -39177,6 +39190,8 @@ emitMonoMethodAt: function {
     fid: ztypes.tid.create from: mid
     if (symtab.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return
     fn: regNameOf :symtab tid: fid
+    # the whole method is the instance's (emitUnitMonoFn)
+    symtab.typing.emitMono = monoId
     sg: (fnSignature
         :ast
         :symtab
@@ -39188,6 +39203,7 @@ emitMonoMethodAt: function {
     if declOnly then {
         ld: "\{sg};\n"
         buf.append ld
+        symtab.typing.emitMono = 0
         return
     }
     lo: "\{sg} {\n"
@@ -39195,7 +39211,6 @@ emitMonoMethodAt: function {
     resetFnEmitState :ctx
     registerReftypeParams :ast :symtab :ctx :fid op: (ast.nodes.get i: opId.u64)
     ctx.curThisTid = ztypes.tid.create from: monoId
-    symtab.typing.emitMono = monoId
     emitFnBody :ast :symtab :ctx op: (ast.nodes.get i: opId.u64) :fid :buf
     symtab.typing.emitMono = 0
     ctx.curThisTid = ztypes.tid.create from: 0
@@ -40099,6 +40114,10 @@ emitOneMethod: function {
     buf: String.borrow
 } is {
     mc: ctxCname :ctx tid: mid
+    # a method of an instance is the instance's whole (emitUnitMonoFn)
+    if (symtab.reg.genericOriginOf tid: (ztypes.tid.create from: thisTid)).isZero.not then {
+        symtab.typing.emitMono = thisTid
+    }
     ret: methodReturnC :ast :symtab :ctx :mid :thisTid :op
     params: String
     pnames: List String
@@ -40132,11 +40151,7 @@ emitOneMethod: function {
         isGen: setupGenCtx :ast :symtab :ctx :mid :op
         if isGen then emitGenPrologue :ctx :buf
         ctx.curThisTid = ztypes.tid.create from: thisTid
-        if (symtab.reg.genericOriginOf tid: (ztypes.tid.create from: thisTid)).isZero.not then {
-            symtab.typing.emitMono = thisTid
-        }
         emitFnBody :ast :symtab :ctx :op fid: mid :buf
-        symtab.typing.emitMono = 0
         ctx.curThisTid = ztypes.tid.create from: 0
         if isGen then {
             emitGenEpilogue :ctx :buf
@@ -40144,6 +40159,7 @@ emitOneMethod: function {
         }
         buf.append "}\n\n"
     }
+    symtab.typing.emitMono = 0
     resetFnEmitState :ctx
 }
 

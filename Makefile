@@ -1355,7 +1355,10 @@ perf: $(PERFBIN)
 #
 # -10,513 when a scope came to be named by its node: no label string per body
 # scope, and a template walk's scopes are lazy like every other walk's.
-ALLOC_BASELINE := 2586596
+#
+# +4,178 when an instance walk came to keep its own variable ids: all of it the
+# source (the per-instance maps themselves cost 3).
+ALLOC_BASELINE := 2590774
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
