@@ -26836,7 +26836,7 @@ checkTransferMarker: function {
             msg: mvs
         )
     }
-    if (isMoveMarkerId nameId: cnId) then checkFieldMove :st :ast n: (ast.nodes.get i: dp.nid.u64)
+    if (isMoveMarkerId nameId: cnId) then takeMarkerOnField :st :ast :dp
     mkRootId: bareAtomNameId n: (ast.nodes.get i: dp.parent.u64)
     # a numeric literal is an atom too, and names no variable
     notVariable: mkRootId.isZero or (isNumericLiteralNameAt :ast ref: mkRootId)
@@ -28102,10 +28102,10 @@ reportTakenUseAt: function {
 }
 
 # reportMovedArgRead -- a part of a call that reads `path` when an earlier
-# argument of a call still open moved a field overlapping it: the callee would
-# hold the field beside the value moved out of it, exactly as it would a name
-# passed after it moved. A call that has completed is not open, so what it
-# moved reads empty afterwards.
+# argument of a call still open moved a generator's local overlapping it (the
+# one field that moves, genLocalField): the callee would hold the local beside
+# the value moved out of it, exactly as it would a name passed after it moved. A
+# call that has completed is not open, so what it moved reads empty afterwards.
 reportMovedArgRead: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -30301,13 +30301,13 @@ refuseBorrowedReassign: function {
     )
 }
 
-# refuseBorrowedTake -- a value pinned to storage something else owns cannot be
-# taken by a parameter (refuseBorrowedMove); a field read through names moves out
-# of its field instead.
+# refuseBorrowedTake -- a value pinned to storage something else owns -- a field,
+# an element a call hands back -- cannot be taken by a parameter
+# (refuseBorrowedMove). A generator's local (genLocalField) moves as a local does.
 refuseBorrowedTake: function {
     st: zenv.ZSymbolTable ast: Ast.view n: astnode.view vt: ztypes.tid
 } is {
-    if (movedFieldPath :st :ast :n) then return
+    if (genLocalField :st :ast :n) then return
     refuseBorrowedMove :st :ast :n :vt verb: "into a taking argument"
 }
 
@@ -30322,7 +30322,16 @@ refuseBorrowedMove: function {
 } out bool is {
     bt: borrowedValueText :st :ast :n :vt
     if bt.length == 0 then return false
-    mbv: "Cannot move borrowed variable '\{bt}' \{verb} — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
+    borrowedMoveError :st :n text: bt.stringView :verb
+    return true
+}
+
+# borrowedMoveError -- the refusal of moving the borrowed value `n`, spelt `text`,
+# `verb` into storage that owns what it holds.
+borrowedMoveError: function {
+    st: zenv.ZSymbolTable n: astnode.view text: StringView verb: StringView
+} is {
+    mbv: "Cannot move borrowed variable '\{text}' \{verb} — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
     (addError
         :st
         nodeid: (nodeId :n)
@@ -30331,7 +30340,6 @@ refuseBorrowedMove: function {
         e: zast.err.ownerError
         msg: mbv
     )
-    return true
 }
 
 # consumeReassignPins -- a pinning call on the right of `x = ...` keeps its
@@ -34277,9 +34285,26 @@ readonlyMoveError: function {
     )
 }
 
+# takeMarkerOnField -- `h.p.take`. A field is borrowed from its owner whatever
+# owns the owner, and changes only by `swap`, so a take of one that owns what it
+# holds moves a borrowed value and is refused in the words a borrowed name's
+# `.take` gets. A field that owns nothing -- a number, a record, a view -- hands
+# on its value, and a generator's local (genLocalField) moves as a local does:
+# both answer to checkFieldMove.
+takeMarkerOnField: function {st: zenv.ZSymbolTable ast: Ast.view dp: dpref} is {
+    fieldN: ast.nodes.get i: dp.parent.u64
+    if (movedFieldPath :st :ast n: fieldN) when (genLocalField :st :ast n: fieldN).not then {
+        ft: walkTypeOf :st nid: dp.parent.u64
+        if (refuseBorrowedMove :st :ast n: fieldN vt: ft verb: "with '.take'") then return
+    }
+    checkFieldMove :st :ast n: (ast.nodes.get i: dp.nid.u64)
+}
+
 # checkFieldMove -- a move out of a field leaves the field empty, which is a write
 # to it: refused, as any write is, through a readonly root or a locked path. A
-# name moved whole is not a field and answers to the move rules for names.
+# name moved whole is not a field and answers to the move rules for names. Only a
+# generator's local (genLocalField) and a field that owns nothing get here: every
+# other field in a moving position is refused as a borrowed value.
 checkFieldMove: function {st: zenv.ZSymbolTable ast: Ast.view n: astnode.view} is {
     if (movedFieldPath :st :ast :n).not then return
     checkWriteLock :st :ast :n verb: "move" moving: true
@@ -34298,6 +34323,36 @@ movedFieldPath: function {st: zenv.ZSymbolTable.view ast: Ast.view n: astnode.vi
         if (memberReadIsField :st parentNid: n.parent.u64 nameId: cid).not then return false
         if p.atomid then return true
         return (movedFieldPath :st :ast n: p)
+    } else {
+        return false
+    }
+}
+
+# genLocalField -- `n`, less a move marker, reads a field generator lowering made
+# for a local of the body: the author wrote `s`, the walk reads `this.s`. It is a
+# local to the programmer, which the instance stores across suspensions, so it
+# moves as a local does. A field the author declared is a field like any other.
+genLocalField: function {st: zenv.ZSymbolTable.view ast: Ast.view n: astnode.view} out bool is {
+    if st.typing.genLocalFields.length == 0 then return false
+    match (
+        n
+    ) case dottedpath then {
+        cid: atomNameId :ast n: (ast.nodes.get i: n.child.u64)
+        if (isMoveMarkerId nameId: cid) then return (genLocalField
+            :st
+            :ast
+            n: (ast.nodes.get i: n.parent.u64)
+        )
+        pt: walkTypeOf :st nid: n.parent.u64
+        if pt.isZero then return false
+        md: st.typing.declMemberIdOf parentTypeId: pt nameId: cid
+        if md.isZero then return false
+        fieldNode: u32
+        {
+            mo: st.typing.decls.get i: md.u64
+            fieldNode = mo.node
+        }
+        return (st.typing.genLocalFields.has item: fieldNode.u64)
     } else {
         return false
     }
@@ -35366,17 +35421,19 @@ moveArmLeavesIntoArgument: function {
     }
 }
 
-# moveArmFieldLeaves -- an arm of a taken value that reads a field moves out of it
-# on that arm's path, as `f s: h.p` does: the write is checked where the field is
-# read, the emitter zeroes it there, and the rest of the call may not read it. An
-# arm that reads storage no field of a local owns is refused instead.
+# moveArmFieldLeaves -- an arm of a taken value that reads storage something else
+# owns -- a field, an element a call hands back -- is refused, as the same value
+# written alone is. An arm that reads a generator's local (genLocalField) moves out
+# of the instance on that arm's path, as `f s: s` does there: the write is checked
+# where the local is read, the emitter zeroes it there, and the rest of the call
+# may not read it.
 moveArmFieldLeaves: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} is {
     leaves: ListVal u32
     armBorrowedLeaves :st :ast :nid into: leaves
     with lit: leaves.iterate do for lf: lit loop {
         ln: ast.nodes.get i: lf.u64
         lt: walkTypeOf :st nid: lf.u64
-        if (localFieldPath :st :ast n: ln).not then {
+        if (genLocalField :st :ast n: ln).not then {
             refuseBorrowedMove :st :ast n: ln vt: lt verb: "into a taking argument"
         } else if (typeIsReftype :st tid: lt) when (st.reg.needsDestructor typeId: lt) then {
             errF: st.typing.errors.length
@@ -36210,15 +36267,17 @@ checkTypedCallArg: function {
         if isTake then dispVal = ztypes.zparamownership.takeMode
         stampArgDisposition :st :ast op: arg.operation own: dispVal
     }
-    # a field handed to a taking parameter is moved out of: `.take` on it was
-    # checked where the marker is
-    # and what the rest of the call reads of that field is refused
+    # a field handed to a taking parameter is refused as a borrowed value; a
+    # generator's local moves out, `.take` on it checked where the marker is, and
+    # what the rest of the call reads of it is refused
     if dispHit when isTake then {
         opN: ast.nodes.get i: arg.operation.u64
-        refuseBorrowedTake :st :ast n: opN :vt
         errM: st.typing.errors.length
-        if (isMarkedMove :ast n: opN).not then checkFieldMove :st :ast n: opN
-        if st.typing.errors.length == errM when (movedFieldPath :st :ast n: opN) then {
+        refuseBorrowedTake :st :ast n: opN :vt
+        if st.typing.errors.length == errM when (isMarkedMove :ast n: opN).not then {
+            checkFieldMove :st :ast n: opN
+        }
+        if st.typing.errors.length == errM when (genLocalField :st :ast n: opN) then {
             mvp: ListVal zast.nameid
             appendValueTuple :ast n: opN dst: mvp
             st.recordMovedArg path: mvp.listView
@@ -37358,15 +37417,10 @@ reportReturnedBareField: function {
     if st.typing.currentReturnsBorrow then return
     bfn: returnedBareFieldName :ast :st nid: arg.operation
     if bfn.length == 0 then return
-    mbf: "Cannot return field '\{bfn}' as a bare read — the owner still frees it; return '\{bfn}.copy' (duplicate) or '\{bfn}.take' (move out)"
-    (addError
-        :st
-        nodeid: (nodeId n: (ast.nodes.get i: arg.operation.u64))
-        lineno: (nodeLine n: (ast.nodes.get i: arg.operation.u64))
-        colno: (nodeCol n: (ast.nodes.get i: arg.operation.u64))
-        e: zast.err.ownerError
-        msg: mbf
-    )
+    fieldN: ast.nodes.get i: arg.operation.u64
+    txt: String
+    exprTextOf :ast n: fieldN dst: txt
+    borrowedMoveError :st n: fieldN text: txt.stringView verb: "as an owned result"
 }
 
 # recordReturnedOwnedLocal -- a returned owned local is CONSUMED: record the
@@ -37704,8 +37758,8 @@ lockMethodReceiver: function {
     rroId: zast.nameid
 } out bool is {
     recvShared: true
-    # the receiver is passed by reference, so a field an argument moved out of
-    # it is refused as a later argument's read of that field is
+    # the receiver is passed by reference, so a generator's local an argument
+    # moved out of it is refused as a later argument's read of that local is
     if st.movedArgDepths.length > 0 then {
         mrr: ListVal zast.nameid
         {
@@ -40298,10 +40352,10 @@ checkConcreteGenericArg: function {
 # lockGenericValueArg -- what a generic call does to one value argument's
 # source, placed while the arguments are walked and in their order, exactly as a
 # concrete call's walk places it: a later argument that moves the same value
-# meets this one's lock, and one that reads a field this one moved out meets the
-# move. The instance is not minted yet, so the TEMPLATE's parameter answers; each
-# instance carries its markers. A name moved into a taking parameter is consumed
-# once the instance is known (lockGenericCallArg).
+# meets this one's lock, and one that reads a generator's local this one moved
+# out meets the move. The instance is not minted yet, so the TEMPLATE's
+# parameter answers; each instance carries its markers. A name moved into a
+# taking parameter is consumed once the instance is known (lockGenericCallArg).
 lockGenericValueArg: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -40395,9 +40449,10 @@ lockProjectionPins: function {
     }
 }
 
-# moveGenericFieldArg -- a field handed to a generic call's taking parameter is
-# moved out of it: the emitter zeroes it, a move through a readonly or locked
-# path is refused, and the rest of the call may not read it.
+# moveGenericFieldArg -- a path handed to a generic call's taking parameter: a
+# field is refused as a borrowed value, and a generator's local moves out of the
+# instance -- the emitter zeroes it, a move through a locked path is refused, and
+# the rest of the call may not read it.
 moveGenericFieldArg: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -40406,10 +40461,12 @@ moveGenericFieldArg: function {
     vt: ztypes.tid
 } is {
     stampArgDisposition :st :ast op: arg.operation own: ztypes.zparamownership.takeMode
-    refuseBorrowedTake :st :ast n: opN :vt
     errM: st.typing.errors.length
-    if (isMarkedMove :ast n: opN).not then checkFieldMove :st :ast n: opN
-    if st.typing.errors.length == errM when (movedFieldPath :st :ast n: opN) then {
+    refuseBorrowedTake :st :ast n: opN :vt
+    if st.typing.errors.length == errM when (isMarkedMove :ast n: opN).not then {
+        checkFieldMove :st :ast n: opN
+    }
+    if st.typing.errors.length == errM when (genLocalField :st :ast n: opN) then {
         mvp: ListVal zast.nameid
         appendValueTuple :ast n: opN dst: mvp
         st.recordMovedArg path: mvp.listView
@@ -51723,8 +51780,14 @@ lowerDeclaredGeneratorsInUnit: function {
                 callFnId: 0
                 wrapperNodeId: 0
                 readsAbsentInput: false
+                localFields: ListVal u32
             )
             zgenerator.lowerDeclared :ast objId: opId dst: gd
+            # the fields made for the body's locals move as locals do
+            # (genLocalField)
+            with lfit: gd.localFields.iterate do for lf: lfit loop (st.typing.genLocalFields.add
+                item: lf.u64
+            )
             # `yield` is in scope for exactly this body, and the pass that
             # prepared the body is what knows which body that is
             if gd.callFnId > 0 then (st.typing.generatorCallBodies.add

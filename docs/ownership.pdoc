@@ -392,11 +392,11 @@ variable 'v' into an owned binding").
 
 An arm that reads storage something else owns answers where the value lands the
 way the same read written alone does. A binding is a second name for it
-(#~"r: if c then h.p else h.q" pins both fields and frees nothing). A slot that
-takes the value moves a field out of it on that arm's path, so
-#~"keep s: (if c then h.p else made)" leaves #~"h.p" empty when #~"c" held. A
-reassignment of an owned local, a return, or a taking slot given an element a
-list still owns is refused with the words that read gets alone.
+(#~"r: if c then h.p else h.q" pins both fields and frees nothing). A
+reassignment of an owned local, a return, or a taking slot is refused with the
+words that read gets alone: a field and an element a list still owns never move
+out (#~"keep s: (if c then h.p else made)" is "Cannot move borrowed variable
+'h.p' into a taking argument").
 
 #----: Ownership Transfer Inside Loops
 
@@ -940,18 +940,12 @@ aliasing and is the property #~"docs/spec.pdoc" calls 'no aliasing for
 reftypes'. Top-level #~"data" items are exempt -- they are immutable and
 never locked.
 
-A field an argument moves out -- #~"h.p.take", or #~"h.p" handed to a
-#~".take" parameter -- is gone for the rest of that call, as a moved name is: a
-later argument, or the receiver, that reads the field or its owner is refused
-with #~"cannot use 'h.p' after ownership transfer" (#~"both s: h.p h: h",
-#~"h.useWith s: h.p", #~"withLength s: h.p n: h.p.length"). A sibling field stays
-free (#~"pair s: h.p t: h.q"), and a read written before the move sees the
-field whole. From the move on, the owner reads the field empty: what the same
-statement runs after that call -- an enclosing call's later argument, the other
-operand, the next interpolation part -- sees it so, and a second call that moves
-it again (#~"(keep s: h.p) + (keep s: h.p)") moves the empty value. The other order is
-refused as a passed name's move is: #~"ownerFirst h: h s: h.p" gives
-#~"Cannot move 'h.p': this call already passes 'h'".
+A field never moves out of its owner: it is borrowed whatever owns the owner,
+and only #~"swap" exchanges its value (see Moving a borrowed value into an
+owner). A generator's local is a local to the programmer, though the lowering
+keeps it in the instance across suspensions: moved into a #~".take" parameter,
+it is gone for the rest of that call as a moved name is, and a later argument
+that reads it is refused.
 
 #---: Call-scoped Locking Algorithm
 
@@ -1264,12 +1258,16 @@ A value read out of storage something else owns -- a reftype field
 (#~"h.p"), an element a call hands back pinned to its container
 (#~"l.get i: 0") -- cannot move into storage that owns what it holds: a
 reassignment of an owned local or of a field (#~"r = h.p", #~"h.q = h.p"), a
-taking argument, a constructor field or a collection element given
-#~"l.get i: 0". Both owners would free it. The refusal is the borrowed-name
-one: "Cannot move borrowed variable 'l.get i: 0' into a taking argument".
-Write #~".copy" to keep the source, #~".take" to move a field out, or put a new
-value in the slot (#~"h.p = v", which destroys the old one) or #~"swap" two.
-A field handed to a slot that takes it is already a move out of the field.
+return, a taking argument, a constructor field or a collection element. Both
+owners would free it. The refusal is the borrowed-name one: "Cannot move
+borrowed variable 'h.p' into a taking argument". A field is borrowed from its
+owner whatever owns the owner, so #~".take" on one that owns what it holds is
+refused the same way ("Cannot move borrowed variable 'h.p' with '.take'"); a
+field that owns nothing -- a number, a record, a view -- hands on a copy.
+Write #~".copy" to keep the source, put a new value in the slot (#~"h.p = v",
+which destroys the old one), or #~"swap" the value out: #~"x: String" then
+#~"x swap h.p" leaves #~"h.p" holding an empty String and #~"x" owning what it
+held.
 
 #---: Returning a borrowed parameter as owned
 

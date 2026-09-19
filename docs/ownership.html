@@ -549,11 +549,11 @@ gets (<code>r: if c then v else z</code> with <code>v: String.view</code>: "Cann
 variable 'v' into an owned binding").</p>
 <p>An arm that reads storage something else owns answers where the value lands the
 way the same read written alone does. A binding is a second name for it
-(<code>r: if c then h.p else h.q</code> pins both fields and frees nothing). A slot that
-takes the value moves a field out of it on that arm's path, so
-<code>keep s: (if c then h.p else made)</code> leaves <code>h.p</code> empty when <code>c</code> held. A
-reassignment of an owned local, a return, or a taking slot given an element a
-list still owns is refused with the words that read gets alone.</p>
+(<code>r: if c then h.p else h.q</code> pins both fields and frees nothing). A
+reassignment of an owned local, a return, or a taking slot is refused with the
+words that read gets alone: a field and an element a list still owns never move
+out (<code>keep s: (if c then h.p else made)</code> is "Cannot move borrowed variable
+'h.p' into a taking argument").</p>
 <h4 id="ownership-transfer-inside-loops"><a href="#ownership-transfer-inside-loops">6.1.2. Ownership Transfer Inside Loops</a></h4>
 <p>A <code>for</code> loop runs its conditions and its body zero or more times. Moving a
 variable declared <em><strong>outside</strong></em> the loop on a path that reaches the next
@@ -1003,18 +1003,12 @@ axes: argument-versus-argument and argument-versus-receiver). This prevents
 aliasing and is the property <code>docs/spec.pdoc</code> calls 'no aliasing for
 reftypes'. Top-level <code>data</code> items are exempt -- they are immutable and
 never locked.</p>
-<p>A field an argument moves out -- <code>h.p.take</code>, or <code>h.p</code> handed to a
-<code>.take</code> parameter -- is gone for the rest of that call, as a moved name is: a
-later argument, or the receiver, that reads the field or its owner is refused
-with <code>cannot use 'h.p' after ownership transfer</code> (<code>both s: h.p h: h</code>,
-<code>h.useWith s: h.p</code>, <code>withLength s: h.p n: h.p.length</code>). A sibling field stays
-free (<code>pair s: h.p t: h.q</code>), and a read written before the move sees the
-field whole. From the move on, the owner reads the field empty: what the same
-statement runs after that call -- an enclosing call's later argument, the other
-operand, the next interpolation part -- sees it so, and a second call that moves
-it again (<code>(keep s: h.p) + (keep s: h.p)</code>) moves the empty value. The other order is
-refused as a passed name's move is: <code>ownerFirst h: h s: h.p</code> gives
-<code>Cannot move 'h.p': this call already passes 'h'</code>.</p>
+<p>A field never moves out of its owner: it is borrowed whatever owns the owner,
+and only <code>swap</code> exchanges its value (see Moving a borrowed value into an
+owner). A generator's local is a local to the programmer, though the lowering
+keeps it in the instance across suspensions: moved into a <code>.take</code> parameter,
+it is gone for the rest of that call as a moved name is, and a later argument
+that reads it is refused.</p>
 <h3 id="call-scoped-locking-algorithm"><a href="#call-scoped-locking-algorithm">8.3. Call-scoped Locking Algorithm</a></h3>
 <p>When a function is called, locks are taken on argument paths and the
 receiver path, then released when the call returns:</p>
@@ -1287,12 +1281,16 @@ remediation (<code>.copy</code>, <code>.take</code>, or a non-owned destination)
 (<code>h.p</code>), an element a call hands back pinned to its container
 (<code>l.get i: 0</code>) -- cannot move into storage that owns what it holds: a
 reassignment of an owned local or of a field (<code>r = h.p</code>, <code>h.q = h.p</code>), a
-taking argument, a constructor field or a collection element given
-<code>l.get i: 0</code>. Both owners would free it. The refusal is the borrowed-name
-one: "Cannot move borrowed variable 'l.get i: 0' into a taking argument".
-Write <code>.copy</code> to keep the source, <code>.take</code> to move a field out, or put a new
-value in the slot (<code>h.p = v</code>, which destroys the old one) or <code>swap</code> two.
-A field handed to a slot that takes it is already a move out of the field.</p>
+return, a taking argument, a constructor field or a collection element. Both
+owners would free it. The refusal is the borrowed-name one: "Cannot move
+borrowed variable 'h.p' into a taking argument". A field is borrowed from its
+owner whatever owns the owner, so <code>.take</code> on one that owns what it holds is
+refused the same way ("Cannot move borrowed variable 'h.p' with '.take'"); a
+field that owns nothing -- a number, a record, a view -- hands on a copy.
+Write <code>.copy</code> to keep the source, put a new value in the slot (<code>h.p = v</code>,
+which destroys the old one), or <code>swap</code> the value out: <code>x: String</code> then
+<code>x swap h.p</code> leaves <code>h.p</code> holding an empty String and <code>x</code> owning what it
+held.</p>
 <h3 id="returning-a-borrowed-parameter-as-owned"><a href="#returning-a-borrowed-parameter-as-owned">9.2. Returning a borrowed parameter as owned</a></h3>
 <p>A function declared <code>out T</code> returns an owned value. Returning a
 borrowed parameter directly would alias the caller's heap data:</p>

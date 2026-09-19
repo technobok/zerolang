@@ -1348,7 +1348,11 @@ perf: $(PERFBIN)
 #
 # +161 when only a generic unit's instantiation came to have its arguments
 # resolved at completion: all of it the source.
-ALLOC_BASELINE := 2595388
+#
+# +1,721 when a field came never to move: about a hundred are the empty Ast a
+# swap-out constructs per parse (89defeea), the rest the source of the refusal
+# and of the generator local map.
+ALLOC_BASELINE := 2597109
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
