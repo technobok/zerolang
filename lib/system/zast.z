@@ -60,6 +60,7 @@ public: unit {
     :appendSpan
     :childIds
     :childIdsInto
+    :cloneTreeAt
     :childIdsAt
     :spanEndLineAt
     :stmtLineCount
@@ -2090,6 +2091,311 @@ childIdsInto: function {ast: Ast.view n: astnode.view acc: ListVal u32} is {
         appendIds :acc ids: ast.units
     } else null
 }
+
+# cloneTreeAt -- a deep copy of the subtree the row `nid` names: every row a
+# fresh node, every position kept. The children are copied and interned first,
+# in canonical order (childIdsInto), then the copy's own slot is reserved; each
+# row view is scoped to a block that lends nothing. Answers the copy, which the
+# caller interns (tableAdd). A program row copies without its units.
+cloneTreeAt: function {ast: Ast nid: nodeid} out astnode is {
+    kids: ListVal u32
+    {
+        n: ast.nodes.get i: nid.u64
+        childIdsInto :ast :n acc: kids
+    }
+    cloned: ListVal u32
+    ki: u64
+    for ki < kids.length loop {
+        c: cloneTreeAt :ast nid: (nodeid.create from: (kids.get i: ki))
+        cloned.append (tableAdd :ast n: c)
+        ki = ki + 1
+    }
+    myId: tableReserve :ast
+    built: astnode.placeholder
+    {
+        n: ast.nodes.get i: nid.u64
+        built = cloneArm :n :myId :cloned kids: ast.kids
+    }
+    return built
+}
+
+# cloneArm -- the copy of `n`'s arm under `myId`, its children the interned
+# copies in `cloned` (canonical childIds order; an absent optional child is
+# simply not there). Reads the view only.
+cloneArm: function {
+    kids: ListVal u32
+    n: astnode.view
+    myId: nodeid
+    cloned: (ListVal u32).view
+} out astnode is {
+    match (
+        n
+    ) case atomid then {
+        return (astnode.atomid (atomidrow
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            name: n.name
+        )
+        )
+    } case labelvalue then {
+        return (astnode.labelvalue (labelvaluerow
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            name: n.name
+        )
+        )
+    } case dottedpath then {
+        return (astnode.dottedpath (dottedpathrow
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            parent: (nodeid.create from: (cloned.get i: 0))
+            child: (nodeid.create from: (cloned.get i: 1))
+        )
+        )
+    } case call then {
+        return (astnode.call (callrow
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            callable: (nodeid.create from: (cloned.get i: 0))
+            arguments: (kidsAddWindow :kids xs: (cloned.slice from: 1 to: cloned.length))
+            infix: n.infix
+        )
+        )
+    } case namedoperation then {
+        return (astnode.namedoperation (namedoperationrow
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            name: n.name
+            operation: (nodeid.create from: (cloned.get i: 0))
+        )
+        )
+    } case statement then {
+        return (astnode.statement (statementrow
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            statements: (kidsAddWindow :kids xs: (cloned.slice from: 0 to: cloned.length))
+        )
+        )
+    } case statementline then {
+        return (astnode.statementline (statementlinerow
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            statementline: (nodeid.create from: (cloned.get i: 0))
+        )
+        )
+    } case assignment then {
+        return (astnode.assignment (assignmentrow
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            name: n.name
+            value: (nodeid.create from: (cloned.get i: 0))
+        )
+        )
+    } case reassignment then {
+        return (astnode.reassignment (reassignmentrow
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            topath: (nodeid.create from: (cloned.get i: 0))
+            value: (nodeid.create from: (cloned.get i: 1))
+        )
+        )
+    } case swapstmt then {
+        return (astnode.swapstmt (swapstmtrow
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            lhs: (nodeid.create from: (cloned.get i: 0))
+            rhs: (nodeid.create from: (cloned.get i: 1))
+        )
+        )
+    } case ifexpr then {
+        k: n.clauses.count.u64
+        els: nodeid
+        if n.elseclause > 0 then els = nodeid.create from: (cloned.get i: k)
+        return (astnode.ifexpr (ifrow
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            clauses: (kidsAddWindow :kids xs: (cloned.slice from: 0 to: k))
+            elseclause: els
+        )
+        )
+    } case ifclause then {
+        k: n.conditions.count.u64
+        return (astnode.ifclause (ifclauserow
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            conditions: (kidsAddWindow :kids xs: (cloned.slice from: 0 to: k))
+            statement: (nodeid.create from: (cloned.get i: k))
+        )
+        )
+    } case forexpr then {
+        k: n.conditions.count.u64
+        bodyId: nodeid
+        postsAt: k
+        if n.body > 0 then {
+            bodyId = nodeid.create from: (cloned.get i: k)
+            postsAt = k + 1
+        }
+        return (astnode.forexpr (forrow
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            conditions: (kidsAddWindow :kids xs: (cloned.slice from: 0 to: k))
+            body: bodyId
+            postconditions: (kidsAddWindow
+                :kids
+                xs: (cloned.slice from: postsAt to: cloned.length)
+            )
+        )
+        )
+    } case doexpr then {
+        return (astnode.doexpr (dorow
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            statement: (nodeid.create from: (cloned.get i: 0))
+        )
+        )
+    } case withexpr then {
+        return (astnode.withexpr (withrow
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            name: n.name
+            value: (nodeid.create from: (cloned.get i: 0))
+            body: (nodeid.create from: (cloned.get i: 1))
+        )
+        )
+    } case caseexpr then {
+        k: n.clauses.count.u64
+        els: nodeid
+        if n.elseclause > 0 then els = nodeid.create from: (cloned.get i: k + 1)
+        return (astnode.caseexpr (caserow
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            subject: (nodeid.create from: (cloned.get i: 0))
+            clauses: (kidsAddWindow :kids xs: (cloned.slice from: 1 to: k + 1))
+            elseclause: els
+        )
+        )
+    } case caseclause then {
+        return (astnode.caseclause (caseclauserow
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            name: n.name
+            matcharm: (nodeid.create from: (cloned.get i: 0))
+            statement: (nodeid.create from: (cloned.get i: 1))
+        )
+        )
+    } case atomstring then {
+        return (astnode.atomstring (atomstringrow
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            stringparts: (kidsAddWindow :kids xs: (cloned.slice from: 0 to: cloned.length))
+        )
+        )
+    } case stringchunk then {
+        ckL: n.chunkKind
+        return (astnode.stringchunk (stringchunkrow
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            text: n.text
+            chunkKind: ckL
+        )
+        )
+    } case error then {
+        return (astnode.error (errorrow
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            width: n.width
+            err: n.err
+            msg: n.msg
+            fsno: n.fsno
+            note: n.note
+            hint: n.hint
+        )
+        )
+    } case datablock then {
+        k: n.elements.count.u64
+        ot: nodeid
+        if n.outType > 0 then ot = nodeid.create from: (cloned.get i: k)
+        return (astnode.datablock (datablockrow
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            elements: (kidsAddWindow :kids xs: (cloned.slice from: 0 to: k))
+            outType: ot
+        )
+        )
+    } case functiondef then {
+        at: u64
+        rt: nodeid
+        if n.returntype > 0 then {
+            rt = nodeid.create from: (cloned.get i: at)
+            at = at + 1
+        }
+        pn: n.parameters.count.u64
+        ps: kidsAddWindow :kids xs: (cloned.slice from: at to: at + pn)
+        at = at + pn
+        bd: nodeid
+        if n.body > 0 then {
+            bd = nodeid.create from: (cloned.get i: at)
+            at = at + 1
+        }
+        return (astnode.functiondef (functionrow
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            returntype: rt
+            parameters: ps
+            body: bd
+            isNative: n.isNative
+            pins: n.pins
+            asItems: (kidsAddWindow :kids xs: (cloned.slice from: at to: cloned.length))
+        )
+        )
+    } case objectdef then {
+        k: n.isItems.count.u64
+        return (astnode.objectdef (objectdefrow
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            kind: n.kind
+            isItems: (kidsAddWindow :kids xs: (cloned.slice from: 0 to: k))
+            asItems: (kidsAddWindow :kids xs: (cloned.slice from: k to: cloned.length))
+            isNative: n.isNative
+        )
+        )
+    } case unitdef then {
+        return (astnode.unitdef (unitrow
+            nodeid: myId
+            lineno: n.lineno
+            colno: n.colno
+            kind: n.kind
+            body: (kidsAddWindow :kids xs: (cloned.slice from: 0 to: cloned.length))
+        )
+        )
+    } else {
+        return astnode.placeholder
+    }
+}
+
 
 # childIdsAt -- childIds of the node with id `id`.
 childIdsAt: function {ast: Ast.view id: u32} out ListVal u32 is {

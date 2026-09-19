@@ -1377,7 +1377,10 @@ perf: $(PERFBIN)
 #
 # -4,444 when the `typeof` node and the field shells it typed went with the
 # generator locals that were their only source: all of it the source.
-ALLOC_BASELINE := 2567466
+#
+# -2,587 when the lowering's two copiers became one deep copy in zast: all of
+# it the source.
+ALLOC_BASELINE := 2564879
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
