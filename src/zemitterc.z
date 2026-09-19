@@ -4137,6 +4137,7 @@ armValueExpr: function {
     vx: emitExpr :ast :symtab :ctx :n
     tn: armTakeLeaf :ast :symtab :n
     if tn == 0 then return vx
+    if (movedSourceNeedsZero :ast :symtab n: (ast.nodes.get i: tn)).not then return vx
     tt: stampIdOf :symtab nid: tn
     tz: armTakeZeroC :ast :symtab :ctx tid: tt
     if tz.length == 0 then return vx
@@ -4160,6 +4161,7 @@ emitArmTakeZero: function {
 } is {
     tn: armTakeLeaf :ast :symtab :n
     if tn == 0 then return
+    if (movedSourceNeedsZero :ast :symtab n: (ast.nodes.get i: tn)).not then return
     tz: armTakeZeroC :ast :symtab :ctx tid: (stampIdOf :symtab nid: tn)
     if tz.length == 0 then return
     zl: "\{ind}\{rv} = \{tz};\n"
@@ -4304,12 +4306,41 @@ implicitTakeSource: function {
     }
 }
 
+# moveNeedsZero -- whether moving out of the local `vid` zeroes it: a path
+# still destroys it (the checker recorded it maybe at a destroy point,
+# zeroOnMove), it is a generator's local, whose field the instance's
+# destructor frees, or it is no variable of the checker's -- a loop's header
+# binding or payload -- whose destroys the emitter still owns. A local moved
+# on every path that reaches a destroy of it needs nothing (D3).
+moveNeedsZero: function {symtab: zenv.ZSymbolTable.view vid: ztypes.vid} out bool is {
+    if vid.isZero then return true
+    if (symtab.typing.zeroOnMove.has item: vid.u64) then return true
+    return (symtab.typing.genLocalFieldOf.get key: vid.u64).some
+}
+
+# movedSourceNeedsZero -- moveNeedsZero for the local the value `n` moves out
+# of: the base of a `.take` / `.hold`, or a bare name. Any other source -- a
+# field -- is zeroed as ever.
+movedSourceNeedsZero: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.view
+} out bool is {
+    src: u64
+    mb: moveMarkerBase :ast :n
+    if mb > 0 then {
+        src = atomNodeId n: (ast.nodes.get i: mb)
+    } else if (isBareNameValue :n) then {
+        src = interpPartNodeId :n
+    }
+    if src == 0 then return true
+    return (moveNeedsZero :symtab vid: (atomVid :symtab nid: src))
+}
+
 # emitExplicitTakeZero -- an explicit `<atom>.take` argument: the source is
 # zeroed so its scope-exit destructor no-ops, the move having transferred
-# ownership. The caller has already excused a HOLD parameter, which is passed
-# by pointer and never destroyed by the callee. A heap-pointer collection
-# zeroes to NULL, as emitImplicitMoveZero does for the unmarked spelling: the
-# value IS the pointer, and a struct zero does not fit one.
+# ownership -- when a destroy of it still runs (movedSourceNeedsZero). A
+# heap-pointer collection zeroes to NULL, as emitImplicitMoveZero does for the
+# unmarked spelling: the value IS the pointer, and a struct zero does not fit
+# one.
 emitExplicitTakeZero: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -4319,6 +4350,7 @@ emitExplicitTakeZero: function {
     ind: StringView
     buf: String.borrow
 } is {
+    if (movedSourceNeedsZero :ast :symtab n: (ast.nodes.get i: a.operation.u64)).not then return
     etid: (stampIdOf
         :symtab
         nid: (interpPartNodeId n: (ast.nodes.get i: a.operation.u64))
@@ -4350,6 +4382,7 @@ emitImplicitMoveZero: function {
     ind: StringView
     buf: String.borrow
 } is {
+    if (movedSourceNeedsZero :ast :symtab n: (ast.nodes.get i: a.operation.u64)).not then return
     isrc: (implicitTakeSource
         :ast
         :symtab
@@ -19345,7 +19378,7 @@ emitStringBind: function {
                 if szs.length == 0 when (isBareNameValue n: avn) then {
                     szs = implicitTakeSource :ast :symtab :ctx n: avn
                 }
-                if szs.length > 0 then {
+                if szs.length > 0 when (movedSourceNeedsZero :ast :symtab n: avn) then {
                     szi: "\{ind}\{szs} = (\{ctx.strC}_t){0};\n"
                     buf.append szi
                 }
@@ -19420,6 +19453,7 @@ emitBindSourceZero: function {
     ind: StringView
     buf: String.borrow
 } is {
+    if (movedSourceNeedsZero :ast :symtab n: avn).not then return
     if (isFieldTake :ast n: avn) when (bindValueIsFnRef :symtab :avn).not then {
         ftz: "\{ind}\{rv} = (\{ct}){0};\n"
         buf.append ftz
@@ -20388,7 +20422,7 @@ emitStoreTo: function {
     # into a container -- now owns the heap). Scalars/valtypes have no
     # destructor and are left untouched.
     zsrc: reassignMoveSource :ast :symtab :ctx :valueNode
-    if zsrc.length > 0 then {
+    if zsrc.length > 0 when (movedSourceNeedsZero :ast :symtab n: valueNode) then {
         zid: stampIdOf :symtab nid: rftnid
         zt: movedZeroText :ast :symtab :ctx nid: rftnid tid: zid
         if zt.length > 0 then buf.append "\{ind}\{zsrc} = \{zt};\n"
