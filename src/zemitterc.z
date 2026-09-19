@@ -168,7 +168,7 @@ ctxCname: function {ctx: Ctx.view tid: ztypes.tid} out String is {
 
 # atomVid -- the variable a reference node resolves to, or 0.
 atomVid: function {symtab: zenv.ZSymbolTable.view nid: u64} out ztypes.vid is {
-    return ((symtab.typing.atomVariableIn mono: symtab.typing.emitMono :nid).or
+    return ((symtab.typing.atomVariableId.get key: nid).or
         d: (ztypes.vid.create from: 0)
     )
 }
@@ -4070,8 +4070,7 @@ isLocalTake: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.v
         if (ztypecheck.isMoveMarker name: cn.stringView).not then return false
         pn: ast.nodes.get i: n.parent.u64
         if pn.atomid.not then return false
-        return (symtab.typing.atomVariableIn mono: symtab.typing.emitMono nid: pn.nodeid.u64
-        ).none.not
+        return (symtab.typing.atomVariableId.get key: pn.nodeid.u64).none.not
     } else {
         return false
     }
@@ -4234,7 +4233,7 @@ implicitTakeSourceAtom: function {
     nid: u64
     nm: StringView
 } out String is {
-    avo: symtab.typing.atomVariableIn mono: symtab.typing.emitMono :nid
+    avo: symtab.typing.atomVariableId.get key: nid
     match (
         avo
     ) case some then {
@@ -8102,7 +8101,7 @@ collectionValueCallRhs: function {
         # move -- and one naming a FUNCTION is the call it auto-makes. A bare
         # TYPE atom (`Bytes`, `ByteView`) is a construction, so the variable
         # stamp and the function name are what separate them.
-        cav: symtab.typing.atomVariableIn mono: symtab.typing.emitMono nid: n.nodeid.u64
+        cav: symtab.typing.atomVariableId.get key: n.nodeid.u64
         match (
             cav
         ) case some then {
@@ -13280,13 +13279,13 @@ namedCalleeFnId: function {
     calleeIsLocal: (
         cbn0 >
         0 and
-        (symtab.typing.atomVariableIn mono: symtab.typing.emitMono nid: cbn0).none.not or
-        (symtab.typing.atomVariableIn mono: symtab.typing.emitMono nid: call.callable.u64).none.not
+        (symtab.typing.atomVariableId.get key: cbn0).none.not or
+        (symtab.typing.atomVariableId.get key: call.callable.u64).none.not
     )
     fid: ztypes.tid
     if calleeIsLocal.not then fid = userFnId :ast :symtab :ctx name: cn0
     if fid.isZero when cbn0 > 0 then {
-        clv: symtab.typing.atomVariableIn mono: symtab.typing.emitMono nid: cbn0
+        clv: symtab.typing.atomVariableId.get key: cbn0
         match (
             clv
         ) case some then null case none then {
@@ -13603,8 +13602,7 @@ emitSiblingFnCall: function {
 } out String is {
     rcal: ast.nodes.get i: call.callable.u64
     if rcal.atomid.not then return "".string
-    if (symtab.typing.atomVariableIn mono: symtab.typing.emitMono nid: call.callable.u64
-    ).none.not then return "".string
+    if (symtab.typing.atomVariableId.get key: call.callable.u64).none.not then return "".string
     mfid: monoStampIdOf :symtab :ctx nid: call.callable.u64
     if mfid.isZero then mfid = rtid
     return (emitUserFnCall :ast :symtab :ctx :call fid: mfid)
@@ -14226,7 +14224,7 @@ emitAtom: function {
     # stamped variable use first: the local, alias-resolved and C-mangled
     # -- a stamped atom is a LOCAL, so the module-constant probe (an owned
     # key alloc + hash) never runs for it
-    avo: symtab.typing.atomVariableIn mono: symtab.typing.emitMono nid: n.nodeid.u64
+    avo: symtab.typing.atomVariableId.get key: n.nodeid.u64
     match (
         avo
     ) case some then {
@@ -16468,7 +16466,7 @@ emitDottedNativeMarker: function {
 baseAtomNamesFunction: function {symtab: zenv.ZSymbolTable.view n: astnode.view} out bool is {
     anid: atomNodeId :n
     if anid == 0 then return false
-    avo: symtab.typing.atomVariableIn mono: symtab.typing.emitMono nid: anid
+    avo: symtab.typing.atomVariableId.get key: anid
     match (
         avo
     ) case some then {
@@ -16494,8 +16492,7 @@ baseAtomNamesFunction: function {symtab: zenv.ZSymbolTable.view n: astnode.view}
 baseAtomIsFoldedString: function {symtab: zenv.ZSymbolTable.view n: astnode.view} out bool is {
     anid: atomNodeId :n
     if anid == 0 then return false
-    if (symtab.typing.atomVariableIn mono: symtab.typing.emitMono nid: anid
-    ).none.not then return false
+    if (symtab.typing.atomVariableId.get key: anid).none.not then return false
     g: symtab.typing.nodeConst.get key: anid
     match (
         g
@@ -18297,7 +18294,7 @@ emitPrintAtom: function {
     # A stamped local is not a constant, so the probe is skipped for one --
     # the same order emitExpr's atomid arm uses.
     {
-        alo: symtab.typing.atomVariableIn mono: symtab.typing.emitMono nid: n.nodeid.u64
+        alo: symtab.typing.atomVariableId.get key: n.nodeid.u64
         if alo.none then {
             unitTid9: unitTidOf :ast :symtab unitName: ctx.mainName.stringView
             cst: (memberConstStringText
@@ -26092,7 +26089,7 @@ seedPostGuardAlias: function {
     pgRawId: (symtab.typing.postGuardName.get key: pgid).or d: zast.nameid
     pgRawN: zast.poolTextAt pool: ast.names ref: pgRawId
     if pgRawN.length == 0 then return
-    pgrv: ((symtab.typing.postGuardVarIn mono: symtab.typing.emitMono nid: pgid).or
+    pgrv: ((symtab.typing.postGuardVarId.get key: pgid).or
         d: (ztypes.vid.create from: 0)
     )
     if pgrv.isZero then return

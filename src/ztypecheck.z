@@ -25908,7 +25908,7 @@ baseRunsCall: function {st: zenv.ZSymbolTable.view ast: Ast.view nid: zast.nodei
     }
     if isCall then return true
     if (
-        isAtom.not or (st.typing.atomVariableIn mono: st.typing.curMonoStamp nid: nid.u64).none.not
+        isAtom.not or (st.typing.atomVariableId.get key: nid.u64).none.not
     ) then return false
     rdo: st.typing.refDecl.get key: nid.u64
     match (
@@ -28881,7 +28881,7 @@ refuseBorrowedArms: function {
 # declared itself, which has left scope and which the arm's own end moves.
 armLeafLocal: function {st: zenv.ZSymbolTable ast: Ast.view nid: u32} out ztypes.vid is {
     none: ztypes.vid.create from: 0
-    av: st.typing.atomVariableIn mono: st.typing.curMonoStamp nid: nid.u64
+    av: st.typing.atomVariableId.get key: nid.u64
     if av.none then return none
     cur: st.lookupVarId nameId: (bareAtomNameId n: (ast.nodes.get i: nid.u64))
     if cur.none then return none
@@ -40759,8 +40759,9 @@ genericParamSubjectTid: function {
         # monoParamSubst now, so stampGate substitutes it)
         setgs: subjT
         ztyping.nodeTypeSet tbl: st.typing.nodeType nid: gsnid.u64 tid: setgs
-        if st.typing.curMonoStamp > 0 then {
-            gmk: ztyping.monostamp mono: st.typing.curMonoStamp node: gsnid.u64
+        gwm: st.typing.walkMonoOf nid: gsnid.u64
+        if gwm > 0 then {
+            gmk: ztyping.monostamp mono: gwm node: gsnid.u64
             st.typing.monoNodeType.set key: gmk value: setgs
         }
     }
@@ -41492,7 +41493,7 @@ rejectGenericValueMatch: function {
     # instance arm dispatch (the template body is shared), so it is
     # rejected rather than silently taking the else path.
     gvid: nodeId n: (ast.nodes.get i: casenode.subject.u64)
-    gvav: st.typing.atomVariableIn mono: st.typing.curMonoStamp nid: gvid.u64
+    gvav: st.typing.atomVariableId.get key: gvid.u64
     match (
         gvav
     ) case some then {
@@ -41632,8 +41633,7 @@ rebindOuterUses: function {st: zenv.ZSymbolTable ast: Ast.view root: u32} is {
         wi = wi + 1
         wn: ast.nodes.get i: wid.u64
         zast.childIdsInto :ast n: wn acc: work
-        if wn.atomid when (st.typing.atomVariableIn mono: st.typing.curMonoStamp nid: wid.u64
-        ).none.not then {
+        if wn.atomid when (st.typing.atomVariableId.get key: wid.u64).none.not then {
             outer: st.lookupVarId nameId: wn.name
             if outer.some then st.typing.setAtomVariable nid: wid.u64 vid: outer
         }
@@ -41802,8 +41802,9 @@ checkCase: function {
         if gmn > 0 then {
             gmv: subjT
             ztyping.nodeTypeSet tbl: st.typing.nodeType nid: gmn.u64 tid: gmv
-            if st.typing.curMonoStamp > 0 then {
-                gmk8: ztyping.monostamp mono: st.typing.curMonoStamp node: gmn.u64
+            gwm8: st.typing.walkMonoOf nid: gmn.u64
+            if gwm8 > 0 then {
+                gmk8: ztyping.monostamp mono: gwm8 node: gmn.u64
                 st.typing.monoNodeType.set key: gmk8 value: gmv
             }
         }
@@ -49146,8 +49147,7 @@ evalConstNode: function {
     # atoms read a variable -- the two guards below are that record, one for a
     # bare name and one for the root of a path.
     if plan.arm == 2 then {
-        if (st.typing.atomVariableIn mono: st.typing.curMonoStamp nid: nid.u64
-        ).none.not then return ztypes.noConst
+        if (st.typing.atomVariableId.get key: nid.u64).none.not then return ztypes.noConst
         # a literal never needs an OWNED name, and every numeric literal in the
         # program reaches this arm. The member pull below takes the id.
         isLit: false
@@ -49183,8 +49183,7 @@ evalConstNode: function {
     if plan.arm == 4 then {
         vp: numericParamThroughValue :st :ast parentId: plan.parentId childId: plan.childId
         if vp.kind.none.not then return vp
-        if (st.typing.atomVariableIn mono: st.typing.curMonoStamp nid: plan.parentId.u64
-        ).none.not then return ztypes.noConst
+        if (st.typing.atomVariableId.get key: plan.parentId.u64).none.not then return ztypes.noConst
         return (evalConstDotted
             :st
             :scope

@@ -1384,7 +1384,10 @@ perf: $(PERFBIN)
 # +5,360 when each generic instance came to walk and emit its own copy of the
 # body: +1 the behaviour (the self-compile has no instance), the rest the
 # source, which the per-instance routing's retirement returns.
-ALLOC_BASELINE := 2570239
+#
+# -1,403 when an atom's and a guard's variables stopped being kept per
+# instance: all of it the source. A signature's stamps stay per instance.
+ALLOC_BASELINE := 2568836
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
