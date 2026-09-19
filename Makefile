@@ -1518,7 +1518,7 @@ emitter-guard:
 	chk "resolveTypeIdByName" "$$e3" 17; \
 	chk "userFnId" "$$e4" 21; \
 	chk "childOwnershipText" "$$e5" 0; \
-	chk "regNameOf" "$$e6" 70; \
+	chk "regNameOf" "$$e6" 69; \
 	chk "ztypes.mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 3; \
 	chk "monoOriginName" "$$e9" 7; \
