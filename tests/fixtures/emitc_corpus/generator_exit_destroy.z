@@ -1,0 +1,45 @@
+# A generator's exit frees the locals it leaves, as a function's does: each is
+# kept in a field of the instance, so the exit destroys the field and zeroes it
+# -- a `return` every local of the body, a `break` and a `continue` the loop
+# body's -- and the instance's own destructor, or the next binding of the
+# local, finds it empty. The leak kind (ASan) is the judge.
+Box: class {
+    n: i64
+    tag: String
+}
+
+Counter: generator { limit: i64 } as {
+    call: function out i64 is {
+        i: 0
+        kept: "kept".string
+        for i < this.limit loop {
+            b: (Box n: i tag: "t".string)
+            s: "each".string
+            if i == 3 then return
+            i = i + 1
+            if i == 2 then continue
+            yield b.n
+            print "\{s} \{kept}"
+        }
+    }
+}
+
+Breaker: generator { limit: i64 } as {
+    call: function out i64 is {
+        i: 0
+        for i < this.limit loop {
+            b: (Box n: i tag: "t".string)
+            i = i + 1
+            if i == 3 then break
+            yield b.n
+        }
+        after: "after".string
+        yield 99
+        print after
+    }
+}
+
+main: function is {
+    for v: (Counter limit: 5) loop print "counter \{v}"
+    for w: (Breaker limit: 5) loop print "breaker \{w}"
+}
