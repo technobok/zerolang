@@ -1,0 +1,68 @@
+# A field handed to a GENERIC call's taking parameter -- `o.t.take`, or `o.t`
+# where the parameter takes it, or a name as `:b` -- is moved out: the field is
+# left empty and its owner's destructor finds nothing to free. The generic path
+# never zeroed it, so the owner freed the buffer the callee had already freed.
+# Two fields of one value are two values (`x: o.s y: o.t`), two views of one
+# field coexist, and a fresh copy (`s.copy`) holds nothing of its source, which
+# may be moved or written in the same call -- none is one value passed twice.
+Outer: class {
+    s: String
+    t: String
+}
+
+Item: class {
+    v: i64
+}
+
+Pair: class {
+    a: Item
+    b: Item
+}
+
+keepView: function as { T: StringLike.generic } in {a: T.view b: String.take} is {
+    print "\{a} \{b}"
+}
+
+keep: function as { T: StringLike.generic } in {b: T.take} is {
+    print b
+}
+
+views: function as { T: StringLike.generic } in {a: T.view b: T.view} is {
+    print "\{a}=\{b}"
+}
+
+siblings: function as { T: AnyRef.generic } in {x: T y: T} is {
+    print "siblings"
+}
+
+keepFirst: function as { T: StringLike.generic } in {b: String.take t: T.view} is {
+    print "\{b}\{t}"
+}
+
+copyThenTake: function as { T: StringLike.generic } in {a: T b: String.take} is {
+    print "\{a} \{b}"
+}
+
+copyThenWrite: function as { T: StringLike.generic } in {a: T o: Outer} is {
+    o.s = "changed".string
+    print "\{a} \{o.s}"
+}
+
+main: function is {
+    o: Outer s: "left".string t: "right".string
+    keepView a: o.s b: o.t.take
+    print "after explicit: [\{o.t}]"
+    p: Outer s: "one".string t: "two".string
+    keep b: p.t
+    print "after implicit: [\{p.t}]"
+    views a: p.s b: p.s
+    q: Pair a: (Item v: 1) b: (Item v: 2)
+    siblings x: q.a y: q.b
+    b: "named".string
+    keepFirst :b t: "!"
+    c: "fresh".string
+    copyThenTake a: c.copy b: c.take
+    w: Outer s: "orig".string t: "t".string
+    copyThenWrite a: w.s.copy o: w
+    print "done"
+}

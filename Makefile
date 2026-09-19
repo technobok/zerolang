@@ -1305,7 +1305,11 @@ perf: $(PERFBIN)
 # +5,428 when every integer operator came to fold over constant operands, and
 # the arithmetic operators to be routed by well-known name id: the same source
 # compiles with the same count, all of it is the source longer.
-ALLOC_BASELINE := 2576567
+#
+# +3,706 when a generic call's arguments came to lock what they reference while
+# they are walked: +324 of it is the call locks themselves (the old source,
+# compiled by both compilers), the rest the source's own new lock and move legs.
+ALLOC_BASELINE := 2580273
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

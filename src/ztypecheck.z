@@ -32908,6 +32908,56 @@ lockCallPath: function {
     if re.length > 0 then addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: re
 }
 
+# lockCallArgPath -- the call-scoped lock an argument that is a field path
+# (`o.s`) takes for the call's duration: SHARED intent on each strict prefix,
+# SHARED on the leaf, held by the CALL, so a later argument that moves or passes
+# the same value meets it. Unlike a nested receiver's lockCallPath it stops at
+# the first conflict, which names both arguments once.
+lockCallArgPath: function {
+    st: zenv.ZSymbolTable
+    pool: zast.StringPool.view
+    path: (ListVal zast.nameid).view
+    callId: u64
+    # the callee may write through the reference
+    mutable: bool
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+} is {
+    n: path.length
+    if n == 0 then return
+    if mutable then markVarMutated :st nameId: (path.get i: 0)
+    end: 1.u64
+    for end < n loop {
+        hs: ztypes.zlockholder kind: ztypes.zlockholderkind.callKind id: callId
+        rs: (st.tryLock
+            :pool
+            path: (path.slice from: 0 to: end)
+            lockType: ztypes.zlockstate.shared
+            lockScope: ztypes.zlockscope.intent
+            holder: hs
+            mutable: false
+            alias: true
+        )
+        if rs.length > 0 then {
+            addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: rs
+            return
+        }
+        end = end + 1
+    }
+    he: ztypes.zlockholder kind: ztypes.zlockholderkind.callKind id: callId
+    re: (st.tryLock
+        :pool
+        path: path.listView
+        lockType: ztypes.zlockstate.shared
+        lockScope: ztypes.zlockscope.target
+        holder: he
+        :mutable
+        alias: true
+    )
+    if re.length > 0 then addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: re
+}
+
 # takenHere -- the location stamp an ownership-transfer overlay carries (pop
 # propagates only located takes into the enclosing scope).
 takenHere: function {} out optionval ztypes.zsrcpos is {
@@ -38169,13 +38219,12 @@ genericCallInstance: function {
     return (walkTypeOf :st nid: cnid.u64)
 }
 
-# lockGenericCallArgs -- the locks a GENERIC function's arguments take, read
-# off the minted instance's parameters (the inference walk only typed them).
-# A bare-name reftype argument at a `.take` parameter moves in; at any other
-# it locks SHARED for the call, mutable unless the parameter is `.view` --
-# exactly what a concrete call's argument does. When the instance's result
-# keeps its inputs (`outx`, a `.borrow`/`.view` return), each lock is also a
-# pin the result holds, answered as a concrete call's pins are.
+# lockGenericCallArgs -- what a GENERIC function's arguments leave behind, read
+# off the minted instance's parameters. A bare-name reftype argument at a
+# `.take` parameter moves in. The call-scoped locks were placed while the
+# arguments were walked (lockGenericValueArg); when the instance's result keeps
+# its inputs (`outx`, a `.borrow`/`.view` return), each locked argument is also
+# a pin the result holds, answered as a concrete call's pins are.
 lockGenericCallArgs: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -38216,9 +38265,10 @@ pinGenericCallResult: function {
     pinCallResult :st funcId: mid :pins recvPath: noRecv recvShared: true
 }
 
-# lockGenericCallArg -- one argument of lockGenericCallArgs: a bare-name
-# reftype value at parameter `pnId` moves in or locks for the call; any other
-# shape places no row.
+# lockGenericCallArg -- one argument of lockGenericCallArgs, once the instance
+# is known: a bare-name reftype value at parameter `pnId` moves in, and a locked
+# one (its lock was placed by the walk, lockGenericValueArg) is a pin the result
+# may keep.
 lockGenericCallArg: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -38230,7 +38280,7 @@ lockGenericCallArg: function {
     # the instance's result keeps its inputs
     calleePins: bool
 } is {
-    bnId: bareAtomNameId n: (ast.nodes.get i: arg.operation.u64)
+    bnId: atomNameId :ast n: (ast.nodes.get i: arg.operation.u64)
     if bnId.isZero then {
         if calleePins then pinGenericPathArg :st :ast :mid :pnId :arg :pins
         return
@@ -38256,21 +38306,8 @@ lockGenericCallArg: function {
             colno: arg.colno
         )
         stampArgDisposition :st :ast op: arg.operation own: ztypes.zparamownership.takeMode
-    } else if aow.isLockish then {
-        (lockCallArg
-            :st
-            pool: ast.names
-            nameId: bnId
-            callId: call.nid.u64
-            shared: true
-            mutable: aow.isViewArg.not
-            nodeid: arg.nid
-            lineno: arg.lineno
-            colno: arg.colno
-        )
-        if calleePins then {
-            pinsAppendOne :pins nameId: bnId shared: true mutable: aow.isViewArg.not alias: true
-        }
+    } else if aow.isLockish when calleePins then {
+        pinsAppendOne :pins nameId: bnId shared: true mutable: aow.isViewArg.not alias: true
     }
 }
 
@@ -39986,6 +40023,127 @@ checkConcreteGenericArg: function {
     checkArgTypeMismatch :st :ast :ptid :vt :pnId :arg
 }
 
+# lockGenericValueArg -- what a generic call does to one value argument's
+# source, placed while the arguments are walked and in their order, exactly as a
+# concrete call's walk places it: a later argument that moves the same value
+# meets this one's lock, and one that reads a field this one moved out meets the
+# move. The instance is not minted yet, so the TEMPLATE's parameter answers; each
+# instance carries its markers. A name moved into a taking parameter is consumed
+# once the instance is known (lockGenericCallArg).
+lockGenericValueArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    call: callref
+    funcId: ztypes.tid
+    pnId: zast.nameid
+    arg: argref
+    vt: ztypes.tid
+    # the pending pins before this argument was walked: those past it are the
+    # ones its own walk left
+    pinMark: u64
+} is {
+    if pnId.isZero then return
+    if (typeIsReftype :st tid: vt).not then return
+    aow: argOwnershipOf :st :funcId isCtor: false :pnId :vt
+    opN: ast.nodes.get i: arg.operation.u64
+    bnId: atomNameId :ast n: opN
+    if aow.isTake then {
+        if bnId.isZero then moveGenericFieldArg :st :ast :arg :opN :vt
+        return
+    }
+    if aow.isLockish.not then return
+    if bnId.isZero.not then {
+        if (st.lookupVarId nameId: bnId).none then return
+        (lockCallArg
+            :st
+            pool: ast.names
+            nameId: bnId
+            callId: call.nid.u64
+            shared: true
+            mutable: aow.isViewArg.not
+            nodeid: arg.nid
+            lineno: arg.lineno
+            colno: arg.colno
+        )
+        return
+    }
+    # a projection -- a view, a slice, a borrowed element -- reaches into what
+    # its walk pinned; a fresh value (`s.copy`) pinned nothing and holds nothing
+    if (movedFieldPath :st :ast n: opN).not then {
+        lockProjectionPins :st :ast :call :arg :pinMark
+        return
+    }
+    src: ListVal zast.nameid
+    appendValueTuple :ast n: opN dst: src
+    if (st.lookupVarId nameId: (src.get i: 0)).none then return
+    (lockCallArgPath
+        :st
+        pool: ast.names
+        path: src
+        callId: call.nid.u64
+        mutable: aow.isViewArg.not
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+    )
+}
+
+# lockProjectionPins -- a generic call's argument that reaches into its source
+# through a call -- `s.stringView`, `xs.getMut i: 0` -- holds what that call
+# pinned for the call's duration, as the concrete call's argument temp does.
+lockProjectionPins: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    call: callref
+    arg: argref
+    pinMark: u64
+} is {
+    k: pinMark
+    for k < st.typing.pendingPins.length loop {
+        pth: ListVal zast.nameid
+        mut: false
+        {
+            pp: st.typing.pendingPins.get i: k
+            mut = pp.mutable
+            with pit: pp.path.iterate do for seg: pit loop pth.append seg
+        }
+        k = k + 1
+        if pth.length == 0 then continue
+        if (st.lookupVarId nameId: (pth.get i: 0)).none then continue
+        (lockCallArgPath
+            :st
+            pool: ast.names
+            path: pth
+            callId: call.nid.u64
+            mutable: mut
+            nodeid: arg.nid
+            lineno: arg.lineno
+            colno: arg.colno
+        )
+    }
+}
+
+# moveGenericFieldArg -- a field handed to a generic call's taking parameter is
+# moved out of it: the emitter zeroes it, a move through a readonly or locked
+# path is refused, and the rest of the call may not read it.
+moveGenericFieldArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    arg: argref
+    opN: astnode.view
+    vt: ztypes.tid
+} is {
+    stampArgDisposition :st :ast op: arg.operation own: ztypes.zparamownership.takeMode
+    refuseBorrowedTake :st :ast n: opN :vt
+    errM: st.typing.errors.length
+    if (isMarkedMove :ast n: opN).not then checkFieldMove :st :ast n: opN
+    if st.typing.errors.length == errM when (movedFieldPath :st :ast n: opN) then {
+        mvp: ListVal zast.nameid
+        appendValueTuple :ast n: opN dst: mvp
+        st.recordMovedArg path: mvp.listView
+    }
+}
+
 # inferGenericCallSubs -- read one call's arguments into the generic-parameter
 # substitutions: an explicit type argument names its parameter, a value argument
 # infers from the type it walks to, and a positional one binds by index.
@@ -40016,6 +40174,7 @@ inferGenericCallSubs: function {
             if argNumeric.not then bindExplicitTypeArg :st :unitDecl :ast :arg :subs
             continue
         }
+        pinMark: st.typing.pendingPins.length
         avt: checkValueAt :st :unitDecl :ast nid: arg.operation
         mat: materialiseLiteral :ast :st :unitDecl t: avt
         hs: (argHolderSlot
@@ -40030,6 +40189,16 @@ inferGenericCallSubs: function {
         )
         posIdx = posIdx + 1
         if hs.slot < pHolderIds.length then {
+            (lockGenericValueArg
+                :st
+                :ast
+                :call
+                :funcId
+                pnId: (pNames.get i: hs.slot)
+                :arg
+                vt: avt
+                :pinMark
+            )
             (bindValueArg
                 :st
                 :ast

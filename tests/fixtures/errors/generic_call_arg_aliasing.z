@@ -1,0 +1,129 @@
+# E0200: a generic call's arguments lock what they reference while the
+# arguments are walked, in their order, exactly as a concrete call's do. The
+# locks were placed only after every argument had been walked, so a later
+# argument's move met none of them: the callee read a value freed beside it,
+# through a name (`a: s b: s.take`), a field (`a: o.s o: o.take`, `o: o`), a
+# view or an element of it (`a: s.stringView`, `a: (l.get i: 0)`), and a field
+# moved out under a view of it. A field and its owner, one field twice, or one
+# name twice (`:a b: a`) is one value passed twice, and so is a view into a
+# field beside its owner; a field of a readonly binding cannot go to a
+# parameter that may write through it. Two fields of one value are two values,
+# and a fresh copy is none of its source's: both pass (generic_call_field_move).
+Outer: class {
+    s: String
+    t: String
+}
+
+Item: class {
+    v: i64
+}
+
+Crate: class {
+    it: Item
+}
+
+Holder: class {
+    xs: (List String)
+}
+
+viewTake: function as { T: StringLike.generic } in {a: T.view b: String.take} is {
+    b.drop
+    print a
+}
+
+viewOwner: function as { T: StringLike.generic } in {a: T.view o: Outer.take} is {
+    o.drop
+    print a
+}
+
+both: function as { T: AnyRef.generic } in {a: T c: Crate} is {
+    print "both"
+}
+
+twice: function as { T: AnyRef.generic } in {a: T b: T} is {
+    print "twice"
+}
+
+viewList: function as { T: StringLike.generic } in {a: T.view l: (List String).take} is {
+    l.drop
+    print a
+}
+
+viewWrite: function as { T: StringLike.generic } in {a: T.view o: Outer} is {
+    o.s = "replaced".string
+    print a
+}
+
+grow: function as { T: AnyRef.generic } in {l: T} is {
+    print "grow"
+}
+
+nameThenTake: function is {
+    s: "a heap string".string
+    viewTake a: s b: s.take
+}
+
+fieldThenOwnerTake: function is {
+    o: Outer s: "a heap string".string t: "t".string
+    viewOwner a: o.s o: o.take
+}
+
+fieldThenOwnerMoved: function is {
+    o: Outer s: "a heap string".string t: "t".string
+    viewOwner a: o.s o: o
+}
+
+fieldThenFieldTake: function is {
+    o: Outer s: "a heap string".string t: "t".string
+    viewTake a: o.s b: o.s.take
+}
+
+fieldAndOwner: function is {
+    c: Crate it: (Item v: 1)
+    both a: c.it :c
+}
+
+fieldTwice: function is {
+    c: Crate it: (Item v: 1)
+    twice a: c.it b: c.it
+}
+
+shorthandTwice: function is {
+    a: Item v: 1
+    twice :a b: a
+}
+
+viewThenTake: function is {
+    s: "a heap string".string
+    viewTake a: s.stringView b: s.take
+}
+
+elementThenTake: function is {
+    l: List String
+    l.append "a heap string".string
+    viewList a: (l.get i: 0) :l
+}
+
+substringBesideOwner: function is {
+    o: Outer s: "a heap string".string t: "t".string
+    viewWrite a: (o.s.substring from: 0 to: 4) :o
+}
+
+readonlyRoot: function {h: Holder.view} is {
+    grow l: h.xs
+}
+
+main: function is {
+    nameThenTake
+    fieldThenOwnerTake
+    fieldThenOwnerMoved
+    fieldThenFieldTake
+    fieldAndOwner
+    fieldTwice
+    shorthandTwice
+    viewThenTake
+    elementThenTake
+    substringBesideOwner
+    h: Holder xs: (List String)
+    readonlyRoot :h
+}

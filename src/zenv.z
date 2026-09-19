@@ -85,14 +85,18 @@ holderEq: function {a: ztypes.zlockholder b: ztypes.zlockholder} out bool is {
 # sameCallConflict -- a second reference to one value inside ONE call -- two
 # arguments, or an argument and the receiver -- where either may write
 # through itself: the callee holds both at once. Shared rows coexist
-# everywhere else. An INTENT prefix laid toward this very path is the
-# argument's own step to its leaf, not another reference.
+# everywhere else. An INTENT prefix is a step toward a leaf, not a reference:
+# one laid toward this very path is the argument's own step, and one being
+# requested is answered by the leaf it leads to, so two fields of one value
+# (`o.a`, `o.b`) are two references, not the same one twice.
 sameCallConflict: function {
     e: ztypes.ZEntry.view
+    lockScope: ztypes.zlockscope
     holder: ztypes.zlockholder
     mutable: bool
     path: ListViewVal zast.nameid
 } out bool is {
+    if lockScope == ztypes.zlockscope.intent then return false
     if e.lockHolder.kind.callKind.not then return false
     if (holderEq a: e.lockHolder b: holder).not then return false
     if (e.lockMutable or mutable).not then return false
@@ -1255,7 +1259,7 @@ ZSymbolTable: class {
                     conflictSelf = holderEq a: e.lockHolder b: holder
                     break
                 }
-                if (sameCallConflict :e :holder :mutable :path) then {
+                if (sameCallConflict :e :lockScope :holder :mutable :path) then {
                     conflictAt = j2
                     conflictFound = true
                     conflictSelf = true
