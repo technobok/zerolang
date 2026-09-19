@@ -421,6 +421,9 @@ ZSymbolTable: class {
     # the place in `open` of each function body open, innermost last: a
     # `return` leaves every scope from there up
     fnScopeDepths: ListVal u64
+    # the place in `open` of each scope a `break` leaves, innermost last: a
+    # loop's, or a `do` block's, which binds `break` to itself
+    breakScopes: ListVal u64
     # the generic-parameter answers a TEMPLATE walk keeps out of the shared stamp
     # table, by node, so that walk can still read what it just checked
     templateStamps: (IdMapV u64 v: ztypes.tid)
@@ -929,8 +932,8 @@ ZSymbolTable: class {
         this.recordExitDestroy :nid downTo: (this.fnScopeDepths.get i: n - 1) :except
     }
 
-    # recordLoopExitDestroy -- what the `break` or `continue` at `nid` destroys:
-    # every scope inside its loop, the loop's own among them.
+    # recordLoopExitDestroy -- what the `continue` at `nid` destroys: every scope
+    # inside its loop, the loop's own among them.
     recordLoopExitDestroy: function {:this nid: u64} is {
         n: this.loopRuns.length
         if n == 0 then return
@@ -939,6 +942,25 @@ ZSymbolTable: class {
             downTo: (this.loopRuns.get i: n - 1).scopeIndex
             except: ztypes.vid
         )
+    }
+
+    # recordBreakDestroy -- what the `break` at `nid` destroys: every scope inside
+    # what it leaves -- its loop, or the `do` block that binds `break` -- that
+    # scope's own among them.
+    recordBreakDestroy: function {:this nid: u64} is {
+        n: this.breakScopes.length
+        if n == 0 then return
+        this.recordExitDestroy :nid downTo: (this.breakScopes.get i: n - 1) except: ztypes.vid
+    }
+
+    # openBreakScope -- the innermost open scope is one a `break` leaves.
+    openBreakScope: function {:this} is {
+        this.breakScopes.append this.open.length - 1
+    }
+
+    # closeBreakScope -- that scope is closing.
+    closeBreakScope: function {:this} is {
+        if this.breakScopes.length > 0 then this.breakScopes.pop
     }
 
     # recordNamedDestroy -- what the `.drop` or the reassignment at `nid`
@@ -2344,6 +2366,7 @@ newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} o
         genBorrowDepths: ListVal u64
         dryRunDepth: 0
         fnScopeDepths: ListVal u64
+        breakScopes: ListVal u64
         templateStamps: (IdMapV u64 v: ztypes.tid)
         templateArmPreds: (IdMapV u64 v: ztypes.tid)
         scopeHidden: IdSet u64

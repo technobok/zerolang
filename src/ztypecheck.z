@@ -30863,6 +30863,7 @@ checkDo: function {
     donode: doref
 } out ztypes.tid is {
     doMarker: st.pushBlock node: donode.nid
+    st.openBreakScope
     dbk: st.reg.ctlPlaceholder
     (st.define
         nameId: zast.names.wkBreak
@@ -30872,6 +30873,7 @@ checkDo: function {
     checkStatement :st :unitDecl :ast blockId: donode.statement
     result: lastStmtType :st :ast block: (ast.nodes.get i: donode.statement.u64)
     st.popTo marker: doMarker
+    st.closeBreakScope
     result = wrapDoBreakValue :ast :st :unitDecl :donode :result
     if result > 0 then {
         setk: result
@@ -31479,6 +31481,7 @@ checkFor: function {
     entryStart: st.entryMark
     forMarker: st.pushBlock node: fornode.nid
     st.openLoopRun :entryStart
+    st.openBreakScope
     endLoopWriteNarrowing :st :ast :fornode
     bk: st.reg.ctlPlaceholder
     (st.define
@@ -31537,6 +31540,7 @@ checkFor: function {
     k: st.unreachableKind
     if k == zenv.divkind.exit then st.discardTakenFrom start: bodyMark
     st.popTo marker: forMarker
+    st.closeBreakScope
     run: st.closeLoopRun
     if k == zenv.divkind.none then reportLoopMoves :st :ast :fornode :run
     reportContinueMoves :st :ast :fornode :run
@@ -42923,8 +42927,8 @@ checkStmtExpression: function {
 
 # recordControlDestroy -- what the control statement `valueId` destroys as it
 # leaves (exitDestroy): a `return` every scope of its function, but the local it
-# hands back when it returns a bare name; a `break` or a `continue` every scope
-# inside its loop.
+# hands back when it returns a bare name; a `break` every scope inside what it
+# leaves, its loop or a `do` block; a `continue` every scope inside its loop.
 recordControlDestroy: function {
     st: zenv.ZSymbolTable ast: Ast.view valueId: zast.nodeid kind: u8
 } is {
@@ -42945,9 +42949,8 @@ recordControlDestroy: function {
         }
         st.recordReturnDestroy nid: valueId.u64 except: ret
     }
-    if kind == zenv.divkind.brk or (kind == zenv.divkind.cont) then (st.recordLoopExitDestroy
-        nid: valueId.u64
-    )
+    if kind == zenv.divkind.brk then st.recordBreakDestroy nid: valueId.u64
+    if kind == zenv.divkind.cont then st.recordLoopExitDestroy nid: valueId.u64
 }
 
 # checkStmtInner -- dispatch a statement line's inner row by arm, and stamp the
