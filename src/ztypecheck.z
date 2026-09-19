@@ -37306,7 +37306,8 @@ checkYieldCall: function {
             kYa = kYa + 1
             ya: argRefAt :ast nid: (zast.nodeid.create from: yaId.u32)
             if ya.nid.isZero.not then {
-                checkValueAt :st :unitDecl :ast nid: ya.operation
+                yaT: checkValueAt :st :unitDecl :ast nid: ya.operation
+                checkYieldedValue :st :unitDecl :ast arg: ya argT: yaT
             }
         }
     }
@@ -37384,6 +37385,57 @@ valueIsYieldCall: function {ast: Ast.view nid: zast.nodeid} out bool is {
     } else {
         return false
     }
+}
+
+# checkYieldedValue -- a yielded value against the generator's element type, as
+# a returned value is checked against a function's declared return
+# (checkReturnTypeMatch): a number must land in it, and any other value must be
+# of it. The element is what the `call` wrapper carries.
+checkYieldedValue: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    arg: argref
+    argT: ztypes.tid
+} is {
+    if argT.isZero then return
+    wr: st.typing.currentReturnTypeId
+    if wr.isZero then return
+    elem: ztypes.tid
+    {
+        eo: iterWrapperElem :ast :st :unitDecl wid: wr
+        match (
+            eo
+        ) case some then {
+            elem = ztypes.tid.create from: eo
+        } case none then return
+    }
+    # an instance over a template's parameters is checked per instance
+    if (st.reg.isPartialOf tid: elem) then return
+    if (numberLandsInNumber :st :ast srcTid: argT dstTid: elem) then {
+        (checkNumericCoercion
+            :st
+            :ast
+            dstTid: elem
+            srcTid: argT
+            valueNid: arg.nid
+            nodeid: arg.nid
+            lineno: arg.lineno
+            colno: arg.colno
+        )
+        return
+    }
+    if (typesCompatible :ast :st a: argT b: elem) then return
+    en: st.reg.nameOf tid: elem
+    an: st.reg.nameOf tid: argT
+    (addError
+        :st
+        nodeid: (nodeId n: (ast.nodes.get i: arg.operation.u64))
+        lineno: (nodeLine n: (ast.nodes.get i: arg.operation.u64))
+        colno: (nodeCol n: (ast.nodes.get i: arg.operation.u64))
+        e: zast.err.typeError
+        msg: "yield type mismatch: the generator yields \{en}, got \{an}"
+    )
 }
 
 # reportReturnLabelledArg -- `return` is itself a call, so a LABELLED argument
