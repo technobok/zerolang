@@ -1335,7 +1335,10 @@ perf: $(PERFBIN)
 #
 # +623 when a class came to free the Box it holds: +36 of it the destroy
 # operand a reassignment now spells through destroyOperand, the rest the source.
-ALLOC_BASELINE := 2588332
+#
+# +2,592 when a Box's fields and methods came to be its element's: all of it
+# the source.
+ALLOC_BASELINE := 2590924
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

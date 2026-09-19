@@ -1,0 +1,76 @@
+# A Box's fields and methods are its element's, read and called through the
+# cell, as its operators already were: from a local, a parameter, a `.take`
+# parameter, a class field holding the box, and a call's result -- a field
+# read and write (a nested record field too), a method with and without
+# arguments, a mutating one, and a variant's arm predicate. A write through a
+# parameter reaches the caller: the box is the cell. The checker answered
+# "'Box_big' has no member 'a'" for every one of them.
+pt: record {
+    x: i64
+    y: i64
+}
+
+big: record {
+    a: i64
+    b: i64
+    p: pt
+} as {
+    total: function {s: this} out i64 is {
+        return s.a + s.b
+    }
+    viewTotal: function {s: this.view} out i64 is {
+        return s.a * s.b
+    }
+    scaled: function {s: this by: i64} out i64 is {
+        return s.a * by
+    }
+    grow: function {s: this.borrow by: i64} is {
+        s.a = s.a + by
+    }
+}
+
+shape: variant {
+    sq: i64
+    rect: i64
+}
+
+Holder: class {
+    bx: (Box t: big)
+}
+
+sum: function {x: (Box t: big)} out i64 is {
+    return x.a + x.total
+}
+
+keep: function {x: (Box t: big).take} out i64 is {
+    return x.b + x.viewTotal
+}
+
+setA: function {x: (Box t: big) v: i64} is {
+    x.a = v
+}
+
+mk: function out (Box t: big) is {
+    return (Box from: (big a: 5 b: 6 p: (pt x: 1 y: 2)))
+}
+
+main: function is {
+    bx: Box from: (big a: 3 b: 4 p: (pt x: 5 y: 6))
+    print "local \{bx.a} \{bx.b} \{bx.total} \{bx.viewTotal} \{bx.p.x}"
+    print "param \{sum x: bx}"
+    bx.a = 10
+    bx.p.y = 60
+    print "write \{bx.a} \{bx.total} \{bx.p.y}"
+    print "args \{bx.scaled by: 5}"
+    bx.grow by: 1
+    setA x: bx v: bx.a + 1
+    print "mutate \{bx.a}"
+    h: Holder bx: (Box from: (big a: 7 b: 8 p: (pt x: 0 y: 0)))
+    h.bx.a = 42
+    h.bx.grow by: 1
+    print "field \{h.bx.a} \{h.bx.total} \{h.bx.scaled by: 2}"
+    print "result \{mk.a} \{mk.scaled by: 4}"
+    sh: Box from: (shape.sq 4)
+    print "arm \{sh.sq} \{sh.rect}"
+    print "take \{keep x: bx.take}"
+}

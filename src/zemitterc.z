@@ -8028,6 +8028,23 @@ emitSynthOperatorCallForm: function {
     return (emitOperatorCallForm :ast :symtab :ctx :call)
 }
 
+# callableBoxElem -- boxMemberElem of a dotted callable: the element type a
+# method called off a Box belongs to, 0 for any other callable.
+callableBoxElem: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    callable: astnode.view
+} out u64 is {
+    match (
+        callable
+    ) case dottedpath then {
+        return (boxMemberElem :ast :symtab :ctx n: callable)
+    } else {
+        return 0
+    }
+}
+
 # emitInstanceMethodCall -- `recv.method args` on a user CLASS instance (not a
 # Type qualifier, not a collection / system native): emit
 # {methodCname}(&recv, posArgs) with the receiver mapped to the :this param and
@@ -8056,6 +8073,10 @@ emitInstanceMethodCall: function {
     # the arguments is not reached through the dot, whatever the base emits to
     if (symtab.typing.callRecvFromArgs.has item: call.nodeid.u64) then return "".string
     rtid0: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
+    # a Box's methods are its element's, called through the cell: the box IS
+    # the pointer to the element a method takes its receiver by
+    bxEl: callableBoxElem :ast :symtab :ctx callable: callableNode
+    if bxEl > 0 then rtid0 = ztypes.tid.create from: bxEl.u64
     rtidc: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: rtid0.u64)
     rtid: methodOwnerId :ast :symtab rtid: (ztypes.tid.create from: rtidc.u64) :mn
     if rtid == 0 then return "".string
@@ -8102,6 +8123,24 @@ emitInstanceMethodCall: function {
             recvExpr: emitDottedReceiver :ast :symtab :ctx callable: callableNode
             if recvExpr.length == 0 then return "".string
             rIsPtr: dottedReceiverIsPtr :ast :symtab :ctx callable: callableNode
+            if bxEl > 0 then {
+                rIsPtr = true
+                # a box a call hands back is owned by nothing else: bound to a
+                # temp the scope frees, as a read off it is
+                bxBase: zast.nodeid
+                {
+                    cbx: ast.nodes.get i: call.callable.u64
+                    if cbx.dottedpath then bxBase = cbx.parent
+                }
+                bxRh: (ownedReceiverHoist
+                    :ast
+                    :symtab
+                    :ctx
+                    expr: recvExpr.stringView
+                    n: (ast.nodes.get i: bxBase.u64)
+                )
+                if bxRh.length > 0 then recvExpr = bxRh
+            }
             return (emitInstanceMethodBody
                 :ast
                 :symtab
@@ -14753,6 +14792,14 @@ emitDottedNestedBase: function {
     # reached (a field path fails pathIsPointer's lock-field test)
     nstPtr: pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
     if nstPtr.not then nstPtr = isHeapPtrCollection :symtab :ctx tid: nlid
+    # a Box's fields and methods are its element's, read through the cell
+    nbxE: boxMemberElem :ast :symtab :ctx :n
+    if nbxE > 0 then {
+        baseAtom = "(*\{baseAtom})"
+        nlid = ztypes.tid.create from: nbxE.u64
+        bs9vid = ztypes.vid
+        nstPtr = false
+    }
     # a reference-returning base (`getMut` over a compound element) is a pointer
     # into storage the container owns, and a stack collection's legs take the
     # receiver's address: it is bound first -- still running before anything
@@ -15611,6 +15658,9 @@ emitDottedAtomBase: function {
     bn2r: StringView
     bn2v: ztypes.vid
     baseAtomVid: ztypes.vid
+    # the base is a Box and the member is its element's: the element's type,
+    # read through the dereferenced cell `bn2` already spells
+    boxElem: 0.u64
 } out String is {
     eNum: dottedAtomNumericBase :bn2 :mn2
     if eNum.length > 0 then return eNum
@@ -15645,6 +15695,7 @@ emitDottedAtomBase: function {
     # member-read path, not through emitInstanceMethodCall.
     bstamp0: monoStampIdOf :symtab :ctx nid: bnid2.u64
     if bstamp0.isZero then bstamp0 = stampIdOf :symtab nid: bnid2
+    if boxElem > 0 then bstamp0 = ztypes.tid.create from: boxElem.u64
     bstamp: bstamp0
     bsn0: regNameView :symtab tid: bstamp0
     bcid: canonFnId :ast :symtab :ctx tid: bstamp0 name: bsn0
@@ -16198,7 +16249,9 @@ armPredicateC: function {
     pn: ast.nodes.get i: n.parent.u64
     recvP: emitExpr :ast :symtab :ctx n: pn
     valP: recvP.copy
-    if (pathIsPointer :ast :symtab :ctx n: pn) then valP = "(*\{recvP})"
+    # a Box receiver is the pointer to the variant it holds
+    bxP: (boxMemberElem :ast :symtab :ctx :n) > 0
+    if bxP or (pathIsPointer :ast :symtab :ctx n: pn) then valP = "(*\{recvP})"
     if (isOrdinalPair :symtab tid: dap) then {
         fa: ordinalPairFirstArmId :symtab tid: dap
         # the arm NAME resolved through any alias, as an id
@@ -16210,6 +16263,7 @@ armPredicateC: function {
     # an ordinal IS its discriminator: compare the value, not a field
     if (isOrdinalVariant :symtab tid: dap) then return "((\{valP}) == \{tgP})"
     accP: receiverTagAccess :ast :symtab :ctx :pn
+    if bxP then accP = "->".string
     return "((\{recvP})\{accP}tag == \{tgP})"
 }
 
@@ -16231,11 +16285,14 @@ tagAccessorReadC: function {
         d: ztypes.tid
     )
     castT: typeRefC :ast :symtab :ctx tid: tatE thisTid: ztypes.tid
+    # a Box receiver is the pointer to the variant it holds
+    bxT: (boxMemberElem :ast :symtab :ctx :n) > 0
     if (isOrdinalVariant :symtab tid: dtr) then {
-        if (pathIsPointer :ast :symtab :ctx n: pn) then return "((\{castT})(*\{recvT}))"
+        if bxT or (pathIsPointer :ast :symtab :ctx n: pn) then return "((\{castT})(*\{recvT}))"
         return "((\{castT})(\{recvT}))"
     }
     accT: receiverTagAccess :ast :symtab :ctx :pn
+    if bxT then accT = "->".string
     return "((\{castT})(\{recvT})\{accT}tag)"
 }
 
@@ -16536,6 +16593,34 @@ baseAtomReadsAsValue: function {symtab: zenv.ZSymbolTable.view n: astnode.view} 
     return (baseAtomIsFoldedString :symtab :n)
 }
 
+# boxMemberElem -- the element type a member read off a Box reaches: a Box's
+# fields and methods are its element's, the ownership markers and `.copy` its
+# own (ztypecheck.boxMemberDelegates). 0 when the base is not a Box or the
+# member is the box's. A parameter's stamp is a shell named after the Box, so
+# it is canonicalised as nodeIsAtomBox does.
+boxMemberElem: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.dottedpathrow.view
+} out u64 is {
+    mnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64)
+    if (ztypecheck.boxMemberDelegates :ast nameId: mnId).not then return 0
+    bnid: interpPartNodeId n: (ast.nodes.get i: n.parent.u64)
+    bt: monoStampIdOf :symtab :ctx nid: bnid.u64
+    if bt.isZero then bt = stampIdOf :symtab nid: bnid
+    if bt.isZero then return 0
+    if (isBoxTid :symtab tid: bt).not then {
+        bxn: regNameView :symtab tid: bt
+        bxc: canonTypeId :ast :symtab :ctx tid: bt name: bxn
+        if bxc == 0 then return 0
+        bt = ztypes.tid.create from: bxc.u64
+        if (isBoxTid :symtab tid: bt).not then return 0
+    }
+    if (symtab.reg.genericArgCount specId: bt) != 1 then return 0
+    return (symtab.reg.genericArgAt specId: bt ordinal: 0)
+}
+
 # emitDottedRead -- the C text of a dotted PATH read (the call form is
 # emitDottedCall). The legs run in the order the checker's stamps settle them:
 # built-in combinators, unit-qualified reads, the conversions, the tagged-type
@@ -16640,6 +16725,12 @@ emitDottedRead: function {
     if dnm.length > 0 then return dnm
     mn2: aliasOrChild :ast :symtab aliasId: n.nodeid childId: n.child
     if bn2.length > 0 then {
+        # a Box's fields and methods are its element's, read through the cell
+        bxE: boxMemberElem :ast :symtab :ctx :n
+        if bxE > 0 then {
+            bn2 = "(*\{bn2})"
+            bn2v = ztypes.vid
+        }
         aba: (emitDottedAtomBase
             :ast
             :symtab
@@ -16650,6 +16741,7 @@ emitDottedRead: function {
             bn2r: bn2r.stringView
             :bn2v
             :baseAtomVid
+            boxElem: bxE
         )
         if aba.length > 0 then return aba
     }

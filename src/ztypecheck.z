@@ -21,6 +21,7 @@
 # Public interface -- the definitions other units may reference; all
 # other top-level definitions are private to this unit.
 public: unit {
+    :boxMemberDelegates
     :isFunctionDefWithBody
     :truthyCondArmOf
     :blockEndsInReturn
@@ -27005,6 +27006,15 @@ checkUntypedConstantCast: function {
     return (callleg handled: true tid: target)
 }
 
+# boxMemberDelegates -- a member read off a Box that is its element's: anything
+# but the ownership and access markers and `.copy`, which act on the box.
+boxMemberDelegates: function {ast: Ast.view nameId: zast.nameid} out bool is {
+    if nameId.isZero then return false
+    if (isStripMarkerId :nameId) then return false
+    if (isDropMarkerId :nameId) then return false
+    return (zast.nameTextEq :ast ref: nameId s: "copy").not
+}
+
 # dottedBaseTid -- type the base a dotted path hangs off. The base is a REFERENCE,
 # so a name-shaped one must not construct and a `.take` child must not auto-call;
 # an unresolved bare name may still be a unit, and a literal materialises to its
@@ -27079,15 +27089,15 @@ dottedBaseTid: function {
             }
         }
     }
-    # A BOX IS A HEAP POINTER AROUND ONE VALTYPE and declares no operators of
-    # its own, so its OPERATORS are the boxed element's -- always, not only
-    # when the Box resolves nothing: under --eager every member is minted and
-    # the Box would answer with an edge of its own, attributing the operator to
-    # a type that declares none. Named members stay the Box's (`b.take` is the
-    # Box's); only punctuation delegates.
+    # A BOX IS A HEAP POINTER AROUND ONE VALTYPE and declares no members of
+    # its own, so its operators, fields and methods are the boxed element's --
+    # always, not only when the Box resolves nothing: under --eager every member
+    # is minted and the Box would answer with an edge of its own, attributing
+    # the member to a type that declares none. The ownership and access markers
+    # stay the Box's (`b.take` moves the box, `b.drop` ends it), and `.copy` is
+    # asked of the box, which has none.
     {
-        cnmB: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: dp.child.u64))
-        isOpB: isOperatorName name: cnmB.stringView
+        isOpB: boxMemberDelegates :ast nameId: (atomNameId :ast n: (ast.nodes.get i: dp.child.u64))
         if isOpB when (st.reg.isBoxOf tid: bt) when (st.reg.genericArgCount specId: bt) == 1 then {
             bxE: st.reg.genericArgAt specId: bt ordinal: 0
             if bxE > 0 then bt = ztypes.tid.create from: bxE.u64
