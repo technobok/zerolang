@@ -1442,7 +1442,10 @@ perf: $(PERFBIN)
 #
 # +328 when a reassignment and a `.drop` came to destroy what the checker
 # recorded: the source.
-ALLOC_BASELINE := 2602462
+#
+# +156 when an exit the checker recorded nothing for came to be refused: the
+# source.
+ALLOC_BASELINE := 2602618
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2904,7 +2907,7 @@ view-guard:
 # commit message, and the guard cannot tell the two apart: the prose is the
 # check, so say which one it is.
 FALLBACK_BASELINE :=
-EMITFAIL_BASELINE := 34
+EMITFAIL_BASELINE := 36
 MARKER_BASELINE := 24
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
