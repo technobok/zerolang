@@ -4409,10 +4409,8 @@ emitCallTakeInvalidations: function {
         }
         ts: takeStringSource :ast :symtab :ctx n: opNode
         if ts.length > 0 then {
-            if isHold.not then {
-                emitExplicitTakeZero :ast :symtab :ctx :a ts: ts.stringView :ind :buf
-            }
-        } else if isTake then {
+            emitExplicitTakeZero :ast :symtab :ctx :a ts: ts.stringView :ind :buf
+        } else if isTake or isHold then {
             emitImplicitMoveZero :ast :symtab :ctx :a :ind :buf
         }
         emitValueTakeInvalidations :ast :symtab :ctx n: opNode :ind :buf
@@ -7097,12 +7095,7 @@ instanceMethodArgPtr: function {
     # a non-TAKE class arg passes by pointer (mirrors the method
     # signature); isReftypeParam resolves a cross-unit class shell that
     # a bare typetypeOf==CLASS check misses.
-    pTake: (symtab.typing.declOwnershipIs
-        pool: ast.names
-        parentTypeId: (ztypes.tid.create from: mco.u64)
-        name: posParamName
-        own: ztypes.zparamownership.takeMode
-    )
+    pTake: paramTakesArg :ast :symtab fid: (ztypes.tid.create from: mco.u64) pname: posParamName
     isRef: false
     if pTake.not when (isReftypeParam
         :ast
@@ -9838,12 +9831,7 @@ emitInterpArgForParam: function {
     sx: emitInterpArgExpr :ast :symtab :ctx :n
     if sx.length == 0 then return "".string
     isTake: false
-    if pid == ctx.strTid when (symtab.typing.declOwnershipIs
-        pool: ast.names
-        parentTypeId: fid
-        name: pname
-        own: ztypes.zparamownership.takeMode
-    ) then isTake = true
+    if pid == ctx.strTid when (paramTakesArg :ast :symtab :fid :pname) then isTake = true
     hn: ctx.argHoistCtr
     ctx.argHoistCtr = ctx.argHoistCtr + 1
     nmH: "_ah\{hn}"
@@ -13077,12 +13065,7 @@ userFnArgText: function {
     if projd then return atomVarId
     # the parameter's mode: by pointer (addressed unless already one), or a
     # borrow hoist of the value
-    pTake8: (symtab.typing.declOwnershipIs
-        pool: ast.names
-        parentTypeId: fid
-        name: pinNm
-        own: ztypes.zparamownership.takeMode
-    )
+    pTake8: paramTakesArg :ast :symtab :fid pname: pinNm
     isBorrowed: hoistExprIsBorrowRooted :ast :symtab :ctx n: argOpNode
     ctx.lastArgByPtr = (userFnParamByPointer
         :ast
@@ -26881,12 +26864,7 @@ isListPtrParam: function {
     pname: StringView
     tid: ztypes.tid
 } out bool is {
-    if (symtab.typing.declOwnershipIs
-        pool: ast.names
-        parentTypeId: fid
-        name: pname
-        own: ztypes.zparamownership.takeMode
-    ) then return false
+    if (paramTakesArg :ast :symtab :fid :pname) then return false
     bt: chaseColMono :symtab :ctx :tid
     if (isIdCollectionOriginOf :symtab :ctx tid: (ztypes.tid.create from: bt.u64)) then return true
     return (isListOriginOf :symtab :ctx tid: (ztypes.tid.create from: bt.u64))
@@ -27019,7 +26997,28 @@ markedValtypeRefParam: function {
     return false
 }
 
-# paramTypeIsPointer -- is a parameter's C type `T*`? A non-`take` user class
+# paramTakesArg -- whether the parameter `pname` of `fid` takes ownership of
+# its argument: a `.take`, or a `.hold`, which is moved in as `.take` is and
+# then frozen. Readonly is the checker's to enforce, so the two pass, and are
+# destroyed, alike.
+paramTakesArg: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view fid: ztypes.tid pname: StringView
+} out bool is {
+    if (symtab.typing.declOwnershipIs
+        pool: ast.names
+        parentTypeId: fid
+        name: pname
+        own: ztypes.zparamownership.takeMode
+    ) then return true
+    return (symtab.typing.declOwnershipIs
+        pool: ast.names
+        parentTypeId: fid
+        name: pname
+        own: ztypes.zparamownership.holdMode
+    )
+}
+
+# paramTypeIsPointer -- is a parameter's C type `T*`? A non-owning user class
 # passes by reference, and the stdlib families answer separately because
 # isReftypeParam deliberately covers user classes only.
 #
@@ -27035,29 +27034,17 @@ paramTypeIsPointer: function {
     pname: StringView
     pid: ztypes.tid
 } out bool is {
-    isTake: (symtab.typing.declOwnershipIs
-        pool: ast.names
-        parentTypeId: fid
-        name: pname
-        own: ztypes.zparamownership.takeMode
-    )
-    isHold: (symtab.typing.declOwnershipIs
-        pool: ast.names
-        parentTypeId: fid
-        name: pname
-        own: ztypes.zparamownership.holdMode
-    )
+    owns: paramTakesArg :ast :symtab :fid :pname
     # The receiver is a reference in BOTH families -- its default is `borrow`,
     # not `take`, so a record method acts on the caller's instance rather than
     # on a copy of it.
-    if isTake.not when isHold.not then {
+    if owns.not then {
         if pname == "this" then return true
         rnid: zast.poolFind pool: ast.names text: pname
         if rnid > 0 when (symtab.reg.thisParamNameIs tid: fid nameId: rnid) then return true
     }
-    if isTake.not when isHold.not when (markedValtypeRefParam :ast :symtab :fid :pname :pid
-    ) then return true
-    if isTake.not when (isReftypeParam
+    if owns.not when (markedValtypeRefParam :ast :symtab :fid :pname :pid) then return true
+    if owns.not when (isReftypeParam
         :ast
         :symtab
         :ctx
@@ -29783,12 +29770,7 @@ oweTakeParamFrees: function {
         ppn: ppnB.stringView
         ppid: pids.get i: pj
         pj = pj + 1
-        if (symtab.typing.declOwnershipIs
-            pool: ast.names
-            parentTypeId: fid
-            name: ppn
-            own: ztypes.zparamownership.takeMode
-        ) then {
+        if (paramTakesArg :ast :symtab :fid pname: ppn) then {
             pmnB: (paramVidIn
                 :ast
                 :symtab
@@ -37162,12 +37144,7 @@ lowerNativeArg: function {
     }
     iv: emitInterpArgExpr :ast :symtab :ctx n: op
     if iv.length > 0 then return iv
-    isTake: (symtab.typing.declOwnershipIs
-        pool: ast.names
-        parentTypeId: fid
-        name: pname
-        own: ztypes.zparamownership.takeMode
-    )
+    isTake: paramTakesArg :ast :symtab :fid :pname
     needAmp: false
     if isTake.not then {
         if (isReftypeParam
@@ -40303,12 +40280,7 @@ classParamByPointer: function {
     pid: u64
 } out bool is {
     pt: ztypes.tid.create from: pid.u64
-    take: (symtab.typing.declOwnershipIs
-        pool: ast.names
-        parentTypeId: mid
-        name: pname
-        own: ztypes.zparamownership.takeMode
-    )
+    take: paramTakesArg :ast :symtab fid: mid :pname
     if take.not when (isReftypeParam :ast :symtab :ctx tid: pt) then return true
     if (isBorrowStringParam :ast :symtab :ctx fid: mid :pname pid: pt) then return true
     if (markedValtypeRefParam :ast :symtab fid: mid :pname :pid) then return true

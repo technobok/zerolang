@@ -1419,7 +1419,10 @@ perf: $(PERFBIN)
 # +120 when a generator's `return` came to print its list too: the source.
 #
 # -304 when a return's three filters came to share one helper: the source.
-ALLOC_BASELINE := 2591295
+#
+# -249 when a `.hold` parameter came to take its argument as `.take` does: the
+# source.
+ALLOC_BASELINE := 2591046
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
