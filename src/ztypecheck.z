@@ -35197,11 +35197,11 @@ lockNonTrivialArg: function {
         viewParam: isViewArg
     )
     # an owned value no name holds, lent to a call whose result keeps it locked:
-    # the result pins the temp, which outlives the call as an unnamed local
-    if calleePins when isLockish when byRef when hadPending.not when (rootNameIdOf
-        :ast
-        n: (ast.nodes.get i: arg.operation.u64)
-    ).isZero then {
+    # the result pins the temp, which outlives the call as an unnamed local. A
+    # root that names no variable (`mkList`, auto-called) holds nothing either.
+    argRoot: rootNameIdOf :ast n: (ast.nodes.get i: arg.operation.u64)
+    rootIsVar: argRoot.isZero.not and (st.lookupVarId nameId: argRoot).some
+    if calleePins when isLockish when byRef when hadPending.not when rootIsVar.not then {
         tnId: nameIdOf :ast name: tnm.stringView
         pinsAppendOne :pins nameId: tnId shared: isViewArg mutable: isViewArg.not alias: false
         st.typing.pinnedArgTemps.set key: tnId value: vt.u64
@@ -35380,6 +35380,21 @@ moveArmFieldLeaves: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} i
     }
 }
 
+# atomReadsNoVariable -- the argument `op` is a bare name that reads no
+# variable, yet yields a reftype value: a function it auto-calls or a type it
+# constructs. Such a value is owned by nothing that is named.
+atomReadsNoVariable: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    op: zast.nodeid
+    vt: ztypes.tid
+} out bool is {
+    if (typeIsReftype :st tid: vt).not then return false
+    nm: bareAtomNameId n: (ast.nodes.get i: op.u64)
+    if nm.isZero then return false
+    return (st.lookupVarId nameId: nm).none
+}
+
 # hoistAndLockArg -- what the CALL does to the argument's source: hoist a
 # non-trivial value to a temp, take ownership of it, or place the lock a
 # borrowed parameter holds for the call's duration. A locked source joins
@@ -35403,7 +35418,11 @@ hoistAndLockArg: function {
     calleePins: bool
     arg: argref
 } is {
-    if (argIsTrivial :ast op: (ast.nodes.get i: arg.operation.u64)) then {
+    trivial: argIsTrivial :ast op: (ast.nodes.get i: arg.operation.u64)
+    # a bare name that is no variable -- a function it auto-calls, a type it
+    # constructs -- hands over a value no name holds: a temporary like a call's
+    if trivial when (atomReadsNoVariable :st :ast op: arg.operation :vt) then trivial = false
+    if trivial then {
         (hoistTrivialArg
             :st
             :ast
@@ -38432,7 +38451,7 @@ genericCallInstance: function {
 # a pin the result holds, answered as a concrete call's pins are.
 lockGenericCallArgs: function {
     st: zenv.ZSymbolTable
-    ast: Ast.view
+    ast: Ast
     call: callref
     # the minted instance, whose parameters carry the template's markers
     mid: ztypes.tid
@@ -38476,7 +38495,7 @@ pinGenericCallResult: function {
 # may keep.
 lockGenericCallArg: function {
     st: zenv.ZSymbolTable
-    ast: Ast.view
+    ast: Ast
     call: callref
     mid: ztypes.tid
     pnId: zast.nameid
@@ -38491,7 +38510,12 @@ lockGenericCallArg: function {
         return
     }
     bvo: st.lookupVarId nameId: bnId
-    if bvo.none then return
+    if bvo.none then {
+        # a name that is no variable -- a function it auto-calls, a type it
+        # constructs -- hands over a temporary the result may keep
+        if calleePins then pinGenericTempArg :st :ast :mid :pnId :arg :pins
+        return
+    }
     bto: st.lookup nameId: bnId
     if bto.none then return
     if (typeIsReftype :st tid: bto).not then return
@@ -38521,7 +38545,7 @@ lockGenericCallArg: function {
 # holds, as a plain call's path argument's is.
 pinGenericPathArg: function {
     st: zenv.ZSymbolTable
-    ast: Ast.view
+    ast: Ast
     mid: ztypes.tid
     pnId: zast.nameid
     arg: argref
@@ -38534,9 +38558,42 @@ pinGenericPathArg: function {
     if aow.isLockish.not then return
     src: ListVal zast.nameid
     appendValueTuple :ast n: an dst: src
-    if src.length == 0 then return
-    if (st.lookupVarId nameId: (src.get i: 0)).none then return
+    # a call's result, or any value no variable roots, is a temporary
+    rootsVar: false
+    if src.length > 0 then rootsVar = (st.lookupVarId nameId: (src.get i: 0)).some
+    if rootsVar.not then {
+        if an.call then pinGenericTempArg :st :ast :mid :pnId :arg :pins
+        return
+    }
     pinsAppend :pins path: src shared: true mutable: aow.isViewArg.not alias: true carried: false
+}
+
+# pinGenericTempArg -- an argument that is a TEMPORARY (a call's result, a
+# function a bare name auto-calls, a type it constructs) at a locking parameter
+# of a generic call whose result keeps its inputs: the value no name holds is
+# given one, which the result pins and which outlives the call as an unnamed
+# local -- as a concrete call's argument temp is (lockNonTrivialArg). Without
+# it the temporary was freed with the statement under the result.
+pinGenericTempArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    mid: ztypes.tid
+    pnId: zast.nameid
+    arg: argref
+    pins: List ztyping.PinPath
+} is {
+    vt: walkTypeOf :st nid: (nodeId n: (ast.nodes.get i: arg.operation.u64)).u64
+    if (typeIsReftype :st tid: vt).not then return
+    aow: argOwnershipOf :st funcId: mid isCtor: false :pnId :vt
+    if aow.isLockish.not then return
+    tn: st.typing.nextTempId
+    st.typing.nextTempId = tn + 1
+    tname: "_t\{tn}"
+    tnId: zast.poolSet pool: ast.names text: tname.stringView
+    vid: st.reg.newVariable ztypeId: vt ownership: ztypes.zownership.owned
+    st.defineVar nameId: tnId :vid
+    pinsAppendOne :pins nameId: tnId shared: aow.isViewArg mutable: aow.isViewArg.not alias: false
+    st.typing.pinnedArgTemps.set key: tnId value: vt.u64
 }
 
 # checkDottedTypeApplication -- a generic type reached through a dotted path and
