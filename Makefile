@@ -1403,7 +1403,10 @@ perf: $(PERFBIN)
 # source.
 #
 # +145 when a `with` came to end its value where it ends: the source.
-ALLOC_BASELINE := 2588723
+#
+# +449 when a branch that yields a value, and a `do` value, came to print the
+# checker's lists: the source.
+ALLOC_BASELINE := 2589172
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
