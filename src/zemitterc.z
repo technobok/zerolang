@@ -4041,10 +4041,9 @@ takeMoveCtype: function {
 
 # isFieldTake -- true iff `n` reduces to a `<obj>.field.take` whose parent is
 # itself a dotted path (a field, not a bare atom). The field lvalue is zeroed
-# after the move so the owner's destructor does not double-free the payload the
-# take aliased out (a bare `<x>.take` is handled by takeStringSource). The
-# checker lets such a take move only a generator's local, which the body reads as
-# `this.s`; a field that owns nothing hands on a copy, and zeroing it is harmless.
+# after the move (a bare `<x>.take` is handled by takeStringSource). The checker
+# lets such a take move only a field that owns nothing -- a number, a record, a
+# view -- and a move out of a field leaves it empty (takeMarkerOnField).
 isFieldTake: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
@@ -4227,7 +4226,7 @@ emitNarrowedTakeZero: function {
 # the typechecker's stamps ALONE (the emitter never re-resolves a name; a local
 # may legitimately shadow a type). A local variable (atomVariableId) is a move
 # source; a def/type/fn reference (refDecl) is not; an atom the checker
-# stamped as neither (e.g. a generator-promoted local, now instance state) is a
+# stamped as neither (a loop payload, which binds a name and no variable) is a
 # plain value and IS a move source.
 implicitTakeSourceAtom: function {
     symtab: zenv.ZSymbolTable.view
@@ -4297,93 +4296,6 @@ implicitTakeSource: function {
     } else {
         return "".string
     }
-}
-
-# fieldMoveNode -- the field an argument moves out of: `this.s.take`, or `this.s`
-# handed to a slot that takes it (`isTake`). The checker lets only a generator's
-# local move, which the body reads as a field of the instance. 0 unless the field
-# is read through names, the one shape with a place to zero.
-fieldMoveNode: function {ast: Ast.view n: astnode.view isTake: bool} out u64 is {
-    match (
-        n
-    ) case dottedpath then {
-        src: n.nodeid.u64
-        {
-            cn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-            if (ztypecheck.isMoveMarker name: cn.stringView) then {
-                src = n.parent.u64
-            } else if isTake.not then {
-                return 0
-            }
-        }
-        if (pathThroughNames :ast nid: src).not then return 0
-        return src
-    } else {
-        return 0
-    }
-}
-
-# pathThroughNames -- a member read whose receivers are all names: `h.p`,
-# `this.items.first`.
-pathThroughNames: function {ast: Ast.view nid: u64} out bool is {
-    n: ast.nodes.get i: nid
-    match (
-        n
-    ) case dottedpath then {
-        p: ast.nodes.get i: n.parent.u64
-        if p.atomid then return true
-        return (pathThroughNames :ast nid: n.parent.u64)
-    } else {
-        return false
-    }
-}
-
-# fieldMoveInPlace -- an argument that moves a generator's local out of the
-# instance -- `this.s.take`, or `this.s` handed to a slot that takes it; the
-# checker lets no other field move -- as one C expression that reads the field and
-# zeroes it where the move is written, so its owner's destructor finds nothing
-# to free and whatever runs after the move in the same statement reads the
-# field empty: a later argument of an enclosing call, the other operand, the
-# next interpolation part. "" for any other node, and for a field whose type
-# owns nothing.
-fieldMoveInPlace: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    n: astnode.view
-} out String is {
-    none: String
-    disp: symtab.typing.argDisposition.get key: (ztypecheck.nodeId :n).u64
-    if disp.none then return none
-    if disp == ztypes.zparamownership.holdMode then return none
-    fs: fieldMoveNode :ast :n isTake: disp == ztypes.zparamownership.takeMode
-    if fs == 0 then return none
-    fn: ast.nodes.get i: fs
-    ftid: stampIdOf :symtab nid: (interpPartNodeId n: fn)
-    # a field whose type owns nothing has nothing to zero, asked before any text
-    owns: symtab.reg.needsDestructor typeId: ftid
-    if owns.not then owns = isHeapPtrCollection :symtab :ctx tid: ftid
-    if owns.not then return none
-    # the path is spelled here to ask whether it is a place; when it is not,
-    # the caller spells it again, so what this spelling hoisted is dropped
-    hmk: pendingHoistMark :ctx
-    place: String
-    match (
-        fn
-    ) case dottedpath then {
-        place = emitDottedRead :ast :symtab :ctx n: fn
-    } else null
-    if (isPlainCPath s: place.stringView).not then {
-        dropHoistsTo :ctx mark: hmk
-        return none
-    }
-    zero: armTakeZeroC :ast :symtab :ctx tid: ftid
-    if zero.length == 0 then {
-        dropHoistsTo :ctx mark: hmk
-        return none
-    }
-    mv: "({ __typeof__(\{place}) _mv = \{place}; \{place} = \{zero}; _mv; })"
-    return mv
 }
 
 # emitExplicitTakeZero -- an explicit `<atom>.take` argument: the source is
@@ -4490,13 +4402,10 @@ emitCallTakeInvalidations: function {
             } case none then null
         }
         ts: takeStringSource :ast :symtab :ctx n: opNode
-        fieldSrc: fieldMoveNode :ast n: opNode :isTake
         if ts.length > 0 then {
             if isHold.not then {
                 emitExplicitTakeZero :ast :symtab :ctx :a ts: ts.stringView :ind :buf
             }
-        } else if fieldSrc > 0 then {
-            # zeroed where the move is written (fieldMoveInPlace)
         } else if isTake then {
             emitImplicitMoveZero :ast :symtab :ctx :a :ind :buf
         }
@@ -12091,9 +12000,9 @@ metaCreateFieldText: function {
             av = avM
         }
     } else {
-        # a field absent from the meta.create args (a generator's promoted
-        # local: an inner iterator struct or a loop counter) is value-
-        # initialized; a typed zero compiles for both scalars and structs.
+        # a field absent from the meta.create args (a generator's state: a
+        # local the body keeps, an inner iterator struct or a loop counter) is
+        # value-initialized; a typed zero compiles for both scalars and structs.
         ffid: fids.get i: fi
         ffct: (typeRefC
             :ast
@@ -16822,8 +16731,6 @@ emitExpr: function {
         lvv: atomVid :symtab nid: n.nodeid.u64
         return (emitLocalAtomNameAt :symtab :ctx nid: n.nodeid.u64 name: lvC.stringView vid: lvv)
     } case dottedpath then {
-        fmv: fieldMoveInPlace :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64)
-        if fmv.length > 0 then return fmv
         dre: emitDottedRead :ast :symtab :ctx :n
         return (loadValueStructRef :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64) e: dre.take)
     } case atomstring then {
@@ -19225,9 +19132,9 @@ emitListBind: function {
                         buf.append lzi0
                     }
                 }
-                # a take out of a FIELD or a local moves the buffer the same
-                # way: the source is zeroed so its owner's destroy no-ops
-                if (isFieldTake :ast n: avn) or (isLocalTake :ast :symtab n: avn) then {
+                # a take out of a local moves the buffer the same way: the
+                # source is zeroed so its own destroy no-ops
+                if (isLocalTake :ast :symtab n: avn) then {
                     lzf0: "\{ind}\{lvr0} = (\{lcb}_t){0};\n"
                     buf.append lzf0
                 }
@@ -19280,9 +19187,9 @@ emitHeapColBind: function {
                 buf.append hzi0
             }
         }
-        # a take out of a FIELD or a local moves the allocation the same
-        # way: the source is cleared so its owner's destroy no-ops
-        if (isFieldTake :ast n: avn) or (isLocalTake :ast :symtab n: avn) then {
+        # a take out of a local moves the allocation the same way: the
+        # source is cleared so its own destroy no-ops
+        if (isLocalTake :ast :symtab n: avn) then {
             hzf0: "\{ind}\{hvr} = NULL;\n"
             buf.append hzf0
         }
@@ -19448,12 +19355,6 @@ emitStringBind: function {
                         szi: "\{ind}\{szs} = (\{ctx.strC}_t){0};\n"
                         buf.append szi
                     }
-                }
-                # a take out of a FIELD moves the buffer the same way: the
-                # field is zeroed so the holder's destructor no-ops on it
-                if (isFieldTake :ast n: avn) then {
-                    szf: "\{ind}\{sx} = (\{ctx.strC}_t){0};\n"
-                    buf.append szf
                 }
             }
         }
@@ -20468,10 +20369,9 @@ emitStoreTo: function {
     }
     emitReassignDestroy :symtab :ctx :nm2 :rtnid :rtsid :ind :buf
     buf.append "\{ind}\{nm2} = \{rv2};\n"
-    # a `<obj>.field.take` RHS -- a generator's local, the one field that
-    # moves -- moved it out as a shallow struct copy: zero the field lvalue so
-    # the instance's destructor does not double-free the payload (mirrors the
-    # binding case; fn-typed fields are POD references and move nothing).
+    # a `<obj>.field.take` RHS -- a field that owns nothing, the one field that
+    # moves -- leaves the field empty (mirrors the binding case; fn-typed fields
+    # are POD references and move nothing).
     rftnid: interpPartNodeId n: valueNode
     if (isFieldTake :ast n: valueNode) when (valueIsFnTyped :symtab nid: rftnid).not then {
         rftz: movedZeroText :ast :symtab :ctx nid: rtnid tid: rtsid
@@ -23241,9 +23141,7 @@ emitObjIterRecv: function {
     # enclosing block's flush (and the return path), freeing owned
     # captured params. Registered BEFORE the loop label so break /
     # continue inside the loop never free the live instance.
-    # gated on structDestroyNontrivial ALONE: the destructor is now emitted
-    # for anything it answers true for, and the stamped flag misses a synth
-    # iterator whose only owned field is a promoted local
+    # gated on structDestroyNontrivial: whether the destructor frees anything
     if ownGit when (structDestroyNontrivial :symtab :ctx tid: itid) then {
         gdt: "    \{itCb}_destroy(&_git\{mN});\n"
         gdn: "_git\{mN}"
@@ -23674,10 +23572,10 @@ emitIntRangeFor: function {
         # A suspension inside the body RETURNS from `.call`, and the resume
         # `goto` lands inside the loop, PAST the C for-init -- so the counter,
         # which lives only in the header, is indeterminate on the next call and
-        # the loop yields once and reports itself exhausted. It cannot be
-        # promoted the way a local is: a `for` label is a nameid on the header's
-        # namedoperation, so crossWalk never records it and it carries no
-        # variable id to alias a field to either. Instead the counter keeps its
+        # the loop yields once and reports itself exhausted. It is no local the
+        # checker keeps in the instance: a `for` label is a nameid on the
+        # header's namedoperation and carries no variable id to alias a field
+        # to. Instead the counter keeps its
         # C local -- so the header, `continue` and the increment are all
         # untouched -- and is SPILLED to a state field across each suspension.
         pushed: false
@@ -39218,15 +39116,7 @@ emitOneRecord: function {
         ids: fids
         :buf
     )
-    # `needsDestructor` is a flag STAMPED at check time; for a generator's synth
-    # iterator class it is computed from the parameters alone, so a class whose
-    # only owned field is a promoted LOCAL carries false and its local was never
-    # freed. structDestroyNontrivial reads the REAL field types here at emit
-    # time, so it is the accurate authority -- ask it too.
-    wantDtor: (
-        (symtab.reg.needsDestructor typeId: tid) or (structDestroyNontrivial :symtab :ctx :tid)
-    )
-    if wantDtor then {
+    if (symtab.reg.needsDestructor typeId: tid) then {
         emitStructDestructor :ast :symtab :ctx :tid :fnames :fids :buf
     }
 }
@@ -39673,7 +39563,7 @@ emitExprFormYield: function {
         # bind the name TO ITS SLOT rather than copying it into a C local.
         # `a: yield 1` used after a later suspension read a dead local before
         # this -- silently, and long before expression-position yield existed:
-        # crossingLocals excludes every `name: yield E` binding from promotion
+        # the checker keeps no `name: yield E` binding in the instance
         # (a REFTYPE resume value is an alias into the caller's storage and a
         # stored pointer would dangle), and for a valtype that left the value
         # in a local the next `return` threw away. The slot is a field, so it
@@ -39870,7 +39760,7 @@ emitYieldStmt: function {
     flushBlockFrees :ctx tmp: ytmp fL: 0 lL: 0 diverged: false :buf
     # what the value moved out of is zeroed before the suspension returns
     emitValueTakeInvalidations :ast :symtab :ctx n: yx :ind :buf
-    # a boxed yield MOVES an lvalue operand (a promoted local `this->x`):
+    # a boxed yield MOVES an lvalue operand (a local the instance keeps):
     # zero the source so the instance destructor does not double-free it
     if ctx.genPayC.length > 0 when (isNonLvalueArg s: ve.stringView).not then {
         lzv: "\{ind}\{ve} = (\{ctx.genPayC}){0};\n"

@@ -1370,7 +1370,11 @@ perf: $(PERFBIN)
 # -13,630 when a generator's locals came to be the checker's: all of it the
 # source (the lowering's crossing analysis and its rewrite of the whole body are
 # gone; the self-compile has no generator).
-ALLOC_BASELINE := 2579905
+#
+# -7,995 when the machinery for moving a field out went with the generator
+# locals it served: -6,925 the source, -1,023 the emitter no longer spelling
+# every member read a second time to ask whether it moved a field.
+ALLOC_BASELINE := 2571910
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

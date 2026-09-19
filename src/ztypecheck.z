@@ -27133,11 +27133,7 @@ dottedBaseTid: function {
     if baseIsName then st.typing.suppressBareCtor = true
     supFnPrev: st.typing.suppressFnAutoCall
     if childIsTake then st.typing.suppressFnAutoCall = true
-    # a name-shaped base is read as part of the whole path, not on its own
-    mrbPrev: st.movedReadInBase
-    if baseIsName then st.movedReadInBase = true
     bt: checkValueAt :st :unitDecl :ast nid: dp.parent
-    st.movedReadInBase = mrbPrev
     st.typing.suppressFnAutoCall = supFnPrev
     st.typing.suppressBareCtor = supPrev
     if bt.isZero then {
@@ -28084,37 +28080,6 @@ reportTakenUseAt: function {
         hint: eh5
         :width
     )
-}
-
-# reportMovedArgRead -- a part of a call that reads `path` when an earlier
-# argument of a call still open moved a generator's local overlapping it (the
-# one field that moves, genLocalField): the callee would hold the local beside
-# the value moved out of it, exactly as it would a name passed after it moved. A
-# call that has completed is not open, so what it moved reads empty afterwards.
-reportMovedArgRead: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    path: (ListVal zast.nameid).view
-    nodeid: zast.nodeid
-    lineno: u32
-    colno: u32
-} is {
-    if path.length == 0 then return
-    mo: st.movedArgOverlapping path: path.listView
-    match (
-        mo
-    ) case some then {
-        mt: st.formatMovedArg pool: ast.names i: mo
-        rt: zenv.formatPath pool: ast.names path: path.listView
-        (reportTakenUseAt
-            :st
-            :nodeid
-            :lineno
-            :colno
-            name: mt.stringView
-            width: rt.length.u32.orPanic
-        )
-    } case none then null
 }
 
 # checkLiteralAtom -- a numeric literal atom types as its literal pseudo-type.
@@ -37804,16 +37769,6 @@ lockMethodReceiver: function {
     rroId: zast.nameid
 } out bool is {
     recvShared: true
-    # the receiver is passed by reference, so a generator's local an argument
-    # moved out of it is refused as a later argument's read of that local is
-    if st.movedArgDepths.length > 0 then {
-        mrr: ListVal zast.nameid
-        {
-            calM: ast.nodes.get i: call.callable.u64
-            methodReceiverTuple :ast n: calM dst: mrr
-        }
-        reportMovedArgRead :st :ast path: mrr nodeid: call.nid lineno: call.lineno colno: call.colno
-    }
     if rroId.isZero.not then {
         rvo2: st.lookupVarId nameId: rroId
         match (
@@ -42941,15 +42896,9 @@ checkValueArmAt: function {
         cr: callRefAt :ast :nid
         return (checkCall :st :unitDecl :ast call: cr)
     } case dottedpath then {
-        if st.movedArgDepths.length > 0 when st.movedReadInBase.not then {
-            checkMovedArgReadAt :st :ast :nid
-        }
         dr: dpRefAt :ast :nid
         return (checkDotted :st :unitDecl :ast dp: dr coerce: true)
     } case atomid then {
-        if st.movedArgDepths.length > 0 when st.movedReadInBase.not then {
-            checkMovedArgReadAt :st :ast :nid
-        }
         ar: atomRefAt :ast :nid
         return (checkAtomid :st :unitDecl :ast node: ar)
     } case atomstring then {
@@ -42980,42 +42929,11 @@ checkValueArmAt: function {
         return (checkFor :st :unitDecl :ast fornode: frr)
     } case labelvalue then {
         lvr: labelRefAt :ast :nid
-        if st.movedArgDepths.length > 0 then {
-            mlp: ListVal zast.nameid
-            mlp.append lvr.name
-            (reportMovedArgRead
-                :st
-                :ast
-                path: mlp
-                nodeid: lvr.nid
-                lineno: lvr.lineno
-                colno: lvr.colno
-            )
-        }
         return (checkLabelValueAt :st :ast lv: lvr)
     } else {
         return (ztypes.tid.create from: 0)
     }
 }
-
-# checkMovedArgReadAt -- a name or a field path read, whole, while a call that
-# moved a field out of an argument is still open: refused when the two paths
-# overlap. The base of a path is not read on its own (`h` in `h.q`).
-checkMovedArgReadAt: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} is {
-    mrp: ListVal zast.nameid
-    n: ast.nodes.get i: nid.u64
-    if (rootNameIdOf :ast :n).isZero then return
-    appendValueTuple :ast :n dst: mrp
-    (reportMovedArgRead
-        :st
-        :ast
-        path: mrp
-        nodeid: (nodeId :n)
-        lineno: (nodeLine :n)
-        colno: (nodeCol :n)
-    )
-}
-
 
 # ctlDivKind -- how a bare control name leaves the statement's scope: `return`
 # leaves the function, `break` the loop, `continue` the iteration;
@@ -51837,7 +51755,7 @@ lowerDeclaredGeneratorsInUnit: function {
 # load-bearing. This one APPENDS FIELDS to a definition the author wrote, and
 # indexing binds a definition's members where it stands -- so a field added
 # after indexing is not there when the class resolves, and the state cursor and
-# the promoted locals go missing from the struct while everything else about the
+# the loop counters go missing from the struct while everything else about the
 # program still typechecks. The function form appends a WHOLE NEW definition
 # instead, which resolves on demand whenever it is added, so it can run late and
 # does: it has to wait for the Iterator protocol. Nothing here needs Iterator.
