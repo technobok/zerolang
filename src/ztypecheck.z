@@ -33796,8 +33796,9 @@ unnamedReceiverLocal: function {
 }
 
 # adoptPinnedArgTemps -- the argument temps a pinning call's result keeps locked
-# died with the call's scope: each is defined again, owned, as an unnamed local
-# of the scope the call is in, so the pin names a live variable.
+# left the scope with the call: each is defined again -- the same variable, so
+# it is one temporary however far it is promoted -- as an unnamed local of the
+# scope the call is in, so the pin names a live variable.
 adoptPinnedArgTemps: function {st: zenv.ZSymbolTable pins: (List ztyping.PinPath).view} is {
     roots: ListVal zast.nameid
     with pit: pins.iterate do for p: pit loop roots.append (p.path.get i: 0)
@@ -33805,11 +33806,7 @@ adoptPinnedArgTemps: function {st: zenv.ZSymbolTable pins: (List ztyping.PinPath
         # a temp's name is unique to the run, so an entry is never asked twice
         ato: st.typing.pinnedArgTemps.get key: r
         if ato.some when (st.lookupVarId nameId: r).none then {
-            vid: (st.reg.newVariable
-                ztypeId: (ztypes.tid.create from: ato)
-                ownership: ztypes.zownership.owned
-            )
-            st.defineVar nameId: r :vid
+            st.defineVar nameId: r vid: ato
             st.typing.lineUnnamedLocals.append r
         }
     }
@@ -35255,7 +35252,8 @@ lockNonTrivialArg: function {
     if calleePins when isLockish when byRef when hadPending.not when rootIsVar.not then {
         tnId: nameIdOf :ast name: tnm.stringView
         pinsAppendOne :pins nameId: tnId shared: isViewArg mutable: isViewArg.not alias: false
-        st.typing.pinnedArgTemps.set key: tnId value: vt.u64
+        tvo: st.lookupVarId nameId: tnId
+        if tvo.some then st.typing.pinnedArgTemps.set key: tnId value: tvo
     }
     if hadPending.not when isLockish when byRef then {
         (lockCallArg
@@ -38642,7 +38640,7 @@ pinGenericTempArg: function {
     vid: st.reg.newVariable ztypeId: vt ownership: ztypes.zownership.owned
     st.defineVar nameId: tnId :vid
     pinsAppendOne :pins nameId: tnId shared: aow.isViewArg mutable: aow.isViewArg.not alias: false
-    st.typing.pinnedArgTemps.set key: tnId value: vt.u64
+    st.typing.pinnedArgTemps.set key: tnId value: vid
 }
 
 # checkDottedTypeApplication -- a generic type reached through a dotted path and

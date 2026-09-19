@@ -1358,7 +1358,10 @@ perf: $(PERFBIN)
 #
 # +4,178 when an instance walk came to keep its own variable ids: all of it the
 # source (the per-instance maps themselves cost 3).
-ALLOC_BASELINE := 2590774
+#
+# +434 when a promoted argument temp came to keep its variable: all of it the
+# source (the self-compile promotes none).
+ALLOC_BASELINE := 2591208
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
