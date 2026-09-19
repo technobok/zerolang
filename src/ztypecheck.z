@@ -40528,9 +40528,33 @@ lockGenericValueArg: function {
         return
     }
     # a projection -- a view, a slice, a borrowed element -- reaches into what
-    # its walk pinned; a fresh value (`s.copy`) pinned nothing and holds nothing
+    # its walk pinned; a fresh value (an interpolation, `s.copy`, a call that
+    # returns one) pinned nothing, and is held by a TEMPORARY of the call's,
+    # exactly as a concrete call's argument is. Without one the only owner of
+    # `buf.append "\{n}"`'s argument was a temp the emitter invented, and the
+    # checker had no name for the value it frees.
     if (movedFieldPath :st :ast n: opN).not then {
-        lockProjectionPins :st :ast :call :arg :pinMark
+        # A TRIVIAL argument is not hoisted, exactly as `hoistAndLockArg`
+        # splits it on the concrete path: a string literal is a view over
+        # static program memory, and a temporary that owned one would free it.
+        # The channel must also be EMPTY, not merely unchanged by this
+        # argument: `hoistArg` drains all of it, so a receiver's or an earlier
+        # argument's residue would be read as this value's sources and mint a
+        # BORROWED temp for an owned one. Both fall to the projection leg.
+        trivialG: argIsTrivial :ast op: opN
+        if st.typing.pendingPins.length == 0 when trivialG.not then {
+            (hoistArg
+                :ast
+                :st
+                argId: arg.operation
+                argType: vt
+                paramType: aow.pt
+                consumes: false
+                viewParam: aow.isViewArg
+            )
+        } else {
+            lockProjectionPins :st :ast :call :arg :pinMark
+        }
         return
     }
     src: ListVal zast.nameid
