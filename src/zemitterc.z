@@ -18785,54 +18785,37 @@ emitStringReturnValue: function {
 }
 
 # emitDiscardedResult -- a statement-position call (explicit, dotted auto-call,
-# or bare-atom auto-call) whose result is discarded: when the stamped result
-# type is an owned destructible value (String / class / union) and the RHS is
-# not a borrow by the declared signature (bindingRhsIsBorrow: funcReturnsBorrow
-# markers, container element views), bind the result to a temp and destroy it.
-# Emits `expr;` alone otherwise.
+# or bare-atom auto-call) whose result is discarded: the fresh owned result the
+# checker holds in a temporary of its own (discardTemp, keyed by the value's
+# node `nid`) is bound to it and destroyed as the statement ends; any other
+# result is evaluated for its effect alone.
 emitDiscardedResult: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    isBorrow: bool
+    nid: u64
     ce: StringView
     rtid: ztypes.tid
     ind: StringView
-    tmp: TmpCtr
     buf: String.borrow
 } is {
-    dctt: symtab.reg.typetypeOf typeId: rtid
-    dcdrop: false
-    if (symtab.reg.needsDestructor typeId: rtid) when isBorrow.not then {
-        if rtid == ctx.strTid then dcdrop = true
-        if dctt == ztypes.ztypetype.classType then dcdrop = true
-        if dctt == ztypes.ztypetype.unionType then dcdrop = true
+    dv: symtab.typing.discardTemp.get key: nid
+    if dv.none then {
+        buf.append "\{ind}(void)(\{ce});\n"
+        return
     }
-    if dcdrop when (isNonLvalueArg s: ce) then {
-        dctn: tmpNext :ctx :tmp
-        dctnm: "_c\{dctn}"
-        dcct: "\{ctx.strC}_t"
-        dcfree: "\{ind}\{ctx.strC}_free(&\{dctnm});\n"
-        if rtid != ctx.strTid then {
-            dcct = (typeRefC
-                :ast
-                :symtab
-                :ctx
-                tid: (ztypes.tid.create from: rtid.u64)
-                thisTid: ztypes.tid
-            )
-            dccb: ctxCname :ctx tid: (ztypes.tid.create from: rtid.u64)
-            dcref: "&\{dctnm}"
-            if (ctEndsWithStar ct: dcct.stringView) then dcref = "\{dctnm}"
-            dcfree = "\{ind}\{dccb}_destroy(\{dcref});\n"
-        }
-        dcdecl: "\{ind}\{dcct} \{dctnm} = \{ce};\n"
-        buf.append dcdecl
-        buf.append dcfree
-    } else {
-        lc: "\{ind}(void)(\{ce});\n"
-        buf.append lc
+    dnm: varCName :ctx vid: dv name: ""
+    if rtid == ctx.strTid then {
+        buf.append "\{ind}\{ctx.strC}_t \{dnm} = \{ce};\n"
+        buf.append "\{ind}\{ctx.strC}_free(&\{dnm});\n"
+        return
     }
+    dct: typeRefC :ast :symtab :ctx tid: rtid thisTid: ztypes.tid
+    dcb: ctxCname :ctx tid: rtid
+    dref: "&\{dnm}"
+    if (ctEndsWithStar ct: dct.stringView) then dref = dnm.copy
+    buf.append "\{ind}\{dct} \{dnm} = \{ce};\n"
+    buf.append "\{ind}\{dcb}_destroy(\{dref});\n"
 }
 
 # emitCallStmt -- one call-shaped statement: return / print / a plain call.
@@ -18907,16 +18890,14 @@ emitCallStmt: function {
     ce: emitCallValue :ast :symtab :ctx :call
     flushArgHoists :ctx :ind :tmp :buf
     dcrtid: stampIdOf :symtab nid: call.nodeid.u64
-    isBorrow98: callRhsIsBorrow :ast :symtab :ctx :call
     (emitDiscardedResult
         :ast
         :symtab
         :ctx
-        isBorrow: isBorrow98
+        nid: call.nodeid.u64
         ce: ce.stringView
         rtid: dcrtid
         :ind
-        :tmp
         :buf
     )
     emitCallTakeInvalidations :ast :symtab :ctx :call :ind :buf
@@ -19989,16 +19970,14 @@ emitDottedAutoCallStmt: function {
         buf.append lud
     } else {
         drtid: stampIdOf :symtab nid: (interpPartNodeId :n)
-        isBorrow99: bindingRhsIsBorrow :ast :symtab :ctx :n
         (emitDiscardedResult
             :ast
             :symtab
             :ctx
-            isBorrow: isBorrow99
+            nid: (zast.nodeIdOf :n).u64
             ce: de.stringView
             rtid: drtid
             :ind
-            :tmp
             :buf
         )
     }
@@ -20105,16 +20084,14 @@ emitContinueStmt: function {
             buf.append lu
         } else {
             urtid: stampIdOf :symtab nid: (interpPartNodeId :n)
-            isBorrow910: bindingRhsIsBorrow :ast :symtab :ctx :n
             (emitDiscardedResult
                 :ast
                 :symtab
                 :ctx
-                isBorrow: isBorrow910
+                nid: (zast.nodeIdOf :n).u64
                 ce: ue.stringView
                 rtid: urtid
                 :ind
-                :tmp
                 :buf
             )
         }
@@ -20148,16 +20125,14 @@ emitReturnStmt: function {
         flushArgHoists :ctx :ind :tmp :buf
         if (fce.stringView.startsWith prefix: "/*").not then {
             artid: stampIdOf :symtab nid: (interpPartNodeId :n)
-            isBorrow911: bindingRhsIsBorrow :ast :symtab :ctx :n
             (emitDiscardedResult
                 :ast
                 :symtab
                 :ctx
-                isBorrow: isBorrow911
+                nid: (zast.nodeIdOf :n).u64
                 ce: fce.stringView
                 rtid: artid
                 :ind
-                :tmp
                 :buf
             )
             return

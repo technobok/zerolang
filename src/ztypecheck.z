@@ -24707,6 +24707,7 @@ checkMemberAutoCall: function {
         mid: (ztypes.tid.create from: mo.u64)
     ) then {
         aShr: methodReceiverIsView :st mid: (ztypes.tid.create from: mo.u64)
+        noteStatementAutoCall :st nid: dp.nid.u64
         lockAutoCallReceiver :ast :st :dp shared: aShr
         ro: methodReturnOf :st mid: (ztypes.tid.create from: mo.u64)
         match (
@@ -25249,6 +25250,7 @@ checkUnitMemberValue: function {
             :st
             mid: (ztypes.tid.create from: memberDecl.u64)
         ) then {
+            noteStatementAutoCall :st nid: dp.nid.u64
             ro: methodReturnOf :st mid: (ztypes.tid.create from: memberDecl.u64)
             match (
                 ro
@@ -27442,6 +27444,7 @@ typeOfBareName: function {
             isAutoFn = false
         }
         if isAutoFn then {
+            noteStatementAutoCall :st nid: node.nid.u64
             ro: methodReturnOf :st mid: (ztypes.tid.create from: fo.u64)
             match (
                 ro
@@ -43259,6 +43262,9 @@ checkStmtLine: function {
     ul0: st.typing.lineUnnamedLocals.length
     tailLine: last and (st.tailBlock == blockId.u64) and blockId.isZero.not
     if tailLine then forwardTail :st :ast :innerId
+    # only a block's last line can be its value: a statement block's is not
+    discarded: tailLine.not and (last.not or (st.typing.stmtBlocks.has item: blockId.u64))
+    if discarded then noteStatementBlocks :st :ast :innerId
     if innerId.isZero.not then {
         dk = checkStmtInner :st :unitDecl :ast :innerId lineId: slnId
     }
@@ -43272,9 +43278,121 @@ checkStmtLine: function {
     )
     recordTempHoldingLine :st lineId: slnId from: ul0
     if last then stashArmValuePins :st :ast lineId: slnId
+    if discarded when dk == zenv.divkind.none then recordDiscard :st :ast :innerId
     drainPendingBorrow :st
     if dk > 0 then st.markUnreachable kind: dk
     if dk == zenv.divkind.cont then st.recordContinueTakes
+}
+
+# noteStatementBlocks -- the row `innerId` of a line whose value nothing
+# receives: an `if`, `match`, loop, `do` or `with` there is a statement, and so
+# is the last line of each of its arms and bodies (stmtBlocks).
+noteStatementBlocks: function {st: zenv.ZSymbolTable ast: Ast.view innerId: zast.nodeid} is {
+    if innerId.isZero then return
+    n: ast.nodes.get i: innerId.u64
+    match (
+        n
+    ) case forexpr then {
+        st.typing.stmtBlocks.add item: n.body.u64
+    } case doexpr then {
+        st.typing.stmtBlocks.add item: n.statement.u64
+    } case withexpr then {
+        st.typing.stmtBlocks.add item: n.body.u64
+        st.typing.stmtBlocks.add item: (doStatementOf n: (ast.nodes.get i: n.body.u64)).u64
+    } case ifexpr then {
+        k: u64
+        for k < n.clauses.count.u64 loop {
+            cl: ifClauseRefAt :ast nid: (zast.ifClauseAt :ast nid: innerId i: k)
+            k = k + 1
+            st.typing.stmtBlocks.add item: cl.statement.u64
+        }
+        st.typing.stmtBlocks.add item: n.elseclause.u64
+    } case caseexpr then {
+        k: u64
+        for k < n.clauses.count.u64 loop {
+            cc: caseClauseRefAt :ast nid: (zast.caseClauseAt :ast nid: innerId i: k)
+            k = k + 1
+            st.typing.stmtBlocks.add item: cc.statement.u64
+        }
+        st.typing.stmtBlocks.add item: n.elseclause.u64
+    } else null
+}
+
+# noteStatementAutoCall -- the function or method named at `nid` without an
+# argument list is called there, and `nid` is a statement's own value: a
+# result the statement may discard (recordDiscard).
+noteStatementAutoCall: function {st: zenv.ZSymbolTable nid: u64} is {
+    if nid == st.typing.stmtExprNid then st.typing.autoCallNodes.add item: nid
+}
+
+# doStatementOf -- the statement block a `do` node holds, 0 for any other node.
+doStatementOf: function {n: astnode.view} out zast.nodeid is {
+    match (
+        n
+    ) case doexpr then {
+        return n.statement
+    } else {
+        return zast.nodeid
+    }
+}
+
+# recordDiscard -- the statement whose row is `innerId` computes a value nothing
+# receives: when that value is a fresh owned result -- a call's, or a
+# construction's, that owns what it holds and borrows from nothing -- the
+# checker holds it in a temporary of its own that dies as the statement ends
+# (discardTemp, D4). A read of a local or a field holds nothing of its own.
+recordDiscard: function {st: zenv.ZSymbolTable ast: Ast innerId: zast.nodeid} is {
+    if innerId.isZero then return
+    if (freshResultNode :st :ast nid: innerId.u64).not then return
+    vt: walkTypeOf :st nid: innerId.u64
+    if vt.isZero then return
+    tid: ztypes.tid.create from: vt.u64
+    if (st.reg.needsDestructor typeId: tid).not then return
+    tt: st.reg.typetypeOf typeId: tid
+    if (tt == ztypes.ztypetype.classType or (tt == ztypes.ztypetype.unionType)).not then return
+    # a result that keeps a borrow of its inputs is a reference to them, an
+    # `outx` one a value of its own (checkAssignment's rule)
+    if st.typing.pendingPins.length > 0 when st.typing.pendingBorrowOwned.not then return
+    if (isViewFamilyTid :ast :st :tid) then return
+    vid: st.reg.newVariable ztypeId: tid ownership: ztypes.zownership.owned
+    st.reg.setVariableSynthOrigin id: vid origin: "discard".string
+    if st.recording then st.typing.discardTemp.set key: innerId.u64 value: vid
+}
+
+# freshResultNode -- the node computes a value of its own: a call of a function
+# or a construction -- not `return` and its kin, a borrowing wrapper or a
+# function reference -- or a function or method named without an argument list.
+freshResultNode: function {st: zenv.ZSymbolTable.view ast: Ast.view nid: u64} out bool is {
+    if (st.typing.autoCallNodes.has item: nid) then return true
+    ck: st.typing.callKind.get key: nid
+    match (
+        ck
+    ) case some then {
+        k: ck
+        match (
+            k
+        ) case regular then {
+            return true
+        } case recordCreate then {
+            return true
+        } case classCreate then {
+            return true
+        } case unionCreate then {
+            return true
+        } case protocolCreate then {
+            return true
+        } case facetCreate then {
+            return true
+        } case typedefCreate then {
+            return true
+        } case boxCreate then {
+            return true
+        } else {
+            return false
+        }
+    } case none then {
+        return false
+    }
 }
 
 # forwardTail -- the last line `innerId` of a block in return position: a `with`
@@ -44582,6 +44700,9 @@ checkFunctionBodyIn: function {
             st.tailBody = fn.body.u64
             st.tailBlock = fn.body.u64
         }
+        # a body's last line returns its value when it declares one (a tail,
+        # never a discard), and is a statement otherwise
+        st.typing.stmtBlocks.add item: fn.body.u64
         walkBodyAt :st :unitDecl :ast bodyId: fn.body
         checkImplicitReturn :st :ast defn: fn :bodyErrs
         st.tailBody = prevTailBody
