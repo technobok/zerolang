@@ -49934,14 +49934,57 @@ instantiatedAliasFold: function {
     if unm.isZero then return false
     dnm: zast.nameTextCopy :ast ref: (declNameIdOf :st :declId)
     if dnm.length == 0 then return false
+    # a value that names its own definition, directly or through another
+    # (`foo: bar foo`, `Strs: (List Strs)`), re-enters here while its
+    # arguments resolve: that is a cycle, reported once, and the re-entry is
+    # answered as a constant would be
+    open: false
+    with oit: st.typing.aliasFoldsOpen.iterate do for od: oit loop {
+        if od == declId.u64 then open = true
+    }
+    if open then {
+        reportAliasCycle :st :ast :declId :dnode
+        return false
+    }
+    st.typing.aliasFoldsOpen.append declId.u64
     cdr: callRefAt :ast nid: opId
-    return (resolveInstantiatedAlias
+    folded: (resolveInstantiatedAlias
         :ast
         :st
         unitDecl: unm
         frame: own
         defName: dnm.stringView
         defn: cdr
+    )
+    st.typing.aliasFoldsOpen.pop
+    return folded
+}
+
+# reportAliasCycle -- a unit-level definition whose value names the definition
+# itself, directly or through another: no value or type can come out of it.
+reportAliasCycle: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    declId: ztypes.declid
+    dnode: u32
+} is {
+    if (st.typing.aliasCyclesReported.has item: declId.u64) then return
+    st.typing.aliasCyclesReported.add item: declId.u64
+    dn: ast.nodes.get i: dnode.u64
+    nm: zast.nameTextAt :ast ref: (declNameIdOf :st :declId)
+    mc: "'\{nm}' is defined in terms of itself"
+    hc: "a definition's value may not name the definition, directly or through another one".string
+    nc: String
+    (addErrorH
+        :st
+        nodeid: (nodeId n: dn)
+        lineno: (nodeLine n: dn)
+        colno: (nodeCol n: dn)
+        e: zast.err.constError
+        msg: mc
+        note: nc
+        hint: hc
+        width: nm.length.u32.orPanic
     )
 }
 

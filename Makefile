@@ -1314,7 +1314,11 @@ perf: $(PERFBIN)
 # pinning result to hold its pins: +1,278 of it is those locks (the new source,
 # compiled by both compilers -- the old compiler reads it, the new one refuses
 # the old source's two views into the registry), the rest the source.
-ALLOC_BASELINE := 2582286
+#
+# +1,114 when a definition whose value names itself came to be reported rather
+# than followed down the stack: +240 of it is the open-definition mark each
+# alias-shaped fold pushes, the rest the source.
+ALLOC_BASELINE := 2583400
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
