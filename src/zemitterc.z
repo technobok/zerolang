@@ -19898,25 +19898,18 @@ emitDottedAutoCallStmt: function {
     # covers it) -- emit nothing, like emitCallStmt. A `.take` whose value
     # nothing receives ends the local here as `.drop` does.
     dct: dottedChildText :ast :n
-    if dct == "drop" or (ztypecheck.isMoveMarker name: dct) then {
+    isDrop: dct == "drop"
+    if isDrop or (ztypecheck.isMoveMarker name: dct) then {
         rrid: dottedReceiverStampId :ast :symtab callable: n
         rtt: symtab.reg.typetypeOf typeId: rrid
         if rtt == ztypes.ztypetype.protocolType then return
-        rcvKey: atomVid :symtab nid: (dottedBaseNodeId :ast :n)
-        rbrw: false
-        bvg: ctx.borrowedVars.get key: rcvKey
-        match (
-            bvg
-        ) case some then {
-            rbrw = bvg
-        } case none then null
         # a name that owns nothing -- a borrow, a parameter the caller still
-        # owns -- ends with its drop, and what it named is left to its owner
-        if (
-            (symtab.reg.variableOwnershipOf id: rcvKey) == ztypes.zownership.borrowed
-        ) then rbrw = true
-        if rbrw then {
-            emitDropReleasedTemps :symtab :tmp dropNid: (zast.nodeIdOf :n).u64 :ind :buf
+        # owns -- ends with its drop, and what it named is left to its owner:
+        # the checker recorded no destroy there. A `.take` nothing receives
+        # ends an owned local, which the checker let it move.
+        dropNid: (zast.nodeIdOf :n).u64
+        if isDrop when (namedDestroyOwes :symtab nid: dropNid).not then {
+            emitDropReleasedTemps :symtab :tmp :dropNid :ind :buf
             return
         }
         rcvV: emitDottedReceiver :ast :symtab :ctx callable: n
@@ -20305,6 +20298,14 @@ emitReassignStmt: function {
         :ctx
         tid: (reassignDestroyTid :ast :symtab n: topathNode nid: rtnid)
     )
+    # a local's old value dies as the checker recorded it: not when it was
+    # moved away, nor when the local owns nothing; a field's always does, and
+    # so does that of a name a loop's header binds, which is no variable of
+    # the checker's
+    destroyOld: true
+    if topathNode.atomid when (atomVid :symtab nid: rtnid).isZero.not then {
+        destroyOld = namedDestroyOwes :symtab nid: n.nodeid.u64
+    }
     (emitStoreTo
         :ast
         :symtab
@@ -20313,17 +20314,28 @@ emitReassignStmt: function {
         :rtnid
         :rtsid
         valueNode: (ast.nodes.get i: n.value.u64)
+        :destroyOld
         :ind
         :tmp
         :buf
     )
 }
 
+# namedDestroyOwes -- whether the `.drop` or the reassignment at `nid` destroys
+# the value its local holds: the checker recorded one there (exitDestroy) for
+# a local that owns what it holds, and the local was not moved away first.
+namedDestroyOwes: function {symtab: zenv.ZSymbolTable.view nid: u64} out bool is {
+    rg: symtab.typing.exitDestroy.get key: nid
+    if rg.none then return false
+    return (symtab.typing.destroyItems.get i: rg.start.u64).state != 1
+}
+
 # emitStoreTo -- store a value into the C lvalue `nm2`, replacing what it held:
 # the value runs first (into a temporary when it is no lvalue and the target
-# owns heap), the old value is freed, the new one written, and every source the
-# value moved out of is zeroed so its own free no-ops. `rtnid` and `rtsid` are
-# the target's stamped node and chased type.
+# owns heap), the old value is freed when it is owed (`destroyOld`), the new
+# one written, and every source the value moved out of is zeroed so its own
+# free no-ops. `rtnid` and `rtsid` are the target's stamped node and chased
+# type.
 emitStoreTo: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -20332,6 +20344,7 @@ emitStoreTo: function {
     rtnid: u64
     rtsid: ztypes.tid
     valueNode: astnode.view
+    destroyOld: bool
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -20354,7 +20367,7 @@ emitStoreTo: function {
         emitMovedArgZeroing :ast :symtab :ctx n: valueNode :ind :buf
         ran = true
     }
-    emitReassignDestroy :symtab :ctx :nm2 :rtnid :rtsid :ind :buf
+    if destroyOld then emitReassignDestroy :symtab :ctx :nm2 :rtnid :rtsid :ind :buf
     buf.append "\{ind}\{nm2} = \{rv2};\n"
     # a `<obj>.field.take` RHS -- a field that owns nothing, the one field that
     # moves -- leaves the field empty (mirrors the binding case; fn-typed fields
@@ -20971,6 +20984,8 @@ emitGenLocalBind: function {
         rtnid: n.nodeid.u64
         :rtsid
         valueNode: (ast.nodes.get i: n.value.u64)
+        # what an earlier walk of this binding left in the field
+        destroyOld: true
         :ind
         :tmp
         :buf

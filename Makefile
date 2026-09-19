@@ -1439,7 +1439,10 @@ perf: $(PERFBIN)
 #
 # +2,177 when a body's last line came to be recorded as the return it is:
 # the source.
-ALLOC_BASELINE := 2602134
+#
+# +328 when a reassignment and a `.drop` came to destroy what the checker
+# recorded: the source.
+ALLOC_BASELINE := 2602462
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
