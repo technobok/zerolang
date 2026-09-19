@@ -26761,6 +26761,10 @@ checkTransferMarker: function {
                     st.releaseHeldLocks holder: mh
                     if (isDropMarkerId nameId: cnId) then noteDropReleasedTemps :st dropNid: dp.nid
                 }
+                if (isDropMarkerId nameId: cnId) then (st.recordNamedDestroy
+                    nid: dp.nid.u64
+                    nameId: mkRootId
+                )
                 st.invalidate nameId: mkRootId loc: takenHere
             }
         } case none then {
@@ -29956,6 +29960,8 @@ checkReassignment: function {
     checkReassignedType :st :ast :rasgn :lvt :rvt
     checkNarrowedTargetWrite :st :ast :rasgn
     checkMethodRefTarget :st :ast :rasgn
+    # the local's old value dies here, in whatever state the value left it
+    if hbNmId.isZero.not then st.recordNamedDestroy nid: rasgn.nid.u64 nameId: hbNmId
     invalidateMovedSource :st :ast :rasgn :rvt
     moveArmLeavesByReassignment :st :ast :rasgn
 }
@@ -42871,6 +42877,7 @@ checkStmtExpression: function {
     k0: ctlDivKind bn: bn0
     ctl0: k0 > 0
     if ctl0.not when isR0 then k0 = zenv.divkind.exit
+    recordControlDestroy :st :ast :valueId kind: k0
     # a statement whose value resolved to nothing and raised nothing:
     # an unresolvable root name is an unknown reference (the emitter
     # would otherwise hit its unhandled-callee backstop)
@@ -42884,6 +42891,35 @@ checkStmtExpression: function {
         }
     }
     return k0
+}
+
+# recordControlDestroy -- what the control statement `valueId` destroys as it
+# leaves (exitDestroy): a `return` every scope of its function, but the local it
+# hands back when it returns a bare name; a `break` or a `continue` every scope
+# inside its loop.
+recordControlDestroy: function {
+    st: zenv.ZSymbolTable ast: Ast.view valueId: zast.nodeid kind: u8
+} is {
+    if kind == zenv.divkind.exit then {
+        ret: ztypes.vid
+        {
+            vn: ast.nodes.get i: valueId.u64
+            if vn.call when vn.arguments.count == 1 then {
+                a0: (argRefAt
+                    :ast
+                    nid: (zast.nodeid.create
+                        from: (zast.kidAt kids: ast.kids span: vn.arguments i: 0)
+                    )
+                )
+                rn: bareAtomNameId n: (ast.nodes.get i: a0.operation.u64)
+                if rn.isZero.not then ret = (st.lookupVarId nameId: rn).or d: ztypes.vid
+            }
+        }
+        st.recordReturnDestroy nid: valueId.u64 except: ret
+    }
+    if kind == zenv.divkind.brk or (kind == zenv.divkind.cont) then (st.recordLoopExitDestroy
+        nid: valueId.u64
+    )
 }
 
 # checkStmtInner -- dispatch a statement line's inner row by arm, and stamp the
@@ -44133,6 +44169,7 @@ checkFunctionBodyIn: function {
         prevSup: st.typing.suppressParamStamps
         if isGenDef then st.typing.suppressParamStamps = true
         st.push parent: rf node: fn.nid
+        st.fnScopeDepths.append st.open.length - 1
         kP: u64
         for kP < fn.nparams loop {
             pmId: (zast.fnParamAt :ast nid: fn.nid i: kP).u32
@@ -44233,6 +44270,7 @@ checkFunctionBodyIn: function {
         st.typing.currentReturnsView = prevRv
         st.typing.currentFnPins = prevFp
         st.typing.currentFnTid = prevFn
+        st.fnScopeDepths.pop
         st.pop
         st.typing.suppressParamStamps = prevSup
     }

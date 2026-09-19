@@ -418,6 +418,9 @@ ZSymbolTable: class {
     genBorrowDepths: ListVal u64
     # how many dry runs are open: nothing a dry run walks is recorded
     dryRunDepth: u64
+    # the place in `open` of each function body open, innermost last: a
+    # `return` leaves every scope from there up
+    fnScopeDepths: ListVal u64
     # the generic-parameter answers a TEMPLATE walk keeps out of the shared stamp
     # table, by node, so that walk can still read what it just checked
     templateStamps: (IdMapV u64 v: ztypes.tid)
@@ -888,19 +891,80 @@ ZSymbolTable: class {
     }
 
     # appendOwnedOf -- the variables `scope` binds that a destroy point lists,
-    # newest first, each in the state it is in here.
-    appendOwnedOf: function {:this scope: ztypes.declid} is {
+    # newest first, each in the state it is in here, but `except`.
+    appendOwnedOf: function {:this scope: ztypes.declid except: ztypes.vid} is {
         ki: this.typing.declChildSlots declId: scope
         for ki > 0 loop {
             ki = ki - 1
             kd: this.typing.declChildAt declId: scope index: ki
             v: this.typing.declLocalVarOf declId: kd
-            if (this.ownsDestroy vid: v) then {
+            if v != except when (this.ownsDestroy vid: v) then {
                 vs: this.stateOfDecl declId: kd
                 this.typing.destroyItems.append (ztyping.destroyitem vid: v state: vs)
                 if vs == 2 then this.typing.zeroOnMove.add item: v.u64
             }
         }
+    }
+
+    # recordExitDestroy -- what the exit at `nid` destroys: the owned locals of
+    # every open scope from the innermost down to the one at `downTo` in `open`,
+    # innermost first, but `except` -- the local a `return` hands back.
+    recordExitDestroy: function {:this nid: u64 downTo: u64 except: ztypes.vid} is {
+        if this.recording.not then return
+        start: this.typing.destroyItems.length
+        i: this.open.length
+        for i > downTo loop {
+            i = i - 1
+            sid: (this.open.get :i).id
+            if sid.isZero.not then this.appendOwnedOf scope: sid :except
+        }
+        this.closeExitRange :nid :start
+    }
+
+    # recordReturnDestroy -- what the `return` at `nid` destroys: every scope of
+    # the function it leaves, but the local `except` it returns.
+    recordReturnDestroy: function {:this nid: u64 except: ztypes.vid} is {
+        n: this.fnScopeDepths.length
+        if n == 0 then return
+        this.recordExitDestroy :nid downTo: (this.fnScopeDepths.get i: n - 1) :except
+    }
+
+    # recordLoopExitDestroy -- what the `break` or `continue` at `nid` destroys:
+    # every scope inside its loop, the loop's own among them.
+    recordLoopExitDestroy: function {:this nid: u64} is {
+        n: this.loopRuns.length
+        if n == 0 then return
+        (this.recordExitDestroy
+            :nid
+            downTo: (this.loopRuns.get i: n - 1).scopeIndex
+            except: ztypes.vid
+        )
+    }
+
+    # recordNamedDestroy -- what the `.drop` or the reassignment at `nid`
+    # destroys: the value the local `nameId` holds there.
+    recordNamedDestroy: function {:this nid: u64 nameId: zast.nameid} is {
+        if this.recording.not then return
+        d: this.findLocal :nameId
+        if d.isZero then return
+        v: this.typing.declLocalVarOf declId: d
+        if (this.ownsDestroy vid: v).not then return
+        start: this.typing.destroyItems.length
+        vs: this.stateOfDecl declId: d
+        this.typing.destroyItems.append (ztyping.destroyitem vid: v state: vs)
+        if vs == 2 then this.typing.zeroOnMove.add item: v.u64
+        this.closeExitRange :nid :start
+    }
+
+    # closeExitRange -- the items from `start` are what the exit at `nid`
+    # destroys; nothing is recorded for an exit that destroys nothing.
+    closeExitRange: function {:this nid: u64 start: u64} is {
+        n: this.typing.destroyItems.length - start
+        if n == 0 then return
+        (this.typing.exitDestroy.set
+            key: nid
+            value: (ztyping.destroyrange start: start.u32.orPanic len: n.u32.orPanic)
+        )
     }
 
     # recordScopeDestroy -- what the end of the closing scope `fr` destroys, when
@@ -910,7 +974,7 @@ ZSymbolTable: class {
         if this.recording.not then return
         if (this.unreachableScopes.has item: fr.id.u64) then return
         start: this.typing.destroyItems.length
-        this.appendOwnedOf scope: fr.id
+        this.appendOwnedOf scope: fr.id except: ztypes.vid
         n: this.typing.destroyItems.length - start
         if n == 0 then return
         (this.typing.scopeDestroy.set
@@ -2024,6 +2088,7 @@ ZSymbolTable: class {
             breakStart: this.loopBreakTakes.length
             contStart: this.loopContinueTakes.length
             onceStart: this.loopOnceTakes.length
+            scopeIndex: this.open.length - 1
         )
     }
 
@@ -2244,6 +2309,9 @@ looprun: record {
     contStart: u64
     # into loopOnceTakes
     onceStart: u64
+    # the place in `open` of the loop's own scope: a `break` or a `continue`
+    # leaves every scope from there up
+    scopeIndex: u64
 }
 
 # divkind -- how a scope's walk ended, when it did not fall through: `exit`
@@ -2275,6 +2343,7 @@ newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} o
         genBorrowNames: ListVal zast.nameid
         genBorrowDepths: ListVal u64
         dryRunDepth: 0
+        fnScopeDepths: ListVal u64
         templateStamps: (IdMapV u64 v: ztypes.tid)
         templateArmPreds: (IdMapV u64 v: ztypes.tid)
         scopeHidden: IdSet u64

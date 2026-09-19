@@ -1390,7 +1390,10 @@ perf: $(PERFBIN)
 #
 # +8,494 when the checker came to record what each scope's end destroys: +492
 # the behaviour (the self-compile's own lists), the rest the source.
-ALLOC_BASELINE := 2577330
+#
+# +5,255 when the checker came to record what each exit destroys: +28 the
+# behaviour, the rest the source.
+ALLOC_BASELINE := 2582585
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

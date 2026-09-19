@@ -133,6 +133,65 @@ canonNodeText: function {ast: Ast.view nid: u64} out String is {
     return txt
 }
 
+# destroyVarNames -- each variable a local binds, by id, to the local's name:
+# a variable is known by its id alone, and the dump names it.
+destroyVarNames: function {st: zenv.ZSymbolTable.view} out (IdMapV u64 v: u32) is {
+    names: IdMapV u64 v: u32
+    di: u64
+    for di < st.typing.decls.length loop {
+        dd: ztypes.declid.create from: di
+        dv: st.typing.declLocalVarOf declId: dd
+        if dv.isZero.not then names.set key: dv.u64 value: (st.typing.declNameOf declId: dd)
+        di = di + 1
+    }
+    return names
+}
+
+# appendDestroyRows -- one dump row per item of the destroy point `nid`.
+appendDestroyRows: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    names: (IdMapV u64 v: u32).view
+    kind: StringView
+    nid: u64
+    range: ztyping.destroyrange
+    rows: List String
+} is {
+    nt: canonNodeText :ast :nid
+    i: u64
+    for i < range.len.u64 loop {
+        it: st.typing.destroyItems.get i: range.start.u64 + i
+        vni: (names.get key: it.vid.u64).or d: 0
+        vn: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: vni)
+        vnSql: sqlStr s: vn.stringView
+        stt: destroyStateText state: it.state
+        rows.append "\{kind} | \{nt} | \{i} | \{vnSql} | \{stt}"
+        i = i + 1
+    }
+}
+
+# exitKindText -- which exit a destroy point's node is: the control name a
+# statement calls or names (return, break, continue), a `.drop`, or a
+# reassignment.
+exitKindText: function {ast: Ast.view nid: u64} out String is {
+    n: ast.nodes.get i: nid
+    match (
+        n
+    ) case reassignment then {
+        return "reassign".string
+    } case dottedpath then {
+        return "drop".string
+    } case call then {
+        cn: ast.nodes.get i: n.callable.u64
+        if cn.atomid then return (zast.nameTextCopy :ast ref: cn.name)
+        return "call".string
+    } case atomid then {
+        return (zast.nameTextCopy :ast ref: n.name)
+    } else {
+        return "exit".string
+    }
+}
+
 # destroyStateText -- a destroy item's state as the dump spells it.
 destroyStateText: function {state: u8} out StringView is {
     if state == 1 then return "moved"
@@ -769,13 +828,9 @@ ZDumper: class {
         }
     }
 
-    # appendAtomStamps -- one row per atom-use variable-id stamp and per
-    appendAtomStamps: function {:this typing: ztyping.ZTyping pool: zast.StringPool.view} is {
-        with avit: typing.atomVariableId.iterateItems do for av: avit loop {
-            row: "INSERT OR IGNORE INTO atom_variable VALUES (\{av.key}, \{av.value});\n"
-            this.acc.append s: row
-        }
-        # what each scope's end destroys, in order
+    # appendDestroyRaw -- one row per item of each scope's end and each exit,
+    # in order.
+    appendDestroyRaw: function {:this typing: ztyping.ZTyping} is {
         with sdit: typing.scopeDestroy.iterateItems do for sd: sdit loop {
             sdi: u64
             for sdi < sd.value.len.u64 loop {
@@ -784,6 +839,23 @@ ZDumper: class {
                 this.acc.append s: rowsd
                 sdi = sdi + 1
             }
+        }
+        with edit: typing.exitDestroy.iterateItems do for ed: edit loop {
+            edi: u64
+            for edi < ed.value.len.u64 loop {
+                eit: typing.destroyItems.get i: ed.value.start.u64 + edi
+                rowed: "INSERT INTO destroy VALUES ('exit', \{ed.key}, \{edi}, \{eit.vid}, \{eit.state});\n"
+                this.acc.append s: rowed
+                edi = edi + 1
+            }
+        }
+    }
+
+    # appendAtomStamps -- one row per atom-use variable-id stamp and per
+    appendAtomStamps: function {:this typing: ztyping.ZTyping pool: zast.StringPool.view} is {
+        with avit: typing.atomVariableId.iterateItems do for av: avit loop {
+            row: "INSERT OR IGNORE INTO atom_variable VALUES (\{av.key}, \{av.value});\n"
+            this.acc.append s: row
         }
         # the field each generator local is kept in
         with glit: typing.genLocalFieldOf.iterateItems do for gl: glit loop {
@@ -1427,28 +1499,28 @@ ZDumper: class {
     # appendDestroyCanon -- what each destroy point destroys: the site's kind and
     # node, each item's place in its order, the variable by name and its state.
     appendDestroyCanon: function {:this ast: Ast.view st: zenv.ZSymbolTable.view} is {
-        names: IdMapV u64 v: u32
-        di: u64
-        for di < st.typing.decls.length loop {
-            dd: ztypes.declid.create from: di
-            dv: st.typing.declLocalVarOf declId: dd
-            if dv.isZero.not then names.set key: dv.u64 value: (st.typing.declNameOf declId: dd)
-            di = di + 1
-        }
+        names: destroyVarNames :st
         rows: List String
-        with sdit: st.typing.scopeDestroy.iterateItems do for sd: sdit loop {
-            nt: canonNodeText :ast nid: sd.key
-            sdi: u64
-            for sdi < sd.value.len.u64 loop {
-                it: st.typing.destroyItems.get i: sd.value.start.u64 + sdi
-                vni: (names.get key: it.vid.u64).or d: 0
-                vn: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: vni)
-                vnSql: sqlStr s: vn.stringView
-                rows.append "scope | \{nt} | \{sdi} | \{vnSql} | \{(destroyStateText
-                    state: it.state
-                )}"
-                sdi = sdi + 1
-            }
+        with sdit: st.typing.scopeDestroy.iterateItems do for sd: sdit loop (appendDestroyRows
+            :ast
+            :st
+            :names
+            kind: "scope"
+            nid: sd.key
+            range: sd.value
+            :rows
+        )
+        with edit: st.typing.exitDestroy.iterateItems do for ed: edit loop {
+            ekd: exitKindText :ast nid: ed.key
+            (appendDestroyRows
+                :ast
+                :st
+                :names
+                kind: ekd.stringView
+                nid: ed.key
+                range: ed.value
+                :rows
+            )
         }
         this.emitSection title: "destroy" :rows
     }
@@ -1498,6 +1570,7 @@ dumpSql: function {program: Ast.view vfs: zvfs.ZVfs symtab: zenv.ZSymbolTable} o
     d.appendGenericArgs st: symtab
     d.appendTypedNodes typing: symtab.typing
     d.appendAtomStamps typing: symtab.typing pool: program.names
+    d.appendDestroyRaw typing: symtab.typing
     d.appendMemberConst typing: symtab.typing
     d.appendConformance typing: symtab.typing
     d.appendSymbolTable ast: program st: symtab
