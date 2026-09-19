@@ -1417,7 +1417,9 @@ perf: $(PERFBIN)
 # checker's lists: -1,052 the behaviour, the rest the source.
 #
 # +120 when a generator's `return` came to print its list too: the source.
-ALLOC_BASELINE := 2591599
+#
+# -304 when a return's three filters came to share one helper: the source.
+ALLOC_BASELINE := 2591295
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1621,7 +1623,7 @@ lifetime-guard:
 	chk() { if [ "$$2" -gt "$$3" ]; then echo "lifetime-guard FAIL: $$1 = $$2 (baseline $$3)"; fail=1; \
 	  elif [ "$$2" -lt "$$3" ]; then echo "lifetime-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
 	chk "registerScopeDestroy" "$$l1" 6; \
-	chk "refsLocal" "$$l2" 6; \
+	chk "refsLocal" "$$l2" 4; \
 	chk "isNonLvalueArg" "$$l3" 30; \
 	chk "bindingRhsIsBorrow" "$$l4" 18; \
 	chk "'_ah{' argument hoists" "$$l5" 9; \

@@ -22627,7 +22627,7 @@ emitExitItem: function {
 
 # exitKeeps -- whether an exit leaves the registered local `vid` (C name
 # `name`) alone: the returned value `retExpr` reads it (`keepRefd`), or it
-# names another's storage.
+# names another's storage (ctx.aliases).
 exitKeeps: function {
     ctx: Ctx.view vid: ztypes.vid name: StringView retExpr: StringView keepRefd: bool
 } out bool is {
@@ -29692,10 +29692,7 @@ emitReturnCleanup: function {
         fvR: tmp.frees.get i: fRi
         fRi = fRi + 1
         keepF: (
-            keepRefd and
-            (refsLocal expr: retExpr name: fvR.name.stringView) or
-            (vvHas xs: ctx.aliases vid: fvR.vid) or
-            fvR.spent
+            fvR.spent or (exitKeeps :ctx vid: fvR.vid name: fvR.name.stringView :retExpr :keepRefd)
         ).not
         if keepF when allRows or fvR.vid.isZero then {
             lfR: "\{ind}\{ctx.strC}_free(&\{fvR.name});\n"
@@ -29707,10 +29704,8 @@ emitReturnCleanup: function {
     for li < nL loop {
         owed: tmp.listFrees.get i: li
         keepL: (
-            keepRefd and
-            (refsLocal expr: retExpr name: owed.name.stringView) or
-            (vvHas xs: ctx.aliases vid: owed.vid) or
-            owed.spent
+            owed.spent or
+            (exitKeeps :ctx vid: owed.vid name: owed.name.stringView :retExpr :keepRefd)
         ).not
         if keepL when allRows or owed.vid.isZero then buf.append owed.stmt
         li = li + 1
@@ -29725,16 +29720,15 @@ emitReturnCleanup: function {
         ccl0: ctx.breakLabelCleanup.get i: ci
         ccv0: ctx.breakLabelCleanupVar.get i: ci
         cRaw: ctx.breakLabelCleanupRaw.get i: ci
-        if ccl0.length > 0 then {
-            keepC: (
-                keepRefd and
-                (refsLocal expr: retExpr name: ccv0.stringView) or
-                (vvHas xs: ctx.aliases vid: cRaw)
-            ).not
-            if keepC then {
-                lcr: "\{ind}\{ccl0}"
-                buf.append lcr
-            }
+        if ccl0.length > 0 when (exitKeeps
+            :ctx
+            vid: cRaw
+            name: ccv0.stringView
+            :retExpr
+            :keepRefd
+        ).not then {
+            lcr: "\{ind}\{ccl0}"
+            buf.append lcr
         }
         ci = ci + 1
     }
