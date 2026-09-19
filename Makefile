@@ -1396,7 +1396,9 @@ perf: $(PERFBIN)
 #
 # +4,302 when a block's, a branch's and a body's end came to print the
 # checker's lists: -170 the behaviour, the rest the source.
-ALLOC_BASELINE := 2586887
+#
+# +600 when a loop body's end came to print them too: the source.
+ALLOC_BASELINE := 2587487
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
