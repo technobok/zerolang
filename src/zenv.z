@@ -302,6 +302,10 @@ openscope: record {
     id: ztypes.declid
     # the scope it was opened inside
     parent: ztypes.declid
+    # the node whose evaluation the scope brackets -- a function body, a block,
+    # an arm, a loop, a call -- or zero for a bracket the checker opens for
+    # itself, which no C block closes
+    node: zast.nodeid
     # the entry index the scope began at, which is what popping restores to
     start: u64
     # how many definitions it has taken so far
@@ -454,11 +458,17 @@ ZSymbolTable: class {
 
     # Open a scope under `parent` -- the enclosing scope, or the declaration
     # whose body this is -- and make it current.
-    pushScope: function {:this label: StringView parent: ztypes.declid} out ztypes.declid is {
-        f: this.typing.declNewScope :parent node: 0
+    pushScope: function {
+        :this
+        label: StringView
+        parent: ztypes.declid
+        node: zast.nodeid
+    } out ztypes.declid is {
+        f: this.typing.declNewScope :parent node: node.u32
         this.open.append (openscope
             id: f
             :parent
+            :node
             start: this.entries.length
             defs: 0
             firstVid: this.reg.variableCount
@@ -474,19 +484,20 @@ ZSymbolTable: class {
     # and call brackets never do, and a scope that holds nothing is
     # invisible to every walk. The model dump wants every scope, so a dump
     # (and a template walk, whose scopes are hidden by id) opens it now.
-    pushLazyScope: function {:this label: StringView} is {
+    pushLazyScope: function {:this label: StringView node: zast.nodeid} is {
         parent: this.curScope
         if this.typing.dumpRows then {
-            this.pushScope :label :parent
+            this.pushScope :label :parent :node
             return
         }
         if this.typing.suppressParamStamps then {
-            this.pushScope :label :parent
+            this.pushScope :label :parent :node
             return
         }
         this.open.append (openscope
             id: ztypes.declid
             :parent
+            :node
             start: this.entries.length
             defs: 0
             firstVid: this.reg.variableCount
@@ -501,30 +512,30 @@ ZSymbolTable: class {
         if n == 0 then return
         top: this.open.get i: n - 1
         if top.id.isZero.not then return
-        top.id = this.typing.declNewScope parent: top.parent node: 0
+        top.id = this.typing.declNewScope parent: top.parent node: top.node.u32
         this.open.set i: n - 1 val: top
         this.curScope = top.id
     }
 
     # push -- open a body scope (a function's, or a mono walk's) under the
     # declaration it belongs to, named for the dump.
-    push: function {:this name: StringView parent: ztypes.declid} out u64 is {
-        return (this.pushScope label: name :parent).u64
+    push: function {:this name: StringView parent: ztypes.declid node: zast.nodeid} out u64 is {
+        return (this.pushScope label: name :parent :node).u64
     }
 
-    # pushBlock / pushCall -- open a nested scope; the marker returned is the
-    # depth to pop back to.
-    pushBlock: function {:this name: StringView} out u64 is {
+    # pushBlock / pushCall -- open a nested scope over `node`; the marker
+    # returned is the depth to pop back to.
+    pushBlock: function {:this name: StringView node: zast.nodeid} out u64 is {
         marker: this.open.length
-        this.pushLazyScope label: name
+        this.pushLazyScope label: name :node
         return marker
     }
 
-    # open a call scope and answer the marker that closes it. A call scope
-    # exists so a borrow taken for the call ends with it
-    pushCall: function {:this} out u64 is {
+    # open a call scope over the call `node` and answer the marker that closes
+    # it. A call scope exists so a borrow taken for the call ends with it
+    pushCall: function {:this node: zast.nodeid} out u64 is {
         marker: this.open.length
-        this.pushLazyScope label: ""
+        this.pushLazyScope label: "" :node
         return marker
     }
 
@@ -627,7 +638,7 @@ ZSymbolTable: class {
     # pushDryRun -- open a scope for a dry run: its rows are discarded whole
     # by popDiscard, and it stays out of the dump.
     pushDryRun: function {:this} is {
-        f: this.pushScope label: "" parent: this.curScope
+        f: this.pushScope label: "" parent: this.curScope node: zast.nodeid
         this.scopeHidden.add item: f.u64
     }
 

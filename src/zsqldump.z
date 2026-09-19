@@ -103,6 +103,24 @@ vidOrNullText: function {o: optionval ztypes.vid} out String is {
     }
 }
 
+# canonScopeNode -- the node a scope brackets, as its kind and position
+# (`call@12:5`), which no id renumbering moves; "" for a bracket the checker
+# opened for itself.
+canonScopeNode: function {
+    ast: Ast.view st: zenv.ZSymbolTable.view scope: ztypes.declid
+} out String is {
+    dn: (st.typing.decls.get i: scope.u64).node
+    if dn == 0 then return "".string
+    n: ast.nodes.get i: dn.u64
+    pos: zast.posOf :n
+    # composed with append, not interpolation: display text, not a table key
+    txt: String
+    txt.append (zast.armName :n)
+    txt.append "@\{pos.line}"
+    txt.append ":\{pos.col}"
+    return txt
+}
+
 # scopeLabelOf -- a scope's dump label ("" when unlabelled: a call bracket).
 scopeLabelOf: function {st: zenv.ZSymbolTable.view scope: ztypes.declid} out String is {
     o: st.scopeLabel.get key: scope.u64
@@ -230,7 +248,7 @@ schemaSql: function {} out String is {
         s: "CREATE TABLE IF NOT EXISTS conformance (conformance_id INTEGER PRIMARY KEY, impl_type_id INTEGER NOT NULL, spec_type_id INTEGER NOT NULL, label TEXT NOT NULL, is_facet INTEGER NOT NULL);\n"
     )
     (acc.append
-        s: "CREATE TABLE IF NOT EXISTS scope (scope_id INTEGER PRIMARY KEY, parent_id INTEGER, kind TEXT NOT NULL, name TEXT NOT NULL, depth INTEGER NOT NULL, unreachable INTEGER NOT NULL);\n"
+        s: "CREATE TABLE IF NOT EXISTS scope (scope_id INTEGER PRIMARY KEY, parent_id INTEGER, kind TEXT NOT NULL, name TEXT NOT NULL, depth INTEGER NOT NULL, unreachable INTEGER NOT NULL, node_id INTEGER);\n"
     )
     (acc.append
         s: "CREATE TABLE IF NOT EXISTS variable (variable_id INTEGER PRIMARY KEY, ztype_id INTEGER, ownership TEXT NOT NULL, is_private_access INTEGER NOT NULL, borrow_origin TEXT, synth_origin TEXT, origin TEXT);\n"
@@ -836,7 +854,12 @@ ZDumper: class {
             parentSql: "NULL".string
             if (st.typing.declIsScope declId: pd) then parentSql = "\{pd}"
             unreachNum: boolNum b: (st.unreachableScopes.has item: d.u64)
-            r: "INSERT OR IGNORE INTO scope VALUES (\{d}, \{parentSql}, \{kindSql}, \{nameSql}, \{depth}, \{unreachNum});\n"
+            nodeSql: "NULL".string
+            {
+                dn: (st.typing.decls.get i: d.u64).node
+                if dn > 0 then nodeSql = "\{dn}"
+            }
+            r: "INSERT OR IGNORE INTO scope VALUES (\{d}, \{parentSql}, \{kindSql}, \{nameSql}, \{depth}, \{unreachNum}, \{nodeSql});\n"
             this.acc.append s: r
             depth = depth + 1
         }
@@ -1228,6 +1251,7 @@ ZDumper: class {
     # id-independent.
     appendScopeRowsCanon: function {
         :this
+        ast: Ast.view
         st: zenv.ZSymbolTable.view
         scopeName: (IdMapR u64 V: String)
     } is {
@@ -1255,7 +1279,8 @@ ZDumper: class {
             kindSql: sqlStr s: kind
             nameSql: sqlStr s: lbl.stringView
             unreachNum: boolNum b: (st.unreachableScopes.has item: d.u64)
-            line: "\{parentNameSql} | \{kindSql} | \{nameSql} | \{depth} | \{unreachNum}"
+            nodeSql: sqlStr s: (canonScopeNode :ast :st scope: d).stringView
+            line: "\{parentNameSql} | \{kindSql} | \{nameSql} | \{depth} | \{unreachNum} | \{nodeSql}"
             scopeRows.append line
             depth = depth + 1
         }
@@ -1339,15 +1364,13 @@ ZDumper: class {
     # dropped, a scope's parent named by its label, entry/variable ztype via
     # canonTypeName. No unit filter -- the table holds only the main unit's
     # bodies.
-    appendSymbolTableCanon: function {
-        :this pool: zast.StringPool.view st: zenv.ZSymbolTable.view
-    } is {
+    appendSymbolTableCanon: function {:this ast: Ast.view st: zenv.ZSymbolTable.view} is {
         scopeName: IdMapR u64 V: String
         seen: IdSet u64
         narrowedRows: List String
-        this.appendScopeRowsCanon :st :scopeName
-        this.appendEntryRowsCanon :pool :st :scopeName :seen :narrowedRows
-        this.appendVariableRowsCanon :pool :st :seen
+        this.appendScopeRowsCanon :ast :st :scopeName
+        this.appendEntryRowsCanon pool: ast.names :st :scopeName :seen :narrowedRows
+        this.appendVariableRowsCanon pool: ast.names :st :seen
         this.emitSection title: "narrowed_subtype" rows: narrowedRows
     }
     # emit what each call argument's ownership resolved to
@@ -1445,7 +1468,7 @@ dumpCanon: function {program: Ast.view symtab: zenv.ZSymbolTable} out String is 
     d.appendGenericArgsCanon unm: mu.stringView st: symtab
     d.appendConformanceCanon unm: mu.stringView st: symtab
     d.appendMemberConstCanon pool: program.names unm: mu.stringView st: symtab
-    d.appendSymbolTableCanon pool: program.names st: symtab
+    d.appendSymbolTableCanon ast: program st: symtab
     d.appendCallGenericBindingCanon :program st: symtab
     return d.acc.copy
 }
