@@ -30440,8 +30440,9 @@ reportNotAddressable: function {
 
 # withValueOwnership -- the with-binding's ownership from the bound value's
 # syntactic shape, the same rules as a function argument: a bare
-# name bound to a runtime variable or a plain dotted path borrows; `.take`
-# transfers; calls, literals and constructions are fresh owned values.
+# name bound to a runtime variable or a field read through names borrows;
+# `.take` transfers; calls -- an auto-called member among them -- literals and
+# constructions are fresh owned values.
 withValueOwnership: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
@@ -30461,13 +30462,29 @@ withValueOwnership: function {
         }
     } case dottedpath then {
         cn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: v.child.u64))
-        if cn.stringView == "take" then {
-            return ztypes.zownership.owned
-        } else {
-            return ztypes.zownership.borrowed
-        }
+        if cn.stringView == "take" then return ztypes.zownership.owned
+        if (movedFieldPath :st :ast n: (ast.nodes.get i: v.nodeid.u64)
+        ) then return ztypes.zownership.borrowed
+        return ztypes.zownership.owned
     } else {
         return ztypes.zownership.owned
+    }
+}
+
+# withValueIsMemberCall -- the with-bound value is an auto-called member of a
+# path (`TEXT.lines`): a value of its own, which may still look into the path
+# it was called on without its signature saying so.
+withValueIsMemberCall: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view v: astnode.view
+} out bool is {
+    match (
+        v
+    ) case dottedpath then {
+        if (isMoveMarkerId nameId: (atomNameId :ast n: (ast.nodes.get i: v.child.u64))
+        ) then return false
+        return (movedFieldPath :st :ast n: (ast.nodes.get i: v.nodeid.u64)).not
+    } else {
+        return false
     }
 }
 
@@ -30511,7 +30528,18 @@ checkWith: function {
         pboW: st.typing.pendingBorrowOwned
         st.typing.pendingBorrowOwned = false
         if wpins.length == 0 then {
-            if own == ztypes.zownership.borrowed then {
+            # a borrow pins the path it aliases; an auto-called member's result
+            # is owned, and pins the path it was called on the same way, as it
+            # may look into it without its signature saying so
+            if (
+                own ==
+                ztypes.zownership.borrowed or
+                (withValueIsMemberCall
+                    :st
+                    :ast
+                    v: (ast.nodes.get i: withnode.value.u64)
+                )
+            ) then {
                 wtup: ListVal zast.nameid
                 appendValueTuple :ast n: (ast.nodes.get i: withnode.value.u64) dst: wtup
                 (pinsAppend

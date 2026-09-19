@@ -1406,7 +1406,10 @@ perf: $(PERFBIN)
 #
 # +449 when a branch that yields a value, and a `do` value, came to print the
 # checker's lists: the source.
-ALLOC_BASELINE := 2589172
+#
+# +531 when a scope's end came to print only the checker's list, and a `with`
+# bound to an auto-called member came to own its value: the source.
+ALLOC_BASELINE := 2589703
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
