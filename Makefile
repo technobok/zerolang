@@ -1338,7 +1338,10 @@ perf: $(PERFBIN)
 #
 # +2,592 when a Box's fields and methods came to be its element's: all of it
 # the source.
-ALLOC_BASELINE := 2590924
+#
+# +2,543 when a generic type's construction came to infer through a type
+# application: all of it the source.
+ALLOC_BASELINE := 2593467
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

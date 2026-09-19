@@ -22013,9 +22013,12 @@ bindValueArgSub: function {
     pk: zast.nameid
     fNames: (ListVal zast.nameid).view
     fParams: (ListVal zast.nameid).view
+    ptNames: (ListVal zast.nameid).view
+    ptTids: (ListVal u64).view
     sfx: String
     subs: (IdMapV zast.nameid v: u64)
     boundParams: IdSet zast.nameid
+    tk: ztypes.declid
 } is {
     vt0: checkValueAt :st :unitDecl :ast nid: opId
     gio: fieldParamIndexOf names: fNames name: pk
@@ -22027,8 +22030,11 @@ bindValueArgSub: function {
         gidx = gio
         gfound = true
     } case none then null
-    if gfound.not then return
     if vt0.isZero then return
+    if gfound.not then {
+        bindPartialRowArg :st :ast :pk :ptNames :ptTids argTid: vt0 :sfx :subs :boundParams :tk
+        return
+    }
     mv0: materialiseLiteral :ast :st :unitDecl t: vt0
     if mv0 != vt0 then {
         iid0: nodeId n: (ast.nodes.get i: opId.u64)
@@ -22048,6 +22054,47 @@ bindValueArgSub: function {
     boundParams.add item: gp0
 }
 
+# bindPartialRowArg -- a label naming a row typed OVER the template's params
+# (`v: (ListVal t: t)`, a field `c: (slot t: t)`) infers them from the value's
+# own arguments, as a generic function's parameter of that shape does
+# (bindPartialParamSubs); each newly bound param joins the instance's name.
+bindPartialRowArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    pk: zast.nameid
+    ptNames: (ListVal zast.nameid).view
+    ptTids: (ListVal u64).view
+    argTid: ztypes.tid
+    sfx: String
+    subs: (IdMapV zast.nameid v: u64)
+    boundParams: IdSet zast.nameid
+    tk: ztypes.declid
+} is {
+    pio: fieldParamIndexOf names: ptNames name: pk
+    if pio.none then return
+    gparams: st.reg.genericParamNamesOf tdecl: tk
+    (bindPartialParamSubs
+        :st
+        :ast
+        :gparams
+        paramTid: (ptTids.get i: pio)
+        argTid: argTid.u64
+        :subs
+    )
+    gi: u64
+    for gi < gparams.length loop {
+        gp: gparams.get i: gi
+        gi = gi + 1
+        if (boundParams.has item: gp) then continue
+        bv: (subs.get key: gp).or d: 0
+        if bv == 0 then continue
+        bvn: monoValName :st frame: st.curFrame :ast tid: (ztypes.tid.create from: bv.u64)
+        sfx.append s: "_"
+        sfx.append s: bvn
+        boundParams.add item: gp
+    }
+}
+
 # inferConstructionArg -- what one construction argument binds. An unnamed
 # argument binds nothing; a label naming a generic param carries a type
 # argument, and a label naming a field infers its param from the value.
@@ -22060,6 +22107,8 @@ inferConstructionArg: function {
     primaryName: zast.nameid
     fNames: (ListVal zast.nameid).view
     fParams: (ListVal zast.nameid).view
+    ptNames: (ListVal zast.nameid).view
+    ptTids: (ListVal u64).view
     sfx: String
     subs: (IdMapV zast.nameid v: u64)
     valueSubs: (IdMapV zast.nameid v: u64)
@@ -22097,9 +22146,12 @@ inferConstructionArg: function {
             :pk
             :fNames
             :fParams
+            :ptNames
+            :ptTids
             :sfx
             :subs
             :boundParams
+            :tk
         )
     }
 }
@@ -22117,6 +22169,9 @@ inferConstructionSubs: function {
     primaryName: zast.nameid
     fNames: (ListVal zast.nameid).view
     fParams: (ListVal zast.nameid).view
+    # the rows typed over the params, and their types
+    ptNames: (ListVal zast.nameid).view
+    ptTids: (ListVal u64).view
     sfx: String
     subs: (IdMapV zast.nameid v: u64)
     valueSubs: (IdMapV zast.nameid v: u64)
@@ -22136,6 +22191,8 @@ inferConstructionSubs: function {
             :primaryName
             :fNames
             :fParams
+            :ptNames
+            :ptTids
             :sfx
             :subs
             :valueSubs
@@ -22194,6 +22251,37 @@ appendRowNames: function {
     }
 }
 
+# classifyInferenceRows -- which of a template's rows infer its params: one
+# typed as a bare param binds it by name (`fNames`/`fParams`), and one typed as
+# a type application over the params (`(ListVal t: t)`, `(slot t: t)`) binds
+# them from the argument's own arguments (`ptNames`/`ptTids`).
+classifyInferenceRows: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    tk: ztypes.declid
+    childNames: (ListVal zast.nameid).view
+    rowTids: (ListVal u64).view
+    fNames: ListVal zast.nameid
+    fParams: ListVal zast.nameid
+    ptNames: ListVal zast.nameid
+    ptTids: ListVal u64
+} is {
+    ci3: u64
+    for ci3 < rowTids.length loop {
+        cid3: rowTids.get i: ci3
+        pnm3: st.reg.nameViewOf tid: (ztypes.tid.create from: cid3.u64)
+        pid3: zast.poolFind pool: ast.names text: pnm3
+        if pid3.isZero.not when (st.reg.isGenericParamOf tdecl: tk name: pid3) then {
+            fNames.append (childNames.get i: ci3)
+            fParams.append pid3
+        } else if (st.reg.isPartialOf tid: (ztypes.tid.create from: cid3.u64)) then {
+            ptNames.append (childNames.get i: ci3)
+            ptTids.append cid3
+        }
+        ci3 = ci3 + 1
+    }
+}
+
 # inferGenericConstruction -- a generic class/record template called with
 # field-bound value arguments: labels naming generic params resolve as
 # explicit type args; other args walk as values and bind their field's
@@ -22228,18 +22316,19 @@ inferGenericConstruction: function {
     stageRowsOf :st ownerTid: tplId names: childNames tids: cIds3
     fNames: ListVal zast.nameid
     fParams: ListVal zast.nameid
-    ci3: u64
-    cn3: cIds3.length
-    for ci3 < cn3 loop {
-        cid3: cIds3.get i: ci3
-        pnm3: st.reg.nameOf tid: (ztypes.tid.create from: cid3.u64)
-        pid3: nameIdOf :ast name: pnm3.stringView
-        if (st.reg.isGenericParamOf tdecl: tk name: pid3) then {
-            fNames.append (childNames.get i: ci3)
-            fParams.append pid3
-        }
-        ci3 = ci3 + 1
-    }
+    ptNames: ListVal zast.nameid
+    ptTids: ListVal u64
+    (classifyInferenceRows
+        :st
+        :ast
+        :tk
+        :childNames
+        rowTids: cIds3
+        :fNames
+        :fParams
+        :ptNames
+        :ptTids
+    )
     sfx: String
     subs: IdMapV zast.nameid v: u64
     valueSubs: IdMapV zast.nameid v: u64
@@ -22253,6 +22342,8 @@ inferGenericConstruction: function {
         :primaryName
         :fNames
         :fParams
+        :ptNames
+        :ptTids
         :sfx
         :subs
         :valueSubs
