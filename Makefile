@@ -1458,7 +1458,10 @@ perf: $(PERFBIN)
 #
 # +3,887 when a statement's discarded result came to be held in a temporary of
 # the checker's: +66 the behaviour, the rest the source.
-ALLOC_BASELINE := 2606996
+#
+# +351 when the dump came to list each hoisted argument's temporary: the
+# source.
+ALLOC_BASELINE := 2607347
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
