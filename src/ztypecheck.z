@@ -28718,26 +28718,27 @@ checkClauseCondition: function {
     }
 }
 
-# checkClause -- walk one if-clause: its conditions (each must be bool or a
-# 2-arm sum type), the predicate facts they establish, then its statement
-# block. Answers the block's last statement type, 0 for a row that is no
-# if-clause.
-checkClause: function {
+# checkClauseConditions -- walk one if-clause's conditions (each must be bool
+# or a 2-arm sum type) and the predicate facts they establish.
+checkClauseConditions: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
     clause: ifclauseref
     factsOut: List ArmPredFact
     boolId: u64
-} out u64 is {
-    if clause.nid.isZero then return 0
+} is {
+    if clause.nid.isZero then return
     k: u64
     for k < clause.nconds loop {
         condId: zast.ifCondAt :ast nid: clause.nid i: k
         k = k + 1
         cond: argRefAt :ast nid: condId
         if cond.nid.isZero.not then {
+            condMark: st.entryMark
             checkClauseCondition :st :unitDecl :ast :cond :boolId
+            # a conjunct after the first runs only when those before it hold
+            if k > 1 then st.markTakesMaybeFrom from: condMark
             # the fact a conjunct establishes holds for the conjuncts after it,
             # not only for the body: `when` short-circuits, so a later conjunct
             # runs only where this one held. Applying it here is what makes
@@ -28752,6 +28753,15 @@ checkClause: function {
             } case none then null
         }
     }
+}
+
+# checkClauseBody -- walk one if-clause's statement block, its conditions
+# walked. Answers the block's last statement type, 0 for a row that is no
+# if-clause.
+checkClauseBody: function {
+    st: zenv.ZSymbolTable unitDecl: ztypes.declid ast: Ast clause: ifclauseref
+} out u64 is {
+    if clause.nid.isZero then return 0
     # a condition's borrow residue is dead once the condition value is
     # consumed -- it must not leak into the block's argument lock seeds
     drainPendingBorrow :st
@@ -28905,11 +28915,34 @@ moveArmLeavesIntoBinding: function {
 } is {
     if (isControlValue :ast nid: asgn.value).not then return
     leaves: ListVal u32
-    armLocalLeaves :st :ast nid: asgn.value into: leaves
+    armValueLeaves :st :ast nid: asgn.value into: leaves
     with lit: leaves.iterate do for lf: lit loop {
         from: armLeafLocal :st :ast nid: lf
-        if from.isZero.not then moveArmLeafIntoBinding :st :ast nid: lf :from to: vid2
+        if from.isZero.not then {
+            partial: armLeafIsPartial :st :ast :leaves :from
+            moveArmLeafIntoBinding :st :ast nid: lf :from to: vid2
+            if partial then markLeafTakeMaybe :st :ast leaf: lf
+        }
     }
+}
+
+# armLeafIsPartial -- whether a control value one of whose arm values
+# (`leaves`) yields the local `from` has another that yields something else: a
+# path reaches past the `if` or `match` still holding the local, so moving it
+# there is a maybe (D3) -- zeroed where it happens, destroyed at the scope's
+# end all the same.
+armLeafIsPartial: function {
+    st: zenv.ZSymbolTable ast: Ast.view leaves: (ListVal u32).view from: ztypes.vid
+} out bool is {
+    with ait: leaves.iterate do for lf: ait loop {
+        if ((armLeafLocal :st :ast nid: lf) == from).not then return true
+    }
+    return false
+}
+
+# markLeafTakeMaybe -- the move the arm leaf `leaf` just recorded is a maybe.
+markLeafTakeMaybe: function {st: zenv.ZSymbolTable ast: Ast.view leaf: u32} is {
+    st.markTakeMaybe declId: (st.findLocal nameId: (bareAtomNameId n: (ast.nodes.get i: leaf.u64)))
 }
 
 # moveArmLeafIntoBinding -- one arm's bare local `from` moving into the binding
@@ -29677,10 +29710,11 @@ moveNameByReassignment: function {
 moveArmLeavesByReassignment: function {st: zenv.ZSymbolTable ast: Ast rasgn: reasgref} is {
     if (isControlValue :ast nid: rasgn.value).not then return
     leaves: ListVal u32
-    armLocalLeaves :st :ast nid: rasgn.value into: leaves
+    armValueLeaves :st :ast nid: rasgn.value into: leaves
     with lit: leaves.iterate do for lf: lit loop {
         from: armLeafLocal :st :ast nid: lf
         if from.isZero.not when (typeIsReftype :st tid: (st.reg.variableTypeOf id: from)) then {
+            partial: armLeafIsPartial :st :ast :leaves :from
             nm: zast.nameTextAt :ast ref: (bareAtomNameId n: (ast.nodes.get i: lf.u64))
             (moveNameByReassignment
                 :st
@@ -29692,6 +29726,7 @@ moveArmLeavesByReassignment: function {st: zenv.ZSymbolTable ast: Ast rasgn: rea
                 lineno: (nodeLine n: (ast.nodes.get i: lf.u64))
                 colno: (nodeCol n: (ast.nodes.get i: lf.u64))
             )
+            if partial then markLeafTakeMaybe :st :ast leaf: lf
             st.typing.armLeafMoves.add item: lf.u64
         }
     }
@@ -30956,11 +30991,16 @@ checkDo: function {
         nameId: zast.names.wkBreak
         ztypeId: (ztypes.tid.create from: dbk.u64)
     )
+    brkMark: st.loopBreakTakes.length
     drainPendingBorrow :st
     checkStatement :st :unitDecl :ast blockId: donode.statement
     result: lastStmtType :st :ast block: (ast.nodes.get i: donode.statement.u64)
+    broke: st.breakLeavesInnermost
+    endTook: ListVal u64
+    if broke then st.takenDeclsInScope into: endTook
     st.popTo marker: doMarker
     st.closeBreakScope
+    if broke then settleDoBreakTakes :st :brkMark :endTook
     result = wrapDoBreakValue :ast :st :unitDecl :donode :result
     if result > 0 then {
         setk: result
@@ -31598,6 +31638,8 @@ checkFor: function {
         # the iterable binding runs once, before the loop: what it moved is
         # not moved again by the next iteration
         if (forCondBindsName :ast :condId) then st.recordOnceTakes from: onceMark
+        # a condition after the first runs only when those before it hold
+        if kC > 1 then st.markTakesMaybeFrom from: onceMark
     }
     kP: u64
     for kP < fornode.nposts loop {
@@ -31923,6 +31965,29 @@ relayBreakTakes: function {st: zenv.ZSymbolTable run: zenv.looprun} is {
     }
 }
 
+# settleDoBreakTakes -- a `do` block a `break` left: the takes on the paths
+# that left it with `break` (recorded from `brkMark`) are laid again after it,
+# and those its end laid (`endTook`) stay, each moved only maybe (D3) -- some
+# path reached past the block without it. A block-local is gone with the
+# block, and a name it shadowed must not be consumed in its place, so only a
+# declaration the name still resolves to is laid.
+settleDoBreakTakes: function {st: zenv.ZSymbolTable brkMark: u64 endTook: (ListVal u64).view} is {
+    for st.loopBreakTakes.length > brkMark loop {
+        d: ztypes.declid.create from: st.loopBreakTakes.pop
+        if (declStillResolves :st :d) then st.invalidateDeclAs declId: d loc: takenHere maybe: true
+    }
+    with eit: endTook.iterate do for dv: eit loop {
+        d2: ztypes.declid.create from: dv
+        if (declStillResolves :st d: d2) then st.markTakeMaybe declId: d2
+    }
+}
+
+# declStillResolves -- whether the local `d`'s name still names it here.
+declStillResolves: function {st: zenv.ZSymbolTable.view d: ztypes.declid} out bool is {
+    nid: zast.nameid.create from: (st.typing.declNameOf declId: d)
+    return (st.findLocal nameId: nid) == d
+}
+
 # ArmTakes -- what the arms of an `if` or a `match` moved of the locals live
 # before it: every such local, consumed after the statement on at least one
 # path, and how many of the arms that reach the statement's end moved each. A
@@ -31935,25 +32000,6 @@ ArmTakes: class {
     counts: (IdMapV u64 v: u64)
     # how many arms reach the statement's end
     reached: u64
-}
-
-# restoreTakenArm -- after a NON-diverging if arm, undo any takes of outer-scope
-# owned locals (by declaration, clearTakenDecl) so the next arm + the restore see
-# them live, recording them in `taken` for a single post-if invalidate. Without this a take in one arm
-# propagates (via popTo) into the sibling arm, which then sees the var as gone and
-# never stamps its type (e.g. an else-arm's `childpath.take` emitting `.take` on a
-# String). A take is an overlay over a persisting entry, so clearTaken alone
-# restores (no redefine).
-restoreTakenArm: function {st: zenv.ZSymbolTable liveBefore: (IdSet u64).view taken: IdSet u64} is {
-    # a local live before the arm is still in scope and still owned: only a
-    # take row laid in the arm can have changed it
-    for vn: liveBefore.iterate loop {
-        vd: ztypes.declid.create from: vn
-        if (st.hasTakenRow declId: vd) then {
-            taken.add item: vn
-            st.clearTakenDecl declId: vd
-        }
-    }
 }
 
 # settleArmTakes -- an arm's takes once its walk ends. A path that leaves the
@@ -31970,14 +32016,25 @@ settleArmTakes: function {
     k: st.settleDivergingTakes
     if k == zenv.divkind.exit then return k
     if k == zenv.divkind.brk then return k
-    armTook: IdSet u64
-    restoreTakenArm :st :liveBefore taken: armTook
-    for vn: armTook.iterate loop {
-        taken.taken.add item: vn
-        if k == zenv.divkind.none then (taken.counts.set
-            key: vn
-            value: ((taken.counts.get key: vn).or d: 0) + 1
-        )
+    # a take of a local live before the arm, laid in the arm, is undone so
+    # the sibling arms see the local live, and collected for the single
+    # invalidation after the statement. Without the undo a take in one arm
+    # would reach the sibling arm, which then sees the local gone and never
+    # stamps its type. A take is an overlay over a persisting entry, so the
+    # clear alone restores it. A take laid over it since, outside the arm (a
+    # sibling clause's condition), is not the arm's.
+    for vn: liveBefore.iterate loop {
+        vd: ztypes.declid.create from: vn
+        if (st.takenInInnermost declId: vd) then {
+            taken.taken.add item: vn
+            # an arm that moved it on only some of its paths does not count: a
+            # path through it reaches the end still holding the local
+            if k == zenv.divkind.none when (st.stateOfDecl declId: vd) != 2 then (taken.counts.set
+                key: vn
+                value: ((taken.counts.get key: vn).or d: 0) + 1
+            )
+            st.clearTakenDecl declId: vd
+        }
     }
     if k == zenv.divkind.none then taken.reached = taken.reached + 1
     return k
@@ -32092,7 +32149,22 @@ checkIfClauses: function {
             holds: false
         )
         cfacts: List ArmPredFact
-        bt: checkClause :st :unitDecl :ast :clause factsOut: cfacts boolId: pBool
+        cStart: st.entryMark
+        checkClauseConditions :st :unitDecl :ast :clause factsOut: cfacts boolId: pBool
+        cEnd: st.entryMark
+        bt: checkClauseBody :st :unitDecl :ast :clause
+        # what the conditions moved is not the arm's: they ran before it on
+        # every path that reached this clause, the next clause's among them
+        cDecls: ListVal u64
+        cMaybes: ListVal bool
+        cLocs: ListVal ztypes.zsrcpos
+        if (st.takenBetween from: cStart to: cEnd) then (st.liftTakenBetween
+            from: cStart
+            to: cEnd
+            decls: cDecls
+            maybes: cMaybes
+            locs: cLocs
+        )
         dvgC: st.isUnreachable
         btc: bt
         branchTypes.append btc
@@ -32101,6 +32173,7 @@ checkIfClauses: function {
         if ak == zenv.divkind.none then allDiverge = false
         if ak == zenv.divkind.none then st.collectArmNarrowingEnds
         st.popTo marker: bm
+        layConditionTakes :st decls: cDecls maybes: cMaybes locs: cLocs later: kC > 1
         cn1c: clause.nconds
         if cn1c == 1 when cfacts.length == 1 then {
             mvf: cfacts.pop
@@ -32119,6 +32192,31 @@ checkIfClauses: function {
     flagsOut.append allDiverge
     flagsOut.append anyEmpty
     return kindAcc
+}
+
+
+# layConditionTakes -- the takes an `if` clause's conditions made, laid again
+# where the `if` stands once the clause is walked: the clauses after it and
+# the code after the `if` see them consumed. A clause after the first runs its
+# conditions only when those before failed (`later`), so what they moved is
+# moved only maybe (D3), as is what a conjunct after the first moved.
+layConditionTakes: function {
+    st: zenv.ZSymbolTable
+    decls: (ListVal u64).view
+    maybes: (ListVal bool).view
+    locs: (ListVal ztypes.zsrcpos).view
+    later: bool
+} is {
+    i: decls.length
+    for i > 0 loop {
+        i = i - 1
+        d: ztypes.declid.create from: (decls.get :i)
+        if (declStillResolves :st :d) then (st.invalidateDeclAs
+            declId: d
+            loc: optionval.some (locs.get :i)
+            maybe: later or (maybes.get :i)
+        )
+    }
 }
 
 
@@ -35300,10 +35398,11 @@ moveArmLeavesIntoArgument: function {
     if (isControlValue :ast nid: arg.operation).not then return
     moveArmFieldLeaves :st :ast nid: arg.operation
     leaves: ListVal u32
-    armLocalLeaves :st :ast nid: arg.operation into: leaves
+    armValueLeaves :st :ast nid: arg.operation into: leaves
     with lit: leaves.iterate do for lf: lit loop {
         from: armLeafLocal :st :ast nid: lf
         if from.isZero.not when (typeIsReftype :st tid: (st.reg.variableTypeOf id: from)) then {
+            partial: armLeafIsPartial :st :ast :leaves :from
             nm: zast.nameTextAt :ast ref: (bareAtomNameId n: (ast.nodes.get i: lf.u64))
             (consumeBareArgOwnership
                 :st
@@ -35317,6 +35416,7 @@ moveArmLeavesIntoArgument: function {
                 lineno: (nodeLine n: (ast.nodes.get i: lf.u64))
                 colno: (nodeCol n: (ast.nodes.get i: lf.u64))
             )
+            if partial then markLeafTakeMaybe :st :ast leaf: lf
             st.typing.armLeafMoves.add item: lf.u64
         }
     }
@@ -43036,7 +43136,10 @@ recordControlDestroy: function {
         }
         st.recordReturnDestroy nid: valueId.u64 except: ret
     }
-    if kind == zenv.divkind.brk then st.recordBreakDestroy nid: valueId.u64
+    if kind == zenv.divkind.brk then {
+        st.noteBreak
+        st.recordBreakDestroy nid: valueId.u64
+    }
     if kind == zenv.divkind.cont then st.recordLoopExitDestroy nid: valueId.u64
 }
 

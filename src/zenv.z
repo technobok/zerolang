@@ -422,8 +422,10 @@ ZSymbolTable: class {
     # `return` leaves every scope from there up
     fnScopeDepths: ListVal u64
     # the place in `open` of each scope a `break` leaves, innermost last: a
-    # loop's, or a `do` block's, which binds `break` to itself
+    # loop's, or a `do` block's, which binds `break` to itself -- and whether
+    # a `break` leaves it
     breakScopes: ListVal u64
+    breakSeen: ListVal bool
     # the generic-parameter answers a TEMPLATE walk keeps out of the shared stamp
     # table, by node, so that walk can still read what it just checked
     templateStamps: (IdMapV u64 v: ztypes.tid)
@@ -853,9 +855,24 @@ ZSymbolTable: class {
         te: this.reg.newEntry ztypeId: zt
         te.isTaken = true
         te.takenAt = loc
-        te.takenMaybe = maybe
+        # a local narrowed to an arm gives up only the arm's payload: it still
+        # owns what holds it, so its end destroys it all the same
+        te.takenMaybe = maybe or (this.narrowsToArm declId: d)
         this.appendRow row: te declId: d
         return true
+    }
+
+    # markTakeMaybe -- the move of the local `declId` just recorded happened on
+    # only some of the paths that reach here (D3): an arm of an `if` or a
+    # `match` whose value moved it, where another arm yields something else.
+    markTakeMaybe: function {:this declId: ztypes.declid} is {
+        ro: this.rowOf :declId
+        match (
+            ro
+        ) case some then {
+            e: this.entries.getMut i: ro
+            if e.isTaken then e.takenMaybe = true
+        } case none then null
     }
 
     # --- destruction ---
@@ -956,11 +973,39 @@ ZSymbolTable: class {
     # openBreakScope -- the innermost open scope is one a `break` leaves.
     openBreakScope: function {:this} is {
         this.breakScopes.append this.open.length - 1
+        this.breakSeen.append false
     }
 
     # closeBreakScope -- that scope is closing.
     closeBreakScope: function {:this} is {
         if this.breakScopes.length > 0 then this.breakScopes.pop
+        if this.breakSeen.length > 0 then this.breakSeen.pop
+    }
+
+    # noteBreak -- a `break` leaves the innermost break scope.
+    noteBreak: function {:this} is {
+        n: this.breakSeen.length
+        if n > 0 then this.breakSeen.set i: n - 1 val: true
+    }
+
+    # breakLeavesInnermost -- whether a `break` left the innermost break scope.
+    breakLeavesInnermost: function {this: this.view} out bool is {
+        n: this.breakSeen.length
+        if n == 0 then return false
+        return (this.breakSeen.get i: n - 1)
+    }
+
+    # takenDeclsInScope -- the declarations the innermost scope's rows take,
+    # in order.
+    takenDeclsInScope: function {this: this.view into: ListVal u64} is {
+        n: this.open.length
+        if n == 0 then return
+        p: (this.open.get i: n - 1).start
+        for p < this.entries.length loop {
+            e: this.entries.get i: p
+            if e.isTaken then into.append e.declId.u64
+            p = p + 1
+        }
     }
 
     # recordNamedDestroy -- what the `.drop` or the reassignment at `nid`
@@ -1067,6 +1112,65 @@ ZSymbolTable: class {
             j = j - 1
         }
         return (optionval.none u64)
+    }
+
+    # takenInInnermost -- whether a take was laid over `declId` in the
+    # innermost scope, whatever rows were laid after it.
+    takenInInnermost: function {this: this.view declId: ztypes.declid} out bool is {
+        n: this.open.length
+        if n == 0 then return false
+        ko: this.takenIndexDecl :declId
+        match (
+            ko
+        ) case some then {
+            return ko >= (this.open.get i: n - 1).start
+        } case none then {
+            return false
+        }
+    }
+
+    # takenBetween -- whether a take row lies in rows [from, to).
+    takenBetween: function {this: this.view from: u64 to: u64} out bool is {
+        i: from
+        for i < to loop {
+            if (this.entries.get :i).isTaken then return true
+            i = i + 1
+        }
+        return false
+    }
+
+    # liftTakenBetween -- remove the take rows laid in rows [from, to), newest
+    # first, keeping each one's declaration, whether it was a maybe, and where
+    # it was taken. A row that records no place is left, as a scope's close
+    # leaves it.
+    liftTakenBetween: function {
+        :this
+        from: u64
+        to: u64
+        decls: ListVal u64
+        maybes: ListVal bool
+        locs: ListVal ztypes.zsrcpos
+    } is {
+        i: to
+        for i > from loop {
+            i = i - 1
+            tk: false
+            {
+                e: this.entries.get :i
+                if e.isTaken then {
+                    taOpt: e.takenAt
+                    match (
+                        taOpt
+                    ) case some then {
+                        tk = true
+                        decls.append e.declId.u64
+                        maybes.append e.takenMaybe
+                        locs.append taOpt
+                    } case none then null
+                }
+            }
+            if tk then this.removeEntryAt dropIdx: i
+        }
     }
 
     # Rebuild the row list from `dropIdx` up, omitting that slot; the rows
@@ -1888,6 +1992,16 @@ ZSymbolTable: class {
         return e.excludedSubtypes.length > 0
     }
 
+    # narrowsToArm -- whether the local's newest row narrows it to one arm or to
+    # that arm's payload, so that the name reads the payload.
+    narrowsToArm: function {this: this.view declId: ztypes.declid} out bool is {
+        ro: this.rowOf :declId
+        if ro.none then return false
+        e: this.entries.get i: ro
+        if e.narrowedSubtype.isZero.not then return true
+        return e.originalZtypeId.none.not
+    }
+
     # anyNarrowed -- whether any open scope narrows any local. Asked before a
     # walk that exists only to end narrowings, which has nothing to do when
     # nothing is narrowed -- the common case.
@@ -2088,14 +2202,14 @@ ZSymbolTable: class {
 
     # settleDivergingTakes -- what the innermost scope's takes owe once its
     # walk ends, by the kind that ended it. A path that leaves the FUNCTION
-    # drops them: it never reaches the code after. One that leaves the LOOP
-    # with `break` records them for the loop to lay again after itself --
-    # the code after the loop still sees them consumed -- and drops them
-    # here. A `continue`, or a reachable end, keeps them: the next iteration,
-    # or the code after, sees them. Answers the kind.
+    # drops them: it never reaches the code after. One that leaves a LOOP or a
+    # `do` block with `break` records them for it to lay again after itself --
+    # the code after still sees them consumed -- and drops them here. A
+    # `continue`, or a reachable end, keeps them: the next iteration, or the
+    # code after, sees them. Answers the kind.
     settleDivergingTakes: function {:this} out u8 is {
         k: this.unreachableKind
-        if k == divkind.brk when this.loopRuns.length > 0 then this.recordBreakTakes
+        if k == divkind.brk when this.breakScopes.length > 0 then this.recordBreakTakes
         if k == divkind.exit then this.discardTakenInCurrentScope
         if k == divkind.exit then this.discardNarrowingEndsInCurrentScope
         if k == divkind.brk then this.discardTakenInCurrentScope
@@ -2112,6 +2226,18 @@ ZSymbolTable: class {
             onceStart: this.loopOnceTakes.length
             scopeIndex: this.open.length - 1
         )
+    }
+
+    # markTakesMaybeFrom -- the takes laid from `from` on happened on only some
+    # of the paths that reach here (D3): a condition after the first, which
+    # runs only when the ones before it hold.
+    markTakesMaybeFrom: function {:this from: u64} is {
+        i: from
+        for i < this.entries.length loop {
+            e: this.entries.getMut :i
+            i = i + 1
+            if e.isTaken then e.takenMaybe = true
+        }
     }
 
     # recordOnceTakes -- the moves an iterable binding made (the rows laid
@@ -2168,8 +2294,8 @@ ZSymbolTable: class {
         }
     }
 
-    # recordBreakTakes -- the innermost scope's taken rows, by decl id, onto
-    # the innermost loop's run
+    # recordBreakTakes -- the innermost scope's taken rows, by decl id, for the
+    # innermost loop or `do` block the `break` leaves
     recordBreakTakes: function {:this} is {
         n: this.open.length
         if n == 0 then return
@@ -2367,6 +2493,7 @@ newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} o
         dryRunDepth: 0
         fnScopeDepths: ListVal u64
         breakScopes: ListVal u64
+        breakSeen: ListVal bool
         templateStamps: (IdMapV u64 v: ztypes.tid)
         templateArmPreds: (IdMapV u64 v: ztypes.tid)
         scopeHidden: IdSet u64

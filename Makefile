@@ -1426,7 +1426,12 @@ perf: $(PERFBIN)
 # +3,583 when an arm's pins came to be kept for the binding of its `if` or
 # `match`: +6 the behaviour, the rest the source (a new IdMapV instance among
 # it).
-ALLOC_BASELINE := 2594629
+#
+# +5,882 when a move on only some paths came to be recorded as one (an arm
+# value, an arm's inner path, a narrowed payload, a block's `break`, a later
+# condition) and a condition's moves came to outlive its clause: -66 the
+# behaviour (the arm settle's two sets went), the rest the source.
+ALLOC_BASELINE := 2600511
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
