@@ -1422,7 +1422,11 @@ perf: $(PERFBIN)
 #
 # -249 when a `.hold` parameter came to take its argument as `.take` does: the
 # source.
-ALLOC_BASELINE := 2591046
+#
+# +3,583 when an arm's pins came to be kept for the binding of its `if` or
+# `match`: +6 the behaviour, the rest the source (a new IdMapV instance among
+# it).
+ALLOC_BASELINE := 2594629
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

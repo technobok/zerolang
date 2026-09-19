@@ -29182,7 +29182,94 @@ pinBoundFieldArms: function {st: zenv.ZSymbolTable ast: Ast vt: ztypes.tid nid: 
     armBorrowedLeaves :st :ast :nid into: leaves
     with lit: leaves.iterate do for lf: lit loop {
         pinBoundField :st :ast :vt nid: (zast.nodeid.create from: lf)
+        pinArmValue :st :ast leaf: lf.u64
     }
+}
+
+# pinArmValue -- the pins the arm value `leaf` left where its line was walked
+# (stashArmValuePins), pending again for the binding of the `if` or `match`:
+# an element a call hands back pins its source as it does bound alone. A pin
+# rooted at storage the arm declared is refused: it dies with the arm.
+pinArmValue: function {st: zenv.ZSymbolTable ast: Ast.view leaf: u64} is {
+    if (st.typing.armLeafPlaces.has item: leaf).not then return
+    sp: st.typing.armValuePinSpan.get key: leaf
+    if sp.none then return
+    k: u64
+    for k < sp.len.u64 loop {
+        i: sp.start.u64 + k
+        k = k + 1
+        root: armValuePinRoot :st :i
+        was: st.typing.armValuePinRoots.get :i
+        now: (st.lookupVarId nameId: root).or d: ztypes.vid
+        if was > 0 when now.u64 != was then {
+            reportArmKeepsDyingStorage :st :ast :leaf :root
+            return
+        }
+    }
+    k = 0
+    for k < sp.len.u64 loop {
+        p: st.typing.armValuePins.get i: sp.start.u64 + k
+        k = k + 1
+        st.typing.pendingPins.append (ztyping.PinPath
+            path: p.path.copy
+            shared: p.shared
+            mutable: p.mutable
+            alias: p.alias
+            carried: p.carried
+        )
+    }
+}
+
+# armValuePinRoot -- the name stashed pin `i` is rooted at.
+armValuePinRoot: function {st: zenv.ZSymbolTable.view i: u64} out zast.nameid is {
+    p: st.typing.armValuePins.get :i
+    return (p.path.get i: 0)
+}
+
+# reportArmKeepsDyingStorage -- the arm value `leaf` keeps `root` locked, and
+# `root` is storage the arm declared, which dies as the arm ends.
+reportArmKeepsDyingStorage: function {
+    st: zenv.ZSymbolTable ast: Ast.view leaf: u64 root: zast.nameid
+} is {
+    dn: lockRootPhrase :st :ast nameId: root
+    m: "Cannot bind this value: it keeps \{dn} locked, which dies with its arm"
+    ln: ast.nodes.get i: leaf
+    (addError
+        :st
+        nodeid: (zast.nodeid.create from: leaf.u32.orPanic)
+        lineno: (nodeLine n: ln)
+        colno: (nodeCol n: ln)
+        e: zast.err.ownerError
+        msg: m
+    )
+}
+
+# stashArmValuePins -- the pins the last line of a block left, kept under the
+# node of the value it yields before the line's walk drains them, with the
+# variable each pin's root names there: when the block is an arm of an `if` or
+# a `match` whose value is bound, the binding pins what the arm that ran hands
+# back (pinArmValue).
+stashArmValuePins: function {st: zenv.ZSymbolTable ast: Ast.view lineId: zast.nodeid} is {
+    n: st.typing.pendingPins.length
+    if n == 0 then return
+    vid: implicitReturnValue :st :ast :lineId
+    if vid.isZero then return
+    start: st.typing.armValuePins.length
+    with pit: st.typing.pendingPins.iterate do for p: pit loop {
+        rv: (st.lookupVarId nameId: (p.path.get i: 0)).or d: ztypes.vid
+        st.typing.armValuePinRoots.append rv.u64
+        st.typing.armValuePins.append (ztyping.PinPath
+            path: p.path.copy
+            shared: p.shared
+            mutable: p.mutable
+            alias: p.alias
+            carried: p.carried
+        )
+    }
+    (st.typing.armValuePinSpan.set
+        key: vid.u64
+        value: (ztyping.pinspan start: start.u32.orPanic len: n.u32.orPanic)
+    )
 }
 
 # checkMovedValueAt -- type the value of a binding or a reassignment. A
@@ -43026,6 +43113,7 @@ checkStatement: function {
             dk = checkStmtInner :st :unitDecl :ast :innerId lineId: slnId
         }
         recordTempHoldingLine :st lineId: slnId from: ul0
+        if k == nLines then stashArmValuePins :st :ast lineId: slnId
         drainPendingBorrow :st
         if dk > 0 then st.markUnreachable kind: dk
         if dk == zenv.divkind.cont then st.recordContinueTakes
