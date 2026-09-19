@@ -51364,10 +51364,10 @@ validateGeneratorDef: function {
 }
 
 # lowerDeclaredGeneratorsInUnit -- prepare every `generator` definition in the
-# unit for the ordinary class walk. Unlike the function form there is nothing to
-# move: the definition stays where the author wrote it and keeps its name, so
-# this only hands each one to zgenerator and records which body `yield` is legal
-# in.
+# unit, and in every unit it declares, for the ordinary class walk. Unlike the
+# function form there is nothing to move: the definition stays where the author
+# wrote it and keeps its name, so this only hands each one to zgenerator and
+# records which body `yield` is legal in.
 lowerDeclaredGeneratorsInUnit: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -51380,6 +51380,7 @@ lowerDeclaredGeneratorsInUnit: function {
         vx229 = vx229 + 1
         opId: zast.nodeid
         gnm: String
+        nestedId: zast.nodeid
         {
             bm: ast.nodes.get i: bmId.u64
             if bm.namedoperation then {
@@ -51388,8 +51389,14 @@ lowerDeclaredGeneratorsInUnit: function {
                     opId = bm.operation
                     gnm = zast.nameTextCopy :ast ref: bm.name
                 }
+                if bo.unitdef when (zast.unitOpDeclaresUnit :ast opId: bm.operation.u32) then {
+                    nestedId = bm.operation
+                }
             }
         }
+        # a unit declared inside this one -- inline, a hidden subunit, one more
+        # level down -- declares generators of its own
+        if nestedId > 0 then lowerDeclaredGeneratorsInUnit :st :ast unitdefId: nestedId
         if opId > 0 then {
             validateGeneratorDef :st :ast defName: gnm.stringView objId: opId
             gd: (zgenerator.GenDeclared

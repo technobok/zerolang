@@ -1,0 +1,60 @@
+# A generator declared anywhere but the main file's top level was broken: in an
+# inline unit, one level deeper, or a hidden subunit it was never lowered -- a
+# `for` iterated the generator object itself, and a body inside its own unit
+# read `yield` as an unknown name -- and one in a sibling file unit was lowered
+# but its loop called `{type}_call`, which nothing defines. The lowering walks
+# every unit a unit declares, and a loop asks the iterator by its ids. Three of
+# the units declare a `Count` of their own.
+kit: unit {
+    Count: generator { hi: i64 } as {
+        call: function out i64 is {
+            i: 0
+            for i < this.hi loop {
+                yield i
+                i = i + 1
+            }
+        }
+    }
+    Adder: generator as {
+        call: function {step: i64} out i64 is {
+            a: yield 1
+            yield (a + 10)
+        }
+    }
+    total: function out i64 is {
+        t: 0
+        for v: (Count hi: 4) loop t = t + v
+        return t
+    }
+    deeper: unit {
+        Pair: generator as {
+            call: function out i64 is {
+                yield 7
+                yield 8
+            }
+        }
+    }
+}
+
+main: function is {
+    for v: (kit.Count hi: 3) loop print "inline \{v}"
+    print "inline total \{kit.total}"
+    with g: kit.Adder do {
+        x: g.call step: 0
+        y: g.call step: 5
+        match (y) case some then print "inline add \{y}" case none then print "none"
+        x
+    }
+    for p: kit.deeper.Pair loop print "deeper \{p}"
+    for s: (sub.Count hi: 2) loop print "subunit \{s}"
+    for w: sub.Words loop print "subunit word \{w}"
+    print "subunit total \{sub.total}"
+    for d: (generator_outside_dep.Count hi: 2) loop print "file \{d}"
+    with h: generator_outside_dep.Adder do {
+        a: h.call step: 0
+        b: h.call step: 5
+        match (b) case some then print "file add \{b}" case none then print "none"
+        a
+    }
+    for k: (generator_outside_dep.Tick n: 0 lim: 2) loop print "file tick \{k}"
+}

@@ -1318,7 +1318,11 @@ perf: $(PERFBIN)
 # +1,114 when a definition whose value names itself came to be reported rather
 # than followed down the stack: +240 of it is the open-definition mark each
 # alias-shaped fold pushes, the rest the source.
-ALLOC_BASELINE := 2583262
+#
+# +197 when generator lowering came to walk every unit a unit declares: the
+# compiler's own `public:` blocks are walked too, as checkNamespaceBodies walks
+# them.
+ALLOC_BASELINE := 2583459
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
