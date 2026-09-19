@@ -38,6 +38,9 @@ OwedFree: class {
     # the statement that zeroes the temporary, which an early destroy leaves
     # behind so the block's own destroy of it is a no-op
     zero: String
+    # the destroy was emitted already, where the checker's list for the local's
+    # scope said (emitScopeDestroy): no later flush or exit emits it again
+    spent: false
 }
 
 # TmpCtr -- per-function temp name counter, and the destructors owed at the
@@ -21149,18 +21152,21 @@ emitDoStmt: function {
         dst: ast.nodes.get i: n.statement.u64
         emitBodyNode :ast :symtab :ctx n: dst ind: indd.stringView :tmp :buf
         dvF: blockDiverges :ast :symtab :ctx n: dst
-        flushBlockFrees :ctx :tmp fL: sfL lL: slL diverged: dvF :buf
+        closeScopeBlock :symtab :ctx :tmp fL: sfL lL: slL diverged: dvF node: n.nodeid.u64 :buf
         lwh: "\{ind}} while (0);\n"
         buf.append lwh
         popLoopLabel :ctx id: sdoId :ind :buf
     } else {
-        (emitBodyNode
-            :ast
+        # the block's lines join the enclosing C block, but its locals end with
+        # it: what the checker recorded its end destroys is spent here
+        dst2: ast.nodes.get i: n.statement.u64
+        emitBodyNode :ast :symtab :ctx n: dst2 :ind :tmp :buf
+        if (blockDiverges :ast :symtab :ctx n: dst2).not then (emitScopeDestroy
             :symtab
             :ctx
-            n: (ast.nodes.get i: n.statement.u64)
-            :ind
             :tmp
+            node: n.nodeid.u64
+            :ind
             :buf
         )
     }
@@ -22280,14 +22286,143 @@ flushBlockFrees: function {
     live: diverged.not
     for tmp.listFrees.length > lL loop {
         lvo: tmp.listFrees.pop
-        if live then buf.append lvo.stmt
+        if live when lvo.spent.not then buf.append lvo.stmt
     }
     for tmp.frees.length > fL loop {
         fvo: tmp.frees.pop
-        if live then {
+        if live when fvo.spent.not then {
             ff: "    \{ctx.strC}_free(&\{fvo.name});\n"
             buf.append ff
         }
+    }
+}
+
+# closeScopeBlock -- the destroys owed where the C block of checker scope `node`
+# closes: the emitter's own temporaries registered since (fL, lL), newest
+# first -- a local may be what one of them walks -- then the locals the checker
+# recorded the scope's end destroys (emitScopeDestroy). Every row since the
+# marks leaves the lists; a block that diverges on every path emits nothing,
+# its exits having freed what it held.
+closeScopeBlock: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tmp: TmpCtr
+    fL: u64
+    lL: u64
+    diverged: bool
+    node: u64
+    buf: String.borrow
+} is {
+    if diverged.not then {
+        # the emitter's own temporaries first, newest first: a local may be
+        # what one of them walks
+        i: tmp.listFrees.length
+        for i > lL loop {
+            i = i - 1
+            lt: tmp.listFrees.get :i
+            if lt.vid.isZero when lt.spent.not then buf.append lt.stmt
+        }
+        j: tmp.frees.length
+        for j > fL loop {
+            j = j - 1
+            ft: tmp.frees.get i: j
+            if ft.vid.isZero when ft.spent.not then buf.append "    \{ctx.strC}_free(&\{ft.name});\n"
+        }
+        emitScopeDestroy :symtab :ctx :tmp :node ind: "    " :buf
+    }
+    # a local registered here that a construct not yet reading the checker's
+    # lists owns is freed as the block always freed it
+    flushBlockFrees :ctx :tmp :fL :lL :diverged :buf
+}
+
+# emitScopeDestroy -- what the checker recorded the end of scope `node` destroys
+# (scopeDestroy), in its order: each local by the destroy its binding registered,
+# which is spent so no later flush or exit emits it again, and a local that
+# registered none -- a generator's local kept in the instance -- by its type,
+# the field zeroed after so the instance's destructor finds it empty.
+emitScopeDestroy: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tmp: TmpCtr
+    node: u64
+    ind: StringView
+    buf: String.borrow
+} is {
+    rg: symtab.typing.scopeDestroy.get key: node
+    if rg.none then return
+    k: u64
+    for k < rg.len.u64 loop {
+        it: symtab.typing.destroyItems.get i: rg.start.u64 + k
+        k = k + 1
+        if (spendOwedFree :ctx :tmp vid: it.vid :ind :buf).not then (emitUnownedDestroy
+            :symtab
+            :ctx
+            vid: it.vid
+            :ind
+            :buf
+        )
+    }
+}
+
+# spendOwedFree -- emit the destroy the binding of `vid` registered, newest
+# registration first, and mark it spent; false when it registered none.
+spendOwedFree: function {
+    ctx: Ctx.view tmp: TmpCtr vid: ztypes.vid ind: StringView buf: String.borrow
+} out bool is {
+    i: tmp.listFrees.length
+    for i > 0 loop {
+        i = i - 1
+        lf: tmp.listFrees.getMut :i
+        if lf.vid == vid when lf.spent.not then {
+            lf.spent = true
+            buf.append lf.stmt
+            return true
+        }
+    }
+    j: tmp.frees.length
+    for j > 0 loop {
+        j = j - 1
+        ff: tmp.frees.getMut i: j
+        if ff.vid == vid when ff.spent.not then {
+            ff.spent = true
+            buf.append "\{ind}\{ctx.strC}_free(&\{ff.name});\n"
+            return true
+        }
+    }
+    return false
+}
+
+# emitUnownedDestroy -- the destroy of a local the checker lists and whose
+# binding registered none: a generator's local, which lives in a field of the
+# instance (genLocalFieldOf), freed by its type and then zeroed so the
+# instance's own destructor finds it empty. Nothing for a type that frees
+# nothing, or a local bound elsewhere.
+emitUnownedDestroy: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    vid: ztypes.vid
+    ind: StringView
+    buf: String.borrow
+} is {
+    gf: symtab.typing.genLocalFieldOf.get key: vid.u64
+    if gf.none then return
+    al: vvFind xs: ctx.aliases :vid
+    if al == 0 then return
+    fld: (ctx.aliases.get i: al - 1).val.copy
+    tid: symtab.reg.variableTypeOf id: vid
+    if tid == ctx.strTid then {
+        buf.append "\{ind}\{ctx.strC}_free(&\{fld});\n"
+        buf.append "\{ind}\{fld} = (\{ctx.strC}_t){0};\n"
+        return
+    }
+    if (symtab.reg.needsDestructor typeId: tid).not then return
+    dcb: ctxCname :ctx :tid
+    dop: destroyOperand :symtab :ctx :tid nm: fld.stringView
+    buf.append "\{ind}\{dcb}_destroy(\{dop});\n"
+    if (isHeapPtrCollection :symtab :ctx :tid) then {
+        buf.append "\{ind}\{fld} = NULL;\n"
+    } else {
+        buf.append "\{ind}\{fld} = (\{dcb}_t){0};\n"
     }
 }
 
@@ -22304,14 +22439,13 @@ emitBreakFrees: function {ctx: Ctx.view tmp: TmpCtr.view ind: StringView buf: St
     for i > lMark loop {
         i = i - 1
         st: tmp.listFrees.get :i
-        buf.append st.stmt
+        if st.spent.not then buf.append st.stmt
     }
     j: tmp.frees.length
     for j > fMark loop {
         j = j - 1
         nm: tmp.frees.get i: j
-        ff0: "\{ind}\{ctx.strC}_free(&\{nm.name});\n"
-        buf.append ff0
+        if nm.spent.not then buf.append "\{ind}\{ctx.strC}_free(&\{nm.name});\n"
     }
 }
 
@@ -22331,14 +22465,13 @@ emitContinueFrees: function {
     for i > lMark loop {
         i = i - 1
         st: tmp.listFrees.get :i
-        buf.append st.stmt
+        if st.spent.not then buf.append st.stmt
     }
     j: tmp.frees.length
     for j > fMark loop {
         j = j - 1
         nm: tmp.frees.get i: j
-        ff0: "\{ind}\{ctx.strC}_free(&\{nm.name});\n"
-        buf.append ff0
+        if nm.spent.not then buf.append "\{ind}\{ctx.strC}_free(&\{nm.name});\n"
     }
 }
 
@@ -25248,7 +25381,7 @@ emitIfClause: function {
             lLi: tmp.listFrees.length
             emitBodyNode :ast :symtab :ctx n: cst ind: ind2.stringView :tmp :buf
             dvF: blockDiverges :ast :symtab :ctx n: cst
-            flushBlockFrees :ctx :tmp fL: fLi lL: lLi diverged: dvF :buf
+            closeScopeBlock :symtab :ctx :tmp fL: fLi lL: lLi diverged: dvF node: n.nodeid.u64 :buf
         }
         restoreNarrowSeeds :ctx svids: sVid prevV: sPrevV prevT: sPrevT
         restoreCondExclusions :ctx mark: xMark
@@ -25465,7 +25598,7 @@ emitElse: function {
         lLe: tmp.listFrees.length
         emitBodyNode :ast :symtab :ctx n: o ind: ind2.stringView :tmp :buf
         dvF: blockDiverges :ast :symtab :ctx n: o
-        flushBlockFrees :ctx :tmp fL: fLe lL: lLe diverged: dvF :buf
+        closeScopeBlock :symtab :ctx :tmp fL: fLe lL: lLe diverged: dvF node: oId.u64 :buf
     }
     restoreNarrowSeeds :ctx svids: sVid prevV: sPrevV prevT: sPrevT
     restoreCondExclusions :ctx mark: xMark
@@ -29383,7 +29516,8 @@ emitReturnCleanup: function {
         keepF: (
             keepRefd and
             (refsLocal expr: retExpr name: fvR.name.stringView) or
-            (vvHas xs: ctx.aliases vid: fvR.vid)
+            (vvHas xs: ctx.aliases vid: fvR.vid) or
+            fvR.spent
         ).not
         if keepF then {
             lfR: "\{ind}\{ctx.strC}_free(&\{fvR.name});\n"
@@ -29397,7 +29531,8 @@ emitReturnCleanup: function {
         keepL: (
             keepRefd and
             (refsLocal expr: retExpr name: owed.name.stringView) or
-            (vvHas xs: ctx.aliases vid: owed.vid)
+            (vvHas xs: ctx.aliases vid: owed.vid) or
+            owed.spent
         ).not
         if keepL then buf.append owed.stmt
         li = li + 1
@@ -29550,10 +29685,36 @@ emitFnBody: function {
     # a body that diverges on every path never reaches this flush; the
     # return/break cleanups already freed the same locals on those paths
     if endsRet then return
-    fiter: tmp.frees.iterate
-    for fv: fiter loop buf.append "    \{ctx.strC}_free(&\{fv.name});\n"
-    lfi: tmp.listFrees.iterate
-    for lfs: lfi loop buf.append lfs.stmt
+    emitBodyEndFrees :symtab :ctx :tmp node: op.nodeid.u64 :buf
+}
+
+# emitBodyEndFrees -- what a function body's fall-through end frees: the
+# emitter's own temporaries, then the locals the checker recorded the body's end
+# destroys (emitScopeDestroy), then a local registered here that a construct not
+# yet reading the checker's lists owns, freed as the body always freed it.
+emitBodyEndFrees: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tmp: TmpCtr
+    node: u64
+    buf: String.borrow
+} is {
+    emitOwedRows :ctx :tmp temps: true :buf
+    emitScopeDestroy :symtab :ctx :tmp :node ind: "    " :buf
+    emitOwedRows :ctx :tmp temps: false :buf
+}
+
+# emitOwedRows -- the rows still owed, in registration order: the emitter's own
+# temporaries (`temps`) or the locals, and never one already spent.
+emitOwedRows: function {ctx: Ctx.view tmp: TmpCtr.view temps: bool buf: String.borrow} is {
+    with fiter: tmp.frees.iterate do for fv: fiter loop {
+        if (
+            fv.vid.isZero == temps
+        ) when fv.spent.not then buf.append "    \{ctx.strC}_free(&\{fv.name});\n"
+    }
+    with lfi: tmp.listFrees.iterate do for lfs: lfi loop {
+        if lfs.vid.isZero == temps when lfs.spent.not then buf.append lfs.stmt
+    }
 }
 
 # collectUnitLiterals -- pool the plain literals of every main-unit
