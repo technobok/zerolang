@@ -6277,12 +6277,6 @@ registerFnGenericParams: function {
             registerGenericParams :st :ast tdecl: fnDecl items: fn.asItems
         }
     }
-    hasB: fnode.body > 0
-    if hasB then {
-        dvg: bodyEndsInReturn :ast bodyId: fnode.body
-        fidd: fid
-        st.typing.fnBodyDiverges.set key: fidd value: dvg
-    }
 }
 
 # recordFnBodyPresence -- note whether a function has a body: a bodyless one is
@@ -14871,14 +14865,6 @@ fixupCustomTags: function {
     }
 }
 
-# bodyEndsInReturn -- true when a function body's last statement is a
-# bare `return ...` call (the syntactic divergence the clone-scope synthesis
-# needs; no stamps are made).
-bodyEndsInReturn: function {ast: Ast.view bodyId: zast.nodeid} out bool is {
-    if bodyId.isZero then return false
-    return (blockEndsInReturn :ast block: (ast.nodes.get i: bodyId.u64))
-}
-
 # true when `block`'s last statement is a return.
 blockEndsInReturn: function {ast: Ast.view block: astnode.view} out bool is {
     match (
@@ -21310,7 +21296,6 @@ mintValuePartialSpec: function {
         }
         ki = ki + 1
     }
-    st.reg.specWasFresh = true
     return mid
 }
 
@@ -21432,7 +21417,6 @@ getOrMintSpec: function {
             ki8 = ki8 + 1
         }
         if hit8 then {
-            st.reg.specWasFresh = false
             return (ztypes.tid.create from: cur8)
         }
     }
@@ -21517,7 +21501,6 @@ getOrMintSpec: function {
         )
         recordNumericFieldDefaults :st monoId: mid8 :templateId
     }
-    st.reg.specWasFresh = true
     return (ztypes.tid.create from: mid8)
 }
 
@@ -40809,9 +40792,6 @@ checkGenericCall: function {
         valSubs: vsI
         fallbackArg: 0
     )
-    # getOrMintSpec resolved the mono structurally through the trie and reports
-    # whether it minted rather than reusing an existing spec
-    wasNew: st.reg.specWasFresh
     (substituteGenericReturn
         :st
         :unitDecl
@@ -40821,16 +40801,6 @@ checkGenericCall: function {
         :subs
     )
     healGenericReturn :st :unitDecl :ast :funcId :mid :gparams :subs
-    if wasNew then {
-        dvo: st.typing.fnBodyDiverges.get key: funcId
-        match (
-            dvo
-        ) case some then {
-            cm2: st.pushBlock node: zast.nodeid
-            if dvo then st.markUnreachable kind: zenv.divkind.exit
-            st.popTo marker: cm2
-        } case none then null
-    }
     # The arg walk above (checkValue per value arg) can leave a pending
     # borrow from a projection argument (s.stringView): drain it -- the
     # call's result is an OWNED value, so a binding of it must not borrow

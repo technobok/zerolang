@@ -1361,7 +1361,9 @@ perf: $(PERFBIN)
 #
 # +434 when a promoted argument temp came to keep its variable: all of it the
 # source (the self-compile promotes none).
-ALLOC_BASELINE := 2591208
+#
+# -782 when a generic call stopped making a divergence scope only the dump read.
+ALLOC_BASELINE := 2590426
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
