@@ -5741,13 +5741,21 @@ emitDataIndexCall: function {
     ctx: Ctx
     call: zast.callrow.view
 } out String is {
-    bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
-    if bn.length == 0 then return "".string
-    dtid: (dataBlockTid
-        :symtab
-        nid: (dottedBaseNodeId :ast n: (ast.nodes.get i: call.callable.u64))
-    )
+    # the block is the base's: a bare name (`primes`) by its reference, any
+    # other shape (`inl.primes`, a block a nested unit declares) by its stamp
+    dtid: ztypes.tid
+    {
+        cn: ast.nodes.get i: call.callable.u64
+        if cn.dottedpath.not then return "".string
+        dtid = dataBlockTid :symtab nid: (atomNodeId n: (ast.nodes.get i: cn.parent.u64))
+        if dtid.isZero then {
+            bst: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: cn.parent.u64)).u64
+            if bst > 0 when (
+                (symtab.reg.typetypeOf typeId: bst) == ztypes.ztypetype.dataType
+            ) then dtid = bst
+        }
+    }
     if dtid.isZero then return "".string
     isData: ctx.dataElems.has key: (ztypes.tid.create from: dtid.u64)
     if isData.not then return "".string
@@ -27982,6 +27990,14 @@ fillDataElemsIn: function {
                 :symtab
                 :ctx
                 op: (ast.nodes.get i: bmNode.operation.u64)
+            )
+            # a unit declared inside this one -- inline, a hidden subunit --
+            # declares data blocks of its own
+            if (zast.unitOpDeclaresUnit :ast opId: bmNode.operation.u32) then (fillDataElemsIn
+                :symtab
+                :ctx
+                :ast
+                mainOpId: bmNode.operation
             )
         }
     }

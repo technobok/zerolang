@@ -1326,7 +1326,10 @@ perf: $(PERFBIN)
 # the source. (The splits above were first measured with the two compilers at
 # paths of different lengths, which alone moves the count by 240 -- argv[0] is
 # an input; they are corrected here.)
-ALLOC_BASELINE := 2585278
+#
+# +865 when a data block a nested unit declares came to be readable: all of it
+# the source.
+ALLOC_BASELINE := 2586143
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

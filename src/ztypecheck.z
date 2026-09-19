@@ -7817,7 +7817,7 @@ resolveData: function {
     frame: ztypes.declid
     defName: StringView
     dnode: dataref
-} is {
+} out ztypes.tid is {
     did: (declareCanonicalType
         :st
         :frame
@@ -7972,6 +7972,7 @@ resolveData: function {
         childTypeId: tagId
     )
     st.reg.setDataElemType typeId: (ztypes.tid.create from: did.u64) value: elemTid.u64
+    return (ztypes.tid.create from: did.u64)
 }
 
 # isTypedefField -- true when a type-expr astnode is an `X.typedef` dottedpath (the
@@ -14118,23 +14119,12 @@ resolveDef: function {
             tid: (ztypes.tid.create from: fid.u64)
         )
     } case datablock then {
+        # the block's type is the one it was just declared as, wherever it is
+        # written: a nested unit's block has no name in the file unit, or
+        # another block's
         dr: dataRefAt :ast nid: defnId
-        resolveData :st frame: rf :ast :unitDecl :defName dnode: dr
-        dbrid: (resolvedByIds
-            :st
-            :ast
-            :unitDecl
-            name: (zast.poolFind pool: ast.names text: defName)
-        )
-        match (
-            dbrid
-        ) case some then {
-            (ztyping.nodeTypeSet
-                tbl: st.typing.nodeType
-                nid: defnId.u64
-                tid: (ztypes.tid.create from: dbrid.u64)
-            )
-        } case none then null
+        dbt: resolveData :st frame: rf :ast :unitDecl :defName dnode: dr
+        if dbt.isZero.not then ztyping.nodeTypeSet tbl: st.typing.nodeType nid: defnId.u64 tid: dbt
     } case objectdef then {
         orf: objRefAt :ast nid: defnId
         (resolveObjectDef
@@ -48860,23 +48850,43 @@ evalConstArmViaUnit: function {
             gpNameId = gp.name
         }
     }
-    if gpNameId.isZero.not when gcNameId.isZero.not when (nameDenotesUnit
+    if gpNameId.isZero or gcNameId.isZero then return ztypes.noConst
+    lookupUnit9: ztypes.declid
+    if (nameDenotesUnit :st :frame nameId: gpNameId) then {
+        lookupUnit9 = unitDeclOfNameOrOwn :st :frame nameId: gpNameId
+    } else {
+        # a unit this one DECLARES (`inl.codes.lf`, `kit.shape.sq`): in scope
+        # through the environment, and its own declaration is where the type is
+        lookupUnit9 = nestedUnitDeclNamed :st :frame nameId: gpNameId
+    }
+    if lookupUnit9.isZero then return ztypes.noConst
+    qa: (constArmRead
         :st
         :frame
-        nameId: gpNameId
-    ) then {
-        lookupUnit9: unitDeclOfNameOrOwn :st :frame nameId: gpNameId
-        qa: (constArmRead
-            :st
-            :frame
-            :ast
-            lookupUnit: lookupUnit9
-            typeNameId: gcNameId
-            armNameId: nameCountId
-        )
-        if qa.kind.none.not then return qa
+        :ast
+        lookupUnit: lookupUnit9
+        typeNameId: gcNameId
+        armNameId: nameCountId
+    )
+    return qa
+}
+
+# nestedUnitDeclNamed -- the declaration of the nested unit or subunit `nameId`
+# names from `frame`, or 0 when it names no unit declaration.
+nestedUnitDeclNamed: function {
+    st: zenv.ZSymbolTable.view
+    frame: ztypes.declid
+    nameId: zast.nameid
+} out ztypes.declid is {
+    h: envLookup :st :frame :nameId
+    if h.declId.isZero then return (ztypes.declid.create from: 0)
+    isUd: false
+    {
+        hdo: st.typing.decls.get i: h.declId.u64
+        if hdo.kind.unitDecl then isUd = true
     }
-    return ztypes.noConst
+    if isUd.not then return (ztypes.declid.create from: 0)
+    return h.declId
 }
 
 # evalConstDotted -- a dotted path's value: a member read off a named base
