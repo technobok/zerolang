@@ -1374,7 +1374,10 @@ perf: $(PERFBIN)
 # -7,995 when the machinery for moving a field out went with the generator
 # locals it served: -6,925 the source, -1,023 the emitter no longer spelling
 # every member read a second time to ask whether it moved a field.
-ALLOC_BASELINE := 2571910
+#
+# -4,444 when the `typeof` node and the field shells it typed went with the
+# generator locals that were their only source: all of it the source.
+ALLOC_BASELINE := 2567466
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

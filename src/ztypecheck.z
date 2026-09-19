@@ -4017,29 +4017,19 @@ partialFieldTid: function {
 # fieldSlotTid -- a field's declared type: the partial specialisation when the
 # typeref's argument names a generic parameter of the owning template, and the
 # ordinary named shell otherwise. Both field paths ask this rather than carrying
-# the choice themselves. `shellOwnerId` is the owner the shell path wants, which
-# is not the same question as which template owns the parameter.
+# the choice themselves.
 fieldSlotTid: function {
     st: zenv.ZSymbolTable
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
     ownerTid: u64
-    shellOwnerId: u64
     oId: zast.nodeid
     thisName: StringView
 } out ztypes.tid is {
     pt9: partialFieldTid :st :ast :unitDecl :scope :ownerTid :oId
     if pt9.isZero.not then return pt9
-    return (resolveTyperefShellMarked
-        :st
-        :scope
-        :ast
-        :unitDecl
-        ownerId: shellOwnerId
-        nid: oId
-        :thisName
-    )
+    return (resolveFieldTyperef :st :ast :unitDecl :scope nid: oId :thisName)
 }
 
 # partialParamTid -- partialUnderDecl over a PARAMETER's typeref. A function's
@@ -5019,51 +5009,6 @@ resolveTyperefCallShell: function {
     return (st.reg.newType name: suffix.stringView typetype: ztypes.ztypetype.recordType)
 }
 
-# typeofSourceType -- resolve a typeof field's SOURCE without a body walk: a
-# bare atom reads the owner's already-resolved field of that name (a generator
-# parameter capture). 0 when the shape needs the body walk.
-typeofSourceType: function {
-    ast: Ast
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    ownerId: u64
-    nid: zast.nodeid
-} out u64 is {
-    arm: rowArmAt :ast :nid
-    match (
-        arm
-    ) case atomid then {
-        if ownerId == 0 then return 0
-        ar: atomRefAt :ast :nid
-        co: (st.typing.declChildOfId
-            parentTypeId: (ztypes.tid.create from: ownerId.u64)
-            nameId: ar.name
-        )
-        match (
-            co
-        ) case some then {
-            nameCount: st.reg.nameOf tid: (ztypes.tid.create from: co.u64)
-            if nameCount.length > 0 then {
-                ro: walkLookupTyperef :st :scope :ast :unitDecl base: nameCount.stringView
-                match (
-                    ro
-                ) case some then {
-                    return ro
-                } case none then {
-                    return co
-                }
-            } else {
-                return co
-            }
-        } case none then {
-            return 0
-        }
-    } else {
-        return 0
-    }
-}
-
 # refuseLiteralTyperef -- a literal type names what a lexeme wears until context
 # pins it; it is COMPILE-TIME ONLY and has no C representation, so written as a
 # declared type it produced C that does not compile (`z_t1_t` is never defined).
@@ -5107,65 +5052,20 @@ refuseLiteralTyperef: function {
     )
 }
 
-# resolveTyperefShellMarked -- resolveTyperefShell plus the typeof handling:
-# a generator-promoted local's field type is a `typeof <first-rhs>` node.
-# When the source resolves from signatures alone the field types directly
-# (and the typeof node stamps); otherwise the shell is marked and the
-# body's first `this.<field> =` write swaps it.
-resolveTyperefShellMarked: function {
+# resolveFieldTyperef -- resolveTyperefShell for a member's declared type: an
+# edge of the containment graph, and never a literal's pseudo-type.
+resolveFieldTyperef: function {
     st: zenv.ZSymbolTable
     ast: Ast
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    ownerId: u64
     nid: zast.nodeid
     thisName: StringView
 } out ztypes.tid is {
-    # the row is read through a view scoped to this block: the resolutions
-    # below lend ast exclusively
-    isTof: false
-    sourceId: zast.nodeid
-    {
-        typeExpr: ast.nodes.get i: nid.u64
-        if typeExpr.typeofexpr then {
-            isTof = true
-            sourceId = typeExpr.source
-        }
-    }
-    if isTof then {
-        rid: u64
-        rid = typeofSourceType :st :scope :ast :unitDecl :ownerId nid: sourceId
-        # a source that resolved to ANOTHER field's unresolved shell is not
-        # resolved either: taking it would freeze this field on a placeholder
-        # that nothing will ever swap, because only the field the shell was
-        # minted for is swapped. `a: "x"` then `b: a` in a generator body did
-        # exactly that and left `b` typed `?`. Fall through and mint this
-        # field its OWN shell, which its own `this.b = a` write then swaps.
-        if rid > 0 when (st.typing.typeofShell.has key: (ztypes.tid.create from: rid.u64)
-        ) then rid = 0
-        if rid > 0 then {
-            # the node's stamp defers to the post-demand pass so it lands
-            # on the globally-resolved type, not an early shell
-            tnm: st.reg.nameOf tid: (ztypes.tid.create from: rid.u64)
-            if tnm.length > 0 then {
-                (st.typing.pendingTyperef.set
-                    key: nid.u64
-                    value: (nameIdOf :ast name: tnm.stringView)
-                )
-                st.typing.pendingTyperefScope.set key: nid.u64 value: scope
-            }
-            return (ztypes.tid.create from: rid)
-        }
-    }
     prevCE: st.typing.inContainmentEdge
     st.typing.inContainmentEdge = true
     cid: resolveTyperefShell :st :scope :ast :unitDecl :nid :thisName
     st.typing.inContainmentEdge = prevCE
-    if isTof then {
-        tk: cid
-        tv: nid
-        st.typing.typeofShell.set key: tk value: tv
-    }
     refuseLiteralTyperef :st :ast :nid tid: (ztypes.tid.create from: cid)
     return (ztypes.tid.create from: cid)
 }
@@ -8972,7 +8872,6 @@ attachDeclaredField: function {
         :unitDecl
         :scope
         ownerTid: rid
-        shellOwnerId: 0
         oId: fm.operation
         thisName: defName
     )
@@ -9516,15 +9415,7 @@ detectTagAccessor: function {
     if tc.stringView != "tag" then return
     if (isNumericTypeName name: tp.stringView).not then return
     mname: zast.nameTextCopy :ast ref: am.name
-    nid: (resolveTyperefShellMarked
-        :st
-        :scope
-        :ast
-        :unitDecl
-        ownerId: 0
-        nid: am.operation
-        thisName: defName
-    )
+    nid: resolveFieldTyperef :st :ast :unitDecl :scope nid: am.operation thisName: defName
     if nid.isZero then return
     if (armNames.has item: am.name.u64) then {
         mac: "'\{mname}' collides with the '\{defName}' arm of the same name"
@@ -9944,7 +9835,6 @@ resolveVariant: function {
                 :unitDecl
                 :scope
                 ownerTid: vid
-                shellOwnerId: 0
                 oId: fm.operation
                 thisName: defName
             )
@@ -10607,7 +10497,6 @@ attachUnionArm: function {
         :unitDecl
         :scope
         ownerTid: uid
-        shellOwnerId: 0
         oId: armTe
         thisName: defName
     )
@@ -11619,7 +11508,6 @@ resolveNamedFieldSlot: function {
         :unitDecl
         :scope
         ownerTid: cid
-        shellOwnerId: cid
         oId: fm.operation
         thisName: defName
     )
@@ -15486,8 +15374,6 @@ scanCallsInNode: function {
     } case swapstmt then {
         scanCallsAt :st :scope :ast nid: node.lhs
         scanCallsAt :st :scope :ast nid: node.rhs
-    } case typeofexpr then {
-        scanCallsAt :st :scope :ast nid: node.source
     } case dottedpath then {
         demandPathNames :st :scope :ast parentId: node.parent childId: node.child
         # the member selector is never a definition to demand
@@ -29823,8 +29709,6 @@ checkReassignedType: function {
             ) then {
                 skipR = true
             }
-            tsoR: st.typing.typeofShell.get key: chkT
-            if tsoR.some then skipR = true
             if skipR.not then {
                 enR: st.reg.nameOf tid: chkT
                 anR: st.reg.nameOf tid: rvt
@@ -29911,50 +29795,6 @@ refuseBorrowedWrite: function {
         width: nm.length.u32.orPanic
     )
     return true
-}
-
-# resolveTypeofTarget -- a typeof-placeholder field resolves at its FIRST write:
-# swap the field child to the RHS's type and restamp the target path.
-resolveTypeofTarget: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    rasgn: reasgref
-    lvt: ztypes.tid
-    rvt: ztypes.tid
-} is {
-    # A typeof-placeholder field resolves at its first write: swap the
-    # field child to the RHS's type and restamp the target path.
-    if lvt > 0 when rvt > 0 then {
-        tso: st.typing.typeofShell.get key: lvt
-        match (
-            tso
-        ) case some then {
-            troot: methodReceiverRootId :ast n: (ast.nodes.get i: rasgn.topath.u64)
-            if troot.isZero.not then {
-                tto: st.lookup nameId: troot
-                match (
-                    tto
-                ) case some then {
-                    tfnId: dottedChildNameId :ast n: (ast.nodes.get i: rasgn.topath.u64)
-                    if tfnId.isZero.not then {
-                        mrvt: materialiseLiteral :ast :st :unitDecl t: rvt
-                        (st.typing.setMemberType
-                            parentTypeId: (ztypes.tid.create from: tto.u64)
-                            nameId: tfnId
-                            childTypeId: mrvt
-                        )
-                        settof: mrvt
-                        stampGate :st nid: tso.u64 tid: settof
-                        if rasgn.topath.isZero.not then {
-                            settp: mrvt
-                            stampGate :st nid: rasgn.topath.u64 tid: settp
-                        }
-                    }
-                } case none then null
-            }
-        } case none then null
-    }
 }
 
 # retakeHoldLock -- `h = y.hold` rebinds a hold binding, so its readonly self-lock
@@ -30097,7 +29937,6 @@ checkReassignment: function {
         )
         return
     }
-    resolveTypeofTarget :st :unitDecl :ast :rasgn :lvt :rvt
     # A literal RHS at a concretely-typed target coerces: restamp the RHS. A
     # literal-typed target (a literal-init loop binding) keeps the pseudo.
     if lvt > 0 when rvt > 0 when (isLiteralTypeId :st tid: rvt) when (isLiteralTypeId :st tid: lvt
@@ -30462,8 +30301,6 @@ swapTypesAgree: function {st: zenv.ZSymbolTable.view a: ztypes.tid b: ztypes.tid
     if at == ztypes.ztypetype.genericParam when bt == ztypes.ztypetype.genericParam then return true
     if at == ztypes.ztypetype.neverType then return true
     if bt == ztypes.ztypetype.neverType then return true
-    if (st.typing.typeofShell.get key: a).some then return true
-    if (st.typing.typeofShell.get key: b).some then return true
     if (typedefReaches :st from: a to: b) then return true
     return (typedefReaches :st from: b to: a)
 }
@@ -52911,7 +52748,7 @@ shellScalarName: function {name: StringView} out bool is {
 
 # canonShellTid -- the canonical id for a SHELL stamp value, 0 to leave
 # the stamp alone. Mirrors canonicalizeShellChildren's shell detection
-# (no defining unit, not a generic param / scalar shell / typeof shell);
+# (no defining unit, not a generic param / scalar shell);
 # memoized per shell id.
 canonShellTid: function {
     ast: Ast
@@ -52940,12 +52777,6 @@ canonShellTid: function {
     if ok then {
         nmNode: st.reg.nameOf :tid
         if (shellScalarName name: nmNode.stringView) then nmNode = "".string
-        tso: st.typing.typeofShell.get key: tid
-        match (
-            tso
-        ) case some then {
-            nmNode = "".string
-        } case none then null
         if nmNode.length > 0 then {
             rid: (shellResolveByName
                 :st
@@ -53191,12 +53022,10 @@ memberTypeIsShell: function {
 }
 
 # shellNameToResolve -- the name a shell resolves by: the recorded type's
-# name, unless it is a scalar's or a typeof shell's
-# (those are not shells); empty then.
+# name, unless it is a scalar's (which is not a shell); empty then.
 shellNameToResolve: function {st: zenv.ZSymbolTable cto: u64} out String is {
     nmNode: st.reg.nameOf tid: (ztypes.tid.create from: cto.u64)
     if (shellScalarName name: nmNode.stringView) then return String
-    if (st.typing.typeofShell.get key: cto).some then return String
     return nmNode
 }
 

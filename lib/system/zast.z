@@ -37,7 +37,6 @@ public: unit {
     :stringchunkrow
     :StringPool
     :swapstmtrow
-    :typeofexprrow
     :unitrow
     :withrow
     :callkind
@@ -322,8 +321,6 @@ astnode: variant {
     dottedpath: dottedpathrow
     # a call with its arguments, each labelled
     call: callrow
-    # the type OF an expression, asked for rather than written
-    typeofexpr: typeofexprrow
     # a name bound to something -- the node that carries a label for everything
     # that has one
     namedoperation: namedoperationrow
@@ -1188,19 +1185,6 @@ callrow: record {
     infix: bool
 }
 
-# typeof-expression payload (compiler-synthesised): the operation
-# whose static type is taken.
-typeofexprrow: record {
-    # this typeof's own row in the node table
-    nodeid: nodeid
-    # the line this typeof starts on
-    lineno: u32
-    # the column this typeof starts at
-    colno: u32
-    # the expression whose type is being asked for
-    source: nodeid
-}
-
 # Named-operation payload: an optional argument label plus the
 # operation value. Appears as a Call/Data argument; `name` is the
 # label's Ast.names pool id (0 = absent / positional).
@@ -1719,8 +1703,6 @@ posOf: function {n: astnode.view} out nodepos is {
         return (nodepos line: n.lineno col: n.colno)
     } case namedoperation then {
         return (nodepos line: n.lineno col: n.colno)
-    } case typeofexpr then {
-        return (nodepos line: n.lineno col: n.colno)
     } case datablock then {
         return (nodepos line: n.lineno col: n.colno)
     } case stringchunk then {
@@ -1864,9 +1846,6 @@ printNodeWith: function {ast: Ast.view n: astnode.view withId: bool} is {
         print "\{idp}call @\{n.lineno}:\{n.colno} args=\{n.arguments.count.u64}"
         printNodeWith :ast :withId n: (ast.nodes.get i: n.callable.u64)
         printKidsWith :ast span: n.arguments :withId
-    } case typeofexpr then {
-        print "\{idp}typeofexpr @\{n.lineno}:\{n.colno}"
-        printNodeWith :ast :withId n: (ast.nodes.get i: n.source.u64)
     } case namedoperation then {
         if withId then {
             print "\{idp}namedoperation @\{n.lineno}:\{n.colno}"
@@ -2058,8 +2037,6 @@ childIdsInto: function {ast: Ast.view n: astnode.view acc: ListVal u32} is {
     } case call then {
         acc.append from: n.callable.u32
         appendSpan kids: ast.kids :acc span: n.arguments
-    } case typeofexpr then {
-        acc.append from: n.source.u32
     } case namedoperation then {
         acc.append from: n.operation.u32
     } case datablock then {
@@ -2602,8 +2579,6 @@ nodeIdOf: function {n: astnode.view} out nodeid is {
         return n.nodeid
     } case call then {
         return n.nodeid
-    } case typeofexpr then {
-        return n.nodeid
     } case namedoperation then {
         return n.nodeid
     } case datablock then {
@@ -2683,8 +2658,6 @@ armName: function {n: astnode.view} out StringView is {
         return "dottedpath"
     } case call then {
         return "call"
-    } case typeofexpr then {
-        return "typeofexpr"
     } case namedoperation then {
         return "namedoperation"
     } case datablock then {
