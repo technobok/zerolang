@@ -3070,6 +3070,10 @@ Ctx: class {
     # whether a generator body is being emitted, which changes what a return
     # means
     genActive: bool
+    # the `return`, `break` or `continue` statement being emitted, whose
+    # destroys the checker recorded (exitDestroy); 0 at a tail value, which
+    # records none
+    exitNode: u64
     # the emitted C name of the generator receiver, for the state-machine
     # prologue: it is a renamed parameter, not the literal `this`
     genRecvC: String
@@ -18744,7 +18748,7 @@ emitStringReturnValue: function {
         if (isInterp :ast parts: n.stringparts) then {
             sB: emitInterpBuild :ast :symtab :ctx parts: n.stringparts :ind :tmp :buf
             rexp: "_s\{sB}"
-            emitReturnCleanup :ctx :tmp retExpr: rexp.stringView keepRefd: true :ind :buf
+            emitReturnCleanup :symtab :ctx :tmp retExpr: rexp.stringView keepRefd: true :ind :buf
             lst: "\{ind}return _s\{sB};\n"
             buf.append lst
             return true
@@ -18857,6 +18861,8 @@ emitCallStmt: function {
         return
     }
     if sfnId == zast.names.wkReturn then {
+        outerExit: ctx.exitNode
+        ctx.exitNode = call.nodeid.u64
         hasArg: false
         arx539: u64
         for arx539 < call.arguments.count.u64 loop {
@@ -18873,11 +18879,12 @@ emitCallStmt: function {
                 lgd: "\{ind}goto L_done;\n"
                 buf.append lgd
             } else {
-                emitReturnCleanup :ctx :tmp retExpr: "" keepRefd: true :ind :buf
+                emitReturnCleanup :symtab :ctx :tmp retExpr: "" keepRefd: true :ind :buf
                 lr2: "\{ind}return;\n"
                 buf.append lr2
             }
         }
+        ctx.exitNode = outerExit
         return
     }
     ce: emitCallValue :ast :symtab :ctx :call
@@ -19999,12 +20006,13 @@ emitDottedAutoCallStmt: function {
 # emitBreakStmt -- `break`: the block frees, then the owned-payload dtor the
 # jump would skip, then the goto. A do-block entry carries an empty cleanup.
 emitBreakStmt: function {
+    symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     ind: StringView
     tmp: TmpCtr.view
     buf: String.borrow
 } is {
-    emitBreakFrees :ctx :tmp :ind :buf
+    emitBreakFrees :symtab :ctx :tmp :ind :buf
     if ctx.breakLabels.length > 0 then {
         bid: ctx.breakLabels.get i: ctx.breakLabels.length - 1
         # an owned-payload loop's per-iteration dtor: the jump
@@ -20057,7 +20065,7 @@ emitContinueStmt: function {
             }
         }
         if inDo when hasLoop then {
-            emitContinueFrees :ctx :tmp idx: loopIdx :ind :buf
+            emitContinueFrees :symtab :ctx :tmp idx: loopIdx :ind :buf
             ccl: ctx.breakLabelCleanup.get i: loopIdx
             if ccl.length > 0 then {
                 lcc: "\{ind}\{ccl}"
@@ -20069,7 +20077,7 @@ emitContinueStmt: function {
             ucn: true
             ctx.contLabelUsed.set key: cid value: ucn
         } else {
-            emitBreakFrees :ctx :tmp :ind :buf
+            emitBreakFrees :symtab :ctx :tmp :ind :buf
             if ctx.breakLabelCleanup.length > 0 then {
                 pcl0: (ctx.breakLabelCleanup.get
                     i: ctx.breakLabelCleanup.length - 1
@@ -20156,22 +20164,25 @@ emitReturnStmt: function {
     # bare control keywords parse as an AtomId reference (no value): a
     # no-value `return` (goto L_done inside a generator), `break`, `continue`.
     bkw: atomTextOf :ast :n
+    outerExit: ctx.exitNode
+    ctx.exitNode = interpPartNodeId :n
     if bkw == "return" then {
         if ctx.genActive then {
             lgd: "\{ind}goto L_done;\n"
             buf.append lgd
         } else {
-            emitReturnCleanup :ctx :tmp retExpr: "" keepRefd: true :ind :buf
+            emitReturnCleanup :symtab :ctx :tmp retExpr: "" keepRefd: true :ind :buf
             lrt: "\{ind}return;\n"
             buf.append lrt
         }
     } else {
         if bkw == "break" then {
-            emitBreakStmt :ctx :ind :tmp :buf
+            emitBreakStmt :symtab :ctx :ind :tmp :buf
         } else {
             emitContinueStmt :ast :symtab :ctx :n :bkw :ind :tmp :buf
         }
     }
+    ctx.exitNode = outerExit
 }
 
 # reassignRhsText -- the C text of a reassignment's value: a copy hoist, an
@@ -22501,53 +22512,125 @@ emitUnownedDestroy: function {
     }
 }
 
-# emitBreakFrees -- free the loop-body owned locals (everything bound since the
-# innermost loop entry) before a `break`/`continue`, which skips the loop body's
-# end-of-block flushBlockFrees. Non-destructive (reads by index, no pop): the
-# normal fall-through still flushes them at block close. Mirrors flushBlockFrees
-# order (listFrees newest-first, then frees).
-emitBreakFrees: function {ctx: Ctx.view tmp: TmpCtr.view ind: StringView buf: String.borrow} is {
+# emitBreakFrees -- the destroys a `break`, or a `continue` that jumps no
+# `do` block, owes: those of the innermost loop or `do` entry's scopes
+# (emitContinueFrees).
+emitBreakFrees: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tmp: TmpCtr.view
+    ind: StringView
+    buf: String.borrow
+} is {
     if ctx.breakFreesMarks.length == 0 then return
-    fMark: ctx.breakFreesMarks.get i: ctx.breakFreesMarks.length - 1
-    lMark: ctx.breakListMarks.get i: ctx.breakListMarks.length - 1
-    i: tmp.listFrees.length
-    for i > lMark loop {
-        i = i - 1
-        st: tmp.listFrees.get :i
-        if st.spent.not then buf.append st.stmt
-    }
-    j: tmp.frees.length
-    for j > fMark loop {
-        j = j - 1
-        nm: tmp.frees.get i: j
-        if nm.spent.not then buf.append "\{ind}\{ctx.strC}_free(&\{nm.name});\n"
-    }
+    emitContinueFrees :symtab :ctx :tmp idx: ctx.breakFreesMarks.length - 1 :ind :buf
 }
 
-# emitContinueFrees -- free the owned locals bound since the mark-stack entry
-# at `idx` (the targeted LOOP's entry) before a continue that jumps out of a
-# do-block wrapper. Non-destructive, mirroring emitBreakFrees.
+# emitContinueFrees -- the destroys owed where an exit leaves the scopes since
+# the mark-stack entry at `idx` (the loop or `do` it leaves): the emitter's own
+# temporaries registered since, newest first, then the locals the checker
+# recorded the exit destroys (emitExitDestroy). Non-destructive: the path that
+# does not take the exit still owes them. An exit the checker recorded nothing
+# for (ctx.exitNode 0) frees every row registered since.
 emitContinueFrees: function {
-    ctx: Ctx.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
     tmp: TmpCtr.view
     idx: u64
     ind: StringView
     buf: String.borrow
 } is {
+    allRows: ctx.exitNode == 0
     fMark: ctx.breakFreesMarks.get i: idx
     lMark: ctx.breakListMarks.get i: idx
     i: tmp.listFrees.length
     for i > lMark loop {
         i = i - 1
         st: tmp.listFrees.get :i
-        if st.spent.not then buf.append st.stmt
+        if st.spent.not when allRows or st.vid.isZero then buf.append st.stmt
     }
     j: tmp.frees.length
     for j > fMark loop {
         j = j - 1
         nm: tmp.frees.get i: j
-        if nm.spent.not then buf.append "\{ind}\{ctx.strC}_free(&\{nm.name});\n"
+        if nm.spent.not when (
+            allRows or nm.vid.isZero
+        ) then buf.append "\{ind}\{ctx.strC}_free(&\{nm.name});\n"
     }
+    if allRows.not then emitExitDestroy :symtab :ctx :tmp retExpr: "" keepRefd: false :ind :buf
+}
+
+# emitExitDestroy -- what the checker recorded the exit being emitted
+# (ctx.exitNode) destroys (exitDestroy), in its order: each local by the
+# destroy its binding registered, which stays owed -- the path that does not
+# take the exit destroys it too -- and a local that registered none by its
+# type (emitUnownedDestroy). A `return` whose value is `retExpr` keeps a local
+# that value reads (`keepRefd`).
+emitExitDestroy: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tmp: TmpCtr.view
+    retExpr: StringView
+    keepRefd: bool
+    ind: StringView
+    buf: String.borrow
+} is {
+    rg: symtab.typing.exitDestroy.get key: ctx.exitNode
+    if rg.none then return
+    k: u64
+    for k < rg.len.u64 loop {
+        it: symtab.typing.destroyItems.get i: rg.start.u64 + k
+        k = k + 1
+        emitExitItem :symtab :ctx :tmp vid: it.vid :retExpr :keepRefd :ind :buf
+    }
+}
+
+# emitExitItem -- the destroy an exit owes the local `vid`: the unspent row its
+# binding registered, newest first, unless the returned value reads it
+# (`keepRefd`) or the local names another's storage (ctx.aliases); by its type
+# when its binding registered none.
+emitExitItem: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tmp: TmpCtr.view
+    vid: ztypes.vid
+    retExpr: StringView
+    keepRefd: bool
+    ind: StringView
+    buf: String.borrow
+} is {
+    i: tmp.listFrees.length
+    for i > 0 loop {
+        i = i - 1
+        lf: tmp.listFrees.get :i
+        if lf.vid == vid when lf.spent.not then {
+            if (exitKeeps :ctx :vid name: lf.name.stringView :retExpr :keepRefd
+            ).not then buf.append lf.stmt
+            return
+        }
+    }
+    j: tmp.frees.length
+    for j > 0 loop {
+        j = j - 1
+        ff: tmp.frees.get i: j
+        if ff.vid == vid when ff.spent.not then {
+            if (exitKeeps :ctx :vid name: ff.name.stringView :retExpr :keepRefd).not then {
+                buf.append "\{ind}\{ctx.strC}_free(&\{ff.name});\n"
+            }
+            return
+        }
+    }
+    emitUnownedDestroy :symtab :ctx :vid :ind :buf
+}
+
+# exitKeeps -- whether an exit leaves the registered local `vid` (C name
+# `name`) alone: the returned value `retExpr` reads it (`keepRefd`), or it
+# names another's storage.
+exitKeeps: function {
+    ctx: Ctx.view vid: ztypes.vid name: StringView retExpr: StringView keepRefd: bool
+} out bool is {
+    if keepRefd when (refsLocal expr: retExpr :name) then return true
+    return (vvHas xs: ctx.aliases :vid)
 }
 
 # emit one arm of a match over a scalar subject.
@@ -25785,9 +25868,9 @@ emitPlainReturn: function {
     rv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: vid.u64)
     flushArgHoists :ctx :ind :tmp :buf
     clProbe: String
-    emitReturnCleanup :ctx :tmp retExpr: rv.stringView keepRefd: true :ind buf: clProbe
+    emitReturnCleanup :symtab :ctx :tmp retExpr: rv.stringView keepRefd: true :ind buf: clProbe
     clFull: String
-    emitReturnCleanup :ctx :tmp retExpr: rv.stringView keepRefd: false :ind buf: clFull
+    emitReturnCleanup :symtab :ctx :tmp retExpr: rv.stringView keepRefd: false :ind buf: clFull
     leakFix: clFull.length > clProbe.length
     rtid: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: vid.u64))
     retCt: typeRefC :ast :symtab :ctx tid: rtid thisTid: ztypes.tid
@@ -25895,7 +25978,7 @@ emitReturnOfNode: function {
     bx: emitOptionBoxHoist :ast :symtab :ctx n: (ast.nodes.get i: vid.u64) :ind :tmp :buf
     if bx.length > 0 then {
         emitValueTakeInvalidations :ast :symtab :ctx n: (ast.nodes.get i: vid.u64) :ind :buf
-        emitReturnCleanup :ctx :tmp retExpr: bx.stringView keepRefd: true :ind :buf
+        emitReturnCleanup :symtab :ctx :tmp retExpr: bx.stringView keepRefd: true :ind :buf
         buf.append "\{ind}return \{bx};\n"
         return
     }
@@ -25954,7 +26037,7 @@ emitTailValue: function {
     )
     if bound.not then return false
     cl: String
-    emitReturnCleanup :ctx :tmp retExpr: nm.stringView keepRefd: false :ind buf: cl
+    emitReturnCleanup :symtab :ctx :tmp retExpr: nm.stringView keepRefd: false :ind buf: cl
     buf.append cl
     buf.append "\{ind}return \{nm};\n"
     return true
@@ -29583,21 +29666,25 @@ isRegisteredOwned: function {tmp: TmpCtr.view name: StringView} out bool is {
     return false
 }
 
-# emitReturnCleanup -- free the registered owned locals (tmp.frees + tmp.listFrees)
-# BEFORE a return, reclaiming them on the diverging path the function-end flush
-# never reaches. Does NOT pop (other returns + the end flush still need them).
-# Skips any local REFERENCED in the return expression `retExpr` (it is part of, or
-# borrowed by, the return value) and any non-owning alias (`ctx.aliases`). A
-# match-arm-narrowed subject is NOT skipped -- the arm aliases it via narrowBox (no
-# shadow), so it stays a normal owned local whose destructor is correctly typed here.
+# emitReturnCleanup -- the destroys owed BEFORE a return, on the diverging path
+# the function-end destroys never reach: the emitter's own temporaries
+# registered in the function, then the locals the checker recorded the return
+# destroys (emitExitDestroy), then every enclosing loop's payload. Does NOT pop
+# (other returns and the end still owe them). Skips a temporary or payload the
+# return expression `retExpr` REFERENCES (it is part of, or borrowed by, the
+# returned value) and any non-owning alias (`ctx.aliases`). A tail value, which
+# the checker records nothing for (ctx.exitNode 0), frees every registered
+# row.
 emitReturnCleanup: function {
-    ctx: Ctx.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
     tmp: TmpCtr.view
     retExpr: StringView
     keepRefd: bool
     ind: StringView
     buf: String.borrow
 } is {
+    allRows: ctx.exitNode == 0
     fRi: u64
     for fRi < tmp.frees.length loop {
         fvR: tmp.frees.get i: fRi
@@ -29608,7 +29695,7 @@ emitReturnCleanup: function {
             (vvHas xs: ctx.aliases vid: fvR.vid) or
             fvR.spent
         ).not
-        if keepF then {
+        if keepF when allRows or fvR.vid.isZero then {
             lfR: "\{ind}\{ctx.strC}_free(&\{fvR.name});\n"
             buf.append lfR
         }
@@ -29623,9 +29710,10 @@ emitReturnCleanup: function {
             (vvHas xs: ctx.aliases vid: owed.vid) or
             owed.spent
         ).not
-        if keepL then buf.append owed.stmt
+        if keepL when allRows or owed.vid.isZero then buf.append owed.stmt
         li = li + 1
     }
+    if allRows.not then emitExitDestroy :symtab :ctx :tmp :retExpr :keepRefd :ind :buf
     # a return exits every enclosing loop: emit each owned-payload loop's
     # per-iteration cleanup (empty for plain loops and do entries), unless
     # the payload is part of the return value or a non-owning alias.
@@ -30423,6 +30511,7 @@ emitC: function {
         exSaveV: List String
         exSaveT: ListVal u64
         genActive: false
+        exitNode: 0
         genRecvC: "this".string
         genValC: "value".string
         genYieldCount: 0

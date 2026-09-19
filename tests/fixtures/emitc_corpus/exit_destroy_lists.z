@@ -1,0 +1,82 @@
+# exit_destroy_lists.z -- every exit frees what the checker recorded it leaves
+# (exitDestroy), each owned local exactly once on the path that exits and on
+# the one that falls through: a `return` three blocks deep frees every
+# enclosing block's locals; a `return` of one local frees the others and hands
+# that one back; a `break` and a `continue` free the loop body's locals; a
+# `break` in a bare block frees only that block's; a `continue` in a bare block
+# frees the block's and the loop body's. Strings, classes and lists, so both
+# kinds of registered destroy are read. The leak kind (ASan) is the judge.
+Box: class {
+    n: i64
+    tag: String
+}
+
+deep: function {k: i64} out i64 is {
+    a: "a".string
+    if k > 0 then {
+        b: (Box n: k tag: "t".string)
+        if k > 1 then {
+            c: ListVal i64
+            c.append 7
+            if k > 2 then {
+                d: (Box n: k + 1 tag: "t".string)
+                print "deep a=\{a} c=\{c.length}"
+                return d.n + b.n
+            }
+            print "c=\{c.length}"
+        }
+        print "b=\{b.n}"
+    }
+    return 0
+}
+
+pick: function {first: bool} out String is {
+    x: "x".string
+    y: "y".string
+    z: (Box n: 3 tag: "t".string)
+    print "z=\{z.n}"
+    if first then return x
+    return y
+}
+
+loops: function {n: i64} out i64 is {
+    total: 0
+    i: 0
+    for i < n loop {
+        i = i + 1
+        s: "row".string
+        b: (Box n: i tag: "t".string)
+        if i == 2 then continue
+        if i == 4 then break
+        print "\{s} \{b.n}"
+        total = total + b.n
+    }
+    return total
+}
+
+blocks: function {n: i64} out i64 is {
+    total: 0
+    i: 0
+    for i < n loop {
+        i = i + 1
+        kept: (Box n: i tag: "t".string)
+        {
+            local: "local".string
+            xs: ListVal i64
+            xs.append i
+            if i == 2 then continue
+            if i == 3 then break
+            print "\{local} \{xs.length}"
+        }
+        total = total + kept.n
+    }
+    return total
+}
+
+main: function is {
+    print "\{deep k: 3} \{deep k: 2} \{deep k: 1}"
+    print (pick first: true)
+    print (pick first: false)
+    print "\{loops n: 6}"
+    print "\{blocks n: 5}"
+}
