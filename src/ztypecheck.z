@@ -34615,10 +34615,10 @@ isLiteralTypeId: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool 
 }
 
 # hoistArg -- hoist a non-trivial call argument into a fresh `_tN` synth temp:
-# define the temp (OWNED, synth origin anf) in the open CALL scope and record
-# the synth Assignment / value-Expression / AtomId rows + their type stamps for
-# the dump. The parsed argument keeps its own stamps; only the dump rows are
-# synthesised (no AST mutation).
+# define the temp (OWNED, synth origin anf) in the open CALL scope, record it as
+# the argument's temporary (tempOf), and, for the dump only, the synth
+# Assignment / AtomId rows + their type stamps (hoistRows). The parsed argument
+# keeps its own stamps.
 hoistArg: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -34640,30 +34640,7 @@ hoistArg: function {
         ln = nodeLine n: argNode
         co = nodeCol n: argNode
     }
-    assignId: zast.tableReserve :ast
-    atomId: zast.tableReserve :ast
-    st.typing.synthNodes.append (ztyping.SynthNode
-        nodeid: assignId
-        kind: "Assignment"
-        ownerUnit: st.typing.synthOwnerUnit
-        ownerName: st.typing.synthOwnerName
-        lineno: ln
-        colno: co
-    )
-    st.typing.synthNodes.append (ztyping.SynthNode
-        nodeid: atomId
-        kind: "AtomId"
-        ownerUnit: st.typing.synthOwnerUnit
-        ownerName: st.typing.synthOwnerName
-        lineno: ln
-        colno: co
-    )
-    seta: argType
-    stampGate :st nid: assignId.u64 tid: (ztypes.tid.create from: seta.u64)
-    atomT: argType
-    if paramType > 0 then atomT = ztypes.tid.create from: paramType.u64
-    setm: atomT
-    stampGate :st nid: atomId.u64 tid: (ztypes.tid.create from: setm.u64)
+    assignId: hoistRows :ast :st :argType :paramType :ln :co
     hpins0: List ztyping.PinPath
     takePendingPins :st dst: hpins0
     # A borrow path whose LEAF is a method describes a CALL, and a call's
@@ -34724,12 +34701,50 @@ hoistArg: function {
             )
         }
     }
-    st.typing.setDefVariable nid: assignId.u64 :vid
+    if assignId.isZero.not then st.typing.setDefVariable nid: assignId.u64 :vid
+    if st.recording then st.typing.tempOf.set key: argId.u64 value: vid
     if consumes then (st.invalidate
         nameId: (nameIdOf :ast name: tname.stringView)
         loc: takenHere
     )
     return tname
+}
+
+# hoistRows -- the synth Assignment / AtomId rows a hoisted argument shows as
+# in the dump, stamped with the argument's and the parameter's types; the
+# Assignment's id, 0 for a compile, which reserves no rows (D2).
+hoistRows: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    argType: ztypes.tid
+    paramType: u64
+    ln: u32
+    co: u32
+} out zast.nodeid is {
+    if st.typing.dumpRows.not then return zast.nodeid
+    assignId: zast.tableReserve :ast
+    atomId: zast.tableReserve :ast
+    st.typing.synthNodes.append (ztyping.SynthNode
+        nodeid: assignId
+        kind: "Assignment"
+        ownerUnit: st.typing.synthOwnerUnit
+        ownerName: st.typing.synthOwnerName
+        lineno: ln
+        colno: co
+    )
+    st.typing.synthNodes.append (ztyping.SynthNode
+        nodeid: atomId
+        kind: "AtomId"
+        ownerUnit: st.typing.synthOwnerUnit
+        ownerName: st.typing.synthOwnerName
+        lineno: ln
+        colno: co
+    )
+    stampGate :st nid: assignId.u64 tid: argType
+    atomT: argType
+    if paramType > 0 then atomT = ztypes.tid.create from: paramType.u64
+    stampGate :st nid: atomId.u64 tid: atomT
+    return assignId
 }
 
 # memberIsDataField -- whether a member row is stored in the type's C struct:

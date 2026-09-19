@@ -1451,7 +1451,11 @@ perf: $(PERFBIN)
 #
 # +24 when a `do` block whose last line returned stopped freeing its locals
 # again: the source.
-ALLOC_BASELINE := 2602698
+#
+# +411 when a hoisted argument's temporary came to be recorded (tempOf) and a
+# compile stopped reserving its dump rows: -10 the behaviour (and 10.6 MB
+# fewer bytes), the rest the source.
+ALLOC_BASELINE := 2603109
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
