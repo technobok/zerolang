@@ -22401,7 +22401,9 @@ branchScopeOf: function {
 # (scopeDestroy), in its order: each local by the destroy its binding registered,
 # which is spent so no later flush or exit emits it again, and a local that
 # registered none -- a generator's local kept in the instance -- by its type,
-# the field zeroed after so the instance's destructor finds it empty.
+# the field zeroed after so the instance's destructor finds it empty. A local
+# moved on every path here holds nothing and is skipped (D3); one moved on
+# some was zeroed where it moved, and its destroy frees nothing there.
 emitScopeDestroy: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -22416,6 +22418,7 @@ emitScopeDestroy: function {
     for k < rg.len.u64 loop {
         it: symtab.typing.destroyItems.get i: rg.start.u64 + k
         k = k + 1
+        if it.state == 1 then continue
         if (spendOwedFree :ctx :tmp vid: it.vid :ind :buf).not then (emitUnownedDestroy
             :symtab
             :ctx
@@ -22540,8 +22543,9 @@ emitContinueFrees: function {
 # (ctx.exitNode) destroys (exitDestroy), in its order: each local by the
 # destroy its binding registered, which stays owed -- the path that does not
 # take the exit destroys it too -- and a local that registered none by its
-# type (emitUnownedDestroy). A `return` whose value is `retExpr` keeps a local
-# that value reads (`keepRefd`).
+# type (emitUnownedDestroy). A local moved on every path here is skipped (D3).
+# A `return` whose value is `retExpr` keeps a local that value reads
+# (`keepRefd`).
 emitExitDestroy: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -22557,6 +22561,7 @@ emitExitDestroy: function {
     for k < rg.len.u64 loop {
         it: symtab.typing.destroyItems.get i: rg.start.u64 + k
         k = k + 1
+        if it.state == 1 then continue
         emitExitItem :symtab :ctx :tmp vid: it.vid :retExpr :keepRefd :ind :buf
     }
 }

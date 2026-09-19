@@ -1433,7 +1433,10 @@ perf: $(PERFBIN)
 # behaviour (the arm settle's two sets went), the rest the source.
 #
 # -58 when a `.take` binding came to move rather than alias: the source.
-ALLOC_BASELINE := 2600453
+#
+# -496 when a local moved on every path came to print no destroy: -599 the
+# behaviour, the rest the source.
+ALLOC_BASELINE := 2599957
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
