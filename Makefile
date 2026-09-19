@@ -1345,7 +1345,7 @@ perf: $(PERFBIN)
 # +1,988 when a pinning call came to hold an argument that is a temporary: +378
 # of it is the temps a bare function or type name now gets as an argument (the
 # old source, both compilers), the rest the source.
-ALLOC_BASELINE := 2595382
+ALLOC_BASELINE := 2595227
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
