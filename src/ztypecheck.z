@@ -37553,13 +37553,26 @@ recordReturnedOwnedLocal: function {
         refuseReturnedArms :st :ast nid: arg.operation
         # an arm that yields a bare local returns it on that arm's path
         leaves: ListVal u32
-        armLocalLeaves :st :ast nid: arg.operation into: leaves
+        armValueLeaves :st :ast nid: arg.operation into: leaves
         with lit: leaves.iterate do for lf: lit loop {
             from: armLeafLocal :st :ast nid: lf
             if from.isZero.not then {
                 lt: st.reg.variableTypeOf id: from
                 if (typeIsReftype :st tid: lt) then {
+                    partial: armLeafIsPartial :st :ast :leaves :from
                     returnOwnedLocal :st :ast nid: lf vid: from tid: lt
+                    # the arm hands the local out on its path, as a binding of
+                    # the value takes it
+                    lfn: ast.nodes.get i: lf.u64
+                    (st.invalidateDeclAs
+                        declId: (st.findLocal nameId: (bareAtomNameId n: lfn))
+                        loc: optionval.some (ztypes.zsrcpos
+                            fsno: zvfs.fsno
+                            lineno: (nodeLine n: lfn)
+                            colno: (nodeCol n: lfn)
+                        )
+                        maybe: partial
+                    )
                     st.typing.armLeafMoves.add item: lf.u64
                 }
             }
@@ -43203,24 +43216,65 @@ checkStatement: function {
     for k < nLines loop {
         slnId: zast.stmtLineAt :ast nid: blockId i: k
         k = k + 1
-        # the line row is read through a view scoped to this block: the inner
-        # walk lends ast
-        innerId: zast.nodeid
-        {
-            sline: ast.nodes.get i: slnId.u64
-            if sline.statementline then innerId = sline.statementline
-        }
-        dk: zenv.divkind.none
-        ul0: st.typing.lineUnnamedLocals.length
-        if innerId.isZero.not then {
-            dk = checkStmtInner :st :unitDecl :ast :innerId lineId: slnId
-        }
-        recordTempHoldingLine :st lineId: slnId from: ul0
-        if k == nLines then stashArmValuePins :st :ast lineId: slnId
-        drainPendingBorrow :st
-        if dk > 0 then st.markUnreachable kind: dk
-        if dk == zenv.divkind.cont then st.recordContinueTakes
+        checkStmtLine :st :unitDecl :ast :blockId :slnId last: k == nLines
     }
+}
+
+# checkStmtLine -- one line `slnId` of the block `blockId`, its `last` line
+# when so: its row walked, a tail in return position handed on or recorded,
+# and how the line diverges laid for the lines after it.
+checkStmtLine: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    blockId: zast.nodeid
+    slnId: zast.nodeid
+    last: bool
+} is {
+    # the line row is read through a view scoped to this block: the inner
+    # walk lends ast
+    innerId: zast.nodeid
+    {
+        sline: ast.nodes.get i: slnId.u64
+        if sline.statementline then innerId = sline.statementline
+    }
+    dk: zenv.divkind.none
+    ul0: st.typing.lineUnnamedLocals.length
+    tailLine: last and (st.tailBlock == blockId.u64) and blockId.isZero.not
+    if tailLine then forwardTail :st :ast :innerId
+    if innerId.isZero.not then {
+        dk = checkStmtInner :st :unitDecl :ast :innerId lineId: slnId
+    }
+    # the body's own tail is recorded once its value is judged
+    # (checkImplicitReturn); a `with` or `do` block's, here
+    if tailLine when blockId.u64 != st.tailBody then (recordTailExit
+        :st
+        :ast
+        lineId: slnId
+        valId: (implicitReturnValue :st :ast lineId: slnId)
+    )
+    recordTempHoldingLine :st lineId: slnId from: ul0
+    if last then stashArmValuePins :st :ast lineId: slnId
+    drainPendingBorrow :st
+    if dk > 0 then st.markUnreachable kind: dk
+    if dk == zenv.divkind.cont then st.recordContinueTakes
+}
+
+# forwardTail -- the last line `innerId` of a block in return position: a `with`
+# block, or a `do` block no `break` leaves, hands return position to its own
+# last line, as the emitter hands it on.
+forwardTail: function {st: zenv.ZSymbolTable ast: Ast.view innerId: zast.nodeid} is {
+    if innerId.isZero then return
+    n: ast.nodes.get i: innerId.u64
+    match (
+        n
+    ) case withexpr then {
+        # its body is a `do` block, whose own block holds the lines
+        forwardTail :st :ast innerId: n.body
+    } case doexpr then {
+        if (blockHasBreak :ast n: (ast.nodes.get i: n.statement.u64)
+        ).not then st.tailBlock = n.statement.u64
+    } else null
 }
 
 # noteDropReleasedTemps -- a `.drop` released its binding's holds: an unnamed
@@ -44106,6 +44160,25 @@ checkImplicitReturn: function {
     checkReturnCarries :st :ast :arg :argT
     checkReturnTypeMatch :st :ast :arg :argT
     if (isLiteralTypeId :st tid: argT) then stampGate :st nid: lsid.u64 tid: expR
+    recordTailExit :st :ast lineId: lsid :valId
+}
+
+# recordTailExit -- what the tail line `lineId` of a value-returning body
+# destroys as it returns its value `valId` (exitDestroy, as a `return` of it
+# records): every scope of the function, but the local it hands back when the
+# value is a bare name. A `with` or `do` line hands return position to its own
+# last line, which records instead.
+recordTailExit: function {
+    st: zenv.ZSymbolTable ast: Ast.view lineId: zast.nodeid valId: zast.nodeid
+} is {
+    if valId.isZero then return
+    vn: ast.nodes.get i: valId.u64
+    if vn.withexpr or vn.doexpr then return
+    ret: ztypes.vid
+    rn: bareAtomNameId n: vn
+    if rn.isZero.not then ret = (st.lookupVarId nameId: rn).or d: ztypes.vid
+    st.recordReturnDestroy nid: lineId.u64 except: ret
+    if st.recording then st.typing.tailExits.add item: lineId.u64
 }
 
 # implicitReturnValue -- the expression an `out`-typed function body's last line
@@ -44482,8 +44555,20 @@ checkFunctionBodyIn: function {
             )
         }
         bodyErrs: st.typing.errors.length
+        prevTailBody: st.tailBody
+        prevTailBlock: st.tailBlock
+        st.tailBody = 0
+        st.tailBlock = 0
+        if st.typing.currentReturnTypeId > 0 when (st.typing.generatorCallBodies.has
+            item: fn.nid.u64
+        ).not then {
+            st.tailBody = fn.body.u64
+            st.tailBlock = fn.body.u64
+        }
         walkBodyAt :st :unitDecl :ast bodyId: fn.body
         checkImplicitReturn :st :ast defn: fn :bodyErrs
+        st.tailBody = prevTailBody
+        st.tailBlock = prevTailBlock
         st.typing.currentYieldInputTid = prevYi
         st.typing.currentGenTid = prevGen
         st.typing.genSpillNext = prevSpill

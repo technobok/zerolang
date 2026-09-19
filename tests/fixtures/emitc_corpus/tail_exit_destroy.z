@@ -1,0 +1,40 @@
+# A value-returning body's last line returns its value and frees what the
+# checker recorded that return destroys: a local moved before it frees nothing
+# there, a `with` block in that place frees its own locals and the body's, and
+# an `if` value whose arm yields a local hands that local out on its path --
+# freed on the other, by a tail and by a `return` alike. The leak kind (ASan)
+# is the judge.
+eat: function {s: String.take} out u64 is {
+    return s.length
+}
+
+afterMove: function out u64 is {
+    s: "abc".string
+    n: eat :s
+    t: "x".string
+    t.length + n
+}
+
+withTail: function {c: bool} out u64 is {
+    s: "abc".string
+    with w: s.length do {
+        u: "uu".string
+        u.length + w
+    }
+}
+
+armTail: function {c: bool} out String is {
+    o: "arm".string
+    if c then o else "other".string
+}
+
+armReturn: function {c: bool} out String is {
+    o: "ret".string
+    return (if c then o else "no".string)
+}
+
+main: function is {
+    print "\{afterMove} \{withTail c: true}"
+    print "\{armTail c: true} \{armTail c: false}"
+    print "\{armReturn c: true} \{armReturn c: false}"
+}

@@ -1436,7 +1436,10 @@ perf: $(PERFBIN)
 #
 # -496 when a local moved on every path came to print no destroy: -599 the
 # behaviour, the rest the source.
-ALLOC_BASELINE := 2599957
+#
+# +2,177 when a body's last line came to be recorded as the return it is:
+# the source.
+ALLOC_BASELINE := 2602134
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
