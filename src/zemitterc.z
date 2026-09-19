@@ -19337,15 +19337,17 @@ emitStringBind: function {
             emitValueTakeInvalidations :ast :symtab :ctx n: avn :ind :buf
             if (bindingRhsIsBorrow :ast :symtab :ctx n: avn).not then {
                 tmp.oweFree name: nm.string vid: nameVid
-                # a binding from a bare owned local is a MOVE, exactly as a
-                # reassignment from one is: zero the source so its scope-exit
-                # free no-ops now that this binding owns the buffer.
-                if (isBareNameValue n: avn) then {
-                    szs: implicitTakeSource :ast :symtab :ctx n: avn
-                    if szs.length > 0 then {
-                        szi: "\{ind}\{szs} = (\{ctx.strC}_t){0};\n"
-                        buf.append szi
-                    }
+                # a binding from a bare owned local, or from an explicit
+                # `<local>.take`, is a MOVE, exactly as a reassignment from
+                # one is: zero the source so its scope-exit free no-ops now
+                # that this binding owns the buffer.
+                szs: takeStringSource :ast :symtab :ctx n: avn
+                if szs.length == 0 when (isBareNameValue n: avn) then {
+                    szs = implicitTakeSource :ast :symtab :ctx n: avn
+                }
+                if szs.length > 0 then {
+                    szi: "\{ind}\{szs} = (\{ctx.strC}_t){0};\n"
+                    buf.append szi
                 }
             }
         }
@@ -19525,11 +19527,12 @@ emitTypedBind: function {
     )
 }
 
-# emitTakeAliasBind -- `x: <inst>.take` over a record or class is an ownership
-# ALIAS: record `x => inst` and emit no storage, so a later `x` resolves to
-# `inst`. A narrowed-subject take is the exception -- it MOVES the payload out of
-# the match arm's box, so it needs real storage and box zeroing.
-emitTakeAliasBind: function {
+# emitNarrowedTakeBind -- `x: <subject>.take` over a match subject narrowed to
+# an arm MOVES the payload out of the arm's box: real storage from the
+# narrowed cast, the payload zeroed, so the subject's destroy frees only the
+# box. False for any other value, which binds as a move like any other (the
+# source zeroed, so a path that did not move it still destroys it).
+emitNarrowedTakeBind: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -19540,59 +19543,46 @@ emitTakeAliasBind: function {
     nm: StringView
     nameVid: ztypes.vid
 } out bool is {
-    handled: false
     avn: ast.nodes.get i: n.value.u64
-    # `x: <inst>.take` over a record/class is an ownership alias: record
-    # `x => inst` and emit no storage (subsequent `x` resolves to `inst`).
     tabA: takeAliasBase :ast :symtab n: avn
     tabAV: atomVid :symtab nid: (takeAliasBaseNid :ast :symtab n: avn)
-    if tabA.length > 0 then {
-        # a narrowed-subject `.take` binding MOVES the payload out of
-        # the match arm's box: real storage from the narrowed cast plus
-        # box zeroing, so the subject's post-match destroy no-ops (a
-        # pure alias would re-resolve to the whole un-narrowed subject)
-        if (vvHas xs: ctx.narrowBox vid: tabAV) then {
-            ntO: vtGet xs: ctx.narrowTid vid: tabAV
-            match (
-                ntO
-            ) case some then {
-                ctB: (typeRefC
-                    :ast
-                    :symtab
-                    :ctx
-                    tid: (ztypes.tid.create from: ntO.u64)
-                    thisTid: ztypes.tid
-                )
-                valB: takeSourceResolve :ctx name: tabA vid: tabAV
-                lnB1: "\{ind}\{ctB} \{nm} = \{valB};\n"
-                buf.append lnB1
-                lnB2: "\{ind}\{valB} = (\{ctB}){0};\n"
-                buf.append lnB2
-                # a String payload is freed by the string runtime, which
-                # has no `_destroy`: it rides the scope's String free list
-                # like any other owned String local.
-                ldcbC: ctxCname :ctx tid: (ztypes.tid.create from: ntO.u64)
-                if ldcbC.stringView == ctx.strC then {
-                    tmp.oweFree name: nm.string vid: nameVid
-                } else {
-                    if (symtab.reg.needsDestructor typeId: ntO) then {
-                        ldcbB: ctxCname :ctx tid: (ztypes.tid.create from: ntO.u64)
-                        ldfB: "    \{ldcbB}_destroy(&\{nm});\n"
-                        tmp.oweList stmt: ldfB.copy name: nm.string vid: nameVid
-                    }
+    # a narrowed-subject `.take` binding MOVES the payload out of
+    # the match arm's box: real storage from the narrowed cast plus
+    # payload zeroing, so the subject's destroy frees only the box
+    if tabA.length > 0 when (vvHas xs: ctx.narrowBox vid: tabAV) then {
+        ntO: vtGet xs: ctx.narrowTid vid: tabAV
+        match (
+            ntO
+        ) case some then {
+            ctB: (typeRefC
+                :ast
+                :symtab
+                :ctx
+                tid: (ztypes.tid.create from: ntO.u64)
+                thisTid: ztypes.tid
+            )
+            valB: takeSourceResolve :ctx name: tabA vid: tabAV
+            lnB1: "\{ind}\{ctB} \{nm} = \{valB};\n"
+            buf.append lnB1
+            lnB2: "\{ind}\{valB} = (\{ctB}){0};\n"
+            buf.append lnB2
+            # a String payload is freed by the string runtime, which
+            # has no `_destroy`: it rides the scope's String free list
+            # like any other owned String local.
+            ldcbC: ctxCname :ctx tid: (ztypes.tid.create from: ntO.u64)
+            if ldcbC.stringView == ctx.strC then {
+                tmp.oweFree name: nm.string vid: nameVid
+            } else {
+                if (symtab.reg.needsDestructor typeId: ntO) then {
+                    ldcbB: ctxCname :ctx tid: (ztypes.tid.create from: ntO.u64)
+                    ldfB: "    \{ldcbB}_destroy(&\{nm});\n"
+                    tmp.oweList stmt: ldfB.copy name: nm.string vid: nameVid
                 }
-                return true
-            } case none then null
-        }
-        # the alias VALUE is C text, so it must be the source's emitted
-        # identifier -- its source name names nothing in the output
-        tabAE: emitLocalAtomName :ctx name: tabA vid: tabAV
-        lalA: "\{ind}/* alias: \{nm} => \{tabAE} */\n"
-        buf.append lalA
-        vvSet xs: ctx.aliases vid: nameVid val: tabAE.stringView
-        return true
+            }
+            return true
+        } case none then null
     }
-    return handled
+    return false
 }
 
 # dropStaleBorrowAlias -- a binding statement introduces a FRESH local, so a
@@ -19721,7 +19711,7 @@ emitAssignment: function {
         nm: nm.stringView
         ct: ct.stringView
     ) then return
-    if (emitTakeAliasBind
+    if (emitNarrowedTakeBind
         :ast
         :symtab
         :ctx
@@ -19905,9 +19895,10 @@ emitDottedAutoCallStmt: function {
     buf: String.borrow
 } is {
     # `.drop` on a protocol is a transfer marker (scope-exit destroy
-    # covers it) -- emit nothing, like emitCallStmt.
+    # covers it) -- emit nothing, like emitCallStmt. A `.take` whose value
+    # nothing receives ends the local here as `.drop` does.
     dct: dottedChildText :ast :n
-    if dct == "drop" then {
+    if dct == "drop" or (ztypecheck.isMoveMarker name: dct) then {
         rrid: dottedReceiverStampId :ast :symtab callable: n
         rtt: symtab.reg.typetypeOf typeId: rrid
         if rtt == ztypes.ztypetype.protocolType then return

@@ -1431,7 +1431,9 @@ perf: $(PERFBIN)
 # value, an arm's inner path, a narrowed payload, a block's `break`, a later
 # condition) and a condition's moves came to outlive its clause: -66 the
 # behaviour (the arm settle's two sets went), the rest the source.
-ALLOC_BASELINE := 2600511
+#
+# -58 when a `.take` binding came to move rather than alias: the source.
+ALLOC_BASELINE := 2600453
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
