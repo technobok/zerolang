@@ -6857,20 +6857,19 @@ forceMemberOf: function {
     forceMemberDecl :st :ast memberDeclId: md
 }
 
-# forceUnitDefMember -- force `unit.def.member` from ids. Body checking reaches
-# a method by NAME rather than through a receiver's type, so it is the one
-# demand point that cannot go through a tid.
-forceUnitDefMember: function {
+# forceOwnerMember -- force one member of the type `ownerDecl` declares, found
+# through the owner's declaration rather than its name: a type a nested unit
+# declares has another type's name in the file unit, or none. Body checking
+# reaches here before the member's signature has been resolved.
+forceOwnerMember: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    unitDecl: ztypes.declid
-    defId: zast.nameid
+    ownerDecl: ztypes.declid
     memberId: zast.nameid
 } is {
     if st.typing.eagerAll then return
-    dd: declOfUnitDefIds :st :unitDecl nameId: defId
-    if dd.isZero then return
-    md: st.typing.declFindChild parentDeclId: dd nameId: memberId
+    if ownerDecl.isZero then return
+    md: st.typing.declFindChild parentDeclId: ownerDecl nameId: memberId
     if md.isZero then return
     forceMemberDecl :st :ast memberDeclId: md
 }
@@ -43275,24 +43274,6 @@ objectdefHasMethodBodies: function {ast: Ast.view op: astnode.view} out bool is 
     }
 }
 
-# methodDeclOf -- the declaration of method `memberId` of type `typeName` in
-# `unitDecl`, or 0.
-methodDeclOf: function {
-    st: zenv.ZSymbolTable.view
-    unitDecl: ztypes.declid
-    # the owner type's name, interned
-    typeNameId: zast.nameid
-    memberId: zast.nameid
-} out ztypes.declid is {
-    td: (declOfUnitDefIds
-        :st
-        :unitDecl
-        nameId: typeNameId
-    )
-    if td.isZero then return (ztypes.declid.create from: 0)
-    return (st.typing.declFindChild parentDeclId: td nameId: memberId)
-}
-
 # checkMethodBodies -- body-check every method of one type definition (is- and
 # as-block functiondefs, declaration order). The scopes land under the walk's
 # current scope, where the first demand placed them.
@@ -43308,6 +43289,10 @@ checkMethodBodies: function {
     opId: zast.nodeid
 } is {
     typeName: zast.nameTextCopy :ast ref: typeNameId
+    # the owner's declaration by its id: a type a nested unit declares shares
+    # its name with any top-level one, and the file unit's name answers that one
+    ownerDecl: declOfTypeId :st tid: typeTid
+    if ownerDecl.isZero then ownerDecl = declOfUnitDefIds :st :unitDecl nameId: typeNameId
     orf: objRefAt :ast nid: opId
     if orf.nid.isZero.not then {
         kI: u64
@@ -43335,16 +43320,9 @@ checkMethodBodies: function {
                 {
                     # about to check this body, so its signature is needed:
                     # `this` binds from the resolved receiver
-                    hDefId2: typeNameId
-                    (forceUnitDefMember
-                        :st
-                        :ast
-                        :unitDecl
-                        defId: hDefId2
-                        memberId: imName
-                    )
+                    forceOwnerMember :st :ast :ownerDecl memberId: imName
                     qn: "\{typeName}.\{mname}"
-                    declId93: methodDeclOf :st :unitDecl :typeNameId memberId: imName
+                    declId93: st.typing.declFindChild parentDeclId: ownerDecl nameId: imName
                     imFr: fnRefAt :ast nid: imOp
                     (checkFunctionBody
                         :st
@@ -43384,16 +43362,9 @@ checkMethodBodies: function {
             }
             if amIsFn then {
                 {
-                    hDefId: typeNameId
-                    (forceUnitDefMember
-                        :st
-                        :ast
-                        :unitDecl
-                        defId: hDefId
-                        memberId: amName
-                    )
+                    forceOwnerMember :st :ast :ownerDecl memberId: amName
                     qn2: "\{typeName}.\{monoName}"
-                    declId94: methodDeclOf :st :unitDecl :typeNameId memberId: amName
+                    declId94: st.typing.declFindChild parentDeclId: ownerDecl nameId: amName
                     amFr: fnRefAt :ast nid: amOp
                     (checkFunctionBody
                         :st

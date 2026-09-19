@@ -3382,8 +3382,13 @@ Ctx: class {
     origins: ListVal ztypes.tid
 }
 
-# canonFnId -- userFnId, but a tid already carrying a generic origin is a
-# registered mono and inherently canonical: skip the name round-trip and use it.
+# canonFnId -- userFnId, but a tid that is already the one needs no name
+# round-trip: a registered mono (it carries a generic origin), or a type with
+# its own declaration. Only a SHELL -- an id with no declaration, standing for
+# a main-unit type -- is resolved by its name; a declared type's name looked up
+# in the main unit answers ANOTHER type there when two units declare the name
+# (`kit.Cell` and a top-level `Cell`), and every member read through it called
+# the other type's method.
 canonFnId: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -3392,6 +3397,7 @@ canonFnId: function {
     name: StringView
 } out u64 is {
     if (originTidOf :symtab :tid) > 0 then return tid
+    if (ztypecheck.declOfTypeId st: symtab :tid).isZero.not then return tid
     return (userFnId :ast :symtab :ctx :name)
 }
 
@@ -20785,6 +20791,27 @@ valueIsArmTag: function {symtab: zenv.ZSymbolTable.view n: astnode.view} out boo
     return ado.kind.armDecl
 }
 
+# withValueCType -- the C type of a `with` binding's value, as a binding's is:
+# a builtin scalar by its C name, anything else by its stamped id. The name
+# route found nothing for a type a nested unit declares (`with c: kit.Cfg`
+# was declared int64_t), and the main unit's own type for a name two units
+# declare.
+withValueCType: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+    wsid: u64
+} out String is {
+    tid: ztypes.tid.create from: wsid.u64
+    wtn: stampNameDeep :symtab :n
+    # a builtin scalar keeps its C name, as a binding's does (bindDeclaredCType)
+    sc: cTypeOf name: wtn.stringView
+    if sc.length > 0 when wsid == 0 or (scalarTidIsBuiltin :symtab :tid) then return sc
+    if wsid > 0 then return (typeRefC :ast :symtab :ctx :tid thisTid: ztypes.tid)
+    return (cTypeForName :ast :symtab :ctx name: wtn.stringView)
+}
+
 # emitWithLocal -- the header's C local for a `with` value that lives in the
 # block. A reference-returning callee hands back `T*`, so the binding ALIASES
 # its source exactly as a plain binding does; anything else is the value.
@@ -20888,19 +20915,7 @@ emitWithStmt: function {
     wnmR: zast.nameTextAt :ast ref: n.name
     wnm: varCName :ctx vid: (defVid :symtab nid: n.nodeid.u64) name: wnmR.stringView
     wsid: stampIdDeep :symtab n: (ast.nodes.get i: n.value.u64)
-    wct: String
-    if (originTidOf :symtab tid: (ztypes.tid.create from: wsid.u64)) > 0 then {
-        wct = (typeRefC
-            :ast
-            :symtab
-            :ctx
-            tid: (ztypes.tid.create from: wsid.u64)
-            thisTid: ztypes.tid
-        )
-    } else {
-        wtn: stampNameDeep :symtab n: (ast.nodes.get i: n.value.u64)
-        wct = cTypeForName :ast :symtab :ctx name: wtn.stringView
-    }
+    wct: withValueCType :ast :symtab :ctx n: (ast.nodes.get i: n.value.u64) :wsid
     wv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.value.u64
     # a non-lvalue receiver (`with x: (mk).iterate do`) hoisted an _ahN temp
     # while that expression was built; declare it before the line that reads
@@ -22880,7 +22895,12 @@ objIterIterableTid: function {
     if itid.isZero then return (objitertids :itid :bareFnId)
     if bareFnId.isZero then {
         canoT: u64
+        # a mono, or a type with its own declaration, is already the one; only
+        # a shell is looked up by name -- which in the main unit answers a
+        # same-named type of its own, not one another unit declares
         if (originTidOf :symtab tid: itid0) > 0 then {
+            canoT = itid0
+        } else if (ztypecheck.declOfTypeId st: symtab tid: itid0).isZero.not then {
             canoT = itid0
         } else {
             itn0: regNameOf :symtab tid: itid0
@@ -22931,9 +22951,9 @@ objIterYieldTid: function {
     return ovid
 }
 
-# objIterCallC -- the C name of the iterator's `.call`. A main-unit user-class
-# iterator is emitted by emitOneMethod under its own cname id; native and
-# collection iterators keep the template's `{type}_call`.
+# objIterCallC -- the C name of the iterator's `.call`. A user-class iterator,
+# declared in whatever unit, is emitted by emitOneMethod under its own cname id;
+# native and collection iterators keep the template's `{type}_call`.
 objIterCallC: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -22941,17 +22961,16 @@ objIterCallC: function {
     cco: ztypes.tid
     itid: ztypes.tid
 } out String is {
-    itn: regNameOf :symtab tid: itid
-    # a main-unit user-class iterator's .call is emitted by emitOneMethod
-    # (its own cname id); native/collection iterators (CpIter, SetIter,
-    # emitted with the type-id cname) keep the template's `{type}_call`.
+    # the iterator is asked by its ids: a name looked up in the main unit
+    # misses a class another unit declares, and wrote a `{type}_call` nothing
+    # defines. A `call` with a body is the author's (a generator's is); a
+    # native one (CpIter's, TextReader's) is the runtime's `{type}_call`, and a
+    # generic instance carries its origin and keeps the template's naming.
     callC: String
-    itUfn: canonFnId :ast :symtab :ctx tid: itid name: itn.stringView
     isUserCls: false
-    if itUfn > 0 when (symtab.reg.typetypeOf typeId: itid) == ztypes.ztypetype.classType then {
-        # exclude collection monos (SetIter etc., which have a generic origin)
+    if (symtab.reg.typetypeOf typeId: itid) == ztypes.ztypetype.classType then {
         itorig: originTidOf :symtab tid: itid
-        if itorig.isZero then isUserCls = true
+        if itorig.isZero when (fnIsNativeId :symtab fid: cco).not then isUserCls = true
     }
     if isUserCls then {
         callC = ctxCname :ctx tid: (ztypes.tid.create from: cco.u64)
@@ -25720,19 +25739,7 @@ emitTailStmt: function {
         wnmR8: zast.nameTextAt :ast ref: n.name
         wnmT: varCName :ctx vid: (defVid :symtab nid: n.nodeid.u64) name: wnmR8.stringView
         wsidT: stampIdDeep :symtab n: (ast.nodes.get i: n.value.u64)
-        wctT: String
-        if (originTidOf :symtab tid: (ztypes.tid.create from: wsidT.u64)) > 0 then {
-            wctT = (typeRefC
-                :ast
-                :symtab
-                :ctx
-                tid: (ztypes.tid.create from: wsidT.u64)
-                thisTid: ztypes.tid
-            )
-        } else {
-            wtnT: stampNameDeep :symtab n: (ast.nodes.get i: n.value.u64)
-            wctT = cTypeForName :ast :symtab :ctx name: wtnT.stringView
-        }
+        wctT: withValueCType :ast :symtab :ctx n: (ast.nodes.get i: n.value.u64) wsid: wsidT
         wvT: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.value.u64
         # a reference-returning callee hands back `T*`, so a `with` binding
         # ALIASES its source exactly as a plain binding does
