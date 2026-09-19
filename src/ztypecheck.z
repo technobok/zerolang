@@ -30682,7 +30682,7 @@ checkWith: function {
     ast: Ast
     withnode: withref
 } out ztypes.tid is {
-    withMarker: st.pushBlock name: "with" node: withnode.nid
+    withMarker: st.pushBlock node: withnode.nid
     errW: st.typing.errors.length
     vt: checkValueAt :st :unitDecl :ast nid: withnode.value
     if (refuseNonValue :st :ast :vt nid: withnode.value) then vt = ztypes.tid
@@ -31034,7 +31034,7 @@ checkDo: function {
     ast: Ast
     donode: doref
 } out ztypes.tid is {
-    doMarker: st.pushBlock name: "block" node: donode.nid
+    doMarker: st.pushBlock node: donode.nid
     dbk: st.reg.ctlPlaceholder
     (st.define
         nameId: zast.names.wkBreak
@@ -31144,39 +31144,22 @@ bindForBorrowedElement: function {
     }
 }
 
-# probeForCallIteration -- walk a call-shaped iterator init once, in an empty
-# call scope, so its per-iteration call is typed before the loop binds an
-# element. Gated on the value being an iterator wrapper.
+# probeForCallIteration -- a call-shaped iterator init that is not an iterator
+# wrapper has its `call` member forced, so its per-iteration call is typed
+# before the loop binds an element.
 probeForCallIteration: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
     vt: ztypes.tid
 } is {
-    doProbe: false
-    pw: iterWrapperElem :ast :st :unitDecl wid: vt
-    match (
-        pw
-    ) case some then {
-        doProbe = true
-    } case none then {
-        (forceMemberOf
-            :st
-            :ast
-            parentTypeId: vt
-            nameId: zast.names.wkCall
-        )
-        ico: st.typing.declChildOfId parentTypeId: vt nameId: zast.names.wkCall
-        match (
-            ico
-        ) case some then {
-            doProbe = true
-        } case none then null
-    }
-    if doProbe then {
-        ecm: st.pushCall node: zast.nodeid
-        st.popTo marker: ecm
-    }
+    if (iterWrapperElem :ast :st :unitDecl wid: vt).none.not then return
+    (forceMemberOf
+        :st
+        :ast
+        parentTypeId: vt
+        nameId: zast.names.wkCall
+    )
 }
 
 
@@ -31666,7 +31649,7 @@ checkFor: function {
     fornode: forref
 } out ztypes.tid is {
     entryStart: st.entryMark
-    forMarker: st.pushBlock name: "for" node: fornode.nid
+    forMarker: st.pushBlock node: fornode.nid
     st.openLoopRun :entryStart
     endLoopWriteNarrowing :st :ast :fornode
     bk: st.reg.ctlPlaceholder
@@ -32150,7 +32133,7 @@ checkIfClauses: function {
             if skipDead when clause.statement != fbr.stmt then dead = true
         }
         if dead then continue
-        bm: st.pushBlock name: "if_branch" node: clause.nid
+        bm: st.pushBlock node: clause.nid
         with pfit: accFacts.iterate do for pf: pfit loop (applyPredFact
             :ast
             :st
@@ -32544,7 +32527,7 @@ checkIf: function {
     # dead only on this host; neither of those emits C, so no artifact differs.
     skipDead: false
     if fbr.known when st.typing.eagerAll.not then skipDead = true
-    ifMarker: st.pushBlock name: "if" node: ifnode.nid
+    ifMarker: st.pushBlock node: ifnode.nid
     armEnds: st.openArmNarrowingEnds
     liveBefore: st.getLiveOwnedVars
     takenAcross: IdSet u64
@@ -32580,7 +32563,7 @@ checkIf: function {
         elseDead: false
         if skipDead when ifnode.elseclause != fbr.stmt then elseDead = true
         if elseDead.not then {
-            ebm: st.pushBlock name: "if_else" node: ifnode.elseclause
+            ebm: st.pushBlock node: ifnode.elseclause
             with efit: accFacts.iterate do for ef: efit loop (applyPredFact
                 :ast
                 :st
@@ -40843,8 +40826,7 @@ checkGenericCall: function {
         match (
             dvo
         ) case some then {
-            csname: "function:\{mname}\{gsfx4}"
-            cm2: st.pushBlock name: csname.stringView node: zast.nodeid
+            cm2: st.pushBlock node: zast.nodeid
             if dvo then st.markUnreachable kind: zenv.divkind.exit
             st.popTo marker: cm2
         } case none then null
@@ -41165,8 +41147,7 @@ checkCaseClause: function {
             stampGate :st nid: amid.u64 tid: seta
         }
     }
-    asname: "arm:\{armName}"
-    armMarker: st.pushBlock name: asname.stringView node: clause.nid
+    armMarker: st.pushBlock node: clause.nid
     # Every arm of a sum subject must name one of its declared arms.
     armo: optionval.none u64
     (forceMemberOf
@@ -41419,7 +41400,7 @@ checkCaseElse: function {
     anyEmpty: false
     allDiverge: true
     if (isEmptyBody n: (ast.nodes.get i: casenode.elseclause.u64)) then anyEmpty = true
-    elseMarker: st.pushBlock name: "arm:else" node: casenode.elseclause
+    elseMarker: st.pushBlock node: casenode.elseclause
     if targetName.length > 0 when subjT > 0 then {
         with eiter: covered.iterate do for en2: eiter loop {
             (st.exclude
@@ -41585,7 +41566,7 @@ checkCaseArms: function {
     # the match is done, as an `if` arm's does
     liveBefore: st.getLiveOwnedVars
     takenAcross: IdSet u64
-    st.pushBlock name: "match_body" node: zast.nodeid
+    st.pushBlock node: zast.nodeid
     if targetName.length > 0 then st.resetNarrowing nameId: (nameIdOf
         :ast
         name: targetName.stringView
@@ -41885,7 +41866,7 @@ checkDissectedArm: function {
         return none
     }
     armBlock: zast.nodeid.create from: win
-    armMarker: st.pushBlock name: "arm:dissected" node: armBlock
+    armMarker: st.pushBlock node: armBlock
     checkStatement :st :unitDecl :ast blockId: armBlock
     at: ztypes.tid.create from: (lastStmtType :st :ast block: (ast.nodes.get i: win.u64))
     st.popTo marker: armMarker
@@ -41937,7 +41918,7 @@ checkCase: function {
 } out ztypes.tid is {
     foldCaseArm :st :ast :unitDecl n: casenode
     constFailClear :st
-    matchMarker: st.pushBlock name: "match" node: casenode.nid
+    matchMarker: st.pushBlock node: casenode.nid
     subjT: caseSubjectTid :st :unitDecl :ast :casenode
     # per-mono instance walk: a subject that is a bare TYPE name (resolved
     # by the instance's scope define, not a value) is a compile-time
@@ -44289,15 +44270,7 @@ checkFunctionBodyIn: function {
         # its scopes/entries stay out of the dump log).
         prevSup: st.typing.suppressParamStamps
         if isGenDef then st.typing.suppressParamStamps = true
-        sname: String
-        if defName.length > 0 then {
-            sname = "function:\{defName}"
-        } else {
-            # the label spells the name: read through a borrow scoped here
-            dnT: zast.nameTextAt :ast ref: defNameId
-            sname = "function:\{dnT}"
-        }
-        st.push name: sname.stringView parent: rf node: fn.nid
+        st.push parent: rf node: fn.nid
         kP: u64
         for kP < fn.nparams loop {
             pmId: (zast.fnParamAt :ast nid: fn.nid i: kP).u32
@@ -45042,8 +45015,7 @@ stampOneFnMono: function {
     monoNm: st.reg.nameOf tid: monoId
     prevSup: st.typing.suppressParamStamps
     st.typing.suppressParamStamps = true
-    sn: "fngeneric:\{monoNm}"
-    st.push name: sn.stringView parent: scope node: zast.nodeid
+    st.push parent: scope node: zast.nodeid
     st.typing.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     {
         bindMonoParams :st :monoId
@@ -45156,8 +45128,7 @@ stampOneClassMono: function {
     monoNm: st.reg.nameOf tid: monoId
     prevSup: st.typing.suppressParamStamps
     st.typing.suppressParamStamps = true
-    sn: "classgeneric:\{monoNm}"
-    st.push name: sn.stringView parent: scope node: zast.nodeid
+    st.push parent: scope node: zast.nodeid
     st.typing.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     {
         bindMonoParams :st :monoId
@@ -45618,8 +45589,7 @@ stampOneUnitMono: function {
     monoNm: st.reg.nameOf tid: monoId
     prevSup: st.typing.suppressParamStamps
     st.typing.suppressParamStamps = true
-    sn: "unitgeneric:\{monoNm}"
-    st.push name: sn.stringView parent: scope node: zast.nodeid
+    st.push parent: scope node: zast.nodeid
     st.typing.monoParamSubst = IdMapV ztypes.tid v: ztypes.tid
     {
         bindMonoParams :st :monoId

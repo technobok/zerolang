@@ -1352,7 +1352,10 @@ perf: $(PERFBIN)
 # +1,721 when a field came never to move: about a hundred are the empty Ast a
 # swap-out constructs per parse (89defeea), the rest the source of the refusal
 # and of the generator local map.
-ALLOC_BASELINE := 2597109
+#
+# -10,513 when a scope came to be named by its node: no label string per body
+# scope, and a template walk's scopes are lazy like every other walk's.
+ALLOC_BASELINE := 2586596
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

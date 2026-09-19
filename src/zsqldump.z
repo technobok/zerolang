@@ -103,9 +103,9 @@ vidOrNullText: function {o: optionval ztypes.vid} out String is {
     }
 }
 
-# canonScopeNode -- the node a scope brackets, as its kind and position
-# (`call@12:5`), which no id renumbering moves; "" for a bracket the checker
-# opened for itself.
+# canonScopeNode -- a scope's name in the dump: the node it brackets, as its
+# kind and position (`call@12:5`), which no id renumbering moves; "" for a
+# bracket the checker opened for itself.
 canonScopeNode: function {
     ast: Ast.view st: zenv.ZSymbolTable.view scope: ztypes.declid
 } out String is {
@@ -121,16 +121,24 @@ canonScopeNode: function {
     return txt
 }
 
-# scopeLabelOf -- a scope's dump label ("" when unlabelled: a call bracket).
-scopeLabelOf: function {st: zenv.ZSymbolTable.view scope: ztypes.declid} out String is {
-    o: st.scopeLabel.get key: scope.u64
-    match (
-        o
-    ) case some then {
-        return o.copy
-    } case none then {
-        return "".string
+# scopeKindText -- CALL for a scope over a call, BLOCK for any other.
+scopeKindText: function {
+    ast: Ast.view st: zenv.ZSymbolTable.view scope: ztypes.declid
+} out StringView is {
+    dn: (st.typing.decls.get i: scope.u64).node
+    if dn > 0 when (ast.nodes.get i: dn.u64).call then return "CALL"
+    return "BLOCK"
+}
+
+# scopeUnderHidden -- `scope`, or a scope it sits in, is one the dump leaves out
+# (ZSymbolTable.scopeHidden): every scope a hidden walk opened goes with it.
+scopeUnderHidden: function {st: zenv.ZSymbolTable.view scope: ztypes.declid} out bool is {
+    d: scope
+    for (st.typing.declIsScope declId: d) loop {
+        if (st.scopeHidden.has item: d.u64) then return true
+        d = st.typing.declParentOf declId: d
     }
+    return false
 }
 
 # definedUnitOf -- a type's defining unit as an Option, derived off the
@@ -836,7 +844,7 @@ ZDumper: class {
     # appendScopeRows -- one `scope` row per scope declaration that is not
     # hidden. The depth column counts the scopes emitted, not the nesting: it is
     # the order they were declared in.
-    appendScopeRows: function {:this st: zenv.ZSymbolTable.view} is {
+    appendScopeRows: function {:this ast: Ast.view st: zenv.ZSymbolTable.view} is {
         depth: u64
         nd: st.typing.decls.length
         di: u64
@@ -844,12 +852,9 @@ ZDumper: class {
             d: ztypes.declid.create from: di
             di = di + 1
             if (st.typing.declIsScope declId: d).not then continue
-            if (st.scopeHidden.has item: d.u64) then continue
-            lbl: scopeLabelOf :st scope: d
-            kind: "BLOCK"
-            if lbl.length == 0 then kind = "CALL"
-            kindSql: sqlStr s: kind
-            nameSql: sqlStr s: lbl.stringView
+            if (scopeUnderHidden :st scope: d) then continue
+            kindSql: sqlStr s: (scopeKindText :ast :st scope: d)
+            nameSql: sqlStr s: (canonScopeNode :ast :st scope: d).stringView
             pd: st.typing.declParentOf declId: d
             parentSql: "NULL".string
             if (st.typing.declIsScope declId: pd) then parentSql = "\{pd}"
@@ -934,11 +939,11 @@ ZDumper: class {
     # opened (depth = that index); entry rows the locals and overlay rows
     # snapshotted when each scope closed; variable rows the per-id side
     # tables, deduped.
-    appendSymbolTable: function {:this pool: zast.StringPool.view st: zenv.ZSymbolTable.view} is {
+    appendSymbolTable: function {:this ast: Ast.view st: zenv.ZSymbolTable.view} is {
         seen: IdSet u64
-        this.appendScopeRows :st
-        this.appendEntryRows :pool :st :seen
-        this.appendVariableRows :pool :st :seen
+        this.appendScopeRows :ast :st
+        this.appendEntryRows pool: ast.names :st :seen
+        this.appendVariableRows pool: ast.names :st :seen
     }
     # --- canonical (id-normalized) renderers for the dump-canon gate ---
     # Each emits a table's id-independent projection (PK ids omitted, FK ids
@@ -1263,9 +1268,9 @@ ZDumper: class {
             d: ztypes.declid.create from: di
             di = di + 1
             if (st.typing.declIsScope declId: d).not then continue
-            if (st.scopeHidden.has item: d.u64) then continue
-            lbl: scopeLabelOf :st scope: d
-            scopeName.set key: d.u64 value: lbl.copy
+            if (scopeUnderHidden :st scope: d) then continue
+            name: canonScopeNode :ast :st scope: d
+            scopeName.set key: d.u64 value: name.copy
             parentNameSql: "NULL".string
             pd: st.typing.declParentOf declId: d
             po: scopeName.get key: pd.u64
@@ -1274,13 +1279,10 @@ ZDumper: class {
             ) case some then {
                 parentNameSql = sqlStr s: po.stringView
             } case none then null
-            kind: "BLOCK"
-            if lbl.length == 0 then kind = "CALL"
-            kindSql: sqlStr s: kind
-            nameSql: sqlStr s: lbl.stringView
+            kindSql: sqlStr s: (scopeKindText :ast :st scope: d)
+            nameSql: sqlStr s: name.stringView
             unreachNum: boolNum b: (st.unreachableScopes.has item: d.u64)
-            nodeSql: sqlStr s: (canonScopeNode :ast :st scope: d).stringView
-            line: "\{parentNameSql} | \{kindSql} | \{nameSql} | \{depth} | \{unreachNum} | \{nodeSql}"
+            line: "\{parentNameSql} | \{kindSql} | \{nameSql} | \{depth} | \{unreachNum}"
             scopeRows.append line
             depth = depth + 1
         }
@@ -1421,7 +1423,7 @@ dumpSql: function {program: Ast.view vfs: zvfs.ZVfs symtab: zenv.ZSymbolTable} o
     d.appendAtomStamps typing: symtab.typing pool: program.names
     d.appendMemberConst typing: symtab.typing
     d.appendConformance typing: symtab.typing
-    d.appendSymbolTable pool: program.names st: symtab
+    d.appendSymbolTable ast: program st: symtab
     return d.acc.copy
 }
 
