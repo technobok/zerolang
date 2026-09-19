@@ -170,7 +170,7 @@ scopes with different ownership, which is the common case.
 #---: ZEntry -- an overlay row
 
 #~"ZEntry" (#~"src/ztypes.z") is one overlay row of the body walk: a
-take, a narrowing, or a lock laid over a local while the frame that laid
+take, a narrowing, or a lock laid over a local while the scope that laid
 it is open. A local itself is a #~"localDecl" in the declaration tree;
 the row points at it.
 
@@ -178,7 +178,7 @@ the row points at it.
   [#*: #~"entryId": monotonic id]
   [#*: #~"declId" (the local's declaration -- its name, type and
     variable are read off it), #~"defSeq" (the row's place among the
-    frame's locals, for the dump)]
+    scope's locals, for the dump)]
   [#*: #~"ztypeId": the type the row presents (a narrowing changes it)]
   [#*: #~"hasLock", #~"lockType", #~"lockScope", #~"lockHolder",
     #~"lockPath": lock state -- the lock kind, whether it is on the leaf or
@@ -190,7 +190,7 @@ the row points at it.
     emitter can generate the C-level unwrap]
   [#*: #~"isTaken", #~"takenAt": consumed-binding state]
 
-Rows live on #~"ZSymbolTable.entries" and die with their frame; the
+Rows live on #~"ZSymbolTable.entries" and die with their scope; the
 local's declaration persists, so the walk can return to it.
 
 
@@ -232,34 +232,34 @@ has a direct SQL representation.
 #---: ZSymbolTable -- the body walk's state
 
 #~"ZSymbolTable" (#~"src/zenv.z") is the body walk's state over the
-declaration tree. A frame is a #~"blockDecl" under the frame or
-declaration enclosing it and a local is a #~"localDecl" under the frame
+declaration tree. A scope is a #~"scopeDecl" under the scope or
+declaration enclosing it and a local is a #~"localDecl" under the scope
 it is written in, so both persist and can be returned to; the table holds
-what is transient: the stack of open frames (#~"open", innermost last,
-each an #~"openframe" with the frame's row, its parent, and where its
+what is transient: the stack of open scopes (#~"open", innermost last,
+each an #~"openscope" with the scope's row, its parent, and where its
 overlay rows begin),
 the overlay rows laid over locals (#~"entries", see ZEntry above), the
-frames whose remainder proved unreachable, and the rows snapshotted for the
-dump when a frame closes. It owns the type registry and the typing tables
+scopes whose remainder proved unreachable, and the rows snapshotted for the
+dump when a scope closes. It owns the type registry and the typing tables
 outright, so every method reads metadata through #~"this.reg" /
 #~"this.typing".
 
-A local resolves by climbing the open frame chain; a frame's parent that
-is not a frame -- the function declaration -- ends the climb, so two
+A local resolves by climbing the open scope chain; a scope's parent that
+is not a scope -- the function declaration -- ends the climb, so two
 functions never see each other's locals whatever order their bodies are
 walked in.
 
-The frame a resolver works in is an explicit #~"frame:" argument, never
-an ambient cursor: a declaration resolves in its parent's frame
-(#~"declParentIdOf"), a body walk opens its base frame under the
+The scope a resolver works in is an explicit #~"scope:" argument, never
+an ambient cursor: a declaration resolves in its parent's scope
+(#~"declParentIdOf"), a body walk opens its base scope under the
 declaration (#~"push name: parent:"), and every resolver it reaches is
-handed the frame it should resolve from. The table's #~"curFrame" is the
-body walk's own position -- the innermost open frame that has a row --
-and only #~"pushFrame" / #~"materialiseTop" / #~"pop" move it. Key APIs:
+handed the scope it should resolve from. The table's #~"curScope" is the
+body walk's own position -- the innermost open scope that has a row --
+and only #~"pushScope" / #~"materialiseTop" / #~"pop" move it. Key APIs:
 
 #ul:
-  [#*: #~"pushFrame" / #~"pushBlock" / #~"pushCall" / #~"pop" / #~"popTo"
-    -- open and close frames (a block frame that declares nothing mints no
+  [#*: #~"pushScope" / #~"pushBlock" / #~"pushCall" / #~"pop" / #~"popTo"
+    -- open and close scopes (a block scope that declares nothing mints no
     row)]
   [#*: #~"defineVar" / #~"define" / #~"lookup" / #~"lookupVarId"
     -- local definition and name -> type / variable resolution]
@@ -269,7 +269,7 @@ and only #~"pushFrame" / #~"materialiseTop" / #~"pop" move it. Key APIs:
   [#*: #~"findExclusiveLock", #~"isPathLocked" -- access-
     site enforcement (used by lock-escape checks)]
   [#*: #~"narrow", #~"exclude" -- install a narrowing or
-    exclusion overlay row in the current frame]
+    exclusion overlay row in the current scope]
 
 The lock conflict logic lives in #~"zenv.z", not in
 #~"ztypecheck.z". The typechecker only chooses #_*"when" to
@@ -377,7 +377,7 @@ concrete #~"Node" arm; see #~"lib/system/zast.z".
 
 Resolution is keyed by #_*"declaration", not by synthesized dotted-string
 names. Every definition is one Decl in the tree, found from a reference by
-walking the frames outward from the frame the reference was written in,
+walking the scopes outward from the scope the reference was written in,
 and that Decl carries its own resolution state -- #~"pending" (demanded,
 queued), #~"resolving" (grey), #~"defined" (its type id is final),
 #~"walked" (its body checked). A reference that reaches a declaration
@@ -392,7 +392,7 @@ E0100. The flow is:
   [#*: Not yet defined: mark it pending and queue it
     (#~"pendingDefs"); #~"resolveDemandedDefs" drains the queue from the
     top level, dispatching to the #~"resolve*" resolver by #~"nodetype"
-    in the declaration's own frame.]
+    in the declaration's own scope.]
   [#*: A nested resolution that re-enters a #~"resolving" declaration
     takes the declared id (or reports the cycle).]
   [#*: On success the resolver marks the declaration #~"defined" and
@@ -407,7 +407,7 @@ similarly.
 #--: Type-name resolution and the canonical-id rule
 
 A bare type name (the #~"i64" in #~"x: i64", a conformance marker, a
-field or parameter type) resolves #_*"outward" from the frame it is
+field or parameter type) resolves #_*"outward" from the scope it is
 written in: the enclosing namespace or template, the current unit, then
 the prelude (#~"core", whose members are re-exports of the system units).
 First match wins, so a type defined in the current unit #_*"shadows" a
@@ -415,8 +415,8 @@ same-named stdlib builtin, and there is no list of stdlib unit names
 anywhere in the resolver. Two functions implement this:
 
 #ul:
-  [#*: #~"envLookup(ty, frame, nameId)" -- the frame walk: which
-    declaration #~"nameId" denotes for a reference written in #~"frame".
+  [#*: #~"envLookup(ty, scope, nameId)" -- the scope walk: which
+    declaration #~"nameId" denotes for a reference written in #~"scope".
     #~"resolveAtomType" routes a name atom through it, get-or-declaring
     the ONE canonical id via #~"declareCanonicalType".]
   [#*: #~"walkLookupTyperef(ast, ty, reg, unitDecl, base)" -- the same
@@ -599,7 +599,7 @@ Deep methods that take a borrow into a return value record the
 source path on the pending-borrow slot (#~"ZTyping.pendingBorrowPath"
 and its flags); the binding site (#~"checkAssignment" or the
 call-argument check) consumes it with #~"takePendingBorrow" and
-installs the borrow lock against the actual destination frame, and
+installs the borrow lock against the actual destination scope, and
 #~"drainPendingBorrow" clears it at statement and call boundaries so
 it cannot leak across statements.
 The dedicated #~".take" / #~".borrow" / #~".view" / #~".hold" /

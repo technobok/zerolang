@@ -255,14 +255,14 @@ local binding, or synthesised</li>
 scopes with different ownership, which is the common case.</p>
 <h3 id="zentry-an-overlay-row"><a href="#zentry-an-overlay-row">3.3. ZEntry -- an overlay row</a></h3>
 <p><code>ZEntry</code> (<code>src/ztypes.z</code>) is one overlay row of the body walk: a
-take, a narrowing, or a lock laid over a local while the frame that laid
+take, a narrowing, or a lock laid over a local while the scope that laid
 it is open. A local itself is a <code>localDecl</code> in the declaration tree;
 the row points at it.</p>
 <ul>
 <li><code>entryId</code>: monotonic id</li>
 <li><code>declId</code> (the local's declaration -- its name, type and
 variable are read off it), <code>defSeq</code> (the row's place among the
-frame's locals, for the dump)</li>
+scope's locals, for the dump)</li>
 <li><code>ztypeId</code>: the type the row presents (a narrowing changes it)</li>
 <li><code>hasLock</code>, <code>lockType</code>, <code>lockScope</code>, <code>lockHolder</code>,
 <code>lockPath</code>: lock state -- the lock kind, whether it is on the leaf or
@@ -274,7 +274,7 @@ union / variant subjects in match arms, as arm name ids</li>
 emitter can generate the C-level unwrap</li>
 <li><code>isTaken</code>, <code>takenAt</code>: consumed-binding state</li>
 </ul>
-<p>Rows live on <code>ZSymbolTable.entries</code> and die with their frame; the
+<p>Rows live on <code>ZSymbolTable.entries</code> and die with their scope; the
 local's declaration persists, so the walk can return to it.</p>
 <h3 id="ztyping-the-typecheck-output-container"><a href="#ztyping-the-typecheck-output-container">3.4. ZTyping -- the typecheck-output container</a></h3>
 <p><code>ZTyping</code> (<code>src/ztyping.z</code>) is the single mutable container
@@ -307,31 +307,31 @@ The SQL dumper writes one row per component entry, so every table
 has a direct SQL representation.</p>
 <h3 id="zsymboltable-the-body-walk-s-state"><a href="#zsymboltable-the-body-walk-s-state">3.5. ZSymbolTable -- the body walk's state</a></h3>
 <p><code>ZSymbolTable</code> (<code>src/zenv.z</code>) is the body walk's state over the
-declaration tree. A frame is a <code>blockDecl</code> under the frame or
-declaration enclosing it and a local is a <code>localDecl</code> under the frame
+declaration tree. A scope is a <code>scopeDecl</code> under the scope or
+declaration enclosing it and a local is a <code>localDecl</code> under the scope
 it is written in, so both persist and can be returned to; the table holds
-what is transient: the stack of open frames (<code>open</code>, innermost last,
-each an <code>openframe</code> with the frame's row, its parent, and where its
+what is transient: the stack of open scopes (<code>open</code>, innermost last,
+each an <code>openscope</code> with the scope's row, its parent, and where its
 overlay rows begin),
 the overlay rows laid over locals (<code>entries</code>, see ZEntry above), the
-frames whose remainder proved unreachable, and the rows snapshotted for the
-dump when a frame closes. It owns the type registry and the typing tables
+scopes whose remainder proved unreachable, and the rows snapshotted for the
+dump when a scope closes. It owns the type registry and the typing tables
 outright, so every method reads metadata through <code>this.reg</code> /
 <code>this.typing</code>.</p>
-<p>A local resolves by climbing the open frame chain; a frame's parent that
-is not a frame -- the function declaration -- ends the climb, so two
+<p>A local resolves by climbing the open scope chain; a scope's parent that
+is not a scope -- the function declaration -- ends the climb, so two
 functions never see each other's locals whatever order their bodies are
 walked in.</p>
-<p>The frame a resolver works in is an explicit <code>frame:</code> argument, never
-an ambient cursor: a declaration resolves in its parent's frame
-(<code>declParentIdOf</code>), a body walk opens its base frame under the
+<p>The scope a resolver works in is an explicit <code>scope:</code> argument, never
+an ambient cursor: a declaration resolves in its parent's scope
+(<code>declParentIdOf</code>), a body walk opens its base scope under the
 declaration (<code>push name: parent:</code>), and every resolver it reaches is
-handed the frame it should resolve from. The table's <code>curFrame</code> is the
-body walk's own position -- the innermost open frame that has a row --
-and only <code>pushFrame</code> / <code>materialiseTop</code> / <code>pop</code> move it. Key APIs:</p>
+handed the scope it should resolve from. The table's <code>curScope</code> is the
+body walk's own position -- the innermost open scope that has a row --
+and only <code>pushScope</code> / <code>materialiseTop</code> / <code>pop</code> move it. Key APIs:</p>
 <ul>
-<li><code>pushFrame</code> / <code>pushBlock</code> / <code>pushCall</code> / <code>pop</code> / <code>popTo</code>
--- open and close frames (a block frame that declares nothing mints no
+<li><code>pushScope</code> / <code>pushBlock</code> / <code>pushCall</code> / <code>pop</code> / <code>popTo</code>
+-- open and close scopes (a block scope that declares nothing mints no
 row)</li>
 <li><code>defineVar</code> / <code>define</code> / <code>lookup</code> / <code>lookupVarId</code>
 -- local definition and name -&gt; type / variable resolution</li>
@@ -341,7 +341,7 @@ rule is in <code>lockAcquireConflict</code></li>
 <li><code>findExclusiveLock</code>, <code>isPathLocked</code> -- access-
 site enforcement (used by lock-escape checks)</li>
 <li><code>narrow</code>, <code>exclude</code> -- install a narrowing or
-exclusion overlay row in the current frame</li>
+exclusion overlay row in the current scope</li>
 </ul>
 <p>The lock conflict logic lives in <code>zenv.z</code>, not in
 <code>ztypecheck.z</code>. The typechecker only chooses <em><strong>when</strong></em> to
@@ -430,7 +430,7 @@ concrete <code>Node</code> arm; see <code>lib/system/zast.z</code>.</p>
 <h2 id="resolution-stack-and-cycle-detection"><a href="#resolution-stack-and-cycle-detection">6. Resolution Stack and Cycle Detection</a></h2>
 <p>Resolution is keyed by <em><strong>declaration</strong></em>, not by synthesized dotted-string
 names. Every definition is one Decl in the tree, found from a reference by
-walking the frames outward from the frame the reference was written in,
+walking the scopes outward from the scope the reference was written in,
 and that Decl carries its own resolution state -- <code>pending</code> (demanded,
 queued), <code>resolving</code> (grey), <code>defined</code> (its type id is final),
 <code>walked</code> (its body checked). A reference that reaches a declaration
@@ -444,7 +444,7 @@ E0100. The flow is:</p>
 <li>Not yet defined: mark it pending and queue it
     (<code>pendingDefs</code>); <code>resolveDemandedDefs</code> drains the queue from the
     top level, dispatching to the <code>resolve*</code> resolver by <code>nodetype</code>
-    in the declaration's own frame.</li>
+    in the declaration's own scope.</li>
 <li>A nested resolution that re-enters a <code>resolving</code> declaration
     takes the declared id (or reports the cycle).</li>
 <li>On success the resolver marks the declaration <code>defined</code> and
@@ -456,15 +456,15 @@ to its own enclosing type without naming it. <code>this</code> works
 similarly.</p>
 <h2 id="type-name-resolution-and-the-canonical-id-rule"><a href="#type-name-resolution-and-the-canonical-id-rule">7. Type-name resolution and the canonical-id rule</a></h2>
 <p>A bare type name (the <code>i64</code> in <code>x: i64</code>, a conformance marker, a
-field or parameter type) resolves <em><strong>outward</strong></em> from the frame it is
+field or parameter type) resolves <em><strong>outward</strong></em> from the scope it is
 written in: the enclosing namespace or template, the current unit, then
 the prelude (<code>core</code>, whose members are re-exports of the system units).
 First match wins, so a type defined in the current unit <em><strong>shadows</strong></em> a
 same-named stdlib builtin, and there is no list of stdlib unit names
 anywhere in the resolver. Two functions implement this:</p>
 <ul>
-<li><code>envLookup(ty, frame, nameId)</code> -- the frame walk: which
-declaration <code>nameId</code> denotes for a reference written in <code>frame</code>.
+<li><code>envLookup(ty, scope, nameId)</code> -- the scope walk: which
+declaration <code>nameId</code> denotes for a reference written in <code>scope</code>.
 <code>resolveAtomType</code> routes a name atom through it, get-or-declaring
 the ONE canonical id via <code>declareCanonicalType</code>.</li>
 <li><code>walkLookupTyperef(ast, ty, reg, unitDecl, base)</code> -- the same
@@ -621,7 +621,7 @@ current call's identity.</p>
 source path on the pending-borrow slot (<code>ZTyping.pendingBorrowPath</code>
 and its flags); the binding site (<code>checkAssignment</code> or the
 call-argument check) consumes it with <code>takePendingBorrow</code> and
-installs the borrow lock against the actual destination frame, and
+installs the borrow lock against the actual destination scope, and
 <code>drainPendingBorrow</code> clears it at statement and call boundaries so
 it cannot leak across statements.
 The dedicated <code>.take</code> / <code>.borrow</code> / <code>.view</code> / <code>.hold</code> /

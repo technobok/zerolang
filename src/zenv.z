@@ -1,13 +1,13 @@
 # ZeroLang body-walk environment for the type checker.
 #
-# Frames and locals are declarations in the typing's Decl tree -- a frame is a
-# blockDecl under the frame or declaration enclosing it, a local a localDecl
-# under the frame it is written in -- so they persist and can be returned to.
-# The table holds the walk's state over them: the open frames (a stack of ids,
+# Scopes and locals are declarations in the typing's Decl tree -- a scope is a
+# scopeDecl under the scope or declaration enclosing it, a local a localDecl
+# under the scope it is written in -- so they persist and can be returned to.
+# The table holds the walk's state over them: the open scopes (a stack of ids,
 # innermost last), the overlay rows the walk lays over locals (a take, a
-# narrowing, a lock), which die with the frame that laid them, the frames whose
+# narrowing, a lock), which die with the scope that laid them, the scopes whose
 # remainder the walk found unreachable, and the rows snapshotted for the dump
-# when a frame closes.
+# when a scope closes.
 #
 # `this.entries` -- the overlay rows -- is reached through a borrowed
 # receiver, so `List.get` yields a COPY: fine to read, but a mutation written
@@ -291,23 +291,23 @@ formatAliasConflict: function {
 
 # --- carriers ---
 
-# A row of the dump's `entry` table: a local of a frame, or an overlay row
-# laid over one, snapshotted when the frame closed. `position` is the row's
-# place among the frame's locals and overlays in the order they were laid.
-# openframe -- one open frame of the body walk: its Decl row (0 while a lazy
-# frame has declared nothing), the frame it hangs under, the overlay index
+# A row of the dump's `entry` table: a local of a scope, or an overlay row
+# laid over one, snapshotted when the scope closed. `position` is the row's
+# place among the scope's locals and overlays in the order they were laid.
+# openscope -- one open scope of the body walk: its Decl row (0 while a lazy
+# scope has declared nothing), the scope it hangs under, the overlay index
 # where its rows begin, and how many locals it has defined (a row's defSeq).
-openframe: record {
-    # the frame's own declaration
+openscope: record {
+    # the scope's own declaration
     id: ztypes.declid
-    # the frame it was opened inside
+    # the scope it was opened inside
     parent: ztypes.declid
-    # the entry index the frame began at, which is what popping restores to
+    # the entry index the scope began at, which is what popping restores to
     start: u64
     # how many definitions it has taken so far
     defs: u64
-    # the id the next variable minted after the frame opened took: a variable
-    # with a smaller id was bound before it, in an enclosing frame
+    # the id the next variable minted after the scope opened took: a variable
+    # with a smaller id was bound before it, in an enclosing scope
     firstVid: u64
 }
 
@@ -349,19 +349,19 @@ heldlock: record {
     holder: ztypes.zlockholder
 }
 
-# The body walk's environment. Frames and locals are declarations in the
-# typing's Decl tree -- a frame is a blockDecl whose parent is the frame or
-# declaration enclosing it, a local a localDecl under the frame it is written
-# in -- so they persist, and a walk that returns to a frame later finds what
+# The body walk's environment. Scopes and locals are declarations in the
+# typing's Decl tree -- a scope is a scopeDecl whose parent is the scope or
+# declaration enclosing it, a local a localDecl under the scope it is written
+# in -- so they persist, and a walk that returns to a scope later finds what
 # was written there. What the table holds is the walk's STATE over them: the
-# open frames, innermost last (a stack of frame ids -- discipline, not
-# storage; the innermost with a row is curFrame), the overlay rows the walk lays
-# over locals -- a take, a narrowing, a lock -- which die with the frame that
-# laid them, the frames whose walk found their remainder unreachable, and the
-# rows snapshotted for the dump when a frame closes.
+# open scopes, innermost last (a stack of scope ids -- discipline, not
+# storage; the innermost with a row is curScope), the overlay rows the walk lays
+# over locals -- a take, a narrowing, a lock -- which die with the scope that
+# laid them, the scopes whose walk found their remainder unreachable, and the
+# rows snapshotted for the dump when a scope closes.
 #
-# A local resolves by climbing the open frame chain from the top through each
-# enclosing frame; a frame's parent that is not a frame -- the function
+# A local resolves by climbing the open scope chain from the top through each
+# enclosing scope; a scope's parent that is not a scope -- the function
 # declaration -- ends the climb, so two functions never see each other's
 # locals whatever order their bodies are walked in, and a body walked on
 # demand from inside another leaves that one's locals invisible. The overlay
@@ -370,20 +370,20 @@ heldlock: record {
 # tables outright (moved in at construction), so every method reads metadata
 # via `this.reg` / `this.typing`.
 ZSymbolTable: class {
-    # the open frames, innermost last
-    open: ListVal openframe
-    # the innermost open frame that has a row -- the frame the walk resolves
-    # from. A frame that has declared nothing yet has no row (pushBlock,
+    # the open scopes, innermost last
+    open: ListVal openscope
+    # the innermost open scope that has a row -- the scope the walk resolves
+    # from. A scope that has declared nothing yet has no row (pushBlock,
     # pushCall): it is transparent to every lookup, so the nearest enclosing
-    # frame that does exist answers for it. 0 outside every walk.
-    curFrame: ztypes.declid
+    # scope that does exist answers for it. 0 outside every walk.
+    curScope: ztypes.declid
     # the scope stack as one flat list; a scope is a RANGE of it, which is why
     # popping is an index and not a structure
     entries: List ZEntry
-    # frames the walk proved unreachable, so nothing inside one is reported
+    # scopes the walk proved unreachable, so nothing inside one is reported
     # twice
-    unreachableFrames: IdSet u64
-    # how each such frame became unreachable, a `divkind`: the first kind
+    unreachableScopes: IdSet u64
+    # how each such scope became unreachable, a `divkind`: the first kind
     # recorded is the one control took
     unreachableKinds: (IdMapV u64 v: u8
     # the open loops' bookkeeping, innermost last: each run marks its start
@@ -409,7 +409,7 @@ ZSymbolTable: class {
     armNarrowingEnds: ListVal u64
     # the paths of the generator locals (the one field that moves) moved into a
     # taking argument of a call still open, run together root first:
-    # `movedArgEnds` closes each one, and `movedArgDepths` is how many frames
+    # `movedArgEnds` closes each one, and `movedArgDepths` is how many scopes
     # were open when it moved, so it leaves with its call
     movedArgPaths: ListVal zast.nameid
     movedArgEnds: ListVal u64
@@ -423,14 +423,14 @@ ZSymbolTable: class {
     # `optionval_t`), by node: the if-narrowing reads them there, and the shared
     # dpArmPredicate the emitter reads keeps each instance's own
     templateArmPreds: (IdMapV u64 v: ztypes.tid)
-    # dump scaffolding: a frame's label ("function:x", "if_branch", ...), the
-    # frames a diagnostics-only template walk opened (kept out of the dump),
-    # and the rows snapshotted when a frame closed
-    frameLabel: (IdMapR u64 V: String
-    # frames hidden from lookup, which is how a nested unit stops leaking its
+    # dump scaffolding: a scope's label ("function:x", "if_branch", ...), the
+    # scopes a diagnostics-only template walk opened (kept out of the dump),
+    # and the rows snapshotted when a scope closed
+    scopeLabel: (IdMapR u64 V: String
+    # scopes hidden from lookup, which is how a nested unit stops leaking its
     # names outward
     )
-    frameHidden: IdSet u64
+    scopeHidden: IdSet u64
     # the snapshot rows, appended as entries are popped rather than read live
     entryDump: List ZEntryDumpRow
     # the type registry this table resolves against
@@ -438,11 +438,11 @@ ZSymbolTable: class {
     # the stamp container everything checked here is recorded into
     typing: ZTyping
 } as {
-    # --- frames ---
+    # --- scopes ---
 
-    # innermostFrame -- the innermost open frame that has a row, or the zero
+    # innermostScope -- the innermost open scope that has a row, or the zero
     # id when none is open.
-    innermostFrame: function {this: this.view} out ztypes.declid is {
+    innermostScope: function {this: this.view} out ztypes.declid is {
         n: this.open.length
         for n > 0 loop {
             n = n - 1
@@ -452,39 +452,39 @@ ZSymbolTable: class {
         return (ztypes.declid.create from: 0)
     }
 
-    # Open a frame under `parent` -- the enclosing frame, or the declaration
+    # Open a scope under `parent` -- the enclosing scope, or the declaration
     # whose body this is -- and make it current.
-    pushFrame: function {:this label: StringView parent: ztypes.declid} out ztypes.declid is {
-        f: this.typing.declNewFrame :parent node: 0
-        this.open.append (openframe
+    pushScope: function {:this label: StringView parent: ztypes.declid} out ztypes.declid is {
+        f: this.typing.declNewScope :parent node: 0
+        this.open.append (openscope
             id: f
             :parent
             start: this.entries.length
             defs: 0
             firstVid: this.reg.variableCount
         )
-        if label.length > 0 then this.frameLabel.set key: f.u64 value: label.string
-        if this.typing.suppressParamStamps then this.frameHidden.add item: f.u64
-        this.curFrame = f
+        if label.length > 0 then this.scopeLabel.set key: f.u64 value: label.string
+        if this.typing.suppressParamStamps then this.scopeHidden.add item: f.u64
+        this.curScope = f
         return f
     }
 
-    # pushLazyFrame -- open a block frame whose row is minted only when it
+    # pushLazyScope -- open a block scope whose row is minted only when it
     # first declares something (materialiseTop): most blocks, arms, loops
-    # and call brackets never do, and a frame that holds nothing is
-    # invisible to every walk. The model dump wants every frame, so a dump
-    # (and a template walk, whose frames are hidden by id) opens it now.
-    pushLazyFrame: function {:this label: StringView} is {
-        parent: this.curFrame
+    # and call brackets never do, and a scope that holds nothing is
+    # invisible to every walk. The model dump wants every scope, so a dump
+    # (and a template walk, whose scopes are hidden by id) opens it now.
+    pushLazyScope: function {:this label: StringView} is {
+        parent: this.curScope
         if this.typing.dumpRows then {
-            this.pushFrame :label :parent
+            this.pushScope :label :parent
             return
         }
         if this.typing.suppressParamStamps then {
-            this.pushFrame :label :parent
+            this.pushScope :label :parent
             return
         }
-        this.open.append (openframe
+        this.open.append (openscope
             id: ztypes.declid
             :parent
             start: this.entries.length
@@ -493,30 +493,30 @@ ZSymbolTable: class {
         )
     }
 
-    # materialiseTop -- give the innermost open frame its row, under the
-    # frame it was opened in, and make it the typing's current frame. A
-    # no-op for a frame that already has a row.
+    # materialiseTop -- give the innermost open scope its row, under the
+    # scope it was opened in, and make it the typing's current scope. A
+    # no-op for a scope that already has a row.
     materialiseTop: function {:this} is {
         n: this.open.length
         if n == 0 then return
         top: this.open.get i: n - 1
         if top.id.isZero.not then return
-        top.id = this.typing.declNewFrame parent: top.parent node: 0
+        top.id = this.typing.declNewScope parent: top.parent node: 0
         this.open.set i: n - 1 val: top
-        this.curFrame = top.id
+        this.curScope = top.id
     }
 
-    # push -- open a body frame (a function's, or a mono walk's) under the
+    # push -- open a body scope (a function's, or a mono walk's) under the
     # declaration it belongs to, named for the dump.
     push: function {:this name: StringView parent: ztypes.declid} out u64 is {
-        return (this.pushFrame label: name :parent).u64
+        return (this.pushScope label: name :parent).u64
     }
 
-    # pushBlock / pushCall -- open a nested frame; the marker returned is the
+    # pushBlock / pushCall -- open a nested scope; the marker returned is the
     # depth to pop back to.
     pushBlock: function {:this name: StringView} out u64 is {
         marker: this.open.length
-        this.pushLazyFrame label: name
+        this.pushLazyScope label: name
         return marker
     }
 
@@ -524,24 +524,24 @@ ZSymbolTable: class {
     # exists so a borrow taken for the call ends with it
     pushCall: function {:this} out u64 is {
         marker: this.open.length
-        this.pushLazyFrame label: ""
+        this.pushLazyScope label: ""
         return marker
     }
 
-    # Close the innermost frame. Its overlay rows are dropped -- except a
-    # take of a local defined in an ENCLOSING frame, which the enclosing
-    # frame inherits so the error persists -- and the frame's locals and
-    # rows are snapshotted for the dump first. The typing's current frame
-    # returns to the frame's parent.
+    # Close the innermost scope. Its overlay rows are dropped -- except a
+    # take of a local defined in an ENCLOSING scope, which the enclosing
+    # scope inherits so the error persists -- and the scope's locals and
+    # rows are snapshotted for the dump first. The typing's current scope
+    # returns to the scope's parent.
     pop: function {:this} out u64 is {
         n: this.open.length
         if n == 0 then return 0
         fr: this.open.get i: n - 1
         top: fr.id
         start: fr.start
-        if top.isZero.not then this.snapshotFrame frame: top :start
+        if top.isZero.not then this.snapshotScope scope: top :start
         endIdx: this.entries.length
-        # takes of enclosing frames' locals survive the close, and so do the
+        # takes of enclosing scopes' locals survive the close, and so do the
         # narrowing ends a write laid over them
         mDecls: ListVal ztypes.declid
         mTypes: ListVal u64
@@ -570,17 +570,17 @@ ZSymbolTable: class {
             p2 = p2 + 1
         }
         # a lock lives as long as its HOLDER: a row a variable of an ENCLOSING
-        # frame holds -- a value that moved out of this frame with its locks --
+        # scope holds -- a value that moved out of this scope with its locks --
         # survives the close, laid again over its root, which is still open
         mLocks: List ztypes.ZEntry
         p3: start
         for p3 < endIdx loop {
             e: this.entries.get i: p3
-            # a holder minted while this frame was open dies with it -- the
+            # a holder minted while this scope was open dies with it -- the
             # common case, answered by its id; only an older holder is asked
-            # which frame binds it
+            # which scope binds it
             if e.hasLock when e.lockHolder.kind.varKind when e.lockHolder.id < fr.firstVid then {
-                hf: this.frameOfVar vid: (ztypes.vid.create from: e.lockHolder.id)
+                hf: this.scopeOfVar vid: (ztypes.vid.create from: e.lockHolder.id)
                 rf: this.typing.declParentOf declId: e.declId
                 if hf.isZero.not when hf != top when rf != top then {
                     le: this.reg.newEntry ztypeId: e.ztypeId
@@ -600,7 +600,7 @@ ZSymbolTable: class {
         this.dropTail :start
         this.open.pop
         if this.movedArgDepths.length > 0 then this.dropMovedArgs
-        this.curFrame = this.innermostFrame
+        this.curScope = this.innermostScope
         for mLocks.length > 0 loop {
             le2: mLocks.pop
             d2: le2.declId
@@ -624,22 +624,22 @@ ZSymbolTable: class {
         return top.u64
     }
 
-    # pushDryRun -- open a frame for a dry run: its rows are discarded whole
+    # pushDryRun -- open a scope for a dry run: its rows are discarded whole
     # by popDiscard, and it stays out of the dump.
     pushDryRun: function {:this} is {
-        f: this.pushFrame label: "" parent: this.curFrame
-        this.frameHidden.add item: f.u64
+        f: this.pushScope label: "" parent: this.curScope
+        this.scopeHidden.add item: f.u64
     }
 
-    # popDiscard -- close the innermost frame and drop every row it laid,
-    # takes included: the frame was a dry run.
+    # popDiscard -- close the innermost scope and drop every row it laid,
+    # takes included: the scope was a dry run.
     popDiscard: function {:this} is {
         n: this.open.length
         if n == 0 then return
         this.dropTail start: (this.open.get i: n - 1).start
         this.open.pop
         if this.movedArgDepths.length > 0 then this.dropMovedArgs
-        this.curFrame = this.innermostFrame
+        this.curScope = this.innermostScope
     }
 
     # close every scope back to `marker`, dumping the entries as they go
@@ -661,11 +661,11 @@ ZSymbolTable: class {
         this.defineLocal :nameId ztypeId: (this.reg.variableTypeOf id: vid) varId: vid
     }
 
-    # frameBindsHere -- does the INNERMOST open frame already bind `nameId`?
-    # Same-frame only: an OUTER frame binding the name is shadowing, which is
+    # scopeBindsHere -- does the INNERMOST open scope already bind `nameId`?
+    # Same-scope only: an OUTER scope binding the name is shadowing, which is
     # legal and resolved by declFindLocal's outward walk. An unmaterialised
-    # frame has no locals yet, so it binds nothing.
-    frameBindsHere: function {this: this.view nameId: zast.nameid} out bool is {
+    # scope has no locals yet, so it binds nothing.
+    scopeBindsHere: function {this: this.view nameId: zast.nameid} out bool is {
         n: this.open.length
         if n == 0 then return false
         fr: (this.open.get i: n - 1).id
@@ -680,7 +680,7 @@ ZSymbolTable: class {
         if n == 0 then return
         this.materialiseTop
         top: this.open.get i: n - 1
-        # one binding per name per frame: the namespace walks read a frame's
+        # one binding per name per scope: the namespace walks read a scope's
         # children by name and stop at the first hit, so a second edge under
         # the same name would be unreachable. The binding site reports the
         # duplicate; this keeps the tree honest if one ever reaches here.
@@ -700,14 +700,14 @@ ZSymbolTable: class {
     # --- name resolution ---
 
     # findLocal -- the declaration `nameId` resolves to from the innermost
-    # open frame outward: each frame's own locals (the last defined wins),
-    # then the frame enclosing it, until the chain leaves the frames. Zero
-    # when no frame defines it.
+    # open scope outward: each scope's own locals (the last defined wins),
+    # then the scope enclosing it, until the chain leaves the scopes. Zero
+    # when no scope defines it.
     findLocal: function {this: this.view nameId: zast.nameid} out ztypes.declid is {
-        return (this.typing.declFindLocal frame: this.curFrame :nameId)
+        return (this.typing.declFindLocal scope: this.curScope :nameId)
     }
 
-    # isLocalName -- does an open frame define `nameId`, taken or not?
+    # isLocalName -- does an open scope define `nameId`, taken or not?
     isLocalName: function {this: this.view nameId: zast.nameid} out bool is {
         d: this.findLocal :nameId
         return d.isZero.not
@@ -728,7 +728,7 @@ ZSymbolTable: class {
         return (optionval.none u64)
     }
 
-    # appendRow -- lay `row` over `declId` in the innermost frame.
+    # appendRow -- lay `row` over `declId` in the innermost scope.
     appendRow: function {:this row: ZEntry.take declId: ztypes.declid} is {
         r: row.take
         r.declId = declId
@@ -741,7 +741,7 @@ ZSymbolTable: class {
     # recordMovedArg -- a generator's local, which the walk reads as a field of
     # the instance, moved into a taking argument of the innermost open call: what
     # the rest of that call reads of it is refused, and the record closes with
-    # the call's frame.
+    # the call's scope.
     recordMovedArg: function {:this path: ListViewVal zast.nameid} is {
         this.movedArgPaths.extendView from: path
         this.movedArgEnds.append this.movedArgPaths.length
@@ -778,7 +778,7 @@ ZSymbolTable: class {
         )
     }
 
-    # dropMovedArgs -- forget the moved locals of calls whose frames have closed.
+    # dropMovedArgs -- forget the moved locals of calls whose scopes have closed.
     dropMovedArgs: function {:this} is {
         n: this.open.length
         for this.movedArgDepths.length > 0 loop {
@@ -973,7 +973,7 @@ ZSymbolTable: class {
         } case none then null
     }
 
-    # Drop every taken row the innermost frame laid (diverging arm).
+    # Drop every taken row the innermost scope laid (diverging arm).
     discardTakenInCurrentScope: function {:this} is {
         n: this.open.length
         if n == 0 then return
@@ -981,7 +981,7 @@ ZSymbolTable: class {
     }
 
     # Drop every taken row laid at or above `start`, which is never below
-    # the innermost frame's start: only that frame's rows can be dropped,
+    # the innermost scope's start: only that scope's rows can be dropped,
     # so only they are drained and rebuilt -- the rows below are left where
     # they are.
     discardTakenFrom: function {:this start: u64} is {
@@ -1022,9 +1022,9 @@ ZSymbolTable: class {
 
     # localNameOfVar -- the name of the open local bound to `vid`, or 0.
     localNameOfVar: function {this: this.view vid: ztypes.vid} out u32 is {
-        cur: this.curFrame
+        cur: this.curScope
         for cur > 0 loop {
-            if (this.typing.declIsFrame declId: cur).not then return 0
+            if (this.typing.declIsScope declId: cur).not then return 0
             kn: this.typing.declChildSlots declId: cur
             ki: kn
             for ki > 0 loop {
@@ -1038,12 +1038,12 @@ ZSymbolTable: class {
         return 0
     }
 
-    # frameOfVar -- the open frame that binds `vid`, climbing from the innermost;
-    # zero when no open frame binds it.
-    frameOfVar: function {this: this.view vid: ztypes.vid} out ztypes.declid is {
-        cur: this.curFrame
+    # scopeOfVar -- the open scope that binds `vid`, climbing from the innermost;
+    # zero when no open scope binds it.
+    scopeOfVar: function {this: this.view vid: ztypes.vid} out ztypes.declid is {
+        cur: this.curScope
         for cur > 0 loop {
-            if (this.typing.declIsFrame declId: cur).not then return ztypes.declid
+            if (this.typing.declIsScope declId: cur).not then return ztypes.declid
             kn: this.typing.declChildSlots declId: cur
             ki: kn
             for ki > 0 loop {
@@ -1056,19 +1056,19 @@ ZSymbolTable: class {
         return ztypes.declid
     }
 
-    # frameEncloses -- `outer` is `inner` or one of the frames enclosing it, so
+    # scopeEncloses -- `outer` is `inner` or one of the scopes enclosing it, so
     # a value bound in `outer` lives at least as long as one bound in `inner`.
-    frameEncloses: function {
+    scopeEncloses: function {
         this: this.view
-        # the frame expected to be the outer one
+        # the scope expected to be the outer one
         outer: ztypes.declid
-        # the frame whose ancestry is climbed
+        # the scope whose ancestry is climbed
         inner: ztypes.declid
     } out bool is {
         cur: inner
         for cur > 0 loop {
             if cur == outer then return true
-            if (this.typing.declIsFrame declId: cur).not then return false
+            if (this.typing.declIsScope declId: cur).not then return false
             cur = this.typing.declParentOf declId: cur
         }
         return false
@@ -1568,7 +1568,7 @@ ZSymbolTable: class {
     }
 
     # Release all locks held by `holder` (rebuild omitting them). Most
-    # calls release nothing (their locks died with an inner frame), so scan
+    # calls release nothing (their locks died with an inner scope), so scan
     # first and skip the rebuild when no row names the holder; when it does
     # run, the scratch list is sized once (a compile churns thousands of
     # these over row tables hundreds long -- the doubling chain was a top-5
@@ -1649,7 +1649,7 @@ ZSymbolTable: class {
     }
 
     # Exclude `subtypeName` from `name`'s type. Collapses to a narrowing
-    # when one excludable subtype remains; marks the frame unreachable when
+    # when one excludable subtype remains; marks the scope unreachable when
     # none remain.
     exclude: function {:this nameId: zast.nameid subtypeName: zast.nameid fullTypeId: u64} is {
         d: this.findLocal :nameId
@@ -1720,7 +1720,7 @@ ZSymbolTable: class {
 
     # endNarrowingByWrite -- a write replaced the local's value, so no narrowing
     # of it stands: lay the row that restores its declared type. When the local
-    # WAS narrowed the row is marked, and the frames carry it outward -- a
+    # WAS narrowed the row is marked, and the scopes carry it outward -- a
     # narrowing an enclosing scope established described the value the write
     # replaced, in every scope the write can reach.
     endNarrowingByWrite: function {:this nameId: zast.nameid} is {
@@ -1759,7 +1759,7 @@ ZSymbolTable: class {
         return e.excludedSubtypes.length > 0
     }
 
-    # anyNarrowed -- whether any open frame narrows any local. Asked before a
+    # anyNarrowed -- whether any open scope narrows any local. Asked before a
     # walk that exists only to end narrowings, which has nothing to do when
     # nothing is narrowed -- the common case.
     anyNarrowed: function {this: this.view} out bool is {
@@ -1771,7 +1771,7 @@ ZSymbolTable: class {
         return false
     }
 
-    # discardNarrowingEndsInCurrentScope -- a frame whose walk left the
+    # discardNarrowingEndsInCurrentScope -- a scope whose walk left the
     # function drops the narrowing ends it holds: the code after never runs on
     # that path, so the narrowing still describes the value it reaches.
     discardNarrowingEndsInCurrentScope: function {:this} is {
@@ -1791,7 +1791,7 @@ ZSymbolTable: class {
     }
 
     # holdsNarrowingEnd -- whether a row at or above `from` is a narrowing end.
-    # Asked before a rebuild of the rows, which nearly every frame can skip.
+    # Asked before a rebuild of the rows, which nearly every scope can skip.
     holdsNarrowingEnd: function {this: this.view from: u64} out bool is {
         i: from
         for i < this.entries.length loop {
@@ -1808,7 +1808,7 @@ ZSymbolTable: class {
     }
 
     # collectArmNarrowingEnds -- a non-diverging arm finished: take the
-    # narrowing ends its frame holds for locals of ENCLOSING frames off the
+    # narrowing ends its scope holds for locals of ENCLOSING scopes off the
     # stack, so its close does not carry them into the sibling arms, and hold
     # them for the statement's end.
     collectArmNarrowingEnds: function {:this} is {
@@ -1918,19 +1918,19 @@ ZSymbolTable: class {
         }
     }
 
-    # mark the current frame unreachable, after a statement that diverges;
+    # mark the current scope unreachable, after a statement that diverges;
     # the first kind recorded is the one control took
     markUnreachable: function {:this kind: u8} is {
         this.materialiseTop
-        f: this.curFrame
+        f: this.curScope
         if f.isZero then return
-        this.unreachableFrames.add item: f.u64
+        this.unreachableScopes.add item: f.u64
         known: this.unreachableKinds.get key: f.u64
         if known.none then this.unreachableKinds.set key: f.u64 value: kind
     }
 
-    # how the innermost open frame became unreachable; `divkind.none` while it
-    # is reachable. The mark is the frame's own; one that has no row yet
+    # how the innermost open scope became unreachable; `divkind.none` while it
+    # is reachable. The mark is the scope's own; one that has no row yet
     # cannot carry it.
     unreachableKind: function {this: this.view} out u8 is {
         n: this.open.length
@@ -1957,7 +1957,7 @@ ZSymbolTable: class {
         return this.entries.length
     }
 
-    # settleDivergingTakes -- what the innermost frame's takes owe once its
+    # settleDivergingTakes -- what the innermost scope's takes owe once its
     # walk ends, by the kind that ended it. A path that leaves the FUNCTION
     # drops them: it never reaches the code after. One that leaves the LOOP
     # with `break` records them for the loop to lay again after itself --
@@ -2038,7 +2038,7 @@ ZSymbolTable: class {
         }
     }
 
-    # recordBreakTakes -- the innermost frame's taken rows, by decl id, onto
+    # recordBreakTakes -- the innermost scope's taken rows, by decl id, onto
     # the innermost loop's run
     recordBreakTakes: function {:this} is {
         n: this.open.length
@@ -2054,13 +2054,13 @@ ZSymbolTable: class {
     # --- utility ---
 
     # All defined, non-taken names inner->outer (dedup), for did-you-mean:
-    # each open frame's locals in definition order, innermost frame first.
+    # each open scope's locals in definition order, innermost scope first.
     allNames: function {this: this.view} out ListVal u32 is {
         names: ListVal u32
         seen: IdSet u32
-        cur: this.curFrame
+        cur: this.curScope
         for cur > 0 loop {
-            if (this.typing.declIsFrame declId: cur).not then return names
+            if (this.typing.declIsScope declId: cur).not then return names
             kn: this.typing.declChildSlots declId: cur
             ki: u64
             for ki < kn loop {
@@ -2100,9 +2100,9 @@ ZSymbolTable: class {
     # a row of the same declaration and does not hide a take under it.
     getLiveOwnedVars: function {this: this.view} out IdSet u64 is {
         decls: IdSet u64
-        cur: this.curFrame
+        cur: this.curScope
         for cur > 0 loop {
-            if (this.typing.declIsFrame declId: cur).not then return decls
+            if (this.typing.declIsScope declId: cur).not then return decls
             kn: this.typing.declChildSlots declId: cur
             ki: kn
             for ki > 0 loop {
@@ -2126,14 +2126,14 @@ ZSymbolTable: class {
 
     # --- dump ---
 
-    # snapshotFrame -- the frame's locals and overlay rows, in the order they
+    # snapshotScope -- the scope's locals and overlay rows, in the order they
     # were laid, as dump rows. A generic template body walk is
-    # diagnostics-only: its frames stay out of the dump (the emitter re-walks
+    # diagnostics-only: its scopes stay out of the dump (the emitter re-walks
     # per instance).
-    snapshotFrame: function {:this frame: ztypes.declid start: u64} is {
+    snapshotScope: function {:this scope: ztypes.declid start: u64} is {
         if this.typing.dumpRows.not then return
         if this.typing.suppressParamStamps then return
-        kn: this.typing.declChildSlots declId: frame
+        kn: this.typing.declChildSlots declId: scope
         endIdx: this.entries.length
         pos: u64
         ki: u64
@@ -2147,7 +2147,7 @@ ZSymbolTable: class {
                 with xit: e.excludedSubtypes.iterate do for xn: xit loop exs.append xn.u32
                 nsc: e.narrowedSubtype
                 this.entryDump.append (ZEntryDumpRow
-                    scopeId: frame.u64
+                    scopeId: scope.u64
                     position: pos
                     entryId: e.entryId
                     name: (this.typing.declNameOf declId: e.declId)
@@ -2164,12 +2164,12 @@ ZSymbolTable: class {
                 ri = ri + 1
             }
             if ki < kn then {
-                kd: this.typing.declChildAt declId: frame index: ki
+                kd: this.typing.declChildAt declId: scope index: ki
                 vidOpt: optionval.none ztypes.vid
                 v: this.typing.declLocalVarOf declId: kd
                 if v.isZero.not then vidOpt = optionval.some v
                 this.entryDump.append (ZEntryDumpRow
-                    scopeId: frame.u64
+                    scopeId: scope.u64
                     position: pos
                     entryId: kd.u64
                     name: (this.typing.declNameOf declId: kd)
@@ -2203,7 +2203,7 @@ looprun: record {
     onceStart: u64
 }
 
-# divkind -- how a frame's walk ended, when it did not fall through: `exit`
+# divkind -- how a scope's walk ended, when it did not fall through: `exit`
 # leaves the function (`return`, `panic`), `brk` leaves the loop, `cont` ends
 # the iteration. Ordered so that the weakest for an enclosing loop -- the one
 # that still reaches its next iteration -- is the largest.
@@ -2218,10 +2218,10 @@ divkind: data {
 # typing tables it will resolve against.
 newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} out ZSymbolTable is {
     return (ZSymbolTable
-        open: ListVal openframe
-        curFrame: ztypes.declid
+        open: ListVal openscope
+        curScope: ztypes.declid
         entries: List ZEntry
-        unreachableFrames: IdSet u64
+        unreachableScopes: IdSet u64
         unreachableKinds: (IdMapV u64 v: u8)
         loopRuns: ListVal looprun
         loopBreakTakes: ListVal u64
@@ -2235,8 +2235,8 @@ newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} o
         movedReadInBase: false
         templateStamps: (IdMapV u64 v: ztypes.tid)
         templateArmPreds: (IdMapV u64 v: ztypes.tid)
-        frameLabel: (IdMapR u64 V: String)
-        frameHidden: IdSet u64
+        scopeLabel: (IdMapR u64 V: String)
+        scopeHidden: IdSet u64
         entryDump: List ZEntryDumpRow
         :reg
         :typing

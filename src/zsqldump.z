@@ -103,9 +103,9 @@ vidOrNullText: function {o: optionval ztypes.vid} out String is {
     }
 }
 
-# frameLabelOf -- a frame's dump label ("" when unlabelled: a call bracket).
-frameLabelOf: function {st: zenv.ZSymbolTable.view frame: ztypes.declid} out String is {
-    o: st.frameLabel.get key: frame.u64
+# scopeLabelOf -- a scope's dump label ("" when unlabelled: a call bracket).
+scopeLabelOf: function {st: zenv.ZSymbolTable.view scope: ztypes.declid} out String is {
+    o: st.scopeLabel.get key: scope.u64
     match (
         o
     ) case some then {
@@ -815,8 +815,8 @@ ZDumper: class {
         }
     }
 
-    # appendScopeRows -- one `scope` row per frame declaration that is not
-    # hidden. The depth column counts the frames emitted, not the nesting: it is
+    # appendScopeRows -- one `scope` row per scope declaration that is not
+    # hidden. The depth column counts the scopes emitted, not the nesting: it is
     # the order they were declared in.
     appendScopeRows: function {:this st: zenv.ZSymbolTable.view} is {
         depth: u64
@@ -825,17 +825,17 @@ ZDumper: class {
         for di < nd loop {
             d: ztypes.declid.create from: di
             di = di + 1
-            if (st.typing.declIsFrame declId: d).not then continue
-            if (st.frameHidden.has item: d.u64) then continue
-            lbl: frameLabelOf :st frame: d
+            if (st.typing.declIsScope declId: d).not then continue
+            if (st.scopeHidden.has item: d.u64) then continue
+            lbl: scopeLabelOf :st scope: d
             kind: "BLOCK"
             if lbl.length == 0 then kind = "CALL"
             kindSql: sqlStr s: kind
             nameSql: sqlStr s: lbl.stringView
             pd: st.typing.declParentOf declId: d
             parentSql: "NULL".string
-            if (st.typing.declIsFrame declId: pd) then parentSql = "\{pd}"
-            unreachNum: boolNum b: (st.unreachableFrames.has item: d.u64)
+            if (st.typing.declIsScope declId: pd) then parentSql = "\{pd}"
+            unreachNum: boolNum b: (st.unreachableScopes.has item: d.u64)
             r: "INSERT OR IGNORE INTO scope VALUES (\{d}, \{parentSql}, \{kindSql}, \{nameSql}, \{depth}, \{unreachNum});\n"
             this.acc.append s: r
             depth = depth + 1
@@ -907,9 +907,9 @@ ZDumper: class {
     }
 
     # appendSymbolTable -- scope / entry / variable rows from the body-walk
-    # environment. scope rows are the walk's frames in the order they were
+    # environment. scope rows are the walk's scopes in the order they were
     # opened (depth = that index); entry rows the locals and overlay rows
-    # snapshotted when each frame closed; variable rows the per-id side
+    # snapshotted when each scope closed; variable rows the per-id side
     # tables, deduped.
     appendSymbolTable: function {:this pool: zast.StringPool.view st: zenv.ZSymbolTable.view} is {
         seen: IdSet u64
@@ -1222,8 +1222,8 @@ ZDumper: class {
         this.emitSection title: "member_const" :rows
     }
 
-    # appendScopeRowsCanon -- the `scope` projection, and the frame-id to
-    # frame-NAME map every later canon row resolves its scope through. A frame's
+    # appendScopeRowsCanon -- the `scope` projection, and the scope-id to
+    # scope-NAME map every later canon row resolves its scope through. A scope's
     # parent is named rather than numbered, which is what makes the projection
     # id-independent.
     appendScopeRowsCanon: function {
@@ -1238,9 +1238,9 @@ ZDumper: class {
         for di < nd loop {
             d: ztypes.declid.create from: di
             di = di + 1
-            if (st.typing.declIsFrame declId: d).not then continue
-            if (st.frameHidden.has item: d.u64) then continue
-            lbl: frameLabelOf :st frame: d
+            if (st.typing.declIsScope declId: d).not then continue
+            if (st.scopeHidden.has item: d.u64) then continue
+            lbl: scopeLabelOf :st scope: d
             scopeName.set key: d.u64 value: lbl.copy
             parentNameSql: "NULL".string
             pd: st.typing.declParentOf declId: d
@@ -1254,7 +1254,7 @@ ZDumper: class {
             if lbl.length == 0 then kind = "CALL"
             kindSql: sqlStr s: kind
             nameSql: sqlStr s: lbl.stringView
-            unreachNum: boolNum b: (st.unreachableFrames.has item: d.u64)
+            unreachNum: boolNum b: (st.unreachableScopes.has item: d.u64)
             line: "\{parentNameSql} | \{kindSql} | \{nameSql} | \{depth} | \{unreachNum}"
             scopeRows.append line
             depth = depth + 1
@@ -1263,7 +1263,7 @@ ZDumper: class {
     }
 
     # appendEntryRowsCanon -- the `entry` projection. An entry whose scope has no
-    # name is one in a hidden frame and contributes no row, but its narrowing
+    # name is one in a hidden scope and contributes no row, but its narrowing
     # still does, so `narrowedRows` fills alongside and is emitted by the caller.
     # `seen` collects the variable ids the variable projection then renders.
     appendEntryRowsCanon: function {
@@ -1335,8 +1335,8 @@ ZDumper: class {
     }
 
     # appendSymbolTableCanon -- the body-walk environment (scope / entry /
-    # variable / narrowed_subtype), id-normalized: frame and entry ids are
-    # dropped, a frame's parent named by its label, entry/variable ztype via
+    # variable / narrowed_subtype), id-normalized: scope and entry ids are
+    # dropped, a scope's parent named by its label, entry/variable ztype via
     # canonTypeName. No unit filter -- the table holds only the main unit's
     # bodies.
     appendSymbolTableCanon: function {

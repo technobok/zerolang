@@ -135,9 +135,9 @@ declkind: variant {
     # the `public:` block, which is itself a declaration because it is itself a
     # unit
     publicNs: null
-    # a body frame: a function's body, or a block, arm, loop or call bracket
-    # inside one -- the environment frame the locals written there hang under
-    blockDecl: null
+    # a body scope: a function's body, or a block, arm, loop or call bracket
+    # inside one -- the environment scope the locals written there hang under
+    scopeDecl: null
     # a local variable or body-level binding (a parameter's body binding, a
     # loop variable, a generic parameter bound for a walk)
     localDecl: null
@@ -174,8 +174,8 @@ declkindName: function {k: declkind} out String is {
         return "reexport".string
     } case publicNs then {
         return "publicns".string
-    } case blockDecl then {
-        return "block".string
+    } case scopeDecl then {
+        return "scope".string
     } case localDecl then {
         return "local".string
     } case programDecl then {
@@ -287,8 +287,8 @@ Decl: class {
     grantsPrivate: bool
     # a unit-kind row that is a lookup FRAME (a file unit, a namespace, a
     # subunit, a template, and their clones -- not a `require:` block): the
-    # frame walks ask this bit, never the node
-    unitFrame: bool
+    # scope walks ask this bit, never the node
+    unitScope: bool
     # fnptrField -- the member occupies a struct function-pointer slot: an
     # is-block function member of a record or class, or an as-block member of a
     # generic class. Where it was declared, not its kind, decides this.
@@ -494,7 +494,7 @@ ZTyping: class {
     # enclosing numeric generic parameter the walk has no value for
     numericArgDependent: bool
     # the generic template ops whose method bodies have been scanned for
-    # demands from the template's own frame (once per template)
+    # demands from the template's own scope (once per template)
     templateBodiesScanned: IdSet u64
     # the instances the post-sweep has walked: the sweep repeats while walks
     # mint new instances, and each instance is walked once
@@ -802,8 +802,8 @@ ZTyping: class {
     # use site demands: the tooling mode, so an error inside a definition
     # nothing references is still reported.
     eagerAll: bool
-    # keep the per-frame dump rows (locals and overlay rows in the order they
-    # were laid) as each frame closes: the model dump reads them; nothing
+    # keep the per-scope dump rows (locals and overlay rows in the order they
+    # were laid) as each scope closes: the model dump reads them; nothing
     # else does, so a plain build or check does not build them
     dumpRows: bool
 
@@ -830,22 +830,22 @@ ZTyping: class {
     # `require:` guard differently in the editor than on the command line.
     foldPaths: List String
     # a generic parameter's BOUND, as (atom node -> the name it spells) and the
-    # frame to resolve it in. Recorded where the parameter is registered -- the
+    # scope to resolve it in. Recorded where the parameter is registered -- the
     # bound is read as TEXT there and mapped to a constraint kind, never as a
     # type-ref -- and resolved once at the end, for TOOLING only: an unresolved
     # one is silent, and nothing here reaches the emitter.
     genericBoundName: (IdMapV u64 v: zast.nameid
-    # the frame a generic bound resolves in, which is where it was WRITTEN and
+    # the scope a generic bound resolves in, which is where it was WRITTEN and
     # not where it is used
     )
-    genericBoundFrame: (IdMapV u64 v: ztypes.declid
+    genericBoundScope: (IdMapV u64 v: ztypes.declid
     # what a reference resolved to, recorded for TOOLING and read by nothing
     # else. refDecl is the emitter's -- it reads it in five places and adding an
     # entry there for an editor's benefit moved the emitted C -- so a stamp that
     # exists to answer go-to-definition goes here instead.
     )
     toolRefDecl: (IdMapV u64 v: ztypes.declid
-    # a generic parameter, as (node -> the name it spells) and the frame to
+    # a generic parameter, as (node -> the name it spells) and the scope to
     # resolve it in. Recorded at the parameter's declaration and at every type
     # position that resolves to one: a generic parameter lives outside the
     # name-resolution table, so nothing else records what its atom means, and
@@ -853,9 +853,9 @@ ZTyping: class {
     # for its declaration either. Resolved once at the end, for TOOLING only.
     )
     genericParamName: (IdMapV u64 v: zast.nameid
-    # the frame a generic parameter belongs to
+    # the scope a generic parameter belongs to
     )
-    genericParamFrame: (IdMapV u64 v: ztypes.declid
+    genericParamScope: (IdMapV u64 v: ztypes.declid
     # what the end pass made of those: the parameter's own Decl, and the node of
     # the bound it was declared with. The Decl entry is also the MARKER -- a
     # generic parameter and an ordinary field are both fieldDecl, so a Decl
@@ -940,7 +940,7 @@ ZTyping: class {
     # the collections unit's declaration, cached because the container checks
     # reach for it constantly
     collectionsUnitRoot: ztypes.declid
-    # the prelude's root DeclId (`core`), the outermost frame of every bare
+    # the prelude's root DeclId (`core`), the outermost scope of every bare
     # definition lookup, resolved once the def index exists
     coreUnitRoot: ztypes.declid
     # the program root DeclId, minted beside the sentinel: every file unit
@@ -953,10 +953,10 @@ ZTyping: class {
     # one-shot guard: the native link-target descend runs once per program
     # type-ref node id -> base type name; resolved to its real type post-demand
     pendingTyperef: (IdMapV u64 v: zast.nameid
-    # the environment frame the type-ref was written in (curFrame at record
+    # the environment scope the type-ref was written in (curScope at record
     # time), so the post-demand stamp resolves it where it was written
     )
-    pendingTyperefFrame: (IdMapV u64 v: ztypes.declid
+    pendingTyperefScope: (IdMapV u64 v: ztypes.declid
     # each unit's own type. A unit IS a type, so it has one
     )
     unitTypesById: (IdMapV u64 v: ztypes.tid
@@ -1058,7 +1058,7 @@ ZTyping: class {
             pending: false
             walked: false
             grantsPrivate: false
-            unitFrame: false
+            unitScope: false
             fnptrField: false
             conformerName: 0
             varId: ztypes.vid
@@ -1085,43 +1085,43 @@ ZTyping: class {
         return (ztypes.declid.create from: 0)
     }
 
-    # declSetUnitFrame -- mark a unit-kind row as a lookup frame.
-    declSetUnitFrame: function {:this declId: ztypes.declid} is {
+    # declSetUnitScope -- mark a unit-kind row as a lookup scope.
+    declSetUnitScope: function {:this declId: ztypes.declid} is {
         fo: this.decls.getMut i: declId.u64
-        fo.unitFrame = true
+        fo.unitScope = true
     }
 
     # declSetParent -- link a declaration to its enclosing one after the mint.
     # declNew edges a child into its parent's namespace, so a declaration that
     # is parented but NOT looked up by name there takes the link directly
-    # (declNewFrame and declCloneType do the same).
+    # (declNewScope and declCloneType do the same).
     declSetParent: function {:this declId: ztypes.declid parent: ztypes.declid} is {
         po: this.decls.getMut i: declId.u64
         po.parent = parent
     }
 
-    # declIsUnitFrame -- the frame bit (a `public:` block is one too).
-    declIsUnitFrame: function {t: this.view declId: ztypes.declid} out bool is {
+    # declIsUnitScope -- the scope bit (a `public:` block is one too).
+    declIsUnitScope: function {t: this.view declId: ztypes.declid} out bool is {
         decl: t.decls.get i: declId.u64
         if decl.kind.publicNs then return true
-        return decl.unitFrame
+        return decl.unitScope
     }
 
-    # declNewFrame -- a body frame under `parent` (a function declaration, or
-    # the enclosing frame). Unnamed: a frame is entered, never referred to.
-    declNewFrame: function {:this parent: ztypes.declid node: u32} out ztypes.declid is {
-        # parent-linked, but not edged into the parent's namespace: a frame is
+    # declNewScope -- a body scope under `parent` (a function declaration, or
+    # the enclosing scope). Unnamed: a scope is entered, never referred to.
+    declNewScope: function {:this parent: ztypes.declid node: u32} out ztypes.declid is {
+        # parent-linked, but not edged into the parent's namespace: a scope is
         # climbed out of, never looked up, and a function's children stay its
         # parameters
-        id: this.declNew name: 0 parent: ztypes.declid kind: declkind.blockDecl :node
+        id: this.declNew name: 0 parent: ztypes.declid kind: declkind.scopeDecl :node
         fo: this.decls.getMut i: id.u64
         fo.parent = parent
         return id
     }
 
-    # declNewLocal -- a local written in frame `parent`: its name, type and
-    # (for a runtime binding) variable id. A frame binds each name once, so
-    # rebinding it in the same frame is a duplicate definition; a NESTED frame
+    # declNewLocal -- a local written in scope `parent`: its name, type and
+    # (for a runtime binding) variable id. A scope binds each name once, so
+    # rebinding it in the same scope is a duplicate definition; a NESTED scope
     # is what shadows an outer local.
     declNewLocal: function {
         :this name: u32 parent: ztypes.declid node: u32 typeId: ztypes.tid varId: ztypes.vid
@@ -1142,11 +1142,11 @@ ZTyping: class {
         return r
     }
 
-    # declIsFrame -- is `declId` a body frame?
-    declIsFrame: function {t: this.view declId: ztypes.declid} out bool is {
+    # declIsScope -- is `declId` a body scope?
+    declIsScope: function {t: this.view declId: ztypes.declid} out bool is {
         r: false
         decl: t.decls.get i: declId.u64
-        if decl.kind.blockDecl then r = true
+        if decl.kind.scopeDecl then r = true
         return r
     }
 
@@ -1185,25 +1185,25 @@ ZTyping: class {
         return r
     }
 
-    # declFindLocal -- the local `nameId` resolves to from frame `frame`
-    # outward: each frame's own locals (a frame binds each name at most once),
-    # then the frame enclosing it, until the chain leaves the frames -- a
-    # frame's parent that is not a frame is the declaration whose body it is,
-    # and ends the walk. One row read and one probe per frame; a nested frame
+    # declFindLocal -- the local `nameId` resolves to from scope `scope`
+    # outward: each scope's own locals (a scope binds each name at most once),
+    # then the scope enclosing it, until the chain leaves the scopes -- a
+    # scope's parent that is not a scope is the declaration whose body it is,
+    # and ends the walk. One row read and one probe per scope; a nested scope
     # is what shadows an outer local.
     declFindLocal: function {
         t: this.view
-        frame: ztypes.declid
+        scope: ztypes.declid
         nameId: zast.nameid
     } out ztypes.declid is {
         if nameId.isZero then return (ztypes.declid.create from: 0)
-        cur: frame
+        cur: scope
         for cur > 0 loop {
             found: ztypes.declid
             next: ztypes.declid
             {
                 fo: t.decls.get i: cur.u64
-                if fo.kind.blockDecl.not then return (ztypes.declid.create from: 0)
+                if fo.kind.scopeDecl.not then return (ztypes.declid.create from: 0)
                 lo: fo.children.get key: nameId
                 match (
                     lo
@@ -1732,19 +1732,19 @@ ZTyping: class {
     # this parent link -- but is edged into no namespace: a specialisation is
     # reached through the trie under its template, never by name, so
     # resolving the template's name still finds the template, and a walk from
-    # a specialisation's member climbs into the template's frame first.
+    # a specialisation's member climbs into the template's scope first.
     declCloneType: function {:this templateDeclId: ztypes.declid} out ztypes.declid is {
         tname: u32
         tnode: u32
         tkind: declkind.typeDecl
-        tframe: false
+        tscope: false
         kids: ListVal ztypes.declid
         {
             to: this.decls.get i: templateDeclId.u64
             tname = to.name
             tnode = to.node
             tkind = to.kind
-            tframe = to.unitFrame
+            tscope = to.unitScope
             with cit: to.children.iterateItems do for c: cit loop kids.append c.value
         }
         if tname == 0 then return (ztypes.declid.create from: 0
@@ -1753,7 +1753,7 @@ ZTyping: class {
         # parameter declarations.
         )
         id: this.declNew name: tname parent: ztypes.declid kind: tkind node: tnode
-        if tframe then this.declSetUnitFrame declId: id
+        if tscope then this.declSetUnitScope declId: id
         {
             no: this.decls.getMut i: id.u64
             no.parent = templateDeclId
@@ -2903,10 +2903,10 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         targetTriple: "".string
         foldPaths: List String
         genericBoundName: (IdMapV u64 v: zast.nameid)
-        genericBoundFrame: (IdMapV u64 v: ztypes.declid)
+        genericBoundScope: (IdMapV u64 v: ztypes.declid)
         toolRefDecl: (IdMapV u64 v: ztypes.declid)
         genericParamName: (IdMapV u64 v: zast.nameid)
-        genericParamFrame: (IdMapV u64 v: ztypes.declid)
+        genericParamScope: (IdMapV u64 v: ztypes.declid)
         genericParamDecl: (IdMapV u64 v: ztypes.declid)
         genericParamBound: (IdMapV u64 v: u64)
         stmtExprNid: 0
@@ -2926,7 +2926,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         programRoot: ztypes.declid
         nullTypeId: 0
         pendingTyperef: (IdMapV u64 v: zast.nameid)
-        pendingTyperefFrame: (IdMapV u64 v: ztypes.declid)
+        pendingTyperefScope: (IdMapV u64 v: ztypes.declid)
         unitTypesById: (IdMapV u64 v: ztypes.tid)
         decls: List Decl
         declByTypeId: (IdMapV u64 v: ztypes.declid)
@@ -2964,7 +2964,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         pending: false
         walked: false
         grantsPrivate: false
-        unitFrame: false
+        unitScope: false
         fnptrField: false
         conformerName: 0
         varId: ztypes.vid
@@ -2974,9 +2974,9 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
     childTid.constStrings.append "".string
     # the program root, DeclId 1: the file units are parented to it, so every
     # declaration but this one has a parent. Minted with parent 0, so it takes
-    # no name edge and lands in no namespace; it carries no unit-frame bit and
+    # no name edge and lands in no namespace; it carries no unit-scope bit and
     # no type id, which is what keeps it out of the bare-name walks --
-    # unitFrameOf climbs through it and probeFrameTyperef finds no member
+    # unitScopeOf climbs through it and probeScopeTyperef finds no member
     # index on it.
     childTid.programRoot = (childTid.declNew
         name: 0
