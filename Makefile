@@ -1448,7 +1448,10 @@ perf: $(PERFBIN)
 #
 # +56 when a local moved on every path came to be zeroed no more: -1,152 the
 # behaviour, the rest the source.
-ALLOC_BASELINE := 2602674
+#
+# +24 when a `do` block whose last line returned stopped freeing its locals
+# again: the source.
+ALLOC_BASELINE := 2602698
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
