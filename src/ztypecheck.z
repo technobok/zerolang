@@ -29528,6 +29528,7 @@ checkAssignment: function {
             )
         }
         st.defineVar nameId: asgn.name :vid
+        noteGenBorrowBinding :st :ast :own nameId: asgn.name value: asgn.value
         vid2: vid
         st.typing.setDefVariable nid: asgn.nid.u64 vid: vid2
         st.reg.setVariableOrigin id: vid2 origin: ztypes.zvarorigin.local
@@ -30731,6 +30732,7 @@ checkWith: function {
             origin: (pinRootAt pins: wpins i: 0)
         )
         st.defineVar nameId: withnode.name :vid
+        noteGenBorrowBinding :st :ast :own nameId: withnode.name value: withnode.value
         vid2: vid
         st.typing.setDefVariable nid: withnode.nid.u64 vid: vid2
         if (withValueCrossesSuspension :st :ast :withnode :own) then {
@@ -37269,6 +37271,7 @@ checkYieldCall: function {
     call: callref
 } out ztypes.tid is {
     st.typing.callKind.set key: call.nid.u64 value: zast.callkind.yieldCall
+    reportBorrowsAtYield :st :ast :call
     # `yield` is itself a call, so a LABELLED argument binds to YIELD and not
     # to the value being yielded -- the same trap `return` carries, and it
     # earns the same sentence rather than a complaint about the bare callee.
@@ -37329,6 +37332,57 @@ checkYieldCall: function {
         return (ztypes.tid.create from: yvo)
     } case none then {
         return (ztypes.tid.create from: 0)
+    }
+}
+
+# reportBorrowsAtYield -- every borrow the generator body bound that is still in
+# scope at this yield. The body resumes in a later call, and a borrow does not
+# live in the instance across the suspension.
+reportBorrowsAtYield: function {st: zenv.ZSymbolTable ast: Ast.view call: callref} is {
+    if st.genBorrowNames.length == 0 then return
+    names: ListVal zast.nameid
+    with bit: st.genBorrowNames.iterate do for bn: bit loop names.append bn
+    with nit: names.iterate do for nm: nit loop {
+        bnm: zast.poolTextAt pool: ast.names ref: nm
+        (addError
+            :st
+            nodeid: call.nid
+            lineno: call.lineno
+            colno: call.colno
+            e: zast.err.ownerError
+            msg: "'\{bnm}' borrows and is in scope at this yield: a borrow does not live across a suspension"
+        )
+    }
+}
+
+# noteGenBorrowBinding -- a generator body bound `nameId` to a borrow, which may
+# not be in scope at a yield (reportBorrowsAtYield). A `yield` value is no borrow
+# of the body's: it lives in the resume slot.
+noteGenBorrowBinding: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    own: ztypes.zownership
+    nameId: zast.nameid
+    value: zast.nodeid
+} is {
+    if own != ztypes.zownership.borrowed then return
+    if st.typing.currentGenTid.isZero then return
+    if (valueIsYieldCall :ast nid: value) then return
+    st.noteGenBorrow :nameId
+}
+
+# valueIsYieldCall -- the value `nid` is a `yield` call, through a statement
+# line.
+valueIsYieldCall: function {ast: Ast.view nid: zast.nodeid} out bool is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case statementline then {
+        return (valueIsYieldCall :ast nid: n.statementline)
+    } case call then {
+        return (zast.isYieldCalleeAt :ast callableId: n.callable)
+    } else {
+        return false
     }
 }
 

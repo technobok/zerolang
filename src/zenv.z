@@ -420,6 +420,11 @@ ZSymbolTable: class {
     movedArgDepths: ListVal u64
     # the walk is inside the base of a dotted path, which the whole path reads
     movedReadInBase: bool
+    # the names a generator body bound to a borrow, in binding order, and how
+    # many scopes were open at each binding: a yield refuses every one still in
+    # scope, and each leaves with the scope that bound it
+    genBorrowNames: ListVal zast.nameid
+    genBorrowDepths: ListVal u64
     # the generic-parameter answers a TEMPLATE walk keeps out of the shared stamp
     # table, by node, so that walk can still read what it just checked
     templateStamps: (IdMapV u64 v: ztypes.tid)
@@ -593,6 +598,7 @@ ZSymbolTable: class {
         this.dropTail :start
         this.open.pop
         if this.movedArgDepths.length > 0 then this.dropMovedArgs
+        if this.genBorrowDepths.length > 0 then this.dropGenBorrows
         this.curScope = this.innermostScope
         for mLocks.length > 0 loop {
             le2: mLocks.pop
@@ -632,6 +638,7 @@ ZSymbolTable: class {
         this.dropTail start: (this.open.get i: n - 1).start
         this.open.pop
         if this.movedArgDepths.length > 0 then this.dropMovedArgs
+        if this.genBorrowDepths.length > 0 then this.dropGenBorrows
         this.curScope = this.innermostScope
     }
 
@@ -782,6 +789,23 @@ ZSymbolTable: class {
             kept: u64
             if dl > 1 then kept = this.movedArgEnds.get i: dl - 2
             for this.movedArgPaths.length > kept loop this.movedArgPaths.pop
+        }
+    }
+
+    # noteGenBorrow -- a generator body bound `nameId` to a borrow in the
+    # innermost open scope: it may not be in scope at a yield.
+    noteGenBorrow: function {:this nameId: zast.nameid} is {
+        this.genBorrowNames.append nameId
+        this.genBorrowDepths.append this.open.length
+    }
+
+    # dropGenBorrows -- forget the borrows whose scopes have closed.
+    dropGenBorrows: function {:this} is {
+        n: this.open.length
+        for this.genBorrowDepths.length > 0 loop {
+            if (this.genBorrowDepths.get i: this.genBorrowDepths.length - 1) <= n then return
+            this.genBorrowDepths.pop
+            this.genBorrowNames.pop
         }
     }
 
@@ -2226,6 +2250,8 @@ newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} o
         movedArgEnds: ListVal u64
         movedArgDepths: ListVal u64
         movedReadInBase: false
+        genBorrowNames: ListVal zast.nameid
+        genBorrowDepths: ListVal u64
         templateStamps: (IdMapV u64 v: ztypes.tid)
         templateArmPreds: (IdMapV u64 v: ztypes.tid)
         scopeHidden: IdSet u64
