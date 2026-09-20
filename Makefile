@@ -1501,7 +1501,10 @@ perf: $(PERFBIN)
 #
 # +9 when a member read off a BOX came to hold the box rather than nothing:
 # 0 behaviour, all of it the source.
-ALLOC_BASELINE := 2612286
+#
+# +58 when the owned-receiver hoist's destroy became the checker's: 0
+# behaviour, all of it the source.
+ALLOC_BASELINE := 2612344
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
