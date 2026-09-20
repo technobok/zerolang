@@ -27084,6 +27084,18 @@ dottedBaseTid: function {
             if bxE > 0 then bt = ztypes.tid.create from: bxE.u64
         }
     }
+    # A VALUE READ THROUGH IS HELD WHILE IT IS READ. `(mkBox).label` reads a
+    # field out of a value no name binds; the emitter hoists it so the read can
+    # happen and then destroys it, so by D1 that value is a variable of the
+    # checker's. Every dotted path passes here -- a field, a marker, a method's
+    # receiver -- so the rule is stated once for all of them, and the call legs
+    # that ask it too find the temporary already made.
+    if (receiverIsValue :st :ast nid: dp.parent) then (ownedReceiverTemp
+        :st
+        :ast
+        recvT: bt
+        recvNid: dp.parent.u64
+    )
     return bt
 }
 
@@ -33923,6 +33935,10 @@ ownedReceiverTemp: function {
     # is self-contained (it may hold no reftype, spec.pdoc), so the emitter
     # never hoists one to free it, and a temporary for it would name nothing.
     if (typeIsReftype :st tid: recvT).not then return
+    # one value, one temporary: a call's receiver is reached both as the base
+    # of its dotted callable and by the call leg, and the second mint would
+    # leave the first variable named by nothing
+    if (st.typing.tempOf.get key: recvNid).some then return
     mintReceiverTemp :st :ast :recvT :recvNid
 }
 
