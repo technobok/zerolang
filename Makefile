@@ -1518,7 +1518,10 @@ perf: $(PERFBIN)
 # the checker's: 0 behaviour, all of it the source. A temporary bound in an
 # arm materialises the scope that brackets it, so the scope rows a compile
 # makes move with it.
-ALLOC_BASELINE := 2611561
+#
+# -43 when the parked arm took that temporary's name: 0 behaviour, all of it
+# the source.
+ALLOC_BASELINE := 2611518
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1731,7 +1734,7 @@ lifetime-guard:
 	chk "refsLocal" "$$l2" 4; \
 	chk "isNonLvalueArg" "$$l3" 29; \
 	chk "bindingRhsIsBorrow" "$$l4" 13; \
-	chk "'_ah{' argument hoists" "$$l5" 2; \
+	chk "'_ah{' argument hoists" "$$l5" 1; \
 	chk "hoistExprIsBorrowRooted" "$$l6" 5; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  The emitter decided a lifetime on its own again. Read the checker's destroy"; \
