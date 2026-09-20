@@ -1563,7 +1563,10 @@ perf: $(PERFBIN)
 # -113 when the scope-destroy registration asked the checker instead of the
 # value's shape: -114 the behaviour (the shape walk is gone from that path),
 # +1 the source.
-ALLOC_BASELINE := 2613877
+#
+# -22 when that registration stopped taking the tree it no longer reads: 0
+# behaviour, all of it the source.
+ALLOC_BASELINE := 2613855
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
