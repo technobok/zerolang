@@ -1508,7 +1508,12 @@ perf: $(PERFBIN)
 # +538 when a control value's temporary came to answer for its ARMS: 0
 # behaviour, all of it the source (a walk of the arm leaves per hoisted
 # control value, and the rule stated in its own function).
-ALLOC_BASELINE := 2612882
+#
+# -2,142 when the by-value borrow hoist stopped taking a caller's reading of
+# whether its value borrows: 0 behaviour, all of it the source. Ten arguments,
+# six locals that computed them, two parameters threaded for them, a record
+# field, and the two `ctorArgIsBorrow*` walks that nothing was left to call.
+ALLOC_BASELINE := 2610740
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1720,9 +1725,9 @@ lifetime-guard:
 	chk "registerScopeDestroy" "$$l1" 6; \
 	chk "refsLocal" "$$l2" 4; \
 	chk "isNonLvalueArg" "$$l3" 29; \
-	chk "bindingRhsIsBorrow" "$$l4" 14; \
+	chk "bindingRhsIsBorrow" "$$l4" 13; \
 	chk "'_ah{' argument hoists" "$$l5" 2; \
-	chk "hoistExprIsBorrowRooted" "$$l6" 14; \
+	chk "hoistExprIsBorrowRooted" "$$l6" 5; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  The emitter decided a lifetime on its own again. Read the checker's destroy"; \
 	  echo "  lists (scopeDestroy, exitDestroy) and the variable's recorded state instead."; \

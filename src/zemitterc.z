@@ -4661,7 +4661,6 @@ svValueFormAt: function {
             av: expr
             pid: ctx.strTid
             paramTake: false
-            isBorrow: (hoistExprIsBorrowRooted :ast :symtab :ctx :n)
         )
         if hv.length > 0 then return (svValueForm :ctx expr: hv.stringView :isStr vid: ztypes.vid)
     }
@@ -5224,13 +5223,11 @@ svNativeArgFrag: function {
     sx: emitExpr :ast :symtab :ctx :n
     stampTid: stampIdOf :symtab nid: (interpPartNodeId :n)
     if stampTid == ctx.strTid then {
-        isBorrow9: hoistExprIsBorrowRooted :ast :symtab :ctx :n
         sxh: (hoistBorrowValArg
             :ast
             :symtab
             :ctx
             argNid: (zast.nodeIdOf :n).u64
-            isBorrow: isBorrow9
             av: sx.stringView
             pid: ctx.strTid
             paramTake: false
@@ -6044,7 +6041,6 @@ emitStringArgMethod: function {
     if rptr then recvAddr = "\{recvExpr}"
     argval: String
     argTid: u64
-    argBor: false
     argPtr: false
     arx279: u64
     for arx279 < call.arguments.count.u64 loop {
@@ -6069,7 +6065,6 @@ emitStringArgMethod: function {
                 av: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
                 argval = av
                 argOpNode: ast.nodes.get i: a.operation.u64
-                argBor = hoistExprIsBorrowRooted :ast :symtab :ctx n: argOpNode
                 argTid = stampIdOf :symtab nid: (interpPartNodeId n: argOpNode)
                 argPtr = pathIsPointer :ast :symtab :ctx n: argOpNode
             }
@@ -6087,7 +6082,6 @@ emitStringArgMethod: function {
                 av: argval.stringView
                 pid: ctx.strTid
                 paramTake: false
-                isBorrow: argBor
             )
             if aph.length > 0 then argval = aph
             aacc: "."
@@ -6785,7 +6779,6 @@ hoistBorrowValArg: function {
     av: StringView
     pid: ztypes.tid
     paramTake: bool
-    isBorrow: bool
     # the argument node this hoist is for, 0 when the caller reaches the hoist
     # with C text alone. It answers `symtab.typing.tempOf` -- the checker
     # variable the value is held in -- which no leg reads yet. The four other
@@ -6821,9 +6814,9 @@ hoistBorrowValArg: function {
         tid: (ztypes.tid.create from: vrid.u64)
         nm: vnmh.stringView
     )
-    # a borrow-returning call result is a shared view: hoist for
-    # lvalue-ness only, never destroy
-    if isBorrow then vdt = "".string
+    # a value the checker says the temporary does not own -- a borrow-returning
+    # call's result is a shared view -- is hoisted for lvalue-ness only
+    if (scopeOwnsTemp :symtab :argNid).not then vdt = "".string
     avc: av.string
     ctx.argHoistVals.append avc
     ctx.argHoistTypes.append vcty.copy
@@ -6864,17 +6857,6 @@ receiverOnce: function {
     tid: ztypes.tid
 } out String is {
     if (isNonLvalueArg s: text).not then return text.string
-    borrowed: false
-    match (
-        callable
-    ) case dottedpath then {
-        borrowed = (hoistExprIsBorrowRooted
-            :ast
-            :symtab
-            :ctx
-            n: (ast.nodes.get i: callable.parent.u64)
-        )
-    } else null
     hv: (hoistBorrowValArg
         :ast
         :symtab
@@ -6883,7 +6865,6 @@ receiverOnce: function {
         av: text
         pid: tid
         paramTake: false
-        isBorrow: borrowed
     )
     if hv.length > 0 then return hv
     return (hoistLvalue :ast :symtab :ctx av: text :tid)
@@ -6969,7 +6950,6 @@ stringViewBinopOperand: function {
             av: expr
             pid: pid9
             paramTake: false
-            isBorrow: false
         )
         if hv.length > 0 then src = hv.copy
     }
@@ -7003,8 +6983,6 @@ stringViewBinopOperand: function {
 # appended to the caller's buffer; these four ride back beside it, `posIdx`
 # because a positional argument advances a cursor the next parameter reads.
 instargval: record {
-    # the argument is borrowed rather than taken
-    avBor: bool
     # the argument used an interpolation, which had to be built before the call
     usedInterp: bool
     # the variable behind it, 0 when it is not a bare name
@@ -7063,7 +7041,6 @@ instanceMethodArgValue: function {
         pid: posParamId
     )
     atomVarId: String
-    avBor: false
     usedInterp: false
     # the argument's value node, so the pointer check below asks
     # about the variable rather than the emitted text. An
@@ -7082,25 +7059,11 @@ instanceMethodArgValue: function {
             :call
             label: posParamName
         )
-        avBor = (ctorArgIsBorrow
-            :ast
-            :symtab
-            :ctx
-            :call
-            label: posParamName
-        )
         avNd = ctorArgNodeByLabel :ast :call label: posParamName
         if isLbl9b.not then {
             pv: ctorArgByPosition :ast :symtab :ctx :call idx: positionalIdx
             if pv.length > 0 then {
                 atomVarId = pv
-                avBor = (ctorArgIsBorrowPos
-                    :ast
-                    :symtab
-                    :ctx
-                    :call
-                    idx: positionalIdx
-                )
                 avNd = ctorArgNodeByPosition :ast :call idx: positionalIdx
             }
             positionalIdx = positionalIdx + 1
@@ -7118,7 +7081,6 @@ instanceMethodArgValue: function {
     }
     av.append atomVarId
     return (instargval
-        :avBor
         :usedInterp
         :avq
         posIdx: positionalIdx
@@ -7347,7 +7309,6 @@ instanceMethodArg: function {
             :ptr
             avNd: avr.avNd
             usedInterp: avr.usedInterp
-            avBor: avr.avBor
             :posParamId
             av: atomVarId.stringView
             :args
@@ -7366,7 +7327,6 @@ appendArgValue: function {
     ptr: instargptr
     avNd: u64
     usedInterp: bool
-    avBor: bool
     posParamId: u64
     av: StringView
     args: String.borrow
@@ -7384,14 +7344,13 @@ appendArgValue: function {
             :ctx
             :ptr
             :usedInterp
-            :avBor
             :posParamId
             av: ld.stringView
             :args
         )
         return
     }
-    appendArgValueText :ast :symtab :ctx :ptr :usedInterp :avBor :posParamId :av :args
+    appendArgValueText :ast :symtab :ctx :ptr :usedInterp :posParamId :av :args
 }
 
 # appendArgValueText -- appendArgValue's text, hoisted when a borrow of the value
@@ -7402,7 +7361,6 @@ appendArgValueText: function {
     ctx: Ctx
     ptr: instargptr
     usedInterp: bool
-    avBor: bool
     posParamId: u64
     av: StringView
     args: String.borrow
@@ -7415,7 +7373,6 @@ appendArgValueText: function {
             :av
             pid: (ztypes.tid.create from: posParamId.u64)
             paramTake: ptr.pTake
-            isBorrow: avBor
         )
         if vbhm.length > 0 then {
             args.append vbhm
@@ -8972,7 +8929,6 @@ emitStrConvCall: function {
             av: pv.stringView
             pid: ptid
             paramTake: false
-            isBorrow: false
         )
         if sh.length > 0 then pv = sh.copy
     }
@@ -11320,64 +11276,6 @@ orderDropPositions: function {ctx: Ctx base: u64} is {
     }
 }
 
-# ctorArgIsBorrow / ctorArgIsBorrowPos -- bindingRhsIsBorrow over the
-# argument ctorArgByLabel / ctorArgByPosition would emit: a hoisted
-# borrow-returning result must not register a destroy.
-ctorArgIsBorrow: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    call: zast.callrow.view
-    label: StringView
-} out bool is {
-    arx369: u64
-    for arx369 < call.arguments.count.u64 loop {
-        aId: zast.kidAt kids: ast.kids span: call.arguments i: arx369
-        arx369 = arx369 + 1
-        a: ast.nodes.get i: aId.u64
-        if a.namedoperation then {
-            an: zast.nameTextAt :ast ref: a.name
-            if an.stringView == label then return (hoistExprIsBorrowRooted
-                :ast
-                :symtab
-                :ctx
-                n: (ast.nodes.get i: a.operation.u64)
-            )
-        }
-    }
-    return false
-}
-
-# true when a constructor argument sits in a borrow position.
-ctorArgIsBorrowPos: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    call: zast.callrow.view
-    idx: u64
-} out bool is {
-    seen: u64
-    arx379: u64
-    for arx379 < call.arguments.count.u64 loop {
-        aId: zast.kidAt kids: ast.kids span: call.arguments i: arx379
-        arx379 = arx379 + 1
-        a: ast.nodes.get i: aId.u64
-        if a.namedoperation then {
-            an: zast.nameTextAt :ast ref: a.name
-            if an.length == 0 then {
-                if seen == idx then return (hoistExprIsBorrowRooted
-                    :ast
-                    :symtab
-                    :ctx
-                    n: (ast.nodes.get i: a.operation.u64)
-                )
-                seen = seen + 1
-            }
-        }
-    }
-    return false
-}
-
 # ctorarg -- the argument node a constructor parameter binds.
 ctorarg: record {
     # the argument node; 0 when the call supplies none
@@ -13186,7 +13084,6 @@ userFnArgText: function {
     # the parameter's mode: by pointer (addressed unless already one), or a
     # borrow hoist of the value
     pTake8: paramTakesArg :ast :symtab :fid pname: pinNm
-    isBorrowed: hoistExprIsBorrowRooted :ast :symtab :ctx n: argOpNode
     ctx.lastArgByPtr = (userFnParamByPointer
         :ast
         :symtab
@@ -13220,7 +13117,6 @@ userFnArgText: function {
         av: atomVarId.stringView
         pid: (ztypes.tid.create from: pinId.u64)
         paramTake: pTake8
-        isBorrow: isBorrowed
     )
     if vbh8.length > 0 then return vbh8
     return atomVarId
@@ -18647,16 +18543,15 @@ stringCopyLitIndex: function {
 # statement when the CHECKER says the temporary owns what it holds -- a borrow
 # its owner keeps (`list.get`) owns nothing and is not freed here.
 copyReceiverTemp: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    n: astnode.view
+    # the `.copy` receiver's value node
+    argNid: u64
     pv: StringView
 } out String is {
-    tnm: argHoistName :symtab :ctx argNid: (zast.nodeIdOf :n).u64 fallback: "_cpv"
+    tnm: argHoistName :symtab :ctx :argNid fallback: "_cpv"
     dt: String
-    if (scopeOwnsTemp :symtab argNid: (zast.nodeIdOf :n).u64
-    ) then dt = "    \{ctx.strC}_free(&\{tnm});\n"
+    if (scopeOwnsTemp :symtab :argNid) then dt = "    \{ctx.strC}_free(&\{tnm});\n"
     ctx.argHoistVals.append pv.string
     ctx.argHoistTypes.append "\{ctx.strC}_t"
     ctx.argHoistDtors.append dt
@@ -18689,10 +18584,9 @@ copyRvalueHoist: function {
             return "".string
         }
         tnm: (copyReceiverTemp
-            :ast
             :symtab
             :ctx
-            n: (ast.nodes.get i: n.parent.u64)
+            argNid: (zast.nodeIdOf n: (ast.nodes.get i: n.parent.u64)).u64
             pv: pv.stringView
         )
         return "\{ctx.strC}_copy(&\{tnm})"
@@ -18746,10 +18640,9 @@ emitStringBindValue: function {
                 if (isNonLvalueArg s: pv.stringView).not then dropHoistsTo :ctx mark: hmk
                 if (isNonLvalueArg s: pv.stringView) then {
                     tnm: (copyReceiverTemp
-                        :ast
                         :symtab
                         :ctx
-                        n: (ast.nodes.get i: n.parent.u64)
+                        argNid: (zast.nodeIdOf n: (ast.nodes.get i: n.parent.u64)).u64
                         pv: pv.stringView
                     )
                     flushArgHoists :ctx :ind :tmp :buf
@@ -36820,7 +36713,6 @@ fileFromArgCoerce: function {
                     nid: (interpPartNodeId n: (ast.nodes.get i: fa.operation.u64))
                 )
                 if stampTid == ctx.strTid then {
-                    isBorrow912: hoistExprIsBorrowRooted :ast :symtab :ctx n: faOpNode
                     fh: (hoistBorrowValArg
                         :ast
                         :symtab
@@ -36829,7 +36721,6 @@ fileFromArgCoerce: function {
                         :av
                         pid: ctx.strTid
                         paramTake: false
-                        isBorrow: isBorrow912
                     )
                     fb: av.string
                     if fh.length > 0 then fb = fh
@@ -37256,7 +37147,6 @@ lowerNativeArg: function {
         )
         av0: emitExpr :ast :symtab :ctx n: op
         if (stampIsStr :symtab :ctx nid: (interpPartNodeId n: op)) then {
-            isBorrow913: hoistExprIsBorrowRooted :ast :symtab :ctx n: op
             hb: (hoistBorrowValArg
                 :ast
                 :symtab
@@ -37265,7 +37155,6 @@ lowerNativeArg: function {
                 av: av0.stringView
                 pid: ctx.strTid
                 paramTake: false
-                isBorrow: isBorrow913
             )
             if hb.length > 0 then av0 = hb
             av0q: atomVidIfPlain :ast :symtab :ctx n: op text: av0.stringView
