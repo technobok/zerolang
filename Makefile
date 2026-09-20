@@ -1485,7 +1485,10 @@ perf: $(PERFBIN)
 # +81 when a method-leaf pin came to be kept for a method that LENDS what it
 # answers: 0 behaviour, all of it the source (the rule's comment is most of
 # it).
-ALLOC_BASELINE := 2612357
+#
+# +100 when a receiver temporary stopped claiming to own a borrowed element:
+# 0 behaviour, all of it the source.
+ALLOC_BASELINE := 2612457
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
