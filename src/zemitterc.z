@@ -6797,7 +6797,7 @@ hoistBorrowValArg: function {
     if isStrH.not when (symtab.reg.needsDestructor typeId: vrid).not then {
         return "".string
     }
-    vnmh: argHoistName :symtab :ctx :argNid
+    vnmh: argHoistName :symtab :ctx :argNid fallback: "_ah"
     vcty: typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: pid.u64) thisTid: ztypes.tid
     # a Map or Set value is held through its heap pointer
     if (isHeapPtrCollection :symtab :ctx tid: (ztypes.tid.create from: pid.u64)
@@ -6900,11 +6900,7 @@ hoistLvalue: function {
     # the argument whose address this temp provides, 0 when unknown here
     argNid: 0.u64
 } out String is {
-    argNid
-
-    vhn: ctx.argHoistCtr
-    ctx.argHoistCtr = ctx.argHoistCtr + 1
-    vnm: "_ah\{vhn}"
+    vnm: argHoistName :symtab :ctx :argNid fallback: "_ah"
     vcty: typeRefC :ast :symtab :ctx :tid thisTid: ztypes.tid
     if ptr then vcty.append "*"
     if tag > 0 when own then ctx.hoistTags.set key: vnm.copy value: tag
@@ -7222,7 +7218,7 @@ instanceMethodArgHoist: function {
     argNid: 0.u64
 } out String is {
 
-    nmH: argHoistName :symtab :ctx :argNid
+    nmH: argHoistName :symtab :ctx :argNid fallback: "_ah"
     hcty: (typeRefC
         :ast
         :symtab
@@ -9187,6 +9183,7 @@ emitCollectionMethodCall: function {
             tag: ((symtab.typing.unnamedLocalOfNode.get key: (zast.nodeIdOf n: recvNode).u64).or
                 d: 0
             )
+            argNid: (zast.nodeIdOf n: recvNode).u64
         )
         bn = bh9.copy
     }
@@ -9492,7 +9489,7 @@ ownedReceiverHoist: function {
     if rct.length == 0 then return "".string
     # a Map or Set value is held through its heap pointer
     if (isHeapPtrCollection :symtab :ctx tid: rtid) then rct.append "*"
-    rnm: argHoistName :symtab :ctx argNid: (zast.nodeIdOf :n).u64
+    rnm: argHoistName :symtab :ctx argNid: (zast.nodeIdOf :n).u64 fallback: "_ah"
     rdt: hoistDestroyLine :symtab :ctx tid: rtid nm: rnm.stringView
     rex: expr.string
     ctx.argHoistVals.append rex
@@ -9827,6 +9824,8 @@ argHoistName: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     argNid: u64
+    # what the emitter's own name is called when it has to invent one
+    fallback: StringView
 } out String is {
     if argNid > 0 then {
         tv: symtab.typing.tempOf.get key: argNid
@@ -9834,7 +9833,7 @@ argHoistName: function {
     }
     hn: ctx.argHoistCtr
     ctx.argHoistCtr = ctx.argHoistCtr + 1
-    return "_ah\{hn}"
+    return "\{fallback}\{hn}"
 }
 
 # emitColInterpArg -- an interpolated-string collection-method argument hoisted to
@@ -9863,7 +9862,7 @@ emitColInterpArg: function {
         }
         sx = ex
     }
-    nmH: argHoistName :symtab :ctx argNid: (zast.nodeIdOf :n).u64
+    nmH: argHoistName :symtab :ctx argNid: (zast.nodeIdOf :n).u64 fallback: "_ah"
     hdt: String
     if consumes.not when (hoistExprIsBorrowRooted :ast :symtab :ctx :n).not then {
         hdt = "    \{ctx.strC}_free(&\{nmH});\n"
@@ -9896,7 +9895,7 @@ emitInterpArgForParam: function {
     if sx.length == 0 then return "".string
     isTake: false
     if pid == ctx.strTid when (paramTakesArg :ast :symtab :fid :pname) then isTake = true
-    nmH: argHoistName :symtab :ctx argNid: (zast.nodeIdOf :n).u64
+    nmH: argHoistName :symtab :ctx argNid: (zast.nodeIdOf :n).u64 fallback: "_ah"
     hdt: String
     if isTake.not then hdt = "    \{ctx.strC}_free(&\{nmH});\n"
     retx: String
@@ -12109,7 +12108,7 @@ emitByrefArg: function {
     argNid: 0.u64
 } out String is {
     if (isNonLvalueArg s: av).not then return "&\{av}"
-    nmH: argHoistName :symtab :ctx :argNid
+    nmH: argHoistName :symtab :ctx :argNid fallback: "_ah"
     hcty: typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: pid.u64) thisTid: ztypes.tid
     htyc: hcty.copy
     hrid: pid
@@ -18594,9 +18593,7 @@ copyReceiverTemp: function {
     n: astnode.view
     pv: StringView
 } out String is {
-    hn: ctx.argHoistCtr
-    ctx.argHoistCtr = ctx.argHoistCtr + 1
-    tnm: "_cpv\{hn}"
+    tnm: argHoistName :symtab :ctx argNid: (zast.nodeIdOf :n).u64 fallback: "_cpv"
     dt: String
     if (hoistExprIsBorrowRooted :ast :symtab :ctx :n
     ).not then dt = "    \{ctx.strC}_free(&\{tnm});\n"
