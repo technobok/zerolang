@@ -1495,7 +1495,10 @@ perf: $(PERFBIN)
 # -162 when the lvalue hoist stopped taking a caller's reading of whether it
 # owns: 0 behaviour, all of it the source (a parameter, its one argument and
 # the predicate call that built it).
-ALLOC_BASELINE := 2612302
+#
+# -25 when the instance-method `&` hoist asked the checker too: 0 behaviour,
+# all of it the source.
+ALLOC_BASELINE := 2612277
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
