@@ -1468,7 +1468,10 @@ perf: $(PERFBIN)
 #
 # +49 when the interpolated argument of a user call asked the same question:
 # 0 behaviour, all of it the source.
-ALLOC_BASELINE := 2612368
+#
+# +47 for the comment that says why a nameless variable keeps its id under
+# --readable-names: 0 behaviour, all of it the source.
+ALLOC_BASELINE := 2612415
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
