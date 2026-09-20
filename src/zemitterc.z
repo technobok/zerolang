@@ -6771,7 +6771,14 @@ hoistBorrowValArg: function {
     pid: ztypes.tid
     paramTake: bool
     isBorrow: bool
+    # the argument node this hoist is for, 0 when the caller reaches the hoist
+    # with C text alone. It answers `symtab.typing.tempOf` -- the checker
+    # variable the value is held in -- which no leg reads yet. The four other
+    # argument hoists take it on the same terms.
+    argNid: 0.u64
 } out String is {
+    argNid
+
     if (isNonLvalueArg s: av).not then return "".string
     if paramTake then return "".string
     vrid: pid
@@ -6892,7 +6899,11 @@ hoistLvalue: function {
     ptr: false
     # the checker's unnamed local this temp realises, 0 for none
     tag: 0.u64
+    # the argument whose address this temp provides, 0 when unknown here
+    argNid: 0.u64
 } out String is {
+    argNid
+
     vhn: ctx.argHoistCtr
     ctx.argHoistCtr = ctx.argHoistCtr + 1
     vnm: "_ah\{vhn}"
@@ -7208,7 +7219,11 @@ instanceMethodArgHoist: function {
     isStrBorrow: bool
     avBor: bool
     atomVarId: StringView
+    # the argument this `&` is taken of, 0 when unknown here
+    argNid: 0.u64
 } out String is {
+    argNid
+
     hn: ctx.argHoistCtr
     ctx.argHoistCtr = ctx.argHoistCtr + 1
     nmH: "_ah\{hn}"
@@ -9432,7 +9447,11 @@ stringKeyArgPointer: function {
     call: zast.callrow.view
     label: StringView
     expr: StringView
+    # the key or item argument this pointer is for, 0 when unknown here
+    argNid: 0.u64
 } out String is {
+    argNid
+
     # a String `.view`/`.borrow` PARAMETER, or a borrowed field, arrives as a
     # pointer already; addressing it again hands the runtime a `String_t**`,
     # which the C compiler rejects
@@ -12076,7 +12095,11 @@ emitByrefArg: function {
     av: StringView
     pid: ztypes.tid
     isBorrow: bool
+    # the argument passed by reference, 0 when unknown here
+    argNid: 0.u64
 } out String is {
+    argNid
+
     if (isNonLvalueArg s: av).not then return "&\{av}"
     hn: ctx.argHoistCtr
     ctx.argHoistCtr = ctx.argHoistCtr + 1
@@ -12876,6 +12899,7 @@ orderFnptrArg: function {
         av: av.stringView
         pid: (ztypes.tid.create from: pid)
         isBorrow: true
+        argNid: (zast.nodeIdOf n: op).u64
     )
     constant: orderConstant :ast :symtab :ctx n: op text: av.stringView byPtr: addr
     (orderPart
@@ -13118,6 +13142,7 @@ userFnArgText: function {
             av: atomVarId.stringView
             pid: (ztypes.tid.create from: pinId.u64)
             isBorrow: isBorrowed
+            argNid: (zast.nodeIdOf n: argOpNode).u64
         )
     }
     # a pointer-held valtype handed to a BY-VALUE parameter is loaded, and so
