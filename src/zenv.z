@@ -1067,19 +1067,26 @@ ZSymbolTable: class {
     }
 
     # recordScopeDestroy -- what the end of the closing scope `fr` destroys, when
-    # the walk falls through to it (scopeDestroy).
+    # the walk falls through to it (scopeDestroy), and what its TEMPORARIES own
+    # (scopeTempDestroy), which is a different question and is asked of every
+    # scope. A scope the walk cannot fall out of -- a loop body ending in
+    # `break`, a branch that returns -- destroys none of its locals at its end,
+    # because an exit destroyed them (exitDestroy). But a temporary bound there
+    # still either owns what it holds or does not, and that is all a hoist asks
+    # (scopeOwnsTemp): the emitter places the free at the statement, not at the
+    # scope's end, so withholding the answer just left the hoist to guess again.
     recordScopeDestroy: function {:this fr: openscope} is {
         if fr.id.isZero or fr.node.isZero then return
         if this.recording.not then return
-        if (this.unreachableScopes.has item: fr.id.u64) then return
-        start: this.typing.destroyItems.length
-        this.appendOwnedOf scope: fr.id except: ztypes.vid
-        n: this.typing.destroyItems.length - start
-        if n > 0 then (this.typing.scopeDestroy.set
-            key: fr.node.u64
-            value: (ztyping.destroyrange start: start.u32.orPanic len: n.u32.orPanic)
-        )
-        # and what it would destroy of its temporaries, which no leg prints yet
+        if (this.unreachableScopes.has item: fr.id.u64).not then {
+            start: this.typing.destroyItems.length
+            this.appendOwnedOf scope: fr.id except: ztypes.vid
+            n: this.typing.destroyItems.length - start
+            if n > 0 then (this.typing.scopeDestroy.set
+                key: fr.node.u64
+                value: (ztyping.destroyrange start: start.u32.orPanic len: n.u32.orPanic)
+            )
+        }
         tstart: this.typing.destroyItems.length
         this.appendOwnedTempsOf scope: fr.id
         tn: this.typing.destroyItems.length - tstart

@@ -1488,7 +1488,10 @@ perf: $(PERFBIN)
 #
 # +100 when a receiver temporary stopped claiming to own a borrowed element:
 # 0 behaviour, all of it the source.
-ALLOC_BASELINE := 2612457
+#
+# +7 when a scope the walk cannot fall out of still answered for its
+# temporaries: 0 behaviour, all of it the source.
+ALLOC_BASELINE := 2612464
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
