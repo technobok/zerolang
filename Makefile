@@ -1478,7 +1478,10 @@ perf: $(PERFBIN)
 # -67 when the by-reference argument hoist stopped taking a caller's reading
 # of whether its value borrows: 0 behaviour, all of it the source (one
 # parameter and eight arguments).
-ALLOC_BASELINE := 2612254
+#
+# +22 when the `.copy` receiver temp asked the checker instead: 0 behaviour,
+# all of it the source.
+ALLOC_BASELINE := 2612276
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1692,7 +1695,7 @@ lifetime-guard:
 	chk "isNonLvalueArg" "$$l3" 29; \
 	chk "bindingRhsIsBorrow" "$$l4" 14; \
 	chk "'_ah{' argument hoists" "$$l5" 2; \
-	chk "hoistExprIsBorrowRooted" "$$l6" 16; \
+	chk "hoistExprIsBorrowRooted" "$$l6" 15; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  The emitter decided a lifetime on its own again. Read the checker's destroy"; \
 	  echo "  lists (scopeDestroy, exitDestroy) and the variable's recorded state instead."; \
