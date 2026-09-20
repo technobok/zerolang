@@ -33910,12 +33910,19 @@ mintReceiverTemp: function {
 } out zast.nameid is {
     if recvT.isZero then return zast.nameid
     if (isViewFamilyTid :ast :st tid: recvT) then return zast.nameid
+    # ONE VALUE, ONE TEMPORARY. A receiver is reached twice -- as the base of
+    # its dotted path, and by the call leg that pins its result -- and a second
+    # mint would leave two variables claiming one value, which a destroy list
+    # would then free twice.
+    exN: st.typing.tempNameOf.get key: recvNid
+    if exN.some then return exN
     tn: st.typing.nextTempId
     st.typing.nextTempId = tn + 1
     tname: "_t\{tn}"
     vid: st.reg.newVariable ztypeId: recvT ownership: ztypes.zownership.owned
     tnId: zast.poolSet pool: ast.names text: tname.stringView
     st.defineTemp nameId: tnId :vid
+    st.typing.tempNameOf.set key: recvNid value: tnId
     if st.recording then st.typing.tempOf.set key: recvNid value: vid
     return tnId
 }
@@ -33935,10 +33942,6 @@ ownedReceiverTemp: function {
     # is self-contained (it may hold no reftype, spec.pdoc), so the emitter
     # never hoists one to free it, and a temporary for it would name nothing.
     if (typeIsReftype :st tid: recvT).not then return
-    # one value, one temporary: a call's receiver is reached both as the base
-    # of its dotted callable and by the call leg, and the second mint would
-    # leave the first variable named by nothing
-    if (st.typing.tempOf.get key: recvNid).some then return
     mintReceiverTemp :st :ast :recvT :recvNid
 }
 

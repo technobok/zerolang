@@ -915,6 +915,28 @@ ZSymbolTable: class {
         return (this.typing.suppressParamStamps and (this.typing.curMonoStamp == 0)).not
     }
 
+    # appendOwnedTempsOf -- the TEMPORARIES `scope` binds that own something at
+    # its end, newest first, in the state they are in here. The other half of
+    # `appendOwnedOf`'s walk: `ownsDestroy` excludes a temporary because the
+    # emitter still decides when it dies, and this is what the checker would
+    # say if it decided instead.
+    appendOwnedTempsOf: function {:this scope: ztypes.declid} is {
+        ki: this.typing.declChildSlots declId: scope
+        for ki > 0 loop {
+            ki = ki - 1
+            kd: this.typing.declChildAt declId: scope index: ki
+            v: this.typing.declLocalVarOf declId: kd
+            if (this.typing.tempVars.has item: v.u64).not then continue
+            if v.isZero then continue
+            if (this.reg.variableOwnershipOf id: v) != ztypes.zownership.owned then continue
+            if (this.reg.isReftypeOf tid: (this.reg.variableTypeOf id: v)).not then continue
+            this.typing.destroyItems.append (ztyping.destroyitem
+                vid: v
+                state: (this.stateOfDecl declId: kd)
+            )
+        }
+    }
+
     # appendOwnedOf -- the variables `scope` binds that a destroy point lists,
     # newest first, each in the state it is in here, but `except`.
     appendOwnedOf: function {:this scope: ztypes.declid except: ztypes.vid} is {
@@ -1048,10 +1070,18 @@ ZSymbolTable: class {
         start: this.typing.destroyItems.length
         this.appendOwnedOf scope: fr.id except: ztypes.vid
         n: this.typing.destroyItems.length - start
-        if n == 0 then return
-        (this.typing.scopeDestroy.set
+        if n > 0 then (this.typing.scopeDestroy.set
             key: fr.node.u64
             value: (ztyping.destroyrange start: start.u32.orPanic len: n.u32.orPanic)
+        )
+        # and what it would destroy of its temporaries, which no leg prints yet
+        tstart: this.typing.destroyItems.length
+        this.appendOwnedTempsOf scope: fr.id
+        tn: this.typing.destroyItems.length - tstart
+        if tn == 0 then return
+        (this.typing.scopeTempDestroy.set
+            key: fr.node.u64
+            value: (ztyping.destroyrange start: tstart.u32.orPanic len: tn.u32.orPanic)
         )
     }
 
