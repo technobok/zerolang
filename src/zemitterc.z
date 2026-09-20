@@ -8771,18 +8771,15 @@ pathRootsAtVariable: function {
 }
 
 # bindBorrows -- the binding owns nothing, so it registers no cleanup and zeroes
-# no source. Two ways to be one: the value's SHAPE says so (a field read, an
-# element, a `.borrow` marker), or the CHECKER made the variable a borrow -- a
-# bare name is only the second, because its shape alone cannot tell a borrow
-# from a move. Both legs that ask ask here.
+# no source. That is the CHECKER's answer about the binding's own variable and
+# nothing else: a value whose shape says borrow -- a field read, an element, a
+# `.borrow` marker -- is a value the checker already made the binding borrow
+# from, so reading the shape a second time could only disagree with it. Both
+# legs that ask ask here.
 bindBorrows: function {
-    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
     n: zast.assignmentrow.view
-    avn: astnode.view
 } out bool is {
-    if (bindingRhsIsBorrow :ast :symtab :ctx n: avn) then return true
     return (bindingVarIsBorrowed :symtab :n)
 }
 
@@ -18913,7 +18910,7 @@ emitCollectionBind: function {
     nameVid: ztypes.vid
 } out bool is {
     avn: ast.nodes.get i: n.value.u64
-    nbrw: bindBorrows :ast :symtab :ctx :n :avn
+    nbrw: bindBorrows :symtab :n
     ltid: bindChasedTid :symtab :ctx :n :avn
     isList: isListOriginOf :symtab :ctx tid: ltid
     isHeap: isSetOriginOf :symtab :ctx tid: ltid
@@ -19673,7 +19670,7 @@ emitAssignment: function {
     nameVid: defVid :symtab nid: n.nodeid.u64
     nm: varCName :ctx vid: nameVid name: anmC.stringView
     dropStaleBorrowAlias :ctx vid: nameVid
-    nbrw: bindBorrows :ast :symtab :ctx :n :avn
+    nbrw: bindBorrows :symtab :n
     ctx.borrowedVars.set key: (defVid :symtab nid: n.nodeid.u64) value: nbrw
     if ctx.genActive when (isYieldNode :ast n: avn) then {
         (emitExprFormYield
