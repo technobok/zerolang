@@ -1498,7 +1498,10 @@ perf: $(PERFBIN)
 #
 # -25 when the instance-method `&` hoist asked the checker too: 0 behaviour,
 # all of it the source.
-ALLOC_BASELINE := 2612277
+#
+# +9 when a member read off a BOX came to hold the box rather than nothing:
+# 0 behaviour, all of it the source.
+ALLOC_BASELINE := 2612286
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
