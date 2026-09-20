@@ -28864,6 +28864,26 @@ armValueLeaves: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid into: 
     }
 }
 
+# armsYieldAPlace -- a control value one of whose arms yields a PLACE: storage
+# something else owns -- a local the arm does not move, a field, an element a
+# call hands back. What such a value hands back is a REFERENCE on that arm's
+# path, so it owns nothing, while an arm yielding a value of its own holds that
+# in a temporary of its own. `armLeafPlaces` and `armLeafMoves` are where the
+# arm walk recorded which is which, and the emitter's `armLeafIsPlace` reads the
+# same two -- one fact, asked from both sides.
+armsYieldAPlace: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} out bool is {
+    if (isControlValue :ast :nid).not then return false
+    leaves: ListVal u32
+    armValueLeaves :st :ast :nid into: leaves
+    place: false
+    with lit: leaves.iterate do for lf: lit loop {
+        if (st.typing.armLeafMoves.has item: lf.u64).not when (st.typing.armLeafPlaces.has
+            item: lf.u64
+        ) then place = true
+    }
+    return place
+}
+
 # armBorrowedLeaves -- the arm values read out of storage something else owns: a
 # field read through names rooted in a local, or a value a call hands back pinned
 # to its source. A destination that owns what it holds refuses them, one by one.
@@ -34764,6 +34784,13 @@ hoistArg: function {
     if hpins.length > 0 when (typeIsReftype
         :st
         tid: (ztypes.tid.create from: argType.u64)
+    ) then hown = ztypes.zownership.borrowed
+    # A CONTROL VALUE'S ARMS NEED NOT AGREE: one that yields a place makes the
+    # merged value a reference, which owns nothing (armsYieldAPlace).
+    if hown == ztypes.zownership.owned when (armsYieldAPlace
+        :st
+        :ast
+        nid: argId
     ) then hown = ztypes.zownership.borrowed
     vid: st.reg.newVariable ztypeId: argType ownership: hown
     st.reg.setVariableSynthOrigin id: vid origin: "anf".string

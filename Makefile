@@ -1504,7 +1504,11 @@ perf: $(PERFBIN)
 #
 # +58 when the owned-receiver hoist's destroy became the checker's: 0
 # behaviour, all of it the source.
-ALLOC_BASELINE := 2612344
+#
+# +538 when a control value's temporary came to answer for its ARMS: 0
+# behaviour, all of it the source (a walk of the arm leaves per hoisted
+# control value, and the rule stated in its own function).
+ALLOC_BASELINE := 2612882
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
