@@ -1656,18 +1656,24 @@ emitter-guard:
 
 # lifetime-guard -- ratchet on the emitter's own decisions about what dies when:
 # the checker records every scope end's and every exit's destroy list, with each
-# variable's state (scopeDestroy, exitDestroy), and the emitter comes to print
-# them. Each count here is a place the emitter still re-derives a lifetime --
-# registering a scope destroy, deciding whether a local is referenced by a
-# return, guessing an lvalue from C text, reading a binding's borrow off its
-# shape, spelling an argument hoist -- and each falls to zero as the stage that
-# replaces it lands. A rising count is a new re-derivation.
+# variable's state (scopeDestroy, exitDestroy, scopeTempDestroy), and the emitter
+# comes to print them. Each count here is a place the emitter still re-derives a
+# lifetime -- registering a scope destroy, deciding whether a local is referenced
+# by a return, guessing an lvalue from C text, reading a binding's borrow off its
+# shape, reading a HOIST's off the expression under it, spelling an argument
+# hoist -- and each falls to zero as the stage that replaces it lands. A rising
+# count is a new re-derivation.
+#
+# paramTakesArg is deliberately NOT counted: it answers which C form a parameter
+# takes, the value or a pointer to it, as well as whether it takes ownership, and
+# the first of those is the signature's to say and is not going anywhere.
 lifetime-guard:
 	@l1=$$(grep -c 'registerScopeDestroy' src/zemitterc.z); \
 	l2=$$(grep -c 'refsLocal' src/zemitterc.z); \
 	l3=$$(grep -c 'isNonLvalueArg' src/zemitterc.z); \
 	l4=$$(grep -c 'bindingRhsIsBorrow' src/zemitterc.z); \
 	l5=$$(grep -cF '_ah\{' src/zemitterc.z); \
+	l6=$$(grep -c 'hoistExprIsBorrowRooted' src/zemitterc.z); \
 	fail=0; \
 	chk() { if [ "$$2" -gt "$$3" ]; then echo "lifetime-guard FAIL: $$1 = $$2 (baseline $$3)"; fail=1; \
 	  elif [ "$$2" -lt "$$3" ]; then echo "lifetime-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
@@ -1676,12 +1682,13 @@ lifetime-guard:
 	chk "isNonLvalueArg" "$$l3" 29; \
 	chk "bindingRhsIsBorrow" "$$l4" 14; \
 	chk "'_ah{' argument hoists" "$$l5" 2; \
+	chk "hoistExprIsBorrowRooted" "$$l6" 16; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  The emitter decided a lifetime on its own again. Read the checker's destroy"; \
 	  echo "  lists (scopeDestroy, exitDestroy) and the variable's recorded state instead."; \
 	  exit 1; \
 	fi; \
-	echo "lifetime-guard OK: registerScopeDestroy=$$l1 refsLocal=$$l2 isNonLvalueArg=$$l3 bindingRhsIsBorrow=$$l4 argHoists=$$l5"
+	echo "lifetime-guard OK: registerScopeDestroy=$$l1 refsLocal=$$l2 isNonLvalueArg=$$l3 bindingRhsIsBorrow=$$l4 argHoists=$$l5 hoistBorrowRooted=$$l6"
 
 # deadcode-guard -- emitted statements that no path can reach. clang's
 # -Wunreachable-code family is the oracle; gcc accepts the flag but never warns.

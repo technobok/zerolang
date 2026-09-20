@@ -1,0 +1,68 @@
+# An interpolated argument is a temporary the CHECKER decides the fate of: the
+# leg that hoists it asks what the scope binding it destroys (scopeTempDestroy)
+# instead of reading ownership back off the argument's shape, the method's
+# contract or the parameter's signature.
+#
+# The four answers it can get, each with a place that has to hold:
+#
+#   owned   -- a borrowing parameter, a reading collection method: the
+#              temporary still holds the String where it dies, and is freed;
+#   moved   -- a taking parameter, a consuming collection method: the value
+#              went in, and a free here would be the second one;
+#   borrows -- a hoist that owns nothing (an `outx ... .view` return read off
+#              the temporary): freeing it would free what it only points at;
+#   promoted -- the call's result keeps the temporary locked, so it outlives
+#              the call scope; the hoist list, not the checker's scope, is
+#              still what says when it dies.
+#
+# Every line here is ASan-checked for both a leak and a double free, which is
+# the only judge of the difference between them.
+keep: function {s: String.take} out u64 is {
+    return s.length
+}
+
+borrowIt: function {s: String} out u64 is {
+    return s.length
+}
+
+viewIt: function {s: StringView} out u64 is {
+    return s.length
+}
+
+headOfView: function {s: String.view} outx StringView is {
+    return s.stringView
+}
+
+main: function is {
+    n: 7
+
+    # moved: the temporary goes into the parameter, which frees it
+    print "take \{keep s: "k\{n}"}"
+
+    # owned: the parameter only borrows, so the temporary is freed here
+    print "borrow \{borrowIt s: "b\{n}"}"
+
+    # owned: a view parameter reads the temporary and keeps nothing
+    v: "v\{n}"
+    print "view \{viewIt s: v.stringView}"
+
+    words: List String
+    # moved: a consuming collection method takes the temporary in
+    words.append from: "w\{n}"
+    print "appended \{words.length}"
+
+    seen: Set String
+    seen.add item: "s\{n}"
+    # owned: a reading collection method borrows, so the temporary is freed
+    if (seen.has item: "s\{n}") then print "has"
+    if (seen.has item: "other\{n}") then print "unreachable"
+
+    counts: Map String V: String
+    counts.set key: "c\{n}" value: "one".string
+    got: counts.get key: "c\{n}"
+    if got.some then print "got \{got}"
+
+    # promoted: the result views the temporary, so it lives past the call
+    len: (headOfView s: "p\{n}").length
+    print "promoted \{len}"
+}
