@@ -32383,6 +32383,36 @@ recordControlPlaceLeaves: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nod
         }
         if place then st.typing.armLeafPlaces.add item: lf.u64
     }
+    parkOwnedArmLeaves :st :ast :leaves
+}
+
+# parkOwnedArmLeaves -- when ANY arm of a value `if` or `match` yields a place,
+# the whole value is a reference to that arm's storage, and an arm that yields a
+# value of its own has no storage to point at: it is parked in a temporary the
+# statement releases, and its address is what that arm answers. By D1 that
+# temporary is a variable of the checker's, so it is minted here -- beside the
+# fact that made the value a reference, which is the only place both are known.
+parkOwnedArmLeaves: function {st: zenv.ZSymbolTable ast: Ast leaves: (ListVal u32).view} is {
+    place: false
+    with pit: leaves.iterate do for lf: pit loop {
+        if (st.typing.armLeafPlaces.has item: lf.u64) then place = true
+    }
+    if place.not then return
+    with mit: leaves.iterate do for lf: mit loop {
+        if (st.typing.armLeafPlaces.has item: lf.u64).not when (st.typing.armLeafMoves.has
+            item: lf.u64
+        ).not then parkedArmTemp :st :ast :lf
+    }
+}
+
+# parkedArmTemp -- the temporary one such arm is parked in. It is the same rule
+# a value receiver's temporary follows -- a reftype value no name binds, held
+# while it is used -- so it is the same mint, idempotent per node and declining
+# a value its callee only lends.
+parkedArmTemp: function {st: zenv.ZSymbolTable ast: Ast lf: u32} is {
+    lt: walkTypeOf :st nid: lf.u64
+    if lt.isZero then return
+    ownedReceiverTemp :st :ast recvT: lt recvNid: lf.u64
 }
 
 # looseArm -- among untyped literal arms, the one whose type they take: a float

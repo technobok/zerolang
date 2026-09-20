@@ -1513,7 +1513,12 @@ perf: $(PERFBIN)
 # whether its value borrows: 0 behaviour, all of it the source. Ten arguments,
 # six locals that computed them, two parameters threaded for them, a record
 # field, and the two `ctorArgIsBorrow*` walks that nothing was left to call.
-ALLOC_BASELINE := 2610740
+#
+# +821 when the arms a REFERENCE control value parks came to be temporaries of
+# the checker's: 0 behaviour, all of it the source. A temporary bound in an
+# arm materialises the scope that brackets it, so the scope rows a compile
+# makes move with it.
+ALLOC_BASELINE := 2611561
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
