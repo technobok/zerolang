@@ -9823,6 +9823,25 @@ emitInterpStmtValue: function {
     }
 }
 
+# argHoistName -- what an argument hoist's temporary is CALLED. A value the
+# checker holds a temporary for is spelled by that temporary's variable, so the
+# name the emitter prints and the name the checker reasons about are one name
+# (D1); anything else still gets the emitter's own `_ahN`, which this is
+# steadily replacing. WHEN it dies is still the hoist list's business.
+argHoistName: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    argNid: u64
+} out String is {
+    if argNid > 0 then {
+        tv: symtab.typing.tempOf.get key: argNid
+        if tv.some then return (varCName :ctx vid: tv name: "")
+    }
+    hn: ctx.argHoistCtr
+    ctx.argHoistCtr = ctx.argHoistCtr + 1
+    return "_ah\{hn}"
+}
+
 # emitColInterpArg -- an interpolated-string collection-method argument hoisted to
 # an owned String temp via the argHoist mechanism (flushed at the statement). When
 # the method BORROWS the arg (consumes == false: has/delete/get), a scope-exit
@@ -9849,9 +9868,7 @@ emitColInterpArg: function {
         }
         sx = ex
     }
-    hn: ctx.argHoistCtr
-    ctx.argHoistCtr = ctx.argHoistCtr + 1
-    nmH: "_ah\{hn}"
+    nmH: argHoistName :symtab :ctx argNid: (zast.nodeIdOf :n).u64
     hdt: String
     if consumes.not when (hoistExprIsBorrowRooted :ast :symtab :ctx :n).not then {
         hdt = "    \{ctx.strC}_free(&\{nmH});\n"
@@ -9884,9 +9901,7 @@ emitInterpArgForParam: function {
     if sx.length == 0 then return "".string
     isTake: false
     if pid == ctx.strTid when (paramTakesArg :ast :symtab :fid :pname) then isTake = true
-    hn: ctx.argHoistCtr
-    ctx.argHoistCtr = ctx.argHoistCtr + 1
-    nmH: "_ah\{hn}"
+    nmH: argHoistName :symtab :ctx argNid: (zast.nodeIdOf :n).u64
     hdt: String
     if isTake.not then hdt = "    \{ctx.strC}_free(&\{nmH});\n"
     retx: String
