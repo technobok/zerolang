@@ -1461,7 +1461,11 @@ perf: $(PERFBIN)
 #
 # +351 when the dump came to list each hoisted argument's temporary: the
 # source.
-ALLOC_BASELINE := 2611096
+#
+# +1,223 when a temporary came to record the scope that binds it, so a hoist
+# can ask what the checker listed for that scope: +24 the behaviour -- one map
+# grown once per compile -- and the rest the source.
+ALLOC_BASELINE := 2612319
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

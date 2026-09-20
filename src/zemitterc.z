@@ -9850,11 +9850,36 @@ argHoistName: function {
     return "\{fallback}\{hn}"
 }
 
+# scopeOwnsTemp -- whether the temporary holding the value node `argNid` still
+# owns what it holds where it dies: what the checker listed for the scope that
+# binds the temporary (scopeTempDestroy), in the state that scope's end left it.
+# False when no temporary holds the value, when the temporary owns nothing -- a
+# hoist that only borrows -- and when the value moved out of it (D3). The scope
+# is the one `tempScopeOf` recorded as the temporary was bound, which is the key
+# its list is under.
+scopeOwnsTemp: function {symtab: zenv.ZSymbolTable.view argNid: u64} out bool is {
+    if argNid == 0 then return false
+    tv: symtab.typing.tempOf.get key: argNid
+    if tv.none then return false
+    so: symtab.typing.tempScopeOf.get key: tv.u64
+    if so.none then return false
+    rg: symtab.typing.scopeTempDestroy.get key: so
+    if rg.none then return false
+    k: u64
+    for k < rg.len.u64 loop {
+        it: symtab.typing.destroyItems.get i: rg.start.u64 + k
+        k = k + 1
+        if it.vid == tv then return it.state == 0
+    }
+    return false
+}
+
 # emitColInterpArg -- an interpolated-string collection-method argument hoisted to
-# an owned String temp via the argHoist mechanism (flushed at the statement). When
-# the method BORROWS the arg (consumes == false: has/delete/get), a scope-exit
-# free is registered; a consuming method (add/set) moves the temp in. "" when n is
-# not an interpolated string.
+# an owned String temp via the argHoist mechanism (flushed at the statement). The
+# free is registered when the CHECKER says the temporary still owns what it holds
+# where it dies: a consuming method (add/set) moves it in, and a hoist that only
+# borrows owns nothing, so neither leaves one to register. The hoist list still
+# says WHEN the free runs. "" when n is not an interpolated string.
 emitColInterpArg: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -9876,11 +9901,15 @@ emitColInterpArg: function {
         }
         sx = ex
     }
-    nmH: argHoistName :symtab :ctx argNid: (zast.nodeIdOf :n).u64 fallback: "_ah"
+    argNid: (zast.nodeIdOf :n).u64
+    nmH: argHoistName :symtab :ctx :argNid fallback: "_ah"
     hdt: String
-    if consumes.not when (hoistExprIsBorrowRooted :ast :symtab :ctx :n).not then {
-        hdt = "    \{ctx.strC}_free(&\{nmH});\n"
-    }
+    if (scopeOwnsTemp :symtab :argNid) then hdt = (hoistDestroyLine
+        :symtab
+        :ctx
+        tid: ctx.strTid
+        nm: nmH.stringView
+    )
     retx: nmH.copy
     ctx.argHoistVals.append sx
     ctx.argHoistTypes.append "\{ctx.strC}_t"
