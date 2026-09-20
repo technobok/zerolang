@@ -1556,7 +1556,10 @@ perf: $(PERFBIN)
 # +941 when a loop BODY became its own scope, separate from the header's:
 # +824 the behaviour -- one more scope per loop, and the compiler is full of
 # loops -- and 117 the source.
-ALLOC_BASELINE := 2613563
+#
+# +427 when a `for` INITIALISER became a variable of the checker's: 0
+# behaviour (the scope it needed was the commit before), all of it the source.
+ALLOC_BASELINE := 2613990
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

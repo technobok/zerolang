@@ -31359,7 +31359,29 @@ bindForIteration: function {
             )
         }
     } else {
-        st.define nameId: cond.name ztypeId: vt
+        # A NAMED CONDITION THAT IS NOT AN ITERATION IS AN INITIALISER: it
+        # declares a local, run once before the loop and read at every test,
+        # and what it binds it OWNS unless the value is lent. Binding it with
+        # no VARIABLE left it outside every destroy list -- `scopeDestroy`
+        # cannot name what has no vid -- so the emitter's own registration was
+        # the only thing freeing it, and no rule that reads a variable could
+        # reach it. It lands in the loop's HEADER scope, which is why that had
+        # to be separated from the body's first.
+        iown: ztypes.zownership.owned
+        if (typeIsReftype :st tid: vt) when (
+            (isViewFamilyTid :ast :st tid: vt) or
+            (valueIsLent
+                :st
+                :ast
+                nid: cond.operation
+            )
+        ) then iown = ztypes.zownership.borrowed
+        ivid: st.reg.newVariable ztypeId: vt ownership: iown
+        st.reg.setVariableOrigin id: ivid origin: ztypes.zvarorigin.local
+        st.defineVar nameId: cond.name vid: ivid
+        # keyed by the VALUE node, which is what `emitForCond` asks `defVid`
+        # with: a for header has no assignment row for the binding to hang on
+        st.typing.setDefVariable nid: cond.operation.u64 vid: ivid
     }
     if spillFor when fe.elem > 0 then mintForSpillFields :st :ast :cond :fe :vt :facId
 }
@@ -31681,7 +31703,6 @@ checkFor: function {
     entryStart: st.entryMark
     forMarker: st.pushBlock node: fornode.nid
     st.openLoopRun :entryStart
-    st.openBreakScope
     endLoopWriteNarrowing :st :ast :fornode
     bk: st.reg.ctlPlaceholder
     (st.define
@@ -31729,6 +31750,10 @@ checkFor: function {
     # loop, which frees it and then iterates again over freed storage.
     # `popTo marker: forMarker` below pops this with it.
     st.pushBlock node: fornode.body
+    # A `break` LEAVES THE BODY, NOT THE HEADER. It jumps to a label that sits
+    # inside the header's C extent -- the header's destroys are emitted after
+    # it -- so listing the header's locals at the break frees them twice.
+    st.openBreakScope
     walkBodyAt :st :unitDecl :ast bodyId: fornode.body
     elemT: ztypes.tid
     # a body whose last statement DIVERGES -- a bare `return`, a return call,

@@ -20429,6 +20429,11 @@ emitForStmt: function {
     stepped: condsNeedSteps :ast :symtab :ctx :suspends conds: n.conditions
     # a named condition is an initialiser, run once before the loop: emitted
     # ahead of the loop's mark, so a `break` does not free what it hoisted
+    # the HEADER's scope owns what its initialisers register, so the marks are
+    # taken before them: closed after the loop, those rows are the header
+    # scope's to emit and to pop, not the enclosing block's
+    fLh: tmp.frees.length
+    lLh: tmp.listFrees.length
     emitForNamedInits :ast :symtab :ctx :n :ind :tmp :buf
     lidW: pushLoopLabel :ctx :tmp isDo: false
     ind2: "\{ind}    "
@@ -20459,10 +20464,20 @@ emitForStmt: function {
     lwc: "\{ind}}\n"
     buf.append lwc
     popLoopLabel :ctx id: lidW :ind :buf
-    # the HEADER's scope ends where the loop does, after the break label: what
-    # a named condition bound was declared once, ahead of the loop, and a
-    # `break` has to reach its destroy as much as falling out does
-    emitScopeDestroy :symtab :ctx :tmp node: n.nodeid.u64 :ind :buf
+    # the HEADER's scope ends where the loop does, AFTER the break label: both
+    # the path that falls out and the path that jumps reach it there, and a
+    # `break` no longer lists the header's locals of its own (it leaves the
+    # BODY's scope), so each is destroyed exactly once.
+    (closeScopeBlock
+        :symtab
+        :ctx
+        :tmp
+        fL: fLh
+        lL: lLh
+        diverged: false
+        node: n.nodeid.u64
+        :buf
+    )
     ctx.condDepth = ctx.condDepth - 1
 }
 
