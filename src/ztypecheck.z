@@ -33570,9 +33570,15 @@ pinsAllShared: function {pins: (List ztyping.PinPath).view} out bool is {
     return true
 }
 
-# pinsWithoutMethodLeaves -- move `src` into `dst` dropping every pin whose
-# path LEAF is a method: such a path describes a CALL, and a call's result
-# ownership is its signature's business (`.copy` hands back a fresh value).
+# pinsWithoutMethodLeaves -- move `src` into `dst` dropping the pins whose path
+# LEAF is a method whose result is FRESH: such a path describes a CALL, and a
+# call's result ownership is its signature's business, so `.copy` hands back a
+# value the temporary owns and locking its source would freeze it for nothing.
+# The other half of that rule is why the leaf's id is asked for rather than a
+# bare "is it a method": a method that LENDS what it answers -- an element get,
+# an `outx` or a declared borrow return -- hands back a view INTO the source,
+# and the pin it left is the whole record of that. Dropping those made a
+# borrowed element's temporary claim it owned the element.
 pinsWithoutMethodLeaves: function {
     st: zenv.ZSymbolTable.view
     src: List ztyping.PinPath
@@ -33582,7 +33588,8 @@ pinsWithoutMethodLeaves: function {
     for src.length > 0 loop rev.append src.pop
     for rev.length > 0 loop {
         p: rev.pop
-        if (pathLeafIsMethod :st path: p.path).not then dst.append p
+        mid: pathLeafMethodId :st path: p.path
+        if mid.isZero or (resultPins :st funcId: mid) then dst.append p
     }
 }
 
