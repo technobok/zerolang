@@ -33806,9 +33806,20 @@ valueReceiverPins: function {
     # receives the pins a borrowed receiver left
     pins: List ztyping.PinPath
 } is {
-    if (resultPins :st :funcId).not then return
     if path.length > 0 when (st.lookupVarId nameId: (path.get i: 0)).none.not then return
     if (receiverIsValue :st :ast nid: recvNid).not then return
+    if (resultPins :st :funcId).not then {
+        # nothing keeps the receiver locked, but it is still a value that owns
+        # its storage; a receiver whose own walk left pins owns nothing and
+        # hands those on instead.
+        if st.typing.pendingPins.length == 0 then (ownedReceiverTemp
+            :st
+            :ast
+            :recvT
+            recvNid: recvNid.u64
+        )
+        return
+    }
     for path.length > 0 loop path.pop
     if st.typing.pendingPins.length > 0 then {
         takePendingPins :st dst: pins
@@ -33836,20 +33847,49 @@ unnamedReceiverLocal: function {
 } is {
     if recvT.isZero then return
     if (isViewFamilyTid :ast :st tid: recvT) then return
+    tnId: mintReceiverTemp :st :ast :recvT :recvNid
+    if tnId.isZero then return
+    st.typing.lineUnnamedLocals.append tnId
+    st.typing.unnamedLocalOfNode.set key: recvNid value: tnId.u64
+    dst.append tnId
+}
+
+# mintReceiverTemp -- the temporary a receiver that is a VALUE is held in: its
+# own variable, owned, defined in the enclosing scope. A view value (a
+# StringView, a ListView) points at storage it does not own and gets none, and
+# answers a zero name. `tempOf` records the VARIABLE, which is what the emitter
+# spells: a name resolves only while its scope is open, and emission runs after
+# every scope has popped.
+mintReceiverTemp: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    recvT: ztypes.tid
+    recvNid: u64
+} out zast.nameid is {
+    if recvT.isZero then return zast.nameid
+    if (isViewFamilyTid :ast :st tid: recvT) then return zast.nameid
     tn: st.typing.nextTempId
     st.typing.nextTempId = tn + 1
     tname: "_t\{tn}"
     vid: st.reg.newVariable ztypeId: recvT ownership: ztypes.zownership.owned
     tnId: zast.poolSet pool: ast.names text: tname.stringView
     st.defineTemp nameId: tnId :vid
-    st.typing.lineUnnamedLocals.append tnId
-    st.typing.unnamedLocalOfNode.set key: recvNid value: tnId.u64
-    # the same record a hoisted argument's temporary gets: the VARIABLE the
-    # value at this node is held in, which the emitter spells. The name id
-    # above cannot serve -- a name resolves only while its scope is open, and
-    # the emitter runs after every scope has popped.
     if st.recording then st.typing.tempOf.set key: recvNid value: vid
-    dst.append tnId
+    return tnId
+}
+
+# ownedReceiverTemp -- a receiver that is a value and owns its storage is held
+# by a temporary of the checker's WHETHER OR NOT the call's result keeps it
+# locked. The emitter hoists and frees it either way, so D1 says the value it
+# frees is a variable of the checker's. It joins no pin list: nothing holds it
+# past the call, and no name binds it.
+ownedReceiverTemp: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    recvT: ztypes.tid
+    recvNid: u64
+} is {
+    mintReceiverTemp :st :ast :recvT :recvNid
 }
 
 # adoptPinnedArgTemps -- the argument temps a pinning call's result keeps locked
