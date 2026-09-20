@@ -9672,7 +9672,7 @@ emitInterpArgExpr: function {
                 hoistFloor: hf
                 hoistRawFloor: hr
             )
-            r: "({ \{lbuf}_s\{sM}; })"
+            r: "({ \{lbuf}\{sM}; })"
             return r
         }
         return "".string
@@ -9696,11 +9696,11 @@ emitInterpArgExpr: function {
 
 # emitInterpStmtValue -- like emitInterpArgExpr, but emits the interp build chain
 # as PRIOR statements into buf (so a referenced local is read at THIS point) and
-# returns the owned-String temp name "_sN"; "" otherwise. Used where the build
+# returns the owned-String temp's name; "" otherwise. Used where the build
 # must precede the statement -- a reassignment drop-old, so `s = "\{s}x"` reads
 # old s before the old value is freed (as emitStringBindValue does).
-# emitInterpBuild does NOT register _sN for free, so the
-# assignment `nm2 = _sN` moves the storage into the lvalue with no double-free.
+# emitInterpBuild does NOT register that buffer for free, so the assignment
+# `nm2 = <buffer>` moves the storage into the lvalue with no double-free.
 emitInterpStmtValue: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -9714,8 +9714,17 @@ emitInterpStmtValue: function {
         n
     ) case atomstring then {
         if (isInterp :ast parts: n.stringparts) then {
-            sB: emitInterpBuild :ast :symtab :ctx parts: n.stringparts :ind :tmp :buf
-            return "_s\{sB}"
+            sB: (emitInterpBuild
+                :ast
+                :symtab
+                :ctx
+                parts: n.stringparts
+                :ind
+                :tmp
+                :buf
+                strNid: n.nodeid.u64
+            )
+            return sB
         }
         return "".string
     } case dottedpath then {
@@ -17481,16 +17490,21 @@ emitInterpPrint: function {
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
+    # the interpolated literal's own node, 0 when unknown here
+    strNid: 0.u64
 } is {
-    sN: emitInterpBuild :ast :symtab :ctx :parts :ind :tmp :buf
-    l1: "\{ind}\{ctx.strC}_print(&_s\{sN});\n"
+    sNm: emitInterpBuild :ast :symtab :ctx :parts :ind :tmp :buf :strNid
+    l1: "\{ind}\{ctx.strC}_print(&\{sNm});\n"
     buf.append l1
-    l2: "\{ind}\{ctx.strC}_free(&_s\{sN});\n"
+    l2: "\{ind}\{ctx.strC}_free(&\{sNm});\n"
     buf.append l2
 }
 
 # emitInterpBuild -- the create/append chain for an interpolated literal;
-# returns the _sN temp index (caller prints/frees or binds it).
+# answers the buffer's C NAME, which the caller prints, frees or binds. The
+# name is the checker's temporary for the literal (`tempOf` keyed by the
+# atomstring node), so the string the emitter assembles and the value the
+# checker reasons about are one variable (D1).
 emitInterpBuild: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -17499,9 +17513,14 @@ emitInterpBuild: function {
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
+    # the interpolated literal's own node when the buffer IS the value the
+    # checker holds a temporary for -- a print's argument. 0 when the buffer is
+    # an inner detail: a statement expression assigns it to a hoist outside the
+    # block, and that hoist is what carries the checker's name
+    strNid: 0.u64
     hoistFloor: 0.u64
     hoistRawFloor: 0.u64
-} out u64 is {
+} out String is {
     est: u64
     h5x9: u64
     for h5x9 < parts.count.u64 loop {
@@ -17516,8 +17535,10 @@ emitInterpBuild: function {
         }
         if isC.not then est = est + 16
     }
-    sN: tmpNext :ctx :tmp
-    l0: "\{ind}\{ctx.strC}_t _s\{sN} = \{ctx.strC}_create((uint64_t)\{est});\n"
+    # `_s<n>` is this buffer's own prefix and nothing else mints one now, but it
+    # numbers from `ctx.argHoistCtr` here rather than from the TmpCtr
+    sNm: argHoistName :symtab :ctx argNid: strNid fallback: "_s"
+    l0: "\{ind}\{ctx.strC}_t \{sNm} = \{ctx.strC}_create((uint64_t)\{est});\n"
     buf.append l0
     h6x9: u64
     for h6x9 < parts.count.u64 loop {
@@ -17528,7 +17549,7 @@ emitInterpBuild: function {
             :symtab
             :ctx
             n: (ast.nodes.get i: qId.u64)
-            :sN
+            sNm: sNm.stringView
             :ind
             :tmp
             :buf
@@ -17536,7 +17557,7 @@ emitInterpBuild: function {
             :hoistRawFloor
         )
     }
-    return sN
+    return sNm
 }
 
 # the printf format specifier for a numeric type.
@@ -17735,8 +17756,8 @@ interpPartTypeName: function {
 # buffer declaration with its formatting statement, then the append.
 appendFormattedNum: function {
     ctx: Ctx
-    # the string being built and the temp counter value for the buffer
-    sN: u64
+    # the string being built, and the temp counter value for the scalar buffer
+    sNm: StringView
     bN: u64
     # the C declaration of the buffer and of `_b<N>_n`, its formatted length
     stmt: String
@@ -17744,7 +17765,7 @@ appendFormattedNum: function {
     buf: String.borrow
 } is {
     buf.append "\{ind}\{stmt};\n"
-    buf.append "\{ind}\{ctx.strC}_append(&_s\{sN}, _b\{bN}, (uint64_t)_b\{bN}_n);\n"
+    buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, _b\{bN}, (uint64_t)_b\{bN}_n);\n"
 }
 
 # appendViewPart -- append a StringView-typed part, a by-value operand (a
@@ -17755,7 +17776,7 @@ appendViewPart: function {
     ctx: Ctx
     # the part's C text
     val: StringView
-    sN: u64
+    sNm: StringView
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -17763,10 +17784,10 @@ appendViewPart: function {
     if (singleReadNeedsTemp s: val) then {
         svh: tmpNext :ctx :tmp
         buf.append "\{ind}\{ctx.svC}_t _h\{svh} = \{val};\n"
-        buf.append "\{ind}\{ctx.strC}_append(&_s\{sN}, _h\{svh}.data, _h\{svh}.size);\n"
+        buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, _h\{svh}.data, _h\{svh}.size);\n"
         return
     }
-    buf.append "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}.data, \{val}.size);\n"
+    buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, \{val}.data, \{val}.size);\n"
 }
 
 # appendStringPart -- append a String-typed part. An atom (a borrowed String
@@ -17783,7 +17804,7 @@ appendStringPart: function {
     n: astnode.view
     # the part's C text
     val: StringView
-    sN: u64
+    sNm: StringView
     ind: StringView
     buf: String.borrow
 } is {
@@ -17804,14 +17825,14 @@ appendStringPart: function {
         # a String read through a borrowed field is a pointer with no variable
         # behind it
         if an0.length == 0 when (pathIsPointer :ast :symtab :ctx :n) then sAcc = "->".string
-        buf.append "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}\{sAcc}data, \{val}\{sAcc}size);\n"
+        buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, \{val}\{sAcc}data, \{val}\{sAcc}size);\n"
         return
     }
     # a fallback here may NOT be spelled `_h<n>`: that prefix is the TmpCtr's,
     # and this name comes from `ctx.argHoistCtr`, so two counters would collide
     hNm: argHoistName :symtab :ctx argNid: (interpPartNodeId :n) fallback: "_hp"
     buf.append "\{ind}\{ctx.strC}_t \{hNm} = \{val};\n"
-    buf.append "\{ind}\{ctx.strC}_append(&_s\{sN}, \{hNm}.data, \{hNm}.size);\n"
+    buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, \{hNm}.data, \{hNm}.size);\n"
     if (scopeOwnsTemp :symtab argNid: (interpPartNodeId :n)) then {
         buf.append "\{ind}\{ctx.strC}_free(&\{hNm});\n"
     }
@@ -17825,7 +17846,7 @@ emitInterpPart: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: astnode.view
-    sN: u64
+    sNm: StringView
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -17833,7 +17854,7 @@ emitInterpPart: function {
     if n.stringchunk then {
         tv: (zast.poolTextAt pool: ast.names ref: n.text).stringView
         esc: cEscape text: tv
-        buf.append "\{ind}\{ctx.strC}_append(&_s\{sN}, \"\{esc}\", sizeof(\"\{esc}\")-1);\n"
+        buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, \"\{esc}\", sizeof(\"\{esc}\")-1);\n"
         return
     }
     tn: interpPartTypeName :ast :symtab :ctx :n
@@ -17848,7 +17869,7 @@ emitInterpPart: function {
         needsAddM :ctx uname: "prelude" memb: "fmt_128"
         (appendFormattedNum
             :ctx
-            :sN
+            :sNm
             :bN
             stmt: "char _b\{bN}[48]; int _b\{bN}_n = z_fmt_i128(_b\{bN}, (__int128)\{val})"
             :ind
@@ -17858,7 +17879,7 @@ emitInterpPart: function {
         needsAddM :ctx uname: "prelude" memb: "fmt_128"
         (appendFormattedNum
             :ctx
-            :sN
+            :sNm
             :bN
             stmt: "char _b\{bN}[48]; int _b\{bN}_n = z_fmt_u128(_b\{bN}, (unsigned __int128)\{val})"
             :ind
@@ -17878,7 +17899,7 @@ emitInterpPart: function {
         }
         (appendFormattedNum
             :ctx
-            :sN
+            :sNm
             :bN
             stmt: "char _b\{bN}[32]; int _b\{bN}_n = snprintf(_b\{bN}, 32, \"\{conv}\", \{cast}\{val})"
             :ind
@@ -17887,7 +17908,7 @@ emitInterpPart: function {
     } else if tns == "f128" then {
         (appendFormattedNum
             :ctx
-            :sN
+            :sNm
             :bN
             stmt: "char _b\{bN}[64]; int _b\{bN}_n = quadmath_snprintf(_b\{bN}, 64, \"%Qg\", \{val})"
             :ind
@@ -17896,22 +17917,22 @@ emitInterpPart: function {
     } else if (isFloatName name: tns) then {
         (appendFormattedNum
             :ctx
-            :sN
+            :sNm
             :bN
             stmt: "char _b\{bN}[64]; int _b\{bN}_n = snprintf(_b\{bN}, 64, \"%g\", (double)\{val})"
             :ind
             :buf
         )
     } else if tns == "StringView" then {
-        appendViewPart :ctx val: val.stringView :sN :ind :tmp :buf
+        appendViewPart :ctx val: val.stringView :sNm :ind :tmp :buf
     } else if tns == "String" then {
-        appendStringPart :ast :symtab :ctx :n val: val.stringView :sN :ind :buf
+        appendStringPart :ast :symtab :ctx :n val: val.stringView :sNm :ind :buf
     } else if (originIsTid
         :symtab
         tid: (stampIdOf :symtab nid: (interpPartNodeId :n))
         originTid: (ctx.origins.get i: ogStr)
     ) then {
-        buf.append "\{ind}\{ctx.strC}_append(&_s\{sN}, \{val}.data, \{val}.len);\n"
+        buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, \{val}.data, \{val}.len);\n"
     } else {
         emitFail :ctx what: "unhandled interp part type \{tn}" line: (ztypecheck.nodeLine :n)
         buf.append "\{ind}/* zemitterc: unhandled interp part type \{tn} */\n"
@@ -18173,7 +18194,16 @@ emitPrintStringLiteral: function {
     buf: String.borrow
 } is {
     if (isInterp :ast parts: n.stringparts) then {
-        emitInterpPrint :ast :symtab :ctx parts: n.stringparts :ind :tmp :buf
+        (emitInterpPrint
+            :ast
+            :symtab
+            :ctx
+            parts: n.stringparts
+            :ind
+            :tmp
+            :buf
+            strNid: n.nodeid.u64
+        )
         return
     }
     li: litIndexOf :ctx nid: n.nodeid.u64
@@ -18563,8 +18593,17 @@ emitStringBindValue: function {
         n
     ) case atomstring then {
         if (isInterp :ast parts: n.stringparts) then {
-            sB: emitInterpBuild :ast :symtab :ctx parts: n.stringparts :ind :tmp :buf
-            lst: "\{ind}\{ctx.strC}_t \{nm} = _s\{sB};\n"
+            sB: (emitInterpBuild
+                :ast
+                :symtab
+                :ctx
+                parts: n.stringparts
+                :ind
+                :tmp
+                :buf
+                strNid: n.nodeid.u64
+            )
+            lst: "\{ind}\{ctx.strC}_t \{nm} = \{sB};\n"
             buf.append lst
             tmp.oweFree name: nm.string vid: nmVid
             return true
@@ -18694,10 +18733,18 @@ emitStringReturnValue: function {
         n
     ) case atomstring then {
         if (isInterp :ast parts: n.stringparts) then {
-            sB: emitInterpBuild :ast :symtab :ctx parts: n.stringparts :ind :tmp :buf
-            rexp: "_s\{sB}"
-            emitReturnCleanup :symtab :ctx :tmp retExpr: rexp.stringView keepRefd: true :ind :buf
-            lst: "\{ind}return _s\{sB};\n"
+            sB: (emitInterpBuild
+                :ast
+                :symtab
+                :ctx
+                parts: n.stringparts
+                :ind
+                :tmp
+                :buf
+                strNid: n.nodeid.u64
+            )
+            emitReturnCleanup :symtab :ctx :tmp retExpr: sB.stringView keepRefd: true :ind :buf
+            lst: "\{ind}return \{sB};\n"
             buf.append lst
             return true
         } else {

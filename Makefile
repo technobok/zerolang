@@ -1536,7 +1536,13 @@ perf: $(PERFBIN)
 # went with `dottedCalleeFid`, its last reader: 0 behaviour, all of it the
 # source. The emitter no longer reads ownership off an expression's shape
 # anywhere.
-ALLOC_BASELINE := 2611236
+#
+# +1,324 when the interpolation BUFFER took the checker's name: +1,239 the
+# behaviour and 85 the source. The behaviour is one String per interpolated
+# literal -- the name, which the old spelling never materialised because it
+# built `_s<n>` inline at each use from a counter it threaded. D1 asks for the
+# name, and the name costs a String.
+ALLOC_BASELINE := 2612560
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
