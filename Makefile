@@ -1491,7 +1491,11 @@ perf: $(PERFBIN)
 #
 # +7 when a scope the walk cannot fall out of still answered for its
 # temporaries: 0 behaviour, all of it the source.
-ALLOC_BASELINE := 2612464
+#
+# -162 when the lvalue hoist stopped taking a caller's reading of whether it
+# owns: 0 behaviour, all of it the source (a parameter, its one argument and
+# the predicate call that built it).
+ALLOC_BASELINE := 2612302
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1705,7 +1709,7 @@ lifetime-guard:
 	chk "isNonLvalueArg" "$$l3" 29; \
 	chk "bindingRhsIsBorrow" "$$l4" 14; \
 	chk "'_ah{' argument hoists" "$$l5" 2; \
-	chk "hoistExprIsBorrowRooted" "$$l6" 15; \
+	chk "hoistExprIsBorrowRooted" "$$l6" 14; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  The emitter decided a lifetime on its own again. Read the checker's destroy"; \
 	  echo "  lists (scopeDestroy, exitDestroy) and the variable's recorded state instead."; \
