@@ -1542,7 +1542,10 @@ perf: $(PERFBIN)
 # literal -- the name, which the old spelling never materialised because it
 # built `_s<n>` inline at each use from a counter it threaded. D1 asks for the
 # name, and the name costs a String.
-ALLOC_BASELINE := 2612560
+#
+# +40 when that buffer's free became the checker's: 0 behaviour, all of it the
+# source.
+ALLOC_BASELINE := 2612600
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
