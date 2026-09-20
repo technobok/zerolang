@@ -1521,7 +1521,10 @@ perf: $(PERFBIN)
 #
 # -43 when the parked arm took that temporary's name: 0 behaviour, all of it
 # the source.
-ALLOC_BASELINE := 2611518
+#
+# +55 when its destroy became the checker's too: 0 behaviour, all of it the
+# source. No leg composes a destructor of its own any more.
+ALLOC_BASELINE := 2611573
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
