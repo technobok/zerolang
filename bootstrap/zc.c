@@ -65703,7 +65703,7 @@ z_t57_t z_t4918(const z_t3025_t* z_v32094, uint64_t z_v32095, z_t85_t z_v32096) 
         if (z_t6882(&z_v32095)) {
             return z_v32102;
         }
-        if (z_t1974_has(&z_v32094->rnBareVids, z_v32095)) {
+        if ((z_v32102.size > 0ULL) && z_t1974_has(&z_v32094->rnBareVids, z_v32095)) {
             return z_v32102;
         }
         z_t57_t _s0 = z_t57_create((uint64_t)17);
