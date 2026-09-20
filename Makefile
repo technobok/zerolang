@@ -1668,7 +1668,7 @@ lifetime-guard:
 	chk "refsLocal" "$$l2" 4; \
 	chk "isNonLvalueArg" "$$l3" 29; \
 	chk "bindingRhsIsBorrow" "$$l4" 14; \
-	chk "'_ah{' argument hoists" "$$l5" 9; \
+	chk "'_ah{' argument hoists" "$$l5" 7; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  The emitter decided a lifetime on its own again. Read the checker's destroy"; \
 	  echo "  lists (scopeDestroy, exitDestroy) and the variable's recorded state instead."; \
