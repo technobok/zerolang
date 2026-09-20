@@ -33654,6 +33654,33 @@ resultPins: function {st: zenv.ZSymbolTable.view funcId: ztypes.tid} out bool is
     return ((st.typing.funcReturnsBorrow.get key: funcId).or d: false)
 }
 
+# ownedValueReceiver -- a receiver that owns what it holds and that no name
+# binds is a temporary of the checker's EVEN WHEN the call's result keeps
+# nothing: the emitter hoists it so the call runs once, and frees it, so D1
+# says the value it frees is a variable of the checker's. A receiver rooted in
+# a variable names its storage already, unless the path ends in a fresh value
+# (`grid.pop.length`), which nothing names either.
+ownedValueReceiver: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    call: callref
+} is {
+    rpn: dottedParentNodeId :ast n: (ast.nodes.get i: call.callable.u64)
+    if rpn.isZero then return
+    if (receiverIsValue :st :ast nid: rpn).not then return
+    if (receiverRootIsVar :st :ast :call) when (receiverIsFreshValue
+        :st
+        :ast
+        nid: rpn
+    ).not then return
+    (ownedReceiverTemp
+        :st
+        :ast
+        recvT: (ztypes.tid.create from: (walkTypeOf :st nid: rpn.u64))
+        recvNid: rpn.u64
+    )
+}
+
 # captureValueReceiver -- a call on a receiver that is a value rather than a
 # variable: the receiver is evaluated before the arguments, so the pins its own
 # borrowed result left are taken now, before the argument walk. They are the
@@ -33663,14 +33690,17 @@ resultPins: function {st: zenv.ZSymbolTable.view funcId: ztypes.tid} out bool is
 # keep; zero otherwise.
 captureValueReceiver: function {
     st: zenv.ZSymbolTable
-    ast: Ast.view
+    ast: Ast
     call: callref
     funcId: ztypes.tid
     # receives the pins a borrowed receiver left
     pins: List ztyping.PinPath
 } out ztypes.tid is {
     if (resultPins :st :funcId).not then {
-        if st.typing.pendingPins.length == 0 then return ztypes.tid
+        if st.typing.pendingPins.length == 0 then {
+            ownedValueReceiver :st :ast :call
+            return ztypes.tid
+        }
         rpv: dottedParentNodeId :ast n: (ast.nodes.get i: call.callable.u64)
         if rpv.isZero or (receiverIsValue :st :ast nid: rpv).not then return ztypes.tid
         # the result keeps nothing, so the flags that describe what it would
@@ -33889,6 +33919,10 @@ ownedReceiverTemp: function {
     recvT: ztypes.tid
     recvNid: u64
 } is {
+    # only a REFTYPE receiver holds storage a temporary has to own: a valtype
+    # is self-contained (it may hold no reftype, spec.pdoc), so the emitter
+    # never hoists one to free it, and a temporary for it would name nothing.
+    if (typeIsReftype :st tid: recvT).not then return
     mintReceiverTemp :st :ast :recvT :recvNid
 }
 
@@ -38675,6 +38709,9 @@ checkGenericFnCall: function {
     midG: genericCallInstance :st :ast :call
     checkGenericCallMissingArgs :ast :st :call mid: midG recvImplicit: true
     rroG: methodReceiverRootId :ast n: callableNode
+    # a generic method's receiver owns what it holds exactly as a concrete
+    # method's does; the concrete leg reaches this through captureValueReceiver
+    ownedValueReceiver :st :ast :call
     lockMethodReceiver :st :ast :call :dro rroId: rroG
     st.popTo marker: mcmG
     pinGenericCallResult :st mid: midG pins: pinsG
