@@ -28860,16 +28860,6 @@ armValueLeaves: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid into: 
     }
 }
 
-# armLocalLeaves -- the arm values that are bare names: what a destination that
-# takes the value moves.
-armLocalLeaves: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid into: ListVal u32} is {
-    all: ListVal u32
-    armValueLeaves :st :ast :nid into: all
-    with ait: all.iterate do for lf: ait loop {
-        if (bareAtomNameId n: (ast.nodes.get i: lf.u64)).isZero.not then into.append from: lf
-    }
-}
-
 # armBorrowedLeaves -- the arm values read out of storage something else owns: a
 # field read through names rooted in a local, or a value a call hands back pinned
 # to its source. A destination that owns what it holds refuses them, one by one.
@@ -40509,9 +40499,6 @@ lockGenericValueArg: function {
     pnId: zast.nameid
     arg: argref
     vt: ztypes.tid
-    # the pending pins before this argument was walked: those past it are the
-    # ones its own walk left
-    pinMark: u64
     # the locks the call's result may keep
     pins: List ztyping.PinPath
 } is {
@@ -40532,8 +40519,9 @@ lockGenericValueArg: function {
     # StringView is a native CLASS, so it passes `typeIsReftype`, and a
     # temporary that owned one would own a view over static program memory.
     #
-    # `pinMark` is not consulted: `hoistArg` takes the whole pin channel, and
-    # the temp installs only the paths rooted in THIS argument.
+    # What the channel held BEFORE this argument is not consulted: `hoistArg`
+    # takes the whole pin channel, and the temp installs only the paths rooted
+    # in THIS argument.
     (hoistAndLockArg
         :st
         :ast
@@ -40605,7 +40593,6 @@ inferGenericCallSubs: function {
             if argNumeric.not then bindExplicitTypeArg :st :unitDecl :ast :arg :subs
             continue
         }
-        pinMark: st.typing.pendingPins.length
         errG: st.typing.errors.length
         avt: checkValueAt :st :unitDecl :ast nid: arg.operation
         # a value that did not type is reported HERE, as the concrete
@@ -40641,7 +40628,6 @@ inferGenericCallSubs: function {
                 pnId: (pNames.get i: hs.slot)
                 :arg
                 vt: avt
-                :pinMark
                 :pins
             )
             (bindValueArg
@@ -43334,7 +43320,7 @@ doStatementOf: function {n: astnode.view} out zast.nodeid is {
 # (discardTemp, D4). A read of a local or a field holds nothing of its own.
 recordDiscard: function {st: zenv.ZSymbolTable ast: Ast innerId: zast.nodeid} is {
     if innerId.isZero then return
-    if (freshResultNode :st :ast nid: innerId.u64).not then return
+    if (freshResultNode :st nid: innerId.u64).not then return
     vt: walkTypeOf :st nid: innerId.u64
     if vt.isZero then return
     tid: ztypes.tid.create from: vt.u64
@@ -43353,7 +43339,7 @@ recordDiscard: function {st: zenv.ZSymbolTable ast: Ast innerId: zast.nodeid} is
 # freshResultNode -- the node computes a value of its own: a call of a function
 # or a construction -- not `return` and its kin, a borrowing wrapper or a
 # function reference -- or a function or method named without an argument list.
-freshResultNode: function {st: zenv.ZSymbolTable.view ast: Ast.view nid: u64} out bool is {
+freshResultNode: function {st: zenv.ZSymbolTable.view nid: u64} out bool is {
     if (st.typing.autoCallNodes.has item: nid) then return true
     ck: st.typing.callKind.get key: nid
     match (
