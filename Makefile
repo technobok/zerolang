@@ -1528,7 +1528,10 @@ perf: $(PERFBIN)
 # +209 when an interpolation PART no name binds became a temporary: +99 the
 # behaviour -- the compiler's own source is full of them, and each mints a
 # variable and materialises the scope bracketing it -- and 110 the source.
-ALLOC_BASELINE := 2611782
+#
+# +54 when the part's buffer took that temporary's name: +34 the behaviour (a
+# name built from a vid rather than a counter) and 20 the source.
+ALLOC_BASELINE := 2611836
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
