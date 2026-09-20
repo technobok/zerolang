@@ -7583,7 +7583,6 @@ orderMethodParam: function {
                 :ctx
                 av: recvExpr
                 pid: (ztypes.tid.create from: pid)
-                isBorrow: false
             )
         }
     } else if written == 0 when (symtab.typing.declHasDefaultId parentTypeId: mco nameId: pname
@@ -11140,7 +11139,6 @@ orderRecordField: function {
             :ctx
             av: av.stringView
             pid: (ztypes.tid.create from: ffid.u64)
-            isBorrow: true
         )
     }
     constant: true
@@ -12101,7 +12099,6 @@ metaCreateFieldText: function {
                 :ctx
                 av: av.stringView
                 pid: (ztypes.tid.create from: ffidL.u64)
-                isBorrow: true
             )
             av = avM
         }
@@ -12147,14 +12144,15 @@ metaCreateFieldText: function {
 
 # emitByrefArg -- an argument passed BY REFERENCE. A non-lvalue has no address
 # to take, so it is hoisted into a numbered `_ah` temp of the parameter's own C
-# type and the temp's address goes to the call instead.
+# type and the temp's address goes to the call instead. Whether that temp is
+# freed is the CHECKER's answer about it (scopeOwnsTemp), not a bool each caller
+# worked out from the shape of what it was passing.
 emitByrefArg: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     av: StringView
     pid: ztypes.tid
-    isBorrow: bool
     # the argument passed by reference, 0 when unknown here
     argNid: 0.u64
 } out String is {
@@ -12175,7 +12173,12 @@ emitByrefArg: function {
         if hrr > 0 then hrid = ztypes.tid.create from: hrr.u64
     }
     hdt: String
-    if isBorrow.not then hdt = hoistDestroyLine :symtab :ctx tid: hrid nm: nmH.stringView
+    if (scopeOwnsTemp :symtab :argNid) then hdt = (hoistDestroyLine
+        :symtab
+        :ctx
+        tid: hrid
+        nm: nmH.stringView
+    )
     avc: av.string
     r: "&\{nmH}"
     ctx.argHoistVals.append avc
@@ -12954,7 +12957,6 @@ orderFnptrArg: function {
         :ctx
         av: av.stringView
         pid: (ztypes.tid.create from: pid)
-        isBorrow: true
         argNid: (zast.nodeIdOf n: op).u64
     )
     constant: orderConstant :ast :symtab :ctx n: op text: av.stringView byPtr: addr
@@ -13197,7 +13199,6 @@ userFnArgText: function {
             :ctx
             av: atomVarId.stringView
             pid: (ztypes.tid.create from: pinId.u64)
-            isBorrow: isBorrowed
             argNid: (zast.nodeIdOf n: argOpNode).u64
         )
     }
@@ -14627,7 +14628,7 @@ emitNestedMonoMethodBase: function {
             } else if (isNonLvalueArg s: baseAtom) then {
                 # a call's result is read through ONE hoisted temporary: the
                 # slot and the receiver it is handed are the same value
-                nfrcv = emitByrefArg :ast :symtab :ctx av: baseAtom pid: nlid isBorrow: false
+                nfrcv = emitByrefArg :ast :symtab :ctx av: baseAtom pid: nlid
                 nfbase = "(\{nfrcv})"
                 nfacc = "->".string
             }
@@ -14693,7 +14694,6 @@ emitNestedMonoMethodBase: function {
                                 :ctx
                                 av: baseAtom
                                 pid: nlid
-                                isBorrow: false
                             )
                         }
                     }
@@ -14969,7 +14969,7 @@ methodAutoCallRead: function {
         # a base that is not an lvalue -- an arm constant (`Dir.up`), a call's
         # result -- has no address: it is hoisted into the `_ah` temp an
         # argument gets, and a name still emits as `&name`
-        methodRecv = emitByrefArg :ast :symtab :ctx av: bn2 pid: bstamp isBorrow: false
+        methodRecv = emitByrefArg :ast :symtab :ctx av: bn2 pid: bstamp
     }
     ida: renderedMethodDefaultArgs :ast :symtab :ctx fnTid: mt
     if ida.length > 0 then return "\{mc2}(\{methodRecv}, \{ida})"

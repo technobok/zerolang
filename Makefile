@@ -1474,7 +1474,11 @@ perf: $(PERFBIN)
 #
 # -94 when three definitions the linter had been calling dead went: 0
 # behaviour, all of it the source.
-ALLOC_BASELINE := 2612321
+#
+# -67 when the by-reference argument hoist stopped taking a caller's reading
+# of whether its value borrows: 0 behaviour, all of it the source (one
+# parameter and eight arguments).
+ALLOC_BASELINE := 2612254
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
