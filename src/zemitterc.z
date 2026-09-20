@@ -9920,11 +9920,13 @@ emitColInterpArg: function {
 
 # emitInterpArgForParam -- an interpolated-string-literal argument built into a
 # hoisted temp `_ah<N>` and coerced to the parameter's C form: a String.take
-# param moves the temp in (no free); a String borrow takes it by pointer; a
-# StringView param gets a by-value view. The temp is freed at block exit unless
-# moved into a take param. Returns "" when the argument is not an interpolated
-# literal (the caller emits it normally). Mirrors emitColInterpArg's hoist but
-# generalises the returned form across param kinds.
+# param moves the temp in; a String borrow takes it by pointer; a StringView
+# param gets a by-value view. Which form the parameter takes is the signature's
+# to say and stays `paramTakesArg`'s; whether the temporary is freed is the
+# CHECKER's, and a temporary moved into a take param owns nothing where it dies.
+# Returns "" when the argument is not an interpolated literal (the caller emits
+# it normally). Mirrors emitColInterpArg's hoist but generalises the returned
+# form across param kinds.
 emitInterpArgForParam: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -9938,9 +9940,15 @@ emitInterpArgForParam: function {
     if sx.length == 0 then return "".string
     isTake: false
     if pid == ctx.strTid when (paramTakesArg :ast :symtab :fid :pname) then isTake = true
-    nmH: argHoistName :symtab :ctx argNid: (zast.nodeIdOf :n).u64 fallback: "_ah"
+    argNid: (zast.nodeIdOf :n).u64
+    nmH: argHoistName :symtab :ctx :argNid fallback: "_ah"
     hdt: String
-    if isTake.not then hdt = "    \{ctx.strC}_free(&\{nmH});\n"
+    if (scopeOwnsTemp :symtab :argNid) then hdt = (hoistDestroyLine
+        :symtab
+        :ctx
+        tid: ctx.strTid
+        nm: nmH.stringView
+    )
     retx: String
     if pid == ctx.strTid then {
         if isTake then {
