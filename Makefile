@@ -1524,7 +1524,11 @@ perf: $(PERFBIN)
 #
 # +55 when its destroy became the checker's too: 0 behaviour, all of it the
 # source. No leg composes a destructor of its own any more.
-ALLOC_BASELINE := 2611573
+#
+# +209 when an interpolation PART no name binds became a temporary: +99 the
+# behaviour -- the compiler's own source is full of them, and each mints a
+# variable and materialises the scope bracketing it -- and 110 the source.
+ALLOC_BASELINE := 2611782
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
