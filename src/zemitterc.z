@@ -8783,6 +8783,15 @@ bindBorrows: function {
     return (bindingVarIsBorrowed :symtab :n)
 }
 
+# varOwnsHere -- the checker made `vid` a variable that OWNS what it holds, so
+# the binding of it registers a cleanup and the value moves into it. The
+# inverse of `bindingVarIsBorrowed`, for the legs that hold the variable
+# rather than the binding row it came from.
+varOwnsHere: function {symtab: zenv.ZSymbolTable.view vid: ztypes.vid} out bool is {
+    if vid.isZero then return false
+    return (symtab.reg.variableOwnershipOf id: vid) == ztypes.zownership.owned
+}
+
 # bindingVarIsBorrowed -- the CHECKER made this binding a borrow. Read off the
 # binding's own variable, which is where the rule was decided: a bare name, a
 # field read and a marker all land here, and none of them is re-judged.
@@ -19327,7 +19336,7 @@ emitStringBind: function {
             # the caller zeroes that source here, as every other binding
             # branch does
             emitValueTakeInvalidations :ast :symtab :ctx n: avn :ind :buf
-            if (bindingRhsIsBorrow :ast :symtab :ctx n: avn).not then {
+            if (varOwnsHere :symtab vid: nameVid) then {
                 tmp.oweFree name: nm.string vid: nameVid
                 # a binding from a bare owned local, or from an explicit
                 # `<local>.take`, is a MOVE, exactly as a reassignment from
@@ -20799,6 +20808,13 @@ registerScopeDestroy: function {
     # the block's pending-cleanup lists
     tmp: TmpCtr
 } is {
+    # NOT `varOwnsHere nameVid` yet, though that is where this is going: a `for`
+    # INITIALISER's binding is not a checker variable at all -- `for t: "x"
+    # .string while ... loop` gives `t` no vid, so `scopeDestroy` never lists
+    # it and `variableOwnershipOf` cannot speak for it, and this destroy is the
+    # only one it gets. Asking the checker here drops it and leaks (measured:
+    # 53 bytes over `for_initialiser_types`' three initialisers). Giving those
+    # bindings vids is 7h's, with the `for_cond` scopes.
     if (bindingRhsIsBorrow :ast :symtab :ctx n: valueNode) then {
         # an arm named as a value CONSTRUCTS its tag and holds nothing, so it
         # owes nothing -- until a write gives the local a payload to free

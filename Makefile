@@ -1548,7 +1548,11 @@ perf: $(PERFBIN)
 #
 # -159 when a binding stopped reading its RHS's shape and asked only what the
 # checker made its variable: 0 behaviour, all of it the source.
-ALLOC_BASELINE := 2612441
+#
+# +181 when the String binding asked the same question of its own variable: 0
+# behaviour, all of it the source (the note saying why the scope-destroy
+# registration cannot follow it yet is most of it).
+ALLOC_BASELINE := 2612622
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1760,7 +1764,7 @@ lifetime-guard:
 	chk "registerScopeDestroy" "$$l1" 6; \
 	chk "refsLocal" "$$l2" 4; \
 	chk "isNonLvalueArg" "$$l3" 29; \
-	chk "bindingRhsIsBorrow" "$$l4" 12; \
+	chk "bindingRhsIsBorrow" "$$l4" 11; \
 	chk "'_ah{' argument hoists" "$$l5" 1; \
 	chk "hoistExprIsBorrowRooted" "$$l6" 0; \
 	if [ "$$fail" = "1" ]; then \
