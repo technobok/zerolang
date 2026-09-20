@@ -8265,61 +8265,6 @@ fnReturnsRefBorrow: function {
     return (isReftypeParam :ast :symtab :ctx tid: retTid)
 }
 
-# hoistExprIsBorrowRooted -- the hoisted expression's ROOT is a
-# borrow-returning call (an element get and any field chain off it): the
-# hoist is a shared view and must not register a free. Field chains off
-# NAMED bases keep their existing legs untouched (a destructor-less box's
-# field interp-free is load-bearing today).
-hoistExprIsBorrowRooted: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
-    n: astnode.view
-} out bool is {
-    match (
-        n
-    ) case statementline then {
-        sln: ast.nodes.get i: n.statementline.u64
-        return (hoistExprIsBorrowRooted :ast :symtab :ctx n: sln)
-    } case call then {
-        return (callRhsIsBorrow :ast :symtab :ctx call: n)
-    } case dottedpath then {
-        # a dotted path that is itself a zero-arg auto-call answers for its own
-        # result, whatever its base: an owned return (`(l.get i: 0).copy`) is a
-        # temp to free, a declared `.borrow`/`.view` return (`c.label`) is not.
-        # A field or arm read is rooted where its base is.
-        mfid: dottedCalleeFid :symtab nid: n.nodeid.u64
-        if mfid.isZero.not then return (funcBorrowFlag :symtab tid: mfid)
-        rbf: refBorrowCalleeFid :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64)
-        if rbf > 0 then return true
-        return (hoistExprIsBorrowRooted :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
-    } case ifexpr then {
-        return (controlValueIsReference :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64))
-    } case caseexpr then {
-        return (controlValueIsReference :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64))
-    } else {
-        return false
-    }
-}
-
-# dottedCalleeFid -- the function type a dotted path auto-calls, when the
-# checker resolved the path to a method or a free function; 0 for a field or
-# arm read, and for a path the checker left unstamped.
-dottedCalleeFid: function {symtab: zenv.ZSymbolTable.view nid: u64} out ztypes.tid is {
-    none: ztypes.tid
-    rdo: symtab.typing.refDecl.get key: nid
-    match (
-        rdo
-    ) case some then {
-        rd: symtab.typing.decls.get i: rdo.u64
-        if rd.kind.methodDecl then return (ztypes.tid.create from: rd.typeId)
-        if rd.kind.funcDecl then return (ztypes.tid.create from: rd.typeId)
-        return none
-    } case none then {
-        return none
-    }
-}
-
 # callRhsIsBorrow -- the call-shaped leg of bindingRhsIsBorrow: the callee's
 # declared return carries the `.borrow` marker (funcReturnsBorrow, recorded
 # from the signature). Dotted method calls whose callable stamp missed probe
@@ -17840,7 +17785,6 @@ appendStringPart: function {
     val: StringView
     sN: u64
     ind: StringView
-    tmp: TmpCtr
     buf: String.borrow
 } is {
     an0: atomTextOf :ast :n
@@ -17868,7 +17812,7 @@ appendStringPart: function {
     hNm: argHoistName :symtab :ctx argNid: (interpPartNodeId :n) fallback: "_hp"
     buf.append "\{ind}\{ctx.strC}_t \{hNm} = \{val};\n"
     buf.append "\{ind}\{ctx.strC}_append(&_s\{sN}, \{hNm}.data, \{hNm}.size);\n"
-    if (hoistExprIsBorrowRooted :ast :symtab :ctx :n).not then {
+    if (scopeOwnsTemp :symtab argNid: (interpPartNodeId :n)) then {
         buf.append "\{ind}\{ctx.strC}_free(&\{hNm});\n"
     }
 }
@@ -17961,7 +17905,7 @@ emitInterpPart: function {
     } else if tns == "StringView" then {
         appendViewPart :ctx val: val.stringView :sN :ind :tmp :buf
     } else if tns == "String" then {
-        appendStringPart :ast :symtab :ctx :n val: val.stringView :sN :ind :tmp :buf
+        appendStringPart :ast :symtab :ctx :n val: val.stringView :sN :ind :buf
     } else if (originIsTid
         :symtab
         tid: (stampIdOf :symtab nid: (interpPartNodeId :n))

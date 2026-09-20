@@ -30199,6 +30199,32 @@ borrowedValueText: function {
     return txt
 }
 
+# dottedLendsResult -- the method a dotted path auto-calls declares a borrow
+# return, so reading the path hands back a view INTO its base. This is the path
+# form of what `callHandsBackBorrow` answers for a call that is written as one:
+# `c.label` and `(c.label)` lend the same thing, and only the second is a `call`
+# node.
+dottedLendsResult: function {st: zenv.ZSymbolTable nid: u64} out bool is {
+    rdo: st.typing.refDecl.get key: nid
+    if rdo.none then return false
+    rd: st.typing.decls.get i: rdo.u64
+    if (rd.kind.methodDecl or rd.kind.funcDecl).not then return false
+    return ((st.typing.funcReturnsBorrow.get key: (ztypes.tid.create from: rd.typeId)).or
+        d: false
+    )
+}
+
+# valueIsLent -- the value at `nid` is one whose storage belongs to something
+# else, so a temporary holding it owns nothing: a call, or a path that
+# auto-calls one, whose callee declares a borrow return; or a control value one
+# of whose arms yields a place, which makes the whole value a reference on that
+# arm's path. Both sides of a lifetime ask this -- the mint below and the
+# argument hoist -- so the two cannot drift apart.
+valueIsLent: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} out bool is {
+    if (callHandsBackBorrow :st :ast n: (ast.nodes.get i: nid.u64)) then return true
+    return (armsYieldAPlace :st :ast :nid)
+}
+
 # callHandsBackBorrow -- the call `n` hands back a value pinned to its source,
 # because its callee's return carries `.borrow` (an element read off a
 # container). Asked of a value whose pins are no longer pending: an arm of an
@@ -30231,6 +30257,8 @@ callHandsBackBorrow: function {st: zenv.ZSymbolTable ast: Ast.view n: astnode.vi
         } case none then {
             return false
         }
+    } case dottedpath then {
+        return (dottedLendsResult :st nid: n.nodeid.u64)
     } else {
         return false
     }
@@ -33984,12 +34012,10 @@ mintReceiverTemp: function {
     tn: st.typing.nextTempId
     st.typing.nextTempId = tn + 1
     tname: "_t\{tn}"
-    # WHAT THE RECEIVER IS HELD IN DOES NOT ALWAYS OWN IT. A call whose return
-    # carries `.borrow` hands back a view into its source -- `(l.get i: 0)` is
-    # the list's element, not a copy of it -- so the temporary holding it owns
-    # nothing and a destroy list naming it would free the container's storage.
+    # WHAT A VALUE IS HELD IN DOES NOT ALWAYS OWN IT (valueIsLent): a temporary
+    # over storage something else owns would free that storage.
     rown: ztypes.zownership.owned
-    if (callHandsBackBorrow :st :ast n: (ast.nodes.get i: recvNid)
+    if (valueIsLent :st :ast nid: (zast.nodeid.create from: recvNid.u32.orPanic)
     ) then rown = ztypes.zownership.borrowed
     vid: st.reg.newVariable ztypeId: recvT ownership: rown
     tnId: zast.poolSet pool: ast.names text: tname.stringView
