@@ -1559,7 +1559,11 @@ perf: $(PERFBIN)
 #
 # +427 when a `for` INITIALISER became a variable of the checker's: 0
 # behaviour (the scope it needed was the commit before), all of it the source.
-ALLOC_BASELINE := 2613990
+#
+# -113 when the scope-destroy registration asked the checker instead of the
+# value's shape: -114 the behaviour (the shape walk is gone from that path),
+# +1 the source.
+ALLOC_BASELINE := 2613877
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1771,7 +1775,7 @@ lifetime-guard:
 	chk "registerScopeDestroy" "$$l1" 6; \
 	chk "refsLocal" "$$l2" 4; \
 	chk "isNonLvalueArg" "$$l3" 29; \
-	chk "bindingRhsIsBorrow" "$$l4" 11; \
+	chk "bindingRhsIsBorrow" "$$l4" 10; \
 	chk "'_ah{' argument hoists" "$$l5" 1; \
 	chk "hoistExprIsBorrowRooted" "$$l6" 0; \
 	if [ "$$fail" = "1" ]; then \
