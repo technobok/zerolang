@@ -733,6 +733,11 @@ perf: $(PERFBIN)
 # skipping the member materialisation for monos, where the lookup answers
 # without it, cost 59 allocations MORE than it saved.
 #
+# +1,369 for the counted range counting in the RECEIVER's width, and it is the
+# COMPILER'S OWN SOURCE, not the reader: 73 net lines of src/, at the 13-17
+# allocations a line this tree costs to compile. ab.sh splits it 0 behaviour /
+# +1,369 source, and the emitted C changes only where the width was wrong.
+#
 # +337,556 for the infix form compiling as a call. `a op b` IS `a.op b`, so an
 # operator expression is now a call node, a dotted callable and an unlabelled
 # namedoperation where it was one binop row -- and it takes the call path's
@@ -1566,7 +1571,7 @@ perf: $(PERFBIN)
 #
 # -22 when that registration stopped taking the tree it no longer reads: 0
 # behaviour, all of it the source.
-ALLOC_BASELINE := 2613855
+ALLOC_BASELINE := 2615224
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

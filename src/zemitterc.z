@@ -18025,31 +18025,50 @@ stampIdDeep: function {
     return (ztypes.tid.create from: 0)
 }
 
+# tidDeep -- a stamp id with a value-position FUNCTION unwrapped to its return
+# type. The id the readers that owe scalarCTypeFor a canonical id ask for, since
+# a spelling cannot tell a user type shadowing a scalar from the scalar:
+# `xs.length` in a for-header auto-calls, so the node's own stamp is the METHOD
+# and its width is the method's return.
+tidDeep: function {
+    symtab: zenv.ZSymbolTable.view
+    sid: ztypes.tid
+} out ztypes.tid is {
+    if sid.isZero then return ztypes.tid
+    # a value-position FUNCTION stamp is an auto-call; its value type is the
+    # method's return.
+    if (symtab.reg.typetypeOf typeId: sid) == ztypes.ztypetype.functionType then {
+        rto: fnReturnTidOf :symtab tid: sid
+        if rto > 0 then return (ztypes.tid.create from: rto.u64)
+        rno: symtab.typing.funcReturnNode.get key: sid
+        match (
+            rno
+        ) case some then {
+            rrt: stampIdOf :symtab nid: rno
+            if rrt > 0 then return rrt
+        } case none then null
+    }
+    return sid
+}
+
+# stampTidDeep -- tidDeep of a NODE's own stamp.
+stampTidDeep: function {
+    symtab: zenv.ZSymbolTable.view
+    n: astnode.view
+} out ztypes.tid is {
+    return (tidDeep :symtab sid: (stampIdOf :symtab nid: (interpPartNodeId :n)))
+}
+
 # stampNameDeep -- a node's stamped type name, unwrapping a value-position
-# FUNCTION stamp to its return type.
+# FUNCTION stamp to its return type. The name of what stampTidDeep answers, so
+# the two cannot disagree about which type a node carries.
 stampNameDeep: function {
     symtab: zenv.ZSymbolTable.view
     n: astnode.view
 } out String is {
-    nid: interpPartNodeId :n
-    sid: stampIdOf :symtab :nid
-    if sid > 0 then {
-        # a value-position FUNCTION stamp is an auto-call; its value
-        # type is the method's return.
-        if (symtab.reg.typetypeOf typeId: sid) == ztypes.ztypetype.functionType then {
-            rto: fnReturnTidOf :symtab tid: sid
-            if rto > 0 then return (regNameOf :symtab tid: (ztypes.tid.create from: rto.u64))
-            rno: symtab.typing.funcReturnNode.get key: sid
-            match (
-                rno
-            ) case some then {
-                rrt: stampIdOf :symtab nid: rno
-                if rrt > 0 then return (regNameOf :symtab tid: rrt)
-            } case none then null
-        }
-        return (regNameOf :symtab tid: sid)
-    }
-    return "".string
+    sid: stampTidDeep :symtab :n
+    if sid.isZero then return "".string
+    return (regNameOf :symtab tid: sid)
 }
 
 # emitPrintStmt -- a statement-position print call.
@@ -23888,6 +23907,8 @@ emitIntRangeFor: function {
         bound: rangeBoundExpr :ast :symtab :ctx n: (ast.nodes.get i: c0.operation.u64)
         if bound.length == 0 then return false
         fromx: rangeFromExpr :ast :symtab :ctx n: (ast.nodes.get i: c0.operation.u64)
+        ctR: rangeCType :ast :symtab n: (ast.nodes.get i: c0.operation.u64)
+        if ctR.length == 0 then return false
         lidR: pushLoopLabel :ctx :tmp isDo: false
         # A suspension inside the body RETURNS from `.call`, and the resume
         # `goto` lands inside the loop, PAST the C for-init -- so the counter,
@@ -23911,7 +23932,7 @@ emitIntRangeFor: function {
             )
             pushed = true
         }
-        lh: "\{ind}for (int64_t \{lbl} = \{fromx}; \{lbl} < (int64_t)(\{bound}); \{lbl}++) {\n"
+        lh: "\{ind}for (\{ctR} \{lbl} = \{fromx}; \{lbl} < (\{bound}); \{lbl}++) {\n"
         buf.append lh
         ind2: "\{ind}    "
         # the body is a BLOCK: whatever it registers -- an argument hoisted to an
@@ -23977,9 +23998,7 @@ rangeBoundExpr: function {
     # width-suffixed one (`3.u8`) a DOTTED PATH, and `xs.length` a dotted path too.
     # Without it the documented sugar found no bound at all, fell through to the
     # iterator protocol, and looped forever on its own receiver.
-    isLean: false
-    btnL: stampNameDeep :symtab :n
-    if (isIntScalarName name: btnL.stringView) then isLean = true
+    isLean: (intScalarCTypeOf :symtab tid: (stampTidDeep :symtab :n)).length > 0
     match (
         n
     ) case call then {
@@ -23997,10 +24016,12 @@ rangeBoundExpr: function {
         cmnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64)
         if (isRangeMemberId id: cmnId) then {
             # the receiver may be a dotted-path itself (squares.length.iterate)
-            # -- stampNameDeep resolves its scalar type either way.
-            btn: stampNameDeep :symtab n: (ast.nodes.get i: n.parent.u64)
-            boundCType: cTypeOf name: btn.stringView
-            if boundCType.length > 0 then {
+            # -- stampTidDeep resolves its scalar type either way.
+            bct: (intScalarCTypeOf
+                :symtab
+                tid: (stampTidDeep :symtab n: (ast.nodes.get i: n.parent.u64))
+            )
+            if bct.length > 0 then {
                 return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
             }
         }
@@ -24010,6 +24031,59 @@ rangeBoundExpr: function {
         if isLean then return (emitExpr :ast :symtab :ctx :n)
         return "".string
     }
+}
+
+# intScalarCTypeOf -- the C scalar an INTEGER tid spells, "" for anything else.
+# Asked by canonical id: a user type shadowing a scalar name emits its own
+# struct, and a float or bool receiver is no counter at all -- counted in an
+# integer a float bound would truncate silently.
+intScalarCTypeOf: function {
+    symtab: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+} out String is {
+    if tid.isZero then return "".string
+    rnm: regNameOf :symtab :tid
+    if (isIntScalarName name: rnm.stringView).not then return "".string
+    return (scalarCTypeFor :symtab name: rnm.stringView :tid)
+}
+
+# rangeCType -- the C type a counted range's induction variable takes: the
+# RECEIVER's, which is the type the loop name binds to. "" when the operand
+# drives no counted range, and the arms are rangeBoundExpr's own -- the bound
+# and the width are the same receiver read two ways, so they must agree about
+# which node that is.
+#
+# Written `int64_t` the counter was signed whatever the receiver's width, so a
+# u64 bound above i64's maximum compared as a negative number and the loop ran
+# once or not at all. A u8 receiver counted in 64 bits and the loop name, typed
+# u8, was assigned from a wider counter at every step.
+rangeCType: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    n: astnode.view
+} out String is {
+    match (
+        n
+    ) case call then {
+        callableNode: ast.nodes.get i: n.callable.u64
+        mnId: dottedChildNameIdOf :ast n: callableNode
+        if (isRangeMemberId id: mnId) then {
+            # the callable of `N.iterate from: F` is the dotted path whose
+            # receiver dottedReceiverStampId reads -- the node rangeBoundExpr
+            # hands to emitDottedReceiver
+            rsid: dottedReceiverStampId :ast :symtab callable: callableNode
+            return (intScalarCTypeOf :symtab tid: (tidDeep :symtab sid: rsid))
+        }
+    } case dottedpath then {
+        cmnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64)
+        if (isRangeMemberId id: cmnId) then {
+            rt2: stampTidDeep :symtab n: (ast.nodes.get i: n.parent.u64)
+            return (intScalarCTypeOf :symtab tid: rt2)
+        }
+    } else null
+    # THE LEAN FORM: `for x: N loop` is sugar for `for x: N.iterate loop`, so an
+    # integer-typed operand IS its own bound and its own width.
+    return (intScalarCTypeOf :symtab tid: (stampTidDeep :symtab :n))
 }
 
 # rangeFromExpr -- the `from:` argument of an iterate range, or "0".
@@ -26651,7 +26725,9 @@ emitListComprehension: function {
             bound: rangeBoundExpr :ast :symtab :ctx n: (ast.nodes.get i: c0.operation.u64)
             from: rangeFromExpr :ast :symtab :ctx n: (ast.nodes.get i: c0.operation.u64)
             if bound.length == 0 then return
-            fh: "\{ind}for (int64_t \{lbl} = \{from}; \{lbl} < \{bound}; \{lbl}++) {\n"
+            ct6: rangeCType :ast :symtab n: (ast.nodes.get i: c0.operation.u64)
+            if ct6.length == 0 then return
+            fh: "\{ind}for (\{ct6} \{lbl} = \{from}; \{lbl} < (\{bound}); \{lbl}++) {\n"
             buf.append fh
             ind2: "\{ind}    "
             (emitComprehensionBody
