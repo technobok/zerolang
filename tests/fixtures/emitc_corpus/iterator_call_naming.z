@@ -1,0 +1,78 @@
+# iterator_call_naming.z -- a `for` header names an iterator's `call` by WHO
+# WROTE IT, not by what the iterator is.
+#
+# Iterator-shaped is a question about the `call` member: `forElementOf` asks
+# `declChildOfId ... wkCall` and looks at neither the family nor the generic
+# origin. The emitter asked both, and spelled the collection templates'
+# `{type}_call` for any iterator that was not a plain non-generic class --
+# a name nothing defines. Each shape below type-checked, emitted, and was
+# refused by the C compiler.
+#
+# A method with a BODY is emitted by emitOneMethod under its own cname id,
+# whatever declares it. `is native` is what marks the template-named ones.
+
+# a non-generic record: a cursor that costs no heap
+counter: record { i: i64  max: i64 } as {
+    call: function {c: this} out (optionval t: i64) is {
+        if c.i < c.max then {
+            result: optionval.some c.i
+            c.i = c.i + 1
+            return result
+        }
+        result: optionval.none i64
+        return result
+    }
+}
+
+# a GENERIC record: one template, a cursor per element type
+span: record { cur: t  stop: t } as {
+    t: anyval.generic
+    call: function {s: this} out (optionval t: t) is {
+        if s.cur < s.stop then {
+            v: optionval.some s.cur
+            s.cur = s.cur + 1
+            return v
+        }
+        return (optionval.none t)
+    }
+}
+
+# a GENERIC class: the same question on the reference side
+Ticks: class { cur: t  stop: t } as {
+    t: anyval.generic
+    call: function {k: this} out (optionval t: t) is {
+        if k.cur < k.stop then {
+            v: optionval.some k.cur
+            k.cur = k.cur + 1
+            return v
+        }
+        return (optionval.none t)
+    }
+}
+
+mkspan: function {n: u64} out (span t: u64) is {
+    return (span cur: 0.u64 stop: n)
+}
+
+main: function is {
+    # rule 4: a non-call expression whose type is iterator-shaped
+    r: counter i: 0 max: 4
+    for x: r loop print "r \{x}"
+    # rule 1: a call expression returning an iterator-shaped value
+    for y: (counter i: 10 max: 13) loop print "c \{y}"
+    # the cursor is a value, so a second walk from a fresh one starts over
+    r2: counter i: 0 max: 2
+    for z: r2 loop print "z \{z}"
+
+    # a generic record, bound then driven, and returned from a call
+    s: (span cur: 0.u64 stop: 3.u64)
+    for a: s loop print "s \{a}"
+    for b: (mkspan n: 2) loop print "m \{b}"
+    # a second element type off the same template
+    s8: (span cur: 0.u8 stop: 2.u8)
+    for c: s8 loop print "u8 \{c}"
+
+    # a generic class
+    t: (Ticks cur: 0.u64 stop: 3.u64)
+    for d: t loop print "t \{d}"
+}
