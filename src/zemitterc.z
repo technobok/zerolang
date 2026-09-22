@@ -12901,8 +12901,9 @@ emitFnptrLocalCall: function {
 # `<cname>_<label>_create(&arg)`. "" when the parameter is no spec or the
 # argument no conforming concrete type.
 conformanceArgText: function {
+    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx.view
+    ctx: Ctx
     argOpNode: astnode.view
     av: StringView
     avVid: ztypes.vid
@@ -12919,7 +12920,23 @@ conformanceArgText: function {
     if pLbl.length == 0 then return "".string
     aIb: ctxCname :ctx tid: aTid
     aRcv: "&\{av}"
-    if (isPtrVid :ctx vid: avVid) then aRcv = "\{av}"
+    if (isPtrVid :ctx vid: avVid) then {
+        aRcv = "\{av}"
+    } else if (isNonLvalueArg s: av) then {
+        # AN INLINE CONSTRUCTION IS NOT AN LVALUE. `f g: (Cat k: 40)` handed
+        # the helper `&z_t109_create(40)`, which C rejects -- bind it to a temp
+        # first, as emitProtocolCreateCall's own `from:` leg already does for
+        # the same shape written `Greeter.create from: (Cat k: 40)`.
+        ahv: (hoistLvalue
+            :ast
+            :symtab
+            :ctx
+            :av
+            tid: (ztypes.tid.create from: aTid.u64)
+            argNid: (zast.nodeIdOf n: argOpNode).u64
+        )
+        aRcv = "&\{ahv}"
+    }
     return "\{aIb}_\{pLbl}_create(\{aRcv})"
 }
 
@@ -12998,6 +13015,7 @@ userFnArgText: function {
     ppid: pinId
     {
         spec: (conformanceArgText
+            :ast
             :symtab
             :ctx
             :argOpNode

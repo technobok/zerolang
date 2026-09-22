@@ -1,0 +1,62 @@
+# protocol_inline_construct.z -- a value handed to a protocol or facet
+# PARAMETER goes in as its conformance box, `<impl>_<label>_create(&arg)`, and
+# the `&` needs an lvalue. A construction written inline is not one:
+#
+#     via g: (Cat k: 40)
+#     ==> z_t104(z_t109_Greeter_create(&z_t109_create(40)), 2)
+#         error: lvalue required as unary '&' operand
+#
+# Nor is a call result, `via g: (mk)` -- `&z_t111()` -- and nor is a folded
+# constant, which is why isNonLvalueArg is the test rather than "is it a call".
+# Binding the value first always worked, so this was a shape you had to know to
+# avoid, in valid source the compiler accepted and then could not compile.
+#
+# `emitProtocolCreateCall` had already met the same shape on the explicit verb
+# (`Greeter.create from: (Cat k: 40)`) and hoists it; the argument site now asks
+# the same question. `named` is the control: it takes the lvalue path, which
+# must keep emitting `&z_vN` with no temp.
+Greeter: protocol {
+    greet: function {:this n: i64} out i64
+}
+
+sizer: facet {
+    size: function {:this b: i64} out i64
+}
+
+Cat: class {
+    k: i64
+} as {
+    :Greeter
+    greet: function {c: this n: i64} out i64 is {
+        return c.k + n
+    }
+}
+
+pt: record {
+    x: i64
+} as {
+    m: sizer
+    size: function {p: this b: i64} out i64 is {
+        return p.x + b
+    }
+}
+
+mk: function out Cat is {
+    return (Cat k: 40)
+}
+
+viaProto: function {g: Greeter n: i64} out i64 is {
+    return (g.greet :n)
+}
+
+viaFacet: function {s: sizer b: i64} out i64 is {
+    return (s.size :b)
+}
+
+main: function is {
+    named: Cat k: 1
+    print "named \{viaProto g: named n: 2}"
+    print "inline \{viaProto g: (Cat k: 40) n: 2}"
+    print "call \{viaProto g: (mk) n: 2}"
+    print "facet \{viaFacet s: (pt x: 5) b: 10}"
+}

@@ -1660,7 +1660,11 @@ perf: $(PERFBIN)
 # -139 deleting the array `getMut` leg: 0 behaviour, -139 source. It emitted a
 # call to a C function z_array.c.tmpl does not write, for a member `array` does
 # not declare, and nothing could reach it.
-ALLOC_BASELINE := 2626527
+#
+# +226 hoisting a non-lvalue at a protocol or facet parameter: 0 behaviour --
+# the compiler passes no construction to one -- and 226 source, which is the
+# hoist leg and the `ast` the site now takes.
+ALLOC_BASELINE := 2626753
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
