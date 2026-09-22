@@ -1,18 +1,12 @@
-# generator_nested_yield_suspends_for.z -- a C-STYLE `for` binding whose only
+# generator_nested_yield_suspends_for.z -- a counted `for` whose only
 # suspension sits INSIDE an expression.
 #
-# `for i: 0 while i < n loop` initialises once and tests per iteration, so the
-# binding is hoisted to its own statement and promotes to a state field like
-# any other local. Without the hoist the resume `goto` re-enters the loop past
-# the initialisation, `i` is indeterminate on the second `.call`, and the loop
-# yields once and then reports itself exhausted -- the wrong answer with no
-# diagnostic that `generator_cstyle_for.z` exists to pin.
-#
-# Whether to hoist is decided by asking the body whether it suspends, and that
-# question has ONE answer: `zast.yieldCountIn`, the count the lowering sizes
-# its resume slots by and the emitter numbers its labels by. A second walk over
+# Whether the loop suspends decides whether its counter takes a state slot, and
+# that question has ONE answer: `zast.yieldCountIn`, the count the lowering
+# sizes its slots by and the emitter numbers its labels by. A second walk over
 # fewer node kinds answers a yield reached only through an interpolated string
-# or a dotted path as no suspension at all.
+# or a dotted path as no suspension at all, and the loop then yields once and
+# reports itself exhausted -- the wrong answer with no diagnostic.
 #
 # The position has to be one nothing else lifts first. A yield bound to a local
 # that outlives it is split to a statement by the crossing promotion, which
@@ -23,27 +17,24 @@
 
 Plain: generator { n: i64 } as {
     call: function {step: i64} out i64 is {
-        for i: 0 while i < this.n loop {
+        for i: this.n.each loop {
             yield i
-            i = i + 1
         }
     }
 }
 
 Interp: generator { n: i64 } as {
     call: function {step: i64} out i64 is {
-        for i: 0 while i < this.n loop {
+        for i: this.n.each loop {
             print "sent \{yield i}"
-            i = i + 1
         }
     }
 }
 
 Dotted: generator { n: i64 } as {
     call: function {step: i64} out i64 is {
-        for i: 0 while i < this.n loop {
+        for i: this.n.each loop {
             if (yield i).u32.orPanic > 100.u32 then print "high"
-            i = i + 1
         }
     }
 }
