@@ -14370,8 +14370,10 @@ emitNestedCollectionBase: function {
         if mn2 == "pop" then return "\{nlcb}_pop(\{recvB})"
         if mn2 == "sort" then return "\{nlcb}_sort(\{recvB})"
         if (ztypecheck.isListViewMember name: mn2) then return "\{nlcb}_listView(\{recvB})"
-        if mn2 == "iterate" then return "\{nlcb}_iterate(\{recvB})"
-        if mn2 == "iterateMut" then return "\{nlcb}_iterateMut(\{recvB})"
+        if (isListWalkMember name: mn2) then {
+            w9: "_\{mn2}("
+            return "\{nlcb}\{w9}\{recvB})"
+        }
     }
     # Set/Map are heap-pointer collections; their methods are emitted by the
     # collection template (not registry children), so a CLASS-dispatch
@@ -15218,9 +15220,10 @@ emitCollectionMemberRead: function {
             el0: "\{bn2}\{accB2}length"
             return el0
         }
-        if mn2 == "iterate" then {
+        if (isListReadWalkMember name: mn2) then {
             lcb9: ctxCname :ctx tid: bstamp
-            epLi: "\{lcb9}_iterate(\{recvB2})"
+            w8: "_\{mn2}("
+            epLi: "\{lcb9}\{w8}\{recvB2})"
             return epLi
         }
     }
@@ -23230,9 +23233,9 @@ isForIterCall: function {ast: Ast.view n: astnode.view} out bool is {
     ) case call then {
         return true
     } case dottedpath then {
-        cn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-        if cn.stringView == "iterateMut" then return true
-        return cn.stringView == "iterate"
+        cn: atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64)
+        if cn == zast.names.wkIterate or (cn == zast.names.wkIterateMut) then return true
+        return cn == zast.names.wkIterateReverse
     } else {
         return false
     }
@@ -24124,6 +24127,26 @@ emitClosedRangeFor: function {
     } else {
         return false
     }
+}
+
+# isListWalkMember -- `iterate`, `iterateReverse` or `iterateMut`: the three
+# walks a list-family receiver hands back a cursor for. Each emits the C
+# function of its own name, so they are ONE leg rather than three compares --
+# which is the shape A001 exists to discourage.
+isListWalkMember: function {name: StringView} out bool is {
+    if name.length == 0 then return false
+    known: " iterate iterateReverse iterateMut "
+    probe: " \{name} "
+    return (known.contains needle: probe)
+}
+
+# isListReadWalkMember -- the two READONLY walks, which a view declares too.
+# `iterateMut` is the owner's alone.
+isListReadWalkMember: function {name: StringView} out bool is {
+    if name.length == 0 then return false
+    known: " iterate iterateReverse "
+    probe: " \{name} "
+    return (known.contains needle: probe)
 }
 
 # isIntScalarName -- one of the twelve INTEGER scalar names. A counted range
@@ -31663,6 +31686,12 @@ emitListSliceOnDemand: function {
 # The walk therefore reads `{data, length}` as they were at `iterate` time
 # rather than re-reading the container. Unreachable in a valid program: the lock
 # model already excludes a writer for the iterator's lifetime.
+#
+# `idx` is a COUNT of the elements yielded, not a position, which is what lets
+# `down` reverse the walk without a second cursor: the exhaustion test is the
+# same at either end, and a reverse walk over an empty window ends before it
+# subtracts anything. Counting down a position is the alternative, and it is
+# the underflow `iterateReverse` exists to remove.
 emitListIterCursor: function {
     ctx: Ctx
     liId: u64
@@ -31675,7 +31704,7 @@ emitListIterCursor: function {
     listIterMark :ctx tid: liId
     li: cbaseNoPrefix :ctx tid: (ztypes.tid.create from: liId.u64)
     ov: cbaseNoPrefix :ctx tid: (ztypes.tid.create from: ovId.u64)
-    s0: "typedef struct {\n    \{ect}* data;\n    uint64_t length;\n    uint64_t idx;\n} z_\{li}_t;\n"
+    s0: "typedef struct {\n    \{ect}* data;\n    uint64_t length;\n    uint64_t idx;\n    bool down;\n} z_\{li}_t;\n"
     buf.append s0
     s1: "static z_\{ov}_t z_\{li}_call(z_\{li}_t* _it);\n"
     buf.append s1
@@ -31687,7 +31716,7 @@ emitListIterCursor: function {
     buf.append s4
     s5: "    _out.tag = Z_\{ovu}_TAG_SOME;\n"
     buf.append s5
-    s6: "    _out.data = &_it->data[_it->idx];\n"
+    s6: "    _out.data = &_it->data[_it->down ? (_it->length - 1 - _it->idx) : _it->idx];\n"
     buf.append s6
     s7: "    _it->idx++;\n    return _out;\n}\n"
     buf.append s7
@@ -31707,6 +31736,16 @@ emitListIter: function {
     buf: String.borrow
 } is {
     liId: monoMethodReturn :symtab :monoId nameId: zast.names.wkIterate
+    # a mono that walks only BACKWARDS mints its cursor through the reverse
+    # member, so the forward one answers nothing and the cursor would go
+    # unemitted under a name the reverse constructor then names
+    if liId == 0 then {
+        liId = (monoMethodReturn
+            :symtab
+            :monoId
+            nameId: zast.names.wkIterateReverse
+        )
+    }
     if liId == 0 then return
     ovId: (monoMethodReturn
         :symtab
@@ -31738,8 +31777,17 @@ emitListIter: function {
     s8: "static z_\{li}_t z_\{nm}_iterate(const z_\{nm}_t* _this);\n"
     if (monoMemberUsed :symtab :monoId nameId: zast.names.wkIterate) then {
         buf.append s8
-        s: "static z_\{li}_t z_\{nm}_iterate(const z_\{nm}_t* _this) {\n    z_\{li}_t _it = {0};\n    _it.data = _this->data;\n    _it.length = _this->length;\n    _it.idx = 0;\n    return _it;\n}\n\n"
+        s: "static z_\{li}_t z_\{nm}_iterate(const z_\{nm}_t* _this) {\n    z_\{li}_t _it = {0};\n    _it.data = _this->data;\n    _it.length = _this->length;\n    _it.idx = 0;\n    _it.down = false;\n    return _it;\n}\n\n"
         buf.append s
+    }
+    # iterateReverse -- the same cursor over the same window, walked from the
+    # far end. Readonly like `iterate`, and there is no mutable twin: writing
+    # through a walk is `iterateMut`, in either direction it is the same lock.
+    if (monoMemberUsed :symtab :monoId nameId: zast.names.wkIterateReverse) then {
+        s12: "static z_\{li}_t z_\{nm}_iterateReverse(const z_\{nm}_t* _this);\n"
+        buf.append s12
+        s13: "static z_\{li}_t z_\{nm}_iterateReverse(const z_\{nm}_t* _this) {\n    z_\{li}_t _it = {0};\n    _it.data = _this->data;\n    _it.length = _this->length;\n    _it.idx = 0;\n    _it.down = true;\n    return _it;\n}\n\n"
+        buf.append s13
     }
     # iterateMut -- the mutable walk, for a mono that declares one. The same
     # cursor over the same storage; the two differ only in what the typechecker
@@ -31749,7 +31797,7 @@ emitListIter: function {
     if (monoMemberUsed :symtab :monoId nameId: zast.names.wkIterateMut) then {
         s10: "static z_\{li}_t z_\{nm}_iterateMut(z_\{nm}_t* _this);\n"
         buf.append s10
-        s11: "static z_\{li}_t z_\{nm}_iterateMut(z_\{nm}_t* _this) {\n    z_\{li}_t _it = {0};\n    _it.data = _this->data;\n    _it.length = _this->length;\n    _it.idx = 0;\n    return _it;\n}\n\n"
+        s11: "static z_\{li}_t z_\{nm}_iterateMut(z_\{nm}_t* _this) {\n    z_\{li}_t _it = {0};\n    _it.data = _this->data;\n    _it.length = _this->length;\n    _it.idx = 0;\n    _it.down = false;\n    return _it;\n}\n\n"
         buf.append s11
     }
 }

@@ -1,0 +1,44 @@
+# list_iterate_reverse.z -- the READONLY walk, last element first.
+#
+# It exists because the index form is a trap: `(xs.length - 1).downto to: 0`
+# reads fine and underflows u64 on an EMPTY list, walking 1.8e19 elements.
+# `downto` is for numeric descents, where the endpoints are values the author
+# wrote; walking a container backwards is the container's own business.
+#
+# One cursor serves both directions. Its index is a COUNT of what it has
+# yielded rather than a position, so the exhaustion test is the same at either
+# end and a reverse walk over an empty window ends before it subtracts
+# anything -- which is the underflow, removed rather than moved.
+pt: record { x: i64 y: i64 }
+
+main: function is {
+    ns: ListVal i64
+    ns.append from: 1
+    ns.append from: 2
+    ns.append from: 3
+    with rt: ns.iterateReverse do for a: rt loop print "val \{a}"
+    # the forward walk is unchanged, and the two may not overlap
+    with ft: ns.iterate do for b: ft loop print "fwd \{b}"
+    # an EMPTY list: the case an index counted down cannot survive
+    empty: ListVal i64
+    with et: empty.iterateReverse do for c: et loop print "never \{c}"
+    print "empty walked nothing"
+    # one element: the first step is also the last
+    one: ListVal i64
+    one.append from: 7
+    with ot: one.iterateReverse do for d: ot loop print "one \{d}"
+    # a VIEW walks the window it spans, not the container behind it
+    mid: ns.slice from: 1 to: 3
+    with vt: mid.iterateReverse do for e: vt loop print "view \{e}"
+    # a COMPOUND element comes out by value, last first
+    ps: ListVal pt
+    ps.append from: (pt x: 1 y: 10)
+    ps.append from: (pt x: 2 y: 20)
+    with pt2: ps.iterateReverse do for f: pt2 loop print "pt \{f.x} \{f.y}"
+    # a REFTYPE element: the payload is a borrowed view into the list
+    names: List String
+    names.append "alpha".string
+    names.append "beta".string
+    with nt: names.iterateReverse do for g: nt loop print "ref \{g}"
+    print "done"
+}

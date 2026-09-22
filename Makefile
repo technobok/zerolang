@@ -1619,7 +1619,13 @@ perf: $(PERFBIN)
 # commit that made it one cost +427 -- and with it go its mint, its ownership
 # question, the two emitters that declared it, and the generator pass that
 # hoisted it back out of suspending headers.
-ALLOC_BASELINE := 2618271
+#
+# +3,466 for `iterateReverse` on the four list types: 421 behaviour and 3,045
+# the source. The behaviour is FOUR MORE DECLARATIONS -- a stdlib member costs
+# a Decl row on its template and on every monomorphisation of it, and a
+# self-compile mints many -- not the walk, which is one field and one branch in
+# a cursor that already existed. The source is the emitter's own new legs.
+ALLOC_BASELINE := 2621737
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
