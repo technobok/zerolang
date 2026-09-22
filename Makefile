@@ -1668,7 +1668,13 @@ perf: $(PERFBIN)
 # +581 refusing a reference conformer of a facet: 0 behaviour -- the compiler
 # conforms no reftype to one -- and 581 source, which is the rule and its
 # message.
-ALLOC_BASELINE := 2627334
+#
+# +3,218 giving `with` its value form: -13 behaviour and 3,231 source. The
+# behaviour falls because forwardTail asks withForwardsTail once where it used
+# to recurse; the source is the emission itself, which is one binding emitter
+# for the statement and the expression plus the three small readers that say
+# which node a `with` takes its value and its type from.
+ALLOC_BASELINE := 2630552
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

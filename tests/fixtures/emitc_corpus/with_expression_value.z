@@ -1,0 +1,90 @@
+# with_expression_value.z -- `with` used as an EXPRESSION. grammar.pdoc has
+# always said the form exists -- "`with` can be used as an expression. The
+# result will be the value of the `do` expression" -- and the emitter had no leg
+# for it, so `n: with v: ... do ...` was `error[E0500]: unhandled expr` for every
+# value but one, and THAT one was a silently empty list: a collection-typed RHS
+# fell through to `emitListBind`'s last leg, "a fresh list at the capacity asked
+# for", which accepts any RHS and builds an empty one.
+#
+# It is the statement form with one difference -- the body binds a local instead
+# of being dropped -- so both come out of one emission, and the body's value
+# asks the same dispatcher a binding of it would. That is what makes `comp`,
+# `chosen` and `nested` work: a comprehension, an `if` and another `with` each
+# bind a local their own way.
+#
+# `text` is the one that needs its own answer: THE WITH NODE CARRIES THE BOUND
+# VALUE'S TYPE, not the expression's (checkWith stamps it there because the
+# binding needs it), so a body yielding something else -- i64 bound, String
+# yielded -- typed the statement expression's local as int64_t and would not
+# compile.
+#
+# TAIL POSITION IS THREE CASES AND THEY WERE TWO BUGS. `tailBare` returned the
+# value the `with` BOUND, from a function with no `return` at all: return
+# position passed into the body, and an unbraced body is not a block, so nothing
+# consumed it. `tailBraced` forwarded correctly and still does. `tailReturns`
+# returns from inside the body, which is the case forwarding is for --
+# `withForwardsTail` is the one predicate the checker's tail-exit record and the
+# emitter both read, so they cannot disagree about which line returns.
+mkText: function out String is {
+    return "hello".string
+}
+
+tailBare: function {xs: (ListVal i64).view} out i64 is {
+    with a: (xs.get i: 0) do a * 3
+}
+
+tailBraced: function {xs: (ListVal i64).view} out i64 is {
+    with a: (xs.get i: 0) do { a * 3 }
+}
+
+tailReturns: function {xs: (ListVal i64).view} out i64 is {
+    with a: (xs.get i: 0) do {
+        if a > 3 then { return a * 2 }
+        return 0
+    }
+}
+
+twice: function {v: i64} out i64 is {
+    return v * 2
+}
+
+main: function is {
+    xs: ListVal i64
+    xs.append from: 5
+    xs.append from: 7
+
+    bare: with v: (xs.get i: 0) do v * 2
+    print "bare \{bare}"
+
+    block: with v: (xs.get i: 0) do {
+        k: v + 1
+        k * 10
+    }
+    print "block \{block}"
+
+    comp: with it: xs.iterate do for e: it loop e * 2
+    print "comp \{comp.length}"
+    for c: comp.iterate loop print "  \{c}"
+
+    chosen: with v: (xs.get i: 0) do if v > 3 then 100 else 200
+    print "chosen \{chosen}"
+
+    nested: with a: (xs.get i: 0) do with b: (xs.get i: 1) do a + b
+    print "nested \{nested}"
+
+    text: with v: (xs.get i: 0) do "n=\{v}"
+    print "text \{text}"
+
+    owned: with t: mkText do t.copy
+    print "owned \{owned}"
+
+    arg: twice v: (with a: (xs.get i: 0) do a + 1)
+    print "arg \{arg}"
+
+    print "tailBare \{tailBare :xs}"
+    print "tailBraced \{tailBraced :xs}"
+    print "tailReturns \{tailReturns :xs}"
+
+    # the statement form drops the value, as it always has
+    with it: xs.iterate do for e: it loop print "stmt \{e}"
+}

@@ -30,6 +30,7 @@ public: unit {
     :targetExeSuffix
     :targetTripleError
     :blockHasBreak
+    :withForwardsTail
     :armLeaves
     :dissectedArgOf
     :dissectedArmOf
@@ -43760,6 +43761,24 @@ freshResultNode: function {st: zenv.ZSymbolTable.view nid: u64} out bool is {
     }
 }
 
+# withForwardsTail -- return position passes INTO a `with`'s body, rather than
+# the `with` being the tail value itself, when that body is a `do` block no
+# `break` leaves. An unbraced body is a value, and the `with` line returns it.
+# The tail-exit record and the emitter both ask THIS, so the two cannot
+# disagree about which line returns -- when they did, a bare-bodied tail `with`
+# was recorded by nobody and emitted a function with no `return` at all.
+withForwardsTail: function {ast: Ast.view n: astnode.view} out bool is {
+    match (
+        n
+    ) case withexpr then {
+        ds: doStatementOf n: (ast.nodes.get i: n.body.u64)
+        if ds.isZero then return false
+        return (blockHasBreak :ast n: (ast.nodes.get i: ds.u64)).not
+    } else {
+        return false
+    }
+}
+
 # forwardTail -- the last line `innerId` of a block in return position: a `with`
 # block, or a `do` block no `break` leaves, hands return position to its own
 # last line, as the emitter hands it on.
@@ -43770,7 +43789,9 @@ forwardTail: function {st: zenv.ZSymbolTable ast: Ast.view innerId: zast.nodeid}
         n
     ) case withexpr then {
         # its body is a `do` block, whose own block holds the lines
-        forwardTail :st :ast innerId: n.body
+        if (withForwardsTail :ast n: (ast.nodes.get i: innerId.u64)) then {
+            st.tailBlock = (doStatementOf n: (ast.nodes.get i: n.body.u64)).u64
+        }
     } case doexpr then {
         if (blockHasBreak :ast n: (ast.nodes.get i: n.statement.u64)
         ).not then st.tailBlock = n.statement.u64
@@ -44727,7 +44748,10 @@ recordTailExit: function {
 } is {
     if valId.isZero then return
     vn: ast.nodes.get i: valId.u64
-    if vn.withexpr or vn.doexpr then return
+    # a `do` line, and a `with` that hands return position to its own body,
+    # record at that body's last line instead
+    if vn.doexpr then return
+    if (withForwardsTail :ast n: vn) then return
     ret: ztypes.vid
     rn: bareAtomNameId n: vn
     if rn.isZero.not then ret = (st.lookupVarId nameId: rn).or d: ztypes.vid

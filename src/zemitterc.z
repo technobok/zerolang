@@ -16756,6 +16756,13 @@ emitExpr: function {
         mcx: emitControlExpr :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64)
         if mcx.length > 0 then return mcx
         return (unhandledExpr :ctx line: n.lineno)
+    } case withexpr then {
+        # grammar.pdoc: "`with` can be used as an expression. The result will be
+        # the value of the `do` expression." It reaches C the way an `if` or a
+        # `match` does -- no C expression spells a scope with a binding in it
+        wcx: emitControlExpr :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64)
+        if wcx.length > 0 then return wcx
+        return (unhandledExpr :ctx line: n.lineno)
     } else {
         return (unhandledExpr :ctx line: (ztypecheck.nodeLine :n))
     }
@@ -17046,7 +17053,7 @@ emitControlPtrExpr: function {
     return r
 }
 
-# emitControlExpr -- an `if` or a `match` used inside an expression (an
+# emitControlExpr -- an `if`, a `match` or a `with` used inside an expression (an
 # argument, an operand, an interpolation part, a condition, a returned value)
 # that no C expression spells: a match, or an if whose arms are blocks. Its arms
 # run where the expression is evaluated -- at every loop test, only past a short
@@ -17063,7 +17070,7 @@ emitControlExpr: function {
 } out String is {
     nid: zast.nodeIdOf :n
     # a generic body's value is typed by the instance being emitted
-    vt: bindingStampOf :symtab :ctx nid: nid.u64
+    vt: bindingStampOf :symtab :ctx nid: (controlValueStampNid :ast :symtab :n)
     ct: typeRefC :ast :symtab :ctx tid: vt thisTid: ztypes.tid
     if ct.length > 0 when (isHeapPtrCollection :symtab :ctx tid: vt) then ct = "\{ct}*"
     # "" when there is no C type, or when an arm leaves from here, which the
@@ -19049,9 +19056,10 @@ emitControlCollectionBind: function {
     tmp.oweList stmt: free.copy name: nm.string vid: nameVid
 }
 
-# controlValueOwnsArms -- an `if`, a `match` or a breakless do block used as a
-# value, none of whose arms yields a borrowed read (a field, an element view):
-# every arm hands over a value of its own. False for any other node.
+# controlValueOwnsArms -- an `if`, a `match`, a `with` or a breakless do block
+# used as a value, none of whose arms yields a borrowed read (a field, an
+# element view): every arm hands over a value of its own. False for any other
+# node. A `with` has ONE arm, its body.
 controlValueOwnsArms: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -19063,6 +19071,8 @@ controlValueOwnsArms: function {
     ) case doexpr then {
         if (ztypecheck.blockHasBreak :ast n: (ast.nodes.get i: n.statement.u64)) then return false
         return (armValueOwned :ast :symtab :ctx blockId: n.statement)
+    } case withexpr then {
+        return (armValueOwned :ast :symtab :ctx blockId: n.body)
     } case ifexpr then null case caseexpr then null else {
         return false
     }
@@ -19098,7 +19108,7 @@ armValueOwned: function {
         if valId.isZero then return true
     }
     vn: ast.nodes.get i: valId.u64
-    nested: vn.ifexpr or vn.caseexpr or vn.doexpr
+    nested: vn.ifexpr or vn.caseexpr or vn.doexpr or vn.withexpr
     if nested then return (controlValueOwnsArms :ast :symtab :ctx n: vn)
     return (bindingRhsIsBorrow :ast :symtab :ctx n: vn).not
 }
@@ -21068,16 +21078,112 @@ emitGenLocalBind: function {
     vvSet xs: ctx.aliases vid: nameVid val: fld.stringView
 }
 
-# emitWithStmt -- `with x: <value> do <body>`: the value is bound for the body's
-# duration and destroyed with the block it was bound in, whatever exit the body
-# takes. The binding is emitted into the ENCLOSING C block rather than braces of
-# its own, so that block's flush is where its cleanup belongs -- and inside a
-# loop body that flush runs per iteration.
+# emitWithStmt -- `with x: <value> do <body>` as a statement.
 emitWithStmt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: zast.withrow.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    wnoTid: ztypes.tid
+    emitWithBody :ast :symtab :ctx :n bindTo: "" bindCt: "" bindTid: wnoTid :ind :tmp :buf
+}
+
+# withValueBlock -- the node a `with` body yields its value from. A BRACED body
+# is a `do` block, not a bare statement block, so the value is its statement
+# block's last line; an unbraced one is the value itself.
+withValueBlock: function {n: astnode.view} out zast.nodeid is {
+    match (
+        n
+    ) case doexpr then {
+        return n.statement
+    } else {
+        return (zast.nodeIdOf :n)
+    }
+}
+
+# withValueNodeId -- the node whose stamp types a `with` used as an EXPRESSION.
+# THE WITH NODE CARRIES THE BOUND VALUE'S TYPE, not the expression's: checkWith
+# stamps it there because the binding needs it, and says so. So the expression's
+# own type is its body's value -- which differs whenever the body computes
+# something else, `with v: (xs.get i: 0) do "n=\{v}"` being i64 bound and String
+# yielded.
+withValueNodeId: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view n: zast.withrow.view
+} out u64 is {
+    vb: withValueBlock n: (ast.nodes.get i: n.body.u64)
+    isBlk: false
+    {
+        bn: ast.nodes.get i: vb.u64
+        isBlk = bn.statement
+    }
+    if isBlk.not then return vb.u64
+    lineId: ztypecheck.lastStmtLineIdAt :ast oId: vb
+    if lineId.isZero then return vb.u64
+    vId: ztypecheck.implicitReturnValue st: symtab :ast :lineId
+    if vId.isZero then return vb.u64
+    return vId.u64
+}
+
+# controlValueStampNid -- the node whose stamp types a control value. An `if` or
+# a `match` carries its own; a `with` carries the bound value's instead
+# (withValueNodeId).
+controlValueStampNid: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.view
+} out u64 is {
+    match (
+        n
+    ) case withexpr then {
+        return (withValueNodeId :ast :symtab :n)
+    } else {
+        return (zast.nodeIdOf :n).u64
+    }
+}
+
+# emitWithBindValue -- `s: with x: <value> do <expr>`: run the `with` with its
+# body binding the local instead of being dropped. Its value IS the body's
+# value, which is what makes the statement and the expression one emission with
+# one difference.
+emitWithBindValue: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+    rtid: ztypes.tid
+    nm: StringView
+    ct: StringView
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} out bool is {
+    match (
+        n
+    ) case withexpr then {
+        emitWithBody :ast :symtab :ctx :n bindTo: nm bindCt: ct bindTid: rtid :ind :tmp :buf
+        return true
+    } else {
+        return false
+    }
+}
+
+# emitWithBody -- `with x: <value> do <body>`: the value is bound for the body's
+# duration and destroyed with the block it was bound in, whatever exit the body
+# takes. The binding is emitted into the ENCLOSING C block rather than braces of
+# its own, so that block's flush is where its cleanup belongs -- and inside a
+# loop body that flush runs per iteration. `bindTo` names the local the body's
+# value assigns to, "" when the `with` is a statement and the value is dropped.
+emitWithBody: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.withrow.view
+    bindTo: StringView
+    # the target's C type and stamped type; unused when bindTo is ""
+    bindCt: StringView
+    bindTid: ztypes.tid
     ind: StringView
     tmp: TmpCtr
     buf: String.borrow
@@ -21139,7 +21245,44 @@ emitWithStmt: function {
         :tmp
     )
     wbody: ast.nodes.get i: n.body.u64
-    emitBodyNode :ast :symtab :ctx n: wbody :ind :tmp :buf
+    if bindTo.length > 0 then {
+        wvb: withValueBlock n: wbody
+        # THE BODY MAY BE A CONTROL VALUE of its own -- an `if`, a `match` or a
+        # comprehension -- and each of those binds a local its own way, so the
+        # body's value asks the same dispatcher a binding of it would. Only a
+        # plain value falls through to a declaration and an assignment.
+        if (emitControlBindValue
+            :ast
+            :symtab
+            :ctx
+            vid: wvb
+            rtid: bindTid
+            nm: bindTo
+            ct: bindCt
+            :ind
+            :tmp
+            :buf
+        ).not then {
+            wbd: "\{ind}\{bindCt} \{bindTo};\n"
+            buf.append wbd
+            # the scope is the `with`'s own and its end is printed below, after
+            # the body, exactly where the statement form prints it -- so the
+            # branch closes only the temporaries it registered itself
+            (emitBranchAssign
+                :ast
+                :symtab
+                :ctx
+                n: (ast.nodes.get i: wvb.u64)
+                target: bindTo
+                scope: 0
+                :ind
+                :tmp
+                :buf
+            )
+        }
+    } else {
+        emitBodyNode :ast :symtab :ctx n: wbody :ind :tmp :buf
+    }
     # the value ends with the `with`, though its line joined the enclosing C
     # block: what the checker recorded the `with`'s end destroys is spent here
     if (blockDiverges :ast :symtab :ctx n: wbody).not then (emitScopeDestroy
@@ -26371,8 +26514,15 @@ emitTailValue: function {
     isCtl: false
     {
         vn: ast.nodes.get i: vid.u64
-        isBlock = vn.withexpr or vn.doexpr
-        isCtl = vn.ifexpr or vn.caseexpr or vn.forexpr
+        isBlock = vn.doexpr
+        # A `with` THAT YIELDS A VALUE binds a return local like any other
+        # control value. It used to fall through to emitTailStmt, which emits
+        # the binding and then the body as a statement -- so the function
+        # returned the value the `with` BOUND rather than the one its body
+        # yielded: `with a: (xs.get i: 0) do a * 3` answered a, silently. A
+        # `with` whose body RETURNS yields nothing, so implicitReturnValue
+        # answers 0 above and that leg still has it.
+        isCtl = vn.ifexpr or vn.caseexpr or vn.forexpr or vn.withexpr
     }
     if isBlock then return false
     ctx.tailReturned = true
@@ -26380,7 +26530,10 @@ emitTailValue: function {
         emitReturnOfNode :ast :symtab :ctx vid: vid.u32 :ind :tmp :buf
         return true
     }
-    rtid: stampIdOf :symtab nid: vid.u64
+    rtid: (stampIdOf
+        :symtab
+        nid: (controlValueStampNid :ast :symtab n: (ast.nodes.get i: vid.u64))
+    )
     ct: typeRefC :ast :symtab :ctx tid: rtid thisTid: ztypes.tid
     if (isHeapPtrCollection :symtab :ctx tid: rtid) then ct = "\{ct}*"
     trn: tmpNext :ctx :tmp
@@ -26405,8 +26558,8 @@ emitTailValue: function {
     return true
 }
 
-# emitControlBindValue -- bind the value of an `if`, a `match` or a list
-# comprehension to the local `nm`, as a binding of it is emitted.
+# emitControlBindValue -- bind the value of an `if`, a `match`, a `with` or a
+# list comprehension to the local `nm`, as a binding of it is emitted.
 emitControlBindValue: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -26422,6 +26575,7 @@ emitControlBindValue: function {
     vn: ast.nodes.get i: vid.u64
     if (emitIfBindValue :ast :symtab :ctx n: vn :nm :ct :ind :tmp :buf) then return true
     if (emitMatchBindValue :ast :symtab :ctx n: vn :nm :ct :ind :tmp :buf) then return true
+    if (emitWithBindValue :ast :symtab :ctx n: vn :rtid :nm :ct :ind :tmp :buf) then return true
     if (forexprValue n: vn).not then return false
     lcb: ctxCname :ctx tid: rtid
     lc0: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)0);\n"
@@ -26486,6 +26640,11 @@ emitTailStmt: function {
         ctx.tailReturned = true
         return true
     } case withexpr then {
+        # return position passes inward only when the checker said it does
+        # (withForwardsTail); otherwise the `with` IS the tail value, and
+        # emitTailValue binds and returns it
+        if (ztypecheck.withForwardsTail :ast n: (ast.nodes.get i: n.nodeid.u64)
+        ).not then return false
         # an owned copy: the with-binding's emission below lends ast
         wnmR8: zast.nameTextAt :ast ref: n.name
         wnmT: varCName :ctx vid: (defVid :symtab nid: n.nodeid.u64) name: wnmR8.stringView
