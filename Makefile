@@ -733,6 +733,11 @@ perf: $(PERFBIN)
 # skipping the member materialisation for monos, where the lookup answers
 # without it, cost 59 allocations MORE than it saved.
 #
+# +524 for the conformance exemption on the method-body gate: a conformance row
+# scan per bodied member of a runtime-owned type. A vtable wrapper is emitted
+# from the row and not from a use site, so a member reached only through
+# `spec.member` is never stamped used and must not be deferred.
+#
 # +1,633 for the integer range itself: `intrange` and a bodied `each` on the
 # eight scalars are ~70 lines of new lib/system, which the self-compile
 # compiles like any other source. The DEMAND gate above is what keeps that off
@@ -1591,7 +1596,7 @@ perf: $(PERFBIN)
 #
 # -22 when that registration stopped taking the tree it no longer reads: 0
 # behaviour, all of it the source.
-ALLOC_BASELINE := 2617998
+ALLOC_BASELINE := 2618522
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

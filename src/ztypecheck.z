@@ -44034,7 +44034,27 @@ bodiedMemberDeferred: function {
     if memberDecl.isZero then return false
     if ownerTid.isZero then return false
     if (st.reg.isNativeOf tid: ownerTid).not then return false
+    # A CONFORMING TYPE CARRIES ITS WHOLE SURFACE. A spec's vtable wrapper is
+    # emitted from the conformance row, not from a use site, so a member
+    # reached only through `spec.member` is never stamped used and deferring it
+    # would leave the wrapper calling a body nothing walked. The conformance
+    # force (forceAllMembers) resolves the signatures and stops there, which is
+    # why the row has to be asked here instead.
+    if (typeOwnerConforms :st tid: ownerTid) then return false
     return (st.typing.usedMemberDecl.has item: memberDecl.u64).not
+}
+
+# typeOwnerConforms -- does any conformance row name this type (or the template
+# it was instantiated from) as an implementation?
+typeOwnerConforms: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    og: st.reg.genericOriginOf :tid
+    found: false
+    with cit: st.typing.conformance.iterate do for crow: cit loop {
+        if crow.implTypeId == tid.u64 or (og > 0 and (crow.implTypeId == og.u64)) then {
+            found = true
+        }
+    }
+    return found
 }
 
 # checkMethodBodies -- body-check every method of one type definition (is- and
