@@ -1867,6 +1867,11 @@ emitter-guard:
 # paramTakesArg is deliberately NOT counted: it answers which C form a parameter
 # takes, the value or a pointer to it, as well as whether it takes ownership, and
 # the first of those is the signature's to say and is not going anywhere.
+#
+# isNonLvalueArg IS counted and is the row that does not belong with the rest:
+# "can C take the address of this text" is a question about C, not about when a
+# value dies, and it has no checker answer to defer to. It rises when a site
+# that addresses a value learns to bind a non-lvalue first, which is a fix.
 lifetime-guard:
 	@l1=$$(grep -c 'registerScopeDestroy' src/zemitterc.z); \
 	l2=$$(grep -c 'refsLocal' src/zemitterc.z); \
@@ -1877,9 +1882,9 @@ lifetime-guard:
 	fail=0; \
 	chk() { if [ "$$2" -gt "$$3" ]; then echo "lifetime-guard FAIL: $$1 = $$2 (baseline $$3)"; fail=1; \
 	  elif [ "$$2" -lt "$$3" ]; then echo "lifetime-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
-	chk "registerScopeDestroy" "$$l1" 6; \
+	chk "registerScopeDestroy" "$$l1" 5; \
 	chk "refsLocal" "$$l2" 4; \
-	chk "isNonLvalueArg" "$$l3" 29; \
+	chk "isNonLvalueArg" "$$l3" 30; \
 	chk "bindingRhsIsBorrow" "$$l4" 10; \
 	chk "'_ah{' argument hoists" "$$l5" 1; \
 	chk "hoistExprIsBorrowRooted" "$$l6" 0; \
