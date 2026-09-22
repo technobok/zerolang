@@ -8540,7 +8540,7 @@ aliasBaseOf: function {
     if (rhsIsBorrowGet :ast :symtab :ctx n: avn) then {
         return (aliasbase node: n.value.u64 place: false)
     }
-    if (rhsIsBorrowedFieldRead :ast :symtab :ctx n: avn) then {
+    if (rhsIsBorrowedFieldRead :ast :symtab :ctx abind: n n: avn) then {
         return (aliasbase node: n.value.u64 place: true)
     }
     vsr: valueStructRefNode :ast :symtab :ctx n: avn
@@ -8778,23 +8778,26 @@ bindingVarIsBorrowed: function {
 # for it and must alias rather than snapshot it -- a snapshot of a reftype
 # shares the source's buffer and both grow and free it independently. A zero-arg
 # method auto-call reads as a dotted path too and answers FALSE: it returns a
-# value of its own. The borrow decision itself stays bindingRhsIsBorrow's.
+# value of its own. The borrow decision is the CHECKER's, read off the binding's
+# own VARIABLE like the bare-name shape beside it, so the two cannot disagree.
 rhsIsBorrowedFieldRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
+    # the binding, whose variable says whether it borrows
+    abind: zast.assignmentrow.view
     n: astnode.view
 } out bool is {
     match (
         n
     ) case statementline then {
         sfr: ast.nodes.get i: n.statementline.u64
-        return (rhsIsBorrowedFieldRead :ast :symtab :ctx n: sfr)
+        return (rhsIsBorrowedFieldRead :ast :symtab :ctx :abind n: sfr)
     } case dottedpath then {
         dn: ast.nodes.get i: n.nodeid.u64
         rtn: ast.nodes.get i: n.parent.u64
         if (pathRootsAtVariable :ast :symtab n: rtn).not then return false
-        if (bindingRhsIsBorrow :ast :symtab :ctx n: dn).not then return false
+        if (bindingVarIsBorrowed :symtab n: abind).not then return false
         fch: aliasChildName :ast :symtab n: dn
         fpid: interpPartNodeId n: (ast.nodes.get i: n.parent.u64)
         fco: (symtab.typing.declChildOf
