@@ -4035,7 +4035,20 @@ fieldSlotTid: function {
 } out ztypes.tid is {
     pt9: partialFieldTid :st :ast :unitDecl :scope :ownerTid :oId
     if pt9.isZero.not then return pt9
-    return (resolveFieldTyperef :st :ast :unitDecl :scope nid: oId :thisName)
+    # THE OWNER IS ON THE CONTAINMENT PATH for the width of this typeref, and
+    # only for it. A layout cycle is a field edge that reaches a type already
+    # on that path, which is a different question from reaching one merely
+    # part-resolved: the resolution walk gets into a type through method
+    # signatures and return types too, and neither forces a layout.
+    od7: declOfTypeId :st tid: (ztypes.tid.create from: ownerTid.u64)
+    prevOn7: false
+    if od7.isZero.not then {
+        prevOn7 = st.typing.declIsOnContainmentPath declId: od7
+        st.typing.declSetContaining declId: od7 mark: true
+    }
+    r7: resolveFieldTyperef :st :ast :unitDecl :scope nid: oId :thisName
+    if od7.isZero.not then st.typing.declSetContaining declId: od7 mark: prevOn7
+    return r7
 }
 
 # partialParamTid -- partialUnderDecl over a PARAMETER's typeref. A function's
@@ -9421,7 +9434,20 @@ detectTagAccessor: function {
     if tc.stringView != "tag" then return
     if (isNumericTypeName name: tp.stringView).not then return
     mname: zast.nameTextCopy :ast ref: am.name
-    nid: resolveFieldTyperef :st :ast :unitDecl :scope nid: am.operation thisName: defName
+    # A TAG ACCESSOR IS NOT A CONTAINMENT EDGE. `tag: u8.tag` declares a read of
+    # the discriminator the variant already carries, not a field that has to lay
+    # out inside it -- so it takes the plain typeref, and a type reached through
+    # it is never an ancestor of anything.
+    nid: (ztypes.tid.create
+        from: (resolveTyperefShell
+            :st
+            :scope
+            :ast
+            :unitDecl
+            nid: am.operation
+            thisName: defName
+        )
+    )
     if nid.isZero then return
     if (armNames.has item: am.name.u64) then {
         mac: "'\{mname}' collides with the '\{defName}' arm of the same name"
@@ -13751,10 +13777,20 @@ descendNamedId: function {
         return (ztypes.tid.create from: tid)
     }
     if (st.typing.declIsResolving declId: ddecl) then {
-        # A grey hit is a back-edge. Reference-kind targets (UNION/CLASS --
-        # boxed) are legal forward declarations; a VALUE-kind target reached
-        # through a containment edge cannot lay out.
-        if st.typing.inContainmentEdge then {
+        # A grey hit is a back-edge, and the early return below is what stops
+        # the descent going round again: it uses the forward-decl id rather
+        # than re-entering resolveDef. Whether that back-edge is an ERROR is a
+        # narrower question.
+        #
+        # Reference-kind targets (UNION/CLASS -- boxed) are legal forward
+        # declarations; a VALUE-kind target reached through a containment edge
+        # cannot lay out -- but only when the target is on the containment
+        # PATH. Grey alone says the resolution walk is inside it, and that walk
+        # gets into a type through method signatures, return types and tag
+        # accessors, none of which force a layout.
+        if st.typing.inContainmentEdge when (st.typing.declIsOnContainmentPath
+            declId: ddecl
+        ) then {
             cycV: (
                 ttv ==
                 ztypes.ztypetype.recordType or

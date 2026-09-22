@@ -346,6 +346,16 @@ Decl: class {
     # a type's methods, or a free function's body. The walk is what stamps a
     # body, so this is what the emitter asks before emitting one.
     walked: bool
+    # containing -- this declaration is on the CONTAINMENT path: resolution is
+    # inside a field or arm typeref it declares. The containment DFS's own grey
+    # mark, and the one a layout cycle is judged against.
+    #
+    # `resolving` cannot answer that. It marks a declaration reached by ANY
+    # edge -- a method signature, a return type, a tag accessor, an alias -- so
+    # a type merely part-resolved higher up reads as an ancestor of whatever
+    # field edge happens to reach it, and a back-edge to a leaf reads as a
+    # layout cycle.
+    containing: bool
     # grantsPrivate -- the field's declared type was a `.private` friend handle
     # (syntactic; not derivable from typeId).
     grantsPrivate: bool
@@ -1188,6 +1198,7 @@ ZTyping: class {
             defined: false
             pending: false
             walked: false
+            containing: false
             grantsPrivate: false
             unitScope: false
             fnptrField: false
@@ -1420,6 +1431,24 @@ ZTyping: class {
     declIsResolving: function {this: this.view declId: ztypes.declid} out bool is {
         decl: this.decls.get i: declId.u64
         return decl.resolving
+    }
+
+    # declSetContaining / declIsOnContainmentPath -- the containment DFS's grey
+    # mark, set only while resolution is inside a field or arm typeref this
+    # declaration declares. A grey hit through a containment edge is a layout
+    # cycle only when the target is on THIS path.
+    declSetContaining: function {:this declId: ztypes.declid mark: bool} is {
+        decl: this.decls.getMut i: declId.u64
+        decl.containing = mark
+    }
+
+    # whether this declaration has a field or arm typeref open below it
+    declIsOnContainmentPath: function {
+        this: this.view
+        declId: ztypes.declid
+    } out bool is {
+        decl: this.decls.get i: declId.u64
+        return decl.containing
     }
 
     # declSetDefined / declIsDefined -- the demand "done" mark.
@@ -3166,6 +3195,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         defined: false
         pending: false
         walked: false
+        containing: false
         grantsPrivate: false
         unitScope: false
         fnptrField: false

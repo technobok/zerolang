@@ -733,6 +733,13 @@ perf: $(PERFBIN)
 # skipping the member materialisation for monos, where the lookup answers
 # without it, cost 59 allocations MORE than it saved.
 #
+# +675 for the containment check asking whether the target is on the
+# containment PATH rather than merely mid-resolution: a per-Decl mark, set and
+# restored around each field or arm typeref. 0 behaviour on the corpus -- it
+# only stops a FALSE cycle, and nothing in the corpus triggered one -- so all
+# of it is the ~40 net lines of new src/ plus the mark's own set and restore
+# at every field edge of every type the compiler resolves.
+#
 # +1,369 for the counted range counting in the RECEIVER's width, and it is the
 # COMPILER'S OWN SOURCE, not the reader: 73 net lines of src/, at the 13-17
 # allocations a line this tree costs to compile. ab.sh splits it 0 behaviour /
@@ -1571,7 +1578,7 @@ perf: $(PERFBIN)
 #
 # -22 when that registration stopped taking the tree it no longer reads: 0
 # behaviour, all of it the source.
-ALLOC_BASELINE := 2615134
+ALLOC_BASELINE := 2615809
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
