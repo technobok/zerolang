@@ -34287,9 +34287,19 @@ adoptPinnedArgTemps: function {st: zenv.ZSymbolTable pins: (List ztyping.PinPath
     with rit: roots.iterate do for r: rit loop {
         # a temp's name is unique to the run, so an entry is never asked twice
         ato: st.typing.pinnedArgTemps.get key: r
-        if ato.some when (st.lookupVarId nameId: r).none then {
-            st.defineVar nameId: r vid: ato
-            st.typing.lineUnnamedLocals.append r
+        if ato.some then {
+            if (st.lookupVarId nameId: r).none then {
+                # defineTemp, not defineVar: the temporary is now THIS scope's,
+                # and `tempScopeOf` is the key its destroy list is under -- left
+                # pointing at the popped call scope, scopeOwnsTemp looks it up
+                # in a list that no longer names it and answers "owns nothing",
+                # which drops the free
+                st.defineTemp nameId: r vid: ato
+                st.typing.lineUnnamedLocals.append r
+            }
+            # settled either way -- adopted here, or still bound by a scope that
+            # has yet to pop -- so the scope that holds it now may list it
+            st.typing.pinnedTempPending.set key: ato value: false
         }
     }
 }
@@ -35766,7 +35776,12 @@ lockNonTrivialArg: function {
         tnId: nameIdOf :ast name: tnm.stringView
         pinsAppendOne :pins nameId: tnId shared: isViewArg mutable: isViewArg.not alias: false
         tvo: st.lookupVarId nameId: tnId
-        if tvo.some then st.typing.pinnedArgTemps.set key: tnId value: tvo
+        if tvo.some then {
+            st.typing.pinnedArgTemps.set key: tnId value: tvo
+            # the call's own scope pops before the result is judged, and it must
+            # not list a temporary that result keeps locked
+            st.typing.pinnedTempPending.set key: tvo value: true
+        }
     }
     if hadPending.not when isLockish when byRef then {
         (lockCallArg

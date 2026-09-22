@@ -1674,7 +1674,11 @@ perf: $(PERFBIN)
 # to recurse; the source is the emission itself, which is one binding emitter
 # for the statement and the expression plus the three small readers that say
 # which node a `with` takes its value and its type from.
-ALLOC_BASELINE := 2630552
+#
+# +776 giving every temporary ONE death: 0 behaviour and 776 source. The map
+# that says which temps a pinning call's result will adopt is one row per such
+# temp, and the compiler makes few; the source is the map and its two readers.
+ALLOC_BASELINE := 2631328
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
