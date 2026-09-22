@@ -7343,6 +7343,11 @@ attachMethods: function {
 # spec resolves to a FACET or PROTOCOL (a RECORD marker like a numeric's `tag: tag` is a
 # discriminator child, NOT a conformance). The helper C names (vtable/create/destroy/
 # wrapper) are the emitter's and stay empty here.
+#
+# A FACET IS CONFORMED BY A VALTYPE, a protocol by a reftype, and the stdlib
+# says so itself: `valhashable` is a facet and `RefHashable` is a protocol, the
+# same constraint split by family. A facet value holds its conformer INLINE, in
+# a union, so a reference one would put a reference inside a value.
 recordConformance: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -7350,6 +7355,8 @@ recordConformance: function {
     specTypeId: u64
     label: StringView
     labelNameId: u64
+    # the marker's operation node, for the refusal's position
+    markerOp: zast.nodeid
 } is {
     tt: st.reg.typetypeOf typeId: (ztypes.tid.create from: specTypeId.u64)
     recordIt: false
@@ -7362,6 +7369,28 @@ recordConformance: function {
     } case protocolType then {
         recordIt = true
     } else null
+    if isFacetC when (typeIsReftype :st tid: (ztypes.tid.create from: implTypeId.u64)) then {
+        rcin: st.reg.nameOf tid: (ztypes.tid.create from: implTypeId.u64)
+        rcsn: st.reg.nameOf tid: (ztypes.tid.create from: specTypeId.u64)
+        rcm: "'\{rcin}' is a reference type and cannot conform to the facet '\{rcsn}'"
+        rch: "a facet holds its conformer INLINE, so a reference one would put a reference inside a value; declare '\{rcsn}' a protocol, the way the stdlib pairs `valhashable` (a facet) with `RefHashable` (a protocol)"
+        rcn: String
+        rcnode: ast.nodes.get i: markerOp.u64
+        (addErrorH
+            :st
+            nodeid: markerOp
+            lineno: (nodeLine n: rcnode)
+            colno: (nodeCol n: rcnode)
+            e: zast.err.typeError
+            msg: rcm
+            note: rcn
+            hint: rch
+            width: rcsn.length.u32.orPanic
+        )
+        # the row is still recorded: nothing is emitted once there is an error,
+        # and a marker that is no conformance reads as an ordinary FIELD, which
+        # made the construction below it report a missing argument as well
+    }
     if recordIt then {
         cf: st.reg.newConformance :implTypeId :specTypeId :label :labelNameId isFacet: isFacetC
         st.typing.conformance.append cf
@@ -7577,6 +7606,7 @@ attachMarkers: function {
                     specTypeId: mtid
                     label: mlbl.stringView
                     labelNameId: mmName.u64
+                    markerOp: mmOp
                 )
             } case none then {
                 if (isLabelValue op: (ast.nodes.get i: mmOp.u64)) then {

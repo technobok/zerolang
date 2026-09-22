@@ -1664,7 +1664,11 @@ perf: $(PERFBIN)
 # +226 hoisting a non-lvalue at a protocol or facet parameter: 0 behaviour --
 # the compiler passes no construction to one -- and 226 source, which is the
 # hoist leg and the `ast` the site now takes.
-ALLOC_BASELINE := 2626753
+#
+# +581 refusing a reference conformer of a facet: 0 behaviour -- the compiler
+# conforms no reftype to one -- and 581 source, which is the rule and its
+# message.
+ALLOC_BASELINE := 2627334
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
