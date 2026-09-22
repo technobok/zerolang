@@ -1652,7 +1652,11 @@ perf: $(PERFBIN)
 # behaviour again, and for the same reason -- there is no comprehension in src/
 # or lib/system, so the new routing never runs on a self-compile. All of it is
 # the new emitter code, which is a class, a Ctx stack and two lifted functions.
-ALLOC_BASELINE := 2626788
+#
+# -122 backing the `with`-expression fallback leg out again: 0 behaviour, -122
+# source. A construct the emitter cannot render is a FALLBACK, and those only
+# ever shrink -- the answer is to make the value bind, not to refuse it here.
+ALLOC_BASELINE := 2626666
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -3124,7 +3128,7 @@ view-guard:
 # commit message, and the guard cannot tell the two apart: the prose is the
 # check, so say which one it is.
 FALLBACK_BASELINE :=
-EMITFAIL_BASELINE := 36
+EMITFAIL_BASELINE := 37
 MARKER_BASELINE := 24
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
