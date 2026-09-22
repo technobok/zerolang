@@ -23919,9 +23919,14 @@ emitObjIterFor: function {
     }
 }
 
-# emitIntRangeFor -- `for x: N.iterate loop` / `for x: (N.iterate from: F)`:
-# a counted C for-loop `for (T x = F; x < N; x++)`. Returns false when the
+# emitIntRangeFor -- `for x: <integer range> loop`: the header's shared
+# preamble, then whichever family the range belongs to. Returns false when the
 # header is not a single integer-range binding.
+#
+# The two families are emitted separately because they read their header
+# differently -- a half-open range's receiver is its BOUND, a closed one's is
+# its START -- while the label and the bail above them are the same question
+# asked once.
 emitIntRangeFor: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -23941,41 +23946,214 @@ emitIntRangeFor: function {
         if lblR8.length == 0 then return false
         lblV8: defVid :symtab nid: (interpPartNodeId n: (ast.nodes.get i: c0.operation.u64))
         lbl: varCName :ctx vid: lblV8 name: lblR8.stringView
-        bound: rangeBoundExpr :ast :symtab :ctx n: (ast.nodes.get i: c0.operation.u64)
-        if bound.length == 0 then return false
-        fromx: rangeFromExpr :ast :symtab :ctx n: (ast.nodes.get i: c0.operation.u64)
-        ctR: rangeCType :ast :symtab n: (ast.nodes.get i: c0.operation.u64)
-        if ctR.length == 0 then return false
+        # THE CLOSED FAMILY FIRST, because rangeBoundExpr answers "" for it: a
+        # closed range's receiver is its start, not its bound, so it has no
+        # bound to read and the half-open leg would decline the header and hand
+        # it to the object path to build a cursor.
+        crM: closedRangeMemberOf :ast n: (ast.nodes.get i: c0.operation.u64)
+        if crM.isZero.not then return (emitClosedRangeFor
+            :ast
+            :symtab
+            :ctx
+            :m
+            n: (ast.nodes.get i: c0.operation.u64)
+            lbl: lbl.stringView
+            down: crM == zast.names.wkDownto
+            :ind
+            :tmp
+            :buf
+        )
+        return (emitCountedRangeFor
+            :ast
+            :symtab
+            :ctx
+            :m
+            n: (ast.nodes.get i: c0.operation.u64)
+            lbl: lbl.stringView
+            :ind
+            :tmp
+            :buf
+        )
+    } else {
+        return false
+    }
+}
+
+# emitCountedRangeFor -- `for x: N.iterate loop` / `for x: (N.iterate from: F)`
+# and the lean `for x: N loop`: the HALF-OPEN range as `for (T x = F; x < N;
+# x++)`. False when the operand drives no counted range.
+emitCountedRangeFor: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    m: zast.forrow.view
+    n: astnode.view
+    lbl: StringView
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} out bool is {
+    bound: rangeBoundExpr :ast :symtab :ctx :n
+    if bound.length == 0 then return false
+    fromx: rangeFromExpr :ast :symtab :ctx :n
+    ctR: rangeCType :ast :symtab :n
+    if ctR.length == 0 then return false
+    lidR: pushLoopLabel :ctx :tmp isDo: false
+    # A suspension inside the body RETURNS from `.call`, and the resume
+    # `goto` lands inside the loop, PAST the C for-init -- so the counter,
+    # which lives only in the header, is indeterminate on the next call and
+    # the loop yields once and reports itself exhausted. It is no local the
+    # checker keeps in the instance: a `for` label is a nameid on the
+    # header's namedoperation and carries no variable id to alias a field
+    # to. Instead the counter keeps its
+    # C local -- so the header, `continue` and the increment are all
+    # untouched -- and is SPILLED to a state field across each suspension.
+    pushed: false
+    if ctx.genActive when (zast.yieldCountIn :ast nid: m.body) > 0 then {
+        ctx.genForNext = ctx.genForNext + 1
+        fcF: "_fc_\{ctx.genForNext}"
+        ctx.genForSpills.append (ForSpill
+            field: fcF
+            saved: lbl.string
+            restored: lbl.string
+            kind: spillkind.copy
+            payC: String
+        )
+        pushed = true
+    }
+    lh: "\{ind}for (\{ctR} \{lbl} = \{fromx}; \{lbl} < (\{bound}); \{lbl}++) {\n"
+    buf.append lh
+    ind2: "\{ind}    "
+    # the body is a BLOCK: whatever it registers -- an argument hoisted to an
+    # `_ah` temp, an owned local -- is declared per iteration and has to be
+    # freed per iteration. Without the mark those frees stayed pending and
+    # landed after the loop, naming a temp that had left C scope.
+    fLR: tmp.frees.length
+    lLR: tmp.listFrees.length
+    dvR: false
+    if m.body > 0 then {
+        bodyNode: ast.nodes.get i: m.body.u64
+        emitBodyNode :ast :symtab :ctx n: bodyNode ind: ind2.stringView :tmp :buf
+        dvR = blockDiverges :ast :symtab :ctx n: bodyNode
+    }
+    closeScopeBlock :symtab :ctx :tmp fL: fLR lL: lLR diverged: dvR node: m.body.u64 :buf
+    emitContLabel :ctx id: lidR ind: ind2.stringView :buf
+    lc: "\{ind}}\n"
+    buf.append lc
+    popLoopLabel :ctx id: lidR :ind :buf
+    # the counter leaves C scope with the loop, so a suspension after it
+    # must not spill it
+    if pushed then ctx.genForSpills.pop
+    return true
+}
+
+# closedRangeCmp -- the guard a closed range is entered under: an ASCENDING
+# range whose start is already past its end walks nothing, and a descending one
+# whose start is already below it does the same. One compare, outside the loop.
+closedRangeCmp: function {down: bool} out StringView is {
+    if down then return ">="
+    return "<="
+}
+
+# closedRangeStepOp -- which way the loop variable moves.
+closedRangeStepOp: function {down: bool} out StringView is {
+    if down then return "-"
+    return "+"
+}
+
+# emitClosedRangeFor -- `for x: (F.upto to: T) loop` and its `downto` twin: the
+# CLOSED range lowered to a counted C loop, with no range object constructed.
+#
+# A closed range cannot be driven by an endpoint comparison. `i >= 0` on an
+# unsigned type is true forever and the step wraps at zero, and a range whose
+# last value is its type's MAXIMUM has no value past it to stop at -- the two
+# shapes the closed forms exist to serve. So the loop counts down a trip count,
+# exactly as `intrange` does.
+#
+# The loop variable stays in the for-INIT, where the half-open form keeps it,
+# and steps in the THIRD clause so `continue` reaches the step. It steps through
+# u64, which is defined at every width and sign; its final step is dead and may
+# wrap (`3.u8.downto to: 0` leaves it at 255), because the count has already
+# reached zero and the loop has left.
+#
+# Both ends are bound to locals first: each is read twice, once by the guard and
+# once by the count or the init, and re-emitting the expression would evaluate
+# it twice.
+emitClosedRangeFor: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    m: zast.forrow.view
+    n: astnode.view
+    lbl: StringView
+    down: bool
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} out bool is {
+    # asked of the WHOLE node, before the match below narrows it to the call
+    # row: both readers take the node the header binds, as rangeBoundExpr's
+    # arms do
+    ctR: rangeCType :ast :symtab :n
+    if ctR.length == 0 then return false
+    tox: rangeToExpr :ast :symtab :ctx :n
+    if tox.length == 0 then return false
+    match (
+        n
+    ) case call then {
+        startx: (emitDottedReceiver
+            :ast
+            :symtab
+            :ctx
+            callable: (ast.nodes.get i: n.callable.u64)
+        )
+        if startx.length == 0 then return false
+        mN: tmpNext :ctx :tmp
+        rs: "_rs\{mN}"
+        re: "_re\{mN}"
+        fn: "_fn\{mN}"
+        cnt: closedRangeCountExpr from: rs.stringView to: re.stringView :down
         lidR: pushLoopLabel :ctx :tmp isDo: false
-        # A suspension inside the body RETURNS from `.call`, and the resume
-        # `goto` lands inside the loop, PAST the C for-init -- so the counter,
-        # which lives only in the header, is indeterminate on the next call and
-        # the loop yields once and reports itself exhausted. It is no local the
-        # checker keeps in the instance: a `for` label is a nameid on the
-        # header's namedoperation and carries no variable id to alias a field
-        # to. Instead the counter keeps its
-        # C local -- so the header, `continue` and the increment are all
-        # untouched -- and is SPILLED to a state field across each suspension.
+        d0: "\{ind}\{ctR} \{rs} = \{startx};\n"
+        buf.append d0
+        d1: "\{ind}\{ctR} \{re} = \{tox};\n"
+        buf.append d1
+        d2: "\{ind}uint64_t \{fn} = 0;\n"
+        buf.append d2
+        gd: closedRangeCmp :down
+        d3: "\{ind}if (\{rs} \{gd} \{re}) \{fn} = \{cnt};\n"
+        buf.append d3
+        # TWO values cross a suspension here where the half-open form spills
+        # one: the resume `goto` lands past the C for-init, and the count is no
+        # more recomputable than the variable -- the ends it was taken from
+        # left C scope with the declarations above.
         pushed: false
         if ctx.genActive when (zast.yieldCountIn :ast nid: m.body) > 0 then {
             ctx.genForNext = ctx.genForNext + 1
             fcF: "_fc_\{ctx.genForNext}"
             ctx.genForSpills.append (ForSpill
                 field: fcF
-                saved: lbl.copy
-                restored: lbl.copy
+                saved: lbl.string
+                restored: lbl.string
+                kind: spillkind.copy
+                payC: String
+            )
+            fnF: "_fn_\{ctx.genForNext}"
+            ctx.genForSpills.append (ForSpill
+                field: fnF
+                saved: fn.copy
+                restored: fn.copy
                 kind: spillkind.copy
                 payC: String
             )
             pushed = true
         }
-        lh: "\{ind}for (\{ctR} \{lbl} = \{fromx}; \{lbl} < (\{bound}); \{lbl}++) {\n"
+        sp: closedRangeStepOp :down
+        st1: "\{fn} = \{fn} - 1"
+        st2: "\{lbl} = (\{ctR})((uint64_t)\{lbl} \{sp} 1ULL)"
+        lh: "\{ind}for (\{ctR} \{lbl} = \{rs}; \{fn} > 0; \{st1}, \{st2}) {\n"
         buf.append lh
         ind2: "\{ind}    "
-        # the body is a BLOCK: whatever it registers -- an argument hoisted to an
-        # `_ah` temp, an owned local -- is declared per iteration and has to be
-        # freed per iteration. Without the mark those frees stayed pending and
-        # landed after the loop, naming a temp that had left C scope.
         fLR: tmp.frees.length
         lLR: tmp.listFrees.length
         dvR: false
@@ -23989,9 +24167,10 @@ emitIntRangeFor: function {
         lc: "\{ind}}\n"
         buf.append lc
         popLoopLabel :ctx id: lidR :ind :buf
-        # the counter leaves C scope with the loop, so a suspension after it
-        # must not spill it
-        if pushed then ctx.genForSpills.pop
+        if pushed then {
+            ctx.genForSpills.pop
+            ctx.genForSpills.pop
+        }
         return true
     } else {
         return false
@@ -24017,6 +24196,84 @@ isIntScalarName: function {name: StringView} out bool is {
 # advanced -- a loop that printed the receiver forever.
 isRangeMemberId: function {id: zast.nameid} out bool is {
     return id == zast.names.wkIterate or (id == zast.names.wkEach)
+}
+
+# isClosedRangeMemberId -- `upto` or `downto`, by INTERNED ID. SEPARATE from
+# isRangeMemberId deliberately: that one's callers read the receiver as the
+# range's BOUND, and a closed range's receiver is its START. Teaching the two
+# names to it would emit `for (T i = 0; i < start; i++)` and walk the wrong
+# values with no diagnostic -- the mirror of the failure recorded above, where
+# one of two recognisers learned `each` and the other did not. rangeCType asks
+# both, because the width is the receiver's whichever family it is.
+isClosedRangeMemberId: function {id: zast.nameid} out bool is {
+    return id == zast.names.wkUpto or (id == zast.names.wkDownto)
+}
+
+# closedRangeMemberOf -- the closed-range member a `for` header's operation
+# calls, or 0 for anything else. Only the CALL shape can name one: the endpoint
+# arrives as a `to:` argument, so there is no bare dotted-path spelling to test.
+closedRangeMemberOf: function {ast: Ast.view n: astnode.view} out zast.nameid is {
+    match (
+        n
+    ) case call then {
+        mnId: dottedChildNameIdOf :ast n: (ast.nodes.get i: n.callable.u64)
+        if (isClosedRangeMemberId id: mnId) then return mnId
+        return zast.nameid
+    } else {
+        return zast.nameid
+    }
+}
+
+# rangeToExpr -- the `to:` endpoint of a closed range, or "". The argument is
+# taken by POSITION rather than by its label: `upto` and `downto` declare one
+# parameter each, and the member has already been identified by interned id
+# before this is asked, so the single argument present is that endpoint.
+rangeToExpr: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+} out String is {
+    match (
+        n
+    ) case call then {
+        if n.arguments.count.u64 != 1 then return "".string
+        aId: zast.kidAt kids: ast.kids span: n.arguments i: 0
+        a: ast.nodes.get i: aId.u64
+        if a.namedoperation then return (emitExpr
+            :ast
+            :symtab
+            :ctx
+            n: (ast.nodes.get i: a.operation.u64)
+        )
+        return "".string
+    } else {
+        return "".string
+    }
+}
+
+# closedRangeCountExpr -- the trip count a closed range walks: the number of
+# values in `[lo, hi]`, which is `hi - lo + 1` taken in the UNSIGNED domain.
+#
+# One expression serves all eight integer types and both directions. Each end is
+# reinterpreted through u64 first -- the two's complement `.bits` names in the
+# stdlib -- so a signed range spanning zero does not overflow the way `to - from`
+# would, and an unsigned one is simply zero-extended. The stdlib writes the
+# unsigned case as `(to - v).u64 + 1`, subtracting at the receiver's own width;
+# that truncation is a no-op here because the caller has already guarded
+# `lo <= hi`, so the difference cannot exceed what the receiver's width holds.
+# The two spellings therefore agree on every value, which is what must not drift.
+#
+# The full span is the one count this cannot express: `hi - lo` is then u64's
+# maximum and the `+ 1` wraps to zero, so the loop walks nothing. `intrange`
+# has the same hole, and closing it is not a lowering question.
+closedRangeCountExpr: function {from: StringView to: StringView down: bool} out String is {
+    if down then {
+        cd: "((uint64_t)\{from} - (uint64_t)\{to}) + 1ULL"
+        return cd
+    }
+    cu: "((uint64_t)\{to} - (uint64_t)\{from}) + 1ULL"
+    return cu
 }
 
 # rangeBoundExpr -- the upper bound of an `N.iterate` / `N.each` range (the
@@ -24104,7 +24361,10 @@ rangeCType: function {
     ) case call then {
         callableNode: ast.nodes.get i: n.callable.u64
         mnId: dottedChildNameIdOf :ast n: callableNode
-        if (isRangeMemberId id: mnId) then {
+        # BOTH range families, unlike rangeBoundExpr: a closed range's receiver
+        # is its START rather than its bound, but the induction variable's width
+        # is the receiver's either way
+        if (isRangeMemberId id: mnId) or (isClosedRangeMemberId id: mnId) then {
             # the callable of `N.iterate from: F` is the dotted path whose
             # receiver dottedReceiverStampId reads -- the node rangeBoundExpr
             # hands to emitDottedReceiver

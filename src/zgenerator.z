@@ -963,6 +963,7 @@ promoteForCond: function {
         if c0.namedoperation then {
             cn0: zast.nameTextAt :ast ref: c0.name
             if cn0.length > 0 when suspends when (condIsTrivial
+                :ast
                 n: (ast.nodes.get i: c0.operation.u64)
             ).not then doHoist = true
             if doHoist then {
@@ -1085,30 +1086,65 @@ promoteFor: function {
     )
 }
 
-# true when condition `n` is a trivial always-true form.
-condIsTrivial: function {n: astnode.view} out bool is {
+# countedRangeHeader -- a header the EMITTER lowers to a counted C `for`, named
+# by the same interned member ids it uses: `N.iterate`, `N.each`, and the closed
+# `F.upto to: T` / `F.downto to: T`.
+#
+# Asked below because such a header must NOT be hoisted. The emitter builds no
+# range object for it -- there is no construction for a resume `goto` to jump
+# past, which is the whole reason the hoist exists -- and moving it to a local
+# hides the member behind a binding, so the lowering never fires and the loop
+# builds a cursor after all. A receiver the emitter declines to count (a user
+# type carrying a member of the same name) is safe left here too: the checker
+# mints the loop's iterable field for a header that is a construction, and that
+# field is what the object path reads.
+countedRangeHeader: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
-    ) case atomid then {
-        return true
+    ) case call then {
+        cn: ast.nodes.get i: n.callable.u64
+        mid: zast.nameid
+        match (
+            cn
+        ) case dottedpath then {
+            ch: ast.nodes.get i: cn.child.u64
+            if ch.atomid then mid = ch.name
+        } else null
+        if mid == zast.names.wkIterate or (mid == zast.names.wkEach) then return true
+        return mid == zast.names.wkUpto or (mid == zast.names.wkDownto)
     } else {
         return false
     }
 }
 
-# i64TypePath -- the `system.i64` type path the state cursor and the loop
-# counters are declared with. Minted fresh per field: a type path is a node, and
+# true when condition `n` needs no hoist out of a suspending loop's header: a
+# bare name, which is already a binding, or a counted range, which becomes no
+# object at all.
+condIsTrivial: function {ast: Ast.view n: astnode.view} out bool is {
+    match (
+        n
+    ) case atomid then {
+        return true
+    } else {
+        return (countedRangeHeader :ast :n)
+    }
+}
+
+# scalarTypePath -- the `system.<name>` type path the state cursor and the loop
+# fields are declared with. Minted fresh per field: a type path is a node, and
 # two fields may not share one.
-i64TypePath: function {
+scalarTypePath: function {
     # the tree the path is minted into
     ast: Ast
     # the line the field is attributed to
     line: u32
     # the column likewise
     col: u32
+    # the system scalar the field takes
+    name: StringView
 } out astnode is {
     sysAtom: mkAtom :ast :line :col name: "system"
-    i64Leaf: mkAtom :ast :line :col name: "i64"
+    i64Leaf: mkAtom :ast :line :col :name
     return (astnode.dottedpath (zast.dottedpathrow
         nodeid: (zast.tableReserve :ast)
         lineno: line
@@ -1473,10 +1509,21 @@ appendForCounterFields: function {
     fci: u64
     for fci < forSlots loop {
         fci = fci + 1
-        fcTy: i64TypePath :ast :line :col
+        fcTy: scalarTypePath :ast :line :col name: "i64"
         fcNm: "_fc_\{fci}"
         fcF: mkNamedOp :ast :line :col name: fcNm.stringView op: fcTy
         addFields.append (zast.tableAdd :ast n: fcF)
+        # and its TRIP COUNT, for the loops that turn out to be a CLOSED range:
+        # those spill two values where a half-open one spills the counter alone,
+        # and the count is no more recomputable on resume than the counter is.
+        # Paired with the counter rather than counted separately, for the reason
+        # `suspendingForCountOf` over-counts in the first place -- telling the
+        # families apart needs the checker's stamps, which this pass does not
+        # have, and a spare scalar field costs nothing.
+        fnTy: scalarTypePath :ast :line :col name: "u64"
+        fnNm: "_fn_\{fci}"
+        fnF: mkNamedOp :ast :line :col name: fnNm.stringView op: fnTy
+        addFields.append (zast.tableAdd :ast n: fnF)
     }
 }
 
@@ -1611,7 +1658,7 @@ lowerDeclared: function {
     # The body's locals are the checker's: it keeps each in a field of its own.
     addFields: ListVal u32
     {
-        stTy: i64TypePath :ast :line :col
+        stTy: scalarTypePath :ast :line :col name: "i64"
         stField: mkNamedOp :ast :line :col name: "state" op: stTy
         addFields.append (zast.tableAdd :ast n: stField)
     }

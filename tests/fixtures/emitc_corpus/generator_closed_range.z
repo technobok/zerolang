@@ -1,0 +1,58 @@
+# generator_closed_range.z -- a CLOSED integer range whose loop body suspends.
+#
+# `for i: (F.upto to: T) loop` lowers to a counted C loop carrying TWO values in
+# its header: the loop variable and the trip count it walks down. The resume
+# `goto` lands inside the loop, past the C for-init AND past the count's
+# declaration, so both are indeterminate on the next `.call` unless both are
+# spilled -- where the half-open form has only the variable to save. Neither can
+# be recomputed either: the ends they were taken from left C scope with the
+# declarations the goto jumped over.
+#
+# `Down` walks an unsigned range to zero, the shape no endpoint comparison can
+# express; `Twice` proves two sibling loops draw two distinct count fields;
+# `Nest` proves an inner suspending closed loop still works.
+
+Up: generator { n: i64 } as {
+    call: function out i64 is {
+        for i: (2.upto to: this.n) loop {
+            yield i
+        }
+    }
+}
+
+Down: generator { n: u8 } as {
+    call: function out u8 is {
+        for i: (this.n.downto to: 0.u8) loop {
+            yield i
+        }
+    }
+}
+
+Twice: generator { n: i64 } as {
+    call: function out i64 is {
+        for i: (1.upto to: this.n) loop {
+            yield i
+        }
+        for j: (1.upto to: this.n) loop {
+            yield j + 100
+        }
+    }
+}
+
+Nest: generator { n: i64 } as {
+    call: function out i64 is {
+        for a: (1.upto to: this.n) loop {
+            for b: (1.upto to: this.n) loop {
+                yield (a * 10) + b
+            }
+        }
+    }
+}
+
+main: function is {
+    for u: (Up n: 5) loop print "up: \{u}"
+    for d: (Down n: 3.u8) loop print "down: \{d}"
+    for t: (Twice n: 2) loop print "t: \{t}"
+    for g: (Nest n: 2) loop print "g: \{g}"
+    print "done"
+}

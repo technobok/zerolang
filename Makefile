@@ -1600,7 +1600,13 @@ perf: $(PERFBIN)
 #
 # -22 when that registration stopped taking the tree it no longer reads: 0
 # behaviour, all of it the source.
-ALLOC_BASELINE := 2619615
+#
+# +5,414 for the closed range's counted lowering: +2 behaviour -- two more
+# well-known names interned per carrier, and nothing else on the old source --
+# and 5,412 the SOURCE, ~307 net lines of src/ at the 13-17 allocations a line
+# this tree costs to compile. The emitted C is smaller wherever a closed range
+# is a `for` header: `range_closed_forms.z` builds seven fewer range objects.
+ALLOC_BASELINE := 2625029
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
