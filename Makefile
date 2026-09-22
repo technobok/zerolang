@@ -733,6 +733,13 @@ perf: $(PERFBIN)
 # skipping the member materialisation for monos, where the lookup answers
 # without it, cost 59 allocations MORE than it saved.
 #
+# +556 for the method-body demand gate: a bodied member of a RUNTIME-OWNED
+# type is walked only where the program calls it, so the gate is asked at every
+# bodied member of every type resolved. 0 behaviour -- no stdlib type has a
+# bodied member yet, so nothing is deferred; it is the ~30 net lines of src/.
+# It pays for itself the moment one does: a bodied `each` on the eight scalars
+# costs 1 line of C in a program that never iterates, against 418 without it.
+#
 # +675 for the containment check asking whether the target is on the
 # containment PATH rather than merely mid-resolution: a per-Decl mark, set and
 # restored around each field or arm typeref. 0 behaviour on the corpus -- it
@@ -1578,7 +1585,7 @@ perf: $(PERFBIN)
 #
 # -22 when that registration stopped taking the tree it no longer reads: 0
 # behaviour, all of it the source.
-ALLOC_BASELINE := 2615809
+ALLOC_BASELINE := 2616365
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

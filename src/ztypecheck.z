@@ -44007,6 +44007,36 @@ objectdefHasMethodBodies: function {ast: Ast.view op: astnode.view} out bool is 
     }
 }
 
+# bodiedMemberDeferred -- may this bodied member's body be left unwalked?
+#
+# A member of a RUNTIME-OWNED type is walked only where the program calls it.
+# A native type is one every program touches -- the scalars are -- so a member
+# written in zerolang on one is otherwise walked by every compile, mints
+# whatever its body constructs, and lands those types in the emitted C of a
+# program that never calls it. A type the AUTHOR declared is walked whole, as
+# it always has been; narrowing that is a separate question with a much wider
+# blast radius.
+#
+# `usedMemberDecl` is stamped by the reference that resolves the member, and
+# the owner's walk is driven from that same resolution, so a member the program
+# calls anywhere is walked. Verified across the 784-program corpus and by two
+# ordering probes, including one that names the owner in a signature before any
+# call. A shape that ever slipped through would show the symptom
+# stdFnUndemanded already names: a body emitted with nothing stamped.
+#
+# `--eager` walks everything, which is the point of it.
+bodiedMemberDeferred: function {
+    st: zenv.ZSymbolTable
+    ownerTid: ztypes.tid
+    memberDecl: ztypes.declid
+} out bool is {
+    if st.typing.eagerAll then return false
+    if memberDecl.isZero then return false
+    if ownerTid.isZero then return false
+    if (st.reg.isNativeOf tid: ownerTid).not then return false
+    return (st.typing.usedMemberDecl.has item: memberDecl.u64).not
+}
+
 # checkMethodBodies -- body-check every method of one type definition (is- and
 # as-block functiondefs, declaration order). The scopes land under the walk's
 # current scope, where the first demand placed them.
@@ -44051,13 +44081,16 @@ checkMethodBodies: function {
             }
             if imIsFn then {
                 {
-                    # about to check this body, so its signature is needed:
-                    # `this` binds from the resolved receiver
-                    forceOwnerMember :st :ast :ownerDecl memberId: imName
                     qn: "\{typeName}.\{mname}"
                     declId93: st.typing.declFindChild parentDeclId: ownerDecl nameId: imName
+                    imSkip: bodiedMemberDeferred :st ownerTid: typeTid memberDecl: declId93
+                    # about to check this body, so its signature is needed:
+                    # `this` binds from the resolved receiver. AFTER the gate:
+                    # forcing it mints the member's return type, which is how a
+                    # deferred body still dragged its types into every program
+                    if imSkip.not then forceOwnerMember :st :ast :ownerDecl memberId: imName
                     imFr: fnRefAt :ast nid: imOp
-                    (checkFunctionBody
+                    if imSkip.not then (checkFunctionBody
                         :st
                         :scope
                         :unitDecl
@@ -44095,11 +44128,12 @@ checkMethodBodies: function {
             }
             if amIsFn then {
                 {
-                    forceOwnerMember :st :ast :ownerDecl memberId: amName
                     qn2: "\{typeName}.\{monoName}"
                     declId94: st.typing.declFindChild parentDeclId: ownerDecl nameId: amName
+                    amSkip: bodiedMemberDeferred :st ownerTid: typeTid memberDecl: declId94
+                    if amSkip.not then forceOwnerMember :st :ast :ownerDecl memberId: amName
                     amFr: fnRefAt :ast nid: amOp
-                    (checkFunctionBody
+                    if amSkip.not then (checkFunctionBody
                         :st
                         :scope
                         :unitDecl
