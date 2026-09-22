@@ -87,7 +87,8 @@ module Rouge
           converror copy drop error f128 f16
           f32 f64 false floatliteral generic hold
           i128 i16 i32 i64 i8
-          idkey intliteral iterator meta never
+          idkey intliteral intrange iterator meta
+          never
           null openmode optionval panic parseerror print
           private public resultval return seekorigin stderr
           stdin stdout str stringJoin tag take
