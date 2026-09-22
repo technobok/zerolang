@@ -1,0 +1,25 @@
+# A `for` element takes a lock on the ITERATOR it came from, so the chain the
+# loop actually runs on is held end to end: `e` holds `it`, `it` holds `xs`.
+#
+# Without it the element held NOTHING -- the `with` binding took the container
+# lock -- so its validity rested on a lock another binding owned. Reassigning
+# that binding released it while the reference was still live and the container
+# was free to reallocate under it: a confirmed heap-use-after-free.
+#
+# The element locks the ITERATOR rather than the container on purpose. Copying
+# the container lock down would make two bindings claim one path, and an
+# `iterateItems` / `iterateMut` walk holds that path exclusively.
+main: function is {
+    xs: ListVal i64
+    xs.append from: 1
+    ys: ListVal i64
+    ys.append from: 2
+    with it: xs.iterate do for e: it loop {
+        it = ys.iterate
+        print "e \{e}"
+    }
+    with jt: xs.iterate do for f: jt loop {
+        p: jt.call
+        print "f \{f}"
+    }
+}

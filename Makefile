@@ -1637,7 +1637,11 @@ perf: $(PERFBIN)
 # test, which is two more emitted statements per counted loop and no more work
 # at run time -- measured at -O0 it is FASTER than the re-read, and at -O1 the
 # three shapes are within 1%.
-ALLOC_BASELINE := 2622675
+#
+# +1,410 when the `for` element took a lock on its ITERATOR: 470 behaviour --
+# one lock row per `with`-form element, and the compiler walks many -- and 940
+# the source. 0 emitted C: the row is the checker's alone.
+ALLOC_BASELINE := 2624085
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

@@ -31177,6 +31177,27 @@ bindForBorrowedElement: function {
             colno: fcl
         )
     }
+    # THE `with` FORM: the element holds nothing of its own, so it takes the
+    # iterator itself -- see lockIteratorForElement.
+    if fpins.length == 0 then {
+        ilm: (lockIteratorForElement
+            :st
+            :ast
+            iterName: (atomNameId :ast n: (ast.nodes.get i: cond.operation.u64))
+            :vid
+        )
+        if ilm.length > 0 then {
+            icn: ast.nodes.get i: cond.operation.u64
+            (addError
+                :st
+                nodeid: (nodeId n: icn)
+                lineno: (nodeLine n: icn)
+                colno: (nodeCol n: icn)
+                e: zast.err.ownerError
+                msg: ilm
+            )
+        }
+    }
     # The element is a reference derived from the lock its
     # holder has on the container, so it inherits that
     # lock's strength: a SHARED pin (a `view` iterator
@@ -34441,6 +34462,46 @@ readonlySelfLock: function {
         holder: rsh
         mutable: false
         alias: false
+    )
+}
+
+# lockIteratorForElement -- the loop element takes a lock on the ITERATOR it
+# came from. Returns the conflict message, or "" when the lock was taken.
+#
+# A `with`-bound iterator holds the lock on the container; the element holds
+# nothing, so its validity rests on a lock another binding owns and anything
+# that ends that lock early -- reassigning the iterator -- leaves the element
+# pointing into storage nothing holds. Confirmed heap-use-after-free.
+#
+# The element locks the ITERATOR rather than the container, which is the chain
+# as it actually runs: `e` holds `it`, `it` holds `xs`. Copying the container
+# lock onto the element instead makes two bindings claim one path, and an
+# `iterateItems` / `iterateMut` walk holds that path exclusively. This is also
+# the lock an explicit `p: it.call` already takes -- the `for` payload is the
+# same reference and earns the same row.
+lockIteratorForElement: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    iterName: zast.nameid
+    vid: ztypes.vid
+} out String is {
+    if iterName.isZero then return "".string
+    if vid.isZero then return "".string
+    if (st.lookupVarId nameId: iterName).none then return "".string
+    lip: ListVal zast.nameid
+    lip.append iterName
+    lih: (ztypes.zlockholder
+        kind: ztypes.zlockholderkind.varKind
+        id: vid
+    )
+    return (st.tryLock
+        pool: ast.names
+        path: lip.listView
+        lockType: ztypes.zlockstate.exclusive
+        lockScope: ztypes.zlockscope.target
+        holder: lih
+        mutable: false
+        alias: true
     )
 }
 
