@@ -31377,8 +31377,6 @@ bindForIteration: function {
     nm: StringView
     facId: u64
     spillFor: bool
-    # nothing but this binding can end the loop, so it has to be an iterator
-    soleCond: bool
 } is {
     # A call-shaped iterator init probes its per-iteration call
     # in an empty call scope; gated on the value being an iterator
@@ -31397,49 +31395,31 @@ bindForIteration: function {
             )
         }
     } else {
-        # AN INITIALISER NEEDS SOMETHING ELSE TO END THE LOOP. On its own it
-        # runs once and is read at a test that does not exist, so the loop
-        # never leaves -- `while (1)` in the emitted C, with no diagnostic.
-        # An ITERATOR is the other way a `for` ends: it answers `none`.
-        if soleCond then {
-            itn: st.reg.nameOf tid: vt
-            im: "a 'for' binding with no loop condition must be an iterator, got '\{itn}'"
-            ih: "give the loop a condition ('for x: e while c loop'), or bind something that walks: 'n.each', 'n.upto to: m', 'xs.iterate'".string
-            (addErrorH
-                :st
-                nodeid: cond.nid
-                lineno: (nodeLine n: (ast.nodes.get i: cond.operation.u64))
-                colno: (nodeCol n: (ast.nodes.get i: cond.operation.u64))
-                e: zast.err.typeError
-                msg: im
-                note: String
-                hint: ih
-                width: 0
-            )
-        }
-        # A NAMED CONDITION THAT IS NOT AN ITERATION IS AN INITIALISER: it
-        # declares a local, run once before the loop and read at every test,
-        # and what it binds it OWNS unless the value is lent. Binding it with
-        # no VARIABLE left it outside every destroy list -- `scopeDestroy`
-        # cannot name what has no vid -- so the emitter's own registration was
-        # the only thing freeing it, and no rule that reads a variable could
-        # reach it. It lands in the loop's HEADER scope, which is why that had
-        # to be separated from the body's first.
-        iown: ztypes.zownership.owned
-        if (typeIsReftype :st tid: vt) when (
-            (isViewFamilyTid :ast :st tid: vt) or
-            (valueIsLent
-                :st
-                :ast
-                nid: cond.operation
-            )
-        ) then iown = ztypes.zownership.borrowed
-        ivid: st.reg.newVariable ztypeId: vt ownership: iown
-        st.reg.setVariableOrigin id: ivid origin: ztypes.zvarorigin.local
-        st.defineVar nameId: cond.name vid: ivid
-        # keyed by the VALUE node, which is what `emitForCond` asks `defVid`
-        # with: a for header has no assignment row for the binding to hang on
-        st.typing.setDefVariable nid: cond.operation.u64 vid: ivid
+        # A NAMED `for` BINDING IS WHAT THE LOOP WALKS, so it has to be able
+        # to: an iterator answers `none` when it is done, and nothing else
+        # ends a loop by itself. A value bound here instead ran once and was
+        # read at a test that may not exist -- `while (1)` in the emitted C,
+        # with no diagnostic. It is an ordinary local, written before the loop.
+        itn: st.reg.nameOf tid: vt
+        im: "a 'for' binding must be an iterator, got '\{itn}'"
+        ih: "bind it before the loop and test it in the header ('x: e' then 'for c loop'), or walk something: 'n.each', 'n.upto to: m', 'xs.iterate'".string
+        (addErrorH
+            :st
+            nodeid: cond.nid
+            lineno: (nodeLine n: (ast.nodes.get i: cond.operation.u64))
+            colno: (nodeCol n: (ast.nodes.get i: cond.operation.u64))
+            e: zast.err.typeError
+            msg: im
+            note: String
+            hint: ih
+            width: 0
+        )
+        # bound typeless all the same, so the body's reads of it are not each
+        # an unknown reference on top of the one error
+        (st.define
+            nameId: cond.name
+            ztypeId: ztypes.tid
+        )
     }
     if spillFor when fe.elem > 0 then mintForSpillFields :st :ast :cond :fe :vt :facId
 }
@@ -31565,9 +31545,6 @@ checkForCondition: function {
     # whether the loop's body suspends inside a generator, so what the
     # header binds must be saved to the instance
     spillFor: bool
-    # whether this is the loop's ONLY condition and it has no postcondition,
-    # so nothing but the binding itself can end the loop
-    soleCond: bool
 } is {
     # the condition is a namedoperation row, read as plain values: the
     # walks below lend ast
@@ -31636,7 +31613,6 @@ checkForCondition: function {
             nm: nm.stringView
             :facId
             :spillFor
-            :soleCond
         )
     }
     # an iterable that failed still binds its loop name, typeless, so
@@ -31794,15 +31770,12 @@ checkFor: function {
     if st.typing.currentGenTid.isZero.not then {
         spillFor = (zast.yieldCountIn :ast nid: fornode.body) > 0
     }
-    # one condition and no postcondition: the binding is the only thing that
-    # could end the loop, so it must be able to
-    soleCond: fornode.nconds == 1 and (fornode.nposts == 0)
     kC: u64
     for kC < fornode.nconds loop {
         condId: zast.forCondAt :ast nid: fornode.nid i: kC
         kC = kC + 1
         onceMark: st.entryMark
-        checkForCondition :st :unitDecl :ast :condId :spillFor :soleCond
+        checkForCondition :st :unitDecl :ast :condId :spillFor
         # the iterable binding runs once, before the loop: what it moved is
         # not moved again by the next iteration
         if (forCondBindsName :ast :condId) then st.recordOnceTakes from: onceMark

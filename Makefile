@@ -1613,7 +1613,13 @@ perf: $(PERFBIN)
 # it was its own bound, the `from:` argument scan, and the value-form emitter --
 # and the source is ~190 fewer lines of src/ plus ten fewer stdlib declarations.
 # 0 corpus difference: the call sites had already moved to `each` / `upto`.
-ALLOC_BASELINE := 2621337
+#
+# -3,066 when a `for` binding had to be an iterator: 0 behaviour and all of it
+# the source. The header initialiser was a VARIABLE of the checker's -- the
+# commit that made it one cost +427 -- and with it go its mint, its ownership
+# question, the two emitters that declared it, and the generator pass that
+# hoisted it back out of suspending headers.
+ALLOC_BASELINE := 2618271
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

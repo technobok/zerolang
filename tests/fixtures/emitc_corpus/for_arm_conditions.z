@@ -1,0 +1,51 @@
+# for_arm_conditions.z -- a `for` binding beside `while:` arms.
+#
+# The binding is what the loop WALKS and the arms are a second way to leave it,
+# so they are tested per iteration INSIDE the loop rather than in a C header
+# the binding already owns. The order is the order they are written: the
+# iterator advances, its payload binds, and then the arms are read -- which is
+# why an arm may name the loop variable.
+#
+# The shape emitted invalid C until the arms had somewhere to go: the binding
+# was declared once ahead of the loop as if it were an initialiser, so `e` was
+# the iterator object and every read of it was an aggregate where a value was
+# wanted.
+Gen: generator { n: i64 } as {
+    call: function out i64 is {
+        for i: this.n.each loop {
+            yield i
+        }
+    }
+}
+
+main: function is {
+    xs: ListVal i64
+    xs.append from: 10
+    xs.append from: 20
+    xs.append from: 30
+    # a container iterator, stopped early by an arm the body sets
+    cont: true
+    with it: xs.iterate do for e: it while cont loop {
+        print "e \{e}"
+        if e == 20 then cont = false
+    }
+    # a counted range, stopped by a separate counter
+    n: 0
+    for k: 5.each while n < 3 loop {
+        print "k \{k}"
+        n = n + 1
+    }
+    # an arm that reads the LOOP VARIABLE: it is bound before the arm is read
+    for m: 9.each while m < 3 loop print "m \{m}"
+    # a closed range with an arm
+    for c: (2.upto to: 8) while c < 5 loop print "c \{c}"
+    # an arm false at its first test walks nothing
+    for z: 4.each while n < 0 loop print "z \{z}"
+    # a suspending loop keeps its counter across the arm
+    g: 0
+    for v: (Gen n: 5) while g < 2 loop {
+        print "v \{v}"
+        g = g + 1
+    }
+    print "done"
+}

@@ -20415,14 +20415,11 @@ emitForStmt: function {
     # `goto` back into the loop body still lands correctly on resume.
     suspends: forCondSuspends :ast :ctx :n
     stepped: condsNeedSteps :ast :symtab :ctx :suspends conds: n.conditions
-    # a named condition is an initialiser, run once before the loop: emitted
-    # ahead of the loop's mark, so a `break` does not free what it hoisted
-    # the HEADER's scope owns what its initialisers register, so the marks are
-    # taken before them: closed after the loop, those rows are the header
-    # scope's to emit and to pop, not the enclosing block's
+    # the HEADER's scope owns what its conditions register: the marks are
+    # taken before them and closed after the loop, so those rows are the
+    # header scope's to emit and to pop, not the enclosing block's
     fLh: tmp.frees.length
     lLh: tmp.listFrees.length
-    emitForNamedInits :ast :symtab :ctx :n :ind :tmp :buf
     lidW: pushLoopLabel :ctx :tmp isDo: false
     ind2: "\{ind}    "
     if stepped then {
@@ -20437,7 +20434,7 @@ emitForStmt: function {
             :buf
         )
     } else {
-        emitPlainWhileHead :ast :symtab :ctx :n :ind :tmp :buf
+        emitPlainWhileHead :ast :symtab :ctx :n :ind :buf
     }
     fLw: tmp.frees.length
     lLw: tmp.listFrees.length
@@ -20467,28 +20464,6 @@ emitForStmt: function {
         :buf
     )
     ctx.condDepth = ctx.condDepth - 1
-}
-
-# emitForNamedInits -- the initialisers a loop's named conditions declare, once,
-# before the loop.
-emitForNamedInits: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    n: zast.forrow.view
-    ind: StringView
-    tmp: TmpCtr
-    buf: String.borrow
-} is {
-    named: String
-    ci: u64
-    for ci < n.conditions.count.u64 loop {
-        kcId: zast.kidAt kids: ast.kids span: n.conditions i: ci
-        ci = ci + 1
-        if (forCondIsNamed :ast kId: kcId) then {
-            emitForCond :ast :symtab :ctx n: (ast.nodes.get i: kcId.u64) cond: named :ind :tmp :buf
-        }
-    }
 }
 
 # emitDoWhileFor -- `for loop { .. } while C`: no pre-conditions and at
@@ -20584,6 +20559,42 @@ doWhileCondText: function {
     return pcond
 }
 
+# forArmCond -- the text of a loop's `while:` arms: every condition that is
+# NOT the named binding, joined. "" when there are none.
+#
+# A named binding drives the loop by itself -- an iterator answers `none`, a
+# counted range runs out -- so the arms are a second way to leave, tested per
+# iteration inside the loop rather than in a C header the binding already owns.
+#
+# The binding is condition ZERO whenever there is one: the parser accepts a
+# name only in the first, so the callers that read `i: 0` to find it are
+# reading what the grammar guarantees.
+forArmCond: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.forrow.view
+} out String is {
+    cond: String
+    ax9: u64
+    for ax9 < n.conditions.count.u64 loop {
+        kId: zast.kidAt kids: ast.kids span: n.conditions i: ax9
+        ax9 = ax9 + 1
+        if (forCondIsNamed :ast :kId).not then {
+            emitForCond :ast :symtab :ctx n: (ast.nodes.get i: kId.u64) :cond
+        }
+    }
+    return cond
+}
+
+# emitForArmBreak -- the arms' test, as the loop's first statement: `if (!(c))
+# break;`. Nothing when the loop has no arms.
+emitForArmBreak: function {armc: StringView ind: StringView buf: String.borrow} is {
+    if armc.length == 0 then return
+    l: "\{ind}if (!(\{armc})) break;\n"
+    buf.append l
+}
+
 # emitPlainWhileHead -- the ordinary `while (c) {` opening, where no condition
 # suspends and the test can stay in the header.
 emitPlainWhileHead: function {
@@ -20597,8 +20608,6 @@ emitPlainWhileHead: function {
     n: zast.forrow.view
     # the indent the loop is written at
     ind: StringView
-    # the free list the tests' temps ride
-    tmp: TmpCtr
     # the `while (c) {` line appends here
     buf: String.borrow
 } is {
@@ -20608,7 +20617,7 @@ emitPlainWhileHead: function {
         kId: zast.kidAt kids: ast.kids span: n.conditions i: cox1259
         cox1259 = cox1259 + 1
         if (forCondIsNamed :ast :kId).not then {
-            emitForCond :ast :symtab :ctx n: (ast.nodes.get i: kId.u64) :cond :ind :tmp :buf
+            emitForCond :ast :symtab :ctx n: (ast.nodes.get i: kId.u64) :cond
         }
     }
     # `for loop { ... }` -- no conditions, no postconditions: an unconditional
@@ -23740,6 +23749,11 @@ emitObjIterLoop: function {
     ind2: "\{ind}    "
     fLO: tmp.frees.length
     lLO: tmp.listFrees.length
+    # the arms are tested AFTER the payload binds, so one may read the loop
+    # variable; the iterator has already advanced, which is the order the
+    # conditions are written in
+    armO: forArmCond :ast :symtab :ctx n: m
+    emitForArmBreak armc: armO.stringView ind: ind2.stringView :buf
     dvG: false
     if m.body > 0 then {
         mb: ast.nodes.get i: m.body.u64
@@ -23828,7 +23842,7 @@ emitObjIterFor: function {
     tmp: TmpCtr
     buf: String.borrow
 } out bool is {
-    if m.conditions.count.u64 != 1 then return false
+    if m.conditions.count.u64 == 0 then return false
     c0Id: zast.kidAt kids: ast.kids span: m.conditions i: 0
     c0: ast.nodes.get i: c0Id.u64
     match (
@@ -23868,7 +23882,7 @@ emitIntRangeFor: function {
     tmp: TmpCtr
     buf: String.borrow
 } out bool is {
-    if m.conditions.count.u64 != 1 then return false
+    if m.conditions.count.u64 == 0 then return false
     c0Id: zast.kidAt kids: ast.kids span: m.conditions i: 0
     c0: ast.nodes.get i: c0Id.u64
     match (
@@ -23955,6 +23969,8 @@ emitCountedRangeFor: function {
     lh: "\{ind}for (\{ctR} \{lbl} = 0; \{lbl} < (\{bound}); \{lbl}++) {\n"
     buf.append lh
     ind2: "\{ind}    "
+    armC: forArmCond :ast :symtab :ctx n: m
+    emitForArmBreak armc: armC.stringView ind: ind2.stringView :buf
     # the body is a BLOCK: whatever it registers -- an argument hoisted to an
     # `_ah` temp, an owned local -- is declared per iteration and has to be
     # freed per iteration. Without the mark those frees stayed pending and
@@ -24085,6 +24101,8 @@ emitClosedRangeFor: function {
         lh: "\{ind}for (\{ctR} \{lbl} = \{rs}; \{fn} > 0; \{st1}, \{st2}) {\n"
         buf.append lh
         ind2: "\{ind}    "
+        armX: forArmCond :ast :symtab :ctx n: m
+        emitForArmBreak armc: armX.stringView ind: ind2.stringView :buf
         fLR: tmp.frees.length
         lLR: tmp.listFrees.length
         dvR: false
@@ -24295,86 +24313,32 @@ rangeCType: function {
     }
 }
 
-# emitForCond -- one for-header arm: a `while:` arm joins the loop
-# condition; a named binding arm emits its init before the loop.
+# emitForCond -- one `while:` arm of a for-header, joined into the loop
+# condition. A NAMED arm is not one: it binds what the loop walks, and the
+# range and iterator emitters drive it. Every caller skips it.
 emitForCond: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: astnode.view
     cond: String.borrow
-    ind: StringView
-    # the free list an initialiser's hoisted temps ride
-    tmp: TmpCtr
-    buf: String.borrow
 } is {
     if n.namedoperation then {
-        lblR7: zast.nameTextAt :ast ref: n.name
-        lblV7: defVid :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.operation.u64))
-        lbl: varCName :ctx vid: lblV7 name: lblR7.stringView
-        if lblR7.length == 0 then {
-            # a loop's test runs at every iteration, so it is evaluated in place
-            mk7: openInPlace :ctx
-            cv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: n.operation.u64)
-            tw7: (truthyCondText
-                :ast
-                :symtab
-                :ctx
-                n: (ast.nodes.get i: n.operation.u64)
-                raw: cv.stringView
-            )
-            if tw7.length > 0 then cv = tw7
-            if cond.length > 0 then cond.append " && "
-            appendInPlaceCond :ctx mark: mk7 text: cv.stringView dst: cond
-        } else {
-            (emitForInitialiser
-                :ast
-                :symtab
-                :ctx
-                op: n.operation
-                lbl: lbl.stringView
-                nameVid: lblV7
-                :ind
-                :tmp
-                :buf
-            )
-        }
+        if (zast.nameTextAt :ast ref: n.name).length > 0 then return
+        # a loop's test runs at every iteration, so it is evaluated in place
+        mk7: openInPlace :ctx
+        cv: valueExprC :ast :symtab :ctx n: (ast.nodes.get i: n.operation.u64)
+        tw7: (truthyCondText
+            :ast
+            :symtab
+            :ctx
+            n: (ast.nodes.get i: n.operation.u64)
+            raw: cv.stringView
+        )
+        if tw7.length > 0 then cv = tw7
+        if cond.length > 0 then cond.append " && "
+        appendInPlaceCond :ctx mark: mk7 text: cv.stringView dst: cond
     }
-}
-
-# emitForInitialiser -- a for condition that names a binding: its declaration,
-# once, before the loop.
-emitForInitialiser: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    # the value it binds
-    op: zast.nodeid
-    # the binding's C name
-    lbl: StringView
-    nameVid: ztypes.vid
-    ind: StringView
-    tmp: TmpCtr
-    buf: String.borrow
-} is {
-    onid: exprNodeId n: (ast.nodes.get i: op.u64)
-    tn: stampNameView :symtab nid: onid
-    takeFnTid: stampIdOf :symtab nid: onid
-    ct: scalarCTypeFor :symtab name: tn tid: takeFnTid
-    iv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: op.u64)
-    # the initialiser runs once, before the loop: its temps are declared there,
-    # ahead of the loop's own frees
-    flushArgHoists :ctx :ind :tmp :buf
-    # a value that is not a scalar has the C type any binding of it has
-    if ct.length == 0 then ct = typeRefC :ast :symtab :ctx tid: takeFnTid thisTid: ztypes.tid
-    if ct.length > 0 when (isHeapPtrCollection :symtab :ctx tid: takeFnTid) then ct.append "*"
-    if ct.length == 0 then ct = "int64_t".string
-    buf.append "\{ind}\{ct} \{lbl} = \{iv};\n"
-    # a binding: what it moved is zeroed after it, and what it owns is released
-    # with the block around the loop
-    opNode: ast.nodes.get i: op.u64
-    emitValueTakeInvalidations :ast :symtab :ctx n: opNode :ind :buf
-    registerScopeDestroy :symtab :ctx tid: takeFnTid nm: lbl :nameVid valueNode: opNode :tmp
 }
 
 # exprNodeId -- the node id of value `n`, whatever its shape: the id its stamp
