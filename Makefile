@@ -733,6 +733,10 @@ perf: $(PERFBIN)
 # skipping the member materialisation for monos, where the lookup answers
 # without it, cost 59 allocations MORE than it saved.
 #
+# +1,093 for `upto` / `downto` on the eight scalars: sixteen more bodied stdlib
+# members, which the self-compile compiles like any other source. The demand
+# gate keeps them off the programs that do not call them.
+#
 # +524 for the conformance exemption on the method-body gate: a conformance row
 # scan per bodied member of a runtime-owned type. A vtable wrapper is emitted
 # from the row and not from a use site, so a member reached only through
@@ -1596,7 +1600,7 @@ perf: $(PERFBIN)
 #
 # -22 when that registration stopped taking the tree it no longer reads: 0
 # behaviour, all of it the source.
-ALLOC_BASELINE := 2618522
+ALLOC_BASELINE := 2619615
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

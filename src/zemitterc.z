@@ -13514,6 +13514,26 @@ emitUserMethodLeg: function {
     return (emitInstanceMethodCall :ast :symtab :ctx :call)
 }
 
+# calleeHasBody -- the member this call names on `ownerTid` is written in
+# zerolang rather than supplied by the runtime. A native OWNER says nothing
+# about its individual members: the scalars are native and `each` / `upto` /
+# `downto` on them have bodies.
+calleeHasBody: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    call: zast.callrow.view
+    ownerTid: ztypes.tid
+} out bool is {
+    mnB: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
+    if mnB.length == 0 then return false
+    co: (symtab.typing.declChildOfId
+        parentTypeId: ownerTid
+        nameId: (zast.poolFind pool: ast.names text: mnB)
+    )
+    if co.none then return false
+    return (fnIsNativeId :symtab fid: (ztypes.tid.create from: co.u64)).not
+}
+
 # emitMethodDeclCall -- a callee declared as a METHOD, routed by its owner's
 # family: a native collection, the two string types, a native that takes
 # arguments, a protocol or facet, and otherwise the compiler's own emission. A
@@ -13544,7 +13564,16 @@ emitMethodDeclCall: function {
     ott: symtab.reg.typetypeOf typeId: ownerTid
     isSpec: ott == ztypes.ztypetype.protocolType or (ott == ztypes.ztypetype.facetType)
     if isSpec then return (emitProtocolDispatch :ast :symtab :ctx :call)
-    if (symtab.reg.isNativeOf tid: ownerTid) then return "".string
+    # A NATIVE OWNER MAY DECLARE A BODIED MEMBER, and its body is emitted like
+    # any other -- `u8.upto` is one. The bail below is for members the RUNTIME
+    # owns, which answer from their natives.tbl row above; a member with a body
+    # has no row to answer from and belongs on the ordinary method leg.
+    if (symtab.reg.isNativeOf tid: ownerTid) when (calleeHasBody
+        :ast
+        :symtab
+        :call
+        :ownerTid
+    ).not then return "".string
     isIoNat: (
         ownerTid.u64 ==
         ctx.ioFileTid or
