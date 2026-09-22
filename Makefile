@@ -1625,7 +1625,13 @@ perf: $(PERFBIN)
 # a Decl row on its template and on every monomorphisation of it, and a
 # self-compile mints many -- not the walk, which is one field and one branch in
 # a cursor that already existed. The source is the emitter's own new legs.
-ALLOC_BASELINE := 2621737
+#
+# +289 when the `for` ELEMENT became a variable of the checker's: 57 behaviour
+# -- one mint per element binding, and the compiler is full of loops -- and 232
+# the source. A binding with no vid sat outside every destroy list and every
+# take overlay, so no rule that reads a variable could reach it; the readonly
+# loop-variable lock is the rule that has to.
+ALLOC_BASELINE := 2622026
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

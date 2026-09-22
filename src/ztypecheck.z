@@ -31389,10 +31389,23 @@ bindForIteration: function {
         if fe.isView then {
             bindForBorrowedElement :st :ast :cond elem: fe.elem :nm
         } else {
-            (st.define
-                nameId: cond.name
+            # THE ELEMENT IS A VARIABLE. Bound with no vid it sat outside every
+            # destroy list and every take overlay -- `scopeDestroy` cannot name
+            # what has no variable -- so no rule that reads one could reach it,
+            # and the readonly lock below has nothing to hold.
+            evid: (st.reg.newVariable
                 ztypeId: (ztypes.tid.create from: fe.elem.u64)
+                ownership: ztypes.zownership.owned
             )
+            st.reg.setVariableOrigin id: evid origin: ztypes.zvarorigin.local
+            st.defineVar nameId: cond.name vid: evid
+            st.typing.setDefVariable nid: cond.operation.u64 vid: evid
+            # A MOVE OUT OF IT MUST ZERO IT. The element's destroy is the
+            # EMITTER's -- one unconditional cleanup per iteration, which no
+            # destroy point of the checker's lists -- so nothing here would
+            # record the state that makes a move zero its source, and
+            # `xs.append t` would hand the list a value the loop then frees.
+            st.typing.zeroOnMove.add item: evid.u64
         }
     } else {
         # A NAMED `for` BINDING IS WHAT THE LOOP WALKS, so it has to be able
