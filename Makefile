@@ -1647,7 +1647,12 @@ perf: $(PERFBIN)
 # loop, and the compiler's own comprehensions are over valtype elements, which
 # copy -- so the new walk costs the self-compile nothing and the new code costs
 # it everything.
-ALLOC_BASELINE := 2625894
+#
+# +894 when the for-EXPRESSION started walking what the statement form walks: 0
+# behaviour again, and for the same reason -- there is no comprehension in src/
+# or lib/system, so the new routing never runs on a self-compile. All of it is
+# the new emitter code, which is a class, a Ctx stack and two lifted functions.
+ALLOC_BASELINE := 2626788
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

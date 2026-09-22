@@ -3092,6 +3092,11 @@ Ctx: class {
     # emitted, innermost last. Every suspension spills all of them and every
     # resume label reloads them
     genForSpills: List ForSpill
+    # the for-EXPRESSION append targets open around the statement being
+    # emitted, innermost last: a comprehension records one, and the loop's own
+    # body takes it (emitBodyNode). Nested only through a comprehension inside
+    # another's body, which is why it is a stack rather than a slot
+    comprehendTo: List ComprehendTo
     # the yield number of each yield HOISTED out of expression position, by
     # call node id. The suspension runs as its own statement and the resume
     # value lands in `_yv_<k>`; the expression emitter then renders that yield
@@ -3716,6 +3721,20 @@ ForSpill: class {
     # the payload C type the view kinds cast through and the owned kind
     # zero-fills with; "" for a plain copy
     payC: String
+}
+
+# ComprehendTo -- a for-EXPRESSION's append target: the C list its body's value
+# is appended to, and the BODY NODE that may take it. THE NODE IS THE KEY. A
+# construct in the loop's HEADER emits a body of its own through emitBodyNode,
+# and only the loop's own body may take the target; a bare flag would be spent
+# on the first of them.
+ComprehendTo: class {
+    # the loop body this target belongs to
+    body: zast.nodeid
+    # the list mono's C name base
+    cb: String
+    # the C variable holding the list
+    lvar: String
 }
 
 # VidVal / VidTid -- assoc-list entries for the per-function narrowing and alias
@@ -4371,30 +4390,25 @@ emitExplicitTakeZero: function {
     buf.append inv
 }
 
-# emitImplicitMoveZero -- a bare owning local moved into a taking slot: the
+# emitMovedSourceZero -- a bare owning local moved into a taking slot: the
 # source is zeroed so its scope-exit destructor no-ops. A heap-pointer
 # collection zeroes to NULL; a type with no destructor carries nothing to free
-# and needs no zero at all.
-emitImplicitMoveZero: function {
+# and needs no zero at all, which is also what makes this safe to ask of a
+# COPYING slot -- a valtype element has no destructor, so it emits nothing.
+# Anything that is not a bare name reads back "" and is the emitter's own
+# temporary, not a local something else still destroys.
+emitMovedSourceZero: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    a: zast.namedoperationrow.view
+    n: astnode.view
     ind: StringView
     buf: String.borrow
 } is {
-    if (movedSourceNeedsZero :ast :symtab n: (ast.nodes.get i: a.operation.u64)).not then return
-    isrc: (implicitTakeSource
-        :ast
-        :symtab
-        :ctx
-        n: (ast.nodes.get i: a.operation.u64)
-    )
+    if (movedSourceNeedsZero :ast :symtab :n).not then return
+    isrc: implicitTakeSource :ast :symtab :ctx :n
     if isrc.length == 0 then return
-    istid: (stampIdOf
-        :symtab
-        nid: (interpPartNodeId n: (ast.nodes.get i: a.operation.u64))
-    )
+    istid: stampIdOf :symtab nid: (interpPartNodeId :n)
     if (isHeapPtrCollection :symtab :ctx tid: istid) then {
         iinvh: "\{ind}\{isrc} = NULL;\n"
         buf.append iinvh
@@ -4404,6 +4418,25 @@ emitImplicitMoveZero: function {
     itc: typeRefC :ast :symtab :ctx tid: istid thisTid: ztypes.tid
     iinv: "\{ind}\{isrc} = (\{itc}){0};\n"
     buf.append iinv
+}
+
+# emitImplicitMoveZero -- emitMovedSourceZero for a call argument's value.
+emitImplicitMoveZero: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    a: zast.namedoperationrow.view
+    ind: StringView
+    buf: String.borrow
+} is {
+    (emitMovedSourceZero
+        :ast
+        :symtab
+        :ctx
+        n: (ast.nodes.get i: a.operation.u64)
+        :ind
+        :buf
+    )
 }
 
 # emitCallTakeInvalidations -- zero the source local of each ownership-moved arg
@@ -19115,6 +19148,16 @@ emitListBind: function {
                     buf.append lzf0
                 }
             } else {
+                # THE LAST LEG IS A CONSTRUCTION, and a `with` expression is
+                # not one: its value cannot be bound at all (`n: with it: xs
+                # .iterate do it.call.some` is this same failure, loudly), so
+                # reaching here with one built an EMPTY LIST and said nothing.
+                # A comprehension inside it is the shape that made that a
+                # wrong answer rather than an obvious one.
+                if avn.withexpr then {
+                    wf1: "a `with` expression's value cannot be bound".string
+                    emitFail :ctx what: wf1 line: avn.lineno
+                }
                 lcap: listCapArg :ast :symtab :ctx n: avn
                 flushArgHoists :ctx :ind :tmp :buf
                 lb1: "\{ind}\{lcb}_t \{nm} = \{lcb}_create((uint64_t)\{lcap});\n"
@@ -26830,6 +26873,33 @@ emitBodyNode: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
+    # A FOR-EXPRESSION'S BODY APPENDS ITS VALUE, and this is the one point all
+    # five loop shapes emit their body through, so it is the one place that has
+    # to know. The target is matched by NODE, so a body emitted from inside the
+    # loop's header cannot take it.
+    ctn9: ctx.comprehendTo.length
+    if ctn9 > 0 then {
+        hit9: false
+        {
+            top9: ctx.comprehendTo.get i: ctn9 - 1
+            hit9 = top9.body.u64 == (zast.nodeIdOf :n).u64
+        }
+        if hit9 then {
+            tgt9: ctx.comprehendTo.pop
+            (emitComprehensionNode
+                :ast
+                :symtab
+                :ctx
+                :n
+                listCb: tgt9.cb.stringView
+                listVar: tgt9.lvar.stringView
+                :ind
+                :tmp
+                :buf
+            )
+            return
+        }
+    }
     match (
         n
     ) case statement then {
@@ -26850,20 +26920,35 @@ forexprValue: function {n: astnode.view} out bool is {
     }
 }
 
-# emitComprehensionBody -- unwrap the body Option (borrowed via the param) and
-# emit its statements, the last appended to the list.
-emitComprehensionBody: function {
+# emitAppendedValueMoves -- THE APPEND IS A MOVE, so what it consumed is zeroed
+# where a statement's would be: the local a bare owned value came out of, and
+# the sources any taking call inside it moved from. Without it a loop payload
+# moved into the list is freed twice, once by the list and once by the loop's
+# own per-iteration cleanup -- measured as a double free on
+# `ys: for e: g loop e` over a generator of Strings.
+emitAppendedValueMoves: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    body: astnode.view
-    listCb: StringView
-    listVar: StringView
+    n: astnode.view
     ind: StringView
-    tmp: TmpCtr
     buf: String.borrow
 } is {
-    emitComprehensionNode :ast :symtab :ctx n: body :listCb :listVar :ind :tmp :buf
+    match (
+        n
+    ) case statementline then {
+        (emitAppendedValueMoves
+            :ast
+            :symtab
+            :ctx
+            n: (ast.nodes.get i: n.statementline.u64)
+            :ind
+            :buf
+        )
+    } else {
+        emitMovedSourceZero :ast :symtab :ctx :n :ind :buf
+        emitValueTakeInvalidations :ast :symtab :ctx :n :ind :buf
+    }
 }
 
 # emitComprehensionNode -- the body's statements: each but the last emits
@@ -26892,6 +26977,7 @@ emitComprehensionNode: function {
                 flushArgHoists :ctx :ind :tmp :buf
                 la: "\{ind}\{listCb}_append(&\{listVar}, (\{av}));\n"
                 buf.append la
+                emitAppendedValueMoves :ast :symtab :ctx n: st :ind :buf
             } else {
                 emitStmt :ast :symtab :ctx n: st :ind :tmp :buf
             }
@@ -26902,11 +26988,23 @@ emitComprehensionNode: function {
         flushArgHoists :ctx :ind :tmp :buf
         la2: "\{ind}\{listCb}_append(&\{listVar}, (\{av2}));\n"
         buf.append la2
+        emitAppendedValueMoves :ast :symtab :ctx :n :ind :buf
     }
 }
 
-# emitListComprehension -- populate listVar from `for x: N.each loop { expr }`:
-# a counted for-loop whose body appends the comprehension's value expression.
+# emitListComprehension -- populate listVar from a `for` used as an expression.
+#
+# IT WALKS WHATEVER THE STATEMENT FORM WALKS. The append target is recorded
+# against the loop's body node and emitForStmt is asked for the loop, so the
+# counted range, the closed range, an object iterator, a do-while and a plain
+# condition all reach the emitters they already reach as statements -- and
+# bring the loop labels, the `while:` arms, the scope destroys, the break and
+# continue cleanup and the generator spills with them.
+#
+# It used to emit ONE shape of its own, a counted header that re-read its bound
+# (the re-read emitCountedRangeFor stopped doing), and for every other source
+# it returned having emitted nothing at all. The list was already created, so
+# the answer was an empty list and no diagnostic.
 emitListComprehension: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -26921,33 +27019,20 @@ emitListComprehension: function {
     match (
         forNode
     ) case forexpr then {
-        if forNode.conditions.count.u64 != 1 then return
-        c0Id: zast.kidAt kids: ast.kids span: forNode.conditions i: 0
-        c0: ast.nodes.get i: c0Id.u64
-        if c0.namedoperation then {
-            lblR6: zast.nameTextAt :ast ref: c0.name
-            lblV6: defVid :symtab nid: (interpPartNodeId n: (ast.nodes.get i: c0.operation.u64))
-            lbl: varCName :ctx vid: lblV6 name: lblR6.stringView
-            bound: rangeBoundExpr :ast :symtab :ctx n: (ast.nodes.get i: c0.operation.u64)
-            if bound.length == 0 then return
-            ct6: rangeCType :ast :symtab n: (ast.nodes.get i: c0.operation.u64)
-            if ct6.length == 0 then return
-            fh: "\{ind}for (\{ct6} \{lbl} = 0; \{lbl} < (\{bound}); \{lbl}++) {\n"
-            buf.append fh
-            ind2: "\{ind}    "
-            (emitComprehensionBody
-                :ast
-                :symtab
-                :ctx
-                body: (ast.nodes.get i: forNode.body.u64)
-                :listCb
-                :listVar
-                ind: ind2.stringView
-                :tmp
-                :buf
-            )
-            lcc: "\{ind}}\n"
-            buf.append lcc
+        ctx.comprehendTo.append (ComprehendTo
+            body: forNode.body
+            cb: listCb.string
+            lvar: listVar.string
+        )
+        depth6: ctx.comprehendTo.length
+        emitForStmt :ast :symtab :ctx n: forNode :ind :tmp :buf
+        # the body always emits, so the target always goes; one left standing
+        # means the list would be silently empty, which is the defect this
+        # replaced and is not a thing to fall back to
+        if ctx.comprehendTo.length == depth6 then {
+            tgt6: ctx.comprehendTo.pop
+            f6: "for-expression body emitted no append (list \{tgt6.lvar})"
+            emitFail :ctx what: f6 line: forNode.lineno
         }
     } else null
 }
@@ -30826,6 +30911,7 @@ emitC: function {
         genYieldNext: 0
         genForNext: 0
         genForSpills: List ForSpill
+        comprehendTo: List ComprehendTo
         yieldTempK: (IdMapV u64 v: u64)
         genWrap: "".string
         genSomeTag: "".string
