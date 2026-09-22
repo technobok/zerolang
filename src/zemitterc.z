@@ -9362,8 +9362,10 @@ stringKeyArgPointer: function {
 # heap: `(mk n: 1).length` emits the call inline, reads `.size` off the result
 # and drops the only reference to it. Hoist the receiver into a statement temp
 # (declared by flushArgHoists, freed with the scope) and read the member off
-# that instead. "" when the receiver is already an lvalue, owns nothing, or is
-# a BORROW-returning call -- a shared view must never be freed here.
+# that instead. "" when the receiver is already an lvalue, when its type frees
+# nothing, and when the CHECKER says the temporary holding it owns nothing --
+# which is the same question "is this a borrow-returning call" was asking, and
+# is the answer the free below already comes from.
 ownedReceiverHoist: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -9375,20 +9377,14 @@ ownedReceiverHoist: function {
     rtid: stampIdOf :symtab nid: (interpPartNodeId :n)
     if rtid.isZero then return "".string
     if (symtab.reg.needsDestructor typeId: rtid).not then return "".string
-    if (bindingRhsIsBorrow :ast :symtab :ctx :n) then return "".string
+    rnid: (zast.nodeIdOf :n).u64
+    if (scopeOwnsTemp :symtab argNid: rnid).not then return "".string
     rct: typeRefC :ast :symtab :ctx tid: rtid thisTid: ztypes.tid
     if rct.length == 0 then return "".string
     # a Map or Set value is held through its heap pointer
     if (isHeapPtrCollection :symtab :ctx tid: rtid) then rct.append "*"
-    rnid: (zast.nodeIdOf :n).u64
     rnm: argHoistName :symtab :ctx argNid: rnid fallback: "_ah"
-    rdt: String
-    if (scopeOwnsTemp :symtab argNid: rnid) then rdt = (hoistDestroyLine
-        :symtab
-        :ctx
-        tid: rtid
-        nm: rnm.stringView
-    )
+    rdt: hoistDestroyLine :symtab :ctx tid: rtid nm: rnm.stringView
     rex: expr.string
     ctx.argHoistVals.append rex
     ctx.argHoistTypes.append rct

@@ -1684,7 +1684,12 @@ perf: $(PERFBIN)
 #
 # +47 flipping rhsIsBorrowedFieldRead the same way: 0 behaviour, 47 source --
 # the binding row threaded through a recursive reader.
-ALLOC_BASELINE := 2631383
+#
+# -51 flipping ownedReceiverHoist onto scopeOwnsTemp: 0 behaviour, -51 source.
+# It asked TWO questions where one does -- a shape test to decide whether to
+# hoist, and the checker's answer to decide the free -- and the shape test cost
+# more than the earlier exit saves.
+ALLOC_BASELINE := 2631332
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1901,7 +1906,7 @@ lifetime-guard:
 	chk "registerScopeDestroy" "$$l1" 5; \
 	chk "refsLocal" "$$l2" 4; \
 	chk "isNonLvalueArg" "$$l3" 30; \
-	chk "bindingRhsIsBorrow" "$$l4" 7; \
+	chk "bindingRhsIsBorrow" "$$l4" 6; \
 	chk "'_ah{' argument hoists" "$$l5" 1; \
 	chk "hoistExprIsBorrowRooted" "$$l6" 0; \
 	if [ "$$fail" = "1" ]; then \
