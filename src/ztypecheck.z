@@ -31659,6 +31659,89 @@ checkForCondition: function {
     }
 }
 
+# forValueNode -- the node a `for` body yields as its value: the last line's
+# value, or 0 when it yields none. It is the node lastStmtType reads the type
+# of, so the two always speak about the same expression.
+forValueNode: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view block: astnode.view
+} out zast.nodeid is {
+    match (
+        block
+    ) case statement then {
+        ne9: block.statements.count.u64
+        if ne9 == 0 then return zast.nodeid
+        lastId9: zast.kidAt kids: ast.kids span: block.statements i: ne9 - 1
+        last9: ast.nodes.get i: lastId9.u64
+        if last9.statementline.not then return zast.nodeid
+        return (implicitReturnValue :st :ast lineId: last9.nodeid)
+    } else {
+        # an expression-shaped body (`loop x * x`) carries its value on its
+        # own node, exactly as lastStmtType reads it
+        return (nodeId n: block)
+    }
+}
+
+# checkComprehensionValue -- A FOR-EXPRESSION APPENDS ITS BODY'S VALUE, so that
+# value answers to `.append`'s own contract: a reftype element is TAKEN
+# (`ListRef.append from: T.take`) and a valtype is COPIED (`ListVal.append
+# from: t`), which is why only the reftype half is asked here.
+#
+# Nothing modelled the append before, so a borrowed element was written into an
+# owning list with no diagnostic -- `ys: for e: xs.iterate loop e` over a
+# `List String` minted an owning `ListRef String` from a view of the
+# container's storage. It read as a wrong length only because the emitter never
+# emitted the loop; with the loop emitted it is a use-after-free.
+#
+# The refusals are the argument site's, not a second derivation of them: a bare
+# name goes to consumeBareArgOwnership (readonly, pinned, borrowed, and the
+# take it records is what reportLoopMoves reads to refuse moving an outer local
+# once per iteration), anything else to refuseBorrowedTake.
+checkComprehensionValue: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    fornode: forref
+    elemT: ztypes.tid
+} is {
+    if (typeIsReftype :st tid: elemT).not then return
+    if fornode.body.isZero then return
+    vnid9: forValueNode :st :ast block: (ast.nodes.get i: fornode.body.u64)
+    if vnid9.isZero then return
+    vn9: ast.nodes.get i: vnid9.u64
+    bn9: bareAtomNameId n: vn9
+    if bn9.isZero.not then {
+        bvo9: st.lookupVarId nameId: bn9
+        match (
+            bvo9
+        ) case some then {
+            bnt9: zast.nameTextAt :ast ref: bn9
+            # the list the value moves into has no variable yet -- the binding
+            # that receives it is minted from the type this walk returns -- so
+            # the locks a value carries have nowhere to go, and one that holds
+            # any is refused rather than followed to storage nothing names
+            norecv9: ztypes.vid
+            nopins9: List ztyping.PinPath
+            (consumeBareArgOwnership
+                :st
+                :ast
+                name: bnt9.stringView
+                vid: bvo9
+                recvVid: norecv9
+                calleePins: false
+                pins: nopins9
+                nodeid: vnid9
+                lineno: (nodeLine n: vn9)
+                colno: (nodeCol n: vn9)
+            )
+            return
+        } case none then null
+    }
+    errM9: st.typing.errors.length
+    refuseBorrowedTake :st :ast n: vn9 vt: elemT
+    if st.typing.errors.length == errM9 when (isMarkedMove :ast n: vn9).not then {
+        checkFieldMove :st :ast n: vn9
+    }
+}
+
 # forComprehensionTid -- the type a `for` used as an expression produces: a
 # List of the body's value type, and 0 when the body produces no value.
 forComprehensionTid: function {
@@ -31845,6 +31928,13 @@ checkFor: function {
     if fornode.body > 0 when st.isUnreachable.not then {
         fb: ast.nodes.get i: fornode.body.u64
         elemT = ztypes.tid.create from: (lastStmtType :st :ast block: fb)
+    }
+    # THE VALUE IS APPENDED, and only in value position: a statement loop
+    # whose last line happens to have a value discards it, and stmtBlocks is
+    # what says which this is (noteStatementBlocks runs before the walk reaches
+    # here). The scope is still open, so the element is still a name.
+    if elemT > 0 when (st.typing.stmtBlocks.has item: fornode.body.u64).not then {
+        checkComprehensionValue :st :ast :fornode :elemT
     }
     # a body that leaves the FUNCTION runs at most once: its own takes are
     # dropped (the code after the loop never sees them) while a condition's
