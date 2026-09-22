@@ -1656,7 +1656,11 @@ perf: $(PERFBIN)
 # -122 backing the `with`-expression fallback leg out again: 0 behaviour, -122
 # source. A construct the emitter cannot render is a FALLBACK, and those only
 # ever shrink -- the answer is to make the value bind, not to refuse it here.
-ALLOC_BASELINE := 2626666
+#
+# -139 deleting the array `getMut` leg: 0 behaviour, -139 source. It emitted a
+# call to a C function z_array.c.tmpl does not write, for a member `array` does
+# not declare, and nothing could reach it.
+ALLOC_BASELINE := 2626527
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
