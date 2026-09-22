@@ -733,6 +733,12 @@ perf: $(PERFBIN)
 # skipping the member materialisation for monos, where the lookup answers
 # without it, cost 59 allocations MORE than it saved.
 #
+# +1,633 for the integer range itself: `intrange` and a bodied `each` on the
+# eight scalars are ~70 lines of new lib/system, which the self-compile
+# compiles like any other source. The DEMAND gate above is what keeps that off
+# the programs: a bodied `each` costs 1 line of emitted C in a program that
+# never iterates, against 418 without it.
+#
 # +556 for the method-body demand gate: a bodied member of a RUNTIME-OWNED
 # type is walked only where the program calls it, so the gate is asked at every
 # bodied member of every type resolved. 0 behaviour -- no stdlib type has a
@@ -1585,7 +1591,7 @@ perf: $(PERFBIN)
 #
 # -22 when that registration stopped taking the tree it no longer reads: 0
 # behaviour, all of it the source.
-ALLOC_BASELINE := 2616365
+ALLOC_BASELINE := 2617998
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

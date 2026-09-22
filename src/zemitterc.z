@@ -20422,11 +20422,20 @@ emitForStmt: function {
     buf: String.borrow
 } is {
     ctx.condDepth = ctx.condDepth + 1
-    if (emitObjIterFor :ast :symtab :ctx m: n :ind :tmp :buf) then {
+    # THE COUNTED RANGE IS ASKED FIRST. An integer range is an ordinary
+    # iterator -- it has a `call` returning an optionval like any other -- so
+    # the object path matches it too, and asked first it would construct a
+    # cursor and step it where the compiler can just count. Both emit the same
+    # loop; only one of them emits no object.
+    #
+    # It cannot capture a container: emitIntRangeFor bails unless rangeCType
+    # answers, and that is the RECEIVER's integer width, which a List or a Map
+    # does not have.
+    if (emitIntRangeFor :ast :symtab :ctx m: n :ind :tmp :buf) then {
         ctx.condDepth = ctx.condDepth - 1
         return
     }
-    if (emitIntRangeFor :ast :symtab :ctx m: n :ind :tmp :buf) then {
+    if (emitObjIterFor :ast :symtab :ctx m: n :ind :tmp :buf) then {
         ctx.condDepth = ctx.condDepth - 1
         return
     }
@@ -24047,15 +24056,15 @@ intScalarCTypeOf: function {
 }
 
 # rangeCType -- the C type a counted range's induction variable takes: the
-# RECEIVER's, which is the type the loop name binds to. "" when the operand
-# drives no counted range, and the arms are rangeBoundExpr's own -- the bound
-# and the width are the same receiver read two ways, so they must agree about
-# which node that is.
+# RECEIVER's, which is what the range yields and so what the loop name binds.
+# "" when the operand drives no counted range, and the arms are
+# rangeBoundExpr's own -- the bound and the width are the same receiver read
+# two ways, so they must agree about which node that is.
 #
-# Written `int64_t` the counter was signed whatever the receiver's width, so a
-# u64 bound above i64's maximum compared as a negative number and the loop ran
-# once or not at all. A u8 receiver counted in 64 bits and the loop name, typed
-# u8, was assigned from a wider counter at every step.
+# Written `int64_t` the counter was signed whatever the width, so a u64 bound
+# above i64's maximum compared as a negative number and the loop ran once or
+# not at all. A u8 range counted in 64 bits and the loop name, typed u8, was
+# assigned from a wider counter at every step.
 rangeCType: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -39748,16 +39757,32 @@ emitRecordMethods: function {
                 match (
                     mo
                 ) case some then {
-                    (emitOneMethod
-                        :ast
-                        :symtab
-                        :ctx
-                        mid: (ztypes.tid.create from: mo.u64)
-                        thisTid: tid
-                        op: (ast.nodes.get i: am2.operation.u64)
-                        :declOnly
-                        :buf
-                    )
+                    # A BODIED MEMBER OF A NATIVE TYPE IS EMITTED ONLY WHERE THE
+                    # PROGRAM CALLS IT. A native type is one the runtime owns and
+                    # that every program touches -- the scalars are -- so a member
+                    # written in zerolang on one is otherwise a dead C function,
+                    # and the types its body constructs dead structs, in every
+                    # program that so much as counts a string's bytes. A type the
+                    # author declared carries its whole surface, as it always has.
+                    skipM: false
+                    if (symtab.reg.isNativeOf :tid) then {
+                        mnId9: zast.poolFind pool: ast.names text: mname.stringView
+                        if (monoMemberUsed :symtab monoId: tid nameId: mnId9).not then {
+                            skipM = true
+                        }
+                    }
+                    if skipM.not then {
+                        (emitOneMethod
+                            :ast
+                            :symtab
+                            :ctx
+                            mid: (ztypes.tid.create from: mo.u64)
+                            thisTid: tid
+                            op: (ast.nodes.get i: am2.operation.u64)
+                            :declOnly
+                            :buf
+                        )
+                    }
                 } case none then null
             }
             wi = wi + 1

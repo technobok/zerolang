@@ -1,0 +1,44 @@
+# ranges -- the integer range iterator, an implementation subunit of system.
+# It lives here rather than in system.z because it has a BODY, and system.z is
+# declarations: every member there is `is native`.
+#
+# An integer range is an ordinary zerolang iterator. `for i: 10.each loop` is
+# dispatch rule 1 and `r: 10.each` + `for i: r loop` is rule 4 -- there is no
+# loop form that is special-cased for integers. The compiler lowers the header
+# form to a counted C loop without constructing one, which is an optimisation
+# and not the semantics.
+
+# a walk over consecutive integers of type `t`, ascending.
+#
+# The cursor holds a COUNT of iterations remaining rather than an endpoint to
+# compare against, and steps only while more remain. An endpoint cannot say
+# what a count says: a range whose last value is its type's maximum has no
+# representable value past it to stop at, so the comparison is true forever and
+# the step wraps. Counting cannot reach past the end, so that case does not
+# exist -- and a count of zero is simply a walk that yields nothing, which is
+# what a non-positive `each` hands back.
+intrange: record {
+    # the value this step yields; meaningless once `left` is 0
+    cur: t
+    # iterations remaining, this one included
+    left: u64
+    # step direction: `downto` counts down, `each` and `upto` count up
+    down: bool
+} as {
+    # the INTEGER type walked. Lowercase says valtype, so a binding of it COPIES
+    t: anyval.generic
+
+    # the next value, or none once the walk is exhausted. A `for` header drives
+    # it
+    call: function {r: this} out optionval t is {
+        if r.left == 0 then return (optionval.none t)
+        v: r.cur
+        r.left = r.left - 1
+        # the last value does not step: past the end there may be nothing to
+        # step to
+        if r.left > 0 then {
+            if r.down then r.cur = r.cur - 1 else r.cur = r.cur + 1
+        }
+        return (optionval.some v)
+    }
+}
