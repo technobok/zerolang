@@ -2669,6 +2669,7 @@ VIEW_GUARD_EMITTED := get:ListRef.get,ListView.get getMut:ListRef.getMut \
   contains:ListRef.contains \
   listView:ListRef.listView sort:ListRef.sort \
   iterate:ListRef.iterate,ListView.iterate \
+  iterateReverse:ListRef.iterateReverse,ListView.iterateReverse \
   call:ListIter.call,ListIterVal.call \
   iterateMut:ListRef.iterateMut getv:MapRR.get eq:- \
   extendView:ListVal.extendView destroy:- \
@@ -2692,10 +2693,12 @@ VIEW_GUARD_INLINE := Bytes.byteView:unemitted \
   ListVal.getMut:ListRef.getMut \
   ListViewVal.get:ListView.get ListViewVal.slice:ListView.slice \
   ListViewVal.iterate:ListView.iterate \
+  ListViewVal.iterateReverse:ListView.iterateReverse \
   ListViewVal.length:inline \
   ListVal.sort:ListRef.sort ListVal.listView:ListRef.listView \
   ListVal.slice:ListRef.slice \
   ListVal.iterate:ListRef.iterate ListVal.iterateMut:ListRef.iterateMut \
+  ListVal.iterateReverse:ListRef.iterateReverse \
   ListVal.length:inline ListVal.capacity:inline \
   SetVal.add:SetRef.add SetVal.has:SetRef.has SetVal.delete:SetRef.delete \
   SetVal.iterate:SetRef.iterate SetIterVal.call:SetIter.call \
