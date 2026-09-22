@@ -80,6 +80,7 @@ operation can fail for reasons the caller needs to handle
   [#*: #> to=null: #b:"null" -- #~"null: record is native"]
   [#*: #> to=never: #b:"never" -- #~"never: record is native"]
   [#*: #> to=literal-types: #b:"intliteral" / #b:"floatliteral" -- the compile-time types of a numeric literal]
+  [#*: #> to=intrange: #b:"intrange" -- the walk #~"each" / #~"upto" / #~"downto" hand back]
   [#*: #> to=any: #b:"Any" -- #~"Any: union is native" (system-internal; not user-reachable)]
 
 #p: #b:"String types"
@@ -250,6 +251,51 @@ the unsigned types, where it would be the identity.
                       # differ in bits, so no value conversion sees it
 """
 
+#b:"Counting." An integer is #_*"not" iterable: it declares no
+#~"iterate", and there is no bare #~"for x: 5 loop". Counting is three
+named members on the eight concrete integer types, and each one's NAME
+says which convention it takes:
+
+#ul:
+  [#*: #~"n.each" -- a COUNT, so the range is half-open #~"[0, n)".
+  A count at or below zero walks nothing.]
+  [#*: #~"a.upto to: b" -- ENDPOINTS, so the range is closed
+  #~"[a, b]": #~"b" is walked, not stopped at. An inverted range
+  (#~"a" past #~"b") walks nothing.]
+  [#*: #~"a.downto to: b" -- the same, descending.]
+
+#code language=zerolang: """
+  for i: 5.each loop print "\{i}"            # 0 1 2 3 4
+  for i: (2.upto to: 5) loop print "\{i}"    # 2 3 4 5
+  for i: (3.u8.downto to: 0) loop print "\{i}"   # 3 2 1 0
+"""
+
+The element is the RECEIVER's type, so #~"3.u8.each" indexes in
+#~"u8" and #~"3.i64.each" in #~"i64". #~"i128" and #~"u128" declare
+none of the three.
+
+All three hand back an #> to=intrange: #~"intrange", an ordinary
+iterator, so a binding holds one and a #~"for" header drives it like
+any other -- and the header LOWERS to a counted C loop, constructing no
+object at all.
+
+#b:"Closed ranges count rather than compare." A closed range cannot be
+driven by an endpoint test, and the two shapes it exists for are why:
+#~"n.downto to: 0" on an unsigned type would compare #~"i >= 0", true
+forever, and step by wrapping at zero; and a range whose last value is
+its type's MAXIMUM has no representable value past it to stop at. The
+cursor holds a COUNT of the iterations remaining instead, which reaches
+neither. The one range it cannot express is a type's FULL span --
+#~"0.upto to:" u64's maximum is 2^64 values and the count holds
+2^64-1 -- so that walks nothing; see
+#> to=./Design-OPEN.html: Design-OPEN.
+
+#b:"Walking a container backwards is not this." #~"downto" is for
+numeric descents, where both endpoints are values you wrote.
+#~"(xs.length - 1).downto to: 0" reads correctly and underflows
+#~"u64" on an empty list; the list family declares
+#> to=./stdlib_collections.html: #~"iterateReverse" for that.
+
 #b:"Exponents." The four float types carry #~"scaleB" and #~"logB",
 IEEE 754's own names for the two operations that move a value along its
 exponent without touching its significand.
@@ -303,6 +349,32 @@ them fails at type-check with its own message instead of inside the C
 compiler. Width on platforms without native 128-bit support is
 determined at C compile time.
 
+
+#--: intrange
+
+A walk over consecutive integers of type #~"t", the value #~"each",
+#~"upto" and #~"downto" hand back. A record, so a binding of it copies
+and it allocates nothing.
+
+#code language=zerolang: """
+  intrange: record {
+      cur: t          # the value this step yields
+      left: u64       # iterations remaining, this one included
+      down: bool      # `downto` counts down; `each` and `upto` count up
+  } as {
+      t: anyval.generic
+      call: function {r: this} out optionval t
+  }
+"""
+
+#~"call" is the iterator step: the next value, or #~"none" once the
+walk is exhausted. It is what a #~"for" header drives, and what to call
+when the range is held as a value:
+
+#code language=zerolang: """
+  r: 1.upto to: 3
+  for h: r loop print "\{h}"      # 1 2 3
+"""
 
 #--: literal types
 
