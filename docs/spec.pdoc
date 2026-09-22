@@ -1721,10 +1721,10 @@ values of the #~"loop" statement.
       # MyIter is pinned until 'for' completes
   }
 
-  # iterable — i64 has an .iterate method returning an integer-range
-  # iterator. The lean form `for x: 5 loop` is sugar for
-  # `for x: 5.iterate loop`.
-  for x: 5 loop {
+  # integer range — `each` is a COUNT, half-open; `upto` / `downto`
+  # take endpoints and are closed. Integers themselves are not
+  # iterable: there is no bare `for x: 5 loop`.
+  for x: 5.each loop {
       # x = 0, 1, 2, 3, 4
   }
 
@@ -1754,7 +1754,7 @@ and not currently accepted by the parser. The plain binding form
 #-----: For-loop dispatch
 
 The compiler classifies the binding RHS by AST shape and result type and
-picks one of five dispatch modes. Rules are checked in order; first match
+picks one of four dispatch modes. Rules are checked in order; first match
 wins. Let R be the type produced by evaluating the RHS, and call a type
 "iterator-shaped" if it has a #~".call" method whose only required parameter
 is #~":this" and whose return type is #~"Option(t)", #~"optionval(t)", or
@@ -1766,35 +1766,31 @@ is #~":this" and whose return type is #~"Option(t)", #~"optionval(t)", or
       eagerly before the loop and uses R as the iterator;
       #~"R.call" is invoked per iteration. Example:
       #~"for line: (TextReader File: f) loop ...".]
-  [#*: #b:"Rule 2 (iterable):" RHS is a non-call expression AND its
-      type T has an #~".iterate" method whose only required parameter
-      is #~":this" and whose return is iterator-shaped. The compiler
-      synthesises the call to #~".iterate" once before the loop;
-      its result is the iterator. Example: #~"for x: 5 loop" lowers
-      to #~"for x: 5.iterate loop". Only the exact name #~".iterate"
-      triggers this rule; other iterator-producing methods such as
-      #~".iterateMut" or #~".iterateItems" must be invoked
-      explicitly so they fall under rule 1.]
-  [#*: #b:"Rule 3 (function as iterator):" RHS is a call expression
+  [#*: #b:"Rule 2 (function as iterator):" RHS is a call expression
       AND its return type is #~"Option(t)" / #~"optionval(t)" /
       #~"OptionView(t)" directly. The compiler defers the call: it is
       re-invoked once per iteration and the result is the
       per-iteration value.]
-  [#*: #b:"Rule 4 (instance with call):" RHS is a non-call expression
+  [#*: #b:"Rule 3 (instance with call):" RHS is a non-call expression
       AND its type T is itself iterator-shaped. T is the iterator;
       #~"T.call" is invoked per iteration. This is the typical shape
-      for iterator instances bound by a prior #~"with".]
-  [#*: #b:"Rule 5 (none of the above):" compile error. The diagnostic
-      lists the three accepted shapes and suggests rewriting to a
-      manual #~"for loop { ... break ... }" loop when none fit.]
+      for iterator instances bound by a prior #~"with", and the shape
+      #~"5.each" / #~"2.upto to: 5" take.]
+  [#*: #b:"Rule 4 (none of the above):" the binding is an
+      #b:"initialiser" -- declared once before the loop and read by the
+      loop's own conditions, as #~"for sv: s.stringView while
+      sv.length > 3 loop" does. An initialiser that is the loop's ONLY
+      condition is a compile error: nothing would ever end the loop.]
 
-The compiler does not auto-synthesise a trivial
-#~"iterate: function {:this} is { return :this }" on iterator types;
-authors who want their type to be both iterator and iterable must write
-both #~".iterate" and #~".call" explicitly.
+#b:"There is no iterable rule." A method named #~".iterate" is called
+like any other -- the compiler never synthesises the call -- so
+#~"for e: xs.iterate loop" is Rule 1 and #~"for e: it loop" over a
+#~"with"-bound iterator is Rule 3. #~".iterateMut" and
+#~".iterateItems" are ordinary members for the same reason, and so is
+#~".each" on an integer.
 
 The for-loop expression form (a list of the loop body's final values) is
-available under all five dispatch rules.
+available under all four dispatch rules.
 
 #---: .take on Function Names
 
@@ -3771,7 +3767,7 @@ The compiler provides two tiers of pre-existing methods on types:
   See #> to=./ownership.html: ownership for the full rule.]
   [#*: #_+"Native methods" declared in #~"lib/system/*.z" with the
   #~"is native" form. #~"String.copy", #~".byteView",
-  #~".listView", #~".stringView", #~".iterate", #~".each",
+  #~".listView", #~".stringView", #~".iterate",
   #~".append", #~".length", and the collection / numeric-type methods
   are all in this tier. They are visible to readers of the standard
   library and resolve through the ordinary member-lookup path -- there
@@ -4591,12 +4587,12 @@ An #b:"iterator" in Zerolang is any type whose #~".call" method takes only
 #~"OptionView(t)". The #~"for" loop drives an iterator by repeatedly
 invoking #~".call" until the result's tag is #~"none".
 
-An #b:"iterable" is any type that exposes an #~".iterate" method whose only
-required parameter is #~":this" and whose return type is itself iterator-shaped.
-The for-loop's binding RHS may be either an iterator or an iterable; rule 2
-of the dispatch (see #_~"For-loop dispatch") synthesises the #~".iterate"
-call. Stdlib examples: integers (#~"5.iterate"), #~"List" (#~"mylist.iterate"),
-#~"Map" (#~"mymap.iterate" → keys, #~"mymap.iterateItems" → entries).
+#~".iterate" is a #_*"convention", not a dispatch rule: a container names
+its walk that way, and the call is written out like any other. Stdlib
+examples: #~"List" (#~"mylist.iterate"), #~"Map" (#~"mymap.iterate" → keys,
+#~"mymap.iterateItems" → entries). Integers are #_*"not" iterable and declare
+no #~".iterate"; they count with #~"5.each", #~"2.upto to: 5" and
+#~"5.downto to: 2", each of which hands back an #~"intrange" iterator.
 
 Two iterator patterns are common:
 
