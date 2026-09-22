@@ -5524,71 +5524,6 @@ emitSvNativeInfix: function {
     return (orderWrap prefix: oprefix call: ecall)
 }
 
-# emitScalarIterateCall -- the VALUE form of a numeric `iterate` / `each`.
-#
-# These are Rule 3 generator functions: `{:this from: type} out (optionval type)`,
-# re-invoked once per iteration, and a for-header is free to lower them to a
-# counted loop instead -- which emitIntRangeFor does, emitting no call at all.
-# That left the value form with no emitter at all: `v: 5.iterate from: 2`
-# type-checks, mints its optionval mono, and then reported `unhandled callee`
-# for a member the compiler supplies. natives.tbl carries an EMPTY row for each
-# of them precisely to say the compiler supplies it, so an absent leg here is
-# the compiler not keeping its own word.
-#
-# One step of the range: the element at `from` when the range has not ended,
-# `none` when it has. Both operands are bound first -- either may be a call.
-emitScalarIterateCall: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    call: zast.callrow.view
-} out String is {
-    mnI: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
-    if mnI.length == 0 then return "".string
-    nmIdI: zast.poolFind pool: ast.names text: mnI
-    isRangeI: nmIdI == zast.names.wkIterate or (nmIdI == zast.names.wkEach)
-    if isRangeI.not then return "".string
-    # the call's own stamp names the optionval mono the checker minted; a
-    # container's `iterate` returns an ITERATOR and never reaches this test
-    ovidI: stampIdOf :symtab nid: call.nodeid.u64
-    if ovidI.isZero then return "".string
-    if (originIsTid
-        :symtab
-        tid: ovidI
-        originTid: (ctx.origins.get i: ogOptionval)
-    ).not then return "".string
-    recvI: (emitDottedReceiver
-        :ast
-        :symtab
-        :ctx
-        callable: (ast.nodes.get i: call.callable.u64)
-    )
-    if recvI.length == 0 then return "".string
-    # `from:` is the only argument, and it defaults to 0 exactly as the
-    # for-header's rangeFromExpr defaults it
-    fromI: "0".string
-    arx239: u64
-    for arx239 < call.arguments.count.u64 loop {
-        aIdI: zast.kidAt kids: ast.kids span: call.arguments i: arx239
-        arx239 = arx239 + 1
-        aI: ast.nodes.get i: aIdI.u64
-        if aI.namedoperation then {
-            axI: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: aI.operation.u64)
-            if axI.length > 0 then fromI = axI.copy
-        }
-    }
-    ovcI: ctxCname :ctx tid: ovidI
-    someI: variantTag :symtab tid: ovidI arm: "some"
-    noneI: variantTag :symtab tid: ovidI arm: "none"
-    payI: armPayloadC :ast :symtab :ctx tid: ovidI arm: "some"
-    if payI.length == 0 then return "".string
-    r0I: "({ \{payI} _rf = (\{fromI}); \{payI} _rl = (\{recvI}); "
-    r1I: "(_rf < _rl) ? ((\{ovcI}_t){ .tag = \{someI}, .data.some = _rf }) "
-    r2I: ": ((\{ovcI}_t){ .tag = \{noneI} }); })"
-    outI: "\{r0I}\{r1I}\{r2I}"
-    return outI
-}
-
 # emitDottedCall -- a method call on a stamped String/StringView base:
 # the simple native set emits {svC}_{member}(&base, &args...).
 emitDottedCall: function {
@@ -13387,9 +13322,6 @@ emitNamedCalleeChain: function {
     # the call form arrived here.
     opc: emitOperatorCallForm :ast :symtab :ctx :call
     if opc.length > 0 then return opc
-    # a numeric range asked for as a VALUE rather than driven by a for-header
-    sic: emitScalarIterateCall :ast :symtab :ctx :call
-    if sic.length > 0 then return sic
     # a yield hoisted out of expression position: the suspension has already
     # run as its own statement and left the resume value in a temp, so what is
     # left here is a plain read
@@ -23979,9 +23911,9 @@ emitIntRangeFor: function {
     }
 }
 
-# emitCountedRangeFor -- `for x: N.iterate loop` / `for x: (N.iterate from: F)`
-# and the lean `for x: N loop`: the HALF-OPEN range as `for (T x = F; x < N;
-# x++)`. False when the operand drives no counted range.
+# emitCountedRangeFor -- `for x: N.each loop`: the HALF-OPEN range as
+# `for (T x = 0; x < N; x++)`. A count starts at 0 -- `each` takes no argument
+# to start it anywhere else. False when the operand drives no counted range.
 emitCountedRangeFor: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -23995,7 +23927,6 @@ emitCountedRangeFor: function {
 } out bool is {
     bound: rangeBoundExpr :ast :symtab :ctx :n
     if bound.length == 0 then return false
-    fromx: rangeFromExpr :ast :symtab :ctx :n
     ctR: rangeCType :ast :symtab :n
     if ctR.length == 0 then return false
     lidR: pushLoopLabel :ctx :tmp isDo: false
@@ -24021,7 +23952,7 @@ emitCountedRangeFor: function {
         )
         pushed = true
     }
-    lh: "\{ind}for (\{ctR} \{lbl} = \{fromx}; \{lbl} < (\{bound}); \{lbl}++) {\n"
+    lh: "\{ind}for (\{ctR} \{lbl} = 0; \{lbl} < (\{bound}); \{lbl}++) {\n"
     buf.append lh
     ind2: "\{ind}    "
     # the body is a BLOCK: whatever it registers -- an argument hoisted to an
@@ -24177,11 +24108,11 @@ emitClosedRangeFor: function {
     }
 }
 
-# isIntScalarName -- one of the twelve INTEGER scalar names. The lean `for x: N`
-# form below counts in an int64 induction variable, so a float bound would
-# truncate silently and a bool one is meaningless -- cTypeOf answers for both, so
-# it cannot be the test. Membership through one string rather than a compare
-# chain, which is the shape A001 exists to discourage.
+# isIntScalarName -- one of the twelve INTEGER scalar names. A counted range
+# counts in an integer induction variable, so a float receiver would truncate
+# silently and a bool one is meaningless -- cTypeOf answers for both, so it
+# cannot be the test. Membership through one string rather than a compare chain,
+# which is the shape A001 exists to discourage.
 isIntScalarName: function {name: StringView} out bool is {
     if name.length == 0 then return false
     known: " i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 c8 c32 "
@@ -24189,13 +24120,15 @@ isIntScalarName: function {name: StringView} out bool is {
     return (known.contains needle: probe)
 }
 
-# isRangeMemberId -- `iterate` or its synonym `each`, by INTERNED ID. Both legs
-# of the range emit ask through here: emitRangeStep once accepted `each` while
-# rangeBoundExpr compared the spelling "iterate" alone, so `for x: N.each loop`
-# missed the counted-loop path, fell through to the iterator protocol, and never
-# advanced -- a loop that printed the receiver forever.
-isRangeMemberId: function {id: zast.nameid} out bool is {
-    return id == zast.names.wkIterate or (id == zast.names.wkEach)
+# isCountRangeMemberId -- `each`, by INTERNED ID: the COUNT family, whose
+# receiver is the range's BOUND and whose walk is half-open. Both legs of the
+# count emit ask through here, and they must agree: one recogniser once
+# accepted `each` while the bound reader compared the spelling "iterate" alone,
+# so `for x: N.each loop` missed the counted-loop path, fell through to the
+# iterator protocol, and never advanced -- a loop that printed the receiver
+# forever.
+isCountRangeMemberId: function {id: zast.nameid} out bool is {
+    return id == zast.names.wkEach
 }
 
 # isClosedRangeMemberId -- `upto` or `downto`, by INTERNED ID. SEPARATE from
@@ -24276,41 +24209,26 @@ closedRangeCountExpr: function {from: StringView to: StringView down: bool} out 
     return cu
 }
 
-# rangeBoundExpr -- the upper bound of an `N.iterate` / `N.each` range (the
-# dotted receiver N); "" when the operation is not one of those calls.
+# rangeBoundExpr -- the upper bound of an `N.each` range: the dotted receiver
+# N, which the half-open walk stops below. "" for anything else.
+#
+# There is no other shape to read. Integers are not iterable, so no bare
+# `for x: N loop` makes an operand its own bound, and `each` takes no arguments,
+# so it is never a call. A CLOSED range is read by rangeStartExpr/rangeToExpr
+# instead -- its receiver is the range's start, not its bound.
 rangeBoundExpr: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: astnode.view
 } out String is {
-    # THE LEAN FORM, tested once for every arm below: `for x: N loop` is sugar for
-    # `for x: N.iterate loop` (spec.pdoc, Iteration), so an integer-typed operand
-    # IS its own bound and `from` is 0. It is asked here rather than in each arm
-    # because a `case` arm narrows the subject to its payload and no longer holds
-    # the whole node, and the shape varies: a bare literal is an atom, a
-    # width-suffixed one (`3.u8`) a DOTTED PATH, and `xs.length` a dotted path too.
-    # Without it the documented sugar found no bound at all, fell through to the
-    # iterator protocol, and looped forever on its own receiver.
-    isLean: (intScalarCTypeOf :symtab tid: (stampTidDeep :symtab :n)).length > 0
     match (
         n
-    ) case call then {
-        callableNode: ast.nodes.get i: n.callable.u64
-        mnId: dottedChildNameIdOf :ast n: callableNode
-        if (isRangeMemberId id: mnId) then return (emitDottedReceiver
-            :ast
-            :symtab
-            :ctx
-            callable: callableNode
-        )
-        if isLean then return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64))
-        return "".string
-    } case dottedpath then {
+    ) case dottedpath then {
         cmnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64)
-        if (isRangeMemberId id: cmnId) then {
-            # the receiver may be a dotted-path itself (squares.length.iterate)
-            # -- stampTidDeep resolves its scalar type either way.
+        if (isCountRangeMemberId id: cmnId) then {
+            # the receiver may be a dotted path itself (squares.length.each) --
+            # stampTidDeep resolves its scalar type either way
             bct: (intScalarCTypeOf
                 :symtab
                 tid: (stampTidDeep :symtab n: (ast.nodes.get i: n.parent.u64))
@@ -24319,10 +24237,8 @@ rangeBoundExpr: function {
                 return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
             }
         }
-        if isLean then return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid.u64))
         return "".string
     } else {
-        if isLean then return (emitExpr :ast :symtab :ctx :n)
         return "".string
     }
 }
@@ -24359,58 +24275,23 @@ rangeCType: function {
     match (
         n
     ) case call then {
+        # the CLOSED family: only it takes an argument, so only it is a call
         callableNode: ast.nodes.get i: n.callable.u64
-        mnId: dottedChildNameIdOf :ast n: callableNode
-        # BOTH range families, unlike rangeBoundExpr: a closed range's receiver
-        # is its START rather than its bound, but the induction variable's width
-        # is the receiver's either way
-        if (isRangeMemberId id: mnId) or (isClosedRangeMemberId id: mnId) then {
-            # the callable of `N.iterate from: F` is the dotted path whose
-            # receiver dottedReceiverStampId reads -- the node rangeBoundExpr
-            # hands to emitDottedReceiver
+        if (isClosedRangeMemberId id: (dottedChildNameIdOf :ast n: callableNode)) then {
             rsid: dottedReceiverStampId :ast :symtab callable: callableNode
             return (intScalarCTypeOf :symtab tid: (tidDeep :symtab sid: rsid))
         }
+        return "".string
     } case dottedpath then {
+        # the COUNT family, whose receiver rangeBoundExpr reads as the bound
         cmnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64)
-        if (isRangeMemberId id: cmnId) then {
+        if (isCountRangeMemberId id: cmnId) then {
             rt2: stampTidDeep :symtab n: (ast.nodes.get i: n.parent.u64)
             return (intScalarCTypeOf :symtab tid: rt2)
         }
-    } else null
-    # THE LEAN FORM: `for x: N loop` is sugar for `for x: N.iterate loop`, so an
-    # integer-typed operand IS its own bound and its own width.
-    return (intScalarCTypeOf :symtab tid: (stampTidDeep :symtab :n))
-}
-
-# rangeFromExpr -- the `from:` argument of an iterate range, or "0".
-rangeFromExpr: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    n: astnode.view
-} out String is {
-    match (
-        n
-    ) case call then {
-        arx549: u64
-        for arx549 < n.arguments.count.u64 loop {
-            aId: zast.kidAt kids: ast.kids span: n.arguments i: arx549
-            arx549 = arx549 + 1
-            a: ast.nodes.get i: aId.u64
-            if a.namedoperation then {
-                an: zast.nameTextAt :ast ref: a.name
-                if an.stringView == "from" then return (emitExpr
-                    :ast
-                    :symtab
-                    :ctx
-                    n: (ast.nodes.get i: a.operation.u64)
-                )
-            }
-        }
-        return "0".string
+        return "".string
     } else {
-        return "0".string
+        return "".string
     }
 }
 
@@ -26996,7 +26877,7 @@ emitComprehensionNode: function {
     }
 }
 
-# emitListComprehension -- populate listVar from `for x: N.iterate loop { expr }`:
+# emitListComprehension -- populate listVar from `for x: N.each loop { expr }`:
 # a counted for-loop whose body appends the comprehension's value expression.
 emitListComprehension: function {
     ast: Ast.view
@@ -27020,11 +26901,10 @@ emitListComprehension: function {
             lblV6: defVid :symtab nid: (interpPartNodeId n: (ast.nodes.get i: c0.operation.u64))
             lbl: varCName :ctx vid: lblV6 name: lblR6.stringView
             bound: rangeBoundExpr :ast :symtab :ctx n: (ast.nodes.get i: c0.operation.u64)
-            from: rangeFromExpr :ast :symtab :ctx n: (ast.nodes.get i: c0.operation.u64)
             if bound.length == 0 then return
             ct6: rangeCType :ast :symtab n: (ast.nodes.get i: c0.operation.u64)
             if ct6.length == 0 then return
-            fh: "\{ind}for (\{ct6} \{lbl} = \{from}; \{lbl} < (\{bound}); \{lbl}++) {\n"
+            fh: "\{ind}for (\{ct6} \{lbl} = 0; \{lbl} < (\{bound}); \{lbl}++) {\n"
             buf.append fh
             ind2: "\{ind}    "
             (emitComprehensionBody

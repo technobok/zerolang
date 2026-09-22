@@ -1606,7 +1606,14 @@ perf: $(PERFBIN)
 # and 5,412 the SOURCE, ~307 net lines of src/ at the 13-17 allocations a line
 # this tree costs to compile. The emitted C is smaller wherever a closed range
 # is a `for` header: `range_closed_forms.z` builds seven fewer range objects.
-ALLOC_BASELINE := 2625029
+#
+# -3,692 when `iterate` left the integer types: -631 behaviour and -3,061 the
+# source. The behaviour is three readers that ran on every `for` header and now
+# do not -- the lean-form probe that stamped each operand's type to ask whether
+# it was its own bound, the `from:` argument scan, and the value-form emitter --
+# and the source is ~190 fewer lines of src/ plus ten fewer stdlib declarations.
+# 0 corpus difference: the call sites had already moved to `each` / `upto`.
+ALLOC_BASELINE := 2621337
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

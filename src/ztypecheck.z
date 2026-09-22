@@ -26952,7 +26952,7 @@ checkNumericSuffixCast: function {
         # suffix, so a numeric target the literal type does not declare is an
         # error here rather than a fall-through -- otherwise `3.5.u8` would
         # materialise to f64 and quietly become f64's runtime-checked `u8`.
-        # A NON-numeric child does fall through: that is how `5.iterate` and
+        # A NON-numeric child does fall through: that is how `5.each` and
         # `1.0.scaleB` reach their member on the materialised receiver.
         )
         litTid: st.reg.literalIntTid
@@ -27107,8 +27107,8 @@ dottedBaseTid: function {
         }
         if bt.isZero then return (ztypes.tid.create from: 0)
     }
-    # A literal base materialises before member lookup (`5.iterate` is
-    # i64.iterate); the parent node restamps at the concrete default.
+    # A literal base materialises before member lookup (`5.each` is i64's);
+    # the parent node restamps at the concrete default.
     if (isLiteralTypeId :st tid: bt) then {
         mbt: materialiseLiteral :ast :st :unitDecl t: bt
         if mbt != bt then {
@@ -31377,6 +31377,8 @@ bindForIteration: function {
     nm: StringView
     facId: u64
     spillFor: bool
+    # nothing but this binding can end the loop, so it has to be an iterator
+    soleCond: bool
 } is {
     # A call-shaped iterator init probes its per-iteration call
     # in an empty call scope; gated on the value being an iterator
@@ -31395,6 +31397,26 @@ bindForIteration: function {
             )
         }
     } else {
+        # AN INITIALISER NEEDS SOMETHING ELSE TO END THE LOOP. On its own it
+        # runs once and is read at a test that does not exist, so the loop
+        # never leaves -- `while (1)` in the emitted C, with no diagnostic.
+        # An ITERATOR is the other way a `for` ends: it answers `none`.
+        if soleCond then {
+            itn: st.reg.nameOf tid: vt
+            im: "a 'for' binding with no loop condition must be an iterator, got '\{itn}'"
+            ih: "give the loop a condition ('for x: e while c loop'), or bind something that walks: 'n.each', 'n.upto to: m', 'xs.iterate'".string
+            (addErrorH
+                :st
+                nodeid: cond.nid
+                lineno: (nodeLine n: (ast.nodes.get i: cond.operation.u64))
+                colno: (nodeCol n: (ast.nodes.get i: cond.operation.u64))
+                e: zast.err.typeError
+                msg: im
+                note: String
+                hint: ih
+                width: 0
+            )
+        }
         # A NAMED CONDITION THAT IS NOT AN ITERATION IS AN INITIALISER: it
         # declares a local, run once before the loop and read at every test,
         # and what it binds it OWNS unless the value is lent. Binding it with
@@ -31543,6 +31565,9 @@ checkForCondition: function {
     # whether the loop's body suspends inside a generator, so what the
     # header binds must be saved to the instance
     spillFor: bool
+    # whether this is the loop's ONLY condition and it has no postcondition,
+    # so nothing but the binding itself can end the loop
+    soleCond: bool
 } is {
     # the condition is a namedoperation row, read as plain values: the
     # walks below lend ast
@@ -31555,7 +31580,7 @@ checkForCondition: function {
     facId: forFactoryTid :st :unitDecl :ast :fbnId
     vt: ztypes.tid
     errC: st.typing.errors.length
-    # A for-header names an ITERATOR, not a call. `for x: 5.iterate loop`
+    # A for-header names an ITERATOR, not a call. `for x: 5.each loop`
     # lowers to a counted C loop and emits no call at all, so a member that
     # keeps its FUNCTION stamp here is legitimate and its arity never
     # matters. fnAutoCallable answers false for that AND for a bare
@@ -31602,7 +31627,17 @@ checkForCondition: function {
         checkBareForCondition :st :unitDecl :ast :cond :vt
     }
     if nm.length > 0 when vt > 0 then {
-        bindForIteration :st :unitDecl :ast :cond :vt nm: nm.stringView :facId :spillFor
+        (bindForIteration
+            :st
+            :unitDecl
+            :ast
+            :cond
+            :vt
+            nm: nm.stringView
+            :facId
+            :spillFor
+            :soleCond
+        )
     }
     # an iterable that failed still binds its loop name, typeless, so
     # the body's reads of it are not each an unknown reference
@@ -31759,12 +31794,15 @@ checkFor: function {
     if st.typing.currentGenTid.isZero.not then {
         spillFor = (zast.yieldCountIn :ast nid: fornode.body) > 0
     }
+    # one condition and no postcondition: the binding is the only thing that
+    # could end the loop, so it must be able to
+    soleCond: fornode.nconds == 1 and (fornode.nposts == 0)
     kC: u64
     for kC < fornode.nconds loop {
         condId: zast.forCondAt :ast nid: fornode.nid i: kC
         kC = kC + 1
         onceMark: st.entryMark
-        checkForCondition :st :unitDecl :ast :condId :spillFor
+        checkForCondition :st :unitDecl :ast :condId :spillFor :soleCond
         # the iterable binding runs once, before the loop: what it moved is
         # not moved again by the next iteration
         if (forCondBindsName :ast :condId) then st.recordOnceTakes from: onceMark
