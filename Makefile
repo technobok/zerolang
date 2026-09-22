@@ -1689,7 +1689,11 @@ perf: $(PERFBIN)
 # It asked TWO questions where one does -- a shape test to decide whether to
 # hoist, and the checker's answer to decide the free -- and the shape test cost
 # more than the earlier exit saves.
-ALLOC_BASELINE := 2631332
+#
+# -43 flipping oweControlBinding onto the binding's variable: 0 behaviour, -43
+# source. A walk of every arm becomes one read of one variable, and three
+# parameters stop being threaded to reach it.
+ALLOC_BASELINE := 2631289
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1893,6 +1897,12 @@ emitter-guard:
 # "can C take the address of this text" is a question about C, not about when a
 # value dies, and it has no checker answer to defer to. It rises when a site
 # that addresses a value learns to bind a non-lvalue first, which is a fix.
+#
+# bindingRhsIsBorrow's residue is the same shape. Its four LIFETIME callers are
+# gone -- each reads the checker now -- and the one call left feeds
+# controlValueOwnsArms, which two sites ask to pick an EMITTER: which collection
+# binder runs, and which return shape a heap collection yielded from arms takes.
+# Neither decides when anything dies, so the row is a floor, not a target.
 lifetime-guard:
 	@l1=$$(grep -c 'registerScopeDestroy' src/zemitterc.z); \
 	l2=$$(grep -c 'refsLocal' src/zemitterc.z); \
