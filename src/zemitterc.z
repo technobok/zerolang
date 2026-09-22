@@ -23929,9 +23929,16 @@ emitIntRangeFor: function {
     }
 }
 
-# emitCountedRangeFor -- `for x: N.each loop`: the HALF-OPEN range as
-# `for (T x = 0; x < N; x++)`. A count starts at 0 -- `each` takes no argument
-# to start it anywhere else. False when the operand drives no counted range.
+# emitCountedRangeFor -- `for x: N.each loop`: the HALF-OPEN range, walked by
+# the same trip count the closed forms use. A count starts at 0 -- `each` takes
+# no argument to start it anywhere else. False when the operand drives no
+# counted range.
+#
+# THE COUNT IS READ ONCE, which is the whole of the difference from
+# `x < (N)`: that re-read N at every test, so a body that assigned to N drove
+# the loop -- `for i: n.each loop { n = n + 100 }` never terminated, while the
+# same range held as a value ran n times, because `intrange` captures its count
+# at construction. One spelling of one loop cannot mean two things.
 emitCountedRangeFor: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -23947,16 +23954,20 @@ emitCountedRangeFor: function {
     if bound.length == 0 then return false
     ctR: rangeCType :ast :symtab :n
     if ctR.length == 0 then return false
+    mN: tmpNext :ctx :tmp
+    fn: "_fn\{mN}"
+    cnt: countRangeCountExpr ct: ctR.stringView bound: bound.stringView
+    d0: "\{ind}uint64_t \{fn} = \{cnt};\n"
+    buf.append d0
     lidR: pushLoopLabel :ctx :tmp isDo: false
-    # A suspension inside the body RETURNS from `.call`, and the resume
-    # `goto` lands inside the loop, PAST the C for-init -- so the counter,
-    # which lives only in the header, is indeterminate on the next call and
-    # the loop yields once and reports itself exhausted. It is no local the
-    # checker keeps in the instance: a `for` label is a nameid on the
-    # header's namedoperation and carries no variable id to alias a field
-    # to. Instead the counter keeps its
-    # C local -- so the header, `continue` and the increment are all
-    # untouched -- and is SPILLED to a state field across each suspension.
+    # A suspension inside the body RETURNS from `.call`, and the resume `goto`
+    # lands inside the loop, PAST the C for-init -- so the counter and the
+    # count, which live only in the header, are indeterminate on the next call
+    # and the loop yields once and reports itself exhausted. Neither is a local
+    # the checker keeps in the instance: a `for` label is a nameid on the
+    # header's namedoperation and carries no variable id to alias a field to.
+    # Both keep their C locals -- so the header, `continue` and the step are
+    # untouched -- and are SPILLED to state fields across each suspension.
     pushed: false
     if ctx.genActive when (zast.yieldCountIn :ast nid: m.body) > 0 then {
         ctx.genForNext = ctx.genForNext + 1
@@ -23968,9 +23979,19 @@ emitCountedRangeFor: function {
             kind: spillkind.copy
             payC: String
         )
+        fnF: "_fn_\{ctx.genForNext}"
+        ctx.genForSpills.append (ForSpill
+            field: fnF
+            saved: fn.copy
+            restored: fn.copy
+            kind: spillkind.copy
+            payC: String
+        )
         pushed = true
     }
-    lh: "\{ind}for (\{ctR} \{lbl} = 0; \{lbl} < (\{bound}); \{lbl}++) {\n"
+    st1: "\{fn} = \{fn} - 1"
+    st2: "\{lbl} = (\{ctR})((uint64_t)\{lbl} + 1ULL)"
+    lh: "\{ind}for (\{ctR} \{lbl} = 0; \{fn} > 0; \{st1}, \{st2}) {\n"
     buf.append lh
     ind2: "\{ind}    "
     armC: forArmCond :ast :symtab :ctx n: m
@@ -23992,9 +24013,12 @@ emitCountedRangeFor: function {
     lc: "\{ind}}\n"
     buf.append lc
     popLoopLabel :ctx id: lidR :ind :buf
-    # the counter leaves C scope with the loop, so a suspension after it
-    # must not spill it
-    if pushed then ctx.genForSpills.pop
+    # both leave C scope with the loop, so a suspension after it must not
+    # spill either
+    if pushed then {
+        ctx.genForSpills.pop
+        ctx.genForSpills.pop
+    }
     return true
 }
 
@@ -24225,6 +24249,22 @@ rangeToExpr: function {
     } else {
         return "".string
     }
+}
+
+# countRangeCountExpr -- the trip count `each` walks: the receiver itself,
+# which IS the count, read once into u64.
+#
+# A SIGNED receiver clamps at zero, as the stdlib body does with
+# `(v.u64.or d: 0)`: a negative count walks nothing, and reinterpreting one as
+# u64 would walk 1.8e19. An unsigned receiver needs no test, and emitting one
+# would be a comparison the C compiler is right to warn about.
+countRangeCountExpr: function {ct: StringView bound: StringView} out String is {
+    if ct.startsWith "uint" then {
+        cu: "(uint64_t)(\{bound})"
+        return cu
+    }
+    cs: "(\{bound}) < 0 ? 0 : (uint64_t)(\{bound})"
+    return cs
 }
 
 # closedRangeCountExpr -- the trip count a closed range walks: the number of

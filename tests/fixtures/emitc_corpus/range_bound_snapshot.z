@@ -1,0 +1,52 @@
+# range_bound_snapshot.z -- a counted range takes its count ONCE, before the
+# first step, so the body cannot drive the loop it is running in.
+#
+# `each` used to emit `for (T i = 0; i < (n); i++)`, re-reading `n` at every
+# test: a body that assigned to `n` steered the loop, and `n = n + 100` never
+# terminated. The same range held as a VALUE ran n times, because `intrange`
+# captures its count at construction -- so one spelling of one loop meant two
+# things. It counts down a trip count now, like the closed forms always have.
+main: function is {
+    n: 5
+    c: 0
+    for i: n.each loop {
+        n = n + 100
+        c = c + 1
+    }
+    print "each header: \{c} (n is now \{n})"
+
+    m: 5
+    d: 0
+    r: m.each
+    for j: r loop {
+        m = m + 100
+        d = d + 1
+    }
+    print "each value:  \{d}"
+
+    k: 5
+    e: 0
+    for p: (0.upto to: k) loop {
+        k = k + 100
+        e = e + 1
+    }
+    print "upto header: \{e}"
+
+    # a count at or below zero still walks nothing: the clamp is the stdlib's
+    neg: (0 - 4).i64
+    z: 0
+    for q: neg.each loop z = z + 1
+    print "negative:    \{z}"
+
+    # a bound DERIVED from a container is the length at entry, not a live read
+    xs: ListVal i64
+    xs.append from: 1
+    xs.append from: 2
+    g: 0
+    for w: xs.length.each loop {
+        xs.append from: 9
+        g = g + 1
+    }
+    print "derived:     \{g} (length is now \{xs.length})"
+    print "done"
+}

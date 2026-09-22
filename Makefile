@@ -1631,7 +1631,13 @@ perf: $(PERFBIN)
 # the source. A binding with no vid sat outside every destroy list and every
 # take overlay, so no rule that reads a variable could reach it; the readonly
 # loop-variable lock is the rule that has to.
-ALLOC_BASELINE := 2622026
+#
+# +649 when `each` joined the trip-count form: 0 behaviour and all of it the
+# source. The emitter reads the bound once into a count rather than at every
+# test, which is two more emitted statements per counted loop and no more work
+# at run time -- measured at -O0 it is FASTER than the re-read, and at -O1 the
+# three shapes are within 1%.
+ALLOC_BASELINE := 2622675
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
