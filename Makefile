@@ -1678,7 +1678,10 @@ perf: $(PERFBIN)
 # +776 giving every temporary ONE death: 0 behaviour and 776 source. The map
 # that says which temps a pinning call's result will adopt is one row per such
 # temp, and the compiler makes few; the source is the map and its two readers.
-ALLOC_BASELINE := 2631328
+#
+# +8 flipping emitBindSourceZero onto the binding's own variable: 0 behaviour,
+# 8 source -- one more parameter threaded to one call site.
+ALLOC_BASELINE := 2631336
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -1895,7 +1898,7 @@ lifetime-guard:
 	chk "registerScopeDestroy" "$$l1" 5; \
 	chk "refsLocal" "$$l2" 4; \
 	chk "isNonLvalueArg" "$$l3" 30; \
-	chk "bindingRhsIsBorrow" "$$l4" 10; \
+	chk "bindingRhsIsBorrow" "$$l4" 9; \
 	chk "'_ah{' argument hoists" "$$l5" 1; \
 	chk "hoistExprIsBorrowRooted" "$$l6" 0; \
 	if [ "$$fail" = "1" ]; then \

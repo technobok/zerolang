@@ -19462,13 +19462,17 @@ bindAliasCType: function {
 # emitBindSourceZero -- the binding MOVED its value, so the source is zeroed:
 # its scope-exit free has to no-op now that the binding owns the heap. A field
 # take, a String take and a bare owned local each spell the zero differently. A
-# BORROW binding owns nothing, so its source keeps its value, and ownership is
-# decided from the TYPE before the source text is composed -- a scalar binding
-# moves nothing, and asking for the source costs a String.
+# BORROW binding owns nothing, so its source keeps its value -- asked of the
+# binding's own VARIABLE, which is where the checker decided it, not of the
+# RHS's shape. Ownership is decided from the TYPE before the source text is
+# composed: a scalar binding moves nothing, and asking for the source costs a
+# String.
 emitBindSourceZero: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
+    # the binding, whose variable says whether it borrows
+    abind: zast.assignmentrow.view
     avn: astnode.view
     rv: StringView
     ct: StringView
@@ -19493,7 +19497,7 @@ emitBindSourceZero: function {
     bzo: bzp
     if (symtab.reg.needsDestructor typeId: bzt) then bzo = true
     if bzo.not then return
-    if (bindingRhsIsBorrow :ast :symtab :ctx n: avn) then return
+    if (bindingVarIsBorrowed :symtab n: abind) then return
     bzs: implicitTakeSource :ast :symtab :ctx n: avn
     if bzs.length == 0 then return
     if bzp then {
@@ -19563,6 +19567,7 @@ emitTypedBind: function {
         :ast
         :symtab
         :ctx
+        abind: n
         :avn
         rv: rv.stringView
         :ct
