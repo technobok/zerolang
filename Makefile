@@ -1718,7 +1718,10 @@ perf: $(PERFBIN)
 #
 # +171 a unit-level definition named after a marker is refused: 0 behaviour,
 # 171 source -- the unit-body legs of the same reserved-name check.
-ALLOC_BASELINE := 2634553
+#
+# +1 the E0037 help names the current reserved words: 0 behaviour, 1 source --
+# the longer literal only.
+ALLOC_BASELINE := 2634554
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
