@@ -1,0 +1,38 @@
+# Friend-handle and borrowed fields constructed from marker paths. `.private`
+# and `.borrow` emit as their base, so on a receiver or a borrowed parameter --
+# already a pointer -- the field takes it as it is; on a local it takes the
+# local's address.
+Bag: class { a: i64 count: i64 } as {
+    public: unit { :count :viaThis :viaNamed :viaView }
+    viaThis: function {:this} out i64 is {
+        hd: (Holder h: this.private)
+        return hd.read
+    }
+    viaNamed: function {b: this.borrow} out i64 is {
+        hd: (Holder h: b.private)
+        return hd.read
+    }
+    viaView: function {b: this.view} out i64 is {
+        pk: (Peek v: b)
+        return pk.v.count
+    }
+}
+Holder: class { h: Bag.private.borrow } as {
+    read: function {:this} out i64 is { return (forward h: this.h) }
+}
+Peek: class { v: Bag.view }
+Keep: class { k: Bag.borrow }
+forward: function {h: Bag.private.borrow} out i64 is { return h.a }
+bump: function {b: Bag.borrow} out i64 is {
+    kp: (Keep k: b.borrow)
+    return kp.k.count + 100
+}
+main: function is {
+    b: (Bag a: 42 count: 3)
+    print "this=\{b.viaThis} named=\{b.viaNamed} view=\{b.viaView}"
+    print "param=\{bump :b}"
+    {
+        kl: (Keep k: b.borrow)
+        print "local=\{kl.k.count}"
+    }
+}

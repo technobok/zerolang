@@ -1725,7 +1725,10 @@ perf: $(PERFBIN)
 # +753 a `public:` block may not hold a visibility block: 0 behaviour, 753
 # source -- refuseNestedVisibility, asked of every interface entry on both the
 # file-unit scan and the subunit index.
-ALLOC_BASELINE := 2635307
+#
+# +419 a marker path is a pointer when its base is: 0 behaviour, 419 source --
+# markerEmitsBase and pathIsPointer's new leg.
+ALLOC_BASELINE := 2635726
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

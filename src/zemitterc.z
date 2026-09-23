@@ -3634,10 +3634,24 @@ pathIsPointer: function {
         # the astnode is re-fetched by its own id.
         dnd: ast.nodes.get i: n.nodeid.u64
         if (nodeIsRefBorrowResult :ast :symtab :ctx n: dnd) then return true
+        # an access or borrow marker contributes no C text: `b.private` and
+        # `b.borrow` ARE `b`, a pointer exactly when `b` is one
+        if (markerEmitsBase id: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))) then {
+            return (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
+        }
         return (borrowedFieldPath :ast :symtab :ctx :n)
     } else {
         return false
     }
+}
+
+# markerEmitsBase -- a path leaf that is an access or borrow marker, which
+# emits as the path's base unchanged.
+markerEmitsBase: function {id: zast.nameid} out bool is {
+    if id == zast.names.wkPrivate then return true
+    if id == zast.names.wkPublic then return true
+    if id == zast.names.wkBorrow then return true
+    return id == zast.names.wkView
 }
 
 # borrowedFieldPath -- the dotted path reads a NON-OWNED field (`c.l` on
