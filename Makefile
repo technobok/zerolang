@@ -1776,7 +1776,9 @@ perf: $(PERFBIN)
 #
 # +180 a typedef's callee is stamped with the type it builds: 0 behaviour, 180
 # source (the zls half is not on the self-compile's path).
-ALLOC_BASELINE := 2635411
+#
+# -15 the name-keyed isStringy is gone: 0 behaviour, -15 source.
+ALLOC_BASELINE := 2635396
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
