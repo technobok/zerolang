@@ -3634,25 +3634,32 @@ pathIsPointer: function {
         # the astnode is re-fetched by its own id.
         dnd: ast.nodes.get i: n.nodeid.u64
         if (nodeIsRefBorrowResult :ast :symtab :ctx n: dnd) then return true
-        cn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64
-        # the parent's stamp whatever its shape: a borrowed field reached
-        # through a nested owned field (`p.left.s`) is a pointer too
-        )
-        )
-        pnid: (zast.nodeIdOf n: (ast.nodes.get i: n.parent.u64)).u64
-        pstamp: stampIdOf :symtab nid: pnid
-        pstn: regNameView :symtab tid: pstamp
-        prid: canonTypeId :ast :symtab :ctx tid: pstamp name: pstn
-        ptid: pstamp
-        if prid > 0 then ptid = ztypes.tid.create from: prid.u64
-        return (symtab.typing.declIsBorrowedField
-            pool: ast.names
-            parentTypeId: ptid
-            name: cn.stringView
-        )
+        return (borrowedFieldPath :ast :symtab :ctx :n)
     } else {
         return false
     }
+}
+
+# borrowedFieldPath -- the dotted path reads a NON-OWNED field (`c.l` on
+# `l: (ListVal t: i64).borrow`), which the C holds by pointer. The field is
+# asked of the parent's stamp whatever its shape: a borrowed field reached
+# through a nested owned field (`p.left.s`) is a pointer too.
+borrowedFieldPath: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.dottedpathrow.view
+} out bool is {
+    pnid: (zast.nodeIdOf n: (ast.nodes.get i: n.parent.u64)).u64
+    pstamp: stampIdOf :symtab nid: pnid
+    pstn: regNameView :symtab tid: pstamp
+    prid: canonTypeId :ast :symtab :ctx tid: pstamp name: pstn
+    ptid: pstamp
+    if prid > 0 then ptid = ztypes.tid.create from: prid.u64
+    return (symtab.typing.declIsBorrowedFieldId
+        parentTypeId: ptid
+        nameId: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
+    )
 }
 
 # refValtypeResult -- the node is a reference-returning call whose result is a
@@ -9058,6 +9065,10 @@ emitCollectionMethodCall: function {
             ptr: true
         )
         bn = "(*\{bp9})"
+    } else if recvNode.dottedpath when (borrowedFieldPath :ast :symtab :ctx n: recvNode) then {
+        # a borrowed field (`c.l` on `l: (ListVal t: i64).borrow`) holds its
+        # container by pointer and has no variable for colRecvRef to ask
+        bn = "(*\{bn})"
     }
     # the temp owns the receiver only when the call handed over a new value; an
     # element or other borrow still belongs to its container. A Set or a Map is
@@ -14691,8 +14702,21 @@ emitDottedNestedBase: function {
     nlid = ztypes.tid.create from: (chaseColMono :symtab :ctx tid: nlid)
     # a Map/Set-typed base is a heap pointer regardless of how it was
     # reached (a field path fails pathIsPointer's lock-field test)
-    nstPtr: pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
+    nbPar: ast.nodes.get i: n.parent.u64
+    nbPtr: pathIsPointer :ast :symtab :ctx n: nbPar
+    nstPtr: nbPtr
     if nstPtr.not then nstPtr = isHeapPtrCollection :symtab :ctx tid: nlid
+    # a borrowed field (`c.m` on `m: (MapVV k: i64 v: i64).borrow`) holds its
+    # container by pointer: read through it once, and every leg below sees the
+    # container itself -- a Map or Set still as its heap pointer
+    if nbPtr when nbPar.dottedpath when (borrowedFieldPath :ast :symtab :ctx n: nbPar) then {
+        nbIsHeap: isHeapPtrCollection :symtab :ctx tid: nlid
+        if nbIsHeap or (stackCollectionTid :symtab :ctx tid: nlid) then {
+            baseAtom = "(*\{baseAtom})"
+            bs9vid = ztypes.vid
+            nstPtr = nbIsHeap
+        }
+    }
     # a Box's fields and methods are its element's, read through the cell
     nbxE: boxMemberElem :ast :symtab :ctx :n
     if nbxE > 0 then {

@@ -1,0 +1,79 @@
+# nonowned_container_field.z -- a class whose non-owned field is a native
+# CONTAINER (`(ListVal t: i64).borrow` and friends). The field holds the
+# container by POINTER, and the receiver legs asked only whether a VARIABLE is
+# one: a dotted path has none, so every method call through the field took the
+# address of the pointer (`z_append(&c.l, 5)`) and a Map or Set's `length` read
+# through a pointer to its heap pointer. gcc refused each program.
+#
+# Covered: a List mutated through the field by call-form methods (`append`,
+# `set`, `insert`, `get`, `contains`) and by zero-argument ones (`pop`,
+# `iterate`), inside a method (`this.l`) and through a nested owned field
+# (`d.c.l`); a ListRef; a Map and a Set written and read. The owner reads every
+# change back once the holder has died.
+C: class {
+    l: (ListVal t: i64).borrow
+    add: function {:this v: i64} is {
+        this.l.append v
+    }
+}
+
+R: class {
+    l: (ListRef T: String).borrow
+}
+
+M: class {
+    m: (MapVV k: i64 v: i64).borrow
+}
+
+S: class {
+    s: (SetVal k: i64).borrow
+}
+
+D: class {
+    c: C
+}
+
+main: function is {
+    src: (ListVal t: i64)
+    src.append 4
+    {
+        c: C l: src
+        c.l.append 5
+        old: c.l.set i: 0 val: 9
+        c.l.insert from: 1 at: 0
+        c.add v: 6
+        print "list: \{c.l.length} old \{old} first \{c.l.get i: 0} has5 \{c.l.contains item: 5}"
+        print "pop \{c.l.pop}"
+        for x: c.l.iterate loop print "x \{x}"
+    }
+    {
+        d: D c: (C l: src)
+        d.c.l.append 8
+        print "nested: \{d.c.l.length}"
+    }
+    print "after list: \{src.length}"
+
+    words: (ListRef T: String)
+    {
+        r: R l: words
+        r.l.append "w".string
+        print "listref: \{r.l.length}"
+    }
+    print "after listref: \{words.length}"
+
+    map: (MapVV k: i64 v: i64)
+    {
+        m: M m: map
+        m.m.set key: 1 value: 2
+        print "map: \{m.m.length} has \{m.m.has key: 1}"
+    }
+    print "after map: \{map.length}"
+
+    set: (SetVal k: i64)
+    {
+        s: S s: set
+        s.s.add item: 3
+        print "set: \{s.s.length}"
+    }
+    print "after set: \{set.length}"
+}

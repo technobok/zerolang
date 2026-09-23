@@ -1693,7 +1693,13 @@ perf: $(PERFBIN)
 # -43 flipping oweControlBinding onto the binding's variable: 0 behaviour, -43
 # source. A walk of every arm becomes one read of one variable, and three
 # parameters stop being threaded to reach it.
-ALLOC_BASELINE := 2631289
+#
+# +434 reading a container through a borrowed field: 0 behaviour, 434 source.
+# The receiver legs asked whether a VARIABLE is a pointer, which a field path
+# has none of; the source is borrowedFieldPath -- pathIsPointer's field leg,
+# lifted out so the two collection receiver sites ask it by id -- and the two
+# derefs that read through it.
+ALLOC_BASELINE := 2631723
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
