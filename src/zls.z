@@ -3279,6 +3279,63 @@ genericParamHoverCard: function {snap: zcheck.CheckResult hit: navhit} out Value
     return (hoverMarkdown code: gcard.stringView doc: gdoc.stringView)
 }
 
+# hitReadsConstOpt -- the hit is a bare name that reads a constant (`LIMIT`,
+# `ON: true`, `M: mode.slow`): a use with no variable, resolved to a
+# declaration, whose node carries the value the checker folded. A numeric
+# literal folds too and is not asked.
+hitReadsConstOpt: function {
+    o: (Option zenv.ZSymbolTable).view
+    hit: navhit
+    # the hit's written text
+    name: StringView
+} out bool is {
+    if hit.kind != 1 then return false
+    if hit.vid.isZero.not then return false
+    # a literal folds too, and is no constant's name
+    if (ztypecheck.isNumericLiteralName :name) then return false
+    if hit.declId.isZero then return false
+    match (
+        o
+    ) case some then {
+        return (o.typing.nodeConst.has key: hit.nodeid)
+    } case none then {
+        return false
+    }
+}
+
+# constHoverText -- the compile-time value a use site reads, as source would
+# spell it: a number, a quoted string, `Type.arm`. "" when the node has none.
+constHoverText: function {
+    o: (Option zenv.ZSymbolTable).view
+    prog: Ast.view
+    nid: u64
+} out String is {
+    match (
+        o
+    ) case some then {
+        cvo: o.typing.nodeConst.get key: nid
+        if cvo.none then return "".string
+        v: cvo
+        if v.kind.ivalKind then return "\{v.ival}"
+        if v.kind.fvalKind then return "\{v.fval}"
+        if v.kind.svalKind then {
+            sv: o.typing.constStrings.get i: v.strId.u64
+            return "\"\{sv}\""
+        }
+        if v.kind.armKind then {
+            # display text, spelled as the source writes the arm
+            arm: String
+            arm.append (o.reg.nameViewOf tid: v.armTid)
+            arm.appendByte b: 46
+            arm.append (zast.poolTextAt pool: prog.names ref: v.armName)
+            return arm
+        }
+        return "".string
+    } case none then {
+        return "".string
+    }
+}
+
 # hoverTypeFence -- the code-fence text for a hit that has no signature: the
 # type's kind when the registry knows one, otherwise `owner.name: type` with the
 # reference's ownership annotation. "" when nothing can be said, which is the
@@ -3290,7 +3347,11 @@ hoverTypeFence: function {
     # the node's own stamped type, which the kind fallback does not use
     t: u64
 } out String is {
-    tk: typeKindTextOpt o: snap.st tid: (ztypes.tid.create from: hit.tid.u64)
+    # a CONSTANT's hit carries its value's type: the card names the constant,
+    # its type and its value, not the type
+    isConst: hitReadsConstOpt o: snap.st :hit name: hname.stringView
+    tk: String
+    if isConst.not then tk = typeKindTextOpt o: snap.st tid: (ztypes.tid.create from: hit.tid.u64)
     if tk.length > 0 then {
         kindFence: displayTypeNameOfOpt o: snap.st tid: (ztypes.tid.create from: hit.tid.u64)
         kindFence.append ": "
@@ -3314,6 +3375,13 @@ hoverTypeFence: function {
     fence.append hname
     fence.append ": "
     fence.append tn
+    if isConst then {
+        cv: constHoverText o: snap.st prog: snap.prog nid: hit.nodeid
+        if cv.length > 0 then {
+            fence.append " = "
+            fence.append cv
+        }
+    }
     annot: refAnnotation prog: snap.prog o: snap.st vid: hit.vid nid: hit.nodeid
     if annot.length > 0 then {
         fence.append "  # "
@@ -3405,7 +3473,13 @@ navHoverAnswer: function {
         docBody = hoverDoc :snap :sp nid: dnd
         if hit.owner > 0 then appendTrailingDoc :snap :sp nid: dnd :body
     }
-    if docBody.length == 0 when legacyDnd > 0 when legacyDnd != dnd then {
+    # a constant with no doc of its own takes none: the fallback is its
+    # value's TYPE, whose doc describes something else
+    if docBody.length == 0 when legacyDnd > 0 when legacyDnd != dnd when (hitReadsConstOpt
+        o: snap.st
+        :hit
+        name: hname.stringView
+    ).not then {
         docBody = hoverDoc :snap :sp nid: legacyDnd
     }
     hoverCallNotes :snap :sp :hit :body :docBody
