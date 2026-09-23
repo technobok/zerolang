@@ -1757,7 +1757,11 @@ perf: $(PERFBIN)
 #
 # +500 `Bytes.byteView` lowers to its base's listView: 0 behaviour, 500 source
 # -- markTypedefListViewUse, asked at each resolved member.
-ALLOC_BASELINE := 2641136
+#
+# -3075 the `T.borrow from:` verb and `X.public` are retired: -46 behaviour,
+# -3029 source -- no `borrow` member is minted per typedef, protocol and facet,
+# and the verb's routing and exemptions are gone.
+ALLOC_BASELINE := 2638061
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

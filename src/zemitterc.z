@@ -8580,7 +8580,8 @@ aliasBaseOf: function {
 }
 
 # typedefBorrowSource -- the source node of a borrowed typedef (`Bytes xs.borrow`,
-# `Bytes.borrow from: xs`), the path under its `.borrow`; 0 for any other value.
+# `Bytes.create from: xs.borrow`), the path under its `.borrow`; 0 for any other
+# value.
 # The binding is a second name for that source.
 typedefBorrowSource: function {
     ast: Ast.view
@@ -16351,23 +16352,6 @@ emitDottedTagRead: function {
     return "".string
 }
 
-# borrowMarkerIsOwnership -- whether `.borrow` on a value of type `dpbT` is the
-# ownership marker rather than a member: a protocol or facet declares a real
-# `borrow` projection, and so does a type with a function-typed `borrow`
-# member. The split is drawn off the base type exactly as checkBorrowLeg
-# draws it -- one discriminator, so the two cannot disagree.
-borrowMarkerIsOwnership: function {symtab: zenv.ZSymbolTable.view dpbT: ztypes.tid} out bool is {
-    bttB: symtab.reg.typetypeOf typeId: dpbT
-    if bttB == ztypes.ztypetype.protocolType then return false
-    if bttB == ztypes.ztypetype.facetType then return false
-    bcoB: symtab.typing.declChildOfId parentTypeId: dpbT nameId: zast.names.wkBorrow
-    if bcoB.none then return true
-    return (
-        (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: bcoB.u64)) ==
-        ztypes.ztypetype.functionType
-    ).not
-}
-
 # moveMarkerMovesBase -- whether `.take`/`.hold` on this base moves a heap
 # value: a String, a union, a by-value class (a borrowed pointer-param class
 # is not a move source), or a function value.
@@ -16521,7 +16505,7 @@ emitDottedNativeMarker: function {
     }
     # `.borrow` on a value is the ownership marker, and the checker accepts it
     # as one; it emits the receiver itself.
-    if (mnIs :ctx id: mn2Id at: mnBorrow) when (borrowMarkerIsOwnership :symtab :dpbT) then {
+    if (mnIs :ctx id: mn2Id at: mnBorrow) then {
         return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
     }
     # `.take` / `.hold` hands on the base itself (markerHandsOnBase)
@@ -36620,7 +36604,7 @@ protoChildMethods: function {
                 (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: ptid4.u64)) ==
                 ztypes.ztypetype.functionType
             ) then {
-                isSynth: pnid4 == zast.names.wkCreate.u64 or (pnid4 == zast.names.wkBorrow.u64)
+                isSynth: pnid4 == zast.names.wkCreate.u64
                 if isSynth.not then {
                     cnBe4: ast.names.texts.get i: pnid4.u64
                     cn0: cnBe4.copy
@@ -38639,8 +38623,8 @@ emitProtocolDispatch: function {
     return (orderWrap :prefix call: "\{recv}\{acc}vtable->\{dslot}(\{dargs})")
 }
 
-# emitProtocolCreateCall -- `Reader.create from: g.take` (owned, heap-box +
-# source invalidation) / `Provider.borrow from: m.borrow` (borrowed, shares the
+# emitProtocolCreateCall -- `Reader g` / `Reader.create from: g.take` (owned,
+# heap-box + source invalidation) or `Provider m.borrow` (borrowed, shares the
 # source). Both route to the impl's conformance helper for the protocol.
 emitProtocolCreateCall: function {
     ast: Ast.view
@@ -38649,8 +38633,8 @@ emitProtocolCreateCall: function {
     call: zast.callrow.view
 } out String is {
     # the projection and whether it borrows are the checker's: the call's
-    # stamp is the protocol or facet, its kind the verb -- whether it was
-    # spelled `P.create from: d.take`, `P.borrow from: d` or bare `P d.borrow`
+    # stamp is the protocol or facet, its kind whether the source's marker
+    # borrows -- whether it was spelled `P.create from: d.take` or bare `P d`
     protoTid: stampIdOf :symtab nid: call.nodeid.u64
     ptt: symtab.reg.typetypeOf typeId: protoTid
     isFct: ptt == ztypes.ztypetype.facetType

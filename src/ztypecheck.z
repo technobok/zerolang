@@ -8107,7 +8107,7 @@ objectTypedefBaseTid: function {
 # fnptr slot (a spec field / method / method-ref), excluding the constructor and
 # comparison synthetics so they stay free functions / ctors.
 fnFieldFlaggableName: function {name: StringView} out bool is {
-    return (name == "create" or (name == "==") or (name == "!=") or (name == "borrow")).not
+    return (name == "create" or (name == "==") or (name == "!=")).not
 }
 
 # typeExprHasPrivate -- does a field's type expression carry a `.private` marker
@@ -9274,9 +9274,8 @@ synthComparisonPair: function {
     )
 }
 
-# synthRecordMembers -- the members a record gets without declaring them: a typedef
-# wrapper's `borrow` projection, or the generated `==` and `hash` a plain record
-# carries. `hash` is minted whether or not `==` was; valHashMissingPart decides
+# synthRecordMembers -- the members a record gets without declaring them: the
+# generated `==` a plain record carries, and `hash`. `hash` is minted whether or not `==` was; valHashMissingPart decides
 # at the use whether the two agree.
 synthRecordMembers: function {
     st: zenv.ZSymbolTable
@@ -9289,31 +9288,18 @@ synthRecordMembers: function {
     eqDeclR: bool
     neDeclR: bool
 } is {
-    if istd then {
-        borrowId: (st.reg.newType
-            name: "borrow"
+    # a typedef wrapper gets no comparison pair of its own. Otherwise only the
+    # `==: null` opt-out suppresses the PAIR -- it says the type has no equality
+    # at all. A DECLARED operator suppresses just ITSELF, which
+    # synthComparisonMember decides per name by asking the decl tree, where the
+    # author's member already is.
+    if istd.not when isgen.not when eqOptR.not then {
+        (synthComparisonPair
+            :st
             ownerTid: rid
-            typetype: ztypes.ztypetype.functionType
+            eqDecl: eqDeclR
+            neDecl: neDeclR
         )
-        (st.typing.declSynthMemberTyped
-            parentTypeId: (ztypes.tid.create from: rid.u64)
-            nameId: zast.names.wkBorrow
-            kind: ztyping.declkind.methodDecl
-            childTypeId: borrowId
-        )
-    } else {
-        # only the `==: null` opt-out suppresses the PAIR -- it says the
-        # type has no equality at all. A DECLARED operator suppresses just
-        # ITSELF, which synthComparisonMember decides per name by asking
-        # the decl tree, where the author's member already is.
-        if isgen.not when eqOptR.not then {
-            (synthComparisonPair
-                :st
-                ownerTid: rid
-                eqDecl: eqDeclR
-                neDecl: neDeclR
-            )
-        }
     }
     synthRecordHash :st :ast :rnode :rid :isgen
 }
@@ -12180,19 +12166,6 @@ resolveClassCreate: function {
         )
         materializeCreateParams :st :ast typeTid: cid :createId
     }
-    if istd then {
-        borrowId: (st.reg.newType
-            name: "borrow"
-            ownerTid: cid
-            typetype: ztypes.ztypetype.functionType
-        )
-        (st.typing.declSynthMemberTyped
-            parentTypeId: (ztypes.tid.create from: cid.u64)
-            nameId: zast.names.wkBorrow
-            kind: ztyping.declkind.methodDecl
-            childTypeId: borrowId
-        )
-    }
     return needsDtor
 }
 
@@ -12458,17 +12431,6 @@ resolveFacet: function {
             kind: ztyping.declkind.methodDecl
             childTypeId: createId
         )
-        borrowId: (st.reg.newType
-            name: "borrow"
-            ownerTid: fid
-            typetype: ztypes.ztypetype.functionType
-        )
-        (st.typing.declSynthMemberTyped
-            parentTypeId: (ztypes.tid.create from: fid.u64)
-            nameId: zast.names.wkBorrow
-            kind: ztyping.declkind.methodDecl
-            childTypeId: borrowId
-        )
     }
     if pvExcl_ffid.length > 0 then st.typing.privacySeen = true
     applyGrantsPrivate :st parentId: ffid grants: pvGrants_ffid
@@ -12575,17 +12537,6 @@ resolveProtocol: function {
             nameId: zast.names.wkCreate
             kind: ztyping.declkind.methodDecl
             childTypeId: createId
-        )
-        borrowId: (st.reg.newType
-            name: "borrow"
-            ownerTid: pid
-            typetype: ztypes.ztypetype.functionType
-        )
-        (st.typing.declSynthMemberTyped
-            parentTypeId: (ztypes.tid.create from: pid.u64)
-            nameId: zast.names.wkBorrow
-            kind: ztyping.declkind.methodDecl
-            childTypeId: borrowId
         )
     }
     st.reg.setNeedsDestructor typeId: (ztypes.tid.create from: pid.u64)
@@ -19353,7 +19304,7 @@ cloneGenericMemberInto: function {
     deep5: false
     # a `create` the template writes is cloned like any method; the synthesised
     # one is the instance's own (mintMonoRecordShape)
-    isSynth: chName == "borrow"
+    isSynth: false
     if chName == "create" then {
         isSynth = st.typing.declMemberIsSynth parentTypeId: templateId nameId: zast.names.wkCreate
     }
@@ -23785,16 +23736,6 @@ unionCreateArmName: function {
     }
 }
 
-# borrowDottedBaseId -- the base atom's node id when a dotted path's child is
-# `borrow` (a protocol/facet borrow projection), or none.
-borrowDottedBaseId: function {ast: Ast.view n: astnode.view} out optionval u32 is {
-    if n.dottedpath then {
-        bcn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.child.u64))
-        if bcn.stringView == "borrow" then return (optionval.some n.parent.u32)
-    }
-    return (optionval.none u32)
-}
-
 # valueNoCoerceAt -- checkValueAt minus the value-position auto-call coercion
 # (construction arguments take method REFERENCES for function-typed fields).
 valueNoCoerceAt: function {
@@ -23908,7 +23849,7 @@ projectionSourceBorrows: function {ast: Ast.view call: callref} out bool is {
     return false
 }
 
-# checkProjectionCreate -- `F.create from: expr` / `P.borrow from: expr` on a
+# checkProjectionCreate -- `P src` / `P.create from: src` on a
 # facet or protocol: a projection, not a call. No CALL scope; the from-argument
 # walks in the current scope (a facet copies its source -- nothing is consumed);
 # the value is the facet/protocol type.
@@ -24183,7 +24124,7 @@ pinTypedefBorrowSource: function {st: zenv.ZSymbolTable ast: Ast src: zast.nodei
     pinsPush :st path: tup shared: false mutable: true alias: false
 }
 
-# checkTypedefBorrow -- `T src.borrow` (or `T.borrow from: src`) on a typedef:
+# checkTypedefBorrow -- `T src.borrow` (or `T.create from: src.borrow`) on a typedef:
 # a borrowed cast, a second name for the source. No CALL scope, no take; the
 # source walks in the current scope and the binding borrows it EXCLUSIVELY --
 # writes through the binding are writes to the source (the lifted view origin
@@ -26637,8 +26578,8 @@ checkResolvedMember: function {
 # one of its elements, an arm. A marker moves, lends or freezes a variable or a
 # field; such a value is read where it is written, so the marker would do
 # nothing while saying it does something. A function carries its own reference
-# form, and a protocol, a facet or a type declaring the name as a function its
-# `.borrow` projection, so none of them is asked.
+# form (`f.take`), so it is not asked. A TYPE names no storage either: a
+# projection is written with the marker on its source (`Speaker d.borrow`).
 # The addressability question is the one a write target answers. True when it
 # reported; the marked value then has no type, so a binding of it is not refused
 # a second time for what it would have held.
@@ -26653,16 +26594,7 @@ refuseMarkerWithoutStorage: function {
     if isMarker.not then return false
     btt: st.reg.typetypeOf typeId: bt
     if btt == ztypes.ztypetype.functionType then return false
-    if btt == ztypes.ztypetype.protocolType or (btt == ztypes.ztypetype.facetType) then return false
     if (isAddressableTarget :ast :st nid: dp.parent) then return false
-    # a type that DECLARES the name as a function -- a typedef wrapper's
-    # `ByteView.borrow from: ...` -- is calling it, not marking anything
-    forceMemberOf :st :ast parentTypeId: bt nameId: cnId
-    declared: (st.typing.declChildOfId parentTypeId: bt nameId: cnId).or d: 0
-    if declared > 0 when (
-        (st.reg.typetypeOf typeId: (ztypes.tid.create from: declared.u64)) ==
-        ztypes.ztypetype.functionType
-    ) then return false
     tp: ListVal zast.nameid
     appendValueTuple :ast n: (ast.nodes.get i: dp.parent.u64) dst: tp
     what: "this value".string
@@ -26738,10 +26670,26 @@ checkMarkerMember: function {
         stampGate :st nid: dp.nid.u64 tid: setpv
         return (callleg handled: true tid: bt)
     }
+    # `public` is no member of anything: a unit's `public:` block IS its
+    # surface (`host.MAX`), and a value outside its type reads only that
+    # surface already. Inside the unit the block is reached by its own name.
     if cnId == zast.names.wkPublic then {
-        setpb: bt
-        stampGate :st nid: dp.nid.u64 tid: setpb
-        return (callleg handled: true tid: bt)
+        pbWhat: "type"
+        if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.unitType then pbWhat = "unit"
+        pbNm: st.reg.nameOf tid: bt
+        pcN: ast.nodes.get i: dp.child.u64
+        (addErrorH
+            :st
+            nodeid: (nodeId n: pcN)
+            lineno: (nodeLine n: pcN)
+            colno: (nodeCol n: pcN)
+            e: zast.err.typeError
+            msg: "\{pbWhat} '\{pbNm}' has no member 'public'"
+            note: "a `public:` block is the surface itself; its members are read directly".string
+            hint: "".string
+            width: 6
+        )
+        return (callleg handled: true tid: (ztypes.tid.create from: 0))
     }
     # `.stringView` on a StringView is an identity no-op and is rejected --
     # the value is already a StringView.
@@ -26792,41 +26740,21 @@ checkMarkerMember: function {
         }
     }
     if cnId == zast.names.wkBorrow then {
-        # Protocol/facet `.borrow` and a typedef wrapper's FUNCTION borrow
-        # child are projection callables, not ownership markers.
-        btt1: st.reg.typetypeOf typeId: bt
-        isMk: (btt1 == ztypes.ztypetype.protocolType or (btt1 == ztypes.ztypetype.facetType)).not
-        if isMk then {
-            (forceMemberOf
-                :st
-                :ast
-                parentTypeId: bt
-                nameId: zast.names.wkBorrow
-            )
-            bco: st.typing.declChildOfId parentTypeId: bt nameId: zast.names.wkBorrow
-            bcid: bco.or d: 0
-            if bcid > 0 when (
-                (st.reg.typetypeOf typeId: (ztypes.tid.create from: bcid.u64)) ==
-                ztypes.ztypetype.functionType
-            ) then isMk = false
-        }
-        if isMk then {
-            # a `.borrow` VALUE bound by a binding or a `with` is a second
-            # name for what it names: the alias pins the source SHARED and may
-            # write through itself. An ARGUMENT position locks through the
-            # call's own leg instead, so the pin is left to it.
-            if dp.nid.u64 != st.typing.callArgNode when (typeIsReftype :st tid: bt) then {
-                btup: ListVal zast.nameid
-                appendValueTuple :ast n: (ast.nodes.get i: dp.parent.u64) dst: btup
-                if btup.length > 0 when (st.lookupVarId nameId: (btup.get i: 0)).none.not then {
-                    drainPendingBorrow :st
-                    pinsPush :st path: btup shared: true mutable: true alias: true
-                }
+        # a `.borrow` VALUE bound by a binding or a `with` is a second name for
+        # what it names: the alias pins the source SHARED and may write through
+        # itself. An ARGUMENT position locks through the call's own leg
+        # instead, so the pin is left to it.
+        if dp.nid.u64 != st.typing.callArgNode when (typeIsReftype :st tid: bt) then {
+            btup: ListVal zast.nameid
+            appendValueTuple :ast n: (ast.nodes.get i: dp.parent.u64) dst: btup
+            if btup.length > 0 when (st.lookupVarId nameId: (btup.get i: 0)).none.not then {
+                drainPendingBorrow :st
+                pinsPush :st path: btup shared: true mutable: true alias: true
             }
-            setbw: bt
-            stampGate :st nid: dp.nid.u64 tid: setbw
-            return (callleg handled: true tid: bt)
         }
+        setbw: bt
+        stampGate :st nid: dp.nid.u64 tid: setbw
+        return (callleg handled: true tid: bt)
     }
     return (callleg handled: false tid: (ztypes.tid.create from: 0))
 }
@@ -38546,15 +38474,15 @@ callleg: record {
     tid: ztypes.tid
 }
 
-# checkTypedefOrProjectionCall -- a dotted `create` or `borrow` on a typedef or
-# projection base: the wrapper's constructor, or the view it projects.
+# checkTypedefOrProjectionCall -- a dotted `create` on a typedef or projection
+# base: the wrapper's construction, or the projection -- owned or borrowed as
+# the source's marker says.
 checkTypedefOrProjectionCall: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
     call: callref
     tdcid: u32
-    isBorrowForm: bool
 } out callleg is {
     tdo: walkTypeOf :st nid: tdcid.u64
     isTd: (
@@ -38562,16 +38490,6 @@ checkTypedefOrProjectionCall: function {
         0 or
         ((typedefBaseTidOf :st tid: (ztypes.tid.create from: tdo.u64)) > 0)
     )
-    if isTd when isBorrowForm then {
-        return (callleg handled: true tid: (checkTypedefBorrow
-            :st
-            :unitDecl
-            :ast
-            :call
-            tdId: tdo
-        )
-        )
-    }
     if isTd then {
         return (callleg handled: true tid: (checkTypedefCreate
             :st
@@ -38585,17 +38503,9 @@ checkTypedefOrProjectionCall: function {
     pjtt: st.reg.typetypeOf typeId: (ztypes.tid.create from: tdo.u64)
     isProj: pjtt == ztypes.ztypetype.facetType or (pjtt == ztypes.ztypetype.protocolType)
     if isProj then {
+        pjBorrow: projectionSourceBorrows :ast :call
         pjTake: false
-        pjBorrow: false
-        if pjtt == ztypes.ztypetype.protocolType then {
-            callableNode: ast.nodes.get i: call.callable.u64
-            pjcn: (zast.nameTextAt
-                :ast
-                ref: (dottedChildNameId :ast n: callableNode)
-            )
-            if pjcn.stringView == "create" then pjTake = true
-            if pjcn.stringView == "borrow" then pjBorrow = true
-        }
+        if pjtt == ztypes.ztypetype.protocolType when pjBorrow.not then pjTake = true
         return (callleg handled: true tid: (checkProjectionCreate
             :st
             :unitDecl
@@ -38724,20 +38634,11 @@ checkResolvedMethodCall: function {
     ) case some then {
         tdcid = tdcb
     } case none then null
-    isBorrowForm: false
-    bdcb: borrowDottedBaseId :ast n: (ast.nodes.get i: call.callable.u64)
-    match (
-        bdcb
-    ) case some then {
-        tdcid = bdcb
-        isBorrowForm = true
-    } case none then null
     # `T.create ...` from inside T's own create -- the explicit spelling
     # of the same recursion the bare-name leg refuses. The dotted base's
     # stamped type is the type being constructed, the same move the
-    # synthesized-create leg below makes. The borrow form (`T.borrow`)
-    # shares `tdcid` and is not a construction.
-    if tdcid > 0 when isBorrowForm.not then {
+    # synthesized-create leg below makes.
+    if tdcid > 0 then {
         sctid: walkTypeOf :st nid: tdcid.u64
         if sctid > 0 then {
             (ctorSelfRecursionAt
@@ -38757,7 +38658,6 @@ checkResolvedMethodCall: function {
             :ast
             :call
             :tdcid
-            :isBorrowForm
         )
         if dleg.handled then return dleg.tid
     }

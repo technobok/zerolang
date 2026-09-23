@@ -1955,8 +1955,8 @@ than owning its payload (<code>.hold</code> stays owned but readonly):</p>
 takes ownership of the payload; the union's destructor frees the
 payload.</li>
 <li><strong>Non-owned arms</strong> (<code>some: t.borrow</code>): the constructor takes a
-pinned source via the <code>from:</code> parameter (consistent with
-<code>protocol.borrow from: x</code>); the union's destructor releases
+pinned source via the <code>from:</code> parameter (consistent with a borrowed
+projection, <code>protocol x.borrow</code>); the union's destructor releases
 the pin without freeing the payload. The union's lifetime cannot
 exceed the borrowed source's lifetime; escape analysis prevents
 storing the union into an aggregate that outlives the source.</li>
@@ -2450,8 +2450,9 @@ besides listing the unit's definitions it may DEFINE -- a constant, a function, 
 type -- and those definitions are on the unit's surface too. From outside they
 are spelled through the unit ('host.MAX'); the enclosing unit's own body reaches
 them by the qualified path 'public.MAX', never by a bare name (a bare name walks
-outward, not into a nested unit); 'host.public.MAX' also resolves, the block
-pseudo-member being never private. A definition inside the block resolves in the
+outward, not into a nested unit). 'public' is no member of the unit:
+'host.public.MAX' is refused, as is '.public' on a value, whose outside reader
+sees only the surface already. A definition inside the block resolves in the
 block's scope -- its own siblings first, then the enclosing unit's, outward.</p>
 <p>Renaming applies to every definition block -- records, classes, variants, unions,
 facets, protocols and units -- and to both fields and methods. Once a member is
@@ -3047,7 +3048,7 @@ and the source's marker picks what the result owns:</p>
 <ul>
 <li><code>T x</code>, <code>T x.take</code> or <code>T.create from: x</code> takes the source and
 returns an owned typedef instance; <code>x</code> is moved.</li>
-<li><code>T x.borrow</code> (or <code>T.borrow from: x</code>) returns a borrowed typedef
+<li><code>T x.borrow</code> (or <code>T.create from: x.borrow</code>) returns a borrowed typedef
 instance: a second name for <code>x</code>, which is locked exclusively while the
 binding lives. A write through the binding is a write to <code>x</code>, and the
 binding frees nothing. Like any borrow it cannot be returned from an
@@ -4993,21 +4994,21 @@ both the protocol instance and the underlying data are destroyed.
 <code>.take</code> is <em><strong>not</strong></em> a protocol constructor; it remains the inline
 ownership method on runtime instances (<code>obj.take</code>) only.</li>
 <li>Borrowed via the source's marker: <code>protocol obj.borrow</code>
-(or <code>protocol.borrow from: obj.borrow</code>) when the label shorthand is
+(or <code>protocol.create from: obj.borrow</code>) when the label shorthand is
 not available. This creates a borrowed
 protocol instance (same semantics as the label form). The source
 variable is locked for the lifetime of the protocol instance. The
 protocol instance lives on the stack until it falls out of scope; the
 underlying data is not destroyed.</li>
 </ol>
-<p>For borrowed instances (label and <code>borrow</code> forms): if the protocol instance
+<p>For borrowed instances (label and <code>.borrow</code> forms): if the protocol instance
 is created in a lower scope (eg. passing as a standard loaned argument), then
 after that scope the protocol instance is destroyed and the underlying variable
 is again available for use.</p>
 <p><em><strong>Implicit projection at call sites.</strong></em> When a function parameter is declared
 with a protocol (or facet) type, callers may pass a concrete value that
 declares conformance to that protocol directly &#x2014; no explicit
-<code>protocol.borrow from: x</code> / <code>protocol.create from: x</code> wrapper is needed.
+<code>protocol x.borrow</code> / <code>protocol x</code> projection is needed.
 The compiler synthesises the projection at the call boundary:</p>
 <ul>
 <li><code>borrow</code> when the parameter is annotated <code>.borrow</code> or carries
@@ -5049,8 +5050,8 @@ main: function is {
     # Owned instance via create (or take)
     # r: Reader.create from: f.take   # f is consumed, r owns the data
 
-    # Borrowed instance via protocol constructor
-    # r: Reader.borrow from: f.borrow   # f is locked while r is in scope
+    # Borrowed instance via the source's marker
+    # r: Reader f.borrow               # f is locked while r is in scope
 
     print "\{use_reader r}"  # prints 15
 }</code></pre>
