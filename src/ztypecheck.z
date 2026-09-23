@@ -5772,6 +5772,15 @@ registerValueParam: function {
         :thisName
         nid: pm.operation
     )
+    # a `.private` parameter is a friend handle: the call must hand it one. A
+    # `this.private` receiver is the type's own method, and grants itself
+    pmOp: ast.nodes.get i: pm.operation.u64
+    if (typeExprHasPrivate :ast n: pmOp) when (typeExprRootIsThis :ast n: pmOp).not then {
+        (st.typing.setChildGrantsPrivateId
+            parentTypeId: (ztypes.tid.create from: fid.u64)
+            nameId: pm.name
+        )
+    }
     pown: pathOwnership :ast n: (ast.nodes.get i: pm.operation.u64)
     match (
         pown
@@ -8067,6 +8076,20 @@ typeExprHasPrivate: function {ast: Ast.view n: astnode.view} out bool is {
         nameCount: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.child.u64))
         if nameCount.stringView == "private" then return true
         return (typeExprHasPrivate :ast n: (ast.nodes.get i: n.parent.u64))
+    } else {
+        return false
+    }
+}
+
+# typeExprRootIsThis -- does a type expression name the receiver under any
+# markers (`this`, `this.private.borrow`)?
+typeExprRootIsThis: function {ast: Ast.view n: astnode.view} out bool is {
+    match (
+        n
+    ) case atomid then {
+        return n.name == zast.names.wkThis
+    } case dottedpath then {
+        return (typeExprRootIsThis :ast n: (ast.nodes.get i: n.parent.u64))
     } else {
         return false
     }
@@ -24426,15 +24449,14 @@ baseIsPrivateCapable: function {
             return false
         }
     } case dottedpath then {
-        cnm: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: baseNode.child.u64))
-        if cnm.stringView == "private" then return true
+        cnId: atomNameId :ast n: (ast.nodes.get i: baseNode.child.u64)
+        if cnId == zast.names.wkPrivate then return true
         pbNode: ast.nodes.get i: baseNode.parent.u64
         pbNid: nodeId n: pbNode
         pbType: walkTypeOf :st nid: pbNid.u64
-        if pbType > 0 when (st.typing.declGrantsPrivate
-            pool: ast.names
+        if pbType > 0 when (st.typing.declGrantsPrivateId
             parentTypeId: (ztypes.tid.create from: pbType.u64)
-            name: cnm.stringView
+            nameId: cnId
         ) then return true
         return false
     } else {
@@ -36530,6 +36552,79 @@ checkNamedArgParam: function {
     checkArgTypeMismatch :st :ast ptid: pcidX :vt :pnId :arg
 }
 
+# refusePlainPrivateArg -- a `.private` parameter or field is a friend handle,
+# and the call must hand it one: a `.private` path (checked where the marker
+# is), or a binding that already is a handle -- a `.private` parameter, or a
+# read of a `.private` field. A plain value grants nothing -- E0102.
+refusePlainPrivateArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    funcId: ztypes.tid
+    # the call constructs a type, so the slot is one of its fields
+    isCtor: bool
+    pnId: zast.nameid
+    vt: ztypes.tid
+    arg: argref
+} is {
+    if funcId.isZero or pnId.isZero then return
+    if (st.typing.declGrantsPrivateId parentTypeId: funcId nameId: pnId).not then return
+    argN: ast.nodes.get i: arg.operation.u64
+    if (argIsPrivateHandle :st :ast n: argN) then return
+    pnm: zast.nameTextAt :ast ref: pnId
+    btNm: st.reg.nameOf tid: vt
+    slot: "parameter"
+    if isCtor then slot = "field"
+    (addErrorH
+        :st
+        nodeid: (nodeId n: argN)
+        lineno: (nodeLine n: argN)
+        colno: (nodeCol n: argN)
+        e: zast.err.privateEscape
+        msg: "\{slot} '\{pnm}' takes a '.private' handle of '\{btNm}', and a plain value is not one"
+        note: "".string
+        hint: "".string
+        width: 1
+    )
+}
+
+# argIsPrivateHandle -- is the argument a `.private` handle: a `.private` path
+# (under any ownership marker), a binding declared as one, or a read of a field
+# declared as one?
+argIsPrivateHandle: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    n: astnode.view
+} out bool is {
+    # a bare name, or the `:name` shorthand that passes one
+    bnId: atomNameId :ast :n
+    if bnId.isZero.not then {
+        vo: st.lookupVarId nameId: bnId
+        match (
+            vo
+        ) case some then {
+            return (st.reg.variableIsPrivate id: vo)
+        } case none then {
+            return false
+        }
+    }
+    match (
+        n
+    ) case dottedpath then {
+        cnId: atomNameId :ast n: (ast.nodes.get i: n.child.u64)
+        if cnId == zast.names.wkPrivate then return true
+        pbNode: ast.nodes.get i: n.parent.u64
+        if (isStripMarkerId nameId: cnId) then return (argIsPrivateHandle :st :ast n: pbNode)
+        pbType: walkTypeOf :st nid: (nodeId n: pbNode).u64
+        if pbType.isZero then return false
+        return (st.typing.declGrantsPrivateId
+            parentTypeId: (ztypes.tid.create from: pbType.u64)
+            nameId: cnId
+        )
+    } else {
+        return false
+    }
+}
+
 # stampArgDisposition -- record what the call does with the argument `op`:
 # the emitter zeroes the source of a taken one after the call, and the LSP
 # words it. Keyed by the value node.
@@ -36753,6 +36848,7 @@ checkTypedCallArg: function {
         ownCtor = false
     }
     aow: argOwnershipOf :st funcId: ownFn isCtor: ownCtor :pnId :vt
+    refusePlainPrivateArg :st :ast funcId: ownFn :isCtor :pnId :vt :arg
     isTake: aow.isTake
     isLockish: aow.isLockish
     isViewArg: aow.isViewArg

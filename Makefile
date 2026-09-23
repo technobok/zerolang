@@ -1707,7 +1707,11 @@ perf: $(PERFBIN)
 # +414 calling a stored function through a readonly path: 0 behaviour, 414
 # source -- callReadsReceiver, the one question the three receiver-lock sites
 # now ask in place of the receiver marker alone.
-ALLOC_BASELINE := 2632123
+#
+# +1967 a `.private` slot takes a spelled grant: 0 behaviour, 1967 source --
+# refusePlainPrivateArg and argIsPrivateHandle, which never fire on the
+# compiler's own source (it declares no `.private` parameter or field).
+ALLOC_BASELINE := 2634090
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
