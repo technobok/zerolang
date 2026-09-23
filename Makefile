@@ -1744,7 +1744,10 @@ perf: $(PERFBIN)
 #
 # +34 a typedef over a generic instance is built from that instance: 0
 # behaviour, 34 source -- two comments' worth of the checker and emitter legs.
-ALLOC_BASELINE := 2637560
+#
+# +438 an inline typedef argument's temporary is freed: 0 behaviour, 438
+# source -- ownedTypedefArg, asked by the two argument hoists.
+ALLOC_BASELINE := 2637998
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

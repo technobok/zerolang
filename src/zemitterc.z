@@ -6775,7 +6775,10 @@ hoistBorrowValArg: function {
     # argument hoists take it on the same terms.
     argNid: 0.u64
 } out String is {
-    if (isNonLvalueArg s: av).not then return "".string
+    # an lvalue needs no temp -- unless it is a typedef built from a consumed
+    # local (`(Path s)`), spelled as that local, whose own free the consumption
+    # dropped: the checker's temporary owns it
+    if (isNonLvalueArg s: av).not when (ownedTypedefArg :symtab :argNid).not then return "".string
     if paramTake then return "".string
     vrid: pid
     if (definedInUnitTid :symtab tid: (ztypes.tid.create from: pid.u64)).isZero then {
@@ -9766,6 +9769,20 @@ argHoistName: function {
     return "\{fallback}\{hn}"
 }
 
+# ownedTypedefArg -- the argument `argNid` is a typedef built from a value
+# (`(Path s)`) whose temporary the checker says owns it. A typedef emits as its
+# source, so the text is an lvalue that still needs the temporary's free.
+ownedTypedefArg: function {symtab: zenv.ZSymbolTable.view argNid: u64} out bool is {
+    if argNid == 0 then return false
+    ck: symtab.typing.callKind.get key: argNid
+    match (
+        ck
+    ) case some then {
+        if ck != zast.callkind.typedefCreate then return false
+    } case none then return false
+    return (scopeOwnsTemp :symtab :argNid)
+}
+
 # scopeOwnsTemp -- whether the temporary holding the value node `argNid` still
 # owns what it holds where it dies: what the checker listed for the scope that
 # binds the temporary (scopeTempDestroy), in the state that scope's end left it.
@@ -12015,7 +12032,9 @@ emitByrefArg: function {
     # the argument passed by reference, 0 when unknown here
     argNid: 0.u64
 } out String is {
-    if (isNonLvalueArg s: av).not then return "&\{av}"
+    # as for a by-value argument: a typedef built inline from a consumed local
+    # is hoisted, so the temporary's free runs
+    if (isNonLvalueArg s: av).not when (ownedTypedefArg :symtab :argNid).not then return "&\{av}"
     nmH: argHoistName :symtab :ctx :argNid fallback: "_ah"
     hcty: typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: pid.u64) thisTid: ztypes.tid
     htyc: hcty.copy
