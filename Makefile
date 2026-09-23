@@ -1715,7 +1715,10 @@ perf: $(PERFBIN)
 # +292 the `:name` shorthand in a type body is checked for a reserved name: 0
 # behaviour, 292 source -- the parser's new leg, which the compiler's own
 # source never takes.
-ALLOC_BASELINE := 2634382
+#
+# +171 a unit-level definition named after a marker is refused: 0 behaviour,
+# 171 source -- the unit-body legs of the same reserved-name check.
+ALLOC_BASELINE := 2634553
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
