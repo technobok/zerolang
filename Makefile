@@ -1741,7 +1741,10 @@ perf: $(PERFBIN)
 # +1026 a bare-name projection (`Speaker d.borrow`) takes its ownership from the
 # source's marker: 0 behaviour, 1026 source -- projectionSourceBorrows and the
 # construction leg's projection branch; the compiler constructs no protocol.
-ALLOC_BASELINE := 2637526
+#
+# +34 a typedef over a generic instance is built from that instance: 0
+# behaviour, 34 source -- two comments' worth of the checker and emitter legs.
+ALLOC_BASELINE := 2637560
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
