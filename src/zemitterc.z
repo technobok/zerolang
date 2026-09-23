@@ -5607,12 +5607,19 @@ emitDottedCall: function {
         # nested/projected base ((zast.poolTextAt pool: ast.names ref: el.text).stringView.stripPrefix): no base atom, but
         # the base is a stamped String/StringView -- emit it as an expression (a
         # compound-literal lvalue, so the `&base` SV-native legs stay valid C).
-        rsid: (dottedReceiverStampId
-            :ast
+        # a typedef over String or StringView (`Path`) is its base here: it
+        # shares the base's struct and methods
+        rsid: (chaseStrTypedef
             :symtab
-            callable: (ast.nodes.get i: call.callable.u64)
+            :ctx
+            tid: (ztypes.tid.create from: (dottedReceiverStampId
+                :ast
+                :symtab
+                callable: (ast.nodes.get i: call.callable.u64)
+            ).u64
+            )
         )
-        if (isStringyTid :ctx tid: (ztypes.tid.create from: rsid.u64)) then {
+        if (isStringyTid :ctx tid: rsid) then {
             callableNode: ast.nodes.get i: call.callable.u64
             bn = emitDottedReceiver :ast :symtab :ctx callable: callableNode
             btid = ztypes.tid.create from: rsid
@@ -5621,7 +5628,7 @@ emitDottedCall: function {
         }
     } else {
         bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: call.callable.u64)
-        btid = stampIdOf :symtab nid: bnid
+        btid = chaseStrTypedef :symtab :ctx tid: (stampIdOf :symtab nid: bnid)
         # the simple-atom receiver becomes its own identifier (the bn.length==0
         # leg already routes through emitDottedReceiver). An alias or narrowing
         # in scope substitutes for it, and then no variable is being read -- so
@@ -14718,6 +14725,38 @@ unitInstanceMemberRead: function {
     return cn
 }
 
+# nestedStringMember -- a String or StringView member read through a FIELD: a
+# String method on the receiver, or a view parse native. A typedef over either
+# (`Path`, `PathView`) shares its base's struct and methods and answers the
+# same. "" when the receiver is neither, or the member is none of these.
+nestedStringMember: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    parent: astnode.view
+    base: StringView
+    mn2: StringView
+    bs9vid: ztypes.vid
+} out String is {
+    nptT: chaseStrTypedef :symtab :ctx tid: (stampIdDeep :symtab n: parent)
+    if nptT == ctx.strTid then {
+        nsm: (emitStringMethod
+            :ctx
+            recv: base
+            recvIsPtr: (pathIsPointer :ast :symtab :ctx n: parent)
+            mn: mn2
+            recvVid: bs9vid
+        )
+        if nsm.length > 0 then return nsm
+    }
+    if (isStringyTid :ctx tid: nptT) when (isSvParseNative name: mn2) then {
+        needsAddM :ctx uname: "system" memb: mn2
+        pnv: svValueForm :ctx expr: base isStr: nptT == ctx.strTid vid: bs9vid
+        return "\{ctx.svC}_\{mn2}(&\{pnv})"
+    }
+    return "".string
+}
+
 # emitDottedNestedBase -- a read whose base is itself a path (`it.target.a`,
 # `this.field.pop`): emit the base expression, then chain `.` or `->` by whether
 # the base resolves to a pointer. The collection legs repeat here because the
@@ -14759,25 +14798,16 @@ emitDottedNestedBase: function {
         emitFail :ctx what: "unhandled dotted".string line: n.lineno
         return "/* zemitterc: unhandled dotted */0".string
     }
-    nptn: stampNameDeep :symtab n: (ast.nodes.get i: n.parent.u64)
-    if nptn.stringView == "String" then {
-        nptr: pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64)
-        nsm: (emitStringMethod
-            :ctx
-            recv: baseAtom.stringView
-            recvIsPtr: nptr
-            mn: mn2
-            recvVid: bs9vid
-        )
-        if nsm.length > 0 then return nsm
-    }
-    if (isStringy name: nptn.stringView) when (isSvParseNative name: mn2) then {
-        needsAddM :ctx uname: "system" memb: mn2
-        npIsStr: nptn.stringView == "String"
-        pnv: svValueForm :ctx expr: baseAtom.stringView isStr: npIsStr vid: bs9vid
-        epnv: "\{ctx.svC}_\{mn2}(&\{pnv})"
-        return epnv
-    }
+    nsm: (nestedStringMember
+        :ast
+        :symtab
+        :ctx
+        parent: (ast.nodes.get i: n.parent.u64)
+        base: baseAtom.stringView
+        :mn2
+        :bs9vid
+    )
+    if nsm.length > 0 then return nsm
     # a no-arg List method on a nested receiver (this.field.pop): the bsmn
     # leg above missed it (bstamp keys off an atom base, 0 for a nested
     # path). Resolve the List mono from the base node and emit the call.

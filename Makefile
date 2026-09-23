@@ -1764,7 +1764,12 @@ perf: $(PERFBIN)
 #
 # -28 the typedef flag the retired `borrow` synthesis needed leaves two
 # signatures: 0 behaviour, -28 source.
-ALLOC_BASELINE := 2638033
+#
+# -3258 a String member through a field is asked by tid: -3230 behaviour, -28
+# source -- the nested leg spelled the receiver's type NAME (stampNameDeep, a
+# fresh String) for every member read through a field, to compare it with
+# "String"; nestedStringMember compares the chased tid.
+ALLOC_BASELINE := 2634775
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
