@@ -1761,7 +1761,10 @@ perf: $(PERFBIN)
 # -3075 the `T.borrow from:` verb and `X.public` are retired: -46 behaviour,
 # -3029 source -- no `borrow` member is minted per typedef, protocol and facet,
 # and the verb's routing and exemptions are gone.
-ALLOC_BASELINE := 2638061
+#
+# -28 the typedef flag the retired `borrow` synthesis needed leaves two
+# signatures: 0 behaviour, -28 source.
+ALLOC_BASELINE := 2638033
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2630,18 +2633,18 @@ eager-lib-guard: bin/zc
 # the spelling moves, and it dies silently.
 member-guard:
 	@m1=$$(grep -cE '[a-z]*cn\.stringView ==|[a-z]*cn == "' src/ztypecheck.z); \
-	if [ "$$m1" -gt 10 ]; then \
-	  echo "member-guard FAIL: string-keyed member compares = $$m1 (baseline 10)"; \
+	if [ "$$m1" -gt 7 ]; then \
+	  echo "member-guard FAIL: string-keyed member compares = $$m1 (baseline 7)"; \
 	  echo "  A new hardcoded string-keyed member/marker special-case was added to the"; \
 	  echo "  type checker. Resolve members through their declared childOf edges (the"; \
 	  echo "  system units are the source of truth); bump the baseline only for a"; \
 	  echo "  genuinely-sanctioned marker."; \
 	  exit 1; \
 	fi; \
-	if [ "$$m1" -lt 10 ]; then \
-	  echo "member-guard: string-keyed member compares = $$m1 < baseline 10 -- lower the baseline here"; \
+	if [ "$$m1" -lt 7 ]; then \
+	  echo "member-guard: string-keyed member compares = $$m1 < baseline 7 -- lower the baseline here"; \
 	fi; \
-	echo "member-guard OK: string-keyed member compares = $$m1 (<=10)"
+	echo "member-guard OK: string-keyed member compares = $$m1 (<=7)"
 
 # highlight-guard -- the two syntax highlighters must carry the language's
 # actual vocabulary. THE LANGUAGE IS THE SOURCE OF TRUTH, never the lists:
