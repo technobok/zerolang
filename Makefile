@@ -1732,7 +1732,12 @@ perf: $(PERFBIN)
 # -1798 `.valtype`/`.reftype` no longer declare a generic parameter: -298
 # behaviour, -1500 source -- two fewer name-text compares per generic-param
 # question and genericConstraintKind's String, gone.
-ALLOC_BASELINE := 2633928
+#
+# +2572 a declaration reading a member its type lacks is reported: +32
+# behaviour, 2540 source -- resolveFunction lists a function's `as` item values
+# to ask each one (the list allocates only where an `as` block exists), and
+# reportMissingTypeMember's lookups.
+ALLOC_BASELINE := 2636500
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

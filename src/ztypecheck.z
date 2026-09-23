@@ -6283,11 +6283,24 @@ resolveFunction: function {
     # the as-items are read through a view scoped to this block: the walks
     # below lend ast
     isgen: false
+    # the `as` items' values, for the ones that are no generic parameter
+    asOps: ListVal u32
     {
         fn: ast.nodes.get i: fnId.u64
         if fn.functiondef then {
             isgen = hasGenericParam :ast items: fn.asItems
+            fax: u64
+            for fax < fn.asItems.count.u64 loop {
+                faId: zast.kidAt kids: ast.kids span: fn.asItems i: fax
+                fax = fax + 1
+                fa: ast.nodes.get i: faId.u64
+                if fa.namedoperation then asOps.append from: fa.operation.u32
+            }
         }
+    }
+    # an `as` item naming a member its type does not declare names nothing
+    with faIt: asOps.iterate do for faOp: faIt loop {
+        reportMissingTypeMember :st scope: rf :ast :unitDecl op: (zast.nodeid.create from: faOp)
     }
     fnDecl: declOfFnDef :st scope: rf :ast :unitDecl :ownerNameId :defName :thisName
     # link the declaration to its type up front: the parameter loop below
@@ -7430,10 +7443,73 @@ asItemMarkerTarget: function {
     } case none then {
         if (isLabelValue op: (ast.nodes.get i: op.u64)).not then {
             asItemTypeNameRefused :st :scope :ast :unitDecl :parentId :item :op
+            reportMissingTypeMember :st :scope :ast :unitDecl :op
         }
     }
     if refused then return (optionval.none u64)
     return mtid
+}
+
+# leafNamesNoMember -- a path leaf that marks its root rather than naming a
+# member of it: `.generic`, `.typedef`, an ownership or access marker, and the
+# tag spec.
+leafNamesNoMember: function {ast: Ast.view leafId: zast.nameid} out bool is {
+    if leafId == zast.names.wkTag then return true
+    if (isStripMarkerId nameId: leafId) then return true
+    if (zast.nameTextEq :ast ref: leafId s: "generic") then return true
+    return (zast.nameTextEq :ast ref: leafId s: "typedef")
+}
+
+# reportMissingTypeMember -- a dotted value `P.m` whose root names a TYPE (not a
+# unit, not a constant) that declares no member `m`: the report a read of the
+# same path gets in a body, placed at the declaration. A marker leaf --
+# `.generic`, `.typedef`, an ownership or access marker -- and the tag spec name
+# no member. True when it reported.
+reportMissingTypeMember: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    op: zast.nodeid
+} out bool is {
+    rootId: zast.nameid
+    leafId: zast.nameid
+    ln: u32
+    co: u32
+    {
+        n: ast.nodes.get i: op.u64
+        if n.dottedpath.not then return false
+        rootId = atomNameId :ast n: (ast.nodes.get i: n.parent.u64)
+        leafId = atomNameId :ast n: (ast.nodes.get i: n.child.u64)
+        ln = nodeLine n: (ast.nodes.get i: op.u64)
+        co = nodeCol n: (ast.nodes.get i: op.u64)
+    }
+    if rootId.isZero or leafId.isZero then return false
+    if (leafNamesNoMember :ast :leafId) then return false
+    if (isNumericLiteralNameAt :ast ref: rootId) then return false
+    # a root this unit declares as no type -- a constant (`N: LEN.u32`), an
+    # alias -- is read through the value channel, which reports its own miss
+    rdc: declOfUnitDef :st :unitDecl :scope nameId: rootId
+    if rdc.isZero.not when (declDefTypetype :st :ast declId: rdc).none then return false
+    rto: walkLookupTyperefById :ast :st :unitDecl :scope baseId: rootId
+    if rto.none then return false
+    rt: ztypes.tid.create from: rto
+    if (st.reg.typetypeOf typeId: rt) == ztypes.ztypetype.unitType then return false
+    if (st.typing.declChildOfId parentTypeId: rt nameId: leafId).none.not then return false
+    root: zast.nameTextAt :ast ref: rootId
+    member: zast.nameTextAt :ast ref: leafId
+    (addErrorH
+        :st
+        nodeid: op
+        lineno: ln
+        colno: co
+        e: zast.err.typeError
+        msg: "type '\{root}' has no member '\{member}'"
+        note: "".string
+        hint: "".string
+        width: root.length.u32.orPanic
+    )
+    return true
 }
 
 # asItemNamesPlainType -- an `as` item naming a type that is neither a
@@ -13549,12 +13625,13 @@ aliasRootScope: function {
 }
 
 # missingAliasTargetKind -- what a dotted alias's target lacks: 1 a unit without
-# the member, 2 a sum type without the arm, 3 a root that names nothing, 0 when
-# it is none of those. A bare alias resolves elsewhere; a root declared in the
-# alias's own scope as something other than a unit -- a constant, whose member
-# reads the value channel reports -- or a root type that is not a sum, whose
-# member is no alias target at all, is another check's; and a target that
-# exists but did not resolve is the chase's to explain. A generic parameter's
+# the member, 2 a type without it (a sum type's arm, any other type's member),
+# 3 a root that names nothing, 0 when it is none of those. A bare alias resolves
+# elsewhere; a root declared in the alias's own scope as something other than a
+# unit -- a constant, whose member reads the value channel reports -- is another
+# check's; so is a member that EXISTS on a type that is not a sum (`Point.create`
+# is a construction, refused as one); and a target that exists but did not
+# resolve is the chase's to explain. A generic parameter's
 # marker (`t: anyval.generic`) names no member.
 missingAliasTargetKind: function {
     st: zenv.ZSymbolTable
@@ -13590,9 +13667,8 @@ missingAliasTargetKind: function {
     )
     if rootTid == 0 then return 3
     rt: ztypes.tid.create from: rootTid
-    rtt: st.reg.typetypeOf typeId: rt
-    if rtt != ztypes.ztypetype.variantType when rtt != ztypes.ztypetype.unionType then return 0
     if (st.typing.declChildOfId parentTypeId: rt nameId: target.defName).none.not then return 0
+    if (leafNamesNoMember :ast leafId: target.defName) then return 0
     return 2
 }
 
@@ -50659,6 +50735,15 @@ resolveDottedConstantDef: function {
                     known = true
                 } case none then null
             }
+            # a member the type does not declare is no construction: the read
+            # names nothing, and says so
+            if known when (reportMissingTypeMember
+                :st
+                :scope
+                :ast
+                :unitDecl
+                op: defn.nid
+            ) then known = false
             if known then {
                 # a variant or union parent names an ARM, a data block parent
                 # an element or its length, and a UNIT parent reads a member of
