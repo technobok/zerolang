@@ -705,6 +705,17 @@ methodReceiverIsView: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out 
     }
 }
 
+# callReadsReceiver -- the call at the dotted path `nid` only READS its receiver,
+# so the receiver lock is shared: the method declares its receiver `.view`, or
+# the path names a function STORED IN A FIELD, which is called by reading the
+# slot and has no receiver to write through.
+callReadsReceiver: function {st: zenv.ZSymbolTable.view mid: ztypes.tid nid: u64} out bool is {
+    if (methodReceiverIsView :st :mid) then return true
+    md: (st.typing.refDecl.get key: nid).or d: ztypes.declid
+    if md.isZero then return false
+    return (st.typing.decls.get i: md.u64).fnptrField
+}
+
 # typesCompatible -- compare two type ids: identity, never (divergent) actual,
 # generic-param pairs, literal/numeric coercion (intliteral/floatliteral -> concrete
 # numerics), and an asymmetric typedef-base walk on `a`.
@@ -24792,7 +24803,7 @@ checkMemberAutoCall: function {
         :st
         mid: (ztypes.tid.create from: mo.u64)
     ) then {
-        aShr: methodReceiverIsView :st mid: (ztypes.tid.create from: mo.u64)
+        aShr: callReadsReceiver :st mid: (ztypes.tid.create from: mo.u64) nid: dp.nid.u64
         noteStatementAutoCall :st nid: dp.nid.u64
         lockAutoCallReceiver :ast :st :dp shared: aShr
         ro: methodReturnOf :st mid: (ztypes.tid.create from: mo.u64)
@@ -38401,7 +38412,7 @@ lockMethodReceiver: function {
             match (
                 rvt2
             ) case some then {
-                recvShared = methodReceiverIsView :st mid: dro
+                recvShared = callReadsReceiver :st mid: dro nid: call.callable.u64
                 (lockCallArg
                     :st
                     pool: ast.names
@@ -38452,7 +38463,7 @@ lockNestedMethodReceiver: function {
             rpidN: dottedParentNodeId :ast n: callableNode
             rvtN: walkTypeOf :st nid: rpidN.u64
             if rvtN > 0 then {
-                recvShared = methodReceiverIsView :st mid: dro
+                recvShared = callReadsReceiver :st mid: dro nid: call.callable.u64
                 (lockCallPath
                     :st
                     :ast

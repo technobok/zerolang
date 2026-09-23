@@ -1,0 +1,42 @@
+# fnptr_field_call_through_view.z -- a function STORED IN A FIELD is called
+# through a readonly (`.view`) path. Calling it reads the slot: the function
+# has no receiver, so nothing can write through the path it sits on. The
+# receiver lock took its strength from the callee's receiver marker alone, and
+# a stored function has none, so every such call took an EXCLUSIVE lock and a
+# readonly path refused it.
+#
+# Covered: a zero-argument call (the auto-call leg) and a call with arguments
+# (the method-call leg), each through a `.view` parameter, through a
+# `this.view` receiver, and through a nested field (`o.s.f`).
+Slot: class {
+    f: function {x: i64} out i64
+    g: function out i64
+    both: function {s: this.view} out i64 is {
+        return s.g + (s.f x: 1)
+    }
+}
+
+Outer: class {
+    s: Slot
+}
+
+peek: function {s: Slot.view} out i64 is {
+    a: s.g
+    return a + (s.f x: 3)
+}
+
+deep: function {o: Outer.view} out i64 is {
+    a: o.s.g
+    return a + (o.s.f x: 5)
+}
+
+dbl: function {x: i64} out i64 is { return x * 2 }
+seven: function out i64 is { return 7 }
+
+main: function is {
+    b: Slot f: dbl.take g: seven.take
+    print "param: \{peek s: b}"
+    print "receiver: \{b.both}"
+    o: Outer s: (Slot f: dbl.take g: seven.take)
+    print "nested: \{deep o: o}"
+}

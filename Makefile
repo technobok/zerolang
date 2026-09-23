@@ -1703,7 +1703,11 @@ perf: $(PERFBIN)
 # -14 letting only a FUNCTION member auto-call: -28 behaviour, +14 source. A
 # field read no longer takes and releases a receiver lock as though it were a
 # call, which is also 1.1% of the self-compile's instructions.
-ALLOC_BASELINE := 2631709
+#
+# +414 calling a stored function through a readonly path: 0 behaviour, 414
+# source -- callReadsReceiver, the one question the three receiver-lock sites
+# now ask in place of the receiver marker alone.
+ALLOC_BASELINE := 2632123
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
