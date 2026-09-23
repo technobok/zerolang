@@ -1699,7 +1699,11 @@ perf: $(PERFBIN)
 # has none of; the source is borrowedFieldPath -- pathIsPointer's field leg,
 # lifted out so the two collection receiver sites ask it by id -- and the two
 # derefs that read through it.
-ALLOC_BASELINE := 2631723
+#
+# -14 letting only a FUNCTION member auto-call: -28 behaviour, +14 source. A
+# field read no longer takes and releases a receiver lock as though it were a
+# call, which is also 1.1% of the self-compile's instructions.
+ALLOC_BASELINE := 2631709
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

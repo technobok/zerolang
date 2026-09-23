@@ -1,0 +1,53 @@
+# generic_view_field_read.z -- a generic type's method reads a field whose type
+# is the GENERIC PARAMETER through a `.view` receiver. The template walk types
+# that field as the parameter itself, which declares no members, and the
+# member leg asked only whether the member takes no arguments before treating
+# the read as a zero-argument auto-call: the read took the receiver lock a call
+# takes, exclusive unless the method says `.view`, and a readonly receiver
+# refused it. A `.borrow` receiver hid the same wrong lock.
+#
+# Covered: a bind, an operator, a comparison, a record, a reftype parameter
+# read through `.copy`, and a field of a concrete type beside the generic one.
+Slot: class {
+    v: t
+    n: i64
+    bound: function {s: this.view} out t is {
+        x: s.v
+        return x
+    }
+    next: function {s: this.view} out t is {
+        return s.v + 1
+    }
+    same: function {s: this.view o: t} out bool is {
+        return s.v == o
+    }
+    both: function {s: this.view} out i64 is {
+        return s.n + 1
+    }
+} as { t: anyval.generic }
+
+Pt: record {
+    v: t
+    get: function {s: this.view} out t is {
+        return s.v
+    }
+} as { t: anyval.generic }
+
+Cell: class {
+    v: T
+    dup: function {s: this.view} out T is {
+        return s.v.copy
+    }
+} as { T: AnyRef.generic }
+
+main: function is {
+    a: (Slot t: i64) v: 4 n: 2
+    print "slot: \{a.bound} \{a.next} \{a.same o: 4} \{a.both}"
+    b: (Slot t: u8) v: 9.u8 n: 0
+    print "u8: \{b.next}"
+    p: (Pt t: i64) v: 3
+    print "record: \{p.get}"
+    c: (Cell T: String) v: "abc".string
+    d: c.dup
+    print "cell: \{d} \{c.v}"
+}
