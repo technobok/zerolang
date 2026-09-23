@@ -3131,6 +3131,32 @@ navTargetByKind: function {snap: zcheck.CheckResult hnid: u64 kind: u8} out navt
     )
 }
 
+# isUnitTidOpt -- `tid` is a unit's type, over the LSP's optional snapshot.
+isUnitTidOpt: function {o: (Option zenv.ZSymbolTable).view tid: u64} out bool is {
+    match (
+        o
+    ) case some then {
+        return (
+            (o.reg.typetypeOf typeId: (ztypes.tid.create from: tid.u64)) ==
+            ztypes.ztypetype.unitType
+        )
+    } case none then {
+        return false
+    }
+}
+
+# typeNamedAs -- type `tid`'s own name is `name`, its unit qualifier aside: the
+# name in a construction names the type, where a value of the type would not.
+# A unit is not asked.
+typeNamedAs: function {o: (Option zenv.ZSymbolTable).view tid: u64 name: StringView} out bool is {
+    # a unit's name resolves through the unit lookup, which knows its file
+    if (isUnitTidOpt :o :tid) then return false
+    full: displayTypeNameOfOpt :o tid: (ztypes.tid.create from: tid.u64)
+    if full.stringView == name then return true
+    dotted: ".\{name}"
+    return (full.stringView.endsWith suffix: dotted.stringView)
+}
+
 # navTargetRefine -- the legs that need the Decl. An OPERATOR: the method the
 # checker bound carries the doc, and surfaceDeclOfType finds the declaration
 # that declares it. A generic parameter's own declaration: its table, not
@@ -3166,6 +3192,16 @@ navTargetRefine: function {
     }
     if base.vid.isZero when refTid == 0 when base.owner == 0 when refDeclId > 0 then {
         refTid = declTypeIdOf o: snap.st declId: refDeclId
+    }
+    # a TYPE named in callable position (`Dog n: 7`, `Path s`): the checker
+    # stamps the name with the type it builds and keeps its refDecl free for the
+    # emitter, so the declaration is the type's own
+    if kind == 1 when base.vid.isZero when refDeclId.isZero then {
+        ct9: nodeTypeAt o: snap.st nid: hnid
+        if ct9 > 0 when (typeNamedAs o: snap.st tid: ct9 name: hnm) then {
+            refTid = ct9
+            refDeclId = surfaceDeclOfType o: snap.st prog: snap.prog tid: ct9
+        }
     }
     return (navtarget vid: base.vid tid: refTid owner: base.owner declId: refDeclId)
 }

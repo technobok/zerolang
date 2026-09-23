@@ -1773,7 +1773,10 @@ perf: $(PERFBIN)
 # +456 a hoisted argument read out of a lent value is held by a temp that owns
 # nothing: 0 behaviour, 456 source -- valueIsLent's field leg and hoistArg
 # asking it.
-ALLOC_BASELINE := 2635231
+#
+# +180 a typedef's callee is stamped with the type it builds: 0 behaviour, 180
+# source (the zls half is not on the self-compile's path).
+ALLOC_BASELINE := 2635411
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
