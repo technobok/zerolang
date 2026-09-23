@@ -8563,6 +8563,8 @@ aliasBaseOf: function {
 } out aliasbase is {
     bmb: rhsBorrowMarkerBase :ast :symtab n: avn
     if bmb > 0 then return (aliasbase node: bmb place: false)
+    tbs: typedefBorrowSource :ast :symtab n: avn
+    if tbs > 0 then return (aliasbase node: tbs place: true)
     if (rhsIsBorrowGet :ast :symtab :ctx n: avn) then {
         return (aliasbase node: n.value.u64 place: false)
     }
@@ -8575,6 +8577,56 @@ aliasBaseOf: function {
         return (aliasbase node: n.value.u64 place: true)
     }
     return (aliasbase node: 0 place: false)
+}
+
+# typedefBorrowSource -- the source node of a borrowed typedef (`Bytes xs.borrow`,
+# `Bytes.borrow from: xs`), the path under its `.borrow`; 0 for any other value.
+# The binding is a second name for that source.
+typedefBorrowSource: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    n: astnode.view
+} out u64 is {
+    match (
+        n
+    ) case statementline then {
+        return (typedefBorrowSource :ast :symtab n: (ast.nodes.get i: n.statementline.u64))
+    } case call then {
+        ck: symtab.typing.callKind.get key: n.nodeid.u64
+        if ck.none then return 0
+        if ck != zast.callkind.typedefBorrow then return 0
+        return (underBorrowMarker :ast nid: (castSourceArg :ast call: n))
+    } else {
+        return 0
+    }
+}
+
+# castSourceArg -- the value a cast is built from: its `from:` argument, or its
+# one unlabelled argument; 0 when it has neither.
+castSourceArg: function {ast: Ast.view call: zast.callrow.view} out u64 is {
+    k: u64
+    for k < call.arguments.count.u64 loop {
+        aId: zast.kidAt kids: ast.kids span: call.arguments i: k
+        k = k + 1
+        a: ast.nodes.get i: aId.u64
+        if a.namedoperation then {
+            an: zast.nameTextAt :ast ref: a.name
+            if an.length == 0 or (an.stringView == "from") then return a.operation.u64
+        }
+    }
+    return 0
+}
+
+# underBorrowMarker -- the path a `.borrow` marker is written on (`xs` of
+# `xs.borrow`), else the node itself.
+underBorrowMarker: function {ast: Ast.view nid: u64} out u64 is {
+    if nid == 0 then return 0
+    src: ast.nodes.get i: nid
+    if src.dottedpath.not then return nid
+    if (
+        (atomNameIdOf :ast n: (ast.nodes.get i: src.child.u64)) != zast.names.wkBorrow
+    ) then return nid
+    return src.parent.u64
 }
 
 # valueStructRefNode -- the node of a value that calls a user function

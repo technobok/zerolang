@@ -24077,6 +24077,15 @@ checkTypedefCreate: function {
     call: callref
     tdId: u64
 } out ztypes.tid is {
+    # the source's marker picks the result's ownership: `Bytes xs.borrow` is a
+    # second name for `xs`, locked for as long as it lives
+    if (projectionSourceBorrows :ast :call) then return (checkTypedefBorrow
+        :st
+        :unitDecl
+        :ast
+        :call
+        :tdId
+    )
     found: false
     kAiter: u64
     for kAiter < call.nargs loop {
@@ -24151,11 +24160,32 @@ checkCastFromType: function {
     )
 }
 
-# checkTypedefBorrow -- `T.borrow from: expr` on a typedef: a borrowed
-# cast. No CALL scope, no take; the from-argument walks in the current
-# scope and the binding borrows the argument's source (the lifted view
-# origin when the argument is itself a borrowed view, else the
-# argument's own path).
+# pinTypedefBorrowSource -- a borrowed typedef locks its source EXCLUSIVELY. A
+# `.borrow` source left its marker's pin pending, and the binding takes the path
+# under it in its place; a source that is itself a borrowed view (a call's
+# result) already pinned what it reads.
+pinTypedefBorrowSource: function {st: zenv.ZSymbolTable ast: Ast src: zast.nodeid} is {
+    srcN: src
+    {
+        so: ast.nodes.get i: src.u64
+        if so.dottedpath when (
+            (atomNameId :ast n: (ast.nodes.get i: so.child.u64)) == zast.names.wkBorrow
+        ) then {
+            srcN = so.parent
+        }
+    }
+    if srcN != src then drainPendingBorrow :st
+    if st.typing.pendingPins.length > 0 then return
+    tup: ListVal zast.nameid
+    appendValueTuple :ast n: (ast.nodes.get i: srcN.u64) dst: tup
+    pinsPush :st path: tup shared: false mutable: true alias: false
+}
+
+# checkTypedefBorrow -- `T src.borrow` (or `T.borrow from: src`) on a typedef:
+# a borrowed cast, a second name for the source. No CALL scope, no take; the
+# source walks in the current scope and the binding borrows it EXCLUSIVELY --
+# writes through the binding are writes to the source (the lifted view origin
+# when the source is itself a borrowed view, which that view pinned).
 checkTypedefBorrow: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -24189,15 +24219,7 @@ checkTypedefBorrow: function {
                     :vt
                     errMark: errT0
                 )
-                if vt > 0 when st.typing.pendingPins.length == 0 then {
-                    tup: ListVal zast.nameid
-                    (appendValueTuple
-                        :ast
-                        n: (ast.nodes.get i: arg.operation.u64)
-                        dst: tup
-                    )
-                    pinsPush :st path: tup shared: true mutable: true alias: false
-                }
+                if vt > 0 then pinTypedefBorrowSource :st :ast src: arg.operation
             }
         }
     }

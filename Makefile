@@ -1747,7 +1747,11 @@ perf: $(PERFBIN)
 #
 # +438 an inline typedef argument's temporary is freed: 0 behaviour, 438
 # source -- ownedTypedefArg, asked by the two argument hoists.
-ALLOC_BASELINE := 2637998
+#
+# +2377 a borrowed typedef is a second name for its source: 0 behaviour, 2377
+# source -- the checker's routing and exclusive pin, and the emitter's alias
+# leg (typedefBorrowSource and its two helpers).
+ALLOC_BASELINE := 2640375
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
