@@ -2983,6 +2983,26 @@ isInstanceOfOpt: function {o: (Option zenv.ZSymbolTable).view tid: u64 tpl: u64}
     }
 }
 
+# declAnnotation -- what a reference with no variable names, as a hover's `#`
+# note: a unit's own definition is "static unit-level", a type's `as` constant
+# is "constant", and a type's field or conformance -- read off a value -- takes
+# no note. "" when the reference resolved to no declaration.
+declAnnotation: function {o: (Option zenv.ZSymbolTable).view nid: u64} out String is {
+    rd: refDeclOf :o :nid
+    if rd.isZero then return "".string
+    match (
+        o
+    ) case some then {
+        if (o.typing.isAsConstDecl declId: rd) then return "constant".string
+        parent: (o.typing.decls.get i: rd.u64).parent
+        if parent.isZero then return "".string
+        if (o.typing.decls.get i: parent.u64).unitScope then return "static unit-level".string
+        return "".string
+    } case none then {
+        return "".string
+    }
+}
+
 # refAnnotation -- a value reference's ownership + scope origin (+ borrow
 # source) as an in-fence `#` comment body: "owned local" / "borrowed
 # parameter" / "borrowed local, from s" / "static unit-level"; "" when the
@@ -2993,11 +3013,7 @@ refAnnotation: function {
     vid: ztypes.vid
     nid: u64
 } out String is {
-    if vid.isZero then {
-        udo: useUnitDef :o :nid
-        if udo > 0 then return "static unit-level".string
-        return "".string
-    }
+    if vid.isZero then return (declAnnotation :o :nid)
     match (
         o
     ) case some then {
