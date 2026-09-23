@@ -1374,7 +1374,8 @@ indexDeclPublicEntries: function {
             mId: zast.kidAt kids: ast.kids span: bodyIds i: vx39
             vx39 = vx39 + 1
             m: argRefAt :ast nid: (zast.nodeid.create from: mId.u32)
-            if m.nid.isZero.not then {
+            nested: refuseNestedVisibility :st :ast :m
+            if m.nid.isZero.not when nested.not then {
                 # the entry's value row is read through a view scoped to this
                 # block: the index walk below lends ast
                 iref: m.name
@@ -8237,6 +8238,28 @@ aliasentry: record {
     node: u32
 }
 
+# refuseNestedVisibility -- a visibility block describes the unit or type it
+# stands in; one inside a `public:` block would describe the interface, which
+# has none. True when the entry `m` was such a block and was reported.
+refuseNestedVisibility: function {st: zenv.ZSymbolTable ast: Ast.view m: argref} out bool is {
+    if m.nid.isZero then return false
+    isPubB: zast.unitOpKindIs :ast opId: m.operation.u32 k: zast.unitkind.publicNs
+    isPrivB: zast.unitOpKindIs :ast opId: m.operation.u32 k: zast.unitkind.privateNs
+    if isPubB.not when isPrivB.not then return false
+    kw: "private"
+    if isPubB then kw = "public"
+    (addResolveErrorH
+        :st
+        nodeid: m.nid
+        lineno: m.lineno
+        colno: m.colno
+        e: zast.err.typeError
+        msg: "a `public:` block cannot hold a `\{kw}:` block"
+        width: kw.length.u32.orPanic
+    )
+    return true
+}
+
 # scanPublicEntry -- one entry of a `public:` block. Every entry exports its
 # own name; an entry spelled as a bare atom whose name DIFFERS from the atom's
 # is a rename and is recorded as one. `badMsg` is what any other shape is
@@ -8253,6 +8276,8 @@ scanPublicEntry: function {
 } is {
     bn: ast.nodes.get i: nid.u64
     if bn.namedoperation.not then return
+    ent: argRefAt :ast nid: (zast.nodeid.create from: nid)
+    if (refuseNestedVisibility :st :ast m: ent) then return
     pubIds.add item: bn.name.u64
     bop: ast.nodes.get i: bn.operation.u64
     match (

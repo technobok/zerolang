@@ -1721,7 +1721,11 @@ perf: $(PERFBIN)
 #
 # +1 the E0037 help names the current reserved words: 0 behaviour, 1 source --
 # the longer literal only.
-ALLOC_BASELINE := 2634554
+#
+# +753 a `public:` block may not hold a visibility block: 0 behaviour, 753
+# source -- refuseNestedVisibility, asked of every interface entry on both the
+# file-unit scan and the subunit index.
+ALLOC_BASELINE := 2635307
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
