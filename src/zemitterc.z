@@ -38441,7 +38441,8 @@ dispatchSlotNames: function {
 }
 
 # dispatchArgText -- one dispatched argument's C text. A collection argument is
-# passed by address, unless the path already yields a pointer.
+# passed by address, unless the path already yields a pointer; a call's value is
+# bound to a temp so it has one.
 dispatchArgText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -38458,6 +38459,19 @@ dispatchArgText: function {
         originTid: (originTidOf :symtab tid: atid)
     ) then apfx = "&".string
     if (pathIsPointer :ast :symtab :ctx :n) then apfx = "".string
+    # a value a call returns has no address: it is bound to a temp first, freed
+    # when the checker's temporary owns it (a view it does not)
+    if apfx.length > 0 when (isNonLvalueArg s: av.stringView) then {
+        hv: (hoistLvalue
+            :ast
+            :symtab
+            :ctx
+            av: av.stringView
+            tid: atid
+            argNid: (zast.nodeIdOf :n).u64
+        )
+        return "&\{hv}"
+    }
     return "\{apfx}\{av}"
 }
 

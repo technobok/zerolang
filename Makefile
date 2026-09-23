@@ -1751,7 +1751,10 @@ perf: $(PERFBIN)
 # +2377 a borrowed typedef is a second name for its source: 0 behaviour, 2377
 # source -- the checker's routing and exclusive pin, and the emitter's alias
 # leg (typedefBorrowSource and its two helpers).
-ALLOC_BASELINE := 2640375
+#
+# +261 a call's value passed by address to a protocol method is bound to a temp:
+# 0 behaviour, 261 source -- dispatchArgText's hoist leg.
+ALLOC_BASELINE := 2640636
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
