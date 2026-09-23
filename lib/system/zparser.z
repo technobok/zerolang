@@ -2824,12 +2824,14 @@ Parser: class {
     }
 
     # objectMemberItem -- a `name:` item with no member after it, which names a
-    # member of the object. True when a duplicate name was recorded.
+    # member of the object. True when a duplicate name, or a reserved one where
+    # it may not stand, was recorded.
     objectMemberItem: function {
         :this
         lex: zlexer.Lexer
         items: ListVal u32
         names: ListVal u64
+        typeBody: bool
     } out bool is {
         lblTok: lex.acceptAny pool: this.ast.names
         nm: lblTok.text
@@ -2847,6 +2849,14 @@ Parser: class {
         lvName: lblTok.text
         opName: lblTok.text
         lv: this.mkLabelValue line: lblTok.lineno col: lblTok.colno nameId: lvName
+        if typeBody when (isReservedMemberName id: lblTok.text) then {
+            mKind: unitKindForLabel id: lblTok.text unitBody: false
+            rerr: this.reservedMemberError :lblTok member: lv :mKind
+            if rerr.some then {
+                items.append (this.intern n: rerr)
+                return true
+            }
+        }
         no: (this.mkNamedOp
             name: opName
             operation: lv
@@ -2918,7 +2928,7 @@ Parser: class {
             for (this.atEol :lex) loop lex.advance pool: this.ast.names
             pktt: lex.peekType
             if pktt == zlexer.toktype.labelPreTok then {
-                if (this.objectMemberItem :lex :items :names) then return true
+                if (this.objectMemberItem :lex :items :names :typeBody) then return true
                 continue
             }
             if pktt != zlexer.toktype.labelTok then break

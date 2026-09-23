@@ -1711,7 +1711,11 @@ perf: $(PERFBIN)
 # +1967 a `.private` slot takes a spelled grant: 0 behaviour, 1967 source --
 # refusePlainPrivateArg and argIsPrivateHandle, which never fire on the
 # compiler's own source (it declares no `.private` parameter or field).
-ALLOC_BASELINE := 2634090
+#
+# +292 the `:name` shorthand in a type body is checked for a reserved name: 0
+# behaviour, 292 source -- the parser's new leg, which the compiler's own
+# source never takes.
+ALLOC_BASELINE := 2634382
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
