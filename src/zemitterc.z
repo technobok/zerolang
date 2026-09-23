@@ -38561,17 +38561,22 @@ emitProtocolCreateCall: function {
     ctx: Ctx
     call: zast.callrow.view
 } out String is {
-    bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
-    if bn.length == 0 then return "".string
-    mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
-    isCreate: mn == "create" or (mn == "borrow")
-    if isCreate.not then return "".string
-    protoTid: resolveTypeIdByName :ast :symtab :ctx name: bn
-    ptt: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: protoTid.u64)
+    # the projection and whether it borrows are the checker's: the call's
+    # stamp is the protocol or facet, its kind the verb -- whether it was
+    # spelled `P.create from: d.take`, `P.borrow from: d` or bare `P d.borrow`
+    protoTid: stampIdOf :symtab nid: call.nodeid.u64
+    ptt: symtab.reg.typetypeOf typeId: protoTid
     isFct: ptt == ztypes.ztypetype.facetType
     if ptt != ztypes.ztypetype.protocolType when isFct.not then return "".string
+    ckP: symtab.typing.callKind.get key: call.nodeid.u64
+    borrowsP: false
+    match (
+        ckP
+    ) case some then {
+        borrowsP = ckP == zast.callkind.protocolBorrow
+    } case none then return "".string
     suffix: "create_owned".string
-    if mn == "borrow" then suffix = "create".string
+    if borrowsP then suffix = "create".string
     # a facet copies its source either way: one helper serves both verbs
     if isFct then suffix = "create".string
     arx629: u64
@@ -38580,8 +38585,9 @@ emitProtocolCreateCall: function {
         arx629 = arx629 + 1
         a: ast.nodes.get i: aId.u64
         if a.namedoperation then {
+            # the source is the `from:` argument, or the one unlabelled argument
             an: zast.nameTextAt :ast ref: a.name
-            if an.stringView == "from" then {
+            if an.length == 0 or (an.stringView == "from") then {
                 fop: ast.nodes.get i: a.operation.u64
                 fromBase: atomOrBaseText :ast n: fop
                 fdn: stampNameDeep :symtab n: (ast.nodes.get i: a.operation.u64)
@@ -38594,7 +38600,7 @@ emitProtocolCreateCall: function {
                 )
                 if fromTid == 0 then return "".string
                 implBase: ctxCname :ctx tid: (ztypes.tid.create from: fromTid.u64)
-                label: conformanceLabelFor :symtab implTid: fromTid :protoTid
+                label: conformanceLabelFor :symtab implTid: fromTid protoTid: protoTid.u64
                 if label.length == 0 then return "".string
                 valueVid: atomVid :symtab nid: (dottedBaseNodeId :ast n: fop)
                 if valueVid.isZero then valueVid = atomVid :symtab nid: (atomNodeId n: fop)

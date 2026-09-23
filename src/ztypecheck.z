@@ -23890,6 +23890,22 @@ projectionCallKind: function {
     return zast.callkind.protocolCreate
 }
 
+# projectionSourceBorrows -- the source of a bare projection (`Speaker d.borrow`:
+# the `from:` argument, or the one unlabelled argument) is marked `.borrow`.
+projectionSourceBorrows: function {ast: Ast.view call: callref} out bool is {
+    k: u64
+    for k < call.nargs loop {
+        arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: k)
+        k = k + 1
+        if arg.nid.isZero then continue
+        if arg.name.isZero.not when (zast.nameTextEq :ast ref: arg.name s: "from").not then continue
+        op: ast.nodes.get i: arg.operation.u64
+        if op.dottedpath.not then return false
+        return (atomNameId :ast n: (ast.nodes.get i: op.child.u64)) == zast.names.wkBorrow
+    }
+    return false
+}
+
 # checkProjectionCreate -- `F.create from: expr` / `P.borrow from: expr` on a
 # facet or protocol: a projection, not a call. No CALL scope; the from-argument
 # walks in the current scope (a facet copies its source -- nothing is consumed);
@@ -39883,6 +39899,25 @@ checkTypeConstruction: function {
     tid: ztypes.tid
 } out ztypes.tid is {
     funcId: tid
+    # A PROJECTION TYPE IS NO RECORD TO BUILD. `Speaker d` re-views its source,
+    # and the source's own marker says how: `d.borrow` borrows it for the
+    # binding's life, `d` or `d.take` hands it over.
+    pjtt: st.reg.typetypeOf typeId: tid
+    if pjtt == ztypes.ztypetype.protocolType or (pjtt == ztypes.ztypetype.facetType) then {
+        pjBorrow: projectionSourceBorrows :ast :call
+        # a facet copies its source whichever way; an owned protocol takes it
+        pjTake: false
+        if pjtt == ztypes.ztypetype.protocolType when pjBorrow.not then pjTake = true
+        return (checkProjectionCreate
+            :st
+            :unitDecl
+            :ast
+            :call
+            pjId: tid.u64
+            consumes: pjTake
+            borrows: pjBorrow
+        )
+    }
     if (refuseDisabledConstruction :st :call :tid) then {
         # the arguments are still values, and still stamp
         checkWrappedValueArgs :st :unitDecl :ast :call

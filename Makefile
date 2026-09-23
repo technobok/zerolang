@@ -1737,7 +1737,11 @@ perf: $(PERFBIN)
 # behaviour, 2540 source -- resolveFunction lists a function's `as` item values
 # to ask each one (the list allocates only where an `as` block exists), and
 # reportMissingTypeMember's lookups.
-ALLOC_BASELINE := 2636500
+#
+# +1026 a bare-name projection (`Speaker d.borrow`) takes its ownership from the
+# source's marker: 0 behaviour, 1026 source -- projectionSourceBorrows and the
+# construction leg's projection branch; the compiler constructs no protocol.
+ALLOC_BASELINE := 2637526
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
