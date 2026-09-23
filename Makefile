@@ -1754,7 +1754,10 @@ perf: $(PERFBIN)
 #
 # +261 a call's value passed by address to a protocol method is bound to a temp:
 # 0 behaviour, 261 source -- dispatchArgText's hoist leg.
-ALLOC_BASELINE := 2640636
+#
+# +500 `Bytes.byteView` lowers to its base's listView: 0 behaviour, 500 source
+# -- markTypedefListViewUse, asked at each resolved member.
+ALLOC_BASELINE := 2641136
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

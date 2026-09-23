@@ -2168,7 +2168,9 @@ isStringViewMember: function {name: StringView} out bool is {
 # see isStringViewMember.
 isListViewMember: function {name: StringView} out bool is {
     if name == "listView" then return true
-    return false
+    # `Bytes.byteView` is its base's listView, re-typed: the typedef shares the
+    # base's representation
+    return name == "byteView"
 }
 
 # isMoveMarker -- a value-position ownership-transfer marker. `.hold` moves its
@@ -26438,6 +26440,22 @@ checkTypeReadSuppliesReceiver: function {
     return false
 }
 
+# markTypedefListViewUse -- `cnId` is a list-view conversion used on a typedef
+# `bt`: record its base instance's listView as used too, since the conversion
+# lowers to it.
+markTypedefListViewUse: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    bt: ztypes.tid
+    cnId: zast.nameid
+} is {
+    if (isListViewMember name: (zast.nameTextAt :ast ref: cnId).stringView).not then return
+    base: typedefBaseTidOf :st tid: bt
+    if base.isZero then return
+    lvD: st.typing.declMemberIdOf parentTypeId: base nameId: zast.names.wkListView
+    if lvD.isZero.not then st.typing.usedMemberDecl.add item: lvD.u64
+}
+
 # memberDeclaresReceiver -- the function member `cnId` of `bt` takes a receiver. A
 # member a mono MINTS for itself carries no parameter rows, so the question goes
 # to the template's declaration of it.
@@ -26494,6 +26512,9 @@ checkResolvedMember: function {
             ownD: st.typing.declMemberIdOf parentTypeId: bt nameId: cnId
             if ownD.isZero.not then st.typing.usedMemberDecl.add item: ownD.u64
         }
+        # a typedef's view conversion (`Bytes.byteView`) IS its base's listView,
+        # which the emitter writes only for a base instance something used
+        markTypedefListViewUse :st :ast :bt :cnId
     }
     if (checkMemberNamespace :st :ast :unitDecl :dp :bt :cnId :mo :coerce
     ).not then return (ztypes.tid.create from: 0)
