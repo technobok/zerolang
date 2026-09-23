@@ -1728,7 +1728,11 @@ perf: $(PERFBIN)
 #
 # +419 a marker path is a pointer when its base is: 0 behaviour, 419 source --
 # markerEmitsBase and pathIsPointer's new leg.
-ALLOC_BASELINE := 2635726
+#
+# -1798 `.valtype`/`.reftype` no longer declare a generic parameter: -298
+# behaviour, -1500 source -- two fewer name-text compares per generic-param
+# question and genericConstraintKind's String, gone.
+ALLOC_BASELINE := 2633928
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

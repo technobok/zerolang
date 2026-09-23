@@ -2400,29 +2400,22 @@ recordConformerContexts: function {
 }
 
 # isBareGenericParam -- a generic-param definition in direct dotted form
-# (`t: Any.generic`); wrapped shapes (a def whose payload merely contains a
+# (`t: anyval.generic`); wrapped shapes (a def whose payload merely contains a
 # constraint) are not unit-level generic params.
 isBareGenericParam: function {ast: Ast.view op: astnode.view} out bool is {
     match (
         op
     ) case dottedpath then {
         leaf: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: op.child.u64))
-        return (
-            leaf.stringView ==
-            "generic" or
-            (leaf.stringView == "valtype") or
-            (
-                leaf.stringView == "reftype"
-            )
-        )
+        return leaf.stringView == "generic"
     } else {
         return false
     }
 }
 
 # isGenericParam -- true when a type-expr is a generic-parameter constraint
-# (`Any.generic` / `u64.generic` / `anyval.generic`): a dottedpath whose leaf is
-# `generic` or `valtype`, peeling a parameterized `call` around it.
+# (`u64.generic` / `anyval.generic`): a dottedpath whose leaf is `generic`,
+# peeling a parameterized `call` around it.
 isGenericParam: function {ast: Ast.view op: astnode.view} out bool is {
     match (
         op
@@ -2430,14 +2423,7 @@ isGenericParam: function {ast: Ast.view op: astnode.view} out bool is {
         return (isGenericParam :ast op: (ast.nodes.get i: op.callable.u64))
     } case dottedpath then {
         leaf: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: op.child.u64))
-        return (
-            leaf.stringView ==
-            "generic" or
-            (leaf.stringView == "valtype") or
-            (
-                leaf.stringView == "reftype"
-            )
-        )
+        return leaf.stringView == "generic"
     } else {
         return false
     }
@@ -2511,10 +2497,7 @@ registerGenericParamOne: function {
 } is {
     if m.namedoperation when (isGenericParam :ast op: (ast.nodes.get i: m.operation.u64)) then {
         cb: genericConstraintBase :ast n: (ast.nodes.get i: m.operation.u64)
-        ckx: genericConstraintKind :ast n: (ast.nodes.get i: m.operation.u64)
-        cf9x: cb.copy
-        if ckx.length > 0 then cf9x = "\{cb}.\{ckx}"
-        k: constraintKindFor text: cf9x.stringView
+        k: constraintKindFor text: cb.stringView
         # a bound no kind classifies is a DECLARATION, and what it admits is
         # that declaration's business: its name is kept so the check can find it
         bn: zast.nameid
@@ -2531,7 +2514,7 @@ registerGenericParamOne: function {
             :tdecl
             paramName: m.name
             kind: k
-            numKind: (constraintIntKind cv: cf9x.stringView)
+            numKind: (constraintIntKind cv: cb.stringView)
             boundName: bn
             boundQual: bq
         )
@@ -2593,24 +2576,6 @@ genericBoundQualifierId: function {ast: Ast.view n: astnode.view} out zast.namei
         return r
     } else {
         return (zast.nameid.create from: 0)
-    }
-}
-
-# genericConstraintKind -- the value-kind leaf of a constraint declaration# genericConstraintKind -- the value-kind leaf of a constraint declaration
-# (`Any.valtype` -> "valtype", `Any.reftype` -> "reftype"), "" for plain
-# `.generic` bounds.
-genericConstraintKind: function {ast: Ast.view n: astnode.view} out String is {
-    match (
-        n
-    ) case call then {
-        return (genericConstraintKind :ast n: (ast.nodes.get i: n.callable.u64))
-    } case dottedpath then {
-        nameCount: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.child.u64))
-        if nameCount.stringView == "valtype" then return nameCount.copy
-        if nameCount.stringView == "reftype" then return nameCount.copy
-        return "".string
-    } else {
-        return "".string
     }
 }
 
