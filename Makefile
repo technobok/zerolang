@@ -1769,7 +1769,11 @@ perf: $(PERFBIN)
 # source -- the nested leg spelled the receiver's type NAME (stampNameDeep, a
 # fresh String) for every member read through a field, to compare it with
 # "String"; nestedStringMember compares the chased tid.
-ALLOC_BASELINE := 2634775
+#
+# +456 a hoisted argument read out of a lent value is held by a temp that owns
+# nothing: 0 behaviour, 456 source -- valueIsLent's field leg and hoistArg
+# asking it.
+ALLOC_BASELINE := 2635231
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

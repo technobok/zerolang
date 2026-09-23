@@ -30364,12 +30364,27 @@ dottedLendsResult: function {st: zenv.ZSymbolTable nid: u64} out bool is {
 
 # valueIsLent -- the value at `nid` is one whose storage belongs to something
 # else, so a temporary holding it owns nothing: a call, or a path that
-# auto-calls one, whose callee declares a borrow return; or a control value one
+# auto-calls one, whose callee declares a borrow return; a field read off such a
+# value; or a control value one
 # of whose arms yields a place, which makes the whole value a reference on that
 # arm's path. Both sides of a lifetime ask this -- the mint below and the
 # argument hoist -- so the two cannot drift apart.
 valueIsLent: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} out bool is {
     if (callHandsBackBorrow :st :ast n: (ast.nodes.get i: nid.u64)) then return true
+    # a FIELD read off a lent value is lent too: `(hs.get i: 0).parts` is
+    # storage the list's element owns. A valtype field is read by copy, and the
+    # copy is the temporary's own
+    fbase: zast.nodeid
+    fReft: typeIsReftype :st tid: (walkTypeOf :st nid: nid.u64)
+    {
+        n: ast.nodes.get i: nid.u64
+        if fReft when n.dottedpath when (memberReadIsField
+            :st
+            parentNid: n.parent.u64
+            nameId: (atomNameId :ast n: (ast.nodes.get i: n.child.u64))
+        ) then fbase = n.parent
+    }
+    if fbase.isZero.not when (valueIsLent :st :ast nid: fbase) then return true
     return (armsYieldAPlace :st :ast :nid)
 }
 
@@ -35220,9 +35235,10 @@ hoistArg: function {
         :st
         tid: (ztypes.tid.create from: argType.u64)
     ) then hown = ztypes.zownership.borrowed
-    # A CONTROL VALUE'S ARMS NEED NOT AGREE: one that yields a place makes the
-    # merged value a reference, which owns nothing (armsYieldAPlace).
-    if hown == ztypes.zownership.owned when (armsYieldAPlace
+    # A VALUE WHOSE STORAGE SOMETHING ELSE OWNS is held by a temp that owns
+    # nothing (valueIsLent): a borrow-returning call, a field read off one, or a
+    # control value one of whose arms yields a place -- the arms need not agree.
+    if hown == ztypes.zownership.owned when (valueIsLent
         :st
         :ast
         nid: argId
