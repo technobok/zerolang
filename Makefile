@@ -3275,7 +3275,9 @@ view-guard:
 # commit message, and the guard cannot tell the two apart: the prose is the
 # check, so say which one it is.
 FALLBACK_BASELINE :=
-EMITFAIL_BASELINE := 37
+# 38: nativeBoxCall's refusal -- a native conformer boxed as a protocol whose
+# member it has no C spelling for (only Text.stringView has one).
+EMITFAIL_BASELINE := 38
 MARKER_BASELINE := 24
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
