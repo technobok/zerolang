@@ -2837,25 +2837,22 @@ ogNone: 41.u64
 # right answer by construction.
 mnOrPanic: 0.u64
 mnCopy: 1.u64
-mnPrivate: 2.u64
-mnMeta: 3.u64
-mnOption: 4.u64
-mnResult: 5.u64
-mnDrop: 6.u64
-mnPrint: 7.u64
-mnPanic: 8.u64
-mnError: 9.u64
-mnAppend: 10.u64
-mnInsert: 11.u64
-mnPush: 12.u64
-mnGetMut: 13.u64
-mnPop: 14.u64
-mnExtend: 15.u64
-mnHas: 16.u64
-mnDelete: 17.u64
-mnKeyAt: 18.u64
-mnValueAt: 19.u64
-mnBorrow: 20.u64
+mnMeta: 2.u64
+mnOption: 3.u64
+mnResult: 4.u64
+mnPrint: 5.u64
+mnPanic: 6.u64
+mnError: 7.u64
+mnAppend: 8.u64
+mnInsert: 9.u64
+mnPush: 10.u64
+mnGetMut: 11.u64
+mnPop: 12.u64
+mnExtend: 13.u64
+mnHas: 14.u64
+mnDelete: 15.u64
+mnKeyAt: 16.u64
+mnValueAt: 17.u64
 
 # ogPut -- place one row AT its own constant. Writing the index and the name
 # together is what keeps the two halves of the table in step; a row that drifts
@@ -2883,11 +2880,9 @@ mnPut: function {acc: List String at: u64 name: StringView} is {
 memberDispatchNames: function {acc: List String} is {
     mnPut :acc at: mnOrPanic name: "orPanic"
     mnPut :acc at: mnCopy name: "copy"
-    mnPut :acc at: mnPrivate name: "private"
     mnPut :acc at: mnMeta name: "meta"
     mnPut :acc at: mnOption name: "Option"
     mnPut :acc at: mnResult name: "Result"
-    mnPut :acc at: mnDrop name: "drop"
     mnPut :acc at: mnPrint name: "print"
     mnPut :acc at: mnPanic name: "panic"
     mnPut :acc at: mnError name: "error"
@@ -2901,7 +2896,6 @@ memberDispatchNames: function {acc: List String} is {
     mnPut :acc at: mnDelete name: "delete"
     mnPut :acc at: mnKeyAt name: "keyAt"
     mnPut :acc at: mnValueAt name: "valueAt"
-    mnPut :acc at: mnBorrow name: "borrow"
 }
 
 # mnIs -- is `id` the dispatch name at index `at`? TWO zeros meet here and they
@@ -3995,8 +3989,7 @@ takeAliasBaseNid: function {
     ) case statementline then {
         return (takeAliasBaseNid :ast :symtab n: (ast.nodes.get i: n.statementline.u64))
     } case dottedpath then {
-        cn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-        if (ztypecheck.isMoveMarker name: cn.stringView).not then return 0
+        if (leafMoves :ast leaf: n.child).not then return 0
         bnid: atomNodeId n: (ast.nodes.get i: n.parent.u64)
         bt: stampIdOf :symtab nid: bnid
         bo: originTidOf :symtab tid: bt
@@ -4046,8 +4039,7 @@ takeStringSource: function {
     ) case statementline then {
         return (takeStringSource :ast :symtab :ctx n: (ast.nodes.get i: n.statementline.u64))
     } case dottedpath then {
-        cn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-        if (ztypecheck.isMoveMarker name: cn.stringView).not then return "".string
+        if (leafMoves :ast leaf: n.child).not then return "".string
         bnid: atomNodeId n: (ast.nodes.get i: n.parent.u64)
         bid: stampIdOf :symtab nid: bnid
         isMv: (
@@ -4097,8 +4089,7 @@ isFieldTake: function {ast: Ast.view n: astnode.view} out bool is {
     ) case statementline then {
         return (isFieldTake :ast n: (ast.nodes.get i: n.statementline.u64))
     } case dottedpath then {
-        cn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-        if (ztypecheck.isMoveMarker name: cn.stringView).not then return false
+        if (leafMoves :ast leaf: n.child).not then return false
         return (isDottedAutoCall n: (ast.nodes.get i: n.parent.u64))
     } else {
         return false
@@ -4113,8 +4104,7 @@ isLocalTake: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.v
     ) case statementline then {
         return (isLocalTake :ast :symtab n: (ast.nodes.get i: n.statementline.u64))
     } case dottedpath then {
-        cn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-        if (ztypecheck.isMoveMarker name: cn.stringView).not then return false
+        if (leafMoves :ast leaf: n.child).not then return false
         pn: ast.nodes.get i: n.parent.u64
         if pn.atomid.not then return false
         return (symtab.typing.atomVariableId.get key: pn.nodeid.u64).none.not
@@ -4228,8 +4218,7 @@ emitNarrowedTakeZero: function {
         sln: ast.nodes.get i: n.statementline.u64
         emitNarrowedTakeZero :ast :symtab :ctx n: sln :ind :buf
     } case dottedpath then {
-        cn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-        if (ztypecheck.isMoveMarker name: cn.stringView) then {
+        if (leafMoves :ast leaf: n.child) then {
             bn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
             bn9v: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent.u64))
             if (vvHas xs: ctx.narrowBox vid: bn9v) then {
@@ -4303,8 +4292,7 @@ moveMarkerBase: function {ast: Ast.view n: astnode.view} out u64 is {
     match (
         n
     ) case dottedpath then {
-        mbc: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-        if (ztypecheck.isMoveMarker name: mbc.stringView).not then return 0
+        if (leafMoves :ast leaf: n.child).not then return 0
         return n.parent.u64
     } else {
         return 0
@@ -8461,7 +8449,7 @@ bindingRhsIsBorrow: function {
             # a field read off a narrowed subject is a shallow-copy borrow (it aliases
             # the subject's heap); an ownership builtin yields an owned value, and so
             # does a method auto-call (FUNCTION child) on the narrowed payload.
-            if (ztypecheck.isMoveMarker name: ch.stringView) then return false
+            if (ztypecheck.isMoveMarkerId nameId: chId) then return false
             if ch.stringView == "copy" then return false
             if ch.stringView == "string" then return false
             ntO2: vtGet xs: ctx.narrowTid vid: bnmV
@@ -8507,7 +8495,7 @@ bindingRhsIsBorrow: function {
             # protocol or facet declaring a real `borrow` projection resolves
             # above and never reaches here.
             chId: atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64)
-            if (mnIs :ctx id: chId at: mnBorrow) then return true
+            if (zast.markerKindOfName id: chId).borrowMarker then return true
             return false
         }
     } else {
@@ -12570,7 +12558,8 @@ emitCrossUnitSumCtor: function {
     ctorArmName: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if ctorArmName.length == 0 then return "".string
     if ctorArmName == "create" then return "".string
-    if ctorArmName == "borrow" then return "".string
+    ctorMk: zast.markerKindOf :ast n: (ast.nodes.get i: call.callable.u64)
+    if ctorMk.borrowMarker then return "".string
     ud4x: ztypecheck.unitDeclOfName st: symtab nameId: obId
     go: (ztypecheck.resolvedByIdsRo
         :ast
@@ -14574,7 +14563,8 @@ emitNestedMonoMethodBase: function {
         # a protocol/facet-typed base reached through a FIELD dispatches
         # exactly as a bare one does; without this the member read falls
         # through to the struct-field leg below and gcc rejects it
-        if (isDispatchableTid :symtab tid: nlid) when (vtableAutoCallName name: mn2) then {
+        viaVtable: vtableAutoCallName :ast leaf: n.child name: mn2
+        if (isDispatchableTid :symtab tid: nlid) when viaVtable then {
             nacc: ".".string
             if (pathIsPointer
                 :ast
@@ -15753,7 +15743,8 @@ emitDottedAtomBase: function {
     bstamp = ztypes.tid.create from: (chaseColMono :symtab :ctx tid: bstamp)
     bstamp = ztypes.tid.create from: (chaseStrTypedef :symtab :ctx tid: bstamp)
     rtt: symtab.reg.typetypeOf typeId: bstamp
-    if (isDispatchableTid :symtab tid: bstamp) when (vtableAutoCallName name: mn2) then {
+    viaVtable: vtableAutoCallName :ast leaf: n.child name: mn2
+    if (isDispatchableTid :symtab tid: bstamp) when viaVtable then {
         pacc: ".".string
         if (isPtrVid :ctx vid: bn2v) then pacc = "->".string
         return (vtableAutoCallC
@@ -16525,17 +16516,17 @@ emitDottedNativeMarker: function {
         return "z_\{nnu}_\{mn2n}()"
     }
     # `.private` is a compile-time friend marker -- it emits the receiver itself.
-    if (mnIs :ctx id: mn2Id at: mnPrivate) then {
+    if (zast.markerKindOfName id: mn2Id).privateMarker then {
         return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
     }
     # `.borrow` on a value is the ownership marker, and the checker accepts it
     # as one; it emits the receiver itself.
-    if (mnIs :ctx id: mn2Id at: mnBorrow) then {
+    if (zast.markerKindOfName id: mn2Id).borrowMarker then {
         return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
     }
     # `.take` / `.hold` hands on the base itself (markerHandsOnBase)
     mn2b: zast.nameTextAt :ast ref: mn2Id
-    if (ztypecheck.isMoveMarker name: mn2b.stringView) when (markerHandsOnBase
+    if (ztypecheck.isMoveMarkerId nameId: mn2Id) when (markerHandsOnBase
         :ast
         :symtab
         :ctx
@@ -18978,7 +18969,7 @@ emitCallStmt: function {
     buf: String.borrow
 } is {
     relmnId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable.u64)
-    if (mnIs :ctx id: relmnId at: mnDrop) then {
+    if (zast.markerKindOfName id: relmnId).dropMarker then {
         relbnid: dottedBaseNodeId :ast n: (ast.nodes.get i: call.callable.u64)
         reltid: stampIdOf :symtab nid: relbnid
         if (symtab.reg.typetypeOf typeId: reltid) == ztypes.ztypetype.protocolType then return
@@ -20075,9 +20066,9 @@ emitDottedAutoCallStmt: function {
     # `.drop` on a protocol is a transfer marker (scope-exit destroy
     # covers it) -- emit nothing, like emitCallStmt. A `.take` whose value
     # nothing receives ends the local here as `.drop` does.
-    dct: dottedChildText :ast :n
-    isDrop: dct == "drop"
-    if isDrop or (ztypecheck.isMoveMarker name: dct) then {
+    mk: zast.markerKindOf :ast :n
+    isDrop: mk.dropMarker
+    if isDrop or mk.takeMarker or mk.holdMarker then {
         rrid: dottedReceiverStampId :ast :symtab callable: n
         rtt: symtab.reg.typetypeOf typeId: rrid
         if rtt == ztypes.ztypetype.protocolType then return
@@ -38418,11 +38409,20 @@ vtableDataArg: function {recv: StringView acc: StringView isFacet: bool} out Str
     return "\{recv}\{acc}data"
 }
 
-# vtableAutoCallName -- a member name that dispatches through the vtable. The
-# three lifecycle verbs are emitted by their own legs (emitProtocolCreateCall
-# and the destroy helper) and have no vtable slot.
-vtableAutoCallName: function {name: StringView} out bool is {
-    return (name == "create" or (name == "borrow") or (name == "drop")).not
+# leafMoves -- a path's leaf is `.take` or `.hold`, the markers that move their
+# source.
+leafMoves: function {ast: Ast.view leaf: zast.nodeid} out bool is {
+    k: zast.markerKindOfLeaf :ast :leaf
+    return k.takeMarker or k.holdMarker
+}
+
+# vtableAutoCallName -- a member that dispatches through the vtable. `create`
+# and the `.borrow` / `.drop` markers are emitted by their own legs
+# (emitProtocolCreateCall and the destroy helper) and have no vtable slot.
+vtableAutoCallName: function {ast: Ast.view leaf: zast.nodeid name: StringView} out bool is {
+    if name == "create" then return false
+    mk: zast.markerKindOfLeaf :ast :leaf
+    return (mk.borrowMarker or mk.dropMarker).not
 }
 
 # vtableAutoCallC -- a ZERO-ARG method auto-call on a protocol/facet receiver.
@@ -38690,8 +38690,8 @@ emitProtocolDispatch: function {
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if mn.length == 0 then return "".string
     if mn == "create" then return "".string
-    if mn == "borrow" then return "".string
-    if mn == "drop" then return "".string
+    mk: zast.markerKindOf :ast n: (ast.nodes.get i: call.callable.u64)
+    if mk.borrowMarker or mk.dropMarker then return "".string
     callableNode: ast.nodes.get i: call.callable.u64
     rtid: dispatchReceiverTid :ast :symtab :ctx callable: callableNode
     if (isDispatchableTid :symtab tid: rtid).not then return "".string
