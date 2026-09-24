@@ -1785,7 +1785,9 @@ perf: $(PERFBIN)
 #
 # +1 the Text spec's receiver is `t: this.view`: 0 behaviour, 1 source (a
 # named receiver where `:this` was).
-ALLOC_BASELINE := 2646636
+#
+# +2 RefHashable's two receivers are `t: this.view`: 0 behaviour, 2 source.
+ALLOC_BASELINE := 2646638
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
