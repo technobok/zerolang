@@ -1778,7 +1778,11 @@ perf: $(PERFBIN)
 # source (the zls half is not on the self-compile's path).
 #
 # -15 the name-keyed isStringy is gone: 0 behaviour, -15 source.
-ALLOC_BASELINE := 2643930
+#
+# +2705 a native Text conformer (String, a str mono) boxes on demand: 0
+# behaviour, 2705 source -- the compiler boxes no native conformer, so the
+# demand list stays empty and the splice never runs.
+ALLOC_BASELINE := 2646635
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

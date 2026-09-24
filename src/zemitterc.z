@@ -3193,6 +3193,12 @@ Ctx: class {
     fnptrWritten: IdSet u64
     # the typedef pass has run: a function type met after it must be one it wrote
     fnptrPassDone: bool
+    # the (impl, protocol) pairs a NATIVE conformer is boxed as -- a String or a
+    # str mono handed to a Text. The runtime supplies such an impl's struct, so
+    # no unit pass writes its helpers: every box site asks for them here, and
+    # emitC writes them once the last body is out
+    nativeBoxImpls: ListVal u64
+    nativeBoxProtos: ListVal u64
     # runtime templates already substituted, keyed by their instantiation
     tmplCache: (Map String V: String
     # each io canonical stem's C name
@@ -13005,7 +13011,7 @@ conformanceArgText: function {
     aTT: symtab.reg.typetypeOf typeId: aTid
     aConc: aTT == ztypes.ztypetype.classType or (aTT == ztypes.ztypetype.recordType)
     if aConc.not then return "".string
-    pLbl: conformanceLabelFor :symtab implTid: aTid :protoTid
+    pLbl: boxLabelFor :symtab :ctx implTid: aTid :protoTid
     if pLbl.length == 0 then return "".string
     aIb: ctxCname :ctx tid: aTid
     aRcv: "&\{av}"
@@ -14904,7 +14910,7 @@ protocolProjectionRead: function {
     # the protocol
     mco: u64
 } out String is {
-    clab: conformanceLabelFor :symtab implTid: bstamp protoTid: mco
+    clab: boxLabelFor :symtab :ctx implTid: bstamp protoTid: mco
     if (clab.stringView == mn2).not then return String
     ib: ctxCnameView :ctx tid: bstamp
     if (isPtrVid :ctx vid: bn2v) then return "\{ib}_\{mn2}_create(\{bn2})"
@@ -31220,6 +31226,8 @@ emitC: function {
         fnptrDemand: IdSet u64
         fnptrWritten: IdSet u64
         fnptrPassDone: false
+        nativeBoxImpls: ListVal u64
+        nativeBoxProtos: ListVal u64
         tmplCache: (Map String V: String)
         ioCanonC: (Map String V: String)
         nativeTbl: (Map String V: String)
@@ -31327,7 +31335,18 @@ emitC: function {
     }
     codeBuf: String
     emitCodeBody :program :symtab :ctx :runtimeDir :nodeEstE :codeBuf
+    # a native conformer's helpers follow every struct and runtime unit they
+    # read, and precede every method body that boxes one; a body asks for them
+    # while it is written, so they go in once the last one is out
+    natAt: codeBuf.length
     emitRecordDefs :program :symtab :ctx buf: codeBuf
+    if ctx.nativeBoxImpls.length > 0 then {
+        spliced: String
+        spliced.append (codeBuf.substring from: 0 to: natAt)
+        emitNativeConformanceImpls ast: program :symtab :ctx buf: spliced
+        spliced.append (codeBuf.substring from: natAt to: codeBuf.length)
+        codeBuf = spliced
+    }
     poolBuf: String
     emitLiteralPools :ctx :litTexts :poolBuf
     (assembleEmitOutput
@@ -37059,7 +37078,9 @@ emitProtocolImpl: function {
     buf: String.borrow
 } is {
     implOrig: originTidOf :symtab tid: (ztypes.tid.create from: implTid.u64)
-    if implOrig > 0 then return
+    # a native mono (str) is boxed per instance, on demand (boxLabelFor)
+    isNat: (nativeConformerRow :symtab tid: implTid).isZero.not
+    if implOrig > 0 when isNat.not then return
     implBase: ctxCname :ctx tid: (ztypes.tid.create from: implTid.u64)
     implCtype: "\{implBase}_t"
     protoBase: ctxCname :ctx tid: protoTid
@@ -37166,6 +37187,10 @@ emitProtocolImpl: function {
         w1: "    \{implCtype}* _self = (\{implCtype}*)_data;\n"
         buf.append w1
         w2: "    \{retkw}\{implMc}(\{cargs});\n"
+        if isNat then {
+            nbc: nativeBoxCall :symtab :ctx :implTid mname: mname.stringView
+            w2 = "    \{retkw}\{nbc};\n"
+        }
         buf.append w2
         buf.append "}\n\n"
         mi = mi + 1
@@ -37197,6 +37222,7 @@ emitProtocolImpl: function {
     buf.append od0
     if (symtab.reg.needsDestructor typeId: implTid) then {
         od1: "    \{implBase}_destroy((\{implCtype}*)p);\n"
+        if implTid == ctx.strTid then od1 = "    \{ctx.strC}_free((\{implCtype}*)p);\n"
         buf.append od1
     }
     buf.append "    free(p);\n}\n\n"
@@ -37415,6 +37441,98 @@ emitConformanceImplsForType: function {
             }
         }
         i = i + 1
+    }
+}
+
+# nativeConformerRow -- the type a NATIVE conformer's conformance rows name:
+# the type itself (String), or the generic origin a mono was instantiated from
+# (str), whose rows its instances share. 0 for every conformer the program
+# declares, whose helpers its unit pass writes.
+nativeConformerRow: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
+    rowTid: tid
+    og: originTidOf :symtab :tid
+    if og.isZero.not then rowTid = og
+    if (symtab.reg.isNativeOf tid: rowTid) then return rowTid
+    return (ztypes.tid.create from: 0)
+}
+
+# boxLabelFor -- conformanceLabelFor at a site that boxes `implTid` as
+# `protoTid`. A native conformer is looked up through the row its origin
+# carries, and the pair is recorded: nothing else would ever write its helpers.
+boxLabelFor: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    implTid: u64
+    protoTid: u64
+} out String is {
+    nrow: nativeConformerRow :symtab tid: (ztypes.tid.create from: implTid.u64)
+    if nrow.isZero then return (conformanceLabelFor :symtab :implTid :protoTid)
+    lbl: conformanceLabelFor :symtab implTid: nrow.u64 :protoTid
+    if lbl.length == 0 then return lbl
+    seen: false
+    bi: u64
+    for bi < ctx.nativeBoxImpls.length loop {
+        if (ctx.nativeBoxImpls.get i: bi) == implTid when (
+            (ctx.nativeBoxProtos.get i: bi) == protoTid
+        ) then seen = true
+        bi = bi + 1
+    }
+    if seen.not then {
+        ctx.nativeBoxImpls.append implTid
+        ctx.nativeBoxProtos.append protoTid
+    }
+    return lbl
+}
+
+# nativeBoxCall -- a wrapper's call of a NATIVE conformer's method, spelled the
+# way a call site spells it: the runtime has no function behind the method for
+# a vtable slot to point at. `stringView`, Text's one member, is the only one a
+# native conformer declares; any other is refused rather than emitted as a
+# call to nothing.
+nativeBoxCall: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    implTid: ztypes.tid
+    mname: StringView
+} out String is {
+    if mname == "stringView" then {
+        if implTid == ctx.strTid then return (svValueFormPtr :ctx expr: "_self")
+        if (originIsTid :symtab tid: implTid originTid: (ctx.origins.get i: ogStr)) then {
+            return "((\{ctx.svC}_t){ .data = _self->data, .size = _self->len })"
+        }
+    }
+    (emitFail
+        :ctx
+        what: "a native conformer boxed as a protocol whose member '\{mname}' it has no C spelling for"
+        line: 0
+    )
+    return "".string
+}
+
+# emitNativeConformanceImpls -- the helpers of every native conformer a box
+# site asked for (boxLabelFor), one set per (impl, protocol) pair.
+emitNativeConformanceImpls: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    buf: String.borrow
+} is {
+    ni: u64
+    for ni < ctx.nativeBoxImpls.length loop {
+        implT: ztypes.tid.create from: (ctx.nativeBoxImpls.get i: ni)
+        protoT: ztypes.tid.create from: (ctx.nativeBoxProtos.get i: ni)
+        ni = ni + 1
+        nrow: nativeConformerRow :symtab tid: implT
+        lbl: conformanceLabelFor :symtab implTid: nrow.u64 protoTid: protoT.u64
+        (emitProtocolImpl
+            :ast
+            :symtab
+            :ctx
+            implTid: implT
+            protoTid: protoT
+            label: lbl.stringView
+            :buf
+        )
     }
 }
 
@@ -37699,7 +37817,7 @@ wrapperCreateArg: function {
                     abr: aliasResolveAt :symtab :ctx nid: abnid.u64 name: ab vid: abrV0
                     abtid: stampIdOf :symtab nid: abnid
                     abcb: ctxCname :ctx tid: abtid
-                    ablab: conformanceLabelFor :symtab implTid: abtid protoTid: prtid
+                    ablab: boxLabelFor :symtab :ctx implTid: abtid protoTid: prtid
                     abv: ztypes.vid
                     if abr.stringView == ab then abv = atomVid :symtab nid: abnid
                     abrC: emitLocalAtomNameAt :symtab :ctx nid: abnid.u64 name: ab vid: abrV0
@@ -38765,7 +38883,7 @@ emitProtocolCreateCall: function {
                 )
                 if fromTid == 0 then return "".string
                 implBase: ctxCname :ctx tid: (ztypes.tid.create from: fromTid.u64)
-                label: conformanceLabelFor :symtab implTid: fromTid protoTid: protoTid.u64
+                label: boxLabelFor :symtab :ctx implTid: fromTid protoTid: protoTid.u64
                 if label.length == 0 then return "".string
                 valueVid: atomVid :symtab nid: (dottedBaseNodeId :ast n: fop)
                 if valueVid.isZero then valueVid = atomVid :symtab nid: (atomNodeId n: fop)
