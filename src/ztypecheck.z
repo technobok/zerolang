@@ -8420,8 +8420,9 @@ scanTypeAsBlock: function {
 
 # scanTypeField -- one declared field: it is a member, its type may carry a
 # `.private` handle grant, and a `public:` block that does not name it excludes
-# it.
+# it. A field holding a handle says how: `.private.borrow` or `.private.view`.
 scanTypeField: function {
+    st: zenv.ZSymbolTable
     ast: Ast.view
     n: astnode.view
     memberIds: IdSet u64
@@ -8435,9 +8436,42 @@ scanTypeField: function {
     if (typeExprHasPrivate
         :ast
         n: (ast.nodes.get i: n.operation.u64)
-    ) then grants.append from: n.name.u64
+    ) then {
+        grants.append from: n.name.u64
+        refuseBarePrivateField :st :ast opId: n.operation
+    }
     if pubFound.not then return
     if (pubIds.has item: n.name.u64).not then excl.append from: n.name.u64
+}
+
+# refuseBarePrivateField -- a field's type that ENDS in `.private`: a field holds
+# a friend handle by reference, and must say which kind, `.private.borrow` or
+# `.private.view`. A parameter's bare `.private` is `.private.borrow`.
+refuseBarePrivateField: function {st: zenv.ZSymbolTable ast: Ast.view opId: zast.nodeid} is {
+    if (typeExprLeafId :ast :opId) != zast.names.wkPrivate then return
+    op: ast.nodes.get i: opId.u64
+    (addResolveErrorH
+        :st
+        nodeid: opId
+        lineno: (nodeLine n: op)
+        colno: (nodeCol n: op)
+        e: zast.err.typeError
+        msg: "a `.private` field must be `.private.borrow` or `.private.view`".string
+        width: 1
+    )
+}
+
+# typeExprLeafId -- the name a dotted type expression ends in, zero for any
+# other shape
+typeExprLeafId: function {ast: Ast.view opId: zast.nodeid} out zast.nameid is {
+    op: ast.nodes.get i: opId.u64
+    match (
+        op
+    ) case dottedpath then {
+        return (atomNameId :ast n: (ast.nodes.get i: op.child.u64))
+    } else {
+        return (zast.nameid.create from: 0)
+    }
 }
 
 # scanTypeAsMember -- one `as`-item that is an ordinary definition rather than a
@@ -8543,6 +8577,7 @@ scanVisibility: function {
         fId: (zast.objIsItemAt :ast nid: onode.nid i: kFiter).u32
         kFiter = kFiter + 1
         (scanTypeField
+            :st
             :ast
             n: (ast.nodes.get i: fId.u64)
             :memberIds
