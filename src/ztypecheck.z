@@ -8287,18 +8287,15 @@ aliasentry: record {
 refuseNestedVisibility: function {st: zenv.ZSymbolTable ast: Ast.view m: argref} out bool is {
     if m.nid.isZero then return false
     isPubB: zast.unitOpKindIs :ast opId: m.operation.u32 k: zast.unitkind.publicNs
-    isPrivB: zast.unitOpKindIs :ast opId: m.operation.u32 k: zast.unitkind.privateNs
-    if isPubB.not when isPrivB.not then return false
-    kw: "private"
-    if isPubB then kw = "public"
+    if isPubB.not then return false
     (addResolveErrorH
         :st
         nodeid: m.nid
         lineno: m.lineno
         colno: m.colno
         e: zast.err.typeError
-        msg: "a `public:` block cannot hold a `\{kw}:` block"
-        width: kw.length.u32.orPanic
+        msg: "a `public:` block cannot hold a `public:` block".string
+        width: 6
     )
     return true
 }
@@ -8375,17 +8372,6 @@ scanTypeAsBlock: function {
     aliases: ListVal aliasentry
 } out bool is {
     if n.namedoperation.not then return false
-    if (zast.unitOpKindIs :ast opId: n.operation k: zast.unitkind.privateNs) then {
-        (addResolveErrorH
-            :st
-            nodeid: n.nodeid
-            lineno: n.lineno
-            colno: n.colno
-            e: zast.err.typeError
-            msg: "`private:` cannot be redefined -- `private` always includes every field and method of the type".string
-            width: 7
-        )
-    }
     if (zast.unitOpKindIs :ast opId: n.operation k: zast.unitkind.publicNs).not then return false
     opNode: ast.nodes.get i: n.operation.u64
     if opNode.unitdef then (scanPublicBlock
@@ -8432,11 +8418,7 @@ scanTypeAsMember: function {
     pubIds: IdSet u64
 } is {
     if n.namedoperation.not then return
-    skip: (
-        (zast.unitOpKindIs :ast opId: n.operation k: zast.unitkind.publicNs) or
-        (zast.unitOpKindIs :ast opId: n.operation k: zast.unitkind.privateNs)
-    )
-    if skip then return
+    if (zast.unitOpKindIs :ast opId: n.operation k: zast.unitkind.publicNs) then return
     memberIds.add item: n.name.u64
     if (pubIds.has item: n.name.u64).not then excl.append from: n.name.u64
 }
@@ -8583,19 +8565,6 @@ scanUnitMember: function {
 } out bool is {
     um: ast.nodes.get i: nid.u64
     if um.namedoperation.not then return false
-    isPriv: zast.unitOpKindIs :ast opId: um.operation k: zast.unitkind.privateNs
-    if isPriv then {
-        (addResolveErrorH
-            :st
-            nodeid: um.nodeid
-            lineno: um.lineno
-            colno: um.colno
-            e: zast.err.typeError
-            msg: "`private:` cannot be redefined -- `private` always includes every definition of the unit".string
-            width: 7
-        )
-        return false
-    }
     if (zast.unitOpKindIs :ast opId: um.operation k: zast.unitkind.publicNs).not then {
         memberIds.add item: um.name.u64
         memberNameList.append from: um.name.u64
