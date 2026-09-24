@@ -410,7 +410,8 @@ Parser: class {
     }
 
     # True when `tok` is a named-argument label (LABEL) or label shorthand
-    # (LABELPRE), which forces a single-path operation to parse as a call.
+    # (LABELPRE), which forces a single-path operation to parse as a call. A
+    # keyword written as either is a label too, and is refused as one.
     ttIsLabel: function {tt: zlexer.toktype} out bool is {
         match (
             tt
@@ -418,9 +419,32 @@ Parser: class {
             return true
         } case labelPreTok then {
             return true
+        } case reservedLabelTok then {
+            return true
+        } case reservedLabelPreTok then {
+            return true
         } else {
             return false
         }
+    }
+
+    # reservedLabelLookahead -- the buffered token is a keyword or a reserved
+    # word written as a label (`view:`) or a label shorthand (`:view`)
+    reservedLabelLookahead: function {this: this.view lex: zlexer.Lexer.view} out bool is {
+        tt: lex.peekType
+        return tt == zlexer.toktype.reservedLabelTok or (tt == zlexer.toktype.reservedLabelPreTok)
+    }
+
+    # reservedLabelError -- the E0033 for a keyword or reserved word where a
+    # label names something, at the word
+    reservedLabelError: function {:this lex: zlexer.Lexer} out astnode is {
+        bad: lex.acceptAny pool: this.ast.names
+        w: zast.poolTextCopy pool: this.ast.names ref: bad.text
+        return (this.mkError
+            tok: bad
+            code: zast.err.reservedName
+            msg: "'\{w}' is a reserved word and cannot be used as a name"
+        )
     }
 
     # Does an atom start at the current token? (PARENOPEN | REFID | STRBEG)
@@ -1142,6 +1166,7 @@ Parser: class {
         }
         argNames: ListVal u64
         for true loop {
+            if (this.reservedLabelLookahead :lex) then return (this.reservedLabelError :lex)
             lblOpt: lex.accept tt: zlexer.toktype.labelTok pool: this.ast.names
             match (
                 lblOpt
@@ -1340,6 +1365,10 @@ Parser: class {
             return true
         } case labelPreTok then {
             return true
+        } case reservedLabelTok then {
+            return true
+        } case reservedLabelPreTok then {
+            return true
         } else {
             return (this.exprLookahead :lex)
         }
@@ -1353,6 +1382,7 @@ Parser: class {
         startPos: lex.peekPos
         sLine: startPos.lineno
         sCol: startPos.colno
+        if (this.reservedLabelLookahead :lex) then return (this.reservedLabelError :lex)
         tt: lex.peekType
         if tt == zlexer.toktype.labelPreTok then {
             lblTok: lex.acceptAny pool: this.ast.names
@@ -1920,6 +1950,7 @@ Parser: class {
         forCol: u32
     } out astnode is {
         tPos: lex.peekPos
+        if (this.reservedLabelLookahead :lex) then return (this.reservedLabelError :lex)
         tt: lex.peekType
         if tt == zlexer.toktype.whileTok then {
             lex.advance pool: this.ast.names
@@ -2136,6 +2167,7 @@ Parser: class {
                 msg: "Expected with".string
             )
         } case some then null
+        if (this.reservedLabelLookahead :lex) then return (this.reservedLabelError :lex)
         isLabel: lex.peekType == zlexer.toktype.labelTok
         if isLabel then {
             lblTok: lex.acceptAny pool: this.ast.names
@@ -2288,7 +2320,7 @@ Parser: class {
                 continue
             }
             la: this.atomLookahead :lex
-            if la.not then break
+            if la.not then return (this.dataElementsEnd :lex)
             pathNode: this.parsePath :lex
             pErr: Parser.isError node: pathNode
             if pErr then return (optionval.some pathNode)
@@ -2297,6 +2329,13 @@ Parser: class {
             elements.append (this.intern n: no)
         }
         return (optionval.none astnode)
+    }
+
+    # dataElementsEnd -- no element starts here, so the elements end: none, or
+    # the refusal of a keyword written as an element's label
+    dataElementsEnd: function {:this lex: zlexer.Lexer} out optionval astnode is {
+        if (this.reservedLabelLookahead :lex).not then return (optionval.none astnode)
+        return (optionval.some (this.reservedLabelError :lex))
     }
 
     # dataBlockWithOut -- the data block itself, carrying the `out` type when one
@@ -2497,6 +2536,10 @@ Parser: class {
         } case some then {
             for true loop {
                 lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
+                if (this.reservedLabelLookahead :lex) then {
+                    params.append (this.intern n: (this.reservedLabelError :lex))
+                    return params
+                }
                 pktt: lex.peekType
                 if pktt == zlexer.toktype.labelPreTok then {
                     lblTok: lex.acceptAny pool: this.ast.names
@@ -2982,6 +3025,10 @@ Parser: class {
     } out bool is {
         for true loop {
             for (this.atEol :lex) loop lex.advance pool: this.ast.names
+            if (this.reservedLabelLookahead :lex) then {
+                items.append (this.intern n: (this.reservedLabelError :lex))
+                return true
+            }
             pktt: lex.peekType
             if pktt == zlexer.toktype.labelPreTok then {
                 if (this.objectMemberItem :lex :items :names :typeBody) then return true
@@ -3180,6 +3227,11 @@ Parser: class {
         lex.setFilterEol enabled: false pool: this.ast.names
         for true loop {
             for (this.atEol :lex) loop lex.advance pool: this.ast.names
+            if (this.reservedLabelLookahead :lex) then {
+                body.append (this.intern n: (this.reservedLabelError :lex))
+                lex.setFilterEol enabled: prevFilter pool: this.ast.names
+                return body
+            }
             pktt: lex.peekType
             if pktt == zlexer.toktype.labelPreTok then {
                 lblTok: lex.acceptAny pool: this.ast.names

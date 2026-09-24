@@ -104,6 +104,11 @@ toktype: variant {
     labelTok: null
     # the `:name` shorthand, where the label and its value are the same word
     labelPreTok: null
+    # a keyword or reserved word written as a label, `view:`. The lexer reads
+    # the shape; the parser refuses it where a label stands
+    reservedLabelTok: null
+    # a keyword or reserved word written as a shorthand, `:view`
+    reservedLabelPreTok: null
     # `=`, which REASSIGNS -- a binding is spelled with `:` instead
     equalsTok: null
     # the `function` keyword
@@ -1224,8 +1229,8 @@ Tokenizer: class {
     }
 
     # colonPreWordToken -- a word that FOLLOWED a colon. The colon is the token
-    # returned and the word is stashed behind it as a LABELPRE, or as an ERR when
-    # the word is a keyword or a reserved word: neither may be a label.
+    # returned and the word is stashed behind it as a LABELPRE, or as a
+    # RESERVEDLABELPRE when the word is a keyword or a reserved word.
     colonPreWordToken: function {
         :this
         pool: zast.StringPool
@@ -1240,8 +1245,7 @@ Tokenizer: class {
         colonpre_col: u32
     } out token is {
         stage_tt: toktype.labelPreTok
-        if kwfound then stage_tt = toktype.errTok
-        if reservedfound then stage_tt = toktype.errTok
+        if kwfound or reservedfound then stage_tt = toktype.reservedLabelPreTok
         this.nexttok = (this.spanTok
             :pool
             tt: stage_tt
@@ -1316,12 +1320,11 @@ Tokenizer: class {
                 :colonpre_col
             )
         }
-        # a trailing colon on a word that is neither a keyword nor reserved makes
-        # it a LABEL, with the colon stashed. A keyword with a trailing colon
-        # leaves the colon for the next call to read as a leading one.
-        labelpath: false
-        if this.atchar == ascii.colon when kwfound.not when reservedfound.not then labelpath = true
-        if labelpath then {
+        # a trailing colon makes the word a LABEL, with the colon stashed -- a
+        # RESERVEDLABEL when the word is a keyword or reserved
+        if this.atchar == ascii.colon then {
+            lbl_tt: toktype.labelTok
+            if kwfound or reservedfound then lbl_tt = toktype.reservedLabelTok
             this.nexttok = (token
                 toktype: toktype.colonTok
                 width: 1
@@ -1334,7 +1337,7 @@ Tokenizer: class {
             this.accept
             return (this.spanTok
                 :pool
-                tt: toktype.labelTok
+                tt: lbl_tt
                 s: s_word
                 e: e_word
                 line: word_line
