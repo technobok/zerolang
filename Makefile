@@ -1787,7 +1787,13 @@ perf: $(PERFBIN)
 # named receiver where `:this` was).
 #
 # +2 RefHashable's two receivers are `t: this.view`: 0 behaviour, 2 source.
-ALLOC_BASELINE := 2646638
+#
+# +9047 a conformer is checked against its spec: 317 behaviour (the check runs
+# over the compiler's own rows -- String and str against Text, the io classes,
+# the zvfs providers), 8742 source, -12 the three zvfs receivers aligned to
+# the spec. Measured against the old tree with the new zvfs.z, since the new
+# zc refuses the old one.
+ALLOC_BASELINE := 2655685
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

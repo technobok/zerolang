@@ -58,6 +58,7 @@ public: unit {
     :nodeId
     :nodeLine
     :paramIsThisReceiverId
+    :methodImplementsSpec
     :declOfTypeId
     :tagAccessorOwner
     :surfaceDeclOfTypeId
@@ -7467,6 +7468,430 @@ recordConformance: function {
         # emitted from the conformance row rather than from a use site, so
         # nothing else would ever demand the impl's signatures
         forceAllMembers :st :ast tid: (ztypes.tid.create from: implTypeId.u64)
+        # and the spec's, which checkConformances compares them with
+        forceAllMembers :st :ast tid: (ztypes.tid.create from: specTypeId.u64)
+    }
+}
+
+# conformanceOwn -- a receiver's or parameter's marker as a conformance compares
+# it: `.borrow` is the default a missing marker means, and a bare `:this` is
+# recorded as one, so the two read alike.
+conformanceOwn: function {o: optionval ztypes.zparamownership} out ztypes.zparamownership is {
+    r: o.or d: ztypes.zparamownership.noneMode
+    if r == ztypes.zparamownership.borrowMode then return ztypes.zparamownership.noneMode
+    return r
+}
+
+# checkConformances -- every explicit conformance the program recorded, checked
+# against its spec (checkConformanceSignature). Run once the declarations are
+# resolved and the shells canonical: a row is recorded when its marker is
+# reached, before the spec's return types have been stamped. Reported at the
+# marker, the member the impl declares under the conformance's label.
+checkConformances: function {ast: Ast st: zenv.ZSymbolTable} is {
+    impls: ListVal u64
+    specs: ListVal u64
+    labels: ListVal u64
+    with cit: st.typing.conformance.iterate do for crow: cit loop {
+        impls.append crow.implTypeId
+        specs.append crow.specTypeId
+        labels.append crow.labelNameId
+    }
+    ci: u64
+    for ci < impls.length loop {
+        implT: ztypes.tid.create from: (impls.get i: ci)
+        specT: ztypes.tid.create from: (specs.get i: ci)
+        lblId: zast.nameid.create from: (labels.get i: ci).u32.orPanic
+        ci = ci + 1
+        mdecl: st.typing.declMemberIdOf parentTypeId: implT nameId: lblId
+        if mdecl.isZero then mdecl = st.typing.declIdOfType typeId: implT
+        mnid: zast.nodeid
+        if mdecl.isZero.not then {
+            dnode: (st.typing.decls.get i: mdecl.u64).node
+            mnid = zast.nodeid.create from: dnode
+        }
+        checkConformanceSignature :st :ast implTid: implT specTid: specT markerOp: mnid
+    }
+}
+
+# methodImplementsSpec -- `mid` is a method its owner declares in order to
+# implement a member of a spec it explicitly conforms to. Such a method's
+# signature, markers included, is the spec's (checkConformanceSignature), so it
+# is not the method's own to change.
+methodImplementsSpec: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out bool is {
+    owner: st.reg.ownerTidOf tid: mid
+    if owner.isZero then return false
+    ownerOg: st.reg.genericOriginOf tid: owner
+    mnameId: memberNameIdOfTid :st :owner :mid
+    if mnameId.isZero then return false
+    found: false
+    with cit: st.typing.conformance.iterate do for crow: cit loop {
+        isOwn: crow.implTypeId == owner.u64
+        if ownerOg.isZero.not when crow.implTypeId == ownerOg.u64 then isOwn = true
+        if isOwn when (specDeclaresMethod
+            :st
+            specTid: (ztypes.tid.create from: crow.specTypeId)
+            nameId: mnameId
+        ) then found = true
+    }
+    return found
+}
+
+# memberNameIdOfTid -- the name `owner` declares its member `mid` under, or 0.
+memberNameIdOfTid: function {
+    st: zenv.ZSymbolTable.view
+    owner: ztypes.tid
+    mid: ztypes.tid
+} out zast.nameid is {
+    r: zast.nameid
+    slots: st.typing.declRowSlots ownerTid: owner
+    si: u64
+    for si < slots loop {
+        row: st.typing.declRowAt ownerTid: owner membersOnly: true slot: si
+        si = si + 1
+        if row.keep when row.tid == mid.u64 then r = zast.nameid.create from: row.name.u32.orPanic
+    }
+    return r
+}
+
+# specDeclaresMethod -- the spec declares a method named `nameId`.
+specDeclaresMethod: function {
+    st: zenv.ZSymbolTable.view
+    specTid: ztypes.tid
+    nameId: zast.nameid
+} out bool is {
+    smo: st.typing.declChildOfId parentTypeId: specTid :nameId
+    match (
+        smo
+    ) case some then {
+        stt: st.reg.typetypeOf typeId: (ztypes.tid.create from: smo)
+        return stt == ztypes.ztypetype.functionType
+    } case none then return false
+}
+
+# conformanceReceiverOwn -- a method's receiver marker, noneMode when it has
+# none: the receiver thisParamNameIdOf names, or else the bare `:this`, which
+# records no name. A spec receiver that resolution dropped reads unmarked.
+conformanceReceiverOwn: function {
+    st: zenv.ZSymbolTable.view
+    mid: ztypes.tid
+} out ztypes.zparamownership is {
+    rpn: st.reg.thisParamNameIdOf tid: mid
+    rn: zast.names.wkThis
+    if rpn.isZero.not then rn = zast.nameid.create from: rpn.u32
+    return (conformanceOwn o: (st.typing.declOwnershipOfId parentTypeId: mid nameId: rn))
+}
+
+# conformanceParams -- a method's parameters in order, the receiver left out,
+# as (type id, name id) pairs: what a conformer is compared on, position by
+# position, the way the vtable wrapper forwards them.
+conformanceParams: function {
+    st: zenv.ZSymbolTable.view
+    mid: ztypes.tid
+    ids: ListVal u64
+    nameIds: ListVal u64
+} is {
+    aids: ListVal u64
+    anms: ListVal u64
+    dataFieldIds :st tid: mid ids: aids nameIds: anms
+    rpn: (st.reg.thisParamNameIdOf tid: mid).u64
+    i: u64
+    for i < anms.length loop {
+        pn: anms.get :i
+        pt: aids.get :i
+        i = i + 1
+        if pn == zast.names.wkThis.u64 or (rpn > 0 and (pn == rpn)) then continue
+        ids.append pt
+        nameIds.append pn
+    }
+}
+
+# conformanceReturnMarker -- the marker a method's return carries, as the
+# source spells it: `view`, `borrow`, `hold`, or "" for none.
+conformanceReturnMarker: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out String is {
+    if ((st.typing.funcReturnsView.get key: mid).or d: false) then return "view".string
+    if ((st.typing.funcReturnsBorrow.get key: mid).or d: false) then return "borrow".string
+    if ((st.typing.funcReturnsFrozen.get key: mid).or d: false) then return "hold".string
+    return "".string
+}
+
+# conformanceParamNoun -- "parameter" or "parameters", for a count in a message.
+conformanceParamNoun: function {n: u64} out String is {
+    if n == 1 then return "parameter".string
+    return "parameters".string
+}
+
+# conformanceMarkerPhrase -- a marker for a message: `` `.view` `` or
+# "unmarked".
+conformanceMarkerPhrase: function {m: StringView} out String is {
+    if m.length == 0 then return "unmarked".string
+    return "`.\{m}`"
+}
+
+# conformanceSpecIsSelfTyped -- a spec member with a parameter of the
+# interface's OWN type, the receiver excluded. It is no part of the
+# dispatchable surface (the emitter's specMemberIsSelfTyped gives it no slot),
+# so a conformer is not compared on it.
+conformanceSpecIsSelfTyped: function {
+    st: zenv.ZSymbolTable.view
+    specTid: ztypes.tid
+    smid: ztypes.tid
+} out bool is {
+    sids: ListVal u64
+    snms: ListVal u64
+    conformanceParams :st mid: smid ids: sids nameIds: snms
+    return (sids.contains item: specTid.u64)
+}
+
+# checkConformanceSignature -- an explicit conformer implements each method its
+# spec declares with the spec's own signature: present, the same arity, the
+# same parameter and return types, and the same ownership marker on the
+# receiver, on every parameter and on the return (`out` against `outx`
+# included). Unmarked matches only unmarked; a stricter implementation is not
+# a match. A call through the interface is checked against the SPEC, and the
+# vtable wrapper forwards it to the implementation by name, so whatever the
+# spec promises the implementation has to keep.
+checkConformanceSignature: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    implTid: ztypes.tid
+    specTid: ztypes.tid
+    markerOp: zast.nodeid
+} is {
+    slots: st.typing.declRowSlots ownerTid: specTid
+    si: u64
+    for si < slots loop {
+        row: st.typing.declRowAt ownerTid: specTid membersOnly: true slot: si
+        si = si + 1
+        smid: ztypes.tid.create from: row.tid
+        if row.keep.not or (row.name == zast.names.wkCreate.u64) then continue
+        if (st.reg.typetypeOf typeId: smid) != ztypes.ztypetype.functionType then continue
+        if (conformanceSpecIsSelfTyped :st :specTid :smid) then continue
+        (checkConformanceMethod
+            :st
+            :ast
+            :implTid
+            :specTid
+            :smid
+            mnameId: (zast.nameid.create from: row.name.u32.orPanic)
+            :markerOp
+        )
+    }
+}
+
+# conformanceReport -- a conformance finding, reported at the marker.
+conformanceReport: function {
+    st: zenv.ZSymbolTable ast: Ast.view markerOp: zast.nodeid msg: String
+} is {
+    mnode: ast.nodes.get i: markerOp.u64
+    (addError
+        :st
+        nodeid: markerOp
+        lineno: (nodeLine n: mnode)
+        colno: (nodeCol n: mnode)
+        e: zast.err.typeError
+        :msg
+    )
+}
+
+# conformanceImplMethod -- the method the conformer declares under the spec
+# method's name, or 0 when it declares none (or declares a field there).
+conformanceImplMethod: function {
+    st: zenv.ZSymbolTable.view
+    implTid: ztypes.tid
+    mnameId: zast.nameid
+} out ztypes.tid is {
+    r: ztypes.tid
+    imo: st.typing.declChildOfId parentTypeId: implTid nameId: mnameId
+    match (
+        imo
+    ) case some then {
+        r = ztypes.tid.create from: imo
+    } case none then null
+    if r.isZero.not when (st.reg.typetypeOf typeId: r) != ztypes.ztypetype.functionType then {
+        r = ztypes.tid.create from: 0
+    }
+    return r
+}
+
+# checkConformanceMethod -- one spec method against the conformer's method of
+# the same name: present, not generic, the same arity, then the receiver, the
+# parameters and the return.
+checkConformanceMethod: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    implTid: ztypes.tid
+    specTid: ztypes.tid
+    smid: ztypes.tid
+    mnameId: zast.nameid
+    markerOp: zast.nodeid
+} is {
+    implName: st.reg.nameOf tid: implTid
+    specName: st.reg.nameOf tid: specTid
+    mname: zast.poolTextAt pool: ast.names ref: mnameId
+    imid: conformanceImplMethod :st :implTid :mnameId
+    if imid.isZero then {
+        (conformanceReport
+            :st
+            :ast
+            :markerOp
+            msg: "'\{implName}' conforms to \{specName} but does not implement '\{mname}'"
+        )
+        return
+    }
+    if (st.reg.isGenericOf tid: imid) then {
+        (conformanceReport
+            :st
+            :ast
+            :markerOp
+            msg: "'\{implName}' implements \{specName}'s '\{mname}' with a generic method, where the spec's is not: a conformer implements the spec's own signature"
+        )
+        return
+    }
+    sids: ListVal u64
+    snms: ListVal u64
+    conformanceParams :st mid: smid ids: sids nameIds: snms
+    iids: ListVal u64
+    inms: ListVal u64
+    conformanceParams :st mid: imid ids: iids nameIds: inms
+    if sids.length != iids.length then {
+        noun: conformanceParamNoun n: iids.length
+        (conformanceReport
+            :st
+            :ast
+            :markerOp
+            msg: "'\{implName}' implements \{specName}'s '\{mname}' taking \{iids.length} \{noun}, where the spec's takes \{sids.length}"
+        )
+        return
+    }
+    srOwn: conformanceReceiverOwn :st mid: smid
+    irOwn: conformanceReceiverOwn :st mid: imid
+    if srOwn != irOwn then {
+        srm: markerText o: srOwn
+        irm: markerText o: irOwn
+        srp: conformanceMarkerPhrase m: srm.stringView
+        irp: conformanceMarkerPhrase m: irm.stringView
+        (conformanceReport
+            :st
+            :ast
+            :markerOp
+            msg: "'\{implName}' implements \{specName}'s '\{mname}' with a receiver that is \{irp}, where the spec's is \{srp}"
+        )
+    }
+    pi: u64
+    for pi < sids.length loop {
+        (checkConformanceParam
+            :st
+            :ast
+            :smid
+            :imid
+            spT: (ztypes.tid.create from: (sids.get i: pi))
+            ipT: (ztypes.tid.create from: (iids.get i: pi))
+            spN: (zast.nameid.create from: (snms.get i: pi).u32.orPanic)
+            ipN: (zast.nameid.create from: (inms.get i: pi).u32.orPanic)
+            :implName
+            :specName
+            :mname
+            :markerOp
+        )
+        pi = pi + 1
+    }
+    checkConformanceReturn :st :ast :smid :imid :implName :specName :mname :markerOp
+}
+
+# checkConformanceParam -- one parameter pair, in position: the same type and
+# the same marker.
+checkConformanceParam: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    smid: ztypes.tid
+    imid: ztypes.tid
+    spT: ztypes.tid
+    ipT: ztypes.tid
+    spN: zast.nameid
+    ipN: zast.nameid
+    implName: String.view
+    specName: String.view
+    mname: String.view
+    markerOp: zast.nodeid
+} is {
+    pnm: zast.poolTextAt pool: ast.names ref: spN
+    if spT != ipT then {
+        stn: st.reg.nameOf tid: spT
+        itn: st.reg.nameOf tid: ipT
+        (conformanceReport
+            :st
+            :ast
+            :markerOp
+            msg: "'\{implName}' implements \{specName}'s '\{mname}' with parameter '\{pnm}' of type \{itn}, where the spec's is \{stn}"
+        )
+    }
+    spO: conformanceOwn o: (st.typing.declOwnershipOfId parentTypeId: smid nameId: spN)
+    ipO: conformanceOwn o: (st.typing.declOwnershipOfId parentTypeId: imid nameId: ipN)
+    if spO != ipO then {
+        spm: markerText o: spO
+        ipm: markerText o: ipO
+        spp: conformanceMarkerPhrase m: spm.stringView
+        ipp: conformanceMarkerPhrase m: ipm.stringView
+        (conformanceReport
+            :st
+            :ast
+            :markerOp
+            msg: "'\{implName}' implements \{specName}'s '\{mname}' with parameter '\{pnm}' \{ipp}, where the spec's is \{spp}"
+        )
+    }
+}
+
+# checkConformanceReturn -- the return: the same type, `out` against `outx`, and
+# the same marker.
+checkConformanceReturn: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    smid: ztypes.tid
+    imid: ztypes.tid
+    implName: String.view
+    specName: String.view
+    mname: String.view
+    markerOp: zast.nodeid
+} is {
+    sRetT: (methodReturnOf :st mid: smid).or d: ztypes.tid
+    iRetT: (methodReturnOf :st mid: imid).or d: ztypes.tid
+    if sRetT != iRetT then {
+        srn: "nothing".string
+        if sRetT.isZero.not then srn = st.reg.nameOf tid: sRetT
+        irn: "nothing".string
+        if iRetT.isZero.not then irn = st.reg.nameOf tid: iRetT
+        (conformanceReport
+            :st
+            :ast
+            :markerOp
+            msg: "'\{implName}' implements \{specName}'s '\{mname}' returning \{irn}, where the spec's returns \{srn}"
+        )
+    }
+    sPins: (st.typing.funcPins.get key: smid).or d: false
+    iPins: (st.typing.funcPins.get key: imid).or d: false
+    if sPins != iPins then {
+        skw: "out".string
+        if sPins then skw = "outx".string
+        ikw: "out".string
+        if iPins then ikw = "outx".string
+        (conformanceReport
+            :st
+            :ast
+            :markerOp
+            msg: "'\{implName}' implements \{specName}'s '\{mname}' declared `\{ikw}`, where the spec's is `\{skw}`"
+        )
+    }
+    sRm: conformanceReturnMarker :st mid: smid
+    iRm: conformanceReturnMarker :st mid: imid
+    if sRm != iRm then {
+        srp: conformanceMarkerPhrase m: sRm.stringView
+        irp: conformanceMarkerPhrase m: iRm.stringView
+        (conformanceReport
+            :st
+            :ast
+            :markerOp
+            msg: "'\{implName}' implements \{specName}'s '\{mname}' with a return that is \{irp}, where the spec's is \{srp}"
+        )
     }
 }
 
@@ -7764,20 +8189,16 @@ attachMarkers: function {
                         nameId: mmName
                         childTypeId: amlid
                     )
-                    acf: (st.reg.newConformance
+                    # a LABEL marker (`:Text`) conforms without naming a spec
+                    # member: the same row, and the same check, as a named one
+                    (recordConformance
+                        :st
+                        :ast
                         implTypeId: parentId
                         specTypeId: amlid
                         label: amlbl.stringView
                         labelNameId: mmName.u64
-                        isFacet: false
-                    )
-                    st.typing.conformance.append acf
-                    # a LABEL marker (`:Text`) conforms without naming a spec
-                    # member, and the vtable wrapper is emitted from this row
-                    (forceAllMembers
-                        :st
-                        :ast
-                        tid: (ztypes.tid.create from: parentId.u64)
+                        markerOp: mmOp
                     )
                 }
             }
@@ -54710,6 +55131,7 @@ typecheck: function {
         )
         checkAnyBounds ast: program :st
         checkGenericBounds ast: program :st
+        checkConformances ast: program :st
         checkWideLiterals ast: program :st
         stampAliasValues :st ast: program
         stampGenericBounds :st ast: program
