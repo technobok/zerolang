@@ -321,8 +321,8 @@ the backing buffers of <code>String</code>, <code>List</code> and similar contai
 heap. A class lives inline on the stack, but copying is disallowed: the single
 stack slot for a class is its identity.</p>
 <h3 id="defaults"><a href="#defaults">2.2. Defaults</a></h3>
-<p>All function parameters default to <code>.borrow</code>. Return values default to
-<code>.take</code>. There is no distinction between valtype and reftype defaults.</p>
+<p>An unmarked function parameter borrows: the caller's value is not moved.
+Return values default to <code>.take</code>.</p>
 <table>
 <colgroup>
 <col style="width: 33%">
@@ -333,22 +333,27 @@ stack slot for a class is its identity.</p>
 <tr><th style="text-align: left">Context</th><th style="text-align: left">Valtype default</th><th style="text-align: left">Reftype default</th></tr>
 </thead>
 <tbody>
-<tr><td>In parameters</td><td>borrow (copy)</td><td>borrow (reference)</td></tr>
+<tr><td>In parameters</td><td>copy</td><td>borrow (reference)</td></tr>
 <tr><td>Out return values</td><td>take</td><td>take</td></tr>
 </tbody>
 </table>
-<p>For valtypes, <code>.borrow</code> performs a copy -- the source is NOT invalidated.
-For reftypes, <code>.borrow</code> passes a reference -- the source is NOT invalidated.
-<code>.take</code> must be explicitly written on parameter definitions when ownership
-transfer is intended.</p>
+<p>For valtypes, an unmarked parameter is a COPY -- the callee reads and writes
+its own value, and the source is NOT invalidated. Writing <code>.borrow</code> on a
+valtype parameter passes it BY REFERENCE instead: the callee may write the
+caller's value, and the write is visible after the call. <code>.view</code> passes a
+valtype by reference too, readonly. For reftypes, an unmarked or <code>.borrow</code>
+parameter passes a reference -- the source is NOT invalidated. <code>.take</code> must
+be explicitly written on parameter definitions when ownership transfer is
+intended.</p>
 <p>The defaults can be overridden by explicitly specifying <code>.take</code>,
-<code>.borrow</code> or <code>.view</code>, subject to the restriction that <code>.view</code> is
-only valid on reftypes and generic type parameters (not on known valtypes).</p>
+<code>.borrow</code>, <code>.view</code> or <code>.hold</code>. A valtype <code>.borrow</code> parameter the body
+never writes pays for a reference it does not use, and lint L030 says so.</p>
 <h3 id="passing-conventions"><a href="#passing-conventions">2.3. Passing Conventions</a></h3>
 <ul>
-<li>Valtypes are always passed by value (the full value is copied). The
-  exception is <code>this</code> in methods which is passed by reference so that methods
-  can act on the fields in the value directly.</li>
+<li>An unmarked valtype parameter is passed by value (the full value is
+  copied). The exceptions are passed by reference: <code>this</code> in methods, so
+  that methods can act on the fields in the value directly, and a parameter
+  marked <code>.borrow</code> (writable) or <code>.view</code> (readonly).</li>
 <li>Reftypes are always passed by reference (a pointer to the stack slot
   where the instance lives).</li>
 </ul>
@@ -1433,7 +1438,10 @@ parameters of the same type:</p>
   reftype's normal C calling convention).</li>
 <li>Generic <code>.borrow</code> parameter -- passed using the convention of whatever
   concrete type the generic parameter monomorphizes to (reftype: pointer;
-  valtype: value). <code>.borrow</code> on a known valtype is a compile error.</li>
+  valtype: value).</li>
+<li>Known valtype <code>.borrow</code> parameter -- passed by pointer, so the
+  callee's writes reach the caller's value; <code>.view</code> is passed the same way,
+  readonly.</li>
 </ul>
 <h3 id="unions-protocol-instances-variants"><a href="#unions-protocol-instances-variants">10.4. Unions, Protocol Instances, Variants</a></h3>
 <p>Unions are represented as a <code>{tag, void*}</code> struct on the stack. The tag

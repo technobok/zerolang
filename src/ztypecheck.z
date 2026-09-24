@@ -37194,6 +37194,31 @@ argIsPrivateHandle: function {
     }
 }
 
+# markValtypeBorrowArg -- a VALTYPE argument bound to a parameter marked
+# `.borrow` goes by pointer, and the callee may write through it: the mutation
+# evidence lockCallArg records for a reftype argument, which a valtype one never
+# reaches because it takes no lock. An unmarked valtype parameter is a copy and
+# records nothing. L020, L027 and L030 read the evidence.
+markValtypeBorrowArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    funcId: ztypes.tid
+    pnId: zast.nameid
+    vt: ztypes.tid
+    arg: argref
+} is {
+    if funcId.isZero or pnId.isZero then return
+    if (typeIsReftype :st tid: vt) then return
+    oo: st.typing.declOwnershipOfId parentTypeId: funcId nameId: pnId
+    if (oo.or d: ztypes.zparamownership.noneMode) != ztypes.zparamownership.borrowMode then return
+    an: ast.nodes.get i: arg.operation.u64
+    rn: rootNameIdOf :ast n: an
+    # the `:name` shorthand is the same bare local read, with no path to root
+    if rn.isZero then rn = bareAtomNameId n: an
+    if rn.isZero then rn = atomNameId :ast n: an
+    markVarMutated :st nameId: rn
+}
+
 # stampArgDisposition -- record what the call does with the argument `op`:
 # the emitter zeroes the source of a taken one after the call, and the LSP
 # words it. Keyed by the value node.
@@ -37439,6 +37464,9 @@ checkTypedCallArg: function {
         if isHold then dispVal = ztypes.zparamownership.holdMode
         if isTake then dispVal = ztypes.zparamownership.takeMode
         stampArgDisposition :st :ast op: arg.operation own: dispVal
+    }
+    if ownCtor.not when isRecvArg.not then {
+        markValtypeBorrowArg :st :ast funcId: ownFn :pnId :vt :arg
     }
     # a field handed to a taking parameter is refused as a borrowed value, and a
     # `.take` on one is checked where the marker is

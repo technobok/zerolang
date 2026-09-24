@@ -1796,7 +1796,10 @@ perf: $(PERFBIN)
 #
 # -28 a valtype `.hold` binding is frozen: 0 behaviour, -28 source (the gate
 # that asked typeIsReftype is gone).
-ALLOC_BASELINE := 2655657
+#
+# +746 L030, a valtype `.borrow` parameter never mutated: 0 behaviour (the
+# mutation evidence for a valtype argument allocates nothing), 746 source.
+ALLOC_BASELINE := 2656403
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

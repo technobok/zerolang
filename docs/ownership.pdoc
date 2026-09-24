@@ -131,30 +131,35 @@ stack slot for a class is its identity.
 
 #---: Defaults
 
-All function parameters default to #~".borrow". Return values default to
-#~".take". There is no distinction between valtype and reftype defaults.
+An unmarked function parameter borrows: the caller's value is not moved.
+Return values default to #~".take".
 
 #table cols="3 3 3":
   Context            |Valtype default |Reftype default
-  In parameters      |borrow (copy)   |borrow (reference)
+  In parameters      |copy            |borrow (reference)
   Out return values  |take            |take
 
-For valtypes, #~".borrow" performs a copy -- the source is NOT invalidated.
-For reftypes, #~".borrow" passes a reference -- the source is NOT invalidated.
-#~".take" must be explicitly written on parameter definitions when ownership
-transfer is intended.
+For valtypes, an unmarked parameter is a COPY -- the callee reads and writes
+its own value, and the source is NOT invalidated. Writing #~".borrow" on a
+valtype parameter passes it BY REFERENCE instead: the callee may write the
+caller's value, and the write is visible after the call. #~".view" passes a
+valtype by reference too, readonly. For reftypes, an unmarked or #~".borrow"
+parameter passes a reference -- the source is NOT invalidated. #~".take" must
+be explicitly written on parameter definitions when ownership transfer is
+intended.
 
 The defaults can be overridden by explicitly specifying #~".take",
-#~".borrow" or #~".view", subject to the restriction that #~".view" is
-only valid on reftypes and generic type parameters (not on known valtypes).
+#~".borrow", #~".view" or #~".hold". A valtype #~".borrow" parameter the body
+never writes pays for a reference it does not use, and lint L030 says so.
 
 
 #---: Passing Conventions
 
 #ul:
-  [#*: Valtypes are always passed by value (the full value is copied). The
-  exception is #~"this" in methods which is passed by reference so that methods
-  can act on the fields in the value directly.]
+  [#*: An unmarked valtype parameter is passed by value (the full value is
+  copied). The exceptions are passed by reference: #~"this" in methods, so
+  that methods can act on the fields in the value directly, and a parameter
+  marked #~".borrow" (writable) or #~".view" (readonly).]
   [#*: Reftypes are always passed by reference (a pointer to the stack slot
   where the instance lives).]
 
@@ -1446,7 +1451,10 @@ parameters of the same type:
   reftype's normal C calling convention).]
   [#*: Generic #~".borrow" parameter -- passed using the convention of whatever
   concrete type the generic parameter monomorphizes to (reftype: pointer;
-  valtype: value). #~".borrow" on a known valtype is a compile error.]
+  valtype: value).]
+  [#*: Known valtype #~".borrow" parameter -- passed by pointer, so the
+  callee's writes reach the caller's value; #~".view" is passed the same way,
+  readonly.]
 
 #---: Unions, Protocol Instances, Variants
 

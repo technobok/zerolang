@@ -3773,6 +3773,46 @@ Analysis: class {
         )
     }
 
+    # reportValtypeBorrowParam -- L030. An unmarked valtype parameter is a copy;
+    # `.borrow` passes it by reference, so the callee can write the caller's
+    # value (ownership.pdoc, Defaults). One the body never mutates pays for a
+    # reference it does not use. Called only for a used, never-mutated
+    # parameter: the evidence L020 reads, which records a pass to another
+    # `.borrow` parameter too (markValtypeBorrowArg). A generic parameter is
+    # not asked: its `.borrow` follows the type it is instantiated with.
+    reportValtypeBorrowParam: function {
+        :this
+        ast: Ast.view
+        st: zenv.ZSymbolTable.view
+        fnOp: u32
+        vid: ztypes.vid
+        nameRef: zast.nameid
+        line: u32
+        col: u32
+    } is {
+        if (st.reg.hasVariable id: vid).not then return
+        vt: st.reg.variableTypeOf id: vid
+        if vt.isZero then return
+        if (st.reg.typetypeOf typeId: vt) == ztypes.ztypetype.genericParam then return
+        if (st.reg.isValtypeOf tid: vt).not then return
+        ftid: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: fnOp.u64
+        if ftid.isZero then return
+        own: (st.typing.declOwnershipOfId
+            parentTypeId: (ztypes.tid.create from: ftid.u64)
+            nameId: nameRef
+        )
+        ownM: own.or d: ztypes.zparamownership.noneMode
+        if ownM != ztypes.zparamownership.borrowMode then return
+        pnm: zast.poolTextAt pool: ast.names ref: nameRef
+        (this.warn
+            code: "L030"
+            msg: "parameter '\{pnm}' is a value type the body never mutates -- drop `.borrow` to take a copy, or write `.view`"
+            :line
+            :col
+            width: pnm.length.u32.orPanic
+        )
+    }
+
     # reportUnmutatedReceiver -- L027. A receiver written `:this` is mutable by
     # default; one the body never mutates should declare `this: this.view`, for
     # the reason L020 gives a parameter. The receiver's variable and the
@@ -3857,6 +3897,15 @@ Analysis: class {
         ) case some then {
             umut: st.typing.variableMutated.has item: vo
             if (used.has item: vo) when umut.not then {
+                (this.reportValtypeBorrowParam
+                    ast: prog
+                    :st
+                    fnOp: fop
+                    vid: vo
+                    nameRef: site.name
+                    line: site.line
+                    col: site.col
+                )
                 (this.reportUnmutatedParam
                     ast: prog
                     :st
