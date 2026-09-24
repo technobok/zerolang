@@ -124,12 +124,10 @@ isReservedMemberName: function {id: zast.nameid} out bool is {
     return id == zast.names.wkPublic
 }
 
-# isOwnershipMarkerTok -- the markers that may follow `private.`: take, borrow,
-# view, hold and drop.
-isOwnershipMarkerTok: function {tt: zlexer.toktype} out bool is {
-    if tt == zlexer.toktype.privateTok then return false
-    if tt == zlexer.toktype.genericTok then return false
-    return (zlexer.isMarkerTok :tt)
+# isFriendNarrowTok -- the markers that may follow `private.`: a friend handle
+# is a reference, so only `borrow` or `view` narrows it.
+isFriendNarrowTok: function {tt: zlexer.toktype} out bool is {
+    return tt == zlexer.toktype.borrowTok or (tt == zlexer.toktype.viewTok)
 }
 
 # The kind a `unit` body carries, from the label that introduces it. This is
@@ -534,7 +532,7 @@ Parser: class {
     # parent is the path built so far, then at most one marker suffix:
     #   term { "." id } [ "." type_suffix ]
     #   type_suffix : marker | bound
-    #   marker : ( [ "private" "." ] ownership_marker ) | "private"
+    #   marker : ( "private" [ "." ( "borrow" | "view" ) ] ) | ownership_marker
     # Recursion (rather than a loop reassigning an outer-scope binding) keeps
     # each owned `parent` local to its call.
     parsePathTail: function {
@@ -589,8 +587,8 @@ Parser: class {
     }
 
     # parsePathSuffix -- the type_suffix that ends a path; the buffered token is
-    # its first marker. `private` may be followed by one ownership marker;
-    # nothing follows the suffix.
+    # its first marker. `private` may be narrowed by `borrow` or `view`; nothing
+    # follows the suffix.
     parsePathSuffix: function {
         :this lex: zlexer.Lexer parent: astnode startLine: u32 startCol: u32
     } out astnode is {
@@ -599,12 +597,12 @@ Parser: class {
         isPriv: mTok.toktype == zlexer.toktype.privateTok
         if isPriv when lex.peekType == zlexer.toktype.dotTok then {
             lex.advance pool: this.ast.names
-            if (isOwnershipMarkerTok tt: lex.peekType).not then {
+            if (isFriendNarrowTok tt: lex.peekType).not then {
                 bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
                     tok: bad
                     code: zast.err.badPath
-                    msg: "Expected take, borrow, view, hold or drop after `private.`".string
+                    msg: "Expected borrow or view after `private.`".string
                 )
             }
             oTok: lex.acceptAny pool: this.ast.names
