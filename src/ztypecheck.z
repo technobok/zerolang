@@ -7527,7 +7527,15 @@ reportMissingTypeMember: function {
     rdc: declOfUnitDef :st :unitDecl :scope nameId: rootId
     if rdc.isZero.not when (declDefTypetype :st :ast declId: rdc).none then return false
     rto: walkLookupTyperefById :ast :st :unitDecl :scope baseId: rootId
-    if rto.none then return false
+    if rto.none then {
+        # a type this unit declares and nothing has demanded yet (a field
+        # typed `Bag.bogus`, its owner demanded first): demand it, and ask
+        # once the drain has resolved it
+        if rdc.isZero then return false
+        demandDecl :st declId: rdc
+        st.typing.pendingMemberChecks.append (ztyping.membercheck :op :scope :unitDecl)
+        return false
+    }
     rt: ztypes.tid.create from: rto
     if (st.reg.typetypeOf typeId: rt) == ztypes.ztypetype.unitType then return false
     if (st.typing.declChildOfId parentTypeId: rt nameId: leafId).none.not then return false
@@ -15393,6 +15401,21 @@ resolveDemandedDecl: function {
     }
 }
 
+# askPendingMemberChecks -- the member checks whose parent a drain has now
+# resolved. A parent still unresolved has its own report; its check is dropped.
+askPendingMemberChecks: function {st: zenv.ZSymbolTable ast: Ast} is {
+    if st.typing.pendingMemberChecks.length == 0 then return
+    checks: ListVal ztyping.membercheck
+    checks swap st.typing.pendingMemberChecks
+    for mc: checks.iterate loop (reportMissingTypeMember
+        :st
+        scope: mc.scope
+        :ast
+        unitDecl: mc.unitDecl
+        op: mc.op
+    )
+}
+
 # resolveDemandedDefs -- resolve every demanded declaration, in discovery
 # order, including the ones each resolution demands in turn: a definition's
 # body is scanned once its own resolution completes, so a callee is never
@@ -15422,6 +15445,7 @@ resolveDemandedDefs: function {st: zenv.ZSymbolTable scope: ztypes.declid ast: A
         resolveDemandedDecl :st scope: rf :ast declId: d
     }
     st.typing.pendingDefs = ListVal ztypes.declid
+    askPendingMemberChecks :st :ast
     # after the post-demand stamp pass, a drain stamps what it recorded
     if st.typing.typerefPassRan then {
         (stampPendingTyperefs

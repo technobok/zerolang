@@ -17,6 +17,7 @@
 # other top-level definitions are private to this unit.
 public: unit {
     :SynthNode
+    :membercheck
     :defaultval
     :foldedbranch
     :callslot
@@ -68,6 +69,18 @@ pendwrite: record {
     name: zast.nameid
     # the type being written into it, held until the parent finishes resolving
     type: ztypes.tid
+}
+
+# One member check a dotted type-ref owes its parent (`b: Bag.bogus`), held
+# until the parent it demanded has resolved: the question is asked of the
+# parent's TYPE, which exists only once something demands it.
+membercheck: record {
+    # the dotted type-ref
+    op: zast.nodeid
+    # the scope it was written in
+    scope: ztypes.declid
+    # the unit it was written in
+    unitDecl: ztypes.declid
 }
 
 # One row of a declChildWalk, read by slot instead of accumulated into a
@@ -1136,6 +1149,9 @@ ZTyping: class {
     # declarations a reference found and demanded, in discovery order,
     # awaiting resolution (resolveDemandedDefs drains it)
     pendingDefs: ListVal ztypes.declid
+    # member checks whose parent type was demanded and not yet resolved; the
+    # drain that resolves it asks them (resolveDemandedDefs)
+    pendingMemberChecks: ListVal membercheck
     # dependency units in which a demanded definition has resolved (by unit
     # name id): each runs its conformance pass once, on first entry
     enteredUnits: IdSet u64
@@ -3167,6 +3183,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         refDecl: (IdMapV u64 v: ztypes.declid)
         usedMemberDecl: IdSet u64
         pendingDefs: ListVal ztypes.declid
+        pendingMemberChecks: ListVal membercheck
         enteredUnits: IdSet u64
         requireSeen: IdSet u64
         requireDemanded: ListVal ztypes.declid

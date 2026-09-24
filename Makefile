@@ -1778,7 +1778,7 @@ perf: $(PERFBIN)
 # source (the zls half is not on the self-compile's path).
 #
 # -15 the name-keyed isStringy is gone: 0 behaviour, -15 source.
-ALLOC_BASELINE := 2640660
+ALLOC_BASELINE := 2641983
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
