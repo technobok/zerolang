@@ -41,6 +41,9 @@ name:
   #*: #~"[x]" represents 0 or 1 #~"x"
   #*: #~"{x}" represents 0 or more #~"x"
   #*: #~"x | y" represents #~"x" or #~"y"
+  [#*: #~"( x )" groups #~"x" as one element. There is no precedence between
+  sequence and #~"|": a production that mixes them groups every alternative
+  explicitly]
   #*: #~"? description ?" represents a special class described by the string #~"description"
 
 #--: Productions
@@ -104,13 +107,33 @@ Note that #~"return", #~"break", #~"continue" and #~"yield" are #_*"not" in
 either list: they are ordinary identifiers the compiler defines into scope (see
 #>"expression").
 
-#---: marker
+#---: type_suffix
 
-The ownership, access and bound keywords. A marker is never a name: it stands
-only after a #~"." in a #>"term", where it selects as an #>"id" would.
+The keywords that end a #>"term": at most one suffix, and nothing after it. A
+suffix is never a name; it stands only after a #~".".
 
 #code:
-  : "take" | "borrow" | "view" | "hold" | "drop" | "private" | "generic"
+  : #>"marker" | #>"bound"
+
+#---: marker
+
+An ownership marker, or #~"private" -- the friend handle -- optionally narrowed
+by one: #~"x.private.view".
+
+#code:
+  : ( \[ "private" "." \] #>"ownership-marker" ) | "private"
+
+#---: ownership_marker
+
+#code:
+  : "take" | "borrow" | "view" | "hold" | "drop"
+
+#---: bound
+
+The bound of a generic parameter, #~"T: anyval.generic".
+
+#code:
+  : "generic"
 
 #---: id
 
@@ -145,7 +168,7 @@ identifier. #~"." in particular is only accepted inside an #>"id-float";
 elsewhere it begins a dotted path.
 
 #code:
-  : "a" . "z" | "A" . "Z" | "0" . "9"
+  : ( "a" . "z" ) | ( "A" . "Z" ) | ( "0" . "9" )
   | "!" | "$" | "%" | "&" | "'" | "*" | "+" | "-" | "/" | "<"
   | "=" | ">" | "?" | "@" | "\\" | "^" | "_" | "|" | "~"
 
@@ -437,19 +460,21 @@ nothing has none to declare. Its body is #~"call", which lives in #~"as", so
 as" and #~"g: generator is {} as" all parse to the same thing.
 
 #code:
-  : (
+  : ( (
       "record" | "class" |
       "variant" | "union" |
       "facet" | "protocol"
-  )
-  \[ "is" \] (
-      "{" { ( #>"label" #>"item-body-member" ) | #>"label-shorthand" } "}"
+    )
+    \[ "is" \] (
+      ( "{" { ( #>"label" #>"item-body-member" ) | #>"label-shorthand" } "}" )
       | "native"
     )
-  \[ "as" "{" { ( #>"label" #>"item-body-member" ) | #>"label-shorthand" } "}" \]
-  | "generator"
-  \[ \[ "is" \] "{" { ( #>"label" #>"item-body-member" ) | #>"label-shorthand" } "}" \]
-  "as" "{" { ( #>"label" #>"item-body-member" ) | #>"label-shorthand" } "}"
+    \[ "as" "{" { ( #>"label" #>"item-body-member" ) | #>"label-shorthand" } "}" \]
+  )
+  | ( "generator"
+    \[ \[ "is" \] "{" { ( #>"label" #>"item-body-member" ) | #>"label-shorthand" } "}" \]
+    "as" "{" { ( #>"label" #>"item-body-member" ) | #>"label-shorthand" } "}"
+  )
 
 #---: item_body_member
 
@@ -793,7 +818,7 @@ cannot be line delimitered (ie. all sub-calls must also have parens).
   | #>"id"
   | #>"string"
   | #>"stringraw"
-  | ( #>"term" { "." ( #>"id" | #>"marker" ) } )
+  | ( #>"term" { "." #>"id" } \[ "." #>"type-suffix" \] )
 
 #---: string
 
@@ -824,8 +849,8 @@ Escaped string value that is inserted in a string.
   | "\\b"
   | "\\\\"
   | "\\\""
-  | "\\x" #>"hexdigit" #>"hexdigit"
-  | "\\u" #>"hexdigit" #>"hexdigit" #>"hexdigit" #>"hexdigit" #>"hexdigit" #>"hexdigit"
+  | ( "\\x" #>"hexdigit" #>"hexdigit" )
+  | ( "\\u" #>"hexdigit" #>"hexdigit" #>"hexdigit" #>"hexdigit" #>"hexdigit" #>"hexdigit" )
 
 
 #---: stringexpr
@@ -859,7 +884,7 @@ A carriage return is an EOL, #_*"not" whitespace: the lexer emits an eol for
 one end-of-line per line rather than two.
 
 #code:
-  : ( "\\n" | "\\r" \[ "\\n" \] )
+  : "\\n" | ( "\\r" \[ "\\n" \] )
 
 #---: whitespace
 
@@ -889,7 +914,7 @@ expression (must be followed by a open curly brace).
 Not a token, this definition is used within other tokens.
 
 #code:
-  : "0" . "9" | "a" . "f" | "A" . "F"
+  : ( "0" . "9" ) | ( "a" . "f" ) | ( "A" . "F" )
 
 #---: eof
 

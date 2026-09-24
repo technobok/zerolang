@@ -124,6 +124,14 @@ isReservedMemberName: function {id: zast.nameid} out bool is {
     return id == zast.names.wkPublic
 }
 
+# isOwnershipMarkerTok -- the markers that may follow `private.`: take, borrow,
+# view, hold and drop.
+isOwnershipMarkerTok: function {tt: zlexer.toktype} out bool is {
+    if tt == zlexer.toktype.privateTok then return false
+    if tt == zlexer.toktype.genericTok then return false
+    return (zlexer.isMarkerTok :tt)
+}
+
 # The kind a `unit` body carries, from the label that introduces it. This is
 # the one place a unit's meaning is read from a name; every later reader asks
 # `zast.unitrow.kind`. `require:` is a unit-level block only, so a type-body
@@ -499,10 +507,12 @@ Parser: class {
     }
 
     # Consume `. id` selectors, nesting each into a DottedPath whose
-    # parent is the path built so far. A marker keyword (`take`, `view`, ...)
-    # is a selector too, and becomes the same atom its name would. Recursion
-    # (rather than a loop reassigning an outer-scope binding) keeps each owned
-    # `parent` local to its call.
+    # parent is the path built so far, then at most one marker suffix:
+    #   term { "." id } [ "." type_suffix ]
+    #   type_suffix : marker | bound
+    #   marker : ( [ "private" "." ] ownership_marker ) | "private"
+    # Recursion (rather than a loop reassigning an outer-scope binding) keeps
+    # each owned `parent` local to its call.
     parsePathTail: function {
         :this lex: zlexer.Lexer parent: astnode startLine: u32 startCol: u32
     } out astnode is {
@@ -512,25 +522,14 @@ Parser: class {
         ) case none then {
             return parent
         } case some then {
-            childTt: zlexer.toktype.refIdTok
-            if (zlexer.isMarkerTok tt: lex.peekType) then childTt = lex.peekType
-            idOpt: lex.accept tt: childTt pool: this.ast.names
+            if (zlexer.isMarkerTok tt: lex.peekType) then {
+                return (this.parsePathSuffix :lex :parent :startLine :startCol)
+            }
+            idOpt: lex.accept tt: zlexer.toktype.refIdTok pool: this.ast.names
             match (
                 idOpt
             ) case some then {
-                child: astnode.atomid (zast.atomidrow
-                    nodeid: this.nextId
-                    lineno: idOpt.lineno
-                    colno: idOpt.colno
-                    name: idOpt.text
-                )
-                np: astnode.dottedpath (zast.dottedpathrow
-                    nodeid: this.nextId
-                    lineno: startLine
-                    colno: startCol
-                    parent: (this.intern n: parent)
-                    child: (this.intern n: child)
-                )
+                np: this.pathSegment :parent tok: idOpt :startLine :startCol
                 return (this.parsePathTail :lex parent: np :startLine :startCol)
             } case none then {
                 bad: lex.acceptAny pool: this.ast.names
@@ -542,6 +541,68 @@ Parser: class {
                 return err
             }
         }
+    }
+
+    # pathSegment -- `parent.child` as a DottedPath, the child an atom named by
+    # `tok`. A marker keyword's atom carries its name, as an id's does.
+    pathSegment: function {
+        :this parent: astnode tok: zlexer.token startLine: u32 startCol: u32
+    } out astnode is {
+        child: astnode.atomid (zast.atomidrow
+            nodeid: this.nextId
+            lineno: tok.lineno
+            colno: tok.colno
+            name: tok.text
+        )
+        return (astnode.dottedpath (zast.dottedpathrow
+            nodeid: this.nextId
+            lineno: startLine
+            colno: startCol
+            parent: (this.intern n: parent)
+            child: (this.intern n: child)
+        )
+        )
+    }
+
+    # parsePathSuffix -- the type_suffix that ends a path; the buffered token is
+    # its first marker. `private` may be followed by one ownership marker;
+    # nothing follows the suffix.
+    parsePathSuffix: function {
+        :this lex: zlexer.Lexer parent: astnode startLine: u32 startCol: u32
+    } out astnode is {
+        mTok: lex.acceptAny pool: this.ast.names
+        np: this.pathSegment :parent tok: mTok :startLine :startCol
+        isPriv: mTok.toktype == zlexer.toktype.privateTok
+        if isPriv when lex.peekType == zlexer.toktype.dotTok then {
+            lex.advance pool: this.ast.names
+            if (isOwnershipMarkerTok tt: lex.peekType).not then {
+                bad: lex.acceptAny pool: this.ast.names
+                return (this.mkError
+                    tok: bad
+                    code: zast.err.badPath
+                    msg: "Expected take, borrow, view, hold or drop after `private.`".string
+                )
+            }
+            oTok: lex.acceptAny pool: this.ast.names
+            op: this.pathSegment parent: np tok: oTok :startLine :startCol
+            return (this.endPathAfter :lex path: op marker: oTok)
+        }
+        return (this.endPathAfter :lex path: np marker: mTok)
+    }
+
+    # endPathAfter -- a marker ends its path: the finished path, or the error at
+    # a `.` that tries to continue it.
+    endPathAfter: function {
+        :this lex: zlexer.Lexer path: astnode marker: zlexer.token
+    } out astnode is {
+        if lex.peekType != zlexer.toktype.dotTok then return path
+        mTxt: zast.poolTextCopy pool: this.ast.names ref: marker.text
+        bad: lex.acceptAny pool: this.ast.names
+        return (this.mkError
+            tok: bad
+            code: zast.err.badPath
+            msg: "Expected end of path after `\{mTxt}`"
+        )
     }
 
     # acceptPath -> Option boundary over parsePath.
