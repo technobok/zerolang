@@ -2187,31 +2187,18 @@ valueIsHold: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
     ) case dottedpath then {
-        cnh: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.child.u64))
-        return cnh.stringView == "hold"
+        return (zast.markerKindOfLeaf :ast leaf: n.child).holdMarker
     } else {
         return false
     }
-}
-
-# isStripMarker -- true for a dotted-path leaf that is an ownership or access marker
-# (`.borrow`/`.take`/`.private`/`.public`); a type reference peels these to
-# reach the underlying base type.
-isStripMarker: function {name: StringView} out bool is {
-    if name == "borrow" then return true
-    if name == "take" then return true
-    if name == "view" then return true
-    if name == "hold" then return true
-    if name == "private" then return true
-    if name == "public" then return true
-    return false
 }
 
 # isMoveMarkerId / isDropMarkerId / isStripMarkerId / isStringViewMemberId --
 # the predicates above asked of an interned name, which is what a member check
 # holds; no text is read.
 isMoveMarkerId: function {nameId: zast.nameid} out bool is {
-    return nameId == zast.names.wkTake or (nameId == zast.names.wkHold)
+    k: zast.markerKindOfName id: nameId
+    return k.takeMarker or k.holdMarker
 }
 
 # isDropMarkerId -- the early-lifetime marker, by id. A statement-only sibling
@@ -2220,19 +2207,17 @@ isMoveMarkerId: function {nameId: zast.nameid} out bool is {
 # hardcoded compares is how member-guard came to be watching a spelling that
 # had moved.
 isDropMarkerId: function {nameId: zast.nameid} out bool is {
-    return nameId == zast.names.wkDrop
+    return (zast.markerKindOfName id: nameId).dropMarker
 }
 
 # isStripMarkerId -- the ownership and access markers a value path may end in,
-# by id: not addressable segments of the path.
+# by id: not addressable segments of the path. A type reference peels them to
+# reach its base; `public` peels too, as the in-unit `public.X` namespace.
 isStripMarkerId: function {nameId: zast.nameid} out bool is {
-    if nameId == zast.names.wkBorrow then return true
-    if nameId == zast.names.wkTake then return true
-    if nameId == zast.names.wkView then return true
-    if nameId == zast.names.wkHold then return true
-    if nameId == zast.names.wkPrivate then return true
     if nameId == zast.names.wkPublic then return true
-    return false
+    k: zast.markerKindOfName id: nameId
+    if k.unmarked or k.dropMarker then return false
+    return k.genericBound.not
 }
 
 # isStringViewMemberId -- `.stringView`, by id.
@@ -3909,13 +3894,7 @@ partialTyperefTid: function {
         arm
     ) case dottedpath then {
         dr: dpRefAt :ast :nid
-        # the child's name is read through a view scoped to this block: the
-        # walk below lends ast
-        isStrip: false
-        {
-            dcn6: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: dr.child.u64))
-            isStrip = isStripMarker name: dcn6.stringView
-        }
+        isStrip: isStripMarkerId nameId: (atomNameId :ast n: (ast.nodes.get i: dr.child.u64))
         if isStrip then return (partialTyperefTid
             :st
             :scope
@@ -4082,8 +4061,7 @@ markerPeeledBase: function {ast: Ast.view n: astnode.view} out String is {
     match (
         n
     ) case dottedpath then {
-        mcn3: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.child.u64))
-        if (isStripMarker name: mcn3.stringView) then {
+        if (isStripMarkerId nameId: (atomNameId :ast n: (ast.nodes.get i: n.child.u64))) then {
             return (atomName :ast n: (ast.nodes.get i: n.parent.u64))
         }
         return "".string
@@ -5707,11 +5685,8 @@ checkParamTypeShape: function {
             value: ztyping.defaultval.func fnDecl
         )
     } else {
-        pdcn: (zast.nameTextAt
-            :ast
-            ref: (dottedChildNameId :ast n: (ast.nodes.get i: pm.operation.u64))
-        )
-        if pdcn.length > 0 when (isStripMarker name: pdcn.stringView).not then {
+        pdcnId: dottedChildNameId :ast n: (ast.nodes.get i: pm.operation.u64)
+        if pdcnId.isZero.not when (isStripMarkerId nameId: pdcnId).not then {
             prn: (zast.nameTextAt
                 :ast
                 ref: (rootNameIdOf :ast n: (ast.nodes.get i: pm.operation.u64
@@ -5732,7 +5707,7 @@ checkParamTypeShape: function {
                 scope: rf
                 nameId: (nameIdOf :ast name: prn.stringView)
             ).not when (pathNamesTypeConstant :st :ast ownerTid: fid node: pm.operation).not then {
-                pArmNid: zast.poolFind pool: ast.names text: pdcn.stringView
+                pArmNid: pdcnId
                 (recordParamArmDefault
                     :st
                     :ast
@@ -6762,12 +6737,10 @@ stampForcedTyperef: function {
         stop: true
         {
             pk: ast.nodes.get i: tnid
-            if pk.dottedpath then {
-                mcn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: pk.child.u64))
-                if (isStripMarker name: mcn.stringView) then {
-                    tnid = pk.parent.u64
-                    stop = false
-                }
+            pkLeaf: dottedChildNameId :ast n: pk
+            if pk.dottedpath when (isStripMarkerId nameId: pkLeaf) then {
+                tnid = pk.parent.u64
+                stop = false
             }
         }
         if stop then peel = 4
@@ -8226,8 +8199,7 @@ typeExprHasPrivate: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
     ) case dottedpath then {
-        nameCount: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.child.u64))
-        if nameCount.stringView == "private" then return true
+        if (zast.markerKindOfLeaf :ast leaf: n.child).privateMarker then return true
         return (typeExprHasPrivate :ast n: (ast.nodes.get i: n.parent.u64))
     } else {
         return false
@@ -9182,10 +9154,7 @@ attachDeclaredField: function {
         thisName: ""
         nid: fm.operation
     )
-    dcn1: (zast.nameTextAt
-        :ast
-        ref: (dottedChildNameId :ast n: (ast.nodes.get i: fm.operation.u64))
-    )
+    dcn1Id: dottedChildNameId :ast n: (ast.nodes.get i: fm.operation.u64)
     rdnr: (zast.nameTextAt
         :ast
         ref: (rootNameIdOf :ast n: (ast.nodes.get i: fm.operation.u64))
@@ -9199,7 +9168,7 @@ attachDeclaredField: function {
             value: ztyping.defaultval.literal fm.operation
         )
     } else {
-        if dcn1.length > 0 when (isStripMarker name: dcn1.stringView).not when (nameDenotesUnit
+        if dcn1Id.isZero.not when (isStripMarkerId nameId: dcn1Id).not when (nameDenotesUnit
             :st
             :scope
             nameId: (nameIdOf
@@ -9207,7 +9176,7 @@ attachDeclaredField: function {
                 name: rdnr.stringView
             )
         ).not when (pathNamesTypeConstant :st :ast ownerTid: rid node: fm.operation).not then {
-            rArmNid: zast.poolFind pool: ast.names text: dcn1.stringView
+            rArmNid: dcn1Id
             rArmDecl: st.typing.declMemberIdOf parentTypeId: cid nameId: rArmNid
             (st.typing.declSetDefault
                 parentTypeId: (ztypes.tid.create from: rid.u64)
@@ -9218,8 +9187,8 @@ attachDeclaredField: function {
         }
     }
     recordFoldedScalarDefault :st :ast what: "field" ownerTid: rid dm: fm
-    if dcn1.length > 0 when (isStripMarker name: dcn1.stringView) then null else {
-        if dcn1.length > 0 then {
+    if dcn1Id.isZero.not when (isStripMarkerId nameId: dcn1Id) then null else {
+        if dcn1Id.isZero.not then {
             rdk3: nodeId n: (ast.nodes.get i: fm.operation.u64)
             rdo3: rid
             st.typing.pendingDefaultOwner.set key: rdk3.u64 value: rdo3
@@ -11238,10 +11207,7 @@ recordFieldDefault: function {
     fname: StringView
     fm: argref
 } is {
-    dcn0: (zast.nameTextAt
-        :ast
-        ref: (dottedChildNameId :ast n: (ast.nodes.get i: fm.operation.u64))
-    )
+    dcn0Id: dottedChildNameId :ast n: (ast.nodes.get i: fm.operation.u64)
     rdnc: (zast.nameTextAt
         :ast
         ref: (rootNameIdOf :ast n: (ast.nodes.get i: fm.operation.u64))
@@ -11255,7 +11221,7 @@ recordFieldDefault: function {
             value: ztyping.defaultval.literal fm.operation
         )
     } else {
-        if dcn0.length > 0 when (isStripMarker name: dcn0.stringView).not when (nameDenotesUnit
+        if dcn0Id.isZero.not when (isStripMarkerId nameId: dcn0Id).not when (nameDenotesUnit
             :st
             :scope
             nameId: (nameIdOf
@@ -11263,7 +11229,7 @@ recordFieldDefault: function {
                 name: rdnc.stringView
             )
         ).not when (pathNamesTypeConstant :st :ast ownerTid: cid node: fm.operation).not then {
-            cArmNid: zast.poolFind pool: ast.names text: dcn0.stringView
+            cArmNid: dcn0Id
             cArmDecl: (st.typing.declMemberIdOf
                 parentTypeId: cidf
                 nameId: cArmNid
@@ -11284,8 +11250,8 @@ recordFieldDefault: function {
             )
         }
     }
-    if dcn0.length > 0 when (isStripMarker name: dcn0.stringView) then null else {
-        if dcn0.length > 0 then {
+    if dcn0Id.isZero.not when (isStripMarkerId nameId: dcn0Id) then null else {
+        if dcn0Id.isZero.not then {
             rdk: nodeId n: (ast.nodes.get i: fm.operation.u64)
             rdo: cid
             st.typing.pendingDefaultOwner.set key: rdk.u64 value: rdo
@@ -27315,8 +27281,7 @@ dottedBaseTid: function {
         if dpkN.dottedpath then baseIsName = true
         # a type application there names its type, as a name does
         if dpkN.call then st.typing.typeAppsNamed.add item: dp.parent.u64
-        tknm: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: dp.child.u64))
-        if tknm.stringView == "take" then childIsTake = true
+        if (zast.markerKindOfLeaf :ast leaf: dp.child).takeMarker then childIsTake = true
     }
     supPrev: st.typing.suppressBareCtor
     if baseIsName then st.typing.suppressBareCtor = true
@@ -30948,8 +30913,7 @@ withValueOwnership: function {
             return ztypes.zownership.owned
         }
     } case dottedpath then {
-        cn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: v.child.u64))
-        if cn.stringView == "take" then return ztypes.zownership.owned
+        if (zast.markerKindOfLeaf :ast leaf: v.child).takeMarker then return ztypes.zownership.owned
         if (movedFieldPath :st :ast n: (ast.nodes.get i: v.nodeid.u64)
         ) then return ztypes.zownership.borrowed
         return ztypes.zownership.owned
@@ -33837,10 +33801,7 @@ appendValueTuple: function {ast: Ast.view n: astnode.view dst: ListVal zast.name
     } case dottedpath then {
         appendValueTuple :ast n: (ast.nodes.get i: n.parent.u64) :dst
         cid: atomNameId :ast n: (ast.nodes.get i: n.child.u64)
-        if cid.isZero.not then {
-            ct: zast.poolTextAt pool: ast.names ref: cid
-            if (isStripMarker name: ct.stringView).not then dst.append cid
-        }
+        if cid.isZero.not when (isStripMarkerId nameId: cid).not then dst.append cid
     } else null
 }
 
