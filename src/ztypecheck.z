@@ -4193,6 +4193,76 @@ recordReturnType: function {
 } is {
     if oId.isZero then return
     recordTyperef :st :scope :ast :unitDecl :thisName nid: oId
+    checkReturnNamesType :st :scope :ast :unitDecl :thisName :oId
+}
+
+# checkReturnNamesType -- a dotted `out` type the typeref pass left untyped: its
+# leaf is no marker, bound or numeric suffix and its parent no unit, so it named
+# no type (`out Bag.bogus`, `out Bag.drop`, `out mode.slow`). Reported, and typed
+# as the parent so its uses check against something; unreported, the return
+# typed as null and the first use said so.
+checkReturnNamesType: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    thisName: StringView
+    oId: zast.nodeid
+} is {
+    if (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: oId.u64) > 0 then return
+    parentId: zast.nodeid
+    leafId: zast.nameid
+    {
+        rn: ast.nodes.get i: oId.u64
+        match (
+            rn
+        ) case dottedpath then {
+            parentId = rn.parent
+            leafId = atomNameId :ast n: (ast.nodes.get i: rn.child.u64)
+        } else null
+    }
+    if parentId.isZero or leafId.isZero then return
+    if (leafNamesNoMember :ast :leafId) then return
+    pnId: atomNameId :ast n: (ast.nodes.get i: parentId.u64)
+    if pnId.isZero then return
+    if (isNumericLiteralNameAt :ast ref: pnId) then return
+    if (nameDenotesUnit :st :scope nameId: pnId) then return
+    reportReturnNamesNoType :st :scope :ast :unitDecl nid: oId unitId: pnId memberId: leafId
+    recordResolvedName :st :scope :ast :unitDecl :thisName nameId: pnId nid: oId.u64 recScope: scope
+    recordTyperef :st :scope :ast :unitDecl :thisName nid: parentId
+}
+
+# reportReturnNamesNoType -- the report for checkReturnNamesType: `.drop` is a
+# statement, a member of the parent (an arm) is a value, and any other leaf names
+# nothing.
+reportReturnNamesNoType: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+    unitId: zast.nameid
+    memberId: zast.nameid
+} is {
+    rdc: declOfUnitDef :st :unitDecl :scope nameId: unitId
+    child: ztypes.declid
+    if rdc.isZero.not then child = st.typing.declFindChild parentDeclId: rdc nameId: memberId
+    if memberId == zast.names.wkDrop or child.isZero then {
+        reportPeeledLeaf :st :scope :ast :unitDecl :nid leafId: memberId
+        return
+    }
+    pT: zast.nameTextCopy :ast ref: unitId
+    mT: zast.nameTextCopy :ast ref: memberId
+    n: ast.nodes.get i: nid.u64
+    (addResolveErrorH
+        :st
+        nodeid: nid
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.typeError
+        msg: "an `out` type names '\{mT}', a member of '\{pT}', not a type"
+        width: pT.length.u32.orPanic
+    )
 }
 
 # demandTyperefNames -- demand every name a type-expr references (the head
