@@ -3438,6 +3438,11 @@ generic-param-guard: bin/zl
 # silently folds `.+`, `.-`, `.*` and `./` into one entry and the guard then
 # compares 148 paths believing it compared 208.
 #
+# An operator is a punctuation name or one of the three word operators the
+# compiler keys by well-known name (`and`, `or`, `not`). A row's path ends at
+# `]` or at the space before its attributes, and that terminator is what keeps
+# a word from matching the front of a longer name (`orPanic`).
+#
 # A fourth leg read every lib/system file and required a row for each `is
 # native` it found. The compiler does that itself now, at the declaration and
 # for every unit a program loads -- measured, not assumed: instrumented to
@@ -3451,11 +3456,11 @@ natives-tbl-guard: bin/zc
 	for f in lib/system/system.z lib/system/system/*.z lib/system/collections.z; do \
 	  u=system; case "$$f" in *collections.z) u=collections;; esac; \
 	  awk -v U=$$u '/^[A-Za-z_][A-Za-z0-9_]*: (record|variant|class)( |$$)/ {o=$$1; sub(/:$$/,"",o)} \
-	    o != "" && /^    [-+*\/%&<>=!|^]+: function .*is native/ {op=$$1; sub(/:$$/,"",op); print U"."o"."op}' \
+	    o != "" && /^    ([-+*\/%&<>=!|^]+|and|or|not): function .*is native/ {op=$$1; sub(/:$$/,"",op); print U"."o"."op}' \
 	    $$f; \
 	done | LC_ALL=C sort -u > $$d/decl; \
-	grep -oE '^\[[a-z]+\.[A-Za-z0-9_]+\.[-+*/%&<>=!|^]+' src/runtime/natives.tbl \
-	  | sed 's/^\[//' | LC_ALL=C sort -u > $$d/rows; \
+	grep -oE '^\[[a-z]+\.[A-Za-z0-9_]+\.([-+*/%&<>=!|^]+|and|or|not)[] ]' src/runtime/natives.tbl \
+	  | sed -e 's/^\[//' -e 's/[] ]$$//' | LC_ALL=C sort -u > $$d/rows; \
 	miss=$$(LC_ALL=C comm -23 $$d/decl $$d/rows); \
 	orph=$$(LC_ALL=C comm -13 $$d/decl $$d/rows); \
 	if [ -n "$$miss" ]; then \
