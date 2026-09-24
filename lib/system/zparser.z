@@ -116,19 +116,12 @@ chunkStartsWith: function {n: astnode.view p: StringView pool: zast.StringPool.v
     return res
 }
 
-# True for the ownership/access marker names that cannot be declared as
-# type-body members (the language claims them in member position); the
-# visibility members `public:`/`private:` carve out the unit form.
+# True for `public`, the one member name a type body may not declare: it names
+# the visibility block, so only the `public: unit { ... }` form stands. The
+# marker words are keywords and never reach here as a label.
 isReservedMemberName: function {id: zast.nameid} out bool is {
     if id.isZero then return false
-    if id == zast.names.wkTake then return true
-    if id == zast.names.wkBorrow then return true
-    if id == zast.names.wkView then return true
-    if id == zast.names.wkHold then return true
-    if id == zast.names.wkDrop then return true
-    if id == zast.names.wkPrivate then return true
-    if id == zast.names.wkPublic then return true
-    return false
+    return id == zast.names.wkPublic
 }
 
 # The kind a `unit` body carries, from the label that introduces it. This is
@@ -507,9 +500,10 @@ Parser: class {
     }
 
     # Consume `. id` selectors, nesting each into a DottedPath whose
-    # parent is the path built so far. Recursion (rather than a loop
-    # reassigning an outer-scope binding) keeps each owned `parent`
-    # local to its call.
+    # parent is the path built so far. A marker keyword (`take`, `view`, ...)
+    # is a selector too, and becomes the same atom its name would. Recursion
+    # (rather than a loop reassigning an outer-scope binding) keeps each owned
+    # `parent` local to its call.
     parsePathTail: function {
         :this lex: zlexer.Lexer parent: astnode startLine: u32 startCol: u32
     } out astnode is {
@@ -519,7 +513,9 @@ Parser: class {
         ) case none then {
             return parent
         } case some then {
-            idOpt: lex.accept tt: zlexer.toktype.refIdTok pool: this.ast.names
+            childTt: zlexer.toktype.refIdTok
+            if (zlexer.isMarkerTok tt: lex.peekType) then childTt = lex.peekType
+            idOpt: lex.accept tt: childTt pool: this.ast.names
             match (
                 idOpt
             ) case some then {

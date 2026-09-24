@@ -52,6 +52,13 @@ module Rouge
           swap
           native
           =
+          take
+          borrow
+          view
+          hold
+          drop
+          private
+          generic
         )
       end
 
@@ -83,17 +90,17 @@ module Rouge
           RefHashable Result Seeker Set SetIter SetIterVal
           SetRef SetVal Splitter String StringLike StringView
           Text TextReader Writer _ anyval array
-          bool borrow break c32 c8 continue
-          converror copy drop error f128 f16
-          f32 f64 false floatliteral generic hold
+          bool break c32 c8 continue
+          converror copy error f128 f16
+          f32 f64 false floatliteral
           i128 i16 i32 i64 i8
           idkey intliteral intrange iterator meta
           never
           null openmode optionval panic parseerror print
-          private public resultval return seekorigin stderr
-          stdin stdout str stringJoin tag take
+          public resultval return seekorigin stderr
+          stdin stdout str stringJoin tag
           this true typedef u128 u16
-          u32 u64 u8 valhashable view yield
+          u32 u64 u8 valhashable yield
         )
       end
 

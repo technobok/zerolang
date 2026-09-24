@@ -44,12 +44,13 @@
         'if', 'when', 'then', 'else',
         'for', 'while', 'loop', 'with', 'do', 'on',
         'match', 'case', 'swap',
-        'native', '='
+        'native', '=',
+        'take', 'borrow', 'view', 'hold', 'drop', 'private', 'generic'
     ];
 
     // Exactly islookupReserved in lib/system/zlexer.z. `view` is NOT here --
-    // it is an ownership marker and a predeclared identifier (see builtins);
-    // listing it made every `.view` in the docs render as an error.
+    // it is a marker keyword (see keywords); listing it here made every
+    // `.view` in the docs render as an error.
     var reserved = [
         'macro', 'goto', 'repeat', 'until', 'flag', 'cell',
         'pragma', 'enum', 'unsafe', 'switch'
@@ -73,8 +74,7 @@
         'Path', 'PathView', 'IoError', 'Reader', 'Writer', 'Closer', 'Seeker', 'seekorigin', 'File', 'openmode',
         'print', 'stringJoin', 'error', 'panic', 'stdin', 'stdout', 'stderr',
         'return', 'break', 'continue', 'yield',
-        'public', 'private', 'this', 'meta', 'typedef', 'tag', 'iterator',
-        'take', 'borrow', 'view', 'hold', 'copy', 'drop', 'generic'
+        'public', 'this', 'meta', 'typedef', 'tag', 'iterator', 'copy'
     ];
 
     // Build a regex that matches a full WORD token and classifies it.

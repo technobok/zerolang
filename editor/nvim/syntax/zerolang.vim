@@ -48,6 +48,7 @@ syn match zerolangKeyword /\<\%(function\|in\|out\|outx\|is\|as\|native\)\>/
 syn match zerolangKeyword /\<\%(if\|when\|then\|else\)\>/
 syn match zerolangKeyword /\<\%(for\|while\|loop\|with\|do\|on\)\>/
 syn match zerolangKeyword /\<\%(match\|case\|swap\)\>/
+syn match zerolangKeyword /\<\%(take\|borrow\|view\|hold\|drop\|private\|generic\)\>/
 " Operator-class identifiers: runs of non-alphanumeric WORD chars
 " (=, ==, !=, <, <=, >, >=, +, -, *, /, &, |, ?, etc.) highlight
 " as a single token instead of splitting per character.
@@ -59,8 +60,8 @@ syn match zerolangOperator /\<[-!$%&'*+\/<=>?@\\^|~]\+\>/
 syn match zerolangKeyword /\<=\>/
 
 " Reserved words (highlighted as errors). Exactly islookupReserved in
-" lib/system/zlexer.z. `view` is NOT here -- it is an ownership marker and a
-" predeclared identifier (below); it was listed in both, and reserved wins.
+" lib/system/zlexer.z. `view` is NOT here -- it is a marker keyword (above);
+" it was once listed as both reserved and predeclared, and reserved won.
 syn match zerolangReserved /\<\%(macro\|goto\|repeat\|until\|flag\|cell\)\>/
 syn match zerolangReserved /\<\%(pragma\|enum\|unsafe\|switch\)\>/
 
@@ -85,8 +86,7 @@ syn match zerolangBuiltinConst /\<\%(null\|never\|true\|false\|_\)\>/
 " Predeclared functions, streams, and context words
 syn match zerolangBuiltin /\<\%(print\|stringJoin\|error\|panic\|stdin\|stdout\|stderr\)\>/
 syn match zerolangBuiltin /\<\%(return\|break\|continue\|yield\)\>/
-syn match zerolangBuiltin /\<\%(public\|private\|this\|meta\|typedef\|tag\|iterator\)\>/
-syn match zerolangBuiltin /\<\%(take\|borrow\|view\|hold\|copy\|drop\|generic\)\>/
+syn match zerolangBuiltin /\<\%(public\|this\|meta\|typedef\|tag\|iterator\|copy\)\>/
 
 " Labels: word: and :word (defined after keywords — longer match wins)
 exe 'syn match zerolangLabel /' . s:W . '\+:/'

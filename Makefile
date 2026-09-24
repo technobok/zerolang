@@ -1778,7 +1778,7 @@ perf: $(PERFBIN)
 # source (the zls half is not on the self-compile's path).
 #
 # -15 the name-keyed isStringy is gone: 0 behaviour, -15 source.
-ALLOC_BASELINE := 2635395
+ALLOC_BASELINE := 2636857
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2675,10 +2675,9 @@ set -e
 LC_ALL=C; export LC_ALL
 D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT
 
-# what a highlighter may carry that core.z does not define: the ownership and
-# access markers, the context words, and `Any`, which is real and reachable
-# without a core.z re-export.
-CONTEXT="Any _ borrow copy drop generic hold iterator meta private public tag take this view yield"
+# what a highlighter may carry that core.z does not define: the context words
+# and `Any`, which is real and reachable without a core.z re-export.
+CONTEXT="Any _ copy iterator meta public tag this yield"
 
 sed -n 's|^syn match \([A-Za-z]*\) /\(.*\)/$$|\1 \2|p' editor/nvim/syntax/zerolang.vim > "$$D/vim.raw"
 vimset() {
