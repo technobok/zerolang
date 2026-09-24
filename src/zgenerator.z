@@ -43,19 +43,8 @@ NameCtr: class {
     }
 }
 
-# leafAtomName -- an atom's name (owned copy); "" for other shapes.
-leafAtomName: function {ast: Ast.view n: astnode.view} out String is {
-    match (
-        n
-    ) case atomid then {
-        return (zast.nameTextCopy :ast ref: n.name)
-    } else {
-        return "".string
-    }
-}
-
-# leafAtomNameId -- an atom's name id; 0 for other shapes. The id twin of
-# leafAtomName: a resolved compare needs the pool id, never the text.
+# leafAtomNameId -- an atom's name id; 0 for other shapes. A resolved compare
+# needs the pool id, never the text.
 leafAtomNameId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
     ast
     match (
@@ -68,20 +57,13 @@ leafAtomNameId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
 }
 
 
-# pathLeafName -- the take/borrow ownership leaf on a dotted path, "" when
-# none. It answers only those two: a `.view` or `.hold` leaf comes back
-# unmarked, so a caller that needs every marker must read the leaf by name id.
-pathLeafName: function {ast: Ast.view n: astnode.view} out String is {
-    match (
-        n
-    ) case dottedpath then {
-        ln: leafAtomName :ast n: (ast.nodes.get i: n.child.u64)
-        if ln.stringView == "take" then return ln
-        if ln.stringView == "borrow" then return ln
-        return "".string
-    } else {
-        return "".string
-    }
+# pathLeafMarker -- the take/borrow ownership leaf on a dotted path, unmarked
+# when none. It answers only those two: a `.view` or `.hold` leaf comes back
+# unmarked, so a caller that needs every marker must read the leaf itself.
+pathLeafMarker: function {ast: Ast.view n: astnode.view} out zast.markerkind is {
+    k: zast.markerKindOf :ast :n
+    if k.takeMarker or k.borrowMarker then return k
+    return zast.markerkind.unmarked
 }
 
 # GivesParts -- split the iterator return into (gives base path CLONE,
@@ -91,9 +73,9 @@ GivesParts: class {
     # a CLONE of the element path, which feeds the option wrapper. A clone
     # because the original stays in the tree
     base: optionval astnode
-    # the ownership leaf. "borrow" selects OptionView and anything else
+    # the ownership leaf. `.borrow` selects OptionView and anything else
     # selects Option, which is the whole of the choice
-    leaf: String
+    leaf: zast.markerkind
 }
 
 # read the `gives` type from operation `n` into `dst`.
@@ -101,7 +83,7 @@ givesFromOp: function {ast: Ast nid: zast.nodeid dst: GivesParts} is {
     innerId: zast.nodeid
     isDotted: false
     parentId: zast.nodeid
-    lf: String
+    lf: zast.markerkind.unmarked
     {
         n: ast.nodes.get i: nid.u64
         match (
@@ -110,13 +92,13 @@ givesFromOp: function {ast: Ast nid: zast.nodeid dst: GivesParts} is {
             isDotted = true
             parentId = n.parent
         } else null
-        if innerId.isZero then lf = pathLeafName :ast :n
+        if innerId.isZero then lf = pathLeafMarker :ast :n
     }
     if innerId.isZero.not then {
         givesFromOp :ast nid: innerId :dst
         return
     }
-    if lf.length > 0 then {
+    if lf.unmarked.not then {
         if isDotted then {
             bc: zast.cloneTreeAt :ast nid: parentId
             dst.base = optionval.some bc
@@ -323,14 +305,14 @@ buildWrapper: function {
     line: u32
     col: u32
     base: astnode
-    leaf: StringView
+    leaf: zast.markerkind
 } out astnode is {
     # the wrapper is owned unless the leaf asks for a view: `Option` for a
     # plain or `.take` leaf, `OptionView` for `.borrow` -- which the checker
     # then refuses, since nothing implements a reference yield. The checker
     # collapses the owned wrapper further (a valtype element to optionval).
     wn: "Option"
-    if leaf == "borrow" then wn = "OptionView"
+    if leaf.borrowMarker then wn = "OptionView"
     wAtom: mkAtom :ast :line :col name: wn
     tArg: mkBareOp :ast :line :col op: base
     wargs: ListVal u32
@@ -1091,14 +1073,14 @@ wrapDeclaredCallReturn: function {
     if retId.isZero then return 0
     gp: (GivesParts
         base: optionval.none astnode
-        leaf: "".string
+        leaf: zast.markerkind.unmarked
     )
     givesFromOp :ast nid: retId dst: gp
     gb: gp.base
     match (
         gb
     ) case some then {
-        wrapper: buildWrapper :ast :line :col base: gb leaf: gp.leaf.stringView
+        wrapper: buildWrapper :ast :line :col base: gb leaf: gp.leaf
         wid: zast.tableAdd :ast n: wrapper
         cfm: ast.nodes.getMut i: callFnId.u64
         if cfm.functiondef then cfm.returntype = zast.nodeid.create from: wid
@@ -1467,7 +1449,7 @@ createParamPath: function {
     # the field's declared type node
     nid: zast.nodeid
 } out astnode is {
-    # the leaf is read by NAME ID, not through pathLeafName: that one answers
+    # the leaf is read by NAME ID, not through pathLeafMarker: that one answers
     # only take/lock/borrow, and a `.view` field read through it comes back
     # unmarked and would be handed a `.take` parameter -- an owned copy of a
     # reference. That is the same take/lock/borrow blind spot this whole form
