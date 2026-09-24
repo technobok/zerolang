@@ -1782,7 +1782,10 @@ perf: $(PERFBIN)
 # +2705 a native Text conformer (String, a str mono) boxes on demand: 0
 # behaviour, 2705 source -- the compiler boxes no native conformer, so the
 # demand list stays empty and the splice never runs.
-ALLOC_BASELINE := 2646635
+#
+# +1 the Text spec's receiver is `t: this.view`: 0 behaviour, 1 source (a
+# named receiver where `:this` was).
+ALLOC_BASELINE := 2646636
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
