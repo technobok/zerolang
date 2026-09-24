@@ -754,6 +754,34 @@ docByteAt: function {s: StringView i: u64} out u8 is {
     return 0
 }
 
+# simplePathFirstAtom -- the first atom of a plain name or a dotted path of
+# names (`x`, `a.b.c`), or 0 when `id` is anything else.
+simplePathFirstAtom: function {ast: Ast.view id: zast.nodeid} out zast.nodeid is {
+    n: ast.nodes.get i: id.u64
+    match (
+        n
+    ) case atomid then {
+        return id
+    } case dottedpath then {
+        if (atomNameIdOf n: (ast.nodes.get i: n.child.u64)).isZero then return zast.nodeid
+        return (simplePathFirstAtom :ast id: n.parent)
+    } else {
+        return zast.nodeid
+    }
+}
+
+# simplePathLastAtom -- the last atom of a path simplePathFirstAtom accepts.
+simplePathLastAtom: function {ast: Ast.view id: zast.nodeid} out zast.nodeid is {
+    n: ast.nodes.get i: id.u64
+    match (
+        n
+    ) case dottedpath then {
+        return n.child
+    } else {
+        return id
+    }
+}
+
 # atomNameIdOf -- an atom's interned name id, 0 when the node is not an atom
 # (no pool id is 0, so a compare against it misses).
 atomNameIdOf: function {n: astnode.view} out zast.nameid is {
@@ -1753,7 +1781,9 @@ Analysis: class {
 
     # checkBoolLiteralCompare -- L028: a comparison with a boolean literal.
     # `X == false` / `X != true` is `X.not`, and `X == true` / `X != false` is
-    # `X` itself. Both operator and literal are matched by pool id.
+    # `X` itself, with the literal on either side. Both operator and literal
+    # are matched by pool id; when both operands are literals the right one is
+    # the literal, as it is when only the right one is.
     checkBoolLiteralCompare: function {
         :this ast: Ast.view opId: zast.nodeid lhsId: zast.nodeid rhsId: zast.nodeid
     } is {
@@ -1762,14 +1792,93 @@ Analysis: class {
         isNe: opNm == zast.names.wkOpNe
         if isEq.not when isNe.not then return
         litNm: atomNameIdOf n: (ast.nodes.get i: rhsId.u64)
-        if litNm.isZero then return
+        reversed: false
+        if (this.isBoolLiteralId nm: litNm).not then {
+            litNm = atomNameIdOf n: (ast.nodes.get i: lhsId.u64)
+            if (this.isBoolLiteralId nm: litNm).not then return
+            reversed = true
+        }
         isTrue: litNm == this.trueId
         isFalse: litNm == this.falseId
-        if isTrue.not when isFalse.not then return
         neg: isEq and isFalse or (isNe and isTrue)
         litLen: 4.u64
         if isFalse then litLen = 5
+        if reversed then {
+            this.reportBoolLiteralCompareReversed :ast litId: lhsId operandId: rhsId :neg
+            return
+        }
         this.reportBoolLiteralCompare :ast :lhsId :opId :rhsId :neg :litLen
+    }
+
+    # isBoolLiteralId -- the name id is `true` or `false`.
+    isBoolLiteralId: function {t: this.view nm: zast.nameid} out bool is {
+        if nm.isZero then return false
+        return nm == t.trueId or (nm == t.falseId)
+    }
+
+    # reportBoolLiteralCompareReversed -- L028 with the literal written first
+    # (`false == b`). The fix rewrites the comparison, from the literal to the
+    # operand's last byte, as the operand with `.not` appended for a negation.
+    # It is offered only for a plain name or a dotted path of names, whose
+    # extent the tree gives exactly (its first atom's start to its last atom's
+    # end); any other operand is reported without a fix.
+    reportBoolLiteralCompareReversed: function {
+        :this
+        ast: Ast.view
+        litId: zast.nodeid
+        operandId: zast.nodeid
+        neg: bool
+    } is {
+        lp: zast.posOf n: (ast.nodes.get i: litId.u64)
+        what: "`== true` / `!= false` is the value itself: drop the comparison".string
+        if neg then what = "`== false` / `!= true` negates: write `.not`".string
+        firstId: simplePathFirstAtom :ast id: operandId
+        if firstId.isZero then {
+            this.warn code: "L028" msg: what line: lp.line col: lp.col width: 1
+            return
+        }
+        lastN: ast.nodes.get i: (simplePathLastAtom :ast id: operandId).u64
+        fp: zast.posOf n: (ast.nodes.get i: firstId.u64)
+        ep: zast.posOf n: lastN
+        lastLen: (zast.poolTextAt pool: ast.names ref: (atomNameIdOf n: lastN)).length.u64
+        srcOwned: this.source.copy
+        srcv: srcOwned.stringView
+        litLo: (tokByteStart
+            lineStart: this.lineStart
+            srcLines: this.lines
+            lineno: lp.line
+            colno: lp.col
+        )
+        xLo: (tokByteStart
+            lineStart: this.lineStart
+            srcLines: this.lines
+            lineno: fp.line
+            colno: fp.col
+        )
+        lastLo: (tokByteStart
+            lineStart: this.lineStart
+            srcLines: this.lines
+            lineno: ep.line
+            colno: ep.col
+        )
+        xHi: lastLo + lastLen
+        if xHi > srcv.length or (xHi <= xLo) or (xLo <= litLo) then {
+            this.warn code: "L028" msg: what line: lp.line col: lp.col width: 1
+            return
+        }
+        xText: (srcv.substring from: xLo to: xHi).string
+        suffix: ".not"
+        if neg.not then suffix = ""
+        (this.warnFix
+            code: "L028"
+            msg: what
+            line: lp.line
+            col: lp.col
+            width: (xHi - litLo).u32.orPanic
+            lo: litLo
+            hi: xHi
+            repl: "\{xText}\{suffix}"
+        )
     }
 
     # reportBoolLiteralCompare -- the L028 finding and its fix: the whole
