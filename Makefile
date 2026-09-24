@@ -1793,7 +1793,10 @@ perf: $(PERFBIN)
 # the zvfs providers), 8742 source, -12 the three zvfs receivers aligned to
 # the spec. Measured against the old tree with the new zvfs.z, since the new
 # zc refuses the old one.
-ALLOC_BASELINE := 2655685
+#
+# -28 a valtype `.hold` binding is frozen: 0 behaviour, -28 source (the gate
+# that asked typeIsReftype is gone).
+ALLOC_BASELINE := 2655657
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
