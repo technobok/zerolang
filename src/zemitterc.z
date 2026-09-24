@@ -35738,8 +35738,12 @@ emitLateMember: function {
 }
 
 # emitLateGroupOrdered -- the late monos and late-user structs in dependency
-# order, by fixpoint; whatever the fixpoint cannot place is emitted in list
-# order rather than dropped.
+# order, by fixpoint. A cycle stops it: two classes that hold Lists of each
+# other each wait for the other's List, and each List's bodies wait for its
+# element. A List or ListView holds its element only by pointer, so its struct
+# and prototypes can come first and its bodies after the element: the stuck
+# containers are split that way and the fixpoint runs again. Whatever it still
+# cannot place is emitted in list order rather than dropped.
 emitLateGroupOrdered: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -35750,48 +35754,12 @@ emitLateGroupOrdered: function {
     buf: String.borrow
 } is {
     emittedSet: IdSet u64
-    totalPend: lateGroup.length
-    emittedCount: u64
-    done: false
-    stuck: false
-    for done.not loop {
-        progressed: false
-        pi: u64
-        pn: lateGroup.length
-        for pi < pn loop {
-            x: lateGroup.get i: pi
-            if (emittedSet.has item: x).not when (lateMemberReady
-                :ast
-                :symtab
-                :ctx
-                tid: (ztypes.tid.create from: x.u64)
-                group: lateSet
-                emitted: emittedSet
-            ) then {
-                (emitLateMember
-                    :ast
-                    :symtab
-                    :ctx
-                    :runtimeDir
-                    tid: (ztypes.tid.create from: x.u64)
-                    :buf
-                )
-                emittedSet.add item: x
-                emittedCount = emittedCount + 1
-                progressed = true
-            }
-            pi = pi + 1
-        }
-        if emittedCount >= totalPend then {
-            done = true
-        } else {
-            if progressed.not then {
-                done = true
-                stuck = true
-            }
-        }
-    }
-    if stuck then {
+    allOut: emitLateFixpoint :ast :symtab :ctx :runtimeDir :lateGroup :lateSet :emittedSet :buf
+    if allOut then return
+    bodies: String
+    emitStuckContainerHeads :ast :symtab :ctx :runtimeDir :lateGroup :emittedSet :buf :bodies
+    allOut = emitLateFixpoint :ast :symtab :ctx :runtimeDir :lateGroup :lateSet :emittedSet :buf
+    if allOut.not then {
         f0: u64
         f1: lateGroup.length
         for f0 < f1 loop {
@@ -35808,6 +35776,107 @@ emitLateGroupOrdered: function {
                 emittedSet.add item: x2
             }
             f0 = f0 + 1
+        }
+    }
+    buf.append bodies
+}
+
+# emitLateFixpoint -- emit every late member whose dependencies are out, until a
+# pass places nothing. True when the whole group is out.
+emitLateFixpoint: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    runtimeDir: StringView
+    lateGroup: (ListVal u64).view
+    lateSet: IdSet u64
+    emittedSet: IdSet u64
+    buf: String.borrow
+} out bool is {
+    for true loop {
+        progressed: false
+        pending: false
+        pi: u64
+        for pi < lateGroup.length loop {
+            x: lateGroup.get i: pi
+            pi = pi + 1
+            if (emittedSet.has item: x) then continue
+            if (lateMemberReady
+                :ast
+                :symtab
+                :ctx
+                tid: (ztypes.tid.create from: x.u64)
+                group: lateSet
+                emitted: emittedSet
+            ) then {
+                (emitLateMember
+                    :ast
+                    :symtab
+                    :ctx
+                    :runtimeDir
+                    tid: (ztypes.tid.create from: x.u64)
+                    :buf
+                )
+                emittedSet.add item: x
+                progressed = true
+            } else {
+                pending = true
+            }
+        }
+        if pending.not then return true
+        if progressed.not then return false
+    }
+    return false
+}
+
+# emitStuckContainerHeads -- each List or ListView mono the fixpoint could not
+# place: its struct and prototypes now, which is all a holder needs, and its
+# bodies into `bodies`, written once every element is out. It counts as out.
+emitStuckContainerHeads: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    runtimeDir: StringView
+    lateGroup: (ListVal u64).view
+    emittedSet: IdSet u64
+    buf: String.borrow
+    bodies: String.borrow
+} is {
+    si: u64
+    for si < lateGroup.length loop {
+        x: lateGroup.get i: si
+        si = si + 1
+        if (emittedSet.has item: x) then continue
+        xt: ztypes.tid.create from: x.u64
+        isList: isListOriginOf :symtab :ctx tid: xt
+        if isList.not when (isListViewOriginOf :symtab :ctx tid: xt).not then continue
+        whole: String
+        emitMonoById :ast :symtab :ctx :runtimeDir monoId: xt buf: whole
+        splitContainerText text: whole.stringView head: buf rest: bodies
+        emittedSet.add item: x
+    }
+}
+
+# splitContainerText -- a List or ListView mono's C divided at what a holder
+# needs: its struct blocks and every one-line prototype go to `head`,
+# everything but the struct blocks to `rest`. The struct holds the element by
+# pointer, so the head needs it declared only; the bodies index it.
+splitContainerText: function {text: StringView head: String.borrow rest: String.borrow} is {
+    inStruct: false
+    with lit: text.lines do for ln: lit loop {
+        opens: (ln.startsWith prefix: "typedef struct ") and (ln.endsWith suffix: "{")
+        if opens then inStruct = true
+        if inStruct then {
+            head.append ln
+            head.append "\n"
+            if (ln.startsWith prefix: "} ") when (ln.endsWith suffix: ";") then inStruct = false
+        } else {
+            if (ln.startsWith prefix: "static ") when (ln.endsWith suffix: ");") then {
+                head.append ln
+                head.append "\n"
+            }
+            rest.append ln
+            rest.append "\n"
         }
     }
 }
