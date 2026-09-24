@@ -15149,11 +15149,8 @@ ensureUnitRequire: function {
     # first used, not after its C has been written. The ambient pending
     # failure belongs to whatever resolution we interrupted; save it.
     # the block guards on the toolchain, so the platform facts have to be in
-    # place before it folds -- earlier than the main pass seeds them. Once.
-    if st.typing.platformSeeded.not then {
-        st.typing.platformSeeded = true
-        seedFoldNatives :st :scope :ast
-    }
+    # place before it folds
+    ensureFoldNativesSeeded :st :scope :ast
     prevFail: st.typing.constFail
     constFailClear :st
     resolveDemandedDecl :st :scope :ast declId: rq
@@ -48682,6 +48679,11 @@ constValueOfMemberId: function {
     if nid.isZero then return ztypes.noConst
     od: constOwnerDeclForId :st :scope :unitDecl :nameId
     if od.isZero then return ztypes.noConst
+    # a member the compiler answers (`platform.os`) is seeded before its
+    # first read, whichever fold reaches it first
+    if st.typing.platformSeeded.not when (isFoldUnitDecl :st :scope :ast declId: od) then {
+        ensureFoldNativesSeeded :st :scope :ast
+    }
     # the constant's own declaration is the owner's child of that name, so the
     # def node comes off the same walk that found the owner. u32 because a node
     # id is one, and the binding's type IS its initializer.
@@ -52374,6 +52376,39 @@ targetIsHost: function {triple: StringView} out bool is {
     return o9h.stringView == ho and (a9h.stringView == ha)
 }
 
+# ensureFoldNativesSeeded -- the compile-time facts natives.tbl names (the
+# platform unit's os, arch, cc, ...), written ONCE and before the first fold
+# that reads them: a `require:` block, a unit-level constant, or the main pass,
+# whichever reaches them first. A unit-level `if` on `platform.os` folds while
+# the main unit's definitions resolve, which is before the main pass seeds.
+ensureFoldNativesSeeded: function {st: zenv.ZSymbolTable scope: ztypes.declid ast: Ast} is {
+    if st.typing.platformSeeded then return
+    st.typing.platformSeeded = true
+    seedFoldNatives :st :scope :ast
+}
+
+# isFoldUnitDecl -- the declaration is a unit a natives.tbl `fold` row names:
+# its members are answered by the compiler, not folded from their source.
+isFoldUnitDecl: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast.view
+    declId: ztypes.declid
+} out bool is {
+    with fit: st.typing.foldPaths.iterate do for fp: fit loop {
+        fv: fp.stringView
+        dot: fv.indexOf needle: "."
+        match (
+            dot
+        ) case some then {
+            un: nameIdOf :ast name: (fv.substring from: 0 to: dot)
+            if un.isZero then continue
+            if (unitDeclOfNameOrOwn :st :scope nameId: un) == declId then return true
+        } case none then null
+    }
+    return false
+}
+
 # seedFoldNatives -- answer the compile-time values THIS TABLE names.
 #
 # natives.tbl is what says which paths the compiler answers; this walks its
@@ -54629,9 +54664,7 @@ typecheck: function {
             unitDecl: st.typing.mainUnitRoot
         )
     }
-    {
-        seedFoldNatives :st scope: rf ast: program
-    }
+    ensureFoldNativesSeeded :st scope: rf ast: program
     resolveConstantDefs :st scope: rf :program
     completeUnitInstantiations :st scope: rf :program
     applyUnitVisibility :st :program
