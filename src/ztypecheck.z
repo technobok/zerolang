@@ -4368,8 +4368,41 @@ dottedTyperefShell: function {
             defName: nsChildNm
         )
         if nsTid.isZero.not then return nsTid.u64
+        # the parent is the type only when the leaf is a marker or a member of
+        # it (an arm default); any other leaf names nothing, and is reported
+        # before the peel so the slot still types
+        reportPeeledLeaf :st :scope :ast :unitDecl :nid leafId: cId
         return (resolveTyperefShell :st :scope :ast :unitDecl nid: parentId :thisName)
     }
+}
+
+# reportPeeledLeaf -- a dotted type-ref about to peel to its parent: `.drop` is
+# a statement and declares nothing (`h: Bag.drop`), and a leaf that is neither
+# a marker nor a member of the parent names nothing (`h: Bag.bogus`).
+reportPeeledLeaf: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+    leafId: zast.nameid
+} is {
+    if leafId != zast.names.wkDrop then {
+        reportMissingTypeMember :st :scope :ast :unitDecl op: nid
+        return
+    }
+    n: ast.nodes.get i: nid.u64
+    (addErrorH
+        :st
+        nodeid: nid
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.typeError
+        msg: "`.drop` is a statement, not a declaration marker".string
+        note: "".string
+        hint: "".string
+        width: 1
+    )
 }
 
 
