@@ -1836,7 +1836,10 @@ perf: $(PERFBIN)
 #
 # +607 an unresolved spec return is no conformance evidence: 0 behaviour, 607
 # source.
-ALLOC_BASELINE := 2677311
+#
+# +4420 member use on a type parameter waits for the instance: 6 behaviour,
+# 4411 source; perf-strict reads 3 more than ab.sh.
+ALLOC_BASELINE := 2681731
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

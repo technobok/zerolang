@@ -2293,6 +2293,46 @@ with v: my_borrow_source do {
     v0: OptionView.some from: v
     v1: OptionView.none i64
 }</code></pre>
+<h5 id="what-a-bound-promises">What a bound promises</h5>
+<p>A bound decides which types may instantiate a generic definition, and nothing
+more. Each instantiation checks that its concrete type satisfies the bound --
+a type outside a union bound, or one that does not conform to a protocol or
+facet bound, is refused at the instantiating call -- and then checks the
+template's body again with that type in place of the parameter.</p>
+<p>The body is not checked against the bound. Every use of a member on a type
+parameter -- a method, a field, an operator -- is resolved in each instance,
+exactly as operators always were: operators are methods. A member the bound
+does not declare therefore works for a type that has it (duck typing), and
+the instance of a type that lacks it is refused there. The error points at
+the template's text, and its note names the instance and the call that made
+it:</p>
+<pre><code class="language-zerolang">measurable: facet {
+    measure: function {t: this.view} out i64
+}
+pt: record { x: i64 } as {
+    m: measurable
+    measure: function {t: this.view} out i64 is { return t.x }
+    extra: function {t: this.view} out i64 is { return 7 }
+}
+# `extra` is not measurable's: pt has it, so `g v: p` compiles; a second
+# conformer without it would be refused in its own instance
+g: function as { t: measurable.generic } in {v: t} out i64 is { return v.extra }</code></pre>
+<p>A union bound admits exactly its members, and each instance is checked on
+its own:</p>
+<pre><code class="language-zerolang">Fig: union { :Sq :Circ }
+edgeOf: function as { T: Fig.generic } in {s: T} out u64 is { return s.edge }
+# edgeOf s: sq   -- compiles: Sq has `edge`
+# edgeOf s: c    -- error: type 'Circ' has no member 'edge'
+#                   note: in the instance of `edgeOf` with T = Circ,
+#                         instantiated at app.z line 14
+# edgeOf s: rock -- error: 'Rock' does not satisfy constraint 'Fig'</code></pre>
+<p>The same holds for <code>anyval</code> and <code>anyref</code> bounds, where no set of members
+could be checked in advance. The cost is where the error lands: a member
+missing from one instantiating type is reported inside the generic body, not
+at the call -- hence the note. And a template nobody instantiates is checked
+only for what does not involve its parameters: <code>--eager</code> and
+<code>zl lint --full</code> cannot report a member use on a type parameter until some
+instantiation supplies a type.</p>
 <h5 id="heterogeneous-union-constraints">Heterogeneous union constraints</h5>
 <p>A <code>union</code> used as a generic constraint via <code>.generic</code> may contain a mix of
 concrete type members and protocol/facet members. A concrete member accepts an

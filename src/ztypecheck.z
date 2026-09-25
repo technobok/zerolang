@@ -26948,9 +26948,10 @@ checkNumericParamMember: function {
     return (callleg handled: true tid: bound)
 }
 
-# checkUnresolvedMember -- the member did not resolve on the base type. `.copy` is
-# an ownership primitive rather than a constrained member, so a generic-param
-# receiver still types it t -> t; everything else is diagnosed here.
+# checkUnresolvedMember -- the member did not resolve on the base type. On a
+# type parameter nothing is diagnosed: every member use -- a method, a field,
+# an operator -- is the instance's to resolve; everything else is diagnosed
+# here.
 checkUnresolvedMember: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -26985,25 +26986,21 @@ checkUnresolvedMember: function {
             stampGate :st nid: dp.nid.u64 tid: bt
             return bt
         }
-        # AN OPERATOR ON A TYPE PARAMETER RESOLVES AT INSTANTIATION, not in the
-        # template: `add: function {a: t b: t} out t is { return a + b }` is
-        # checked against each concrete t by the per-instance clone. An operator
-        # is spelled in punctuation, so the name itself says which members these
-        # are, and the template keeps the coercible lhs result.
+        # A MEMBER ON A TYPE PARAMETER RESOLVES AT INSTANTIATION, not in the
+        # template: `add: function {a: t b: t} out t is { return a + b }` and
+        # `area: function {s: T} out u64 is { return s.area }` are checked
+        # against each concrete type by the per-instance clone. Operators are
+        # methods, and a bound only decides which types may instantiate, so a
+        # member the bound does not declare is not refused here either (duck
+        # typing, spec "What a bound promises"). An operator keeps the
+        # coercible lhs result; a named member's result is not known until
+        # the instance, and the template types it as nothing, which every
+        # later check reads as not yet known.
         if (isOperatorName name: cn.stringView) then {
             stampGate :st nid: dp.nid.u64 tid: bt
             return bt
         }
-        btn9x: st.reg.nameOf tid: bt
-        mgp: "type parameter '\{btn9x}' has no member '\{cn}' (its constraint provides none)"
-        (addError
-            :st
-            nodeid: dp.nid
-            lineno: dp.lineno
-            colno: dp.colno
-            e: zast.err.genericError
-            msg: mgp
-        )
+        return ztypes.tid
     }
     cpleg: checkCopyMember :st :ast :dp :bt :cnId
     if cpleg.handled then return cpleg.tid
@@ -27498,6 +27495,14 @@ checkMarkerMember: function {
             width: 6
         )
         return (callleg handled: true tid: (ztypes.tid.create from: 0))
+    }
+    # in an INSTANCE the author wrote `.stringView` for a type parameter a
+    # StringView happened to fill: the conversion is the identity, as `.copy` is
+    if st.typing.curMonoStamp > 0 when (isStringViewMemberId nameId: cnId) when (
+        bt == (builtinTidTc :ast :st base: "StringView")
+    ) then {
+        stampGate :st nid: dp.nid.u64 tid: bt
+        return (callleg handled: true tid: bt)
     }
     # `.stringView` on a StringView is an identity no-op and is rejected --
     # the value is already a StringView.
@@ -32269,6 +32274,42 @@ forElementOf: function {
             fe.wrapper = rv
             fe.isView = isOptionViewMono :ast :st :unitDecl wid: rv
         } case none then null
+    } case none then null
+    if fe.elem == 0 when (st.reg.isPartialOf tid: vt) then {
+        return (partialForElement :st :unitDecl :ast :vt)
+    }
+    return fe
+}
+
+# partialForElement -- a template walk's iterator over its own type parameter
+# (`ListIter_T` of `(List T).view`): the partial instance carries no members,
+# so the element is read off its TEMPLATE's `call` -- the parameter its option
+# wraps -- and taken from the partial's type arguments. The instance walk
+# checks the loop on the concrete iterator.
+partialForElement: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    vt: ztypes.tid
+} out forelem is {
+    fe: forelem elem: 0 wrapper: vt isView: false
+    og: st.reg.genericOriginOf tid: vt
+    if og.isZero then return fe
+    forceMemberOf :st :ast parentTypeId: og nameId: zast.names.wkCall
+    c1: (st.typing.declChildOfId parentTypeId: og nameId: zast.names.wkCall).or d: 0
+    if c1 == 0 then return fe
+    rv: (methodReturnOf :st mid: (ztypes.tid.create from: c1.u64)).or d: ztypes.tid
+    if rv.isZero or ((st.reg.genericArgCount specId: rv) == 0) then return fe
+    et: ztypes.tid.create from: (st.reg.genericArgAt specId: rv ordinal: 0)
+    if (st.reg.typetypeOf typeId: et) != ztypes.ztypetype.genericParam then return fe
+    pn: nameIdOf :ast name: (st.reg.nameOf tid: et).stringView
+    ordo: st.reg.paramOrdinalOf tdecl: (declOfTypeId :st tid: og) paramName: pn
+    match (
+        ordo
+    ) case some then {
+        fe.elem = st.reg.genericArgAt specId: vt ordinal: ordo
+        fe.wrapper = rv
+        fe.isView = isOptionViewMono :ast :st :unitDecl wid: rv
     } case none then null
     return fe
 }
@@ -42567,6 +42608,7 @@ checkGenericCall: function {
         valSubs: vsI
         fallbackArg: 0
     )
+    noteMonoSite :st mono: mid :call :unitDecl
     (substituteGenericReturn
         :st
         :unitDecl
@@ -47064,6 +47106,7 @@ stampOneFnMono: function {
     tplDecl29Org: st.reg.genericOriginOf tid: monoId
     fnTemplateDecl: declOfTypeId :st tid: tplDecl29Org
     cfbFr: fnRefAt :ast nid: (instanceBodyAt :st :ast mono: monoId.u64 opId: fnOpId)
+    errF0: st.typing.errors.length
     (checkFunctionBody
         :st
         :scope
@@ -47076,6 +47119,7 @@ stampOneFnMono: function {
         :ast
         declId: fnTemplateDecl
     )
+    noteInstanceErrors :st :ast mono: monoId from: errF0
     st.typing.synthLabel = prevL
     st.typing.synthOwnerUnit = prevL9U
     st.typing.synthOwnerName = prevL9N
@@ -47204,6 +47248,7 @@ stampOneClassMono: function {
     prevL9U: st.typing.synthOwnerUnit
     prevL9N: st.typing.synthOwnerName
     prevT: st.typing.currentThisTid
+    errC0: st.typing.errors.length
     mi: u64
     for mi < mNames.length loop {
         mnm: mNames.get i: mi
@@ -47234,6 +47279,7 @@ stampOneClassMono: function {
             declId: classTemplateDecl
         )
     }
+    noteInstanceErrors :st :ast mono: monoId from: errC0
     st.typing.synthLabel = prevL
     st.typing.synthOwnerUnit = prevL9U
     st.typing.synthOwnerName = prevL9N
@@ -47520,6 +47566,77 @@ templateRepeatsInMints: function {st: zenv.ZSymbolTable.view monoId: u64} out u6
         p = (st.typing.monoMintedBy.get key: p).or d: 0
     }
     return n
+}
+
+# noteMonoSite -- the first call that instantiates `mono`: an error in the
+# instance names it.
+noteMonoSite: function {
+    st: zenv.ZSymbolTable
+    mono: ztypes.tid
+    call: callref
+    unitDecl: ztypes.declid
+} is {
+    if mono.isZero or (st.typing.monoSite.has key: mono.u64) then return
+    ms: ztyping.monosite lineno: call.lineno colno: call.colno :unitDecl
+    st.typing.monoSite.set key: mono.u64 value: ms
+}
+
+# noteInstanceErrors -- the errors an instance walk raised from `from` on are
+# about the instance, not the template text they point at: each gains a note
+# naming the template, its type arguments and the call that instantiated it.
+# Duck typing puts a type's missing member inside library code, and without
+# this the reader would not know which instantiation to look at. Once per
+# instance: an instance is walked once.
+noteInstanceErrors: function {st: zenv.ZSymbolTable ast: Ast.view mono: ztypes.tid from: u64} is {
+    n: st.typing.errors.length
+    if n <= from then return
+    ctxt: instanceNote :st :ast :mono
+    i: from
+    for i < n loop {
+        e: st.typing.errors.getMut :i
+        if e.note.length == 0 then {
+            e.note = ctxt.copy
+        } else {
+            e.note = "\{ctxt.stringView}; \{e.note.stringView}"
+        }
+        i = i + 1
+    }
+}
+
+# instanceNote -- "in the instance of `edgeOf` with T = Circ, instantiated at
+# app.z line 14": the template, each type argument, and the first
+# instantiating call when a call made it.
+instanceNote: function {st: zenv.ZSymbolTable.view ast: Ast.view mono: ztypes.tid} out String is {
+    org: st.reg.genericOriginOf tid: mono
+    tn: st.reg.nameOf tid: org
+    r: "in the instance of `\{tn}`"
+    pnames: st.reg.genericParamNamesOf tdecl: (declOfTypeId :st tid: org)
+    n: st.reg.genericArgCount specId: mono
+    i: u64
+    sep: " with ".string
+    for i < n loop {
+        if (st.reg.genericArgIsValueAt specId: mono ordinal: i).not when i < pnames.length then {
+            pn: zast.nameTextAt :ast ref: (pnames.get :i)
+            at: ztypes.tid.create from: (st.reg.genericArgAt specId: mono ordinal: i)
+            an: st.reg.nameOf tid: at
+            r.append sep
+            r.append pn
+            r.append " = "
+            r.append an
+            sep = ", ".string
+        }
+        i = i + 1
+    }
+    so: st.typing.monoSite.get key: mono.u64
+    match (
+        so
+    ) case some then {
+        uname: zast.nameid.create from: (st.typing.decls.get i: so.unitDecl.u64).name
+        un: zast.nameTextAt :ast ref: uname
+        at: ", instantiated at \{un}.z line \{so.lineno}"
+        r.append at
+    } case none then null
+    return r
 }
 
 # recordMintedBy -- every type id minted since `minted` was minted by the walk

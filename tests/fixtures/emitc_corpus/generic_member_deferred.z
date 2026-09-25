@@ -1,0 +1,67 @@
+# A member used on a type parameter is resolved in each instance, so a
+# generic body may call what its bound declares -- a protocol's or a facet's
+# methods, a StringLike's `stringView` -- and, since a bound only decides
+# which types may instantiate, a member the bound does not declare works
+# for a type that has it (duck typing). Loops over a `(List T).view` type
+# their element from the instance too.
+Shape: protocol {
+    area: function {t: this.view} out u64
+}
+Sq: class { side: u64 } as {
+    :Shape
+    area: function {t: this.view} out u64 is { return t.side * t.side }
+    edge: function {t: this.view} out u64 is { return t.side }
+}
+Circ: class { r: u64 } as {
+    :Shape
+    area: function {t: this.view} out u64 is { return t.r * t.r * 3 }
+}
+Label: class { data_: String } as {
+    :Text
+    stringView: function {m: this.view} outx StringView is {
+        return m.data_.stringView
+    }
+}
+measurable: facet {
+    measure: function {t: this.view} out i64
+}
+pt: record { x: i64 } as {
+    m: measurable
+    measure: function {t: this.view} out i64 is { return t.x }
+    # not in the bound: reached by duck typing
+    extra: function {t: this.view} out i64 is { return t.x * 10 }
+}
+Fig: union { :Sq :Circ }
+
+# a protocol bound's method, borrowed and taken
+areaOf: function as { T: Shape.generic } in {s: T} out u64 is { return s.area }
+consume: function as { T: Shape.generic } in {s: T.take} out u64 is { return s.area }
+# every element of a list of T
+total: function as { T: Shape.generic } in {xs: (List T).view} out u64 is {
+    n: 0.u64
+    for x: xs.iterate loop n = n + x.area
+    return n
+}
+# StringLike: a Label, a StringView and a String all answer `stringView`
+lenOf: function as { T: StringLike.generic } in {s: T.view} out u64 is { return s.stringView.length }
+# a facet bound's method, and a member the facet does not declare
+measureOf: function as { t: measurable.generic } in {v: t} out i64 is { return v.measure }
+extraOf: function as { t: measurable.generic } in {v: t} out i64 is { return v.extra }
+# a union bound: `edge` is Sq's alone, and only Sq instantiates edgeOf
+edgeOf: function as { T: Fig.generic } in {s: T} out u64 is { return s.edge }
+figArea: function as { T: Fig.generic } in {s: T} out u64 is { return s.area }
+
+main: function is {
+    q: Sq side: 3
+    c: Circ r: 1
+    print "\{areaOf s: q} \{areaOf s: c} \{consume s: (Sq side: 4)}"
+    xs: List Sq
+    xs.append (Sq side: 2)
+    xs.append (Sq side: 3)
+    print "\{total :xs}"
+    l: Label data_: "abcd".string
+    print "\{lenOf s: l} \{lenOf s: "xy"} \{lenOf s: "q".string}"
+    p: pt x: 4
+    print "\{measureOf v: p} \{extraOf v: p}"
+    print "\{edgeOf s: q} \{figArea s: q} \{figArea s: c}"
+}
