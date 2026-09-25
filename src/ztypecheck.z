@@ -2981,7 +2981,7 @@ resolveMonoRefInline: function {
         } else null
     }
     if arm == 2 then {
-        return (resolveMonoRefParts
+        rm: (resolveMonoRefParts
             :st
             :scope
             :ast
@@ -2992,6 +2992,18 @@ resolveMonoRefInline: function {
             arguments: argIds
             :nid
         )
+        if rm > 0 when (st.typing.typedefClash.has key: rm) then {
+            opn: ast.nodes.get i: opNid.u64
+            (reportTypedefClash
+                :ast
+                :st
+                tid: (ztypes.tid.create from: rm.u64)
+                at: opNid
+                lineno: (nodeLine n: opn)
+                colno: (nodeCol n: opn)
+            )
+        }
+        return rm
     }
     return 0
 }
@@ -20398,6 +20410,7 @@ mintMono: function {
     } case none then null
     st.reg.setGenericOrigin typeId: (ztypes.tid.create from: mid.u64) value: templateId
     declMonoType :st monoTid: mid :templateId
+    mintMonoTypedefBase :ast :st :unitDecl :rf :templateId :mid :subs :idSubs
     # a function's instance returns what its template says it returns, a
     # reference or not, as a method's clone does
     if tt == ztypes.ztypetype.functionType then {
@@ -20458,6 +20471,129 @@ mintMono: function {
     mintMonoRecordShape :ast :st :rf :templateId :mid :tt
     mintMonoTagShape :st :mid :tt :name
     synthInstanceValueMembers :ast :st :rf :templateId :mid :tt
+}
+
+# mintMonoTypedefBase -- an instance of a generic typedef wraps the instance of
+# its base: the template's partial base (`List t`) respecialised under this
+# instance's arguments (`List String`), and the base's name, which is what
+# the emitter asks to know a typedef. It frees what its base frees.
+mintMonoTypedefBase: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    rf: ztypes.declid
+    templateId: ztypes.tid
+    mid: u64
+    subs: (IdMapV zast.nameid v: u64).view
+    idSubs: (IdMapV u64 v: u64)
+} is {
+    tb: typedefBaseTidOf :st tid: templateId
+    if tb.isZero then return
+    mt: ztypes.tid.create from: mid.u64
+    # a base argument the base's own parameter refuses is this instance's
+    # error, reported where the instance is named; the base is minted
+    # quietly, so its members still answer and nothing repeats the refusal
+    prevQuiet: st.typing.quietBounds
+    cl: typedefBaseClash :ast :st scope: rf base: tb :idSubs
+    if cl.argTid.isZero.not then {
+        st.typing.typedefClash.set key: mid value: cl
+        st.typing.quietBounds = true
+    }
+    target: substitutedMemberTid :ast :st :unitDecl :rf chId: tb.u64 :subs :idSubs
+    st.typing.quietBounds = prevQuiet
+    st.typing.typedefBaseTid.set key: mt value: (ztypes.tid.create from: target.u64)
+    bn: st.typing.typedefBaseName.get key: templateId.u64
+    match (
+        bn
+    ) case some then {
+        st.typing.typedefBaseName.set key: mid value: bn
+    } case none then null
+    if (st.reg.needsDestructor typeId: (ztypes.tid.create from: target.u64)) then {
+        st.reg.setNeedsDestructor typeId: mt
+    }
+}
+
+# typedefBaseClash -- the first argument a generic typedef's partial base
+# (`List t`) takes from this instance's substitution that the base's own
+# parameter refuses; a zero argTid when every one is admitted.
+typedefBaseClash: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    base: ztypes.tid
+    idSubs: (IdMapV u64 v: u64).view
+} out ztyping.typedefclash is {
+    none: (ztyping.typedefclash
+        baseDecl: ztypes.declid
+        paramName: zast.nameid
+        argTid: ztypes.tid
+        reported: false
+    )
+    if (st.reg.isPartialOf tid: base).not then return none
+    bd: declOfTypeId :st tid: (st.reg.genericOriginOf tid: base)
+    if bd.isZero then return none
+    pn: st.reg.genericParamNamesOf tdecl: bd
+    n: st.reg.genericArgCount specId: base
+    if pn.length < n then n = pn.length
+    i: u64
+    for i < n loop {
+        if (st.reg.genericArgIsValueAt specId: base ordinal: i).not then {
+            a: st.reg.genericArgAt specId: base ordinal: i
+            sa: (idSubs.get key: a).or d: a
+            p: pn.get :i
+            at: ztypes.tid.create from: sa.u64
+            if (constraintAdmits :ast :st :scope tdecl: bd paramName: p argTid: at).not then {
+                return (ztyping.typedefclash baseDecl: bd paramName: p argTid: at reported: false)
+            }
+        }
+        i = i + 1
+    }
+    return none
+}
+
+# reportTypedefClash -- the base refusal recorded for generic typedef instance
+# `tid`, reported once, here: the site that names the instance. Line 0 is the
+# end-of-check sweep, for an instance no site named.
+reportTypedefClash: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    tid: ztypes.tid
+    at: zast.nodeid
+    lineno: u32
+    colno: u32
+} is {
+    co: st.typing.typedefClash.get key: tid.u64
+    match (
+        co
+    ) case some then {
+        if co.reported then return
+        cl: co
+        cl.reported = true
+        st.typing.typedefClash.set key: tid.u64 value: cl
+        m: constraintUnmetText :ast :st tdecl: cl.baseDecl paramName: cl.paramName argTid: cl.argTid
+        org: st.reg.genericOriginOf :tid
+        tdn: qualifiedTypeName :st tid: org name: (st.reg.nameOf tid: org).stringView
+        m.append " (the base of '\{tdn}')"
+        reportConstraintUnmet :st :at :lineno :colno msg: m
+    } case none then null
+}
+
+# reportTypedefClashes -- every recorded base refusal no site reported.
+reportTypedefClashes: function {ast: Ast st: zenv.ZSymbolTable} is {
+    ks: ListVal u64
+    with cit: st.typing.typedefClash.iterateItems do for ce: cit loop {
+        if ce.value.reported.not then ks.append from: ce.key
+    }
+    with kit: ks.iterate do for k: kit loop {
+        (reportTypedefClash
+            :ast
+            :st
+            tid: (ztypes.tid.create from: k.u64)
+            at: zast.nodeid
+            lineno: 0
+            colno: 0
+        )
+    }
 }
 
 # synthInstanceValueMembers -- the comparison pair and the `hash` an instance of
@@ -20689,6 +20825,36 @@ constraintHolds: function {
     }
 }
 
+# constraintAdmits -- a generic argument its parameter's constraint admits.
+constraintAdmits: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    tdecl: ztypes.declid
+    paramName: zast.nameid
+    argTid: ztypes.tid
+} out bool is {
+    # a bare parameter has nothing to check yet and a partial re-checks on
+    # completion: both wear GENERIC_PARAM, and the tag is what covers both
+    if (st.reg.typetypeOf typeId: argTid) == ztypes.ztypetype.genericParam then return true
+    cd: st.reg.genericParamConstraintOf :tdecl :paramName
+    ck: cd.kind
+    if ck == ztypes.constraintkind.none then return true
+    # `null` is the payload-less marker and satisfies either FAMILY bound --
+    # a null arm carries no payload, so the family question does not arise
+    # ((Result null e: IoError) stays the io idiom). Hashability bounds
+    # still reject it: a null key has nothing to hash.
+    isNul: argTid.u64 == st.typing.nullTypeId
+    if isNul.not then {
+        nn: st.reg.nameOf tid: argTid
+        if nn.stringView == "null" then isNul = true
+    }
+    if isNul when ck == ztypes.constraintkind.refType then return true
+    if isNul when ck == ztypes.constraintkind.valType then return true
+    if ck == ztypes.constraintkind.other then return (namedBoundAdmits :ast :st :scope :cd :argTid)
+    return (constraintHolds :ast :st :scope :ck :argTid)
+}
+
 # check that a generic argument satisfies its parameter's constraint. A refusal
 # is reported at `at`/`lineno`/`colno`, the call that inferred the argument;
 # line 0 is the spec front door, which holds no source node.
@@ -20703,30 +20869,8 @@ checkConstraintSat: function {
     colno: u32
     argTid: ztypes.tid
 } is {
-    # a bare parameter has nothing to check yet and a partial re-checks on
-    # completion: both wear GENERIC_PARAM, and the tag is what covers both
-    if (st.reg.typetypeOf typeId: argTid) == ztypes.ztypetype.genericParam then return
-    cd: st.reg.genericParamConstraintOf :tdecl :paramName
-    ck: cd.kind
-    if ck == ztypes.constraintkind.none then return
-    # `null` is the payload-less marker and satisfies either FAMILY bound --
-    # a null arm carries no payload, so the family question does not arise
-    # ((Result null e: IoError) stays the io idiom). Hashability bounds
-    # still reject it: a null key has nothing to hash.
-    isNul: argTid.u64 == st.typing.nullTypeId
-    if isNul.not then {
-        nn: st.reg.nameOf tid: argTid
-        if nn.stringView == "null" then isNul = true
-    }
-    if isNul when ck == ztypes.constraintkind.refType then return
-    if isNul when ck == ztypes.constraintkind.valType then return
-    if ck == ztypes.constraintkind.other then {
-        if (namedBoundAdmits :ast :st :scope :cd :argTid) then return
-        m9: constraintUnmetText :ast :st :tdecl :paramName :argTid
-        reportConstraintUnmet :st :at :lineno :colno msg: m9
-        return
-    }
-    if (constraintHolds :ast :st :scope :ck :argTid) then return
+    if st.typing.quietBounds then return
+    if (constraintAdmits :ast :st :scope :tdecl :paramName :argTid) then return
     m: constraintUnmetText :ast :st :tdecl :paramName :argTid
     reportConstraintUnmet :st :at :lineno :colno msg: m
 }
@@ -24145,6 +24289,7 @@ genericTypeConstruction: function {
         fallbackArg: firstA
     )
     if mid.isZero then return (ztypes.tid.create from: 0)
+    reportTypedefClash :ast :st tid: mid at: call.nid lineno: call.lineno colno: call.colno
     isSized: tname.stringView == "str" or (tname.stringView == "array")
     if isSized then {
         (mintCollectionChildren
@@ -56218,6 +56363,7 @@ typecheck: function {
         checkConformances ast: program :st
         checkHashKeys ast: program :st
         checkSpecStandIns ast: program :st
+        reportTypedefClashes ast: program :st
         checkWideLiterals ast: program :st
         stampAliasValues :st ast: program
         stampGenericBounds :st ast: program

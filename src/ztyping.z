@@ -21,6 +21,7 @@ public: unit {
     :defaultval
     :foldedbranch
     :specstandin
+    :typedefclash
     :monosite
     :callslot
     :monostamp
@@ -94,6 +95,21 @@ monosite: record {
     colno: u32
     # the unit the call is written in
     unitDecl: ztypes.declid
+}
+
+# typedefclash -- a generic typedef instance whose base's own parameter refuses
+# the argument the instance hands it: `Bag: typedef (List t) as { t:
+# anyval.generic }` is accepted, and `Bag t: i64` gives List an i64. Reported
+# once, at the first site that names the instance.
+typedefclash: record {
+    # the base template's declaration, whose parameter refuses
+    baseDecl: ztypes.declid
+    # the refusing parameter
+    paramName: zast.nameid
+    # the argument it refuses
+    argTid: ztypes.tid
+    # already reported
+    reported: bool
 }
 
 # specstandin -- a value placed where a protocol or facet value is expected:
@@ -1000,6 +1016,11 @@ ZTyping: class {
     specStandIns: ListVal specstandin
     # each instance's first instantiating call, which its errors name
     monoSite: (IdMapV u64 v: monosite)
+    # each generic typedef instance whose base refuses its argument
+    typedefClash: (IdMapV u64 v: typedefclash)
+    # bound refusals are not reported: a typedef instance's base is being
+    # minted after its clash was recorded, and would only repeat it
+    quietBounds: bool
     # resolve every top-level definition of every unit, not only the ones a
     # use site demands: the tooling mode, so an error inside a definition
     # nothing references is still reported.
@@ -3188,6 +3209,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         conformance: List ztypes.ZConformance
         specStandIns: ListVal specstandin
         monoSite: (IdMapV u64 v: monosite)
+        typedefClash: (IdMapV u64 v: typedefclash)
+        quietBounds: false
         eagerAll: false
         dumpRows: false
         requireMain: true
