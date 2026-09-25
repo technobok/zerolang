@@ -1833,7 +1833,10 @@ perf: $(PERFBIN)
 # +1408 `List <Protocol>` works: 7 behaviour (the new pass gathers the
 # compiler's own collection monos to look for a protocol argument, and finds
 # none), 1401 source.
-ALLOC_BASELINE := 2676704
+#
+# +607 an unresolved spec return is no conformance evidence: 0 behaviour, 607
+# source.
+ALLOC_BASELINE := 2677311
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
