@@ -32814,23 +32814,24 @@ setEqBody: function {kind: u64} out String is {
     return "_a == _b".string
 }
 
-# the C body that destroys a Set's items.
-setDestroyItems: function {isStr: bool strC: StringView} out String is {
-    if isStr then {
-        return "    for (uint64_t i = 0; i < p->entries_len; i++) {\n        if (p->entries[i].alive) {\n            \{strC}_free(&p->entries[i].item);\n        }\n    }\n"
+# the C body that destroys a Set's items, handed the item's free statement
+# (mapValFreeStmt), empty for an item that owns nothing.
+setDestroyItems: function {itemFree: StringView} out String is {
+    if itemFree.length > 0 then {
+        return "    for (uint64_t i = 0; i < p->entries_len; i++) {\n        if (p->entries[i].alive) {\n            \{itemFree}\n        }\n    }\n"
     }
     return "".string
 }
 
 # the C snippet duplicating a Set item.
-setFreeItemDup: function {isStr: bool strC: StringView} out String is {
-    if isStr then return "        \{strC}_free(&_item);\n"
+setFreeItemDup: function {itemFree: StringView} out String is {
+    if itemFree.length > 0 then return "        \{itemFree}\n"
     return "".string
 }
 
 # the C snippet deleting a Set item.
-setFreeItemDel: function {isStr: bool strC: StringView} out String is {
-    if isStr then return "    \{strC}_free(&_this->entries[idx].item);\n"
+setFreeItemDel: function {itemFree: StringView} out String is {
+    if itemFree.length > 0 then return "    \{itemFree}\n"
     return "".string
 }
 
@@ -32957,9 +32958,13 @@ emitSetMono: function {
             buf.append fd
         }
     }
-    destroyItems: setDestroyItems :isStr strC: ctx.strC.stringView
-    freeItemDup: setFreeItemDup :isStr strC: ctx.strC.stringView
-    freeItemDel: setFreeItemDel :isStr strC: ctx.strC.stringView
+    et: ztypes.tid.create from: elemTid.u64
+    ifDestroy: mapValFreeStmt :symtab :ctx valTid: et slot: "p->entries[i].item"
+    destroyItems: setDestroyItems itemFree: ifDestroy.stringView
+    ifDup: mapValFreeStmt :symtab :ctx valTid: et slot: "_item"
+    freeItemDup: setFreeItemDup itemFree: ifDup.stringView
+    ifDel: mapValFreeStmt :symtab :ctx valTid: et slot: "_this->entries[idx].item"
+    freeItemDel: setFreeItemDel itemFree: ifDel.stringView
     p: "\{runtimeDir}/z_Set.c.tmpl"
     raw: readTemplateCached :ctx path: p.stringView
     if raw.length > 0 then {
@@ -33018,12 +33023,13 @@ emitSetMono: function {
     )
 }
 
-# mapDestroyEntries / mapFreeKeyDup / mapFreeKeyDel -- String-key cleanup
+# mapDestroyEntries / mapFreeKeyDup / mapFreeKeyDel -- the key cleanup
 # fragments: per-entry key free on destroy, incoming-key free when a set hits
-# an existing key, stored-key free on delete. Empty for non-heap keys.
-mapDestroyEntries: function {isStr: bool strC: StringView valFree: StringView} out String is {
+# an existing key, stored-key free on delete. Each is handed the key's free
+# statement for its slot (mapValFreeStmt), empty for a key that owns nothing.
+mapDestroyEntries: function {keyFree: StringView valFree: StringView} out String is {
     keyLine: String
-    if isStr then keyLine = "            \{strC}_free(&p->entries[i].key);\n"
+    if keyFree.length > 0 then keyLine = "            \{keyFree}\n"
     valLine: String
     if valFree.length > 0 then valLine = "            \{valFree}\n"
     if keyLine.length + valLine.length == 0 then return "".string
@@ -33031,15 +33037,15 @@ mapDestroyEntries: function {isStr: bool strC: StringView valFree: StringView} o
 }
 
 # the C snippet duplicating a Map key.
-mapFreeKeyDup: function {isStr: bool strC: StringView} out String is {
-    if isStr then return "        \{strC}_free(&_key);\n"
+mapFreeKeyDup: function {keyFree: StringView} out String is {
+    if keyFree.length > 0 then return "        \{keyFree}\n"
     return "".string
 }
 
 # the C snippet deleting a Map key (and its value).
-mapFreeKeyDel: function {isStr: bool strC: StringView valFree: StringView} out String is {
+mapFreeKeyDel: function {keyFree: StringView valFree: StringView} out String is {
     res: String
-    if isStr then res = "    \{strC}_free(&_this->entries[idx].key);\n"
+    if keyFree.length > 0 then res = "    \{keyFree}\n"
     if valFree.length > 0 then res = "\{res}    \{valFree}\n"
     return res
 }
@@ -33304,12 +33310,10 @@ emitMapMono: function {
     )
     freeValDup: String
     if vfDup.length > 0 then freeValDup = "        \{vfDup}\n"
-    destroyEntries: (mapDestroyEntries
-        isStr: keyIsStr
-        strC: ctx.strC.stringView
-        valFree: vfDestroy.stringView
-    )
-    freeKeyDup: mapFreeKeyDup isStr: keyIsStr strC: ctx.strC.stringView
+    kfDestroy: mapValFreeStmt :symtab :ctx valTid: kk slot: "p->entries[i].key"
+    destroyEntries: mapDestroyEntries keyFree: kfDestroy.stringView valFree: vfDestroy.stringView
+    kfDup: mapValFreeStmt :symtab :ctx valTid: kk slot: "_key"
+    freeKeyDup: mapFreeKeyDup keyFree: kfDup.stringView
     getBody: String
     if (originIsTid
         :symtab
@@ -33337,7 +33341,8 @@ emitMapMono: function {
     rmWrapName: regNameOf :symtab tid: (ztypes.tid.create from: rmWrapId.u64)
     rmWrap: cbaseNoPrefix :ctx tid: (ztypes.tid.create from: rmWrapId.u64)
     rmWrapU: cUpperOf text: rmWrapName.stringView
-    keyOnlyFree: mapFreeKeyDel isStr: keyIsStr strC: ctx.strC.stringView valFree: ""
+    kfDel: mapValFreeStmt :symtab :ctx valTid: kk slot: "_this->entries[idx].key"
+    keyOnlyFree: mapFreeKeyDel keyFree: kfDel.stringView valFree: ""
     delTail: "\{keyOnlyFree}    _this->entries[idx].alive = 0;\n    _this->indices[slot] = Z_\{mcr}_INDEX_DELETED;\n    _this->length--;\n"
     removeBody: String
     if (originIsTid
