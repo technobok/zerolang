@@ -1829,7 +1829,11 @@ perf: $(PERFBIN)
 # +3440 an owning place refuses a bare conformer: -7 behaviour (a protocol-typed
 # DATA field read -- zvfs's ProviderBox.p -- no longer pushes a projection pin;
 # only a conformance label projects), 3447 source.
-ALLOC_BASELINE := 2675296
+#
+# +1408 `List <Protocol>` works: 7 behaviour (the new pass gathers the
+# compiler's own collection monos to look for a protocol argument, and finds
+# none), 1401 source.
+ALLOC_BASELINE := 2676704
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

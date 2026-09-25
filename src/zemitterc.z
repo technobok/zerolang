@@ -36576,6 +36576,7 @@ emitMonos: function {
         emitOneVariant :ast :symtab :ctx tid: (ztypes.tid.create from: svId.u64) :buf
         tsv = tsv + 1
     }
+    preEmitProtocolElems :ast :symtab :ctx :work :buf
     (emitOptionMonos
         :ast
         :symtab
@@ -36591,6 +36592,51 @@ emitMonos: function {
         :work
         :buf
     )
+}
+
+# preEmitProtocolElems -- a container of PROTOCOL values holds each value by
+# value and destroys it through the protocol's destroy, so the protocol's
+# struct, vtable and destroy are declared before any mono that stores one.
+# They were emitted with the user types, after every mono, and `List Shape`
+# named a struct the C compiler had not seen.
+preEmitProtocolElems: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    work: MonoWork.view
+    buf: String.borrow
+} is {
+    monos: ListVal u64
+    with a: work.wOptRes.iterate do for m: a loop monos.append from: m
+    with b: work.wOptView.iterate do for m: b loop monos.append from: m
+    with c: work.wArr.iterate do for m: c loop monos.append from: m
+    with d: work.wListView.iterate do for m: d loop monos.append from: m
+    with e: work.wList.iterate do for m: e loop monos.append from: m
+    with f: work.wSet.iterate do for m: f loop monos.append from: m
+    with g: work.wMap.iterate do for m: g loop monos.append from: m
+    with mit: monos.iterate do for mono: mit loop {
+        preEmitProtocolArgs :ast :symtab :ctx mono: (ztypes.tid.create from: mono) :buf
+    }
+}
+
+# preEmitProtocolArgs -- each protocol among one mono's type arguments.
+preEmitProtocolArgs: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    mono: ztypes.tid
+    buf: String.borrow
+} is {
+    n: symtab.reg.genericArgCount specId: mono
+    i: u64
+    for i < n loop {
+        at: ztypes.tid.create from: (symtab.reg.genericArgAt specId: mono ordinal: i)
+        isType: (symtab.reg.genericArgIsValueAt specId: mono ordinal: i).not
+        if isType when (symtab.reg.typetypeOf typeId: at) == ztypes.ztypetype.protocolType then {
+            maybePreEmitElem :ast :symtab :ctx eid: at :buf
+        }
+        i = i + 1
+    }
 }
 
 # emitRecordDefs -- main-unit record structs + meta_create constructors
