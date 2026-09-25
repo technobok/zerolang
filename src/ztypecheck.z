@@ -7685,14 +7685,19 @@ conformanceReport: function {
 }
 
 # conformanceImplMethod -- the method the conformer declares under the spec
-# method's name, or 0 when it declares none (or declares a field there).
+# method's name, or 0 when it declares none (or declares a field there). A
+# typedef's is its chain's first declarer: its own, or its base's, and a `null`
+# shell that hides the base's is no method.
 conformanceImplMethod: function {
     st: zenv.ZSymbolTable.view
     implTid: ztypes.tid
     mnameId: zast.nameid
 } out ztypes.tid is {
     r: ztypes.tid
-    imo: st.typing.declChildOfId parentTypeId: implTid nameId: mnameId
+    imo: (st.typing.declChildOfId
+        parentTypeId: (valOpOwner :st tid: implTid nameId: mnameId)
+        nameId: mnameId
+    )
     match (
         imo
     ) case some then {
@@ -20813,7 +20818,8 @@ sumMemberAdmits: function {
 }
 
 # typeConformsTo -- a conformance row names `impl` (or the template it was
-# instantiated from) against `spec`.
+# instantiated from) against `spec`, or `impl` is a typedef that inherits the
+# conformance from its base.
 typeConformsTo: function {
     st: zenv.ZSymbolTable.view impl: ztypes.tid spec: ztypes.tid
 } out bool is {
@@ -20826,7 +20832,74 @@ typeConformsTo: function {
             found = true
         }
     }
-    return found
+    if found then return true
+    return (typedefInheritsConformance :st :impl :spec)
+}
+
+# typedefInheritsConformance -- a typedef conforms where its base does, while
+# every spec method's first declarer on the typedef still keeps the spec's
+# signature: the base's own, or an override that counts as its own new
+# definition. A method hidden with `null` implements nothing, so a typedef
+# that hides or reshapes one quietly does not conform, and using it as the
+# spec is refused at the use.
+typedefInheritsConformance: function {
+    st: zenv.ZSymbolTable.view impl: ztypes.tid spec: ztypes.tid
+} out bool is {
+    base: typedefBaseTidOf :st tid: impl
+    if base.isZero then return false
+    if (typeConformsTo :st impl: base :spec).not then return false
+    slots: st.typing.declRowSlots ownerTid: spec
+    si: u64
+    for si < slots loop {
+        row: st.typing.declRowAt ownerTid: spec membersOnly: true slot: si
+        si = si + 1
+        smid: ztypes.tid.create from: row.tid
+        if row.keep.not or (row.name == zast.names.wkCreate.u64) then continue
+        if (st.reg.typetypeOf typeId: smid) != ztypes.ztypetype.functionType then continue
+        if (conformanceSpecIsSelfTyped :st specTid: spec :smid) then continue
+        imid: (conformanceImplMethod
+            :st
+            implTid: impl
+            mnameId: (zast.nameid.create from: row.name.u32.orPanic)
+        )
+        if (conformanceMethodMatches :st :smid :imid).not then return false
+    }
+    return true
+}
+
+# conformanceMethodMatches -- checkConformanceMethod's comparisons as a
+# predicate: `imid` implements the spec method `smid` with its exact
+# signature. Nothing is reported.
+conformanceMethodMatches: function {
+    st: zenv.ZSymbolTable.view smid: ztypes.tid imid: ztypes.tid
+} out bool is {
+    if imid.isZero or (st.reg.isGenericOf tid: imid) then return false
+    sids: ListVal u64
+    snms: ListVal u64
+    conformanceParams :st mid: smid ids: sids nameIds: snms
+    iids: ListVal u64
+    inms: ListVal u64
+    conformanceParams :st mid: imid ids: iids nameIds: inms
+    if sids.length != iids.length then return false
+    sRo: conformanceReceiverOwn :st mid: smid
+    if sRo != (conformanceReceiverOwn :st mid: imid) then return false
+    pi: u64
+    for pi < sids.length loop {
+        if (sids.get i: pi) != (iids.get i: pi) then return false
+        spN: zast.nameid.create from: (snms.get i: pi).u32.orPanic
+        ipN: zast.nameid.create from: (inms.get i: pi).u32.orPanic
+        spO: conformanceOwn o: (st.typing.declOwnershipOfId parentTypeId: smid nameId: spN)
+        ipO: conformanceOwn o: (st.typing.declOwnershipOfId parentTypeId: imid nameId: ipN)
+        if spO != ipO then return false
+        pi = pi + 1
+    }
+    sRetT: (methodReturnOf :st mid: smid).or d: ztypes.tid
+    iRetT: (methodReturnOf :st mid: imid).or d: ztypes.tid
+    if sRetT != iRetT then return false
+    sPins: (st.typing.funcPins.get key: smid).or d: false
+    iPins: (st.typing.funcPins.get key: imid).or d: false
+    if sPins != iPins then return false
+    return (conformanceReturnMarker :st mid: smid) == (conformanceReturnMarker :st mid: imid)
 }
 
 # constraintUnmetText -- the message for a generic argument its parameter's
@@ -20875,13 +20948,17 @@ hashableUnmetReason: function {
         return (valHashableUnmetReason :ast :st :tid)
     }
     if ck == ztypes.constraintkind.refHashable when (st.reg.isReftypeOf :tid) then {
-        htd: typedefChainEnd :st :tid
         kn: st.reg.nameOf :tid
-        if (st.typing.declIsMethodId parentTypeId: htd nameId: zast.names.wkHash).not then {
+        ho: valOpOwner :st :tid nameId: zast.names.wkHash
+        if (st.typing.declIsMethodId parentTypeId: ho nameId: zast.names.wkHash).not then {
             return "'\{kn}' declares no 'hash'"
         }
-        if (st.typing.declIsMethodId parentTypeId: htd nameId: zast.names.wkOpEq).not then {
+        eo: valOpOwner :st :tid nameId: zast.names.wkOpEq
+        if (st.typing.declIsMethodId parentTypeId: eo nameId: zast.names.wkOpEq).not then {
             return "'\{kn}' declares no '=='"
+        }
+        if (ownEqWithoutOwnHash :st :tid) then {
+            return "it writes its own '==' but not its 'hash', and a key's two must agree".string
         }
     }
     return "".string
@@ -21121,31 +21198,32 @@ typeIsHashable: function {
         if (valEqMissingPart :ast :st :tid depth: 0).isZero.not then return false
         return (valHashMissingPart :ast :st :tid depth: 0).isZero
     }
-    # a reference type declares both itself; a typedef over one asks its base
-    htd: typedefChainEnd :st :tid
-    if (st.typing.declIsMethodId
-        parentTypeId: htd
-        nameId: (zast.nameid.create from: zast.names.wkHash)
-    ).not then return false
-    return (st.typing.declIsMethodId
-        parentTypeId: htd
-        nameId: (zast.nameid.create from: zast.names.wkOpEq)
-    )
+    # a reference type declares both itself; a typedef takes each from the
+    # first link of its chain that declares it, and a `null` shell is no method
+    ho: valOpOwner :st :tid nameId: zast.names.wkHash
+    if (st.typing.declIsMethodId parentTypeId: ho nameId: zast.names.wkHash).not then return false
+    eo: valOpOwner :st :tid nameId: zast.names.wkOpEq
+    if (st.typing.declIsMethodId parentTypeId: eo nameId: zast.names.wkOpEq).not then return false
+    return (ownEqWithoutOwnHash :st :tid).not
 }
 
-# typedefChainEnd -- the end of `tid`'s typedef chain: the type a typedef over
-# a reference type takes its members from.
-typedefChainEnd: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
+# ownEqWithoutOwnHash -- a link of `tid`'s typedef chain writes its own `==`
+# while the `hash` it would be keyed by is still its base's. The two must
+# agree, and the base's hash knows nothing of the typedef's equality.
+ownEqWithoutOwnHash: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
     t: tid
-    for true loop {
+    for t.isZero.not loop {
         bo: st.typing.typedefBaseTid.get key: t
-        match (
-            bo
-        ) case some then {
-            t = ztypes.tid.create from: bo
-        } case none then break
+        if bo.none then return false
+        if (st.typing.declMemberIdOf parentTypeId: t nameId: zast.names.wkHash).isZero.not then {
+            return false
+        }
+        if (st.typing.declMemberIdOf parentTypeId: t nameId: zast.names.wkOpEq).isZero.not then {
+            return true
+        }
+        t = ztypes.tid.create from: bo
     }
-    return t
+    return false
 }
 
 # checkHashKeys -- every type a hashable bound admitted as a Map or Set key,
@@ -21178,9 +21256,18 @@ checkHashKey: function {
     seen.add item: tid.u64
     if (st.reg.isValtypeOf :tid).not then {
         if (st.reg.isReftypeOf :tid).not then return
-        htd: typedefChainEnd :st :tid
-        checkKeyMember :ast :st owner: htd nameId: zast.names.wkHash
-        checkKeyMember :ast :st owner: htd nameId: zast.names.wkOpEq
+        (checkKeyMember
+            :ast
+            :st
+            owner: (valOpOwner :st :tid nameId: zast.names.wkHash)
+            nameId: zast.names.wkHash
+        )
+        (checkKeyMember
+            :ast
+            :st
+            owner: (valOpOwner :st :tid nameId: zast.names.wkOpEq)
+            nameId: zast.names.wkOpEq
+        )
         return
     }
     hs: valOpSource :ast :st :tid nameId: zast.names.wkHash
@@ -28244,9 +28331,12 @@ checkDotted: function {
         cnId = intNmX
         aliasViaX = true
     }
+    tdT: bt
     if (declaresOwnInequality :st :ast :bt :cnId).not then {
         bt = typedefMemberOwner :st :ast :bt :cnId
+        if (refuseHiddenTypedefMember :st :ast :dp :bt :cnId) then return ztypes.tid
     }
+    if (refuseTypedefArmConstructor :st :unitDecl :ast :dp :tdT :bt :cnId) then return ztypes.tid
     tacc: checkTagAccessor :st :unitDecl :ast :dp :bt :cnId
     if tacc.handled then return tacc.tid
     # A cross-unit narrowed match-arm base can be a SHELL whose member
@@ -28343,21 +28433,135 @@ declaresOwnInequality: function {
     return (derivedInequalityMember :st :ast :bt :cnId :mo).some
 }
 
-# typedefMemberOwner -- the type a member read resolves on: the base itself, or# typedefMemberOwner -- the type a member read resolves on: the base itself, or
-# the base a typedef delegates a member it does not carry to (Bytes.append is
-# List_u8.append).
+# refuseTypedefArmConstructor -- `ShapeAlias.sq 4`: an arm constructor named
+# through a typedef `tdT` over a union or variant `bt` (the same type when the
+# receiver is no typedef). A typedef is built from one value
+# of its base, so the arm is constructed on the base and the typedef from it.
+# On a VALUE the same path is the arm predicate, which reads through.
+refuseTypedefArmConstructor: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    dp: dpref
+    tdT: ztypes.tid
+    bt: ztypes.tid
+    cnId: zast.nameid
+} out bool is {
+    if tdT == bt then return false
+    btt: st.reg.typetypeOf typeId: bt
+    if btt != ztypes.ztypetype.unionType when btt != ztypes.ztypetype.variantType then return false
+    mo: st.typing.declChildOfId parentTypeId: bt nameId: cnId
+    if mo.none then return false
+    ctt: st.reg.typetypeOf typeId: (ztypes.tid.create from: mo)
+    if ctt == ztypes.ztypetype.functionType or (ctt == ztypes.ztypetype.dataType) then return false
+    if (dottedBaseIsValue :st :ast :unitDecl n: (ast.nodes.get i: dp.nid.u64)) then return false
+    tn: st.reg.nameOf tid: tdT
+    bn: st.reg.nameOf tid: bt
+    an: zast.nameTextAt :ast ref: cnId
+    (addErrorH
+        :st
+        nodeid: dp.nid
+        lineno: dp.lineno
+        colno: dp.colno
+        e: zast.err.typeError
+        msg: "'\{an}' is an arm of '\{bn}', not of the typedef '\{tn}'"
+        note: "a typedef is built from one value of its base".string
+        hint: "construct the arm on '\{bn}' and build '\{tn}' from that value"
+        width: 1
+    )
+    return true
+}
+
+# typedefSumBase -- the union or variant at the end of `tid`'s typedef chain,
+# whose arms a match, an arm predicate and narrowing read through the
+# typedef; `tid` itself when it is no typedef over a sum.
+typedefSumBase: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
+    if (typedefBaseTidOf :st :tid).isZero then return tid
+    t: tid
+    for (typedefBaseTidOf :st tid: t).isZero.not loop t = typedefBaseTidOf :st tid: t
+    tt: st.reg.typetypeOf typeId: (partialTemplateOf :st tid: t)
+    if tt == ztypes.ztypetype.unionType or (tt == ztypes.ztypetype.variantType) then return t
+    return tid
+}
+
+# typedefMemberOwner -- the type a member read resolves on: the first link of
+# the receiver's typedef chain that declares it -- the receiver itself, or the
+# base a typedef delegates a member it does not carry to (Bytes.append is
+# List_u8.append), through any number of typedefs. A typedef that hides the
+# member (`twice: null`) declares it too, and typedefHidesMember tells the
+# caller so. When no link declares it, the chain's end, whose conversions and
+# lenient members answer for it.
 typedefMemberOwner: function {
     st: zenv.ZSymbolTable
     ast: Ast
     bt: ztypes.tid
     cnId: zast.nameid
 } out ztypes.tid is {
-    forceMemberOf :st :ast parentTypeId: bt nameId: cnId
-    if (st.typing.declChildOfId parentTypeId: bt nameId: cnId).some then return bt
-    tdd: typedefBaseTidOf :st tid: bt
-    if tdd.isZero then tdd = typedefBaseOf :st tid: bt
-    if tdd > 0 then return tdd
-    return bt
+    cur: bt
+    depth: u64
+    for depth < 64 loop {
+        depth = depth + 1
+        forceMemberOf :st :ast parentTypeId: cur nameId: cnId
+        if (st.typing.declChildOfId parentTypeId: cur nameId: cnId).some then return cur
+        if (typedefHidesMember :st :ast tid: cur :cnId) then return cur
+        nxt: typedefBaseTidOf :st tid: cur
+        if nxt.isZero then nxt = typedefBaseOf :st tid: cur
+        if nxt.isZero then return cur
+        cur = nxt
+    }
+    return cur
+}
+
+# refuseHiddenTypedefMember -- a use of a member the typedef `bt` hides.
+refuseHiddenTypedefMember: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+} out bool is {
+    if (typedefHidesMember :st :ast tid: bt :cnId).not then return false
+    hn: st.reg.nameOf tid: bt
+    mn: zast.nameTextAt :ast ref: cnId
+    (addErrorH
+        :st
+        nodeid: dp.nid
+        lineno: dp.lineno
+        colno: dp.colno
+        e: zast.err.typeError
+        msg: "'\{hn}' hides '\{mn}'"
+        note: "a typedef's `\{mn}: null` hides the member its base declares"
+        hint: String
+        width: 1
+    )
+    return true
+}
+
+# typedefHidesMember -- a typedef's as-block sets the member to `null`, which
+# hides the member its base declares.
+typedefHidesMember: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    tid: ztypes.tid
+    cnId: zast.nameid
+} out bool is {
+    if (typedefBaseTidOf :st :tid).isZero then return false
+    td: declOfTypeId :st :tid
+    if td.isZero then return false
+    dnode: u32
+    {
+        dro: st.typing.decls.get i: td.u64
+        dnode = dro.node
+    }
+    if dnode == 0 then return false
+    nop: ast.nodes.get i: dnode.u64
+    if nop.namedoperation.not then return false
+    op: ast.nodes.get i: nop.operation.u64
+    if op.objectdef then {
+        nm: zast.nameTextAt :ast ref: cnId
+        return (memberNullOptOut :ast asItems: op.asItems member: nm.stringView)
+    }
+    return false
 }
 
 # refuseReadUnderPin -- the dotted path is READ while another variable holds
@@ -43822,7 +44026,8 @@ checkCase: function {
     foldCaseArm :st :ast :unitDecl n: casenode
     constFailClear :st
     matchMarker: st.pushBlock node: casenode.nid
-    subjT: caseSubjectTid :st :unitDecl :ast :casenode
+    # a typedef over a union or variant is matched on its base's arms
+    subjT: typedefSumBase :st tid: (caseSubjectTid :st :unitDecl :ast :casenode)
     # per-mono instance walk: a subject that is a bare TYPE name (resolved
     # by the instance's scope define, not a value) is a compile-time
     # dissection -- only the arm this instance selects is walked
