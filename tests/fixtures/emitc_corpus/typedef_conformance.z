@@ -1,0 +1,46 @@
+# typedef_conformance.z -- a typedef inherits its base's conformances. Where
+# it is used as the protocol, or as the facet, it is boxed under the base's
+# label with a vtable of its own, whose slots are its first declarers: an
+# override it writes (Echo) is what the protocol calls. A chain inherits too.
+# The checker refused an inherited conformance outright, and an explicit
+# `:Speaker` on a typedef emitted its wrappers over a struct nobody declared.
+Speaker: protocol {
+    speak: function {:this} out u64
+}
+
+Dog: class { n: u64 s: String } as {
+    :Speaker
+    speak: function {:this} out u64 is { return this.n }
+}
+
+Echo: typedef Dog as {
+    speak: function {:this} out u64 is { return this.n * 2 }
+}
+
+Pup: typedef Dog
+Pup2: typedef Pup
+sizer: facet {
+    size: function {:this} out u64
+}
+
+pt: record { n: u64 } as {
+    m: sizer
+    size: function {:this} out u64 is { return this.n + 100 }
+}
+
+ptA: typedef pt
+hear: function {s: Speaker} out u64 is { return s.speak }
+measure: function {z: sizer} out u64 is { return z.size }
+main: function is {
+    e: Echo (Dog n: 3 s: "e".string)
+    p: Pup (Dog n: 4 s: "p".string)
+    q: Pup2 (Pup (Dog n: 5 s: "q".string))
+    print "hear \{hear s: e} \{hear s: p} \{hear s: q}"
+    b: Speaker.create from: Echo (Dog n: 6 s: "b".string)
+    print "box \{b.speak}"
+    xs: List Speaker
+    xs.append from: (Speaker.create from: Pup (Dog n: 7 s: "x".string))
+    print "list \{xs.length}"
+    a: ptA (pt n: 1)
+    print "facet \{measure z: a}"
+}

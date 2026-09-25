@@ -1,0 +1,69 @@
+# typedef_members_keys.z -- a typedef's OWN methods are called on it, and its
+# base's are forwarded, each at the first link of the chain that declares it:
+# an override wins, a mutation through a parameter or a field persists.
+# As a Map or Set key a typedef hashes and compares by the first declarer of
+# each member, its own or its base's, and every key is freed.
+# The emitter chased every typedef to its base, so an own method was read as
+# a field of the base's struct, and a typedef key was hashed as a scalar.
+Box: class { n: u64 s: String } as {
+    twice: function {t: this.view} out u64 is { return t.n * 2 }
+    add: function {t: this.view k: u64} out u64 is { return t.n + k }
+    hash: function {t: this.view} out u64 is { return t.n }
+    ==: function {t: this.view rhs: Box} out bool is { return t.n == rhs.n }
+}
+
+Loud: typedef Box as {
+    twice: function {t: this.view} out u64 is { return t.n * 20 }
+    plus: function {t: this.view k: u64 m: u64} out u64 is { return (t.add :k) + m }
+    grow: function {:this} is { this.n = this.n + 10 }
+}
+
+Louder: typedef Loud as {
+    thrice: function {t: this.view} out u64 is { return t.n * 3 }
+}
+
+pt: record { n: u64 } as {
+    twice: function {t: this.view} out u64 is { return t.n * 2 }
+}
+
+ptX: typedef pt as {
+    half: function {t: this.view} out u64 is { return t.n / 2 }
+}
+
+Holder: class { l: Loud }
+viaParam: function {l: Loud} out u64 is {
+    l.grow
+    return (l.plus k: 1 m: 2)
+}
+
+Parity: typedef Box as {
+    hash: function {t: this.view} out u64 is { return t.n % 2 }
+    ==: function {t: this.view rhs: Parity} out bool is { return t.n % 2 == (rhs.n % 2) }
+}
+
+BoxK: typedef Box
+main: function is {
+    l: Loud (Box n: 3 s: "a".string)
+    print "own \{l.twice} \{l.add k: 1} \{l.plus k: 1 m: 1}"
+    l.grow
+    print "grow \{l.n}"
+    print "param \{viaParam :l} \{l.n}"
+    h: Holder l: Loud (Box n: 5 s: "b".string)
+    print "field \{h.l.twice} \{h.l.plus k: 0 m: 0}"
+    h.l.grow
+    print "fieldgrow \{h.l.n}"
+    r: Louder (Loud (Box n: 1 s: "c".string))
+    print "chain \{r.twice} \{r.thrice} \{r.add k: 5}"
+    p: ptX (pt n: 8)
+    print "rec \{p.half} \{p.twice}"
+    m: MapRV Parity v: u64
+    m.set key: Parity (Box n: 1 s: "a".string) value: 1
+    m.set key: Parity (Box n: 3 s: "b".string) value: 2
+    m.set key: Parity (Box n: 4 s: "c".string) value: 3
+    ks: SetRef BoxK
+    ks.add item: BoxK (Box n: 2 s: "d".string)
+    ks.add item: BoxK (Box n: 2 s: "e".string)
+    kd: BoxK (Box n: 2 s: "f".string)
+    ks.delete item: kd
+    print "keys \{m.length} \{ks.length}"
+}

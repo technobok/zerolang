@@ -7926,7 +7926,7 @@ emitSynthOperatorCallForm: function {
     if (isOperatorName name: mnS).not then return "".string
     if call.arguments.count.u64 != 1 then return "".string
     rt0S: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
-    rtcS: chaseAggregateTypedef :symtab :ctx tid: (ztypes.tid.create from: rt0S.u64)
+    rtcS: typedefMethodOwner :ast :symtab :ctx tid: (ztypes.tid.create from: rt0S.u64) mn: mnS
     ownerS: (methodOwnerId
         :ast
         :symtab
@@ -7992,7 +7992,7 @@ emitInstanceMethodCall: function {
     # the pointer to the element a method takes its receiver by
     bxEl: callableBoxElem :ast :symtab :ctx callable: callableNode
     if bxEl > 0 then rtid0 = ztypes.tid.create from: bxEl.u64
-    rtidc: chaseAggregateTypedef :symtab :ctx tid: (ztypes.tid.create from: rtid0.u64)
+    rtidc: typedefMethodOwner :ast :symtab :ctx tid: (ztypes.tid.create from: rtid0.u64) :mn
     rtid: methodOwnerId :ast :symtab rtid: (ztypes.tid.create from: rtidc.u64) :mn
     if rtid == 0 then return "".string
     # Both families reach here: a user record's methods take their receiver by
@@ -8277,7 +8277,9 @@ callRhsIsBorrow: function {
     chId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if chId.isZero then return false
     rid: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
-    rid = chaseAggregateTypedef :symtab :ctx tid: (ztypes.tid.create from: rid.u64)
+    chNm: zast.nameTextAt :ast ref: chId
+    ridT: ztypes.tid.create from: rid.u64
+    rid = typedefMethodOwner :ast :symtab :ctx tid: ridT mn: chNm.stringView
     mfid: ((symtab.typing.declChildOfId
         parentTypeId: rid
         nameId: chId
@@ -8380,7 +8382,7 @@ refBorrowCalleeFid: function {
         ch8: aliasChildName :ast :symtab n: (ast.nodes.get i: n.callable.u64)
         if ch8.length == 0 then return 0
         rid8: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: n.callable.u64)
-        rid8 = chaseAggregateTypedef :symtab :ctx tid: (ztypes.tid.create from: rid8.u64)
+        rid8 = typedefMethodOwner :ast :symtab :ctx tid: (ztypes.tid.create from: rid8.u64) mn: ch8
         mf8: ((symtab.typing.declChildOf
             pool: ast.names
             parentTypeId: rid8
@@ -14818,7 +14820,7 @@ emitDottedNestedBase: function {
     nnid9: interpPartNodeId n: (ast.nodes.get i: n.parent.u64)
     nlid: monoStampIdOf :symtab :ctx nid: nnid9.u64
     if nlid.isZero then nlid = stampIdOf :symtab nid: nnid9
-    nlid = ztypes.tid.create from: (chaseAggregateTypedef :symtab :ctx tid: nlid)
+    nlid = typedefMethodOwner :ast :symtab :ctx tid: nlid mn: mn2
     # a Map/Set-typed base is a heap pointer regardless of how it was
     # reached (a field path fails pathIsPointer's lock-field test)
     nbPar: ast.nodes.get i: n.parent.u64
@@ -15760,7 +15762,7 @@ emitDottedAtomBase: function {
             if brid > 0 then bstamp = ztypes.tid.create from: brid.u64
         }
     }
-    bstamp = ztypes.tid.create from: (chaseAggregateTypedef :symtab :ctx tid: bstamp)
+    bstamp = typedefMethodOwner :ast :symtab :ctx tid: bstamp mn: mn2
     bstamp = ztypes.tid.create from: (chaseStrTypedef :symtab :ctx tid: bstamp)
     rtt: symtab.reg.typetypeOf typeId: bstamp
     viaVtable: vtableAutoCallName :ast leaf: n.child name: mn2
@@ -22350,6 +22352,14 @@ emitMatchStmt: function {
         name: stn.stringView
     )
     if (matchGenericRoute :ast :symtab :ctx :m :assignTo :ind :tmp :buf) then return
+    # a typedef over a union or variant is matched on its base's tag
+    {
+        vend: typedefChaseTid :symtab tid: (ztypes.tid.create from: vtid.u64)
+        vett: symtab.reg.typetypeOf typeId: vend
+        if vett == ztypes.ztypetype.unionType or (vett == ztypes.ztypetype.variantType) then {
+            vtid = vend.u64
+        }
+    }
     isVar: false
     isUni: false
     if vtid > 0 then {
@@ -28387,6 +28397,34 @@ chaseAggregateTypedef: function {
     return e
 }
 
+# typedefMethodOwner -- the type a call of method `mn` on a value of `tid`
+# resolves on: the first link of tid's typedef chain that declares the method
+# with a body -- a typedef's own method -- else chaseAggregateTypedef's end,
+# which the typedef shares every other member with. A typedef's NATIVE member
+# (Bytes.byteView) has no C of its own: the runtime serves it as the end's.
+typedefMethodOwner: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tid: ztypes.tid
+    mn: StringView
+} out ztypes.tid is {
+    if (symtab.typing.typedefBaseTid.has key: tid).not then return tid
+    t: tid
+    for t.isZero.not loop {
+        mo: symtab.typing.declChildOf pool: ast.names parentTypeId: t name: mn
+        match (
+            mo
+        ) case some then {
+            if (fnIsNativeId :symtab fid: (ztypes.tid.create from: mo)).not then return t
+        } case none then null
+        bo: symtab.typing.typedefBaseTid.get key: t
+        if bo.none then break
+        t = ztypes.tid.create from: bo
+    }
+    return (chaseAggregateTypedef :symtab :ctx :tid)
+}
+
 # chaseStrTypedef -- a typedef over String/StringView (Path, PathView),
 # through any number of typedefs, canonicalizes to the base tid: the wrapper
 # shares the base's struct, methods, and cleanup.
@@ -32674,15 +32712,22 @@ monoElemName: function {full: String prefixLen: u64} out String is {
 # declaredKeyFnId -- the fn id of a `hash` or `==` the KEY TYPE declared, or
 # zero when it declares none. A reftype key has no byte representation to hash --
 # its contents live behind a pointer -- so RefHashable makes it declare both,
-# and the container must then CALL them instead of casting the aggregate.
+# and the container must then CALL them instead of casting the aggregate. A
+# typedef over an aggregate keys by the first link of its chain that declares
+# each, as the checker admitted it; a scalar typedef hashes as its scalar.
 declaredKeyFnId: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    tid: ztypes.tid
+    ctx: Ctx.view
+    tid0: ztypes.tid
     member: StringView
 } out ztypes.tid is {
     nid: zast.poolFind pool: ast.names text: member
     if nid.isZero then return ztypes.tid
+    tid: tid0
+    if (chaseAggregateTypedef :symtab :ctx tid: tid0) != tid0 then {
+        tid = ztypecheck.valOpOwner st: symtab tid: tid0 nameId: nid
+    }
     if (symtab.typing.declIsMethodId parentTypeId: tid nameId: nid).not then return ztypes.tid
     if (symtab.typing.declMemberIsSynth parentTypeId: tid nameId: nid) then return ztypes.tid
     mo: symtab.typing.declChildOfId parentTypeId: tid nameId: nid
@@ -32707,7 +32752,7 @@ declaredKeyFnC: function {
     tid: ztypes.tid
     member: StringView
 } out String is {
-    fid: declaredKeyFnId :ast :symtab :tid :member
+    fid: declaredKeyFnId :ast :symtab :ctx tid0: tid :member
     if fid.isZero then return "".string
     return (ctxCname :ctx tid: fid)
 }
@@ -32747,6 +32792,7 @@ keyFnParamConstC: function {
 keyFnProtosC: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
     tid: ztypes.tid
     dh: StringView
     de: StringView
@@ -32754,8 +32800,8 @@ keyFnProtosC: function {
     rhsT: StringView
     rhsByPtr: bool
 } out String is {
-    hfid: declaredKeyFnId :ast :symtab :tid member: "hash"
-    efid: declaredKeyFnId :ast :symtab :tid member: "=="
+    hfid: declaredKeyFnId :ast :symtab :ctx tid0: tid member: "hash"
+    efid: declaredKeyFnId :ast :symtab :ctx tid0: tid member: "=="
     hq: keyFnParamConstC :ast :symtab fid: hfid index: 0
     eq: keyFnParamConstC :ast :symtab fid: efid index: 0
     rq: String
@@ -32948,6 +32994,7 @@ emitSetMono: function {
             fd: (keyFnProtosC
                 :ast
                 :symtab
+                :ctx
                 tid: (ztypes.tid.create from: elemTid.u64)
                 dh: dh.stringView
                 de: de.stringView
@@ -33286,6 +33333,7 @@ emitMapMono: function {
             fdm: (keyFnProtosC
                 :ast
                 :symtab
+                :ctx
                 tid: (ztypes.tid.create from: keyTid.u64)
                 dh: dhm.stringView
                 de: dem.stringView
@@ -36984,8 +37032,8 @@ emitOneFacet: function {
     buf.append l0
     du: String
     with iiter: impls.iterate do for itid: iiter loop {
-        icn: ctxCname :ctx tid: (ztypes.tid.create from: itid.u64)
-        drow: "    \{icn}_t _i\{itid};\n"
+        icn: implStructC :symtab :ctx tid: (ztypes.tid.create from: itid.u64)
+        drow: "    \{icn} _i\{itid};\n"
         du.append drow
     }
     if du.length == 0 then du.append "    char _none;\n"
@@ -37095,31 +37143,37 @@ emitOneProtocol: function {
     buf.append l2
 }
 
+# implStructC -- the C struct a conformer's value is: a typedef over an
+# aggregate or a String is its chain end's struct, anything else its own.
+implStructC: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid} out String is {
+    e: chaseStrTypedef :symtab :ctx tid: (chaseAggregateTypedef :symtab :ctx :tid)
+    ecn: ctxCnameView :ctx tid: e
+    return "\{ecn}_t"
+}
+
 # implMethodCname -- the C name a conformance wrapper calls for the impl's
 # `mname`. A NATIVE member's symbol is the canon-named one a fragment defines,
 # whichever unit is being emitted; the per-unit emission pass rebinds mainName,
-# so the nonmain test below cannot answer that half on its own.
+# so the nonmain test below cannot answer that half on its own. A typedef's
+# method is its chain's first declarer: its own, or its base's.
 implMethodCname: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     implTid: ztypes.tid
     mnameId: zast.nameid
     mname: StringView
-    implBase: StringView
 } out String is {
+    owner: ztypecheck.valOpOwner st: symtab tid: implTid nameId: mnameId
+    implBase: ctxCnameView :ctx tid: owner
     implMid: ztypes.tid
-    imo: symtab.typing.declChildOfId parentTypeId: implTid nameId: mnameId
+    imo: symtab.typing.declChildOfId parentTypeId: owner nameId: mnameId
     match (
         imo
     ) case some then {
         implMid = ztypes.tid.create from: imo
     } case none then null
     if (fnIsNativeId :symtab fid: implMid) then return "\{implBase}_\{mname}"
-    if (definedInNonMain
-        :symtab
-        :ctx
-        tid: (ztypes.tid.create from: implTid.u64)
-    ) then return "\{implBase}_\{mname}"
+    if (definedInNonMain :symtab :ctx tid: owner) then return "\{implBase}_\{mname}"
     return (ctxCname :ctx tid: (ztypes.tid.create from: implMid.u64))
 }
 
@@ -37141,7 +37195,7 @@ emitProtocolImpl: function {
     isNat: (nativeConformerRow :symtab tid: implTid).isZero.not
     if implOrig > 0 when isNat.not then return
     implBase: ctxCname :ctx tid: (ztypes.tid.create from: implTid.u64)
-    implCtype: "\{implBase}_t"
+    implCtype: implStructC :symtab :ctx tid: (ztypes.tid.create from: implTid.u64)
     protoBase: ctxCname :ctx tid: protoTid
     protoCtype: "\{protoBase}_t"
     vtableCtype: "\{protoBase}_vtable_t"
@@ -37236,7 +37290,6 @@ emitProtocolImpl: function {
             :implTid
             :mnameId
             mname: mname.stringView
-            implBase: implBase.stringView
         )
         retkw: "return ".string
         if ret.stringView == "void" then retkw = "".string
@@ -37279,9 +37332,11 @@ emitProtocolImpl: function {
     buf.append bc0
     od0: "static void \{wbase}_owned_destroy(void* p) {\n"
     buf.append od0
-    if (symtab.reg.needsDestructor typeId: implTid) then {
-        od1: "    \{implBase}_destroy((\{implCtype}*)p);\n"
-        if implTid == ctx.strTid then od1 = "    \{ctx.strC}_free((\{implCtype}*)p);\n"
+    implEnd: chaseStrTypedef :symtab :ctx tid: (chaseAggregateTypedef :symtab :ctx tid: implTid)
+    if (symtab.reg.needsDestructor typeId: implEnd) then {
+        endBase: ctxCnameView :ctx tid: implEnd
+        od1: "    \{endBase}_destroy((\{implCtype}*)p);\n"
+        if implEnd == ctx.strTid then od1 = "    \{ctx.strC}_free((\{implCtype}*)p);\n"
         buf.append od1
     }
     buf.append "    free(p);\n}\n\n"
@@ -37305,7 +37360,7 @@ emitFacetImpl: function {
 } is {
     if (isGenericType :symtab tid: (ztypes.tid.create from: implTid.u64)) then return
     implBase: ctxCname :ctx tid: (ztypes.tid.create from: implTid.u64)
-    implCtype: "\{implBase}_t"
+    implCtype: implStructC :symtab :ctx tid: (ztypes.tid.create from: implTid.u64)
     facetBase: ctxCname :ctx tid: facetTid
     facetCtype: "\{facetBase}_t"
     vtableCtype: "\{facetBase}_vtable_t"
@@ -37392,7 +37447,6 @@ emitFacetImpl: function {
             :implTid
             :mnameId
             mname: mname.stringView
-            implBase: implBase.stringView
         )
         retkw: "return ".string
         if ret.stringView == "void" then retkw = "".string

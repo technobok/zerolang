@@ -37486,6 +37486,8 @@ checkSpecStandIns: function {ast: Ast st: zenv.ZSymbolTable} is {
             bad.append from: i
         } else if su.owning when (standInNeedsBox :st value: su.value spec: su.spec) then {
             bad.append from: i
+        } else {
+            recordInheritedConformance :ast :st value: su.value spec: su.spec
         }
         i = i + 1
     }
@@ -37510,6 +37512,57 @@ checkSpecStandIns: function {ast: Ast st: zenv.ZSymbolTable} is {
             width: 1
         )
     }
+}
+
+# recordInheritedConformance -- a typedef that stands in for `spec` through its
+# base takes the base's conformance row as its own, under the base's label.
+# The emitter builds a conformer's vtable from its row, and each slot is the
+# typedef's first declarer of that method -- an override it writes included --
+# so the base's own vtable would not serve it.
+recordInheritedConformance: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    value: ztypes.tid
+    spec: ztypes.tid
+} is {
+    if (typedefBaseTidOf :st tid: value).isZero then return
+    src: conformanceRowLink :st impl: value :spec
+    if src.isZero or (src == value) then return
+    if (typedefInheritsConformance :st impl: value :spec).not then return
+    lbl: String
+    lblId: u64
+    isF: false
+    with cit: st.typing.conformance.iterate do for crow: cit loop {
+        if crow.specTypeId == spec.u64 when crow.implTypeId == src.u64 when lbl.length == 0 then {
+            lbl = crow.label.copy
+            lblId = crow.labelNameId
+            isF = crow.isFacet
+        }
+    }
+    cf: (st.reg.newConformance
+        implTypeId: value.u64
+        specTypeId: spec.u64
+        label: lbl.stringView
+        labelNameId: lblId
+        isFacet: isF
+    )
+    st.typing.conformance.append cf
+    forceAllMembers :st :ast tid: value
+}
+
+# conformanceRowLink -- the first link of `impl`'s typedef chain, `impl` itself
+# first, that a conformance row names against `spec`; zero when none does.
+conformanceRowLink: function {
+    st: zenv.ZSymbolTable.view impl: ztypes.tid spec: ztypes.tid
+} out ztypes.tid is {
+    t: impl
+    for t.isZero.not loop {
+        with cit: st.typing.conformance.iterate do for crow: cit loop {
+            if crow.specTypeId == spec.u64 when crow.implTypeId == t.u64 then return t
+        }
+        t = typedefBaseTidOf :st tid: t
+    }
+    return t
 }
 
 # standInNeedsBox -- a concrete conformer written for a PROTOCOL: an owning
