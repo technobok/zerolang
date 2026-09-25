@@ -927,7 +927,17 @@ Server: class {
             match (
                 dgo
             ) case some then {
-                mu = zsource.unitNameOf path: dgo.path.stringView
+                # a subunit's document is checked inside its topmost unit, which
+                # the parse starts from -- never above the project's roots
+                top: zsource.topUnitPathOf path: dgo.path.stringView
+                if dgo.relpath.length == 0 then top = dgo.path.copy
+                inRoots: (relPathBest
+                    path: top.stringView
+                    srcDir: this.srcDir.stringView
+                    systemDir: this.systemDir.stringView
+                )
+                if inRoots.length == 0 then top = dgo.path.copy
+                mu = zsource.unitNameOf path: top.stringView
                 mp = dgo.path.copy
                 found = true
             } case none then null
@@ -1004,13 +1014,20 @@ Server: class {
                 ri = ri + 1
             }
             if e.value.path.stringView == mainPath then {
+                self: docFsnoOf :r rel: drel.stringView srcDir: this.srcDir.stringView
+                # a check that loaded no unit from this document did not check
+                # it: say so rather than publish a clean file
+                if self.u32 == 0 when arr.items.length == 0 then {
+                    nc: notCheckedDiag :r :mainUnit :msgs
+                    arr.items.append nc
+                }
                 (tcLintInto
                     :arr
                     text: e.value.text.copy
                     relpath: drel.stringView
                     utf32: this.encUtf32
                     prog: r.prog
-                    uname: mainUnit
+                    :self
                     sto: r.st
                 )
             } else {
@@ -1168,7 +1185,7 @@ Server: class {
         match (
             uo
         ) case some then {
-            mu: String
+            drel: String
             dtext: String
             found: false
             {
@@ -1176,7 +1193,7 @@ Server: class {
                 match (
                     dgo
                 ) case some then {
-                    mu = zsource.unitNameOf path: dgo.path.stringView
+                    drel = dgo.relpath.copy
                     dtext = dgo.text.copy
                     found = true
                 } case none then null
@@ -1188,7 +1205,11 @@ Server: class {
                 ) case some then {
                     res: (symbolsAnswer
                         snap: sno
-                        unitName: mu.stringView
+                        unitOp: (docUnitOp
+                            r: sno
+                            rel: drel.stringView
+                            srcDir: this.srcDir.stringView
+                        )
                         docText: dtext.stringView
                         utf32: this.encUtf32
                     )
@@ -1230,6 +1251,36 @@ diagValue: function {
     d.set key: "code".string value: Value.text code
     d.set key: "source".string value: Value.text "zc".string
     d.set key: "message".string value: Value.text msg.string
+    return (Value.object d)
+}
+
+# notCheckedDiag -- a warning on line 1 that the check loaded no unit from the
+# document: a subunit its parent never names, or a project that did not parse
+# (then naming the first error, which sits in another file).
+notCheckedDiag: function {
+    r: zcheck.CheckResult.view
+    mainUnit: StringView
+    msgs: (List String).view
+} out Value is {
+    why: "no unit the project loads from '\{mainUnit}' comes from this file (a subunit loads only when its parent names it)"
+    if r.parseOk.not then {
+        why = "the project does not parse from unit '\{mainUnit}'"
+        if msgs.length > 0 then why.append ": \{msgs.get i: 0}"
+    }
+    pos: newObj
+    pos.set key: "line".string value: Value.intval 0
+    pos.set key: "character".string value: Value.intval 0
+    pos2: newObj
+    pos2.set key: "line".string value: Value.intval 0
+    pos2.set key: "character".string value: Value.intval 1
+    rg: newObj
+    rg.set key: "start".string value: Value.object pos
+    rg.set key: "end".string value: Value.object pos2
+    d: newObj
+    d.set key: "range".string value: Value.object rg
+    d.set key: "severity".string value: Value.intval 2
+    d.set key: "source".string value: Value.text "zls".string
+    d.set key: "message".string value: Value.text "not checked: \{why}"
     return (Value.object d)
 }
 
@@ -1529,6 +1580,33 @@ pathMatches: function {pv: StringView rel: StringView srcDir: StringView} out bo
     ov.append rel
     if pv == ov then return true
     return false
+}
+
+# docFsnoOf -- the file number the check gave the document at `rel`: the
+# parsed file whose provider path is the document's. 0 when the check parsed
+# no such file.
+docFsnoOf: function {
+    r: zcheck.CheckResult.view rel: StringView srcDir: StringView
+} out zvfs.fsno is {
+    found: zvfs.fsno
+    if r.parseOk.not then return found
+    with sit: r.prog.fileSegs.iterate do for sg: sit loop {
+        if found.u32 == 0 then {
+            pv: r.vfs.pathfromprovider dentryid: sg.fsno
+            if (pathMatches pv: pv.stringView :rel :srcDir) then found = sg.fsno
+        }
+    }
+    return found
+}
+
+# docUnitOp -- the unitdef node of the document's unit, found by its FILE: a
+# subunit's document is that subunit, never a top-level unit of the same name.
+# 0 when no loaded unit comes from the document.
+docUnitOp: function {
+    r: zcheck.CheckResult.view rel: StringView srcDir: StringView
+} out zast.nodeid is {
+    lu: zsource.lintedUnitOf prog: r.prog self: (docFsnoOf :r :rel :srcDir)
+    return lu.op
 }
 
 # ---- stamp lookups through the snapshot's Option symtab ----
@@ -3746,64 +3824,23 @@ appendIfObject: function {arr: Arr v: Value.take} is {
     if keep then arr.items.append v
 }
 
-# symbolsAnswer -- flat DocumentSymbol list for the document's unit.
+# symbolsAnswer -- flat DocumentSymbol list for the document's unit, the unitdef
+# node `unitOp` (0: none, an empty list).
 symbolsAnswer: function {
     snap: zcheck.CheckResult.view
-    unitName: StringView
+    unitOp: zast.nodeid
     docText: StringView
     utf32: bool
 } out Value is {
     arr: newArr
-    collectUnitSymbols prog: snap.prog :unitName :docText :utf32 :arr
+    if unitOp.isZero.not then (collectBodySymbols
+        ast: snap.prog
+        ud: (snap.prog.nodes.get i: unitOp.u64)
+        :docText
+        :utf32
+        :arr
+    )
     return (Value.array arr)
-}
-
-# collect document-symbol entries for a whole unit.
-collectUnitSymbols: function {
-    prog: Ast.view
-    unitName: StringView
-    docText: StringView
-    utf32: bool
-    arr: Arr
-} is {
-    {
-        uCnt9b: prog.units.length
-        uIdx9b: u64
-        for uIdx9b < uCnt9b loop {
-            u9Id: zast.nodeid.create from: (prog.units.get i: uIdx9b)
-            uIdx9b = uIdx9b + 1
-            (collectUnitSymbolsIn
-                ast: prog
-                wId: u9Id
-                :unitName
-                :docText
-                :utf32
-                :arr
-            )
-        }
-    }
-}
-
-# collect document-symbol entries within a unit node.
-collectUnitSymbolsIn: function {
-    ast: Ast.view
-    wId: zast.nodeid
-    unitName: StringView
-    docText: StringView
-    utf32: bool
-    arr: Arr
-} is {
-    w: ast.nodes.get i: wId.u64
-    if w.namedoperation then {
-        lb: zast.nameTextAt :ast ref: w.name
-        if lb.stringView == unitName then (collectBodySymbols
-            :ast
-            ud: (ast.nodes.get i: w.operation.u64)
-            :docText
-            :utf32
-            :arr
-        )
-    }
 }
 
 # collect document-symbol entries from a unit body.
@@ -3908,7 +3945,8 @@ lintInto: function {arr: Arr text: String.take relpath: StringView utf32: bool} 
 
 # tcLintInto -- lintInto plus the typecheck-tier rules (L005 suffix, L012
 # unused private def / member, L013 / L014 unused local / param) for the
-# document that owns the check's main unit. Reuses the compile pass's
+# document the check was run for: its unit, a subunit included, found by
+# its file. Reuses the compile pass's
 # program and symbol table -- no second typecheck.
 tcLintInto: function {
     arr: Arr
@@ -3916,7 +3954,8 @@ tcLintInto: function {
     relpath: StringView
     utf32: bool
     prog: Ast.view
-    uname: StringView
+    # the file the check parsed the document from; its unit is linted
+    self: zvfs.fsno
     sto: Option zenv.ZSymbolTable
 } is {
     lo: zsource.defaultOpts
@@ -3926,7 +3965,7 @@ tcLintInto: function {
     match (
         sto
     ) case some then {
-        lu: zsource.lintedUnitNamed :prog :uname
+        lu: zsource.lintedUnitOf :prog :self
         if lu.op.isZero.not then {
             la.lintSuffixUnit :prog :lu st: sto
             la.reportUnusedDefs :prog :lu st: sto
@@ -4261,47 +4300,16 @@ collectMemberDef: function {ast: Ast.view m: zast.astnode.view sink: (MapRV Stri
 # enclosingDefStart -- the start line of the unit-body definition the
 # cursor sits in (the last def at or before the cursor line), also
 # adding that definition's parameter names when it is a function.
-# 0 when the cursor precedes every definition.
+# 0 when the cursor precedes every definition, or there is no unit.
 enclosingDefStart: function {
     prog: Ast.view
-    unitName: StringView
+    # the document's unitdef node
+    unitOp: zast.nodeid
     l1u: u32
     sink: (MapRV String v: u8)
 } out u32 is {
-    uCnt9c: prog.units.length
-    uIdx9c: u64
-    for uIdx9c < uCnt9c loop {
-        u9Id: zast.nodeid.create from: (prog.units.get i: uIdx9c)
-        uIdx9c = uIdx9c + 1
-        r: enclosingInUnit ast: prog wId: u9Id :unitName :l1u :sink
-        if r > 0 then return r
-    }
-    return 0
-}
-
-# the definition enclosing a position within a unit.
-enclosingInUnit: function {
-    ast: Ast.view
-    wId: zast.nodeid
-    unitName: StringView
-    l1u: u32
-    sink: (MapRV String v: u8)
-} out u32 is {
-    w: ast.nodes.get i: wId.u64
-    match (
-        w
-    ) case namedoperation then {
-        ul: zast.nameTextAt :ast ref: w.name
-        if ul.stringView == unitName then return (enclosingInBody
-            :ast
-            ud: (ast.nodes.get i: w.operation.u64)
-            :l1u
-            :sink
-        )
-        return 0
-    } else {
-        return 0
-    }
+    if unitOp.isZero then return 0
+    return (enclosingInBody ast: prog ud: (prog.nodes.get i: unitOp.u64) :l1u :sink)
 }
 
 # the definition enclosing a position within a body.
@@ -4389,8 +4397,12 @@ addScopeCompletions: function {
     l1u: u32
     sink: (MapRV String v: u8)
 } is {
-    docUnit: zsource.unitNameOf path: docRel
-    defStart: enclosingDefStart prog: snap.prog unitName: docUnit.stringView :l1u :sink
+    defStart: (enclosingDefStart
+        prog: snap.prog
+        unitOp: (docUnitOp r: snap rel: docRel :srcDir)
+        :l1u
+        :sink
+    )
     if defStart > 0 then {
         sp: (Spans
             rows: ListVal spanrow
@@ -4917,11 +4929,10 @@ addMemberCompletions: function {
         if (unitFsnoByName :snap name: base) > 0 then {
             addUnitMembers prog: snap.prog name: base :sink
         } else {
-            docUnit: zsource.unitNameOf path: docRel
             throwaway: MapRV String v: u8
             ds: (enclosingDefStart
                 prog: snap.prog
-                unitName: docUnit.stringView
+                unitOp: (docUnitOp r: snap rel: docRel :srcDir)
                 :l1u
                 sink: throwaway
             )
@@ -4951,9 +4962,13 @@ addMemberCompletions: function {
         )
         startSeg = nextDot + 1
     } else {
-        docUnit: zsource.unitNameOf path: docRel
         throwaway: MapRV String v: u8
-        ds: enclosingDefStart prog: snap.prog unitName: docUnit.stringView :l1u sink: throwaway
+        ds: (enclosingDefStart
+            prog: snap.prog
+            unitOp: (docUnitOp r: snap rel: docRel :srcDir)
+            :l1u
+            sink: throwaway
+        )
         cur = baseTypeInScope :snap :docRel :srcDir defStart: ds :l1u base: firstSeg.stringView
     }
     if cur == 0 then return
