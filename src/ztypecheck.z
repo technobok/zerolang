@@ -37059,7 +37059,8 @@ lockNonTrivialArg: function {
     # the parameter is the callee's receiver: a valtype locks like a class
     isRecvArg: bool
     # a valtype bound to `.borrow` or `.view`: its field path and its hoisted
-    # temp take the call lock, and no pin
+    # temp take the call lock, and for a pinning (`outx`) callee the pins a
+    # reftype's take
     valByPointer: bool
     pins: List ztyping.PinPath
     # the call's result keeps the locks its arguments place
@@ -37076,7 +37077,10 @@ lockNonTrivialArg: function {
     # the real source tuple so the synth temp installs the
     # spec's SHARED-prefix + EXCLUSIVE-leaf locks on it
     byRef: isRecvArg or (typeIsReftype :st tid: (ztypes.tid.create from: vt.u64))
-    if isLockish when byRef then {
+    # what the result of an `outx` callee keeps locked is every borrow and view
+    # argument, whatever its family
+    pinsLike: byRef or (valByPointer and calleePins)
+    if isLockish when pinsLike then {
         lockBorrowedArgPath :st :ast :arg :isViewArg :pins :calleePins
         lockFieldArgForCall :st :ast :call :arg :isViewArg
     } else if isLockish when valByPointer then lockFieldArgForCall :st :ast :call :arg :isViewArg
@@ -37096,7 +37100,7 @@ lockNonTrivialArg: function {
     # root that names no variable (`mkList`, auto-called) holds nothing either.
     argRoot: rootNameIdOf :ast n: (ast.nodes.get i: arg.operation.u64)
     rootIsVar: argRoot.isZero.not and (st.lookupVarId nameId: argRoot).some
-    if calleePins when isLockish when byRef when hadPending.not when rootIsVar.not then {
+    if calleePins when isLockish when pinsLike when hadPending.not when rootIsVar.not then {
         tnId: nameIdOf :ast name: tnm.stringView
         pinsAppendOne :pins nameId: tnId shared: isViewArg mutable: isViewArg.not alias: false
         tvo: st.lookupVarId nameId: tnId
@@ -37137,7 +37141,7 @@ hoistTrivialArg: function {
     # the parameter is the callee's receiver: a valtype locks like a class
     isRecvArg: bool
     # a valtype bound to `.borrow` or `.view`: a bare name takes the call lock,
-    # and no pin
+    # and the pin a pinning (`outx`) callee's result keeps, as a reftype's does
     valByPointer: bool
     pins: List ztyping.PinPath
     # the receiver a taken value moves into, zero when the call has none
@@ -37204,7 +37208,7 @@ hoistTrivialArg: function {
                         )
                         )
                     )
-                    if calleePins when byRef then {
+                    if calleePins when byRef or valByPointer then {
                         (pinsAppendOne
                             :pins
                             nameId: bnId
@@ -42584,7 +42588,12 @@ lockGenericValueArg: function {
     pins: List ztyping.PinPath
 } is {
     if pnId.isZero then return
-    if (typeIsReftype :st tid: vt).not then return
+    # a valtype takes the lock, and an `outx` result's pin, only when its
+    # parameter takes it by pointer; the TEMPLATE's marker answers, as below
+    vow: valtypeArgOwn :st :funcId :pnId :vt
+    valByPtr: vow == ztypes.zparamownership.borrowMode
+    if vow == ztypes.zparamownership.viewMode then valByPtr = true
+    if (typeIsReftype :st tid: vt).not when valByPtr.not then return
     aow: argOwnershipOf :st :funcId isCtor: false :pnId :vt
     # the TEMPLATE answers: `copyReturnMarkers` gives the instance the same
     # `outx` / borrow-return markers when it is minted
@@ -42615,8 +42624,7 @@ lockGenericValueArg: function {
         # a generic call's parameter list excludes the receiver
         # (genericCallHolders), so no argument slot can be one
         isRecvArg: false
-        # and only a reftype argument reaches here
-        valByPointer: false
+        valByPointer: valByPtr
         :pins
         :recvVid
         :calleePins
