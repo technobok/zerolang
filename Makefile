@@ -100,13 +100,11 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 # well as the relocated front-end, because they share that directory. What it does NOT
 # reach is examples/ and tests/fixtures/; a rule that must hold there needs its own guard.
 ZLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z tests/unit/*.z
-# The --full tier checks a file as the unit its roots resolve it to, so style-lint
-# gives each tree its roots: tests/unit's units live under tests/unit. The
-# lib/system/system/ files are SUBUNITS of `system`, which the tier cannot yet
-# resolve by file (it reports that rather than skipping), so they get the fast
-# tier only; their code is still typechecked through every program that uses it.
-ZLFULLSCOPE := src/*.z lib/system/*.z
-ZLSUBUNITS := lib/system/system/*.z
+# The --full tier checks a file as the unit it IS: a top-level unit under its
+# roots, or a subunit (lib/system/system/ holds `system`'s) inside the parent
+# beside its folder. style-lint gives each tree its roots: tests/unit's units
+# live under tests/unit.
+ZLFULLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z
 # FMTSCOPE -- what the zl *formatter* checks: every unit the printer lays out, the unit
 # tests included; tests/fixtures/ stays as written, since its files are inputs.
 FMTSCOPE := src/*.z lib/system/*.z lib/system/system/*.z examples/*.z tests/unit/*.z
@@ -147,7 +145,6 @@ style-lint-fast: bin/zl
 style-lint: bin/zl
 	bin/zl lint --full --src src --system lib/system $(ZLFULLSCOPE)
 	bin/zl lint --full --src tests/unit --src src --system lib/system tests/unit/*.z
-	bin/zl lint $(ZLSUBUNITS)
 	bin/zl format --check $(FMTSCOPE)
 
 # out/ztestrunner -- the self-hosted corpus runner (src/ztestrunner.z), built
@@ -3481,9 +3478,13 @@ generic-param-guard: bin/zl
 # the pass did not run, and exit non-zero. An error the pass finds in a
 # dependency unit is shown at THAT unit's path and line, with its source line.
 # A finding in a generic body is reported once, not once per instance's copy.
+# A subunit file is linted as the subunit it is, reading its parent, and its
+# finding is at its own path and line; a subunit file its parent never names is
+# reported as unchecked.
 ZLFULL_FIX := tests/fixtures/zl_full/tiered.z
 ZLFULL_DEP := tests/fixtures/zl_full/depunit/depmain.z
 ZLFULL_ONCE := tests/fixtures/zl_full/generic_once.z
+ZLFULL_SUB := tests/fixtures/zl_full/subunit/host
 zl-full-guard: bin/zl
 	@d=$$(mktemp -d); fail=0; \
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_FIX) 2>&1); \
@@ -3506,9 +3507,17 @@ zl-full-guard: bin/zl
 	if [ "$$(printf '%s\n' "$$out" | grep -c 'L013')" != 1 ] || [ "$$(printf '%s\n' "$$out" | grep -c 'L022')" != 1 ]; then \
 	  echo "zl-full-guard FAIL: a generic body's L013/L022 was not reported exactly once:"; \
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
+	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_SUB)/inner.z 2>&1); \
+	if ! printf '%s\n' "$$out" | grep -q 'L013' || ! printf '%s\n' "$$out" | grep -q 'subunit/host/inner.z:4:5' || printf '%s\n' "$$out" | grep -q 'error\['; then \
+	  echo "zl-full-guard FAIL: a subunit file was not linted as its parent's subunit, at its own path:"; \
+	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
+	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_SUB)/orphan.z 2>&1); rc=$$?; \
+	if [ $$rc -eq 0 ] || ! printf '%s\n' "$$out" | grep -q "did not run: no unit the roots load for 'host' comes from this file"; then \
+	  echo "zl-full-guard FAIL: a subunit file its parent never names was not reported (rc=$$rc):"; \
+	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "zl-full-guard OK: --full runs without flags from a foreign cwd, says why when it cannot, and places a dependency's error in its own file"
+	echo "zl-full-guard OK: --full runs without flags from a foreign cwd, says why when it cannot, places a dependency's error in its own file, and lints a subunit as itself"
 
 # natives-tbl-guard -- src/runtime/natives.tbl answers "which implementation"
 # for every operator the system units declare `is native`, keyed by qualified

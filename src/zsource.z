@@ -10,12 +10,14 @@ public: unit {
     :Analysis
     :analyzeFileTiered
     :analyzeSource
+    :lintedUnitNamed
     :lintopts
     :defaultOpts
     :complexityThreshold
     :lineDiffEdits
     :renderDiff
     :sourceParses
+    :topUnitPathOf
     :unitNameOf
 }
 
@@ -84,19 +86,6 @@ duplicateBodyLines: 8.u32
 # default. `--complexity N` overrides it, and 0 turns the rule off.
 complexityThreshold: 15.u32
 
-# unitOpOfName -- the unitdef node of the program's unit named `uname`, 0 when
-# no unit has that name.
-unitOpOfName: function {ast: Ast.view uname: StringView} out zast.nodeid is {
-    with it: ast.units.iterate do for uId: it loop {
-        u: ast.nodes.get i: uId.u64
-        if u.namedoperation then {
-            un: zast.nameTextAt :ast ref: u.name
-            if un.stringView == uname then return u.operation
-        }
-    }
-    return zast.nodeid
-}
-
 # casingKindOf -- the kind an object definition's name is cased by: its own,
 # or for a typedef its base's.
 casingKindOf: function {ast: Ast.view opId: zast.nodeid} out zast.objectkind is {
@@ -154,11 +143,17 @@ typedefCasingKind: function {ast: Ast.view baseId: zast.nodeid} out zast.objectk
 
 # isDirPath -- whether `path` names a directory, following links.
 isDirPath: function {path: StringView} out bool is {
+    return (pathKindIs :path want: io.filekind.dir)
+}
+
+# pathKindIs -- whether `path` names an entry of the kind `want`; false when it
+# cannot be read.
+pathKindIs: function {path: StringView want: io.filekind} out bool is {
     sr: io.stat :path
     match (
         sr
     ) case ok then {
-        return sr.kind.dir
+        return sr.kind == want
     } case err then null
     return false
 }
@@ -3504,48 +3499,15 @@ Analysis: class {
         this.walkSuf :ast n: r :uname :st funcretId: retId
     }
 
-    # lintSuffixUnit -- run the suffix check over a typechecked program's main unit.
-    lintSuffixUnit: function {:this prog: Ast.view uname: StringView st: zenv.ZSymbolTable} is {
-        mn: mainUnitNameOf program: prog
-        {
-            uCnt9a: prog.units.length
-            uIdx9a: u64
-            for uIdx9a < uCnt9a loop {
-                uId: zast.nodeid.create from: (prog.units.get i: uIdx9a)
-                uIdx9a = uIdx9a + 1
-                (this.lintSuffixNamedOp
-                    ast: prog
-                    namedOpId: uId
-                    mainName: mn.stringView
-                    :uname
-                    :st
-                )
-            }
-        }
-    }
-
-    # lintSuffixNamedOp -- run the suffix check on the main unit only.
-    lintSuffixNamedOp: function {
-        :this
-        ast: Ast.view
-        namedOpId: u32
-        mainName: StringView
-        uname: StringView
-        st: zenv.ZSymbolTable
-    } is {
-        namedOp: ast.nodes.get i: namedOpId.u64
-        if namedOp.namedoperation then {
-            un: zast.nameTextAt :ast ref: namedOp.name
-            if un.stringView == mainName then {
-                (this.walkSuf
-                    :ast
-                    n: (ast.nodes.get i: namedOp.operation.u64)
-                    :uname
-                    :st
-                    funcretId: (zast.nodeid.create from: 0)
-                )
-            }
-        }
+    # lintSuffixUnit -- run the suffix check over the linted unit.
+    lintSuffixUnit: function {:this prog: Ast.view lu: LintedUnit.view st: zenv.ZSymbolTable} is {
+        (this.walkSuf
+            ast: prog
+            n: (prog.nodes.get i: lu.op.u64)
+            uname: lu.name.stringView
+            :st
+            funcretId: (zast.nodeid.create from: 0)
+        )
     }
 
     # checkSuffix -- L005 (typecheck tier): build the project VFS, parse this file's unit in the
@@ -3585,6 +3547,16 @@ Analysis: class {
         if (zast.isErrorAt ast: prog id: prog.root.u32) then {
             this.reportUnparsedProject :prog :vfs :srcdirs :uname
         } else {
+            # the unit this FILE is, found by the file and never by name: a
+            # subunit is found inside its parent, and a same-named unit another
+            # root answers is not this file
+            self: this.selfFsnoOf :vfs :prog
+            lu: lintedUnitOf :prog :self
+            if lu.op.isZero then {
+                mw: "no unit the roots load for '\{uname}' comes from this file (a subunit loads only when its parent names it)"
+                this.reportTierSkipped errv: zast.err.badReference cause: mw.stringView note: String
+                return
+            }
             reg: ztypes.newRegistry
             ccPath9v: zcheck.pickCc ccFlag: "" targetTriple: ""
             ccMode9v: zcheck.pickCcMode modeFlag: ""
@@ -3605,16 +3577,16 @@ Analysis: class {
                 foldPaths: foldPaths9
             )
             this.reportTypeErrors :st :prog
-            this.placeForeignDiags :vfs :prog
+            this.placeForeignDiags :vfs :self
             # the rules below read what the typecheck STAMPED. On a failed
             # typecheck that evidence is partial, so they would report from it
             # rather than about it
             if st.typing.errors.length == 0 then {
-                this.lintSuffixUnit :prog :uname :st
-                this.reportUnusedDefs :prog :uname :st
-                this.reportUnusedVars :prog :uname :st
-                this.reportViewableLocals :prog :uname :st
-                if this.opts.arch then this.reportArch :prog :uname :st :srcdirs :systemdir
+                this.lintSuffixUnit :prog :lu :st
+                this.reportUnusedDefs :prog :lu :st
+                this.reportUnusedVars :prog :lu :st
+                this.reportViewableLocals :prog :lu :st
+                if this.opts.arch then this.reportArch :prog :lu :st :srcdirs :systemdir
             }
         }
     }
@@ -3699,8 +3671,7 @@ Analysis: class {
     # placeForeignDiags -- a diagnostic the typecheck found in another file than
     # this one names that file and shows its line. The project's file system
     # is gone once the tier returns, so each is placed now.
-    placeForeignDiags: function {:this vfs: zvfs.ZVfs.view prog: Ast.view} is {
-        self: this.selfFsnoOf :vfs :prog
+    placeForeignDiags: function {:this vfs: zvfs.ZVfs.view self: zvfs.fsno} is {
         n: this.diags.length
         i: u64
         for i < n loop {
@@ -3782,14 +3753,14 @@ Analysis: class {
     reportArch: function {
         :this
         prog: Ast.view
-        uname: StringView
+        lu: LintedUnit.view
         st: zenv.ZSymbolTable.view
         srcdirs: (List String).view
         systemdir: StringView
     } is {
         {
-            mainOp: unitOpOfName ast: prog :uname
-            if mainOp.isZero then return
+            mainOp: lu.op
+            uname: lu.name.stringView
             namedIds: IdSet u64
             {
                 di: 1.u64
@@ -3803,8 +3774,10 @@ Analysis: class {
                 }
             }
             this.archWalk ast: prog nId: mainOp :namedIds
-            # A007 speaks only for a unit that lives under one of the roots
+            # A007 speaks only for a top-level unit that lives under one of the
+            # roots; a subunit exports nothing past its parent
             inSrc: false
+            if lu.names.length > 1 then return
             with sit: srcdirs.iterate do for d: sit loop {
                 du: unitNamesIn dir: d.stringView
                 if (du.contains item: uname.string) then inSrc = true
@@ -4333,10 +4306,9 @@ Analysis: class {
     # main unit's function defs (precise name/position; the receiver is exempt). Locals are the
     # assignment bindings in this file. The opt-out is to `touch` the variable: write its name on
     # its own line (it lowers to `(void)(x);`), which stamps a use.
-    reportUnusedVars: function {:this prog: Ast.view uname: StringView st: zenv.ZSymbolTable} is {
+    reportUnusedVars: function {:this prog: Ast.view lu: LintedUnit.view st: zenv.ZSymbolTable} is {
         used: usedVarSet :st wtgt: (writeTargetAtoms :prog)
-        mainOp: unitBodyOpOf :prog :uname
-        if mainOp.isZero then return
+        mainOp: lu.op
         fnOps: collectFnOps :prog :mainOp
         with fit: fnOps.iterate do for fop: fit loop {
             this.reportParamsOf :prog :st :used :fop
@@ -4515,10 +4487,9 @@ Analysis: class {
     # view serves and the allocation is avoidable (`.stringView` at the uses,
     # `asString` at a container probe).
     reportViewableLocals: function {
-        :this prog: Ast.view uname: StringView st: zenv.ZSymbolTable
+        :this prog: Ast.view lu: LintedUnit.view st: zenv.ZSymbolTable
     } is {
-        mainOp: unitBodyOpOf :prog :uname
-        if mainOp.isZero then return
+        mainOp: lu.op
         mainFsno: unitAnchorFsno :prog :mainOp
         zeroFs: zvfs.fsno
         if mainFsno == zeroFs then return
@@ -4565,12 +4536,11 @@ Analysis: class {
     # as a fallback, every atom name in the unit's own file segment -- then the unit's
     # members and each type's members are judged against it.
     reportUnusedDefs: function {
-        :this prog: Ast.view uname: StringView st: zenv.ZSymbolTable.view
+        :this prog: Ast.view lu: LintedUnit.view st: zenv.ZSymbolTable.view
     } is {
-        mainTid: unitTidOf :prog :uname :st
+        mainTid: unitTidOf :prog names: lu.names :st
         if mainTid == 0 then return
-        mainOp: unitBodyOpOf :prog :uname
-        if mainOp.isZero then return
+        mainOp: lu.op
         memIds: unitMemberIds :prog unitOp: mainOp
         probe: u32
         if memIds.length > 0 then probe = memIds.get i: 0
@@ -4940,18 +4910,89 @@ selfReferenceAt: function {
     return (um.declIds.get i: k) == declId
 }
 
-# unitTidOf -- the type id of the unit named `uname`, 0 when the program declares
-# no such unit
-unitTidOf: function {prog: Ast.view uname: StringView st: zenv.ZSymbolTable.view} out u64 is {
-    uo: (ztypecheck.declTypeIdOf
-        :st
-        declId: (st.typing.declFindChild
-            parentDeclId: st.typing.programRoot
-            nameId: (zast.poolFind pool: prog.names text: uname)
+# unitTidOf -- the type id of the unit `names` spells from the top level down (a
+# subunit is declared inside its parent), 0 when the program declares no such
+# unit
+unitTidOf: function {
+    prog: Ast.view names: (List String).view st: zenv.ZSymbolTable.view
+} out u64 is {
+    decl: st.typing.programRoot
+    with nit: names.iterate do for nm: nit loop {
+        decl = (st.typing.declFindChild
+            parentDeclId: decl
+            nameId: (zast.poolFind pool: prog.names text: nm.stringView)
         )
-    )
+    }
+    uo: ztypecheck.declTypeIdOf :st declId: decl
     if uo.isZero then return 0
     return uo.u64
+}
+
+# LintedUnit -- the unit a linted FILE is: its unitdef node (0 when the parse
+# loaded no unit from that file), its name, and the unit names from the top
+# level down to it.
+LintedUnit: class {
+    # the unit's unitdef node
+    op: zast.nodeid
+    # its own name, the last of `names`
+    name: String
+    # the names from the top-level unit down, which spell its declaration
+    names: List String
+}
+
+# lintedUnitOf -- the unit whose body lives in the file `self`: the program's
+# top-level units and, inside each, its subunits, searched by the FILE each
+# body came from and never by name.
+lintedUnitOf: function {prog: Ast.view self: zvfs.fsno} out LintedUnit is {
+    lu: LintedUnit op: zast.nodeid name: String names: List String
+    if self.u32 == 0 then return lu
+    trail: List String
+    with uit: prog.units.iterate do for uId: uit loop {
+        if lu.op.isZero then findUnitIn :prog :self namedOpId: uId :trail into: lu
+    }
+    return lu
+}
+
+# lintedUnitNamed -- the top-level unit named `uname` as a LintedUnit, the
+# last of several winning: for zls, whose compile pass roots the program at
+# the open document's unit by that name.
+lintedUnitNamed: function {prog: Ast.view uname: StringView} out LintedUnit is {
+    lu: LintedUnit op: zast.nodeid name: uname.string names: List String
+    with uit: prog.units.iterate do for uId: uit loop {
+        un: prog.nodes.get i: uId.u64
+        if un.namedoperation then {
+            unm: zast.poolTextAt pool: prog.names ref: un.name
+            if unm.stringView == uname then lu.op = un.operation
+        }
+    }
+    lu.names.append uname.string
+    return lu
+}
+
+# findUnitIn -- lintedUnitOf's search below one named node: the unit itself when
+# its body is the file, else each of its subunits. `trail` holds the names above.
+findUnitIn: function {
+    prog: Ast.view
+    self: zvfs.fsno
+    namedOpId: u32
+    trail: List String
+    into: LintedUnit
+} is {
+    n: prog.nodes.get i: namedOpId.u64
+    if n.namedoperation.not then return
+    op: n.operation
+    if (prog.nodes.get i: op.u64).unitdef.not then return
+    trail.append (zast.nameTextCopy ast: prog ref: n.name)
+    if (unitAnchorFsno :prog mainOp: op) == self then {
+        into.op = op
+        with tit: trail.iterate do for t: tit loop into.names.append t.copy
+        into.name = (trail.get i: trail.length - 1).copy
+    } else {
+        with mit: (unitMemberIds :prog unitOp: op).iterate do for mid: mit loop {
+            if into.op.isZero then findUnitIn :prog :self namedOpId: mid :trail :into
+        }
+    }
+    trail.pop
 }
 
 # unitAnchorFsno -- the file a unit's body lives in. The unit node itself is
@@ -4971,26 +5012,6 @@ unitAnchorFsno: function {prog: Ast.view mainOp: zast.nodeid} out zvfs.fsno is {
         }
     }
     return zeroFs
-}
-
-# unitBodyOpOf -- the body node of the unit named `uname` in `prog`, 0 when no
-# unit carries that name; the last of several wins, as it always has
-unitBodyOpOf: function {prog: Ast.view uname: StringView} out zast.nodeid is {
-    found: zast.nodeid
-    uN: prog.units.length
-    uI: u64
-    for uI < uN loop {
-        uid: zast.nodeid.create from: (prog.units.get i: uI)
-        uI = uI + 1
-        un: prog.nodes.get i: uid.u64
-        match (
-            un
-        ) case namedoperation then {
-            unm: zast.poolTextAt pool: prog.names ref: un.name
-            if unm.stringView == uname then found = un.operation
-        } else null
-    }
-    return found
 }
 
 # unitMemberIds -- the unit body's member nodes, in order
@@ -5375,9 +5396,44 @@ isAnchor: function {
     }
 }
 
-# mainUnitNameOf -- the program's main unit name.
-mainUnitNameOf: function {program: Ast.view} out String is {
-    return program.mainUnitName.copy
+# topUnitPathOf -- the file of the topmost unit `path` belongs to. A file in a
+# folder `<d>/<u>/` beside a unit file `<d>/<u>.z` is that unit's subunit, so
+# the walk steps up to `<d>/<u>.z`, and on while its folder is a subunit folder
+# too. The path as given when it is no subunit; a bare file name is looked up
+# from the working directory.
+topUnitPathOf: function {path: StringView} out String is {
+    cur: path.string
+    if (path.lastIndexOf needle: "/").none then {
+        wd: os.cwd
+        match (
+            wd
+        ) case ok then {
+            cur = "\{wd}/\{path}"
+        } case err then {
+            return cur
+        }
+    }
+    climbed: false
+    stepping: true
+    for stepping loop {
+        stepping = false
+        slashOpt: cur.stringView.lastIndexOf needle: "/"
+        match (
+            slashOpt
+        ) case some then {
+            if slashOpt > 0 then {
+                parentFile: "\{cur.stringView.substring from: 0 to: slashOpt}.z"
+                if (pathKindIs path: parentFile.stringView want: io.filekind.file) then {
+                    cur = parentFile.take
+                    stepping = true
+                    climbed = true
+                }
+            }
+        } case none then null
+    }
+    # no subunit: the path as it was given
+    if climbed.not then return path.string
+    return cur
 }
 
 # unitNameOf -- a file path's unit name: the final path segment without the ".z" suffix.
@@ -5922,7 +5978,9 @@ analyzeFileFull: function {
             docParams: opts.docParams
             docFields: opts.docFields
         )
-        un: unitNameOf path: a.path.stringView
+        # a subunit file is parsed from its topmost unit, which names the parse
+        top: topUnitPathOf path: a.path.stringView
+        un: unitNameOf path: top.stringView
         a.checkSuffix :srcdirs :systemdir uname: un.stringView
         a.checkLineLength width: opts.lineLength
         a.sortEditsInPlace
