@@ -1839,7 +1839,7 @@ perf: $(PERFBIN)
 #
 # +4420 member use on a type parameter waits for the instance: 6 behaviour,
 # 4411 source; perf-strict reads 3 more than ab.sh.
-ALLOC_BASELINE := 2683718
+ALLOC_BASELINE := 2683673
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2693,8 +2693,8 @@ eager-lib-guard: bin/zc
 #
 # The sanctioned markers are, exhaustively, what the baseline still counts:
 # access (private / public), the conversions (copy / str), the container
-# markers (tag / array / index), the definition keywords (typedef / return /
-# create / error / panic), and the `Iterator` protocol marker. A rising count means a new hardcoded
+# markers (tag / array / index), the definition keywords (return / create /
+# error / panic), and the `Iterator` protocol marker. A rising count means a new hardcoded
 # string-keyed special-case -- resolve members through their declared childOf
 # edges instead (the system units are the source of truth). Bump the baseline
 # here only for a genuinely-sanctioned marker.
@@ -2708,18 +2708,18 @@ eager-lib-guard: bin/zc
 # the spelling moves, and it dies silently.
 member-guard:
 	@m1=$$(grep -cE '[a-z]*cn\.stringView ==|[a-z]*cn == "' src/ztypecheck.z); \
-	if [ "$$m1" -gt 7 ]; then \
-	  echo "member-guard FAIL: string-keyed member compares = $$m1 (baseline 7)"; \
+	if [ "$$m1" -gt 5 ]; then \
+	  echo "member-guard FAIL: string-keyed member compares = $$m1 (baseline 5)"; \
 	  echo "  A new hardcoded string-keyed member/marker special-case was added to the"; \
 	  echo "  type checker. Resolve members through their declared childOf edges (the"; \
 	  echo "  system units are the source of truth); bump the baseline only for a"; \
 	  echo "  genuinely-sanctioned marker."; \
 	  exit 1; \
 	fi; \
-	if [ "$$m1" -lt 7 ]; then \
-	  echo "member-guard: string-keyed member compares = $$m1 < baseline 7 -- lower the baseline here"; \
+	if [ "$$m1" -lt 5 ]; then \
+	  echo "member-guard: string-keyed member compares = $$m1 < baseline 5 -- lower the baseline here"; \
 	fi; \
-	echo "member-guard OK: string-keyed member compares = $$m1 (<=7)"
+	echo "member-guard OK: string-keyed member compares = $$m1 (<=5)"
 
 # highlight-guard -- the two syntax highlighters must carry the language's
 # actual vocabulary. THE LANGUAGE IS THE SOURCE OF TRUTH, never the lists:
@@ -3112,6 +3112,10 @@ isdecl {
     }
     if ($$0 ~ /^[A-Za-z][A-Za-z0-9]*: (record|variant|facet)/) {
         dty = $$1; sub(/:.*/, "", dty); dval[dty] = 1; grab = 0; next
+    }
+    # a typedef takes its base's family, which its name's casing spells
+    if ($$0 ~ /^[A-Za-z][A-Za-z0-9]*: typedef /) {
+        dty = $$1; sub(/:.*/, "", dty); dval[dty] = (dty ~ /^[a-z]/); grab = 0; next
     }
     if (dty == "") next
     if (grab) {
