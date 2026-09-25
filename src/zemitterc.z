@@ -28392,9 +28392,14 @@ chaseAggregateTypedef: function {
     if (symtab.typing.typedefBaseTid.has key: tid).not then return tid
     e: typedefChaseTid :symtab :tid
     if e == ctx.strTid or (e == ctx.svTid) then return tid
-    # a scalar is a native record, and an ordinal variant emits as one
+    # a scalar is a native record, and an ordinal variant emits as one; a
+    # sized str or array is a native record too, and an aggregate
     isRec: (symtab.reg.typetypeOf typeId: e) == ztypes.ztypetype.recordType
-    if isRec when (symtab.reg.isNativeOf tid: e) then return tid
+    if isRec when (symtab.reg.isNativeOf tid: e) then {
+        eo: originTidOf :symtab tid: e
+        isSized: eo == (ctx.origins.get i: ogStr) or (eo == (ctx.origins.get i: ogArray))
+        if isSized.not or eo.isZero then return tid
+    }
     if (isOrdinalVariant :symtab tid: e) then return tid
     return e
 }
@@ -37301,8 +37306,18 @@ emitProtocolImpl: function {
         w1: "    \{implCtype}* _self = (\{implCtype}*)_data;\n"
         buf.append w1
         w2: "    \{retkw}\{implMc}(\{cargs});\n"
-        if isNat then {
-            nbc: nativeBoxCall :symtab :ctx :implTid mname: mname.stringView
+        # a typedef's slot served by a NATIVE conformer at the end of its
+        # chain (a typedef over str) is spelled as that conformer's: the
+        # typedef shares its struct, and the runtime has no function for it
+        natOwner: implTid
+        viaNat: isNat
+        if isNat.not then {
+            natOwner = ztypecheck.valOpOwner st: symtab tid: implTid nameId: mnameId
+            natRow: nativeConformerRow :symtab tid: natOwner
+            if natOwner != implTid when natRow.isZero.not then viaNat = true
+        }
+        if viaNat then {
+            nbc: nativeBoxCall :symtab :ctx implTid: natOwner mname: mname.stringView
             w2 = "    \{retkw}\{nbc};\n"
         }
         buf.append w2
