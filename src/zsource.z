@@ -97,6 +97,17 @@ unitOpOfName: function {ast: Ast.view uname: StringView} out zast.nodeid is {
     return zast.nodeid
 }
 
+# isDirPath -- whether `path` names a directory, following links.
+isDirPath: function {path: StringView} out bool is {
+    sr: io.stat :path
+    match (
+        sr
+    ) case ok then {
+        return sr.kind.dir
+    } case err then null
+    return false
+}
+
 # unitNamesIn -- the unit names of the `.z` files directly under `dir`.
 unitNamesIn: function {dir: StringView} out List String is {
     names: List String
@@ -3441,11 +3452,13 @@ Analysis: class {
     }
 
     # checkSuffix -- L005 (typecheck tier): build the project VFS, parse this file's unit in the
-    # project, typecheck, and walk the typed tree for redundant numeric suffixes. A missing
-    # dependency (in-project parse error) skips the check silently.
+    # project, typecheck, and walk the typed tree for redundant numeric suffixes. A tier that
+    # cannot run -- a root that is not a directory, a unit not found, a dependency that does not
+    # parse -- is reported as an error naming why: `--full` never passes a file it did not check.
     checkSuffix: function {
         :this srcdirs: (List String).view systemdir: StringView uname: StringView
     } is {
+        if (this.rootsReady :srcdirs :systemdir).not then return
         vfs: (zvfs.ZVfs
             providers: List zvfs.ProviderBox
             providerRoot: (IdMapR u32 V: String)
@@ -3471,7 +3484,9 @@ Analysis: class {
         prog: p.parse :vfs :rootid mainUnitName: uname.string
         # a failed parse names its error as the tree's root row. The test is a
         # call so no lock outlives it: typecheck below takes the tree.
-        if (zast.isErrorAt ast: prog id: prog.root.u32).not then {
+        if (zast.isErrorAt ast: prog id: prog.root.u32) then {
+            this.reportUnparsedProject :prog :vfs :srcdirs :uname
+        } else {
             reg: ztypes.newRegistry
             ccPath9v: zcheck.pickCc ccFlag: "" targetTriple: ""
             ccMode9v: zcheck.pickCcMode modeFlag: ""
@@ -3503,6 +3518,83 @@ Analysis: class {
                 if this.opts.arch then this.reportArch :prog :uname :st :srcdirs :systemdir
             }
         }
+    }
+
+    # rootsReady -- whether every root the typecheck tier registers is a
+    # directory. The VFS refuses anything else by panicking, so each is asked
+    # here first and a missing one is reported as the reason the tier did not run.
+    rootsReady: function {:this srcdirs: (List String).view systemdir: StringView} out bool is {
+        if (isDirPath path: systemdir).not then {
+            ms: "the system directory '\{systemdir}' does not exist"
+            this.reportTierSkipped errv: zast.err.ioError cause: ms.stringView note: String
+            return false
+        }
+        missing: String
+        with sit: srcdirs.iterate do for d: sit loop {
+            if missing.length == 0 when (isDirPath path: d.stringView).not then missing = d.copy
+        }
+        if missing.length == 0 then return true
+        mr: "the src root '\{missing}' does not exist"
+        this.reportTierSkipped errv: zast.err.ioError cause: mr.stringView note: String
+        return false
+    }
+
+    # reportUnparsedProject -- the project parse failed, so the typecheck tier
+    # did not run: this unit is under no src root, or a unit it loads does not
+    # parse. A parse error in the file itself is already the fast tier's report.
+    reportUnparsedProject: function {
+        :this
+        prog: Ast.view
+        vfs: zvfs.ZVfs
+        srcdirs: (List String).view
+        uname: StringView
+    } is {
+        if this.parseErrorCount > 0 then return
+        progRoot: prog.nodes.get i: prog.root.u64
+        match (
+            progRoot
+        ) case error then {
+            e: zast.errorDataOf ast: prog row: progRoot
+            if e.lineno == 0 when e.err.badReference then {
+                roots: String
+                with rit: srcdirs.iterate do for r: rit loop {
+                    if roots.length > 0 then roots.append ", "
+                    roots.append r
+                }
+                mu: "unit '\{uname}' is under none of the src roots (\{roots})"
+                this.reportTierSkipped errv: e.err cause: mu.stringView note: String
+                return
+            }
+            where: String
+            if e.fsno.u64 > 0 then {
+                path: vfs.pathfromprovider dentryid: e.fsno
+                at: "in \{path} at line \{e.lineno}: "
+                where.append at
+            }
+            where.append (zast.errorLine :e)
+            (this.reportTierSkipped
+                errv: e.err
+                cause: "a unit it loads does not parse"
+                note: where.take
+            )
+        } else null
+    }
+
+    # reportTierSkipped -- the typecheck tier did not run for this file: an
+    # error naming why, and the flags that name the project.
+    reportTierSkipped: function {:this errv: zast.err cause: StringView note: String.take} is {
+        msg: "the typecheck tier (--full) did not run: \{cause}"
+        d: (zdiag.errorDiag
+            :errv
+            fsno: zvfs.fsno
+            lineno: 0
+            colno: 0
+            width: 0
+            msg: msg.take
+            :note
+            hint: "name the project with --src DIR and --system DIR".string
+        )
+        this.diags.append d
     }
 
     # reportTypeErrors -- the typecheck's own diagnostics. This tier already

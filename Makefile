@@ -90,7 +90,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard lifetime-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard fmt-raw-guard test-tcc test-tcc-heavy mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
+.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard zl-full-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard lifetime-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard fmt-raw-guard test-tcc test-tcc-heavy mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -161,7 +161,7 @@ test: bin/zc $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint complexity-report warn-check shadow-guard emitter-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check perf-strict test-tcc-heavy mode-parity ci-corpus
+ci: style-lint zl-full-guard complexity-report warn-check shadow-guard emitter-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check perf-strict test-tcc-heavy mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
@@ -1799,7 +1799,11 @@ perf: $(PERFBIN)
 #
 # +746 L030, a valtype `.borrow` parameter never mutated: 0 behaviour (the
 # mutation evidence for a valtype argument allocates nothing), 746 source.
-ALLOC_BASELINE := 2656403
+#
+# +11 `zl lint --full` never silent: 0 behaviour, 11 source (zdiag.render's
+# file-level location line; the rest is zl's and zsource's, which a zc
+# self-compile does not load).
+ALLOC_BASELINE := 2656414
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -3426,6 +3430,31 @@ generic-param-guard: bin/zl
 	  exit 1; \
 	fi; \
 	echo "generic-param-guard OK: examples + corpus + error fixtures clean (baseline 0)"
+
+# zl-full-guard -- `zl lint --full` never passes a file it did not check. Run
+# from a directory holding no project, with no flags, on a fixture outside it,
+# the pass still runs: the file's own directory is a src root and the stdlib is
+# found as zc finds it, so the fixture's L030 is reported. A --system that does
+# not exist, and a --src the unit is not under, are each reported as the reason
+# the pass did not run, and exit non-zero.
+ZLFULL_FIX := tests/fixtures/zl_full/tiered.z
+zl-full-guard: bin/zl
+	@d=$$(mktemp -d); fail=0; \
+	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_FIX) 2>&1); \
+	if ! printf '%s\n' "$$out" | grep -q 'L030'; then \
+	  echo "zl-full-guard FAIL: no flags, foreign cwd: the typecheck tier did not report L030:"; \
+	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
+	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full --system $$d/none $(CURDIR)/$(ZLFULL_FIX) 2>&1); rc=$$?; \
+	if [ $$rc -eq 0 ] || ! printf '%s\n' "$$out" | grep -q 'did not run: the system directory'; then \
+	  echo "zl-full-guard FAIL: a missing --system was not reported (rc=$$rc):"; \
+	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
+	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full --src $$d $(CURDIR)/$(ZLFULL_FIX) 2>&1); rc=$$?; \
+	if [ $$rc -eq 0 ] || ! printf '%s\n' "$$out" | grep -q "did not run: unit 'tiered' is under none"; then \
+	  echo "zl-full-guard FAIL: a unit under no --src root was not reported (rc=$$rc):"; \
+	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
+	rm -rf $$d; \
+	if [ $$fail -ne 0 ]; then exit 1; fi; \
+	echo "zl-full-guard OK: --full runs without flags from a foreign cwd, and says why when it cannot"
 
 # natives-tbl-guard -- src/runtime/natives.tbl answers "which implementation"
 # for every operator the system units declare `is native`, keyed by qualified

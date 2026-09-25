@@ -65,6 +65,27 @@ reportAnalysis: function {a: zsource.Analysis.view} is {
     }
 }
 
+# rootsFor -- the src roots `path` is checked against: every --src as given,
+# or, when none was, the file's own directory and then the working directory.
+# The file's own directory comes first, so the unit checked is the file named
+# and not a same-named unit where zl happens to run.
+rootsFor: function {srcdirs: (List String).view path: StringView} out List String is {
+    roots: List String
+    with sit: srcdirs.iterate do for d: sit loop roots.append from: d.copy
+    if roots.length > 0 then return roots
+    slashOpt: path.lastIndexOf needle: "/"
+    match (
+        slashOpt
+    ) case some then {
+        # a file at the filesystem root keeps its `/`
+        cut: slashOpt
+        if cut == 0 then cut = 1
+        roots.append from: (path.substring from: 0 to: cut).string
+    } case none then null
+    roots.append from: ".".string
+    return roots
+}
+
 # runLint -- lint each target file at the tier `opts` asks for. Exit 1 if any
 # diagnostics fail the gate.
 runLint: function {
@@ -79,7 +100,8 @@ runLint: function {
     }
     total: u64
     with pit: paths.iterate do for p: pit loop {
-        a: zsource.analyzeFileTiered path: p.copy :srcdirs :systemdir :opts
+        roots: rootsFor :srcdirs path: p.stringView
+        a: zsource.analyzeFileTiered path: p.copy srcdirs: roots :systemdir :opts
         reportAnalysis :a
         total = total + a.failCount
     }
@@ -176,7 +198,8 @@ formatOnePath: function {
 } out i32 is {
     fmtOpts: zsource.defaultOpts
     fmtOpts.full = full
-    a: zsource.analyzeFileTiered path: p.string :srcdirs :systemdir opts: fmtOpts
+    roots: rootsFor :srcdirs path: p
+    a: zsource.analyzeFileTiered path: p.string srcdirs: roots :systemdir opts: fmtOpts
     if a.parseErrorCount > 0 then {
         reportAnalysis :a
         mp: "zl fmt: \{p} has parse errors; not formatting"
@@ -308,9 +331,10 @@ CliFlags: class {
     # the files named on the command line, in the order given
     paths: List String
     # every --src, in the order given: all are roots and the first that answers
-    # a unit name wins, as zc resolves them
+    # a unit name wins, as zc resolves them. Empty when none was given, and
+    # each file is then checked from its own directory (rootsFor)
     srcdirs: List String
-    # where the stdlib lives
+    # --system as given, empty when absent: main resolves it as zc does
     systemdir: String
     # the lint options, filled in place as the flags are read
     opts: zsource.lintopts
@@ -460,7 +484,7 @@ parseArgs: function {argv: (List String).view from: u64 n: u64} out CliFlags is 
     cf: (CliFlags
         paths: List String
         srcdirs: List String
-        systemdir: "lib/system".string
+        systemdir: String
         opts: zsource.defaultOpts
         check: false
         stdout: false
@@ -483,7 +507,6 @@ parseArgs: function {argv: (List String).view from: u64 n: u64} out CliFlags is 
         if known.not then cf.takeOperand :av :arg
         i = i + 1
     }
-    if cf.srcdirs.length == 0 then cf.srcdirs.append from: ".".string
     return cf
 }
 
@@ -522,6 +545,8 @@ main: function is {
     }
 
     cf: parseArgs :argv from: 2 :n
+    # the stdlib by zc's own precedence, so a run from outside the tree finds it
+    cf.systemdir = zcheck.resolveSystemDir flagVal: cf.systemdir.stringView
     if sv == "lint" then {
         lintOpts: cf.lintOpts
         rc: (runLint
