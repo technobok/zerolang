@@ -48,20 +48,37 @@ printUsage: function is {
 }
 
 # reportAnalysis -- render every collected diagnostic for one file to stderr,
-# rustc-style, reusing the file's line table for the source snippet.
+# rustc-style, reusing the file's line table for the source snippet. A
+# diagnostic the full tier placed in another file names that file and its line.
 reportAnalysis: function {a: zsource.Analysis.view} is {
+    di: u32
     with dit: a.diags.iterate do for d: dit loop {
-        srcLine: String
-        hasLine: false
-        if d.lineno > 0 then {
-            idx: d.lineno - 1
-            if idx.u64 < a.lines.length then {
-                srcLine = (a.lines.get i: idx.u64).copy
-                hasLine = true
+        placed: a.elsewhere.get key: di
+        match (
+            placed
+        ) case some then {
+            # found in another file: that file's path and line
+            there: (zdiag.render
+                :d
+                path: placed.path.stringView
+                srcLine: placed.line.stringView
+                hasLine: placed.hasLine
+            )
+            io.eprintln there
+        } case none then {
+            srcLine: String
+            hasLine: false
+            if d.lineno > 0 then {
+                idx: d.lineno - 1
+                if idx.u64 < a.lines.length then {
+                    srcLine = (a.lines.get i: idx.u64).copy
+                    hasLine = true
+                }
             }
+            block: zdiag.render :d path: a.path.stringView srcLine: srcLine.stringView :hasLine
+            io.eprintln block
         }
-        block: zdiag.render :d path: a.path.stringView srcLine: srcLine.stringView :hasLine
-        io.eprintln block
+        di = di + 1
     }
 }
 

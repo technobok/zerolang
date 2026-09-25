@@ -163,6 +163,23 @@ isDirPath: function {path: StringView} out bool is {
     return false
 }
 
+# sameFile -- whether two paths name one filesystem object: the same device
+# and inode, whatever the spelling. False when either cannot be read.
+sameFile: function {a: StringView b: StringView} out bool is {
+    sa: io.stat path: a
+    sb: io.stat path: b
+    match (
+        sa
+    ) case ok then {
+        match (
+            sb
+        ) case ok then {
+            return sa.device == sb.device and (sa.inode == sb.inode)
+        } case err then null
+    } case err then null
+    return false
+}
+
 # unitNamesIn -- the unit names of the `.z` files directly under `dir`.
 unitNamesIn: function {dir: StringView} out List String is {
     names: List String
@@ -1188,6 +1205,17 @@ endsWithNewline: function {src: StringView} out bool is {
     }
 }
 
+# DiagSrc -- where a diagnostic found in ANOTHER file than the linted one is
+# shown: that file's path, and its source line when it has one.
+DiagSrc: class {
+    # the file the diagnostic is in, as its root spells it
+    path: String
+    # the source line it points at
+    line: String
+    # whether `line` was read; false leaves the diagnostic without a snippet
+    hasLine: bool
+}
+
 # the working state of one file's lint/format analysis: the source and
 # its line table, the collected diagnostics and fix edits, and the raw
 # token stream shared across the checks.
@@ -1214,6 +1242,9 @@ Analysis: class {
     # boolean-literal rule compares ids and never spellings
     trueId: zast.nameid
     falseId: zast.nameid
+    # each diagnostic found in another file, keyed by its index in `diags`: the
+    # full tier places it while the project's file system is still there
+    elsewhere: (IdMapR u32 V: DiagSrc)
     # which optional rules this run enables. One value threads from the command
     # line to every rule, so a new rule is a field here and not a parameter on
     # every layer between
@@ -3562,7 +3593,8 @@ Analysis: class {
                 target: ""
                 foldPaths: foldPaths9
             )
-            this.reportTypeErrors :st
+            this.reportTypeErrors :st :prog
+            this.placeForeignDiags :vfs :prog
             # the rules below read what the typecheck STAMPED. On a failed
             # typecheck that evidence is partial, so they would report from it
             # rather than about it
@@ -3653,6 +3685,51 @@ Analysis: class {
         this.diags.append d
     }
 
+    # placeForeignDiags -- a diagnostic the typecheck found in another file than
+    # this one names that file and shows its line. The project's file system
+    # is gone once the tier returns, so each is placed now.
+    placeForeignDiags: function {:this vfs: zvfs.ZVfs.view prog: Ast.view} is {
+        self: this.selfFsnoOf :vfs :prog
+        n: this.diags.length
+        i: u64
+        for i < n loop {
+            f: (this.diags.get :i).fsno
+            ln: (this.diags.get :i).lineno
+            if f.u32 > 0 when (f == self).not then {
+                fp: vfs.pathfromproviderNative dentryid: f.u32
+                if fp.length == 0 then fp = vfs.pathfromprovider dentryid: f
+                srcLine: String
+                hasLine: false
+                if ln > 0 then {
+                    got: vfs.getline dentryid: f.u32 lineno: ln.u64 - 1
+                    match (
+                        got
+                    ) case some then {
+                        srcLine = got.take
+                        hasLine = true
+                    } case none then null
+                }
+                at: DiagSrc path: fp.take line: srcLine.take :hasLine
+                this.elsewhere.set key: i.u32.orPanic value: at.take
+            }
+            i = i + 1
+        }
+    }
+
+    # selfFsnoOf -- the fsno the parse gave THIS file: the loaded file that is
+    # the same filesystem object as its path, so two spellings of one path
+    # agree. 0 when the parse did not load it.
+    selfFsnoOf: function {this: this.view vfs: zvfs.ZVfs.view prog: Ast.view} out zvfs.fsno is {
+        found: zvfs.fsno
+        with sit: prog.fileSegs.iterate do for sg: sit loop {
+            if found.u32 == 0 then {
+                fp: vfs.pathfromproviderNative dentryid: sg.fsno.u32
+                if (sameFile a: fp.stringView b: this.path.stringView) then found = sg.fsno
+            }
+        }
+        return found
+    }
+
     # reportTypeErrors -- the typecheck's own diagnostics. This tier already
     # runs a COMPLETE eager typecheck, because its rules read what that run
     # stamps; these are what the same run found, and they used to be discarded.
@@ -3660,11 +3737,15 @@ Analysis: class {
     # nothing demands is walked by no build, and until eager-lib-guard no gate
     # compiled a library unit under `--eager` either. `requireMain: false` is
     # why this works on a unit that is not a program.
-    reportTypeErrors: function {:this st: zenv.ZSymbolTable.view} is {
+    # A typecheck error stamps fsno 0, so its file is the one its node is in,
+    # as zc reads it; 0 still (this file) when it names no node.
+    reportTypeErrors: function {:this st: zenv.ZSymbolTable.view prog: Ast.view} is {
         with eit: st.typing.errors.iterate do for er: eit loop {
+            ef: er.fsno
+            if ef.u32 == 0 when er.nodeid > 0 then ef = prog.fsnoForNode nodeid: er.nodeid
             d: (zdiag.errorDiag
                 errv: er.err
-                fsno: er.fsno
+                fsno: ef
                 lineno: er.lineno
                 colno: er.colno
                 width: er.width
@@ -5707,6 +5788,7 @@ analyzeSource: function {source: String.take path: String.take opts: lintopts} o
         funcDepth: 0
         trueId: zast.nameid
         falseId: zast.nameid
+        elsewhere: (IdMapR u32 V: DiagSrc)
         :opts
     )
     a.runFastChecks n: root
@@ -5750,6 +5832,7 @@ analyzeFile: function {path: String.take opts: lintopts} out Analysis is {
             funcDepth: 0
             trueId: zast.nameid
             falseId: zast.nameid
+            elsewhere: (IdMapR u32 V: DiagSrc)
             :opts
         )
         d: (zdiag.errorDiag
@@ -5794,6 +5877,7 @@ analyzeFileFull: function {
             funcDepth: 0
             trueId: zast.nameid
             falseId: zast.nameid
+            elsewhere: (IdMapR u32 V: DiagSrc)
             :opts
         )
         a.runFastChecks n: root
@@ -5828,6 +5912,7 @@ analyzeFileFull: function {
             funcDepth: 0
             trueId: zast.nameid
             falseId: zast.nameid
+            elsewhere: (IdMapR u32 V: DiagSrc)
             :opts
         )
         d: (zdiag.errorDiag
@@ -5892,6 +5977,7 @@ sourceParses: function {source: String.take} out bool is {
         funcDepth: 0
         trueId: zast.nameid
         falseId: zast.nameid
+        elsewhere: (IdMapR u32 V: DiagSrc)
         opts: defaultOpts
     )
     root: ast.parseSource :source

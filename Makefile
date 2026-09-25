@@ -3478,8 +3478,10 @@ generic-param-guard: bin/zl
 # the pass still runs: the file's own directory is a src root and the stdlib is
 # found as zc finds it, so the fixture's L030 is reported. A --system that does
 # not exist, and a --src the unit is not under, are each reported as the reason
-# the pass did not run, and exit non-zero.
+# the pass did not run, and exit non-zero. An error the pass finds in a
+# dependency unit is shown at THAT unit's path and line, with its source line.
 ZLFULL_FIX := tests/fixtures/zl_full/tiered.z
+ZLFULL_DEP := tests/fixtures/zl_full/depunit/depmain.z
 zl-full-guard: bin/zl
 	@d=$$(mktemp -d); fail=0; \
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_FIX) 2>&1); \
@@ -3494,9 +3496,13 @@ zl-full-guard: bin/zl
 	if [ $$rc -eq 0 ] || ! printf '%s\n' "$$out" | grep -q "did not run: unit 'tiered' is under none"; then \
 	  echo "zl-full-guard FAIL: a unit under no --src root was not reported (rc=$$rc):"; \
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
+	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_DEP) 2>&1); \
+	if ! printf '%s\n' "$$out" | grep -q 'depunit/dep.z:3:10' || ! printf '%s\n' "$$out" | grep -q 'bad: "x" + n'; then \
+	  echo "zl-full-guard FAIL: an error in a dependency unit was not shown at its own path and line:"; \
+	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "zl-full-guard OK: --full runs without flags from a foreign cwd, and says why when it cannot"
+	echo "zl-full-guard OK: --full runs without flags from a foreign cwd, says why when it cannot, and places a dependency's error in its own file"
 
 # natives-tbl-guard -- src/runtime/natives.tbl answers "which implementation"
 # for every operator the system units declare `is native`, keyed by qualified
