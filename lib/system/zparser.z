@@ -3857,7 +3857,7 @@ Parser: class {
             )
             ewBindNameList ast: this.ast scope: outNames items: body
             raw: collectExterns ast: this.ast :body
-            dirid: vfs.walk parent: parentid name: unitname.stringView
+            dirid: vfs.siblingDir fileid: fsid name: unitname.stringView
             dkind: vfs.arm dentryid: dirid
             hasSubdir: false
             match (
@@ -3865,33 +3865,33 @@ Parser: class {
             ) case dir then {
                 hasSubdir = true
             } case file then null case notfound then null
+            # the subunit folder answers first, for every name -- a core name
+            # included -- and only what it does not hold goes on up
             for raw.length > 0 loop {
                 rname: raw.pop
-                inCore: coreNames.contains item: rname
-                if inCore.not then {
-                    handled: false
-                    if hasSubdir then {
-                        subNames: ListVal u32
-                        sub: (this.loadUnit
-                            :vfs
-                            parentid: dirid
-                            unitname: rname
-                            kind: zast.unitkind.subunit
-                            :coreNames
-                            outBody: body
-                            outExterns: raw
-                            outNames: subNames
-                        )
-                        subErr: Parser.isError node: sub
-                        if subErr then {
-                            nf: Parser.isFileNotFound node: sub
-                            if nf.not then return sub
-                        } else {
-                            handled = true
-                        }
+                handled: false
+                if hasSubdir then {
+                    subNames: ListVal u32
+                    sub: (this.loadUnit
+                        :vfs
+                        parentid: dirid
+                        unitname: rname
+                        kind: zast.unitkind.subunit
+                        :coreNames
+                        outBody: body
+                        outExterns: raw
+                        outNames: subNames
+                    )
+                    subErr: Parser.isError node: sub
+                    if subErr then {
+                        nf: Parser.isFileNotFound node: sub
+                        if nf.not then return sub
+                    } else {
+                        handled = true
                     }
-                    if handled.not then outExterns.append rname.copy
                 }
+                inCore: coreNames.contains item: rname
+                if handled.not when inCore.not then outExterns.append rname.copy
             }
             root: astnode.unitdef (zast.unitrow
                 nodeid: this.nextId

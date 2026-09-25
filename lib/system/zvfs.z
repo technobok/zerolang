@@ -24,6 +24,7 @@ public: unit {
     :fsno
     :mountdata
     :notfounddata
+    :shadowpair
 }
 
 # fsno -- a registered file's id in the vfs dentry space; 0 is "no file"
@@ -105,6 +106,18 @@ mountdata: record {
     # whether `second` holds a root at all. An `instead` bind leaves it unset,
     # which is the whole difference between it and the other two
     has_second: bool
+}
+
+# shadowpair -- an overlay and the provider tree it shadows (zls's open buffers
+# over the src dir). The two are ONE directory tree, so `ZVfs.siblingDir` looks a
+# sibling up in both, the overlay first.
+shadowpair: record {
+    # whether a pair is set at all; the two roots mean nothing when false
+    active: bool
+    # the overlay's root entry, searched first
+    top: fsno
+    # the root entry of the tree the overlay shadows
+    base: fsno
 }
 
 # mountinfo -- value-type carrier used by ZVfs.walk to drop the
@@ -568,6 +581,8 @@ ZVfs: class {
     # the entry every absolute walk starts from
     )
     rootid: fsno
+    # the overlay a sibling lookup treats as one tree with what it shadows
+    shadow: shadowpair
 } as {
     # registerNull -- append a NullProvider to the provider list and
     # create its root directory dentry. Returns the new dentryid.
@@ -879,6 +894,103 @@ ZVfs: class {
             return (joinPath parent: ro.stringView name: rel.stringView)
         } case none then {
             return "".string
+        }
+    }
+
+    # shadowOver -- record that the overlay rooted at `top` shadows the tree
+    # rooted at `base`, so `siblingDir` treats the two as one tree.
+    shadowOver: function {:this top: fsno base: fsno} is {
+        this.shadow = shadowpair active: true :top :base
+    }
+
+    # siblingDir -- the entry `name` beside the file `fileid`, walked from the
+    # directory the file was found in and never from the union root, so a
+    # same-named entry in another root cannot stand in for it. Under a shadow
+    # pair the same directory in the partner tree is searched too; when both
+    # hold it, the answer is a mount over the two, the overlay first.
+    siblingDir: function {:this fileid: fsno name: StringView} out fsno is {
+        par: this.parentOf dentryid: fileid
+        near: this.walk parent: par :name
+        if this.shadow.active.not then return near
+        partner: fsno
+        nearIsTop: false
+        if (this._sameProvider a: par b: this.shadow.top) then {
+            partner = this.shadow.base
+            nearIsTop = true
+        } else if (this._sameProvider a: par b: this.shadow.base) then {
+            partner = this.shadow.top
+        } else {
+            return near
+        }
+        rel: this.pathfromprovider dentryid: par
+        with it: (rel.stringView.split sep: "/") do for piece: it loop {
+            if piece.length > 0 then partner = this.walk parent: partner name: piece
+        }
+        far: this.walk parent: partner :name
+        nearDir: (this.arm dentryid: near) == nodekind.dir
+        farDir: (this.arm dentryid: far) == nodekind.dir
+        if nearDir.not then {
+            if farDir then return far
+            return near
+        }
+        if farDir.not then return near
+        md: mountdata parentid: par first: far second: near has_second: true
+        if nearIsTop then md = mountdata parentid: par first: near second: far has_second: true
+        mid: this.entrytable.append entry: dentry.mount md
+        this.file_names.append name.string
+        return mid
+    }
+
+    # parentOf -- the directory entry `dentryid` hangs under; the root is its
+    # own parent.
+    parentOf: function {this: this.view dentryid: fsno} out fsno is {
+        e: this.entrytable.entries.get i: dentryid.u64
+        match (
+            e
+        ) case root then {
+            return dentryid
+        } case notfound then {
+            return e.parentid
+        } case file then {
+            return e.parentid
+        } case directory then {
+            return e.parentid
+        } case mount then {
+            return e.parentid
+        }
+    }
+
+    # _sameProvider -- whether two entries belong to one provider. A root or a
+    # mount belongs to none, so it matches nothing.
+    _sameProvider: function {this: this.view a: fsno b: fsno} out bool is {
+        ea: this.entrytable.entries.get i: a.u64
+        pa: u32
+        match (
+            ea
+        ) case file then {
+            pa = ea.providerid
+        } case directory then {
+            pa = ea.providerid
+        } case notfound then {
+            pa = ea.providerid
+        } case root then {
+            return false
+        } case mount then {
+            return false
+        }
+        eb: this.entrytable.entries.get i: b.u64
+        match (
+            eb
+        ) case file then {
+            return pa == eb.providerid
+        } case directory then {
+            return pa == eb.providerid
+        } case notfound then {
+            return pa == eb.providerid
+        } case root then {
+            return false
+        } case mount then {
+            return false
         }
     }
 
