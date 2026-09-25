@@ -1817,7 +1817,11 @@ perf: $(PERFBIN)
 # valtype argument to a `.borrow`/`.view` parameter in the compiler's own
 # source -- `astnode.view` above all -- now takes the lock a reftype one
 # does), 597 source.
-ALLOC_BASELINE := 2661666
+#
+# +7517 a hash key is checked exactly: 25 behaviour (each Map/Set key type the
+# compiler's own source admits is recorded and its two members compared once),
+# 7492 source.
+ALLOC_BASELINE := 2669183
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

@@ -20551,10 +20551,13 @@ constraintHolds: function {
         forceValParts :st :ast tid: argTid depth: 0
         if (typeIsHashable :st :ast tid: argTid).not then return false
         st.typing.hashUsed.add item: argTid.u64
+        st.typing.hashKeys.add item: argTid.u64
         return true
     } case refHashable then {
         if (st.reg.isReftypeOf tid: argTid).not then return false
-        return (typeIsHashable :st :ast tid: argTid)
+        if (typeIsHashable :st :ast tid: argTid).not then return false
+        st.typing.hashKeys.add item: argTid.u64
+        return true
     } case idKey then {
         # an id key is not merely hashable: the container indexes on its BITS,
         # so the bound admits only the scalars whose bits are an index
@@ -20765,7 +20768,62 @@ constraintUnmetText: function {
     }
     pnmT: zast.nameTextAt :ast ref: paramName
     m: "generic argument '\{an}' does not satisfy constraint '\{con}' on parameter '\{pnmT}' of '\{tdn}'"
+    why: hashableUnmetReason :ast :st ck: cdx.kind tid: argTid
+    if why.length > 0 then {
+        m.append ": "
+        m.append why
+    }
     return m
+}
+
+# hashableUnmetReason -- why a type of the bound's family has no usable `hash`
+# and `==`, for the refusal of a hashable bound; "" for any other bound, or a
+# type of the other family (the family is the reason there).
+hashableUnmetReason: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    ck: ztypes.constraintkind
+    tid: ztypes.tid
+} out String is {
+    if ck == ztypes.constraintkind.valHashable when (st.reg.isValtypeOf :tid) then {
+        return (valHashableUnmetReason :ast :st :tid)
+    }
+    if ck == ztypes.constraintkind.refHashable when (st.reg.isReftypeOf :tid) then {
+        htd: typedefChainEnd :st :tid
+        kn: st.reg.nameOf :tid
+        if (st.typing.declIsMethodId parentTypeId: htd nameId: zast.names.wkHash).not then {
+            return "'\{kn}' declares no 'hash'"
+        }
+        if (st.typing.declIsMethodId parentTypeId: htd nameId: zast.names.wkOpEq).not then {
+            return "'\{kn}' declares no '=='"
+        }
+    }
+    return "".string
+}
+
+# valHashableUnmetReason -- the first thing that leaves a value type with no
+# usable `==` or `hash`: its own member, or the part whose member is missing.
+valHashableUnmetReason: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+} out String is {
+    kn: st.reg.nameOf :tid
+    em: valEqMissingPart :ast :st :tid depth: 0
+    if em == tid then {
+        eo: valOpOwner :st :tid nameId: zast.names.wkOpEq
+        if (st.typing.declIsMethodId parentTypeId: eo nameId: zast.names.wkOpEq) then {
+            return "its '==' does not compare a '\{kn}' with another '\{kn}'"
+        }
+        return "'\{kn}' has no '=='"
+    }
+    if em.isZero.not then return "its part '\{st.reg.nameOf tid: em}' has no '=='"
+    hm: valHashMissingPart :ast :st :tid depth: 0
+    if hm.isZero then return "".string
+    if hm != tid then return "its part '\{st.reg.nameOf tid: hm}' has no 'hash'"
+    hsrc: valOpSource :ast :st :tid nameId: zast.names.wkHash
+    if hsrc.none then return "'\{kn}' has no 'hash'"
+    return "it writes its own '==' but not its 'hash', and a key's two must agree".string
 }
 
 # checkAnyBounds -- `Any` is not a user-spellable bound: a generic parameter
@@ -20978,15 +21036,7 @@ typeIsHashable: function {
         return (valHashMissingPart :ast :st :tid depth: 0).isZero
     }
     # a reference type declares both itself; a typedef over one asks its base
-    htd: tid
-    for true loop {
-        bo: st.typing.typedefBaseTid.get key: htd
-        match (
-            bo
-        ) case some then {
-            htd = ztypes.tid.create from: bo
-        } case none then break
-    }
+    htd: typedefChainEnd :st :tid
     if (st.typing.declIsMethodId
         parentTypeId: htd
         nameId: (zast.nameid.create from: zast.names.wkHash)
@@ -20995,6 +21045,231 @@ typeIsHashable: function {
         parentTypeId: htd
         nameId: (zast.nameid.create from: zast.names.wkOpEq)
     )
+}
+
+# typedefChainEnd -- the end of `tid`'s typedef chain: the type a typedef over
+# a reference type takes its members from.
+typedefChainEnd: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
+    t: tid
+    for true loop {
+        bo: st.typing.typedefBaseTid.get key: t
+        match (
+            bo
+        ) case some then {
+            t = ztypes.tid.create from: bo
+        } case none then break
+    }
+    return t
+}
+
+# checkHashKeys -- every type a hashable bound admitted as a Map or Set key,
+# checked EXACTLY against the key's spec, `hash: {t: this.view} out u64` and
+# `==: {t: this.view rhs: K} out bool` with K the key's own type (or admitted
+# by a generic `==`'s bound). The bound admits by name, and a member that only
+# shares the name compiled to C the C compiler refused. A reference type's
+# declared members are checked, and a value type's WRITTEN ones: a generated
+# member is correct by construction, so its parts are checked in its place.
+# Run once the members are resolved, as checkConformances is; admission holds
+# no source node, so a finding is reported at the member.
+checkHashKeys: function {ast: Ast st: zenv.ZSymbolTable} is {
+    keys: ListVal u64
+    with kit: st.typing.hashKeys.iterate do for k: kit loop keys.append from: k
+    seen: IdSet u64
+    with lit: keys.iterate do for k: lit loop {
+        checkHashKey :ast :st tid: (ztypes.tid.create from: k) :seen depth: 0
+    }
+}
+
+# checkHashKey -- one key type, or one part of a generated key member.
+checkHashKey: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    tid: ztypes.tid
+    seen: IdSet u64
+    depth: u64
+} is {
+    if tid.isZero or (depth > 64) or (seen.has item: tid.u64) then return
+    seen.add item: tid.u64
+    if (st.reg.isValtypeOf :tid).not then {
+        if (st.reg.isReftypeOf :tid).not then return
+        htd: typedefChainEnd :st :tid
+        checkKeyMember :ast :st owner: htd nameId: zast.names.wkHash
+        checkKeyMember :ast :st owner: htd nameId: zast.names.wkOpEq
+        return
+    }
+    hs: valOpSource :ast :st :tid nameId: zast.names.wkHash
+    es: valOpSource :ast :st :tid nameId: zast.names.wkOpEq
+    if hs.written then {
+        ho: valOpOwner :st :tid nameId: zast.names.wkHash
+        checkKeyMember :ast :st owner: ho nameId: zast.names.wkHash
+    }
+    if es.written then {
+        eo: valOpOwner :st :tid nameId: zast.names.wkOpEq
+        checkKeyMember :ast :st owner: eo nameId: zast.names.wkOpEq
+    }
+    if (hs.generated or es.generated).not then return
+    parts: ListVal u64
+    valPartTids :ast :st tid: (valOpOwner :st :tid nameId: zast.names.wkOpEq) :parts
+    with pit: parts.iterate do for pt: pit loop {
+        checkHashKey :ast :st tid: (ztypes.tid.create from: pt) :seen depth: depth + 1
+    }
+}
+
+# checkKeyMember -- `owner`'s member `nameId` (`hash` or `==`) against the key
+# spec, reported at the member when it differs.
+checkKeyMember: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    owner: ztypes.tid
+    nameId: zast.nameid
+} is {
+    mid: conformanceImplMethod :st implTid: owner mnameId: nameId
+    if mid.isZero then return
+    why: keyMemberMismatch :ast :st :owner :mid :nameId
+    if why.length == 0 then return
+    md: st.typing.declMemberIdOf parentTypeId: owner :nameId
+    if md.isZero then return
+    dn: zast.nodeid.create from: (st.typing.decls.get i: md.u64).node
+    mnode: ast.nodes.get i: dn.u64
+    kn: st.reg.nameOf tid: owner
+    msg: "'\{kn}' cannot be a Map or Set key: "
+    msg.append why
+    (addErrorH
+        :st
+        nodeid: dn
+        lineno: (nodeLine n: mnode)
+        colno: (nodeCol n: mnode)
+        e: zast.err.typeError
+        :msg
+        note: "a key declares `hash: function {t: this.view} out u64` and `==: function {t: this.view rhs: type} out bool`".string
+        hint: "".string
+        width: 1
+    )
+}
+
+# keyMemberMismatch -- how method `mid` differs from the key spec's member of
+# the same name, or "" when it matches: its parameter count, its receiver,
+# `==`'s parameter, and its return.
+keyMemberMismatch: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    owner: ztypes.tid
+    mid: ztypes.tid
+    nameId: zast.nameid
+} out String is {
+    isHash: nameId == zast.names.wkHash
+    mname: zast.nameTextCopy :ast ref: nameId
+    ids: ListVal u64
+    nms: ListVal u64
+    conformanceParams :st :mid :ids nameIds: nms
+    want: 1.u64
+    if isHash then want = 0
+    if ids.length != want then {
+        noun: conformanceParamNoun n: ids.length
+        return "its '\{mname}' takes \{ids.length} \{noun}, where a key's takes \{want}"
+    }
+    why: keyReceiverMismatch :st :mid mname: mname.stringView
+    if why.length == 0 when isHash.not then why = (keyEqParamMismatch
+        :ast
+        :st
+        :owner
+        :mid
+        pT: (ztypes.tid.create from: (ids.get i: 0))
+        pnId: (zast.nameid.create from: (nms.get i: 0).u32.orPanic)
+    )
+    if why.length == 0 then why = keyReturnMismatch :ast :st :mid mname: mname.stringView :isHash
+    return why
+}
+
+# keyReceiverMismatch -- a key member's receiver is `.view`; a bare `:this`
+# is not.
+keyReceiverMismatch: function {
+    st: zenv.ZSymbolTable.view
+    mid: ztypes.tid
+    mname: StringView
+} out String is {
+    rpn: st.reg.thisParamNameIdOf tid: mid
+    rn: zast.names.wkThis
+    if rpn.isZero.not then rn = zast.nameid.create from: rpn.u32
+    rOwnO: st.typing.declOwnershipOfId parentTypeId: mid nameId: rn
+    rOwn: rOwnO.or d: ztypes.zparamownership.noneMode
+    if rOwn == ztypes.zparamownership.viewMode then return "".string
+    rm: markerText o: rOwn
+    rp: conformanceMarkerPhrase m: rm.stringView
+    return "its '\{mname}' has a receiver that is \{rp}, where a key's is `.view`"
+}
+
+# keyEqParamMismatch -- `==`'s parameter is the key's own type, unmarked, or a
+# generic parameter whose bound admits the key.
+keyEqParamMismatch: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    owner: ztypes.tid
+    mid: ztypes.tid
+    pT: ztypes.tid
+    pnId: zast.nameid
+} out String is {
+    if (st.reg.typetypeOf typeId: pT) == ztypes.ztypetype.genericParam then {
+        if (keyParamAdmits :ast :st :mid :pT key: owner) then return "".string
+        kn: st.reg.nameOf tid: owner
+        return "its '==' is generic, and its bound does not admit a '\{kn}'"
+    }
+    if pT != owner then {
+        ptn: st.reg.nameOf tid: pT
+        return "its '==' compares with a '\{ptn}', where a key's compares with its own type"
+    }
+    pO: conformanceOwn o: (st.typing.declOwnershipOfId parentTypeId: mid nameId: pnId)
+    if pO == ztypes.zparamownership.noneMode then return "".string
+    pm: markerText o: pO
+    pp: conformanceMarkerPhrase m: pm.stringView
+    return "its '==' takes its parameter \{pp}, where a key's is unmarked"
+}
+
+# keyReturnMismatch -- a key's `hash` returns u64 and its `==` bool, both
+# unmarked. A return not yet resolved is not judged.
+keyReturnMismatch: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    mid: ztypes.tid
+    mname: StringView
+    isHash: bool
+} out String is {
+    wantT: builtinTidT :ast :st scope: st.curScope base: "bool"
+    if isHash then wantT = builtinTidT :ast :st scope: st.curScope base: "u64"
+    rt: methodReturnOf :st :mid
+    match (
+        rt
+    ) case some then {
+        if rt != wantT then {
+            rtn: st.reg.nameOf tid: rt
+            wtn: st.reg.nameOf tid: wantT
+            return "its '\{mname}' returns \{rtn}, where a key's returns \{wtn}"
+        }
+    } case none then null
+    rmk: conformanceReturnMarker :st :mid
+    if rmk.length == 0 then return "".string
+    return "its '\{mname}' returns `.\{rmk}`, where a key's return is unmarked"
+}
+
+# keyParamAdmits -- a generic `==`'s parameter type `pT` admits the key: the
+# bound of the method's type parameter holds for it, as String's StringLike
+# one holds for a String.
+keyParamAdmits: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    mid: ztypes.tid
+    pT: ztypes.tid
+    key: ztypes.tid
+} out bool is {
+    tdecl: declOfTypeId :st tid: mid
+    if tdecl.isZero then return true
+    pn: nameIdOf :ast name: (st.reg.nameOf tid: pT).stringView
+    cd: st.reg.genericParamConstraintOf :tdecl paramName: pn
+    if cd.kind == ztypes.constraintkind.none then return true
+    if cd.kind == ztypes.constraintkind.other then {
+        return (namedBoundAdmits :ast :st scope: st.curScope :cd argTid: key)
+    }
+    return (constraintHolds :ast :st scope: st.curScope ck: cd.kind argTid: key)
 }
 
 # valopsrc -- where a value type's `==`, `hash` or `compare` comes from. A
@@ -55195,6 +55470,7 @@ typecheck: function {
         checkAnyBounds ast: program :st
         checkGenericBounds ast: program :st
         checkConformances ast: program :st
+        checkHashKeys ast: program :st
         checkWideLiterals ast: program :st
         stampAliasValues :st ast: program
         stampGenericBounds :st ast: program

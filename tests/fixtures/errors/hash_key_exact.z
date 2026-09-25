@@ -1,0 +1,42 @@
+# E0100: a Map or Set key's `hash` and `==` are checked exactly against the
+# key spec, `hash: function {t: this.view} out u64` and
+# `==: function {t: this.view rhs: type} out bool`. Members that only share the
+# names used to compile to C the C compiler refused, or to accept a key whose
+# hash writes to it.
+Seeded: class { n: u64 } as {
+    # an extra parameter
+    hash: function {t: this.view seed: u64} out u64 is { return t.n + seed }
+    ==: function {t: this.view rhs: Seeded} out bool is { return t.n == rhs.n }
+}
+Loose: class { n: u64 } as {
+    hash: function {t: this.view} out u64 is { return t.n }
+    # compares with a u64, not a Loose
+    ==: function {t: this.view rhs: u64} out bool is { return t.n == rhs }
+}
+Counting: class { n: u64 hits: u64 } as {
+    # a hash that writes to its key
+    hash: function {:this} out u64 is {
+        this.hits = this.hits + 1
+        return this.n
+    }
+    ==: function {t: this.view rhs: Counting} out bool is { return t.n == rhs.n }
+}
+narrow: record { x: u64 } as {
+    # a written hash of the wrong width
+    hash: function {t: this.view} out u32 is { return t.x.u32.orPanic }
+    ==: function {t: this.view rhs: narrow} out bool is { return t.x == rhs.x }
+}
+mutv: record { x: u64 } as {
+    hash: function {t: this.view} out u64 is { return t.x }
+    # a bare `:this` is not `.view`
+    ==: function {:this rhs: mutv} out bool is { return this.x == rhs.x }
+}
+
+main: function is {
+    a: MapRV Seeded v: u64
+    b: MapRV Loose v: u64
+    c: MapRV Counting v: u64
+    d: SetVal narrow
+    e: SetVal mutv
+    print "\{a.length} \{b.length} \{c.length} \{d.length} \{e.length}"
+}
