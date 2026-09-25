@@ -6847,12 +6847,26 @@ receiverOnce: function {
     text: StringView
     tid: ztypes.tid
 } out String is {
+    return (receiverOnceAt :ast :symtab :ctx baseNid: (dottedBaseNid n: callable) :text :tid)
+}
+
+# receiverOnceAt -- receiverOnce for a receiver known by its own node: a
+# member read that auto-calls through a vtable has no call node.
+receiverOnceAt: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    # the receiver's node
+    baseNid: u64
+    text: StringView
+    tid: ztypes.tid
+} out String is {
     if (isNonLvalueArg s: text).not then return text.string
     hv: (hoistBorrowValArg
         :ast
         :symtab
         :ctx
-        argNid: (dottedBaseNid n: callable)
+        argNid: baseNid
         av: text
         pid: tid
         paramTake: false
@@ -14603,8 +14617,10 @@ emitNestedMonoMethodBase: function {
                 :ctx
                 n: (ast.nodes.get i: n.parent.u64)
             ) then nacc = "->".string
+            # the table and the data are both read through the receiver
+            nrecv: receiverOnceAt :ast :symtab :ctx baseNid: n.parent.u64 text: baseAtom tid: nlid
             return (vtableAutoCallC
-                recv: baseAtom
+                recv: nrecv.stringView
                 acc: nacc.stringView
                 mn: mn2
                 isFacet: nrtt == ztypes.ztypetype.facetType
@@ -14921,10 +14937,11 @@ emitDottedNestedBase: function {
 }
 
 # protocolProjectionRead -- a borrowed conformance projection: f.myreader ->
-# {Impl}_{label}_create(&f) (a borrowed fat pointer). Only an as-block
-# conformance LABEL materializes; a stored protocol field (p: SomeProto) is a
-# by-value fat pointer accessed directly, so the read is gated on the
-# conformance row. Empty when the member is not the label.
+# {Impl}_{label}_create(&f) (a borrowed fat pointer; for a facet, the copy its
+# one create makes). Only an as-block conformance LABEL materializes; a stored
+# protocol or facet field (p: SomeProto) is a by-value value accessed directly,
+# so the read is gated on the conformance row. Empty when the member is not the
+# label.
 protocolProjectionRead: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -15073,7 +15090,7 @@ emitResolvedMemberRead: function {
     readIsRef: bool
 } out String is {
     mtt: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: mco.u64)
-    if mtt == ztypes.ztypetype.protocolType then {
+    if mtt == ztypes.ztypetype.protocolType or (mtt == ztypes.ztypetype.facetType) then {
         pj: protocolProjectionRead :symtab :ctx :mn2 :bn2 :bn2v :bstamp :mco
         if pj.length > 0 then return pj
     }
@@ -15782,8 +15799,10 @@ emitDottedAtomBase: function {
     if (isDispatchableTid :symtab tid: bstamp) when viaVtable then {
         pacc: ".".string
         if (isPtrVid :ctx vid: bn2v) then pacc = "->".string
+        # the table and the data are both read through the receiver
+        precv: receiverOnceAt :ast :symtab :ctx baseNid: n.parent.u64 text: bn2 tid: bstamp
         return (vtableAutoCallC
-            recv: bn2
+            recv: precv.stringView
             acc: pacc.stringView
             mn: mn2
             isFacet: rtt == ztypes.ztypetype.facetType
