@@ -1003,6 +1003,8 @@ Builder: class {
             xs.append (this.tok tt: zlexer.toktype.dotTok)
             childTt: zlexer.toktype.refIdTok
             if (zlexer.isMarkerTok tt: this.c.peekKind) then childTt = this.c.peekKind
+            # `X.typedef` names the field form's marker
+            if this.c.peekKind == zlexer.toktype.typedefTok then childTt = zlexer.toktype.typedefTok
             xs.append (this.tok tt: childTt)
         } else null
         return (this.d.concat xs)
@@ -1624,7 +1626,22 @@ Builder: class {
         match (
             n
         ) case objectdef then {
-            xs.append (this.tok tt: this.c.peekKind)
+            first: this.c.peekKind
+            xs.append (this.tok tt: first)
+            # a typedef's base is one type reference, written where a clause's
+            # value is
+            if first == zlexer.toktype.typedefTok then {
+                xs.append this.idSpace
+                if (this.peekIs tt: zlexer.toktype.isTok) then {
+                    xs.append (this.tok tt: zlexer.toktype.isTok)
+                    xs.append this.idSpace
+                }
+                xs.append (this.visitValue
+                    id: (this.kid span: n.isItems i: 0)
+                    slot: slotClause
+                    wrapped: false
+                )
+            }
             for true loop {
                 if this.c.failed then break
                 kind: this.c.peekKind

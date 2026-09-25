@@ -97,6 +97,61 @@ unitOpOfName: function {ast: Ast.view uname: StringView} out zast.nodeid is {
     return zast.nodeid
 }
 
+# casingKindOf -- the kind an object definition's name is cased by: its own,
+# or for a typedef its base's.
+casingKindOf: function {ast: Ast.view opId: zast.nodeid} out zast.objectkind is {
+    op: ast.nodes.get i: opId.u64
+    match (
+        op
+    ) case objectdef then {
+        if op.kind == zast.objectkind.typedefDef then {
+            b0: zast.kidAt kids: ast.kids span: op.isItems i: 0
+            return (typedefCasingKind :ast baseId: (zast.nodeid.create from: b0))
+        }
+        return op.kind
+    } else {
+        return zast.objectkind.recordDef
+    }
+}
+
+# typedefCasingKind -- the family a typedef's name is cased by: its base's,
+# read off the base's own name, since that name is cased by its family too. A
+# capitalised base is a reftype and makes the typedef read as a class; any
+# other, a record. A parameterized base is read by its head, a dotted one by
+# its last segment.
+typedefCasingKind: function {ast: Ast.view baseId: zast.nodeid} out zast.objectkind is {
+    hid: baseId
+    {
+        bn: ast.nodes.get i: baseId.u64
+        match (
+            bn
+        ) case call then {
+            hid = bn.callable
+        } else null
+    }
+    nm: zast.nameid
+    {
+        hn: ast.nodes.get i: hid.u64
+        match (
+            hn
+        ) case atomid then {
+            nm = hn.name
+        } case dottedpath then {
+            cn: ast.nodes.get i: hn.child.u64
+            if cn.atomid then nm = cn.name
+        } else null
+    }
+    if nm.isZero then return zast.objectkind.recordDef
+    tx: zast.nameTextAt :ast ref: nm
+    fb: tx.stringView.byteAt i: 0
+    match (
+        fb
+    ) case some then {
+        if fb >= 65 when fb <= 90 then return zast.objectkind.classDef
+    } case none then null
+    return zast.objectkind.recordDef
+}
+
 # isDirPath -- whether `path` names a directory, following links.
 isDirPath: function {path: StringView} out bool is {
     sr: io.stat :path
@@ -1569,7 +1624,7 @@ Analysis: class {
                             nameRef: bm.name
                             line: bm.lineno
                             col: bm.colno
-                            kind: op.kind
+                            kind: (casingKindOf :ast opId: bm.operation)
                         )
                     }
                 }

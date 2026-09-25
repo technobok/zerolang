@@ -2342,12 +2342,7 @@ recordConformerContexts: function {
     op: astnode.view
 } is {
     if op.objectdef then {
-        isRef: (
-            op.kind ==
-            zast.objectkind.classDef or
-            (op.kind == zast.objectkind.unionDef) or
-            (op.kind == zast.objectkind.generatorDef)
-        )
+        isRef: defKindIsReftype :st :ast :unitDecl :defName kind: op.kind
         dk0: (zast.poolFind pool: ast.names text: defName).u64
         dv0: isRef
         st.typing.mainDefIsReftype.set key: dk0 value: dv0
@@ -8524,10 +8519,12 @@ isTypedefField: function {ast: Ast.view n: astnode.view} out bool is {
     }
 }
 
-# recordIsTypedef -- true when a record's `is` body carries a single `X.typedef`
+# recordIsTypedef -- true when a definition is a typedef: a `typedef`
+# declarator, or a record or class whose `is` body carries a single `X.typedef`
 # field. Such a record gets no field child and synthesizes `create`+`borrow`
 # instead of `create`/`==`/`!=`.
 recordIsTypedef: function {ast: Ast.view rnode: objref} out bool is {
+    if rnode.kind == zast.objectkind.typedefDef then return true
     kFiter: u64
     for kFiter < rnode.nis loop {
         fmId: (zast.objIsItemAt :ast nid: rnode.nid i: kFiter).u32
@@ -8539,68 +8536,39 @@ recordIsTypedef: function {ast: Ast.view rnode: objref} out bool is {
     return false
 }
 
-# typedefFieldBaseNameId -- the base type name of an `X.typedef` field's `X`
-# (e.g. `(List of: u8).typedef` -> "List"). Borrows the astnode, never binds it (a
-# bare bind would move the type-expr out of the shared AST).
-typedefFieldBaseNameId: function {ast: Ast.view n: astnode.view} out zast.nameid is {
-    match (
-        n
-    ) case dottedpath then {
-        return (paramTypeBaseNameId :ast op: (ast.nodes.get i: n.parent.u64))
-    } else {
-        return (zast.nameid.create from: 0)
+# objectTypedefBaseNode -- the type reference a typedef wraps: a `typedef`
+# declarator's single is-item, or the `X` of a single `X.typedef` field. Zero
+# when the object is not a typedef.
+objectTypedefBaseNode: function {ast: Ast.view onode: objref} out zast.nodeid is {
+    if onode.kind == zast.objectkind.typedefDef then {
+        return (zast.objIsItemAt :ast nid: onode.nid i: 0)
     }
-}
-
-# objectTypedefBaseId -- the base type name of an objectdef's single `X.typedef`
-# field (the typedef wrapper base), or "" when the object is not a typedef.
-objectTypedefBaseId: function {ast: Ast.view onode: objref} out zast.nameid is {
     kFiter: u64
     for kFiter < onode.nis loop {
         fmId: (zast.objIsItemAt :ast nid: onode.nid i: kFiter).u32
         kFiter = kFiter + 1
         fm: ast.nodes.get i: fmId.u64
         if fm.namedoperation when (isTypedefField :ast n: (ast.nodes.get i: fm.operation.u64)
-        ) then return (typedefFieldBaseNameId :ast n: (ast.nodes.get i: fm.operation.u64))
+        ) then {
+            dr: dpRefAt :ast nid: fm.operation
+            return dr.parent
+        }
     }
-    return (zast.nameid.create from: 0)
+    return (zast.nodeid.create from: 0)
 }
 
-# typedefFieldBaseTid -- the type id of an `X.typedef` field's `X`. A
-# parameterized base (`(List of: u8).typedef`) resolves through the spec trie,
-# which materializes the instance; a bare atom (`String.typedef`) resolves
-# through the unit ladder. 0 when the node is not a typedef field or the base
-# does not resolve.
-typedefFieldBaseTid: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    nid: zast.nodeid
-} out u64 is {
-    dr: dpRefAt :ast :nid
-    if dr.nid.isZero.not then {
-        memberIdAt: (resolveMonoRefInline
-            :st
-            :scope
-            :ast
-            :unitDecl
-            thisName: ""
-            enclDecl: ztypes.declid
-            opNid: dr.parent
-            nid: 0
-        )
-        if memberIdAt > 0 then return memberIdAt
-        anId: rootNameIdOf :ast n: (ast.nodes.get i: dr.parent.u64)
-        if anId.isZero then return 0
-        return (resolveAtomType :st :scope :ast :unitDecl nameId: anId thisName: "")
-    } else {
-        return 0
-    }
+# objectTypedefBaseId -- the base type name of a typedef (the wrapper's base),
+# or zero when the object is not a typedef.
+objectTypedefBaseId: function {ast: Ast.view onode: objref} out zast.nameid is {
+    bn: objectTypedefBaseNode :ast :onode
+    if bn.isZero then return (zast.nameid.create from: 0)
+    return (paramTypeBaseNameId :ast op: (ast.nodes.get i: bn.u64))
 }
 
-# objectTypedefBaseTid -- the base type id of an objectdef's single `X.typedef`
-# field, or 0 when the object is not a typedef.
+# objectTypedefBaseTid -- the base type id of a typedef, or 0 when the object
+# is not a typedef or its base does not resolve. A parameterized base
+# (`(List of: u8)`) resolves through the spec trie, which materializes the
+# instance; a bare atom (`String`) resolves through the unit ladder.
 objectTypedefBaseTid: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -8608,23 +8576,22 @@ objectTypedefBaseTid: function {
     scope: ztypes.declid
     onode: objref
 } out u64 is {
-    kFiter: u64
-    for kFiter < onode.nis loop {
-        fmId: (zast.objIsItemAt :ast nid: onode.nid i: kFiter).u32
-        kFiter = kFiter + 1
-        fm: argRefAt :ast nid: (zast.nodeid.create from: fmId.u32)
-        if fm.nid.isZero.not when (isTypedefField :ast n: (ast.nodes.get i: fm.operation.u64)
-        ) then {
-            return (typedefFieldBaseTid
-                :st
-                :scope
-                :ast
-                :unitDecl
-                nid: fm.operation
-            )
-        }
-    }
-    return 0
+    bn: objectTypedefBaseNode :ast :onode
+    if bn.isZero then return 0
+    memberIdAt: (resolveMonoRefInline
+        :st
+        :scope
+        :ast
+        :unitDecl
+        thisName: ""
+        enclDecl: ztypes.declid
+        opNid: bn
+        nid: 0
+    )
+    if memberIdAt > 0 then return memberIdAt
+    anId: rootNameIdOf :ast n: (ast.nodes.get i: bn.u64)
+    if anId.isZero then return 0
+    return (resolveAtomType :st :scope :ast :unitDecl nameId: anId thisName: "")
 }
 
 # fnFieldFlaggableName -- an is-block FUNCTION member that should become a struct
@@ -12831,7 +12798,20 @@ resolveClass: function {
     istd: recordIsTypedef :ast rnode: cnode
     if istd when (resolveClassTypedefBase :st :ast :unitDecl :scope :cid :cnode
     ) then needsDtor = true
+    # a `typedef` declarator's one is-item is its base, not a field: its inner
+    # refs (the u8 in `(ListVal u8)`) still stamp
     kFiter: u64
+    if cnode.kind == zast.objectkind.typedefDef then {
+        kFiter = cnode.nis
+        (recordTyperef
+            :st
+            :scope
+            :ast
+            :unitDecl
+            thisName: ""
+            nid: (objectTypedefBaseNode :ast onode: cnode)
+        )
+    }
     for kFiter < cnode.nis loop {
         fmId: (zast.objIsItemAt :ast nid: cnode.nid i: kFiter).u32
         kFiter = kFiter + 1
@@ -13157,6 +13137,131 @@ declOfUnitDef: function {
     return (ztypes.declid.create from: 0)
 }
 
+# typedefBaseDecl -- the Decl a typedef definition's base names, looked up from
+# the unit the typedef is written in: an atom or a parameterized base by its
+# head name, a dotted one by its unit and name. Zero when the base names no
+# definition.
+typedefBaseDecl: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    declId: ztypes.declid
+    baseNid: zast.nodeid
+} out ztypes.declid is {
+    zd: ztypes.declid
+    bn: ast.nodes.get i: baseNid.u64
+    dk: dottedDefTargetIds :ast n: bn
+    if dk.unitName.u32 > 0 then {
+        du: unitDeclOfName :st nameId: dk.unitName
+        if du.isZero then return zd
+        return (declOfUnitDef :st scope: du unitDecl: du nameId: dk.defName)
+    }
+    hn: paramTypeBaseNameId :ast op: bn
+    if hn.isZero then return zd
+    scope: declParentIdOf :st :declId
+    ud: unitScopeOf :st declId: scope
+    site: definingSiteForId :st :ast unitDecl: ud :scope nameId: hn
+    if site.defUnit.isZero then return zd
+    return (declOfUnitDef :st :scope unitDecl: site.defUnit nameId: hn)
+}
+
+# typedefDefTypetype -- the typetype a `typedef` definition takes: its base's
+# family, so a valtype base makes it a record and a reftype base a class. A
+# typedef of a typedef takes the family its base took. A base that names no
+# definition reads as a record, and resolving the base reports it.
+typedefDefTypetype: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    declId: ztypes.declid
+    baseNid: zast.nodeid
+    depth: u64
+} out ztypes.ztypetype is {
+    if depth > 32 then return ztypes.ztypetype.recordType
+    bd: typedefBaseDecl :st :ast :declId :baseNid
+    if bd.isZero then return ztypes.ztypetype.recordType
+    bb: declTypedefBaseNid :st :ast declId: bd
+    if bb.isZero.not then {
+        return (typedefDefTypetype :st :ast declId: bd baseNid: bb depth: depth + 1)
+    }
+    btt: declDefTypetype :st :ast declId: bd
+    match (
+        btt
+    ) case some then {
+        if btt == ztypes.ztypetype.classType then return ztypes.ztypetype.classType
+        if btt == ztypes.ztypetype.unionType then return ztypes.ztypetype.classType
+        if btt == ztypes.ztypetype.protocolType then return ztypes.ztypetype.classType
+    } case none then null
+    return ztypes.ztypetype.recordType
+}
+
+# declTypedefBaseNid -- the base type reference of the `typedef` definition a
+# Decl records; zero when it records anything else.
+declTypedefBaseNid: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    declId: ztypes.declid
+} out zast.nodeid is {
+    zn: zast.nodeid
+    dnode: u32
+    {
+        dro: st.typing.decls.get i: declId.u64
+        dnode = dro.node
+    }
+    if dnode == 0 then return zn
+    nop: ast.nodes.get i: dnode.u64
+    if nop.namedoperation then {
+        dop: ast.nodes.get i: nop.operation.u64
+        if dop.objectdef when dop.kind == zast.objectkind.typedefDef then {
+            return (zast.nodeid.create from: (zast.kidAt kids: ast.kids span: dop.isItems i: 0))
+        }
+    }
+    return zn
+}
+
+# defKindIsReftype -- a unit's definition named `defName`, of kind `kind`,
+# is a reftype: a class, union or generator, or a typedef over a reftype.
+defKindIsReftype: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    unitDecl: ztypes.declid
+    defName: StringView
+    kind: zast.objectkind
+} out bool is {
+    if kind == zast.objectkind.typedefDef then {
+        return (typedefDefIsReftype :st :ast :unitDecl :defName)
+    }
+    return (
+        kind ==
+        zast.objectkind.classDef or
+        (kind == zast.objectkind.unionDef) or
+        (kind == zast.objectkind.generatorDef)
+    )
+}
+
+# typedefDefIsReftype -- a unit's `typedef` definition named `defName` takes a
+# reftype base, so it resolves as a class.
+typedefDefIsReftype: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    unitDecl: ztypes.declid
+    defName: StringView
+} out bool is {
+    dd: (declOfUnitDef
+        :st
+        scope: unitDecl
+        :unitDecl
+        nameId: (zast.poolFind pool: ast.names text: defName)
+    )
+    if dd.isZero then return false
+    tt: declDefTypetype :st :ast declId: dd
+    match (
+        tt
+    ) case some then {
+        return tt == ztypes.ztypetype.classType
+    } case none then {
+        return false
+    }
+}
+
 # declDefTypetype -- the typetype a declaration's def node declares
 # (defTypetypeOf off the Decl's own namedoperation); none for defs that
 # mint no canonical type (re-exports, constants, null/never).
@@ -13173,6 +13278,10 @@ declDefTypetype: function {
         dname = decl.name
     }
     if dnode == 0 then return (optionval.none ztypes.ztypetype)
+    db: declTypedefBaseNid :st :ast :declId
+    if db.isZero.not then {
+        return (optionval.some (typedefDefTypetype :st :ast :declId baseNid: db depth: 0))
+    }
     nop: ast.nodes.get i: dnode.u64
     if nop.namedoperation then {
         nmNode: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: dname.u32)
@@ -14627,6 +14736,12 @@ resolveObjectDef: function {
         resolveClass :st scope: rf :ast :unitDecl :defName cnode: defn
     } case generatorDef then {
         resolveClass :st scope: rf :ast :unitDecl :defName cnode: defn
+    } case typedefDef then {
+        if (typedefDefIsReftype :st :ast :unitDecl :defName) then {
+            resolveClass :st scope: rf :ast :unitDecl :defName cnode: defn
+        } else {
+            resolveRecord :st scope: rf :ast :unitDecl :defName rnode: defn
+        }
     } case facetDef then {
         resolveFacet :st scope: rf :ast :unitDecl :defName fnode: defn
     } case protocolDef then {

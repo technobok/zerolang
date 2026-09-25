@@ -27,6 +27,7 @@ module Rouge
           protocol
           data
           generator
+          typedef
 
           function
           in
@@ -99,7 +100,7 @@ module Rouge
           null openmode optionval panic parseerror print
           public resultval return seekorigin stderr
           stdin stdout str stringJoin tag
-          this true typedef u128 u16
+          this true u128 u16
           u32 u64 u8 valhashable yield
         )
       end

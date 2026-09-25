@@ -39,7 +39,7 @@
     // functions (see builtins).
     var keywords = [
         'unit', 'record', 'class', 'variant', 'union', 'facet', 'protocol', 'data',
-        'generator',
+        'generator', 'typedef',
         'function', 'in', 'out', 'outx', 'is', 'as',
         'if', 'when', 'then', 'else',
         'for', 'while', 'loop', 'with', 'do', 'on',
@@ -74,7 +74,7 @@
         'Path', 'PathView', 'IoError', 'Reader', 'Writer', 'Closer', 'Seeker', 'seekorigin', 'File', 'openmode',
         'print', 'stringJoin', 'error', 'panic', 'stdin', 'stdout', 'stderr',
         'return', 'break', 'continue', 'yield',
-        'public', 'this', 'meta', 'typedef', 'tag', 'iterator', 'copy'
+        'public', 'this', 'meta', 'tag', 'iterator', 'copy'
     ];
 
     // Build a regex that matches a full WORD token and classifies it.

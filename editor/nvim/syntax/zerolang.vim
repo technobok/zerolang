@@ -43,7 +43,7 @@ syn match zerolangEscapeError /\\$/ contained
 syn region zerolangInterpolation matchgroup=zerolangInterpolationDelim start=/\\{/ end=/}/ contained contains=TOP
 
 " Keywords (use syn match so labels can take priority)
-syn match zerolangKeyword /\<\%(unit\|record\|class\|variant\|union\|facet\|protocol\|data\|generator\)\>/
+syn match zerolangKeyword /\<\%(unit\|record\|class\|variant\|union\|facet\|protocol\|data\|generator\|typedef\)\>/
 syn match zerolangKeyword /\<\%(function\|in\|out\|outx\|is\|as\|native\)\>/
 syn match zerolangKeyword /\<\%(if\|when\|then\|else\)\>/
 syn match zerolangKeyword /\<\%(for\|while\|loop\|with\|do\|on\)\>/
@@ -86,7 +86,7 @@ syn match zerolangBuiltinConst /\<\%(null\|never\|true\|false\|_\)\>/
 " Predeclared functions, streams, and context words
 syn match zerolangBuiltin /\<\%(print\|stringJoin\|error\|panic\|stdin\|stdout\|stderr\)\>/
 syn match zerolangBuiltin /\<\%(return\|break\|continue\|yield\)\>/
-syn match zerolangBuiltin /\<\%(public\|this\|meta\|typedef\|tag\|iterator\|copy\)\>/
+syn match zerolangBuiltin /\<\%(public\|this\|meta\|tag\|iterator\|copy\)\>/
 
 " Labels: word: and :word (defined after keywords — longer match wins)
 exe 'syn match zerolangLabel /' . s:W . '\+:/'

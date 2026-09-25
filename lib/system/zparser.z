@@ -177,7 +177,7 @@ isBareNullBody: function {ast: Ast.view body: astnode.view} out bool is {
 }
 
 # True for the keyword token types that open an inline type definition
-# (record / class / variant / union / protocol / facet / data). These are
+# (record / class / variant / union / protocol / facet / typedef / data). These are
 # rejected inside an object body -- such a type must be defined at unit
 # level and referenced by name.
 isInlineTypedefTok: function {tt: zlexer.toktype} out bool is {
@@ -196,6 +196,8 @@ isInlineTypedefTok: function {tt: zlexer.toktype} out bool is {
     } case facetTok then {
         return true
     } case generatorTok then {
+        return true
+    } case typedefTok then {
         return true
     } case dataTok then {
         return true
@@ -553,6 +555,13 @@ Parser: class {
         } case some then {
             if (zlexer.isMarkerTok tt: lex.peekType) then {
                 return (this.parsePathSuffix :lex :parent :startLine :startCol)
+            }
+            # `X.typedef` names the marker of the field form, a member like any
+            # other
+            if lex.peekType == zlexer.toktype.typedefTok then {
+                tdTok: lex.acceptAny pool: this.ast.names
+                tdp: this.pathSegment :parent tok: tdTok :startLine :startCol
+                return (this.parsePathTail :lex parent: tdp :startLine :startCol)
             }
             idOpt: lex.accept tt: zlexer.toktype.refIdTok pool: this.ast.names
             match (
@@ -3200,6 +3209,8 @@ Parser: class {
             return (this.parseItemDefinition :lex :startPos kind: zast.objectkind.facetDef)
         } case generatorTok then {
             return (this.parseItemDefinition :lex :startPos kind: zast.objectkind.generatorDef)
+        } case typedefTok then {
+            return (this.parseTypedefDefinition :lex :startPos)
         } case ifTok then {
             return (this.acceptIfExpression :lex)
         } case matchTok then {
@@ -3410,6 +3421,52 @@ Parser: class {
             :kind
             startLine: startPos.lineno
             startCol: startPos.colno
+        )
+    }
+
+    # typedef-definition entry: `typedef [is] <type> [as { ... }]`. The base is
+    # one type reference -- the production an `out` takes -- and is the
+    # objectdef's single is-item; the as-block is any item definition's.
+    parseTypedefDefinition: function {
+        :this lex: zlexer.Lexer startPos: zlexer.tokpos
+    } out astnode is {
+        lex.advance pool: this.ast.names
+        lex.accept tt: zlexer.toktype.isTok pool: this.ast.names
+        if (this.atomLookahead :lex).not then {
+            bad: lex.acceptAny pool: this.ast.names
+            return (this.mkError
+                tok: bad
+                code: zast.err.badItem
+                msg: "Expected type reference for typedef".string
+            )
+        }
+        base: this.parseTyperefOperation :lex
+        if (Parser.isError node: base) then return base
+        isItems: ListVal u32
+        isItems.append (this.intern n: base).u32
+        asItems: ListVal u32
+        if lex.peekType == zlexer.toktype.asTok then {
+            lex.advance pool: this.ast.names
+            ab: this.getObjectBody :lex typeBody: true
+            abn: ab.length
+            if abn > 0 then {
+                lastId: ab.pop
+                if (zast.isErrorAt ast: this.ast id: lastId) then {
+                    return (zast.tableTake ast: this.ast id: lastId)
+                }
+                ab.append lastId
+            }
+            asItems = ab
+        }
+        return (astnode.objectdef (zast.objectdefrow
+            nodeid: this.nextId
+            lineno: startPos.lineno
+            colno: startPos.colno
+            kind: zast.objectkind.typedefDef
+            isItems: (zast.kidsAdd kids: this.ast.kids xs: isItems)
+            asItems: (zast.kidsAdd kids: this.ast.kids xs: asItems)
+            isNative: false
+        )
         )
     }
 
