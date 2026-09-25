@@ -1,0 +1,82 @@
+# sum_conformance.z -- a union conforms to a protocol and a variant to a facet,
+# as a class and a record do. A union is boxed by pointer: borrowed as an
+# argument, owned in a `List Speaker` (from a moved binding and from an inline
+# construction), its payload destroyed through the box. A variant is a facet
+# member by value, beside a record conforming to the same facet, and conforms
+# to a protocol as a record may. The marker is a member of its type but no arm
+# of it: a match over either needs only the arms the body declares, and the
+# label reads as the projection (`m.Speaker`, `d.m`), not as an arm predicate.
+Speaker: protocol {
+    speak: function {t: this.view} out i64
+}
+Shape: union {
+    sq: String
+    none: null
+} as {
+    :Speaker
+    speak: function {t: this.view} out i64 is {
+        match (
+            t
+        ) case sq then {
+            return t.length.i64.orPanic
+        } case none then {
+            return 0
+        }
+    }
+}
+hear: function {s: Speaker} out i64 is {
+    return s.speak
+}
+
+sizer: facet {
+    size: function {t: this.view} out u64
+}
+dir: variant {
+    n: i64
+    none: null
+} as {
+    m: sizer
+    :Speaker
+    speak: function {t: this.view} out i64 is { return 2 }
+    size: function {t: this.view} out u64 is {
+        match (
+            t
+        ) case n then {
+            return t.u64.orPanic
+        } case none then {
+            return 0
+        }
+    }
+}
+pt: record { x: u64 } as {
+    m: sizer
+    size: function {t: this.view} out u64 is { return t.x * 10 }
+}
+measure: function {z: sizer} out u64 is {
+    return z.size
+}
+
+main: function is {
+    m: Shape.sq "abc".string
+    print "\{hear s: m} \{hear s: m.Speaker} \{m.Speaker.speak}"
+    xs: List Speaker
+    xs.append (Speaker.create from: m.take)
+    xs.append (Speaker.create from: (Shape.sq "hello".string))
+    xs.append (Speaker.create from: Shape.none)
+    xs.append (Speaker.create from: (dir.n 1))
+    n: 0.i64
+    for x: xs.iterate loop n = n + x.speak
+    print "\{n} \{xs.length}"
+
+    d: dir.n 3
+    print "\{measure z: d} \{measure z: d.m} \{d.m.size} \{hear s: d}"
+    if d.n then print "n"
+    print "\{measure z: (pt x: 4)}"
+    zs: ListVal sizer
+    zs.append (sizer.create from: d)
+    zs.append (sizer.create from: dir.none)
+    zs.append (sizer.create from: (pt x: 2))
+    t: 0.u64
+    for z: zs.iterate loop t = t + z.size
+    print "\{t} \{zs.length}"
+}

@@ -13010,7 +13010,14 @@ emitFnptrLocalCall: function {
 
 # emit a call used as a value (its result expression).
 
-# conformanceArgText -- a concrete class/record argument handed to a
+# typetypeConforms -- whether a type of this family may declare a conformance:
+# class and union to a protocol, record and variant to a facet.
+typetypeConforms: function {tt: ztypes.ztypetype} out bool is {
+    if tt == ztypes.ztypetype.classType or (tt == ztypes.ztypetype.recordType) then return true
+    return tt == ztypes.ztypetype.unionType or (tt == ztypes.ztypetype.variantType)
+}
+
+# conformanceArgText -- a concrete class/record/union/variant argument handed to a
 # protocol / facet parameter goes in as its conformance box: the impl's
 # `<cname>_<label>_create(&arg)`. "" when the parameter is no spec or the
 # argument no conforming concrete type.
@@ -13030,8 +13037,7 @@ conformanceArgText: function {
     if isProtoP.not then return "".string
     aTid: stampIdOf :symtab nid: (interpPartNodeId n: argOpNode)
     aTT: symtab.reg.typetypeOf typeId: aTid
-    aConc: aTT == ztypes.ztypetype.classType or (aTT == ztypes.ztypetype.recordType)
-    if aConc.not then return "".string
+    if (typetypeConforms tt: aTT).not then return "".string
     pLbl: boxLabelFor :symtab :ctx implTid: aTid :protoTid
     if pLbl.length == 0 then return "".string
     # the checker refuses a conformer in an owning place: a borrowed box handed
@@ -15126,10 +15132,11 @@ synthHashRead: function {
 }
 
 # sumMemberMethodRead -- a sum type's dotted read where the member is a declared
-# METHOD rather than an arm. An arm and a method can never share a name (E0003
-# rejects it), so the DECLARATION answers which one a bare read is; the payload
-# read below applies only when it answers nothing, or names something with no
-# body to read. The declared arms are children too, hence the FUNCTION test.
+# METHOD or conformance label rather than an arm. An arm and a method can never
+# share a name (E0003 rejects it), so the DECLARATION answers which one a bare
+# read is; the payload read below applies only when it answers nothing, or
+# names something with no body to read. The declared arms are children too,
+# hence the FUNCTION test.
 # fbtn names the enclosing type for a read whose base is a TYPE rather than a
 # value; a sum value's base is always a variable, and the type-name form is
 # taken by dottedAtomTaggedBase before this leg is reached.
@@ -15150,12 +15157,15 @@ sumMemberMethodRead: function {
     match (
         mco
     ) case some then {
+        # a conformance label reads as its projection; emitResolvedMemberRead
+        # answers only for the label, so an arm holding a spec value stays one
+        mtt: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: mco.u64)
         if (
-            (symtab.reg.typetypeOf
-                typeId: (ztypes.tid.create from: mco.u64)
-            ) !=
-            ztypes.ztypetype.functionType
-        ) then return "".string
+            mtt ==
+            ztypes.ztypetype.functionType or
+            (mtt == ztypes.ztypetype.protocolType) or
+            (mtt == ztypes.ztypetype.facetType)
+        ).not then return "".string
         return (emitResolvedMemberRead
             :ast
             :symtab
@@ -28603,7 +28613,10 @@ variantArmIds: function {
             if (
                 (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: vtid1.u64)) !=
                 ztypes.ztypetype.functionType
-            ) when vnid1 != zast.names.wkTag.u64 then {
+            ) when vnid1 != zast.names.wkTag.u64 when (symtab.typing.isConformanceLabel
+                implTid: otvi1.u64
+                nameId: vnid1
+            ).not then {
                 cid0: vtid1
                 ids.append cid0
                 nid0: vnid1
@@ -37567,11 +37580,12 @@ emitConformanceImplsForType: function {
     isFacet: bool
     buf: String.borrow
 } is {
-    # a class impl is skipped for a facet: a class copied into an inline union
+    # a reftype impl is skipped for a facet: one copied into an inline union
     # would break the valtype guarantee, and catching that is front-end work
+    implTT: symtab.reg.typetypeOf typeId: implTid
     if isFacet when (
-        (symtab.reg.typetypeOf typeId: implTid) != ztypes.ztypetype.recordType
-    ) then return
+        implTT == ztypes.ztypetype.recordType or (implTT == ztypes.ztypetype.variantType)
+    ).not then return
     if (typeStructEmitted :ctx tid: implTid).not then return
     tids: ListVal u64
     labels: List String
@@ -39153,7 +39167,8 @@ emitUnitDefMethods: function {
 }
 
 # emitUnitConformanceImpls -- one unit body's conformance implementations, the
-# protocol family then the facet one, for every record and class it declares.
+# protocol family then the facet one, for every type it declares that may
+# conform: a class, record, union, variant or typedef.
 # The name is wanted for nothing but the lookup, so it is asked by id.
 emitUnitConformanceImpls: function {
     ast: Ast.view
@@ -39171,7 +39186,11 @@ emitUnitConformanceImpls: function {
         if bi.namedoperation.not then continue
         biOp: ast.nodes.get i: bi.operation.u64
         if (
-            (isClassDef n: biOp) or (isRecordDef n: biOp) or (isTypedefDef n: biOp)
+            (isClassDef n: biOp) or
+            (isRecordDef n: biOp) or
+            (isUnionDef n: biOp) or
+            (isVariantDef n: biOp) or
+            (isTypedefDef n: biOp)
         ).not then continue
         implT: unitMemberTid :ast :symtab :ctx :ownerTid nameId: bi.name
         if implT.isZero then continue
