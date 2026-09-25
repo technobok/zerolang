@@ -498,10 +498,13 @@ Server: class {
     debounce: bool
     # open-doc uris awaiting a coalesced recheck (interactive mode only)
     dirty: (MapRV String v: bool
-    # last-good check per document uri: navigation answers from these
-    # even while the live buffer is broken
+    # last-good check per GROUP -- the relpath of the topmost unit a set of
+    # open documents belongs to: a unit and its subunits share one check.
+    # Navigation answers from these even while the live buffer is broken
     )
     snapshots: (Map String V: zcheck.CheckResult)
+    # each open document's group: the key of the check that answers for it
+    docCheck: (Map String V: String)
 } as {
     # ---- framed reader over the BufReader ----
 
@@ -841,6 +844,19 @@ Server: class {
             match (
                 rem
             ) case some then null case none then null
+            # the group's check goes with its last open document
+            gone: this.docCheck.remove key: uo.copy
+            match (
+                gone
+            ) case some then {
+                gk: gone.take
+                if (this.groupInUse key: gk.stringView).not then {
+                    dropped: this.snapshots.remove key: gk
+                    match (
+                        dropped
+                    ) case some then null case none then null
+                }
+            } case none then null
             # clear this uri's diagnostics
             empty: newArr
             p: newObj
@@ -877,18 +893,24 @@ Server: class {
         return this.dirty.length > 0
     }
 
-    # flushDirty -- recheck every dirty document, then clear. The dirty uris
-    # are copied out first: recomputeFor locks `this`, which would conflict
-    # with a live iterator over this.dirty.
+    # flushDirty -- recheck every dirty document, then clear: one check per
+    # GROUP, since a unit and its subunits share it. The dirty uris are copied
+    # out first: recomputeFor locks `this`, which would conflict with a live
+    # iterator over this.dirty.
     flushDirty: function {:this} is {
         uris: List String
         with it: this.dirty.iterateItems do for e: it loop uris.append e.key.copy
         fresh: MapRV String v: bool
         this.dirty = fresh
+        checked: Set String
         ui: u64
         for ui < uris.length loop {
             u: uris.get i: ui
-            this.recomputeFor uri: u.stringView
+            g: this.groupOf uri: u.stringView
+            if (checked.has item: g).not then {
+                this.recomputeFor uri: u.stringView
+                checked.add item: g.take
+            }
             ui = ui + 1
         }
     }
@@ -919,30 +941,24 @@ Server: class {
                 ov.set key: k value: v
             }
         }
-        mu: String
         mp: String
+        drel: String
         found: false
         {
             dgo: this.docs.get key: uri.asString
             match (
                 dgo
             ) case some then {
-                # a subunit's document is checked inside its topmost unit, which
-                # the parse starts from -- never above the project's roots
-                top: zsource.topUnitPathOf path: dgo.path.stringView
-                if dgo.relpath.length == 0 then top = dgo.path.copy
-                inRoots: (relPathBest
-                    path: top.stringView
-                    srcDir: this.srcDir.stringView
-                    systemDir: this.systemDir.stringView
-                )
-                if inRoots.length == 0 then top = dgo.path.copy
-                mu = zsource.unitNameOf path: top.stringView
                 mp = dgo.path.copy
+                drel = dgo.relpath.copy
                 found = true
             } case none then null
         }
         if found.not then return
+        # a subunit's document is checked inside its topmost unit, which the
+        # parse starts from; that unit's relpath keys the group's shared check
+        topRel: this.topRelOf rel: drel.stringView
+        mu: zsource.unitNameOf path: topRel.stringView
         r: (zcheck.check
             srcdir: this.srcDir.stringView
             systemdir: this.systemDir.stringView
@@ -954,9 +970,127 @@ Server: class {
         zcheck.diagsOf :r :rows :msgs
         this.publishAll :r :rows :msgs mainUnit: mu.stringView mainPath: mp.stringView
         if r.parseOk then {
-            ku: uri.string
-            this.snapshots.set key: ku value: r
+            # the check answers for every open document of the group, so an
+            # edit to any of them refreshes navigation for all
+            this.bindGroup :uri topRel: topRel.stringView
+            this.snapshots.set key: topRel.copy value: r
         }
+    }
+
+    # topRelOf -- the relpath of the topmost unit the file at `rel` belongs to.
+    # While its folder `<d>/<u>/` sits beside a unit file `<d>/<u>.z`, it is a
+    # subunit and the walk steps up; the parent counts when it is an open
+    # buffer, saved or not, or a file under either root. A relpath with no
+    # folder is its own top, so the climb never leaves the roots.
+    topRelOf: function {this: this.view rel: StringView} out String is {
+        cur: rel.string
+        stepping: true
+        for stepping loop {
+            stepping = false
+            slashOpt: cur.stringView.lastIndexOf needle: "/"
+            match (
+                slashOpt
+            ) case some then {
+                if slashOpt > 0 then {
+                    parentRel: "\{cur.stringView.substring from: 0 to: slashOpt}.z"
+                    if (this.unitFileExists rel: parentRel.stringView) then {
+                        cur = parentRel.take
+                        stepping = true
+                    }
+                }
+            } case none then null
+        }
+        return cur
+    }
+
+    # unitFileExists -- whether a unit file is at `rel`: an open document's
+    # buffer, saved or not, or a file under the src or system root.
+    unitFileExists: function {this: this.view rel: StringView} out bool is {
+        open: false
+        with kit: this.docs.iterate do for k: kit loop {
+            dgo: this.docs.get key: k
+            match (
+                dgo
+            ) case some then {
+                if dgo.relpath.stringView == rel then open = true
+            } case none then null
+        }
+        if open then return true
+        if (io.exists path: (zcheck.joinPath a: this.srcDir.stringView b: rel)) then return true
+        return (io.exists path: (zcheck.joinPath a: this.systemDir.stringView b: rel))
+    }
+
+    # groupOf -- the group key of the open document `uri`: its topmost unit's
+    # relpath. "" when the document is not open.
+    groupOf: function {this: this.view uri: StringView} out String is {
+        rel: String
+        {
+            dgo: this.docs.get key: uri.asString
+            match (
+                dgo
+            ) case some then {
+                rel = dgo.relpath.copy
+            } case none then {
+                return rel
+            }
+        }
+        return (this.topRelOf rel: rel.stringView)
+    }
+
+    # bindGroup -- point every open document of the group `topRel` at its check,
+    # the one just run for `uri` included.
+    bindGroup: function {:this uri: StringView topRel: StringView} is {
+        # the documents are copied out first: the climb reads `this.docs` too
+        uris: List String
+        rels: List String
+        with kit: this.docs.iterate do for k: kit loop {
+            dgo: this.docs.get key: k
+            match (
+                dgo
+            ) case some then {
+                uris.append k.copy
+                rels.append dgo.relpath.copy
+            } case none then null
+        }
+        members: List String
+        members.append uri.string
+        i: u64
+        for i < uris.length loop {
+            top: this.topRelOf rel: (rels.get :i).stringView
+            if top.stringView == topRel then members.append (uris.get :i).copy
+            i = i + 1
+        }
+        with mit: members.iterate do for m: mit loop {
+            this.docCheck.set key: m.copy value: topRel.string
+        }
+    }
+
+    # checkKeyOf -- the key of the check that answers for `uri`, "" when none
+    # has run for it.
+    checkKeyOf: function {this: this.view uri: StringView} out String is {
+        g: this.docCheck.get key: uri.asString
+        match (
+            g
+        ) case some then {
+            return g.copy
+        } case none then {
+            return String
+        }
+    }
+
+    # groupInUse -- whether any open document is still answered by the check
+    # `key`.
+    groupInUse: function {this: this.view key: StringView} out bool is {
+        used: false
+        with kit: this.docCheck.iterate do for k: kit loop {
+            g: this.docCheck.get key: k
+            match (
+                g
+            ) case some then {
+                if g.stringView == key then used = true
+            } case none then null
+        }
+        return used
     }
 
     # publishAll -- one publishDiagnostics per open document: its
@@ -1013,14 +1147,17 @@ Server: class {
                 }
                 ri = ri + 1
             }
-            if e.value.path.stringView == mainPath then {
-                self: docFsnoOf :r rel: drel.stringView srcDir: this.srcDir.stringView
-                # a check that loaded no unit from this document did not check
-                # it: say so rather than publish a clean file
-                if self.u32 == 0 when arr.items.length == 0 then {
-                    nc: notCheckedDiag :r :mainUnit :msgs
-                    arr.items.append nc
-                }
+            self: docFsnoOf :r rel: drel.stringView srcDir: this.srcDir.stringView
+            # a check that loaded no unit from the document it was run for did
+            # not check it: say so rather than publish a clean file
+            isMain: e.value.path.stringView == mainPath
+            if isMain when self.u32 == 0 when arr.items.length == 0 then {
+                nc: notCheckedDiag :r :mainUnit :msgs
+                arr.items.append nc
+            }
+            # every document the check loaded takes its typecheck-tier lints
+            # from it: the check is eager, so each loaded body was walked
+            if self.u32 > 0 then {
                 (tcLintInto
                     :arr
                     text: e.value.text.copy
@@ -1118,7 +1255,8 @@ Server: class {
                     } case none then null
                 }
                 if found then {
-                    sno: this.snapshots.get key: uo
+                    ck: this.checkKeyOf uri: uo.stringView
+                    sno: this.snapshots.get key: ck
                     match (
                         sno
                     ) case some then {
@@ -1199,7 +1337,8 @@ Server: class {
                 } case none then null
             }
             if found then {
-                sno: this.snapshots.get key: uo
+                ck: this.checkKeyOf uri: uo.stringView
+                sno: this.snapshots.get key: ck
                 match (
                     sno
                 ) case some then {
@@ -5948,6 +6087,7 @@ main: function is {
         debounce: true
         dirty: (MapRV String v: bool)
         snapshots: (Map String V: zcheck.CheckResult)
+        docCheck: (Map String V: String)
     )
     if listenArg.length > 0 then {
         pr: listenArg.stringView.parseU64
