@@ -795,9 +795,10 @@ Runner: class {
 
 # runArchCases -- the architecture ratchet. `zl lint --full --arch` over every
 # compiler and front-end unit, counted per (rule, file) and compared with
-# tests/fixtures/arch_baseline.txt: a count above its baseline is a new
-# finding and fails; a count below it is progress and asks for the baseline
-# to be lowered; a file with no baseline row must be clean.
+# tests/fixtures/arch_baseline.txt, exactly (ratchetCheck, ratchetStale): a
+# count above its baseline is a new finding and fails; a count below it fails
+# until its row is lowered in the same commit; a row no finding meets is spent
+# and fails until deleted; a file with no baseline row must be clean.
 runArchCases: function {r: Runner} is {
     basePath: "\{r.root.stringView}/tests/fixtures/arch_baseline.txt"
     if (io.exists path: basePath).not then {
@@ -847,6 +848,9 @@ runArchCases: function {r: Runner} is {
     baseKeys: List String
     baseCounts: ListVal u64
     readRatchetBaseline path: basePath.stringView keys: baseKeys counts: baseCounts
+    # which rows a finding met: a row none meets is spent, and fails below
+    seen: ListVal bool
+    with bkit: baseKeys.iterate do for bk: bkit loop seen.append from: false
     anyFail: false
     ji: u64
     for ji < pool.length loop {
@@ -870,23 +874,21 @@ runArchCases: function {r: Runner} is {
             code: codes.get i: ci
             c: counts.get i: ci
             key: "\{code.stringView} \{fnm}"
-            base: u64
-            bi: u64
-            for bi < baseKeys.length loop {
-                bk: baseKeys.get i: bi
-                if bk.stringView == key then base = baseCounts.get i: bi
-                bi = bi + 1
-            }
-            if c > base then {
-                print "FAIL(arch) \{key}: \{c} findings, baseline \{base} -- a new finding; fix it or justify raising the baseline"
-                anyFail = true
-            } else if c < base then {
-                print "arch: \{key}: \{c} < baseline \{base} -- lower the baseline"
-            }
+            failed: (ratchetCheck
+                kind: "arch"
+                key: key.stringView
+                :c
+                :baseKeys
+                :baseCounts
+                :seen
+                above: "a new finding; fix it or justify raising the baseline"
+            )
+            if failed then anyFail = true
             ci = ci + 1
         }
         ji = ji + 1
     }
+    if (ratchetStale kind: "arch" :baseKeys :baseCounts :seen) then anyFail = true
     if anyFail then {
         r.fails = r.fails + 1
     } else {
@@ -956,8 +958,9 @@ docRatchetCode: function {code: StringView} out bool is {
 # runDocCases -- the documentation ratchet. `zl lint --docs-all` over every compiler,
 # stdlib and front-end unit, counted per (rule, file) and compared with
 # tests/fixtures/doc_baseline.txt: a count above its baseline is a newly undocumented
-# member -- or a new doc that only re-says its declaration -- and fails; a count below is
-# progress and asks for the baseline to be lowered. Heavy: it is a full-corpus lint pass,
+# member -- or a new doc that only re-says its declaration -- and fails; a count below
+# fails until its row is lowered, and a spent row until it is deleted (the same exact
+# ratchet as the arch kind). Heavy: it is a full-corpus lint pass,
 # so it runs in `make ci` and not in the fast gate. Unlike the arch kind this does NOT
 # walk tests/unit: a test driver is not the corpus a reader learns the language from.
 runDocCases: function {r: Runner} is {
@@ -1005,6 +1008,9 @@ runDocCases: function {r: Runner} is {
     baseKeys: List String
     baseCounts: ListVal u64
     readRatchetBaseline path: basePath.stringView keys: baseKeys counts: baseCounts
+    # which rows a finding met: a row none meets is spent, and fails below
+    seen: ListVal bool
+    with bkit: baseKeys.iterate do for bk: bkit loop seen.append from: false
     anyFail: false
     ji: u64
     for ji < pool.length loop {
@@ -1026,28 +1032,87 @@ runDocCases: function {r: Runner} is {
             code: codes.get i: ci
             c: counts.get i: ci
             key: "\{code.stringView} \{fnm}"
-            base: u64
-            bi: u64
-            for bi < baseKeys.length loop {
-                bk: baseKeys.get i: bi
-                if bk.stringView == key then base = baseCounts.get i: bi
-                bi = bi + 1
-            }
-            if c > base then {
-                print "FAIL(docs) \{key}: \{c} findings, baseline \{base} -- a new undocumented member, or a doc that only re-says its declaration; write the doc or justify the baseline"
-                anyFail = true
-            } else if c < base then {
-                print "docs: \{key}: \{c} < baseline \{base} -- lower the baseline"
-            }
+            failed: (ratchetCheck
+                kind: "docs"
+                key: key.stringView
+                :c
+                :baseKeys
+                :baseCounts
+                :seen
+                above: "a new undocumented member, or a doc that only re-says its declaration; write the doc or justify the baseline"
+            )
+            if failed then anyFail = true
             ci = ci + 1
         }
         ji = ji + 1
     }
+    if (ratchetStale kind: "docs" :baseKeys :baseCounts :seen) then anyFail = true
     if anyFail then {
         r.fails = r.fails + 1
     } else {
         r.passN = r.passN + 1
     }
+}
+
+# ratchetCheck -- one (code, file) count against its baseline row, marking the
+# row as met. The ratchet is EXACT: a count above its row is a new finding, and
+# a count below it fails too -- the fix lowers its row in the same commit, so
+# no slack is left for a later regression to hide in. True when it fails.
+ratchetCheck: function {
+    # `arch` or `docs`, for the message
+    kind: StringView
+    # "<code> <file>"
+    key: StringView
+    # the findings counted
+    c: u64
+    baseKeys: (List String).view
+    baseCounts: (ListVal u64).view
+    # which rows a finding met, parallel to baseKeys
+    seen: ListVal bool
+    # what to do about a count above its row
+    above: StringView
+} out bool is {
+    base: u64
+    bi: u64
+    for bi < baseKeys.length loop {
+        if (baseKeys.get i: bi).stringView == key then {
+            base = baseCounts.get i: bi
+            seen.set i: bi val: true
+        }
+        bi = bi + 1
+    }
+    if c > base then {
+        print "FAIL(\{kind}) \{key}: \{c} findings, baseline \{base} -- \{above}"
+        return true
+    }
+    if c < base then {
+        print "FAIL(\{kind}) \{key}: \{c} findings, baseline \{base} -- the count fell: lower the row to \{c} in this commit"
+        return true
+    }
+    return false
+}
+
+# ratchetStale -- every baseline row no finding met: its file has none of that
+# code left (or is gone), and a row nothing compares would otherwise sit stale
+# and hide a regression up to its count. True when any is found.
+ratchetStale: function {
+    kind: StringView
+    baseKeys: (List String).view
+    baseCounts: (ListVal u64).view
+    seen: (ListVal bool).view
+} out bool is {
+    stale: false
+    bi: u64
+    for bi < baseKeys.length loop {
+        if (seen.get i: bi).not then {
+            bk: baseKeys.get i: bi
+            bc: baseCounts.get i: bi
+            print "FAIL(\{kind}) \{bk}: 0 findings, baseline \{bc} -- the row is spent: delete it in this commit"
+            stale = true
+        }
+        bi = bi + 1
+    }
+    return stale
 }
 
 # archCount -- bump the count of `code` in the parallel code / count lists.
