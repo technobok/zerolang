@@ -1,0 +1,54 @@
+# typedef_user_base.z -- a typedef over a USER record or class is its base at
+# the C level: the base's struct, methods and cleanup. It reached gcc as a
+# struct of its own name in every shape: a method auto-call or a call with
+# arguments read as a field, a class typedef's local freed through a
+# destructor that was never emitted, a field of typedef type left the struct
+# incomplete, and a class typedef parameter was copied, so a mutation through
+# it was lost.
+pt: record { n: u64 } as {
+    twice: function {t: this.view} out u64 is { return t.n * 2 }
+    scaled: function {t: this.view by: u64} out u64 is { return t.n * by }
+    grown: function {t: this.view} out pt is { return (pt n: t.n + 1) }
+    bump: function {:this} is { this.n = this.n + 1 }
+}
+
+Box: class { n: u64 label: String } as {
+    twice: function {t: this.view} out u64 is { return t.n * 2 }
+    bump: function {:this} is { this.n = this.n + 1 }
+}
+
+ptAlias: typedef pt
+ptAlias2: typedef ptAlias
+BoxAlias: typedef Box
+Holder: class { k: ptAlias b: BoxAlias }
+
+bumped: function {b: BoxAlias} out u64 is {
+    b.bump
+    return b.twice
+}
+
+main: function is {
+    k: ptAlias (pt n: 2)
+    k.bump
+    print "record \{k.n} \{k.twice} \{k.scaled by: 5}"
+    g: k.grown
+    print "grown \{g.n}"
+    k2: ptAlias2 (ptAlias (pt n: 7))
+    print "chain \{k2.twice}"
+    b: BoxAlias (Box n: 3 label: "box".string)
+    b.bump
+    print "class \{b.n} \{b.twice} \{b.label}"
+    print "param \{bumped :b} \{b.n}"
+    h: Holder k: ptAlias (pt n: 1) b: BoxAlias (Box n: 5 label: "h".string)
+    print "field \{h.k.twice} \{h.b.twice}"
+    xs: List BoxAlias
+    xs.append from: BoxAlias (Box n: 9 label: "x".string)
+    print "list \{xs.length}"
+    raw: Box n: 4 label: "raw".string
+    c: BoxAlias.create from: raw
+    print "create \{c.twice}"
+    src: Box n: 6 label: "src".string
+    v: BoxAlias src.borrow
+    v.bump
+    print "borrow \{v.n}"
+}

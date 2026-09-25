@@ -6018,7 +6018,7 @@ emitStringArgMethod: function {
     recvExpr: emitDottedReceiver :ast :symtab :ctx callable: callableNode
     if recvExpr.length == 0 then return "".string
     rtid0: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
-    rtid: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: rtid0.u64)
+    rtid: chaseAggregateTypedef :symtab :ctx tid: (ztypes.tid.create from: rtid0.u64)
     rtid = chaseStrTypedef :symtab :ctx tid: (ztypes.tid.create from: rtid.u64)
     rtn: regNameOf :symtab tid: (ztypes.tid.create from: rtid.u64)
     if rtn.stringView != "String" then return "".string
@@ -6744,7 +6744,7 @@ hoistDestroyLine: function {
     tid: ztypes.tid
     nm: StringView
 } out String is {
-    dt: chaseStrTypedef :symtab :ctx tid: (chaseColMono :symtab :ctx :tid)
+    dt: chaseStrTypedef :symtab :ctx tid: (chaseAggregateTypedef :symtab :ctx :tid)
     if dt == ctx.strTid then return "    \{ctx.strC}_free(&\{nm});\n"
     if (symtab.reg.needsDestructor typeId: dt).not then return "".string
     cb: ctxCname :ctx tid: dt
@@ -7722,7 +7722,7 @@ operatorReceiverTid: function {
             if rms9.isZero.not then rt0 = rms9
         }
     }
-    rtc: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: rt0.u64)
+    rtc: chaseAggregateTypedef :symtab :ctx tid: (ztypes.tid.create from: rt0.u64)
     bxT9: ztypes.tid.create from: rtc.u64
     if (symtab.reg.isBoxOf tid: bxT9) when (symtab.reg.genericArgCount specId: bxT9) == 1 then {
         bxE9: symtab.reg.genericArgAt specId: bxT9 ordinal: 0
@@ -7926,7 +7926,7 @@ emitSynthOperatorCallForm: function {
     if (isOperatorName name: mnS).not then return "".string
     if call.arguments.count.u64 != 1 then return "".string
     rt0S: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
-    rtcS: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: rt0S.u64)
+    rtcS: chaseAggregateTypedef :symtab :ctx tid: (ztypes.tid.create from: rt0S.u64)
     ownerS: (methodOwnerId
         :ast
         :symtab
@@ -7992,7 +7992,7 @@ emitInstanceMethodCall: function {
     # the pointer to the element a method takes its receiver by
     bxEl: callableBoxElem :ast :symtab :ctx callable: callableNode
     if bxEl > 0 then rtid0 = ztypes.tid.create from: bxEl.u64
-    rtidc: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: rtid0.u64)
+    rtidc: chaseAggregateTypedef :symtab :ctx tid: (ztypes.tid.create from: rtid0.u64)
     rtid: methodOwnerId :ast :symtab rtid: (ztypes.tid.create from: rtidc.u64) :mn
     if rtid == 0 then return "".string
     # Both families reach here: a user record's methods take their receiver by
@@ -8202,7 +8202,7 @@ isValueStructTid: function {
 } out bool is {
     if tid.isZero then return false
     if (chaseStrTypedef :symtab :ctx :tid) == ctx.strTid then return true
-    cm: ztypes.tid.create from: (chaseColMono :symtab :ctx :tid).u64
+    cm: ztypes.tid.create from: (chaseAggregateTypedef :symtab :ctx :tid).u64
     if (isListOriginOf :symtab :ctx tid: cm) then return true
     return (isIdCollectionOriginOf :symtab :ctx tid: cm)
 }
@@ -8277,7 +8277,7 @@ callRhsIsBorrow: function {
     chId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if chId.isZero then return false
     rid: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
-    rid = chaseColMono :symtab :ctx tid: (ztypes.tid.create from: rid.u64)
+    rid = chaseAggregateTypedef :symtab :ctx tid: (ztypes.tid.create from: rid.u64)
     mfid: ((symtab.typing.declChildOfId
         parentTypeId: rid
         nameId: chId
@@ -8380,7 +8380,7 @@ refBorrowCalleeFid: function {
         ch8: aliasChildName :ast :symtab n: (ast.nodes.get i: n.callable.u64)
         if ch8.length == 0 then return 0
         rid8: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: n.callable.u64)
-        rid8 = chaseColMono :symtab :ctx tid: (ztypes.tid.create from: rid8.u64)
+        rid8 = chaseAggregateTypedef :symtab :ctx tid: (ztypes.tid.create from: rid8.u64)
         mf8: ((symtab.typing.declChildOf
             pool: ast.names
             parentTypeId: rid8
@@ -8753,7 +8753,8 @@ rhsIsBorrowGet: function {
         chId: aliasChildNameId :ast :symtab n: cbl
         isMut: chId == zast.names.wkGetMut
         if isMut.not when (chId == zast.names.wkGet).not then return false
-        bt: chaseColMono :symtab :ctx tid: (dottedReceiverStampId :ast :symtab callable: cbl)
+        rst: dottedReceiverStampId :ast :symtab callable: cbl
+        bt: chaseAggregateTypedef :symtab :ctx tid: rst
         isC: (
             (isListOriginOf :symtab :ctx tid: (ztypes.tid.create from: bt.u64)) or
             (isListViewOriginOf :symtab :ctx tid: (ztypes.tid.create from: bt.u64))
@@ -8788,7 +8789,7 @@ bindChasedTid: function {
 } out ztypes.tid is {
     bt: stampIdOf :symtab nid: n.nodeid.u64
     if bt.isZero then bt = stampIdOf :symtab nid: (interpPartNodeId n: avn)
-    return (ztypes.tid.create from: (chaseColMono :symtab :ctx tid: bt))
+    return (ztypes.tid.create from: (chaseAggregateTypedef :symtab :ctx tid: bt))
 }
 
 # pathRootsAtVariable -- the dotted path bottoms out in a name that resolves to
@@ -8907,7 +8908,7 @@ emitStrConvCall: function {
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if mn != "str" then return "".string
     rid0: stampIdOf :symtab nid: call.nodeid.u64
-    rid: chaseColMono :symtab :ctx tid: rid0
+    rid: chaseAggregateTypedef :symtab :ctx tid: rid0
     if (originIsTid
         :symtab
         tid: (ztypes.tid.create from: rid.u64)
@@ -9013,7 +9014,7 @@ emitEmptyColCreate: function {
             :ctx
             nid: (interpPartNodeId n: (ast.nodes.get i: call.callable.u64))
         )
-        amid: chaseColMono :symtab :ctx tid: amid0
+        amid: chaseAggregateTypedef :symtab :ctx tid: amid0
         if (originIsTid
             :symtab
             tid: (ztypes.tid.create from: amid.u64)
@@ -9029,7 +9030,7 @@ emitEmptyColCreate: function {
             :ctx
             nid: (interpPartNodeId n: (ast.nodes.get i: call.callable.u64))
         )
-        smid: chaseColMono :symtab :ctx tid: smid0
+        smid: chaseAggregateTypedef :symtab :ctx tid: smid0
         if (originIsTid
             :symtab
             tid: (ztypes.tid.create from: smid.u64)
@@ -9051,7 +9052,7 @@ emitEmptyColCreate: function {
     } case none then null
     if isCr.not then return "".string
     mid: stampIdOf :symtab nid: call.nodeid.u64
-    mid = ztypes.tid.create from: (chaseColMono :symtab :ctx tid: mid)
+    mid = ztypes.tid.create from: (chaseAggregateTypedef :symtab :ctx tid: mid)
     monoOrigin: originTidOf :symtab tid: mid
     if monoOrigin.isZero then return "".string
     isCol: (
@@ -9095,7 +9096,7 @@ emitCollectionMethodCall: function {
     )
     mnId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     brid: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
-    bt: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: brid.u64
+    bt: chaseAggregateTypedef :symtab :ctx tid: (ztypes.tid.create from: brid.u64
     # classify by the mono's ORIGIN NAME (the graph-independent identity):
     # a by-name-resolved origin tid can diverge from the mono's captured
     # genericOriginId when extra units register their own List/Map shells
@@ -12718,7 +12719,7 @@ emitFnptrFieldCall: function {
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     if mn.length == 0 then return "".string
     rtid0: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable.u64)
-    rtid: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: rtid0.u64)
+    rtid: chaseAggregateTypedef :symtab :ctx tid: (ztypes.tid.create from: rtid0.u64)
     if rtid.isZero then return "".string
     if (symtab.typing.declIsFnptrField
         pool: ast.names
@@ -14031,7 +14032,7 @@ emitDataMember: function {
 } out String is {
     if mn2.stringView == "array" then {
         daid0: stampIdOf :symtab nid: n.nodeid.u64
-        daid: chaseColMono :symtab :ctx tid: daid0
+        daid: chaseAggregateTypedef :symtab :ctx tid: daid0
         daCt: (typeRefC
             :ast
             :symtab
@@ -14177,7 +14178,7 @@ implicitZeroValue: function {
     # preference: a typedef over a collection names its base `ListVal`, which
     # is a template rather than a C scalar or a user function, and the chase
     # panics on it. Asked in this order the chase never sees one.
-    zm: chaseColMono :symtab :ctx :tid
+    zm: chaseAggregateTypedef :symtab :ctx :tid
     # a sized str or array is built by its parameterless runtime create
     {
         zso: originTidOf :symtab tid: (ztypes.tid.create from: zm.u64)
@@ -14817,7 +14818,7 @@ emitDottedNestedBase: function {
     nnid9: interpPartNodeId n: (ast.nodes.get i: n.parent.u64)
     nlid: monoStampIdOf :symtab :ctx nid: nnid9.u64
     if nlid.isZero then nlid = stampIdOf :symtab nid: nnid9
-    nlid = ztypes.tid.create from: (chaseColMono :symtab :ctx tid: nlid)
+    nlid = ztypes.tid.create from: (chaseAggregateTypedef :symtab :ctx tid: nlid)
     # a Map/Set-typed base is a heap pointer regardless of how it was
     # reached (a field path fails pathIsPointer's lock-field test)
     nbPar: ast.nodes.get i: n.parent.u64
@@ -15759,7 +15760,7 @@ emitDottedAtomBase: function {
             if brid > 0 then bstamp = ztypes.tid.create from: brid.u64
         }
     }
-    bstamp = ztypes.tid.create from: (chaseColMono :symtab :ctx tid: bstamp)
+    bstamp = ztypes.tid.create from: (chaseAggregateTypedef :symtab :ctx tid: bstamp)
     bstamp = ztypes.tid.create from: (chaseStrTypedef :symtab :ctx tid: bstamp)
     rtt: symtab.reg.typetypeOf typeId: bstamp
     viaVtable: vtableAutoCallName :ast leaf: n.child name: mn2
@@ -16562,7 +16563,7 @@ emitDottedNativeMarker: function {
             ncVal = ncDeref.copy
         }
         ncRet: stampIdOf :symtab nid: n.nodeid.u64
-        ncRetM: chaseColMono :symtab :ctx tid: ncRet
+        ncRetM: chaseAggregateTypedef :symtab :ctx tid: ncRet
         return (emitNumericCast
             :ctx
             dstName: mn2b.stringView
@@ -16671,7 +16672,7 @@ emitDottedRead: function {
     dcMnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64)
     if (mnIs :ctx id: dcMnId at: mnOrPanic) then {
         pStamp: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64))
-        pMono: chaseColMono :symtab :ctx tid: pStamp
+        pMono: chaseAggregateTypedef :symtab :ctx tid: pStamp
         pOrig: monoOriginName :symtab tid: (ztypes.tid.create from: pMono.u64)
         isRcc: false
         if pOrig.stringView == "resultval" then isRcc = true
@@ -20475,7 +20476,7 @@ emitReassignStmt: function {
     rtnid: interpPartNodeId n: topathNode
     # a collection-typedef lvalue (Bytes) stores and destroys as its
     # chased underlying mono, exactly like the binding path
-    rtsid: ztypes.tid.create from: (chaseColMono
+    rtsid: ztypes.tid.create from: (chaseAggregateTypedef
         :symtab
         :ctx
         tid: (reassignDestroyTid :ast :symtab n: topathNode nid: rtnid)
@@ -21189,7 +21190,7 @@ emitGenLocalBind: function {
 } is {
     fnm: zast.nameTextAt :ast ref: field
     fld: genFieldC :ctx name: fnm.stringView
-    rtsid: ztypes.tid.create from: (chaseColMono
+    rtsid: ztypes.tid.create from: (chaseAggregateTypedef
         :symtab
         :ctx
         tid: (symtab.reg.variableTypeOf id: nameVid)
@@ -21996,7 +21997,7 @@ emitReassignLvalue: function {
         rsc: canonFnId :ast :symtab :ctx tid: stampTid name: rsn.stringView
         rsFp: stampTid
         if rsc > 0 then rsFp = ztypes.tid.create from: rsc.u64
-        rsFpc: chaseColMono :symtab :ctx tid: rsFp
+        rsFpc: chaseAggregateTypedef :symtab :ctx tid: rsFp
         if (symtab.typing.declIsFnptrField
             pool: ast.names
             parentTypeId: rsFpc
@@ -27410,14 +27411,16 @@ isUserClassMonoTid: function {
 # isReftypeParam -- a user reftype (class/union) param, passed BY REFERENCE: a
 # function param that is a CLASS or UNION, not a collection mono (List/Map/Set),
 # and not a value-native (String/StringView live in the system/collections
-# units). Records/variants/facets (valtypes) and natives stay by value.
+# units). Records/variants/facets (valtypes) and natives stay by value. A
+# typedef passes as the end of its chain does: a typedef over a class is that
+# class.
 isReftypeParam: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     tid: ztypes.tid
 } out bool is {
-    cid: tid
+    cid: chaseStrTypedef :symtab :ctx tid: (chaseAggregateTypedef :symtab :ctx :tid)
     duT: definedInUnitTid :symtab :tid
     isShell: duT.isZero
     if isShell then {
@@ -27436,16 +27439,10 @@ isReftypeParam: function {
     # user-class one: containers via isListPtrParam/isSetMapPtrParam, String
     # via isBorrowStringParam (pointer when non-owned), StringView by value (a
     # 16-byte fat pointer with no owned interior). Each is asked by what it IS
-    # -- the two well-known ids, a typedef base, a runtime-owned layout -- and
-    # the collection monos left above already. Asking which unit declared it
-    # answered for a user class of the same name too, which no id does.
-    return (
-        cid ==
-        ctx.strTid or
-        (cid == ctx.svTid) or
-        (isTypedefType :symtab tid: cid) or
-        (symtab.reg.isNativeOf tid: cid)
-    ).not
+    # -- the two well-known ids, a runtime-owned layout -- and the collection
+    # monos left above already. Asking which unit declared it answered for a
+    # user class of the same name too, which no id does.
+    return (cid == ctx.strTid or (cid == ctx.svTid) or (symtab.reg.isNativeOf tid: cid)).not
 }
 
 # elemBorrowsByPtr -- a List/ListView element type whose `get` lowers to a
@@ -27488,7 +27485,7 @@ elemRefByPtr: function {
     if (elemBorrowsByPtr :ast :symtab :ctx :tid) then return true
     # a Set or a Map element is already a pointer, so a copy of it IS the reference
     if (isHeapPtrCollection :symtab :ctx :tid) then return false
-    ce: chaseColMono :symtab :ctx :tid
+    ce: chaseAggregateTypedef :symtab :ctx :tid
     if (isCollectionOriginTid :ctx originTid: (originTidOf :symtab tid: ce)) then return true
     tt: symtab.reg.typetypeOf typeId: tid
     if tt == ztypes.ztypetype.recordType then return true
@@ -27561,7 +27558,7 @@ isSetMapPtrParam: function {
     pname
     # the param's own origin (a typedef wrapper chases to its base mono)
     # against the cached Set/Map template ids
-    bt: chaseColMono :symtab :ctx :tid
+    bt: chaseAggregateTypedef :symtab :ctx :tid
     return (
         (isSetOriginOf :symtab :ctx tid: (ztypes.tid.create from: bt.u64)) or
         (isMapOriginOf
@@ -27584,7 +27581,7 @@ isListPtrParam: function {
     tid: ztypes.tid
 } out bool is {
     if (paramTakesArg :ast :symtab :fid :pname) then return false
-    bt: chaseColMono :symtab :ctx :tid
+    bt: chaseAggregateTypedef :symtab :ctx :tid
     if (isIdCollectionOriginOf :symtab :ctx tid: (ztypes.tid.create from: bt.u64)) then return true
     return (isListOriginOf :symtab :ctx tid: (ztypes.tid.create from: bt.u64))
 }
@@ -28369,41 +28366,38 @@ cTypeForName: function {
     }
 }
 
-# chaseColMono -- if tid is a typedef-class over a collection mono (Bytes ->
-# List_u8, ByteView -> ListView_u8), the underlying mono id; else tid. The
-# emitter treats Bytes/ByteView as zero-overhead aliases of their collection.
-chaseColMono: function {
+# chaseAggregateTypedef -- the end of tid's typedef chain when that end is an
+# aggregate: a collection mono (Bytes -> List_u8, ByteView -> ListView_u8) or
+# a user record, class, union, variant or protocol (BoxAlias -> Box). The
+# emitter treats such a typedef as a zero-overhead alias: it shares the end's
+# struct, methods and cleanup. tid itself for no typedef, or a chain ending
+# in a scalar (emitted as that scalar) or a String (chaseStrTypedef's).
+chaseAggregateTypedef: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     tid: ztypes.tid
 } out ztypes.tid is {
-    bo: symtab.typing.typedefBaseTid.get key: tid
-    match (
-        bo
-    ) case some then {
-        if (isCollectionOriginTid
-            :ctx
-            originTid: (originTidOf :symtab tid: (ztypes.tid.create from: bo.u64))
-        ) then return (ztypes.tid.create from: bo.u64)
-    } case none then null
-    return tid
+    if (symtab.typing.typedefBaseTid.has key: tid).not then return tid
+    e: typedefChaseTid :symtab :tid
+    if e == ctx.strTid or (e == ctx.svTid) then return tid
+    # a scalar is a native record, and an ordinal variant emits as one
+    isRec: (symtab.reg.typetypeOf typeId: e) == ztypes.ztypetype.recordType
+    if isRec when (symtab.reg.isNativeOf tid: e) then return tid
+    if (isOrdinalVariant :symtab tid: e) then return tid
+    return e
 }
 
-# chaseStrTypedef -- a class typedef over String/StringView (Path, PathView)
-# canonicalizes to the base tid: the wrapper shares the base's struct,
-# methods, and cleanup. Single-level chase (stdlib typedefs are one level).
+# chaseStrTypedef -- a typedef over String/StringView (Path, PathView),
+# through any number of typedefs, canonicalizes to the base tid: the wrapper
+# shares the base's struct, methods, and cleanup.
 chaseStrTypedef: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     tid: ztypes.tid
 } out ztypes.tid is {
-    bo: symtab.typing.typedefBaseTid.get key: tid
-    match (
-        bo
-    ) case some then {
-        if bo == ctx.strTid then return ctx.strTid
-        if bo == ctx.svTid then return ctx.svTid
-    } case none then null
+    if (symtab.typing.typedefBaseTid.has key: tid).not then return tid
+    e: typedefChaseTid :symtab :tid
+    if e == ctx.strTid or (e == ctx.svTid) then return e
     return tid
 }
 
@@ -28431,7 +28425,7 @@ typeRefC: function {
         if ct.length > 0 then return ct
         if tn == "this" when thisTid > 0 then cid = thisTid
     }
-    cmid: chaseColMono :symtab :ctx tid: cid
+    cmid: chaseAggregateTypedef :symtab :ctx tid: cid
     if cmid != cid then {
         cmc: ctxCname :ctx tid: (ztypes.tid.create from: cmid.u64)
         return "\{cmc}_t"
@@ -30460,7 +30454,7 @@ takeParamDestroyTid: function {
     ppid: u64
 } out ztypes.tid is {
     pt: ztypes.tid.create from: ppid.u64
-    puse: chaseColMono :symtab :ctx tid: pt
+    puse: chaseAggregateTypedef :symtab :ctx tid: pt
     if (symtab.reg.needsDestructor typeId: puse).not then {
         ptnm: regNameOf :symtab tid: pt
         prbn: canonTypeId :ast :symtab :ctx tid: pt name: ptnm.stringView
@@ -31722,7 +31716,7 @@ listElemsDestroyC: function {
     if eid == ctx.strTid then {
         return "    for (uint64_t _di = 0; _di < p->length; _di++) {\n        \{ctx.strC}_free(&p->data[_di]);\n    }\n"
     }
-    ecid: chaseColMono :symtab :ctx tid: eid
+    ecid: chaseAggregateTypedef :symtab :ctx tid: eid
     if (isHeapPtrCollection :symtab :ctx tid: eid) then {
         hcb: ctxCname :ctx tid: ecid
         return "    for (uint64_t _di = 0; _di < p->length; _di++) {\n        \{hcb}_destroy(p->data[_di]);\n    }\n"
@@ -33061,7 +33055,7 @@ mapValFreeStmt: function {
 } out String is {
     if valTid == ctx.strTid then return "\{ctx.strC}_free(&\{slot});"
     if valTid > 0 then {
-        vmid: chaseColMono :symtab :ctx tid: valTid
+        vmid: chaseAggregateTypedef :symtab :ctx tid: valTid
         needs: (
             (symtab.reg.needsDestructor typeId: vmid) or
             (isHeapPtrCollection :symtab :ctx tid: valTid)
@@ -34106,7 +34100,7 @@ isHeapPtrCollection: function {
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
-    cm: chaseColMono :symtab :ctx :tid
+    cm: chaseAggregateTypedef :symtab :ctx :tid
     return (
         (isMapOriginOf :symtab :ctx tid: (ztypes.tid.create from: cm.u64)) or
         (isSetOriginOf
@@ -34420,7 +34414,7 @@ maybePreEmitElem: function {
         )
         if srid > 0 then rid0 = ztypes.tid.create from: srid.u64
     }
-    cid: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: rid0.u64)
+    cid: chaseAggregateTypedef :symtab :ctx tid: (ztypes.tid.create from: rid0.u64)
     monoLk4: originTidOf :symtab tid: (ztypes.tid.create from: cid.u64)
     if monoLk4 > 0 then return
     if (isGenericType :symtab tid: (ztypes.tid.create from: cid.u64)) then return
@@ -34769,7 +34763,7 @@ monoDependsOnUser: function {
     en: elems.length
     for ei < en loop {
         eid: elems.get i: ei
-        ceid: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: eid.u64)
+        ceid: chaseAggregateTypedef :symtab :ctx tid: (ztypes.tid.create from: eid.u64)
         if (userList.contains item: ceid) then return true
         emo: originTidOf :symtab tid: (ztypes.tid.create from: ceid.u64)
         if emo > 0 when (monoDependsOnUser
@@ -34811,7 +34805,7 @@ monoHoldsCollectionPassMono: function {
     monoElemIdsOf :symtab :ctx :monoId acc: elems
     ei: u64
     for ei < elems.length loop {
-        ce: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: (elems.get i: ei))
+        ce: chaseAggregateTypedef :symtab :ctx tid: (ztypes.tid.create from: (elems.get i: ei))
         if (isCollectionPassMono :symtab :ctx tid: ce) then return true
         # a value sum embeds its payload, so one over such a mono is ordered
         # with it (a sum cannot hold itself by value, so this ends)
@@ -34882,7 +34876,7 @@ userDefnRefsUnemitted: function {
     fn: fids.length
     for fi < fn loop {
         fid: fids.get i: fi
-        cfid: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: fid.u64)
+        cfid: chaseAggregateTypedef :symtab :ctx tid: (ztypes.tid.create from: fid.u64)
         skip: isHeapPtrCollection :symtab :ctx tid: (ztypes.tid.create from: fid.u64)
         if skip.not when (group.has item: cfid) when (emitted.has item: cfid).not then return true
         fi = fi + 1
@@ -34909,7 +34903,7 @@ monoLateDepsMet: function {
     en: elems.length
     for ei < en loop {
         eid: elems.get i: ei
-        ceid: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: eid.u64)
+        ceid: chaseAggregateTypedef :symtab :ctx tid: (ztypes.tid.create from: eid.u64)
         if (group.has item: ceid) when (emitted.has item: ceid).not then return false
         emo: originTidOf :symtab tid: (ztypes.tid.create from: ceid.u64)
         if emo > 0 when (monoLateDepsMet
@@ -36833,7 +36827,7 @@ protoParamCtype: function {
     pct: typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: cpid.u64) :thisTid
     if pct.length == 0 then pct = "int64_t".string
     isCol: false
-    ccm: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: cpid.u64)
+    ccm: chaseAggregateTypedef :symtab :ctx tid: (ztypes.tid.create from: cpid.u64)
     if (ccm.u64 == cpid).not then isCol = true
     if (isCollectionOriginTid
         :ctx
@@ -38406,7 +38400,7 @@ emitResultCombinator: function {
     }
     if bnid == 0 then return "".string
     rtid0: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: bnid.u64))
-    rtid: chaseColMono :symtab :ctx tid: rtid0
+    rtid: chaseAggregateTypedef :symtab :ctx tid: rtid0
     if rtid.isZero then return "".string
     isRes: originIsTid :symtab tid: rtid originTid: (ctx.origins.get i: ogResultval)
     isOpt: originIsTid :symtab tid: rtid originTid: (ctx.origins.get i: ogOptionval)
@@ -38708,7 +38702,7 @@ dispatchArgText: function {
     av: emitExpr :ast :symtab :ctx :n
     atid: stampIdOf :symtab nid: (interpPartNodeId :n)
     apfx: String
-    chasedColTid: chaseColMono :symtab :ctx tid: atid
+    chasedColTid: chaseAggregateTypedef :symtab :ctx tid: atid
     if (chasedColTid == atid).not then apfx = "&".string
     if (isCollectionOriginTid
         :ctx
@@ -39560,7 +39554,7 @@ structDestroyNontrivial: function {
         ).not then {
             if fid == ctx.strTid then return true
             if (fieldIsBox :symtab fid: (ztypes.tid.create from: fid.u64)) > 0 then return true
-            fmid: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: fid.u64)
+            fmid: chaseAggregateTypedef :symtab :ctx tid: (ztypes.tid.create from: fid.u64)
             if (symtab.reg.needsDestructor typeId: fmid) then return true
             if (isHeapPtrCollection
                 :symtab
@@ -39623,7 +39617,7 @@ emitStructDestructor: function {
                 dbx: "    \{bxC}_destroy(p->\{bxP}\{fname});\n"
                 buf.append dbx
             } else {
-                fmid: chaseColMono :symtab :ctx tid: (ztypes.tid.create from: fid.u64)
+                fmid: chaseAggregateTypedef :symtab :ctx tid: (ztypes.tid.create from: fid.u64)
                 fneeds: (
                     (symtab.reg.needsDestructor typeId: fmid) or
                     (isHeapPtrCollection :symtab :ctx tid: (ztypes.tid.create from: fid.u64))
