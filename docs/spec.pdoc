@@ -177,7 +177,7 @@ identifiers start with a decimal digit after an optional sign.
 Other predefined identifiers:
 
 #code language=zerolang: """
-  null never AnyRef anyval RefHashable valhashable Box _ typedef tag
+  null never AnyRef anyval RefHashable valhashable Box _ tag
 
   u8 u16 u32 u64 u128
   i8 i16 i32 i64 i128
@@ -3419,44 +3419,87 @@ For valtypes, returns a copy without locking. See
 
 #----: typedef
 
-A typedef wraps an underlying type to provide a new type. The new type has no
-run-time overhead beyond the underlying type, it is simply a compile time
-construct.
+A typedef wraps one base type to provide a new type. The new type has no
+run-time overhead beyond its base: it is a compile-time construct.
 
-To define a new typedef, define a class, record, union, or variant with a
-single field whose type uses the #~".typedef" accessor on the underlying type.
-The typedef may also have generic parameters and methods that operate on the
-new type. It may satisfy protocols (with #~"as") using a combination of methods
-defined on the new type and on the underlying type.
+A typedef is declared with the #~"typedef" declarator, followed by its base
+type -- the same type reference an #~"out" names -- and an optional #~"as"
+block of its own members:
 
-A typedef definition must have exactly one field in the #~"is" section. That
-field uses #~".typedef" on the base type. Additional fields are forbidden and
-produce a compiler error.
+#code language=zerolang: """
+  meters: typedef i64
+  tid: typedef u64 as {
+      ==: function {t: this.view rhs: tid} out bool is { return t.u64 == rhs.u64 }
+      hash: function {t: this.view} out u64 is { return t.u64 }
+  }
+  Path: typedef String
+  ShapeAlias: typedef Shape
+"""
 
-A typedef must not have any user-defined constructor methods. Wrapping is
-handled by the compiler and type system and there is no way to intervene.
+The typedef's family is its base's: a typedef over a valtype (a record, a
+variant, a facet or a scalar) is a valtype, and one over a reftype (a class,
+a union, a protocol, #~"String", a collection) is a reftype. Its name is
+cased by that family, as any type's is.
 
-All generic parameters in the typedef #_*"MUST" be used in the #~"this"
-definition line. That is, only generic parts of the underlying type may be
-referenced. Any generic parameters must be able to be automatically derived
-from the source item.
+A typedef declares no constructor of its own: wrapping is handled by the
+compiler and there is no way to intervene, so a #~"create" in its #~"as"
+block is an error. Every generic parameter of a typedef #_*"MUST" appear in
+its base type: a parameter is a part of the base, derived from the value
+the typedef is built from.
 
-Any methods defined in the #~"as" section will override methods of the same
-name on the underlying type. All unshadowed methods of the underlying type
-will be exposed on the typedef. A method can be hidden by setting it to
-#~"null" in the #~"as" section.
+#p: #b:"Members."
 
-The typedef may only use public methods and fields of the underlying type.
+The typedef's own member wins. Any other member is its base's, found through
+the whole typedef chain: the first link that declares it answers, so a
+typedef of a typedef reaches the original base's methods. A forwarded method
+keeps its signature: a base method returning the base type returns the base
+type on the typedef too. A member set to #~"null" in the #~"as" block hides
+the base's member of that name, and using a hidden member is an error. A
+typedef's own methods may use only the base's public members: inside the
+typedef, the base is outside code.
 
-To create a reftype typedef use a class or a union. The underlying type
-#_*"must" be a reftype.
+There is no field for the base. The base value is reached by passing the
+typedef where the base is expected (below).
 
-Create a valtype typedef using a record or a variant. The underlying type
-#_*"must" be a valtype.
+#p: #b:"Conformance."
 
-A typedef is built from a value of exactly its base type (a typedef over a
+A typedef inherits its base's conformances, to protocols and facets alike.
+The inherited conformance holds while every method the spec names keeps the
+spec's signature on the typedef, read at its first declarer:
+
+#ul:
+  [#*: a method the typedef hides with #~"null" implements nothing;]
+  [#*: a method the typedef overrides counts as its own new definition, and
+  is checked against the spec exactly, as any conformer's is.]
+
+A typedef whose hide or override breaks a conformance quietly does not
+conform, and using it as that protocol or facet is refused at the use. An
+explicit conformance marker in the typedef's #~"as" block is checked
+exactly, each spec method answered by its first declarer -- so a typedef may
+conform through its base's methods. Where a typedef stands in for a
+protocol, it does so with its own dispatch: an override it writes is what
+the protocol calls.
+
+#p: #b:"Map and Set keys."
+
+A typedef keys a #~"Map" or #~"Set" with the first declarer of #~"hash" and
+of #~"==", its own or its base's. One that hides either is not a key, and one
+that writes its own #~"==" must also write its own #~"hash": the base's hash
+knows nothing of the typedef's equality.
+
+#p: #b:"Unions and variants."
+
+A typedef over a union or variant is matched, tested with arm predicates and
+narrowed through its base's arms. An arm is constructed only on the base, and
+the typedef built from that value: #~"ShapeAlias (Shape.sq 4)".
+#~"ShapeAlias.sq 4" is an error.
+
+#p: #b:"Construction."
+
+A typedef is built from one value of exactly its base type (a typedef over a
 generic instance, such as #~"Bytes" over #~"ListVal u8", from that instance),
-and the source's marker picks what the result owns:
+unnamed or named #~"from" -- any other argument is an error -- and the
+source's marker picks what the result owns:
 
 #ul:
   [#*: #~"T x", #~"T x.take" or #~"T.create from: x" takes the source and
@@ -3470,6 +3513,8 @@ and the source's marker picks what the result owns:
 A readonly view of a value is not a typedef construction: it is the base's
 view method (#~"b.byteView", #~"s.stringView", #~"xs.listView"), which pins
 the source shared.
+
+#p: #b:"Compatibility."
 
 The typedef retains the underlying type and so can continue to be passed to
 functions that expect the underlying type as is (backward compatible). But the
@@ -3490,7 +3535,7 @@ type is expected.
 
 #code language=zerolang: """
   # valtype typedef: meters wrapping i64
-  meters: record { val: i64.typedef } as {}
+  meters: typedef i64
 
   main: function is {
       # create an owned typedef instance
@@ -3505,14 +3550,16 @@ type is expected.
 
   show: function {x: i64} is { print "\{x}" }
 
-  # reftype typedef with method shadowing
-  MyDict: class {
-      base: (dict k: str v: i64).typedef
-  } as {
-      k: anyval.generic
-      v: anyval.generic
+  # reftype typedef over a class, with an override and a hidden method
+  Box: class { n: u64 } as {
+      twice: function {t: this.view} out u64 is { return t.n * 2 }
+      bump: function {:this} is { this.n = this.n + 1 }
   }
-  """
+  Loud: typedef Box as {
+      twice: function {t: this.view} out u64 is { return t.n * 20 }
+      bump: null
+  }
+"""
 
 Reassigning and swapping to a typedef is permitted. For a valtype, the same
 (typedef'ed) or the underlying type may be assigned to the typedef'ed valtype.
@@ -3863,8 +3910,7 @@ The compiler provides two tiers of pre-existing methods on types:
   is no syntactic special case for them in the type checker.]
 
 The remaining subsections describe the intrinsic tier and a small set
-of compiler-introspection accessors (#~".generic", #~".tag",
-#~".typedef"). The native tier is covered by the per-type pages in the
+of compiler-introspection accessors (#~".generic", #~".tag"). The native tier is covered by the per-type pages in the
 standard library reference.
 
 #----: take (method)
@@ -4038,13 +4084,6 @@ See also the built-in [#> to=generic: generic type] or a description of
 #~".tag" is a synthetic member on every #~"data" type and every numeric type,
 naming that type as the discriminator source for a union or variant. It is
 written in the #~"as" block and nowhere else -- see [#> to=tag: tag].
-
-#----: typedef (method)
-
-The #~".typedef" accessor is a synthetic member available on all types. It is
-used exclusively in type definitions to mark that the enclosing type is a
-typedef wrapping the accessed type. See the typedef section above for full
-details.
 
 #---: data
 
