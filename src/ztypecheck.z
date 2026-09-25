@@ -30805,6 +30805,14 @@ checkReassignedType: function {
             lttR: st.reg.typetypeOf typeId: chkT
             if lttR == ztypes.ztypetype.protocolType then skipR = true
             if lttR == ztypes.ztypetype.facetType then skipR = true
+            (noteSpecStandIn
+                :st
+                value: rvt
+                spec: chkT
+                nid: rasgn.nid
+                lineno: rasgn.lineno
+                colno: rasgn.colno
+            )
             if lttR == ztypes.ztypetype.genericParam then skipR = true
             if lttR == ztypes.ztypetype.functionType when (functionSignaturesMatch
                 :ast
@@ -37040,6 +37048,70 @@ argMismatchSkipped: function {
     )
 }
 
+# noteSpecStandIn -- a value of type `value` written where a `spec` value is
+# expected. A plain type compare cannot decide it (a conformer is not the
+# spec), and a conformance row is recorded only when its marker is reached, so
+# the question waits for checkSpecStandIns at the end. Nothing is noted for a
+# place that is not typed by a protocol or facet.
+noteSpecStandIn: function {
+    st: zenv.ZSymbolTable
+    value: ztypes.tid
+    spec: ztypes.tid
+    nid: zast.nodeid
+    lineno: u32
+    colno: u32
+} is {
+    stt: st.reg.typetypeOf typeId: spec
+    if stt != ztypes.ztypetype.protocolType when stt != ztypes.ztypetype.facetType then return
+    st.typing.specStandIns.append (ztyping.specstandin :value :spec :nid :lineno :colno)
+}
+
+# checkSpecStandIns -- every value noted where a spec value is expected
+# conforms to the spec: a conformance row names its type, or the template it
+# was instantiated from. Anything else used to typecheck and then fail in the
+# C compiler, whatever its type -- an i64 passed for a protocol parameter
+# included. A type parameter, and a type still partial, are the instance's
+# to decide.
+checkSpecStandIns: function {st: zenv.ZSymbolTable} is {
+    bad: ListVal u64
+    n: st.typing.specStandIns.length
+    i: u64
+    for i < n loop {
+        su: st.typing.specStandIns.get :i
+        if (specStandInHolds :st value: su.value spec: su.spec).not then bad.append from: i
+        i = i + 1
+    }
+    with bit: bad.iterate do for bi: bit loop {
+        su: st.typing.specStandIns.get i: bi
+        vn: "'\{st.reg.nameOf tid: su.value}'"
+        if (isLiteralTypeId :st tid: su.value) then vn = "a numeric literal".string
+        sn: st.reg.nameOf tid: su.spec
+        (addErrorH
+            :st
+            nodeid: su.nid
+            lineno: su.lineno
+            colno: su.colno
+            e: zast.err.typeError
+            msg: "\{vn} cannot stand in for \{sn}: it does not conform to it"
+            note: String
+            hint: "a conformer declares `:\{sn}` in its `as` block"
+            width: 1
+        )
+    }
+}
+
+# specStandInHolds -- `value` may be written where `spec` is expected.
+specStandInHolds: function {
+    st: zenv.ZSymbolTable.view
+    value: ztypes.tid
+    spec: ztypes.tid
+} out bool is {
+    if value.isZero or (value == spec) then return true
+    if (st.reg.typetypeOf typeId: value) == ztypes.ztypetype.genericParam then return true
+    if (st.reg.isPartialOf tid: value) then return true
+    return (typeConformsTo :st impl: value :spec)
+}
+
 # functionSignaturesMatch -- a function value `a` fits a place typed by the
 # function type `b`: the same parameters in order, with the same names, types and
 # ownership, and the same return. Specs and functions are structurally typed, so
@@ -37336,6 +37408,14 @@ checkArgTypeMismatch: function {
         )
     }
     if (typesCompatible :ast :st a: vt b: (ztypes.tid.create from: ptid.u64)) then return
+    (noteSpecStandIn
+        :st
+        value: vt
+        spec: (ztypes.tid.create from: ptid.u64)
+        nid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+    )
     if (argMismatchSkipped :st :ast :vt :ptid) then return
     en7: st.reg.nameOf tid: (ztypes.tid.create from: ptid.u64)
     an7: st.reg.nameOf tid: (ztypes.tid.create from: vt.u64)
@@ -55471,6 +55551,7 @@ typecheck: function {
         checkGenericBounds ast: program :st
         checkConformances ast: program :st
         checkHashKeys ast: program :st
+        checkSpecStandIns :st
         checkWideLiterals ast: program :st
         stampAliasValues :st ast: program
         stampGenericBounds :st ast: program

@@ -1821,7 +1821,11 @@ perf: $(PERFBIN)
 # +7517 a hash key is checked exactly: 25 behaviour (each Map/Set key type the
 # compiler's own source admits is recorded and its two members compared once),
 # 7492 source.
-ALLOC_BASELINE := 2669183
+#
+# +2673 a value written where a spec value is expected must conform: 0
+# behaviour (the compiler's own source writes none), 2671 source; perf-strict
+# reads 2 more than ab.sh, the usual argv[0]/cwd difference.
+ALLOC_BASELINE := 2671856
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
