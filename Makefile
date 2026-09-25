@@ -3480,8 +3480,10 @@ generic-param-guard: bin/zl
 # not exist, and a --src the unit is not under, are each reported as the reason
 # the pass did not run, and exit non-zero. An error the pass finds in a
 # dependency unit is shown at THAT unit's path and line, with its source line.
+# A finding in a generic body is reported once, not once per instance's copy.
 ZLFULL_FIX := tests/fixtures/zl_full/tiered.z
 ZLFULL_DEP := tests/fixtures/zl_full/depunit/depmain.z
+ZLFULL_ONCE := tests/fixtures/zl_full/generic_once.z
 zl-full-guard: bin/zl
 	@d=$$(mktemp -d); fail=0; \
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_FIX) 2>&1); \
@@ -3499,6 +3501,10 @@ zl-full-guard: bin/zl
 	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_DEP) 2>&1); \
 	if ! printf '%s\n' "$$out" | grep -q 'depunit/dep.z:3:10' || ! printf '%s\n' "$$out" | grep -q 'bad: "x" + n'; then \
 	  echo "zl-full-guard FAIL: an error in a dependency unit was not shown at its own path and line:"; \
+	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
+	out=$$(cd $$d && $(CURDIR)/bin/zl lint --full $(CURDIR)/$(ZLFULL_ONCE) 2>&1); \
+	if [ "$$(printf '%s\n' "$$out" | grep -c 'L013')" != 1 ] || [ "$$(printf '%s\n' "$$out" | grep -c 'L022')" != 1 ]; then \
+	  echo "zl-full-guard FAIL: a generic body's L013/L022 was not reported exactly once:"; \
 	  printf '%s\n' "$$out" | sed 's/^/    /'; fail=1; fi; \
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \

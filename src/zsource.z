@@ -163,6 +163,17 @@ isDirPath: function {path: StringView} out bool is {
     return false
 }
 
+# inInstanceCopy -- whether `nid` lies in a generic instance's own copy of a
+# template body; `ranges` holds each copy's start and end (exclusive) in turn.
+inInstanceCopy: function {ranges: (ListVal u64).view nid: u64} out bool is {
+    i: u64
+    for i + 1 < ranges.length loop {
+        if nid >= (ranges.get :i) when nid < (ranges.get i: i + 1) then return true
+        i = i + 2
+    }
+    return false
+}
+
 # sameFile -- whether two paths name one filesystem object: the same device
 # and inode, whatever the spelling. False when either cannot be read.
 sameFile: function {a: StringView b: StringView} out bool is {
@@ -4273,7 +4284,9 @@ Analysis: class {
     }
 
     # reportUnusedLocalAt -- L013: a local binding no read reaches. Only a
-    # binding in the unit's OWN file is judged, which is what mainFsno says.
+    # binding in the unit's OWN file is judged, which is what mainFsno says,
+    # and only the template's: a generic instance's copy of the body reports
+    # from its template's file and line, so it would repeat the template's.
     # This takes no symbol table on purpose: it runs with defVariableId pinned
     # by its own walk, and lending the table under that pin is the shape
     # usedDeclSet was rewritten to avoid.
@@ -4282,11 +4295,14 @@ Analysis: class {
         prog: Ast.view
         used: (IdSet u64).view
         mainFsno: zvfs.fsno
+        # the node ranges of every instance's copy of a body, start and end in turn
+        copies: (ListVal u64).view
         nid: u64
         vid: u64
     } is {
         if (used.has item: vid) then return
         if (prog.fsnoForNode nodeid: nid.u32.orPanic) != mainFsno then return
+        if (inInstanceCopy ranges: copies :nid) then return
         nm: String
         ln: u32
         cl: u32
@@ -4328,7 +4344,14 @@ Analysis: class {
         if fnOps.length == 0 then return
         mainFsno: prog.fsnoForNode nodeid: (fnOps.get i: 0)
         with dit: st.typing.defVariableId.iterateItems do for dv: dit loop {
-            this.reportUnusedLocalAt :prog :used :mainFsno nid: dv.key vid: dv.value
+            (this.reportUnusedLocalAt
+                :prog
+                :used
+                :mainFsno
+                copies: st.typing.instanceBodyRanges
+                nid: dv.key
+                vid: dv.value
+            )
         }
     }
 
@@ -4506,9 +4529,13 @@ Analysis: class {
         # the (node, variable) pairs are collected first: the conversion
         # probes below lend st
         dvPairs: ListVal u64
+        # a generic instance's copy of a body reports from its template's line,
+        # so only the template's own bindings are judged
         with dit: st.typing.defVariableId.iterateItems do for dv: dit loop {
-            dvPairs.append from: dv.key
-            dvPairs.append from: dv.value.u64
+            if (inInstanceCopy ranges: st.typing.instanceBodyRanges nid: dv.key).not then {
+                dvPairs.append from: dv.key
+                dvPairs.append from: dv.value.u64
+            }
         }
         dpi: u64
         for dpi < dvPairs.length loop {
