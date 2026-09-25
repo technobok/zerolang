@@ -1024,7 +1024,10 @@ second: the name resolves to a value, so the call is a method call on it.
 
 In a type specifier the same rule applies with no receiver in play: the
 unlabelled argument is the first generic parameter, as in #~"(List u8)". A
-construction reads its fields the same way, as in #~"point 5 y: 2".
+construction reads its fields the same way, as in #~"point 5 y: 2". A generic
+typedef is the exception: its unlabelled argument is #~"from", the value of its
+base, so its type arguments are always labelled (see
+[#> to=typedef: typedef]).
 
 The rules above are designed to:
 
@@ -3516,6 +3519,49 @@ source's marker picks what the result owns:
 A readonly view of a value is not a typedef construction: it is the base's
 view method (#~"b.byteView", #~"s.stringView", #~"xs.listView"), which pins
 the source shared.
+
+#p: #b:"Generic typedefs."
+
+A typedef whose base names its own generic parameters is generic, and each
+instance wraps the matching instance of its base: #~"Bag T: String" wraps
+#~"List String". Everything above holds per instance -- members forward to
+the base instance, the typedef's own methods are checked per instance (a
+generic is a template, as for a generic class), and the instance conforms
+and keys as its base instance does.
+
+A generic typedef's unlabelled argument is #~"from", the value of its base,
+and its type arguments are always labelled, in expressions and in type
+positions alike:
+
+#code language=zerolang: """
+  Bag: typedef (List T) as { T: AnyRef.generic }
+
+  l: List String
+  b: Bag l                  # from: l, T inferred: String
+  b2: Bag from: l           # the same
+  c: Bag l T: String        # pinned; must agree with l
+  e: Bag T: String          # the type application: an empty Bag
+  count: function {x: (Bag T: String).view} out u64 is { return x.length }
+  x: Bag String             # error: 'from' takes a value, and 'String' is a type
+"""
+
+The type arguments are inferred from the value's type, which #_*"MUST" be an
+instance of the base's template, and a labelled one #_*"MUST" agree with it.
+A numeric generic parameter is never inferred, here as anywhere, and is
+written: #~"Label raw n: 8" for #~"Label: typedef (str to: n)". A
+non-generic typedef has no type arguments and takes its value as above
+(#~"Names l").
+
+A typedef parameter's bound need not be its base parameter's. The
+declaration is accepted, and an instance whose argument the base's parameter
+refuses is an error at the line that names the instance:
+
+#code language=zerolang: """
+  Nums: typedef (List t) as { t: anyval.generic }   # accepted
+  n: Nums t: i64
+  # error[E0400]: generic argument 'i64' does not satisfy constraint 'AnyRef'
+  #   on parameter 'T' of 'collections.ListRef' (the base of 'app.Nums')
+"""
 
 #p: #b:"Compatibility."
 

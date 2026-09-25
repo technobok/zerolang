@@ -1079,7 +1079,10 @@ be classified at all. A local binding that shadows a type name is settled by the
 second: the name resolves to a value, so the call is a method call on it.</p>
 <p>In a type specifier the same rule applies with no receiver in play: the
 unlabelled argument is the first generic parameter, as in <code>(List u8)</code>. A
-construction reads its fields the same way, as in <code>point 5 y: 2</code>.</p>
+construction reads its fields the same way, as in <code>point 5 y: 2</code>. A generic
+typedef is the exception: its unlabelled argument is <code>from</code>, the value of its
+base, so its type arguments are always labelled (see
+<a href="#typedef">typedef</a>).</p>
 <p>The rules above are designed to:</p>
 <ul>
 <li>unambiguously document the arguments to a call or type specifier</li>
@@ -3140,6 +3143,38 @@ binding frees nothing. Like any borrow it cannot be returned from an
 <p>A readonly view of a value is not a typedef construction: it is the base's
 view method (<code>b.byteView</code>, <code>s.stringView</code>, <code>xs.listView</code>), which pins
 the source shared.</p>
+<p><strong>Generic typedefs.</strong></p>
+<p>A typedef whose base names its own generic parameters is generic, and each
+instance wraps the matching instance of its base: <code>Bag T: String</code> wraps
+<code>List String</code>. Everything above holds per instance -- members forward to
+the base instance, the typedef's own methods are checked per instance (a
+generic is a template, as for a generic class), and the instance conforms
+and keys as its base instance does.</p>
+<p>A generic typedef's unlabelled argument is <code>from</code>, the value of its base,
+and its type arguments are always labelled, in expressions and in type
+positions alike:</p>
+<pre><code class="language-zerolang">  Bag: typedef (List T) as { T: AnyRef.generic }
+
+  l: List String
+  b: Bag l                  # from: l, T inferred: String
+  b2: Bag from: l           # the same
+  c: Bag l T: String        # pinned; must agree with l
+  e: Bag T: String          # the type application: an empty Bag
+  count: function {x: (Bag T: String).view} out u64 is { return x.length }
+  x: Bag String             # error: 'from' takes a value, and 'String' is a type</code></pre>
+<p>The type arguments are inferred from the value's type, which <em><strong>MUST</strong></em> be an
+instance of the base's template, and a labelled one <em><strong>MUST</strong></em> agree with it.
+A numeric generic parameter is never inferred, here as anywhere, and is
+written: <code>Label raw n: 8</code> for <code>Label: typedef (str to: n)</code>. A
+non-generic typedef has no type arguments and takes its value as above
+(<code>Names l</code>).</p>
+<p>A typedef parameter's bound need not be its base parameter's. The
+declaration is accepted, and an instance whose argument the base's parameter
+refuses is an error at the line that names the instance:</p>
+<pre><code class="language-zerolang">  Nums: typedef (List t) as { t: anyval.generic }   # accepted
+  n: Nums t: i64
+  # error[E0400]: generic argument 'i64' does not satisfy constraint 'AnyRef'
+  #   on parameter 'T' of 'collections.ListRef' (the base of 'app.Nums')</code></pre>
 <p><strong>Compatibility.</strong></p>
 <p>The typedef retains the underlying type and so can continue to be passed to
 functions that expect the underlying type as is (backward compatible). But the
