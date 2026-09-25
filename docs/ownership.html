@@ -1020,6 +1020,15 @@ axes: argument-versus-argument and argument-versus-receiver). This prevents
 aliasing and is the property <code>docs/spec.pdoc</code> calls 'no aliasing for
 reftypes'. Top-level <code>data</code> items are exempt -- they are immutable and
 never locked.</p>
+<p>A valtype passed by pointer obeys the same rule: a receiver, or an argument
+to a parameter written <code>.borrow</code> or <code>.view</code>. Both alias the caller's
+value exactly as a reftype argument does, so <code>twoB a: q b: q</code> with two
+<code>point.borrow</code> parameters, a <code>.borrow</code> beside a <code>.view</code> of the same
+value, and <code>q.addFrom o: q</code> with a <code>point.view</code> parameter are all
+refused. An unmarked valtype parameter takes a copy, which aliases nothing
+and locks nothing. For either family, two <code>.view</code>s of one value take two
+shared locks, which never conflict, and sibling fields (<code>p.l</code> and
+<code>p.r</code>) are different values.</p>
 <p>A field never moves out of its owner: it is borrowed whatever owns the owner,
 and only <code>swap</code> exchanges its value (see Moving a borrowed value into an
 owner). A generator's local is an ordinary local, though the instance keeps it
@@ -1032,7 +1041,8 @@ receiver path, then released when the call returns:</p>
 <li>If the argument is a top-level <code>data</code> item, no lock is taken
   (immutable, freely shared).</li>
 <li>For an argument whose source is a path <code>(root, f1, ..., fn)</code>
-  resolving to a reftype leaf, a shared lock is taken on every
+  resolving to a reftype leaf, or to a valtype leaf passed by pointer, a
+  shared lock is taken on every
   intermediate prefix (<code>(root,)</code>, <code>(root, f1)</code>, ...,
   <code>(root, f1, ..., fn-1)</code>) and an exclusive lock is taken on
   the leaf <code>(root, f1, ..., fn)</code>. The intent-shared ancestors permit

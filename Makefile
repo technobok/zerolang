@@ -1812,7 +1812,12 @@ perf: $(PERFBIN)
 # +11 `zl lint --full` never silent: 0 behaviour, 11 source (zdiag.render's
 # file-level location line; the rest is zl's and zsource's, which a zc
 # self-compile does not load).
-ALLOC_BASELINE := 2656414
+#
+# +5252 a valtype passed by pointer takes the call lock: 4655 behaviour (every
+# valtype argument to a `.borrow`/`.view` parameter in the compiler's own
+# source -- `astnode.view` above all -- now takes the lock a reftype one
+# does), 597 source.
+ALLOC_BASELINE := 2661666
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

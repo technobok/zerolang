@@ -36337,6 +36337,9 @@ lockNonTrivialArg: function {
     isViewArg: bool
     # the parameter is the callee's receiver: a valtype locks like a class
     isRecvArg: bool
+    # a valtype bound to `.borrow` or `.view`: its field path and its hoisted
+    # temp take the call lock, and no pin
+    valByPointer: bool
     pins: List ztyping.PinPath
     # the call's result keeps the locks its arguments place
     calleePins: bool
@@ -36355,7 +36358,7 @@ lockNonTrivialArg: function {
     if isLockish when byRef then {
         lockBorrowedArgPath :st :ast :arg :isViewArg :pins :calleePins
         lockFieldArgForCall :st :ast :call :arg :isViewArg
-    }
+    } else if isLockish when valByPointer then lockFieldArgForCall :st :ast :call :arg :isViewArg
     hadPending: false
     if st.typing.pendingPins.length > 0 then hadPending = true
     tnm: (hoistArg
@@ -36383,7 +36386,7 @@ lockNonTrivialArg: function {
             st.typing.pinnedTempPending.set key: tvo value: true
         }
     }
-    if hadPending.not when isLockish when byRef then {
+    if hadPending.not when isLockish when byRef or valByPointer then {
         (lockCallArg
             :st
             pool: ast.names
@@ -36412,6 +36415,9 @@ hoistTrivialArg: function {
     isViewArg: bool
     # the parameter is the callee's receiver: a valtype locks like a class
     isRecvArg: bool
+    # a valtype bound to `.borrow` or `.view`: a bare name takes the call lock,
+    # and no pin
+    valByPointer: bool
     pins: List ztyping.PinPath
     # the receiver a taken value moves into, zero when the call has none
     recvVid: ztypes.vid
@@ -36440,7 +36446,7 @@ hoistTrivialArg: function {
         bnId = atomNameId :ast n: (ast.nodes.get i: arg.operation.u64)
     }
     byRef: isRecvArg or (typeIsReftype :st tid: (ztypes.tid.create from: vt.u64))
-    if bnId.isZero.not when byRef then {
+    if bnId.isZero.not when byRef or valByPointer then {
         bvo: st.lookupVarId nameId: bnId
         match (
             bvo
@@ -36477,7 +36483,7 @@ hoistTrivialArg: function {
                         )
                         )
                     )
-                    if calleePins then {
+                    if calleePins when byRef then {
                         (pinsAppendOne
                             :pins
                             nameId: bnId
@@ -36578,6 +36584,9 @@ hoistAndLockArg: function {
     # the parameter is the callee's receiver, so a valtype argument is passed
     # by reference and locks like a dotted receiver
     isRecvArg: bool
+    # a valtype bound to an explicit `.borrow` or `.view`: it takes the call
+    # lock a reftype argument takes, and pins no result
+    valByPointer: bool
     pins: List ztyping.PinPath
     # the receiver a taken value moves into, zero when the call has none
     recvVid: ztypes.vid
@@ -36600,6 +36609,7 @@ hoistAndLockArg: function {
             :isLockish
             :isViewArg
             :isRecvArg
+            :valByPointer
             :pins
             :recvVid
             :calleePins
@@ -36616,6 +36626,7 @@ hoistAndLockArg: function {
             :isLockish
             :isViewArg
             :isRecvArg
+            :valByPointer
             :pins
             :calleePins
             :arg
@@ -37194,6 +37205,21 @@ argIsPrivateHandle: function {
     }
 }
 
+# valtypeArgOwn -- the marker a VALTYPE argument's parameter declares:
+# `noneMode` for a reftype argument, an unmarked parameter, or no parameter. A
+# `.borrow` or `.view` one takes the value by pointer; an unmarked one copies it.
+valtypeArgOwn: function {
+    st: zenv.ZSymbolTable
+    funcId: ztypes.tid
+    pnId: zast.nameid
+    vt: ztypes.tid
+} out ztypes.zparamownership is {
+    if funcId.isZero or pnId.isZero then return ztypes.zparamownership.noneMode
+    if (typeIsReftype :st tid: vt) then return ztypes.zparamownership.noneMode
+    oo: st.typing.declOwnershipOfId parentTypeId: funcId nameId: pnId
+    return (oo.or d: ztypes.zparamownership.noneMode)
+}
+
 # markValtypeBorrowArg -- a VALTYPE argument bound to a parameter marked
 # `.borrow` goes by pointer, and the callee may write through it: the mutation
 # evidence lockCallArg records for a reftype argument, which a valtype one never
@@ -37207,10 +37233,7 @@ markValtypeBorrowArg: function {
     vt: ztypes.tid
     arg: argref
 } is {
-    if funcId.isZero or pnId.isZero then return
-    if (typeIsReftype :st tid: vt) then return
-    oo: st.typing.declOwnershipOfId parentTypeId: funcId nameId: pnId
-    if (oo.or d: ztypes.zparamownership.noneMode) != ztypes.zparamownership.borrowMode then return
+    if (valtypeArgOwn :st :funcId :pnId :vt) != ztypes.zparamownership.borrowMode then return
     an: ast.nodes.get i: arg.operation.u64
     rn: rootNameIdOf :ast n: an
     # the `:name` shorthand is the same bare local read, with no path to root
@@ -37465,8 +37488,15 @@ checkTypedCallArg: function {
         if isTake then dispVal = ztypes.zparamownership.takeMode
         stampArgDisposition :st :ast op: arg.operation own: dispVal
     }
+    # a valtype bound to an explicit `.borrow` or `.view` goes by pointer and
+    # aliases its source as a reftype argument does, so it takes the same call
+    # lock. An unmarked valtype parameter is a copy and takes none
+    valByPointer: false
     if ownCtor.not when isRecvArg.not then {
         markValtypeBorrowArg :st :ast funcId: ownFn :pnId :vt :arg
+        vow: valtypeArgOwn :st funcId: ownFn :pnId :vt
+        if vow == ztypes.zparamownership.borrowMode then valByPointer = true
+        if vow == ztypes.zparamownership.viewMode then valByPointer = true
     }
     # a field handed to a taking parameter is refused as a borrowed value, and a
     # `.take` on one is checked where the marker is
@@ -37508,6 +37538,7 @@ checkTypedCallArg: function {
         :isLockish
         :isViewArg
         :isRecvArg
+        :valByPointer
         :pins
         :recvVid
         :calleePins
@@ -41637,6 +41668,8 @@ lockGenericValueArg: function {
         # a generic call's parameter list excludes the receiver
         # (genericCallHolders), so no argument slot can be one
         isRecvArg: false
+        # and only a reftype argument reaches here
+        valByPointer: false
         :pins
         :recvVid
         :calleePins
