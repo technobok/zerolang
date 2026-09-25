@@ -1825,7 +1825,11 @@ perf: $(PERFBIN)
 # +2673 a value written where a spec value is expected must conform: 0
 # behaviour (the compiler's own source writes none), 2671 source; perf-strict
 # reads 2 more than ab.sh, the usual argv[0]/cwd difference.
-ALLOC_BASELINE := 2671856
+#
+# +3440 an owning place refuses a bare conformer: -7 behaviour (a protocol-typed
+# DATA field read -- zvfs's ProviderBox.p -- no longer pushes a projection pin;
+# only a conformance label projects), 3447 source.
+ALLOC_BASELINE := 2675296
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -3309,7 +3313,9 @@ view-guard:
 FALLBACK_BASELINE :=
 # 38: nativeBoxCall's refusal -- a native conformer boxed as a protocol whose
 # member it has no C spelling for (only Text.stringView has one).
-EMITFAIL_BASELINE := 38
+# 39: conformanceArgText's refusal -- a conformer boxed for an owning (`.take`)
+# parameter, which the checker refuses first.
+EMITFAIL_BASELINE := 39
 MARKER_BASELINE := 24
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls

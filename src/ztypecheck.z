@@ -25734,7 +25734,11 @@ checkMemberProjections: function {
     # the receiver: the consuming binding becomes BORROWED with the base
     # as its origin (and installs the borrow locks).
     rmtt: st.reg.typetypeOf typeId: (ztypes.tid.create from: rm.u64)
-    if rmtt == ztypes.ztypetype.protocolType then {
+    if rmtt == ztypes.ztypetype.protocolType when (memberReadIsField
+        :st
+        parentNid: dp.parent.u64
+        nameId: cnId
+    ).not then {
         pjroot: (zast.nameTextAt
             :ast
             ref: (bareAtomNameId n: (ast.nodes.get i: dp.parent.u64))
@@ -30812,6 +30816,8 @@ checkReassignedType: function {
                 nid: rasgn.nid
                 lineno: rasgn.lineno
                 colno: rasgn.colno
+                valueNid: rasgn.value
+                owning: true
             )
             if lttR == ztypes.ztypetype.genericParam then skipR = true
             if lttR == ztypes.ztypetype.functionType when (functionSignaturesMatch
@@ -31281,6 +31287,16 @@ borrowedMoveError: function {
     st: zenv.ZSymbolTable n: astnode.view text: StringView verb: StringView
 } is {
     mbv: "Cannot move borrowed variable '\{text}' \{verb} — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
+    # a borrowed BOX is a call, not a name: what makes one that owns is the
+    # source's marker
+    bck: st.typing.callKind.get key: (nodeId :n).u64
+    match (
+        bck
+    ) case some then {
+        if bck == zast.callkind.protocolBorrow or (bck == zast.callkind.facetBorrow) then {
+            mbv = "Cannot move '\{text}' \{verb}: it is a borrowed box, bound to its source for the full scope -- take the source (`.take`, or no marker) for a box that owns it"
+        }
+    } case none then null
     (addError
         :st
         nodeid: (nodeId :n)
@@ -37060,10 +37076,32 @@ noteSpecStandIn: function {
     nid: zast.nodeid
     lineno: u32
     colno: u32
+    valueNid: zast.nodeid
+    owning: bool
 } is {
     stt: st.reg.typetypeOf typeId: spec
     if stt != ztypes.ztypetype.protocolType when stt != ztypes.ztypetype.facetType then return
-    st.typing.specStandIns.append (ztyping.specstandin :value :spec :nid :lineno :colno)
+    su: (ztyping.specstandin
+        :value
+        :spec
+        :nid
+        :lineno
+        :colno
+        :valueNid
+        :owning
+    )
+    st.typing.specStandIns.append su
+}
+
+# markSpecStandInOwned -- the argument at `nid` binds a parameter that owns
+# what it is given: the stand-in its type check just noted is an owning one.
+markSpecStandInOwned: function {st: zenv.ZSymbolTable nid: zast.nodeid} is {
+    n: st.typing.specStandIns.length
+    if n == 0 then return
+    su: st.typing.specStandIns.get i: n - 1
+    if su.nid != nid then return
+    su.owning = true
+    st.typing.specStandIns.set i: n - 1 val: su
 }
 
 # checkSpecStandIns -- every value noted where a spec value is expected
@@ -37072,17 +37110,25 @@ noteSpecStandIn: function {
 # C compiler, whatever its type -- an i64 passed for a protocol parameter
 # included. A type parameter, and a type still partial, are the instance's
 # to decide.
-checkSpecStandIns: function {st: zenv.ZSymbolTable} is {
+checkSpecStandIns: function {ast: Ast st: zenv.ZSymbolTable} is {
     bad: ListVal u64
     n: st.typing.specStandIns.length
     i: u64
     for i < n loop {
         su: st.typing.specStandIns.get :i
-        if (specStandInHolds :st value: su.value spec: su.spec).not then bad.append from: i
+        if (specStandInHolds :st value: su.value spec: su.spec).not then {
+            bad.append from: i
+        } else if su.owning when (standInNeedsBox :st value: su.value spec: su.spec) then {
+            bad.append from: i
+        }
         i = i + 1
     }
     with bit: bad.iterate do for bi: bit loop {
         su: st.typing.specStandIns.get i: bi
+        if (specStandInHolds :st value: su.value spec: su.spec) then {
+            reportOwnedStandIn :ast :st :su
+            continue
+        }
         vn: "'\{st.reg.nameOf tid: su.value}'"
         if (isLiteralTypeId :st tid: su.value) then vn = "a numeric literal".string
         sn: st.reg.nameOf tid: su.spec
@@ -37098,6 +37144,58 @@ checkSpecStandIns: function {st: zenv.ZSymbolTable} is {
             width: 1
         )
     }
+}
+
+# standInNeedsBox -- a concrete conformer written for a PROTOCOL: an owning
+# place refuses it, since only a borrowing one may take it as the spec
+# implicitly. A value of the spec's own type (a box already), a type
+# parameter, and a facet place are not this rule's.
+standInNeedsBox: function {
+    st: zenv.ZSymbolTable.view
+    value: ztypes.tid
+    spec: ztypes.tid
+} out bool is {
+    if value == spec then return false
+    if (st.reg.typetypeOf typeId: spec) != ztypes.ztypetype.protocolType then return false
+    vtt: st.reg.typetypeOf typeId: value
+    if vtt == ztypes.ztypetype.classType then return true
+    if vtt == ztypes.ztypetype.recordType then return true
+    return vtt == ztypes.ztypetype.unionType
+}
+
+# reportOwnedStandIn -- a conformer written where the value is owned. The
+# place would own a box of a value it never took, so it says how to make one
+# that owns: `P.create from: d.take`, or the construction wrapped as it is.
+reportOwnedStandIn: function {ast: Ast st: zenv.ZSymbolTable su: ztyping.specstandin} is {
+    vn: st.reg.nameOf tid: su.value
+    sn: st.reg.nameOf tid: su.spec
+    fix: "wrap it: `\{sn}.create from: (...)`"
+    bn: bareAtomNameId n: (ast.nodes.get i: su.valueNid.u64)
+    if bn.isZero then bn = takenBareName :ast nid: su.valueNid
+    if bn.isZero.not then {
+        bt: zast.nameTextAt :ast ref: bn
+        fix = "write `\{sn}.create from: \{bt}.take`"
+    }
+    (addErrorH
+        :st
+        nodeid: su.nid
+        lineno: su.lineno
+        colno: su.colno
+        e: zast.err.typeError
+        msg: "'\{vn}' cannot stand in for \{sn} where the value is owned: \{fix}"
+        note: "only a borrowing place -- a borrow or view parameter, or `\{sn} d` -- takes a conformer as the protocol implicitly"
+        hint: String
+        width: 1
+    )
+}
+
+# takenBareName -- the name `x` of a value written `x.take`, or 0.
+takenBareName: function {ast: Ast.view nid: zast.nodeid} out zast.nameid is {
+    vn: ast.nodes.get i: nid.u64
+    if vn.dottedpath.not then return zast.nameid
+    cid: atomNameId :ast n: (ast.nodes.get i: vn.child.u64)
+    if cid != zast.names.wkTake then return zast.nameid
+    return (bareAtomNameId n: (ast.nodes.get i: vn.parent.u64))
 }
 
 # specStandInHolds -- `value` may be written where `spec` is expected.
@@ -37415,6 +37513,8 @@ checkArgTypeMismatch: function {
         nid: arg.nid
         lineno: arg.lineno
         colno: arg.colno
+        valueNid: arg.operation
+        owning: false
     )
     if (argMismatchSkipped :st :ast :vt :ptid) then return
     en7: st.reg.nameOf tid: (ztypes.tid.create from: ptid.u64)
@@ -37820,6 +37920,7 @@ checkTypedCallArg: function {
         ownCtor = false
     }
     aow: argOwnershipOf :st funcId: ownFn isCtor: ownCtor :pnId :vt
+    if aow.isTake then markSpecStandInOwned :st nid: arg.nid
     refusePlainPrivateArg :st :ast funcId: ownFn :isCtor :pnId :vt :arg
     isTake: aow.isTake
     isLockish: aow.isLockish
@@ -39298,6 +39399,22 @@ checkReturnTypeMatch: function {
         return
     }
     if (typesCompatible :ast :st a: argT b: expR) then return
+    # a value returned as a protocol is judged with every other stand-in, as
+    # an owning place: the caller owns what a function returns
+    retIsProto: (st.reg.typetypeOf typeId: expR) == ztypes.ztypetype.protocolType
+    if retIsProto when (yieldIsInScope :st).not then {
+        (noteSpecStandIn
+            :st
+            value: argT
+            spec: expR
+            nid: (nodeId n: (ast.nodes.get i: arg.operation.u64))
+            lineno: (nodeLine n: (ast.nodes.get i: arg.operation.u64))
+            colno: (nodeCol n: (ast.nodes.get i: arg.operation.u64))
+            valueNid: arg.operation
+            owning: true
+        )
+        return
+    }
     en: st.reg.nameOf tid: expR
     an: st.reg.nameOf tid: argT
     m4: "return type mismatch: function expects \{en}, got \{an}"
@@ -55551,7 +55668,7 @@ typecheck: function {
         checkGenericBounds ast: program :st
         checkConformances ast: program :st
         checkHashKeys ast: program :st
-        checkSpecStandIns :st
+        checkSpecStandIns ast: program :st
         checkWideLiterals ast: program :st
         stampAliasValues :st ast: program
         stampGenericBounds :st ast: program
