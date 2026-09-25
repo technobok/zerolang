@@ -2759,22 +2759,30 @@ docCommentForNode: function {snap: zcheck.CheckResult fsno: zvfs.fsno defLine: u
     return r
 }
 
-# unitFsnoByName -- the vfs dentry id of the file for the unit named
-# `name`, or 0 when no such unit file exists.
-unitFsnoByName: function {snap: zcheck.CheckResult name: StringView} out zvfs.fsno is {
-    ids: ListVal zvfs.fsno
-    paths: List String
-    snap.vfs.fileTable outIds: ids outPaths: paths
-    result: zvfs.fsno
-    i: u64
-    n: ids.length
-    for i < n loop {
-        pth: paths.get :i
-        un: zsource.unitNameOf path: pth.stringView
-        if un.stringView == name then result = ids.get :i
-        i = i + 1
+# unitFsnoByName -- the file of the TOP-LEVEL unit named `name`: the file its
+# body was parsed from, never a file that merely shares the name (a subunit
+# `holder/util.z` is not the unit `util`). 0 when the program has no such unit,
+# or the unit has no member to place it.
+unitFsnoByName: function {snap: zcheck.CheckResult.view name: StringView} out zvfs.fsno is {
+    lu: zsource.lintedUnitNamed prog: snap.prog uname: name
+    if lu.op.isZero then return zvfs.fsno
+    return (zsource.unitAnchorFsno prog: snap.prog mainOp: lu.op)
+}
+
+# unitFsnoOfDecl -- the file of the unit declared by `declId` (a subunit
+# reference resolves to its declaration): the file its body was parsed from.
+# The declaration's own node is minted after that file closes and lies in
+# none, so the body answers. 0 when it has no member to place it.
+unitFsnoOfDecl: function {snap: zcheck.CheckResult.view declId: ztypes.declid} out zvfs.fsno is {
+    dn: declNodeOf o: snap.st :declId
+    if dn == 0 then return zvfs.fsno
+    op: zast.nodeid.create from: dn.u32.orPanic
+    {
+        n: snap.prog.nodes.get i: dn
+        if n.namedoperation then op = n.operation
     }
-    return result
+    if (snap.prog.nodes.get i: op.u64).unitdef.not then return zvfs.fsno
+    return (zsource.unitAnchorFsno prog: snap.prog mainOp: op)
 }
 
 # unitGenericParamsOf -- a unitdef's generic parameters rendered " {T U}"
@@ -3252,8 +3260,14 @@ navResolve: function {
     hnid: hit.nodeid.u64
     base: navTargetByKind :snap :hnid kind: hit.kind
     t: navTargetRefine :snap :hnid hnm: hnm.stringView kind: hit.kind :base
+    # a unit's name answers with its FILE: a top-level unit's by name, a
+    # subunit's through the declaration the checker resolved it to
     unitFsno: zvfs.fsno
-    if t.vid.isZero when t.tid == 0 then unitFsno = unitFsnoByName :snap name: hnm.stringView
+    if t.vid.isZero when t.tid == 0 then {
+        unitFsno = unitFsnoByName :snap name: hnm.stringView
+    } else if t.vid.isZero when (isUnitTidOpt o: snap.st tid: t.tid) then {
+        unitFsno = unitFsnoOfDecl :snap declId: t.declId
+    }
     found: (navhit
         idx: bi
         kind: hit.kind
