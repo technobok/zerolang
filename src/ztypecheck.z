@@ -9747,6 +9747,55 @@ synthRecordMembers: function {
     synthRecordHash :st :ast :rnode :rid :isgen
 }
 
+# checkTypedefShape -- what a typedef's as-block may not declare. It has no
+# constructor of its own: it is built from its base, and a user `create` was
+# never called. Every generic parameter is a part of the base, so each must
+# appear in the base type; one that does not could never be derived from the
+# value the typedef is built from.
+checkTypedefShape: function {st: zenv.ZSymbolTable ast: Ast.view onode: objref} is {
+    bn: objectTypedefBaseNode :ast :onode
+    if bn.isZero then return
+    kAiter: u64
+    for kAiter < onode.nas loop {
+        amId: zast.objAsItemAt :ast nid: onode.nid i: kAiter
+        kAiter = kAiter + 1
+        am: argRefAt :ast nid: amId
+        if am.nid.isZero then continue
+        amOp: ast.nodes.get i: am.operation.u64
+        nm: zast.nameTextAt :ast ref: am.name
+        if am.name == zast.names.wkCreate when (isFunctionDefOp op: amOp) then {
+            (addErrorH
+                :st
+                nodeid: am.nid
+                lineno: am.lineno
+                colno: am.colno
+                e: zast.err.typeError
+                msg: "a typedef declares no `create`: it is built from its base".string
+                note: String
+                hint: "remove it; the typedef is constructed as `T x` or `T.create from: x`".string
+                width: 6
+            )
+        }
+        if (isGenericParam :ast op: amOp) when (nodeMentionsName
+            :ast
+            n: (ast.nodes.get i: bn.u64)
+            name: nm.stringView
+        ).not then {
+            (addErrorH
+                :st
+                nodeid: am.nid
+                lineno: am.lineno
+                colno: am.colno
+                e: zast.err.typeError
+                msg: "generic parameter '\{nm}' is not used in the typedef's base type"
+                note: "a typedef's parameters are the parts of its base, derived from the value it is built from".string
+                hint: "use '\{nm}' in the base type, or remove it"
+                width: nm.length.u32.orPanic
+            )
+        }
+    }
+}
+
 # recordTypedefBase -- `X: typedef T` records the base it wraps by BOTH channels:
 # the declaration's name id and, when it resolves here, its tid. The two are not
 # the same presence set, so both are written.
@@ -9758,6 +9807,7 @@ recordTypedefBase: function {
     rnode: objref
     rid: u64
 } is {
+    checkTypedefShape :st :ast onode: rnode
     tdb: objectTypedefBaseId :ast onode: rnode
     if tdb.isZero.not then {
         tdk: rid
@@ -12557,6 +12607,7 @@ resolveClassTypedefBase: function {
     cnode: objref
 } out bool is {
     needsDtor: false
+    checkTypedefShape :st :ast onode: cnode
     tdbase: objectTypedefBaseId :ast onode: cnode
     if (fieldTypeNeedsCleanup :st :scope :ast :unitDecl nameId: tdbase isBorrowed: false) then {
         needsDtor = true
@@ -24818,6 +24869,39 @@ consumeCastFromArg: function {
     }
 }
 
+# refuseTypedefExtraArgs -- a typedef is built from ONE value, its base:
+# unnamed or named `from`. Any other argument -- a second value, or one under
+# another name (`meters val: 5`) -- is not an argument of the construction.
+refuseTypedefExtraArgs: function {st: zenv.ZSymbolTable ast: Ast.view call: callref tdId: u64} is {
+    seen: false
+    kAiter: u64
+    for kAiter < call.nargs loop {
+        argId: zast.callArgAt :ast nid: call.nid i: kAiter
+        kAiter = kAiter + 1
+        arg: argRefAt :ast nid: argId
+        if arg.nid.isZero then continue
+        isFrom: arg.name.isZero or (zast.nameTextEq :ast ref: arg.name s: "from")
+        if isFrom when seen.not then {
+            seen = true
+            continue
+        }
+        tn: st.reg.nameOf tid: (ztypes.tid.create from: tdId)
+        what: "a second value".string
+        if arg.name.isZero.not then what = "'\{zast.nameTextAt :ast ref: arg.name}'"
+        (addErrorH
+            :st
+            nodeid: arg.nid
+            lineno: arg.lineno
+            colno: arg.colno
+            e: zast.err.callError
+            msg: "\{what} is not an argument of '\{tn}': a typedef is built from one value of its base"
+            note: String
+            hint: "write '\{tn} x' or '\{tn}.create from: x'"
+            width: 1
+        )
+    }
+}
+
 # checkTypedefCreate -- `T.create from: expr` / bare `T expr` on a typedef:
 # an owned cast, not a call. No CALL scope; the from-argument walks in the
 # current scope (a non-trivial one hoists there) and is consumed; the value
@@ -24829,6 +24913,7 @@ checkTypedefCreate: function {
     call: callref
     tdId: u64
 } out ztypes.tid is {
+    refuseTypedefExtraArgs :st :ast :call :tdId
     # the source's marker picks the result's ownership: `Bytes xs.borrow` is a
     # second name for `xs`, locked for as long as it lives
     if (projectionSourceBorrows :ast :call) then return (checkTypedefBorrow
@@ -24971,6 +25056,7 @@ checkTypedefBorrow: function {
                     :vt
                     errMark: errT0
                 )
+                checkCastFromType :st :ast :tdId :vt :arg
                 if vt > 0 then pinTypedefBorrowSource :st :ast src: arg.operation
             }
         }
