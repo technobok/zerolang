@@ -100,6 +100,13 @@ NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 # well as the relocated front-end, because they share that directory. What it does NOT
 # reach is examples/ and tests/fixtures/; a rule that must hold there needs its own guard.
 ZLSCOPE := src/*.z lib/system/*.z lib/system/system/*.z tests/unit/*.z
+# The --full tier checks a file as the unit its roots resolve it to, so style-lint
+# gives each tree its roots: tests/unit's units live under tests/unit. The
+# lib/system/system/ files are SUBUNITS of `system`, which the tier cannot yet
+# resolve by file (it reports that rather than skipping), so they get the fast
+# tier only; their code is still typechecked through every program that uses it.
+ZLFULLSCOPE := src/*.z lib/system/*.z
+ZLSUBUNITS := lib/system/system/*.z
 # FMTSCOPE -- what the zl *formatter* checks: every unit the printer lays out, the unit
 # tests included; tests/fixtures/ stays as written, since its files are inputs.
 FMTSCOPE := src/*.z lib/system/*.z lib/system/system/*.z examples/*.z tests/unit/*.z
@@ -138,7 +145,9 @@ style-lint-fast: bin/zl
 	bin/zl format --check $(FMTSCOPE)
 
 style-lint: bin/zl
-	bin/zl lint --full --src src --system lib/system $(ZLSCOPE)
+	bin/zl lint --full --src src --system lib/system $(ZLFULLSCOPE)
+	bin/zl lint --full --src tests/unit --src src --system lib/system tests/unit/*.z
+	bin/zl lint $(ZLSUBUNITS)
 	bin/zl format --check $(FMTSCOPE)
 
 # out/ztestrunner -- the self-hosted corpus runner (src/ztestrunner.z), built
