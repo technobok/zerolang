@@ -13087,8 +13087,9 @@ declOfUnitDef: function {
 
 # typedefBaseDecl -- the Decl a typedef definition's base names, looked up from
 # the unit the typedef is written in: an atom or a parameterized base by its
-# head name, a dotted one by its unit and name. Zero when the base names no
-# definition.
+# head name, a dotted one by its unit and name. A name that reaches its
+# definition through an alias (`List` is core's `collections.ListRef`) is
+# followed to the alias's target. Zero when the base names no definition.
 typedefBaseDecl: function {
     st: zenv.ZSymbolTable.view
     ast: Ast.view
@@ -13109,7 +13110,30 @@ typedefBaseDecl: function {
     ud: unitScopeOf :st declId: scope
     site: definingSiteForId :st :ast unitDecl: ud :scope nameId: hn
     if site.defUnit.isZero then return zd
+    if site.aliasDecl.isZero.not then return (aliasTargetDecl :st :ast aliasDecl: site.aliasDecl)
     return (declOfUnitDef :st :scope unitDecl: site.defUnit nameId: hn)
+}
+
+# aliasTargetDecl -- the definition an alias Decl names, through any number of
+# aliases; zero when it names none.
+aliasTargetDecl: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    aliasDecl: ztypes.declid
+} out ztypes.declid is {
+    d: aliasDecl
+    hops: u64
+    for hops < 16 loop {
+        hops = hops + 1
+        tk: reexportTargetIdsOf :st :ast declId: d
+        if tk.unitName.isZero then return d
+        du: unitDeclOfName :st nameId: tk.unitName
+        if du.isZero then return (ztypes.declid.create from: 0)
+        nd: declOfUnitDef :st scope: du unitDecl: du nameId: tk.defName
+        if nd.isZero then return nd
+        d = nd
+    }
+    return d
 }
 
 # typedefDefTypetype -- the typetype a `typedef` definition takes: its base's
