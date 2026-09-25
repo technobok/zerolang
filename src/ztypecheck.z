@@ -3219,6 +3219,9 @@ validateMonoRefLabels: function {
     arguments: (ListVal u32).view
     tplId: ztypes.tid
 } is {
+    # a generic typedef's unlabelled argument is its `from:` value: reported,
+    # and the position resolves as spelled so nothing downstream repeats it
+    refuseTypedefTypePositionFrom :st :ast :arguments :tplId
     tk: declOfTypeId :st tid: tplId
     pnames: st.reg.genericParamNamesOf tdecl: tk
     if pnames.length == 0 then return
@@ -3430,6 +3433,47 @@ anyLabelledArg: function {ast: Ast.view arguments: (ListVal u32).view} out bool 
         ai = ai + 1
     }
     return false
+}
+
+# refuseTypedefTypePositionFrom -- a generic typedef in a type position takes
+# its type arguments labelled (`(Bag T: String)`): its unlabelled argument is
+# `from:`, a value, so `(Bag String)` is refused as the grammar reads it.
+refuseTypedefTypePositionFrom: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    arguments: (ListVal u32).view
+    tplId: ztypes.tid
+} is {
+    if (isGenericTypedef :st tid: tplId).not then return
+    with ait: arguments.iterate do for a: ait loop {
+        arg: argRefAt :ast nid: (zast.nodeid.create from: a)
+        if arg.nid.isZero.not when arg.name.isZero then {
+            # a name in a type position names a type
+            isName: false
+            {
+                opn: ast.nodes.get i: arg.operation.u64
+                isName = opn.atomid or opn.dottedpath
+            }
+            tpn: st.reg.nameOf tid: tplId
+            m: "a type position holds no value, and argument 'from' of '\{tpn}' is one"
+            if isName then {
+                tn: argOperandName :ast :arg
+                m = "argument 'from' takes a value, and '\{tn}' is a type"
+            }
+            (addErrorH
+                :st
+                nodeid: arg.nid
+                lineno: arg.lineno
+                colno: arg.colno
+                e: zast.err.callError
+                msg: m
+                note: "a generic typedef's unlabelled argument is 'from:', the value of its base; its type arguments are labelled".string
+                hint: String
+                width: 1
+            )
+            return
+        }
+    }
 }
 
 # resolveMonoRefParts -- resolveMonoRefInline's call-shaped core, taking the
@@ -25180,6 +25224,7 @@ refuseTypedefExtraArgs: function {st: zenv.ZSymbolTable ast: Ast.view call: call
             seen = true
             continue
         }
+        if (isTypedefTypeArg :st tdId: (ztypes.tid.create from: tdId) name: arg.name) then continue
         tn: st.reg.nameOf tid: (ztypes.tid.create from: tdId)
         what: "a second value".string
         if arg.name.isZero.not then what = "'\{zast.nameTextAt :ast ref: arg.name}'"
@@ -25195,6 +25240,380 @@ refuseTypedefExtraArgs: function {st: zenv.ZSymbolTable ast: Ast.view call: call
             width: 1
         )
     }
+}
+
+# isGenericTypedef -- `tid` is a generic typedef's template (`Bag: typedef
+# (List t) as { t: ... }`).
+isGenericTypedef: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    if tid.isZero then return false
+    if (st.typing.typedefBaseName.has key: tid.u64).not then return false
+    return (st.reg.isGenericOf :tid)
+}
+
+# isTypedefTypeArg -- `name` labels a type argument of the generic typedef that
+# `tdId` is an instance of (`t:` in `Bag l t: String`).
+isTypedefTypeArg: function {
+    st: zenv.ZSymbolTable.view tdId: ztypes.tid name: zast.nameid
+} out bool is {
+    if name.isZero then return false
+    og: st.reg.genericOriginOf tid: tdId
+    if (isGenericTypedef :st tid: og).not then return false
+    return (st.reg.isGenericParamOf tdecl: (declOfTypeId :st tid: og) :name)
+}
+
+# checkGenericTypedefCall -- a GENERIC typedef applied to arguments. Its
+# unlabelled argument is `from:`, the value of its base, and each type argument
+# is labelled: `Bag l` and `Bag from: l` take `t` from the type of `l`, and
+# `Bag l t: String` also pins it, which must agree. The instance is then built
+# from the value as any typedef is. Not handled without a value (`Bag t:
+# String` is a type application, the empty instance).
+checkGenericTypedefCall: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    call: callref
+    tplId: ztypes.tid
+} out callleg is {
+    fromArgId: typedefFromArgId :ast :call
+    if fromArgId.isZero then return (callleg handled: false tid: ztypes.tid)
+    fArg: argRefAt :ast nid: fromArgId
+    if (refuseTypedefFromType :st :unitDecl :ast arg: fArg) then {
+        return (typedefCallFailed :st :call :tplId)
+    }
+    subs: IdMapV zast.nameid v: u64
+    valSubs: IdMapV zast.nameid v: u64
+    if (typedefInstanceSubs :st :unitDecl :ast :call :tplId :fArg :subs :valSubs).not then {
+        return (typedefCallFailed :st :call :tplId)
+    }
+    tk: declOfTypeId :st tid: tplId
+    sfx: String
+    missing: typedefInstanceSuffix :st :ast :tk :subs :valSubs :sfx
+    if missing.isZero.not then {
+        reportTypedefMissingParam :st :ast :call :tplId :tk :missing bound: sfx.length > 0
+        return (typedefCallFailed :st :call :tplId)
+    }
+    mid: (getOrMintSpec
+        :st
+        scope: st.curScope
+        :ast
+        :unitDecl
+        sfx: sfx.stringView
+        templateId: tplId
+        :subs
+        :valSubs
+        fallbackArg: 0
+    )
+    if mid.isZero then return (typedefCallFailed :st :call :tplId)
+    reportTypedefClash :ast :st tid: mid at: call.nid lineno: call.lineno colno: call.colno
+    gcal: nodeId n: (ast.nodes.get i: call.callable.u64)
+    if gcal > 0 then {
+        setga: mid
+        stampGate :st nid: gcal.u64 tid: setga
+    }
+    r: checkTypedefCreate :st :unitDecl :ast :call tdId: mid.u64
+    return (callleg handled: true tid: r)
+}
+
+# typedefFromArgId -- a generic typedef construction's value argument: the
+# first unlabelled one, or `from:`; zero when there is none.
+typedefFromArgId: function {ast: Ast call: callref} out zast.nodeid is {
+    kAiter: u64
+    for kAiter < call.nargs loop {
+        argId: zast.callArgAt :ast nid: call.nid i: kAiter
+        kAiter = kAiter + 1
+        arg: argRefAt :ast nid: argId
+        if arg.nid.isZero.not when (
+            arg.name.isZero or (zast.nameTextEq :ast ref: arg.name s: "from")
+        ) then return argId
+    }
+    return (zast.nodeid.create from: 0)
+}
+
+# typedefInstanceSubs -- the arguments of the instance a generic typedef
+# construction builds: the value's type binds the template's parameters (a
+# dry run of the value, as a generic construction's inference makes), then the
+# labelled type arguments pin them. False when the value is no instance of the
+# base's template or a pin is refused, each reported.
+typedefInstanceSubs: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    call: callref
+    tplId: ztypes.tid
+    fArg: argref
+    subs: (IdMapV zast.nameid v: u64)
+    valSubs: (IdMapV zast.nameid v: u64)
+} out bool is {
+    st.pushDryRun
+    vt: checkValueAt :st :unitDecl :ast nid: fArg.operation
+    st.popDiscard
+    if vt.isZero then return false
+    tk: declOfTypeId :st tid: tplId
+    gparams: st.reg.genericParamNamesOf tdecl: tk
+    if (bindTypedefFromSubs :st :ast :tplId :gparams :vt :subs).not then {
+        bo: st.reg.genericOriginOf tid: (typedefBaseTidOf :st tid: tplId)
+        en: st.reg.nameOf tid: bo
+        an: st.reg.nameOf tid: vt
+        (addErrorH
+            :st
+            nodeid: fArg.nid
+            lineno: fArg.lineno
+            colno: fArg.colno
+            e: zast.err.callError
+            msg: "argument 'from' type mismatch: expected an instance of \{en}, got \{an}"
+            note: "a generic typedef is constructed from an instance of its base".string
+            hint: String
+            width: 1
+        )
+        return false
+    }
+    return (applyTypedefTypePins :st :unitDecl :ast :call :tk :subs :valSubs)
+}
+
+# typedefInstanceSuffix -- the instance name's argument suffix, in the
+# template's parameter order: a type argument's name, a numeric one's value.
+# The first parameter nothing bound, or zero.
+typedefInstanceSuffix: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tk: ztypes.declid
+    subs: (IdMapV zast.nameid v: u64).view
+    valSubs: (IdMapV zast.nameid v: u64).view
+    sfx: String
+} out zast.nameid is {
+    missing: zast.nameid
+    gparams: st.reg.genericParamNamesOf tdecl: tk
+    with git: gparams.iterate do for gp: git loop {
+        got: subs.get key: gp
+        gotV: valSubs.get key: gp
+        if got.some then {
+            sfx.append s: "_"
+            sfx.append s: (monoValName
+                :st
+                scope: st.curScope
+                :ast
+                tid: (ztypes.tid.create from: got.u64)
+            )
+        } else if gotV.some then {
+            (appendNumericArgSuffix
+                :sfx
+                bits: gotV
+                cd: (st.reg.genericParamConstraintOf tdecl: tk paramName: gp)
+            )
+        } else if missing.isZero then {
+            missing = gp
+        }
+    }
+    return missing
+}
+
+# reportTypedefMissingParam -- a generic typedef construction that leaves a
+# parameter unbound, worded as a generic construction's is: nothing inferred,
+# one parameter not inferred, or a numeric one, which is never inferred.
+reportTypedefMissingParam: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    call: callref
+    tplId: ztypes.tid
+    tk: ztypes.declid
+    missing: zast.nameid
+    bound: bool
+} is {
+    tname: st.reg.nameOf tid: tplId
+    mn: zast.nameTextAt :ast ref: missing
+    mm: "cannot infer type arguments for generic type '\{tname}'"
+    me: zast.err.genericError
+    if bound then mm = "cannot infer generic parameter '\{mn}' for '\{tname}'"
+    if (st.reg.genericParamConstraintOf tdecl: tk paramName: missing).numKind.has then {
+        mm = "missing required argument '\{mn}': generic parameter '\{mn}' of '\{tname}' takes a compile-time integer, which is never inferred"
+        me = zast.err.callError
+    }
+    (addErrorH
+        :st
+        nodeid: call.nid
+        lineno: call.lineno
+        colno: call.colno
+        e: me
+        msg: mm
+        note: String
+        hint: String
+        width: 0
+    )
+}
+
+# typedefCallFailed -- a generic typedef construction that was refused: the
+# call is the template, so the one diagnostic stands without a cascade.
+typedefCallFailed: function {st: zenv.ZSymbolTable call: callref tplId: ztypes.tid} out callleg is {
+    stt: tplId
+    stampGate :st nid: call.nid.u64 tid: stt
+    return (callleg handled: true tid: tplId)
+}
+
+# argOperandName -- the type name an argument's operand spells (`String` in
+# `Bag String`), as an owned copy.
+argOperandName: function {ast: Ast.view arg: argref} out String is {
+    return (zast.nameTextCopy
+        :ast
+        ref: (paramTypeBaseNameId :ast op: (ast.nodes.get i: arg.operation.u64))
+    )
+}
+
+# refuseTypedefFromType -- the `from:` slot of a generic typedef takes a value;
+# a bare type name written there (`Bag String`) is refused, as the grammar
+# reads it. A call there constructs a value (`Bag (List String)`).
+refuseTypedefFromType: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    arg: argref
+} out bool is {
+    isName: false
+    {
+        opn: ast.nodes.get i: arg.operation.u64
+        isName = opn.atomid or opn.dottedpath
+    }
+    if isName.not then return false
+    if (elidedPrimaryTypeArg :st :unitDecl :ast opId: arg.operation).not then return false
+    tn: argOperandName :ast :arg
+    (addErrorH
+        :st
+        nodeid: arg.nid
+        lineno: arg.lineno
+        colno: arg.colno
+        e: zast.err.callError
+        msg: "argument 'from' takes a value, and '\{tn}' is a type"
+        note: "a generic typedef's unlabelled argument is 'from:', the value of its base; its type arguments are labelled".string
+        hint: String
+        width: 1
+    )
+    return true
+}
+
+# bindTypedefFromSubs -- bind a generic typedef's parameters from the type of
+# the value it is built from: the value's own typedef chain is followed to an
+# instance of the base's template, whose arguments meet the template's partial
+# base (`List t` met by `List_String` binds t = String), or to an instance of
+# the typedef itself, whose arguments are its own. False when the chain reaches
+# neither.
+bindTypedefFromSubs: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tplId: ztypes.tid
+    gparams: (ListVal zast.nameid).view
+    vt: ztypes.tid
+    subs: (IdMapV zast.nameid v: u64)
+} out bool is {
+    pb: typedefBaseTidOf :st tid: tplId
+    if pb.isZero then return false
+    bo: st.reg.genericOriginOf tid: pb
+    if bo.isZero then bo = pb
+    cur: vt
+    depth: u64
+    for depth < 64 loop {
+        depth = depth + 1
+        co: st.reg.genericOriginOf tid: cur
+        if co == tplId then {
+            bindTypedefOwnArgs :st inst: cur :gparams :subs
+            return true
+        }
+        if co == bo or (cur == bo) then {
+            bindPartialParamSubs :st :ast :gparams paramTid: pb.u64 argTid: cur.u64 :subs
+            return true
+        }
+        nxt: typedefBaseTidOf :st tid: cur
+        if nxt.isZero then return false
+        cur = nxt
+    }
+    return false
+}
+
+# bindTypedefOwnArgs -- a value of the typedef itself binds each parameter to
+# its own instance's argument, in order.
+bindTypedefOwnArgs: function {
+    st: zenv.ZSymbolTable
+    inst: ztypes.tid
+    gparams: (ListVal zast.nameid).view
+    subs: (IdMapV zast.nameid v: u64)
+} is {
+    n: st.reg.genericArgCount specId: inst
+    if gparams.length < n then n = gparams.length
+    i: u64
+    for i < n loop {
+        subs.set key: (gparams.get :i) value: (st.reg.genericArgAt specId: inst ordinal: i)
+        i = i + 1
+    }
+}
+
+# applyTypedefTypePins -- the labelled type arguments of a generic typedef's
+# construction (`Bag l T: String`): each binds its parameter, and a type must
+# agree with what the value already bound. A numeric parameter is never
+# inferred and binds only here (`Label raw n: 8`). False when one is refused or
+# contradicts the value.
+applyTypedefTypePins: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    call: callref
+    tk: ztypes.declid
+    subs: (IdMapV zast.nameid v: u64)
+    valSubs: (IdMapV zast.nameid v: u64)
+} out bool is {
+    ok: true
+    kAiter: u64
+    for kAiter < call.nargs loop {
+        argId: zast.callArgAt :ast nid: call.nid i: kAiter
+        kAiter = kAiter + 1
+        arg: argRefAt :ast nid: argId
+        if arg.nid.isZero or arg.name.isZero then continue
+        if (st.reg.isGenericParamOf tdecl: tk name: arg.name).not then continue
+        psfx: String
+        pins: IdMapV zast.nameid v: u64
+        pvals: IdMapV zast.nameid v: u64
+        pbound: IdSet zast.nameid
+        (bindTypeArgSub
+            :st
+            :unitDecl
+            :ast
+            opId: arg.operation
+            pk: arg.name
+            sfx: psfx
+            subs: pins
+            valueSubs: pvals
+            boundParams: pbound
+            :tk
+        )
+        pvv: pvals.get key: arg.name
+        if pvv.some then {
+            valSubs.set key: arg.name value: pvv
+            continue
+        }
+        pv: (pins.get key: arg.name).or d: 0
+        if pv == 0 then {
+            ok = false
+            continue
+        }
+        had: (subs.get key: arg.name).or d: 0
+        if had > 0 when had != pv then {
+            pn: zast.nameTextAt :ast ref: arg.name
+            pinned: st.reg.nameOf tid: (ztypes.tid.create from: pv.u64)
+            made: st.reg.nameOf tid: (ztypes.tid.create from: had.u64)
+            (addErrorH
+                :st
+                nodeid: arg.nid
+                lineno: arg.lineno
+                colno: arg.colno
+                e: zast.err.genericError
+                msg: "type argument '\{pn}' is \{pinned}, but the value makes it \{made}"
+                note: String
+                hint: String
+                width: 1
+            )
+            ok = false
+            continue
+        }
+        subs.set key: arg.name value: pv
+    }
+    return ok
 }
 
 # checkTypedefCreate -- `T.create from: expr` / bare `T expr` on a typedef:
@@ -40977,6 +41396,10 @@ checkDottedTypeApplication: function {
     call: callref
     tplId: ztypes.tid
 } out callleg is {
+    if (isGenericTypedef :st tid: tplId) then {
+        gtdD: checkGenericTypedefCall :st :unitDecl :ast :call :tplId
+        if gtdD.handled then return gtdD
+    }
     errD: st.typing.errors.length
     vokD: validateGenericTypeArgs :ast :st :unitDecl :call :tplId allowFrom: false
     gres: genericTypeConstruction :ast :st :unitDecl :call :tplId
@@ -41262,6 +41685,10 @@ checkBareGenericCall: function {
         )
     }
     if gtt != ztypes.ztypetype.functionType then {
+        if (isGenericTypedef :st tid: funcId) then {
+            gtd: checkGenericTypedefCall :st :unitDecl :ast :call tplId: funcId
+            if gtd.handled then return gtd
+        }
         errB: st.typing.errors.length
         vok: (validateGenericTypeArgs
             :ast

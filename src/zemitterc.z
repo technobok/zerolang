@@ -13845,6 +13845,17 @@ emitCallValue: function {
                 )
                 cec: emitEmptyColCreate :ast :symtab :ctx :call cn0: cnm.stringView
                 if cec.length > 0 then return cec
+                # a generic typedef's instance applied to its type arguments
+                # alone (`Label n: 4`) is its base's empty value
+                if (isTypedefType :symtab tid: ctid) then {
+                    return (implicitZeroValue
+                        :ast
+                        :symtab
+                        :ctx
+                        name: (regNameView :symtab tid: ctid)
+                        tid: ctid
+                    )
+                }
                 ctt: symtab.reg.typetypeOf typeId: ctid
                 if ctt == ztypes.ztypetype.recordType then return (emitRecordCtor
                     :ast
@@ -36749,8 +36760,29 @@ emitRecordDefs: function {
                     ctxBindMain :ctx name: sm.stringView unitDecl: smD
                 }
             }
+            if ph == 2 then emitTypedefInstanceConformanceImpls ast: program :symtab :ctx :buf
             ph = ph + 1
         }
+    }
+}
+
+# emitTypedefInstanceConformanceImpls -- the conformance helpers of each instance
+# of a generic typedef: no unit body declares an instance, so the per-unit pass
+# never reaches the row the instance inherited from its base.
+emitTypedefInstanceConformanceImpls: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    buf: String.borrow
+} is {
+    insts: ListVal u64
+    with tit: symtab.typing.typedefBaseTid.iterateItems do for te: tit loop {
+        if (symtab.reg.genericOriginOf tid: te.key).isZero.not then insts.append te.key.u64
+    }
+    with iit: insts.iterate do for it: iit loop {
+        implT: ztypes.tid.create from: it.u64
+        emitConformanceImplsForType :ast :symtab :ctx implTid: implT isFacet: false :buf
+        emitConformanceImplsForType :ast :symtab :ctx implTid: implT isFacet: true :buf
     }
 }
 
@@ -37198,9 +37230,10 @@ emitProtocolImpl: function {
     buf: String.borrow
 } is {
     implOrig: originTidOf :symtab tid: (ztypes.tid.create from: implTid.u64)
-    # a native mono (str) is boxed per instance, on demand (boxLabelFor)
+    # a native mono (str) is boxed per instance, on demand (boxLabelFor); an
+    # instance of a generic typedef carries the row it inherited as its own
     isNat: (nativeConformerRow :symtab tid: implTid).isZero.not
-    if implOrig > 0 when isNat.not then return
+    if implOrig > 0 when isNat.not when (isTypedefType :symtab tid: implTid).not then return
     implBase: ctxCname :ctx tid: (ztypes.tid.create from: implTid.u64)
     implCtype: implStructC :symtab :ctx tid: (ztypes.tid.create from: implTid.u64)
     protoBase: ctxCname :ctx tid: protoTid
