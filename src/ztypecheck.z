@@ -20684,13 +20684,18 @@ constraintHolds: function {
     }
 }
 
-# check that a generic argument satisfies its parameter's constraint.
+# check that a generic argument satisfies its parameter's constraint. A refusal
+# is reported at `at`/`lineno`/`colno`, the call that inferred the argument;
+# line 0 is the spec front door, which holds no source node.
 checkConstraintSat: function {
     ast: Ast
     st: zenv.ZSymbolTable
     scope: ztypes.declid
     tdecl: ztypes.declid
     paramName: zast.nameid
+    at: zast.nodeid
+    lineno: u32
+    colno: u32
     argTid: ztypes.tid
 } is {
     # a bare parameter has nothing to check yet and a partial re-checks on
@@ -20713,12 +20718,36 @@ checkConstraintSat: function {
     if ck == ztypes.constraintkind.other then {
         if (namedBoundAdmits :ast :st :scope :cd :argTid) then return
         m9: constraintUnmetText :ast :st :tdecl :paramName :argTid
-        addResolveError :st e: zast.err.genericError msg: m9
+        reportConstraintUnmet :st :at :lineno :colno msg: m9
         return
     }
     if (constraintHolds :ast :st :scope :ck :argTid) then return
     m: constraintUnmetText :ast :st :tdecl :paramName :argTid
-    addResolveError :st e: zast.err.genericError msg: m
+    reportConstraintUnmet :st :at :lineno :colno msg: m
+}
+
+# reportConstraintUnmet -- a constraint refusal, at the call that inferred the
+# argument when there is one, else with no position.
+reportConstraintUnmet: function {
+    st: zenv.ZSymbolTable
+    at: zast.nodeid
+    lineno: u32
+    colno: u32
+    msg: String
+} is {
+    if lineno == 0 then {
+        addResolveError :st e: zast.err.genericError :msg
+        return
+    }
+    (addResolveErrorH
+        :st
+        nodeid: at
+        :lineno
+        :colno
+        e: zast.err.genericError
+        :msg
+        width: 1
+    )
 }
 
 # namedBoundAdmits -- a bound that names a DECLARATION admits what that
@@ -22102,6 +22131,9 @@ buildSpecTrieKeys: function {
                 tdecl: tk8
                 paramName: pn8
                 argTid: (ztypes.tid.create from: pgot8.u64)
+                at: zast.nodeid
+                lineno: 0
+                colno: 0
             )
             keys8.append pgot8
             keyIsVal8.append false
@@ -42956,6 +42988,9 @@ checkGenericCall: function {
                 tdecl: gtk4
                 paramName: gp3
                 argTid: (ztypes.tid.create from: ggot.u64)
+                at: call.nid
+                lineno: call.lineno
+                colno: call.colno
             )
             an4: (monoValName
                 :st
