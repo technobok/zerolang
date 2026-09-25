@@ -3586,8 +3586,6 @@ recordDottedTyperef: function {
     # Ownership/access strip marker (this.borrow / StringView.borrow / Container.private):
     # record the dotted node with its peeled base AND recurse on the parent so the
     # stripped inner atom is stamped too.
-    # A `.typedef` marker only recurses -- the dotted node itself resolves to a
-    # NULL-defined typedef wrapper the dump filters out.
     # the row and its parent/child names are read through views scoped to
     # blocks (owned copies): the recordings below lend ast exclusively
     parentId: zast.nodeid
@@ -3668,19 +3666,15 @@ recordDottedTyperef: function {
                 recordTyperef :st :scope :ast :unitDecl :thisName nid: parentId
             }
         } else {
-            if (zast.nameTextEq :ast ref: cnId s: "typedef") then {
-                recordTyperef :st :scope :ast :unitDecl :thisName nid: parentId
-            } else {
-                (stampNestedTyperef
-                    :st
-                    :scope
-                    :ast
-                    :unitDecl
-                    unitId: pnId
-                    memberId: cnId
-                    :nid
-                )
-            }
+            (stampNestedTyperef
+                :st
+                :scope
+                :ast
+                :unitDecl
+                unitId: pnId
+                memberId: cnId
+                :nid
+            )
         }
     }
 }
@@ -7968,20 +7962,17 @@ asItemMarkerTarget: function {
 }
 
 # leafNamesNoMember -- a path leaf that marks its root rather than naming a
-# member of it: `.generic`, `.typedef`, an ownership or access marker, and the
-# tag spec.
+# member of it: `.generic`, an ownership or access marker, and the tag spec.
 leafNamesNoMember: function {ast: Ast.view leafId: zast.nameid} out bool is {
     if leafId == zast.names.wkTag then return true
     if (isStripMarkerId nameId: leafId) then return true
-    if (zast.markerKindOfName id: leafId).genericBound then return true
-    return (zast.nameTextEq :ast ref: leafId s: "typedef")
+    return (zast.markerKindOfName id: leafId).genericBound
 }
 
 # reportMissingTypeMember -- a dotted value `P.m` whose root names a TYPE (not a
 # unit, not a constant) that declares no member `m`: the report a read of the
 # same path gets in a body, placed at the declaration. A marker leaf --
-# `.generic`, `.typedef`, an ownership or access marker -- and the tag spec name
-# no member. True when it reported.
+# `.generic`, an ownership or access marker -- and the tag spec name no member. True when it reported.
 reportMissingTypeMember: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
@@ -8505,56 +8496,17 @@ resolveData: function {
     return (ztypes.tid.create from: did.u64)
 }
 
-# isTypedefField -- true when a type-expr astnode is an `X.typedef` dottedpath (the
-# marker that makes a record a zero-overhead typedef wrapper). Matching the astnode
-# param narrows it cleanly.
-isTypedefField: function {ast: Ast.view n: astnode.view} out bool is {
-    match (
-        n
-    ) case dottedpath then {
-        cn: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: n.child.u64))
-        return cn.stringView == "typedef"
-    } else {
-        return false
-    }
+# recordIsTypedef -- true when a definition is a `typedef`. Such a type gets no
+# field child and synthesizes `create`+`borrow` instead of `create`/`==`/`!=`.
+recordIsTypedef: function {rnode: objref} out bool is {
+    return rnode.kind == zast.objectkind.typedefDef
 }
 
-# recordIsTypedef -- true when a definition is a typedef: a `typedef`
-# declarator, or a record or class whose `is` body carries a single `X.typedef`
-# field. Such a record gets no field child and synthesizes `create`+`borrow`
-# instead of `create`/`==`/`!=`.
-recordIsTypedef: function {ast: Ast.view rnode: objref} out bool is {
-    if rnode.kind == zast.objectkind.typedefDef then return true
-    kFiter: u64
-    for kFiter < rnode.nis loop {
-        fmId: (zast.objIsItemAt :ast nid: rnode.nid i: kFiter).u32
-        kFiter = kFiter + 1
-        fm: ast.nodes.get i: fmId.u64
-        if fm.namedoperation when (isTypedefField :ast n: (ast.nodes.get i: fm.operation.u64)
-        ) then return true
-    }
-    return false
-}
-
-# objectTypedefBaseNode -- the type reference a typedef wraps: a `typedef`
-# declarator's single is-item, or the `X` of a single `X.typedef` field. Zero
-# when the object is not a typedef.
+# objectTypedefBaseNode -- the type reference a typedef wraps, its single
+# is-item. Zero when the object is not a typedef.
 objectTypedefBaseNode: function {ast: Ast.view onode: objref} out zast.nodeid is {
-    if onode.kind == zast.objectkind.typedefDef then {
-        return (zast.objIsItemAt :ast nid: onode.nid i: 0)
-    }
-    kFiter: u64
-    for kFiter < onode.nis loop {
-        fmId: (zast.objIsItemAt :ast nid: onode.nid i: kFiter).u32
-        kFiter = kFiter + 1
-        fm: ast.nodes.get i: fmId.u64
-        if fm.namedoperation when (isTypedefField :ast n: (ast.nodes.get i: fm.operation.u64)
-        ) then {
-            dr: dpRefAt :ast nid: fm.operation
-            return dr.parent
-        }
-    }
-    return (zast.nodeid.create from: 0)
+    if (recordIsTypedef rnode: onode).not then return (zast.nodeid.create from: 0)
+    return (zast.objIsItemAt :ast nid: onode.nid i: 0)
 }
 
 # objectTypedefBaseId -- the base type name of a typedef (the wrapper's base),
@@ -9795,7 +9747,7 @@ synthRecordMembers: function {
     synthRecordHash :st :ast :rnode :rid :isgen
 }
 
-# recordTypedefBase -- `X: T.typedef` records the base it wraps by BOTH channels:
+# recordTypedefBase -- `X: typedef T` records the base it wraps by BOTH channels:
 # the declaration's name id and, when it resolves here, its tid. The two are not
 # the same presence set, so both are written.
 recordTypedefBase: function {
@@ -9813,23 +9765,6 @@ recordTypedefBase: function {
     }
     tdt: objectTypedefBaseTid :st :scope :ast :unitDecl onode: rnode
     if tdt > 0 then {
-        tdn: st.reg.nameOf tid: (ztypes.tid.create from: rid.u64)
-        (refuseReftypeMember
-            :st
-            :ast
-            fm: (argref
-                nid: rnode.nid
-                name: zast.nameid
-                operation: zast.nodeid
-                lineno: rnode.lineno
-                colno: rnode.colno
-            )
-            owner: tdn.stringView
-            tid: (ztypes.tid.create from: tdt.u64)
-            what: "record typedef"
-            remedy: "class"
-            name: tdn.stringView
-        )
         tdk5: rid
         (st.typing.typedefBaseTid.set
             key: (ztypes.tid.create from: tdk5.u64)
@@ -9920,8 +9855,8 @@ attachRecordIsItems: function {
 
 # resolveRecord -- resolve a record ObjectDef into a RECORD valtype. A normal
 # record: a child per field (field name -> type-ref shell), a child per as-block
-# method, then synthesized `create`/`==`/`!=`. A typedef record (single
-# `X.typedef` field): no field child, the methods, then `create`+`borrow`. Synth
+# method, then synthesized `create`/`==`/`!=`. A typedef over a valtype
+# (`x: typedef u64`): no field child, the methods, then `create`+`borrow`. Synth
 # children are shallow FUNCTION shells (JOIN-only). Generics arrive later.
 resolveRecord: function {
     st: zenv.ZSymbolTable
@@ -9972,7 +9907,7 @@ resolveRecord: function {
         if unitTmpl.isZero.not then registerUnitParamsOn :st :ast tdecl: tdecl9 :unitTmpl
         refuseReftypeBounds :st :ast :unitDecl :scope tdecl: tdecl9 what: "record" items: asItems
     }
-    istd: recordIsTypedef :ast :rnode
+    istd: recordIsTypedef :rnode
     if istd then recordTypedefBase :st :scope :ast :unitDecl :rnode :rid
     isDecls: recordisdecls create: false eq: false ne: false
     if istd.not then isDecls = (attachRecordIsItems
@@ -12007,7 +11942,7 @@ valueStampsTyperef: function {
 # valueDeclares -- a field or parameter declaration whose value, when it folds,
 # declares the member's type: a bare name (`n: LIMIT`, `p: false`), an operator
 # (`n: 2 * 3`) or a compile-time `if` or `match`. A path is a TYPE in declaration position
-# (`zast.astnode.view`, `T.typedef`), and its value forms -- a suffixed literal,
+# (`zast.astnode.view`), and its value forms -- a suffixed literal,
 # an arm -- have paths of their own.
 valueDeclares: function {ast: Ast.view node: zast.nodeid} out bool is {
     n: ast.nodes.get i: node.u64
@@ -12204,51 +12139,6 @@ resolveNamedFieldSlot: function {
         nid: fm.operation
     )
     recordFieldDefault :st :ast :scope :cid :cidf :fname :fm
-    return needsDtor
-}
-
-# resolveClassFieldSlot -- resolve a field that is not a reference to an
-# already-declared member: its declared type, its default, and whether owning
-# it gives the class a destructor. True when it does.
-resolveClassFieldSlot: function {
-    st: zenv.ZSymbolTable
-    ast: Ast
-    unitDecl: ztypes.declid
-    scope: ztypes.declid
-    defName: StringView
-    cid: u64
-    fname: StringView
-    # the field's head type name id
-    ftn: zast.nameid
-    borrowedField: bool
-    fm: argref
-} out bool is {
-    needsDtor: false
-    if (isTypedefField :ast n: (ast.nodes.get i: fm.operation.u64)) then {
-        # No field child for the wrapper, but the inner refs
-        # (the u8 in `(List of: u8).typedef`) still stamp.
-        (recordTyperef
-            :st
-            :scope
-            :ast
-            :unitDecl
-            thisName: ""
-            nid: fm.operation
-        )
-    } else {
-        if (resolveNamedFieldSlot
-            :st
-            :ast
-            :unitDecl
-            :scope
-            :defName
-            :cid
-            :fname
-            :ftn
-            :borrowedField
-            :fm
-        ) then needsDtor = true
-    }
     return needsDtor
 }
 
@@ -12465,7 +12355,7 @@ resolveClassFieldEntry: function {
     ) case some then {
         recordMemberRefField :st :ast :cid fname: fname.stringView :mref :fm
     } case none then {
-        if (resolveClassFieldSlot
+        if (resolveNamedFieldSlot
             :st
             :ast
             :unitDecl
@@ -12733,8 +12623,8 @@ finishClassDef: function {
 # field (field name -> type-ref shell), a child per as-block method, then a synthesized
 # `create` child (LAST). Classes are reference types (is_valtype false); they get
 # `create` but NO `==`/`!=` (unlike records). A class keeps a destructor when any field
-# owns heap data (fieldTypeNeedsCleanup), else none. A typedef class (single
-# `X.typedef` field) gets no field child, synth `create`+`borrow`, and inherits
+# owns heap data (fieldTypeNeedsCleanup), else none. A typedef over a reftype
+# (`Path: typedef String`) gets no field child, synth `create`+`borrow`, and inherits
 # needs_destructor from the wrapped base (List -> yes, ListView -> no). Custom /
 # `null` create, generics + protocols come later.
 resolveClass: function {
@@ -12795,7 +12685,7 @@ resolveClass: function {
             unitTmpl: unitTmplC
         )
     }
-    istd: recordIsTypedef :ast rnode: cnode
+    istd: recordIsTypedef rnode: cnode
     if istd when (resolveClassTypedefBase :st :ast :unitDecl :scope :cid :cnode
     ) then needsDtor = true
     # a `typedef` declarator's one is-item is its base, not a field: its inner
@@ -52360,25 +52250,6 @@ resolveConstantDef: function {
                 defn: dr
                 sfLit: sfLit.stringView
                 sfTy: sfTy.stringView
-            )
-        }
-        # A `.typedef` MARKER DECLARES A FIELD'S TYPE. `Arr2: (array t: i64 to:
-        # 2).typedef` at unit level is the same construction the bare form is
-        # refused as -- and the parentheses only hid it from the test above,
-        # which reads an atom base: the definition was accepted and every use
-        # of the name reached the emitter as an unhandled binding.
-        isTdT: isTypedefField :ast n: (ast.nodes.get i: defnId.u64)
-        if sfLit.length == 0 when isTdT then {
-            dmT: "a unit-level constant takes a literal value, not a construction".string
-            dhT: "a `.typedef` marker declares the type of a FIELD; write '\{defName}' as a field's type, or alias the type itself"
-            (reportUnitConstantShape
-                :st
-                nodeid: dr.nid
-                lineno: dr.lineno
-                colno: dr.colno
-                width: sfTy.length.u32.orPanic
-                msg: dmT
-                hint: dhT
             )
         }
     } case call then {
