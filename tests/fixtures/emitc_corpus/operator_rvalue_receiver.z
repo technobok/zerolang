@@ -1,0 +1,45 @@
+# An operator's left operand is its method's receiver, taken by address; one
+# that is a call's result is bound to a temp for that address. The temp owed
+# nothing, so an OWNED result -- a class, a protocol box, a list -- leaked
+# every time; the same value as a method call's receiver was released. Both
+# now bind it the same way (receiverOnceAt). A list `==` binds either operand
+# so.
+#
+# A facet operator on a call result (the vtable path, `&recv.data`) is the
+# shape the conformance follow-up asked about; it was already right.
+Sh: protocol {
+    +: function {t: this.view o: i64} out i64
+}
+
+Cell: class { n: i64  s: String } as {
+    :Sh
+    +: function {c: this.view o: i64} out i64 is { return c.n + o }
+}
+
+adder: facet {
+    +: function {t: this.view o: i64} out i64
+}
+
+pt: record { x: i64 } as {
+    :adder
+    +: function {p: this.view o: i64} out i64 is { return p.x + o }
+}
+
+mkCell: function {n: i64} out Cell is { return (Cell :n s: "cell".string) }
+
+mkSh: function {n: i64} out Sh is { return (Sh.create from: (mkCell :n)) }
+
+mkAdder: function {n: i64} out adder is { return (adder.create from: (pt x: n)) }
+
+mkList: function {n: i64} out (ListVal i64) is {
+    xs: ListVal i64
+    xs.append n
+    return xs
+}
+
+main: function is {
+    print "\{(mkCell n: 1) + 2} \{(mkSh n: 3) + 4} \{((mkSh n: 5) + 1) + 1}"
+    print "\{(mkAdder n: 6) + 1} \{((mkAdder n: 7) + 1) + 2}"
+    ys: mkList n: 1
+    print "\{(mkList n: 1) == ys} \{ys == (mkList n: 2)} \{(mkList n: 3) != (mkList n: 3)}"
+}

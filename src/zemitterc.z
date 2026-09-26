@@ -6816,24 +6816,6 @@ hoistBorrowValArg: function {
     return vnmh
 }
 
-# lvalueForm -- `av` as something `&` may be taken of. A receiver that is
-# itself a call is not an lvalue -- C rejects `&f(x)` -- so it is bound to a
-# temp the statement flush declares; a compound literal already is one and
-# pays for nothing.
-lvalueForm: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    av: StringView
-    tid: ztypes.tid
-} out String is {
-    if (av.startsWith prefix: "((") then return av.string
-    if (isNonLvalueArg s: av).not then return av.string
-    t: hoistLvalue :ast :symtab :ctx :av :tid
-    if t.length > 0 then return t
-    return av.string
-}
-
 # receiverOnce -- a receiver a call spells more than once: a vtable call reads
 # both its table and its data through it, a function field is read through it
 # and passed it. One that is not an lvalue -- a call's result -- is bound to a
@@ -17617,11 +17599,16 @@ emitDeclaredOperator: function {
         recv = emitExpr :ast :symtab :ctx n: (ast.nodes.get i: lhsNid)
     } else {
         # `&` needs an LVALUE, and a receiver that is itself a call is not one --
-        # `&f(x)` is rejected by C. lvalueForm binds it to a temp the statement
-        # flush declares; a compound literal already is an lvalue.
+        # `&f(x)` is rejected by C. It is bound to a temp as a method call's
+        # receiver is (receiverOnceAt), so an OWNED result is released with it;
+        # a compound literal already is an lvalue.
         lv: operandValueC :ast :symtab :ctx nid: lhsNid
-        lf: lvalueForm :ast :symtab :ctx av: lv.stringView tid: owner
-        recv = "&\{lf}"
+        if (lv.startsWith prefix: "((") then {
+            recv = "&\{lv}"
+        } else {
+            lf: receiverOnceAt :ast :symtab :ctx baseNid: lhsNid text: lv.stringView tid: owner
+            recv = "&\{lf}"
+        }
     }
     orderArgAt :ast :symtab :ctx st: ord mark: mk text: recv nid: lhsNid byPtr: true slot: 0
     mkR: pendingHoistMark :ctx
@@ -17700,7 +17687,8 @@ emitListEqOperator: function {
 }
 
 # listOperandAddr -- the address of a list operand; a list already held by
-# pointer is its own.
+# pointer is its own. One that is a call's result is bound to a temp as a
+# receiver is (receiverOnceAt), so an owned list is released with it.
 listOperandAddr: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -17712,7 +17700,8 @@ listOperandAddr: function {
         return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: nid))
     }
     lv: operandValueC :ast :symtab :ctx :nid
-    lf: lvalueForm :ast :symtab :ctx av: lv.stringView :tid
+    if (lv.startsWith prefix: "((") then return "&\{lv}"
+    lf: receiverOnceAt :ast :symtab :ctx baseNid: nid text: lv.stringView :tid
     return "&\{lf}"
 }
 

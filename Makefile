@@ -1875,7 +1875,10 @@ perf: $(PERFBIN)
 #
 # +34 a generic union instance is minted with its destructor flag: 0
 # behaviour, 34 source.
-ALLOC_BASELINE := 2736790
+#
+# -212 an operator's owned rvalue receiver is released: 0 behaviour, -212
+# source (lvalueForm is gone).
+ALLOC_BASELINE := 2736578
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
