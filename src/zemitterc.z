@@ -16436,8 +16436,9 @@ emitDottedTagRead: function {
 }
 
 # moveMarkerMovesBase -- whether `.take`/`.hold` on this base moves a heap
-# value: a String, a union, a by-value class (a borrowed pointer-param class
-# is not a move source), or a function value.
+# value: a String, a union, a protocol value (it owns its box), a by-value
+# class (a borrowed pointer-param class is not a move source), or a function
+# value.
 moveMarkerMovesBase: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -16450,7 +16451,7 @@ moveMarkerMovesBase: function {
     tkt: stampIdOf :symtab nid: tknid
     if tkt == ctx.strTid then return true
     tt: symtab.reg.typetypeOf typeId: tkt
-    if tt == ztypes.ztypetype.unionType then return true
+    if tt == ztypes.ztypetype.unionType or (tt == ztypes.ztypetype.protocolType) then return true
     if tt == ztypes.ztypetype.functionType then return true
     if tt == ztypes.ztypetype.classType then {
         return (isPtrVid :ctx vid: (atomVid :symtab nid: tknid)).not
@@ -38829,12 +38830,12 @@ leafMoves: function {ast: Ast.view leaf: zast.nodeid} out bool is {
 }
 
 # vtableAutoCallName -- a member that dispatches through the vtable. `create`
-# and the `.borrow` / `.drop` markers are emitted by their own legs
-# (emitProtocolCreateCall and the destroy helper) and have no vtable slot.
+# and every ownership marker (`.take`, `.hold`, `.borrow`, `.drop`, ...) are
+# emitted by their own legs and name no vtable slot -- a marker is a reserved
+# word, so no spec declares a method by its name.
 vtableAutoCallName: function {ast: Ast.view leaf: zast.nodeid name: StringView} out bool is {
     if name == "create" then return false
-    mk: zast.markerKindOfLeaf :ast :leaf
-    return (mk.borrowMarker or mk.dropMarker).not
+    return (zast.markerKindOfLeaf :ast :leaf).unmarked
 }
 
 # vtableAutoCallC -- a ZERO-ARG method auto-call on a protocol/facet receiver.

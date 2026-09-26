@@ -1892,7 +1892,9 @@ perf: $(PERFBIN)
 #
 # -1194 a call through a function value builds its arguments as a direct call
 # does: 0 behaviour, -1194 source (orderFnptrArg's own copy is gone).
-ALLOC_BASELINE := 2739561
+#
+# +13 `.take`/`.hold` hand a protocol value on: 0 behaviour, 13 source.
+ALLOC_BASELINE := 2739574
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
