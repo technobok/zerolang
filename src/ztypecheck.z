@@ -19763,6 +19763,12 @@ checkInterpPart: function {
         isBare = pn.atomid
     }
     if isFn when isBare when st.typing.errors.length > 0 then return
+    # a bare name is spliced where it stands: a READ of its storage, which an
+    # exclusive pin on it refuses as it refuses a field read
+    if isBare when (typeIsReftype :st tid: ptid) then {
+        pn2: ast.nodes.get i: partId.u64
+        refuseReadUnderPin :st :ast nid: partId lineno: (nodeLine n: pn2) colno: (nodeCol n: pn2)
+    }
     if (printableInterpTid :ast :st tid: ptid) then {
         # A PART IS A VALUE HELD WHILE IT IS SPLICED. A part no name binds -- a
         # call's result, a path that auto-calls one -- is built, appended to the
@@ -28710,7 +28716,7 @@ checkResolvedMember: function {
             :st
             tid: (ztypes.tid.create from: rm.u64)
         ) then argVal = true
-        if argVal.not then refuseReadUnderPin :st :ast :dp
+        if argVal.not then refuseReadUnderPin :st :ast nid: dp.nid lineno: dp.lineno colno: dp.colno
     }
     # A FUNCTION FIELD NAMED AS A WRITE TARGET is the slot, not a call of it:
     # `h.zero = other.take` replaces the function, where auto-calling typed the
@@ -29766,20 +29772,26 @@ typedefHidesMember: function {
     return false
 }
 
-# refuseReadUnderPin -- the dotted path is READ while another variable holds
-# an EXCLUSIVE pin over it: the pin says that holder may be writing through
-# its reference, so the source is read through the holder or not at all until
-# the holder dies.
-refuseReadUnderPin: function {st: zenv.ZSymbolTable ast: Ast.view dp: dpref} is {
+# refuseReadUnderPin -- the path at `nid` (a dotted path, or a bare name read as
+# a value) is READ while another variable holds an EXCLUSIVE pin over it: the
+# pin says that holder may be writing through its reference, so the source is
+# read through the holder or not at all until the holder dies.
+refuseReadUnderPin: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    nid: zast.nodeid
+    lineno: u32
+    colno: u32
+} is {
     # the root alone answers the common case: no variable holds an EXCLUSIVE
     # lock on it, so there is nothing to overlap and no path to build
-    rid: rootNameIdOf :ast n: (ast.nodes.get i: dp.nid.u64)
+    rid: rootNameIdOf :ast n: (ast.nodes.get i: nid.u64)
     if rid.isZero then return
     rd: st.findLocal nameId: rid
     if rd.isZero then return
     if (st.hasExclusiveVarLock declId: rd).not then return
     rp: ListVal zast.nameid
-    appendValueTuple :ast n: (ast.nodes.get i: dp.nid.u64) dst: rp
+    appendValueTuple :ast n: (ast.nodes.get i: nid.u64) dst: rp
     if rp.length == 0 then return
     rvo: st.lookupVarId nameId: (rp.get i: 0)
     if rvo.none then return
@@ -29795,9 +29807,9 @@ refuseReadUnderPin: function {st: zenv.ZSymbolTable ast: Ast.view dp: dpref} is 
             nr: String
             (addErrorH
                 :st
-                nodeid: dp.nid
-                lineno: dp.lineno
-                colno: dp.colno
+                nodeid: nid
+                :lineno
+                :colno
                 e: zast.err.ownerError
                 msg: mr
                 note: nr
