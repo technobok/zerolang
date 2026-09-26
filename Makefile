@@ -1878,7 +1878,11 @@ perf: $(PERFBIN)
 #
 # -212 an operator's owned rvalue receiver is released: 0 behaviour, -212
 # source (lvalueForm is gone).
-ALLOC_BASELINE := 2736578
+#
+# +536 an instance a type names is sited: 2 behaviour (the site table holds the
+# instances the compiler's own signatures and fields name first, and grows
+# twice more), 534 source.
+ALLOC_BASELINE := 2737114
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
