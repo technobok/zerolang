@@ -5836,6 +5836,50 @@ type has no place in the vtable and is not compared. Linting defers to the
 spec too: a method implementing a spec member keeps the spec's receiver, and
 L027 does not ask it to be #~".view".
 
+#p: #b:"Generic conformers."
+
+A generic class, union, record or variant declares a conformance in its
+#~"as" clause as any other type does, and the marker is a promise for
+#_*"every" instance. Each instance the program makes is checked against the
+spec, exactly, with its own methods -- the template's, with the instance's
+type arguments in place of its parameters. An instance that breaks the
+promise is reported at the marker, in the template's name, with a note
+naming the instance and where it was made; a failure every instance shares
+is reported once. A template nothing instantiates is not checked. Each
+instance is a conformer of its own: it has its own vtable, and a facet's
+data union has a member for it.
+
+#code language=zerolang: """
+  Getter: protocol {
+      get: function {t: this.view} out i64
+  }
+
+  Box: class {
+      v: t
+  } as {
+      t: anyval.generic
+      :Getter
+      get: function {t: this.view} out t is {
+          return t.v
+      }
+  }
+
+  main: function is {
+      a: Box v: 7          # Box with t = i64 conforms
+      b: Box v: 7.u8       # Box with t = u8 does not
+      print "\{a.get} \{b.get}"
+  }
+
+  # error[E0100]: 'Box' implements Getter's 'get' returning u8, where the spec's returns i64
+  #  --> app.z:9:6
+  #    9 |     :Getter
+  #      |      ^
+  #      = note: in the instance of `Box` with t = u8, instantiated at app.z line 17
+  """
+
+A marker names a protocol or facet; conforming to an instance of a generic
+protocol is not supported.
+
 Protocols can be used:
 
 - to create protocol instances: see [#> to=protocol-instance-creation: protocol
@@ -6022,13 +6066,18 @@ Although the data is always copied, #~"borrow" still locks the source to
 maintain consistent ownership semantics with protocols. This is important
 when facets and protocols are used interchangeably in generic code.
 
+A conformer's facet label reads as a facet value too, as a protocol label
+does: with #~"p" a #~"point" above, #~"p.m" is a #~"measurable" holding a
+copy of #~"p".
+
 #----: Runtime layout
 
 Facet instances are stack-allocated value types. The C representation is:
 
 #ul:
   [#*: A pointer to the vtable (constant offset, first field)]
-  [#*: An inline data union sized to the largest conforming type]
+  [#*: An inline data union sized to the largest conforming type, each
+  instance of a generic conformer counting as a type of its own]
 
 No heap allocation or destructor is needed. Method dispatch goes through
 the vtable, the same as protocols.
