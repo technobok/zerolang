@@ -1,0 +1,79 @@
+Getter: protocol {
+    v: anyval.generic
+    get: function {t: this.view} out v
+    same: function {t: this.view x: v} out bool
+}
+
+Sized: facet {
+    n: anyval.generic
+    size: function {t: this.view} out n
+    fits: function {t: this.view limit: n} out bool
+}
+
+Cell: class { n: i64 } as {
+    g: (Getter v: i64)
+    get: function {t: this.view} out i64 is { return t.n }
+    same: function {t: this.view x: i64} out bool is { return t.n == x }
+}
+
+Label: class { s: String } as {
+    g: (Getter v: bool)
+    get: function {t: this.view} out bool is { return t.s.length > 3 }
+    same: function {t: this.view x: bool} out bool is { return t.get == x }
+}
+
+Shape: union { box: Cell empty: null } as {
+    g: (Getter v: i64)
+    get: function {t: this.view} out i64 is {
+        match (t) case box then return t.n case empty then return 0
+    }
+    same: function {t: this.view x: i64} out bool is { return t.get == x }
+}
+
+pt: record { x: u32 } as {
+    m: (Sized n: u32)
+    size: function {t: this.view} out u32 is { return t.x }
+    fits: function {t: this.view limit: u32} out bool is { return t.x < limit }
+}
+
+kind: variant { small: i64 big: i64 } as {
+    m: (Sized n: i64)
+    size: function {t: this.view} out i64 is {
+        match (t) case small then return t case big then return t * 10
+    }
+    fits: function {t: this.view limit: i64} out bool is { return (t.size) < limit }
+}
+
+readI: function {g: (Getter v: i64).view} out i64 is { return g.get }
+
+isFour: function {g: (Getter v: i64).view} out bool is { return (g.same x: 4) }
+
+readB: function {g: (Getter v: bool)} out bool is { return g.get }
+
+sizeU: function {s: (Sized n: u32)} out u32 is { return s.size }
+
+fitsI: function {s: (Sized n: i64).view} out bool is { return (s.fits limit: 50) }
+
+bounded: function {g: T} out i64 is { return g.get } as {
+    T: (Getter v: i64).generic
+}
+
+sizedBound: function {s: S} out u32 is { return s.size } as {
+    S: (Sized n: u32).generic
+}
+
+main: function is {
+    c: Cell n: 4
+    print "\{readI g: c} \{c.g.get} \{bounded g: c} \{isFour g: c} \{isFour g: (Cell n: 5)}"
+    print "\{readB g: (Label s: "long".string)}"
+    sh: Shape.box (Cell n: 9)
+    print "\{readI g: sh}"
+    xs: List (Getter v: i64)
+    xs.append ((Getter v: i64).create from: (Cell n: 5))
+    xs.append ((Getter v: i64).create from: (Shape.box (Cell n: 6)))
+    for x: xs.iterate loop print "\{x.get}"
+    p: pt x: 3
+    print "\{sizeU s: p} \{p.m.size} \{fitsI s: (kind.big 4)} \{fitsI s: (kind.big 9)} \{sizedBound s: p}"
+    own: (Sized n: u32).create from: (pt x: 7)
+    print "\{own.size}"
+}

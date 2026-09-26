@@ -1863,7 +1863,10 @@ perf: $(PERFBIN)
 #
 # +1147 an `as` item called on a head that names nothing is reported: 0
 # behaviour, 1147 source.
-ALLOC_BASELINE := 2729536
+#
+# +5793 a marker names a generic spec's instance: 0 behaviour (the compiler's
+# own source declares no generic spec), 5793 source.
+ALLOC_BASELINE := 2735329
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

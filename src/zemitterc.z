@@ -34577,8 +34577,10 @@ maybePreEmitElem: function {
         if srid > 0 then rid0 = ztypes.tid.create from: srid.u64
     }
     cid: chaseAggregateTypedef :symtab :ctx tid: (ztypes.tid.create from: rid0.u64)
+    # an instance is emitted by its own sweep, but a user's spec instance is
+    # emitted as a user spec is
     monoLk4: originTidOf :symtab tid: (ztypes.tid.create from: cid.u64)
-    if monoLk4 > 0 then return
+    if monoLk4 > 0 when (userSpecInstance :symtab tid: cid).not then return
     if (isGenericType :symtab tid: (ztypes.tid.create from: cid.u64)) then return
     duoPe: definedInUnitName :symtab tid: (ztypes.tid.create from: cid.u64)
     peUnit: ctx.mainName.copy
@@ -34890,10 +34892,15 @@ buildUserTypeList: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view acc: L
         if isStruct then {
             mo: originTidOf :symtab tid: (ztypes.tid.create from: t.u64)
             gen: isGenericType :symtab tid: (ztypes.tid.create from: t.u64)
-            if mo.isZero when gen.not when (definedInUnitTid
-                :symtab
-                tid: (ztypes.tid.create from: t.u64)
-            ).isZero.not then {
+            own: (
+                mo.isZero and
+                gen.not and
+                (definedInUnitTid
+                    :symtab
+                    tid: (ztypes.tid.create from: t.u64)
+                ).isZero.not
+            )
+            if own or (userSpecInstance :symtab tid: (ztypes.tid.create from: t.u64)) then {
                 emOk: (symtab.reg.isNativeOf
                     tid: (ztypes.tid.create from: t.u64)
                 ).not
@@ -35754,6 +35761,20 @@ seedFnptrValues: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx
     }
 }
 
+# userSpecInstance -- an instance of a user's generic protocol or facet: its
+# struct and vtable are the program's to write, where the template's
+# non-generic siblings are written. A partial names a parameter and is no type
+# the C has.
+userSpecInstance: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    tt: symtab.reg.typetypeOf typeId: tid
+    if tt != ztypes.ztypetype.protocolType when tt != ztypes.ztypetype.facetType then return false
+    mo: originTidOf :symtab :tid
+    if mo.isZero then return false
+    if (symtab.reg.isPartialOf :tid) then return false
+    if (definedInUnitTid :symtab tid: (ztypes.tid.create from: mo.u64)).isZero then return false
+    return (symtab.reg.isNativeOf tid: (ztypes.tid.create from: mo.u64)).not
+}
+
 # emitUserProtocols -- user PROTOCOLs upfront: a protocol value is a fat pointer,
 # so nothing embeds one by value and it can precede every struct that names it.
 emitUserProtocols: function {
@@ -35768,8 +35789,13 @@ emitUserProtocols: function {
         if (symtab.reg.typetypeOf typeId: tp) == ztypes.ztypetype.protocolType then {
             pgen: isGenericType :symtab tid: tp
             pmo: originTidOf :symtab tid: tp
-            if pmo.isZero when pgen.not when (definedInUnitTid :symtab tid: tp
-            ).isZero.not when (symtab.reg.isNativeOf tid: tp).not then {
+            pown: (
+                pmo.isZero and
+                pgen.not and
+                (definedInUnitTid :symtab tid: tp).isZero.not and
+                (symtab.reg.isNativeOf tid: tp).not
+            )
+            if pown or (userSpecInstance :symtab tid: tp) then {
                 (emitUserTypeById
                     :ast
                     :symtab

@@ -6771,6 +6771,7 @@ forceMemberDecl: function {
             unitDecl: unD
             :ast
             opNid: (zast.nodeid.create from: opId)
+            ownerDecl: (declOfTypeId :st tid: (ztypes.tid.create from: otid.u64))
         )
     }
     st.typing.declSetResolving declId: memberDeclId mark: false
@@ -7170,19 +7171,25 @@ resolveSpecFn: function {
 # any other as-item. A marker is a reference: its target resolves on discovery,
 # depth-first, before anything is asked of it -- the conformer's destructor
 # follows the target's, which exists only once the target's body resolved, so
-# the order the two are written in cannot decide it.
+# the order the two are written in cannot decide it. A type application
+# (`g: (Getter v: i64)`) names an instance of a generic spec, resolved in
+# `ownerDecl`, the conforming type, whose own parameters it may name.
 markerTargetId: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     scope: ztypes.declid
     ast: Ast
     opNid: zast.nodeid
+    ownerDecl: ztypes.declid
 } out optionval u64 is {
     nameId: zast.nameid
+    isApp: false
     {
         op: ast.nodes.get i: opNid.u64
         nameId = atomNameId :ast n: op
+        isApp = op.call
     }
+    if isApp then return (markerApplicationTarget :st :unitDecl :scope :ast :opNid :ownerDecl)
     if nameId.isZero then return (optionval.none u64)
     {
         mnm: zast.nameTextCopy :ast ref: nameId
@@ -7215,6 +7222,35 @@ markerTargetId: function {
     } case none then {
         return (optionval.none u64)
     }
+}
+
+# markerApplicationTarget -- the spec instance a marker's type application
+# names, resolved as the same application written in a signature is; none when
+# it names no protocol or facet instance.
+markerApplicationTarget: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    ast: Ast
+    opNid: zast.nodeid
+    ownerDecl: ztypes.declid
+} out optionval u64 is {
+    r: (resolveMonoRefInline
+        :st
+        :ast
+        :unitDecl
+        :scope
+        thisName: ""
+        enclDecl: ownerDecl
+        :opNid
+        nid: opNid.u32
+    )
+    if r == 0 then return (optionval.none u64)
+    tt: st.reg.typetypeOf typeId: (ztypes.tid.create from: r.u64)
+    if tt == ztypes.ztypetype.protocolType or (tt == ztypes.ztypetype.facetType) then {
+        return (optionval.some r)
+    }
+    return (optionval.none u64)
 }
 
 # asDeclaresMemberId -- the as-block declares the member named by `nameId` as a
@@ -7333,7 +7369,7 @@ attachAsConstant: function {
         if reported.not then reported = reportUnknownAsCallHead :st :ast :parentId :item
         # attachMarkers classifies a bare name or a path, which may name a
         # conformance or a type
-        if reported.not when (valueMayNameType :ast node: item.operation) then return
+        if reported.not when (valueMayNameType :st :ast :parentId node: item.operation) then return
     }
     st.typing.markAsConstDecl declId: md
 }
@@ -7376,11 +7412,28 @@ reportUnknownAsCallHead: function {
 }
 
 # valueMayNameType -- a declaration's value spelled as a bare name or a path,
-# the only forms a type or a conformance can take.
-valueMayNameType: function {ast: Ast.view node: zast.nodeid} out bool is {
-    n: ast.nodes.get i: node.u64
-    if n.dottedpath then return true
-    return (bareAtomNameId :n).isZero.not
+# or as a type application whose head names a type (`g: (Getter v: i64)`): the
+# only forms a type or a conformance can take. The head is looked up where the
+# type `parentId` is declared.
+valueMayNameType: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    parentId: ztypes.tid
+    node: zast.nodeid
+} out bool is {
+    headId: zast.nameid
+    {
+        n: ast.nodes.get i: node.u64
+        if n.dottedpath then return true
+        if n.call.not then return (bareAtomNameId :n).isZero.not
+        headId = bareAtomNameId n: (ast.nodes.get i: n.callable.u64)
+    }
+    if headId.isZero then return false
+    td: declOfTypeId :st tid: parentId
+    if td.isZero then return false
+    sc: declParentIdOf :st declId: td
+    ud: unitRootOfDecl :st declId: td
+    return (walkLookupTyperefById :st scope: sc :ast unitDecl: ud baseId: headId).some
 }
 
 # reportAsMemberNotConstant -- an `as` item whose value is a bare name the type's
@@ -7587,6 +7640,9 @@ recordConformance: function {
     # the marker's operation node, for the refusal's position
     markerOp: zast.nodeid
 } is {
+    # refused, the row is still recorded, as a reference type's facet row is
+    # below: the marker is no field either way
+    refuseGenericSpecMarker :st :ast :specTypeId :label :markerOp
     tt: st.reg.typetypeOf typeId: (ztypes.tid.create from: specTypeId.u64)
     recordIt: false
     isFacetC: false
@@ -7632,6 +7688,54 @@ recordConformance: function {
     }
 }
 
+# refuseGenericSpecMarker -- a marker naming a GENERIC spec itself (`g: Getter`,
+# `:Getter`) names no interface a type can implement: each instance is its own.
+# Refused at the marker, which is shown the instance form; nothing is inferred
+# from the conformer's methods.
+refuseGenericSpecMarker: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    specTypeId: u64
+    label: StringView
+    markerOp: zast.nodeid
+} is {
+    stid: ztypes.tid.create from: specTypeId.u64
+    if (st.reg.isGenericOf tid: stid).not then return
+    stt: st.reg.typetypeOf typeId: stid
+    if stt != ztypes.ztypetype.protocolType when stt != ztypes.ztypetype.facetType then return
+    sn: st.reg.nameOf tid: stid
+    ex: "\{label}: (\{sn}"
+    td: declOfTypeId :st tid: stid
+    with pit: (st.reg.genericParamNamesOf tdecl: td).iterate do for pn: pit loop {
+        cd: st.reg.genericParamConstraintOf tdecl: td paramName: pn
+        pt: zast.nameTextAt :ast ref: pn
+        ex.append " \{pt}: \{exampleArgFor :ast :cd}"
+    }
+    ex.append ")"
+    n: ast.nodes.get i: markerOp.u64
+    (addError
+        :st
+        nodeid: markerOp
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.typeError
+        msg: "'\{sn}' is generic: name the instance this type conforms to, e.g. `\{ex}`"
+    )
+}
+
+# exampleArgFor -- a type a parameter's bound admits, to show an instance form
+# with: i64 for a value or unbounded one, String for a reference one, the
+# bound itself when it names a declaration.
+exampleArgFor: function {ast: Ast.view cd: ztypes.constraintdesc} out String is {
+    if cd.kind == ztypes.constraintkind.refType then return "String".string
+    if cd.kind == ztypes.constraintkind.refHashable then return "String".string
+    if cd.kind == ztypes.constraintkind.stringLike then return "String".string
+    if cd.kind == ztypes.constraintkind.other when cd.boundName.isZero.not then {
+        return (zast.nameTextCopy :ast ref: cd.boundName)
+    }
+    return "i64".string
+}
+
 # conformanceOwn -- a receiver's or parameter's marker as a conformance compares
 # it: `.borrow` is the default a missing marker means, and a bare `:this` is
 # recorded as one, so the two read alike.
@@ -7675,6 +7779,8 @@ checkConformances: function {ast: Ast st: zenv.ZSymbolTable} is {
             mnid = zast.nodeid.create from: dnode
         }
         implName: st.reg.nameOf tid: implT
+        # a marker naming a generic spec itself was refused where it was written
+        if (st.reg.isGenericOf tid: specT) then continue
         if (st.reg.isGenericOf tid: implT) when (st.reg.isNativeOf tid: implT).not then {
             checkInstanceConformances :st :ast row: ci markerOp: mnid implName: implName.stringView
         } else {
@@ -7976,7 +8082,7 @@ checkConformanceMethod: function {
     markerOp: zast.nodeid
     implName: StringView
 } is {
-    specName: st.reg.nameOf tid: specTid
+    specName: specWrittenName :st :ast tid: specTid
     mname: zast.poolTextAt pool: ast.names ref: mnameId
     imid: conformanceImplMethod :st :implTid :mnameId
     if imid.isZero then {
@@ -8206,7 +8312,14 @@ asItemMarkerTarget: function {
     item: zast.nameid
     op: zast.nodeid
 } out optionval u64 is {
-    mtid: markerTargetId :st :scope :unitDecl :ast opNid: op
+    mtid: (markerTargetId
+        :st
+        :scope
+        :unitDecl
+        :ast
+        opNid: op
+        ownerDecl: (declOfTypeId :st tid: (ztypes.tid.create from: parentId.u64))
+    )
     refused: false
     match (
         mtid
@@ -13048,6 +13161,14 @@ resolveClass: function {
     )
 }
 
+# markInstanceSpecMethod -- every method of a generic interface is its
+# instances' own: each instance clones it with the parameters substituted, in
+# its parameters as in its return (a return typed by one already marks it;
+# `fits: function {t: this.view limit: n}` returns none).
+markInstanceSpecMethod: function {st: zenv.ZSymbolTable fnId: u64} is {
+    st.reg.setGeneric typeId: (ztypes.tid.create from: fnId.u64) value: true
+}
+
 # registerInterfaceGenerics -- a protocol or a facet declares its generic
 # parameters in the IS block, beside the spec methods, where every other
 # declaring kind uses `as`. They are registered here, so isGenericParamOf
@@ -13145,6 +13266,7 @@ resolveFacet: function {
                     nameId: sm.name
                     childTypeId: sido
                 )
+                if isgen then markInstanceSpecMethod :st fnId: sido
             }
         }
     }
@@ -13240,6 +13362,7 @@ resolveProtocol: function {
                     nameId: sm.name
                     childTypeId: sido
                 )
+                if isgen then markInstanceSpecMethod :st fnId: sido
             }
         }
     }
@@ -20752,6 +20875,31 @@ mintMono: function {
     mintMonoRecordShape :ast :st :rf :templateId :mid :tt
     mintMonoTagShape :st :mid :tt :name
     synthInstanceValueMembers :ast :st :rf :templateId :mid :tt
+    mintSpecInstanceShape :st :mid :tt
+}
+
+# mintSpecInstanceShape -- an instance of a generic protocol or facet is the
+# interface a non-generic one is: it takes the `create` resolveProtocol and
+# resolveFacet synthesise for one (a generic template has none, so the
+# instance copied none), and a protocol instance the destructor every protocol
+# has, for the box an owning one holds.
+mintSpecInstanceShape: function {st: zenv.ZSymbolTable mid: u64 tt: ztypes.ztypetype} is {
+    if tt != ztypes.ztypetype.protocolType when tt != ztypes.ztypetype.facetType then return
+    mt: ztypes.tid.create from: mid.u64
+    if (st.typing.declHasMemberId parentTypeId: mt nameId: zast.names.wkCreate).not then {
+        createId: (st.reg.newType
+            name: "create"
+            ownerTid: mid
+            typetype: ztypes.ztypetype.functionType
+        )
+        (st.typing.declSynthMemberTyped
+            parentTypeId: mt
+            nameId: zast.names.wkCreate
+            kind: ztyping.declkind.methodDecl
+            childTypeId: createId
+        )
+    }
+    if tt == ztypes.ztypetype.protocolType then st.reg.setNeedsDestructor typeId: mt
 }
 
 # mintMonoTypedefBase -- an instance of a generic typedef wraps the instance of
@@ -38457,7 +38605,11 @@ checkSpecStandIns: function {ast: Ast st: zenv.ZSymbolTable} is {
         }
         vn: "'\{st.reg.nameOf tid: su.value}'"
         if (isLiteralTypeId :st tid: su.value) then vn = "a numeric literal".string
-        sn: st.reg.nameOf tid: su.spec
+        sn: specWrittenName :st :ast tid: su.spec
+        hn: "a conformer declares `:\{sn}` in its `as` block"
+        if (st.reg.genericOriginOf tid: su.spec).isZero.not then {
+            hn = "a conformer declares `name: \{sn}` in its `as` block"
+        }
         (addErrorH
             :st
             nodeid: su.nid
@@ -38466,7 +38618,7 @@ checkSpecStandIns: function {ast: Ast st: zenv.ZSymbolTable} is {
             e: zast.err.typeError
             msg: "\{vn} cannot stand in for \{sn}: it does not conform to it"
             note: String
-            hint: "a conformer declares `:\{sn}` in its `as` block"
+            hint: hn
             width: 1
         )
     }
@@ -38548,12 +38700,38 @@ standInNeedsBox: function {
     return vtt == ztypes.ztypetype.unionType
 }
 
+# specWrittenName -- a spec as a program writes it: its name, or for an
+# instance of a generic spec the application that names it, `(Getter v: i64)`.
+specWrittenName: function {st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid} out String is {
+    org: st.reg.genericOriginOf :tid
+    if org.isZero then return (st.reg.nameOf :tid)
+    otid: ztypes.tid.create from: org.u64
+    r: "(\{st.reg.nameOf tid: otid}"
+    pns: st.reg.genericParamNamesOf tdecl: (declOfTypeId :st tid: otid)
+    n: st.reg.genericArgCount specId: tid
+    i: u64
+    for i < n loop {
+        a: st.reg.genericArgAt specId: tid ordinal: i
+        at: st.reg.nameOf tid: (ztypes.tid.create from: a.u64)
+        if (st.reg.genericArgIsValueAt specId: tid ordinal: i) then at = "\{a}"
+        if i < pns.length then {
+            pt: zast.nameTextAt :ast ref: (pns.get :i)
+            r.append " \{pt}: \{at}"
+        } else {
+            r.append " \{at}"
+        }
+        i = i + 1
+    }
+    r.append ")"
+    return r
+}
+
 # reportOwnedStandIn -- a conformer written where the value is owned. The
 # place would own a box of a value it never took, so it says how to make one
 # that owns: `P.create from: d.take`, or the construction wrapped as it is.
 reportOwnedStandIn: function {ast: Ast st: zenv.ZSymbolTable su: ztyping.specstandin} is {
     vn: st.reg.nameOf tid: su.value
-    sn: st.reg.nameOf tid: su.spec
+    sn: specWrittenName :st :ast tid: su.spec
     fix: "wrap it: `\{sn}.create from: (...)`"
     bn: bareAtomNameId n: (ast.nodes.get i: su.valueNid.u64)
     if bn.isZero then bn = takenBareName :ast nid: su.valueNid
