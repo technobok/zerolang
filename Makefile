@@ -1836,7 +1836,10 @@ perf: $(PERFBIN)
 #
 # +4420 member use on a type parameter waits for the instance: 6 behaviour,
 # 4411 source; perf-strict reads 3 more than ab.sh.
-ALLOC_BASELINE := 2721562
+#
+# +2870 a reference to a function over a spec or a variant has its typedef: 0
+# behaviour (the compiler's own source takes no such reference), 2870 source.
+ALLOC_BASELINE := 2724432
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

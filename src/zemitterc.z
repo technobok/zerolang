@@ -12861,6 +12861,13 @@ emitFnptrFieldCall: function {
     )
 }
 
+# specParamTid -- a protocol or facet type: a parameter a conformer is handed
+# to boxed.
+specParamTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    tt: symtab.reg.typetypeOf typeId: tid
+    return tt == ztypes.ztypetype.protocolType or (tt == ztypes.ztypetype.facetType)
+}
+
 # orderFnptrArg -- one written argument of a call through a function field,
 # built in evaluation order into the slot of the parameter it binds, passed the
 # way that parameter takes it.
@@ -12894,10 +12901,31 @@ orderFnptrArg: function {
             pid: (ztypes.tid.create from: pid)
         )
     }
+    # a conformer handed to a protocol / facet slot goes in as its conformance
+    # box, as it does in a direct call (userFnArgText)
+    projd: false
+    if slot < argIds.length when (specParamTid :symtab tid: (ztypes.tid.create from: pid)) then {
+        pntC: zast.poolTextAt pool: ast.names ref: pnm
+        spec: (conformanceArgText
+            :ast
+            :symtab
+            :ctx
+            argOpNode: op
+            av: av.stringView
+            avVid: (atomVidIfPlain :ast :symtab :ctx n: op text: av.stringView)
+            protoTid: pid
+            owning: (paramTakesArg :ast :symtab fid: fnTid pname: pntC.stringView)
+        )
+        if spec.length > 0 then {
+            av = spec
+            projd = true
+            addr = false
+        }
+    }
     # an argument that already holds a pointer is not addressed again, and a
     # by-value parameter is handed the value of a pointer-held valtype
     if addr when (pathIsPointer :ast :symtab :ctx n: op) then addr = false
-    if addr.not when (ptrHeldValtype :ast :symtab :ctx n: op) then av = "(*\{av})"
+    if addr.not when projd.not when (ptrHeldValtype :ast :symtab :ctx n: op) then av = "(*\{av})"
     if addr then av = (emitByrefArg
         :ast
         :symtab
@@ -35381,9 +35409,41 @@ ensureFwdStruct: function {
     }
 }
 
-# isComplexFnptrParam -- a PROTOCOL/FACET/UNION/VARIANT type is not cleanly
-# forward-declarable as a by-value fnptr param/return (vtable fat pointers,
-# anonymous tagged-union structs); a function using one is never an fnptr value.
+# fwdTaggedSpec -- a protocol, a facet or a non-ordinal variant: a struct the
+# emitter writes as an anonymous typedef unless the type was forward-declared,
+# in which case the body is the tagged `struct X_t { ... };` a forward
+# declaration can name. An ORDINAL variant is its own discriminator, a plain
+# scalar with nothing to declare.
+fwdTaggedSpec: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    tt: symtab.reg.typetypeOf typeId: tid
+    if tt == ztypes.ztypetype.protocolType or (tt == ztypes.ztypetype.facetType) then return true
+    if tt != ztypes.ztypetype.variantType then return false
+    return (isOrdinalVariant :symtab :tid).not
+}
+
+# fwdDeclareSpec -- a protocol, facet or variant in a fnptr signature, not yet
+# written: `typedef struct X_t X_t;`, once, so its emitter writes the tagged
+# body the declaration names. A native type's C is the runtime's.
+fwdDeclareSpec: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    buf: String.borrow
+} is {
+    if (fwdTaggedSpec :symtab :tid).not then return
+    if (typeStructEmitted :ctx :tid) then return
+    if (ctx.fwdDeclaredTypes.has item: tid) then return
+    if (symtab.reg.isNativeOf :tid) then return
+    cn: ctxCname :ctx :tid
+    ctx.fwdDeclaredTypes.add item: tid.u64
+    l0: "typedef struct \{cn}_t \{cn}_t;\n"
+    buf.append l0
+}
+
+# isComplexFnptrParam -- a PROTOCOL/FACET/UNION/VARIANT type a by-value fnptr
+# param or return cannot name: one that is neither written yet nor declared
+# ahead. ensureFwdStruct declares the specs and variants and the main forward
+# pass the unions, so this is the guard for a type neither reached.
 #
 # An ORDINAL variant is the exception, and `bool` is one: the value IS its own
 # discriminator, so it reaches the C as a plain scalar with nothing to forward
@@ -35402,7 +35462,7 @@ isComplexFnptrParam: function {
     if can > 0 then ct = ztypes.tid.create from: can.u64
     if (isOrdinalVariant :symtab tid: ct) then return false
     tt: symtab.reg.typetypeOf typeId: ct
-    return (
+    isAgg: (
         tt ==
         ztypes.ztypetype.protocolType or
         (tt == ztypes.ztypetype.facetType) or
@@ -35411,6 +35471,9 @@ isComplexFnptrParam: function {
         ) or
         (tt == ztypes.ztypetype.variantType)
     )
+    if isAgg.not then return false
+    if (typeStructEmitted :ctx tid: ct) then return false
+    return (isFwdDeclared :ctx tid: ct).not
 }
 
 # emitOneFnptrTypedef -- emit one `typedef RET (*<cname>_ft)(PARAMS);`,
@@ -35466,6 +35529,23 @@ emitOneFnptrTypedef: function {
         rIds.append rpv.u64
         ri = ri + 1
     }
+    srt: fnRegReturnId :symtab :tid
+    if srt.isZero then {
+        srno: symtab.typing.funcReturnNode.get key: tid
+        match (
+            srno
+        ) case some then {
+            srt = stampIdOf :symtab nid: srno
+        } case none then null
+    }
+    # a spec or a variant in the signature is declared by its tag before the
+    # test below asks whether the typedef can name it
+    fj: u64
+    for fj < rIds.length loop {
+        fwdDeclareSpec :symtab :ctx tid: (ztypes.tid.create from: (rIds.get i: fj)) :buf
+        fj = fj + 1
+    }
+    if srt > 0 then fwdDeclareSpec :symtab :ctx tid: srt :buf
     skipIt: false
     sj: u64
     sn: pIds.length
@@ -35478,15 +35558,6 @@ emitOneFnptrTypedef: function {
             tid: (ztypes.tid.create from: spid.u64)
         ) then skipIt = true
         sj = sj + 1
-    }
-    srt: fnRegReturnId :symtab :tid
-    if srt.isZero then {
-        srno: symtab.typing.funcReturnNode.get key: tid
-        match (
-            srno
-        ) case some then {
-            srt = stampIdOf :symtab nid: srno
-        } case none then null
     }
     if srt > 0 when (isComplexFnptrParam :ast :symtab :ctx tid: (ztypes.tid.create from: srt.u64)
     ) then skipIt = true
@@ -37128,8 +37199,14 @@ emitOneFacet: function {
     if du.length == 0 then du.append "    char _none;\n"
     l1: "typedef union {\n\{du}} \{pbase}_data_u;\n\n"
     buf.append l1
-    l2: "typedef struct {\n    \{pbase}_vtable_t* vtable;\n    \{pbase}_data_u data;\n} \{pbase}_t;\n\n"
-    buf.append l2
+    openStructBody :ctx :tid cn: pbase.stringView :buf
+    buf.append "    "
+    buf.append pbase
+    buf.append "_vtable_t* vtable;\n    "
+    buf.append pbase
+    buf.append "_data_u data;\n"
+    closeStructBody :ctx :tid cn: pbase.stringView :buf
+    buf.append "\n"
 }
 
 # emitOneProtocol -- the protocol value representation: vtable typedef (one
@@ -37226,8 +37303,12 @@ emitOneProtocol: function {
     }
     l0: "typedef struct {\n\{vfuncs}} \{pbase}_vtable_t;\n\n"
     buf.append l0
-    l1: "typedef struct {\n    void* data;\n    \{pbase}_vtable_t* vtable;\n    void (*destroy)(void*);\n} \{pbase}_t;\n\n"
-    buf.append l1
+    openStructBody :ctx :tid cn: pbase.stringView :buf
+    buf.append "    void* data;\n    "
+    buf.append pbase
+    buf.append "_vtable_t* vtable;\n    void (*destroy)(void*);\n"
+    closeStructBody :ctx :tid cn: pbase.stringView :buf
+    buf.append "\n"
     l2: "static void \{pbase}_destroy(\{pbase}_t* proto) {\n    if (!proto) return;\n    if (proto->destroy) proto->destroy(proto->data);\n    proto->destroy = NULL;\n}\n\n"
     buf.append l2
 }
@@ -39589,6 +39670,28 @@ writeVariantEq: function {
     dest.append "}\n\n"
 }
 
+# openStructBody -- open a struct the emitter writes as an anonymous typedef,
+# or as the tagged `struct X_t { ... };` a forward declaration named.
+openStructBody: function {ctx: Ctx.view tid: ztypes.tid cn: StringView buf: String.borrow} is {
+    if (isFwdDeclared :ctx :tid) then {
+        lo: "struct \{cn}_t {\n"
+        buf.append lo
+    } else {
+        buf.append "typedef struct {\n"
+    }
+}
+
+# closeStructBody -- close what openStructBody opened: the typedef's name, or
+# just the brace when the tag already named it.
+closeStructBody: function {ctx: Ctx.view tid: ztypes.tid cn: StringView buf: String.borrow} is {
+    if (isFwdDeclared :ctx :tid) then {
+        buf.append "};\n"
+    } else {
+        lc: "} \{cn}_t;\n"
+        buf.append lc
+    }
+}
+
 # emitOneVariant -- tag enum + tagged struct (+ payload union when any
 # arm carries one) + the by-tag/value eq helper.
 emitOneVariant: function {
@@ -39637,7 +39740,7 @@ emitOneVariant: function {
         buf.append lo
         return
     }
-    buf.append "typedef struct {\n"
+    openStructBody :ctx :tid cn: vc.stringView :buf
     tsc: tagStorageCType :symtab :tid
     if tsc.length == 0 then {
         lfE: "    \{vc}_tag_t tag;\n"
@@ -39663,8 +39766,7 @@ emitOneVariant: function {
         pj = pj + 1
     }
     if haveP then buf.append "    } data;\n"
-    lg: "} \{vc}_t;\n"
-    buf.append lg
+    closeStructBody :ctx :tid cn: vc.stringView :buf
     if (eqGenerated :ast :symtab :ctx :tid) then {
         emitVariantEq :ast :symtab :ctx :tid vc: vc.stringView :anames :aids :haveP :buf
     }

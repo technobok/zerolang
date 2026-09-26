@@ -1,0 +1,63 @@
+# A reference to a function whose signature names a protocol, a facet, a
+# union or a variant is an ordinary function value. The `_ft` typedef that
+# spells one was skipped for such a signature ("never an fnptr value"), so a
+# local, a field or a parameter holding the reference named a type the C never
+# declared. Protocols, facets and variants are anonymous structs unless
+# forward-declared, so the typedef declares them by their tag first.
+#
+# A call through the reference hands a conformer to a protocol or facet slot
+# boxed, as a direct call does.
+Plain: protocol {
+    get: function {t: this.view} out i64
+}
+
+sizer: facet {
+    size: function {t: this.view} out i64
+}
+
+Cell: class { n: i64 } as {
+    :Plain
+    get: function {t: this.view} out i64 is { return t.n }
+}
+
+pt: record { x: i64 } as {
+    :sizer
+    size: function {t: this.view} out i64 is { return t.x }
+}
+
+kind: variant { small: i64 big: i64 }
+
+Shape: union { circle: Cell empty: null }
+
+usePlain: function {p: Plain.view} out i64 is { return p.get }
+
+useSizer: function {s: sizer} out i64 is { return s.size }
+
+weigh: function {k: kind} out i64 is {
+    match (k) case small then return k case big then return k * 10
+}
+
+area: function {s: Shape.view} out i64 is {
+    match (s) case circle then return s.n case empty then return 0
+}
+
+makePlain: function {n: i64} out Plain is { return (Plain.create from: (Cell :n)) }
+
+Holder: class { op: usePlain.take w: weigh.take }
+
+apply: function {f: usePlain.take c: Cell} out i64 is { return (f p: c) }
+
+main: function is {
+    c: Cell n: 6
+    p: usePlain.take
+    s: useSizer.take
+    w: weigh.take
+    a: area.take
+    m: makePlain.take
+    print "\{p p: c} \{s s: (pt x: 3)} \{w k: (kind.big 3)}"
+    sh: Shape.circle (Cell n: 4)
+    made: m n: 7
+    print "\{a s: sh} \{made.get}"
+    h: Holder op: usePlain.take w: weigh.take
+    print "\{h.op p: c} \{h.w k: (kind.small 2)} \{apply f: usePlain.take :c}"
+}
