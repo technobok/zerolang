@@ -34448,6 +34448,14 @@ nodeWritesNarrowedName: function {
     return (nameIsNarrowedLocal :st nameId: t2)
 }
 
+# nameReadsPayload -- whether `nameId` resolves to a local narrowed to one arm,
+# so that the name reads that arm's payload rather than the local.
+nameReadsPayload: function {st: zenv.ZSymbolTable.view nameId: zast.nameid} out bool is {
+    d: st.findLocal :nameId
+    if d.isZero then return false
+    return (st.narrowsToArm declId: d)
+}
+
 # nameIsNarrowedLocal -- whether `nameId` resolves to a local its newest row
 # narrows.
 nameIsNarrowedLocal: function {st: zenv.ZSymbolTable.view nameId: zast.nameid} out bool is {
@@ -46351,7 +46359,9 @@ checkStmtExpression: function {
 # recordControlDestroy -- what the control statement `valueId` destroys as it
 # leaves (exitDestroy): a `return` every scope of its function, but the local it
 # hands back when it returns a bare name; a `break` every scope inside what it
-# leaves, its loop or a `do` block; a `continue` every scope inside its loop.
+# leaves, its loop or a `do` block; a `continue` every scope inside its loop. A
+# bare name narrowed to an arm reads the arm's PAYLOAD, a copy the return hands
+# back while the local itself -- an owned union -- is still owed.
 recordControlDestroy: function {
     st: zenv.ZSymbolTable ast: Ast.view valueId: zast.nodeid kind: u8
 } is {
@@ -46367,7 +46377,9 @@ recordControlDestroy: function {
                     )
                 )
                 rn: bareAtomNameId n: (ast.nodes.get i: a0.operation.u64)
-                if rn.isZero.not then ret = (st.lookupVarId nameId: rn).or d: ztypes.vid
+                if rn.isZero.not when (nameReadsPayload :st nameId: rn).not then {
+                    ret = (st.lookupVarId nameId: rn).or d: ztypes.vid
+                }
             }
         }
         st.recordReturnDestroy nid: valueId.u64 except: ret
