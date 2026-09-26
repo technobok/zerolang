@@ -1847,7 +1847,10 @@ perf: $(PERFBIN)
 #
 # +526 a type application over a non-generic type is refused: 0 behaviour, 526
 # source.
-ALLOC_BASELINE := 2726106
+#
+# +507 an interface's generic parameter in `as` is refused: 0 behaviour, 507
+# source.
+ALLOC_BASELINE := 2726613
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

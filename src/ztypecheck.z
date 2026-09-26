@@ -7373,7 +7373,9 @@ isNullName: function {st: zenv.ZSymbolTable.view ast: Ast.view nameId: zast.name
 
 # attachInterfaceAsConstants -- a protocol's or a facet's `as` constants. An
 # interface declares its specs in the `is` block, so nothing else walks its
-# `as` items; each one that is not a function is asked as any type's is.
+# `as` items; each one that is not a function is asked as any type's is. A
+# generic parameter is no constant: an interface declares its parameters in
+# the `is` block, beside the specs they type, and one written here is refused.
 attachInterfaceAsConstants: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -7387,8 +7389,33 @@ attachInterfaceAsConstants: function {
         item: argRefAt :ast nid: itemId
         if item.nid.isZero or item.operation.isZero then continue
         if (ast.nodes.get i: item.operation.u64).functiondef then continue
+        if (zast.isGenericParamOp :ast opId: item.operation.u32) then {
+            refuseInterfaceAsParam :st :ast :parentId :item
+            continue
+        }
         attachAsConstant :st :ast :parentId :item
     }
+}
+
+# refuseInterfaceAsParam -- a generic parameter in a protocol's or a facet's
+# `as` block, reported at its name.
+refuseInterfaceAsParam: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    parentId: ztypes.tid
+    item: argref
+} is {
+    kind: "protocol"
+    if (st.reg.typetypeOf typeId: parentId) == ztypes.ztypetype.facetType then kind = "facet"
+    pn: zast.nameTextAt :ast ref: item.name
+    (addError
+        :st
+        nodeid: item.nid
+        lineno: item.lineno
+        colno: item.colno
+        e: zast.err.genericError
+        msg: "'\{pn}' is a generic parameter: a \{kind} declares its parameters in its body, beside its methods"
+    )
 }
 
 # methodsAreTemplate -- the methods of `objId` belong to a generic template: its
