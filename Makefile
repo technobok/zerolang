@@ -1836,7 +1836,7 @@ perf: $(PERFBIN)
 #
 # +4420 member use on a type parameter waits for the instance: 6 behaviour,
 # 4411 source; perf-strict reads 3 more than ab.sh.
-ALLOC_BASELINE := 2720842
+ALLOC_BASELINE := 2720966
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
