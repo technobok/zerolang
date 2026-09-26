@@ -7246,11 +7246,22 @@ markerApplicationTarget: function {
         nid: opNid.u32
     )
     if r == 0 then return (optionval.none u64)
-    tt: st.reg.typetypeOf typeId: (ztypes.tid.create from: r.u64)
+    tt: specTypetypeOf :st tid: (ztypes.tid.create from: r.u64)
     if tt == ztypes.ztypetype.protocolType or (tt == ztypes.ztypetype.facetType) then {
         return (optionval.some r)
     }
     return (optionval.none u64)
+}
+
+# specTypetypeOf -- a spec's family. A PARTIAL instance (`(Getter v: t)`, over a
+# parameter of the conforming type) wears the generic-parameter tag, so its
+# family is its template's.
+specTypetypeOf: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.ztypetype is {
+    if (st.reg.isPartialOf :tid) then {
+        og: st.reg.genericOriginOf :tid
+        if og.isZero.not then return (st.reg.typetypeOf typeId: (ztypes.tid.create from: og.u64))
+    }
+    return (st.reg.typetypeOf typeId: tid)
 }
 
 # asDeclaresMemberId -- the as-block declares the member named by `nameId` as a
@@ -7643,7 +7654,7 @@ recordConformance: function {
     # refused, the row is still recorded, as a reference type's facet row is
     # below: the marker is no field either way
     refuseGenericSpecMarker :st :ast :specTypeId :label :markerOp
-    tt: st.reg.typetypeOf typeId: (ztypes.tid.create from: specTypeId.u64)
+    tt: specTypetypeOf :st tid: (ztypes.tid.create from: specTypeId.u64)
     recordIt: false
     isFacetC: false
     match (
@@ -7834,11 +7845,14 @@ checkInstanceConformances: function {
         if (st.reg.isPartialOf tid: mono) then continue
         errC0: st.typing.errors.length
         forceAllMembers :st :ast tid: mono
+        # a spec over the template's own parameter is this instance's own
+        instSpec: instanceSpecOf :st :mono :spec :labelNameId
+        if instSpec == 0 then continue
         (checkConformanceSignature
             :st
             :ast
             implTid: mono
-            specTid: (ztypes.tid.create from: spec.u64)
+            specTid: (ztypes.tid.create from: instSpec.u64)
             :markerOp
             :implName
         )
@@ -7850,7 +7864,7 @@ checkInstanceConformances: function {
             # once there is an error
             cf: (st.reg.newConformance
                 implTypeId: mono.u64
-                specTypeId: spec
+                specTypeId: instSpec
                 label: label.stringView
                 :labelNameId
                 :isFacet
@@ -7858,6 +7872,25 @@ checkInstanceConformances: function {
             st.typing.conformance.append cf
         }
     }
+}
+
+# instanceSpecOf -- the spec an instance of a generic conformer conforms to. A
+# spec over the template's own parameter (`g: (Getter v: t)`) is partial, and
+# each instance's is the one its marker member was substituted to -- Box_i64's
+# `g` is `(Getter v: i64)`; any other spec is the template's own. 0 when the
+# instance's is still partial, which has no methods to check.
+instanceSpecOf: function {
+    st: zenv.ZSymbolTable.view
+    mono: ztypes.tid
+    spec: u64
+    labelNameId: u64
+} out u64 is {
+    if (st.reg.isPartialOf tid: (ztypes.tid.create from: spec.u64)).not then return spec
+    lid: zast.nameid.create from: labelNameId.u32.orPanic
+    mto: st.typing.declChildOfId parentTypeId: mono nameId: lid
+    mt: mto.or d: 0
+    if mt == 0 or (st.reg.isPartialOf tid: (ztypes.tid.create from: mt.u64)) then return 0
+    return mt
 }
 
 # methodImplementsSpec -- `mid` is a method its owner declares in order to
@@ -8415,7 +8448,7 @@ asItemNamesPlainType: function {
     target: u64
 } out bool is {
     if item == zast.names.wkTag then return false
-    tt: st.reg.typetypeOf typeId: (ztypes.tid.create from: target.u64)
+    tt: specTypetypeOf :st tid: (ztypes.tid.create from: target.u64)
     if tt == ztypes.ztypetype.facetType or (tt == ztypes.ztypetype.protocolType) then return false
     reportAsItemTypeName :st :ast :parentId :item
     return true
@@ -21509,7 +21542,8 @@ sumMemberAdmits: function {
 
 # typeConformsTo -- a conformance row names `impl` (or the template it was
 # instantiated from) against `spec`, or `impl` is a typedef that inherits the
-# conformance from its base.
+# conformance from its base. The template's row over its own parameter
+# (`g: (Getter v: t)`) names this instance's substituted spec.
 typeConformsTo: function {
     st: zenv.ZSymbolTable.view impl: ztypes.tid spec: ztypes.tid
 } out bool is {
@@ -21520,6 +21554,9 @@ typeConformsTo: function {
             crow.implTypeId == impl.u64 or (og > 0 and (crow.implTypeId == og.u64))
         ) then {
             found = true
+        } else if og > 0 when crow.implTypeId == og.u64 then {
+            isp: instanceSpecOf :st mono: impl spec: crow.specTypeId labelNameId: crow.labelNameId
+            if isp == spec.u64 then found = true
         }
     }
     if found then return true

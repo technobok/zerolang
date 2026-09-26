@@ -1866,7 +1866,10 @@ perf: $(PERFBIN)
 #
 # +5793 a marker names a generic spec's instance: 0 behaviour (the compiler's
 # own source declares no generic spec), 5793 source.
-ALLOC_BASELINE := 2735329
+#
+# +1198 a generic conformer names an instance over its own parameter: 0
+# behaviour, 1198 source.
+ALLOC_BASELINE := 2736527
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

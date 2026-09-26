@@ -1,0 +1,62 @@
+# A generic conformer may name a spec instance over its own parameter:
+# `Box ... g: (Getter v: t)`. Each instance conforms to its own substituted
+# instance -- Box_i64 to `(Getter v: i64)`, Box_bool to `(Getter v: bool)` --
+# and is checked against it at the marker, as any instance of a generic
+# conformer is. A marker with a concrete argument needs no substitution.
+Getter: protocol {
+    v: anyval.generic
+    get: function {t: this.view} out v
+    same: function {t: this.view x: v} out bool
+}
+
+Sized: facet {
+    n: anyval.generic
+    size: function {t: this.view} out n
+}
+
+Box: class { x: t } as {
+    t: anyval.generic
+    g: (Getter v: t)
+    get: function {b: this.view} out t is { return b.x }
+    same: function {b: this.view x: t} out bool is { return b.x == x }
+}
+
+# the argument is concrete: every instance conforms to the same spec
+Counted: class { item: t count: i64 } as {
+    t: anyval.generic
+    g: (Getter v: i64)
+    get: function {c: this.view} out i64 is { return c.count }
+    same: function {c: this.view x: i64} out bool is { return c.count == x }
+}
+
+span: record { lo: t hi: t } as {
+    t: anyval.generic
+    m: (Sized n: t)
+    size: function {s: this.view} out t is { return s.hi - s.lo }
+}
+
+readI: function {g: (Getter v: i64).view} out i64 is { return g.get }
+
+readB: function {g: (Getter v: bool).view} out bool is { return g.get }
+
+sizeU: function {s: (Sized n: u32)} out u32 is { return s.size }
+
+sizeI: function {s: (Sized n: i64).view} out i64 is { return s.size }
+
+bounded: function {g: T} out i64 is { return g.get } as {
+    T: (Getter v: i64).generic
+}
+
+main: function is {
+    bi: Box x: 4
+    bb: Box x: true
+    print "\{readI g: bi} \{readB g: bb} \{bi.g.same x: 4} \{bounded g: bi}"
+    ct: Counted item: 3.u8 count: 7
+    print "\{readI g: ct} \{readI g: (Counted item: 1.5 count: 8)}"
+    xs: List (Getter v: i64)
+    xs.append ((Getter v: i64).create from: (Box x: 5))
+    xs.append ((Getter v: i64).create from: (Counted item: true count: 6))
+    for x: xs.iterate loop print "\{x.get}"
+    su: span lo: 2.u32 hi: 9.u32
+    print "\{sizeU s: su} \{sizeI s: (span lo: 3 hi: 10)} \{su.m.size}"
+}
