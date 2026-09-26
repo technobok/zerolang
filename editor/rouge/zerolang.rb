@@ -82,7 +82,7 @@ module Rouge
         @builtins ||= %w(
           Any AnyRef Box ByteView Bytes Closer
           CpIter File IdMapEntryR IdMapEntryV IdMapItemIterR IdMapItemIterV
-          IdMapR IdMapV IdSet IdSetIter IoError Iterator
+          IdMapR IdMapV IdSet IdSetIter IoError
           LinesIter List ListIter ListIterVal ListRef ListVal
           ListView ListViewVal Map MapEntry MapEntryRV MapEntryVR
           MapEntryVV MapItemIter MapItemIterRV MapItemIterVR MapItemIterVV MapKeyIter

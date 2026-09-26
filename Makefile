@@ -1858,7 +1858,9 @@ perf: $(PERFBIN)
 #
 # -72 a facet box handed to a marked parameter has a temp of its own: 0
 # behaviour, -72 source.
-ALLOC_BASELINE := 2728407
+#
+# -18 the dead `Iterator` protocol is gone: 0 behaviour, -18 source.
+ALLOC_BASELINE := 2728389
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
