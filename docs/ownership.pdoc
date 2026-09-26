@@ -144,7 +144,7 @@ unmarked source.
   A new local name (#~"b: d", #~"with w: d do")  |copy            |borrow
   An owning destination (see Implicit take)      |take            |take
   A reassignment (#~"x = d")                     |copy            |take
-  A projection source (#~"Rd d", #~"P d")        |protocol: take; facet, typedef: copy |take
+  A projection source (#~"Rd d", #~"P d")        |copy            |borrow; take in an owning destination
 
 For valtypes, an unmarked parameter is a COPY -- the callee reads and writes
 its own value, and the source is NOT invalidated. Writing #~".borrow" on a
@@ -199,14 +199,17 @@ destinations are:
   #*: a sum type's arm (#~"U.a d")
   #*: #~"return d" (return values default to #~".take") and #~"yield d"
   #*: a reassignment of an owned variable (#~"x = d", #~"h.f = d")
-  #*: the source of a projection (#~"Rd d", #~"Rd.create from: d", #~"P d" for a typedef #~"P")
+
+A projection's source (#~"Rd d", #~"Rd.create from: d", #~"P d" for a
+typedef #~"P") follows the projection: handed to one of these destinations
+the projection takes its source, and anywhere else -- bound to a new name,
+handed to a borrowing parameter, used as a receiver -- it borrows it, as
+#~"Rd d.borrow" does.
 
 The programmer can write #~".take" explicitly to make the transfer visible.
 After the transfer the variable name is invalidated (for reftypes) or a copy
-was made (for valtypes). Two valtype sources are invalidated all the same: one
-marked #~".take" explicitly, and the source of a protocol projection
-(#~"Rd d", #~"Rd.create from: d"); a facet or typedef projection copies a
-valtype. Note that #~".take" must be explicitly written on the
+was made (for valtypes). A valtype source marked #~".take" explicitly is
+invalidated all the same; a projection copies a valtype source. Note that #~".take" must be explicitly written on the
 parameter definition -- parameters default to #~".borrow". A new local name
 is not a destination that declares ownership: it borrows.
 
@@ -2003,12 +2006,16 @@ semantics:
   of scope.]
   [#*: #+ Owned via #~"create" (#~"r: proto.create from: obj.take", or the
   bare-name shorthand #~"r: proto obj.take"): returns an owned protocol
-  instance. The source object is consumed (taken). On scope exit, both the
+  instance. The source object is consumed (taken). An unmarked source is
+  taken the same way where the instance lands in a place that owns what it
+  holds (a #~".take" parameter, a field, a sum arm, a return, a
+  reassignment); anywhere else it is borrowed, as the next form. On scope exit, both the
   protocol instance and the underlying data are destroyed. Bare-name routes
   through #~"proto.create" via the unified call dispatch; see the spec's
   "Implicit Construction" section.]
-  [#*: #+ Borrowed via the source's marker (#~"r: proto obj.borrow", or
-  #~"r: proto.create from: obj.borrow"): the explicit borrow form for when
+  [#*: #+ Borrowed via the source (#~"r: proto obj.borrow", or
+  #~"r: proto.create from: obj.borrow", or the source unmarked,
+  #~"r: proto obj"): the borrow form for when
   the label shorthand is not available
   (e.g. the implementing type does not name the conformance). Semantically
   equivalent to the label form -- the protocol instance lives on the stack

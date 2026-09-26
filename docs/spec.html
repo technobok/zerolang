@@ -3135,13 +3135,19 @@ generic instance, such as <code>Bytes</code> over <code>ListVal u8</code>, from 
 unnamed or named <code>from</code> -- any other argument is an error -- and the
 source's marker picks what the result owns:</p>
 <ul>
-<li><code>T x</code>, <code>T x.take</code> or <code>T.create from: x</code> takes the source and
-returns an owned typedef instance; <code>x</code> is moved.</li>
-<li><code>T x.borrow</code> (or <code>T.create from: x.borrow</code>) returns a borrowed typedef
-instance: a second name for <code>x</code>, which is locked exclusively while the
-binding lives. A write through the binding is a write to <code>x</code>, and the
-binding frees nothing. Like any borrow it cannot be returned from an
-<code>out</code> function or stored.</li>
+<li><code>T x.take</code> (or <code>T.create from: x.take</code>) takes the source and
+returns an owned typedef instance; <code>x</code> is moved. An unmarked <code>T x</code>
+handed to a destination that owns what it holds -- a <code>.take</code> parameter,
+a constructor's field, a sum arm, a <code>return</code>, a reassignment -- takes
+it the same way.</li>
+<li><code>T x.borrow</code> (or <code>T.create from: x.borrow</code>), and an unmarked
+<code>T x</code> anywhere else -- bound to a name, handed to a borrowing parameter,
+used as a receiver -- returns a borrowed typedef instance: a second name for
+<code>x</code>, which is locked exclusively while the binding lives. A write
+through the binding is a write to <code>x</code>, and the binding frees nothing.
+Like any borrow it cannot be returned from an <code>out</code> function or
+stored.</li>
+<li>An unmarked value-type source is copied, and <code>x</code> stays valid.</li>
 </ul>
 <p>A readonly view of a value is not a typedef construction: it is the base's
 view method (<code>b.byteView</code>, <code>s.stringView</code>, <code>xs.listView</code>), which pins
@@ -5229,15 +5235,19 @@ caller's stack and is forgotten when it goes out of scope, but the
 underlying data is not affected. The source variable is locked for the
 lifetime of the protocol instance.</li>
 <li>Owned via <code>create</code>: call <code>protocol.create from: obj.take</code>
-or use the bare name <code>protocol obj</code> (or <code>protocol obj.take</code>). This creates an owned
+or use the bare name <code>protocol obj.take</code>. This creates an owned
 protocol instance: the source object is consumed and the protocol
-instance owns the data. When the protocol instance goes out of scope,
+instance owns the data. An unmarked source (<code>protocol obj</code>,
+<code>protocol.create from: obj</code>) is taken the same way where the instance is
+handed to a place that owns what it holds -- a <code>.take</code> parameter, a
+field, a sum arm, a <code>return</code>, a reassignment -- and borrowed everywhere
+else, as the next form; a value-type source is copied. When the protocol instance goes out of scope,
 both the protocol instance and the underlying data are destroyed.
 <code>.take</code> is <em><strong>not</strong></em> a protocol constructor; it remains the inline
 ownership method on runtime instances (<code>obj.take</code>) only.</li>
 <li>Borrowed via the source's marker: <code>protocol obj.borrow</code>
-(or <code>protocol.create from: obj.borrow</code>) when the label shorthand is
-not available. This creates a borrowed
+(or <code>protocol.create from: obj.borrow</code>), or the source unmarked, when the
+label shorthand is not available. This creates a borrowed
 protocol instance (same semantics as the label form). The source
 variable is locked for the lifetime of the protocol instance. The
 protocol instance lives on the stack until it falls out of scope; the
@@ -5250,9 +5260,10 @@ to a parameter that borrows or views it (<code>show s: sq</code> for
 its duration. A place that <em><strong>owns</strong></em> what it is given -- a constructor field,
 a <code>.take</code> parameter, a container slot such as <code>append</code>, a reassignment,
 a return -- refuses a bare conformer: it would own an instance of a value it
-never took. Write the owned instance there, <code>Shape.create from: sq.take</code>
-(or around a construction, <code>Shape.create from: (Sq side: 2)</code>), and a
-borrowed one (<code>from: sq.borrow</code>) cannot be moved into it either. A type
+never took. Write the owned instance there, <code>Shape.create from: sq</code> (the
+place takes <code>sq</code>; <code>.take</code> says so) or around a construction,
+<code>Shape.create from: (Sq side: 2)</code>, and a borrowed one
+(<code>from: sq.borrow</code>) cannot be moved into it either. A type
 that does not conform is refused wherever it is written. A generic
 parameter is not a protocol place: a bound only admits the types that may
 instantiate it, and a conformer passed for one is the instance's own type,
@@ -5303,11 +5314,12 @@ main: function is {
     # Borrowed instance via label (preferred form)
     r: f.myreader              # f is locked while r is in scope
 
-    # Owned instance via create (or take)
+    # Owned instance via create
     # r: Reader.create from: f.take   # f is consumed, r owns the data
 
-    # Borrowed instance via the source's marker
+    # Borrowed instance via the source, marked or not
     # r: Reader f.borrow               # f is locked while r is in scope
+    # r: Reader f                      # the same borrow
 
     print "\{use_reader r}"  # prints 15
 }</code></pre>

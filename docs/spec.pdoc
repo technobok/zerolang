@@ -3511,13 +3511,19 @@ unnamed or named #~"from" -- any other argument is an error -- and the
 source's marker picks what the result owns:
 
 #ul:
-  [#*: #~"T x", #~"T x.take" or #~"T.create from: x" takes the source and
-  returns an owned typedef instance; #~"x" is moved.]
-  [#*: #~"T x.borrow" (or #~"T.create from: x.borrow") returns a borrowed typedef
-  instance: a second name for #~"x", which is locked exclusively while the
-  binding lives. A write through the binding is a write to #~"x", and the
-  binding frees nothing. Like any borrow it cannot be returned from an
-  #~"out" function or stored.]
+  [#*: #~"T x.take" (or #~"T.create from: x.take") takes the source and
+  returns an owned typedef instance; #~"x" is moved. An unmarked #~"T x"
+  handed to a destination that owns what it holds -- a #~".take" parameter,
+  a constructor's field, a sum arm, a #~"return", a reassignment -- takes
+  it the same way.]
+  [#*: #~"T x.borrow" (or #~"T.create from: x.borrow"), and an unmarked
+  #~"T x" anywhere else -- bound to a name, handed to a borrowing parameter,
+  used as a receiver -- returns a borrowed typedef instance: a second name for
+  #~"x", which is locked exclusively while the binding lives. A write
+  through the binding is a write to #~"x", and the binding frees nothing.
+  Like any borrow it cannot be returned from an #~"out" function or
+  stored.]
+  [#*: An unmarked value-type source is copied, and #~"x" stays valid.]
 
 A readonly view of a value is not a typedef construction: it is the base's
 view method (#~"b.byteView", #~"s.stringView", #~"xs.listView"), which pins
@@ -5992,15 +5998,19 @@ There are three ways to create a protocol instance:
   underlying data is not affected. The source variable is locked for the
   lifetime of the protocol instance.]
   [#*: #+ Owned via #~"create": call #~"protocol.create from: obj.take"
-  or use the bare name #~"protocol obj" (or #~"protocol obj.take"). This creates an owned
+  or use the bare name #~"protocol obj.take". This creates an owned
   protocol instance: the source object is consumed and the protocol
-  instance owns the data. When the protocol instance goes out of scope,
+  instance owns the data. An unmarked source (#~"protocol obj",
+  #~"protocol.create from: obj") is taken the same way where the instance is
+  handed to a place that owns what it holds -- a #~".take" parameter, a
+  field, a sum arm, a #~"return", a reassignment -- and borrowed everywhere
+  else, as the next form; a value-type source is copied. When the protocol instance goes out of scope,
   both the protocol instance and the underlying data are destroyed.
   #~".take" is #_*"not" a protocol constructor; it remains the inline
   ownership method on runtime instances (#~"obj.take") only.]
   [#*: #+ Borrowed via the source's marker: #~"protocol obj.borrow"
-  (or #~"protocol.create from: obj.borrow") when the label shorthand is
-  not available. This creates a borrowed
+  (or #~"protocol.create from: obj.borrow"), or the source unmarked, when the
+  label shorthand is not available. This creates a borrowed
   protocol instance (same semantics as the label form). The source
   variable is locked for the lifetime of the protocol instance. The
   protocol instance lives on the stack until it falls out of scope; the
@@ -6013,9 +6023,10 @@ to a parameter that borrows or views it (#~"show s: sq" for
 its duration. A place that #_*"owns" what it is given -- a constructor field,
 a #~".take" parameter, a container slot such as #~"append", a reassignment,
 a return -- refuses a bare conformer: it would own an instance of a value it
-never took. Write the owned instance there, #~"Shape.create from: sq.take"
-(or around a construction, #~"Shape.create from: (Sq side: 2)"), and a
-borrowed one (#~"from: sq.borrow") cannot be moved into it either. A type
+never took. Write the owned instance there, #~"Shape.create from: sq" (the
+place takes #~"sq"; #~".take" says so) or around a construction,
+#~"Shape.create from: (Sq side: 2)", and a borrowed one
+(#~"from: sq.borrow") cannot be moved into it either. A type
 that does not conform is refused wherever it is written. A generic
 parameter is not a protocol place: a bound only admits the types that may
 instantiate it, and a conformer passed for one is the instance's own type,
@@ -6071,11 +6082,12 @@ mechanism on generic constraints.
       # Borrowed instance via label (preferred form)
       r: f.myreader              # f is locked while r is in scope
 
-      # Owned instance via create (or take)
+      # Owned instance via create
       # r: Reader.create from: f.take   # f is consumed, r owns the data
 
-      # Borrowed instance via the source's marker
+      # Borrowed instance via the source, marked or not
       # r: Reader f.borrow               # f is locked while r is in scope
+      # r: Reader f                      # the same borrow
 
       print "\{use_reader r}"  # prints 15
   }

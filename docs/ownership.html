@@ -341,7 +341,7 @@ unmarked source.</p>
 <tr><td>A new local name (<code>b: d</code>, <code>with w: d do</code>)</td><td>copy</td><td>borrow</td></tr>
 <tr><td>An owning destination (see Implicit take)</td><td>take</td><td>take</td></tr>
 <tr><td>A reassignment (<code>x = d</code>)</td><td>copy</td><td>take</td></tr>
-<tr><td>A projection source (<code>Rd d</code>, <code>P d</code>)</td><td>protocol: take; facet, typedef: copy</td><td>take</td></tr>
+<tr><td>A projection source (<code>Rd d</code>, <code>P d</code>)</td><td>copy</td><td>borrow; take in an owning destination</td></tr>
 </tbody>
 </table>
 <p>For valtypes, an unmarked parameter is a COPY -- the callee reads and writes
@@ -387,14 +387,16 @@ destinations are:</p>
 <li>a sum type's arm (<code>U.a d</code>)</li>
 <li><code>return d</code> (return values default to <code>.take</code>) and <code>yield d</code></li>
 <li>a reassignment of an owned variable (<code>x = d</code>, <code>h.f = d</code>)</li>
-<li>the source of a projection (<code>Rd d</code>, <code>Rd.create from: d</code>, <code>P d</code> for a typedef <code>P</code>)</li>
 </ul>
+<p>A projection's source (<code>Rd d</code>, <code>Rd.create from: d</code>, <code>P d</code> for a
+typedef <code>P</code>) follows the projection: handed to one of these destinations
+the projection takes its source, and anywhere else -- bound to a new name,
+handed to a borrowing parameter, used as a receiver -- it borrows it, as
+<code>Rd d.borrow</code> does.</p>
 <p>The programmer can write <code>.take</code> explicitly to make the transfer visible.
 After the transfer the variable name is invalidated (for reftypes) or a copy
-was made (for valtypes). Two valtype sources are invalidated all the same: one
-marked <code>.take</code> explicitly, and the source of a protocol projection
-(<code>Rd d</code>, <code>Rd.create from: d</code>); a facet or typedef projection copies a
-valtype. Note that <code>.take</code> must be explicitly written on the
+was made (for valtypes). A valtype source marked <code>.take</code> explicitly is
+invalidated all the same; a projection copies a valtype source. Note that <code>.take</code> must be explicitly written on the
 parameter definition -- parameters default to <code>.borrow</code>. A new local name
 is not a destination that declares ownership: it borrows.</p>
 <h3 id="a-bare-bind-borrows"><a href="#a-bare-bind-borrows">3.3. A bare bind borrows</a></h3>
@@ -1904,12 +1906,16 @@ instance and becomes accessible again when the protocol instance goes out
 of scope.</li>
 <li>Owned via <code>create</code> (<code>r: proto.create from: obj.take</code>, or the
 bare-name shorthand <code>r: proto obj.take</code>): returns an owned protocol
-instance. The source object is consumed (taken). On scope exit, both the
+instance. The source object is consumed (taken). An unmarked source is
+taken the same way where the instance lands in a place that owns what it
+holds (a <code>.take</code> parameter, a field, a sum arm, a return, a
+reassignment); anywhere else it is borrowed, as the next form. On scope exit, both the
 protocol instance and the underlying data are destroyed. Bare-name routes
 through <code>proto.create</code> via the unified call dispatch; see the spec's
 "Implicit Construction" section.</li>
-<li>Borrowed via the source's marker (<code>r: proto obj.borrow</code>, or
-<code>r: proto.create from: obj.borrow</code>): the explicit borrow form for when
+<li>Borrowed via the source (<code>r: proto obj.borrow</code>, or
+<code>r: proto.create from: obj.borrow</code>, or the source unmarked,
+<code>r: proto obj</code>): the borrow form for when
 the label shorthand is not available
 (e.g. the implementing type does not name the conformance). Semantically
 equivalent to the label form -- the protocol instance lives on the stack

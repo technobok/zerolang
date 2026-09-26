@@ -25592,35 +25592,76 @@ projectionCallKind: function {
     return zast.callkind.protocolCreate
 }
 
-# projectionSourceBorrows -- the source of a bare projection (`Speaker d.borrow`:
-# the `from:` argument, or the one unlabelled argument) is marked `.borrow`.
-projectionSourceBorrows: function {ast: Ast.view call: callref} out bool is {
-    k: u64
-    for k < call.nargs loop {
-        arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: k)
-        k = k + 1
-        if arg.nid.isZero then continue
-        if arg.name.isZero.not when (zast.nameTextEq :ast ref: arg.name s: "from").not then continue
-        op: ast.nodes.get i: arg.operation.u64
-        if op.dottedpath.not then return false
-        return (atomNameId :ast n: (ast.nodes.get i: op.child.u64)) == zast.names.wkBorrow
+# projectionSourceBorrows -- a projection (`Speaker d`, `Bytes.create from: d`)
+# of the walked source `src`, of type `vt`, borrows it: the source is marked
+# `.borrow`, or it is a reftype place written without a marker and the
+# projection is not the value of a destination that owns what it holds
+# (owningValueNid), which takes it.
+projectionSourceBorrows: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    call: callref
+    src: zast.nodeid
+    vt: ztypes.tid
+} out bool is {
+    sn: ast.nodes.get i: src.u64
+    mk: zast.markerKindOf :ast n: sn
+    if mk.borrowMarker then return true
+    if mk.unmarked.not then return false
+    if call.nid.u64 == st.typing.owningValueNid then return false
+    if (typeIsReftype :st tid: vt).not then return false
+    bn: bareAtomNameId n: sn
+    if bn.isZero.not then return (st.lookupVarId nameId: bn).none.not
+    return (localFieldPath :st :ast n: sn)
+}
+
+# checkOwnedValueAt -- walk the value a destination that owns what it holds is
+# handed: a projection that is the whole value takes its source
+# (projectionSourceBorrows).
+checkOwnedValueAt: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    nid: zast.nodeid
+} out ztypes.tid is {
+    prev: st.typing.owningValueNid
+    st.typing.owningValueNid = valueCoreNid :ast :nid
+    vt: checkValueAt :st :unitDecl :ast :nid
+    st.typing.owningValueNid = prev
+    return vt
+}
+
+# valueCoreNid -- the node a value is, under the lines and one-statement
+# blocks its parentheses wrap it in.
+valueCoreNid: function {ast: Ast.view nid: zast.nodeid} out u64 is {
+    cur: nid
+    for cur.isZero.not loop {
+        n: ast.nodes.get i: cur.u64
+        if n.statementline then {
+            cur = n.statementline
+        } else if n.statement when n.statements.count == 1 then {
+            cur = zast.nodeid.create from: (zast.kidAt kids: ast.kids span: n.statements i: 0)
+        } else {
+            return cur.u64
+        }
     }
-    return false
+    return cur.u64
 }
 
 # checkProjectionCreate -- `P src` / `P.create from: src` on a
 # facet or protocol: a projection, not a call. No CALL scope; the from-argument
-# walks in the current scope (a facet copies its source -- nothing is consumed);
-# the value is the facet/protocol type.
+# walks in the current scope. A facet copies its source; a protocol borrows
+# it (projectionSourceBorrows) or takes it, and copies a value type. The value
+# is the facet/protocol type.
 checkProjectionCreate: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
     call: callref
     pjId: u64
-    consumes: bool
-    borrows: bool
 } out ztypes.tid is {
+    isFacet: (st.reg.typetypeOf typeId: (ztypes.tid.create from: pjId)) == ztypes.ztypetype.facetType
+    borrows: false
     found: false
     kAiter: u64
     for kAiter < call.nargs loop {
@@ -25633,7 +25674,9 @@ checkProjectionCreate: function {
         an: zast.nameTextCopy :ast ref: arg.name
         if an.length > 0 when (an.stringView == "from").not then continue
         found = true
-        pvt: checkValueAt :st :unitDecl :ast nid: arg.operation
+        # a projection or construction as the source is a temporary this one
+        # consumes or re-views, so it owns what it holds
+        pvt: checkOwnedValueAt :st :unitDecl :ast nid: arg.operation
         if pvt.isZero then continue
         # the source must conform, as an argument at a spec parameter must; a
         # typedef conforming through its base takes the base's row as its own
@@ -25649,9 +25692,14 @@ checkProjectionCreate: function {
             valueNid: arg.operation
             owning: false
         )
-        if borrows then {
+        if (zast.markerKindOf :ast n: (ast.nodes.get i: arg.operation.u64)).borrowMarker then {
+            borrows = true
             borrowProjectionSource :st :ast pjId: (ztypes.tid.create from: pjId) :arg
+        } else if isFacet.not when (projectionSourceBorrows :st :ast :call src: arg.operation vt: pvt) then {
+            borrows = true
+            pinProjectionBorrow :st :ast :arg
         } else {
+            consumes: isFacet.not and (typeIsReftype :st tid: pvt)
             consumeProjectionSource :st :ast :arg argT: pvt :consumes
         }
     }
@@ -26190,10 +26238,13 @@ applyTypedefTypePins: function {
     return ok
 }
 
-# checkTypedefCreate -- `T.create from: expr` / bare `T expr` on a typedef:
-# an owned cast, not a call. No CALL scope; the from-argument walks in the
-# current scope (a non-trivial one hoists there) and is consumed; the value
-# is the typedef type.
+# checkTypedefCreate -- `T.create from: expr` / bare `T expr` on a typedef: a
+# cast, not a call. No CALL scope; the from-argument walks in the current
+# scope. A source that borrows (projectionSourceBorrows: `Bytes xs.borrow`, or
+# `Bytes xs` outside an owning destination) makes the value a second name for
+# it, locked EXCLUSIVELY for as long as it lives -- writes through the value
+# are writes to the source. Any other source is consumed (a non-trivial one
+# hoists there). The value is the typedef type.
 checkTypedefCreate: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -26202,15 +26253,7 @@ checkTypedefCreate: function {
     tdId: u64
 } out ztypes.tid is {
     refuseTypedefExtraArgs :st :ast :call :tdId
-    # the source's marker picks the result's ownership: `Bytes xs.borrow` is a
-    # second name for `xs`, locked for as long as it lives
-    if (projectionSourceBorrows :ast :call) then return (checkTypedefBorrow
-        :st
-        :unitDecl
-        :ast
-        :call
-        :tdId
-    )
+    borrows: false
     found: false
     kAiter: u64
     for kAiter < call.nargs loop {
@@ -26227,7 +26270,8 @@ checkTypedefCreate: function {
             if isFrom then {
                 found = true
                 errT0: st.typing.errors.length
-                vt: checkValueAt :st :unitDecl :ast nid: arg.operation
+                # a construction as the source is a temporary the cast takes
+                vt: checkOwnedValueAt :st :unitDecl :ast nid: arg.operation
                 (reportUnresolvedCastArg
                     :st
                     :unitDecl
@@ -26237,13 +26281,22 @@ checkTypedefCreate: function {
                     errMark: errT0
                 )
                 checkCastFromType :st :ast :tdId :vt :arg
-                if vt > 0 then consumeCastFromArg :st :ast aOpId: arg.operation :vt
+                if vt > 0 then {
+                    borrows = projectionSourceBorrows :st :ast :call src: arg.operation :vt
+                    if borrows then {
+                        pinTypedefBorrowSource :st :ast src: arg.operation
+                    } else {
+                        consumeCastFromArg :st :ast aOpId: arg.operation :vt
+                    }
+                }
             }
         }
     }
     settd: tdId
     stampGate :st nid: call.nid.u64 tid: (ztypes.tid.create from: settd.u64)
-    st.typing.callKind.set key: call.nid.u64 value: zast.callkind.typedefCreate
+    ck: zast.callkind.typedefCreate
+    if borrows then ck = zast.callkind.typedefBorrow
+    st.typing.callKind.set key: call.nid.u64 value: ck
     return (ztypes.tid.create from: tdId)
 }
 
@@ -26304,55 +26357,6 @@ pinTypedefBorrowSource: function {st: zenv.ZSymbolTable ast: Ast src: zast.nodei
     tup: ListVal zast.nameid
     appendValueTuple :ast n: (ast.nodes.get i: srcN.u64) dst: tup
     pinsPush :st path: tup shared: false mutable: true alias: false
-}
-
-# checkTypedefBorrow -- `T src.borrow` (or `T.create from: src.borrow`) on a typedef:
-# a borrowed cast, a second name for the source. No CALL scope, no take; the
-# source walks in the current scope and the binding borrows it EXCLUSIVELY --
-# writes through the binding are writes to the source (the lifted view origin
-# when the source is itself a borrowed view, which that view pinned).
-checkTypedefBorrow: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    call: callref
-    tdId: u64
-} out ztypes.tid is {
-    found: false
-    kAiter: u64
-    for kAiter < call.nargs loop {
-        argId: (zast.callArgAt :ast nid: call.nid i: kAiter).u32
-        kAiter = kAiter + 1
-        arg: argRefAt :ast nid: (zast.nodeid.create from: argId.u32)
-        if arg.nid.isZero.not when found.not then {
-            an: zast.nameTextCopy :ast ref: arg.name
-            isFrom: false
-            if an.length == 0 then {
-                isFrom = true
-            } else {
-                if an.stringView == "from" then isFrom = true
-            }
-            if isFrom then {
-                found = true
-                errT0: st.typing.errors.length
-                vt: checkValueAt :st :unitDecl :ast nid: arg.operation
-                (reportUnresolvedCastArg
-                    :st
-                    :unitDecl
-                    :ast
-                    argId: arg.operation
-                    :vt
-                    errMark: errT0
-                )
-                checkCastFromType :st :ast :tdId :vt :arg
-                if vt > 0 then pinTypedefBorrowSource :st :ast src: arg.operation
-            }
-        }
-    }
-    settd: tdId
-    stampGate :st nid: call.nid.u64 tid: (ztypes.tid.create from: settd.u64)
-    st.typing.callKind.set key: call.nid.u64 value: zast.callkind.typedefBorrow
-    return (ztypes.tid.create from: tdId)
 }
 
 # methodHasThisReceiver -- a FUNCTION child bound to a receiver: a declared
@@ -32606,7 +32610,10 @@ checkReassignment: function {
     if lvt > 0 when (st.reg.typetypeOf typeId: lvt) == ztypes.ztypetype.functionType then {
         rvt = ztypes.tid.create from: (valueNoCoerceAt :st :unitDecl :ast nid: rasgn.value)
     } else {
+        owPrev: st.typing.owningValueNid
+        st.typing.owningValueNid = valueCoreNid :ast nid: rasgn.value
         rvt = checkMovedValueAt :st :unitDecl :ast nid: rasgn.value
+        st.typing.owningValueNid = owPrev
     }
     # a value that resolved to nothing and raised nothing: an unresolvable
     # root name is an unknown reference, as at a binding
@@ -39673,18 +39680,8 @@ checkTypedCallArg: function {
         :wasPos
         :arg
     )
-    # a `create` the type WRITES binds its own parameters, so their ownership
-    # is the function's, as a direct call of it reads it; only the synthesised
-    # one takes each field as the field declares it
-    ownFn: funcId
-    ownCtor: isCtor
-    if isCtor when (effId == funcId).not when (st.typing.declMemberIsSynth
-        parentTypeId: funcId
-        nameId: zast.names.wkCreate
-    ).not then {
-        ownFn = effId
-        ownCtor = false
-    }
+    ownFn: ownershipCallee :st :effId :funcId :isCtor
+    ownCtor: isCtor and (ownFn == funcId)
     aow: argOwnershipOf :st funcId: ownFn isCtor: ownCtor :pnId :vt
     if aow.isTake then markSpecStandInOwned :st nid: arg.nid
     refusePlainPrivateArg :st :ast funcId: ownFn :isCtor :pnId :vt :arg
@@ -39897,7 +39894,11 @@ walkOneCallArg: function {
                 n: (ast.nodes.get i: arg.operation.u64)
             ).u64
             st.typing.suppressBareCtor = isTypeArg
-            vt = checkValueAt :st :unitDecl :ast nid: arg.operation
+            if (argSlotOwns :st :effId :funcId :isCtor :recvImplicit :argIdx :arg) then {
+                vt = checkOwnedValueAt :st :unitDecl :ast nid: arg.operation
+            } else {
+                vt = checkValueAt :st :unitDecl :ast nid: arg.operation
+            }
             st.typing.suppressBareCtor = sbPrev
             st.typing.callArgNode = caPrev
             if isTypeArg when vt.isZero.not then refuseValueTypeArg :st :unitDecl :ast :arg :vt
@@ -39948,6 +39949,50 @@ walkOneCallArg: function {
             :calleePins
             :arg
         )
+    }
+}
+
+# ownershipCallee -- the function whose parameters say what a call does to its
+# arguments. A `create` the type WRITES binds its own parameters (`effId`), so
+# their ownership is the function's, as a direct call of it reads it; only the
+# synthesised one takes each field as the field declares it (`funcId`).
+ownershipCallee: function {
+    st: zenv.ZSymbolTable.view
+    effId: ztypes.tid
+    funcId: ztypes.tid
+    isCtor: bool
+} out ztypes.tid is {
+    if isCtor when (effId == funcId).not when (st.typing.declMemberIsSynth
+        parentTypeId: funcId
+        nameId: zast.names.wkCreate
+    ).not then return effId
+    return funcId
+}
+
+# argSlotOwns -- the parameter or field the argument binds to owns what it is
+# handed: a `.take` or `.hold` parameter, or an owned field of a synthesised
+# construction. Asked before the argument is walked, so that an unmarked
+# projection there takes its source (checkOwnedValueAt).
+argSlotOwns: function {
+    st: zenv.ZSymbolTable.view
+    effId: ztypes.tid
+    funcId: ztypes.tid
+    isCtor: bool
+    recvImplicit: bool
+    argIdx: u64
+    arg: argref
+} out bool is {
+    pnId: arg.name
+    if pnId.isZero then pnId = positionalParamNameId :st funcId: effId idx: argIdx skipRecv: recvImplicit
+    if pnId.isZero then return false
+    ownFn: ownershipCallee :st :effId :funcId :isCtor
+    oo: st.typing.declOwnershipOfId parentTypeId: ownFn nameId: pnId
+    match (
+        oo
+    ) case some then {
+        return oo == ztypes.zparamownership.takeMode or (oo == ztypes.zparamownership.holdMode)
+    } case none then {
+        return isCtor and (ownFn == funcId)
     }
 }
 
@@ -40229,7 +40274,7 @@ boxArgumentTid: function {
         if boxParam.isZero.not when arg.name == boxParam then continue
         reportBoxUnknownArgument :st :ast :arg
         fnd = true
-        avt: checkValueAt :st :unitDecl :ast nid: arg.operation
+        avt: checkOwnedValueAt :st :unitDecl :ast nid: arg.operation
         vt = materialiseLiteral :ast :st :unitDecl t: avt
         if vt.isZero then continue
         bindBoxedArgument :st :ast :arg argT: vt
@@ -40786,7 +40831,7 @@ checkYieldCall: function {
             kYa = kYa + 1
             ya: argRefAt :ast nid: (zast.nodeid.create from: yaId.u32)
             if ya.nid.isZero.not then {
-                yaT: checkValueAt :st :unitDecl :ast nid: ya.operation
+                yaT: checkOwnedValueAt :st :unitDecl :ast nid: ya.operation
                 checkYieldedValue :st :unitDecl :ast arg: ya argT: yaT
             }
         }
@@ -41213,7 +41258,12 @@ checkReturnedValue: function {
     arg: argref
 } is {
     errR: st.typing.errors.length
-    argT: checkValueAt :st :unitDecl :ast nid: arg.operation
+    argT: ztypes.tid
+    if st.typing.currentReturnsBorrow then {
+        argT = checkValueAt :st :unitDecl :ast nid: arg.operation
+    } else {
+        argT = checkOwnedValueAt :st :unitDecl :ast nid: arg.operation
+    }
     # A returned value that typed to nothing and raised nothing is an
     # unresolvable name -- but ONLY where this walk knows the enclosing
     # function's return type. Some bodies reach here degenerate (zlexer's
@@ -41314,17 +41364,12 @@ checkTypedefOrProjectionCall: function {
     pjtt: st.reg.typetypeOf typeId: (ztypes.tid.create from: tdo.u64)
     isProj: pjtt == ztypes.ztypetype.facetType or (pjtt == ztypes.ztypetype.protocolType)
     if isProj then {
-        pjBorrow: projectionSourceBorrows :ast :call
-        pjTake: false
-        if pjtt == ztypes.ztypetype.protocolType when pjBorrow.not then pjTake = true
         return (callleg handled: true tid: (checkProjectionCreate
             :st
             :unitDecl
             :ast
             :call
             pjId: tdo
-            consumes: pjTake
-            borrows: pjBorrow
         )
         )
     }
@@ -41877,7 +41922,7 @@ checkTaggedCtorArg: function {
                 msg: uum
             )
         }
-        uvt: checkValueAt :st :unitDecl :ast nid: arg2.operation
+        uvt: checkOwnedValueAt :st :unitDecl :ast nid: arg2.operation
         # the arm stores its payload OWNED: a
         # bare-name reftype payload transfers
         upbn: (bareAtomName
@@ -42664,23 +42709,17 @@ checkTypeConstruction: function {
     tid: ztypes.tid
 } out ztypes.tid is {
     funcId: tid
-    # A PROJECTION TYPE IS NO RECORD TO BUILD. `Speaker d` re-views its source,
-    # and the source's own marker says how: `d.borrow` borrows it for the
-    # binding's life, `d` or `d.take` hands it over.
+    # A PROJECTION TYPE IS NO RECORD TO BUILD. `Speaker d` re-views its source:
+    # `d` and `d.borrow` borrow it, `d.take` hands it over, and so does `d` in a
+    # destination that owns what it holds.
     pjtt: st.reg.typetypeOf typeId: tid
     if pjtt == ztypes.ztypetype.protocolType or (pjtt == ztypes.ztypetype.facetType) then {
-        pjBorrow: projectionSourceBorrows :ast :call
-        # a facet copies its source whichever way; an owned protocol takes it
-        pjTake: false
-        if pjtt == ztypes.ztypetype.protocolType when pjBorrow.not then pjTake = true
         return (checkProjectionCreate
             :st
             :unitDecl
             :ast
             :call
             pjId: tid.u64
-            consumes: pjTake
-            borrows: pjBorrow
         )
     }
     if (refuseDisabledConstruction :st :call :tid) then {

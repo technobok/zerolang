@@ -1,0 +1,80 @@
+# An unmarked projection of a named place -- `Rd d`, `Rd.create from: d`, a
+# typedef `P d` -- BORROWS its source, as `d.borrow` does: bound to a name,
+# handed to a borrowing parameter, or used as a receiver, `d` is locked for as
+# long as the projection lives and stays owned by its name. Handed to a
+# destination that owns what it holds -- a `.take` parameter, a constructor's
+# field, a sum arm, a return, a reassignment, `.append` -- it TAKES
+# the source. A value-type source copies either way. Each leg below once
+# double-freed, failed in the C compiler, or moved a source it only read.
+Rd: protocol {
+    rdn: function {t: this.view} out i64
+}
+
+PC: class { n: i64  s: String } as {
+    :Rd
+    rdn: function {c: this.view} out i64 is { return c.n }
+}
+
+pt: record { x: i64 } as {
+    :Rd
+    rdn: function {c: this.view} out i64 is { return c.x }
+}
+
+P: typedef PC
+
+H: class { r: Rd }
+
+U: union { a: Rd  b: i64 }
+
+use: function {r: Rd} out i64 is { return r.rdn }
+
+keep: function {r: Rd.take} out i64 is { return r.rdn }
+
+# a borrowed parameter projected: the projection borrows it in turn
+viaParam: function {d: PC} out i64 is {
+    pn: 0
+    {
+        p: Rd d
+        pn = p.rdn
+    }
+    q: P d
+    return pn + q.n
+}
+
+made: function {n: i64} out Rd is {
+    d: PC :n s: "m".string
+    return (Rd d)
+}
+
+main: function is {
+    a: PC n: 1 s: "a".string
+    print "param \{viaParam d: a} \{a.n}"
+    c: true
+    if c then {
+        p: Rd a
+        print "if \{p.rdn}"
+    }
+    print "after if \{a.n}"
+    print "arg \{use r: (Rd a)} recv \{(Rd a).rdn} still \{a.n}"
+    t: P.create from: a
+    print "typedef \{t.n}"
+    b: PC n: 2 s: "b".string
+    print "keep \{keep r: (Rd b)}"
+    e: PC n: 3 s: "e".string
+    h: H r: (Rd e)
+    print "field \{h.r.rdn}"
+    f: PC n: 4 s: "f".string
+    u: U.a (Rd f)
+    match (u) case a then print "arm \{u.rdn}" case b then null
+    g: PC n: 5 s: "g".string
+    xs: List Rd
+    xs.append (Rd g)
+    print "append \{xs.length}"
+    r: made n: 7
+    m: PC n: 8 s: "r".string
+    r = Rd m
+    print "reassign \{r.rdn}"
+    v: pt x: 9
+    w: Rd v
+    print "value \{w.rdn} \{v.x} \{keep r: (Rd v)} \{v.x}"
+}
