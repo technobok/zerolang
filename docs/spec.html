@@ -2096,8 +2096,10 @@ compiler generated 'generic' method, that allows that defined object to be used
 as a generic constraint when used as a type in a field or parameter. Also,
 'generic' is a predeclared type that takes a 'from' parameter of type 'any'
 that can be used to specify generic fields or parameters.</p>
-<p>For all compound types and functions, generic parameters are declared in the
-<code>as</code> clause, not in instance fields or function parameters. Functions declare
+<p>For compound types and functions, generic parameters are declared in the
+<code>as</code> clause, not in instance fields or function parameters -- except for a
+protocol or a facet, whose body holds only specs and which declares its
+generic parameters there, beside the specs they type. Functions declare
 generic parameters via <code>as { name: constraint.generic }</code> alongside their
 <code>in</code>, <code>out</code> and <code>is</code> clauses. See <a href="#function-definition-arguments">Function Definition Arguments</a> for details.</p>
 <p>Any object (unit, function/spec, union, variant, class, object, protocol,
@@ -2725,9 +2727,9 @@ to a type reference (of the form <code>name: typereference</code>).</p>
     to function calls (to specify a generic type). As with function calls, the
     name of the first generic argument may be omitted</li>
 <li>a type followed by <code>.generic</code> (eg. <code>AnyRef.generic</code>) to create a generic
-    type parameter. For functions and protocols, the generic parameter is declared
-    in the body. For records, unions, classes and variants, the generic parameter
-    is declared in the <code>as</code> section.</li>
+    type parameter. For protocols and facets, the generic parameter is declared
+    in the body, beside the specs it types. For records, unions, classes,
+    variants and functions, it is declared in the <code>as</code> section.</li>
 <li>a type followed by <code>.take</code>, <code>.borrow</code>, <code>.view</code> or <code>.hold</code> in
     function parameter definitions to specify ownership and locking
     semantics. See <a href="./ownership.html">ownership.</a></li>
@@ -5131,8 +5133,66 @@ main: function is {
 #    9 |     :Getter
 #      |      ^
 #      = note: in the instance of `Box` with t = u8, instantiated at app.z line 17</code></pre>
-<p>A marker names a protocol or facet; conforming to an instance of a generic
-protocol is not supported.</p>
+<p><strong>Generic protocols and facets.</strong></p>
+<p>A protocol or a facet may be generic. Its generic parameters are declared in
+its body, beside the specs they type; one written in the <code>as</code> section is
+refused. Each <em><strong>instance</strong></em> is an interface of its own, its parameters
+substituted in every spec, and is written as a type application wherever a
+type goes -- a parameter, a <code>List</code> element, <code>(Getter v: i64).create
+from: c</code>. A conformance names the instance it conforms to, in parentheses,
+and is checked exactly against that instance's specs. A generic conformer
+may name an instance over its own parameter, as <code>Box</code> does below: each
+instance of <code>Box</code> conforms to its own substituted instance -- <code>Box</code> with
+<code>t = i64</code> to <code>(Getter v: i64)</code> -- and is checked against it as the
+generic conformers above are. A generic bound may name an instance too:
+<code>T: (Getter v: i64).generic</code> admits the types that conform to it.</p>
+<pre><code class="language-zerolang">Getter: protocol {
+    v: anyval.generic
+    get: function {t: this.view} out v
+}
+
+Cell: class {
+    n: i64
+} as {
+    g: (Getter v: i64)
+    get: function {c: this.view} out i64 is {
+        return c.n
+    }
+}
+
+Box: class {
+    x: t
+} as {
+    t: anyval.generic
+    g: (Getter v: t)
+    get: function {b: this.view} out t is {
+        return b.x
+    }
+}
+
+show: function {g: (Getter v: i64).view} out i64 is {
+    return g.get
+}
+
+main: function is {
+    print "\{show g: (Cell n: 4)} \{show g: (Box x: 5)}"    # 4 5
+}</code></pre>
+<p>The generic spec itself names no interface a type can implement: a marker
+naming it, as a label or by name, is refused at the marker, and nothing is
+inferred from the conformer's methods.</p>
+<pre><code class="language-zerolang">Cell: class {
+    n: i64
+} as {
+    :Getter
+    get: function {c: this.view} out i64 is {
+        return c.n
+    }
+}
+
+# error[E0100]: 'Getter' is generic: name the instance this type conforms to, e.g. `Getter: (Getter v: i64)`
+#  --&gt; app.z:9:6
+#    9 |     :Getter
+#      |      ^</code></pre>
 <p>Protocols can be used:</p>
 <p>- to create protocol instances: see <a href="#protocol-instance-creation">protocol
   instance creation</a>.
@@ -5259,6 +5319,20 @@ specs (function signatures without bodies) that conforming types must
 implement. Only value types (records, variants) can implement facets.</p>
 <pre><code class="language-zerolang">measurable: facet {
     measure: function {:this b: i64} out i64
+}</code></pre>
+<p>A facet may be generic, its parameters declared in its body, and a value type
+conforms to one of its instances by naming it, exactly as for a generic
+protocol (see <a href="#protocol">protocol</a>):</p>
+<pre><code class="language-zerolang">sized: facet {
+    n: anyval.generic
+    size: function {t: this.view} out n
+}
+
+span: record { lo: u32  hi: u32 } as {
+    m: (sized n: u32)
+    size: function {s: this.view} out u32 is {
+        return s.hi - s.lo
+    }
 }</code></pre>
 <h4 id="conformance"><a href="#conformance">11.7.1. Conformance</a></h4>
 <p>A value type declares conformance to a facet via a labeled entry in its
