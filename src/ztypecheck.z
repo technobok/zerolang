@@ -31888,6 +31888,31 @@ checkMovedValueAt: function {
     return vt
 }
 
+# refuseValueBorrowBinding -- `b: p.borrow` binding a VALUE type: the binding
+# is an owned copy (a value type aliases nothing, so no pin transfers to it),
+# and `b` goes on reading the old value after `p` is written. The marker says
+# a borrow that does not happen, so it is refused; a `.borrow` PARAMETER,
+# which is passed by reference, still aliases.
+refuseValueBorrowBinding: function {
+    st: zenv.ZSymbolTable ast: Ast.view vt: ztypes.tid asgn: asgnref
+} is {
+    if vt.isZero or (typeIsValtype :st tid: vt).not then return
+    vn: ast.nodes.get i: asgn.value.u64
+    if vn.dottedpath.not or (zast.markerKindOf :ast n: vn).borrowMarker.not then return
+    tn: st.reg.nameOf tid: vt
+    (addErrorH
+        :st
+        nodeid: asgn.value
+        lineno: (nodeLine n: vn)
+        colno: (nodeCol n: vn)
+        e: zast.err.ownerError
+        msg: "'\{tn}' is a value type: the binding copies it, so `.borrow` has nothing to borrow"
+        note: "".string
+        hint: "drop the marker; a `.borrow` parameter is what refers to the caller's value".string
+        width: 1
+    )
+}
+
 # refuseNonValue -- a data block or a unit used whole where a value is wanted.
 # True when `vt`, the value's type, is one and was refused.
 refuseNonValue: function {
@@ -32020,6 +32045,7 @@ checkAssignment: function {
         return
     }
     if (refuseNonValue :st :ast :vt nid: asgn.value) then return
+    refuseValueBorrowBinding :st :ast :vt :asgn
     if vt > 0 then {
         pinBoundField :st :ast :vt nid: asgn.value
         pinBoundName :st :ast :vt nid: asgn.value

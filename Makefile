@@ -1894,7 +1894,9 @@ perf: $(PERFBIN)
 # does: 0 behaviour, -1194 source (orderFnptrArg's own copy is gone).
 #
 # +13 `.take`/`.hold` hand a protocol value on: 0 behaviour, 13 source.
-ALLOC_BASELINE := 2739574
+#
+# +711 a `.borrow` binding of a value type is refused: 0 behaviour, 711 source.
+ALLOC_BASELINE := 2740285
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
