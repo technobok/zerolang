@@ -12989,6 +12989,29 @@ resolveClass: function {
     )
 }
 
+# registerInterfaceGenerics -- a protocol or a facet declares its generic
+# parameters in the IS block, beside the spec methods, where every other
+# declaring kind uses `as`. They are registered here, so isGenericParamOf
+# answers for a spec member typed by one rather than resolving it as an
+# ordinary name. True, with the type marked generic, when it declares any.
+registerInterfaceGenerics: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    defName: StringView
+    tid: ztypes.tid
+    fnode: objref
+} out bool is {
+    tdecl: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: defName)
+    od: ast.nodes.get i: fnode.nid.u64
+    if od.objectdef.not then return false
+    if (hasGenericParam :ast items: od.isItems).not then return false
+    st.reg.setGeneric typeId: tid value: true
+    registerGenericParams :st :ast :tdecl items: od.isItems
+    return true
+}
+
 # resolveFacet -- resolve a facet ObjectDef into a FACET valtype: a child per
 # is-block spec method (the `:this` receiver dropped), then synthesized `create` +
 # `borrow` FUNCTION shells (JOIN-only, no own row). Facets are value types
@@ -13016,14 +13039,15 @@ resolveFacet: function {
     scanVisibility :st :ast onode: fnode excl: pvExcl_ffid grants: pvGrants_ffid
     st.reg.setValtype typeId: (ztypes.tid.create from: fid.u64) value: true
     attachInterfaceAsConstants :st :ast parentId: (ztypes.tid.create from: fid.u64) :fnode
-    isgen: false
-    {
-        onIsgen: ast.nodes.get i: fnode.nid.u64
-        if onIsgen.objectdef then {
-            isgen = hasGenericParam :ast items: onIsgen.isItems
-        }
-    }
-    if isgen then st.reg.setGeneric typeId: (ztypes.tid.create from: fid.u64) value: true
+    isgen: (registerInterfaceGenerics
+        :st
+        :ast
+        :unitDecl
+        :scope
+        :defName
+        tid: (ztypes.tid.create from: fid.u64)
+        :fnode
+    )
     # `type` INSIDE AN INTERFACE IS THE INTERFACE. Reading it as the first
     # recorded CONFORMER makes a spec member's parameter concrete: the vtable
     # slot comes out typed `bool (*op_eq)(void*, pt)` and there is no uniform
@@ -13111,27 +13135,15 @@ resolveProtocol: function {
     scanVisibility :st :ast onode: fnode excl: pvExcl_ppid grants: pvGrants_ppid
     st.reg.setValtype typeId: (ztypes.tid.create from: pid.u64) value: false
     attachInterfaceAsConstants :st :ast parentId: (ztypes.tid.create from: pid.u64) :fnode
-    isgen: false
-    {
-        onIsgen: ast.nodes.get i: fnode.nid.u64
-        if onIsgen.objectdef then {
-            isgen = hasGenericParam :ast items: onIsgen.isItems
-        }
-    }
-    if isgen then {
-        st.reg.setGeneric typeId: (ztypes.tid.create from: pid.u64) value: true
-        # a generic protocol declares its parameters in the IS block, beside the
-        # spec methods, where every other declaring kind uses `as`. Nothing
-        # registered them, so isGenericParamOf answered false for a protocol and
-        # a spec member typed by one was resolved as an ordinary value.
-        tdeclP: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: defName)
-        {
-            onRgP: ast.nodes.get i: fnode.nid.u64
-            if onRgP.objectdef then {
-                registerGenericParams :st :ast tdecl: tdeclP items: onRgP.isItems
-            }
-        }
-    }
+    isgen: (registerInterfaceGenerics
+        :st
+        :ast
+        :unitDecl
+        :scope
+        :defName
+        tid: (ztypes.tid.create from: pid.u64)
+        :fnode
+    )
     # A protocol spec receiver is normally dropped (resolves to nothing). The reference
     # resolves Text NESTED inside String's `:Text` marker, so Text's spec `:this` binds
     # to the enclosing String -- mirror that for the system Text protocol.

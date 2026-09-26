@@ -1850,7 +1850,9 @@ perf: $(PERFBIN)
 #
 # +507 an interface's generic parameter in `as` is refused: 0 behaviour, 507
 # source.
-ALLOC_BASELINE := 2726613
+#
+# +134 a facet may be generic: 0 behaviour, 134 source.
+ALLOC_BASELINE := 2726747
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
