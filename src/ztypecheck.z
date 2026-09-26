@@ -32274,46 +32274,61 @@ checkMethodRefTarget: function {
     ast: Ast.view
     rasgn: reasgref
 } is {
+    tmk: borrowedFieldMarkerOf :st :ast :rasgn
+    if tmk.length == 0 then return
+    targetFnName: (zast.nameTextAt
+        :ast
+        ref: (dottedChildNameId :ast n: (ast.nodes.get i: rasgn.topath.u64))
+    )
+    md: "Cannot reassign '.\{tmk}' field '\{targetFnName}' — a non-owned field is set at construction time and immutable"
+    (addError
+        :st
+        nodeid: rasgn.nid
+        lineno: rasgn.lineno
+        colno: rasgn.colno
+        e: zast.err.ownerError
+        msg: md
+    )
+}
+
+# borrowedFieldMarkerOf -- the marker (`borrow`, `view`) of the non-owned field a
+# dotted target writes, read off its root's type; "" for an owned field or any
+# other target.
+borrowedFieldMarkerOf: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    rasgn: reasgref
+} out String is {
+    tmk: String
     targetRoot: methodReceiverRootId :ast n: (ast.nodes.get i: rasgn.topath.u64)
     targetFnName: (zast.nameTextAt
         :ast
         ref: (dottedChildNameId :ast n: (ast.nodes.get i: rasgn.topath.u64))
     )
-    if targetRoot.isZero.not when targetFnName.length > 0 then {
-        tto: st.lookup nameId: targetRoot
-        match (
-            tto
-        ) case some then {
-            if (st.typing.declIsBorrowedField
-                pool: ast.names
+    if targetRoot.isZero or (targetFnName.length == 0) then return tmk
+    tto: st.lookup nameId: targetRoot
+    match (
+        tto
+    ) case some then {
+        if (st.typing.declIsBorrowedField
+            pool: ast.names
+            parentTypeId: (ztypes.tid.create from: tto.u64)
+            name: targetFnName.stringView
+        ) then {
+            tmk.append "borrow"
+            tmo: (st.typing.declOwnershipOfId
                 parentTypeId: (ztypes.tid.create from: tto.u64)
-                name: targetFnName.stringView
-            ) then {
-                tmk: "borrow".string
-                {
-                    tmo: (st.typing.declOwnershipOfId
-                        parentTypeId: (ztypes.tid.create from: tto.u64)
-                        nameId: (zast.poolFind pool: ast.names text: targetFnName.stringView)
-                    )
-                    match (
-                        tmo
-                    ) case some then {
-                        tmt: markerText o: tmo
-                        if tmt.length > 0 then tmk = tmt
-                    } case none then null
-                }
-                md: "Cannot reassign '.\{tmk}' field '\{targetFnName}' — a non-owned field is set at construction time and immutable"
-                (addError
-                    :st
-                    nodeid: rasgn.nid
-                    lineno: rasgn.lineno
-                    colno: rasgn.colno
-                    e: zast.err.ownerError
-                    msg: md
-                )
-            }
-        } case none then null
-    }
+                nameId: (zast.poolFind pool: ast.names text: targetFnName.stringView)
+            )
+            match (
+                tmo
+            ) case some then {
+                tmt: markerText o: tmo
+                if tmt.length > 0 then tmk = tmt
+            } case none then null
+        }
+    } case none then null
+    return tmk
 }
 
 # checkReassignedType -- the RHS value must be assignable to the target's DECLARED
@@ -32404,8 +32419,7 @@ checkReassignedType: function {
 }
 
 # checkNarrowedTargetWrite -- writing a bare name resets its narrowing (a fresh
-# value of the whole declared type is legal again) and is refused outright when
-# the name is borrowed or readonly-locked.
+# value of the whole declared type is legal again).
 checkNarrowedTargetWrite: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -32426,15 +32440,6 @@ checkNarrowedTargetWrite: function {
         } case none then null
     }
     st.endNarrowingByWrite nameId: nmId
-    (refuseBorrowedWrite
-        :st
-        :ast
-        target: rasgn.topath
-        nodeid: rasgn.nid
-        lineno: rasgn.lineno
-        colno: rasgn.colno
-        verb: "reassign"
-    )
 }
 
 # refuseBorrowedWrite -- a write to a bare name bound to a BORROWED variable is
@@ -32552,7 +32557,7 @@ checkReassignment: function {
         hbNmId = atomNameId :ast n: tpn
         rvIsHold = valueIsHold :ast n: (ast.nodes.get i: rasgn.value.u64)
     }
-    if hbNmId.isZero.not when rvIsHold then {
+    if hbNmId.isZero.not then {
         hbo: st.lookupVarId nameId: hbNmId
         match (
             hbo
@@ -32563,11 +32568,23 @@ checkReassignment: function {
             ) case some then {
                 if hlh.kind == ztypes.zlockholderkind.varKind when hlh.id == hbo then {
                     hbVid = hbo
-                    st.releaseHeldLocks holder: hlh
+                    if rvIsHold then st.releaseHeldLocks holder: hlh
                 }
             } case none then null
         } case none then null
     }
+    # a refused target walks no value: a move the value spells would outlive
+    # the refusal and report its source as spent
+    if (refuseBorrowedWrite
+        :st
+        :ast
+        target: rasgn.topath
+        nodeid: rasgn.nid
+        lineno: rasgn.lineno
+        colno: rasgn.colno
+        verb: "reassign"
+    ) then return
+    if (refuseMarkedModeChange :st :ast :rasgn targetHeld: hbVid > 0) then return
     checkWriteLock :st :ast n: (ast.nodes.get i: rasgn.topath.u64) verb: "assign to" moving: false
     errR0: st.typing.errors.length
     # a FUNCTION-typed target takes a method REFERENCE, exactly as the same
@@ -32589,7 +32606,7 @@ checkReassignment: function {
     # recorded before the write lays anything over the local (its hold lock
     # retaken, its narrowing ended), which would read it as live again
     if hbNmId.isZero.not then st.recordNamedDestroy nid: rasgn.nid.u64 nameId: hbNmId
-    if hbVid > 0 then retakeHoldLock :st :ast :rasgn :hbVid :hbNmId
+    if hbVid > 0 when rvIsHold then retakeHoldLock :st :ast :rasgn :hbVid :hbNmId
     refuseBorrowedReassign :st :ast :rasgn targetNameId: hbNmId :rvt
     refuseBorrowedArms :st :ast nid: rasgn.value verb: "by reassignment"
     consumeReassignPins :st :ast :rasgn :hbNmId :rvt
@@ -32788,6 +32805,40 @@ localFieldPath: function {st: zenv.ZSymbolTable ast: Ast.view n: astnode.view} o
     root: rootNameIdOf :ast :n
     if root.isZero then return false
     return (st.lookupVarId nameId: root).none.not
+}
+
+# refuseMarkedModeChange -- a reassignment keeps the ownership its target was
+# bound with, so a value whose marker spells another mode is refused: `.hold`
+# rebinds only a `.hold` binding, and `.borrow` is stored in no owned or held
+# target. A non-owned field target is checkMethodRefTarget's. true when it
+# refused.
+refuseMarkedModeChange: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    rasgn: reasgref
+    # the target is a `.hold` binding
+    targetHeld: bool
+} out bool is {
+    mk: zast.markerKindOf :ast n: (ast.nodes.get i: rasgn.value.u64)
+    vmode: ""
+    if mk.holdMarker when targetHeld.not then vmode = "held"
+    if mk.borrowMarker then vmode = "borrowed"
+    if vmode.length == 0 then return false
+    if (borrowedFieldMarkerOf :st :ast :rasgn).length > 0 then return false
+    tmode: "owned"
+    if targetHeld then tmode = "held"
+    tt: String
+    exprTextOf :ast n: (ast.nodes.get i: rasgn.topath.u64) dst: tt
+    mm: "Cannot reassign \{tmode} '\{tt}' with a \{vmode} value: a reassignment keeps the ownership its target was bound with"
+    (addError
+        :st
+        nodeid: rasgn.nid
+        lineno: rasgn.lineno
+        colno: rasgn.colno
+        e: zast.err.ownerError
+        msg: mm
+    )
+    return true
 }
 
 # refuseBorrowedReassign -- `r = v` into a target that owns what it holds -- an
