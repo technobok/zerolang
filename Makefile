@@ -1844,7 +1844,10 @@ perf: $(PERFBIN)
 #
 # +574 a generic protocol instance's method keeps its receiver marker: 0
 # behaviour (the compiler's own source declares no generic spec), 574 source.
-ALLOC_BASELINE := 2725580
+#
+# +526 a type application over a non-generic type is refused: 0 behaviour, 526
+# source.
+ALLOC_BASELINE := 2726106
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

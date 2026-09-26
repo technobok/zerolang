@@ -3476,6 +3476,31 @@ refuseTypedefTypePositionFrom: function {
     }
 }
 
+# refuseNonGenericApplication -- a type application whose head is no generic
+# template names nothing: an instance of a type with no parameters is not a
+# type. True, with the error laid at the head, when `tplId` is not generic;
+# the application then answers the head itself, so nothing downstream reads
+# a phantom instance of it.
+refuseNonGenericApplication: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    tplId: ztypes.tid
+    at: zast.nodeid
+} out bool is {
+    if (st.reg.isGenericOf tid: tplId) then return false
+    name: st.reg.nameOf tid: tplId
+    n: ast.nodes.get i: at.u64
+    (addError
+        :st
+        nodeid: at
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.genericError
+        msg: "'\{name}' is not generic: it takes no type arguments"
+    )
+    return true
+}
+
 # resolveMonoRefParts -- resolveMonoRefInline's call-shaped core, taking the
 # callable and argument list directly so narrowed call subjects can feed it.
 resolveMonoRefParts: function {
@@ -3537,6 +3562,7 @@ resolveMonoRefParts: function {
             name: tname.stringView
         )
         if tplId.isZero then return 0
+        if (refuseNonGenericApplication :st :ast :tplId at: callableNid) then return tplId.u64
         validateMonoRefLabels :ast :st :arguments :tplId
         # generator wrapper collapse: the synth `.call` return's Option over a
         # VALTYPE element is optionval (ownership is a physical no-op there);
