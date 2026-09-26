@@ -1,0 +1,119 @@
+# generic_conformance.z -- a generic type's conformance marker holds for every
+# instance, and each instance is its own conformer: its own vtable helpers,
+# built from its own substituted methods, and -- for a facet -- its own member
+# of the facet's inline data union, sized to the largest instance.
+#
+# A generic CLASS to a protocol: borrowed as an argument, owned in a
+# `List Speaker` beside another instance of the same template, and a
+# protocol-bounded generic parameter taking an instance (no box: the bound
+# only admits it). A generic UNION to the same protocol. A generic RECORD and
+# a generic VARIANT to a facet, two instances each, of different sizes, in one
+# `ListVal sizer`. A generic typedef over a conforming generic class inherits
+# the conformance. And a conformer declared in another unit.
+Speaker: protocol {
+    speak: function {t: this.view} out i64
+}
+Dog: class {
+    v: t
+    n: i64
+} as {
+    t: anyval.generic
+    :Speaker
+    speak: function {t: this.view} out i64 is {
+        return t.n
+    }
+}
+Maybe: union {
+    got: T
+    empty: null
+} as {
+    T: AnyRef.generic
+    :Speaker
+    speak: function {t: this.view} out i64 is {
+        match (
+            t
+        ) case got then {
+            return 100
+        } case empty then {
+            return 0
+        }
+    }
+}
+hear: function {s: Speaker} out i64 is {
+    return s.speak
+}
+hearAny: function {s: T} out i64 as { T: Speaker.generic } is {
+    return s.speak
+}
+
+sizer: facet {
+    size: function {t: this.view} out u64
+}
+pr: record {
+    a: t
+    w: u64
+} as {
+    t: anyval.generic
+    m: sizer
+    size: function {t: this.view} out u64 is {
+        return t.w
+    }
+}
+slot: variant {
+    full: t
+    blank: null
+} as {
+    t: anyval.generic
+    m: sizer
+    size: function {t: this.view} out u64 is {
+        match (
+            t
+        ) case full then {
+            return 7
+        } case blank then {
+            return 1
+        }
+    }
+}
+measure: function {z: sizer} out u64 is {
+    return z.size
+}
+
+Pup: typedef (Dog t: u8)
+
+Crate: xunit_gconform.Crate
+Named: xunit_gconform.Named
+tag: function {x: Named} out i64 is {
+    return x.tagged
+}
+
+main: function is {
+    d: Dog v: 1.u8 n: 5
+    e: Dog v: 3 n: 6
+    print "\{hear s: d} \{hear s: e} \{hearAny s: d} \{d.Speaker.speak}"
+    xs: List Speaker
+    xs.append (Speaker.create from: d.take)
+    xs.append (Speaker.create from: e.take)
+    xs.append (Speaker.create from: (Maybe.got "x".string))
+    xs.append (Speaker.create from: (Pup (Dog v: 2.u8 n: 9)))
+    n: 0.i64
+    for x: xs.iterate loop n = n + x.speak
+    print "\{n} \{xs.length}"
+    m: Maybe.got "y".string
+    print "\{hear s: m} \{hear s: m.Speaker}"
+
+    p: pr a: 1.u8 w: 2
+    q: pr a: 1.i64 w: 3
+    print "\{measure z: p} \{measure z: q} \{p.m.size}"
+    zs: ListVal sizer
+    zs.append (sizer.create from: p)
+    zs.append (sizer.create from: q)
+    zs.append (sizer.create from: (slot.full 1.u16))
+    zs.append (sizer.create from: (slot.blank t: f64))
+    t: 0.u64
+    for z: zs.iterate loop t = t + z.size
+    print "\{t} \{zs.length}"
+
+    c: Crate v: 1.u8 k: 4
+    print "\{tag x: c} \{c.Named.tagged}"
+}

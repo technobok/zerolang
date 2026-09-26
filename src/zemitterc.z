@@ -15710,9 +15710,19 @@ dottedAtomRecClsBase: function {
     ).not then isRecOrCls = true
     if rtt == ztypes.ztypetype.classType then {
         # user classes only -- collection monos (List/Set/Map, with a
-        # generic origin) keep their own dottedpath legs below.
+        # generic origin) keep their own dottedpath legs below. An instance
+        # of a generic conformer reads its conformance label as a projection.
         baseStampOrigin: originTidOf :symtab tid: bstamp
-        if baseStampOrigin.isZero then isRecOrCls = true
+        if baseStampOrigin.isZero then {
+            isRecOrCls = true
+        } else {
+            isRecOrCls = (zenv.isConformanceLabelOf
+                ty: symtab.typing
+                reg: symtab.reg
+                tid: bstamp
+                nameId: (zast.poolFind pool: ast.names text: mn2).u64
+            )
+        }
     }
     if isRecOrCls then {
         utm: (emitUserTypeMemberRead
@@ -36792,24 +36802,29 @@ emitRecordDefs: function {
                     ctxBindMain :ctx name: sm.stringView unitDecl: smD
                 }
             }
-            if ph == 2 then emitTypedefInstanceConformanceImpls ast: program :symtab :ctx :buf
+            if ph == 2 then emitInstanceConformanceImpls ast: program :symtab :ctx :buf
             ph = ph + 1
         }
     }
 }
 
-# emitTypedefInstanceConformanceImpls -- the conformance helpers of each instance
-# of a generic typedef: no unit body declares an instance, so the per-unit pass
-# never reaches the row the instance inherited from its base.
-emitTypedefInstanceConformanceImpls: function {
+# emitInstanceConformanceImpls -- the conformance helpers of each generic
+# instance that carries rows of its own: an instance of a generic conformer,
+# checked against the spec at the end of typecheck, and an instance of a
+# generic typedef, which inherited its base's. No unit body declares an
+# instance, so the per-unit pass never reaches either. A native instance (str)
+# is boxed per use instead (boxLabelFor).
+emitInstanceConformanceImpls: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     buf: String.borrow
 } is {
     insts: ListVal u64
-    with tit: symtab.typing.typedefBaseTid.iterateItems do for te: tit loop {
-        if (symtab.reg.genericOriginOf tid: te.key).isZero.not then insts.append te.key.u64
+    with cit: symtab.typing.conformance.iterate do for row: cit loop {
+        it: ztypes.tid.create from: row.implTypeId
+        if (symtab.reg.genericOriginOf tid: it).isZero.not when (nativeConformerRow :symtab tid: it
+        ).isZero when (insts.contains item: it.u64).not then insts.append it.u64
     }
     with iit: insts.iterate do for it: iit loop {
         implT: ztypes.tid.create from: it.u64
@@ -36962,10 +36977,13 @@ protoParamCtype: function {
 }
 
 # facetImplTids -- the deduplicated impl type ids conforming to facet `tid`,
-# in conformance-row (declaration) order.
+# in conformance-row (declaration) order: each instance of a generic conformer
+# by its own row, never the template, whose struct is never emitted.
 facetImplTids: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid acc: ListVal u64} is {
     with citer: symtab.typing.conformance.iterate do for row: citer loop {
-        if row.specTypeId == tid when (acc.contains item: row.implTypeId
+        if row.specTypeId == tid when (acc.contains item: row.implTypeId).not when (isGenericType
+            :symtab
+            tid: (ztypes.tid.create from: row.implTypeId)
         ).not then acc.append row.implTypeId
     }
 }
@@ -37262,10 +37280,13 @@ emitProtocolImpl: function {
     buf: String.borrow
 } is {
     implOrig: originTidOf :symtab tid: (ztypes.tid.create from: implTid.u64)
-    # a native mono (str) is boxed per instance, on demand (boxLabelFor); an
-    # instance of a generic typedef carries the row it inherited as its own
+    # a native mono (str) is boxed per instance, on demand (boxLabelFor); any
+    # other instance conforms by a row of its own (emitInstanceConformanceImpls)
     isNat: (nativeConformerRow :symtab tid: implTid).isZero.not
-    if implOrig > 0 when isNat.not when (isTypedefType :symtab tid: implTid).not then return
+    if implOrig > 0 when isNat.not then {
+        ownLbl: conformanceLabelFor :symtab implTid: implTid.u64 protoTid: protoTid.u64
+        if ownLbl.length == 0 then return
+    }
     implBase: ctxCname :ctx tid: (ztypes.tid.create from: implTid.u64)
     implCtype: implStructC :symtab :ctx tid: (ztypes.tid.create from: implTid.u64)
     protoBase: ctxCname :ctx tid: protoTid
@@ -37415,7 +37436,14 @@ emitProtocolImpl: function {
     od0: "static void \{wbase}_owned_destroy(void* p) {\n"
     buf.append od0
     implEnd: chaseStrTypedef :symtab :ctx tid: (chaseAggregateTypedef :symtab :ctx tid: implTid)
-    if (symtab.reg.needsDestructor typeId: implEnd) then {
+    endDtor: symtab.reg.needsDestructor typeId: implEnd
+    # an instance of a generic union always has one, as registerScopeDestroy
+    # reads it: its flag is not minted with it
+    endOrig: originTidOf :symtab tid: implEnd
+    if endOrig > 0 when (symtab.reg.typetypeOf typeId: implEnd) == ztypes.ztypetype.unionType then {
+        endDtor = true
+    }
+    if endDtor then {
         endBase: ctxCnameView :ctx tid: implEnd
         od1: "    \{endBase}_destroy((\{implCtype}*)p);\n"
         if implEnd == ctx.strTid then od1 = "    \{ctx.strC}_free((\{implCtype}*)p);\n"
