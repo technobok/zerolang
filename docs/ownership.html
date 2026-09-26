@@ -99,7 +99,7 @@ Table of Contents</div>
 </li>
 <li><a href="#implicit-take">Implicit take</a>
 </li>
-<li><a href="#a-bare-bind-is-a-move">A bare bind is a move</a>
+<li><a href="#a-bare-bind-borrows">A bare bind borrows</a>
 </li>
 <li><a href="#scope-exit">Scope exit</a>
 </li>
@@ -323,7 +323,9 @@ heap. A class lives inline on the stack, but copying is disallowed: the single
 stack slot for a class is its identity.</p>
 <h3 id="defaults"><a href="#defaults">2.2. Defaults</a></h3>
 <p>An unmarked function parameter borrows: the caller's value is not moved.
-Return values default to <code>.take</code>.</p>
+Return values default to <code>.take</code>. A new local name bound from a named
+place borrows it too. A destination that declares ownership takes an
+unmarked source.</p>
 <table>
 <colgroup>
 <col style="width: 33%">
@@ -336,6 +338,10 @@ Return values default to <code>.take</code>.</p>
 <tbody>
 <tr><td>In parameters</td><td>copy</td><td>borrow (reference)</td></tr>
 <tr><td>Out return values</td><td>take</td><td>take</td></tr>
+<tr><td>A new local name (<code>b: d</code>, <code>with w: d do</code>)</td><td>copy</td><td>borrow</td></tr>
+<tr><td>An owning destination (see Implicit take)</td><td>take</td><td>take</td></tr>
+<tr><td>A reassignment (<code>x = d</code>)</td><td>copy</td><td>take</td></tr>
+<tr><td>A projection source (<code>Rd d</code>, <code>P d</code>)</td><td>copy</td><td>take</td></tr>
 </tbody>
 </table>
 <p>For valtypes, an unmarked parameter is a COPY -- the callee reads and writes
@@ -364,32 +370,44 @@ never writes pays for a reference it does not use, and lint L030 says so.</p>
 <ul>
 <li>Pass to a <code>.take</code> parameter -- transfers ownership to the callee</li>
 <li>Pass to a <code>.borrow</code> parameter -- temporary loan, ownership returns after the call</li>
-<li>Assign to a new name -- transfers ownership to the new name (old name is invalidated for reftypes; for valtypes, a copy is made and both names are valid)</li>
+<li>Bind to a new name -- <code>q: p</code> borrows (see A bare bind borrows); <code>q: p.take</code> transfers ownership to the new name and invalidates the old one. For valtypes either form copies and both names stay valid</li>
+<li>Reassign into another owned variable -- <code>x = p</code> transfers ownership, and <code>p</code> is invalidated (valtypes copy)</li>
 <li>Store in a field of an object</li>
 <li>Swap with another owned variable of the same type</li>
 <li>Return from a function (as <code>.take</code> or <code>.borrow</code>)</li>
 <li>Destroy explicitly via <code>.take</code> as an unused expression</li>
 </ul>
 <h3 id="implicit-take"><a href="#implicit-take">3.2. Implicit take</a></h3>
-<p>When a variable is passed to an explicitly declared <code>.take</code> parameter, the
-compiler automatically applies <code>.take</code> at the call site even if the
-programmer does not write it explicitly. The programmer can write <code>.take</code>
-explicitly to make the transfer visible in the source. After the call, the
-variable name is invalidated (for reftypes) or a copy was made (for valtypes).
-Note that <code>.take</code> must be explicitly written on the parameter definition --
-parameters default to <code>.borrow</code>.</p>
-<h3 id="a-bare-bind-is-a-move"><a href="#a-bare-bind-is-a-move">3.3. A bare bind is a move</a></h3>
-<p>Binding an owned reftype to a new name with no ownership method
-(<code>q: p</code>) is the same transfer as the reassignment <code>q = p</code>: the new
-name owns the value, the old one is invalidated, and a later read of it
-is <code>cannot use 'p' after ownership transfer</code>. The emitted code moves
-the struct and zeroes the source, so the source's scope-exit destroy is
-a no-op rather than a second free.</p>
+<p>A destination that declares ownership takes an unmarked variable: the
+compiler applies <code>.take</code> even when the source does not write it. The
+destinations are:</p>
+<ul>
+<li>an explicitly declared <code>.take</code> parameter (<code>xs.append d</code>)</li>
+<li>a constructor's field fill (<code>H f: d</code>)</li>
+<li>a sum type's arm (<code>U.a d</code>)</li>
+<li><code>return d</code> (return values default to <code>.take</code>) and <code>yield d</code></li>
+<li>a reassignment of an owned variable (<code>x = d</code>, <code>h.f = d</code>)</li>
+<li>the source of a projection (<code>Rd d</code>, <code>Rd.create from: d</code>, <code>P d</code> for a typedef <code>P</code>)</li>
+</ul>
+<p>The programmer can write <code>.take</code> explicitly to make the transfer visible.
+After the transfer the variable name is invalidated (for reftypes) or a copy
+was made (for valtypes). Note that <code>.take</code> must be explicitly written on the
+parameter definition -- parameters default to <code>.borrow</code>. A new local name
+is not a destination that declares ownership: it borrows.</p>
+<h3 id="a-bare-bind-borrows"><a href="#a-bare-bind-borrows">3.3. A bare bind borrows</a></h3>
+<p>Binding a reftype to a new name with no ownership method (<code>q: p</code>) is
+the same as <code>q: p.borrow</code>: the new name is a second name for <code>p</code>'s
+storage. <code>p</code> stays readable, a write through <code>q</code> reaches it, <code>p</code>
+cannot be written or moved while <code>q</code> lives, and <code>q</code> cannot be
+rebound, swapped or returned as an owned result. <code>q: p.take</code> moves:
+the new name owns the value, the old one is invalidated, and a later
+read of it is <code>cannot use 'p' after ownership transfer</code>. A valtype
+copies either way.</p>
 <p>The same rule reaches a match arm's payload: inside <code>case some then</code>
-the subject name IS the payload, so <code>s: opt</code> moves the payload out of
-the box and the subject is invalidated for the rest of the scope. Use
-<code>.copy</code> to keep the subject usable, or read it through a view. (A
-bare <em><strong>return</strong></em> of that payload is refused, because it would escape
+the subject name IS the payload, so <code>s: opt</code> borrows the payload and
+the subject stays usable after the arm. <code>s: opt.take</code> moves it out and
+the subject is invalidated for the rest of its scope.
+(A bare <em><strong>return</strong></em> of that payload is refused, because it would escape
 the arm's scope while the subject still owns the value.)</p>
 <h3 id="scope-exit"><a href="#scope-exit">3.4. Scope exit</a></h3>
 <p>When an owned variable falls out of scope without being consumed:</p>
@@ -1787,9 +1805,9 @@ non-owning windows into a parent container, and every one of them is an
 <code>outx</code> declaration -- that is what pins the parent.</p>
 <p>Two rules make views sound, and the compiler enforces both:</p>
 <ul>
-<li><strong>A view's payload cannot be moved out.</strong> Binding it to a new name,
-reassigning it away, marking it <code>.take</code>, or passing it to a taking
-parameter are all rejected with <code>E0200</code>. Moving the payload would
+<li><strong>A view's payload cannot be moved out.</strong> Marking it <code>.take</code>,
+reassigning it away, or passing it to a taking parameter are all
+rejected with <code>E0200</code>; binding it to a new name borrows it. Moving the payload would
 drain the map's stored value in place -- the map would keep answering
 <code>some</code> with an empty husk. Call <code>.copy</code> on the payload to keep an
 owned copy; reading it in place (interpolation, <code>.stringView</code>,
@@ -1844,7 +1862,8 @@ match (
     g1
 ) case some then {
     kept: g1.copy                # OK: copy to keep
-    # stolen: g1                 # E0200: cannot move payload out of a view
+    alias: g1                    # OK: a second name, borrowed
+    # stolen: g1.take            # E0200: cannot move payload out of a view
 } case none then {}
 # m.set key: "c" ...             # E0200: writer while g1/g2 live</code></pre>
 <pre><code class="language-zerolang">with it: m.iterateItems do for e: it loop {

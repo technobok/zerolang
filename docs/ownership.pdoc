@@ -133,12 +133,18 @@ stack slot for a class is its identity.
 #---: Defaults
 
 An unmarked function parameter borrows: the caller's value is not moved.
-Return values default to #~".take".
+Return values default to #~".take". A new local name bound from a named
+place borrows it too. A destination that declares ownership takes an
+unmarked source.
 
 #table cols="3 3 3":
-  Context            |Valtype default |Reftype default
-  In parameters      |copy            |borrow (reference)
-  Out return values  |take            |take
+  Context                                        |Valtype default |Reftype default
+  In parameters                                  |copy            |borrow (reference)
+  Out return values                              |take            |take
+  A new local name (#~"b: d", #~"with w: d do")  |copy            |borrow
+  An owning destination (see Implicit take)      |take            |take
+  A reassignment (#~"x = d")                     |copy            |take
+  A projection source (#~"Rd d", #~"P d")        |copy            |take
 
 For valtypes, an unmarked parameter is a COPY -- the callee reads and writes
 its own value, and the source is NOT invalidated. Writing #~".borrow" on a
@@ -174,7 +180,8 @@ An owned (taken) variable has full permission over its value.
 #ul:
   #*: Pass to a #~".take" parameter -- transfers ownership to the callee
   #*: Pass to a #~".borrow" parameter -- temporary loan, ownership returns after the call
-  #*: Assign to a new name -- transfers ownership to the new name (old name is invalidated for reftypes; for valtypes, a copy is made and both names are valid)
+  #*: Bind to a new name -- #~"q: p" borrows (see A bare bind borrows); #~"q: p.take" transfers ownership to the new name and invalidates the old one. For valtypes either form copies and both names stay valid
+  #*: Reassign into another owned variable -- #~"x = p" transfers ownership, and #~"p" is invalidated (valtypes copy)
   #*: Store in a field of an object
   #*: Swap with another owned variable of the same type
   #*: Return from a function (as #~".take" or #~".borrow")
@@ -182,28 +189,40 @@ An owned (taken) variable has full permission over its value.
 
 #---: Implicit take
 
-When a variable is passed to an explicitly declared #~".take" parameter, the
-compiler automatically applies #~".take" at the call site even if the
-programmer does not write it explicitly. The programmer can write #~".take"
-explicitly to make the transfer visible in the source. After the call, the
-variable name is invalidated (for reftypes) or a copy was made (for valtypes).
-Note that #~".take" must be explicitly written on the parameter definition --
-parameters default to #~".borrow".
+A destination that declares ownership takes an unmarked variable: the
+compiler applies #~".take" even when the source does not write it. The
+destinations are:
 
-#---: A bare bind is a move
+#ul:
+  #*: an explicitly declared #~".take" parameter (#~"xs.append d")
+  #*: a constructor's field fill (#~"H f: d")
+  #*: a sum type's arm (#~"U.a d")
+  #*: #~"return d" (return values default to #~".take") and #~"yield d"
+  #*: a reassignment of an owned variable (#~"x = d", #~"h.f = d")
+  #*: the source of a projection (#~"Rd d", #~"Rd.create from: d", #~"P d" for a typedef #~"P")
 
-Binding an owned reftype to a new name with no ownership method
-(#~"q: p") is the same transfer as the reassignment #~"q = p": the new
-name owns the value, the old one is invalidated, and a later read of it
-is #~"cannot use 'p' after ownership transfer". The emitted code moves
-the struct and zeroes the source, so the source's scope-exit destroy is
-a no-op rather than a second free.
+The programmer can write #~".take" explicitly to make the transfer visible.
+After the transfer the variable name is invalidated (for reftypes) or a copy
+was made (for valtypes). Note that #~".take" must be explicitly written on the
+parameter definition -- parameters default to #~".borrow". A new local name
+is not a destination that declares ownership: it borrows.
+
+#---: A bare bind borrows
+
+Binding a reftype to a new name with no ownership method (#~"q: p") is
+the same as #~"q: p.borrow": the new name is a second name for #~"p"'s
+storage. #~"p" stays readable, a write through #~"q" reaches it, #~"p"
+cannot be written or moved while #~"q" lives, and #~"q" cannot be
+rebound, swapped or returned as an owned result. #~"q: p.take" moves:
+the new name owns the value, the old one is invalidated, and a later
+read of it is #~"cannot use 'p' after ownership transfer". A valtype
+copies either way.
 
 The same rule reaches a match arm's payload: inside #~"case some then"
-the subject name IS the payload, so #~"s: opt" moves the payload out of
-the box and the subject is invalidated for the rest of the scope. Use
-#~".copy" to keep the subject usable, or read it through a view. (A
-bare #_*"return" of that payload is refused, because it would escape
+the subject name IS the payload, so #~"s: opt" borrows the payload and
+the subject stays usable after the arm. #~"s: opt.take" moves it out and
+the subject is invalidated for the rest of its scope.
+(A bare #_*"return" of that payload is refused, because it would escape
 the arm's scope while the subject still owns the value.)
 
 #---: Scope exit
@@ -1869,9 +1888,9 @@ non-owning windows into a parent container, and every one of them is an
 Two rules make views sound, and the compiler enforces both:
 
 #ul:
-  [#*: #b:"A view's payload cannot be moved out." Binding it to a new name,
-      reassigning it away, marking it #~".take", or passing it to a taking
-      parameter are all rejected with #~"E0200". Moving the payload would
+  [#*: #b:"A view's payload cannot be moved out." Marking it #~".take",
+      reassigning it away, or passing it to a taking parameter are all
+      rejected with #~"E0200"; binding it to a new name borrows it. Moving the payload would
       drain the map's stored value in place -- the map would keep answering
       #~"some" with an empty husk. Call #~".copy" on the payload to keep an
       owned copy; reading it in place (interpolation, #~".stringView",
@@ -1933,7 +1952,8 @@ out a writable alias.
       g1
   ) case some then {
       kept: g1.copy                # OK: copy to keep
-      # stolen: g1                 # E0200: cannot move payload out of a view
+      alias: g1                    # OK: a second name, borrowed
+      # stolen: g1.take            # E0200: cannot move payload out of a view
   } case none then {}
   # m.set key: "c" ...             # E0200: writer while g1/g2 live
   """
