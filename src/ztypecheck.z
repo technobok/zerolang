@@ -2474,6 +2474,10 @@ registerGenericParamOne: function {
     if m.namedoperation when (isGenericParam :ast op: (ast.nodes.get i: m.operation.u64)) then {
         cb: genericConstraintBase :ast n: (ast.nodes.get i: m.operation.u64)
         k: constraintKindFor text: cb.stringView
+        # a bound written as a type application names the instance it builds,
+        # and is found through that node rather than a name
+        ba: genericBoundApplication :ast n: (ast.nodes.get i: m.operation.u64)
+        if ba > 0 then k = ztypes.constraintkind.other
         # a bound no kind classifies is a DECLARATION, and what it admits is
         # that declaration's business: its name is kept so the check can find it
         bn: zast.nameid
@@ -2493,6 +2497,7 @@ registerGenericParamOne: function {
             numKind: (constraintIntKind cv: cb.stringView)
             boundName: bn
             boundQual: bq
+            boundApp: ba
         )
         # the BOUND names a real declaration -- `anyval`, a protocol -- but
         # everything above reads it as TEXT and maps it to a constraint kind,
@@ -2552,6 +2557,22 @@ genericBoundQualifierId: function {ast: Ast.view n: astnode.view} out zast.namei
         return r
     } else {
         return (zast.nameid.create from: 0)
+    }
+}
+
+# genericBoundApplication -- the type application a bound is written as
+# (`(Getter v: i64).generic`), 0 for a bound written as a name. A DEFAULTED
+# bound is a call over the same path and answers for its callable.
+genericBoundApplication: function {ast: Ast.view n: astnode.view} out u32 is {
+    match (
+        n
+    ) case call then {
+        return (genericBoundApplication :ast n: (ast.nodes.get i: n.callable.u64))
+    } case dottedpath then {
+        if (ast.nodes.get i: n.parent.u64).call then return n.parent.u32
+        return 0
+    } else {
+        return 0
     }
 }
 
@@ -2687,6 +2708,7 @@ registerUnitParamsOn: function {
             numKind: cd.numKind
             boundName: cd.boundName
             boundQual: cd.boundQual
+            boundApp: cd.boundApp
         )
         ut: genericParamTidMint :st :ast tdecl: unitTmpl nameId: pn
         st.reg.setGenericParamTid :tdecl paramName: pn tid: (ztypes.tid.create from: ut)
@@ -21073,7 +21095,14 @@ constraintAdmits: function {
     }
     if isNul when ck == ztypes.constraintkind.refType then return true
     if isNul when ck == ztypes.constraintkind.valType then return true
-    if ck == ztypes.constraintkind.other then return (namedBoundAdmits :ast :st :scope :cd :argTid)
+    if ck == ztypes.constraintkind.other then return (namedBoundAdmits
+        :ast
+        :st
+        :scope
+        :tdecl
+        :cd
+        :argTid
+    )
     return (constraintHolds :ast :st :scope :ck :argTid)
 }
 
@@ -21126,17 +21155,22 @@ reportConstraintUnmet: function {
 # member's own type or a conformer of a protocol/facet member, and a variant
 # exactly its arms' payload types. A bound that names nothing is
 # checkGenericBounds's report, not this one, and admits everything here so the
-# same mistake is not reported twice.
+# same mistake is not reported twice. A bound over another of the template's
+# parameters (`(Getter v: u).generic`) is a PARTIAL instance, which one
+# argument alone cannot decide, and admits it.
 namedBoundAdmits: function {
     ast: Ast
     st: zenv.ZSymbolTable
     scope: ztypes.declid
+    # the template whose parameter the bound is on
+    tdecl: ztypes.declid
     cd: ztypes.constraintdesc
     argTid: ztypes.tid
 } out bool is {
-    bt: namedBoundTid :ast :st :scope :cd
+    bt: namedBoundTid :ast :st :scope :tdecl :cd
     if bt.isZero then return true
     if bt == argTid then return true
+    if (st.reg.isPartialOf tid: bt) then return true
     tt: st.reg.typetypeOf typeId: bt
     if tt == ztypes.ztypetype.protocolType or (tt == ztypes.ztypetype.facetType) then {
         return (typeConformsTo :st impl: argTid spec: bt)
@@ -21148,13 +21182,60 @@ namedBoundAdmits: function {
     return true
 }
 
+# boundApplicationTid -- the instance a bound written as a type application
+# names, resolved as the same application written in a signature is: over a
+# generic template it mints the instance, over any other type it is refused,
+# and an argument that names nothing is reported as a signature's is (the
+# shell leg), leaving a type no argument conforms to.
+boundApplicationTid: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    tdecl: ztypes.declid
+    app: u32
+} out ztypes.tid is {
+    ud: unitRootOfDecl :st declId: tdecl
+    r: (resolveMonoRefInline
+        :st
+        :ast
+        unitDecl: ud
+        scope: tdecl
+        thisName: ""
+        enclDecl: tdecl
+        opNid: (zast.nodeid.create from: app)
+        nid: app
+    )
+    if r == 0 then {
+        cr: callRefAt :ast nid: (zast.nodeid.create from: app)
+        args: ListVal u32
+        k: u64
+        for k < cr.nargs loop {
+            args.append from: (zast.callArgAt :ast nid: cr.nid i: k).u32
+            k = k + 1
+        }
+        r = (resolveTyperefCallShell
+            :st
+            :ast
+            unitDecl: ud
+            scope: tdecl
+            thisName: ""
+            callableId: cr.callable
+            argIds: args
+        )
+    }
+    return (ztypes.tid.create from: r.u64)
+}
+
 # namedBoundTid -- the type a named bound resolves to, 0 when it names none.
 namedBoundTid: function {
     ast: Ast
     st: zenv.ZSymbolTable
     scope: ztypes.declid
+    # the template whose parameter the bound is on, where an application's
+    # names resolve
+    tdecl: ztypes.declid
     cd: ztypes.constraintdesc
 } out ztypes.tid is {
+    if cd.boundApp > 0 then return (boundApplicationTid :ast :st :tdecl app: cd.boundApp)
     if cd.boundName.isZero then return ztypes.tid
     ud: unitRootOfDecl :st declId: scope
     if cd.boundQual.isZero.not then {
@@ -21338,7 +21419,9 @@ constraintUnmetText: function {
     an: st.reg.nameOf tid: argTid
     cdx: st.reg.genericParamConstraintOf :tdecl :paramName
     con: constraintTextOf desc: cdx
-    # a bound no kind classifies is spelled by its own name
+    # a bound no kind classifies is spelled by its own name, an application
+    # by its own text
+    if con.length == 0 when cdx.boundApp > 0 then con = typeExprText :ast nid: cdx.boundApp.u64
     if con.length == 0 when cdx.boundName.isZero.not then {
         con = zast.nameTextCopy :ast ref: cdx.boundName
     }
@@ -21864,7 +21947,7 @@ keyParamAdmits: function {
     cd: st.reg.genericParamConstraintOf :tdecl paramName: pn
     if cd.kind == ztypes.constraintkind.none then return true
     if cd.kind == ztypes.constraintkind.other then {
-        return (namedBoundAdmits :ast :st scope: st.curScope :cd argTid: key)
+        return (namedBoundAdmits :ast :st scope: st.curScope :tdecl :cd argTid: key)
     }
     return (constraintHolds :ast :st scope: st.curScope ck: cd.kind argTid: key)
 }

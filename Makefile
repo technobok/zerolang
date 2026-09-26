@@ -1852,7 +1852,10 @@ perf: $(PERFBIN)
 # source.
 #
 # +134 a facet may be generic: 0 behaviour, 134 source.
-ALLOC_BASELINE := 2726747
+#
+# +1732 a bound written as a type application names its instance: 0
+# behaviour (the compiler's own source writes no such bound), 1732 source.
+ALLOC_BASELINE := 2728479
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
