@@ -1,0 +1,63 @@
+# A readonly value reaching a protocol or a facet. A `.view` parameter is a
+# const pointer in C, and three places took it as a mutable one:
+# - a conformance box (`<impl>_<label>_create`), built from a `.view`
+#   conformer -- as an argument or through a label (`q.m.size`);
+# - a facet method dispatched through a facet parameter marked `.view`, whose
+#   inline data is const where the vtable slot takes `void*`;
+# - a conformer handed to a facet parameter marked `.view` or `.borrow`, which
+#   takes a pointer while the box is a value.
+# The checker refuses a writing method on any of them, so each is read only.
+sizer: facet {
+    size: function {t: this.view} out i64
+}
+
+Plain: protocol {
+    get: function {t: this.view} out i64
+}
+
+pt: record { x: i64 } as {
+    m: sizer
+    size: function {t: this.view} out i64 is { return t.x }
+}
+
+kind: variant { small: i64 big: i64 } as {
+    :sizer
+    size: function {t: this.view} out i64 is {
+        match (t) case small then return t case big then return t * 10
+    }
+}
+
+Cell: class { n: i64 } as {
+    pl: Plain
+    get: function {t: this.view} out i64 is { return t.n }
+}
+
+viewSize: function {s: sizer.view} out i64 is { return s.size }
+
+borrowSize: function {s: sizer.borrow} out i64 is { return s.size }
+
+copySize: function {s: sizer} out i64 is { return s.size }
+
+passOn: function {s: sizer.view} out i64 is { return (viewSize :s) }
+
+viewGet: function {p: Plain.view} out i64 is { return p.get }
+
+recordView: function {q: pt.view} out i64 is {
+    return (copySize s: q) + (viewSize s: q) + q.m.size
+}
+
+variantView: function {k: kind.view} out i64 is { return (viewSize s: k) }
+
+cellView: function {c: Cell.view} out i64 is { return (viewGet p: c) + c.pl.get }
+
+main: function is {
+    p: pt x: 2
+    print "\{viewSize s: p} \{borrowSize s: p} \{passOn s: p}"
+    f: sizer.create from: (pt x: 3)
+    print "\{viewSize s: f} \{borrowSize s: f}"
+    print "\{recordView q: p} \{variantView k: (kind.big 4)}"
+    c: Cell n: 6
+    print "\{cellView :c}"
+    through: viewSize.take
+    print "\{through s: p}"
+}

@@ -1839,7 +1839,9 @@ perf: $(PERFBIN)
 #
 # +2870 a reference to a function over a spec or a variant has its typedef: 0
 # behaviour (the compiler's own source takes no such reference), 2870 source.
-ALLOC_BASELINE := 2724432
+#
+# +574 a readonly value reaches a protocol or facet: 0 behaviour, 574 source.
+ALLOC_BASELINE := 2725006
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

@@ -12919,6 +12919,14 @@ orderFnptrArg: function {
         if spec.length > 0 then {
             av = spec
             projd = true
+            if addr then av = (boxAddressArg
+                :ast
+                :symtab
+                :ctx
+                box: av.stringView
+                tid: pid
+                argOpNode: op
+            )
             addr = false
         }
     }
@@ -13131,6 +13139,28 @@ userFnParamByPointer: function {
     return (isListPtrParam :ast :symtab :ctx :fid :pname tid: (ztypes.tid.create from: pid.u64))
 }
 
+# boxAddressArg -- a conformance box handed to a facet parameter marked
+# `.view` or `.borrow`, which takes a pointer: the box is a value, so it is
+# bound to a temp and the temp is addressed.
+boxAddressArg: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    box: StringView
+    tid: u64
+    argOpNode: astnode.view
+} out String is {
+    bx: (hoistLvalue
+        :ast
+        :symtab
+        :ctx
+        av: box
+        tid: (ztypes.tid.create from: tid)
+        argNid: (zast.nodeIdOf n: argOpNode).u64
+    )
+    return "&\{bx}"
+}
+
 # userFnArgText -- the C text of one argument of a user-function call, for
 # the parameter it binds: the interpolation / conformance projections, then
 # the by-reference or borrow hoist the parameter's mode asks for.
@@ -13183,6 +13213,17 @@ userFnArgText: function {
         if spec.length > 0 then {
             atomVarId = spec
             projd = true
+            if (markedValtypeRefParam :ast :symtab :fid pname: pinNm pid: ppid) then {
+                atomVarId = (boxAddressArg
+                    :ast
+                    :symtab
+                    :ctx
+                    box: atomVarId.stringView
+                    tid: ppid
+                    :argOpNode
+                )
+                ctx.lastArgByPtr = true
+            }
         }
     }
     if projd then return atomVarId
@@ -37512,7 +37553,7 @@ emitProtocolImpl: function {
         mj = mj + 1
     }
     buf.append "};\n\n"
-    bc0: "static \{protoCtype} \{wbase}_create(\{implCtype}* val) {\n    \{protoCtype} proto = {0};\n    proto.data = val;\n    proto.vtable = &\{wbase}_vtable;\n    proto.destroy = NULL;\n    return proto;\n}\n\n"
+    bc0: "static \{protoCtype} \{wbase}_create(const \{implCtype}* val) {\n    \{protoCtype} proto = {0};\n    proto.data = (void*)val;\n    proto.vtable = &\{wbase}_vtable;\n    proto.destroy = NULL;\n    return proto;\n}\n\n"
     buf.append bc0
     od0: "static void \{wbase}_owned_destroy(void* p) {\n"
     buf.append od0
@@ -37672,7 +37713,7 @@ emitFacetImpl: function {
         mj = mj + 1
     }
     buf.append "};\n\n"
-    fc0: "static \{facetCtype} \{wbase}_create(\{implCtype}* val) {\n    \{facetCtype} facet = {0};\n    facet.vtable = &\{wbase}_vtable;\n    facet.data._i\{implTid} = *val;\n    return facet;\n}\n\n"
+    fc0: "static \{facetCtype} \{wbase}_create(const \{implCtype}* val) {\n    \{facetCtype} facet = {0};\n    facet.vtable = &\{wbase}_vtable;\n    facet.data._i\{implTid} = *val;\n    return facet;\n}\n\n"
     buf.append fc0
 }
 
@@ -38826,9 +38867,11 @@ isDispatchableTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out
 
 # vtableDataArg -- the receiver argument a vtable slot takes. A protocol's
 # `data` is already a pointer to the boxed impl; a facet stores the impl INLINE
-# in a union, so the slot takes its address.
+# in a union, so the slot takes its address -- cast, since a facet reached
+# through a `.view` pointer is const and the slot takes `void*` (the checker
+# refuses a writing method there).
 vtableDataArg: function {recv: StringView acc: StringView isFacet: bool} out String is {
-    if isFacet then return "&\{recv}\{acc}data"
+    if isFacet then return "(void*)&\{recv}\{acc}data"
     return "\{recv}\{acc}data"
 }
 
