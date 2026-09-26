@@ -1887,7 +1887,9 @@ perf: $(PERFBIN)
 # (the compiler's own source writes no application bound), 2578 source.
 #
 # +454 a `.borrow` on a facet projection is refused: 0 behaviour, 454 source.
-ALLOC_BASELINE := 2740146
+#
+# +609 a spec instance projects as its name does: 0 behaviour, 609 source.
+ALLOC_BASELINE := 2740755
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

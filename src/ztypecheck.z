@@ -42812,6 +42812,16 @@ wrappedCalleeIsCallResult: function {st: zenv.ZSymbolTable.view call: callref} o
     return false
 }
 
+# wrappedCalleeIsSpec -- the parenthesised callee is a type application naming a
+# protocol or facet instance, not a call yielding a value of one.
+wrappedCalleeIsSpec: function {
+    st: zenv.ZSymbolTable.view call: callref wcv: ztypes.tid
+} out bool is {
+    if (wrappedCalleeIsCallResult :st :call) then return false
+    tt: st.reg.typetypeOf typeId: wcv
+    return tt == ztypes.ztypetype.protocolType or (tt == ztypes.ztypetype.facetType)
+}
+
 # wrappedCalleeIsCtorType -- a non-FUNCTION wrapped callee is the paren-mono
 # construction form, whose value args ride the standard ctor walk (call
 # scope, hoists, consumption); a container family is not.
@@ -42921,6 +42931,11 @@ checkWrappedCall: function {
         reportUnresolvedValue :st :unitDecl :ast nid: call.callable
     }
     if wcv.u64 == 0 then return (ztypes.tid.create from: 0)
+    # an instance of a generic protocol or facet, `(Getter v: i64) c`, is
+    # projected onto as the spec's own name is
+    if call.nargs > 0 when (wrappedCalleeIsSpec :st :call :wcv) then {
+        return (checkTypeConstruction :st :unitDecl :ast :call tid: wcv)
+    }
     if call.nargs > 0 when (wrappedCalleeIsCallResult :st :call) then {
         refuseValueCallArgs :st :unitDecl :ast :call vt: wcv nameId: zast.nameid
         checkWrappedValueArgs :st :unitDecl :ast :call
@@ -55767,7 +55782,8 @@ lowerDeclaredGenerators: function {st: zenv.ZSymbolTable program: Ast} is {
 
 # stampConstructionKind -- record what a call CONSTRUCTS, derived from the type
 # it answers. The three families are the three the emitter renders differently;
-# anything else is an ordinary call and says so. A partial specialization -- a
+# a protocol or facet -- an instance of a generic one, `(Getter v: i64)` -- is
+# a projection onto it; anything else is an ordinary call and says so. A partial specialization -- a
 # construction over a parameter of the template being walked -- constructs
 # what its template does, so the template walk and each instance walk of a body
 # record the same kind on the node they share.
@@ -55785,6 +55801,8 @@ stampConstructionKind: function {st: zenv.ZSymbolTable nid: u64 tid: ztypes.tid}
     if tt == ztypes.ztypetype.classType then ck = zast.callkind.classCreate
     if tt == ztypes.ztypetype.unionType then ck = zast.callkind.unionCreate
     if tt == ztypes.ztypetype.variantType then ck = zast.callkind.unionCreate
+    if tt == ztypes.ztypetype.protocolType then ck = zast.callkind.protocolCreate
+    if tt == ztypes.ztypetype.facetType then ck = zast.callkind.facetCreate
     st.typing.callKind.set key: nid value: ck
 }
 
