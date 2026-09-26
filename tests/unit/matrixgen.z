@@ -1,0 +1,1920 @@
+# matrixgen -- the ownership matrix's generator: every type family crossed with
+# every position a value of it can stand in, each crossing a CELL whose verdict
+# the expectations table tests/fixtures/matrix_expect.txt states. RUN (the
+# default) is a value checked by golden and leak-clean under the leak kind;
+# REFUSED is the error line an errors fixture pins; NA is a cell that cannot be
+# written, with the reason; ASK is a question for the user, emitted nowhere
+# until it is answered.
+#
+# Usage: matrixgen [--root DIR] [--cells DIR]
+#   --root   the repository the fixtures are written under (default `.`):
+#            per family emitc_corpus/matrix_<f>.z (and matrix_<f>_conf.z for the
+#            conformance cells), run_golden/matrix_<f>*.out, the matrix_ rows of
+#            run_cases.txt, and errors/matrix_<f>_refused.z + .err.
+#   --cells  one program per cell into DIR plus DIR/manifest.txt (name family
+#            position verdict expected detail) instead, to look at a cell alone.
+#
+# A family is text: its declarations, and templates for making a value (`@V` the
+# number, `@S` that many letters), reading one back (`@X` the value) and calling
+# a method or an operator on one. A position is text too, written against the
+# family through `@MK[n]` (make n), `@RD[x]` (read x), `@ME[x]` and `@OP[x]`
+# (a method or operator on x), `@T` (the type), `@RT` (what a read returns),
+# `@Z` (its zero), `@LIST` `@MAP` `@OPT` `@RES` (the container of the type's
+# ownership family) and `@GB` (its generic bound).
+
+public: unit {
+    :main
+}
+
+# Family -- one type family: what declares it and the templates that use it
+Family: class {
+    name: String
+    # every declaration the cells of this family need
+    decls: String
+    # the declared type that conforms to Rd in the conformance cells, the name of
+    # its rdn receiver and rdn's body; an empty confType -- it cannot conform
+    confType: String
+    confParam: String
+    confBody: String
+    # the type as a position writes it
+    ty: String
+    make: String
+    read: String
+    meth: String
+    op: String
+    # the type as the compiler's messages name it
+    shown: String
+    # the groups a table selector names it by, space-delimited
+    tags: String
+    isRef: bool
+    unsignedRead: bool
+}
+
+# Position -- one place a value stands: declarations and a body, both
+# templates, and the number the body returns
+Position: class {
+    name: String
+    decls: String
+    body: String
+    expect: i64
+    # the body projects the value onto Rd, so only a conforming family has it
+    needsConf: bool
+}
+
+# Row -- one line of the expectations table, its position resolved to an index
+Row: class {
+    lineno: u64
+    selector: String
+    pos: u64
+    expected: outcome
+    detail: String
+}
+
+# Slot -- a cell as generated: the family and position by index, the outcome,
+# and the table row that set it (-1 -- no row, the default RUN)
+Slot: class {
+    fam: u64
+    pos: u64
+    expected: outcome
+    row: i64
+}
+
+# outcome -- what a cell is expected to do: run (and free all it made), be
+# refused, be unwritable, or wait on a question
+outcome: variant { run: null refused: null na: null ask: null }
+
+# fail -- report a generator error and stop
+fail: function as { T: StringLike.generic } in {msg: T.view} is {
+    io.eprintln "matrixgen: \{msg}"
+    os.exit code: 1
+}
+
+# writeFile -- write a generated file, stopping on failure
+writeFile: function as { T: StringLike.generic } in {path: T.view content: StringView} is {
+    w: io.writeText :path :content
+    if w.err then fail msg: "cannot write \{path}"
+}
+
+# ensureDir -- make a directory and its parents, stopping on failure
+ensureDir: function as { T: StringLike.generic } in {path: T.view} is {
+    mk: io.mkdirp :path
+    if mk.err then fail msg: "cannot create \{path}"
+}
+
+# rdDecl -- the protocol every conforming family conforms to
+rdDecl: function out String is {
+    return "Rd: protocol {\n    rdn: function {t: this.view} out i64\n}\n".string
+}
+
+# confDecls -- the family's declarations with `:Rd` and its rdn written into
+# the conforming type's `as` block, after Rd itself; empty when it cannot conform
+confDecls: function {f: Family.view} out String is {
+    buf: String
+    if f.confType.length == 0 then return buf
+    buf.append rdDecl
+    head: "\{f.confType}: "
+    done: false
+    decls: f.decls.stringView
+    with it: decls.lines do for ln: it loop {
+        buf.append ln
+        buf.append "\n"
+        if done.not when (ln.startsWith prefix: head) when (ln.endsWith suffix: " as {") then {
+            buf.append "    :Rd\n"
+            buf.append "    rdn: function {\{f.confParam}: this.view} out i64 is { \{f.confBody} }\n"
+            done = true
+        }
+    }
+    if done.not then fail msg: "family \{f.name}: no `\{f.confType}: ... as {` line to conform"
+    return buf
+}
+
+# letters -- n copies of `s`, a string whose length is n
+letters: function {n: i64} out String is {
+    buf: String
+    k: 0
+    for k < n loop {
+        buf.append "s"
+        k = k + 1
+    }
+    return buf
+}
+
+# fill -- a make/method/operator template with its number put in
+fill: function {tpl: StringView n: i64} out String is {
+    s: letters :n
+    a: tpl.replace needle: "@S" replacement: s
+    return (a.stringView.replace needle: "@V" replacement: "\{n}")
+}
+
+# form -- a bracketed template form: make, read, method, operator; plain is
+# an `@` that starts none
+form: variant { plain: null make: null read: null method: null operator: null }
+
+# formOf -- the form a name before `[` spells
+formOf: function {name: StringView} out form is {
+    if name == "MK" then return form.make
+    if name == "RD" then return form.read
+    if name == "ME" then return form.method
+    if name == "OP" then return form.operator
+    return form.plain
+}
+
+# bracketed -- one `@NAME[arg]` form expanded for family f in a cell numbered n
+bracketed: function {f: Family.view fm: form arg: StringView n: i64} out String is {
+    if fm.make then {
+        k: arg.parseI64
+        if k.err then fail msg: "bad @MK[\{arg}]"
+        return (fill tpl: f.make.stringView n: k.orPanic)
+    }
+    if fm.read then return (f.read.stringView.replace needle: "@X" replacement: arg)
+    if fm.method then {
+        m: f.meth.stringView.replace needle: "@X" replacement: arg
+        return (fill tpl: m.stringView :n)
+    }
+    o: f.op.stringView.replace needle: "@M" replacement: f.make
+    o2: o.stringView.replace needle: "@X" replacement: arg
+    return (fill tpl: o2.stringView :n)
+}
+
+# expandBrackets -- every `@MK[..]` `@RD[..]` `@ME[..]` `@OP[..]` in text
+expandBrackets: function {f: Family.view text: StringView n: i64} out String is {
+    buf: String
+    i: u64
+    len: text.length
+    for i < len loop {
+        rest: text.substring from: i to: len
+        at: rest.indexOf needle: "@"
+        if at.none then {
+            buf.append rest
+            return buf
+        }
+        p: at
+        buf.append (rest.substring from: 0 to: p)
+        tail: rest.substring from: p + 1 to: rest.length
+        open: tail.indexOf needle: "["
+        close: tail.indexOf needle: "]"
+        fm: formOf name: (tail.substring from: 0 to: (open.or d: 0))
+        if open.none or close.none or fm.plain then {
+            buf.append "@"
+            i = i + p + 1
+        } else {
+            arg: tail.substring from: (open.or d: 0) + 1 to: (close.or d: 0)
+            buf.append (bracketed :f :fm :arg :n)
+            i = i + p + 2 + (close.or d: 0)
+        }
+    }
+    return buf
+}
+
+# expand -- a position template written out for family f in a cell numbered n
+expand: function {f: Family.view text: StringView n: i64} out String is {
+    brackets: expandBrackets :f :text :n
+    ref: f.isRef
+    listT: if ref then "List" else "ListVal"
+    withList: brackets.stringView.replace needle: "@LIST" replacement: listT
+    mapT: if ref then "Map String V: \{f.ty}" else "MapRV String v: \{f.ty}"
+    withMap: withList.stringView.replace needle: "@MAP" replacement: mapT
+    optT: if ref then "(Option T: \{f.ty})" else "(optionval t: \{f.ty})"
+    withOpt: withMap.stringView.replace needle: "@OPT" replacement: optT
+    resT: if ref then "(Result T: \{f.ty} E: String)" else "(resultval t: \{f.ty} e: i64)"
+    withRes: withOpt.stringView.replace needle: "@RES" replacement: resT
+    bound: if ref then "AnyRef" else "anyval"
+    withBound: withRes.stringView.replace needle: "@GB" replacement: bound
+    withRet: withBound.stringView.replace needle: "@RT" replacement: (retType :f)
+    zero: if f.unsignedRead then "0.u64" else "0"
+    withZero: withRet.stringView.replace needle: "@Z" replacement: zero
+    return (withZero.stringView.replace needle: "@T" replacement: f.ty)
+}
+
+# retType -- what a read of the family returns
+retType: function {f: Family.view} out StringView is {
+    if f.unsignedRead then return "u64"
+    return "i64"
+}
+
+# cellFn -- the function a cell becomes: `at` and the position in camel case
+cellFn: function {pos: StringView} out String is {
+    buf: "at".string
+    with it: (pos.split sep: "_") do for piece: it loop {
+        if piece.length > 0 then {
+            buf.append (piece.substring from: 0 to: 1).toUpperAscii
+            buf.append (piece.substring from: 1 to: piece.length)
+        }
+    }
+    return buf
+}
+
+# famClass -- the `class` family: Cell
+famClass: function out Family is {
+    d: String
+    d.append "Cell: class { n: i64  s: String } as {\n"
+    d.append "    getn: function {c: this.view} out i64 is { return c.n }\n"
+    d.append "    +: function {c: this.view o: i64} out i64 is { return c.n + o }\n"
+    d.append "}\n"
+    d.append "readF: function {v: Cell.view} out i64 is { return v.n }\n"
+    return (Family
+        name: "class".string
+        decls: d
+        confType: "Cell".string
+        confParam: "c".string
+        confBody: "return c.n".string
+        ty: "Cell".string
+        make: "(Cell n: @V s: \"c\".string)".string
+        read: "(readF v: @X)".string
+        meth: "@X.getn".string
+        op: "(@X + 0)".string
+        shown: "Cell".string
+        tags: " ref constructible ".string
+        isRef: true
+        unsignedRead: false
+    )
+}
+
+# famRecord -- the `record` family: pt
+famRecord: function out Family is {
+    d: String
+    d.append "pt: record { x: i64 } as {\n"
+    d.append "    getn: function {c: this.view} out i64 is { return c.x }\n"
+    d.append "    +: function {c: this.view o: i64} out i64 is { return c.x + o }\n"
+    d.append "}\n"
+    d.append "readF: function {v: pt.view} out i64 is { return v.x }\n"
+    return (Family
+        name: "record".string
+        decls: d
+        confType: "pt".string
+        confParam: "c".string
+        confBody: "return c.x".string
+        ty: "pt".string
+        make: "(pt x: @V)".string
+        read: "(readF v: @X)".string
+        meth: "@X.getn".string
+        op: "(@X + 0)".string
+        shown: "pt".string
+        tags: " val constructible ".string
+        isRef: false
+        unsignedRead: false
+    )
+}
+
+# famUnion -- the `union` family: Sh
+famUnion: function out Family is {
+    d: String
+    d.append "Cell: class { n: i64  s: String }\n"
+    d.append "Sh: union { c: Cell  e: null } as {\n"
+    d.append "    getn: function {u: this.view} out i64 is {\n"
+    d.append "        match (u) case c then return u.n case e then return 0\n"
+    d.append "    }\n"
+    d.append "    +: function {u: this.view o: i64} out i64 is {\n"
+    d.append "        match (u) case c then return u.n + o case e then return o\n"
+    d.append "    }\n"
+    d.append "}\n"
+    d.append "readF: function {v: Sh.view} out i64 is {\n"
+    d.append "    match (v) case c then return v.n case e then return 0\n"
+    d.append "}\n"
+    return (Family
+        name: "union".string
+        decls: d
+        confType: "Sh".string
+        confParam: "u".string
+        confBody: "match (u) case c then return u.n case e then return 0".string
+        ty: "Sh".string
+        make: "(Sh.c (Cell n: @V s: \"u\".string))".string
+        read: "(readF v: @X)".string
+        meth: "@X.getn".string
+        op: "(@X + 0)".string
+        shown: "Sh".string
+        tags: " ref sum ".string
+        isRef: true
+        unsignedRead: false
+    )
+}
+
+# famVariant -- the `variant` family: kd
+famVariant: function out Family is {
+    d: String
+    d.append "kd: variant { k: i64  z: null } as {\n"
+    d.append "    getn: function {u: this.view} out i64 is {\n"
+    d.append "        match (u) case k then return u case z then return 0\n"
+    d.append "    }\n"
+    d.append "    +: function {u: this.view o: i64} out i64 is {\n"
+    d.append "        match (u) case k then return u + o case z then return o\n"
+    d.append "    }\n"
+    d.append "}\n"
+    d.append "readF: function {v: kd.view} out i64 is {\n"
+    d.append "    match (v) case k then return v case z then return 0\n"
+    d.append "}\n"
+    return (Family
+        name: "variant".string
+        decls: d
+        confType: "kd".string
+        confParam: "u".string
+        confBody: "match (u) case k then return u case z then return 0".string
+        ty: "kd".string
+        make: "(kd.k @V)".string
+        read: "(readF v: @X)".string
+        meth: "@X.getn".string
+        op: "(@X + 0)".string
+        shown: "kd".string
+        tags: " val sum ".string
+        isRef: false
+        unsignedRead: false
+    )
+}
+
+# famGclass -- the `gclass` family: (GBox t: i64)
+famGclass: function out Family is {
+    d: String
+    d.append "GBox: class { x: t  s: String } as {\n"
+    d.append "    t: anyval.generic\n"
+    d.append "    getn: function {c: this.view} out t is { return c.x }\n"
+    d.append "    +: function {c: this.view o: t} out t is { return c.x + o }\n"
+    d.append "}\n"
+    d.append "readF: function {v: (GBox t: i64).view} out i64 is { return v.x }\n"
+    return (Family
+        name: "gclass".string
+        decls: d
+        confType: "".string
+        confParam: "".string
+        confBody: "".string
+        ty: "(GBox t: i64)".string
+        make: "((GBox t: i64) x: @V s: \"g\".string)".string
+        read: "(readF v: @X)".string
+        meth: "@X.getn".string
+        op: "(@X + 0)".string
+        shown: "GBox_i64".string
+        tags: " ref constructible generic ".string
+        isRef: true
+        unsignedRead: false
+    )
+}
+
+# famGrecord -- the `grecord` family: (gpt t: i64)
+famGrecord: function out Family is {
+    d: String
+    d.append "gpt: record { x: t } as {\n"
+    d.append "    t: anyval.generic\n"
+    d.append "    getn: function {c: this.view} out t is { return c.x }\n"
+    d.append "    +: function {c: this.view o: t} out t is { return c.x + o }\n"
+    d.append "}\n"
+    d.append "readF: function {v: (gpt t: i64).view} out i64 is { return v.x }\n"
+    return (Family
+        name: "grecord".string
+        decls: d
+        confType: "".string
+        confParam: "".string
+        confBody: "".string
+        ty: "(gpt t: i64)".string
+        make: "((gpt t: i64) x: @V)".string
+        read: "(readF v: @X)".string
+        meth: "@X.getn".string
+        op: "(@X + 0)".string
+        shown: "gpt_i64".string
+        tags: " val constructible generic ".string
+        isRef: false
+        unsignedRead: false
+    )
+}
+
+# famGunion -- the `gunion` family: (GT t: i64)
+famGunion: function out Family is {
+    d: String
+    d.append "GT: union { leaf: t  node: String } as {\n"
+    d.append "    t: anyval.generic\n"
+    d.append "    getn: function {u: this.view d: t} out t is {\n"
+    d.append "        match (u) case leaf then return u case node then return d\n"
+    d.append "    }\n"
+    d.append "    +: function {u: this.view o: t} out t is {\n"
+    d.append "        match (u) case leaf then return u + o case node then return o\n"
+    d.append "    }\n"
+    d.append "}\n"
+    d.append "readF: function {v: (GT t: i64).view} out i64 is {\n"
+    d.append "    match (v) case leaf then return v case node then return 0\n"
+    d.append "}\n"
+    return (Family
+        name: "gunion".string
+        decls: d
+        confType: "".string
+        confParam: "".string
+        confBody: "".string
+        ty: "(GT t: i64)".string
+        make: "((GT t: i64).leaf @V)".string
+        read: "(readF v: @X)".string
+        meth: "(@X.getn d: 0)".string
+        op: "(@X + 0)".string
+        shown: "GT_i64".string
+        tags: " ref sum generic ".string
+        isRef: true
+        unsignedRead: false
+    )
+}
+
+# famGvariant -- the `gvariant` family: (gv t: i64)
+famGvariant: function out Family is {
+    d: String
+    d.append "gv: variant { k: t  z: null } as {\n"
+    d.append "    t: anyval.generic\n"
+    d.append "    getn: function {u: this.view d: t} out t is {\n"
+    d.append "        match (u) case k then return u case z then return d\n"
+    d.append "    }\n"
+    d.append "    +: function {u: this.view o: t} out t is {\n"
+    d.append "        match (u) case k then return u + o case z then return o\n"
+    d.append "    }\n"
+    d.append "}\n"
+    d.append "readF: function {v: (gv t: i64).view} out i64 is {\n"
+    d.append "    match (v) case k then return v case z then return 0\n"
+    d.append "}\n"
+    return (Family
+        name: "gvariant".string
+        decls: d
+        confType: "".string
+        confParam: "".string
+        confBody: "".string
+        ty: "(gv t: i64)".string
+        make: "((gv t: i64).k @V)".string
+        read: "(readF v: @X)".string
+        meth: "(@X.getn d: 0)".string
+        op: "(@X + 0)".string
+        shown: "gv_i64".string
+        tags: " val sum generic ".string
+        isRef: false
+        unsignedRead: false
+    )
+}
+
+# famProtocol -- the `protocol` family: Sp
+famProtocol: function out Family is {
+    d: String
+    d.append "Sp: protocol {\n"
+    d.append "    get: function {t: this.view} out i64\n"
+    d.append "    +: function {t: this.view o: i64} out i64\n"
+    d.append "}\n"
+    d.append "PC: class { n: i64  s: String } as {\n"
+    d.append "    :Sp\n"
+    d.append "    get: function {c: this.view} out i64 is { return c.n }\n"
+    d.append "    +: function {c: this.view o: i64} out i64 is { return c.n + o }\n"
+    d.append "}\n"
+    d.append "readF: function {v: Sp.view} out i64 is { return v.get }\n"
+    return (Family
+        name: "protocol".string
+        decls: d
+        confType: "".string
+        confParam: "".string
+        confBody: "".string
+        ty: "Sp".string
+        make: "(Sp.create from: (PC n: @V s: \"p\".string))".string
+        read: "(readF v: @X)".string
+        meth: "@X.get".string
+        op: "(@X + 0)".string
+        shown: "Sp".string
+        tags: " ref interface ".string
+        isRef: true
+        unsignedRead: false
+    )
+}
+
+# famFacet -- the `facet` family: sz
+famFacet: function out Family is {
+    d: String
+    d.append "sz: facet {\n"
+    d.append "    size: function {t: this.view} out i64\n"
+    d.append "    +: function {t: this.view o: i64} out i64\n"
+    d.append "}\n"
+    d.append "fp: record { x: i64 } as {\n"
+    d.append "    :sz\n"
+    d.append "    size: function {p: this.view} out i64 is { return p.x }\n"
+    d.append "    +: function {p: this.view o: i64} out i64 is { return p.x + o }\n"
+    d.append "}\n"
+    d.append "readF: function {v: sz.view} out i64 is { return v.size }\n"
+    return (Family
+        name: "facet".string
+        decls: d
+        confType: "".string
+        confParam: "".string
+        confBody: "".string
+        ty: "sz".string
+        make: "(sz.create from: (fp x: @V))".string
+        read: "(readF v: @X)".string
+        meth: "@X.size".string
+        op: "(@X + 0)".string
+        shown: "sz".string
+        tags: " val interface ".string
+        isRef: false
+        unsignedRead: false
+    )
+}
+
+# famGprotocol -- the `gprotocol` family: (Getter v: i64)
+famGprotocol: function out Family is {
+    d: String
+    d.append "Getter: protocol {\n"
+    d.append "    v: anyval.generic\n"
+    d.append "    get: function {t: this.view} out v\n"
+    d.append "    +: function {t: this.view o: v} out v\n"
+    d.append "}\n"
+    d.append "GC: class { n: i64  s: String } as {\n"
+    d.append "    g: (Getter v: i64)\n"
+    d.append "    get: function {c: this.view} out i64 is { return c.n }\n"
+    d.append "    +: function {c: this.view o: i64} out i64 is { return c.n + o }\n"
+    d.append "}\n"
+    d.append "readF: function {v: (Getter v: i64).view} out i64 is { return v.get }\n"
+    return (Family
+        name: "gprotocol".string
+        decls: d
+        confType: "".string
+        confParam: "".string
+        confBody: "".string
+        ty: "(Getter v: i64)".string
+        make: "((Getter v: i64).create from: (GC n: @V s: \"q\".string))".string
+        read: "(readF v: @X)".string
+        meth: "@X.get".string
+        op: "(@X + 0)".string
+        shown: "Getter_i64".string
+        tags: " ref interface generic ".string
+        isRef: true
+        unsignedRead: false
+    )
+}
+
+# famGfacet -- the `gfacet` family: (sized n: i64)
+famGfacet: function out Family is {
+    d: String
+    d.append "sized: facet {\n"
+    d.append "    n: anyval.generic\n"
+    d.append "    size: function {t: this.view} out n\n"
+    d.append "    +: function {t: this.view o: n} out n\n"
+    d.append "}\n"
+    d.append "gp: record { x: i64 } as {\n"
+    d.append "    m: (sized n: i64)\n"
+    d.append "    size: function {p: this.view} out i64 is { return p.x }\n"
+    d.append "    +: function {p: this.view o: i64} out i64 is { return p.x + o }\n"
+    d.append "}\n"
+    d.append "readF: function {v: (sized n: i64).view} out i64 is { return v.size }\n"
+    return (Family
+        name: "gfacet".string
+        decls: d
+        confType: "".string
+        confParam: "".string
+        confBody: "".string
+        ty: "(sized n: i64)".string
+        make: "((sized n: i64).create from: (gp x: @V))".string
+        read: "(readF v: @X)".string
+        meth: "@X.size".string
+        op: "(@X + 0)".string
+        shown: "sized_i64".string
+        tags: " val interface generic ".string
+        isRef: false
+        unsignedRead: false
+    )
+}
+
+# famString -- the `string` family: String
+famString: function out Family is {
+    d: String
+    d.append "readF: function {v: String.view} out u64 is { return v.length }\n"
+    return (Family
+        name: "string".string
+        decls: d
+        confType: "".string
+        confParam: "".string
+        confBody: "".string
+        ty: "String".string
+        make: "\"@S\".string".string
+        read: "(readF v: @X)".string
+        meth: "@X.length".string
+        op: "(if @X == \"@S\".string then @V else 0)".string
+        shown: "String".string
+        tags: " ref native ".string
+        isRef: true
+        unsignedRead: true
+    )
+}
+
+# famList -- the `list` family: (ListVal i64)
+famList: function out Family is {
+    d: String
+    d.append "mkL: function {n: i64} out (ListVal i64) is {\n"
+    d.append "    xs: ListVal i64\n"
+    d.append "    xs.append n\n"
+    d.append "    return xs\n"
+    d.append "}\n"
+    d.append "readF: function {v: (ListVal i64).view} out i64 is {\n"
+    d.append "    r: 0\n"
+    d.append "    for e: v.iterate loop r = r + e\n"
+    d.append "    return r\n"
+    d.append "}\n"
+    return (Family
+        name: "list".string
+        decls: d
+        confType: "".string
+        confParam: "".string
+        confBody: "".string
+        ty: "(ListVal i64)".string
+        make: "(mkL n: @V)".string
+        read: "(readF v: @X)".string
+        meth: "(@X.get i: 0)".string
+        op: "(if @X == (mkL n: @V) then @V else 0)".string
+        shown: "ListVal_i64".string
+        tags: " ref native ".string
+        isRef: true
+        unsignedRead: false
+    )
+}
+
+# famMap -- the `map` family: (Map String V: MC)
+famMap: function out Family is {
+    d: String
+    d.append "MC: class { n: i64  s: String }\n"
+    d.append "mkM: function {n: i64} out (Map String V: MC) is {\n"
+    d.append "    m: Map String V: MC\n"
+    d.append "    m.set key: \"k\".string value: (MC :n s: \"m\".string)\n"
+    d.append "    return m\n"
+    d.append "}\n"
+    d.append "readF: function {v: (Map String V: MC).view} out i64 is {\n"
+    d.append "    g: v.get key: \"k\".string\n"
+    d.append "    match (g) case some then return g.n case none then return 0\n"
+    d.append "}\n"
+    return (Family
+        name: "map".string
+        decls: d
+        confType: "".string
+        confParam: "".string
+        confBody: "".string
+        ty: "(Map String V: MC)".string
+        make: "(mkM n: @V)".string
+        read: "(readF v: @X)".string
+        meth: "(if @X.length == 1 then @V else 0)".string
+        op: "(if @X == (mkM n: @V) then @V else 0)".string
+        shown: "MapRR_String_MC".string
+        tags: " ref native ".string
+        isRef: true
+        unsignedRead: false
+    )
+}
+
+# famOption -- the `option` family: (Option T: OC)
+famOption: function out Family is {
+    d: String
+    d.append "OC: class { n: i64  s: String }\n"
+    d.append "readF: function {v: (Option T: OC).view} out i64 is {\n"
+    d.append "    match (v) case some then return v.n case none then return 0\n"
+    d.append "}\n"
+    return (Family
+        name: "option".string
+        decls: d
+        confType: "".string
+        confParam: "".string
+        confBody: "".string
+        ty: "(Option T: OC)".string
+        make: "((Option T: OC).some (OC n: @V s: \"o\".string))".string
+        read: "(readF v: @X)".string
+        meth: "(if @X.some then @V else 0)".string
+        op: "(if @X == @M then @V else 0)".string
+        shown: "Option_OC".string
+        tags: " ref native sum ".string
+        isRef: true
+        unsignedRead: false
+    )
+}
+
+# famResult -- the `result` family: (Result T: RC E: String)
+famResult: function out Family is {
+    d: String
+    d.append "RC: class { n: i64  s: String }\n"
+    d.append "readF: function {v: (Result T: RC E: String).view} out i64 is {\n"
+    d.append "    match (v) case ok then return v.n case err then return 0\n"
+    d.append "}\n"
+    return (Family
+        name: "result".string
+        decls: d
+        confType: "".string
+        confParam: "".string
+        confBody: "".string
+        ty: "(Result T: RC E: String)".string
+        make: "((Result T: RC E: String).ok (RC n: @V s: \"r\".string))".string
+        read: "(readF v: @X)".string
+        meth: "(if @X.ok then @V else 0)".string
+        op: "(if @X == @M then @V else 0)".string
+        shown: "Result_RC_String".string
+        tags: " ref native sum ".string
+        isRef: true
+        unsignedRead: false
+    )
+}
+
+# famTclass -- the `tclass` family: TC
+famTclass: function out Family is {
+    d: String
+    d.append "Cell: class { n: i64  s: String } as {\n"
+    d.append "    getn: function {c: this.view} out i64 is { return c.n }\n"
+    d.append "    +: function {c: this.view o: i64} out i64 is { return c.n + o }\n"
+    d.append "}\n"
+    d.append "TC: typedef Cell\n"
+    d.append "readF: function {v: TC.view} out i64 is { return v.n }\n"
+    return (Family
+        name: "tclass".string
+        decls: d
+        confType: "Cell".string
+        confParam: "c".string
+        confBody: "return c.n".string
+        ty: "TC".string
+        make: "(TC (Cell n: @V s: \"t\".string))".string
+        read: "(readF v: @X)".string
+        meth: "@X.getn".string
+        op: "(@X + 0)".string
+        shown: "TC".string
+        tags: " ref typedef ".string
+        isRef: true
+        unsignedRead: false
+    )
+}
+
+# famTrecord -- the `trecord` family: tp
+famTrecord: function out Family is {
+    d: String
+    d.append "pt: record { x: i64 } as {\n"
+    d.append "    getn: function {c: this.view} out i64 is { return c.x }\n"
+    d.append "    +: function {c: this.view o: i64} out i64 is { return c.x + o }\n"
+    d.append "}\n"
+    d.append "tp: typedef pt\n"
+    d.append "readF: function {v: tp.view} out i64 is { return v.x }\n"
+    return (Family
+        name: "trecord".string
+        decls: d
+        confType: "pt".string
+        confParam: "c".string
+        confBody: "return c.x".string
+        ty: "tp".string
+        make: "(tp (pt x: @V))".string
+        read: "(readF v: @X)".string
+        meth: "@X.getn".string
+        op: "(@X + 0)".string
+        shown: "tp".string
+        tags: " val typedef ".string
+        isRef: false
+        unsignedRead: false
+    )
+}
+
+# families -- every family the matrix crosses, in grid order
+families: function out List Family is {
+    fams: List Family
+    fams.append famClass
+    fams.append famRecord
+    fams.append famUnion
+    fams.append famVariant
+    fams.append famGclass
+    fams.append famGrecord
+    fams.append famGunion
+    fams.append famGvariant
+    fams.append famProtocol
+    fams.append famFacet
+    fams.append famGprotocol
+    fams.append famGfacet
+    fams.append famString
+    fams.append famList
+    fams.append famMap
+    fams.append famOption
+    fams.append famResult
+    fams.append famTclass
+    fams.append famTrecord
+    return fams
+}
+
+# positions -- every position a family's value stands in, in grid order
+positions: function out List Position is {
+    ps: List Position
+    bindingPositions :ps
+    fieldPositions :ps
+    parameterPositions :ps
+    returnPositions :ps
+    containerPositions :ps
+    receiverPositions :ps
+    narrowingPositions :ps
+    projectionPositions :ps
+    conformancePositions :ps
+    return ps
+}
+
+# bindingPositions -- a value bound, moved, reassigned and borrowed in a local
+bindingPositions: function {ps: List Position} is {
+    (addPos
+        :ps
+        name: "local"
+        decls: ""
+        body: "x: @MK[11]\n    return @RD[x]"
+        expect: 11
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "move"
+        decls: ""
+        body: "a: @MK[12]\n    b: a\n    return @RD[b]"
+        expect: 12
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "reassign"
+        decls: ""
+        body: "x: @MK[1]\n    x = @MK[13]\n    return @RD[x]"
+        expect: 13
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "move_then_read"
+        decls: ""
+        body: "a: @MK[59]\n    b: a\n    if @RD[b] == 0 then return 0\n    return @RD[a]"
+        expect: 59
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "borrow_then_read"
+        decls: ""
+        body: "x: @MK[31]\n    b: x.borrow\n    return @RD[b]"
+        expect: 31
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "borrow_then_write"
+        decls: ""
+        body: "x: @MK[29]\n    b: x.borrow\n    x = @MK[1]\n    return @RD[b]"
+        expect: 29
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "borrow_after"
+        decls: ""
+        body: "x: @MK[1]\n    {\n        b: x.borrow\n        if @RD[b] == 0 then return 0\n    }\n    x = @MK[32]\n    return @RD[x]"
+        expect: 32
+        needsConf: false
+    )
+}
+
+# fieldPositions -- a value in a class's field, and in a generic class's
+fieldPositions: function {ps: List Position} is {
+    (addPos
+        :ps
+        name: "field"
+        decls: "HolderF: class { f: @T }\n"
+        body: "h: HolderF f: @MK[14]\n    return @RD[h.f]"
+        expect: 14
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "field_set"
+        decls: "HolderS: class { f: @T }\n"
+        body: "h: HolderS f: @MK[1]\n    h.f = @MK[15]\n    return @RD[h.f]"
+        expect: 15
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "field_take"
+        decls: "HolderT: class { f: @T }\n"
+        body: "h: HolderT f: @MK[71]\n    x: h.f.take\n    return @RD[x]"
+        expect: 71
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "field_borrow_write"
+        decls: "HolderB: class { f: @T  g: i64 }\n"
+        body: "h: HolderB f: @MK[72] g: 0\n    b: h.f.borrow\n    h.f = @MK[1]\n    return @RD[b]"
+        expect: 72
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "field_borrow_sibling"
+        decls: "HolderSib: class { f: @T  g: i64 }\n"
+        body: "h: HolderSib f: @MK[73] g: 0\n    b: h.f.borrow\n    h.g = 1\n    return @RD[b]"
+        expect: 73
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "generic_field"
+        decls: "GenField: class { item: u } as {\n    u: @GB.generic\n}\n"
+        body: "g: GenField item: @MK[27]\n    return @RD[g.item]"
+        expect: 27
+        needsConf: false
+    )
+}
+
+# parameterPositions -- a value handed to each parameter marker, named and built inline, and through a function value
+parameterPositions: function {ps: List Position} is {
+    (addPos
+        :ps
+        name: "param"
+        decls: "useParam: function {p: @T} out @RT is { return @RD[p] }\n"
+        body: "x: @MK[16]\n    return (useParam p: x)"
+        expect: 16
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "param_inline"
+        decls: "useParamInline: function {p: @T} out @RT is { return @RD[p] }\n"
+        body: "return (useParamInline p: @MK[17])"
+        expect: 17
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "param_borrow"
+        decls: "useParamBorrow: function {p: @T.borrow} out @RT is { return @RD[p] }\n"
+        body: "x: @MK[18]\n    return (useParamBorrow p: x)"
+        expect: 18
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "param_borrow_inline"
+        decls: "useParamBorrowInline: function {p: @T.borrow} out @RT is { return @RD[p] }\n"
+        body: "return (useParamBorrowInline p: @MK[33])"
+        expect: 33
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "param_view"
+        decls: "useParamView: function {p: @T.view} out @RT is { return @RD[p] }\n"
+        body: "x: @MK[19]\n    return (useParamView p: x)"
+        expect: 19
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "param_view_inline"
+        decls: "useParamViewInline: function {p: @T.view} out @RT is { return @RD[p] }\n"
+        body: "return (useParamViewInline p: @MK[34])"
+        expect: 34
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "param_take"
+        decls: "useParamTake: function {p: @T.take} out @RT is { return @RD[p] }\n"
+        body: "x: @MK[20]\n    return (useParamTake p: x.take)"
+        expect: 20
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "param_take_inline"
+        decls: "useParamTakeInline: function {p: @T.take} out @RT is { return @RD[p] }\n"
+        body: "return (useParamTakeInline p: @MK[21])"
+        expect: 21
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "param_take_then_read"
+        decls: "useTakeThenRead: function {p: @T.take} out @RT is { return @RD[p] }\n"
+        body: "x: @MK[60]\n    if (useTakeThenRead p: x.take) == 0 then return 0\n    return @RD[x]"
+        expect: 60
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "fnref"
+        decls: "useFnref: function {p: @T} out @RT is { return @RD[p] }\n"
+        body: "fr: useFnref.take\n    return (fr p: @MK[28])"
+        expect: 28
+        needsConf: false
+    )
+}
+
+# returnPositions -- a value returned, read straight off a call, and returned out of a narrowed arm
+returnPositions: function {ps: List Position} is {
+    (addPos
+        :ps
+        name: "return"
+        decls: "mkReturn: function out @T is { return @MK[22] }\n"
+        body: "x: mkReturn\n    return @RD[x]"
+        expect: 22
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "return_rvalue_read"
+        decls: "mkRvalue: function out @T is { return @MK[23] }\n"
+        body: "return @RD[mkRvalue]"
+        expect: 23
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "return_narrowed"
+        decls: "ReturnNarrowed: union { a: @T  e: null }\ngetReturnNarrowed: function out @T is {\n    u: ReturnNarrowed.a @MK[35]\n    match (u) case a then return u.take case e then return @MK[1]\n}\n"
+        body: "x: getReturnNarrowed\n    return @RD[x]"
+        expect: 35
+        needsConf: false
+    )
+}
+
+# containerPositions -- a value in a List, a Map, an Option, a Result and a union arm
+containerPositions: function {ps: List Position} is {
+    (addPos
+        :ps
+        name: "list_elem"
+        decls: ""
+        body: "xs: @LIST @T\n    xs.append @MK[24]\n    r: @Z\n    for e: xs.iterate loop r = r + @RD[e]\n    return r"
+        expect: 24
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "list_get"
+        decls: ""
+        body: "xs: @LIST @T\n    xs.append @MK[36]\n    g: xs.get i: 0\n    return @RD[g]"
+        expect: 36
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "list_get_write"
+        decls: ""
+        body: "xs: @LIST @T\n    xs.append @MK[74]\n    g: xs.get i: 0\n    xs.append @MK[1]\n    return @RD[g]"
+        expect: 74
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "list_pop"
+        decls: ""
+        body: "xs: @LIST @T\n    xs.append @MK[37]\n    p: xs.pop\n    return @RD[p]"
+        expect: 37
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "list_iter_write"
+        decls: ""
+        body: "xs: @LIST @T\n    xs.append @MK[38]\n    r: @Z\n    for e: xs.iterate loop {\n        r = r + @RD[e]\n        xs.append @MK[1]\n    }\n    return r"
+        expect: 38
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "list_iter_after"
+        decls: ""
+        body: "xs: @LIST @T\n    xs.append @MK[39]\n    r: @Z\n    for e: xs.iterate loop r = r + @RD[e]\n    xs.append @MK[1]\n    return r"
+        expect: 39
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "map_value"
+        decls: ""
+        body: "m: @MAP\n    m.set key: \"k\".string value: @MK[25]\n    return 25"
+        expect: 25
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "map_get"
+        decls: ""
+        body: "m: @MAP\n    m.set key: \"k\".string value: @MK[40]\n    g: m.get key: \"k\".string\n    match (g) case some then return @RD[g] case none then return 0"
+        expect: 40
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "map_get_write"
+        decls: ""
+        body: "m: @MAP\n    m.set key: \"k\".string value: @MK[75]\n    g: m.get key: \"k\".string\n    m.set key: \"j\".string value: @MK[1]\n    match (g) case some then return @RD[g] case none then return 0"
+        expect: 75
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "option_payload"
+        decls: ""
+        body: "o: @OPT.some @MK[41]\n    match (o) case some then return @RD[o] case none then return 0"
+        expect: 41
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "result_payload"
+        decls: ""
+        body: "o: @RES.ok @MK[42]\n    match (o) case ok then return @RD[o] case err then return 0"
+        expect: 42
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "union_arm"
+        decls: "UnionArm: union { a: @T  e: null }\nrdUnionArm: function {u: UnionArm.view} out @RT is {\n    match (u) case a then return @RD[u] case e then return 0\n}\n"
+        body: "u: UnionArm.a @MK[26]\n    return (rdUnionArm :u)"
+        expect: 26
+        needsConf: false
+    )
+}
+
+# receiverPositions -- a value as a method's and an operator's receiver, a local and a call's result, and handed on as an argument
+receiverPositions: function {ps: List Position} is {
+    (addPos
+        :ps
+        name: "method_lvalue"
+        decls: ""
+        body: "x: @MK[43]\n    return @ME[x]"
+        expect: 43
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "method_rvalue"
+        decls: "mkMethodRvalue: function out @T is { return @MK[44] }\n"
+        body: "return @ME[(mkMethodRvalue)]"
+        expect: 44
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "operator_lvalue"
+        decls: ""
+        body: "x: @MK[45]\n    return @OP[x]"
+        expect: 45
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "operator_rvalue"
+        decls: "mkOperatorRvalue: function out @T is { return @MK[46] }\n"
+        body: "return @OP[(mkOperatorRvalue)]"
+        expect: 46
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "this_as_arg"
+        decls: "ThisArg: typedef @T as {\n    fwd: function {c: this.view} out @RT is { return @RD[c] }\n}\n"
+        body: "x: ThisArg @MK[70]\n    return x.fwd"
+        expect: 70
+        needsConf: false
+    )
+}
+
+# narrowingPositions -- a value narrowed by match and if, and bound by with
+narrowingPositions: function {ps: List Position} is {
+    (addPos
+        :ps
+        name: "match_arm"
+        decls: "MatchArm: union { a: @T  e: null }\n"
+        body: "u: MatchArm.a @MK[53]\n    match (u) case a then return @RD[u] case e then return 0"
+        expect: 53
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "if_arm"
+        decls: "IfArm: union { a: @T  e: null }\n"
+        body: "u: IfArm.a @MK[54]\n    if u.a then return @RD[u]\n    return 0"
+        expect: 54
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "with_bind"
+        decls: ""
+        body: "r: @Z\n    with w: @MK[55] do r = @RD[w]\n    return r"
+        expect: 55
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "with_borrow"
+        decls: ""
+        body: "x: @MK[56]\n    r: @Z\n    with w: x.borrow do r = @RD[w]\n    return r"
+        expect: 56
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "with_borrow_write"
+        decls: ""
+        body: "x: @MK[57]\n    r: @Z\n    with w: x.borrow do {\n        x = @MK[1]\n        r = @RD[w]\n    }\n    return r"
+        expect: 57
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "with_borrow_after"
+        decls: ""
+        body: "x: @MK[1]\n    r: @Z\n    with w: x.borrow do r = @RD[w]\n    x = @MK[58]\n    return @RD[x]"
+        expect: 58
+        needsConf: false
+    )
+}
+
+# projectionPositions -- a value as the source of a typedef projection
+projectionPositions: function {ps: List Position} is {
+    (addPos
+        :ps
+        name: "proj_label"
+        decls: "PjLabel: typedef @T\n"
+        body: "x: @MK[47]\n    p: x.PjLabel\n    return @RD[p]"
+        expect: 47
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "proj_create"
+        decls: "PjCreate: typedef @T\n"
+        body: "x: @MK[48]\n    p: PjCreate.create from: x\n    return @RD[p]"
+        expect: 48
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "proj_create_then_read"
+        decls: "PjCreateRead: typedef @T\n"
+        body: "x: @MK[62]\n    p: PjCreateRead.create from: x\n    if @RD[p] == 0 then return 0\n    return @RD[x]"
+        expect: 62
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "proj_bare"
+        decls: "PjBare: typedef @T\n"
+        body: "x: @MK[49]\n    p: PjBare x\n    return @RD[p]"
+        expect: 49
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "proj_bare_then_read"
+        decls: "PjBareRead: typedef @T\n"
+        body: "x: @MK[61]\n    p: PjBareRead x\n    if @RD[p] == 0 then return 0\n    return @RD[x]"
+        expect: 61
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "proj_borrow"
+        decls: "PjBorrow: typedef @T\n"
+        body: "x: @MK[50]\n    p: PjBorrow x.borrow\n    return @RD[p]"
+        expect: 50
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "proj_borrow_write"
+        decls: "PjBorrowWrite: typedef @T\n"
+        body: "x: @MK[51]\n    p: PjBorrowWrite x.borrow\n    x = @MK[1]\n    return @RD[p]"
+        expect: 51
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "proj_borrow_after"
+        decls: "PjBorrowAfter: typedef @T\n"
+        body: "x: @MK[1]\n    {\n        p: PjBorrowAfter x.borrow\n        if @RD[p] == 0 then return 0\n    }\n    x = @MK[52]\n    return @RD[x]"
+        expect: 52
+        needsConf: false
+    )
+}
+
+# conformancePositions -- a value as the source of a projection onto Rd, which it conforms to
+conformancePositions: function {ps: List Position} is {
+    (addPos
+        :ps
+        name: "conf_label"
+        decls: ""
+        body: "x: @MK[63]\n    p: x.Rd\n    return p.rdn"
+        expect: 63
+        needsConf: true
+    )
+    (addPos
+        :ps
+        name: "conf_label_write"
+        decls: ""
+        body: "x: @MK[64]\n    p: x.Rd\n    x = @MK[1]\n    return p.rdn"
+        expect: 64
+        needsConf: true
+    )
+    (addPos
+        :ps
+        name: "conf_create"
+        decls: ""
+        body: "x: @MK[65]\n    p: Rd.create from: x\n    return p.rdn"
+        expect: 65
+        needsConf: true
+    )
+    (addPos
+        :ps
+        name: "conf_bare"
+        decls: ""
+        body: "x: @MK[66]\n    p: Rd x\n    return p.rdn"
+        expect: 66
+        needsConf: true
+    )
+    (addPos
+        :ps
+        name: "conf_bare_then_read"
+        decls: ""
+        body: "x: @MK[69]\n    p: Rd x\n    if p.rdn == 0 then return 0\n    return @RD[x]"
+        expect: 69
+        needsConf: true
+    )
+    (addPos
+        :ps
+        name: "conf_borrow"
+        decls: ""
+        body: "x: @MK[67]\n    p: Rd x.borrow\n    return p.rdn"
+        expect: 67
+        needsConf: true
+    )
+    (addPos
+        :ps
+        name: "conf_borrow_write"
+        decls: ""
+        body: "x: @MK[68]\n    p: Rd x.borrow\n    x = @MK[1]\n    return p.rdn"
+        expect: 68
+        needsConf: true
+    )
+}
+
+# addPos -- one position appended to the list
+addPos: function {
+    ps: List Position
+    name: StringView
+    decls: StringView
+    body: StringView
+    expect: i64
+    needsConf: bool
+} is {
+    ps.append (Position name: name.string decls: decls.string body: body.string :expect :needsConf)
+}
+
+# words -- the first three space-separated words of a table line, then the rest
+# of the line trimmed; fewer pieces when the line has fewer words
+words: function {line: StringView} out List String is {
+    buf: List String
+    t: line.trim
+    from: u64
+    for buf.length < 3 loop {
+        rest: (t.substring :from to: t.length).trimStart
+        if rest.length == 0 then return buf
+        from = t.length - rest.length
+        sp: rest.indexOf needle: " "
+        if sp.none then {
+            buf.append rest.string
+            return buf
+        }
+        buf.append (rest.substring from: 0 to: sp).string
+        from = from + sp
+    }
+    last: (t.substring :from to: t.length).trim
+    if last.length > 0 then buf.append last.string
+    return buf
+}
+
+# slurp -- a file's text, stopping when it cannot be read
+slurp: function {path: StringView} out String is {
+    r: io.readText :path
+    match (
+        r
+    ) case ok then {
+        return r.copy
+    } case err then {
+        fail msg: "cannot read \{path}"
+        return "".string
+    }
+}
+
+# outcomeOf -- the outcome a verdict word names, stopping on any other word
+outcomeOf: function {w: StringView where: String.view} out outcome is {
+    if w == "RUN" then return outcome.run
+    if w == "REFUSED" then return outcome.refused
+    if w == "NA" then return outcome.na
+    if w == "ASK" then return outcome.ask
+    fail msg: "\{where}: unknown verdict '\{w}'"
+    return outcome.run
+}
+
+# outcomeWord -- the verdict word an outcome is written as
+outcomeWord: function {o: outcome} out StringView is {
+    match (
+        o
+    ) case run then return "RUN" case refused then return "REFUSED" case na then return "NA" case ask then return "ASK"
+}
+
+# isCode -- an error code as a REFUSED row starts its detail: `E` and 4 digits
+isCode: function {w: StringView} out bool is {
+    if w.length != 5 then return false
+    if (w.startsWith prefix: "E").not then return false
+    tail: w.substring from: 1 to: 5
+    n: tail.parseU64
+    return n.ok
+}
+
+# selects -- whether a row's selector names the family: `*`, `@<tag>`, or its name
+selects: function {sel: StringView f: Family.view} out bool is {
+    if sel == "*" then return true
+    if (sel.startsWith prefix: "@") then {
+        tag: " \{sel.substring from: 1 to: sel.length} "
+        return (f.tags.contains tag)
+    }
+    return sel == f.name
+}
+
+# knownSelector -- a selector that names at least one family
+knownSelector: function {sel: StringView fams: (List Family).view} out bool is {
+    for f: fams.iterate loop {
+        if (selects :sel :f) then return true
+    }
+    return false
+}
+
+# positionIndex -- where the named position sits in poss, stopping when it is none
+positionIndex: function {
+    name: StringView poss: (List Position).view where: String.view
+} out u64 is {
+    pi: u64
+    for pi < poss.length loop {
+        p: poss.get i: pi
+        if p.name == name then return pi
+        pi = pi + 1
+    }
+    fail msg: "\{where}: unknown position '\{name}'"
+    return 0
+}
+
+# checkDetail -- a REFUSED row's detail is a code and a message; an NA or ASK
+# row's is its reason
+checkDetail: function {where: String.view expected: outcome detail: StringView} is {
+    if expected.refused then {
+        sp: detail.indexOf needle: " "
+        code: detail.substring from: 0 to: (sp.or d: detail.length)
+        if sp.none or (isCode w: code).not then fail msg: "\{where}: REFUSED wants `Ennnn message`"
+    }
+    if expected.na or expected.ask when detail.length == 0 then (fail
+        msg: "\{where}: \{outcomeWord o: expected} needs a reason"
+    )
+}
+
+# parseRow -- one table line as a row, each part checked
+parseRow: function {
+    line: StringView
+    where: String.view
+    lineno: u64
+    fams: (List Family).view
+    poss: (List Position).view
+} out Row is {
+    ws: words :line
+    if ws.length < 3 then fail msg: "\{where}: want `selector position verdict [detail]`"
+    sel: ws.get i: 0
+    if (knownSelector sel: sel.stringView :fams).not then (fail
+        msg: "\{where}: unknown selector '\{sel}'"
+    )
+    pos: ws.get i: 1
+    pi: positionIndex name: pos.stringView :poss :where
+    expected: outcomeOf w: (ws.get i: 2).stringView :where
+    detail: if ws.length > 3 then (ws.get i: 3).copy else "".string
+    checkDetail :where :expected detail: detail.stringView
+    return (Row :lineno selector: sel.copy pos: pi :expected :detail)
+}
+
+# readTable -- the expectations table's rows
+readTable: function {
+    path: StringView fams: (List Family).view poss: (List Position).view
+} out List Row is {
+    rows: List Row
+    content: slurp :path
+    lineno: u64
+    with it: content.stringView.lines do for ln: it loop {
+        lineno = lineno + 1
+        t: ln.trim
+        if t.length > 0 when (t.startsWith prefix: "#").not then {
+            where: "\{path}:\{lineno}"
+            rows.append (parseRow line: t :where :lineno :fams :poss)
+        }
+    }
+    return rows
+}
+
+# slotFor -- the cell of family fi at position pi: the LAST row selecting it
+# wins; a position the family cannot have must be NA there
+slotFor: function {
+    fams: (List Family).view
+    poss: (List Position).view
+    rows: (List Row).view
+    used: ListVal bool
+    fi: u64
+    pi: u64
+} out Slot is {
+    f: fams.get i: fi
+    p: poss.get i: pi
+    row: -1
+    expected: outcome.run
+    ri: u64
+    for ri < rows.length loop {
+        r: rows.get i: ri
+        if r.pos == pi when (selects sel: r.selector.stringView :f) then {
+            row = ri.i64.orPanic
+            expected = r.expected
+            used.set i: ri val: true
+        }
+        ri = ri + 1
+    }
+    if p.needsConf when f.confType.length == 0 when expected.na.not then {
+        fail msg: "\{f.name}/\{p.name}: the family cannot conform to Rd; the table must say NA"
+    }
+    return (Slot fam: fi pos: pi :expected :row)
+}
+
+# allSlots -- every cell, families outer and positions inner; a row that selects
+# no cell is an error
+allSlots: function {
+    fams: (List Family).view
+    poss: (List Position).view
+    rows: (List Row).view
+    tablePath: StringView
+} out List Slot is {
+    used: ListVal bool
+    for used.length < rows.length loop used.append false
+    buf: List Slot
+    fi: u64
+    for fi < fams.length loop {
+        pi: u64
+        for pi < poss.length loop {
+            buf.append (slotFor :fams :poss :rows :used :fi :pi)
+            pi = pi + 1
+        }
+        fi = fi + 1
+    }
+    ri: u64
+    for ri < rows.length loop {
+        if (used.get i: ri).not then {
+            r: rows.get i: ri
+            fail msg: "\{tablePath}:\{r.lineno}: the row selects no cell"
+        }
+        ri = ri + 1
+    }
+    return buf
+}
+
+# rowDetail -- the detail of the row that set a slot, with `@N` the type as
+# the compiler names it
+rowDetail: function {s: Slot.view rows: (List Row).view f: Family.view} out String is {
+    if s.row < 0 then return "".string
+    r: rows.get i: s.row.u64.orPanic
+    return (r.detail.stringView.replace needle: "@N" replacement: f.shown)
+}
+
+# errLine -- a REFUSED detail `Ennnn message` as the compiler prints it
+errLine: function {detail: StringView} out String is {
+    sp: (detail.indexOf needle: " ").or d: 0
+    code: detail.substring from: 0 to: sp
+    msg: detail.substring from: sp + 1 to: detail.length
+    return "error[\{code}]: \{msg}\n"
+}
+
+# header -- the first lines of every generated program
+header: function {f: Family.view what: StringView} out String is {
+    buf: "# GENERATED by tests/unit/matrixgen.z from tests/fixtures/matrix_expect.txt --\n".string
+    buf.append "# `make regen-matrix`; do not edit. The `\{f.name}` family (\{f.ty}) in every\n"
+    buf.append "# position whose cell is \{what}: one function per cell, called from main.\n"
+    return buf
+}
+
+# cellBody -- a cell as a function returning its read
+cellBody: function {f: Family.view p: Position.view name: StringView} out String is {
+    body: expand :f text: p.body.stringView n: p.expect
+    return "\{name}: function out \{retType :f} is {\n    \{body}\n}\n"
+}
+
+# program -- a program of the given cells: declarations, one function per cell,
+# and a main printing each cell's position and value
+program: function {
+    f: Family.view
+    poss: (List Position).view
+    slots: (List Slot).view
+    decls: StringView
+    what: StringView
+} out String is {
+    buf: header :f :what
+    buf.append decls
+    fns: String
+    calls: String
+    for s: slots.iterate loop {
+        p: poss.get i: s.pos
+        buf.append (expand :f text: p.decls.stringView n: p.expect)
+        fname: cellFn pos: p.name.stringView
+        fns.append (cellBody :f :p name: fname.stringView)
+        calls.append "    print \"\{p.name} \\{\{fname}}\"\n"
+    }
+    buf.append fns
+    buf.append "main: function is {\n"
+    buf.append calls
+    buf.append "}\n"
+    return buf
+}
+
+# golden -- what a RUN program prints
+golden: function {poss: (List Position).view slots: (List Slot).view} out String is {
+    buf: String
+    for s: slots.iterate loop {
+        p: poss.get i: s.pos
+        buf.append "\{p.name} \{p.expect}\n"
+    }
+    return buf
+}
+
+# errGolden -- the error lines a REFUSED program reports, in cell order
+errGolden: function {f: Family.view rows: (List Row).view slots: (List Slot).view} out String is {
+    buf: String
+    for s: slots.iterate loop {
+        d: rowDetail :s :rows :f
+        buf.append (errLine detail: d.stringView)
+    }
+    if slots.length == 1 then {
+        buf.append "1 error found\n"
+    } else buf.append "\{slots.length} errors found\n"
+    return buf
+}
+
+# pick -- the family's slots with the given outcome, its conformance cells or
+# its others
+pick: function {
+    slots: (List Slot).view
+    poss: (List Position).view
+    fi: u64
+    expected: outcome
+    conf: bool
+} out List Slot is {
+    buf: List Slot
+    for s: slots.iterate loop {
+        p: poss.get i: s.pos
+        if s.fam == fi when s.expected == expected when p.needsConf == conf then {
+            buf.append (Slot fam: s.fam pos: s.pos expected: s.expected row: s.row)
+        }
+    }
+    return buf
+}
+
+# writeRun -- one RUN program and its golden; its run_cases row appended to cases
+writeRun: function {
+    root: StringView
+    f: Family.view
+    poss: (List Position).view
+    slots: (List Slot).view
+    decls: StringView
+    stem: StringView
+    cases: String
+} is {
+    if slots.length == 0 then return
+    prog: program :f :poss :slots :decls what: "RUN"
+    writeFile path: "\{root}/tests/fixtures/emitc_corpus/\{stem}.z" content: prog.stringView
+    gold: golden :poss :slots
+    writeFile path: "\{root}/tests/fixtures/run_golden/\{stem}.out" content: gold.stringView
+    cases.append "\{stem} tests/fixtures/emitc_corpus\n"
+}
+
+# writeRefused -- the family's REFUSED program and its .err: the conformance
+# declarations when the family has them, so every refused cell fits one program
+writeRefused: function {
+    root: StringView
+    f: Family.view
+    poss: (List Position).view
+    rows: (List Row).view
+    slots: (List Slot).view
+} is {
+    if slots.length == 0 then return
+    cd: confDecls :f
+    decls: if cd.length > 0 then cd.copy else f.decls.copy
+    prog: program :f :poss :slots decls: decls.stringView what: "REFUSED"
+    stem: "matrix_\{f.name}_refused"
+    writeFile path: "\{root}/tests/fixtures/errors/\{stem}.z" content: prog.stringView
+    err: errGolden :f :rows :slots
+    writeFile path: "\{root}/tests/fixtures/errors/\{stem}.err" content: err.stringView
+}
+
+# writeFamily -- one family's RUN programs (its conformance cells apart, so a
+# conformance defect cannot hide the rest) and its REFUSED program
+writeFamily: function {
+    root: StringView
+    fams: (List Family).view
+    poss: (List Position).view
+    rows: (List Row).view
+    slots: (List Slot).view
+    fi: u64
+    cases: String
+} is {
+    f: fams.get i: fi
+    stem: "matrix_\{f.name}"
+    run: pick :slots :poss :fi expected: outcome.run conf: false
+    writeRun :root :f :poss slots: run decls: f.decls.stringView stem: stem.stringView :cases
+    confRun: pick :slots :poss :fi expected: outcome.run conf: true
+    cd: confDecls :f
+    confStem: "matrix_\{f.name}_conf"
+    writeRun :root :f :poss slots: confRun decls: cd.stringView stem: confStem.stringView :cases
+    refused: pick :slots :poss :fi expected: outcome.refused conf: false
+    confRefused: pick :slots :poss :fi expected: outcome.refused conf: true
+    for s: confRefused.iterate loop refused.append (Slot
+        fam: s.fam
+        pos: s.pos
+        expected: s.expected
+        row: s.row
+    )
+    writeRefused :root :f :poss :rows slots: refused
+}
+
+# writeFixtures -- every family's programs and goldens under root, and the
+# matrix_ rows of run_cases.txt replaced by this run's
+writeFixtures: function {
+    root: StringView
+    fams: (List Family).view
+    poss: (List Position).view
+    rows: (List Row).view
+    slots: (List Slot).view
+} is {
+    ensureDir path: "\{root}/tests/fixtures/emitc_corpus"
+    ensureDir path: "\{root}/tests/fixtures/run_golden"
+    ensureDir path: "\{root}/tests/fixtures/errors"
+    cases: String
+    fi: u64
+    for fi < fams.length loop {
+        writeFamily :root :fams :poss :rows :slots :fi :cases
+        fi = fi + 1
+    }
+    writeCases :root :cases
+}
+
+# writeCases -- run_cases.txt with its matrix_ rows replaced by cases
+writeCases: function {root: StringView cases: String.view} is {
+    path: "\{root}/tests/fixtures/run_cases.txt"
+    buf: String
+    if (io.exists :path) then {
+        content: slurp path: path.stringView
+        with it: content.stringView.lines do for ln: it loop {
+            if ln.length > 0 when (ln.startsWith prefix: "matrix_").not then {
+                buf.append ln
+                buf.append "\n"
+            }
+        }
+    }
+    buf.append cases
+    writeFile :path content: buf.stringView
+}
+
+# writeCells -- one program per writable cell, and the manifest
+writeCells: function {
+    dir: StringView
+    fams: (List Family).view
+    poss: (List Position).view
+    rows: (List Row).view
+    slots: (List Slot).view
+} is {
+    ensureDir path: dir
+    manifest: String
+    for s: slots.iterate loop {
+        f: fams.get i: s.fam
+        p: poss.get i: s.pos
+        if p.needsConf.not or (f.confType.length > 0) then {
+            cd: confDecls :f
+            decls: if p.needsConf then cd.copy else f.decls.copy
+            extra: expand :f text: p.decls.stringView n: p.expect
+            body: expand :f text: p.body.stringView n: p.expect
+            rt: retType :f
+            name: "\{f.name}__\{p.name}"
+            prog: "\{decls}\{extra}probe: function out \{rt} is {\n    \{body}\n}\nmain: function is {\n    print \"\\{probe}\"\n}\n"
+            writeFile path: "\{dir}/\{name}.z" content: prog.stringView
+            d: rowDetail :s :rows :f
+            manifest.append "\{name} \{f.name} \{p.name} \{(outcomeWord
+                o: s.expected
+            )} \{p.expect} \{d}\n"
+        }
+    }
+    writeFile path: "\{dir}/manifest.txt" content: manifest.stringView
+}
+
+# tally -- how many slots carry the outcome
+tally: function {slots: (List Slot).view expected: outcome} out u64 is {
+    n: u64
+    for s: slots.iterate loop {
+        if s.expected == expected then n = n + 1
+    }
+    return n
+}
+
+# report -- the counts, and each open question with how many cells wait on it
+report: function {
+    fams: (List Family).view
+    poss: (List Position).view
+    rows: (List Row).view
+    slots: (List Slot).view
+} is {
+    run: tally :slots expected: outcome.run
+    refused: tally :slots expected: outcome.refused
+    na: tally :slots expected: outcome.na
+    ask: tally :slots expected: outcome.ask
+    print "matrixgen: \{fams.length} families x \{poss.length} positions: \{run} RUN, \{refused} REFUSED, \{na} NA, \{ask} ASK"
+    questions: List String
+    counts: ListVal u64
+    for s: slots.iterate loop {
+        if s.expected.ask then {
+            f: fams.get i: s.fam
+            d: rowDetail :s :rows :f
+            qi: u64
+            for qi < questions.length while (questions.get i: qi) != d loop qi = qi + 1
+            if qi == questions.length then {
+                questions.append d.copy
+                counts.append 0
+            }
+            counts.set i: qi val: (counts.get i: qi) + 1
+        }
+    }
+    qi: u64
+    for qi < questions.length loop {
+        print "  ASK x\{counts.get i: qi}: \{questions.get i: qi}"
+        qi = qi + 1
+    }
+}
+
+# Options -- the command line: where the fixtures go, or the cells instead
+Options: class {
+    root: String
+    cellsDir: String
+}
+
+# parseArgs -- the command line as Options, stopping on anything else
+parseArgs: function out Options is {
+    argv: os.args
+    opts: Options root: ".".string cellsDir: "".string
+    i: 1.u64
+    for i < argv.length loop {
+        a: argv.get :i
+        if i + 1 >= argv.length then fail msg: "usage: matrixgen [--root DIR] [--cells DIR]"
+        v: argv.get i: i + 1
+        if a == "--root" then {
+            opts.root = v.copy
+        } else if a == "--cells" then {
+            opts.cellsDir = v.copy
+        } else fail msg: "usage: matrixgen [--root DIR] [--cells DIR]"
+        i = i + 2
+    }
+    return opts
+}
+
+main: function is {
+    opts: parseArgs
+    fams: families
+    poss: positions
+    tablePath: "\{opts.root}/tests/fixtures/matrix_expect.txt"
+    rows: readTable path: tablePath.stringView :fams :poss
+    slots: allSlots :fams :poss :rows tablePath: tablePath.stringView
+    if opts.cellsDir.length > 0 then {
+        writeCells dir: opts.cellsDir.stringView :fams :poss :rows :slots
+    } else writeFixtures root: opts.root.stringView :fams :poss :rows :slots
+    report :fams :poss :rows :slots
+}

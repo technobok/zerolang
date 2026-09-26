@@ -90,7 +90,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard zl-full-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard lifetime-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard fmt-raw-guard test-tcc test-tcc-heavy mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
+.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard zl-full-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens regen-matrix bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard lifetime-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard fmt-raw-guard test-tcc test-tcc-heavy mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -463,6 +463,20 @@ regen-fmt-goldens: out/zfmt
 		$(BUILDDIR)/zfmt $$f $$args > tests/fixtures/fmt_golden/$$name.z; \
 	done
 	@echo "regenerated fmt goldens via $(BUILDDIR)/zfmt"
+
+# The ownership matrix's generator: tests/unit/matrixgen.z crosses every type
+# family with every position, each cell's verdict read from
+# tests/fixtures/matrix_expect.txt.
+out/matrixgen: bin/zc tests/unit/matrixgen.z $(wildcard lib/system/*.z) $(wildcard lib/system/system/*.z)
+	@mkdir -p $(BUILDDIR)
+	bin/zc matrixgen --src tests/unit --system lib/system --emit-c $(BUILDDIR)/matrixgen.c
+	$(CC) $(CFLAGS) -o $(BUILDDIR)/matrixgen $(BUILDDIR)/matrixgen.c $(call ZLINKOF,$(BUILDDIR)/matrixgen.c) -lm
+
+# Regenerate the matrix fixtures (emitc_corpus/matrix_*, run_golden/matrix_*,
+# errors/matrix_*_refused, the matrix_ rows of run_cases.txt) from the
+# expectations table. Always review the resulting diff before committing.
+regen-matrix: out/matrixgen
+	$(BUILDDIR)/matrixgen --root .
 
 # fmt-raw-guard -- the cursor's round-trip proof, gated. RAW mode lays out
 # nothing: it replays every token and its trivia straight from the cursor, so
