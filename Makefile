@@ -1896,7 +1896,10 @@ perf: $(PERFBIN)
 # +13 `.take`/`.hold` hand a protocol value on: 0 behaviour, 13 source.
 #
 # +711 a `.borrow` binding of a value type is refused: 0 behaviour, 711 source.
-ALLOC_BASELINE := 2740285
+#
+# -966 a value-type union arm is boxed implicitly: -18 behaviour (the arm
+# check that copied every arm's name is gone), -948 source.
+ALLOC_BASELINE := 2739319
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

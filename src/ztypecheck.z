@@ -11425,43 +11425,6 @@ refuseReftypeBounds: function {
     }
 }
 
-# checkUnionArmIsReftype -- THE BOX RULE: a union holds reftypes. A null arm carries
-# no payload; a MARKED arm (view/borrow/hold) is reference-family whatever it
-# points at; a collapsed `(Box T)` arm was already vetted valtype. What remains
-# must be a reftype.
-checkUnionArmIsReftype: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    fm: argref
-    an: StringView
-    aname: StringView
-    armTe: zast.nodeid
-    armMk: bool
-    cid: ztypes.tid
-} is {
-    # THE BOX RULE: a union holds reftypes. A null arm carries no
-    # payload; a MARKED arm (view/borrow/hold) is reference-family
-    # whatever it points at; a collapsed (Box T) arm was already
-    # vetted valtype. What remains must be a reftype.
-    if an != "null" when armTe == fm.operation when armMk.not when (typeIsValtype :st tid: cid
-    ) then {
-        # the arm's type as it is WRITTEN: an array, a nested application or a
-        # dotted name spells no atom, and the hint read `(Box )`
-        bxv: typeExprText :ast nid: armTe.u64
-        if bxv.length == 0 then bxv = atomName :ast n: (ast.nodes.get i: armTe.u64)
-        mbv: "a union arm holds reftypes; box the valtype: '\{aname}: (Box \{bxv})'"
-        (addResolveErrorH
-            :st
-            nodeid: fm.nid
-            lineno: fm.lineno
-            colno: fm.colno
-            e: zast.err.typeError
-            msg: mbv
-            width: aname.length.u32.orPanic
-        )
-    }
-}
-
 # attachUnionArm -- resolve one union isItem into an arm: its payload type, the
 # ordinal it carries, and the diagnostics an ill-formed arm earns. Answers the
 # arm's tid, or 0 for a null (payload-less) arm.
@@ -11489,15 +11452,11 @@ attachUnionArm: function {
         )
     }
     ordinalArmNames.add item: fm.name.u64
-    an: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: fm.operation.u64
-    # A `(Box T)` arm collapses to T: the arm child IS the boxed
-    # valtype. A union arm is heap-celled whichever family it holds,
-    # so the spelling changes no emitted C; it exists so the
-    # declaration SAYS the arm boxes a valtype. Only the builtin Box
-    # (empty generic class body) collapses; a user class named Box
-    # resolves as an ordinary parameterized arm.
-    )
-    )
+    # A `(Box T)` arm collapses to T: the arm child IS the boxed valtype. A
+    # union arm is heap-celled whichever family it holds, so the spelling
+    # changes no emitted C and a bare valtype arm means the same. Only the
+    # builtin Box (empty generic class body) collapses; a user class named
+    # Box resolves as an ordinary parameterized arm.
     armTe: fm.operation
     armOpId: fm.operation
     # the arm's call shape is read as plain values: the lookup below lends ast
@@ -11558,11 +11517,9 @@ attachUnionArm: function {
     # resolve above strips it, so record it per member the way a class
     # field does. `view` / `hold` are what a match arm reads back.
     alk: pathOwnership :ast n: (ast.nodes.get i: fm.operation.u64)
-    armMk: false
     match (
         alk
     ) case some then {
-        armMk = true
         (st.typing.setChildOwnership
             pool: ast.names
             parentTypeId: (ztypes.tid.create from: uid.u64)
@@ -11570,16 +11527,6 @@ attachUnionArm: function {
             ownership: alk
         )
     } case none then null
-    (checkUnionArmIsReftype
-        :st
-        :ast
-        :fm
-        an: an.stringView
-        aname: aname.stringView
-        :armTe
-        :armMk
-        :cid
-    )
     (recordTyperef
         :st
         :scope
