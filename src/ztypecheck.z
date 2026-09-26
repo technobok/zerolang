@@ -7330,11 +7330,49 @@ attachAsConstant: function {
     folded: constValueOfDecl :st :ast declId: md
     if folded.kind.none then {
         reported: reportAsMemberNotConstant :st :ast :parentId :item
+        if reported.not then reported = reportUnknownAsCallHead :st :ast :parentId :item
         # attachMarkers classifies a bare name or a path, which may name a
         # conformance or a type
         if reported.not when (valueMayNameType :ast node: item.operation) then return
     }
     st.typing.markAsConstDecl declId: md
+}
+
+# reportUnknownAsCallHead -- an `as` item whose value is a call (`k: (f a: 1)`,
+# or a type application `g: (Getter v: i64)`) whose head resolves nowhere:
+# reported as the same name is in a body, rather than left a constant that
+# never folds. True when it reported.
+reportUnknownAsCallHead: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    parentId: ztypes.tid
+    item: argref
+} out bool is {
+    headNid: zast.nodeid
+    {
+        vn: ast.nodes.get i: item.operation.u64
+        if vn.call.not then return false
+        headNid = vn.callable
+    }
+    headId: bareAtomNameId n: (ast.nodes.get i: headNid.u64)
+    if headId.isZero then return false
+    td: declOfTypeId :st tid: parentId
+    if td.isZero then return false
+    unknown: unresolvedBareName :ast :st unitDecl: (unitRootOfDecl :st declId: td) nameId: headId
+    if unknown.length == 0 then return false
+    hn: ast.nodes.get i: headNid.u64
+    (addErrorH
+        :st
+        nodeid: headNid
+        lineno: (nodeLine n: hn)
+        colno: (nodeCol n: hn)
+        e: zast.err.badReference
+        msg: "Unknown reference '\{unknown}'"
+        note: "".string
+        hint: "".string
+        width: unknown.length.u32.orPanic
+    )
+    return true
 }
 
 # valueMayNameType -- a declaration's value spelled as a bare name or a path,

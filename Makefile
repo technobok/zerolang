@@ -1860,7 +1860,10 @@ perf: $(PERFBIN)
 # behaviour, -72 source.
 #
 # -18 the dead `Iterator` protocol is gone: 0 behaviour, -18 source.
-ALLOC_BASELINE := 2728389
+#
+# +1147 an `as` item called on a head that names nothing is reported: 0
+# behaviour, 1147 source.
+ALLOC_BASELINE := 2729536
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
