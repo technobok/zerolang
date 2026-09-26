@@ -1841,7 +1841,10 @@ perf: $(PERFBIN)
 # behaviour (the compiler's own source takes no such reference), 2870 source.
 #
 # +574 a readonly value reaches a protocol or facet: 0 behaviour, 574 source.
-ALLOC_BASELINE := 2725006
+#
+# +574 a generic protocol instance's method keeps its receiver marker: 0
+# behaviour (the compiler's own source declares no generic spec), 574 source.
+ALLOC_BASELINE := 2725580
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

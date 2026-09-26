@@ -1,0 +1,32 @@
+# A method of a generic protocol INSTANCE keeps its receiver marker. A spec
+# method resolves with its receiver dropped from the parameters, so the marker
+# lives only in the receiver's ownership row -- and the instance's clone of
+# the method copied the typed parameters alone. `(Getter v: i64)` then read
+# its `.view` methods as writers, and calling one through a `.view` parameter
+# was refused: "Cannot take exclusive lock on 'g': 'g' is readonly here".
+#
+# `Plain` is the control: the same shape, not generic, always worked. The
+# references demand the bodies; nothing here builds a value of either spec,
+# so the case is a dump: the program typechecks.
+Getter: protocol {
+    v: anyval.generic
+    get: function {t: this.view} out v
+    near: function {this: this.view n: v} out bool
+}
+
+Plain: protocol {
+    get: function {t: this.view} out i64
+}
+
+useGetter: function {g: (Getter v: i64).view} out i64 is {
+    if (g.near n: 2) then return g.get
+    return 0
+}
+
+usePlain: function {p: Plain.view} out i64 is { return p.get }
+
+main: function is {
+    getter: useGetter.take
+    plain: usePlain.take
+    print "declared"
+}

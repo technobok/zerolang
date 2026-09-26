@@ -19815,6 +19815,30 @@ cloneParamDefaults: function {
     }
 }
 
+# cloneDroppedReceiver -- a spec method resolves with its receiver DROPPED from
+# the parameters: the receiver's row has no type, so the typed-row copy in
+# cloneMethodInto passes it by, and with it the only record of its marker. The
+# clone declares the same untyped row and takes the marker, which is what
+# methodReceiverIsView asks. A receiver that kept its type was copied already.
+cloneDroppedReceiver: function {
+    st: zenv.ZSymbolTable
+    tplFnId: ztypes.tid
+    toFn: ztypes.tid
+    tpn0id: u32
+} is {
+    if tpn0id == 0 then return
+    rnid: zast.nameid.create from: tpn0id
+    if (st.typing.declMemberIdOf parentTypeId: tplFnId nameId: rnid).isZero then return
+    if (st.typing.declMemberIdOf parentTypeId: toFn nameId: rnid).isZero.not then return
+    st.typing.declSynthMember parentTypeId: toFn nameId: rnid kind: ztyping.declkind.paramDecl
+    rown: st.typing.declOwnershipOfId parentTypeId: tplFnId nameId: rnid
+    match (
+        rown
+    ) case some then {
+        st.typing.setChildOwnershipId parentTypeId: toFn nameId: rnid ownership: rown
+    } case none then null
+}
+
 # cloneMethodInto -- specialize one template method for an instance: a fresh
 # FUNCTION type named {spec}.{m} whose param children and return substitute
 # the template parameters (id-first, then re-specialization). genericOriginId
@@ -19929,6 +19953,7 @@ cloneMethodInto: function {
         :tplClassId
         tpn0: tpn0.stringView
     )
+    cloneDroppedReceiver :st tplFnId: (ztypes.tid.create from: tplFnId) toFn: fid5 :tpn0id
     # the parameter defaults: a construction or a call that leaves one out
     # fills it from the clone
     cloneParamDefaults :st from: tplFnId to: fid5 names: cNid5
