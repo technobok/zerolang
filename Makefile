@@ -1872,7 +1872,10 @@ perf: $(PERFBIN)
 #
 # +229 a union returned through its payload is still destroyed: 0 behaviour,
 # 229 source.
-ALLOC_BASELINE := 2736756
+#
+# +34 a generic union instance is minted with its destructor flag: 0
+# behaviour, 34 source.
+ALLOC_BASELINE := 2736790
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

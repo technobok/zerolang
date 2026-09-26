@@ -1,0 +1,62 @@
+# An instance of a generic union owns the cell each arm is held in, as its
+# template does, and carries the destructor flag from the moment it is
+# minted. It carried none: two emitter sites (a scope exit, a protocol box)
+# patched the flag in with a rule of their own, and every other reader went
+# without -- an owned `.take` parameter was never destroyed. Every position
+# that asks: a local, an owned field and its reassignment, a List element
+# pushed and popped, a Map value, an Option and a Result payload, another
+# union's arm, a generic class's field, an owned parameter (each arm, and
+# returned through its payload), a return.
+Tree: union { leaf: t node: String } as {
+    t: anyval.generic
+}
+
+Holder: class { tr: (Tree t: i64) }
+
+Outer: union { inner: (Tree t: i64) none: null }
+
+Box: class { item: U } as {
+    U: AnyRef.generic
+}
+
+mk: function {n: i64} out (Tree t: i64) is { return ((Tree t: i64).node "n\{n}") }
+
+eat: function {x: (Tree t: i64).take} out i64 is {
+    match (x) case leaf then return x case node then return 1
+}
+
+count: function {x: (Tree t: i64).take} out i64 is {
+    r: 0
+    match (x) case leaf then r = x case node then r = 1
+    return r
+}
+
+pick: function {xs: (List (Tree t: i64)).view} out (Option (Tree t: i64)) is {
+    if xs.length == 0 then return (Option (Tree t: i64)).none
+    return ((Option (Tree t: i64)).some ((Tree t: i64).node "picked".string))
+}
+
+parse: function {ok: bool} out (Result (Tree t: i64) E: String) is {
+    if ok then return ((Result (Tree t: i64) E: String).ok ((Tree t: i64).node "r".string))
+    return ((Result (Tree t: i64) E: String).err "bad".string)
+}
+
+main: function is {
+    a: (Tree t: i64).node "a".string
+    h: Holder tr: ((Tree t: i64).node "held".string)
+    h.tr = (Tree t: i64).node "reassigned".string
+    xs: List (Tree t: i64)
+    xs.append ((Tree t: i64).node "one".string)
+    xs.append (mk n: 2)
+    popped: xs.pop
+    m: Map String V: (Tree t: i64)
+    m.set key: "k".string value: ((Tree t: i64).node "mv".string)
+    got: pick xs: xs
+    r1: parse ok: true
+    r2: parse ok: false
+    o: Outer.inner ((Tree t: i64).node "in".string)
+    b: Box item: ((Tree t: i64).node "boxed".string)
+    print "\{eat x: (mk n: 3)} \{eat x: ((Tree t: i64).leaf 9)} \{xs.length} \{m.length}"
+    print "\{count x: (mk n: 4)} \{count x: ((Tree t: i64).leaf 6)}"
+    match (o) case inner then print "inner" case none then print "none"
+}

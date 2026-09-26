@@ -20703,6 +20703,22 @@ templateNeedsMonoDtor: function {
     return needsDtorM
 }
 
+# unionMonoNeedsDtor -- an instance of a generic union owns the cell each arm is
+# held in, as its template does (resolveUnion flags every union with a
+# non-null arm), so it takes the template's flag. OptionView is the exception:
+# a view's arm points at a value it does not own.
+unionMonoNeedsDtor: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    rf: ztypes.declid
+    templateId: ztypes.tid
+    tt: ztypes.ztypetype
+} out bool is {
+    if tt != ztypes.ztypetype.unionType then return false
+    if (st.reg.needsDestructor typeId: templateId).not then return false
+    return templateId != (builtinTidT :st scope: rf :ast base: "OptionView")
+}
+
 # mintMonoTagShape -- give a monomorphised sum type its discriminator: the tag
 # width its template declares, and for a variant the ordinal each arm carries.
 mintMonoTagShape: function {
@@ -20866,7 +20882,7 @@ mintMono: function {
         )
     )
     needsDtorM: templateNeedsMonoDtor :ast :st :rf :templateId
-    if needsDtorM then {
+    if needsDtorM or (unionMonoNeedsDtor :ast :st :rf :templateId :tt) then {
         st.reg.setNeedsDestructor typeId: (ztypes.tid.create from: mid.u64)
     }
     # An elided leading type argument stages under the empty name; rebind it
