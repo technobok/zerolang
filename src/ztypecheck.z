@@ -21358,6 +21358,84 @@ checkConstraintSat: function {
     reportConstraintUnmet :st :at :lineno :colno msg: m
 }
 
+# qualifiedTemplateName -- a template as a constraint report names it: its
+# name, qualified by its unit.
+qualifiedTemplateName: function {st: zenv.ZSymbolTable.view tdecl: ztypes.declid} out String is {
+    tdo: st.typing.decls.get i: tdecl.u64
+    tdn: st.reg.nameOf tid: (ztypes.tid.create from: tdo.typeId)
+    un9x: unitNameOfTid :st tid: (ztypes.tid.create from: tdo.typeId)
+    if un9x.length > 0 then return "\{un9x}.\{tdn}"
+    return tdn
+}
+
+# checkPartialBounds -- a bound over another of the template's parameters,
+# `T: (Getter v: u).generic`, names a PARTIAL instance, which admission checks
+# argument by argument and so cannot decide (namedBoundAdmits admits it). Once
+# every parameter is bound it is decided: the bound is respecialised with
+# this instantiation's arguments, and the argument for its parameter must
+# conform to that instance.
+checkPartialBounds: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    tdecl: ztypes.declid
+    pnames: (ListVal zast.nameid).view
+    subs: (IdMapV zast.nameid v: u64).view
+    at: zast.nodeid
+    lineno: u32
+    colno: u32
+} is {
+    if st.typing.quietBounds then return
+    anyApp: false
+    with qit: pnames.iterate do for qn: qit loop {
+        if (st.reg.genericParamConstraintOf :tdecl paramName: qn).boundApp > 0 then anyApp = true
+    }
+    if anyApp.not then return
+    idSubs: IdMapV u64 v: u64
+    with ait: pnames.iterate do for an: ait loop {
+        av: subs.get key: an
+        match (
+            av
+        ) case some then {
+            idSubs.set key: (genericParamTidMint :st :ast :tdecl nameId: an) value: av
+        } case none then null
+    }
+    with pit: pnames.iterate do for pn: pit loop {
+        argv: (subs.get key: pn).or d: 0
+        inst: partialBoundInstance :st :ast :unitDecl :tdecl param: pn :idSubs
+        if argv == 0 or (inst == 0) then continue
+        argT: ztypes.tid.create from: argv.u64
+        instT: ztypes.tid.create from: inst.u64
+        if argT == instT or (typeConformsTo :st impl: argT spec: instT) then continue
+        an: st.reg.nameOf tid: argT
+        sn: specWrittenName :st :ast tid: instT
+        pt: zast.nameTextAt :ast ref: pn
+        tdn: qualifiedTemplateName :st :tdecl
+        m: "generic argument '\{an}' does not satisfy constraint '\{sn}' on parameter '\{pt}' of '\{tdn}'"
+        reportConstraintUnmet :st :at :lineno :colno msg: m
+    }
+}
+
+# partialBoundInstance -- the instance a parameter's partial application bound
+# names once `idSubs` binds the template's parameters; 0 when the bound is no
+# partial application or stays partial.
+partialBoundInstance: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    tdecl: ztypes.declid
+    param: zast.nameid
+    idSubs: (IdMapV u64 v: u64)
+} out u64 is {
+    cd: st.reg.genericParamConstraintOf :tdecl paramName: param
+    if cd.boundApp == 0 then return 0
+    bt: boundApplicationTid :ast :st :tdecl app: cd.boundApp
+    if bt.isZero or (st.reg.isPartialOf tid: bt).not then return 0
+    inst: respecialize :st scope: tdecl :ast :unitDecl specTid: bt.u64 :idSubs
+    if inst == 0 or (st.reg.isPartialOf tid: (ztypes.tid.create from: inst.u64)) then return 0
+    return inst
+}
+
 # reportConstraintUnmet -- a constraint refusal, at the call that inferred the
 # argument when there is one, else with no position.
 reportConstraintUnmet: function {
@@ -21661,13 +21739,7 @@ constraintUnmetText: function {
     if con.length == 0 when cdx.boundName.isZero.not then {
         con = zast.nameTextCopy :ast ref: cdx.boundName
     }
-    tdn: String
-    {
-        tdo: st.typing.decls.get i: tdecl.u64
-        tdn = st.reg.nameOf tid: (ztypes.tid.create from: tdo.typeId)
-        un9x: unitNameOfTid :st tid: (ztypes.tid.create from: tdo.typeId)
-        if un9x.length > 0 then tdn = "\{un9x}.\{tdn}"
-    }
+    tdn: qualifiedTemplateName :st :tdecl
     pnmT: zast.nameTextAt :ast ref: paramName
     m: "generic argument '\{an}' does not satisfy constraint '\{con}' on parameter '\{pnmT}' of '\{tdn}'"
     why: hashableUnmetReason :ast :st ck: cdx.kind tid: argTid
@@ -22855,6 +22927,17 @@ buildSpecTrieKeys: function {
             }
         }
     }
+    (checkPartialBounds
+        :st
+        :ast
+        unitDecl: (unitRootOfDecl :st declId: tk8)
+        tdecl: tk8
+        pnames: pnames8
+        :subs
+        at: zast.nodeid
+        lineno: 0
+        colno: 0
+    )
     return trieOk8
 }
 
@@ -44166,6 +44249,17 @@ checkGenericCall: function {
     }
     if allOk.not then return (ztypes.tid.create from: 0)
     if gparams.length == 0 then return (ztypes.tid.create from: 0)
+    (checkPartialBounds
+        :st
+        :ast
+        :unitDecl
+        tdecl: gtk4
+        pnames: gparams
+        :subs
+        at: call.nid
+        lineno: call.lineno
+        colno: call.colno
+    )
     mid: (getOrMintSpec
         :st
         scope: st.curScope
