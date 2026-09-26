@@ -7533,22 +7533,28 @@ conformanceOwn: function {o: optionval ztypes.zparamownership} out ztypes.zparam
 # against its spec (checkConformanceSignature). Run once the declarations are
 # resolved and the shells canonical: a row is recorded when its marker is
 # reached, before the spec's return types have been stamped. Reported at the
-# marker, the member the impl declares under the conformance's label.
+# marker, the member the impl declares under the conformance's label. A user
+# generic template's marker is a promise for every instance, so each instance
+# is checked instead of the template (checkInstanceConformances).
 checkConformances: function {ast: Ast st: zenv.ZSymbolTable} is {
-    impls: ListVal u64
-    specs: ListVal u64
-    labels: ListVal u64
-    with cit: st.typing.conformance.iterate do for crow: cit loop {
-        impls.append crow.implTypeId
-        specs.append crow.specTypeId
-        labels.append crow.labelNameId
+    rows: ListVal u64
+    {
+        ri: u64
+        for ri < st.typing.conformance.length loop {
+            rows.append ri
+            ri = ri + 1
+        }
     }
-    ci: u64
-    for ci < impls.length loop {
-        implT: ztypes.tid.create from: (impls.get i: ci)
-        specT: ztypes.tid.create from: (specs.get i: ci)
-        lblId: zast.nameid.create from: (labels.get i: ci).u32.orPanic
-        ci = ci + 1
+    for ci: rows.iterate loop {
+        implT: ztypes.tid
+        specT: ztypes.tid
+        lblId: zast.nameid
+        {
+            crow: st.typing.conformance.get i: ci
+            implT = ztypes.tid.create from: crow.implTypeId
+            specT = ztypes.tid.create from: crow.specTypeId
+            lblId = zast.nameid.create from: crow.labelNameId.u32.orPanic
+        }
         mdecl: st.typing.declMemberIdOf parentTypeId: implT nameId: lblId
         if mdecl.isZero then mdecl = st.typing.declIdOfType typeId: implT
         mnid: zast.nodeid
@@ -7556,7 +7562,83 @@ checkConformances: function {ast: Ast st: zenv.ZSymbolTable} is {
             dnode: (st.typing.decls.get i: mdecl.u64).node
             mnid = zast.nodeid.create from: dnode
         }
-        checkConformanceSignature :st :ast implTid: implT specTid: specT markerOp: mnid
+        implName: st.reg.nameOf tid: implT
+        if (st.reg.isGenericOf tid: implT) when (st.reg.isNativeOf tid: implT).not then {
+            checkInstanceConformances :st :ast row: ci markerOp: mnid implName: implName.stringView
+        } else {
+            (checkConformanceSignature
+                :st
+                :ast
+                implTid: implT
+                specTid: specT
+                markerOp: mnid
+                implName: implName.stringView
+            )
+        }
+    }
+}
+
+# checkInstanceConformances -- a generic template's conformance row, checked on
+# each instance the program made (D15: against the instance's own substituted
+# methods), at the template's marker and in the template's name, each error
+# carrying the instance note; the same failure in two instances is one error.
+# A conforming instance gets its own row, as a generic typedef instance does. A
+# template nothing instantiates is silent, as any unused declaration is. A
+# native template's rows (str's `:Text`) are its instances' already.
+checkInstanceConformances: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    # the template's row, by position
+    row: u64
+    markerOp: zast.nodeid
+    implName: StringView
+} is {
+    tpl: u64
+    spec: u64
+    label: String
+    labelNameId: u64
+    isFacet: false
+    {
+        crow: st.typing.conformance.get i: row
+        tpl = crow.implTypeId
+        spec = crow.specTypeId
+        label = crow.label.copy
+        labelNameId = crow.labelNameId
+        isFacet = crow.isFacet
+    }
+    last: st.reg.nextTypeId
+    t: 1.u64
+    for t < last loop {
+        mono: ztypes.tid.create from: t.u64
+        t = t + 1
+        if (st.reg.genericOriginOf tid: mono).u64 != tpl then continue
+        # a partial is trie bookkeeping with no methods of its own
+        if (st.reg.isPartialOf tid: mono) then continue
+        errC0: st.typing.errors.length
+        forceAllMembers :st :ast tid: mono
+        (checkConformanceSignature
+            :st
+            :ast
+            implTid: mono
+            specTid: (ztypes.tid.create from: spec.u64)
+            :markerOp
+            :implName
+        )
+        if st.typing.errors.length > errC0 then {
+            noteInstanceErrors :st :ast :mono from: errC0
+        } else {
+            # a failure another instance already reported is deduped away, so
+            # this instance may still read as conforming; nothing is emitted
+            # once there is an error
+            cf: (st.reg.newConformance
+                implTypeId: mono.u64
+                specTypeId: spec
+                label: label.stringView
+                :labelNameId
+                :isFacet
+            )
+            st.typing.conformance.append cf
+        }
     }
 }
 
@@ -7703,6 +7785,9 @@ checkConformanceSignature: function {
     implTid: ztypes.tid
     specTid: ztypes.tid
     markerOp: zast.nodeid
+    # the conformer as its messages name it: an instance is named by its
+    # template, and its note says which instance
+    implName: StringView
 } is {
     slots: st.typing.declRowSlots ownerTid: specTid
     si: u64
@@ -7721,6 +7806,7 @@ checkConformanceSignature: function {
             :smid
             mnameId: (zast.nameid.create from: row.name.u32.orPanic)
             :markerOp
+            :implName
         )
     }
 }
@@ -7776,8 +7862,8 @@ checkConformanceMethod: function {
     smid: ztypes.tid
     mnameId: zast.nameid
     markerOp: zast.nodeid
+    implName: StringView
 } is {
-    implName: st.reg.nameOf tid: implTid
     specName: st.reg.nameOf tid: specTid
     mname: zast.poolTextAt pool: ast.names ref: mnameId
     imid: conformanceImplMethod :st :implTid :mnameId
@@ -7889,7 +7975,7 @@ checkConformanceParam: function {
     ipT: ztypes.tid
     spN: zast.nameid
     ipN: zast.nameid
-    implName: String.view
+    implName: StringView
     specName: String.view
     mname: String.view
     markerOp: zast.nodeid
@@ -7928,7 +8014,7 @@ checkConformanceReturn: function {
     ast: Ast.view
     smid: ztypes.tid
     imid: ztypes.tid
-    implName: String.view
+    implName: StringView
     specName: String.view
     mname: String.view
     markerOp: zast.nodeid
@@ -8674,9 +8760,7 @@ materializeCreateParams: function {
     # resolveDef's settle, which lands after the parameter order is decided
     )
     mkIds8: ListVal u64
-    with cfit8: st.typing.conformance.iterate do for crow8: cfit8 loop {
-        if crow8.implTypeId == typeTid then mkIds8.append crow8.labelNameId
-    }
+    conformanceMarkerIds :st tid: (ztypes.tid.create from: typeTid.u64) ids: mkIds8
     fnameIds: ListVal u64
     ftypeIds: ListVal u64
     ot_ri: ztypes.tid.create from: typeTid.u64
@@ -10596,7 +10680,7 @@ resolveVariant: function {
         :isgen
         :ordinalArmNames
     )
-    if isgen.not then attachMarkers :st :scope :ast :unitDecl parentId: vid objId: vnode.nid
+    attachMarkers :st :scope :ast :unitDecl parentId: vid objId: vnode.nid
     (synthVariantEqHash
         :st
         :ast
@@ -11471,7 +11555,7 @@ resolveUnion: function {
         :isgen
         :ordinalArmNames
     )
-    if isgen.not then attachMarkers :st :scope :ast :unitDecl parentId: uid objId: vnode.nid
+    attachMarkers :st :scope :ast :unitDecl parentId: uid objId: vnode.nid
     if allNull.not then {
         st.reg.setNeedsDestructor typeId: (ztypes.tid.create from: uid.u64)
     }
@@ -12638,16 +12722,18 @@ resolveClassCreate: function {
             objId: cnode.nid
         )
         if hcAs then hasCreate = true
-        mNeedsDtor: (attachMarkers
-            :st
-            :scope
-            :ast
-            :unitDecl
-            parentId: cid
-            objId: cnode.nid
-        )
-        if mNeedsDtor then needsDtor = true
     }
+    # a generic template's marker holds for every instance, each checked at the
+    # end of typecheck (checkConformances)
+    mNeedsDtor: (attachMarkers
+        :st
+        :scope
+        :ast
+        :unitDecl
+        parentId: cid
+        objId: cnode.nid
+    )
+    if mNeedsDtor then needsDtor = true
     if hasCreate.not when isgen.not then {
         createId: (st.reg.newType
             name: "create"
@@ -23638,6 +23724,7 @@ inferGenericConstruction: function {
         fallbackArg: 0
     )
     if mid.isZero then return (ztypes.tid.create from: 0)
+    noteMonoSite :st mono: mid :call :unitDecl
     forceMemberOf :st :ast parentTypeId: mid nameId: zast.names.wkCreate
     cro: st.typing.declChildOfId parentTypeId: mid nameId: zast.names.wkCreate
     match (
@@ -24335,6 +24422,7 @@ genericTypeConstruction: function {
         fallbackArg: firstA
     )
     if mid.isZero then return (ztypes.tid.create from: 0)
+    noteMonoSite :st mono: mid :call :unitDecl
     reportTypedefClash :ast :st tid: mid at: call.nid lineno: call.lineno colno: call.colno
     isSized: tname.stringView == "str" or (tname.stringView == "array")
     if isSized then {
@@ -26731,7 +26819,12 @@ checkTaggedMemberPath: function {
     btt0: st.reg.typetypeOf typeId: bt
     isTagged: btt0 == ztypes.ztypetype.variantType or (btt0 == ztypes.ztypetype.unionType)
     # a conformance label is no arm: it projects, as a record's does
-    if isTagged when (st.typing.isConformanceLabel implTid: bt.u64 nameId: cnId.u64) then {
+    if isTagged when (zenv.isConformanceLabelOf
+        ty: st.typing
+        reg: st.reg
+        tid: bt
+        nameId: cnId.u64
+    ) then {
         isTagged = false
     }
     if isTagged then {
@@ -36748,11 +36841,9 @@ memberReadIsField: function {
     if nameId.isZero then return false
     pt: walkTypeOf :st nid: parentNid
     if pt.isZero then return false
-    isLabel: false
-    with cfit: st.typing.conformance.iterate do for crow: cfit loop {
-        if crow.implTypeId == pt when crow.labelNameId == nameId.u64 then isLabel = true
+    if (zenv.isConformanceLabelOf ty: st.typing reg: st.reg tid: pt nameId: nameId.u64) then {
+        return false
     }
-    if isLabel then return false
     mo: st.typing.declChildOfId parentTypeId: pt :nameId
     match (
         mo
@@ -37175,6 +37266,18 @@ memberIsDataField: function {
     return true
 }
 
+# conformanceMarkerIds -- the label ids of `tid`'s conformance markers: its own
+# rows, and those of the generic template it is an instance of, whose markers
+# hold for every instance (zenv.isConformanceLabelOf asks the same of one name).
+conformanceMarkerIds: function {st: zenv.ZSymbolTable.view tid: ztypes.tid ids: ListVal u64} is {
+    og: st.reg.genericOriginOf :tid
+    with cfit: st.typing.conformance.iterate do for crow: cfit loop {
+        if crow.implTypeId == tid.u64 or (og.isZero.not and (crow.implTypeId == og.u64)) then {
+            ids.append crow.labelNameId
+        }
+    }
+}
+
 # dataFieldIds -- a type's user-supplied data fields/params in order, as the
 # (name pool id, type id) pairs: for a FUNCTION, all params; for a record/class,
 # fnptr fields plus non-FUNCTION fields, excluding as-block constants
@@ -37194,11 +37297,7 @@ dataFieldIds: function {
         # probe below is a scan over these few ids, not the whole table)
     )
     mkIds8: ListVal u64
-    if isFn.not then {
-        with cfit8: st.typing.conformance.iterate do for crow8: cfit8 loop {
-            if crow8.implTypeId == tid then mkIds8.append crow8.labelNameId
-        }
-    }
+    if isFn.not then conformanceMarkerIds :st :tid ids: mkIds8
     # collect the rows first: the fnptr probe below resolves a member
     # declaration, which locks the whole ZTyping this iteration is holding
     ri: u64
@@ -40985,6 +41084,7 @@ mintSumArmInstance: function {
         fallbackArg: subT
     )
     if mintedT > 0 then {
+        noteMonoSite :st mono: mintedT :call :unitDecl
         setgu: mintedT
         stampGate :st nid: call.nid.u64 tid: setgu
         (st.typing.callKind.set
@@ -48577,8 +48677,8 @@ templateRepeatsInMints: function {st: zenv.ZSymbolTable.view monoId: u64} out u6
     return n
 }
 
-# noteMonoSite -- the first call that instantiates `mono`: an error in the
-# instance names it.
+# noteMonoSite -- the first call that instantiates `mono`, a generic function's
+# call or a generic type's construction: an error in the instance names it.
 noteMonoSite: function {
     st: zenv.ZSymbolTable
     mono: ztypes.tid
