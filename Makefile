@@ -1889,7 +1889,10 @@ perf: $(PERFBIN)
 # +454 a `.borrow` on a facet projection is refused: 0 behaviour, 454 source.
 #
 # +609 a spec instance projects as its name does: 0 behaviour, 609 source.
-ALLOC_BASELINE := 2740755
+#
+# -1194 a call through a function value builds its arguments as a direct call
+# does: 0 behaviour, -1194 source (orderFnptrArg's own copy is gone).
+ALLOC_BASELINE := 2739561
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

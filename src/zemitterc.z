@@ -12843,16 +12843,13 @@ emitFnptrFieldCall: function {
     )
 }
 
-# specParamTid -- a protocol or facet type: a parameter a conformer is handed
-# to boxed.
-specParamTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
-    tt: symtab.reg.typetypeOf typeId: tid
-    return tt == ztypes.ztypetype.protocolType or (tt == ztypes.ztypetype.facetType)
-}
-
-# orderFnptrArg -- one written argument of a call through a function field,
-# built in evaluation order into the slot of the parameter it binds, passed the
-# way that parameter takes it.
+# orderFnptrArg -- one written argument of a call through a function value (a
+# local or a field), built in evaluation order into the slot of the parameter
+# it binds. The slot's function type declares its parameters as a function
+# does, so the argument is built exactly as a direct call's is
+# (orderUserFnArg): projected onto a spec slot, addressed for a by-pointer one,
+# an owned inline value held in the temp that releases it. An argument past the
+# slot's parameters -- which the checker has refused -- is its bare value.
 orderFnptrArg: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -12865,59 +12862,26 @@ orderFnptrArg: function {
     op: astnode.view
     ord: orderstate.borrow
 } is {
-    mk: pendingHoistMark :ctx
-    av: emitExpr :ast :symtab :ctx n: op
-    pid: u64
-    pnm: zast.nameid
-    addr: false
     if slot < argIds.length then {
-        pid = argIds.get i: slot
-        pnm = zast.nameid.create from: (argNmIds.get i: slot).u32.orPanic
+        pnm: zast.nameid.create from: (argNmIds.get i: slot).u32.orPanic
         pnt: zast.poolTextAt pool: ast.names ref: pnm
-        addr = (paramTypeIsPointer
+        (orderUserFnArg
             :ast
             :symtab
             :ctx
             fid: fnTid
-            pname: pnt.stringView
-            pid: (ztypes.tid.create from: pid)
-        )
-    }
-    # a conformer handed to a protocol / facet slot goes in as its conformance
-    # box, as it does in a direct call (userFnArgText)
-    projd: false
-    if slot < argIds.length when (specParamTid :symtab tid: (ztypes.tid.create from: pid)) then {
-        pntC: zast.poolTextAt pool: ast.names ref: pnm
-        spec: (conformanceArgText
-            :ast
-            :symtab
-            :ctx
+            pinId: (argIds.get i: slot)
+            pinNm: pnt.stringView
+            pname: pnm
             argOpNode: op
-            av: av.stringView
-            avVid: (atomVidIfPlain :ast :symtab :ctx n: op text: av.stringView)
-            protoTid: pid
-            owning: (paramTakesArg :ast :symtab fid: fnTid pname: pntC.stringView)
+            :slot
+            :ord
         )
-        if spec.length > 0 then {
-            av = spec
-            projd = true
-            if addr then av = boxAddressArg :ast :symtab :ctx box: av.stringView tid: pid
-            addr = false
-        }
+        return
     }
-    # an argument that already holds a pointer is not addressed again, and a
-    # by-value parameter is handed the value of a pointer-held valtype
-    if addr when (pathIsPointer :ast :symtab :ctx n: op) then addr = false
-    if addr.not when projd.not when (ptrHeldValtype :ast :symtab :ctx n: op) then av = "(*\{av})"
-    if addr then av = (emitByrefArg
-        :ast
-        :symtab
-        :ctx
-        av: av.stringView
-        pid: (ztypes.tid.create from: pid)
-        argNid: (zast.nodeIdOf n: op).u64
-    )
-    constant: orderConstant :ast :symtab :ctx n: op text: av.stringView byPtr: addr
+    mk: pendingHoistMark :ctx
+    av: emitExpr :ast :symtab :ctx n: op
+    constant: orderConstant :ast :symtab :ctx n: op text: av.stringView byPtr: false
     (orderPart
         :ast
         :symtab
@@ -12927,8 +12891,8 @@ orderFnptrArg: function {
         text: av
         :constant
         fid: fnTid
-        :pid
-        pname: pnm
+        pid: 0
+        pname: zast.nameid
         ctype: ""
         :slot
     )

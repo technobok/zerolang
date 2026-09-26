@@ -1,0 +1,54 @@
+# A call through a function value -- a local or a field -- builds each
+# argument as a direct call does. It had its own copy of that code, and the
+# copy passed an owned value built inline (a union, a protocol box, a generic
+# union, a protocol instance) straight into the call: no temp held it, and
+# nothing destroyed it. Now both routes build arguments through one function.
+Getter: protocol {
+    v: anyval.generic
+    get: function {t: this.view} out v
+}
+
+Sp: protocol {
+    get: function {t: this.view} out i64
+}
+
+Cell: class { n: i64  s: String } as {
+    :Sp
+    g: (Getter v: i64)
+    get: function {c: this.view} out i64 is { return c.n }
+}
+
+Sh: union { c: Cell  e: null }
+
+GT: union { leaf: t  node: String } as {
+    t: anyval.generic
+}
+
+readSh: function {v: Sh} out i64 is {
+    match (v) case c then return v.n case e then return 0
+}
+
+readGT: function {v: (GT t: i64)} out i64 is {
+    match (v) case leaf then return v case node then return 0
+}
+
+readSp: function {v: Sp} out i64 is { return v.get }
+
+readG: function {v: (Getter v: i64)} out i64 is { return v.get }
+
+readCell: function {v: Cell} out i64 is { return v.n }
+
+Hooks: class { sh: readSh.take  sp: readSp.take }
+
+main: function is {
+    a: readSh.take
+    b: readGT.take
+    c: readSp.take
+    d: readG.take
+    e: readCell.take
+    print "\{a v: (Sh.c (Cell n: 1 s: "a".string))} \{b v: ((GT t: i64).leaf 2)}"
+    print "\{c v: (Sp.create from: (Cell n: 3 s: "c".string))}"
+    print "\{d v: ((Getter v: i64).create from: (Cell n: 4 s: "d".string))} \{e v: (Cell n: 5 s: "e".string)}"
+    h: Hooks sh: readSh.take sp: readSp.take
+    print "\{h.sh v: (Sh.c (Cell n: 6 s: "h".string))} \{h.sp v: (Sp.create from: (Cell n: 7 s: "i".string))}"
+}
