@@ -4,11 +4,13 @@
 Getter: protocol {
     v: anyval.generic
     get: function {t: this.view} out v
+    getd: function {t: this.view d: v} out v
     +: function {t: this.view o: v} out v
 }
 GC: class { n: i64  s: String } as {
     g: (Getter v: i64)
     get: function {c: this.view} out i64 is { return c.n }
+    getd: function {c: this.view d: i64} out i64 is { return c.n + d }
     +: function {c: this.view o: i64} out i64 is { return c.n + o }
 }
 readF: function {v: (Getter v: i64).view} out i64 is { return v.get }
@@ -29,6 +31,7 @@ useParamTakeInline: function {p: (Getter v: i64).take} out i64 is { return (read
 useFnref: function {p: (Getter v: i64)} out i64 is { return (readF v: p) }
 mkReturn: function out (Getter v: i64) is { return ((Getter v: i64).create from: (GC n: 22 s: "q".string)) }
 mkRvalue: function out (Getter v: i64) is { return ((Getter v: i64).create from: (GC n: 23 s: "q".string)) }
+retTakeParam: function {p: (Getter v: i64).take} out (Getter v: i64) is { return p }
 ReturnNarrowed: union { a: (Getter v: i64)  e: null }
 getReturnNarrowed: function out (Getter v: i64) is {
     u: ReturnNarrowed.a ((Getter v: i64).create from: (GC n: 35 s: "q".string))
@@ -39,8 +42,10 @@ rdUnionArm: function {u: UnionArm.view} out i64 is {
     match (u) case a then return (readF v: u) case e then return 0
 }
 mkMethodRvalue: function out (Getter v: i64) is { return ((Getter v: i64).create from: (GC n: 44 s: "q".string)) }
+mkMethodRvalueArg: function out (Getter v: i64) is { return ((Getter v: i64).create from: (GC n: 83 s: "q".string)) }
 MatchArm: union { a: (Getter v: i64)  e: null }
 IfArm: union { a: (Getter v: i64)  e: null }
+ArmTakeAssign: union { a: (Getter v: i64)  e: null }
 PjCreate: typedef (Getter v: i64)
 PjBare: typedef (Getter v: i64)
 PjBorrow: typedef (Getter v: i64)
@@ -171,6 +176,10 @@ atReturn: function out i64 is {
 atReturnRvalueRead: function out i64 is {
     return (readF v: mkRvalue)
 }
+atReturnTakeParam: function out i64 is {
+    x: retTakeParam p: ((Getter v: i64).create from: (GC n: 82 s: "q".string))
+    return (readF v: x)
+}
 atReturnNarrowed: function out i64 is {
     x: getReturnNarrowed
     return (readF v: x)
@@ -232,6 +241,9 @@ atMethodLvalue: function out i64 is {
 atMethodRvalue: function out i64 is {
     return (mkMethodRvalue).get
 }
+atMethodRvalueArg: function out i64 is {
+    return ((mkMethodRvalueArg).getd d: 0)
+}
 atOperatorLvalue: function out i64 is {
     x: ((Getter v: i64).create from: (GC n: 45 s: "q".string))
     return (x + 0)
@@ -244,6 +256,12 @@ atIfArm: function out i64 is {
     u: IfArm.a ((Getter v: i64).create from: (GC n: 54 s: "q".string))
     if u.a then return (readF v: u)
     return 0
+}
+atArmTakeAssign: function out i64 is {
+    u: ArmTakeAssign.a ((Getter v: i64).create from: (GC n: 85 s: "q".string))
+    r: ((Getter v: i64).create from: (GC n: 1 s: "q".string))
+    match (u) case a then r = u.take case e then null
+    return (readF v: r)
 }
 atWithBind: function out i64 is {
     r: 0
@@ -314,6 +332,7 @@ main: function is {
     print "fnref \{atFnref}"
     print "return \{atReturn}"
     print "return_rvalue_read \{atReturnRvalueRead}"
+    print "return_take_param \{atReturnTakeParam}"
     print "return_narrowed \{atReturnNarrowed}"
     print "list_elem \{atListElem}"
     print "list_get \{atListGet}"
@@ -326,9 +345,11 @@ main: function is {
     print "union_arm \{atUnionArm}"
     print "method_lvalue \{atMethodLvalue}"
     print "method_rvalue \{atMethodRvalue}"
+    print "method_rvalue_arg \{atMethodRvalueArg}"
     print "operator_lvalue \{atOperatorLvalue}"
     print "match_arm \{atMatchArm}"
     print "if_arm \{atIfArm}"
+    print "arm_take_assign \{atArmTakeAssign}"
     print "with_bind \{atWithBind}"
     print "with_borrow \{atWithBorrow}"
     print "with_borrow_after \{atWithBorrowAfter}"

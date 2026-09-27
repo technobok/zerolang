@@ -3,11 +3,13 @@
 # position whose cell is RUN: one function per cell, called from main.
 Sp: protocol {
     get: function {t: this.view} out i64
+    getd: function {t: this.view d: i64} out i64
     +: function {t: this.view o: i64} out i64
 }
 PC: class { n: i64  s: String } as {
     :Sp
     get: function {c: this.view} out i64 is { return c.n }
+    getd: function {c: this.view d: i64} out i64 is { return c.n + d }
     +: function {c: this.view o: i64} out i64 is { return c.n + o }
 }
 readF: function {v: Sp.view} out i64 is { return v.get }
@@ -28,6 +30,7 @@ useParamTakeInline: function {p: Sp.take} out i64 is { return (readF v: p) }
 useFnref: function {p: Sp} out i64 is { return (readF v: p) }
 mkReturn: function out Sp is { return (Sp.create from: (PC n: 22 s: "p".string)) }
 mkRvalue: function out Sp is { return (Sp.create from: (PC n: 23 s: "p".string)) }
+retTakeParam: function {p: Sp.take} out Sp is { return p }
 ReturnNarrowed: union { a: Sp  e: null }
 getReturnNarrowed: function out Sp is {
     u: ReturnNarrowed.a (Sp.create from: (PC n: 35 s: "p".string))
@@ -38,9 +41,11 @@ rdUnionArm: function {u: UnionArm.view} out i64 is {
     match (u) case a then return (readF v: u) case e then return 0
 }
 mkMethodRvalue: function out Sp is { return (Sp.create from: (PC n: 44 s: "p".string)) }
+mkMethodRvalueArg: function out Sp is { return (Sp.create from: (PC n: 83 s: "p".string)) }
 mkOperatorRvalue: function out Sp is { return (Sp.create from: (PC n: 46 s: "p".string)) }
 MatchArm: union { a: Sp  e: null }
 IfArm: union { a: Sp  e: null }
+ArmTakeAssign: union { a: Sp  e: null }
 PjCreate: typedef Sp
 PjBare: typedef Sp
 PjBorrow: typedef Sp
@@ -171,6 +176,10 @@ atReturn: function out i64 is {
 atReturnRvalueRead: function out i64 is {
     return (readF v: mkRvalue)
 }
+atReturnTakeParam: function out i64 is {
+    x: retTakeParam p: (Sp.create from: (PC n: 82 s: "p".string))
+    return (readF v: x)
+}
 atReturnNarrowed: function out i64 is {
     x: getReturnNarrowed
     return (readF v: x)
@@ -232,6 +241,9 @@ atMethodLvalue: function out i64 is {
 atMethodRvalue: function out i64 is {
     return (mkMethodRvalue).get
 }
+atMethodRvalueArg: function out i64 is {
+    return ((mkMethodRvalueArg).getd d: 0)
+}
 atOperatorLvalue: function out i64 is {
     x: (Sp.create from: (PC n: 45 s: "p".string))
     return (x + 0)
@@ -247,6 +259,12 @@ atIfArm: function out i64 is {
     u: IfArm.a (Sp.create from: (PC n: 54 s: "p".string))
     if u.a then return (readF v: u)
     return 0
+}
+atArmTakeAssign: function out i64 is {
+    u: ArmTakeAssign.a (Sp.create from: (PC n: 85 s: "p".string))
+    r: (Sp.create from: (PC n: 1 s: "p".string))
+    match (u) case a then r = u.take case e then null
+    return (readF v: r)
 }
 atWithBind: function out i64 is {
     r: 0
@@ -317,6 +335,7 @@ main: function is {
     print "fnref \{atFnref}"
     print "return \{atReturn}"
     print "return_rvalue_read \{atReturnRvalueRead}"
+    print "return_take_param \{atReturnTakeParam}"
     print "return_narrowed \{atReturnNarrowed}"
     print "list_elem \{atListElem}"
     print "list_get \{atListGet}"
@@ -329,10 +348,12 @@ main: function is {
     print "union_arm \{atUnionArm}"
     print "method_lvalue \{atMethodLvalue}"
     print "method_rvalue \{atMethodRvalue}"
+    print "method_rvalue_arg \{atMethodRvalueArg}"
     print "operator_lvalue \{atOperatorLvalue}"
     print "operator_rvalue \{atOperatorRvalue}"
     print "match_arm \{atMatchArm}"
     print "if_arm \{atIfArm}"
+    print "arm_take_assign \{atArmTakeAssign}"
     print "with_bind \{atWithBind}"
     print "with_borrow \{atWithBorrow}"
     print "with_borrow_after \{atWithBorrowAfter}"

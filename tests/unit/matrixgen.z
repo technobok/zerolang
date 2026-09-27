@@ -19,8 +19,9 @@
 # A family is text: its declarations, and templates for making a value (`@V` the
 # number, `@S` that many letters), reading one back (`@X` the value) and calling
 # a method or an operator on one. A position is text too, written against the
-# family through `@MK[n]` (make n), `@RD[x]` (read x), `@ME[x]` and `@OP[x]`
-# (a method or operator on x), `@T` (the type), `@RT` (what a read returns),
+# family through `@MK[n]` (make n), `@RD[x]` (read x), `@ME[x]` `@MA[x]` and
+# `@OP[x]` (a method, a method taking an argument, or an operator on x),
+# `@ARM` (the arm a make builds), `@T` (the type), `@RT` (what a read returns),
 # `@Z` (its zero), `@LIST` `@MAP` `@OPT` `@RES` (the container of the type's
 # ownership family), `@GB` (its generic bound) and `@GP` (a generic parameter
 # named in its bound's case).
@@ -44,11 +45,16 @@ Family: class {
     make: String
     read: String
     meth: String
+    # a method that takes an argument; empty -- the type declares none
+    methArg: String
     op: String
     # the type as the compiler's messages name it: the canonical spelling,
     # which differs from `ty` where the source reaches a type through an alias
     # (`Map` for MapRR)
     shown: String
+    # the arm the make template builds, which an arm predicate tests; empty --
+    # not a sum type
+    arm: String
     # the groups a table selector names it by, space-delimited
     tags: String
     isRef: bool
@@ -152,15 +158,16 @@ fill: function {tpl: StringView n: i64} out String is {
     return (a.stringView.replace needle: "@V" replacement: "\{n}")
 }
 
-# form -- a bracketed template form: make, read, method, operator; plain is
-# an `@` that starts none
-form: variant { plain: null make: null read: null method: null operator: null }
+# form -- a bracketed template form: make, read, method, method with an
+# argument, operator; plain is an `@` that starts none
+form: variant { plain: null make: null read: null method: null methodArg: null operator: null }
 
 # formOf -- the form a name before `[` spells
 formOf: function {name: StringView} out form is {
     if name == "MK" then return form.make
     if name == "RD" then return form.read
     if name == "ME" then return form.method
+    if name == "MA" then return form.methodArg
     if name == "OP" then return form.operator
     return form.plain
 }
@@ -177,12 +184,16 @@ bracketed: function {f: Family.view fm: form arg: StringView n: i64} out String 
         m: f.meth.stringView.replace needle: "@X" replacement: arg
         return (fill tpl: m.stringView :n)
     }
+    if fm.methodArg then {
+        m: f.methArg.stringView.replace needle: "@X" replacement: arg
+        return (fill tpl: m.stringView :n)
+    }
     o: f.op.stringView.replace needle: "@M" replacement: f.make
     o2: o.stringView.replace needle: "@X" replacement: arg
     return (fill tpl: o2.stringView :n)
 }
 
-# expandBrackets -- every `@MK[..]` `@RD[..]` `@ME[..]` `@OP[..]` in text
+# expandBrackets -- every `@MK[..]` `@RD[..]` `@ME[..]` `@MA[..]` `@OP[..]` in text
 expandBrackets: function {f: Family.view text: StringView n: i64} out String is {
     buf: String
     i: u64
@@ -215,9 +226,10 @@ expandBrackets: function {f: Family.view text: StringView n: i64} out String is 
 # expand -- a position template written out for family f in a cell numbered n
 expand: function {f: Family.view text: StringView n: i64} out String is {
     brackets: expandBrackets :f :text :n
+    withArm: brackets.stringView.replace needle: "@ARM" replacement: f.arm
     ref: f.isRef
     listT: if ref then "List" else "ListVal"
-    withList: brackets.stringView.replace needle: "@LIST" replacement: listT
+    withList: withArm.stringView.replace needle: "@LIST" replacement: listT
     mapT: if ref then "Map String V: \{f.ty}" else "MapRV String v: \{f.ty}"
     withMap: withList.stringView.replace needle: "@MAP" replacement: mapT
     optT: if ref then "(Option T: \{f.ty})" else "(optionval t: \{f.ty})"
@@ -258,6 +270,7 @@ famClass: function out Family is {
     d: String
     d.append "Cell: class { n: i64  s: String } as {\n"
     d.append "    getn: function {c: this.view} out i64 is { return c.n }\n"
+    d.append "    getd: function {c: this.view d: i64} out i64 is { return c.n + d }\n"
     d.append "    +: function {c: this.view o: i64} out i64 is { return c.n + o }\n"
     d.append "}\n"
     d.append "readF: function {v: Cell.view} out i64 is { return v.n }\n"
@@ -271,8 +284,10 @@ famClass: function out Family is {
         make: "(Cell n: @V s: \"c\".string)".string
         read: "(readF v: @X)".string
         meth: "@X.getn".string
+        methArg: "(@X.getd d: 0)".string
         op: "(@X + 0)".string
         shown: "Cell".string
+        arm: "".string
         tags: " ref constructible ".string
         isRef: true
         unsignedRead: false
@@ -284,6 +299,7 @@ famRecord: function out Family is {
     d: String
     d.append "pt: record { x: i64 } as {\n"
     d.append "    getn: function {c: this.view} out i64 is { return c.x }\n"
+    d.append "    getd: function {c: this.view d: i64} out i64 is { return c.x + d }\n"
     d.append "    +: function {c: this.view o: i64} out i64 is { return c.x + o }\n"
     d.append "}\n"
     d.append "readF: function {v: pt.view} out i64 is { return v.x }\n"
@@ -297,8 +313,10 @@ famRecord: function out Family is {
         make: "(pt x: @V)".string
         read: "(readF v: @X)".string
         meth: "@X.getn".string
+        methArg: "(@X.getd d: 0)".string
         op: "(@X + 0)".string
         shown: "pt".string
+        arm: "".string
         tags: " val constructible ".string
         isRef: false
         unsignedRead: false
@@ -312,6 +330,9 @@ famUnion: function out Family is {
     d.append "Sh: union { c: Cell  e: null } as {\n"
     d.append "    getn: function {u: this.view} out i64 is {\n"
     d.append "        match (u) case c then return u.n case e then return 0\n"
+    d.append "    }\n"
+    d.append "    getd: function {u: this.view d: i64} out i64 is {\n"
+    d.append "        match (u) case c then return u.n + d case e then return d\n"
     d.append "    }\n"
     d.append "    +: function {u: this.view o: i64} out i64 is {\n"
     d.append "        match (u) case c then return u.n + o case e then return o\n"
@@ -330,8 +351,10 @@ famUnion: function out Family is {
         make: "(Sh.c (Cell n: @V s: \"u\".string))".string
         read: "(readF v: @X)".string
         meth: "@X.getn".string
+        methArg: "(@X.getd d: 0)".string
         op: "(@X + 0)".string
         shown: "Sh".string
+        arm: "c".string
         tags: " ref sum ".string
         isRef: true
         unsignedRead: false
@@ -344,6 +367,9 @@ famVariant: function out Family is {
     d.append "kd: variant { k: i64  z: null } as {\n"
     d.append "    getn: function {u: this.view} out i64 is {\n"
     d.append "        match (u) case k then return u case z then return 0\n"
+    d.append "    }\n"
+    d.append "    getd: function {u: this.view d: i64} out i64 is {\n"
+    d.append "        match (u) case k then return u + d case z then return d\n"
     d.append "    }\n"
     d.append "    +: function {u: this.view o: i64} out i64 is {\n"
     d.append "        match (u) case k then return u + o case z then return o\n"
@@ -362,8 +388,10 @@ famVariant: function out Family is {
         make: "(kd.k @V)".string
         read: "(readF v: @X)".string
         meth: "@X.getn".string
+        methArg: "(@X.getd d: 0)".string
         op: "(@X + 0)".string
         shown: "kd".string
+        arm: "k".string
         tags: " val sum ".string
         isRef: false
         unsignedRead: false
@@ -376,6 +404,7 @@ famGclass: function out Family is {
     d.append "GBox: class { x: t  s: String } as {\n"
     d.append "    t: anyval.generic\n"
     d.append "    getn: function {c: this.view} out t is { return c.x }\n"
+    d.append "    getd: function {c: this.view d: t} out t is { return c.x + d }\n"
     d.append "    +: function {c: this.view o: t} out t is { return c.x + o }\n"
     d.append "}\n"
     d.append "readF: function {v: (GBox t: i64).view} out i64 is { return v.x }\n"
@@ -389,8 +418,10 @@ famGclass: function out Family is {
         make: "((GBox t: i64) x: @V s: \"g\".string)".string
         read: "(readF v: @X)".string
         meth: "@X.getn".string
+        methArg: "(@X.getd d: 0)".string
         op: "(@X + 0)".string
         shown: "(GBox t: i64)".string
+        arm: "".string
         tags: " ref constructible generic ".string
         isRef: true
         unsignedRead: false
@@ -403,6 +434,7 @@ famGrecord: function out Family is {
     d.append "gpt: record { x: t } as {\n"
     d.append "    t: anyval.generic\n"
     d.append "    getn: function {c: this.view} out t is { return c.x }\n"
+    d.append "    getd: function {c: this.view d: t} out t is { return c.x + d }\n"
     d.append "    +: function {c: this.view o: t} out t is { return c.x + o }\n"
     d.append "}\n"
     d.append "readF: function {v: (gpt t: i64).view} out i64 is { return v.x }\n"
@@ -416,8 +448,10 @@ famGrecord: function out Family is {
         make: "((gpt t: i64) x: @V)".string
         read: "(readF v: @X)".string
         meth: "@X.getn".string
+        methArg: "(@X.getd d: 0)".string
         op: "(@X + 0)".string
         shown: "(gpt t: i64)".string
+        arm: "".string
         tags: " val constructible generic ".string
         isRef: false
         unsignedRead: false
@@ -449,8 +483,10 @@ famGunion: function out Family is {
         make: "((GT t: i64).leaf @V)".string
         read: "(readF v: @X)".string
         meth: "(@X.getn d: 0)".string
+        methArg: "(@X.getn d: 0)".string
         op: "(@X + 0)".string
         shown: "(GT t: i64)".string
+        arm: "leaf".string
         tags: " ref sum generic ".string
         isRef: true
         unsignedRead: false
@@ -482,8 +518,10 @@ famGvariant: function out Family is {
         make: "((gv t: i64).k @V)".string
         read: "(readF v: @X)".string
         meth: "(@X.getn d: 0)".string
+        methArg: "(@X.getn d: 0)".string
         op: "(@X + 0)".string
         shown: "(gv t: i64)".string
+        arm: "k".string
         tags: " val sum generic ".string
         isRef: false
         unsignedRead: false
@@ -495,11 +533,13 @@ famProtocol: function out Family is {
     d: String
     d.append "Sp: protocol {\n"
     d.append "    get: function {t: this.view} out i64\n"
+    d.append "    getd: function {t: this.view d: i64} out i64\n"
     d.append "    +: function {t: this.view o: i64} out i64\n"
     d.append "}\n"
     d.append "PC: class { n: i64  s: String } as {\n"
     d.append "    :Sp\n"
     d.append "    get: function {c: this.view} out i64 is { return c.n }\n"
+    d.append "    getd: function {c: this.view d: i64} out i64 is { return c.n + d }\n"
     d.append "    +: function {c: this.view o: i64} out i64 is { return c.n + o }\n"
     d.append "}\n"
     d.append "readF: function {v: Sp.view} out i64 is { return v.get }\n"
@@ -513,8 +553,10 @@ famProtocol: function out Family is {
         make: "(Sp.create from: (PC n: @V s: \"p\".string))".string
         read: "(readF v: @X)".string
         meth: "@X.get".string
+        methArg: "(@X.getd d: 0)".string
         op: "(@X + 0)".string
         shown: "Sp".string
+        arm: "".string
         tags: " ref interface ".string
         isRef: true
         unsignedRead: false
@@ -526,11 +568,13 @@ famFacet: function out Family is {
     d: String
     d.append "sz: facet {\n"
     d.append "    size: function {t: this.view} out i64\n"
+    d.append "    getd: function {t: this.view d: i64} out i64\n"
     d.append "    +: function {t: this.view o: i64} out i64\n"
     d.append "}\n"
     d.append "fp: record { x: i64 } as {\n"
     d.append "    :sz\n"
     d.append "    size: function {p: this.view} out i64 is { return p.x }\n"
+    d.append "    getd: function {p: this.view d: i64} out i64 is { return p.x + d }\n"
     d.append "    +: function {p: this.view o: i64} out i64 is { return p.x + o }\n"
     d.append "}\n"
     d.append "readF: function {v: sz.view} out i64 is { return v.size }\n"
@@ -544,8 +588,10 @@ famFacet: function out Family is {
         make: "(sz.create from: (fp x: @V))".string
         read: "(readF v: @X)".string
         meth: "@X.size".string
+        methArg: "(@X.getd d: 0)".string
         op: "(@X + 0)".string
         shown: "sz".string
+        arm: "".string
         tags: " val interface ".string
         isRef: false
         unsignedRead: false
@@ -558,11 +604,13 @@ famGprotocol: function out Family is {
     d.append "Getter: protocol {\n"
     d.append "    v: anyval.generic\n"
     d.append "    get: function {t: this.view} out v\n"
+    d.append "    getd: function {t: this.view d: v} out v\n"
     d.append "    +: function {t: this.view o: v} out v\n"
     d.append "}\n"
     d.append "GC: class { n: i64  s: String } as {\n"
     d.append "    g: (Getter v: i64)\n"
     d.append "    get: function {c: this.view} out i64 is { return c.n }\n"
+    d.append "    getd: function {c: this.view d: i64} out i64 is { return c.n + d }\n"
     d.append "    +: function {c: this.view o: i64} out i64 is { return c.n + o }\n"
     d.append "}\n"
     d.append "readF: function {v: (Getter v: i64).view} out i64 is { return v.get }\n"
@@ -576,8 +624,10 @@ famGprotocol: function out Family is {
         make: "((Getter v: i64).create from: (GC n: @V s: \"q\".string))".string
         read: "(readF v: @X)".string
         meth: "@X.get".string
+        methArg: "(@X.getd d: 0)".string
         op: "(@X + 0)".string
         shown: "(Getter v: i64)".string
+        arm: "".string
         tags: " ref interface generic ".string
         isRef: true
         unsignedRead: false
@@ -590,11 +640,13 @@ famGfacet: function out Family is {
     d.append "sized: facet {\n"
     d.append "    n: anyval.generic\n"
     d.append "    size: function {t: this.view} out n\n"
+    d.append "    getd: function {t: this.view d: n} out n\n"
     d.append "    +: function {t: this.view o: n} out n\n"
     d.append "}\n"
     d.append "gp: record { x: i64 } as {\n"
     d.append "    m: (sized n: i64)\n"
     d.append "    size: function {p: this.view} out i64 is { return p.x }\n"
+    d.append "    getd: function {p: this.view d: i64} out i64 is { return p.x + d }\n"
     d.append "    +: function {p: this.view o: i64} out i64 is { return p.x + o }\n"
     d.append "}\n"
     d.append "readF: function {v: (sized n: i64).view} out i64 is { return v.size }\n"
@@ -608,8 +660,10 @@ famGfacet: function out Family is {
         make: "((sized n: i64).create from: (gp x: @V))".string
         read: "(readF v: @X)".string
         meth: "@X.size".string
+        methArg: "(@X.getd d: 0)".string
         op: "(@X + 0)".string
         shown: "(sized n: i64)".string
+        arm: "".string
         tags: " val interface generic ".string
         isRef: false
         unsignedRead: false
@@ -630,8 +684,10 @@ famString: function out Family is {
         make: "\"@S\".string".string
         read: "(readF v: @X)".string
         meth: "@X.length".string
+        methArg: "(if (@X.startsWith prefix: \"s\") then @V else 0)".string
         op: "(if @X == \"@S\".string then @V else 0)".string
         shown: "String".string
+        arm: "".string
         tags: " ref native ".string
         isRef: true
         unsignedRead: true
@@ -661,8 +717,10 @@ famList: function out Family is {
         make: "(mkL n: @V)".string
         read: "(readF v: @X)".string
         meth: "(@X.get i: 0)".string
+        methArg: "(@X.get i: 0)".string
         op: "(if @X == (mkL n: @V) then @V else 0)".string
         shown: "(ListVal t: i64)".string
+        arm: "".string
         tags: " ref native ".string
         isRef: true
         unsignedRead: false
@@ -692,11 +750,46 @@ famMap: function out Family is {
         make: "(mkM n: @V)".string
         read: "(readF v: @X)".string
         meth: "(if @X.length == 1 then @V else 0)".string
+        methArg: "(if (@X.has key: \"k\".string) then @V else 0)".string
         op: "(if @X == (mkM n: @V) then @V else 0)".string
         shown: "(MapRR K: String V: MC)".string
+        arm: "".string
         tags: " ref native ".string
         isRef: true
         unsignedRead: false
+    )
+}
+
+# famSet -- the `set` family: (Set String)
+famSet: function out Family is {
+    d: String
+    d.append "mkS: function {s: String.take} out (Set String) is {\n"
+    d.append "    st: Set String\n"
+    d.append "    st.add item: s\n"
+    d.append "    return st\n"
+    d.append "}\n"
+    d.append "readF: function {v: (Set String).view} out u64 is {\n"
+    d.append "    r: 0.u64\n"
+    d.append "    for e: v.iterate loop r = r + e.length\n"
+    d.append "    return r\n"
+    d.append "}\n"
+    return (Family
+        name: "set".string
+        decls: d
+        confType: "".string
+        confParam: "".string
+        confBody: "".string
+        ty: "(Set String)".string
+        make: "(mkS s: \"@S\".string)".string
+        read: "(readF v: @X)".string
+        meth: "(if @X.length == 1 then @V else 0)".string
+        methArg: "(if (@X.has item: \"@S\".string) then @V else 0)".string
+        op: "".string
+        shown: "(SetRef K: String)".string
+        arm: "".string
+        tags: " ref native ".string
+        isRef: true
+        unsignedRead: true
     )
 }
 
@@ -717,8 +810,10 @@ famOption: function out Family is {
         make: "((Option T: OC).some (OC n: @V s: \"o\".string))".string
         read: "(readF v: @X)".string
         meth: "(if @X.some then @V else 0)".string
+        methArg: "".string
         op: "(if @X == @M then @V else 0)".string
         shown: "(Option T: OC)".string
+        arm: "some".string
         tags: " ref native sum ".string
         isRef: true
         unsignedRead: false
@@ -742,8 +837,10 @@ famResult: function out Family is {
         make: "((Result T: RC E: String).ok (RC n: @V s: \"r\".string))".string
         read: "(readF v: @X)".string
         meth: "(if @X.ok then @V else 0)".string
+        methArg: "".string
         op: "(if @X == @M then @V else 0)".string
         shown: "(Result T: RC E: String)".string
+        arm: "ok".string
         tags: " ref native sum ".string
         isRef: true
         unsignedRead: false
@@ -755,6 +852,7 @@ famTclass: function out Family is {
     d: String
     d.append "Cell: class { n: i64  s: String } as {\n"
     d.append "    getn: function {c: this.view} out i64 is { return c.n }\n"
+    d.append "    getd: function {c: this.view d: i64} out i64 is { return c.n + d }\n"
     d.append "    +: function {c: this.view o: i64} out i64 is { return c.n + o }\n"
     d.append "}\n"
     d.append "TC: typedef Cell\n"
@@ -769,8 +867,10 @@ famTclass: function out Family is {
         make: "(TC (Cell n: @V s: \"t\".string))".string
         read: "(readF v: @X)".string
         meth: "@X.getn".string
+        methArg: "(@X.getd d: 0)".string
         op: "(@X + 0)".string
         shown: "TC".string
+        arm: "".string
         tags: " ref typedef ".string
         isRef: true
         unsignedRead: false
@@ -782,6 +882,7 @@ famTrecord: function out Family is {
     d: String
     d.append "pt: record { x: i64 } as {\n"
     d.append "    getn: function {c: this.view} out i64 is { return c.x }\n"
+    d.append "    getd: function {c: this.view d: i64} out i64 is { return c.x + d }\n"
     d.append "    +: function {c: this.view o: i64} out i64 is { return c.x + o }\n"
     d.append "}\n"
     d.append "tp: typedef pt\n"
@@ -796,8 +897,10 @@ famTrecord: function out Family is {
         make: "(tp (pt x: @V))".string
         read: "(readF v: @X)".string
         meth: "@X.getn".string
+        methArg: "(@X.getd d: 0)".string
         op: "(@X + 0)".string
         shown: "tp".string
+        arm: "".string
         tags: " val typedef ".string
         isRef: false
         unsignedRead: false
@@ -822,6 +925,7 @@ families: function out List Family is {
     fams.append famString
     fams.append famList
     fams.append famMap
+    fams.append famSet
     fams.append famOption
     fams.append famResult
     fams.append famTclass
@@ -1112,7 +1216,8 @@ parameterPositions: function {ps: List Position} is {
     )
 }
 
-# returnPositions -- a value returned, read straight off a call, and returned out of a narrowed arm
+# returnPositions -- a value returned, read straight off a call, a `.take`
+# parameter returned, and a value returned out of a narrowed arm
 returnPositions: function {ps: List Position} is {
     (addPos
         :ps
@@ -1128,6 +1233,14 @@ returnPositions: function {ps: List Position} is {
         decls: "mkRvalue: function out @T is { return @MK[23] }\n"
         body: "return @RD[mkRvalue]"
         expect: 23
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "return_take_param"
+        decls: "retTakeParam: function {p: @T.take} out @T is { return p }\n"
+        body: "x: retTakeParam p: @MK[82]\n    return @RD[x]"
+        expect: 82
         needsConf: false
     )
     (addPos
@@ -1240,7 +1353,9 @@ containerPositions: function {ps: List Position} is {
     )
 }
 
-# receiverPositions -- a value as a method's and an operator's receiver, a local and a call's result, and handed on as an argument
+# receiverPositions -- a value as a method's (with and without an argument), an
+# arm predicate's and an operator's receiver, a local and a call's result, and
+# handed on as an argument
 receiverPositions: function {ps: List Position} is {
     (addPos
         :ps
@@ -1256,6 +1371,22 @@ receiverPositions: function {ps: List Position} is {
         decls: "mkMethodRvalue: function out @T is { return @MK[44] }\n"
         body: "return @ME[(mkMethodRvalue)]"
         expect: 44
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "method_rvalue_arg"
+        decls: "mkMethodRvalueArg: function out @T is { return @MK[83] }\n"
+        body: "return @MA[(mkMethodRvalueArg)]"
+        expect: 83
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "predicate_rvalue"
+        decls: "mkPredicateRvalue: function out @T is { return @MK[84] }\n"
+        body: "return (if (mkPredicateRvalue).@ARM then 84 else 0)"
+        expect: 84
         needsConf: false
     )
     (addPos
@@ -1284,7 +1415,8 @@ receiverPositions: function {ps: List Position} is {
     )
 }
 
-# narrowingPositions -- a value narrowed by match and if, and bound by with
+# narrowingPositions -- a value narrowed by match and if, taken out of an arm
+# into an owned local, and bound by with
 narrowingPositions: function {ps: List Position} is {
     (addPos
         :ps
@@ -1300,6 +1432,14 @@ narrowingPositions: function {ps: List Position} is {
         decls: "IfArm: union { a: @T  e: null }\n"
         body: "u: IfArm.a @MK[54]\n    if u.a then return @RD[u]\n    return 0"
         expect: 54
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "arm_take_assign"
+        decls: "ArmTakeAssign: union { a: @T  e: null }\n"
+        body: "u: ArmTakeAssign.a @MK[85]\n    r: @MK[1]\n    match (u) case a then r = u.take case e then null\n    return @RD[r]"
+        expect: 85
         needsConf: false
     )
     (addPos
@@ -1336,8 +1476,17 @@ narrowingPositions: function {ps: List Position} is {
     )
 }
 
-# projectionPositions -- a value as the source of a typedef projection
+# projectionPositions -- a member the type does not declare, and a value as the
+# source of a typedef projection
 projectionPositions: function {ps: List Position} is {
+    (addPos
+        :ps
+        name: "unknown_member"
+        decls: ""
+        body: "x: @MK[86]\n    return x.zork"
+        expect: 86
+        needsConf: false
+    )
     (addPos
         :ps
         name: "proj_label"

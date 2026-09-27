@@ -3,6 +3,7 @@
 # position whose cell is RUN: one function per cell, called from main.
 pt: record { x: i64 } as {
     getn: function {c: this.view} out i64 is { return c.x }
+    getd: function {c: this.view d: i64} out i64 is { return c.x + d }
     +: function {c: this.view o: i64} out i64 is { return c.x + o }
 }
 readF: function {v: pt.view} out i64 is { return v.x }
@@ -24,6 +25,7 @@ useParamTakeInline: function {p: pt.take} out i64 is { return (readF v: p) }
 useFnref: function {p: pt} out i64 is { return (readF v: p) }
 mkReturn: function out pt is { return (pt x: 22) }
 mkRvalue: function out pt is { return (pt x: 23) }
+retTakeParam: function {p: pt.take} out pt is { return p }
 ReturnNarrowed: union { a: pt  e: null }
 getReturnNarrowed: function out pt is {
     u: ReturnNarrowed.a (pt x: 35)
@@ -34,12 +36,14 @@ rdUnionArm: function {u: UnionArm.view} out i64 is {
     match (u) case a then return (readF v: u) case e then return 0
 }
 mkMethodRvalue: function out pt is { return (pt x: 44) }
+mkMethodRvalueArg: function out pt is { return (pt x: 83) }
 mkOperatorRvalue: function out pt is { return (pt x: 46) }
 ThisArg: typedef pt as {
     fwd: function {c: this.view} out i64 is { return (readF v: c) }
 }
 MatchArm: union { a: pt  e: null }
 IfArm: union { a: pt  e: null }
+ArmTakeAssign: union { a: pt  e: null }
 PjCreate: typedef pt
 PjCreateRead: typedef pt
 PjBare: typedef pt
@@ -174,6 +178,10 @@ atReturn: function out i64 is {
 atReturnRvalueRead: function out i64 is {
     return (readF v: mkRvalue)
 }
+atReturnTakeParam: function out i64 is {
+    x: retTakeParam p: (pt x: 82)
+    return (readF v: x)
+}
 atReturnNarrowed: function out i64 is {
     x: getReturnNarrowed
     return (readF v: x)
@@ -249,6 +257,9 @@ atMethodLvalue: function out i64 is {
 atMethodRvalue: function out i64 is {
     return (mkMethodRvalue).getn
 }
+atMethodRvalueArg: function out i64 is {
+    return ((mkMethodRvalueArg).getd d: 0)
+}
 atOperatorLvalue: function out i64 is {
     x: (pt x: 45)
     return (x + 0)
@@ -268,6 +279,12 @@ atIfArm: function out i64 is {
     u: IfArm.a (pt x: 54)
     if u.a then return (readF v: u)
     return 0
+}
+atArmTakeAssign: function out i64 is {
+    u: ArmTakeAssign.a (pt x: 85)
+    r: (pt x: 1)
+    match (u) case a then r = u.take case e then null
+    return (readF v: r)
 }
 atWithBind: function out i64 is {
     r: 0
@@ -324,6 +341,7 @@ main: function is {
     print "fnref \{atFnref}"
     print "return \{atReturn}"
     print "return_rvalue_read \{atReturnRvalueRead}"
+    print "return_take_param \{atReturnTakeParam}"
     print "return_narrowed \{atReturnNarrowed}"
     print "list_elem \{atListElem}"
     print "list_get \{atListGet}"
@@ -338,11 +356,13 @@ main: function is {
     print "union_arm \{atUnionArm}"
     print "method_lvalue \{atMethodLvalue}"
     print "method_rvalue \{atMethodRvalue}"
+    print "method_rvalue_arg \{atMethodRvalueArg}"
     print "operator_lvalue \{atOperatorLvalue}"
     print "operator_rvalue \{atOperatorRvalue}"
     print "this_as_arg \{atThisAsArg}"
     print "match_arm \{atMatchArm}"
     print "if_arm \{atIfArm}"
+    print "arm_take_assign \{atArmTakeAssign}"
     print "with_bind \{atWithBind}"
     print "proj_create \{atProjCreate}"
     print "proj_create_then_read \{atProjCreateThenRead}"

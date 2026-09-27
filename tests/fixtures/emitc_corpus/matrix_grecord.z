@@ -4,6 +4,7 @@
 gpt: record { x: t } as {
     t: anyval.generic
     getn: function {c: this.view} out t is { return c.x }
+    getd: function {c: this.view d: t} out t is { return c.x + d }
     +: function {c: this.view o: t} out t is { return c.x + o }
 }
 readF: function {v: (gpt t: i64).view} out i64 is { return v.x }
@@ -25,6 +26,7 @@ useParamTakeInline: function {p: (gpt t: i64).take} out i64 is { return (readF v
 useFnref: function {p: (gpt t: i64)} out i64 is { return (readF v: p) }
 mkReturn: function out (gpt t: i64) is { return ((gpt t: i64) x: 22) }
 mkRvalue: function out (gpt t: i64) is { return ((gpt t: i64) x: 23) }
+retTakeParam: function {p: (gpt t: i64).take} out (gpt t: i64) is { return p }
 ReturnNarrowed: union { a: (gpt t: i64)  e: null }
 getReturnNarrowed: function out (gpt t: i64) is {
     u: ReturnNarrowed.a ((gpt t: i64) x: 35)
@@ -35,11 +37,13 @@ rdUnionArm: function {u: UnionArm.view} out i64 is {
     match (u) case a then return (readF v: u) case e then return 0
 }
 mkMethodRvalue: function out (gpt t: i64) is { return ((gpt t: i64) x: 44) }
+mkMethodRvalueArg: function out (gpt t: i64) is { return ((gpt t: i64) x: 83) }
 ThisArg: typedef (gpt t: i64) as {
     fwd: function {c: this.view} out i64 is { return (readF v: c) }
 }
 MatchArm: union { a: (gpt t: i64)  e: null }
 IfArm: union { a: (gpt t: i64)  e: null }
+ArmTakeAssign: union { a: (gpt t: i64)  e: null }
 PjCreate: typedef (gpt t: i64)
 PjCreateRead: typedef (gpt t: i64)
 PjBare: typedef (gpt t: i64)
@@ -174,6 +178,10 @@ atReturn: function out i64 is {
 atReturnRvalueRead: function out i64 is {
     return (readF v: mkRvalue)
 }
+atReturnTakeParam: function out i64 is {
+    x: retTakeParam p: ((gpt t: i64) x: 82)
+    return (readF v: x)
+}
 atReturnNarrowed: function out i64 is {
     x: getReturnNarrowed
     return (readF v: x)
@@ -249,6 +257,9 @@ atMethodLvalue: function out i64 is {
 atMethodRvalue: function out i64 is {
     return (mkMethodRvalue).getn
 }
+atMethodRvalueArg: function out i64 is {
+    return ((mkMethodRvalueArg).getd d: 0)
+}
 atThisAsArg: function out i64 is {
     x: ThisArg ((gpt t: i64) x: 70)
     return x.fwd
@@ -261,6 +272,12 @@ atIfArm: function out i64 is {
     u: IfArm.a ((gpt t: i64) x: 54)
     if u.a then return (readF v: u)
     return 0
+}
+atArmTakeAssign: function out i64 is {
+    u: ArmTakeAssign.a ((gpt t: i64) x: 85)
+    r: ((gpt t: i64) x: 1)
+    match (u) case a then r = u.take case e then null
+    return (readF v: r)
 }
 atWithBind: function out i64 is {
     r: 0
@@ -317,6 +334,7 @@ main: function is {
     print "fnref \{atFnref}"
     print "return \{atReturn}"
     print "return_rvalue_read \{atReturnRvalueRead}"
+    print "return_take_param \{atReturnTakeParam}"
     print "return_narrowed \{atReturnNarrowed}"
     print "list_elem \{atListElem}"
     print "list_get \{atListGet}"
@@ -331,9 +349,11 @@ main: function is {
     print "union_arm \{atUnionArm}"
     print "method_lvalue \{atMethodLvalue}"
     print "method_rvalue \{atMethodRvalue}"
+    print "method_rvalue_arg \{atMethodRvalueArg}"
     print "this_as_arg \{atThisAsArg}"
     print "match_arm \{atMatchArm}"
     print "if_arm \{atIfArm}"
+    print "arm_take_assign \{atArmTakeAssign}"
     print "with_bind \{atWithBind}"
     print "proj_create \{atProjCreate}"
     print "proj_create_then_read \{atProjCreateThenRead}"
