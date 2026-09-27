@@ -3516,7 +3516,9 @@ isPtrVid: function {ctx: Ctx.view vid: ztypes.vid} out bool is {
 # A user CLASS is the exception and the gate is not caution: it is the one
 # family passed BY REFERENCE, so its pointer already IS the value, and loading
 # one would copy a struct whose destructor the source still owns -- a double
-# free, where leaving it alone is a C type error the compiler still catches.
+# free, where leaving it alone is a C type error the compiler still catches. A
+# Set, a Map or a box is not loaded either: its value is its pointer
+# (valueIsItsPointer).
 needsValueDeref: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -3526,6 +3528,7 @@ needsValueDeref: function {
 } out bool is {
     if (nodeIsBareAtom :n).not then return false
     if (pathIsPointer :ast :symtab :ctx :n).not then return false
+    if (valueIsItsPointer :symtab :ctx :tid) then return false
     return (isReftypeParam :ast :symtab :ctx :tid).not
 }
 
@@ -4156,23 +4159,6 @@ armTakeLeaf: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.v
     }
 }
 
-# armTakeZeroC -- the value a taken source of type `tid` is zeroed to: NULL for a
-# heap-pointer collection, `(T){0}` for any other type with something to
-# destroy, "" for a type that owns nothing.
-armTakeZeroC: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    tid: ztypes.tid
-} out String is {
-    if (isHeapPtrCollection :symtab :ctx :tid) then return "NULL".string
-    if (symtab.reg.needsDestructor typeId: tid).not then return "".string
-    zc: typeRefC :ast :symtab :ctx :tid thisTid: ztypes.tid
-    if zc.length == 0 then return "".string
-    zv: "(\{zc}){0}"
-    return zv
-}
-
 # armValueExpr -- an if arm's value as one C expression. An arm that takes a
 # local or a field moves the value out of its source, and only when that arm
 # runs: the source is zeroed inside the expression, so its scope-exit destroy
@@ -4188,7 +4174,7 @@ armValueExpr: function {
     if tn == 0 then return vx
     if (movedSourceNeedsZero :ast :symtab n: (ast.nodes.get i: tn)).not then return vx
     tt: stampIdOf :symtab nid: tn
-    tz: armTakeZeroC :ast :symtab :ctx tid: tt
+    tz: movedZeroC :ast :symtab :ctx tid: tt
     if tz.length == 0 then return vx
     tc: typeRefC :ast :symtab :ctx tid: tt thisTid: ztypes.tid
     if (isHeapPtrCollection :symtab :ctx tid: tt) then tc = "\{tc}*"
@@ -4211,7 +4197,7 @@ emitArmTakeZero: function {
     tn: armTakeLeaf :ast :symtab :n
     if tn == 0 then return
     if (movedSourceNeedsZero :ast :symtab n: (ast.nodes.get i: tn)).not then return
-    tz: armTakeZeroC :ast :symtab :ctx tid: (stampIdOf :symtab nid: tn)
+    tz: movedZeroC :ast :symtab :ctx tid: (stampIdOf :symtab nid: tn)
     if tz.length == 0 then return
     zl: "\{ind}\{rv} = \{tz};\n"
     buf.append zl
@@ -4238,23 +4224,16 @@ emitNarrowedTakeZero: function {
         emitNarrowedTakeZero :ast :symtab :ctx n: sln :ind :buf
     } case dottedpath then {
         if (leafMoves :ast leaf: n.child) then {
-            bn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
             bn9v: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent.u64))
             if (vvHas xs: ctx.narrowBox vid: bn9v) then {
+                bn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
                 box: takeSourceResolve :ctx name: bn.stringView vid: bn9v
                 tido: vtGet xs: ctx.narrowTid vid: bn9v
                 match (
                     tido
                 ) case some then {
-                    cTypeText: (typeRefC
-                        :ast
-                        :symtab
-                        :ctx
-                        tid: (ztypes.tid.create from: tido.u64)
-                        thisTid: ztypes.tid
-                    )
-                    inv: "\{ind}\{box} = (\{cTypeText}){0};\n"
-                    buf.append inv
+                    zc: movedZeroC :ast :symtab :ctx tid: (ztypes.tid.create from: tido.u64)
+                    if zc.length > 0 then buf.append "\{ind}\{box} = \{zc};\n"
                 } case none then null
             }
         }
@@ -20489,20 +20468,20 @@ emitReassignDestroy: function {
     buf.append (destroyLineC :symtab :ctx tid: rtsid nm: nm2 :ind)
 }
 
-# movedZeroText -- what a moved-out source is overwritten with so its own
-# scope-exit free no-ops: NULL for a heap collection, the zero struct of a
-# String or of any destructor-bearing type; empty when the value owns nothing.
-movedZeroText: function {
+# movedZeroC -- what a moved-out source of type tid is overwritten with so its
+# own scope-exit destroy no-ops: NULL for a Set or a Map, which is its pointer,
+# the zero value of anything else that has a destroy (destroyTargetTid); empty
+# when the value owns nothing.
+movedZeroC: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    # the source's node and type
-    nid: u64
     tid: ztypes.tid
 } out String is {
     if (isHeapPtrCollection :symtab :ctx :tid) then return "NULL".string
-    if (stampIsStr :symtab :ctx :nid) then return "(\{ctx.strC}_t){0}"
-    if (symtab.reg.needsDestructor typeId: tid).not then return String
+    dt: destroyTargetTid :symtab :ctx :tid
+    if dt.isZero then return String
+    if dt == ctx.strTid then return "(\{ctx.strC}_t){0}"
     zct: typeRefC :ast :symtab :ctx :tid thisTid: ztypes.tid
     return "(\{zct}){0}"
 }
@@ -20803,7 +20782,7 @@ emitStoreTo: function {
     # are POD references and move nothing).
     rftnid: interpPartNodeId n: valueNode
     if (isFieldTake :ast n: valueNode) when (valueIsFnTyped :symtab nid: rftnid).not then {
-        rftz: movedZeroText :ast :symtab :ctx nid: rtnid tid: rtsid
+        rftz: movedZeroC :ast :symtab :ctx tid: rtsid
         # a field that owns nothing is still zeroed, as the binding case does
         if rftz.length == 0 then {
             rfct: typeRefC :ast :symtab :ctx tid: rtsid thisTid: ztypes.tid
@@ -20820,7 +20799,7 @@ emitStoreTo: function {
     zsrc: reassignMoveSource :ast :symtab :ctx :valueNode
     if zsrc.length > 0 when (movedSourceNeedsZero :ast :symtab n: valueNode) then {
         zid: stampIdOf :symtab nid: rftnid
-        zt: movedZeroText :ast :symtab :ctx nid: rftnid tid: zid
+        zt: movedZeroC :ast :symtab :ctx tid: zid
         if zt.length > 0 then buf.append "\{ind}\{zsrc} = \{zt};\n"
     }
 }
@@ -26699,7 +26678,6 @@ emitHoistedReturn: function {
     retNm: "_ret\{rtmpN}"
     buf.append "\{ind}\{retCt} \{retNm} = \{rv};\n"
     buf.append moved
-    emitNarrowedTakeZero :ast :symtab :ctx n: (ast.nodes.get i: vid.u64) :ind :buf
     if leakFix then buf.append clFull else buf.append clProbe
     buf.append "\{ind}return \{retNm};\n"
 }
@@ -26773,24 +26751,24 @@ emitPlainReturn: function {
     retCt: typeRefC :ast :symtab :ctx tid: rtid thisTid: ztypes.tid
     isPtr: (ctEndsWithStar ct: retCt.stringView) or (isHeapPtrCollection :symtab :ctx tid: rtid)
     trivial: isBareCName s: rv.stringView
-    # the sources the value moves out of, zeroed once the value is in its temp
+    # the sources the value moves out of -- a taken argument, a narrowed
+    # payload's box -- zeroed once the value is in its temp
     moved: String
     emitValueTakeInvalidations :ast :symtab :ctx n: (ast.nodes.get i: vid.u64) :ind buf: moved
+    emitNarrowedTakeZero :ast :symtab :ctx n: (ast.nodes.get i: vid.u64) :ind buf: moved
     hoist: (
         trivial.not and
         isPtr.not and
         (retCt.length > 0) and
         (clProbe.length > 0 or leakFix or (moved.length > 0))
     )
-    # a heap collection an `if` or `match` yields from arms that own their
-    # values: an arm that yields a local moved it, so the pointer is bound first
-    # and every owned local is freed after -- the local on a path whose arm did
-    # not take it included
-    if retCt.length > 0 when (isHeapPtrCollection :symtab :ctx tid: rtid) when (controlValueOwnsArms
-        :ast
-        :symtab
-        :ctx
-        n: (ast.nodes.get i: vid.u64)
+    # a heap collection the return MOVES out of a source -- a `.take`, a
+    # narrowed payload -- or that an `if` or `match` yields from arms that own
+    # their values: the pointer is bound first, the source zeroed, and every
+    # owned local is freed after -- the source's owner, and the local on a path
+    # whose arm did not take it, included
+    if retCt.length > 0 when (isHeapPtrCollection :symtab :ctx tid: rtid) when (
+        moved.length > 0 or (controlValueOwnsArms :ast :symtab :ctx n: (ast.nodes.get i: vid.u64))
     ) then {
         hpc: "\{retCt}*"
         (emitHoistedReturn
