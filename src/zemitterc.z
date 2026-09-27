@@ -19955,6 +19955,7 @@ emitAssignment: function {
         :buf
         nm: nm.stringView
         ct: ct.stringView
+        :nameVid
     ) then return
     if (emitNarrowedTakeBind
         :ast
@@ -20097,10 +20098,12 @@ emitControlBind: function {
 
 # emitReferenceBind -- a local bound from an `if` or a `match` with a place arm
 # (controlValueIsReference): the binding is a second name for the storage the arm
-# that ran yields, as `r: h.p` is, so it is declared from the reference and frees
-# nothing. An arm that yields a value of its own parks it in a temporary that
-# lives as long as the binding, not as long as the statement. True when it
-# handled the binding.
+# that ran yields, as `r: h.p` is, so it is a POINTER to that storage, aliased to
+# its deref, and frees nothing -- a copy would share the owner's heap and leave
+# the owner stale when a write through the copy grew it. A heap collection's
+# local is its pointer already, and is copied. An arm that yields a value of its
+# own parks it in a temporary that lives as long as the binding, not as long as
+# the statement. True when it handled the binding.
 emitReferenceBind: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -20111,6 +20114,8 @@ emitReferenceBind: function {
     buf: String.borrow
     nm: StringView
     ct: StringView
+    # the binding's variable, which the alias is recorded under
+    nameVid: ztypes.vid
 } out bool is {
     if ct.length == 0 then return false
     if (controlValueIsReference :ast :symtab :ctx n: avn).not then return false
@@ -20119,8 +20124,15 @@ emitReferenceBind: function {
     rv: emitExpr :ast :symtab :ctx n: avn
     flushArgHoists :ctx :ind :tmp :buf
     ctx.hoistsToBlock = prevBlock
-    lr: "\{ind}\{ct} \{nm} = \{rv};\n"
-    buf.append lr
+    vt: bindingStampOf :symtab :ctx nid: (zast.nodeIdOf n: avn).u64
+    if (isHeapPtrCollection :symtab :ctx tid: vt) then {
+        buf.append "\{ind}\{ct} \{nm} = \{rv};\n"
+        return true
+    }
+    buf.append "\{ind}\{ct}* __borrow_\{nm} = &\{rv};\n"
+    buf.append "\{ind}/* alias: \{nm} => (*__borrow_\{nm}) */\n"
+    bal: "(*__borrow_\{nm})"
+    vvSet xs: ctx.aliases vid: nameVid val: bal.stringView
     return true
 }
 
