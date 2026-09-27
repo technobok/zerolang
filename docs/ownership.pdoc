@@ -144,6 +144,7 @@ unmarked source.
   A new local name (#~"b: d", #~"with w: d do")  |copy            |borrow
   An owning destination (see Implicit take)      |take            |take
   A reassignment of an owned target (#~"x = d")  |copy            |refused (#~"d" is a borrow; #~"d.take" moves)
+  A reassignment of a borrowed target (#~"b = d") |copy           |re-points #~"b" at #~"d"
   A projection source (#~"Rd d", #~"P d")        |copy            |borrow; take in an owning destination
 
 For valtypes, an unmarked parameter is a COPY -- the callee reads and writes
@@ -218,7 +219,8 @@ Binding a reftype to a new name with no ownership method (#~"q: p") is
 the same as #~"q: p.borrow": the new name is a second name for #~"p"'s
 storage. #~"p" stays readable, a write through #~"q" reaches it, #~"p"
 cannot be written or moved while #~"q" lives, and #~"q" cannot be
-rebound, swapped or returned as an owned result. #~"q: p.take" moves:
+swapped or returned as an owned result -- reassigned, it re-points (see A
+reassignment keeps the mode). #~"q: p.take" moves:
 the new name owns the value, the old one is invalidated, and a later
 read of it is #~"cannot use 'p' after ownership transfer". A valtype
 copies either way.
@@ -248,6 +250,21 @@ it is not readable after that scope, and it is freed at its own scope's end on
 the paths that refilled it. A loop that consumes an outer local may refill it
 before the iteration ends (#~"for c loop { keep c: v.take; v = mk }").
 
+A borrowed local or parameter is RE-POINTED by a reassignment: #~"b = z"
+makes #~"b" borrow #~"z" -- nothing is written through #~"b", and nothing is
+freed. Any borrow re-points to another borrow of its type: a place, unmarked or
+#~".borrow"; an element a call hands back (#~"g = xs.get i: 1"); a view
+(#~"lv = ys.listView"); a borrowed projection (#~"p = Rd e"). Written in the
+borrow's own scope, the re-point ends its borrow of the old source; written in
+a branch, a loop or a nested block it adds to it, so the old source stays
+locked until the borrow's scope ends on the paths that kept it. The new source
+must live as long as the borrow ("Cannot re-point 'b' at 'e': 'b' outlives
+'e'"), and a writable borrow is not re-pointed at a readonly one. A #~".take",
+a #~".hold" or an owned value is refused ("Cannot reassign borrowed 'b' with an
+owned value: a reassignment keeps the ownership its target was bound with").
+A borrow is never swapped, and a value-type parameter, the caller's copy, is
+written through its fields but not replaced whole.
+
 #---: Scope exit
 
 When an owned variable falls out of scope without being consumed:
@@ -271,7 +288,7 @@ the compiler treats it as borrowed to maintain a uniform ownership model.
   #*: Call methods on the value (including mutating methods via #~"this")
   #*: Read and write fields (through the borrowed reference)
   #*: Pass to a #~".borrow" parameter in a function call
-  #*: Pass to a #~".borrow" parameter in a function call
+  #*: Be re-pointed -- #~"b = z" makes it borrow #~"z" instead (see A reassignment keeps the mode)
 
 #---: What a borrowed variable cannot do
 
@@ -280,7 +297,7 @@ the compiler treats it as borrowed to maintain a uniform ownership model.
   #*: Cannot call #~".take" on it (error: cannot take a borrowed variable)
   #*: Cannot be stored in a field of another object
   #*: Cannot be swapped, on either side -- a #~"with" alias of a path included
-  #*: Cannot be reassigned -- the name must remain bound to the same borrowed value for its full scope (shadowing in inner scopes is permitted)
+  #*: Cannot be reassigned an owned value (#~"b = z.take") or a held one -- a reassignment keeps the mode it was bound with
 
 #---: Scope exit
 
@@ -2090,6 +2107,8 @@ the direct form.
   #~"return s.stringView" where #~"s" is a local             |Cannot return this value: it keeps 's' locked, which dies with this call |Return an owned copy (#~".string"), or a view of a parameter through #~"outx"
   #~"return (W s: loc)" from an #~"outx" function            |the returned #~"W" stores 'loc' in its non-owned field 's', but 'loc' is not a #~".borrow"/#~".view" parameter |Fill the field from a parameter or the receiver
   #~"x = y", #~"x = y.hold" or #~"x = y.borrow" into an owned #~"x" |Cannot reassign owned 'x' with a held value: a reassignment keeps the ownership its target was bound with |Bind a new name with the marker, or reassign an owned value (#~"y.take", #~"y.copy")
+  #~"b = e" into a borrow #~"b" that outlives #~"e"          |Cannot re-point 'b' at 'e': 'b' outlives 'e' |Re-point #~"b" at storage of its own scope or an enclosing one
+  #~"b = z.take" or #~"b = mk" into a borrowed #~"b"         |Cannot reassign borrowed 'b' with an owned value: a reassignment keeps the ownership its target was bound with |Re-point it at a borrow (#~"b = z"), or bind an owned name
   #~"x = w.take" where #~"x" outlives what #~"w" locks        |Cannot move 'w' by reassignment: it holds locks on 'a', and 'x' outlives 'a' |Keep 'x' inside 'a's scope, or #~"w.copy"
   non-owned field on a record                               |non-owned fields only allowed on classes              |Change the enclosing type from #~"record" to #~"class"
   a reftype field on a record (#~"s: String")               |a record field holds valtypes; make 'R' a class to hold 'String' |Make #~"R" a #~"class"; a valtype that must live on the heap is a #~"Box from:" local, never a field

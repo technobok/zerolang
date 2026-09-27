@@ -20527,6 +20527,10 @@ emitReassignStmt: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
+    if (symtab.typing.repoints.has item: n.nodeid.u64) then {
+        emitRepointStmt :ast :symtab :ctx :n :ind :tmp :buf
+        return
+    }
     topathNode: ast.nodes.get i: n.topath.u64
     nm2: emitReassignLvalue :ast :symtab :ctx n: topathNode
     rtnid: interpPartNodeId n: topathNode
@@ -20558,6 +20562,43 @@ emitReassignStmt: function {
         :tmp
         :buf
     )
+}
+
+# emitRepointStmt -- `x = v` re-pointing the borrowed `x` (the checker's
+# repoints). A borrow the C holds as a pointer -- an alias `(*__borrow_x)`, a
+# pointer parameter -- is given the address of the storage `v` names (a
+# `.borrow` marker names the path under it); any other borrow -- a view, a
+# borrowed box, a collection's own pointer -- is its value, stored whole.
+# Nothing is freed and no source is zeroed: `x` owns nothing.
+emitRepointStmt: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.reassignmentrow.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    topathNode: ast.nodes.get i: n.topath.u64
+    tgt: emitReassignLvalue :ast :symtab :ctx n: topathNode
+    xv: atomVid :symtab nid: (atomNodeId n: topathNode)
+    ptr: String
+    tv: tgt.stringView
+    if (tv.startsWith prefix: "(*") when (tv.endsWith suffix: ")") then {
+        ptr.append (tv.substring from: 2 to: tv.length - 1)
+    } else if (isPtrVid :ctx vid: xv) then {
+        ptr.append tv
+    }
+    base: ast.nodes.get i: (underBorrowMarker :ast nid: n.value.u64)
+    rvm: emitExpr :ast :symtab :ctx n: base
+    flushArgHoists :ctx :ind :tmp :buf
+    if ptr.length > 0 then {
+        addr: "&"
+        if (pathIsPointer :ast :symtab :ctx n: base) then addr = ""
+        buf.append "\{ind}\{ptr} = \{addr}\{rvm};\n"
+        return
+    }
+    buf.append "\{ind}\{tgt} = \{rvm};\n"
 }
 
 # namedDestroyOwes -- whether the `.drop` or the reassignment at `nid` destroys

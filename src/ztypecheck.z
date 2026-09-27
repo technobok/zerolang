@@ -31884,6 +31884,27 @@ refuseValueBorrowBinding: function {
     )
 }
 
+# refuseNullValue -- `null` bound or assigned as a value, `vt` its type: it has
+# no value until a union or variant wraps it. true when it refused.
+refuseNullValue: function {
+    st: zenv.ZSymbolTable ast: Ast.view vt: ztypes.tid nid: zast.nodeid
+} out bool is {
+    if vt.isZero or ((st.reg.typetypeOf typeId: vt) != ztypes.ztypetype.nullType) then return false
+    vn: ast.nodes.get i: nid.u64
+    (addErrorH
+        :st
+        nodeid: nid
+        lineno: (nodeLine n: vn)
+        colno: (nodeCol n: vn)
+        e: zast.err.typeError
+        msg: "'null' cannot be used as a value — null must be wrapped in a union or variant (eg. option.none)".string
+        note: String
+        hint: String
+        width: 4
+    )
+    return true
+}
+
 # refuseNonValue -- a data block or a unit used whole where a value is wanted.
 # True when `vt`, the value's type, is one and was refused.
 refuseNonValue: function {
@@ -31990,31 +32011,7 @@ checkAssignment: function {
     if vt.isZero when st.typing.errors.length == errA0 then {
         reportUnresolvedValue :st :unitDecl :ast nid: asgn.value
     }
-    if vt > 0 when (st.reg.typetypeOf typeId: vt) == ztypes.ztypetype.nullType then {
-        m1: "'null' cannot be used as a value — null must be wrapped in a union or variant (eg. option.none)".string
-        vln1: u32
-        vcl1: u32
-        {
-            av: ast.nodes.get i: asgn.value.u64
-            vln1 = nodeLine n: av
-            vcl1 = nodeCol n: av
-        }
-        vid1: asgn.value
-        en1: String
-        eh1: String
-        (addErrorH
-            :st
-            nodeid: vid1
-            lineno: vln1
-            colno: vcl1
-            e: zast.err.typeError
-            msg: m1
-            note: en1
-            hint: eh1
-            width: 4
-        )
-        return
-    }
+    if (refuseNullValue :st :ast :vt nid: asgn.value) then return
     if (refuseNonValue :st :ast :vt nid: asgn.value) then return
     refuseValueBorrowBinding :st :ast :vt :asgn
     if vt > 0 then {
@@ -32385,10 +32382,11 @@ checkNarrowedTargetWrite: function {
     st.endNarrowingByWrite nameId: nmId
 }
 
-# refuseBorrowedWrite -- a write to a bare name bound to a BORROWED variable is
-# refused: the name is bound for its full scope to storage it does not own, and
-# a reassignment or a swap would replace what the owner still holds. true when
-# it refused.
+# refuseBorrowedWrite -- a swap of a bare name bound to a BORROWED variable, or
+# a reassignment of a value-type parameter -- the writes a borrow does not
+# re-point -- is refused: a swap exchanges what two owners hold, and a borrow
+# holds nothing; a value-type parameter is read, and written through its fields,
+# but not replaced whole. true when it refused.
 refuseBorrowedWrite: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -32396,8 +32394,8 @@ refuseBorrowedWrite: function {
     nodeid: zast.nodeid
     lineno: u32
     colno: u32
-    # the write, as the message names it: `reassign` or `swap`
-    verb: StringView
+    # the write is a swap, not a reassignment
+    swapping: bool
 } out bool is {
     nmId: atomNameId :ast n: (ast.nodes.get i: target.u64)
     if nmId.isZero then return false
@@ -32405,9 +32403,13 @@ refuseBorrowedWrite: function {
     if nvo.none then return false
     if (isBorrowedVar :st vid: nvo).not then return false
     nm: zast.nameTextAt :ast ref: nmId
-    ma: "Cannot \{verb} borrowed variable '\{nm}'"
-    ha: "borrowed names are bound for their full scope; shadow in an inner scope instead".string
-    ena: String
+    ma: "Cannot reassign borrowed variable '\{nm}'"
+    ena: "a parameter is not replaced whole".string
+    if swapping then {
+        ma = "Cannot swap borrowed variable '\{nm}'"
+        ena = "a swap exchanges the values two owners hold, and a borrow owns none".string
+    }
+    ha: String
     (addErrorH
         :st
         :nodeid
@@ -32519,6 +32521,19 @@ checkReassignment: function {
             } case none then null
         } case none then null
     }
+    # a borrowed reftype local or parameter is re-pointed, not written through;
+    # a value-type parameter is its own copy, and is not reassigned whole
+    if hbNmId.isZero.not when (typeIsReftype :st tid: lvt) then {
+        bvo: st.lookupVarId nameId: hbNmId
+        match (
+            bvo
+        ) case some then {
+            if (isBorrowedVar :st vid: bvo) then {
+                checkRepoint :st :unitDecl :ast :rasgn xVid: bvo :lvt
+                return
+            }
+        } case none then null
+    }
     # a refused target walks no value: a move the value spells would outlive
     # the refusal and report its source as spent
     if (refuseBorrowedWrite
@@ -32528,7 +32543,7 @@ checkReassignment: function {
         nodeid: rasgn.nid
         lineno: rasgn.lineno
         colno: rasgn.colno
-        verb: "reassign"
+        swapping: false
     ) then return
     if (refuseModeChange :st :ast :rasgn targetHeld: hbVid > 0 vt: ztypes.tid) then return
     checkWriteLock :st :ast n: (ast.nodes.get i: rasgn.topath.u64) verb: "assign to" moving: false
@@ -32567,30 +32582,7 @@ checkReassignment: function {
     refuseBorrowedArms :st :ast nid: rasgn.value verb: "by reassignment"
     consumeReassignPins :st :ast :rasgn :hbNmId :rvt
     mrv0: materialiseLiteral :ast :st :unitDecl t: rvt
-    if mrv0 > 0 when (st.reg.typetypeOf typeId: mrv0) == ztypes.ztypetype.nullType then {
-        m0n: "'null' cannot be used as a value — null must be wrapped in a union or variant (eg. option.none)".string
-        vln0: u32
-        vcl0: u32
-        {
-            rvn: ast.nodes.get i: rasgn.value.u64
-            vln0 = nodeLine n: rvn
-            vcl0 = nodeCol n: rvn
-        }
-        en0: String
-        eh0: String
-        (addErrorH
-            :st
-            nodeid: rasgn.value
-            lineno: vln0
-            colno: vcl0
-            e: zast.err.typeError
-            msg: m0n
-            note: en0
-            hint: eh0
-            width: 4
-        )
-        return
-    }
+    if (refuseNullValue :st :ast vt: mrv0 nid: rasgn.value) then return
     # A literal RHS at a concretely-typed target coerces: restamp the RHS. A
     # literal-typed target (a literal-init loop binding) keeps the pseudo.
     if lvt > 0 when rvt > 0 when (isLiteralTypeId :st tid: rvt) when (isLiteralTypeId :st tid: lvt
@@ -32605,6 +32597,173 @@ checkReassignment: function {
     checkNarrowedTargetWrite :st :ast :rasgn
     checkMethodRefTarget :st :ast :rasgn
     moveTakeLocksToTarget :st :ast :rasgn :rvt
+}
+
+# checkRepoint -- `x = v` into the BORROWED local or parameter `x`: the name is
+# re-pointed at what `v` borrows (repoints), the way a binding of `v` would
+# borrow it, and nothing is written through it. `v` must be a borrow -- a
+# place unmarked or `.borrow`, or a call that hands one back; a `.take` or
+# `.hold` is refused as a mode change, and so is an owned value. The storage
+# `v` borrows must live as long as `x`, and a writable `x` cannot take a
+# readonly borrow. Written in `x`'s own scope, the re-point ends the borrow `x`
+# held; written deeper -- a branch, a loop, a block -- it adds to it, so the
+# old source stays locked until the scope ends on the paths that kept it.
+checkRepoint: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    rasgn: reasgref
+    # the borrowed target
+    xVid: ztypes.vid
+    # the target's declared type
+    lvt: ztypes.tid
+} is {
+    vn0: ast.nodes.get i: rasgn.value.u64
+    mk: zast.markerKindOf :ast n: vn0
+    if mk.takeMarker or mk.holdMarker then {
+        vmT: "an owned"
+        if mk.holdMarker then vmT = "a held"
+        reportRepointMode :st :ast :rasgn vmode: vmT
+        return
+    }
+    drainPendingBorrow :st
+    errR: st.typing.errors.length
+    rvt: checkValueAt :st :unitDecl :ast nid: rasgn.value
+    if rvt.isZero or (st.typing.errors.length != errR) then {
+        drainPendingBorrow :st
+        return
+    }
+    checkReassignedType :st :ast :rasgn :lvt :rvt
+    pinBoundField :st :ast vt: rvt nid: rasgn.value
+    pinBoundName :st :ast vt: rvt nid: rasgn.value
+    pinBoundFieldArms :st :ast vt: rvt nid: rasgn.value
+    bpins: List ztyping.PinPath
+    takePendingPins :st dst: bpins
+    # an `outx` result is pinned and owned, unless it is a view -- the
+    # reference itself, as its binding would be
+    owned: (
+        bpins.length ==
+        0 or
+        (
+            st.typing.pendingBorrowOwned and
+            (isViewFamilyTid
+                :ast
+                :st
+                tid: rvt
+            ).not
+        )
+    )
+    roV: st.typing.pendingBorrowReadonly
+    st.typing.pendingBorrowOwned = false
+    st.typing.pendingBorrowReadonly = false
+    st.typing.pendingBorrowFrozen = false
+    if owned then {
+        reportRepointMode :st :ast :rasgn vmode: "an owned"
+        return
+    }
+    if (refuseRepointReadonly :st :ast :rasgn :xVid :lvt pins: bpins :roV) then return
+    if (refuseRepointOutlives :st :ast :rasgn :xVid pins: bpins) then return
+    if (st.innermostOpenIs scope: (st.scopeOfVar vid: xVid)) then (st.releaseHeldLocks
+        holder: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: xVid.u64)
+    )
+    (installPins
+        :st
+        pool: ast.names
+        pins: bpins
+        vid: xVid
+        onlyRoot: zast.nameid
+        forceShared: false
+        nodeid: rasgn.nid
+        lineno: rasgn.lineno
+        colno: rasgn.colno
+    )
+    st.reg.setVariableBorrowOrigin id: xVid origin: (pinRootAt pins: bpins i: 0)
+    checkNarrowedTargetWrite :st :ast :rasgn
+    st.typing.repoints.add item: rasgn.nid.u64
+}
+
+# refuseRepointReadonly -- a writable borrowed target re-pointed at a readonly
+# borrow (`roV`, or a pin that may not write) would write through storage it
+# may only read. A view writes through nothing, whatever it borrows. true when
+# it refused.
+refuseRepointReadonly: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    rasgn: reasgref
+    xVid: ztypes.vid
+    lvt: ztypes.tid
+    pins: (List ztyping.PinPath).view
+    roV: bool
+} out bool is {
+    if (isViewFamilyTid :ast :st tid: lvt) then return false
+    xName: varNameText :st :ast vid: xVid
+    if (nameIsReadonly :st :ast name: xName.stringView) then return false
+    ro: roV
+    with rit: pins.iterate do for rp: rit loop {
+        if rp.mutable.not then ro = true
+    }
+    if ro.not then return false
+    reportRepointMode :st :ast :rasgn vmode: "a readonly"
+    return true
+}
+
+# reportRepointMode -- the refusal of re-pointing the borrowed target at a
+# value of the mode `vmode`, spelt with its article (`an owned`).
+reportRepointMode: function {
+    st: zenv.ZSymbolTable ast: Ast.view rasgn: reasgref vmode: StringView
+} is {
+    tt: String
+    exprTextOf :ast n: (ast.nodes.get i: rasgn.topath.u64) dst: tt
+    mm: "Cannot reassign borrowed '\{tt}' with \{vmode} value: a reassignment keeps the ownership its target was bound with"
+    vn: ast.nodes.get i: rasgn.value.u64
+    (addError
+        :st
+        nodeid: rasgn.value
+        lineno: (nodeLine n: vn)
+        colno: (nodeCol n: vn)
+        e: zast.err.ownerError
+        msg: mm
+    )
+}
+
+# refuseRepointOutlives -- a re-point's pins rooted at a local of a scope that
+# ends before the target's: the target would go on referring to storage that
+# is gone. A borrowed or viewed parameter outlives every local. true when it
+# refused.
+refuseRepointOutlives: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    rasgn: reasgref
+    xVid: ztypes.vid
+    pins: (List ztyping.PinPath).view
+} out bool is {
+    xScope: st.scopeOfVar vid: xVid
+    with pit: pins.iterate do for p: pit loop {
+        root: p.path.get i: 0
+        rvo: st.lookupVarId nameId: root
+        match (
+            rvo
+        ) case some then {
+            if (st.reg.variableOriginOf id: rvo) != ztypes.zvarorigin.param when (st.scopeEncloses
+                outer: (st.scopeOfVar vid: rvo)
+                inner: xScope
+            ).not then {
+                xn: varNameText :st :ast vid: xVid
+                rn: zast.nameTextAt :ast ref: root
+                mo: "Cannot re-point '\{xn}' at '\{rn}': '\{xn}' outlives '\{rn}'"
+                (addError
+                    :st
+                    nodeid: rasgn.value
+                    lineno: (nodeLine n: (ast.nodes.get i: rasgn.value.u64))
+                    colno: (nodeCol n: (ast.nodes.get i: rasgn.value.u64))
+                    e: zast.err.ownerError
+                    msg: mo
+                )
+                return true
+            }
+        } case none then null
+    }
+    return false
 }
 
 # refillTargetType -- a local whose value was moved out, written whole: the
@@ -33062,7 +33221,7 @@ checkSwapSide: function {
         nodeid: swapnode.nid
         lineno: swapnode.lineno
         colno: swapnode.colno
-        verb: "swap"
+        swapping: true
     ) then return none
     dt: walked
     nmId: atomNameId :ast n: (ast.nodes.get i: side.u64)

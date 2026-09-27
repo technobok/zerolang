@@ -929,25 +929,30 @@ is expected at runtime (right hand side of assignments, <code>if</code> conditio
 </ul>
 <h3 id="assignment"><a href="#assignment">4.1. assignment</a></h3>
 <h3 id="reassignment"><a href="#reassignment">4.2. reassignment</a></h3>
-<p>Reassignment replaces the value bound to an existing name or field.
-For valtype targets the RHS is copied into the slot. For reftype
-targets the existing value is destroyed first, the RHS is moved into
-the slot, and the RHS source name is invalidated &#x2014; use-after-move on
-the source name is a compile-time error. This "drop-and-transfer"
-rule keeps both sides free of aliasing while guaranteeing that no
-storage is lost to a leak and no value is freed twice.</p>
+<p>Reassignment replaces the value bound to an existing name or field, in
+the ownership mode the target was bound with. For valtype targets the
+RHS is copied into the slot. For an owned reftype target the existing
+value is destroyed first, the RHS -- an owned value: <code>.take</code> of a
+name, a construction, a call's result -- is moved into the slot, and a
+<code>.take</code> source name is invalidated; use-after-move on it is a
+compile-time error. A bare name is a borrow, and an owned target refuses
+it. This "drop-and-transfer" rule keeps both sides free of aliasing while
+guaranteeing that no storage is lost to a leak and no value is freed
+twice. A borrowed name is instead re-pointed at what the RHS borrows (see
+<a href="./ownership.html">ownership).</a></p>
 <pre><code>: Holder: class { msg: string }
 : h: Holder msg: "initial".string
 : fresh: "updated".string
-: h.msg = fresh       # destroys the old msg, moves fresh in
+: h.msg = fresh.take  # destroys the old msg, moves fresh in
 : # using `fresh` here is an error.</code></pre>
-<p>Reassigning a reftype field whose source is borrowed is an ownership
-error &#x2014; the borrow binding must stay live for its full scope.</p>
+<p>Reassigning an owned reftype field from a borrow -- a bare name, a
+borrowed parameter, <code>.borrow</code> -- is an ownership error: the field keeps
+the mode it was declared with.</p>
 <p>The target must be an addressable location: a variable, or a field
 reached through one (see the grammar's addressability rule). A call, a
 literal, a unit constant, a type, a function or a method names no
-storage, and reassigning one is <code>E0100</code>. Reassigning a borrowed name is
-<code>E0200</code>.</p>
+storage, and reassigning one is <code>E0100</code>. Reassigning a borrowed name
+re-points it; handing it an owned value is <code>E0200</code>.</p>
 <p>Use <code>swap</code> when both sides need to remain initialised and
 addressable: no move occurs, the two slots exchange contents and
 both stay valid.</p>
@@ -4035,8 +4040,10 @@ and <code>out type.borrow</code> is refused since nothing would keep that source
 alive. See <a href="./ownership.html">ownership.</a></p>
 <p>The <code>is</code> parameter to <code>function</code> specifies the body. It may be a single
 expression or a block of code. Each line of code is a local variable definition
-or a statement. All arguments supplied can be referenced by name but are
-read-only and cannot be reassigned. The function result can be the value of the
+or a statement. All arguments supplied can be referenced by name; a
+borrowed reftype parameter may be re-pointed (<code>p = z</code>), and a value-type
+one, the caller's copy, is written through its fields but not replaced
+whole. The function result can be the value of the
 last expression in the body or the <code>return</code> statement can also be called in the
 body for early return of a value. The last expression is checked exactly as a
 value handed to <code>return</code> is, and a body with an <code>out</code> type that ends on a
