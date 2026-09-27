@@ -19739,7 +19739,7 @@ checkInterpPart: function {
         # emitter releases is a variable of the checker's. A part a NAME binds
         # is appended where it stands and never held, which is why this asks
         # `receiverIsValue` rather than minting for every part.
-        if (receiverIsValue :st :ast nid: partId) then (ownedReceiverTemp
+        if (receiverIsValue :st :ast :unitDecl nid: partId) then (ownedReceiverTemp
             :st
             :ast
             recvT: ptid
@@ -27011,6 +27011,7 @@ reportPrivateMember: function {
 checkMemberAutoCall: function {
     st: zenv.ZSymbolTable
     ast: Ast
+    unitDecl: ztypes.declid
     dp: dpref
     # the RECEIVER's type: a member declared `out type` answers this instance
     bt: ztypes.tid
@@ -27046,6 +27047,7 @@ checkMemberAutoCall: function {
             (valueReceiverPins
                 :st
                 :ast
+                :unitDecl
                 funcId: (ztypes.tid.create from: mo.u64)
                 recvNid: dp.parent
                 recvT: bt
@@ -28699,6 +28701,7 @@ checkResolvedMember: function {
     result = (checkMemberAutoCall
         :st
         :ast
+        :unitDecl
         :dp
         :bt
         :mo
@@ -29431,7 +29434,7 @@ dottedBaseTid: function {
     # checker's. Every dotted path passes here -- a field, a marker, a method's
     # receiver -- so the rule is stated once for all of them, and the call legs
     # that ask it too find the temporary already made.
-    if (receiverIsValue :st :ast nid: dp.parent) then (ownedReceiverTemp
+    if (receiverIsValue :st :ast :unitDecl nid: dp.parent) then (ownedReceiverTemp
         :st
         :ast
         recvT: holdT
@@ -36733,11 +36736,12 @@ resultPins: function {st: zenv.ZSymbolTable.view funcId: ztypes.tid} out bool is
 ownedValueReceiver: function {
     st: zenv.ZSymbolTable
     ast: Ast
+    unitDecl: ztypes.declid
     call: callref
 } is {
     rpn: dottedParentNodeId :ast n: (ast.nodes.get i: call.callable.u64)
     if rpn.isZero then return
-    if (receiverIsValue :st :ast nid: rpn).not then return
+    if (receiverIsValue :st :ast :unitDecl nid: rpn).not then return
     if (receiverRootIsVar :st :ast :call) when (receiverIsFreshValue
         :st
         :ast
@@ -36761,6 +36765,7 @@ ownedValueReceiver: function {
 captureValueReceiver: function {
     st: zenv.ZSymbolTable
     ast: Ast
+    unitDecl: ztypes.declid
     call: callref
     funcId: ztypes.tid
     # receives the pins a borrowed receiver left
@@ -36768,11 +36773,11 @@ captureValueReceiver: function {
 } out ztypes.tid is {
     if (resultPins :st :funcId).not then {
         if st.typing.pendingPins.length == 0 then {
-            ownedValueReceiver :st :ast :call
+            ownedValueReceiver :st :ast :unitDecl :call
             return ztypes.tid
         }
         rpv: dottedParentNodeId :ast n: (ast.nodes.get i: call.callable.u64)
-        if rpv.isZero or (receiverIsValue :st :ast nid: rpv).not then return ztypes.tid
+        if rpv.isZero or (receiverIsValue :st :ast :unitDecl nid: rpv).not then return ztypes.tid
         # the result keeps nothing, so the flags that describe what it would
         # keep go with the pins
         takePendingPins :st dst: pins
@@ -36782,7 +36787,7 @@ captureValueReceiver: function {
     rpid: dottedParentNodeId :ast n: (ast.nodes.get i: call.callable.u64)
     if (receiverRootIsVar :st :ast :call) when (receiverIsFreshValue :st :ast nid: rpid
     ).not then return ztypes.tid
-    if rpid.isZero or (receiverIsValue :st :ast nid: rpid).not then return ztypes.tid
+    if rpid.isZero or (receiverIsValue :st :ast :unitDecl nid: rpid).not then return ztypes.tid
     takePendingPins :st dst: pins
     if pins.length > 0 then return ztypes.tid
     return (ztypes.tid.create from: (walkTypeOf :st nid: rpid.u64))
@@ -36842,11 +36847,48 @@ lockReceiverPins: function {
     }
 }
 
+# namesTypeApplication -- the call at `nid` applies a type to type arguments
+# alone (`(Option T: PC)`, `(ListVal i64)`): it names the instance and computes
+# no value. Its head is a bare name for a type, and every argument names a type
+# or is such an application itself. A value among the arguments (`(Rd a)`, a
+# projection) makes it a value.
+namesTypeApplication: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+} out bool is {
+    headId: zast.nodeid
+    {
+        bn: ast.nodes.get i: nid.u64
+        if bn.call when (ast.nodes.get i: bn.callable.u64).atomid then headId = bn.callable
+    }
+    if headId.isZero then return false
+    if (nodeNamesType :st :ast :unitDecl nid: headId).not then return false
+    call: callRefAt :ast :nid
+    k: u64
+    for k < call.nargs loop {
+        arg: argRefAt :ast nid: (zast.callArgAt :ast :nid i: k)
+        k = k + 1
+        if arg.nid.isZero then return false
+        isCall: (ast.nodes.get i: arg.operation.u64).call
+        if isCall then {
+            if (namesTypeApplication :st :ast :unitDecl nid: arg.operation).not then return false
+        } else if (nodeNamesType :st :ast :unitDecl nid: arg.operation).not then return false
+    }
+    return true
+}
+
 # receiverIsValue -- whether a dotted base is a value no variable holds: a call,
 # a function a bare name or a path auto-calls, or any other expression (a
 # literal, an interpolation, a value if). A name for a variable, a unit or a
 # type is not one.
-receiverIsValue: function {st: zenv.ZSymbolTable.view ast: Ast.view nid: zast.nodeid} out bool is {
+receiverIsValue: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+} out bool is {
     isName: false
     isPath: false
     {
@@ -36855,6 +36897,7 @@ receiverIsValue: function {st: zenv.ZSymbolTable.view ast: Ast.view nid: zast.no
         isPath = bn.dottedpath
     }
     if isName then return (baseRunsCall :st :ast :nid)
+    if (namesTypeApplication :st :ast :unitDecl :nid) then return false
     if isPath.not then return true
     rdo: st.typing.refDecl.get key: nid.u64
     if rdo.none then return false
@@ -36897,6 +36940,7 @@ joinValueReceiver: function {
 valueReceiverPins: function {
     st: zenv.ZSymbolTable
     ast: Ast
+    unitDecl: ztypes.declid
     funcId: ztypes.tid
     # the receiver node
     recvNid: zast.nodeid
@@ -36907,7 +36951,7 @@ valueReceiverPins: function {
     pins: List ztyping.PinPath
 } is {
     if path.length > 0 when (st.lookupVarId nameId: (path.get i: 0)).none.not then return
-    if (receiverIsValue :st :ast nid: recvNid).not then return
+    if (receiverIsValue :st :ast :unitDecl nid: recvNid).not then return
     if (resultPins :st :funcId).not then {
         # nothing keeps the receiver locked, but it is still a value that owns
         # its storage; a receiver whose own walk left pins owns nothing and
@@ -41706,7 +41750,7 @@ checkResolvedMethodCall: function {
     # its value keeps locked is taken now, before the argument walk drains it
     rvPins: List ztyping.PinPath
     rvT: ztypes.tid
-    if recvVal then rvT = captureValueReceiver :st :ast :call funcId: dro pins: rvPins
+    if recvVal then rvT = captureValueReceiver :st :ast :unitDecl :call funcId: dro pins: rvPins
     # a receiver rooted in a variable is locked through that root after the
     # arguments; any other holds its pins locked across them
     if rvPins.length > 0 when (receiverRootIsVar :st :ast :call).not then {
@@ -42278,7 +42322,7 @@ checkGenericFnCall: function {
     rroG: methodReceiverRootId :ast n: callableNode
     # a generic method's receiver owns what it holds exactly as a concrete
     # method's does; the concrete leg reaches this through captureValueReceiver
-    ownedValueReceiver :st :ast :call
+    ownedValueReceiver :st :ast :unitDecl :call
     lockMethodReceiver :st :ast :call :dro rroId: rroG
     st.popTo marker: mcmG
     pinGenericCallResult :st mid: midG pins: pinsG
