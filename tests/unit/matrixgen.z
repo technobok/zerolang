@@ -946,6 +946,8 @@ positions: function out List Position is {
     narrowingPositions :ps
     projectionPositions :ps
     conformancePositions :ps
+    lentPositions :ps
+    hoistArgPositions :ps
     return ps
 }
 
@@ -1658,6 +1660,145 @@ conformancePositions: function {ps: List Position} is {
         decls: ""
         body: "x: @MK[68]\n    p: Rd x.borrow\n    x = @MK[1]\n    return p.rdn"
         expect: 68
+        needsConf: true
+    )
+}
+
+# lentPositions -- a value with no name of its own, read where it stands: one a
+# list lends (`xs.get`), whose temporary owns nothing, and a field of a call's
+# result, whose temporary owns the whole result
+lentPositions: function {ps: List Position} is {
+    (addPos
+        :ps
+        name: "lent_read"
+        decls: ""
+        body: "xs: @LIST @T\n    xs.append @MK[90]\n    return @RD[(xs.get i: 0)]"
+        expect: 90
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "lent_method"
+        decls: ""
+        body: "xs: @LIST @T\n    xs.append @MK[91]\n    return @ME[(xs.get i: 0)]"
+        expect: 91
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "lent_method_arg"
+        decls: ""
+        body: "xs: @LIST @T\n    xs.append @MK[92]\n    return @MA[(xs.get i: 0)]"
+        expect: 92
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "lent_operator"
+        decls: ""
+        body: "xs: @LIST @T\n    xs.append @MK[93]\n    return @OP[(xs.get i: 0)]"
+        expect: 93
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "lent_predicate"
+        decls: ""
+        body: "xs: @LIST @T\n    xs.append @MK[94]\n    return (if (xs.get i: 0).@ARM then 94 else 0)"
+        expect: 94
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "lent_param_borrow"
+        decls: "useLentBorrow: function {p: @T.borrow} out @RT is { return @RD[p] }\n"
+        body: "xs: @LIST @T\n    xs.append @MK[95]\n    return (useLentBorrow p: (xs.get i: 0))"
+        expect: 95
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "lent_param_view"
+        decls: "useLentView: function {p: @T.view} out @RT is { return @RD[p] }\n"
+        body: "xs: @LIST @T\n    xs.append @MK[96]\n    return (useLentView p: (xs.get i: 0))"
+        expect: 96
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "field_rvalue_read"
+        decls: "RvHolder: class { f: @T }\nmkRvHolder: function {n: i64} out RvHolder is { return (RvHolder f: @MK[97]) }\n"
+        body: "return @RD[(mkRvHolder n: 0).f]"
+        expect: 97
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "field_rvalue_method"
+        decls: "RvHolderM: class { f: @T }\nmkRvHolderM: function {n: i64} out RvHolderM is { return (RvHolderM f: @MK[98]) }\n"
+        body: "return @ME[(mkRvHolderM n: 0).f]"
+        expect: 98
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "field_rvalue_method_arg"
+        decls: "RvHolderA: class { f: @T }\nmkRvHolderA: function {n: i64} out RvHolderA is { return (RvHolderA f: @MK[99]) }\n"
+        body: "return @MA[(mkRvHolderA n: 0).f]"
+        expect: 99
+        needsConf: false
+    )
+}
+
+# hoistArgPositions -- a value with no name handed to a method's parameter, and
+# one a projection or a conformance takes inside an arm that returns
+hoistArgPositions: function {ps: List Position} is {
+    (addPos
+        :ps
+        name: "method_param_inline"
+        decls: "MethIn: class { k: i64 } as {\n    useIt: function {:this p: @T} out @RT is { return @RD[p] }\n}\n"
+        body: "u: MethIn k: 0\n    return (u.useIt p: @MK[100])"
+        expect: 100
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "method_param_view_inline"
+        decls: "MethView: class { k: i64 } as {\n    useIt: function {:this p: @T.view} out @RT is { return @RD[p] }\n}\n"
+        body: "u: MethView k: 0\n    return (u.useIt p: @MK[101])"
+        expect: 101
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "method_param_take_inline"
+        decls: "MethTake: class { k: i64 } as {\n    useIt: function {:this p: @T.take} out @RT is { return @RD[p] }\n}\n"
+        body: "u: MethTake k: 0\n    return (u.useIt p: @MK[102])"
+        expect: 102
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "method_param_lent"
+        decls: "MethLent: class { k: i64 } as {\n    useIt: function {:this p: @T} out @RT is { return @RD[p] }\n}\n"
+        body: "u: MethLent k: 0\n    xs: @LIST @T\n    xs.append @MK[103]\n    return (u.useIt p: (xs.get i: 0))"
+        expect: 103
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "proj_create_return_arm"
+        decls: "PjArm: typedef @T\nmkPjArm: function {k: i64} out PjArm is {\n    if k > 0 then return (PjArm.create from: @MK[104])\n    return (PjArm.create from: @MK[1])\n}\n"
+        body: "p: mkPjArm k: 1\n    return @RD[p]"
+        expect: 104
+        needsConf: false
+    )
+    (addPos
+        :ps
+        name: "conf_create_return_arm"
+        decls: "mkConfArm: function {k: i64} out Rd is {\n    if k > 0 then return (Rd.create from: @MK[105])\n    return (Rd.create from: @MK[1])\n}\n"
+        body: "c: mkConfArm k: 1\n    return c.rdn"
+        expect: 105
         needsConf: true
     )
 }
