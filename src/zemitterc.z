@@ -6734,25 +6734,62 @@ methodOwnerId: function {
     return rtid
 }
 
+# destroyTargetTid -- the type whose cleanup frees a value of tid, zero when the
+# value owns nothing. A typedef emits no cleanup of its own: it shares its end's
+# struct and cleanup, an aggregate's (chaseAggregateTypedef) or a String's
+# (chaseStrTypedef), so every destroy of a typedef's value names the end's.
+destroyTargetTid: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tid: ztypes.tid
+} out ztypes.tid is {
+    dt: chaseStrTypedef :symtab :ctx tid: (chaseAggregateTypedef :symtab :ctx :tid)
+    if dt == ctx.strTid or (symtab.reg.needsDestructor typeId: dt) then return dt
+    if (isHeapPtrCollection :symtab :ctx tid: dt) then return dt
+    return ztypes.tid
+}
+
+# destroyFnC -- the C function that frees a value of tid, handed destroyOperand's
+# form of it: a String's free, else its destroy target's destructor; "" when the
+# value owns nothing.
+destroyFnC: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tid: ztypes.tid
+} out String is {
+    dt: destroyTargetTid :symtab :ctx :tid
+    if dt.isZero then return String
+    if dt == ctx.strTid then return "\{ctx.strC}_free"
+    return "\{ctxCnameView :ctx tid: dt}_destroy"
+}
+
+# destroyLineC -- the statement, indented by `ind`, that frees the value `nm` of
+# type tid: destroyFnC handed destroyOperand's form of nm; "" when it owns
+# nothing.
+destroyLineC: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tid: ztypes.tid
+    nm: StringView
+    ind: StringView
+} out String is {
+    dt: destroyTargetTid :symtab :ctx :tid
+    if dt.isZero then return String
+    if dt == ctx.strTid then return "\{ind}\{ctx.strC}_free(&\{nm});\n"
+    addr: "&"
+    if (valueIsItsPointer :symtab :ctx tid: dt) then addr = ""
+    return "\{ind}\{ctxCnameView :ctx tid: dt}_destroy(\{addr}\{nm});\n"
+}
+
 # hoistDestroyLine -- the scope-exit line that destroys a hoisted `_ah` temp
-# of type `tid`, "" when the type owns nothing. A String frees; a typedef
-# class over a collection or a string (Bytes, Path) shares its base's struct
-# and cleanup and has no destroyer of its own, so the line names the base's:
-# the binding leg already destroys such a local as its base, and a hoisted
-# argument must not call a function the alias never emits.
+# of type `tid`, "" when the type owns nothing.
 hoistDestroyLine: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     tid: ztypes.tid
     nm: StringView
 } out String is {
-    dt: chaseStrTypedef :symtab :ctx tid: (chaseAggregateTypedef :symtab :ctx :tid)
-    if dt == ctx.strTid then return "    \{ctx.strC}_free(&\{nm});\n"
-    if (symtab.reg.needsDestructor typeId: dt).not then return "".string
-    cb: ctxCname :ctx tid: dt
-    # a Map or Set temp already IS the pointer its destroy takes
-    if (isHeapPtrCollection :symtab :ctx tid: dt) then return "    \{cb}_destroy(\{nm});\n"
-    return "    \{cb}_destroy(\{destroyOperand :symtab :ctx tid: dt :nm});\n"
+    return (destroyLineC :symtab :ctx :tid :nm ind: "    ")
 }
 
 # hoistBorrowValArg -- a by-value call argument that is an owned, destructible,
@@ -19020,17 +19057,15 @@ emitDiscardedResult: function {
         return
     }
     dnm: varCName :ctx vid: dv name: ""
-    if rtid == ctx.strTid then {
-        buf.append "\{ind}\{ctx.strC}_t \{dnm} = \{ce};\n"
-        buf.append "\{ind}\{ctx.strC}_free(&\{dnm});\n"
-        return
-    }
-    dct: typeRefC :ast :symtab :ctx tid: rtid thisTid: ztypes.tid
-    dcb: ctxCname :ctx tid: rtid
-    dref: "&\{dnm}"
-    if (ctEndsWithStar ct: dct.stringView) then dref = dnm.copy
+    dct: if rtid == ctx.strTid then "\{ctx.strC}_t" else (typeRefC
+        :ast
+        :symtab
+        :ctx
+        tid: rtid
+        thisTid: ztypes.tid
+    )
     buf.append "\{ind}\{dct} \{dnm} = \{ce};\n"
-    buf.append "\{ind}\{dcb}_destroy(\{dref});\n"
+    buf.append (destroyLineC :symtab :ctx tid: rtid nm: dnm.stringView :ind)
 }
 
 # emitCallStmt -- one call-shaped statement: return / print / a plain call.
@@ -19818,11 +19853,14 @@ emitNarrowedTakeBind: function {
             if ldcbC.stringView == ctx.strC then {
                 tmp.oweFree name: nm.string vid: nameVid
             } else {
-                if (symtab.reg.needsDestructor typeId: ntO) then {
-                    ldcbB: ctxCname :ctx tid: (ztypes.tid.create from: ntO.u64)
-                    ldfB: "    \{ldcbB}_destroy(&\{nm});\n"
-                    tmp.oweList stmt: ldfB.copy name: nm.string vid: nameVid
-                }
+                ldcB: (destroyLineC
+                    :symtab
+                    :ctx
+                    tid: (ztypes.tid.create from: ntO.u64)
+                    :nm
+                    ind: "    "
+                )
+                if ldcB.length > 0 then tmp.oweList stmt: ldcB.take name: nm.string vid: nameVid
             }
             return true
         } case none then null
@@ -20169,21 +20207,13 @@ emitDottedAutoCallStmt: function {
             return
         }
         rcvV: emitDottedReceiver :ast :symtab :ctx callable: n
-        if rrid == ctx.strTid then {
-            rdf: "\{ind}\{ctx.strC}_free(&\{rcvV});\n"
-            buf.append rdf
-        } else {
-            if (symtab.reg.needsDestructor typeId: rrid) then {
-                rdcb: ctxCname :ctx tid: (ztypes.tid.create from: rrid.u64)
-                rdref: "&\{rcvV}"
-                if (isBoxTid
-                    :symtab
-                    tid: (ztypes.tid.create from: rrid.u64)
-                ) then rdref = "\{rcvV}"
-                rdc: "\{ind}\{rdcb}_destroy(\{rdref});\n"
-                buf.append rdc
-            }
-        }
+        buf.append (destroyLineC
+            :symtab
+            :ctx
+            tid: (ztypes.tid.create from: rrid.u64)
+            nm: rcvV.stringView
+            :ind
+        )
         rinv: (
             rrid ==
             ctx.strTid or
@@ -20456,13 +20486,7 @@ emitReassignDestroy: function {
         buf.append "\{ind}\{ctx.strC}_free(&\{nm2});\n"
         return
     }
-    if (symtab.reg.needsDestructor typeId: rtsid).not then return
-    # the chased mono's registry cname is authoritative (the stamp name still
-    # says the typedef)
-    rdcb: ctxCname :ctx tid: rtsid
-    # a heap collection and a box ARE the pointer their destroy takes
-    rdop: destroyOperand :symtab :ctx tid: rtsid nm: nm2
-    buf.append "\{ind}\{rdcb}_destroy(\{rdop});\n"
+    buf.append (destroyLineC :symtab :ctx tid: rtsid nm: nm2 :ind)
 }
 
 # movedZeroText -- what a moved-out source is overwritten with so its own
@@ -20609,10 +20633,8 @@ emitRepointCompanion: function {
         tmp.oweFree name: nm.copy vid: cv
         return
     }
-    if (symtab.reg.needsDestructor typeId: tid).not then return
-    cb: ctxCname :ctx :tid
-    dop: destroyOperand :symtab :ctx :tid nm: nm.stringView
-    tmp.oweList stmt: "\{ind}\{cb}_destroy(\{dop});\n" name: nm.copy vid: cv
+    dc: destroyLineC :symtab :ctx :tid nm: nm.stringView :ind
+    if dc.length > 0 then tmp.oweList stmt: dc.take name: nm.copy vid: cv
 }
 
 # companionCType -- the C type a companion of type `tid` is held as: the String
@@ -20716,13 +20738,7 @@ emitOwnedRepoint: function {
     rrn: tmpNext :ctx :tmp
     ct: companionCType :ast :symtab :ctx :tid
     buf.append "\{ind}\{ct} _rr\{rrn} = \{rv};\n"
-    if tid == ctx.strTid then {
-        buf.append "\{ind}\{ctx.strC}_free(&\{cn});\n"
-    } else if (symtab.reg.needsDestructor typeId: tid) then {
-        cb: ctxCname :ctx :tid
-        dop: destroyOperand :symtab :ctx :tid nm: cn.stringView
-        buf.append "\{ind}\{cb}_destroy(\{dop});\n"
-    }
+    buf.append (destroyLineC :symtab :ctx :tid nm: cn.stringView :ind)
     buf.append "\{ind}\{cn} = _rr\{rrn};\n"
     emitMovedArgZeroing :ast :symtab :ctx n: valueNode :ind :buf
     if ptr.length > 0 then {
@@ -21272,12 +21288,8 @@ registerScopeDestroy: function {
         tmp.oweFree name: nm.string vid: nameVid
         return
     }
-    if (symtab.reg.needsDestructor typeId: tid).not then return
-    dcb: ctxCname :ctx :tid
-    dref: "&\{nm}"
-    if (isBoxTid :symtab :tid) then dref = nm.string
-    df: "    \{dcb}_destroy(\{dref});\n"
-    tmp.oweList stmt: df.copy name: nm.string vid: nameVid
+    dc: destroyLineC :symtab :ctx :tid :nm ind: "    "
+    if dc.length > 0 then tmp.oweList stmt: dc.take name: nm.string vid: nameVid
 }
 
 # valueIsArmTag -- the value names a sum type's arm (`U.none`): the checker
@@ -21388,9 +21400,13 @@ emitWithField: function {
     fnm: zast.nameTextAt :ast ref: wf
     fld: genFieldC :ctx name: fnm.stringView
     if (structDestroyNontrivial :symtab :ctx tid: (ztypes.tid.create from: wsid.u64)) then {
-        wcb: ctxCname :ctx tid: (ztypes.tid.create from: wsid.u64)
-        ld: "\{ind}\{wcb}_destroy(&\{fld});\n"
-        buf.append ld
+        buf.append (destroyLineC
+            :symtab
+            :ctx
+            tid: (ztypes.tid.create from: wsid.u64)
+            nm: fld.stringView
+            :ind
+        )
     }
     la: "\{ind}\{fld} = \{wv};\n"
     buf.append la
@@ -23091,14 +23107,14 @@ emitUnownedDestroy: function {
         buf.append "\{ind}\{fld} = (\{ctx.strC}_t){0};\n"
         return
     }
-    if (symtab.reg.needsDestructor typeId: tid).not then return
-    dcb: ctxCname :ctx :tid
-    dop: destroyOperand :symtab :ctx :tid nm: fld.stringView
-    buf.append "\{ind}\{dcb}_destroy(\{dop});\n"
+    dc: destroyLineC :symtab :ctx :tid nm: fld.stringView :ind
+    if dc.length == 0 then return
+    buf.append dc
     if (isHeapPtrCollection :symtab :ctx :tid) then {
         buf.append "\{ind}\{fld} = NULL;\n"
     } else {
-        buf.append "\{ind}\{fld} = (\{dcb}_t){0};\n"
+        zcb: ctxCname :ctx tid: (destroyTargetTid :symtab :ctx :tid)
+        buf.append "\{ind}\{fld} = (\{zcb}_t){0};\n"
     }
 }
 
@@ -23547,9 +23563,8 @@ emitDoBindValue: function {
             if boxedC.length > 0 then {
                 l0b: "\{ind}\{nm}.data = NULL;\n"
                 buf.append l0b
-                dcb: ctxCname :ctx :tid
-                ldf: "    \{dcb}_destroy(&\{nm});\n"
-                tmp.oweList stmt: ldf.copy name: nm.string vid: nmVid
+                ldc: destroyLineC :symtab :ctx :tid :nm ind: "    "
+                if ldc.length > 0 then tmp.oweList stmt: ldc.take name: nm.string vid: nmVid
             }
             l1: "\{ind}do {\n"
             buf.append l1
@@ -28340,17 +28355,25 @@ isTypedefType: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out boo
 }
 
 # destroyOperand -- what a value's destroy is handed: its address, or the value
-# itself where the value already IS the pointer the destroy frees -- a box, and
-# a Set or Map, which live on the heap.
+# itself where it already IS the pointer the destroy frees (valueIsItsPointer).
 destroyOperand: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     tid: ztypes.tid
     nm: StringView
 } out String is {
-    if (isBoxTid :symtab :tid) then return nm.string
-    if (isHeapPtrCollection :symtab :ctx :tid) then return nm.string
+    if (valueIsItsPointer :symtab :ctx :tid) then return nm.string
     return "&\{nm}"
+}
+
+# valueIsItsPointer -- a value of tid is held as the pointer its destroy frees:
+# a box, and a Set or Map, which live on the heap.
+valueIsItsPointer: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tid: ztypes.tid
+} out bool is {
+    return (isBoxTid :symtab :tid) or (isHeapPtrCollection :symtab :ctx :tid)
 }
 
 # isBoxTid -- the type is a builtin Box mono (heap pointer), as flagged by the
@@ -30781,14 +30804,8 @@ oweTakeParamFrees: function {
             } else {
                 puse: takeParamDestroyTid :ast :symtab :ctx :ppid
                 if puse.isZero.not then {
-                    pcb: ctxCname :ctx tid: puse
-                    pdf: "    \{pcb}_destroy(\{(destroyOperand
-                        :symtab
-                        :ctx
-                        tid: puse
-                        nm: pmn.stringView
-                    )});\n"
-                    tmp.oweList stmt: pdf.copy name: pmn.copy vid: pmnB
+                    pdc: destroyLineC :symtab :ctx tid: puse nm: pmn.stringView ind: "    "
+                    tmp.oweList stmt: pdc.take name: pmn.copy vid: pmnB
                 }
             }
         }
@@ -31286,35 +31303,18 @@ buildTypeCnames: function {
     }
 }
 
-# emitStringFragments -- the String, StringView and hash runtime fragments, plus
-# the destructor aliases a String-typedef class needs: it SHARES the String
-# struct, so its registered destructor is aliased to the String free and every
-# generic destroy site links (an unused wrapper is fine, -Wno-unused-function).
+# emitStringFragments -- the String, StringView and hash runtime fragments. A
+# String typedef (Path) shares the String struct and its free (destroyFnC).
 emitStringFragments: function {
-    symtab: zenv.ZSymbolTable.view
     runtimeDir: StringView
     errs: List String
     buf: String.borrow
     strC: StringView
     svC: StringView
-    strId: ztypes.tid
-    typeCnames: (List String).view
 } is {
     p1: "\{runtimeDir}/z_String.inc"
     f1: loadFragment path: p1.stringView :svC :strC fails: errs
     buf.append f1
-    # a String-typedef class (Path) shares the String struct: alias its
-    # registered destructor to the String free so every generic destroy
-    # site links (unused wrappers are fine: -Wno-unused-function)
-    with sdit: symtab.typing.typedefBaseTid.iterateItems do for sde: sdit loop {
-        if sde.value == strId when (symtab.reg.needsDestructor
-            typeId: (ztypes.tid.create from: sde.key)
-        ) then {
-            sdc: listCname cnames: typeCnames tid: (ztypes.tid.create from: sde.key)
-            sdw: "static void \{sdc}_destroy(\{strC}_t* p) { \{strC}_free(p); }\n"
-            buf.append sdw
-        }
-    }
     p2: "\{runtimeDir}/z_StringView.inc"
     f2: loadFragment path: p2.stringView :svC :strC fails: errs
     buf.append f2
@@ -31438,14 +31438,11 @@ emitC: function {
     mnames: ListVal zast.nameid
     buildMemberNameIds :program acc: mnames
     (emitStringFragments
-        :symtab
         :runtimeDir
         :errs
         :buf
         strC: strC.stringView
         svC: svC.stringView
-        :strId
-        :typeCnames
     )
     mn: mainCName :program
     litIds: ListVal u64
@@ -31927,16 +31924,8 @@ emitBoxMono: function {
     bsig: "static void z_\{nm}_destroy(void* v) {\n"
     buf.append bsig
     buf.append "    if (!v) return;\n"
-    if beid == ctx.strTid then {
-        bfree: "    \{ctx.strC}_free(v);\n"
-        buf.append bfree
-    } else {
-        if (symtab.reg.needsDestructor typeId: (ztypes.tid.create from: beid.u64)) then {
-            bicb: ctxCname :ctx tid: (ztypes.tid.create from: beid.u64)
-            bidf: "    \{bicb}_destroy(v);\n"
-            buf.append bidf
-        }
-    }
+    bfn: destroyFnC :symtab :ctx tid: (ztypes.tid.create from: beid.u64)
+    if bfn.length > 0 then buf.append "    \{bfn}(v);\n"
     buf.append "    free(v);\n"
     buf.append "}\n\n"
 }
@@ -32007,22 +31996,15 @@ listElemsDestroyC: function {
     ctx: Ctx
     eid: ztypes.tid
 } out String is {
-    if eid == ctx.strTid then {
-        return "    for (uint64_t _di = 0; _di < p->length; _di++) {\n        \{ctx.strC}_free(&p->data[_di]);\n    }\n"
-    }
-    ecid: chaseAggregateTypedef :symtab :ctx tid: eid
-    if (isHeapPtrCollection :symtab :ctx tid: eid) then {
-        hcb: ctxCname :ctx tid: ecid
-        return "    for (uint64_t _di = 0; _di < p->length; _di++) {\n        \{hcb}_destroy(p->data[_di]);\n    }\n"
-    }
-    if (symtab.reg.needsDestructor typeId: ecid).not then {
+    ecid: eid
+    if (destroyTargetTid :symtab :ctx tid: eid).isZero then {
         eln: regNameOf :symtab tid: eid
         rbn: canonTypeId :ast :symtab :ctx tid: eid name: eln.stringView
         if rbn > 0 then ecid = ztypes.tid.create from: rbn.u64
     }
-    if (symtab.reg.needsDestructor typeId: ecid).not then return "".string
-    ecb: ctxCname :ctx tid: ecid
-    return "    for (uint64_t _di = 0; _di < p->length; _di++) {\n        \{ecb}_destroy(&p->data[_di]);\n    }\n"
+    edc: destroyLineC :symtab :ctx tid: ecid nm: "p->data[_di]" ind: "        "
+    if edc.length == 0 then return edc
+    return "    for (uint64_t _di = 0; _di < p->length; _di++) {\n\{edc}    }\n"
 }
 
 # emitListMono -- substitute z_List.c.tmpl for a List instance + the
@@ -32905,27 +32887,19 @@ payloadDestructor: function {
     ) case some then {
         pn: regNameOf :symtab tid: (ztypes.tid.create from: co.u64)
         if pn.stringView == "null" then return "".string
-        if co == ctx.strTid then return "\{ctx.strC}_free"
         # childOf already resolves the arm to its concrete (possibly cross-unit)
         # payload id; canonicalize a destructor-less shell via resolveTypeIdByName,
-        # the same way the List-element destructor does. Build the cname with
-        # cnameOf (a fresh String) -- never bind the borrowed destructorName, which
-        # would move out of the registry borrow (scope-exit free -> UAF).
-        rid: co
-        if (symtab.reg.needsDestructor typeId: (ztypes.tid.create from: co.u64)).not then {
-            rbn: (canonTypeId
-                :ast
-                :symtab
-                :ctx
-                tid: (ztypes.tid.create from: co.u64)
-                name: pn.stringView
-            )
-            if rbn > 0 then rid = rbn
-        }
-        if (symtab.reg.needsDestructor typeId: (ztypes.tid.create from: rid.u64)) then {
-            cb: ctxCname :ctx tid: (ztypes.tid.create from: rid.u64)
-            return "\{cb}_destroy"
-        }
+        # the same way the List-element destructor does
+        pfn: destroyFnC :symtab :ctx tid: (ztypes.tid.create from: co.u64)
+        if pfn.length > 0 then return pfn
+        rbn: (canonTypeId
+            :ast
+            :symtab
+            :ctx
+            tid: (ztypes.tid.create from: co.u64)
+            name: pn.stringView
+        )
+        if rbn > 0 then return (destroyFnC :symtab :ctx tid: (ztypes.tid.create from: rbn.u64))
     } case none then null
     return "".string
 }
@@ -33362,24 +33336,18 @@ mapValFreeStmt: function {
     valTid: ztypes.tid
     slot: StringView
 } out String is {
-    if valTid == ctx.strTid then return "\{ctx.strC}_free(&\{slot});"
-    if valTid > 0 then {
-        vmid: chaseAggregateTypedef :symtab :ctx tid: valTid
-        needs: (
-            (symtab.reg.needsDestructor typeId: vmid) or
-            (isHeapPtrCollection :symtab :ctx tid: valTid)
-        )
-        if needs then {
-            vcb: ctxCname :ctx tid: (ztypes.tid.create from: vmid.u64)
-            if (isHeapPtrCollection
-                :symtab
-                :ctx
-                tid: valTid
-            ) then return "\{vcb}_destroy(\{slot});"
-            return "\{vcb}_destroy(&\{slot});"
-        }
-    }
-    return "".string
+    if valTid.isZero then return "".string
+    vfs: destroyFnC :symtab :ctx tid: valTid
+    if vfs.length == 0 then return vfs
+    vfs.append "("
+    vfs.append (destroyOperand
+        :symtab
+        :ctx
+        tid: (destroyTargetTid :symtab :ctx tid: valTid)
+        nm: slot
+    )
+    vfs.append ");"
+    return vfs
 }
 
 # emitMapIters -- the MapKeyIter/MapItemIter/MapEntry block for a Map mono,
@@ -37710,12 +37678,11 @@ emitProtocolImpl: function {
     buf.append bc0
     od0: "static void \{wbase}_owned_destroy(void* p) {\n"
     buf.append od0
-    implEnd: chaseStrTypedef :symtab :ctx tid: (chaseAggregateTypedef :symtab :ctx tid: implTid)
-    if (symtab.reg.needsDestructor typeId: implEnd) then {
-        endBase: ctxCnameView :ctx tid: implEnd
-        od1: "    \{endBase}_destroy((\{implCtype}*)p);\n"
-        if implEnd == ctx.strTid then od1 = "    \{ctx.strC}_free((\{implCtype}*)p);\n"
-        buf.append od1
+    ofn: destroyFnC :symtab :ctx tid: implTid
+    if ofn.length > 0 then {
+        buf.append "    "
+        buf.append ofn
+        buf.append "((\{implCtype}*)p);\n"
     }
     buf.append "    free(p);\n}\n\n"
     oc0: "static \{protoCtype} \{wbase}_create_owned(\{implCtype}* val) {\n    \{protoCtype} proto = {0};\n    \{implCtype}* boxed = (\{implCtype}*)z_xmalloc(sizeof(\{implCtype}));\n    *boxed = *val;\n    proto.data = boxed;\n    proto.vtable = &\{wbase}_vtable;\n    proto.destroy = \{wbase}_owned_destroy;\n    return proto;\n}\n\n"
@@ -40084,27 +40051,15 @@ emitStructDestructor: function {
                 dbx: "    \{bxC}_destroy(p->\{bxP}\{fname});\n"
                 buf.append dbx
             } else {
-                fmid: chaseAggregateTypedef :symtab :ctx tid: (ztypes.tid.create from: fid.u64)
-                fneeds: (
-                    (symtab.reg.needsDestructor typeId: fmid) or
-                    (isHeapPtrCollection :symtab :ctx tid: (ztypes.tid.create from: fid.u64))
+                dfP: memberCPrefix name: fname.stringView
+                fslot: "p->\{dfP}\{fname}"
+                buf.append (destroyLineC
+                    :symtab
+                    :ctx
+                    tid: (ztypes.tid.create from: fid.u64)
+                    nm: fslot.stringView
+                    ind: "    "
                 )
-                if fneeds then {
-                    fcb: ctxCname :ctx tid: (ztypes.tid.create from: fmid.u64)
-                    if (isHeapPtrCollection
-                        :symtab
-                        :ctx
-                        tid: (ztypes.tid.create from: fid.u64)
-                    ) then {
-                        dfP: memberCPrefix name: fname.stringView
-                        df: "    \{fcb}_destroy(p->\{dfP}\{fname});\n"
-                        buf.append df
-                    } else {
-                        df2P: memberCPrefix name: fname.stringView
-                        df2: "    \{fcb}_destroy(&p->\{df2P}\{fname});\n"
-                        buf.append df2
-                    }
-                }
             }
         }
         fi = fi + 1
