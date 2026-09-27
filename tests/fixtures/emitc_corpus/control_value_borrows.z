@@ -1,0 +1,37 @@
+# A binding of an `if` or `match` value borrows each arm's bare local, as
+# `b: d` borrows `d`: every leaf stays readable and owned by its name, and the
+# binding refers to whichever the arm that ran yields. `.borrow` arms borrow the
+# same way (they used to be copied into the binding and freed twice). An arm's
+# `.take` moves it; a re-point borrows; a borrowing parameter reads the arm's
+# local in place; a taking one moves it. A write through the binding reaches
+# the local the arm that ran names.
+Cell: class { n: i64  s: String }
+Mode: variant { fast: null  slow: null }
+use: function {x: Cell} out i64 is { return x.n }
+keep: function {x: Cell.take} out i64 is { return x.n }
+main: function is {
+    d: Cell n: 1 s: "d".string
+    e: Cell n: 2 s: "e".string
+    f: Cell n: 3 s: "f".string
+    c: false
+    t: if c then d else f.take
+    print "take-arm \{t.n} \{d.n}"
+    m: Mode.slow
+    w: match (m) case fast then d case slow then e
+    print "match \{w.n} \{d.n} \{e.n}"
+    b: d
+    b = if c then d else e
+    print "repoint \{b.n}"
+    print "arg \{use x: (if c then d else e)} \{d.n} \{e.n}"
+    g: Cell n: 4 s: "g".string
+    h: Cell n: 5 s: "h".string
+    print "take-param \{keep x: (if c then g else h)}"
+    k: if c then d.borrow else e.borrow
+    print "borrow-arms \{k.n} \{d.n} \{e.n}"
+    {
+        x: if c.not then d else e
+        x.n = 9
+        x.s.append "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    }
+    print "write-through \{d.n} \{d.s.length}"
+}
