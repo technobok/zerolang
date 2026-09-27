@@ -4021,7 +4021,8 @@ takeAliasBaseNid: function {
             btt ==
             ztypes.ztypetype.recordType or
             (btt == ztypes.ztypetype.classType) or
-            (btt == ztypes.ztypetype.unionType)
+            (btt == ztypes.ztypetype.unionType) or
+            (btt == ztypes.ztypetype.protocolType)
         )
         if isUC then return bnid
         return 0
@@ -4030,8 +4031,11 @@ takeAliasBaseNid: function {
     }
 }
 
-# takeAliasBase -- the base atom of a `<x>.take` over a user record/class (an
-# ownership-transfer alias: the binding reuses the source storage), else "".
+# takeAliasBase -- the base atom of a `<x>.take` over a user record, class,
+# union or protocol (an ownership-transfer alias: the binding reuses the source
+# storage), else "". A variant and a facet are values that own nothing; any
+# family that owns something must be here, or a narrowed payload taken out of
+# its arm stays in the box the subject's destroy frees.
 # takeAliasBase -- that base atom's text, derived from the node above so the
 # name and the id can never describe different atoms.
 takeAliasBase: function {
@@ -4047,9 +4051,11 @@ takeAliasBase: function {
     return (atomTextOf :ast n: (ast.nodes.get i: tbn))
 }
 
-# takeStringSource -- if `n` is a `<atom>.take` over a String value, the resolved
-# C name of the source local to zero after the move (the callee now owns the
-# heap buffer), else "". Used at the statement level to suppress a double free.
+# takeStringSource -- if `n` is a `<atom>.take` that moves a heap value
+# (moveMarkerMovesBase), the resolved C name of the source local to zero after
+# the move (the receiver now owns the heap), else "". A function value moves
+# too, but its source may be the function itself, which has nothing to zero.
+# Used at the statement level to suppress a double free.
 takeStringSource: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -4062,16 +4068,10 @@ takeStringSource: function {
         return (takeStringSource :ast :symtab :ctx n: (ast.nodes.get i: n.statementline.u64))
     } case dottedpath then {
         if (leafMoves :ast leaf: n.child).not then return "".string
+        if (moveMarkerMovesBase :ast :symtab :ctx pnid: n.parent.u64).not then return "".string
         bnid: atomNodeId n: (ast.nodes.get i: n.parent.u64)
-        bid: stampIdOf :symtab nid: bnid
-        isMv: (
-            bid == ctx.strTid or ((symtab.reg.typetypeOf typeId: bid) == ztypes.ztypetype.unionType)
-        )
-        if (symtab.reg.typetypeOf typeId: bid) == ztypes.ztypetype.classType when (isPtrVid
-            :ctx
-            vid: (atomVid :symtab nid: bnid)
-        ).not then isMv = true
-        if isMv.not then return "".string
+        bt: stampIdOf :symtab nid: bnid
+        if (symtab.reg.typetypeOf typeId: bt) == ztypes.ztypetype.functionType then return "".string
         bn9r: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent.u64))
         return (takeSourceResolve :ctx name: bn9r.stringView vid: (atomVid :symtab nid: bnid))
     } else {
@@ -16453,7 +16453,7 @@ emitDottedTagRead: function {
 moveMarkerMovesBase: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
+    ctx: Ctx.view
     # the marker's base node id
     pnid: u64
 } out bool is {
@@ -19832,8 +19832,8 @@ emitNarrowedTakeBind: function {
             valB: takeSourceResolve :ctx name: tabA vid: tabAV
             lnB1: "\{ind}\{ctB} \{nm} = \{valB};\n"
             buf.append lnB1
-            lnB2: "\{ind}\{valB} = (\{ctB}){0};\n"
-            buf.append lnB2
+            zcB: movedZeroC :ast :symtab :ctx tid: (ztypes.tid.create from: ntO.u64)
+            if zcB.length > 0 then buf.append "\{ind}\{valB} = \{zcB};\n"
             # a String payload is freed by the string runtime, which
             # has no `_destroy`: it rides the scope's String free list
             # like any other owned String local.
