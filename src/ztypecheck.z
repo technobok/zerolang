@@ -32626,6 +32626,28 @@ checkRepoint: function {
         reportRepointMode :st :ast :rasgn vmode: vmT
         return
     }
+    # a borrow of `x` itself (`c: x`) aliases what `x` refers to, and the
+    # re-point would release that storage under it; `x`'s own readonly lock is
+    # no borrow of it
+    oth: (st.lockHeldByOther
+        nameId: (atomNameId :ast n: (ast.nodes.get i: rasgn.topath.u64))
+        except: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: xVid.u64)
+    )
+    match (
+        oth
+    ) case some then {
+        tn: varNameText :st :ast vid: xVid
+        hn: st.formatLockHolder pool: ast.names holder: oth
+        (addError
+            :st
+            nodeid: rasgn.nid
+            lineno: rasgn.lineno
+            colno: rasgn.colno
+            e: zast.err.ownerError
+            msg: "Cannot re-point '\{tn}': '\{hn}' borrows through it"
+        )
+        return
+    } case none then null
     drainPendingBorrow :st
     errR: st.typing.errors.length
     rvt: checkValueAt :st :unitDecl :ast nid: rasgn.value

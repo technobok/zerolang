@@ -1859,6 +1859,27 @@ ZSymbolTable: class {
     # shared TARGET is a live read of its whole subtree, so a write below it is
     # blocked too; a shared INTENT is only bookkeeping toward a deeper lock,
     # which is checked on its own row.
+    # lockHeldByOther -- a lock on the local `nameId`, or on a path through
+    # it, held by any holder but `except`: something borrows it or through it.
+    lockHeldByOther: function {
+        this: this.view
+        nameId: zast.nameid
+        except: ztypes.zlockholder
+    } out optionval ztypes.zlockholder is {
+        d: this.findLocal :nameId
+        if d.isZero then return (optionval.none ztypes.zlockholder)
+        if (this.typing.declRowsOf declId: d) == 0 then return (optionval.none ztypes.zlockholder)
+        j: this.entries.length
+        for j > 0 loop {
+            j = j - 1
+            e: this.entries.get i: j
+            if e.declId == d when e.hasLock when (holderEq a: e.lockHolder b: except).not then {
+                return (optionval.some e.lockHolder)
+            }
+        }
+        return (optionval.none ztypes.zlockholder)
+    }
+
     findReadBlocker: function {
         this: this.view
         path: (ListVal zast.nameid).view
