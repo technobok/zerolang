@@ -3548,10 +3548,10 @@ valueExprC: function {
     return e
 }
 
-# ptrHeldValtype -- a bare atom that is a C pointer to a VALTYPE: a `.view`
-# valtype parameter, a valtype receiver. Only the valtype families load; a
-# String, StringView or container view is a pointer its own legs already
-# spell for, and a class is passed by reference, so its pointer IS the value.
+# ptrHeldValtype -- a bare atom that is a C pointer to a value of a BY-VALUE
+# family (passesByValue): a `.view` valtype parameter, a receiver. A String,
+# StringView or container view is a pointer its own legs already spell for,
+# and a class is passed by reference, so its pointer IS the value.
 # The family is the VARIABLE's declared type, not the node's stamp: a union
 # parameter narrowed by a guard is stamped with its payload record while the
 # C still holds the union pointer. The cheap tests come first so the common
@@ -3569,7 +3569,19 @@ ptrHeldValtype: function {
     vid: atomVid :symtab :nid
     if (isPtrVid :ctx :vid).not then return false
     if (pathIsPointer :ast :symtab :ctx :n).not then return false
-    return (symtab.reg.isValtypeOf tid: (symtab.reg.variableTypeOf id: vid))
+    vt: chaseAggregateTypedef :symtab :ctx tid: (symtab.reg.variableTypeOf id: vid)
+    return (passesByValue :symtab tid: vt)
+}
+
+# passesByValue -- an unmarked parameter of tid takes its argument BY VALUE: a
+# valtype, and a union (Option, Result) or protocol, whose header shares the
+# payload it points at -- a non-owning borrow, sound because the source is
+# locked for the call and a borrow frees nothing. A class, a String and the
+# collections pass by pointer.
+passesByValue: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    if (symtab.reg.isValtypeOf :tid) then return true
+    tt: symtab.reg.typetypeOf typeId: tid
+    return tt == ztypes.ztypetype.unionType or (tt == ztypes.ztypetype.protocolType)
 }
 
 # valueAtomNid -- the node id of a bare local read, through any parentheses:
@@ -5172,7 +5184,12 @@ emitSvCompareCall: function {
             if ca.namedoperation then {
                 cae: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: ca.operation.u64)
                 cat: stampNameDeep :symtab n: (ast.nodes.get i: ca.operation.u64)
-                caIsStr: cat.stringView == "String"
+                caIsStr: (operandIsStr
+                    :symtab
+                    :ctx
+                    n: (ast.nodes.get i: ca.operation.u64)
+                    tname: cat.stringView
+                )
                 cav: (atomVidIfPlain
                     :ast
                     :symtab
@@ -5822,8 +5839,8 @@ dottedReceiverStampId: function {
     }
 }
 
-# dottedReceiverIsPtr -- true when a dotted method call's receiver is already a
-# C pointer (a ptrVar like `this`, or a borrowed field), so the call passes it
+# dottedReceiverIsPtr -- true when a dotted method call's receiver is already
+# the C pointer a receiver takes (argAlreadyPointer), so the call passes it
 # directly rather than taking its address.
 dottedReceiverIsPtr: function {
     ast: Ast.view
@@ -5834,10 +5851,20 @@ dottedReceiverIsPtr: function {
     match (
         callable
     ) case dottedpath then {
-        return (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: callable.parent.u64))
+        return (receiverNodeIsPtr :ast :symtab :ctx n: (ast.nodes.get i: callable.parent.u64))
     } else {
         return false
     }
+}
+
+# receiverNodeIsPtr -- argAlreadyPointer for a receiver known by its node
+receiverNodeIsPtr: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+} out bool is {
+    return (argAlreadyPointer :ast :symtab :ctx :n vid: (atomVid :symtab nid: (valueAtomNid :n)))
 }
 
 # emitNativeArgMethod -- a native method that takes ARGUMENTS, emitted from its
@@ -6977,7 +7004,7 @@ stringViewBinopOperand: function {
         )
         if hv.length > 0 then src = hv.copy
     }
-    isStrT: tname == "String"
+    isStrT: operandIsStr :symtab :ctx :n :tname
     if isStrT.not when (singleReadNeedsTemp s: src.stringView) then {
         src = hoistLvalue :ast :symtab :ctx av: expr tid: ctx.svTid
     }
@@ -7112,9 +7139,10 @@ instanceMethodArgValue: function {
     )
 }
 
-# instanceMethodArgPtr -- a non-TAKE class argument passes by pointer (mirroring
-# the method signature), and so do a borrowed String and a list. An interpolated
-# argument is a statement expression, never an lvalue, so it never does.
+# instanceMethodArgPtr -- how one argument of a user-object method is passed:
+# by pointer when the parameter takes one (paramTakesPointer), addressed unless
+# the argument already is one (argAlreadyPointer). An interpolated argument is
+# a statement expression, never an lvalue, so it never is.
 instanceMethodArgPtr: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -7124,75 +7152,36 @@ instanceMethodArgPtr: function {
     posParamId: u64
     usedInterp: bool
     avq: ztypes.vid
-    # the call, so the argument this parameter binds can be found by label when
-    # -- and only when -- the answer is needed
-    call: zast.callrow.view
+    # the argument's node, 0 for an interpolated one
+    avNd: u64
 } out instargptr is {
-    ptra: false
-    isStrBorrow: false
-    # a non-TAKE class arg passes by pointer (mirrors the method
-    # signature); isReftypeParam resolves a cross-unit class shell that
-    # a bare typetypeOf==CLASS check misses.
     pTake: paramTakesArg :ast :symtab fid: (ztypes.tid.create from: mco.u64) pname: posParamName
-    isRef: false
-    if pTake.not when (isReftypeParam
+    ptra: (paramTakesPointer
         :ast
         :symtab
         :ctx
-        tid: (ztypes.tid.create from: posParamId.u64)
-    ) then isRef = true
-    if isRef then {
-        ptra = true
-    } else {
-        if (isBorrowStringParam
+        fid: (ztypes.tid.create from: mco.u64)
+        pname: posParamName
+        pid: posParamId
+        takesArg: pTake
+    )
+    if usedInterp then ptra = false
+    isStrBorrow: false
+    byref: false
+    if ptra then {
+        isStrBorrow = (isBorrowStringParam
             :ast
             :symtab
             :ctx
             fid: (ztypes.tid.create from: mco.u64)
             pname: posParamName
             pid: (ztypes.tid.create from: posParamId.u64)
+        )
+        byref = true
+        if avNd > 0 when (argAlreadyPointer :ast :symtab :ctx n: (ast.nodes.get i: avNd) vid: avq
         ) then {
-            ptra = true
-            isStrBorrow = true
+            byref = false
         }
-    }
-    if ptra.not when (isListPtrParam
-        :ast
-        :symtab
-        :ctx
-        fid: (ztypes.tid.create from: mco.u64)
-        pname: posParamName
-        tid: (ztypes.tid.create from: posParamId.u64)
-    ) then ptra = true
-    # a VALTYPE parameter marked `.view` or `.borrow` is a pointer too. The
-    # signature emitter has always known this (markedValtypeRefParam, asked
-    # through paramTypeIsPointer on the free-function path); this site did not
-    # ask, so a method declaring one got a pointer parameter and was handed a
-    # value
-    if ptra.not when pTake.not when (markedValtypeRefParam
-        :ast
-        :symtab
-        fid: (ztypes.tid.create from: mco.u64)
-        pname: posParamName
-        pid: posParamId
-    ) then ptra = true
-    if usedInterp then ptra = false
-    byref: false
-    # an argument that already holds a pointer must not be addressed again. A
-    # bare local answers through its vid; a PATH -- a non-owned reftype field,
-    # a reference-returning call -- has no vid, and only the argument's own
-    # expression answers for it. Asking one half hands the callee a `T**`.
-    # The path walk runs only when the cheap test has already said no, and a
-    # pointer-held variable read as a narrowed valtype payload is the payload's
-    # value, which is addressed like any value
-    if ptra then {
-        held: isPtrVid :ctx vid: avq
-        if held then {
-            held = (argNarrowedByLabel :ast :symtab :call label: posParamName vid: avq).not
-        } else {
-            held = argIsPointerByLabel :ast :symtab :ctx :call label: posParamName
-        }
-        if held.not then byref = true
     }
     return (instargptr
         :ptra
@@ -7296,7 +7285,7 @@ instanceMethodArg: function {
         :posParamId
         usedInterp: avr.usedInterp
         avq: avr.avq
-        :call
+        avNd: avr.avNd
     )
     ctx.lastArgByPtr = ptr.byref
     # the value text LOADED a pointer-held valtype (valueExprC); a parameter
@@ -10513,7 +10502,7 @@ emitQualRecvMethodCall: function {
         # WRITTEN, since the construction-argument text loads a pointer-held
         # valtype and the receiver slot wants the pointer
         if recvNdQ > 0 then {
-            recvPtrQ = pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: recvNdQ)
+            recvPtrQ = receiverNodeIsPtr :ast :symtab :ctx n: (ast.nodes.get i: recvNdQ)
             if recvPtrQ when (ptrHeldValtype :ast :symtab :ctx n: (ast.nodes.get i: recvNdQ)) then {
                 recvExQ = emitExpr :ast :symtab :ctx n: (ast.nodes.get i: recvNdQ)
             }
@@ -11406,12 +11395,14 @@ ctorArgTextAt: function {
     return (valueExprC :ast :symtab :ctx :n)
 }
 
-# argAlreadyPointer -- does this argument expression already evaluate to a C
-# pointer, so that addressing it again would hand the callee a `T**`? Two ways
-# it can be one, and a site that asks only the first is wrong: a bare local
-# holding a reference answers through its VID, while a path -- a non-owned
-# reftype field, a reference-returning call -- has no vid of its own and only
-# `pathIsPointer` sees it. Every byref decision asks this, not one half of it.
+# argAlreadyPointer -- does this argument expression already evaluate to the C
+# pointer a pointer parameter takes, so that addressing it again would hand the
+# callee a `T**`? Three ways it can be one, and a site that asks only one is
+# wrong: a bare local holding a reference answers through its VID; a Set or a
+# Map lives on the heap and is always its pointer (receiverHeldAsPointer asks
+# the same two of a receiver); a path -- a non-owned reftype field, a
+# reference-returning call -- has no vid of its own and only `pathIsPointer`
+# sees it. Every byref decision asks this, not one part of it.
 argAlreadyPointer: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -11420,7 +11411,20 @@ argAlreadyPointer: function {
     vid: ztypes.vid
 } out bool is {
     if (isPtrVid :ctx :vid) then return (narrowedValtypePayload :symtab :n :vid).not
+    if (isHeapPtrCollection :symtab :ctx tid: (stampIdOf :symtab nid: (interpPartNodeId :n))
+    ) then return true
     return (pathIsPointer :ast :symtab :ctx :n)
+}
+
+# receiverHeldAsPointer -- argAlreadyPointer for a receiver known by its
+# variable and type: a pointer-held variable, or a Set or Map.
+receiverHeldAsPointer: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    vid: ztypes.vid
+    tid: ztypes.tid
+} out bool is {
+    return (isPtrVid :ctx :vid) or (isHeapPtrCollection :symtab :ctx :tid)
 }
 
 # narrowedValtypePayload -- a pointer-held variable NARROWED to a valtype
@@ -11462,33 +11466,6 @@ argIsPointerByLabel: function {
                 :symtab
                 :ctx
                 n: (ast.nodes.get i: a.operation.u64)
-            )
-        }
-    }
-    return false
-}
-
-# argNarrowedByLabel -- the arg at `label` reads the pointer-held variable `vid`
-# as a narrowed valtype payload: its value, not the pointer the variable is held
-# through.
-argNarrowedByLabel: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    call: zast.callrow.view
-    label: StringView
-    vid: ztypes.vid
-} out bool is {
-    arx401: u64
-    for arx401 < call.arguments.count.u64 loop {
-        aId: zast.kidAt kids: ast.kids span: call.arguments i: arx401
-        arx401 = arx401 + 1
-        a: ast.nodes.get i: aId.u64
-        if a.namedoperation then {
-            an: zast.nameTextAt :ast ref: a.name
-            if an.stringView == label then return (narrowedValtypePayload
-                :symtab
-                n: (ast.nodes.get i: a.operation.u64)
-                :vid
             )
         }
     }
@@ -13082,10 +13059,13 @@ conformanceArgText: function {
     return "\{aIb}_\{pLbl}_create(\{aRcv})"
 }
 
-# userFnParamByPointer -- a user function's parameter takes its argument by
-# pointer: the receiver (in both families), a marked valtype reference, an
-# unowned reftype, a borrowed String, a List.
-userFnParamByPointer: function {
+# paramTakesPointer -- a parameter of the user function or method fid takes
+# its argument by pointer: the receiver (in both families), a value type marked
+# `.view` or `.borrow`, an unowned class, a borrowed String, a List. Every other
+# parameter takes its argument by value -- a union, Option, Result or protocol
+# as the header that shares its payload (passesByValue), a Set or a Map as the
+# heap pointer it already is.
+paramTakesPointer: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -13195,7 +13175,7 @@ userFnArgText: function {
     # the parameter's mode: by pointer (addressed unless already one), or a
     # borrow hoist of the value
     pTake8: paramTakesArg :ast :symtab :fid pname: pinNm
-    ctx.lastArgByPtr = (userFnParamByPointer
+    ctx.lastArgByPtr = (paramTakesPointer
         :ast
         :symtab
         :ctx
@@ -15055,7 +15035,12 @@ methodAutoCallRead: function {
         return "\{mc2}()"
     }
     methodRecv: "\{bn2}"
-    if (calleeTakesReceiverByPtr :ast :symtab fid: mt) when (isPtrVid :ctx vid: bn2v).not then {
+    if (calleeTakesReceiverByPtr :ast :symtab fid: mt) when (receiverHeldAsPointer
+        :symtab
+        :ctx
+        vid: bn2v
+        tid: bstamp
+    ).not then {
         # a base that is not an lvalue -- an arm constant (`Dir.up`), a call's
         # result -- has no address: it is hoisted into the `_ah` temp an
         # argument gets, and a name still emits as `&name`
@@ -15846,7 +15831,6 @@ emitDottedAtomBase: function {
         }
     }
     bstamp = typedefMethodOwner :ast :symtab :ctx tid: bstamp mn: mn2
-    bstamp = ztypes.tid.create from: (chaseStrTypedef :symtab :ctx tid: bstamp)
     rtt: symtab.reg.typetypeOf typeId: bstamp
     viaVtable: vtableAutoCallName :ast leaf: n.child name: mn2
     if (isDispatchableTid :symtab tid: bstamp) when viaVtable then {
@@ -17561,12 +17545,26 @@ orderRowOperand: function {
             :ctx
             :n
             expr: v.stringView
-            isStr: tname.stringView == "String"
+            isStr: (operandIsStr :symtab :ctx :n tname: tname.stringView)
             vid: q
         )
         v = vf.take
     }
     orderArgAt :ast :symtab :ctx st: ord mark: mk text: v :nid byPtr: false :slot
+}
+
+# operandIsStr -- a string operand is a String, not a view: a String typedef
+# (Path) included, since it shares the String struct and its projection to a
+# view (chaseStrTypedef). `tname` is the operand's deep stamp name, which
+# answers where the id route has none (a shell method's result).
+operandIsStr: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+    tname: StringView
+} out bool is {
+    if tname == "String" then return true
+    return (chaseStrTypedef :symtab :ctx tid: (stampIdDeep :symtab :n)) == ctx.strTid
 }
 
 # operandScalarC -- the C type of an operand whose stamp is a builtin scalar or
@@ -21319,10 +21317,11 @@ withValueCType: function {
     tid: ztypes.tid.create from: wsid.u64
     wtn: stampNameDeep :symtab :n
     if wsid == 0 then return (cTypeForName :ast :symtab :ctx name: wtn.stringView)
-    # a builtin scalar keeps its C name, as a binding's does (bindDeclaredCType)
+    # a builtin scalar keeps its C name, as a binding's does (bindDeclaredCType);
+    # a Set or a Map is held as its pointer (slotCType)
     sc: scalarCTypeFor :symtab name: wtn.stringView :tid
     if sc.length > 0 then return sc
-    return (typeRefC :ast :symtab :ctx :tid thisTid: ztypes.tid)
+    return (slotCType :ast :symtab :ctx :tid)
 }
 
 # emitWithLocal -- the header's C local for a `with` value that lives in the
@@ -28661,9 +28660,10 @@ chaseAggregateTypedef: function {
 
 # typedefMethodOwner -- the type a call of method `mn` on a value of `tid`
 # resolves on: the first link of tid's typedef chain that declares the method
-# with a body -- a typedef's own method -- else chaseAggregateTypedef's end,
-# which the typedef shares every other member with. A typedef's NATIVE member
-# (Bytes.byteView) has no C of its own: the runtime serves it as the end's.
+# with a body -- a typedef's own method -- else the chain's end, an aggregate
+# (chaseAggregateTypedef) or a String (chaseStrTypedef), which the typedef
+# shares every other member with. A typedef's NATIVE member (Bytes.byteView)
+# has no C of its own: the runtime serves it as the end's.
 typedefMethodOwner: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -28684,7 +28684,7 @@ typedefMethodOwner: function {
         if bo.none then break
         t = ztypes.tid.create from: bo
     }
-    return (chaseAggregateTypedef :symtab :ctx :tid)
+    return (chaseStrTypedef :symtab :ctx tid: (chaseAggregateTypedef :symtab :ctx :tid))
 }
 
 # chaseStrTypedef -- a typedef over String/StringView (Path, PathView),
@@ -39037,16 +39037,20 @@ vtableCallC: function {
     return "\{recv}\{acc}vtable->\{cSlotName name: mn}(\{dargs}\{argTail})"
 }
 
-# dispatchReceiverTid -- the dispatchable type a protocol receiver stands for:
-# its own stamp when that dispatches, else the canonical type behind it.
+# dispatchReceiverTid -- the dispatchable type a protocol receiver stands for
+# when method `mn` is called on it: its own stamp when that dispatches -- a
+# typedef's through the link that owns `mn` (typedefMethodOwner), so its own
+# method stays its own and every other member dispatches as its end's -- else
+# the canonical type behind it.
 dispatchReceiverTid: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     callable: astnode.view
+    mn: StringView
 } out ztypes.tid is {
     rtid: dottedReceiverStampId :ast :symtab :callable
-    own: ztypes.tid.create from: rtid.u64
+    own: typedefMethodOwner :ast :symtab :ctx tid: (ztypes.tid.create from: rtid.u64) :mn
     if (isDispatchableTid :symtab tid: own) then return own
     rtn0: regNameOf :symtab tid: own
     if rtn0.length == 0 then return own
@@ -39274,7 +39278,7 @@ emitProtocolDispatch: function {
     mk: zast.markerKindOf :ast n: (ast.nodes.get i: call.callable.u64)
     if mk.borrowMarker or mk.dropMarker then return "".string
     callableNode: ast.nodes.get i: call.callable.u64
-    rtid: dispatchReceiverTid :ast :symtab :ctx callable: callableNode
+    rtid: dispatchReceiverTid :ast :symtab :ctx callable: callableNode :mn
     if (isDispatchableTid :symtab tid: rtid).not then return "".string
     recvText: emitDottedReceiver :ast :symtab :ctx callable: callableNode
     if recvText.length == 0 then return "".string
