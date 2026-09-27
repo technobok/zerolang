@@ -1443,18 +1443,43 @@ ZSymbolTable: class {
     # Drop every taken row laid at or above `start`, which is never below
     # the innermost scope's start: only that scope's rows can be dropped,
     # so only they are drained and rebuilt -- the rows below are left where
-    # they are.
+    # they are. A take of a temporary bound in one of those scopes stays: the
+    # temporary dies with its scope, so no code after sees it, and the scope's
+    # record of what its temporaries own (recordScopeDestroy) reads it -- a
+    # value moved out on a path that returns is moved, not owned.
     discardTakenFrom: function {:this start: u64} is {
         rev: List ZEntry
         for this.entries.length > start loop rev.append this.entries.pop
         for rev.length > 0 loop {
             e: rev.pop
-            if e.isTaken.not then {
+            if e.isTaken.not or (this.tempDiesAbove declId: e.declId :start) then {
                 this.entries.append e
             } else {
                 this.typing.declRowsAdd declId: e.declId delta: -1
             }
         }
+    }
+
+    # tempDiesAbove -- the local is one of the checker's temporaries, bound in
+    # a scope opened at or above the entry index `start`: one dropped with it.
+    tempDiesAbove: function {
+        this: this.view
+        # the local asked about
+        declId: ztypes.declid
+        # the entry index the dropped scopes begin at
+        start: u64
+    } out bool is {
+        v: this.typing.declLocalVarOf :declId
+        if (this.typing.tempVars.has item: v.u64).not then return false
+        p: this.typing.declParentOf :declId
+        k: this.open.length
+        for k > 0 loop {
+            k = k - 1
+            sc: this.open.get i: k
+            if sc.start < start then return false
+            if sc.id == p then return true
+        }
+        return false
     }
 
     # record where a take happened
