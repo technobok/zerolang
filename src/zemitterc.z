@@ -4655,7 +4655,7 @@ svValueFormAt: function {
     # a reference control value (`(*p)`) runs its arms where it is spelt: it is
     # read once, into a temp that owns nothing
     if isStr when (singleReadNeedsTemp s: expr) then {
-        rv: hoistLvalue :ast :symtab :ctx av: expr tid: ctx.strTid
+        rv: hoistForAddress :ast :symtab :ctx av: expr tid: ctx.strTid argNid: 0
         return (svValueForm :ctx expr: rv.stringView :isStr vid: ztypes.vid)
     }
     return (svValueForm :ctx :expr :isStr :vid)
@@ -5242,7 +5242,8 @@ svNativeArgFrag: function {
     # an argument of the wrong C type.
     if stampTid == ctx.svTid then {
         if (isNonLvalueArg s: sx.stringView) then {
-            svb: hoistLvalue :ast :symtab :ctx av: sx.stringView tid: ctx.svTid
+            # the view owns nothing: the temp only gives it an address
+            svb: hoistForAddress :ast :symtab :ctx av: sx.stringView tid: ctx.svTid argNid: 0
             rvh: "&\{svb}"
             return rvh
         }
@@ -5988,6 +5989,8 @@ emitStringArgMethod: function {
     argval: String
     argTid: u64
     argPtr: false
+    # the argument's node, 0 until the loop finds it
+    argNode: u64
     arx279: u64
     for arx279 < call.arguments.count.u64 loop {
         aId: zast.kidAt kids: ast.kids span: call.arguments i: arx279
@@ -6010,6 +6013,7 @@ emitStringArgMethod: function {
             } else {
                 av: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
                 argval = av.take
+                argNode = a.operation.u64
                 argOpNode: ast.nodes.get i: a.operation.u64
                 argTid = stampIdOf :symtab nid: (interpPartNodeId n: argOpNode)
                 argPtr = pathIsPointer :ast :symtab :ctx n: argOpNode
@@ -6028,6 +6032,7 @@ emitStringArgMethod: function {
                 av: argval.stringView
                 pid: ctx.strTid
                 paramTake: false
+                argNid: argNode
             )
             if aph.length > 0 then argval = aph.take
             aacc: "."
@@ -6086,7 +6091,8 @@ stringAppendViewText: function {
     argTid: ztypes.tid
 } out String is {
     if argTid == ctx.svTid when (singleReadNeedsTemp s: argval) then {
-        ah: hoistLvalue :ast :symtab :ctx av: argval tid: argTid
+        # a view read twice is bound once, and frees nothing
+        ah: hoistForAddress :ast :symtab :ctx av: argval tid: argTid argNid: 0
         rh: "\{ctx.strC}_append(\{recvAddr}, (\{ah}).data, (\{ah}).size)"
         return rh
     }
@@ -6273,6 +6279,8 @@ orderSettle: function {
     tnum: ctx.orderCtr
     ctx.orderCtr = ctx.orderCtr + 1
     tn: "_o\{tnum}"
+    # an evaluation-order temp holds the part's value for the call, which owns
+    # it: it is no address hoist and owes no destroy
     ctx.orderPieceNames.append String
     ctx.orderPieceTemps.append tnum + 1
     ctx.orderPieceVals.append text
@@ -6752,9 +6760,9 @@ hoistDestroyLine: function {
 
 # hoistBorrowValArg -- a by-value call argument that is an owned, destructible,
 # non-lvalue temporary (e.g. a `Map.get` Option result) handed to a borrow param
-# (not paramTake) is freed by neither side. Hoist it into a temp registered
-# for scope-exit destroy (mirrors the by-ref `&`-hoist) and return the temp name;
-# "" when no hoist is needed. `av` is borrowed -- the caller keeps ownership.
+# (not paramTake) is freed by neither side: it is hoisted (hoistForAddress) and
+# the temp's name returned; "" when no hoist is needed. `av` is borrowed -- the
+# caller keeps ownership.
 hoistBorrowValArg: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -6762,53 +6770,16 @@ hoistBorrowValArg: function {
     av: StringView
     pid: ztypes.tid
     paramTake: bool
-    # the argument node this hoist is for, 0 when the caller reaches the hoist
-    # with C text alone. It answers `symtab.typing.tempOf` -- the checker
-    # variable the value is held in -- which no leg reads yet. The four other
-    # argument hoists take it on the same terms.
-    argNid: 0.u64
+    argNid: u64
 } out String is {
     # an lvalue needs no temp -- unless it is a typedef built from a consumed
     # local (`(Path s)`), spelled as that local, whose own free the consumption
     # dropped: the checker's temporary owns it
     if (isNonLvalueArg s: av).not when (ownedTypedefArg :symtab :argNid).not then return "".string
     if paramTake then return "".string
-    vrid: pid
-    if (definedInUnitTid :symtab tid: (ztypes.tid.create from: pid.u64)).isZero then {
-        vtn: regNameOf :symtab tid: (ztypes.tid.create from: pid.u64)
-        vrr: (canonTypeId
-            :ast
-            :symtab
-            :ctx
-            tid: (ztypes.tid.create from: pid.u64)
-            name: vtn.stringView
-        )
-        if vrr > 0 then vrid = ztypes.tid.create from: vrr.u64
-    }
-    isStrH: vrid == ctx.strTid
-    if isStrH.not when (symtab.reg.needsDestructor typeId: vrid).not then {
-        return "".string
-    }
-    vnmh: argHoistName :symtab :ctx :argNid fallback: "_ah"
-    vcty: typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: pid.u64) thisTid: ztypes.tid
-    # a Map or Set value is held through its heap pointer
-    if (isHeapPtrCollection :symtab :ctx tid: (ztypes.tid.create from: pid.u64)
-    ) then vcty.append "*"
-    vdt: (hoistDestroyLine
-        :symtab
-        :ctx
-        tid: (ztypes.tid.create from: vrid.u64)
-        nm: vnmh.stringView
-    )
-    # a value the checker says the temporary does not own -- a borrow-returning
-    # call's result is a shared view -- is hoisted for lvalue-ness only
-    if (scopeOwnsTemp :symtab :argNid).not then vdt = "".string
-    avc: av.string
-    ctx.argHoistVals.append avc
-    ctx.argHoistTypes.append vcty.copy
-    ctx.argHoistDtors.append vdt
-    ctx.argHoistNames.append vnmh.copy
-    return vnmh
+    # a value whose type frees nothing needs no temp to free it
+    if (destroyTargetTid :symtab :ctx tid: pid).isZero then return "".string
+    return (hoistForAddress :ast :symtab :ctx :av tid: pid :argNid)
 }
 
 # receiverOnce -- a receiver a call spells more than once: a vtable call reads
@@ -6839,54 +6810,64 @@ receiverOnceAt: function {
     tid: ztypes.tid
 } out String is {
     if (isNonLvalueArg s: text).not then return text.string
-    hv: (hoistBorrowValArg
-        :ast
-        :symtab
-        :ctx
-        argNid: baseNid
-        av: text
-        pid: tid
-        paramTake: false
-    )
-    if hv.length > 0 then return hv
-    return (hoistLvalue :ast :symtab :ctx av: text :tid)
+    return (hoistForAddress :ast :symtab :ctx av: text :tid argNid: baseNid)
 }
 
-# hoistLvalue -- bind an expression to a temp so its ADDRESS can be taken. The
-# sv-native legs pass `&receiver`, and a receiver that is itself a call is not an
-# lvalue: C rejects `&f(x)`. This is hoistBorrowValArg's isBorrow leg generalised
-# to a type the caller says whether it owns: a StringView owns nothing and the
-# temp is bound and never freed, while a call handing back an owned container
-# has no other owner, so `own` gives the temp the destroy its type asks for.
-# The caller decides addressability; a compound literal already is one and must
-# not come here (it would cost a temp for nothing, and every program emitting
-# one would move). A value that is a POINTER to storage someone else owns binds
-# as that pointer, owning nothing, and the caller derefs the temp.
-hoistLvalue: function {
+# hoistOwes -- whether a hoisted temporary owes a destroy: exactly when the
+# checker's temporary for the value node `argNid` still owns what it holds where
+# it dies (scopeOwnsTemp), whatever was hoisted. A `ptr` temporary is a `T*` into
+# storage someone else owns, and owes none.
+hoistOwes: function {symtab: zenv.ZSymbolTable.view argNid: u64 ptr: bool} out bool is {
+    if ptr then return false
+    return (scopeOwnsTemp :symtab :argNid)
+}
+
+# hoistCtype -- a hoisted temporary's C type: the value's, held through its heap
+# pointer for a Map or Set, and a pointer to it for a `ptr` value.
+hoistCtype: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    ptr: bool
+} out String is {
+    ct: typeRefC :ast :symtab :ctx :tid thisTid: ztypes.tid
+    if ptr or (isHeapPtrCollection :symtab :ctx :tid) then ct.append "*"
+    return ct
+}
+
+# hoistForAddress -- bind a value to a statement temporary so its ADDRESS can be
+# taken: C rejects `&f(x)`. The temporary owes a destroy exactly when the
+# checker's temporary for the value node `argNid` still owns what it holds where
+# it dies (scopeOwnsTemp) -- the one answer every hoist gives, whatever it
+# hoists. `argNid` is 0 only where the caller has no node, and each such caller
+# says why its value owns nothing. A `ptr` value is a `T*` into storage someone
+# else owns: the temporary owns nothing and the caller derefs it. The caller
+# decides addressability; a compound literal already is one and must not come
+# here (it would cost a temp for nothing). Answers the temporary's name.
+hoistForAddress: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     av: StringView
     tid: ztypes.tid
+    # the value's node: what the checker's temporary for it owns
+    argNid: u64
     # the value is a `T*` into storage the temp does not own
     ptr: false
     # the checker's unnamed local this temp realises, 0 for none
     tag: 0.u64
-    # the argument whose address this temp provides, 0 when unknown here
-    argNid: 0.u64
 } out String is {
-    vnm: argHoistName :symtab :ctx :argNid fallback: "_ah"
-    vcty: typeRefC :ast :symtab :ctx :tid thisTid: ztypes.tid
-    if ptr then vcty.append "*"
-    owns: scopeOwnsTemp :symtab :argNid
-    if tag > 0 when owns then ctx.hoistTags.set key: vnm.copy value: tag
-    vdt: String
-    if owns then vdt = hoistDestroyLine :symtab :ctx :tid nm: vnm.stringView
+    nm: argHoistName :symtab :ctx :argNid fallback: "_ah"
+    owes: hoistOwes :symtab :argNid :ptr
+    if tag > 0 when owes then ctx.hoistTags.set key: nm.copy value: tag
+    dt: String
+    if owes then dt = hoistDestroyLine :symtab :ctx :tid nm: nm.stringView
     ctx.argHoistVals.append av.string
-    ctx.argHoistTypes.append vcty.copy
-    ctx.argHoistDtors.append vdt
-    ctx.argHoistNames.append vnm.copy
-    return vnm
+    ctx.argHoistTypes.append (hoistCtype :ast :symtab :ctx :tid :ptr)
+    ctx.argHoistDtors.append dt
+    ctx.argHoistNames.append nm.copy
+    return nm
 }
 
 # tagOwedTemps -- the statement temporaries just owed from `from` on that
@@ -6937,7 +6918,8 @@ stringViewBinopOperand: function {
     }
     isStrT: operandIsStr :symtab :ctx :n :tname
     if isStrT.not when (singleReadNeedsTemp s: src.stringView) then {
-        src = hoistLvalue :ast :symtab :ctx av: expr tid: ctx.svTid
+        # the operand is a view: bound so it is read once; it frees nothing
+        src = hoistForAddress :ast :symtab :ctx av: expr tid: ctx.svTid argNid: 0
     }
     valueVid: atomVidIfPlain :ast :symtab :ctx :n text: src.stringView
     vf: String
@@ -6982,8 +6964,6 @@ instargval: record {
 instargptr: record {
     # the argument is passed by pointer
     ptra: bool
-    # it is a borrowed String, which the callee must not free
-    isStrBorrow: bool
     # the parameter takes ownership
     pTake: bool
     # the parameter is by-reference, so a non-lvalue has to be hoisted to have
@@ -7097,89 +7077,15 @@ instanceMethodArgPtr: function {
         takesArg: pTake
     )
     if usedInterp then ptra = false
-    isStrBorrow: false
     byref: false
     if ptra then {
-        isStrBorrow = (isBorrowStringParam
-            :ast
-            :symtab
-            :ctx
-            fid: (ztypes.tid.create from: mco.u64)
-            pname: posParamName
-            pid: (ztypes.tid.create from: posParamId.u64)
-        )
         byref = true
         if avNd > 0 when (argAlreadyPointer :ast :symtab :ctx n: (ast.nodes.get i: avNd) vid: avq
         ) then {
             byref = false
         }
     }
-    return (instargptr
-        :ptra
-        :isStrBorrow
-        :pTake
-        :byref
-    )
-}
-
-# instanceMethodArgHoist -- `&` of a non-lvalue (a call result) is invalid C, so
-# the value goes to a typed temp `_ah<N>` and the temp is destroyed at block
-# exit when the CHECKER says it owns what it holds. Returns the `&_ah<N>` the
-# call site passes.
-instanceMethodArgHoist: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    posParamId: u64
-    isStrBorrow: bool
-    atomVarId: StringView
-    # the argument this `&` is taken of, 0 when unknown here
-    argNid: 0.u64
-} out String is {
-    nmH: argHoistName :symtab :ctx :argNid fallback: "_ah"
-    hcty: (typeRefC
-        :ast
-        :symtab
-        :ctx
-        tid: (ztypes.tid.create from: posParamId.u64)
-        thisTid: ztypes.tid
-    )
-    htyc: hcty.copy
-    owns: scopeOwnsTemp :symtab :argNid
-    hdt: String
-    if isStrBorrow when owns then {
-        hdt = "    \{ctx.strC}_free(&\{nmH});\n"
-    } else if owns then {
-        hrid: posParamId
-        if (definedInUnitTid
-            :symtab
-            tid: (ztypes.tid.create from: posParamId.u64)
-        ).isZero then {
-            htn: (regNameOf
-                :symtab
-                tid: (ztypes.tid.create from: posParamId.u64)
-            )
-            hrr: (resolveTypeIdByName
-                :ast
-                :symtab
-                :ctx
-                name: htn.stringView
-            )
-            if hrr > 0 then hrid = hrr
-        }
-        hdt = (hoistDestroyLine
-            :symtab
-            :ctx
-            tid: (ztypes.tid.create from: hrid.u64)
-            nm: nmH.stringView
-        )
-    }
-    abh: "&\{nmH}"
-    ctx.argHoistVals.append atomVarId.string
-    ctx.argHoistTypes.append htyc
-    ctx.argHoistDtors.append hdt
-    ctx.argHoistNames.append nmH
-    return abh
+    return (instargptr :ptra :pTake :byref)
 }
 
 # instanceMethodArg -- one declared parameter of a user-object method, from its
@@ -7230,21 +7136,14 @@ instanceMethodArg: function {
         atomVarId = emitExpr :ast :symtab :ctx n: (ast.nodes.get i: avr.avNd)
     }
     if ptr.byref then {
-        if (isNonLvalueArg s: atomVarId.stringView) then {
-            abh: (instanceMethodArgHoist
-                :ast
-                :symtab
-                :ctx
-                :posParamId
-                isStrBorrow: ptr.isStrBorrow
-                atomVarId: atomVarId.stringView
-                argNid: avr.avNd
-            )
-            args.append abh
-        } else {
-            ab: "&\{atomVarId}"
-            args.append ab
-        }
+        args.append (emitByrefArg
+            :ast
+            :symtab
+            :ctx
+            av: atomVarId.stringView
+            pid: (ztypes.tid.create from: posParamId)
+            argNid: avr.avNd
+        )
     } else {
         (appendArgValue
             :ast
@@ -7308,7 +7207,6 @@ appendArgValueText: function {
     usedInterp: bool
     posParamId: u64
     av: StringView
-    # the argument's node: what the checker's temporary for it owns
     argNid: u64
     args: String.borrow
 } is {
@@ -8897,7 +8795,8 @@ emitStrConvCall: function {
         if sh.length > 0 then pv = sh.copy
     }
     if ptid == ctx.svTid when (singleReadNeedsTemp s: pv.stringView) then {
-        pv = hoistLvalue :ast :symtab :ctx av: pv.stringView tid: ptid
+        # a view, bound so the call runs once; there is nothing to free
+        pv = hoistForAddress :ast :symtab :ctx av: pv.stringView tid: ptid argNid: 0
     }
     lenAcc: "len".string
     if ptid == ctx.strTid then lenAcc = "size".string
@@ -8955,7 +8854,8 @@ emitBoxCreate: function {
     bN: ctx.argHoistCtr
     ctx.argHoistCtr = ctx.argHoistCtr + 1
     bnm: "_Box\{bN}"
-    # declared zero by the enclosing statement, assigned here
+    # declared zero by the enclosing statement, assigned here; the box moves
+    # into the value it builds, so it is no address hoist and owes no destroy
     ctx.argHoistNames.append bnm.copy
     ctx.argHoistVals.append String
     ctx.argHoistTypes.append "\{binner}*"
@@ -9090,12 +8990,13 @@ emitCollectionMethodCall: function {
     # its deref
     recvNode: ast.nodes.get i: (dottedParentNodeId n: (ast.nodes.get i: call.callable.u64))
     if (nodeIsRefBorrowResult :ast :symtab :ctx n: recvNode) then {
-        bp9: (hoistLvalue
+        bp9: (hoistForAddress
             :ast
             :symtab
             :ctx
             av: bn.stringView
             tid: (ztypes.tid.create from: bt.u64)
+            argNid: 0
             ptr: true
         )
         bn = "(*\{bp9})"
@@ -9108,13 +9009,12 @@ emitCollectionMethodCall: function {
     # element or other borrow still belongs to its container. A Set or a Map is
     # held as its pointer.
     if rcvIsCreate.not when (svRecvAddressable recv: bn.stringView).not then {
-        bh9: (hoistLvalue
+        bh9: (hoistForAddress
             :ast
             :symtab
             :ctx
             av: bn.stringView
             tid: (ztypes.tid.create from: bt.u64)
-            ptr: (isHeapPtrCollection :symtab :ctx tid: (ztypes.tid.create from: bt.u64))
             tag: ((symtab.typing.unnamedLocalOfNode.get key: (zast.nodeIdOf n: recvNode).u64).or
                 d: 0
             )
@@ -9377,28 +9277,21 @@ stringKeyArgPointer: function {
     call: zast.callrow.view
     label: StringView
     expr: StringView
-    # the key or item argument this pointer is for, 0 when unknown here
-    argNid: 0.u64
 } out String is {
-    argNid
-
     # a String `.view`/`.borrow` PARAMETER, or a borrowed field, arrives as a
     # pointer already; addressing it again hands the runtime a `String_t**`,
     # which the C compiler rejects
     if (argIsPointerByLabel :ast :symtab :ctx :call :label) then return expr.string
     if (isNonLvalueArg s: expr) then {
-        hnK: ctx.argHoistCtr
-        ctx.argHoistCtr = ctx.argHoistCtr + 1
-        nmK: "_ah\{hnK}"
-        hdtK: "    \{ctx.strC}_free(&\{nmK});\n"
-        exc: expr.string
-        ctx.argHoistVals.append exc
-        htK: "\{ctx.strC}_t"
-        ctx.argHoistTypes.append htK
-        ctx.argHoistDtors.append hdtK
-        retK: "&\{nmK}"
-        ctx.argHoistNames.append nmK
-        return retK
+        nmK: (hoistForAddress
+            :ast
+            :symtab
+            :ctx
+            av: expr
+            tid: ctx.strTid
+            argNid: (ctorArgNodeByLabel :ast :call :label)
+        )
+        return "&\{nmK}"
     }
     return "&\{expr}"
 }
@@ -9424,19 +9317,8 @@ ownedReceiverHoist: function {
     if (symtab.reg.needsDestructor typeId: rtid).not then return "".string
     rnid: (zast.nodeIdOf :n).u64
     if (scopeOwnsTemp :symtab argNid: rnid).not then return "".string
-    rct: typeRefC :ast :symtab :ctx tid: rtid thisTid: ztypes.tid
-    if rct.length == 0 then return "".string
-    # a Map or Set value is held through its heap pointer
-    if (isHeapPtrCollection :symtab :ctx tid: rtid) then rct.append "*"
-    rnm: argHoistName :symtab :ctx argNid: rnid fallback: "_ah"
-    rdt: hoistDestroyLine :symtab :ctx tid: rtid nm: rnm.stringView
-    rex: expr.string
-    ctx.argHoistVals.append rex
-    ctx.argHoistTypes.append rct
-    ctx.argHoistDtors.append rdt
-    rnc: rnm.copy
-    ctx.argHoistNames.append rnc
-    return rnm
+    if (typeRefC :ast :symtab :ctx tid: rtid thisTid: ztypes.tid).length == 0 then return "".string
+    return (hoistForAddress :ast :symtab :ctx av: expr tid: rtid argNid: rnid)
 }
 
 # emitSetMethodCall -- an arg-taking method on a Set-mono receiver (a heap
@@ -9849,21 +9731,14 @@ emitColInterpArg: function {
         }
         sx = ex.take
     }
-    argNid: (zast.nodeIdOf :n).u64
-    nmH: argHoistName :symtab :ctx :argNid fallback: "_ah"
-    hdt: String
-    if (scopeOwnsTemp :symtab :argNid) then hdt = (hoistDestroyLine
+    return (hoistForAddress
+        :ast
         :symtab
         :ctx
+        av: sx.stringView
         tid: ctx.strTid
-        nm: nmH.stringView
+        argNid: (zast.nodeIdOf :n).u64
     )
-    retx: nmH.copy
-    ctx.argHoistVals.append sx
-    ctx.argHoistTypes.append "\{ctx.strC}_t"
-    ctx.argHoistDtors.append hdt
-    ctx.argHoistNames.append nmH
-    return retx
 }
 
 # emitInterpArgForParam -- an interpolated-string-literal argument built into a
@@ -9888,14 +9763,13 @@ emitInterpArgForParam: function {
     if sx.length == 0 then return "".string
     isTake: false
     if pid == ctx.strTid when (paramTakesArg :ast :symtab :fid :pname) then isTake = true
-    argNid: (zast.nodeIdOf :n).u64
-    nmH: argHoistName :symtab :ctx :argNid fallback: "_ah"
-    hdt: String
-    if (scopeOwnsTemp :symtab :argNid) then hdt = (hoistDestroyLine
+    nmH: (hoistForAddress
+        :ast
         :symtab
         :ctx
+        av: sx.stringView
         tid: ctx.strTid
-        nm: nmH.stringView
+        argNid: (zast.nodeIdOf :n).u64
     )
     retx: String
     if pid == ctx.strTid then {
@@ -9907,10 +9781,6 @@ emitInterpArgForParam: function {
     } else {
         retx = svValueForm :ctx expr: nmH.stringView isStr: true vid: (ztypes.vid.create from: 0)
     }
-    ctx.argHoistVals.append sx
-    ctx.argHoistTypes.append "\{ctx.strC}_t"
-    ctx.argHoistDtors.append hdt
-    ctx.argHoistNames.append nmH
     return retx
 }
 
@@ -11088,6 +10958,7 @@ orderRecordField: function {
             :ctx
             av: av.stringView
             pid: (ztypes.tid.create from: ffid.u64)
+            argNid: ca.nid
         )
     }
     constant: true
@@ -11978,6 +11849,7 @@ metaCreateFieldText: function {
                 :ctx
                 av: av.stringView
                 pid: (ztypes.tid.create from: ffidL.u64)
+                argNid: (ctorArgNodeByLabel :ast :call label: fname)
             )
             av = avM.take
         }
@@ -12022,51 +11894,21 @@ metaCreateFieldText: function {
 }
 
 # emitByrefArg -- an argument passed BY REFERENCE. A non-lvalue has no address
-# to take, so it is hoisted into a numbered `_ah` temp of the parameter's own C
-# type and the temp's address goes to the call instead. Whether that temp is
-# freed is the CHECKER's answer about it (scopeOwnsTemp), not a bool each caller
-# worked out from the shape of what it was passing.
+# to take, so it is hoisted (hoistForAddress) into a temp of the parameter's own
+# C type and the temp's address goes to the call instead.
 emitByrefArg: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     av: StringView
     pid: ztypes.tid
-    # the argument passed by reference, 0 when unknown here
-    argNid: 0.u64
+    argNid: u64
 } out String is {
     # as for a by-value argument: a typedef built inline from a consumed local
     # is hoisted, so the temporary's free runs
     if (isNonLvalueArg s: av).not when (ownedTypedefArg :symtab :argNid).not then return "&\{av}"
-    nmH: argHoistName :symtab :ctx :argNid fallback: "_ah"
-    hcty: typeRefC :ast :symtab :ctx tid: (ztypes.tid.create from: pid.u64) thisTid: ztypes.tid
-    htyc: hcty.copy
-    hrid: pid
-    if (definedInUnitTid :symtab tid: (ztypes.tid.create from: pid.u64)).isZero then {
-        htn0: regNameOf :symtab tid: (ztypes.tid.create from: pid.u64)
-        hrr: (canonTypeId
-            :ast
-            :symtab
-            :ctx
-            tid: (ztypes.tid.create from: pid.u64)
-            name: htn0.stringView
-        )
-        if hrr > 0 then hrid = ztypes.tid.create from: hrr.u64
-    }
-    hdt: String
-    if (scopeOwnsTemp :symtab :argNid) then hdt = (hoistDestroyLine
-        :symtab
-        :ctx
-        tid: hrid
-        nm: nmH.stringView
-    )
-    avc: av.string
-    r: "&\{nmH}"
-    ctx.argHoistVals.append avc
-    ctx.argHoistTypes.append htyc
-    ctx.argHoistDtors.append hdt
-    ctx.argHoistNames.append nmH
-    return r
+    nmH: hoistForAddress :ast :symtab :ctx :av tid: pid :argNid
+    return "&\{nmH}"
 }
 
 # fnIsNativeId -- the fn id's isNative flag (a mono inherits it from its
@@ -12983,7 +12825,7 @@ conformanceArgText: function {
         # the helper `&z_t109_create(40)`, which C rejects -- bind it to a temp
         # first, as emitProtocolCreateCall's own `from:` leg already does for
         # the same shape written `Greeter.create from: (Cat k: 40)`.
-        ahv: (hoistLvalue
+        ahv: (hoistForAddress
             :ast
             :symtab
             :ctx
@@ -13046,7 +12888,8 @@ boxAddressArg: function {
     box: StringView
     tid: u64
 } out String is {
-    bx: hoistLvalue :ast :symtab :ctx av: box tid: (ztypes.tid.create from: tid)
+    # a facet box holds a copy of a valtype and owns nothing to destroy
+    bx: hoistForAddress :ast :symtab :ctx av: box tid: (ztypes.tid.create from: tid) argNid: 0
     return "&\{bx}"
 }
 
@@ -14842,7 +14685,7 @@ emitDottedNestedBase: function {
         :ctx
         n: (ast.nodes.get i: n.parent.u64)
     ) then {
-        brp: hoistLvalue :ast :symtab :ctx av: baseAtom.stringView tid: nlid ptr: true
+        brp: hoistForAddress :ast :symtab :ctx av: baseAtom.stringView tid: nlid argNid: 0 ptr: true
         baseAtom = "(*\{brp})"
         bs9vid = ztypes.vid
         nstPtr = false
@@ -14876,6 +14719,7 @@ emitDottedNestedBase: function {
             :ast
             :symtab
             :ctx
+            baseNid: n.parent.u64
             :mn2
             bn2: baseAtom.stringView
             bn2v: bs9vid
@@ -14944,6 +14788,7 @@ methodAutoCallRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
+    baseNid: u64
     mn2: StringView
     bn2: StringView
     bn2v: ztypes.vid
@@ -14982,7 +14827,7 @@ methodAutoCallRead: function {
         # a base that is not an lvalue -- an arm constant (`Dir.up`), a call's
         # result -- has no address: it is hoisted into the `_ah` temp an
         # argument gets, and a name still emits as `&name`
-        methodRecv = emitByrefArg :ast :symtab :ctx av: bn2 pid: bstamp
+        methodRecv = emitByrefArg :ast :symtab :ctx av: bn2 pid: bstamp argNid: baseNid
     }
     ida: renderedMethodDefaultArgs :ast :symtab :ctx fnTid: mt
     if ida.length > 0 then return "\{mc2}(\{methodRecv}, \{ida})"
@@ -15042,6 +14887,7 @@ emitResolvedMemberRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
+    baseNid: u64
     mn2: StringView
     bn2: StringView
     bn2v: ztypes.vid
@@ -15062,7 +14908,19 @@ emitResolvedMemberRead: function {
     }
     sh: synthHashRead :ast :symtab :ctx :bn2 :bn2v :bstamp :mco :fbtn :readIsRef
     if sh.length > 0 then return sh
-    return (methodAutoCallRead :ast :symtab :ctx :mn2 :bn2 :bn2v :bstamp :mco :fbtn :readIsRef)
+    return (methodAutoCallRead
+        :ast
+        :symtab
+        :ctx
+        :baseNid
+        :mn2
+        :bn2
+        :bn2v
+        :bstamp
+        :mco
+        :fbtn
+        :readIsRef
+    )
 }
 
 # synthHashRead -- a read of a generated `hash` off a value: its type's hash of
@@ -15100,6 +14958,7 @@ sumMemberMethodRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
+    baseNid: u64
     mn2: StringView
     bn2: StringView
     bn2v: ztypes.vid
@@ -15126,6 +14985,7 @@ sumMemberMethodRead: function {
             :ast
             :symtab
             :ctx
+            :baseNid
             :mn2
             :bn2
             :bn2v
@@ -15145,6 +15005,7 @@ emitUserTypeMemberRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
+    baseNid: u64
     mn2: StringView
     bn2: StringView
     bn2v: ztypes.vid
@@ -15217,6 +15078,7 @@ emitUserTypeMemberRead: function {
             :ast
             :symtab
             :ctx
+            :baseNid
             :mn2
             :bn2
             :bn2v
@@ -15648,6 +15510,7 @@ dottedAtomRecClsBase: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
+    baseNid: u64
     bn2: StringView
     mn2: StringView
     bn2v: ztypes.vid
@@ -15686,6 +15549,7 @@ dottedAtomRecClsBase: function {
             :ast
             :symtab
             :ctx
+            :baseNid
             :mn2
             :bn2
             :bn2v
@@ -15786,16 +15650,27 @@ emitDottedAtomBase: function {
         (symtab.reg.typetypeOf typeId: (stampIdOf :symtab nid: n.nodeid.u64)) ==
         ztypes.ztypetype.functionType
     )
-    eRc: dottedAtomRecClsBase :ast :symtab :ctx :bn2 :mn2 :bn2v :bstamp :rtt :readIsRef
+    eRc: (dottedAtomRecClsBase
+        :ast
+        :symtab
+        :ctx
+        baseNid: n.parent.u64
+        :bn2
+        :mn2
+        :bn2v
+        :bstamp
+        :rtt
+        :readIsRef
+    )
     if eRc.length > 0 then return eRc
     # a UNION reads its payload through legs further down, but the question of
     # whether the member is a METHOD at all is the same one the variant leg asks
     if rtt == ztypes.ztypetype.unionType then {
-        eSmU: sumMemberMethodRead :ast :symtab :ctx :mn2 :bn2 :bn2v :bstamp
+        eSmU: sumMemberMethodRead :ast :symtab :ctx baseNid: n.parent.u64 :mn2 :bn2 :bn2v :bstamp
         if eSmU.length > 0 then return eSmU
     }
     if rtt == ztypes.ztypetype.variantType then {
-        eSm: sumMemberMethodRead :ast :symtab :ctx :mn2 :bn2 :bn2v :bstamp
+        eSm: sumMemberMethodRead :ast :symtab :ctx baseNid: n.parent.u64 :mn2 :bn2 :bn2v :bstamp
         if eSm.length > 0 then return eSm
         armDaP: memberCPrefix name: mn2
         e: "\{bn2}.data.\{armDaP}\{mn2}"
@@ -16739,12 +16614,14 @@ emitDottedRead: function {
                 nbH: isNonLvalueArg s: nbX.stringView
                 if nbX.stringView.startsWith "((" then nbH = false
                 if nbH then {
-                    nbTmp: (hoistLvalue
+                    # the receiver is a view, whose temp frees nothing
+                    nbTmp: (hoistForAddress
                         :ast
                         :symtab
                         :ctx
                         av: nbX.stringView
                         tid: (ztypes.tid.create from: nbT.u64)
+                        argNid: 0
                     )
                     if nbTmp.length > 0 then nbX = nbTmp.copy
                 }
@@ -16798,7 +16675,7 @@ loadValueStructRef: function {
 } out String is {
     if (valueStructRefNode :ast :symtab :ctx :n) == 0 then return e
     rt: stampIdOf :symtab nid: (interpPartNodeId :n)
-    ph: hoistLvalue :ast :symtab :ctx av: e.stringView tid: rt ptr: true
+    ph: hoistForAddress :ast :symtab :ctx av: e.stringView tid: rt argNid: 0 ptr: true
     return "(*\{ph})"
 }
 
@@ -17071,7 +16948,6 @@ armRefLeaf: function {
     # a Set or Map value is its own reference: a place arm yields the pointer, an
     # owned one parks it
     heap: isHeapPtrCollection :symtab :ctx tid: lt
-    if heap then ct = "\{ct}*"
     if heap when (armLeafIsPlace :ast :symtab :ctx :n) then return text.string
     if (armLeafIsPlace :ast :symtab :ctx :n) then {
         pv: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: lf))
@@ -17082,9 +16958,10 @@ armRefLeaf: function {
         ra: "((\{ct}*)&(\{text}))"
         return ra
     }
+    # declared zero by the statement and assigned where the arm runs
     nm: argHoistName :symtab :ctx argNid: lf fallback: "_ah"
     dt: String
-    if (scopeOwnsTemp :symtab argNid: lf) then dt = (hoistDestroyLine
+    if (hoistOwes :symtab argNid: lf ptr: false) then dt = (hoistDestroyLine
         :symtab
         :ctx
         tid: lt
@@ -17092,12 +16969,12 @@ armRefLeaf: function {
     )
     if ctx.armRefDepth > 0 then {
         ctx.armParkNames.append nm.copy
-        ctx.armParkTypes.append ct.copy
+        ctx.armParkTypes.append (hoistCtype :ast :symtab :ctx tid: lt ptr: false)
         ctx.armParkDtors.append dt
     } else {
         ctx.argHoistNames.append nm.copy
         ctx.argHoistVals.append String
-        ctx.argHoistTypes.append ct.copy
+        ctx.argHoistTypes.append (hoistCtype :ast :symtab :ctx tid: lt ptr: false)
         ctx.argHoistDtors.append dt
     }
     if heap then {
@@ -18729,20 +18606,14 @@ stringCopyLitIndex: function {
 # statement when the CHECKER says the temporary owns what it holds -- a borrow
 # its owner keeps (`list.get`) owns nothing and is not freed here.
 copyReceiverTemp: function {
+    ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     # the `.copy` receiver's value node
     argNid: u64
     pv: StringView
 } out String is {
-    tnm: argHoistName :symtab :ctx :argNid fallback: "_cpv"
-    dt: String
-    if (scopeOwnsTemp :symtab :argNid) then dt = "    \{ctx.strC}_free(&\{tnm});\n"
-    ctx.argHoistVals.append pv.string
-    ctx.argHoistTypes.append "\{ctx.strC}_t"
-    ctx.argHoistDtors.append dt
-    ctx.argHoistNames.append tnm.copy
-    return tnm
+    return (hoistForAddress :ast :symtab :ctx av: pv tid: ctx.strTid :argNid)
 }
 
 # copyRvalueHoist -- `<rvalue>.copy` over a String (e.g. `(list.get i: n).copy`):
@@ -18770,6 +18641,7 @@ copyRvalueHoist: function {
             return "".string
         }
         tnm: (copyReceiverTemp
+            :ast
             :symtab
             :ctx
             argNid: (zast.nodeIdOf n: (ast.nodes.get i: n.parent.u64)).u64
@@ -18835,6 +18707,7 @@ emitStringBindValue: function {
                 if (isNonLvalueArg s: pv.stringView).not then dropHoistsTo :ctx mark: hmk
                 if (isNonLvalueArg s: pv.stringView) then {
                     tnm: (copyReceiverTemp
+                        :ast
                         :symtab
                         :ctx
                         argNid: (zast.nodeIdOf n: (ast.nodes.get i: n.parent.u64)).u64
@@ -38992,7 +38865,7 @@ dispatchArgText: function {
     # a value a call returns has no address: it is bound to a temp first, freed
     # when the checker's temporary owns it (a view it does not)
     if apfx.length > 0 when (isNonLvalueArg s: av.stringView) then {
-        hv: (hoistLvalue
+        hv: (hoistForAddress
             :ast
             :symtab
             :ctx
@@ -39238,12 +39111,13 @@ emitProtocolCreateCall: function {
                     fvx: emitExpr :ast :symtab :ctx n: fop
                     valVarC = fvx.copy
                     refPfx = "&".string
-                    if (isNonLvalueArg s: fvx.stringView) then valVarC = (hoistLvalue
+                    if (isNonLvalueArg s: fvx.stringView) then valVarC = (hoistForAddress
                         :ast
                         :symtab
                         :ctx
                         av: fvx.stringView
                         tid: (ztypes.tid.create from: fromTid.u64)
+                        argNid: (zast.nodeIdOf n: fop).u64
                     )
                 }
                 ce: "\{implBase}_\{label}_\{suffix}(\{refPfx}\{valVarC})"
