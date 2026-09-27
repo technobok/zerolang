@@ -441,9 +441,19 @@ borrow's own scope, the re-point ends its borrow of the old source; written in
 a branch, a loop or a nested block it adds to it, so the old source stays
 locked until the borrow's scope ends on the paths that kept it. The new source
 must live as long as the borrow ("Cannot re-point 'b' at 'e': 'b' outlives
-'e'"), and a writable borrow is not re-pointed at a readonly one. A <code>.take</code>,
-a <code>.hold</code> or an owned value is refused ("Cannot reassign borrowed 'b' with an
-owned value: a reassignment keeps the ownership its target was bound with").
+'e'"), and a writable borrow is not re-pointed at a readonly one; nor is a
+borrow something else borrows through ("Cannot re-point 'b': 'c' borrows
+through it"). A <code>.take</code> or a <code>.hold</code> is refused ("Cannot reassign borrowed
+'b' with an owned value: a reassignment keeps the ownership its target was bound
+with").</p>
+<p>A borrow re-pointed at an OWNED value -- a call's result, a construction --
+refers to a companion that holds it: an unnamed owned local of the borrow's own
+scope, declared empty beside it. The companion frees what it held each time it
+takes a new value (a loop re-pointing the borrow on each iteration frees the
+last one) and at the end of the borrow's scope, whichever way it is left. The
+value runs before the old one is freed, so it may read the borrow
+(<code>b = mk n: b.n + 1</code>). A binding of an owned value stays owned
+(<code>b: mk n: 3</code>); only a reassignment of a borrow makes a companion.
 A borrow is never swapped, and a value-type parameter, the caller's copy, is
 written through its fields but not replaced whole.</p>
 <h3 id="scope-exit"><a href="#scope-exit">3.5. Scope exit</a></h3>
@@ -471,7 +481,7 @@ the compiler treats it as borrowed to maintain a uniform ownership model.</p>
 <li>Cannot call <code>.take</code> on it (error: cannot take a borrowed variable)</li>
 <li>Cannot be stored in a field of another object</li>
 <li>Cannot be swapped, on either side -- a <code>with</code> alias of a path included</li>
-<li>Cannot be reassigned an owned value (<code>b = z.take</code>) or a held one -- a reassignment keeps the mode it was bound with</li>
+<li>Cannot be reassigned <code>z.take</code> or <code>z.hold</code> -- a reassignment keeps the mode it was bound with; an owned value (<code>b = mk</code>) is held for it by a companion</li>
 </ul>
 <h3 id="scope-exit-2"><a href="#scope-exit-2">4.3. Scope exit</a></h3>
 <p>When a borrowed variable falls out of scope:</p>
@@ -2007,7 +2017,8 @@ the direct form.</p>
 <tr><td><code>return (W s: loc)</code> from an <code>outx</code> function</td><td>the returned <code>W</code> stores 'loc' in its non-owned field 's', but 'loc' is not a <code>.borrow</code>/<code>.view</code> parameter</td><td>Fill the field from a parameter or the receiver</td></tr>
 <tr><td><code>x = y</code>, <code>x = y.hold</code> or <code>x = y.borrow</code> into an owned <code>x</code></td><td>Cannot reassign owned 'x' with a held value: a reassignment keeps the ownership its target was bound with</td><td>Bind a new name with the marker, or reassign an owned value (<code>y.take</code>, <code>y.copy</code>)</td></tr>
 <tr><td><code>b = e</code> into a borrow <code>b</code> that outlives <code>e</code></td><td>Cannot re-point 'b' at 'e': 'b' outlives 'e'</td><td>Re-point <code>b</code> at storage of its own scope or an enclosing one</td></tr>
-<tr><td><code>b = z.take</code> or <code>b = mk</code> into a borrowed <code>b</code></td><td>Cannot reassign borrowed 'b' with an owned value: a reassignment keeps the ownership its target was bound with</td><td>Re-point it at a borrow (<code>b = z</code>), or bind an owned name</td></tr>
+<tr><td><code>b = z.take</code> into a borrowed <code>b</code></td><td>Cannot reassign borrowed 'b' with an owned value: a reassignment keeps the ownership its target was bound with</td><td>Re-point it at <code>z</code> (<code>b = z</code>), or bind an owned name</td></tr>
+<tr><td><code>b = e</code> where <code>c: b</code> borrows through <code>b</code></td><td>Cannot re-point 'b': 'c' borrows through it</td><td>End <code>c</code>'s scope first</td></tr>
 <tr><td><code>x = w.take</code> where <code>x</code> outlives what <code>w</code> locks</td><td>Cannot move 'w' by reassignment: it holds locks on 'a', and 'x' outlives 'a'</td><td>Keep 'x' inside 'a's scope, or <code>w.copy</code></td></tr>
 <tr><td>non-owned field on a record</td><td>non-owned fields only allowed on classes</td><td>Change the enclosing type from <code>record</code> to <code>class</code></td></tr>
 <tr><td>a reftype field on a record (<code>s: String</code>)</td><td>a record field holds valtypes; make 'R' a class to hold 'String'</td><td>Make <code>R</code> a <code>class</code>; a valtype that must live on the heap is a <code>Box from:</code> local, never a field</td></tr>

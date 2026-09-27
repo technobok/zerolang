@@ -20564,6 +20564,59 @@ emitReassignStmt: function {
     )
 }
 
+# emitRepointCompanion -- the companion of the borrow `vid` (the checker's
+# repointCompanion), when it has one: declared empty beside it, and destroyed
+# where the checker records its scope's end, as an owned local's binding
+# registers its destroy. Empty, its destroy frees nothing.
+emitRepointCompanion: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    vid: ztypes.vid
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    if vid.isZero then return
+    co: symtab.typing.repointCompanion.get key: vid.u64
+    if co.none then return
+    cv: co
+    tid: ztypes.tid.create from: (chaseAggregateTypedef
+        :symtab
+        :ctx
+        tid: (symtab.reg.variableTypeOf id: cv)
+    )
+    nm: varCName :ctx vid: cv name: "_c"
+    ct: companionCType :ast :symtab :ctx :tid
+    if (isHeapPtrCollection :symtab :ctx :tid) then {
+        buf.append "\{ind}\{ct} \{nm} = NULL;\n"
+    } else {
+        buf.append "\{ind}\{ct} \{nm} = (\{ct}){0};\n"
+    }
+    if tid == ctx.strTid then {
+        tmp.oweFree name: nm.copy vid: cv
+        return
+    }
+    if (symtab.reg.needsDestructor typeId: tid).not then return
+    cb: ctxCname :ctx :tid
+    dop: destroyOperand :symtab :ctx :tid nm: nm.stringView
+    tmp.oweList stmt: "\{ind}\{cb}_destroy(\{dop});\n" name: nm.copy vid: cv
+}
+
+# companionCType -- the C type a companion of type `tid` is held as: the String
+# struct, a heap collection's pointer, any other type's value.
+companionCType: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+} out String is {
+    if tid == ctx.strTid then return "\{ctx.strC}_t"
+    ct: typeRefC :ast :symtab :ctx :tid thisTid: ztypes.tid
+    if (isHeapPtrCollection :symtab :ctx :tid) then ct.append "*"
+    return ct
+}
+
 # emitRepointStmt -- `x = v` re-pointing the borrowed `x` (the checker's
 # repoints). A borrow the C holds as a pointer -- an alias `(*__borrow_x)`, a
 # pointer parameter -- is given the address of the storage `v` names (a
@@ -20589,6 +20642,21 @@ emitRepointStmt: function {
     } else if (isPtrVid :ctx vid: xv) then {
         ptr.append tv
     }
+    if (symtab.typing.ownedRepoints.has item: n.nodeid.u64) then {
+        (emitOwnedRepoint
+            :ast
+            :symtab
+            :ctx
+            :n
+            :xv
+            ptr: ptr.stringView
+            tgt: tgt.stringView
+            :ind
+            :tmp
+            :buf
+        )
+        return
+    }
     base: ast.nodes.get i: (underBorrowMarker :ast nid: n.value.u64)
     rvm: emitExpr :ast :symtab :ctx n: base
     flushArgHoists :ctx :ind :tmp :buf
@@ -20599,6 +20667,59 @@ emitRepointStmt: function {
         return
     }
     buf.append "\{ind}\{tgt} = \{rvm};\n"
+}
+
+# emitOwnedRepoint -- `x = v` re-pointing the borrowed `x` at an owned value
+# (the checker's ownedRepoints): the value runs first, into a temporary -- it
+# may read `x`, which may still refer to the companion -- then `x`'s companion
+# frees what it held and takes the value, the sources the value moved out of
+# are zeroed, and `x` refers to it: a pointer `x` takes its address, a borrow
+# held by value copies it.
+emitOwnedRepoint: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: zast.reassignmentrow.view
+    # the borrow, and the pointer the C holds it as ("" when it is held by value)
+    xv: ztypes.vid
+    ptr: StringView
+    # the borrow's lvalue
+    tgt: StringView
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    co: symtab.typing.repointCompanion.get key: xv.u64
+    if co.none then return
+    cv: co
+    tid: ztypes.tid.create from: (chaseAggregateTypedef
+        :symtab
+        :ctx
+        tid: (symtab.reg.variableTypeOf id: cv)
+    )
+    cn: varCName :ctx vid: cv name: "_c"
+    valueNode: ast.nodes.get i: n.value.u64
+    rv: reassignRhsText :ast :symtab :ctx :valueNode :ind :tmp :buf
+    flushArgHoists :ctx :ind :tmp :buf
+    rrn: tmpNext :ctx :tmp
+    ct: companionCType :ast :symtab :ctx :tid
+    buf.append "\{ind}\{ct} _rr\{rrn} = \{rv};\n"
+    if tid == ctx.strTid then {
+        buf.append "\{ind}\{ctx.strC}_free(&\{cn});\n"
+    } else if (symtab.reg.needsDestructor typeId: tid) then {
+        cb: ctxCname :ctx :tid
+        dop: destroyOperand :symtab :ctx :tid nm: cn.stringView
+        buf.append "\{ind}\{cb}_destroy(\{dop});\n"
+    }
+    buf.append "\{ind}\{cn} = _rr\{rrn};\n"
+    emitMovedArgZeroing :ast :symtab :ctx n: valueNode :ind :buf
+    if ptr.length > 0 then {
+        addr: "&"
+        if (isHeapPtrCollection :symtab :ctx :tid) then addr = ""
+        buf.append "\{ind}\{ptr} = \{addr}\{cn};\n"
+        return
+    }
+    buf.append "\{ind}\{tgt} = \{cn};\n"
 }
 
 # namedDestroyOwes -- whether the `.drop` or the reassignment at `nid` destroys
@@ -21821,6 +21942,15 @@ emitStmtParts: function {
         emitCallStmt :ast :symtab :ctx call: n :ind :tmp :buf
     } case assignment then {
         emitAssignment :ast :symtab :ctx :n :ind :tmp :buf
+        (emitRepointCompanion
+            :ast
+            :symtab
+            :ctx
+            vid: (defVid :symtab nid: n.nodeid.u64)
+            :ind
+            :tmp
+            :buf
+        )
     } case reassignment then {
         emitReassignStmt :ast :symtab :ctx :n :ind :tmp :buf
     } case swapstmt then {
@@ -30680,6 +30810,20 @@ emitFnBody: function {
     outerOrderCtr: ctx.orderCtr
     ctx.orderCtr = 0
     oweTakeParamFrees :ast :symtab :ctx :op :fid :tmp
+    pcx: u64
+    for pcx < op.parameters.count.u64 loop {
+        pcm: ast.nodes.get i: (zast.kidAt kids: ast.kids span: op.parameters i: pcx).u64
+        pcx = pcx + 1
+        if pcm.namedoperation then (emitRepointCompanion
+            :ast
+            :symtab
+            :ctx
+            vid: (paramVidIn :ast :symtab params: op.parameters nameId: pcm.name)
+            ind: "    "
+            :tmp
+            :buf
+        )
+    }
     endsRet: false
     if op.body > 0 then {
         opb: ast.nodes.get i: op.body.u64

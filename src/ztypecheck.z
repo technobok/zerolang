@@ -32065,6 +32065,13 @@ checkAssignment: function {
             )
         }
         st.defineVar nameId: asgn.name :vid
+        if own == ztypes.zownership.borrowed then (mintRepointCompanion
+            :st
+            :ast
+            borrowVid: vid
+            nameId: asgn.name
+            :vt
+        )
         bindGenLocal :st :ast :own :vid nameId: asgn.name value: asgn.value
         vid2: vid
         st.typing.setDefVariable nid: asgn.nid.u64 vid: vid2
@@ -32599,6 +32606,105 @@ checkReassignment: function {
     moveTakeLocksToTarget :st :ast :rasgn :rvt
 }
 
+# collectRepointNames -- the bare names the body under `body` reassigns from a
+# value that may be owned (repointMayOwn), appended to `into`. A nested function
+# is not walked. Shadowing is not followed, and a name the list wrongly holds
+# only gives a borrow a companion it never fills, which frees nothing.
+collectRepointNames: function {
+    ast: Ast.view
+    body: zast.nodeid
+    into: ListVal u32
+    # the worklist, emptied first
+    work: ListVal u32
+} is {
+    if body.isZero then return
+    for work.length > 0 loop work.pop
+    work.append body.u32
+    wi: u64
+    for wi < work.length loop {
+        nid: work.get i: wi
+        wi = wi + 1
+        n: ast.nodes.get i: nid.u64
+        if n.functiondef then continue
+        if n.reassignment when (repointMayOwn :ast value: n.value) then {
+            nm: atomNameId :ast n: (ast.nodes.get i: n.topath.u64)
+            if nm.isZero.not then into.append nm.u32
+        }
+        zast.childIdsInto :ast :n acc: work
+    }
+}
+
+# repointMayOwn -- a reassigned value that may be owned, by its spelling: not a
+# bare name, nor a marked place (`.borrow`, `.take`, `.hold`). A field read or a
+# call that hands back a borrow is included; what it is, the walk decides.
+repointMayOwn: function {ast: Ast.view value: zast.nodeid} out bool is {
+    vn: ast.nodes.get i: (valueCoreNid :ast nid: value)
+    if vn.atomid then return false
+    return (zast.markerKindOf :ast n: vn).unmarked
+}
+
+# isRepointName -- the function body being walked reassigns `nameId` from a
+# value that may be owned (collectRepointNames).
+isRepointName: function {st: zenv.ZSymbolTable.view nameId: zast.nameid} out bool is {
+    nm: st.typing.repointNameMarks.length
+    if nm == 0 then return false
+    i: st.typing.repointNameMarks.get i: nm - 1
+    for i < st.typing.repointNames.length loop {
+        if (st.typing.repointNames.get :i) == nameId.u32 then return true
+        i = i + 1
+    }
+    return false
+}
+
+# mintRepointCompanion -- the borrowed reftype local or parameter `borrowVid`,
+# bound under `nameId`, which the body may re-point at an owned value: an owned
+# local of its scope, unnamed and empty, holds what it is re-pointed at, and is
+# destroyed wherever that scope ends as any owned local is. A generator's
+# locals live in its instance, and a borrow does not live across a suspension:
+# none is given one there.
+mintRepointCompanion: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    borrowVid: ztypes.vid
+    nameId: zast.nameid
+    vt: ztypes.tid
+} is {
+    if (typeIsReftype :st tid: vt).not then return
+    if st.typing.currentGenTid.isZero.not then return
+    if (isRepointName :st :nameId).not then return
+    tn: st.typing.nextTempId
+    st.typing.nextTempId = tn + 1
+    tname: "_t\{tn}"
+    cv: st.reg.newVariable ztypeId: vt ownership: ztypes.zownership.owned
+    tnId: zast.poolSet pool: ast.names text: tname.stringView
+    st.defineVar nameId: tnId vid: cv
+    st.reg.setVariableOrigin id: cv origin: ztypes.zvarorigin.local
+    st.typing.repointCompanion.set key: borrowVid.u64 value: cv
+}
+
+# mintParamCompanions -- a companion for each borrowed reftype parameter the
+# body may re-point at an owned value (mintRepointCompanion).
+mintParamCompanions: function {st: zenv.ZSymbolTable ast: Ast fn: fnref} is {
+    k: u64
+    for k < fn.nparams loop {
+        pm: argRefAt :ast nid: (zast.fnParamAt :ast nid: fn.nid i: k)
+        k = k + 1
+        if pm.name.isZero then continue
+        pvo: st.lookupVarId nameId: pm.name
+        match (
+            pvo
+        ) case some then {
+            if (isBorrowedVar :st vid: pvo) then (mintRepointCompanion
+                :st
+                :ast
+                borrowVid: pvo
+                nameId: pm.name
+                vt: (st.reg.variableTypeOf id: pvo)
+            )
+        } case none then null
+    }
+}
+
 # checkRepoint -- `x = v` into the BORROWED local or parameter `x`: the name is
 # re-pointed at what `v` borrows (repoints), the way a binding of `v` would
 # borrow it, and nothing is written through it. `v` must be a borrow -- a
@@ -32680,7 +32786,7 @@ checkRepoint: function {
     st.typing.pendingBorrowReadonly = false
     st.typing.pendingBorrowFrozen = false
     if owned then {
-        reportRepointMode :st :ast :rasgn vmode: "an owned"
+        repointOwned :st :ast :rasgn :xVid pins: bpins
         return
     }
     if (refuseRepointReadonly :st :ast :rasgn :xVid :lvt pins: bpins :roV) then return
@@ -32729,6 +32835,47 @@ refuseRepointReadonly: function {
     return true
 }
 
+# repointOwned -- `x = v` with `v` an owned value -- a call's result, a
+# construction -- into the borrowed `x`: the value is stored in `x`'s companion
+# (mintRepointCompanion), whose old value, and the locks it held, go first, and
+# `x` refers to it. A lock the value holds is its companion's, so what it locks
+# must live as long as `x`. Refused where `x` has no companion.
+repointOwned: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    rasgn: reasgref
+    xVid: ztypes.vid
+    pins: (List ztyping.PinPath).view
+} is {
+    co: st.typing.repointCompanion.get key: xVid.u64
+    if co.none then {
+        reportRepointMode :st :ast :rasgn vmode: "an owned"
+        return
+    }
+    cv: co
+    if (refuseRepointOutlives :st :ast :rasgn :xVid :pins) then return
+    (st.releaseHeldLocks
+        holder: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: cv.u64)
+    )
+    if pins.length > 0 then (installPins
+        :st
+        pool: ast.names
+        :pins
+        vid: cv
+        onlyRoot: zast.nameid
+        forceShared: false
+        nodeid: rasgn.nid
+        lineno: rasgn.lineno
+        colno: rasgn.colno
+    )
+    if (st.innermostOpenIs scope: (st.scopeOfVar vid: xVid)) then (st.releaseHeldLocks
+        holder: (ztypes.zlockholder kind: ztypes.zlockholderkind.varKind id: xVid.u64)
+    )
+    checkNarrowedTargetWrite :st :ast :rasgn
+    st.typing.repoints.add item: rasgn.nid.u64
+    st.typing.ownedRepoints.add item: rasgn.nid.u64
+}
+
 # reportRepointMode -- the refusal of re-pointing the borrowed target at a
 # value of the mode `vmode`, spelt with its article (`an owned`).
 reportRepointMode: function {
@@ -32773,6 +32920,11 @@ refuseRepointOutlives: function {
                 xn: varNameText :st :ast vid: xVid
                 rn: zast.nameTextAt :ast ref: root
                 mo: "Cannot re-point '\{xn}' at '\{rn}': '\{xn}' outlives '\{rn}'"
+                # a call's argument the result keeps locked has no name of the
+                # program's
+                if (st.typing.pinnedArgTemps.get key: root).some then {
+                    mo = "Cannot re-point '\{xn}' at a value that locks a temporary: '\{xn}' outlives the temporary"
+                }
                 (addError
                     :st
                     nodeid: rasgn.value
@@ -48294,6 +48446,13 @@ checkFunctionBodyIn: function {
         if isGenDef then st.typing.suppressParamStamps = true
         st.push parent: rf node: fn.nid
         st.fnScopeDepths.append st.open.length - 1
+        st.typing.repointNameMarks.append st.typing.repointNames.length
+        (collectRepointNames
+            :ast
+            body: fn.body
+            into: st.typing.repointNames
+            work: st.typing.repointWork
+        )
         kP: u64
         for kP < fn.nparams loop {
             pmId: (zast.fnParamAt :ast nid: fn.nid i: kP).u32
@@ -48312,6 +48471,7 @@ checkFunctionBodyIn: function {
                 )
             }
         }
+        mintParamCompanions :st :ast :fn
         setSynthOwnerLabel :st :unitDecl :ast :defName :defNameId :thisName
         st.typing.currentThisTid = thisTid
         prevFn: st.typing.currentFnTid
@@ -48410,6 +48570,8 @@ checkFunctionBodyIn: function {
         st.typing.currentFnPins = prevFp
         st.typing.currentFnTid = prevFn
         st.fnScopeDepths.pop
+        rnm: st.typing.repointNameMarks.pop
+        for st.typing.repointNames.length > rnm loop st.typing.repointNames.pop
         st.pop
         st.typing.suppressParamStamps = prevSup
     }

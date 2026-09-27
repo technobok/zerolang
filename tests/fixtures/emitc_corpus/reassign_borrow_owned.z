@@ -1,0 +1,72 @@
+# A borrow reassigned from an OWNED value -- a call's result, a construction, an
+# interpolation, a projection that takes its source -- keeps its mode: the
+# value is held in the borrow's companion, an unnamed owned local of its scope,
+# and the borrow refers to it. The companion frees what it held each time it is
+# refilled (a loop's site running again) and at its scope's end, a `return`
+# included. The value runs before the old value is freed, so it may read the
+# borrow. A parameter re-pointed this way leaves the caller's value alone.
+Cell: class { n: i64  s: String }
+Rd: protocol {
+    rdn: function {t: this.view} out i64
+}
+PC: class { n: i64  s: String } as {
+    :Rd
+    rdn: function {c: this.view} out i64 is { return c.n }
+}
+mk: function {n: i64} out Cell is { return (Cell :n s: "made".string) }
+param: function {p: Cell} out i64 is {
+    t: p.n
+    p = mk n: 50
+    p.n = p.n + t
+    return p.n
+}
+early: function {c: bool} out i64 is {
+    a: Cell n: 1 s: "a".string
+    b: a
+    i: 0
+    for i < 3 loop {
+        if c when i == 2 then return b.n
+        b = mk n: i + 10
+        i = i + 1
+    }
+    return b.n
+}
+selfRead: function is {
+    a: Cell n: 1 s: "a".string
+    b: a
+    b = mks n: 2 s: b.s
+    b = mks n: b.n + 1 s: b.s
+    print "self \{b.n} \{b.s}"
+}
+mks: function {n: i64 s: String.view} out Cell is { return (Cell :n s: s.copy) }
+main: function is {
+    a: Cell n: 1 s: "a".string
+    b: a
+    b = mk n: 2
+    b.n = b.n + 1
+    a.n = 7
+    print "fresh \{b.n} \{a.n}"
+    b = Cell n: 4 s: "built".string
+    print "built \{b.n}"
+    c: true
+    if c then b = mk n: 5
+    print "branch \{b.n}"
+    print "param \{param p: a} \{a.n}"
+    print "early \{early c: true} \{early c: false}"
+    s1: "one".string
+    bs: s1
+    bs = "two".string
+    bs = "\{bs} three"
+    print "string \{bs} \{s1}"
+    pa: PC n: 8 s: "p".string
+    pr: Rd pa
+    pb: PC n: 9 s: "q".string
+    pr = Rd.create from: pb.take
+    print "box \{pr.rdn}"
+    m1: (MapRV String v: i64)
+    bm: m1
+    bm = (MapRV String v: i64)
+    bm.set key: "x".string value: 3
+    print "map \{bm.length} \{m1.length}"
+    selfRead
+}
