@@ -3748,9 +3748,11 @@ ForSpill: class {
     restored: String
     # which reload shape
     kind: spillkind
-    # the payload C type the view kinds cast through and the owned kind
-    # zero-fills with; "" for a plain copy
+    # the payload C type the view kinds cast through; "" for a plain copy
     payC: String
+    # what the owned kind leaves the field holding once the local has the
+    # payload back (movedZeroC); "" when the payload owns nothing
+    payZero: String
 }
 
 # ComprehendTo -- a for-EXPRESSION's append target: the C list its body's value
@@ -4072,27 +4074,6 @@ takeStringSource: function {
     }
 }
 
-# takeMoveCtype -- the C type of a `<atom>.take` source (for the `(T){0}`
-# zeroing), via typeRefC on the base's stamp (canonicalizes String to strC).
-takeMoveCtype: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    n: astnode.view
-} out String is {
-    match (
-        n
-    ) case statementline then {
-        return (takeMoveCtype :ast :symtab :ctx n: (ast.nodes.get i: n.statementline.u64))
-    } case dottedpath then {
-        bnid: atomNodeId n: (ast.nodes.get i: n.parent.u64)
-        bid: stampIdOf :symtab nid: bnid
-        return (typeRefC :ast :symtab :ctx tid: bid thisTid: ztypes.tid)
-    } else {
-        return "".string
-    }
-}
-
 # isFieldTake -- true iff `n` reduces to a `<obj>.field.take` whose parent is
 # itself a dotted path (a field, not a bare atom). The field lvalue is zeroed
 # after the move (a bare `<x>.take` is handled by takeStringSource). The checker
@@ -4167,7 +4148,7 @@ armValueExpr: function {
     if tn == 0 then return vx
     if (movedSourceNeedsZero :ast :symtab n: (ast.nodes.get i: tn)).not then return vx
     tt: stampIdOf :symtab nid: tn
-    tz: movedZeroC :ast :symtab :ctx tid: tt
+    tz: movedZeroC :symtab :ctx tid: tt
     if tz.length == 0 then return vx
     tc: typeRefC :ast :symtab :ctx tid: tt thisTid: ztypes.tid
     if (isHeapPtrCollection :symtab :ctx tid: tt) then tc = "\{tc}*"
@@ -4190,7 +4171,7 @@ emitArmTakeZero: function {
     tn: armTakeLeaf :ast :symtab :n
     if tn == 0 then return
     if (movedSourceNeedsZero :ast :symtab n: (ast.nodes.get i: tn)).not then return
-    tz: movedZeroC :ast :symtab :ctx tid: (stampIdOf :symtab nid: tn)
+    tz: movedZeroC :symtab :ctx tid: (stampIdOf :symtab nid: tn)
     if tz.length == 0 then return
     zl: "\{ind}\{rv} = \{tz};\n"
     buf.append zl
@@ -4225,7 +4206,7 @@ emitNarrowedTakeZero: function {
                 match (
                     tido
                 ) case some then {
-                    zc: movedZeroC :ast :symtab :ctx tid: (ztypes.tid.create from: tido.u64)
+                    zc: movedZeroC :symtab :ctx tid: (ztypes.tid.create from: tido.u64)
                     if zc.length > 0 then buf.append "\{ind}\{box} = \{zc};\n"
                 } case none then null
             }
@@ -4356,11 +4337,8 @@ movedSourceNeedsZero: function {
 }
 
 # emitExplicitTakeZero -- an explicit `<atom>.take` argument: the source is
-# zeroed so its scope-exit destructor no-ops, the move having transferred
-# ownership -- when a destroy of it still runs (movedSourceNeedsZero). A
-# heap-pointer collection zeroes to NULL, as emitImplicitMoveZero does for the
-# unmarked spelling: the value IS the pointer, and a struct zero does not fit
-# one.
+# zeroed (movedZeroC) so its scope-exit destructor no-ops, the move having
+# transferred ownership -- when a destroy of it still runs (movedSourceNeedsZero).
 emitExplicitTakeZero: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -4375,26 +4353,15 @@ emitExplicitTakeZero: function {
         :symtab
         nid: (interpPartNodeId n: (ast.nodes.get i: a.operation.u64))
     )
-    if (isHeapPtrCollection :symtab :ctx tid: etid) then {
-        invh: "\{ind}\{ts} = NULL;\n"
-        buf.append invh
-        return
-    }
-    tc: (takeMoveCtype
-        :ast
-        :symtab
-        :ctx
-        n: (ast.nodes.get i: a.operation.u64)
-    )
-    inv: "\{ind}\{ts} = (\{tc}){0};\n"
-    buf.append inv
+    ez: movedZeroC :symtab :ctx tid: etid
+    if ez.length > 0 then buf.append "\{ind}\{ts} = \{ez};\n"
 }
 
 # emitMovedSourceZero -- a bare owning local moved into a taking slot: the
-# source is zeroed so its scope-exit destructor no-ops. A heap-pointer
-# collection zeroes to NULL; a type with no destructor carries nothing to free
-# and needs no zero at all, which is also what makes this safe to ask of a
-# COPYING slot -- a valtype element has no destructor, so it emits nothing.
+# source is zeroed (movedZeroC) so its scope-exit destructor no-ops. A type
+# with no destructor carries nothing to free and needs no zero at all, which
+# is also what makes this safe to ask of a COPYING slot -- a valtype element
+# has no destructor, so it emits nothing.
 # Anything that is not a bare name reads back "" and is the emitter's own
 # temporary, not a local something else still destroys.
 emitMovedSourceZero: function {
@@ -4408,16 +4375,8 @@ emitMovedSourceZero: function {
     if (movedSourceNeedsZero :ast :symtab :n).not then return
     isrc: implicitTakeSource :ast :symtab :ctx :n
     if isrc.length == 0 then return
-    istid: stampIdOf :symtab nid: (interpPartNodeId :n)
-    if (isHeapPtrCollection :symtab :ctx tid: istid) then {
-        iinvh: "\{ind}\{isrc} = NULL;\n"
-        buf.append iinvh
-        return
-    }
-    if (symtab.reg.needsDestructor typeId: istid).not then return
-    itc: typeRefC :ast :symtab :ctx tid: istid thisTid: ztypes.tid
-    iinv: "\{ind}\{isrc} = (\{itc}){0};\n"
-    buf.append iinv
+    iz: movedZeroC :symtab :ctx tid: (stampIdOf :symtab nid: (interpPartNodeId :n))
+    if iz.length > 0 then buf.append "\{ind}\{isrc} = \{iz};\n"
 }
 
 # emitImplicitMoveZero -- emitMovedSourceZero for a call argument's value.
@@ -18946,9 +18905,9 @@ emitOptionBoxHoist: function {
         b4: "\{ind}*_Box\{bN} = _t\{bN};\n"
         buf.append b4
         if (isBareCName s: av.stringView) when (isRegisteredOwned :tmp name: av.stringView) then {
-            invB: "\{ind}\{av} = (\{payC}){0};\n"
-            if (strHasSub hay: payC.stringView needle: "*") then invB = "\{ind}\{av} = NULL;\n"
-            buf.append invB
+            payT: (symtab.typing.declChildOf pool: ast.names parentTypeId: mid name: "some").or d: 0
+            bz: movedZeroC :symtab :ctx tid: (ztypes.tid.create from: payT.u64)
+            if bz.length > 0 then buf.append "\{ind}\{av} = \{bz};\n"
         }
         b5: "\{ind}_c\{bN}.data = _Box\{bN};\n"
         buf.append b5
@@ -19178,6 +19137,7 @@ emitCollectionBind: function {
             :nm
             :nameVid
             cb: hcb.stringView
+            :ltid
             :nbrw
         )
         return true
@@ -19355,17 +19315,19 @@ emitListBind: function {
                 # before reaching here, and must never zero its source.
                 if nbrw.not when (isBareNameValue n: avn) then {
                     lzs0: implicitTakeSource :ast :symtab :ctx n: avn
-                    if lzs0.length > 0 then {
-                        lzi0: "\{ind}\{lzs0} = (\{lcb}_t){0};\n"
-                        buf.append lzi0
-                    }
+                    if lzs0.length > 0 then buf.append "\{ind}\{lzs0} = \{(movedZeroC
+                        :symtab
+                        :ctx
+                        tid: ltid
+                    )};\n"
                 }
                 # a take out of a local moves the buffer the same way: the
                 # source is zeroed so its own destroy no-ops
-                if (isLocalTake :ast :symtab n: avn) then {
-                    lzf0: "\{ind}\{lvr0} = (\{lcb}_t){0};\n"
-                    buf.append lzf0
-                }
+                if (isLocalTake :ast :symtab n: avn) then buf.append "\{ind}\{lvr0} = \{(movedZeroC
+                    :symtab
+                    :ctx
+                    tid: ltid
+                )};\n"
             } else {
                 # THE LAST LEG IS A CONSTRUCTION, and it accepts anything: a
                 # `withexpr` RHS reaches it and builds an EMPTY LIST, so
@@ -19404,6 +19366,8 @@ emitHeapColBind: function {
     nm: StringView
     nameVid: ztypes.vid
     cb: StringView
+    # the collection's type
+    ltid: ztypes.tid
     nbrw: bool
 } is {
     if (collectionValueCallRhs :ast :symtab n: avn) then {
@@ -19418,17 +19382,19 @@ emitHeapColBind: function {
         # pointer to the same allocation and must leave the source standing.
         if nbrw.not when (isBareNameValue n: avn) then {
             hzs0: implicitTakeSource :ast :symtab :ctx n: avn
-            if hzs0.length > 0 then {
-                hzi0: "\{ind}\{hzs0} = NULL;\n"
-                buf.append hzi0
-            }
+            if hzs0.length > 0 then buf.append "\{ind}\{hzs0} = \{(movedZeroC
+                :symtab
+                :ctx
+                tid: ltid
+            )};\n"
         }
         # a take out of a local moves the allocation the same way: the
         # source is cleared so its own destroy no-ops
-        if (isLocalTake :ast :symtab n: avn) then {
-            hzf0: "\{ind}\{hvr} = NULL;\n"
-            buf.append hzf0
-        }
+        if (isLocalTake :ast :symtab n: avn) then buf.append "\{ind}\{hvr} = \{(movedZeroC
+            :symtab
+            :ctx
+            tid: ltid
+        )};\n"
     } else {
         hcap: listCapArg :ast :symtab :ctx n: avn
         flushArgHoists :ctx :ind :tmp :buf
@@ -19591,8 +19557,8 @@ emitStringBind: function {
                     szs = implicitTakeSource :ast :symtab :ctx n: avn
                 }
                 if szs.length > 0 when (movedSourceNeedsZero :ast :symtab n: avn) then {
-                    szi: "\{ind}\{szs} = (\{ctx.strC}_t){0};\n"
-                    buf.append szi
+                    szz: movedZeroC :symtab :ctx tid: btid
+                    buf.append "\{ind}\{szs} = \{szz};\n"
                 }
             }
         }
@@ -19665,46 +19631,28 @@ emitBindSourceZero: function {
     abind: zast.assignmentrow.view
     avn: astnode.view
     rv: StringView
-    ct: StringView
     ind: StringView
     buf: String.borrow
 } is {
     if (movedSourceNeedsZero :ast :symtab n: avn).not then return
+    bzt: stampIdOf :symtab nid: (interpPartNodeId n: avn)
+    # a field that moves owns nothing, and reads as empty once moved out
     if (isFieldTake :ast n: avn) when (bindValueIsFnRef :symtab :avn).not then {
-        ftz: "\{ind}\{rv} = (\{ct}){0};\n"
-        buf.append ftz
+        buf.append "\{ind}\{rv} = \{zeroValueC :ast :symtab :ctx tid: bzt};\n"
         return
     }
     bts: takeStringSource :ast :symtab :ctx n: avn
     if bts.length > 0 then {
-        bzz: "\{ind}\{rv} = (\{ct}){0};\n"
-        buf.append bzz
+        bzz: movedZeroC :symtab :ctx tid: bzt
+        if bzz.length > 0 then buf.append "\{ind}\{rv} = \{bzz};\n"
         return
     }
     if (isBareNameValue n: avn).not then return
-    bzt: stampIdOf :symtab nid: (interpPartNodeId n: avn)
-    bzp: isHeapPtrCollection :symtab :ctx tid: bzt
-    bzo: bzp
-    if (symtab.reg.needsDestructor typeId: bzt) then bzo = true
-    if bzo.not then return
+    if (destroyTargetTid :symtab :ctx tid: bzt).isZero then return
     if (bindingVarIsBorrowed :symtab n: abind) then return
     bzs: implicitTakeSource :ast :symtab :ctx n: avn
     if bzs.length == 0 then return
-    if bzp then {
-        bzh: "\{ind}\{bzs} = NULL;\n"
-        buf.append bzh
-        return
-    }
-    bzc: (typeRefC
-        :ast
-        :symtab
-        :ctx
-        tid: bzt
-        thisTid: ztypes.tid
-    )
-    if bzc.length == 0 then return
-    bzi: "\{ind}\{bzs} = (\{bzc}){0};\n"
-    buf.append bzi
+    buf.append "\{ind}\{bzs} = \{movedZeroC :symtab :ctx tid: bzt};\n"
 }
 
 # emitTypedBind -- the general binding: a declared C type and a value, plus the
@@ -19760,7 +19708,6 @@ emitTypedBind: function {
         abind: n
         :avn
         rv: rv.stringView
-        :ct
         :ind
         :buf
     )
@@ -19814,7 +19761,7 @@ emitNarrowedTakeBind: function {
             valB: takeSourceResolve :ctx name: tabA vid: tabAV
             lnB1: "\{ind}\{ctB} \{nm} = \{valB};\n"
             buf.append lnB1
-            zcB: movedZeroC :ast :symtab :ctx tid: (ztypes.tid.create from: ntO.u64)
+            zcB: movedZeroC :symtab :ctx tid: (ztypes.tid.create from: ntO.u64)
             if zcB.length > 0 then buf.append "\{ind}\{valB} = \{zcB};\n"
             # a String payload is freed by the string runtime, which
             # has no `_destroy`: it rides the scope's String free list
@@ -20184,23 +20131,8 @@ emitDottedAutoCallStmt: function {
             nm: rcvV.stringView
             :ind
         )
-        rinv: (
-            rrid ==
-            ctx.strTid or
-            (rtt == ztypes.ztypetype.classType) or
-            (rtt == ztypes.ztypetype.unionType)
-        )
-        if rinv then {
-            rci: (typeRefC
-                :ast
-                :symtab
-                :ctx
-                tid: (ztypes.tid.create from: rrid.u64)
-                thisTid: ztypes.tid
-            )
-            riv: "\{ind}\{rcvV} = (\{rci}){0};\n"
-            buf.append riv
-        }
+        riv: movedZeroC :symtab :ctx tid: (ztypes.tid.create from: rrid.u64)
+        if riv.length > 0 then buf.append "\{ind}\{rcvV} = \{riv};\n"
         return
     }
     de: emitExpr :ast :symtab :ctx :n
@@ -20459,20 +20391,34 @@ emitReassignDestroy: function {
     buf.append (destroyLineC :symtab :ctx tid: rtsid nm: nm2 :ind)
 }
 
-# movedZeroC -- what a moved-out source of type tid is overwritten with so its
-# own scope-exit destroy no-ops: NULL for a Set or a Map, which is its pointer,
-# the zero value of anything else that has a destroy (destroyTargetTid); empty
-# when the value owns nothing.
+# movedZeroC -- what a value of type tid that was moved out or destroyed is
+# overwritten with so its own scope-exit destroy no-ops: NULL where the value
+# is the pointer its destroy frees (valueIsItsPointer), else the zeroed struct
+# of its destroy target, which a typedef shares; empty when it owns nothing.
 movedZeroC: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tid: ztypes.tid
+} out String is {
+    dt: destroyTargetTid :symtab :ctx :tid
+    if dt.isZero then return String
+    if (valueIsItsPointer :symtab :ctx tid: dt) then return "NULL".string
+    if dt == ctx.strTid then return "(\{ctx.strC}_t){0}"
+    return "(\{ctxCnameView :ctx tid: dt}_t){0}"
+}
+
+# zeroValueC -- the empty value of type tid in C, whether or not it owns
+# anything: movedZeroC's for a value with a destroy, the zeroed value of its C
+# type for one without. What a moved-out field reads as, and what a slot
+# starts from.
+zeroValueC: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     tid: ztypes.tid
 } out String is {
-    if (isHeapPtrCollection :symtab :ctx :tid) then return "NULL".string
-    dt: destroyTargetTid :symtab :ctx :tid
-    if dt.isZero then return String
-    if dt == ctx.strTid then return "(\{ctx.strC}_t){0}"
+    mz: movedZeroC :symtab :ctx :tid
+    if mz.length > 0 then return mz
     zct: typeRefC :ast :symtab :ctx :tid thisTid: ztypes.tid
     return "(\{zct}){0}"
 }
@@ -20594,11 +20540,7 @@ emitRepointCompanion: function {
     )
     nm: varCName :ctx vid: cv name: "_c"
     ct: companionCType :ast :symtab :ctx :tid
-    if (isHeapPtrCollection :symtab :ctx :tid) then {
-        buf.append "\{ind}\{ct} \{nm} = NULL;\n"
-    } else {
-        buf.append "\{ind}\{ct} \{nm} = (\{ct}){0};\n"
-    }
+    buf.append "\{ind}\{ct} \{nm} = \{zeroValueC :ast :symtab :ctx :tid};\n"
     if tid == ctx.strTid then {
         tmp.oweFree name: nm.copy vid: cv
         return
@@ -20773,13 +20715,7 @@ emitStoreTo: function {
     # are POD references and move nothing).
     rftnid: interpPartNodeId n: valueNode
     if (isFieldTake :ast n: valueNode) when (valueIsFnTyped :symtab nid: rftnid).not then {
-        rftz: movedZeroC :ast :symtab :ctx tid: rtsid
-        # a field that owns nothing is still zeroed, as the binding case does
-        if rftz.length == 0 then {
-            rfct: typeRefC :ast :symtab :ctx tid: rtsid thisTid: ztypes.tid
-            rftz = "(\{rfct}){0}"
-        }
-        buf.append "\{ind}\{rv2} = \{rftz};\n"
+        buf.append "\{ind}\{rv2} = \{zeroValueC :ast :symtab :ctx tid: rtsid};\n"
     }
     if ran.not then emitMovedArgZeroing :ast :symtab :ctx n: valueNode :ind :buf
     # a value that moves an owned local -- its `.take`, or the bare local a
@@ -20790,7 +20726,7 @@ emitStoreTo: function {
     zsrc: reassignMoveSource :ast :symtab :ctx :valueNode
     if zsrc.length > 0 when (movedSourceNeedsZero :ast :symtab n: valueNode) then {
         zid: stampIdOf :symtab nid: rftnid
-        zt: movedZeroC :ast :symtab :ctx tid: zid
+        zt: movedZeroC :symtab :ctx tid: zid
         if zt.length > 0 then buf.append "\{ind}\{zsrc} = \{zt};\n"
     }
 }
@@ -23073,20 +23009,10 @@ emitUnownedDestroy: function {
     if al == 0 then return
     fld: (ctx.aliases.get i: al - 1).val.copy
     tid: symtab.reg.variableTypeOf id: vid
-    if tid == ctx.strTid then {
-        buf.append "\{ind}\{ctx.strC}_free(&\{fld});\n"
-        buf.append "\{ind}\{fld} = (\{ctx.strC}_t){0};\n"
-        return
-    }
     dc: destroyLineC :symtab :ctx :tid nm: fld.stringView :ind
     if dc.length == 0 then return
     buf.append dc
-    if (isHeapPtrCollection :symtab :ctx :tid) then {
-        buf.append "\{ind}\{fld} = NULL;\n"
-    } else {
-        zcb: ctxCname :ctx tid: (destroyTargetTid :symtab :ctx :tid)
-        buf.append "\{ind}\{fld} = (\{zcb}_t){0};\n"
-    }
+    buf.append "\{ind}\{fld} = \{movedZeroC :symtab :ctx :tid};\n"
 }
 
 # emitBreakFrees -- the destroys a `break`, or a `continue` that jumps no
@@ -24169,6 +24095,8 @@ pushPayloadSpill: function {
     lbl: StringView
     mN: u64
     payC: StringView
+    # the payload's type
+    payTid: ztypes.tid
 } out bool is {
     if ctx.genActive.not then return false
     pfO: symtab.typing.forPayloadField.get key: cNid.u64
@@ -24189,6 +24117,7 @@ pushPayloadSpill: function {
             restored: restoredO
             kind: pk
             payC: payC.string
+            payZero: (movedZeroC :symtab :ctx tid: payTid)
         )
         return true
     } case none then {
@@ -24314,7 +24243,24 @@ emitObjIterLoop: function {
         :ind
         :buf
     )
-    pushedO: pushPayloadSpill :ast :symtab :ctx :cNid :pk :lbl :mN payC: payC.stringView
+    payTid: ((symtab.typing.declChildOf
+        pool: ast.names
+        parentTypeId: (ztypes.tid.create from: ovid.u64)
+        name: "some"
+    ).or
+        d: 0
+    )
+    pushedO: (pushPayloadSpill
+        :ast
+        :symtab
+        :ctx
+        :cNid
+        :pk
+        :lbl
+        :mN
+        payC: payC.stringView
+        payTid: (ztypes.tid.create from: payTid.u64)
+    )
     ind2: "\{ind}    "
     fLO: tmp.frees.length
     lLO: tmp.listFrees.length
@@ -24543,6 +24489,7 @@ emitCountedRangeFor: function {
             restored: lbl.string
             kind: spillkind.copy
             payC: String
+            payZero: String
         )
         fnF: "_fn_\{ctx.genForNext}"
         ctx.genForSpills.append (ForSpill
@@ -24551,6 +24498,7 @@ emitCountedRangeFor: function {
             restored: fn.copy
             kind: spillkind.copy
             payC: String
+            payZero: String
         )
         pushed = true
     }
@@ -24677,6 +24625,7 @@ emitClosedRangeFor: function {
                 restored: lbl.string
                 kind: spillkind.copy
                 payC: String
+                payZero: String
             )
             fnF: "_fn_\{ctx.genForNext}"
             ctx.genForSpills.append (ForSpill
@@ -24685,6 +24634,7 @@ emitClosedRangeFor: function {
                 restored: fn.copy
                 kind: spillkind.copy
                 payC: String
+                payZero: String
             )
             pushed = true
         }
@@ -27205,13 +27155,8 @@ zeroBranchLocalMove: function {
         li = li + 1
     }
     if owed.not then return
-    mtid: stampIdOf :symtab nid: (zast.nodeIdOf n: vn).u64
-    mc: typeRefC :ast :symtab :ctx tid: mtid thisTid: ztypes.tid
-    if mc.length == 0 then return
-    mz: "\{ind}\{src} = (\{mc}){0};\n"
-    # a heap collection is held through its pointer
-    if (isHeapPtrCollection :symtab :ctx tid: mtid) then mz = "\{ind}\{src} = NULL;\n"
-    buf.append mz
+    mz: movedZeroC :symtab :ctx tid: (stampIdOf :symtab nid: (zast.nodeIdOf n: vn).u64)
+    if mz.length > 0 then buf.append "\{ind}\{src} = \{mz};\n"
 }
 
 # postGuardStmtId -- the node id of a guarding if/match statement that
@@ -30474,13 +30419,6 @@ unitOpHasBodiedFn: function {ast: Ast.view opId: u32} out bool is {
         ) then return true
     }
     return false
-}
-
-# strHasSub -- substring containment with a dynamic needle, routed through a
-# StringView receiver: the emitter resolves .contains on a param, not on a
-# for-loop iterate element used directly as a method-call receiver.
-strHasSub: function {hay: StringView needle: StringView} out bool is {
-    return (hay.contains :needle)
 }
 
 # isBareCName -- true if s is a plain C identifier (only [A-Za-z0-9_]); such a
@@ -41474,8 +41412,8 @@ emitYieldStmt: function {
     # a boxed yield MOVES an lvalue operand (a local the instance keeps):
     # zero the source so the instance destructor does not double-free it
     if ctx.genPayC.length > 0 when (isNonLvalueArg s: ve.stringView).not then {
-        lzv: "\{ind}\{ve} = (\{ctx.genPayC}){0};\n"
-        buf.append lzv
+        lzv: movedZeroC :symtab :ctx tid: (stampIdOf :symtab nid: (interpPartNodeId n: yx))
+        if lzv.length > 0 then buf.append "\{ind}\{ve} = \{lzv};\n"
     }
     # a loop keeps its counter in the C for-header and its payload in a local
     # inside the loop, and a `with` its value in the header's local; this
@@ -41524,8 +41462,7 @@ emitSpillReloads: function {ctx: Ctx.view ind: StringView buf: String.borrow} is
         } case owned then {
             lo: "\{ind}\{sp.restored} = \{f};\n"
             buf.append lo
-            lz: "\{ind}\{f} = (\{sp.payC}){0};\n"
-            buf.append lz
+            if sp.payZero.length > 0 then buf.append "\{ind}\{f} = \{sp.payZero};\n"
         } case viewCopy then {
             lw: "\{ind}\{sp.saved} = \{f};\n"
             buf.append lw
