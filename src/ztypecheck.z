@@ -800,7 +800,7 @@ levenshtein: function {a: StringView b: StringView} out u64 is {
             cur.append best
             j = j + 1
         }
-        prev = cur
+        prev = cur.take
         i = i + 1
     }
     return (prev.get i: nb)
@@ -15292,7 +15292,7 @@ recordUnitConformerContexts: function {
         ccn0: String
         if cmm.namedoperation then {
             ccn1: zast.nameTextCopy :ast ref: cmm.name
-            ccn0 = ccn1
+            ccn0 = ccn1.take
         }
         ccNames.append ccn0
     }
@@ -22640,7 +22640,7 @@ refuseHashWithoutPartHash: function {
     if (miss == bt).not then {
         mn: st.reg.nameOf tid: miss
         hm: "its part of type '\{mn}' has no 'hash'"
-        h = hm
+        h = hm.take
     }
     eqSrc: valOpSource :ast :st tid: bt nameId: zast.names.wkOpEq
     if miss == bt when eqSrc.written or eqSrc.negated then {
@@ -22691,7 +22691,7 @@ refuseEqWithoutPartEq: function {
     if (miss == bt).not then {
         mn: st.reg.nameOf tid: miss
         hm: "its part of type '\{mn}' has no '=='"
-        h = hm
+        h = hm.take
     }
     cn2: ast.nodes.get i: dp.child.u64
     (addErrorH
@@ -26884,7 +26884,7 @@ reportUnknownMember: function {
             hMm: String
             if sugMm.length > 0 then {
                 hhMm: "did you mean '\{sugMm}'?"
-                hMm = hhMm
+                hMm = hhMm.take
             }
             if (declMemberIsPrivate
                 :st
@@ -26893,7 +26893,7 @@ reportUnknownMember: function {
             ) then {
                 cn: zast.nameTextAt :ast ref: cnId
                 hpMm: "'\{cn}' is private (not in the public interface)"
-                hMm = hpMm
+                hMm = hpMm.take
             }
             cnidMm: nodeId n: (ast.nodes.get i: dp.child.u64)
             cnlnMm: nodeLine n: (ast.nodes.get i: dp.child.u64)
@@ -27546,7 +27546,7 @@ reportUnknownUnitMember: function {
     h3: String
     if sug3.length > 0 then {
         hh3: "did you mean '\{sug3}'?"
-        h3 = hh3
+        h3 = hh3.take
     }
     if (declMemberIsPrivate
         :st
@@ -27555,7 +27555,7 @@ reportUnknownUnitMember: function {
     ) then {
         cn: zast.nameTextAt :ast ref: cnId
         hp3: "'\{cn}' is private (not in the public interface)"
-        h3 = hp3
+        h3 = hp3.take
     }
     en3: String
     cnid3: nodeId n: (ast.nodes.get i: dp.child.u64)
@@ -32188,105 +32188,24 @@ moveLocksToTarget: function {
     } case none then null
 }
 
-# invalidateMovedSource -- a bare-name reftype RHS is a MOVE: the source
-# invalidates, which the symtab records by appending its taken overlay entry.
-invalidateMovedSource: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    rasgn: reasgref
-    rvt: ztypes.tid
-} is {
-    # A bare-name reftype RHS is a move: the source invalidates (the symtab
-    # appends its taken overlay entry).
-    rn: zast.nameTextAt :ast ref: (bareAtomNameId n: (ast.nodes.get i: rasgn.value.u64))
-    if rn.length > 0 when rvt > 0 when (typeIsReftype :st tid: rvt) then {
-        vo: st.lookupVarId nameId: (nameIdOf :ast name: rn.stringView)
-        match (
-            vo
-        ) case some then {
-            (moveNameByReassignment
-                :st
-                :ast
-                :rasgn
-                name: rn.stringView
-                from: vo
-                nodeid: rasgn.nid
-                lineno: rasgn.lineno
-                colno: rasgn.colno
-            )
-        } case none then null
-    }
-    moveTakeLocksToTarget :st :ast :rasgn :rvt
-}
-
-# moveNameByReassignment -- the local `from`, written `name` at the given place,
-# moves into the reassignment's target: refused when it is readonly, pinned or
-# borrowed; otherwise its locks follow it and it is spent.
-moveNameByReassignment: function {
-    st: zenv.ZSymbolTable
-    ast: Ast.view
-    rasgn: reasgref
-    name: StringView
-    from: ztypes.vid
-    nodeid: zast.nodeid
-    lineno: u32
-    colno: u32
-} is {
-    if (nameIsReadonly :st :ast :name) then {
-        readonlyMoveError :st :nodeid :lineno :colno :name verb: "by reassignment"
-        return
-    }
-    if (pinnedMoveError
-        :st
-        :ast
-        :nodeid
-        :lineno
-        :colno
-        :name
-        verb: "by reassignment"
-    ) then return
-    if (isBorrowedVar :st vid: from) then {
-        mc: "Cannot move borrowed variable '\{name}' by reassignment — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source"
-        (addError
-            :st
-            :nodeid
-            :lineno
-            :colno
-            e: zast.err.ownerError
-            msg: mc
-        )
-        return
-    }
-    moveLocksToTarget :st :ast :rasgn :from
-    (st.invalidate
-        nameId: (nameIdOf :ast :name)
-        loc: takenHere
-    )
-}
-
-# moveArmLeavesByReassignment -- `r = if c then w else ..`: an arm that yields a
-# bare local moves it into the target on that arm's path, as `r = w` does.
-moveArmLeavesByReassignment: function {st: zenv.ZSymbolTable ast: Ast rasgn: reasgref} is {
+# refuseArmLeavesIntoOwned -- `r = if c then w else ..` into an owned target: an
+# arm that yields a bare reftype local yields a borrow, which the target's mode
+# refuses as `r = w` alone is refused (reportModeChange); `w.take` moves.
+refuseArmLeavesIntoOwned: function {st: zenv.ZSymbolTable ast: Ast rasgn: reasgref} is {
     if (isControlValue :ast nid: rasgn.value).not then return
     leaves: ListVal u32
     armValueLeaves :st :ast nid: rasgn.value into: leaves
     with lit: leaves.iterate do for lf: lit loop {
         from: armLeafLocal :st :ast nid: lf
         if from.isZero.not when (typeIsReftype :st tid: (st.reg.variableTypeOf id: from)) then {
-            partial: armLeafIsPartial :st :ast :leaves :from
-            nm: zast.nameTextAt :ast ref: (bareAtomNameId n: (ast.nodes.get i: lf.u64))
-            (moveNameByReassignment
+            (reportModeChange
                 :st
                 :ast
                 :rasgn
-                name: nm.stringView
-                :from
-                nodeid: (zast.nodeid.create from: lf)
-                lineno: (nodeLine n: (ast.nodes.get i: lf.u64))
-                colno: (nodeCol n: (ast.nodes.get i: lf.u64))
+                targetHeld: false
+                vmode: "borrowed"
+                value: (zast.nodeid.create from: lf)
             )
-            if partial then markLeafTakeMaybe :st :ast leaf: lf
-            st.typing.armLeafMoves.add item: lf.u64
         }
     }
 }
@@ -32348,7 +32267,7 @@ borrowedFieldMarkerOf: function {
                 tmo
             ) case some then {
                 tmt: markerText o: tmo
-                if tmt.length > 0 then tmk = tmt
+                if tmt.length > 0 then tmk = tmt.take
             } case none then null
         }
     } case none then null
@@ -32548,10 +32467,13 @@ checkReassignment: function {
     ast: Ast
     rasgn: reasgref
 } is {
-    st.typing.inAssignTarget = true
     errL0: st.typing.errors.length
-    lvt: checkValueAt :st :unitDecl :ast nid: rasgn.topath
-    st.typing.inAssignTarget = false
+    lvt: refillTargetType :st :ast :rasgn
+    if lvt.isZero then {
+        st.typing.inAssignTarget = true
+        lvt = checkValueAt :st :unitDecl :ast nid: rasgn.topath
+        st.typing.inAssignTarget = false
+    }
     # a target that resolved to nothing and raised nothing: an unresolvable
     # root name is an unknown reference, as at a read -- a local is not in
     # scope before the line that binds it
@@ -32608,7 +32530,7 @@ checkReassignment: function {
         colno: rasgn.colno
         verb: "reassign"
     ) then return
-    if (refuseMarkedModeChange :st :ast :rasgn targetHeld: hbVid > 0) then return
+    if (refuseModeChange :st :ast :rasgn targetHeld: hbVid > 0 vt: ztypes.tid) then return
     checkWriteLock :st :ast n: (ast.nodes.get i: rasgn.topath.u64) verb: "assign to" moving: false
     errR0: st.typing.errors.length
     # a FUNCTION-typed target takes a method REFERENCE, exactly as the same
@@ -32628,6 +32550,13 @@ checkReassignment: function {
     if rvt.isZero when st.typing.errors.length == errR0 then {
         ubnR0: unresolvedBareCallable :ast :st :unitDecl nid: rasgn.value
         if ubnR0.length > 0 then reportUnknownNameAt :st :ast nid: rasgn.value name: ubnR0
+    }
+    # a held target's readonly lock refused the write already (checkWriteLock)
+    if hbVid == 0 when lvt > 0 when (
+        (st.reg.typetypeOf typeId: lvt) != ztypes.ztypetype.functionType
+    ) then {
+        if (refuseModeChange :st :ast :rasgn targetHeld: false vt: rvt) then return
+        refuseArmLeavesIntoOwned :st :ast :rasgn
     }
     # the local's old value dies here, in whatever state the value left it --
     # recorded before the write lays anything over the local (its hold lock
@@ -32675,8 +32604,23 @@ checkReassignment: function {
     checkReassignedType :st :ast :rasgn :lvt :rvt
     checkNarrowedTargetWrite :st :ast :rasgn
     checkMethodRefTarget :st :ast :rasgn
-    invalidateMovedSource :st :ast :rasgn :rvt
-    moveArmLeavesByReassignment :st :ast :rasgn
+    moveTakeLocksToTarget :st :ast :rasgn :rvt
+}
+
+# refillTargetType -- a local whose value was moved out, written whole: the
+# write refills it, so the target is typed as its declaration and stamped as its
+# variable rather than read, which would be a use after the move. The write
+# lays a live row over the local (checkNarrowedTargetWrite). Zero for any other
+# target.
+refillTargetType: function {st: zenv.ZSymbolTable ast: Ast.view rasgn: reasgref} out ztypes.tid is {
+    nm: atomNameId :ast n: (ast.nodes.get i: rasgn.topath.u64)
+    if nm.isZero or (st.isTakenName nameId: nm).not then return ztypes.tid
+    d: st.findLocal nameId: nm
+    t: st.typing.declLocalTypeOf declId: d
+    stampGate :st nid: rasgn.topath.u64 tid: t
+    v: st.typing.declLocalVarOf declId: d
+    if v.isZero.not then st.typing.setAtomVariable nid: rasgn.topath.u64 vid: v
+    return t
 }
 
 # exprTextOf -- the spelling of a value built from names, member reads and calls
@@ -32834,38 +32778,79 @@ localFieldPath: function {st: zenv.ZSymbolTable ast: Ast.view n: astnode.view} o
     return (st.lookupVarId nameId: root).none.not
 }
 
-# refuseMarkedModeChange -- a reassignment keeps the ownership its target was
-# bound with, so a value whose marker spells another mode is refused: `.hold`
-# rebinds only a `.hold` binding, and `.borrow` is stored in no owned or held
-# target. A non-owned field target is checkMethodRefTarget's. true when it
-# refused.
-refuseMarkedModeChange: function {
+# reassignValueMode -- the mode a reassignment's value `n` is written in when
+# it is not owned: "held" for `.hold`, "borrowed" for `.borrow` or for an
+# unmarked reftype place -- a variable, or a field read through one -- which is
+# a borrow. "" for an owned value (`.take`, a call's result, a construction)
+# and, while its type `vt` is not known yet, for an unmarked one.
+reassignValueMode: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    n: astnode.view
+    vt: ztypes.tid
+} out StringView is {
+    mk: zast.markerKindOf :ast :n
+    if mk.holdMarker then return "held"
+    if mk.borrowMarker then return "borrowed"
+    if mk.unmarked.not then return ""
+    if vt.isZero or (typeIsReftype :st tid: vt).not then return ""
+    bn: bareAtomNameId :n
+    if bn.isZero.not then {
+        if (st.lookupVarId nameId: bn).none then return ""
+        return "borrowed"
+    }
+    if (localFieldPath :st :ast :n) then return "borrowed"
+    return ""
+}
+
+# refuseModeChange -- a reassignment keeps the ownership its target was bound
+# with, so a value written in another mode is refused (reassignValueMode):
+# `.hold` rebinds only a `.hold` binding, and a borrow is stored in no owned or
+# held target -- `x = d.take` moves. A non-owned field target is
+# checkMethodRefTarget's. Asked before the value is walked, with `vt` zero, of
+# the markers, whose walk would move their source; and after, of an unmarked
+# place. true when it refused.
+refuseModeChange: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     rasgn: reasgref
     # the target is a `.hold` binding
     targetHeld: bool
+    vt: ztypes.tid
 } out bool is {
-    mk: zast.markerKindOf :ast n: (ast.nodes.get i: rasgn.value.u64)
-    vmode: ""
-    if mk.holdMarker when targetHeld.not then vmode = "held"
-    if mk.borrowMarker then vmode = "borrowed"
+    vn: ast.nodes.get i: rasgn.value.u64
+    vmode: reassignValueMode :st :ast n: vn :vt
     if vmode.length == 0 then return false
+    if targetHeld when (zast.markerKindOf :ast n: vn).holdMarker then return false
     if (borrowedFieldMarkerOf :st :ast :rasgn).length > 0 then return false
+    reportModeChange :st :ast :rasgn :targetHeld :vmode value: rasgn.value
+    return true
+}
+
+# reportModeChange -- the refusal of storing a `vmode` value, at `value`, in
+# the reassignment's owned or held target.
+reportModeChange: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    rasgn: reasgref
+    targetHeld: bool
+    vmode: StringView
+    value: zast.nodeid
+} is {
     tmode: "owned"
     if targetHeld then tmode = "held"
     tt: String
     exprTextOf :ast n: (ast.nodes.get i: rasgn.topath.u64) dst: tt
     mm: "Cannot reassign \{tmode} '\{tt}' with a \{vmode} value: a reassignment keeps the ownership its target was bound with"
+    vn: ast.nodes.get i: value.u64
     (addError
         :st
-        nodeid: rasgn.nid
-        lineno: rasgn.lineno
-        colno: rasgn.colno
+        nodeid: value
+        lineno: (nodeLine n: vn)
+        colno: (nodeCol n: vn)
         e: zast.err.ownerError
         msg: mm
     )
-    return true
 }
 
 # refuseBorrowedReassign -- `r = v` into a target that owns what it holds -- an
@@ -38701,7 +38686,7 @@ reportUnknownArgument: function {
     h: String
     if sug.length > 0 then {
         hh: "did you mean '\{sug}'?"
-        h = hh
+        h = hh.take
     }
     note: String
     (addErrorH
@@ -45129,7 +45114,7 @@ checkCaseArms: function {
     targetName: String
     if isSum then {
         tn: subjectAtomName :ast n: (ast.nodes.get i: casenode.subject.u64)
-        targetName = tn
+        targetName = tn.take
     }
     neverId: u64
     nvOpt: walkLookupTyperef :st scope: st.curScope :ast :unitDecl base: "never"
@@ -47207,7 +47192,7 @@ walkDeclaredDef: function {
             :ast
             declId: dd
         )
-        st.typing.synthLabel = prevL
+        st.typing.synthLabel = prevL.take
         st.typing.synthOwnerUnit = prevL9U
         st.typing.synthOwnerName = prevL9N
         st.typing.currentThisTid = prevT
@@ -47280,7 +47265,7 @@ walkOwnerMethods: function {
                 typeTid: (ztypes.tid.create from: owTid)
                 opId: mem.operation
             )
-            st.typing.synthLabel = prev
+            st.typing.synthLabel = prev.take
             st.typing.synthOwnerUnit = prevU
             st.typing.synthOwnerName = prevN
             st.typing.currentThisTid = prevThis
@@ -47944,7 +47929,7 @@ setSynthOwnerLabel: function {
         defName.length == 0
     ) then dnT.stringView else defName
     lbl: "\{lblUnit}.\{lblName}"
-    st.typing.synthLabel = lbl
+    st.typing.synthLabel = lbl.take
     # the same pair as ids: a method's owner is its TYPE, everything
     # else owns itself. checkCase reads this instead of splitting the
     # label back apart.
@@ -48916,7 +48901,7 @@ stampOneFnMono: function {
         declId: fnTemplateDecl
     )
     noteInstanceErrors :st :ast mono: monoId from: errF0
-    st.typing.synthLabel = prevL
+    st.typing.synthLabel = prevL.take
     st.typing.synthOwnerUnit = prevL9U
     st.typing.synthOwnerName = prevL9N
     st.typing.currentThisTid = prevT
@@ -49076,7 +49061,7 @@ stampOneClassMono: function {
         )
     }
     noteInstanceErrors :st :ast mono: monoId from: errC0
-    st.typing.synthLabel = prevL
+    st.typing.synthLabel = prevL.take
     st.typing.synthOwnerUnit = prevL9U
     st.typing.synthOwnerName = prevL9N
     st.typing.currentThisTid = prevT
@@ -49680,7 +49665,7 @@ stampOneUnitMono: function {
             )
         }
     }
-    st.typing.synthLabel = prevL
+    st.typing.synthLabel = prevL.take
     st.typing.synthOwnerUnit = prevL9U
     st.typing.synthOwnerName = prevL9N
     st.typing.currentThisTid = prevT
@@ -52406,7 +52391,7 @@ reportConstantNoMember: function {
     h: String
     if sug.length > 0 then {
         hh: "did you mean '\{sug}'?"
-        h = hh
+        h = hh.take
     }
     (addErrorH
         :st

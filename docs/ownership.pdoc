@@ -143,7 +143,7 @@ unmarked source.
   Out return values                              |take            |take
   A new local name (#~"b: d", #~"with w: d do")  |copy            |borrow
   An owning destination (see Implicit take)      |take            |take
-  A reassignment (#~"x = d")                     |copy            |take
+  A reassignment of an owned target (#~"x = d")  |copy            |refused (#~"d" is a borrow; #~"d.take" moves)
   A projection source (#~"Rd d", #~"P d")        |copy            |borrow; take in an owning destination
 
 For valtypes, an unmarked parameter is a COPY -- the callee reads and writes
@@ -181,7 +181,7 @@ An owned (taken) variable has full permission over its value.
   #*: Pass to a #~".take" parameter -- transfers ownership to the callee
   #*: Pass to a #~".borrow" parameter -- temporary loan, ownership returns after the call
   #*: Bind to a new name -- #~"q: p" borrows (see A bare bind borrows); #~"q: p.take" transfers ownership to the new name and invalidates the old one. For valtypes #~"q: p" copies and both names stay valid, and #~"q: p.take" invalidates #~"p" as it does a reftype
-  #*: Reassign into another owned variable -- #~"x = p" transfers ownership, and #~"p" is invalidated (valtypes copy)
+  #*: Reassign into another owned variable -- #~"x = p.take" transfers ownership, and #~"p" is invalidated; a bare #~"x = p" is refused (see A reassignment keeps the mode). A valtype copies
   #*: Store in a field of an object
   #*: Swap with another owned variable of the same type
   #*: Return from a function (as #~".take" or #~".borrow")
@@ -198,7 +198,6 @@ destinations are:
   #*: a constructor's field fill (#~"H f: d")
   #*: a sum type's arm (#~"U.a d")
   #*: #~"return d" (return values default to #~".take") and #~"yield d"
-  #*: a reassignment of an owned variable (#~"x = d", #~"h.f = d")
 
 A projection's source (#~"Rd d", #~"Rd.create from: d", #~"P d" for a
 typedef #~"P") follows the projection: handed to one of these destinations
@@ -230,6 +229,24 @@ the subject stays usable after the arm. #~"s: opt.take" moves it out and
 the subject is invalidated for the rest of its scope.
 (A bare #_*"return" of that payload is refused, because it would escape
 the arm's scope while the subject still owns the value.)
+
+#---: A reassignment keeps the mode
+
+A name keeps the ownership mode it was bound with. An owned local or field is
+reassigned an owned value: #~"x = d.take", a construction, a call's result. A
+bare #~"x = d" is refused ("Cannot reassign owned 'x' with a borrowed value: a
+reassignment keeps the ownership its target was bound with"): #~"d" unmarked is
+a borrow. So is a field read through a local (#~"x = h.g"), a borrowed
+parameter, an arm of an #~"if" or #~"match" that yields a bare local, and
+#~"x = d.borrow"; #~"x = d.hold" is refused the same way, since #~".hold"
+rebinds only a #~".hold" binding. A value type copies whatever the spelling.
+
+An owned local whose value was moved out may be refilled: #~"y: x.take" then
+#~"x = mk" makes #~"x" usable again. A refill on only some paths -- in a
+branch, a loop body, or a nested block -- leaves the local moved on the others:
+it is not readable after that scope, and it is freed at its own scope's end on
+the paths that refilled it. A loop that consumes an outer local may refill it
+before the iteration ends (#~"for c loop { keep c: v.take; v = mk }").
 
 #---: Scope exit
 
@@ -421,8 +438,9 @@ local is invalid after the #~"if" all the same, and destroyed at its scope's
 end on the paths that kept it.
 
 An arm whose value is a bare local moves it the same way when the value lands
-where a bare local would move: a binding, a reassignment, a #~".take"
-parameter, a return. #~"r: if c then o else z" moves #~"o" on the path where
+where a bare local would move: a binding, a #~".take" parameter, a return. A
+reassignment moves an arm's local only when the arm writes #~".take": a bare
+local there is a borrow, which an owned target refuses. #~"r: if c then o else z" moves #~"o" on the path where
 #~"c" held and #~"z" on the other, and both are invalid after the #~"if"; a
 sibling arm may still read #~"o" (#~"if c then o else o.copy"). A readonly,
 borrowed or pinned local is refused arm by arm with the words its bare move
@@ -450,7 +468,7 @@ iteration is therefore always wrong: the first iteration consumes it, and the
 next would find it already consumed.
 
 The compiler refuses #~".take", #~".drop", #~".box", a reassignment
-(#~"t = m"), or passing an outer-scope variable to a #~".take" parameter -- in
+(#~"t = m.take"), or passing an outer-scope variable to a #~".take" parameter -- in
 a loop condition, a postcondition, or the body -- whenever the path after the
 move can reach the next iteration: the body falls through, or ends the
 iteration with #~"continue". A bare binding (#~"b: m") is not among them: it
@@ -469,7 +487,9 @@ The move is legal when every path after it #_*"leaves" the loop: #~"break"
 (the name stays consumed after the loop, so a later read is refused as any
 use after a move is) or #~"return" / #~"panic". A move in a condition is
 legal only when the body always leaves the loop, so the condition runs at
-most once; a postcondition move only when the body never falls through.
+most once; a postcondition move only when the body never falls through. A
+move in the body is legal too when the body refills the local before the
+iteration ends (#~"v = mk"): the next iteration finds it holding a value.
 
 Variables declared #_*"inside" the loop body, and the loop's own binding, are
 unaffected: each iteration produces a fresh binding, so taking the local is
@@ -2069,8 +2089,8 @@ the direct form.
   #~"out T.borrow" / #~"out T.view"                          |a reference return keeps its sources locked            |Write #~"outx T.borrow" / #~"outx T.view"
   #~"return s.stringView" where #~"s" is a local             |Cannot return this value: it keeps 's' locked, which dies with this call |Return an owned copy (#~".string"), or a view of a parameter through #~"outx"
   #~"return (W s: loc)" from an #~"outx" function            |the returned #~"W" stores 'loc' in its non-owned field 's', but 'loc' is not a #~".borrow"/#~".view" parameter |Fill the field from a parameter or the receiver
-  #~"x = y.hold" / #~"x = y.borrow" into an owned #~"x"      |Cannot reassign owned 'x' with a held value: a reassignment keeps the ownership its target was bound with |Bind a new name with the marker, or reassign an owned value (#~"y.take", #~"y.copy")
-  #~"x = w" where #~"x" outlives what #~"w" locks             |Cannot move 'w' by reassignment: it holds locks on 'a', and 'x' outlives 'a' |Keep 'x' inside 'a's scope, or #~"w.copy"
+  #~"x = y", #~"x = y.hold" or #~"x = y.borrow" into an owned #~"x" |Cannot reassign owned 'x' with a held value: a reassignment keeps the ownership its target was bound with |Bind a new name with the marker, or reassign an owned value (#~"y.take", #~"y.copy")
+  #~"x = w.take" where #~"x" outlives what #~"w" locks        |Cannot move 'w' by reassignment: it holds locks on 'a', and 'x' outlives 'a' |Keep 'x' inside 'a's scope, or #~"w.copy"
   non-owned field on a record                               |non-owned fields only allowed on classes              |Change the enclosing type from #~"record" to #~"class"
   a reftype field on a record (#~"s: String")               |a record field holds valtypes; make 'R' a class to hold 'String' |Make #~"R" a #~"class"; a valtype that must live on the heap is a #~"Box from:" local, never a field
   a reftype payload on a variant arm                        |a variant arm holds valtypes; make 'V' a union to hold 'String' |Make #~"V" a #~"union"

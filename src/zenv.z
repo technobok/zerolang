@@ -566,34 +566,45 @@ ZSymbolTable: class {
         this.recordScopeDestroy :fr
         endIdx: this.entries.length
         # takes of enclosing scopes' locals survive the close, and so do the
-        # narrowing ends a write laid over them
+        # narrowing ends a write laid over them and the refills (`refills`) a
+        # write made. A refill replaces the local's takes before it here, and a
+        # take replaces a refill before it; takes alone are laid in turn
         mDecls: ListVal ztypes.declid
         mTypes: ListVal u64
-        mLocs: ListVal ztypes.zsrcpos
-        mMaybe: ListVal bool
+        mLocs: ListVal (optionval ztypes.zsrcpos)
+        # 0 a take, 1 a maybe take, 2 a refill, 4 replaced by a later row
+        mFlags: ListVal u8
+        mRefilled: false
         mEnds: ListVal ztypes.declid
         p2: start
         for p2 < endIdx loop {
             e: this.entries.get i: p2
-            if e.endsNarrowing when (this.typing.declParentOf declId: e.declId) != top then {
-                mEnds.append e.declId
-            }
-            if e.isTaken then {
-                taOpt: e.takenAt
-                match (
-                    taOpt
-                ) case some then {
-                    ef: this.typing.declParentOf declId: e.declId
-                    if ef != top then {
-                        zt: e.ztypeId
-                        mDecls.append e.declId
-                        mTypes.append zt
-                        mLocs.append taOpt
-                        mMaybe.append e.takenMaybe
-                    }
-                } case none then null
-            }
             p2 = p2 + 1
+            if e.isTaken.not when e.refills.not when e.endsNarrowing.not then continue
+            if (this.typing.declParentOf declId: e.declId) == top then continue
+            if e.endsNarrowing then mEnds.append e.declId
+            if e.isTaken when e.takenAt.none then continue
+            if e.isTaken.not when e.refills.not then continue
+            if e.refills or mRefilled then {
+                j: u64
+                for j < mDecls.length loop {
+                    if (mDecls.get i: j) == e.declId then {
+                        jf: mFlags.get i: j
+                        if e.refills or (jf == 2) then mFlags.set i: j val: 4
+                    }
+                    j = j + 1
+                }
+            }
+            fl: u8
+            if e.takenMaybe then fl = 1
+            if e.refills then {
+                fl = 2
+                mRefilled = true
+            }
+            mDecls.append e.declId
+            mTypes.append e.ztypeId.u64
+            mLocs.append e.takenAt
+            mFlags.append fl
         }
         # a lock lives as long as its HOLDER: a row a variable of an ENCLOSING
         # scope holds -- a value that moved out of this scope with its locks --
@@ -636,15 +647,22 @@ ZSymbolTable: class {
         mi: u64
         for mi < mc loop {
             d: mDecls.get i: mi
-            already: this.isTakenDecl declId: d
-            if already.not then {
-                te: this.reg.newEntry ztypeId: (ztypes.tid.create from: (mTypes.get i: mi).u64)
-                te.isTaken = true
-                te.takenAt = optionval.some (mLocs.get i: mi)
-                te.takenMaybe = mMaybe.get i: mi
-                this.appendRow row: te declId: d
-            }
+            fl: mFlags.get i: mi
             mi = mi + 1
+            if fl == 4 then continue
+            already: this.isTakenDecl declId: d
+            # a refill of a local that came in taken leaves it maybe taken; a
+            # take of one that came in taken is laid again only to weaken a
+            # certain take to a maybe, which a refill further in makes it
+            if fl == 2 when already.not then continue
+            if fl == 0 when already then continue
+            if fl == 1 when already when (this.stateOfDecl declId: d) == 2 then continue
+            te: this.reg.newEntry ztypeId: (ztypes.tid.create from: (mTypes.get i: mi - 1).u64)
+            te.isTaken = true
+            te.takenMaybe = fl != 0
+            te.takenAt = mLocs.get i: mi - 1
+            if fl == 2 then te.takenAt = this.takenAtOfDecl declId: d
+            this.appendRow row: te declId: d
         }
         # laid last, so no row re-laid above narrows the local again
         with meit: mEnds.iterate do for md: meit loop this.layNarrowingEnd declId: md
@@ -1149,6 +1167,21 @@ ZSymbolTable: class {
     } out optionval ztypes.zsrcpos is {
         d: this.findLocal :nameId
         ro: this.rowOf declId: d
+        match (
+            ro
+        ) case some then {
+            e: this.entries.get i: ro
+            if e.isTaken then return e.takenAt
+        } case none then null
+        return (optionval.none ztypes.zsrcpos)
+    }
+
+    # takenAtOfDecl -- where the local's newest row says its value was moved
+    # out, none when it holds one.
+    takenAtOfDecl: function {
+        this: this.view declId: ztypes.declid
+    } out optionval ztypes.zsrcpos is {
+        ro: this.rowOf :declId
         match (
             ro
         ) case some then {
@@ -2024,12 +2057,14 @@ ZSymbolTable: class {
     # of it stands: lay the row that restores its declared type. When the local
     # WAS narrowed the row is marked, and the scopes carry it outward -- a
     # narrowing an enclosing scope established described the value the write
-    # replaced, in every scope the write can reach.
+    # replaced, in every scope the write can reach. When its value had moved
+    # out the row is a refill (`refills`), which the scopes carry out too.
     endNarrowingByWrite: function {:this nameId: zast.nameid} is {
         d: this.findLocal :nameId
         if d.isZero then return
         re: this.reg.newEntry ztypeId: (this.typing.declLocalTypeOf declId: d)
         re.endsNarrowing = this.isNarrowedDecl declId: d
+        re.refills = this.isTakenDecl declId: d
         this.appendRow row: re declId: d
     }
 

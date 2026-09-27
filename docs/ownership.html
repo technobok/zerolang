@@ -101,6 +101,8 @@ Table of Contents</div>
 </li>
 <li><a href="#a-bare-bind-borrows">A bare bind borrows</a>
 </li>
+<li><a href="#a-reassignment-keeps-the-mode">A reassignment keeps the mode</a>
+</li>
 <li><a href="#scope-exit">Scope exit</a>
 </li>
 </ul>
@@ -340,7 +342,7 @@ unmarked source.</p>
 <tr><td>Out return values</td><td>take</td><td>take</td></tr>
 <tr><td>A new local name (<code>b: d</code>, <code>with w: d do</code>)</td><td>copy</td><td>borrow</td></tr>
 <tr><td>An owning destination (see Implicit take)</td><td>take</td><td>take</td></tr>
-<tr><td>A reassignment (<code>x = d</code>)</td><td>copy</td><td>take</td></tr>
+<tr><td>A reassignment of an owned target (<code>x = d</code>)</td><td>copy</td><td>refused (<code>d</code> is a borrow; <code>d.take</code> moves)</td></tr>
 <tr><td>A projection source (<code>Rd d</code>, <code>P d</code>)</td><td>copy</td><td>borrow; take in an owning destination</td></tr>
 </tbody>
 </table>
@@ -371,7 +373,7 @@ never writes pays for a reference it does not use, and lint L030 says so.</p>
 <li>Pass to a <code>.take</code> parameter -- transfers ownership to the callee</li>
 <li>Pass to a <code>.borrow</code> parameter -- temporary loan, ownership returns after the call</li>
 <li>Bind to a new name -- <code>q: p</code> borrows (see A bare bind borrows); <code>q: p.take</code> transfers ownership to the new name and invalidates the old one. For valtypes <code>q: p</code> copies and both names stay valid, and <code>q: p.take</code> invalidates <code>p</code> as it does a reftype</li>
-<li>Reassign into another owned variable -- <code>x = p</code> transfers ownership, and <code>p</code> is invalidated (valtypes copy)</li>
+<li>Reassign into another owned variable -- <code>x = p.take</code> transfers ownership, and <code>p</code> is invalidated; a bare <code>x = p</code> is refused (see A reassignment keeps the mode). A valtype copies</li>
 <li>Store in a field of an object</li>
 <li>Swap with another owned variable of the same type</li>
 <li>Return from a function (as <code>.take</code> or <code>.borrow</code>)</li>
@@ -386,7 +388,6 @@ destinations are:</p>
 <li>a constructor's field fill (<code>H f: d</code>)</li>
 <li>a sum type's arm (<code>U.a d</code>)</li>
 <li><code>return d</code> (return values default to <code>.take</code>) and <code>yield d</code></li>
-<li>a reassignment of an owned variable (<code>x = d</code>, <code>h.f = d</code>)</li>
 </ul>
 <p>A projection's source (<code>Rd d</code>, <code>Rd.create from: d</code>, <code>P d</code> for a
 typedef <code>P</code>) follows the projection: handed to one of these destinations
@@ -414,7 +415,22 @@ the subject stays usable after the arm. <code>s: opt.take</code> moves it out an
 the subject is invalidated for the rest of its scope.
 (A bare <em><strong>return</strong></em> of that payload is refused, because it would escape
 the arm's scope while the subject still owns the value.)</p>
-<h3 id="scope-exit"><a href="#scope-exit">3.4. Scope exit</a></h3>
+<h3 id="a-reassignment-keeps-the-mode"><a href="#a-reassignment-keeps-the-mode">3.4. A reassignment keeps the mode</a></h3>
+<p>A name keeps the ownership mode it was bound with. An owned local or field is
+reassigned an owned value: <code>x = d.take</code>, a construction, a call's result. A
+bare <code>x = d</code> is refused ("Cannot reassign owned 'x' with a borrowed value: a
+reassignment keeps the ownership its target was bound with"): <code>d</code> unmarked is
+a borrow. So is a field read through a local (<code>x = h.g</code>), a borrowed
+parameter, an arm of an <code>if</code> or <code>match</code> that yields a bare local, and
+<code>x = d.borrow</code>; <code>x = d.hold</code> is refused the same way, since <code>.hold</code>
+rebinds only a <code>.hold</code> binding. A value type copies whatever the spelling.</p>
+<p>An owned local whose value was moved out may be refilled: <code>y: x.take</code> then
+<code>x = mk</code> makes <code>x</code> usable again. A refill on only some paths -- in a
+branch, a loop body, or a nested block -- leaves the local moved on the others:
+it is not readable after that scope, and it is freed at its own scope's end on
+the paths that refilled it. A loop that consumes an outer local may refill it
+before the iteration ends (<code>for c loop { keep c: v.take; v = mk }</code>).</p>
+<h3 id="scope-exit"><a href="#scope-exit">3.5. Scope exit</a></h3>
 <p>When an owned variable falls out of scope without being consumed:</p>
 <ul>
 <li>Reftype: the instance is destroyed (destructor called, memory freed)</li>
@@ -576,8 +592,9 @@ after the first, or a later clause's condition, runs only on some paths: the
 local is invalid after the <code>if</code> all the same, and destroyed at its scope's
 end on the paths that kept it.</p>
 <p>An arm whose value is a bare local moves it the same way when the value lands
-where a bare local would move: a binding, a reassignment, a <code>.take</code>
-parameter, a return. <code>r: if c then o else z</code> moves <code>o</code> on the path where
+where a bare local would move: a binding, a <code>.take</code> parameter, a return. A
+reassignment moves an arm's local only when the arm writes <code>.take</code>: a bare
+local there is a borrow, which an owned target refuses. <code>r: if c then o else z</code> moves <code>o</code> on the path where
 <code>c</code> held and <code>z</code> on the other, and both are invalid after the <code>if</code>; a
 sibling arm may still read <code>o</code> (<code>if c then o else o.copy</code>). A readonly,
 borrowed or pinned local is refused arm by arm with the words its bare move
@@ -616,7 +633,9 @@ on later iterations '&lt;name&gt;' would already be consumed)
 (the name stays consumed after the loop, so a later read is refused as any
 use after a move is) or <code>return</code> / <code>panic</code>. A move in a condition is
 legal only when the body always leaves the loop, so the condition runs at
-most once; a postcondition move only when the body never falls through.</p>
+most once; a postcondition move only when the body never falls through. A
+move in the body is legal too when the body refills the local before the
+iteration ends (<code>v = mk</code>): the next iteration finds it holding a value.</p>
 <p>Variables declared <em><strong>inside</strong></em> the loop body, and the loop's own binding, are
 unaffected: each iteration produces a fresh binding, so taking the local is
 fine. The iterable binding itself (<code>for r: (G s: src) loop</code>) runs once,
@@ -1970,8 +1989,8 @@ the direct form.</p>
 <tr><td><code>out T.borrow</code> / <code>out T.view</code></td><td>a reference return keeps its sources locked</td><td>Write <code>outx T.borrow</code> / <code>outx T.view</code></td></tr>
 <tr><td><code>return s.stringView</code> where <code>s</code> is a local</td><td>Cannot return this value: it keeps 's' locked, which dies with this call</td><td>Return an owned copy (<code>.string</code>), or a view of a parameter through <code>outx</code></td></tr>
 <tr><td><code>return (W s: loc)</code> from an <code>outx</code> function</td><td>the returned <code>W</code> stores 'loc' in its non-owned field 's', but 'loc' is not a <code>.borrow</code>/<code>.view</code> parameter</td><td>Fill the field from a parameter or the receiver</td></tr>
-<tr><td><code>x = y.hold</code> / <code>x = y.borrow</code> into an owned <code>x</code></td><td>Cannot reassign owned 'x' with a held value: a reassignment keeps the ownership its target was bound with</td><td>Bind a new name with the marker, or reassign an owned value (<code>y.take</code>, <code>y.copy</code>)</td></tr>
-<tr><td><code>x = w</code> where <code>x</code> outlives what <code>w</code> locks</td><td>Cannot move 'w' by reassignment: it holds locks on 'a', and 'x' outlives 'a'</td><td>Keep 'x' inside 'a's scope, or <code>w.copy</code></td></tr>
+<tr><td><code>x = y</code>, <code>x = y.hold</code> or <code>x = y.borrow</code> into an owned <code>x</code></td><td>Cannot reassign owned 'x' with a held value: a reassignment keeps the ownership its target was bound with</td><td>Bind a new name with the marker, or reassign an owned value (<code>y.take</code>, <code>y.copy</code>)</td></tr>
+<tr><td><code>x = w.take</code> where <code>x</code> outlives what <code>w</code> locks</td><td>Cannot move 'w' by reassignment: it holds locks on 'a', and 'x' outlives 'a'</td><td>Keep 'x' inside 'a's scope, or <code>w.copy</code></td></tr>
 <tr><td>non-owned field on a record</td><td>non-owned fields only allowed on classes</td><td>Change the enclosing type from <code>record</code> to <code>class</code></td></tr>
 <tr><td>a reftype field on a record (<code>s: String</code>)</td><td>a record field holds valtypes; make 'R' a class to hold 'String'</td><td>Make <code>R</code> a <code>class</code>; a valtype that must live on the heap is a <code>Box from:</code> local, never a field</td></tr>
 <tr><td>a reftype payload on a variant arm</td><td>a variant arm holds valtypes; make 'V' a union to hold 'String'</td><td>Make <code>V</code> a <code>union</code></td></tr>
