@@ -365,8 +365,10 @@ monoOfNativeTemplate: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out 
     return (st.reg.isNativeOf tid: go)
 }
 
-# bareCtorError -- one diagnostic for a bare type name in value position
-# that cannot construct, with the shared teaching note.
+# bareCtorError -- one diagnostic for a construction by type name that the type
+# does not offer. The teaching note is said of the bare spelling only: a bare
+# type name in value position is a zero-argument `create`, which a construction
+# written with arguments is not.
 bareCtorError: function {
     st: zenv.ZSymbolTable
     nodeid: zast.nodeid
@@ -375,8 +377,11 @@ bareCtorError: function {
     width: u32
     msg: String
     hint: String
+    # the construction is the bare type name, not the name given arguments
+    bare: true
 } is {
-    nt: "a bare type name in value position is a zero-argument 'create' construction".string
+    nt: String
+    if bare then nt = "a bare type name in value position is a zero-argument 'create' construction".string
     mc: msg.copy
     hc: hint.copy
     (addErrorH
@@ -435,44 +440,9 @@ checkBareTypeValueAt: function {
     width: u32
     tid: ztypes.tid
 } is {
-    tt: st.reg.typetypeOf typeId: tid
-    isFam: tt.isUserFamily
-    if isFam.not then return
-    if (refuseBorrowedBareType :ast :st :nodeid :lineno :colno :width :tid) then return
+    if (st.reg.typetypeOf typeId: tid).isUserFamily.not then return
+    if (refuseNameConstruction :ast :st :nodeid :lineno :colno :width :tid bare: true) then return
     tdb: typedefBaseOf :st :tid
-    # a generic template has no concrete layout until its arguments apply
-    isGen: false
-    {
-        isgeneric9v: st.reg.isGenericOf :tid
-        if isgeneric9v then isGen = true
-    }
-    if isGen then {
-        tn: specWrittenName :st :ast :tid
-        mg: "cannot construct '\{tn}' from its bare name: a generic type needs type arguments"
-        hg: "apply type arguments first, e.g. '(ListVal t: u8)'".string
-        bareCtorError :st :nodeid :lineno :colno :width msg: mg hint: hg
-        return
-    }
-    # unions and variants select an arm; bool's arms are its literals
-    isUV: tt.isSum
-    if isUV then {
-        tn: specWrittenName :st :ast :tid
-        mu: "cannot construct '\{tn}' from its bare name: a union/variant selects an arm"
-        hu: "construct an arm: '\{tn}.<arm> ...'"
-        if tid == (builtinTidT :st scope: st.curScope :ast base: "bool") then {
-            hu = "write 'false' (the zero arm) or 'true'".string
-        }
-        bareCtorError :st :nodeid :lineno :colno :width msg: mu hint: hu
-        return
-    }
-    isPF: tt.isInterface
-    if isPF then {
-        tn: specWrittenName :st :ast :tid
-        mp: "cannot construct '\{tn}' from its bare name: a protocol/facet projects a conforming value"
-        hp: "bind a value of a conforming type instead".string
-        bareCtorError :st :nodeid :lineno :colno :width msg: mp hint: hp
-        return
-    }
     # a typedef class over String (Path) is the empty string value
     if tdb > 0 when tdb == (builtinTidT :st scope: st.curScope :ast base: "String") then {
         ics: tid
@@ -487,23 +457,6 @@ checkBareTypeValueAt: function {
         return
     }
     forceMemberOf :st :ast parentTypeId: tid nameId: zast.names.wkCreate
-    crO: st.typing.declChildOfId parentTypeId: tid nameId: zast.names.wkCreate
-    hasCr: false
-    match (
-        crO
-    ) case some then {
-        if (
-            (st.reg.typetypeOf typeId: (ztypes.tid.create from: crO.u64)) ==
-            ztypes.ztypetype.functionType
-        ) then hasCr = true
-    } case none then null
-    if hasCr.not then {
-        tn: specWrittenName :st :ast :tid
-        mn0: "cannot construct '\{tn}' from its bare name: the type does not define construction (create: null)"
-        hn0: "use the type's own factory functions".string
-        bareCtorError :st :nodeid :lineno :colno :width msg: mn0 hint: hn0
-        return
-    }
     # the zero-argument spelling of self-construction: a bare type name (or
     # `T.create` with no arguments) in value position inside T's own create.
     if (ctorSelfRecursionAt :st :nodeid :lineno :colno :width ctorTid: tid) then return
@@ -28379,6 +28332,7 @@ checkUnresolvedMember: function {
             width: 1
             msg: mdc
             hint: "use the type's own factory functions".string
+            bare: false
         )
         return (ztypes.tid.create from: 0)
     }
@@ -42570,6 +42524,22 @@ fieldBoundGenericConstruction: function {
     # diagnosed) never drives field-bound inference; the
     # single-diagnostic template resolution below stands
     gmid: ztypes.tid
+    # the template answers the construction rules for every instance of it, and
+    # asked before inference, a sum is refused by its rule rather than by the
+    # arms inference would read as fields
+    if vok when st.typing.errors.length == errB when (refuseNameConstruction
+        :ast
+        :st
+        nodeid: call.nid
+        lineno: call.lineno
+        colno: call.colno
+        width: 1
+        tid: tplId
+        bare: false
+    ) then {
+        checkWrappedValueArgs :st :unitDecl :ast :call
+        return (callleg handled: true tid: (ztypes.tid.create from: 0))
+    }
     # a refused argument is reported; inference would only report it again
     # as a parameter it cannot infer
     if vok when st.typing.errors.length == errB then {
@@ -42581,10 +42551,6 @@ fieldBoundGenericConstruction: function {
             :tplId
             reportMissing: vok
         )
-    }
-    if gmid > 0 when (refuseDisabledConstruction :st :call tid: gmid) then {
-        checkWrappedValueArgs :st :unitDecl :ast :call
-        return (callleg handled: true tid: (ztypes.tid.create from: 0))
     }
     if gmid > 0 then {
         calid: nodeId n: (ast.nodes.get i: call.callable.u64)
@@ -42934,7 +42900,16 @@ checkTypeConstruction: function {
             pjId: tid.u64
         )
     }
-    if (refuseDisabledConstruction :st :call :tid) then {
+    if (refuseNameConstruction
+        :ast
+        :st
+        nodeid: call.nid
+        lineno: call.lineno
+        colno: call.colno
+        width: 1
+        :tid
+        bare: false
+    ) then {
         # the arguments are still values, and still stamp
         checkWrappedValueArgs :st :unitDecl :ast :call
         return (ztypes.tid.create from: 0)
@@ -43045,28 +43020,121 @@ pinConstructionSources: function {
     }
 }
 
-# refuseDisabledConstruction -- a user record or class that defines no `create`
-# function -- `create: null` -- cannot be constructed, whether the construction
-# names it bare, applies it to arguments or calls `create` on it. Only the bare
-# name was refused; `Secret value: 4` built one anyway. true once reported.
-refuseDisabledConstruction: function {
+# refuseNameConstruction -- a construction of `tid` by its name that the type
+# does not offer, reported by the rule it breaks; true when it refused. Both
+# spellings ask it -- the bare name (`kd`, `(GT t: i64)` alone: checkBareTypeValueAt)
+# and the name given arguments (`kd 5`, `(GT t: i64) leaf: 5`, a template before
+# its arguments are inferred) -- so a rule cannot hold for one and not the other.
+# The rules, and where the spellings differ:
+#   a borrowed view / iterator   bare only: given its source it binds to it
+#   a generic template           bare only: given arguments it is inferred
+#   a union or a variant         both: a sum is built through an arm
+#   a protocol or a facet        bare only: given a value it projects it
+#   `create: null`               both
+# Self-construction and missing fields need the arguments' walk, and are asked
+# after it on both paths.
+refuseNameConstruction: function {
+    ast: Ast
     st: zenv.ZSymbolTable
-    call: callref
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+    width: u32
     tid: ztypes.tid
+    # the construction is the bare type name, not the name given arguments
+    bare: bool
 } out bool is {
-    if (typeDefinesConstruction :st :tid) then return false
-    tn: st.reg.nameOf :tid
-    md: "cannot construct '\{tn}': the type does not define construction (create: null)"
-    (bareCtorError
-        :st
-        nodeid: call.nid
-        lineno: call.lineno
-        colno: call.colno
-        width: 1
-        msg: md
-        hint: "use the type's own factory functions".string
-    )
-    return true
+    tt: st.reg.typetypeOf typeId: tid
+    if bare then {
+        if (refuseBorrowedBareType :ast :st :nodeid :lineno :colno :width :tid) then return true
+        if (st.reg.isGenericOf :tid) then {
+            (nameCtorError
+                :ast
+                :st
+                :nodeid
+                :lineno
+                :colno
+                :width
+                :tid
+                :bare
+                reason: "a generic type needs type arguments"
+                hint: "apply type arguments first, e.g. '(ListVal t: u8)'".string
+            )
+            return true
+        }
+    }
+    # unions and variants select an arm; bool's arms are its literals
+    if tt.isSum then {
+        tn: specWrittenName :st :ast :tid
+        hu: "construct an arm: '\{tn}.<arm> ...'"
+        if tid == (builtinTidT :st scope: st.curScope :ast base: "bool") then {
+            hu = "write 'false' (the zero arm) or 'true'".string
+        }
+        (nameCtorError
+            :ast
+            :st
+            :nodeid
+            :lineno
+            :colno
+            :width
+            :tid
+            :bare
+            reason: "a union/variant selects an arm"
+            hint: hu
+        )
+        return true
+    }
+    if bare when tt.isInterface then {
+        (nameCtorError
+            :ast
+            :st
+            :nodeid
+            :lineno
+            :colno
+            :width
+            :tid
+            :bare
+            reason: "a protocol/facet projects a conforming value"
+            hint: "bind a value of a conforming type instead".string
+        )
+        return true
+    }
+    if (typeDefinesConstruction :st :tid).not then {
+        (nameCtorError
+            :ast
+            :st
+            :nodeid
+            :lineno
+            :colno
+            :width
+            :tid
+            :bare
+            reason: "the type does not define construction (create: null)"
+            hint: "use the type's own factory functions".string
+        )
+        return true
+    }
+    return false
+}
+
+# nameCtorError -- refuseNameConstruction's diagnostic: `cannot construct 'X'`,
+# `from its bare name` when that is the spelling, and the rule's reason.
+nameCtorError: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+    width: u32
+    tid: ztypes.tid
+    bare: bool
+    reason: StringView
+    hint: String
+} is {
+    tn: specWrittenName :st :ast :tid
+    m: "cannot construct '\{tn}': \{reason}"
+    if bare then m = "cannot construct '\{tn}' from its bare name: \{reason}"
+    bareCtorError :st :nodeid :lineno :colno :width msg: m :hint :bare
 }
 
 # typeDefinesConstruction -- the type constructs: only one whose `as` block
@@ -43169,7 +43237,16 @@ checkWrappedCtorArgs: function {
     call: callref
     wcv: ztypes.tid
 } is {
-    if (refuseDisabledConstruction :st :call tid: wcv) then {
+    if (refuseNameConstruction
+        :ast
+        :st
+        nodeid: call.nid
+        lineno: call.lineno
+        colno: call.colno
+        width: 1
+        tid: wcv
+        bare: false
+    ) then {
         checkWrappedValueArgs :st :unitDecl :ast :call
         return
     }
@@ -43385,6 +43462,7 @@ checkExplicitConstruction: function {
             width: 1
             msg: mg
             hint: "apply type arguments first, e.g. '(ListVal t: u8).create'".string
+            bare: false
         )
         checkWrappedValueArgs :st :unitDecl :ast :call
         return (callleg handled: true tid: (ztypes.tid.create from: 0))
