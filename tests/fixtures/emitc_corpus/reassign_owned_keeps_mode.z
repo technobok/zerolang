@@ -1,15 +1,25 @@
 # A reassignment keeps the mode its target was bound with. An owned local or
 # field takes an owned value: `.take` of a local, a construction, a call's
 # result. A local moved out is refilled the same way -- on every path
-# (straight on, after a move in a branch), inside a branch (the local is then
-# held on some paths only, and freed at its end whichever ran), or inside a
-# loop that consumes it and refills it before the next iteration.
+# (straight on, after a move in a branch, in a plain block, in every arm of an
+# `if`/`else` or a `match`), inside a branch alone (the local is then held on
+# some paths only, and freed at its end whichever ran), or inside a loop that
+# consumes it and refills it before the next iteration. An unmarked value-type
+# parameter is the callee's own copy, reassigned whole as a local is.
 Cell: class { n: i64  s: String }
 H: class { f: Cell }
 
 keep: function {c: Cell.take} out i64 is { return c.n }
 
 mk: function {n: i64} out Cell is { return (Cell :n s: "made".string) }
+
+pt: record { x: i64 }
+
+bump: function {p: i64 q: pt} out i64 is {
+    p = p + 1
+    q = pt x: q.x + p
+    return q.x
+}
 
 main: function is {
     x: Cell n: 1 s: "x".string
@@ -47,4 +57,18 @@ main: function is {
     r: Cell n: 12 s: "r".string
     r = if c then g.take else (mk n: 13)
     print "arm \{r.n}"
+    u: r.take
+    {
+        r = mk n: 14
+    }
+    print "block \{u.n} \{r.n}"
+    u2: r.take
+    if c then r = mk n: 15 else r = mk n: 16
+    print "every arm \{u2.n} \{r.n}"
+    u3: r.take
+    match (c) case true then r = mk n: 17 case false then r = mk n: 18
+    print "match arms \{u3.n} \{r.n}"
+    k: 1
+    kp: pt x: 2
+    print "param copy \{bump p: k q: kp} \{k} \{kp.x}"
 }

@@ -244,11 +244,15 @@ parameter, an arm of an #~"if" or #~"match" that yields a bare local, and
 rebinds only a #~".hold" binding. A value type copies whatever the spelling.
 
 An owned local whose value was moved out may be refilled: #~"y: x.take" then
-#~"x = mk" makes #~"x" usable again. A refill on only some paths -- in a
-branch, a loop body, or a nested block -- leaves the local moved on the others:
-it is not readable after that scope, and it is freed at its own scope's end on
-the paths that refilled it. A loop that consumes an outer local may refill it
-before the iteration ends (#~"for c loop { keep c: v.take; v = mk }").
+#~"x = mk" makes #~"x" usable again, and so does a refill every path runs: in
+a plain block no #~"break" leaves, or in every arm of an #~"if" with an
+#~"else" or of a #~"match". A refill on only some paths -- an #~"if" with no
+#~"else", a loop body, a block a #~"break" may leave first -- leaves the local
+moved on the others: it is not readable after that statement, and it is freed
+at its own scope's end on the paths that refilled it. What refills an owned
+local is an owned value, which stays the local's after the statement; a borrow
+cannot refill it. A loop that consumes an outer local may refill it before the
+iteration ends (#~"for c loop { keep c: v.take; v = mk }").
 
 A borrowed local or parameter is RE-POINTED by a reassignment: #~"b = z"
 makes #~"b" borrow #~"z" -- nothing is written through #~"b", and nothing is
@@ -267,14 +271,17 @@ with").
 
 A borrow re-pointed at an OWNED value -- a call's result, a construction --
 refers to a companion that holds it: an unnamed owned local of the borrow's own
-scope, declared empty beside it. The companion frees what it held each time it
+scope, made for a borrow that is re-pointed at an owned value and declared empty
+beside it. The companion frees what it held each time it
 takes a new value (a loop re-pointing the borrow on each iteration frees the
 last one) and at the end of the borrow's scope, whichever way it is left. The
 value runs before the old one is freed, so it may read the borrow
 (#~"b = mk n: b.n + 1"). A binding of an owned value stays owned
 (#~"b: mk n: 3"); only a reassignment of a borrow makes a companion.
-A borrow is never swapped, and a value-type parameter, the caller's copy, is
-written through its fields but not replaced whole.
+A borrow is never swapped. An unmarked value-type parameter is the callee's own
+copy and is reassigned as a local is (#~"p = p + 1"); one passed by reference,
+#~".borrow" or #~".view", is written through its fields but not replaced
+whole.
 
 #---: Scope exit
 

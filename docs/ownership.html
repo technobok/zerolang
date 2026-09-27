@@ -427,11 +427,15 @@ parameter, an arm of an <code>if</code> or <code>match</code> that yields a bare
 <code>x = d.borrow</code>; <code>x = d.hold</code> is refused the same way, since <code>.hold</code>
 rebinds only a <code>.hold</code> binding. A value type copies whatever the spelling.</p>
 <p>An owned local whose value was moved out may be refilled: <code>y: x.take</code> then
-<code>x = mk</code> makes <code>x</code> usable again. A refill on only some paths -- in a
-branch, a loop body, or a nested block -- leaves the local moved on the others:
-it is not readable after that scope, and it is freed at its own scope's end on
-the paths that refilled it. A loop that consumes an outer local may refill it
-before the iteration ends (<code>for c loop { keep c: v.take; v = mk }</code>).</p>
+<code>x = mk</code> makes <code>x</code> usable again, and so does a refill every path runs: in
+a plain block no <code>break</code> leaves, or in every arm of an <code>if</code> with an
+<code>else</code> or of a <code>match</code>. A refill on only some paths -- an <code>if</code> with no
+<code>else</code>, a loop body, a block a <code>break</code> may leave first -- leaves the local
+moved on the others: it is not readable after that statement, and it is freed
+at its own scope's end on the paths that refilled it. What refills an owned
+local is an owned value, which stays the local's after the statement; a borrow
+cannot refill it. A loop that consumes an outer local may refill it before the
+iteration ends (<code>for c loop { keep c: v.take; v = mk }</code>).</p>
 <p>A borrowed local or parameter is RE-POINTED by a reassignment: <code>b = z</code>
 makes <code>b</code> borrow <code>z</code> -- nothing is written through <code>b</code>, and nothing is
 freed. Any borrow re-points to another borrow of its type: a place, unmarked or
@@ -448,14 +452,17 @@ through it"). A <code>.take</code> or a <code>.hold</code> is refused ("Cannot r
 with").</p>
 <p>A borrow re-pointed at an OWNED value -- a call's result, a construction --
 refers to a companion that holds it: an unnamed owned local of the borrow's own
-scope, declared empty beside it. The companion frees what it held each time it
+scope, made for a borrow that is re-pointed at an owned value and declared empty
+beside it. The companion frees what it held each time it
 takes a new value (a loop re-pointing the borrow on each iteration frees the
 last one) and at the end of the borrow's scope, whichever way it is left. The
 value runs before the old one is freed, so it may read the borrow
 (<code>b = mk n: b.n + 1</code>). A binding of an owned value stays owned
 (<code>b: mk n: 3</code>); only a reassignment of a borrow makes a companion.
-A borrow is never swapped, and a value-type parameter, the caller's copy, is
-written through its fields but not replaced whole.</p>
+A borrow is never swapped. An unmarked value-type parameter is the callee's own
+copy and is reassigned as a local is (<code>p = p + 1</code>); one passed by reference,
+<code>.borrow</code> or <code>.view</code>, is written through its fields but not replaced
+whole.</p>
 <h3 id="scope-exit"><a href="#scope-exit">3.5. Scope exit</a></h3>
 <p>When an owned variable falls out of scope without being consumed:</p>
 <ul>

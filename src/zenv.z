@@ -332,6 +332,9 @@ openscope: record {
     # the id the next variable minted after the scope opened took: a variable
     # with a smaller id was bound before it, in an enclosing scope
     firstVid: u64
+    # every path out of the scope that reaches the code after it ran all of it:
+    # a `do` block no `break` left. A refill it made is then made on every path
+    unconditional: bool
 }
 
 # one scope entry, flattened for the SQL dump. It is a snapshot: entries are
@@ -395,6 +398,11 @@ heldlock: record {
 ZSymbolTable: class {
     # the open scopes, innermost last
     open: ListVal openscope
+    # the exits recorded (recordExitDestroy), three words each: the exit's node,
+    # the lowest open scope it leaves, and the variable count when it was
+    # recorded -- what a local bound after them into an enclosing scope must
+    # join (addToExitsLeaving). A function body keeps its own.
+    exitLog: ListVal u64
     # the innermost open scope that has a row -- the scope the walk resolves
     # from. A scope that has declared nothing yet has no row (pushBlock,
     # pushCall): it is transparent to every lookup, so the nearest enclosing
@@ -494,6 +502,7 @@ ZSymbolTable: class {
             start: this.entries.length
             defs: 0
             firstVid: this.reg.variableCount
+            unconditional: false
         )
         if this.typing.suppressParamStamps then this.scopeHidden.add item: f.u64
         this.curScope = f
@@ -514,7 +523,79 @@ ZSymbolTable: class {
             start: this.entries.length
             defs: 0
             firstVid: this.reg.variableCount
+            unconditional: false
         )
+    }
+
+    # markUnconditional -- the open scope at `marker` (the index pushBlock
+    # answered) is left, on every path that reaches the code after it, only
+    # after all of it ran.
+    markUnconditional: function {:this marker: u64} is {
+        if marker >= this.open.length then return
+        fr: this.open.getMut i: marker
+        fr.unconditional = true
+    }
+
+    # openIndexOf -- where the open scope `scope` sits in `open`, none when it is
+    # not open.
+    openIndexOf: function {this: this.view scope: ztypes.declid} out optionval u64 is {
+        i: this.open.length
+        for i > 0 loop {
+            i = i - 1
+            if (this.open.get :i).id == scope then return (optionval.some i)
+        }
+        return (optionval.none u64)
+    }
+
+    # defineVarAt -- bind `nameId` to `vid` in the open scope at `index`, which
+    # has its row, as defineLocal binds in the innermost.
+    defineVarAt: function {:this index: u64 nameId: zast.nameid vid: ztypes.vid} is {
+        fr: this.open.get i: index
+        if fr.id.isZero then return
+        (this.typing.declNewLocal
+            name: nameId.u32
+            parent: fr.id
+            node: 0
+            typeId: (this.reg.variableTypeOf id: vid)
+            varId: vid
+        )
+        fr.defs = fr.defs + 1
+        this.open.set i: index val: fr
+    }
+
+    # addToExitsLeaving -- the owned local `vid`, just bound in the open scope at
+    # `index`, joins the destroys of every exit recorded since the variable
+    # `since` was minted that leaves that scope: such an exit may run after the
+    # local is filled -- on a loop's later iteration -- and an exit that runs
+    # before finds it empty, which frees nothing.
+    addToExitsLeaving: function {:this index: u64 since: ztypes.vid vid: ztypes.vid} is {
+        if this.recording.not then return
+        i: u64
+        for i + 2 < this.exitLog.length loop {
+            nid: this.exitLog.get :i
+            downTo: this.exitLog.get i: i + 1
+            vc: this.exitLog.get i: i + 2
+            i = i + 3
+            if vc > since.u64 when downTo <= index then this.addToExit :nid :vid
+        }
+    }
+
+    # addToExit -- the exit at `nid` destroys `vid` too, after what it listed.
+    addToExit: function {:this nid: u64 vid: ztypes.vid} is {
+        start: this.typing.destroyItems.length
+        rg: this.typing.exitDestroy.get key: nid
+        match (
+            rg
+        ) case some then {
+            k: u64
+            for k < rg.len.u64 loop {
+                it: this.typing.destroyItems.get i: rg.start.u64 + k
+                k = k + 1
+                this.typing.destroyItems.append (ztyping.destroyitem vid: it.vid state: it.state)
+            }
+        } case none then null
+        this.typing.destroyItems.append (ztyping.destroyitem :vid state: 0)
+        this.closeExitRange :nid :start
     }
 
     # innermostOpenIs -- the innermost open scope is `scope` itself: no block,
@@ -666,6 +747,13 @@ ZSymbolTable: class {
             if fl == 2 when already.not then continue
             if fl == 0 when already then continue
             if fl == 1 when already when (this.stateOfDecl declId: d) == 2 then continue
+            # a refill every path through here made refills the local here too
+            if fl == 2 when fr.unconditional then {
+                re: this.reg.newEntry ztypeId: (ztypes.tid.create from: (mTypes.get i: mi - 1).u64)
+                re.refills = true
+                this.appendRow row: re declId: d
+                continue
+            }
             te: this.reg.newEntry ztypeId: (ztypes.tid.create from: (mTypes.get i: mi - 1).u64)
             te.isTaken = true
             te.takenMaybe = fl != 0
@@ -1012,6 +1100,9 @@ ZSymbolTable: class {
     # innermost first, but `except` -- the local a `return` hands back.
     recordExitDestroy: function {:this nid: u64 downTo: u64 except: ztypes.vid} is {
         if this.recording.not then return
+        this.exitLog.append nid
+        this.exitLog.append downTo
+        this.exitLog.append this.reg.variableCount
         start: this.typing.destroyItems.length
         i: this.open.length
         for i > downTo loop {
@@ -1238,6 +1329,31 @@ ZSymbolTable: class {
         } case none then {
             return false
         }
+    }
+
+    # refilledInInnermost -- the locals of enclosing scopes the innermost scope
+    # refilled (a `refills` row) and that hold a value here, appended to `into`
+    # once each.
+    refilledInInnermost: function {this: this.view into: ListVal u64} is {
+        n: this.open.length
+        if n == 0 then return
+        p: (this.open.get i: n - 1).start
+        for p < this.entries.length loop {
+            e: this.entries.get i: p
+            p = p + 1
+            if e.refills.not then continue
+            if (this.isTakenDecl declId: e.declId) then continue
+            if (into.contains item: e.declId.u64) then continue
+            into.append e.declId.u64
+        }
+    }
+
+    # layRefill -- the local `declId` holds a value again: every path to here
+    # refilled it.
+    layRefill: function {:this declId: ztypes.declid} is {
+        re: this.reg.newEntry ztypeId: (this.typing.declLocalTypeOf :declId)
+        re.refills = true
+        this.appendRow row: re :declId
     }
 
     # takenBetween -- whether a take row lies in rows [from, to).
@@ -2612,6 +2728,7 @@ divkind: data {
 newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} out ZSymbolTable is {
     return (ZSymbolTable
         open: ListVal openscope
+        exitLog: ListVal u64
         curScope: ztypes.declid
         entries: List ZEntry
         unreachableScopes: IdSet u64
