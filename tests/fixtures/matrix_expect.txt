@@ -7,9 +7,11 @@
 #
 # selector   a family, `*`, or a group: @ref @val @constructible @sum
 #            @interface @generic @typedef @native
-# verdict    RUN; REFUSED with `Ennnn message` (@N -- the type as the compiler
-#            names it); NA with the reason the cell cannot be written; ASK with
-#            the open question (the cell is emitted nowhere until it is answered)
+# verdict    RUN; REFUSED with `Ennnn message` (@N -- the type as the
+#            compiler names it, its canonical spelling); NA with the reason
+#            the cell cannot be written; ASK with the open question; KNOWN
+#            with the defect that keeps the cell from doing what it should
+#            (ASK and KNOWN cells are emitted nowhere in the fixtures)
 #
 # The LAST row selecting a cell decides it.
 
@@ -33,24 +35,32 @@
 
 # -- a moved source is gone
 *              param_take_then_read   REFUSED  E0200 cannot use 'x' after ownership transfer
-@ref           proj_bare_then_read    REFUSED  E0200 cannot use 'x' after ownership transfer
-@ref           proj_create_then_read  REFUSED  E0200 cannot use 'x' after ownership transfer
-@ref           conf_bare_then_read    REFUSED  E0200 cannot use 'x' after ownership transfer
+
+# -- an unmarked projection bound to a name borrows its source EXCLUSIVELY, as
+#    `.borrow` does; a value-type source is copied, and stays readable
+@ref           proj_bare_then_read    REFUSED  E0200 Cannot take shared lock on 'x': already has exclusive lock held by 'p'
+@ref           proj_create_then_read  REFUSED  E0200 Cannot take shared lock on 'x': already has exclusive lock held by 'p'
+@ref           conf_bare_then_read    REFUSED  E0200 Cannot take shared lock on 'x': already has exclusive lock held by 'p'
+
+# -- a reftype field never moves out: a swap takes it (Q3)
+@ref           field_take             REFUSED  E0200 Cannot move borrowed variable 'h.f' with '.take' — borrowed names stay bound to their source for the full scope; copy with '.copy' to keep the source
 
 # -- a label projection names a conformance; a typedef is not one
 *              proj_label             REFUSED  E0100 type '@N' has no member 'PjLabel'
-tclass         proj_label             REFUSED  E0100 type 'Cell' has no member 'PjLabel'
-trecord        proj_label             REFUSED  E0100 type 'pt' has no member 'PjLabel'
 
-# -- open questions
-@val           proj_borrow            ASK      Q1 `P x.borrow` of a value type copies: refuse it like `b: x.borrow`?
-@val           proj_borrow_write      ASK      Q1 `P x.borrow` of a value type copies: refuse it like `b: x.borrow`?
-@val           proj_borrow_after      ASK      Q1 `P x.borrow` of a value type copies: refuse it like `b: x.borrow`?
-@val           with_borrow            ASK      Q1 `with w: x.borrow` of a value type copies: refuse it like `b: x.borrow`?
-@val           with_borrow_write      ASK      Q1 `with w: x.borrow` of a value type copies: refuse it like `b: x.borrow`?
-@val           with_borrow_after      ASK      Q1 `with w: x.borrow` of a value type copies: refuse it like `b: x.borrow`?
-@val           conf_bare_then_read    ASK      Q2 `Rd x` moves a value type out of `x`, where `b: x` and `P x` copy it
-@ref           field_take             ASK      Q3 `h.f.take` on an owned local's field: move it out, or refuse (the compiler's rule)?
+# -- a `.borrow` of a value type is refused wherever the value is copied: a
+#    typedef built from it and a `with` as much as a binding (Q1)
+@val           proj_borrow            REFUSED  E0200 '@N' is a value type: the binding copies it, so `.borrow` has nothing to borrow
+@val           proj_borrow_write      REFUSED  E0200 '@N' is a value type: the binding copies it, so `.borrow` has nothing to borrow
+@val           proj_borrow_after      REFUSED  E0200 '@N' is a value type: the binding copies it, so `.borrow` has nothing to borrow
+@val           with_borrow            REFUSED  E0200 '@N' is a value type: the binding copies it, so `.borrow` has nothing to borrow
+@val           with_borrow_write      REFUSED  E0200 '@N' is a value type: the binding copies it, so `.borrow` has nothing to borrow
+@val           with_borrow_after      REFUSED  E0200 '@N' is a value type: the binding copies it, so `.borrow` has nothing to borrow
+
+# -- a reassignment keeps the mode the name was bound with
+@ref           repoint_take           REFUSED  E0200 Cannot reassign borrowed 'b' with an owned value: a reassignment keeps the ownership its target was bound with
+@ref           reassign_bare          REFUSED  E0200 Cannot reassign owned 'x' with a borrowed value: a reassignment keeps the ownership its target was bound with
+@ref           field_reassign_bare    REFUSED  E0200 Cannot reassign owned 'h.f' with a borrowed value: a reassignment keeps the ownership its target was bound with
 
 # -- cells that cannot be written
 map            operator_lvalue        NA       Map declares no operator
@@ -80,3 +90,43 @@ result         operator_rvalue        NA       Result declares no operator
 @native        conf_borrow            NA       a native type declares no conformance
 @native        conf_borrow_write      NA       a native type declares no conformance
 @native        conf_bare_then_read    NA       a native type declares no conformance
+
+# -- known defects: each cell waits on its fix (the M1 worklist)
+tclass         return_narrowed        KNOWN    D1 a typedef of a class in a container, an arm or a `with`: its _destroy is never emitted (C compiler)
+tclass         map_value              KNOWN    D1 a typedef of a class in a container, an arm or a `with`: its _destroy is never emitted (C compiler)
+tclass         map_get                KNOWN    D1 a typedef of a class in a container, an arm or a `with`: its _destroy is never emitted (C compiler)
+tclass         option_payload         KNOWN    D1 a typedef of a class in a container, an arm or a `with`: its _destroy is never emitted (C compiler)
+tclass         result_payload         KNOWN    D1 a typedef of a class in a container, an arm or a `with`: its _destroy is never emitted (C compiler)
+tclass         union_arm              KNOWN    D1 a typedef of a class in a container, an arm or a `with`: its _destroy is never emitted (C compiler)
+tclass         match_arm              KNOWN    D1 a typedef of a class in a container, an arm or a `with`: its _destroy is never emitted (C compiler)
+tclass         if_arm                 KNOWN    D1 a typedef of a class in a container, an arm or a `with`: its _destroy is never emitted (C compiler)
+tclass         with_bind              KNOWN    D1 a typedef of a class in a container, an arm or a `with`: its _destroy is never emitted (C compiler)
+gclass         operator_lvalue        KNOWN    D2 an operator on a generic instance: an implicit declaration (C compiler)
+grecord        operator_lvalue        KNOWN    D2 an operator on a generic instance: an implicit declaration (C compiler)
+gunion         operator_lvalue        KNOWN    D2 an operator on a generic instance: an implicit declaration (C compiler)
+gvariant       operator_lvalue        KNOWN    D2 an operator on a generic instance: an implicit declaration (C compiler)
+gclass         operator_rvalue        KNOWN    D2 an operator on a generic instance: an unknown type (C compiler)
+grecord        operator_rvalue        KNOWN    D2 an operator on a generic instance: an unknown type (C compiler)
+gunion         operator_rvalue        KNOWN    D2 an operator on a generic instance: an unknown type (C compiler)
+gvariant       operator_rvalue        KNOWN    D2 an operator on a generic instance: an unknown type (C compiler)
+gprotocol      operator_rvalue        KNOWN    D2 an operator on a generic instance: an unknown type (C compiler)
+gfacet         operator_rvalue        KNOWN    D2 an operator on a generic instance: an unknown type (C compiler)
+union          this_as_arg            KNOWN    D3 a receiver handed on to a `.view` parameter (C compiler)
+gunion         this_as_arg            KNOWN    D3 a receiver handed on to a `.view` parameter (C compiler)
+protocol       this_as_arg            KNOWN    D3 a receiver handed on to a `.view` parameter (C compiler)
+gprotocol      this_as_arg            KNOWN    D3 a receiver handed on to a `.view` parameter (C compiler)
+option         this_as_arg            KNOWN    D3 a receiver handed on to a `.view` parameter (C compiler)
+result         this_as_arg            KNOWN    D3 a receiver handed on to a `.view` parameter (C compiler)
+map            this_as_arg            KNOWN    D3 a receiver handed on to a `.view` parameter (C compiler)
+string         this_as_arg            KNOWN    D3 a receiver handed on to a `.view` parameter (C compiler)
+map            with_bind              KNOWN    D4 a `with` over a Map (C compiler)
+map            with_borrow            KNOWN    D4 a `with` over a Map (C compiler)
+map            with_borrow_after      KNOWN    D4 a `with` over a Map (C compiler)
+map            return_narrowed        KNOWN    D5 a narrowed Map payload returned: use after free
+option         method_rvalue          KNOWN    D6 a method on a call result leaks the result
+result         method_rvalue          KNOWN    D6 a method on a call result leaks the result
+gunion         method_rvalue          KNOWN    D6 a method on a call result leaks the result
+protocol       proj_label             KNOWN    D7 a label projection on an interface value passes the checker (E0500 in the emitter)
+facet          proj_label             KNOWN    D7 a label projection on an interface value passes the checker (E0500 in the emitter)
+gprotocol      proj_label             KNOWN    D7 a label projection on an interface value passes the checker (E0500 in the emitter)
+gfacet         proj_label             KNOWN    D7 a label projection on an interface value passes the checker (E0500 in the emitter)
