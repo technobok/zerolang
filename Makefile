@@ -1913,7 +1913,7 @@ perf: $(PERFBIN)
 #
 # -966 a value-type union arm is boxed implicitly: -18 behaviour (the arm
 # check that copied every arm's name is gone), -948 source.
-ALLOC_BASELINE := 2758590
+ALLOC_BASELINE := 2759046
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

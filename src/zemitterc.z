@@ -7524,13 +7524,15 @@ orderMethodParam: function {
             one.append recvExpr
         } else {
             # same rule as the auto-call base: a receiver that IS a call has no
-            # address, so emitByrefArg hoists it into a temp
+            # address, so emitByrefArg hoists it into a temp -- the checker's
+            # temp for the receiver node, freed when the checker says it owns
             one.append (emitByrefArg
                 :ast
                 :symtab
                 :ctx
                 av: recvExpr
                 pid: (ztypes.tid.create from: pid)
+                argNid: (dottedBaseNid n: (ast.nodes.get i: call.callable.u64))
             )
         }
     } else if written == 0 when (symtab.typing.declHasDefaultId parentTypeId: mco nameId: pname
@@ -14640,7 +14642,7 @@ emitNestedMonoMethodBase: function {
             } else if (isNonLvalueArg s: baseAtom) then {
                 # a call's result is read through ONE hoisted temporary: the
                 # slot and the receiver it is handed are the same value
-                nfrcv = emitByrefArg :ast :symtab :ctx av: baseAtom pid: nlid
+                nfrcv = emitByrefArg :ast :symtab :ctx av: baseAtom pid: nlid argNid: n.parent.u64
                 nfbase = "(\{nfrcv})"
                 nfacc = "->".string
             }
@@ -14706,6 +14708,7 @@ emitNestedMonoMethodBase: function {
                                 :ctx
                                 av: baseAtom
                                 pid: nlid
+                                argNid: n.parent.u64
                             )
                         }
                     }
@@ -16363,6 +16366,10 @@ armPredicateC: function {
     if (isOrdinalVariant :symtab tid: dap) then return "((\{valP}) == \{tgP})"
     accP: receiverTagAccess :ast :symtab :ctx :pn
     if bxP then accP = "->".string
+    # a receiver that is a call's owning result is read off the checker's
+    # temporary, which frees it
+    recvO: ownedReceiverHoist :ast :symtab :ctx expr: recvP.stringView n: pn
+    if recvO.length > 0 then recvP = recvO.take
     return "((\{recvP})\{accP}tag == \{tgP})"
 }
 
@@ -16392,6 +16399,8 @@ tagAccessorReadC: function {
     }
     accT: receiverTagAccess :ast :symtab :ctx :pn
     if bxT then accT = "->".string
+    recvO: ownedReceiverHoist :ast :symtab :ctx expr: recvT.stringView n: pn
+    if recvO.length > 0 then recvT = recvO.take
     return "((\{castT})(\{recvT})\{accT}tag)"
 }
 
