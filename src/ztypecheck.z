@@ -446,30 +446,8 @@ checkBareTypeValueAt: function {
         (tt == ztypes.ztypetype.facetType)
     )
     if isFam.not then return
-    # borrowed views -- including a typedef class over a view (PathView) --
-    # bind from an owner and cannot be constructed
-    isVw: isViewFamilyTid :ast :st :tid
-    tdb: ztypes.tid
-    if isVw.not then {
-        tdb = typedefBaseOf :st :tid
-        if tdb > 0 when (isViewFamilyTid
-            :ast
-            :st
-            tid: (ztypes.tid.create from: tdb.u64)
-        ) then isVw = true
-    }
-    if isVw then {
-        tn: st.reg.nameOf :tid
-        mv: "cannot construct '\{tn}' from its bare name: a borrowed view binds from an owner"
-        hv: "project the view from its owner ('.stringView', '.listView', '.substring')".string
-        bareCtorError :st :nodeid :lineno :colno :width msg: mv hint: hv
-        return
-    }
-    # AN ITERATOR BINDS TO WHAT IT WALKS, the way a view binds to what it views.
-    if (isNativeIteratorTid :ast :st :tid) then {
-        refuseIteratorConstruction :st :nodeid :lineno :colno :width tn: (st.reg.nameOf :tid)
-        return
-    }
+    if (refuseBorrowedBareType :ast :st :nodeid :lineno :colno :width :tid) then return
+    tdb: typedefBaseOf :st :tid
     # a generic template has no concrete layout until its arguments apply
     isGen: false
     {
@@ -477,7 +455,7 @@ checkBareTypeValueAt: function {
         if isgeneric9v then isGen = true
     }
     if isGen then {
-        tn: st.reg.nameOf :tid
+        tn: specWrittenName :st :ast :tid
         mg: "cannot construct '\{tn}' from its bare name: a generic type needs type arguments"
         hg: "apply type arguments first, e.g. '(ListVal t: u8)'".string
         bareCtorError :st :nodeid :lineno :colno :width msg: mg hint: hg
@@ -486,7 +464,7 @@ checkBareTypeValueAt: function {
     # unions and variants select an arm; bool's arms are its literals
     isUV: tt == ztypes.ztypetype.unionType or (tt == ztypes.ztypetype.variantType)
     if isUV then {
-        tn: st.reg.nameOf :tid
+        tn: specWrittenName :st :ast :tid
         mu: "cannot construct '\{tn}' from its bare name: a union/variant selects an arm"
         hu: "construct an arm: '\{tn}.<arm> ...'"
         if tid == (builtinTidT :st scope: st.curScope :ast base: "bool") then {
@@ -497,7 +475,7 @@ checkBareTypeValueAt: function {
     }
     isPF: tt == ztypes.ztypetype.protocolType or (tt == ztypes.ztypetype.facetType)
     if isPF then {
-        tn: st.reg.nameOf :tid
+        tn: specWrittenName :st :ast :tid
         mp: "cannot construct '\{tn}' from its bare name: a protocol/facet projects a conforming value"
         hp: "bind a value of a conforming type instead".string
         bareCtorError :st :nodeid :lineno :colno :width msg: mp hint: hp
@@ -528,7 +506,7 @@ checkBareTypeValueAt: function {
         ) then hasCr = true
     } case none then null
     if hasCr.not then {
-        tn: st.reg.nameOf :tid
+        tn: specWrittenName :st :ast :tid
         mn0: "cannot construct '\{tn}' from its bare name: the type does not define construction (create: null)"
         hn0: "use the type's own factory functions".string
         bareCtorError :st :nodeid :lineno :colno :width msg: mn0 hint: hn0
@@ -556,7 +534,7 @@ checkBareTypeValueAt: function {
         st.typing.implicitCreate.set key: nodeid.u64 value: icr
         return
     }
-    tn: st.reg.nameOf :tid
+    tn: specWrittenName :st :ast :tid
     lst: String
     li: u64
     ln: misN.length
@@ -564,7 +542,7 @@ checkBareTypeValueAt: function {
         mn: misN.get i: li
         memberIdAt: misI.get i: li
         li = li + 1
-        mtn: st.reg.nameOf tid: (ztypes.tid.create from: memberIdAt.u64)
+        mtn: specWrittenName :st :ast tid: (ztypes.tid.create from: memberIdAt.u64)
         if lst.length > 0 then lst.append ", "
         ln1: "'\{mn}' (type: \{mtn})"
         lst.append ln1
@@ -573,6 +551,53 @@ checkBareTypeValueAt: function {
     eh: "provide each listed argument ('\{tn} name: value ...') or add field defaults"
     bareCtorError :st :nodeid :lineno :colno :width msg: m hint: eh
 }
+
+# refuseBorrowedBareType -- a bare type name that constructs a borrowed view --
+# a typedef class over one included (PathView) -- or a native iterator: each
+# binds to what it reads, and cannot be made from nothing. true when it refused.
+refuseBorrowedBareType: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+    width: u32
+    tid: ztypes.tid
+} out bool is {
+    # borrowed views -- including a typedef class over a view (PathView) --
+    # bind from an owner and cannot be constructed
+    isVw: isViewFamilyTid :ast :st :tid
+    tdb: ztypes.tid
+    if isVw.not then {
+        tdb = typedefBaseOf :st :tid
+        if tdb > 0 when (isViewFamilyTid
+            :ast
+            :st
+            tid: (ztypes.tid.create from: tdb.u64)
+        ) then isVw = true
+    }
+    if isVw then {
+        tn: specWrittenName :st :ast :tid
+        mv: "cannot construct '\{tn}' from its bare name: a borrowed view binds from an owner"
+        hv: "project the view from its owner ('.stringView', '.listView', '.substring')".string
+        bareCtorError :st :nodeid :lineno :colno :width msg: mv hint: hv
+        return true
+    }
+    # AN ITERATOR BINDS TO WHAT IT WALKS, the way a view binds to what it views.
+    if (isNativeIteratorTid :ast :st :tid) then {
+        (refuseIteratorConstruction
+            :st
+            :nodeid
+            :lineno
+            :colno
+            :width
+            tn: (specWrittenName :st :ast :tid)
+        )
+        return true
+    }
+    return false
+}
+
 
 # isNativeIteratorTid -- a NATIVE iterator cursor. Iteration is STRUCTURAL: a
 # class with a `.call` method returning the right option wrapper is iterable,
@@ -3297,7 +3322,7 @@ reportDependentTypeArg: function {
 } is {
     st.typing.numericArgsRefused.add item: argOp.u64
     pn: zast.nameTextAt :ast ref: param
-    tn: st.reg.nameOf tid: (declTypeIdOf :st declId: tdecl)
+    tn: specWrittenName :st :ast tid: (declTypeIdOf :st declId: tdecl)
     n: ast.nodes.get i: argOp.u64
     (addErrorH
         :st
@@ -3475,7 +3500,7 @@ refuseTypedefTypePositionFrom: function {
                 opn: ast.nodes.get i: arg.operation.u64
                 isName = opn.atomid or opn.dottedpath
             }
-            tpn: st.reg.nameOf tid: tplId
+            tpn: specWrittenName :st :ast tid: tplId
             m: "a type position holds no value, and argument 'from' of '\{tpn}' is one"
             if isName then {
                 tn: argOperandName :ast :arg
@@ -3509,7 +3534,7 @@ refuseNonGenericApplication: function {
     at: zast.nodeid
 } out bool is {
     if (st.reg.isGenericOf tid: tplId) then return false
-    name: st.reg.nameOf tid: tplId
+    name: specWrittenName :st :ast tid: tplId
     n: ast.nodes.get i: at.u64
     (addError
         :st
@@ -7664,8 +7689,8 @@ recordConformance: function {
         recordIt = true
     } else null
     if isFacetC when (typeIsReftype :st tid: (ztypes.tid.create from: implTypeId.u64)) then {
-        rcin: st.reg.nameOf tid: (ztypes.tid.create from: implTypeId.u64)
-        rcsn: st.reg.nameOf tid: (ztypes.tid.create from: specTypeId.u64)
+        rcin: specWrittenName :st :ast tid: (ztypes.tid.create from: implTypeId.u64)
+        rcsn: specWrittenName :st :ast tid: (ztypes.tid.create from: specTypeId.u64)
         rcm: "'\{rcin}' is a reference type and cannot conform to the facet '\{rcsn}'"
         rch: "a facet holds its conformer INLINE, so a reference one would put a reference inside a value; declare '\{rcsn}' a protocol, the way the stdlib pairs `valhashable` (a facet) with `RefHashable` (a protocol)"
         rcn: String
@@ -7712,7 +7737,7 @@ refuseGenericSpecMarker: function {
     if (st.reg.isGenericOf tid: stid).not then return
     stt: st.reg.typetypeOf typeId: stid
     if stt != ztypes.ztypetype.protocolType when stt != ztypes.ztypetype.facetType then return
-    sn: st.reg.nameOf tid: stid
+    sn: specWrittenName :st :ast tid: stid
     ex: "\{label}: (\{sn}"
     td: declOfTypeId :st tid: stid
     with pit: (st.reg.genericParamNamesOf tdecl: td).iterate do for pn: pit loop {
@@ -8231,8 +8256,8 @@ checkConformanceParam: function {
 } is {
     pnm: zast.poolTextAt pool: ast.names ref: spN
     if spT != ipT then {
-        stn: st.reg.nameOf tid: spT
-        itn: st.reg.nameOf tid: ipT
+        stn: specWrittenName :st :ast tid: spT
+        itn: specWrittenName :st :ast tid: ipT
         (conformanceReport
             :st
             :ast
@@ -12095,7 +12120,7 @@ refuseNumericParamName: function {
     tdecl: declOfTypeId :st tid: (ztypes.tid.create from: ownerTid.u64)
     if (st.reg.genericParamConstraintOf :tdecl paramName: dm.name).numKind.has.not then return
     pn: zast.nameTextAt :ast ref: dm.name
-    tn: st.reg.nameOf tid: (ztypes.tid.create from: ownerTid.u64)
+    tn: specWrittenName :st :ast tid: (ztypes.tid.create from: ownerTid.u64)
     (addErrorH
         :st
         nodeid: dm.nid
@@ -19791,7 +19816,7 @@ checkInterpPart: function {
         pLn = nodeLine n: part
         pCo = nodeCol n: part
     }
-    ptn: st.reg.nameOf tid: ptid
+    ptn: specWrittenName :st :ast tid: ptid
     pm: "type '\{ptn}' is not printable in an interpolation"
     (addErrorH
         :st
@@ -20509,8 +20534,8 @@ mintMonoMember: function {
         (st.reg.typetypeOf typeId: (ztypes.tid.create from: chId.u64)) !=
         ztypes.ztypetype.functionType
     ) when (typeIsReftype :st tid: (ztypes.tid.create from: target.u64)) then {
-        anM: st.reg.nameOf tid: (ztypes.tid.create from: target.u64)
-        tnM: st.reg.nameOf tid: templateId
+        anM: specWrittenName :st :ast tid: (ztypes.tid.create from: target.u64)
+        tnM: specWrittenName :st :ast tid: templateId
         mgM: "generic argument '\{anM}' cannot be a record field or variant arm of '\{tnM}'"
         addResolveError :st e: zast.err.genericError msg: mgM
     }
@@ -21716,7 +21741,7 @@ hashableUnmetReason: function {
         return (valHashableUnmetReason :ast :st :tid)
     }
     if ck == ztypes.constraintkind.refHashable when (st.reg.isReftypeOf :tid) then {
-        kn: st.reg.nameOf :tid
+        kn: specWrittenName :st :ast :tid
         ho: valOpOwner :st :tid nameId: zast.names.wkHash
         if (st.typing.declIsMethodId parentTypeId: ho nameId: zast.names.wkHash).not then {
             return "'\{kn}' declares no 'hash'"
@@ -21739,7 +21764,7 @@ valHashableUnmetReason: function {
     st: zenv.ZSymbolTable.view
     tid: ztypes.tid
 } out String is {
-    kn: st.reg.nameOf :tid
+    kn: specWrittenName :st :ast :tid
     em: valEqMissingPart :ast :st :tid depth: 0
     if em == tid then {
         eo: valOpOwner :st :tid nameId: zast.names.wkOpEq
@@ -21748,10 +21773,10 @@ valHashableUnmetReason: function {
         }
         return "'\{kn}' has no '=='"
     }
-    if em.isZero.not then return "its part '\{st.reg.nameOf tid: em}' has no '=='"
+    if em.isZero.not then return "its part '\{specWrittenName :st :ast tid: em}' has no '=='"
     hm: valHashMissingPart :ast :st :tid depth: 0
     if hm.isZero then return "".string
-    if hm != tid then return "its part '\{st.reg.nameOf tid: hm}' has no 'hash'"
+    if hm != tid then return "its part '\{specWrittenName :st :ast tid: hm}' has no 'hash'"
     hsrc: valOpSource :ast :st :tid nameId: zast.names.wkHash
     if hsrc.none then return "'\{kn}' has no 'hash'"
     return "it writes its own '==' but not its 'hash', and a key's two must agree".string
@@ -22072,7 +22097,7 @@ checkKeyMember: function {
     if md.isZero then return
     dn: zast.nodeid.create from: (st.typing.decls.get i: md.u64).node
     mnode: ast.nodes.get i: dn.u64
-    kn: st.reg.nameOf tid: owner
+    kn: specWrittenName :st :ast tid: owner
     msg: "'\{kn}' cannot be a Map or Set key: "
     msg.append why
     (addErrorH
@@ -22152,11 +22177,11 @@ keyEqParamMismatch: function {
 } out String is {
     if (st.reg.typetypeOf typeId: pT) == ztypes.ztypetype.genericParam then {
         if (keyParamAdmits :ast :st :mid :pT key: owner) then return "".string
-        kn: st.reg.nameOf tid: owner
+        kn: specWrittenName :st :ast tid: owner
         return "its '==' is generic, and its bound does not admit a '\{kn}'"
     }
     if pT != owner then {
-        ptn: st.reg.nameOf tid: pT
+        ptn: specWrittenName :st :ast tid: pT
         return "its '==' compares with a '\{ptn}', where a key's compares with its own type"
     }
     pO: conformanceOwn o: (st.typing.declOwnershipOfId parentTypeId: mid nameId: pnId)
@@ -22182,8 +22207,8 @@ keyReturnMismatch: function {
         rt
     ) case some then {
         if rt != wantT then {
-            rtn: st.reg.nameOf tid: rt
-            wtn: st.reg.nameOf tid: wantT
+            rtn: specWrittenName :st :ast tid: rt
+            wtn: specWrittenName :st :ast tid: wantT
             return "its '\{mname}' returns \{rtn}, where a key's returns \{wtn}"
         }
     } case none then null
@@ -22551,8 +22576,8 @@ refuseListMemberWithoutElemOp: function {
     if isCmp when (listElemHasEq :st :ast :elem) then return false
     if isSort when (listElemHasCompare :st :ast :elem) then return false
     cn: zast.nameTextAt :ast ref: cnId
-    btn: st.reg.nameOf tid: bt
-    en: st.reg.nameOf tid: elem
+    btn: specWrittenName :st :ast tid: bt
+    en: specWrittenName :st :ast tid: elem
     m: "type '\{btn}' has no member '\{cn}'"
     h: "its element type '\{en}' has no '=='"
     if isSort then h = "its element type '\{en}' has no 'compare'"
@@ -22634,11 +22659,11 @@ refuseHashWithoutPartHash: function {
         )
         return false
     }
-    btn: st.reg.nameOf tid: bt
+    btn: specWrittenName :st :ast tid: bt
     m: "type '\{btn}' has no member 'hash'"
     h: String
     if (miss == bt).not then {
-        mn: st.reg.nameOf tid: miss
+        mn: specWrittenName :st :ast tid: miss
         hm: "its part of type '\{mn}' has no 'hash'"
         h = hm.take
     }
@@ -22685,11 +22710,11 @@ refuseEqWithoutPartEq: function {
     }
     if miss.isZero then return false
     cn: zast.nameTextAt :ast ref: cnId
-    btn: st.reg.nameOf tid: bt
+    btn: specWrittenName :st :ast tid: bt
     m: "type '\{btn}' has no member '\{cn}'"
     h: String
     if (miss == bt).not then {
-        mn: st.reg.nameOf tid: miss
+        mn: specWrittenName :st :ast tid: miss
         hm: "its part of type '\{mn}' has no '=='"
         h = hm.take
     }
@@ -24492,7 +24517,7 @@ numericArgStandsIn: function {
     sm: constStandsInMessage :ast :st :v target: boundTid
     if sm.length == 0 then return true
     pn: zast.nameTextAt :ast ref: param
-    tn: st.reg.nameOf tid: (declTypeIdOf :st declId: tdecl)
+    tn: specWrittenName :st :ast tid: (declTypeIdOf :st declId: tdecl)
     n: ast.nodes.get i: argOp.u64
     (addErrorH
         :st
@@ -24535,7 +24560,7 @@ reportNumericArg: function {
     why: StringView
 } is {
     pn: zast.nameTextAt :ast ref: param
-    tn: st.reg.nameOf tid: (declTypeIdOf :st declId: tdecl)
+    tn: specWrittenName :st :ast tid: (declTypeIdOf :st declId: tdecl)
     what: "the argument".string
     w: 1.u32
     if nameId.isZero.not then {
@@ -25855,7 +25880,7 @@ refuseTypedefExtraArgs: function {st: zenv.ZSymbolTable ast: Ast.view call: call
             continue
         }
         if (isTypedefTypeArg :st tdId: (ztypes.tid.create from: tdId) name: arg.name) then continue
-        tn: st.reg.nameOf tid: (ztypes.tid.create from: tdId)
+        tn: specWrittenName :st :ast tid: (ztypes.tid.create from: tdId)
         what: "a second value".string
         if arg.name.isZero.not then what = "'\{zast.nameTextAt :ast ref: arg.name}'"
         (addErrorH
@@ -25982,8 +26007,8 @@ typedefInstanceSubs: function {
     gparams: st.reg.genericParamNamesOf tdecl: tk
     if (bindTypedefFromSubs :st :ast :tplId :gparams :vt :subs).not then {
         bo: st.reg.genericOriginOf tid: (typedefBaseTidOf :st tid: tplId)
-        en: st.reg.nameOf tid: bo
-        an: st.reg.nameOf tid: vt
+        en: specWrittenName :st :ast tid: bo
+        an: specWrittenName :st :ast tid: vt
         (addErrorH
             :st
             nodeid: fArg.nid
@@ -26049,7 +26074,7 @@ reportTypedefMissingParam: function {
     missing: zast.nameid
     bound: bool
 } is {
-    tname: st.reg.nameOf tid: tplId
+    tname: specWrittenName :st :ast tid: tplId
     mn: zast.nameTextAt :ast ref: missing
     mm: "cannot infer type arguments for generic type '\{tname}'"
     me: zast.err.genericError
@@ -26225,8 +26250,8 @@ applyTypedefTypePins: function {
         had: (subs.get key: arg.name).or d: 0
         if had > 0 when had != pv then {
             pn: zast.nameTextAt :ast ref: arg.name
-            pinned: st.reg.nameOf tid: (ztypes.tid.create from: pv.u64)
-            made: st.reg.nameOf tid: (ztypes.tid.create from: had.u64)
+            pinned: specWrittenName :st :ast tid: (ztypes.tid.create from: pv.u64)
+            made: specWrittenName :st :ast tid: (ztypes.tid.create from: had.u64)
             (addErrorH
                 :st
                 nodeid: arg.nid
@@ -26289,6 +26314,8 @@ checkTypedefCreate: function {
                     errMark: errT0
                 )
                 checkCastFromType :st :ast :tdId :vt :arg
+                if vt > 0 when (refuseValueBorrow :st :ast :vt value: arg.operation
+                ) then vt = ztypes.tid
                 if vt > 0 then {
                     borrows = projectionSourceBorrows :st :ast :call src: arg.operation :vt
                     if borrows then {
@@ -26331,8 +26358,8 @@ checkCastFromType: function {
         checkArgTypeMismatch :st :ast ptid: base.u64 :vt pnId: (nameIdOf :ast name: "from") :arg
         return
     }
-    en: st.reg.nameOf tid: base
-    an: st.reg.nameOf tid: vt
+    en: specWrittenName :st :ast tid: base
+    an: specWrittenName :st :ast tid: vt
     (addErrorH
         :st
         nodeid: arg.nid
@@ -26537,12 +26564,12 @@ bareFnRefError: function {
         mn: misN.get i: li
         memberIdAt: misI.get i: li
         li = li + 1
-        mtn: st.reg.nameOf tid: (ztypes.tid.create from: memberIdAt.u64)
+        mtn: specWrittenName :st :ast tid: (ztypes.tid.create from: memberIdAt.u64)
         if lst.length > 0 then lst.append ", "
         ln1: "'\{mn}' (type: \{mtn})"
         lst.append ln1
     }
-    fn: st.reg.nameOf tid: fid
+    fn: specWrittenName :st :ast tid: fid
     m: "a bare reference to '\{fn}' calls it: missing required arguments \{lst}"
     nt: "a bare function reference in value position is a call".string
     eh: "call it with its required arguments, or store a reference with '\{fn}.take'"
@@ -26878,7 +26905,11 @@ reportUnknownMember: function {
         }
         if stillMiss then {
             cn: zast.nameTextAt :ast ref: cnId
-            btnMm: st.reg.nameOf tid: bt
+            # named as the value's own type: a typedef forwards its members to
+            # its base, which `bt` is by now
+            shownMm: walkTypeOf :st nid: dp.parent.u64
+            if shownMm.isZero then shownMm = bt
+            btnMm: specWrittenName :st :ast tid: shownMm
             mMm: "type '\{btnMm}' has no member '\{cn}'"
             sugMm: suggestSimilar :ast :st parentTypeId: bt name: cn.stringView
             hMm: String
@@ -26949,7 +26980,7 @@ checkCopyMember: function {
         # StringView was accepted and lowered to an ALIAS of its source, and
         # a valtype whose author wrote `copy: null` was let through because
         # the leg returned for anything that was not a class or a union.
-        btnCp: st.reg.nameOf tid: bt
+        btnCp: specWrittenName :st :ast tid: bt
         bttCp: st.reg.typetypeOf typeId: bt
         isValCp: (
             bttCp ==
@@ -27029,7 +27060,7 @@ reportPrivateMember: function {
             cnidP: nodeId n: (ast.nodes.get i: dp.child.u64)
             cnlnP: nodeLine n: (ast.nodes.get i: dp.child.u64)
             cnclP: nodeCol n: (ast.nodes.get i: dp.child.u64)
-            btNmP: st.reg.nameOf tid: bt
+            btNmP: specWrittenName :st :ast tid: bt
             pmsgP: "'\{cn}' is not public on type '\{btNmP}'"
             (addErrorH
                 :st
@@ -27235,7 +27266,7 @@ refuseHiddenArm: function {
     if (declMemberIsPrivate :st tid: bt nameId: cnId).not then return false
     ccnode: ast.nodes.get i: dp.child.u64
     cn: zast.nameTextAt :ast ref: cnId
-    ccbn: st.reg.nameOf tid: bt
+    ccbn: specWrittenName :st :ast tid: bt
     (addErrorH
         :st
         nodeid: (nodeId n: ccnode)
@@ -27272,7 +27303,7 @@ refuseBareArmPayload: function {
     if anId.isZero then return false
     if (armCarriesPayload :st armTid: bt armName: anId).not then return false
     cn: zast.nameTextAt :ast ref: cnId
-    btn: st.reg.nameOf tid: bt
+    btn: specWrittenName :st :ast tid: bt
     cnode: ast.nodes.get i: dp.child.u64
     mb: "arm '\{cn}' of '\{btn}' carries a payload -- naming an arm gives its tag, and cannot supply what the arm holds"
     hb: "supply the payload after the arm name, or name an arm that carries nothing".string
@@ -27448,7 +27479,7 @@ checkTagAccessor: function {
         }
         if cnId == zast.names.wkTag then {
             cn: zast.nameTextAt :ast ref: cnId
-            btn5: st.reg.nameOf tid: bt
+            btn5: specWrittenName :st :ast tid: bt
             mnx5: "tag not exposed on '\{btn5}' — declare it in the as block (eg. `tag: u8.tag`)"
             en6: String
             eh6: String
@@ -28123,7 +28154,7 @@ refuseTemplateOnlyConstant: function {
     if opId.isZero then return false
     if (constReadsNumericParam :st :ast owner: tdecl :opId).not then return false
     cn: zast.nameTextAt :ast ref: cnId
-    tn: st.reg.nameOf tid: bt
+    tn: specWrittenName :st :ast tid: bt
     (addErrorH
         :st
         nodeid: dp.nid
@@ -28364,7 +28395,7 @@ checkUnresolvedMember: function {
     # `T.create` on a type whose `create` is `null`: the construction is refused
     # in the words every other spelling of it uses, not as a missing member
     if cnId == zast.names.wkCreate when (typeDefinesConstruction :st tid: bt).not then {
-        tnc: st.reg.nameOf tid: bt
+        tnc: specWrittenName :st :ast tid: bt
         mdc: "cannot construct '\{tnc}': the type does not define construction (create: null)"
         (bareCtorError
             :st
@@ -28410,7 +28441,7 @@ checkUnresolvedMember: function {
     # binding (E0500, no location) -- diagnose it on every base.
     if cnId == zast.names.wkView when st.typing.suppressParamStamps.not then {
         cn: zast.nameTextAt :ast ref: cnId
-        btnVw: st.reg.nameOf tid: bt
+        btnVw: specWrittenName :st :ast tid: bt
         mVw: "type '\{btnVw}' has no member 'view'"
         cnidVw: nodeId n: (ast.nodes.get i: dp.child.u64)
         cnlnVw: nodeLine n: (ast.nodes.get i: dp.child.u64)
@@ -28526,7 +28557,7 @@ reportMemberNamespace: function {
     functionMember: bool
 } is {
     cn: zast.nameTextCopy :ast ref: cnId
-    tn: st.reg.nameOf tid: bt
+    tn: specWrittenName :st :ast tid: bt
     verb: "read"
     if functionMember then verb = "call"
     msg: "'\{cn}' belongs to the type '\{tn}', not to an instance"
@@ -28569,7 +28600,7 @@ checkTypeReadSuppliesReceiver: function {
     rpn: receiverParamNameOf :st tid: (ztypes.tid.create from: mo.u64)
     if rpn.isZero then rpn = zast.names.wkThis
     rn: zast.nameTextAt :ast ref: rpn
-    tn: st.reg.nameOf tid: bt
+    tn: specWrittenName :st :ast tid: bt
     mr: "missing required argument '\{rn}' (type: \{tn})"
     cn: zast.nameTextCopy :ast ref: cnId
     (addErrorH
@@ -28857,7 +28888,7 @@ checkMarkerMember: function {
             pcnid: nodeId n: pcNode
             pcln: nodeLine n: pcNode
             pccl: nodeCol n: pcNode
-            btNm: st.reg.nameOf tid: bt
+            btNm: specWrittenName :st :ast tid: bt
             pmsg: "'.private' of '\{btNm}' may only be taken by '\{btNm}' or a holder of its '.private' handle"
             (addErrorH
                 :st
@@ -28881,7 +28912,7 @@ checkMarkerMember: function {
     if cnId == zast.names.wkPublic then {
         pbWhat: "type"
         if (st.reg.typetypeOf typeId: bt) == ztypes.ztypetype.unitType then pbWhat = "unit"
-        pbNm: st.reg.nameOf tid: bt
+        pbNm: specWrittenName :st :ast tid: bt
         pcN: ast.nodes.get i: dp.child.u64
         (addErrorH
             :st
@@ -29291,7 +29322,7 @@ checkNumericSuffixCast: function {
         if castOpt.none then {
             missChild: zast.nameTextAt :ast ref: castChildId
             if (isNumericTypeName name: missChild.stringView) then {
-                ltn: st.reg.nameOf tid: litTid
+                ltn: specWrittenName :st :ast tid: litTid
                 cm9: "'\{ltn}' has no conversion to '\{missChild}'"
                 ch9: "a literal with a decimal point is a float: convert it to a float type, or write the value without a point".string
                 cn9: String
@@ -29675,8 +29706,8 @@ refuseTypedefArmConstructor: function {
     ctt: st.reg.typetypeOf typeId: (ztypes.tid.create from: mo)
     if ctt == ztypes.ztypetype.functionType or (ctt == ztypes.ztypetype.dataType) then return false
     if (dottedBaseIsValue :st :ast :unitDecl n: (ast.nodes.get i: dp.nid.u64)) then return false
-    tn: st.reg.nameOf tid: tdT
-    bn: st.reg.nameOf tid: bt
+    tn: specWrittenName :st :ast tid: tdT
+    bn: specWrittenName :st :ast tid: bt
     an: zast.nameTextAt :ast ref: cnId
     (addErrorH
         :st
@@ -29741,7 +29772,7 @@ refuseHiddenTypedefMember: function {
     cnId: zast.nameid
 } out bool is {
     if (typedefHidesMember :st :ast tid: bt :cnId).not then return false
-    hn: st.reg.nameOf tid: bt
+    hn: specWrittenName :st :ast tid: bt
     mn: zast.nameTextAt :ast ref: cnId
     (addErrorH
         :st
@@ -30154,7 +30185,7 @@ checkReturnRooting: function {
                 srcOk = rootIsBorrowedParam :st :ast n: (ast.nodes.get i: fa.operation.u64)
             }
             if srcOk.not then {
-                tn2: st.reg.nameOf tid: argT
+                tn2: specWrittenName :st :ast tid: argT
                 fld: zast.nameTextAt :ast ref: fa.name
                 src: rootNameTextOf :ast n: (ast.nodes.get i: fa.operation.u64)
                 m2: "the returned `\{tn2}` stores '\{src}' in its non-owned field '\{fld}', but '\{src}' is not a `.borrow`/`.view` parameter -- an `outx` result may only reference what its caller still owns"
@@ -30332,7 +30363,7 @@ checkReturnCarries: function {
                 wn: zast.nameTextAt :ast ref: rbn
                 src0: lockRootPhrase :st :ast nameId: (pinRootAt pins: held i: 0)
                 if st.typing.currentFnPins.not then {
-                    fnNm: st.reg.nameOf tid: st.typing.currentFnTid
+                    fnNm: specWrittenName :st :ast tid: st.typing.currentFnTid
                     m1: "Cannot return '\{wn}': it holds locks on \{src0}, which the caller cannot see because '\{fnNm}' is `out`, not `outx`"
                     (addError
                         :st
@@ -30396,7 +30427,7 @@ checkReturnCarries: function {
     }
     if badPn.isZero.not then {
         pn: zast.nameTextAt :ast ref: badPn
-        fnNm: st.reg.nameOf tid: st.typing.currentFnTid
+        fnNm: specWrittenName :st :ast tid: st.typing.currentFnTid
         m3: "Cannot return this call's result: it keeps '\{pn}' locked, which the caller cannot see because '\{fnNm}' is `out`, not `outx`"
         (addError
             :st
@@ -31225,7 +31256,7 @@ checkClauseCondition: function {
         }
         if ctt != ztypes.ztypetype.neverType when isPair.not then {
             conode: ast.nodes.get i: cond.operation.u64
-            ctnm: st.reg.nameOf tid: ctv
+            ctnm: specWrittenName :st :ast tid: ctv
             cmsg: "condition must be bool or a 2-arm sum type, got '\{ctnm}'"
             (addError
                 :st
@@ -31763,21 +31794,23 @@ checkMovedValueAt: function {
     return vt
 }
 
-# refuseValueBorrowBinding -- `b: p.borrow` binding a VALUE type: the binding
-# is an owned copy (a value type aliases nothing, so no pin transfers to it),
-# and `b` goes on reading the old value after `p` is written. The marker says
-# a borrow that does not happen, so it is refused; a `.borrow` PARAMETER,
-# which is passed by reference, still aliases.
-refuseValueBorrowBinding: function {
-    st: zenv.ZSymbolTable ast: Ast.view vt: ztypes.tid asgn: asgnref
-} is {
-    if vt.isZero or (typeIsValtype :st tid: vt).not then return
-    vn: ast.nodes.get i: asgn.value.u64
-    if vn.dottedpath.not or (zast.markerKindOf :ast n: vn).borrowMarker.not then return
-    tn: st.reg.nameOf tid: vt
+# refuseValueBorrow -- `.borrow` on a VALUE type where the value is copied: a
+# binding of it (`b: p.borrow`), a `with` (`with w: p.borrow`), a typedef built
+# from it (`P p.borrow`). The copy aliases nothing, so no pin transfers to it,
+# and it goes on reading the old value after `p` is written: the marker says a
+# borrow that does not happen, and is refused. A `.borrow` PARAMETER, which is
+# passed by reference, still aliases, and so does a protocol box, which points
+# at its source. `value` is the marked node. true when it refused.
+refuseValueBorrow: function {
+    st: zenv.ZSymbolTable ast: Ast.view vt: ztypes.tid value: zast.nodeid
+} out bool is {
+    if vt.isZero or (typeIsValtype :st tid: vt).not then return false
+    vn: ast.nodes.get i: value.u64
+    if vn.dottedpath.not or (zast.markerKindOf :ast n: vn).borrowMarker.not then return false
+    tn: specWrittenName :st :ast tid: vt
     (addErrorH
         :st
-        nodeid: asgn.value
+        nodeid: value
         lineno: (nodeLine n: vn)
         colno: (nodeCol n: vn)
         e: zast.err.ownerError
@@ -31786,6 +31819,7 @@ refuseValueBorrowBinding: function {
         hint: "drop the marker; a `.borrow` parameter is what refers to the caller's value".string
         width: 1
     )
+    return true
 }
 
 # refuseNullValue -- `null` bound or assigned as a value, `vt` its type: it has
@@ -31917,7 +31951,7 @@ checkAssignment: function {
     }
     if (refuseNullValue :st :ast :vt nid: asgn.value) then return
     if (refuseNonValue :st :ast :vt nid: asgn.value) then return
-    refuseValueBorrowBinding :st :ast :vt :asgn
+    refuseValueBorrow :st :ast :vt value: asgn.value
     if vt > 0 then {
         pinBoundField :st :ast :vt nid: asgn.value
         pinBoundName :st :ast :vt nid: asgn.value
@@ -32245,8 +32279,8 @@ checkReassignedType: function {
                 skipR = true
             }
             if skipR.not then {
-                enR: st.reg.nameOf tid: chkT
-                anR: st.reg.nameOf tid: rvt
+                enR: specWrittenName :st :ast tid: chkT
+                anR: specWrittenName :st :ast tid: rvt
                 mmR: "cannot assign value of type '\{anR}' to '\{enR}' target"
                 (addError
                     :st
@@ -33169,8 +33203,8 @@ checkSwap: function {
     if lt.isZero then return
     if rt.isZero then return
     if (swapTypesAgree :st a: lt b: rt).not then {
-        an: st.reg.nameOf tid: lt
-        bn: st.reg.nameOf tid: rt
+        an: specWrittenName :st :ast tid: lt
+        bn: specWrittenName :st :ast tid: rt
         (addError
             :st
             nodeid: swapnode.nid
@@ -33462,6 +33496,7 @@ checkWith: function {
     errW: st.typing.errors.length
     vt: checkValueAt :st :unitDecl :ast nid: withnode.value
     if (refuseNonValue :st :ast :vt nid: withnode.value) then vt = ztypes.tid
+    refuseValueBorrow :st :ast :vt value: withnode.value
     if vt.u64 == 0 when st.typing.errors.length == errW then {
         (reportUnresolvedValue
             :st
@@ -34200,7 +34235,7 @@ bindForIteration: function {
         # ends a loop by itself. A value bound here instead ran once and was
         # read at a test that may not exist -- `while (1)` in the emitted C,
         # with no diagnostic. It is an ordinary local, written before the loop.
-        itn: st.reg.nameOf tid: vt
+        itn: specWrittenName :st :ast tid: vt
         im: "a 'for' binding must be an iterator, got '\{itn}'"
         ih: "bind it before the loop and test it in the header ('x: e' then 'for c loop'), or walk something: 'n.each', 'n.upto to: m', 'xs.iterate'".string
         (addErrorH
@@ -34321,7 +34356,7 @@ checkBareForCondition: function {
         fTt != ztypes.ztypetype.neverType
     ) when fPair.not then {
         fcn: ast.nodes.get i: cond.operation.u64
-        fctn: st.reg.nameOf tid: vt
+        fctn: specWrittenName :st :ast tid: vt
         fcmsg: "loop condition must be bool or a 2-arm sum type, got '\{fctn}'"
         (addError
             :st
@@ -34602,7 +34637,7 @@ checkForPostcondition: function {
         pPair: ztyping.isSumPair ty: st.typing reg: st.reg tid: pcVt
         if pPair then stampTruthyCond :st n: (ast.nodes.get i: pcOp.u64) tid: pcVt
         if pTt != ztypes.ztypetype.neverType when pPair.not then {
-            pctn: st.reg.nameOf tid: pcVt
+            pctn: specWrittenName :st :ast tid: pcVt
             pcmsg: "loop postcondition must be bool or a 2-arm sum type, got '\{pctn}'"
             (addError
                 :st
@@ -35584,8 +35619,8 @@ reportArmTypes: function {
 } is {
     what: "an `if`"
     if (ast.nodes.get i: nid.u64).caseexpr then what = "a `match`"
-    an: st.reg.nameOf tid: a.tid
-    bn: st.reg.nameOf tid: b.tid
+    an: specWrittenName :st :ast tid: a.tid
+    bn: specWrittenName :st :ast tid: b.tid
     bnode: ast.nodes.get i: b.nid.u64
     (addErrorH
         :st
@@ -38334,7 +38369,7 @@ checkMissingCallArgs: function {
         pname: missingNames.get i: mi
         pcid: missingIds.get i: mi
         mi = mi + 1
-        tnm: st.reg.nameOf tid: (ztypes.tid.create from: pcid.u64)
+        tnm: specWrittenName :st :ast tid: (ztypes.tid.create from: pcid.u64)
         mm: "missing required argument '\{pname}' (type: \{tnm})"
         (addError
             :st
@@ -39012,7 +39047,7 @@ checkSpecStandIns: function {ast: Ast st: zenv.ZSymbolTable} is {
             reportOwnedStandIn :ast :st :su
             continue
         }
-        vn: "'\{st.reg.nameOf tid: su.value}'"
+        vn: "'\{specWrittenName :st :ast tid: su.value}'"
         if (isLiteralTypeId :st tid: su.value) then vn = "a numeric literal".string
         sn: specWrittenName :st :ast tid: su.spec
         hn: "a conformer declares `:\{sn}` in its `as` block"
@@ -39115,13 +39150,13 @@ specWrittenName: function {st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.
     org: st.reg.genericOriginOf :tid
     if org.isZero then return (st.reg.nameOf :tid)
     otid: ztypes.tid.create from: org.u64
-    r: "(\{st.reg.nameOf tid: otid}"
+    r: "(\{specWrittenName :st :ast tid: otid}"
     pns: st.reg.genericParamNamesOf tdecl: (declOfTypeId :st tid: otid)
     n: st.reg.genericArgCount specId: tid
     i: u64
     for i < n loop {
         a: st.reg.genericArgAt specId: tid ordinal: i
-        at: st.reg.nameOf tid: (ztypes.tid.create from: a.u64)
+        at: specWrittenName :st :ast tid: (ztypes.tid.create from: a.u64)
         if (st.reg.genericArgIsValueAt specId: tid ordinal: i) then at = "\{a}"
         if i < pns.length then {
             pt: zast.nameTextAt :ast ref: (pns.get :i)
@@ -39139,7 +39174,7 @@ specWrittenName: function {st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.
 # place would own a box of a value it never took, so it says how to make one
 # that owns: `P.create from: d.take`, or the construction wrapped as it is.
 reportOwnedStandIn: function {ast: Ast st: zenv.ZSymbolTable su: ztyping.specstandin} is {
-    vn: st.reg.nameOf tid: su.value
+    vn: specWrittenName :st :ast tid: su.value
     sn: specWrittenName :st :ast tid: su.spec
     fix: "wrap it: `\{sn}.create from: (...)`"
     bn: bareAtomNameId n: (ast.nodes.get i: su.valueNid.u64)
@@ -39346,8 +39381,8 @@ checkNumericCoercion: function {
     if (isNumericTid :st scope: st.curScope :ast tid: srcTid).not then return
     if (isNumericTid :st scope: st.curScope :ast tid: dstTid).not then return
     if (losslessConvTo :st :ast from: srcTid to: dstTid) then return
-    an9n: st.reg.nameOf tid: srcTid
-    pn9n: st.reg.nameOf tid: dstTid
+    an9n: specWrittenName :st :ast tid: srcTid
+    pn9n: specWrittenName :st :ast tid: dstTid
     mn9n: "'\{an9n}' does not convert to '\{pn9n}' without loss, so it cannot stand in for one"
     hn9n: "convert it where the loss is visible -- `\{pn9n}` returns a result: `v.\{pn9n}.or d: <fallback>`"
     nn9n: String
@@ -39578,7 +39613,7 @@ refusePlainPrivateArg: function {
     argN: ast.nodes.get i: arg.operation.u64
     if (argIsPrivateHandle :st :ast n: argN) then return
     pnm: zast.nameTextAt :ast ref: pnId
-    btNm: st.reg.nameOf tid: vt
+    btNm: specWrittenName :st :ast tid: vt
     slot: "parameter"
     if isCtor then slot = "field"
     (addErrorH
@@ -40236,7 +40271,7 @@ refuseValueTypeArg: function {
 } is {
     baseId: paramTypeBaseNameId :ast op: (ast.nodes.get i: arg.operation.u64)
     if (typeArgTid :st :ast :unitDecl opId: arg.operation :baseId) > 0 then return
-    tn: st.reg.nameOf tid: (materialiseLiteral :ast :st :unitDecl t: vt)
+    tn: specWrittenName :st :ast tid: (materialiseLiteral :ast :st :unitDecl t: vt)
     msg: "the type argument is a value of type '\{tn}', not a type"
     if baseId.isZero.not then {
         nm: zast.nameTextAt :ast ref: baseId
@@ -41181,8 +41216,8 @@ checkYieldedValue: function {
         return
     }
     if (typesCompatible :ast :st a: argT b: elem) then return
-    en: st.reg.nameOf tid: elem
-    an: st.reg.nameOf tid: argT
+    en: specWrittenName :st :ast tid: elem
+    an: specWrittenName :st :ast tid: argT
     (addError
         :st
         nodeid: (nodeId n: (ast.nodes.get i: arg.operation.u64))
@@ -41430,8 +41465,8 @@ checkReturnTypeMatch: function {
         )
         return
     }
-    en: st.reg.nameOf tid: expR
-    an: st.reg.nameOf tid: argT
+    en: specWrittenName :st :ast tid: expR
+    an: specWrittenName :st :ast tid: argT
     m4: "return type mismatch: function expects \{en}, got \{an}"
     n4: String
     h4: String
@@ -41882,7 +41917,7 @@ refuseUninferredArmParam: function {
         numeric: (st.reg.genericParamConstraintOf :tdecl paramName: pn).numKind.has
         if numeric.not when (subs.has key: pn).not then {
             pnT: zast.nameTextAt :ast ref: pn
-            tname: st.reg.nameOf tid: (ztypes.tid.create from: dtp)
+            tname: specWrittenName :st :ast tid: (ztypes.tid.create from: dtp)
             (addErrorH
                 :st
                 nodeid: call.nid
@@ -42209,8 +42244,8 @@ checkTaggedCtorArg: function {
                 a: uvt
                 b: (ztypes.tid.create from: uparmid.u64)
             ).not then {
-                apn: st.reg.nameOf tid: uvt
-                dtn: st.reg.nameOf tid: (ztypes.tid.create from: dtp.u64)
+                apn: specWrittenName :st :ast tid: uvt
+                dtn: specWrittenName :st :ast tid: (ztypes.tid.create from: dtp.u64)
                 upm: "arm '\{unionCtorArm}' payload type mismatch: expected \{upnm}, got \{apn}"
                 # Name the rule for the one typedef
                 # shape that reaches here. The
@@ -42758,7 +42793,7 @@ refuseValueCallArgs: function {
     if (st.typing.declChildOfId parentTypeId: vt nameId: zast.names.wkCall).some then return
     arg0: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: 0)
     if arg0.nid.isZero then return
-    tn: st.reg.nameOf tid: (materialiseLiteral :ast :st :unitDecl t: vt)
+    tn: specWrittenName :st :ast tid: (materialiseLiteral :ast :st :unitDecl t: vt)
     msg: "too many arguments: the callee is a value of type '\{tn}', not a function"
     if nameId.isZero.not then {
         nm: zast.nameTextAt :ast ref: nameId
@@ -43367,7 +43402,7 @@ checkExplicitConstruction: function {
     bt: walkTypeOf :st nid: baseId.u64
     if bt.isZero then return unhandled
     if (st.reg.isGenericOf tid: bt) then {
-        tn: st.reg.nameOf tid: bt
+        tn: specWrittenName :st :ast tid: bt
         mg: "cannot construct '\{tn}': a generic type needs type arguments"
         (bareCtorError
             :st
@@ -43981,8 +44016,8 @@ reportGenericBindingConflict: function {
     argTid: ztypes.tid
 } is {
     gpn: zast.nameTextAt :ast ref: holder
-    bn: st.reg.nameOf tid: boundTid
-    an: st.reg.nameOf tid: argTid
+    bn: specWrittenName :st :ast tid: boundTid
+    an: specWrittenName :st :ast tid: argTid
     mg: "generic parameter '\{gpn}' is already bound to '\{bn}', and this argument would bind it to '\{an}' -- a generic parameter takes one type"
     hg: "pass arguments of one type, or convert this one to '\{bn}'"
     ng: String
@@ -44351,7 +44386,7 @@ genericCallNumericArg: function {
         }
     }
     pn: zast.nameTextAt :ast ref: param
-    tn: st.reg.nameOf tid: (declTypeIdOf :st declId: tdecl)
+    tn: specWrittenName :st :ast tid: (declTypeIdOf :st declId: tdecl)
     (addErrorH
         :st
         nodeid: call.nid
@@ -44843,7 +44878,7 @@ checkSumArmName: function {
     armTid: u64
 } is {
     if armTid == 0 then {
-        subjTn: st.reg.nameOf tid: subjT
+        subjTn: specWrittenName :st :ast tid: subjT
         amsg: "type '\{subjTn}' has no arm '\{armName}'"
         marm: ast.nodes.get i: clause.matcharm.u64
         (addError
@@ -45433,7 +45468,7 @@ rejectGenericValueMatch: function {
     ) case some then {
         gvav
         gsub0: ast.nodes.get i: casenode.subject.u64
-        gtn0: st.reg.nameOf tid: subjT
+        gtn0: specWrittenName :st :ast tid: subjT
         gm: "cannot match over a value of generic parameter type '\{gtn0}'"
         gh: "dissect the type parameter itself (`match \{gtn0}`), or move the value dispatch outside the generic"
         gn: String
@@ -45762,7 +45797,7 @@ checkCase: function {
     # has no child arms to dissect into.
     if subjT > 0 when isSum.not when isGenericSubj.not then {
         subjNode: ast.nodes.get i: casenode.subject.u64
-        subjTn0: st.reg.nameOf tid: subjT
+        subjTn0: specWrittenName :st :ast tid: subjT
         smsg: "match subject must be a union, variant, or generic parameter, got '\{subjTn0}'"
         (addError
             :st
@@ -48095,7 +48130,7 @@ reportNoTailValue: function {
     lsid: zast.nodeid
     expR: ztypes.tid
 } is {
-    en: st.reg.nameOf tid: expR
+    en: specWrittenName :st :ast tid: expR
     ln: defn.lineno
     co: defn.colno
     if lsid.isZero.not then {
@@ -49475,8 +49510,8 @@ firstInstanceWalk: function {
     org: st.reg.genericOriginOf tid: (ztypes.tid.create from: monoId)
     if (st.typing.monoRecursionReported.has item: org.u64) then return false
     st.typing.monoRecursionReported.add item: org.u64
-    tn: st.reg.nameOf tid: org
-    mn: st.reg.nameOf tid: (ztypes.tid.create from: monoId)
+    tn: specWrittenName :st :ast tid: org
+    mn: specWrittenName :st :ast tid: (ztypes.tid.create from: monoId)
     m: "instantiating '\{tn}' does not end: each instance instantiates it again, at a larger type argument ('\{mn}')"
     opn: ast.nodes.get i: opId.u64
     (addError
@@ -49622,7 +49657,7 @@ noteInstanceErrors: function {st: zenv.ZSymbolTable ast: Ast.view mono: ztypes.t
 # instantiating call when a call made it.
 instanceNote: function {st: zenv.ZSymbolTable.view ast: Ast.view mono: ztypes.tid} out String is {
     org: st.reg.genericOriginOf tid: mono
-    tn: st.reg.nameOf tid: org
+    tn: specWrittenName :st :ast tid: org
     r: "in the instance of `\{tn}`"
     pnames: st.reg.genericParamNamesOf tdecl: (declOfTypeId :st tid: org)
     n: st.reg.genericArgCount specId: mono
@@ -50822,8 +50857,8 @@ constStandsInMessage: function {
         tgtId = zast.poolFind pool: ast.names text: tgtName
     }
     if (declaredLossless :st :ast from: v.numTid targetId: tgtId) then return "".string
-    an: st.reg.nameOf tid: v.numTid
-    tn: st.reg.nameOf tid: target
+    an: specWrittenName :st :ast tid: v.numTid
+    tn: specWrittenName :st :ast tid: target
     return "'\{an}' does not convert to '\{tn}' without loss, so it cannot stand in for one"
 }
 
@@ -51106,7 +51141,7 @@ constOfConversion: function {
         return ztypes.noConst
     }
     if v.numTid.isZero.not when (declaredLossless :st :ast from: v.numTid :targetId).not then {
-        sn: st.reg.nameOf tid: v.numTid
+        sn: specWrittenName :st :ast tid: v.numTid
         tn: zast.nameTextCopy :ast ref: targetId
         conv: "'\{sn}' to '\{tn}'"
         (constFailRecord
@@ -51209,7 +51244,11 @@ constOfMatch: function {
     sv: evalConstNode :st :scope :ast :unitDecl nid: cr.subject
     if sv.kind.none then return ztypes.noConst
     if sv.kind.armKind.not then {
-        stn: st.reg.nameOf tid: (ztypes.tid.create from: (constValueTid :st :scope :ast v: sv))
+        stn: (specWrittenName
+            :st
+            :ast
+            tid: (ztypes.tid.create from: (constValueTid :st :scope :ast v: sv))
+        )
         sm: "match subject must be a union, variant, or generic parameter, got '\{stn}'"
         sn: ast.nodes.get i: cr.subject.u64
         (constFailMismatch
@@ -51282,7 +51321,7 @@ constArmRefusal: function {
     an: zast.nameTextAt :ast ref: armId
     declared: st.typing.declFindChild parentDeclId: (declOfTypeId :st tid: subjTid) nameId: armId
     if declared.isZero then {
-        stn: st.reg.nameOf tid: subjTid
+        stn: specWrittenName :st :ast tid: subjTid
         return "type '\{stn}' has no arm '\{an}'"
     }
     if (covered.has item: armId) then return "arm '\{an}' is matched twice"
@@ -52688,7 +52727,7 @@ checkConstantArgKind: function {
     if wantsText when av.kind.svalKind then return
     if wantsInt.not when wantsText.not then return
     pnm: zast.nameTextAt :ast ref: paramName
-    en: st.reg.nameOf tid: pt
+    en: specWrittenName :st :ast tid: pt
     gn: constKindName :st v: av
     (addError
         :st
@@ -54012,7 +54051,7 @@ resolveDottedConstantDef: function {
         if (isNumericTypeName name: sfTy).not then {
             sfLitTid: st.reg.literalIntTid
             if (isFloatLiteralName name: sfLit) then sfLitTid = st.reg.literalFloatTid
-            sfn: st.reg.nameOf tid: sfLitTid
+            sfn: specWrittenName :st :ast tid: sfLitTid
             sm9: "'\{sfn}' has no conversion to '\{sfTy}'"
             sh9: "a literal's suffix names one of the numeric types it converts to".string
             sn9: String
