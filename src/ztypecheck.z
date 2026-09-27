@@ -436,15 +436,7 @@ checkBareTypeValueAt: function {
     tid: ztypes.tid
 } is {
     tt: st.reg.typetypeOf typeId: tid
-    isFam: (
-        tt ==
-        ztypes.ztypetype.recordType or
-        (tt == ztypes.ztypetype.classType) or
-        (tt == ztypes.ztypetype.unionType) or
-        (tt == ztypes.ztypetype.variantType) or
-        (tt == ztypes.ztypetype.protocolType) or
-        (tt == ztypes.ztypetype.facetType)
-    )
+    isFam: tt.isUserFamily
     if isFam.not then return
     if (refuseBorrowedBareType :ast :st :nodeid :lineno :colno :width :tid) then return
     tdb: typedefBaseOf :st :tid
@@ -462,7 +454,7 @@ checkBareTypeValueAt: function {
         return
     }
     # unions and variants select an arm; bool's arms are its literals
-    isUV: tt == ztypes.ztypetype.unionType or (tt == ztypes.ztypetype.variantType)
+    isUV: tt.isSum
     if isUV then {
         tn: specWrittenName :st :ast :tid
         mu: "cannot construct '\{tn}' from its bare name: a union/variant selects an arm"
@@ -473,7 +465,7 @@ checkBareTypeValueAt: function {
         bareCtorError :st :nodeid :lineno :colno :width msg: mu hint: hu
         return
     }
-    isPF: tt == ztypes.ztypetype.protocolType or (tt == ztypes.ztypetype.facetType)
+    isPF: tt.isInterface
     if isPF then {
         tn: specWrittenName :st :ast :tid
         mp: "cannot construct '\{tn}' from its bare name: a protocol/facet projects a conforming value"
@@ -7270,7 +7262,7 @@ markerApplicationTarget: function {
     )
     if r == 0 then return (optionval.none u64)
     tt: specTypetypeOf :st tid: (ztypes.tid.create from: r.u64)
-    if tt == ztypes.ztypetype.protocolType or (tt == ztypes.ztypetype.facetType) then {
+    if tt.isInterface then {
         return (optionval.some r)
     }
     return (optionval.none u64)
@@ -8472,7 +8464,7 @@ asItemNamesPlainType: function {
 } out bool is {
     if item == zast.names.wkTag then return false
     tt: specTypetypeOf :st tid: (ztypes.tid.create from: target.u64)
-    if tt == ztypes.ztypetype.facetType or (tt == ztypes.ztypetype.protocolType) then return false
+    if tt.isInterface then return false
     reportAsItemTypeName :st :ast :parentId :item
     return true
 }
@@ -11840,7 +11832,7 @@ fieldTypeNeedsCleanup: function {
         match (
             tto8
         ) case some then {
-            boxed8: tto8 == ztypes.ztypetype.classType or (tto8 == ztypes.ztypetype.unionType)
+            boxed8: tto8.isReferenceData
             if boxed8 when (st.typing.declIsResolving
                 declId: (declOfUnitDef :st :scope unitDecl: duo8 :nameId)
             ) then return true
@@ -13783,15 +13775,7 @@ valueAppliesUnitTemplate: function {
 isNamedTypeFamily: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
     if tid.isZero then return false
     tt: st.reg.typetypeOf typeId: tid
-    return (
-        tt ==
-        ztypes.ztypetype.recordType or
-        (tt == ztypes.ztypetype.classType) or
-        (tt == ztypes.ztypetype.variantType) or
-        (tt == ztypes.ztypetype.unionType) or
-        (tt == ztypes.ztypetype.protocolType) or
-        (tt == ztypes.ztypetype.facetType)
-    )
+    return tt.isUserFamily
 }
 
 # unitNestedCopyNamed -- `tid` is an instance of a type a generic unit declares,
@@ -14093,7 +14077,7 @@ refuseArmAliasPayload: function {
 } is {
     if tid.isZero then return
     tt: st.reg.typetypeOf typeId: tid
-    isSum: tt == ztypes.ztypetype.variantType or (tt == ztypes.ztypetype.unionType)
+    isSum: tt.isSum
     if isSum.not then return
     tgt: reexportTargetIdsOf :st :ast :declId
     if tgt.defName.isZero then return
@@ -14430,7 +14414,7 @@ aliasTargetTid: function {
             rto
         ) case some then {
             rtt: st.reg.typetypeOf typeId: (ztypes.tid.create from: rto.u64)
-            isTag: rtt == ztypes.ztypetype.variantType or (rtt == ztypes.ztypetype.unionType)
+            isTag: rtt.isSum
             if isTag then {
                 memberDecl: (st.typing.declChildOfId
                     parentTypeId: (ztypes.tid.create from: rto.u64)
@@ -20529,7 +20513,7 @@ mintMonoMember: function {
     # member the substitution left alone (a concrete field, a conformance row
     # such as str's `:Text`) was the declaration's business, and a native
     # template's layout is the runtime's.
-    isVrM: tt == ztypes.ztypetype.recordType or (tt == ztypes.ztypetype.variantType)
+    isVrM: tt.isValueData
     if isVrM when target != chId when (st.reg.isNativeOf tid: templateId).not when (
         (st.reg.typetypeOf typeId: (ztypes.tid.create from: chId.u64)) !=
         ztypes.ztypetype.functionType
@@ -20703,7 +20687,7 @@ mintMonoTagShape: function {
     tt: ztypes.ztypetype
     name: StringView
 } is {
-    wantTag: tt == ztypes.ztypetype.variantType or (tt == ztypes.ztypetype.unionType)
+    wantTag: tt.isSum
     if wantTag then {
         tagName: "\{name}:tag:data"
         tagId: st.reg.newType name: tagName.stringView typetype: ztypes.ztypetype.dataType
@@ -21460,7 +21444,7 @@ namedBoundAdmits: function {
     if bt == argTid then return true
     if (st.reg.isPartialOf tid: bt) then return true
     tt: st.reg.typetypeOf typeId: bt
-    if tt == ztypes.ztypetype.protocolType or (tt == ztypes.ztypetype.facetType) then {
+    if tt.isInterface then {
         return (typeConformsTo :st impl: argTid spec: bt)
     }
     if tt == ztypes.ztypetype.unionType then return (sumBoundAdmits :st :bt :argTid conform: true)
@@ -22290,7 +22274,7 @@ valOpSource: function {
     if t.isZero then return valopsrc.none
     tt: st.reg.typetypeOf typeId: t
     if tt == ztypes.ztypetype.functionType then return valopsrc.builtin
-    isVal: tt == ztypes.ztypetype.recordType or (tt == ztypes.ztypetype.variantType)
+    isVal: tt.isValueData
     if isVal.not then return valopsrc.none
     md: st.typing.declMemberIdOf parentTypeId: t :nameId
     if md.isZero then return valopsrc.none
@@ -26752,15 +26736,9 @@ memberStrictType: function {st: zenv.ZSymbolTable.view bt: u64} out bool is {
     if bt > 0 when bt == st.typing.nullTypeId then return true
     tt: st.reg.typetypeOf typeId: (ztypes.tid.create from: bt.u64)
     isConc: (
-        tt ==
-        ztypes.ztypetype.recordType or
-        (tt == ztypes.ztypetype.classType) or
-        (tt == ztypes.ztypetype.unionType) or
-        (tt == ztypes.ztypetype.variantType) or
+        tt.isUserFamily or
         (tt == ztypes.ztypetype.dataType) or
-        (tt == ztypes.ztypetype.functionType) or
-        (tt == ztypes.ztypetype.protocolType) or
-        (tt == ztypes.ztypetype.facetType)
+        (tt == ztypes.ztypetype.functionType)
     )
     if isConc.not then return false
     if (st.reg.hasType typeId: (ztypes.tid.create from: bt.u64)).not then return false
@@ -26986,21 +26964,13 @@ checkCopyMember: function {
         # the leg returned for anything that was not a class or a union.
         btnCp: specWrittenName :st :ast tid: bt
         bttCp: st.reg.typetypeOf typeId: bt
-        isValCp: (
-            bttCp ==
-            ztypes.ztypetype.recordType or
-            (bttCp == ztypes.ztypetype.variantType) or
-            (
-                bttCp ==
-                ztypes.ztypetype.facetType
-                # A valtype's DEFAULT `.copy` is the byte copy its assignment
-                # already performs -- a valtype holds no reftype, so copying the
-                # bytes copies the whole value. Writing one in the as-block
-                # overrides this default; the member lookup above finds it first
-                # and never reaches here. `copy: null` strikes the default off,
-                # and a monomorphised instance inherits its template's decision.
-            )
-        )
+        # A valtype's DEFAULT `.copy` is the byte copy its assignment already
+        # performs -- a valtype holds no reftype, so copying the bytes copies
+        # the whole value. Writing one in the as-block overrides this default;
+        # the member lookup above finds it first and never reaches here. `copy:
+        # null` strikes the default off, and a monomorphised instance inherits
+        # its template's decision.
+        isValCp: bttCp.isValueFamily
         cpOff: st.typing.copyOptOut.has item: bt
         if cpOff.not then {
             cpOrg: st.reg.genericOriginOf tid: bt
@@ -27348,7 +27318,7 @@ checkTaggedMemberPath: function {
     # PREDICATE: it types bool (true when the value currently holds
     # that arm) and stamps dpArmPredicate for the tag-compare emission.
     btt0: st.reg.typetypeOf typeId: bt
-    isTagged: btt0 == ztypes.ztypetype.variantType or (btt0 == ztypes.ztypetype.unionType)
+    isTagged: btt0.isSum
     # a conformance label is no arm: it projects, as a record's does
     if isTagged when (zenv.isConformanceLabelOf
         ty: st.typing
@@ -27437,7 +27407,7 @@ checkTagAccessor: function {
     # exposes the discriminator on instances as a read-only numeric under
     # the declared name; without one, instance reads of `tag` are rejected.
     btt5: st.reg.typetypeOf typeId: bt
-    isSum: btt5 == ztypes.ztypetype.variantType or (btt5 == ztypes.ztypetype.unionType)
+    isSum: btt5.isSum
     if isSum when (dottedBaseIsValue :st :ast :unitDecl n: (ast.nodes.get i: dp.nid.u64)) then {
         tagHit: false
         tob: tagAccessorOwner :st tid: bt
@@ -28488,7 +28458,7 @@ checkMemberNamespace: function {
     if bt.isZero then return true
     # an interface's members are the conformer's methods, reached through a value
     btt: st.reg.typetypeOf typeId: bt
-    if btt == ztypes.ztypetype.protocolType or (btt == ztypes.ztypetype.facetType) then return true
+    if btt.isInterface then return true
     # a function VALUE has no members: its parameters are its declared children,
     # so a read of one RESOLVED and reached the C as a field of a function
     # pointer. One rule, reported where the missing case is reported.
@@ -29735,7 +29705,7 @@ typedefSumBase: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes
     t: tid
     for (typedefBaseTidOf :st tid: t).isZero.not loop t = typedefBaseTidOf :st tid: t
     tt: st.reg.typetypeOf typeId: (partialTemplateOf :st tid: t)
-    if tt == ztypes.ztypetype.unionType or (tt == ztypes.ztypetype.variantType) then return t
+    if tt.isSum then return t
     return tid
 }
 
@@ -36012,7 +35982,7 @@ refuseSelfTypedMember: function {
     colno: u32
 } out bool is {
     btt: st.reg.typetypeOf typeId: recvTid
-    isIface: btt == ztypes.ztypetype.protocolType or (btt == ztypes.ztypetype.facetType)
+    isIface: btt.isInterface
     if isIface.not then return false
     mo: st.typing.declChildOfId parentTypeId: recvTid :nameId
     match (
@@ -38199,7 +38169,7 @@ ctorFieldIsFilled: function {
     }
     if ((st.typing.fnHasBody.get key: fieldTid).or d: false).not then return false
     ownTT: st.reg.typetypeOf typeId: ownerTid
-    return ownTT == ztypes.ztypetype.recordType or (ownTT == ztypes.ztypetype.classType)
+    return ownTT.isFieldwise
 }
 
 # ctorArgProvided -- the caller supplied this parameter, by taking its
@@ -39133,8 +39103,10 @@ conformanceRowLink: function {
 
 # standInNeedsBox -- a concrete conformer written for a PROTOCOL: an owning
 # place refuses it, since only a borrowing one may take it as the spec
-# implicitly. A value of the spec's own type (a box already), a type
-# parameter, and a facet place are not this rule's.
+# implicitly. A protocol's conformers are a class or a union (a record or a
+# variant conforms to a facet, and is refused as a non-conformer before this);
+# a value of the spec's own type (a box already), a type parameter, and a facet
+# place are not this rule's.
 standInNeedsBox: function {
     st: zenv.ZSymbolTable.view
     value: ztypes.tid
@@ -39142,10 +39114,7 @@ standInNeedsBox: function {
 } out bool is {
     if value == spec then return false
     if (st.reg.typetypeOf typeId: spec) != ztypes.ztypetype.protocolType then return false
-    vtt: st.reg.typetypeOf typeId: value
-    if vtt == ztypes.ztypetype.classType then return true
-    if vtt == ztypes.ztypetype.recordType then return true
-    return vtt == ztypes.ztypetype.unionType
+    return (st.reg.typetypeOf typeId: value).isReferenceData
 }
 
 # specWrittenName -- a spec as a program writes it: its name, or for an
@@ -41605,7 +41574,7 @@ checkTypedefOrProjectionCall: function {
         )
     }
     pjtt: st.reg.typetypeOf typeId: (ztypes.tid.create from: tdo.u64)
-    isProj: pjtt == ztypes.ztypetype.facetType or (pjtt == ztypes.ztypetype.protocolType)
+    isProj: pjtt.isInterface
     if isProj then {
         return (callleg handled: true tid: (checkProjectionCreate
             :st
@@ -42478,7 +42447,7 @@ checkResolvedValueCall: function {
         # generic). Walk the ctor args (hoist + consume) and the
         # value IS the constructed type, so the binding stamps.
         dctt: st.reg.typetypeOf typeId: dro
-        isCtorT: dctt == ztypes.ztypetype.classType or (dctt == ztypes.ztypetype.recordType)
+        isCtorT: dctt.isFieldwise
         if isCtorT then {
             # a typedef's construction is a cast, however the type is reached
             if call.nargs > 0 when (typedefBaseOf :st tid: (ztypes.tid.create from: dro)
@@ -42956,7 +42925,7 @@ checkTypeConstruction: function {
     # `d` and `d.borrow` borrow it, `d.take` hands it over, and so does `d` in a
     # destination that owns what it holds.
     pjtt: st.reg.typetypeOf typeId: tid
-    if pjtt == ztypes.ztypetype.protocolType or (pjtt == ztypes.ztypetype.facetType) then {
+    if pjtt.isInterface then {
         return (checkProjectionCreate
             :st
             :unitDecl
@@ -43032,7 +43001,7 @@ checkTypeConstruction: function {
     if ctt == ztypes.ztypetype.classType then {
         st.typing.callKind.set key: call.nid.u64 value: zast.callkind.classCreate
     }
-    if ctt == ztypes.ztypetype.unionType then {
+    if ctt.isSum then {
         st.typing.callKind.set key: call.nid.u64 value: zast.callkind.unionCreate
     }
     pinConstructionSources :st :tid :pins
@@ -43137,7 +43106,7 @@ wrappedCalleeIsSpec: function {
 } out bool is {
     if (wrappedCalleeIsCallResult :st :call) then return false
     tt: st.reg.typetypeOf typeId: wcv
-    return tt == ztypes.ztypetype.protocolType or (tt == ztypes.ztypetype.facetType)
+    return tt.isInterface
 }
 
 # wrappedCalleeIsCtorType -- a non-FUNCTION wrapped callee is the paren-mono
@@ -47036,7 +47005,7 @@ recordDiscard: function {st: zenv.ZSymbolTable ast: Ast innerId: zast.nodeid} is
     tid: ztypes.tid.create from: vt.u64
     if (st.reg.needsDestructor typeId: tid).not then return
     tt: st.reg.typetypeOf typeId: tid
-    if (tt == ztypes.ztypetype.classType or (tt == ztypes.ztypetype.unionType)).not then return
+    if tt.isReferenceData.not then return
     # a result that keeps a borrow of its inputs is a reference to them, an
     # `outx` one a value of its own (checkAssignment's rule)
     if st.typing.pendingPins.length > 0 when st.typing.pendingBorrowOwned.not then return
@@ -52267,7 +52236,7 @@ constArmRead: function {
         typeDecl: ptd
         defNode: (st.typing.decls.get i: pmd.u64).node
     ) then return (constValueOfMemberTidId :ast :st unitTid: ptid nameId: armNameId)
-    isSum: ptt == ztypes.ztypetype.variantType or (ptt == ztypes.ztypetype.unionType)
+    isSum: ptt.isSum
     if isSum.not then return ztypes.noConst
     anm: armNameId
     # an arm the type does not declare is no value of it
@@ -54604,7 +54573,7 @@ reportMissingQualifiedMember: function {
         if tt == 0 then return
         typeTid: ztypes.tid.create from: tt
         ttt: st.reg.typetypeOf typeId: typeTid
-        valued: ttt == ztypes.ztypetype.variantType or (ttt == ztypes.ztypetype.unionType)
+        valued: ttt.isSum
         if valued.not when ttt != ztypes.ztypetype.dataType then return
         declared: st.typing.declChildOfId parentTypeId: typeTid nameId: memberId
         if declared.none.not then return

@@ -571,14 +571,7 @@ isIntName: function {name: StringView} out bool is {
 # C struct and can declare methods: record, class, variant, union and facet. A
 # protocol is a vtable, not a struct, and the native families answer elsewhere.
 isUserStructType: function {tt: ztypes.ztypetype} out bool is {
-    return (
-        tt ==
-        ztypes.ztypetype.recordType or
-        (tt == ztypes.ztypetype.classType) or
-        (tt == ztypes.ztypetype.variantType) or
-        (tt == ztypes.ztypetype.unionType) or
-        (tt == ztypes.ztypetype.facetType)
-    )
+    return tt.isValueFamily or tt.isReferenceData
 }
 
 # true when `name` is a floating-point type name.
@@ -12641,7 +12634,7 @@ emitCrossUnitCtor: function {
         if (symtab.reg.genericOriginOf tid: inst) == tid then tid = inst
     }
     tt: symtab.reg.typetypeOf typeId: tid
-    isRc: tt == ztypes.ztypetype.recordType or (tt == ztypes.ztypetype.classType)
+    isRc: tt.isFieldwise
     if isRc.not then return "".string
     return (emitRecordCtor :ast :symtab :ctx :call :tid)
 }
@@ -12684,7 +12677,7 @@ emitCrossUnitTag: function {
     } case none then null
     if vtid.isZero then return "".string
     vtt: symtab.reg.typetypeOf typeId: vtid
-    isTagged: vtt == ztypes.ztypetype.variantType or (vtt == ztypes.ztypetype.unionType)
+    isTagged: vtt.isSum
     if isTagged.not then return "".string
     pc: armPayloadC :ast :symtab :ctx tid: (ztypes.tid.create from: vtid.u64) :arm
     if pc.length == 0 then {
@@ -12985,8 +12978,8 @@ emitFnptrLocalCall: function {
 # typetypeConforms -- whether a type of this family may declare a conformance:
 # class and union to a protocol, record and variant to a facet.
 typetypeConforms: function {tt: ztypes.ztypetype} out bool is {
-    if tt == ztypes.ztypetype.classType or (tt == ztypes.ztypetype.recordType) then return true
-    return tt == ztypes.ztypetype.unionType or (tt == ztypes.ztypetype.variantType)
+    if tt.isFieldwise then return true
+    return tt.isSum
 }
 
 # conformanceArgText -- a concrete class/record/union/variant argument handed to a
@@ -13005,7 +12998,7 @@ conformanceArgText: function {
     owning: bool
 } out String is {
     pptt: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: protoTid.u64)
-    isProtoP: pptt == ztypes.ztypetype.protocolType or (pptt == ztypes.ztypetype.facetType)
+    isProtoP: pptt.isInterface
     if isProtoP.not then return "".string
     aTid: stampIdOf :symtab nid: (interpPartNodeId n: argOpNode)
     aTT: symtab.reg.typetypeOf typeId: aTid
@@ -13331,7 +13324,7 @@ orderUserFnArg: function {
 isFieldwiseCtorTid: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
     if tid.isZero then return false
     tt: symtab.reg.typetypeOf typeId: tid
-    return tt == ztypes.ztypetype.recordType or (tt == ztypes.ztypetype.classType)
+    return tt.isFieldwise
 }
 
 # namedCalleeFnId -- the resolved function id a named callee stands for, 0 when
@@ -13671,7 +13664,7 @@ emitMethodDeclCall: function {
     rnam: emitNativeArgMethod :ast :symtab :ctx :call :ownerTid
     if rnam.length > 0 then return rnam
     ott: symtab.reg.typetypeOf typeId: ownerTid
-    isSpec: ott == ztypes.ztypetype.protocolType or (ott == ztypes.ztypetype.facetType)
+    isSpec: ott.isInterface
     if isSpec then return (emitProtocolDispatch :ast :symtab :ctx :call)
     # A NATIVE OWNER MAY DECLARE A BODIED MEMBER, and its body is emitted like
     # any other -- `u8.upto` is one. The bail below is for members the RUNTIME
@@ -14157,7 +14150,7 @@ tagAliasArmC: function {
     if brid.isZero then return "".string
     if bdec.isZero then return "".string
     btt: symtab.reg.typetypeOf typeId: brid
-    isTag: btt == ztypes.ztypetype.variantType or (btt == ztypes.ztypetype.unionType)
+    isTag: btt.isSum
     if isTag.not then return "".string
     atk: (ztypecheck.reexportTargetIdsOf
         st: symtab
@@ -14626,7 +14619,7 @@ emitNestedMonoMethodBase: function {
                 isFacet: nrtt == ztypes.ztypetype.facetType
             )
         }
-        nDisp: nrtt == ztypes.ztypetype.classType or (nrtt == ztypes.ztypetype.recordType)
+        nDisp: nrtt.isFieldwise
         # a FUNCTION FIELD is the instance's own slot: a read calls through it
         # (or, stamped as the field's function, is the field), never the
         # function the declaration wrote as its default
@@ -14914,7 +14907,7 @@ emitDottedNestedBase: function {
     )
     if eMo.length > 0 then return eMo
     nsumT: symtab.reg.typetypeOf typeId: nlid
-    isSum9: nsumT == ztypes.ztypetype.variantType or (nsumT == ztypes.ztypetype.unionType)
+    isSum9: nsumT.isSum
     if isSum9 then {
         eSmN: (sumMemberMethodRead
             :ast
@@ -15096,7 +15089,7 @@ emitResolvedMemberRead: function {
     readIsRef: bool
 } out String is {
     mtt: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: mco.u64)
-    if mtt == ztypes.ztypetype.protocolType or (mtt == ztypes.ztypetype.facetType) then {
+    if mtt.isInterface then {
         pj: protocolProjectionRead :symtab :ctx :mn2 :bn2 :bn2v :bstamp :mco
         if pj.length > 0 then return pj
     }
@@ -16047,12 +16040,7 @@ emitValtypeCopy: function {
     tid: ztypes.tid
 } out String is {
     cvvt: symtab.reg.typetypeOf typeId: tid
-    cvval: (
-        cvvt ==
-        ztypes.ztypetype.recordType or
-        (cvvt == ztypes.ztypetype.variantType) or
-        (cvvt == ztypes.ztypetype.facetType)
-    )
+    cvval: cvvt.isValueFamily
     if cvval.not then return "".string
     cvown: (symtab.typing.declChildOf
         pool: ast.names
@@ -16100,13 +16088,7 @@ emitResolvedCopy: function {
         :tid
         originTid: (ctx.origins.get i: ogStr)
     ) then cvstr = true
-    cvref: (
-        cvtt ==
-        ztypes.ztypetype.classType or
-        (cvtt == ztypes.ztypetype.unionType) or
-        (cvtt == ztypes.ztypetype.protocolType) or
-        cvstr
-    )
+    cvref: cvtt.isReferenceFamily or cvstr
     if cvref.not when (symtab.reg.needsDestructor typeId: tid).not then {
         return (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent.u64))
     }
@@ -16306,7 +16288,7 @@ taggedArmValueC: function {
     mnc0Id: zast.nameid
 } out String is {
     tt: symtab.reg.typetypeOf typeId: dtp
-    dtg: tt == ztypes.ztypetype.variantType or (tt == ztypes.ztypetype.unionType)
+    dtg: tt.isSum
     if dtg.not then return String
     if (isGenericType :symtab tid: dtp) then return String
     vcH: ctxCname :ctx tid: dtp
@@ -17949,7 +17931,7 @@ interpBaseIsOwnedStructField: function {
         # other monos (views, collections) keep the owned-call-result legs
         if bo > 0 when (symtab.reg.needsDestructor typeId: bt).not then return false
         btt: symtab.reg.typetypeOf typeId: bt
-        isUC: btt == ztypes.ztypetype.recordType or (btt == ztypes.ztypetype.classType)
+        isUC: btt.isFieldwise
         if isUC.not then return false
         cn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
         co: symtab.typing.declChildOf pool: ast.names parentTypeId: bt name: cn.stringView
@@ -22593,7 +22575,7 @@ emitMatchStmt: function {
     {
         vend: typedefChaseTid :symtab tid: (ztypes.tid.create from: vtid.u64)
         vett: symtab.reg.typetypeOf typeId: vend
-        if vett == ztypes.ztypetype.unionType or (vett == ztypes.ztypetype.variantType) then {
+        if vett.isSum then {
             vtid = vend.u64
         }
     }
@@ -27606,7 +27588,8 @@ fnReturnTypeId: function {
 # isUserGenericMonoTid -- a specialization of a non-native USER generic type, as
 # opposed to a collection mono or a runtime-owned one. Every family whose method
 # bodies this emitter writes qualifies: a record, a variant and a facet carry
-# the same method surface as a class, only by value.
+# the same method surface as a class, only by value. A protocol's instance has
+# no bodies of its own -- its conformers carry them -- so it is not one.
 isUserGenericMonoTid: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
@@ -27616,13 +27599,7 @@ isUserGenericMonoTid: function {
     if og4.isZero then return false
     if (isCollectionOriginTid :ctx originTid: og4) then return false
     if (symtab.reg.isNativeOf tid: og4) then return false
-    ott: symtab.reg.typetypeOf typeId: og4
-    if ott == ztypes.ztypetype.classType then return true
-    if ott == ztypes.ztypetype.recordType then return true
-    if ott == ztypes.ztypetype.variantType then return true
-    if ott == ztypes.ztypetype.unionType then return true
-    if ott == ztypes.ztypetype.facetType then return true
-    return false
+    return (isUserStructType tt: (symtab.reg.typetypeOf typeId: og4))
 }
 
 # isUserClassMonoTid -- the CLASS subset of the above. Its instances behave like
@@ -28743,15 +28720,7 @@ typeRefC: function {
     # the emitter minted for it -- so the kind decides only whether there is a
     # struct at all. A function type is the one that spells a different suffix,
     # because what it names is a function-pointer typedef and not a struct.
-    isUserStruct: (
-        ctt ==
-        ztypes.ztypetype.recordType or
-        (ctt == ztypes.ztypetype.variantType) or
-        (ctt == ztypes.ztypetype.classType) or
-        (ctt == ztypes.ztypetype.unionType) or
-        (ctt == ztypes.ztypetype.protocolType) or
-        (ctt == ztypes.ztypetype.facetType)
-    )
+    isUserStruct: ctt.isUserFamily
     if isUserStruct then {
         rc: ctxCnameView :ctx tid: cid
         rt: "\{rc}_t"
@@ -35507,7 +35476,7 @@ ensureFwdStruct: function {
     # spelling is the wrapped type, so a forward struct tag would name nothing
     if (isTypedefType :symtab tid: (ztypes.tid.create from: tid.u64)) then return
     tt: symtab.reg.typetypeOf typeId: tid
-    isStruct: tt == ztypes.ztypetype.recordType or (tt == ztypes.ztypetype.classType)
+    isStruct: tt.isFieldwise
     if isStruct then {
         if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogStr)) then isStruct = false
         if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogArray)) then isStruct = false
@@ -35535,7 +35504,7 @@ ensureFwdStruct: function {
 # scalar with nothing to declare.
 fwdTaggedSpec: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
     tt: symtab.reg.typetypeOf typeId: tid
-    if tt == ztypes.ztypetype.protocolType or (tt == ztypes.ztypetype.facetType) then return true
+    if tt.isInterface then return true
     if tt != ztypes.ztypetype.variantType then return false
     return (isOrdinalVariant :symtab :tid).not
 }
@@ -35581,15 +35550,7 @@ isComplexFnptrParam: function {
     if can > 0 then ct = ztypes.tid.create from: can.u64
     if (isOrdinalVariant :symtab tid: ct) then return false
     tt: symtab.reg.typetypeOf typeId: ct
-    isAgg: (
-        tt ==
-        ztypes.ztypetype.protocolType or
-        (tt == ztypes.ztypetype.facetType) or
-        (
-            tt == ztypes.ztypetype.unionType
-        ) or
-        (tt == ztypes.ztypetype.variantType)
-    )
+    isAgg: tt.isInterface or tt.isSum
     if isAgg.not then return false
     if (typeStructEmitted :ctx tid: ct) then return false
     return (isFwdDeclared :ctx tid: ct).not
@@ -35768,15 +35729,7 @@ emitFnptrTypedefs: function {
                 ztypes.ztypetype.functionType
             ) then {
                 fpt0: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: fp0.u64)
-                isObj: (
-                    fpt0 ==
-                    ztypes.ztypetype.recordType or
-                    (fpt0 == ztypes.ztypetype.classType) or
-                    (fpt0 == ztypes.ztypetype.unionType) or
-                    (fpt0 == ztypes.ztypetype.variantType) or
-                    (fpt0 == ztypes.ztypetype.protocolType) or
-                    (fpt0 == ztypes.ztypetype.facetType)
-                )
+                isObj: fpt0.isUserFamily
                 if isObj then fnOwner.set key: fco value: fp0
                 seedDeclaredFnptr :ast :symtab :ctx owner: fp0 name: (fowN0.get i: fk0 - 1) tid: fco
             }
@@ -36401,7 +36354,7 @@ isUserGenericRecordMono: function {
     tcl: ztypes.tid
     tt: ztypes.ztypetype
 } out bool is {
-    isRec: tt == ztypes.ztypetype.recordType or (tt == ztypes.ztypetype.classType)
+    isRec: tt.isFieldwise
     if isRec.not then return false
     if (isCollectionOriginTid
         :ctx
@@ -37822,9 +37775,7 @@ emitConformanceImplsForType: function {
     # a reftype impl is skipped for a facet: one copied into an inline union
     # would break the valtype guarantee, and catching that is front-end work
     implTT: symtab.reg.typetypeOf typeId: implTid
-    if isFacet when (
-        implTT == ztypes.ztypetype.recordType or (implTT == ztypes.ztypetype.variantType)
-    ).not then return
+    if isFacet when implTT.isValueData.not then return
     if (typeStructEmitted :ctx tid: implTid).not then return
     tids: ListVal u64
     labels: List String
@@ -40080,7 +40031,7 @@ borrowedFieldIsReftypePtr: function {
     ftid: canonTypeId :ast :symtab :ctx tid: fid name: ftn.stringView
     if ftid == 0 then ftid = fid
     tt: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: ftid.u64)
-    return tt == ztypes.ztypetype.classType or (tt == ztypes.ztypetype.unionType)
+    return tt.isReferenceData
 }
 
 # storedFieldC -- the C type a field is STORED as: its own type, with a borrowed
@@ -40360,7 +40311,7 @@ hashFnDemand: function {
 } is {
     if (ctx.hashAsked.has item: tid.u64) then return
     tt: symtab.reg.typetypeOf typeId: tid
-    isAgg: tt == ztypes.ztypetype.recordType or (tt == ztypes.ztypetype.variantType)
+    isAgg: tt.isValueData
     if isAgg.not then return
     if (partIsCScalar :symtab :tid) then return
     ctx.hashAsked.add item: tid.u64
@@ -41311,7 +41262,7 @@ emitExprFormYield: function {
     cTypeText: typeRefC :ast :symtab :ctx tid: ltid thisTid: ztypes.tid
     if cTypeText.length == 0 then cTypeText = "int64_t".string
     tt: symtab.reg.typetypeOf typeId: ltid
-    isRef: tt == ztypes.ztypetype.classType or (tt == ztypes.ztypetype.unionType)
+    isRef: tt.isReferenceData
     if isRef then {
         lp0: "\{ind}\{cTypeText}* __borrow_\{nm} = \{srcC};\n"
         buf.append lp0
