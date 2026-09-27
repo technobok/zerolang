@@ -127,6 +127,8 @@ Table of Contents</div>
 </li>
 <li><a href="#ownership-transfer-take">Ownership Transfer (.take)</a>
 </li>
+<li><a href="#re-pointing-a-borrow">Re-pointing a borrow</a>
+</li>
 <li><a href="#drop">.drop</a>
 </li>
 <li><a href="#scope-cleanup">Scope Cleanup</a>
@@ -498,31 +500,48 @@ source. Zero-initialisation sets all pointer fields to <code>NULL</code>, preven
 double-free when the source's scope cleanup runs:</p>
 <pre><code class="language-c">z_named_t d = zv_c;                         /* struct copy */
 zv_c = (z_named_t){0};                      /* invalidate source */</code></pre>
-<h3 id="drop"><a href="#drop">6.6. .drop</a></h3>
+<h3 id="re-pointing-a-borrow"><a href="#re-pointing-a-borrow">6.6. Re-pointing a borrow</a></h3>
+<p>A borrowed local is a pointer to its source, aliased to its deref
+(<code>(*__borrow_b)</code>); a borrowed parameter is the pointer itself. A
+reassignment of a borrow stores a new address and frees nothing:</p>
+<pre><code class="language-c">__borrow_zv_b = &amp;zv_d;                      /* b = d */</code></pre>
+<p>A borrow re-pointed at an owned value refers to its COMPANION, an owned local
+declared empty beside the borrow and destroyed with the borrow's scope. The
+value runs first, the companion's old value is freed, and the borrow takes the
+companion's address:</p>
+<pre><code class="language-c">z_named_t zv_c = (z_named_t){0};            /* declared with b */
+...
+z_named_t _rr0 = z_named_create(...);       /* b = Named ... */
+z_named_destroy(&amp;zv_c);
+zv_c = _rr0;
+__borrow_zv_b = &amp;zv_c;</code></pre>
+<p>A borrow held by value -- a view, a borrowed protocol box, a map's own pointer
+-- is stored whole instead.</p>
+<h3 id="drop"><a href="#drop">6.7. .drop</a></h3>
 <p><code>.drop</code> calls the destructor (if present) and zero-initialises the struct:</p>
 <pre><code class="language-c">z_named_destroy(&amp;zv_n);
 zv_n = (z_named_t){0};</code></pre>
-<h3 id="scope-cleanup"><a href="#scope-cleanup">6.7. Scope Cleanup</a></h3>
+<h3 id="scope-cleanup"><a href="#scope-cleanup">6.8. Scope Cleanup</a></h3>
 <p>When an owned class variable falls out of scope, the destructor is called (if
 the type has one). The cleanup code passes <code>&amp;var</code> to the destructor:</p>
 <pre><code class="language-c">z_named_destroy(&amp;zv_n);</code></pre>
-<h3 id="function-returns"><a href="#function-returns">6.8. Function Returns</a></h3>
+<h3 id="function-returns"><a href="#function-returns">6.9. Function Returns</a></h3>
 <p>Functions returning a class return the struct by value. C compilers apply NRVO
 (Named Return Value Optimisation) in practice, avoiding unnecessary copies.</p>
-<h3 id="parameter-passing"><a href="#parameter-passing">6.9. Parameter Passing</a></h3>
+<h3 id="parameter-passing"><a href="#parameter-passing">6.10. Parameter Passing</a></h3>
 <p>Borrow parameters receive a pointer (the caller passes <code>&amp;var</code>); view
 parameters receive a <code>const</code> pointer. Take parameters receive the struct
 by value (the caller copies the struct and zero-initialises its source);
 <code>.hold</code> is take with a readonly binding, and an <code>outx</code> declaration marks
 a return that pins its non-owned arguments.</p>
-<h3 id="swap"><a href="#swap">6.10. Swap</a></h3>
+<h3 id="swap"><a href="#swap">6.11. Swap</a></h3>
 <p>Swapping two class variables swaps the entire struct:</p>
 <pre><code class="language-c">{
     z_named_t _tmp = zv_a;
     zv_a = zv_b;
     zv_b = _tmp;
 }</code></pre>
-<h3 id="non-owned-fields-on-classes"><a href="#non-owned-fields-on-classes">6.11. Non-Owned Fields on Classes</a></h3>
+<h3 id="non-owned-fields-on-classes"><a href="#non-owned-fields-on-classes">6.12. Non-Owned Fields on Classes</a></h3>
 <p>Classes may have non-owned fields. A class with non-owned fields:</p>
 <ul>
 <li>Holds compile-time locks on the targets of its non-owned fields for the
@@ -626,11 +645,12 @@ typedef struct {
 <p>The protocol struct (3 pointers = 24 bytes) is on the stack.</p>
 <h3 id="borrowed-vs-owned"><a href="#borrowed-vs-owned">8.2. Borrowed vs Owned</a></h3>
 <ul>
-<li>Borrowed (<code>protocol.borrow</code>): <code>data</code> points to the source
-variable (via <code>&amp;var</code>). <code>destroy</code> is <code>NULL</code>. The protocol instance does
+<li>Borrowed (<code>Proto obj</code>, <code>Proto obj.borrow</code>, or the conformance's
+label, <code>obj.reader</code>): <code>data</code> points to the source variable (via <code>&amp;var</code>). <code>destroy</code> is <code>NULL</code>. The protocol instance does
 not own the data.</li>
-<li>Owned (<code>protocol.create</code>): <code>data</code> points to a heap-allocated
-copy of the implementation. <code>destroy</code> is set to a cleanup function that
+<li>Owned (<code>Proto obj.take</code>, <code>Proto.create from: obj.take</code>, or an
+unmarked source handed to a place that owns it): <code>data</code> points to a
+heap-allocated copy of the implementation. <code>destroy</code> is set to a cleanup function that
 frees the copy. For reftype implementations, the cleanup function calls the
 implementation's destructor before freeing.</li>
 </ul>

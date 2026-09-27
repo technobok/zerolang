@@ -284,6 +284,33 @@ double-free when the source's scope cleanup runs:
   zv_c = (z_named_t){0};                      /* invalidate source */
   """
 
+#---: Re-pointing a borrow
+
+A borrowed local is a pointer to its source, aliased to its deref
+(#~"(*__borrow_b)"); a borrowed parameter is the pointer itself. A
+reassignment of a borrow stores a new address and frees nothing:
+
+#code language=c: """
+  __borrow_zv_b = &zv_d;                      /* b = d */
+  """
+
+A borrow re-pointed at an owned value refers to its COMPANION, an owned local
+declared empty beside the borrow and destroyed with the borrow's scope. The
+value runs first, the companion's old value is freed, and the borrow takes the
+companion's address:
+
+#code language=c: """
+  z_named_t zv_c = (z_named_t){0};            /* declared with b */
+  ...
+  z_named_t _rr0 = z_named_create(...);       /* b = Named ... */
+  z_named_destroy(&zv_c);
+  zv_c = _rr0;
+  __borrow_zv_b = &zv_c;
+  """
+
+A borrow held by value -- a view, a borrowed protocol box, a map's own pointer
+-- is stored whole instead.
+
 #---: .drop
 
 #~".drop" calls the destructor (if present) and zero-initialises the struct:
@@ -476,11 +503,12 @@ The protocol struct (3 pointers = 24 bytes) is on the stack.
 #---: Borrowed vs Owned
 
 #ul:
-  [#*: #+ Borrowed (#~"protocol.borrow"): #~"data" points to the source
-  variable (via #~"&var"). #~"destroy" is #~"NULL". The protocol instance does
+  [#*: #+ Borrowed (#~"Proto obj", #~"Proto obj.borrow", or the conformance's
+  label, #~"obj.reader"): #~"data" points to the source variable (via #~"&var"). #~"destroy" is #~"NULL". The protocol instance does
   not own the data.]
-  [#*: #+ Owned (#~"protocol.create"): #~"data" points to a heap-allocated
-  copy of the implementation. #~"destroy" is set to a cleanup function that
+  [#*: #+ Owned (#~"Proto obj.take", #~"Proto.create from: obj.take", or an
+  unmarked source handed to a place that owns it): #~"data" points to a
+  heap-allocated copy of the implementation. #~"destroy" is set to a cleanup function that
   frees the copy. For reftype implementations, the cleanup function calls the
   implementation's destructor before freeing.]
 
