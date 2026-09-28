@@ -23659,9 +23659,42 @@ bodyTypeNameTid: function {
     nameId: zast.nameid
     nid: u64
 } out u64 is {
-    gp: genericParamInScope :st :ast scope: st.curScope :nameId :nid
+    bn: bodySelfTypeNameId :st :ast :nameId
+    gp: genericParamInScope :st :ast scope: st.curScope nameId: bn :nid
     if gp > 0 then return gp
-    return ((walkLookupTyperefById :st scope: st.curScope :ast :unitDecl baseId: nameId).or d: 0)
+    return ((walkLookupTyperefById :st scope: st.curScope :ast :unitDecl baseId: bn).or d: 0)
+}
+
+# bodySelfTypeNameId -- the name `nameId` spells in a body, with `type` read as
+# the enclosing type's name: a predefined identifier naming the parent object
+# (spec, Predefined identifiers) means in a method's body what it means in the
+# method's signature. A local named `type` redefines it; outside a type's
+# members, and for any other name, the name answers itself.
+bodySelfTypeNameId: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    nameId: zast.nameid
+} out zast.nameid is {
+    if nameId.isZero then return nameId
+    if (zast.nameTextEq :ast ref: nameId s: "type").not then return nameId
+    if (st.lookupVarId :nameId).some then return nameId
+    td: enclosingTypeDecl :st scope: st.curScope
+    if td.isZero then return nameId
+    return (zast.nameid.create from: (st.typing.decls.get i: td.u64).name)
+}
+
+# enclosingTypeDecl -- the type whose member the scope `scope` is in: the
+# declaration a method, or an `as` item, hangs under; zero inside a free
+# function or at unit level.
+enclosingTypeDecl: function {st: zenv.ZSymbolTable.view scope: ztypes.declid} out ztypes.declid is {
+    d: scope
+    for d.isZero.not loop {
+        k: (st.typing.decls.get i: d.u64).kind
+        if k.typeDecl then return d
+        if k.funcDecl or k.unitDecl then return ztypes.declid
+        d = declParentIdOf :st declId: d
+    }
+    return d
 }
 
 # genericParamInScope -- the GENERIC_PARAM type a bare name denotes when it is a
@@ -43960,7 +43993,11 @@ checkCall: function {
             return (ztypes.tid.create from: 0)
         }
     }
-    cnId: atomNameId :ast n: (ast.nodes.get i: call.callable.u64)
+    cnId: (bodySelfTypeNameId
+        :st
+        :ast
+        nameId: (atomNameId :ast n: (ast.nodes.get i: call.callable.u64))
+    )
     if cnId == zast.names.wkReturn then {
         return (checkControlBuiltinCall :st :unitDecl :ast :call)
     }
