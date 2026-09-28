@@ -37866,6 +37866,28 @@ fileTypeIdOf: function {
     return 0
 }
 
+# fileFromArgAddr -- the address of a file write's `from:` view, coerced from a
+# String where it is one (fileFromArgCoerce). A view with no address of its own
+# -- a call's result, `outbuf.byteView` -- is bound to a temporary first; a view
+# owns nothing, and a String source's own temporary is the coercion's, so this
+# one takes no node and owes no destroy.
+fileFromArgAddr: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+} out String is {
+    fv: ctorArgByLabel :ast :symtab :ctx :call label: "from"
+    fvc: fileFromArgCoerce :ast :symtab :ctx :call av: fv.stringView
+    # a compound literal (the String coercion's `(StringView){..}`) already has an
+    # address; anything else is passed by reference as any argument is
+    if (fvc.stringView.startsWith prefix: "((") then return "&\{fvc}"
+    fnid: ctorArgNodeByLabel :ast :call label: "from"
+    vt: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: fnid))
+    if vt == ctx.strTid then vt = ctx.svTid
+    return (emitByrefArg :ast :symtab :ctx av: fvc.stringView pid: vt argNid: 0)
+}
+
 # fileFromArgCoerce -- the emitted `from:` argument of a file-method call,
 # projected to a by-value view when the arg is an owned String (TextWriter's
 # StringLike param; ByteView args pass through unchanged). A non-lvalue
@@ -37974,9 +37996,7 @@ emitFileMethodCall: function {
     if mn == "close" then return "\{fc}_close(\{recvExpr})"
     if mn == "flush" then return "\{fc}_flush(\{recvExpr})"
     if mn == "write" then {
-        fv: ctorArgByLabel :ast :symtab :ctx :call label: "from"
-        fvc: fileFromArgCoerce :ast :symtab :ctx :call av: fv.stringView
-        return "\{fc}_write(\{recvExpr}, &\{fvc})"
+        return "\{fc}_write(\{recvExpr}, \{fileFromArgAddr :ast :symtab :ctx :call})"
     }
     if mn == "read" then {
         return (emitOrderedPair
@@ -38009,9 +38029,7 @@ emitFileMethodCall: function {
         )
     }
     if mn == "writeLine" then {
-        wlv: ctorArgByLabel :ast :symtab :ctx :call label: "from"
-        wlc: fileFromArgCoerce :ast :symtab :ctx :call av: wlv.stringView
-        return "\{fc}_writeLine(\{recvExpr}, &\{wlc})"
+        return "\{fc}_writeLine(\{recvExpr}, \{fileFromArgAddr :ast :symtab :ctx :call})"
     }
     return "".string
 }
@@ -38090,22 +38108,16 @@ wrapperCreateArg: function {
                     (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: prtid.u64)) ==
                     ztypes.ztypetype.protocolType
                 ) then {
-                    ab: argBaseAtom :ast n: (ast.nodes.get i: a.operation.u64)
-                    abnid: (argBaseNodeId
+                    # a conformer is boxed as the protocol it stands in for, as at
+                    # any other slot (standInText); a value that already is the
+                    # protocol passes as it stands, a header by value
+                    return (standInText
                         :ast
+                        :symtab
+                        :ctx
                         n: (ast.nodes.get i: a.operation.u64)
-                    ).u64
-                    abrV0: atomVid :symtab nid: abnid
-                    abr: aliasResolveAt :symtab :ctx nid: abnid.u64 name: ab vid: abrV0
-                    abtid: stampIdOf :symtab nid: abnid
-                    abcb: ctxCname :ctx tid: abtid
-                    ablab: boxLabelFor :symtab :ctx implTid: abtid protoTid: prtid
-                    abv: ztypes.vid
-                    if abr.stringView == ab then abv = atomVid :symtab nid: abnid
-                    abrC: emitLocalAtomNameAt :symtab :ctx nid: abnid.u64 name: ab vid: abrV0
-                    abpfx: "&".string
-                    if (isPtrVid :ctx vid: abv) then abpfx = "".string
-                    return "\{abcb}_\{ablab}_create(\{abpfx}\{abrC})"
+                        text: (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64))
+                    )
                 }
                 if (
                     (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: prtid.u64)) ==
@@ -38362,7 +38374,18 @@ lowerNativeArg: function {
         if (markedValtypeRefParam :ast :symtab :fid :pname :pid) then needAmp = true
     }
     av1: emitExpr :ast :symtab :ctx n: op
-    if needAmp when (pathIsPointer :ast :symtab :ctx n: op).not then return "&\{av1}"
+    # by reference: a value with no address (`outbuf.byteView`) is hoisted first,
+    # as every by-reference argument is (emitByrefArg)
+    if needAmp when (pathIsPointer :ast :symtab :ctx n: op).not then {
+        return (emitByrefArg
+            :ast
+            :symtab
+            :ctx
+            av: av1.stringView
+            pid: (ztypes.tid.create from: pid.u64)
+            argNid: (zast.nodeIdOf n: op).u64
+        )
+    }
     return av1
 }
 
