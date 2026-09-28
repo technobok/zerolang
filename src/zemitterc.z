@@ -3428,9 +3428,7 @@ canonTypeId: function {
     # a subunit compares field-wise instead of falling through to a C `==` on
     # two structs, and a class resolves to the conformances it declares.
     tt: symtab.reg.typetypeOf typeId: tid
-    if tt == ztypes.ztypetype.recordType then return tid
-    if tt == ztypes.ztypetype.variantType then return tid
-    if tt == ztypes.ztypetype.classType then return tid
+    if tt.isUserFamily then return tid
     return 0
 }
 
@@ -39167,14 +39165,25 @@ emitProtocolCreateCall: function {
             if an.length == 0 or (an.stringView == "from") then {
                 fop: ast.nodes.get i: a.operation.u64
                 fromBase: atomOrBaseText :ast n: fop
-                fdn: stampNameDeep :symtab n: (ast.nodes.get i: a.operation.u64)
-                fromTid: (canonTypeId
-                    :ast
-                    :symtab
-                    :ctx
-                    tid: (stampIdDeep :symtab n: (ast.nodes.get i: a.operation.u64))
-                    name: fdn.stringView
-                )
+                # the source's type is what the checker recorded it standing in
+                # as (standInOf), as every implicit box reads it -- a union a
+                # subunit declares included, which the name route drops
+                fromTid: u64
+                sio: symtab.typing.standInOf.get key: a.operation.u64
+                match (
+                    sio
+                ) case some then {
+                    fromTid = sio.value.u64
+                } case none then {
+                    fdn: stampNameDeep :symtab n: (ast.nodes.get i: a.operation.u64)
+                    fromTid = (canonTypeId
+                        :ast
+                        :symtab
+                        :ctx
+                        tid: (stampIdDeep :symtab n: (ast.nodes.get i: a.operation.u64))
+                        name: fdn.stringView
+                    )
+                }
                 if fromTid == 0 then return "".string
                 implBase: ctxCname :ctx tid: (ztypes.tid.create from: fromTid.u64)
                 label: boxLabelFor :symtab :ctx implTid: fromTid protoTid: protoTid.u64

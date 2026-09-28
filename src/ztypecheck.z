@@ -8981,6 +8981,13 @@ objectTypedefBaseNode: function {ast: Ast.view onode: objref} out zast.nodeid is
 objectTypedefBaseId: function {ast: Ast.view onode: objref} out zast.nameid is {
     bn: objectTypedefBaseNode :ast :onode
     if bn.isZero then return (zast.nameid.create from: 0)
+    # a base named through its unit (`pr.Cell`) is named by the member it reaches
+    bnn: ast.nodes.get i: bn.u64
+    match (
+        bnn
+    ) case dottedpath then {
+        return (atomNameId :ast n: (ast.nodes.get i: bnn.child.u64))
+    } else null
     return (paramTypeBaseNameId :ast op: (ast.nodes.get i: bn.u64))
 }
 
@@ -9013,6 +9020,12 @@ objectTypedefBaseTid: function {
         nid: 0
     )
     if memberIdAt > 0 then return memberIdAt
+    # a base named through its unit (`pr.Sh`) is the type the path reaches, not
+    # the unit its root names
+    if (ast.nodes.get i: bn.u64).dottedpath then {
+        dtid: resolveDottedArgTid :st :scope :ast nid: bn
+        if dtid > 0 then return dtid
+    }
     anId: rootNameIdOf :ast n: (ast.nodes.get i: bn.u64)
     if anId.isZero then return 0
     return (resolveAtomType :st :scope :ast :unitDecl nameId: anId thisName: "")
@@ -42656,7 +42669,7 @@ checkResolvedValueCall: function {
         # generic). Walk the ctor args (hoist + consume) and the
         # value IS the constructed type, so the binding stamps.
         dctt: st.reg.typetypeOf typeId: dro
-        isCtorT: dctt.isFieldwise
+        isCtorT: dctt.isUserFamily
         if isCtorT then {
             # a typedef's construction is a cast, however the type is reached
             if call.nargs > 0 when (typedefBaseOf :st tid: (ztypes.tid.create from: dro)

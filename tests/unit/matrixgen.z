@@ -965,6 +965,12 @@ families: function out List Family is {
     fams.append (throughUnit f: famGvariant head: "gv")
     fams.append (throughUnit f: famGprotocol head: "Getter")
     fams.append (throughUnit f: famGfacet head: "sized")
+    fams.append (throughUnitAll f: famClass)
+    fams.append (throughUnitAll f: famRecord)
+    fams.append (throughUnitAll f: famUnion)
+    fams.append (throughUnitAll f: famVariant)
+    fams.append (throughUnitAll f: famProtocol)
+    fams.append (throughUnitAll f: famFacet)
     return fams
 }
 
@@ -981,7 +987,7 @@ throughUnit: function {f: Family head: StringView} out Family is {
         if inHead then {
             held.append ln
             held.append "\n"
-            if ln == "}" then inHead = false
+            if (closesBlock line: ln) then inHead = false
         } else {
             rest.append ln
             rest.append "\n"
@@ -1009,6 +1015,131 @@ throughUnit: function {f: Family head: StringView} out Family is {
         isRef: f.isRef
         unsignedRead: f.unsignedRead
     )
+}
+
+# throughUnitAll -- a family whose every TYPE declaration moves to the unit `pr`:
+# the types a family declares (a union's payload class, a protocol's conformer)
+# go together, the functions stay beside the program, and every name the unit
+# now holds is spelled through it (`pr.Sh`) where the program writes it. Rd
+# stays beside the program, so the family conforms to nothing here.
+throughUnitAll: function {f: Family} out Family is {
+    held: String
+    rest: String
+    moved: List String
+    inBlock: false
+    with it: f.decls.stringView.lines do for ln: it loop {
+        if inBlock then {
+            held.append ln
+            held.append "\n"
+            if (closesBlock line: ln) then inBlock = false
+            continue
+        }
+        tk: typeDeclName line: ln
+        if tk.length > 0 then {
+            moved.append tk.copy
+            held.append ln
+            held.append "\n"
+            if (ln.endsWith suffix: "{") then inBlock = true
+        } else {
+            rest.append ln
+            rest.append "\n"
+        }
+    }
+    if moved.length == 0 then fail msg: "family \{f.name}: no type declaration to move"
+    return (Family
+        name: "q\{f.name}"
+        decls: (qualifyNames text: rest.stringView names: moved)
+        unitDecls: held.take
+        confType: "".string
+        confParam: "".string
+        confBody: "".string
+        ty: (qualifyNames text: f.ty.stringView names: moved)
+        make: (qualifyNames text: f.make.stringView names: moved)
+        read: (qualifyNames text: f.read.stringView names: moved)
+        meth: (qualifyNames text: f.meth.stringView names: moved)
+        methArg: (qualifyNames text: f.methArg.stringView names: moved)
+        op: (qualifyNames text: f.op.stringView names: moved)
+        shown: f.shown.copy
+        arm: f.arm.copy
+        tags: "\{f.tags}unit "
+        isRef: f.isRef
+        unsignedRead: f.unsignedRead
+    )
+}
+
+# typeDeclName -- the name a top-level TYPE declaration line declares, "" for
+# any other line
+typeDeclName: function {line: StringView} out String is {
+    if line.length == 0 or (line.startsWith prefix: " ") then return "".string
+    sep: line.indexOf needle: ": "
+    if sep.none then return "".string
+    at: sep
+    kind: line.substring from: at + 2 to: line.length
+    isType: (
+        (kind.startsWith prefix: "class") or
+        (kind.startsWith prefix: "record") or
+        (kind.startsWith prefix: "union") or
+        (kind.startsWith prefix: "variant") or
+        (kind.startsWith prefix: "protocol") or
+        (kind.startsWith prefix: "facet") or
+        (kind.startsWith prefix: "typedef")
+    )
+    if isType.not then return "".string
+    return (line.substring from: 0 to: at).string
+}
+
+# closesBlock -- the line that closes a top-level declaration block
+closesBlock: function {line: StringView} out bool is {
+    return line == "}"
+}
+
+# movedName -- the identifier `word` at `at` in `text` is one of `names` and no
+# dot precedes it: a name the unit now holds, written where the program reads it
+movedName: function {
+    text: StringView
+    at: u64
+    word: StringView
+    names: (List String).view
+} out bool is {
+    if at > 0 then {
+        prev: at - 1
+        if ((text.byteAt prev).or d: 0) == 46 then return false
+    }
+    for nm: names.iterate loop {
+        if nm.stringView == word then return true
+    }
+    return false
+}
+
+# isNameByte -- a byte an identifier is spelled with
+isNameByte: function {b: u8} out bool is {
+    if b >= 97 when b <= 122 then return true
+    if b >= 65 when b <= 90 then return true
+    if b >= 48 when b <= 57 then return true
+    return b == 95
+}
+
+# qualifyNames -- `text` with each identifier of `names` that no dot precedes
+# spelled through the unit `pr`
+qualifyNames: function {text: StringView names: (List String).view} out String is {
+    buf: String
+    i: u64
+    n: text.length
+    for i < n loop {
+        c: (text.byteAt i).or d: 0
+        if (isNameByte b: c).not then {
+            buf.append (text.substring from: i to: i + 1)
+            i = i + 1
+            continue
+        }
+        j: i
+        for j < n while (isNameByte b: ((text.byteAt j).or d: 0)) loop j = j + 1
+        word: text.substring from: i to: j
+        if (movedName :text at: i :word :names) then buf.append "pr."
+        buf.append word
+        i = j
+    }
+    return buf
 }
 
 # writeUnit -- the family's unit `pr` beside the program at `dir/stem.z`, where
