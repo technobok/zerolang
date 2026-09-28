@@ -3388,6 +3388,47 @@ numericParamRefTid: function {
     return (ztypes.tid.create from: (genericParamTidMint :st :ast tdecl: owner :nameId))
 }
 
+# typeApplicationHeadNameId -- the name a type application's head spells: a
+# bare name (`GBox`), or the member a path through a unit reaches (`pr.GBox`);
+# zero for any other head.
+typeApplicationHeadNameId: function {ast: Ast.view callableNid: zast.nodeid} out zast.nameid is {
+    c: ast.nodes.get i: callableNid.u64
+    match (
+        c
+    ) case dottedpath then {
+        return (atomNameId :ast n: (ast.nodes.get i: c.child.u64))
+    } else null
+    return (atomNameId :ast n: c)
+}
+
+# typeApplicationHeadName -- typeApplicationHeadNameId's text, "" for none.
+typeApplicationHeadName: function {ast: Ast.view callableNid: zast.nodeid} out String is {
+    return (zast.nameTextCopy :ast ref: (typeApplicationHeadNameId :ast :callableNid))
+}
+
+# typeApplicationTemplate -- the template a type application's head names: a
+# bare name as monoRefTemplateTid finds it, a path through a unit as a dotted
+# type reference is found (resolveDottedArgTid). The one answer every position
+# resolving a type application gives; zero when the head names none.
+typeApplicationTemplate: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    callableNid: zast.nodeid
+} out ztypes.tid is {
+    if (ast.nodes.get i: callableNid.u64).dottedpath then {
+        return (ztypes.tid.create from: (resolveDottedArgTid :st :scope :ast nid: callableNid))
+    }
+    return (monoRefTemplateTidById
+        :st
+        :scope
+        :ast
+        :unitDecl
+        nameId: (typeApplicationHeadNameId :ast :callableNid)
+    )
+}
+
 # monoRefTemplateTid -- the template a mono type-reference names: a name the
 # CURRENT unit defines wins even when not yet declared, then the ladder, then
 # the defining unit. 0 when none is found.
@@ -3398,19 +3439,31 @@ monoRefTemplateTid: function {
     unitDecl: ztypes.declid
     name: StringView
 } out ztypes.tid is {
+    return (monoRefTemplateTidById :st :scope :ast :unitDecl nameId: (nameIdOf :ast :name))
+}
+
+# monoRefTemplateTidById -- monoRefTemplateTid by the name's id.
+monoRefTemplateTidById: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nameId: zast.nameid
+} out ztypes.tid is {
     tplId: ztypes.tid
-    tduo: (definingSiteFor :st :scope :ast :unitDecl :name).defUnit
-    if tduo == unitDecl then tplId = descendNamed :st :scope :ast unitDecl: tduo :name
+    if nameId.isZero then return tplId
+    tduo: (definingSiteForId :st :ast :unitDecl :scope :nameId).defUnit
+    if tduo == unitDecl then tplId = descendNamedId :st :scope :ast unitDecl: tduo :nameId
     if tplId.isZero then {
-        tplO: walkLookupTyperef :st :scope :ast :unitDecl base: name
+        tplO: walkLookupTyperefById :st :scope :ast :unitDecl baseId: nameId
         tplId = ztypes.tid.create from: (tplO.or d: 0)
     }
-    if tplId.isZero when tduo.isZero.not then tplId = (descendNamed
+    if tplId.isZero when tduo.isZero.not then tplId = (descendNamedId
         :st
         :scope
         :ast
         unitDecl: tduo
-        :name
+        :nameId
     )
     return tplId
 }
@@ -3509,11 +3562,7 @@ resolveMonoRefParts: function {
     {
         # the callee's name, an owned copy read through a view scoped to this
         # block: the lookups below lend ast
-        tname: String
-        {
-            callable: ast.nodes.get i: callableNid.u64
-            tname = zast.nameTextCopy :ast ref: (atomNameId :ast n: callable)
-        }
+        tname: typeApplicationHeadName :ast :callableNid
         if tname.length == 0 then return 0
         # a LABELLED argument may be a numeric parameter's, read as a value of
         # the parameter's bound, which only the template knows: the template is
@@ -3522,7 +3571,7 @@ resolveMonoRefParts: function {
         # definitions are still resolving
         tplId: ztypes.tid
         if (anyLabelledArg :ast :arguments) then {
-            tplId = monoRefTemplateTid :st :scope :ast :unitDecl name: tname.stringView
+            tplId = typeApplicationTemplate :st :scope :ast :unitDecl :callableNid
             if tplId.isZero then return 0
         }
         sfx: String
@@ -3546,13 +3595,7 @@ resolveMonoRefParts: function {
         firstA: ztypes.tid.create from: (firstOut.get i: 0)
         if allOk.not then return 0
         if sfx.length == 0 then return 0
-        if tplId.isZero then tplId = (monoRefTemplateTid
-            :st
-            :scope
-            :ast
-            :unitDecl
-            name: tname.stringView
-        )
+        if tplId.isZero then tplId = typeApplicationTemplate :st :scope :ast :unitDecl :callableNid
         if tplId.isZero then return 0
         if (refuseNonGenericApplication :st :ast :tplId at: callableNid) then return tplId.u64
         validateMonoRefLabels :ast :st :arguments :tplId
@@ -5025,15 +5068,9 @@ shellHeadIsGeneric: function {
     scope: ztypes.declid
     ast: Ast
     unitDecl: ztypes.declid
-    name: StringView
+    callableNid: zast.nodeid
 } out bool is {
-    hid9: ztypes.tid
-    du9: (definingSiteFor :st :scope :ast :unitDecl :name).defUnit
-    if du9 == unitDecl then hid9 = descendNamed :st :scope :ast unitDecl: du9 :name
-    if hid9.isZero then {
-        hw9: walkLookupTyperef :st :scope :ast :unitDecl base: name
-        hid9 = ztypes.tid.create from: (hw9.or d: 0)
-    }
+    hid9: typeApplicationTemplate :st :scope :ast :unitDecl :callableNid
     if hid9.isZero then return false
     return (st.reg.isGenericOf tid: hid9)
 }
@@ -5123,7 +5160,7 @@ resolveTyperefCallShell: function {
     }
     hdG9: false
     if hn9.length > 0 when argRefused.not then {
-        hdG9 = shellHeadIsGeneric :st :scope :ast :unitDecl name: hn9.stringView
+        hdG9 = shellHeadIsGeneric :st :scope :ast :unitDecl callableNid: callableId
     }
     if hdG9 then {
         m9: "type argument of generic type '\{hn9}' does not name a type here"
@@ -5352,7 +5389,7 @@ paramTypeBaseNameId: function {ast: Ast.view op: astnode.view} out zast.nameid i
     } case labelvalue then {
         return op.name
     } case call then {
-        return (atomNameId :ast n: (ast.nodes.get i: op.callable.u64))
+        return (typeApplicationHeadNameId :ast callableNid: op.callable)
     } else {
         return (zast.nameid.create from: 0)
     }
@@ -7402,16 +7439,27 @@ valueMayNameType: function {
     node: zast.nodeid
 } out bool is {
     headId: zast.nameid
+    pathHead: zast.nodeid
     {
         n: ast.nodes.get i: node.u64
         if n.dottedpath then return true
         if n.call.not then return (bareAtomNameId :n).isZero.not
+        if (ast.nodes.get i: n.callable.u64).dottedpath then pathHead = n.callable
         headId = bareAtomNameId n: (ast.nodes.get i: n.callable.u64)
     }
-    if headId.isZero then return false
     td: declOfTypeId :st tid: parentId
     if td.isZero then return false
     sc: declParentIdOf :st declId: td
+    # a head that is a path names a type when it reaches one through a unit
+    # (`(pr.Getter v: i64)`); an infix call's path (`cap * 2`) reaches none
+    if pathHead.isZero.not then {
+        segs: ListVal u64
+        instCallablePath :ast op: (ast.nodes.get i: pathHead.u64) :segs
+        pd: instTemplateDecl :st scopeDeclId: sc :segs
+        if pd.isZero then return false
+        return (st.typing.decls.get i: pd.u64).kind.typeDecl
+    }
+    if headId.isZero then return false
     ud: unitRootOfDecl :st declId: td
     return (walkLookupTyperefById :st scope: sc :ast unitDecl: ud baseId: headId).some
 }
@@ -12939,6 +12987,12 @@ resolveClassTypedefBase: function {
     needsDtor: false
     checkTypedefShape :st :ast onode: cnode
     tdbase: objectTypedefBaseId :ast onode: cnode
+    tdt3: objectTypedefBaseTid :st :scope :ast :unitDecl ownerTid: cid onode: cnode
+    # the base the typedef resolved to answers for itself -- one reached through
+    # its unit (`(pr.GBox t: i64)`) included, which its name alone does not find
+    if tdt3 > 0 when (st.reg.needsDestructor typeId: (ztypes.tid.create from: tdt3.u64)) then {
+        needsDtor = true
+    }
     if (fieldTypeNeedsCleanup :st :scope :ast :unitDecl nameId: tdbase isBorrowed: false) then {
         needsDtor = true
     }
@@ -12946,7 +13000,6 @@ resolveClassTypedefBase: function {
         tdk3: cid
         st.typing.typedefBaseName.set key: tdk3 value: tdbase
     }
-    tdt3: objectTypedefBaseTid :st :scope :ast :unitDecl ownerTid: cid onode: cnode
     if tdt3 > 0 then {
         tdk6: cid
         (st.typing.typedefBaseTid.set
@@ -13443,6 +13496,17 @@ typedefBaseDecl: function {
 } out ztypes.declid is {
     zd: ztypes.declid
     bn: ast.nodes.get i: baseNid.u64
+    # a head that is a path through a unit -- the base's own, or a type
+    # application's (`(pr.GBox t: i64)`) -- names its declaration down that path
+    headNid: baseNid
+    if bn.call then headNid = bn.callable
+    hdn: ast.nodes.get i: headNid.u64
+    if hdn.dottedpath then {
+        segs: ListVal u64
+        instCallablePath :ast op: (ast.nodes.get i: headNid.u64) :segs
+        pd: instTemplateDecl :st scopeDeclId: (declParentIdOf :st :declId) :segs
+        if pd.isZero.not then return pd
+    }
     dk: dottedDefTargetIds :ast n: bn
     if dk.unitName.u32 > 0 then {
         du: unitDeclOfName :st nameId: dk.unitName
@@ -24250,6 +24314,16 @@ explicitPrimaryArgTid: function {
     unitDecl: ztypes.declid
     opId: zast.nodeid
 } out u64 is {
+    # a type application names the template its head does
+    callee: zast.nodeid
+    {
+        op0: ast.nodes.get i: opId.u64
+        if op0.call then callee = op0.callable
+    }
+    if callee.isZero.not then {
+        tpa: typeApplicationTemplate :st scope: st.curScope :ast :unitDecl callableNid: callee
+        return tpa.u64
+    }
     anP: paramTypeBaseNameId :ast op: (ast.nodes.get i: opId.u64)
     if (isNumericLiteralNameAt :ast ref: anP) then return 0
     pid0: bodyTypeNameTid :st :ast :unitDecl nameId: anP nid: opId.u64
@@ -54311,6 +54385,16 @@ resolveCalledConstantDef: function {
             # found the way a type reference finds its template: a name the
             # CURRENT unit defines wins even before it is declared
             ctpl: (monoRefTemplateTid :st :scope :ast :unitDecl name: cbn.stringView).u64
+            # a head that is a type application's -- a path through a unit
+            # (`pr.Pair`) included -- names its template by the one answer
+            htpl: (typeApplicationTemplate
+                :st
+                :scope
+                :ast
+                :unitDecl
+                callableNid: defn.callable
+            ).u64
+            if htpl > 0 then ctpl = htpl
             ckn: ctpl > 0
             # a GENERIC template is the one callee shape that can be
             # INSTANTIATED rather than constructed, so `Strs: (List String)`
