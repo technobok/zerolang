@@ -2444,6 +2444,15 @@ registerGenericParamOne: function {
     if m.namedoperation when (isGenericParam :ast op: (ast.nodes.get i: m.operation.u64)) then {
         cb: genericConstraintBase :ast n: (ast.nodes.get i: m.operation.u64)
         k: constraintKindFor text: cb.stringView
+        # a family's name a declaration in scope takes -- a unit's own
+        # `StringLike` -- names that declaration, as any name does; the system
+        # and core units' own are the families
+        if k != ztypes.constraintkind.other when (boundNameShadowsFamily
+            :ast
+            :st
+            :tdecl
+            op: (ast.nodes.get i: m.operation.u64)
+        ) then k = ztypes.constraintkind.other
         # a bound written as a type application names the instance it builds,
         # and is found through that node rather than a name
         ba: genericBoundApplication :ast n: (ast.nodes.get i: m.operation.u64)
@@ -2509,6 +2518,26 @@ recordGenericBoundAtom: function {
     st.typing.genericBoundScope.set key: bnid value: tdecl
     qn: genericBoundQualifierId :ast n: op
     if qn.isZero.not then st.typing.genericBoundQual.set key: bnid value: qn
+}
+
+# boundNameShadowsFamily -- the bound at `op` is a bare name that a declaration
+# in the template's scope chain takes, outside the system and core units.
+boundNameShadowsFamily: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    tdecl: ztypes.declid
+    op: astnode.view
+} out bool is {
+    if (genericBoundQualifierId :ast n: op).isZero.not then return false
+    bnid: genericBoundAtomId :ast n: op
+    if bnid == 0 then return false
+    bnm: atomNameId :ast n: (ast.nodes.get i: bnid)
+    if bnm.isZero then return false
+    d: declInScope :st scopeDeclId: (declParentIdOf :st declId: tdecl) nameId: bnm
+    if d.isZero then return false
+    ur: unitRootOfDecl :st declId: d
+    if ur == st.typing.systemUnitRoot or (ur == st.typing.coreUnitRoot) then return false
+    return (st.typing.decls.get i: d.u64).kind.typeDecl
 }
 
 # genericBoundQualifierId -- the name a qualified bound is reached through
@@ -7190,12 +7219,19 @@ markerTargetId: function {
 } out optionval u64 is {
     nameId: zast.nameid
     isApp: false
+    isPath: false
     {
         op: ast.nodes.get i: opNid.u64
         nameId = atomNameId :ast n: op
         isApp = op.call
+        isPath = op.dottedpath
     }
     if isApp then return (markerApplicationTarget :st :unitDecl :scope :ast :opNid :ownerDecl)
+    # a marker through a unit (`r: pr.Rd`) names what the path does
+    if isPath then return (markerFamilyTarget
+        :st
+        rid: (resolveDottedArgTid :st :scope :ast nid: opNid)
+    )
     if nameId.isZero then return (optionval.none u64)
     {
         mnm: zast.nameTextCopy :ast ref: nameId
@@ -7213,19 +7249,26 @@ markerTargetId: function {
     match (
         rr
     ) case some then {
-        tt: st.reg.typetypeOf typeId: (ztypes.tid.create from: rr.u64)
-        match (
-            tt
-        ) case facetType then {
-            return (optionval.some rr)
-        } case protocolType then {
-            return (optionval.some rr)
-        } case recordType then {
-            return (optionval.some rr)
-        } else {
-            return (optionval.none u64)
-        }
+        return (markerFamilyTarget :st rid: rr)
     } case none then {
+        return (optionval.none u64)
+    }
+}
+
+# markerFamilyTarget -- a marker's resolved target, when its family is one a
+# marker names: a facet, a protocol or a record.
+markerFamilyTarget: function {st: zenv.ZSymbolTable.view rid: u64} out optionval u64 is {
+    if rid == 0 then return (optionval.none u64)
+    tt: st.reg.typetypeOf typeId: (ztypes.tid.create from: rid)
+    match (
+        tt
+    ) case facetType then {
+        return (optionval.some rid)
+    } case protocolType then {
+        return (optionval.some rid)
+    } case recordType then {
+        return (optionval.some rid)
+    } else {
         return (optionval.none u64)
     }
 }
@@ -10382,7 +10425,7 @@ resolveRecord: function {
         tdecl9: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: defName)
         registerGenericParams :st :ast tdecl: tdecl9 items: asItems
         if unitTmpl.isZero.not then registerUnitParamsOn :st :ast tdecl: tdecl9 :unitTmpl
-        refuseReftypeBounds :st :ast :unitDecl :scope tdecl: tdecl9 what: "record" items: asItems
+        refuseReftypeBounds :st :ast :scope tdecl: tdecl9 what: "record" items: asItems
     }
     istd: recordIsTypedef :rnode
     if istd then recordTypedefBase :st :scope :ast :unitDecl :rnode :rid
@@ -10827,7 +10870,6 @@ resolveVariant: function {
                 (refuseReftypeBounds
                     :st
                     :ast
-                    :unitDecl
                     :scope
                     tdecl: tdecl92
                     what: "variant"
@@ -11378,7 +11420,6 @@ refuseReftypeMember: function {
 boundAdmitsReftype: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    unitDecl: ztypes.declid
     scope: ztypes.declid
     tdecl: ztypes.declid
     fm: argref
@@ -11389,20 +11430,11 @@ boundAdmitsReftype: function {
     if k == ztypes.constraintkind.refHashable then return true
     if k == ztypes.constraintkind.stringLike then return true
     if k != ztypes.constraintkind.other then return false
-    cb: genericConstraintBase :ast n: (ast.nodes.get i: fm.operation.u64)
-    bo: (walkLookupTyperefByIdRo
-        :ast
-        :st
-        :unitDecl
-        :scope
-        baseId: (nameIdOf :ast name: cb.stringView)
-    )
-    match (
-        bo
-    ) case some then {
-        return (typeIsReftype :st tid: (ztypes.tid.create from: bo.u64))
-    } case none then null
-    return false
+    # what the bound RESOLVES to answers -- an application (`(Getter v: i64)`)
+    # or a qualified name included, which its text alone does not find
+    bt: namedBoundTid :ast :st :scope :tdecl :cd
+    if bt.isZero then return false
+    return (typeIsReftype :st tid: bt)
 }
 
 # refuseReftypeBounds -- a valtype template's parameter bound must admit
@@ -11413,7 +11445,6 @@ boundAdmitsReftype: function {
 refuseReftypeBounds: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    unitDecl: ztypes.declid
     scope: ztypes.declid
     tdecl: ztypes.declid
     what: StringView
@@ -11428,7 +11459,7 @@ refuseReftypeBounds: function {
         if fm.nid.isZero.not when (isGenericParam
             :ast
             op: (ast.nodes.get i: fm.operation.u64)
-        ) when (boundAdmitsReftype :st :ast :unitDecl :scope :tdecl :fm) then {
+        ) when (boundAdmitsReftype :st :ast :scope :tdecl :fm) then {
             pn: zast.nameTextAt :ast ref: fm.name
             mb: "a \{what}'s type parameter holds valtypes; bound '\{pn}' with 'anyval.generic'"
             (addResolveErrorH
@@ -16849,6 +16880,23 @@ declAtProgramTop: function {st: zenv.ZSymbolTable.view parentDeclId: ztypes.decl
     return parentDeclId.isZero or (parentDeclId == st.typing.programRoot)
 }
 
+# declInScope -- the declaration `nameId` names from `scopeDeclId`: the nearest
+# scope up the chain that declares it, else a file unit of that name; zero for
+# none.
+declInScope: function {
+    st: zenv.ZSymbolTable.view
+    scopeDeclId: ztypes.declid
+    nameId: zast.nameid
+} out ztypes.declid is {
+    probe: scopeDeclId
+    for probe > 0 loop {
+        c: st.typing.declFindChild parentDeclId: probe :nameId
+        if c.isZero.not then return c
+        probe = declParentIdOf :st declId: probe
+    }
+    return (st.typing.declFindChild parentDeclId: st.typing.programRoot :nameId)
+}
+
 # instTemplateDecl -- the DECLARATION an instantiation's callable path names,
 # resolved through the scope the instantiation was WRITTEN in: this namespace,
 # then each enclosing one out to the unit root, then a file unit of that name.
@@ -16864,21 +16912,7 @@ instTemplateDecl: function {
     if segs.length == 0 then return cur
     s0v: segs.get i: 0
     if s0v == 0 then return cur
-    s0: zast.nameid.create from: s0v.u32.orPanic
-    probe: scopeDeclId
-    for probe > 0 loop {
-        c: st.typing.declFindChild parentDeclId: probe nameId: s0
-        if c.isZero.not then cur = c
-        if cur.isZero.not then {
-            probe = ztypes.declid.create from: 0
-        } else {
-            probe = declParentIdOf :st declId: probe
-        }
-    }
-    if cur.isZero then {
-        ro: st.typing.declFindChild parentDeclId: st.typing.programRoot nameId: s0
-        if ro.isZero.not then cur = ro
-    }
+    cur = declInScope :st :scopeDeclId nameId: (zast.nameid.create from: s0v.u32.orPanic)
     if cur.isZero then return cur
     si: u64
     si = 1
@@ -21515,6 +21549,22 @@ boundApplicationTid: function {
     return (ztypes.tid.create from: r.u64)
 }
 
+# boundQualifierUnit -- the unit a qualified bound (`pr.Rd.generic`) is reached
+# through: a file unit, or a unit declared in scope (a subunit), found down the
+# declaration path as a type application's unit path is; zero for none.
+boundQualifierUnit: function {
+    st: zenv.ZSymbolTable.view
+    scope: ztypes.declid
+    qualId: zast.nameid
+} out ztypes.declid is {
+    fu: unitDeclOfName :st nameId: qualId
+    if fu.isZero.not then return fu
+    d: declInScope :st scopeDeclId: scope nameId: qualId
+    if d.isZero then return d
+    if (st.typing.decls.get i: d.u64).kind.unitDecl then return d
+    return ztypes.declid
+}
+
 # namedBoundTid -- the type a named bound resolves to, 0 when it names none.
 namedBoundTid: function {
     ast: Ast
@@ -21529,7 +21579,7 @@ namedBoundTid: function {
     if cd.boundName.isZero then return ztypes.tid
     ud: unitRootOfDecl :st declId: scope
     if cd.boundQual.isZero.not then {
-        qu: unitDeclOfName :st nameId: cd.boundQual
+        qu: boundQualifierUnit :st :scope qualId: cd.boundQual
         if qu.isZero then return ztypes.tid
         ud = qu
     }
@@ -21880,7 +21930,7 @@ boundRefusalText: function {
     }
     qn: (st.typing.genericBoundQual.get key: nid).or d: zast.nameid
     if qn.isZero.not then {
-        qual: unitDeclOfName :st nameId: qn
+        qual: boundQualifierUnit :st :scope qualId: qn
         # the qualifier names no unit, so it is what does not exist
         if qual.isZero then return (unknownBoundText bt: (zast.nameTextAt :ast ref: qn).stringView)
         qd: declOfUnitDefIds :st unitDecl: qual :nameId
@@ -40794,14 +40844,7 @@ boundMayBeReftype: function {
         nid: (zast.nodeid.create from: (st.typing.decls.get i: pd.u64).node)
     )
     if fm.nid.isZero then return true
-    return (boundAdmitsReftype
-        :st
-        :ast
-        unitDecl: (unitRootOfDecl :st declId: tdecl)
-        scope: tdecl
-        :tdecl
-        :fm
-    )
+    return (boundAdmitsReftype :st :ast scope: tdecl :tdecl :fm)
 }
 
 # unresolvedBareName -- prove a bare name resolves NOWHERE in value
