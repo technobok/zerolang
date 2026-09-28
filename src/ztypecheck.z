@@ -1994,7 +1994,7 @@ resolveAtomType: function {
     }
     if (zast.nameTextEq :ast ref: nameId s: "type") when thisName.length != 0 then {
         tnOwnT: thisName.string
-        return (resolveNamedType
+        named: (resolveNamedType
             :st
             :scope
             :ast
@@ -2002,6 +2002,16 @@ resolveAtomType: function {
             name: thisName
             thisName: tnOwnT.stringView
         )
+        selfApp: (selfApplicationTid
+            :st
+            :ast
+            :unitDecl
+            :scope
+            templateId: (ztypes.tid.create from: named)
+            :nid
+        )
+        if selfApp > 0 then return selfApp
+        return named
     }
     return (resolveNamedTypeId :st :scope :ast :unitDecl :nameId :thisName :nid)
 }
@@ -2937,6 +2947,102 @@ monoArgName: function {an: StringView thisName: StringView} out String is {
     return an.string
 }
 
+# ownsTypeParams -- `tid` is a generic type declaring type parameters of its own:
+# naming it takes arguments. A type a generic unit declares is generic through
+# its unit, whose parameters it carries, and is named bare.
+ownsTypeParams: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    if (st.reg.isGenericOf :tid).not then return false
+    tdecl: declOfTypeId :st :tid
+    own: st.reg.genericParamCountOf :tdecl
+    if own == 0 then return false
+    ud: declParentIdOf :st declId: tdecl
+    if ud.isZero then return true
+    return own > (st.reg.genericParamCountOf tdecl: ud)
+}
+
+# selfApplicationTid -- `type` inside a generic type's own declaration: the type
+# applied to its own parameters, as `(GB t: t)` spells it, each parameter the
+# GENERIC_PARAM the explicit spelling resolves it to there. A signature's partial
+# is completed per instance and a body's walk per instance, so `type` is the
+# instance being checked wherever it stands. 0 when the type owns no parameters.
+selfApplicationTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    templateId: ztypes.tid
+    # the `type` written, where the application is recorded
+    nid: u64
+} out u64 is {
+    if (ownsTypeParams :st tid: templateId).not then return 0
+    tdecl: declOfTypeId :st tid: templateId
+    sfx: String
+    typeSubs: IdMapV zast.nameid v: u64
+    valSubsR: IdMapV zast.nameid v: u64
+    firstA: ztypes.tid
+    with it: (st.reg.genericParamNamesOf :tdecl).iterate do for pn: it loop {
+        recordGenericParamRef :st :nid scope: tdecl name: pn
+        pt: genericParamTidMint :st :ast :tdecl nameId: pn
+        sfx.append s: "_"
+        if (st.reg.genericParamConstraintOf :tdecl paramName: pn).numKind.has then {
+            sfx.append s: (zast.nameTextAt :ast ref: pn)
+        } else {
+            sfx.append s: (monoValName :st :scope :ast tid: (ztypes.tid.create from: pt))
+            if firstA.isZero then firstA = ztypes.tid.create from: pt
+        }
+        typeSubs.set key: pn value: pt
+    }
+    mono: (getOrMintSpec
+        :st
+        :scope
+        :ast
+        unitDecl: st.typing.mainUnitRoot
+        sfx: sfx.stringView
+        :templateId
+        subs: typeSubs
+        valSubs: valSubsR
+        fallbackArg: firstA
+    )
+    if mono.isZero then return 0
+    at: zast.nodeid.create from: nid.u32.orPanic
+    recordMonoRef :st :ast :mono nid: nid.u32.orPanic :at :unitDecl
+    return mono.u64
+}
+
+# refuseBareGenericType -- a type position names a generic type without its
+# arguments (ownsTypeParams): refused at `nid`. Inside the type's own
+# declaration `type` names the instance being checked.
+refuseBareGenericType: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tid: ztypes.tid
+    nid: u64
+    # the scope the position is in, whose enclosing type is asked when
+    # `thisName` is empty
+    scope: ztypes.declid
+    # the type whose declaration the position is in, when the caller knows it
+    thisName: StringView
+} is {
+    if (ownsTypeParams :st :tid).not then return
+    tn: st.reg.nameOf :tid
+    own: tn.stringView == thisName
+    if thisName.length == 0 then own = (enclosingTypeDecl :st :scope) == (declOfTypeId :st :tid)
+    hint: "apply type arguments first, e.g. '(ListVal t: u8)'".string
+    if own then hint = "inside its own declaration, `type` is the instance being checked".string
+    n: ast.nodes.get i: nid
+    (addErrorH
+        :st
+        nodeid: (zast.nodeid.create from: nid.u32.orPanic)
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.genericError
+        msg: "'\{tn}' is a generic type: a type position names it with its type arguments"
+        note: String
+        :hint
+        width: tn.length.u32.orPanic
+    )
+}
+
 # resolveDottedArgTid -- a unit-qualified dotted generic argument
 # (ztypes.zlockstate): descend the member in its defining unit. Marker /
 # non-unit dotted shapes resolve 0 (the caller skips the record).
@@ -3144,7 +3250,40 @@ monoRefArgTid: function {
             if aid.isZero then allOk = false
         }
     }
+    if aid > 0 then aid = (namedTypeArg
+        :st
+        :ast
+        :unitDecl
+        :scope
+        :thisName
+        :aid
+        argNid: arg.operation.u64
+    )
     okOut.append allOk
+    return aid
+}
+
+# namedTypeArg -- a type argument written as a name, once the name resolved to
+# `aid`: `type` in a generic type's own members is the instance being checked
+# (selfApplicationTid); any other name of a generic type takes its arguments
+# (refuseBareGenericType), and `this` is the type being declared.
+namedTypeArg: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    thisName: StringView
+    aid: ztypes.tid
+    argNid: u64
+} out ztypes.tid is {
+    nameId: atomNameId :ast n: (ast.nodes.get i: argNid)
+    if nameId == zast.names.wkThis then return aid
+    if (zast.nameTextEq :ast ref: nameId s: "type") when thisName.length != 0 then {
+        sa: selfApplicationTid :st :ast :unitDecl :scope templateId: aid nid: argNid
+        if sa > 0 then return (ztypes.tid.create from: sa)
+        return aid
+    }
+    refuseBareGenericType :st :ast tid: aid nid: argNid :scope :thisName
     return aid
 }
 
@@ -5047,26 +5186,30 @@ resolveTyperefShell: function {
             arm = 5
         } else null
     }
-    if arm == 1 then return (resolveTyperefAtomShell
-        :st
-        :scope
-        :ast
-        :unitDecl
-        :nameId
-        :thisName
-        demand: true
-        nid: nid.u64
-    )
-    if arm == 2 then return (resolveTyperefAtomShell
-        :st
-        :scope
-        :ast
-        :unitDecl
-        :nameId
-        :thisName
-        demand: false
-        nid: nid.u64
-    )
+    if arm == 1 or (arm == 2) then {
+        r: (resolveTyperefAtomShell
+            :st
+            :scope
+            :ast
+            :unitDecl
+            :nameId
+            :thisName
+            demand: arm == 1
+            nid: nid.u64
+        )
+        # a receiver's `this` is the type being declared
+        if nameId != zast.names.wkThis then {
+            (refuseBareGenericType
+                :st
+                :ast
+                tid: (ztypes.tid.create from: r)
+                nid: nid.u64
+                :scope
+                :thisName
+            )
+        }
+        return r
+    }
     if arm == 4 then return (resolveTyperefCallShell
         :st
         :scope
@@ -23706,12 +23849,24 @@ constructionArgTid: function {
         nid: 0
     )
     if inl9 > 0 then return (instanceTypeOf :st :ast :unitDecl tid: inl9)
-    return (instanceTypeOf
-        :st
-        :ast
-        :unitDecl
-        tid: (bodyTypeNameTid :st :ast :unitDecl nameId: baseId nid: opId.u64)
-    )
+    named: ztypes.tid.create from: (bodyTypeNameTid :st :ast :unitDecl nameId: baseId nid: opId.u64)
+    # `type` names the instance being checked; any other name of a generic type
+    # takes its arguments
+    selfNameId: bodySelfTypeNameId :st :ast nameId: baseId
+    if selfNameId != baseId then {
+        sa: (selfApplicationTid
+            :st
+            :ast
+            :unitDecl
+            scope: st.curScope
+            templateId: named
+            nid: opId.u64
+        )
+        if sa > 0 then return (instanceTypeOf :st :ast :unitDecl tid: sa)
+    } else {
+        refuseBareGenericType :st :ast tid: named nid: opId.u64 scope: st.curScope thisName: ""
+    }
+    return (instanceTypeOf :st :ast :unitDecl tid: named.u64)
 }
 
 # bodyTypeNameTid -- the type a bare name denotes as a type argument written in
@@ -23833,9 +23988,37 @@ instanceTypeOf: function {
         subs.set key: sk.u64 value: sv.u64
         si = si + 1
     }
+    bindMonoValueParams :st monoId: (ztypes.tid.create from: st.typing.curMonoStamp) :subs
     rsp: respecialize :st scope: st.curScope :ast :unitDecl specTid: tid idSubs: subs
     if rsp > 0 then return rsp
     return tid
+}
+
+# bindMonoValueParams -- the value half of bindMonoParams, into `subs`: each
+# numeric parameter's GENERIC_PARAM to the instance's value, so a partial over
+# one (`(Bx t: t cap: cap)`) respecializes to the instance. Kept out of
+# monoParamSubst, which maps types to types.
+bindMonoValueParams: function {
+    st: zenv.ZSymbolTable
+    monoId: ztypes.tid
+    subs: (IdMapV u64 v: u64)
+} is {
+    morig: st.reg.genericOriginOf tid: monoId
+    if morig.isZero then return
+    tdecl: declOfTypeId :st tid: morig
+    pn: st.reg.genericParamNamesOf :tdecl
+    pj: u64
+    for pj < pn.length loop {
+        if (st.reg.genericArgIsValueAt specId: monoId ordinal: pj) then {
+            pto: st.reg.genericParamTidOf :tdecl paramName: (pn.get i: pj)
+            match (
+                pto
+            ) case some then {
+                subs.set key: pto.u64 value: (st.reg.genericArgAt specId: monoId ordinal: pj)
+            } case none then null
+        }
+        pj = pj + 1
+    }
 }
 
 # elidedPrimaryTypeArg -- an unnamed leading argument that names a TYPE binds the
@@ -39223,6 +39406,33 @@ holdStandIn: function {ast: Ast st: zenv.ZSymbolTable su: ztyping.specstandin} i
     if su.value != su.spec then st.typing.standInOf.set key: su.valueNid.u64 value: su
 }
 
+# checkBareGenericReturns -- a function's declared return that names a generic
+# type without its arguments (refuseBareGenericType). The typeref pass alone
+# stamps a return, and it stamps an application's head the same way, so the
+# return node is asked here itself: a name, marked or not, never an application;
+# `this` and `type` name the type being declared.
+checkBareGenericReturns: function {ast: Ast st: zenv.ZSymbolTable} is {
+    ri: u64
+    for ri < st.typing.funcReturnNode.length loop {
+        rn: (st.typing.funcReturnNode.valueAt i: ri).or d: 0
+        ri = ri + 1
+        if rn == 0 then continue
+        n: ast.nodes.get i: rn
+        if n.call then continue
+        root: rootNameIdOf :ast :n
+        if root == zast.names.wkThis or (zast.nameTextEq :ast ref: root s: "type") then continue
+        rsc: (st.typing.pendingTyperefScope.get key: rn).or d: ztypes.declid
+        (refuseBareGenericType
+            :st
+            :ast
+            tid: (ztypes.tid.create from: (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rn))
+            nid: rn
+            scope: rsc
+            thisName: ""
+        )
+    }
+}
+
 # checkSpecStandIns -- every value noted where a spec value is expected
 # conforms to the spec: a conformance row names its type, or the template it
 # was instantiated from. Anything else used to typecheck and then fail in the
@@ -42867,6 +43077,33 @@ fieldBoundGenericConstruction: function {
     return (callleg handled: false tid: (ztypes.tid.create from: 0))
 }
 
+# calleeOwnInstance -- the instance a bare generic callee names by itself: a
+# type a generic unit declares is the unit instance's copy (unitNestedSelf),
+# and `type` in a generic type's own members the instance being checked, as
+# `(GB t: t) x: ..` builds it; zero for any other callee.
+calleeOwnInstance: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    call: callref
+    funcId: ztypes.tid
+} out ztypes.tid is {
+    own: unitNestedSelf :st :ast tid: funcId
+    if own.isZero.not then return own
+    cn: atomNameId :ast n: (ast.nodes.get i: call.callable.u64)
+    if (zast.nameTextEq :ast ref: cn s: "type").not then return own
+    sa: (selfApplicationTid
+        :st
+        :ast
+        :unitDecl
+        scope: st.curScope
+        templateId: funcId
+        nid: call.callable.u64
+    )
+    if sa == 0 then return own
+    return (ztypes.tid.create from: (instanceTypeOf :st :ast :unitDecl tid: sa))
+}
+
 # checkBareGenericCall -- a bare-name call to a GENERIC function: infer its type
 # arguments from the call, mint the instance, and answer its return type.
 checkBareGenericCall: function {
@@ -42879,7 +43116,7 @@ checkBareGenericCall: function {
 } out callleg is {
     result: ztypes.tid
     gtt: st.reg.typetypeOf typeId: funcId
-    nself: unitNestedSelf :st :ast tid: funcId
+    nself: calleeOwnInstance :st :ast :unitDecl :call :funcId
     if nself.isZero.not when gtt != ztypes.ztypetype.functionType then {
         return (callleg
             handled: true
@@ -58206,6 +58443,7 @@ typecheck: function {
         checkConformances ast: program :st
         checkHashKeys ast: program :st
         checkSpecStandIns ast: program :st
+        checkBareGenericReturns ast: program :st
         reportTypedefClashes ast: program :st
         checkWideLiterals ast: program :st
         stampAliasValues :st ast: program
