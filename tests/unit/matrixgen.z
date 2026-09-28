@@ -73,6 +73,9 @@ Position: class {
     expect: i64
     # the body projects the value onto Rd, so only a conforming family has it
     needsConf: bool
+    # a refusal of the cell is raised where its declarations are, before any
+    # body is checked, so an errors golden lists it first
+    atDecl: bool
 }
 
 # Row -- one line of the expectations table, its position resolved to an index
@@ -1030,6 +1033,7 @@ positions: function out List Position is {
     projectionPositions :ps
     conformancePositions :ps
     lentPositions :ps
+    borrowedFieldPositions :ps
     hoistArgPositions :ps
     return ps
 }
@@ -1747,6 +1751,29 @@ conformancePositions: function {ps: List Position} is {
     )
 }
 
+# borrowedFieldPositions -- a value a class holds in a `.borrow` field: stored as
+# the family is passed, read back through the holder
+borrowedFieldPositions: function {ps: List Position} is {
+    (addPos
+        :ps
+        name: "borrowed_field"
+        decls: "HolderBf: class { f: @T.borrow }\n"
+        body: "x: @MK[106]\n    h: HolderBf f: x\n    return @RD[h.f]"
+        expect: 106
+        needsConf: false
+        atDecl: true
+    )
+    (addPos
+        :ps
+        name: "borrowed_field_method"
+        decls: "HolderBm: class { f: @T.borrow }\n"
+        body: "x: @MK[107]\n    h: HolderBm f: x\n    return @ME[h.f]"
+        expect: 107
+        needsConf: false
+        atDecl: true
+    )
+}
+
 # lentPositions -- a value with no name of its own, read where it stands: one a
 # list lends (`xs.get`), whose temporary owns nothing, and a field of a call's
 # result, whose temporary owns the whole result
@@ -1894,8 +1921,16 @@ addPos: function {
     body: StringView
     expect: i64
     needsConf: bool
+    atDecl: false
 } is {
-    ps.append (Position name: name.string decls: decls.string body: body.string :expect :needsConf)
+    ps.append (Position
+        name: name.string
+        decls: decls.string
+        body: body.string
+        :expect
+        :needsConf
+        :atDecl
+    )
 }
 
 # words -- the first three space-separated words of a table line, then the rest
@@ -2174,12 +2209,25 @@ golden: function {poss: (List Position).view slots: (List Slot).view} out String
     return buf
 }
 
-# errGolden -- the error lines a REFUSED program reports, in cell order
-errGolden: function {f: Family.view rows: (List Row).view slots: (List Slot).view} out String is {
+# errGolden -- the error lines a REFUSED program reports: the cells refused where
+# they are declared first, then the rest, each in cell order
+errGolden: function {
+    f: Family.view
+    poss: (List Position).view
+    rows: (List Row).view
+    slots: (List Slot).view
+} out String is {
     buf: String
+    # a declaration's refusal is reported before any body's
     for s: slots.iterate loop {
-        d: rowDetail :s :rows :f
-        buf.append (errLine detail: d.stringView)
+        if (poss.get i: s.pos).atDecl then buf.append (errLine
+            detail: (rowDetail :s :rows :f).stringView
+        )
+    }
+    for s: slots.iterate loop {
+        if (poss.get i: s.pos).atDecl.not then buf.append (errLine
+            detail: (rowDetail :s :rows :f).stringView
+        )
     }
     if slots.length == 1 then {
         buf.append "1 error found\n"
@@ -2241,7 +2289,7 @@ writeRefused: function {
     stem: "matrix_\{f.name}_refused"
     writeFile path: "\{root}/tests/fixtures/errors/\{stem}.z" content: prog.stringView
     writeUnit :f dir: "\{root}/tests/fixtures/errors" stem: stem.stringView
-    err: errGolden :f :rows :slots
+    err: errGolden :f :poss :rows :slots
     writeFile path: "\{root}/tests/fixtures/errors/\{stem}.err" content: err.stringView
 }
 

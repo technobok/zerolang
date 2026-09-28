@@ -12825,7 +12825,60 @@ resolveClassFieldEntry: function {
             :fm
         ) then needsDtor = true
     }
+    if borrowedField then refuseValueBorrowField :st :ast :cid nameId: fm.name :fm
     return needsDtor
+}
+
+# definedAsGenerator -- the type is declared by a `generator` definition, whose
+# class the lowering writes itself.
+definedAsGenerator: function {
+    st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid
+} out bool is {
+    d: declOfTypeId :st :tid
+    if d.isZero then return false
+    dn: (st.typing.decls.get i: d.u64).node
+    if dn == 0 then return false
+    isGen: false
+    {
+        nop: ast.nodes.get i: dn.u64
+        if nop.namedoperation then {
+            def: ast.nodes.get i: nop.operation.u64
+            if def.objectdef when def.kind == zast.objectkind.generatorDef then isGen = true
+        }
+    }
+    return isGen
+}
+
+# refuseValueBorrowField -- a `.borrow` field of a VALUE type: the class holds
+# its copy, as a binding of one does, so the marker says a borrow that does not
+# happen and is refused where the field is declared (refuseValueBorrow's rule).
+refuseValueBorrowField: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    cid: u64
+    nameId: zast.nameid
+    fm: argref
+} is {
+    fop: ast.nodes.get i: fm.operation.u64
+    # a `.borrow` WRITTEN on the field; a generator's state is the lowering's
+    # own class, whose `_resume_input` borrows the caller's argument whatever
+    # its type
+    if fop.dottedpath.not or (zast.markerKindOf :ast n: fop).borrowMarker.not then return
+    if (definedAsGenerator :st :ast tid: (ztypes.tid.create from: cid.u64)) then return
+    ft: (st.typing.declChildOfId parentTypeId: (ztypes.tid.create from: cid.u64) :nameId).or d: 0
+    if ft == 0 or (typeIsValtype :st tid: (ztypes.tid.create from: ft.u64)).not then return
+    tn: specWrittenName :st :ast tid: (ztypes.tid.create from: ft.u64)
+    (addErrorH
+        :st
+        nodeid: fm.operation
+        lineno: (nodeLine n: fop)
+        colno: (nodeCol n: fop)
+        e: zast.err.ownerError
+        msg: "'\{tn}' is a value type: the field holds its copy, so `.borrow` has nothing to borrow"
+        note: "".string
+        hint: "drop the marker; a `.borrow` parameter is what refers to the caller's value".string
+        width: 1
+    )
 }
 
 # resolveClassField -- resolve one field of a class: its declared type, its

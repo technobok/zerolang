@@ -3679,10 +3679,12 @@ borrowedFieldPath: function {
     prid: canonTypeId :ast :symtab :ctx tid: pstamp name: pstn
     ptid: pstamp
     if prid > 0 then ptid = ztypes.tid.create from: prid.u64
-    return (symtab.typing.declIsBorrowedFieldId
+    if (symtab.typing.declIsBorrowedFieldId
         parentTypeId: ptid
         nameId: (atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64))
-    )
+    ).not then return false
+    ft: stampIdOf :symtab nid: (zast.nodeIdOf n: (ast.nodes.get i: n.nodeid.u64)).u64
+    return (borrowedFieldHeldByPointer :ast :symtab :ctx fid: ft)
 }
 
 # refValtypeResult -- the node is a reference-returning call whose result is a
@@ -11008,7 +11010,7 @@ fieldIsReftypePtr: function {
         parentTypeId: owner
         nameId: (zast.nameid.create from: fnameId.u32.orPanic)
     ).not then return false
-    return (borrowedFieldIsReftypePtr :ast :symtab :ctx fid: (ztypes.tid.create from: ffid.u64))
+    return (borrowedFieldHeldByPointer :ast :symtab :ctx fid: (ztypes.tid.create from: ffid.u64))
 }
 
 # ctorArgPositions -- for each parameter of a construction, in declaration
@@ -11837,7 +11839,7 @@ metaCreateFieldText: function {
             pool: ast.names
             parentTypeId: et
             name: fname
-        ) when (borrowedFieldIsReftypePtr
+        ) when (borrowedFieldHeldByPointer
             :ast
             :symtab
             :ctx
@@ -11873,7 +11875,7 @@ metaCreateFieldText: function {
             pool: ast.names
             parentTypeId: et
             name: fname
-        ) when (borrowedFieldIsReftypePtr
+        ) when (borrowedFieldHeldByPointer
             :ast
             :symtab
             :ctx
@@ -14656,16 +14658,19 @@ emitDottedNestedBase: function {
     nbPtr: pathIsPointer :ast :symtab :ctx n: nbPar
     nstPtr: nbPtr
     if nstPtr.not then nstPtr = isHeapPtrCollection :symtab :ctx tid: nlid
-    # a borrowed field (`c.m` on `m: (MapVV k: i64 v: i64).borrow`) holds its
-    # container by pointer: read through it once, and every leg below sees the
-    # container itself -- a Map or Set still as its heap pointer
-    if nbPtr when nbPar.dottedpath when (borrowedFieldPath :ast :symtab :ctx n: nbPar) then {
-        nbIsHeap: isHeapPtrCollection :symtab :ctx tid: nlid
-        if nbIsHeap or (stackCollectionTid :symtab :ctx tid: nlid) then {
-            baseAtom = "(*\{baseAtom})"
-            bs9vid = ztypes.vid
-            nstPtr = nbIsHeap
-        }
+    # a borrowed field (`c.l` on `l: (ListVal t: i64).borrow`) holds a stack
+    # collection by pointer: read through it once, and every leg below sees the
+    # container itself. A Map or a Set is its own heap pointer and a borrowed
+    # field holds just that (borrowedFieldHeldByPointer)
+    if nbPtr when nbPar.dottedpath when (borrowedFieldPath :ast :symtab :ctx n: nbPar
+    ) when (stackCollectionTid
+        :symtab
+        :ctx
+        tid: nlid
+    ) then {
+        baseAtom = "(*\{baseAtom})"
+        bs9vid = ztypes.vid
+        nstPtr = false
     }
     # a Box's fields and methods are its element's, read through the cell
     nbxE: boxMemberElem :ast :symtab :ctx :n
@@ -39833,11 +39838,14 @@ storedFieldPtrC: function {
     return "\{fct}*"
 }
 
-# borrowedFieldIsReftypePtr -- a borrowed field is stored as a pointer to its container
-# only when that container is a reftype (class/union); a protocol lock is the fat
-# pointer by value, and a valtype lock (a bidirectional generator's bool resume
-# input) is stored by value.
-borrowedFieldIsReftypePtr: function {
+# borrowedFieldHeldByPointer -- a borrowed field of type `fid` is stored as a
+# pointer to its source: what a parameter of the type passes by pointer (a class,
+# a String, a List). A Map or a Set is its own heap pointer and holds that. A
+# union, an Option, a Result and a protocol pass BY
+# VALUE -- a header sharing the payload -- and a borrowed field of one holds that
+# header, as the parameter does (passesByValue); a value type's borrowed field
+# is refused before emission.
+borrowedFieldHeldByPointer: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
@@ -39846,8 +39854,9 @@ borrowedFieldIsReftypePtr: function {
     ftn: regNameOf :symtab tid: fid
     ftid: canonTypeId :ast :symtab :ctx tid: fid name: ftn.stringView
     if ftid == 0 then ftid = fid
-    tt: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: ftid.u64)
-    return tt.isReferenceData
+    # a Map or a Set IS its heap pointer, and a borrowed field holds that
+    if (isHeapPtrCollection :symtab :ctx tid: (ztypes.tid.create from: ftid.u64)) then return false
+    return (passesByValue :symtab tid: (ztypes.tid.create from: ftid.u64)).not
 }
 
 # storedFieldC -- the C type a field is STORED as: its own type, with a borrowed
@@ -39868,7 +39877,7 @@ storedFieldC: function {
     if (symtab.typing.declIsBorrowedFieldId
         parentTypeId: ownerTid
         nameId: fnameId
-    ) when (borrowedFieldIsReftypePtr :ast :symtab :ctx :fid) then {
+    ) when (borrowedFieldHeldByPointer :ast :symtab :ctx :fid) then {
         fctP: (storedFieldPtrC
             :ast
             :symtab
