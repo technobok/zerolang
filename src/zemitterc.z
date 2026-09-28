@@ -6949,8 +6949,6 @@ stringViewBinopOperand: function {
 instargval: record {
     # the argument used an interpolation, which had to be built before the call
     usedInterp: bool
-    # the variable behind it, 0 when it is not a bare name
-    avq: ztypes.vid
     # its position, for the natives that map labels onto a positional C
     # signature
     posIdx: u64
@@ -7031,20 +7029,9 @@ instanceMethodArgValue: function {
             positionalIdx = positionalIdx + 1
         }
     }
-    avq: ztypes.vid
-    if avNd > 0 then {
-        avq = (atomVidIfPlain
-            :ast
-            :symtab
-            :ctx
-            n: (ast.nodes.get i: avNd)
-            text: atomVarId.stringView
-        )
-    }
     av.append atomVarId
     return (instargval
         :usedInterp
-        :avq
         posIdx: positionalIdx
         :avNd
     )
@@ -7052,8 +7039,9 @@ instanceMethodArgValue: function {
 
 # instanceMethodArgPtr -- how one argument of a user-object method is passed:
 # by pointer when the parameter takes one (paramTakesPointer), addressed unless
-# the argument already is one (argAlreadyPointer). An interpolated argument is
-# a statement expression, never an lvalue, so it never is.
+# the argument already is one (argAlreadyPointer), which asks the variable the
+# value text `av` names. An interpolated argument is a statement expression,
+# never an lvalue, so it never is.
 instanceMethodArgPtr: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -7062,7 +7050,7 @@ instanceMethodArgPtr: function {
     posParamName: StringView
     posParamId: u64
     usedInterp: bool
-    avq: ztypes.vid
+    av: StringView
     # the argument's node, 0 for an interpolated one
     avNd: u64
 } out instargptr is {
@@ -7080,9 +7068,10 @@ instanceMethodArgPtr: function {
     byref: false
     if ptra then {
         byref = true
-        if avNd > 0 when (argAlreadyPointer :ast :symtab :ctx n: (ast.nodes.get i: avNd) vid: avq
-        ) then {
-            byref = false
+        if avNd > 0 then {
+            avn: ast.nodes.get i: avNd
+            avq: atomVidIfPlain :ast :symtab :ctx n: avn text: av
+            if (argAlreadyPointer :ast :symtab :ctx n: avn vid: avq) then byref = false
         }
     }
     return (instargptr :ptra :pTake :byref)
@@ -7121,32 +7110,62 @@ instanceMethodArg: function {
         :posParamName
         :posParamId
         usedInterp: avr.usedInterp
-        avq: avr.avq
+        av: atomVarId.stringView
         avNd: avr.avNd
     )
-    ctx.lastArgByPtr = ptr.byref
-    # the value text LOADED a pointer-held valtype (valueExprC); a parameter
-    # that takes the pointer reads the argument as written instead
-    if ptr.ptra when ptr.byref.not when avr.avNd > 0 when (ptrHeldValtype
+    (passMethodArg
         :ast
         :symtab
         :ctx
-        n: (ast.nodes.get i: avr.avNd)
+        :ptr
+        avNd: avr.avNd
+        usedInterp: avr.usedInterp
+        :posParamId
+        av: atomVarId
+        :args
+    )
+    return avr.posIdx
+}
+
+# passMethodArg -- a method argument's C text, appended to `args`, once its
+# value text `av` is built and how it is passed decided (instanceMethodArgPtr):
+# the method call's and a declared operator's right operand's one rule.
+passMethodArg: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    ptr: instargptr
+    # the argument's node, 0 for an interpolated one
+    avNd: u64
+    usedInterp: bool
+    posParamId: u64
+    av: String.take
+    args: String.borrow
+} is {
+    ctx.lastArgByPtr = ptr.byref
+    # the value text LOADED a pointer-held valtype (valueExprC); a parameter
+    # that takes the pointer reads the argument as written instead
+    if ptr.ptra when ptr.byref.not when avNd > 0 when (ptrHeldValtype
+        :ast
+        :symtab
+        :ctx
+        n: (ast.nodes.get i: avNd)
     ) then {
-        atomVarId = emitExpr :ast :symtab :ctx n: (ast.nodes.get i: avr.avNd)
+        av = emitExpr :ast :symtab :ctx n: (ast.nodes.get i: avNd)
     }
     # a conformer standing in for a spec parameter is passed as its box: its
     # source's own temporary is spelled inside it, so it takes no other hoist,
     # and the box owns nothing here -- it holds its source by pointer, or the
     # parameter that owns it takes it
-    if avr.avNd > 0 then {
+    if avNd > 0 when (symtab.typing.standInOf.has key: avNd) then {
+        avn: ast.nodes.get i: avNd
         bx: (conformanceArgText
             :ast
             :symtab
             :ctx
-            argOpNode: (ast.nodes.get i: avr.avNd)
-            av: atomVarId.stringView
-            avVid: avr.avq
+            argOpNode: avn
+            av: av.stringView
+            avVid: (atomVidIfPlain :ast :symtab :ctx n: avn text: av.stringView)
         )
         if bx.length > 0 then {
             if ptr.byref then {
@@ -7159,7 +7178,7 @@ instanceMethodArg: function {
                     argNid: 0
                 )
             } else args.append bx
-            return avr.posIdx
+            return
         }
     }
     if ptr.byref then {
@@ -7167,9 +7186,9 @@ instanceMethodArg: function {
             :ast
             :symtab
             :ctx
-            av: atomVarId.stringView
+            av: av.stringView
             pid: (ztypes.tid.create from: posParamId)
-            argNid: avr.avNd
+            argNid: avNd
         )
     } else {
         (appendArgValue
@@ -7177,14 +7196,13 @@ instanceMethodArg: function {
             :symtab
             :ctx
             :ptr
-            avNd: avr.avNd
-            usedInterp: avr.usedInterp
+            :avNd
+            :usedInterp
             :posParamId
-            av: atomVarId.stringView
+            av: av.stringView
             :args
         )
     }
-    return avr.posIdx
 }
 
 # appendArgValue -- a method argument passed as its value (not addressed): a
@@ -17480,14 +17498,18 @@ emitDeclaredOperator: function {
     }
     orderArgAt :ast :symtab :ctx st: ord mark: mk text: recv nid: lhsNid byPtr: true slot: 0
     mkR: pendingHoistMark :ctx
-    rv: (standInText
+    rv: operatorOperandText :ast :symtab :ctx :call :rhsNid
+    (orderArgAt
         :ast
         :symtab
         :ctx
-        n: (ast.nodes.get i: rhsNid)
-        text: (operandValueC :ast :symtab :ctx nid: rhsNid)
+        st: ord
+        mark: mkR
+        text: rv
+        nid: rhsNid
+        byPtr: ctx.lastArgByPtr
+        slot: 1
     )
-    orderArgAt :ast :symtab :ctx st: ord mark: mkR text: rv nid: rhsNid byPtr: false slot: 1
     r: orderFinish :ctx st: ord
     opened: r.length > 0
     if neg then r.append "!"
@@ -17513,6 +17535,57 @@ emitDeclaredOperator: function {
     if opened then r.append ")"
     orderEnd :ctx st: ord
     return r
+}
+
+# operatorOperandText -- a declared operator's right operand, passed as its
+# parameter -- the operator's one besides the receiver -- takes it, by the rule
+# a method argument is passed by (passMethodArg). Sets ctx.lastArgByPtr.
+operatorOperandText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: ztypes.tid
+    rhsNid: u64
+} out String is {
+    av: operandValueC :ast :symtab :ctx nid: rhsNid
+    ctx.lastArgByPtr = false
+    # the receiver by its name id, `this` for the `:this` shorthand; every other
+    # row of a function type is a parameter
+    recvId: symtab.reg.thisParamNameIdOf tid: call
+    if recvId.isZero then recvId = zast.names.wkThis
+    ri: u64
+    nRows: symtab.typing.declRowSlots ownerTid: call
+    for ri < nRows loop {
+        rw: symtab.typing.declRowAt ownerTid: call membersOnly: true slot: ri
+        ri = ri + 1
+        if rw.keep.not or (rw.name == recvId.u64) then continue
+        pn: zast.poolTextAt pool: ast.names ref: (zast.nameid.create from: rw.name.u32.orPanic)
+        ptr: (instanceMethodArgPtr
+            :ast
+            :symtab
+            :ctx
+            mco: call
+            posParamName: pn.stringView
+            posParamId: rw.tid
+            usedInterp: false
+            av: av.stringView
+            avNd: rhsNid
+        )
+        txt: String
+        (passMethodArg
+            :ast
+            :symtab
+            :ctx
+            :ptr
+            avNd: rhsNid
+            usedInterp: false
+            posParamId: rw.tid
+            :av
+            args: txt
+        )
+        return txt
+    }
+    return av
 }
 
 # isListCompare -- `==` or `!=` on a ListVal, which its mono's generated
