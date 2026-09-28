@@ -7137,6 +7137,33 @@ instanceMethodArg: function {
     ) then {
         atomVarId = emitExpr :ast :symtab :ctx n: (ast.nodes.get i: avr.avNd)
     }
+    # a conformer standing in for a spec parameter is passed as its box: its
+    # source's own temporary is spelled inside it, so it takes no other hoist,
+    # and the box owns nothing here -- it holds its source by pointer, or the
+    # parameter that owns it takes it
+    if avr.avNd > 0 then {
+        bx: (conformanceArgText
+            :ast
+            :symtab
+            :ctx
+            argOpNode: (ast.nodes.get i: avr.avNd)
+            av: atomVarId.stringView
+            avVid: avr.avq
+        )
+        if bx.length > 0 then {
+            if ptr.byref then {
+                args.append (emitByrefArg
+                    :ast
+                    :symtab
+                    :ctx
+                    av: bx.stringView
+                    pid: (ztypes.tid.create from: posParamId)
+                    argNid: 0
+                )
+            } else args.append bx
+            return avr.posIdx
+        }
+    }
     if ptr.byref then {
         args.append (emitByrefArg
             :ast
@@ -9780,6 +9807,10 @@ emitInterpArgForParam: function {
         } else {
             retx = "&\{nmH}"
         }
+    } else if (symtab.typing.standInOf.has key: (zast.nodeIdOf :n).u64) then {
+        # the String stands in for a spec the parameter is typed as (`Text`):
+        # the temporary itself, which conformanceArgText boxes
+        retx = nmH.copy
     } else {
         retx = svValueForm :ctx expr: nmH.stringView isStr: true vid: (ztypes.vid.create from: 0)
     }
@@ -9815,7 +9846,13 @@ colArg: function {
                     :consumes
                 )
                 if ic.length > 0 then return ic
-                return (valueExprC :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64))
+                return (standInText
+                    :ast
+                    :symtab
+                    :ctx
+                    n: (ast.nodes.get i: a.operation.u64)
+                    text: (valueExprC :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64))
+                )
             }
             if an.length == 0 when havePos.not then {
                 havePos = true
@@ -9830,7 +9867,13 @@ colArg: function {
                     posFirst = icp.take
                 } else {
                     aOpNode: ast.nodes.get i: a.operation.u64
-                    posFirst = valueExprC :ast :symtab :ctx n: aOpNode
+                    posFirst = (standInText
+                        :ast
+                        :symtab
+                        :ctx
+                        n: aOpNode
+                        text: (valueExprC :ast :symtab :ctx n: aOpNode)
+                    )
                 }
             }
         }
@@ -9857,16 +9900,23 @@ listArg: function {
         a: ast.nodes.get i: aId.u64
         if a.namedoperation then {
             an: zast.nameTextAt :ast ref: a.name
-            if an.stringView == label then return (valueExprC
+            if an.stringView == label then return (standInText
                 :ast
                 :symtab
                 :ctx
                 n: (ast.nodes.get i: a.operation.u64)
+                text: (valueExprC :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64))
             )
             if an.length == 0 when havePos.not then {
                 havePos = true
                 aOpNode: ast.nodes.get i: a.operation.u64
-                posFirst = valueExprC :ast :symtab :ctx n: aOpNode
+                posFirst = (standInText
+                    :ast
+                    :symtab
+                    :ctx
+                    n: aOpNode
+                    text: (valueExprC :ast :symtab :ctx n: aOpNode)
+                )
             }
         }
     }
@@ -10796,7 +10846,9 @@ fieldArgText: function {
 } out String is {
     if ca.nid > 0 then {
         t: ctorArgTextAt :ast :symtab :ctx aid: ca.nid
-        if ca.labelled or (t.length > 0) then return t
+        if ca.labelled or (t.length > 0) then {
+            return (standInText :ast :symtab :ctx n: (ast.nodes.get i: ca.nid) text: t.take)
+        }
     }
     if ca.labelled then return "0".string
     return (fieldDefaultText :ast :symtab :ctx :tid :nameId :fid)
@@ -12782,17 +12834,12 @@ emitFnptrLocalCall: function {
 
 # emit a call used as a value (its result expression).
 
-# typetypeConforms -- whether a type of this family may declare a conformance:
-# class and union to a protocol, record and variant to a facet.
-typetypeConforms: function {tt: ztypes.ztypetype} out bool is {
-    if tt.isFieldwise then return true
-    return tt.isSum
-}
-
-# conformanceArgText -- a concrete class/record/union/variant argument handed to a
-# protocol / facet parameter goes in as its conformance box: the impl's
-# `<cname>_<label>_create(&arg)`. "" when the parameter is no spec or the
-# argument no conforming concrete type.
+# conformanceArgText -- the value at `argOpNode` boxed as the spec it stands in
+# for, when the checker recorded it as a stand-in (standInOf): what a
+# `P.create from: x` or `P x` of the same value emits -- `_create_owned` where
+# the place owns a protocol value, `_create` otherwise (a facet box copies).
+# Every slot that spells a value asks it; "" when the value stands in for
+# nothing.
 conformanceArgText: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -12800,44 +12847,52 @@ conformanceArgText: function {
     argOpNode: astnode.view
     av: StringView
     avVid: ztypes.vid
-    protoTid: u64
-    # the parameter takes what it is given
-    owning: bool
 } out String is {
-    pptt: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: protoTid.u64)
-    isProtoP: pptt.isInterface
-    if isProtoP.not then return "".string
-    aTid: stampIdOf :symtab nid: (interpPartNodeId n: argOpNode)
-    aTT: symtab.reg.typetypeOf typeId: aTid
-    if (typetypeConforms tt: aTT).not then return "".string
-    pLbl: boxLabelFor :symtab :ctx implTid: aTid :protoTid
+    nid: (zast.nodeIdOf n: argOpNode).u64
+    so: symtab.typing.standInOf.get key: nid
+    if so.none then return "".string
+    su: so
+    pLbl: boxLabelFor :symtab :ctx implTid: su.value protoTid: su.spec.u64
     if pLbl.length == 0 then return "".string
-    # the checker refuses a conformer in an owning place: a borrowed box handed
-    # to a `.take` parameter is what leaked, its source never moved
-    if owning when pptt == ztypes.ztypetype.protocolType then {
-        emitFail :ctx what: "a conformer boxed for an owning parameter".string line: 0
-        return "".string
+    suffix: "create".string
+    if su.owning when (
+        (symtab.reg.typetypeOf typeId: su.spec) == ztypes.ztypetype.protocolType
+    ) then {
+        suffix = "create_owned".string
     }
-    aIb: ctxCname :ctx tid: aTid
+    aIb: ctxCname :ctx tid: su.value
     aRcv: "&\{av}"
     if (isPtrVid :ctx vid: avVid) then {
         aRcv = "\{av}"
     } else if (isNonLvalueArg s: av) then {
-        # AN INLINE CONSTRUCTION IS NOT AN LVALUE. `f g: (Cat k: 40)` handed
-        # the helper `&z_t109_create(40)`, which C rejects -- bind it to a temp
-        # first, as emitProtocolCreateCall's own `from:` leg already does for
-        # the same shape written `Greeter.create from: (Cat k: 40)`.
-        ahv: (hoistForAddress
-            :ast
-            :symtab
-            :ctx
-            :av
-            tid: (ztypes.tid.create from: aTid.u64)
-            argNid: (zast.nodeIdOf n: argOpNode).u64
-        )
+        # AN INLINE CONSTRUCTION IS NOT AN LVALUE: C rejects `&z_t109_create(40)`,
+        # so it is bound to a temp first, as a `P.create from: (Cat k: 40)` source is
+        ahv: hoistForAddress :ast :symtab :ctx :av tid: su.value argNid: nid
         aRcv = "&\{ahv}"
     }
-    return "\{aIb}_\{pLbl}_create(\{aRcv})"
+    return "\{aIb}_\{pLbl}_\{suffix}(\{aRcv})"
+}
+
+# standInText -- a slot's text for the value at `n`: boxed as the spec it stands
+# in for (conformanceArgText), or `text` as written.
+standInText: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    n: astnode.view
+    text: String.take
+} out String is {
+    if (symtab.typing.standInOf.has key: (zast.nodeIdOf :n).u64).not then return text
+    bx: (conformanceArgText
+        :ast
+        :symtab
+        :ctx
+        argOpNode: n
+        av: text.stringView
+        avVid: (atomVidIfPlain :ast :symtab :ctx :n text: text.stringView)
+    )
+    if bx.length > 0 then return bx
+    return text
 }
 
 # paramTakesPointer -- a parameter of the user function or method fid takes
@@ -12941,8 +12996,6 @@ userFnArgText: function {
             :argOpNode
             av: atomVarId.stringView
             avVid: avq
-            protoTid: ppid
-            owning: (paramTakesArg :ast :symtab :fid pname: pinNm)
         )
         if spec.length > 0 then {
             atomVarId = spec.take
@@ -17429,7 +17482,13 @@ emitDeclaredOperator: function {
     }
     orderArgAt :ast :symtab :ctx st: ord mark: mk text: recv nid: lhsNid byPtr: true slot: 0
     mkR: pendingHoistMark :ctx
-    rv: operandValueC :ast :symtab :ctx nid: rhsNid
+    rv: (standInText
+        :ast
+        :symtab
+        :ctx
+        n: (ast.nodes.get i: rhsNid)
+        text: (operandValueC :ast :symtab :ctx nid: rhsNid)
+    )
     orderArgAt :ast :symtab :ctx st: ord mark: mkR text: rv nid: rhsNid byPtr: false slot: 1
     r: orderFinish :ctx st: ord
     opened: r.length > 0
@@ -20572,7 +20631,13 @@ emitStoreTo: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
-    rv2: reassignRhsText :ast :symtab :ctx :valueNode :ind :tmp :buf
+    rv2: (standInText
+        :ast
+        :symtab
+        :ctx
+        n: valueNode
+        text: (reassignRhsText :ast :symtab :ctx :valueNode :ind :tmp :buf)
+    )
     # the RHS walk may have recorded _ah arg hoists: declare them HERE,
     # before the assignment line that uses them (they would otherwise
     # flush at a later statement, after -- and outside -- this scope)
@@ -26559,7 +26624,13 @@ emitPlainReturn: function {
     tmp: TmpCtr
     buf: String.borrow
 } is {
-    rv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: vid.u64)
+    rv: (standInText
+        :ast
+        :symtab
+        :ctx
+        n: (ast.nodes.get i: vid.u64)
+        text: (emitExpr :ast :symtab :ctx n: (ast.nodes.get i: vid.u64))
+    )
     flushArgHoists :ctx :ind :tmp :buf
     clProbe: String
     emitReturnCleanup :symtab :ctx :tmp retExpr: rv.stringView keepRefd: true :ind buf: clProbe
@@ -26567,6 +26638,13 @@ emitPlainReturn: function {
     emitReturnCleanup :symtab :ctx :tmp retExpr: rv.stringView keepRefd: false :ind buf: clFull
     leakFix: clFull.length > clProbe.length
     rtid: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: vid.u64))
+    # a conformer returned as the spec is its box, of the spec's type
+    so: symtab.typing.standInOf.get key: vid.u64
+    match (
+        so
+    ) case some then {
+        rtid = so.spec
+    } case none then null
     retCt: typeRefC :ast :symtab :ctx tid: rtid thisTid: ztypes.tid
     isPtr: (ctEndsWithStar ct: retCt.stringView) or (isHeapPtrCollection :symtab :ctx tid: rtid)
     trivial: isBareCName s: rv.stringView
@@ -38858,6 +38936,9 @@ dispatchArgText: function {
     n: astnode.view
 } out String is {
     av: emitExpr :ast :symtab :ctx :n
+    if (symtab.typing.standInOf.has key: (zast.nodeIdOf :n).u64) then {
+        return (standInText :ast :symtab :ctx :n text: av.take)
+    }
     atid: stampIdOf :symtab nid: (interpPartNodeId :n)
     apfx: String
     chasedColTid: chaseAggregateTypedef :symtab :ctx tid: atid

@@ -1913,7 +1913,7 @@ perf: $(PERFBIN)
 #
 # -966 a value-type union arm is boxed implicitly: -18 behaviour (the arm
 # check that copied every arm's name is gone), -948 source.
-ALLOC_BASELINE := 2756615
+ALLOC_BASELINE := 2759088
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2083,10 +2083,10 @@ emitter-guard:
 	chk "'z_t{' literals in src/zemitterc.z" "$$g2" 3; \
 	chk "ztypecheck.resolvedByKey" "$$e1" 0; \
 	chk "ztypecheck.walkLookupTyperef" "$$e2" 5; \
-	chk "resolveTypeIdByName" "$$e3" 16; \
+	chk "resolveTypeIdByName" "$$e3" 15; \
 	chk "userFnId" "$$e4" 21; \
 	chk "childOwnershipText" "$$e5" 0; \
-	chk "regNameOf" "$$e6" 68; \
+	chk "regNameOf" "$$e6" 65; \
 	chk "ztypes.mangleVarName (both inside varCName)" "$$e7" 2; \
 	chk "io.readText" "$$e8" 3; \
 	chk "monoOriginName" "$$e9" 7; \
@@ -2135,9 +2135,9 @@ lifetime-guard:
 	  elif [ "$$2" -lt "$$3" ]; then echo "lifetime-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
 	chk "registerScopeDestroy" "$$l1" 5; \
 	chk "refsLocal" "$$l2" 4; \
-	chk "isNonLvalueArg" "$$l3" 31; \
+	chk "isNonLvalueArg" "$$l3" 29; \
 	chk "bindingRhsIsBorrow" "$$l4" 6; \
-	chk "'_ah{' argument hoists" "$$l5" 1; \
+	chk "'_ah{' argument hoists" "$$l5" 0; \
 	chk "hoistExprIsBorrowRooted" "$$l6" 0; \
 	if [ "$$fail" = "1" ]; then \
 	  echo "  The emitter decided a lifetime on its own again. Read the checker's destroy"; \
@@ -3403,7 +3403,7 @@ FALLBACK_BASELINE :=
 # member it has no C spelling for (only Text.stringView has one).
 # 39: conformanceArgText's refusal -- a conformer boxed for an owning (`.take`)
 # parameter, which the checker refuses first.
-EMITFAIL_BASELINE := 39
+EMITFAIL_BASELINE := 38
 MARKER_BASELINE := 24
 EXCS := $(NAMES:%=$(EXDIR)/%.c)
 fallback-guard: $(EXCS) bin/zc bin/zl bin/zls

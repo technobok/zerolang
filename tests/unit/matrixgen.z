@@ -76,6 +76,9 @@ Position: class {
     # a refusal of the cell is raised where its declarations are, before any
     # body is checked, so an errors golden lists it first
     atDecl: bool
+    # a refusal of the cell is raised once every body is checked (a stand-in
+    # check), so an errors golden lists it last
+    atEnd: bool
 }
 
 # Row -- one line of the expectations table, its position resolved to an index
@@ -1034,6 +1037,7 @@ positions: function out List Position is {
     conformancePositions :ps
     lentPositions :ps
     borrowedFieldPositions :ps
+    standInPositions :ps
     hoistArgPositions :ps
     return ps
 }
@@ -1751,6 +1755,112 @@ conformancePositions: function {ps: List Position} is {
     )
 }
 
+# standInPositions -- a conformer written where Rd is expected with no projection
+# of its own: every slot the checker lets it stand in, each boxing it as `Rd x`
+# would -- borrowed where the slot borrows, owned where it owns
+standInPositions: function {ps: List Position} is {
+    (addPos
+        :ps
+        name: "conf_fn_arg"
+        decls: "useConfFn: function {r: Rd} out i64 is { return r.rdn }\n"
+        body: "x: @MK[120]\n    return (useConfFn r: x)"
+        expect: 120
+        needsConf: true
+    )
+    (addPos
+        :ps
+        name: "conf_fn_arg_inline"
+        decls: "useConfFnIn: function {r: Rd} out i64 is { return r.rdn }\n"
+        body: "return (useConfFnIn r: @MK[121])"
+        expect: 121
+        needsConf: true
+    )
+    (addPos
+        :ps
+        name: "conf_meth_arg"
+        decls: "ConfMeth: class { k: i64 } as {\n    useIt: function {:this r: Rd} out i64 is { return r.rdn + this.k }\n}\n"
+        body: "u: ConfMeth k: 0\n    x: @MK[122]\n    return (u.useIt r: x)"
+        expect: 122
+        needsConf: true
+    )
+    (addPos
+        :ps
+        name: "conf_meth_arg_qual"
+        decls: "ConfMethQ: class { k: i64 } as {\n    useIt: function {u: this.view r: Rd} out i64 is { return r.rdn + u.k }\n}\n"
+        body: "u: ConfMethQ k: 0\n    x: @MK[123]\n    return (ConfMethQ.useIt u: u r: x)"
+        expect: 123
+        needsConf: true
+    )
+    (addPos
+        :ps
+        name: "conf_dispatch_arg"
+        decls: "ConfPk: protocol {\n    pick: function {t: this.view r: Rd} out i64\n}\nConfPC: class { k: i64 } as {\n    :ConfPk\n    pick: function {p: this.view r: Rd} out i64 is { return r.rdn + p.k }\n}\n"
+        body: "p: ConfPk.create from: (ConfPC k: 0)\n    x: @MK[124]\n    return (p.pick r: x)"
+        expect: 124
+        needsConf: true
+    )
+    (addPos
+        :ps
+        name: "conf_operator"
+        decls: "ConfAcc: class { k: i64 } as {\n    +: function {a: this.view r: Rd} out i64 is { return a.k + r.rdn }\n}\n"
+        body: "a: ConfAcc k: 0\n    x: @MK[125]\n    return (a + x)"
+        expect: 125
+        needsConf: true
+    )
+    (addPos
+        :ps
+        name: "conf_field_borrow"
+        decls: "ConfHB: class { r: Rd.borrow }\n"
+        body: "x: @MK[126]\n    h: ConfHB r: x\n    return h.r.rdn"
+        expect: 126
+        needsConf: true
+    )
+    (addPos
+        :ps
+        name: "conf_field_owned"
+        decls: "ConfHO: class { r: Rd }\n"
+        body: "x: @MK[127]\n    h: ConfHO r: x\n    return h.r.rdn"
+        expect: 127
+        needsConf: true
+        atEnd: true
+    )
+    (addPos
+        :ps
+        name: "conf_list"
+        decls: ""
+        body: "xs: List Rd\n    x: @MK[128]\n    xs.append x\n    return (xs.get i: 0).rdn"
+        expect: 128
+        needsConf: true
+        atEnd: true
+    )
+    (addPos
+        :ps
+        name: "conf_reassign"
+        decls: ""
+        body: "p: Rd.create from: @MK[1]\n    x: @MK[129]\n    p = x\n    return p.rdn"
+        expect: 129
+        needsConf: true
+    )
+    (addPos
+        :ps
+        name: "conf_param_take"
+        decls: "useConfTake: function {r: Rd.take} out i64 is { return r.rdn }\n"
+        body: "x: @MK[130]\n    return (useConfTake r: x)"
+        expect: 130
+        needsConf: true
+        atEnd: true
+    )
+    (addPos
+        :ps
+        name: "conf_return"
+        decls: "mkConfRet: function out Rd is {\n    x: @MK[131]\n    return x\n}\n"
+        body: "r: mkConfRet\n    return r.rdn"
+        expect: 131
+        needsConf: true
+        atEnd: true
+    )
+}
+
 # borrowedFieldPositions -- a value a class holds in a `.borrow` field: stored as
 # the family is passed, read back through the holder
 borrowedFieldPositions: function {ps: List Position} is {
@@ -1922,6 +2032,7 @@ addPos: function {
     expect: i64
     needsConf: bool
     atDecl: false
+    atEnd: false
 } is {
     ps.append (Position
         name: name.string
@@ -1930,6 +2041,7 @@ addPos: function {
         :expect
         :needsConf
         :atDecl
+        :atEnd
     )
 }
 
@@ -2210,7 +2322,8 @@ golden: function {poss: (List Position).view slots: (List Slot).view} out String
 }
 
 # errGolden -- the error lines a REFUSED program reports: the cells refused where
-# they are declared first, then the rest, each in cell order
+# they are declared first, then the rest, then those refused once every body is
+# checked, each in cell order
 errGolden: function {
     f: Family.view
     poss: (List Position).view
@@ -2218,14 +2331,20 @@ errGolden: function {
     slots: (List Slot).view
 } out String is {
     buf: String
-    # a declaration's refusal is reported before any body's
+    # a declaration's refusal is reported before any body's, a stand-in's after
     for s: slots.iterate loop {
         if (poss.get i: s.pos).atDecl then buf.append (errLine
             detail: (rowDetail :s :rows :f).stringView
         )
     }
     for s: slots.iterate loop {
-        if (poss.get i: s.pos).atDecl.not then buf.append (errLine
+        p: poss.get i: s.pos
+        if p.atDecl.not when p.atEnd.not then buf.append (errLine
+            detail: (rowDetail :s :rows :f).stringView
+        )
+    }
+    for s: slots.iterate loop {
+        if (poss.get i: s.pos).atEnd then buf.append (errLine
             detail: (rowDetail :s :rows :f).stringView
         )
     }
