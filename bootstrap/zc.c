@@ -2625,8 +2625,8 @@ static const char _zs2530_d[] = "a bare type name in value position is a zero-ar
 static const z_t84_t _zs2530 = { .data = _zs2530_d, .size = 75 };
 static const char _zs2534_d[] = "project the view from its owner ('.stringView', '.listView', '.substring')";
 static const z_t84_t _zs2534 = { .data = _zs2534_d, .size = 74 };
-static const char _zs2536_d[] = "take one from the source, and keep it for the walk: `with it: xs.iterate do for e: it loop ...`";
-static const z_t84_t _zs2536 = { .data = _zs2536_d, .size = 95 };
+static const char _zs2536_d[] = "take one from the source, and keep it for the walk: `with it: xs.iterate do for each e: it loop ...`";
+static const z_t84_t _zs2536 = { .data = _zs2536_d, .size = 100 };
 static const char _zs2552_d[] = "";
 static const z_t84_t _zs2552 = { .data = _zs2552_d, .size = 0 };
 static const char _zs2558_d[] = ".";
