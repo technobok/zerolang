@@ -762,17 +762,17 @@ perf: $(PERFBIN)
 # from the row and not from a use site, so a member reached only through
 # `spec.member` is never stamped used and must not be deferred.
 #
-# +1,633 for the integer range itself: `intrange` and a bodied `each` on the
+# +1,633 for the integer range itself: `intrange` and a bodied `times` on the
 # eight scalars are ~70 lines of new lib/system, which the self-compile
 # compiles like any other source. The DEMAND gate above is what keeps that off
-# the programs: a bodied `each` costs 1 line of emitted C in a program that
+# the programs: a bodied `times` costs 1 line of emitted C in a program that
 # never iterates, against 418 without it.
 #
 # +556 for the method-body demand gate: a bodied member of a RUNTIME-OWNED
 # type is walked only where the program calls it, so the gate is asked at every
 # bodied member of every type resolved. 0 behaviour -- no stdlib type has a
 # bodied member yet, so nothing is deferred; it is the ~30 net lines of src/.
-# It pays for itself the moment one does: a bodied `each` on the eight scalars
+# It pays for itself the moment one does: a bodied `times` on the eight scalars
 # costs 1 line of C in a program that never iterates, against 418 without it.
 #
 # +675 for the containment check asking whether the target is on the
@@ -1916,7 +1916,10 @@ perf: $(PERFBIN)
 #
 # +464 a suspending generator counts a zero-argument `N.each` header: 0
 # behaviour (the compiler's own source has no generator), 464 source.
-ALLOC_BASELINE := 2764559
+#
+# +38 integer `each` is renamed `times`: 2 behaviour (the well-known name pool
+# interns one more name), 36 source.
+ALLOC_BASELINE := 2764597
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -3046,7 +3049,7 @@ VIEW_GUARD_INLINE := Bytes.byteView:unemitted \
   str.length:inline str.size:inline str.string:byvalue \
   str.stringView:inline str.substring:inline \
   optionval.or:byvalue resultval.orPanic:byvalue resultval.or:byvalue \
-  intliteral.*:byvalue floatliteral.*:byvalue *.iterate:byvalue *.each:byvalue
+  intliteral.*:byvalue floatliteral.*:byvalue *.iterate:byvalue *.times:byvalue
 
 define VIEW_GUARD_AWK
 # Reads lib/system/*.z (declarations) and the C backings, then joins them.

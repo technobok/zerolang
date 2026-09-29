@@ -13495,7 +13495,7 @@ emitUserMethodLeg: function {
 
 # calleeHasBody -- the member this call names on `ownerTid` is written in
 # zerolang rather than supplied by the runtime. A native OWNER says nothing
-# about its individual members: the scalars are native and `each` / `upto` /
+# about its individual members: the scalars are native and `times` / `upto` /
 # `downto` on them have bodies.
 calleeHasBody: function {
     ast: Ast.view
@@ -24458,14 +24458,14 @@ emitIntRangeFor: function {
     }
 }
 
-# emitCountedRangeFor -- `for x: N.each loop`: the HALF-OPEN range, walked by
-# the same trip count the closed forms use. A count starts at 0 -- `each` takes
+# emitCountedRangeFor -- `for x: N.times loop`: the HALF-OPEN range, walked by
+# the same trip count the closed forms use. A count starts at 0 -- `times` takes
 # no argument to start it anywhere else. False when the operand drives no
 # counted range.
 #
 # THE COUNT IS READ ONCE, which is the whole of the difference from
 # `x < (N)`: that re-read N at every test, so a body that assigned to N drove
-# the loop -- `for i: n.each loop { n = n + 100 }` never terminated, while the
+# the loop -- `for i: n.times loop { n = n + 100 }` never terminated, while the
 # same range held as a value ran n times, because `intrange` captures its count
 # at construction. One spelling of one loop cannot mean two things.
 emitCountedRangeFor: function {
@@ -24719,15 +24719,14 @@ isIntScalarName: function {name: StringView} out bool is {
     return (known.contains needle: probe)
 }
 
-# isCountRangeMemberId -- `each`, by INTERNED ID: the COUNT family, whose
+# isCountRangeMemberId -- `times`, by INTERNED ID: the COUNT family, whose
 # receiver is the range's BOUND and whose walk is half-open. Both legs of the
-# count emit ask through here, and they must agree: one recogniser once
-# accepted `each` while the bound reader compared the spelling "iterate" alone,
-# so `for x: N.each loop` missed the counted-loop path, fell through to the
-# iterator protocol, and never advanced -- a loop that printed the receiver
-# forever.
+# count emit ask through here, and they must agree: a recogniser that accepts
+# the member while the bound reader does not sends `for x: N.times loop` past
+# the counted-loop path into the iterator protocol, where it never advances --
+# a loop that prints the receiver forever.
 isCountRangeMemberId: function {id: zast.nameid} out bool is {
-    return id == zast.names.wkEach
+    return id == zast.names.wkTimes
 }
 
 # isClosedRangeMemberId -- `upto` or `downto`, by INTERNED ID. SEPARATE from
@@ -24735,7 +24734,7 @@ isCountRangeMemberId: function {id: zast.nameid} out bool is {
 # range's BOUND, and a closed range's receiver is its START. Teaching the two
 # names to it would emit `for (T i = 0; i < start; i++)` and walk the wrong
 # values with no diagnostic -- the mirror of the failure recorded above, where
-# one of two recognisers learned `each` and the other did not. rangeCType asks
+# one of two recognisers knows the member and the other does not. rangeCType asks
 # both, because the width is the receiver's whichever family it is.
 isClosedRangeMemberId: function {id: zast.nameid} out bool is {
     return id == zast.names.wkUpto or (id == zast.names.wkDownto)
@@ -24784,7 +24783,7 @@ rangeToExpr: function {
     }
 }
 
-# countRangeCountExpr -- the trip count `each` walks: the receiver itself,
+# countRangeCountExpr -- the trip count `times` walks: the receiver itself,
 # which IS the count, read once into u64.
 #
 # A SIGNED receiver clamps at zero, as the stdlib body does with
@@ -24824,11 +24823,11 @@ closedRangeCountExpr: function {from: StringView to: StringView down: bool} out 
     return cu
 }
 
-# rangeBoundExpr -- the upper bound of an `N.each` range: the dotted receiver
+# rangeBoundExpr -- the upper bound of an `N.times` range: the dotted receiver
 # N, which the half-open walk stops below. "" for anything else.
 #
 # There is no other shape to read. Integers are not iterable, so no bare
-# `for x: N loop` makes an operand its own bound, and `each` takes no arguments,
+# `for x: N loop` makes an operand its own bound, and `times` takes no arguments,
 # so it is never a call. A CLOSED range is read by rangeStartExpr/rangeToExpr
 # instead -- its receiver is the range's start, not its bound.
 rangeBoundExpr: function {
@@ -24842,7 +24841,7 @@ rangeBoundExpr: function {
     ) case dottedpath then {
         cmnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64)
         if (isCountRangeMemberId id: cmnId) then {
-            # the receiver may be a dotted path itself (squares.length.each) --
+            # the receiver may be a dotted path itself (squares.length.times) --
             # stampTidDeep resolves its scalar type either way
             bct: (intScalarCTypeOf
                 :symtab
