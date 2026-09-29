@@ -1944,7 +1944,10 @@ perf: $(PERFBIN)
 #
 # +3 L029 and the corpus without its written `.iterate`: 0 behaviour, 3 source
 # (the rule's own code, against the calls the compiler's walks no longer spell).
-ALLOC_BASELINE := 2771926
+#
+# -2,509 `with it: X do for each e: it` collapses to `for each e: X`: 0
+# behaviour, -2,509 source (a `with` scope and binding fewer per walk).
+ALLOC_BASELINE := 2769417
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
