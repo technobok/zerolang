@@ -1,0 +1,100 @@
+# A BARE CALLABLE OBJECT IS A CALL. A value whose type has a `call` METHOD is
+# called when read bare, as a function's name and a function reference are --
+# a local, a parameter, a field and a `for` element alike -- and its value is
+# what `call` answers. A marker keeps the object itself: `.borrow` hands it to
+# a function, `.take` moves it, `return g.take` returns it. An arm or a field
+# named `call` makes nothing callable.
+Tally: class {
+    n: i64
+} as {
+    call: function {:this} out i64 is {
+        this.n = this.n + 1
+        return this.n
+    }
+}
+
+Ticks: class {
+    n: i64
+    lim: i64
+} as {
+    call: function {:this} out optionval i64 is {
+        if this.n >= this.lim then return (optionval.none i64)
+        this.n = this.n + 1
+        return (optionval.some this.n)
+    }
+}
+
+Holder: class {
+    t: Tally
+    k: Ticks
+}
+
+Pair: generator { a: i64 b: i64 } as {
+    call: function out i64 is {
+        yield this.a
+        yield this.b
+    }
+}
+
+# a sum with an arm named `call`: a value, never called
+step: variant {
+    call: i64
+    halt: null
+}
+
+# a parameter read bare
+next: function {t: Tally} out i64 is {
+    return t
+}
+
+# the object handed on with a marker
+drain: function {k: Ticks} out i64 is {
+    total: 0
+    for v: k loop total = total + v
+    return total
+}
+
+keep: function out Ticks is {
+    g: Ticks n: 0 lim: 2
+    return g.take
+}
+
+# a generator body reads a field's object bare across its suspensions
+Echo: generator { src: Tally } as {
+    call: function out i64 is {
+        yield this.src
+        yield this.src
+    }
+}
+
+main: function is {
+    t: Tally n: 0
+    # a binding, an interpolation, an argument; the object itself is handed on
+    # with a marker
+    a: t
+    print "\{a} \{t} \{next t: t.borrow} \{a + 100}"
+    # a field and a condition
+    h: Holder t: (Tally n: 10) k: (Ticks n: 0 lim: 3)
+    print "\{h.t}"
+    if h.k then print "some"
+    # a plain `for` walks a bare object: it is called every iteration
+    for v: h.k loop print "walk \{v}"
+    # markers keep the object
+    print "\{drain k: (Ticks n: 0 lim: 3)} \{drain k: keep}"
+    w: Ticks n: 0 lim: 4
+    print "\{drain k: w.borrow} \{w.n}"
+    # a generator read bare answers its next yield
+    p: Pair a: 7 b: 8
+    x: p
+    y: p
+    match (x) case some then print "gen \{x}" case none then null
+    match (y) case some then print "gen \{y}" case none then null
+    # `for` elements that are objects
+    ts: List Tally
+    ts.append (Tally n: 40)
+    ts.append (Tally n: 50)
+    for each e: ts.iterateMut loop print "element \{e}"
+    for each z: (Echo src: (Tally n: 0)) loop print "echo \{z}"
+    s: step.call 3
+    match (s) case call then print "arm \{s}" case halt then null
+}

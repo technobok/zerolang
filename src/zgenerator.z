@@ -848,7 +848,7 @@ promoteInExpr: function {
 # promoteForCond -- one condition of a for-loop being promoted: a
 # suspending loop's non-trivial `each` iterable moves into a synthetic
 # `_iterN` binding (appended to `dst`, ahead of the loop) and the condition
-# then names `_iterN`; any other condition is a deep copy. The new condition's id
+# then walks `_iterN.borrow`; any other condition is a deep copy. The new condition's id
 # goes to `nconds`.
 promoteForCond: function {
     ast: Ast
@@ -905,8 +905,19 @@ promoteForCond: function {
         # an owned copy: the name must outlive the mints below, which lend ast
         )
         cn1: zast.nameTextCopy :ast ref: cnId
+        # the loop walks the object `_iterN` holds -- an iterator, or a
+        # container through its `iterate` -- and does not call it: a bare
+        # callable is called (D1), so the walk names it with a marker
         na0: mkAtom :ast line: hl0 col: hc0 name: snv0
-        nc0: mkNamedOp :ast line: hl0 col: hc0 name: cn1.stringView op: na0
+        nb0: mkAtom :ast line: hl0 col: hc0 name: "borrow"
+        nd0: astnode.dottedpath (zast.dottedpathrow
+            nodeid: (zast.tableReserve :ast)
+            lineno: hl0
+            colno: hc0
+            parent: (zast.tableAdd :ast n: na0)
+            child: (zast.tableAdd :ast n: nb0)
+        )
+        nc0: mkNamedOp :ast line: hl0 col: hc0 name: cn1.stringView op: nd0
         nconds.append (zast.tableAdd :ast n: nc0)
     } else {
         cc0: zast.cloneTreeAt :ast nid: (zast.nodeid.create from: c0Id)

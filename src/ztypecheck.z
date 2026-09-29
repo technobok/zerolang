@@ -29345,7 +29345,49 @@ checkResolvedMember: function {
     if coerce then reportBareMemberRef :st :ast :unitDecl :dp :bt :cnId :mo :result
     reportPrivateMember :st :ast :dp :bt :cnId :aliasViaX
     stampGate :st nid: dp.nid.u64 tid: result
-    return result
+    return (callFieldObject :st :unitDecl :ast :dp :mo :coerce :result)
+}
+
+# callFieldObject -- a FIELD holding a callable object is called when read bare
+# (D10), as a variable holding one is: the read, already checked, becomes the
+# base of its `call`, and only the call is checked on top of it. Answers the
+# read's type unchanged when it is not such a field.
+callFieldObject: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    dp: dpref
+    # the member read, a field unless it is a function
+    mo: u64
+    # the read is in value position, where a bare path is called
+    coerce: bool
+    # the field read's type
+    result: ztypes.tid
+} out ztypes.tid is {
+    if coerce.not then return result
+    moKind: st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)
+    if moKind == ztypes.ztypetype.functionType then return result
+    oc: readsObjectAsCall :st :ast t: result nid: dp.nid.u64
+    if oc.isZero then return result
+    if (fnAutoCallable :st mid: oc).not then {
+        wtp: ListVal zast.nameid
+        appendValueTuple :ast n: (ast.nodes.get i: dp.nid.u64) dst: wtp
+        wpath: zenv.formatPath pool: ast.names path: wtp.listView
+        (bareFnRefErrorFor
+            :ast
+            :st
+            nodeid: dp.nid
+            lineno: dp.lineno
+            colno: dp.colno
+            width: 1
+            fid: oc
+            written: wpath.stringView
+            refHint: false
+        )
+        return result
+    }
+    rewriteFieldReadAsObjectCall :st :ast :dp tid: result
+    return (checkDottedOn :st :unitDecl :ast dp: (dpRefAt :ast nid: dp.nid) bt: result coerce: true)
 }
 
 # refuseMarkerWithoutStorage -- an ownership marker (`.take`, `.borrow`, `.hold`)
@@ -30610,6 +30652,171 @@ rewriteReadAsCall: function {ast: Ast node: atomref} is {
     )
 }
 
+# eachSubjectNidOf -- the value node of a `for each` header, whose bare
+# callable object is walked rather than called (eachSubjectNid); 0 for a plain
+# header, whose value is called.
+eachSubjectNidOf: function {isEach: bool nid: zast.nodeid} out u64 is {
+    if isEach then return nid.u64
+    return 0
+}
+
+# objectCallOf -- the `call` METHOD a value of type `t` answers to, when it has
+# one: the member that makes an object callable. An arm or a field named `call`
+# does not. 0 for a function type and for any type without one.
+objectCallOf: function {st: zenv.ZSymbolTable ast: Ast t: ztypes.tid} out ztypes.tid is {
+    if t.isZero then return t
+    tt: st.reg.typetypeOf typeId: t
+    if tt == ztypes.ztypetype.functionType then return ztypes.tid
+    if tt == ztypes.ztypetype.genericParam then return ztypes.tid
+    forceMemberOf :st :ast parentTypeId: t nameId: zast.names.wkCall
+    co: st.typing.declChildOfId parentTypeId: t nameId: zast.names.wkCall
+    match (
+        co
+    ) case some then {
+        ct: ztypes.tid.create from: co.u64
+        if (st.reg.typetypeOf typeId: ct) != ztypes.ztypetype.functionType then return ztypes.tid
+        fnField: st.typing.declIsFnptrFieldId parentTypeId: t nameId: zast.names.wkCall
+        if fnField then return ztypes.tid
+        return ct
+    } case none then {
+        return ztypes.tid
+    }
+}
+
+# readsObjectAsCall -- a bare read of the value `nid`, of type `t`, is a call of
+# the object's `call`: the type has one, and nothing asks for the object itself
+# -- no marker after it (suppressFnAutoCall), not a dotted path's base
+# (suppressBareCtor), not a write target, and not the value of a `for each`
+# header (eachSubjectNid). 0 when it is read as the object.
+readsObjectAsCall: function {
+    st: zenv.ZSymbolTable ast: Ast t: ztypes.tid nid: u64
+} out ztypes.tid is {
+    if st.typing.suppressFnAutoCall or st.typing.suppressBareCtor then return ztypes.tid
+    if st.typing.inAssignTarget then return ztypes.tid
+    if nid == st.typing.eachSubjectNid then return ztypes.tid
+    return (objectCallOf :st :ast :t)
+}
+
+# callsObjectBare -- the bare read `node`, of type `t`, of a callable object is
+# rewritten into its call (rewriteReadAsObjectCall), answering true: the caller
+# walks the call. A `call` that needs input is refused as a bare call missing
+# its arguments, naming the read as written, and the read stays the object.
+callsObjectBare: function {st: zenv.ZSymbolTable ast: Ast node: atomref t: ztypes.tid} out bool is {
+    oc: readsObjectAsCall :st :ast :t nid: node.nid.u64
+    if oc.isZero then return false
+    if (fnAutoCallable :st mid: oc) then {
+        rewriteReadAsObjectCall :ast :node
+        return true
+    }
+    nm: zast.nameTextCopy :ast ref: node.name
+    (bareFnRefErrorFor
+        :ast
+        :st
+        nodeid: node.nid
+        lineno: node.lineno
+        colno: node.colno
+        width: nm.length.u32.orPanic
+        fid: oc
+        written: nm.stringView
+        refHint: false
+    )
+    return false
+}
+
+# rewriteReadAsObjectCall -- the bare read `node` of a callable object becomes,
+# in the tree, `node.call`: the read moves to a fresh row, and the read's own row
+# -- which every parent already holds -- becomes the dotted path of its `call`,
+# at the read's position. What is walked next, and emitted, is the written call.
+rewriteReadAsObjectCall: function {ast: Ast node: atomref} is {
+    start: ast.nodes.length
+    aid: zast.tableReserve :ast
+    (zast.tableAdd
+        :ast
+        n: astnode.atomid (zast.atomidrow
+            nodeid: aid
+            lineno: node.lineno
+            colno: node.colno
+            name: node.name
+        )
+    )
+    cid: zast.tableReserve :ast
+    (zast.tableAdd
+        :ast
+        n: astnode.atomid (zast.atomidrow
+            nodeid: cid
+            lineno: node.lineno
+            colno: node.colno
+            name: zast.names.wkCall
+        )
+    )
+    fs: ast.fsnoForNode nodeid: node.nid.u32
+    if fs.u64 > 0 then ast.fileSegs.append (zast.FileSeg
+        startId: start.u32.orPanic
+        endId: ast.nodes.length.u32.orPanic
+        fsno: fs
+    )
+    (zast.tableSet
+        :ast
+        id: node.nid.u32
+        child: astnode.dottedpath (zast.dottedpathrow
+            nodeid: node.nid
+            lineno: node.lineno
+            colno: node.colno
+            parent: aid
+            child: cid
+        )
+    )
+}
+
+# rewriteFieldReadAsObjectCall -- the checked field read `dp` of a callable
+# object becomes, in the tree, the base of its `call`: the read moves to a fresh
+# row (keeping its stamp), and its own row -- which its parent holds -- becomes
+# the dotted path `<read>.call`.
+rewriteFieldReadAsObjectCall: function {
+    st: zenv.ZSymbolTable ast: Ast dp: dpref tid: ztypes.tid
+} is {
+    start: ast.nodes.length
+    rid: zast.tableReserve :ast
+    (zast.tableAdd
+        :ast
+        n: astnode.dottedpath (zast.dottedpathrow
+            nodeid: rid
+            lineno: dp.lineno
+            colno: dp.colno
+            parent: dp.parent
+            child: dp.child
+        )
+    )
+    stampGate :st nid: rid.u64 :tid
+    cid: zast.tableReserve :ast
+    (zast.tableAdd
+        :ast
+        n: astnode.atomid (zast.atomidrow
+            nodeid: cid
+            lineno: dp.lineno
+            colno: dp.colno
+            name: zast.names.wkCall
+        )
+    )
+    fs: ast.fsnoForNode nodeid: dp.nid.u32
+    if fs.u64 > 0 then ast.fileSegs.append (zast.FileSeg
+        startId: start.u32.orPanic
+        endId: ast.nodes.length.u32.orPanic
+        fsno: fs
+    )
+    (zast.tableSet
+        :ast
+        id: dp.nid.u32
+        child: astnode.dottedpath (zast.dottedpathrow
+            nodeid: dp.nid
+            lineno: dp.lineno
+            colno: dp.colno
+            parent: rid
+            child: cid
+        )
+    )
+}
+
 # readsFnRefAsCall -- a read of a variable of type `t` is a call of the function
 # it holds: `t` is a function type and nothing asks for the reference -- no
 # marker after it (suppressFnAutoCall), and not the target of a write.
@@ -31411,6 +31618,11 @@ checkAtomid: function {
         # as the function's own name is. The read BECOMES the call in the tree
         # (rewriteReadAsCall), so everything after -- receiver temporaries,
         # path roots, the emitter -- sees a call, not the variable's storage.
+        # a variable holding a callable object is called when read bare: the
+        # read becomes `x.call` in the tree (rewriteReadAsObjectCall)
+        if (callsObjectBare :st :ast :node t: result) then {
+            return (checkValueAt :st :unitDecl :ast nid: node.nid)
+        }
         if (readsFnRefAsCall :st t: result) then {
             if (fnAutoCallable :st mid: result) then {
                 rewriteReadAsCall :ast :node
@@ -35230,6 +35442,8 @@ checkForCondition: function {
     # a 0-arg generator still has to be invoked.
     bfrFor: st.typing.allowBareFnRef
     st.typing.allowBareFnRef = true
+    esPrev: st.typing.eachSubjectNid
+    st.typing.eachSubjectNid = eachSubjectNidOf :isEach nid: cond.operation
     if facId > 0 then {
         # the factory's lazy walks (its body + the iterator class's
         # methods via return-first transitivity) fire before the
@@ -35247,6 +35461,7 @@ checkForCondition: function {
         vt = checkValueAt :st :unitDecl :ast nid: cond.operation
     }
     st.typing.allowBareFnRef = bfrFor
+    st.typing.eachSubjectNid = esPrev
     if (refuseNonValue :st :ast :vt nid: cond.operation) then vt = ztypes.tid
     # a condition that typed to nothing and raised nothing is an
     # unresolvable name -- the same rule the binding and operand sites
@@ -47683,6 +47898,9 @@ checkLabelValueAt: function {
         # is its namedoperation's, and the value becomes the call. A lowering's
         # forward hands the parameter on as it is.
         fwd: zast.isForwardingLabel n: (ast.nodes.get i: lv.nid.u64)
+        if fwd.not when (callsObjectBare :st :ast node: lv t: lvt) then {
+            return (checkValueAt :st :unitDecl :ast nid: lv.nid)
+        }
         if fwd.not when (readsFnRefAsCall :st t: lvt) then {
             if (fnAutoCallable :st mid: lvt) then {
                 rewriteReadAsCall :ast node: lv
