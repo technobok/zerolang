@@ -133068,7 +133068,7 @@ z_t6837_t z_t6600(z_t1186_t* z_v28240, uint64_t z_v28241, z_t657_t* z_v28242, z_
     if (z_t7517(&z_v28240->reg, z_v28254) != ((uint8_t)Z_ZTYPETYPE_TAG_FUNCTIONTYPE)) {
         return z_v28246;
     }
-    if (!(z_t6594(z_v28240, z_v28254))) {
+    if (!(z_t6561(z_v28240, z_v28254))) {
         return z_v28246;
     }
     uint32_t z_v28278 = z_t6842(z_v28240, z_v28242, z_v28243);
