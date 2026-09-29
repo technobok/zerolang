@@ -12,6 +12,9 @@ public: unit {
     :markerKindOf
     :markerKindOfLeaf
     :markerKindOfName
+    :callsBeforeMarker
+    :isGroupedPath
+    :isValueMarkerLeaf
     :assignmentrow
     :Ast
     :atomidrow
@@ -668,6 +671,10 @@ atomidrow: record {
     # the interned name this atom spells. An id, not text: names are compared by
     # id everywhere downstream
     name: nameid
+    # written inside parentheses of its own, `(mk)`. Read SEMANTICALLY, as the
+    # call's `infix` is: parentheses round a callable path force its call, so a
+    # marker after them applies to the result (`callsBeforeMarker`)
+    grouped: false
 }
 
 # a label-value node (a `name:`-shaped operand): position + interned name id.
@@ -1175,6 +1182,9 @@ dottedpathrow: record {
     # the right of the dot. The pair is a PATH and not a call: whether it calls
     # is decided later
     child: nodeid
+    # the whole path was written inside parentheses of its own, `(e.key)` -- as
+    # an atom's `grouped`
+    grouped: false
 }
 
 # Call node payload: the callable path and an ordered list of
@@ -2153,6 +2163,7 @@ cloneArm: function {
             lineno: n.lineno
             colno: n.colno
             name: n.name
+            grouped: n.grouped
         )
         )
     } case labelvalue then {
@@ -2170,6 +2181,7 @@ cloneArm: function {
             colno: n.colno
             parent: (nodeid.create from: (cloned.get i: 0))
             child: (nodeid.create from: (cloned.get i: 1))
+            grouped: n.grouped
         )
         )
     } case call then {
@@ -3081,6 +3093,44 @@ markerKindOf: function {ast: Ast.view n: astnode.view} out markerkind is {
     } else {
         return markerkind.unmarked
     }
+}
+
+# isGroupedPath -- `n` is a name or a dotted path written inside parentheses of
+# its own.
+isGroupedPath: function {n: astnode.view} out bool is {
+    match (
+        n
+    ) case atomid then {
+        return n.grouped
+    } case dottedpath then {
+        return n.grouped
+    } else {
+        return false
+    }
+}
+
+# isValueMarkerLeaf -- the leaf spells a marker that says what a VALUE is handed
+# on as: `.copy`, `.take`, `.borrow`, `.view` or `.hold`. `.copy` is a name, not
+# a keyword, so it is told by its text.
+isValueMarkerLeaf: function {ast: Ast.view leaf: nodeid} out bool is {
+    k: markerKindOfLeaf :ast :leaf
+    if k.takeMarker or k.borrowMarker or k.viewMarker or k.holdMarker then return true
+    c: ast.nodes.get i: leaf.u64
+    match (
+        c
+    ) case atomid then {
+        return (nameTextEq :ast ref: c.name s: "copy")
+    } else {
+        return false
+    }
+}
+
+# callsBeforeMarker -- the dotted path `parent.child` has a parent written in
+# parentheses of its own and a value marker for its child: `(mk).copy`. The
+# parentheses force the parent's call, and the marker applies to the result.
+callsBeforeMarker: function {ast: Ast.view parent: nodeid child: nodeid} out bool is {
+    if (isGroupedPath n: (ast.nodes.get i: parent.u64)).not then return false
+    return (isValueMarkerLeaf :ast leaf: child)
 }
 
 # isGenericParamOp -- true when `opId` declares a generic parameter --

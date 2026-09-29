@@ -649,7 +649,9 @@ Parser: class {
     # atomexpr: filled in by the next stage.
     # atomexpr -> "(" expression ")". EOLs are filtered inside the parens
     # (a parenthesised expression may span lines). Returns the node inside
-    # the parentheses, or an error: grouping is recorded by the tree's shape.
+    # the parentheses, or an error: grouping is recorded by the tree's shape,
+    # except that a lone name or dotted path records it was grouped
+    # (markGrouped) -- a marker after it applies to the path's call.
     parseAtomExpr: function {:this lex: zlexer.Lexer} out astnode is {
         firstPos: lex.peekPos
         openOpt: lex.accept tt: zlexer.toktype.parenOpenTok pool: this.ast.names
@@ -675,7 +677,7 @@ Parser: class {
             match (
                 closeOpt
             ) case some then {
-                return expr
+                return (Parser.markGrouped node: expr)
             } case none then {
                 badPos: lex.peekPos
                 return (this.mkErrorAt
@@ -684,6 +686,36 @@ Parser: class {
                     msg: "Expected closing parenthesis".string
                 )
             }
+        }
+    }
+
+    # markGrouped -- `node` as written inside parentheses of its own. Only a
+    # name or a dotted path records it: parentheses round anything else are
+    # grouping alone, recorded by the tree's shape.
+    markGrouped: function {node: astnode} out astnode is {
+        match (
+            node
+        ) case atomid then {
+            return (astnode.atomid (zast.atomidrow
+                nodeid: node.nodeid
+                lineno: node.lineno
+                colno: node.colno
+                name: node.name
+                grouped: true
+            )
+            )
+        } case dottedpath then {
+            return (astnode.dottedpath (zast.dottedpathrow
+                nodeid: node.nodeid
+                lineno: node.lineno
+                colno: node.colno
+                parent: node.parent
+                child: node.child
+                grouped: true
+            )
+            )
+        } else {
+            return node
         }
     }
 

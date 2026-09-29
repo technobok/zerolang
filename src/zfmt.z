@@ -41,6 +41,12 @@ slotJuxta: 2.u8
 # element: anything compound runs on
 slotTight: 1.u8
 
+# the base of a value marker that was written in parentheses, `(mk).copy`.
+# There the pair is not layout: it forces the base's call, so the marker
+# applies to the result (zast.callsBeforeMarker). Below every shape rank, so
+# every shape keeps it
+slotCalled: 0.u8
+
 # a string interpolation hole. Above every shape rank, like slotLine, so the
 # grammar asks for nothing; distinct from it because the BRACES delimit a break
 # here and no pair has to be inserted for one
@@ -999,7 +1005,10 @@ Builder: class {
         match (
             n
         ) case dottedpath then {
-            xs.append (this.visitValue id: n.parent slot: slotTight wrapped: false)
+            pslot: slotTight
+            called: zast.callsBeforeMarker ast: this.ast parent: n.parent child: n.child
+            if called then pslot = slotCalled
+            xs.append (this.visitValue id: n.parent slot: pslot wrapped: false)
             xs.append (this.tok tt: zlexer.toktype.dotTok)
             childTt: zlexer.toktype.refIdTok
             if (zlexer.isMarkerTok tt: this.c.peekKind) then childTt = this.c.peekKind
@@ -2047,6 +2056,17 @@ sameFacts: function {
         return (sameName :a ra: xa.name :b :xb)
     } case caseclause then {
         return (sameName :a ra: xa.name :b :xb)
+    } case dottedpath then {
+        # parentheses round a marker's base force its call: a printer that
+        # dropped them would change what the marker applies to
+        match (
+            xb
+        ) case dottedpath then {
+            ca: zast.callsBeforeMarker ast: a parent: xa.parent child: xa.child
+            return ca == (zast.callsBeforeMarker ast: b parent: xb.parent child: xb.child)
+        } else {
+            return false
+        }
     } case stringchunk then {
         match (
             xb
