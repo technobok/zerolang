@@ -25988,26 +25988,6 @@ unionCreateArmName: function {
     }
 }
 
-# valueNoCoerceAt -- checkValueAt minus the value-position auto-call coercion
-# (construction arguments take method REFERENCES for function-typed fields).
-valueNoCoerceAt: function {
-    st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
-    ast: Ast
-    nid: zast.nodeid
-} out u64 is {
-    arm: rowArmAt :ast :nid
-    match (
-        arm
-    ) case dottedpath then {
-        dr: dpRefAt :ast :nid
-        return (checkDotted :st :unitDecl :ast dp: dr coerce: false)
-    } else {
-        return (checkValueAt :st :unitDecl :ast :nid)
-    }
-}
-
-
 # borrowProjectionSource -- the source of a projection marked `.borrow`: a
 # protocol's instance borrows it in place (pinProjectionBorrow). A facet holds
 # a COPY of its source, so on a facet projection (`sizer p.borrow`) the marker
@@ -29220,6 +29200,11 @@ reportBareMemberRef: function {
     cn: zast.nameTextCopy :ast ref: cnId
     bfl: nodeLine n: (ast.nodes.get i: dp.child.u64)
     bfc: nodeCol n: (ast.nodes.get i: dp.child.u64)
+    # the read is named as written: the whole path, which is also how its
+    # reference is spelled (`Gauge.tenfold.copy`)
+    wtp: ListVal zast.nameid
+    appendValueTuple :ast n: (ast.nodes.get i: dp.nid.u64) dst: wtp
+    wpath: zenv.formatPath pool: ast.names path: wtp.listView
     (bareFnRefErrorFor
         :ast
         :st
@@ -29228,7 +29213,7 @@ reportBareMemberRef: function {
         colno: bfc
         width: cn.length.u32.orPanic
         fid: result
-        written: cn.stringView
+        written: wpath.stringView
         refHint: (readsMethodThroughInstance :st :ast :unitDecl :dp :bt :mo).not
     )
 }
@@ -33213,18 +33198,12 @@ checkReassignment: function {
     if (refuseModeChange :st :ast :rasgn targetHeld: hbVid > 0 vt: ztypes.tid) then return
     checkWriteLock :st :ast n: (ast.nodes.get i: rasgn.topath.u64) verb: "assign to" moving: false
     errR0: st.typing.errors.length
-    # a FUNCTION-typed target takes a method REFERENCE, exactly as the same
-    # field's constructor argument does: its value walks without the
-    # value-position auto-call
-    rvt: ztypes.tid
-    if lvt > 0 when (st.reg.typetypeOf typeId: lvt) == ztypes.ztypetype.functionType then {
-        rvt = ztypes.tid.create from: (valueNoCoerceAt :st :unitDecl :ast nid: rasgn.value)
-    } else {
-        owPrev: st.typing.owningValueNid
-        st.typing.owningValueNid = valueCoreNid :ast nid: rasgn.value
-        rvt = checkMovedValueAt :st :unitDecl :ast nid: rasgn.value
-        st.typing.owningValueNid = owPrev
-    }
+    # a function-typed target is written a reference as any value is: a bare
+    # callable path is called, and `.copy` is the reference
+    owPrev: st.typing.owningValueNid
+    st.typing.owningValueNid = valueCoreNid :ast nid: rasgn.value
+    rvt: checkMovedValueAt :st :unitDecl :ast nid: rasgn.value
+    st.typing.owningValueNid = owPrev
     # a value that resolved to nothing and raised nothing: an unresolvable
     # root name is an unknown reference, as at a binding
     if rvt.isZero when st.typing.errors.length == errR0 then {
@@ -40959,33 +40938,6 @@ ctorEffectiveTid: function {
     return effId
 }
 
-# ctorArgTakesFnRef -- a FUNCTION-typed field takes a method REFERENCE, so its
-# constructor argument walks without the value-position auto-call coercion.
-ctorArgTakesFnRef: function {
-    st: zenv.ZSymbolTable.view
-    ast: Ast.view
-    effId: ztypes.tid
-    arg: argref
-} out bool is {
-    useNC: false
-    pn0: zast.nameTextAt :ast ref: arg.name
-    if pn0.length > 0 then {
-        fco: (st.typing.declChildOf
-            pool: ast.names
-            parentTypeId: effId
-            name: pn0.stringView
-        )
-        fcid: fco.or d: 0
-        if fcid > 0 when (
-            (st.reg.typetypeOf typeId: (ztypes.tid.create from: fcid.u64)) ==
-            ztypes.ztypetype.functionType
-        ) then {
-            useNC = true
-        }
-    }
-    return useNC
-}
-
 # walkOneCallArg -- type one argument of a call and bind it to its parameter.
 # A locked source joins `pins`, the locks the call's result may keep.
 walkOneCallArg: function {
@@ -41031,19 +40983,13 @@ walkOneCallArg: function {
         }
     }
     if arg.nid.isZero.not then {
-        # a FUNCTION-typed field takes a method REFERENCE: its ctor
-        # argument walks without the value-position auto-call coercion.
-        useNC: false
-        if isCtor then useNC = ctorArgTakesFnRef :st :ast :effId :arg
         vt: ztypes.tid
         errV: st.typing.errors.length
         # a type argument names a type: it constructs nothing
         isTypeArg: isCtor and (ctorArgIsTypeArg :st tplId: funcId :arg)
         tpa: ztypes.tid
-        if isTypeArg when useNC.not then tpa = ctorTypeArgParamTid :st :ast :unitDecl :arg
-        if useNC then {
-            vt = ztypes.tid.create from: (valueNoCoerceAt :st :unitDecl :ast nid: arg.operation)
-        } else if tpa.isZero.not then {
+        if isTypeArg then tpa = ctorTypeArgParamTid :st :ast :unitDecl :arg
+        if tpa.isZero.not then {
             vt = tpa
             stampGate :st nid: arg.operation.u64 tid: vt
         } else {
