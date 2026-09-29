@@ -1826,8 +1826,9 @@ main: function is {
   b: Bag a: 10 b: 20 c: 30 count: 3
 
   # 'with' creates the iterator and scopes its lifetime.
-  # The 'for' loop calls the iterator on each iteration.
-  with iter: Bag.iterate b: b do for each x: iter loop {
+  # The plain 'for' binding calls it on each iteration: read bare,
+  # an iterator is its call.
+  with iter: Bag.iterate b: b do for x: iter loop {
     print "iter: \{x}"
   }
 
@@ -1839,10 +1840,11 @@ main: function is {
 }</code></pre>
 <h3 id="pin-lifecycle-in-the-for-loop"><a href="#pin-lifecycle-in-the-for-loop">13.3. Pin Lifecycle in the For-Loop</a></h3>
 <p>The iterator may be created explicitly with <code>with</code> before the <code>for</code>
-loop; <code>for each</code> also accepts a call that answers one, or a container
-whose <code>iterate</code> it calls (it creates the hidden binding itself). The
-explicit form is:</p>
-<pre><code class="language-zerolang">with iter: container.iterate c: c do for each x: iter loop { ... }</code></pre>
+loop, and is then walked by the plain binding, which calls it every iteration
+(read bare, an iterator is its <code>call</code>); <code>for each</code> accepts a call that
+answers one, or a container whose <code>iterate</code> it calls (it creates the hidden
+binding itself). The explicit form is:</p>
+<pre><code class="language-zerolang">with iter: container.iterate c: c do for x: iter loop { ... }</code></pre>
 <p>The pin lifecycle step by step, for a readonly stdlib walk over a list
 <code>xs</code>:</p>
 <pre><code class="language-zerolang">with iter: xs.iterate do {
@@ -1851,9 +1853,10 @@ explicit form is:</p>
   # readers on xs (length, get, another iterate) stay legal
   # while iter is alive; writers are refused
 
-  for each x: iter loop {
+  for x: iter loop {
     # Entry:
-    #   iter.call is invoked (iter is the receiver)
+    #   iter.call is invoked (iter is the receiver: read bare, the
+    #     iterator is its call)
     #   exclusive lock on iter during the call
     #   result checked -- the call returns (OptionView of), a
     #     borrowed view; none terminates the loop
@@ -1963,11 +1966,11 @@ match (
     # stolen: g1.take            # E0200: cannot move payload out of a view
 } case none then {}
 # m.set key: "c" ...             # E0200: writer while g1/g2 live</code></pre>
-<pre><code class="language-zerolang">with it: m.iterateItems do for each e: it loop {
+<pre><code class="language-zerolang">with it: m.iterateItems do for e: it loop {
     v: m.get key: e.key.copy     # E0200: m is exclusively locked by 'it'
 }
 # pair values with the iteration instead:
-with items: m.iterateItems do for each e: items loop {
+with items: m.iterateItems do for e: items loop {
     print "\{e.key}: \{e.value}"
 }</code></pre>
 <p>The same discipline covers strings: <code>sv: s.stringView</code> pins <code>s</code>

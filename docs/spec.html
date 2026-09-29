@@ -1253,7 +1253,7 @@ with v: p.first do print v
 # The call (bag.iterate b: b) is the single initialization expression
 # for the one binding 'iter' -- the named argument 'b:' belongs to
 # the call, not to with itself.
-with iter: (bag.iterate b: b) do for each x: iter loop { print x }</code></pre>
+with iter: (bag.iterate b: b) do for x: iter loop { print x }</code></pre>
 <p>When the RHS is a plain path reference the compiler may emit the
 binding as an alias for the source -- no stack slot is allocated. See
 the "Binding Aliases" section of <a href="./ownership.html">ownership for the exact</a>
@@ -1648,17 +1648,23 @@ compile error; see the "Ownership Transfer Inside Loops" section of
 <p>Pre-conditions are specified by the <code>while</code> keyword. This is the default
 argument and the argument name can be omitted if it is the first argument. A
 condition is a <code>bool</code> or any other 2-arm sum type, as everywhere else -- see
-<a href="#truthiness">truthiness</a>. An iterator is a value like any other there,
-and is not called for you: the call is written out, <code>for it.call loop</code>.</p>
+<a href="#truthiness">truthiness</a>. A callable object read bare is called there,
+as anywhere: <code>for it loop</code> runs while <code>it.call</code> answers <code>some</code>.</p>
 <p>A single binding ([var]: operation) may be the FIRST condition, and the
 header says how its value is evaluated:</p>
 <ul>
 <li><code>for each x: E</code> -- E is evaluated <em><strong>once</strong></em>, before the loop, and
 walked. When E's type declares an <code>iterate</code> callable with no
 arguments, the loop walks what <code>E.iterate</code> returns; otherwise E must
-itself be an iterator. The iterator's <code>.call</code> runs every iteration.</li>
+itself be an iterator. The iterator's <code>.call</code> runs every iteration.
+E is a container or an expression that <em><strong>produces</strong></em> an iterator -- a
+construction, a call, <code>xs.iterate</code>; a call's result is not called
+again. A variable holding an iterator, read bare, is called (once,
+here), so it is walked by the plain form.</li>
 <li><code>for x: E</code> -- E is evaluated at <em><strong>every</strong></em> iteration, and must itself
-answer <code>Option(t)</code>, <code>optionval(t)</code> or <code>OptionView(t)</code>.</li>
+answer <code>Option(t)</code>, <code>optionval(t)</code> or <code>OptionView(t)</code>. A named
+iterator read bare is its <code>call</code>, so the plain form walks it:
+<code>with it: xs.iterate do for x: it loop</code>.</li>
 </ul>
 <p>Either way a value of one of those three types is produced per iteration; the
 loop terminates when it is <code>none</code>, and binds 'var' to the unwrapped
@@ -1710,8 +1716,8 @@ for each e: xs loop {
     # e is the some-payload (narrowed); xs is pinned until the loop ends
 }
 
-# walk an iterator instance -- its .call answers an option
-with it: xs.iterate do for each v: it loop {
+# walk a named iterator -- read bare it is called, every iteration
+with it: xs.iterate do for v: it loop {
     # ...
 }
 
@@ -1769,24 +1775,33 @@ once, <code>E.iterate</code> is called once, and what it returns is walked --
 exactly as if <code>for each x: E.iterate</code> were written, with the same
 receiver lock and the same pins. <code>iterate</code> is asked <em><strong>first</strong></em>: a
 type with both <code>iterate</code> and <code>.call</code> is walked through
-<code>iterate</code>. Only <code>iterate</code> is implied; <code>.iterateMut</code>,
-<code>.iterateItems</code> and <code>.iterateReverse</code> are written.</li>
+<code>iterate</code> -- when E is not called first: read bare from a variable
+such a value is called, and <code>for each x: b.borrow</code> keeps it. Only
+<code>iterate</code> is implied; <code>.iterateMut</code>, <code>.iterateItems</code> and
+<code>.iterateReverse</code> are written.</li>
 <li><strong>Rule 2 (each, the iterator itself):</strong> <code>for each x: E</code> where T
 is iterator-shaped and has no <code>iterate</code>. E is evaluated once and is
 the iterator; <code>T.call</code> is invoked per iteration. This is the shape
-of a <code>with</code>-bound iterator, a construction such as
-<code>(TextReader file: f)</code>, and <code>5.times</code> / <code>2.upto to: 5</code>.</li>
+of an expression that produces an iterator: a construction such as
+<code>(TextReader file: f)</code>, <code>xs.iterate</code>, and <code>5.times</code> /
+<code>2.upto to: 5</code>. A variable holding an iterator is called when read
+bare, and is walked by Rule 3 instead (<code>for x: it</code>), or kept with a
+marker (<code>for each x: it.borrow</code>).</li>
 <li><strong>Rule 3 (plain):</strong> <code>for x: E</code> where T is <code>Option(t)</code>,
 <code>optionval(t)</code> or <code>OptionView(t)</code>. E is evaluated at every
 iteration and its value is the per-iteration value. A function name
 is a call there as anywhere, and so is a function <em><strong>reference</strong></em> read
 bare, so <code>for n: supplier loop</code> invokes <code>supplier</code> before each
-iteration whether it names a function or holds a reference to one.</li>
+iteration whether it names a function or holds a reference to one. So
+is a callable object read bare: <code>for x: it loop</code> walks a named
+iterator, calling it every iteration.</li>
 <li><strong>Anything else</strong> is a compile error naming the rule it breaks:
 <code>'for each' needs a type with 'iterate' or an iterator 'call'</code> or
 <code>a 'for' binding must answer an option</code>. An option under
-<code>each</code> is refused (evaluated once it answers once), and so is an
-iterator under the plain form (walking it is <code>for each</code>). A value
+<code>each</code> is refused (evaluated once it answers once) -- a bare iterator
+variable among them, since it is called -- and so is an iterator
+<em><strong>expression</strong></em> under the plain form (a call's result is not called
+again; walking it is <code>for each</code>). A value
 belongs before the loop, tested in the header: <code>sv: s.stringView</code>
 then <code>for sv.length &gt; 3 loop</code>.</li>
 </ol>
@@ -4339,6 +4354,14 @@ qualified name to the corresponding C implementation.</p>
 <code>:this</code> and returns one of <code>Option(t)</code>, <code>optionval(t)</code>, or
 <code>OptionView(t)</code>. <code>for each</code> drives an iterator by repeatedly
 invoking <code>.call</code> until the result's tag is <code>none</code>.</p>
+<p>An iterator -- like any value whose type has a <code>.call</code> -- is <em><strong>called</strong></em>
+when read bare, as a function's name is: <code>v: it</code> binds its next value, a
+condition <code>for it loop</code> loops while it answers <code>some</code>, and the plain
+binding <code>for x: it loop</code> walks it. The iterator itself is handed on with a
+marker: <code>drain src: it.borrow</code>, <code>h.src = it.take</code>, <code>return it.take</code>, and
+<code>for each x: it.borrow</code> walks it where <code>for each</code> is wanted. A member read
+off it (<code>it.n</code>) is a member of the object, not of its call; an arm or a field
+named <code>call</code> makes nothing callable.</p>
 <p><code>.iterate</code> is a container's walk, and the one member <code>for each</code> calls for
 you: <code>for each e: xs</code> walks what <code>xs.iterate</code> returns. Every other walk is
 written: <code>mymap.iterateItems</code> &#x2192; entries, <code>xs.iterateReverse</code>,
@@ -4371,7 +4394,7 @@ the loop -- the dispatch creates a hidden binding with that lifetime:</p>
 <pre><code class="language-zerolang">for each line: (textreader file: f) loop { ... }</code></pre>
 <p>An iterator the body must also name -- to read it, or to hand it on -- is bound
 with <code>with</code>, whose scope is the loop's:</p>
-<pre><code class="language-zerolang">with iter: (textreader file: f) do for each line: iter loop { ... }</code></pre>
+<pre><code class="language-zerolang">with iter: (textreader file: f) do for line: iter loop { ... }</code></pre>
 <p>The recommended container-iterator form is a <code>class</code> with a non-owned
 field referencing the container's private members. The container is pinned
 for the iterator's lifetime -- shared for a readonly walk, exclusive for a
@@ -4533,7 +4556,10 @@ an <code>is</code> field instead.</p>
 <p>The first <code>.call</code> supplies a value that nothing has yielded yet, so a first
 yield written in expression form binds what the call that RESUMES it supplies
 -- the second <code>.call</code>. <code>for each</code> drives a generator that receives
-nothing; one with an input is driven by the plain form, whose value -- the
+nothing when it is constructed in the header (<code>for each x: (Gen n: 3)</code>); a
+named one is walked by the plain form (<code>g: Gen n: 3</code> then <code>for x: g</code>),
+since read bare it is called. One with an input is driven by the plain form,
+whose value -- the
 call, input written in it -- is evaluated at every iteration (see
 For-loop dispatch).</p>
 <table>
@@ -4587,9 +4613,9 @@ outer one's body. Both forms work:
 <pre><code class="language-zerolang">  # inline
   for each x: (SubGen ...) loop { yield x }
 
-  # explicit binding (equivalent)
+  # explicit binding: a named generator is walked by the plain form
   inner: (SubGen ...)
-  for each x: inner loop { yield x }</code></pre>
+  for x: inner loop { yield x }</code></pre>
 
 A <code>for each</code> iterable that is a construction is hoisted to a temp
 before the loop, and that temp crosses the enclosing generator's

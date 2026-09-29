@@ -1253,7 +1253,7 @@ with v: p.first do print v
 # The call (bag.iterate b: b) is the single initialization expression
 # for the one binding 'iter' -- the named argument 'b:' belongs to
 # the call, not to with itself.
-with iter: (bag.iterate b: b) do for each x: iter loop { print x }
+with iter: (bag.iterate b: b) do for x: iter loop { print x }
 """
 
 When the RHS is a plain path reference the compiler may emit the
@@ -1678,8 +1678,8 @@ compile error; see the "Ownership Transfer Inside Loops" section of
 Pre-conditions are specified by the #~"while" keyword. This is the default
 argument and the argument name can be omitted if it is the first argument. A
 condition is a #~"bool" or any other 2-arm sum type, as everywhere else -- see
-[#> to=truthiness: truthiness]. An iterator is a value like any other there,
-and is not called for you: the call is written out, #~"for it.call loop".
+[#> to=truthiness: truthiness]. A callable object read bare is called there,
+as anywhere: #~"for it loop" runs while #~"it.call" answers #~"some".
 
 A single binding (\[var\]: operation) may be the FIRST condition, and the
 header says how its value is evaluated:
@@ -1688,9 +1688,15 @@ header says how its value is evaluated:
   [#*: #~"for each x: E" -- E is evaluated #_*"once", before the loop, and
       walked. When E's type declares an #~"iterate" callable with no
       arguments, the loop walks what #~"E.iterate" returns; otherwise E must
-      itself be an iterator. The iterator's #~".call" runs every iteration.]
+      itself be an iterator. The iterator's #~".call" runs every iteration.
+      E is a container or an expression that #_*"produces" an iterator -- a
+      construction, a call, #~"xs.iterate"; a call's result is not called
+      again. A variable holding an iterator, read bare, is called (once,
+      here), so it is walked by the plain form.]
   [#*: #~"for x: E" -- E is evaluated at #_*"every" iteration, and must itself
-      answer #~"Option(t)", #~"optionval(t)" or #~"OptionView(t)".]
+      answer #~"Option(t)", #~"optionval(t)" or #~"OptionView(t)". A named
+      iterator read bare is its #~"call", so the plain form walks it:
+      #~"with it: xs.iterate do for x: it loop".]
 
 Either way a value of one of those three types is produced per iteration; the
 loop terminates when it is #~"none", and binds 'var' to the unwrapped
@@ -1752,8 +1758,8 @@ values of the #~"loop" statement.
       # e is the some-payload (narrowed); xs is pinned until the loop ends
   }
 
-  # walk an iterator instance -- its .call answers an option
-  with it: xs.iterate do for each v: it loop {
+  # walk a named iterator -- read bare it is called, every iteration
+  with it: xs.iterate do for v: it loop {
       # ...
   }
 
@@ -1815,24 +1821,33 @@ Let T be the type the binding's value evaluates to.
       exactly as if #~"for each x: E.iterate" were written, with the same
       receiver lock and the same pins. #~"iterate" is asked #_*"first": a
       type with both #~"iterate" and #~".call" is walked through
-      #~"iterate". Only #~"iterate" is implied; #~".iterateMut",
-      #~".iterateItems" and #~".iterateReverse" are written.]
+      #~"iterate" -- when E is not called first: read bare from a variable
+      such a value is called, and #~"for each x: b.borrow" keeps it. Only
+      #~"iterate" is implied; #~".iterateMut", #~".iterateItems" and
+      #~".iterateReverse" are written.]
   [#*: #b:"Rule 2 (each, the iterator itself):" #~"for each x: E" where T
       is iterator-shaped and has no #~"iterate". E is evaluated once and is
       the iterator; #~"T.call" is invoked per iteration. This is the shape
-      of a #~"with"-bound iterator, a construction such as
-      #~"(TextReader file: f)", and #~"5.times" / #~"2.upto to: 5".]
+      of an expression that produces an iterator: a construction such as
+      #~"(TextReader file: f)", #~"xs.iterate", and #~"5.times" /
+      #~"2.upto to: 5". A variable holding an iterator is called when read
+      bare, and is walked by Rule 3 instead (#~"for x: it"), or kept with a
+      marker (#~"for each x: it.borrow").]
   [#*: #b:"Rule 3 (plain):" #~"for x: E" where T is #~"Option(t)",
       #~"optionval(t)" or #~"OptionView(t)". E is evaluated at every
       iteration and its value is the per-iteration value. A function name
       is a call there as anywhere, and so is a function #_*"reference" read
       bare, so #~"for n: supplier loop" invokes #~"supplier" before each
-      iteration whether it names a function or holds a reference to one.]
+      iteration whether it names a function or holds a reference to one. So
+      is a callable object read bare: #~"for x: it loop" walks a named
+      iterator, calling it every iteration.]
   [#*: #b:"Anything else" is a compile error naming the rule it breaks:
       #~"'for each' needs a type with 'iterate' or an iterator 'call'" or
       #~"a 'for' binding must answer an option". An option under
-      #~"each" is refused (evaluated once it answers once), and so is an
-      iterator under the plain form (walking it is #~"for each"). A value
+      #~"each" is refused (evaluated once it answers once) -- a bare iterator
+      variable among them, since it is called -- and so is an iterator
+      #_*"expression" under the plain form (a call's result is not called
+      again; walking it is #~"for each"). A value
       belongs before the loop, tested in the header: #~"sv: s.stringView"
       then #~"for sv.length > 3 loop".]
 
@@ -4953,6 +4968,15 @@ An #b:"iterator" in Zerolang is any type whose #~".call" method takes only
 #~"OptionView(t)". #~"for each" drives an iterator by repeatedly
 invoking #~".call" until the result's tag is #~"none".
 
+An iterator -- like any value whose type has a #~".call" -- is #_*"called"
+when read bare, as a function's name is: #~"v: it" binds its next value, a
+condition #~"for it loop" loops while it answers #~"some", and the plain
+binding #~"for x: it loop" walks it. The iterator itself is handed on with a
+marker: #~"drain src: it.borrow", #~"h.src = it.take", #~"return it.take", and
+#~"for each x: it.borrow" walks it where #~"for each" is wanted. A member read
+off it (#~"it.n") is a member of the object, not of its call; an arm or a field
+named #~"call" makes nothing callable.
+
 #~".iterate" is a container's walk, and the one member #~"for each" calls for
 you: #~"for each e: xs" walks what #~"xs.iterate" returns. Every other walk is
 written: #~"mymap.iterateItems" → entries, #~"xs.iterateReverse",
@@ -4992,7 +5016,7 @@ An iterator the body must also name -- to read it, or to hand it on -- is bound
 with #~"with", whose scope is the loop's:
 
 #code language=zerolang:
-  with iter: (textreader file: f) do for each line: iter loop { ... }
+  with iter: (textreader file: f) do for line: iter loop { ... }
 
 The recommended container-iterator form is a #~"class" with a non-owned
 field referencing the container's private members. The container is pinned
@@ -5171,7 +5195,10 @@ an #~"is" field instead.
 The first #~".call" supplies a value that nothing has yielded yet, so a first
 yield written in expression form binds what the call that RESUMES it supplies
 -- the second #~".call". #~"for each" drives a generator that receives
-nothing; one with an input is driven by the plain form, whose value -- the
+nothing when it is constructed in the header (#~"for each x: (Gen n: 3)"); a
+named one is walked by the plain form (#~"g: Gen n: 3" then #~"for x: g"),
+since read bare it is called. One with an input is driven by the plain form,
+whose value -- the
 call, input written in it -- is evaluated at every iteration (see
 #_~"For-loop dispatch").
 
@@ -5223,9 +5250,9 @@ Generators compose through existing constructs:
         # inline
         for each x: (SubGen ...) loop { yield x }
 
-        # explicit binding (equivalent)
+        # explicit binding: a named generator is walked by the plain form
         inner: (SubGen ...)
-        for each x: inner loop { yield x }
+        for x: inner loop { yield x }
       """
 
       A #~"for each" iterable that is a construction is hoisted to a temp
