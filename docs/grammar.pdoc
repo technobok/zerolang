@@ -678,27 +678,24 @@ Iteration.
 #~"while" is the default argument, the argument name can be omitted if it is the
 first argument.
 
-#~"label" binding RHS is classified by AST shape and result type. The compiler
-picks one of four dispatch modes (first match wins). The per-iteration value is
-one of #~"Option(t)", #~"optionval(t)", or #~"OptionView(t)"; if the value is
+A #~"label" binding says how its operation is evaluated, and the compiler never
+chooses by the operation's type. The per-iteration value is one of
+#~"Option(t)", #~"optionval(t)", or #~"OptionView(t)"; if the value is
 #~"none" the #~"for" expression ends, otherwise the loop variable is bound to
-the some-payload (narrowed to #~"t").
-
-The dispatch rules (R is the type produced by evaluating the RHS;
-"iterator-shaped" means R has a #~".call" method whose only required parameter
-is #~":this" and whose return type is option/optionval/optionview):
+the some-payload (narrowed to #~"t"). ("iterator-shaped" means a type with a
+#~".call" method whose only required parameter is #~":this" and whose return
+type is option/optionval/optionview.)
 
 #ul:
-  [#*: #b:"call → iterator instance:" RHS is a call AND R is iterator-shaped.
-  The call is invoked once eagerly; #~"R.call" runs per iteration.]
-  [#*: #b:"call → Option-wrapper:" RHS is a call AND its return type is
-  #~"Option(t)" / #~"optionval(t)" / #~"OptionView(t)" directly. The
-  call is deferred and re-invoked once per iteration.]
-  [#*: #b:"non-call → instance with .call:" RHS is not a call AND its type
-  T is itself iterator-shaped. T is the iterator;
-  #~"T.call" runs per iteration.]
-  [#*: #b:"none of the above:" compile error. A named binding is what the loop
-  walks; a value belongs before it, tested in the header.]
+  [#*: #b:"each label operation:" the operation is evaluated once, before the
+  loop. When its type declares an #~"iterate" callable with no arguments, what
+  #~"iterate" returns is walked; otherwise the operation must be
+  iterator-shaped and is walked itself. The iterator's #~".call" runs per
+  iteration.]
+  [#*: #b:"label operation:" the operation is evaluated at every iteration and
+  must itself answer #~"Option(t)" / #~"optionval(t)" / #~"OptionView(t)".]
+  [#*: #b:"anything else:" compile error. A named binding is what ends the
+  loop; a value belongs before it, tested in the header.]
 
 A named binding is always the FIRST condition. The #~"while:" arms beside it
 are tested once per iteration, after it has advanced.
@@ -716,7 +713,7 @@ statement can be used immediately before the #~"for".
   : "for"
   \[ #>"operation" \]                  \# precondition, arg name optional for first
   { "while" #>"operation" }          \# precondition(s)
-  \[ #>"label" #>"operation" \]            \# binding to operation/call
+  \[ \[ "each" \] #>"label" #>"operation" \]  \# binding: walked once (each) or re-evaluated
   { "while" #>"operation" }          \# precondition(s)
   \[ "loop" #>"expression" \]
   { "while" #>"operation" }          \# postcondition(s)

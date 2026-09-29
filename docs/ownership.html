@@ -687,17 +687,19 @@ move in the body is legal too when the body refills the local before the
 iteration ends (<code>v = mk</code>): the next iteration finds it holding a value.</p>
 <p>Variables declared <em><strong>inside</strong></em> the loop body, and the loop's own binding, are
 unaffected: each iteration produces a fresh binding, so taking the local is
-fine. The iterable binding itself (<code>for r: (G s: src) loop</code>) runs once,
+fine. An <code>each</code> binding itself (<code>for each r: (G s: src) loop</code>) runs once,
 before the loop, so a move it makes is not repeated -- unless the loop sits
-inside another loop, whose next iteration enters it again.</p>
+inside another loop, whose next iteration enters it again. A plain binding
+(<code>for r: E loop</code>) runs at every iteration, so a move inside <code>E</code> is a move
+in the loop and is refused as one.</p>
 <pre><code class="language-zerolang">a: Crate value: 1
-for i: 3.times loop {
+for each i: 3.times loop {
     a.take              # ERROR: outer-scope variable, next iteration reached
     b: Crate value: 2
     c: b.take           # OK: b is body-local
 }
 d: Crate value: 3
-for j: 3.times loop {
+for each j: 3.times loop {
     if j == 1 then {
         e: d.take       # OK: this path leaves the loop
         break
@@ -1817,7 +1819,7 @@ main: function is {
 
   # 'with' creates the iterator and scopes its lifetime.
   # The 'for' loop calls the iterator on each iteration.
-  with iter: Bag.iterate b: b do for x: iter loop {
+  with iter: Bag.iterate b: b do for each x: iter loop {
     print "iter: \{x}"
   }
 
@@ -1829,9 +1831,10 @@ main: function is {
 }</code></pre>
 <h3 id="pin-lifecycle-in-the-for-loop"><a href="#pin-lifecycle-in-the-for-loop">13.3. Pin Lifecycle in the For-Loop</a></h3>
 <p>The iterator may be created explicitly with <code>with</code> before the <code>for</code>
-loop; the for-loop dispatch also accepts a call that answers one (it
-creates the hidden binding itself). The explicit form is:</p>
-<pre><code class="language-zerolang">with iter: container.iterate c: c do for x: iter loop { ... }</code></pre>
+loop; <code>for each</code> also accepts a call that answers one, or a container
+whose <code>iterate</code> it calls (it creates the hidden binding itself). The
+explicit form is:</p>
+<pre><code class="language-zerolang">with iter: container.iterate c: c do for each x: iter loop { ... }</code></pre>
 <p>The pin lifecycle step by step, for a readonly stdlib walk over a list
 <code>xs</code>:</p>
 <pre><code class="language-zerolang">with iter: xs.iterate do {
@@ -1840,7 +1843,7 @@ creates the hidden binding itself). The explicit form is:</p>
   # readers on xs (length, get, another iterate) stay legal
   # while iter is alive; writers are refused
 
-  for x: iter loop {
+  for each x: iter loop {
     # Entry:
     #   iter.call is invoked (iter is the receiver)
     #   exclusive lock on iter during the call
@@ -1952,11 +1955,11 @@ match (
     # stolen: g1.take            # E0200: cannot move payload out of a view
 } case none then {}
 # m.set key: "c" ...             # E0200: writer while g1/g2 live</code></pre>
-<pre><code class="language-zerolang">with it: m.iterateItems do for e: it loop {
+<pre><code class="language-zerolang">with it: m.iterateItems do for each e: it loop {
     v: m.get key: e.key.copy     # E0200: m is exclusively locked by 'it'
 }
 # pair values with the iteration instead:
-with items: m.iterateItems do for e: items loop {
+with items: m.iterateItems do for each e: items loop {
     print "\{e.key}: \{e.value}"
 }</code></pre>
 <p>The same discipline covers strings: <code>sv: s.stringView</code> pins <code>s</code>

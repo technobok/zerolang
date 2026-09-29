@@ -652,25 +652,23 @@ may otherwise be a call with a binop argument)</p>
 2-arm sum type. They can be pre- or post- conditions.</p>
 <p><code>while</code> is the default argument, the argument name can be omitted if it is the
 first argument.</p>
-<p><code>label</code> binding RHS is classified by AST shape and result type. The compiler
-picks one of four dispatch modes (first match wins). The per-iteration value is
-one of <code>Option(t)</code>, <code>optionval(t)</code>, or <code>OptionView(t)</code>; if the value is
+<p>A <code>label</code> binding says how its operation is evaluated, and the compiler never
+chooses by the operation's type. The per-iteration value is one of
+<code>Option(t)</code>, <code>optionval(t)</code>, or <code>OptionView(t)</code>; if the value is
 <code>none</code> the <code>for</code> expression ends, otherwise the loop variable is bound to
-the some-payload (narrowed to <code>t</code>).</p>
-<p>The dispatch rules (R is the type produced by evaluating the RHS;
-"iterator-shaped" means R has a <code>.call</code> method whose only required parameter
-is <code>:this</code> and whose return type is option/optionval/optionview):</p>
+the some-payload (narrowed to <code>t</code>). ("iterator-shaped" means a type with a
+<code>.call</code> method whose only required parameter is <code>:this</code> and whose return
+type is option/optionval/optionview.)</p>
 <ul>
-<li><strong>call &#x2192; iterator instance:</strong> RHS is a call AND R is iterator-shaped.
-The call is invoked once eagerly; <code>R.call</code> runs per iteration.</li>
-<li><strong>call &#x2192; Option-wrapper:</strong> RHS is a call AND its return type is
-<code>Option(t)</code> / <code>optionval(t)</code> / <code>OptionView(t)</code> directly. The
-call is deferred and re-invoked once per iteration.</li>
-<li><strong>non-call &#x2192; instance with .call:</strong> RHS is not a call AND its type
-T is itself iterator-shaped. T is the iterator;
-<code>T.call</code> runs per iteration.</li>
-<li><strong>none of the above:</strong> compile error. A named binding is what the loop
-walks; a value belongs before it, tested in the header.</li>
+<li><strong>each label operation:</strong> the operation is evaluated once, before the
+loop. When its type declares an <code>iterate</code> callable with no arguments, what
+<code>iterate</code> returns is walked; otherwise the operation must be
+iterator-shaped and is walked itself. The iterator's <code>.call</code> runs per
+iteration.</li>
+<li><strong>label operation:</strong> the operation is evaluated at every iteration and
+must itself answer <code>Option(t)</code> / <code>optionval(t)</code> / <code>OptionView(t)</code>.</li>
+<li><strong>anything else:</strong> compile error. A named binding is what ends the
+loop; a value belongs before it, tested in the header.</li>
 </ul>
 <p>A named binding is always the FIRST condition. The <code>while:</code> arms beside it
 are tested once per iteration, after it has advanced.</p>
@@ -683,7 +681,7 @@ statement can be used immediately before the <code>for</code>.</p>
 <pre><code>: "for"
 [ <a href="#operation">operation</a> ]                  # precondition, arg name optional for first
 { "while" <a href="#operation">operation</a> }          # precondition(s)
-[ <a href="#label">label</a> <a href="#operation">operation</a> ]            # binding to operation/call
+[ [ "each" ] <a href="#label">label</a> <a href="#operation">operation</a> ]  # binding: walked once (each) or re-evaluated
 { "while" <a href="#operation">operation</a> }          # precondition(s)
 [ "loop" <a href="#expression">expression</a> ]
 { "while" <a href="#operation">operation</a> }          # postcondition(s)</code></pre>

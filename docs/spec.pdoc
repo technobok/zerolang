@@ -1250,7 +1250,7 @@ with v: p.first do print v
 # The call (bag.iterate b: b) is the single initialization expression
 # for the one binding 'iter' -- the named argument 'b:' belongs to
 # the call, not to with itself.
-with iter: (bag.iterate b: b) do for x: iter loop { print x }
+with iter: (bag.iterate b: b) do for each x: iter loop { print x }
 """
 
 When the RHS is a plain path reference the compiler may emit the
@@ -1654,16 +1654,18 @@ handle all looping variations:
   #*: for/while/loop - pre-condition
   #*: for/loop/while - post-condition
   #*: for loop - loop forever
-  [#*: 'foreach' style loop against an iterator or a function/method
-      returning an option-shaped wrapper]
+  [#*: for each - walk an iterator, or a value whose type declares
+      #~"iterate", evaluating it once]
+  [#*: for with a plain binding - evaluate an expression at every iteration
+      until it answers #~"none"]
 
 Arguments:
 
 #table cols="2 2 4":
-  Argument  |Default |Value/Description
-  while     |Yes     |Condition. Pre or post loop condition
-  \[var\]:  |No      |'var' is bound to the some-payload of the iterator's per-iteration value
-  loop      |No      |Block of code that may be executed 0 or more times
+  Argument          |Default |Value/Description
+  while             |Yes     |Condition. Pre or post loop condition
+  \[each\] \[var\]:  |No      |'var' is bound to the some-payload of the binding's per-iteration value
+  loop              |No      |Block of code that may be executed 0 or more times
 
 Because the conditions and the body run 0 or more times, moving a variable
 declared outside the loop on a path that reaches the next iteration is a
@@ -1673,17 +1675,25 @@ compile error; see the "Ownership Transfer Inside Loops" section of
 Pre-conditions are specified by the #~"while" keyword. This is the default
 argument and the argument name can be omitted if it is the first argument. A
 condition is a #~"bool" or any other 2-arm sum type, as everywhere else -- see
-[#> to=truthiness: truthiness].
+[#> to=truthiness: truthiness]. An iterator is a value like any other there,
+and is not called for you: the call is written out, #~"for it.call loop".
 
-A single binding (\[var\]: operation) can be specified before the loop, and it
-must be one: an instance of an iterator type, a constructor call producing one,
-or a function/method call producing an option-shaped wrapper. Anything else is
-a compile error -- a binding is what the loop WALKS. The compiler picks an
-evaluation strategy from the RHS shape (see #_~"For-loop dispatch" below). On
-each
-iteration a value of type #~"Option(t)" / #~"optionval(t)" / #~"OptionView(t)"
-is produced; the loop terminates when the value is #~"none", and binds 'var'
-to the unwrapped some-payload otherwise.
+A single binding (\[var\]: operation) may be the FIRST condition, and the
+header says how its value is evaluated:
+
+#ul:
+  [#*: #~"for each x: E" -- E is evaluated #_*"once", before the loop, and
+      walked. When E's type declares an #~"iterate" callable with no
+      arguments, the loop walks what #~"E.iterate" returns; otherwise E must
+      itself be an iterator. The iterator's #~".call" runs every iteration.]
+  [#*: #~"for x: E" -- E is evaluated at #_*"every" iteration, and must itself
+      answer #~"Option(t)", #~"optionval(t)" or #~"OptionView(t)".]
+
+Either way a value of one of those three types is produced per iteration; the
+loop terminates when it is #~"none", and binds 'var' to the unwrapped
+some-payload otherwise. Anything else bound here is a compile error: the
+binding is what ends the loop. #~"each" always takes a binding. See
+#_~"For-loop dispatch" below.
 
 Inside the loop body, 'var' is the some-payload value (narrowed from the
 wrapper). It is not the wrapper — no #~"match" arm is needed to unwrap it.
@@ -1693,7 +1703,7 @@ The ownership of 'var' depends on the wrapper kind:
   #*: #~"Option(t).some" - 'var' is the owned reftype #~"t"
   #*: #~"optionval(t).some" - 'var' is the owned valtype #~"t" (copied)
   [#*: #~"OptionView(t).some" - 'var' is a borrowed view of #~"t",
-      lifetime-tied to the iterator's lock on its source. Storing
+      lifetime-tied to the lock its producer holds on its source. Storing
       'var' to an aggregate field or returning it from the loop is a
       compile error; use #~".copy" first.]
 
@@ -1705,7 +1715,7 @@ Postconditions are specified by the #~"while" keyword after the #~"loop", and
 take the same condition forms as a pre-condition. They must succeed for the
 #~"for" to continue on a new loop.
 
-Any combination of pre and post conditions and bindings may be specified on a
+Any combination of pre and post conditions and a binding may be specified on a
 single #~"for".
 
 Order matters, conditions/bindings can short-circuit on failure and will stop
@@ -1713,8 +1723,9 @@ processing subsequent tests.
 
 #~"for" requires at least one argument (condition or #~"loop"). #~"for <condition>"
 will loop until condition is false; #~"for x: operation" will loop until
-operation produces #~"none" (discarding x each loop); #~"for loop { ... }" will
-loop unconditionally and indefinitely.
+operation produces #~"none"; #~"for each x: operation" will loop until the
+iterator it evaluates to answers #~"none"; #~"for loop { ... }" will loop
+unconditionally and indefinitely.
 
 #~"for" can be used as an expression. The result will be a list of the final
 values of the #~"loop" statement.
@@ -1733,73 +1744,122 @@ values of the #~"loop" statement.
       # ...
   } while x == y
 
-  # iterator-as-callable — MyIter is an instance of a class whose
-  # .call returns option/optionval/optionview
-  for x: MyIter loop {
-      # x is the some-payload (narrowed)
-      # MyIter is pinned until 'for' completes
+  # walk a container: `each` implies its `.iterate`
+  for each e: xs loop {
+      # e is the some-payload (narrowed); xs is pinned until the loop ends
+  }
+
+  # walk an iterator instance -- its .call answers an option
+  with it: xs.iterate do for each v: it loop {
+      # ...
   }
 
   # integer range — `times` is a COUNT, half-open; `upto` / `downto`
   # take endpoints and are closed. Integers themselves are not
-  # iterable: there is no bare `for x: 5 loop`.
-  for x: 5.times loop {
-      # x = 0, 1, 2, 3, 4
+  # iterable: there is no bare `for each x: 5 loop`.
+  for each i: 5.times loop {
+      # i = 0, 1, 2, 3, 4
   }
 
-  # constructor call returning an iterator instance (eager)
-  for line: (TextReader file: f) loop {
+  # a construction producing an iterator, evaluated once
+  for each c: (Counter n: 2) loop {
       # ...
   }
 
-  # function reference called per iteration (deferred)
-  for n: my_supplier loop {
-      # my_supplier is invoked before each iteration; loop ends
-      # when the result is none
+  # re-evaluated every iteration: a call answering an option, reading the
+  # key the body just moved on (a call with arguments is parenthesised)
+  k: 1
+  for w: (m.get key: k) loop {
+      k = k + 1
   }
 
-  # 'foreach' combined with a precondition
+  # a function name is a call, here as anywhere
+  for n: supplier loop {
+      # supplier is invoked before each iteration; the loop ends
+      # when it answers none
+  }
+
+  # a binding combined with a precondition
   cont: true
-  for x: it while cont loop {
+  for each x: xs while cont loop {
       # multiple conditions all must hold; short-circuit at first false
       cont = false
   }
-  """
 
-The grammar form #~"for x: in iter" (with the #~"in" keyword) is reserved
-and not currently accepted by the parser. The plain binding form
-#~"for x: iter" is canonical.
+  # a bare condition: an iterator's call written out
+  with it: xs.iterate do for it.call loop {
+      # ...
+  }
+  """
 
 #-----: For-loop dispatch
 
-The compiler classifies the binding RHS by AST shape and result type and
-picks one of four dispatch modes. Rules are checked in order; first match
-wins. Let R be the type produced by evaluating the RHS, and call a type
-"iterator-shaped" if it has a #~".call" method whose only required parameter
-is #~":this" and whose return type is #~"Option(t)", #~"optionval(t)", or
-#~"OptionView(t)" for some #~"t".
+The header says how a binding's value is evaluated; the compiler never
+chooses by the value's type. Call a type "iterator-shaped" if it has a
+#~".call" method whose only required parameter is #~":this" and whose return
+type is #~"Option(t)", #~"optionval(t)", or #~"OptionView(t)" for some #~"t".
+Let T be the type the binding's value evaluates to.
 
 #ol:
-  [#*: #b:"Rule 1 (call returning iterator):" RHS is a call expression
-      AND R is iterator-shaped. The compiler invokes the call once
-      eagerly before the loop and uses R as the iterator;
-      #~"R.call" is invoked per iteration. Example:
-      #~"for line: (TextReader File: f) loop ...".]
-  [#*: #b:"Rule 2 (function as iterator):" RHS is a call expression
-      AND its return type is #~"Option(t)" / #~"optionval(t)" /
-      #~"OptionView(t)" directly. The compiler defers the call: it is
-      re-invoked once per iteration and the result is the
-      per-iteration value.]
-  [#*: #b:"Rule 3 (instance with call):" RHS is a non-call expression
-      AND its type T is itself iterator-shaped. T is the iterator;
-      #~"T.call" is invoked per iteration. This is the typical shape
-      for iterator instances bound by a prior #~"with", and the shape
-      #~"5.times" / #~"2.upto to: 5" take.]
-  [#*: #b:"Rule 4 (none of the above):" compile error. A named binding
-      is what the loop WALKS, so it has to be able to -- an iterator
-      answers #~"none" when it is done, and nothing else ends a loop by
-      itself. A value belongs before the loop, tested in the header:
-      #~"sv: s.stringView" then #~"for sv.length > 3 loop".]
+  [#*: #b:"Rule 1 (each, through iterate):" #~"for each x: E" where T
+      declares an #~"iterate" callable with no arguments. E is evaluated
+      once, #~"E.iterate" is called once, and what it returns is walked --
+      exactly as if #~"for each x: E.iterate" were written, with the same
+      receiver lock and the same pins. #~"iterate" is asked #_*"first": a
+      type with both #~"iterate" and #~".call" is walked through
+      #~"iterate". Only #~"iterate" is implied; #~".iterateMut",
+      #~".iterateItems" and #~".iterateReverse" are written.]
+  [#*: #b:"Rule 2 (each, the iterator itself):" #~"for each x: E" where T
+      is iterator-shaped and has no #~"iterate". E is evaluated once and is
+      the iterator; #~"T.call" is invoked per iteration. This is the shape
+      of a #~"with"-bound iterator, a construction such as
+      #~"(TextReader file: f)", and #~"5.times" / #~"2.upto to: 5".]
+  [#*: #b:"Rule 3 (plain):" #~"for x: E" where T is #~"Option(t)",
+      #~"optionval(t)" or #~"OptionView(t)". E is evaluated at every
+      iteration and its value is the per-iteration value. A function name
+      is a call there as anywhere, so #~"for n: supplier loop" invokes
+      #~"supplier" before each iteration; a function #_*"reference" is a
+      value there as anywhere, and is refused.]
+  [#*: #b:"Anything else" is a compile error naming the rule it breaks:
+      #~"'for each' needs a type with 'iterate' or an iterator 'call'" or
+      #~"a 'for' binding must answer an option". An option under
+      #~"each" is refused (evaluated once it answers once), and so is an
+      iterator under the plain form (walking it is #~"for each"). A value
+      belongs before the loop, tested in the header: #~"sv: s.stringView"
+      then #~"for sv.length > 3 loop".]
+
+An iterator type should not declare #~"iterate": #~"for each" would walk
+what it returns instead of the iterator.
+
+The plain form's value is loop code. A #~".take" inside it moves at every
+iteration and is refused like any other move in a loop; under #~"each" the
+value runs once, and may take. In a generator body that suspends, the plain
+form's value is simply evaluated again after the resume; an #~"each"
+binding's iterator, when it is new rather than a variable or a field, is kept
+in the generator's state.
+
+A generator that takes input is driven by the plain form, the input written
+in the call:
+
+#code language=zerolang: """
+  # yields its running total; each call's input is added on resume
+  Acc: generator { total: i64 } as {
+      call: function {step: i64} out i64 is {
+          for loop {
+              s: yield this.total
+              this.total = this.total + s
+          }
+      }
+  }
+
+  with g: (Acc total: 0) do {
+      step: 1
+      for r: (g.call step: step) loop {
+          if r > 10 then break
+          step = step * 2
+      }
+  }
+  """
 
 A binding may carry #~"while:" arms beside it, and they are a SECOND way
 to leave: they are tested once per iteration, after the binding has
@@ -1807,23 +1867,15 @@ advanced and its value is bound, so an arm may read the loop variable.
 The binding is always the FIRST condition -- the grammar accepts a name
 only there.
 
-#b:"There is no iterable rule." A method named #~".iterate" is called
-like any other -- the compiler never synthesises the call -- so
-#~"for e: xs.iterate loop" is Rule 1 and #~"for e: it loop" over a
-#~"with"-bound iterator is Rule 3. #~".iterateMut" and
-#~".iterateItems" are ordinary members for the same reason, and so is
-#~".times" on an integer.
-
 The for-loop expression form (a list of the loop body's final values) is
 available under every rule that produces a loop -- Rules 1 to 3 -- and under
 every loop SHAPE: a bare condition, a #~"while:" arm and the do-while form
-each yield a list, as a bound iterator does. Rule 4 has no loop to take
-values from.
+each yield a list, as a binding does.
 
 THE VALUE IS APPENDED, so it answers to #~".append". The element of a
 reftype list is TAKEN, and a borrowed one is refused in the words any other
-move of it gets: write #~"for e: xs.iterate loop e.copy", not
-#~"for e: xs.iterate loop e". A valtype element is copied and asks nothing.
+move of it gets: write #~"for each e: xs loop e.copy", not
+#~"for each e: xs loop e". A valtype element is copied and asks nothing.
 A loop that runs no iterations yields an empty list.
 
 #---: .take on Function Names
@@ -2218,7 +2270,9 @@ continue), any statements following that expression are unreachable and are
 flagged as a compile error.
 
 For-loop binding narrowing: in #~"for x: operation loop {...}" where
-#~"operation" returns #~"Option(t)" or #~"optionval(t)", the loop variable
+#~"operation" returns #~"Option(t)" or #~"optionval(t)" (or in
+#~"for each x: operation loop {...}", where the iterator's #~".call" does), the
+loop variable
 'x' is narrowed to the some-payload type 't' inside the body. The
 wrapper is never visible — terminating on #~"none" is handled by the
 loop machinery, and #~"x" is the unwrapped value.
@@ -3790,7 +3844,7 @@ argument for the current iteration.
   """
 
 #code language=zerolang: """
-  for x: iterator {
+  for each x: xs loop {
       if x == 0 then continue
       #...
   }
@@ -4524,9 +4578,9 @@ The constructor is #~"(Set K: <element_type>)" for an empty set, or
   n: s.length          # u64, current element count
   c: s.capacity        # u64, current bucket count
 
-  # iteration via with/do — iterate is the READONLY walk (a .view
+  # `for each` walks through iterate, the READONLY walk (a .view
   # receiver, SHARED): the set stays readable while it runs
-  with it: s.iterate do for x: it loop {
+  for each x: s loop {
       print "x: \\{x}"
   }
 """
@@ -4838,13 +4892,14 @@ qualified name to the corresponding C implementation.
 
 An #b:"iterator" in Zerolang is any type whose #~".call" method takes only
 #~":this" and returns one of #~"Option(t)", #~"optionval(t)", or
-#~"OptionView(t)". The #~"for" loop drives an iterator by repeatedly
+#~"OptionView(t)". #~"for each" drives an iterator by repeatedly
 invoking #~".call" until the result's tag is #~"none".
 
-#~".iterate" is a #_*"convention", not a dispatch rule: a container names
-its walk that way, and the call is written out like any other. Stdlib
-examples: #~"List" (#~"mylist.iterate"), #~"Map" (#~"mymap.iterate" → keys,
-#~"mymap.iterateItems" → entries). Integers are #_*"not" iterable and declare
+#~".iterate" is a container's walk, and the one member #~"for each" calls for
+you: #~"for each e: xs" walks what #~"xs.iterate" returns. Every other walk is
+written: #~"mymap.iterateItems" → entries, #~"xs.iterateReverse",
+#~"xs.iterateMut". Stdlib examples: #~"List" (#~"for each e: mylist"),
+#~"Map" (#~"for each k: mymap" → keys). Integers are #_*"not" iterable and declare
 no #~".iterate"; they count with #~"5.times", #~"2.upto to: 5" and
 #~"5.downto to: 2", each of which hands back an #~"intrange" iterator.
 
@@ -4869,19 +4924,17 @@ Two iterator patterns are common:
       cannot transfer ownership of a borrowed value (compile error;
       use #~".copy" first).]
 
-Iterators are typically created and bound explicitly with #~"with" so the
-iterator's lifetime is scoped to the surrounding block; the for-loop binds
-the loop variable to each #~".call" result:
+An iterator constructed as the #~"for each" binding's value lives as long as
+the loop -- the dispatch creates a hidden binding with that lifetime:
 
 #code language=zerolang:
-  with iter: (textreader file: f) do for line: iter loop { ... }
+  for each line: (textreader file: f) loop { ... }
 
-When the iterator is constructed inline as the for-loop's binding RHS, the
-intermediate #~"with" can be omitted — rule 1 of the dispatch creates a
-hidden binding with the same lifetime:
+An iterator the body must also name -- to read it, or to hand it on -- is bound
+with #~"with", whose scope is the loop's:
 
 #code language=zerolang:
-  for line: (textreader file: f) loop { ... }
+  with iter: (textreader file: f) do for each line: iter loop { ... }
 
 The recommended container-iterator form is a #~"class" with a non-owned
 field referencing the container's private members. The container is pinned
@@ -4911,7 +4964,7 @@ where it left off on the next call.
   }
 
   # a generator is a TYPE: this is ordinary construction
-  for x: (IntRange lo: 0 hi: 3) loop { print "\{x}" }
+  for each x: (IntRange lo: 0 hi: 3) loop { print "\{x}" }
   """
 
 A generator is a reftype and is named like one, in PascalCase. It compiles to
@@ -5059,8 +5112,10 @@ an #~"is" field instead.
 
 The first #~".call" supplies a value that nothing has yielded yet, so a first
 yield written in expression form binds what the call that RESUMES it supplies
--- the second #~".call". The for-loop drives only generators that receive
-nothing; one with an input is driven by hand through #~"with" and #~".call".
+-- the second #~".call". #~"for each" drives a generator that receives
+nothing; one with an input is driven by the plain form, whose value -- the
+call, input written in it -- is evaluated at every iteration (see
+#_~"For-loop dispatch").
 
 #table cols="2 2 2 3":
   input form          |Reftype U            |Valtype U            |Resume-input ownership
@@ -5079,7 +5134,7 @@ declare the input #~".take".
   # the caller sends a bool back after each yielded line
   Grep: generator { pat: String } as {
       call: function {keep: bool} out String is {
-          for line: stdin.lines loop {
+          for each line: stdin.lines loop {
               if line contains: this.pat then {
                   wanted: yield line.copy
                   if wanted then store_match line
@@ -5088,12 +5143,12 @@ declare the input #~".take".
       }
   }
 
-  # driven by hand -- a for-loop cannot supply the input
+  # driven by the plain form: the call is evaluated at every iteration,
+  # with the input the body just decided
   with g: (Grep pat: "foo".string) do {
-      next: g.call
-      while next is some then {
-          k: my_check (some next)
-          next = g.call keep: k
+      k: false
+      for line: (g.call keep: k) loop {
+          k = my_check line
       }
   }
   """
@@ -5108,16 +5163,17 @@ Generators compose through existing constructs:
 
       #code language=zerolang: """
         # inline
-        for x: (SubGen ...) loop { yield x }
+        for each x: (SubGen ...) loop { yield x }
 
         # explicit binding (equivalent)
         inner: (SubGen ...)
-        for x: inner loop { yield x }
+        for each x: inner loop { yield x }
       """
 
-      A for-loop iterable that is a construction is hoisted to a temp before
-      the loop, and that temp crosses the enclosing generator's suspensions, so
-      the sub-generator is promoted to a field and persists across calls.]
+      A #~"for each" iterable that is a construction is hoisted to a temp
+      before the loop, and that temp crosses the enclosing generator's
+      suspensions, so the sub-generator is promoted to a field and persists
+      across calls.]
   [#*: #b:"Chaining" -- sequential for-loops in the same body run consecutively;
       each drains its source before the next starts (see
       #~"examples/generator_chain.z").]

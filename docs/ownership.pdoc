@@ -544,19 +544,21 @@ iteration ends (#~"v = mk"): the next iteration finds it holding a value.
 
 Variables declared #_*"inside" the loop body, and the loop's own binding, are
 unaffected: each iteration produces a fresh binding, so taking the local is
-fine. The iterable binding itself (#~"for r: (G s: src) loop") runs once,
+fine. An #~"each" binding itself (#~"for each r: (G s: src) loop") runs once,
 before the loop, so a move it makes is not repeated -- unless the loop sits
-inside another loop, whose next iteration enters it again.
+inside another loop, whose next iteration enters it again. A plain binding
+(#~"for r: E loop") runs at every iteration, so a move inside #~"E" is a move
+in the loop and is refused as one.
 
 #code language=zerolang: """
   a: Crate value: 1
-  for i: 3.times loop {
+  for each i: 3.times loop {
       a.take              # ERROR: outer-scope variable, next iteration reached
       b: Crate value: 2
       c: b.take           # OK: b is body-local
   }
   d: Crate value: 3
-  for j: 3.times loop {
+  for each j: 3.times loop {
       if j == 1 then {
           e: d.take       # OK: this path leaves the loop
           break
@@ -1888,7 +1890,7 @@ The canonical class-based iterator (also in
 
     # 'with' creates the iterator and scopes its lifetime.
     # The 'for' loop calls the iterator on each iteration.
-    with iter: Bag.iterate b: b do for x: iter loop {
+    with iter: Bag.iterate b: b do for each x: iter loop {
       print "iter: \{x}"
     }
 
@@ -1903,11 +1905,12 @@ The canonical class-based iterator (also in
 #---: Pin Lifecycle in the For-Loop
 
 The iterator may be created explicitly with #~"with" before the #~"for"
-loop; the for-loop dispatch also accepts a call that answers one (it
-creates the hidden binding itself). The explicit form is:
+loop; #~"for each" also accepts a call that answers one, or a container
+whose #~"iterate" it calls (it creates the hidden binding itself). The
+explicit form is:
 
 #code language=zerolang:
-  with iter: container.iterate c: c do for x: iter loop { ... }
+  with iter: container.iterate c: c do for each x: iter loop { ... }
 
 The pin lifecycle step by step, for a readonly stdlib walk over a list
 #~"xs":
@@ -1919,7 +1922,7 @@ The pin lifecycle step by step, for a readonly stdlib walk over a list
     # readers on xs (length, get, another iterate) stay legal
     # while iter is alive; writers are refused
 
-    for x: iter loop {
+    for each x: iter loop {
       # Entry:
       #   iter.call is invoked (iter is the receiver)
       #   exclusive lock on iter during the call
@@ -2050,11 +2053,11 @@ out a writable alias.
   """
 
 #code language=zerolang: """
-  with it: m.iterateItems do for e: it loop {
+  with it: m.iterateItems do for each e: it loop {
       v: m.get key: e.key.copy     # E0200: m is exclusively locked by 'it'
   }
   # pair values with the iteration instead:
-  with items: m.iterateItems do for e: items loop {
+  with items: m.iterateItems do for each e: items loop {
       print "\{e.key}: \{e.value}"
   }
   """
