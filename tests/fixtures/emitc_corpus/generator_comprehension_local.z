@@ -1,0 +1,34 @@
+# generator_comprehension_local.z -- a list comprehension bound to a local of a
+# generator body.
+#
+# A generator's locals live in fields of the instance, and a binding stores
+# into its field. A comprehension is a loop rather than an expression, so the
+# store had no value to write: zc stopped at "unhandled expr". The list is now
+# built in the field itself. `Rows` binds one on every pass of a loop that
+# suspends, so each pass frees the list the previous one left there; the run is
+# leak-checked.
+
+Squares: generator { n: i64 } as {
+    call: function out i64 is {
+        sq: for each x: this.n.times loop x * x
+        for each v: sq loop yield v
+    }
+}
+
+Rows: generator { n: i64 } as {
+    call: function out String is {
+        for each r: this.n.times loop {
+            row: for each c: (r + 1).times loop "\{r}\{c}"
+            yield "row \{row.length}: \{row.get i: 0}"
+        }
+    }
+}
+
+main: function is {
+    for each s: (Squares n: 4) loop print "square \{s}"
+    for each w: (Rows n: 3) loop print w
+    with h: (Rows n: 5) do {
+        first: h.call
+        match first case some then print "first \{first}" case none then print "first none"
+    }
+}

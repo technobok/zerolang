@@ -1947,7 +1947,10 @@ perf: $(PERFBIN)
 #
 # -2,509 `with it: X do for each e: it` collapses to `for each e: X`: 0
 # behaviour, -2,509 source (a `with` scope and binding fewer per walk).
-ALLOC_BASELINE := 2769417
+#
+# +519 a generator local bound to a comprehension is built in its field: 0
+# behaviour (the compiler has no generator), 519 source.
+ALLOC_BASELINE := 2769936
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
