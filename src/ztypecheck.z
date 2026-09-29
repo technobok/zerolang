@@ -34873,13 +34873,9 @@ bindForBorrowedElement: function {
     }
     # THE `with` FORM: the element holds nothing of its own, so it takes the
     # iterator itself -- see lockIteratorForElement.
+    iterNm: forElementIteratorName :ast nid: cond.operation
     if fpins.length == 0 then {
-        ilm: (lockIteratorForElement
-            :st
-            :ast
-            iterName: (atomNameId :ast n: (ast.nodes.get i: cond.operation.u64))
-            :vid
-        )
+        ilm: lockIteratorForElement :st :ast iterName: iterNm :vid
         if ilm.length > 0 then {
             icn: ast.nodes.get i: cond.operation.u64
             (addError
@@ -34897,15 +34893,12 @@ bindForBorrowedElement: function {
     # lock's strength: a SHARED pin (a `view` iterator
     # receiver) yields READONLY elements, an exclusive one
     # yields writable ones. The binding-free form knows its
-    # own strength; the `with` form has to ask its binding.
+    # own strength; a walk of an iterator binding -- `for each
+    # e: it`, or the plain `for e: it.call`, whose pins are the
+    # call's on the iterator -- asks the binding.
     elr: false
     if fpins.length > 0 when (pinsAllShared pins: fpins) then elr = true
-    if fpins.length == 0 then {
-        elr = (iterElementIsReadonly
-            :st
-            iterName: (atomNameId :ast n: (ast.nodes.get i: cond.operation.u64))
-        )
-    }
+    if elr.not then elr = iterElementIsReadonly :st iterName: iterNm
     if elr then {
         erm: readonlySelfLock :st :ast name: nm :vid
         if erm.length > 0 then {
@@ -38486,6 +38479,25 @@ readonlySelfLock: function {
         mutable: false
         alias: false
     )
+}
+
+# forElementIteratorName -- the iterator binding a `for` element came from: the
+# header's value names it (`for each e: it`), or calls it (the plain binding
+# `for e: it.call`). The element's lock and its readonly-ness are the ones that
+# iterator holds. Zero when the value names no iterator binding.
+forElementIteratorName: function {ast: Ast.view nid: zast.nodeid} out zast.nameid is {
+    n: ast.nodes.get i: nid.u64
+    match (
+        n
+    ) case atomid then {
+        return n.name
+    } case dottedpath then {
+        leaf: atomNameId :ast n: (ast.nodes.get i: n.child.u64)
+        if leaf != zast.names.wkCall then return zast.nameid
+        return (atomNameId :ast n: (ast.nodes.get i: n.parent.u64))
+    } else {
+        return zast.nameid
+    }
 }
 
 # lockIteratorForElement -- the loop element takes a lock on the ITERATOR it
