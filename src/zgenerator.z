@@ -989,9 +989,9 @@ promoteFor: function {
     )
 }
 
-# countedRangeHeader -- a header the EMITTER lowers to a counted C `for`, named
-# by the same interned member ids it uses: `N.times`, and the closed
-# `F.upto to: T` / `F.downto to: T`.
+# countedRangeHeader -- a call-shaped header the EMITTER lowers to a counted C
+# `for`: the closed `F.upto to: T` / `F.downto to: T`, named by the interned
+# member ids it uses.
 #
 # Asked below because such a header must NOT be hoisted. The emitter builds no
 # range object for it -- there is no construction for a resume `goto` to jump
@@ -999,13 +999,12 @@ promoteFor: function {
 # hides the member behind a binding, so the lowering never fires and the loop
 # builds a cursor after all. A receiver the emitter declines to count (a user
 # type carrying a member of the same name) is safe left here too: the checker
-# mints the loop's iterable field for a header that is a call or a count path
-# (`isCountHeaderPath`), and that field is what the object path reads.
+# keeps any header that is not a place in a state field (headerIsPlace), and
+# that field is what the object path reads.
 countedRangeHeader: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
     ) case call then {
-        # the CLOSED family: only it takes an argument, so only it is a call
         cn: ast.nodes.get i: n.callable.u64
         mid: zast.nameid
         match (
@@ -1015,26 +1014,27 @@ countedRangeHeader: function {ast: Ast.view n: astnode.view} out bool is {
             if ch.atomid then mid = ch.name
         } else null
         return mid == zast.names.wkUpto or (mid == zast.names.wkDownto)
-    } case dottedpath then {
-        # the COUNT family takes none, so it is a bare path
-        ch: ast.nodes.get i: n.child.u64
-        if ch.atomid then return ch.name == zast.names.wkTimes
-        return false
     } else {
         return false
     }
 }
 
-# true when condition `n` needs no hoist out of a suspending loop's header: a
-# bare name, which is already a binding, or a counted range, which becomes no
-# object at all.
+# true when condition `n` needs no hoist out of a suspending loop's header:
+# anything but a call. A name, or a path rooted at one -- a field, a method
+# read off it, `N.times` -- is left for the checker, which keeps what is new in
+# a state field and leaves a place where it is. A call builds its value in C
+# locals the resume `goto` would jump past, so it is hoisted, unless it is a
+# counted range, which becomes no object at all.
 condIsTrivial: function {ast: Ast.view n: astnode.view} out bool is {
+    if (countedRangeHeader :ast :n) then return true
     match (
         n
-    ) case atomid then {
-        return true
+    ) case call then {
+        return false
+    } case dottedpath then {
+        return (condIsTrivial :ast n: (ast.nodes.get i: n.parent.u64))
     } else {
-        return (countedRangeHeader :ast :n)
+        return true
     }
 }
 

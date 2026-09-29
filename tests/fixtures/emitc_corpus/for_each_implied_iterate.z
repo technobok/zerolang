@@ -1,0 +1,98 @@
+# for_each_implied_iterate.z -- `for each x: E` over a type that declares a
+# zero-argument `iterate` walks what `iterate` returns: E is evaluated once and
+# `.iterate` is implied, with the receiver lock, the pins and the element a
+# written `E.iterate` gets. Only `iterate` is implied, and it is asked FIRST: a
+# type with both `iterate` and `call` is walked through `iterate`.
+#
+# Covered: ListVal, List, a map's keys, a set, an IdSet, a field path, a call's
+# result (a temporary the walk must keep alive), a typedef over a list, a
+# generic function's parameter, a type with both members, the comprehension
+# form, a `while` arm, and a generator body that suspends over a field and a
+# local.
+
+Count: generator { n: i64 } as {
+    call: function out i64 is {
+        for each x: this.n.times loop yield x * 100
+    }
+}
+
+Both: class {
+    n: i64
+} as {
+    iterate: function {t: this.view} out Count is {
+        return (Count n: 2)
+    }
+    call: function {:this} out optionval i64 is {
+        this.n = this.n + 1
+        if this.n > 3 then return (optionval.none i64)
+        return (optionval.some this.n)
+    }
+}
+
+Holder: class {
+    xs: ListVal i64
+}
+
+Ids: typedef ListVal i64
+
+mkList: function out (List String) is {
+    xs: List String
+    xs.append "p".string
+    xs.append "q".string
+    return xs
+}
+
+countAll: function as { T: anyval.generic } in {xs: (ListVal t: T).view} out i64 is {
+    n: 0
+    for each e: xs loop n = n + 1
+    return n
+}
+
+Each: generator { items: List String } as {
+    call: function out String is {
+        for each s: this.items loop yield "field \{s}"
+        loc: ListVal i64
+        loc.append 7
+        loc.append 8
+        for each n: loc loop yield "local \{n}"
+    }
+}
+
+main: function is {
+    xs: ListVal i64
+    xs.append 1
+    xs.append 2
+    for each x: xs loop print "listval \{x}"
+    ls: List String
+    ls.append "a".string
+    for each s: ls loop print "list \{s}"
+    m: MapVV i64 v: i64
+    m.set key: 5 value: 50
+    for each k: m loop print "map key \{k}"
+    st: SetVal i64
+    st.add item: 9
+    for each v: st loop print "set \{v}"
+    idset: IdSet u64
+    idset.add item: 11
+    for each id: idset loop print "idset \{id}"
+    h: Holder xs: xs.copy
+    for each f: h.xs loop print "field \{f}"
+    for each c: mkList loop print "call \{c}"
+    ids: Ids
+    ids.append 4
+    for each i: ids loop print "typedef \{i}"
+    print "generic \{countAll xs: xs}"
+    b: Both n: 0
+    for each w: b loop print "both \{w}"
+    doubled: for each d: xs loop d * 2
+    print "comprehension \{doubled.length}"
+    for each y: xs while y < 2 loop print "arm \{y}"
+    names: List String
+    names.append "n1".string
+    names.append "n2".string
+    for each g: (Each items: names.take) loop print g
+    with e: (Each items: (List String)) do {
+        first: e.call
+        match first case some then print "first \{first}" case none then print "first none"
+    }
+}

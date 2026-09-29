@@ -29852,10 +29852,8 @@ dottedBaseTid: function {
 }
 
 
-# checkDotted -- a dotted method reference in a body: type the base, look the
-# member up on the base's type, and stamp the dotted node -- with the method's
-# return when the method takes no user parameters beyond the receiver (the
-# auto-call coercion), else with the method FUNCTION type itself.
+# checkDotted -- a dotted method reference in a body: type the base, then the
+# member on it (checkDottedOn).
 checkDotted: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -29867,6 +29865,21 @@ checkDotted: function {
     if nsc.handled then return nsc.tid
     bt: dottedBaseTid :st :unitDecl :ast :dp
     if bt.isZero then return (ztypes.tid.create from: 0)
+    return (checkDottedOn :st :unitDecl :ast :dp :bt :coerce)
+}
+
+# checkDottedOn -- the member of a dotted path whose base is already typed `bt`:
+# look it up on that type and stamp the dotted node -- with the method's return
+# when the method takes no user parameters beyond the receiver (the auto-call
+# coercion), else with the method FUNCTION type itself.
+checkDottedOn: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    dp: dpref
+    bt: ztypes.tid
+    coerce: bool
+} out ztypes.tid is {
     ucc: checkUntypedConstantCast :st :ast :dp
     if ucc.handled then return ucc.tid
     cnId: atomNameId :ast n: (ast.nodes.get i: dp.child.u64)
@@ -34233,17 +34246,23 @@ isCallNode: function {n: astnode.view} out bool is {
     }
 }
 
-# isCountHeaderPath -- `R.times`: the one member path a suspending loop's
-# header keeps unhoisted, because the emitter counts it on an integer
-# receiver. On any other receiver the member is an ordinary call answering an
-# iterator, which lives across a suspension like a construction does.
-isCountHeaderPath: function {ast: Ast.view n: astnode.view} out bool is {
+# headerIsPlace -- the value a `for each` header walks is storage that already
+# has a home: a variable, or a field read off one. It stays where it is across
+# a suspension. Anything else -- a call's result, a construction, a method read
+# off a place (an implied `.iterate` among them) -- is new, and a suspending
+# loop keeps it in a state field.
+headerIsPlace: function {st: zenv.ZSymbolTable.view ast: Ast.view nid: zast.nodeid} out bool is {
+    n: ast.nodes.get i: nid.u64
     match (
         n
-    ) case dottedpath then {
-        ch: ast.nodes.get i: n.child.u64
-        if ch.atomid then return ch.name == zast.names.wkTimes
-        return false
+    ) case atomid then {
+        if (st.typing.implicitCreate.has key: nid.u64) then return false
+        return (st.lookupVarId nameId: n.name).some
+    } case dottedpath then {
+        d: (st.typing.refDecl.get key: nid.u64).or d: ztypes.declid
+        if d.isZero then return false
+        if (st.typing.decls.get i: d.u64).kind.fieldDecl.not then return false
+        return (headerIsPlace :st :ast nid: n.parent)
     } else {
         return false
     }
@@ -34510,8 +34529,8 @@ mintGenField: function {
 # mintForSpillFields -- the state fields a suspending loop's binding needs: its
 # payload, typed by the element (an owned or value yield) or by the wrapper (a
 # borrowed view: the emitter re-derives the element's pointer or copy from the
-# saved union), and, for an `each` binding, its iterable when that is a
-# construction or a temporary, which would otherwise live in a C local
+# saved union), and, for an `each` binding, its iterable when that is new
+# rather than a place (headerIsPlace), which would otherwise live in a C local
 # outside the loop. An iterable that is already a binding or a field is
 # left where it is, and one of the generator's own type is not embedded.
 mintForSpillFields: function {
@@ -34530,14 +34549,7 @@ mintForSpillFields: function {
     # a plain binding is evaluated afresh at every iteration: there is no
     # iterable to keep
     if isEach.not then return
-    fresh: facId > 0
-    {
-        op: ast.nodes.get i: cond.operation.u64
-        if (isCallNode n: op) then fresh = true
-        if (st.typing.implicitCreate.has key: (nodeId n: op).u64) then fresh = true
-        if (isCountHeaderPath :ast n: op) then fresh = true
-    }
-    if fresh.not then return
+    if facId == 0 when (headerIsPlace :st :ast nid: cond.operation) then return
     # a factory's auto-call already typed the header as the iterator it
     # returns; only a header still typed as the FUNCTION needs its return
     itT: vt
@@ -34575,6 +34587,15 @@ bindForIteration: function {
 } is {
     fe: forelem elem: 0 wrapper: vt isView: false
     if isEach then {
+        # a type with `iterate` is walked through what it returns: from here on
+        # the condition's value IS the `E.iterate` node minted for it
+        if facId == 0 then {
+            iw: implicitIterate :st :unitDecl :ast :cond :vt
+            if iw.nid.isZero.not then {
+                cond.operation = iw.nid
+                vt = iw.tid
+            }
+        }
         # A call-shaped iterator init probes its per-iteration call
         # in an empty call scope; gated on the value being an iterator
         # wrapper.
@@ -34585,54 +34606,71 @@ bindForIteration: function {
     } else {
         fe = forOptionElementOf :st :unitDecl :ast :vt
     }
-    if fe.elem > 0 then {
-        if fe.isView then {
-            bindForBorrowedElement :st :ast :cond elem: fe.elem :nm
-        } else {
-            # THE ELEMENT IS A VARIABLE. Bound with no vid it sat outside every
-            # destroy list and every take overlay -- `scopeDestroy` cannot name
-            # what has no variable -- so no rule that reads one could reach it,
-            # and the readonly lock below has nothing to hold.
-            evid: (st.reg.newVariable
-                ztypeId: (ztypes.tid.create from: fe.elem.u64)
-                ownership: ztypes.zownership.owned
-            )
-            st.reg.setVariableOrigin id: evid origin: ztypes.zvarorigin.local
-            st.defineVar nameId: cond.name vid: evid
-            st.typing.setDefVariable nid: cond.operation.u64 vid: evid
-            # A MOVE OUT OF IT MUST ZERO IT. The element's destroy is the
-            # EMITTER's -- one unconditional cleanup per iteration, which no
-            # destroy point of the checker's lists -- so nothing here would
-            # record the state that makes a move zero its source, and
-            # `xs.append t` would hand the list a value the loop then frees.
-            st.typing.zeroOnMove.add item: evid.u64
-        }
-    } else {
-        # A NAMED `for` BINDING IS WHAT ENDS THE LOOP: an option answering
-        # `none`, read off the binding itself (plain) or off its iterator's
-        # `call` (`each`). Nothing else ends a loop by itself.
-        itn: specWrittenName :st :ast tid: vt
-        im: "a 'for' binding must answer an option, got '\{itn}'"
-        if isEach then im = "'for each' needs an iterator, got '\{itn}'"
-        (addErrorH
-            :st
-            nodeid: cond.nid
-            lineno: (nodeLine n: (ast.nodes.get i: cond.operation.u64))
-            colno: (nodeCol n: (ast.nodes.get i: cond.operation.u64))
-            e: zast.err.typeError
-            msg: im
-            note: String
-            hint: String
-            width: 0
-        )
-        # bound typeless all the same, so the body's reads of it are not each
-        # an unknown reference on top of the one error
-        (st.define
-            nameId: cond.name
-            ztypeId: ztypes.tid
-        )
+    if fe.elem == 0 then {
+        refuseUnwalkableBinding :st :ast :cond :vt :isEach
+        return
     }
-    if spillFor when fe.elem > 0 then mintForSpillFields :st :ast :cond :fe :vt :facId :isEach
+    if fe.isView then {
+        bindForBorrowedElement :st :ast :cond elem: fe.elem :nm
+    } else {
+        bindForOwnedElement :st :cond elem: fe.elem
+    }
+    if spillFor then mintForSpillFields :st :ast :cond :fe :vt :facId :isEach
+}
+
+# bindForOwnedElement -- bind a `for` loop name to an element it owns (or
+# copies) for the iteration.
+bindForOwnedElement: function {st: zenv.ZSymbolTable cond: argref elem: u64} is {
+    # THE ELEMENT IS A VARIABLE. Bound with no vid it sat outside every
+    # destroy list and every take overlay -- `scopeDestroy` cannot name
+    # what has no variable -- so no rule that reads one could reach it,
+    # and the readonly lock below has nothing to hold.
+    evid: (st.reg.newVariable
+        ztypeId: (ztypes.tid.create from: elem.u64)
+        ownership: ztypes.zownership.owned
+    )
+    st.reg.setVariableOrigin id: evid origin: ztypes.zvarorigin.local
+    st.defineVar nameId: cond.name vid: evid
+    st.typing.setDefVariable nid: cond.operation.u64 vid: evid
+    # A MOVE OUT OF IT MUST ZERO IT. The element's destroy is the
+    # EMITTER's -- one unconditional cleanup per iteration, which no
+    # destroy point of the checker's lists -- so nothing here would
+    # record the state that makes a move zero its source, and
+    # `xs.append t` would hand the list a value the loop then frees.
+    st.typing.zeroOnMove.add item: evid.u64
+}
+
+# refuseUnwalkableBinding -- A NAMED `for` BINDING IS WHAT ENDS THE LOOP: an
+# option answering `none`, read off the binding itself (plain) or off its
+# iterator's `call` (`each`, after an implied `iterate`). Nothing else ends a
+# loop by itself, so a binding that yields no element is refused -- and bound
+# typeless all the same, so the body's reads of it are not each an unknown
+# reference on top of the one error.
+refuseUnwalkableBinding: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    cond: argref
+    vt: ztypes.tid
+    isEach: bool
+} is {
+    itn: specWrittenName :st :ast tid: vt
+    im: "a 'for' binding must answer an option, got '\{itn}'"
+    if isEach then im = "'for each' needs a type with 'iterate' or an iterator 'call', got '\{itn}'"
+    (addErrorH
+        :st
+        nodeid: cond.nid
+        lineno: (nodeLine n: (ast.nodes.get i: cond.operation.u64))
+        colno: (nodeCol n: (ast.nodes.get i: cond.operation.u64))
+        e: zast.err.typeError
+        msg: im
+        note: String
+        hint: String
+        width: 0
+    )
+    (st.define
+        nameId: cond.name
+        ztypeId: ztypes.tid
+    )
 }
 
 # forFactoryTid -- the type id of a bare 0-arg function in a `for` header that
@@ -34720,6 +34758,88 @@ checkBareForCondition: function {
     }
 }
 
+
+# iterwalk -- what an `each` binding walks when its value is not itself the
+# iterator: the `E.iterate` node minted for it, and the iterator type that
+# answered. A zero node means E is walked as it is.
+iterwalk: record {
+    nid: zast.nodeid
+    tid: ztypes.tid
+}
+
+# implicitIterate -- `for each x: E` over a type with a zero-argument
+# `iterate`: E is walked through it, exactly as if `E.iterate` were written.
+# The call is a dotted node minted over the E already checked (so E runs, and
+# is checked, once), and it is checked as the written call is -- its receiver
+# lock, the pins its result keeps and its return all come from checkDottedOn.
+# Only `iterate` is implied; a type without one is walked as it is.
+implicitIterate: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    cond: argref
+    vt: ztypes.tid
+} out iterwalk is {
+    none: iterwalk nid: zast.nodeid tid: vt
+    # the member is read where checkDottedOn will read it: a typedef's is its
+    # owner's, and a partial's is its template's
+    ot: typedefMemberOwner :st :ast bt: vt cnId: zast.names.wkIterate
+    if (st.reg.isPartialOf tid: ot) then {
+        og: st.reg.genericOriginOf tid: ot
+        if og.isZero.not then ot = og
+    }
+    forceMemberOf :st :ast parentTypeId: ot nameId: zast.names.wkIterate
+    mo: (st.typing.declChildOfId parentTypeId: ot nameId: zast.names.wkIterate).or d: 0
+    if mo == 0 then return none
+    mt: ztypes.tid.create from: mo.u64
+    if (st.reg.typetypeOf typeId: mt) != ztypes.ztypetype.functionType then return none
+    if (methodHasNoUserArgs :st mid: mt).not then return none
+    dn: implicitIterateNode :st :ast :cond
+    rt: checkDottedOn :st :unitDecl :ast dp: (dpRefAt :ast nid: dn) bt: vt coerce: true
+    return (iterwalk nid: dn tid: rt)
+}
+
+# implicitIterateNode -- the `E.iterate` node of an `each` condition, minted once
+# over the condition's own value node (a loop's header may be walked again) and
+# reported from E's file and position.
+implicitIterateNode: function {st: zenv.ZSymbolTable ast: Ast cond: argref} out zast.nodeid is {
+    have: st.typing.forImplicitIterate.get key: cond.nid.u64
+    match (
+        have
+    ) case some then {
+        return have
+    } case none then null
+    start: ast.nodes.length
+    aid: zast.tableReserve :ast
+    (zast.tableAdd
+        :ast
+        n: astnode.atomid (zast.atomidrow
+            nodeid: aid
+            lineno: cond.lineno
+            colno: cond.colno
+            name: zast.names.wkIterate
+        )
+    )
+    did: zast.tableReserve :ast
+    (zast.tableAdd
+        :ast
+        n: astnode.dottedpath (zast.dottedpathrow
+            nodeid: did
+            lineno: cond.lineno
+            colno: cond.colno
+            parent: cond.operation
+            child: aid
+        )
+    )
+    fs: ast.fsnoForNode nodeid: cond.operation.u32
+    if fs.u64 > 0 then ast.fileSegs.append (zast.FileSeg
+        startId: start.u32.orPanic
+        endId: ast.nodes.length.u32.orPanic
+        fsno: fs
+    )
+    st.typing.forImplicitIterate.set key: cond.nid.u64 value: did
+    return did
+}
 
 # checkForCondition -- resolve one condition in a `for` header: the binding it
 # introduces, the element type it iterates, and the locks that iteration takes.

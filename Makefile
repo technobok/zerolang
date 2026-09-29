@@ -1936,7 +1936,12 @@ perf: $(PERFBIN)
 # +2,326 a plain `for` binding is evaluated at every iteration: 0 behaviour (the
 # compiler's own walks all say `for each`), 2,326 source (the checker's split
 # readers, the emitter's plain loop and the tail it shares with the walk).
-ALLOC_BASELINE := 2768573
+#
+# +3,350 `for each` implies `.iterate`: 0 behaviour (the compiler's own walks
+# still write it), 3,347 source by ab.sh (the minted `E.iterate` node,
+# checkDotted split at its base, headerIsPlace); perf-strict reads 3 more than
+# the split, stable over two runs.
+ALLOC_BASELINE := 2771923
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
