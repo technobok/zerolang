@@ -1942,7 +1942,7 @@ Parser: class {
     # Tail of the for-header. Threads the conditions + postconditions
     # lists and the optional body through recursion as `.take` params so
     # nothing owned is held across a loop body (E0200). `while` before the
-    # body is a condition, after it a postcondition; `label op` is the
+    # body is a condition, after it a postcondition; `[each] label op` is the
     # at-most-one binding; `loop primary` is the body. `hasBody` says
     # whether a body was seen without inspecting the owned body.
     forClausesTail: function {
@@ -1953,6 +1953,7 @@ Parser: class {
         bodyId: zast.nodeid
         hasBody: bool
         bound: bool
+        isEach: bool
         forLine: u32
         forCol: u32
     } out astnode is {
@@ -1994,57 +1995,47 @@ Parser: class {
                 :bodyId
                 :hasBody
                 :bound
+                :isEach
                 :forLine
                 :forCol
             )
         }
-        if tt == zlexer.toktype.labelTok then {
-            if hasBody then {
-                return (this.mkErrorAt
-                    pos: tPos
-                    code: zast.err.badFor
-                    msg: "Binding label not allowed after loop".string
-                )
-            }
-            if bound then {
-                return (this.mkErrorAt
-                    pos: tPos
-                    code: zast.err.badFor
-                    msg: "for accepts at most one binding".string
-                )
-            }
-            lblTok: lex.acceptAny pool: this.ast.names
-            nm: lblTok.text
-            lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
-            vpaths: this.operationPaths :lex
-            n: vpaths.length
-            if n == 0 then {
+        if tt == zlexer.toktype.eachTok then {
+            lex.advance pool: this.ast.names
+            if (this.reservedLabelLookahead :lex) then return (this.reservedLabelError :lex)
+            if (lex.peekType == zlexer.toktype.labelTok).not then {
                 bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
                     tok: bad
-                    code: zast.err.expectedOp
-                    msg: "Expected operation for for binding label".string
+                    code: zast.err.expectedDef
+                    msg: "Expected label after each".string
                 )
             }
-            op: this.operationFromPaths paths: vpaths :lex
-            oErr: Parser.isError node: op
-            if oErr then return op
-            no: (this.mkNamedOp
-                name: nm
-                operation: op
-                line: lblTok.lineno
-                col: lblTok.colno
-            )
-            conditions.append (this.intern n: no)
-            return (this.forClausesTail
+            return (this.forBinding
                 :lex
                 :conditions
                 :postconditions
                 :bodyId
                 :hasBody
-                bound: true
+                :bound
+                isEach: true
                 :forLine
                 :forCol
+                :tPos
+            )
+        }
+        if tt == zlexer.toktype.labelTok then {
+            return (this.forBinding
+                :lex
+                :conditions
+                :postconditions
+                :bodyId
+                :hasBody
+                :bound
+                isEach: false
+                :forLine
+                :forCol
+                :tPos
             )
         }
         if tt == zlexer.toktype.loopTok then {
@@ -2067,6 +2058,7 @@ Parser: class {
                 bodyId: (this.intern n: stmt)
                 hasBody: true
                 :bound
+                :isEach
                 :forLine
                 :forCol
             )
@@ -2079,6 +2071,7 @@ Parser: class {
                     lineno: forLine
                     colno: forCol
                     conditions: (zast.kidsAdd kids: this.ast.kids xs: conditions)
+                    :isEach
                     body: (zast.nodeid.create from: bodyId)
                     postconditions: (zast.kidsAdd kids: this.ast.kids xs: postconditions)
                 )
@@ -2096,13 +2089,79 @@ Parser: class {
             lineno: forLine
             colno: forCol
             conditions: (zast.kidsAdd kids: this.ast.kids xs: conditions)
+            :isEach
             body: (zast.nodeid.create from: bodyId)
             postconditions: (zast.kidsAdd kids: this.ast.kids xs: postconditions)
         )
         )
     }
 
-    # for-expression -> "for" [op] { "while" op } [ label op ] { "while" op }
+    # forBinding -- the header's binding, `label op`, with `each` already
+    # consumed when it was written: at most one, and none after the body.
+    forBinding: function {
+        :this
+        lex: zlexer.Lexer
+        conditions: (ListVal u32).take
+        postconditions: (ListVal u32).take
+        bodyId: zast.nodeid
+        hasBody: bool
+        bound: bool
+        isEach: bool
+        forLine: u32
+        forCol: u32
+        tPos: zlexer.tokpos
+    } out astnode is {
+        if hasBody then {
+            return (this.mkErrorAt
+                pos: tPos
+                code: zast.err.badFor
+                msg: "Binding label not allowed after loop".string
+            )
+        }
+        if bound then {
+            return (this.mkErrorAt
+                pos: tPos
+                code: zast.err.badFor
+                msg: "for accepts at most one binding".string
+            )
+        }
+        lblTok: lex.acceptAny pool: this.ast.names
+        nm: lblTok.text
+        lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
+        vpaths: this.operationPaths :lex
+        n: vpaths.length
+        if n == 0 then {
+            bad: lex.acceptAny pool: this.ast.names
+            return (this.mkError
+                tok: bad
+                code: zast.err.expectedOp
+                msg: "Expected operation for for binding label".string
+            )
+        }
+        op: this.operationFromPaths paths: vpaths :lex
+        oErr: Parser.isError node: op
+        if oErr then return op
+        no: (this.mkNamedOp
+            name: nm
+            operation: op
+            line: lblTok.lineno
+            col: lblTok.colno
+        )
+        conditions.append (this.intern n: no)
+        return (this.forClausesTail
+            :lex
+            :conditions
+            :postconditions
+            :bodyId
+            :hasBody
+            bound: true
+            :isEach
+            :forLine
+            :forCol
+        )
+    }
+
+    # for-expression -> "for" [op] { "while" op } [ ["each"] label op ] { "while" op }
     #                   [ "loop" primary ] { "while" op }
     # -> forexpr (conditions: namedoperation arms [named=binding,
     # unnamed=while/leading], body, postconditions: bare op Nodes). The
@@ -2134,6 +2193,7 @@ Parser: class {
                     bodyId: (zast.nodeid.create from: 0)
                     hasBody: false
                     bound: false
+                    isEach: false
                     :forLine
                     :forCol
                 )
@@ -2151,6 +2211,7 @@ Parser: class {
                 bodyId: (zast.nodeid.create from: 0)
                 hasBody: false
                 bound: false
+                isEach: false
                 :forLine
                 :forCol
             )

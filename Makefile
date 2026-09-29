@@ -1919,7 +1919,11 @@ perf: $(PERFBIN)
 #
 # +38 integer `each` is renamed `times`: 2 behaviour (the well-known name pool
 # interns one more name), 36 source.
-ALLOC_BASELINE := 2764597
+#
+# +1,235 the `each` keyword on a `for` binding: 0 behaviour (the compiler's own
+# source writes no `each` yet), 1,235 source (the parser's forBinding and the
+# flag threaded through the header and the tree).
+ALLOC_BASELINE := 2765832
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

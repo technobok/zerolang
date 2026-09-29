@@ -42,7 +42,7 @@
         'generator', 'typedef',
         'function', 'in', 'out', 'outx', 'is', 'as',
         'if', 'when', 'then', 'else',
-        'for', 'while', 'loop', 'with', 'do', 'on',
+        'for', 'each', 'while', 'loop', 'with', 'do', 'on',
         'match', 'case', 'swap',
         'native', '=',
         'take', 'borrow', 'view', 'hold', 'drop', 'private', 'generic'

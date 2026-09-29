@@ -46,7 +46,7 @@ syn region zerolangInterpolation matchgroup=zerolangInterpolationDelim start=/\\
 syn match zerolangKeyword /\<\%(unit\|record\|class\|variant\|union\|facet\|protocol\|data\|generator\|typedef\)\>/
 syn match zerolangKeyword /\<\%(function\|in\|out\|outx\|is\|as\|native\)\>/
 syn match zerolangKeyword /\<\%(if\|when\|then\|else\)\>/
-syn match zerolangKeyword /\<\%(for\|while\|loop\|with\|do\|on\)\>/
+syn match zerolangKeyword /\<\%(for\|each\|while\|loop\|with\|do\|on\)\>/
 syn match zerolangKeyword /\<\%(match\|case\|swap\)\>/
 syn match zerolangKeyword /\<\%(take\|borrow\|view\|hold\|drop\|private\|generic\)\>/
 " Operator-class identifiers: runs of non-alphanumeric WORD chars

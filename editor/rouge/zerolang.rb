@@ -41,6 +41,7 @@ module Rouge
           else
 
           for
+          each
 
           while
           loop
