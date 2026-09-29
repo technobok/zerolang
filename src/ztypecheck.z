@@ -29219,11 +29219,15 @@ checkResolvedMember: function {
 
 # refuseMarkerWithoutStorage -- an ownership marker (`.take`, `.borrow`, `.hold`)
 # on a value that names no storage: a literal, a unit constant, a data block or
-# one of its elements, an arm. A marker moves, lends or freezes a variable or a
-# field; such a value is read where it is written, so the marker would do
-# nothing while saying it does something. A function carries its own reference
-# form (`f.take`), so it is not asked. A TYPE names no storage either: a
-# projection is written with the marker on its source (`Speaker d.borrow`).
+# one of its elements, an arm, a call's result, and a function's NAME -- a unit
+# function, or a method read through its type. A marker moves, lends or freezes
+# a variable or a field; such a value is read where it is written, so the marker
+# would do nothing while saying it does something. A function's reference is
+# `.copy`; a variable or a field holding one is storage, and `.take` moves it.
+# A native and a bound method have no reference form, and are refused in those
+# words (refuseNativeReference, refuseBoundMethodReference). A TYPE names no
+# storage either: a projection is written with the marker on its source
+# (`Speaker d.borrow`).
 # The addressability question is the one a write target answers. True when it
 # reported; the marked value then has no type, so a binding of it is not refused
 # a second time for what it would have held.
@@ -29237,7 +29241,10 @@ refuseMarkerWithoutStorage: function {
     isMarker: (isMoveMarkerId nameId: cnId) or (cnId == zast.names.wkBorrow)
     if isMarker.not then return false
     btt: st.reg.typetypeOf typeId: bt
-    if btt == ztypes.ztypetype.functionType then return false
+    isFn: btt == ztypes.ztypetype.functionType
+    # a function with no reference form at all is refused in those words
+    if isFn when (refuseNativeReference :st :ast :dp :bt) then return true
+    if isFn when (refuseBoundMethodReference :st :ast :dp :bt :cnId) then return true
     if (isAddressableTarget :ast :st nid: dp.parent) then return false
     tp: ListVal zast.nameid
     appendValueTuple :ast n: (ast.nodes.get i: dp.parent.u64) dst: tp
@@ -29252,6 +29259,7 @@ refuseMarkerWithoutStorage: function {
         what = "'\{pp}'"
         hint = "write the value without a marker: '\{pp}'"
         if btt == ztypes.ztypetype.dataType then hint = "copy a data block with '\{pp}.array'"
+        if isFn then hint = "a function's reference is '\{pp}.copy'"
     }
     cn: zast.nameTextAt :ast ref: cnId
     (addErrorH
@@ -29261,7 +29269,7 @@ refuseMarkerWithoutStorage: function {
         colno: dp.colno
         e: zast.err.typeError
         msg: "\{what} names no storage: '.\{cn}' applies to a variable or a field"
-        note: "a literal, a constant and a data block are values, not places".string
+        note: "a literal, a constant, a data block, a function and a call's result are values, not places".string
         :hint
         width: 1
     )
