@@ -1,0 +1,41 @@
+# generator_factory_suspends.z -- a generator's `for each` over a bare FUNCTION
+# returning an iterator, with a body that suspends.
+#
+# The function's auto-call typed the header as the iterator it returns, while
+# the field that keeps that iterator across the suspension was minted only for
+# a header still typed as the function -- so none was, and the iterator lived
+# in a C local the resume `goto` jumps past: indeterminate on every later
+# `.call`, correct only while the stack happened to hold it. It is a state
+# field like any constructed iterable now.
+#
+# `Relay` is driven to exhaustion; `once` takes one value and drops the
+# instance, so its destructor frees an iterator that is still mid-walk.
+
+Words: generator { n: i64 } as {
+    call: function out String is {
+        for each x: this.n.times loop yield "w\{x}"
+    }
+}
+
+words: function out Words is {
+    return (Words n: 3)
+}
+
+Relay: generator {} as {
+    call: function out String is {
+        for each w: words loop yield w.copy
+    }
+}
+
+once: function is {
+    with r: Relay do {
+        first: r.call
+        match first case some then print "once \{first}" case none then print "once none"
+    }
+}
+
+main: function is {
+    for each r: Relay loop print r
+    once
+    print "done"
+}

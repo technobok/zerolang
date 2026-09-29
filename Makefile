@@ -1929,7 +1929,10 @@ perf: $(PERFBIN)
 # +376 an explicit `.call` on a native iterator names its template's function:
 # 0 behaviour (the compiler's own source drives no iterator by hand), 376
 # source.
-ALLOC_BASELINE := 2766209
+#
+# +38 a generator's walk over a bare iterator factory keeps the iterator in a
+# state field: 0 behaviour, 38 source.
+ALLOC_BASELINE := 2766247
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
