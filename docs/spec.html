@@ -1833,6 +1833,42 @@ the existing <code>.take</code> semantics for value types.</p>
 ref: myfunc.take</code></pre>
 <p><code>.take</code> on a spec name is a compiler error because specs have no value &#x2014;
 they are types only. Use <code>.take</code> on a function name that matches the spec.</p>
+<p><code>.copy</code> on a function also makes another reference to it, and leaves its
+source usable: a unit function (<code>double.copy</code>), a static method or a method
+with a receiver read through its type (<code>T.helper.copy</code>, <code>T.get.copy</code> --
+called with the receiver as an argument), and a function reference held in a
+local, a parameter or a field (<code>f.copy</code>, <code>h.op.copy</code>). A method read
+through an <em><strong>instance</strong></em> has no reference form -- a reference has nowhere to
+carry the receiver -- so <code>t.get.copy</code> calls <code>get</code> and copies what it
+returns, and a method that needs arguments is refused there
+(<code>'a.add' is a bound method: a reference has nowhere to carry the receiver</code>).
+A static method is copied through its type only: <code>t.helper.copy</code> is refused
+as any other read of it through an instance is (<code>'helper' belongs to the type
+'T', not to an instance</code>). A native has no reference form (<code>'print' is native
+and has no reference form</code>).</p>
+<p>Parentheses force the call. A marker after a callable path written in
+parentheses of its own applies to what the call returns: <code>(mk).copy</code> copies
+the list <code>mk</code> returns, where <code>mk.copy</code> is another reference to <code>mk</code>.</p>
+<pre><code class="language-zerolang">double: function {n: i64} out i64 is { return n * 2 }
+mk: function out ListVal i64 is {
+    r: ListVal i64
+    r.append 1
+    return r
+}
+T: record {
+    n: i64
+} as {
+    get: function {:this} out i64 is { return this.n }
+}
+
+main: function is {
+    d: double.copy           # another reference to double
+    g: T.get.copy            # unbound: the receiver is an argument
+    t: T n: 5
+    n: t.get.copy            # through an instance: get is called, 5 copied
+    xs: (mk).copy            # mk is called, and the list it returns copied
+    print "\{d n: 2} \{g this: t} \{n} \{xs.length}"   # 4 5 5 1
+}</code></pre>
 <h2 id="type-system"><a href="#type-system">5. Type System</a></h2>
 <h3 id="overview"><a href="#overview">5.1. Overview</a></h3>
 <p>A type (or data type) is a group of values and the operations that can be
@@ -4770,7 +4806,8 @@ as a value.</p>
 <p>A function reference variable cannot be defined at the unit level (unit level
 declarations are immutable).</p>
 <p>To obtain a function reference value at run time (within a function body), use
-<code>.take</code> on the function name.</p>
+<code>.take</code> or <code>.copy</code> on the function name; <code>.copy</code> also copies a reference
+already held (see <a href="#take-on-function-names">.take on Function Names</a>).</p>
 <p>Function references can be used as:</p>
 <ul>
 <li>local variables</li>

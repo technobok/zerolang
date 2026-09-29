@@ -1894,6 +1894,47 @@ the existing #~".take" semantics for value types.
 #~".take" on a spec name is a compiler error because specs have no value —
 they are types only. Use #~".take" on a function name that matches the spec.
 
+#~".copy" on a function also makes another reference to it, and leaves its
+source usable: a unit function (#~"double.copy"), a static method or a method
+with a receiver read through its type (#~"T.helper.copy", #~"T.get.copy" --
+called with the receiver as an argument), and a function reference held in a
+local, a parameter or a field (#~"f.copy", #~"h.op.copy"). A method read
+through an #_*"instance" has no reference form -- a reference has nowhere to
+carry the receiver -- so #~"t.get.copy" calls #~"get" and copies what it
+returns, and a method that needs arguments is refused there
+(#~"'a.add' is a bound method: a reference has nowhere to carry the receiver").
+A static method is copied through its type only: #~"t.helper.copy" is refused
+as any other read of it through an instance is (#~"'helper' belongs to the type
+'T', not to an instance"). A native has no reference form (#~"'print' is native
+and has no reference form").
+
+Parentheses force the call. A marker after a callable path written in
+parentheses of its own applies to what the call returns: #~"(mk).copy" copies
+the list #~"mk" returns, where #~"mk.copy" is another reference to #~"mk".
+
+#code language=zerolang: """
+  double: function {n: i64} out i64 is { return n * 2 }
+  mk: function out ListVal i64 is {
+      r: ListVal i64
+      r.append 1
+      return r
+  }
+  T: record {
+      n: i64
+  } as {
+      get: function {:this} out i64 is { return this.n }
+  }
+
+  main: function is {
+      d: double.copy           # another reference to double
+      g: T.get.copy            # unbound: the receiver is an argument
+      t: T n: 5
+      n: t.get.copy            # through an instance: get is called, 5 copied
+      xs: (mk).copy            # mk is called, and the list it returns copied
+      print "\{d n: 2} \{g this: t} \{n} \{xs.length}"   # 4 5 5 1
+  }
+  """
+
 
 #--: Type System
 
@@ -5454,7 +5495,8 @@ A function reference variable cannot be defined at the unit level (unit level
 declarations are immutable).
 
 To obtain a function reference value at run time (within a function body), use
-#~".take" on the function name.
+#~".take" or #~".copy" on the function name; #~".copy" also copies a reference
+already held (see [#> to=take-on-function-names: .take on Function Names]).
 
 Function references can be used as:
 

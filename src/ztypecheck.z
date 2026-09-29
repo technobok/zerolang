@@ -27414,6 +27414,23 @@ reportPrivateMember: function {
     }
 }
 
+# readsMethodThroughInstance -- `dp` reads a method that takes a receiver
+# through a value, not through its type: `e.key`, not `Entry.key`. A function
+# FIELD is excluded: it is the instance's own reference, not a method.
+readsMethodThroughInstance: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    dp: dpref
+    bt: ztypes.tid
+    mo: u64
+} out bool is {
+    cnId: atomNameId :ast n: (ast.nodes.get i: dp.child.u64)
+    if (st.typing.declIsFnptrFieldId parentTypeId: bt nameId: cnId) then return false
+    if (memberDeclaresReceiver :st :bt :cnId :mo).not then return false
+    return (dottedBaseIsValue :st :ast :unitDecl n: (ast.nodes.get i: dp.nid.u64))
+}
+
 # checkMemberAutoCall -- a FUNCTION member read in value position auto-calls: it
 # takes the receiver lock a reader takes, answers the method's return type, and
 # routes the pins its result keeps. Answers the path's type.
@@ -27434,7 +27451,12 @@ checkMemberAutoCall: function {
     # declare none, which read a field as a call that locked its receiver.
     moKind: st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)
     if moKind != ztypes.ztypetype.functionType then return result
-    if coerce when st.typing.suppressFnAutoCall.not when (fnAutoCallable
+    # a METHOD read through an INSTANCE has no reference form -- a reference has
+    # nowhere to carry the receiver -- so a `.take` or `.copy` after it does not
+    # stop the call: the marker applies to what the method returns
+    suppressed: st.typing.suppressFnAutoCall
+    if suppressed then suppressed = (readsMethodThroughInstance :st :ast :unitDecl :dp :bt :mo).not
+    if coerce when suppressed.not when (fnAutoCallable
         :st
         mid: (ztypes.tid.create from: mo.u64)
     ) then {
@@ -29353,6 +29375,118 @@ isNativeFnTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is
     return false
 }
 
+# refuseNativeReference -- a native function has no reference form, under
+# `.take` or `.copy`: the compiler supplies its body, and an inlined one has no
+# C function whose address there is to take. false when `bt` is not a native.
+refuseNativeReference: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: dpref
+    bt: ztypes.tid
+} out bool is {
+    if (isNativeFnTid :st tid: bt).not then return false
+    ntp: ListVal zast.nameid
+    appendValueTuple :ast n: (ast.nodes.get i: dp.parent.u64) dst: ntp
+    pth: zenv.formatPath pool: ast.names path: ntp.listView
+    mnr: "'\{pth}' is native and has no reference form"
+    (addError
+        :st
+        nodeid: dp.nid
+        lineno: dp.lineno
+        colno: dp.colno
+        e: zast.err.callError
+        msg: mnr
+    )
+    stampGate :st nid: dp.nid.u64 tid: bt
+    return true
+}
+
+# refuseBoundMethodReference -- A BOUND METHOD HAS NO REFERENCE FORM. A method
+# reference is a plain C function pointer, and a pointer has nowhere to carry
+# the receiver -- `r.add.take` emitted the identical C to the bare `r.add`,
+# which called the method with the receiver and none of its arguments. Copy it
+# off the TYPE instead and pass the receiver explicitly.
+#
+# Scoped by methodHasThisReceiver, which is what separates a method from a
+# callable FIELD: a function-pointer field read (`p.op.take`) declares no
+# receiver and stays legal, as fnptr_field_bare_read instructs. The base must
+# also be a VALUE -- `point.add.copy` names the type, and that is the unbound
+# form this error points at. A method that needs no argument never reaches
+# here: read through an instance it is called (readsMethodThroughInstance).
+# false when nothing was refused.
+refuseBoundMethodReference: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+} out bool is {
+    if (methodHasThisReceiver :st mid: bt).not then return false
+    rootNm: dottedRootName :ast n: (ast.nodes.get i: dp.parent.u64)
+    baseIsValue: false
+    if rootNm.length > 0 then {
+        rvo: st.lookupVarId nameId: (nameIdOf :ast name: rootNm.stringView)
+        match (
+            rvo
+        ) case some then baseIsValue = true case none then null
+    }
+    if baseIsValue.not then return false
+    cn: zast.nameTextAt :ast ref: cnId
+    mNm: dottedChildName :ast n: (ast.nodes.get i: dp.parent.u64
+    # composed with append, not interpolation: a dotted path built inline reads
+    # to A002 as a composed table key
+    )
+    bound: rootNm.copy
+    bound.append "."
+    bound.append mNm
+    unb: st.reg.nameOf tid: (st.reg.ownerTidOf tid: bt)
+    unb.append "."
+    unb.append mNm
+    unb.append ".copy"
+    bmm: "'\{bound.stringView}' is a bound method: a reference has nowhere to carry the receiver"
+    bmn: "a method reference is a plain function pointer".string
+    bmh: "copy it off the type -- '\{unb.stringView}' -- and pass the receiver explicitly"
+    (addErrorH
+        :st
+        nodeid: dp.nid
+        lineno: dp.lineno
+        colno: dp.colno
+        e: zast.err.callError
+        msg: bmm
+        note: bmn
+        hint: bmh
+        width: cn.length.u32.orPanic
+    )
+    stampGate :st nid: dp.nid.u64 tid: bt
+    return true
+}
+
+# checkFunctionCopy -- `.copy` of a FUNCTION is another reference to it: a unit
+# function, a static method or an unbound method read through its type, a
+# function-reference variable, parameter or field. dottedBaseTid read the base
+# as a reference, so a function type here is the function itself, not a call
+# the base walk declined. A native and a bound method have no reference form.
+checkFunctionCopy: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+} out callleg is {
+    if (zast.nameTextEq :ast ref: cnId s: "copy").not then return (callleg
+        handled: false
+        tid: (ztypes.tid.create from: 0)
+    )
+    if (st.reg.typetypeOf typeId: bt) != ztypes.ztypetype.functionType then return (callleg
+        handled: false
+        tid: (ztypes.tid.create from: 0)
+    )
+    refused: refuseNativeReference :st :ast :dp :bt
+    if refused.not then refused = refuseBoundMethodReference :st :ast :dp :bt :cnId
+    if refused.not then stampGate :st nid: dp.nid.u64 tid: bt
+    return (callleg handled: true tid: bt)
+}
+
 # checkTransferMarker -- `.take` / `.drop` are ownership transfer markers, not
 # members. The path carries the base's type; a bare-name source releases its held
 # locks and invalidates (the taken overlay propagates out of popped scopes).
@@ -29383,72 +29517,11 @@ checkTransferMarker: function {
         # left the C compiler reporting a mangled name for a mistake in the path.
         )
     )
-    if (isMoveMarkerId nameId: cnId) when (isNativeFnTid :st tid: bt) then {
-        ntp: ListVal zast.nameid
-        appendValueTuple :ast n: (ast.nodes.get i: dp.parent.u64) dst: ntp
-        pth: zenv.formatPath pool: ast.names path: ntp.listView
-        mnr: "'\{pth}' is native and has no reference form"
-        (addError
-            :st
-            nodeid: dp.nid
-            lineno: dp.lineno
-            colno: dp.colno
-            e: zast.err.callError
-            msg: mnr
-        )
-        stampGate :st nid: dp.nid.u64 tid: bt
+    if (isMoveMarkerId nameId: cnId) when (refuseNativeReference :st :ast :dp :bt) then {
         return (callleg handled: true tid: bt)
     }
-    # A BOUND METHOD HAS NO REFERENCE FORM EITHER. A method reference is a
-    # plain C function pointer, and a pointer has nowhere to carry the
-    # receiver -- `r.add.take` emitted the identical C to the bare `r.add`,
-    # which called the method with the receiver and none of its arguments.
-    # Take it off the TYPE instead and pass the receiver explicitly.
-    #
-    # Scoped by methodHasThisReceiver, which is what separates a method from
-    # a callable FIELD: a function-pointer field read (`p.op.take`) declares
-    # no receiver and stays legal, as fnptr_field_bare_read instructs. The
-    # base must also be a VALUE -- `point.add.take` names the type, and that
-    # is the unbound form this error points at.
-    if (isMoveMarkerId nameId: cnId) when (methodHasThisReceiver :st mid: bt) then {
-        rootNm: dottedRootName :ast n: (ast.nodes.get i: dp.parent.u64)
-        baseIsValue: false
-        if rootNm.length > 0 then {
-            rvo: st.lookupVarId nameId: (nameIdOf :ast name: rootNm.stringView)
-            match (
-                rvo
-            ) case some then baseIsValue = true case none then null
-        }
-        if baseIsValue then {
-            cn: zast.nameTextAt :ast ref: cnId
-            mNm: dottedChildName :ast n: (ast.nodes.get i: dp.parent.u64
-            # composed with append, not interpolation: a dotted path built
-            # inline reads to A002 as a composed table key
-            )
-            bound: rootNm.copy
-            bound.append "."
-            bound.append mNm
-            unb: st.reg.nameOf tid: (st.reg.ownerTidOf tid: bt)
-            unb.append "."
-            unb.append mNm
-            unb.append ".take"
-            bmm: "'\{bound.stringView}' is a bound method: a reference has nowhere to carry the receiver"
-            bmn: "a method reference is a plain function pointer".string
-            bmh: "take it off the type -- '\{unb.stringView}' -- and pass the receiver explicitly"
-            (addErrorH
-                :st
-                nodeid: dp.nid
-                lineno: dp.lineno
-                colno: dp.colno
-                e: zast.err.callError
-                msg: bmm
-                note: bmn
-                hint: bmh
-                width: cn.length.u32.orPanic
-            )
-            stampGate :st nid: dp.nid.u64 tid: bt
-            return (callleg handled: true tid: bt)
-        }
+    if (isMoveMarkerId nameId: cnId) when (refuseBoundMethodReference :st :ast :dp :bt :cnId) then {
+        return (callleg handled: true tid: bt)
     }
     # `.drop` is a statement, not a value: it ends a lifetime and hands
     # back nothing, so a binding, an argument or an operand has nothing to
@@ -29749,10 +29822,24 @@ boxMemberDelegates: function {ast: Ast.view nameId: zast.nameid} out bool is {
     return (zast.nameTextEq :ast ref: nameId s: "copy").not
 }
 
+# isCopyLeaf -- the leaf is the `.copy` member. `.copy` is a name, not a marker
+# keyword, so it is told by its text.
+isCopyLeaf: function {ast: Ast.view leaf: zast.nodeid} out bool is {
+    c: ast.nodes.get i: leaf.u64
+    match (
+        c
+    ) case atomid then {
+        return (zast.nameTextEq :ast ref: c.name s: "copy")
+    } else {
+        return false
+    }
+}
+
 # dottedBaseTid -- type the base a dotted path hangs off. The base is a REFERENCE,
-# so a name-shaped one must not construct and a `.take` child must not auto-call;
-# an unresolved bare name may still be a unit, and a literal materialises to its
-# concrete default before member lookup. 0 when the base types to nothing.
+# so a name-shaped one must not construct and a `.take` or `.copy` child must not
+# auto-call it; an unresolved bare name may still be a unit, and a literal
+# materialises to its concrete default before member lookup. 0 when the base
+# types to nothing.
 dottedBaseTid: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -29762,23 +29849,27 @@ dottedBaseTid: function {
     # the base of a dotted path is a reference, not a bare value: a type
     # name there must not construct (Counter.create, unit.Type.arm). Only
     # name-shaped bases suppress -- an expression base walks normally so
-    # atoms inside its args still stamp. A `.take` child makes the base a
-    # function REFERENCE: the base walk must not auto-call it. Both shapes
-    # are read through views scoped to this block: the base walk lends ast.
+    # atoms inside its args still stamp. A `.take` or `.copy` child makes a
+    # function base a REFERENCE: the base walk must not auto-call it -- unless
+    # the base was written in parentheses of its own, which force the call
+    # (`(mk).copy` copies the result). Both shapes are read through views
+    # scoped to this block: the base walk lends ast.
     baseIsName: false
-    childIsTake: false
+    childIsRef: false
     {
         dpkN: ast.nodes.get i: dp.parent.u64
         if dpkN.atomid then baseIsName = true
         if dpkN.dottedpath then baseIsName = true
         # a type application there names its type, as a name does
         if dpkN.call then st.typing.typeAppsNamed.add item: dp.parent.u64
-        if (zast.markerKindOfLeaf :ast leaf: dp.child).takeMarker then childIsTake = true
+        if (zast.markerKindOfLeaf :ast leaf: dp.child).takeMarker then childIsRef = true
+        if (isCopyLeaf :ast leaf: dp.child) then childIsRef = true
+        if (zast.callsBeforeMarker :ast parent: dp.parent child: dp.child) then childIsRef = false
     }
     supPrev: st.typing.suppressBareCtor
     if baseIsName then st.typing.suppressBareCtor = true
     supFnPrev: st.typing.suppressFnAutoCall
-    if childIsTake then st.typing.suppressFnAutoCall = true
+    if childIsRef then st.typing.suppressFnAutoCall = true
     bt: checkValueAt :st :unitDecl :ast nid: dp.parent
     st.typing.suppressFnAutoCall = supFnPrev
     st.typing.suppressBareCtor = supPrev
@@ -29902,6 +29993,8 @@ checkDottedOn: function {
     if mkm.handled then return mkm.tid
     xfm: checkTransferMarker :st :unitDecl :ast :dp :bt :cnId
     if xfm.handled then return xfm.tid
+    fcp: checkFunctionCopy :st :ast :dp :bt :cnId
+    if fcp.handled then return fcp.tid
     aix: checkArrayIndexMember :st :ast :dp :bt :cnId
     if aix.handled then return aix.tid
     dbm: checkDataBlockMember :st :unitDecl :ast :dp :bt :cnId
