@@ -5989,10 +5989,38 @@ checkParamTypeShape: function {
     }
 }
 
-# namesFunctionWithBody -- `baseId`, looked up outward from `scope`, is declared
-# by a function WITH a body, not a spec. Asked of the declarations themselves,
-# so it answers before the function's type has resolved (a field is resolved
-# on demand, often before a function it names).
+# declaredFunctionNode -- the functiondef row `baseId` declares, looked up
+# outward from `scope` through the declarations themselves -- so it answers
+# before the function's type has resolved (a field is resolved on demand, often
+# before a function it names). 0 when the name declares no function there.
+declaredFunctionNode: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    baseId: zast.nameid
+} out zast.nodeid is {
+    cur: scopeFor :st :scope :unitDecl
+    for cur.isZero.not loop {
+        d: st.typing.declFindChild parentDeclId: cur nameId: baseId
+        if d.isZero.not then {
+            dn: (st.typing.decls.get i: d.u64).node
+            if dn == 0 then return zast.nodeid
+            op: zast.nodeid
+            {
+                n: ast.nodes.get i: dn
+                if n.namedoperation then op = n.operation
+            }
+            if op.isZero then return zast.nodeid
+            if (ast.nodes.get i: op.u64).functiondef then return op
+            return zast.nodeid
+        }
+        cur = declParentIdOf :st declId: cur
+    }
+    return zast.nodeid
+}
+
+# namesFunctionWithBody -- `baseId` declares a function WITH a body, not a spec.
 namesFunctionWithBody: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
@@ -6000,23 +6028,58 @@ namesFunctionWithBody: function {
     scope: ztypes.declid
     baseId: zast.nameid
 } out bool is {
-    cur: scopeFor :st :scope :unitDecl
-    for cur.isZero.not loop {
-        d: st.typing.declFindChild parentDeclId: cur nameId: baseId
-        if d.isZero.not then {
-            dn: (st.typing.decls.get i: d.u64).node
-            if dn == 0 then return false
-            op: zast.nodeid
-            {
-                n: ast.nodes.get i: dn
-                if n.namedoperation then op = n.operation
-            }
-            if op.isZero then return false
-            return (isFunctionDefWithBody o: (ast.nodes.get i: op.u64))
-        }
-        cur = declParentIdOf :st declId: cur
+    fn: declaredFunctionNode :st :ast :unitDecl :scope :baseId
+    if fn.isZero then return false
+    return (isFunctionDefWithBody o: (ast.nodes.get i: fn.u64))
+}
+
+# namesSpec -- `baseId` declares a SPEC: a function with no body that is not
+# native. A spec names a type -- of a parameter, a field, a return -- and has no
+# value: nothing to call, and nothing to reference.
+namesSpec: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    baseId: zast.nameid
+} out bool is {
+    fn: declaredFunctionNode :st :ast :unitDecl :scope :baseId
+    if fn.isZero then return false
+    n: ast.nodes.get i: fn.u64
+    match (
+        n
+    ) case functiondef then {
+        return n.body.isZero and n.isNative.not
+    } else {
+        return false
     }
-    return false
+}
+
+# refuseSpecValue -- a spec's name used as a value: called, read bare, or
+# copied. True when it reported (when `baseId` names a spec).
+refuseSpecValue: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    baseId: zast.nameid
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+} out bool is {
+    if (namesSpec :st :ast :unitDecl scope: st.curScope :baseId).not then return false
+    sn: zast.nameTextCopy :ast ref: baseId
+    (addErrorH
+        :st
+        :nodeid
+        :lineno
+        :colno
+        e: zast.err.typeError
+        msg: "'\{sn}' is a spec, a function with no body: it names a type, and has no value to call or copy"
+        note: "a spec types a parameter, a field or a return, and a function with a body and its signature is passed there".string
+        hint: String
+        width: sn.length.u32.orPanic
+    )
+    return true
 }
 
 # refuseMarkedFunctionType -- a declaration's type written as a function's NAME
@@ -29316,6 +29379,7 @@ checkResolvedMember: function {
 # a second time for what it would have held.
 refuseMarkerWithoutStorage: function {
     st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
     ast: Ast
     dp: dpref
     bt: ztypes.tid
@@ -29325,6 +29389,14 @@ refuseMarkerWithoutStorage: function {
     if isMarker.not then return false
     btt: st.reg.typetypeOf typeId: bt
     isFn: btt == ztypes.ztypetype.functionType
+    # a spec's name was refused as a value by the base walk (refuseSpecValue)
+    if isFn when (namesSpec
+        :st
+        :ast
+        :unitDecl
+        scope: st.curScope
+        baseId: (bareAtomNameId n: (ast.nodes.get i: dp.parent.u64))
+    ) then return true
     # a function with no reference form at all is refused in those words
     if isFn when (refuseNativeReference :st :ast :dp :bt) then return true
     if isFn when (refuseBoundMethodReference :st :ast :dp :bt :cnId) then return true
@@ -30113,7 +30185,8 @@ checkDottedOn: function {
         lineno: dp.lineno
         colno: dp.colno
     ) then return (ztypes.tid.create from: 0)
-    if (refuseMarkerWithoutStorage :st :ast :dp :bt :cnId) then return (ztypes.tid.create from: 0)
+    noStorage: refuseMarkerWithoutStorage :st :unitDecl :ast :dp :bt :cnId
+    if noStorage then return (ztypes.tid.create from: 0)
     mkm: checkMarkerMember :st :unitDecl :ast :dp :bt :cnId
     if mkm.handled then return mkm.tid
     xfm: checkTransferMarker :st :unitDecl :ast :dp :bt :cnId
@@ -30620,6 +30693,15 @@ typeOfBareName: function {
                 fid: (ztypes.tid.create from: fo.u64)
             )
         }
+        if isAutoFn when (refuseSpecValue
+            :st
+            :ast
+            :unitDecl
+            baseId: node.name
+            nodeid: node.nid
+            lineno: node.lineno
+            colno: node.colno
+        ) then isAutoFn = false
         if isAutoFn when st.typing.suppressFnAutoCall.not then {
             result = bareFnCall :st :ast :node fid: (ztypes.tid.create from: fo.u64)
         }
@@ -44746,6 +44828,16 @@ checkCall: function {
     if cnId == zast.names.wkYield when (yieldIsInScope :st) then {
         return (checkYieldCall :st :unitDecl :ast :call)
     }
+    # a spec has no body to call; a local holding a reference of its type does
+    if cnId.isZero.not when (st.lookupVarId nameId: cnId).none when (refuseSpecValue
+        :st
+        :ast
+        :unitDecl
+        baseId: cnId
+        nodeid: call.nid
+        lineno: call.lineno
+        colno: call.colno
+    ) then return (ztypes.tid.create from: 0)
     return (checkRegularCall :st :unitDecl :ast :call :cnId)
 }
 
