@@ -26880,7 +26880,7 @@ fnAutoCallable: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out bool i
 }
 
 # bareFnRefError -- a bare reference to a function with required parameters
-# is a call missing its arguments (a reference needs the explicit '.take').
+# is a call missing its arguments (a reference needs the explicit '.copy').
 bareFnRefError: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -26889,6 +26889,35 @@ bareFnRefError: function {
     colno: u32
     width: u32
     fid: ztypes.tid
+} is {
+    fn: specWrittenName :st :ast tid: fid
+    (bareFnRefErrorFor
+        :ast
+        :st
+        :nodeid
+        :lineno
+        :colno
+        :width
+        :fid
+        written: fn.stringView
+        refHint: true
+    )
+}
+
+# bareFnRefErrorFor -- bareFnRefError naming the read as it was written: a
+# variable holding the reference is named, not the function it holds. The hint
+# offers `.copy` only where the read has a reference form: not for a native,
+# and not for a method read through an instance (`refHint` false).
+bareFnRefErrorFor: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    nodeid: zast.nodeid
+    lineno: u32
+    colno: u32
+    width: u32
+    fid: ztypes.tid
+    written: StringView
+    refHint: bool
 } is {
     prov: ListVal zast.nameid
     misN: List String
@@ -26916,10 +26945,12 @@ bareFnRefError: function {
         ln1: "'\{mn}' (type: \{mtn})"
         lst.append ln1
     }
-    fn: specWrittenName :st :ast tid: fid
-    m: "a bare reference to '\{fn}' calls it: missing required arguments \{lst}"
+    m: "a bare reference to '\{written}' calls it: missing required arguments \{lst}"
     nt: "a bare function reference in value position is a call".string
-    eh: "call it with its required arguments, or store a reference with '\{fn}.take'"
+    eh: "call it with its required arguments, or copy the reference with '\{written}.copy'"
+    # a native has no reference form to copy (refuseNativeReference)
+    noRef: refHint.not or (isNativeFnTid :st tid: fid)
+    if noRef then eh = "call it with its required arguments".string
     (addErrorH
         :st
         :nodeid
@@ -27592,7 +27623,7 @@ checkMemberProjections: function {
             mid: (ztypes.tid.create from: mo.u64)
         ).not then {
             cn: zast.nameTextAt :ast ref: cnId
-            mE3: "function-pointer field '\{cn}' takes arguments; call it, or reference it with '.take'"
+            mE3: "function-pointer field '\{cn}' takes arguments; call it, or copy the reference with '.copy'"
             (addError
                 :st
                 nodeid: dp.nid
@@ -29015,6 +29046,47 @@ memberDeclaresReceiver: function {
     }
 }
 
+# reportBareMemberRef -- The THIRD value position for a bare function reference.
+# checkUnitMemberValue owns `unit.member` and typeOfBareName the bare atom; the
+# instance-method path declined to auto-call and reported nothing, so `y: r.add`
+# kept a FUNCTION stamp and the emitter called it with the receiver alone -- one
+# argument into a two-parameter C function, at exit 0.
+#
+# Two legitimate FUNCTION stamps have to survive: a marker's base, which sets
+# suppressFnAutoCall, and a for-header, which sets allowBareFnRef. A fn-pointer
+# FIELD is excluded because checkMemberProjections already reports it in its
+# own words. The hint offers `.copy` only when the read is not through an
+# instance, where a method has no reference form.
+reportBareMemberRef: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+    mo: u64
+    # the member read's type: still the FUNCTION when it was not called
+    result: ztypes.tid
+} is {
+    if st.typing.suppressFnAutoCall or st.typing.allowBareFnRef then return
+    if (st.reg.typetypeOf typeId: result) != ztypes.ztypetype.functionType then return
+    if (st.typing.declIsFnptrFieldId parentTypeId: bt nameId: cnId) then return
+    cn: zast.nameTextCopy :ast ref: cnId
+    bfl: nodeLine n: (ast.nodes.get i: dp.child.u64)
+    bfc: nodeCol n: (ast.nodes.get i: dp.child.u64)
+    (bareFnRefErrorFor
+        :ast
+        :st
+        nodeid: dp.nid
+        lineno: bfl
+        colno: bfc
+        width: cn.length.u32.orPanic
+        fid: result
+        written: cn.stringView
+        refHint: (readsMethodThroughInstance :st :ast :unitDecl :dp :bt :mo).not
+    )
+}
+
 # checkResolvedMember -- the member resolved on the base type. Stamps the owner for
 # tooling and the emitter, then runs the legs in order: tagged-type construction
 # or arm predicate, the `as` constant, the projection legs, the auto-call, and
@@ -29139,32 +29211,7 @@ checkResolvedMember: function {
         coerce: callIt
         result0: result
     )
-    # The THIRD value position for a bare function reference. checkUnitMemberValue
-    # owns `unit.member` and typeOfBareName the bare atom; the instance-method path
-    # declined to auto-call and reported nothing, so `y: r.add` kept a FUNCTION
-    # stamp and the emitter called it with the receiver alone -- one argument into
-    # a two-parameter C function, at exit 0.
-    #
-    # Two legitimate FUNCTION stamps have to survive: a `.take` peel, which sets
-    # suppressFnAutoCall, and a for-header, which sets allowBareFnRef. A
-    # fn-pointer FIELD is excluded because checkMemberProjections above already
-    # reports it in its own words.
-    if coerce when st.typing.suppressFnAutoCall.not when st.typing.allowBareFnRef.not when (
-        (st.reg.typetypeOf typeId: result) == ztypes.ztypetype.functionType
-    ) when (st.typing.declIsFnptrFieldId parentTypeId: bt nameId: cnId).not then {
-        cn: zast.nameTextCopy :ast ref: cnId
-        bfl: nodeLine n: (ast.nodes.get i: dp.child.u64)
-        bfc: nodeCol n: (ast.nodes.get i: dp.child.u64)
-        (bareFnRefError
-            :ast
-            :st
-            nodeid: dp.nid
-            lineno: bfl
-            colno: bfc
-            width: cn.length.u32.orPanic
-            fid: result
-        )
-    }
+    if coerce then reportBareMemberRef :st :ast :unitDecl :dp :bt :cnId :mo :result
     reportPrivateMember :st :ast :dp :bt :cnId :aliasViaX
     stampGate :st nid: dp.nid.u64 tid: result
     return result
@@ -29822,24 +29869,10 @@ boxMemberDelegates: function {ast: Ast.view nameId: zast.nameid} out bool is {
     return (zast.nameTextEq :ast ref: nameId s: "copy").not
 }
 
-# isCopyLeaf -- the leaf is the `.copy` member. `.copy` is a name, not a marker
-# keyword, so it is told by its text.
-isCopyLeaf: function {ast: Ast.view leaf: zast.nodeid} out bool is {
-    c: ast.nodes.get i: leaf.u64
-    match (
-        c
-    ) case atomid then {
-        return (zast.nameTextEq :ast ref: c.name s: "copy")
-    } else {
-        return false
-    }
-}
-
 # dottedBaseTid -- type the base a dotted path hangs off. The base is a REFERENCE,
-# so a name-shaped one must not construct and a `.take` or `.copy` child must not
-# auto-call it; an unresolved bare name may still be a unit, and a literal
-# materialises to its concrete default before member lookup. 0 when the base
-# types to nothing.
+# so a name-shaped one must not construct and a marker child must not auto-call
+# it; an unresolved bare name may still be a unit, and a literal materialises to
+# its concrete default before member lookup. 0 when the base types to nothing.
 dottedBaseTid: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -29849,8 +29882,9 @@ dottedBaseTid: function {
     # the base of a dotted path is a reference, not a bare value: a type
     # name there must not construct (Counter.create, unit.Type.arm). Only
     # name-shaped bases suppress -- an expression base walks normally so
-    # atoms inside its args still stamp. A `.take` or `.copy` child makes a
-    # function base a REFERENCE: the base walk must not auto-call it -- unless
+    # atoms inside its args still stamp. A marker child (`.copy`, `.take`,
+    # `.borrow`, `.view`, `.hold`, `.drop`) applies to the base itself, so a
+    # function base is a REFERENCE the base walk must not auto-call -- unless
     # the base was written in parentheses of its own, which force the call
     # (`(mk).copy` copies the result). Both shapes are read through views
     # scoped to this block: the base walk lends ast.
@@ -29862,8 +29896,8 @@ dottedBaseTid: function {
         if dpkN.dottedpath then baseIsName = true
         # a type application there names its type, as a name does
         if dpkN.call then st.typing.typeAppsNamed.add item: dp.parent.u64
-        if (zast.markerKindOfLeaf :ast leaf: dp.child).takeMarker then childIsRef = true
-        if (isCopyLeaf :ast leaf: dp.child) then childIsRef = true
+        if (zast.isValueMarkerLeaf :ast leaf: dp.child) then childIsRef = true
+        if (zast.markerKindOfLeaf :ast leaf: dp.child).dropMarker then childIsRef = true
         if (zast.callsBeforeMarker :ast parent: dp.parent child: dp.child) then childIsRef = false
     }
     supPrev: st.typing.suppressBareCtor
@@ -30351,6 +30385,91 @@ checkBareTypeValue: function {
     }
 }
 
+# bareFnCall -- a bare read of a function is a call with no arguments, whether it
+# names the function or reads a reference to one from a variable: answers the
+# call's result -- nothing, for a function with no `out` -- or, when a parameter
+# is required, reports the missing arguments and answers the function itself.
+# The caller has already asked whether the reference itself is wanted
+# (suppressFnAutoCall).
+bareFnCall: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    node: atomref
+    fid: ztypes.tid
+} out ztypes.tid is {
+    if (fnAutoCallable :st mid: fid).not then {
+        nm: zast.nameTextCopy :ast ref: node.name
+        (bareFnRefErrorFor
+            :ast
+            :st
+            nodeid: node.nid
+            lineno: node.lineno
+            colno: node.colno
+            width: nm.length.u32.orPanic
+            :fid
+            written: nm.stringView
+            refHint: true
+        )
+        return fid
+    }
+    noteStatementAutoCall :st nid: node.nid.u64
+    ro: methodReturnOf :st mid: fid
+    match (
+        ro
+    ) case some then {
+        return ro
+    } case none then {
+        return (ztypes.tid.create from: st.typing.nullTypeId)
+    }
+}
+
+# rewriteReadAsCall -- the bare read `node` of a variable holding a function
+# reference becomes, in the tree, the call it makes: the name moves to a fresh
+# row, and the read's own row -- which every parent already holds -- is
+# replaced by a call of that name with no arguments, at the name's position.
+# What the checker walks next, and the emitter later, is that call.
+rewriteReadAsCall: function {st: zenv.ZSymbolTable ast: Ast node: atomref} is {
+    start: ast.nodes.length
+    aid: zast.tableReserve :ast
+    (zast.tableAdd
+        :ast
+        n: astnode.atomid (zast.atomidrow
+            nodeid: aid
+            lineno: node.lineno
+            colno: node.colno
+            name: node.name
+        )
+    )
+    fs: ast.fsnoForNode nodeid: node.nid.u32
+    if fs.u64 > 0 then ast.fileSegs.append (zast.FileSeg
+        startId: start.u32.orPanic
+        endId: ast.nodes.length.u32.orPanic
+        fsno: fs
+    )
+    none: ListVal u32
+    (zast.tableSet
+        :ast
+        id: node.nid.u32
+        child: astnode.call (zast.callrow
+            nodeid: node.nid
+            lineno: node.lineno
+            colno: node.colno
+            callable: aid
+            arguments: (zast.kidsAdd kids: ast.kids xs: none)
+            infix: false
+        )
+    )
+}
+
+# readsFnRefAsCall -- a read of a variable of type `t` is a call of the function
+# it holds: `t` is a function type and nothing asks for the reference -- no
+# marker after it (suppressFnAutoCall), and not the target of a write.
+readsFnRefAsCall: function {st: zenv.ZSymbolTable.view t: ztypes.tid} out bool is {
+    if (st.reg.typetypeOf typeId: t) != ztypes.ztypetype.functionType then return false
+    if st.typing.suppressFnAutoCall then return false
+    return st.typing.inAssignTarget.not
+}
+
 # typeOfBareName -- a bare name that is not a local: it names a TYPE, a unit, or a
 # function. A no-arg non-generic FUNCTION name in value position is a call, and
 # an aliased container name resolves through its twin. 0 when it names nothing.
@@ -30411,41 +30530,7 @@ typeOfBareName: function {
             )
         }
         if isAutoFn when st.typing.suppressFnAutoCall.not then {
-            if (fnAutoCallable
-                :st
-                mid: (ztypes.tid.create from: fo.u64)
-            ).not then {
-                isAutoFn = false
-                # the atom's width is read through a view scoped to this
-                # block: the report below lends ast
-                wdt: u32
-                {
-                    nm: zast.nameTextAt :ast ref: node.name
-                    wdt = nm.length.u32.orPanic
-                }
-                (bareFnRefError
-                    :ast
-                    :st
-                    nodeid: node.nid
-                    lineno: node.lineno
-                    colno: node.colno
-                    width: wdt
-                    fid: (ztypes.tid.create from: fo.u64)
-                )
-            }
-        } else {
-            isAutoFn = false
-        }
-        if isAutoFn then {
-            noteStatementAutoCall :st nid: node.nid.u64
-            ro: methodReturnOf :st mid: (ztypes.tid.create from: fo.u64)
-            match (
-                ro
-            ) case some then {
-                result = ro
-            } case none then {
-                result = ztypes.tid.create from: st.typing.nullTypeId
-            }
+            result = bareFnCall :st :ast :node fid: (ztypes.tid.create from: fo.u64)
         }
         if st.typing.suppressBareCtor.not then {
             (checkBareTypeValue
@@ -31163,6 +31248,17 @@ checkAtomid: function {
             ).or
                 d: result.u64
             )
+        }
+        # a variable holding a function reference is called when read bare,
+        # as the function's own name is. The read BECOMES the call in the tree
+        # (rewriteReadAsCall), so everything after -- receiver temporaries,
+        # path roots, the emitter -- sees a call, not the variable's storage.
+        if (readsFnRefAsCall :st t: result) then {
+            if (fnAutoCallable :st mid: result) then {
+                rewriteReadAsCall :st :ast :node
+                return (checkValueAt :st :unitDecl :ast nid: node.nid)
+            }
+            result = bareFnCall :st :ast :node fid: result
         }
         stampGate :st nid: node.nid.u64 tid: result
         # atom-use variable id: stamped even during template walks (variable
@@ -47442,15 +47538,27 @@ labelRefAt: function {ast: Ast.view nid: zast.nodeid} out atomref is {
 # unresolvable.
 checkLabelValueAt: function {
     st: zenv.ZSymbolTable
-    ast: Ast.view
+    unitDecl: ztypes.declid
+    ast: Ast
     lv: atomref
 } out ztypes.tid is {
     lvo: st.lookup nameId: lv.name
     match (
         lvo
     ) case some then {
-        setlv: lvo
-        stampGate :st nid: lv.nid.u64 tid: (ztypes.tid.create from: setlv.u64)
+        lvt: ztypes.tid.create from: lvo.u64
+        # `:f` over a function reference calls it, as a bare `f` does: the label
+        # is its namedoperation's, and the value becomes the call. A lowering's
+        # forward hands the parameter on as it is.
+        fwd: zast.isForwardingLabel n: (ast.nodes.get i: lv.nid.u64)
+        if fwd.not when (readsFnRefAsCall :st t: lvt) then {
+            if (fnAutoCallable :st mid: lvt) then {
+                rewriteReadAsCall :st :ast node: lv
+                return (checkValueAt :st :unitDecl :ast nid: lv.nid)
+            }
+            lvt = bareFnCall :st :ast node: lv fid: lvt
+        }
+        stampGate :st nid: lv.nid.u64 tid: lvt
         lvv: st.lookupVarId nameId: lv.name
         match (
             lvv
@@ -47458,7 +47566,7 @@ checkLabelValueAt: function {
             setlvv: lvv
             st.typing.setAtomVariable nid: lv.nid.u64 vid: setlvv
         } case none then null
-        return (ztypes.tid.create from: lvo)
+        return lvt
     } case none then {
         lvNm: zast.nameTextAt :ast ref: lv.name
         lvm: "Unknown reference '\{lvNm}'"
@@ -47597,7 +47705,7 @@ checkValueArmAt: function {
         return (checkFor :st :unitDecl :ast fornode: frr)
     } case labelvalue then {
         lvr: labelRefAt :ast :nid
-        return (checkLabelValueAt :st :ast lv: lvr)
+        return (checkLabelValueAt :st :unitDecl :ast lv: lvr)
     } else {
         return (ztypes.tid.create from: 0)
     }

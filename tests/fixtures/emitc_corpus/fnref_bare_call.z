@@ -1,0 +1,96 @@
+# A BARE FUNCTION REFERENCE IS A CALL. The spec: a reference "may be called with
+# the same syntax as used when calling a standard function", and a function's
+# name read bare is a call with no arguments -- so a reference read bare is one
+# too, wherever it is held: a local, a parameter, a field. (A function type is
+# not `anyval`, so no container holds one and no `for` element is one.) Its
+# value is the call's result: a member read reads the result, and a result
+# that owns storage is a temporary freed after its use. `.copy` is how the
+# reference itself is handed on.
+seven: function out i64 is {
+    return 7
+}
+
+yes: function out bool is {
+    return true
+}
+
+hello: function out String is {
+    return "hello".string
+}
+
+hi: function is {
+    print "hi"
+}
+
+pt: record {
+    x: i64
+    y: i64
+}
+
+mkPt: function out pt is {
+    return (pt x: 1 y: 2)
+}
+
+count3: function out ListVal i64 is {
+    r: ListVal i64
+    r.append 1
+    r.append 2
+    r.append 3
+    return r
+}
+
+Holder: class {
+    src: seven.take
+}
+
+# a parameter read bare, as a return
+give: function {f: seven.take} out i64 is {
+    return f
+}
+
+size: function {s: String} out u64 is {
+    return s.length
+}
+
+# a reference held across a suspension: the local lives in the instance
+Twice: generator { f: seven.take } as {
+    call: function out i64 is {
+        g: this.f.copy
+        yield g
+        yield g + 1
+    }
+}
+
+main: function is {
+    f: seven.copy
+    b: yes.copy
+    h: hello.copy
+    n: hi.copy
+    # a binding, an interpolation, an argument, an operand
+    v: f
+    print "\{v} \{f} \{give f: f.copy} \{f + 1}"
+    # a statement: a reference to a function with no `out`
+    n
+    # a condition
+    if b then print "condition"
+    # an owned result: read, passed on, measured -- each a temporary
+    print "\{h} \{size s: h} \{h.length}"
+    # the `:name` shorthand passes the call's result
+    s: h
+    print "\{size :s}"
+    # a member read reads the result
+    q: mkPt.copy
+    r: q.y
+    print "\{q.y} \{r}"
+    c: count3.copy
+    print "\{c.length}"
+    # a field
+    hd: Holder src: f.copy
+    print "\{hd.src}"
+    # `for each` walks the list the call returns; a comprehension over it
+    for each x: c loop print "each \{x}"
+    sq: for each x: c loop x * f
+    print "\{sq.length} \{sq.get i: 2}"
+    # a suspending generator body
+    for each t: (Twice f: f.copy) loop print "gen \{t}"
+}
