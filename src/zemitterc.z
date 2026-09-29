@@ -21281,6 +21281,22 @@ withValueCType: function {
     return (slotCType :ast :symtab :ctx :tid)
 }
 
+# withBorrowsPlace -- a `with` binding of a bare name to a reftype that the
+# checker made a borrow (the unmarked default for a new name): the binding is a
+# second name for the source's storage. The decision is the checker's, read off
+# the binding's own variable.
+withBorrowsPlace: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    n: zast.withrow.view
+    vid: ztypes.vid
+} out bool is {
+    if vid.isZero then return false
+    if (nodeIsBareAtom n: (ast.nodes.get i: n.value.u64)).not then return false
+    if (symtab.reg.variableOwnershipOf id: vid) != ztypes.zownership.borrowed then return false
+    return (symtab.reg.isReftypeOf tid: (symtab.reg.variableTypeOf id: vid))
+}
+
 # emitWithLocal -- the header's C local for a `with` value that lives in the
 # block. A reference-returning callee hands back `T*`, so the binding ALIASES
 # its source exactly as a plain binding does; anything else is the value.
@@ -21308,6 +21324,21 @@ emitWithLocal: function {
         buf.append lw1
         walias: "(*__borrow_\{wnm})"
         vvSet xs: ctx.aliases vid: (defVid :symtab nid: n.nodeid.u64) val: walias.stringView
+        return
+    }
+    # `with v: src` over a name the checker made a borrow: a second name for the
+    # place, as a binding's is (emitBorrowAliasBind). A struct copy shared the
+    # source's buffers and lost every write through `v`.
+    wvid: defVid :symtab nid: n.nodeid.u64
+    if (withBorrowsPlace :ast :symtab :n vid: wvid) then {
+        addrP: "&"
+        if (pathIsPointer :ast :symtab :ctx n: (ast.nodes.get i: n.value.u64)) then addrP = ""
+        lp0: "\{ind}__typeof__(\{addrP}\{wv}) __borrow_\{wnm} = \{addrP}\{wv};\n"
+        buf.append lp0
+        lp1: "\{ind}/* alias: \{wnm} => (*__borrow_\{wnm}) */\n"
+        buf.append lp1
+        palias: "(*__borrow_\{wnm})"
+        vvSet xs: ctx.aliases vid: wvid val: palias.stringView
         return
     }
     wvC: wv.string
