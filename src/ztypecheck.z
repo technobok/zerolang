@@ -42456,8 +42456,16 @@ returnOwnedLocal: function {
     vid: ztypes.vid
     tid: ztypes.tid
 } is {
-    if (st.reg.needsDestructor typeId: tid
-    ) when st.typing.currentReturnsBorrow.not when (isBorrowedVar :st :vid) then {
+    # a borrowed user CLASS is the caller's whether or not it has anything to
+    # destroy: it is passed by reference, and returning it bare takes it, as
+    # `return p.take` would (a destructor-less one reached the C as a pointer
+    # returned for a struct). A view, or a by-value sum with nothing to
+    # destroy, owns nothing, and handing it on copies nothing that matters.
+    isClass: (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.classType
+    # a native class that owns storage has a destructor; one without is a view
+    if isClass then isClass = (st.reg.isNativeOf :tid).not
+    ownsSomething: isClass or (st.reg.needsDestructor typeId: tid)
+    if ownsSomething when st.typing.currentReturnsBorrow.not when (isBorrowedVar :st :vid) then {
         rbNm: zast.nameTextAt :ast ref: (bareAtomNameId n: (ast.nodes.get i: nid.u64))
         mbr: "Cannot return borrowed variable '\{rbNm}' as an owned result — the caller still owns it; return '\{rbNm}.copy' (duplicate), declare the source '.take' (transfer ownership in), or declare the return '.borrow'"
         (addError

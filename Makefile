@@ -1950,7 +1950,7 @@ perf: $(PERFBIN)
 #
 # +519 a generator local bound to a comprehension is built in its field: 0
 # behaviour (the compiler has no generator), 519 source.
-ALLOC_BASELINE := 2785537
+ALLOC_BASELINE := 2785730
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
