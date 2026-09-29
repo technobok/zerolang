@@ -1923,7 +1923,9 @@ perf: $(PERFBIN)
 # +1,235 the `each` keyword on a `for` binding: 0 behaviour (the compiler's own
 # source writes no `each` yet), 1,235 source (the parser's forBinding and the
 # flag threaded through the header and the tree).
-ALLOC_BASELINE := 2765832
+#
+# +1 every iterator walk says `for each`: 0 behaviour, 1 source.
+ALLOC_BASELINE := 2765833
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
