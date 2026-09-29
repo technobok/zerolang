@@ -1846,6 +1846,8 @@ Analysis: class {
                 :ast
                 value: (ast.nodes.get i: n.value.u64)
             )
+        } case forexpr then {
+            this.checkImpliedIterate :ast :n
         } case ifexpr then {
             this.checkEmpty :ast elseclauseId: n.elseclause clauses: n.clauses
             this.checkNestedIf :ast clauses: n.clauses elseclauseId: n.elseclause
@@ -2058,6 +2060,70 @@ Analysis: class {
             lo: xLo
             hi: litHi
             repl: "\{xText}\{suffix}"
+        )
+    }
+
+    # checkImpliedIterate -- L029: `for each x: E.iterate` writes the call `each`
+    # implies. The fix deletes `.iterate`: `each` asks a type's `iterate` before
+    # anything else, so the header still walks the same member. When the byte
+    # before the member is not its `.`, the finding is reported without a fix.
+    checkImpliedIterate: function {:this ast: Ast.view n: zast.forrow.view} is {
+        if n.isEach.not then return
+        if n.conditions.count.u64 == 0 then return
+        c0: ast.nodes.get i: (zast.kidAt kids: ast.kids span: n.conditions i: 0).u64
+        opId: zast.nodeid
+        match (
+            c0
+        ) case namedoperation then {
+            opId = c0.operation
+        } else {
+            return
+        }
+        chId: zast.nodeid
+        opN: ast.nodes.get i: opId.u64
+        match (
+            opN
+        ) case dottedpath then {
+            chId = opN.child
+        } else {
+            return
+        }
+        ch: ast.nodes.get i: chId.u64
+        match (
+            ch
+        ) case atomid then {
+            if ch.name != zast.names.wkIterate then return
+        } else {
+            return
+        }
+        cp: zast.posOf n: ch
+        what: "`each` implies `.iterate`: drop it".string
+        lo: (tokByteStart
+            lineStart: this.lineStart
+            srcLines: this.lines
+            lineno: cp.line
+            colno: cp.col
+        )
+        srcOwned: this.source.copy
+        srcv: srcOwned.stringView
+        hi: lo + 7
+        # the tree matched the member by id; the bytes need only the `.` before
+        # it, where the header's value ends and the call begins
+        ok: false
+        if lo > 0 when hi <= srcv.length then ok = (docByteAt s: srcv i: lo - 1) == 46
+        if ok.not then {
+            this.warn code: "L029" msg: what line: cp.line col: cp.col width: 7
+            return
+        }
+        (this.warnFix
+            code: "L029"
+            msg: what
+            line: cp.line
+            col: cp.col
+            width: 7
+            lo: lo - 1
+            :hi
+            repl: String
         )
     }
 

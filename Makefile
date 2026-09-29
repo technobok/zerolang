@@ -1941,7 +1941,10 @@ perf: $(PERFBIN)
 # still write it), 3,347 source by ab.sh (the minted `E.iterate` node,
 # checkDotted split at its base, headerIsPlace); perf-strict reads 3 more than
 # the split, stable over two runs.
-ALLOC_BASELINE := 2771923
+#
+# +3 L029 and the corpus without its written `.iterate`: 0 behaviour, 3 source
+# (the rule's own code, against the calls the compiler's walks no longer spell).
+ALLOC_BASELINE := 2771926
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
