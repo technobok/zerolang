@@ -1869,13 +1869,12 @@ A static method is copied through its type only: <code>t.helper.copy</code> is r
 as any other read of it through an instance is (<code>'helper' belongs to the type
 'T', not to an instance</code>). A native has no reference form (<code>'print' is native
 and has no reference form</code>).</p>
-<p><code>.take</code> moves a value out of a variable or a field and leaves it invalid. A
-function's name is neither: there is nothing to move and nothing to
-invalidate, so <code>.take</code> on one is refused (<code>'double' names no storage:
-'.take' applies to a variable or a field</code>), as are <code>.hold</code> and <code>.borrow</code>. A
-local, a parameter or a field HOLDING a reference is storage, and <code>.take</code>
-moves it: <code>g: f.take</code> hands the reference to <code>g</code> and <code>f</code> is invalid after
-it.</p>
+<p><code>.take</code> applies to a variable or a field. A function's name is neither, so
+<code>.take</code> on one is refused (<code>'double' names no storage: '.take' applies to a
+variable or a field</code>), as are <code>.hold</code> and <code>.borrow</code>. A local, a parameter
+or a field HOLDING a reference is storage; a function reference is a valtype,
+so <code>g: f.take</code> copies it, as <code>.take</code> copies any value, and <code>f</code> stays
+usable.</p>
 <p>A spec -- a function with no body -- names a type and has no value: calling,
 reading or copying one is refused (<code>'opFn' is a spec, a function with no
 body: it names a type, and has no value to call or copy</code>).</p>
@@ -2703,7 +2702,8 @@ values) and the <code>.take</code> method on runtime instances. Normal arguments
 borrowed within the called function. In <code>match</code> statements, the target is
 borrowed in the body by default; <code>match</code> with <code>.take</code> takes ownership with
 type narrowing. <code>.take</code> arguments pass ownership into the called function:
-the caller's name is invalid after the call.</p>
+the caller's name is invalid after the call -- a reftype's; a valtype passed
+with <code>.take</code> is copied, and the caller's name stays usable.</p>
 <p>A local binding of a reftype BORROWS, the same treatment an argument gets:
 <code>b: a</code> is a second name for what <code>a</code> names, not a transfer of it. Both
 names stay readable, a write through either is seen through the other, and the
@@ -2760,9 +2760,11 @@ methods on runtime instances. <code>.view</code> cannot -- it is a type marker
 only, and <code>x.view</code> is an error (<code>'.view' marks a parameter type readonly;
 a value cannot be viewed</code>):</p>
 <ul>
-<li><code>x.take</code> - takes ownership from the variable <code>x</code>. The name <code>x</code> is
-invalid after the call. Calling <code>.take</code> on an expression that is not used
-(not assigned or passed) destroys the instance.</li>
+<li><code>x.take</code> - takes ownership from the variable <code>x</code>. For a reftype the
+name <code>x</code> is invalid after the call; a valtype has no owner, so its
+<code>.take</code> copies its bytes and <code>x</code> stays usable. Calling <code>.take</code> on an
+expression that is not used (not assigned or passed) destroys the
+instance.</li>
 <li><code>x.borrow</code> - valid on all types. For reftypes, returns a borrowed
 reference to <code>x</code> and exclusively pins <code>x</code> for the lifetime of the
 borrowed reference. For valtypes, returns a copy of <code>x</code> without locking
@@ -3212,7 +3214,8 @@ default for any type family.</p>
 from the caller. As a return type attribute: the default -- function returns a
 new owned instance.</p>
 <p>As a compiler method on instances (<code>x.take</code>): takes ownership from the
-variable, rendering the name invalid. See <a href="#take-method">take (method)</a>.</p>
+variable, rendering the name invalid -- for a reftype; a valtype's <code>.take</code>
+copies it and leaves the name usable. See <a href="#take-method">take (method)</a>.</p>
 <h4 id="borrow"><a href="#borrow">5.4.8. borrow</a></h4>
 <p><code>borrow</code> is a predefined type attribute on all types. When used as a dotted
 path on a type in function parameter declarations, it specifies that ownership
@@ -3699,7 +3702,9 @@ implicitly. It is required to move into a new local name (a bare name there is a
 borrow) and into a reassigned owned local or field (<code>x = d.take</code>).</p>
 <p><code>.take</code> takes no arguments.</p>
 <p><code>.take</code> defines a local variable that owns the value (<code>y: x.take</code>) -- the
-new variable takes the value and the old name becomes undefined. Calling <code>.take</code> as an expression
+new variable takes the value and, for a reftype, the old name becomes undefined.
+A valtype has no owner to move: its <code>.take</code> copies its bytes, and <code>x</code> stays
+usable (a field is not emptied). Calling <code>.take</code> as an expression
 that is not used (not assigned or passed) destroys the instance.</p>
 <p>Inside a <code>for</code> loop, taking a variable declared outside the loop is a compile
 error unless every path after the take leaves the loop (<code>break</code>,
@@ -4246,7 +4251,8 @@ uses the <code>.take</code> attribute (<code>type.take</code>) and the type must
 generic type that may include a reftype.</p>
 <p>The caller must own the variable before the call. The function body is free to
 use the taken argument as if it created it itself (i.e. can be stored,
-returned, destroyed). The caller's variable name is invalid after the call.</p>
+returned, destroyed). The caller's variable name is invalid after the call; a
+valtype's is not -- its <code>.take</code> is a copy.</p>
 <p>Passing a value type via a <code>.take</code> parameter of a generic type passes a copy
 as usual. This allows the same notation to be used for generic container types
 regardless of the type of subcomponents being stored (eg. for Lists). In all

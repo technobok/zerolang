@@ -311,9 +311,9 @@ family, so a typedef over a reftype is a reftype.</p>
 <p>Function references are also valtypes. A function reference is a small,
 copyable pointer to immutable program text. <code>.copy</code> on a function's name
 makes one, and <code>.copy</code> of a reference makes another; a function's name is not
-storage, so <code>.take</code> on it is refused -- there is nothing to invalidate. A
-local, a parameter or a field HOLDING a reference is storage, and <code>.take</code>
-moves it like any value. Read bare, a function name or a reference is CALLED
+storage, so <code>.take</code> on it is refused. A local, a parameter or a field
+HOLDING a reference is storage, and <code>.take</code> copies it, as it copies any
+value. Read bare, a function name or a reference is CALLED
 (spec.pdoc Function References).</p>
 <p> Reference types (reftypes) are interacted with via a reference. The user
 defined compound reference types are <code>class</code> (product reference type) and
@@ -363,8 +363,8 @@ returns. <code>for each</code> asks for <code>iterate</code> before it calls.</l
 parameter, a return, an append into an owning container and an owned
 reassignment take what they are given. Taking a reftype MOVES its single
 owner, and the source name is invalid afterwards; taking a valtype copies
-its bytes -- a value has no owner -- and the source name stays usable. (An
-explicit <code>x.take</code> on a valtype still invalidates <code>x</code>.)</li>
+its bytes -- a value has no owner -- and the source name stays usable,
+whether the take is implied or written (<code>b: a.take</code>).</li>
 <li>A new name or an unmarked parameter borrows a reftype -- it is
 never copied implicitly.</li>
 <li>and copies a valtype -- the compiler's byte copy, which no type
@@ -413,7 +413,7 @@ never writes pays for a reference it does not use, and lint L030 says so.</p>
 <ul>
 <li>Pass to a <code>.take</code> parameter -- transfers ownership to the callee</li>
 <li>Pass to a <code>.borrow</code> parameter -- temporary loan, ownership returns after the call</li>
-<li>Bind to a new name -- <code>q: p</code> borrows (see A bare bind borrows); <code>q: p.take</code> transfers ownership to the new name and invalidates the old one. For valtypes <code>q: p</code> copies and both names stay valid, and <code>q: p.take</code> invalidates <code>p</code> as it does a reftype</li>
+<li>Bind to a new name -- <code>q: p</code> borrows (see A bare bind borrows); <code>q: p.take</code> transfers ownership to the new name and invalidates the old one. For valtypes <code>q: p</code> copies and both names stay valid, and so does <code>q: p.take</code>: a value has no owner to move</li>
 <li>Reassign into another owned variable -- <code>x = p.take</code> transfers ownership, and <code>p</code> is invalidated; a bare <code>x = p</code> is refused (see A reassignment keeps the mode). A valtype copies</li>
 <li>Store in a field of an object</li>
 <li>Swap with another owned variable of the same type</li>
@@ -633,9 +633,11 @@ Destruction happens at scope exit if the value is not otherwise consumed.</p>
 <p>As a return attribute (<code>out type.take</code> or just <code>out type</code> since take is the
 default): the function returns a new owned value to the caller.</p>
 <p>As an inline method (<code>x.take</code>): takes ownership from the variable <code>x</code>.
-The name <code>x</code> is invalidated after the call. If the result is not assigned or
-passed, the instance is destroyed. <code>.take</code> can only be called on an owned
-variable. Calling <code>.take</code> on a borrowed variable is always an error.</p>
+For a reftype the name <code>x</code> is invalidated after the call; a valtype has no
+owner, so its <code>.take</code> copies it and <code>x</code> stays usable (a field is not
+emptied). If the result is not assigned or passed, the instance is destroyed.
+A reftype's <code>.take</code> can only be called on an owned variable: calling it on
+a borrowed one is always an error.</p>
 <h4 id="take-in-conditional-arms"><a href="#take-in-conditional-arms">6.1.1. .take in Conditional Arms</a></h4>
 <p>If <code>.take</code> is called on an owned variable (one with a destructor, or any
 reftype) inside any arm of an <code>if</code> or <code>match</code>, the compiler ensures the

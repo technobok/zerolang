@@ -4092,6 +4092,35 @@ isFieldTake: function {ast: Ast.view n: astnode.view} out bool is {
     }
 }
 
+# fieldMoveEmpties -- a `<obj>.field.take` / `.hold` (isFieldTake) leaves the
+# field empty: a reftype's move takes its single owner, and a `.hold` moves in
+# whatever it holds. A valtype's `.take` copies its bytes and leaves the field
+# as it is.
+fieldMoveEmpties: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    n: astnode.view
+    # the field's type
+    tid: ztypes.tid
+} out bool is {
+    if (isFieldTake :ast :n).not then return false
+    if (symtab.reg.isReftypeOf :tid) then return true
+    return (moveLeafIsHold :ast :n)
+}
+
+# moveLeafIsHold -- `n` reduces to a dotted path ending in `.hold`.
+moveLeafIsHold: function {ast: Ast.view n: astnode.view} out bool is {
+    match (
+        n
+    ) case statementline then {
+        return (moveLeafIsHold :ast n: (ast.nodes.get i: n.statementline.u64))
+    } case dottedpath then {
+        return (zast.markerKindOfLeaf :ast leaf: n.child).holdMarker
+    } else {
+        return false
+    }
+}
+
 # isLocalTake -- true iff `n` reduces to `<local>.take`: a move out of a variable,
 # which a binding of a collection must zero as it does a bare move.
 isLocalTake: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.view} out bool is {
@@ -19606,20 +19635,6 @@ emitStringBind: function {
     return handled
 }
 
-# bindValueIsFnRef -- the bound value is a function REFERENCE, which is POD:
-# taking one moves nothing, so the source (a unit fn symbol, or an fnptr field)
-# is never zeroed.
-bindValueIsFnRef: function {
-    symtab: zenv.ZSymbolTable.view
-    avn: astnode.view
-} out bool is {
-    ftnid: interpPartNodeId n: avn
-    if ftnid == 0 then return false
-    ftst: stampIdOf :symtab nid: ftnid
-    if ftst.isZero then return false
-    return (symtab.reg.typetypeOf typeId: ftst) == ztypes.ztypetype.functionType
-}
-
 # bindAliasCType -- the C type a binding is declared with once ALIASING is
 # accounted for. A reference-returning callee hands back `T*`: the binding
 # aliases the source, so it is declared as a pointer and its vid registered,
@@ -19675,8 +19690,9 @@ emitBindSourceZero: function {
 } is {
     if (movedSourceNeedsZero :ast :symtab n: avn).not then return
     bzt: stampIdOf :symtab nid: (interpPartNodeId n: avn)
-    # a field that moves owns nothing, and reads as empty once moved out
-    if (isFieldTake :ast n: avn) when (bindValueIsFnRef :symtab :avn).not then {
+    # a reftype field that moves owns nothing, and reads as empty once moved
+    # out; a valtype's take copies its bytes and leaves the field as it is
+    if (fieldMoveEmpties :ast :symtab n: avn tid: bzt) then {
         buf.append "\{ind}\{rv} = \{zeroValueC :ast :symtab :ctx tid: bzt};\n"
         return
     }
@@ -20462,15 +20478,6 @@ zeroValueC: function {
     return "(\{zct}){0}"
 }
 
-# valueIsFnTyped -- whether the value node's stamp is a function type: a
-# fn-typed field is a POD reference and a take of it moves nothing.
-valueIsFnTyped: function {symtab: zenv.ZSymbolTable.view nid: u64} out bool is {
-    if nid == 0 then return false
-    st: stampIdOf :symtab :nid
-    if st.isZero then return false
-    return (symtab.reg.typetypeOf typeId: st) == ztypes.ztypetype.functionType
-}
-
 # reassignMoveSource -- the local a stored value MOVES out of, empty when it is
 # not a move: an explicit `<local>.take` / `.hold` (a dotted path, which
 # implicitTakeSource -- bare names only -- does not see; without this the
@@ -20755,11 +20762,12 @@ emitStoreTo: function {
     }
     if destroyOld then emitReassignDestroy :symtab :ctx :nm2 :rtnid :rtsid :ind :buf
     buf.append "\{ind}\{nm2} = \{rv2};\n"
-    # a `<obj>.field.take` RHS -- a field that owns nothing, the one field that
-    # moves -- leaves the field empty (mirrors the binding case; fn-typed fields
-    # are POD references and move nothing).
+    # a `<obj>.field.take` RHS of a reftype that owns nothing -- the one field
+    # that moves -- leaves the field empty (mirrors the binding case). A
+    # valtype's take, a function reference's among them, copies its bytes and
+    # leaves the field as it is.
     rftnid: interpPartNodeId n: valueNode
-    if (isFieldTake :ast n: valueNode) when (valueIsFnTyped :symtab nid: rftnid).not then {
+    if (fieldMoveEmpties :ast :symtab n: valueNode tid: rtsid) then {
         buf.append "\{ind}\{rv2} = \{zeroValueC :ast :symtab :ctx tid: rtsid};\n"
     }
     if ran.not then emitMovedArgZeroing :ast :symtab :ctx n: valueNode :ind :buf

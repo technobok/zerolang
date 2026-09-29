@@ -1930,13 +1930,12 @@ as any other read of it through an instance is (#~"'helper' belongs to the type
 'T', not to an instance"). A native has no reference form (#~"'print' is native
 and has no reference form").
 
-#~".take" moves a value out of a variable or a field and leaves it invalid. A
-function's name is neither: there is nothing to move and nothing to
-invalidate, so #~".take" on one is refused (#~"'double' names no storage:
-'.take' applies to a variable or a field"), as are #~".hold" and #~".borrow". A
-local, a parameter or a field HOLDING a reference is storage, and #~".take"
-moves it: #~"g: f.take" hands the reference to #~"g" and #~"f" is invalid after
-it.
+#~".take" applies to a variable or a field. A function's name is neither, so
+#~".take" on one is refused (#~"'double' names no storage: '.take' applies to a
+variable or a field"), as are #~".hold" and #~".borrow". A local, a parameter
+or a field HOLDING a reference is storage; a function reference is a valtype,
+so #~"g: f.take" copies it, as #~".take" copies any value, and #~"f" stays
+usable.
 
 A spec -- a function with no body -- names a type and has no value: calling,
 reading or copying one is refused (#~"'opFn' is a spec, a function with no
@@ -2954,7 +2953,8 @@ values) and the #~".take" method on runtime instances. Normal arguments are
 borrowed within the called function. In #~"match" statements, the target is
 borrowed in the body by default; #~"match" with #~".take" takes ownership with
 type narrowing. #~".take" arguments pass ownership into the called function:
-the caller's name is invalid after the call.
+the caller's name is invalid after the call -- a reftype's; a valtype passed
+with #~".take" is copied, and the caller's name stays usable.
 
 A local binding of a reftype BORROWS, the same treatment an argument gets:
 #~"b: a" is a second name for what #~"a" names, not a transfer of it. Both
@@ -3018,9 +3018,11 @@ only, and #~"x.view" is an error (#~"'.view' marks a parameter type readonly;
 a value cannot be viewed"):
 
 #ul:
-  [#*: #~"x.take" - takes ownership from the variable #~"x". The name #~"x" is
-    invalid after the call. Calling #~".take" on an expression that is not used
-    (not assigned or passed) destroys the instance.]
+  [#*: #~"x.take" - takes ownership from the variable #~"x". For a reftype the
+    name #~"x" is invalid after the call; a valtype has no owner, so its
+    #~".take" copies its bytes and #~"x" stays usable. Calling #~".take" on an
+    expression that is not used (not assigned or passed) destroys the
+    instance.]
   [#*: #~"x.borrow" - valid on all types. For reftypes, returns a borrowed
     reference to #~"x" and exclusively pins #~"x" for the lifetime of the
     borrowed reference. For valtypes, returns a copy of #~"x" without locking
@@ -3581,7 +3583,8 @@ from the caller. As a return type attribute: the default -- function returns a
 new owned instance.
 
 As a compiler method on instances (#~"x.take"): takes ownership from the
-variable, rendering the name invalid. See [#> to=take-method: take (method)].
+variable, rendering the name invalid -- for a reftype; a valtype's #~".take"
+copies it and leaves the name usable. See [#> to=take-method: take (method)].
 
 #----: borrow
 
@@ -4163,7 +4166,9 @@ borrow) and into a reassigned owned local or field (#~"x = d.take").
 #~".take" takes no arguments.
 
 #~".take" defines a local variable that owns the value (#~"y: x.take") -- the
-new variable takes the value and the old name becomes undefined. Calling #~".take" as an expression
+new variable takes the value and, for a reftype, the old name becomes undefined.
+A valtype has no owner to move: its #~".take" copies its bytes, and #~"x" stays
+usable (a field is not emptied). Calling #~".take" as an expression
 that is not used (not assigned or passed) destroys the instance.
 
 Inside a #~"for" loop, taking a variable declared outside the loop is a compile
@@ -4825,7 +4830,8 @@ generic type that may include a reftype.
 
 The caller must own the variable before the call. The function body is free to
 use the taken argument as if it created it itself (i.e. can be stored,
-returned, destroyed). The caller's variable name is invalid after the call.
+returned, destroyed). The caller's variable name is invalid after the call; a
+valtype's is not -- its #~".take" is a copy.
 
 Passing a value type via a #~".take" parameter of a generic type passes a copy
 as usual. This allows the same notation to be used for generic container types
