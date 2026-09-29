@@ -615,8 +615,9 @@ Backslashes may only appear as part of a valid escape sequence.
 
 An interpolated value must be printable: a numeric, a #~"bool", a #~"String" or
 #~"StringView" (directly or through a typedef), a tag or a #~"str". A function
-value -- a local holding a reference, or a #~".take" written in place -- is not,
-and is #~"E0100"; a method read in place is called, and its result is what prints.
+value -- a reference made in place with #~".copy" -- is not, and is #~"E0100"; a
+function's name, a local holding a reference and a method read in place are
+each called, and the result is what prints.
 Each part is evaluated exactly once, left to right, so a call in a part runs
 once however its value is spliced in.
 
@@ -940,8 +941,9 @@ precedence purposes.
 
 A function call without arguments is still a function call (not a function
 pointer). A bare function name used as a statement or as a value is therefore a
-call, evaluated for its effect or result. Use
-[#> to=take-on-function-names: .take] on the function name to retrieve a
+call, evaluated for its effect or result -- and so is a local, a parameter or
+a field holding a function reference. Use
+[#> to=copy-on-function-names: .copy] on the function name to retrieve a
 function reference instead.
 
 #----: Call Arguments
@@ -1189,7 +1191,8 @@ defaults follow the literal default rules described in
 decimal integers default to i64, non-decimal to u64, floats to f64.
 Function references (functions with bodies) serve as both the type and the
 default value. Specs (functions without bodies) provide only the type, with no
-default.
+default; a marker on a function's name there (#~"f: double.take") is refused,
+so a function-typed parameter with no default names a spec.
 
 #code language=zerolang: """
   calc: function {a: i64 b: 10 c: 20} out i64 is { return a + b + c }
@@ -1883,35 +1886,44 @@ move of it gets: write #~"for each e: xs loop e.copy", not
 #~"for each e: xs loop e". A valtype element is copied and asks nothing.
 A loop that runs no iterations yields an empty list.
 
-#---: .take on Function Names
+#---: .copy on Function Names
 
 To obtain a function reference value (rather than calling the function), use
-the #~".take" dotted operator on the function name. This is consistent with
-the existing #~".take" semantics for value types.
+#~".copy" on the function's name. A function reference is a valtype, a small
+pointer to program text, and #~".copy" makes another one; the source stays
+usable.
 
 #code language=zerolang: """
   myfunc: function {a: i64} out i64 is { return a }
 
   # obtain a function reference without calling the function
-  ref: myfunc.take
+  ref: myfunc.copy
   """
 
-#~".take" on a spec name is a compiler error because specs have no value —
-they are types only. Use #~".take" on a function name that matches the spec.
-
-#~".copy" on a function also makes another reference to it, and leaves its
-source usable: a unit function (#~"double.copy"), a static method or a method
-with a receiver read through its type (#~"T.helper.copy", #~"T.get.copy" --
-called with the receiver as an argument), and a function reference held in a
-local, a parameter or a field (#~"f.copy", #~"h.op.copy"). A method read
-through an #_*"instance" has no reference form -- a reference has nowhere to
-carry the receiver -- so #~"t.get.copy" calls #~"get" and copies what it
-returns, and a method that needs arguments is refused there
+Any unbound function copies: a unit function (#~"double.copy"), a static method
+or a method with a receiver read through its type (#~"T.helper.copy",
+#~"T.get.copy" -- called with the receiver as an argument), and a function
+reference held in a local, a parameter or a field (#~"f.copy", #~"h.op.copy").
+A method read through an #_*"instance" has no reference form -- a reference has
+nowhere to carry the receiver -- so #~"t.get.copy" calls #~"get" and copies what
+it returns, and a method that needs arguments is refused there
 (#~"'a.add' is a bound method: a reference has nowhere to carry the receiver").
 A static method is copied through its type only: #~"t.helper.copy" is refused
 as any other read of it through an instance is (#~"'helper' belongs to the type
 'T', not to an instance"). A native has no reference form (#~"'print' is native
 and has no reference form").
+
+#~".take" moves a value out of a variable or a field and leaves it invalid. A
+function's name is neither: there is nothing to move and nothing to
+invalidate, so #~".take" on one is refused (#~"'double' names no storage:
+'.take' applies to a variable or a field"), as are #~".hold" and #~".borrow". A
+local, a parameter or a field HOLDING a reference is storage, and #~".take"
+moves it: #~"g: f.take" hands the reference to #~"g" and #~"f" is invalid after
+it.
+
+A spec -- a function with no body -- names a type and has no value: calling,
+reading or copying one is refused (#~"'opFn' is a spec, a function with no
+body: it names a type, and has no value to call or copy").
 
 Parentheses force the call. A marker after a callable path written in
 parentheses of its own applies to what the call returns: #~"(mk).copy" copies
@@ -4885,8 +4897,8 @@ function argument label), can be:
 
 Function argument types can NOT be:
 
-- a bare function name (use #~".take" on the function name to obtain a function
-  reference for a #~"Spec" argument)
+- a bare function name: it is a call (use #~".copy" on the function name to pass
+  a function reference for a #~"Spec" argument)
 
 
 #----: Specs
@@ -5504,8 +5516,8 @@ A function reference variable cannot be defined at the unit level (unit level
 declarations are immutable).
 
 To obtain a function reference value at run time (within a function body), use
-#~".take" or #~".copy" on the function name; #~".copy" also copies a reference
-already held (see [#> to=take-on-function-names: .take on Function Names]).
+#~".copy" on the function name; #~".copy" also copies a reference already held
+(see [#> to=copy-on-function-names: .copy on Function Names]).
 
 Function references can be used as:
 
@@ -5515,38 +5527,58 @@ Function references can be used as:
   #*: function parameters
   #*: function return values
 
-For local variable function references, declare and assign using #~".take":
+For local variable function references, declare and assign using #~".copy":
 
 #code language=zerolang: """
-  myspec: function {a: i64 b: i64} out i64
   add: function {a: i64 b: i64} out i64 is { return a + b }
+  subtract: function {a: i64 b: i64} out i64 is { return a - b }
 
   main: function is {
-    ref: add.take                # local function reference
+    ref: add.copy                # local function reference
     result: ref a: 1 b: 2       # call through reference
-    ref = subtract.take          # reassign to another compatible function
+    ref = subtract.copy          # reassign to another compatible function
   }
   """
+
+A function-typed parameter, field or return with #_*"no default" is declared
+by a spec, and the caller passes a function with a body of that signature. A
+function with a body declares both the type and the default (#~"f: add"):
+
+#code language=zerolang: """
+  binop: function {a: i64 b: i64} out i64       # a spec: the type alone
+
+  apply: function {f: binop a: i64 b: i64} out i64 is { return (f :a :b) }
+
+  main: function is {
+    print "\{apply f: add.copy a: 1 b: 2}"
+  }
+  """
+
+A marker on a function's name in a declaration is refused
+(#~"'add.take' marks a function in a declaration: a function-typed slot with
+no default is declared by a spec").
 
 For field function references in record/class #~"is" sections:
 
 #ul:
   [#*: define a function in the #~"is" section — it becomes a per-instance
     function pointer field with that function as the default value]
-  [#*: #_*"OR" define a spec (no body) in the #~"is" section — it becomes a
-    per-instance function pointer field with no default; a function reference
-    #_*"must" be passed to #~"meta.create" using #~".take"]
+  [#*: #_*"OR" define a spec (no body) in the #~"is" section, or name a
+    unit-level spec -- it becomes a per-instance function pointer field with no
+    default; a function reference #_*"must" be passed to #~"meta.create" using
+    #~".copy"]
   [#*: the function reference can be reassigned to an equivalent function at any
-    time using #~".take"]
+    time using #~".copy"]
 
 A body written for an #~"is"-section function is only the field's default: the
 field is each instance's own slot either way, and is replaced on the instance --
 through a local, a field path or #~"this" -- by a function of the same
-signature: a free function (#~"c.op = mul.take"), or a shared method of the
-#~"as" section reached through the type (#~"g.hook = Gauge.tenfold"). Like a
-construction argument for the same field, the value of such a write is read as a
-reference, not called. A function field in the middle of a write target's path
-is called, and its result is not storage.
+signature: a free function (#~"c.op = mul.copy"), or a shared method of the
+#~"as" section reached through the type (#~"g.hook = Gauge.tenfold.copy"). The
+value of such a write, like a construction argument for the same field, is read
+as any value is: a bare function path is called, and #~".copy" is the
+reference. A function field in the middle of a write target's path is called,
+and its result is not storage.
 
 A function value fits a function-typed field, variable or parameter only with the
 #_*"same signature": the same parameters in order, with the same names, types and
@@ -5776,8 +5808,8 @@ replaced with any function of the same signature:
       op: function {a: i64 b: i64} out i64
   }
   main: function is {
-      c: calculator op: add.take
-      c.op = mul.take    # replace the function pointer
+      c: calculator op: add.copy
+      c.op = mul.copy    # replace the function pointer
   }
   """
 
