@@ -29367,7 +29367,7 @@ callFieldObject: function {
     if coerce.not then return result
     moKind: st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)
     if moKind == ztypes.ztypetype.functionType then return result
-    oc: readsObjectAsCall :st :ast t: result
+    oc: readsObjectAsCall :st :ast t: result nid: dp.nid.u64
     if oc.isZero then return result
     if (fnAutoCallable :st mid: oc).not then {
         wtp: ListVal zast.nameid
@@ -30652,6 +30652,25 @@ rewriteReadAsCall: function {ast: Ast node: atomref} is {
     )
 }
 
+# eachSubjectNidOf -- the value node of a `for each` header (eachSubjectNid); 0
+# for a plain header, whose value is evaluated -- and a callable one called -- at
+# every iteration.
+eachSubjectNidOf: function {isEach: bool nid: zast.nodeid} out u64 is {
+    if isEach then return nid.u64
+    return 0
+}
+
+# declaresIterate -- values of type `t` have a zero-argument `iterate`, the walk
+# `for each` implies (implicitIterate).
+declaresIterate: function {st: zenv.ZSymbolTable ast: Ast t: ztypes.tid} out bool is {
+    forceMemberOf :st :ast parentTypeId: t nameId: zast.names.wkIterate
+    mo: (st.typing.declChildOfId parentTypeId: t nameId: zast.names.wkIterate).or d: 0
+    if mo == 0 then return false
+    mt: ztypes.tid.create from: mo.u64
+    if (st.reg.typetypeOf typeId: mt) != ztypes.ztypetype.functionType then return false
+    return (fnAutoCallable :st mid: mt)
+}
+
 # objectCallOf -- the `call` METHOD a value of type `t` answers to, when it has
 # one: the member that makes an object callable. An arm or a field named `call`
 # does not. 0 for a function type and for any type without one.
@@ -30675,13 +30694,18 @@ objectCallOf: function {st: zenv.ZSymbolTable ast: Ast t: ztypes.tid} out ztypes
     }
 }
 
-# readsObjectAsCall -- a bare read of a value of type `t` is a call of the
+# readsObjectAsCall -- a bare read `nid` of a value of type `t` is a call of the
 # object's `call`: the type has one, and nothing asks for the object itself --
 # no marker after it (suppressFnAutoCall), not a dotted path's base
-# (suppressBareCtor), and not a write target. 0 when it is read as the object.
-readsObjectAsCall: function {st: zenv.ZSymbolTable ast: Ast t: ztypes.tid} out ztypes.tid is {
+# (suppressBareCtor), not a write target, and not a `for each` header's value
+# whose type declares `iterate`: `for each` asks `iterate` first (D14). 0 when
+# it is read as the object.
+readsObjectAsCall: function {
+    st: zenv.ZSymbolTable ast: Ast t: ztypes.tid nid: u64
+} out ztypes.tid is {
     if st.typing.suppressFnAutoCall or st.typing.suppressBareCtor then return ztypes.tid
     if st.typing.inAssignTarget then return ztypes.tid
+    if nid == st.typing.eachSubjectNid when (declaresIterate :st :ast :t) then return ztypes.tid
     return (objectCallOf :st :ast :t)
 }
 
@@ -30690,7 +30714,7 @@ readsObjectAsCall: function {st: zenv.ZSymbolTable ast: Ast t: ztypes.tid} out z
 # walks the call. A `call` that needs input is refused as a bare call missing
 # its arguments, naming the read as written, and the read stays the object.
 callsObjectBare: function {st: zenv.ZSymbolTable ast: Ast node: atomref t: ztypes.tid} out bool is {
-    oc: readsObjectAsCall :st :ast :t
+    oc: readsObjectAsCall :st :ast :t nid: node.nid.u64
     if oc.isZero then return false
     if (fnAutoCallable :st mid: oc) then {
         rewriteReadAsObjectCall :ast :node
@@ -35421,6 +35445,8 @@ checkForCondition: function {
     # a 0-arg generator still has to be invoked.
     bfrFor: st.typing.allowBareFnRef
     st.typing.allowBareFnRef = true
+    esPrev: st.typing.eachSubjectNid
+    st.typing.eachSubjectNid = eachSubjectNidOf :isEach nid: cond.operation
     if facId > 0 then {
         # the factory's lazy walks (its body + the iterator class's
         # methods via return-first transitivity) fire before the
@@ -35438,6 +35464,7 @@ checkForCondition: function {
         vt = checkValueAt :st :unitDecl :ast nid: cond.operation
     }
     st.typing.allowBareFnRef = bfrFor
+    st.typing.eachSubjectNid = esPrev
     if (refuseNonValue :st :ast :vt nid: cond.operation) then vt = ztypes.tid
     # a condition that typed to nothing and raised nothing is an
     # unresolvable name -- the same rule the binding and operand sites
