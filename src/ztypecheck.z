@@ -4436,6 +4436,7 @@ recordReturnType: function {
     oId: zast.nodeid
 } is {
     if oId.isZero then return
+    refuseMarkedFunctionType :st :ast :unitDecl :scope typeNid: oId
     recordTyperef :st :scope :ast :unitDecl :thisName nid: oId
     checkReturnNamesType :st :scope :ast :unitDecl :thisName :oId
 }
@@ -5988,6 +5989,85 @@ checkParamTypeShape: function {
     }
 }
 
+# namesFunctionWithBody -- `baseId`, looked up outward from `scope`, is declared
+# by a function WITH a body, not a spec. Asked of the declarations themselves,
+# so it answers before the function's type has resolved (a field is resolved
+# on demand, often before a function it names).
+namesFunctionWithBody: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    baseId: zast.nameid
+} out bool is {
+    cur: scopeFor :st :scope :unitDecl
+    for cur.isZero.not loop {
+        d: st.typing.declFindChild parentDeclId: cur nameId: baseId
+        if d.isZero.not then {
+            dn: (st.typing.decls.get i: d.u64).node
+            if dn == 0 then return false
+            op: zast.nodeid
+            {
+                n: ast.nodes.get i: dn
+                if n.namedoperation then op = n.operation
+            }
+            if op.isZero then return false
+            return (isFunctionDefWithBody o: (ast.nodes.get i: op.u64))
+        }
+        cur = declParentIdOf :st declId: cur
+    }
+    return false
+}
+
+# refuseMarkedFunctionType -- a declaration's type written as a function's NAME
+# with a marker (`f: double.take`). A function with a body declares both the type
+# and the default (`f: double`); a type with no default is declared by a SPEC, a
+# function with no body (`Op: function {n: i64} out i64`, then `f: Op`). True
+# when it reported.
+refuseMarkedFunctionType: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    # the declaration's type node
+    typeNid: zast.nodeid
+} out bool is {
+    baseId: zast.nameid
+    childId: zast.nameid
+    {
+        tn: ast.nodes.get i: typeNid.u64
+        match (
+            tn
+        ) case dottedpath then {
+            baseId = atomNameId :ast n: (ast.nodes.get i: tn.parent.u64)
+            childId = atomNameId :ast n: (ast.nodes.get i: tn.child.u64)
+        } else null
+    }
+    if baseId.isZero or childId.isZero then return false
+    k: zast.markerKindOfName id: childId
+    if (k.takeMarker or k.borrowMarker or k.viewMarker or k.holdMarker).not then return false
+    if (namesFunctionWithBody :st :ast :unitDecl :scope :baseId).not then return false
+    bn: zast.nameTextCopy :ast ref: baseId
+    cn: zast.nameTextAt :ast ref: childId
+    # composed with append, not interpolation: a dotted path built inline reads
+    # to A002 as a composed table key
+    marked: bn.copy
+    marked.append "."
+    marked.append cn
+    (addErrorH
+        :st
+        nodeid: (nodeId n: (ast.nodes.get i: typeNid.u64))
+        lineno: (nodeLine n: (ast.nodes.get i: typeNid.u64))
+        colno: (nodeCol n: (ast.nodes.get i: typeNid.u64))
+        e: zast.err.typeError
+        msg: "'\{marked}' marks a function in a declaration: a function-typed slot with no default is declared by a spec"
+        note: "a function with a body declares the type and the default ('f: \{bn}'); a spec, a function with no body, declares the type alone"
+        hint: "declare a spec with \{bn}'s signature and no body, and name it here"
+        width: bn.length.u32.orPanic
+    )
+    return true
+}
+
 # registerValueParam -- record an ordinary (non-generic, non-receiver) parameter
 # on its function's type: its declared type, its ownership, and the default it
 # carries.
@@ -6007,6 +6087,7 @@ registerValueParam: function {
     pm: argref
 } is {
     if (refuseStringDefault :st :ast what: "parameter" nameId: pm.name fm: pm) then return
+    refuseMarkedFunctionType :st :ast :unitDecl scope: rf typeNid: pm.operation
     cid: partialTid
     # THE VALUE DECLARES THE TYPE, on a parameter exactly as on a field: one
     # declared by a value is a constant declaration, so it takes the same door
@@ -10030,6 +10111,7 @@ attachRecordField: function {
     fname: StringView
 } is {
     if (refuseStringDefault :st :ast what: "field" nameId: fm.name :fm) then return
+    refuseMarkedFunctionType :st :ast :unitDecl :scope typeNid: fm.operation
     ftnR: fieldHeadNameId :ast n: (ast.nodes.get i: fm.operation.u64
     # a field's type-ref can name a SIBLING method (an fn-ptr
     # slot defaulting to it), which is a member like any other
@@ -12677,6 +12759,7 @@ resolveNamedFieldSlot: function {
     fm: argref
 } out bool is {
     needsDtor: false
+    refuseMarkedFunctionType :st :ast :unitDecl :scope typeNid: fm.operation
     fieldOwn: pathOwnership :ast n: (ast.nodes.get i: fm.operation.u64)
     if fname != "_resume_input" when (fieldTypeNeedsCleanup
         :st
