@@ -349,6 +349,27 @@ unmarked source.</p>
 <tr><td>A projection source (<code>Rd d</code>, <code>P d</code>)</td><td>copy</td><td>borrow; take in an owning destination</td></tr>
 </tbody>
 </table>
+<p><strong>What a value written with no marker means.</strong> A bare value has no meaning of
+its own beyond an <em><strong>implied marker</strong></em>, resolved in this order:</p>
+<ol>
+<li>A callable is called. A function's name, a local, parameter or
+field holding a function reference, and a value whose type has a <code>call</code>
+method are called with no arguments, and the result's ownership is the
+call's own (its <code>out</code> or <code>outx</code>). An explicit marker names the thing
+itself instead -- <code>f.copy</code> is a reference, <code>it.borrow</code> the iterator --
+and parentheses force the call first: <code>(mk).copy</code> copies what <code>mk</code>
+returns. <code>for each</code> asks for <code>iterate</code> before it calls.</li>
+<li>An owning destination takes. A field fill or write, a <code>.take</code>
+parameter, a return, an append into an owning container and an owned
+reassignment take what they are given. Taking a reftype MOVES its single
+owner, and the source name is invalid afterwards; taking a valtype copies
+its bytes -- a value has no owner -- and the source name stays usable. (An
+explicit <code>x.take</code> on a valtype still invalidates <code>x</code>.)</li>
+<li>A new name or an unmarked parameter borrows a reftype -- it is
+never copied implicitly.</li>
+<li>and copies a valtype -- the compiler's byte copy, which no type
+can change.</li>
+</ol>
 <p>For valtypes, an unmarked parameter is a COPY -- the callee reads and writes
 its own value, and the source is NOT invalidated. Writing <code>.borrow</code> on a
 valtype parameter passes it BY REFERENCE instead: the callee may write the
@@ -869,7 +890,7 @@ move or drop it.</p>
 <p>Whether <code>x.copy</code> exists depends on the type's family, and it is a
 deliberate split -- not a gap waiting to be filled.</p>
 <ul>
-<li>Valtypes (record, variant, facet) have one by default: the
+<li>Valtypes (record, variant, facet) always have one: the
 byte copy their assignment already performs. A valtype can never
 contain a reftype, so copying its bytes copies the whole value and the
 two are independent afterwards. Writing <code>.copy</code> is therefore never
@@ -898,34 +919,21 @@ already decides what happens to the elements. Where an element is a
 reference, a bitwise copy would give it two owners and anything else is
 a design decision, so there is nobody but the author to make it.</li>
 </ul>
-<p>Both defaults are overridable, and both by the same mechanism -- a
-<code>copy</code> member in the <code>as</code> block. Member lookup finds it first, so it
-wins over the valtype default:</p>
-<pre><code class="language-zerolang">Tagged: record {
-    n: i64
-} as {
-    copy: function {t: this} out Tagged is {
-        return (Tagged n: t.n + 100)   # the default byte copy is replaced
-    }
-}
-
-Inner: class {
+<p>A valtype's copy cannot be changed: its <code>as</code> block may neither write a
+<code>copy</code> nor strike it off with <code>copy: null</code> (<code>'Handle' is a value type:
+its `.copy` is the compiler's byte copy, which cannot be written or struck
+off</code>). Its bytes are the whole value, so the byte copy is always complete and
+costs what a move costs. A value that must never be duplicated owns something
+-- a file descriptor, say -- and is a class, whose single owner the rules
+already enforce. A reftype's only copy is the one its author writes, in the
+<code>as</code> block:</p>
+<pre><code class="language-zerolang">Inner: class {
     n: i64
     label: String
 } as {
     copy: function {t: this.view} out Inner is {
         return (Inner n: t.n label: t.label.copy)   # a reftype's only copy
     }
-}</code></pre>
-<p>A valtype may also strike the default off by defining the member as
-<code>null</code>, the same way <code>==: null</code> opts out of synthesized equality (for the
-type itself and for every value that holds one).
-<code>.copy</code> on such a type is then an error, which is what a type that must
-never be duplicated silently wants:</p>
-<pre><code class="language-zerolang">Handle: record {
-    fd: i32
-} as {
-    copy: null      # duplicating a file descriptor is a bug, not a copy
 }</code></pre>
 <p><code>StringView</code> is a view, not an owner: it is copied by assignment, and
 <code>.string</code> is what allocates an owned <code>String</code> from it.</p>

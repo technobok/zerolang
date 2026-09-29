@@ -7661,6 +7661,37 @@ memberNullOptOut: function {
 # declaring `==: null` or `!=: null` (mirrors the `create: null` opt-out): the
 # record / variant synthetic `==` / `!=` is then suppressed, so a comparison on
 # the type resolves no method and is a hard error.
+# refuseValtypeCopy -- a value type's `.copy` is the compiler's byte copy: a
+# valtype holds no reftype, so copying its bytes copies the whole value, and
+# the copy can be neither written in the `as` block nor struck off with `copy:
+# null`. A value that must never be duplicated is a class.
+refuseValtypeCopy: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    asItems: zast.kidspan
+    defName: StringView
+} is {
+    k: u64
+    for k < asItems.count.u64 loop {
+        amId: zast.kidAt kids: ast.kids span: asItems i: k
+        k = k + 1
+        am: ast.nodes.get i: amId.u64
+        if am.namedoperation when (zast.nameTextEq :ast ref: am.name s: "copy") then {
+            (addErrorH
+                :st
+                nodeid: am.nodeid
+                lineno: am.lineno
+                colno: am.colno
+                e: zast.err.typeError
+                msg: "'\{defName}' is a value type: its `.copy` is the compiler's byte copy, which cannot be written or struck off"
+                note: "a value type holds no reftype, so copying its bytes copies the whole value".string
+                hint: "a value that must never be duplicated is a class".string
+                width: 4
+            )
+        }
+    }
+}
+
 # memberNullOptOut -- true when a type's `as {}` block defines `member` as
 # `null`, the language's way of striking a compiler-provided member off a type.
 eqNullOptOut: function {ast: Ast.view asItems: zast.kidspan} out bool is {
@@ -10719,10 +10750,7 @@ resolveRecord: function {
     # MEMBER at all, only the emitter's derived negation.
     eqAsR: asDeclaresMemberId :ast :asItems nameId: zast.names.wkOpEq
     neAsR: asDeclaresMemberId :ast :asItems nameId: zast.names.wkOpNe
-    # `copy: null` strikes the default byte copy off this type. It is recorded
-    # as a member carrying the null shell so the use site can tell it from a
-    # type that simply never mentioned `copy`.
-    if (memberNullOptOut :ast :asItems member: "copy") then st.typing.copyOptOut.add item: rid
+    refuseValtypeCopy :st :ast :asItems :defName
     if (memberNullOptOut :ast :asItems member: "create") then st.typing.createOptOut.add item: rid
     if isgen then {
         st.reg.setGeneric typeId: rt value: true
@@ -11139,20 +11167,12 @@ resolveVariant: function {
             )
         }
     }
-    hasMemberNullOptOut30: false
+    vAsItems: zast.kidspan first: 0 count: 0
     {
-        onhasMemberNullOptOut30: ast.nodes.get i: vnode.nid.u64
-        if onhasMemberNullOptOut30.objectdef then {
-            hasMemberNullOptOut30 = (memberNullOptOut
-                :ast
-                asItems: onhasMemberNullOptOut30.asItems
-                member: "copy"
-            )
-        }
+        vOn: ast.nodes.get i: vnode.nid.u64
+        if vOn.objectdef then vAsItems = vOn.asItems
     }
-    if hasMemberNullOptOut30 then {
-        st.typing.copyOptOut.add item: vid
-    }
+    refuseValtypeCopy :st :ast asItems: vAsItems :defName
     if isgen then {
         st.reg.setGeneric typeId: (ztypes.tid.create from: vid.u64) value: true
         tdecl92: declOfUnitDef :st :scope :unitDecl nameId: (nameIdOf :ast name: defName)
@@ -27484,33 +27504,13 @@ checkCopyMember: function {
         # the leg returned for anything that was not a class or a union.
         btnCp: specWrittenName :st :ast tid: bt
         bttCp: st.reg.typetypeOf typeId: bt
-        # A valtype's DEFAULT `.copy` is the byte copy its assignment already
+        # A valtype's `.copy` is ALWAYS the byte copy its assignment already
         # performs -- a valtype holds no reftype, so copying the bytes copies
-        # the whole value. Writing one in the as-block overrides this default;
-        # the member lookup above finds it first and never reaches here. `copy:
-        # null` strikes the default off, and a monomorphised instance inherits
-        # its template's decision.
-        isValCp: bttCp.isValueFamily
-        cpOff: st.typing.copyOptOut.has item: bt
-        if cpOff.not then {
-            cpOrg: st.reg.genericOriginOf tid: bt
-            if cpOrg > 0 then cpOff = st.typing.copyOptOut.has item: cpOrg
-        }
-        if isValCp when cpOff.not then {
+        # the whole value -- and no valtype may write or strike one
+        # (refuseValtypeCopy).
+        if bttCp.isValueFamily then {
             stampGate :st nid: dp.nid.u64 tid: bt
             return (callleg handled: true tid: bt)
-        }
-        if cpOff then {
-            mOff: "type '\{btnCp}' has no '.copy': its `as` block defines `copy: null`, striking the default copy off the type"
-            (addError
-                :st
-                nodeid: dp.nid
-                lineno: dp.lineno
-                colno: dp.colno
-                e: zast.err.typeError
-                msg: mOff
-            )
-            return (callleg handled: true tid: (ztypes.tid.create from: 0))
         }
         mCp: "type '\{btnCp}' has no '.copy': a reftype has no default copy -- define a 'copy' method on '\{btnCp}' saying what a duplicate means, or move with '.take'"
 

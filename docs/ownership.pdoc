@@ -149,6 +149,28 @@ unmarked source.
   A reassignment of a borrowed target (#~"b = d") |copy           |re-points #~"b" at #~"d"
   A projection source (#~"Rd d", #~"P d")        |copy            |borrow; take in an owning destination
 
+#b:"What a value written with no marker means." A bare value has no meaning of
+its own beyond an #_*"implied marker", resolved in this order:
+
+#ol:
+  [#*: #_+"A callable is called." A function's name, a local, parameter or
+  field holding a function reference, and a value whose type has a #~"call"
+  method are called with no arguments, and the result's ownership is the
+  call's own (its #~"out" or #~"outx"). An explicit marker names the thing
+  itself instead -- #~"f.copy" is a reference, #~"it.borrow" the iterator --
+  and parentheses force the call first: #~"(mk).copy" copies what #~"mk"
+  returns. #~"for each" asks for #~"iterate" before it calls.]
+  [#*: #_+"An owning destination takes." A field fill or write, a #~".take"
+  parameter, a return, an append into an owning container and an owned
+  reassignment take what they are given. Taking a reftype MOVES its single
+  owner, and the source name is invalid afterwards; taking a valtype copies
+  its bytes -- a value has no owner -- and the source name stays usable. (An
+  explicit #~"x.take" on a valtype still invalidates #~"x".)]
+  [#*: #_+"A new name or an unmarked parameter borrows a reftype" -- it is
+  never copied implicitly.]
+  [#*: #_+"and copies a valtype" -- the compiler's byte copy, which no type
+  can change.]
+
 For valtypes, an unmarked parameter is a COPY -- the callee reads and writes
 its own value, and the source is NOT invalidated. Writing #~".borrow" on a
 valtype parameter passes it BY REFERENCE instead: the callee may write the
@@ -761,7 +783,7 @@ Whether #~"x.copy" exists depends on the type's family, and it is a
 #_+"deliberate" split -- not a gap waiting to be filled.
 
 #ul:
-  [#*: #_+"Valtypes (record, variant, facet) have one by default": the
+  [#*: #_+"Valtypes (record, variant, facet) always have one": the
   byte copy their assignment already performs. A valtype can never
   contain a reftype, so copying its bytes copies the whole value and the
   two are independent afterwards. Writing #~".copy" is therefore never
@@ -790,19 +812,16 @@ Whether #~"x.copy" exists depends on the type's family, and it is a
   reference, a bitwise copy would give it two owners and anything else is
   a design decision, so there is nobody but the author to make it.]
 
-Both defaults are #_+"overridable, and both by the same mechanism" -- a
-#~"copy" member in the #~"as" block. Member lookup finds it first, so it
-wins over the valtype default:
+A #_+"valtype's copy cannot be changed": its #~"as" block may neither write a
+#~"copy" nor strike it off with #~"copy: null" (#~"'Handle' is a value type:
+its `.copy` is the compiler's byte copy, which cannot be written or struck
+off"). Its bytes are the whole value, so the byte copy is always complete and
+costs what a move costs. A value that must never be duplicated owns something
+-- a file descriptor, say -- and is a class, whose single owner the rules
+already enforce. A reftype's only copy is the one its author writes, in the
+#~"as" block:
 
 #code language=zerolang: """
-  Tagged: record {
-      n: i64
-  } as {
-      copy: function {t: this} out Tagged is {
-          return (Tagged n: t.n + 100)   # the default byte copy is replaced
-      }
-  }
-
   Inner: class {
       n: i64
       label: String
@@ -810,20 +829,6 @@ wins over the valtype default:
       copy: function {t: this.view} out Inner is {
           return (Inner n: t.n label: t.label.copy)   # a reftype's only copy
       }
-  }
-  """
-
-A valtype may also #_+"strike the default off" by defining the member as
-#~"null", the same way #~"==: null" opts out of synthesized equality (for the
-type itself and for every value that holds one).
-#~".copy" on such a type is then an error, which is what a type that must
-never be duplicated silently wants:
-
-#code language=zerolang: """
-  Handle: record {
-      fd: i32
-  } as {
-      copy: null      # duplicating a file descriptor is a bug, not a copy
   }
   """
 
