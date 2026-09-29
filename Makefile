@@ -1913,7 +1913,10 @@ perf: $(PERFBIN)
 #
 # -966 a value-type union arm is boxed implicitly: -18 behaviour (the arm
 # check that copied every arm's name is gone), -948 source.
-ALLOC_BASELINE := 2764095
+#
+# +464 a suspending generator counts a zero-argument `N.each` header: 0
+# behaviour (the compiler's own source has no generator), 464 source.
+ALLOC_BASELINE := 2764559
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
