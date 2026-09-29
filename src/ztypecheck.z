@@ -17144,7 +17144,7 @@ seedBodyWalkDemands: function {st: zenv.ZSymbolTable scope: ztypes.declid progra
         unitDecl: st.typing.mainUnitRoot
         found: false
         uiter: program.units.iterate
-        for each uId: uiter loop {
+        for uId: uiter loop {
             u: program.nodes.get i: uId.u64
             if u.namedoperation then {
                 uc2z: unitDeclOfNameOrOwn :st :scope nameId: u.name
@@ -17510,7 +17510,7 @@ scanMainForInstantiations: function {
 } is {
     {
         uiter: program.units.iterate
-        for each uId: uiter loop {
+        for uId: uiter loop {
             u: program.nodes.get i: uId.u64
             if u.namedoperation then {
                 rd: ztypes.declid
@@ -18706,7 +18706,7 @@ buildInstanceMono: function {
         if tplId.isZero then {
             {
                 tuiter: program.units.iterate
-                for each tuId: tuiter loop {
+                for tuId: tuiter loop {
                     tu: program.nodes.get i: tuId.u64
                     if tu.namedoperation then {
                         uc3z: (unitDeclOfNameOrOwn
@@ -29367,7 +29367,7 @@ callFieldObject: function {
     if coerce.not then return result
     moKind: st.reg.typetypeOf typeId: (ztypes.tid.create from: mo.u64)
     if moKind == ztypes.ztypetype.functionType then return result
-    oc: readsObjectAsCall :st :ast t: result nid: dp.nid.u64
+    oc: readsObjectAsCall :st :ast t: result
     if oc.isZero then return result
     if (fnAutoCallable :st mid: oc).not then {
         wtp: ListVal zast.nameid
@@ -30652,14 +30652,6 @@ rewriteReadAsCall: function {ast: Ast node: atomref} is {
     )
 }
 
-# eachSubjectNidOf -- the value node of a `for each` header, whose bare
-# callable object is walked rather than called (eachSubjectNid); 0 for a plain
-# header, whose value is called.
-eachSubjectNidOf: function {isEach: bool nid: zast.nodeid} out u64 is {
-    if isEach then return nid.u64
-    return 0
-}
-
 # objectCallOf -- the `call` METHOD a value of type `t` answers to, when it has
 # one: the member that makes an object callable. An arm or a field named `call`
 # does not. 0 for a function type and for any type without one.
@@ -30683,17 +30675,13 @@ objectCallOf: function {st: zenv.ZSymbolTable ast: Ast t: ztypes.tid} out ztypes
     }
 }
 
-# readsObjectAsCall -- a bare read of the value `nid`, of type `t`, is a call of
-# the object's `call`: the type has one, and nothing asks for the object itself
-# -- no marker after it (suppressFnAutoCall), not a dotted path's base
-# (suppressBareCtor), not a write target, and not the value of a `for each`
-# header (eachSubjectNid). 0 when it is read as the object.
-readsObjectAsCall: function {
-    st: zenv.ZSymbolTable ast: Ast t: ztypes.tid nid: u64
-} out ztypes.tid is {
+# readsObjectAsCall -- a bare read of a value of type `t` is a call of the
+# object's `call`: the type has one, and nothing asks for the object itself --
+# no marker after it (suppressFnAutoCall), not a dotted path's base
+# (suppressBareCtor), and not a write target. 0 when it is read as the object.
+readsObjectAsCall: function {st: zenv.ZSymbolTable ast: Ast t: ztypes.tid} out ztypes.tid is {
     if st.typing.suppressFnAutoCall or st.typing.suppressBareCtor then return ztypes.tid
     if st.typing.inAssignTarget then return ztypes.tid
-    if nid == st.typing.eachSubjectNid then return ztypes.tid
     return (objectCallOf :st :ast :t)
 }
 
@@ -30702,7 +30690,7 @@ readsObjectAsCall: function {
 # walks the call. A `call` that needs input is refused as a bare call missing
 # its arguments, naming the read as written, and the read stays the object.
 callsObjectBare: function {st: zenv.ZSymbolTable ast: Ast node: atomref t: ztypes.tid} out bool is {
-    oc: readsObjectAsCall :st :ast :t nid: node.nid.u64
+    oc: readsObjectAsCall :st :ast :t
     if oc.isZero then return false
     if (fnAutoCallable :st mid: oc) then {
         rewriteReadAsObjectCall :ast :node
@@ -34838,10 +34826,8 @@ bindForBorrowedElement: function {
         ztypeId: (ztypes.tid.create from: elem.u64)
         ownership: ztypes.zownership.borrowed
     )
-    (st.reg.setVariableBorrowOrigin
-        id: vid
-        origin: (atomNameId :ast n: (ast.nodes.get i: cond.operation.u64))
-    )
+    # the element borrows from the iterator it came from, named or called
+    st.reg.setVariableBorrowOrigin id: vid origin: (forElementIteratorName :ast nid: cond.operation)
     nmId: cond.name
     st.defineVar nameId: nmId :vid
     condNid: nodeId n: (ast.nodes.get i: cond.operation.u64)
@@ -35435,8 +35421,6 @@ checkForCondition: function {
     # a 0-arg generator still has to be invoked.
     bfrFor: st.typing.allowBareFnRef
     st.typing.allowBareFnRef = true
-    esPrev: st.typing.eachSubjectNid
-    st.typing.eachSubjectNid = eachSubjectNidOf :isEach nid: cond.operation
     if facId > 0 then {
         # the factory's lazy walks (its body + the iterator class's
         # methods via return-first transitivity) fire before the
@@ -35454,7 +35438,6 @@ checkForCondition: function {
         vt = checkValueAt :st :unitDecl :ast nid: cond.operation
     }
     st.typing.allowBareFnRef = bfrFor
-    st.typing.eachSubjectNid = esPrev
     if (refuseNonValue :st :ast :vt nid: cond.operation) then vt = ztypes.tid
     # a condition that typed to nothing and raised nothing is an
     # unresolvable name -- the same rule the binding and operand sites
@@ -45196,7 +45179,7 @@ isGenericParamLabel: function {
 } out bool is {
     found: false
     tgi: gparams.iterate
-    for each gp2: tgi loop {
+    for gp2: tgi loop {
         if label == gp2 then found = true
     }
     return found
@@ -45842,7 +45825,7 @@ checkGenericCall: function {
     gtk4: declOfTypeId :st tid: funcId
     vsI: IdMapV zast.nameid v: u64
     genericParamIter: gparams.iterate
-    for each gp3: genericParamIter loop {
+    for gp3: genericParamIter loop {
         cd4: st.reg.genericParamConstraintOf tdecl: gtk4 paramName: gp3
         if cd4.numKind.has then {
             # a numeric parameter is never inferred: its argument is written
@@ -46328,10 +46311,10 @@ missingArms: function {
     required: (List String).view covered: (List String).view into: List String
 } is {
     a2iter: required.iterate
-    for each an3: a2iter loop {
+    for an3: a2iter loop {
         found: false
         c2iter: covered.iterate
-        for each cn3: c2iter loop {
+        for cn3: c2iter loop {
             if an3.stringView == cn3 then found = true
         }
         if found.not then into.append an3.copy
@@ -57120,7 +57103,7 @@ resolveConstantDefs: function {
         uops: ListVal u32
         {
             uiter: program.units.iterate
-            for each uId: uiter loop {
+            for uId: uiter loop {
                 u: program.nodes.get i: uId.u64
                 if u.namedoperation then {
                     nm: zast.poolTextAt pool: program.names ref: u.name
