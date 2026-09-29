@@ -14555,9 +14555,14 @@ emitNestedMonoMethodBase: function {
                         )
                         return "\{ctx.svC}_\{mn2}(&\{svfn})"
                     }
-                    nmc: ctxCname :ctx tid: (ztypes.tid.create from: nmco.u64
-                    # a receiver-taking method takes it by pointer in both
-                    # families, so address it unless it already is one
+                    nmc: (autoCallCname
+                        :symtab
+                        :ctx
+                        owner: (ztypes.tid.create from: nlidM.u64)
+                        method: (ztypes.tid.create from: nmco.u64
+                        # a receiver-taking method takes it by pointer in both
+                        # families, so address it unless it already is one
+                        )
                     )
                     nmrecv: "\{baseAtom}"
                     if (calleeTakesReceiverByPtr
@@ -14846,6 +14851,22 @@ typeNameCreateZero: function {
     return String
 }
 
+# autoCallCname -- the C name a no-argument method read calls. An iterator's
+# `call` is spelled as the loop that drives it spells it (objIterCallC): a
+# native one is its template's `{type}_call`, the only C that defines it.
+# Every other method is its own cname.
+autoCallCname: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    # the type the method was found on
+    owner: ztypes.tid
+    method: ztypes.tid
+} out String is {
+    oc: (symtab.typing.declChildOfId parentTypeId: owner nameId: zast.names.wkCall).or d: 0
+    if oc == method.u64 then return (objIterCallC :symtab :ctx cco: method itid: owner)
+    return (ctxCname :ctx tid: method)
+}
+
 # methodAutoCallRead -- a member read that auto-calls a method. A no-arg SV
 # native (count/hash/codepoints/lines) has no per-method C symbol and emits
 # the canonical native over the projected view. `Type.create` off the type
@@ -14880,7 +14901,7 @@ methodAutoCallRead: function {
         return "\{ctx.svC}_\{mn2}(&\{svfa})"
     }
     mt: ztypes.tid.create from: mco.u64
-    mc2: ctxCname :ctx tid: mt
+    mc2: autoCallCname :symtab :ctx owner: bstamp method: mt
     if bn2v.isZero when bn2 == fbtn when mn2 == "create" then {
         z: typeNameCreateZero :symtab :ctx :fbtn :bstamp
         if z.length > 0 then return z
