@@ -34369,7 +34369,8 @@ probeForCallIteration: function {
 }
 
 
-# forelem -- what a `for` header's iterable yields, as forElementOf reads it.
+# forelem -- what a `for` header's binding yields, as forOptionElementOf or
+# forIteratorElementOf reads it.
 forelem: record {
     # the element type the loop name binds to; 0 when the iterable exposes
     # no element wrapper
@@ -34382,10 +34383,11 @@ forelem: record {
     isView: bool
 }
 
-# forElementOf -- the element a `for` header's iterable yields: read off the
-# iterable's own wrapper type, else off the return of the function it names,
-# else off the return of its `call` member.
-forElementOf: function {
+# forOptionElementOf -- the element a PLAIN `for` binding yields: its value is
+# evaluated at every iteration and must itself answer an option. 0 when it
+# does not. A function NAME is a call there, as anywhere, so it answers its
+# return; a function REFERENCE is a value, as anywhere, and answers no option.
+forOptionElementOf: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     ast: Ast
@@ -34398,35 +34400,42 @@ forElementOf: function {
     ) case some then {
         fe.elem = w1
         fe.isView = isOptionViewMono :ast :st :unitDecl wid: vt
-        return fe
     } case none then null
-    rv: optionval.none ztypes.tid
-    if (st.reg.typetypeOf typeId: vt) == ztypes.ztypetype.functionType then {
-        rv = methodReturnOf :st mid: vt
-    } else {
-        (forceMemberOf
-            :st
-            :ast
-            parentTypeId: vt
-            nameId: zast.names.wkCall
-        )
-        c1: st.typing.declChildOfId parentTypeId: vt nameId: zast.names.wkCall
-        match (
-            c1
-        ) case some then {
-            rv = methodReturnOf :st mid: (ztypes.tid.create from: c1.u64)
-        } case none then null
-    }
+    return fe
+}
+
+# forIteratorElementOf -- the element an `each` binding yields. Its value is
+# evaluated once and is the ITERATOR: the element is read off the return of
+# its `call` member. 0 when it has no `call` answering an option.
+forIteratorElementOf: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    vt: ztypes.tid
+} out forelem is {
+    fe: forelem elem: 0 wrapper: vt isView: false
+    (forceMemberOf
+        :st
+        :ast
+        parentTypeId: vt
+        nameId: zast.names.wkCall
+    )
+    c1: st.typing.declChildOfId parentTypeId: vt nameId: zast.names.wkCall
     match (
-        rv
+        c1
     ) case some then {
-        w2: iterWrapperElem :ast :st :unitDecl wid: rv
+        rv: methodReturnOf :st mid: (ztypes.tid.create from: c1.u64)
         match (
-            w2
+            rv
         ) case some then {
-            fe.elem = w2
-            fe.wrapper = rv
-            fe.isView = isOptionViewMono :ast :st :unitDecl wid: rv
+            w2: iterWrapperElem :ast :st :unitDecl wid: rv
+            match (
+                w2
+            ) case some then {
+                fe.elem = w2
+                fe.wrapper = rv
+                fe.isView = isOptionViewMono :ast :st :unitDecl wid: rv
+            } case none then null
         } case none then null
     } case none then null
     if fe.elem == 0 when (st.reg.isPartialOf tid: vt) then {
@@ -34498,10 +34507,10 @@ mintGenField: function {
     return fnId
 }
 
-# mintForSpillFields -- the state fields a suspending object-iterator loop
-# needs: its payload, typed by the element (an owned or value yield) or by
-# the wrapper (a borrowed view: the emitter re-derives the element's pointer
-# or copy from the saved union), and its iterable when that is a
+# mintForSpillFields -- the state fields a suspending loop's binding needs: its
+# payload, typed by the element (an owned or value yield) or by the wrapper (a
+# borrowed view: the emitter re-derives the element's pointer or copy from the
+# saved union), and, for an `each` binding, its iterable when that is a
 # construction or a temporary, which would otherwise live in a C local
 # outside the loop. An iterable that is already a binding or a field is
 # left where it is, and one of the generator's own type is not embedded.
@@ -34512,11 +34521,15 @@ mintForSpillFields: function {
     fe: forelem
     vt: ztypes.tid
     facId: u64
+    isEach: bool
 } is {
     payT: ztypes.tid.create from: fe.elem.u64
     if fe.isView then payT = fe.wrapper
     pf: mintGenField :st :ast name: "_fp" tid: payT
     st.typing.forPayloadField.set key: cond.nid.u64 value: pf
+    # a plain binding is evaluated afresh at every iteration: there is no
+    # iterable to keep
+    if isEach.not then return
     fresh: facId > 0
     {
         op: ast.nodes.get i: cond.operation.u64
@@ -34543,10 +34556,12 @@ mintForSpillFields: function {
     st.typing.forIterableField.set key: cond.nid.u64 value: gf
 }
 
-# bindForIteration -- bind a `for` header's loop name to what its iterable
+# bindForIteration -- bind a `for` header's loop name to what its binding
 # yields: the element type and ownership, and the lock the iteration holds
-# on the container for the body's duration. Inside a generator body whose
-# loop suspends, the loop's state fields are minted here too.
+# for the body's duration. An `each` binding is evaluated once and walked as
+# an iterator; a plain one is evaluated at every iteration and answers the
+# option itself. Inside a generator body whose loop suspends, the loop's
+# state fields are minted here too.
 bindForIteration: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -34556,14 +34571,20 @@ bindForIteration: function {
     nm: StringView
     facId: u64
     spillFor: bool
+    isEach: bool
 } is {
-    # A call-shaped iterator init probes its per-iteration call
-    # in an empty call scope; gated on the value being an iterator
-    # wrapper.
-    if (isCallNode n: (ast.nodes.get i: cond.operation.u64)) then {
-        probeForCallIteration :st :unitDecl :ast :vt
+    fe: forelem elem: 0 wrapper: vt isView: false
+    if isEach then {
+        # A call-shaped iterator init probes its per-iteration call
+        # in an empty call scope; gated on the value being an iterator
+        # wrapper.
+        if (isCallNode n: (ast.nodes.get i: cond.operation.u64)) then {
+            probeForCallIteration :st :unitDecl :ast :vt
+        }
+        fe = forIteratorElementOf :st :unitDecl :ast :vt
+    } else {
+        fe = forOptionElementOf :st :unitDecl :ast :vt
     }
-    fe: forElementOf :st :unitDecl :ast :vt
     if fe.elem > 0 then {
         if fe.isView then {
             bindForBorrowedElement :st :ast :cond elem: fe.elem :nm
@@ -34587,13 +34608,12 @@ bindForIteration: function {
             st.typing.zeroOnMove.add item: evid.u64
         }
     } else {
-        # A NAMED `for` BINDING IS WHAT THE LOOP WALKS, so it has to be able
-        # to: an iterator answers `none` when it is done, and nothing else
-        # ends a loop by itself. A value bound here instead ran once and was
-        # read at a test that may not exist -- `while (1)` in the emitted C,
-        # with no diagnostic. It is an ordinary local, written before the loop.
+        # A NAMED `for` BINDING IS WHAT ENDS THE LOOP: an option answering
+        # `none`, read off the binding itself (plain) or off its iterator's
+        # `call` (`each`). Nothing else ends a loop by itself.
         itn: specWrittenName :st :ast tid: vt
-        im: "a 'for' binding must be an iterator, got '\{itn}'"
+        im: "a 'for' binding must answer an option, got '\{itn}'"
+        if isEach then im = "'for each' needs an iterator, got '\{itn}'"
         (addErrorH
             :st
             nodeid: cond.nid
@@ -34612,7 +34632,7 @@ bindForIteration: function {
             ztypeId: ztypes.tid
         )
     }
-    if spillFor when fe.elem > 0 then mintForSpillFields :st :ast :cond :fe :vt :facId
+    if spillFor when fe.elem > 0 then mintForSpillFields :st :ast :cond :fe :vt :facId :isEach
 }
 
 # forFactoryTid -- the type id of a bare 0-arg function in a `for` header that
@@ -34665,52 +34685,27 @@ forFactoryTid: function {
 }
 
 # checkBareForCondition -- type a `for while <cond> loop` header that binds no
-# name: the value must be bool, or an iterable the loop can drive. Anything
-# else is a type error rather than the invalid C a struct in a `while` head
-# would emit.
+# name: the value must be bool or a 2-arm sum type. An iterator is a value
+# like any other here -- its `call` is what answers, and the header writes it
+# (`for it.call loop`) -- so a bare instance is refused rather than the
+# invalid C a struct in a `while` head would emit.
 checkBareForCondition: function {
     st: zenv.ZSymbolTable
-    unitDecl: ztypes.declid
     ast: Ast
     cond: argref
     vt: ztypes.tid
 } is {
     fbId: builtinTidTc :ast :st base: "bool"
-    fIter: false
-    {
-        fpw: iterWrapperElem :ast :st :unitDecl wid: vt
-        match (
-            fpw
-        ) case some then {
-            fIter = true
-        } case none then null
-    }
-    {
-        (forceMemberOf
-            :st
-            :ast
-            parentTypeId: vt
-            nameId: zast.names.wkCall
-        )
-        fico: st.typing.declChildOfId parentTypeId: vt nameId: zast.names.wkCall
-        match (
-            fico
-        ) case some then {
-            fIter = true
-        } case none then null
-    }
     fTt: st.reg.typetypeOf typeId: vt
     fPair: ztyping.isSumPair ty: st.typing reg: st.reg tid: vt
-    if fPair when fIter.not then {
+    if fPair then {
         (stampTruthyCond
             :st
             n: (ast.nodes.get i: cond.operation.u64)
             tid: vt
         )
     }
-    if fbId > 0 when vt != fbId when fIter.not when (
-        fTt != ztypes.ztypetype.neverType
-    ) when fPair.not then {
+    if fbId > 0 when vt != fbId when fTt != ztypes.ztypetype.neverType when fPair.not then {
         fcn: ast.nodes.get i: cond.operation.u64
         fctn: specWrittenName :st :ast tid: vt
         fcmsg: "loop condition must be bool or a 2-arm sum type, got '\{fctn}'"
@@ -34736,15 +34731,18 @@ checkForCondition: function {
     # whether the loop's body suspends inside a generator, so what the
     # header binds must be saved to the instance
     spillFor: bool
+    # the loop's binding was written `each`
+    isEach: bool
 } is {
     # the condition is a namedoperation row, read as plain values: the
     # walks below lend ast
     cond: argRefAt :ast nid: condId
     if cond.nid.isZero then return
-    # A bare 0-arg function returning an iterator class auto-invokes:
-    # its walk runs in a call scope and the atom keeps the FUNCTION
-    # stamp rather than the auto-call's coerced return.
-    fbnId: bareAtomNameId n: (ast.nodes.get i: cond.operation.u64)
+    # A bare 0-arg function returning an iterator class, as an `each`
+    # binding, auto-invokes: its walk runs in a call scope and the atom keeps
+    # the FUNCTION stamp rather than the auto-call's coerced return.
+    fbnId: zast.nameid
+    if isEach then fbnId = bareAtomNameId n: (ast.nodes.get i: cond.operation.u64)
     facId: forFactoryTid :st :unitDecl :ast :fbnId
     vt: ztypes.tid
     errC: st.typing.errors.length
@@ -34787,12 +34785,10 @@ checkForCondition: function {
         )
     }
     nm: zast.nameTextCopy :ast ref: cond.name
-    # A bare `for while <cond> loop` (no binding, no iterator factory)
-    # must be boolean; a non-bool, non-iterable value is a type error
-    # rather than invalid C. Iterator bindings (`for each e: it`) carry a
-    # name; iterable inits expose an element wrapper or a `call` child.
-    if nm.length == 0 when vt > 0 when facId == 0 then {
-        checkBareForCondition :st :unitDecl :ast :cond :vt
+    # A bare `for while <cond> loop` must be boolean or a 2-arm sum; anything
+    # else is a type error rather than invalid C.
+    if nm.length == 0 when vt > 0 then {
+        checkBareForCondition :st :ast :cond :vt
     }
     if nm.length > 0 when vt > 0 then {
         (bindForIteration
@@ -34804,6 +34800,7 @@ checkForCondition: function {
             nm: nm.stringView
             :facId
             :spillFor
+            :isEach
         )
     }
     # an iterable that failed still binds its loop name, typeless, so
@@ -35049,10 +35046,13 @@ checkFor: function {
         condId: zast.forCondAt :ast nid: fornode.nid i: kC
         kC = kC + 1
         onceMark: st.entryMark
-        checkForCondition :st :unitDecl :ast :condId :spillFor
-        # the iterable binding runs once, before the loop: what it moved is
-        # not moved again by the next iteration
-        if (forCondBindsName :ast :condId) then st.recordOnceTakes from: onceMark
+        checkForCondition :st :unitDecl :ast :condId :spillFor isEach: fornode.isEach
+        # an `each` binding runs once, before the loop: what it moved is not
+        # moved again by the next iteration. A plain one runs at every
+        # iteration, so what it moves is a move in the loop.
+        if fornode.isEach when (forCondBindsName :ast :condId) then (st.recordOnceTakes
+            from: onceMark
+        )
         # a condition after the first runs only when those before it hold
         if kC > 1 then st.markTakesMaybeFrom from: onceMark
     }
@@ -35307,8 +35307,8 @@ bindingNameOfLine: function {ast: Ast.view nid: u32} out u32 is {
     return 0
 }
 
-# forCondBindsName -- the condition is the loop's iterable binding (`x: it`),
-# which runs once before the loop, not a test run per iteration
+# forCondBindsName -- the condition is the loop's binding (`x: E`), not one of
+# its `while` tests
 forCondBindsName: function {ast: Ast.view condId: zast.nodeid} out bool is {
     k: ast.nodes.get i: condId.u64
     if k.namedoperation.not then return false
@@ -47180,6 +47180,8 @@ forref: record {
     lineno: u32
     # the column to report this for against
     colno: u32
+    # the binding was written `each`
+    isEach: bool
 }
 
 # forRefAt -- the for row `nid` as plain values (all zero for any other arm).
@@ -47193,10 +47195,11 @@ forRefAt: function {ast: Ast.view nid: zast.nodeid} out forref is {
             nposts: n.postconditions.count.u64
             lineno: n.lineno
             colno: n.colno
+            isEach: n.isEach
         )
     }
     zn: zast.nodeid
-    return (forref nid: zn nconds: 0 body: zn nposts: 0 lineno: 0 colno: 0)
+    return (forref nid: zn nconds: 0 body: zn nposts: 0 lineno: 0 colno: 0 isEach: false)
 }
 
 # labelRefAt -- the labelvalue row `nid` as plain values: the same shape as an

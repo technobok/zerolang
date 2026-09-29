@@ -1932,7 +1932,11 @@ perf: $(PERFBIN)
 #
 # +38 a generator's walk over a bare iterator factory keeps the iterator in a
 # state field: 0 behaviour, 38 source.
-ALLOC_BASELINE := 2766247
+#
+# +2,326 a plain `for` binding is evaluated at every iteration: 0 behaviour (the
+# compiler's own walks all say `for each`), 2,326 source (the checker's split
+# readers, the emitter's plain loop and the tail it shares with the walk).
+ALLOC_BASELINE := 2768573
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

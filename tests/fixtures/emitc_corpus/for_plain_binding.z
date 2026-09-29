@@ -1,0 +1,122 @@
+# for_plain_binding.z -- `for x: E loop`, a binding written without `each`: E is
+# evaluated at the top of EVERY iteration and must answer an option; `none`
+# ends the loop and `some` binds x for that iteration.
+#
+# Covered: a method answering an optionval (a copied element), one answering an
+# Option (an owned element, freed each iteration), one answering an OptionView
+# (a borrowed element: a map chain re-read with the key the body just moved),
+# a call with arguments, a function name (a call, as anywhere -- also as a bare
+# condition answering bool), an iterator's `call` written out, a `while` arm
+# beside the binding, the comprehension form, a generator that takes input,
+# driven with a value the body updates, the owned element's cleanup on
+# `break`, `continue` and `return`, and a plain binding in a generator body
+# that suspends (E is evaluated after each resume).
+
+Tick: class {
+    n: i64
+    lim: i64
+} as {
+    next: function {:this} out optionval i64 is {
+        if this.n >= this.lim then return (optionval.none i64)
+        this.n = this.n + 1
+        return (optionval.some this.n)
+    }
+}
+
+Src: class {
+    n: i64
+} as {
+    line: function {:this} out (Option T: String) is {
+        if this.n >= 3 then return (Option T: String).none
+        this.n = this.n + 1
+        return ((Option T: String).some "line \{this.n}")
+    }
+}
+
+pull: function {t: Tick} out optionval i64 is {
+    return t.next
+}
+
+nothing: function out optionval i64 is {
+    return (optionval.none i64)
+}
+
+ready: function out bool is {
+    return false
+}
+
+Acc: generator { total: i64 } as {
+    call: function {step: i64} out i64 is {
+        for loop {
+            s: yield this.total
+            this.total = this.total + s
+        }
+    }
+}
+
+firstLong: function {s: Src} out String is {
+    for l: s.line loop {
+        if (l.endsWith suffix: "1") then continue
+        return l.copy
+    }
+    return "none".string
+}
+
+Lines: generator { src: Src } as {
+    call: function out String is {
+        for l: this.src.line loop yield "gen \{l}"
+    }
+}
+
+main: function is {
+    t: Tick n: 0 lim: 3
+    for v: t.next loop print "optionval \{v}"
+
+    s: Src n: 0
+    for l: s.line loop print "option \{l}"
+
+    m: MapVR i64 V: String
+    m.set key: 1 value: "one".string
+    m.set key: 2 value: "two".string
+    m.set key: 3 value: "three".string
+    k: 1
+    for w: (m.get key: k) loop {
+        print "view \{w}"
+        k = k + 1
+    }
+
+    u: Tick n: 0 lim: 2
+    for p: (pull t: u) loop print "call \{p}"
+
+    for z: nothing loop print "never \{z}"
+    for ready loop print "never ready"
+
+    xs: ListVal i64
+    xs.append 7
+    xs.append 8
+    with it: xs.iterate do for e: it.call loop print "by hand \{e}"
+
+    a: Tick n: 0 lim: 10
+    for q: a.next while q < 3 loop print "arm \{q}"
+
+    c: Tick n: 0 lim: 4
+    doubled: for d: c.next loop d * 2
+    print "comprehension \{doubled.length} \{doubled.get i: 3}"
+
+    with g: (Acc total: 0) do {
+        step: 1
+        for r: (g.call step: step) loop {
+            print "input \{r}"
+            if r > 10 then break
+            step = step * 2
+        }
+    }
+
+    b: Src n: 0
+    for x: b.line loop {
+        print "break \{x}"
+        break
+    }
+    print "return \{firstLong s: (Src n: 0)}"
+    for each y: (Lines src: (Src n: 1)) loop print y
+}

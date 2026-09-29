@@ -20783,6 +20783,12 @@ emitForStmt: function {
     buf: String.borrow
 } is {
     ctx.condDepth = ctx.condDepth + 1
+    # a plain binding is evaluated at every iteration; everything below is an
+    # `each` binding's walk or a loop with no binding
+    if (emitPlainBindingFor :ast :symtab :ctx m: n :ind :tmp :buf) then {
+        ctx.condDepth = ctx.condDepth - 1
+        return
+    }
     # THE COUNTED RANGE IS ASKED FIRST. An integer range is an ordinary
     # iterator -- it has a `call` returning an optionval like any other -- so
     # the object path matches it too, and asked first it would construct a
@@ -24229,11 +24235,7 @@ emitObjIterLoop: function {
     # type: there is no iterator to emit against.
     if ovid.isZero then return false
     callC: objIterCallC :symtab :ctx :cco :itid
-    ovn: regNameOf :symtab tid: (ztypes.tid.create from: ovid.u64)
     ovc: ctxCname :ctx tid: (ztypes.tid.create from: ovid.u64)
-    ovu: cUpperOf text: ovn.stringView
-    payC: armPayloadC :ast :symtab :ctx tid: (ztypes.tid.create from: ovid.u64) arm: "some"
-    oovorig: monoOriginName :symtab tid: (ztypes.tid.create from: ovid.u64)
     mN: tmpNext :ctx :tmp
     itCb: ctxCname :ctx tid: itid
     iterRecv: (emitObjIterRecv
@@ -24256,6 +24258,53 @@ emitObjIterLoop: function {
     buf.append l0
     l1: "\{ind}    \{ovc}_t _iter\{mN} = \{callC}(&\{iterRecv});\n"
     buf.append l1
+    (emitOptionLoopTail
+        :ast
+        :symtab
+        :ctx
+        :m
+        :cNid
+        :ovid
+        ovc: ovc.stringView
+        :lbl
+        :lblV
+        :mN
+        :lidO
+        payCleanup: payCleanup.stringView
+        :ind
+        :tmp
+        :buf
+    )
+    return true
+}
+
+# emitOptionLoopTail -- the rest of a loop whose binding answers an option into
+# `_iterN` at the top of every iteration: the `none` break, the payload bind
+# and its spill, the `while:` arms, the body, the payload's per-iteration
+# cleanup and the loop's close. The caller has opened `while (1) {`, written
+# the `_iterN` line, pushed the loop label and taken the payload cleanup.
+emitOptionLoopTail: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    m: zast.forrow.view
+    cNid: zast.nodeid
+    # the option type `_iterN` holds, and its C name
+    ovid: ztypes.tid
+    ovc: StringView
+    lbl: StringView
+    lblV: ztypes.vid
+    mN: u64
+    lidO: u64
+    payCleanup: StringView
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} is {
+    ovn: regNameOf :symtab tid: (ztypes.tid.create from: ovid.u64)
+    ovu: cUpperOf text: ovn.stringView
+    payC: armPayloadC :ast :symtab :ctx tid: (ztypes.tid.create from: ovid.u64) arm: "some"
+    oovorig: monoOriginName :symtab tid: (ztypes.tid.create from: ovid.u64)
     if (originIsTid
         :symtab
         tid: (ztypes.tid.create from: ovid.u64)
@@ -24330,7 +24379,6 @@ emitObjIterLoop: function {
     # the payload leaves C scope with the loop, so a suspension after it must
     # not spill it
     if pushedO then ctx.genForSpills.pop
-    return true
 }
 
 # objIterForNamed -- the single `name: iterable` condition of an object-iterator
@@ -24381,6 +24429,65 @@ objIterForNamed: function {
     }
 }
 
+
+# emitPlainBindingFor -- `for x: E loop`, a binding written without `each`: E is
+# evaluated at the top of EVERY iteration into `_iterN`, and the loop ends at
+# the first `none`. What E's own arguments hoisted is freed as soon as its
+# value is in hand; the rest is the loop an iterator's `call` drives. False
+# when the header has no plain binding.
+emitPlainBindingFor: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    m: zast.forrow.view
+    ind: StringView
+    tmp: TmpCtr
+    buf: String.borrow
+} out bool is {
+    if m.isEach then return false
+    if m.conditions.count.u64 == 0 then return false
+    c0Id: zast.kidAt kids: ast.kids span: m.conditions i: 0
+    c0: ast.nodes.get i: c0Id.u64
+    if c0.namedoperation.not then return false
+    lblR: zast.nameTextAt :ast ref: c0.name
+    if lblR.length == 0 then return false
+    opN: ast.nodes.get i: c0.operation.u64
+    lblV: defVid :symtab nid: (interpPartNodeId n: opN)
+    lbl: varCName :ctx vid: lblV name: lblR.stringView
+    ovid: stampTidDeep :symtab n: opN
+    if ovid.isZero then return false
+    ovc: ctxCname :ctx tid: ovid
+    mN: tmpNext :ctx :tmp
+    lidO: pushLoopLabel :ctx :tmp isDo: false
+    payCleanup: objIterPayCleanup :ast :symtab :ctx :ovid lbl: lbl.stringView :lblV
+    buf.append "\{ind}while (1) {\n"
+    ind2: "\{ind}    "
+    fL: tmp.frees.length
+    lL: tmp.listFrees.length
+    ev: emitExpr :ast :symtab :ctx n: opN
+    flushArgHoists :ctx ind: ind2.stringView :tmp :buf
+    buf.append "\{ind2}\{ovc}_t _iter\{mN} = \{ev};\n"
+    flushBlockFrees :ctx :tmp :fL :lL diverged: false :buf
+    emitValueTakeInvalidations :ast :symtab :ctx n: opN ind: ind2.stringView :buf
+    (emitOptionLoopTail
+        :ast
+        :symtab
+        :ctx
+        :m
+        cNid: (zast.nodeid.create from: c0Id)
+        :ovid
+        ovc: ovc.stringView
+        lbl: lbl.stringView
+        :lblV
+        :mN
+        :lidO
+        payCleanup: payCleanup.stringView
+        :ind
+        :tmp
+        :buf
+    )
+    return true
+}
 
 # emitObjIterFor -- `for each x: <iter> loop` where <iter> is an iterator value
 # (a type with a `.call` child returning optionval/Option). Emits the
