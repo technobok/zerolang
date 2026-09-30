@@ -21883,17 +21883,13 @@ constraintAdmits: function {
     cd: st.reg.genericParamConstraintOf :tdecl :paramName
     ck: cd.kind
     if ck == ztypes.constraintkind.none then return true
-    # `null` is the payload-less marker and satisfies either FAMILY bound --
-    # a null arm carries no payload, so the family question does not arise
-    # ((Result null e: IoError) stays the io idiom). Hashability bounds
-    # still reject it: a null key has nothing to hash.
-    isNul: argTid.u64 == st.typing.nullTypeId
-    if isNul.not then {
-        nn: st.reg.nameOf tid: argTid
-        if nn.stringView == "null" then isNul = true
-    }
+    # `null` is reference-family (user, 2026-09-30): an absent reference. It
+    # satisfies AnyRef ((Result null E: IoError) is the io idiom) and a union
+    # bound with a null arm, never anyval or a variant bound. Hashability
+    # bounds reject it too: a null key has nothing to hash.
+    isNul: isNullTid :st tid: argTid
     if isNul when ck == ztypes.constraintkind.refType then return true
-    if isNul when ck == ztypes.constraintkind.valType then return true
+    if isNul when ck == ztypes.constraintkind.valType then return false
     if ck == ztypes.constraintkind.other then return (namedBoundAdmits
         :ast
         :st
@@ -22071,6 +22067,8 @@ namedBoundAdmits: function {
     }
     if tt == ztypes.ztypetype.unionType then return (sumBoundAdmits :st :bt :argTid conform: true)
     if tt == ztypes.ztypetype.variantType then {
+        # a variant holds value data only, and `null` is reference-family
+        if (isNullTid :st tid: argTid) then return false
         return (sumBoundAdmits :st :bt :argTid conform: false)
     }
     return true
@@ -22343,6 +22341,9 @@ constraintUnmetText: function {
     pnmT: zast.nameTextAt :ast ref: paramName
     m: "generic argument '\{an}' does not satisfy constraint '\{con}' on parameter '\{pnmT}' of '\{tdn}'"
     why: hashableUnmetReason :ast :st ck: cdx.kind tid: argTid
+    if (isNullTid :st tid: argTid) then {
+        why = "'null' is reference-family -- it is a member of AnyRef and of a union bound with a null arm, not of a value-family bound".string
+    }
     if why.length > 0 then {
         m.append ": "
         m.append why
