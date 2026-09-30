@@ -1967,7 +1967,10 @@ perf: $(PERFBIN)
 #
 # +3,792 a bound admits one family: 0 behaviour, 3,792 source (the family test,
 # the union bound's member refusal and the family reason in the report).
-ALLOC_BASELINE := 2802094
+#
+# +3,619 union payload access centralised (armCell*): +1,481 behaviour (the
+# helpers' own Strings while emitting), +2,138 source.
+ALLOC_BASELINE := 2805713
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

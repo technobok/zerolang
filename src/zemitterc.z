@@ -10274,7 +10274,8 @@ emitArmCtorCall: function {
             av = emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
         }
     }
-    e: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; \{payC}* _b = (\{payC}*)z_xmalloc(sizeof(\{payC})); *_b = \{av}; _u.data = _b; _u; })"
+    st: armCellStore pc: payC.stringView box: "_b" value: av.stringView slot: "_u.data"
+    e: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; \{st} _u; })"
     return e
 }
 
@@ -12499,7 +12500,8 @@ emitCrossUnitSumCtor: function {
                 }
             }
         }
-        e: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; \{payC}* _b = (\{payC}*)z_xmalloc(sizeof(\{payC})); *_b = \{av}; _u.data = _b; _u; })"
+        st: armCellStore pc: payC.stringView box: "_b" value: av.stringView slot: "_u.data"
+        e: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; \{st} _u; })"
         return e
     } else {
         e2: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; _u.data = NULL; _u; })"
@@ -18955,17 +18957,20 @@ emitOptionBoxHoist: function {
         buf.append b1
         b2: "\{ind}\{payC} _t\{bN} = \{av};\n"
         buf.append b2
-        b3: "\{ind}\{payC}* _Box\{bN} = (\{payC}*)z_xmalloc(sizeof(\{payC}));\n"
-        buf.append b3
-        b4: "\{ind}*_Box\{bN} = _t\{bN};\n"
-        buf.append b4
+        bx: "_Box\{bN}"
+        tv: "_t\{bN}"
+        b3: armCellAlloc pc: payC.stringView box: bx.stringView
+        buf.append "\{ind}\{b3}\n"
+        b4: armCellFill box: bx.stringView value: tv.stringView
+        buf.append "\{ind}\{b4}\n"
         if (isBareCName s: av.stringView) when (isRegisteredOwned :tmp name: av.stringView) then {
             payT: (symtab.typing.declChildOf pool: ast.names parentTypeId: mid name: "some").or d: 0
             bz: movedZeroC :symtab :ctx tid: (ztypes.tid.create from: payT.u64)
             if bz.length > 0 then buf.append "\{ind}\{av} = \{bz};\n"
         }
-        b5: "\{ind}_c\{bN}.data = _Box\{bN};\n"
-        buf.append b5
+        dl: "_c\{bN}.data"
+        b5: armCellAttach slot: dl.stringView box: bx.stringView
+        buf.append "\{ind}\{b5}\n"
         return "_c\{bN}"
     } else {
         return "".string
@@ -23339,9 +23344,10 @@ emitMatchClause: function {
         unptr: false
         if pc.length > 0 when sname.length > 0 then {
             if isUni then {
-                cmt: "\{ind}    /* alias: \{sname} => (*(\{pc}*)_m\{mN}.data) */\n"
+                msl: "_m\{mN}.data"
+                nbv: armCellRef pc: pc.stringView slot: msl.stringView
+                cmt: "\{ind}    /* alias: \{sname} => \{nbv} */\n"
                 buf.append cmt
-                nbv: "(*(\{pc}*)_m\{mN}.data)"
                 vvSet xs: ctx.narrowBox vid: snameVid val: nbv.stringView
                 co: symtab.typing.declChildOf pool: ast.names parentTypeId: vtid name: arm
                 match (
@@ -23483,7 +23489,9 @@ emitOptionalAssign: function {
     buf: String.borrow
 } is {
     if payC.length > 0 then {
-        lb: "\{ind}\{target}.tag = \{someTag};\n\{ind}{ \{payC}* _zb = (\{payC}*)z_xmalloc(sizeof(\{payC})); *_zb = \{vx}; \{target}.data = _zb; }\n"
+        tsl: "\{target}.data"
+        st: armCellStore pc: payC box: "_zb" value: vx slot: tsl.stringView
+        lb: "\{ind}\{target}.tag = \{someTag};\n\{ind}{ \{st} }\n"
         buf.append lb
     } else {
         la: "\{ind}\{target}.tag = \{someTag};\n\{ind}\{target}.data.some = \{vx};\n"
@@ -24165,11 +24173,15 @@ emitObjIterPayload: function {
             tid: (ztypes.tid.create from: payElemTid.u64)
         )
         if payScalarC.length > 0 when payRef.not then {
-            l3v: "\{ind}    \{payC} \{lbl} = *(\{payC}*)_iter\{mN}.data;\n"
+            vsl: "_iter\{mN}.data"
+            dv: armCellDeref pc: payC slot: vsl.stringView
+            l3v: "\{ind}    \{payC} \{lbl} = \{dv};\n"
             buf.append l3v
             return spillkind.viewCopy
         } else {
-            l3p: "\{ind}    \{payC}* __borrow_\{lbl} = (\{payC}*)_iter\{mN}.data;\n"
+            psl: "_iter\{mN}.data"
+            dp: armCellPtr pc: payC slot: psl.stringView
+            l3p: "\{ind}    \{payC}* __borrow_\{lbl} = \{dp};\n"
             buf.append l3p
             l3pa: "\{ind}    /* alias: \{lbl} => (*__borrow_\{lbl}) */\n"
             buf.append l3pa
@@ -24184,10 +24196,12 @@ emitObjIterPayload: function {
     ) then {
         # owned heap yield: move the payload out, free just the box; the
         # loop var owns it and is freed at the end of each iteration.
-        l3op: "\{ind}    \{payC} \{lbl} = *(\{payC}*)_iter\{mN}.data;\n"
+        idl: "_iter\{mN}.data"
+        dop: armCellDeref pc: payC slot: idl.stringView
+        l3op: "\{ind}    \{payC} \{lbl} = \{dop};\n"
         buf.append l3op
-        l3of: "\{ind}    free(_iter\{mN}.data);\n"
-        buf.append l3of
+        fr: armCellFree slot: idl.stringView
+        buf.append "\{ind}    \{fr}\n"
         return spillkind.owned
     } else {
         l3: "\{ind}    \{payC} \{lbl} = _iter\{mN}.data.some;\n"
@@ -25170,10 +25184,75 @@ armAliasText: function {
     pc: armPayloadC :ast :symtab :ctx :tid :arm
     if pc.length == 0 then return "".string
     if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.unionType then {
-        return "(*(\{pc}*)\{recv}\{acc}data)"
+        rsl: "\{recv}\{acc}data"
+        return (armCellRef pc: pc.stringView slot: rsl.stringView)
     }
     armAtP: memberCPrefix name: arm
     return "\{recv}\{acc}data.\{armAtP}\{arm}"
+}
+
+# A union arm's payload lives in a heap cell that the union's `data` slot
+# points at. The functions below are the one place that spells the cell: every
+# read, store and free of a union payload goes through them. `pc` is the
+# payload's C type as the arm stores it (armPayloadC), `slot` the C expression
+# of the slot.
+
+# armCellRef -- the payload as a parenthesised lvalue.
+armCellRef: function {pc: StringView slot: StringView} out String is {
+    p: armCellPtr :pc :slot
+    return "(*\{p})"
+}
+
+# armCellDeref -- the payload as an initializer's whole right-hand side.
+armCellDeref: function {pc: StringView slot: StringView} out String is {
+    p: armCellPtr :pc :slot
+    return "*\{p}"
+}
+
+# armCellPtr -- the payload's address.
+armCellPtr: function {pc: StringView slot: StringView} out String is {
+    return "(\{pc}*)\{slot}"
+}
+
+# armCellAlloc -- declare `box`, a fresh cell for a payload.
+armCellAlloc: function {pc: StringView box: StringView} out String is {
+    return "\{pc}* \{box} = (\{pc}*)z_xmalloc(sizeof(\{pc}));"
+}
+
+# armCellFill -- copy `value` into the cell `box`.
+armCellFill: function {box: StringView value: StringView} out String is {
+    return "*\{box} = \{value};"
+}
+
+# armCellAttach -- point the slot at the cell `box`.
+armCellAttach: function {slot: StringView box: StringView} out String is {
+    return "\{slot} = \{box};"
+}
+
+# armCellStore -- a payload stored into the slot, as one run of statements:
+# the cell `box` allocated, filled with `value`, and attached.
+armCellStore: function {
+    pc: StringView
+    box: StringView
+    value: StringView
+    slot: StringView
+} out String is {
+    al: armCellAlloc :pc :box
+    fl: armCellFill :box :value
+    at: armCellAttach :slot :box
+    return "\{al} \{fl} \{at}"
+}
+
+# armCellFree -- free the cell the slot points at, its payload already
+# destroyed or moved out.
+armCellFree: function {slot: StringView} out String is {
+    return "free(\{slot});"
+}
+
+# armCellAbsent -- the condition that the slot holds no cell: a null arm, or
+# a union whose payload was moved out.
+armCellAbsent: function {slot: StringView} out String is {
+    return "!\{slot}"
 }
 
 # armMemberTid -- the payload type `arm` names on sum type `owner`, 0 when the
@@ -29043,11 +29122,11 @@ emitArmPayloadDestroy: function {
     if pdtr.length == 0 then return
     co: symtab.typing.declChildOf pool: ast.names parentTypeId: tid name: arm
     if (isHeapPtrCollection :symtab :ctx tid: (ztypes.tid.create from: (co.or d: 0))) then {
-        ldh: "            \{pdtr}(*(\{pc}*)u->data);\n"
-        buf.append ldh
+        dh: armCellDeref :pc slot: "u->data"
+        buf.append "            \{pdtr}(\{dh});\n"
     } else {
-        ldd: "            \{pdtr}((\{pc}*)u->data);\n"
-        buf.append ldd
+        dd: armCellPtr :pc slot: "u->data"
+        buf.append "            \{pdtr}(\{dd});\n"
     }
 }
 
@@ -32968,7 +33047,8 @@ emitUnionMono: function {
     ld: "static void \{vc}_destroy(\{vc}_t* u) {\n"
     buf.append ld
     buf.append "    if (!u) return;\n"
-    buf.append "    if (!u->data) return;\n"
+    ab: armCellAbsent slot: "u->data"
+    buf.append "    if (\{ab}) return;\n"
     buf.append "    switch (u->tag) {\n"
     pj: u64
     for pj < an loop {
@@ -32987,7 +33067,8 @@ emitUnionMono: function {
                 pc: pc.stringView
                 :buf
             )
-            buf.append "            free(u->data);\n"
+            uf: armCellFree slot: "u->data"
+            buf.append "            \{uf}\n"
             buf.append "            break;\n"
         }
         pj = pj + 1
@@ -33749,7 +33830,10 @@ emitMapMono: function {
     ) then {
         removeBody = "    z_\{rmWrap}_t _r;\n    if (idx < 0) {\n        _r.tag = Z_\{rmWrapU}_TAG_NONE;\n        return _r;\n    }\n    _r.tag = Z_\{rmWrapU}_TAG_SOME;\n    _r.data.some = _this->entries[idx].value;\n\{delTail}    return _r;"
     } else {
-        removeBody = "    z_\{rmWrap}_t _r = {0};\n    if (idx < 0) {\n        _r.tag = Z_\{rmWrapU}_TAG_NONE;\n        _r.data = NULL;\n        return _r;\n    }\n    _r.tag = Z_\{rmWrapU}_TAG_SOME;\n    \{valT}* _box = (\{valT}*)z_xmalloc(sizeof(\{valT}));\n    *_box = _this->entries[idx].value;\n    _r.data = _box;\n\{delTail}    return _r;"
+        ral: armCellAlloc pc: valT.stringView box: "_box"
+        rfl: armCellFill box: "_box" value: "_this->entries[idx].value"
+        rat: armCellAttach slot: "_r.data" box: "_box"
+        removeBody = "    z_\{rmWrap}_t _r = {0};\n    if (idx < 0) {\n        _r.tag = Z_\{rmWrapU}_TAG_NONE;\n        _r.data = NULL;\n        return _r;\n    }\n    _r.tag = Z_\{rmWrapU}_TAG_SOME;\n    \{ral}\n    \{rfl}\n    \{rat}\n\{delTail}    return _r;"
     }
     p: "\{runtimeDir}/z_Map.c.tmpl"
     raw: readTemplateCached :ctx path: p.stringView
