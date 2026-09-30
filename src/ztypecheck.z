@@ -36,6 +36,7 @@ public: unit {
     :dissectedArmOf
     :builtinTidTRo
     :dataFieldIds
+    :isNullTid
     :dataFieldNames
     :descendNamed
     :fnReturnBaseNameOf
@@ -39298,6 +39299,12 @@ hoistRows: function {
     return assignId
 }
 
+# isNullTid -- the type is `null`, the payload-less marker.
+isNullTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    if tid.u64 == st.typing.nullTypeId then return true
+    return (st.reg.nameIs :tid name: "null")
+}
+
 # memberIsDataField -- whether a member row is stored in the type's C struct:
 # every parameter of a function type; an fnptr field; a field whose type is
 # not itself a function, is not an `as` constant, and is not one of the
@@ -39323,6 +39330,12 @@ memberIsDataField: function {
         (st.reg.typetypeOf typeId: (ztypes.tid.create from: cto.u64)) ==
         ztypes.ztypetype.functionType
     ) then {
+        return false
+    }
+    # a field an instance types `null` (`v: T` with T = null) carries nothing:
+    # it has no storage and takes no argument. A sum's null arm is its own case.
+    if (isNullTid :st tid: (ztypes.tid.create from: cto)) when (st.reg.typetypeOf typeId: tid
+    ).isSum.not then {
         return false
     }
     if (st.typing.isAsConstDecl

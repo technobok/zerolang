@@ -20131,6 +20131,19 @@ emitReferenceBind: function {
     return true
 }
 
+# readsNullField -- the statement reads a field its instance types `null`
+# (`v: T` with T = null): the field carries nothing and has no storage, so the
+# read is nothing to emit.
+readsNullField: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.view
+} out bool is {
+    rt: dottedReceiverStampId :ast :symtab callable: n
+    if rt.isZero then return false
+    ct: (symtab.typing.declChildOfId parentTypeId: rt nameId: (dottedChildNameIdOf :ast :n)).or d: 0
+    if ct == 0 then return false
+    return (ztypecheck.isNullTid st: symtab tid: (ztypes.tid.create from: ct))
+}
+
 # emitDottedAutoCallStmt -- a no-argument METHOD auto-call in statement position
 # (`this.accept`, `this.statepop`) parses as a dotted path. Emits the call as a
 # statement. A `.drop` transfer marker emits its destroy when the name owes
@@ -20182,6 +20195,7 @@ emitDottedAutoCallStmt: function {
         if riv.length > 0 then buf.append "\{ind}\{rcvV} = \{riv};\n"
         return
     }
+    if (readsNullField :ast :symtab :n) then return
     de: emitExpr :ast :symtab :ctx :n
     flushArgHoists :ctx :ind :tmp :buf
     if (de.stringView.startsWith prefix: "/*") then {
