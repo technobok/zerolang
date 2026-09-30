@@ -1950,7 +1950,11 @@ perf: $(PERFBIN)
 #
 # +519 a generator local bound to a comprehension is built in its field: 0
 # behaviour (the compiler has no generator), 519 source.
-ALLOC_BASELINE := 2798962
+#
+# +97 `return` declares no parameter: 0 behaviour, 97 source. Every small
+# program measured costs 40 FEWER (the dropped `as`/`in`); the self-compile's
+# +97 was not isolated.
+ALLOC_BASELINE := 2799059
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
