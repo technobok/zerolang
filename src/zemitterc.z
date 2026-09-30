@@ -2253,7 +2253,7 @@ ternaryElse: function {
 # atomNameIdOf -- an atom's interned name id (0 when the node is not an atom;
 # no pool id is 0, so a lookup by it misses).
 atomNameIdOf: function {ast: Ast.view n: astnode.view} out zast.nameid is {
-    ast
+    ast.drop
     match (
         n
     ) case atomid then {
@@ -20133,8 +20133,8 @@ emitReferenceBind: function {
 
 # emitDottedAutoCallStmt -- a no-argument METHOD auto-call in statement position
 # (`this.accept`, `this.statepop`) parses as a dotted path. Emits the call as a
-# statement, or nothing at all for a `.drop` transfer marker, whose destroy
-# the scope exit already covers. ALWAYS handles the statement -- the four legs
+# statement. A `.drop` transfer marker emits its destroy when the name owes
+# one, and otherwise only a `(void)` read of the name. ALWAYS handles the statement -- the four legs
 # inside it were `return`s out of emitReturnStmt, so the caller returns too.
 emitDottedAutoCallStmt: function {
     ast: Ast.view
@@ -20160,17 +20160,24 @@ emitDottedAutoCallStmt: function {
         # ends an owned local, which the checker let it move.
         dropNid: (zast.nodeIdOf :n).u64
         if isDrop when (namedDestroyOwes :symtab nid: dropNid).not then {
+            # read once, so a name whose only use is its drop is still used
+            # in the C
+            drv: emitDottedReceiver :ast :symtab :ctx callable: n
+            buf.append "\{ind}(void)(\{drv});\n"
             emitDropReleasedTemps :symtab :tmp :dropNid :ind :buf
             return
         }
         rcvV: emitDottedReceiver :ast :symtab :ctx callable: n
-        buf.append (destroyLineC
+        dsl: (destroyLineC
             :symtab
             :ctx
             tid: (ztypes.tid.create from: rrid.u64)
             nm: rcvV.stringView
             :ind
         )
+        # a type with nothing to destroy still reads the name once
+        if dsl.length == 0 when isDrop then buf.append "\{ind}(void)(\{rcvV});\n"
+        buf.append dsl
         riv: movedZeroC :symtab :ctx tid: (ztypes.tid.create from: rrid.u64)
         if riv.length > 0 then buf.append "\{ind}\{rcvV} = \{riv};\n"
         return
@@ -23649,7 +23656,7 @@ emitMatchBindValue: function {
 # one; a block branch stays on the clause path, which knows how to assign from
 # a body.
 isSimpleValueNode: function {ast: Ast.view n: astnode.view} out bool is {
-    ast
+    ast.drop
     match (
         n
     ) case statement then {
@@ -27919,9 +27926,9 @@ isSetMapPtrParam: function {
     pname: StringView
     tid: ztypes.tid
 } out bool is {
-    ast
-    fid
-    pname
+    ast.drop
+    fid.drop
+    pname.drop
     # the param's own origin (a typedef wrapper chases to its base mono)
     # against the cached Set/Map template ids
     bt: chaseAggregateTypedef :symtab :ctx :tid
@@ -32849,7 +32856,7 @@ definedInNonMain: function {
     ctx: Ctx.view
     tid: ztypes.tid
 } out bool is {
-    symtab
+    symtab.drop
     dgo: ctx.defUnitId.get key: tid
     match (
         dgo
