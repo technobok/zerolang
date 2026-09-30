@@ -1961,7 +1961,10 @@ perf: $(PERFBIN)
 #
 # +199 the six valtype readers return OptionViewVal: 0 behaviour, 199 source
 # (the valtype iterators' instances are now OptionViewVal ones).
-ALLOC_BASELINE := 2800042
+#
+# -1,740 `Any` deleted: 0 behaviour, -1,740 source (checkAnyBounds and its
+# scan of every bound, the four resolution exemptions, the declaration).
+ALLOC_BASELINE := 2798302
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2032,37 +2035,20 @@ perf-elision: bin/zc.c
 # sites (numeric casts, userFnId-first dispatch, control-flow checks, and the
 # head-gated assignment / fnSignature / typeRefC sites); a new by-name site grows
 # the count and fails. New type emission must go through the id-based helpers.
-# any-guard -- `Any` is the bound that says the family genuinely does not
-# matter, and no USER source may say it: a generic names anyval or AnyRef. Two
-# stdlib files keep counted residuals:
-#   system.z (5) -- `return` and `typedef`, whose parameter is never consulted
-#     (probed: bounding them to anyval does not reject a reftype), plus
-#     `Iterator` and `OptionView`, which still span both families.
-#   collections.z (0) -- every container template names the family it takes.
-# Both are ratchets: they may only DECREASE. Enforced here rather than in the
-# typechecker because generic-param registration has no unit name in hand.
+# any-guard -- there is no `Any`: every generic parameter names the one family
+# it takes (anyval, AnyRef, a hashable bound, StringLike or a width), and no
+# bound admits both. The guard keeps lib/system from growing one back; a user
+# spelling needs none, being the standard unknown-type error
+# (any_bound_retired, any_bound_position).
 any-guard:
-	@u=$$(grep -rn 'Any\.generic' --include=*.z src examples tests | grep -vE ':[0-9]+: *#' | grep -vE 'any_bound_retired\.z|any_bound_position\.z|any_shadow_bound\.z' | wc -l); \
-	if [ "$$u" -gt 0 ]; then \
-	  echo "any-guard FAIL: $$u use(s) of Any.generic in user source"; \
-	  grep -rn 'Any\.generic' --include=*.z src examples tests | grep -vE ':[0-9]+: *#' | grep -vE 'any_bound_retired\.z|any_bound_position\.z|any_shadow_bound\.z'; \
-	  echo "  A generic must name the family it takes: anyval.generic or AnyRef.generic."; \
+	@n=$$(grep -nE '^[[:space:]]*Any:|Any\.generic' lib/system/*.z lib/system/system/*.z | grep -vE ':[0-9]+: *#' | wc -l); \
+	if [ "$$n" -gt 0 ]; then \
+	  echo "any-guard FAIL: lib/system declares Any or bounds a parameter by it"; \
+	  grep -nE '^[[:space:]]*Any:|Any\.generic' lib/system/*.z lib/system/system/*.z | grep -vE ':[0-9]+: *#'; \
+	  echo "  A generic names the family it takes: anyval.generic or AnyRef.generic."; \
 	  exit 1; \
 	fi; \
-	s=$$(grep -c 'Any\.generic' lib/system/system.z); \
-	c=$$(grep -c 'Any\.generic' lib/system/collections.z); \
-	fail=0; \
-	if [ "$$s" -gt 5 ]; then echo "any-guard FAIL: system.z Any.generic = $$s (baseline 5)"; fail=1; fi; \
-	if [ "$$c" -gt 0 ]; then echo "any-guard FAIL: collections.z Any.generic = $$c (baseline 0)"; fail=1; fi; \
-	if [ "$$fail" = "1" ]; then echo "  Lower the baseline here when a residual is legitimately removed."; exit 1; fi; \
-	m=$$(grep -lE 'Any\.generic' tests/fixtures/lsp_cases/*.msgs 2>/dev/null | wc -l); \
-	if [ "$$m" -gt 0 ]; then \
-	  echo "any-guard FAIL: $$m lsp .msgs inline source(s) spell Any.generic"; \
-	  grep -lE 'Any\.generic' tests/fixtures/lsp_cases/*.msgs; \
-	  echo "  didOpen inline text overrides the workspace file -- migrate the .msgs too."; \
-	  exit 1; \
-	fi; \
-	echo "any-guard OK: user source clean; system.z=$$s (<=5) collections.z=$$c (<=0); lsp .msgs clean"
+	echo "any-guard OK: lib/system neither declares Any nor bounds by it"
 
 # shadow-guard -- a C type resolved from a NAME can pick up a builtin's spelling
 # for a user type that shadows it; the id-based forms re-check. The two sites in
@@ -2858,9 +2844,8 @@ set -e
 LC_ALL=C; export LC_ALL
 D=$$(mktemp -d); trap 'rm -rf "$$D"' EXIT
 
-# what a highlighter may carry that core.z does not define: the context words
-# and `Any`, which is real and reachable without a core.z re-export.
-CONTEXT="Any _ copy iterator meta public tag this yield"
+# what a highlighter may carry that core.z does not define: the context words.
+CONTEXT="_ copy iterator meta public tag this yield"
 
 sed -n 's|^syn match \([A-Za-z]*\) /\(.*\)/$$|\1 \2|p' editor/nvim/syntax/zerolang.vim > "$$D/vim.raw"
 vimset() {

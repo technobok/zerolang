@@ -81,7 +81,7 @@ module Rouge
 
       def self.builtins   # predeclared
         @builtins ||= %w(
-          Any AnyRef Box ByteView Bytes Closer
+          AnyRef Box ByteView Bytes Closer
           CpIter File IdMapEntryR IdMapEntryV IdMapItemIterR IdMapItemIterV
           IdMapR IdMapV IdSet IdSetIter IoError
           LinesIter List ListIter ListIterVal ListRef ListVal

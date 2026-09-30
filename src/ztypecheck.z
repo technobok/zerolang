@@ -2535,7 +2535,7 @@ registerGenericParamOne: function {
 
 # recordGenericBoundAtom -- the node a bound is SPELLED at, and the unit a
 # qualified one resolves in, recorded for the passes that report on bounds
-# (checkAnyBounds, checkGenericBounds) and for tooling. This must not resolve
+# (checkGenericBounds) and for tooling. This must not resolve
 # as a type-ref: resolution here would reach emission.
 recordGenericBoundAtom: function {
     ast: Ast.view
@@ -15599,7 +15599,7 @@ resolveDottedDef: function {
 #
 # `is native` is the exception, and the only one: the runtime owns those
 # layouts, and the markers the compiler declares this way -- `null`, `never`,
-# `anyval`, `Any`, `Box` -- are deliberately empty. `null` and `never` parse as
+# `anyval`, `AnyRef`, `Box` -- are deliberately empty. `null` and `never` parse as
 # empty records, which is why the marker and not the shape has to be the test.
 refuseEmptyObjectDef: function {
     st: zenv.ZSymbolTable
@@ -18030,7 +18030,7 @@ resolveNamespaceUnit: function {
 }
 
 # resolveInlineGenericUnit -- resolve an inline generic unit (mathops: unit as { t:
-# Any.generic; add; double }) into a UNIT type (is_generic) whose functions are mangled
+# anyval.generic; add; double }) into a UNIT type (is_generic) whose functions are mangled
 # {unit}_{fn} FUNCTION children (with their generic-param types KEPT -- unlike a generic
 # FILE unit, an inline template's params are not suppressed).
 resolveInlineGenericUnit: function {
@@ -19964,9 +19964,6 @@ nameClaimedByScopeId: function {
     ) case some then {
         return true
     } case none then null
-    # `Any` is not user-reachable through the system probe: only a real
-    # scope claim above (its own unit defining it) counts.
-    if (zast.nameTextEq :ast ref: nameId s: "Any") then return false
     nameId96: nameId
     ncs: (resolveUnitChild
         :st
@@ -20025,8 +20022,8 @@ stampResolvedTyperef: function {
 # collides with one is the accepted blind spot). A name whose declaration the
 # environment finds queued or mid-resolution is queued for retry: this pass
 # may run in the middle of a drain, before that declaration has resolved. A
-# name a scope claims, or that any loaded unit resolves, is known -- except
-# `Any`, which only its own unit's claim resolves. False means: report it.
+# name a scope claims, or that any loaded unit resolves, is known. False means:
+# report it.
 typerefExcused: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -20054,7 +20051,6 @@ typerefExcused: function {
         }
     }
     if (nameClaimedByScopeId :ast :st unitDecl: origin scope: rf nameId: pval) then return true
-    if (zast.nameTextEq :ast ref: pval s: "Any") then return false
     # closure-wide: a bare name may resolve to a member of ANY loaded unit
     # (the demand resolvers search the closure; the typeref walk does not)
     puds: programUnitDecls :st
@@ -21767,7 +21763,6 @@ constraintKindFor: function {text: StringView} out ztypes.constraintkind is {
     # checkGenericBounds now refuses a bound that names no type, so the
     # retired spellings report as the unknown names they are.
     if text == "StringLike" then return ztypes.constraintkind.stringLike
-    if text == "Any" then return ztypes.constraintkind.any
     if text.length == 0 then return ztypes.constraintkind.none
     if (constraintIntKind cv: text).has then return ztypes.constraintkind.numeric
     return ztypes.constraintkind.other
@@ -21782,7 +21777,6 @@ constraintTextOf: function {desc: ztypes.constraintdesc} out String is {
     if desc.kind == ztypes.constraintkind.refHashable then return "RefHashable".string
     if desc.kind == ztypes.constraintkind.idKey then return "idkey".string
     if desc.kind == ztypes.constraintkind.stringLike then return "StringLike".string
-    if desc.kind == ztypes.constraintkind.any then return "Any".string
     if desc.kind == ztypes.constraintkind.numeric when desc.numKind.has then {
         return (ztypes.numkindName k: desc.numKind.kind)
     }
@@ -22407,47 +22401,13 @@ valHashableUnmetReason: function {
     return "it writes its own '==' but not its 'hash', and a key's two must agree".string
 }
 
-# checkAnyBounds -- `Any` is not a user-spellable bound: a generic parameter
-# names the family it takes (AnyRef/anyval, a hashable bound, StringLike or a
-# numeric width). The spelling still maps to constraintkind.any at
-# registration, where the declaring unit is not known, so the gate runs once
-# after resolution: each bound atom spelling `Any` whose declaring unit does
-# not itself define `Any` reports the standard unknown-type error, at that
-# atom. system.z defines `Any`, so its residual bounds pass; a user unit
-# passes only by defining its own `Any`.
-checkAnyBounds: function {ast: Ast.view st: zenv.ZSymbolTable} is {
-    anyNid: zast.poolFind pool: ast.names text: "Any"
-    if anyNid.isZero then return
-    # the bound nodes to report, collected while the bound table is read and
-    # reported after: the report lends st
-    anyNodes: ListVal u64
-    for each be: st.typing.genericBoundName.iterateItems loop {
-        if be.value == anyNid then {
-            scope: (st.typing.genericBoundScope.get key: be.key).or d: ztypes.declid
-            if (unitDefinesAny :st :scope :anyNid).not then anyNodes.append from: be.key
-        }
-    }
-    for each bn: anyNodes loop {
-        tn: ast.nodes.get i: bn
-        (addResolveErrorH
-            :st
-            nodeid: (nodeId n: tn)
-            lineno: (nodeLine n: tn)
-            colno: (nodeCol n: tn)
-            e: zast.err.badReference
-            msg: "Unknown type 'Any'".string
-            width: 3
-        )
-    }
-}
-
 # checkGenericBounds -- a bound names a type the program declares, and one that
 # HAS a `.generic`: the spec gives it to a union, a variant, a protocol, a facet
 # and a numeric type. A name the kinds classify (`anyval`, `RefHashable`, a
 # width) is a family and answers for itself; anything else was taken on trust,
 # so `T: Bogus.generic` constrained nothing and `T: Pt.generic` -- a record --
-# constrained nothing either. Demand-driven, like checkAnyBounds: a declaration
-# nothing reaches is not checked.
+# constrained nothing either. Demand-driven: a declaration nothing reaches is
+# not checked.
 checkGenericBounds: function {ast: Ast.view st: zenv.ZSymbolTable} is {
     # collected while the bound table is read and reported after: the report
     # lends st
@@ -22573,26 +22533,6 @@ boundTypetypeRefusal: function {tt: ztypes.ztypetype bt: StringView} out String 
     return "".string
 }
 
-
-# unitDefinesAny -- the unit enclosing declaration `scope` defines its own `Any`;
-# true for a scope in no unit.
-unitDefinesAny: function {
-    st: zenv.ZSymbolTable.view
-    scope: ztypes.declid
-    anyNid: zast.nameid
-} out bool is {
-    d: scope
-    for d > 0 loop {
-        decl: st.typing.decls.get i: d.u64
-        if decl.kind.unitDecl then {
-            # declFindChild reads the pre-resolution def index, so a
-            # defined-but-never-demanded `Any` still counts
-            return (st.typing.declFindChild parentDeclId: d nameId: anyNid) > 0
-        }
-        d = decl.parent
-    }
-    return true
-}
 
 # typeIsHashable -- the type has both `hash` and `==`, so it may key a Map or
 # a Set. Read straight off the DECLARATIONS: `hash` and `==` are synthesised
@@ -23743,8 +23683,8 @@ buildSpecIdSubs: function {
 # paths mint intermediate nodes (genericOriginId = template, genericArgs =
 # the key prefix) that cache partial paths without being emitted.
 # checkConstraintSat -- a specialization argument against its parameter's
-# declared constraint. Any (and numeric bounds, which never reach the tree)
-# pass; value-kind constraints check typeIsValtype/typeIsReftype; StringLike
+# declared constraint. Numeric bounds, which never reach the tree, pass;
+# value-kind constraints check typeIsValtype/typeIsReftype; StringLike
 # checks membership. GENERIC_PARAM args skip -- partial specs re-check on
 # completion. Location-free (the spec front door holds no source node).
 getOrMintSpec: function {
@@ -42202,8 +42142,8 @@ partialTemplateOf: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out zty
 }
 
 # boundMayBeReftype -- whether `tdecl`'s type parameter `paramName` may be
-# instantiated with a reftype: `Any` admits one, and so does every bound
-# boundAdmitsReftype says does. A parameter whose declaration cannot be found
+# instantiated with a reftype: every bound boundAdmitsReftype says does admits
+# one. A parameter whose declaration cannot be found
 # may be anything.
 boundMayBeReftype: function {
     ast: Ast
@@ -42212,7 +42152,7 @@ boundMayBeReftype: function {
     paramName: zast.nameid
 } out bool is {
     k: (st.reg.genericParamConstraintOf :tdecl :paramName).kind
-    if k == ztypes.constraintkind.any or (k == ztypes.constraintkind.none) then return true
+    if k == ztypes.constraintkind.none then return true
     pd: st.typing.declFindChild parentDeclId: tdecl nameId: paramName
     if pd.isZero then return true
     fm: (argRefAt
@@ -59097,7 +59037,6 @@ walkLookupTyperefByIdRo: function {
             cur = unitScopeOf :st declId: (declParentIdOf :st declId: cur)
         }
     }
-    if (zast.nameTextAt :ast ref: baseId).stringView == "Any" then return (optionval.none u64)
     if st.typing.coreUnitRoot.isZero.not then {
         r5: probeScopeTyperefRo :ast :st root: st.typing.coreUnitRoot nameId: baseId depth: 0
         if r5 > 0 then return (optionval.some r5)
@@ -59375,10 +59314,6 @@ walkLookupTyperefFrom: function {
             cur = unitScopeOf :st declId: (declParentIdOf :st declId: cur)
         }
     }
-    # `Any` is not user-reachable through core: only its own unit (system.z,
-    # or a user unit defining one) resolves it. The constraint-position gate
-    # is checkAnyBounds.
-    if (zast.poolTextAt pool: ast.names ref: baseId) == "Any" then return (optionval.none u64)
     if st.typing.coreUnitRoot.isZero then return (optionval.none u64)
     r5: probeScopeTyperef :st :ast root: st.typing.coreUnitRoot nameId: baseId
     if r5 == 0 then return (optionval.none u64)
@@ -60004,7 +59939,6 @@ typecheck: function {
             scope: rf
             unitDecl: canonUd9
         )
-        checkAnyBounds ast: program :st
         checkGenericBounds ast: program :st
         checkConformances ast: program :st
         checkHashKeys ast: program :st

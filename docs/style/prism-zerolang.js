@@ -65,7 +65,7 @@
         'u8', 'u16', 'u32', 'u64', 'u128',
         'i8', 'i16', 'i32', 'i64', 'i128',
         'f16', 'f32', 'f64', 'f128', 'c8', 'c32', 'bool',
-        'String', 'StringView', 'Text', 'StringLike', 'Any', 'AnyRef', 'anyval', 'RefHashable', 'valhashable',
+        'String', 'StringView', 'Text', 'StringLike', 'AnyRef', 'anyval', 'RefHashable', 'valhashable',
         'Option', 'optionval', 'OptionView', 'OptionViewVal', 'Result', 'resultval', 'converror', 'Box', 'intrange',
         'array', 'str', 'List', 'ListRef', 'ListVal', 'ListView', 'ListViewVal', 'ListIter', 'ListIterVal', 'Set', 'SetRef', 'SetVal', 'SetIter', 'SetIterVal', 'Bytes', 'ByteView',
         'IdMapR', 'IdMapV', 'IdMapEntryR', 'IdMapEntryV', 'IdMapItemIterR', 'IdMapItemIterV', 'IdSet', 'IdSetIter',
