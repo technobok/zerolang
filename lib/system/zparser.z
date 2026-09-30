@@ -2930,6 +2930,8 @@ Parser: class {
                 :startCol
             )
         }
+        clashF: this.sharedNameClash :lex a: parameters b: asItems
+        if clashF.some then return clashF
         return (astnode.functiondef (zast.functionrow
             nodeid: this.nextId
             lineno: startLine
@@ -3019,6 +3021,46 @@ Parser: class {
         startPos: lex.peekPos
         isFunc: lex.peekType == zlexer.toktype.functionTok
         if isFunc then return (optionval.some (this.parseFunctionDefinition :lex :startPos))
+        return (optionval.none astnode)
+    }
+
+    # sharedNameClash -- a definition's blocks are one namespace: a function's
+    # parameters and its `as` members, an object's `is` and `as` members. The
+    # error for the first name `b` repeats from `a`, at whichever of the two
+    # comes later in the source; none when every name is unique. A repeat
+    # within one block is refused as the block is read.
+    sharedNameClash: function {
+        :this
+        lex: zlexer.Lexer
+        a: (ListVal u32).view
+        b: (ListVal u32).view
+    } out optionval astnode is {
+        for each bId: b loop {
+            bs: zast.namedSiteAt ast: this.ast nid: bId
+            if bs.name.isZero then continue
+            for each aId: a loop {
+                as2: zast.namedSiteAt ast: this.ast nid: aId
+                if as2.name != bs.name then continue
+                later: bs
+                if (
+                    as2.line > bs.line or (as2.line == bs.line and (as2.col > bs.col))
+                ) then later = as2
+                msg: String
+                w: u32
+                {
+                    nm: zast.nameTextAt ast: this.ast ref: bs.name
+                    msg = "Duplicate item name '\{nm}': a definition's parameters and its `is` and `as` members share one namespace"
+                    w = nm.length.u32.orPanic
+                }
+                pos: lex.peekPos
+                return (optionval.some (this.mkErrorAt
+                    pos: (zlexer.tokpos fsno: pos.fsno lineno: later.line colno: later.col width: w)
+                    code: zast.err.badItem
+                    msg: msg.take
+                )
+                )
+            }
+        }
         return (optionval.none astnode)
     }
 
@@ -3719,6 +3761,8 @@ Parser: class {
         # only: every other kind's members are meaningless without an is-block.
         if kind == zast.objectkind.generatorDef when hasAs then hasBody = true
         if hasBody then {
+            clashO: this.sharedNameClash :lex a: isItems b: asItems
+            if clashO.some then return clashO
             return (astnode.objectdef (zast.objectdefrow
                 nodeid: this.nextId
                 lineno: startLine

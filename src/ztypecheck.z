@@ -11037,14 +11037,12 @@ detectTagAccessor: function {
     scope: ztypes.declid
     defName: StringView
     ownerId: u64
-    armNames: (IdSet u64).view
     am: argref
 } is {
     tp: dottedParentName :ast n: (ast.nodes.get i: am.operation.u64)
     tc: zast.nameTextCopy :ast ref: (dottedChildNameId :ast n: (ast.nodes.get i: am.operation.u64))
     if tc.stringView != "tag" then return
     if (isNumericTypeName name: tp.stringView).not then return
-    mname: zast.nameTextCopy :ast ref: am.name
     # A TAG ACCESSOR IS NOT A CONTAINMENT EDGE. `tag: u8.tag` declares a read of
     # the discriminator the variant already carries, not a field that has to lay
     # out inside it -- so it takes the plain typeref, and a type reached through
@@ -11060,19 +11058,6 @@ detectTagAccessor: function {
         )
     )
     if nid.isZero then return
-    if (armNames.has item: am.name.u64) then {
-        mac: "'\{mname}' collides with the '\{defName}' arm of the same name"
-        (addResolveErrorH
-            :st
-            nodeid: am.nid
-            lineno: am.lineno
-            colno: am.colno
-            e: zast.err.duplicateDef
-            msg: mac
-            width: mname.length.u32.orPanic
-        )
-        return
-    }
     st.typing.tagAccessorName.set key: ownerId value: am.name
     st.typing.tagAccessorTid.set key: (ztypes.tid.create from: ownerId.u64) value: nid
 }
@@ -11126,28 +11111,14 @@ synthVariantEqHash: function {
 }
 
 # sumMethodNameRejected -- a variant or union as-block method whose name cannot
-# become a member: it collides with an ordinal arm of the same name, or it is
-# the reserved discriminator name. True when it was rejected and reported.
+# become a member: the reserved discriminator name. (One that repeats an arm's
+# name is refused by the parser: a definition's `is` and `as` members are one
+# namespace.) True when it was rejected and reported.
 sumMethodNameRejected: function {
     st: zenv.ZSymbolTable
     am: argref
     mname: StringView
-    defName: StringView
-    ordinalArmNames: (IdSet u64).view
 } out bool is {
-    if (ordinalArmNames.has item: am.name.u64) then {
-        mc: "'\{mname}' collides with the '\{defName}' arm of the same name"
-        (addResolveErrorH
-            :st
-            nodeid: am.nid
-            lineno: am.lineno
-            colno: am.colno
-            e: zast.err.duplicateDef
-            msg: mc
-            width: mname.length.u32.orPanic
-        )
-        return true
-    }
     if mname == "tag" then {
         mr: "'tag' is a reserved member name".string
         (addResolveErrorH
@@ -11176,7 +11147,6 @@ attachVariantMethods: function {
     vnode: objref
     vid: u64
     isgen: bool
-    ordinalArmNames: (IdSet u64).view
 } is {
     kAiter: u64
     for kAiter < vnode.nas loop {
@@ -11204,8 +11174,6 @@ attachVariantMethods: function {
                     :st
                     :am
                     mname: mname.stringView
-                    :defName
-                    :ordinalArmNames
                 ).not then {
                     (st.typing.setMemberType
                         parentTypeId: (ztypes.tid.create from: vid.u64)
@@ -11228,7 +11196,6 @@ attachVariantMethods: function {
                     :unitDecl
                     :defName
                     ownerId: vid
-                    armNames: ordinalArmNames
                     :am
                 )
                 if isgen.not then (attachAsConstant
@@ -11416,7 +11383,6 @@ resolveVariant: function {
             }
         }
     }
-    ordinalArmNames: IdSet u64
     # an ORDINAL variant: every arm written `null`, so nothing distinguishes one
     # value but which arm it is. Recorded for the backend at the end of the loop.
     allNullV: true
@@ -11483,7 +11449,6 @@ resolveVariant: function {
                 name: (zast.nameTextAt :ast ref: fm.name).stringView
             )
             if armRefV then continue
-            ordinalArmNames.add item: fm.name.u64
             (st.typing.setMemberType
                 parentTypeId: (ztypes.tid.create from: vid.u64)
                 nameId: fm.name
@@ -11533,7 +11498,6 @@ resolveVariant: function {
         :vnode
         :vid
         :isgen
-        :ordinalArmNames
     )
     attachMarkers :st :scope :ast :unitDecl parentId: vid objId: vnode.nid
     (synthVariantEqHash
@@ -12024,7 +11988,6 @@ attachUnionArm: function {
     uid: u64
     defName: StringView
     fm: argref
-    ordinalArmNames: IdSet u64
 } is {
     aname: zast.nameTextCopy :ast ref: fm.name
     if fm.name == zast.names.wkTag then {
@@ -12039,7 +12002,6 @@ attachUnionArm: function {
             width: 3
         )
     }
-    ordinalArmNames.add item: fm.name.u64
     # A `(Box T)` arm collapses to T: the arm child IS the boxed valtype. A
     # union arm is heap-celled whichever family it holds, so the spelling
     # changes no emitted C and a bare valtype arm means the same. Only the
@@ -12137,7 +12099,6 @@ attachUnionMethods: function {
     vnode: objref
     uid: u64
     isgen: bool
-    ordinalArmNames: (IdSet u64).view
 } is {
     kAiter: u64
     for kAiter < vnode.nas loop {
@@ -12165,8 +12126,6 @@ attachUnionMethods: function {
                     :st
                     :am
                     mname: mname.stringView
-                    :defName
-                    :ordinalArmNames
                 ).not then {
                     (st.typing.setMemberType
                         parentTypeId: (ztypes.tid.create from: uid.u64)
@@ -12189,7 +12148,6 @@ attachUnionMethods: function {
                     :unitDecl
                     :defName
                     ownerId: uid
-                    armNames: ordinalArmNames
                     :am
                 )
                 if isgen.not then (attachAsConstant
@@ -12267,7 +12225,6 @@ resolveUnion: function {
     armCountU: u64
     firstArmU: u64
     secondArmU: u64
-    ordinalArmNames: IdSet u64
     kFiter: u64
     for kFiter < vnode.nis loop {
         fmId: (zast.objIsItemAt :ast nid: vnode.nid i: kFiter).u32
@@ -12297,7 +12254,6 @@ resolveUnion: function {
                 :uid
                 :defName
                 :fm
-                :ordinalArmNames
             )
         }
     }
@@ -12344,7 +12300,6 @@ resolveUnion: function {
         :vnode
         :uid
         :isgen
-        :ordinalArmNames
     )
     attachMarkers :st :scope :ast :unitDecl parentId: uid objId: vnode.nid
     if allNull.not then {
