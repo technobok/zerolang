@@ -1958,7 +1958,10 @@ perf: $(PERFBIN)
 # +784 OptionViewVal, the valtype twin of OptionView: 1 behaviour (the
 # emitter's one new origin row), 783 source (the declaration and the helpers
 # that recognise both origins).
-ALLOC_BASELINE := 2799843
+#
+# +199 the six valtype readers return OptionViewVal: 0 behaviour, 199 source
+# (the valtype iterators' instances are now OptionViewVal ones).
+ALLOC_BASELINE := 2800042
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

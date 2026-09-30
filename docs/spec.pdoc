@@ -1705,11 +1705,12 @@ header says how its value is evaluated:
       #~"iterate"), read bare, is called (once, here), so it is walked by
       the plain form.]
   [#*: #~"for x: E" -- E is evaluated at #_*"every" iteration, and must itself
-      answer #~"Option(t)", #~"optionval(t)" or #~"OptionView(t)". A named
+      answer #~"Option(t)", #~"optionval(t)", #~"OptionView(t)" or
+      #~"OptionViewVal(t)". A named
       iterator read bare is its #~"call", so the plain form walks it:
       #~"with it: xs.iterate do for x: it loop".]
 
-Either way a value of one of those three types is produced per iteration; the
+Either way a value of one of those four types is produced per iteration; the
 loop terminates when it is #~"none", and binds 'var' to the unwrapped
 some-payload otherwise. Anything else bound here is a compile error: the
 binding is what ends the loop. #~"each" always takes a binding. See
@@ -1722,7 +1723,7 @@ The ownership of 'var' depends on the wrapper kind:
 #ul:
   #*: #~"Option(t).some" - 'var' is the owned reftype #~"t"
   #*: #~"optionval(t).some" - 'var' is the owned valtype #~"t" (copied)
-  [#*: #~"OptionView(t).some" - 'var' is a borrowed view of #~"t",
+  [#*: #~"OptionView(t).some" / #~"OptionViewVal(t).some" - 'var' is a borrowed view of #~"t",
       lifetime-tied to the lock its producer holds on its source. Storing
       'var' to an aggregate field or returning it from the loop is a
       compile error; use #~".copy" first.]
@@ -1822,7 +1823,8 @@ values of the #~"loop" statement.
 The header says how a binding's value is evaluated; the compiler never
 chooses by the value's type. Call a type "iterator-shaped" if it has a
 #~".call" method whose only required parameter is #~":this" and whose return
-type is #~"Option(t)", #~"optionval(t)", or #~"OptionView(t)" for some #~"t".
+type is #~"Option(t)", #~"optionval(t)", #~"OptionView(t)" or
+#~"OptionViewVal(t)" for some #~"t".
 Let T be the type the binding's value evaluates to.
 
 #ol:
@@ -1845,7 +1847,7 @@ Let T be the type the binding's value evaluates to.
       bare, and is walked by Rule 3 instead (#~"for x: it"), or kept with a
       marker (#~"for each x: it.borrow").]
   [#*: #b:"Rule 3 (plain):" #~"for x: E" where T is #~"Option(t)",
-      #~"optionval(t)" or #~"OptionView(t)". E is evaluated at every
+      #~"optionval(t)", #~"OptionView(t)" or #~"OptionViewVal(t)". E is evaluated at every
       iteration and its value is the per-iteration value. A function name
       is a call there as anywhere, and so is a function #_*"reference" read
       bare, so #~"for n: supplier loop" invokes #~"supplier" before each
@@ -2206,8 +2208,8 @@ than owning its payload (#~".hold" stays owned but readonly):
 #code language=zerolang: """
   OptionView: union {
       none: null
-      some: t.borrow
-  } as { t: Any.generic }
+      some: T.borrow
+  } as { T: AnyRef.generic }
   """
 
 Per-arm semantics:
@@ -2575,9 +2577,7 @@ value type (record, variant, numeric, #~"str", #~"array"), and the hashed
 positions use #~"RefHashable.generic" / #~"valhashable.generic", which also
 require #~"hash" and #~"==" -- for a value type, a #~"hash" that agrees with
 its #~"==" (see [#> to=auto-generated-equality: Auto-Generated Equality]). The bare #~"Any" bound is not user-writable --
-the build rejects it; it survives only inside #~"system" on parameters that
-are never consulted and on #~"OptionView", which deliberately spans both
-families.
+the build rejects it.
 
 Examples:
 
@@ -2639,14 +2639,21 @@ Examples:
       e: anyval.generic
   }
 
-  # OptionView type for borrowed views (used by container iterators).
-  # Built on top of non-owned union arms — see "Non-owned union arms"
-  # above.
+  # OptionView types for borrowed views (used by container iterators),
+  # one per family: a view of a valtype is still a reference, so the two
+  # share a layout and differ only in their bound. Built on top of
+  # non-owned union arms — see "Non-owned union arms" above.
   OptionView: union {
+      none: null
+      some: T.borrow
+  } as {
+      T: AnyRef.generic
+  }
+  OptionViewVal: union {
       none: null
       some: t.borrow
   } as {
-      t: Any.generic
+      t: anyval.generic
   }
 
   # OptionView.some takes a borrowed source via from:, and binds a
@@ -2655,7 +2662,7 @@ Examples:
   # the source.
   with v: my_borrow_source do {
       v0: OptionView.some from: v
-      v1: OptionView.none i64
+      v1: OptionViewVal.none i64
   }
   """
 
@@ -5022,8 +5029,8 @@ qualified name to the corresponding C implementation.
 #----: Iterators
 
 An #b:"iterator" in Zerolang is any type whose #~".call" method takes only
-#~":this" and returns one of #~"Option(t)", #~"optionval(t)", or
-#~"OptionView(t)". #~"for each" drives an iterator by repeatedly
+#~":this" and returns one of #~"Option(t)", #~"optionval(t)",
+#~"OptionView(t)" or #~"OptionViewVal(t)". #~"for each" drives an iterator by repeatedly
 invoking #~".call" until the result's tag is #~"none".
 
 An iterator -- like any value whose type has a #~".call" -- is #_*"called"
@@ -5054,7 +5061,8 @@ Two iterator patterns are common:
       Each iteration produces a fresh value and the loop body owns
       it for the iteration's duration.]
   [#*: #b:"Container iterators" yield non-owning views into a source
-      collection via #~"OptionView(t)". A plain #~"iterate" holds a
+      collection via #~"OptionView(t)" (#~"OptionViewVal(t)" over valtype
+      elements). A plain #~"iterate" holds a
       #~".view" (shared) reference into the source, so the container
       stays readable; #~"iterateMut" / #~"iterateItems" hold #~".borrow"
       (exclusive). Each yielded value is a borrowed view, lifetime-tied
