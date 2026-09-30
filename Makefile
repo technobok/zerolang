@@ -1964,7 +1964,10 @@ perf: $(PERFBIN)
 #
 # -1,740 `Any` deleted: 0 behaviour, -1,740 source (checkAnyBounds and its
 # scan of every bound, the four resolution exemptions, the declaration).
-ALLOC_BASELINE := 2798302
+#
+# +3,792 a bound admits one family: 0 behaviour, 3,792 source (the family test,
+# the union bound's member refusal and the family reason in the report).
+ALLOC_BASELINE := 2802094
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

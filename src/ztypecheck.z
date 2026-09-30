@@ -11918,8 +11918,7 @@ refuseReftypeMember: function {
 # classified. `AnyRef`, `RefHashable` and `StringLike` do by kind; a bound
 # the kinds do not classify is looked up read-only (a probe cannot mint, and
 # a name that resolves to nothing is the constraint machinery's business, as
-# stampGenericBounds says) and admits one when it names a reftype. A facet
-# bound is a valtype bound.
+# stampGenericBounds says) and admits one by boundFamilyOf's answer.
 boundAdmitsReftype: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -11937,7 +11936,9 @@ boundAdmitsReftype: function {
     # or a qualified name included, which its text alone does not find
     bt: namedBoundTid :ast :st :scope :tdecl :cd
     if bt.isZero then return false
-    return (typeIsReftype :st tid: bt)
+    fam: boundFamilyOf :st :bt
+    if fam.none then return (typeIsReftype :st tid: bt)
+    return fam
 }
 
 # refuseReftypeBounds -- a valtype template's parameter bound must admit
@@ -21858,6 +21859,10 @@ constraintHolds: function {
         # so the bound admits only the scalars whose bits are an index
         return (typeIsIdKey :st :scope :ast tid: argTid)
     } case stringLike then {
+        # a union bound, so it admits reference types only: a `str` conforms to
+        # Text as a value, and is handed to a StringLike parameter as its
+        # `stringView`
+        if (st.reg.isReftypeOf tid: argTid).not then return false
         return (conformsToText :ast :st :scope :argTid)
     } else {
         return true
@@ -22037,9 +22042,10 @@ reportConstraintUnmet: function {
 }
 
 # namedBoundAdmits -- a bound that names a DECLARATION admits what that
-# declaration says: a protocol or facet admits its conformers, a union a
-# member's own type or a conformer of a protocol/facet member, and a variant
-# exactly its arms' payload types. A bound that names nothing is
+# declaration says, within the one family boundFamilyAdmits gives it: a
+# protocol or facet admits its conformers, a union a member's own type or a
+# conformer of a protocol member, and a variant exactly its arms' payload
+# types. A bound that names nothing is
 # checkGenericBounds's report, not this one, and admits everything here so the
 # same mistake is not reported twice. A bound over another of the template's
 # parameters (`(Getter v: u).generic`) is a PARTIAL instance, which one
@@ -22055,6 +22061,7 @@ namedBoundAdmits: function {
 } out bool is {
     bt: namedBoundTid :ast :st :scope :tdecl :cd
     if bt.isZero then return true
+    if (boundFamilyAdmits :st :bt :argTid).not then return false
     if bt == argTid then return true
     if (st.reg.isPartialOf tid: bt) then return true
     tt: st.reg.typetypeOf typeId: bt
@@ -22068,6 +22075,72 @@ namedBoundAdmits: function {
         return (sumBoundAdmits :st :bt :argTid conform: false)
     }
     return true
+}
+
+# boundFamilyAdmits -- a generic parameter admits ONE family: the family of
+# the declaration that bounds it. A union or a protocol admits reference types
+# and a variant or a facet value types, whatever their members or conformers
+# are -- a protocol VALUE may still hold a record, but a parameter bounded by
+# the protocol takes reference types only. `null` is reference-family. An
+# argument whose family is not yet known is left to the member and
+# conformance tests.
+boundFamilyAdmits: function {
+    st: zenv.ZSymbolTable.view
+    bt: ztypes.tid
+    argTid: ztypes.tid
+} out bool is {
+    fam: boundFamilyOf :st :bt
+    if fam.none then return true
+    if (isNullTid :st tid: argTid) then return fam
+    if fam then return (typeIsValtype :st tid: argTid).not
+    return (typeIsReftype :st tid: argTid).not
+}
+
+# boundFamilyOf -- the family a bound naming `bt` admits: true for reference
+# types (a union or a protocol), false for value types (a variant or a facet),
+# none for a declaration of any other kind, which has no `.generic`.
+boundFamilyOf: function {st: zenv.ZSymbolTable.view bt: ztypes.tid} out optionval bool is {
+    return (familyOfBoundTypetype tt: (st.reg.typetypeOf typeId: bt))
+}
+
+# boundDeclTypetype -- the kind of declaration a bound names, found read-only
+# as namedBoundTid finds it; StringLike is a union. An application bound is not
+# read, and answers none, as does a bound the kinds classify otherwise.
+boundDeclTypetype: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    tdecl: ztypes.declid
+    desc: ztypes.constraintdesc
+} out optionval ztypes.ztypetype is {
+    if desc.kind == ztypes.constraintkind.stringLike then {
+        return (optionval.some ztypes.ztypetype.unionType)
+    }
+    if desc.kind != ztypes.constraintkind.other or desc.boundName.isZero then {
+        return (optionval.none ztypes.ztypetype)
+    }
+    ud: unitRootOfDecl :st declId: tdecl
+    if desc.boundQual.isZero.not then {
+        ud = boundQualifierUnit :st scope: tdecl qualId: desc.boundQual
+    }
+    if ud.isZero then return (optionval.none ztypes.ztypetype)
+    d: declOfUnitDefIds :st unitDecl: ud nameId: desc.boundName
+    if d.isZero when st.typing.coreUnitRoot.isZero.not then {
+        d = declOfUnitDefIds :st unitDecl: st.typing.coreUnitRoot nameId: desc.boundName
+    }
+    if d.isZero then return (optionval.none ztypes.ztypetype)
+    return (declDefTypetype :st :ast declId: d)
+}
+
+# familyOfBoundTypetype -- boundFamilyOf's answer for a declaration of kind
+# `tt`.
+familyOfBoundTypetype: function {tt: ztypes.ztypetype} out optionval bool is {
+    if tt == ztypes.ztypetype.unionType or (tt == ztypes.ztypetype.protocolType) then {
+        return (optionval.some true)
+    }
+    if tt == ztypes.ztypetype.variantType or (tt == ztypes.ztypetype.facetType) then {
+        return (optionval.some false)
+    }
+    return (optionval.none bool)
 }
 
 # boundApplicationTid -- the instance a bound written as a type application
@@ -22183,7 +22256,7 @@ forceUnitDefMemberTid: function {
     return (ztypes.tid.create from: r.u64)
 }
 
-# sumBoundAdmits -- a union or variant bound: the argument IS one of its# sumBoundAdmits -- a union or variant bound: the argument IS one of its
+# sumBoundAdmits -- a union or variant bound: the argument IS one of its
 # members' types, or -- for a union, whose members may be protocols or facets --
 # conforms to one.
 sumBoundAdmits: function {
@@ -22340,11 +22413,41 @@ constraintUnmetText: function {
     if (isNullTid :st tid: argTid) then {
         why = "'null' is reference-family -- it is a member of AnyRef and of a union bound with a null arm, not of a value-family bound".string
     }
+    if why.length == 0 then why = boundFamilyUnmetReason :ast :st :tdecl desc: cdx :argTid
     if why.length > 0 then {
         m.append ": "
         m.append why
     }
     return m
+}
+
+# boundFamilyUnmetReason -- the family, when that is why a bound refuses its
+# argument: a union or protocol bound admits reference types only, a variant or
+# facet bound value types only; "" when the family is not the reason.
+boundFamilyUnmetReason: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    tdecl: ztypes.declid
+    desc: ztypes.constraintdesc
+    argTid: ztypes.tid
+} out String is {
+    if (isNullTid :st tid: argTid) then return "".string
+    tt: boundDeclTypetype :ast :st :tdecl :desc
+    if tt.none then return "".string
+    fam: familyOfBoundTypetype :tt
+    if fam.none then return "".string
+    an: specWrittenName :st :ast tid: argTid
+    kw: "union"
+    if tt == ztypes.ztypetype.protocolType then kw = "protocol"
+    if tt == ztypes.ztypetype.variantType then kw = "variant"
+    if tt == ztypes.ztypetype.facetType then kw = "facet"
+    if fam when (typeIsValtype :st tid: argTid) then {
+        return "'\{an}' is a value type, and a \{kw} bound admits reference types only"
+    }
+    if fam.not when (typeIsReftype :st tid: argTid) then {
+        return "'\{an}' is a reference type, and a \{kw} bound admits value types only"
+    }
+    return "".string
 }
 
 # hashableUnmetReason -- why a type of the bound's family has no usable `hash`
@@ -22479,7 +22582,7 @@ boundRefusalText: function {
     if d0.isZero.not then return (boundFamilyRefusal :ast :st declId: d0 bt: bt.stringView)
     to: walkLookupTyperefByIdRo :ast :st unitDecl: ud :scope baseId: nameId
     if to.some then {
-        return (boundTypeRefusal :st tid: (ztypes.tid.create from: to.u64) bt: bt.stringView)
+        return (boundTypeRefusal :ast :st tid: (ztypes.tid.create from: to.u64) bt: bt.stringView)
     }
     if st.typing.coreUnitRoot.isZero.not then {
         dc: declOfUnitDefIds :st unitDecl: st.typing.coreUnitRoot :nameId
@@ -22500,7 +22603,7 @@ boundHasNoGenericText: function {bt: StringView what: StringView} out String is 
 }
 
 # boundFamilyRefusal -- the refusal a bound naming declaration `declId` earns,
-# from the family that declaration declares.
+# from the family that declaration declares, or from a union's members.
 boundFamilyRefusal: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
@@ -22511,7 +22614,9 @@ boundFamilyRefusal: function {
     match (
         tt
     ) case some then {
-        return (boundTypetypeRefusal :tt :bt)
+        m: boundTypetypeRefusal :tt :bt
+        if m.length > 0 or (tt != ztypes.ztypetype.unionType) then return m
+        return (unionBoundMemberRefusal :ast :st tid: (declTypeIdOf :st :declId) :bt)
     } case none then {
         return "".string
     }
@@ -22519,9 +22624,39 @@ boundFamilyRefusal: function {
 
 # boundTypeRefusal -- the same question asked of a resolved type id.
 boundTypeRefusal: function {
-    st: zenv.ZSymbolTable.view tid: ztypes.tid bt: StringView
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    bt: StringView
 } out String is {
-    return (boundTypetypeRefusal tt: (st.reg.typetypeOf typeId: tid) :bt)
+    tt: st.reg.typetypeOf typeId: tid
+    m: boundTypetypeRefusal :tt :bt
+    if m.length > 0 or (tt != ztypes.ztypetype.unionType) then return m
+    return (unionBoundMemberRefusal :ast :st :tid :bt)
+}
+
+# unionBoundMemberRefusal -- a union bound admits reference types only, so a
+# value-type member is one no argument can ever satisfy it through: the bound
+# is refused where it is spelled, naming that member. A union nothing has
+# resolved is not read -- resolving here would reach emission, and every
+# instantiation resolves its bound first.
+unionBoundMemberRefusal: function {
+    ast: Ast.view
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    bt: StringView
+} out String is {
+    if tid.isZero then return "".string
+    parts: ListVal u64
+    variantPayloadTids :st :tid :parts
+    for each p: parts loop {
+        pt: ztypes.tid.create from: p
+        if (typeIsValtype :st tid: pt) then {
+            pn: specWrittenName :st :ast tid: pt
+            return "a union bound admits reference types only: '\{bt}' cannot bound a parameter, since its member '\{pn}' is a value type"
+        }
+    }
+    return "".string
 }
 
 # boundTypetypeRefusal -- the families that have no `.generic`.
@@ -22977,8 +23112,8 @@ valPartTids: function {
     dataFieldIds :st :tid ids: parts nameIds: names
 }
 
-# variantPayloadTids -- the payload types of `tid`'s arms in declaration order;
-# an arm that carries nothing contributes none.
+# variantPayloadTids -- the payload types of `tid`'s arms in declaration order,
+# for a variant or a union; an arm that carries nothing contributes none.
 variantPayloadTids: function {st: zenv.ZSymbolTable.view tid: ztypes.tid parts: ListVal u64} is {
     od: st.typing.declIdOfType typeId: tid
     if od.isZero then return
