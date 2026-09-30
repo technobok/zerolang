@@ -45930,6 +45930,76 @@ genericCallHolders: function {
     return gparams
 }
 
+# typeMentionsParam -- whether `tid` is the template's parameter `param`, or an
+# instance with it among its arguments (`(List T)`), at any depth.
+typeMentionsParam: function {
+    st: zenv.ZSymbolTable.view
+    tdecl: ztypes.declid
+    tid: ztypes.tid
+    param: zast.nameid
+} out bool is {
+    if (st.reg.genericParamNameOfTid :tdecl ptid: tid) == param then return true
+    if (st.reg.isPartialOf :tid).not then return false
+    ai: u64
+    for ai < (st.reg.genericArgCount specId: tid) loop {
+        at: st.reg.genericArgAt specId: tid ordinal: ai
+        ai = ai + 1
+        if (typeMentionsParam :st :tdecl tid: (ztypes.tid.create from: at.u64) :param
+        ) then return true
+    }
+    return false
+}
+
+# holdersMention -- whether a parameter of the function is declared over the
+# generic parameter `param`.
+holdersMention: function {
+    st: zenv.ZSymbolTable.view
+    tdecl: ztypes.declid
+    pHolderIds: (ListVal u64).view
+    param: zast.nameid
+} out bool is {
+    for each hid: pHolderIds loop {
+        if (typeMentionsParam :st :tdecl tid: (ztypes.tid.create from: hid) :param) then return true
+    }
+    return false
+}
+
+# callArgsTyped -- whether every value argument of the call walked to a type.
+callArgsTyped: function {st: zenv.ZSymbolTable ast: Ast.view call: callref} out bool is {
+    k: u64
+    for k < call.nargs loop {
+        aId: zast.callArgAt :ast nid: call.nid i: k
+        k = k + 1
+        arg: argRefAt :ast nid: aId
+        if arg.nid.isZero then continue
+        if (walkTypeOf :st nid: arg.operation.u64).isZero then return false
+    }
+    return true
+}
+
+# reportUninferredCallParam -- a generic function's parameter that no argument
+# names and none is written for: the call has no instance to reach.
+reportUninferredCallParam: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    call: callref
+    param: zast.nameid
+    fname: StringView
+} is {
+    pnT: zast.nameTextAt :ast ref: param
+    (addErrorH
+        :st
+        nodeid: call.nid
+        lineno: call.lineno
+        colno: call.colno
+        e: zast.err.genericError
+        msg: "cannot infer generic parameter '\{pnT}' for '\{fname}'"
+        note: "no argument is declared as '\{pnT}', so no value names it"
+        hint: "write the type argument: '\{pnT}: <type>'"
+        width: 0
+    )
+}
+
 # checkGenericCall -- a call to a generic user function: walk the value args,
 # infer the type-param bindings (explicit `param: Type` args, else each value
 # arg's materialised type through the parameter it feeds), mint the instance
@@ -45960,6 +46030,7 @@ checkGenericCall: function {
         :pHolders
     )
     subs: IdMapV zast.nameid v: u64
+    errI: st.typing.errors.length
     (inferGenericCallSubs
         :st
         :unitDecl
@@ -46020,6 +46091,17 @@ checkGenericCall: function {
             gsfx4.append s: "_"
             gsfx4.append s: an4
         } case none then {
+            # a parameter declared over it whose argument is missing, or an
+            # argument that did not type, has said why already
+            if allOk when st.typing.errors.length == errI when (callArgsTyped :st :ast :call
+            ) when (holdersMention
+                :st
+                tdecl: gtk4
+                :pHolderIds
+                param: gp3
+            ).not then {
+                reportUninferredCallParam :st :ast :call param: gp3 fname: mname.stringView
+            }
             allOk = false
         }
     }
