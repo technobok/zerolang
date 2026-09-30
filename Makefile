@@ -1954,7 +1954,11 @@ perf: $(PERFBIN)
 # +97 `return` declares no parameter: 0 behaviour, 97 source. Every small
 # program measured costs 40 FEWER (the dropped `as`/`in`); the self-compile's
 # +97 was not isolated.
-ALLOC_BASELINE := 2799059
+#
+# +784 OptionViewVal, the valtype twin of OptionView: 1 behaviour (the
+# emitter's one new origin row), 783 source (the declaration and the helpers
+# that recognise both origins).
+ALLOC_BASELINE := 2799843
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

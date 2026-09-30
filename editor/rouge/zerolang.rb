@@ -88,7 +88,7 @@ module Rouge
           ListView ListViewVal Map MapEntry MapEntryRV MapEntryVR
           MapEntryVV MapItemIter MapItemIterRV MapItemIterVR MapItemIterVV MapKeyIter
           MapKeyIterRV MapKeyIterVR MapKeyIterVV MapRR MapRV MapVR
-          MapVV Option OptionView Path PathView Reader
+          MapVV Option OptionView OptionViewVal Path PathView Reader
           RefHashable Result Seeker Set SetIter SetIterVal
           SetRef SetVal Splitter String StringLike StringView
           Text TextReader Writer _ anyval array

@@ -2817,10 +2817,11 @@ ogOptionView: 37.u64
 ogResult: 38.u64
 ogOptionval: 39.u64
 ogResultval: 40.u64
+ogOptionViewVal: 41.u64
 
 # ogNone -- one past the last row: both the count and the "not one of ours"
 # answer, so no real index can be mistaken for it.
-ogNone: 41.u64
+ogNone: 42.u64
 
 # The names the emitter DISPATCHES on -- a member selector, or the base atom of
 # a path it recognises -- interned once per program. The
@@ -2960,6 +2961,7 @@ originBaseNames: function {acc: List String} is {
     ogPut :acc at: ogResult name: "Result"
     ogPut :acc at: ogOptionval name: "optionval"
     ogPut :acc at: ogResultval name: "resultval"
+    ogPut :acc at: ogOptionViewVal name: "OptionViewVal"
 }
 
 # buildOriginTids -- resolve every row in one pass. A unit with no program node
@@ -24133,11 +24135,7 @@ emitObjIterPayload: function {
     ind: StringView
     buf: String.borrow
 } out spillkind is {
-    if (originIsTid
-        :symtab
-        tid: (ztypes.tid.create from: ovid.u64)
-        originTid: (ctx.origins.get i: ogOptionView)
-    ) then {
+    if (isOptionViewOriginOf :symtab :ctx tid: (ztypes.tid.create from: ovid.u64)) then {
         # borrowed-view yield: scalar payloads copy by value; aggregate
         # payloads bind a borrowed pointer (no copy -> the shared fields
         # are never double-freed).
@@ -28636,6 +28634,17 @@ isIdCollectionOriginOf: function {
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
     return f == ogIdMapR or (f == ogIdMapV) or (f == ogIdSet)
+}
+
+# isOptionViewOriginOf -- the type is an OptionView of either element family:
+# the two templates differ only in their bound, and share one C layout.
+isOptionViewOriginOf: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    tid: ztypes.tid
+} out bool is {
+    f: monoFamilyOf :symtab :ctx :tid
+    return f == ogOptionView or (f == ogOptionViewVal)
 }
 
 # isListViewOriginOf -- the type is a ListView of either element family.
@@ -35079,7 +35088,7 @@ monoElemIdsOf: function {
         (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: ogResultval)) or
         (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: ogOption)) or
         (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: ogResult)) or
-        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: ogOptionView)) or
+        (isOptionViewOriginOf :symtab :ctx tid: monoId) or
         ((symtab.reg.typetypeOf typeId: monoId) == ztypes.ztypetype.variantType)
     )
     if isWrap then {
@@ -36437,22 +36446,14 @@ classifyCollectionMono: function {
     if isOptRes then work.wOptRes.append tv
     if isMono when tt == ztypes.ztypetype.unionType then {
         ugu: (isOptRes or isValMono).not
-        if ugu when (originIsTid
-            :symtab
-            tid: tcl
-            originTid: (ctx.origins.get i: ogOptionView)
-        ) then ugu = false
+        if ugu when (isOptionViewOriginOf :symtab :ctx tid: tcl) then ugu = false
         if ugu when (isCollectionOriginTid
             :ctx
             originTid: (originTidOf :symtab tid: tcl)
         ) then ugu = false
         if ugu then work.wUgUnion.append tv
     }
-    if (originIsTid
-        :symtab
-        tid: tcl
-        originTid: (ctx.origins.get i: ogOptionView)
-    ) then work.wOptView.append tv
+    if (isOptionViewOriginOf :symtab :ctx tid: tcl) then work.wOptView.append tv
     colDst: u64
     if (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: ogArray)) then {
         isColKind = true

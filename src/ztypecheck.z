@@ -620,6 +620,7 @@ isViewFamilyTid: function {ast: Ast st: zenv.ZSymbolTable tid: ztypes.tid} out b
     }
     if vog == 0 then return false
     if vog == (builtinTidT :st scope: st.curScope :ast base: "OptionView") then return true
+    if vog == (builtinTidT :st scope: st.curScope :ast base: "OptionViewVal") then return true
     if vog == (builtinTidT :st scope: st.curScope :ast base: "ListView") then return true
     if vog == (builtinTidT :st scope: st.curScope :ast base: "ListViewVal") then return true
     if vog == (builtinTidT :st scope: st.curScope :ast base: "MapEntry") then return true
@@ -21270,8 +21271,8 @@ templateNeedsMonoDtor: function {
 
 # unionMonoNeedsDtor -- an instance of a generic union owns the cell each arm is
 # held in, as its template does (resolveUnion flags every union with a
-# non-null arm), so it takes the template's flag. OptionView is the exception:
-# a view's arm points at a value it does not own.
+# non-null arm), so it takes the template's flag. OptionView and its valtype
+# twin are the exception: a view's arm points at a value it does not own.
 unionMonoNeedsDtor: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -21281,7 +21282,8 @@ unionMonoNeedsDtor: function {
 } out bool is {
     if tt != ztypes.ztypetype.unionType then return false
     if (st.reg.needsDestructor typeId: templateId).not then return false
-    return templateId != (builtinTidT :st scope: rf :ast base: "OptionView")
+    if templateId == (builtinTidT :st scope: rf :ast base: "OptionView") then return false
+    return templateId != (builtinTidT :st scope: rf :ast base: "OptionViewVal")
 }
 
 # mintMonoTagShape -- give a monomorphised sum type its discriminator: the tag
@@ -25951,8 +25953,8 @@ methodReturnOf: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out option
     return (optionval.none ztypes.tid)
 }
 
-# iterWrapperElem -- when a type is an Option / optionval / OptionView instance,
-# its element (`some` child) type id.
+# iterWrapperElem -- when a type is an Option / optionval / OptionView /
+# OptionViewVal instance, its element (`some` child) type id.
 iterWrapperElem: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -25982,13 +25984,14 @@ iterWrapperElem: function {
     ) case some then {
         if origin == wo then isWrapper = true
     } case none then null
+    if (isOptionViewValOrigin :ast :st :unitDecl :origin) then isWrapper = true
     forceMemberOf :st :ast parentTypeId: wid nameId: zast.names.wkSome
     if isWrapper then return (st.typing.declChildOfId parentTypeId: wid nameId: zast.names.wkSome)
     return (optionval.none u64)
 }
 
-# isOptionViewMono -- true when a type is an OptionView instance (its per-
-# iteration values are borrowed views, so the loop var binds BORROWED).
+# isOptionViewMono -- true when a type is an OptionView or OptionViewVal instance
+# (its per-iteration values are borrowed views, so the loop var binds BORROWED).
 isOptionViewMono: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -25999,11 +26002,30 @@ isOptionViewMono: function {
     goo: st.reg.genericOriginOf tid: wid
     if goo > 0 then origin = goo
     if origin == 0 then return false
+    if (isOptionViewValOrigin :ast :st :unitDecl :origin) then return true
     wo: walkLookupTyperef :st scope: st.curScope :ast :unitDecl base: "OptionView"
     match (
         wo
     ) case some then {
         return origin == wo
+    } case none then {
+        return false
+    }
+}
+
+# isOptionViewValOrigin -- `origin` is the OptionViewVal template, looked up as
+# its OptionView twin is at the two sites that ask.
+isOptionViewValOrigin: function {
+    ast: Ast
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    origin: u64
+} out bool is {
+    wv: walkLookupTyperef :st scope: st.curScope :ast :unitDecl base: "OptionViewVal"
+    match (
+        wv
+    ) case some then {
+        return origin == wv
     } case none then {
         return false
     }
