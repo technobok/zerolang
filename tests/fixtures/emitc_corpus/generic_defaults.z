@@ -1,0 +1,101 @@
+# A generic parameter's `default:` is taken wherever an instantiation neither
+# writes nor infers the parameter -- a construction, a union arm (called or
+# read bare), a function call (with no arguments too), an application that
+# leaves it out, and a bare name in a type position -- and it is the SAME
+# instance the application written with it names. A default is any member of
+# the parameter's constraint: a type, an instance over the declaration's own
+# parameters, `null` where it is a member, or a constant for a numeric bound.
+# It may name a parameter declared after it. The default was parsed and
+# ignored: every one of these was "cannot infer", or reached the C.
+Choice: union { num: i64 text: String nothing: null }
+
+Pair: class { a: t  b: e } as {
+    t: (anyval.generic default: i64)
+    e: (anyval.generic default: t)
+}
+
+Holder: class { n: u8 } as {
+    t: (anyval.generic default: i64)
+}
+
+Opt: union { some: t none: null } as {
+    t: (anyval.generic default: i64)
+}
+
+Tree: union { leaf: t node: String } as {
+    t: (anyval.generic default: u8)
+}
+
+Either: union { pick: t other: e } as {
+    t: anyval.generic
+    e: (anyval.generic default: u8)
+}
+
+Later: class { n: u8 } as {
+    E: (AnyRef.generic default: T)
+    T: (AnyRef.generic default: (List String))
+}
+
+Carry: class { v: T  n: u8 } as {
+    T: (Choice.generic default: null)
+}
+
+Sized: record { v: u8 } as {
+    n: (u64.generic default: 4)
+}
+
+Keep: class { p: Pair  n: u8 }
+
+mk: function as { t: (anyval.generic default: i64) } in { n: u64 } out u64 is {
+    return n
+}
+
+zero: function as { t: (anyval.generic default: u8) } out u64 is {
+    return 9
+}
+
+widthOf: function as { n: (u64.generic default: 16) } in { k: u64 } out u64 is {
+    return n + k
+}
+
+# a type position: the defaults' instance
+first: function {p: Pair} out i64 is {
+    return p.a.copy
+}
+
+made: function out Pair is {
+    return (Pair a: 7 b: 8)
+}
+
+isNone: function {o: Opt} out bool is {
+    return o.none
+}
+
+leafOf: function {x: (Tree t: u8)} out u64 is {
+    if x.leaf then return x.u64
+    return 0
+}
+
+show: function {x: (Either t: i64 e: u8)} is {
+    if x.pick then print "pick \{x}" else print "other \{x}"
+}
+
+main: function is {
+    # constructions
+    h: Holder n: 1
+    p: (Pair t: i64) a: 2 b: 3
+    s: Sized v: 4
+    l: Later n: 5
+    c: Carry n: 6
+    d: (Carry T: i64) v: 7 n: 8
+    k: Keep p: (Pair a: 9 b: 10) n: 11
+    print "\{h.n} \{first :p} \{s.v} \{l.n} \{c.n} \{d.v} \{first p: k.p} \{(made).b}"
+    # arms: bare, and one whose payload names no parameter
+    print "\{isNone o: Opt.none} \{isNone o: (Opt.some 3)}"
+    print "\{leafOf x: (Tree.node "s".string)} \{leafOf x: (Tree.leaf 12.u8)}"
+    # an application that leaves `e` out is the one that writes it
+    show x: ((Either t: i64).pick 13)
+    show x: ((Either t: i64).other 14.u8)
+    # calls
+    print "\{mk n: 15} \{mk t: u8 n: 16} \{(zero)} \{widthOf k: 1} \{widthOf n: 2 k: 1}"
+}

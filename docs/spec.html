@@ -2310,13 +2310,29 @@ parameter - an instance is not created; <code>create</code> is not automatically
 as would be done for non-generic arguments. To make this optionally obvious at
 the call site, the <a href="#generic-method">generic method</a> can be 'called' on
 the argument.</p>
-<p>A generic parameter may have a default type, specified using the call form
-<code>(constraint.generic default: type)</code> in an <code>as</code> block. The default must
-satisfy the parameter's constraint -- the same check a user-supplied binding
-faces -- and that is validated at declaration time. When a generic parameter is
-not explicitly specified and cannot be inferred from concrete arguments, the
-default type is used. Explicit arguments and inference both take priority over
-defaults.</p>
+<p>A generic parameter may have a default, specified using the call form
+<code>(constraint.generic default: type)</code> in an <code>as</code> block. The default is any
+member of the parameter's constraint: a type the bound admits (a reference
+type, a union, an instance such as <code>(List String)</code>, one of a union bound's
+arm types, <code>null</code> where it is a member), or a constant for a numeric
+constraint (<code>(u64.generic default: 16)</code>). It may name another parameter of
+the same declaration, written before or after it (<code>e: (anyval.generic
+default: t)</code>), as unit-level definitions may name each other; only a cycle is
+refused. The default is checked against the parameter's constraint where it
+is written -- the same check a user-supplied binding faces -- when the
+declaration is first instantiated.</p>
+<p>When a generic parameter is not written and cannot be inferred from the
+arguments, its default is taken, wherever an instance is made: a
+construction, a union or variant arm (<code>Opt.none</code>, or <code>Tree.node s</code> whose
+payload names no parameter), a function call (a bare <code>mk</code> included), an
+application that leaves the parameter out (<code>(Either t: i64)</code>), and a bare
+generic name in a type position (<code>p: Pair</code> is <code>(Pair t: i64)</code>; inside
+the type's own members too, where <code>type</code> names the instance being
+checked). The default makes the same instance the application written with
+it names. Explicit arguments and inference both take priority over defaults;
+a parameter with neither and no default is refused. To stay generic over a
+parameter that has a default, declare a constraint of your own and write it
+(<code>Pair t: MyGeneric</code>).</p>
 <p>This is a default <em><strong>type</strong></em>, and is a different mechanism from the default
 <em><strong>values</strong></em> of <a href="#default-values">Default values</a>: that section supplies a
 value at the call site from a single source, while a generic parameter's type is
@@ -2343,7 +2359,7 @@ is emitted</li>
 <p>If both an explicit generic argument and a concrete value argument are provided,
 they must be consistent. A conflict produces a compilation error.</p>
 <p>Generic function example with inference:</p>
-<pre><code class="language-zerolang">identity: function as { t: AnyRef.generic } in { val: t } out t is {
+<pre><code class="language-zerolang">identity: function as { t: anyval.generic } in { val: t } out t is {
     return val
 }
 
@@ -3096,6 +3112,11 @@ encoded into a <a href="#union">union</a> or <a href="#variant">variant</a> (eg.
 a value: not a local, not a parameter, not a field. Each is refused where it is
 written. (A function's <code>out null</code> is the exception in form only -- it names
 the absence of a return, not a value that is returned.)</p>
+<p><code>null</code> may be a generic argument where the constraint admits it -- a union
+bound with a <code>null</code> arm, or a family bound -- and a parameter's default. A
+field an instance then types <code>null</code> (<code>v: T</code> in <code>(Carry T: null)</code>)
+carries nothing: it has no storage, its construction takes no argument for it
+(<code>v: null</code> is accepted), and a read of it is no value.</p>
 <p>It can be used in some locations to indicate that an item is intentionally
 omitted or undefined eg. for a subitem in a <a href="#union">union</a> or <a href="#variant">variant</a> that has no associated data.</p>
 <p>As a clause body, the bare identifier <code>null</code> declares an empty

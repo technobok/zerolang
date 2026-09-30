@@ -2483,13 +2483,30 @@ as would be done for non-generic arguments. To make this optionally obvious at
 the call site, the [#> to=generic-method: generic method] can be 'called' on
 the argument.
 
-A generic parameter may have a default type, specified using the call form
-#~"(constraint.generic default: type)" in an #~"as" block. The default must
-satisfy the parameter's constraint -- the same check a user-supplied binding
-faces -- and that is validated at declaration time. When a generic parameter is
-not explicitly specified and cannot be inferred from concrete arguments, the
-default type is used. Explicit arguments and inference both take priority over
-defaults.
+A generic parameter may have a default, specified using the call form
+#~"(constraint.generic default: type)" in an #~"as" block. The default is any
+member of the parameter's constraint: a type the bound admits (a reference
+type, a union, an instance such as #~"(List String)", one of a union bound's
+arm types, #~"null" where it is a member), or a constant for a numeric
+constraint (#~"(u64.generic default: 16)"). It may name another parameter of
+the same declaration, written before or after it (#~"e: (anyval.generic
+default: t)"), as unit-level definitions may name each other; only a cycle is
+refused. The default is checked against the parameter's constraint where it
+is written -- the same check a user-supplied binding faces -- when the
+declaration is first instantiated.
+
+When a generic parameter is not written and cannot be inferred from the
+arguments, its default is taken, wherever an instance is made: a
+construction, a union or variant arm (#~"Opt.none", or #~"Tree.node s" whose
+payload names no parameter), a function call (a bare #~"mk" included), an
+application that leaves the parameter out (#~"(Either t: i64)"), and a bare
+generic name in a type position (#~"p: Pair" is #~"(Pair t: i64)"; inside
+the type's own members too, where #~"type" names the instance being
+checked). The default makes the same instance the application written with
+it names. Explicit arguments and inference both take priority over defaults;
+a parameter with neither and no default is refused. To stay generic over a
+parameter that has a default, declare a constraint of your own and write it
+(#~"Pair t: MyGeneric").
 
 This is a default #_*"type", and is a different mechanism from the default
 #_*"values" of [#> to=default-values: Default values]: that section supplies a
@@ -2522,7 +2539,7 @@ they must be consistent. A conflict produces a compilation error.
 Generic function example with inference:
 
 #code language=zerolang: """
-  identity: function as { t: AnyRef.generic } in { val: t } out t is {
+  identity: function as { t: anyval.generic } in { val: t } out t is {
       return val
   }
 
@@ -3432,6 +3449,12 @@ It follows that #~"null" may not be the declared TYPE of anything that holds
 a value: not a local, not a parameter, not a field. Each is refused where it is
 written. (A function's #~"out null" is the exception in form only -- it names
 the absence of a return, not a value that is returned.)
+
+#~"null" may be a generic argument where the constraint admits it -- a union
+bound with a #~"null" arm, or a family bound -- and a parameter's default. A
+field an instance then types #~"null" (#~"v: T" in #~"(Carry T: null)")
+carries nothing: it has no storage, its construction takes no argument for it
+(#~"v: null" is accepted), and a read of it is no value.
 
 It can be used in some locations to indicate that an item is intentionally
 omitted or undefined eg. for a subitem in a #>"union" or [#>

@@ -2445,6 +2445,27 @@ recordGenericParamRef: function {
     st.typing.genericParamScope.set key: nid value: scope
 }
 
+# genericDefaultNode -- the node a generic parameter's `default:` names, in
+# the call form `(anyval.generic default: i64)`; 0 when it has none.
+genericDefaultNode: function {ast: Ast.view n: astnode.view} out u32 is {
+    match (
+        n
+    ) case call then {
+        ai: u64
+        for ai < n.arguments.count.u64 loop {
+            aId: zast.kidAt kids: ast.kids span: n.arguments i: ai
+            ai = ai + 1
+            arg: argRefAt :ast nid: (zast.nodeid.create from: aId)
+            if arg.nid.isZero.not when (zast.nameTextEq :ast ref: arg.name s: "default") then {
+                return arg.operation.u32
+            }
+        }
+        return 0
+    } else {
+        return 0
+    }
+}
+
 # registerGenericParamOne -- record one member's generic-param declaration.
 registerGenericParamOne: function {
     ast: Ast.view
@@ -2488,6 +2509,7 @@ registerGenericParamOne: function {
             boundName: bn
             boundQual: bq
             boundApp: ba
+            defaultNode: (genericDefaultNode :ast n: (ast.nodes.get i: m.operation.u64))
         )
         # the BOUND names a real declaration -- `anyval`, a protocol -- but
         # everything above reads it as TEXT and maps it to a constraint kind,
@@ -2719,6 +2741,7 @@ registerUnitParamsOn: function {
             boundName: cd.boundName
             boundQual: cd.boundQual
             boundApp: cd.boundApp
+            defaultNode: cd.defaultNode
         )
         ut: genericParamTidMint :st :ast tdecl: unitTmpl nameId: pn
         st.reg.setGenericParamTid :tdecl paramName: pn tid: (ztypes.tid.create from: ut)
@@ -3010,12 +3033,47 @@ selfApplicationTid: function {
     return mono.u64
 }
 
-# refuseBareGenericType -- a type position names a generic type without its
-# arguments (ownsTypeParams): refused at `nid`. Inside the type's own
-# declaration `type` names the instance being checked.
-refuseBareGenericType: function {
+# defaultsInstance -- the instance of the generic type `tid` that its
+# parameters' defaults name, when every parameter has one; 0 otherwise (a
+# default refused is reported at the default).
+defaultsInstance: function {
     st: zenv.ZSymbolTable
     ast: Ast
+    unitDecl: ztypes.declid
+    tid: ztypes.tid
+    scope: ztypes.declid
+} out ztypes.tid is {
+    if (ownsTypeParams :st :tid).not then return ztypes.tid
+    tdecl: declOfTypeId :st :tid
+    if (templateHasDefaults :st :tdecl).not then return ztypes.tid
+    subs: IdMapV zast.nameid v: u64
+    valSubs: IdMapV zast.nameid v: u64
+    sfx: String
+    if (fillGenericDefaults :st :ast :unitDecl :tdecl :subs :valSubs :sfx
+    ).not then return ztypes.tid
+    if subs.length + valSubs.length != (st.reg.genericParamCountOf :tdecl) then return ztypes.tid
+    return (getOrMintSpec
+        :st
+        :scope
+        :ast
+        :unitDecl
+        sfx: sfx.stringView
+        templateId: tid
+        :subs
+        :valSubs
+        fallbackArg: 0
+    )
+}
+
+# bareGenericType -- a type position names a generic type without its
+# arguments (ownsTypeParams): it names the instance its parameters' defaults
+# make, the same instance the application written with them names. A
+# parameter with no default leaves nothing to name, and is refused at `nid`.
+# Answers `tid` itself when it is not generic or was refused.
+bareGenericType: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
     tid: ztypes.tid
     nid: u64
     # the scope the position is in, whose enclosing type is asked when
@@ -3023,12 +3081,25 @@ refuseBareGenericType: function {
     scope: ztypes.declid
     # the type whose declaration the position is in, when the caller knows it
     thisName: StringView
-} is {
-    if (ownsTypeParams :st :tid).not then return
+} out ztypes.tid is {
+    if (ownsTypeParams :st :tid).not then return tid
+    tdecl: declOfTypeId :st :tid
+    mono: defaultsInstance :st :ast :unitDecl :tid :scope
+    if mono > 0 then {
+        (recordMonoRef
+            :st
+            :ast
+            :mono
+            nid: nid.u32.orPanic
+            at: (zast.nodeid.create from: nid.u32.orPanic)
+            :unitDecl
+        )
+        return mono
+    }
     tn: st.reg.nameOf :tid
     own: tn.stringView == thisName
-    if thisName.length == 0 then own = (enclosingTypeDecl :st :scope) == (declOfTypeId :st :tid)
-    hint: "apply type arguments first, e.g. '(ListVal t: u8)'".string
+    if thisName.length == 0 then own = (enclosingTypeDecl :st :scope) == tdecl
+    hint: "apply type arguments first, e.g. '(ListVal t: u8)', or give each parameter a default".string
     if own then hint = "inside its own declaration, `type` is the instance being checked".string
     n: ast.nodes.get i: nid
     (addErrorH
@@ -3042,6 +3113,7 @@ refuseBareGenericType: function {
         :hint
         width: tn.length.u32.orPanic
     )
+    return tid
 }
 
 # resolveDottedArgTid -- a unit-qualified dotted generic argument
@@ -3267,7 +3339,7 @@ monoRefArgTid: function {
 # namedTypeArg -- a type argument written as a name, once the name resolved to
 # `aid`: `type` in a generic type's own members is the instance being checked
 # (selfApplicationTid); any other name of a generic type takes its arguments
-# (refuseBareGenericType), and `this` is the type being declared.
+# or its defaults (bareGenericType), and `this` is the type being declared.
 namedTypeArg: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -3284,8 +3356,7 @@ namedTypeArg: function {
         if sa > 0 then return (ztypes.tid.create from: sa)
         return aid
     }
-    refuseBareGenericType :st :ast tid: aid nid: argNid :scope :thisName
-    return aid
+    return (bareGenericType :st :ast :unitDecl tid: aid nid: argNid :scope :thisName)
 }
 
 # collectMonoRefArgs -- read a mono type-reference's arguments into the type and
@@ -3732,6 +3803,71 @@ anyUnknownParamLabel: function {
     return false
 }
 
+# completeApplication -- a type application of a generic template (one of a
+# type that is not generic is refused), its labels checked, and its
+# parameters every one bound: a parameter it leaves out takes its default, and one with none is refused
+# (refuseIncompleteApplication) -- unless a label naming no parameter, which
+# has been reported, is why it is missing. False once refused.
+completeApplication: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    tplId: ztypes.tid
+    arguments: (ListVal u32).view
+    typeSubs: (IdMapV zast.nameid v: u64)
+    valSubsR: (IdMapV zast.nameid v: u64)
+    sfx: String
+    firstA: ztypes.tid
+    at: zast.nodeid
+} out bool is {
+    if (refuseNonGenericApplication :st :ast :tplId :at) then return false
+    validateMonoRefLabels :ast :st :arguments :tplId
+    if (fillApplicationDefaults :st :ast :unitDecl :tplId :typeSubs valSubs: valSubsR :sfx :firstA
+    ).not then {
+        return false
+    }
+    if (anyUnknownParamLabel :st :ast :arguments :tplId) then return true
+    return (refuseIncompleteApplication :st :ast :tplId :typeSubs :valSubsR :firstA :at).not
+}
+
+# fillApplicationDefaults -- a type application's parameters it leaves out,
+# from their defaults. An unlabelled leading argument binds the first
+# parameter, so it is recorded as that parameter's before any default is
+# taken. Nothing to do for a template none of whose parameters has a default.
+# False once a default was refused.
+fillApplicationDefaults: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    tplId: ztypes.tid
+    typeSubs: (IdMapV zast.nameid v: u64)
+    valSubs: (IdMapV zast.nameid v: u64)
+    sfx: String
+    firstA: ztypes.tid
+} out bool is {
+    tdecl: declOfTypeId :st tid: tplId
+    if (templateHasDefaults :st :tdecl).not then return true
+    if firstA > 0 when (st.reg.genericParamCountOf :tdecl) > 0 then {
+        p0: st.reg.genericParamNameAt :tdecl i: 0
+        if (typeSubs.has key: p0).not when (valSubs.has key: p0).not then (typeSubs.set
+            key: p0
+            value: firstA.u64
+        )
+    }
+    return (fillGenericDefaults :st :ast :unitDecl :tdecl subs: typeSubs :valSubs :sfx)
+}
+
+# templateHasDefaults -- one of the template's parameters declares a default.
+templateHasDefaults: function {st: zenv.ZSymbolTable.view tdecl: ztypes.declid} out bool is {
+    pi: u64
+    for pi < (st.reg.genericParamCountOf :tdecl) loop {
+        pn: st.reg.genericParamNameAt :tdecl i: pi
+        pi = pi + 1
+        if (st.reg.genericParamConstraintOf :tdecl paramName: pn).defaultNode > 0 then return true
+    }
+    return false
+}
+
 # refuseIncompleteApplication -- a type application that leaves one of the
 # template's parameters out names no instance: the missing one would stay a
 # parameter, and each application would mint an instance of its own. A
@@ -3826,18 +3962,18 @@ resolveMonoRefParts: function {
         if sfx.length == 0 then return 0
         if tplId.isZero then tplId = typeApplicationTemplate :st :scope :ast :unitDecl :callableNid
         if tplId.isZero then return 0
-        if (refuseNonGenericApplication :st :ast :tplId at: callableNid) then return tplId.u64
-        validateMonoRefLabels :ast :st :arguments :tplId
-        # a label naming no parameter has been reported, and is why one is missing
-        if (anyUnknownParamLabel :st :ast :arguments :tplId).not when (refuseIncompleteApplication
+        if (completeApplication
             :st
             :ast
+            :unitDecl
             :tplId
+            :arguments
             :typeSubs
             :valSubsR
+            :sfx
             :firstA
             at: callableNid
-        ) then {
+        ).not then {
             return tplId.u64
         }
         # generator wrapper collapse: the synth `.call` return's Option over a
@@ -4094,7 +4230,10 @@ recordTyperefArgs: function {
     # the head atom is itself a type reference: record it so
     # go-to-definition / hover resolve the template (the call still
     # carries the instance stamp)
+    thPrev: st.typing.typerefHead
+    st.typing.typerefHead = true
     recordTyperef :st :scope :ast :unitDecl :thisName nid: callableId
+    st.typing.typerefHead = thPrev
 }
 
 # recordTyperef -- record a signature type-ref node (param / field / arm / return) for
@@ -4160,6 +4299,9 @@ recordTyperef: function {
         recordDottedTyperef :st :ast :unitDecl :scope :thisName :nid
         return
     }
+    if arm == 4 or (arm == 5) when st.typing.typerefHead.not then (st.typing.bareTyperefNodes.add
+        item: nid.u64
+    )
     if arm == 4 then {
         (recordResolvedName
             :st
@@ -5273,14 +5415,15 @@ resolveTyperefShell: function {
         )
         # a receiver's `this` is the type being declared
         if nameId != zast.names.wkThis then {
-            (refuseBareGenericType
+            return (bareGenericType
                 :st
                 :ast
+                :unitDecl
                 tid: (ztypes.tid.create from: r)
                 nid: nid.u64
                 :scope
                 :thisName
-            )
+            ).u64
         }
         return r
     }
@@ -19996,7 +20139,13 @@ stampOnePendingTyperef: function {
     if originId.isZero.not then origin = unitDeclOfNameOrOwn :st scope: rf nameId: originId
     r: walkLookupTyperefFrom :st :ast scope: rf baseId: pval
     if r.some then {
-        stampResolvedTyperef :st :ast nid: uk :pval :origin tid: (ztypes.tid.create from: r.u64)
+        rt: ztypes.tid.create from: r.u64
+        # a generic type named bare in a type position is its defaults' instance
+        if (st.typing.bareTyperefNodes.has item: uk) then {
+            di: defaultsInstance :st :ast :unitDecl tid: rt scope: rf
+            if di > 0 then rt = di
+        }
+        stampResolvedTyperef :st :ast nid: uk :pval :origin tid: rt
         return
     }
     if (typerefExcused :st :ast :uk :rf :origin :pval :gpNames) then return
@@ -24121,7 +24270,15 @@ constructionArgTid: function {
         )
         if sa > 0 then return (instanceTypeOf :st :ast :unitDecl tid: sa)
     } else {
-        refuseBareGenericType :st :ast tid: named nid: opId.u64 scope: st.curScope thisName: ""
+        named = (bareGenericType
+            :st
+            :ast
+            :unitDecl
+            tid: named
+            nid: opId.u64
+            scope: st.curScope
+            thisName: ""
+        )
     }
     return (instanceTypeOf :st :ast :unitDecl tid: named.u64)
 }
@@ -24649,6 +24806,51 @@ classifyInferenceRows: function {
     }
 }
 
+# constructionParamMissing -- a generic construction leaves a parameter
+# neither written, inferred nor defaulted: reported (when `reportMissing`) as
+# the first such parameter, or as the whole type when nothing was bound.
+# Counts a parameter bound in `subs` or `valueSubs` as bound.
+constructionParamMissing: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    call: callref
+    tdecl: ztypes.declid
+    subs: (IdMapV zast.nameid v: u64).view
+    valueSubs: (IdMapV zast.nameid v: u64).view
+    boundParams: IdSet zast.nameid
+    sfx: String.view
+    tname: StringView
+    reportMissing: bool
+} out bool is {
+    firstMissing: zast.nameid
+    pmi: u64
+    for pmi < (st.reg.genericParamCountOf :tdecl) loop {
+        pmName: st.reg.genericParamNameAt :tdecl i: pmi
+        pmi = pmi + 1
+        if (subs.has key: pmName) or (valueSubs.has key: pmName) then boundParams.add item: pmName
+        if (boundParams.has item: pmName).not when firstMissing.isZero then firstMissing = pmName
+    }
+    if firstMissing.isZero then return false
+    if reportMissing.not then return true
+    mmsg: "cannot infer type arguments for generic type '\{tname}'"
+    if sfx.length > 0 then {
+        fmT: zast.nameTextAt :ast ref: firstMissing
+        mmsg = "cannot infer generic parameter '\{fmT}' for '\{tname}'"
+    }
+    (addErrorH
+        :st
+        nodeid: call.nid
+        lineno: call.lineno
+        colno: call.colno
+        e: zast.err.genericError
+        msg: mmsg
+        note: String
+        hint: String
+        width: 0
+    )
+    return true
+}
+
 # inferGenericConstruction -- a generic class/record template called with
 # field-bound value arguments: labels naming generic params resolve as
 # explicit type args; other args walk as values and bind their field's
@@ -24718,50 +24920,26 @@ inferGenericConstruction: function {
         :tk
     )
     st.popDiscard
-    paramsM: st.reg.genericParamNamesOf tdecl: tk
-    firstMissing: zast.nameid
-    pmi: u64
-    pmn: paramsM.length
-    for pmi < pmn loop {
-        pmName: paramsM.get i: pmi
-        if (boundParams.has item: pmName).not when firstMissing.isZero then firstMissing = pmName
-        pmi = pmi + 1
-    }
-    if firstMissing.isZero.not then {
-        if reportMissing then {
-            emn: String
-            ehn: String
-            if sfx.length == 0 then {
-                mmsg: "cannot infer type arguments for generic type '\{tname}'"
-                (addErrorH
-                    :st
-                    nodeid: call.nid
-                    lineno: call.lineno
-                    colno: call.colno
-                    e: zast.err.genericError
-                    msg: mmsg
-                    note: emn
-                    hint: ehn
-                    width: 0
-                )
-            } else {
-                fmT: zast.nameTextAt :ast ref: firstMissing
-                mmsg2: "cannot infer generic parameter '\{fmT}' for '\{tname}'"
-                (addErrorH
-                    :st
-                    nodeid: call.nid
-                    lineno: call.lineno
-                    colno: call.colno
-                    e: zast.err.genericError
-                    msg: mmsg2
-                    note: emn
-                    hint: ehn
-                    width: 0
-                )
-            }
-        }
+    # a parameter no argument names takes its default
+    if (fillGenericDefaults :st :ast :unitDecl tdecl: tk :subs valSubs: valueSubs :sfx).not then {
         return (ztypes.tid.create from: 0)
     }
+    if (constructionParamMissing
+        :st
+        :ast
+        :call
+        tdecl: tk
+        :subs
+        :valueSubs
+        :boundParams
+        :sfx
+        tname: tname.stringView
+        :reportMissing
+    ) then {
+        return (ztypes.tid.create from: 0)
+    }
+    paramsM: st.reg.genericParamNamesOf tdecl: tk
+    pmn: paramsM.length
     if sfx.length == 0 then return (ztypes.tid.create from: 0)
     # a numeric parameter bound with no value was refused, and is reported
     {
@@ -25465,6 +25643,18 @@ genericTypeConstruction: function {
     if dependent then return (valuePartialConstruction :st :ast :call :tplId)
     firstA: firstOut.get i: 0
     if sfx.length == 0 then return (ztypes.tid.create from: 0)
+    if (fillApplicationDefaults
+        :st
+        :ast
+        :unitDecl
+        :tplId
+        typeSubs: subs
+        valSubs: valueSubs
+        :sfx
+        firstA: (ztypes.tid.create from: firstA)
+    ).not then {
+        return (ztypes.tid.create from: 0)
+    }
     if (refuseIncompleteApplication
         :st
         :ast
@@ -27940,23 +28130,34 @@ refuseBareArmPayload: function {
     return true
 }
 
-# refuseTemplateArmRead -- `Opt.none` READ on a generic sum's template, with no
-# argument: nothing names the type's parameters, so there is no instance to
-# build. An arm about to be called infers them from its argument instead.
-refuseTemplateArmRead: function {
+# templateArmBase -- the sum a bare arm read constructs: `bt` itself, or for
+# `Opt.none` READ on a generic sum's template with no argument, the instance
+# its parameters' defaults name. 0 when a parameter has no default: nothing
+# names it, and that is reported. An arm about to be called infers from its
+# argument instead, and a type written with its arguments (`(Option T:
+# type).none` in a generic body) is made concrete by each instance's walk.
+templateArmBase: function {
     st: zenv.ZSymbolTable
-    ast: Ast.view
+    unitDecl: ztypes.declid
+    ast: Ast
     dp: dpref
     bt: ztypes.tid
     cnId: zast.nameid
-} out bool is {
-    if st.typing.calleeDottedNid == dp.nid.u64 then return false
-    if (st.reg.isGenericOf tid: bt).not then return false
-    # the type written with its arguments (`(Option T: type).none` in a generic
-    # body): each instance's walk makes it concrete
-    if (ast.nodes.get i: dp.parent.u64).call then return false
+} out ztypes.tid is {
+    if st.typing.calleeDottedNid == dp.nid.u64 then return bt
+    if (st.reg.isGenericOf tid: bt).not then return bt
+    if (ast.nodes.get i: dp.parent.u64).call then return bt
     tdecl: declOfTypeId :st tid: bt
-    for each pn: (st.reg.genericParamNamesOf :tdecl) loop {
+    subs: IdMapV zast.nameid v: u64
+    valSubs: IdMapV zast.nameid v: u64
+    sfx: String
+    if (fillGenericDefaults :st :ast :unitDecl :tdecl :subs :valSubs :sfx
+    ).not then return ztypes.tid
+    pi: u64
+    for pi < (st.reg.genericParamCountOf :tdecl) loop {
+        pn: st.reg.genericParamNameAt :tdecl i: pi
+        pi = pi + 1
+        if (subs.has key: pn) or (valSubs.has key: pn) then continue
         if (st.reg.genericParamConstraintOf :tdecl paramName: pn).numKind.has then continue
         cnode: ast.nodes.get i: dp.child.u64
         (reportUninferredArm
@@ -27970,9 +28171,19 @@ refuseTemplateArmRead: function {
             line: (nodeLine n: cnode)
             col: (nodeCol n: cnode)
         )
-        return true
+        return ztypes.tid
     }
-    return false
+    return (getOrMintSpec
+        :st
+        scope: st.curScope
+        :ast
+        :unitDecl
+        sfx: sfx.stringView
+        templateId: bt
+        :subs
+        :valSubs
+        fallbackArg: 0
+    )
 }
 
 # checkTaggedMemberPath -- a subtype member named on a tagged TYPE (not a value of
@@ -28019,15 +28230,14 @@ checkTaggedMemberPath: function {
                 if (refuseBareArmPayload :st :ast :dp :bt :cnId) then {
                     return (callleg handled: true tid: (ztypes.tid.create from: 0))
                 }
-                if (refuseTemplateArmRead :st :ast :dp :bt :cnId) then {
-                    return (callleg handled: true tid: (ztypes.tid.create from: 0))
-                }
+                abt: templateArmBase :st :unitDecl :ast :dp :bt :cnId
+                if abt.isZero then return (callleg handled: true tid: (ztypes.tid.create from: 0))
                 dpk0: dp.nid.u64
-                dpv0: bt
+                dpv0: abt
                 st.typing.dpTaggedParent.set key: dpk0 value: dpv0
-                stampedTid: bt
+                stampedTid: abt
                 stampGate :st nid: dp.nid.u64 tid: stampedTid
-                return (callleg handled: true tid: bt)
+                return (callleg handled: true tid: abt)
             }
             isArm: true
             if ctt0 == ztypes.ztypetype.tagType then isArm = false
@@ -40315,14 +40525,24 @@ checkBareGenericReturns: function {ast: Ast st: zenv.ZSymbolTable} is {
         root: rootNameIdOf :ast :n
         if root == zast.names.wkThis or (zast.nameTextEq :ast ref: root s: "type") then continue
         rsc: (st.typing.pendingTyperefScope.get key: rn).or d: ztypes.declid
-        (refuseBareGenericType
+        rtd: ztypes.tid.create from: (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rn)
+        rtb: (bareGenericType
             :st
             :ast
-            tid: (ztypes.tid.create from: (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rn))
+            unitDecl: ztypes.declid
+            tid: rtd
             nid: rn
             scope: rsc
             thisName: ""
         )
+        # a generic type's name, stamped with its defaults' instance: that
+        # instance is what the function returns
+        if rtb != rtd then ztyping.nodeTypeSet tbl: st.typing.nodeType nid: rn tid: rtb
+        nameT: (walkLookupTyperefFrom :st :ast scope: rsc baseId: root).or d: 0
+        if nameT > 0 when (st.reg.genericOriginOf tid: rtb).u64 == nameT then {
+            fk: st.typing.funcReturnNode.keyAt i: ri - 1
+            if fk > 0 then st.reg.setReturnType typeId: (ztypes.tid.create from: fk) value: rtb.u64
+        }
     }
 }
 
@@ -43171,6 +43391,216 @@ checkResolvedMethodCall: function {
     return (ztypes.tid.create from: mres)
 }
 
+# fillGenericDefaults -- bind each parameter of `tdecl` that the instantiation
+# neither wrote nor inferred and that declares a `default:`, in declaration
+# order: a type into `subs`, a numeric constant into `valSubs`, each adding its
+# component to `sfx`. A default may name another parameter of the same
+# declaration, written before or after it, which is filled first; only a cycle
+# is refused. False once a default was refused (reported at the default).
+fillGenericDefaults: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    tdecl: ztypes.declid
+    subs: (IdMapV zast.nameid v: u64)
+    valSubs: (IdMapV zast.nameid v: u64)
+    sfx: String
+} out bool is {
+    grey: IdSet zast.nameid
+    pi: u64
+    for pi < (st.reg.genericParamCountOf :tdecl) loop {
+        pn: st.reg.genericParamNameAt :tdecl i: pi
+        pi = pi + 1
+        if (fillOneDefault :st :ast :unitDecl :tdecl :pn :subs :valSubs :sfx :grey
+        ).not then return false
+    }
+    return true
+}
+
+# fillOneDefault -- fillGenericDefaults for the one parameter `pn`: nothing
+# when it is bound or has no default, its default otherwise. `grey` holds the
+# parameters whose defaults are being resolved, so a default that reaches back
+# to one of them is a cycle.
+fillOneDefault: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    tdecl: ztypes.declid
+    pn: zast.nameid
+    subs: (IdMapV zast.nameid v: u64)
+    valSubs: (IdMapV zast.nameid v: u64)
+    sfx: String
+    grey: IdSet zast.nameid
+} out bool is {
+    if (subs.has key: pn) or (valSubs.has key: pn) then return true
+    cd: st.reg.genericParamConstraintOf :tdecl paramName: pn
+    if cd.defaultNode == 0 then return true
+    dn: zast.nodeid.create from: cd.defaultNode
+    if (grey.has item: pn) then {
+        (reportDefaultRefused
+            :st
+            :ast
+            :pn
+            :dn
+            why: "its default names itself, through the defaults it names"
+        )
+        return false
+    }
+    grey.add item: pn
+    if cd.numKind.has then {
+        na: (numericGenericArg
+            :ast
+            :st
+            :unitDecl
+            scope: tdecl
+            :tdecl
+            param: pn
+            argOp: dn
+            inBody: false
+        )
+        return (bindNumericArg :sfx :valSubs param: pn :na :cd)
+    }
+    dt: defaultTypeTid :st :ast :unitDecl :tdecl :pn :dn :subs :valSubs :sfx :grey
+    if dt == 0 then return false
+    # the default is a member of the parameter's constraint, checked where it
+    # is written; one that is not stops the instance there
+    if (constraintAdmits
+        :ast
+        :st
+        scope: tdecl
+        :tdecl
+        paramName: pn
+        argTid: (ztypes.tid.create from: dt)
+    ).not then {
+        (checkConstraintSat
+            :st
+            scope: tdecl
+            :ast
+            :tdecl
+            paramName: pn
+            argTid: (ztypes.tid.create from: dt)
+            at: dn
+            lineno: (nodeLine n: (ast.nodes.get i: dn.u64))
+            colno: (nodeCol n: (ast.nodes.get i: dn.u64))
+        )
+        return false
+    }
+    subs.set key: pn value: dt
+    an: monoValName :st scope: tdecl :ast tid: (ztypes.tid.create from: dt)
+    sfx.append s: "_"
+    sfx.append s: an
+    return true
+}
+
+# defaultTypeTid -- the type parameter `pn`'s default `dn` names, with the
+# declaration's other parameters it names bound (filled first, through
+# fillOneDefault). 0 once refused, which is reported at the default.
+defaultTypeTid: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    tdecl: ztypes.declid
+    pn: zast.nameid
+    dn: zast.nodeid
+    subs: (IdMapV zast.nameid v: u64)
+    valSubs: (IdMapV zast.nameid v: u64)
+    sfx: String
+    grey: IdSet zast.nameid
+} out u64 is {
+    # the default resolves in the declaration's own scope, where its
+    # parameters are names
+    dt: u64
+    {
+        prevScope: st.curScope
+        st.curScope = tdecl
+        dt = typeArgTid :st :ast :unitDecl opId: dn baseId: (paramTypeBaseNameId
+            :ast
+            op: (ast.nodes.get i: dn.u64)
+        )
+        st.curScope = prevScope
+    }
+    if dt == 0 then {
+        dnm: zast.nameTextAt :ast ref: (paramTypeBaseNameId :ast op: (ast.nodes.get i: dn.u64))
+        why: "its default '\{dnm}' names no type"
+        reportDefaultRefused :st :ast :pn :dn why: why.stringView
+        return 0
+    }
+    # another parameter of the same declaration: its binding, filled first
+    other: st.reg.genericParamNameOfTid :tdecl ptid: (ztypes.tid.create from: dt)
+    if other.isZero.not then {
+        if (fillOneDefault :st :ast :unitDecl :tdecl pn: other :subs :valSubs :sfx :grey
+        ).not then return 0
+        ov: (subs.get key: other).or d: 0
+        if ov == 0 then {
+            (reportDefaultRefused
+                :st
+                :ast
+                :pn
+                :dn
+                why: "its default names a parameter with no argument and no default"
+            )
+        }
+        return ov
+    }
+    if (st.reg.isPartialOf tid: (ztypes.tid.create from: dt)) then {
+        return (defaultOverParams :st :ast :unitDecl :tdecl :dt :subs :valSubs :sfx :grey)
+    }
+    return dt
+}
+
+# defaultOverParams -- a default that is an instance over the declaration's
+# parameters (`(List t)`): those filled first, then the instance re-specialised
+# with their bindings. 0 once one of them was refused.
+defaultOverParams: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    tdecl: ztypes.declid
+    dt: u64
+    subs: (IdMapV zast.nameid v: u64)
+    valSubs: (IdMapV zast.nameid v: u64)
+    sfx: String
+    grey: IdSet zast.nameid
+} out u64 is {
+    idSubs: IdMapV u64 v: u64
+    qi: u64
+    for qi < (st.reg.genericParamCountOf :tdecl) loop {
+        q: st.reg.genericParamNameAt :tdecl i: qi
+        qi = qi + 1
+        if (typeMentionsParam :st :tdecl tid: (ztypes.tid.create from: dt) param: q
+        ).not then continue
+        if (fillOneDefault :st :ast :unitDecl :tdecl pn: q :subs :valSubs :sfx :grey
+        ).not then return 0
+        qv: (subs.get key: q).or d: 0
+        qt: (st.reg.genericParamTidOf :tdecl paramName: q).or d: 0
+        if qv > 0 when qt > 0 then idSubs.set key: qt value: qv
+    }
+    rs: respecialize :st scope: tdecl :ast :unitDecl specTid: dt :idSubs
+    if rs > 0 then return rs
+    return dt
+}
+
+# reportDefaultRefused -- a parameter's default that cannot stand in for it,
+# reported at the default.
+reportDefaultRefused: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    pn: zast.nameid
+    dn: zast.nodeid
+    why: StringView
+} is {
+    pnT: zast.nameTextAt :ast ref: pn
+    n: ast.nodes.get i: dn.u64
+    (addError
+        :st
+        nodeid: dn
+        lineno: (nodeLine :n)
+        colno: (nodeCol :n)
+        e: zast.err.genericError
+        msg: "generic parameter '\{pnT}' cannot take its default: \{why}"
+    )
+}
+
 # refuseUninferredArmParam -- an arm constructed without the type's arguments
 # binds only the parameters its payload names (`leaf: t` binds `t`, `many:
 # (List t)` binds it from the list's element); any other parameter is inferred
@@ -43274,6 +43704,11 @@ mintSumArmInstance: function {
             bindPartialParamSubs :st :ast :gparams paramTid: payId argTid: subT.u64 subs: subs2
         }
     }
+    vsH: IdMapV zast.nameid v: u64
+    dsfx: String
+    if (fillGenericDefaults :st :ast :unitDecl :tdecl subs: subs2 valSubs: vsH sfx: dsfx).not then {
+        return (callleg handled: true tid: ztypes.tid)
+    }
     if (refuseUninferredArmParam :st :ast :call :dtp :tdecl :armId :isNullPay subs: subs2) then {
         return (callleg handled: true tid: ztypes.tid)
     }
@@ -43287,7 +43722,6 @@ mintSumArmInstance: function {
         monoName.append s: "_"
         monoName.append s: an2
     }
-    vsH: IdMapV zast.nameid v: u64
     mintedT: (getOrMintSpec
         :st
         scope: st.curScope
@@ -45885,6 +46319,42 @@ bindValueArg: function {
     }
 }
 
+# bindCallNumericParam -- a generic call's numeric parameter bound: the value
+# the call writes, else its default (`dvs`), else refused -- a numeric
+# parameter is never inferred. False when refused.
+bindCallNumericParam: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    call: callref
+    tdecl: ztypes.declid
+    param: zast.nameid
+    cd: ztypes.constraintdesc
+    dvs: (IdMapV zast.nameid v: u64).view
+    sfx: String
+    vsI: (IdMapV zast.nameid v: u64)
+} out bool is {
+    dnv: dvs.get key: param
+    if (callWritesLabel :ast :call label: param).not when dnv.some then {
+        appendNumericArgSuffix :sfx bits: dnv :cd
+        vsI.set key: param value: dnv
+        return true
+    }
+    na: genericCallNumericArg :st :unitDecl :ast :call :tdecl :param
+    return (bindNumericArg :sfx valSubs: vsI :param :na :cd)
+}
+
+# callWritesLabel -- the call writes an argument labelled `label`.
+callWritesLabel: function {ast: Ast.view call: callref label: zast.nameid} out bool is {
+    k: u64
+    for k < call.nargs loop {
+        arg: argRefAt :ast nid: (zast.callArgAt :ast nid: call.nid i: k)
+        k = k + 1
+        if arg.nid.isZero.not when arg.name == label then return true
+    }
+    return false
+}
+
 # genericCallNumericArg -- the value a generic function call writes for its
 # numeric parameter `param`. A numeric parameter is not inferred from the other
 # arguments, so an unwritten one is refused.
@@ -46085,14 +46555,22 @@ callArgsTyped: function {st: zenv.ZSymbolTable ast: Ast.view call: callref} out 
 }
 
 # reportUninferredCallParam -- a generic function's parameter that no argument
-# names and none is written for: the call has no instance to reach.
+# names and none is written for: the call has no instance to reach. A
+# parameter declared over it whose argument is missing, or an argument that did
+# not type (an error since `errI`), has said why already.
 reportUninferredCallParam: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     call: callref
     param: zast.nameid
     fname: StringView
+    tdecl: ztypes.declid
+    pHolderIds: (ListVal u64).view
+    errI: u64
 } is {
+    if st.typing.errors.length != errI then return
+    if (callArgsTyped :st :ast :call).not then return
+    if (holdersMention :st :tdecl :pHolderIds :param) then return
     pnT: zast.nameTextAt :ast ref: param
     (addErrorH
         :st
@@ -46105,6 +46583,87 @@ reportUninferredCallParam: function {
         hint: "write the type argument: '\{pnT}: <type>'"
         width: 0
     )
+}
+
+# bindCallParams -- a generic call's parameters bound, in declaration order:
+# a numeric one from what the call writes or its default, any other from the
+# inference (`subs`, defaults filled) with its bound checked; each adds its
+# component to `sfx`. A parameter nothing binds is reported
+# (reportUninferredCallParam). False when any is unbound.
+bindCallParams: function {
+    st: zenv.ZSymbolTable
+    unitDecl: ztypes.declid
+    ast: Ast
+    call: callref
+    tdecl: ztypes.declid
+    gparams: (ListVal zast.nameid).view
+    subs: (IdMapV zast.nameid v: u64).view
+    dvs: (IdMapV zast.nameid v: u64).view
+    sfx: String
+    vsI: (IdMapV zast.nameid v: u64)
+    fname: StringView
+    pHolderIds: (ListVal u64).view
+    errI: u64
+} out bool is {
+    allOk: true
+    genericParamIter: gparams.iterate
+    for gp3: genericParamIter loop {
+        cd4: st.reg.genericParamConstraintOf :tdecl paramName: gp3
+        if cd4.numKind.has then {
+            if (bindCallNumericParam
+                :st
+                :unitDecl
+                :ast
+                :call
+                :tdecl
+                param: gp3
+                cd: cd4
+                :dvs
+                :sfx
+                :vsI
+            ).not then allOk = false
+            continue
+        }
+        ggot: subs.get key: gp3
+        match (
+            ggot
+        ) case some then {
+            (checkConstraintSat
+                :st
+                scope: st.curScope
+                :ast
+                :tdecl
+                paramName: gp3
+                argTid: (ztypes.tid.create from: ggot.u64)
+                at: call.nid
+                lineno: call.lineno
+                colno: call.colno
+            )
+            an4: (monoValName
+                :st
+                scope: st.curScope
+                :ast
+                tid: (ztypes.tid.create from: ggot.u64)
+            )
+            sfx.append s: "_"
+            sfx.append s: an4
+        } case none then {
+            if allOk then {
+                (reportUninferredCallParam
+                    :st
+                    :ast
+                    :call
+                    param: gp3
+                    :fname
+                    :tdecl
+                    :pHolderIds
+                    :errI
+                )
+            }
+            allOk = false
+        }
+    }
+    return allOk
 }
 
 # checkGenericCall -- a call to a generic user function: walk the value args,
@@ -46157,61 +46716,28 @@ checkGenericCall: function {
     allOk: true
     gtk4: declOfTypeId :st tid: funcId
     vsI: IdMapV zast.nameid v: u64
-    genericParamIter: gparams.iterate
-    for gp3: genericParamIter loop {
-        cd4: st.reg.genericParamConstraintOf tdecl: gtk4 paramName: gp3
-        if cd4.numKind.has then {
-            # a numeric parameter is never inferred: its argument is written
-            nv4: (genericCallNumericArg
-                :st
-                :unitDecl
-                :ast
-                :call
-                tdecl: gtk4
-                param: gp3
-            )
-            bound4: bindNumericArg sfx: gsfx4 valSubs: vsI param: gp3 na: nv4 cd: cd4
-            allOk = allOk and bound4
-            continue
-        }
-        ggot: subs.get key: gp3
-        match (
-            ggot
-        ) case some then {
-            (checkConstraintSat
-                :st
-                scope: st.curScope
-                :ast
-                tdecl: gtk4
-                paramName: gp3
-                argTid: (ztypes.tid.create from: ggot.u64)
-                at: call.nid
-                lineno: call.lineno
-                colno: call.colno
-            )
-            an4: (monoValName
-                :st
-                scope: st.curScope
-                :ast
-                tid: (ztypes.tid.create from: ggot.u64)
-            )
-            gsfx4.append s: "_"
-            gsfx4.append s: an4
-        } case none then {
-            # a parameter declared over it whose argument is missing, or an
-            # argument that did not type, has said why already
-            if allOk when st.typing.errors.length == errI when (callArgsTyped :st :ast :call
-            ) when (holdersMention
-                :st
-                tdecl: gtk4
-                :pHolderIds
-                param: gp3
-            ).not then {
-                reportUninferredCallParam :st :ast :call param: gp3 fname: mname.stringView
-            }
-            allOk = false
-        }
+    # a parameter no argument names takes its default; a numeric one only when
+    # the call does not write it
+    dvs: IdMapV zast.nameid v: u64
+    dsfx: String
+    if (fillGenericDefaults :st :ast :unitDecl tdecl: gtk4 :subs valSubs: dvs sfx: dsfx).not then {
+        return (ztypes.tid.create from: 0)
     }
+    allOk = (bindCallParams
+        :st
+        :unitDecl
+        :ast
+        :call
+        tdecl: gtk4
+        :gparams
+        :subs
+        :dvs
+        sfx: gsfx4
+        :vsI
+        fname: mname.stringView
+        :pHolderIds
+        :errI
+    )
     if allOk.not then return (ztypes.tid.create from: 0)
     if gparams.length == 0 then return (ztypes.tid.create from: 0)
     (checkPartialBounds
