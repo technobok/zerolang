@@ -21744,6 +21744,10 @@ checkConstraintSat: function {
 } is {
     if st.typing.quietBounds then return
     if (constraintAdmits :ast :st :scope :tdecl :paramName :argTid) then return
+    if lineno == 0 when st.typing.boundSiteLine > 0 then {
+        if st.typing.boundSiteFailArg == argTid.u64 then return
+        st.typing.boundSiteFailArg = argTid.u64
+    }
     m: constraintUnmetText :ast :st :tdecl :paramName :argTid
     reportConstraintUnmet :st :at :lineno :colno msg: m
 }
@@ -21836,7 +21840,20 @@ reportConstraintUnmet: function {
     msg: String
 } is {
     if lineno == 0 then {
-        addResolveError :st e: zast.err.genericError :msg
+        # minted with no position of its own: the statement that asked for it
+        if st.typing.boundSiteLine == 0 then {
+            addResolveError :st e: zast.err.genericError :msg
+            return
+        }
+        (addResolveErrorH
+            :st
+            nodeid: st.typing.boundSiteNid
+            lineno: st.typing.boundSiteLine
+            colno: st.typing.boundSiteCol
+            e: zast.err.genericError
+            :msg
+            width: 1
+        )
         return
     }
     (addResolveErrorH
@@ -48281,8 +48298,23 @@ checkStmtLine: function {
     if innerId.isZero.not then {
         dsPrev: st.typing.stmtDiscarded
         st.typing.stmtDiscarded = discarded
+        bsPrev: st.typing.boundSiteNid
+        blPrev: st.typing.boundSiteLine
+        bcPrev: st.typing.boundSiteCol
+        bfPrev: st.typing.boundSiteFailArg
+        st.typing.boundSiteFailArg = 0
+        {
+            inode: ast.nodes.get i: innerId.u64
+            st.typing.boundSiteNid = innerId
+            st.typing.boundSiteLine = nodeLine n: inode
+            st.typing.boundSiteCol = nodeCol n: inode
+        }
         dk = checkStmtInner :st :unitDecl :ast :innerId lineId: slnId
         st.typing.stmtDiscarded = dsPrev
+        st.typing.boundSiteNid = bsPrev
+        st.typing.boundSiteLine = blPrev
+        st.typing.boundSiteCol = bcPrev
+        st.typing.boundSiteFailArg = bfPrev
     }
     # the body's own tail is recorded once its value is judged
     # (checkImplicitReturn); a `with` or `do` block's, here
