@@ -29763,7 +29763,10 @@ checkTransferMarker: function {
     # `.drop` is a statement, not a value: it ends a lifetime and hands
     # back nothing, so a binding, an argument or an operand has nothing to
     # take from it. Legal only on the node that IS the statement.
-    if (isDropMarkerId nameId: cnId) when dp.nid.u64 != st.typing.stmtExprNid then {
+    # a line whose value is used -- a block's value line, a function's implied
+    # return -- is no statement for this purpose: `x.drop` there yields nothing
+    dropIsValue: dp.nid.u64 != st.typing.stmtExprNid or st.typing.stmtDiscarded.not
+    if (isDropMarkerId nameId: cnId) when dropIsValue then {
         mvs: "'.drop' is a statement, not a value -- it ends a lifetime and produces nothing; use '.take' to move the value into a new name".string
         (addError
             :st
@@ -48279,7 +48282,10 @@ checkStmtLine: function {
     discarded: tailLine.not and (last.not or (st.typing.stmtBlocks.has item: blockId.u64))
     if discarded then noteStatementBlocks :st :ast :innerId
     if innerId.isZero.not then {
+        dsPrev: st.typing.stmtDiscarded
+        st.typing.stmtDiscarded = discarded
         dk = checkStmtInner :st :unitDecl :ast :innerId lineId: slnId
+        st.typing.stmtDiscarded = dsPrev
     }
     # the body's own tail is recorded once its value is judged
     # (checkImplicitReturn); a `with` or `do` block's, here
