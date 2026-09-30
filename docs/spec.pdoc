@@ -1625,13 +1625,14 @@ fails at the offending instantiation — there is no arm to run.
       else 3
   )
 
-  # match as implicit return
+  # match as implicit return: parenthesised, so its clauses may span lines
   describe: function {filetype: i64} out i64 is {
-      match filetype
+      (match filetype
           case WRITE then 0
           case READ then 1
           case READWRITE then 2
           else 3
+      )
   }
 
 
@@ -2504,7 +2505,12 @@ The resolution order for generic type arguments is:
   type at the call site]
   [#*: #_*"Inferred": the compiler derives the type from a concrete value
   supplied to a parameter/field declared as the generic type. This is the
-  preferred syntax where possible]
+  preferred syntax where possible. An arm constructed on the bare sum type
+  infers only the parameters its DECLARED payload names: #~"leaf: t" binds
+  #~"t" from the value, #~"many: (List T)" binds #~"T" from the list's
+  element, and an arm that holds no parameter, or carries nothing, names none
+  -- write the type's arguments, #~"(Tree t: i64).node s" or
+  #~"(Opt t: i64).none" (#~"Opt.none i64" for a one-parameter type)]
   [#*: #_*"Default": the default type specified in the generic parameter
   declaration is used]
   [#*: #_*"Error": if none of the above resolves the type, a compilation error
@@ -6458,7 +6464,10 @@ is a reference type with a uniform two-word layout: a tag and a #~"void*"
 data pointer. The union struct itself lives on the stack; the subtype data
 pointed to by #~"void*" is heap-allocated. Because every arm's payload
 lives in a heap cell the union owns, an arm holds a reference type or a
-value type alike. A #~"null" arm carries no payload; an arm with an
+value type alike -- and constructing an arm that carries a payload costs one
+heap allocation whatever the payload's family: an #~"i64" arm, a #~"String"
+arm and a class arm each allocate their cell. A #>"variant" stores its payload
+inline, with no heap cell, when every arm is a value type. A #~"null" arm carries no payload; an arm with an
 ownership marker (#~".view" / #~".borrow" / #~".hold") refers to what it
 points at; and a value-type arm is the value in its cell -- construction
 takes the bare value and match arms bind the bare element. Writing it
@@ -6540,30 +6549,28 @@ the appropriate destructor for reftype payloads, and nothing for null subtypes.
 
 The #~"match" statement dispatches on the union's tag. All subtypes must be
 covered by case clauses, or an #~"else" clause must be present. Inside a case
-clause, the payload is accessed via dotted path on the union variable.
+clause the union variable is narrowed: its name IS the arm's payload.
 
 #code language=zerolang: """
-  describe: function {r: Result} out String is {
-      match r
-          case ok then {
-              # r.ok accesses the i64 payload (unboxed)
-              print "value = \{r.ok}"
-              return "ok"
-          }
-          case err then {
-              # r.err accesses the string payload (cast)
-              print "error = \{r.err}"
-              return "error"
-          }
-          case none then {
-              # no payload to access
-              return "none"
-          }
+  describe: function {r: Outcome} out String is {
+      match (r) case ok then {
+          # r is narrowed: here it is the i64 payload (unboxed)
+          print "value = \{r}"
+          return "ok".string
+      } case err then {
+          # here it is the String payload
+          print "error = \{r}"
+          return "error".string
+      } case none then {
+          # no payload to access
+          return "none".string
+      }
   }
   """
 
-Accessing subtype data outside of a #~"match" clause is a compile error —
-the union must be narrowed first.
+Accessing subtype data where the union is not narrowed is a compile error:
+narrow it first, with a #~"match" or an arm predicate in an #~"if"
+condition.
 
 #----: Creating sum-type instances
 
@@ -6620,9 +6627,9 @@ Arguments for #~"variant":
   as        |        |Optional block for tag specification and shared attributes
 
 See also the #>"union" section. A variant stores its payload inline
-(tagged storage, no heap cell) and its arms are value types only -- the
-mirror image of a union's reference-only arms; construction, matching and
-tag selection otherwise follow the union rules.
+(tagged storage, no heap cell) and its arms are value types only, where a
+union's arms may hold either family, each in a heap cell; construction,
+matching and tag selection otherwise follow the union rules.
 
 #----: Enumerated Types
 

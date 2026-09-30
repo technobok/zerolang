@@ -27856,6 +27856,41 @@ refuseBareArmPayload: function {
     return true
 }
 
+# refuseTemplateArmRead -- `Opt.none` READ on a generic sum's template, with no
+# argument: nothing names the type's parameters, so there is no instance to
+# build. An arm about to be called infers them from its argument instead.
+refuseTemplateArmRead: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    dp: dpref
+    bt: ztypes.tid
+    cnId: zast.nameid
+} out bool is {
+    if st.typing.calleeDottedNid == dp.nid.u64 then return false
+    if (st.reg.isGenericOf tid: bt).not then return false
+    # the type written with its arguments (`(Option T: type).none` in a generic
+    # body): each instance's walk makes it concrete
+    if (ast.nodes.get i: dp.parent.u64).call then return false
+    tdecl: declOfTypeId :st tid: bt
+    for each pn: (st.reg.genericParamNamesOf :tdecl) loop {
+        if (st.reg.genericParamConstraintOf :tdecl paramName: pn).numKind.has then continue
+        cnode: ast.nodes.get i: dp.child.u64
+        (reportUninferredArm
+            :st
+            :ast
+            dtp: bt.u64
+            :pn
+            armId: cnId
+            isNullPay: true
+            at: (nodeId n: cnode)
+            line: (nodeLine n: cnode)
+            col: (nodeCol n: cnode)
+        )
+        return true
+    }
+    return false
+}
+
 # checkTaggedMemberPath -- a subtype member named on a tagged TYPE (not a value of
 # it, not the tag, not a method) is a construction reference: the path's value IS
 # the tagged parent. A VALUE base makes the path the arm PREDICATE instead -- it
@@ -27898,6 +27933,9 @@ checkTaggedMemberPath: function {
                     return (callleg handled: true tid: (ztypes.tid.create from: 0))
                 }
                 if (refuseBareArmPayload :st :ast :dp :bt :cnId) then {
+                    return (callleg handled: true tid: (ztypes.tid.create from: 0))
+                }
+                if (refuseTemplateArmRead :st :ast :dp :bt :cnId) then {
                     return (callleg handled: true tid: (ztypes.tid.create from: 0))
                 }
                 dpk0: dp.nid.u64
@@ -43038,35 +43076,38 @@ checkResolvedMethodCall: function {
 }
 
 # refuseUninferredArmParam -- an arm constructed without the type's arguments
-# binds only the parameter its payload names (`resultval.ok 5` binds `t`); a
-# second type parameter is inferred from nothing, as the language infers no
-# expected type. A one-parameter type takes its payload's type whole. True once
-# reported.
+# binds only the parameters its payload names (`leaf: t` binds `t`, `many:
+# (List t)` binds it from the list's element); any other parameter is inferred
+# from nothing, as the language infers no expected type, and is refused here.
+# True once reported.
 refuseUninferredArmParam: function {
     st: zenv.ZSymbolTable
     ast: Ast.view
     call: callref
     dtp: u64
+    tdecl: ztypes.declid
+    # the arm constructed, for the note
+    armId: zast.nameid
+    # the arm carries nothing: its argument names the type, or nothing does
+    isNullPay: bool
     subs: (IdMapV zast.nameid v: u64).view
 } out bool is {
-    tdecl: declOfTypeId :st tid: (ztypes.tid.create from: dtp)
-    if (st.reg.genericParamCountOf :tdecl) < 2 then return false
-    pnames: st.reg.genericParamNamesOf :tdecl
-    for each pn: pnames loop {
+    pi: u64
+    for pi < (st.reg.genericParamCountOf :tdecl) loop {
+        pn: st.reg.genericParamNameAt :tdecl i: pi
+        pi = pi + 1
         numeric: (st.reg.genericParamConstraintOf :tdecl paramName: pn).numKind.has
         if numeric.not when (subs.has key: pn).not then {
-            pnT: zast.nameTextAt :ast ref: pn
-            tname: specWrittenName :st :ast tid: (ztypes.tid.create from: dtp)
-            (addErrorH
+            (reportUninferredArm
                 :st
-                nodeid: call.nid
-                lineno: call.lineno
-                colno: call.colno
-                e: zast.err.genericError
-                msg: "cannot infer generic parameter '\{pnT}' for '\{tname}'"
-                note: String
-                hint: String
-                width: 0
+                :ast
+                :dtp
+                :pn
+                :armId
+                :isNullPay
+                at: call.nid
+                line: call.lineno
+                col: call.colno
             )
             return true
         }
@@ -43074,8 +43115,43 @@ refuseUninferredArmParam: function {
     return false
 }
 
-# mintSumArmInstance -- constructing a generic sum's ARM infers the whole type's
-# argument from the payload given: mint that instance and answer its id.
+# reportUninferredArm -- the refusal of an arm construction that leaves `pn`
+# unbound: the note says why nothing names it, the hint writes the argument.
+reportUninferredArm: function {
+    st: zenv.ZSymbolTable
+    ast: Ast.view
+    dtp: u64
+    pn: zast.nameid
+    armId: zast.nameid
+    isNullPay: bool
+    at: zast.nodeid
+    line: u32
+    col: u32
+} is {
+    pnT: zast.nameTextAt :ast ref: pn
+    armT: zast.nameTextAt :ast ref: armId
+    tname: specWrittenName :st :ast tid: (ztypes.tid.create from: dtp)
+    note: "arm '\{armT}' holds no '\{pnT}', so its value does not name it"
+    if isNullPay then note = "arm '\{armT}' carries nothing, so no value names '\{pnT}'"
+    hint: "write the type's arguments: '(\{tname} \{pnT}: <type>).\{armT}'"
+    (addErrorH
+        :st
+        nodeid: at
+        lineno: line
+        colno: col
+        e: zast.err.genericError
+        msg: "cannot infer generic parameter '\{pnT}' for '\{tname}'"
+        :note
+        :hint
+        width: 0
+    )
+}
+
+# mintSumArmInstance -- constructing a generic sum's ARM infers the type's
+# arguments from the payload given, through the arm's DECLARED payload: a
+# payload that is a parameter binds it, one that applies parameters binds them
+# from the value's own arguments, and a null arm's argument names the type of a
+# one-parameter sum. Mints that instance and answers its id.
 mintSumArmInstance: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
@@ -43084,20 +43160,36 @@ mintSumArmInstance: function {
     dtp: u64
     subT: ztypes.tid
     isNullPay: bool
-    pn0: StringView
+    # the arm's declared payload type
+    payId: u64
+    armId: zast.nameid
 } out callleg is {
-    an2: st.reg.nameOf tid: (ztypes.tid.create from: subT.u64)
-    monoName: "_\{an2}"
+    tdecl: declOfTypeId :st tid: (ztypes.tid.create from: dtp)
+    npar: st.reg.genericParamCountOf :tdecl
     subs2: IdMapV zast.nameid v: u64
-    if isNullPay.not then {
-        pv2: subT
-        (subs2.set
-            key: (nameIdOf :ast name: pn0)
-            value: pv2
-        )
+    if isNullPay then {
+        if npar == 1 then subs2.set key: (st.reg.genericParamNameAt :tdecl i: 0) value: subT.u64
+    } else {
+        ppn: st.reg.genericParamNameOfTid :tdecl ptid: (ztypes.tid.create from: payId)
+        if ppn.isZero.not then {
+            subs2.set key: ppn value: subT.u64
+        } else {
+            gparams: st.reg.genericParamNamesOf :tdecl
+            bindPartialParamSubs :st :ast :gparams paramTid: payId argTid: subT.u64 subs: subs2
+        }
     }
-    if (refuseUninferredArmParam :st :ast :call :dtp subs: subs2) then {
+    if (refuseUninferredArmParam :st :ast :call :dtp :tdecl :armId :isNullPay subs: subs2) then {
         return (callleg handled: true tid: ztypes.tid)
+    }
+    monoName: String
+    gi: u64
+    for gi < npar loop {
+        bv: (subs2.get key: (st.reg.genericParamNameAt :tdecl i: gi)).or d: 0
+        gi = gi + 1
+        if bv == 0 then continue
+        an2: st.reg.nameOf tid: (ztypes.tid.create from: bv.u64)
+        monoName.append s: "_"
+        monoName.append s: an2
     }
     vsH: IdMapV zast.nameid v: u64
     mintedT: (getOrMintSpec
@@ -43109,7 +43201,7 @@ mintSumArmInstance: function {
         templateId: (ztypes.tid.create from: dtp.u64)
         subs: subs2
         valSubs: vsH
-        fallbackArg: subT
+        fallbackArg: 0
     )
     if mintedT > 0 then {
         noteMonoSite :st mono: mintedT :call :unitDecl
@@ -43259,7 +43351,7 @@ checkGenericTypeCall: function {
             st.typing.callKind.set key: call.nid.u64 value: zast.callkind.unionCreate
             return (callleg handled: true tid: appT)
         }
-        if subT > 0 when subT > 0 then {
+        if subT > 0 then {
             sleg: (mintSumArmInstance
                 :st
                 :unitDecl
@@ -43268,7 +43360,8 @@ checkGenericTypeCall: function {
                 :dtp
                 :subT
                 :isNullPay
-                pn0: pn0.stringView
+                :payId
+                armId: armnId
             )
             if sleg.handled then return sleg
         }

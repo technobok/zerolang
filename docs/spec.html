@@ -1592,13 +1592,14 @@ x: (match filetype
     else 3
 )
 
-# match as implicit return
+# match as implicit return: parenthesised, so its clauses may span lines
 describe: function {filetype: i64} out i64 is {
-    match filetype
+    (match filetype
         case WRITE then 0
         case READ then 1
         case READWRITE then 2
         else 3
+    )
 }
 
 
@@ -2328,7 +2329,12 @@ default value there.</p>
 type at the call site</li>
 <li><em><strong>Inferred</strong></em>: the compiler derives the type from a concrete value
 supplied to a parameter/field declared as the generic type. This is the
-preferred syntax where possible</li>
+preferred syntax where possible. An arm constructed on the bare sum type
+infers only the parameters its DECLARED payload names: <code>leaf: t</code> binds
+<code>t</code> from the value, <code>many: (List T)</code> binds <code>T</code> from the list's
+element, and an arm that holds no parameter, or carries nothing, names none
+-- write the type's arguments, <code>(Tree t: i64).node s</code> or
+<code>(Opt t: i64).none</code> (<code>Opt.none i64</code> for a one-parameter type)</li>
 <li><em><strong>Default</strong></em>: the default type specified in the generic parameter
 declaration is used</li>
 <li><em><strong>Error</strong></em>: if none of the above resolves the type, a compilation error
@@ -5623,7 +5629,10 @@ is a reference type with a uniform two-word layout: a tag and a <code>void*</cod
 data pointer. The union struct itself lives on the stack; the subtype data
 pointed to by <code>void*</code> is heap-allocated. Because every arm's payload
 lives in a heap cell the union owns, an arm holds a reference type or a
-value type alike. A <code>null</code> arm carries no payload; an arm with an
+value type alike -- and constructing an arm that carries a payload costs one
+heap allocation whatever the payload's family: an <code>i64</code> arm, a <code>String</code>
+arm and a class arm each allocate their cell. A <a href="#variant">variant</a> stores its payload
+inline, with no heap cell, when every arm is a value type. A <code>null</code> arm carries no payload; an arm with an
 ownership marker (<code>.view</code> / <code>.borrow</code> / <code>.hold</code>) refers to what it
 points at; and a value-type arm is the value in its cell -- construction
 takes the bare value and match arms bind the bare element. Writing it
@@ -5696,26 +5705,24 @@ the appropriate destructor for reftype payloads, and nothing for null subtypes.<
 <h4 id="match-on-unions"><a href="#match-on-unions">11.8.3. Match on unions</a></h4>
 <p>The <code>match</code> statement dispatches on the union's tag. All subtypes must be
 covered by case clauses, or an <code>else</code> clause must be present. Inside a case
-clause, the payload is accessed via dotted path on the union variable.</p>
-<pre><code class="language-zerolang">describe: function {r: Result} out String is {
-    match r
-        case ok then {
-            # r.ok accesses the i64 payload (unboxed)
-            print "value = \{r.ok}"
-            return "ok"
-        }
-        case err then {
-            # r.err accesses the string payload (cast)
-            print "error = \{r.err}"
-            return "error"
-        }
-        case none then {
-            # no payload to access
-            return "none"
-        }
+clause the union variable is narrowed: its name IS the arm's payload.</p>
+<pre><code class="language-zerolang">describe: function {r: Outcome} out String is {
+    match (r) case ok then {
+        # r is narrowed: here it is the i64 payload (unboxed)
+        print "value = \{r}"
+        return "ok".string
+    } case err then {
+        # here it is the String payload
+        print "error = \{r}"
+        return "error".string
+    } case none then {
+        # no payload to access
+        return "none".string
+    }
 }</code></pre>
-<p>Accessing subtype data outside of a <code>match</code> clause is a compile error &#x2014;
-the union must be narrowed first.</p>
+<p>Accessing subtype data where the union is not narrowed is a compile error:
+narrow it first, with a <code>match</code> or an arm predicate in an <code>if</code>
+condition.</p>
 <h4 id="creating-sum-type-instances"><a href="#creating-sum-type-instances">11.8.4. Creating sum-type instances</a></h4>
 <p>Creating/setting a union value:</p>
 <pre><code class="language-zerolang">MyClass: class {a: u32 b: u32}
@@ -5769,9 +5776,9 @@ always as large as its largest containing type plus the descriminator.</p>
 </tbody>
 </table>
 <p>See also the <a href="#union">union</a> section. A variant stores its payload inline
-(tagged storage, no heap cell) and its arms are value types only -- the
-mirror image of a union's reference-only arms; construction, matching and
-tag selection otherwise follow the union rules.</p>
+(tagged storage, no heap cell) and its arms are value types only, where a
+union's arms may hold either family, each in a heap cell; construction,
+matching and tag selection otherwise follow the union rules.</p>
 <h4 id="enumerated-types"><a href="#enumerated-types">11.9.1. Enumerated Types</a></h4>
 <p>An enumerated type is not a separate kind: it is a variant or union whose arms
 carry no data. Whether zerolang should gain a distinct <code>enum</code> is an open
