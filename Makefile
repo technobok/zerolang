@@ -1973,7 +1973,10 @@ perf: $(PERFBIN)
 #
 # +134 a match arm restores the narrowing it displaced: 0 behaviour, 134
 # source.
-ALLOC_BASELINE := 2805847
+#
+# +1,802 a match subject that is a call's owning result is freed: 0 behaviour
+# (the compiler matches on no owning call result), 1,802 source.
+ALLOC_BASELINE := 2807649
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

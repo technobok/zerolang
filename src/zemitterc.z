@@ -21423,6 +21423,25 @@ emitWithField: function {
     vvSet xs: ctx.aliases vid: (defVid :symtab nid: n.nodeid.u64) val: fld.stringView
 }
 
+# genSubjectFieldC -- the instance field a generator body's match subject is
+# held in when no variable holds it (genSubjectField), with the alias that makes
+# the temporary's destroy free the field; "" for any other subject.
+genSubjectFieldC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    nid: u64
+} out String is {
+    tv: symtab.typing.tempOf.get key: nid
+    if tv.none then return "".string
+    gf: symtab.typing.genLocalFieldOf.get key: tv.u64
+    if gf.none then return "".string
+    fnm: zast.nameTextAt :ast ref: gf
+    fld: genFieldC :ctx name: fnm.stringView
+    vvSet xs: ctx.aliases vid: tv val: fld.stringView
+    return fld
+}
+
 # emitGenLocalBind -- a generator body's local, bound. The checker keeps it in a
 # field of the instance (genLocalFieldOf), so the binding stores into that field
 # as a reassignment of it would -- freeing the old value, which a loop body left
@@ -22671,6 +22690,21 @@ emitMatchStmt: function {
         n: (ast.nodes.get i: m.subject.u64)
         tid: (ztypes.tid.create from: vtid.u64)
     ) then sxM = "(*\{sx})"
+    # a call's owning result is held in the checker's temporary, which frees it;
+    # in a generator that temporary is a field of the instance
+    gfM: genSubjectFieldC :ast :symtab :ctx nid: m.subject.u64
+    if gfM.length > 0 then {
+        mtv: (symtab.typing.tempOf.get key: m.subject.u64).or d: (ztypes.vid.create from: 0)
+        mtid: symtab.reg.variableTypeOf id: mtv
+        buf.append (destroyLineC :symtab :ctx tid: mtid nm: gfM.stringView :ind)
+        buf.append "\{ind}\{gfM} = \{sxM};\n"
+        sxM = gfM.take
+    } else {
+        subjH: ast.nodes.get i: m.subject.u64
+        hoM: ownedReceiverHoist :ast :symtab :ctx expr: sx.stringView n: subjH
+        if hoM.length > 0 then sxM = hoM.take
+    }
+    flushArgHoists :ctx :ind :tmp :buf
     l0: "\{ind}\{vc}_t _m\{mN} = \{sxM};\n"
     buf.append l0
     accM: ".tag".string

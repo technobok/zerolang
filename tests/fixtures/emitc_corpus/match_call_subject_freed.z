@@ -1,0 +1,50 @@
+# match_call_subject_freed.z -- a match whose subject is a call's owning result
+# frees that result once the match is done.
+#
+# No variable holds such a subject, and nothing freed it: `match (mk n: 4)`
+# copied the union into the match's temporary and leaked its payload cell. The
+# checker now holds the subject in a temporary of its own, as it holds a value
+# receiver, and the emitter frees it with the scope. In a generator the arms
+# may suspend, so that temporary is a field of the instance: re-binding it on a
+# later pass frees what the previous pass left, and an abandoned iterator's
+# destructor frees what it holds.
+
+pt: record { x: i64 }
+Choice: union { p: (Box pt) t: String }
+
+mk: function {n: i64} out Choice is {
+    if n < 0 then return (Choice.t "neg".string)
+    return (Choice.p (pt x: n))
+}
+
+word: function {n: i64} out (Option String) is {
+    if n == 0 then return (Option String).none
+    return (Option.some "w\{n}")
+}
+
+Pass: generator as {
+    call: function out i64 is {
+        i: 0
+        for i < 3 loop {
+            match (mk n: i) case p then {
+                yield i
+                yield i * 10
+            } case t then null
+            i = i + 1
+        }
+    }
+}
+
+main: function is {
+    match (mk n: 4) case p then print "p" case t then print "t"
+    match (mk n: -1) case p then print "p" case t then print "t"
+    n: match (mk n: 7) case p then 1 case t then 2
+    print "n \{n}"
+    match (word n: 3) case some then print "some" case none then print "none"
+    match (word n: 0) case some then print "some" case none then print "none"
+    for each v: Pass loop print "v \{v}"
+    for each w: Pass loop {
+        print "w \{w}"
+        if w == 10 then break
+    }
+}

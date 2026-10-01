@@ -48023,7 +48023,25 @@ caseSubjectTid: function {
     if subjT.isZero when st.typing.errors.length == errS then {
         reportUnresolvedValue :st :unitDecl :ast nid: casenode.subject
     }
+    # a subject no variable holds -- a call's owning result -- is held, and
+    # freed, by a temporary of the checker's, as a value receiver is
+    if subjT.isZero.not when (receiverIsValue :st :ast :unitDecl nid: casenode.subject) then {
+        ownedReceiverTemp :st :ast recvT: subjT recvNid: casenode.subject.u64
+        genSubjectField :st :ast nid: casenode.subject.u64 tid: subjT
+    }
     return subjT
+}
+
+# genSubjectField -- in a generator body a match's arms may suspend, so the
+# temporary holding its subject is kept in the instance, as a local of the body
+# is (bindGenLocal): a field of the subject's type, freed by the instance's
+# destructor if the body never reaches the temporary's own destroy.
+genSubjectField: function {st: zenv.ZSymbolTable ast: Ast nid: u64 tid: ztypes.tid} is {
+    if st.typing.currentGenTid.isZero then return
+    tv: st.typing.tempOf.get key: nid
+    if tv.none then return
+    fid: mintGenField :st :ast name: "_m" :tid
+    st.typing.genLocalFieldOf.set key: tv.u64 value: fid
 }
 
 # unitParamSubjectTid -- a bare match subject naming a generic UNIT's parameter:
