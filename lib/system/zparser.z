@@ -4189,38 +4189,106 @@ Parser: class {
 # (operators, numbers, and dotted-member selectors never name a unit), so
 # the set drives which sibling units and subunits parse() loads.
 #
-# `externs` and `scope` are threaded as borrowed list params (appending to
-# a borrowed reftype mutates the caller's list -- the lib `extendraw`
-# pattern), so the child loops never move an owned accumulator across an
-# iteration (no E0200) and collectExterns returns a plain owned local.
-# Both carry Ast.names pool ids: a scope membership test is an integer
-# compare, and text is materialised only at the two edges (the unit-name
-# shape test, and collectExterns' returned file names).
+# `externs` and `scope` are threaded as borrowed params (mutating a borrowed
+# reftype mutates the caller's), so the child loops never move an owned
+# accumulator across an iteration (no E0200) and collectExterns returns a
+# plain owned local. Both carry Ast.names pool ids, and each answers
+# membership by indexing with one: text is materialised only at the two
+# edges (the unit-name shape test, and collectExterns' returned file names).
 #
 # Bias: keep a name unless it is provably bound. A spurious extern fails
 # to resolve to a file and is harmless; a missed extern would drop a unit.
 # ---------------------------------------------------------------------------
 
-# Record `name` as an extern unless it is bound, not a valid unit name, or
-# already recorded.
+# EwScope -- the names bound at one point of the extern walk. `stack` holds
+# them in binding order, so a block's bindings drop at its end; `counts`
+# holds how often each name id is bound, so whether a name is bound is one
+# index. A scan of the stack per name reference made the walk quadratic in
+# the names a unit binds: 43% of a 4,000-function compile.
+EwScope: class {
+    # the bound names, innermost last
+    stack: ListVal zast.nameid
+    # how many entries of `stack` each name id has, indexed by the id
+    counts: ListVal u32
+} as {
+    # an empty scope over a pool of `names` ids: `counts` is sized once, so it
+    # never grows by copying as higher ids are bound
+    create: function {names: u64} out this is {
+        return (meta.create stack: ListVal zast.nameid counts: (ListVal u32 capacity: names))
+    }
+
+    # bind `id` until the scope is truncated below this point. A ref of 0 -- a
+    # positional arm, which binds no name -- binds nothing.
+    bind: function {:this id: zast.nameid} is {
+        if id.isZero then return
+        n: id.u64
+        for this.counts.length <= n loop this.counts.append 0
+        this.counts.set i: n val: (this.counts.get i: n) + 1
+        this.stack.append id
+    }
+
+    # whether `id` is bound here
+    has: function {this: this.view id: zast.nameid} out bool is {
+        n: id.u64
+        if n >= this.counts.length then return false
+        return (this.counts.get i: n) > 0
+    }
+
+    # how many names are bound: the point a block truncates back to
+    depth: function {this: this.view} out u64 is {
+        return this.stack.length
+    }
+
+    # drop the bindings made since depth `n` (block / scope exit)
+    truncate: function {:this n: u64} is {
+        for this.stack.length > n loop {
+            id: this.stack.pop
+            this.counts.set i: id.u64 val: (this.counts.get i: id.u64) - 1
+        }
+    }
+
+    # bind a scope seed named by its text (`this` / `type` / `meta`). A name the
+    # pool never interned cannot be referenced either, so a miss binds nothing.
+    bindKnown: function {:this ast: Ast.view text: StringView} is {
+        this.bind id: (zast.poolFind pool: ast.names :text)
+    }
+
+    # bind the names the namedoperation arms of `items` define (a unit body, a
+    # parameter list)
+    bindNamesOf: function {:this ast: Ast.view items: zast.kidspan} is {
+        ei: u64
+        en: items.count.u64
+        for ei < en loop {
+            eid: zast.kidAt kids: ast.kids span: items i: ei
+            ei = ei + 1
+            item: ast.nodes.get i: eid.u64
+            if item.namedoperation then this.bind id: item.name
+        }
+    }
+}
+
+# Record `name` as an extern unless it is bound, already recorded, or not a
+# valid unit name.
 ewEmit: function {
     # the tree the name was read from
     ast: Ast.view
-    # the accumulating extern list; a name already in it is not added twice
+    # the accumulating extern list, in first-reference order
     externs: ListVal u32
+    # the names already in `externs`; a name in it is not added twice
+    seen: IdSet zast.nameid
     # the names bound so far. A name in scope is not an extern
-    scope: (ListVal u32).view
+    scope: EwScope.view
     # the candidate. It is kept unless PROVABLY bound: a spurious extern fails
     # to resolve to a file and is harmless, while a missed one would drop a unit
     nameId: zast.nameid
 } is {
-    inScope: scope.contains item: nameId
-    if inScope then return
-    dup: externs.contains item: nameId
-    if dup then return
+    if (scope.has id: nameId) or (seen.has item: nameId) then return
     t: zast.nameTextAt :ast ref: nameId
     valid: isValidUnitName name: t.stringView
-    if valid then externs.append nameId
+    if valid then {
+        externs.append nameId
+        seen.add nameId
+    }
 }
 
 # Push an optional bound name (a namedoperation / param / loop label).
@@ -4230,14 +4298,6 @@ ewBindOptName: function {scope: ListVal u32 ref: zast.nameid} is {
     scope.append ref
 }
 
-# Push a scope seed named by its text (`this` / `type` / `meta`). A name the
-# pool never interned cannot be referenced either, so a miss binds nothing.
-ewBindKnown: function {ast: Ast.view scope: ListVal u32 text: StringView} is {
-    id: zast.poolFind pool: ast.names :text
-    if id.isZero then return
-    scope.append id
-}
-
 # Bind one namedoperation arm's name.
 ewBindOneName: function {scope: ListVal u32 item: astnode.view} is {
     if item.namedoperation then {
@@ -4245,28 +4305,12 @@ ewBindOneName: function {scope: ListVal u32 item: astnode.view} is {
     }
 }
 
-# Bind the top-level names of a converted id-list (unit bodies).
-ewBindNameIds: function {ast: Ast.view scope: ListVal u32 items: zast.kidspan} is {
-    ei: u64
-    en: items.count.u64
-    for ei < en loop {
-        eid: zast.kidAt kids: ast.kids span: items i: ei
-        ewBindOneName :scope item: (ast.nodes.get i: eid.u64)
-        ei = ei + 1
-    }
-}
-
-# ewBindNameList -- ewBindNameIds over a list the parser still holds, before
-# the node that will own the span is built. Same core, different accessor.
+# ewBindNameList -- the names a unit body defines, collected from the list
+# the parser still holds, before the node that will own the span is built.
 ewBindNameList: function {ast: Ast.view scope: ListVal u32 items: (ListVal u32).view} is {
     for each eid: items loop {
         ewBindOneName :scope item: (ast.nodes.get i: eid.u64)
     }
-}
-
-# Drop bindings introduced since depth `n` (block / scope exit).
-ewTruncate: function {scope: ListVal u32 n: u64} is {
-    for scope.length > n loop scope.pop
 }
 
 # Walk an optional child node if present.
@@ -4274,17 +4318,18 @@ ewTruncate: function {scope: ListVal u32 n: u64} is {
 ewWalkOptAt: function {
     # the tree walked
     ast: Ast.view
-    # the extern list this walk adds to
+    # the extern list this walk adds to, and the names already in it
     externs: ListVal u32
+    seen: IdSet zast.nameid
     # the names bound at this point
-    scope: ListVal u32
+    scope: EwScope
     # the optional child, 0 when there is none -- which is the whole reason for
     # the `At` twin
     oId: zast.nodeid
 } is {
     if oId.isZero then return
     o: ast.nodes.get i: oId.u64
-    ewWalk :ast :externs :scope node: o
+    ewWalk :ast :externs :seen :scope node: o
 }
 
 # Walk every node of an id list.
@@ -4293,11 +4338,12 @@ ewWalkOptAt: function {
 ewWalkList: function {
     ast: Ast.view
     externs: ListVal u32
-    scope: ListVal u32
+    seen: IdSet zast.nameid
+    scope: EwScope
     items: (ListVal u32).view
 } is {
     for each wid: items loop {
-        ewWalk :ast :externs :scope node: (ast.nodes.get i: wid.u64)
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: wid.u64)
     }
 }
 
@@ -4305,10 +4351,11 @@ ewWalkList: function {
 ewWalkIds: function {
     # the tree walked
     ast: Ast.view
-    # the extern list the children's walks add to
+    # the extern list the children's walks add to, and the names already in it
     externs: ListVal u32
+    seen: IdSet zast.nameid
     # the names bound at this point
-    scope: ListVal u32
+    scope: EwScope
     # the children walked in order
     items: zast.kidspan
 } is {
@@ -4316,7 +4363,7 @@ ewWalkIds: function {
     wn: items.count.u64
     for wi < wn loop {
         wid: zast.kidAt kids: ast.kids span: items i: wi
-        ewWalk :ast :externs :scope node: (ast.nodes.get i: wid.u64)
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: wid.u64)
         wi = wi + 1
     }
 }
@@ -4327,21 +4374,22 @@ ewWalkIds: function {
 ewWalkForCond: function {
     # the tree walked
     ast: Ast.view
-    # the extern list the header's walk adds to
+    # the extern list the header's walk adds to, and the names already in it
     externs: ListVal u32
+    seen: IdSet zast.nameid
     # the names bound at this point; a for header BINDS its loop name, so the
     # body sees it
-    scope: ListVal u32
+    scope: EwScope
     # the for header's condition, which may introduce that binding
     cond: astnode.view
 } is {
     match (
         cond
     ) case namedoperation then {
-        ewWalk :ast :externs :scope node: (ast.nodes.get i: cond.operation.u64)
-        ewBindOptName :scope ref: cond.name
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: cond.operation.u64)
+        scope.bind id: cond.name
     } else {
-        ewWalk :ast :externs :scope node: cond
+        ewWalk :ast :externs :seen :scope node: cond
     }
 }
 
@@ -4351,101 +4399,107 @@ ewWalkForCond: function {
 # the generic arm would build a list of those ids per node visited. Everything
 # else recurses over zast.childIds. Emits atomid references; threads the bound
 # scope through nested definitions and blocks.
-ewWalk: function {ast: Ast.view externs: ListVal u32 scope: ListVal u32 node: astnode.view} is {
+ewWalk: function {
+    ast: Ast.view
+    externs: ListVal u32
+    seen: IdSet zast.nameid
+    scope: EwScope
+    node: astnode.view
+} is {
     match (
         node
     ) case atomid then {
-        ewEmit :ast :externs :scope nameId: node.name
+        ewEmit :ast :externs :seen :scope nameId: node.name
     } case labelvalue then {
         # `:name` is `name: name`: a reference to `name` (a `public:` block
         # entry that lists a hidden subunit is what loads its file)
-        ewEmit :ast :externs :scope nameId: node.name
+        ewEmit :ast :externs :seen :scope nameId: node.name
     } case dottedpath then {
         # only the base can name a unit; a member selector never does
-        ewWalk :ast :externs :scope node: (ast.nodes.get i: node.parent.u64)
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.parent.u64)
     } case assignment then {
         # binds its name for what follows, not for its own value
-        ewWalk :ast :externs :scope node: (ast.nodes.get i: node.value.u64)
-        scope.append node.name
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.value.u64)
+        scope.bind id: node.name
     } case statement then {
-        base: scope.length
-        ewWalkIds :ast :externs :scope items: node.statements
-        ewTruncate :scope n: base
+        base: scope.depth
+        ewWalkIds :ast :externs :seen :scope items: node.statements
+        scope.truncate n: base
     } case forexpr then {
-        base: scope.length
+        base: scope.depth
         cox1179: u64
         for cox1179 < node.conditions.count.u64 loop {
             fc: zast.kidAt kids: ast.kids span: node.conditions i: cox1179
             cox1179 = cox1179 + 1
-            ewWalkForCond :ast :externs :scope cond: (ast.nodes.get i: fc.u64)
+            ewWalkForCond :ast :externs :seen :scope cond: (ast.nodes.get i: fc.u64)
         }
-        ewWalkOptAt :ast :externs :scope oId: node.body
-        ewWalkIds :ast :externs :scope items: node.postconditions
-        ewTruncate :scope n: base
+        ewWalkOptAt :ast :externs :seen :scope oId: node.body
+        ewWalkIds :ast :externs :seen :scope items: node.postconditions
+        scope.truncate n: base
     } case withexpr then {
-        base: scope.length
-        ewWalk :ast :externs :scope node: (ast.nodes.get i: node.value.u64)
-        scope.append node.name
-        ewWalk :ast :externs :scope node: (ast.nodes.get i: node.body.u64)
-        ewTruncate :scope n: base
+        base: scope.depth
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.value.u64)
+        scope.bind id: node.name
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.body.u64)
+        scope.truncate n: base
     } case caseclause then {
         # the arm pattern names an arm of the subject, never a unit
-        ewWalk :ast :externs :scope node: (ast.nodes.get i: node.statement.u64)
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.statement.u64)
     } case statementline then {
-        ewWalk :ast :externs :scope node: (ast.nodes.get i: node.statementline.u64)
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.statementline.u64)
     } case call then {
-        ewWalk :ast :externs :scope node: (ast.nodes.get i: node.callable.u64)
-        ewWalkIds :ast :externs :scope items: node.arguments
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.callable.u64)
+        ewWalkIds :ast :externs :seen :scope items: node.arguments
     } case atomstring then {
-        ewWalkIds :ast :externs :scope items: node.stringparts
+        ewWalkIds :ast :externs :seen :scope items: node.stringparts
     } case namedoperation then {
-        ewWalk :ast :externs :scope node: (ast.nodes.get i: node.operation.u64)
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.operation.u64)
     } case ifexpr then {
-        ewWalkIds :ast :externs :scope items: node.clauses
-        ewWalkOptAt :ast :externs :scope oId: node.elseclause
+        ewWalkIds :ast :externs :seen :scope items: node.clauses
+        ewWalkOptAt :ast :externs :seen :scope oId: node.elseclause
     } case ifclause then {
-        ewWalkIds :ast :externs :scope items: node.conditions
-        ewWalk :ast :externs :scope node: (ast.nodes.get i: node.statement.u64)
+        ewWalkIds :ast :externs :seen :scope items: node.conditions
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.statement.u64)
     } case caseexpr then {
-        ewWalk :ast :externs :scope node: (ast.nodes.get i: node.subject.u64)
-        ewWalkIds :ast :externs :scope items: node.clauses
-        ewWalkOptAt :ast :externs :scope oId: node.elseclause
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.subject.u64)
+        ewWalkIds :ast :externs :seen :scope items: node.clauses
+        ewWalkOptAt :ast :externs :seen :scope oId: node.elseclause
     } case reassignment then {
-        ewWalk :ast :externs :scope node: (ast.nodes.get i: node.topath.u64)
-        ewWalk :ast :externs :scope node: (ast.nodes.get i: node.value.u64)
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.topath.u64)
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.value.u64)
     } case functiondef then {
-        base: scope.length
-        ewBindNameIds :ast :scope items: node.parameters
-        ewBindNameIds :ast :scope items: node.asItems
-        ewWalkOptAt :ast :externs :scope oId: node.returntype
-        ewWalkIds :ast :externs :scope items: node.parameters
-        ewWalkOptAt :ast :externs :scope oId: node.body
-        ewWalkIds :ast :externs :scope items: node.asItems
-        ewTruncate :scope n: base
+        base: scope.depth
+        scope.bindNamesOf :ast items: node.parameters
+        scope.bindNamesOf :ast items: node.asItems
+        ewWalkOptAt :ast :externs :seen :scope oId: node.returntype
+        ewWalkIds :ast :externs :seen :scope items: node.parameters
+        ewWalkOptAt :ast :externs :seen :scope oId: node.body
+        ewWalkIds :ast :externs :seen :scope items: node.asItems
+        scope.truncate n: base
     } case objectdef then {
-        base: scope.length
-        ewBindKnown :ast :scope text: "this"
-        ewBindKnown :ast :scope text: "type"
-        ewBindKnown :ast :scope text: "meta"
-        ewBindNameIds :ast :scope items: node.isItems
-        ewBindNameIds :ast :scope items: node.asItems
-        ewWalkIds :ast :externs :scope items: node.isItems
-        ewWalkIds :ast :externs :scope items: node.asItems
-        ewTruncate :scope n: base
+        base: scope.depth
+        scope.bindKnown :ast text: "this"
+        scope.bindKnown :ast text: "type"
+        scope.bindKnown :ast text: "meta"
+        scope.bindNamesOf :ast items: node.isItems
+        scope.bindNamesOf :ast items: node.asItems
+        ewWalkIds :ast :externs :seen :scope items: node.isItems
+        ewWalkIds :ast :externs :seen :scope items: node.asItems
+        scope.truncate n: base
     } case unitdef then {
-        base: scope.length
-        ewBindKnown :ast :scope text: "this"
-        ewBindKnown :ast :scope text: "type"
-        ewBindKnown :ast :scope text: "meta"
+        base: scope.depth
+        scope.bindKnown :ast text: "this"
+        scope.bindKnown :ast text: "type"
+        scope.bindKnown :ast text: "meta"
         # a `public:` block's entries name the ENCLOSING unit's definitions
         # (`:impl`, `perimeter: perimImpl`): binding the entry names first
         # would hide the references they are, and a listed hidden subunit
         # loads on the strength of that reference alone
-        if node.kind.publicNs.not then ewBindNameIds :ast :scope items: node.body
-        ewWalkIds :ast :externs :scope items: node.body
-        ewTruncate :scope n: base
+        if node.kind.publicNs.not then scope.bindNamesOf :ast items: node.body
+        ewWalkIds :ast :externs :seen :scope items: node.body
+        scope.truncate n: base
     } case program then null else {
-        ewWalkList :ast :externs :scope items: (zast.childIds :ast n: node)
+        ewWalkList :ast :externs :seen :scope items: (zast.childIds :ast n: node)
     }
 }
 
@@ -4455,12 +4509,16 @@ ewWalk: function {ast: Ast.view externs: ListVal u32 scope: ListVal u32 node: as
 # extern names in source-reference order; parse() loads them as units.
 collectExterns: function {ast: Ast.view body: (ListVal u32).view} out List String is {
     externIds: ListVal u32
-    scope: ListVal u32
-    ewBindKnown :ast :scope text: "this"
-    ewBindKnown :ast :scope text: "type"
-    ewBindKnown :ast :scope text: "meta"
-    ewBindNameList :ast :scope items: body
-    ewWalkList :ast externs: externIds :scope items: body
+    seen: IdSet zast.nameid
+    scope: EwScope.create names: ast.names.length
+    scope.bindKnown :ast text: "this"
+    scope.bindKnown :ast text: "type"
+    scope.bindKnown :ast text: "meta"
+    for each bid: body loop {
+        item: ast.nodes.get i: bid.u64
+        if item.namedoperation then scope.bind id: item.name
+    }
+    ewWalkList :ast externs: externIds :seen :scope items: body
     externs: List String capacity: externIds.length
     for each eid: externIds loop {
         externs.append (zast.poolTextCopy pool: ast.names ref: (zast.nameid.create from: eid.u32))
