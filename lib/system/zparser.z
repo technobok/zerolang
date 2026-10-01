@@ -1281,6 +1281,15 @@ Parser: class {
     acceptCall: function {:this lex: zlexer.Lexer paths: (ListVal u32).take} out astnode is {
         stack: Parser.reverseStack src: paths
         callable: stack.pop
+        return (this.acceptCallArgs :lex :callable :stack)
+    }
+
+    # acceptCallArgs -- acceptCall once its head is read: `stack` holds the
+    # remaining paths reversed, the unlabelled argument's operation when there
+    # is one.
+    acceptCallArgs: function {
+        :this lex: zlexer.Lexer callable: u32 stack: (ListVal u32).take
+    } out astnode is {
         cp: zast.posOf n: (this.ast.nodes.get i: callable.u64)
         abase: this.argStack.length
         nbase: this.argNameStack.length
@@ -1444,6 +1453,28 @@ Parser: class {
             if labelNext then return (this.acceptCall :lex :paths)
         }
         return (this.foldBinop :paths :lex)
+    }
+
+    # operationOrCallFromBase -- operationOrCallFromPaths over the operation at
+    # `base`, with the same three answers in the same order. A trailing error
+    # path is the result. A call whose head is its only path takes no list: the
+    # head comes off the stack and its arguments are all labelled. One path
+    # with no label after it is the operation itself.
+    operationOrCallFromBase: function {:this base: u64 lex: zlexer.Lexer} out astnode is {
+        n: this.pathCount :base
+        last: this.opStack.get i: this.opStack.length - 1
+        if (zast.isErrorAt ast: this.ast id: last) then {
+            for this.opStack.length > base loop this.opStack.pop
+            return (this.ast.nodes.get i: last.u64)
+        }
+        if n == 1 then {
+            head: this.opStack.pop
+            if (Parser.ttIsLabel tt: lex.peekType) then {
+                return (this.acceptCallArgs :lex callable: head stack: ListVal u32)
+            }
+            return (this.ast.nodes.get i: head.u64)
+        }
+        return (this.operationOrCallFromPaths paths: (this.takePaths :base) :lex)
     }
 
     # operation-or-call: top-level Option boundary over the bare core;
@@ -3951,13 +3982,7 @@ Parser: class {
                     startCol: tPos.colno
                 )
             } case none then {
-                # one path and no label after it is the operation itself,
-                # exactly as the fold returns it
-                if n == 1 when (Parser.ttIsLabel tt: lex.peekType).not then {
-                    only: this.opStack.pop
-                    return (this.ast.nodes.get i: only.u64)
-                }
-                return (this.operationOrCallFromPaths paths: (this.takePaths base: pbase) :lex)
+                return (this.operationOrCallFromBase base: pbase :lex)
             }
         }
     }
