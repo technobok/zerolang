@@ -238,7 +238,25 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-10-01 | 9e05d9e3 | [recovery P3: the allocation sites the census ranked first](#r-9e05d9e3) | 0.69s | -- | 119MB / -- | 79 / 331 / 283 (total 693) | 2,245,533 | 350MB | -- | 153,505 |
 | 2026-10-01 | 957d2327 | [recovery P4: a part that only reads takes no ordered temp](#r-957d2327) | 0.70s | -- | 121MB / -- | 84 / 336 / 279 (total 729) | 2,189,755 | 350MB | -- | 153,622 |
 | 2026-10-01 | 8b777544 | [recovery P5: the operator path](#r-8b777544) | 0.76s | -- | 121MB / -- | 84 / 383 / 340 (total 807) | 2,095,237 | 346MB | -- | 153,651 |
+| 2026-10-02 | 059ef68f | [recovery P6: pin-only blocks flattened, dead code out](#r-059ef68f) | 0.71s | -- | 121MB / -- | 92 / 335 / 284 (total 711) | 2,094,311 | 346MB | -- | 152,805 |
 
+
+<a id="r-059ef68f"></a>
+**Recovery P6: pin-only blocks flattened, dead code out** (`a8894ece`,
+`059ef68f`). Behaviour-neutral, so the numbers stand still: allocations
+2,095,237 -> 2,094,311, instructions 7,305M -> 7,317M (+0.15%, the walk over
+the `.drop` lines and the flattened scopes), source 153,651 -> 152,805 lines.
+- `a8894ece`: 429 of 736 bare blocks flattened (Q9). Where each `.drop`
+  goes was decided by the checker's E0200s: 62 drops.
+- `059ef68f`: five unreferenced methods deleted.
+
+**Not done.**
+- The Ctx split into setup tables and mutable state. The plan expected ~63
+  copy-first workarounds; there are 17, against 842 functions that take a
+  Ctx.
+- The rest of the P6 list (lock entry points, flag records, side tables,
+  parser recursion), each an open-ended structural rewrite with no
+  measured payoff.
 
 <a id="r-8b777544"></a>
 **Recovery P5: the operator path** (`1e728d01`, `8b777544`). Allocations
