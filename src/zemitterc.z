@@ -1226,38 +1226,24 @@ hasUnfilledHole: function {text: StringView} out bool is {
     return false
 }
 
-# hasHoleBinding -- is `name` bound at all? Separate from its VALUE, because a hole
-# may legitimately fill with NOTHING: `@TAG_X@` is `.tag` while X is a tagged
-# struct and empty once X is unwrapped, and "" from holeBindingText alone cannot be
-# told from a hole nobody bound.
-hasHoleBinding: function {
+# appendHoleBinding -- append the text hole `name` fills with to `buf`, and
+# answer whether anything binds it. Whether it is bound is a separate answer
+# from what it appends, because a hole may legitimately fill with NOTHING:
+# `@TAG_X@` is `.tag` while X is a tagged struct and empty once X is
+# unwrapped. A CNAME binding fills with the bound name minus its `z_` prefix,
+# because the body spells that prefix itself (`z_@File@_t`), and a value
+# carrying no `z_` is a canon that resolved to nothing, which appends nothing
+# and is reported as fatal at the fill site. A RAW binding fills verbatim: an
+# emitted operand is an arbitrary C expression, not a type's name, so the
+# prefix rule would be a lie about it. Cnames are consulted first.
+appendHoleBinding: function {
+    buf: String.borrow
     name: StringView
     bindNames: (List String).view
+    bindVals: (List String).view
     rawNames: (List String).view
+    rawVals: (List String).view
 } out bool is {
-    for each k: bindNames loop {
-        if k.stringView == name then return true
-    }
-    for each rk: rawNames loop {
-        if rk.stringView == name then return true
-    }
-    return false
-}
-
-# holeBindingText -- the text a hole fills with. A CNAME binding fills with the
-# bound name minus its `z_` prefix, because the body spells that prefix itself
-# (`z_@File@_t`), and a value carrying no `z_` is a canon that resolved to
-# nothing -- reported as fatal at the fill site. A RAW binding fills verbatim:
-# an emitted operand is an arbitrary C expression, not a type's name, so the
-# prefix rule would be a lie about it. Cnames are consulted first; a name in
-# neither list is fatal.
-holeBindingText: function {
-    name: StringView
-    bindNames: List String
-    bindVals: List String
-    rawNames: List String
-    rawVals: List String
-} out String is {
     bi: u64
     bn: bindNames.length
     for bi < bn loop {
@@ -1265,9 +1251,8 @@ holeBindingText: function {
         if k.stringView == name then {
             v: bindVals.get i: bi
             vv: v.stringView
-            if (vv.startsWith prefix: "z_").not then return "".string
-            rest: vv.substring from: 2 to: vv.length
-            return rest.string
+            if (vv.startsWith prefix: "z_") then buf.append (vv.substring from: 2 to: vv.length)
+            return true
         }
         bi = bi + 1
     }
@@ -1276,12 +1261,12 @@ holeBindingText: function {
     for ri < rn loop {
         rk: rawNames.get i: ri
         if rk.stringView == name then {
-            rv: rawVals.get i: ri
-            return rv.copy
+            buf.append (rawVals.get i: ri)
+            return true
         }
         ri = ri + 1
     }
-    return "".string
+    return false
 }
 
 # fillHoles -- fill every `z_@Name@` hole in a runtime fragment from the
@@ -1343,10 +1328,8 @@ fillHoles: function {
                 ) case some then {
                     endn: at + 1 + ho
                     nm: tv.substring from: at + 1 to: endn
-                    val: holeBindingText name: nm :bindNames :bindVals :rawNames :rawVals
-                    if (hasHoleBinding name: nm :bindNames :rawNames) then {
-                        buf.append val
-                    } else {
+                    if (appendHoleBinding :buf name: nm :bindNames :bindVals :rawNames :rawVals
+                    ).not then {
                         fh: "fragment \{path}: hole @\{nm}@ is bound to nothing"
                         fails.append from: fh
                         bad = true
