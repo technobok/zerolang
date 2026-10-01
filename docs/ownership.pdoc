@@ -199,16 +199,19 @@ never writes pays for a reference it does not use, and lint L030 says so.
   copied). The exceptions are passed by reference: #~"this" in methods, so
   that methods can act on the fields in the value directly, and a parameter
   marked #~".borrow" (writable) or #~".view" (readonly).]
-  [#*: A class, a borrowed String and a List are passed by reference (a
-  pointer to the stack slot where the instance lives), so the callee's writes
-  reach the caller's value.]
+  [#*: A class, a union (#~"Option" and #~"Result" among them), a borrowed
+  String and a List are passed by reference (a pointer to the stack slot where
+  the instance lives), so the callee's writes reach the caller's value. For a
+  union that includes a write through a narrowed payload, whatever the arm
+  holds: the union is never copied to be borrowed, as a String is not.]
   [#*: A Set and a Map live on the heap: the value #+ is its pointer, and that
   pointer is what is passed.]
-  [#*: A union (#~"Option" and #~"Result" among them) and a protocol instance
-  are passed by value: their #~"{tag, data}" or #~"{vtable, data}" header is
-  copied and shares the payload it points at. The copy owns nothing -- an
-  unmarked or #~".view" parameter frees nothing, and the caller's source is
-  locked for the call -- so it is a borrow like any other.]
+  [#*: A protocol instance is passed by value: its #~"{vtable, data}" header is
+  copied and shares the boxed conformer it points at. The copy owns nothing --
+  an unmarked or #~".view" parameter frees nothing, and the caller's source is
+  locked for the call -- so it is a borrow like any other. A view union
+  (#~"OptionView", #~"OptionViewVal") holds only a pointer to what it views and
+  is passed by value, as the other views are.]
   [#*: A receiver (#~"this") is a pointer in every family. Handed on as an
   argument, it is passed in the argument's own convention: loaded for a
   by-value parameter, as it stands for a by-reference one.]
@@ -1501,9 +1504,9 @@ scope, the locks held by its non-owned fields are released together with the
 instance itself.
 
 A non-owned field holds its source the way a parameter of its type is passed
-(see Passing Conventions): a class, a String or a List by pointer; a Map or a
-Set as its own heap pointer; a union, an Option, a Result or a protocol by
-value, a header sharing the payload it points at. A value type's #~".borrow"
+(see Passing Conventions): a class, a union (an Option, a Result), a String or
+a List by pointer; a Map or a Set as its own heap pointer; a protocol by value,
+a header sharing the conformer it points at. A value type's #~".borrow"
 field is refused: the class holds a copy of it, as a #~".borrow" binding of one
 would, so the marker names a borrow that does not happen.
 
@@ -1596,7 +1599,7 @@ parameters of the same type:
 
 #ul:
   [#*: Reftype #~".borrow" parameter -- the reftype's normal C calling
-  convention (see Passing Conventions): a class's pointer, a union's or a
+  convention (see Passing Conventions): a class's or a union's pointer, a
   protocol instance's header.]
   [#*: Generic #~".borrow" parameter -- passed using the convention of whatever
   concrete type the generic parameter monomorphizes to (reftype: pointer;

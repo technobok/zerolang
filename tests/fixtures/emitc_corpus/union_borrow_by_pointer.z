@@ -1,0 +1,123 @@
+# union_borrow_by_pointer.z -- a BORROWED union is a pointer to the caller's
+# union, as a borrowed String is: a write through a narrowed payload reaches
+# the caller from every position a union is borrowed in.
+#
+# The positions: a parameter (`.borrow` by default, and `.view` read), a match
+# on a parameter and on a local, an `if` guard, a borrow binding, a List
+# element (`getMut`, and `get` read), a class's borrowed field, a borrowed
+# return, an rvalue argument, Option and Result parameters, and a match whose
+# arm suspends a generator. Each write is a field write or a mutating method on
+# the payload; the caller then reads the payload back.
+
+pt: record { x: i64 } as {
+    bump: function {:this} is { this.x = this.x + 10 }
+}
+Cell: class { n: i64 } as {
+    inc: function {:this} is { this.n = this.n + 1 }
+}
+Choice: union { p: (Box pt) t: String  c: Cell }
+
+show: function {u: Choice.view} out String is {
+    match (u) case p then return "p \{u.x}" case t then return "t \{u}" case c then return "c \{u.n}"
+}
+
+viaMatch: function {u: Choice} is {
+    match (u) case p then u.x = u.x + 1 case t then u.append "!" case c then u.inc
+}
+
+viaMethod: function {u: Choice} is {
+    match (u) case p then u.bump case t then null case c then u.inc
+}
+
+viaGuard: function {u: Choice} is {
+    if u.p then u.bump
+    if u.t then u.append "?"
+}
+
+viaBinding: function {u: Choice} is {
+    b: u
+    match (b) case p then b.x = b.x + 100 case t then b.append "+" case c then b.inc
+}
+
+Holder: class { u: Choice.borrow } as {
+    poke: function {:this} is {
+        match (this.u) case p then null case t then null case c then null
+        viaMatch u: this.u
+    }
+}
+
+pick: function {xs: (List Choice).borrow i: u64} outx Choice.borrow is {
+    return (xs.getMut :i)
+}
+
+mk: function {n: i64} out Choice is {
+    return (Choice.p (pt x: n))
+}
+
+firstOf: function {o: Option Cell} is {
+    match (o) case some then o.inc case none then null
+}
+
+okOf: function {r: (Result Cell E: Cell)} is {
+    match (r) case ok then r.inc case err then r.inc
+}
+
+Steps: generator { start: i64 } as {
+    call: function out i64 is {
+        u: Choice.p (pt x: this.start)
+        match (u) case p then {
+            yield u.x
+            u.bump
+            yield u.x
+        } case t then null case c then null
+        if u.p then yield u.x
+    }
+}
+
+main: function is {
+    a: Choice.p (pt x: 1)
+    viaMatch u: a
+    viaMethod u: a
+    viaGuard u: a
+    viaBinding u: a
+    print (show u: a)
+    b: Choice.t "s".string
+    viaMatch u: b
+    viaGuard u: b
+    viaBinding u: b
+    print (show u: b)
+    c: Choice.c (Cell n: 0)
+    viaMatch u: c
+    viaMethod u: c
+    viaBinding u: c
+    print (show u: c)
+    loc: Choice.p (pt x: 5)
+    match (loc) case p then loc.bump case t then null case c then null
+    if loc.p then loc.x = loc.x * 2
+    print (show u: loc)
+    xs: List Choice
+    xs.append (Choice.p (pt x: 7))
+    xs.append (Choice.t "e".string)
+    {
+        e: xs.getMut i: 0
+        match (e) case p then e.bump case t then null case c then null
+    }
+    {
+        r: pick :xs i: 1
+        viaMatch u: r
+    }
+    print (show u: (xs.get i: 0))
+    print (show u: (xs.get i: 1))
+    h: Holder u: a
+    h.poke
+    print (show u: a)
+    print (show u: (mk n: 40))
+    viaMatch u: (mk n: 41)
+    o: Option.some (Cell n: 9)
+    firstOf :o
+    match (o) case some then print "some \{o.n}" case none then null
+    r: (Result Cell E: Cell).ok (Cell n: 3)
+    okOf :r
+    match (r) case ok then print "ok \{r.n}" case err then null
+    for each v: (Steps start: 2) loop print "step \{v}"
+}

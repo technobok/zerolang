@@ -1976,7 +1976,10 @@ perf: $(PERFBIN)
 #
 # +1,802 a match subject that is a call's owning result is freed: 0 behaviour
 # (the compiler matches on no owning call result), 1,802 source.
-ALLOC_BASELINE := 2807649
+#
+# +330 a borrowed union is a pointer: -167 behaviour (a match on a variable
+# reads it in place, with no copy and no per-arm slot text), +497 source.
+ALLOC_BASELINE := 2807979
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
