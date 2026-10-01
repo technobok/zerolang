@@ -1033,7 +1033,7 @@ argument binds nothing, and the call is an error rather than a dropped value:
   """
 
 Nothing here reads the spelling of a name or counts the segments of a path.
-#~"io.open \"f\" mode: READ" needs no special case: #~"open" declares no
+#~"io.open \"f\" mode: _.READ" needs no special case: #~"open" declares no
 receiver, so the first question settles it and the base — a unit — never has to
 be classified at all. A local binding that shadows a type name is settled by the
 second: the name resolves to a value, so the call is a method call on it.
@@ -1082,11 +1082,10 @@ no method, so that is reported as what it is.
 
 Argument evaluations are also subject to ownership locking. See #>"ownership".
 
-The expression for an argument value is first evaluated in the current scope.
-If the value is a single identifier (undotted) and it does not resolve up to
-the current module level, it is assumed to be within the scope of the argument
-type. This allows enum arguments to be specified without qualifier (as long as
-there is no local definition of that same identifier).
+The expression for an argument value is evaluated in the current scope. An
+argument that names an arm of its parameter's type, or constructs one, without
+spelling the type writes #~"_" for it -- #~"mode: _.READ" -- see
+[#> to=underscore: Underscore].
 
 #----: Call Examples
 
@@ -1149,7 +1148,7 @@ a function-style call #_*"is" the receiver:
   #               and by 'r:'
   """
 
-Resolving as a child of the argument type:
+Naming an arm of the argument's type:
 
 #code language=zerolang: """
   # ----- in unit file "io"
@@ -1163,9 +1162,9 @@ Resolving as a child of the argument type:
 
   open: io.open
 
-  # fmode subtypes can be specified directly (as long as READ is not
-  # defined locally)
-  fh: open "MyFile.txt" mode: READ
+  # `_` in an argument is the type of the parameter it fills, so an arm
+  # of the parameter's type is written `_.READ`
+  fh: open "MyFile.txt" mode: _.READ
 
   # same as line above...
   mode: io.mode
@@ -1644,7 +1643,7 @@ fails at the offending instantiation — there is no arm to run.
   }
 
 
-  match f: (open filename) case ok then {
+  with f: (open filename) do match f case ok then {
       # f is ok (filehandle)
       f.write data
   } else {
@@ -1653,7 +1652,7 @@ fails at the offending instantiation — there is no arm to run.
   }   # 'f' is closed (destroyed) here (or was never opened)
 
 
-  match thing.err then return
+  if thing.err then return
   # type of 'thing' has been narrowed to exclude 'err'
   """
 
@@ -3624,6 +3623,24 @@ It can be used to:
 
 - create instances of that argument's type (#~"_.create ...")
 - specifying enum argument values
+
+#~"_" starts the argument -- #~"_.READ", #~"_.create x: 1" -- and means the
+type itself, so it reaches a type another unit declares (#~"io.open p mode:
+_.read") as readily as one of the caller's own. A type that has no name -- an
+instance of a generic, such as #~"(List i64)" -- cannot be spelled by #~"_",
+and is an error at the #~"_". A bare #~"_" with nothing after it names no
+member, and is an unknown reference.
+
+#code language=zerolang: """
+  mode: variant {READ: null WRITE: null}
+  pt: record {x: i64 y: i64}
+
+  openit: function {name: StringView m: mode} out i64 is { ... }
+  dist: function {p: pt} out i64 is { ... }
+
+  a: openit name: "f" m: _.READ          # mode.READ
+  b: dist p: (_.create x: 3 y: 4)        # pt x: 3 y: 4
+  """
 
 #----: generic
 

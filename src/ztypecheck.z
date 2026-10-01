@@ -41840,6 +41840,9 @@ walkOneCallArg: function {
             vt = tpa
             stampGate :st nid: arg.operation.u64 tid: vt
         } else {
+            # `_.ARM` / `_.create ...`: the `_` is the parameter's type, spelled
+            # into the tree before the argument is walked
+            spellCallArgUnderscore :st :ast :unitDecl :effId :recvImplicit :argIdx :arg
             caPrev: st.typing.callArgNode
             sbPrev: st.typing.suppressBareCtor
             st.typing.callArgNode = (nodeId
@@ -41902,6 +41905,171 @@ walkOneCallArg: function {
             :arg
         )
     }
+}
+
+# underscoreRoot -- the `_` a call argument's operation starts from (spec:
+# Underscore): the root of a dotted path, `_.READ`, or of a call's dotted
+# callable, `_.create x: 1`. 0 when it starts from anything else; a bare `_`
+# with nothing after it names no member and stays an unknown reference.
+underscoreRoot: function {ast: Ast.view op: zast.nodeid} out zast.nodeid is {
+    us: zast.poolFind pool: ast.names text: "_"
+    if us.isZero then return zast.nodeid
+    cur: op
+    dotted: false
+    for cur.isZero.not loop {
+        n: ast.nodes.get i: cur.u64
+        match (
+            n
+        ) case call then {
+            cur = n.callable
+        } case dottedpath then {
+            dotted = true
+            cur = n.parent
+        } case atomid then {
+            if dotted when n.name == us then return cur
+            return zast.nodeid
+        } else {
+            return zast.nodeid
+        }
+    }
+    return zast.nodeid
+}
+
+# spellCallArgUnderscore -- spellUnderscore for an argument of a concrete call:
+# the parameter is the label, else the one at the argument's position.
+spellCallArgUnderscore: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    effId: ztypes.tid
+    recvImplicit: bool
+    argIdx: u64
+    arg: argref
+} is {
+    us: underscoreRoot :ast op: arg.operation
+    if us.isZero then return
+    pn: arg.name
+    if pn.isZero then pn = (positionalParamNameId
+        :st
+        funcId: effId
+        idx: argIdx
+        skipRecv: recvImplicit
+    )
+    spellUnderscore :st :ast :unitDecl :effId pnId: pn at: us
+}
+
+# spellGenericArgUnderscore -- spellUnderscore for an argument of a generic
+# call, whose inference walks the arguments first: the parameter is the label,
+# else the name at the argument's position in `pNames`.
+spellGenericArgUnderscore: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    funcId: ztypes.tid
+    pNames: (ListVal zast.nameid).view
+    posIdx: u64
+    arg: argref
+} is {
+    us: underscoreRoot :ast op: arg.operation
+    if us.isZero then return
+    pn: arg.name
+    if pn.isZero when posIdx < pNames.length then pn = pNames.get i: posIdx
+    spellUnderscore :st :ast :unitDecl effId: funcId pnId: pn at: us
+}
+
+# spellUnderscore -- the `_` at `at` stands for the type of the parameter the
+# argument fills, and the tree gets that type's name in its place: the bare name
+# when it names that type where the call is written, else the name of what
+# declares it (its unit, or a subunit) and its own. A type no name spells -- an
+# instance of a generic -- is reported.
+spellUnderscore: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    # the callee, and the parameter the argument fills
+    effId: ztypes.tid
+    pnId: zast.nameid
+    at: zast.nodeid
+} is {
+    if pnId.isZero then return
+    # a callee resolved on demand has not typed its parameters yet
+    forceAllMembers :st :ast tid: effId
+    pto: st.typing.declChildOfId parentTypeId: effId nameId: pnId
+    if pto.none then return
+    ptid: ztypes.tid.create from: pto
+    def: st.reg.defOf tid: ptid
+    tnm: zast.nameid
+    if def.isZero.not when (st.reg.genericOriginOf tid: ptid).isZero then {
+        tnm = zast.nameid.create from: (st.typing.decls.get i: def.u64).name
+    }
+    un: ast.nodes.get i: at.u64
+    line: nodeLine n: un
+    col: nodeCol n: un
+    if tnm.isZero.not then {
+        bare: walkLookupTyperefById :st scope: st.curScope :ast :unitDecl baseId: tnm
+        if (bare.or d: 0) == ptid.u64 then {
+            (zast.tableSet
+                :ast
+                id: at.u32
+                child: astnode.atomid (zast.atomidrow nodeid: at lineno: line colno: col name: tnm)
+            )
+            return
+        }
+        # the declaration that declares the type -- its unit, or a subunit of
+        # one -- is the name a caller writes in front of it
+        ud: (st.typing.decls.get i: def.u64).parent
+        unm: zast.nameid
+        if ud.isZero.not then unm = zast.nameid.create from: (st.typing.decls.get i: ud.u64).name
+        if unm.isZero.not then {
+            spellQualifiedUnderscore :ast :at unitName: unm typeName: tnm :line :col
+            return
+        }
+    }
+    pnT: zast.nameTextAt :ast ref: pnId
+    tw: specWrittenName :st :ast tid: ptid
+    m: "'_' stands for the type of parameter '\{pnT}', and \{tw} has no name to spell it"
+    addError :st nodeid: at lineno: line colno: col e: zast.err.badReference msg: m
+}
+
+# spellQualifiedUnderscore -- the `_` row at `at` becomes the path `unit.type`:
+# two fresh name rows, and the `_` row -- which its parent already holds --
+# replaced by the path over them.
+spellQualifiedUnderscore: function {
+    ast: Ast
+    at: zast.nodeid
+    unitName: zast.nameid
+    typeName: zast.nameid
+    line: u32
+    col: u32
+} is {
+    start: ast.nodes.length
+    uid: zast.tableReserve :ast
+    (zast.tableAdd
+        :ast
+        n: astnode.atomid (zast.atomidrow nodeid: uid lineno: line colno: col name: unitName)
+    )
+    tid: zast.tableReserve :ast
+    (zast.tableAdd
+        :ast
+        n: astnode.atomid (zast.atomidrow nodeid: tid lineno: line colno: col name: typeName)
+    )
+    fs: ast.fsnoForNode nodeid: at.u32
+    if fs.u64 > 0 then ast.fileSegs.append (zast.FileSeg
+        startId: start.u32.orPanic
+        endId: ast.nodes.length.u32.orPanic
+        fsno: fs
+    )
+    (zast.tableSet
+        :ast
+        id: at.u32
+        child: astnode.dottedpath (zast.dottedpathrow
+            nodeid: at
+            lineno: line
+            colno: col
+            parent: uid
+            child: tid
+        )
+    )
 }
 
 # ownershipCallee -- the function whose parameters say what a call does to its
@@ -46439,6 +46607,8 @@ inferGenericCallSubs: function {
             continue
         }
         errG: st.typing.errors.length
+        # `_` is the parameter's type here too: this walk is the argument's first
+        spellGenericArgUnderscore :st :ast :unitDecl :funcId :pNames :posIdx :arg
         avt: checkValueAt :st :unitDecl :ast nid: arg.operation
         # a value that did not type is reported HERE, as the concrete
         # argument walk reports it (walkOneCallArg): the generic leg used to

@@ -1088,7 +1088,7 @@ argument binds nothing, and the call is an error rather than a dropped value:</p
 <pre><code class="language-zerolang">n: (xs.length 3)
 # error[E0300]: too many arguments: 'length' takes no parameter besides its receiver</code></pre>
 <p>Nothing here reads the spelling of a name or counts the segments of a path.
-<code>io.open "f" mode: READ</code> needs no special case: <code>open</code> declares no
+<code>io.open "f" mode: _.READ</code> needs no special case: <code>open</code> declares no
 receiver, so the first question settles it and the base &#x2014; a unit &#x2014; never has to
 be classified at all. A local binding that shadows a type name is settled by the
 second: the name resolves to a value, so the call is a method call on it.</p>
@@ -1128,11 +1128,10 @@ An <em><strong>odd</strong></em> number of paths is the operator form &#x2014; r
 passing two arguments. An operator is an identifier and a numeric literal names
 no method, so that is reported as what it is.</p>
 <p>Argument evaluations are also subject to ownership locking. See <a href="#ownership">Ownership</a>.</p>
-<p>The expression for an argument value is first evaluated in the current scope.
-If the value is a single identifier (undotted) and it does not resolve up to
-the current module level, it is assumed to be within the scope of the argument
-type. This allows enum arguments to be specified without qualifier (as long as
-there is no local definition of that same identifier).</p>
+<p>The expression for an argument value is evaluated in the current scope. An
+argument that names an arm of its parameter's type, or constructs one, without
+spelling the type writes <code>_</code> for it -- <code>mode: _.READ</code> -- see
+<a href="#underscore">Underscore</a>.</p>
 <h4 id="call-examples"><a href="#call-examples">4.4.2. Call Examples</a></h4>
 <p>Basic function call (no argument):</p>
 <pre><code class="language-zerolang">result: f</code></pre>
@@ -1164,7 +1163,7 @@ a function-style call <em><strong>is</strong></em> the receiver:</p>
 <pre><code class="language-zerolang">result: parenttype.f parent r: parent a: arg1
 # error[E0300]: the receiver is supplied twice: by the unlabelled argument
 #               and by 'r:'</code></pre>
-<p>Resolving as a child of the argument type:</p>
+<p>Naming an arm of the argument's type:</p>
 <pre><code class="language-zerolang"># ----- in unit file "io"
 
 mode: variant { READ: null  WRITE: null }  # an enumeration
@@ -1176,9 +1175,9 @@ open: function {name: String mode: mode} out filehandle is {
 
 open: io.open
 
-# fmode subtypes can be specified directly (as long as READ is not
-# defined locally)
-fh: open "MyFile.txt" mode: READ
+# `_` in an argument is the type of the parameter it fills, so an arm
+# of the parameter's type is written `_.READ`
+fh: open "MyFile.txt" mode: _.READ
 
 # same as line above...
 mode: io.mode
@@ -1610,7 +1609,7 @@ describe: function {filetype: i64} out i64 is {
 }
 
 
-match f: (open filename) case ok then {
+with f: (open filename) do match f case ok then {
     # f is ok (filehandle)
     f.write data
 } else {
@@ -1619,7 +1618,7 @@ match f: (open filename) case ok then {
 }   # 'f' is closed (destroyed) here (or was never opened)
 
 
-match thing.err then return
+if thing.err then return
 # type of 'thing' has been narrowed to exclude 'err'</code></pre>
 <h4 id="for"><a href="#for">4.6.5. for</a></h4>
 <p><code>for</code> expressions allow iteration or repeated execution. It can be used to
@@ -3258,6 +3257,20 @@ refer to the type of the parameter being specified.</p>
 <p>It can be used to:</p>
 <p>- create instances of that argument's type (<code>_.create ...</code>)
 - specifying enum argument values</p>
+<p><code>_</code> starts the argument -- <code>_.READ</code>, <code>_.create x: 1</code> -- and means the
+type itself, so it reaches a type another unit declares (<code>io.open p mode:
+_.read</code>) as readily as one of the caller's own. A type that has no name -- an
+instance of a generic, such as <code>(List i64)</code> -- cannot be spelled by <code>_</code>,
+and is an error at the <code>_</code>. A bare <code>_</code> with nothing after it names no
+member, and is an unknown reference.</p>
+<pre><code class="language-zerolang">mode: variant {READ: null WRITE: null}
+pt: record {x: i64 y: i64}
+
+openit: function {name: StringView m: mode} out i64 is { ... }
+dist: function {p: pt} out i64 is { ... }
+
+a: openit name: "f" m: _.READ          # mode.READ
+b: dist p: (_.create x: 3 y: 4)        # pt x: 3 y: 4</code></pre>
 <h4 id="generic"><a href="#generic">5.4.6. generic</a></h4>
 <p>For creating generic fields/parameters. <code>generic</code> is itself generic and can
 take any union/variant/protocol/numerictype as an argument. See also
