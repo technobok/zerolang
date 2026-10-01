@@ -118,11 +118,10 @@ cnameOf: function {tid: ztypes.tid ownerName: StringView name: StringView} out S
                     flat.append "_"
                 } else {
                     identB: (
-                        bo >=
-                        97 and
+                        (bo >= 97) and
                         (bo <= 122) or
-                        (bo >= 65 and (bo <= 90)) or
-                        (bo >= 48 and (bo <= 57)) or
+                        ((bo >= 65) and (bo <= 90)) or
+                        ((bo >= 48) and (bo <= 57)) or
                         (bo == 95)
                     )
                     if identB then {
@@ -584,7 +583,7 @@ isUserStructType: function {tt: ztypes.ztypetype} out bool is {
 
 # true when `name` is a floating-point type name.
 isFloatName: function {name: StringView} out bool is {
-    return name == "f16" or (name == "f32") or (name == "f64") or (name == "f128")
+    return (name == "f16") or (name == "f32") or (name == "f64") or (name == "f128")
 }
 
 # numBits -- integer numeric type bit width (0 if not an integer type).
@@ -671,7 +670,7 @@ literalDefaultC: function {lex: StringView} out String is {
 wideLiteralC: function {lex: StringView} out String is {
     if lex.length < 19 then return ""
     b0: (lex.byteAt i: 0).or d: 0
-    if b0 < 49 or (b0 > 57) then return ""
+    if (b0 < 49) or (b0 > 57) then return ""
     if (ztypes.literalBeyondI64 numstr: lex).not then return ""
     return "\{lex}ULL"
 }
@@ -818,7 +817,7 @@ convIntToFloat: function {
     rangeAnd: ""
     if dstName == "f16" then rangeAnd = " && _mag <= 65504"
     ssig: numSigned name: srcName
-    wide: srcName == "i128" or (srcName == "u128")
+    wide: (srcName == "i128") or (srcName == "u128")
     magExpr: convMagExpr signed: ssig :wide
     if wide then {
         w: "unsigned __int128 _mag = \{magExpr}; uint64_t _mh = (uint64_t)(_mag >> 64); uint64_t _ml = (uint64_t)_mag; int _bl = _mh ? (128 - __builtin_clzll(_mh)) : (_ml ? 64 - __builtin_clzll(_ml) : 0); int _tz = _ml ? __builtin_ctzll(_ml) : (_mh ? 64 + __builtin_ctzll(_mh) : 0); if (_mag == 0 || ((_bl - _tz) <= \{p}\{rangeAnd})) { \{okSet} } else { \{(convErr
@@ -3876,7 +3875,7 @@ vvRemove: function {xs: List VidVal vid: ztypes.vid} is {
     for i < n loop {
         if (xs.get :i).vid == vid then {
             last: xs.pop
-            if i + 1 < n then xs.set :i val: last
+            if (i + 1) < n then xs.set :i val: last
             return
         }
         i = i + 1
@@ -3976,7 +3975,7 @@ vtRemove: function {xs: List VidTid vid: ztypes.vid} is {
     for i < n loop {
         if (xs.get :i).vid == vid then {
             last: xs.pop
-            if i + 1 < n then xs.set :i val: last
+            if (i + 1) < n then xs.set :i val: last
             return
         }
         i = i + 1
@@ -4039,8 +4038,7 @@ takeAliasBaseNid: function {
         if bo > 0 then return 0
         btt: symtab.reg.typetypeOf typeId: bt
         isUC: (
-            btt ==
-            ztypes.ztypetype.recordType or
+            (btt == ztypes.ztypetype.recordType) or
             (btt == ztypes.ztypetype.classType) or
             (btt == ztypes.ztypetype.unionType) or
             (btt == ztypes.ztypetype.protocolType)
@@ -4536,8 +4534,7 @@ needsAddM: function {ctx: Ctx uname: StringView memb: StringView} is {
 # called sv_cstr, and no fragment answers to the name alone.
 osCrossUnitNeeds: function {ctx: Ctx memb: StringView} is {
     svc: (
-        memb ==
-        "env" or
+        (memb == "env") or
         (memb == "setEnv") or
         (memb == "unsetEnv") or
         (memb == "setCwd") or
@@ -4545,8 +4542,7 @@ osCrossUnitNeeds: function {ctx: Ctx memb: StringView} is {
     )
     if svc then needsAddM :ctx uname: "io" memb: "@sv_cstr"
     er: (
-        memb ==
-        "setEnv" or
+        (memb == "setEnv") or
         (memb == "unsetEnv") or
         (memb == "cwd") or
         (memb == "setCwd") or
@@ -4941,28 +4937,11 @@ dottedBaseNodeId: function {ast: Ast.view n: astnode.view} out u64 is {
     }
 }
 
-# wordListHas -- `word` is one of the space-separated words of `words`: the
-# membership-string shape (a table, not a compare chain), read in place as
-# views, so asking costs no probe string.
-wordListHas: function {words: StringView word: StringView} out bool is {
-    n: words.length
-    if word.length == 0 then return false
-    i: u64
-    for i < n loop {
-        j: i
-        # 32 is the space that separates the words
-        for j < n while ((words.byteAt j).or d: 32) != 32 loop j = j + 1
-        if (words.substring from: i to: j) == word then return true
-        i = j + 1
-    }
-    return false
-}
-
 # isSvNoArgNative -- no-arg StringView natives whose fragments must be
 # registered by the scanNeeds pre-pass: type-method bodies emit after
 # the runtime pass, so an in-body demand comes too late to matter.
 isSvNoArgNative: function {name: StringView} out bool is {
-    return (wordListHas words: "count hash fastHash codepoints lines" word: name)
+    return (ztypes.wordListHas words: "count hash fastHash codepoints lines" word: name)
 }
 
 # isSvParseNative -- a StringView parse native (parseF64/I64/U64) returning a
@@ -5481,7 +5460,7 @@ emitSvSimpleCall: function {
     btIsStr: bool
     dcbV: ztypes.vid
 } out String is {
-    svRecvOk: btid == ctx.svTid or btIsStr
+    svRecvOk: (btid == ctx.svTid) or btIsStr
     if svRecvOk when (isSvSimpleNative name: mnv) then {
         needsAddM :ctx uname: "system" memb: mnv
         # a String receiver projects to a view value, like the
@@ -5616,7 +5595,7 @@ emitDottedCall: function {
     dcbV: ztypes.vid
     # the receiver's C text: the expression's, or the base atom's local name
     bn: String
-    if bn0.length == 0 or baseIsCall then {
+    if (bn0.length == 0) or baseIsCall then {
         # nested/projected base ((zast.poolTextAt pool: ast.names ref: el.text).stringView.stripPrefix): no base atom, but
         # the base is a stamped String/StringView -- emit it as an expression (a
         # compound-literal lvalue, so the `&base` SV-native legs stay valid C).
@@ -6239,7 +6218,7 @@ orderEnd: function {ctx: Ctx st: orderstate} is {
 # orderSlotText -- the argument text in slot `slot` of the call `st` opened, ""
 # when no argument fills it.
 orderSlotText: function {t: Ctx.view st: orderstate slot: u64} outx StringView is {
-    if st.valBase + slot >= t.orderVals.length then return ""
+    if (st.valBase + slot) >= t.orderVals.length then return ""
     got: t.orderVals.get i: st.valBase + slot
     return got.stringView
 }
@@ -6346,13 +6325,13 @@ cByteEffect: function {c: u8 prev: u8 nxt: u8} out u8 is {
         if (isCNameByte c: prev) then return 1
         return 0
     }
-    if c == 44 or (c == 123) or (c == 34) or (c == 39) then return 1
+    if (c == 44) or (c == 123) or (c == 34) or (c == 39) then return 1
     if c == 61 then {
         if nxt == 61 then return 2
-        if prev == 33 or (prev == 60) or (prev == 62) then return 0
+        if (prev == 33) or (prev == 60) or (prev == 62) then return 0
         return 1
     }
-    if c == 43 or (c == 45) when nxt == c then return 1
+    if (c == 43) or (c == 45) when nxt == c then return 1
     return 0
 }
 
@@ -6495,7 +6474,7 @@ orderFinish: function {ctx: Ctx st: orderstate} out String is {
 # its own.
 appendDecimal: function {buf: String.borrow n: u64} is {
     p: 1.u64
-    for n / p >= 10 loop p = p * 10
+    for (n / p) >= 10 loop p = p * 10
     for p > 0 loop {
         dig: n / p % 10
         buf.appendByte b: ((48.u64 + dig).u8.or d: 48)
@@ -6556,13 +6535,15 @@ isCNumberLiteral: function {s: StringView} out bool is {
     i: u64
     if ((s.byteAt i: 0).or d: 0) == 45 then i = 1
     first: (s.byteAt :i).or d: 0
-    if first < 48 or (first > 57) then return false
+    if (first < 48) or (first > 57) then return false
     prev: first
     for i < s.length loop {
         c: (s.byteAt :i).or d: 0
-        sign: c == 43 or (c == 45)
+        sign: (c == 43) or (c == 45)
         if sign then {
-            if (prev == 101 or (prev == 69) or (prev == 112) or (prev == 80)).not then return false
+            if (
+                (prev == 101) or (prev == 69) or (prev == 112) or (prev == 80)
+            ).not then return false
         } else if c != 46 when (isCNameByte :c).not then {
             return false
         }
@@ -6870,7 +6851,7 @@ destroyTargetTid: function {
     tid: ztypes.tid
 } out ztypes.tid is {
     dt: chaseStrTypedef :symtab :ctx tid: (chaseAggregateTypedef :symtab :ctx :tid)
-    if dt == ctx.strTid or (symtab.reg.needsDestructor typeId: dt) then return dt
+    if (dt == ctx.strTid) or (symtab.reg.needsDestructor typeId: dt) then return dt
     if (isHeapPtrCollection :symtab :ctx tid: dt) then return dt
     return ztypes.tid
 }
@@ -7684,7 +7665,7 @@ nextWrittenParam: function {
     for i < n loop {
         if (done.get i: base + i).not then {
             w: writ.get i: base + i
-            if best == n or (w < bestW) then {
+            if (best == n) or (w < bestW) then {
                 best = i
                 bestW = w
             }
@@ -7705,7 +7686,7 @@ isOperatorName: function {name: StringView} out bool is {
     match (
         b0
     ) case some then {
-        return (b0 >= 97 and (b0 <= 122) or (b0 >= 65 and (b0 <= 90)) or (b0 == 95)).not
+        return ((b0 >= 97) and (b0 <= 122) or ((b0 >= 65) and (b0 <= 90)) or (b0 == 95)).not
     } case none then null
     return false
 }
@@ -8666,7 +8647,7 @@ castSourceArg: function {ast: Ast.view call: zast.callrow.view} out u64 is {
         a: ast.nodes.get i: aId
         if a.namedoperation then {
             an: zast.nameTextAt :ast ref: a.name
-            if an.length == 0 or (an.stringView == "from") then return a.operation.u64
+            if (an.length == 0) or (an.stringView == "from") then return a.operation.u64
         }
     }
     return 0
@@ -9220,7 +9201,7 @@ emitCollectionMethodCall: function {
     originName: monoOriginName :symtab tid: (ztypes.tid.create from: bt.u64)
     ov: originName.stringView
     if ov == "array" then return (emitArrayMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
-    isList: ov == "ListRef" or (ov == "ListVal") or (ov == "ListView") or (ov == "ListViewVal")
+    isList: (ov == "ListRef") or (ov == "ListVal") or (ov == "ListView") or (ov == "ListViewVal")
     if isList then return (emitListMethodCall
         :ast
         :symtab
@@ -9231,11 +9212,11 @@ emitCollectionMethodCall: function {
         bt: (ztypes.tid.create from: bt.u64)
         :bvid
     )
-    isSet: ov == "SetRef" or (ov == "SetVal")
+    isSet: (ov == "SetRef") or (ov == "SetVal")
     if isSet then return (emitSetMethodCall :ast :symtab :ctx :call :mnId :bn :bt)
-    isMap: ov == "MapRR" or (ov == "MapRV") or (ov == "MapVR") or (ov == "MapVV")
+    isMap: (ov == "MapRR") or (ov == "MapRV") or (ov == "MapVR") or (ov == "MapVV")
     if isMap then return (emitMapMethodCall :ast :symtab :ctx :call :mnId :bn :bt)
-    isIdMap: ov == "IdMapR" or (ov == "IdMapV")
+    isIdMap: (ov == "IdMapR") or (ov == "IdMapV")
     if isIdMap then return (emitIdMapMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
     if ov == "IdSet" then return (emitIdSetMethodCall :ast :symtab :ctx :call :mnId :bn :bt :bvid)
     return ""
@@ -9385,7 +9366,7 @@ colArgHeldByPtr: function {
         a: ast.nodes.get i: aId
         if a.namedoperation then {
             an: zast.nameTextAt :ast ref: a.name
-            if an.stringView == label or (an.length == 0) then {
+            if (an.stringView == label) or (an.length == 0) then {
                 op: ast.nodes.get i: a.operation.u64
                 if (pathIsPointer :ast :symtab :ctx n: op).not then return false
                 return (ptrHeldValtype :ast :symtab :ctx n: op).not
@@ -10564,7 +10545,7 @@ callKindIsCreate: function {symtab: zenv.ZSymbolTable.view nid: u64} out bool is
     match (
         ck
     ) case some then {
-        return ck == zast.callkind.recordCreate or (ck == zast.callkind.classCreate)
+        return (ck == zast.callkind.recordCreate) or (ck == zast.callkind.classCreate)
     } case none then null
     return false
 }
@@ -10826,7 +10807,7 @@ renderedMethodDefaultArgs: function {
         pnjId: pidlNm.get i: j
         j = j + 1
         isRecv: (
-            pnjId == zast.names.wkThis.u64 or (thisPn.length > 0 and (thisPn.stringView == pnj))
+            (pnjId == zast.names.wkThis.u64) or ((thisPn.length > 0) and (thisPn.stringView == pnj))
         )
         if isRecv.not then {
             userSeen = true
@@ -11674,10 +11655,10 @@ narrowConstToName: function {v: i64 name: StringView} out i64 is {
 # infinity or a NaN -- which the typechecker never folds.
 floatConstText: function {v: f64 name: StringView} out String is {
     bits: v.bits
-    expo: bits >> 52 & 2047
+    expo: (bits >> 52) & 2047
     if expo == 2047 then return ""
     r: String
-    if bits >> 63 == 1 then r.append "-"
+    if (bits >> 63) == 1 then r.append "-"
     r.append (hexFloatMagnitude :expo mant: bits & 4503599627370495)
     probe: " \{name} "
     mf32: " f32 "
@@ -11699,7 +11680,7 @@ hexFloatMagnitude: function {expo: u64 mant: u64} out String is {
     r: "0x\{lead}."
     shift: 48.u64
     for shift <= 48 loop {
-        nib: (mant >> shift & 15).u8.orPanic
+        nib: ((mant >> shift) & 15).u8.orPanic
         if nib < 10 then r.appendByte b: nib + 48 else r.appendByte b: nib + 87
         if shift == 0 then break
         shift = shift - 4
@@ -13354,8 +13335,7 @@ namedCalleeFnId: function {
 } out ztypes.tid is {
     cbn0: atomNodeId n: (ast.nodes.get i: call.callable.u64)
     calleeIsLocal: (
-        cbn0 >
-        0 and
+        (cbn0 > 0) and
         (symtab.typing.atomVariableId.get key: cbn0).none.not or
         (symtab.typing.atomVariableId.get key: call.callable.u64).none.not
     )
@@ -13563,8 +13543,7 @@ emitCallProbeChain: function {
 # template's own id.
 ownerIsCollectionFamily: function {ctx: Ctx.view fam: ztypes.tid} out bool is {
     return (
-        fam ==
-        (ctx.origins.get i: family.list) or
+        (fam == (ctx.origins.get i: family.list)) or
         (fam == (ctx.origins.get i: family.listVal)) or
         (fam == (ctx.origins.get i: family.listView)) or
         (fam == (ctx.origins.get i: family.listViewVal)) or
@@ -13682,8 +13661,7 @@ emitMethodDeclCall: function {
         :ownerTid
     ).not then return ""
     isIoNat: (
-        ownerTid.u64 ==
-        ctx.ioFileTid or
+        (ownerTid.u64 == ctx.ioFileTid) or
         (ownerTid.u64 == ctx.netListenerTid) or
         (ownerTid.u64 == ctx.netConnTid)
     )
@@ -13800,7 +13778,7 @@ emitCallValue: function {
     match (
         ckh
     ) case some then {
-        isTdk: ckh == zast.callkind.typedefCreate or (ckh == zast.callkind.typedefBorrow)
+        isTdk: (ckh == zast.callkind.typedefCreate) or (ckh == zast.callkind.typedefBorrow)
         if isTdk then {
             tdh: emitTypedefCreateCall :ast :symtab :ctx :call
             if tdh.length > 0 then return tdh
@@ -13810,8 +13788,7 @@ emitCallValue: function {
             if bxh.length > 0 then return bxh
         }
         isPjk: (
-            ckh ==
-            zast.callkind.protocolCreate or
+            (ckh == zast.callkind.protocolCreate) or
             (ckh == zast.callkind.protocolBorrow) or
             (ckh == zast.callkind.facetCreate) or
             (ckh == zast.callkind.facetBorrow)
@@ -13844,7 +13821,7 @@ emitCallValue: function {
     match (
         ckh
     ) case some then {
-        isCtorKind: ckh == zast.callkind.recordCreate or (ckh == zast.callkind.classCreate)
+        isCtorKind: (ckh == zast.callkind.recordCreate) or (ckh == zast.callkind.classCreate)
         if isCtorKind then {
             ccal: ast.nodes.get i: call.callable.u64
             if ccal.atomid when (symtab.typing.refDecl.has key: call.callable.u64).not then {
@@ -13950,7 +13927,7 @@ varCName: function {ctx: Ctx.view vid: ztypes.vid name: StringView} out String i
 # no leading zero, as varCName writes them.
 varCNameIs: function {ctx: Ctx.view vid: ztypes.vid name: StringView text: StringView} out bool is {
     if ctx.readableNames or vid.isZero then return (varCName :ctx :vid :name).stringView == text
-    if text.length < 4 or (text.startsWith prefix: "z_v").not then return false
+    if (text.length < 4) or (text.startsWith prefix: "z_v").not then return false
     digits: text.substring from: 3 to: text.length
     if ((digits.byteAt 0).or d: 0) == 48 then return false
     parsed: digits.parseU64
@@ -14248,7 +14225,7 @@ implicitZeroValue: function {
         zso: originTidOf :symtab tid: (ztypes.tid.create from: zm.u64)
         strO: ctx.origins.get i: family.str
         arrO: ctx.origins.get i: family.fixedArray
-        isSized: zso == strO or (zso == arrO)
+        isSized: (zso == strO) or (zso == arrO)
         if isSized when zso.isZero.not then {
             zsc: ctxCname :ctx tid: (ztypes.tid.create from: zm.u64)
             return "\{zsc}_create()"
@@ -15238,8 +15215,7 @@ sumMemberMethodRead: function {
         # answers only for the label, so an arm holding a spec value stays one
         mtt: symtab.reg.typetypeOf typeId: (ztypes.tid.create from: mco.u64)
         if (
-            mtt ==
-            ztypes.ztypetype.functionType or
+            (mtt == ztypes.ztypetype.functionType) or
             (mtt == ztypes.ztypetype.protocolType) or
             (mtt == ztypes.ztypetype.facetType)
         ).not then return ""
@@ -15287,7 +15263,7 @@ emitUserTypeMemberRead: function {
         )
         if sm.length > 0 then return sm
     }
-    isFN: mn2 == "close" or (mn2 == "flush") or (mn2 == "readLine") or (mn2 == "accept")
+    isFN: (mn2 == "close") or (mn2 == "flush") or (mn2 == "readLine") or (mn2 == "accept")
     isFile: false
     isNetU: false
     if isFN then {
@@ -16546,7 +16522,7 @@ moveMarkerMovesBase: function {
     tkt: stampIdOf :symtab nid: tknid
     if tkt == ctx.strTid then return true
     tt: symtab.reg.typetypeOf typeId: tkt
-    if tt == ztypes.ztypetype.unionType or (tt == ztypes.ztypetype.protocolType) then return true
+    if (tt == ztypes.ztypetype.unionType) or (tt == ztypes.ztypetype.protocolType) then return true
     if tt == ztypes.ztypetype.functionType then return true
     if tt == ztypes.ztypetype.classType then {
         return (isPtrVid :ctx vid: (atomVid :symtab nid: tknid)).not
@@ -17282,7 +17258,7 @@ emitControlPtrExpr: function {
     nid: zast.nodeIdOf :n
     vt: bindingStampOf :symtab :ctx nid: nid.u64
     ct: typeRefC :ast :symtab :ctx tid: vt thisTid: ztypes.tid
-    if ct.length == 0 or (ztypecheck.armLeaves :ast :n inLoop: false) then return ""
+    if (ct.length == 0) or (ztypecheck.armLeaves :ast :n inLoop: false) then return ""
     ltmp: TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree
     cvN: tmpNext :ctx tmp: ltmp
     cv: "_cv\{cvN}"
@@ -17347,7 +17323,7 @@ emitControlExpr: function {
     # "" when there is no C type, or when an arm leaves from here, which the
     # checker refuses: its cleanup could not reach the values the enclosing
     # statement is building
-    if ct.length == 0 or (ztypecheck.armLeaves :ast :n inLoop: false) then return ""
+    if (ct.length == 0) or (ztypecheck.armLeaves :ast :n inLoop: false) then return ""
     ltmp: TmpCtr n: 0 frees: List OwedFree listFrees: List OwedFree
     cvN: tmpNext :ctx tmp: ltmp
     cv: "_cv\{cvN}"
@@ -17807,7 +17783,7 @@ isListCompare: function {
     owner: ztypes.tid
     opId: zast.nameid
 } out bool is {
-    isCmp: opId == zast.names.wkOpEq or (opId == zast.names.wkOpNe)
+    isCmp: (opId == zast.names.wkOpEq) or (opId == zast.names.wkOpNe)
     if isCmp.not then return false
     return (originIsTid :symtab tid: owner originTid: (ctx.origins.get i: family.listVal))
 }
@@ -23764,7 +23740,7 @@ emitBranchAssignOptional: function {
         for si < cnt loop {
             sxId: zast.kidAt kids: ast.kids span: n.statements i: si
             sx: ast.nodes.get i: sxId
-            if si + 1 == cnt then {
+            if (si + 1) == cnt then {
                 vx: emitExpr :ast :symtab :ctx n: sx
                 flushArgHoists :ctx :ind :tmp :buf
                 emitOptionalAssign :target :someTag :payC vx: vx.stringView :ind :buf
@@ -24095,7 +24071,7 @@ isForIterCall: function {ast: Ast.view n: astnode.view} out bool is {
         return true
     } case dottedpath then {
         cn: atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64)
-        if cn == zast.names.wkIterate or (cn == zast.names.wkIterateMut) then return true
+        if (cn == zast.names.wkIterate) or (cn == zast.names.wkIterateMut) then return true
         return cn == zast.names.wkIterateReverse
     } else {
         return false
@@ -25192,7 +25168,7 @@ isCountRangeMemberId: function {id: zast.nameid} out bool is {
 # one of two recognisers knows the member and the other does not. rangeCType asks
 # both, because the width is the receiver's whichever family it is.
 isClosedRangeMemberId: function {id: zast.nameid} out bool is {
-    return id == zast.names.wkUpto or (id == zast.names.wkDownto)
+    return (id == zast.names.wkUpto) or (id == zast.names.wkDownto)
 }
 
 # closedRangeMemberOf -- the closed-range member a `for` header's operation
@@ -25561,10 +25537,9 @@ remainingArm: function {
     rem: String
     for each a: all loop {
         hit: (
-            exv.length >
-            0 and
+            (exv.length > 0) and
             (hasSpaceDelimitedWord hay: exv.stringView word: a.stringView) or
-            (extra.length > 0 and (hasSpaceDelimitedWord hay: extra word: a.stringView))
+            ((extra.length > 0) and (hasSpaceDelimitedWord hay: extra word: a.stringView))
         )
         if hit.not then {
             remN = remN + 1
@@ -25611,7 +25586,7 @@ bodyReassigns: function {ast: Ast.view n: astnode.view name: StringView} out boo
     } case swapstmt then {
         sl: atomTextOf :ast n: (ast.nodes.get i: n.lhs.u64)
         sr: atomTextOf :ast n: (ast.nodes.get i: n.rhs.u64)
-        return sl == name or (sr == name)
+        return (sl == name) or (sr == name)
     } case ifexpr then {
         hif: false
         clx1049: u64
@@ -27279,7 +27254,7 @@ emitPlainReturn: function {
         trivial.not and
         isPtr.not and
         (retCt.length > 0) and
-        (clProbe.length > 0 or leakFix or (moved.length > 0))
+        ((clProbe.length > 0) or leakFix or (moved.length > 0))
     )
     # a heap collection the return MOVES out of a source -- a `.take`, a
     # narrowed payload -- or that an `if` or `match` yields from arms that own
@@ -27287,7 +27262,7 @@ emitPlainReturn: function {
     # owned local is freed after -- the source's owner, and the local on a path
     # whose arm did not take it, included
     if retCt.length > 0 when (isHeapPtrCollection :symtab :ctx tid: rtid) when (
-        moved.length > 0 or (controlValueOwnsArms :ast :symtab :ctx n: (ast.nodes.get i: vid))
+        (moved.length > 0) or (controlValueOwnsArms :ast :symtab :ctx n: (ast.nodes.get i: vid))
     ) then {
         hpc: "\{retCt}*"
         (emitHoistedReturn
@@ -27605,7 +27580,7 @@ emitBranchAssign: function {
         lL: tmp.listFrees.length
         cnt: n.statements.count.u64
         si: u64
-        for si + 1 < cnt loop {
+        for (si + 1) < cnt loop {
             sxId: zast.kidAt kids: ast.kids span: n.statements i: si
             emitStmt :ast :symtab :ctx n: (ast.nodes.get i: sxId) :ind :tmp :buf
             si = si + 1
@@ -27878,7 +27853,7 @@ emitStatementBlock: function {
         s9Id: zast.kidAt kids: ast.kids span: stmts :i
         s: ast.nodes.get i: s9Id
         tailNow: false
-        if trTail when i + 1 == nst then tailNow = true
+        if trTail when (i + 1) == nst then tailNow = true
         handled: false
         if tailNow then {
             handled = emitTailStmt :ast :symtab :ctx n: s :ind :tmp :buf
@@ -28175,7 +28150,7 @@ isReftypeParam: function {
     # -- the two well-known ids, a runtime-owned layout -- and the collection
     # monos left above already. Asking which unit declared it answered for a
     # user class of the same name too, which no id does.
-    return (cid == ctx.strTid or (cid == ctx.svTid) or (symtab.reg.isNativeOf tid: cid)).not
+    return ((cid == ctx.strTid) or (cid == ctx.svTid) or (symtab.reg.isNativeOf tid: cid)).not
 }
 
 # unionBorrowsByPtr -- a union borrowed is a POINTER to the caller's slot, as a
@@ -28985,7 +28960,7 @@ isListOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return f == family.list or (f == family.listVal)
+    return (f == family.list) or (f == family.listVal)
 }
 
 # isSetOriginOf -- the type is a Set of EITHER family. The two templates differ
@@ -28999,7 +28974,7 @@ isSetOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return f == family.set or (f == family.setVal)
+    return (f == family.set) or (f == family.setVal)
 }
 
 # isMapOriginOf -- the type is a Map of ANY of the four key/value families.
@@ -29009,7 +28984,7 @@ isMapOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return f == family.map or (f == family.mapRV) or (f == family.mapVR) or (f == family.mapVV)
+    return (f == family.map) or (f == family.mapRV) or (f == family.mapVR) or (f == family.mapVV)
 }
 
 # isIdMapOriginOf -- the type is an IdMap of either value family.
@@ -29019,7 +28994,7 @@ isIdMapOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return f == family.idMapR or (f == family.idMapV)
+    return (f == family.idMapR) or (f == family.idMapV)
 }
 
 # isIdSetOriginOf -- the type is an IdSet.
@@ -29040,7 +29015,7 @@ isIdCollectionOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return f == family.idMapR or (f == family.idMapV) or (f == family.idSet)
+    return (f == family.idMapR) or (f == family.idMapV) or (f == family.idSet)
 }
 
 # isOptionViewOriginOf -- the type is an OptionView of either element family:
@@ -29051,7 +29026,7 @@ isOptionViewOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return f == family.optionView or (f == family.optionViewVal)
+    return (f == family.optionView) or (f == family.optionViewVal)
 }
 
 # isListViewOriginOf -- the type is a ListView of either element family.
@@ -29061,7 +29036,7 @@ isListViewOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return f == family.listView or (f == family.listViewVal)
+    return (f == family.listView) or (f == family.listViewVal)
 }
 
 # isMapEntryOriginOf -- the type is a MapEntry of any of the four families.
@@ -29071,8 +29046,8 @@ isMapEntryOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    if f == family.mapEntry or (f == family.mapEntryRV) then return true
-    return f == family.mapEntryVR or (f == family.mapEntryVV)
+    if (f == family.mapEntry) or (f == family.mapEntryRV) then return true
+    return (f == family.mapEntryVR) or (f == family.mapEntryVV)
 }
 
 # isIdMapEntryOriginOf -- the type is an IdMapEntry of either value family.
@@ -29082,7 +29057,7 @@ isIdMapEntryOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return f == family.idMapEntryR or (f == family.idMapEntryV)
+    return (f == family.idMapEntryR) or (f == family.idMapEntryV)
 }
 
 # isCollectionOriginTid -- originTid (a genericOriginId) is one of the cached
@@ -29189,7 +29164,7 @@ chaseAggregateTypedef: function {
 } out ztypes.tid is {
     if (symtab.typing.typedefBaseTid.has key: tid).not then return tid
     e: typedefChaseTid :symtab :tid
-    if e == ctx.strTid or (e == ctx.svTid) then return tid
+    if (e == ctx.strTid) or (e == ctx.svTid) then return tid
     # a scalar is a native record, and an ordinal variant emits as one; a
     # sized str or array is a native record too, and an aggregate
     isRec: (symtab.reg.typetypeOf typeId: e) == ztypes.ztypetype.recordType
@@ -29197,7 +29172,7 @@ chaseAggregateTypedef: function {
         eo: originTidOf :symtab tid: e
         strO: ctx.origins.get i: family.str
         arrO: ctx.origins.get i: family.fixedArray
-        isSized: eo == strO or (eo == arrO)
+        isSized: (eo == strO) or (eo == arrO)
         if isSized.not or eo.isZero then return tid
     }
     if (isOrdinalVariant :symtab tid: e) then return tid
@@ -29243,7 +29218,7 @@ chaseStrTypedef: function {
 } out ztypes.tid is {
     if (symtab.typing.typedefBaseTid.has key: tid).not then return tid
     e: typedefChaseTid :symtab :tid
-    if e == ctx.strTid or (e == ctx.svTid) then return e
+    if (e == ctx.strTid) or (e == ctx.svTid) then return e
     return tid
 }
 
@@ -30918,7 +30893,7 @@ collectFnDecls: function {
                     :ownerTid
                     wantWalked: true
                 ) or
-                (nm.stringView == "main" and (ctx.mainName.stringView != ctx.realMain))
+                ((nm.stringView == "main") and (ctx.mainName.stringView != ctx.realMain))
             )
             if skipDepMain.not then {
                 dv: di
@@ -31089,11 +31064,10 @@ isBareCName: function {s: StringView} out bool is {
             bo
         ) case some then {
             ok: (
-                bo >=
-                48 and
+                (bo >= 48) and
                 (bo <= 57) or
-                (bo >= 65 and (bo <= 90)) or
-                (bo >= 97 and (bo <= 122)) or
+                ((bo >= 65) and (bo <= 90)) or
+                ((bo >= 97) and (bo <= 122)) or
                 (bo == 95)
             )
             if ok.not then return false
@@ -31151,11 +31125,10 @@ ctEndsWithStar: function {ct: StringView} out bool is {
 # isIdChar -- a C-identifier byte [A-Za-z0-9_].
 isIdChar: function {b: u8} out bool is {
     return (
-        b >=
-        48 and
+        (b >= 48) and
         (b <= 57) or
-        (b >= 65 and (b <= 90)) or
-        (b >= 97 and (b <= 122)) or
+        ((b >= 65) and (b <= 90)) or
+        ((b >= 97) and (b <= 122)) or
         (
             b == 95
         )
@@ -31171,7 +31144,7 @@ refsLocal: function {expr: StringView name: StringView} out bool is {
     if nl == 0 then return false
     if nl > el then return false
     i: u64
-    for i + nl <= el loop {
+    for (i + nl) <= el loop {
         eq: true
         k: u64
         for k < nl loop {
@@ -31479,7 +31452,7 @@ collectUnitLiterals: function {
     # the copy's function row is the last of its range
     rgs: symtab.typing.instanceBodyRanges.listView
     ri: u64
-    for ri + 1 < rgs.length loop {
+    for (ri + 1) < rgs.length loop {
         fnv: program.nodes.get i: (rgs.get i: ri + 1) - 1
         ri = ri + 2
         if fnv.functiondef when fnv.body > 0 then (collectLiterals
@@ -33311,8 +33284,7 @@ definedInFragmentUnit: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
     duId: defUnitIdOf :ctx :tid
     if duId == 0 then return false
     return (
-        duId ==
-        ctx.ioUnitDecl or
+        (duId == ctx.ioUnitDecl) or
         (duId == ctx.cliUnitDecl) or
         (
             duId == ctx.netUnitDecl
@@ -33886,7 +33858,7 @@ mapDestroyEntries: function {keyFree: StringView valFree: StringView} out String
     if keyFree.length > 0 then keyLine = "            \{keyFree}\n"
     valLine: String
     if valFree.length > 0 then valLine = "            \{valFree}\n"
-    if keyLine.length + valLine.length == 0 then return ""
+    if (keyLine.length + valLine.length) == 0 then return ""
     return "    for (uint64_t i = 0; i < p->entries_len; i++) {\n        if (p->entries[i].alive) {\n\{keyLine}\{valLine}        }\n    }\n"
 }
 
@@ -35079,7 +35051,7 @@ isIoUnitClass: function {symtab: zenv.ZSymbolTable.view ctx: Ctx tid: ztypes.tid
     if (originTidOf :symtab :tid).isZero.not then return false
     duId: defUnitIdOf :ctx :tid
     if duId == 0 then return false
-    return duId == ctx.ioUnitDecl or (duId == ctx.osUnitDecl) or (duId == ctx.cliUnitDecl)
+    return (duId == ctx.ioUnitDecl) or (duId == ctx.osUnitDecl) or (duId == ctx.cliUnitDecl)
 }
 
 # ioClassIsLive -- whether an io-unit class needs its conformance impls: File
@@ -36218,8 +36190,7 @@ emitOneFnptrTypedef: function {
             rpn: rpnB.stringView
             rtn: regNameOf :symtab tid: (ztypes.tid.create from: rpv.u64)
             isRecv: (
-                rpn ==
-                "this" or
+                (rpn == "this") or
                 (rtn.stringView == "this") or
                 (rtn.stringView == ownNm) or
                 (rpv == ownT)
@@ -37787,8 +37758,7 @@ specMemberIsSelfTyped: function {
     pi: u64
     for pi < pnames.length loop {
         isRecv: (
-            (pidsNm.get i: pi) ==
-            zast.names.wkThis.u64 or
+            ((pidsNm.get i: pi) == zast.names.wkThis.u64) or
             (rpn.isZero.not and ((pidsNm.get i: pi) == rpn.u64))
         )
         if isRecv.not when (pids.get i: pi) == ifaceTid.u64 then found = true
@@ -37971,8 +37941,7 @@ emitOneProtocol: function {
             pid: pids.get i: pi
             ptn: regNameOf :symtab tid: (ztypes.tid.create from: pid.u64)
             isThis: (
-                pnm.stringView ==
-                "this" or
+                (pnm.stringView == "this") or
                 (
                     ptn.stringView ==
                     "this"
@@ -38122,8 +38091,7 @@ emitProtocolImpl: function {
             pid: pids.get i: pi
             ptn: regNameOf :symtab tid: (ztypes.tid.create from: pid.u64)
             isThis: (
-                pnm.stringView ==
-                "this" or
+                (pnm.stringView == "this") or
                 (
                     ptn.stringView ==
                     "this"
@@ -38654,8 +38622,7 @@ emitFileMethodCall: function {
     if bn.length == 0 then return ""
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
     isFM: (
-        mn ==
-        "close" or
+        (mn == "close") or
         (mn == "read") or
         (mn == "write") or
         (mn == "seek") or
@@ -39029,7 +38996,7 @@ lowerNativeArg: function {
     op: astnode.view
 } out String is {
     isViewP: (
-        pid == ctx.svTid or ((symtab.reg.typetypeOf typeId: pid) == ztypes.ztypetype.genericParam)
+        (pid == ctx.svTid) or ((symtab.reg.typetypeOf typeId: pid) == ztypes.ztypetype.genericParam)
     )
     if isViewP then {
         avh: emitColInterpArg :ast :symtab :ctx n: op consumes: false
@@ -39395,7 +39362,7 @@ emitParsedMethodCall: function {
     bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable.u64)
     if bn.length == 0 then return ""
     mn: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable.u64)
-    isPM: mn == "hasFlag" or (mn == "option") or (mn == "positional")
+    isPM: (mn == "hasFlag") or (mn == "option") or (mn == "positional")
     if isPM.not then return ""
     bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: call.callable.u64)
     pid: fileTypeIdOf :ast :symtab nid: bnid mname: mn
@@ -39885,7 +39852,7 @@ emitProtocolCreateCall: function {
         if a.namedoperation then {
             # the source is the `from:` argument, or the one unlabelled argument
             an: zast.nameTextAt :ast ref: a.name
-            if an.length == 0 or (an.stringView == "from") then {
+            if (an.length == 0) or (an.stringView == "from") then {
                 fop: ast.nodes.get i: a.operation.u64
                 fromBase: atomOrBaseText :ast n: fop
                 # the source's type is what the checker recorded it standing in
@@ -39925,7 +39892,7 @@ emitProtocolCreateCall: function {
                 # `create(&)` -- and a zero-argument one has a name that denotes
                 # no variable, which emitted `&fn`. Both are calls: emit the
                 # value, and bind it where its address cannot be taken.
-                if fromBase.length == 0 or valueVid.isZero then {
+                if (fromBase.length == 0) or valueVid.isZero then {
                     fvx: emitExpr :ast :symtab :ctx n: fop
                     valVarC = fvx.copy
                     refPfx = "&"
@@ -41193,7 +41160,7 @@ valKeyEqBody: function {
 # members (valKeyHashBody, valKeyEqBody): a value type. A String and a
 # StringView keep their native pair, a reference its declared one.
 isValKey: function {symtab: zenv.ZSymbolTable.view key: ztypes.tid kind: u64} out bool is {
-    if kind == 1 or (kind == 2) then return false
+    if (kind == 1) or (kind == 2) then return false
     return (symtab.reg.isValtypeOf tid: key)
 }
 

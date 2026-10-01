@@ -162,7 +162,7 @@ pathKindIs: function {path: StringView want: io.filekind} out bool is {
 # template body; `ranges` holds each copy's start and end (exclusive) in turn.
 inInstanceCopy: function {ranges: (ListVal u64).view nid: u64} out bool is {
     i: u64
-    for i + 1 < ranges.length loop {
+    for (i + 1) < ranges.length loop {
         if nid >= (ranges.get :i) when nid < (ranges.get i: i + 1) then return true
         i = i + 2
     }
@@ -180,7 +180,7 @@ sameFile: function {a: StringView b: StringView} out bool is {
         match (
             sb
         ) case ok then {
-            return sa.device == sb.device and (sa.inode == sb.inode)
+            return (sa.device == sb.device) and (sa.inode == sb.inode)
         } case err then null
     } case err then null
     return false
@@ -554,7 +554,7 @@ ccVisit: function {ast: Ast.view id: zast.nodeid nesting: u32 fnName: zast.namei
         )
     } case forexpr then {
         acc.score = acc.score + 1 + nesting
-        if n.conditions.count + n.postconditions.count > 1 then acc.score = acc.score + 1
+        if (n.conditions.count + n.postconditions.count) > 1 then acc.score = acc.score + 1
         ccVisitSpan :ast span: n.conditions :nesting :fnName :acc
         ccVisit :ast id: n.body nesting: nesting + 1 :fnName :acc
         ccVisitSpan :ast span: n.postconditions :nesting :fnName :acc
@@ -619,8 +619,7 @@ isComposedParts: function {ast: Ast.view parts: zast.kidspan} out bool is {
 # a key).
 isKeySeparator: function {s: StringView} out bool is {
     return (
-        s.length >
-        0 and
+        (s.length > 0) and
         (s.length <= 2) and
         (s.contains needle: " ").not and
         (s.contains
@@ -895,7 +894,7 @@ trimBackWs: function {s: StringView hi: u64} out u64 is {
 
 # byteIsWs -- a space, tab or line-end byte.
 byteIsWs: function {b: u8} out bool is {
-    return b == 32 or (b == 9) or (b == 10) or (b == 13)
+    return (b == 32) or (b == 9) or (b == 10) or (b == 13)
 }
 
 # parenGroupStart -- the index of the `(` matching the `)` at `close - 1`; 0 when
@@ -932,7 +931,7 @@ onlyOpensBetween: function {s: StringView lo: u64 hi: u64} out bool is {
 # docByteIsWord -- true for the ASCII letters and digits a word is made of. Everything
 # else -- punctuation, backticks, the `--` dash, path separators -- is a boundary.
 docByteIsWord: function {b: u8} out bool is {
-    return b >= 97 and (b <= 122) or (b >= 65 and (b <= 90)) or (b >= 48 and (b <= 57))
+    return (b >= 97) and (b <= 122) or ((b >= 65) and (b <= 90)) or ((b >= 48) and (b <= 57))
 }
 
 # docIsStopword -- true for a function word every doc shares, which therefore says
@@ -1109,7 +1108,7 @@ docStartsLine: function {ln: StringView col: u32} out bool is {
     i: u64
     for i < n loop {
         c: docByteAt s: ln :i
-        isSpace: c == 32 or (c == 9)
+        isSpace: (c == 32) or (c == 9)
         if isSpace.not then return false
         i = i + 1
     }
@@ -1675,14 +1674,12 @@ Analysis: class {
         :this ast: Ast.view nameRef: zast.nameid line: u32 col: u32 kind: zast.objectkind
     } is {
         isVal: (
-            kind ==
-            zast.objectkind.recordDef or
+            (kind == zast.objectkind.recordDef) or
             (kind == zast.objectkind.variantDef) or
             (kind == zast.objectkind.facetDef)
         )
         isRef: (
-            kind ==
-            zast.objectkind.classDef or
+            (kind == zast.objectkind.classDef) or
             (kind == zast.objectkind.unionDef) or
             (kind == zast.objectkind.protocolDef) or
             (kind == zast.objectkind.generatorDef)
@@ -1802,6 +1799,7 @@ Analysis: class {
         # call arm cannot ask the node it came from.
         ipW: zast.infixPartsOf :ast :n
         if ipW.found then {
+            this.checkMixedOperators :ast opId: ipW.operator lhsId: ipW.lhs
             this.checkBoolLiteralCompare :ast opId: ipW.operator lhsId: ipW.lhs rhsId: ipW.rhs
             if this.opts.arch then {
                 this.checkLiteralCompare :ast opId: ipW.operator lhsId: ipW.lhs rhsId: ipW.rhs
@@ -1918,7 +1916,7 @@ Analysis: class {
     # isBoolLiteralId -- the name id is `true` or `false`.
     isBoolLiteralId: function {t: this.view nm: zast.nameid} out bool is {
         if nm.isZero then return false
-        return nm == t.trueId or (nm == t.falseId)
+        return (nm == t.trueId) or (nm == t.falseId)
     }
 
     # reportBoolLiteralCompareReversed -- L028 with the literal written first
@@ -1967,7 +1965,7 @@ Analysis: class {
             colno: ep.col
         )
         xHi: lastLo + lastLen
-        if xHi > srcv.length or (xHi <= xLo) or (xLo <= litLo) then {
+        if (xHi > srcv.length) or (xHi <= xLo) or (xLo <= litLo) then {
             this.warn code: "L028" msg: what line: lp.line col: lp.col width: 1
             return
         }
@@ -2059,6 +2057,47 @@ Analysis: class {
             hi: litHi
             repl: "\{xText}\{suffix}"
         )
+    }
+
+    # checkMixedOperators -- L032: `a op1 b op2 c` with op1 and op2 of different
+    # kinds and no parentheses. Operators group left to right with no
+    # precedence, so the left operand of op2 is `a op1 b` whatever the kinds;
+    # the safe fix writes those parentheses. The tree does not record
+    # parentheses, so the source says whether they are there: the operand is
+    # grouped when the text before op2 ends in a `)` whose `(` opens just
+    # before the operand.
+    checkMixedOperators: function {:this ast: Ast.view opId: zast.nodeid lhsId: zast.nodeid} is {
+        inner: zast.infixPartsOf :ast n: (ast.nodes.get i: lhsId.u64)
+        if inner.found.not then return
+        outerK: operatorKind :ast nid: opId
+        innerK: operatorKind :ast nid: inner.operator
+        if (outerK == 0) or (innerK == 0) or (outerK == innerK) then return
+        if this.lineStart.length == 0 then return
+        op: zast.posOf n: (ast.nodes.get i: opId.u64)
+        lp: zast.posOf n: (ast.nodes.get i: lhsId.u64)
+        opB: (tokByteStart
+            lineStart: this.lineStart
+            srcLines: this.lines
+            lineno: op.line
+            colno: op.col
+        )
+        lhsB: (tokByteStart
+            lineStart: this.lineStart
+            srcLines: this.lines
+            lineno: lp.line
+            colno: lp.col
+        )
+        srcOwned: this.source.copy
+        sv: srcOwned.stringView
+        endB: opB
+        for endB > lhsB while (isSpaceByte c: (docByteAt s: sv i: endB - 1)) loop endB = endB - 1
+        if (groupedSpan :sv lo: lhsB hi: endB) then return
+        outerNm: zast.nameTextAt :ast ref: (atomNameIdOf n: (ast.nodes.get i: opId.u64))
+        inn: zast.nameTextAt :ast ref: (atomNameIdOf n: (ast.nodes.get i: inner.operator.u64))
+        what: "`\{inn}` and `\{outerNm}` chained without parentheses: operators group left to right, so the `\{inn}` is taken first"
+        this.warn code: "L032" msg: what line: op.line col: op.col width: outerNm.length.u32.orPanic
+        this.edits.append (zfix.Edit byteLo: lhsB byteHi: lhsB replacement: "(")
+        this.edits.append (zfix.Edit byteLo: endB byteHi: endB replacement: ")")
     }
 
     # checkImpliedIterate -- L029: `for each x: E.iterate` writes the call `each`
@@ -2403,7 +2442,7 @@ Analysis: class {
     # checkMemberCasing -- flag each variant/union arm whose name starts with an uppercase
     # letter (not lowerCamelCase), with a suggested rename (see casingSuggest/casingMessage).
     checkMemberCasing: function {:this ast: Ast.view kind: zast.objectkind items: zast.kidspan} is {
-        isVU: kind == zast.objectkind.variantDef or (kind == zast.objectkind.unionDef)
+        isVU: (kind == zast.objectkind.variantDef) or (kind == zast.objectkind.unionDef)
         if isVU.not then return
         h9x9: u64
         for h9x9 < items.count loop {
@@ -2831,17 +2870,12 @@ Analysis: class {
     } is {
         this.reportDefDocs :ast :site :docs
         isRC: (
-            okind ==
-            zast.objectkind.recordDef or
+            (okind == zast.objectkind.recordDef) or
             (okind == zast.objectkind.classDef) or
             (okind == zast.objectkind.generatorDef)
         )
-        isVU: (
-            okind == zast.objectkind.variantDef or (okind == zast.objectkind.unionDef)
-        )
-        isPF: (
-            okind == zast.objectkind.protocolDef or (okind == zast.objectkind.facetDef)
-        )
+        isVU: (okind == zast.objectkind.variantDef) or (okind == zast.objectkind.unionDef)
+        isPF: (okind == zast.objectkind.protocolDef) or (okind == zast.objectkind.facetDef)
         if docFields when isRC then (this.checkDocsMembersIn
             :ast
             span: isItems
@@ -3173,7 +3207,7 @@ Analysis: class {
         destTid: u64
         strTid: u64
     } is {
-        if destTid == 0 or (destTid != strTid) then return
+        if (destTid == 0) or (destTid != strTid) then return
         cln: u32
         ccl: u32
         isLitString: false
@@ -3184,7 +3218,7 @@ Analysis: class {
                 chn: ast.nodes.get i: dpn.child.u64
                 ci: nodeInfoOf n: chn
                 li: nodeInfoOf n: lit
-                written: ci.line != li.line or (ci.col != li.col)
+                written: (ci.line != li.line) or (ci.col != li.col)
                 if lit.atomstring when written when (
                     (atomNameIdOf n: chn).u32 == zast.names.wkString
                 ) then {
@@ -3236,7 +3270,7 @@ Analysis: class {
                 }
             }
         }
-        if from == 0 or (from == destTid) or (mname.length == 0) then return
+        if (from == 0) or (from == destTid) or (mname.length == 0) then return
         if (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: opId).u64 != destTid then return
         if (builtinNumericTid :ast :st tid: from).not then return
         if (builtinNumericTid :ast :st tid: destTid).not then return
@@ -3261,7 +3295,7 @@ Analysis: class {
         st: zenv.ZSymbolTable
         funcretId: zast.nodeid
     } is {
-        if arguments.count.u64 != 1 or funcretId.isZero then return
+        if (arguments.count.u64 != 1) or funcretId.isZero then return
         rarg: ast.nodes.get i: (zast.kidAt kids: ast.kids span: arguments i: 0)
         if rarg.namedoperation.not then return
         rt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: funcretId.u64
@@ -3377,9 +3411,8 @@ Analysis: class {
         pj: u64
         for pj < names.length loop {
             isRecv: (
-                (nameIds.get i: pj) ==
-                zast.names.wkThis.u64 or
-                (thisPn.length > 0 and (thisPn == (names.get i: pj)))
+                ((nameIds.get i: pj) == zast.names.wkThis.u64) or
+                ((thisPn.length > 0) and (thisPn == (names.get i: pj)))
             )
             if isRecv.not then return (optionval.some pj)
             pj = pj + 1
@@ -5311,7 +5344,7 @@ unitFileSegment: function {prog: Ast.view probe: u32} out segrange is {
         sgI = sgI + 1
         if probe >= sg.startId when probe < sg.endId then {
             narrower: r.end == r.start
-            if sg.endId - sg.startId < (r.end - r.start) then narrower = true
+            if (sg.endId - sg.startId) < (r.end - r.start) then narrower = true
             if narrower then {
                 r.start = sg.startId
                 r.end = sg.endId
@@ -5763,7 +5796,9 @@ sortEdits: function {edits: (List zfix.Edit).borrow} out List zfix.Edit is {
             if u.not then {
                 e: edits.get :i
                 better: (
-                    best == n or (e.byteLo < bestLo) or (e.byteLo == bestLo and (e.byteHi > bestHi))
+                    (best == n) or
+                    (e.byteLo < bestLo) or
+                    ((e.byteLo == bestLo) and (e.byteHi > bestHi))
                 )
                 if better then {
                     best = i
@@ -5806,7 +5841,7 @@ emitDiffHunk: function {
     oldCount: clHi - clLo + 1
     aByte: lineStart.get i: clLo
     bByte: srcLen
-    if clHi + 1 < nLines then bByte = lineStart.get i: clHi + 1
+    if (clHi + 1) < nLines then bByte = lineStart.get i: clHi + 1
     newBlock: String
     prev: aByte
     j: cStart
@@ -5833,7 +5868,7 @@ emitDiffHunk: function {
         buf.append dm
         oi = oi + 1
     }
-    if clHi + 1 == nLines when (endsWithNewline src: source).not then {
+    if (clHi + 1) == nLines when (endsWithNewline src: source).not then {
         buf.append "\\ No newline at end of file\n"
     }
     for each nl: newLines loop {
@@ -5872,7 +5907,7 @@ linesEqualAt: function {
     i: u64
     p: u64
 } out bool is {
-    if i >= m or (p >= n) then return false
+    if (i >= m) or (p >= n) then return false
     oi: oldLines.get :i
     pj: newLines.get i: p
     return oi.stringView == pj
@@ -5946,7 +5981,7 @@ lineDiffEdits: function {old: StringView new: StringView} out List zfix.Edit is 
     edits: List zfix.Edit
     i: u64
     p: u64
-    for i < m or (p < n) loop {
+    for (i < m) or (p < n) loop {
         if (linesEqualAt :oldLines :newLines :m :n :i :p) then {
             i = i + 1
             p = p + 1
@@ -5959,7 +5994,7 @@ lineDiffEdits: function {old: StringView new: StringView} out List zfix.Edit is 
         nhi: byteAtLine starts: newStarts srcLen: newLen k: at.newAt
         repl: String
         zfix.appendRange buf: repl src: new lo: nlo hi: nhi
-        doEmit: hi > lo or (nhi > nlo)
+        doEmit: (hi > lo) or (nhi > nlo)
         if doEmit then edits.append (zfix.Edit byteLo: lo byteHi: hi replacement: repl)
         i = at.oldAt
         p = at.newAt
@@ -6272,7 +6307,7 @@ hasHash: function {line: StringView} out bool is {
 # takesArguments -- a callee whose arguments bind parameters by name: a
 # function, or a user type, whose construction's fields are its parameters.
 takesArguments: function {tt: ztypes.ztypetype} out bool is {
-    return tt == ztypes.ztypetype.functionType or tt.isValueFamily or tt.isReferenceData
+    return (tt == ztypes.ztypetype.functionType) or tt.isValueFamily or tt.isReferenceData
 }
 
 # builtinNumericTid -- `tid` is one of the builtin numeric scalars, asked without
@@ -6290,4 +6325,51 @@ isNumericLiteralNode: function {ast: Ast.view n: astnode.view} out bool is {
     if n.atomid.not then return false
     nm: zast.nameTextAt :ast ref: n.name
     return (ztypecheck.isNumericLiteralName name: nm.stringView)
+}
+
+# operatorKind -- ztypes.operatorKindOf for the operator atom at `nid`.
+operatorKind: function {ast: Ast.view nid: zast.nodeid} out u8 is {
+    nm: zast.nameTextAt :ast ref: (atomNameIdOf n: (ast.nodes.get i: nid.u64))
+    return (ztypes.operatorKindOf name: nm.stringView)
+}
+
+# isSpaceByte -- a space, a tab or a line end.
+isSpaceByte: function {c: u8} out bool is {
+    return (c == 32) or (c == 9) or (c == 10) or (c == 13)
+}
+
+# groupedSpan -- the source between `lo` and `hi` is one parenthesised group:
+# it ends in a `)` whose matching `(` opens before `lo`, with nothing between
+# them but space and the opening parentheses of the operand's own first term.
+groupedSpan: function {sv: StringView lo: u64 hi: u64} out bool is {
+    if (hi == 0) or ((docByteAt s: sv i: hi - 1) != 41) then return false
+    op: matchingOpenParen :sv close: hi - 1
+    if op == 0 then return false
+    i: op - 1
+    # the group must open before the operand does, `((a) == b) or c`
+    if i >= lo then return false
+    k: i + 1
+    for k < lo while (
+        (isSpaceByte c: (docByteAt s: sv i: k)) or ((docByteAt s: sv i: k) == 40)
+    ) loop {
+        k = k + 1
+    }
+    return k >= lo
+}
+
+# matchingOpenParen -- the `(` matching the `)` at `close`, as its index plus
+# one; 0 when none matches.
+matchingOpenParen: function {sv: StringView close: u64} out u64 is {
+    depth: u64
+    i: close + 1
+    for i > 0 loop {
+        i = i - 1
+        c: docByteAt s: sv :i
+        if c == 41 then depth = depth + 1
+        if c == 40 then {
+            depth = depth - 1
+            if depth == 0 then return i + 1
+        }
+    }
+    return 0
 }

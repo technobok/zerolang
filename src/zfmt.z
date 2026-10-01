@@ -353,7 +353,7 @@ Builder: class {
                 lead.append ct
                 lead.append this.idHard
                 dang.append ct
-                if info.eolsEnd > 1 when j + 1 == info.count then {
+                if info.eolsEnd > 1 when (j + 1) == info.count then {
                     e: u32
                     ex: capped n: info.eolsEnd - 1 :cap
                     for e < ex loop {
@@ -804,12 +804,15 @@ Builder: class {
     # visitBinop -- a left-deep chain flattened: operands with their trailing
     # operators, one operand per line when the enclosing parens break; bare
     # (unwrapped) the chain never breaks. The leftmost operand continues the
-    # parenthesis budget of the chain; its own parentheses are redundant only
-    # when every operator inside and outside them is the same one
+    # parenthesis budget of the chain. Flattening stops where an operator of a
+    # different kind starts -- `(x == y) + 1` keeps its parentheses, though the
+    # chain would group the same without them (ztypes.operatorKindOf; the
+    # linter's L032 asks for them)
     visitBinop: function {:this id: zast.nodeid wrapped: bool} out u32 is {
         operands: ListVal u32
         operators: ListVal u32
         cur: id
+        mixed: false
         for true loop {
             n: this.node id: cur
             ip: zast.infixPartsOf ast: this.ast :n
@@ -820,7 +823,25 @@ Builder: class {
             operands.append ip.rhs.u32
             operators.append ip.operator.u32
             cur = ip.lhs
+            if (this.kindChangesAt outerOp: ip.operator lhs: cur) then {
+                operands.append cur.u32
+                mixed = true
+                break
+            }
         }
+        return (this.printChain :operands :operators :mixed :wrapped)
+    }
+
+    # printChain -- visitBinop's operands and operators, collected outermost
+    # first, printed leftmost first. A leftmost operand of another kind
+    # (`mixed`) keeps its parentheses
+    printChain: function {
+        :this
+        operands: (ListVal u32).view
+        operators: (ListVal u32).view
+        mixed: bool
+        wrapped: bool
+    } out u32 is {
         xs: ListVal u32
         idx: operands.length
         first: true
@@ -828,7 +849,10 @@ Builder: class {
             idx = idx - 1
             oid: zast.nodeid.create from: (operands.get i: idx)
             if first then {
-                xs.append (this.visitValue id: oid slot: slotkind.juxta wrapped: false)
+                # a left operand of another kind is printed in its parentheses
+                fslot: slotkind.juxta
+                if mixed then fslot = slotkind.called
+                xs.append (this.visitValue id: oid slot: fslot wrapped: false)
             } else {
                 xs.append this.idSpace
                 xs.append (this.visitValue
@@ -849,6 +873,30 @@ Builder: class {
         # fits, and breaks at its operators only when it does not
         if wrapped then return (this.d.group (this.d.concat xs))
         return (this.d.concat xs)
+    }
+
+    # kindChangesAt -- `lhs` is itself an operator chain whose operator is of
+    # another kind than `outerOp` (both being operators of some kind)
+    kindChangesAt: function {this: this.view outerOp: zast.nodeid lhs: zast.nodeid} out bool is {
+        ip: zast.infixPartsOf ast: this.ast n: (this.node id: lhs)
+        if ip.found.not then return false
+        ok: this.opKindOf id: outerOp
+        ik: this.opKindOf id: ip.operator
+        return (ok != 0) and (ik != 0) and (ok != ik)
+    }
+
+    # opKindOf -- ztypes.operatorKindOf for the operator atom `id`; 0 for any
+    # other node
+    opKindOf: function {this: this.view id: zast.nodeid} out u8 is {
+        n: this.node :id
+        match (
+            n
+        ) case atomid then {
+            nm: zast.nameTextAt ast: this.ast ref: n.name
+            return (ztypes.operatorKindOf name: nm.stringView)
+        } else {
+            return 0
+        }
     }
 
     # visitCall -- a callable and its arguments: flat when they fit, else one
@@ -945,7 +993,7 @@ Builder: class {
     hugsLast: function {this: this.view args: (ListVal u32).view} out bool is {
         ai: u64
         for ai < args.length loop {
-            last: ai + 1 == args.length
+            last: (ai + 1) == args.length
             if (this.d.breaksAt id: (args.get i: ai)) then {
                 if last.not then return false
             } else if last then return false
@@ -1817,14 +1865,14 @@ Builder: class {
         forced: false
         # a data block of bare elements fills its rows, the author's own row
         # breaks kept; anything else is one item per line when broken
-        filling: kind == 3 and (span.count > 1) and (this.allUnlabelled :span)
+        filling: (kind == 3) and (span.count > 1) and (this.allUnlabelled :span)
         fillKids: ListVal u32
         prevEnd: u32
         i: u64
         for i < span.count loop {
             itemId: this.kid :span :i
             g: this.gapDocs cap: 1
-            forced = forced or (i == 0 and g.marker and this.keepMarkers) or g.hasComment
+            forced = forced or ((i == 0) and g.marker and this.keepMarkers) or g.hasComment
             if filling then {
                 if i == 0 then inner.append this.idLine
                 prevEnd = this.fillItem :g :itemId first: i == 0 :prevEnd dst: fillKids
@@ -1835,7 +1883,7 @@ Builder: class {
         }
         if filling then inner.append (this.d.fill fillKids)
         g: this.gapDocs cap: 1
-        forced = forced or g.hasComment or (span.count == 0 and g.marker and this.keepMarkers)
+        forced = forced or g.hasComment or ((span.count == 0) and g.marker and this.keepMarkers)
         if g.trailing > 0 then inner.append g.trailing
         if g.dangling > 0 then {
             inner.append this.idHard
