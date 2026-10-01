@@ -239,7 +239,38 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-10-01 | 957d2327 | [recovery P4: a part that only reads takes no ordered temp](#r-957d2327) | 0.70s | -- | 121MB / -- | 84 / 336 / 279 (total 729) | 2,189,755 | 350MB | -- | 153,622 |
 | 2026-10-01 | 8b777544 | [recovery P5: the operator path](#r-8b777544) | 0.76s | -- | 121MB / -- | 84 / 383 / 340 (total 807) | 2,095,237 | 346MB | -- | 153,651 |
 | 2026-10-02 | 059ef68f | [recovery P6: pin-only blocks flattened, dead code out](#r-059ef68f) | 0.71s | -- | 121MB / -- | 92 / 335 / 284 (total 711) | 2,094,311 | 346MB | -- | 152,805 |
+| 2026-10-02 | eeb543f6 | [recovery P7: four language changes, two lints; the arc's end](#r-eeb543f6) | 0.74s | -- | 120MB / -- | 81 / 354 / 296 (total 731) | 2,086,585 | 343MB | -- | 153,396 |
 
+
+<a id="r-eeb543f6"></a>
+**Recovery P7: four language changes, two lints; the arc's end** (`bb31387f` ->
+`eeb543f6`, final `make ci` green in the main tree). Allocations 2,094,311 ->
+2,086,585, instructions 7,317M -> 7,337M: the checker does more (the `_`
+spelling, literal promotion), and sweeping out ~2,700 suffixes and conversions
+gave back most of it (-12,835 allocations in L031's sweep alone). Wall 0.74s,
+taken with the load average near 6.
+
+Changes, in order:
+- `_` as the parameter's type;
+- a string literal is a String at a String destination;
+- L015 reports the `.string` that has become redundant;
+- L031 redundant-widening;
+- L032 mixed-operator-chain, with the printer keeping that grouping;
+- the Design-OPEN entries for `else when` and a view pinning its owner.
+
+**Not done: the list index type parameter (Q4 ii).** The parameter compiles
+and checks for user programs, but a system-unit typedef over a list
+instance (`ByteView: typedef ListViewVal u8`) is minted before the
+template's parameters can be read. The default is never filled in, so the
+typedef resolves to an intermediate node of the instance trie. The C that
+references it does not compile, for the compiler and for every program
+that uses io. That has to be fixed first. The id-indexed tables then wait
+on the migration (~2,250 `nodes.get` call sites alone).
+
+**The arc, end to end** (`426b1224` -> `eeb543f6`): allocations 2,825,524 ->
+2,086,585 (-26%), instructions 9,056M -> 7,337M (-19%), fixed input 4,442M ->
+2,548M (-43%), wall 0.84s -> 0.70-0.74s, ordered temps in bin/zc.c 29,530 ->
+9,418.
 
 <a id="r-059ef68f"></a>
 **Recovery P6: pin-only blocks flattened, dead code out** (`a8894ece`,
