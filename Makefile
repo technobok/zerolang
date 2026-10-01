@@ -2173,7 +2173,8 @@ emitter-guard:
 # isNonLvalueArg IS counted and is the row that does not belong with the rest:
 # "can C take the address of this text" is a question about C, not about when a
 # value dies, and it has no checker answer to defer to. It rises when a site
-# that addresses a value learns to bind a non-lvalue first, which is a fix.
+# that addresses a value learns to bind a non-lvalue first, which is a fix
+# (29 -> 30: `split` on a view call's result, viewRecvAddr).
 #
 # bindingRhsIsBorrow's residue is the same shape. Its four LIFETIME callers are
 # gone -- each reads the checker now -- and the one call left feeds
@@ -2192,7 +2193,7 @@ lifetime-guard:
 	  elif [ "$$2" -lt "$$3" ]; then echo "lifetime-guard: $$1 = $$2 < baseline $$3 -- lower the baseline here"; fi; }; \
 	chk "registerScopeDestroy" "$$l1" 5; \
 	chk "refsLocal" "$$l2" 4; \
-	chk "isNonLvalueArg" "$$l3" 29; \
+	chk "isNonLvalueArg" "$$l3" 30; \
 	chk "bindingRhsIsBorrow" "$$l4" 6; \
 	chk "'_ah{' argument hoists" "$$l5" 0; \
 	chk "hoistExprIsBorrowRooted" "$$l6" 0; \
