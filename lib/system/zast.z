@@ -1015,12 +1015,16 @@ nodeid: typedef u32 as {
 # indexes its row; row 0 is a sentinel holding the empty text, which is the
 # answer for an absent ref. Texts are never removed, so an id stays valid for
 # the pool's lifetime. The slot index is an open-addressed, linear-probed
-# power-of-two table keyed by the seeded StringView hash: ids follow
+# power-of-two table keyed by the seeded StringView fastHash -- the keys are
+# the program's own text, so it need not resist flooding: ids follow
 # insertion order and are deterministic, but slot layout is process-local
 # -- dump text, never hashes.
 StringPool: class {
     # the interned strings, indexed by name id. Id 0 is the sentinel empty text
     texts: List String
+    # each text's hash, indexed by name id like `texts`: a probe compares it
+    # before the bytes, and a rebuild re-slots every text without re-hashing
+    hashes: ListVal u64
     # the hash index over `texts`, which is what makes interning a lookup rather
     # than a scan
     slots: ListVal u32
@@ -1032,12 +1036,14 @@ StringPool: class {
     create: function {} out this is {
         p: (meta.create
             texts: List String
+            hashes: ListVal u64
             slots: ListVal u32
             used: 0
         )
         # the sentinel row an absent ref reads. It is deliberately given no
         # slot, so interning "" still mints an id of its own.
         p.texts.append "".string
+        p.hashes.append 0
         return p
     }
 
@@ -1064,9 +1070,7 @@ StringPool: class {
         mask: ncap - 1
         k: 1.u64
         for k < this.texts.length loop {
-            text: this.texts.get i: k
-            hv: text.stringView.hash
-            idx: hv & mask
+            idx: (this.hashes.get i: k) & mask
             for (ns.get i: idx) != 0 loop idx = idx + 1 & mask
             ns.set i: idx val: k.u32.orPanic
             k = k + 1
@@ -1074,16 +1078,19 @@ StringPool: class {
         this.slots = ns.take
     }
 
-    # probeSlot -- the slot index for s: either holds s's id or is the
-    # empty slot where s would insert. Requires a non-empty slot table.
-    probeSlot: function {t: this.view s: StringView} out u64 is {
+    # probeSlot -- the slot index for s, whose hash is h: either holds s's id
+    # or is the empty slot where s would insert. Requires a non-empty slot
+    # table. Only a slot whose text hashed the same is compared byte by byte.
+    probeSlot: function {t: this.view s: StringView h: u64} out u64 is {
         mask: t.slots.length - 1
-        idx: s.hash & mask
+        idx: h & mask
         for true loop {
             sid: t.slots.get i: idx
             if sid == 0 then return idx
-            text: t.texts.get i: sid.u64
-            if text.stringView == s then return idx
+            if (t.hashes.get i: sid.u64) == h then {
+                text: t.texts.get i: sid.u64
+                if text.stringView == s then return idx
+            }
             idx = idx + 1 & mask
         }
         return 0
@@ -1092,11 +1099,13 @@ StringPool: class {
     # set -- intern s, copying the bytes only on first sight.
     set: function {:this s: StringView} out nameid is {
         this.reserve
-        si: this.probeSlot :s
+        h: s.fastHash
+        si: this.probeSlot :s :h
         sid: this.slots.get i: si
         if sid > 0 then return (nameid.create from: sid.u32)
         nid: this.texts.length.u32.orPanic
         this.texts.append s.string
+        this.hashes.append h
         this.slots.set i: si val: nid
         this.used = this.used + 1
         return (nameid.create from: nid.u32)
@@ -1106,11 +1115,13 @@ StringPool: class {
     # dropped when the text is already interned.
     setOwned: function {:this s: String.take} out nameid is {
         this.reserve
-        si: this.probeSlot s: s.stringView
+        h: s.stringView.fastHash
+        si: this.probeSlot s: s.stringView :h
         sid: this.slots.get i: si
         if sid > 0 then return (nameid.create from: sid.u32)
         nid: this.texts.length.u32.orPanic
         this.texts.append s
+        this.hashes.append h
         this.slots.set i: si val: nid
         this.used = this.used + 1
         return (nameid.create from: nid.u32)
@@ -1120,7 +1131,7 @@ StringPool: class {
     # Read-only: never interns, never grows the slot table.
     find: function {t: this.view s: StringView} out nameid is {
         if t.slots.length == 0 then return (nameid.create from: 0)
-        si: t.probeSlot :s
+        si: t.probeSlot :s h: s.fastHash
         return (nameid.create from: (t.slots.get i: si))
     }
 
