@@ -233,7 +233,26 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-09-10 | b90b64df | [a loop variable survives a suspension](#r-loop-var-suspension) | 0.50s | -- | 100MB / -- | 118 / 190 / 202 (total 510) | 2,138,058 | 306MB | -- | 123,510 |
 | 2026-09-11 | 43e533e1 | [the allocation ratchet joins ci, and the drift comes out](#r-alloc-gate-recovery) | 0.56s | -- | 100MB / -- | 141 / 226 / 211 (total 578) | 2,161,395 | 309MB | -- | 124,541 |
 | 2026-10-01 | 426b1224 | [re-baseline after 669 commits: a heavier input, not a slower compiler](#r-426b1224) | 0.84s | 0.90s | 119MB / 98MB | 153 / 361 / 330 (total 844) | 2,825,524 | 367MB | 31.0s (2,275 cases) | 152,955 |
+| 2026-10-01 | a9910efd | [recovery P1: four bugs, two of them allocations](#r-a9910efd) | 0.79s | -- | 120MB / -- | 147 / 369 / 331 (total 855) | 2,792,336 | 367MB | 31.0s (2,280 cases) | 153,076 |
 
+
+<a id="r-a9910efd"></a>
+**Recovery P1: four bugs, two of them allocations** (`3d477c94` ->
+`a9910efd`, baseline 2,825,524 -> 2,792,336, instructions 9,056M -> 9,018M,
+fixed input 4,442M -> 4,420M).
+
+- `bebf407b`: an unmet generic bound written outside a statement is located
+  and reported once. This costs +1,920 source allocations for the new code;
+  the compiler's behaviour is unchanged.
+- `37690e1e` and `a9910efd`: a NUL byte is an error, a lone CR is whitespace
+  (spec: "Linefeed only denotes a new line"), and the EOL token's text is the
+  linefeed alone, so a CRLF file's multi-line string no longer breaks the C.
+  Source +940.
+- `a9d8034b`: `isNumericTid` memoizes its answer per tid: -36,403
+  behaviour. This was the 09-11 fix's remaining cost, a name copy for
+  every numeric type asked about.
+- `9fabcccc`: `refsLocal` stops at the first differing byte. That is -0.23%
+  instructions on the -O2 driver, and no allocations.
 
 <a id="r-426b1224"></a>
 **Re-baseline after 669 commits: a heavier input, not a slower compiler**
