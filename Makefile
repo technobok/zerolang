@@ -1979,7 +1979,10 @@ perf: $(PERFBIN)
 #
 # +330 a borrowed union is a pointer: -167 behaviour (a match on a variable
 # reads it in place, with no copy and no per-arm slot text), +497 source.
-ALLOC_BASELINE := 2807979
+#
+# +460 `split` on a view call's result: +19 behaviour (the receiver's address
+# is built once per split call), +441 source.
+ALLOC_BASELINE := 2808439
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
