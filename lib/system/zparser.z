@@ -268,6 +268,13 @@ Parser: class {
     # the payload-less placeholder arm until a converted parent moves
     # the real child in).
     ast: Ast
+    # the operand/operator paths of the operations being parsed, innermost
+    # last: operationPaths pushes one operation's paths and answers where
+    # they start, and its consumer truncates back to there. A nested
+    # operation pushes above and is gone before the outer one is read, so one
+    # stack serves every level -- and a single-path operation, the common
+    # case, never builds a list at all.
+    opStack: ListVal u32
 } as {
     # a parser with an empty tree: the node table holds only its sentinel row,
     # and the name pool only the empty text
@@ -275,6 +282,7 @@ Parser: class {
         return (meta.create
             nextNodeId: 1
             ast: Ast.create
+            opStack: ListVal u32
         )
     }
 
@@ -1095,19 +1103,50 @@ Parser: class {
         )
     }
 
-    # Greedily collect operand/operator paths in source order. Stops at
-    # the first non-atom token. A malformed path is appended as a
-    # trailing error arm (callers pop and check the tail before
-    # dispatching on the count).
-    operationPaths: function {:this lex: zlexer.Lexer} out ListVal u32 is {
-        paths: ListVal u32
+    # Greedily collect operand/operator paths in source order onto opStack,
+    # answering the stack depth they start at. Stops at the first non-atom
+    # token. A malformed path is pushed as a trailing error arm (consumers
+    # check the tail before dispatching on the count).
+    operationPaths: function {:this lex: zlexer.Lexer} out u64 is {
+        base: this.opStack.length
         for (this.atomLookahead :lex) loop {
             node: this.parsePath :lex
             errored: Parser.isError :node
-            paths.append (this.intern n: node).u32
+            nid: (this.intern n: node).u32
+            this.opStack.append nid
             if errored then break
         }
+        return base
+    }
+
+    # pathCount -- how many paths the operation at `base` pushed.
+    pathCount: function {this: this.view base: u64} out u64 is {
+        return this.opStack.length - base
+    }
+
+    # takePaths -- the operation at `base`, off the stack and into a list of
+    # its own, for the consumers that fold or call over several paths.
+    takePaths: function {:this base: u64} out ListVal u32 is {
+        n: this.opStack.length - base
+        paths: ListVal u32 capacity: n
+        i: base
+        for i < this.opStack.length loop {
+            paths.append (this.opStack.get :i)
+            i = i + 1
+        }
+        for this.opStack.length > base loop this.opStack.pop
         return paths
+    }
+
+    # operationFromBase -- operationFromPaths over the operation at `base`. One
+    # path is the operation itself, error or not, exactly as the fold returns
+    # it; only several are taken into a list.
+    operationFromBase: function {:this base: u64 lex: zlexer.Lexer.view} out astnode is {
+        if (this.pathCount :base) == 1 then {
+            only: this.opStack.pop
+            return (this.ast.nodes.get i: only.u64)
+        }
+        return (this.operationFromPaths paths: (this.takePaths :base) :lex)
     }
 
     # Fold a reversed operand/operator stack (pop yields source order)
@@ -1230,8 +1269,8 @@ Parser: class {
                         msg: "Duplicate argument name".string
                     )
                 }
-                vpaths: this.operationPaths :lex
-                vlen: vpaths.length
+                vbase: this.operationPaths :lex
+                vlen: this.pathCount base: vbase
                 if vlen == 0 then {
                     bad: lex.acceptAny pool: this.ast.names
                     return (this.mkError
@@ -1240,7 +1279,7 @@ Parser: class {
                         msg: "Expected an Operation after label".string
                     )
                 }
-                val: this.operationFromPaths paths: vpaths :lex
+                val: this.operationFromBase base: vbase :lex
                 vIsErr: Parser.isError node: val
                 if vIsErr then return val
                 no: (this.mkNamedOp
@@ -1311,8 +1350,8 @@ Parser: class {
     # operations, so operationPaths stops at the label and they still need
     # parentheses.
     parseTyperefOperation: function {:this lex: zlexer.Lexer} out astnode is {
-        paths: this.operationPaths :lex
-        n: paths.length
+        pbase: this.operationPaths :lex
+        n: this.pathCount base: pbase
         if n == 0 then {
             badPos: lex.peekPos
             return (this.mkErrorAt
@@ -1321,7 +1360,7 @@ Parser: class {
                 msg: "Expected type reference".string
             )
         }
-        return (this.operationFromPaths :paths :lex)
+        return (this.operationFromBase base: pbase :lex)
     }
 
     # operation-or-call: the top-level entry that also accepts named
@@ -1713,8 +1752,8 @@ Parser: class {
         if tt == zlexer.toktype.whenTok then {
             lex.advance pool: this.ast.names
             lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
-            vpaths: this.operationPaths :lex
-            n: vpaths.length
+            vbase: this.operationPaths :lex
+            n: this.pathCount base: vbase
             if n == 0 then {
                 bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
@@ -1723,7 +1762,7 @@ Parser: class {
                     msg: "Expected operation (condition) for 'if'".string
                 )
             }
-            cond: this.operationFromPaths paths: vpaths :lex
+            cond: this.operationFromBase base: vbase :lex
             cErr: Parser.isError node: cond
             if cErr then return cond
             cp: zast.posOf n: cond
@@ -1814,8 +1853,8 @@ Parser: class {
             clausePos: lex.peekPos
             cLine: clausePos.lineno
             cCol: clausePos.colno
-            vpaths: this.operationPaths :lex
-            n: vpaths.length
+            vbase: this.operationPaths :lex
+            n: this.pathCount base: vbase
             if n == 0 then {
                 bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
@@ -1824,7 +1863,7 @@ Parser: class {
                     msg: "Expected operation (condition) for 'if'".string
                 )
             }
-            cond: this.operationFromPaths paths: vpaths :lex
+            cond: this.operationFromBase base: vbase :lex
             cErr: Parser.isError node: cond
             if cErr then return cond
             cp: zast.posOf n: cond
@@ -1954,8 +1993,8 @@ Parser: class {
             )
         } case some then {
             lex.accept tt: zlexer.toktype.onTok pool: this.ast.names
-            spaths: this.operationPaths :lex
-            sn: spaths.length
+            sbase: this.operationPaths :lex
+            sn: this.pathCount base: sbase
             if sn == 0 then {
                 bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
@@ -1964,7 +2003,7 @@ Parser: class {
                     msg: "Expected operation for match (subject)".string
                 )
             }
-            subject: this.operationFromPaths paths: spaths :lex
+            subject: this.operationFromBase base: sbase :lex
             sErr: Parser.isError node: subject
             if sErr then return subject
             clauses: ListVal u32
@@ -2002,8 +2041,8 @@ Parser: class {
         if tt == zlexer.toktype.whileTok then {
             lex.advance pool: this.ast.names
             lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
-            vpaths: this.operationPaths :lex
-            n: vpaths.length
+            vbase: this.operationPaths :lex
+            n: this.pathCount base: vbase
             if n == 0 then {
                 bad: lex.acceptAny pool: this.ast.names
                 return (this.mkError
@@ -2012,7 +2051,7 @@ Parser: class {
                     msg: "Expected operation (condition) for for".string
                 )
             }
-            op: this.operationFromPaths paths: vpaths :lex
+            op: this.operationFromBase base: vbase :lex
             oErr: Parser.isError node: op
             if oErr then return op
             if hasBody then {
@@ -2167,8 +2206,8 @@ Parser: class {
         lblTok: lex.acceptAny pool: this.ast.names
         nm: lblTok.text
         lex.accept tt: zlexer.toktype.eolTok pool: this.ast.names
-        vpaths: this.operationPaths :lex
-        n: vpaths.length
+        vbase: this.operationPaths :lex
+        n: this.pathCount base: vbase
         if n == 0 then {
             bad: lex.acceptAny pool: this.ast.names
             return (this.mkError
@@ -2177,7 +2216,7 @@ Parser: class {
                 msg: "Expected operation for for binding label".string
             )
         }
-        op: this.operationFromPaths paths: vpaths :lex
+        op: this.operationFromBase base: vbase :lex
         oErr: Parser.isError node: op
         if oErr then return op
         no: (this.mkNamedOp
@@ -2222,8 +2261,8 @@ Parser: class {
         } case some then {
             conditions: ListVal u32
             postconditions: ListVal u32
-            paths: this.operationPaths :lex
-            n: paths.length
+            pbase: this.operationPaths :lex
+            n: this.pathCount base: pbase
             if n == 0 then {
                 return (this.forClausesTail
                     :lex
@@ -2237,7 +2276,7 @@ Parser: class {
                     :forCol
                 )
             }
-            op: this.operationFromPaths :paths :lex
+            op: this.operationFromBase base: pbase :lex
             oErr: Parser.isError node: op
             if oErr then return op
             cp: zast.posOf n: op
@@ -2279,8 +2318,8 @@ Parser: class {
         if isLabel then {
             lblTok: lex.acceptAny pool: this.ast.names
             nm: lblTok.text
-            vpaths: this.operationPaths :lex
-            n: vpaths.length
+            vbase: this.operationPaths :lex
+            n: this.pathCount base: vbase
             if n == 0 then {
                 badPos: lex.peekPos
                 return (this.mkErrorAt
@@ -2289,7 +2328,7 @@ Parser: class {
                     msg: "Expected operation for with value".string
                 )
             }
-            op: this.operationFromPaths paths: vpaths :lex
+            op: this.operationFromBase base: vbase :lex
             oErr: Parser.isError node: op
             if oErr then return op
             doOpt: lex.accept tt: zlexer.toktype.doTok pool: this.ast.names
@@ -3301,8 +3340,8 @@ Parser: class {
                 msg: "Inline type definition is not allowed here; define it at unit level and reference it by name".string
             )
         }
-        paths: this.operationPaths :lex
-        n: paths.length
+        pbase: this.operationPaths :lex
+        n: this.pathCount base: pbase
         if n == 0 then {
             bad: lex.acceptAny pool: this.ast.names
             return (this.mkError
@@ -3311,7 +3350,7 @@ Parser: class {
                 msg: "Expected a function or expression for item".string
             )
         }
-        return (this.operationFromPaths :paths :lex)
+        return (this.operationFromBase base: pbase :lex)
     }
 
     # type-definition dispatcher: unit / function / the six item-definition
@@ -3353,8 +3392,8 @@ Parser: class {
         } case dataTok then {
             return (this.acceptDataDefinition :lex)
         } else {
-            paths: this.operationPaths :lex
-            n: paths.length
+            pbase: this.operationPaths :lex
+            n: this.pathCount base: pbase
             if n == 0 then {
                 return (this.mkErrorAt
                     pos: startPos
@@ -3362,7 +3401,7 @@ Parser: class {
                     msg: "Expected a type definition or expression".string
                 )
             }
-            return (this.operationFromPaths :paths :lex)
+            return (this.operationFromBase base: pbase :lex)
         }
     }
 
@@ -3822,8 +3861,8 @@ Parser: class {
     # stopped at a non-atomid.
     parseOperation: function {:this lex: zlexer.Lexer} out astnode is {
         tPos: lex.peekPos
-        paths: this.operationPaths :lex
-        n: paths.length
+        pbase: this.operationPaths :lex
+        n: this.pathCount base: pbase
         if n == 0 then {
             return (this.mkErrorAt
                 pos: tPos
@@ -3836,7 +3875,7 @@ Parser: class {
             eqOpt
         ) case some then {
             return (this.buildReassignment
-                :paths
+                paths: (this.takePaths base: pbase)
                 :lex
                 startLine: tPos.lineno
                 startCol: tPos.colno
@@ -3847,13 +3886,19 @@ Parser: class {
                 swOpt
             ) case some then {
                 return (this.buildSwap
-                    :paths
+                    paths: (this.takePaths base: pbase)
                     :lex
                     startLine: tPos.lineno
                     startCol: tPos.colno
                 )
             } case none then {
-                return (this.operationOrCallFromPaths :paths :lex)
+                # one path and no label after it is the operation itself,
+                # exactly as the fold returns it
+                if n == 1 when (Parser.ttIsLabel tt: lex.peekType).not then {
+                    only: this.opStack.pop
+                    return (this.ast.nodes.get i: only.u64)
+                }
+                return (this.operationOrCallFromPaths paths: (this.takePaths base: pbase) :lex)
             }
         }
     }
