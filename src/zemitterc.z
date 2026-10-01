@@ -3050,8 +3050,16 @@ Ctx: class {
     # each data block's element text, by type
     )
     dataElems: (IdMapR ztypes.tid V: String
-    # each data constant's emitted text, keyed by owner and name
+    # a native operator row's hole bindings: `StringView` and `T` its cnames,
+    # `L` and `R` its operands. The names never change and the values are
+    # replaced per operator, so the four lists live here and an operator
+    # borrows them (emitOperatorAt) rather than building four of its own
     )
+    opBindNames: List String
+    opBindVals: List String
+    opRawNames: List String
+    opRawVals: List String
+    # each data constant's emitted text, keyed by owner and name
     dataConst: (MapVR dataconstkey V: String
     # each data slot's emitted text, keyed by owner and slot
     )
@@ -17563,23 +17571,44 @@ emitOperatorAt: function {
     orderRowOperand :ast :symtab :ctx :owner key: key.stringView nid: rhsNid slot: 1 :ord
     oprefix: orderFinish :ctx st: ord
     # a typedef emits no helper of its own: the chain end owns it
-    tcn: ctxCname :ctx tid: owner
-    tdb: typedefChaseBaseName :ast :symtab tid: owner
-    if tdb.length > 0 then {
-        tcn = ctxCname :ctx tid: (typedefChaseTid :symtab tid: owner)
-    }
+    tcnTid: owner
+    if (typedefChaseHasBaseName :symtab tid: owner) then tcnTid = typedefChaseTid :symtab tid: owner
+    filled: fillOperatorRow :ctx :ord :body :key :tcnTid
+    return (orderWrap prefix: oprefix call: filled)
+}
+
+# fillOperatorRow -- a native operator row's C: its holes filled from the
+# owner's cname and the two operands built in `ord`, through the four binding
+# lists borrowed from the context. The names are fixed, the owner's cname and
+# the operands move in, and nothing is copied.
+fillOperatorRow: function {
+    ctx: Ctx
+    ord: orderstate
+    body: String
+    key: String
+    tcnTid: ztypes.tid
+} out String is {
     bn: List String
     bv: List String
-    bn.append from: "StringView".string
-    bv.append from: ctx.svC.copy
-    bn.append from: "T".string
-    bv.append from: tcn.copy
     rn: List String
     rv: List String
-    rn.append from: "L".string
-    rv.append from: (orderSlotText t: ctx st: ord slot: 0).string
-    rn.append from: "R".string
-    rv.append from: (orderSlotText t: ctx st: ord slot: 1).string
+    bn swap ctx.opBindNames
+    bv swap ctx.opBindVals
+    rn swap ctx.opRawNames
+    rv swap ctx.opRawVals
+    if bn.length == 0 then {
+        bn.append from: "StringView".string
+        bn.append from: "T".string
+        bv.append from: ctx.svC.copy
+        bv.append from: String
+        rn.append from: "L".string
+        rn.append from: "R".string
+        rv.append from: String
+        rv.append from: String
+    }
+    bv.set i: 1 val: (ctxCname :ctx tid: tcnTid)
+    rv.set i: 0 val: (ctx.orderVals.set i: ord.valBase val: String)
+    rv.set i: 1 val: (ctx.orderVals.set i: ord.valBase + 1 val: String)
     orderEnd :ctx st: ord
     filled: (fillHolesForCtx
         :ctx
@@ -17590,7 +17619,11 @@ emitOperatorAt: function {
         rawNames: rn
         rawVals: rv
     )
-    return (orderWrap prefix: oprefix call: filled)
+    bn swap ctx.opBindNames
+    bv swap ctx.opBindVals
+    rn swap ctx.opRawNames
+    rv swap ctx.opRawVals
+    return filled
 }
 
 # operandValueC -- an operator's operand as a VALUE, which is what valueExprC
@@ -28887,6 +28920,22 @@ typedefChaseBaseName: function {
     return nm
 }
 
+# typedefChaseHasBaseName -- whether typedefChaseBaseName would name anything,
+# asked without copying the name.
+typedefChaseHasBaseName: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    cur: tid
+    for true loop {
+        if (symtab.typing.typedefBaseName.has key: cur) then return true
+        bo: symtab.typing.typedefBaseTid.get key: cur
+        match (
+            bo
+        ) case some then {
+            cur = ztypes.tid.create from: bo
+        } case none then break
+    }
+    return false
+}
+
 # typedefChaseC -- the underlying C scalar of a typedef record, chasing
 # the typedef-base chain (meters -> i64, height -> meters -> i64); ""
 # when the type is not a typedef.
@@ -32074,6 +32123,10 @@ emitC: function {
         needMembs: List String
         fnSigs: (IdMapR ztypes.tid V: String)
         dataElems: (IdMapR ztypes.tid V: String)
+        opBindNames: List String
+        opBindVals: List String
+        opRawNames: List String
+        opRawVals: List String
         dataConst: (MapVR dataconstkey V: String)
         dataSlot: (MapVR dataslotkey V: String)
         ptrVids: ListVal ztypes.vid
