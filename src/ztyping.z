@@ -695,6 +695,13 @@ ZTyping: class {
     # the `as`-section members that are constants of their type, by declaration:
     # a type-level value, reached through the type and folded like a unit constant
     asConstDecls: IdSet u64
+    # boxedArms -- the union arms written `(Box T)`, or whose instance's
+    # argument is a Box, by armKey: a heap cell whatever the payload's size
+    boxedArms: IdSet u64
+    # inlineArms -- the bare value-type union arms whose payload fits the
+    # union's pointer-wide slot, by armKey: stored in the slot itself, with no
+    # cell (checkUnionArmSlots)
+    inlineArms: IdSet u64
     # types synthesised to carry a generator's state
     generatorWrapper: (IdMapV u64 v: bool
     # nodes deliberately left unstamped, so a later pass does not read absence
@@ -2663,6 +2670,17 @@ ZTyping: class {
         this.asConstDecls.add item: declId.u64
     }
 
+    # armKey -- a union arm's key in boxedArms and inlineArms: its union's type
+    # id and its name id, which an instance's arm carries as its template's does
+    armKey: function {t: this.view parentTypeId: ztypes.tid nameId: zast.nameid} out u64 is {
+        return parentTypeId.u64 << 32 + nameId.u64
+    }
+
+    # armIsInline -- the arm's payload is stored in the union's slot itself
+    armIsInline: function {t: this.view parentTypeId: ztypes.tid nameId: zast.nameid} out bool is {
+        return (t.inlineArms.has item: (t.armKey :parentTypeId :nameId))
+    }
+
     # isAsConstDecl -- whether a member declaration is such a constant
     isAsConstDecl: function {this: this.view declId: ztypes.declid} out bool is {
         if declId.isZero then return false
@@ -3169,6 +3187,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         renameSeen: false
         privacySeen: false
         asConstDecls: IdSet u64
+        boxedArms: IdSet u64
+        inlineArms: IdSet u64
         generatorWrapper: (IdMapV u64 v: bool)
         noStampNode: (IdMapV u64 v: bool)
         fnHasBody: (IdMapV u64 v: bool)

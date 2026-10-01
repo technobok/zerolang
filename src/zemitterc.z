@@ -10298,7 +10298,15 @@ emitArmCtorCall: function {
             av = emitExpr :ast :symtab :ctx n: (ast.nodes.get i: a.operation.u64)
         }
     }
-    st: armCellStore pc: payC.stringView box: "_b" value: av.stringView slot: "_u.data"
+    inl: armIsInlineC :ast :symtab tid: stid :arm
+    usl: armSlotC recv: "_u" acc: "." :arm inline: inl
+    st: (armCellStore
+        pc: payC.stringView
+        box: "_b"
+        value: av.stringView
+        slot: usl.stringView
+        inline: inl
+    )
     e: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; \{st} _u; })"
     return e
 }
@@ -12497,7 +12505,20 @@ emitCrossUnitSumCtor: function {
                 }
             }
         }
-        st: armCellStore pc: payC.stringView box: "_b" value: av.stringView slot: "_u.data"
+        inl: (armIsInlineC
+            :ast
+            :symtab
+            tid: (ztypes.tid.create from: utid.u64)
+            arm: ctorArmName
+        )
+        usl: armSlotC recv: "_u" acc: "." arm: ctorArmName inline: inl
+        st: (armCellStore
+            pc: payC.stringView
+            box: "_b"
+            value: av.stringView
+            slot: usl.stringView
+            inline: inl
+        )
         e: "({ \{vc}_t _u = {0}; _u.tag = \{tg}; \{st} _u; })"
         return e
     } else {
@@ -22759,8 +22780,6 @@ emitMatchStmt: function {
         buf.append "\{ind}switch (\{mRecv}\{mAcc}tag) {\n"
     }
     ind2: "\{ind}    "
-    mSlot: String
-    if isUni then mSlot = "\{mRecv}\{mAcc}data"
     clx999: u64
     for clx999 < m.clauses.count.u64 loop {
         cId: zast.kidAt kids: ast.kids span: m.clauses i: clx999
@@ -22774,7 +22793,8 @@ emitMatchStmt: function {
             vtid: (ztypes.tid.create from: vtid.u64)
             :isUni
             :mN
-            slot: mSlot.stringView
+            slotRecv: mRecv.stringView
+            slotAcc: mAcc
             :sname
             snameVid: snameV
             :assignTo
@@ -23404,8 +23424,9 @@ emitMatchClause: function {
     vtid: ztypes.tid
     isUni: bool
     mN: u64
-    # a union subject's payload slot
-    slot: StringView
+    # a union subject's storage and the access its slot is read with
+    slotRecv: StringView
+    slotAcc: StringView
     sname: StringView
     snameVid: ztypes.vid
     assignTo: StringView
@@ -23430,7 +23451,9 @@ emitMatchClause: function {
         prevT: (vtGet xs: ctx.narrowTid vid: snameVid).or d: (ztypes.tid.create from: 0)
         if pc.length > 0 when sname.length > 0 then {
             if isUni then {
-                nbv: armCellRef pc: pc.stringView :slot
+                inl: armIsInlineC :ast :symtab tid: vtid :arm
+                msl: armSlotC recv: slotRecv acc: slotAcc :arm inline: inl
+                nbv: armCellRef pc: pc.stringView slot: msl.stringView inline: inl
                 cmt: "\{ind}    /* alias: \{sname} => \{nbv} */\n"
                 buf.append cmt
                 vvSet xs: ctx.narrowBox vid: snameVid val: nbv.stringView
@@ -25268,33 +25291,66 @@ armAliasText: function {
     pc: armPayloadC :ast :symtab :ctx :tid :arm
     if pc.length == 0 then return "".string
     if (symtab.reg.typetypeOf typeId: tid) == ztypes.ztypetype.unionType then {
-        rsl: "\{recv}\{acc}data"
-        return (armCellRef pc: pc.stringView slot: rsl.stringView)
+        inl: armIsInlineC :ast :symtab :tid :arm
+        rsl: armSlotC :recv :acc :arm inline: inl
+        return (armCellRef pc: pc.stringView slot: rsl.stringView inline: inl)
     }
     armAtP: memberCPrefix name: arm
     return "\{recv}\{acc}data.\{armAtP}\{arm}"
 }
 
 # A union arm's payload lives in a heap cell that the union's `data` slot
-# points at. The functions below are the one place that spells the cell: every
-# read, store and free of a union payload goes through them. `pc` is the
-# payload's C type as the arm stores it (armPayloadC), `slot` the C expression
-# of the slot.
+# points at -- or, for an INLINE arm (a bare value-type payload that fits the
+# slot, checkUnionArmSlots), in the slot itself, as the arm's own member of the
+# union that overlays `data`. The functions below are the one place that spells
+# either: every read, store and free of a union payload goes through them. `pc`
+# is the payload's C type as the arm stores it (armPayloadC), `slot` the C
+# expression of the slot (armSlotC) and `inline` whether the arm is inline.
 
-# armCellRef -- the payload as a parenthesised lvalue.
-armCellRef: function {pc: StringView slot: StringView} out String is {
+# armIsInlineC -- arm `arm` of union `tid` keeps its payload in the slot.
+armIsInlineC: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    arm: StringView
+} out bool is {
+    nid: zast.poolFind pool: ast.names text: arm
+    if nid.isZero then return false
+    return (symtab.typing.armIsInline parentTypeId: tid nameId: nid)
+}
+
+# armSlotC -- the slot arm `arm` keeps its payload in, reached from `recv` with
+# `acc`: the union's `data`, or the inline arm's member.
+armSlotC: function {recv: StringView acc: StringView arm: StringView inline: bool} out String is {
+    if inline then return "\{recv}\{acc}\{armInlineMember :arm}"
+    return "\{recv}\{acc}data"
+}
+
+# armInlineMember -- the name an inline arm's member carries in the union that
+# overlays `data`: the arm's own, after a prefix no arm named `data` can meet.
+armInlineMember: function {arm: StringView} out String is {
+    return "in_\{arm}"
+}
+
+# armCellRef -- the payload as a parenthesised lvalue; an inline arm's is the
+# member access itself, which binds tighter than any operator around it and
+# reads as the lvalue it is (isNonLvalueArg).
+armCellRef: function {pc: StringView slot: StringView inline: false} out String is {
+    if inline then return slot.string
     p: armCellPtr :pc :slot
     return "(*\{p})"
 }
 
 # armCellDeref -- the payload as an initializer's whole right-hand side.
-armCellDeref: function {pc: StringView slot: StringView} out String is {
+armCellDeref: function {pc: StringView slot: StringView inline: false} out String is {
+    if inline then return slot.string
     p: armCellPtr :pc :slot
     return "*\{p}"
 }
 
 # armCellPtr -- the payload's address.
-armCellPtr: function {pc: StringView slot: StringView} out String is {
+armCellPtr: function {pc: StringView slot: StringView inline: false} out String is {
+    if inline then return "&\{slot}"
     return "(\{pc}*)\{slot}"
 }
 
@@ -25314,13 +25370,16 @@ armCellAttach: function {slot: StringView box: StringView} out String is {
 }
 
 # armCellStore -- a payload stored into the slot, as one run of statements:
-# the cell `box` allocated, filled with `value`, and attached.
+# the cell `box` allocated, filled with `value`, and attached; an inline arm's
+# payload is the slot's own store.
 armCellStore: function {
     pc: StringView
     box: StringView
     value: StringView
     slot: StringView
+    inline: false
 } out String is {
+    if inline then return "\{slot} = \{value};"
     al: armCellAlloc :pc :box
     fl: armCellFill :box :value
     at: armCellAttach :slot :box
@@ -32145,15 +32204,7 @@ capLenT: function {cap: u64} out String is {
 # capacity (array/str `to`): the value its numeric generic argument recorded,
 # never a spelling read back out of its name.
 monoLengthValue: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid} out u64 is {
-    n: symtab.reg.genericArgCount specId: monoId
-    i: u64
-    for i < n loop {
-        if (symtab.reg.genericArgIsValueAt specId: monoId ordinal: i) then {
-            return (symtab.reg.genericArgAt specId: monoId ordinal: i)
-        }
-        i = i + 1
-    }
-    return 0
+    return (symtab.reg.sizedLength specId: monoId)
 }
 
 # the same count as C text.
@@ -33085,9 +33136,10 @@ definedInFragmentUnit: function {ctx: Ctx.view tid: ztypes.tid} out bool is {
     )
 }
 
-# emitUnionMono -- a UNION mono (Option/Result): tag enum + { tag; void*
-# data } heap-payload struct + destroy (free the payload on non-null arms,
-# recursing into an aggregate payload's destructor first).
+# emitUnionMono -- a UNION (a user union, an Option/Result mono): tag enum +
+# { tag; slot } struct, the slot a `void* data` overlaid by each inline arm's
+# member (emitUnionSlot), + destroy (free a cell arm's payload, recursing into
+# an aggregate payload's destructor first; an inline arm frees nothing).
 emitUnionMono: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -33104,6 +33156,11 @@ emitUnionMono: function {
     # an arm-less union is a constraint-only bound (`AnyRef`): no
     # runtime form, and an empty C enum does not compile. See emitOneVariant.
     if anames.length == 0 then return
+    # an inline arm holds its payload by value, so the payload's struct comes
+    # first
+    inlTids: ListVal u64
+    unionInlineArmTids :symtab :tid acc: inlTids
+    preEmitEmbeddedTypes :ast :symtab :ctx ids: inlTids :buf
     checkTagStem :symtab :ctx :tid
     vc: ctxCname :ctx :tid
     buf.append "typedef enum {\n"
@@ -33133,13 +33190,14 @@ emitUnionMono: function {
         lfD: "    \{tsc} tag;\n"
         buf.append lfD
     }
-    buf.append "    void* data;\n"
+    inlineAsserts: emitUnionSlot :ast :symtab :ctx :tid :anames :buf
     if (isFwdDeclared :ctx :tid) then {
         buf.append "};\n"
     } else {
         lg: "} \{vc}_t;\n"
         buf.append lg
     }
+    buf.append inlineAsserts
     ld: "static void \{vc}_destroy(\{vc}_t* u) {\n"
     buf.append ld
     buf.append "    if (!u) return;\n"
@@ -33150,7 +33208,8 @@ emitUnionMono: function {
     for pj < an loop {
         pname: anames.get i: pj
         pc: armPayloadC :ast :symtab :ctx :tid arm: pname.stringView
-        if pc.length > 0 then {
+        # an inline payload is a value in the slot: nothing to destroy or free
+        if pc.length > 0 when (armIsInlineC :ast :symtab :tid arm: pname.stringView).not then {
             ptg: variantTag :symtab :tid arm: pname.stringView
             lcase: "        case \{ptg}:\n"
             buf.append lcase
@@ -33172,6 +33231,38 @@ emitUnionMono: function {
     buf.append "        default: break;\n"
     buf.append "    }\n"
     buf.append "}\n\n"
+}
+
+# emitUnionSlot -- a union's payload slot: `void* data`, overlaid -- when any arm
+# is inline -- by each inline arm's own member, in an anonymous union so `data`
+# keeps its name. Answers the assertions, one per inline arm, that its payload
+# fits the slot as the checker measured it (checkUnionArmSlots): the C
+# compiler holds the checker to the layout.
+emitUnionSlot: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    tid: ztypes.tid
+    anames: (List String).view
+    buf: String.borrow
+} out String is {
+    members: String
+    asserts: String
+    for each an: anames loop {
+        if (armIsInlineC :ast :symtab :tid arm: an.stringView) then {
+            pc: armPayloadC :ast :symtab :ctx :tid arm: an.stringView
+            members.append "        \{pc} \{armInlineMember arm: an.stringView};\n"
+            asserts.append "_Static_assert(sizeof(\{pc}) <= sizeof(void*) && _Alignof(\{pc}) <= _Alignof(void*), \"union arm payload wider than its slot\");\n"
+        }
+    }
+    if members.length == 0 then {
+        buf.append "    void* data;\n"
+        return asserts
+    }
+    buf.append "    union {\n        void* data;\n"
+    buf.append members
+    buf.append "    };\n"
+    return asserts
 }
 
 # payloadDestructor -- the destructor cname for an arm whose payload is an
@@ -35408,6 +35499,20 @@ monoHoldsCollectionPassMono: function {
     return false
 }
 
+# unionInlineArmTids -- the payload types a union holds BY VALUE: its inline
+# arms'. A cell arm is behind the slot's pointer and orders nothing.
+unionInlineArmTids: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid acc: ListVal u64} is {
+    ids: ListVal u64
+    nameIds: ListVal u64
+    variantArmIds :symtab :tid :ids :nameIds
+    k: u64
+    for k < ids.length loop {
+        nm: zast.nameid.create from: (nameIds.get i: k).u32.orPanic
+        if (symtab.typing.armIsInline parentTypeId: tid nameId: nm) then acc.append (ids.get i: k)
+        k = k + 1
+    }
+}
+
 # isValueSumMono -- an optionval or resultval instance.
 isValueSumMono: function {
     symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid
@@ -35437,9 +35542,10 @@ isCollectionPassMono: function {
 
 # userDefnRefsUnemitted -- does the user type have a by-value field whose type is
 # in groupList but not yet in emittedList? Map/Set fields are heap pointers in the
-# port (fwd-decl suffices) so they impose no ordering edge; a UNION is boxed so it
-# is never dragged by its own arms. Passing an empty emittedList answers the plain
-# "references any group member" question used by the late-type closure.
+# port (fwd-decl suffices) so they impose no ordering edge; a UNION's cell arms
+# are behind its pointer, and only its inline arms (unionInlineArmTids) are held
+# by value. Passing an empty emittedList answers the plain "references any group
+# member" question used by the late-type closure.
 userDefnRefsUnemitted: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
@@ -35448,9 +35554,10 @@ userDefnRefsUnemitted: function {
     emitted: (IdSet u64).view
 } out bool is {
     tt: symtab.reg.typetypeOf :typeId
-    if tt == ztypes.ztypetype.unionType then return false
     fids: ListVal u64
-    if tt == ztypes.ztypetype.variantType then {
+    if tt == ztypes.ztypetype.unionType then {
+        unionInlineArmTids :symtab tid: typeId acc: fids
+    } else if tt == ztypes.ztypetype.variantType then {
         fidsNm: ListVal u64
         variantArmIds :symtab tid: typeId ids: fids nameIds: fidsNm
     } else if tt == ztypes.ztypetype.facetType then {

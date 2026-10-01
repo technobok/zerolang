@@ -1,0 +1,96 @@
+# union_inline_arms.z -- a bare value-type union arm that fits the union's
+# pointer-wide slot is stored in the slot itself: no heap cell, nothing to
+# free. Each shape that fits -- a scalar, an 8-byte record, a typedef, an
+# ordinal variant, a `str 7` (its length byte and 7 chars), a bool, four u16s,
+# a generic union's own parameter at i64 and at a record -- is constructed,
+# matched, written through (a field write, a mutating method) by a parameter
+# and by a local, moved and reassigned, beside a String arm and a boxed one.
+
+pt: record { x: i32  y: i32 } as {
+    bump: function {:this} is { this.x = this.x + 10 }
+}
+meters: typedef i64
+dir: variant { up: null  down: null }
+Shape: union {
+    num: i64
+    p: pt
+    m: meters
+    d: dir
+    s: (str to: 7)
+    yes: bool
+    big: (Box pt)
+    name: String
+    none: null
+}
+Tree: union { leaf: t  node: String } as { t: anyval.generic }
+Packed: union { four: (array t: u16 to: 4)  n: null }
+
+touch: function {u: Shape} is {
+    match (u) case p then u.bump case big then u.bump case name then u.append "!" else null
+}
+
+describe: function {u: Shape.view} out String is {
+    match (
+        u
+    ) case num then {
+        return "num \{u}"
+    } case p then {
+        return "p \{u.x},\{u.y}"
+    } case m then {
+        return "m".string
+    } case d then {
+        if u.down then return "d down".string
+        return "d up".string
+    } case s then {
+        return "s \{u.stringView}"
+    } case yes then {
+        return "yes \{u}"
+    } case big then {
+        return "big \{u.x},\{u.y}"
+    } case name then {
+        return "name \{u}"
+    } case none then return "none".string
+}
+
+main: function is {
+    a: Shape.num 41
+    print (describe u: a)
+    b: Shape.p (pt x: 1 y: 2)
+    touch u: b
+    match (b) case p then b.y = b.y + 5 else null
+    if b.p then b.bump
+    print (describe u: b)
+    print (describe u: (Shape.m (meters 7)))
+    print (describe u: (Shape.d dir.down))
+    print (describe u: (Shape.s ("abcdefg".str to: 7)))
+    print (describe u: (Shape.yes true))
+    c: Shape.big (pt x: 3 y: 4)
+    touch u: c
+    print (describe u: c)
+    g: Shape.name "n".string
+    touch u: g
+    h: g.take
+    print (describe u: h)
+    a = Shape.name "re".string
+    print (describe u: a)
+    a = Shape.p (pt x: 8 y: 9)
+    touch u: a
+    print (describe u: a)
+    xs: List Shape
+    xs.append (Shape.p (pt x: 0 y: 0))
+    {
+        e: xs.getMut i: 0
+        touch u: e
+    }
+    print (describe u: (xs.get i: 0))
+    ti: (Tree i64).leaf 5
+    match (ti) case leaf then print "leaf \{ti}" case node then null
+    tp: (Tree pt).leaf (pt x: 3 y: 4)
+    match (tp) case leaf then tp.bump case node then null
+    if tp.leaf then print "tp \{tp.x}"
+    q: (array t: u16 to: 4)
+    q.set i: 2 item: 9
+    pk: Packed.four q
+    match (pk) case four then pk.set i: 3 item: 7 case n then null
+    if pk.four then print "pk \{pk.get i: 2} \{pk.get i: 3}"
+}

@@ -379,12 +379,14 @@ non-owned fields are immutable after construction.
 
 #--: Unions (Reftypes)
 
-Unions are sum reference types. The struct itself is #+ stack-allocated; the
-subtype data is heap-allocated via a #~"void*" pointer.
+Unions are sum reference types. The struct itself is #+ stack-allocated; a
+payload lives in a heap cell its #~"void*" slot points at, or -- for an
+inline arm -- in the slot itself.
 
 #---: Memory Layout
 
-A union is always two pointer-widths (16 bytes): a tag and a #~"void*":
+A union is always two pointer-widths (16 bytes): a tag and a pointer-wide
+slot:
 
 #code language=c: """
   typedef enum {
@@ -398,21 +400,35 @@ A union is always two pointer-widths (16 bytes): a tag and a #~"void*":
   } z_result_t;
   """
 
-The struct is 16 bytes on the stack regardless of subtype sizes. Subtype data
-is heap-allocated and owned by the union.
+The struct is 16 bytes on the stack regardless of subtype sizes. A union
+with an inline arm overlays #~"data" with each inline arm's own member, in an
+anonymous union, and asserts that each fits:
+
+#code language=c: """
+  typedef struct {
+      z_shape_tag_t tag;
+      union {
+          void* data;      /* a cell arm's heap cell */
+          int64_t in_num;  /* the inline arm `num: i64` */
+      };
+  } z_shape_t;
+  _Static_assert(sizeof(int64_t) <= sizeof(void*) && _Alignof(int64_t) <= _Alignof(void*), "...");
+  """
 
 #---: Subtype Data
 
-A union's arm holds either family: a #~"null" arm carries no payload, a
-marked arm (#~".view" / #~".borrow" / #~".hold") is reference-family
-whatever it points at, and a valtype arm is the value in its cell --
-#~"(Box T)" is an optional spelling that collapses to the element. The
-subtype data is always heap-allocated:
+A union's arm layout is what its declaration writes: a #~"null" arm carries
+no payload, a marked arm (#~".view" / #~".borrow" / #~".hold") is
+reference-family whatever it points at, and the rest are:
 
 #ul:
-  [#*: For valtype subtypes: #~"malloc(sizeof(subtype))" + copy value.]
-  [#*: For reftype subtypes (classes, strings, etc.): #~"malloc(sizeof(subtype))"
-  + move (take) the struct into the heap allocation, invalidating the source.]
+  [#*: A bare valtype arm that fits the slot (size and alignment no wider
+  than a pointer): the value itself, in its member of the slot. No allocation,
+  nothing to free. A wider one is a compile error that hints #~"(Box T)".]
+  [#*: A #~"(Box T)" valtype arm, or a #~"Box" type argument: a heap cell,
+  #~"malloc(sizeof(subtype))" + copy value; the Box collapses to the element.]
+  [#*: A reftype arm (classes, strings, etc.): #~"malloc(sizeof(subtype))" +
+  move (take) the struct into the heap allocation, invalidating the source.]
   [#*: For #~"null" subtypes: #~"data" is #~"NULL".]
 
 Because union subtypes can be reftypes, a union may indirectly contain
@@ -564,8 +580,8 @@ No destructor is needed.
 #~"Box" is a generic type that heap-allocates a single instance of a
 #_*"valtype" (its bound is #~"anyval.generic"; a reftype is already a heap
 pointer). The C representation is a bare pointer to the inner type. As a
-union arm or union type argument, #~"(Box T)" collapses to the element --
-see the union section.
+union arm or union type argument, #~"(Box T)" collapses to the element and
+the arm is a heap cell -- see the union section.
 
 #---: Memory Layout
 

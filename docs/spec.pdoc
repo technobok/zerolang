@@ -2830,12 +2830,13 @@ Example: #~"b: Box from: 42" heap-allocates the integer; #~"r: b + 8" uses
 transparent arithmetic. #~"p: Box from: (pt x: 1 y: 2)" boxes a record, and
 #~"p.x", #~"p.x = 5" and #~"p.sum" read, write and call through the box.
 
-#~"(Box T)" may also spell a union's valtype arm, where it means the same
-as the bare type: it #_*"collapses", the arm child is the element itself, construction takes the
-bare value, match arms bind the bare element, and the emitted C is exactly
-the heap cell a union arm always uses. The same collapse applies when a
-union is instantiated with a Box type argument, as in
-#~"(Result (Box u64) E: IoError)". See #>"union".
+#~"(Box T)" spells a union's value-type arm that lives in a heap cell: it
+#_*"collapses" -- the arm child is the element itself, construction takes the
+bare value, match arms bind the bare element -- and the arm is a cell, where a
+bare value-type arm is stored in the union's slot when it fits. Write it for
+a payload wider than the slot. The same collapse applies when a union is
+instantiated with a Box type argument, as in #~"(Result (Box u64) E: IoError)".
+See #>"union".
 
 Embedding a generic type in another type:
 
@@ -6541,21 +6542,40 @@ For controlling the discriminator, see also the #>"tag" type.
 
 Unions are sum-types that can hold exactly one of their child types at any
 given time. A discriminator (tag) is auto-generated for each subtype. A union
-is a reference type with a uniform two-word layout: a tag and a #~"void*"
-data pointer. The union struct itself lives on the stack; the subtype data
-pointed to by #~"void*" is heap-allocated. A union is copied only when it
-moves: a borrowed union -- a parameter, a match or #~"if" subject, a borrow
-binding, a non-owned field, a borrowed return -- is a pointer to the caller's
-union, so a write through a narrowed payload reaches it. Because every arm's payload
-lives in a heap cell the union owns, an arm holds a reference type or a
-value type alike -- and constructing an arm that carries a payload costs one
-heap allocation whatever the payload's family: an #~"i64" arm, a #~"String"
-arm and a class arm each allocate their cell. A #>"variant" stores its payload
-inline, with no heap cell, when every arm is a value type. A #~"null" arm carries no payload; an arm with an
-ownership marker (#~".view" / #~".borrow" / #~".hold") refers to what it
-points at; and a value-type arm is the value in its cell -- construction
-takes the bare value and match arms bind the bare element. Writing it
-#~"(Box T)" means the same arm: the Box #_*"collapses" to its element.
+is a reference type with a uniform two-word layout: a tag and a pointer-wide
+data slot. The union struct itself lives on the stack. A union is copied only
+when it moves: a borrowed union -- a parameter, a match or #~"if" subject, a
+borrow binding, a non-owned field, a borrowed return -- is a pointer to the
+caller's union, so a write through a narrowed payload reaches it.
+
+An arm's layout is what its declaration writes:
+
+#ul:
+  [#*: A reference-type arm (a #~"String", a class) lives in a heap cell the
+  union owns, which its slot points at: constructing the arm allocates the
+  cell.]
+  [#*: A bare value-type arm is stored in the slot itself, with no allocation,
+  when it fits: its size and alignment no wider than a pointer on the target
+  (8 bytes on x86_64 and aarch64). An #~"i64", a two-#~"i32" record, a typedef
+  over one, an ordinal variant and a #~"str 7" (its length byte and 7 chars)
+  all fit.]
+  [#*: A bare value-type arm wider than the slot is a compile error at the arm,
+  naming its size, the slot's and the target, with the hint #~"(Box T)".
+  Written #~"(Box T)", the arm is a heap cell whatever its size, so every
+  allocation a union makes is in its source. A tagged variant (its tag and its
+  payload) and a facet (a vtable and a copy) rarely fit; an ordinal variant
+  always does.]
+  [#*: A generic union's arm over its own value-type parameter is measured per
+  instance: #~"Tree i64" is stored in the slot where #~"Tree pair" (16 bytes)
+  is refused, at the template's arm, naming the instance. An author who wants
+  wide instances writes #~"(Box t)".]
+  [#*: A #~"null" arm carries no payload; an arm with an ownership marker
+  (#~".view" / #~".borrow" / #~".hold") refers to what it points at.]
+
+Inline or in a cell, construction takes the bare value and match arms bind
+the bare element, and a write through a narrowed payload reaches the union. A
+#>"variant" stores its payload inline, with no heap cell, when every arm is a
+value type.
 
 A union used as a generic bound (#~"T: Choice.generic") admits reference types
 only: its members' own types, #~"null" among them, and the conformers of a

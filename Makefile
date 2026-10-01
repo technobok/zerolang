@@ -1982,7 +1982,12 @@ perf: $(PERFBIN)
 #
 # +460 `split` on a view call's result: +19 behaviour (the receiver's address
 # is built once per split call), +441 source.
-ALLOC_BASELINE := 2808439
+#
+# +14,993 a bare value-type union arm that fits the slot is stored in it: +191
+# behaviour (the arm-layout pass, the per-arm inline answer while emitting),
+# +14,800 source (the layout measure and the pass: DHAT spreads it over the
+# ordinary compile of the new code, no hotspot).
+ALLOC_BASELINE := 2823432
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

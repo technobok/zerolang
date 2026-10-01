@@ -560,10 +560,12 @@ born-borrowed previously enforced for records. A class cannot be duplicated, so
 there is no risk of multiple copies holding the same lock.</p>
 <p>non-owned fields are immutable after construction.</p>
 <h2 id="unions-reftypes"><a href="#unions-reftypes">7. Unions (Reftypes)</a></h2>
-<p>Unions are sum reference types. The struct itself is  stack-allocated; the
-subtype data is heap-allocated via a <code>void*</code> pointer.</p>
+<p>Unions are sum reference types. The struct itself is  stack-allocated; a
+payload lives in a heap cell its <code>void*</code> slot points at, or -- for an
+inline arm -- in the slot itself.</p>
 <h3 id="memory-layout-4"><a href="#memory-layout-4">7.1. Memory Layout</a></h3>
-<p>A union is always two pointer-widths (16 bytes): a tag and a <code>void*</code>:</p>
+<p>A union is always two pointer-widths (16 bytes): a tag and a pointer-wide
+slot:</p>
 <pre><code class="language-c">typedef enum {
     Z_RESULT_TAG_OK,
     Z_RESULT_TAG_ERR,
@@ -573,18 +575,29 @@ typedef struct {
     z_result_tag_t tag;
     void* data;           /* heap-allocated subtype data */
 } z_result_t;</code></pre>
-<p>The struct is 16 bytes on the stack regardless of subtype sizes. Subtype data
-is heap-allocated and owned by the union.</p>
+<p>The struct is 16 bytes on the stack regardless of subtype sizes. A union
+with an inline arm overlays <code>data</code> with each inline arm's own member, in an
+anonymous union, and asserts that each fits:</p>
+<pre><code class="language-c">typedef struct {
+    z_shape_tag_t tag;
+    union {
+        void* data;      /* a cell arm's heap cell */
+        int64_t in_num;  /* the inline arm `num: i64` */
+    };
+} z_shape_t;
+_Static_assert(sizeof(int64_t) &lt;= sizeof(void*) &amp;&amp; _Alignof(int64_t) &lt;= _Alignof(void*), "...");</code></pre>
 <h3 id="subtype-data"><a href="#subtype-data">7.2. Subtype Data</a></h3>
-<p>A union's arm holds either family: a <code>null</code> arm carries no payload, a
-marked arm (<code>.view</code> / <code>.borrow</code> / <code>.hold</code>) is reference-family
-whatever it points at, and a valtype arm is the value in its cell --
-<code>(Box T)</code> is an optional spelling that collapses to the element. The
-subtype data is always heap-allocated:</p>
+<p>A union's arm layout is what its declaration writes: a <code>null</code> arm carries
+no payload, a marked arm (<code>.view</code> / <code>.borrow</code> / <code>.hold</code>) is
+reference-family whatever it points at, and the rest are:</p>
 <ul>
-<li>For valtype subtypes: <code>malloc(sizeof(subtype))</code> + copy value.</li>
-<li>For reftype subtypes (classes, strings, etc.): <code>malloc(sizeof(subtype))</code>
-  + move (take) the struct into the heap allocation, invalidating the source.</li>
+<li>A bare valtype arm that fits the slot (size and alignment no wider
+  than a pointer): the value itself, in its member of the slot. No allocation,
+  nothing to free. A wider one is a compile error that hints <code>(Box T)</code>.</li>
+<li>A <code>(Box T)</code> valtype arm, or a <code>Box</code> type argument: a heap cell,
+  <code>malloc(sizeof(subtype))</code> + copy value; the Box collapses to the element.</li>
+<li>A reftype arm (classes, strings, etc.): <code>malloc(sizeof(subtype))</code> +
+  move (take) the struct into the heap allocation, invalidating the source.</li>
 <li>For <code>null</code> subtypes: <code>data</code> is <code>NULL</code>.</li>
 </ul>
 <p>Because union subtypes can be reftypes, a union may indirectly contain
@@ -688,8 +701,8 @@ No destructor is needed.</p>
 <p><code>Box</code> is a generic type that heap-allocates a single instance of a
 <em><strong>valtype</strong></em> (its bound is <code>anyval.generic</code>; a reftype is already a heap
 pointer). The C representation is a bare pointer to the inner type. As a
-union arm or union type argument, <code>(Box T)</code> collapses to the element --
-see the union section.</p>
+union arm or union type argument, <code>(Box T)</code> collapses to the element and
+the arm is a heap cell -- see the union section.</p>
 <h3 id="memory-layout-7"><a href="#memory-layout-7">10.1. Memory Layout</a></h3>
 <p>For <code>Box(point)</code> where point is <code>{ i64 x, i64 y }</code>:</p>
 <pre><code class="language-c">/* C type: z_point_t*  (pointer to heap-allocated point struct) */
