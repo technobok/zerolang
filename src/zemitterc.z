@@ -3344,6 +3344,8 @@ Ctx: class {
     orderPendName: ListVal u64
     # the value node a waiting scalar part's temp is typed from, 0 for none
     orderPendNid: ListVal u64
+    # whether a waiting part only reads (isPureCText)
+    orderPendPure: ListVal bool
     # the next `_o` number, the function's own
     orderCtr: u64
     # whether the argument just built was passed by pointer
@@ -6219,14 +6221,15 @@ isCNameByte: function {c: u8} out bool is {
 }
 
 # orderstate -- where one call's parts began in the evaluation-order lists,
-# whether a part that is not constant has been seen, and whether the last such
-# part is still waiting for a temp.
+# whether a part that is not constant has been seen, and where the parts still
+# waiting to learn whether they need a temp begin.
 orderstate: record {
     pieceMark: u64
     # where the call's slots begin in orderVals
     valBase: u64
     live: bool
-    pending: bool
+    # where the call's waiting parts begin in the orderPend lists
+    pendMark: u64
 }
 
 # orderBegin -- a call's parts are about to be built, in written order, into
@@ -6234,7 +6237,11 @@ orderstate: record {
 orderBegin: function {ctx: Ctx slots: u64} out orderstate is {
     base: ctx.orderVals.length
     for ctx.orderVals.length < (base + slots) loop ctx.orderVals.append String
-    return (orderstate pieceMark: ctx.orderPieceVals.length valBase: base live: false pending: false
+    return (orderstate
+        pieceMark: ctx.orderPieceVals.length
+        valBase: base
+        live: false
+        pendMark: ctx.orderPendText.length
     )
 }
 
@@ -6258,11 +6265,15 @@ orderSetSlot: function {ctx: Ctx st: orderstate slot: u64 text: String.take} is 
 }
 
 # orderPart -- one part of a call, just built from `mark`, placed in evaluation
-# order. Parts are evaluated in the order they are written, so once a part that
-# is not constant has been seen, anything evaluated after it -- a later part's
-# hoists, a later part that is not constant -- runs in place, after it, and that
-# part is read into an ordered temp first. A part that is not constant waits for
-# its temp until something follows it: the last one stays in the call. The first
+# order. Parts are evaluated in the order they are written. C leaves a call's
+# arguments and an operator's operands unsequenced, so a part that is not
+# constant is read into an ordered temp first when something evaluated after it
+# could change what it reads or see what it does: a later part that may write,
+# or a later part's hoists. A part that only READS (isPureCText) needs no temp
+# when every part after it only reads too -- nothing can change what it read --
+# and a part that may write needs one only when anything not constant follows
+# it. So a part waits until what follows decides: the last one stays in the
+# call, and so does every reading part after the last writing one. The first
 # such part's hoists stay where the statement declares them: nothing is
 # evaluated before them.
 orderPart: function {
@@ -6286,9 +6297,13 @@ orderPart: function {
     # the node whose value the text is, which types a scalar's temp; 0 for none
     valueNid: 0.u64
 } is {
+    pure: constant.not and (isPureCText s: text.stringView)
     if st.live then {
-        follows: constant.not or (hoistsWithValues :ctx :mark)
-        if follows then orderSettle :ast :symtab :ctx :st
+        if (hoistsWithValues :ctx :mark) or (constant.not and pure.not) then {
+            orderSettleWaiting :ast :symtab :ctx :st all: true
+        } else if constant.not then {
+            orderSettleWaiting :ast :symtab :ctx :st all: false
+        }
         i: mark.names
         for i < ctx.argHoistNames.length loop {
             if (ctx.argHoistVals.get :i).length > 0 then {
@@ -6304,7 +6319,6 @@ orderPart: function {
         return
     }
     st.live = true
-    st.pending = true
     ctx.orderPendText.append text
     ctx.orderPendType.append ctype.string
     ctx.orderPendSlot.append slot
@@ -6312,6 +6326,85 @@ orderPart: function {
     ctx.orderPendPid.append pid
     ctx.orderPendName.append pname.u64
     ctx.orderPendNid.append valueNid
+    ctx.orderPendPure.append pure
+}
+
+# isPureCText -- the emitted C text of a part reads and does nothing else: no
+# call, no assignment, no increment, no comma, no block. Its value can change
+# only if something evaluated around it writes, which is what orderPart asks of
+# the parts after it. Anything the scan cannot vouch for is not pure, and keeps
+# its temp.
+isPureCText: function {s: StringView} out bool is {
+    if s.length == 0 then return false
+    i: u64
+    prev: u8
+    for i < s.length loop {
+        c: (s.byteAt :i).or d: 0
+        e: cByteEffect :c :prev nxt: ((s.byteAt i: i + 1).or d: 0)
+        if e == 1 then return false
+        # the second byte of `==` says nothing
+        if e == 2 then i = i + 1
+        prev = c
+        i = i + 1
+    }
+    return true
+}
+
+# cByteEffect -- what byte `c` of emitted C text, between `prev` and `nxt`,
+# says about evaluating the text: 0 nothing, 1 it may call or write, 2 it opens
+# `==`. A `(` after a name is a call, after anything else a cast or a group; a
+# comma, a brace or a quote is more than the scan vouches for; `=` alone
+# assigns while `==`, `!=`, `<=` and `>=` compare; `++` and `--` write.
+cByteEffect: function {c: u8 prev: u8 nxt: u8} out u8 is {
+    if c == 40 then {
+        if (isCNameByte c: prev) then return 1
+        return 0
+    }
+    if c == 44 or (c == 123) or (c == 34) or (c == 39) then return 1
+    if c == 61 then {
+        if nxt == 61 then return 2
+        if prev == 33 or (prev == 60) or (prev == 62) then return 0
+        return 1
+    }
+    if c == 43 or (c == 45) when nxt == c then return 1
+    return 0
+}
+
+# orderSettleWaiting -- a part follows the call's waiting parts that decides
+# them. One that may write, or brings hoists, settles every waiting part into
+# its temp, in written order. One that only reads settles only a waiting part
+# that may write; reading parts keep waiting. A waiting part that may write is
+# always the only one waiting: what follows it settles it either way.
+orderSettleWaiting: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    st: orderstate.view
+    all: bool
+} is {
+    n: ctx.orderPendText.length
+    if n == st.pendMark then return
+    if all.not when (ctx.orderPendPure.get i: st.pendMark) then return
+    i: st.pendMark
+    for i < n loop {
+        orderSettle :ast :symtab :ctx :st :i
+        i = i + 1
+    }
+    orderDropWaiting :ctx :st
+}
+
+# orderDropWaiting -- the call's waiting parts, decided: off the orderPend lists.
+orderDropWaiting: function {ctx: Ctx st: orderstate.view} is {
+    for ctx.orderPendText.length > st.pendMark loop {
+        ctx.orderPendText.pop
+        ctx.orderPendType.pop
+        ctx.orderPendSlot.pop
+        ctx.orderPendFid.pop
+        ctx.orderPendPid.pop
+        ctx.orderPendName.pop
+        ctx.orderPendNid.pop
+        ctx.orderPendPure.pop
+    }
 }
 
 # hoistsWithValues -- whether a part built from `mark` recorded a hoist that is
@@ -6325,27 +6418,26 @@ hoistsWithValues: function {ctx: Ctx.view mark: hoistmark} out bool is {
     return false
 }
 
-# orderSettle -- something is evaluated after the waiting part: read it into its
+# orderSettle -- something is evaluated after waiting part `i`: read it into its
 # ordered temp here, declared zero by the statement. A part whose type has no C
-# spelling stays in the call.
+# spelling stays in the call. orderDropWaiting takes the entry off afterwards.
 orderSettle: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    st: orderstate.borrow
+    st: orderstate.view
+    i: u64
 } is {
-    if st.pending.not then return
-    st.pending = false
-    text: ctx.orderPendText.pop
-    given: ctx.orderPendType.pop
-    slot: ctx.orderPendSlot.pop
-    fid: ztypes.tid.create from: ctx.orderPendFid.pop
-    pid: ztypes.tid.create from: ctx.orderPendPid.pop
+    text: ctx.orderPendText.set :i val: String
+    given: ctx.orderPendType.set :i val: String
+    slot: ctx.orderPendSlot.get :i
+    fid: ztypes.tid.create from: (ctx.orderPendFid.get :i)
+    pid: ztypes.tid.create from: (ctx.orderPendPid.get :i)
     pn: (zast.poolTextAt
         pool: ast.names
-        ref: (zast.nameid.create from: ctx.orderPendName.pop.u32.orPanic)
+        ref: (zast.nameid.create from: (ctx.orderPendName.get :i).u32.orPanic)
     )
-    vnid: ctx.orderPendNid.pop
+    vnid: ctx.orderPendNid.get :i
     # a part no declared parameter types is typed as its own expression, read
     # through a comma so a `const` source still gives an assignable temp. A
     # scalar is spelled with its C type: typed as its own expression, the
@@ -6376,19 +6468,18 @@ orderSettle: function {
 
 # orderFinish -- a call's parts are built: the opening of the comma expression
 # whose assignments run ahead of it -- `(a = x, b = y, ` -- or "" when there are
-# none (orderClose completes it). A part still waiting for a temp is the last
-# evaluated and stays in the call.
+# none (orderClose completes it). The parts still waiting need no temp: the last
+# one evaluated, and the reading parts after the last one that may write, stay
+# in the call.
 orderFinish: function {ctx: Ctx st: orderstate} out String is {
-    if st.pending then {
-        pslot: ctx.orderPendSlot.pop
-        ptext: ctx.orderPendText.pop
-        ctx.orderPendType.pop
-        orderSetSlot :ctx :st slot: pslot text: ptext
-        ctx.orderPendFid.pop
-        ctx.orderPendPid.pop
-        ctx.orderPendName.pop
-        ctx.orderPendNid.pop
+    wi: st.pendMark
+    for wi < ctx.orderPendText.length loop {
+        wslot: ctx.orderPendSlot.get i: wi
+        wtext: ctx.orderPendText.set i: wi val: String
+        orderSetSlot :ctx :st slot: wslot text: wtext
+        wi = wi + 1
     }
+    orderDropWaiting :ctx :st
     prefix: String
     if ctx.orderPieceVals.length == st.pieceMark then return prefix
     prefix.append "("
@@ -32067,6 +32158,7 @@ emitC: function {
         orderPendPid: ListVal u64
         orderPendName: ListVal u64
         orderPendNid: ListVal u64
+        orderPendPure: ListVal bool
         orderCtr: 0
         lastArgByPtr: false
         tmpHigh: 0

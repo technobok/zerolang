@@ -143,6 +143,8 @@ Table of Contents</div>
 </li>
 <li><a href="#stamp-driven-emission">Stamp-Driven Emission</a>
 </li>
+<li><a href="#evaluation-order">Evaluation Order</a>
+</li>
 </ul>
 </li>
 <li><a href="#bootstrapping-self-hosting">Bootstrapping &amp; self-hosting</a>
@@ -862,6 +864,19 @@ probe-chain fallbacks -- are counted and pinned by <code>emitter-guard</code>.
 Internal impossibilities (an unresolvable typedef base, an unspellable
 field type) <strong>panic</strong> with a <code>zemitterc:</code> message instead of
 emitting a silent fallback type.</p>
+<h3 id="evaluation-order"><a href="#evaluation-order">9.6. Evaluation Order</a></h3>
+<p>A call's arguments and an operator's operands are evaluated in the order they
+are written (spec: Call Arguments, Operations), and C leaves both unsequenced.
+The emitter keeps the order with <strong>ordered temps</strong>: a part is read into an
+<code>_oN</code> temp ahead of the call, in a comma expression, when something evaluated
+after it could change what it reads or see what it does. A part that only
+<strong>reads</strong> -- its C text holds no call, assignment, increment, comma or block
+(<code>isPureCText</code>) -- needs no temp when every part after it only reads too:
+<code>a + b</code>, <code>p.x + p.y</code> and <code>pair a: y.v b: (y.v + 1)</code> are plain C. A part
+that may write needs one only when a part that is not constant follows it.
+<code>h.bump + h.count</code> keeps a temp for <code>h.bump</code>, and <code>x.v + (addTo c: x d: 1)</code>
+one for <code>x.v</code>. A literal, a folded constant and a plain address never need
+one. <code>order_pure_parts</code> pins each case by running it.</p>
 <h2 id="bootstrapping-self-hosting"><a href="#bootstrapping-self-hosting">10. Bootstrapping &amp; self-hosting</a></h2>
 <p>The compiler is self-hosted: it is written in zerolang (<code>src/*.z</code>) and
 compiles itself. Building and testing it require only a C toolchain -- no
