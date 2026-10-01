@@ -16,11 +16,13 @@ public: unit {
 # the columns one indent step adds
 indentStep: 4.u32
 
-# the layout mode a command is printed in: flat spells every line as a space
-modeFlat: 0.u8
-
-# the layout mode a command is printed in: break spells every line as a newline
-modeBreak: 1.u8
+# printmode -- the layout mode a command is printed in
+printmode: data {
+    # flat spells every line as a space
+    flat: 0
+    # break spells every line as a newline
+    brk: 1
+} out u8
 
 # what a row is: the shape of one document node
 dockind: variant {
@@ -96,7 +98,7 @@ docrow: record {
 cmd: record {
     # the columns a newline inside it indents to
     ind: u32
-    # modeFlat or modeBreak
+    # printmode.flat or printmode.brk
     mode: u8
     # the row
     id: u32
@@ -355,7 +357,7 @@ Doc: class {
     # print -- `root` laid out at `width` columns, from column 0
     print: function {this: this.view root: u32 width: u32} out String is {
         p: newPrinter :width pos: 0 pendingSpace: false pendingIndent: false indentCols: 0
-        p.cmds.append (cmd ind: 0 mode: modeBreak id: root off: 0)
+        p.cmds.append (cmd ind: 0 mode: printmode.brk id: root off: 0)
         printLoop d: this :p
         result: String
         result swap p.buf
@@ -410,7 +412,7 @@ printCmd: function {d: Doc.view p: Printer c: cmd} is {
         p.cmds.append (cmd ind: c.ind + indentStep mode: c.mode id: row.child off: 0)
     } case ifBreak then {
         pick: row.alt
-        if c.mode == modeBreak then pick = row.child
+        if c.mode == printmode.brk then pick = row.child
         if pick > 0 then p.cmds.append (cmd ind: c.ind mode: c.mode id: pick off: 0)
     } case lineSuffix then {
         p.suffixes.append (cmd ind: c.ind mode: c.mode id: row.child off: 0)
@@ -457,7 +459,7 @@ emitText: function {d: Doc.view p: Printer row: docrow} is {
 # emitLine -- a line: a pending space when flat (nothing for a softline), else
 # the held suffixes first and then a newline whose indent is pending
 emitLine: function {p: Printer c: cmd hard: bool soft: bool} is {
-    if c.mode == modeFlat when hard.not then {
+    if c.mode == printmode.flat when hard.not then {
         if soft.not then {
             p.pendingSpace = true
             p.pos = p.pos + 1
@@ -490,11 +492,11 @@ flushSuffixes: function {p: Printer} is {
 # broken otherwise; a group already flat stays flat unless something below
 # forces a break
 printGroup: function {d: Doc.view p: Printer c: cmd row: docrow} is {
-    if c.mode == modeFlat when row.breaks.not then {
-        p.cmds.append (cmd ind: c.ind mode: modeFlat id: row.child off: 0)
+    if c.mode == printmode.flat when row.breaks.not then {
+        p.cmds.append (cmd ind: c.ind mode: printmode.flat id: row.child off: 0)
         return
     }
-    next: cmd ind: c.ind mode: modeFlat id: row.child off: 0
+    next: cmd ind: c.ind mode: printmode.flat id: row.child off: 0
     first: ListVal cmd
     first.append next
     rem: p.width.i64 - p.pos.i64
@@ -504,7 +506,7 @@ printGroup: function {d: Doc.view p: Printer c: cmd row: docrow} is {
         return
     }
     if row.breaks.not when p.strict then p.overflow = true
-    p.cmds.append (cmd ind: c.ind mode: modeBreak id: row.child off: 0)
+    p.cmds.append (cmd ind: c.ind mode: printmode.brk id: row.child off: 0)
 }
 
 # fitsverdict -- what one command settled about the rest fitting on the line.
@@ -527,21 +529,21 @@ fitsstep: record {
 # breakModeOf -- the mode a group's children print in: broken when the group
 # is marked so, else the enclosing mode.
 breakModeOf: function {c: cmd row: docrow} out u8 is {
-    if row.breaks then return modeBreak
+    if row.breaks then return printmode.brk
     return c.mode
 }
 
 # ifBreakPick -- the child an ifBreak prints: the break child in break mode,
 # else the alternative.
 ifBreakPick: function {c: cmd row: docrow} out u32 is {
-    if c.mode == modeBreak then return row.child
+    if c.mode == printmode.brk then return row.child
     return row.alt
 }
 
 # bestFittingPick -- the child a bestFitting prints in mode `m`: the last (most
 # expanded) when broken, else the first.
 bestFittingPick: function {d: Doc.view row: docrow m: u8} out u32 is {
-    if m == modeBreak then return (kidAt :d span: row.kids i: row.kids.count - 1)
+    if m == printmode.brk then return (kidAt :d span: row.kids i: row.kids.count - 1)
     return (kidAt :d span: row.kids i: 0)
 }
 
@@ -563,10 +565,10 @@ fitsOne: function {
     ) case text then {
         rest = rest - row.width.i64
     } case line then {
-        if c.mode == modeBreak then v = fitsverdict.fits
+        if c.mode == printmode.brk then v = fitsverdict.fits
         rest = rest - 1
     } case softline then {
-        if c.mode == modeBreak then v = fitsverdict.fits
+        if c.mode == printmode.brk then v = fitsverdict.fits
     } case hardline then {
         v = fitsverdict.fits
     } case group then {
@@ -635,7 +637,7 @@ fitsFlat: function {
     i: ids.length
     for i > 0 loop {
         i = i - 1
-        first.append (cmd :ind mode: modeFlat id: (ids.get :i) off: 0)
+        first.append (cmd :ind mode: printmode.flat id: (ids.get :i) off: 0)
     }
     ok: fitsCmds :d :p stack: first :rem useRest: false mustBeFlat: true
     return ok
@@ -652,8 +654,8 @@ printFill: function {d: Doc.view p: Printer c: cmd row: docrow} is {
     one: ListVal u32
     one.append content
     contentFits: fitsFlat :d :p ind: c.ind ids: one :rem
-    contentMode: modeBreak
-    if contentFits then contentMode = modeFlat
+    contentMode: printmode.brk
+    if contentFits then contentMode = printmode.flat
     if c.off + 1 >= n then {
         p.cmds.append (cmd ind: c.ind mode: contentMode id: content off: 0)
         return
@@ -667,7 +669,7 @@ printFill: function {d: Doc.view p: Printer c: cmd row: docrow} is {
         three.append sep
         three.append (kidAt :d span: row.kids i: c.off + 2)
         pairFits: fitsFlat :d :p ind: c.ind ids: three :rem
-        if pairFits.not then sepMode = modeBreak
+        if pairFits.not then sepMode = printmode.brk
     }
     p.cmds.append (cmd ind: c.ind mode: sepMode id: sep off: 0)
     p.cmds.append (cmd ind: c.ind mode: contentMode id: content off: 0)
@@ -685,12 +687,12 @@ printBest: function {d: Doc.view p: Printer c: cmd row: docrow} is {
             v: kidAt :d span: row.kids :i
             i = i + 1
             if (variantFits :d :p ind: c.ind id: v) then {
-                p.cmds.append (cmd ind: c.ind mode: modeBreak id: v off: 0)
+                p.cmds.append (cmd ind: c.ind mode: printmode.brk id: v off: 0)
                 return
             }
         }
     }
-    p.cmds.append (cmd ind: c.ind mode: modeBreak id: last off: 0)
+    p.cmds.append (cmd ind: c.ind mode: printmode.brk id: last off: 0)
 }
 
 # variantFits -- whether variant `id`, printed in break mode from the current
@@ -705,7 +707,7 @@ variantFits: function {d: Doc.view p: Printer ind: u32 id: u32} out bool is {
         indentCols: p.indentCols
     )
     sub.strict = true
-    sub.cmds.append (cmd :ind mode: modeBreak :id off: 0)
+    sub.cmds.append (cmd :ind mode: printmode.brk :id off: 0)
     printLoop :d p: sub
     if sub.overflow then return false
     none: ListVal cmd

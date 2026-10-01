@@ -1995,7 +1995,11 @@ perf: $(PERFBIN)
 # -1,132 source (no `Result (Box u64)` instance left to mint and emit).
 #
 # +901 `zc explain` reads only an E code: 0 behaviour, +901 source.
-ALLOC_BASELINE := 2824564
+#
+# +279 the emitter's origin and dispatch tables, zfmt's slot ranks and zdoc's
+# print modes are data blocks: 0 behaviour, +279 source (an element read
+# resolves through its block).
+ALLOC_BASELINE := 2824843
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

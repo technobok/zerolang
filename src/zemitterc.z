@@ -2772,87 +2772,93 @@ dataslotkey: record {
     slot: u64
 }
 
-# The builtin templates the emitter keys on by ORIGIN tid, one constant per
-# family. The constant IS the index into `ctx.origins`, so
-# `ctx.origins.get i: ogListVal` is the tid `ListVal` was minted from -- and an
-# id compare against it is shadow-proof, which comparing the spelling was not.
-ogStr: 0.u64
-ogArray: 1.u64
-ogList: 2.u64
-ogListVal: 3.u64
-ogListView: 4.u64
-ogListViewVal: 5.u64
-ogMap: 6.u64
-ogMapRV: 7.u64
-ogMapVR: 8.u64
-ogMapVV: 9.u64
-ogSet: 10.u64
-ogSetVal: 11.u64
-ogIdMapR: 12.u64
-ogIdMapV: 13.u64
-ogIdSet: 14.u64
-ogIdSetIter: 15.u64
-ogIdMapItemIterR: 16.u64
-ogIdMapItemIterV: 17.u64
-ogIdMapEntryR: 18.u64
-ogIdMapEntryV: 19.u64
-ogMapEntry: 20.u64
-ogListIter: 21.u64
-ogListIterVal: 22.u64
-ogSetIter: 23.u64
-ogSetIterVal: 24.u64
-ogMapKeyIter: 25.u64
-ogMapItemIter: 26.u64
-ogMapKeyIterRV: 27.u64
-ogMapKeyIterVR: 28.u64
-ogMapKeyIterVV: 29.u64
-ogMapItemIterRV: 30.u64
-ogMapItemIterVR: 31.u64
-ogMapItemIterVV: 32.u64
-ogMapEntryRV: 33.u64
-ogMapEntryVR: 34.u64
-ogMapEntryVV: 35.u64
-ogOption: 36.u64
-ogOptionView: 37.u64
-ogResult: 38.u64
-ogOptionval: 39.u64
-ogResultval: 40.u64
-ogOptionViewVal: 41.u64
+# family -- the builtin templates the emitter keys on by ORIGIN tid, one
+# element per family. The element IS the index into `ctx.origins`, so
+# `ctx.origins.get i: family.listVal` is the tid `ListVal` was minted from --
+# and an id compare against it is shadow-proof, which comparing the spelling was
+# not. `fixedArray` is the `array` template: a data block's own `.array` member
+# would shadow an element of that name.
+family: data {
+    str: 0
+    fixedArray: 1
+    list: 2
+    listVal: 3
+    listView: 4
+    listViewVal: 5
+    map: 6
+    mapRV: 7
+    mapVR: 8
+    mapVV: 9
+    set: 10
+    setVal: 11
+    idMapR: 12
+    idMapV: 13
+    idSet: 14
+    idSetIter: 15
+    idMapItemIterR: 16
+    idMapItemIterV: 17
+    idMapEntryR: 18
+    idMapEntryV: 19
+    mapEntry: 20
+    listIter: 21
+    listIterVal: 22
+    setIter: 23
+    setIterVal: 24
+    mapKeyIter: 25
+    mapItemIter: 26
+    mapKeyIterRV: 27
+    mapKeyIterVR: 28
+    mapKeyIterVV: 29
+    mapItemIterRV: 30
+    mapItemIterVR: 31
+    mapItemIterVV: 32
+    mapEntryRV: 33
+    mapEntryVR: 34
+    mapEntryVV: 35
+    option: 36
+    optionView: 37
+    result: 38
+    optionval: 39
+    resultval: 40
+    optionViewVal: 41
 
-# ogNone -- one past the last row: both the count and the "not one of ours"
-# answer, so no real index can be mistaken for it.
-ogNone: 42.u64
+    # none -- one past the last row: both the count and the "not one of ours"
+    # answer, so no real index can be mistaken for it.
+    none: 42
+} out u64
 
-# The names the emitter DISPATCHES on -- a member selector, or the base atom of
-# a path it recognises -- interned once per program. The
-# constant IS the index into `ctx.mnames`, exactly as `ogXxx` indexes
+# dispatch -- the names the emitter DISPATCHES on -- a member selector, or the
+# base atom of a path it recognises -- interned once per program. The element
+# IS the index into `ctx.mnames`, exactly as a `family` element indexes
 # `ctx.origins` -- and an id compare is what the text compare was reaching for,
 # without copying the name out of the pool to make it. A name this program
 # never interned answers 0, and no member's name id is 0, so the miss is the
 # right answer by construction.
-mnOrPanic: 0.u64
-mnCopy: 1.u64
-mnMeta: 2.u64
-mnOption: 3.u64
-mnResult: 4.u64
-mnPrint: 5.u64
-mnPanic: 6.u64
-mnError: 7.u64
-mnAppend: 8.u64
-mnInsert: 9.u64
-mnPush: 10.u64
-mnGetMut: 11.u64
-mnPop: 12.u64
-mnExtend: 13.u64
-mnHas: 14.u64
-mnDelete: 15.u64
-mnKeyAt: 16.u64
-mnValueAt: 17.u64
+dispatch: data {
+    orPanic: 0
+    copy: 1
+    meta: 2
+    option: 3
+    result: 4
+    print: 5
+    panic: 6
+    error: 7
+    append: 8
+    insert: 9
+    push: 10
+    getMut: 11
+    pop: 12
+    extend: 13
+    has: 14
+    delete: 15
+    keyAt: 16
+    valueAt: 17
+} out u64
 
-# ogPut -- place one row AT its own constant. Writing the index and the name
+# familyPut -- place one row AT its own element. Writing the index and the name
 # together is what keeps the two halves of the table in step; a row that drifts
 # fails here rather than silently renaming a family.
-ogPut: function {acc: List String at: u64 name: StringView} is {
+familyPut: function {acc: List String at: u64 name: StringView} is {
     if acc.length != at then {
         m: "zemitterc: origin table out of order at \{at} (\{name})"
         panic msg: m
@@ -2860,10 +2866,10 @@ ogPut: function {acc: List String at: u64 name: StringView} is {
     acc.append name.string
 }
 
-# mnPut / memberDispatchNames -- ogPut's twin for the member-name table: the
-# list and the mnXxx constants are one table written twice, so the filler
-# checks the row it is about to write is the row the constant names.
-mnPut: function {acc: List String at: u64 name: StringView} is {
+# dispatchPut / memberDispatchNames -- familyPut's twin for the member-name
+# table: the list and the `dispatch` elements are one table written twice, so
+# the filler checks the row it is about to write is the row the element names.
+dispatchPut: function {acc: List String at: u64 name: StringView} is {
     if acc.length != at then {
         m: "zemitterc: member-name table out of order at \{at} (\{name})"
         panic msg: m
@@ -2873,37 +2879,37 @@ mnPut: function {acc: List String at: u64 name: StringView} is {
 
 # the member names a dispatch table needs, collected in one pass
 memberDispatchNames: function {acc: List String} is {
-    mnPut :acc at: mnOrPanic name: "orPanic"
-    mnPut :acc at: mnCopy name: "copy"
-    mnPut :acc at: mnMeta name: "meta"
-    mnPut :acc at: mnOption name: "Option"
-    mnPut :acc at: mnResult name: "Result"
-    mnPut :acc at: mnPrint name: "print"
-    mnPut :acc at: mnPanic name: "panic"
-    mnPut :acc at: mnError name: "error"
-    mnPut :acc at: mnAppend name: "append"
-    mnPut :acc at: mnInsert name: "insert"
-    mnPut :acc at: mnPush name: "push"
-    mnPut :acc at: mnGetMut name: "getMut"
-    mnPut :acc at: mnPop name: "pop"
-    mnPut :acc at: mnExtend name: "extend"
-    mnPut :acc at: mnHas name: "has"
-    mnPut :acc at: mnDelete name: "delete"
-    mnPut :acc at: mnKeyAt name: "keyAt"
-    mnPut :acc at: mnValueAt name: "valueAt"
+    dispatchPut :acc at: dispatch.orPanic name: "orPanic"
+    dispatchPut :acc at: dispatch.copy name: "copy"
+    dispatchPut :acc at: dispatch.meta name: "meta"
+    dispatchPut :acc at: dispatch.option name: "Option"
+    dispatchPut :acc at: dispatch.result name: "Result"
+    dispatchPut :acc at: dispatch.print name: "print"
+    dispatchPut :acc at: dispatch.panic name: "panic"
+    dispatchPut :acc at: dispatch.error name: "error"
+    dispatchPut :acc at: dispatch.append name: "append"
+    dispatchPut :acc at: dispatch.insert name: "insert"
+    dispatchPut :acc at: dispatch.push name: "push"
+    dispatchPut :acc at: dispatch.getMut name: "getMut"
+    dispatchPut :acc at: dispatch.pop name: "pop"
+    dispatchPut :acc at: dispatch.extend name: "extend"
+    dispatchPut :acc at: dispatch.has name: "has"
+    dispatchPut :acc at: dispatch.delete name: "delete"
+    dispatchPut :acc at: dispatch.keyAt name: "keyAt"
+    dispatchPut :acc at: dispatch.valueAt name: "valueAt"
 }
 
-# mnIs -- is `id` the dispatch name at index `at`? TWO zeros meet here and they
+# dispatchIs -- is `id` the dispatch name at index `at`? TWO zeros meet here and they
 # are not the same zero: a node with no member name answers 0, and a name this
 # program never interned is 0 in the table. Comparing them directly would say
 # yes to every nameless callable, so a zero id is no name at all and answers no.
-mnIs: function {ctx: Ctx.view id: zast.nameid at: u64} out bool is {
+dispatchIs: function {ctx: Ctx.view id: zast.nameid at: u64} out bool is {
     if id.isZero then return false
     return id == (ctx.mnames.get i: at)
 }
 
 # buildMemberNameIds -- those names as pool ids for the program being emitted,
-# in mnXxx order. A carrier with no program answers zeros, which match nothing.
+# in `dispatch` order. A carrier with no program answers zeros, which match nothing.
 buildMemberNameIds: function {program: Ast.view acc: ListVal zast.nameid} is {
     names: List String
     memberDispatchNames acc: names
@@ -2916,57 +2922,57 @@ buildMemberNameIds: function {program: Ast.view acc: ListVal zast.nameid} is {
     }
 }
 
-# originBaseNames -- those templates by name, in ogXxx order. This list and the
+# originBaseNames -- those templates by name, in `family` order. This list and the
 # constants above are the same table read two ways; nothing else may reorder it,
 # because the index is the identity.
 originBaseNames: function {acc: List String} is {
-    ogPut :acc at: ogStr name: "str"
-    ogPut :acc at: ogArray name: "array"
-    ogPut :acc at: ogList name: "ListRef"
-    ogPut :acc at: ogListVal name: "ListVal"
-    ogPut :acc at: ogListView name: "ListView"
-    ogPut :acc at: ogListViewVal name: "ListViewVal"
-    ogPut :acc at: ogMap name: "MapRR"
-    ogPut :acc at: ogMapRV name: "MapRV"
-    ogPut :acc at: ogMapVR name: "MapVR"
-    ogPut :acc at: ogMapVV name: "MapVV"
-    ogPut :acc at: ogSet name: "SetRef"
-    ogPut :acc at: ogSetVal name: "SetVal"
-    ogPut :acc at: ogIdMapR name: "IdMapR"
-    ogPut :acc at: ogIdMapV name: "IdMapV"
-    ogPut :acc at: ogIdSet name: "IdSet"
-    ogPut :acc at: ogIdSetIter name: "IdSetIter"
-    ogPut :acc at: ogIdMapItemIterR name: "IdMapItemIterR"
-    ogPut :acc at: ogIdMapItemIterV name: "IdMapItemIterV"
-    ogPut :acc at: ogIdMapEntryR name: "IdMapEntryR"
-    ogPut :acc at: ogIdMapEntryV name: "IdMapEntryV"
-    ogPut :acc at: ogMapEntry name: "MapEntry"
-    ogPut :acc at: ogListIter name: "ListIter"
-    ogPut :acc at: ogListIterVal name: "ListIterVal"
-    ogPut :acc at: ogSetIter name: "SetIter"
-    ogPut :acc at: ogSetIterVal name: "SetIterVal"
-    ogPut :acc at: ogMapKeyIter name: "MapKeyIter"
-    ogPut :acc at: ogMapItemIter name: "MapItemIter"
-    ogPut :acc at: ogMapKeyIterRV name: "MapKeyIterRV"
-    ogPut :acc at: ogMapKeyIterVR name: "MapKeyIterVR"
-    ogPut :acc at: ogMapKeyIterVV name: "MapKeyIterVV"
-    ogPut :acc at: ogMapItemIterRV name: "MapItemIterRV"
-    ogPut :acc at: ogMapItemIterVR name: "MapItemIterVR"
-    ogPut :acc at: ogMapItemIterVV name: "MapItemIterVV"
-    ogPut :acc at: ogMapEntryRV name: "MapEntryRV"
-    ogPut :acc at: ogMapEntryVR name: "MapEntryVR"
-    ogPut :acc at: ogMapEntryVV name: "MapEntryVV"
-    ogPut :acc at: ogOption name: "Option"
-    ogPut :acc at: ogOptionView name: "OptionView"
-    ogPut :acc at: ogResult name: "Result"
-    ogPut :acc at: ogOptionval name: "optionval"
-    ogPut :acc at: ogResultval name: "resultval"
-    ogPut :acc at: ogOptionViewVal name: "OptionViewVal"
+    familyPut :acc at: family.str name: "str"
+    familyPut :acc at: family.fixedArray name: "array"
+    familyPut :acc at: family.list name: "ListRef"
+    familyPut :acc at: family.listVal name: "ListVal"
+    familyPut :acc at: family.listView name: "ListView"
+    familyPut :acc at: family.listViewVal name: "ListViewVal"
+    familyPut :acc at: family.map name: "MapRR"
+    familyPut :acc at: family.mapRV name: "MapRV"
+    familyPut :acc at: family.mapVR name: "MapVR"
+    familyPut :acc at: family.mapVV name: "MapVV"
+    familyPut :acc at: family.set name: "SetRef"
+    familyPut :acc at: family.setVal name: "SetVal"
+    familyPut :acc at: family.idMapR name: "IdMapR"
+    familyPut :acc at: family.idMapV name: "IdMapV"
+    familyPut :acc at: family.idSet name: "IdSet"
+    familyPut :acc at: family.idSetIter name: "IdSetIter"
+    familyPut :acc at: family.idMapItemIterR name: "IdMapItemIterR"
+    familyPut :acc at: family.idMapItemIterV name: "IdMapItemIterV"
+    familyPut :acc at: family.idMapEntryR name: "IdMapEntryR"
+    familyPut :acc at: family.idMapEntryV name: "IdMapEntryV"
+    familyPut :acc at: family.mapEntry name: "MapEntry"
+    familyPut :acc at: family.listIter name: "ListIter"
+    familyPut :acc at: family.listIterVal name: "ListIterVal"
+    familyPut :acc at: family.setIter name: "SetIter"
+    familyPut :acc at: family.setIterVal name: "SetIterVal"
+    familyPut :acc at: family.mapKeyIter name: "MapKeyIter"
+    familyPut :acc at: family.mapItemIter name: "MapItemIter"
+    familyPut :acc at: family.mapKeyIterRV name: "MapKeyIterRV"
+    familyPut :acc at: family.mapKeyIterVR name: "MapKeyIterVR"
+    familyPut :acc at: family.mapKeyIterVV name: "MapKeyIterVV"
+    familyPut :acc at: family.mapItemIterRV name: "MapItemIterRV"
+    familyPut :acc at: family.mapItemIterVR name: "MapItemIterVR"
+    familyPut :acc at: family.mapItemIterVV name: "MapItemIterVV"
+    familyPut :acc at: family.mapEntryRV name: "MapEntryRV"
+    familyPut :acc at: family.mapEntryVR name: "MapEntryVR"
+    familyPut :acc at: family.mapEntryVV name: "MapEntryVV"
+    familyPut :acc at: family.option name: "Option"
+    familyPut :acc at: family.optionView name: "OptionView"
+    familyPut :acc at: family.result name: "Result"
+    familyPut :acc at: family.optionval name: "optionval"
+    familyPut :acc at: family.resultval name: "resultval"
+    familyPut :acc at: family.optionViewVal name: "OptionViewVal"
 }
 
 # buildOriginTids -- resolve every row in one pass. A unit with no program node
 # registers none of them and every row stays 0; the list is filled either way,
-# so an ogXxx index is always in range.
+# so a `family` index is always in range.
 buildOriginTids: function {
     program: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -3146,7 +3152,7 @@ Ctx: class {
     unitKeysC: List String
     # whether those two are built yet
     unitCacheBuilt: bool
-    # the member names this program interned, indexed by the mnXxx constants
+    # the member names this program interned, indexed by the `dispatch` elements
     mnames: ListVal zast.nameid
     # name-id -> resolved tid (misses cached as 0): the typed model is
     # frozen during emission, so resolution per name id is emit-stable
@@ -4790,9 +4796,9 @@ stmtFormNameId: function {
     zid: zast.nameid
     if cid.isZero then return zid
     isSf: (
-        (mnIs :ctx id: cid at: mnPrint) or
-        (mnIs :ctx id: cid at: mnPanic) or
-        (mnIs :ctx id: cid at: mnError) or
+        (dispatchIs :ctx id: cid at: dispatch.print) or
+        (dispatchIs :ctx id: cid at: dispatch.panic) or
+        (dispatchIs :ctx id: cid at: dispatch.error) or
         (cid == zast.names.wkReturn)
     )
     if isSf.not then return zid
@@ -5879,7 +5885,7 @@ emitNativeArgMethod: function {
     if mn.length == 0 then return "".string
     # a str instance's members are declared on its template
     srcT: ownerTid
-    if (originIsTid :symtab tid: ownerTid originTid: (ctx.origins.get i: ogStr)) then {
+    if (originIsTid :symtab tid: ownerTid originTid: (ctx.origins.get i: family.str)) then {
         srcT = originTidOf :symtab tid: ownerTid
     }
     srcP: convSrcPathOf :symtab srcTid: srcT
@@ -8860,7 +8866,7 @@ emitStrConvCall: function {
     if (originIsTid
         :symtab
         tid: (ztypes.tid.create from: rid.u64)
-        originTid: (ctx.origins.get i: ogStr)
+        originTid: (ctx.origins.get i: family.str)
     ).not then return "".string
     rnm: cbaseNoPrefix :ctx tid: (ztypes.tid.create from: rid.u64)
     pv: emitDottedReceiver :ast :symtab :ctx callable: (ast.nodes.get i: call.callable.u64)
@@ -8968,7 +8974,7 @@ emitEmptyColCreate: function {
         if (originIsTid
             :symtab
             tid: (ztypes.tid.create from: amid.u64)
-            originTid: (ctx.origins.get i: ogArray)
+            originTid: (ctx.origins.get i: family.fixedArray)
         ) then {
             acb: ctxCname :ctx tid: (ztypes.tid.create from: amid.u64)
             return "\{acb}_create()"
@@ -8984,7 +8990,7 @@ emitEmptyColCreate: function {
         if (originIsTid
             :symtab
             tid: (ztypes.tid.create from: smid.u64)
-            originTid: (ctx.origins.get i: ogStr)
+            originTid: (ctx.origins.get i: family.str)
         ) then {
             scb: ctxCname :ctx tid: (ztypes.tid.create from: smid.u64)
             return "\{scb}_create()"
@@ -9145,7 +9151,7 @@ emitListMethodCall: function {
 } out String is {
     cb: ctxCname :ctx tid: bt
     recvR: colRecvRef :ctx bn: bn.stringView vid: bvid
-    if (mnIs :ctx id: mnId at: mnAppend) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.append) then {
         v: colArg :ast :symtab :ctx :call label: "from" consumes: true
         e0: "\{cb}_append(\{recvR}, \{v})"
         return e0
@@ -9161,7 +9167,7 @@ emitListMethodCall: function {
         ) then return "(*\{e1})"
         return e1
     }
-    if (mnIs :ctx id: mnId at: mnGetMut) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.getMut) then {
         vm: listArg :ast :symtab :ctx :call label: "i"
         e1m: "\{cb}_getMut(\{recvR}, \{vm})"
         if (listGetIsPtr
@@ -9207,11 +9213,11 @@ emitListMethodCall: function {
             bForm: argform.moved
         )
     }
-    if (mnIs :ctx id: mnId at: mnPop) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.pop) then {
         e3: "\{cb}_pop(\{recvR})"
         return e3
     }
-    if (mnIs :ctx id: mnId at: mnInsert) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.insert) then {
         return (emitOrderedPair
             :ast
             :symtab
@@ -9226,7 +9232,7 @@ emitListMethodCall: function {
             bForm: argform.value
         )
     }
-    if (mnIs :ctx id: mnId at: mnExtend) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.extend) then {
         eaa: listTakeArgBase :ast :call label: "from"
         eaV: atomVid :symtab nid: (listTakeArgBaseNid :ast :call label: "from")
         ea: emitLocalAtomName :ctx name: eaa vid: eaV
@@ -9424,7 +9430,7 @@ emitSetMethodCall: function {
         e0: "\{cb}_add(\{bn}, \{v})"
         return e0
     }
-    if (mnIs :ctx id: mnId at: mnHas) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.has) then {
         viv: colArgAsStringViewExpr :ast :symtab :ctx :call label: "item"
         if viv.length > 0 then return "\{cb}_hasv(\{bn}, \{viv})"
         v: colArg :ast :symtab :ctx :call label: "item" consumes: false
@@ -9441,7 +9447,7 @@ emitSetMethodCall: function {
         e1: "\{cb}_has(\{bn}, \{v})"
         return e1
     }
-    if (mnIs :ctx id: mnId at: mnDelete) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.delete) then {
         viv: colArgAsStringViewExpr :ast :symtab :ctx :call label: "item"
         if viv.length > 0 then return "\{cb}_deletev(\{bn}, \{viv})"
         v: colArg :ast :symtab :ctx :call label: "item" consumes: false
@@ -9506,7 +9512,7 @@ emitMapMethodCall: function {
         e1: "\{cb}_get(\{bn}, \{vk})"
         return e1
     }
-    if (mnIs :ctx id: mnId at: mnHas) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.has) then {
         vkv: colArgAsStringViewExpr :ast :symtab :ctx :call label: "key"
         if vkv.length > 0 then return "\{cb}_hasv(\{bn}, \{vkv})"
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
@@ -9578,22 +9584,22 @@ emitIdMapMethodCall: function {
         e1: "\{cb}_get(\{recvR}, \{vk})"
         return e1
     }
-    if (mnIs :ctx id: mnId at: mnGetMut) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.getMut) then {
         vkm: colArg :ast :symtab :ctx :call label: "key" consumes: false
         e1m: "\{cb}_getMut(\{recvR}, \{vkm})"
         return e1m
     }
-    if (mnIs :ctx id: mnId at: mnHas) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.has) then {
         vk: colArg :ast :symtab :ctx :call label: "key" consumes: false
         e2: "\{cb}_has(\{recvR}, \{vk})"
         return e2
     }
-    if (mnIs :ctx id: mnId at: mnKeyAt) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.keyAt) then {
         vi: colArg :ast :symtab :ctx :call label: "i" consumes: false
         e3: "\{cb}_keyAt(\{recvR}, \{vi})"
         return e3
     }
-    if (mnIs :ctx id: mnId at: mnValueAt) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.valueAt) then {
         vi2: colArg :ast :symtab :ctx :call label: "i" consumes: false
         e4: "\{cb}_valueAt(\{recvR}, \{vi2})"
         return e4
@@ -9619,7 +9625,7 @@ emitIdSetMethodCall: function {
         e0: "\{cb}_add(\{recvR}, \{v})"
         return e0
     }
-    if (mnIs :ctx id: mnId at: mnHas) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.has) then {
         v: colArg :ast :symtab :ctx :call label: "item" consumes: false
         e1: "\{cb}_has(\{recvR}, \{v})"
         return e1
@@ -13472,20 +13478,20 @@ emitCallProbeChain: function {
 ownerIsCollectionFamily: function {ctx: Ctx.view fam: ztypes.tid} out bool is {
     return (
         fam ==
-        (ctx.origins.get i: ogList) or
-        (fam == (ctx.origins.get i: ogListVal)) or
-        (fam == (ctx.origins.get i: ogListView)) or
-        (fam == (ctx.origins.get i: ogListViewVal)) or
-        (fam == (ctx.origins.get i: ogSet)) or
-        (fam == (ctx.origins.get i: ogSetVal)) or
-        (fam == (ctx.origins.get i: ogMap)) or
-        (fam == (ctx.origins.get i: ogMapRV)) or
-        (fam == (ctx.origins.get i: ogMapVR)) or
-        (fam == (ctx.origins.get i: ogMapVV)) or
-        (fam == (ctx.origins.get i: ogIdMapR)) or
-        (fam == (ctx.origins.get i: ogIdMapV)) or
-        (fam == (ctx.origins.get i: ogIdSet)) or
-        (fam == (ctx.origins.get i: ogArray))
+        (ctx.origins.get i: family.list) or
+        (fam == (ctx.origins.get i: family.listVal)) or
+        (fam == (ctx.origins.get i: family.listView)) or
+        (fam == (ctx.origins.get i: family.listViewVal)) or
+        (fam == (ctx.origins.get i: family.set)) or
+        (fam == (ctx.origins.get i: family.setVal)) or
+        (fam == (ctx.origins.get i: family.map)) or
+        (fam == (ctx.origins.get i: family.mapRV)) or
+        (fam == (ctx.origins.get i: family.mapVR)) or
+        (fam == (ctx.origins.get i: family.mapVV)) or
+        (fam == (ctx.origins.get i: family.idMapR)) or
+        (fam == (ctx.origins.get i: family.idMapV)) or
+        (fam == (ctx.origins.get i: family.idSet)) or
+        (fam == (ctx.origins.get i: family.fixedArray))
     )
 }
 
@@ -14118,7 +14124,9 @@ implicitZeroValue: function {
     # a sized str or array is built by its parameterless runtime create
     {
         zso: originTidOf :symtab tid: (ztypes.tid.create from: zm.u64)
-        isSized: zso == (ctx.origins.get i: ogStr) or (zso == (ctx.origins.get i: ogArray))
+        strO: ctx.origins.get i: family.str
+        arrO: ctx.origins.get i: family.fixedArray
+        isSized: zso == strO or (zso == arrO)
         if isSized when zso.isZero.not then {
             zsc: ctxCname :ctx tid: (ztypes.tid.create from: zm.u64)
             return "\{zsc}_create()"
@@ -14392,7 +14400,8 @@ nestedCounterRead: function {
     recvIsPtr: bool
 } out String is {
     isLength: mnId == zast.names.wkLength
-    if isLength when (originIsTid :symtab tid: nlid originTid: (ctx.origins.get i: ogArray)) then {
+    arrO: ctx.origins.get i: family.fixedArray
+    if isLength when (originIsTid :symtab tid: nlid originTid: arrO) then {
         acnb: ctxCname :ctx tid: nlid
         return "\{acnb}_length"
     }
@@ -14436,7 +14445,7 @@ emitNestedCollectionBase: function {
 } out String is {
     eCt: nestedCounterRead :symtab :ctx :mnId :nlid :baseAtom :recvIsPtr
     if eCt.length > 0 then return eCt
-    if (mnIs :ctx id: mnId at: mnCopy) then {
+    if (dispatchIs :ctx id: mnId at: dispatch.copy) then {
         fam: copyFamilyOf :symtab :ctx tid: nlid
         if fam > 0 then {
             crv: colRecvRef :ctx bn: baseAtom vid: bs9vid
@@ -14449,7 +14458,7 @@ emitNestedCollectionBase: function {
             )
         }
     }
-    if (originIsTid :symtab tid: nlid originTid: (ctx.origins.get i: ogStr)) then {
+    if (originIsTid :symtab tid: nlid originTid: (ctx.origins.get i: family.str)) then {
         nstrcb: ctxCname :ctx tid: nlid
         if mn2 == "length" then return "\{baseAtom}.len"
         if mn2 == "size" then return "\{nstrcb}_size"
@@ -15356,7 +15365,7 @@ emitCollectionMemberRead: function {
     # A dict is heap-held and its local already IS the pointer the body wants;
     # a list or an id container is a stack struct, so the local's ADDRESS is.
     mnc9: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
-    if (mnIs :ctx id: mnc9 at: mnCopy) then {
+    if (dispatchIs :ctx id: mnc9 at: dispatch.copy) then {
         fam9: copyFamilyOf :symtab :ctx tid: bstamp
         if fam9 > 0 then return (containerCopyText
             :ctx
@@ -15366,7 +15375,7 @@ emitCollectionMemberRead: function {
             heapRecv: bn2
         )
     }
-    if (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: ogArray)) then {
+    if (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: family.fixedArray)) then {
         acba: ctxCname :ctx tid: bstamp
         if mn2 == "length" then {
             eal: "\{acba}_length"
@@ -15377,7 +15386,7 @@ emitCollectionMemberRead: function {
             return eai
         }
     }
-    if (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: ogStr)) then {
+    if (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: family.str)) then {
         scba: ctxCname :ctx tid: bstamp
         if mn2 == "length" then {
             esl: "\{bn2}\{accB2}len"
@@ -15657,8 +15666,8 @@ dottedAtomRecClsBase: function {
     if rtt == ztypes.ztypetype.recordType when (originIsTid
         :symtab
         tid: bstamp
-        originTid: (ctx.origins.get i: ogArray)
-    ).not when (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: ogStr)
+        originTid: (ctx.origins.get i: family.fixedArray)
+    ).not when (originIsTid :symtab tid: bstamp originTid: (ctx.origins.get i: family.str)
     ).not then isRecOrCls = true
     if rtt == ztypes.ztypetype.classType then {
         # user classes only -- collection monos (List/Set/Map, with a
@@ -16056,7 +16065,7 @@ emitResolvedCopy: function {
     if (originIsTid
         :symtab
         :tid
-        originTid: (ctx.origins.get i: ogStr)
+        originTid: (ctx.origins.get i: family.str)
     ) then cvstr = true
     cvref: cvtt.isReferenceFamily or cvstr
     if cvref.not when (symtab.reg.needsDestructor typeId: tid).not then {
@@ -16129,11 +16138,11 @@ colCopyCall: function {
 # up as a missing call, never as a wrong emission on a reference family whose
 # elements would get two owners.
 copyFamilyOf: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid} out u64 is {
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogListVal)) then return 1
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogIdMapV)) then return 1
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogIdSet)) then return 1
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogSetVal)) then return 2
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogMapVV)) then return 2
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.listVal)) then return 1
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.idMapV)) then return 1
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.idSet)) then return 1
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.setVal)) then return 2
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.mapVV)) then return 2
     return 0
 }
 
@@ -16227,7 +16236,7 @@ emitDottedConversionRead: function {
     dps: ast.nodes.get i: n.parent.u64
     ccbc: emitCrossUnitBareCreate :ctx :ast :symtab parent: dps childId: mnc0Id
     if ccbc.length > 0 then return ccbc
-    if (mnIs :ctx id: mnc0Id at: mnCopy) then {
+    if (dispatchIs :ctx id: mnc0Id at: dispatch.copy) then {
         cpc: emitCopyConversion :ast :symtab :ctx :n
         if cpc.length > 0 then return cpc
     }
@@ -16685,7 +16694,7 @@ emitDottedRead: function {
     # is handled by emitResultCombinator in the call dispatch instead.
     # the member is asked by ID: the legs below lend ast, and an id is a scalar
     dcMnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child.u64)
-    if (mnIs :ctx id: dcMnId at: mnOrPanic) then {
+    if (dispatchIs :ctx id: dcMnId at: dispatch.orPanic) then {
         pStamp: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent.u64))
         pMono: chaseAggregateTypedef :symtab :ctx tid: pStamp
         pOrig: monoOriginName :symtab tid: (ztypes.tid.create from: pMono.u64)
@@ -17660,7 +17669,7 @@ isListCompare: function {
 } out bool is {
     isCmp: opId == zast.names.wkOpEq or (opId == zast.names.wkOpNe)
     if isCmp.not then return false
-    return (originIsTid :symtab tid: owner originTid: (ctx.origins.get i: ogListVal))
+    return (originIsTid :symtab tid: owner originTid: (ctx.origins.get i: family.listVal))
 }
 
 # emitListEqOperator -- a ListVal `==` (or its negation): the mono's `_eq`
@@ -18191,7 +18200,7 @@ emitInterpPart: function {
     } else if (originIsTid
         :symtab
         tid: (stampIdOf :symtab nid: (interpPartNodeId :n))
-        originTid: (ctx.origins.get i: ogStr)
+        originTid: (ctx.origins.get i: family.str)
     ) then {
         buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, \{val}.data, \{val}.len);\n"
     } else {
@@ -18591,7 +18600,7 @@ emitPrintAtom: function {
         buf.append lpv
         return
     }
-    if (originIsTid :symtab tid: argTid originTid: (ctx.origins.get i: ogStr)) then {
+    if (originIsTid :symtab tid: argTid originTid: (ctx.origins.get i: family.str)) then {
         lpstr: "\{ind}\{ctx.svC}_print((\{ctx.svC}_t){ .data = \{anmE}.data, .size = \{anmE}.len });\n"
         buf.append lpstr
         return
@@ -18946,7 +18955,7 @@ emitOptionBoxHoist: function {
         cn: dottedChildText :ast n: (ast.nodes.get i: n.callable.u64)
         if cn != "some" then return "".string
         mid: stampIdOf :symtab nid: n.nodeid.u64
-        if (originIsTid :symtab tid: mid originTid: (ctx.origins.get i: ogOption)).not then {
+        if (originIsTid :symtab tid: mid originTid: (ctx.origins.get i: family.option)).not then {
             return "".string
         }
         av: "0".string
@@ -19103,15 +19112,15 @@ emitCallStmt: function {
             n: (ast.nodes.get i: call.callable.u64)
         )
     }
-    if (mnIs :ctx id: sfnId at: mnPrint) then {
+    if (dispatchIs :ctx id: sfnId at: dispatch.print) then {
         emitPrintStmt :ast :symtab :ctx :call :ind :tmp :buf
         return
     }
-    if (mnIs :ctx id: sfnId at: mnPanic) then {
+    if (dispatchIs :ctx id: sfnId at: dispatch.panic) then {
         emitPanicStmt :ast :symtab :ctx :call :ind :tmp :buf
         return
     }
-    if (mnIs :ctx id: sfnId at: mnError) then {
+    if (dispatchIs :ctx id: sfnId at: dispatch.error) then {
         emitErrorStmt :ast :symtab :ctx :call :ind :tmp :buf
         return
     }
@@ -23686,7 +23695,7 @@ emitDoBindValue: function {
             # malloc'd box, none carries NULL data, and the local owns the
             # box (scope-exit destroy).
             boxedC: String
-            if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogOption)) then {
+            if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.option)) then {
                 boxedC = armPayloadC :ast :symtab :ctx :tid arm: "some"
             }
             l0: "\{ind}\{nm}.tag = \{noneTag};\n"
@@ -24299,7 +24308,7 @@ emitObjIterPayload: function {
     } else if (originIsTid
         :symtab
         tid: (ztypes.tid.create from: ovid.u64)
-        originTid: (ctx.origins.get i: ogOption)
+        originTid: (ctx.origins.get i: family.option)
     ) then {
         # owned heap yield: move the payload out, free just the box; the
         # loop var owns it and is freed at the end of each iteration.
@@ -24378,7 +24387,7 @@ objIterPayCleanup: function {
     if (originIsTid
         :symtab
         tid: (ztypes.tid.create from: ovid.u64)
-        originTid: (ctx.origins.get i: ogOption)
+        originTid: (ctx.origins.get i: family.option)
     ) then {
         pfree: (payloadDestructor
             :ast
@@ -24499,7 +24508,7 @@ emitOptionLoopTail: function {
     if (originIsTid
         :symtab
         tid: (ztypes.tid.create from: ovid.u64)
-        originTid: (ctx.origins.get i: ogOption)
+        originTid: (ctx.origins.get i: family.option)
     ) then {
         # owned heap-payload union: destroy the box on the NONE arm too.
         l2o: "\{ind}    if (_iter\{mN}.tag == Z_\{ovu}_TAG_NONE) { \{ovc}_destroy(&_iter\{mN}); break; }\n"
@@ -28777,21 +28786,21 @@ nodeIsAtomBox: function {
     }
 }
 
-# originFamilyOf -- the origins table read backwards: which ogXxx family an
-# ORIGIN tid names, or ogNone. Zero is no family -- a builtin the program never
+# originFamilyOf -- the origins table read backwards: which `family` element an
+# ORIGIN tid names, or family.none. Zero is no family -- a builtin the program never
 # registers leaves its row 0, and matching that would make every origin-less
 # type a List.
 originFamilyOf: function {ctx: Ctx.view originTid: ztypes.tid} out u64 is {
-    if originTid.isZero then return ogNone
+    if originTid.isZero then return family.none
     i: u64
-    for i < ogNone loop {
+    for i < family.none loop {
         if originTid == (ctx.origins.get :i) then return i
         i = i + 1
     }
-    return ogNone
+    return family.none
 }
 
-# monoFamilyOf -- the family a MONO was minted from, or ogNone. Every predicate
+# monoFamilyOf -- the family a MONO was minted from, or family.none. Every predicate
 # below asks exactly this and differs only in which answers it accepts.
 monoFamilyOf: function {
     symtab: zenv.ZSymbolTable.view
@@ -28812,7 +28821,7 @@ isListOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return f == ogList or (f == ogListVal)
+    return f == family.list or (f == family.listVal)
 }
 
 # isSetOriginOf -- the type is a Set of EITHER family. The two templates differ
@@ -28826,7 +28835,7 @@ isSetOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return f == ogSet or (f == ogSetVal)
+    return f == family.set or (f == family.setVal)
 }
 
 # isMapOriginOf -- the type is a Map of ANY of the four key/value families.
@@ -28836,7 +28845,7 @@ isMapOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return f == ogMap or (f == ogMapRV) or (f == ogMapVR) or (f == ogMapVV)
+    return f == family.map or (f == family.mapRV) or (f == family.mapVR) or (f == family.mapVV)
 }
 
 # isIdMapOriginOf -- the type is an IdMap of either value family.
@@ -28846,7 +28855,7 @@ isIdMapOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return f == ogIdMapR or (f == ogIdMapV)
+    return f == family.idMapR or (f == family.idMapV)
 }
 
 # isIdSetOriginOf -- the type is an IdSet.
@@ -28856,7 +28865,7 @@ isIdSetOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return f == ogIdSet
+    return f == family.idSet
 }
 
 # isIdCollectionOriginOf -- the type is an IdMap or an IdSet: the id-keyed
@@ -28867,7 +28876,7 @@ isIdCollectionOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return f == ogIdMapR or (f == ogIdMapV) or (f == ogIdSet)
+    return f == family.idMapR or (f == family.idMapV) or (f == family.idSet)
 }
 
 # isOptionViewOriginOf -- the type is an OptionView of either element family:
@@ -28878,7 +28887,7 @@ isOptionViewOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return f == ogOptionView or (f == ogOptionViewVal)
+    return f == family.optionView or (f == family.optionViewVal)
 }
 
 # isListViewOriginOf -- the type is a ListView of either element family.
@@ -28888,7 +28897,7 @@ isListViewOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return f == ogListView or (f == ogListViewVal)
+    return f == family.listView or (f == family.listViewVal)
 }
 
 # isMapEntryOriginOf -- the type is a MapEntry of any of the four families.
@@ -28898,9 +28907,8 @@ isMapEntryOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return (
-        f == ogMapEntry or (f == ogMapEntryRV) or (f == ogMapEntryVR) or (f == ogMapEntryVV)
-    )
+    if f == family.mapEntry or (f == family.mapEntryRV) then return true
+    return f == family.mapEntryVR or (f == family.mapEntryVV)
 }
 
 # isIdMapEntryOriginOf -- the type is an IdMapEntry of either value family.
@@ -28910,22 +28918,22 @@ isIdMapEntryOriginOf: function {
     tid: ztypes.tid
 } out bool is {
     f: monoFamilyOf :symtab :ctx :tid
-    return f == ogIdMapEntryR or (f == ogIdMapEntryV)
+    return f == family.idMapEntryR or (f == family.idMapEntryV)
 }
 
 # isCollectionOriginTid -- originTid (a genericOriginId) is one of the cached
 # collection/iterator origins, i.e. a template that mints a C struct type
 # (List/ListView/Set/Map/MapEntry and the iterators).
 #
-# The table has three zones and this is the MIDDLE one: ogStr and ogArray
+# The table has three zones and this is the MIDDLE one: family.str and family.fixedArray
 # precede it, the option/result families follow it. Moving a row across either
 # bound changes what counts as a collection, silently -- which is why the two
 # bounds are named here rather than a membership list being written out again.
 isCollectionOriginTid: function {ctx: Ctx.view originTid: ztypes.tid} out bool is {
     f: originFamilyOf :ctx :originTid
-    if f == ogNone then return false
-    if f < ogList then return false
-    return f < ogOption
+    if f == family.none then return false
+    if f < family.list then return false
+    return f < family.option
 }
 
 # cTypeForNameTid -- like cTypeForName, for a site that holds the tid: a
@@ -29023,7 +29031,9 @@ chaseAggregateTypedef: function {
     isRec: (symtab.reg.typetypeOf typeId: e) == ztypes.ztypetype.recordType
     if isRec when (symtab.reg.isNativeOf tid: e) then {
         eo: originTidOf :symtab tid: e
-        isSized: eo == (ctx.origins.get i: ogStr) or (eo == (ctx.origins.get i: ogArray))
+        strO: ctx.origins.get i: family.str
+        arrO: ctx.origins.get i: family.fixedArray
+        isSized: eo == strO or (eo == arrO)
         if isSized.not or eo.isZero then return tid
     }
     if (isOrdinalVariant :symtab tid: e) then return tid
@@ -29131,7 +29141,7 @@ typeRefC: function {
         cTypeText: "\{cc}_t"
         return cTypeText
     }
-    if (originIsTid :symtab tid: cid originTid: (ctx.origins.get i: ogArray)) then {
+    if (originIsTid :symtab tid: cid originTid: (ctx.origins.get i: family.fixedArray)) then {
         aca: ctxCnameView :ctx tid: cid
         act: "\{aca}_t"
         return act
@@ -32424,7 +32434,7 @@ emitListMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: (ctx.mnames.get i: mnCopy)
+        nameId: (ctx.mnames.get i: dispatch.copy)
         file: "z_List_copy.c.tmpl"
         nm: nm.stringView
         hole: "ELEM_T"
@@ -33684,7 +33694,7 @@ emitSetMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: (ctx.mnames.get i: mnCopy)
+        nameId: (ctx.mnames.get i: dispatch.copy)
         file: "z_dict_copy.c.tmpl"
         nm: nm.stringView
         hole: ""
@@ -33983,7 +33993,7 @@ emitMapMono: function {
     if (originIsTid
         :symtab
         tid: (ztypes.tid.create from: ovId.u64)
-        originTid: (ctx.origins.get i: ogOptionval)
+        originTid: (ctx.origins.get i: family.optionval)
     ) then {
         gbV: "    z_\{ov}_t _r;\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        _r.data.some = _this->entries[idx].value;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n    }\n    return _r;"
         getBody = gbV.take
@@ -34013,7 +34023,7 @@ emitMapMono: function {
     if (originIsTid
         :symtab
         tid: (ztypes.tid.create from: rmWrapId.u64)
-        originTid: (ctx.origins.get i: ogOptionval)
+        originTid: (ctx.origins.get i: family.optionval)
     ) then {
         removeBody = "    z_\{rmWrap}_t _r;\n    if (idx < 0) {\n        _r.tag = Z_\{rmWrapU}_TAG_NONE;\n        return _r;\n    }\n    _r.tag = Z_\{rmWrapU}_TAG_SOME;\n    _r.data.some = _this->entries[idx].value;\n\{delTail}    return _r;"
     } else {
@@ -34085,7 +34095,7 @@ emitMapMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: (ctx.mnames.get i: mnCopy)
+        nameId: (ctx.mnames.get i: dispatch.copy)
         file: "z_dict_copy.c.tmpl"
         nm: nm.stringView
         hole: ""
@@ -34152,7 +34162,7 @@ emitIdMapMono: function {
     if (originIsTid
         :symtab
         tid: (ztypes.tid.create from: ovId.u64)
-        originTid: (ctx.origins.get i: ogOptionval)
+        originTid: (ctx.origins.get i: family.optionval)
     ) then {
         getBody = "    z_\{ov}_t _r;\n    if (idx >= 0) {\n        _r.tag = Z_\{ovu}_TAG_SOME;\n        _r.data.some = _this->entries[idx].value;\n    } else {\n        _r.tag = Z_\{ovu}_TAG_NONE;\n    }\n    return _r;"
     } else {
@@ -34201,7 +34211,7 @@ emitIdMapMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: (ctx.mnames.get i: mnCopy)
+        nameId: (ctx.mnames.get i: dispatch.copy)
         file: "z_IdMap_copy.c.tmpl"
         nm: nm.stringView
         hole: ""
@@ -34350,7 +34360,7 @@ emitIdSetMono: function {
         :ctx
         :runtimeDir
         :monoId
-        nameId: (ctx.mnames.get i: mnCopy)
+        nameId: (ctx.mnames.get i: dispatch.copy)
         file: "z_IdSet_copy.c.tmpl"
         nm: nm.stringView
         hole: "ITEM_T"
@@ -35176,7 +35186,7 @@ monoNeedsFwdDecl: function {
     tid: ztypes.tid
 } out bool is {
     if (symtab.reg.needsDestructor typeId: tid) then return true
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogArray)) then return true
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.fixedArray)) then return true
     if (isListOriginOf :symtab :ctx :tid) then return true
     if (isListViewOriginOf :symtab :ctx :tid) then return true
     if (isSetOriginOf :symtab :ctx :tid) then return true
@@ -35292,7 +35302,7 @@ monoElemIdsOf: function {
     byGet: (
         (isListOriginOf :symtab :ctx tid: monoId) or
         (isListViewOriginOf :symtab :ctx tid: monoId) or
-        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: ogArray))
+        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.fixedArray))
     )
     if byGet then {
         e: listElemType :symtab :monoId
@@ -35323,10 +35333,10 @@ monoElemIdsOf: function {
         return
     }
     isWrap: (
-        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: ogOptionval)) or
-        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: ogResultval)) or
-        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: ogOption)) or
-        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: ogResult)) or
+        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.optionval)) or
+        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.resultval)) or
+        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.option)) or
+        (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.result)) or
         (isOptionViewOriginOf :symtab :ctx tid: monoId) or
         ((symtab.reg.typetypeOf typeId: monoId) == ztypes.ztypetype.variantType)
     )
@@ -35485,8 +35495,8 @@ unionInlineArmTids: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid acc
 isValueSumMono: function {
     symtab: zenv.ZSymbolTable.view ctx: Ctx.view tid: ztypes.tid
 } out bool is {
-    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogOptionval)) then return true
-    return (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogResultval))
+    if (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.optionval)) then return true
+    return (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.resultval))
 }
 
 # isCollectionPassMono -- a mono whose C the collection pass writes: a collection,
@@ -35498,12 +35508,12 @@ isCollectionPassMono: function {
     co: originTidOf :symtab :tid
     if co.isZero then return false
     if (isCollectionOriginTid :ctx originTid: co) then return true
-    if (originFamilyOf :ctx originTid: co) == ogArray then return true
+    if (originFamilyOf :ctx originTid: co) == family.fixedArray then return true
     tt: symtab.reg.typetypeOf typeId: tid
     if (isUserGenericRecordMono :symtab :ctx tcl: tid :tt) then return true
     isValMono: (
-        (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogOptionval)) or
-        (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogResultval))
+        (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.optionval)) or
+        (originIsTid :symtab :tid originTid: (ctx.origins.get i: family.resultval))
     )
     return (isUserGenericVariantMono :symtab :ctx tcl: tid :tt :isValMono)
 }
@@ -35651,11 +35661,11 @@ emitMonoById: function {
     monoId: ztypes.tid
     buf: String.borrow
 } is {
-    if (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: ogOptionval)) then {
+    if (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.optionval)) then {
         emitOneVariant :ast :symtab :ctx tid: monoId :buf
         return
     }
-    if (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: ogResultval)) then {
+    if (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.resultval)) then {
         emitOneVariant :ast :symtab :ctx tid: monoId :buf
         return
     }
@@ -35663,7 +35673,7 @@ emitMonoById: function {
         emitListViewMono :ast :symtab :ctx :runtimeDir :monoId :buf
         return
     }
-    if (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: ogArray)) then {
+    if (originIsTid :symtab tid: monoId originTid: (ctx.origins.get i: family.fixedArray)) then {
         emitArrayMono :ast :symtab :ctx :runtimeDir :monoId :buf
         return
     }
@@ -35913,8 +35923,10 @@ ensureFwdStruct: function {
     tt: symtab.reg.typetypeOf typeId: tid
     isStruct: tt.isFieldwise
     if isStruct then {
-        if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogStr)) then isStruct = false
-        if (originIsTid :symtab :tid originTid: (ctx.origins.get i: ogArray)) then isStruct = false
+        strO: ctx.origins.get i: family.str
+        arrO: ctx.origins.get i: family.fixedArray
+        if (originIsTid :symtab :tid originTid: strO) then isStruct = false
+        if (originIsTid :symtab :tid originTid: arrO) then isStruct = false
     }
     if isStruct when (ctx.fwdDeclaredTypes.has item: tid).not then {
         # a mono is declared on the terms its own pass declares it: an iterator
@@ -36301,22 +36313,22 @@ collectLateGroup: function {
     last: u64
 } is {
     fams: ListVal u64
-    fams.append (ctx.origins.get i: ogArray).u64
-    fams.append (ctx.origins.get i: ogOptionval).u64
-    fams.append (ctx.origins.get i: ogResultval).u64
-    fams.append (ctx.origins.get i: ogListView).u64
-    fams.append (ctx.origins.get i: ogListViewVal).u64
-    fams.append (ctx.origins.get i: ogList).u64
-    fams.append (ctx.origins.get i: ogListVal).u64
-    fams.append (ctx.origins.get i: ogSet).u64
-    fams.append (ctx.origins.get i: ogSetVal).u64
-    fams.append (ctx.origins.get i: ogMap).u64
-    fams.append (ctx.origins.get i: ogMapRV).u64
-    fams.append (ctx.origins.get i: ogIdSet).u64
-    fams.append (ctx.origins.get i: ogIdMapR).u64
-    fams.append (ctx.origins.get i: ogIdMapV).u64
-    fams.append (ctx.origins.get i: ogMapVR).u64
-    fams.append (ctx.origins.get i: ogMapVV).u64
+    fams.append (ctx.origins.get i: family.fixedArray).u64
+    fams.append (ctx.origins.get i: family.optionval).u64
+    fams.append (ctx.origins.get i: family.resultval).u64
+    fams.append (ctx.origins.get i: family.listView).u64
+    fams.append (ctx.origins.get i: family.listViewVal).u64
+    fams.append (ctx.origins.get i: family.list).u64
+    fams.append (ctx.origins.get i: family.listVal).u64
+    fams.append (ctx.origins.get i: family.set).u64
+    fams.append (ctx.origins.get i: family.setVal).u64
+    fams.append (ctx.origins.get i: family.map).u64
+    fams.append (ctx.origins.get i: family.mapRV).u64
+    fams.append (ctx.origins.get i: family.idSet).u64
+    fams.append (ctx.origins.get i: family.idMapR).u64
+    fams.append (ctx.origins.get i: family.idMapV).u64
+    fams.append (ctx.origins.get i: family.mapVR).u64
+    fams.append (ctx.origins.get i: family.mapVV).u64
     fi: u64
     fn: fams.length
     for fi < fn loop {
@@ -36695,8 +36707,8 @@ classifyCollectionMono: function {
 } out bool is {
     isColKind: false
     isOptRes: (
-        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: ogOption)) or
-        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: ogResult))
+        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.option)) or
+        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.result))
     )
     if isOptRes then work.wOptRes.append tv
     if isMono when tt == ztypes.ztypetype.unionType then {
@@ -36710,7 +36722,7 @@ classifyCollectionMono: function {
     }
     if (isOptionViewOriginOf :symtab :ctx tid: tcl) then work.wOptView.append tv
     colDst: u64
-    if (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: ogArray)) then {
+    if (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.fixedArray)) then {
         isColKind = true
         colDst = 1
     }
@@ -36790,12 +36802,12 @@ isUserGenericRecordMono: function {
     if (originIsTid
         :symtab
         tid: tcl
-        originTid: (ctx.origins.get i: ogArray)
+        originTid: (ctx.origins.get i: family.fixedArray)
     ) then return false
     if (originIsTid
         :symtab
         tid: tcl
-        originTid: (ctx.origins.get i: ogStr)
+        originTid: (ctx.origins.get i: family.str)
     ) then return false
     return (isBoxTid :symtab tid: tcl).not
 }
@@ -36856,13 +36868,13 @@ classifyMonoAt: function {
     if (originIsTid
         :symtab
         tid: tcl
-        originTid: (ctx.origins.get i: ogStr)
+        originTid: (ctx.origins.get i: family.str)
     ) then work.wStr.append tv
     if (isBoxTid :symtab tid: tcl) then work.wBox.append tv
     if (isSystemVariantTid :symtab :ctx :tcl :tt :isMono :gen) then work.wSysVar.append tv
     isValMono: (
-        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: ogOptionval)) or
-        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: ogResultval))
+        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.optionval)) or
+        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.resultval))
     )
     if isValMono then (classifyValueMono
         :ast
@@ -36906,8 +36918,8 @@ isUserInstance: function {
     tt: symtab.reg.typetypeOf typeId: tcl
     if (isUserGenericRecordMono :symtab :ctx :tcl :tt) then return true
     isValMono: (
-        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: ogOptionval)) or
-        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: ogResultval))
+        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.optionval)) or
+        (originIsTid :symtab tid: tcl originTid: (ctx.origins.get i: family.resultval))
     )
     return (isUserGenericVariantMono :symtab :ctx :tcl :tt :isValMono)
 }
@@ -38310,7 +38322,7 @@ nativeBoxCall: function {
 } out String is {
     if mname == "stringView" then {
         if implTid == ctx.strTid then return (svValueFormPtr :ctx expr: "_self")
-        if (originIsTid :symtab tid: implTid originTid: (ctx.origins.get i: ogStr)) then {
+        if (originIsTid :symtab tid: implTid originTid: (ctx.origins.get i: family.str)) then {
             return "((\{ctx.svC}_t){ .data = _self->data, .size = _self->len })"
         }
     }
@@ -39184,8 +39196,8 @@ emitResultCombinator: function {
     rtid0: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: bnid.u64))
     rtid: chaseAggregateTypedef :symtab :ctx tid: rtid0
     if rtid.isZero then return "".string
-    isRes: originIsTid :symtab tid: rtid originTid: (ctx.origins.get i: ogResultval)
-    isOpt: originIsTid :symtab tid: rtid originTid: (ctx.origins.get i: ogOptionval)
+    isRes: originIsTid :symtab tid: rtid originTid: (ctx.origins.get i: family.resultval)
+    isOpt: originIsTid :symtab tid: rtid originTid: (ctx.origins.get i: family.optionval)
     if isRes.not when isOpt.not then return "".string
     # `orPanic` is resultval's alone
     if isP when isRes.not then return "".string
@@ -41598,7 +41610,7 @@ setupGenCtx: function {
     if (originIsTid
         :symtab
         tid: (ztypes.tid.create from: rid.u64)
-        originTid: (ctx.origins.get i: ogOption)
+        originTid: (ctx.origins.get i: family.option)
     ) then {
         gp = armPayloadC :ast :symtab :ctx tid: (ztypes.tid.create from: rid.u64) arm: "some"
     }

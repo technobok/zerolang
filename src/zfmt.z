@@ -17,55 +17,58 @@ public: unit {
     :formatSource
 }
 
-# Where a value sits, written as the LOWEST `shapeRank` that takes parentheses
-# there, so `parensRequired` is one comparison. Measured by parsing every shape
-# in every position both ways and comparing the trees: the two rankings form a
-# 4x4 lattice whose every cell is one of these four thresholds.
+# slotkind -- where a value sits, written as the LOWEST `shapeRank` that takes
+# parentheses there, so `parensRequired` is one comparison. Measured by parsing
+# every shape in every position both ways and comparing the trees: the two
+# rankings form a 4x4 lattice whose every cell is one of these four thresholds.
+slotkind: data {
+    # a statement, a binding value, or an interpolation hole: the line or the
+    # braces end it, so no shape needs parentheses (4 is above every rank)
+    line: 4
 
-# a statement, a binding value, or an interpolation hole: the line or the
-# braces end it, so no shape needs parentheses (4 is above every rank)
-slotLine: 4.u8
+    # closed by a following keyword or label -- a condition, a labelled
+    # argument's value, a `with` value, a parameter or result type, a
+    # definition's value: only a labelled call or a control-flow value can run
+    # past it
+    clause: 3
 
-# closed by a following keyword or label -- a condition, a labelled argument's
-# value, a `with` value, a parameter or result type, a definition's value: only
-# a labelled call or a control-flow value can run past it
-slotClause: 3.u8
+    # juxtaposed with a following term -- an unnamed argument, or the leftmost
+    # operand of a chain: a call absorbs what follows it, a binary operation does
+    # not
+    juxta: 2
 
-# juxtaposed with a following term -- an unnamed argument, or the leftmost
-# operand of a chain: a call absorbs what follows it, a binary operation does
-# not
-slotJuxta: 2.u8
+    # juxtaposed with a following operator, dot or label -- a non-leftmost
+    # operand, a callable, a path parent, a swap side, a reassignment target, a
+    # data element: anything compound runs on
+    tight: 1
 
-# juxtaposed with a following operator, dot or label -- a non-leftmost operand,
-# a callable, a path parent, a swap side, a reassignment target, a data
-# element: anything compound runs on
-slotTight: 1.u8
+    # the base of a value marker that was written in parentheses,
+    # `(mk).copy`. There the pair is not layout: it forces the base's call, so
+    # the marker applies to the result (zast.callsBeforeMarker). Below every
+    # shape rank, so every shape keeps it
+    called: 0
 
-# the base of a value marker that was written in parentheses, `(mk).copy`.
-# There the pair is not layout: it forces the base's call, so the marker
-# applies to the result (zast.callsBeforeMarker). Below every shape rank, so
-# every shape keeps it
-slotCalled: 0.u8
+    # a string interpolation hole. Above every shape rank, like `line`, so the
+    # grammar asks for nothing; distinct from it because the BRACES delimit a
+    # break here and no pair has to be inserted for one
+    hole: 5
 
-# a string interpolation hole. Above every shape rank, like slotLine, so the
-# grammar asks for nothing; distinct from it because the BRACES delimit a break
-# here and no pair has to be inserted for one
-slotHole: 5.u8
-
-# a value that is already a definition form in its own right -- a `data` block
-# at unit level. Above every shape rank, so the grammar asks for nothing, and
-# above slotHole so no break asks either: the block's braces end it, and the
-# next line is a new definition whether parentheses are there or not. Measured:
-# `data` alone behaves this way; a labelled call, an if, a match, a with, a for
-# and a bare block all need parentheses in a definition's value
-slotBare: 6.u8
+    # a value that is already a definition form in its own right -- a `data`
+    # block at unit level. Above every shape rank, so the grammar asks for
+    # nothing, and above `hole` so no break asks either: the block's braces end
+    # it, and the next line is a new definition whether parentheses are there or
+    # not. Measured: `data` alone behaves this way; a labelled call, an if, a
+    # match, a with, a for and a bare block all need parentheses in a
+    # definition's value
+    bare: 6
+} out u8
 
 # pairsOnBreak -- whether a break at this position would leave the value
 # undelimited. Every position would, except a hole: EOL ends a statement and a
 # binding, a keyword or label follows a clause, and a term follows an argument.
 # Only the hole already has delimiters on both sides.
 pairsOnBreak: function {slot: u8} out bool is {
-    return slot < slotHole
+    return slot < slotkind.hole
 }
 
 # the outcome of formatting one source: the text, or why it was refused
@@ -484,9 +487,9 @@ Builder: class {
         } case unitdef then {
             return (this.visitUnit :id)
         } case datablock then {
-            return (this.visitValue :id slot: slotBare wrapped: false)
+            return (this.visitValue :id slot: slotkind.bare wrapped: false)
         } else {
-            return (this.visitValue :id slot: slotClause wrapped: false)
+            return (this.visitValue :id slot: slotkind.clause wrapped: false)
         }
     }
 
@@ -829,12 +832,12 @@ Builder: class {
             idx = idx - 1
             oid: zast.nodeid.create from: (operands.get i: idx)
             if first then {
-                xs.append (this.visitValue id: oid slot: slotJuxta wrapped: false)
+                xs.append (this.visitValue id: oid slot: slotkind.juxta wrapped: false)
             } else {
                 xs.append this.idSpace
                 xs.append (this.visitValue
                     id: (zast.nodeid.create from: (operators.get i: idx))
-                    slot: slotTight
+                    slot: slotkind.tight
                     wrapped: false
                 )
                 if wrapped then {
@@ -842,7 +845,7 @@ Builder: class {
                 } else {
                     xs.append this.idSpace
                 }
-                xs.append (this.visitValue id: oid slot: slotTight wrapped: false)
+                xs.append (this.visitValue id: oid slot: slotkind.tight wrapped: false)
             }
             first = false
         }
@@ -862,7 +865,7 @@ Builder: class {
     visitCall: function {:this id: zast.nodeid inParens: bool} out u32 is {
         n: this.node :id
         if n.call.not then return 0
-        callable: this.visitValue id: n.callable slot: slotTight wrapped: false
+        callable: this.visitValue id: n.callable slot: slotkind.tight wrapped: false
         args: ListVal u32
         trails: ListVal u32
         forced: false
@@ -923,7 +926,7 @@ Builder: class {
         one: ListVal u32
         if g.lead > 0 then one.append g.lead
         if a.name.isZero then {
-            one.append (this.visitValue id: a.operation slot: slotJuxta wrapped: false)
+            one.append (this.visitValue id: a.operation slot: slotkind.juxta wrapped: false)
         } else {
             op: this.node id: a.operation
             if op.labelvalue then {
@@ -932,7 +935,7 @@ Builder: class {
                 one.append (this.tokLabel name: a.name)
                 one.append (this.visitValue
                     id: a.operation
-                    slot: slotClause
+                    slot: slotkind.clause
                     wrapped: false
                 )
             }
@@ -1005,9 +1008,9 @@ Builder: class {
         match (
             n
         ) case dottedpath then {
-            pslot: slotTight
+            pslot: slotkind.tight
             called: zast.callsBeforeMarker ast: this.ast parent: n.parent child: n.child
-            if called then pslot = slotCalled
+            if called then pslot = slotkind.called
             xs.append (this.visitValue id: n.parent slot: pslot wrapped: false)
             xs.append (this.tok tt: zlexer.toktype.dotTok)
             childTt: zlexer.toktype.refIdTok
@@ -1059,7 +1062,7 @@ Builder: class {
                 if hole < parts.count.u64 then {
                     xs.append (this.visitValue
                         id: (this.kid span: parts i: hole)
-                        slot: slotHole
+                        slot: slotkind.hole
                         wrapped: false
                     )
                 }
@@ -1098,7 +1101,7 @@ Builder: class {
         match (
             n
         ) case reassignment then {
-            xs.append (this.visitValue id: n.topath slot: slotTight wrapped: false)
+            xs.append (this.visitValue id: n.topath slot: slotkind.tight wrapped: false)
             xs.append this.idSpace
             xs.append (this.tok tt: zlexer.toktype.equalsTok)
             xs.append this.idSpace
@@ -1114,23 +1117,23 @@ Builder: class {
         match (
             n
         ) case swapstmt then {
-            xs.append (this.visitValue id: n.lhs slot: slotTight wrapped: false)
+            xs.append (this.visitValue id: n.lhs slot: slotkind.tight wrapped: false)
             xs.append this.idSpace
             xs.append (this.tok tt: zlexer.toktype.swapTok)
             xs.append this.idSpace
-            xs.append (this.visitValue id: n.rhs slot: slotTight wrapped: false)
+            xs.append (this.visitValue id: n.rhs slot: slotkind.tight wrapped: false)
         } else null
         return (this.d.concat xs)
     }
 
     # rhsValue -- the value of a binding or a reassignment
     rhsValue: function {:this id: zast.nodeid} out u32 is {
-        return (this.visitValue :id slot: slotLine wrapped: false)
+        return (this.visitValue :id slot: slotkind.line wrapped: false)
     }
 
     # condValue -- a condition, which its context never wraps
     condValue: function {:this id: zast.nodeid} out u32 is {
-        return (this.visitValue :id slot: slotClause wrapped: false)
+        return (this.visitValue :id slot: slotkind.clause wrapped: false)
     }
 
     # ---- statements ----
@@ -1204,12 +1207,12 @@ Builder: class {
             ) case assignment then {
                 return (this.visitAssignment id: n.statementline)
             } else {
-                return (this.visitValue id: n.statementline slot: slotLine wrapped: false)
+                return (this.visitValue id: n.statementline slot: slotkind.line wrapped: false)
             }
         } case assignment then {
             return (this.visitAssignment :id)
         } else {
-            return (this.visitValue :id slot: slotLine wrapped: false)
+            return (this.visitValue :id slot: slotkind.line wrapped: false)
         }
     }
 
@@ -1419,7 +1422,7 @@ Builder: class {
             if cond.name.isZero then return (this.condValue id: cond.operation)
             xs: ListVal u32
             xs.append (this.tokLabel name: cond.name)
-            xs.append (this.visitValue id: cond.operation slot: slotClause wrapped: false)
+            xs.append (this.visitValue id: cond.operation slot: slotkind.clause wrapped: false)
             return (this.d.concat xs)
         } else {
             return 0
@@ -1484,7 +1487,7 @@ Builder: class {
         }
         this.c.openParens = this.c.openParens + opened
         mine: entry + opened
-        needed: this.parensRequired inner: id slot: slotClause
+        needed: this.parensRequired inner: id slot: slotkind.clause
         innerNode: this.node :id
         isCall: innerNode.call
         g: emptyGap
@@ -1548,11 +1551,11 @@ Builder: class {
             xs.append (this.tok tt: zlexer.toktype.withTok)
             xs.append this.idSpace
             xs.append (this.tokLabel name: n.name)
-            xs.append (this.visitValue id: n.value slot: slotClause wrapped: false)
+            xs.append (this.visitValue id: n.value slot: slotkind.clause wrapped: false)
             xs.append this.idSpace
             xs.append (this.tok tt: zlexer.toktype.doTok)
             xs.append this.idSpace
-            xs.append (this.visitValue id: n.body slot: slotLine wrapped: false)
+            xs.append (this.visitValue id: n.body slot: slotkind.line wrapped: false)
         } else null
         return (this.d.concat xs)
     }
@@ -1575,7 +1578,7 @@ Builder: class {
                 xs.append this.idSpace
                 xs.append (this.tok tt: zlexer.toktype.outTok)
                 xs.append this.idSpace
-                xs.append (this.visitValue id: n.outType slot: slotClause wrapped: false)
+                xs.append (this.visitValue id: n.outType slot: slotkind.clause wrapped: false)
             }
         } else null
         return (this.d.concat xs)
@@ -1606,12 +1609,14 @@ Builder: class {
                     xs.append this.idSpace
                     xs.append (this.tok tt: zlexer.toktype.outTok)
                     xs.append this.idSpace
-                    xs.append (this.visitValue id: n.returntype slot: slotClause wrapped: false)
+                    rt: this.visitValue id: n.returntype slot: slotkind.clause wrapped: false
+                    xs.append rt
                 } else if kind == zlexer.toktype.outxTok then {
                     xs.append this.idSpace
                     xs.append (this.tok tt: zlexer.toktype.outxTok)
                     xs.append this.idSpace
-                    xs.append (this.visitValue id: n.returntype slot: slotClause wrapped: false)
+                    rt: this.visitValue id: n.returntype slot: slotkind.clause wrapped: false
+                    xs.append rt
                 } else if kind == zlexer.toktype.isTok then {
                     xs.append this.idSpace
                     xs.append (this.tok tt: zlexer.toktype.isTok)
@@ -1653,7 +1658,7 @@ Builder: class {
                 }
                 xs.append (this.visitValue
                     id: (this.kid span: n.isItems i: 0)
-                    slot: slotClause
+                    slot: slotkind.clause
                     wrapped: false
                 )
             }
@@ -1945,7 +1950,7 @@ Builder: class {
             } else null
             xs: ListVal u32
             xs.append (this.tokLabel name: n.name)
-            xs.append (this.visitValue id: n.operation slot: slotClause wrapped: false)
+            xs.append (this.visitValue id: n.operation slot: slotkind.clause wrapped: false)
             return (this.d.concat xs)
         } else {
             this.c.note msg: "a parameter the formatter does not print".string
@@ -1967,12 +1972,12 @@ Builder: class {
             } else null
             if n.name.isZero then return (this.visitValue
                 id: n.operation
-                slot: slotTight
+                slot: slotkind.tight
                 wrapped: false
             )
             xs: ListVal u32
             xs.append (this.tokLabel name: n.name)
-            xs.append (this.visitValue id: n.operation slot: slotTight wrapped: false)
+            xs.append (this.visitValue id: n.operation slot: slotkind.tight wrapped: false)
             return (this.d.concat xs)
         } else {
             this.c.note msg: "a data element the formatter does not print".string
