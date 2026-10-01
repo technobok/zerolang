@@ -1255,7 +1255,7 @@ ZTyping: class {
     # every Decl row, indexed by its DeclId: row 0 is the sentinel and ids are
     # minted dense in mint order and never removed, so the id IS the index
     )
-    decls: List Decl
+    decls: (List Decl i: ztypes.declid)
     # type id -> the declaration that minted it (first mint wins), so a member
     # setter reaches the owner's declaration without the type registry. A
     # monomorphisation is absent: it links to its template through the
@@ -1381,13 +1381,13 @@ ZTyping: class {
 
     # declSetUnitScope -- mark a unit-kind row as a lookup scope.
     declSetUnitScope: function {:this declId: ztypes.declid} is {
-        fo: this.decls.getMut i: declId.u64
+        fo: this.decls.getMut i: declId
         fo.unitScope = true
     }
 
     # declIsUnitScope -- the scope bit (a `public:` block is one too).
     declIsUnitScope: function {t: this.view declId: ztypes.declid} out bool is {
-        decl: t.decls.get i: declId.u64
+        decl: t.decls.get i: declId
         if decl.kind.publicNs then return true
         return decl.unitScope
     }
@@ -1399,7 +1399,7 @@ ZTyping: class {
         # climbed out of, never looked up, and a function's children stay its
         # parameters
         id: this.declNew name: 0 parent: ztypes.declid kind: declkind.scopeDecl :node
-        fo: this.decls.getMut i: id.u64
+        fo: this.decls.getMut i: id
         fo.parent = parent
         return id
     }
@@ -1412,7 +1412,7 @@ ZTyping: class {
         :this name: u32 parent: ztypes.declid node: u32 typeId: ztypes.tid varId: ztypes.vid
     } out ztypes.declid is {
         id: this.declNew :name :parent kind: declkind.localDecl :node
-        lo: this.decls.getMut i: id.u64
+        lo: this.decls.getMut i: id
         lo.typeId = typeId
         lo.varId = varId
         return id
@@ -1422,7 +1422,7 @@ ZTyping: class {
     # invalid id.
     declParentOf: function {t: this.view declId: ztypes.declid} out ztypes.declid is {
         r: ztypes.declid
-        decl: t.decls.get i: declId.u64
+        decl: t.decls.get i: declId
         r = decl.parent
         return r
     }
@@ -1430,7 +1430,7 @@ ZTyping: class {
     # declIsScope -- is `declId` a body scope?
     declIsScope: function {t: this.view declId: ztypes.declid} out bool is {
         r: false
-        decl: t.decls.get i: declId.u64
+        decl: t.decls.get i: declId
         if decl.kind.scopeDecl then r = true
         return r
     }
@@ -1438,7 +1438,7 @@ ZTyping: class {
     # declLocalTypeOf / declLocalVarOf -- a local's type and variable id.
     declLocalTypeOf: function {t: this.view declId: ztypes.declid} out ztypes.tid is {
         r: ztypes.tid
-        decl: t.decls.get i: declId.u64
+        decl: t.decls.get i: declId
         r = decl.typeId
         return r
     }
@@ -1446,7 +1446,7 @@ ZTyping: class {
     # declRowsOf / declRowsAdd -- the live overlay-row count of a local.
     declRowsOf: function {t: this.view declId: ztypes.declid} out u64 is {
         r: u64
-        decl: t.decls.get i: declId.u64
+        decl: t.decls.get i: declId
         r = decl.rows
         return r
     }
@@ -1454,7 +1454,7 @@ ZTyping: class {
     # move a declaration's row count by `delta`. Negative undoes a speculative
     # registration without a second table to undo it from
     declRowsAdd: function {:this declId: ztypes.declid delta: i64} is {
-        decl: this.decls.getMut i: declId.u64
+        decl: this.decls.getMut i: declId
         if delta > 0 then {
             decl.rows = decl.rows + 1
         } else {
@@ -1465,7 +1465,7 @@ ZTyping: class {
     # the variable a declaration owns, where it owns one
     declLocalVarOf: function {t: this.view declId: ztypes.declid} out ztypes.vid is {
         r: ztypes.vid
-        decl: t.decls.get i: declId.u64
+        decl: t.decls.get i: declId
         r = decl.varId
         return r
     }
@@ -1487,7 +1487,7 @@ ZTyping: class {
             found: ztypes.declid
             next: ztypes.declid
             {
-                fo: t.decls.get i: cur.u64
+                fo: t.decls.get i: cur
                 if fo.kind.scopeDecl.not then return (ztypes.declid.create from: 0)
                 lo: fo.children.get key: nameId
                 match (
@@ -1507,7 +1507,7 @@ ZTyping: class {
     # namespace (0 past the end); declNameOf -- a declaration's name id.
     declChildAt: function {t: this.view declId: ztypes.declid index: u64} out ztypes.declid is {
         r: ztypes.declid
-        decl: t.decls.get i: declId.u64
+        decl: t.decls.get i: declId
         co: decl.children.valueAt i: index
         match (
             co
@@ -1520,7 +1520,7 @@ ZTyping: class {
     # a declaration's name as a pool id. Compare these, never the text
     declNameOf: function {t: this.view declId: ztypes.declid} out u32 is {
         r: u32
-        decl: t.decls.get i: declId.u64
+        decl: t.decls.get i: declId
         r = decl.name
         return r
     }
@@ -1533,20 +1533,20 @@ ZTyping: class {
     declAddChildEdge: function {
         :this parentDeclId: ztypes.declid nameId: zast.nameid childDeclId: ztypes.declid
     } is {
-        po: this.decls.getMut i: parentDeclId.u64
+        po: this.decls.getMut i: parentDeclId
         po.children.set key: nameId value: childDeclId
     }
 
     # declSetPending / declIsPending -- the demand mark: a reference found
     # the definition and queued it (ZTyping.pendingDefs) for resolution.
     declSetPending: function {:this declId: ztypes.declid mark: bool} is {
-        decl: this.decls.getMut i: declId.u64
+        decl: this.decls.getMut i: declId
         decl.pending = mark
     }
 
     # whether the declaration is registered but not yet resolved
     declIsPending: function {this: this.view declId: ztypes.declid} out bool is {
-        decl: this.decls.get i: declId.u64
+        decl: this.decls.get i: declId
         return decl.pending
     }
 
@@ -1562,27 +1562,27 @@ ZTyping: class {
 
     # declSetWalked / declIsWalked -- the body-walk mark.
     declSetWalked: function {:this declId: ztypes.declid} is {
-        decl: this.decls.getMut i: declId.u64
+        decl: this.decls.getMut i: declId
         decl.walked = true
     }
 
     # whether its body has been walked, which is what keeps a demand-driven walk
     # from walking one twice
     declIsWalked: function {t: this.view declId: ztypes.declid} out bool is {
-        decl: t.decls.get i: declId.u64
+        decl: t.decls.get i: declId
         return decl.walked
     }
 
     # declSetResolving / declIsResolving -- the DFS grey mark.
     declSetResolving: function {:this declId: ztypes.declid mark: bool} is {
-        decl: this.decls.getMut i: declId.u64
+        decl: this.decls.getMut i: declId
         decl.resolving = mark
     }
 
     # the DFS grey mark: true while resolution is inside this declaration, which
     # is how a cycle is caught rather than followed
     declIsResolving: function {this: this.view declId: ztypes.declid} out bool is {
-        decl: this.decls.get i: declId.u64
+        decl: this.decls.get i: declId
         return decl.resolving
     }
 
@@ -1591,7 +1591,7 @@ ZTyping: class {
     # declaration declares. A grey hit through a containment edge is a layout
     # cycle only when the target is on THIS path.
     declSetContaining: function {:this declId: ztypes.declid mark: bool} is {
-        decl: this.decls.getMut i: declId.u64
+        decl: this.decls.getMut i: declId
         decl.containing = mark
     }
 
@@ -1600,27 +1600,27 @@ ZTyping: class {
         this: this.view
         declId: ztypes.declid
     } out bool is {
-        decl: this.decls.get i: declId.u64
+        decl: this.decls.get i: declId
         return decl.containing
     }
 
     # declSetDefined / declIsDefined -- the demand "done" mark.
     declSetDefined: function {:this declId: ztypes.declid} is {
-        decl: this.decls.getMut i: declId.u64
+        decl: this.decls.getMut i: declId
         decl.defined = true
     }
 
     # whether the declaration has a definition at all, as against a reference
     # that mentioned it
     declIsDefined: function {this: this.view declId: ztypes.declid} out bool is {
-        decl: this.decls.get i: declId.u64
+        decl: this.decls.get i: declId
         return decl.defined
     }
 
     # First conformer wins, in body order: a later as-block naming the same
     # marker does not displace the spec receiver already bound.
     declSetConformer: function {:this declId: ztypes.declid nameId: u32} is {
-        decl: this.decls.getMut i: declId.u64
+        decl: this.decls.getMut i: declId
         if decl.conformerName == 0 then decl.conformerName = nameId
     }
 
@@ -1628,7 +1628,7 @@ ZTyping: class {
     # reverse edge. The first mint wins, so a later alias declaration sharing
     # the type does not displace the defining one.
     declSetType: function {:this declId: ztypes.declid typeId: ztypes.tid} is {
-        decl: this.decls.getMut i: declId.u64
+        decl: this.decls.getMut i: declId
         decl.typeId = typeId
         if typeId > 0 then {
             seen: false
@@ -1706,7 +1706,7 @@ ZTyping: class {
         nameId: zast.nameid
     } out ztypes.declid is {
         found: ztypes.declid
-        po: t.decls.get i: parentDeclId.u64
+        po: t.decls.get i: parentDeclId
         co: po.children.get key: nameId
         match (
             co
@@ -1749,7 +1749,7 @@ ZTyping: class {
             }
             isFn8: false
             node8: u32
-            oo8: this.decls.get i: od8.u64
+            oo8: this.decls.get i: od8
             if oo8.kind.methodDecl then isFn8 = true
             if oo8.kind.funcDecl then isFn8 = true
             node8 = oo8.node
@@ -1765,7 +1765,7 @@ ZTyping: class {
                 node: node8
             )
         }
-        do8: this.decls.getMut i: md8.u64
+        do8: this.decls.getMut i: md8
         do8.typeId = typeId
         do8.drop
         # every member type names the declaration that minted it, whatever the
@@ -1805,7 +1805,7 @@ ZTyping: class {
         md: t.declMemberIdOf :parentTypeId :nameId
         if md.isZero.not then {
             childTid: u64
-            mo: t.decls.get i: md.u64
+            mo: t.decls.get i: md
             childTid = mo.typeId
             if childTid == 0 then return (optionval.none u64)
             return (optionval.some childTid)
@@ -1850,7 +1850,7 @@ ZTyping: class {
         md: this.declMemberIdOf :parentTypeId :nameId
         if md.isZero then return false
         r: ztypes.zparamownership.noneMode
-        mo: this.decls.get i: md.u64
+        mo: this.decls.get i: md
         r = mo.ownership
         if r == ztypes.zparamownership.borrowMode then return true
         return r == ztypes.zparamownership.viewMode
@@ -1866,7 +1866,7 @@ ZTyping: class {
         md: this.declMemberIdOf :parentTypeId :nameId
         if md.isZero then return defaultval.none
         r: defaultval.none
-        mo: this.decls.get i: md.u64
+        mo: this.decls.get i: md
         dv: mo.defaultVal
         r = dv
         return r
@@ -1881,7 +1881,7 @@ ZTyping: class {
         md: this.declMemberIdOf :parentTypeId :nameId
         if md.isZero then return false
         r: false
-        mo: this.decls.get i: md.u64
+        mo: this.decls.get i: md
         if mo.defaultVal.none then r = false else r = true
         return r
     }
@@ -1896,7 +1896,7 @@ ZTyping: class {
         md: this.declMemberIdOf :parentTypeId :nameId
         if md.isZero then return (optionval.none ztypes.zparamownership)
         r: ztypes.zparamownership.noneMode
-        mo: this.decls.get i: md.u64
+        mo: this.decls.get i: md
         r = mo.ownership
         if r.noneMode then return (optionval.none ztypes.zparamownership)
         return (optionval.some r)
@@ -1911,7 +1911,7 @@ ZTyping: class {
     } out bool is {
         md: this.declMemberIdOf :parentTypeId :nameId
         if md.isZero then return false
-        mo: this.decls.get i: md.u64
+        mo: this.decls.get i: md
         return mo.grantsPrivate
     }
 
@@ -1931,7 +1931,7 @@ ZTyping: class {
         md: this.declMemberIdOf :parentTypeId nameId: nid
         if md.isZero then return false
         r: false
-        mo: this.decls.get i: md.u64
+        mo: this.decls.get i: md
         oc: own
         r = (ztypes.zparamownershipInt mo.ownership) == (ztypes.zparamownershipInt oc)
         return r
@@ -1961,7 +1961,7 @@ ZTyping: class {
         md: this.declMemberIdOf :parentTypeId :nameId
         if md.isZero then return false
         r: false
-        mo: this.decls.get i: md.u64
+        mo: this.decls.get i: md
         r = mo.fnptrField
         return r
     }
@@ -1982,8 +1982,8 @@ ZTyping: class {
         od: t.declIdOfType typeId: parentTypeId
         if od.isZero then return false
         r: false
-        mo: t.decls.get i: md.u64
-        oo: t.decls.get i: od.u64
+        mo: t.decls.get i: md
+        oo: t.decls.get i: od
         if mo.node == oo.node then r = true
         return r
     }
@@ -1999,7 +1999,7 @@ ZTyping: class {
         md: t.declMemberIdOf :parentTypeId :nameId
         if md.isZero then return false
         r: false
-        mo: t.decls.get i: md.u64
+        mo: t.decls.get i: md
         k: mo.kind
         if k.methodDecl then r = true
         if k.funcDecl then r = true
@@ -2019,7 +2019,7 @@ ZTyping: class {
         tkind: declkind.typeDecl
         tscope: false
         kids: ListVal ztypes.declid
-        to: this.decls.get i: templateDeclId.u64
+        to: this.decls.get i: templateDeclId
         tname = to.name
         tnode = to.node
         tkind = to.kind
@@ -2033,7 +2033,7 @@ ZTyping: class {
         )
         id: this.declNew name: tname parent: ztypes.declid kind: tkind node: tnode
         if tscope then this.declSetUnitScope declId: id
-        no: this.decls.getMut i: id.u64
+        no: this.decls.getMut i: id
         no.parent = templateDeclId
         no.drop
         ki: u64
@@ -2046,7 +2046,7 @@ ZTyping: class {
             ck: declkind.fieldDecl
             isM: false
             {
-                ko: this.decls.get i: kd.u64
+                ko: this.decls.get i: kd
                 cn = ko.name
                 cnode = ko.node
                 ck = ko.kind
@@ -2088,7 +2088,7 @@ ZTyping: class {
         if od.isZero then return
         if (this.declFindChild parentDeclId: od :nameId) > 0 then return
         node: u32
-        oo: this.decls.get i: od.u64
+        oo: this.decls.get i: od
         node = oo.node
         oo.drop
         kk: kind
@@ -2125,7 +2125,7 @@ ZTyping: class {
         if od.isZero then return
         if (this.declFindChild parentDeclId: od :nameId) > 0 then return
         node: u32
-        oo: this.decls.get i: od.u64
+        oo: this.decls.get i: od
         node = oo.node
         oo.drop
         kk: kind
@@ -2134,7 +2134,7 @@ ZTyping: class {
 
     # declChildSlots -- how many children a declaration's namespace holds.
     declChildSlots: function {t: this.view declId: ztypes.declid} out u64 is {
-        po: t.decls.get i: declId.u64
+        po: t.decls.get i: declId
         return po.children.length
     }
 
@@ -2183,7 +2183,7 @@ ZTyping: class {
         nid: u64
         did: ztypes.declid
         {
-            oo: this.decls.get i: od.u64
+            oo: this.decls.get i: od
             nid = (oo.children.keyAt i: slot).u64
             vo: oo.children.valueAt i: slot
             match (
@@ -2195,7 +2195,7 @@ ZTyping: class {
         keep: membersOnly.not
         mt: u64
         {
-            ko: this.decls.get i: did.u64
+            ko: this.decls.get i: did
             if membersOnly then {
                 if ko.kind.fieldDecl then keep = true
                 if ko.kind.methodDecl then keep = true
@@ -2314,7 +2314,7 @@ ZTyping: class {
         for i < n loop {
             did: ztypes.declid
             {
-                oo: this.decls.get i: od.u64
+                oo: this.decls.get i: od
                 vo: oo.children.valueAt :i
                 match (
                     vo
@@ -2323,7 +2323,7 @@ ZTyping: class {
                 } case none then null
             }
             i = i + 1
-            ko: this.decls.get i: did.u64
+            ko: this.decls.get i: did
             isMem: (
                 ko.kind.fieldDecl or ko.kind.methodDecl or ko.kind.paramDecl or ko.kind.armDecl
             )
@@ -2347,7 +2347,7 @@ ZTyping: class {
             nid: u64
             did: ztypes.declid
             {
-                oo: this.decls.get i: od.u64
+                oo: this.decls.get i: od
                 nid = (oo.children.keyAt :i).u64
                 vo: oo.children.valueAt :i
                 match (
@@ -2357,7 +2357,7 @@ ZTyping: class {
                 } case none then null
             }
             i = i + 1
-            ko: this.decls.get i: did.u64
+            ko: this.decls.get i: did
             if ko.typeId > 0 then r = nid
         }
         return r
@@ -2400,7 +2400,7 @@ ZTyping: class {
         md: this.declMemberIdOf :parentTypeId :nameId
         if md.u64 == 0 then return md
         childTid: u64
-        mo: this.decls.get i: md.u64
+        mo: this.decls.get i: md
         childTid = mo.typeId
         if childTid == 0 then return (ztypes.declid.create from: 0)
         return md
@@ -2627,7 +2627,7 @@ ZTyping: class {
     setChildGrantsPrivateId: function {:this parentTypeId: ztypes.tid nameId: zast.nameid} is {
         md8: this.declMemberIdOf :parentTypeId :nameId
         if md8.isZero.not then {
-            do8: this.decls.getMut i: md8.u64
+            do8: this.decls.getMut i: md8
             do8.grantsPrivate = true
         }
     }
@@ -2668,7 +2668,7 @@ ZTyping: class {
     setChildFnptrFieldId: function {:this parentTypeId: ztypes.tid nameId: zast.nameid} is {
         md8: this.declMemberIdOf :parentTypeId :nameId
         if md8.isZero.not then {
-            do8: this.decls.getMut i: md8.u64
+            do8: this.decls.getMut i: md8
             do8.fnptrField = true
         }
     }
@@ -2692,7 +2692,7 @@ ZTyping: class {
     } is {
         md8: this.declMemberIdOf :parentTypeId :nameId
         if md8.isZero then return
-        do8: this.decls.getMut i: md8.u64
+        do8: this.decls.getMut i: md8
         dv8: value
         do8.defaultVal = dv8
     }
@@ -2724,7 +2724,7 @@ ZTyping: class {
         }
         if tgt.isZero then return ""
         nm: u32
-        to: this.decls.get i: tgt.u64
+        to: this.decls.get i: tgt
         nm = to.name
         tx: zast.poolTextAt :pool ref: (zast.nameid.create from: nm.u32)
         if isArm then return "arm \{tx}"
@@ -2746,7 +2746,7 @@ ZTyping: class {
         if nid8 > 0 then {
             md8: this.declMemberIdOf :parentTypeId nameId: nid8
             if md8.isZero.not then {
-                do8: this.decls.getMut i: md8.u64
+                do8: this.decls.getMut i: md8
                 oc8: ownership
                 do8.ownership = oc8
             }
@@ -2759,7 +2759,7 @@ ZTyping: class {
     } is {
         md8: this.declMemberIdOf :parentTypeId :nameId
         if md8.isZero.not then {
-            do8: this.decls.getMut i: md8.u64
+            do8: this.decls.getMut i: md8
             oc8: ownership
             do8.ownership = oc8
         }
@@ -3266,7 +3266,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         pendingTyperef: (IdMapV u64 v: zast.nameid)
         pendingTyperefScope: (IdMapV u64 v: ztypes.declid)
         unitTypesById: (IdMapV u64 v: ztypes.tid)
-        decls: List Decl
+        decls: (List Decl i: ztypes.declid)
         declByTypeId: (IdMapV u64 v: ztypes.declid)
         publicNsByOwner: (IdMapV u64 v: ztypes.declid)
         refDecl: (IdMapV u64 v: ztypes.declid)
