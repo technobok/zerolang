@@ -235,7 +235,32 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-10-01 | 426b1224 | [re-baseline after 669 commits: a heavier input, not a slower compiler](#r-426b1224) | 0.84s | 0.90s | 119MB / 98MB | 153 / 361 / 330 (total 844) | 2,825,524 | 367MB | 31.0s (2,275 cases) | 152,955 |
 | 2026-10-01 | a9910efd | [recovery P1: four bugs, two of them allocations](#r-a9910efd) | 0.79s | -- | 120MB / -- | 147 / 369 / 331 (total 855) | 2,792,336 | 367MB | 31.0s (2,280 cases) | 153,076 |
 | 2026-10-01 | 4e9a2473 | [recovery P2: the quadratic extern scan, and the interner](#r-4e9a2473) | 0.80s | -- | 119MB / -- | 86 / 386 / 339 (total 811) | 2,796,894 | 369MB | -- | 153,245 |
+| 2026-10-01 | 9e05d9e3 | [recovery P3: the allocation sites the census ranked first](#r-9e05d9e3) | 0.69s | -- | 119MB / -- | 79 / 331 / 283 (total 693) | 2,245,533 | 350MB | -- | 153,505 |
 
+
+<a id="r-9e05d9e3"></a>
+**Recovery P3: the allocation sites the census ranked first** (`a00888c2` ->
+`9e05d9e3`). Allocations 2,796,894 -> 2,245,533 (-19.7%), instructions
+7,649M -> 7,338M (-4.1%), fixed input 2,655M -> 2,585M. Wall 0.80s -> 0.69s.
+
+| commit | allocations (behaviour) | what |
+| --- | --- | --- |
+| `8c0d3ce7` | -219,955 | a function's signature is built once; a plain atom is recognised without spelling it |
+| `ab45b2de` | -83,364 | an operation's paths go on one scratch stack; a single path is never a list |
+| `3919ce1d` | -26,128 | a fragment hole's value is appended where it goes |
+| `c0bac28c` | -72,619 | a call's arguments are read onto scratch stacks |
+| `18049b17` | -26,226 | a call whose head is its only path takes no list |
+| `ce5fab9a` | -30,767 | a transient receiver's lock is a probe: checked, never laid |
+| `2632c7b8` | -22,483 | a variant tag is spelled into one string; a callee's C name is read where used |
+| `9e05d9e3` | -75,244 | missing-argument checking walks the field rows instead of listing them |
+
+**Not done, and why.**
+- A per-type memo of `dataFieldIds` in the checker is not sound. A member
+  row's type can be filled in after the fact without the row count
+  changing, so neither a cache nor a count check would notice.
+- The emitter's `varCName` allocations are the expression text itself.
+- `emitOperatorAt` is the operator path, which P5 reworks.
+- What remains is a long tail of sites at 1-2% each.
 
 <a id="r-4e9a2473"></a>
 **Recovery P2: the quadratic extern scan, and the interner** (`120767eb` ->
