@@ -27745,11 +27745,11 @@ methodHasNoUserArgs: function {
 # lockTransientReceiver -- a receiver that locks for ONE expression's duration:
 # a zero-argument auto-call, or a binop's left operand, which is the receiver
 # of the operator method (a binop is the call form of a one-argument method).
-# The lock is released by holder as soon as it is taken -- neither form opens
-# a scope to pop -- so its only effect is the conflict check against locks
-# outstanding elsewhere. `shared` is what the METHOD's receiver marker decided.
-# A lock the conflict check refused laid no row, and the release scan is
-# skipped when nothing was laid: a binop is the hottest path there is.
+# Neither form opens a scope to pop, so a lock would be released as soon as it
+# was taken: its only effect is the conflict check against locks outstanding
+# elsewhere, and it is taken as a PROBE, which checks and lays no row. `shared`
+# is what the METHOD's receiver marker decided. A binop is the hottest path
+# there is.
 lockTransientReceiver: function {
     ast: Ast.view
     st: zenv.ZSymbolTable
@@ -27767,7 +27767,6 @@ lockTransientReceiver: function {
     if atup.length == 0 then return
     arv: st.lookupVarId nameId: (atup.get i: 0)
     if arv.none then return
-    before: st.entries.length
     if atup.length == 1 then {
         (lockCallArg
             :st
@@ -27779,6 +27778,7 @@ lockTransientReceiver: function {
             :nodeid
             :lineno
             :colno
+            probe: true
         )
     } else {
         (lockCallPath
@@ -27792,14 +27792,9 @@ lockTransientReceiver: function {
             :nodeid
             :lineno
             :colno
+            probe: true
         )
     }
-    if st.entries.length == before then return
-    ahl: (ztypes.zlockholder
-        kind: ztypes.zlockholderkind.callKind
-        id: holderId
-    )
-    st.releaseHeldLocks holder: ahl
 }
 
 # lockAutoCallReceiver -- lockTransientReceiver for a zero-argument auto-call:
@@ -38130,6 +38125,8 @@ lockCallArg: function {
     nodeid: zast.nodeid
     lineno: u32
     colno: u32
+    # check the lock without laying it (zenv tryLock's `probe`)
+    probe: false
 } is {
     if mutable then markVarMutated :st :nameId
     pth: ListVal zast.nameid
@@ -38145,6 +38142,7 @@ lockCallArg: function {
         holder: h
         :mutable
         alias: true
+        :probe
     )
     if r.length > 0 then addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: r
 }
@@ -38164,6 +38162,8 @@ lockCallPath: function {
     nodeid: zast.nodeid
     lineno: u32
     colno: u32
+    # check the locks without laying them (zenv tryLock's `probe`)
+    probe: false
 } is {
     n: path.length
     if n == 0 then return
@@ -38195,6 +38195,7 @@ lockCallPath: function {
             holder: hs
             mutable: false
             alias: true
+            :probe
         )
         if rs.length > 0 then addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: rs
         end = end + 1
@@ -38210,6 +38211,7 @@ lockCallPath: function {
         holder: he
         :mutable
         alias: true
+        :probe
     )
     if re.length > 0 then addError :st :nodeid :lineno :colno e: zast.err.ownerError msg: re
 }
