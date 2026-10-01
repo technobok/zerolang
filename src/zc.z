@@ -509,30 +509,47 @@ removeTemp: function {path: StringView} is {
     ) case ok then null case err then null
 }
 
-# parseECode -- the numeric code in an "E0200"/"0200"/"200" string (0 if none).
+# parseECode -- the numeric code in an "E0200"/"e0200"/"0200"/"200" string; 0
+# for any other spelling. Every byte after the optional E is a digit: skipping
+# the others read `A001` -- a zl rule code -- as E0001.
 parseECode: function {s: StringView} out u32 is {
-    r: u32
     i: u64
-    n: s.length
-    for i < n loop {
-        bo: s.byteAt :i
-        match (
-            bo
-        ) case some then {
-            if bo >= 48 when bo <= 57 then {
-                d: (bo - 48).u32
-                r = r * 10
-                r = r + d
-            }
-        } case none then null
+    b0: (s.byteAt i: 0).or d: 0
+    if b0 == 69 or (b0 == 101) then i = 1
+    if i == s.length then return 0
+    return (digitsValue :s from: i)
+}
+
+# digitsValue -- the decimal value of `s` from byte `from` on; 0 unless every
+# byte there is a digit.
+digitsValue: function {s: StringView from: u64} out u32 is {
+    r: u32
+    i: from
+    for i < s.length loop {
+        bo: (s.byteAt :i).or d: 0
+        if bo < 48 or (bo > 57) then return 0
+        r = r * 10 + (bo - 48).u32
         i = i + 1
     }
     return r
 }
 
+# isZlRuleCode -- `A001`, `L013`: an architecture rule's or a lint's code, which
+# zl explains rather than zc.
+isZlRuleCode: function {s: StringView} out bool is {
+    b0: (s.byteAt i: 0).or d: 0
+    if b0 != 65 when b0 != 76 then return false
+    if s.length < 2 then return false
+    return (digitsValue :s from: 1) > 0
+}
+
 # runExplain -- print the explanation for an error code, or a category fallback.
 runExplain: function {codeArg: StringView} is {
     code: parseECode s: codeArg
+    if code == 0 when (isZlRuleCode s: codeArg) then {
+        io.eprintln "zc explain: \{codeArg} is a zl rule code -- run `zl explain \{codeArg}`"
+        os.exit code: 2
+    }
     if code == 0 then {
         m: "zc explain: not an error code: \{codeArg} (try e.g. zc explain E0200)"
         io.eprintln m

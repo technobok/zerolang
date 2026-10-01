@@ -1993,7 +1993,9 @@ perf: $(PERFBIN)
 #
 # -1,123 io, net and zls return ResultVR: +9 behaviour (the ptrbits fold row),
 # -1,132 source (no `Result (Box u64)` instance left to mint and emit).
-ALLOC_BASELINE := 2823663
+#
+# +901 `zc explain` reads only an E code: 0 behaviour, +901 source.
+ALLOC_BASELINE := 2824564
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2411,6 +2413,12 @@ zlink-rules-guard:
 # The last case is the other half of the same rule: a value-taking flag that
 # ends the command line is a usage error. It used to read one past argv and
 # abort in the allocator's index check, which names no flag and exits 1.
+#
+# `zc explain` refuses a code it does not own the same way. It used to read only
+# a code's digits, so `zc explain A001` -- a zl rule -- printed E0001's
+# "internal compiler error"; a zl rule code now points at `zl explain`, any
+# other non-E spelling is no error code, and E0200 / e0200 / 0200 / 200 all
+# still explain E0200.
 refusal-guard: bin/zc $(BUILDDIR)/tcc
 	@d=$(BUILDDIR)/refusal; rm -rf $$d; mkdir -p $$d; bad=0; \
 	bin/zc build hello --src examples --system lib/system --cc tcc --cc-mode spawn \
@@ -2467,6 +2475,25 @@ refusal-guard: bin/zc $(BUILDDIR)/tcc
 	  if [ $$rc -ne 2 ] || ! grep -q -- "zc: $$fl needs a value" $$d/m.log; then \
 	    echo "refusal-guard FAIL: a trailing $$fl must exit 2 naming the flag, got $$rc"; \
 	    cat $$d/m.log; bad=1; \
+	  fi; \
+	done; \
+	for c in A001 L013; do \
+	  bin/zc explain $$c > $$d/x.log 2>&1; rc=$$?; \
+	  if [ $$rc -ne 2 ] || ! grep -q "run \`zl explain $$c\`" $$d/x.log; then \
+	    echo "refusal-guard FAIL: zc explain $$c must exit 2 pointing at zl explain, got $$rc"; \
+	    cat $$d/x.log; bad=1; \
+	  fi; \
+	done; \
+	for c in X0200 E02x0 E; do \
+	  bin/zc explain $$c > $$d/x.log 2>&1; rc=$$?; \
+	  if [ $$rc -ne 2 ] || ! grep -q "not an error code: $$c" $$d/x.log; then \
+	    echo "refusal-guard FAIL: zc explain $$c must be refused as no error code, got $$rc"; \
+	    cat $$d/x.log; bad=1; \
+	  fi; \
+	done; \
+	for c in E0200 e0200 0200 200; do \
+	  if [ "$$(bin/zc explain $$c 2>&1 | head -1)" != "ownership error" ]; then \
+	    echo "refusal-guard FAIL: zc explain $$c must explain E0200"; bad=1; \
 	  fi; \
 	done; \
 	if [ $$bad -ne 0 ]; then \
