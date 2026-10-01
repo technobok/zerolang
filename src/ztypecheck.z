@@ -22837,8 +22837,9 @@ reportWideArms: function {
 }
 
 # reportWideArm -- a bare value-type arm the slot cannot hold, refused at the
-# arm's declaration `nd` -- the template's, for an instance -- with its size,
-# the slot's and the target, and the `(Box T)` that makes it a cell.
+# arm's declaration `nd` -- or, for an instance, where the program instantiated
+# it, naming the template's arm -- with its size, the slot's and the target,
+# and the `(Box T)` that makes it a cell.
 reportWideArm: function {
     ast: Ast
     st: zenv.ZSymbolTable
@@ -22862,6 +22863,38 @@ reportWideArm: function {
     } else if lay.known.not then {
         msg = "arm `\{an}` of `\{un}` holds `\{pn}`, whose size the checker cannot measure against a union's slot; write `(Box \{pn})`"
     }
+    # an instance's refusal stands where the program instantiated it: the
+    # template may be another unit's, the system's among them, and the
+    # argument that made the arm wide is the instantiation's
+    so: st.typing.monoSite.get key: uid.u64
+    match (
+        so
+    ) case some then {
+        org: st.reg.genericOriginOf tid: uid
+        if org.isZero.not then {
+            # a Box argument is refused by the value bound, so the cure is the
+            # template's: its arm written boxed
+            tat: (st.typing.declChildOfId parentTypeId: org nameId: nm).or d: 0
+            tan: specWrittenName :st :ast tid: (ztypes.tid.create from: tat)
+            if lay.known then {
+                msg = "arm `\{an}` of `\{un}` holds `\{pn}` (\{lay.size} bytes), wider than a union's \{ptrB}-byte slot on \{arch}; an instance this wide needs the template's arm written `(Box \{tan})`"
+            }
+            und: (st.typing.decls.get i: so.unitDecl.u64).node
+            st.typing.errors.append (zast.ErrorData
+                nodeid: zast.nodeid
+                lineno: so.lineno
+                colno: so.colno
+                width: 1
+                err: zast.err.typeError
+                msg: msg.copy
+                fsno: (ast.fsnoForNode nodeid: und)
+                note: String
+                hint: String
+            )
+            st.typing.isError = true
+            return
+        }
+    } case none then null
     nn: ast.nodes.get i: nd.u64
     (addResolveErrorH
         :st
@@ -58286,6 +58319,7 @@ foldProviderOf: function {
     if memberNm == (nameIdOf :ast name: "cc") then return 3
     if memberNm == (nameIdOf :ast name: "ccmode") then return 4
     if memberNm == (nameIdOf :ast name: "target") then return 5
+    if memberNm == (nameIdOf :ast name: "ptrbits") then return 6
     return 0
 }
 
@@ -58370,6 +58404,18 @@ applyFoldProvider: function {
             :ast
             member: "target"
             value: value9
+        )
+        return
+    }
+    if prov == 6 then {
+        # the width of a pointer, which is the width of a union's payload slot
+        pb: targetPointerBytes triple: st.typing.targetTriple.stringView
+        (seedPlatformValue
+            :st
+            :ptid
+            :ast
+            member: "ptrbits"
+            value: (ztypes.makeIntConst v: (pb * 8).i64.orPanic)
         )
         return
     }

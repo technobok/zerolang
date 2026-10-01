@@ -1987,7 +1987,10 @@ perf: $(PERFBIN)
 # behaviour (the arm-layout pass, the per-arm inline answer while emitting),
 # +14,800 source (the layout measure and the pass: DHAT spreads it over the
 # ordinary compile of the new code, no hotspot).
-ALLOC_BASELINE := 2823432
+#
+# +1,354 ResultVR, the platform.ptrbits answer, and an instance's wide arm
+# refused where it is instantiated: 0 behaviour, +1,354 source.
+ALLOC_BASELINE := 2824786
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
