@@ -210,7 +210,7 @@ Doc: class {
 
     # breaksAt -- whether row `id` holds a forced break
     breaksAt: function {this: this.view id: u32} out bool is {
-        return (this.rows.get i: id.u64).breaks
+        return (this.rows.get i: id).breaks
     }
 
     # text -- the source bytes [lo, hi), which must hold no newline
@@ -257,7 +257,7 @@ Doc: class {
     group: function {:this child: u32} out u32 is {
         r: blankRow kind: dockind.group
         r.child = child
-        r.breaks = (this.rows.get i: child.u64).breaks
+        r.breaks = (this.rows.get i: child).breaks
         return (this.add row: r)
     }
 
@@ -265,7 +265,7 @@ Doc: class {
     indent: function {:this child: u32} out u32 is {
         r: blankRow kind: dockind.indent
         r.child = child
-        r.breaks = (this.rows.get i: child.u64).breaks
+        r.breaks = (this.rows.get i: child).breaks
         return (this.add row: r)
     }
 
@@ -275,8 +275,8 @@ Doc: class {
         r: blankRow kind: dockind.ifBreak
         r.child = brk
         r.alt = flat
-        if brk > 0 then r.breaks = (this.rows.get i: brk.u64).breaks
-        if flat > 0 when (this.rows.get i: flat.u64).breaks then r.breaks = true
+        if brk > 0 then r.breaks = (this.rows.get i: brk).breaks
+        if flat > 0 when (this.rows.get i: flat).breaks then r.breaks = true
         return (this.add row: r)
     }
 
@@ -296,7 +296,7 @@ Doc: class {
         for i < xs.length loop {
             k: xs.get :i
             this.kids.append k
-            if (this.rows.get i: k.u64).breaks then r.breaks = true
+            if (this.rows.get i: k).breaks then r.breaks = true
             i = i + 1
         }
         return r
@@ -366,7 +366,7 @@ Doc: class {
 
 # kidAt -- the i-th child id a span names
 kidAt: function {d: Doc.view span: docspan i: u32} out u32 is {
-    return (d.kids.get i: (span.first + i).u64)
+    return (d.kids.get i: span.first + i)
 }
 
 # pushKidsOnto -- the children of `span` from index `from` on, pushed so the
@@ -394,7 +394,7 @@ printLoop: function {d: Doc.view p: Printer} is {
 
 # printCmd -- one command, by the kind of its row
 printCmd: function {d: Doc.view p: Printer c: cmd} is {
-    row: d.rows.get i: c.id.u64
+    row: d.rows.get i: c.id
     match (
         row.kind
     ) case text then {
@@ -447,9 +447,9 @@ writePending: function {p: Printer} is {
 emitText: function {d: Doc.view p: Printer row: docrow} is {
     writePending :p
     if row.src then {
-        p.buf.append (d.source.substring from: row.lo.u64 to: row.hi.u64)
+        p.buf.append (d.source.substring from: row.lo to: row.hi)
     } else {
-        p.buf.append (d.lexicon.substring from: row.lo.u64 to: row.hi.u64)
+        p.buf.append (d.lexicon.substring from: row.lo to: row.hi)
     }
     p.pos = p.pos + row.width
     if p.pos > p.width then p.overflow = true
@@ -498,7 +498,7 @@ printGroup: function {d: Doc.view p: Printer c: cmd row: docrow} is {
     next: cmd ind: c.ind mode: printmode.flat id: row.child off: 0
     first: ListVal cmd
     first.append next
-    rem: p.width.i64 - p.pos.i64
+    rem: p.width.i64 - p.pos
     flat: fitsCmds :d :p stack: first :rem useRest: true mustBeFlat: false
     if row.breaks.not when flat then {
         p.cmds.append next
@@ -562,7 +562,7 @@ fitsOne: function {
     match (
         row.kind
     ) case text then {
-        rest = rest - row.width.i64
+        rest = rest - row.width
     } case line then {
         if c.mode == printmode.brk then v = fitsverdict.fits
         rest = rest - 1
@@ -587,7 +587,7 @@ fitsOne: function {
     } case concat then {
         pushKidsOnto :d :stack :c span: row.kids from: 0
     } case verbatim then {
-        rest = rest - row.width.i64
+        rest = rest - row.width
         if row.alt > 0 then v = fitsverdict.fits
     }
     return (fitsstep verdict: v left: rest)
@@ -616,7 +616,7 @@ fitsCmds: function {
             continue
         }
         c: stack.pop
-        step: fitsOne :d :stack :c row: (d.rows.get i: c.id.u64) :left :mustBeFlat
+        step: fitsOne :d :stack :c row: (d.rows.get i: c.id) :left :mustBeFlat
         if step.verdict.fits then return true
         if step.verdict.overflows then return false
         left = step.left
@@ -648,7 +648,7 @@ fitsFlat: function {
 printFill: function {d: Doc.view p: Printer c: cmd row: docrow} is {
     n: row.kids.count
     if c.off >= n then return
-    rem: p.width.i64 - p.pos.i64
+    rem: p.width.i64 - p.pos
     content: kidAt :d span: row.kids i: c.off
     one: ListVal u32
     one.append content
@@ -714,7 +714,7 @@ variantFits: function {d: Doc.view p: Printer ind: u32 id: u32} out bool is {
         :d
         :p
         stack: none
-        rem: p.width.i64 - sub.pos.i64
+        rem: p.width.i64 - sub.pos
         useRest: true
         mustBeFlat: false
     )
@@ -728,7 +728,7 @@ variantFits: function {d: Doc.view p: Printer ind: u32 id: u32} out bool is {
 emitVerbatim: function {d: Doc.view p: Printer c: cmd row: docrow} is {
     writePending :p
     delta: i64
-    if row.shift then delta = c.ind.i64 - row.origIndent.i64
+    if row.shift then delta = c.ind.i64 - row.origIndent
     col: u32
     sawNl: false
     sv: d.source.stringView
