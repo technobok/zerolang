@@ -275,6 +275,12 @@ Parser: class {
     # stack serves every level -- and a single-path operation, the common
     # case, never builds a list at all.
     opStack: ListVal u32
+    # a call's arguments and their label ids while acceptCall reads them, on
+    # the same discipline: a call keeps its window from where it started, an
+    # argument's own nested calls push above it and are gone before it lands,
+    # and the finished window is claimed into the kid table directly
+    argStack: ListVal u32
+    argNameStack: ListVal u64
 } as {
     # a parser with an empty tree: the node table holds only its sentinel row,
     # and the name pool only the empty text
@@ -283,6 +289,8 @@ Parser: class {
             nextNodeId: 1
             ast: Ast.create
             opStack: ListVal u32
+            argStack: ListVal u32
+            argNameStack: ListVal u64
         )
     }
 
@@ -1037,6 +1045,45 @@ Parser: class {
         )
     }
 
+    # argLabelSeen -- `nm` already labels an argument of the call whose label
+    # window starts at `nbase`
+    argLabelSeen: function {this: this.view nbase: u64 nm: zast.nameid} out bool is {
+        i: nbase
+        for i < this.argNameStack.length loop {
+            if (this.argNameStack.get :i) == nm.u64 then return true
+            i = i + 1
+        }
+        return false
+    }
+
+    # dropArgs -- a call's argument windows, gone: what a call leaves on
+    # either stack when it finishes or fails
+    dropArgs: function {:this abase: u64 nbase: u64} is {
+        for this.argStack.length > abase loop this.argStack.pop
+        for this.argNameStack.length > nbase loop this.argNameStack.pop
+    }
+
+    # mkCallFromArgs -- mkCall over the argument window from `abase`, claimed
+    # straight into the kid table, after which the window is dropped
+    mkCallFromArgs: function {
+        :this callable: u32 abase: u64 nbase: u64 line: u32 col: u32
+    } out astnode is {
+        span: (zast.kidsAddWindow
+            kids: this.ast.kids
+            xs: (this.argStack.slice from: abase to: this.argStack.length)
+        )
+        this.dropArgs :abase :nbase
+        return (astnode.call (zast.callrow
+            nodeid: this.nextId
+            lineno: line
+            colno: col
+            callable: (zast.nodeid.create from: callable)
+            arguments: span
+            infix: false
+        )
+        )
+    }
+
     # mkInfixCall -- the INFIX spelling of a one-argument method call. `a op b`
     # and `a.op b` are one call: the receiver and the operator are the dotted
     # callable, and the right operand is the call's one unlabelled argument.
@@ -1235,7 +1282,8 @@ Parser: class {
         stack: Parser.reverseStack src: paths
         callable: stack.pop
         cp: zast.posOf n: (this.ast.nodes.get i: callable.u64)
-        args: ListVal u32
+        abase: this.argStack.length
+        nbase: this.argNameStack.length
         if stack.length > 0 then {
             argNode: this.foldStack :stack :lex
             argIsErr: Parser.isError node: argNode
@@ -1247,11 +1295,14 @@ Parser: class {
                 line: ap.line
                 col: ap.col
             )
-            args.append (this.intern n: uarg).u32
+            uargId: (this.intern n: uarg).u32
+            this.argStack.append uargId
         }
-        argNames: ListVal u64
         for true loop {
-            if (this.reservedLabelLookahead :lex) then return (this.reservedLabelError :lex)
+            if (this.reservedLabelLookahead :lex) then {
+                this.dropArgs :abase :nbase
+                return (this.reservedLabelError :lex)
+            }
             lblOpt: lex.accept tt: zlexer.toktype.labelTok pool: this.ast.names
             match (
                 lblOpt
@@ -1260,8 +1311,9 @@ Parser: class {
                 noName: lblOpt.text
                 vLine: lblOpt.lineno
                 vCol: lblOpt.colno
-                dup: argNames.contains item: nm.u64
+                dup: this.argLabelSeen :nbase :nm
                 if dup then {
+                    this.dropArgs :abase :nbase
                     bad: lex.acceptAny pool: this.ast.names
                     return (this.mkError
                         tok: bad
@@ -1272,6 +1324,7 @@ Parser: class {
                 vbase: this.operationPaths :lex
                 vlen: this.pathCount base: vbase
                 if vlen == 0 then {
+                    this.dropArgs :abase :nbase
                     bad: lex.acceptAny pool: this.ast.names
                     return (this.mkError
                         tok: bad
@@ -1281,15 +1334,19 @@ Parser: class {
                 }
                 val: this.operationFromBase base: vbase :lex
                 vIsErr: Parser.isError node: val
-                if vIsErr then return val
+                if vIsErr then {
+                    this.dropArgs :abase :nbase
+                    return val
+                }
                 no: (this.mkNamedOp
                     name: noName
                     operation: val
                     line: vLine
                     col: vCol
                 )
-                args.append (this.intern n: no).u32
-                argNames.append from: nm.u64
+                noId: (this.intern n: no).u32
+                this.argStack.append noId
+                this.argNameStack.append nm.u64
             } case none then {
                 lblOpt2: lex.accept tt: zlexer.toktype.labelPreTok pool: this.ast.names
                 match (
@@ -1300,8 +1357,9 @@ Parser: class {
                     noName: lblOpt2.text
                     vLine: lblOpt2.lineno
                     vCol: lblOpt2.colno
-                    dup: argNames.contains item: nm.u64
+                    dup: this.argLabelSeen :nbase :nm
                     if dup then {
+                        this.dropArgs :abase :nbase
                         bad: lex.acceptAny pool: this.ast.names
                         return (this.mkError
                             tok: bad
@@ -1316,14 +1374,15 @@ Parser: class {
                         line: vLine
                         col: vCol
                     )
-                    args.append (this.intern n: no).u32
-                    argNames.append from: nm.u64
+                    noId: (this.intern n: no).u32
+                    this.argStack.append noId
+                    this.argNameStack.append nm.u64
                 } case none then {
                     break
                 }
             }
         }
-        return (this.mkCall :callable arguments: args line: cp.line col: cp.col)
+        return (this.mkCallFromArgs :callable :abase :nbase line: cp.line col: cp.col)
     }
 
     # Bare operation core: dispatch a non-empty path list. Odd count ->
