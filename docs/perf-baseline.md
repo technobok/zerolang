@@ -36,6 +36,55 @@ valgrind --tool=dhat --dhat-out-file=/tmp/zc.dhat out/zc-perf zc --src src \
     --system lib/system --emit-c /dev/null
 ```
 
+**Fixed input.** The self-compile times the compiler on its own current
+source, so it cannot separate "the compiler got slower" from "its source got
+bigger". This 39,105-line synthetic program -- records, arithmetic, loops,
+labelled calls, interpolation and `ListVal` appends, in syntax every compiler
+since 2026-09-11 accepts -- is the same input for any two compilers:
+
+```bash
+python3 - 1500 > out/fx.z <<'PY'
+import sys
+n = int(sys.argv[1])
+F = '''f{i}: function {{a: i64 b: i64}} out i64 is {{
+    s: a + b
+    t: (s * 3) - (a % 7)
+    k: 0
+    for k < b loop {{
+        if (k % 2) == 0 then {{
+            t = t + k
+        }} else {{
+            t = t - 1
+        }}
+        k = k + 1
+    }}
+    p: pt x: t y: s
+    if p.x > p.y then return p.x
+    return {r}
+}}
+
+g{i}: function {{xs: ListVal i64 v: i64}} is {{
+    xs.append v
+    xs.append (v + {i})
+}}
+
+h{i}: function {{name: StringView v: i64}} out String is {{
+    msg: "\\{{name}} = \\{{v}}"
+    return msg
+}}
+'''
+out = ["pt: record {x: i64 y: i64}\n"]
+out += [F.format(i=i, r=f"(f{i - 1} a: t b: s)" if i else "p.y") for i in range(n)]
+out.append("main: function is {\n    xs: ListVal i64\n")
+for i in range(0, n, max(1, n // 50)):
+    out.append(f'    g{i} :xs v: (f{i} a: 1 b: 2)\n    print (h{i} name: "n" v: {i})\n')
+out.append('    print "\\{xs.length}"\n}\n')
+sys.stdout.write("".join(out))
+PY
+# each compiler runs from ITS OWN tree's root (it reads src/runtime/natives.tbl):
+perf stat -e instructions:u -r 3 out/zc-perf emit out/fx.z -o /dev/null
+```
+
 A speed claim needs BOTH binaries on the SAME input -- `perf stat -r 7` over
 instructions, which resolves below 2% where wall does not. The wall column is
 not an A/B across rows: it times the compiler on its own current source, so it
@@ -183,7 +232,84 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-09-10 | cb26d174 | [a valtype holds value data only](#r-valtype-holds-values) | 0.48s | -- | 100MB / -- | 125 / 183 / 187 (total 495) | 2,132,433 | 305MB | -- | 123,216 |
 | 2026-09-10 | b90b64df | [a loop variable survives a suspension](#r-loop-var-suspension) | 0.50s | -- | 100MB / -- | 118 / 190 / 202 (total 510) | 2,138,058 | 306MB | -- | 123,510 |
 | 2026-09-11 | 43e533e1 | [the allocation ratchet joins ci, and the drift comes out](#r-alloc-gate-recovery) | 0.56s | -- | 100MB / -- | 141 / 226 / 211 (total 578) | 2,161,395 | 309MB | -- | 124,541 |
+| 2026-10-01 | 426b1224 | [re-baseline after 669 commits: a heavier input, not a slower compiler](#r-426b1224) | 0.84s | 0.90s | 119MB / 98MB | 153 / 361 / 330 (total 844) | 2,825,524 | 367MB | 31.0s (2,275 cases) | 152,955 |
 
+
+<a id="r-426b1224"></a>
+**Re-baseline after 669 commits: a heavier input, not a slower compiler**
+(`43e533e1` -> `426b1224`, 2026-09-11 -> 2026-10-01). Wall 0.56s -> 0.84s,
+allocations 2,161,395 -> 2,825,524, instructions 5,776M -> 9,056M. Per line of
+compiler source that is 46.4k -> 59.2k instructions, so the growth is not
+just more lines.
+
+**Per-seed series.** Each sampled commit's own seed (`bootstrap/zc.c`) was
+built the way `out/zc-perf` is (gcc -O1 + mimalloc) and timed compiling its
+own tree, in equal-length directories so ARGV[0] adds the same bytes each
+time:
+
+| commit | date | LOC | parse/check/emit ms | instr | allocs |
+| --- | --- | --- | --- | --- | --- |
+| `d3d5f914` | 09-11 | 124,541 | 109 / 226 / 219 | 5,776M | 2,161,169 |
+| `4e738bf7` | 09-12 | 125,519 | 121 / 244 / 242 | 5,934M | 2,502,766 |
+| `1378471d` | 09-13 | 123,650 | 101 / 217 / 213 | 5,672M | 2,457,506 |
+| `e8889855` | 09-16 | 134,630 | 129 / 269 / 267 | 7,003M | 2,814,892 |
+| `a01db7d7` | 09-19 | 140,605 | 136 / 307 / 294 | 7,544M | 2,576,331 |
+| `97ad55b7` | 09-23 | 143,371 | 159 / 327 / 334 | 7,916M | 2,631,034 |
+| `e07af719` | 09-29 | 149,989 | 159 / 390 / 326 | 8,687M | 2,765,562 |
+| `5ce8356c` | 10-01 | 152,937 | 224 / 505 / 440 | 9,070M | 2,824,513 |
+
+(Twenty commits were measured; this keeps the inflections. Phase times are
+from a shared host and only roughly comparable; instructions and allocations
+are exact.) The largest single step, `1378471d` -> `e8889855` (+1,331M,
++357k allocations), was bisected over its 22 commits, and no single commit
+stands out. The range is the borrow-rule batch, which also added 11k lines
+of source.
+
+**The control: the same input to both compilers.** The fixed-input program
+(Commands, above) costs 4,392M instructions under the 09-11 compiler and
+4,442M under HEAD's, **+1.1%**. On a fixed input the compiler is about as fast
+as it was. What grew is its own source: `ztypecheck.z` went from 43,372 to
+60,551 lines, `zemitterc.z` from 34,095 to 42,336, and the emitted
+`bin/zc.c` from 120,634 to 162,717.
+
+**What the same input produces did change.** The 09-11 compiler emits 34,786
+lines of C for the fixed input, and HEAD emits 43,513. The difference is
+ordered-evaluation temps: `(_o0 = a, (_o0 + b))` where `a + b` would do.
+There are 0 of them at 09-11, 10,296 `_oN =` assignments in the fixed
+input's C at HEAD, and 29,267 in `bin/zc.c`. Order is a promise the spec
+makes, and the cost of keeping it is now visible. A temp is needed only
+where something later in the expression could observe the value changing.
+
+**Where the self-compile spends it (HEAD).**
+
+- **Quadratic: `ewEmit`** (zparser.z), the unit-loading extern scan, does a
+  linear `scope.contains` over every bound name for each name reference. That
+  is 470M instructions, 5.6% of the self-compile, and 43% of a
+  4,000-function single-file compile.
+- **Allocations by first user frame (DHAT, of 2,825,247):**
+  - `varCName` 206,027
+  - `dataFieldIds` 179,562
+  - `Parser.operationPaths` 135,517
+  - `emitOperatorAt` 94,467
+  - `Parser.acceptCall` 72,316
+  - `appendValueTuple` 71,402
+  - `layLockRow` 70,202
+  - `nameOf` 62,350
+  - `typeRefC` 49,674
+  - `lockCallArg` 46,180
+  - `orderSettle` 45,687
+  - `cTypeOf` 45,111
+  - `isNumericTid` 36,356, which is the 2026-09-11 fix regressing. It no
+    longer copies a name it rejects, but it still copies one per numeric
+    type it accepts.
+  - `fnSignature` is built three times per function: 218k allocations
+    inclusive.
+- **CPU:** parse 18%, check 35%, emit 36%. The emitter answers per-parameter
+  questions by name text (about 16% of emit). The StringPool hashes with
+  siphash even under `--fast-hash`. `litIndexOf` is quadratic, and several
+  passes scan the whole registry once per generic template.
+
+These are the inputs to the recovery arc that follows this row.
 
 <a id="r-alloc-gate-recovery"></a>
 **The allocation ratchet joins ci, and the drift comes out** (`0b773eb3` ->
