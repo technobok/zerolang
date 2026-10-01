@@ -34011,6 +34011,7 @@ checkReassignment: function {
     # callable path is called, and `.copy` is the reference
     owPrev: st.typing.owningValueNid
     st.typing.owningValueNid = valueCoreNid :ast nid: rasgn.value
+    promoteStringLiteral :st :ast nid: rasgn.value destTid: lvt
     rvt: checkMovedValueAt :st :unitDecl :ast nid: rasgn.value
     st.typing.owningValueNid = owPrev
     # a value that resolved to nothing and raised nothing: an unresolvable
@@ -41842,6 +41843,7 @@ walkOneCallArg: function {
             # `_.ARM` / `_.create ...`: the `_` is the parameter's type, spelled
             # into the tree before the argument is walked
             spellCallArgUnderscore :st :ast :unitDecl :effId :recvImplicit :argIdx :arg
+            promoteCallArgLiteral :st :ast :effId :recvImplicit :argIdx :arg
             caPrev: st.typing.callArgNode
             sbPrev: st.typing.suppressBareCtor
             st.typing.callArgNode = (nodeId
@@ -41932,6 +41934,129 @@ underscoreRoot: function {ast: Ast.view op: zast.nodeid} out zast.nodeid is {
         }
     }
     return zast.nodeid
+}
+
+# promoteStringLiteral -- a plain string literal written where the destination
+# is known to be a String (Q3, spec: String Literal Types) is the owned String it
+# reads as there: the literal moves to a fresh row, and its own row -- which its
+# parent already holds -- becomes `literal.string`, which is what everything
+# after reads. A literal anywhere else stays the StringView it is, and so does
+# one an interpolation makes a String already.
+promoteStringLiteral: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    nid: zast.nodeid
+    destTid: ztypes.tid
+} is {
+    if nid.isZero or destTid.isZero then return
+    lit: ast.nodes.get i: nid.u64
+    if lit.atomstring.not then return
+    if (stringLitIsPlain :ast parts: lit.stringparts).not then return
+    if destTid != (builtinTidT :st scope: st.curScope :ast base: "String") then return
+    start: ast.nodes.length
+    lid: zast.tableReserve :ast
+    (zast.tableAdd
+        :ast
+        n: astnode.atomstring (zast.atomstringrow
+            nodeid: lid
+            lineno: lit.lineno
+            colno: lit.colno
+            stringparts: lit.stringparts
+        )
+    )
+    sid: zast.tableReserve :ast
+    (zast.tableAdd
+        :ast
+        n: astnode.atomid (zast.atomidrow
+            nodeid: sid
+            lineno: lit.lineno
+            colno: lit.colno
+            name: (zast.nameid.create from: zast.names.wkString)
+        )
+    )
+    fs: ast.fsnoForNode nodeid: nid.u32
+    if fs.u64 > 0 then ast.fileSegs.append (zast.FileSeg
+        startId: start.u32.orPanic
+        endId: ast.nodes.length.u32.orPanic
+        fsno: fs
+    )
+    (zast.tableSet
+        :ast
+        id: nid.u32
+        child: astnode.dottedpath (zast.dottedpathrow
+            nodeid: nid
+            lineno: lit.lineno
+            colno: lit.colno
+            parent: lid
+            child: sid
+        )
+    )
+}
+
+# stringLitIsPlain -- every part of a string literal is literal text: no
+# interpolation, which would make it a String already.
+stringLitIsPlain: function {ast: Ast.view parts: zast.kidspan} out bool is {
+    i: u64
+    for i < parts.count.u64 loop {
+        pid: zast.kidAt kids: ast.kids span: parts :i
+        i = i + 1
+        if (ast.nodes.get i: pid.u64).stringchunk.not then return false
+    }
+    return true
+}
+
+# promoteCallArgLiteral -- promoteStringLiteral for an argument of a concrete
+# call, against the parameter it fills: the label, else the one at its position.
+promoteCallArgLiteral: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    effId: ztypes.tid
+    recvImplicit: bool
+    argIdx: u64
+    arg: argref
+} is {
+    if (ast.nodes.get i: arg.operation.u64).atomstring.not then return
+    pn: arg.name
+    if pn.isZero then pn = (positionalParamNameId
+        :st
+        funcId: effId
+        idx: argIdx
+        skipRecv: recvImplicit
+    )
+    promoteToParam :st :ast :effId :pn nid: arg.operation
+}
+
+# promoteGenericArgLiteral -- promoteStringLiteral for an argument of a generic
+# call, against a parameter declared String outright: one typed by a parameter
+# of the call keeps the literal a view.
+promoteGenericArgLiteral: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    funcId: ztypes.tid
+    pNames: (ListVal zast.nameid).view
+    posIdx: u64
+    arg: argref
+} is {
+    if (ast.nodes.get i: arg.operation.u64).atomstring.not then return
+    pn: arg.name
+    if pn.isZero when posIdx < pNames.length then pn = pNames.get i: posIdx
+    promoteToParam :st :ast effId: funcId :pn nid: arg.operation
+}
+
+# promoteToParam -- promoteStringLiteral against parameter `pn` of `effId`, its
+# members forced first: a callee resolved on demand has not typed them yet.
+promoteToParam: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    effId: ztypes.tid
+    pn: zast.nameid
+    nid: zast.nodeid
+} is {
+    if pn.isZero then return
+    forceAllMembers :st :ast tid: effId
+    pto: st.typing.declChildOfId parentTypeId: effId nameId: pn
+    if pto.none then return
+    promoteStringLiteral :st :ast :nid destTid: (ztypes.tid.create from: pto)
 }
 
 # spellCallArgUnderscore -- spellUnderscore for an argument of a concrete call:
@@ -43374,6 +43499,12 @@ checkReturnedValue: function {
     arg: argref
 } is {
     errR: st.typing.errors.length
+    (promoteStringLiteral
+        :st
+        :ast
+        nid: arg.operation
+        destTid: (ztypes.tid.create from: st.typing.currentReturnTypeId)
+    )
     argT: ztypes.tid
     if st.typing.currentReturnsBorrow then {
         argT = checkValueAt :st :unitDecl :ast nid: arg.operation
@@ -46608,6 +46739,7 @@ inferGenericCallSubs: function {
         errG: st.typing.errors.length
         # `_` is the parameter's type here too: this walk is the argument's first
         spellGenericArgUnderscore :st :ast :unitDecl :funcId :pNames :posIdx :arg
+        promoteGenericArgLiteral :st :ast :funcId :pNames :posIdx :arg
         avt: checkValueAt :st :unitDecl :ast nid: arg.operation
         # a value that did not type is reported HERE, as the concrete
         # argument walk reports it (walkOneCallArg): the generic leg used to
