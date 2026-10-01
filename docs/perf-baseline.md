@@ -237,7 +237,25 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-10-01 | 4e9a2473 | [recovery P2: the quadratic extern scan, and the interner](#r-4e9a2473) | 0.80s | -- | 119MB / -- | 86 / 386 / 339 (total 811) | 2,796,894 | 369MB | -- | 153,245 |
 | 2026-10-01 | 9e05d9e3 | [recovery P3: the allocation sites the census ranked first](#r-9e05d9e3) | 0.69s | -- | 119MB / -- | 79 / 331 / 283 (total 693) | 2,245,533 | 350MB | -- | 153,505 |
 | 2026-10-01 | 957d2327 | [recovery P4: a part that only reads takes no ordered temp](#r-957d2327) | 0.70s | -- | 121MB / -- | 84 / 336 / 279 (total 729) | 2,189,755 | 350MB | -- | 153,622 |
+| 2026-10-01 | 8b777544 | [recovery P5: the operator path](#r-8b777544) | 0.76s | -- | 121MB / -- | 84 / 383 / 340 (total 807) | 2,095,237 | 346MB | -- | 153,651 |
 
+
+<a id="r-8b777544"></a>
+**Recovery P5: the operator path** (`1e728d01`, `8b777544`). Allocations
+2,189,755 -> 2,095,237, instructions 7,310M -> 7,305M, fixed input 2,558M
+-> 2,534M.
+- `1e728d01`: `==` and `!=` read the checker's resolution like every other
+  operator. The pair exclusion had sent 3,634 of them per self-compile
+  through a by-name derivation.
+- `8b777544`: a native operator row is filled through four binding lists
+  the context owns, instead of four new lists and eight strings per
+  operator: -95,367 allocations.
+
+**Not done.** The checker's infix fast path (skip the special-form and
+missing-argument legs for `a op b`) was measured first. Across ALL calls
+those legs are 0.31% and 0.94% of the self-compile, and call dispatch is
+the checker's core: not worth the risk. Wall 0.76s was taken with the
+machine still loaded from ci (P4's 0.70s is the better reading).
 
 <a id="r-957d2327"></a>
 **Recovery P4: a part that only reads takes no ordered temp** (`6b62b9a3`
