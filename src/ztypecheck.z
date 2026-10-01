@@ -3914,7 +3914,50 @@ refuseIncompleteApplication: function {
 
 # resolveMonoRefParts -- resolveMonoRefInline's call-shaped core, taking the
 # callable and argument list directly so narrowed call subjects can feed it.
+# A type written outside a statement -- a signature, a field, an alias -- has
+# no statement to report an unmet bound at: the type-ref itself is the site,
+# for the instance and for the members minting it reaches.
 resolveMonoRefParts: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    thisName: StringView
+    enclDecl: ztypes.declid
+    callableNid: zast.nodeid
+    arguments: (ListVal u32).view
+    nid: u32
+} out u64 is {
+    if st.typing.boundSiteLine > 0 then {
+        return (mintMonoRefParts
+            :st
+            :scope
+            :ast
+            :unitDecl
+            :thisName
+            :enclDecl
+            :callableNid
+            :arguments
+            :nid
+        )
+    }
+    {
+        cn: ast.nodes.get i: callableNid.u64
+        st.typing.boundSiteNid = callableNid
+        st.typing.boundSiteLine = nodeLine n: cn
+        st.typing.boundSiteCol = nodeCol n: cn
+    }
+    st.typing.boundSiteFailArg = 0
+    r: mintMonoRefParts :st :scope :ast :unitDecl :thisName :enclDecl :callableNid :arguments :nid
+    st.typing.boundSiteNid = zast.nodeid
+    st.typing.boundSiteLine = 0
+    st.typing.boundSiteCol = 0
+    st.typing.boundSiteFailArg = 0
+    return r
+}
+
+# mintMonoRefParts -- resolveMonoRefParts once the site is set.
+mintMonoRefParts: function {
     st: zenv.ZSymbolTable
     ast: Ast
     unitDecl: ztypes.declid
@@ -21958,8 +22001,24 @@ checkConstraintSat: function {
         if st.typing.boundSiteFailArg == argTid.u64 then return
         st.typing.boundSiteFailArg = argTid.u64
     }
+    if (unmetBoundReported :st :tdecl :paramName :argTid) then return
     m: constraintUnmetText :ast :st :tdecl :paramName :argTid
     reportConstraintUnmet :st :at :lineno :colno msg: m
+}
+
+# unmetBoundReported -- this refusal was reported already; one not yet
+# reported is recorded, as the caller reports it now.
+unmetBoundReported: function {
+    st: zenv.ZSymbolTable
+    tdecl: ztypes.declid
+    paramName: zast.nameid
+    argTid: ztypes.tid
+} out bool is {
+    for each u: st.typing.unmetBounds loop {
+        if u.tdecl == tdecl when u.paramName == paramName when u.argTid == argTid then return true
+    }
+    st.typing.unmetBounds.append (ztyping.unmetbound :tdecl :paramName :argTid)
+    return false
 }
 
 # qualifiedTemplateName -- a template as a constraint report names it: its
@@ -22011,7 +22070,7 @@ checkPartialBounds: function {
         argT: ztypes.tid.create from: argv.u64
         instT: ztypes.tid.create from: inst.u64
         if argT == instT or (typeConformsTo :st impl: argT spec: instT) then continue
-        an: st.reg.nameOf tid: argT
+        an: specWrittenName :st :ast tid: argT
         sn: specWrittenName :st :ast tid: instT
         pt: zast.nameTextAt :ast ref: pn
         tdn: qualifiedTemplateName :st :tdecl
@@ -22433,7 +22492,7 @@ constraintUnmetText: function {
     paramName: zast.nameid
     argTid: ztypes.tid
 } out String is {
-    an: st.reg.nameOf tid: argTid
+    an: specWrittenName :st :ast tid: argTid
     cdx: st.reg.genericParamConstraintOf :tdecl :paramName
     con: constraintTextOf desc: cdx
     # a bound no kind classifies is spelled by its own name, an application
