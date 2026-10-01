@@ -2,10 +2,10 @@
    Grows the list capacity as needed. Returns actual bytes read
    (0 indicates EOF); retries on EINTR. The loop breaks out so the body
    ends in its return -- c2mir miscompiles a struct return otherwise. */
-static z_@Result_u64_IoError@_t z_@File@_read(
+static z_@ResultVR_u64_IoError@_t z_@File@_read(
     z_@File@_t* f, z_@ListVal_u8@_t* buf, uint64_t max
 );
-static z_@Result_u64_IoError@_t z_@File@_read(
+static z_@ResultVR_u64_IoError@_t z_@File@_read(
     z_@File@_t* f, z_@ListVal_u8@_t* buf, uint64_t max
 ) {
     if (buf->capacity < buf->length + max) {

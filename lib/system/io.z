@@ -277,7 +277,7 @@ Reader: protocol {
     # read up to `max` bytes into `into`, answering how many actually arrived. A
     # count of 0 is EOF rather than an error, so a caller loops until it sees
     # one
-    read: function {:this into: Bytes max: u64} out (Result (Box u64) E: IoError)
+    read: function {:this into: Bytes max: u64} out (ResultVR u64 E: IoError)
 }
 
 # `writer.write from: bv`
@@ -288,7 +288,7 @@ Reader: protocol {
 Writer: protocol {
     # write the view's bytes, answering how many actually went. It may be FEWER
     # than the view holds, so a caller loops rather than assuming
-    write: function {:this from: ByteView} out (Result (Box u64) E: IoError)
+    write: function {:this from: ByteView} out (ResultVR u64 E: IoError)
     # force buffered output to its destination. Until this returns, a write that
     # reached a buffer has not necessarily reached the resource
     flush: function {:this} out (Result null E: IoError)
@@ -312,7 +312,7 @@ Closer: protocol {
 Seeker: protocol {
     # move the read/write head to `to`, measured from `from`, answering the new
     # absolute position counted from the start
-    seek: function {:this to: i64 from: seekorigin} out (Result (Box u64) E: IoError)
+    seek: function {:this to: i64 from: seekorigin} out (ResultVR u64 E: IoError)
 }
 
 # `file` -- an open OS file handle. Wraps a POSIX-style file
@@ -349,10 +349,10 @@ File: class {
     # actual count read; 0 indicates EOF. The caller owns `buf` and
     # sees the new bytes in place on return. Signature matches the
     # `reader` protocol.
-    read: function {:this into: Bytes max: u64} out (Result (Box u64) E: IoError) is native
+    read: function {:this into: Bytes max: u64} out (ResultVR u64 E: IoError) is native
     # write all bytes from `src` to the file. Returns the count
     # actually written (may be less than src.length on short write).
-    write: function {:this from: ByteView} out (Result (Box u64) E: IoError) is native
+    write: function {:this from: ByteView} out (ResultVR u64 E: IoError) is native
     # flush buffered writes — a no-op on raw POSIX file descriptors
     # (each `write` syscall already goes to the kernel), kept so the
     # `writer` protocol signature is satisfied.
@@ -360,7 +360,7 @@ File: class {
     # reposition the read/write head. `to` is a byte offset
     # interpreted relative to `from` (start / current / end). Returns
     # the new absolute position measured from the start.
-    seek: function {:this to: i64 from: seekorigin} out (Result (Box u64) E: IoError) is native
+    seek: function {:this to: i64 from: seekorigin} out (ResultVR u64 E: IoError) is native
 }
 
 # openmode -- how `io.open` should acquire the underlying fd.
@@ -427,7 +427,7 @@ BufWriter: class {
     create: function {to: Writer.borrow capacity: u64} outx this is native
     # buffer the view's bytes, writing through to the sink whenever the buffer
     # fills
-    write: function {:this from: ByteView} out (Result (Box u64) E: IoError) is native
+    write: function {:this from: ByteView} out (ResultVR u64 E: IoError) is native
     # hand the buffered bytes to the sink now. A BufWriter that is dropped
     # unflushed loses them
     flush: function {:this} out (Result null E: IoError) is native
@@ -463,7 +463,7 @@ BufReader: class {
     create: function {from: Reader.borrow capacity: u64} outx this is native
     # serve up to `max` bytes from the buffer, refilling from the source when it
     # runs dry. 0 still means EOF
-    read: function {:this into: Bytes max: u64} out (Result (Box u64) E: IoError) is native
+    read: function {:this into: Bytes max: u64} out (ResultVR u64 E: IoError) is native
 }
 
 # `textwriter` -- string-oriented adapter over a `bufwriter`. Writes
@@ -489,14 +489,14 @@ TextWriter: class {
     # byte layer beneath
     create: function {to: BufWriter.borrow} outx this is native
     # write a string's bytes with no terminator added
-    write: function as { T: StringLike.generic } in {:this from: T.view} out (Result
-        (Box u64)
+    write: function as { T: StringLike.generic } in {:this from: T.view} out (ResultVR
+        u64
         E: IoError
     ) is native
     # write a string's bytes followed by a newline -- the only difference from
     # `write`
-    writeLine: function as { T: StringLike.generic } in {:this from: T.view} out (Result
-        (Box u64)
+    writeLine: function as { T: StringLike.generic } in {:this from: T.view} out (ResultVR
+        u64
         E: IoError
     ) is native
     # flush through to the underlying BufWriter, and so to its sink

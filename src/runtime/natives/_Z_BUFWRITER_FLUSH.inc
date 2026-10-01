@@ -11,10 +11,9 @@ static z_@Result_null_IoError@_t z_@BufWriter@_flush(z_@BufWriter@_t* self) {
         return result;
     }
     z_@ListViewVal_u8@_t view = { self->buf.length, self->buf.data };
-    z_@Result_u64_IoError@_t wr =
+    z_@ResultVR_u64_IoError@_t wr =
         self->sink.vtable->write(self->sink.data, &view);
-    if (wr.tag == Z_RESULT_BOX_U64_IOERROR_TAG_OK) {
-        free(wr.data);
+    if (wr.tag == Z_RESULTVR_U64_IOERROR_TAG_OK) {
         self->buf.length = 0;
         result.tag = Z_RESULT_NULL_IOERROR_TAG_OK;
         result.data = NULL;

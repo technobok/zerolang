@@ -4,10 +4,10 @@
    than `cap` bytes). Returns what it has in one call; callers
    that need exactly N bytes loop externally, matching the
    reader-protocol contract ('short reads are fine'). */
-static z_@Result_u64_IoError@_t z_@BufReader@_read(
+static z_@ResultVR_u64_IoError@_t z_@BufReader@_read(
     z_@BufReader@_t* self, z_@ListVal_u8@_t* into, uint64_t max
 );
-static z_@Result_u64_IoError@_t z_@BufReader@_read(
+static z_@ResultVR_u64_IoError@_t z_@BufReader@_read(
     z_@BufReader@_t* self, z_@ListVal_u8@_t* into, uint64_t max
 ) {
     uint64_t available = self->buf.length - self->head;
@@ -23,11 +23,10 @@ static z_@Result_u64_IoError@_t z_@BufReader@_read(
            source read, then fall through to the drain path. */
         self->buf.length = 0;
         self->head = 0;
-        z_@Result_u64_IoError@_t rr = self->source.vtable->read(
+        z_@ResultVR_u64_IoError@_t rr = self->source.vtable->read(
             self->source.data, &self->buf, self->cap
         );
-        if (rr.tag != Z_RESULT_BOX_U64_IOERROR_TAG_OK) return rr;
-        free(rr.data);
+        if (rr.tag != Z_RESULTVR_U64_IOERROR_TAG_OK) return rr;
         available = self->buf.length;
         if (available == 0) return z_io_u64_ok(0);
     }

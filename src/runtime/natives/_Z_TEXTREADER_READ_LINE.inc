@@ -39,17 +39,16 @@ static z_@Result_String_IoError@_t z_@TextReader@_readLine(
         scan_start = self->buf.length;
         uint64_t cap = self->source->cap;
         if (cap == 0) cap = 4096;
-        z_@Result_u64_IoError@_t rr = z_@BufReader@_read(
+        z_@ResultVR_u64_IoError@_t rr = z_@BufReader@_read(
             self->source, &self->buf, cap
         );
-        if (rr.tag != Z_RESULT_BOX_U64_IOERROR_TAG_OK) {
+        if (rr.tag != Z_RESULTVR_U64_IOERROR_TAG_OK) {
             z_@Result_String_IoError@_t result = {0};
             result.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;
             result.data = rr.data;
             return result;
         }
-        uint64_t n = *(uint64_t*)rr.data;
-        free(rr.data);
+        uint64_t n = rr.in_ok;
         if (n == 0) {
             if (self->buf.length == 0) {
                 return z_io_String_err_arm(Z_IOERROR_TAG_EOF);
