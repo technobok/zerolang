@@ -1,0 +1,42 @@
+# match_keeps_outer_narrowing.z -- a match on a name an enclosing `if` has
+# already narrowed leaves that narrowing in place for the statements after it.
+#
+# Each match arm put the name's alias back by REMOVING it, not by restoring the
+# one it displaced: after `match (o)` inside `if o.i then`, `o` read as the
+# whole Outer again, so `if o.p` tested Outer's tag against Choice's arm and
+# `o.x` wrote through Outer's cell as though it held a pt -- into the inner
+# union's own tag. The value printed nothing and the payload leaked.
+
+pt: record { x: i64 } as {
+    bump: function {:this} is { this.x = this.x + 10 }
+}
+Choice: union { p: (Box pt) t: String }
+Outer: union { i: Choice  n: null }
+
+viaParam: function {o: Outer} is {
+    if o.i then {
+        match (o) case p then o.x = o.x + 100 case t then o.append "!"
+        if o.p then o.bump
+        if o.t then o.append "?"
+    }
+}
+
+show: function {o: Outer.view} is {
+    match (o) case i then {
+        match (o) case p then print "p \{o.x}" case t then print "t \{o}"
+    } case n then print "n"
+}
+
+main: function is {
+    o: Outer.i (Choice.p (pt x: 1))
+    if o.i then {
+        match (o) case p then o.x = o.x + 1000 case t then null
+        if o.p then o.x = o.x + 1
+    }
+    show :o
+    viaParam :o
+    show :o
+    q: Outer.i (Choice.t "s".string)
+    viaParam o: q
+    show o: q
+}

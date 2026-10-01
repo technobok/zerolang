@@ -1970,7 +1970,10 @@ perf: $(PERFBIN)
 #
 # +3,619 union payload access centralised (armCell*): +1,481 behaviour (the
 # helpers' own Strings while emitting), +2,138 source.
-ALLOC_BASELINE := 2805713
+#
+# +134 a match arm restores the narrowing it displaced: 0 behaviour, 134
+# source.
+ALLOC_BASELINE := 2805847
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
