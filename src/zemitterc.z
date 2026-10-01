@@ -200,16 +200,26 @@ atomVidIfPlain: function {
     ) case atomid then {
         at: zast.nameTextAt :ast ref: n.name
         atomVarId: atomVid :symtab nid: n.nodeid.u64
-        ae: emitLocalAtomNameAt :symtab :ctx nid: n.nodeid.u64 name: at.stringView vid: atomVarId
-        if ae.stringView != text then return (ztypes.vid.create from: 0)
-        return atomVarId
+        if (localAtomNameIsAt
+            :symtab
+            :ctx
+            nid: n.nodeid.u64
+            name: at.stringView
+            vid: atomVarId
+            :text
+        ) then {
+            return atomVarId
+        }
+        return (ztypes.vid.create from: 0)
     } case labelvalue then {
         # the `:name` shorthand names a binding just as a bare atom does
         lv: zast.nameTextAt :ast ref: n.name
         lvv: atomVid :symtab nid: n.nodeid.u64
-        le: emitLocalAtomNameAt :symtab :ctx nid: n.nodeid.u64 name: lv.stringView vid: lvv
-        if le.stringView != text then return (ztypes.vid.create from: 0)
-        return lvv
+        if (localAtomNameIsAt :symtab :ctx nid: n.nodeid.u64 name: lv.stringView vid: lvv :text
+        ) then {
+            return lvv
+        }
+        return (ztypes.vid.create from: 0)
     } case dottedpath then {
         # a dotted path can still emit as its bare base -- a `.private` access
         # marker contributes no C text -- and then the base IS the value passed.
@@ -218,9 +228,9 @@ atomVidIfPlain: function {
         if db.length == 0 then return (ztypes.vid.create from: 0)
         dbv: atomVid :symtab nid: (atomNodeId n: dbn)
         dbn9: (atomNodeId n: dbn).u64
-        de: emitLocalAtomNameAt :symtab :ctx nid: dbn9 name: db.stringView vid: dbv
-        if de.stringView != text then return (ztypes.vid.create from: 0)
-        return dbv
+        if (localAtomNameIsAt :symtab :ctx nid: dbn9 name: db.stringView vid: dbv :text
+        ) then return dbv
+        return (ztypes.vid.create from: 0)
     } else {
         return (ztypes.vid.create from: 0)
     }
@@ -3036,7 +3046,11 @@ Ctx: class {
     needUnits: List String
     # members some fragment needs declared before it can be emitted
     needMembs: List String
+    # each function's "RET cname(PARAMS)", by its type: the forward
+    # declaration and the definition write the same text, built once
+    fnSigs: (IdMapR ztypes.tid V: String
     # each data block's element text, by type
+    )
     dataElems: (IdMapR ztypes.tid V: String
     # each data constant's emitted text, keyed by owner and name
     )
@@ -13885,6 +13899,24 @@ varCName: function {ctx: Ctx.view vid: ztypes.vid name: StringView} out String i
     return "z_v\{vid}"
 }
 
+# varCNameIs -- whether `text` is exactly varCName's spelling, decided without
+# composing it in the default scheme: `z_v` and the id's decimal digits, with
+# no leading zero, as varCName writes them.
+varCNameIs: function {ctx: Ctx.view vid: ztypes.vid name: StringView text: StringView} out bool is {
+    if ctx.readableNames or vid.isZero then return (varCName :ctx :vid :name).stringView == text
+    if text.length < 4 or (text.startsWith prefix: "z_v").not then return false
+    digits: text.substring from: 3 to: text.length
+    if ((digits.byteAt 0).or d: 0) == 48 then return false
+    parsed: digits.parseU64
+    match (
+        parsed
+    ) case ok then {
+        return parsed == vid.u64
+    } case err then {
+        return false
+    }
+}
+
 # memberCPrefix -- what a struct member's name needs in front of it to be a C
 # identifier. A member keeps its source spelling: it has no id space of its
 # own, and its namespace is the struct, so nothing but a C reserved word can
@@ -13951,6 +13983,27 @@ emitLocalAtomNameAt: function {
 } out String is {
     if (narrowingEndedAt :symtab :ctx :nid :vid) then return (wholeLocalName :ctx :name :vid)
     return (emitLocalAtomName :ctx :name :vid)
+}
+
+# localAtomNameIsAt -- whether `text` is exactly emitLocalAtomNameAt's spelling
+# for the read at `nid`, asked without spelling it: the same three answers in
+# the same order -- the narrowing's alias unless a write ended it, the take
+# alias, the variable's own name -- each compared where it stands.
+localAtomNameIsAt: function {
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    nid: u64
+    name: StringView
+    vid: ztypes.vid
+    text: StringView
+} out bool is {
+    if (narrowingEndedAt :symtab :ctx :nid :vid).not then {
+        nb: vvFind xs: ctx.narrowBox :vid
+        if nb > 0 then return (ctx.narrowBox.get i: nb - 1).val.stringView == text
+    }
+    al: vvFind xs: ctx.aliases :vid
+    if al > 0 then return (ctx.aliases.get i: al - 1).val.stringView == text
+    return (varCNameIs :ctx :vid :name :text)
 }
 
 # aliasResolveAt -- aliasResolve for the read at `nid`: past a narrowing a
@@ -28667,6 +28720,37 @@ fnSignature: function {
     return sig
 }
 
+# appendFnSignature -- fnSignature's text appended to `buf`, then `tail` (";\n"
+# for a declaration, " {\n" for a definition). Built once per function: every
+# function's forward declaration and its definition ask for the same text.
+appendFnSignature: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    name: StringView
+    fid: ztypes.tid
+    op: astnode.view
+    buf: String.borrow
+    tail: StringView
+} is {
+    hit: false
+    {
+        got: ctx.fnSigs.get key: fid
+        match (
+            got
+        ) case some then {
+            buf.append got
+            hit = true
+        } case none then null
+    }
+    if hit.not then {
+        sig: fnSignature :ast :symtab :ctx :name :fid :op
+        buf.append sig
+        ctx.fnSigs.set key: fid value: sig.take
+    }
+    buf.append tail
+}
+
 # typedefChaseTid -- the chain-end base tid of a typedef (tid itself when it
 # is not one). The equality, cast and key-classification legs ask this so a
 # typedef behaves exactly as its base at the C level.
@@ -30403,13 +30487,12 @@ emitUnitMonoFn: function {
     # its own copy
     symtab.typing.emitMono = t
     iop: ast.nodes.get i: (instanceOpAt :symtab mono: t op: (zast.nodeIdOf n: op).u64)
-    sig: fnSignature :ast :symtab :ctx name: fnm.stringView fid: cfid op: iop
     if declOnly then {
-        buf.append "\{sig};\n"
+        appendFnSignature :ast :symtab :ctx name: fnm.stringView fid: cfid op: iop :buf tail: ";\n"
         symtab.typing.emitMono = 0
         return
     }
-    buf.append "\{sig} {\n"
+    appendFnSignature :ast :symtab :ctx name: fnm.stringView fid: cfid op: iop :buf tail: " {\n"
     resetFnEmitState :ctx
     registerReftypeParams :ast :symtab :ctx fid: cfid op: iop
     ctx.curThisTid = ztypes.tid.create from: t
@@ -30638,20 +30721,28 @@ emitFnMonoInstances: function {
             iop: (ast.nodes.get
                 i: (instanceOpAt :symtab mono: t.u64 op: (zast.nodeIdOf n: templateFnOp).u64)
             )
-            sig: (fnSignature
-                :ast
-                :symtab
-                :ctx
-                name: fnm.stringView
-                fid: (ztypes.tid.create from: t.u64)
-                op: iop
-            )
             if declOnly then {
-                ld: "\{sig};\n"
-                buf.append ld
+                (appendFnSignature
+                    :ast
+                    :symtab
+                    :ctx
+                    name: fnm.stringView
+                    fid: (ztypes.tid.create from: t.u64)
+                    op: iop
+                    :buf
+                    tail: ";\n"
+                )
             } else {
-                lo: "\{sig} {\n"
-                buf.append lo
+                (appendFnSignature
+                    :ast
+                    :symtab
+                    :ctx
+                    name: fnm.stringView
+                    fid: (ztypes.tid.create from: t.u64)
+                    op: iop
+                    :buf
+                    tail: " {\n"
+                )
                 resetFnEmitState :ctx
                 (registerReftypeParams
                     :ast
@@ -30839,20 +30930,28 @@ emitFnDeclsInOrder: function {
                     :buf
                 )
             } else {
-                sig: (fnSignature
-                    :ast
-                    :symtab
-                    :ctx
-                    name: nm2.stringView
-                    :fid
-                    op: (ast.nodes.get i: dm2.operation.u64)
-                )
                 if declOnly then {
-                    ld: "\{sig};\n"
-                    buf.append ld
+                    (appendFnSignature
+                        :ast
+                        :symtab
+                        :ctx
+                        name: nm2.stringView
+                        :fid
+                        op: (ast.nodes.get i: dm2.operation.u64)
+                        :buf
+                        tail: ";\n"
+                    )
                 } else {
-                    lo: "\{sig} {\n"
-                    buf.append lo
+                    (appendFnSignature
+                        :ast
+                        :symtab
+                        :ctx
+                        name: nm2.stringView
+                        :fid
+                        op: (ast.nodes.get i: dm2.operation.u64)
+                        :buf
+                        tail: " {\n"
+                    )
                     resetFnEmitState :ctx
                     (registerReftypeParams
                         :ast
@@ -31881,6 +31980,7 @@ emitC: function {
         emitErrors: List String
         needUnits: List String
         needMembs: List String
+        fnSigs: (IdMapR ztypes.tid V: String)
         dataElems: (IdMapR ztypes.tid V: String)
         dataConst: (MapVR dataconstkey V: String)
         dataSlot: (MapVR dataslotkey V: String)
@@ -39956,16 +40056,16 @@ emitUnitFnFwdDecls: function {
             )
             continue
         }
-        fdsig: (fnSignature
+        (appendFnSignature
             :ast
             :symtab
             :ctx
             name: fdn.stringView
             fid: fdid
             op: bfdOp
+            :buf
+            tail: ";\n"
         )
-        fdl: "\{fdsig};\n"
-        buf.append fdl
     }
 }
 
@@ -41360,22 +41460,30 @@ emitMonoMethodAt: function {
     fn: regNameOf :symtab tid: fid
     # the whole method is the instance's (emitUnitMonoFn)
     symtab.typing.emitMono = monoId
-    sg: (fnSignature
+    if declOnly then {
+        (appendFnSignature
+            :ast
+            :symtab
+            :ctx
+            name: fn.stringView
+            :fid
+            op: (ast.nodes.get i: opId.u64)
+            :buf
+            tail: ";\n"
+        )
+        symtab.typing.emitMono = 0
+        return
+    }
+    (appendFnSignature
         :ast
         :symtab
         :ctx
         name: fn.stringView
         :fid
         op: (ast.nodes.get i: opId.u64)
+        :buf
+        tail: " {\n"
     )
-    if declOnly then {
-        ld: "\{sg};\n"
-        buf.append ld
-        symtab.typing.emitMono = 0
-        return
-    }
-    lo: "\{sg} {\n"
-    buf.append lo
     resetFnEmitState :ctx
     registerReftypeParams :ast :symtab :ctx :fid op: (ast.nodes.get i: opId.u64)
     ctx.curThisTid = ztypes.tid.create from: monoId
