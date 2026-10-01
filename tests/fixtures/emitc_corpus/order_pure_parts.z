@@ -1,0 +1,76 @@
+# A part that only reads -- a literal, a local, a field path, a scalar operator
+# over those -- needs no ordered temporary when every part after it only reads
+# too: nothing can change what it read. A part followed by one that may WRITE
+# keeps its temporary, because C leaves the operands of `+` and the arguments
+# of a call unsequenced, and the read would otherwise see the write. Every
+# line prints the value the written order gives.
+Counter: class {
+    n: i64
+} as {
+    bump: function {:this} out i64 is {
+        this.n = this.n + 100
+        return this.n
+    }
+    count: function {this: this.view} out i64 is {
+        return this.n
+    }
+}
+
+pt: record {
+    x: i64
+    y: i64
+}
+
+slot: record {
+    v: i64
+}
+
+# writes through the reference it is handed
+addTo: function {c: slot.borrow d: i64} out i64 is {
+    c.v = c.v + d
+    return c.v
+}
+
+pair: function {a: i64 b: i64} out i64 is {
+    return (a * 1000) + b
+}
+
+main: function is {
+    print "operators"
+    h: Counter n: 1
+    a: h.bump + h.count
+    b: h.count + h.bump
+    x: slot v: 5
+    c: x.v + (addTo c: x d: 10)
+    d: (addTo c: x d: 10) + x.v
+    p: pt x: 2 y: 3
+    e: p.x + p.y
+    f: (x.v + p.x) * (p.y - 1)
+    print "\{a} \{b} \{c} \{d} \{e} \{f}"
+
+    print "arguments"
+    y: slot v: 7
+    g: pair a: y.v b: (addTo c: y d: 1)
+    i: pair a: (addTo c: y d: 1) b: y.v
+    j: pair a: y.v b: (y.v + 1)
+    k: pair a: h.n b: h.bump
+    print "\{g} \{i} \{j} \{k}"
+
+    print "construction"
+    z: slot v: 1
+    q: pt x: z.v y: (addTo c: z d: 1)
+    r: pt x: (addTo c: z d: 1) y: z.v
+    print "\{q.x} \{q.y} \{r.x} \{r.y}"
+
+    print "collection"
+    w: slot v: 3
+    xs: ListVal i64
+    xs.append w.v
+    xs.append (addTo c: w d: 4)
+    xs.append (w.v + (addTo c: w d: 1))
+    print "\{xs.get i: 0} \{xs.get i: 1} \{xs.get i: 2}"
+
+    print "interpolation"
+    u: slot v: 1
+    print "\{u.v} \{addTo c: u d: 1} \{u.v}"
+}
