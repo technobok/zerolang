@@ -2038,17 +2038,21 @@ collectLiterals: function {ast: Ast.view n: astnode.view ids: ListVal u64 texts:
 
 # litIndexOf -- the 1-based pool index for a literal's nodeid (0 = absent).
 litIndexOf: function {ctx: Ctx nid: u64} out u64 is {
+    li: (ctx.litIndex.get key: nid).or d: 0
+    if li > 0 then ctx.usedLits.add item: nid
+    return li
+}
+
+# literalIndex -- each literal's node id -> its 1-based place in `ids`, the
+# first place when a node is pooled twice
+literalIndex: function {ids: (ListVal u64).view} out (IdMapV u64 v: u64) is {
+    m: IdMapV u64 v: u64 capacity: ids.length
     i: u64
-    n: ctx.litIds.length
-    for i < n loop {
-        v: ctx.litIds.get :i
-        if v == nid then {
-            ctx.usedLits.add item: nid
-            return i + 1
-        }
+    for each nid: ids loop {
         i = i + 1
+        if (m.has key: nid).not then m.set key: nid value: i
     }
-    return 0
+    return m
 }
 
 # ternaryClause / ternaryElse -- if-expression rendering as nested C
@@ -3013,6 +3017,8 @@ Ctx: class {
     cnames: List String
     # the literal pool's ids in emission order
     litIds: ListVal u64
+    # a literal's node id -> its 1-based place in litIds
+    litIndex: (IdMapV u64 v: u64)
     # which literals were actually referenced, so the unused ones are not
     # emitted
     usedLits: IdSet u64
@@ -31820,6 +31826,7 @@ emitC: function {
     litIds: ListVal u64
     litTexts: List String
     collectUnitLiterals :program :symtab ids: litIds texts: litTexts
+    litIndex: literalIndex ids: litIds
     rm: mn.copy
     rnBare: IdSet ztypes.vid
     if readableNames then collectRnBareVids :symtab bare: rnBare
@@ -31834,6 +31841,7 @@ emitC: function {
         :svC
         cnames: typeCnames
         :litIds
+        :litIndex
         usedLits: IdSet u64
         constLits: List String
         tailRetActive: false
