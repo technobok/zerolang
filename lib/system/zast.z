@@ -1025,6 +1025,10 @@ StringPool: class {
     # each text's hash, indexed by name id like `texts`: a probe compares it
     # before the bytes, and a rebuild re-slots every text without re-hashing
     hashes: ListVal u64
+    # a byte per text that its first reader stores, so a classification made
+    # once per distinct text -- the lexer's keyword lookup -- is not redone
+    # per occurrence. 0 means not classified yet.
+    wordClass: ListVal u8
     # the hash index over `texts`, which is what makes interning a lookup rather
     # than a scan
     slots: ListVal u32
@@ -1037,6 +1041,7 @@ StringPool: class {
         p: (meta.create
             texts: List String
             hashes: ListVal u64
+            wordClass: ListVal u8
             slots: ListVal u32
             used: 0
         )
@@ -1044,6 +1049,7 @@ StringPool: class {
         # slot, so interning "" still mints an id of its own.
         p.texts.append "".string
         p.hashes.append 0
+        p.wordClass.append 0
         return p
     }
 
@@ -1106,6 +1112,7 @@ StringPool: class {
         nid: this.texts.length.u32.orPanic
         this.texts.append s.string
         this.hashes.append h
+        this.wordClass.append 0
         this.slots.set i: si val: nid
         this.used = this.used + 1
         return (nameid.create from: nid.u32)
@@ -1122,9 +1129,20 @@ StringPool: class {
         nid: this.texts.length.u32.orPanic
         this.texts.append s
         this.hashes.append h
+        this.wordClass.append 0
         this.slots.set i: si val: nid
         this.used = this.used + 1
         return (nameid.create from: nid.u32)
+    }
+
+    # classOf -- the byte stored for id's text by setClass; 0 until then.
+    classOf: function {t: this.view id: nameid} out u8 is {
+        return (t.wordClass.get i: id.u64)
+    }
+
+    # setClass -- store id's classification byte.
+    setClass: function {:this id: nameid c: u8} is {
+        this.wordClass.set i: id.u64 val: c
     }
 
     # find -- the id of an already-interned text (0 when absent).

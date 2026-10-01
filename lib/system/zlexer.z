@@ -290,6 +290,14 @@ tokpos: record {
     width: u32
 }
 
+# wordclass -- what a word's text is, as StringPool.classOf keeps it per
+# text (0, its default, is "not asked yet")
+wordclass: data {
+    name: 1
+    reserved: 2
+    keyword: 3
+} out u8
+
 # kwlookup result: a token type plus a "found" flag. Returned by
 # `kwlookup` instead of routing through a `toktype` sentinel arm.
 kwresult: record { found: bool tt: toktype }
@@ -809,6 +817,35 @@ Tokenizer: class {
         return (this.textTok :pool tt: toktype.strChrTok s: sc :line :col)
     }
 
+    # idTok -- a token over the source span `s`..`e` whose text is already
+    # interned as `id`.
+    idTok: function {
+        this: this.view
+        tt: toktype
+        id: zast.nameid
+        s: u64
+        e: u64
+        line: u32
+        col: u32
+    } out token is {
+        return (token
+            toktype: tt
+            width: (spanWidth :s :e)
+            text: id
+            fsno: this.fsno
+            lineno: line
+            colno: col
+        )
+    }
+
+    # colonText -- the pool id a colon token carries. Only a reader that keeps
+    # trivia reads it; the Lexer drops colon tokens, so its colons intern
+    # nothing.
+    colonText: function {this: this.view pool: zast.StringPool} out zast.nameid is {
+        if this.keepTrivia then return (pool.set s: ":")
+        return zast.nameid
+    }
+
     # spanTok -- a token whose width and text both come from the source span
     # `s`..`e`. The two are written together everywhere they are written at all,
     # because a spanned token's width IS its span's.
@@ -1249,7 +1286,7 @@ Tokenizer: class {
     colonPreWordToken: function {
         :this
         pool: zast.StringPool
-        s0: u64
+        wid: zast.nameid
         s_word: u64
         e_word: u64
         kwfound: bool
@@ -1261,16 +1298,23 @@ Tokenizer: class {
     } out token is {
         stage_tt: toktype.labelPreTok
         if kwfound or reservedfound then stage_tt = toktype.reservedLabelPreTok
-        this.nexttok = (this.spanTok
-            :pool
+        this.nexttok = (this.idTok
             tt: stage_tt
+            id: wid
             s: s_word
             e: e_word
             line: word_line
             col: word_col
         )
         this.hasnext = true
-        return (this.byteTok :pool tt: toktype.colonTok s: s0 line: colonpre_line col: colonpre_col)
+        return (token
+            toktype: toktype.colonTok
+            width: 1
+            text: (this.colonText :pool)
+            fsno: this.fsno
+            lineno: colonpre_line
+            colno: colonpre_col
+        )
     }
 
     # wordToken -- the word branch. A leading colon is saved separately from the
@@ -1308,23 +1352,32 @@ Tokenizer: class {
                 :col
             )
         }
-        # the word's type comes from its source span; the views stay scoped so no
-        # lock outlives the lookups
+        # the word is interned once, and what it is -- a keyword, a reserved
+        # word, a name -- is asked once per distinct text and kept in the
+        # pool; the views stay scoped so no lock outlives the lookups
+        wid: this.tokSpanId :pool s: s_word e: e_word
+        wcls: pool.classOf id: wid
         kwfound: false
         kwtt: toktype.errTok
-        reservedfound: false
-        {
+        if wcls == 0 or (wcls == wordclass.keyword) then {
             wsv: this.source.stringView
             wv: wsv.substring from: s_word to: e_word
             kw_res: kwlookup wv
             kwfound = kw_res.found
             kwtt = kw_res.tt
-            reservedfound = islookupReserved sv: wv
+            if wcls == 0 then {
+                wcls = wordclass.name
+                if kwfound then {
+                    wcls = wordclass.keyword
+                } else if (islookupReserved sv: wv) then wcls = wordclass.reserved
+                pool.setClass id: wid c: wcls
+            }
         }
+        reservedfound: wcls == wordclass.reserved
         if has_colonpre then {
             return (this.colonPreWordToken
                 :pool
-                :s0
+                :wid
                 :s_word
                 :e_word
                 :kwfound
@@ -1343,16 +1396,16 @@ Tokenizer: class {
             this.nexttok = (token
                 toktype: toktype.colonTok
                 width: 1
-                text: (pool.set s: ":")
+                text: (this.colonText :pool)
                 fsno: this.fsno
                 lineno: this.lineno
                 colno: this.colno
             )
             this.hasnext = true
             this.accept
-            return (this.spanTok
-                :pool
+            return (this.idTok
                 tt: lbl_tt
+                id: wid
                 s: s_word
                 e: e_word
                 line: word_line
@@ -1362,7 +1415,7 @@ Tokenizer: class {
         ret_tt: toktype.refIdTok
         if kwfound then ret_tt = kwtt
         if reservedfound then ret_tt = toktype.errTok
-        return (this.spanTok :pool tt: ret_tt s: s_word e: e_word line: word_line col: word_col)
+        return (this.idTok tt: ret_tt id: wid s: s_word e: e_word line: word_line col: word_col)
     }
 
     # the next token, advancing past it
