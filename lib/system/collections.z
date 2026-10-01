@@ -62,26 +62,30 @@ ListRef: class is native as {
     # the REFERENCE element type of ListRef. Uppercase says reftype, so a
     # binding of it MOVES
     T: AnyRef.generic
+    # the type that indexes the ListRef: u64 unless the list says otherwise, and
+    # then an id space of its own (`ListVal astnode i: nodeid`), so a row is
+    # read with an id of that space and not with any other number
+    i: (idkey.generic default: u64)
 
     # append one element to a ListRef; it is TAKEN, so the list owns it and the
     # caller's binding is spent
     append: function {:this from: T.take} is native
     # insert one element into a ListRef at `at`, shifting the tail up; it is
     # TAKEN, so the list owns it and the caller's binding is spent
-    insert: function {:this from: T.take at: u64} is native
+    insert: function {:this from: T.take at: i} is native
     # append every element of another ListRef, which is taken whole rather than
     # element by element
     extend: function {:this from: type.take} is native
     # the readonly element reference: several may be live at once and none of
     # them can be written through. `getMut` is the mutable twin.
-    get: function {t: this.view i: u64} outx T.view is native
+    get: function {t: this.view i: i} outx T.view is native
     # the mutable element reference: writes through it reach the list, and it
     # excludes every other reference to the container. `get` is the readonly
     # twin (see iterate/iterateMut).
-    getMut: function {t: this.borrow i: u64} outx T.borrow is native
+    getMut: function {t: this.borrow i: i} outx T.borrow is native
     # replace element `i` of a ListRef, handing back the one displaced so its
     # ownership has somewhere to go
-    set: function {:this i: u64 val: T.take} out T is native
+    set: function {:this i: i val: T.take} out T is native
     # remove the last element of a ListRef and hand back its ownership
     pop: function {:this} out T is native
     # a LINEAR scan of the ListRef for an equal element. A list is ordered, not
@@ -96,11 +100,11 @@ ListRef: class is native as {
     capacity: function {t: this.view} out u64 is native
     # a borrowed readonly view over the whole ListRef. It pins the list, so it
     # must not outlive it
-    listView: function {t: this.view} outx ListView T is native
+    listView: function {t: this.view} outx (ListView T :i) is native
     # a borrowed readonly window over the elements in [from, to). It pins the
     # list, so it must not outlive it; `listView` is the whole-list case.
     # Panics when from > to or to > length
-    slice: function {t: this.view from: u64 to: u64} outx ListView T is native
+    slice: function {t: this.view from: i to: i} outx (ListView T :i) is native
     # the readonly walk: a SHARED receiver, so several may run at once and the
     # container stays readable throughout -- and the elements it yields are
     # readonly. `iterateMut` is the exclusive twin for writing through them.
@@ -128,26 +132,30 @@ ListVal: class is native as {
     # the VALUE element type of ListVal. Lowercase says valtype, so a binding of
     # it COPIES
     t: anyval.generic
+    # the type that indexes the ListVal: u64 unless the list says otherwise, and
+    # then an id space of its own (`ListVal astnode i: nodeid`), so a row is
+    # read with an id of that space and not with any other number
+    i: (idkey.generic default: u64)
 
     # append one element to a ListVal; it is COPIED in -- a valtype has no
     # ownership to transfer
     append: function {:this from: t} is native
     # insert one element into a ListVal at `at`, shifting the tail up; it is
     # COPIED in -- a valtype has no ownership to transfer
-    insert: function {:this from: t at: u64} is native
+    insert: function {:this from: t at: i} is native
     # append every element of another ListVal, which is taken whole rather than
     # element by element
     extend: function {:this from: type.take} is native
     # a COPY of the element -- cheap, and it cannot alias. That RETURN is what
     # separates this from `ListRef.get`, which hands back a view. The two share
     # one emitted C, whose receiver is const, and both say so
-    get: function {t: this.view i: u64} out t is native
+    get: function {t: this.view i: i} out t is native
     # the mutable element reference: a COMPOUND valtype's children are mutated
     # in place through it. Whole-element replacement is `set`.
-    getMut: function {t: this.borrow i: u64} outx t.borrow is native
+    getMut: function {t: this.borrow i: i} outx t.borrow is native
     # replace element `i` of a ListVal, handing back the one displaced so its
     # ownership has somewhere to go
-    set: function {:this i: u64 val: t} out t is native
+    set: function {:this i: i val: t} out t is native
     # remove the last element of a ListVal and hand back its ownership
     pop: function {:this} out t is native
     # a LINEAR scan of the ListVal for an equal element, by the element's own
@@ -169,11 +177,11 @@ ListVal: class is native as {
     capacity: function {t: this.view} out u64 is native
     # a borrowed readonly view over the whole ListVal. It pins the list, so it
     # must not outlive it
-    listView: function {t: this.view} outx ListViewVal t is native
+    listView: function {t: this.view} outx (ListViewVal t :i) is native
     # a borrowed readonly window over the elements in [from, to). It pins the
     # list, so it must not outlive it; `listView` is the whole-list case.
     # Panics when from > to or to > length
-    slice: function {t: this.view from: u64 to: u64} outx ListViewVal t is native
+    slice: function {t: this.view from: i to: i} outx (ListViewVal t :i) is native
     # append every element of a window to the end of this ListVal. The window
     # may be one over this very list: the elements are read before the append
     # writes, so `xs.extendView from: (xs.slice ...)` is well defined. VALTYPE
@@ -236,15 +244,19 @@ ListView: class is native as {
     # the REFERENCE element type of ListView. Uppercase says reftype, so a
     # binding of it MOVES
     T: AnyRef.generic
+    # the type that indexes the ListView: u64 unless the list says otherwise, and
+    # then an id space of its own (`ListVal astnode i: nodeid`), so a row is
+    # read with an id of that space and not with any other number
+    i: (idkey.generic default: u64)
 
     # the element at `i`, readonly. A ListView borrows its storage and never
     # owns it
-    get: function {t: this.view i: u64} outx T.view is native
+    get: function {t: this.view i: i} outx T.view is native
     # a narrower window over the same storage, spanning [from, to) of THIS
     # view. It pins this view as the view pins its list: the storage is the
     # list's, and a window that outlived the view could outlive the list's
     # lock. Panics when from > to or to > length
-    slice: function {t: this.view from: u64 to: u64} outx type is native
+    slice: function {t: this.view from: i to: i} outx type is native
     # the readonly walk over the window: a shared receiver, so several may run
     # at once and the window stays readable throughout. There is no mutable
     # twin -- a view is readonly, and `ListRef.iterateMut` is where writing
@@ -264,15 +276,19 @@ ListViewVal: class is native as {
     # the VALUE element type of ListViewVal. Lowercase says valtype, so a
     # binding of it COPIES
     t: anyval.generic
+    # the type that indexes the ListViewVal: u64 unless the list says otherwise, and
+    # then an id space of its own (`ListVal astnode i: nodeid`), so a row is
+    # read with an id of that space and not with any other number
+    i: (idkey.generic default: u64)
 
     # the element at `i`, readonly. A ListViewVal borrows its storage and never
     # owns it
-    get: function {t: this.view i: u64} out t is native
+    get: function {t: this.view i: i} out t is native
     # a narrower window over the same storage, spanning [from, to) of THIS
     # view. It pins this view as the view pins its list: the storage is the
     # list's, and a window that outlived the view could outlive the list's
     # lock. Panics when from > to or to > length
-    slice: function {t: this.view from: u64 to: u64} outx type is native
+    slice: function {t: this.view from: i to: i} outx type is native
     # the readonly walk over the window: a shared receiver, so several may run
     # at once and the window stays readable throughout. There is no mutable
     # twin -- a view is readonly, and `ListVal.iterateMut` is where writing
