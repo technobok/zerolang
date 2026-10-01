@@ -40129,33 +40129,35 @@ dataFieldIds: function {
     ids: ListVal u64
     nameIds: ListVal u64
 } is {
-    isFn: (
-        (st.reg.typetypeOf typeId: tid) ==
-        ztypes.ztypetype.functionType
-        # this type's conformance-marker label ids, collected once (the per-field
-        # probe below is a scan over these few ids, not the whole table)
-    )
+    isFn: (st.reg.typetypeOf typeId: tid) == ztypes.ztypetype.functionType
+    # this type's conformance-marker label ids, collected once (the per-field
+    # probe below is a scan over these few ids, not the whole table)
     mkIds8: ListVal u64
     if isFn.not then conformanceMarkerIds :st :tid ids: mkIds8
-    # collect the rows first: the fnptr probe below resolves a member
-    # declaration, which locks the whole ZTyping this iteration is holding
     ri: u64
     n_ri: st.typing.declRowSlots ownerTid: tid
     for ri < n_ri loop {
         rw_ri: st.typing.declRowAt ownerTid: tid membersOnly: true slot: ri
         ri = ri + 1
-        if rw_ri.keep when (memberIsDataField
-            :st
-            :tid
-            tcNameId: rw_ri.name
-            cto: rw_ri.tid
-            :isFn
-            mkIds: mkIds8
-        ) then {
+        if (dataFieldKeeps :st :tid row: rw_ri :isFn mkIds: mkIds8) then {
             ids.append rw_ri.tid
             nameIds.append rw_ri.name
         }
     }
+}
+
+# dataFieldKeeps -- whether member row `row` of `tid` is one of its data
+# fields: the one test dataFieldIds applies per row, for a walk over the
+# rows that needs no list of them.
+dataFieldKeeps: function {
+    st: zenv.ZSymbolTable.view
+    tid: ztypes.tid
+    row: ztyping.declrow
+    isFn: bool
+    mkIds: (ListVal u64).view
+} out bool is {
+    if row.keep.not then return false
+    return (memberIsDataField :st :tid tcNameId: row.name cto: row.tid :isFn :mkIds)
 }
 
 # dataFieldNames -- dataFieldIds with each field's text alongside its ids. The
@@ -40264,52 +40266,67 @@ missingCtorFields: function {
     if isCtor when (st.reg.isNativeOf tid: funcId) then return
     effId: funcId
     if isCtor then effId = ctorParamOwnerTid :ast :st :funcId
-    ids: ListVal u64
-    idsNm: ListVal u64
     # a WALK consumer: an is-block `function {..} out T` with no body is an
     # fn-ptr FIELD, and an unresolved member carries no type, so it is
     # invisible here rather than reported missing
     forceAllMembers :st :ast tid: effId
-    dataFieldIds :st tid: effId :ids nameIds: idsNm
-    pcnt: ids.length
-    if pcnt == 0 then return
+    # the data fields are walked row by row, as dataFieldIds selects them,
+    # with no list of them built
+    isFn: (st.reg.typetypeOf typeId: effId) == ztypes.ztypetype.functionType
+    mkIds: ListVal u64
+    if isFn.not then conformanceMarkerIds :st tid: effId ids: mkIds
     thisPnId: receiverParamNameOf :st tid: effId
     vpos: u64
-    i: u64
-    for i < pcnt loop {
-        pcid: ids.get :i
-        pnameId: idsNm.get :i
-        i = i + 1
-        isRecv: (
-            pnameId ==
-            zast.names.wkThis.u64 or
-            (
-                thisPnId.isZero.not and
-                (
-                    pnameId ==
-                    thisPnId.u64
-                    # THE RECEIVER IS REQUIRED WHENEVER NOTHING ELSE SUPPLIED IT, and it is
-                    # the first declared parameter, so it also takes positional slot 0.
-                    # Skipping it unconditionally credited that slot to the NEXT parameter,
-                    # which is how `point.sub p` -- receiver given, `a` omitted -- ran with
-                    # `a` at zero instead of being reported.
-                )
-            )
-        )
-        if isRecv when recvImplicit then continue
+    ri: u64
+    nr: st.typing.declRowSlots ownerTid: effId
+    for ri < nr loop {
+        row: st.typing.declRowAt ownerTid: effId membersOnly: true slot: ri
+        ri = ri + 1
+        if (dataFieldKeeps :st tid: effId :row :isFn :mkIds).not then continue
+        pcid: row.tid
+        pnameId: row.name
+        # THE RECEIVER IS REQUIRED WHENEVER NOTHING ELSE SUPPLIED IT, and it is
+        # the first declared parameter, so it also takes positional slot 0.
+        # Skipping it unconditionally credited that slot to the NEXT parameter,
+        # which is how `point.sub p` -- receiver given, `a` omitted -- ran with
+        # `a` at zero instead of being reported.
+        if recvImplicit when (isReceiverParamName :pnameId :thisPnId) then continue
         posI: vpos
         vpos = vpos + 1
-        if isCtor when (ctorFieldIsFilled
-            :st
-            ownerTid: effId
-            fieldTid: (ztypes.tid.create from: pcid.u64)
-        ) then continue
         pnId: zast.nameid.create from: pnameId.u32.orPanic
-        if (st.typing.declHasDefaultId parentTypeId: effId nameId: pnId) then continue
-        if (ctorArgProvided :provided :posCount :posI nameId: pnameId) then continue
+        if (fieldSupplied :st :isCtor :effId :pcid :pnId :provided :posCount :posI) then continue
         missingNames.append (zast.nameTextCopy :ast ref: pnId)
         missingIds.append pcid
     }
+}
+
+# isReceiverParamName -- the parameter named `pnameId` is the receiver: `this`,
+# or the name the method gave its receiver parameter (`thisPnId`, 0 for none).
+isReceiverParamName: function {pnameId: u64 thisPnId: zast.nameid} out bool is {
+    if pnameId == zast.names.wkThis.u64 then return true
+    return thisPnId.isZero.not and (pnameId == thisPnId.u64)
+}
+
+# fieldSupplied -- a required field/param of `effId` that needs no argument
+# here: a construction's field filled some other way, one with a default, or
+# one the call's labels or positional count already cover.
+fieldSupplied: function {
+    st: zenv.ZSymbolTable
+    isCtor: bool
+    effId: ztypes.tid
+    pcid: u64
+    pnId: zast.nameid
+    provided: (ListVal zast.nameid).view
+    posCount: u64
+    posI: u64
+} out bool is {
+    if isCtor when (ctorFieldIsFilled
+        :st
+        ownerTid: effId
+        fieldTid: (ztypes.tid.create from: pcid.u64)
+    ) then return true
+    if (st.typing.declHasDefaultId parentTypeId: effId nameId: pnId) then return true
+    return (ctorArgProvided :provided :posCount :posI nameId: pnId.u64)
 }
 
 # receiverParamNameOf -- the pool id of a method's receiver-parameter name, 0
