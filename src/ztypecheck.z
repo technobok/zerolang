@@ -21572,7 +21572,10 @@ mintCollectionMethod: function {
 # specLookup -- the existing specialization of `templateId` over the ordered
 # concrete arguments `args`, read straight off the id trie getOrMintSpec builds.
 # Lookup only: it never mints, so a caller can ask whether an instance was
-# demanded. 0 when any argument is unset or the path is not in the trie.
+# demanded. Parameters past `args` take their defaults, as the written
+# application `(ListVal u8)` does; 0 when any argument is unset, an omitted
+# parameter has no recorded default, or the path is not in the trie -- a walk
+# that stops at an interior node names no instance.
 specLookup: function {
     st: zenv.ZSymbolTable.view
     templateId: ztypes.tid
@@ -21599,6 +21602,38 @@ specLookup: function {
         }
     }
     if ok.not then return (ztypes.tid.create from: 0)
+    if (st.reg.isTrieNodeOf tid: cur) then return (specLookupDefaults :st :templateId node: cur from: args.length)
+    return cur
+}
+
+# specLookupDefaults -- specLookup past the written arguments: from the trie
+# node `node` the walk reached, one level per remaining parameter of
+# `templateId`, each keyed on the type its default named. 0 when one has no
+# recorded default or its level is missing.
+specLookupDefaults: function {
+    st: zenv.ZSymbolTable.view
+    templateId: ztypes.tid
+    node: ztypes.tid
+    # the first parameter no argument was written for
+    from: u64
+} out ztypes.tid is {
+    tdecl: declOfTypeId :st tid: templateId
+    cur: node
+    pi: from
+    for pi < (st.reg.genericParamCountOf :tdecl) loop {
+        d: st.reg.genericParamDefaultTidAt :tdecl i: pi
+        if d.isZero then return ztypes.tid
+        n: st.reg.getGenericChild parentId: cur key: d.u64
+        match (
+            n
+        ) case some then {
+            cur = n
+        } case none then {
+            return ztypes.tid
+        }
+        pi = pi + 1
+    }
+    if (st.reg.isTrieNodeOf tid: cur) then return ztypes.tid
     return cur
 }
 
@@ -44048,6 +44083,9 @@ defaultTypeTid: function {
     if (st.reg.isPartialOf tid: (ztypes.tid.create from: dt)) then {
         return (defaultOverParams :st :ast :unitDecl :tdecl :dt :subs :valSubs :sfx :grey)
     }
+    # names no parameter: every instance takes this type, which the read-only
+    # lookup completes an argument list with
+    st.reg.setGenericParamDefaultTid :tdecl paramName: pn tid: (ztypes.tid.create from: dt)
     return dt
 }
 

@@ -982,6 +982,11 @@ ParamDesc: class {
     # the canonical GENERIC_PARAM type minted for it during resolution; 0 until
     # then
     paramTid: tid
+    # the type its `default:` named, recorded when an instance first took it --
+    # only for a default that names no other parameter, so it is the same in
+    # every instance; 0 until then and for any other default. The read-only
+    # instance lookup (specLookup) completes an argument list with it.
+    defaultTid: tid
 }
 
 # a template's generic parameters in declaration order.
@@ -1839,6 +1844,7 @@ ZTypeRegistry: class {
                             :defaultNode
                         )
                         paramTid: tid
+                        defaultTid: tid
                     )
                 }
             } case none then null
@@ -1856,6 +1862,7 @@ ZTypeRegistry: class {
                     :defaultNode
                 )
                 paramTid: tid
+                defaultTid: tid
             )
             this.genericParams.set key: tdecl value: np
         }
@@ -1947,6 +1954,52 @@ ZTypeRegistry: class {
             return plo.params.length
         } case none then null
         return 0
+    }
+
+    # setGenericParamDefaultTid -- record the type `paramName`'s default named,
+    # for a default that names no other parameter of `tdecl`.
+    setGenericParamDefaultTid: function {
+        this: this.view
+        # the template the parameter belongs to
+        tdecl: declid
+        # the parameter whose default was resolved
+        paramName: zast.nameid
+        # the type the default named
+        tid: tid
+    } is {
+        po: this.paramOrdinalOf :tdecl :paramName
+        match (
+            po
+        ) case some then {
+            plo: this.genericParams.get key: tdecl
+            match (
+                plo
+            ) case some then {
+                v: tid
+                pdx: plo.params.getMut i: po
+                pdx.defaultTid = v
+            } case none then {
+                (panic
+                    msg: "setGenericParamDefaultTid: the declaration owns an ordinal for this parameter but no parameter list"
+                )
+            }
+        } case none then {
+            (panic
+                msg: "setGenericParamDefaultTid: recording a default under a declaration that does not own the parameter"
+            )
+        }
+    }
+
+    # genericParamDefaultTidAt -- the type the declaration's `i`th parameter's
+    # default named, as setGenericParamDefaultTid recorded it; 0 when none was.
+    genericParamDefaultTidAt: function {this: this.view tdecl: declid i: u64} out tid is {
+        plo: this.genericParams.get key: tdecl
+        match (
+            plo
+        ) case some then {
+            if i < plo.params.length then return (plo.params.get :i).defaultTid
+        } case none then null
+        return tid
     }
 
     # genericParamNameAt -- the name of the declaration's `i`th parameter, in
