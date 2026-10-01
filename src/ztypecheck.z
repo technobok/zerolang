@@ -3029,8 +3029,7 @@ defaultsInstance: function {
     subs: IdMapV zast.nameid v: u64
     valSubs: IdMapV zast.nameid v: u64
     sfx: String
-    if (fillGenericDefaults :st :ast :unitDecl :tdecl :subs :valSubs :sfx
-    ).not then return ztypes.tid
+    if (fillGenericDefaults :st :ast :tdecl :subs :valSubs :sfx).not then return ztypes.tid
     if (subs.length + valSubs.length) != (st.reg.genericParamCountOf :tdecl) then return ztypes.tid
     return (getOrMintSpec
         :st
@@ -3789,7 +3788,6 @@ anyUnknownParamLabel: function {
 completeApplication: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    unitDecl: ztypes.declid
     tplId: ztypes.tid
     arguments: (ListVal u32).view
     typeSubs: (IdMapV zast.nameid v: u64)
@@ -3800,8 +3798,7 @@ completeApplication: function {
 } out bool is {
     if (refuseNonGenericApplication :st :ast :tplId :at) then return false
     validateMonoRefLabels :ast :st :arguments :tplId
-    if (fillApplicationDefaults :st :ast :unitDecl :tplId :typeSubs valSubs: valSubsR :sfx :firstA
-    ).not then {
+    if (fillApplicationDefaults :st :ast :tplId :typeSubs valSubs: valSubsR :sfx :firstA).not then {
         return false
     }
     if (anyUnknownParamLabel :st :ast :arguments :tplId) then return true
@@ -3816,7 +3813,6 @@ completeApplication: function {
 fillApplicationDefaults: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    unitDecl: ztypes.declid
     tplId: ztypes.tid
     typeSubs: (IdMapV zast.nameid v: u64)
     valSubs: (IdMapV zast.nameid v: u64)
@@ -3832,7 +3828,7 @@ fillApplicationDefaults: function {
             value: firstA.u64
         )
     }
-    return (fillGenericDefaults :st :ast :unitDecl :tdecl subs: typeSubs :valSubs :sfx)
+    return (fillGenericDefaults :st :ast :tdecl subs: typeSubs :valSubs :sfx)
 }
 
 # templateHasDefaults -- one of the template's parameters declares a default.
@@ -3984,7 +3980,6 @@ mintMonoRefParts: function {
         if (completeApplication
             :st
             :ast
-            :unitDecl
             :tplId
             :arguments
             :typeSubs
@@ -21602,8 +21597,8 @@ specLookup: function {
         }
     }
     if ok.not then return (ztypes.tid.create from: 0)
-    if (st.reg.isTrieNodeOf tid: cur) then return (specLookupDefaults :st :templateId node: cur from: args.length)
-    return cur
+    if (st.reg.isTrieNodeOf tid: cur).not then return cur
+    return (specLookupDefaults :st :templateId node: cur from: args.length)
 }
 
 # specLookupDefaults -- specLookup past the written arguments: from the trie
@@ -23804,6 +23799,85 @@ mintSpecUnderTemplate: function {
     return mid8
 }
 
+# defaultsTailLength -- how much of an instance's label its trailing default
+# arguments' components take, which the label leaves out: `ListVal_u8`, not
+# `ListVal_u8_u64`, the name a runtime fragment spells whatever index
+# parameter the list has. From
+# the last parameter back, while the key is the type its parameter's default
+# named (defaultTypeTid recorded it) and the label ends in that type's
+# component; never the first parameter's, so an instance is not labelled as
+# its template is (`Holder` over its default is `Holder_i64`). A label whose
+# builder wrote the components in another order keeps them.
+defaultsTailLength: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    scope: ztypes.declid
+    tk8: ztypes.declid
+    keys8: (ListVal u64).view
+    keyIsVal8: (ListVal bool).view
+    label: StringView
+} out u64 is {
+    end: label.length
+    ki: keys8.length
+    for ki > 1 loop {
+        ki = ki - 1
+        if (keyIsVal8.get i: ki) then break
+        d: st.reg.genericParamDefaultTidAt tdecl: tk8 i: ki
+        if d.isZero or ((keys8.get i: ki) != d.u64) then break
+        cut: defaultComponentLength :st :ast :scope :tk8 :d head: (label.substring from: 0 to: end)
+        if cut == 0 then break
+        end = end - cut
+    }
+    return label.length - end
+}
+
+# defaultComponentLength -- the length of the `_<type>` component a default
+# `d` adds that `head` ends in, spelled as the instantiating scope or the
+# declaration names it; 0 when it ends in neither.
+defaultComponentLength: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    scope: ztypes.declid
+    tk8: ztypes.declid
+    d: ztypes.tid
+    head: StringView
+} out u64 is {
+    c1: "_\{monoValName :st :scope :ast tid: d}"
+    if (head.endsWith suffix: c1) then return c1.length
+    c2: "_\{monoValName :st scope: tk8 :ast tid: d}"
+    if (head.endsWith suffix: c2) then return c2.length
+    return 0
+}
+
+# bindSpecDefaults -- getOrMintSpec's arguments completed for a template with
+# defaults, so its instance keys on EVERY parameter: `fallbackArg` binds the
+# first unbound parameter with no default (the one argument an internal mint
+# such as a comprehension's list passes), and every other unbound parameter
+# takes its default, adding its label component to `sfx`. A default refused
+# is reported at the default and leaves its parameter unbound.
+bindSpecDefaults: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    tk8: ztypes.declid
+    pnames8: (ListVal zast.nameid).view
+    subs: (IdMapV zast.nameid v: u64)
+    valSubs: (IdMapV zast.nameid v: u64)
+    fallbackArg: u64
+    sfx: String
+} is {
+    if fallbackArg > 0 then {
+        for each pn: pnames8 loop {
+            if (subs.has key: pn).not when (valSubs.has key: pn).not when (
+                (st.reg.genericParamConstraintOf tdecl: tk8 paramName: pn).defaultNode == 0
+            ) then {
+                subs.set key: pn value: fallbackArg
+                break
+            }
+        }
+    }
+    fillGenericDefaults :st :ast tdecl: tk8 :subs :valSubs :sfx
+}
+
 # buildSpecTrieKeys -- the arguments that key this spec's level of the id trie, in
 # the template's DECLARATION order. Answers false when a key cannot be settled, in
 # which case the trie is not consulted at all.
@@ -24140,6 +24214,11 @@ getOrMintSpec: function {
             if prnmv8.isZero.not then valSubs.set key: prnmv8 value: evv8
         } case none then null
     }
+    # the label components the defaults add, after the caller's own
+    dsfx8: String
+    if (templateHasDefaults :st tdecl: tk8) then {
+        bindSpecDefaults :st :ast :tk8 :pnames8 :subs :valSubs :fallbackArg sfx: dsfx8
+    }
     keys8: ListVal u64
     keyIsVal8: ListVal bool
     trieOk8: (buildSpecTrieKeys
@@ -24183,7 +24262,11 @@ getOrMintSpec: function {
     }
     # composed only past the trie, because a HIT never reads it: the label is
     # decided once, where the spec is minted
-    mn8: "\{st.reg.nameOf tid: templateId}\{sfx}"
+    mn8: "\{st.reg.nameOf tid: templateId}\{sfx}\{dsfx8}"
+    if trieOk8 then {
+        cut8: defaultsTailLength :st :ast :scope :tk8 :keys8 :keyIsVal8 label: mn8.stringView
+        if cut8 > 0 then mn8 = "\{mn8.substring from: 0 to: mn8.length - cut8}"
+    }
     idSubs8: IdMapV u64 v: u64
     if trieOk8 then buildSpecIdSubs :st :pnames8 :keys8 :idSubs8 :tk8
     # A generic-parameter argument makes the spec partial -- and so does a
@@ -25224,7 +25307,7 @@ inferGenericConstruction: function {
     )
     st.popDiscard
     # a parameter no argument names takes its default
-    if (fillGenericDefaults :st :ast :unitDecl tdecl: tk :subs valSubs: valueSubs :sfx).not then {
+    if (fillGenericDefaults :st :ast tdecl: tk :subs valSubs: valueSubs :sfx).not then {
         return (ztypes.tid.create from: 0)
     }
     if (constructionParamMissing
@@ -25939,7 +26022,6 @@ genericTypeConstruction: function {
     if (fillApplicationDefaults
         :st
         :ast
-        :unitDecl
         :tplId
         typeSubs: subs
         valSubs: valueSubs
@@ -28439,8 +28521,7 @@ templateArmBase: function {
     subs: IdMapV zast.nameid v: u64
     valSubs: IdMapV zast.nameid v: u64
     sfx: String
-    if (fillGenericDefaults :st :ast :unitDecl :tdecl :subs :valSubs :sfx
-    ).not then return ztypes.tid
+    if (fillGenericDefaults :st :ast :tdecl :subs :valSubs :sfx).not then return ztypes.tid
     pi: u64
     for pi < (st.reg.genericParamCountOf :tdecl) loop {
         pn: st.reg.genericParamNameAt :tdecl i: pi
@@ -40932,13 +41013,20 @@ standInNeedsBox: function {
 
 # specWrittenName -- a spec as a program writes it: its name, or for an
 # instance of a generic spec the application that names it, `(Getter v: i64)`.
+# Trailing arguments that are their parameter's default are left out, as the
+# instance's label leaves them (defaultsTailLength): `(ListVal t: u8)`.
 specWrittenName: function {st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.tid} out String is {
     org: st.reg.genericOriginOf :tid
     if org.isZero then return (st.reg.nameOf :tid)
     otid: ztypes.tid.create from: org.u64
     r: "(\{specWrittenName :st :ast tid: otid}"
-    pns: st.reg.genericParamNamesOf tdecl: (declOfTypeId :st tid: otid)
+    tdecl: declOfTypeId :st tid: otid
+    pns: st.reg.genericParamNamesOf :tdecl
     n: st.reg.genericArgCount specId: tid
+    for n > 1 loop {
+        if (argIsItsDefault :st :tdecl spec: tid ordinal: n - 1).not then break
+        n = n - 1
+    }
     i: u64
     for i < n loop {
         a: st.reg.genericArgAt specId: tid ordinal: i
@@ -40954,6 +41042,20 @@ specWrittenName: function {st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.
     }
     r.append ")"
     return r
+}
+
+# argIsItsDefault -- whether the spec's `ordinal`th argument is a type its
+# parameter's default named (one recorded by defaultTypeTid).
+argIsItsDefault: function {
+    st: zenv.ZSymbolTable.view
+    tdecl: ztypes.declid
+    spec: ztypes.tid
+    ordinal: u64
+} out bool is {
+    if (st.reg.genericArgIsValueAt specId: spec :ordinal) then return false
+    d: st.reg.genericParamDefaultTidAt :tdecl i: ordinal
+    if d.isZero then return false
+    return (st.reg.genericArgAt specId: spec :ordinal) == d.u64
 }
 
 # reportOwnedStandIn -- a conformer written where the value is owned. The
@@ -43938,7 +44040,6 @@ checkResolvedMethodCall: function {
 fillGenericDefaults: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    unitDecl: ztypes.declid
     tdecl: ztypes.declid
     subs: (IdMapV zast.nameid v: u64)
     valSubs: (IdMapV zast.nameid v: u64)
@@ -43949,8 +44050,7 @@ fillGenericDefaults: function {
     for pi < (st.reg.genericParamCountOf :tdecl) loop {
         pn: st.reg.genericParamNameAt :tdecl i: pi
         pi = pi + 1
-        if (fillOneDefault :st :ast :unitDecl :tdecl :pn :subs :valSubs :sfx :grey
-        ).not then return false
+        if (fillOneDefault :st :ast :tdecl :pn :subs :valSubs :sfx :grey).not then return false
     }
     return true
 }
@@ -43962,7 +44062,6 @@ fillGenericDefaults: function {
 fillOneDefault: function {
     st: zenv.ZSymbolTable
     ast: Ast
-    unitDecl: ztypes.declid
     tdecl: ztypes.declid
     pn: zast.nameid
     subs: (IdMapV zast.nameid v: u64)
@@ -43985,11 +44084,15 @@ fillOneDefault: function {
         return false
     }
     grey.add item: pn
+    # the default resolves where it is written: in the declaration's own unit,
+    # not the instantiating one's -- a program's own `u64` record is not the
+    # `u64` collections.ListVal defaults its index to
+    dUnit: unitRootOfDecl :st declId: tdecl
     if cd.numKind.has then {
         na: (numericGenericArg
             :ast
             :st
-            :unitDecl
+            unitDecl: dUnit
             scope: tdecl
             :tdecl
             param: pn
@@ -43998,7 +44101,7 @@ fillOneDefault: function {
         )
         return (bindNumericArg :sfx :valSubs param: pn :na :cd)
     }
-    dt: defaultTypeTid :st :ast :unitDecl :tdecl :pn :dn :subs :valSubs :sfx :grey
+    dt: defaultTypeTid :st :ast unitDecl: dUnit :tdecl :pn :dn :subs :valSubs :sfx :grey
     if dt == 0 then return false
     # the default is a member of the parameter's constraint, checked where it
     # is written; one that is not stops the instance there
@@ -44066,8 +44169,7 @@ defaultTypeTid: function {
     # another parameter of the same declaration: its binding, filled first
     other: st.reg.genericParamNameOfTid :tdecl ptid: (ztypes.tid.create from: dt)
     if other.isZero.not then {
-        if (fillOneDefault :st :ast :unitDecl :tdecl pn: other :subs :valSubs :sfx :grey
-        ).not then return 0
+        if (fillOneDefault :st :ast :tdecl pn: other :subs :valSubs :sfx :grey).not then return 0
         ov: (subs.get key: other).or d: 0
         if ov == 0 then {
             (reportDefaultRefused
@@ -44110,8 +44212,7 @@ defaultOverParams: function {
         qi = qi + 1
         if (typeMentionsParam :st :tdecl tid: (ztypes.tid.create from: dt) param: q
         ).not then continue
-        if (fillOneDefault :st :ast :unitDecl :tdecl pn: q :subs :valSubs :sfx :grey
-        ).not then return 0
+        if (fillOneDefault :st :ast :tdecl pn: q :subs :valSubs :sfx :grey).not then return 0
         qv: (subs.get key: q).or d: 0
         qt: (st.reg.genericParamTidOf :tdecl paramName: q).or d: 0
         if qv > 0 when qt > 0 then idSubs.set key: qt value: qv
@@ -44247,7 +44348,7 @@ mintSumArmInstance: function {
     }
     vsH: IdMapV zast.nameid v: u64
     dsfx: String
-    if (fillGenericDefaults :st :ast :unitDecl :tdecl subs: subs2 valSubs: vsH sfx: dsfx).not then {
+    if (fillGenericDefaults :st :ast :tdecl subs: subs2 valSubs: vsH sfx: dsfx).not then {
         return (callleg handled: true tid: ztypes.tid)
     }
     if (refuseUninferredArmParam :st :ast :call :dtp :tdecl :armId :isNullPay subs: subs2) then {
@@ -47249,7 +47350,7 @@ checkGenericCall: function {
     # the call does not write it
     dvs: IdMapV zast.nameid v: u64
     dsfx: String
-    if (fillGenericDefaults :st :ast :unitDecl tdecl: gtk4 :subs valSubs: dvs sfx: dsfx).not then {
+    if (fillGenericDefaults :st :ast tdecl: gtk4 :subs valSubs: dvs sfx: dsfx).not then {
         return (ztypes.tid.create from: 0)
     }
     allOk = (bindCallParams
