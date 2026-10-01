@@ -1046,6 +1046,21 @@ emitNumericCast: function {
     )
 }
 
+# appendUpper -- `text` upper-cased (ASCII), appended to `buf`.
+appendUpper: function {buf: String.borrow text: StringView} is {
+    i: u64
+    n: text.length
+    for i < n loop {
+        b: (text.byteAt :i).or d: 0
+        if b >= 97 when b <= 122 then {
+            buf.appendByte b: b - 32
+        } else {
+            buf.appendByte :b
+        }
+        i = i + 1
+    }
+}
+
 # cUpperOf -- ASCII upper-case for tag spellings.
 cUpperOf: function {text: StringView} out String is {
     buf: String
@@ -7362,7 +7377,6 @@ emitInstanceMethodBody: function {
     # supplied as the call's one unlabelled argument has already taken slot 0
     posStart: u64
 } out String is {
-    mcn: ctxCname :ctx tid: (ztypes.tid.create from: mco.u64)
     pids: ListVal u64
     pidsNm: ListVal u64
     recFieldIds :symtab tid: (ztypes.tid.create from: mco.u64) ids: pids nameIds: pidsNm
@@ -7427,7 +7441,11 @@ emitInstanceMethodBody: function {
     oprefix: orderFinish :ctx st: ord
     args: orderJoinSlots :ctx st: ord count: pn
     orderEnd :ctx st: ord
-    return (orderClose prefix: oprefix callee: mcn.stringView args: args.stringView)
+    return (orderClose
+        prefix: oprefix
+        callee: (ctxCnameView :ctx tid: (ztypes.tid.create from: mco.u64))
+        args: args.stringView
+    )
 }
 
 # methodArgPositions -- for each declared parameter of a method, where its
@@ -13136,7 +13154,6 @@ emitUserFnCall: function {
     call: zast.callrow.view
     fid: ztypes.tid
 } out String is {
-    fc: ctxCname :ctx tid: fid
     fpIds: ListVal u64
     fpIdsNm: ListVal u64
     recFieldIds :symtab tid: fid ids: fpIds nameIds: fpIdsNm
@@ -13214,7 +13231,7 @@ emitUserFnCall: function {
         pp = pp + 1
     }
     orderEnd :ctx st: ord
-    return (orderClose prefix: oprefix callee: fc.stringView args: args.stringView)
+    return (orderClose prefix: oprefix callee: (ctxCnameView :ctx tid: fid) args: args.stringView)
 }
 
 # orderUserFnArg -- one written argument of a user-function call, built and
@@ -29335,10 +29352,10 @@ variantTag: function {
     tid: ztypes.tid
     arm: StringView
 } out String is {
-    vn: regNameView :symtab :tid
-    vu: cUpperOf text: vn
-    au: cUpperOf text: arm
-    t: "Z_\{vu}_TAG_\{au}"
+    t: "Z_".string
+    appendUpper buf: t text: (regNameView :symtab :tid)
+    t.append "_TAG_"
+    appendUpper buf: t text: arm
     return t
 }
 
