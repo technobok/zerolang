@@ -483,3 +483,51 @@ argument) was considered when #~"and" / #~"or" landed and not built: it
 adds a second, control-flow spelling of a boolean operator for a shape
 the tree writes rarely. Open: whether the repeated bodies that appear
 justify it, and what it would be called.
+
+Decided 2026-10-01: the language gets no short-circuit #_*"operators" --
+an operator is a call, and a call evaluates every argument. If the clause
+is built, its candidate spelling is #~"else when", the disjunction twin of
+#~"when": #~"if a else when b then x" runs #~"x" when #~"a" held, and
+otherwise asks #~"b" -- #~"b" runs only when #~"a" did not hold.
+
+#code language=zerolang: """
+  # today: the body twice, or two statements
+  if s.isEmpty then return true
+  if ((s.byteAt 0).or d: 0) == 32 then return true
+
+  # the clause, if it is built
+  if s.isEmpty else when ((s.byteAt 0).or d: 0) == 32 then return true
+  """
+
+Still open: whether it is built at all.
+
+#--: a view pins its owner
+
+A view (#~".view", or the #~"outx" result of a #~"get") locks the place it
+was read from for as long as it lives, and a call that lends the whole
+owner -- #~"ctx", #~"ast", #~"st" -- is then refused while it does. Code
+that reads one table and then calls with the context it lives in has
+three ways out today, and all three are in the compiler's source:
+
+#ul:
+  [#*: end the view before the call -- a bare block around it, or
+  #~"name.drop" after its last use. #~".drop" is the spelling (decided
+  2026-10-01, and the bare blocks that only scoped a pin were rewritten
+  to it);]
+  [#*: copy what was read (#~".copy"), so nothing pins;]
+  [#*: split the owner. Sibling fields lock independently -- a view of
+  #~"o.tables" does not conflict with lending #~"o.state" mutably -- so a
+  structure that is set up once and then only read (name tables, the
+  natives table, the cname table) can live beside the state that changes,
+  and a function that needs both takes them as two parameters.]
+
+The third is the structural answer, decided as the pattern for new code.
+#~".hold" keeps its meaning: the slot may be replaced, its contents may
+not.
+
+Measured on the emitter's #~"Ctx" (2026-10-02): 17 places copy a field to
+dodge the whole-#~"ctx" lend, against 842 functions that take #~"ctx". The
+split would rewrite every one of those signatures to remove 17 copies, so
+it was not made there. Open: whether a later restructuring of the emitter
+takes it on, and whether the checker's #~"st" / #~"ast" pair, which sees
+the same pattern, is worth it on its own.
