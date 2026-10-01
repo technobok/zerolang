@@ -1999,7 +1999,10 @@ perf: $(PERFBIN)
 # +279 the emitter's origin and dispatch tables, zfmt's slot ranks and zdoc's
 # print modes are data blocks: 0 behaviour, +279 source (an element read
 # resolves through its block).
-ALLOC_BASELINE := 2824843
+#
+# +681 a data element may not take the name of one of the block's own members:
+# 0 behaviour, +681 source.
+ALLOC_BASELINE := 2825524
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

@@ -9326,6 +9326,20 @@ dataElemTypeName: function {
     return (ast.internString text: "i64")
 }
 
+# dataOwnMember -- what a data block's own member of this name is, or "" when
+# the name is free for an element: `tag` its discriminator (synthesised under
+# that name), `length` its element count, `index` its run-time element read and
+# `array` its copy into a sized array. An element of one of these names is
+# refused where it is written.
+dataOwnMember: function {ast: Ast.view nameId: zast.nameid} out String is {
+    if nameId.isZero then return "".string
+    if nameId == zast.names.wkTag then return "discriminator".string
+    if nameId == zast.names.wkLength then return "element count".string
+    if nameId == (nameIdOf :ast name: "index") then return "run-time element read".string
+    if nameId == (nameIdOf :ast name: "array") then return "copy into a sized array".string
+    return "".string
+}
+
 # resolveData -- resolve a data-block definition into a DATA type: one child per
 # element (the element's own label when present, else its ordinal), all of the
 # block's single element type, plus a `tag` child typed `tag__{element-type}`.
@@ -9390,23 +9404,25 @@ resolveData: function {
                 ord: "\{ordinal}"
                 memberIdAt = ast.internString text: ord.stringView
             }
-            # the block's own discriminator is synthesised below under this
-            # name, so an element claiming it would shadow the tag and leave
-            # the tagged type reading an element as its discriminator.
-            if memberIdAt == zast.names.wkTag then {
-                tm: "a data element may not be named 'tag'".string
-                th: "`tag` is the block's own discriminator: rename the element".string
-                en: String
+            # an element named for one of the block's own members would shadow
+            # it, or be shadowed by it -- either way a read of the name would
+            # not mean what it says
+            ownM: dataOwnMember :ast nameId: memberIdAt
+            if ownM.length > 0 then {
+                elN: ast.nodes.get i: elId.u64
+                emN: zast.nameTextAt :ast ref: memberIdAt
+                tm: "a data element may not be named '\{emN}'"
+                th: "`\{emN}` is the block's own \{ownM}: rename the element"
                 (addErrorH
                     :st
-                    nodeid: dnode.nid
-                    lineno: dnode.lineno
-                    colno: dnode.colno
+                    nodeid: (nodeId n: elN)
+                    lineno: (nodeLine n: elN)
+                    colno: (nodeCol n: elN)
                     e: zast.err.typeError
                     msg: tm
-                    note: en
+                    note: String
                     hint: th
-                    width: 4
+                    width: emN.length.u32.orPanic
                 )
             }
             (st.typing.setMemberType
