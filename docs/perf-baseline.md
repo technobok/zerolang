@@ -236,7 +236,23 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-10-01 | a9910efd | [recovery P1: four bugs, two of them allocations](#r-a9910efd) | 0.79s | -- | 120MB / -- | 147 / 369 / 331 (total 855) | 2,792,336 | 367MB | 31.0s (2,280 cases) | 153,076 |
 | 2026-10-01 | 4e9a2473 | [recovery P2: the quadratic extern scan, and the interner](#r-4e9a2473) | 0.80s | -- | 119MB / -- | 86 / 386 / 339 (total 811) | 2,796,894 | 369MB | -- | 153,245 |
 | 2026-10-01 | 9e05d9e3 | [recovery P3: the allocation sites the census ranked first](#r-9e05d9e3) | 0.69s | -- | 119MB / -- | 79 / 331 / 283 (total 693) | 2,245,533 | 350MB | -- | 153,505 |
+| 2026-10-01 | 957d2327 | [recovery P4: a part that only reads takes no ordered temp](#r-957d2327) | 0.70s | -- | 121MB / -- | 84 / 336 / 279 (total 729) | 2,189,755 | 350MB | -- | 153,622 |
 
+
+<a id="r-957d2327"></a>
+**Recovery P4: a part that only reads takes no ordered temp** (`6b62b9a3`
+fixture, then `957d2327`). A part keeps its `_oN` temp unless it and every
+later part only read (Q1).
+- The compiler emitting itself: 29,530 -> 9,388 temps, 163,375 -> 153,306
+  lines.
+- The fixed input's C: 43,513 -> 33,217 lines and 10,296 -> 0 temps, now
+  under the 34,786 lines the 09-11 compiler wrote before the order
+  guarantee existed.
+- The compiler's own work: 7,338M -> 7,310M instructions, and 55,778 fewer
+  allocations (the temps it no longer builds).
+
+The shipped driver's C is emitted by the seed, so the driver itself gets
+the smaller C at the next seed bump.
 
 <a id="r-9e05d9e3"></a>
 **Recovery P3: the allocation sites the census ranked first** (`a00888c2` ->
