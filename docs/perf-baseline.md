@@ -234,7 +234,46 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-09-11 | 43e533e1 | [the allocation ratchet joins ci, and the drift comes out](#r-alloc-gate-recovery) | 0.56s | -- | 100MB / -- | 141 / 226 / 211 (total 578) | 2,161,395 | 309MB | -- | 124,541 |
 | 2026-10-01 | 426b1224 | [re-baseline after 669 commits: a heavier input, not a slower compiler](#r-426b1224) | 0.84s | 0.90s | 119MB / 98MB | 153 / 361 / 330 (total 844) | 2,825,524 | 367MB | 31.0s (2,275 cases) | 152,955 |
 | 2026-10-01 | a9910efd | [recovery P1: four bugs, two of them allocations](#r-a9910efd) | 0.79s | -- | 120MB / -- | 147 / 369 / 331 (total 855) | 2,792,336 | 367MB | 31.0s (2,280 cases) | 153,076 |
+| 2026-10-01 | 4e9a2473 | [recovery P2: the quadratic extern scan, and the interner](#r-4e9a2473) | 0.80s | -- | 119MB / -- | 86 / 386 / 339 (total 811) | 2,796,894 | 369MB | -- | 153,245 |
 
+
+<a id="r-4e9a2473"></a>
+**Recovery P2: the quadratic extern scan, and the interner** (`120767eb` ->
+`4e9a2473`). Instructions 9,018M -> 7,649M (-15.2%); the fixed input
+4,420M -> 2,655M (-40%); allocations +4,558, all of it the new code itself
+or a per-unit table.
+
+| commit | instructions (-O2 driver, same source) | what |
+| --- | --- | --- |
+| `5c04bfb1` | -958M (-16.4%) | the extern walk asks "is it bound" by index (EwScope) |
+| `bf54be1b` | -28M (-0.6%) | a literal's pool index is a map lookup |
+| `580f1e90`, `18a1233b` | -- | `StringView.fastHash`, then the seed that knows it |
+| `1471c35a` | -80M (-1.6%) | the name pool hashes with fastHash and compares stored hashes first |
+| `4e9a2473` | -43M (-0.9%) | a word is interned once and classified once per distinct text |
+
+**The quadratic was most of it.** `ewEmit` scanned every bound name for each
+name reference while collecting a unit's externs. The 39k-line fixed input
+is one file, so it paid the most: -40%. A 104k-line one-file program now
+parses in 230ms, down from 1,744ms.
+
+**Wall moved less than instructions.** 0.80s, measured with the load
+average still near 4 after ci. The scan that went was a tight linear loop
+with a high IPC, so it cost fewer cycles than its instruction count
+suggested.
+
+**Measured and not done.** Each was profiled at `4e9a2473` before any work
+went into it:
+- the unit-loading name lists;
+- `nodeInInstanceBody`;
+- the registry-wide template scans (`stampMonoTemplate*`,
+  `checkInstanceConformances`, `emitFnMonoInstances`, `methodOwnerId` at
+  0.26%);
+- `literalTidOfLiteralOperand`;
+- zenv's `rowOf` (0.51% inclusive).
+
+None reaches half a percent on the self-compile. `declFindChild` is 6.2%
+inclusive, but it is already one hash probe, reached from dozens of callers
+with no single hot path: that cost is the volume of calls, not a scan.
 
 <a id="r-a9910efd"></a>
 **Recovery P1: four bugs, two of them allocations** (`3d477c94` ->
