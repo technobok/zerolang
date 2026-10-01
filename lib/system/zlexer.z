@@ -294,14 +294,17 @@ tokpos: record {
 # `kwlookup` instead of routing through a `toktype` sentinel arm.
 kwresult: record { found: bool tt: toktype }
 
-# Byte-class predicates used by the scanner dispatch.
+# Byte-class predicates used by the scanner dispatch. A carriage return is
+# whitespace: only a linefeed ends a line, and a CR before one is the CRLF
+# spelling of that line end.
 isws: function {b: u8} out bool is {
-    return b == ascii.space or (b == ascii.ht)
+    return b == ascii.space or (b == ascii.ht) or (b == ascii.cr)
 }
 
-# true when byte `b` may appear in a comment body (anything but CR/LF/NUL).
+# true when byte `b` may appear in a comment body: anything but LF and NUL --
+# a comment runs to the linefeed.
 iscommentbody: function {b: u8} out bool is {
-    return b != ascii.nul and (b != ascii.lf) and (b != ascii.cr)
+    return b != ascii.nul and (b != ascii.lf)
 }
 
 # Bitmask flags for the 128-element charflags table below. Each
@@ -1046,15 +1049,23 @@ Tokenizer: class {
         )
     }
 
-    # eolToken -- an end of line, either spelling. CR consumes a following LF so
-    # CRLF is one token, and both advance the line counter; the token itself is
-    # the same either way.
+    # nextIsLf -- the byte after .atchar is a linefeed: a CR there is the CRLF
+    # spelling of a line end, and anywhere else whitespace.
+    nextIsLf: function {this: this.view} out bool is {
+        return ((this.source.stringView.byteAt this.pos).or d: 0) == ascii.lf
+    }
+
+    # eolToken -- an end of line, either spelling. CR consumes the LF that
+    # follows it so CRLF is one token, and both advance the line counter. The
+    # token is the same either way: its text is the linefeed alone, which is
+    # what a newline inside a string literal holds whatever the file's line
+    # ends are.
     eolToken: function {:this pool: zast.StringPool c: u8 s0: u64 line: u32 col: u32} out token is {
         this.accept
         if c == ascii.cr when this.atchar == ascii.lf then this.accept
         this.lineno = this.lineno + 1
         this.colno = 1
-        return (this.spanTok :pool tt: toktype.eolTok s: s0 e: this.tokpos :line :col)
+        return (this.spanTok :pool tt: toktype.eolTok s: this.tokpos - 1 e: this.tokpos :line :col)
     }
 
     # stringStateToken -- the token the STATE STACK dictates, if it dictates one.
@@ -1370,6 +1381,11 @@ Tokenizer: class {
         s0: this.tokpos
 
         if c == ascii.nul then {
+            # a NUL inside the file is a byte no token admits, not its end
+            if this.tokpos < this.source.length then {
+                this.accept
+                return (this.byteTok :pool tt: toktype.errTok s: s0 :line :col)
+            }
             return (token
                 toktype: toktype.eofTok
                 width: 0
@@ -1380,9 +1396,8 @@ Tokenizer: class {
             )
         }
 
-        if c == ascii.lf or (c == ascii.cr) then {
-            return (this.eolToken :pool :c :s0 :line :col)
-        }
+        if c == ascii.lf then return (this.eolToken :pool :c :s0 :line :col)
+        if c == ascii.cr when this.nextIsLf then return (this.eolToken :pool :c :s0 :line :col)
 
         # State-aware dispatch: when the top of the state stack is
         # STRING, the doublequote ends the string (pop + STREND) and

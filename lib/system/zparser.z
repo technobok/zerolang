@@ -347,15 +347,22 @@ Parser: class {
             reserved: false
             {
                 errTxt: zast.poolTextAt pool: this.ast.names ref: tok.text
+                # a control byte prints as nothing a reader can see: it is named
+                # by its code
+                shown: "'\{errTxt}'"
+                ctl: (errTxt.stringView.byteAt 0).or d: 32
+                if errTxt.length == 1 when ctl < 32 then shown = "(byte \{ctl})"
                 if code.badString then {
-                    em9 = "unknown escape or character '\{errTxt}' in string literal"
+                    em9 = "unknown escape or character \{shown} in string literal"
                 } else if (zlexer.islookupReserved sv: errTxt.stringView) then {
                     # a reserved word is a word the lexer refused, not a stray
                     # character: it is the name the grammar does not allow
                     reserved = true
                     em9 = "'\{errTxt}' is a reserved word and cannot be used as a name"
+                } else if errTxt.length == 1 when ctl == 0 then {
+                    em9 = "a NUL byte cannot appear in source text".string
                 } else {
-                    em9 = "unexpected characters '\{errTxt}'"
+                    em9 = "unexpected characters \{shown}"
                 }
             }
             if code.badString then return (this.mkErrorAt :pos code: zast.err.badString msg: em9)
@@ -3974,6 +3981,12 @@ Parser: class {
             match (
                 eofOpt
             ) case none then {
+                # characters that form no token: the lexer's diagnosis says
+                # which
+                if lx.peekType == zlexer.toktype.errTok then {
+                    bad: lx.acceptAny pool: this.ast.names
+                    return (this.mkError tok: bad code: zast.err.badUnit msg: "".string)
+                }
                 badPos: lx.peekPos
                 rwTxt: this.peekReservedWord lex: lx
                 if rwTxt.length > 0 then return (this.mkErrorAt
