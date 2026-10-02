@@ -240,7 +240,40 @@ the account there under its own `<a id="r-<commit>">` anchor.
 | 2026-10-01 | 8b777544 | [recovery P5: the operator path](#r-8b777544) | 0.76s | -- | 121MB / -- | 84 / 383 / 340 (total 807) | 2,095,237 | 346MB | -- | 153,651 |
 | 2026-10-02 | 059ef68f | [recovery P6: pin-only blocks flattened, dead code out](#r-059ef68f) | 0.71s | -- | 121MB / -- | 92 / 335 / 284 (total 711) | 2,094,311 | 346MB | -- | 152,805 |
 | 2026-10-02 | eeb543f6 | [recovery P7: four language changes, two lints; the arc's end](#r-eeb543f6) | 0.74s | -- | 120MB / -- | 81 / 354 / 296 (total 731) | 2,086,585 | 343MB | -- | 153,396 |
+| 2026-10-02 | f2716a9d | [P7.3: a list takes an index type; the id tables migrate](#r-f2716a9d) | 0.67s | -- | 121MB / -- | 87 / 325 / 259 (total 671) | 2,074,323 | 343MB | -- | 153,990 |
 
+
+<a id="r-f2716a9d"></a>
+**P7.3: a list takes an index type; the id tables migrate** (`6c55cee9` ->
+`f2716a9d`, ten commits). Allocations 2,086,585 -> 2,074,323, instructions
+7,337M -> 7,368M (+0.4%), fixed input 2,548M -> 2,553M (+0.2%). Wall 0.67s,
+load average near 2.5.
+
+What the numbers are made of:
+- Every list instance now carries a second parameter. That is +7,222
+  allocations in the self-compile (`ad5df24c`), and the small instruction
+  rise on both inputs.
+- The typed tables give most of it back. A read no longer widens its id, so
+  the declaration and node migrations each drop thousands of conversions to
+  compile: -4,012 and -20,468 allocations.
+- The name pool's indexed tables are instances of their own, emitted beside
+  the unindexed ones: +1,862.
+
+Every commit after the collections change was behaviour-neutral: the drivers
+emit byte-identical C from the same source, and only the corpus programs
+that import zast or zparser differ, through the library alone.
+
+The commits, in order:
+- `6c55cee9`: specLookup completes omitted parameters from their defaults.
+  This fixed the ByteView trie bug that blocked P7.3: io's fragment types had
+  been read off an interior trie node.
+- `83fa0401`: every instance of a defaulted template keys on every
+  parameter, and a trailing default stays out of its label and written name.
+- `ad5df24c`: `i: (idkey.generic default: u64)` on ListRef, ListVal,
+  ListView and ListViewVal.
+- `df9689ff`, `2cc879c8`, `276bd760`, `87d2dc21`, `f2716a9d`: the tables
+  indexed by tid, declid, nodeid and nameid.
+- `669a0f9f`, `1555a757`: the two seed refreshes.
 
 <a id="r-eeb543f6"></a>
 **Recovery P7: four language changes, two lints; the arc's end** (`bb31387f` ->
@@ -265,7 +298,8 @@ template's parameters can be read. The default is never filled in, so the
 typedef resolves to an intermediate node of the instance trie. The C that
 references it does not compile, for the compiler and for every program
 that uses io. That has to be fixed first. The id-indexed tables then wait
-on the migration (~2,250 `nodes.get` call sites alone).
+on the migration (~2,250 `nodes.get` call sites alone). Both were done
+next: [P7.3](#r-f2716a9d).
 
 **The arc, end to end** (`426b1224` -> `eeb543f6`): allocations 2,825,524 ->
 2,086,585 (-26%), instructions 9,056M -> 7,337M (-19%), fixed input 4,442M ->
