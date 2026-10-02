@@ -180,7 +180,7 @@ mkReturnBody: function {
 } out astnode is {
     retCal: mkAtom :ast :line :col name: "return"
     retArg: mkBareOp :ast :line :col op: inner
-    retArgs: ListVal u32
+    retArgs: ListVal zast.nodeid
     retArgs.append (zast.tableAdd :ast n: retArg)
     retCall: astnode.call (zast.callrow
         nodeid: (zast.tableReserve :ast)
@@ -196,7 +196,7 @@ mkReturnBody: function {
         colno: col
         statementline: (zast.tableAdd :ast n: retCall)
     )
-    slist: ListVal u32
+    slist: ListVal zast.nodeid
     slist.append (zast.tableAdd :ast n: sline)
     return (astnode.statement (zast.statementrow
         nodeid: (zast.tableReserve :ast)
@@ -232,7 +232,7 @@ buildCreateMethod: function {
     ast: Ast
     line: u32
     col: u32
-    params: (ListVal u32).take
+    params: (ListVal zast.nodeid).take
     fwdNames: (List String).view
     # a captured field is a reference, so the create is `outx this`
     pins: bool
@@ -248,7 +248,7 @@ buildCreateMethod: function {
     )
     zeroAtom: mkAtom :ast :line :col name: "0"
     stArg: mkNamedOp :ast :line :col name: "state" op: zeroAtom
-    cargs: ListVal u32
+    cargs: ListVal zast.nodeid
     cargs.append (zast.tableAdd :ast n: stArg)
     fi: u64
     fn: fwdNames.length
@@ -290,7 +290,7 @@ buildCreateMethod: function {
         body: (zast.tableAdd :ast n: body)
         isNative: false
         :pins
-        asItems: (zast.kidsAdd kids: ast.kids xs: ListVal u32)
+        asItems: (zast.kidsAdd kids: ast.kids xs: ListVal zast.nodeid)
     )
     )
 }
@@ -317,7 +317,7 @@ buildWrapper: function {
     if leaf.borrowMarker then wn = "OptionView"
     wAtom: mkAtom :ast :line :col name: wn
     tArg: mkBareOp :ast :line :col op: base
-    wargs: ListVal u32
+    wargs: ListVal zast.nodeid
     wargs.append (zast.tableAdd :ast n: tArg)
     return (astnode.call (zast.callrow
         nodeid: (zast.tableReserve :ast)
@@ -356,8 +356,7 @@ bindsYieldValue: function {ast: Ast.view n: astnode.view} out bool is {
     kids: zast.childIds :ast :n
     i: u64
     for i < kids.length loop {
-        if (bindsYieldValue :ast n: (ast.nodes.get i: (zast.nodeid.create from: (kids.get :i)))
-        ) then return true
+        if (bindsYieldValue :ast n: (ast.nodes.get i: (kids.get :i))) then return true
         i = i + 1
     }
     return false
@@ -379,7 +378,7 @@ promoteIterables: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out astnode 
     isStmt: false
     lnP: u32
     coP: u32
-    lineIds: ListVal u32
+    lineIds: ListVal zast.nodeid
     {
         n: ast.nodes.get i: nid
         if n.statement then {
@@ -395,9 +394,9 @@ promoteIterables: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out astnode 
         }
     }
     if isStmt.not then return (zast.cloneTreeAt :ast :nid)
-    newLines: ListVal u32
+    newLines: ListVal zast.nodeid
     for each s0Id: lineIds loop {
-        promoteLine :ast :ctr nid: (zast.nodeid.create from: s0Id) dst: newLines
+        promoteLine :ast :ctr nid: s0Id dst: newLines
     }
     return (astnode.statement (zast.statementrow
         nodeid: (zast.tableReserve :ast)
@@ -418,8 +417,8 @@ promoteIterables: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out astnode 
 # like any other.
 spillBeforeYields: function {ast: Ast ctr: NameCtr nid: zast.nodeid} is {
     if nid.isZero then return
-    kids: ListVal u32
-    lines: ListVal u32
+    kids: ListVal zast.nodeid
+    lines: ListVal zast.nodeid
     {
         n: ast.nodes.get i: nid
         if n.functiondef or n.objectdef or n.unitdef then return
@@ -434,13 +433,13 @@ spillBeforeYields: function {ast: Ast ctr: NameCtr nid: zast.nodeid} is {
         }
     }
     for each k: kids loop {
-        spillBeforeYields :ast :ctr nid: (zast.nodeid.create from: k)
+        spillBeforeYields :ast :ctr nid: k
     }
     if lines.length == 0 then return
-    newLines: ListVal u32
+    newLines: ListVal zast.nodeid
     for each l: lines loop {
         inner: zast.nodeid
-        ln: ast.nodes.get i: (zast.nodeid.create from: l)
+        ln: ast.nodes.get i: l
         if ln.statementline then inner = ln.statementline
         spillIn :ast :ctr nid: inner dst: newLines
         newLines.append l
@@ -458,11 +457,11 @@ spillBeforeYields: function {ast: Ast ctr: NameCtr nid: zast.nodeid} is {
 # and a call's receiver and then its arguments. A call's part that holds a yield
 # is spilled whole when a later part holds one too, so what lies between the two
 # runs between the suspensions; the call's last such part is walked in turn.
-spillIn: function {ast: Ast ctr: NameCtr nid: zast.nodeid dst: ListVal u32} is {
+spillIn: function {ast: Ast ctr: NameCtr nid: zast.nodeid dst: ListVal zast.nodeid} is {
     if nid.isZero then return
     if (zast.yieldCountIn :ast :nid) == 0 then return
-    parts: ListVal u32
-    holders: ListVal u32
+    parts: ListVal zast.nodeid
+    holders: ListVal zast.nodeid
     next: spillStep :ast :nid :parts :holders
     if next.isZero.not then {
         spillIn :ast :ctr nid: next :dst
@@ -477,8 +476,8 @@ spillIn: function {ast: Ast ctr: NameCtr nid: zast.nodeid dst: ListVal u32} is {
 spillStep: function {
     ast: Ast.view
     nid: zast.nodeid
-    parts: ListVal u32
-    holders: ListVal u32
+    parts: ListVal zast.nodeid
+    holders: ListVal zast.nodeid
 } out zast.nodeid is {
     n: ast.nodes.get i: nid
     match (
@@ -500,8 +499,8 @@ spillStep: function {
         }
         cb: ast.nodes.get i: n.callable
         if cb.dottedpath then {
-            parts.append cb.parent.u32
-            holders.append n.callable.u32
+            parts.append cb.parent
+            holders.append n.callable
         }
         ai: u64
         for ai < n.arguments.count loop {
@@ -509,7 +508,7 @@ spillStep: function {
             ai = ai + 1
             a: ast.nodes.get i: aId
             if a.namedoperation then {
-                parts.append a.operation.u32
+                parts.append a.operation
                 holders.append aId
             }
         }
@@ -536,9 +535,9 @@ firstConditionOf: function {ast: Ast.view clauses: zast.kidspan} out zast.nodeid
 spillCallParts: function {
     ast: Ast
     ctr: NameCtr
-    parts: (ListVal u32).view
-    holders: (ListVal u32).view
-    dst: ListVal u32
+    parts: (ListVal zast.nodeid).view
+    holders: (ListVal zast.nodeid).view
+    dst: ListVal zast.nodeid
 } is {
     last: parts.length
     pi: u64
@@ -550,21 +549,18 @@ spillCallParts: function {
     pi = 0
     for pi < last loop {
         part: parts.get i: pi
-        if (
-            (partHoldsYield :ast :part) or
-            (spillStaysPut :ast nid: (zast.nodeid.create from: part)).not
-        ) then {
+        if (partHoldsYield :ast :part) or (spillStaysPut :ast nid: part).not then {
             (spillPart
                 :ast
                 :ctr
-                part: (zast.nodeid.create from: part)
-                holder: (zast.nodeid.create from: (holders.get i: pi))
+                :part
+                holder: (holders.get i: pi)
                 :dst
             )
         }
         pi = pi + 1
     }
-    spillIn :ast :ctr nid: (zast.nodeid.create from: (parts.get i: last)) :dst
+    spillIn :ast :ctr nid: (parts.get i: last) :dst
 }
 
 # partHoldsYield -- a yield is written somewhere inside `part`.
@@ -604,7 +600,7 @@ spillStaysPut: function {ast: Ast.view nid: zast.nodeid} out bool is {
 # as the argument `holder` carries, or as the receiver of the member read
 # `holder` is.
 spillPart: function {
-    ast: Ast ctr: NameCtr part: zast.nodeid holder: zast.nodeid dst: ListVal u32
+    ast: Ast ctr: NameCtr part: zast.nodeid holder: zast.nodeid dst: ListVal zast.nodeid
 } is {
     spillIn :ast :ctr nid: part :dst
     ln: u32
@@ -619,7 +615,7 @@ spillPart: function {
         lineno: ln
         colno: co
         name: snid
-        value: (zast.nodeid.create from: part)
+        value: part
     )
     sl: astnode.statementline (zast.statementlinerow
         nodeid: (zast.tableReserve :ast)
@@ -629,7 +625,7 @@ spillPart: function {
     )
     dst.append (zast.tableAdd :ast n: sl)
     at: mkAtom :ast line: ln col: co name: synthN.stringView
-    atId: zast.nodeid.create from: (zast.tableAdd :ast n: at)
+    atId: zast.tableAdd :ast n: at
     hm: ast.nodes.getMut i: holder
     if hm.namedoperation then {
         hm.operation = atId
@@ -652,7 +648,7 @@ promoteIterablesIdAt: function {
 # promoteLine -- one statement line: a for-statement transforms (possibly
 # appending synthetic bindings first); anything else passes through as a deep
 # copy (cloneTreeAt).
-promoteLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid dst: ListVal u32} is {
+promoteLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid dst: ListVal zast.nodeid} is {
     isFor: false
     innerId: zast.nodeid
     lnQ: u32
@@ -746,7 +742,7 @@ promoteWrappedBody: function {ast: Ast ctr: NameCtr oId: zast.nodeid} out u32 is
 # line a statement of its own, the block under a `doexpr`, exactly the shape a
 # braced body has. With nothing hoisted the promoted node stands alone.
 promoteBareLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out u32 is {
-    hoisted: ListVal u32
+    hoisted: ListVal zast.nodeid
     ni: promoteInExpr :ast :ctr :nid dst: hoisted
     if hoisted.length == 0 then return (zast.tableAdd :ast n: ni)
     lnB: u32
@@ -772,7 +768,7 @@ promoteBareLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out u32 is {
         nodeid: (zast.tableReserve :ast)
         lineno: lnB
         colno: coB
-        statement: (zast.nodeid.create from: (zast.tableAdd :ast n: blk))
+        statement: (zast.tableAdd :ast n: blk)
     )
     return (zast.tableAdd :ast n: redo)
 }
@@ -815,7 +811,7 @@ promoteWith: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out astnode is {
         lineno: lnW
         colno: coW
         name: nameW
-        value: (zast.nodeid.create from: nvalId)
+        value: nvalId
         body: (zast.nodeid.create from: nbodyId)
     )
     )
@@ -838,7 +834,7 @@ promoteInExpr: function {
     ast: Ast
     ctr: NameCtr
     nid: zast.nodeid
-    dst: ListVal u32
+    dst: ListVal zast.nodeid
 } out astnode is {
     isW: false
     n9: ast.nodes.get i: nid
@@ -857,8 +853,8 @@ promoteForCond: function {
     ctr: NameCtr
     c0Id: zast.nodeid
     suspends: bool
-    dst: ListVal u32
-    nconds: ListVal u32
+    dst: ListVal zast.nodeid
+    nconds: ListVal zast.nodeid
 } is {
     # the condition is read through a view scoped to this block: the
     # synth below mints, which lends ast exclusively
@@ -934,15 +930,15 @@ promoteFor: function {
     ast: Ast
     ctr: NameCtr
     nid: zast.nodeid
-    dst: ListVal u32
+    dst: ListVal zast.nodeid
 } out astnode is {
     isFor: false
     lnS: u32
     coS: u32
     bodyId: zast.nodeid
     isEach: false
-    condIds: ListVal u32
-    postIds: ListVal u32
+    condIds: ListVal zast.nodeid
+    postIds: ListVal zast.nodeid
     {
         n: ast.nodes.get i: nid
         if n.forexpr then {
@@ -975,7 +971,7 @@ promoteFor: function {
         nb: ast.nodes.get i: (zast.nodeid.create from: nbodyId)
         suspends = (zast.yieldCountOf :ast n: nb) > 0
     }
-    nconds: ListVal u32
+    nconds: ListVal zast.nodeid
     ci9: u64
     # only an `each` iterable is hoisted: a plain binding is evaluated at
     # every iteration, so there is nothing to keep across a suspension
@@ -987,16 +983,16 @@ promoteFor: function {
         (promoteForCond
             :ast
             :ctr
-            c0Id: (zast.nodeid.create from: c0Id)
+            :c0Id
             suspends: hoistable
             :dst
             :nconds
         )
     }
-    nposts: ListVal u32
+    nposts: ListVal zast.nodeid
     piter: postIds.iterate
     for p0Id: piter loop {
-        pp0: zast.cloneTreeAt :ast nid: (zast.nodeid.create from: p0Id)
+        pp0: zast.cloneTreeAt :ast nid: p0Id
         nposts.append (zast.tableAdd :ast n: pp0)
     }
     return (astnode.forexpr (zast.forrow
@@ -1140,7 +1136,7 @@ injectCallReceiver: function {
     tpId: zast.tableAdd :ast n: thisParam
     cfm2: ast.nodes.getMut i: callFnId
     if cfm2.functiondef then {
-        rest: ListVal u32
+        rest: ListVal zast.nodeid
         rest.append tpId
         pax1569: u64
         for pax1569 < cfm2.parameters.count loop {
@@ -1171,7 +1167,7 @@ buildDeclaredCreate: function {
     # their type nodes, in the same order
     authorTypes: (ListVal u64).view
 } is {
-    createParams: ListVal u32
+    createParams: ListVal zast.nodeid
     anyRef: false
     api: u64
     apn: authorNames.length
@@ -1200,7 +1196,7 @@ buildDeclaredCreate: function {
     cmId: zast.tableAdd :ast n: cmN
     objc: ast.nodes.getMut i: objId
     if objc.objectdef then {
-        asMerged: ListVal u32
+        asMerged: ListVal zast.nodeid
         asx1799: u64
         for asx1799 < objc.asItems.count loop {
             aId2: zast.kidAt kids: ast.kids span: objc.asItems i: asx1799
@@ -1221,11 +1217,11 @@ appendDeclaredFields: function {
     # the generator definition gaining the fields
     objId: zast.nodeid
     # the field nodes to append, in order
-    addFields: (ListVal u32).view
+    addFields: (ListVal zast.nodeid).view
 } is {
     objm: ast.nodes.getMut i: objId
     if objm.objectdef then {
-        merged: ListVal u32
+        merged: ListVal zast.nodeid
         isx1969: u64
         for isx1969 < objm.isItems.count loop {
             iId: zast.kidAt kids: ast.kids span: objm.isItems i: isx1969
@@ -1400,7 +1396,7 @@ appendResumeFields: function {
     # how many suspension points the body has
     yieldSlots: u64
     # the field list the counters join
-    addFields: ListVal u32
+    addFields: ListVal zast.nodeid
 } is {
     yvi: u64
     for yvi < yieldSlots loop {
@@ -1432,7 +1428,7 @@ appendForCounterFields: function {
     # how many suspending `for` loops the body has
     forSlots: u64
     # the field list the resume fields join
-    addFields: ListVal u32
+    addFields: ListVal zast.nodeid
 } is {
     fci: u64
     for fci < forSlots loop {
@@ -1582,7 +1578,7 @@ lowerDeclared: function {
 
     # the fields the transform needs, appended to the ones the author declared.
     # The body's locals are the checker's: it keeps each in a field of its own.
-    addFields: ListVal u32
+    addFields: ListVal zast.nodeid
     stTy: scalarTypePath :ast :line :col name: "i64"
     stField: mkNamedOp :ast :line :col name: "state" op: stTy
     addFields.append (zast.tableAdd :ast n: stField)

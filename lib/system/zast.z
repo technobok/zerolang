@@ -817,10 +817,10 @@ Ast: class {
     # are one id
     names: StringPool
     # the node ids of the top-level units, which is where a walk starts
-    units: ListVal u32
+    units: ListVal nodeid
     # every node's child ids, end to end. A carrier names its own children as a
     # `kidspan` window into this, so no node owns a list
-    kids: ListVal u32
+    kids: ListVal nodeid
     # Per-file nodeid segments: diagnostics map an erroring node back to
     # the file whose parse allocated it.
     fileSegs: List FileSeg
@@ -837,8 +837,8 @@ Ast: class {
         a: (meta.create
             nodes: (ListVal astnode i: nodeid)
             names: StringPool.create
-            units: ListVal u32
-            kids: ListVal u32
+            units: ListVal nodeid
+            kids: ListVal nodeid
             fileSegs: List FileSeg
             root: nodeid
             mainUnitName: String
@@ -847,7 +847,7 @@ Ast: class {
         # which every reader already treats as "nothing here"
         a.nodes.append from: astnode.placeholder
         # and row 0 of the child arena, so that no real span starts at 0
-        a.kids.append from: 0.u32
+        a.kids.append from: nodeid
         a.names.set s: "this"
         a.names.set s: "return"
         a.names.set s: "break"
@@ -2001,7 +2001,7 @@ printNodeWith: function {ast: Ast.view n: astnode.view withId: bool} is {
         pui: u64
         pun: ast.units.length
         for pui < pun loop {
-            puid: nodeid.create from: (ast.units.get i: pui)
+            puid: ast.units.get i: pui
             printNodeWith :ast :withId n: (ast.nodes.get i: puid)
             pui = pui + 1
         }
@@ -2044,7 +2044,7 @@ printProgramCanonicalRoot: function {ast: Ast.view} is {
         pui: u64
         pun: ast.units.length
         for pui < pun loop {
-            puid: nodeid.create from: (ast.units.get i: pui)
+            puid: ast.units.get i: pui
             printNodeCanonicalAt :ast nId: puid
             pui = pui + 1
         }
@@ -2078,8 +2078,8 @@ tableSet: function {ast: Ast id: nodeid child: astnode} is {
 # own arm for that child and takes the rest from here. Absent optional
 # children (an if without else, a function without a body) are omitted, and a
 # program's children are the program's units.
-childIds: function {ast: Ast.view n: astnode.view} out ListVal u32 is {
-    acc: ListVal u32
+childIds: function {ast: Ast.view n: astnode.view} out ListVal nodeid is {
+    acc: ListVal nodeid
     childIdsInto :ast :n :acc
     return acc
 }
@@ -2088,56 +2088,56 @@ childIds: function {ast: Ast.view n: astnode.view} out ListVal u32 is {
 # fresh one. A walk that recurses through childIds allocates a list per NODE;
 # driving the same walk from one list it both reads and appends to allocates
 # one per WALK. The list is not cleared, so it doubles as the walk's worklist.
-childIdsInto: function {ast: Ast.view n: astnode.view acc: ListVal u32} is {
+childIdsInto: function {ast: Ast.view n: astnode.view acc: ListVal nodeid} is {
     match (
         n
     ) case atomstring then {
         appendSpan kids: ast.kids :acc span: n.stringparts
     } case dottedpath then {
-        acc.append from: n.parent.u32
-        acc.append from: n.child.u32
+        acc.append from: n.parent
+        acc.append from: n.child
     } case call then {
-        acc.append from: n.callable.u32
+        acc.append from: n.callable
         appendSpan kids: ast.kids :acc span: n.arguments
     } case namedoperation then {
-        acc.append from: n.operation.u32
+        acc.append from: n.operation
     } case datablock then {
         appendSpan kids: ast.kids :acc span: n.elements
         appendOptId :acc id: n.outType
     } case statement then {
         appendSpan kids: ast.kids :acc span: n.statements
     } case statementline then {
-        acc.append from: n.statementline.u32
+        acc.append from: n.statementline
     } case assignment then {
-        acc.append from: n.value.u32
+        acc.append from: n.value
     } case reassignment then {
-        acc.append from: n.topath.u32
-        acc.append from: n.value.u32
+        acc.append from: n.topath
+        acc.append from: n.value
     } case swapstmt then {
-        acc.append from: n.lhs.u32
-        acc.append from: n.rhs.u32
+        acc.append from: n.lhs
+        acc.append from: n.rhs
     } case ifexpr then {
         appendSpan kids: ast.kids :acc span: n.clauses
         appendOptId :acc id: n.elseclause
     } case ifclause then {
         appendSpan kids: ast.kids :acc span: n.conditions
-        acc.append from: n.statement.u32
+        acc.append from: n.statement
     } case forexpr then {
         appendSpan kids: ast.kids :acc span: n.conditions
         appendOptId :acc id: n.body
         appendSpan kids: ast.kids :acc span: n.postconditions
     } case doexpr then {
-        acc.append from: n.statement.u32
+        acc.append from: n.statement
     } case withexpr then {
-        acc.append from: n.value.u32
-        acc.append from: n.body.u32
+        acc.append from: n.value
+        acc.append from: n.body
     } case caseexpr then {
-        acc.append from: n.subject.u32
+        acc.append from: n.subject
         appendSpan kids: ast.kids :acc span: n.clauses
         appendOptId :acc id: n.elseclause
     } case caseclause then {
-        acc.append from: n.matcharm.u32
-        acc.append from: n.statement.u32
+        acc.append from: n.matcharm
+        acc.append from: n.statement
     } case functiondef then {
         appendOptId :acc id: n.returntype
         appendSpan kids: ast.kids :acc span: n.parameters
@@ -2159,15 +2159,15 @@ childIdsInto: function {ast: Ast.view n: astnode.view acc: ListVal u32} is {
 # row view is scoped to a block that lends nothing. Answers the copy, which the
 # caller interns (tableAdd). A program row copies without its units.
 cloneTreeAt: function {ast: Ast nid: nodeid} out astnode is {
-    kids: ListVal u32
+    kids: ListVal nodeid
     {
         n: ast.nodes.get i: nid
         childIdsInto :ast :n acc: kids
     }
-    cloned: ListVal u32
+    cloned: ListVal nodeid
     ki: u64
     for ki < kids.length loop {
-        c: cloneTreeAt :ast nid: (nodeid.create from: (kids.get i: ki))
+        c: cloneTreeAt :ast nid: (kids.get i: ki)
         cloned.append (tableAdd :ast n: c)
         ki = ki + 1
     }
@@ -2184,10 +2184,10 @@ cloneTreeAt: function {ast: Ast nid: nodeid} out astnode is {
 # copies in `cloned` (canonical childIds order; an absent optional child is
 # simply not there). Reads the view only.
 cloneArm: function {
-    kids: ListVal u32
+    kids: ListVal nodeid
     n: astnode.view
     myId: nodeid
-    cloned: (ListVal u32).view
+    cloned: (ListVal nodeid).view
 } out astnode is {
     match (
         n
@@ -2214,8 +2214,8 @@ cloneArm: function {
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
-            parent: (nodeid.create from: (cloned.get i: 0))
-            child: (nodeid.create from: (cloned.get i: 1))
+            parent: (cloned.get i: 0)
+            child: (cloned.get i: 1)
             grouped: n.grouped
         )
         )
@@ -2224,7 +2224,7 @@ cloneArm: function {
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
-            callable: (nodeid.create from: (cloned.get i: 0))
+            callable: (cloned.get i: 0)
             arguments: (kidsAddWindow :kids xs: (cloned.slice from: 1 to: cloned.length))
             infix: n.infix
         )
@@ -2235,7 +2235,7 @@ cloneArm: function {
             lineno: n.lineno
             colno: n.colno
             name: n.name
-            operation: (nodeid.create from: (cloned.get i: 0))
+            operation: (cloned.get i: 0)
         )
         )
     } case statement then {
@@ -2251,7 +2251,7 @@ cloneArm: function {
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
-            statementline: (nodeid.create from: (cloned.get i: 0))
+            statementline: (cloned.get i: 0)
         )
         )
     } case assignment then {
@@ -2260,7 +2260,7 @@ cloneArm: function {
             lineno: n.lineno
             colno: n.colno
             name: n.name
-            value: (nodeid.create from: (cloned.get i: 0))
+            value: (cloned.get i: 0)
         )
         )
     } case reassignment then {
@@ -2268,8 +2268,8 @@ cloneArm: function {
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
-            topath: (nodeid.create from: (cloned.get i: 0))
-            value: (nodeid.create from: (cloned.get i: 1))
+            topath: (cloned.get i: 0)
+            value: (cloned.get i: 1)
         )
         )
     } case swapstmt then {
@@ -2277,8 +2277,8 @@ cloneArm: function {
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
-            lhs: (nodeid.create from: (cloned.get i: 0))
-            rhs: (nodeid.create from: (cloned.get i: 1))
+            lhs: (cloned.get i: 0)
+            rhs: (cloned.get i: 1)
         )
         )
     } case ifexpr then {
@@ -2300,7 +2300,7 @@ cloneArm: function {
             lineno: n.lineno
             colno: n.colno
             conditions: (kidsAddWindow :kids xs: (cloned.slice from: 0 to: k))
-            statement: (nodeid.create from: (cloned.get i: k))
+            statement: (cloned.get i: k)
         )
         )
     } case forexpr then {
@@ -2329,7 +2329,7 @@ cloneArm: function {
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
-            statement: (nodeid.create from: (cloned.get i: 0))
+            statement: (cloned.get i: 0)
         )
         )
     } case withexpr then {
@@ -2338,8 +2338,8 @@ cloneArm: function {
             lineno: n.lineno
             colno: n.colno
             name: n.name
-            value: (nodeid.create from: (cloned.get i: 0))
-            body: (nodeid.create from: (cloned.get i: 1))
+            value: (cloned.get i: 0)
+            body: (cloned.get i: 1)
         )
         )
     } case caseexpr then {
@@ -2350,7 +2350,7 @@ cloneArm: function {
             nodeid: myId
             lineno: n.lineno
             colno: n.colno
-            subject: (nodeid.create from: (cloned.get i: 0))
+            subject: (cloned.get i: 0)
             clauses: (kidsAddWindow :kids xs: (cloned.slice from: 1 to: k + 1))
             elseclause: els
         )
@@ -2361,8 +2361,8 @@ cloneArm: function {
             lineno: n.lineno
             colno: n.colno
             name: n.name
-            matcharm: (nodeid.create from: (cloned.get i: 0))
-            statement: (nodeid.create from: (cloned.get i: 1))
+            matcharm: (cloned.get i: 0)
+            statement: (cloned.get i: 1)
         )
         )
     } case atomstring then {
@@ -2463,7 +2463,7 @@ cloneArm: function {
 
 
 # childIdsAt -- childIds of the node with id `id`.
-childIdsAt: function {ast: Ast.view id: nodeid} out ListVal u32 is {
+childIdsAt: function {ast: Ast.view id: nodeid} out ListVal nodeid is {
     return (childIds :ast n: (ast.nodes.get i: id))
 }
 
@@ -2474,7 +2474,7 @@ spanEndLineAt: function {ast: Ast.view id: nodeid} out u32 is {
     best: p.line
     kids: childIdsAt :ast :id
     for each k: kids loop {
-        kl: spanEndLineAt :ast id: (nodeid.create from: k)
+        kl: spanEndLineAt :ast id: k
         if kl > best then best = kl
     }
     return best
@@ -2659,14 +2659,14 @@ yieldCountOf: function {ast: Ast.view n: astnode.view} out u64 is {
     if n.call when (isYieldCalleeAt :ast callableId: n.callable) then c = 1
     # one worklist for the whole subtree, not a child list per node. The count
     # is a SUM, so the order the worklist drains in does not matter.
-    work: ListVal u32
+    work: ListVal nodeid
     childIdsInto :ast :n acc: work
     wi: u64
     for wi < work.length loop {
         wid: work.get i: wi
         wi = wi + 1
         if wid > 0 then {
-            wn: ast.nodes.get i: (nodeid.create from: wid)
+            wn: ast.nodes.get i: wid
             if wn.functiondef.not then {
                 if wn.call when (isYieldCalleeAt :ast callableId: wn.callable) then c = c + 1
                 childIdsInto :ast n: wn acc: work
@@ -2711,14 +2711,14 @@ suspendingForCountOf: function {ast: Ast.view n: astnode.view} out u64 is {
     }
     # one worklist for the whole subtree, as in yieldCountOf, and for the same
     # reason: this is a sum, so drain order is free.
-    work: ListVal u32
+    work: ListVal nodeid
     childIdsInto :ast :n acc: work
     wi: u64
     for wi < work.length loop {
         wid: work.get i: wi
         wi = wi + 1
         if wid > 0 then {
-            wn: ast.nodes.get i: (nodeid.create from: wid)
+            wn: ast.nodes.get i: wid
             if wn.functiondef.not then {
                 if wn.forexpr when wn.conditions.count.u64 == 1 when (
                     (yieldCountIn :ast nid: wn.body) > 0
@@ -2759,7 +2759,7 @@ stringPartAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 # per operator in the program and every one of them has exactly one argument,
 # so building a one-element list just to copy it out cost a heap block for
 # every operator a self-compile sees.
-kidsAdd1: function {kids: ListVal u32 x: u32} out kidspan is {
+kidsAdd1: function {kids: ListVal nodeid x: nodeid} out kidspan is {
     f: kids.length.u32.orPanic
     kids.append from: x
     return (kidspan first: f count: 1)
@@ -2769,7 +2769,7 @@ kidsAdd1: function {kids: ListVal u32 x: u32} out kidspan is {
 # copy is what makes a span contiguous: the parser builds a node's children
 # while parsing grandchildren that are appending here too, so the window can
 # only be claimed once the list is finished.
-kidsAdd: function {kids: ListVal u32 xs: (ListVal u32).view} out kidspan is {
+kidsAdd: function {kids: ListVal nodeid xs: (ListVal nodeid).view} out kidspan is {
     n: xs.length
     if n == 0 then return (kidspan first: 0 count: 0)
     f: kids.length.u32.orPanic
@@ -2782,7 +2782,7 @@ kidsAdd: function {kids: ListVal u32 xs: (ListVal u32).view} out kidspan is {
 # just to read it once. The window pins its source SHARED for its lifetime,
 # which is why `kids` and the window's source must be different lists -- every
 # caller appends to the node's own kid table and windows a clone.
-kidsAddWindow: function {kids: ListVal u32 xs: ListViewVal u32} out kidspan is {
+kidsAddWindow: function {kids: ListVal nodeid xs: ListViewVal nodeid} out kidspan is {
     n: xs.length
     if n == 0 then return (kidspan first: 0 count: 0)
     f: kids.length.u32.orPanic
@@ -2792,14 +2792,14 @@ kidsAddWindow: function {kids: ListVal u32 xs: ListViewVal u32} out kidspan is {
 
 # kidAt -- child `i` of `span`. Out of range is a panic, not a sentinel: a walk
 # reads `span.count` first and a bad index is a bug in the walk.
-kidAt: function {kids: (ListVal u32).view span: kidspan i: u64} out nodeid is {
-    return (nodeid.create from: (kids.get i: span.first.u64 + i))
+kidAt: function {kids: (ListVal nodeid).view span: kidspan i: u64} out nodeid is {
+    return (kids.get i: span.first.u64 + i)
 }
 
 # kidIds -- the children of `span`, in order, as a list of their own: the shape
 # a walk wants when it visits them more than once or hands them on
-kidIds: function {ast: Ast.view span: kidspan} out ListVal u32 is {
-    ids: ListVal u32
+kidIds: function {ast: Ast.view span: kidspan} out ListVal nodeid is {
+    ids: ListVal nodeid
     i: u64
     for i < span.count loop {
         ids.append from: (kidAt kids: ast.kids :span :i)
@@ -2863,8 +2863,8 @@ infixPartsOf: function {ast: Ast.view n: astnode.view} out infixparts is {
 
 # objItemIds -- every member node of an object definition, its `is` items then
 # its `as` items; empty when `nid` is not an object definition
-objItemIds: function {ast: Ast.view nid: nodeid} out ListVal u32 is {
-    ids: ListVal u32
+objItemIds: function {ast: Ast.view nid: nodeid} out ListVal nodeid is {
+    ids: ListVal nodeid
     n: ast.nodes.get i: nid
     match (
         n
@@ -2908,7 +2908,7 @@ namedSiteAt: function {ast: Ast.view nid: nodeid} out namedsite is {
 }
 
 # appendSpan -- append every id in `span` to `acc`, the span twin of appendIds.
-appendSpan: function {kids: (ListVal u32).view acc: ListVal u32 span: kidspan} is {
+appendSpan: function {kids: (ListVal nodeid).view acc: ListVal nodeid span: kidspan} is {
     si: u64
     for si < span.count loop {
         acc.append from: (kidAt :kids :span i: si)
@@ -2919,14 +2919,14 @@ appendSpan: function {kids: (ListVal u32).view acc: ListVal u32 span: kidspan} i
 # appendIds -- append every id in `ids` to `acc`. A walk collects a node's
 # children through one accumulator rather than a fresh list per visit, which is
 # where the per-visit lists went.
-appendIds: function {acc: ListVal u32 ids: (ListVal u32).view} is {
+appendIds: function {acc: ListVal nodeid ids: (ListVal nodeid).view} is {
     for each i: ids loop acc.append from: i
 }
 
 # appendOptId -- append `id` unless it is the zero sentinel, so a caller
 # collecting an OPTIONAL child needs no test of its own.
-appendOptId: function {acc: ListVal u32 id: nodeid} is {
-    if id.isZero.not then acc.append from: id.u32
+appendOptId: function {acc: ListVal nodeid id: nodeid} is {
+    if id.isZero.not then acc.append from: id
 }
 
 # nodeIdOf -- a node's own id (any arm).
