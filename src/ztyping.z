@@ -26,6 +26,7 @@ public: unit {
     :monosite
     :callslot
     :monostamp
+    :armkey
     :bodycopy
     :destroyitem
     :destroyrange
@@ -281,6 +282,12 @@ constslot: record {
     owner: u64
     # the constant's name. The pair keys memberConst
     name: u64
+}
+
+# armkey -- one union arm: the union's type and the arm's name
+armkey: record {
+    owner: ztypes.tid
+    name: zast.nameid
 }
 
 # monostamp -- which node of which monomorphisation. One template node carries
@@ -761,11 +768,11 @@ ZTyping: class {
     asConstDecls: IdSet u64
     # boxedArms -- the union arms written `(Box T)`, or whose instance's
     # argument is a Box, by armKey: a heap cell whatever the payload's size
-    boxedArms: IdSet u64
+    boxedArms: SetVal armkey
     # inlineArms -- the bare value-type union arms whose payload fits the
     # union's pointer-wide slot, by armKey: stored in the slot itself, with no
     # cell (checkUnionArmSlots)
-    inlineArms: IdSet u64
+    inlineArms: SetVal armkey
     # types synthesised to carry a generator's state
     generatorWrapper: (IdMapV u64 v: bool
     # nodes deliberately left unstamped, so a later pass does not read absence
@@ -2655,9 +2662,9 @@ ZTyping: class {
     }
 
     # armKey -- a union arm's key in boxedArms and inlineArms: its union's type
-    # id and its name id, which an instance's arm carries as its template's does
-    armKey: function {t: this.view parentTypeId: ztypes.tid nameId: zast.nameid} out u64 is {
-        return (parentTypeId.u64 << 32) + nameId.u64
+    # and its name, which an instance's arm carries as its template's does
+    armKey: function {t: this.view parentTypeId: ztypes.tid nameId: zast.nameid} out armkey is {
+        return (armkey owner: parentTypeId name: nameId)
     }
 
     # armIsInline -- the arm's payload is stored in the union's slot itself
@@ -3064,7 +3071,7 @@ armSuffixSideOf: function {
 nodeTypeAt: function {
     tbl: (ListVal ztypes.tid i: zast.nodeid).view nid: zast.nodeid
 } out ztypes.tid is {
-    if nid.u64 >= tbl.length then return (ztypes.tid.create from: 0)
+    if nid.u64 >= tbl.length then return ztypes.noTid
     return (tbl.get i: nid)
 }
 
@@ -3146,8 +3153,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         renameSeen: false
         privacySeen: false
         asConstDecls: IdSet u64
-        boxedArms: IdSet u64
-        inlineArms: IdSet u64
+        boxedArms: SetVal armkey
+        inlineArms: SetVal armkey
         generatorWrapper: (IdMapV u64 v: bool)
         noStampNode: (IdMapV zast.nodeid v: bool)
         fnHasBody: (IdMapV u64 v: bool)
