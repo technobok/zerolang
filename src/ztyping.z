@@ -158,7 +158,7 @@ declrow: record {
     # the declaration's name, interned
     name: u64
     # the type it resolved to
-    tid: u64
+    tid: ztypes.tid
     # whether the row survives the pass that built it, which is how a
     # speculative registration is undone without a second table
     keep: bool
@@ -279,7 +279,7 @@ callslot: record {
 # constslot -- which member of which type, for the compile-time value channel.
 constslot: record {
     # the type the constant is declared on
-    owner: u64
+    owner: ztypes.tid
     # the constant's name. The pair keys memberConst
     name: u64
 }
@@ -294,7 +294,7 @@ armkey: record {
 # a different answer per instance, so the instance id is part of the key.
 monostamp: record {
     # the instantiated type
-    mono: u64
+    mono: ztypes.tid
     # the node inside it. The pair keys a stamp that differs per instantiation,
     # which a node id alone could not
     node: zast.nodeid
@@ -331,7 +331,7 @@ destroyrange: record {
 monoVariableIn: function {
     perMono: (MapVV monostamp v: ztypes.vid).view
     shared: (IdMapV zast.nodeid v: ztypes.vid).view
-    mono: u64
+    mono: ztypes.tid
     nid: zast.nodeid
 } out optionval ztypes.vid is {
     if mono > 0 then {
@@ -371,7 +371,7 @@ setFirstOrPerMono: function as { t: anyval.generic } in {
     perMono: (MapVV monostamp v: t)
     shared: (IdMapV zast.nodeid v: t)
     copies: (ListVal bodycopy).view
-    mono: u64
+    mono: ztypes.tid
     nid: zast.nodeid
     value: t
 } is {
@@ -393,7 +393,7 @@ setFirstOrPerMono: function as { t: anyval.generic } in {
 setMonoVariable: function {
     perMono: (MapVV monostamp v: ztypes.vid)
     shared: (IdMapV zast.nodeid v: ztypes.vid)
-    mono: u64
+    mono: ztypes.tid
     nid: zast.nodeid
     vid: ztypes.vid
 } is {
@@ -587,23 +587,23 @@ ZTyping: class {
     # function types whose return carries the `.borrow` marker, recorded at
     # resolution; the body walk's auto-call coercion reads it to report the
     # receiver source path.
-    funcReturnsBorrow: (IdMapV u64 v: bool
+    funcReturnsBorrow: (IdMapV ztypes.tid v: bool
     # of those, the ones whose reference is READONLY (`out T.view`): the pin
     # they leave on the receiver is shared, so several may be live at once.
     )
-    funcReturnsView: (IdMapV u64 v: bool
+    funcReturnsView: (IdMapV ztypes.tid v: bool
     # function types declared `outx`: the result keeps the call's borrow/view
     # inputs locked for the binding's life. An OWNED result stays owned -- the
     # binding keeps its destructor -- so it is tracked apart from
     # funcReturnsBorrow.
     )
-    funcPins: (IdMapV u64 v: bool
+    funcPins: (IdMapV ztypes.tid v: bool
     # function types whose return carries `.hold`: an OWNED result the caller
     # may only READ. Not a reference return -- the binding keeps its destructor
     # -- so it is tracked apart from funcReturnsView, which freezes a binding
     # only because that binding IS the reference handed back.
     )
-    funcReturnsFrozen: (IdMapV u64 v: bool
+    funcReturnsFrozen: (IdMapV ztypes.tid v: bool
     # the binding or reassignment being walked moves a `.take` value in whole
     # (`b: w.take`): the take keeps the value's locks for the site to transfer
     # rather than releasing them
@@ -681,7 +681,7 @@ ZTyping: class {
     # whose walk typed it: only a slot wide enough takes one, which is settled
     # once the walk has typed where each lands
     wideLiteralNodes: ListVal zast.nodeid
-    wideLiteralMonos: ListVal u64
+    wideLiteralMonos: ListVal ztypes.tid
     # the type applications, by node, that name their type rather than build a
     # value of it: the callable of a call supplying the fields (`(Box cap: 8)
     # used: "x"`) and the base of a member path (`(slot t: i64).empty`)
@@ -713,12 +713,12 @@ ZTyping: class {
     templateBodiesScanned: IdSet zast.nodeid
     # the instances the post-sweep has walked: the sweep repeats while walks
     # mint new instances, and each instance is walked once
-    monosWalked: IdSet u64
+    monosWalked: IdSet ztypes.tid
     # the instance whose walk minted each type id (instances minted outside
     # the post-sweep have no entry)
-    monoMintedBy: (IdMapV u64 v: u64)
+    monoMintedBy: (IdMapV ztypes.tid v: ztypes.tid)
     # the templates reported as instantiating themselves without end
-    monoRecursionReported: IdSet u64
+    monoRecursionReported: IdSet ztypes.tid
     # the unnamed local a receiver node's value became (its name id): the
     # emitter tags the temporary it writes for that value with it
     unnamedLocalOfNode: (IdMapV zast.nodeid v: u64)
@@ -738,26 +738,26 @@ ZTyping: class {
     # the instantiation being walked, which is half of every monostamp key
     # minted under it
     )
-    curMonoStamp: u64
+    curMonoStamp: ztypes.tid
     # the instantiation a constant is being evaluated for, when it is read
     # through one (`a.BIG` on a unit instance); 0 otherwise. A template's
     # constant over a numeric generic parameter has a value per instantiation
-    constMono: u64
+    constMono: ztypes.tid
     # the instantiation whose body the emitter is emitting, 0 outside one: a
     # node's type there is the instance walk's stamp (nodeTypeFor)
-    emitMono: u64
+    emitMono: ztypes.tid
     # the function type being walked inside that instantiation
     curMonoFnTid: ztypes.tid
 
     # child-name id minting (ztyping-local id space)
     # base type name id (pool id) -> resolved builtin tid (currentUnit "");
     # an unresolved 0 is never stored so later resolution can still fill it
-    builtinTidMemo: (IdMapV u64 v: ztypes.tid
+    builtinTidMemo: (IdMapV zast.nameid v: ztypes.tid
     # tid -> whether it is a builtin numeric scalar, asked of a type whose name
     # is one of the fourteen; as with builtinTidMemo, an answer made before the
     # builtin resolved is not stored
     )
-    numericTidMemo: (IdMapV u64 v: bool
+    numericTidMemo: (IdMapV ztypes.tid v: bool
     # true once any public-interface rename exists (skips alias lookups otherwise)
     )
     renameSeen: bool
@@ -774,14 +774,14 @@ ZTyping: class {
     # cell (checkUnionArmSlots)
     inlineArms: SetVal armkey
     # types synthesised to carry a generator's state
-    generatorWrapper: (IdMapV u64 v: bool
+    generatorWrapper: (IdMapV zast.nodeid v: bool
     # nodes deliberately left unstamped, so a later pass does not read absence
     # as an error
     )
     noStampNode: (IdMapV zast.nodeid v: bool
     # FUNCTION tid -> the definition carries a body (a bodyless spec is false)
     )
-    fnHasBody: (IdMapV u64 v: bool
+    fnHasBody: (IdMapV ztypes.tid v: bool
     # a reassignment TARGET path is being checked (a write, not a read)
     )
     inAssignTarget: bool
@@ -809,7 +809,7 @@ ZTyping: class {
     # it is minted -- resolving `bool` there MINTS it, and minting during type
     # resolution pulls it ahead of the demand order -- so methodReturnOf answers
     # from these instead, on the one path both the lazy and the eager tiers take.
-    synthCmpTids: IdSet u64
+    synthCmpTids: IdSet ztypes.tid
     # the part that leaves a type with no generated `==`, or zero when it has
     # one: asked at every generated comparison, answered once per type
     valEqMissing: (IdMapV ztypes.tid v: ztypes.tid)
@@ -834,7 +834,7 @@ ZTyping: class {
     eachSubjectNid: zast.nodeid
     # a scalar typedef's base name, keyed by tid so the answer does not depend
     # on which unit the read happens in
-    typedefBaseName: (IdMapV u64 v: zast.nameid
+    typedefBaseName: (IdMapV ztypes.tid v: zast.nameid
     # a typedef wrapper's base type id, resolved structurally at declaration
     # (a parameterized base rides the spec trie, a bare atom the unit ladder)
     )
@@ -842,7 +842,7 @@ ZTyping: class {
     # whether a main-unit definition is a reftype, which the emitter needs
     # before it has walked it
     )
-    mainDefIsReftype: (IdMapV u64 v: bool
+    mainDefIsReftype: (IdMapV zast.nameid v: bool
     # the sum type a dotted path reads an arm of
     )
     dpTaggedParent: (IdMapV zast.nodeid v: ztypes.tid
@@ -882,7 +882,7 @@ ZTyping: class {
     pendingCustomTagNode: (IdMapV u64 v: zast.nodeid
     # the type owning a default not yet resolvable
     )
-    pendingDefaultOwner: (IdMapV zast.nodeid v: u64
+    pendingDefaultOwner: (IdMapV zast.nodeid v: ztypes.tid
     # that default's declaration
     )
     pendingDefaultId: (IdMapV zast.nodeid v: u64
@@ -892,7 +892,7 @@ ZTyping: class {
     # types some site actually constructs, which is what makes construction a
     # DEMAND the emitter must satisfy
     )
-    constructedTypes: (IdMapV u64 v: bool
+    constructedTypes: (IdMapV ztypes.tid v: bool
     # collections whose child types have been minted, so minting runs once
     )
     # the type-ref nodes written as a bare name in a type position -- not an
@@ -900,7 +900,7 @@ ZTyping: class {
     bareTyperefNodes: IdSet zast.nodeid
     # recording an application's head: its name is the template, not a type
     typerefHead: bool
-    collectionChildrenBuilt: IdSet u64
+    collectionChildrenBuilt: IdSet ztypes.tid
     # per-call-argument disposition (take/lock/borrow); absent = valtype/none.
     # The emitter reads it to zero the source of a taken argument, and the LSP
     # to word the argument's ownership.
@@ -973,7 +973,7 @@ ZTyping: class {
     # the type ids of generator instances (the class the lowering produced):
     # their per-call slots are non-owned fields no constructor sets, so the
     # honesty rule on owned returns leaves them alone
-    generatorTypes: IdSet u64
+    generatorTypes: IdSet ztypes.tid
     # the state field a generator `call` body's local lives in, keyed by the
     # local's variable id: the body resumes in a later call, so what the local
     # owns is kept in the instance, one field per variable. A borrow is not kept
@@ -1043,7 +1043,7 @@ ZTyping: class {
     withValueField: (IdMapV zast.nodeid v: zast.nameid
     # inferred concrete tid per call, keyed by call node and parameter name
     )
-    callGenericBinding: (MapVV callslot v: u64
+    callGenericBinding: (MapVV callslot v: ztypes.tid
     # per-node single-valued stamps, indexed by nodeid - 1 (node ids are
     # minted dense 1..N, so the stamp IS the slot); 0 means unstamped
     )
@@ -1074,11 +1074,11 @@ ZTyping: class {
     aliasInternalName: (IdMapR zast.nodeid V: String
     # calls that construct without naming a constructor
     )
-    implicitCreate: (IdMapV zast.nodeid v: u64
+    implicitCreate: (IdMapV zast.nodeid v: ztypes.tid
     # the node a function's return type came from, for the diagnostic that has
     # to point at it
     )
-    funcReturnNode: (IdMapV u64 v: zast.nodeid
+    funcReturnNode: (IdMapV ztypes.tid v: zast.nodeid
     # the variable a definition owns, where it owns one
     )
     defVariableId: (IdMapV zast.nodeid v: ztypes.vid)
@@ -1123,9 +1123,9 @@ ZTyping: class {
     # value as wherever it spells it
     standInOf: (IdMapV zast.nodeid v: specstandin)
     # each instance's first instantiating call, which its errors name
-    monoSite: (IdMapV u64 v: monosite)
+    monoSite: (IdMapV ztypes.tid v: monosite)
     # each generic typedef instance whose base refuses its argument
-    typedefClash: (IdMapV u64 v: typedefclash)
+    typedefClash: (IdMapV ztypes.tid v: typedefclash)
     # bound refusals are not reported: a typedef instance's base is being
     # minted after its clash was recorded, and would only repeat it
     quietBounds: bool
@@ -1272,7 +1272,7 @@ ZTyping: class {
     # in, from its declaration (`tag: u8.tag`) or the spec's u8 default. Absent
     # for a data-sourced tag, whose constants set their own width.
     )
-    variantTagBase: (IdMapV u64 v: u64
+    variantTagBase: (IdMapV ztypes.tid v: ztypes.tid
     # the system unit's root DeclId, resolved once: the member probe below it
     # runs per reference, so it must not re-resolve the unit name each time
     )
@@ -1293,7 +1293,7 @@ ZTyping: class {
     # the canonical `null` tid, seeded with the other system types: an
     # out-less method's auto-call resolves to null, and every reader of
     # that stamp already treats it as the no-value type
-    nullTypeId: u64
+    nullTypeId: ztypes.tid
     # one-shot guard: the native link-target descend runs once per program
     # type-ref node id -> base type name; resolved to its real type post-demand
     pendingTyperef: (IdMapV zast.nodeid v: zast.nameid
@@ -1303,7 +1303,7 @@ ZTyping: class {
     pendingTyperefScope: (IdMapV zast.nodeid v: ztypes.declid
     # each unit's own type. A unit IS a type, so it has one
     )
-    unitTypesById: (IdMapV u64 v: ztypes.tid
+    unitTypesById: (IdMapV zast.nodeid v: ztypes.tid
     # --- declaration tree ---
     # every Decl row, indexed by its DeclId: row 0 is the sentinel and ids are
     # minted dense in mint order and never removed, so the id IS the index
@@ -1313,11 +1313,11 @@ ZTyping: class {
     # setter reaches the owner's declaration without the type registry. A
     # monomorphisation is absent: it links to its template through the
     # registry, never through declSetType.
-    declByTypeId: (IdMapV u64 v: ztypes.declid
+    declByTypeId: (IdMapV ztypes.tid v: ztypes.declid
     # the `public:` block Decl of each unit or type Decl that has one, by
     # the owner's declid: a unit's surface is asked for per qualified lookup
     )
-    publicNsByOwner: (IdMapV u64 v: ztypes.declid
+    publicNsByOwner: (IdMapV ztypes.declid v: ztypes.declid
     # reference nodeid -> resolved DeclId (stamped by resolution)
     )
     refDecl: (IdMapV zast.nodeid v: ztypes.declid
@@ -1416,13 +1416,13 @@ ZTyping: class {
             nameId: (zast.nameid.create from: name.u32)
             childDeclId: id
         )
-        if kind.publicNs then this.publicNsByOwner.set key: parent.u64 value: id
+        if kind.publicNs then this.publicNsByOwner.set key: parent value: id
         return id
     }
 
     # declPublicNsOf -- the `public:` block Decl under `owner`, or 0.
     declPublicNsOf: function {t: this.view owner: ztypes.declid} out ztypes.declid is {
-        po: t.publicNsByOwner.get key: owner.u64
+        po: t.publicNsByOwner.get key: owner
         match (
             po
         ) case some then {
@@ -1604,7 +1604,7 @@ ZTyping: class {
 
     # whether member `nameId` of `implTid` is a conformance marker's label: the
     # marker is a member of its type, but no field of it and no arm
-    isConformanceLabel: function {this: this.view implTid: u64 nameId: u64} out bool is {
+    isConformanceLabel: function {this: this.view implTid: ztypes.tid nameId: u64} out bool is {
         isLabel: false
         for each crow: this.conformance loop {
             if crow.implTypeId == implTid when crow.labelNameId == nameId then isLabel = true
@@ -2199,12 +2199,12 @@ ZTyping: class {
         for i < n loop {
             w: this.pendWrites.get :i
             if w.parent == parentTypeId then {
-                if c == slot then return (declrow name: w.name.u64 tid: w.type.u64 keep: true)
+                if c == slot then return (declrow name: w.name.u64 tid: w.type keep: true)
                 c = c + 1
             }
             i = i + 1
         }
-        return (declrow name: 0 tid: 0 keep: false)
+        return (declrow name: 0 tid: ztypes.noTid keep: false)
     }
 
     # declRowSlots -- how many slots a declChildWalk over `ownerTid` reads.
@@ -2243,7 +2243,7 @@ ZTyping: class {
             } case none then null
         }
         keep: membersOnly.not
-        mt: u64
+        mt: ztypes.tid
         {
             ko: this.decls.get i: did
             if membersOnly then {
@@ -2254,7 +2254,7 @@ ZTyping: class {
             }
             mt = ko.typeId
         }
-        if mt == 0 then keep = false
+        if mt.isZero then keep = false
         return (declrow name: nid tid: mt :keep)
     }
 
@@ -2482,7 +2482,7 @@ ZTyping: class {
         parentTypeId: ztypes.tid
         nameId: zast.nameid
     } out constslot is {
-        return (constslot owner: parentTypeId.u64 name: nameId.u64)
+        return (constslot owner: parentTypeId name: nameId.u64)
     }
 
     # setMemberConst -- record the compile-time VALUE of member `nameId` on
@@ -2498,7 +2498,7 @@ ZTyping: class {
     # of no mono). A template body is walked once per mono, and a value that
     # differs between monos -- a numeric generic parameter's -- is kept per
     # mono; the first value any walk finds is the shared one.
-    setNodeConstIn: function {:this mono: u64 nid: zast.nodeid value: ztypes.cval} is {
+    setNodeConstIn: function {:this mono: ztypes.tid nid: zast.nodeid value: ztypes.cval} is {
         (setFirstOrPerMono
             perMono: this.monoNodeConst
             shared: this.nodeConst
@@ -2511,7 +2511,9 @@ ZTyping: class {
 
     # defVariableIn -- the variable the definition `nid` owns, as the walk of
     # `mono` bound it (monoVariableIn).
-    defVariableIn: function {t: this.view mono: u64 nid: zast.nodeid} out optionval ztypes.vid is {
+    defVariableIn: function {
+        t: this.view mono: ztypes.tid nid: zast.nodeid
+    } out optionval ztypes.vid is {
         return (monoVariableIn perMono: t.monoDefVariableId shared: t.defVariableId :mono :nid)
     }
 
@@ -2555,16 +2557,16 @@ ZTyping: class {
     # `nid` goes to: the instance being walked, unless the node lies in its own
     # copy of the body, whose answers are the plain tables'. 0 outside an
     # instance walk.
-    walkMonoOf: function {t: this.view nid: zast.nodeid} out u64 is {
-        if t.curMonoStamp == 0 then return 0
-        if (t.nodeInInstanceBody :nid) then return 0
+    walkMonoOf: function {t: this.view nid: zast.nodeid} out ztypes.tid is {
+        if t.curMonoStamp.isZero then return ztypes.noTid
+        if (t.nodeInInstanceBody :nid) then return ztypes.noTid
         return t.curMonoStamp
     }
 
     # nodeTypeIn -- a node's type as the walk of `mono` stamped it: the mono's
     # own, else the shared one. An instance walk stamps only its own table, so a
     # checker reading an arm it has just walked asks here.
-    nodeTypeIn: function {t: this.view mono: u64 nid: zast.nodeid} out ztypes.tid is {
+    nodeTypeIn: function {t: this.view mono: ztypes.tid nid: zast.nodeid} out ztypes.tid is {
         if mono > 0 then {
             mg: t.monoNodeType.get key: (monostamp :mono node: nid)
             match (
@@ -2578,7 +2580,7 @@ ZTyping: class {
 
     # nodeConstIn -- a use site's value as the walk of `mono` sees it: the
     # mono's own, else the shared one; `none` when it has neither.
-    nodeConstIn: function {t: this.view mono: u64 nid: zast.nodeid} out ztypes.cval is {
+    nodeConstIn: function {t: this.view mono: ztypes.tid nid: zast.nodeid} out ztypes.cval is {
         if mono > 0 then {
             mg: t.monoNodeConst.get key: (monostamp :mono node: nid)
             match (
@@ -2592,7 +2594,7 @@ ZTyping: class {
 
     # foldedBranchIn -- the branch a fold selected as the walk of `mono` sees it;
     # `known` false when no fold decided one.
-    foldedBranchIn: function {t: this.view mono: u64 nid: zast.nodeid} out foldedbranch is {
+    foldedBranchIn: function {t: this.view mono: ztypes.tid nid: zast.nodeid} out foldedbranch is {
         if mono > 0 then {
             mg: t.monoFoldedBranch.get key: (monostamp :mono node: nid)
             match (
@@ -2911,11 +2913,11 @@ sumPairZeroArm: function {
     # detaches the value from the position: a declared numeric is still
     # sequential from 0, so the arm written first carries 0.
     isData: false
-    tb: ty.variantTagBase.get key: k
+    tb: ty.variantTagBase.get key: (ztypes.tid.create from: k)
     match (
         tb
     ) case some then {
-        if tb == 0 then isData = true
+        if tb.isZero then isData = true
     } case none then null
     if isData.not then return f
     # A data block names its own values, so the pair is boolean-like only when
@@ -3101,10 +3103,10 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         synthOwnerName: zast.nameid
         currentThisTid: ztypes.tid
         currentFnTid: ztypes.tid
-        funcReturnsBorrow: (IdMapV u64 v: bool)
-        funcReturnsView: (IdMapV u64 v: bool)
-        funcPins: (IdMapV u64 v: bool)
-        funcReturnsFrozen: (IdMapV u64 v: bool)
+        funcReturnsBorrow: (IdMapV ztypes.tid v: bool)
+        funcReturnsView: (IdMapV ztypes.tid v: bool)
+        funcPins: (IdMapV ztypes.tid v: bool)
+        funcReturnsFrozen: (IdMapV ztypes.tid v: bool)
         takeIntoBinding: false
         currentReturnsBorrow: false
         currentReturnsView: false
@@ -3124,7 +3126,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         numericArgsRefused: IdSet zast.nodeid
         genericBoundQual: (IdMapV zast.nodeid v: zast.nameid)
         wideLiteralNodes: ListVal zast.nodeid
-        wideLiteralMonos: ListVal u64
+        wideLiteralMonos: ListVal ztypes.tid
         typeAppsNamed: IdSet zast.nodeid
         monoNodeConst: (MapVV monostamp v: ztypes.cval)
         monoFoldedBranch: (MapVV monostamp v: foldedbranch)
@@ -3133,29 +3135,29 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         valuePartialAt: (IdMapV zast.nodeid v: ztypes.tid)
         numericArgDependent: false
         templateBodiesScanned: IdSet zast.nodeid
-        monosWalked: IdSet u64
-        monoMintedBy: (IdMapV u64 v: u64)
-        monoRecursionReported: IdSet u64
+        monosWalked: IdSet ztypes.tid
+        monoMintedBy: (IdMapV ztypes.tid v: ztypes.tid)
+        monoRecursionReported: IdSet ztypes.tid
         unnamedLocalOfNode: (IdMapV zast.nodeid v: u64)
         unheldTemps: IdSet u64
         heldTemps: ListVal u64
         dropTempNodes: ListVal zast.nodeid
         dropTempNames: ListVal u64
         monoParamSubst: (IdMapV ztypes.tid v: ztypes.tid)
-        curMonoStamp: 0
-        constMono: 0
-        emitMono: 0
+        curMonoStamp: ztypes.noTid
+        constMono: ztypes.noTid
+        emitMono: ztypes.noTid
         curMonoFnTid: ztypes.tid
-        builtinTidMemo: (IdMapV u64 v: ztypes.tid)
-        numericTidMemo: (IdMapV u64 v: bool)
+        builtinTidMemo: (IdMapV zast.nameid v: ztypes.tid)
+        numericTidMemo: (IdMapV ztypes.tid v: bool)
         renameSeen: false
         privacySeen: false
         asConstDecls: IdSet u64
         boxedArms: SetVal armkey
         inlineArms: SetVal armkey
-        generatorWrapper: (IdMapV u64 v: bool)
+        generatorWrapper: (IdMapV zast.nodeid v: bool)
         noStampNode: (IdMapV zast.nodeid v: bool)
-        fnHasBody: (IdMapV u64 v: bool)
+        fnHasBody: (IdMapV ztypes.tid v: bool)
         inAssignTarget: false
         sigGenericDecl: ztypes.declid
         inContainmentEdge: false
@@ -3163,7 +3165,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         suppressBareCtor: false
         suppressFnAutoCall: false
         calleeDottedNid: zast.nodeid
-        synthCmpTids: IdSet u64
+        synthCmpTids: IdSet ztypes.tid
         valEqMissing: (IdMapV ztypes.tid v: ztypes.tid)
         hashUsed: IdSet u64
         hashKeys: IdSet u64
@@ -3171,9 +3173,9 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         allowBareFnRef: false
         stmtDiscarded: false
         eachSubjectNid: zast.nodeid
-        typedefBaseName: (IdMapV u64 v: zast.nameid)
+        typedefBaseName: (IdMapV ztypes.tid v: zast.nameid)
         typedefBaseTid: (IdMapV ztypes.tid v: ztypes.tid)
-        mainDefIsReftype: (IdMapV u64 v: bool)
+        mainDefIsReftype: (IdMapV zast.nameid v: bool)
         dpTaggedParent: (IdMapV zast.nodeid v: ztypes.tid)
         dpArmPredicate: (IdMapV zast.nodeid v: ztypes.tid)
         dpTagRead: (IdMapV zast.nodeid v: ztypes.tid)
@@ -3185,13 +3187,13 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         postGuardArm: (IdMapV zast.nodeid v: zast.nameid)
         pendingCustomTag: (IdMapV u64 v: zast.nameid)
         pendingCustomTagNode: (IdMapV u64 v: zast.nodeid)
-        pendingDefaultOwner: (IdMapV zast.nodeid v: u64)
+        pendingDefaultOwner: (IdMapV zast.nodeid v: ztypes.tid)
         pendingDefaultId: (IdMapV zast.nodeid v: u64)
         pendingDefaultName: (IdMapV zast.nodeid v: zast.nameid)
-        constructedTypes: (IdMapV u64 v: bool)
+        constructedTypes: (IdMapV ztypes.tid v: bool)
         bareTyperefNodes: IdSet zast.nodeid
         typerefHead: false
-        collectionChildrenBuilt: IdSet u64
+        collectionChildrenBuilt: IdSet ztypes.tid
         argDisposition: (IdMapV zast.nodeid v: ztypes.zparamownership)
         callRecvFromArgs: IdSet zast.nodeid
         armLeafMoves: IdSet zast.nodeid
@@ -3210,7 +3212,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         generatorCallBodies: IdSet zast.nodeid
         aliasFoldsOpen: ListVal u64
         aliasCyclesReported: IdSet u64
-        generatorTypes: IdSet u64
+        generatorTypes: IdSet ztypes.tid
         genLocalFieldOf: (IdMapV u64 v: zast.nameid)
         destroyItems: ListVal destroyitem
         scopeDestroy: (IdMapV zast.nodeid v: destroyrange)
@@ -3226,7 +3228,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         forIterableField: (IdMapV zast.nodeid v: zast.nameid)
         forImplicitIterate: (IdMapV zast.nodeid v: zast.nodeid)
         withValueField: (IdMapV zast.nodeid v: zast.nameid)
-        callGenericBinding: (MapVV callslot v: u64
+        callGenericBinding: (MapVV callslot v: ztypes.tid
         # measured self-compile: ~0.6 stamps/node -- capacity nodeEst
         # holds 2/3*nodeEst entries before the first grow
         )
@@ -3237,8 +3239,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         variableRebound: IdSet ztypes.vid
         variableMoved: IdSet ztypes.vid
         aliasInternalName: (IdMapR zast.nodeid V: String)
-        implicitCreate: (IdMapV zast.nodeid v: u64)
-        funcReturnNode: (IdMapV u64 v: zast.nodeid)
+        implicitCreate: (IdMapV zast.nodeid v: ztypes.tid)
+        funcReturnNode: (IdMapV ztypes.tid v: zast.nodeid)
         defVariableId: (IdMapV zast.nodeid v: ztypes.vid)
         monoDefVariableId: (MapVV monostamp v: ztypes.vid)
         nodeConst: (IdMapV zast.nodeid v: ztypes.cval)
@@ -3250,8 +3252,8 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         conformance: List ztypes.ZConformance
         specStandIns: ListVal specstandin
         standInOf: (IdMapV zast.nodeid v: specstandin)
-        monoSite: (IdMapV u64 v: monosite)
-        typedefClash: (IdMapV u64 v: typedefclash)
+        monoSite: (IdMapV ztypes.tid v: monosite)
+        typedefClash: (IdMapV ztypes.tid v: typedefclash)
         quietBounds: false
         eagerAll: false
         dumpRows: false
@@ -3281,19 +3283,19 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         sumPairFirstArm: (IdMapV u64 v: u64)
         sumPairSecondArm: (IdMapV u64 v: u64)
         truthyCondArm: (IdMapV zast.nodeid v: u64)
-        variantTagBase: (IdMapV u64 v: u64)
+        variantTagBase: (IdMapV ztypes.tid v: ztypes.tid)
         systemUnitRoot: ztypes.declid
         mainUnitRoot: ztypes.declid
         collectionsUnitRoot: ztypes.declid
         coreUnitRoot: ztypes.declid
         programRoot: ztypes.declid
-        nullTypeId: 0
+        nullTypeId: ztypes.noTid
         pendingTyperef: (IdMapV zast.nodeid v: zast.nameid)
         pendingTyperefScope: (IdMapV zast.nodeid v: ztypes.declid)
-        unitTypesById: (IdMapV u64 v: ztypes.tid)
+        unitTypesById: (IdMapV zast.nodeid v: ztypes.tid)
         decls: (List Decl i: ztypes.declid)
-        declByTypeId: (IdMapV u64 v: ztypes.declid)
-        publicNsByOwner: (IdMapV u64 v: ztypes.declid)
+        declByTypeId: (IdMapV ztypes.tid v: ztypes.declid)
+        publicNsByOwner: (IdMapV ztypes.declid v: ztypes.declid)
         refDecl: (IdMapV zast.nodeid v: ztypes.declid)
         usedMemberDecl: IdSet u64
         pendingDefs: ListVal ztypes.declid

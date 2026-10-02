@@ -1767,7 +1767,7 @@ useVarId: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} out zty
 
 # the unit-definition type id referenced at node `nid` (the referenced
 # declaration's minted tid via refDecl), or 0.
-useUnitDef: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} out u64 is {
+useUnitDef: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} out ztypes.tid is {
     rd: refDeclOf :o :nid
     return (declTypeIdOf :o declId: rd)
 }
@@ -1938,9 +1938,9 @@ declTypeIdOf: function {
 
 # the owner type id of the member referenced at node `nid` (the member
 # declaration's parent type via refDecl), or 0.
-memberOwnerOf: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} out u64 is {
+memberOwnerOf: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} out ztypes.tid is {
     rd: refDeclOf :o :nid
-    if rd.isZero then return 0
+    if rd.isZero then return ztypes.noTid
     par: ztypes.declid
     match (
         o
@@ -1948,15 +1948,15 @@ memberOwnerOf: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} ou
         d: o.typing.decls.get i: rd
         par = d.parent
     } case none then null
-    if par.isZero then return (ztypes.declid.create from: 0)
+    if par.isZero then return ztypes.noTid
     match (
         o
     ) case some then {
         p: o.typing.decls.get i: par
         if p.kind.typeDecl then return p.typeId
-        return 0
+        return ztypes.noTid
     } case none then {
-        return 0
+        return ztypes.noTid
     }
 }
 
@@ -1979,13 +1979,13 @@ defVarIdOf: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} out z
 }
 
 # the type id stamped on node `nid`, or 0.
-nodeTypeAt: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} out u64 is {
+nodeTypeAt: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} out ztypes.tid is {
     match (
         o
     ) case some then {
         return (ztyping.nodeTypeAt tbl: o.typing.nodeType :nid)
     } case none then {
-        return 0
+        return ztypes.noTid
     }
 }
 
@@ -3266,9 +3266,9 @@ navhit: record {
     # the variable the reference resolved to, zero when it is not one
     vid: ztypes.vid
     # the type the reference resolved to, zero when it is not one
-    tid: u64
+    tid: ztypes.tid
     # the owner type of a member hit, zero when it is not one
-    owner: u64
+    owner: ztypes.tid
     # the Decl the reference resolved to; a re-export keeps its own
     declId: ztypes.declid
     # set when the name denotes a UNIT rather than anything inside one
@@ -3312,9 +3312,9 @@ navtarget: record {
     # the variable
     vid: ztypes.vid
     # the type
-    tid: u64
+    tid: ztypes.tid
     # the owner type of a member hit
-    owner: u64
+    owner: ztypes.tid
     # the Decl (surface: a re-export keeps its own Decl); it fills the type id
     # for hits only the Decl layer knows (public-interface entries)
     declId: ztypes.declid
@@ -3326,21 +3326,21 @@ navtarget: record {
 # type, then a unit, then its own variable. The Decl comes from refDecl.
 navTargetByKind: function {snap: zcheck.CheckResult hnid: zast.nodeid kind: u8} out navtarget is {
     refVid: ztypes.vid
-    refTid: u64
-    refOwner: u64
+    refTid: ztypes.tid
+    refOwner: ztypes.tid
     if kind == 1 then {
         refVid = useVarId o: snap.st nid: hnid
         if refVid.isZero then refTid = useUnitDef o: snap.st nid: hnid
     }
     if kind == 2 then {
         refOwner = memberOwnerOf o: snap.st nid: hnid
-        if refOwner == 0 then refTid = useUnitDef o: snap.st nid: hnid
+        if refOwner.isZero then refTid = useUnitDef o: snap.st nid: hnid
     }
     if kind == 3 then refVid = defVarIdOf o: snap.st nid: hnid
     if kind == 6 then {
         refTid = nodeTypeAt o: snap.st nid: hnid
-        if refTid == 0 then refTid = useUnitDef o: snap.st nid: hnid
-        if refTid == 0 then refVid = defVarIdOf o: snap.st nid: hnid
+        if refTid.isZero then refTid = useUnitDef o: snap.st nid: hnid
+        if refTid.isZero then refVid = defVarIdOf o: snap.st nid: hnid
     }
     return (navtarget
         vid: refVid
@@ -3409,7 +3409,7 @@ navTargetRefine: function {
             tid: (nodeTypeAt o: snap.st nid: hnid)
         )
     }
-    if base.vid.isZero when refTid == 0 when base.owner == 0 when refDeclId > 0 then {
+    if base.vid.isZero when refTid.isZero when base.owner.isZero when refDeclId > 0 then {
         refTid = declTypeIdOf o: snap.st declId: refDeclId
     }
     # a TYPE named in callable position (`Dog n: 7`, `Path s`): the checker
@@ -3449,7 +3449,7 @@ navResolve: function {
     # a unit's name answers with its FILE: a top-level unit's by name, a
     # subunit's through the declaration the checker resolved it to
     unitFsno: zvfs.fsno
-    if t.vid.isZero when t.tid == 0 then {
+    if t.vid.isZero when t.tid.isZero then {
         unitFsno = unitFsnoByName :snap name: hnm.stringView
     } else if t.vid.isZero when (isUnitTidOpt o: snap.st tid: t.tid) then {
         unitFsno = unitFsnoOfDecl :snap declId: t.declId
@@ -3628,7 +3628,7 @@ hoverSigTid: function {snap: zcheck.CheckResult hit: navhit} out u64 is {
     sigTid: t
     if ud > 0 then sigTid = ud
     if (isInstanceOfOpt o: snap.st tid: t tpl: ud) then sigTid = t
-    if sigTid == 0 then sigTid = hit.tid
+    if sigTid.isZero then sigTid = hit.tid
     return sigTid
 }
 
@@ -5219,7 +5219,7 @@ caseArmComplete: function {
     subjNode: prog.nodes.get i: subjIdx
     subjNid = ztypecheck.nodeId n: subjNode
     subjTid: nodeTypeAt :o nid: subjNid
-    if subjTid == 0 then return false
+    if subjTid.isZero then return false
     if o.none then return false
     arms: ztypecheck.sumSubtypeNames ast: prog st: o sid: subjTid
     used: List String
@@ -5239,7 +5239,7 @@ resolveCalleeFuncId: function {o: (Option zenv.ZSymbolTable).view nid: zast.node
     ftid: nodeTypeAt :o :nid
     udx: useUnitDef :o :nid
     if udx > 0 then ftid = udx
-    if ftid == 0 then return 0
+    if ftid.isZero then return 0
     result: u64
     match (
         o
