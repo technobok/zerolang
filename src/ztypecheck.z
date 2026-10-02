@@ -11384,8 +11384,8 @@ resolveVariant: function {
     # value but which arm it is. Recorded for the backend at the end of the loop.
     allNullV: true
     armCountV: u64
-    firstArmV: u64
-    secondArmV: u64
+    firstArmV: zast.nameid
+    secondArmV: zast.nameid
     kFiter: u64
     for kFiter < vnode.nis loop {
         fmId: zast.objIsItemAt :ast nid: vnode.nid i: kFiter
@@ -11393,8 +11393,8 @@ resolveVariant: function {
         fm: argRefAt :ast nid: fmId
         if fm.nid.isZero.not then {
             armCountV = armCountV + 1
-            if armCountV == 1 then firstArmV = fm.name.u64
-            if armCountV == 2 then secondArmV = fm.name.u64
+            if armCountV == 1 then firstArmV = fm.name
+            if armCountV == 2 then secondArmV = fm.name
             anV: (zast.nameTextAt
                 :ast
                 ref: (atomNameId :ast n: (ast.nodes.get i: fm.operation))
@@ -11466,8 +11466,8 @@ resolveVariant: function {
     # Positional: which of these is the FALSY arm is a separate question, asked
     # of the discriminator by ztyping.sumPairZeroArm.
     if armCountV == 2 then {
-        st.typing.sumPairFirstArm.set key: vid.u64 value: firstArmV
-        st.typing.sumPairSecondArm.set key: vid.u64 value: secondArmV
+        st.typing.sumPairFirstArm.set key: (ztypes.tid.create from: vid) value: firstArmV
+        st.typing.sumPairSecondArm.set key: (ztypes.tid.create from: vid) value: secondArmV
     }
     # the discriminator's declared storage, so a backend can honour it; a
     # generic template's is its instances'
@@ -12215,8 +12215,8 @@ resolveUnion: function {
     }
     allNull: true
     armCountU: u64
-    firstArmU: u64
-    secondArmU: u64
+    firstArmU: zast.nameid
+    secondArmU: zast.nameid
     kFiter: u64
     for kFiter < vnode.nis loop {
         fmId: zast.objIsItemAt :ast nid: vnode.nid i: kFiter
@@ -12224,8 +12224,8 @@ resolveUnion: function {
         fm: argRefAt :ast nid: fmId
         if fm.nid.isZero.not then {
             armCountU = armCountU + 1
-            if armCountU == 1 then firstArmU = fm.name.u64
-            if armCountU == 2 then secondArmU = fm.name.u64
+            if armCountU == 1 then firstArmU = fm.name
+            if armCountU == 2 then secondArmU = fm.name
             anU: (zast.nameTextCopy
                 :ast
                 ref: (atomNameId :ast n: (ast.nodes.get i: fm.operation))
@@ -12252,8 +12252,8 @@ resolveUnion: function {
     # both arm names of a 2-arm sum -- the union half of the same record the
     # variant resolver writes. Option and Result are the reason it exists.
     if armCountU == 2 then {
-        st.typing.sumPairFirstArm.set key: uid.u64 value: firstArmU
-        st.typing.sumPairSecondArm.set key: uid.u64 value: secondArmU
+        st.typing.sumPairFirstArm.set key: (ztypes.tid.create from: uid) value: firstArmU
+        st.typing.sumPairSecondArm.set key: (ztypes.tid.create from: uid) value: secondArmU
     }
     # the discriminator's declared storage, so a backend can honour it; a
     # generic template's is its instances'
@@ -32513,7 +32513,7 @@ stampTruthyCond: function {
     tid: ztypes.tid
 } is {
     ta: ztyping.sumPairTruthyArmOf ty: st.typing reg: st.reg :tid
-    if ta == 0 then return
+    if ta.isZero then return
     nid: nodeId :n
     if nid.isZero then return
     st.typing.truthyCondArm.set key: nid value: ta
@@ -32608,15 +32608,8 @@ armSuffixSide: function {
 
 # truthyCondArmOf -- the arm a bare 2-arm-sum condition at `nid` holds, 0 when
 # the node is not one.
-truthyCondArmOf: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out u64 is {
-    o: st.typing.truthyCondArm.get key: nid
-    match (
-        o
-    ) case some then {
-        return o
-    } case none then {
-        return 0
-    }
+truthyCondArmOf: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out zast.nameid is {
+    return ((st.typing.truthyCondArm.get key: nid).or d: zast.nameid)
 }
 
 # predFactOf -- recognize an if-condition operation as an arm predicate:
@@ -32632,7 +32625,7 @@ equalityArmFact: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
     n: astnode.view
-    boolId: u64
+    boolId: ztypes.tid
 } out Option ArmPredFact is {
     br0: binRefAt :ast nid: (nodeId :n)
     if br0.operator.isZero then return (Option.none ArmPredFact)
@@ -32644,12 +32637,12 @@ equalityArmFact: function {
     lsd0: (ztyping.armSideOfName
         ty: st.typing
         typeId: boolId
-        nameId: (bareAtomNameId n: (ast.nodes.get i: br0.lhs)).u64
+        nameId: (bareAtomNameId n: (ast.nodes.get i: br0.lhs))
     )
     rsd0: (ztyping.armSideOfName
         ty: st.typing
-        typeId: boolId
-        nameId: (bareAtomNameId n: (ast.nodes.get i: br0.rhs)).u64
+        typeId: (ztypes.tid.create from: boolId)
+        nameId: (bareAtomNameId n: (ast.nodes.get i: br0.rhs))
     )
     if rsd0.truthy then return (predDottedFact
         :st
@@ -32689,7 +32682,7 @@ predFactOf: function {
     ast: Ast.view
     st: zenv.ZSymbolTable.view
     n: astnode.view
-    boolId: u64
+    boolId: ztypes.tid
 } out Option ArmPredFact is {
     # A bare 2-arm sum as the condition IS an arm predicate with the arm left
     # implicit, so it states the same fact `if x.<arm>` states and narrows both
@@ -32697,13 +32690,13 @@ predFactOf: function {
     # excludes it and collapses only when what remains carries a payload.
     {
         ta0: truthyCondArmOf :st nid: (nodeId :n)
-        if ta0 > 0 then {
+        if ta0.isZero.not then {
             sj0: bareAtomNameId :n
             ft0: walkTypeOf :st nid: (nodeId :n)
             if sj0.isZero.not when ft0.isZero.not then {
                 return (Option.some (ArmPredFact
                     subject: sj0
-                    armName: (zast.nameid.create from: ta0.u32.orPanic)
+                    armName: ta0
                     fullTid: ft0
                     negated: false
                 )
@@ -32939,7 +32932,7 @@ checkClauseConditions: function {
     ast: Ast
     clause: ifclauseref
     factsOut: List ArmPredFact
-    boolId: u64
+    boolId: ztypes.tid
 } is {
     if clause.nid.isZero then return
     k: u64
@@ -37009,7 +37002,7 @@ checkIfClauses: function {
     liveBefore: (IdSet u64).view
     takenAcross: ArmTakes
     skipDead: bool
-    pBool: u64
+    pBool: ztypes.tid
     flagsOut: ListVal bool
     fbr: ztyping.foldedbranch
 } out u8 is {
@@ -54386,24 +54379,10 @@ boolConst: function {
 } out ztypes.cval is {
     bt: builtinTidT :st :scope :ast base: "bool"
     if bt.isZero then return ztypes.noConst
-    nmNode: u64
-    if v then {
-        o: st.typing.sumPairSecondArm.get key: bt.u64
-        match (
-            o
-        ) case some then {
-            nmNode = o
-        } case none then null
-    } else {
-        o8: st.typing.sumPairFirstArm.get key: bt.u64
-        match (
-            o8
-        ) case some then {
-            nmNode = o8
-        } case none then null
-    }
-    if nmNode == 0 then return ztypes.noConst
-    return (ztypes.makeArmConst armTid: bt armName: (zast.nameid.create from: nmNode.u32.orPanic))
+    nmNode: (st.typing.sumPairFirstArm.get key: bt).or d: zast.nameid
+    if v then nmNode = (st.typing.sumPairSecondArm.get key: bt).or d: zast.nameid
+    if nmNode.isZero then return ztypes.noConst
+    return (ztypes.makeArmConst armTid: bt armName: nmNode)
 }
 
 # boolArmTruth -- which of bool's arms an armKind constant names: 0 for the arm
@@ -54420,11 +54399,11 @@ boolArmTruth: function {
     bt: builtinTidT :st :scope :ast base: "bool"
     if bt.isZero then return 2
     if v.armTid != bt then return 2
-    f: (st.typing.sumPairFirstArm.get key: bt.u64).or d: 0
-    s: (st.typing.sumPairSecondArm.get key: bt.u64).or d: 0
-    if f == 0 then return 2
-    if v.armName.u64 == f then return 0
-    if v.armName.u64 == s then return 1
+    f: (st.typing.sumPairFirstArm.get key: bt).or d: zast.nameid
+    s: (st.typing.sumPairSecondArm.get key: bt).or d: zast.nameid
+    if f.isZero then return 2
+    if v.armName == f then return 0
+    if v.armName == s then return 1
     return 2
 }
 
@@ -54962,8 +54941,8 @@ foldIfCond: function {
         reg: st.reg
         tid: cv.armTid
     )
-    if fa > 0 when cv.armName.u64 == fa then return 2
-    if ta > 0 when cv.armName.u64 == ta then return 1
+    if fa.isZero.not when cv.armName == fa then return 2
+    if ta.isZero.not when cv.armName == ta then return 1
     return 0
 }
 

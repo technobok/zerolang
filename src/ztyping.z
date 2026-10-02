@@ -1252,11 +1252,11 @@ ZTyping: class {
     # and forcing one at emission time demands members the program never asked
     # for -- which segfaults a demand-driven compile.
     )
-    sumPairFirstArm: (IdMapV u64 v: u64
+    sumPairFirstArm: (IdMapV ztypes.tid v: zast.nameid
     # the other arm of a two-arm sum, which is what a truthiness test needs once
     # it knows the falsy one
     )
-    sumPairSecondArm: (IdMapV u64 v: u64
+    sumPairSecondArm: (IdMapV ztypes.tid v: zast.nameid
     # truthyCondArm -- for a condition node whose type is a 2-arm sum rather
     # than a bool, the name id of the arm the condition HOLDS: the second one,
     # since the first is falsy by the convention. `if x` is `if x.<that arm>`
@@ -1267,7 +1267,7 @@ ZTyping: class {
     # follows a generic MONO back to the template it was minted from, and that
     # needs the registry the emitter only ever holds read-only.
     )
-    truthyCondArm: (IdMapV zast.nodeid v: u64
+    truthyCondArm: (IdMapV zast.nodeid v: zast.nameid
     # variantTagBase -- the NUMERIC type a tagged type's discriminator is stored
     # in, from its declaration (`tag: u8.tag`) or the spec's u8 default. Absent
     # for a data-sourced tag, whose constants set their own width.
@@ -2832,22 +2832,22 @@ sumPairKeyOf: function {
     ty: ZTyping.view
     reg: ztypes.ZTypeRegistry.view
     tid: ztypes.tid
-} out u64 is {
-    o: ty.sumPairFirstArm.get key: tid.u64
+} out ztypes.tid is {
+    o: ty.sumPairFirstArm.get key: (ztypes.tid.create from: tid)
     match (
         o
     ) case some then {
-        return tid.u64
+        return tid
     } case none then null
     go: reg.genericOriginOf :tid
-    if go.isZero then return 0
-    p: ty.sumPairFirstArm.get key: go.u64
+    if go.isZero then return ztypes.noTid
+    p: ty.sumPairFirstArm.get key: (ztypes.tid.create from: go)
     match (
         p
     ) case some then {
-        return go.u64
+        return go
     } case none then null
-    return 0
+    return ztypes.noTid
 }
 
 # sumPairArmValueIs -- does the arm's author-declared `data` constant hold
@@ -2855,15 +2855,12 @@ sumPairKeyOf: function {
 # integer: a non-integer tag has no discriminator to compare.
 sumPairArmValueIs: function {
     ty: ZTyping.view
-    dataTid: u64
-    armName: u64
+    dataTid: ztypes.tid
+    armName: zast.nameid
     want: i64
 } out bool is {
-    if armName == 0 then return false
-    c: (ty.memberConstOf
-        parentTypeId: (ztypes.tid.create from: dataTid.u64)
-        nameId: (zast.nameid.create from: armName.u32.orPanic)
-    )
+    if armName.isZero then return false
+    c: ty.memberConstOf parentTypeId: dataTid nameId: armName
     if c.kind.ivalKind then return c.ival == want
     return false
 }
@@ -2889,31 +2886,19 @@ sumPairZeroArm: function {
     ty: ZTyping.view
     reg: ztypes.ZTypeRegistry.view
     tid: ztypes.tid
-} out u64 is {
+} out zast.nameid is {
+    none: zast.nameid
     k: sumPairKeyOf :ty :reg :tid
-    if k == 0 then return 0
-    f: u64
-    s: u64
-    o: ty.sumPairFirstArm.get key: k
-    match (
-        o
-    ) case some then {
-        f = o
-    } case none then null
-    o8: ty.sumPairSecondArm.get key: k
-    match (
-        o8
-    ) case some then {
-        s = o8
-    } case none then null
-    if f == 0 then return 0
-    if s == 0 then return 0
+    if k.isZero then return none
+    f: (ty.sumPairFirstArm.get key: k).or d: none
+    s: (ty.sumPairSecondArm.get key: k).or d: none
+    if f.isZero or s.isZero then return none
     # variantTagBase records 0 for a DATA-sourced tag, a numeric base for a
     # declared one, and nothing when none was declared. Only the data case
     # detaches the value from the position: a declared numeric is still
     # sequential from 0, so the arm written first carries 0.
     isData: false
-    tb: ty.variantTagBase.get key: (ztypes.tid.create from: k)
+    tb: ty.variantTagBase.get key: k
     match (
         tb
     ) case some then {
@@ -2925,17 +2910,11 @@ sumPairZeroArm: function {
     # order. The arm carrying 0 is the falsy one wherever it stands. Any other
     # set (`{ ON: 1  OFF: 2 }`, `{ HI: 5  LO: 0 }`) is an enumeration that
     # happens to have two elements, not a truth value.
-    dt: u64
-    d0: ty.declChildOfId parentTypeId: (ztypes.tid.create from: k.u64) nameId: zast.names.wkTag
-    match (
-        d0
-    ) case some then {
-        dt = d0
-    } case none then null
-    if dt == 0 then return 0
+    dt: (ty.declChildOfId parentTypeId: k nameId: zast.names.wkTag).or d: ztypes.noTid
+    if dt.isZero then return none
     if (sumPairArmValueIs :ty dataTid: dt armName: f want: 0) then {
         if (sumPairArmValueIs :ty dataTid: dt armName: s want: 1) then return f
-        return 0
+        return none
     }
     if (sumPairArmValueIs :ty dataTid: dt armName: s want: 0) when (sumPairArmValueIs
         :ty
@@ -2943,7 +2922,7 @@ sumPairZeroArm: function {
         armName: f
         want: 1
     ) then return s
-    return 0
+    return none
 }
 
 # isSumPair -- is `tid` a 2-arm sum type with a falsy arm? The question
@@ -2955,7 +2934,7 @@ isSumPair: function {
     reg: ztypes.ZTypeRegistry.view
     tid: ztypes.tid
 } out bool is {
-    return (sumPairZeroArm :ty :reg :tid) > 0
+    return (sumPairZeroArm :ty :reg :tid).isZero.not
 }
 
 # sumPairFalsyArmOf -- the name id of `tid`'s falsy arm: the one whose
@@ -2964,7 +2943,7 @@ sumPairFalsyArmOf: function {
     ty: ZTyping.view
     reg: ztypes.ZTypeRegistry.view
     tid: ztypes.tid
-} out u64 is {
+} out zast.nameid is {
     return (sumPairZeroArm :ty :reg :tid)
 }
 
@@ -2974,26 +2953,14 @@ sumPairTruthyArmOf: function {
     ty: ZTyping.view
     reg: ztypes.ZTypeRegistry.view
     tid: ztypes.tid
-} out u64 is {
+} out zast.nameid is {
+    none: zast.nameid
     z: sumPairZeroArm :ty :reg :tid
-    if z == 0 then return 0
+    if z.isZero then return none
     k: sumPairKeyOf :ty :reg :tid
-    f: u64
-    o: ty.sumPairFirstArm.get key: k
-    match (
-        o
-    ) case some then {
-        f = o
-    } case none then null
-    if f != z then return f
-    o8: ty.sumPairSecondArm.get key: k
-    match (
-        o8
-    ) case some then {
-        return o8
-    } case none then {
-        return 0
-    }
+    f: (ty.sumPairFirstArm.get key: k).or d: none
+    if (f == z).not then return f
+    return ((ty.sumPairSecondArm.get key: k).or d: none)
 }
 
 # armSideOfName -- which side of the 2-arm sum `typeId` the name `nameId` is BY
@@ -3005,19 +2972,19 @@ sumPairTruthyArmOf: function {
 # Positional on purpose: its callers ask about `bool`'s own arms, and bool
 # declares a plain numeric tag whose values ARE the positions. A type whose
 # `data` tag names its own values needs sumPairZeroArm, which reads them.
-armSideOfName: function {ty: ZTyping.view typeId: u64 nameId: u64} out armside is {
-    if nameId == 0 then return armside.none
-    childTid: ty.sumPairSecondArm.get key: typeId
+armSideOfName: function {ty: ZTyping.view typeId: ztypes.tid nameId: zast.nameid} out armside is {
+    if nameId.isZero then return armside.none
+    second: ty.sumPairSecondArm.get key: typeId
     match (
-        childTid
+        second
     ) case some then {
-        if childTid == nameId then return armside.truthy
+        if second == nameId then return armside.truthy
     } case none then null
-    f: ty.sumPairFirstArm.get key: typeId
+    first: ty.sumPairFirstArm.get key: typeId
     match (
-        f
+        first
     ) case some then {
-        if f == nameId then return armside.falsy
+        if first == nameId then return armside.falsy
     } case none then null
     return armside.none
 }
@@ -3055,7 +3022,11 @@ armSuffixSideOf: function {
     match (
         dps
     ) case some then {
-        return (armSideOfName :ty typeId: dps nameId: childNameId)
+        return (armSideOfName
+            :ty
+            typeId: dps
+            nameId: (zast.nameid.create from: childNameId.u32.orPanic)
+        )
     } case none then {
         # `.not` is bool's negation METHOD, not an arm, so the outer node
         # carries no stamp of its own; on an arm predicate it reads as `.false`
@@ -3280,9 +3251,9 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         defNodeIndexBuilt: false
         createOptOut: IdSet u64
         ordinalVariant: (IdMapV u64 v: u64)
-        sumPairFirstArm: (IdMapV u64 v: u64)
-        sumPairSecondArm: (IdMapV u64 v: u64)
-        truthyCondArm: (IdMapV zast.nodeid v: u64)
+        sumPairFirstArm: (IdMapV ztypes.tid v: zast.nameid)
+        sumPairSecondArm: (IdMapV ztypes.tid v: zast.nameid)
+        truthyCondArm: (IdMapV zast.nodeid v: zast.nameid)
         variantTagBase: (IdMapV ztypes.tid v: ztypes.tid)
         systemUnitRoot: ztypes.declid
         mainUnitRoot: ztypes.declid

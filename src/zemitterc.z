@@ -523,16 +523,10 @@ isOrdinalPair: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out boo
 ordinalPairFirstArmId: function {
     symtab: zenv.ZSymbolTable.view
     tid: ztypes.tid
-} out u64 is {
-    if (isOrdinalPair :symtab :tid).not then return 0
-    fa: symtab.typing.sumPairFirstArm.get key: tid.u64
-    match (
-        fa
-    ) case some then {
-        return fa
-    } case none then {
-        return 0
-    }
+} out zast.nameid is {
+    none: zast.nameid
+    if (isOrdinalPair :symtab :tid).not then return none
+    return ((symtab.typing.sumPairFirstArm.get key: tid).or d: none)
 }
 
 # scalarCTypeFor -- the C scalar type for a builtin-named tid, BUT empty when the
@@ -3142,7 +3136,7 @@ Ctx: class {
     # the body's last statement was emitted as a `return`, so nothing after it runs
     tailReturned: bool
     # which unit each definition came from
-    defUnitId: (IdMapV u64 v: u64
+    defUnitId: (IdMapV ztypes.tid v: ztypes.declid
     # the four stdlib units the emitter names outright, resolved once
     )
     ioUnitDecl: u64
@@ -16540,7 +16534,7 @@ armPredicateC: function {
     if (isOrdinalPair :symtab tid: dap) then {
         fa: ordinalPairFirstArmId :symtab tid: dap
         # the arm NAME resolved through any alias, as an id
-        if fa > 0 when mnc0Id.u64 == fa then return "(!(\{valP}))"
+        if fa.isZero.not when mnc0Id == fa then return "(!(\{valP}))"
         return "(\{valP})"
     }
     mnc0P: zast.nameTextAt :ast ref: mnc0Id
@@ -23273,7 +23267,7 @@ emitOrdinalPairMatch: function {
         c: ast.nodes.get i: cId
         if c.caseclause then {
             condB: subj.string
-            if falseArm > 0 when c.name.u64 == falseArm then condB = "!\{subj}"
+            if falseArm.isZero.not when c.name == falseArm then condB = "!\{subj}"
             kwB: "if"
             if firstB.not then kwB = "else if"
             firstB = false
@@ -26012,7 +26006,7 @@ armSideAtNode: function {
 } out ztyping.armside is {
     if nameId.isZero then return ztyping.armside.none
     st: symtab.typing.nodeTypeFor :nid
-    return (ztyping.armSideOfName ty: symtab.typing typeId: st.u64 nameId: nameId.u64)
+    return (ztyping.armSideOfName ty: symtab.typing typeId: (ztypes.tid.create from: st) :nameId)
 }
 
 # boolArmSideOf -- armSideAtNode for a bare atom operand.
@@ -26044,12 +26038,12 @@ truthyCondText: function {
     n: astnode.view
     raw: StringView
 } out String is {
-    fa: (symtab.typing.truthyCondArm.get key: (interpPartNodeId :n)).or d: 0
-    if fa == 0 then return ""
+    fa: (symtab.typing.truthyCondArm.get key: (interpPartNodeId :n)).or d: zast.nameid
+    if fa.isZero then return ""
     tid: symtab.typing.nodeTypeFor nid: (interpPartNodeId :n)
     if tid.isZero then return ""
     if (isOrdinalPair :symtab :tid) then return ""
-    an: zast.nameTextAt :ast ref: (zast.nameid.create from: fa.u32.orPanic)
+    an: zast.nameTextAt :ast ref: fa
     tg: variantTag :symtab :tid arm: an.stringView
     if tg.length == 0 then return ""
     accessOp: ".".string
@@ -26123,7 +26117,7 @@ seedCondOp: function {
     {
         ta0: ztypecheck.truthyCondArmOf st: symtab nid: (interpPartNodeId :n)
         if ta0 > 0 then {
-            an0: zast.nameTextAt :ast ref: (zast.nameid.create from: ta0.u32.orPanic)
+            an0: zast.nameTextAt :ast ref: ta0
             tid93: symtab.typing.nodeTypeFor nid: (interpPartNodeId :n)
             (seedPositiveCore
                 :ast
@@ -26584,7 +26578,7 @@ classifyCondFact: function {
                 # else), and interpPartNodeId of an atomid IS its own id, so
                 # carrying the id is exactly carrying the node.
                 parentNid: (interpPartNodeId :n)
-                armRef: (zast.nameid.create from: ta1.u32.orPanic)
+                armRef: ta1
                 neg: false
             )
         }
@@ -32216,7 +32210,7 @@ emitC: function {
         constLits: List String
         tailRetActive: false
         tailReturned: false
-        defUnitId: (IdMapV u64 v: u64)
+        defUnitId: (IdMapV ztypes.tid v: ztypes.declid)
         ioUnitDecl: 0
         osUnitDecl: 0
         cliUnitDecl: 0
@@ -33434,17 +33428,17 @@ isGenericType: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out boo
 # lookups then serve the hot definedInNonMain path. Interning a fresh integer
 # per unit NAME collapsed two units that share a spelling into one id.
 buildDefUnitIndex: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.view} is {
-    t: u64
+    t: ztypes.tid
     n: symtab.reg.typeCount
     for t < n loop {
         udd: (ztypecheck.unitDeclOfTid
             st: symtab
-            tid: (ztypes.tid.create from: t.u64)
+            tid: t
         )
         if udd.isZero.not then {
-            ctx.defUnitId.set key: t value: udd.u64
+            ctx.defUnitId.set key: t value: udd
         }
-        t = t + 1
+        t = t.next
     }
     ctx.ioUnitDecl = unitDeclByName :symtab :ast name: "io"
     ctx.osUnitDecl = unitDeclByName :symtab :ast name: "os"
