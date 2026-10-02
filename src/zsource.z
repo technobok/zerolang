@@ -91,7 +91,7 @@ complexityThreshold: 15.u32
 # casingKindOf -- the kind an object definition's name is cased by: its own,
 # or for a typedef its base's.
 casingKindOf: function {ast: Ast.view opId: zast.nodeid} out zast.objectkind is {
-    op: ast.nodes.get i: opId.u64
+    op: ast.nodes.get i: opId
     match (
         op
     ) case objectdef then {
@@ -112,7 +112,7 @@ casingKindOf: function {ast: Ast.view opId: zast.nodeid} out zast.objectkind is 
 # its last segment.
 typedefCasingKind: function {ast: Ast.view baseId: zast.nodeid} out zast.objectkind is {
     hid: baseId
-    bn: ast.nodes.get i: baseId.u64
+    bn: ast.nodes.get i: baseId
     match (
         bn
     ) case call then {
@@ -120,13 +120,13 @@ typedefCasingKind: function {ast: Ast.view baseId: zast.nodeid} out zast.objectk
     } else null
     nm: zast.nameid
     {
-        hn: ast.nodes.get i: hid.u64
+        hn: ast.nodes.get i: hid
         match (
             hn
         ) case atomid then {
             nm = hn.name
         } case dottedpath then {
-            cn: ast.nodes.get i: hn.child.u64
+            cn: ast.nodes.get i: hn.child
             if cn.atomid then nm = cn.name
         } else null
     }
@@ -259,11 +259,11 @@ fileUnitReads: function {root: Ast.view uname: StringView into: Set String} is {
         ni: 1.u64
         nn: root.nodes.length
         for ni < nn loop {
-            nd: root.nodes.get i: ni
+            nd: root.nodes.get i: (zast.nodeid.create from: ni.u32.orPanic)
             if nd.dottedpath then {
-                pn: root.nodes.get i: nd.parent.u64
+                pn: root.nodes.get i: nd.parent
                 if pn.atomid when pn.name == uid then {
-                    cn: root.nodes.get i: nd.child.u64
+                    cn: root.nodes.get i: nd.child
                     if cn.atomid then {
                         into.add item: (zast.poolTextCopy pool: root.names ref: cn.name)
                     }
@@ -281,7 +281,7 @@ fileReadNames: function {root: Ast.view into: Set String} is {
         ni: 1.u64
         nn: root.nodes.length
         for ni < nn loop {
-            nd: root.nodes.get i: ni
+            nd: root.nodes.get i: (zast.nodeid.create from: ni.u32.orPanic)
             if nd.reassignment then {
                 topaths.add item: nd.topath.u64
             }
@@ -289,9 +289,9 @@ fileReadNames: function {root: Ast.view into: Set String} is {
         }
         nj: 1.u64
         for nj < nn loop {
-            nd2: root.nodes.get i: nj
+            nd2: root.nodes.get i: (zast.nodeid.create from: nj.u32.orPanic)
             if nd2.dottedpath when (topaths.has item: nj).not then {
-                cn: root.nodes.get i: nd2.child.u64
+                cn: root.nodes.get i: nd2.child
                 if cn.atomid then {
                     into.add item: (zast.poolTextCopy pool: root.names ref: cn.name)
                 }
@@ -327,7 +327,7 @@ lineLeavesBlock: function {ast: Ast.view id: u32} out bool is {
     cur: id
     depth: 0
     for depth < 4 loop {
-        n: ast.nodes.get i: cur
+        n: ast.nodes.get i: (zast.nodeid.create from: cur)
         match (
             n
         ) case statementline then {
@@ -349,7 +349,7 @@ lineLeavesBlock: function {ast: Ast.view id: u32} out bool is {
 # folded away. Two bodies with the same key differ only in what they call
 # things -- the field they read, the map they probe, the helper they forward
 # to -- which is what A006 exists to find.
-bodyKeyInto: function {ast: Ast.view id: u32 buf: String.borrow} is {
+bodyKeyInto: function {ast: Ast.view id: zast.nodeid buf: String.borrow} is {
     n: ast.nodes.get i: id
     buf.append s: (zast.armName :n)
     match (
@@ -361,7 +361,7 @@ bodyKeyInto: function {ast: Ast.view id: u32 buf: String.borrow} is {
     buf.appendByte b: 40
     kids: zast.childIdsAt :ast :id
     for each k: kids loop {
-        bodyKeyInto :ast id: k :buf
+        bodyKeyInto :ast id: (zast.nodeid.create from: k) :buf
         buf.appendByte b: 44
     }
     buf.appendByte b: 41
@@ -376,7 +376,7 @@ bodyIsOneMatch: function {ast: Ast.view bodyId: zast.nodeid} out bool is {
     id: zast.stmtLineAt :ast nid: bodyId i: 0
     depth: 0
     for depth < 4 loop {
-        n: ast.nodes.get i: id.u64
+        n: ast.nodes.get i: id
         match (
             n
         ) case statementline then {
@@ -405,7 +405,7 @@ soleIfOf: function {ast: Ast.view bodyId: zast.nodeid} out zast.nodeid is {
     id: zast.stmtLineAt :ast nid: bodyId i: 0
     depth: 0
     for depth < 4 loop {
-        n: ast.nodes.get i: id.u64
+        n: ast.nodes.get i: id
         match (
             n
         ) case statementline then {
@@ -422,13 +422,13 @@ soleIfOf: function {ast: Ast.view bodyId: zast.nodeid} out zast.nodeid is {
 # or `this.` followed by it. A reference to a function calls it, so either is
 # a recursive call.
 ccSelfRef: function {ast: Ast.view id: zast.nodeid fnName: zast.nameid} out bool is {
-    n: ast.nodes.get i: id.u64
+    n: ast.nodes.get i: id
     match (
         n
     ) case atomid then {
         return n.name == fnName
     } case dottedpath then {
-        p: ast.nodes.get i: n.parent.u64
+        p: ast.nodes.get i: n.parent
         isThis: false
         match (
             p
@@ -436,7 +436,7 @@ ccSelfRef: function {ast: Ast.view id: zast.nodeid fnName: zast.nameid} out bool
             if p.name == zast.names.wkThis then isThis = true
         } else null
         if isThis then {
-            c: ast.nodes.get i: n.child.u64
+            c: ast.nodes.get i: n.child
             match (
                 c
             ) case atomid then {
@@ -515,7 +515,7 @@ ccIf: function {
     if inner.isZero then {
         ccVisit :ast id: elseclause nesting: nesting + 1 :fnName :acc
     } else {
-        m: ast.nodes.get i: inner.u64
+        m: ast.nodes.get i: inner
         match (
             m
         ) case ifexpr then {
@@ -539,7 +539,7 @@ ccIf: function {
 # everything else is walked through
 ccVisit: function {ast: Ast.view id: zast.nodeid nesting: u32 fnName: zast.nameid acc: CcState} is {
     if id.isZero then return
-    n: ast.nodes.get i: id.u64
+    n: ast.nodes.get i: id
     match (
         n
     ) case ifexpr then {
@@ -688,7 +688,7 @@ slIsIf: function {ast: Ast.view sl: astnode.view} out bool is {
     match (
         sl
     ) case statementline then {
-        return (isIfArm n: (ast.nodes.get i: sl.statementline.u64))
+        return (isIfArm n: (ast.nodes.get i: sl.statementline))
     } else {
         return false
     }
@@ -704,7 +704,7 @@ flagbind: record {
 # innerNodeIdOf -- `id` with its statement line peeled: the node a statement
 # line actually holds.
 innerNodeIdOf: function {ast: Ast.view id: zast.nodeid} out zast.nodeid is {
-    n: ast.nodes.get i: id.u64
+    n: ast.nodes.get i: id
     match (
         n
     ) case statementline then {
@@ -716,12 +716,12 @@ innerNodeIdOf: function {ast: Ast.view id: zast.nodeid} out zast.nodeid is {
 
 # singleLineBodyOf -- the one statement an `if` clause's block holds, wrappers
 # peeled; 0 when the block holds any other number of lines.
-singleLineBodyOf: function {ast: Ast.view clauseId: u32} out zast.nodeid is {
+singleLineBodyOf: function {ast: Ast.view clauseId: zast.nodeid} out zast.nodeid is {
     c: ast.nodes.get i: clauseId
     match (
         c
     ) case ifclause then {
-        b: ast.nodes.get i: c.statement.u64
+        b: ast.nodes.get i: c.statement
         match (
             b
         ) case statement then {
@@ -845,13 +845,13 @@ docByteAt: function {s: StringView i: u64} out u8 is {
 # simplePathFirstAtom -- the first atom of a plain name or a dotted path of
 # names (`x`, `a.b.c`), or 0 when `id` is anything else.
 simplePathFirstAtom: function {ast: Ast.view id: zast.nodeid} out zast.nodeid is {
-    n: ast.nodes.get i: id.u64
+    n: ast.nodes.get i: id
     match (
         n
     ) case atomid then {
         return id
     } case dottedpath then {
-        if (atomNameIdOf n: (ast.nodes.get i: n.child.u64)).isZero then return zast.nodeid
+        if (atomNameIdOf n: (ast.nodes.get i: n.child)).isZero then return zast.nodeid
         return (simplePathFirstAtom :ast id: n.parent)
     } else {
         return zast.nodeid
@@ -860,7 +860,7 @@ simplePathFirstAtom: function {ast: Ast.view id: zast.nodeid} out zast.nodeid is
 
 # simplePathLastAtom -- the last atom of a path simplePathFirstAtom accepts.
 simplePathLastAtom: function {ast: Ast.view id: zast.nodeid} out zast.nodeid is {
-    n: ast.nodes.get i: id.u64
+    n: ast.nodes.get i: id
     match (
         n
     ) case dottedpath then {
@@ -1133,8 +1133,8 @@ docLineIsComment: function {ln: StringView} out bool is {
 # does, and must keep doing so: a reader that unwrapped
 # fewer would report the shapes it never looked at as conformant, and the
 # parenthesised form is the one parameter in the tree that would go unseen.
-genericBoundBase: function {ast: Ast.view opId: u32} out String is {
-    if opId == 0 then return ""
+genericBoundBase: function {ast: Ast.view opId: zast.nodeid} out String is {
+    if opId.isZero then return ""
     n: ast.nodes.get i: opId
     match (
         n
@@ -1142,7 +1142,7 @@ genericBoundBase: function {ast: Ast.view opId: u32} out String is {
         return (genericBoundBase :ast opId: n.callable)
     } case dottedpath then {
         if (zast.markerKindOfLeaf :ast leaf: n.child).genericBound.not then return ""
-        return (atomName :ast n: (ast.nodes.get i: n.parent.u64))
+        return (atomName :ast n: (ast.nodes.get i: n.parent))
     } else {
         return ""
     }
@@ -1305,7 +1305,7 @@ Analysis: class {
     # walkOptAt -- the id-taking entry (0 = absent).
     walkOptAt: function {:this ast: Ast.view oId: zast.nodeid} is {
         if oId.isZero then return
-        o: ast.nodes.get i: oId.u64
+        o: ast.nodes.get i: oId
         this.walk :ast n: o
     }
 
@@ -1367,7 +1367,7 @@ Analysis: class {
     # the empty `then {}` (via checkEmptyThen). Receives an ifexpr's else + clauses.
     checkEmpty: function {:this ast: Ast.view elseclauseId: zast.nodeid clauses: zast.kidspan} is {
         if elseclauseId.isZero then return
-        elseNode: ast.nodes.get i: elseclauseId.u64
+        elseNode: ast.nodes.get i: elseclauseId
         if (isEmptyBlock n: elseNode) then {
             p: stmtPos n: elseNode
             (this.warn
@@ -1393,9 +1393,9 @@ Analysis: class {
     # checkEmptyThen -- L002 a single-condition clause whose `then {}` is empty.
     checkEmptyThen: function {:this ast: Ast.view clause: astnode.view} is {
         if clause.ifclause then {
-            cst: ast.nodes.get i: clause.statement.u64
+            cst: ast.nodes.get i: clause.statement
             if (isEmptyBlock n: cst) when clause.conditions.count.u64 == 1 then {
-                p: stmtPos n: (ast.nodes.get i: clause.statement.u64)
+                p: stmtPos n: (ast.nodes.get i: clause.statement)
                 (this.warn
                     code: "L002"
                     msg: "empty `then { }` clause"
@@ -1458,7 +1458,7 @@ Analysis: class {
             a: ast.nodes.get i: aId
             if a.namedoperation then {
                 label: zast.nameTextAt :ast ref: a.name
-                val: atomName :ast n: (ast.nodes.get i: a.operation.u64)
+                val: atomName :ast n: (ast.nodes.get i: a.operation)
                 lsv: label.stringView
                 vsv: val.stringView
                 if lsv.length > 0 when vsv.length > 0 when lsv == vsv then {
@@ -1468,7 +1468,7 @@ Analysis: class {
                         lineno: a.lineno
                         colno: a.colno
                     )
-                    vi: nodeInfoOf n: (ast.nodes.get i: a.operation.u64)
+                    vi: nodeInfoOf n: (ast.nodes.get i: a.operation)
                     hi: (tokByteStart
                         lineStart: this.lineStart
                         srcLines: this.lines
@@ -1573,7 +1573,7 @@ Analysis: class {
             for uix9 < prog.units.length loop {
                 uId9: prog.units.get i: uix9
                 uix9 = uix9 + 1
-                this.walk ast: prog n: (prog.nodes.get i: uId9)
+                this.walk ast: prog n: (prog.nodes.get i: (zast.nodeid.create from: uId9))
             }
         }
     }
@@ -1588,7 +1588,7 @@ Analysis: class {
             un: prog.units.length
             for ui < un loop {
                 uid: prog.units.get i: ui
-                this.dupBodyWalk ast: prog id: uid :firstAt
+                this.dupBodyWalk ast: prog id: (zast.nodeid.create from: uid) :firstAt
                 ui = ui + 1
             }
         }
@@ -1596,13 +1596,13 @@ Analysis: class {
 
     # dupBodyWalk -- one node of the duplicate-body pass: a function's body is
     # keyed and looked up; every child is visited.
-    dupBodyWalk: function {:this ast: Ast.view id: u32 firstAt: (MapRV String v: u64)} is {
+    dupBodyWalk: function {:this ast: Ast.view id: zast.nodeid firstAt: (MapRV String v: u64)} is {
         n: ast.nodes.get i: id
         if n.functiondef when n.body.isZero.not then {
-            span: (zast.spanEndLineAt :ast id: n.body.u32) - n.lineno + 1
+            span: (zast.spanEndLineAt :ast id: n.body) - n.lineno + 1
             if span >= duplicateBodyLines then {
                 key: String
-                bodyKeyInto :ast id: n.body.u32 buf: key
+                bodyKeyInto :ast id: n.body buf: key
                 seen: firstAt.get :key
                 match (
                     seen
@@ -1620,7 +1620,7 @@ Analysis: class {
             }
         }
         kids: zast.childIdsAt :ast :id
-        for each k: kids loop this.dupBodyWalk :ast id: k :firstAt
+        for each k: kids loop this.dupBodyWalk :ast id: (zast.nodeid.create from: k) :firstAt
     }
 
     # walkTypeCasingProgram / walkTypeCasingAt -- L021 (default-on): a type
@@ -1641,7 +1641,7 @@ Analysis: class {
     # the id-taking entry to the type-casing walk, so the caller can lend the
     # tree without holding a node view
     walkTypeCasingAt: function {:this ast: Ast.view nId: zast.nodeid} is {
-        n: ast.nodes.get i: nId.u64
+        n: ast.nodes.get i: nId
         match (
             n
         ) case namedoperation then {
@@ -1653,7 +1653,7 @@ Analysis: class {
                 box2089 = box2089 + 1
                 bm: ast.nodes.get i: bId
                 if bm.namedoperation then {
-                    op: ast.nodes.get i: bm.operation.u64
+                    op: ast.nodes.get i: bm.operation
                     if op.objectdef then {
                         (this.checkTypeNameCasing
                             :ast
@@ -1737,7 +1737,7 @@ Analysis: class {
             gi: u64
             gn: prog.nodes.length
             for gi < gn loop {
-                gm: prog.nodes.get i: gi
+                gm: prog.nodes.get i: (zast.nodeid.create from: gi.u32.orPanic)
                 if gm.namedoperation when (zast.isGenericParamOp ast: prog opId: gm.operation
                 ) then {
                     (this.checkGenericParamCasing
@@ -1760,7 +1760,7 @@ Analysis: class {
     checkGenericParamCasing: function {
         :this ast: Ast.view nameRef: zast.nameid opId: u32 line: u32 col: u32
     } is {
-        bnd: genericBoundBase :ast :opId
+        bnd: genericBoundBase :ast opId: (zast.nodeid.create from: opId)
         if bnd.length == 0 then return
         nm: zast.nameTextAt :ast ref: nameRef
         if nm.length == 0 then return
@@ -1822,7 +1822,7 @@ Analysis: class {
         } case call then {
             (this.checkElide
                 :ast
-                callable: (ast.nodes.get i: n.callable.u64)
+                callable: (ast.nodes.get i: n.callable)
                 arguments: n.arguments
             )
             this.checkCollapseName :ast arguments: n.arguments
@@ -1840,7 +1840,7 @@ Analysis: class {
         } case assignment then {
             if this.funcDepth > 0 then (this.tryBareZeroInit
                 :ast
-                value: (ast.nodes.get i: n.value.u64)
+                value: (ast.nodes.get i: n.value)
             )
         } case forexpr then {
             this.checkImpliedIterate :ast :n
@@ -1868,7 +1868,7 @@ Analysis: class {
         } else null
         kl9: zast.childIds :ast :n
         for each c9: kl9 loop {
-            this.walk :ast n: (ast.nodes.get i: c9)
+            this.walk :ast n: (ast.nodes.get i: (zast.nodeid.create from: c9))
         }
     }
 
@@ -1890,14 +1890,14 @@ Analysis: class {
     checkBoolLiteralCompare: function {
         :this ast: Ast.view opId: zast.nodeid lhsId: zast.nodeid rhsId: zast.nodeid
     } is {
-        opNm: atomNameIdOf n: (ast.nodes.get i: opId.u64)
+        opNm: atomNameIdOf n: (ast.nodes.get i: opId)
         isEq: opNm == zast.names.wkOpEq
         isNe: opNm == zast.names.wkOpNe
         if isEq.not when isNe.not then return
-        litNm: atomNameIdOf n: (ast.nodes.get i: rhsId.u64)
+        litNm: atomNameIdOf n: (ast.nodes.get i: rhsId)
         reversed: false
         if (this.isBoolLiteralId nm: litNm).not then {
-            litNm = atomNameIdOf n: (ast.nodes.get i: lhsId.u64)
+            litNm = atomNameIdOf n: (ast.nodes.get i: lhsId)
             if (this.isBoolLiteralId nm: litNm).not then return
             reversed = true
         }
@@ -1932,7 +1932,7 @@ Analysis: class {
         operandId: zast.nodeid
         neg: bool
     } is {
-        lp: zast.posOf n: (ast.nodes.get i: litId.u64)
+        lp: zast.posOf n: (ast.nodes.get i: litId)
         what: "`== true` / `!= false` is the value itself: drop the comparison".string
         if neg then what = "`== false` / `!= true` negates: write `.not`"
         firstId: simplePathFirstAtom :ast id: operandId
@@ -1940,8 +1940,8 @@ Analysis: class {
             this.warn code: "L028" msg: what line: lp.line col: lp.col width: 1
             return
         }
-        lastN: ast.nodes.get i: (simplePathLastAtom :ast id: operandId).u64
-        fp: zast.posOf n: (ast.nodes.get i: firstId.u64)
+        lastN: ast.nodes.get i: (simplePathLastAtom :ast id: operandId)
+        fp: zast.posOf n: (ast.nodes.get i: firstId)
         ep: zast.posOf n: lastN
         lastLen: (zast.poolTextAt pool: ast.names ref: (atomNameIdOf n: lastN)).length.u64
         srcOwned: this.source.copy
@@ -1999,10 +1999,10 @@ Analysis: class {
         neg: bool
         litLen: u64
     } is {
-        lhsN: ast.nodes.get i: lhsId.u64
+        lhsN: ast.nodes.get i: lhsId
         lp: zast.posOf n: lhsN
-        op: zast.posOf n: (ast.nodes.get i: opId.u64)
-        rp: zast.posOf n: (ast.nodes.get i: rhsId.u64)
+        op: zast.posOf n: (ast.nodes.get i: opId)
+        rp: zast.posOf n: (ast.nodes.get i: rhsId)
         srcOwned: this.source.copy
         srcv: srcOwned.stringView
         xStart: (tokByteStart
@@ -2067,14 +2067,14 @@ Analysis: class {
     # grouped when the text before op2 ends in a `)` whose `(` opens just
     # before the operand.
     checkMixedOperators: function {:this ast: Ast.view opId: zast.nodeid lhsId: zast.nodeid} is {
-        inner: zast.infixPartsOf :ast n: (ast.nodes.get i: lhsId.u64)
+        inner: zast.infixPartsOf :ast n: (ast.nodes.get i: lhsId)
         if inner.found.not then return
         outerK: operatorKind :ast nid: opId
         innerK: operatorKind :ast nid: inner.operator
         if (outerK == 0) or (innerK == 0) or (outerK == innerK) then return
         if this.lineStart.length == 0 then return
-        op: zast.posOf n: (ast.nodes.get i: opId.u64)
-        lp: zast.posOf n: (ast.nodes.get i: lhsId.u64)
+        op: zast.posOf n: (ast.nodes.get i: opId)
+        lp: zast.posOf n: (ast.nodes.get i: lhsId)
         opB: (tokByteStart
             lineStart: this.lineStart
             srcLines: this.lines
@@ -2092,8 +2092,8 @@ Analysis: class {
         endB: opB
         for endB > lhsB while (isSpaceByte c: (docByteAt s: sv i: endB - 1)) loop endB = endB - 1
         if (groupedSpan :sv lo: lhsB hi: endB) then return
-        outerNm: zast.nameTextAt :ast ref: (atomNameIdOf n: (ast.nodes.get i: opId.u64))
-        inn: zast.nameTextAt :ast ref: (atomNameIdOf n: (ast.nodes.get i: inner.operator.u64))
+        outerNm: zast.nameTextAt :ast ref: (atomNameIdOf n: (ast.nodes.get i: opId))
+        inn: zast.nameTextAt :ast ref: (atomNameIdOf n: (ast.nodes.get i: inner.operator))
         what: "`\{inn}` and `\{outerNm}` chained without parentheses: operators group left to right, so the `\{inn}` is taken first"
         this.warn code: "L032" msg: what line: op.line col: op.col width: outerNm.length.u32.orPanic
         this.edits.append (zfix.Edit byteLo: lhsB byteHi: lhsB replacement: "(")
@@ -2117,7 +2117,7 @@ Analysis: class {
             return
         }
         chId: zast.nodeid
-        opN: ast.nodes.get i: opId.u64
+        opN: ast.nodes.get i: opId
         match (
             opN
         ) case dottedpath then {
@@ -2125,7 +2125,7 @@ Analysis: class {
         } else {
             return
         }
-        ch: ast.nodes.get i: chId.u64
+        ch: ast.nodes.get i: chId
         match (
             ch
         ) case atomid then {
@@ -2209,7 +2209,7 @@ Analysis: class {
     # flagBindingAt -- the flag binding a statement line holds (`name: true` /
     # `name: false`), or zeros for any other line.
     flagBindingAt: function {this: this.view ast: Ast.view sid: u32} out flagbind is {
-        n: ast.nodes.get i: (innerNodeIdOf :ast id: (zast.nodeid.create from: sid)).u64
+        n: ast.nodes.get i: (innerNodeIdOf :ast id: (zast.nodeid.create from: sid))
         match (
             n
         ) case assignment then {
@@ -2224,7 +2224,7 @@ Analysis: class {
     # boolLiteralAt -- the pool id of `true` / `false` when the node at `id`, its
     # statement line peeled, is that literal; 0 otherwise.
     boolLiteralAt: function {this: this.view ast: Ast.view id: zast.nodeid} out zast.nameid is {
-        nm: atomNameIdOf n: (ast.nodes.get i: (innerNodeIdOf :ast :id).u64)
+        nm: atomNameIdOf n: (ast.nodes.get i: (innerNodeIdOf :ast :id))
         if nm.isZero then return nm
         if nm == this.trueId then return nm
         if nm == this.falseId then return nm
@@ -2236,7 +2236,7 @@ Analysis: class {
     flagSetAt: function {
         this: this.view ast: Ast.view sid: u32 name: zast.nameid lit: zast.nameid
     } out bool is {
-        n: ast.nodes.get i: (innerNodeIdOf :ast id: (zast.nodeid.create from: sid)).u64
+        n: ast.nodes.get i: (innerNodeIdOf :ast id: (zast.nodeid.create from: sid))
         match (
             n
         ) case ifexpr then {
@@ -2254,11 +2254,11 @@ Analysis: class {
     reassignsTo: function {
         this: this.view ast: Ast.view id: zast.nodeid name: zast.nameid lit: zast.nameid
     } out bool is {
-        n: ast.nodes.get i: id.u64
+        n: ast.nodes.get i: id
         match (
             n
         ) case reassignment then {
-            if (atomNameIdOf n: (ast.nodes.get i: n.topath.u64)) != name then return false
+            if (atomNameIdOf n: (ast.nodes.get i: n.topath)) != name then return false
             return (this.boolLiteralAt :ast id: n.value) == lit
         } else {
             return false
@@ -2276,7 +2276,7 @@ Analysis: class {
         if clauses.count.u64 != 1 then return
         innerId: singleLineBodyOf :ast clauseId: (zast.kidAt kids: ast.kids span: clauses i: 0)
         if innerId.isZero then return
-        inner: ast.nodes.get i: innerId.u64
+        inner: ast.nodes.get i: innerId
         match (
             inner
         ) case ifexpr then {
@@ -2298,7 +2298,7 @@ Analysis: class {
     checkLiteralCompare: function {
         :this ast: Ast.view opId: zast.nodeid lhsId: zast.nodeid rhsId: zast.nodeid
     } is {
-        op: atomName :ast n: (ast.nodes.get i: opId.u64)
+        op: atomName :ast n: (ast.nodes.get i: opId)
         isCmp: op.stringView == "=="
         if op.stringView == "!=" then isCmp = true
         if isCmp.not then return
@@ -2309,7 +2309,7 @@ Analysis: class {
     # one side of a comparison, answering whether it is a string literal --
     # which is what A001 reports
     literalCompareSide: function {:this ast: Ast.view id: zast.nodeid} is {
-        n: ast.nodes.get i: id.u64
+        n: ast.nodes.get i: id
         txt: plainLiteralText :ast :n
         match (
             txt
@@ -2370,7 +2370,7 @@ Analysis: class {
     checkLongFunction: function {:this ast: Ast.view bodyId: zast.nodeid line: u32 col: u32} is {
         if bodyId.isZero then return
         if (bodyIsOneMatch :ast :bodyId) then return
-        lastLine: zast.spanEndLineAt :ast id: bodyId.u32
+        lastLine: zast.spanEndLineAt :ast id: bodyId
         span: lastLine - line + 1
         if span > longFunctionLines then {
             (this.info
@@ -2389,7 +2389,7 @@ Analysis: class {
     # walk reaches at function depth zero.
     checkComplexity: function {:this ast: Ast.view nameId: zast.nameid opId: zast.nodeid} is {
         if opId.isZero then return
-        op: ast.nodes.get i: opId.u64
+        op: ast.nodes.get i: opId
         match (
             op
         ) case functiondef then {
@@ -2413,7 +2413,7 @@ Analysis: class {
 
     # walkCasingAt -- the id-taking entry for the casing visitor.
     walkCasingAt: function {:this ast: Ast.view nId: zast.nodeid} is {
-        n: ast.nodes.get i: nId.u64
+        n: ast.nodes.get i: nId
         this.walkCasing :ast :n
     }
 
@@ -2424,7 +2424,10 @@ Analysis: class {
             n
         ) case program then {
             it: ast.units.iterate
-            for uId: it loop this.walkCasing :ast n: (ast.nodes.get i: uId)
+            for uId: it loop (this.walkCasing
+                :ast
+                n: (ast.nodes.get i: (zast.nodeid.create from: uId))
+            )
         } case unitdef then {
             box2099: u64
             for box2099 < n.body.count loop {
@@ -2433,7 +2436,7 @@ Analysis: class {
                 this.walkCasing :ast n: (ast.nodes.get i: bId)
             }
         } case namedoperation then {
-            this.walkCasing :ast n: (ast.nodes.get i: n.operation.u64)
+            this.walkCasing :ast n: (ast.nodes.get i: n.operation)
         } case objectdef then {
             this.checkMemberCasing :ast kind: n.kind items: n.isItems
         } else null
@@ -2452,7 +2455,7 @@ Analysis: class {
             if item.namedoperation then {
                 isTypeRef: false
                 match (
-                    ast.nodes.get i: item.operation.u64
+                    ast.nodes.get i: item.operation
                 ) case labelvalue then {
                     isTypeRef = true
                 } else null
@@ -2494,9 +2497,9 @@ Analysis: class {
     # checkPublicPosAt -- L019: a unit's `public:` block must sit at the top,
     # before any definition (only the file header comment may precede it).
     checkPublicPosAt: function {:this ast: Ast.view nId: zast.nodeid} is {
-        wn: ast.nodes.get i: nId.u64
+        wn: ast.nodes.get i: nId
         if wn.namedoperation then {
-            ud: ast.nodes.get i: wn.operation.u64
+            ud: ast.nodes.get i: wn.operation
             if ud.unitdef then {
                 sawDef: false
                 box2109: u64
@@ -2801,7 +2804,12 @@ Analysis: class {
     } is {
         ids: zast.kidIds :ast :span
         for each mId: ids loop {
-            this.checkDocsMember :ast member: (ast.nodes.get i: mId) :code :kind
+            (this.checkDocsMember
+                :ast
+                member: (ast.nodes.get i: (zast.nodeid.create from: mId))
+                :code
+                :kind
+            )
         }
     }
 
@@ -2811,7 +2819,13 @@ Analysis: class {
     } is {
         ids: zast.kidIds :ast :span
         for each mId: ids loop {
-            this.walkDocsAsItem :ast m: (ast.nodes.get i: mId) :docs :docParams :docFields
+            (this.walkDocsAsItem
+                :ast
+                m: (ast.nodes.get i: (zast.nodeid.create from: mId))
+                :docs
+                :docParams
+                :docFields
+            )
         }
     }
 
@@ -2902,7 +2916,7 @@ Analysis: class {
     walkDocsNamed: function {
         :this ast: Ast.view site: zast.namedsite docs: bool docParams: bool docFields: bool
     } is {
-        op: ast.nodes.get i: site.operation.u64
+        op: ast.nodes.get i: site.operation
         match (
             op
         ) case functiondef then {
@@ -2945,7 +2959,7 @@ Analysis: class {
         if this.opts.docsPrivate then hasPub = false
         ids: zast.kidIds :ast span: body
         for each bId: ids loop {
-            bsite: zast.namedSiteAt :ast nid: bId
+            bsite: zast.namedSiteAt :ast nid: (zast.nodeid.create from: bId)
             if (unitMemberIsWalkable :ast site: bsite :pubSet :hasPub) then (this.walkDocsAt
                 :ast
                 nId: (zast.nodeid.create from: bId)
@@ -2998,7 +3012,7 @@ Analysis: class {
     walkDocsAt: function {
         :this ast: Ast.view nId: zast.nodeid docs: bool docParams: bool docFields: bool
     } is {
-        n: ast.nodes.get i: nId.u64
+        n: ast.nodes.get i: nId
         this.walkDocs :ast :n :docs :docParams :docFields
     }
 
@@ -3026,23 +3040,23 @@ Analysis: class {
         match (
             value
         ) case statementline then {
-            this.tryBareZeroInit :ast value: (ast.nodes.get i: value.statementline.u64)
+            this.tryBareZeroInit :ast value: (ast.nodes.get i: value.statementline)
         } case statement then {
             if value.statements.count.u64 == 1 then {
                 s0Id: zast.kidAt kids: ast.kids span: value.statements i: 0
                 this.tryBareZeroInit :ast value: (ast.nodes.get i: s0Id)
             }
         } case dottedpath then {
-            repl: bareZeroTypeName :ast n: (ast.nodes.get i: value.child.u64)
+            repl: bareZeroTypeName :ast n: (ast.nodes.get i: value.child)
             if repl.length == 0 then return
-            ptext: bareZeroParentText :ast n: (ast.nodes.get i: value.parent.u64)
+            ptext: bareZeroParentText :ast n: (ast.nodes.get i: value.parent)
             if ptext.length == 0 then return
             isStr: ptext.stringView == "\"\""
             isStrRepl: repl.stringView == "String"
             if isStr when isStrRepl.not then return
             if isStr.not when isStrRepl then return
-            pin: nodeInfoOf n: (ast.nodes.get i: value.parent.u64)
-            cin: nodeInfoOf n: (ast.nodes.get i: value.child.u64)
+            pin: nodeInfoOf n: (ast.nodes.get i: value.parent)
+            cin: nodeInfoOf n: (ast.nodes.get i: value.child)
             if pin.line != cin.line then return
             srcOwned: this.source.copy
             srcv: srcOwned.stringView
@@ -3203,7 +3217,7 @@ Analysis: class {
     litStringRedundant: function {
         :this
         ast: Ast.view
-        opId: u64
+        opId: zast.nodeid
         destTid: u64
         strTid: u64
     } is {
@@ -3214,8 +3228,8 @@ Analysis: class {
         {
             dpn: ast.nodes.get i: opId
             if dpn.dottedpath then {
-                lit: ast.nodes.get i: dpn.parent.u64
-                chn: ast.nodes.get i: dpn.child.u64
+                lit: ast.nodes.get i: dpn.parent
+                chn: ast.nodes.get i: dpn.child
                 ci: nodeInfoOf n: chn
                 li: nodeInfoOf n: lit
                 written: (ci.line != li.line) or (ci.col != li.col)
@@ -3247,7 +3261,7 @@ Analysis: class {
     wideningRedundant: function {
         :this
         ast: Ast.view
-        opId: u64
+        opId: zast.nodeid
         destTid: u64
         st: zenv.ZSymbolTable
     } is {
@@ -3259,8 +3273,8 @@ Analysis: class {
         {
             dpn: ast.nodes.get i: opId
             if dpn.dottedpath then {
-                bn: ast.nodes.get i: dpn.parent.u64
-                chn: ast.nodes.get i: dpn.child.u64
+                bn: ast.nodes.get i: dpn.parent
+                chn: ast.nodes.get i: dpn.child
                 if (isNumericLiteralNode :ast n: bn).not then {
                     from = ztyping.nodeTypeAt tbl: st.typing.nodeType nid: (nodeInfoOf n: bn).id
                     mname = atomName :ast n: chn
@@ -3271,7 +3285,7 @@ Analysis: class {
             }
         }
         if (from == 0) or (from == destTid) or (mname.length == 0) then return
-        if (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: opId).u64 != destTid then return
+        if (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: opId.u64).u64 != destTid then return
         if (builtinNumericTid :ast :st tid: from).not then return
         if (builtinNumericTid :ast :st tid: destTid).not then return
         # a conversion is named for the type it makes; any other member that
@@ -3301,11 +3315,11 @@ Analysis: class {
         rt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: funcretId.u64
         (this.litStringRedundant
             :ast
-            opId: rarg.operation.u64
+            opId: rarg.operation
             destTid: rt
             strTid: (ztypecheck.builtinTidTRo scope: ztypes.declid :ast :st base: "String").u64
         )
-        this.wideningRedundant :ast opId: rarg.operation.u64 destTid: rt :st
+        this.wideningRedundant :ast opId: rarg.operation destTid: rt :st
     }
 
     # slConvArg -- one call argument: flag a redundant StringLike conversion.
@@ -3317,7 +3331,7 @@ Analysis: class {
     slConvArg: function {
         :this
         ast: Ast.view
-        opId: u32
+        opId: zast.nodeid
         originTid: ztypes.tid
         pname: StringView
         ptid: u64
@@ -3340,12 +3354,12 @@ Analysis: class {
         {
             dpn: ast.nodes.get i: opId
             if dpn.dottedpath then {
-                chn: ast.nodes.get i: dpn.child.u64
+                chn: ast.nodes.get i: dpn.child
                 cn = atomName :ast n: chn
                 ci: nodeInfoOf n: chn
                 cln = ci.line
                 ccl = ci.col
-                pnn: ast.nodes.get i: dpn.parent.u64
+                pnn: ast.nodes.get i: dpn.parent
                 bni: nodeInfoOf n: pnn
                 bnid = bni.id
             }
@@ -3486,11 +3500,11 @@ Analysis: class {
             pnmc: names.get i: pidx
             (this.litStringRedundant
                 :ast
-                opId: arg.operation.u64
+                opId: arg.operation
                 destTid: (ids.get i: pidx)
                 strTid: strTid.u64
             )
-            this.wideningRedundant :ast opId: arg.operation.u64 destTid: (ids.get i: pidx) :st
+            this.wideningRedundant :ast opId: arg.operation destTid: (ids.get i: pidx) :st
             (this.slConvArg
                 :ast
                 opId: arg.operation
@@ -3512,7 +3526,7 @@ Analysis: class {
         if arg.namedoperation then {
             an: zast.nameTextAt :ast ref: arg.name
             if an.length > 0 then {
-                s: operandSuffix :ast n: (ast.nodes.get i: arg.operation.u64)
+                s: operandSuffix :ast n: (ast.nodes.get i: arg.operation)
                 if s.tname.length > 0 then {
                     # a generic-origin param never anchors a defix: the
                     # suffix is what SELECTS the instantiation (the mono's
@@ -3558,7 +3572,7 @@ Analysis: class {
         match (
             arg
         ) case namedoperation then {
-            s: operandSuffix :ast n: (ast.nodes.get i: arg.operation.u64)
+            s: operandSuffix :ast n: (ast.nodes.get i: arg.operation)
             if s.tname.length > 0 when s.tname.stringView == rtName then {
                 this.emitSuf ln: s.line col: s.col tname: s.tname.stringView
             }
@@ -3635,9 +3649,9 @@ Analysis: class {
         {
             ipS: zast.infixPartsOf :ast :n
             if ipS.found then {
-                blS: ast.nodes.get i: ipS.lhs.u64
-                brS: ast.nodes.get i: ipS.rhs.u64
-                bopS: atomName :ast n: (ast.nodes.get i: ipS.operator.u64)
+                blS: ast.nodes.get i: ipS.lhs
+                brS: ast.nodes.get i: ipS.rhs
+                bopS: atomName :ast n: (ast.nodes.get i: ipS.operator)
                 (this.sufBinop
                     :ast
                     lhs: blS
@@ -3653,7 +3667,7 @@ Analysis: class {
             (this.sufCall
                 :ast
                 callNid: n.nodeid
-                callable: (ast.nodes.get i: n.callable.u64)
+                callable: (ast.nodes.get i: n.callable)
                 arguments: n.arguments
                 :st
                 :funcretId
@@ -3661,23 +3675,23 @@ Analysis: class {
             (this.slConvCall
                 :ast
                 callNid: n.nodeid
-                callable: (ast.nodes.get i: n.callable.u64)
+                callable: (ast.nodes.get i: n.callable)
                 arguments: n.arguments
                 :st
                 :funcretId
             )
         } case reassignment then {
-            tpn: ast.nodes.get i: n.topath.u64
-            rvn: ast.nodes.get i: n.value.u64
+            tpn: ast.nodes.get i: n.topath
+            rvn: ast.nodes.get i: n.value
             this.sufReassign :ast topath: tpn value: rvn :st
             rtt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: n.topath.u64
             (this.litStringRedundant
                 :ast
-                opId: n.value.u64
+                opId: n.value
                 destTid: rtt
                 strTid: (ztypecheck.builtinTidTRo scope: ztypes.declid :ast :st base: "String").u64
             )
-            this.wideningRedundant :ast opId: n.value.u64 destTid: rtt :st
+            this.wideningRedundant :ast opId: n.value destTid: rtt :st
         } case functiondef then {
             # the function's own return type is the funcret for everything below it
             this.walkSufRet :ast retId: n.returntype :uname :st
@@ -3688,7 +3702,13 @@ Analysis: class {
         } else null
         sl9: zast.childIds :ast :n
         for each s9: sl9 loop {
-            this.walkSuf :ast n: (ast.nodes.get i: s9) :uname :st :funcretId
+            (this.walkSuf
+                :ast
+                n: (ast.nodes.get i: (zast.nodeid.create from: s9))
+                :uname
+                :st
+                :funcretId
+            )
         }
     }
 
@@ -3719,7 +3739,7 @@ Analysis: class {
         funcretId: zast.nodeid
     } is {
         if oId.isZero then return
-        o: ast.nodes.get i: oId.u64
+        o: ast.nodes.get i: oId
         this.walkSuf :ast n: o :uname :st :funcretId
     }
 
@@ -3729,7 +3749,7 @@ Analysis: class {
         :this ast: Ast.view retId: zast.nodeid uname: StringView st: zenv.ZSymbolTable
     } is {
         if retId.isZero then return
-        r: ast.nodes.get i: retId.u64
+        r: ast.nodes.get i: retId
         this.walkSuf :ast n: r :uname :st funcretId: retId
     }
 
@@ -3737,7 +3757,7 @@ Analysis: class {
     lintSuffixUnit: function {:this prog: Ast.view lu: LintedUnit.view st: zenv.ZSymbolTable} is {
         (this.walkSuf
             ast: prog
-            n: (prog.nodes.get i: lu.op.u64)
+            n: (prog.nodes.get i: lu.op)
             uname: lu.name.stringView
             :st
             funcretId: (zast.nodeid.create from: 0)
@@ -3778,7 +3798,7 @@ Analysis: class {
         prog: p.parse :vfs :rootid mainUnitName: uname.string
         # a failed parse names its error as the tree's root row. The test is a
         # call so no lock outlives it: typecheck below takes the tree.
-        if (zast.isErrorAt ast: prog id: prog.root.u32) then {
+        if (zast.isErrorAt ast: prog id: prog.root) then {
             this.reportUnparsedProject :prog :vfs :srcdirs :uname
         } else {
             # the unit this FILE is, found by the file and never by name: a
@@ -3855,7 +3875,7 @@ Analysis: class {
         uname: StringView
     } is {
         if this.parseErrorCount > 0 then return
-        progRoot: prog.nodes.get i: prog.root.u64
+        progRoot: prog.nodes.get i: prog.root
         match (
             progRoot
         ) case error then {
@@ -4081,7 +4101,7 @@ Analysis: class {
         reads: (Set String).view
         mainId: zast.nameid
     } is {
-        ud: ast.nodes.get i: opId.u64
+        ud: ast.nodes.get i: opId
         if ud.unitdef then {
             box2149: u64
             for box2149 < ud.body.count loop {
@@ -4108,7 +4128,7 @@ Analysis: class {
     archFields: function {
         :this ast: Ast.view opId: zast.nodeid readNames: (Set String).view typeName: StringView
     } is {
-        n: ast.nodes.get i: opId.u64
+        n: ast.nodes.get i: opId
         if n.objectdef then {
             isData: n.kind.recordDef
             if n.kind.classDef then isData = true
@@ -4121,7 +4141,7 @@ Analysis: class {
                 isx1939 = isx1939 + 1
                 m: ast.nodes.get i: mId
                 if m.namedoperation then {
-                    mop: ast.nodes.get i: m.operation.u64
+                    mop: ast.nodes.get i: m.operation
                     fnm: zast.poolTextAt pool: ast.names ref: m.name
                     if mop.functiondef.not when (readNames.has item: fnm).not then {
                         (this.warn
@@ -4139,12 +4159,12 @@ Analysis: class {
 
     # archWalk -- A003 at every literal compare of the unit's subtree.
     archWalk: function {:this ast: Ast.view nId: zast.nodeid namedIds: (IdSet u64).view} is {
-        n: ast.nodes.get i: nId.u64
+        n: ast.nodes.get i: nId
         kids: zast.childIds :ast :n
         {
             ipA: zast.infixPartsOf :ast :n
             if ipA.found then {
-                opA: atomName :ast n: (ast.nodes.get i: ipA.operator.u64)
+                opA: atomName :ast n: (ast.nodes.get i: ipA.operator)
                 isCmpA: opA.stringView == "=="
                 if opA.stringView == "!=" then isCmpA = true
                 if isCmpA then {
@@ -4161,7 +4181,7 @@ Analysis: class {
     # a named argument whose value is a literal, which the composed-key rule
     # reads
     archNamedLiteral: function {:this ast: Ast.view id: zast.nodeid namedIds: (IdSet u64).view} is {
-        n: ast.nodes.get i: id.u64
+        n: ast.nodes.get i: id
         txt: plainLiteralText :ast :n
         match (
             txt
@@ -4376,7 +4396,13 @@ Analysis: class {
     # neither is a method implementing a spec member: its receiver is the
     # spec's.
     reportUnmutatedReceiver: function {
-        :this ast: Ast.view st: zenv.ZSymbolTable.view fnOp: u32 opId: u32 line: u32 col: u32
+        :this
+        ast: Ast.view
+        st: zenv.ZSymbolTable.view
+        fnOp: u32
+        opId: zast.nodeid
+        line: u32
+        col: u32
     } is {
         op: ast.nodes.get i: opId
         if op.labelvalue.not then return
@@ -4432,13 +4458,16 @@ Analysis: class {
         # the receiver is exempt: `:this` names it directly (zast.names.wkThis);
         # a spelled `b: this.borrow` is receiver-shaped
         isRecv: site.name == zast.names.wkThis
-        if isRecv.not then isRecv = ztypecheck.paramIsThisReceiverId ast: prog opId: pOpId
+        if isRecv.not then isRecv = (ztypecheck.paramIsThisReceiverId
+            ast: prog
+            opId: (zast.nodeid.create from: pOpId)
+        )
         if isRecv then {
             (this.reportUnmutatedReceiver
                 ast: prog
                 :st
                 fnOp: fop
-                opId: pOpId
+                opId: (zast.nodeid.create from: pOpId)
                 line: site.line
                 col: site.col
             )
@@ -4481,9 +4510,15 @@ Analysis: class {
         used: (IdSet u64).view
         fop: u32
     } is {
-        paramIds: fnParamIds :prog :fop
+        paramIds: fnParamIds :prog fop: (zast.nodeid.create from: fop)
         for each pid: paramIds loop {
-            this.reportParamAt :prog :st :used :fop site: (zast.namedSiteAt ast: prog nid: pid)
+            (this.reportParamAt
+                :prog
+                :st
+                :used
+                :fop
+                site: (zast.namedSiteAt ast: prog nid: (zast.nodeid.create from: pid))
+            )
         }
     }
 
@@ -4501,12 +4536,12 @@ Analysis: class {
         mainFsno: zvfs.fsno
         # the node ranges of every instance's copy of a body, start and end in turn
         copies: (ListVal u64).view
-        nid: u64
+        nid: zast.nodeid
         vid: u64
     } is {
         if (used.has item: vid) then return
-        if (prog.fsnoForNode nodeid: nid.u32.orPanic) != mainFsno then return
-        if (inInstanceCopy ranges: copies :nid) then return
+        if (prog.fsnoForNode nodeid: nid.u32) != mainFsno then return
+        if (inInstanceCopy ranges: copies nid: nid.u64) then return
         nm: String
         ln: u32
         cl: u32
@@ -4552,7 +4587,7 @@ Analysis: class {
                 :used
                 :mainFsno
                 copies: st.typing.instanceBodyRanges
-                nid: dv.key
+                nid: (zast.nodeid.create from: dv.key.u32.orPanic)
                 vid: dv.value
             )
         }
@@ -4573,9 +4608,9 @@ Analysis: class {
         match (
             n
         ) case dottedpath then {
-            fcn: atomName :ast n: (ast.nodes.get i: n.child.u64)
+            fcn: atomName :ast n: (ast.nodes.get i: n.child)
             if fcn.length == 0 then return false
-            fpn: ast.nodes.get i: n.parent.u64
+            fpn: ast.nodes.get i: n.parent
             fpi: nodeInfoOf n: fpn
             fpt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: fpi.id
             if fpt.isZero then return false
@@ -4609,17 +4644,17 @@ Analysis: class {
         this: this.view
         ast: Ast.view
         st: zenv.ZSymbolTable
-        rhsId: u32
+        rhsId: zast.nodeid
     } out String is {
-        if rhsId == 0 then return ""
+        if rhsId.isZero then return ""
         rn: ast.nodes.get i: rhsId
         match (
             rn
         ) case dottedpath then {
-            chn: ast.nodes.get i: rn.child.u64
+            chn: ast.nodes.get i: rn.child
             cn: atomName :ast n: chn
             if cn.length == 0 then return ""
-            pnn: ast.nodes.get i: rn.parent.u64
+            pnn: ast.nodes.get i: rn.parent
             if (this.srcIsFieldRead :ast :st n: pnn) then return ""
             pin: nodeInfoOf n: pnn
             bt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: pin.id
@@ -4632,11 +4667,11 @@ Analysis: class {
             ) then return "`.copy`"
             return ""
         } case call then {
-            cbl: ast.nodes.get i: rn.callable.u64
+            cbl: ast.nodes.get i: rn.callable
             match (
                 cbl
             ) case dottedpath then {
-                ccn: atomName :ast n: (ast.nodes.get i: cbl.child.u64)
+                ccn: atomName :ast n: (ast.nodes.get i: cbl.child)
                 if ccn.stringView == "nameTextCopy" then return "`nameTextCopy`"
                 if ccn.stringView == "poolTextCopy" then return "`poolTextCopy`"
                 return ""
@@ -4655,10 +4690,10 @@ Analysis: class {
         :this
         ast: Ast.view
         st: zenv.ZSymbolTable.view
-        rhsId: u32
+        rhsId: zast.nodeid
     } out ztypes.vid is {
         zv: ztypes.vid
-        if rhsId == 0 then return zv
+        if rhsId.isZero then return zv
         rn: ast.nodes.get i: rhsId
         match (
             rn
@@ -4695,7 +4730,7 @@ Analysis: class {
         # every variable some atom reads
         used: (IdSet u64).view
         # the binding node and its variable
-        nid: u64
+        nid: zast.nodeid
         vid: ztypes.vid
         # the file the unit's body lives in
         mainFsno: zvfs.fsno
@@ -4703,9 +4738,9 @@ Analysis: class {
         if (used.has item: vid).not then return String
         if (st.typing.variableMutated.has item: vid) then return String
         if (st.typing.variableMoved.has item: vid) then return String
-        fs: prog.fsnoForNode nodeid: nid.u32.orPanic
+        fs: prog.fsnoForNode nodeid: nid.u32
         if (fs == mainFsno).not then return String
-        nodeL: prog.nodes.get i: nid.u64
+        nodeL: prog.nodes.get i: nid
         if nodeL.assignment.not then return String
         kind: this.owningConvKind ast: prog :st rhsId: nodeL.value
         rvid: this.convSourceRootVid ast: prog :st rhsId: nodeL.value
@@ -4744,8 +4779,15 @@ Analysis: class {
             nid: dvPairs.get i: dpi
             vid: ztypes.vid.create from: (dvPairs.get i: dpi + 1)
             dpi = dpi + 2
-            kind: this.viewableLocalKind :prog :st :used :nid :vid :mainFsno
-            nodeL: prog.nodes.get i: nid.u64
+            kind: (this.viewableLocalKind
+                :prog
+                :st
+                :used
+                nid: (zast.nodeid.create from: nid.u32.orPanic)
+                :vid
+                :mainFsno
+            )
+            nodeL: prog.nodes.get i: (zast.nodeid.create from: nid.u32.orPanic)
             if kind.length > 0 when nodeL.assignment then {
                 nm: zast.poolTextAt pool: prog.names ref: nodeL.name
                 (this.info
@@ -4801,7 +4843,7 @@ Analysis: class {
     reportIfUnusedDef: function {
         :this prog: Ast.view st: zenv.ZSymbolTable.view ev: UnusedEvidence.view mid: u32
     } is {
-        m: zast.namedSiteAt ast: prog nid: mid
+        m: zast.namedSiteAt ast: prog nid: (zast.nodeid.create from: mid)
         if m.name.isZero then return
         dmD: (st.typing.declTypedMemberIdOf
             parentTypeId: (ztypes.tid.create from: ev.mainTid.u64)
@@ -4835,7 +4877,12 @@ Analysis: class {
         for tmI < ev.memIds.length loop {
             tmid: ev.memIds.get i: tmI
             tmI = tmI + 1
-            this.reportUnusedMembersOf :prog :st :ev site: (zast.namedSiteAt ast: prog nid: tmid)
+            (this.reportUnusedMembersOf
+                :prog
+                :st
+                :ev
+                site: (zast.namedSiteAt ast: prog nid: (zast.nodeid.create from: tmid))
+            )
         }
     }
 
@@ -4851,7 +4898,7 @@ Analysis: class {
         items: zast.objItemIds ast: prog nid: site.operation
         j: u64
         for j < items.length loop {
-            member: zast.namedSiteAt ast: prog nid: (items.get i: j)
+            member: zast.namedSiteAt ast: prog nid: (zast.nodeid.create from: (items.get i: j))
             j = j + 1
             if member.name.isZero.not then {
                 tmdi: (st.typing.declTypedMemberIdOf
@@ -4883,7 +4930,7 @@ Analysis: class {
 # addPublicName -- the name one `public:` entry exports: an entry spelled as a
 # bare atom exports that atom's name, any other shape its own
 addPublicName: function {ast: Ast.view site: zast.namedsite into: IdSet u64} is {
-    eo: ast.nodes.get i: site.operation.u64
+    eo: ast.nodes.get i: site.operation
     match (
         eo
     ) case atomid then {
@@ -4896,10 +4943,10 @@ addPublicName: function {ast: Ast.view site: zast.namedsite into: IdSet u64} is 
 # addPublicNames -- every name one `public:` block spells, added to `into`
 addPublicNames: function {ast: Ast.view opId: zast.nodeid into: IdSet u64} is {
     ids: ListVal u32
-    pu: ast.nodes.get i: opId.u64
+    pu: ast.nodes.get i: opId
     if pu.unitdef then ids = zast.kidIds :ast span: pu.body
     for each eId: ids loop {
-        esite: zast.namedSiteAt :ast nid: eId
+        esite: zast.namedSiteAt :ast nid: (zast.nodeid.create from: eId)
         if esite.name.isZero.not then addPublicName :ast site: esite :into
     }
 }
@@ -4911,7 +4958,7 @@ unitPublicNames: function {ast: Ast.view body: zast.kidspan into: IdSet u64} out
     hasPub: false
     ids: zast.kidIds :ast span: body
     for each pId: ids loop {
-        psite: zast.namedSiteAt :ast nid: pId
+        psite: zast.namedSiteAt :ast nid: (zast.nodeid.create from: pId)
         if psite.name.isZero.not when (zast.unitOpKindIs
             :ast
             opId: psite.operation
@@ -4955,12 +5002,12 @@ writeTargetAtoms: function {prog: Ast.view} out IdSet u64 is {
     ni: u64
     nn: prog.nodes.length
     for ni < nn loop {
-        tp: u64
-        wn: prog.nodes.get i: ni
-        match wn case reassignment then tp = wn.topath.u64 else null
-        if tp > 0 then {
+        tp: zast.nodeid
+        wn: prog.nodes.get i: (zast.nodeid.create from: ni.u32.orPanic)
+        match wn case reassignment then tp = wn.topath else null
+        if tp.isZero.not then {
             tn: prog.nodes.get i: tp
-            match tn case atomid then wtgt.add item: tp else null
+            match tn case atomid then wtgt.add item: tp.u64 else null
         }
         ni = ni + 1
     }
@@ -4980,7 +5027,7 @@ usedVarSet: function {st: zenv.ZSymbolTable.view wtgt: (IdSet u64).view} out IdS
 # appendUserFnOp -- append `opId` when it defines a function written in a real
 # file. Synth-lowered defs sit outside every file segment (fsno 0): they are not
 # user source, so their parameters are exempt
-appendUserFnOp: function {prog: Ast.view opId: u32 fnOps: ListVal u32} is {
+appendUserFnOp: function {prog: Ast.view opId: zast.nodeid fnOps: ListVal u32} is {
     isFn: false
     n: prog.nodes.get i: opId
     if n.functiondef then isFn = true
@@ -4991,7 +5038,7 @@ appendUserFnOp: function {prog: Ast.view opId: u32 fnOps: ListVal u32} is {
 # appendFnOpsOf -- the function definitions one unit member contributes: itself
 # when it defines a function, and the methods of its `as` block when it defines
 # a type
-appendFnOpsOf: function {prog: Ast.view opId: u32 fnOps: ListVal u32} is {
+appendFnOpsOf: function {prog: Ast.view opId: zast.nodeid fnOps: ListVal u32} is {
     appendUserFnOp :prog :opId :fnOps
     # only the `as` half of a type carries methods; its `is` half declares
     # fields and arms, which have no parameters to judge
@@ -4999,10 +5046,10 @@ appendFnOpsOf: function {prog: Ast.view opId: u32 fnOps: ListVal u32} is {
     op: prog.nodes.get i: opId
     match op case objectdef then asIds = zast.kidIds ast: prog span: op.asItems else null
     for each amid: asIds loop {
-        asite: zast.namedSiteAt ast: prog nid: amid
+        asite: zast.namedSiteAt ast: prog nid: (zast.nodeid.create from: amid)
         if asite.operation.isZero.not then (appendUserFnOp
             :prog
-            opId: asite.operation.u32
+            opId: asite.operation
             :fnOps
         )
     }
@@ -5015,10 +5062,10 @@ collectFnOps: function {prog: Ast.view mainOp: zast.nodeid} out ListVal u32 is {
     fnOps: ListVal u32
     memIds: unitMemberIds :prog unitOp: mainOp
     for each mid: memIds loop {
-        msite: zast.namedSiteAt ast: prog nid: mid
+        msite: zast.namedSiteAt ast: prog nid: (zast.nodeid.create from: mid)
         if msite.operation.isZero.not then (appendFnOpsOf
             :prog
-            opId: msite.operation.u32
+            opId: msite.operation
             :fnOps
         )
     }
@@ -5026,7 +5073,7 @@ collectFnOps: function {prog: Ast.view mainOp: zast.nodeid} out ListVal u32 is {
 }
 
 # fnParamIds -- a function definition's parameter nodes, in order
-fnParamIds: function {prog: Ast.view fop: u32} out ListVal u32 is {
+fnParamIds: function {prog: Ast.view fop: zast.nodeid} out ListVal u32 is {
     ids: ListVal u32
     fd: prog.nodes.get i: fop
     match (
@@ -5077,7 +5124,7 @@ unitMembersOf: function {
     for mI < memIds.length loop {
         mid: memIds.get i: mI
         mI = mI + 1
-        m: zast.namedSiteAt ast: prog nid: mid
+        m: zast.namedSiteAt ast: prog nid: (zast.nodeid.create from: mid)
         nm9: u64
         dc9: u64
         if m.name.isZero.not then {
@@ -5118,7 +5165,7 @@ memberIndexAtLine: function {um: UnitMembers.view line: u32} out u64 is {
 # file shares no line numbering with these extents, and dropping one would
 # report a member that IS used.
 selfReferenceAt: function {
-    prog: Ast.view seg: segrange um: UnitMembers.view siteNid: u64 declId: u64
+    prog: Ast.view seg: segrange um: UnitMembers.view siteNid: zast.nodeid declId: u64
 } out bool is {
     if declId == 0 then return false
     if seg.end <= seg.start then return false
@@ -5171,7 +5218,13 @@ lintedUnitOf: function {prog: Ast.view self: zvfs.fsno} out LintedUnit is {
     if self.u32 == 0 then return lu
     trail: List String
     for each uId: prog.units loop {
-        if lu.op.isZero then findUnitIn :prog :self namedOpId: uId :trail into: lu
+        if lu.op.isZero then (findUnitIn
+            :prog
+            :self
+            namedOpId: (zast.nodeid.create from: uId)
+            :trail
+            into: lu
+        )
     }
     return lu
 }
@@ -5182,7 +5235,7 @@ lintedUnitOf: function {prog: Ast.view self: zvfs.fsno} out LintedUnit is {
 lintedUnitNamed: function {prog: Ast.view uname: StringView} out LintedUnit is {
     lu: LintedUnit op: zast.nodeid name: uname.string names: List String
     for each uId: prog.units loop {
-        un: prog.nodes.get i: uId
+        un: prog.nodes.get i: (zast.nodeid.create from: uId)
         if un.namedoperation then {
             unm: zast.poolTextAt pool: prog.names ref: un.name
             if unm.stringView == uname then lu.op = un.operation
@@ -5197,14 +5250,14 @@ lintedUnitNamed: function {prog: Ast.view uname: StringView} out LintedUnit is {
 findUnitIn: function {
     prog: Ast.view
     self: zvfs.fsno
-    namedOpId: u32
+    namedOpId: zast.nodeid
     trail: List String
     into: LintedUnit
 } is {
     n: prog.nodes.get i: namedOpId
     if n.namedoperation.not then return
     op: n.operation
-    if (prog.nodes.get i: op.u64).unitdef.not then return
+    if (prog.nodes.get i: op).unitdef.not then return
     trail.append (zast.nameTextCopy ast: prog ref: n.name)
     if (unitAnchorFsno :prog mainOp: op) == self then {
         into.op = op
@@ -5212,7 +5265,13 @@ findUnitIn: function {
         into.name = (trail.get i: trail.length - 1).copy
     } else {
         for each mid: (unitMemberIds :prog unitOp: op) loop {
-            if into.op.isZero then findUnitIn :prog :self namedOpId: mid :trail :into
+            if into.op.isZero then (findUnitIn
+                :prog
+                :self
+                namedOpId: (zast.nodeid.create from: mid)
+                :trail
+                :into
+            )
         }
     }
     trail.pop
@@ -5263,7 +5322,13 @@ usedDeclSet: function {
         dlo: st.typing.decls.get i: e.value
         dNm = dlo.name
         dPar = dlo.parent
-        if (selfReferenceAt :prog :seg :um siteNid: e.key declId: e.value.u64) then {
+        if (selfReferenceAt
+            :prog
+            :seg
+            :um
+            siteNid: (zast.nodeid.create from: e.key.u32.orPanic)
+            declId: e.value.u64
+        ) then {
             dPar = ztypes.declid
         }
         if dPar.isZero.not when dNm > 0 then {
@@ -5370,7 +5435,7 @@ atomNamesOutsideSegments: function {prog: Ast.view into: IdSet u64} is {
             if ndJ >= sgB.startId when ndJ < sgB.endId then covered = true
         }
         if covered.not then {
-            ndB0: prog.nodes.get i: ndJ
+            ndB0: prog.nodes.get i: (zast.nodeid.create from: ndJ.u32.orPanic)
             if ndB0.atomid then into.add item: ndB0.name.u64
         }
         ndJ = ndJ + 1
@@ -5400,7 +5465,7 @@ atomNamesOutsideSelf: function {
 } is {
     ndI: seg.start.u64
     for ndI < seg.end loop {
-        nd0: prog.nodes.get i: ndI
+        nd0: prog.nodes.get i: (zast.nodeid.create from: ndI.u32.orPanic)
         ndI = ndI + 1
         if nd0.atomid then {
             k: memberIndexAtLine :um line: nd0.lineno
@@ -5418,7 +5483,7 @@ definedTypeTidOf: function {
 } out u64 is {
     if site.name.isZero then return 0
     if site.operation.isZero then return 0
-    to: prog.nodes.get i: site.operation.u64
+    to: prog.nodes.get i: site.operation
     if to.objectdef.not then return 0
     cto: (st.typing.declChildOfId
         parentTypeId: (ztypes.tid.create from: mainTid.u64)
@@ -5519,16 +5584,16 @@ operandSuffix: function {ast: Ast.view n: astnode.view} out SufRec is {
     match (
         n
     ) case dottedpath then {
-        cn: atomName :ast n: (ast.nodes.get i: n.child.u64)
+        cn: atomName :ast n: (ast.nodes.get i: n.child)
         if (ztypecheck.isNumericTypeName name: cn.stringView).not then {
             return (SufRec tname: "" line: 0 col: 0)
         }
-        pn: atomName :ast n: (ast.nodes.get i: n.parent.u64)
+        pn: atomName :ast n: (ast.nodes.get i: n.parent)
         if pn.length == 0 then return (SufRec tname: "" line: 0 col: 0)
         if (literalFitsBase numstr: pn.stringView).not then {
             return (SufRec tname: "" line: 0 col: 0)
         }
-        ci: nodeInfoOf n: (ast.nodes.get i: n.child.u64)
+        ci: nodeInfoOf n: (ast.nodes.get i: n.child)
         return (SufRec tname: cn line: ci.line col: ci.col)
     } else {
         return (SufRec tname: "" line: 0 col: 0)
@@ -5558,7 +5623,7 @@ typeNameOfOptAt: function {
     st: zenv.ZSymbolTable.view
 } out String is {
     if oId.isZero then return ""
-    o: ast.nodes.get i: oId.u64
+    o: ast.nodes.get i: oId
     return (typeNameOfNode n: o :st)
 }
 
@@ -5580,7 +5645,7 @@ litShapedSuf: function {ast: Ast.view n: astnode.view} out bool is {
         } case none then null
         return d
     } case dottedpath then {
-        return (litShapedSuf :ast n: (ast.nodes.get i: n.parent.u64))
+        return (litShapedSuf :ast n: (ast.nodes.get i: n.parent))
     } else {
         return false
     }
@@ -6329,7 +6394,7 @@ isNumericLiteralNode: function {ast: Ast.view n: astnode.view} out bool is {
 
 # operatorKind -- ztypes.operatorKindOf for the operator atom at `nid`.
 operatorKind: function {ast: Ast.view nid: zast.nodeid} out u8 is {
-    nm: zast.nameTextAt :ast ref: (atomNameIdOf n: (ast.nodes.get i: nid.u64))
+    nm: zast.nameTextAt :ast ref: (atomNameIdOf n: (ast.nodes.get i: nid))
     return (ztypes.operatorKindOf name: nm.stringView)
 }
 

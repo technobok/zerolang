@@ -156,7 +156,7 @@ slIsBareNull: function {ast: Ast.view sl: astnode.view} out bool is {
     match (
         sl
     ) case statementline then {
-        return (nodeIsBareNull :ast n: (ast.nodes.get i: sl.statementline.u64))
+        return (nodeIsBareNull :ast n: (ast.nodes.get i: sl.statementline))
     } else {
         return false
     }
@@ -310,7 +310,7 @@ Parser: class {
         tbl: Ast
         tbl swap this.ast
         tbl.root = eid
-        zast.tableSet ast: tbl id: eid.u32 child: e
+        zast.tableSet ast: tbl id: eid child: e
         return tbl
     }
 
@@ -840,7 +840,10 @@ Parser: class {
         i: u64
         for i < n loop {
             elId: parts.get :i
-            c: partClass n: (this.ast.nodes.get i: elId) pool: this.ast.names
+            c: (partClass
+                n: (this.ast.nodes.get i: (zast.nodeid.create from: elId))
+                pool: this.ast.names
+            )
             if c == 1 then return i + 1
             if c != 2 then return 0
             i = i + 1
@@ -860,7 +863,10 @@ Parser: class {
         for j > startIdx loop {
             j2: j - 1
             elId: parts.get i: j2
-            c: partClass n: (this.ast.nodes.get i: elId) pool: this.ast.names
+            c: (partClass
+                n: (this.ast.nodes.get i: (zast.nodeid.create from: elId))
+                pool: this.ast.names
+            )
             if c == 1 then return (optionval.some j2)
             if c != 2 then return (optionval.none u64)
             j = j - 1
@@ -875,7 +881,7 @@ Parser: class {
         n: parts.length
         m: from
         for m < n loop {
-            el: this.ast.nodes.get i: (parts.get i: m)
+            el: this.ast.nodes.get i: (zast.nodeid.create from: (parts.get i: m))
             if el.stringchunk then prefix.append (zast.poolTextAt
                 pool: this.ast.names
                 ref: el.text
@@ -901,7 +907,7 @@ Parser: class {
         for p < endIdx loop {
             elId: parts.get i: p
             p = p + 1
-            el: this.ast.nodes.get i: elId
+            el: this.ast.nodes.get i: (zast.nodeid.create from: elId)
             c: partClass n: el pool: this.ast.names
             if c == 1 then {
                 atLineStart = true
@@ -959,7 +965,7 @@ Parser: class {
             at9: idx
             idx = idx + 1
             if (at9 < startIdx) or (at9 >= endIdx) then continue
-            el: this.ast.nodes.get i: elId
+            el: this.ast.nodes.get i: (zast.nodeid.create from: elId)
             lineStart: atLineStart
             atLineStart = false
             if el.stringchunk.not then {
@@ -1089,7 +1095,7 @@ Parser: class {
     # callable, and the right operand is the call's one unlabelled argument.
     # Every operand is interned already, so the ids move in as they are.
     mkInfixCall: function {
-        :this recv: u32 operator: u32 rhs: u32 line: u32 col: u32
+        :this recv: u32 operator: u32 rhs: zast.nodeid line: u32 col: u32
     } out astnode is {
         dp: astnode.dottedpath (zast.dottedpathrow
             nodeid: this.nextId
@@ -1191,7 +1197,7 @@ Parser: class {
     operationFromBase: function {:this base: u64 lex: zlexer.Lexer.view} out astnode is {
         if (this.pathCount :base) == 1 then {
             only: this.opStack.pop
-            return (this.ast.nodes.get i: only)
+            return (this.ast.nodes.get i: (zast.nodeid.create from: only))
         }
         return (this.operationFromPaths paths: (this.takePaths :base) :lex)
     }
@@ -1202,8 +1208,14 @@ Parser: class {
     # operand.
     foldStack: function {:this stack: (ListVal u32).take lex: zlexer.Lexer.view} out astnode is {
         acc: stack.pop
-        sp: zast.posOf n: (this.ast.nodes.get i: acc)
-        return (this.foldBinopTail :stack :acc line: sp.line col: sp.col :lex)
+        sp: zast.posOf n: (this.ast.nodes.get i: (zast.nodeid.create from: acc))
+        return (this.foldBinopTail
+            :stack
+            acc: (zast.nodeid.create from: acc)
+            line: sp.line
+            col: sp.col
+            :lex
+        )
     }
 
     # collapse the operand/operator stack into a left-nested CALL chain: the
@@ -1212,11 +1224,11 @@ Parser: class {
     # here, so the fold is purely left to right and the shape is exactly what
     # was written
     foldBinopTail: function {
-        :this stack: (ListVal u32).take acc: u32 line: u32 col: u32 lex: zlexer.Lexer.view
+        :this stack: (ListVal u32).take acc: zast.nodeid line: u32 col: u32 lex: zlexer.Lexer.view
     } out astnode is {
         if stack.length == 0 then return (this.ast.nodes.get i: acc)
         op: stack.pop
-        opOk: Parser.isAtomId node: (this.ast.nodes.get i: op)
+        opOk: Parser.isAtomId node: (this.ast.nodes.get i: (zast.nodeid.create from: op))
         if opOk then {
             if stack.length == 0 then {
                 return (this.mkErrorAt
@@ -1226,8 +1238,20 @@ Parser: class {
                 )
             }
             rhs: stack.pop
-            nb: this.mkInfixCall recv: acc operator: op :rhs :line :col
-            return (this.foldBinopTail :stack acc: (this.intern n: nb).u32 :line :col :lex)
+            nb: (this.mkInfixCall
+                recv: acc
+                operator: op
+                rhs: (zast.nodeid.create from: rhs)
+                :line
+                :col
+            )
+            return (this.foldBinopTail
+                :stack
+                acc: (zast.nodeid.create from: (this.intern n: nb).u32)
+                :line
+                :col
+                :lex
+            )
         } else {
             return (this.mkErrorAt
                 pos: lex.peekPos
@@ -1257,7 +1281,7 @@ Parser: class {
     } out astnode is {
         stack: Parser.reverseStack src: paths
         callable: stack.pop
-        cp: zast.posOf n: (this.ast.nodes.get i: callable)
+        cp: zast.posOf n: (this.ast.nodes.get i: (zast.nodeid.create from: callable))
         args: ListVal u32
         if stack.length > 0 then {
             argNode: this.foldStack :stack :lex
@@ -1281,14 +1305,14 @@ Parser: class {
     acceptCall: function {:this lex: zlexer.Lexer paths: (ListVal u32).take} out astnode is {
         stack: Parser.reverseStack src: paths
         callable: stack.pop
-        return (this.acceptCallArgs :lex :callable :stack)
+        return (this.acceptCallArgs :lex callable: (zast.nodeid.create from: callable) :stack)
     }
 
     # acceptCallArgs -- acceptCall once its head is read: `stack` holds the
     # remaining paths reversed, the unlabelled argument's operation when there
     # is one.
     acceptCallArgs: function {
-        :this lex: zlexer.Lexer callable: u32 stack: (ListVal u32).take
+        :this lex: zlexer.Lexer callable: zast.nodeid stack: (ListVal u32).take
     } out astnode is {
         cp: zast.posOf n: (this.ast.nodes.get i: callable)
         abase: this.argStack.length
@@ -1401,8 +1425,8 @@ Parser: class {
         :this paths: (ListVal u32).take lex: zlexer.Lexer.view
     } out astnode is {
         last: paths.pop
-        lerr: zast.isErrorAt ast: this.ast id: last
-        if lerr then return (this.ast.nodes.get i: last)
+        lerr: zast.isErrorAt ast: this.ast id: (zast.nodeid.create from: last)
+        if lerr then return (this.ast.nodes.get i: (zast.nodeid.create from: last))
         paths.append last
         n: paths.length
         even: (n & 1) == 0
@@ -1441,8 +1465,8 @@ Parser: class {
         :this paths: (ListVal u32).take lex: zlexer.Lexer
     } out astnode is {
         last: paths.pop
-        lerr: zast.isErrorAt ast: this.ast id: last
-        if lerr then return (this.ast.nodes.get i: last)
+        lerr: zast.isErrorAt ast: this.ast id: (zast.nodeid.create from: last)
+        if lerr then return (this.ast.nodes.get i: (zast.nodeid.create from: last))
         paths.append last
         n: paths.length
         even: (n & 1) == 0
@@ -1463,16 +1487,20 @@ Parser: class {
     operationOrCallFromBase: function {:this base: u64 lex: zlexer.Lexer} out astnode is {
         n: this.pathCount :base
         last: this.opStack.get i: this.opStack.length - 1
-        if (zast.isErrorAt ast: this.ast id: last) then {
+        if (zast.isErrorAt ast: this.ast id: (zast.nodeid.create from: last)) then {
             for this.opStack.length > base loop this.opStack.pop
-            return (this.ast.nodes.get i: last)
+            return (this.ast.nodes.get i: (zast.nodeid.create from: last))
         }
         if n == 1 then {
             head: this.opStack.pop
             if (Parser.ttIsLabel tt: lex.peekType) then {
-                return (this.acceptCallArgs :lex callable: head stack: ListVal u32)
+                return (this.acceptCallArgs
+                    :lex
+                    callable: (zast.nodeid.create from: head)
+                    stack: ListVal u32
+                )
             }
-            return (this.ast.nodes.get i: head)
+            return (this.ast.nodes.get i: (zast.nodeid.create from: head))
         }
         return (this.operationOrCallFromPaths paths: (this.takePaths :base) :lex)
     }
@@ -2694,8 +2722,8 @@ Parser: class {
             )
         }
         lhs: paths.pop
-        lhsErr: zast.isErrorAt ast: this.ast id: lhs
-        if lhsErr then return (this.ast.nodes.get i: lhs)
+        lhsErr: zast.isErrorAt ast: this.ast id: (zast.nodeid.create from: lhs)
+        if lhsErr then return (this.ast.nodes.get i: (zast.nodeid.create from: lhs))
         rhs: this.parseExpression :lex
         rErr: Parser.isError node: rhs
         if rErr then return rhs
@@ -2724,8 +2752,8 @@ Parser: class {
             )
         }
         lhs: paths.pop
-        lhsErr: zast.isErrorAt ast: this.ast id: lhs
-        if lhsErr then return (this.ast.nodes.get i: lhs)
+        lhsErr: zast.isErrorAt ast: this.ast id: (zast.nodeid.create from: lhs)
+        if lhsErr then return (this.ast.nodes.get i: (zast.nodeid.create from: lhs))
         la: this.atomLookahead :lex
         if la then {
             rhs: this.parsePath :lex
@@ -3011,8 +3039,8 @@ Parser: class {
             an: ab.length
             if an > 0 then {
                 lastId: ab.pop
-                if (zast.isErrorAt ast: this.ast id: lastId) then {
-                    return (zast.tableTake ast: this.ast id: lastId)
+                if (zast.isErrorAt ast: this.ast id: (zast.nodeid.create from: lastId)) then {
+                    return (zast.tableTake ast: this.ast id: (zast.nodeid.create from: lastId))
                 }
                 ab.append lastId
             }
@@ -3045,8 +3073,8 @@ Parser: class {
             pn: pb.length
             if pn > 0 then {
                 lastId: pb.pop
-                if (zast.isErrorAt ast: this.ast id: lastId) then {
-                    return (zast.tableTake ast: this.ast id: lastId)
+                if (zast.isErrorAt ast: this.ast id: (zast.nodeid.create from: lastId)) then {
+                    return (zast.tableTake ast: this.ast id: (zast.nodeid.create from: lastId))
                 }
                 pb.append lastId
             }
@@ -3096,8 +3124,8 @@ Parser: class {
             pn: pb.length
             if pn > 0 then {
                 lastId: pb.pop
-                if (zast.isErrorAt ast: this.ast id: lastId) then {
-                    return (zast.tableTake ast: this.ast id: lastId)
+                if (zast.isErrorAt ast: this.ast id: (zast.nodeid.create from: lastId)) then {
+                    return (zast.tableTake ast: this.ast id: (zast.nodeid.create from: lastId))
                 }
                 pb.append lastId
             }
@@ -3172,10 +3200,10 @@ Parser: class {
         b: (ListVal u32).view
     } out optionval astnode is {
         for each bId: b loop {
-            bs: zast.namedSiteAt ast: this.ast nid: bId
+            bs: zast.namedSiteAt ast: this.ast nid: (zast.nodeid.create from: bId)
             if bs.name.isZero then continue
             for each aId: a loop {
-                as2: zast.namedSiteAt ast: this.ast nid: aId
+                as2: zast.namedSiteAt ast: this.ast nid: (zast.nodeid.create from: aId)
                 if as2.name != bs.name then continue
                 later: bs
                 if (
@@ -3622,8 +3650,8 @@ Parser: class {
             bn: body.length
             if bn > 0 then {
                 lastId: body.pop
-                if (zast.isErrorAt ast: this.ast id: lastId) then {
-                    return (zast.tableTake ast: this.ast id: lastId)
+                if (zast.isErrorAt ast: this.ast id: (zast.nodeid.create from: lastId)) then {
+                    return (zast.tableTake ast: this.ast id: (zast.nodeid.create from: lastId))
                 }
                 body.append lastId
             }
@@ -3714,8 +3742,8 @@ Parser: class {
             abn: ab.length
             if abn > 0 then {
                 lastId: ab.pop
-                if (zast.isErrorAt ast: this.ast id: lastId) then {
-                    return (zast.tableTake ast: this.ast id: lastId)
+                if (zast.isErrorAt ast: this.ast id: (zast.nodeid.create from: lastId)) then {
+                    return (zast.tableTake ast: this.ast id: (zast.nodeid.create from: lastId))
                 }
                 ab.append lastId
             }
@@ -3788,8 +3816,8 @@ Parser: class {
                 ibn: ib.length
                 if ibn > 0 then {
                     lastId: ib.pop
-                    if (zast.isErrorAt ast: this.ast id: lastId) then {
-                        return (zast.tableTake ast: this.ast id: lastId)
+                    if (zast.isErrorAt ast: this.ast id: (zast.nodeid.create from: lastId)) then {
+                        return (zast.tableTake ast: this.ast id: (zast.nodeid.create from: lastId))
                     }
                     ib.append lastId
                 }
@@ -3836,8 +3864,8 @@ Parser: class {
             abn: ab.length
             if abn > 0 then {
                 lastId: ab.pop
-                if (zast.isErrorAt ast: this.ast id: lastId) then {
-                    return (zast.tableTake ast: this.ast id: lastId)
+                if (zast.isErrorAt ast: this.ast id: (zast.nodeid.create from: lastId)) then {
+                    return (zast.tableTake ast: this.ast id: (zast.nodeid.create from: lastId))
                 }
                 ab.append lastId
             }
@@ -3871,8 +3899,8 @@ Parser: class {
                 ibn: ib.length
                 if ibn > 0 then {
                     lastId: ib.pop
-                    if (zast.isErrorAt ast: this.ast id: lastId) then {
-                        return (zast.tableTake ast: this.ast id: lastId)
+                    if (zast.isErrorAt ast: this.ast id: (zast.nodeid.create from: lastId)) then {
+                        return (zast.tableTake ast: this.ast id: (zast.nodeid.create from: lastId))
                     }
                     ib.append lastId
                 }
@@ -4100,8 +4128,8 @@ Parser: class {
             bn: body.length
             if bn > 0 then {
                 lastId: body.pop
-                if (zast.isErrorAt ast: this.ast id: lastId) then {
-                    return (zast.tableTake ast: this.ast id: lastId)
+                if (zast.isErrorAt ast: this.ast id: (zast.nodeid.create from: lastId)) then {
+                    return (zast.tableTake ast: this.ast id: (zast.nodeid.create from: lastId))
                 }
                 body.append lastId
             }
@@ -4301,7 +4329,7 @@ Parser: class {
         mun swap tbl.mainUnitName
         (zast.tableSet
             ast: tbl
-            id: pid.u32
+            id: pid
             child: astnode.program (zast.programrow nodeid: pid lineno: 1 colno: 1)
         )
         return tbl
@@ -4437,7 +4465,7 @@ ewBindOneName: function {scope: ListVal u32 item: astnode.view} is {
 # the parser still holds, before the node that will own the span is built.
 ewBindNameList: function {ast: Ast.view scope: ListVal u32 items: (ListVal u32).view} is {
     for each eid: items loop {
-        ewBindOneName :scope item: (ast.nodes.get i: eid)
+        ewBindOneName :scope item: (ast.nodes.get i: (zast.nodeid.create from: eid))
     }
 }
 
@@ -4456,7 +4484,7 @@ ewWalkOptAt: function {
     oId: zast.nodeid
 } is {
     if oId.isZero then return
-    o: ast.nodes.get i: oId.u64
+    o: ast.nodes.get i: oId
     ewWalk :ast :externs :seen :scope node: o
 }
 
@@ -4471,7 +4499,7 @@ ewWalkList: function {
     items: (ListVal u32).view
 } is {
     for each wid: items loop {
-        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: wid)
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: (zast.nodeid.create from: wid))
     }
 }
 
@@ -4514,7 +4542,7 @@ ewWalkForCond: function {
     match (
         cond
     ) case namedoperation then {
-        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: cond.operation.u64)
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: cond.operation)
         scope.bind id: cond.name
     } else {
         ewWalk :ast :externs :seen :scope node: cond
@@ -4544,10 +4572,10 @@ ewWalk: function {
         ewEmit :ast :externs :seen :scope nameId: node.name
     } case dottedpath then {
         # only the base can name a unit; a member selector never does
-        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.parent.u64)
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.parent)
     } case assignment then {
         # binds its name for what follows, not for its own value
-        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.value.u64)
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.value)
         scope.bind id: node.name
     } case statement then {
         base: scope.depth
@@ -4566,35 +4594,35 @@ ewWalk: function {
         scope.truncate n: base
     } case withexpr then {
         base: scope.depth
-        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.value.u64)
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.value)
         scope.bind id: node.name
-        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.body.u64)
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.body)
         scope.truncate n: base
     } case caseclause then {
         # the arm pattern names an arm of the subject, never a unit
-        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.statement.u64)
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.statement)
     } case statementline then {
-        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.statementline.u64)
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.statementline)
     } case call then {
-        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.callable.u64)
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.callable)
         ewWalkIds :ast :externs :seen :scope items: node.arguments
     } case atomstring then {
         ewWalkIds :ast :externs :seen :scope items: node.stringparts
     } case namedoperation then {
-        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.operation.u64)
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.operation)
     } case ifexpr then {
         ewWalkIds :ast :externs :seen :scope items: node.clauses
         ewWalkOptAt :ast :externs :seen :scope oId: node.elseclause
     } case ifclause then {
         ewWalkIds :ast :externs :seen :scope items: node.conditions
-        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.statement.u64)
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.statement)
     } case caseexpr then {
-        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.subject.u64)
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.subject)
         ewWalkIds :ast :externs :seen :scope items: node.clauses
         ewWalkOptAt :ast :externs :seen :scope oId: node.elseclause
     } case reassignment then {
-        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.topath.u64)
-        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.value.u64)
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.topath)
+        ewWalk :ast :externs :seen :scope node: (ast.nodes.get i: node.value)
     } case functiondef then {
         base: scope.depth
         scope.bindNamesOf :ast items: node.parameters
@@ -4643,7 +4671,7 @@ collectExterns: function {ast: Ast.view body: (ListVal u32).view} out List Strin
     scope.bindKnown :ast text: "type"
     scope.bindKnown :ast text: "meta"
     for each bid: body loop {
-        item: ast.nodes.get i: bid
+        item: ast.nodes.get i: (zast.nodeid.create from: bid)
         if item.namedoperation then scope.bind id: item.name
     }
     ewWalkList :ast externs: externIds :seen :scope items: body

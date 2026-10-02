@@ -1565,7 +1565,7 @@ Spans: class {
     # wrapper. The tree is the parameter; `root` names the row inside it.
     walkProgram: function {:this prog: Ast.view} is {
         {
-            pr9: prog.nodes.get i: prog.root.u64
+            pr9: prog.nodes.get i: prog.root
             pp9: zast.posOf n: pr9
             (this.note
                 id: (zast.nodeIdOf n: pr9)
@@ -1585,7 +1585,7 @@ Spans: class {
     # walkAt -- the id-taking entry: the row view is this frame's, so a
     # caller can lend the table in the same call.
     walkAt: function {:this ast: Ast.view nId: zast.nodeid} is {
-        n: ast.nodes.get i: nId.u64
+        n: ast.nodes.get i: nId
         this.walk :ast :n
     }
 
@@ -1608,8 +1608,8 @@ Spans: class {
             this.addRow id: n.nodeid line: n.lineno col: n.colno name: nLb.stringView kind: 1
         } case dottedpath then {
             # the member selector is a row of its own, not a node walk
-            this.walk :ast n: (ast.nodes.get i: n.parent.u64)
-            this.memberRow :ast dpid: n.nodeid c: (ast.nodes.get i: n.child.u64)
+            this.walk :ast n: (ast.nodes.get i: n.parent)
+            this.memberRow :ast dpid: n.nodeid c: (ast.nodes.get i: n.child)
             return
         } case call then {
             csp: n.lineno.u64 * 1048576 + n.colno
@@ -1656,7 +1656,7 @@ Spans: class {
 
     # record spans for a list of child nodes in order
     walkIds: function {:this ast: Ast.view ids: (ListVal u32).view} is {
-        for each c: ids loop this.walk :ast n: (ast.nodes.get i: c)
+        for each c: ids loop this.walk :ast n: (ast.nodes.get i: (zast.nodeid.create from: c))
     }
 }
 
@@ -1925,7 +1925,7 @@ declRowField: function {
     ) case some then {
         g: o.typing.decls.get i: declId
         if typeId then return g.typeId
-        return g.node
+        return g.node.u64
     } case none then {
         return 0
     }
@@ -2183,7 +2183,7 @@ defaultDisplay: function {
     dl: dv
     if dl.literal then {
         if dl == 0 then return ""
-        dtextOwn = ztypecheck.rootNameOf :ast n: (ast.nodes.get i: dl)
+        dtextOwn = ztypecheck.rootNameOf :ast n: (ast.nodes.get i: (zast.nodeid.create from: dl))
     }
     dk: dv
     if dk.constant then {
@@ -2224,12 +2224,12 @@ paramDocs: function {
     result: Map String V: String
     defNid: defNodeInfo :o :prog :tid member: ""
     if defNid == 0 then return result
-    fnNid: u32
+    fnNid: zast.nodeid
     {
-        wn: prog.nodes.get i: defNid.u64
+        wn: prog.nodes.get i: (zast.nodeid.create from: defNid.u32.orPanic)
         if wn.namedoperation then fnNid = wn.operation
     }
-    if fnNid == 0 then return result
+    if fnNid.isZero then return result
     fsno: zvfs.fsno
     {
         {
@@ -2259,7 +2259,7 @@ paramDocs: function {
         nameRef: u32
         ln: u32
         {
-            pnode: prog.nodes.get i: pid
+            pnode: prog.nodes.get i: (zast.nodeid.create from: pid)
             if pnode.namedoperation then {
                 nameRef = pnode.name
                 ln = pnode.lineno
@@ -2326,12 +2326,12 @@ paramLeadDocs: function {
     result: Map String V: String
     defNid: defNodeInfo :o :prog :tid member: ""
     if defNid == 0 then return result
-    fnNid: u32
+    fnNid: zast.nodeid
     {
-        wn: prog.nodes.get i: defNid.u64
+        wn: prog.nodes.get i: (zast.nodeid.create from: defNid.u32.orPanic)
         if wn.namedoperation then fnNid = wn.operation
     }
-    if fnNid == 0 then return result
+    if fnNid.isZero then return result
     fsno: zvfs.fsno
     {
         {
@@ -2361,7 +2361,7 @@ paramLeadDocs: function {
         nameRef: u32
         ln: u32
         {
-            pnode: prog.nodes.get i: pid
+            pnode: prog.nodes.get i: (zast.nodeid.create from: pid)
             if pnode.namedoperation then {
                 nameRef = pnode.name
                 ln = pnode.lineno
@@ -2967,15 +2967,15 @@ unitFsnoOfDecl: function {snap: zcheck.CheckResult.view declId: ztypes.declid} o
     dn: declNodeOf o: snap.st :declId
     if dn == 0 then return zvfs.fsno
     op: zast.nodeid.create from: dn.u32.orPanic
-    n: snap.prog.nodes.get i: dn
+    n: snap.prog.nodes.get i: (zast.nodeid.create from: dn.u32.orPanic)
     if n.namedoperation then op = n.operation
-    if (snap.prog.nodes.get i: op.u64).unitdef.not then return zvfs.fsno
+    if (snap.prog.nodes.get i: op).unitdef.not then return zvfs.fsno
     return (zsource.unitAnchorFsno prog: snap.prog mainOp: op)
 }
 
 # unitGenericParamsOf -- a unitdef's generic parameters rendered " {T U}"
 # (its `T: base.generic` body declarations); "" when it has none.
-unitGenericParamsOf: function {ast: Ast.view udId: u32} out String is {
+unitGenericParamsOf: function {ast: Ast.view udId: zast.nodeid} out String is {
     ud: ast.nodes.get i: udId
     result: String
     if ud.unitdef then {
@@ -2986,7 +2986,7 @@ unitGenericParamsOf: function {ast: Ast.view udId: u32} out String is {
             gm: ast.nodes.get i: gm9Id
             if gm.namedoperation when (ztypecheck.isBareGenericParam
                 :ast
-                op: (ast.nodes.get i: gm.operation.u64)
+                op: (ast.nodes.get i: gm.operation)
             ) then {
                 gpn: zast.nameTextAt :ast ref: gm.name
                 if result.length == 0 then result.append " {"
@@ -3009,12 +3009,12 @@ unitGenericSuffix: function {prog: Ast.view name: StringView} out String is {
             u9Id: zast.nodeid.create from: (prog.units.get i: uIdx9a)
             uIdx9a = uIdx9a + 1
             opId: zast.nodeid
-            u: prog.nodes.get i: u9Id.u64
+            u: prog.nodes.get i: u9Id
             if u.namedoperation then {
                 lb: zast.poolTextAt pool: prog.names ref: u.name
                 if lb.stringView == name then opId = u.operation
             }
-            if opId > 0 then {
+            if opId.isZero.not then {
                 gs: (unitGenericParamsOf
                     ast: prog
                     udId: opId
@@ -3943,7 +3943,7 @@ symbolsAnswer: function {
     arr: newArr
     if unitOp.isZero.not then (collectBodySymbols
         ast: snap.prog
-        ud: (snap.prog.nodes.get i: unitOp.u64)
+        ud: (snap.prog.nodes.get i: unitOp)
         :docText
         :utf32
         :arr
@@ -3980,7 +3980,7 @@ symbolOf: function {
     if m.namedoperation then {
         lb: zast.nameTextAt :ast ref: m.name
         if lb.length == 0 then return
-        k: symbolKindOf op: (ast.nodes.get i: m.operation.u64)
+        k: symbolKindOf op: (ast.nodes.get i: m.operation)
         lt: docLine text: docText lineno: m.lineno
         c0: encodedCol lineText: lt.stringView cpCol1: m.colno :utf32
         wname: lb.stringView.count
@@ -4373,11 +4373,11 @@ collectTopDefs: function {prog: Ast.view sink: (MapRV String v: u8)} is {
 
 # add a unit's top-level definition names to a completion sink.
 collectUnitDefs: function {ast: Ast.view wId: zast.nodeid sink: (MapRV String v: u8)} is {
-    w: ast.nodes.get i: wId.u64
+    w: ast.nodes.get i: wId
     if w.namedoperation then {
         ul: zast.nameTextAt :ast ref: w.name
         addCand :sink name: ul.stringView kind: 9
-        collectUnitDefsIn :ast ud: (ast.nodes.get i: w.operation.u64) :sink
+        collectUnitDefsIn :ast ud: (ast.nodes.get i: w.operation) :sink
     }
 }
 
@@ -4398,7 +4398,7 @@ collectMemberDef: function {ast: Ast.view m: zast.astnode.view sink: (MapRV Stri
     if m.namedoperation then {
         lb: zast.nameTextAt :ast ref: m.name
         if lb.length > 0 then {
-            k: defKindOf op: (ast.nodes.get i: m.operation.u64)
+            k: defKindOf op: (ast.nodes.get i: m.operation)
             addCand :sink name: lb.stringView kind: k
         }
     }
@@ -4416,7 +4416,7 @@ enclosingDefStart: function {
     sink: (MapRV String v: u8)
 } out u32 is {
     if unitOp.isZero then return 0
-    return (enclosingInBody ast: prog ud: (prog.nodes.get i: unitOp.u64) :l1u :sink)
+    return (enclosingInBody ast: prog ud: (prog.nodes.get i: unitOp) :l1u :sink)
 }
 
 # the definition enclosing a position within a body.
@@ -4470,7 +4470,7 @@ memberStartLine: function {m: zast.astnode.view} out u32 is {
 # add member `m`'s parameter names to a completion sink.
 addMemberParams: function {ast: Ast.view m: zast.astnode.view sink: (MapRV String v: u8)} is {
     if m.namedoperation then {
-        addFnParams :ast op: (ast.nodes.get i: m.operation.u64) :sink
+        addFnParams :ast op: (ast.nodes.get i: m.operation) :sink
     }
 }
 
@@ -4643,12 +4643,12 @@ addUnitMembers: function {prog: Ast.view name: StringView sink: (MapRV String v:
         for uIdx9d < uCnt9d loop {
             u9Id: zast.nodeid.create from: (prog.units.get i: uIdx9d)
             uIdx9d = uIdx9d + 1
-            u: prog.nodes.get i: u9Id.u64
+            u: prog.nodes.get i: u9Id
             if u.namedoperation then {
                 lb: zast.poolTextAt pool: prog.names ref: u.name
                 if lb.stringView == name then (collectUnitDefsIn
                     ast: prog
-                    ud: (prog.nodes.get i: u.operation.u64)
+                    ud: (prog.nodes.get i: u.operation)
                     :sink
                 )
             }
@@ -5135,8 +5135,8 @@ caseWordBefore: function {ltv: StringView ps: u64} out bool is {
 
 # caseClauseIds -- a match's subject node index, with its clause ids appended
 # to `dst`; 0 when the node is not a caseexpr.
-caseClauseIds: function {prog: Ast.view caseId: u64 dst: ListVal u64} out u32 is {
-    cnode: prog.nodes.get i: caseId.u64
+caseClauseIds: function {prog: Ast.view caseId: zast.nodeid dst: ListVal u64} out u32 is {
+    cnode: prog.nodes.get i: caseId
     if cnode.caseexpr.not then return 0
     clx: u64
     for clx < cnode.clauses.count loop {
@@ -5151,10 +5151,10 @@ caseClauseIds: function {prog: Ast.view caseId: u64 dst: ListVal u64} out u32 is
 # clause matches: a bare name or a label.
 usedArmNames: function {prog: Ast.view clauseIds: (ListVal u64).view dst: List String} is {
     for each clId: clauseIds loop {
-        maIdx: u32
-        clNode: prog.nodes.get i: clId.u64
+        maIdx: zast.nodeid
+        clNode: prog.nodes.get i: (zast.nodeid.create from: clId.u32.orPanic)
         if clNode.caseclause then maIdx = clNode.matcharm
-        if maIdx == 0 then continue
+        if maIdx.isZero then continue
         maRef: u32
         {
             maNode: prog.nodes.get i: maIdx
@@ -5211,10 +5211,10 @@ caseArmComplete: function {
     )
     if caseId == 0 then return false
     clauseIds: ListVal u64
-    subjIdx: caseClauseIds :prog :caseId dst: clauseIds
+    subjIdx: caseClauseIds :prog caseId: (zast.nodeid.create from: caseId) dst: clauseIds
     if subjIdx == 0 then return false
     subjNid: u32
-    subjNode: prog.nodes.get i: subjIdx
+    subjNode: prog.nodes.get i: (zast.nodeid.create from: subjIdx)
     subjNid = ztypecheck.nodeId n: subjNode
     subjTid: nodeTypeAt :o nid: subjNid
     if subjTid == 0 then return false
@@ -5492,11 +5492,11 @@ argLabelComplete: function {
     }
     if callId == 0 then return false
     # callable index + supplied argument node ids (scoped: one node view)
-    callableIdx: u32
+    callableIdx: zast.nodeid
     argIds: ListVal u64
     okCall: false
     {
-        cnode: prog.nodes.get i: callId
+        cnode: prog.nodes.get i: (zast.nodeid.create from: callId)
         if cnode.call then {
             callableIdx = cnode.callable
             arx639: u64
@@ -5509,7 +5509,7 @@ argLabelComplete: function {
         }
     }
     if okCall.not then return false
-    if callableIdx == 0 then return false
+    if callableIdx.isZero then return false
     # callee function id (callable node -> nodeId -> useUnitDef)
     calNid: u32
     caln: prog.nodes.get i: callableIdx
@@ -5521,7 +5521,7 @@ argLabelComplete: function {
     for si < argIds.length loop {
         aid: argIds.get i: si
         nameRef: u32
-        anode: prog.nodes.get i: aid.u64
+        anode: prog.nodes.get i: (zast.nodeid.create from: aid.u32.orPanic)
         if anode.namedoperation then nameRef = anode.name
         if nameRef > 0 then {
             lbl: zast.nameTextCopy ast: prog ref: (zast.nameid.create from: nameRef.u32)

@@ -85,7 +85,7 @@ givesFromOp: function {ast: Ast nid: zast.nodeid dst: GivesParts} is {
     parentId: zast.nodeid
     lf: zast.markerkind.unmarked
     {
-        n: ast.nodes.get i: nid.u64
+        n: ast.nodes.get i: nid
         match (
             n
         ) case dottedpath then {
@@ -211,11 +211,11 @@ mkReturnBody: function {
 # marker: the field is a reference the instance keeps locked for its life.
 typePathIsReference: function {ast: Ast.view nid: zast.nodeid} out bool is {
     if nid.isZero then return false
-    n: ast.nodes.get i: nid.u64
+    n: ast.nodes.get i: nid
     match (
         n
     ) case dottedpath then {
-        lid: leafAtomNameId :ast n: (ast.nodes.get i: n.child.u64)
+        lid: leafAtomNameId :ast n: (ast.nodes.get i: n.child)
         if lid == zast.names.wkBorrow then return true
         return lid == zast.names.wkView
     } else {
@@ -351,12 +351,13 @@ bindsYieldValue: function {ast: Ast.view n: astnode.view} out bool is {
     ) case functiondef then {
         return false
     } case assignment then {
-        if (isYieldValue :ast n: (ast.nodes.get i: n.value.u64)) then return true
+        if (isYieldValue :ast n: (ast.nodes.get i: n.value)) then return true
     } else null
     kids: zast.childIds :ast :n
     i: u64
     for i < kids.length loop {
-        if (bindsYieldValue :ast n: (ast.nodes.get i: (kids.get :i))) then return true
+        if (bindsYieldValue :ast n: (ast.nodes.get i: (zast.nodeid.create from: (kids.get :i)))
+        ) then return true
         i = i + 1
     }
     return false
@@ -380,7 +381,7 @@ promoteIterables: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out astnode 
     coP: u32
     lineIds: ListVal u32
     {
-        n: ast.nodes.get i: nid.u64
+        n: ast.nodes.get i: nid
         if n.statement then {
             isStmt = true
             lnP = n.lineno
@@ -420,7 +421,7 @@ spillBeforeYields: function {ast: Ast ctr: NameCtr nid: zast.nodeid} is {
     kids: ListVal u32
     lines: ListVal u32
     {
-        n: ast.nodes.get i: nid.u64
+        n: ast.nodes.get i: nid
         if n.functiondef or n.objectdef or n.unitdef then return
         if (zast.yieldCountOf :ast :n) == 0 then return
         zast.childIdsInto :ast :n acc: kids
@@ -439,14 +440,14 @@ spillBeforeYields: function {ast: Ast ctr: NameCtr nid: zast.nodeid} is {
     newLines: ListVal u32
     for each l: lines loop {
         inner: zast.nodeid
-        ln: ast.nodes.get i: l
+        ln: ast.nodes.get i: (zast.nodeid.create from: l)
         if ln.statementline then inner = ln.statementline
         spillIn :ast :ctr nid: inner dst: newLines
         newLines.append l
     }
     if newLines.length == lines.length then return
     span: zast.kidsAdd kids: ast.kids xs: newLines
-    bm: ast.nodes.getMut i: nid.u64
+    bm: ast.nodes.getMut i: nid
     if bm.statement then bm.statements = span
 }
 
@@ -479,7 +480,7 @@ spillStep: function {
     parts: ListVal u32
     holders: ListVal u32
 } out zast.nodeid is {
-    n: ast.nodes.get i: nid.u64
+    n: ast.nodes.get i: nid
     match (
         n
     ) case assignment then {
@@ -497,7 +498,7 @@ spillStep: function {
         if (zast.isYieldCalleeAt :ast callableId: n.callable) then {
             return (zast.yieldCallOperandAt :ast :nid)
         }
-        cb: ast.nodes.get i: n.callable.u64
+        cb: ast.nodes.get i: n.callable
         if cb.dottedpath then {
             parts.append cb.parent.u32
             holders.append n.callable.u32
@@ -549,8 +550,17 @@ spillCallParts: function {
     pi = 0
     for pi < last loop {
         part: parts.get i: pi
-        if (partHoldsYield :ast :part) or (spillStaysPut :ast nid: part).not then {
-            spillPart :ast :ctr :part holder: (holders.get i: pi) :dst
+        if (
+            (partHoldsYield :ast :part) or
+            (spillStaysPut :ast nid: (zast.nodeid.create from: part)).not
+        ) then {
+            (spillPart
+                :ast
+                :ctr
+                part: (zast.nodeid.create from: part)
+                holder: (zast.nodeid.create from: (holders.get i: pi))
+                :dst
+            )
         }
         pi = pi + 1
     }
@@ -566,7 +576,7 @@ partHoldsYield: function {ast: Ast.view part: u32} out bool is {
 # suspension: a literal, a name, and a member read through names. Nothing else
 # runs in the body while it is suspended, and a name bound to a synthetic local
 # would borrow what it names.
-spillStaysPut: function {ast: Ast.view nid: u32} out bool is {
+spillStaysPut: function {ast: Ast.view nid: zast.nodeid} out bool is {
     n: ast.nodes.get i: nid
     match (
         n
@@ -583,7 +593,7 @@ spillStaysPut: function {ast: Ast.view nid: u32} out bool is {
         }
         return true
     } case dottedpath then {
-        return (spillStaysPut :ast nid: n.parent.u32)
+        return (spillStaysPut :ast nid: n.parent)
     } else {
         return false
     }
@@ -593,7 +603,9 @@ spillStaysPut: function {ast: Ast.view nid: u32} out bool is {
 # to `dst` after the part's own spills, and read the local where the part stood:
 # as the argument `holder` carries, or as the receiver of the member read
 # `holder` is.
-spillPart: function {ast: Ast ctr: NameCtr part: u32 holder: u32 dst: ListVal u32} is {
+spillPart: function {
+    ast: Ast ctr: NameCtr part: zast.nodeid holder: zast.nodeid dst: ListVal u32
+} is {
     spillIn :ast :ctr nid: (zast.nodeid.create from: part) :dst
     ln: u32
     co: u32
@@ -646,14 +658,14 @@ promoteLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid dst: ListVal u32} 
     lnQ: u32
     coQ: u32
     {
-        n: ast.nodes.get i: nid.u64
+        n: ast.nodes.get i: nid
         if n.statementline then {
             innerId = n.statementline
             lnQ = n.lineno
             coQ = n.colno
-            isFor = lineIsFor n: (ast.nodes.get i: n.statementline.u64)
+            isFor = lineIsFor n: (ast.nodes.get i: n.statementline)
             if isFor.not then {
-                isFor = lineIsWith n: (ast.nodes.get i: n.statementline.u64)
+                isFor = lineIsWith n: (ast.nodes.get i: n.statementline)
             }
         }
     }
@@ -700,7 +712,7 @@ promoteWrappedBody: function {ast: Ast ctr: NameCtr oId: zast.nodeid} out u32 is
     lnY: u32
     coY: u32
     {
-        n: ast.nodes.get i: oId.u64
+        n: ast.nodes.get i: oId
         if n.doexpr then {
             isDo = true
             innerId = n.statement
@@ -710,7 +722,7 @@ promoteWrappedBody: function {ast: Ast ctr: NameCtr oId: zast.nodeid} out u32 is
     }
     if isDo.not then {
         bareLine: false
-        nB: ast.nodes.get i: oId.u64
+        nB: ast.nodes.get i: oId
         if (lineIsFor n: nB) then bareLine = true
         if (lineIsWith n: nB) then bareLine = true
         if bareLine then return (promoteBareLine :ast :ctr nid: oId)
@@ -739,7 +751,7 @@ promoteBareLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out u32 is {
     if hoisted.length == 0 then return (zast.tableAdd :ast n: ni)
     lnB: u32
     coB: u32
-    nP: ast.nodes.get i: nid.u64
+    nP: ast.nodes.get i: nid
     pB: zast.posOf n: nP
     lnB = pB.line
     coB = pB.col
@@ -782,7 +794,7 @@ promoteWith: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out astnode is {
     valW: zast.nodeid
     bodyW: zast.nodeid
     {
-        n: ast.nodes.get i: nid.u64
+        n: ast.nodes.get i: nid
         if n.withexpr then {
             isWith = true
             lnW = n.lineno
@@ -829,7 +841,7 @@ promoteInExpr: function {
     dst: ListVal u32
 } out astnode is {
     isW: false
-    n9: ast.nodes.get i: nid.u64
+    n9: ast.nodes.get i: nid
     if n9.withexpr then isW = true
     if isW then return (promoteWith :ast :ctr :nid)
     return (promoteFor :ast :ctr :nid :dst)
@@ -843,7 +855,7 @@ promoteInExpr: function {
 promoteForCond: function {
     ast: Ast
     ctr: NameCtr
-    c0Id: u32
+    c0Id: zast.nodeid
     suspends: bool
     dst: ListVal u32
     nconds: ListVal u32
@@ -861,11 +873,11 @@ promoteForCond: function {
             cn0: zast.nameTextAt :ast ref: c0.name
             if cn0.length > 0 when suspends when (condIsTrivial
                 :ast
-                n: (ast.nodes.get i: c0.operation.u64)
+                n: (ast.nodes.get i: c0.operation)
             ).not then doHoist = true
             if doHoist then {
                 # synth nodes carry the ITERABLE's source position
-                hp0: zast.posOf n: (ast.nodes.get i: c0.operation.u64)
+                hp0: zast.posOf n: (ast.nodes.get i: c0.operation)
                 hl0 = hp0.line
                 hc0 = hp0.col
                 opId = c0.operation
@@ -932,7 +944,7 @@ promoteFor: function {
     condIds: ListVal u32
     postIds: ListVal u32
     {
-        n: ast.nodes.get i: nid.u64
+        n: ast.nodes.get i: nid
         if n.forexpr then {
             isFor = true
             lnS = n.lineno
@@ -960,7 +972,7 @@ promoteFor: function {
     nbodyId: promoteIterablesIdAt :ast :ctr oId: bodyId
     suspends: false
     if nbodyId > 0 then {
-        nb: ast.nodes.get i: nbodyId
+        nb: ast.nodes.get i: (zast.nodeid.create from: nbodyId)
         suspends = (zast.yieldCountOf :ast n: nb) > 0
     }
     nconds: ListVal u32
@@ -972,7 +984,14 @@ promoteFor: function {
     for ci9 < condIds.length loop {
         c0Id: condIds.get i: ci9
         ci9 = ci9 + 1
-        promoteForCond :ast :ctr :c0Id suspends: hoistable :dst :nconds
+        (promoteForCond
+            :ast
+            :ctr
+            c0Id: (zast.nodeid.create from: c0Id)
+            suspends: hoistable
+            :dst
+            :nconds
+        )
     }
     nposts: ListVal u32
     piter: postIds.iterate
@@ -1008,12 +1027,12 @@ countedRangeHeader: function {ast: Ast.view n: astnode.view} out bool is {
     match (
         n
     ) case call then {
-        cn: ast.nodes.get i: n.callable.u64
+        cn: ast.nodes.get i: n.callable
         mid: zast.nameid
         match (
             cn
         ) case dottedpath then {
-            ch: ast.nodes.get i: cn.child.u64
+            ch: ast.nodes.get i: cn.child
             if ch.atomid then mid = ch.name
         } else null
         return (mid == zast.names.wkUpto) or (mid == zast.names.wkDownto)
@@ -1035,7 +1054,7 @@ condIsTrivial: function {ast: Ast.view n: astnode.view} out bool is {
     ) case call then {
         return false
     } case dottedpath then {
-        return (condIsTrivial :ast n: (ast.nodes.get i: n.parent.u64))
+        return (condIsTrivial :ast n: (ast.nodes.get i: n.parent))
     } else {
         return true
     }
@@ -1081,7 +1100,7 @@ wrapDeclaredCallReturn: function {
     col: u32
 } out u32 is {
     retId: zast.nodeid
-    cf: ast.nodes.get i: callFnId.u64
+    cf: ast.nodes.get i: callFnId
     if cf.functiondef then retId = cf.returntype
     if retId.isZero then return 0
     gp: (GivesParts
@@ -1095,7 +1114,7 @@ wrapDeclaredCallReturn: function {
     ) case some then {
         wrapper: buildWrapper :ast :line :col base: gb leaf: gp.leaf
         wid: zast.tableAdd :ast n: wrapper
-        cfm: ast.nodes.getMut i: callFnId.u64
+        cfm: ast.nodes.getMut i: callFnId
         if cfm.functiondef then cfm.returntype = zast.nodeid.create from: wid
         return wid
     } case none then null
@@ -1119,7 +1138,7 @@ injectCallReceiver: function {
     thisP: mkAtom :ast :line :col name: "this"
     thisParam: mkNamedOp :ast :line :col name: "this" op: thisP
     tpId: zast.tableAdd :ast n: thisParam
-    cfm2: ast.nodes.getMut i: callFnId.u64
+    cfm2: ast.nodes.getMut i: callFnId
     if cfm2.functiondef then {
         rest: ListVal u32
         rest.append tpId
@@ -1179,7 +1198,7 @@ buildDeclaredCreate: function {
     )
     cmN: mkNamedOp :ast :line :col name: "create" op: createM
     cmId: zast.tableAdd :ast n: cmN
-    objc: ast.nodes.getMut i: objId.u64
+    objc: ast.nodes.getMut i: objId
     if objc.objectdef then {
         asMerged: ListVal u32
         asx1799: u64
@@ -1204,7 +1223,7 @@ appendDeclaredFields: function {
     # the field nodes to append, in order
     addFields: (ListVal u32).view
 } is {
-    objm: ast.nodes.getMut i: objId.u64
+    objm: ast.nodes.getMut i: objId
     if objm.objectdef then {
         merged: ListVal u32
         isx1969: u64
@@ -1226,7 +1245,7 @@ callBodyIdOf: function {
     # the `call` whose body is wanted
     callFnId: zast.nodeid
 } out zast.nodeid is {
-    cf: ast.nodes.get i: callFnId.u64
+    cf: ast.nodes.get i: callFnId
     match (
         cf
     ) case functiondef then {
@@ -1245,7 +1264,7 @@ declaredInputTypeId: function {
     # the `call` whose input is wanted
     callFnId: zast.nodeid
 } out zast.nodeid is {
-    cf: ast.nodes.get i: callFnId.u64
+    cf: ast.nodes.get i: callFnId
     if cf.functiondef then {
         pax1579: u64
         for pax1579 < cf.parameters.count loop {
@@ -1275,13 +1294,13 @@ resumeFieldPath: function {
     line: u32
     col: u32
     {
-        pp: zast.posOf n: (ast.nodes.get i: nid.u64)
+        pp: zast.posOf n: (ast.nodes.get i: nid)
         line = pp.line
         col = pp.col
-        bn: ast.nodes.get i: nid.u64
+        bn: ast.nodes.get i: nid
         if bn.dottedpath then {
             parentId = bn.parent
-            leafId = leafAtomNameId :ast n: (ast.nodes.get i: bn.child.u64)
+            leafId = leafAtomNameId :ast n: (ast.nodes.get i: bn.child)
         }
     }
     if leafId == zast.names.wkBorrow then return (zast.cloneTreeAt :ast :nid)
@@ -1332,7 +1351,7 @@ readDeclaredParts: function {
     # filled with what the definition declares
     dst: DeclParts
 } is {
-    obn: ast.nodes.get i: objId.u64
+    obn: ast.nodes.get i: objId
     if obn.objectdef then {
         dst.line = obn.lineno
         dst.colno = obn.colno
@@ -1469,10 +1488,10 @@ createParamPath: function {
     # exists to delete, and it is easy to reintroduce by reusing the reader.
     leafId: zast.nameid
     parentId: zast.nodeid
-    bn: ast.nodes.get i: nid.u64
+    bn: ast.nodes.get i: nid
     if bn.dottedpath then {
         parentId = bn.parent
-        leafId = leafAtomNameId :ast n: (ast.nodes.get i: bn.child.u64)
+        leafId = leafAtomNameId :ast n: (ast.nodes.get i: bn.child)
     }
     isNonOwned: (leafId == zast.names.wkBorrow) or (leafId == zast.names.wkView)
     if isNonOwned then return (zast.cloneTreeAt :ast :nid)
@@ -1540,7 +1559,7 @@ lowerDeclared: function {
     # the suspension transform, on the body the author wrote
     newBodyId: promoteIterablesIdAt :ast :ctr oId: bodyId
     if newBodyId > 0 then {
-        cfm3: ast.nodes.getMut i: callFnId.u64
+        cfm3: ast.nodes.getMut i: callFnId
         if cfm3.functiondef then cfm3.body = zast.nodeid.create from: newBodyId
     }
     bodyId2: callBodyIdOf :ast :callFnId
@@ -1551,7 +1570,7 @@ lowerDeclared: function {
     yieldSlots: u64
     forSlots: u64
     {
-        body: ast.nodes.get i: bodyId2.u64
+        body: ast.nodes.get i: bodyId2
         yieldSlots = zast.yieldCountOf :ast n: body
         forSlots = zast.suspendingForCountOf :ast n: body
         # `a: yield e` binds the value the NEXT call supplies. With no input

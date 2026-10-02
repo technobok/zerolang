@@ -810,9 +810,9 @@ names: data {
 # master node table, plus (as the carrier grows) the other tree-scoped
 # state produced by parsing.
 Ast: class {
-    # every node of every file, in one table. A node is addressed by its index,
-    # which is what makes a nodeid a plain integer
-    nodes: ListVal astnode
+    # every node of every file, in one table, indexed by nodeid: a row is read
+    # with a node's id and with no other number
+    nodes: (ListVal astnode i: nodeid)
     # the interned name pool the whole tree shares, so two spellings of one name
     # are one id
     names: StringPool
@@ -835,7 +835,7 @@ Ast: class {
     # sentinel row
     create: function {} out this is {
         a: (meta.create
-            nodes: ListVal astnode
+            nodes: (ListVal astnode i: nodeid)
             names: StringPool.create
             units: ListVal u32
             kids: ListVal u32
@@ -1902,11 +1902,11 @@ printNodeWith: function {ast: Ast.view n: astnode.view withId: bool} is {
         printKidsWith :ast span: n.stringparts :withId
     } case dottedpath then {
         print "\{idp}dottedpath @\{n.lineno}:\{n.colno}"
-        printNodeWith :ast :withId n: (ast.nodes.get i: n.parent.u64)
-        printNodeWith :ast :withId n: (ast.nodes.get i: n.child.u64)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.parent)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.child)
     } case call then {
         print "\{idp}call @\{n.lineno}:\{n.colno} args=\{n.arguments.count.u64}"
-        printNodeWith :ast :withId n: (ast.nodes.get i: n.callable.u64)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.callable)
         printKidsWith :ast span: n.arguments :withId
     } case namedoperation then {
         if withId then {
@@ -1915,7 +1915,7 @@ printNodeWith: function {ast: Ast.view n: astnode.view withId: bool} is {
             print "namedoperation"
         }
         printPoolName :ast ref: n.name
-        printNodeWith :ast :withId n: (ast.nodes.get i: n.operation.u64)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.operation)
     } case datablock then {
         print "\{idp}datablock @\{n.lineno}:\{n.colno} elements=\{n.elements.count}"
         printKidsWith :ast span: n.elements :withId
@@ -1926,19 +1926,19 @@ printNodeWith: function {ast: Ast.view n: astnode.view withId: bool} is {
         printKidsWith :ast span: n.statements :withId
     } case statementline then {
         print "\{idp}statementline @\{n.lineno}:\{n.colno}"
-        printNodeWith :ast :withId n: (ast.nodes.get i: n.statementline.u64)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.statementline)
     } case assignment then {
         asn: nameTextCopy :ast ref: n.name
         print "\{idp}assignment @\{n.lineno}:\{n.colno} name=\{asn}"
-        printNodeWith :ast :withId n: (ast.nodes.get i: n.value.u64)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.value)
     } case reassignment then {
         print "\{idp}reassignment @\{n.lineno}:\{n.colno}"
-        printNodeWith :ast :withId n: (ast.nodes.get i: n.topath.u64)
-        printNodeWith :ast :withId n: (ast.nodes.get i: n.value.u64)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.topath)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.value)
     } case swapstmt then {
         print "\{idp}swapstmt @\{n.lineno}:\{n.colno}"
-        printNodeWith :ast :withId n: (ast.nodes.get i: n.lhs.u64)
-        printNodeWith :ast :withId n: (ast.nodes.get i: n.rhs.u64)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.lhs)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.rhs)
     } case ifexpr then {
         print "\{idp}ifexpr @\{n.lineno}:\{n.colno} clauses=\{n.clauses.count.u64}"
         printKidsWith :ast span: n.clauses :withId
@@ -1947,7 +1947,7 @@ printNodeWith: function {ast: Ast.view n: astnode.view withId: bool} is {
     } case ifclause then {
         print "\{idp}ifclause @\{n.lineno}:\{n.colno} conditions=\{n.conditions.count.u64}"
         printKidsWith :ast span: n.conditions :withId
-        printNodeWith :ast :withId n: (ast.nodes.get i: n.statement.u64)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.statement)
     } case forexpr then {
         print "\{idp}forexpr @\{n.lineno}:\{n.colno} conditions=\{n.conditions.count.u64} isEach=\{n.isEach} postconditions=\{n.postconditions.count.u64}"
         printKidsWith :ast span: n.conditions :withId
@@ -1956,23 +1956,23 @@ printNodeWith: function {ast: Ast.view n: astnode.view withId: bool} is {
         printKidsWith :ast span: n.postconditions :withId
     } case doexpr then {
         print "\{idp}doexpr @\{n.lineno}:\{n.colno}"
-        printNodeWith :ast :withId n: (ast.nodes.get i: n.statement.u64)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.statement)
     } case withexpr then {
         wnm: nameTextCopy :ast ref: n.name
         print "\{idp}withexpr @\{n.lineno}:\{n.colno} name=\{wnm}"
-        printNodeWith :ast :withId n: (ast.nodes.get i: n.value.u64)
-        printNodeWith :ast :withId n: (ast.nodes.get i: n.body.u64)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.value)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.body)
     } case caseexpr then {
         print "\{idp}caseexpr @\{n.lineno}:\{n.colno} clauses=\{n.clauses.count.u64}"
-        printNodeWith :ast :withId n: (ast.nodes.get i: n.subject.u64)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.subject)
         printKidsWith :ast span: n.clauses :withId
         print "  elseclause:"
         printOptChildWith :ast :withId id: n.elseclause
     } case caseclause then {
         ccn: nameTextCopy :ast ref: n.name
         print "\{idp}caseclause @\{n.lineno}:\{n.colno} name=\{ccn}"
-        printNodeWith :ast :withId n: (ast.nodes.get i: n.matcharm.u64)
-        printNodeWith :ast :withId n: (ast.nodes.get i: n.statement.u64)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.matcharm)
+        printNodeWith :ast :withId n: (ast.nodes.get i: n.statement)
     } case functiondef then {
         fdp: ""
         if n.pins then fdp = " pins=true"
@@ -2002,7 +2002,7 @@ printNodeWith: function {ast: Ast.view n: astnode.view withId: bool} is {
         pun: ast.units.length
         for pui < pun loop {
             puid: nodeid.create from: (ast.units.get i: pui)
-            printNodeWith :ast :withId n: (ast.nodes.get i: puid.u64)
+            printNodeWith :ast :withId n: (ast.nodes.get i: puid)
             pui = pui + 1
         }
     }
@@ -2014,8 +2014,8 @@ printNode: function {ast: Ast.view n: astnode.view} is {
 }
 
 # printOptChildWith -- an optional child (0 = absent), in either form.
-printOptChildWith: function {ast: Ast.view id: u32 withId: bool} is {
-    if id == 0 then {
+printOptChildWith: function {ast: Ast.view id: nodeid withId: bool} is {
+    if id.isZero then {
         print "  <none>"
     } else {
         c: ast.nodes.get i: id
@@ -2031,14 +2031,14 @@ printNodeCanonical: function {ast: Ast.view n: astnode.view} is {
 # printNodeCanonicalAt -- print the row an id names. The row view is this
 # frame's, so the table is not fetched from and lent in one call.
 printNodeCanonicalAt: function {ast: Ast.view nId: nodeid} is {
-    n: ast.nodes.get i: nId.u64
+    n: ast.nodes.get i: nId
     printNodeCanonical :ast :n
 }
 
 # printProgramCanonicalRoot -- canonical dump entry for a parsed tree, whose
 # root row `ast.root` names.
 printProgramCanonicalRoot: function {ast: Ast.view} is {
-    prog: ast.nodes.get i: ast.root.u64
+    prog: ast.nodes.get i: ast.root
     if prog.program then {
         print "program @\{prog.lineno}:\{prog.colno} units=\{ast.units.length} mainUnitName=\{ast.mainUnitName}"
         pui: u64
@@ -2068,7 +2068,7 @@ tableReserve: function {ast: Ast} out nodeid is {
 
 # tableSet -- move a converted parent's child into its reserved slot
 # (the displaced placeholder is destroyed here).
-tableSet: function {ast: Ast id: u32 child: astnode} is {
+tableSet: function {ast: Ast id: nodeid child: astnode} is {
     ast.nodes.set i: id val: child
 }
 
@@ -2161,7 +2161,7 @@ childIdsInto: function {ast: Ast.view n: astnode.view acc: ListVal u32} is {
 cloneTreeAt: function {ast: Ast nid: nodeid} out astnode is {
     kids: ListVal u32
     {
-        n: ast.nodes.get i: nid.u64
+        n: ast.nodes.get i: nid
         childIdsInto :ast :n acc: kids
     }
     cloned: ListVal u32
@@ -2174,7 +2174,7 @@ cloneTreeAt: function {ast: Ast nid: nodeid} out astnode is {
     myId: tableReserve :ast
     built: astnode.placeholder
     {
-        n: ast.nodes.get i: nid.u64
+        n: ast.nodes.get i: nid
         built = cloneArm :n :myId :cloned kids: ast.kids
     }
     return built
@@ -2463,18 +2463,18 @@ cloneArm: function {
 
 
 # childIdsAt -- childIds of the node with id `id`.
-childIdsAt: function {ast: Ast.view id: u32} out ListVal u32 is {
+childIdsAt: function {ast: Ast.view id: nodeid} out ListVal u32 is {
     return (childIds :ast n: (ast.nodes.get i: id))
 }
 
 # spanEndLineAt -- the last source line any node under `id` (itself included)
 # starts on: how far down a body reaches, one line above its closing brace.
-spanEndLineAt: function {ast: Ast.view id: u32} out u32 is {
+spanEndLineAt: function {ast: Ast.view id: nodeid} out u32 is {
     p: posOf n: (ast.nodes.get i: id)
     best: p.line
     kids: childIdsAt :ast :id
     for each k: kids loop {
-        kl: spanEndLineAt :ast id: k
+        kl: spanEndLineAt :ast id: (nodeid.create from: k)
         if kl > best then best = kl
     }
     return best
@@ -2483,7 +2483,7 @@ spanEndLineAt: function {ast: Ast.view id: u32} out u32 is {
 # stmtLineCount -- the number of lines in statement block `nid` (0 for any
 # other arm).
 stmtLineCount: function {ast: Ast.view nid: nodeid} out u64 is {
-    n: ast.nodes.get i: nid.u64
+    n: ast.nodes.get i: nid
     if n.statement then return n.statements.count
     return 0
 }
@@ -2491,7 +2491,7 @@ stmtLineCount: function {ast: Ast.view nid: nodeid} out u64 is {
 # stmtLineAt -- the id of line `i` of statement block `nid` (0 for any other
 # arm).
 stmtLineAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
-    n: ast.nodes.get i: nid.u64
+    n: ast.nodes.get i: nid
     if n.statement then return (nodeid.create from: (kidAt kids: ast.kids span: n.statements :i))
     zn: nodeid
     return zn
@@ -2499,7 +2499,7 @@ stmtLineAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 
 # ifCondAt -- the id of condition `i` of if-clause `nid` (0 for any other arm).
 ifCondAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
-    n: ast.nodes.get i: nid.u64
+    n: ast.nodes.get i: nid
     if n.ifclause then return (nodeid.create from: (kidAt kids: ast.kids span: n.conditions :i))
     zn: nodeid
     return zn
@@ -2508,7 +2508,7 @@ ifCondAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 # dataElemAt -- the id of element `i` of data block `nid` (0 for any other
 # arm).
 dataElemAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
-    n: ast.nodes.get i: nid.u64
+    n: ast.nodes.get i: nid
     if n.datablock then return (nodeid.create from: (kidAt kids: ast.kids span: n.elements :i))
     zn: nodeid
     return zn
@@ -2516,7 +2516,7 @@ dataElemAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 
 # caseClauseAt -- the id of clause `i` of match `nid` (0 for any other arm).
 caseClauseAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
-    n: ast.nodes.get i: nid.u64
+    n: ast.nodes.get i: nid
     if n.caseexpr then return (nodeid.create from: (kidAt kids: ast.kids span: n.clauses :i))
     zn: nodeid
     return zn
@@ -2524,7 +2524,7 @@ caseClauseAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 
 # ifClauseAt -- the id of clause `i` of if `nid` (0 for any other arm).
 ifClauseAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
-    n: ast.nodes.get i: nid.u64
+    n: ast.nodes.get i: nid
     if n.ifexpr then return (nodeid.create from: (kidAt kids: ast.kids span: n.clauses :i))
     zn: nodeid
     return zn
@@ -2532,7 +2532,7 @@ ifClauseAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 
 # forCondAt -- the id of condition `i` of for `nid` (0 for any other arm).
 forCondAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
-    n: ast.nodes.get i: nid.u64
+    n: ast.nodes.get i: nid
     if n.forexpr then return (nodeid.create from: (kidAt kids: ast.kids span: n.conditions :i))
     zn: nodeid
     return zn
@@ -2540,7 +2540,7 @@ forCondAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 
 # forPostAt -- the id of postcondition `i` of for `nid` (0 for any other arm).
 forPostAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
-    n: ast.nodes.get i: nid.u64
+    n: ast.nodes.get i: nid
     if n.forexpr then return (nodeid.create from: (kidAt kids: ast.kids span: n.postconditions :i))
     zn: nodeid
     return zn
@@ -2549,7 +2549,7 @@ forPostAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 # objIsItemAt -- the id of `is`-item `i` of object definition `nid` (0 for
 # any other arm).
 objIsItemAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
-    n: ast.nodes.get i: nid.u64
+    n: ast.nodes.get i: nid
     if n.objectdef then return (nodeid.create from: (kidAt kids: ast.kids span: n.isItems :i))
     zn: nodeid
     return zn
@@ -2558,7 +2558,7 @@ objIsItemAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 # objAsItemAt -- the id of `as`-item `i` of object definition `nid` (0 for
 # any other arm).
 objAsItemAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
-    n: ast.nodes.get i: nid.u64
+    n: ast.nodes.get i: nid
     if n.objectdef then return (nodeid.create from: (kidAt kids: ast.kids span: n.asItems :i))
     zn: nodeid
     return zn
@@ -2567,7 +2567,7 @@ objAsItemAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 # fnParamAt -- the id of parameter `i` of function `nid` (0 for any other
 # arm).
 fnParamAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
-    n: ast.nodes.get i: nid.u64
+    n: ast.nodes.get i: nid
     if n.functiondef then return (nodeid.create from: (kidAt kids: ast.kids span: n.parameters :i))
     zn: nodeid
     return zn
@@ -2583,7 +2583,7 @@ fnParamAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 # Passes that run after the checker read the `yieldCall` stamp instead.
 isYieldCalleeAt: function {ast: Ast.view callableId: nodeid} out bool is {
     if callableId.isZero then return false
-    cal: ast.nodes.get i: callableId.u64
+    cal: ast.nodes.get i: callableId
     match (
         cal
     ) case atomid then {
@@ -2599,7 +2599,7 @@ isYieldCalleeAt: function {ast: Ast.view callableId: nodeid} out bool is {
 # each of them.
 yieldCallIdAt: function {ast: Ast.view nid: nodeid} out nodeid is {
     if nid.isZero then return (nodeid.create from: 0)
-    n: ast.nodes.get i: nid.u64
+    n: ast.nodes.get i: nid
     match (
         n
     ) case statementline then {
@@ -2619,7 +2619,7 @@ yieldCallIdAt: function {ast: Ast.view nid: nodeid} out nodeid is {
 yieldCallOperandAt: function {ast: Ast.view nid: nodeid} out nodeid is {
     cid: yieldCallIdAt :ast :nid
     if cid.isZero then return (nodeid.create from: 0)
-    n: ast.nodes.get i: cid.u64
+    n: ast.nodes.get i: cid
     match (
         n
     ) case call then {
@@ -2666,7 +2666,7 @@ yieldCountOf: function {ast: Ast.view n: astnode.view} out u64 is {
         wid: work.get i: wi
         wi = wi + 1
         if wid > 0 then {
-            wn: ast.nodes.get i: wid
+            wn: ast.nodes.get i: (nodeid.create from: wid)
             if wn.functiondef.not then {
                 if wn.call when (isYieldCalleeAt :ast callableId: wn.callable) then c = c + 1
                 childIdsInto :ast n: wn acc: work
@@ -2679,7 +2679,7 @@ yieldCountOf: function {ast: Ast.view n: astnode.view} out u64 is {
 # yieldCountIn -- yieldCountOf for a node already in the table.
 yieldCountIn: function {ast: Ast.view nid: nodeid} out u64 is {
     if nid.isZero then return 0
-    n: ast.nodes.get i: nid.u64
+    n: ast.nodes.get i: nid
     return (yieldCountOf :ast :n)
 }
 
@@ -2718,7 +2718,7 @@ suspendingForCountOf: function {ast: Ast.view n: astnode.view} out u64 is {
         wid: work.get i: wi
         wi = wi + 1
         if wid > 0 then {
-            wn: ast.nodes.get i: wid
+            wn: ast.nodes.get i: (nodeid.create from: wid)
             if wn.functiondef.not then {
                 if wn.forexpr when wn.conditions.count.u64 == 1 when (
                     (yieldCountIn :ast nid: wn.body) > 0
@@ -2737,7 +2737,7 @@ suspendingForCountOf: function {ast: Ast.view n: astnode.view} out u64 is {
 
 # callArgAt -- the id of argument `i` of call `nid` (0 for any other arm).
 callArgAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
-    n: ast.nodes.get i: nid.u64
+    n: ast.nodes.get i: nid
     if n.call then return (nodeid.create from: (kidAt kids: ast.kids span: n.arguments :i))
     zn: nodeid
     return zn
@@ -2746,7 +2746,7 @@ callArgAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
 # stringPartAt -- the id of part `i` of interpolated string `nid` (0 for any
 # other arm).
 stringPartAt: function {ast: Ast.view nid: nodeid i: u64} out nodeid is {
-    n: ast.nodes.get i: nid.u64
+    n: ast.nodes.get i: nid
     if n.atomstring then return (nodeid.create from: (kidAt kids: ast.kids span: n.stringparts :i))
     zn: nodeid
     return zn
@@ -2792,8 +2792,8 @@ kidsAddWindow: function {kids: ListVal u32 xs: ListViewVal u32} out kidspan is {
 
 # kidAt -- child `i` of `span`. Out of range is a panic, not a sentinel: a walk
 # reads `span.count` first and a bad index is a bug in the walk.
-kidAt: function {kids: (ListVal u32).view span: kidspan i: u64} out u32 is {
-    return (kids.get i: span.first.u64 + i)
+kidAt: function {kids: (ListVal u32).view span: kidspan i: u64} out nodeid is {
+    return (nodeid.create from: (kids.get i: span.first.u64 + i))
 }
 
 # kidIds -- the children of `span`, in order, as a list of their own: the shape
@@ -2835,7 +2835,7 @@ infixPartsOf: function {ast: Ast.view n: astnode.view} out infixparts is {
     ) case call then {
         if n.infix.not then return absent
         if n.arguments.count.u64 != 1 then return absent
-        cb: ast.nodes.get i: n.callable.u64
+        cb: ast.nodes.get i: n.callable
         match (
             cb
         ) case dottedpath then {
@@ -2865,7 +2865,7 @@ infixPartsOf: function {ast: Ast.view n: astnode.view} out infixparts is {
 # its `as` items; empty when `nid` is not an object definition
 objItemIds: function {ast: Ast.view nid: nodeid} out ListVal u32 is {
     ids: ListVal u32
-    n: ast.nodes.get i: nid.u64
+    n: ast.nodes.get i: nid
     match (
         n
     ) case objectdef then {
@@ -2891,7 +2891,7 @@ namedsite: record {
 }
 
 # namedSiteAt -- the namedsite of node `nid`
-namedSiteAt: function {ast: Ast.view nid: u32} out namedsite is {
+namedSiteAt: function {ast: Ast.view nid: nodeid} out namedsite is {
     n: ast.nodes.get i: nid
     match (
         n
@@ -2998,12 +2998,12 @@ tableAdd: function {ast: Ast n: astnode} out nodeid is {
 
 # tableTake -- swap a row out of the table (a placeholder goes back in);
 # used to propagate an error node up out of a converted list.
-tableTake: function {ast: Ast id: u32} out astnode is {
+tableTake: function {ast: Ast id: nodeid} out astnode is {
     return (ast.nodes.set i: id val: astnode.placeholder)
 }
 
 # isErrorAt -- the node with id `id` is an error arm.
-isErrorAt: function {ast: Ast.view id: u32} out bool is {
+isErrorAt: function {ast: Ast.view id: nodeid} out bool is {
     n: ast.nodes.get i: id
     if n.error then return true
     return false
@@ -3106,7 +3106,7 @@ markerKindOfName: function {id: nameid} out markerkind is {
 # markerKindOfLeaf -- the marker a path's leaf node spells: its atom or label
 # value's name.
 markerKindOfLeaf: function {ast: Ast.view leaf: nodeid} out markerkind is {
-    c: ast.nodes.get i: leaf.u64
+    c: ast.nodes.get i: leaf
     match (
         c
     ) case atomid then {
@@ -3162,7 +3162,7 @@ isForwardingLabel: function {n: astnode.view} out bool is {
 isValueMarkerLeaf: function {ast: Ast.view leaf: nodeid} out bool is {
     k: markerKindOfLeaf :ast :leaf
     if k.takeMarker or k.borrowMarker or k.viewMarker or k.holdMarker then return true
-    c: ast.nodes.get i: leaf.u64
+    c: ast.nodes.get i: leaf
     match (
         c
     ) case atomid then {
@@ -3176,15 +3176,15 @@ isValueMarkerLeaf: function {ast: Ast.view leaf: nodeid} out bool is {
 # parentheses of its own and a value marker for its child: `(mk).copy`. The
 # parentheses force the parent's call, and the marker applies to the result.
 callsBeforeMarker: function {ast: Ast.view parent: nodeid child: nodeid} out bool is {
-    if (isGroupedPath n: (ast.nodes.get i: parent.u64)).not then return false
+    if (isGroupedPath n: (ast.nodes.get i: parent)).not then return false
     return (isValueMarkerLeaf :ast leaf: child)
 }
 
 # isGenericParamOp -- true when `opId` declares a generic parameter --
 # `<constraint>.generic` -- unwrapping the call the form can carry. The parser marks a unit body holding one
 # as a template; the typechecker asks the same question of a type body.
-isGenericParamOp: function {ast: Ast.view opId: u32} out bool is {
-    if opId == 0 then return false
+isGenericParamOp: function {ast: Ast.view opId: nodeid} out bool is {
+    if opId.isZero then return false
     n: ast.nodes.get i: opId
     match (
         n
@@ -3213,8 +3213,8 @@ itemsHaveGenericParam: function {ast: Ast.view items: zast.kidspan} out bool is 
 
 # True when node `opId` is a unit definition of kind `k`. False when the
 # node is not a unit definition at all.
-unitOpKindIs: function {ast: Ast.view opId: u32 k: unitkind} out bool is {
-    if opId == 0 then return false
+unitOpKindIs: function {ast: Ast.view opId: nodeid k: unitkind} out bool is {
+    if opId.isZero then return false
     n: ast.nodes.get i: opId
     match (
         n
@@ -3239,16 +3239,16 @@ unitOpKindIs: function {ast: Ast.view opId: u32 k: unitkind} out bool is {
 # only "is there a unit body here", which is the question every walker that
 # recurses into one was open-coding as the disjunction.
 unitOpDeclaresUnit: function {ast: Ast.view opId: u32} out bool is {
-    if (unitOpKindIs :ast :opId k: unitkind.namespace) then return true
-    if (unitOpKindIs :ast :opId k: unitkind.publicNs) then return true
-    return (unitOpKindIs :ast :opId k: unitkind.subunit)
+    if (unitOpKindIs :ast opId: (nodeid.create from: opId) k: unitkind.namespace) then return true
+    if (unitOpKindIs :ast opId: (nodeid.create from: opId) k: unitkind.publicNs) then return true
+    return (unitOpKindIs :ast opId: (nodeid.create from: opId) k: unitkind.subunit)
 }
 
 # unitBodyIdsAt -- a unit row's member ids. The row view is scoped to this
 # fetch so the caller may lend the table exclusively afterwards; the ids are
 # values, so the returned list is independent of the table. An id that does
 # not name a unit yields an empty list.
-unitBodyIdsAt: function {ast: Ast.view unitId: u32} out kidspan is {
+unitBodyIdsAt: function {ast: Ast.view unitId: nodeid} out kidspan is {
     u: ast.nodes.get i: unitId
     if u.unitdef then return u.body
     return (kidspan first: 0 count: 0)

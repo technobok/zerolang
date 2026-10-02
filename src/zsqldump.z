@@ -110,7 +110,7 @@ canonScopeNode: function {
     ast: Ast.view st: zenv.ZSymbolTable.view scope: ztypes.declid
 } out String is {
     dn: (st.typing.decls.get i: scope).node
-    if dn == 0 then return ""
+    if dn.isZero then return ""
     n: ast.nodes.get i: dn
     pos: zast.posOf :n
     # composed with append, not interpolation: display text, not a table key
@@ -123,7 +123,7 @@ canonScopeNode: function {
 
 # canonNodeText -- a node in the dump as its kind and position (`call@12:5`),
 # which no id renumbering moves.
-canonNodeText: function {ast: Ast.view nid: u64} out String is {
+canonNodeText: function {ast: Ast.view nid: zast.nodeid} out String is {
     n: ast.nodes.get i: nid
     pos: zast.posOf :n
     txt: String
@@ -157,7 +157,7 @@ appendDestroyRows: function {
     range: ztyping.destroyrange
     rows: List String
 } is {
-    nt: canonNodeText :ast :nid
+    nt: canonNodeText :ast nid: (zast.nodeid.create from: nid.u32.orPanic)
     i: u64
     for i < range.len loop {
         it: st.typing.destroyItems.get i: range.start.u64 + i
@@ -173,7 +173,7 @@ appendDestroyRows: function {
 # exitKindText -- which exit a destroy point's node is: the control name a
 # statement calls or names (return, break, continue), a `.drop`, or a
 # reassignment.
-exitKindText: function {ast: Ast.view nid: u64} out String is {
+exitKindText: function {ast: Ast.view nid: zast.nodeid} out String is {
     n: ast.nodes.get i: nid
     match (
         n
@@ -182,7 +182,7 @@ exitKindText: function {ast: Ast.view nid: u64} out String is {
     } case dottedpath then {
         return "drop"
     } case call then {
-        cn: ast.nodes.get i: n.callable.u64
+        cn: ast.nodes.get i: n.callable
         if cn.atomid then return (zast.nameTextCopy :ast ref: cn.name)
         return "call"
     } case atomid then {
@@ -294,7 +294,7 @@ genericArgRow: function {
 # not name a unit).
 unitdefNodeId: function {ast: Ast.view nId: zast.nodeid} out u32 is {
     result: zast.nodeid
-    n: ast.nodes.get i: nId.u64
+    n: ast.nodes.get i: nId
     if n.unitdef then result = n.nodeid
     return result
 }
@@ -469,9 +469,9 @@ originKindSql: function {o: ztypes.zvarorigin} out String is {
 
 # argAtomName -- the identifier name of the atom node at `id` (1-based), else
 # "" (non-atom arguments carry no stable canon name).
-argAtomName: function {ast: Ast.view id: u64} out String is {
-    if id == 0 then return ""
-    n: ast.nodes.get i: id.u64
+argAtomName: function {ast: Ast.view id: zast.nodeid} out String is {
+    if id.isZero then return ""
+    n: ast.nodes.get i: id
     match (
         n
     ) case atomid then {
@@ -526,7 +526,7 @@ ZDumper: class {
     # walkOptAt -- the id-taking entry (0 = absent).
     walkOptAt: function {:this ast: Ast.view oId: zast.nodeid nameSql: StringView} is {
         if oId.isZero then return
-        o: ast.nodes.get i: oId.u64
+        o: ast.nodes.get i: oId
         this.walkNode :ast node: o :nameSql
     }
 
@@ -538,7 +538,7 @@ ZDumper: class {
         match (
             wrapper
         ) case namedoperation then {
-            this.walkNode :ast node: (ast.nodes.get i: wrapper.operation.u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: wrapper.operation) :nameSql
         } else {
             this.walkNode :ast node: wrapper :nameSql
         }
@@ -558,7 +558,7 @@ ZDumper: class {
             node
         ) case ifclause then {
             this.walkUnwrappedIds :ast ids: node.conditions :nameSql
-            this.walkNode :ast node: (ast.nodes.get i: node.statement.u64) :nameSql
+            this.walkNode :ast node: (ast.nodes.get i: node.statement) :nameSql
         } case forexpr then {
             this.walkUnwrappedIds :ast ids: node.conditions :nameSql
             this.walkOptAt :ast oId: node.body :nameSql
@@ -576,7 +576,7 @@ ZDumper: class {
         } case program then null else {
             kidList9: zast.childIds :ast n: node
             for each c9: kidList9 loop {
-                this.walkNode :ast node: (ast.nodes.get i: c9) :nameSql
+                this.walkNode :ast node: (ast.nodes.get i: (zast.nodeid.create from: c9)) :nameSql
             }
         }
     }
@@ -639,7 +639,7 @@ ZDumper: class {
             labelSql: sqlStr s: label.stringView
             (this.walkNode
                 :ast
-                node: (ast.nodes.get i: member.operation.u64)
+                node: (ast.nodes.get i: member.operation)
                 nameSql: labelSql.stringView
             )
         } else null
@@ -657,13 +657,13 @@ ZDumper: class {
     }
 
     # emit a unit's rows, reached through the namedoperation that names it
-    appendUnitFromNamedOp: function {:this ast: Ast.view unitNamedOpId: u32} is {
+    appendUnitFromNamedOp: function {:this ast: Ast.view unitNamedOpId: zast.nodeid} is {
         unitNamedOp: ast.nodes.get i: unitNamedOpId
         if unitNamedOp.namedoperation then {
             uname: zast.nameTextAt :ast ref: unitNamedOp.name
             (this.appendUnitDefAndBody
                 :ast
-                unitdef: (ast.nodes.get i: unitNamedOp.operation.u64)
+                unitdef: (ast.nodes.get i: unitNamedOp.operation)
                 uname: uname.stringView
             )
         }
@@ -689,7 +689,7 @@ ZDumper: class {
     appendUnitRow: function {
         :this
         ast: Ast.view
-        unitNamedOpId: u32
+        unitNamedOpId: zast.nodeid
         mainName: StringView
         typing: ztyping.ZTyping.view
     } is {
@@ -1100,7 +1100,7 @@ ZDumper: class {
         for uIdx9c < uCnt9c loop {
             uId: zast.nodeid.create from: (program.units.get i: uIdx9c)
             uIdx9c = uIdx9c + 1
-            u: program.nodes.get i: uId.u64
+            u: program.nodes.get i: uId
             match (
                 u
             ) case namedoperation then {
@@ -1518,7 +1518,7 @@ ZDumper: class {
             :rows
         )
         for each ed: st.typing.exitDestroy.iterateItems loop {
-            ekd: exitKindText :ast nid: ed.key
+            ekd: exitKindText :ast nid: (zast.nodeid.create from: ed.key.u32.orPanic)
             (appendDestroyRows
                 :ast
                 :st
@@ -1531,7 +1531,7 @@ ZDumper: class {
         }
         # a statement's discarded fresh result, which dies as it ends
         for each dt: st.typing.discardTemp.iterateItems loop {
-            dnt: canonNodeText :ast nid: dt.key
+            dnt: canonNodeText :ast nid: (zast.nodeid.create from: dt.key.u32.orPanic)
             rows.append "discard | \{dnt} | 0 | NULL | owned"
         }
         this.emitSection title: "destroy" :rows
@@ -1552,7 +1552,7 @@ ZDumper: class {
         # the argument, and whether the temporary owns its value
         trows: List String
         for each to: st.typing.tempOf.iterateItems loop {
-            tnt: canonNodeText :ast nid: to.key
+            tnt: canonNodeText :ast nid: (zast.nodeid.create from: to.key.u32.orPanic)
             tow: "borrowed"
             if (
                 (st.reg.variableOwnershipOf id: to.value) == ztypes.zownership.owned
@@ -1565,7 +1565,7 @@ ZDumper: class {
     appendArgDispositionCanon: function {:this ast: Ast.view st: zenv.ZSymbolTable.view} is {
         rows: List String
         for each ad: st.typing.argDisposition.iterateItems loop {
-            an: argAtomName :ast id: ad.key
+            an: argAtomName :ast id: (zast.nodeid.create from: ad.key.u32.orPanic)
             if an.length > 0 then {
                 anSql: sqlStr s: an.stringView
                 dnm: ztypes.zparamownershipName ad.value
