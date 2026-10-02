@@ -311,6 +311,17 @@ formatAliasConflict: function {
 # A row of the dump's `entry` table: a local of a scope, or an overlay row
 # laid over one, snapshotted when the scope closed. `position` is the row's
 # place among the scope's locals and overlays in the order they were laid.
+# exitrec -- an exit recordExitDestroy saw: a `return`, `break` or `continue`.
+# A local bound after it into a scope it leaves must join it (addToExitsLeaving).
+exitrec: record {
+    exit: zast.nodeid
+    # the position in `open` the exit unwinds to: it leaves every scope from
+    # there up
+    downTo: u64
+    # the id the next variable minted after the exit was recorded took
+    vidMark: ztypes.vid
+}
+
 # openscope -- one open scope of the body walk: its Decl row (0 while a lazy
 # scope has declared nothing), the scope it hangs under, the overlay index
 # where its rows begin, and how many locals it has defined (a row's defSeq).
@@ -329,7 +340,7 @@ openscope: record {
     defs: u64
     # the id the next variable minted after the scope opened took: a variable
     # with a smaller id was bound before it, in an enclosing scope
-    firstVid: u64
+    firstVid: ztypes.vid
     # every path out of the scope that reaches the code after it ran all of it:
     # a `do` block no `break` left. A refill it made is then made on every path
     unconditional: bool
@@ -396,11 +407,9 @@ heldlock: record {
 ZSymbolTable: class {
     # the open scopes, innermost last
     open: ListVal openscope
-    # the exits recorded (recordExitDestroy), three words each: the exit's node,
-    # the lowest open scope it leaves, and the variable count when it was
-    # recorded -- what a local bound after them into an enclosing scope must
-    # join (addToExitsLeaving). A function body keeps its own.
-    exitLog: ListVal u64
+    # the exits recorded (recordExitDestroy), in order. A function body keeps
+    # its own.
+    exitLog: ListVal exitrec
     # the innermost open scope that has a row -- the scope the walk resolves
     # from. A scope that has declared nothing yet has no row (pushBlock,
     # pushCall): it is transparent to every lookup, so the nearest enclosing
@@ -499,7 +508,7 @@ ZSymbolTable: class {
             :node
             start: this.entries.length
             defs: 0
-            firstVid: this.reg.variableCount
+            firstVid: this.reg.nextVid
             unconditional: false
         )
         if this.typing.suppressParamStamps then this.scopeHidden.add item: f.u64
@@ -520,7 +529,7 @@ ZSymbolTable: class {
             :node
             start: this.entries.length
             defs: 0
-            firstVid: this.reg.variableCount
+            firstVid: this.reg.nextVid
             unconditional: false
         )
     }
@@ -569,15 +578,10 @@ ZSymbolTable: class {
     addToExitsLeaving: function {:this index: u64 since: ztypes.vid vid: ztypes.vid} is {
         if this.recording.not then return
         i: u64
-        for (i + 2) < this.exitLog.length loop {
-            nid: this.exitLog.get :i
-            downTo: this.exitLog.get i: i + 1
-            vc: this.exitLog.get i: i + 2
-            i = i + 3
-            if vc > since.u64 when downTo <= index then (this.addToExit
-                nid: (zast.nodeid.create from: nid.u32.orPanic)
-                :vid
-            )
+        for i < this.exitLog.length loop {
+            e: this.exitLog.get :i
+            i = i + 1
+            if e.vidMark > since when e.downTo <= index then this.addToExit nid: e.exit :vid
         }
     }
 
@@ -707,7 +711,9 @@ ZSymbolTable: class {
             # a holder minted while this scope was open dies with it -- the
             # common case, answered by its id; only an older holder is asked
             # which scope binds it
-            if e.hasLock when e.lockHolder.kind.varKind when e.lockHolder.id < fr.firstVid then {
+            if e.hasLock when e.lockHolder.kind.varKind when (
+                e.lockHolder.id < fr.firstVid.u64
+            ) then {
                 hf: this.scopeOfVar vid: (ztypes.vid.create from: e.lockHolder.id)
                 rf: this.typing.declParentOf declId: e.declId
                 if hf.isZero.not when hf != top when rf != top then {
@@ -1101,9 +1107,7 @@ ZSymbolTable: class {
     # innermost first, but `except` -- the local a `return` hands back.
     recordExitDestroy: function {:this nid: zast.nodeid downTo: u64 except: ztypes.vid} is {
         if this.recording.not then return
-        this.exitLog.append nid.u64
-        this.exitLog.append downTo
-        this.exitLog.append this.reg.variableCount
+        this.exitLog.append (exitrec exit: nid :downTo vidMark: this.reg.nextVid)
         start: this.typing.destroyItems.length
         i: this.open.length
         for i > downTo loop {
@@ -2755,7 +2759,7 @@ divkind: data {
 newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} out ZSymbolTable is {
     return (ZSymbolTable
         open: ListVal openscope
-        exitLog: ListVal u64
+        exitLog: ListVal exitrec
         curScope: ztypes.declid
         entries: List ZEntry
         unreachableScopes: IdSet u64
