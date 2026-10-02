@@ -2660,7 +2660,7 @@ builtinTidInU: function {
     symtab: zenv.ZSymbolTable.view
     unitName: StringView
     base: StringView
-} out u64 is {
+} out ztypes.tid is {
     # every caller names the declared family form directly (ListRef, MapRR,
     # ...) and consumes what resolution already minted: the read-only walk
     # answers without the checker's mint legs.
@@ -2672,13 +2672,15 @@ builtinTidInU: function {
         unitDecl: ud9
         :base
     ).or
-        d: 0
+        d: ztypes.noTid
     )
 }
 
 # builtinTid -- builtinTidInU with no unit named, so a user type of the same
 # name never shadows it. 0 when absent from the program.
-builtinTid: function {ast: Ast.view symtab: zenv.ZSymbolTable.view base: StringView} out u64 is {
+builtinTid: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view base: StringView
+} out ztypes.tid is {
     return (builtinTidInU :ast :symtab unitName: "" :base)
 }
 
@@ -3165,7 +3167,7 @@ Ctx: class {
     mnames: ListVal zast.nameid
     # name-id -> resolved tid (misses cached as 0): the typed model is
     # frozen during emission, so resolution per name id is emit-stable
-    resolveByNameC: (IdMapV u64 v: u64
+    resolveByNameC: (IdMapV zast.nameid v: ztypes.tid
     # the main unit's declaration, which every demand walk starts from
     )
     mainUnitId: ztypes.declid
@@ -3437,7 +3439,7 @@ canonTypeId: function {
     ctx: Ctx
     tid: ztypes.tid
     name: StringView
-} out u64 is {
+} out ztypes.tid is {
     if (originTidOf :symtab :tid) > 0 then return tid
     byName: resolveTypeIdByName :ast :symtab :ctx :name
     if byName > 0 then return byName
@@ -3448,7 +3450,7 @@ canonTypeId: function {
     # two structs, and a class resolves to the conformances it declares.
     tt: symtab.reg.typetypeOf typeId: tid
     if tt.isUserFamily then return tid
-    return 0
+    return ztypes.noTid
 }
 
 # userFnId -- the resolved type id of a main-unit function name (0 absent).
@@ -3481,7 +3483,7 @@ userFnIdById: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     nameId: zast.nameid
-} out u64 is {
+} out ztypes.tid is {
     uq1z: ctx.mainUnitId
     go: (ztypecheck.resolveUnitChildRo
         :ast
@@ -3494,7 +3496,7 @@ userFnIdById: function {
     ) case some then {
         return go
     } case none then {
-        return 0
+        return ztypes.noTid
     }
 }
 
@@ -16884,7 +16886,7 @@ boxMemberElem: function {
     if (isBoxTid :symtab tid: bt).not then {
         bxn: regNameView :symtab tid: bt
         bxc: canonTypeId :ast :symtab :ctx tid: bt name: bxn
-        if bxc == 0 then return ztypes.noTid
+        if bxc.isZero then return ztypes.noTid
         bt = ztypes.tid.create from: bxc.u64
         if (isBoxTid :symtab tid: bt).not then return ztypes.noTid
     }
@@ -22435,16 +22437,16 @@ resolveTypeIdByNameId: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     nameId: zast.nameid
-} out u64 is {
-    if nameId.isZero then return 0
-    mc: ctx.resolveByNameC.get key: nameId.u64
+} out ztypes.tid is {
+    if nameId.isZero then return ztypes.noTid
+    mc: ctx.resolveByNameC.get key: nameId
     match (
         mc
     ) case some then {
         return mc
     } case none then null
     r: typeIdByNameStages :ast :symtab :ctx :nameId
-    ctx.resolveByNameC.set key: nameId.u64 value: r
+    ctx.resolveByNameC.set key: nameId value: r
     return r
 }
 
@@ -22454,7 +22456,7 @@ typeIdByNameStages: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     nameId: zast.nameid
-} out u64 is {
+} out ztypes.tid is {
     f: userFnIdById :ast :symtab :ctx :nameId
     if f > 0 then return f
     mo: ztypecheck.resolveUnitChildRo :ast st: symtab unitDecl: symtab.typing.systemUnitRoot :nameId
@@ -22470,19 +22472,19 @@ typeIdByNameStages: function {
         unitDecl: ctx.mainUnitId
         baseId: nameId
     ).or
-        d: 0
+        d: ztypes.noTid
     )
     if lr > 0 then return lr
     # cross-unit: the type may live in a dep unit (zlexer/zast/zvfs) outside
     # walkLookupTyperefById's search list. Pass 1 probes each unit scope by id
     # (no key composition); the composed-key resolvedByKey pass (which also
     # follows unit-level aliases) runs only when every direct probe missed.
-    found: u64
+    found: ztypes.tid
     ensureUnitCache :ctx pool: ast.names :symtab
     uki: u64
     ukn: ctx.unitTidsC.length
     for uki < ukn loop {
-        if found == 0 then {
+        if found.isZero then {
             co: (symtab.typing.declChildOfId
                 parentTypeId: (ctx.unitTidsC.get i: uki)
                 :nameId
@@ -22495,11 +22497,11 @@ typeIdByNameStages: function {
         }
         uki = uki + 1
     }
-    if found == 0 then {
+    if found.isZero then {
         uki8: u64
         ukn8: ctx.unitKeysC.length
         for uki8 < ukn8 loop {
-            if found == 0 then {
+            if found.isZero then {
                 uk: ctx.unitKeysC.get i: uki8
                 ud7x: (ztypecheck.unitDeclOfName
                     st: symtab
@@ -22531,15 +22533,15 @@ resolveTypeIdByName: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     name: StringView
-} out u64 is {
+} out ztypes.tid is {
     nid: zast.poolFind pool: ast.names text: name
     return (resolveTypeIdByNameId :ast :symtab :ctx nameId: nid)
 }
 
 # fnReturnTidOf -- the registry-recorded return tid for a FUNCTION id, 0 when
 # absent. Scopes the typeById view so no lock outlives the read.
-fnReturnTidOf: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out u64 is {
-    r: u64
+fnReturnTidOf: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
+    r: ztypes.tid
     rt: symtab.reg.returnTypeOf :tid
     if rt > 0 then r = rt
     return r
@@ -23052,7 +23054,7 @@ emitMatchStmt: function {
     vend: typedefChaseTid :symtab tid: (ztypes.tid.create from: vtid.u64)
     vett: symtab.reg.typetypeOf typeId: vend
     if vett.isSum then {
-        vtid = vend.u64
+        vtid = vend
     }
     isVar: false
     isUni: false
@@ -28303,7 +28305,7 @@ fnReturnTypeId: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     op: astnode.view
-} out u64 is {
+} out ztypes.tid is {
     match (
         op
     ) case functiondef then {
@@ -28312,10 +28314,10 @@ fnReturnTypeId: function {
             rt: ast.nodes.get i: rtId
             return (stampIdOf :symtab nid: (interpPartNodeId n: rt))
         } else {
-            return 0
+            return ztypes.noTid
         }
     } else {
-        return 0
+        return ztypes.noTid
     }
 }
 
@@ -28793,7 +28795,7 @@ stampedReturnC: function {
     current: StringView
 } out String is {
     rto: fnReturnTidOf :symtab tid: fid
-    if rto == 0 then return String
+    if rto.isZero then return String
     rn: regNameOf :symtab tid: (ztypes.tid.create from: rto.u64)
     rc: cTypeOf name: rn.stringView
     if rc.length > 0 then {
@@ -28831,7 +28833,7 @@ fnReturnPointerC: function {
     ret: StringView
 } out String is {
     retColId: fnReturnTidOf :symtab tid: fid
-    if retColId == 0 then retColId = fnReturnTypeId :ast :symtab :op
+    if retColId.isZero then retColId = fnReturnTypeId :ast :symtab :op
     out0: ret.string
     if retColId > 0 when (isHeapPtrCollection
         :symtab
@@ -31579,7 +31581,7 @@ emitFnBody: function {
     buf: String.borrow
 } is {
     rbt: fnReturnTidOf :symtab tid: fid
-    if rbt == 0 then rbt = fnReturnTypeId :ast :symtab :op
+    if rbt.isZero then rbt = fnReturnTypeId :ast :symtab :op
     ctx.refBorrowRet = (fnReturnsRefBorrow
         :ast
         :symtab
@@ -32229,7 +32231,7 @@ emitC: function {
         unitKeysC: List String
         unitCacheBuilt: false
         :mnames
-        resolveByNameC: (IdMapV u64 v: u64)
+        resolveByNameC: (IdMapV zast.nameid v: ztypes.tid)
         mainUnitId: ztypes.declid
         condDepth: 0
         emitErrors: List String
@@ -33205,20 +33207,20 @@ emitListIter: function {
     # a mono that walks only BACKWARDS mints its cursor through the reverse
     # member, so the forward one answers nothing and the cursor would go
     # unemitted under a name the reverse constructor then names
-    if liId == 0 then {
+    if liId.isZero then {
         liId = (monoMethodReturn
             :symtab
             :monoId
             nameId: zast.names.wkIterateReverse
         )
     }
-    if liId == 0 then return
+    if liId.isZero then return
     ovId: (monoMethodReturn
         :symtab
         monoId: (ztypes.tid.create from: liId.u64)
         nameId: zast.names.wkCall
     )
-    if ovId == 0 then return
+    if ovId.isZero then return
     ovName: regNameOf :symtab tid: (ztypes.tid.create from: ovId.u64)
     ovu: cUpperOf text: ovName.stringView
     (emitListIterCursor
@@ -33699,7 +33701,7 @@ monoMethodReturn: function {
     symtab: zenv.ZSymbolTable.view
     monoId: ztypes.tid
     nameId: zast.nameid
-} out u64 is {
+} out ztypes.tid is {
     co: symtab.typing.declChildOfId parentTypeId: monoId :nameId
     match (
         co
@@ -33711,7 +33713,7 @@ monoMethodReturn: function {
             return mro
         } case none then null
     } case none then null
-    return 0
+    return ztypes.noTid
 }
 
 # monoElemName -- a mono name's element segment, dropping a known prefix
@@ -33958,13 +33960,13 @@ emitSetMono: function {
     ekind: keyHashKind :symtab :ctx tid: (ztypes.tid.create from: elemTid.u64)
     isStr: ekind == 1
     siId: monoMethodReturn :symtab :monoId nameId: zast.names.wkIterate
-    if siId == 0 then return
+    if siId.isZero then return
     ovId: (monoMethodReturn
         :symtab
         monoId: (ztypes.tid.create from: siId.u64)
         nameId: zast.names.wkCall
     )
-    if ovId == 0 then return
+    if ovId.isZero then return
     ovName: regNameOf :symtab tid: (ztypes.tid.create from: ovId.u64)
     ov: cbaseNoPrefix :ctx tid: (ztypes.tid.create from: ovId.u64)
     ovu: cUpperOf text: ovName.stringView
@@ -34153,22 +34155,22 @@ emitMapIters: function {
     buf: String.borrow
 } is {
     miiId: monoMethodReturn :symtab :monoId nameId: zast.names.wkIterateItems
-    if miiId == 0 then return
+    if miiId.isZero then return
     mkiId: monoMethodReturn :symtab :monoId nameId: zast.names.wkIterate
-    if mkiId == 0 then return
+    if mkiId.isZero then return
     ovkId: (monoMethodReturn
         :symtab
         monoId: (ztypes.tid.create from: mkiId.u64)
         nameId: zast.names.wkCall
     )
-    if ovkId == 0 then return
+    if ovkId.isZero then return
     ovkName: regNameOf :symtab tid: (ztypes.tid.create from: ovkId.u64)
     oveId: (monoMethodReturn
         :symtab
         monoId: (ztypes.tid.create from: miiId.u64)
         nameId: zast.names.wkCall
     )
-    if oveId == 0 then return
+    if oveId.isZero then return
     oveName: regNameOf :symtab tid: (ztypes.tid.create from: oveId.u64)
     meId: ztypes.tid
     meo: (symtab.typing.declChildOfId
@@ -34624,7 +34626,7 @@ emitIdMapGetMut: function {
         :monoId
         nameId: (zast.poolFind pool: ast.names text: "getMut")
     )
-    if gmId == 0 then return
+    if gmId.isZero then return
     gmName: regNameOf :symtab tid: (ztypes.tid.create from: gmId.u64)
     gmv: cbaseNoPrefix :ctx tid: (ztypes.tid.create from: gmId.u64)
     gmu: cUpperOf text: gmName.stringView
@@ -34655,13 +34657,13 @@ emitIdMapIters: function {
     buf: String.borrow
 } is {
     miiId: monoMethodReturn :symtab :monoId nameId: zast.names.wkIterateItems
-    if miiId == 0 then return
+    if miiId.isZero then return
     oveId: (monoMethodReturn
         :symtab
         monoId: (ztypes.tid.create from: miiId.u64)
         nameId: zast.names.wkCall
     )
-    if oveId == 0 then return
+    if oveId.isZero then return
     oveName: regNameOf :symtab tid: (ztypes.tid.create from: oveId.u64)
     meId: ztypes.tid
     {
@@ -34717,13 +34719,13 @@ emitIdSetMono: function {
         tid: (ztypes.tid.create from: elemTid.u64)
     )
     siId: monoMethodReturn :symtab :monoId nameId: zast.names.wkIterate
-    if siId == 0 then return
+    if siId.isZero then return
     ovId: (monoMethodReturn
         :symtab
         monoId: (ztypes.tid.create from: siId.u64)
         nameId: zast.names.wkCall
     )
-    if ovId == 0 then return
+    if ovId.isZero then return
     ovName: regNameOf :symtab tid: (ztypes.tid.create from: ovId.u64)
     ov: cbaseNoPrefix :ctx tid: (ztypes.tid.create from: ovId.u64)
     ovu: cUpperOf text: ovName.stringView
@@ -39070,7 +39072,7 @@ emitIoWrapperCreate: function {
     wn: ioCreateWrapper :ast n: (ast.nodes.get i: call.callable)
     if wn.length == 0 then return ""
     wid: resolveTypeIdByName :ast :symtab :ctx name: wn
-    if wid == 0 then return ""
+    if wid.isZero then return ""
     if (
         (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: wid.u64)) !=
         ztypes.ztypetype.classType
@@ -40903,7 +40905,7 @@ borrowedFieldHeldByPointer: function {
 } out bool is {
     ftn: regNameOf :symtab tid: fid
     ftid: canonTypeId :ast :symtab :ctx tid: fid name: ftn.stringView
-    if ftid == 0 then ftid = fid
+    if ftid.isZero then ftid = fid
     # a Map or a Set IS its heap pointer, and a borrowed field holds that
     if (isHeapPtrCollection :symtab :ctx tid: (ztypes.tid.create from: ftid.u64)) then return false
     return (passesByValue :symtab :ctx tid: (ztypes.tid.create from: ftid.u64)).not
@@ -41999,7 +42001,7 @@ setupGenCtx: function {
         return false
     }
     rid: fnReturnTidOf :symtab tid: mid
-    if rid == 0 then {
+    if rid.isZero then {
         mro: ztypecheck.methodReturnOf st: symtab mid: (ztypes.tid.create from: mid.u64)
         match (
             mro
@@ -42007,7 +42009,7 @@ setupGenCtx: function {
             rid = mro
         } case none then null
     }
-    if rid == 0 then {
+    if rid.isZero then {
         ctx.genActive = false
         return false
     }
