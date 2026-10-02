@@ -1912,8 +1912,9 @@ genericParamOwner: function {
 }
 
 # a declaration's defining AST node id, or 0.
-declNodeOf: function {o: (Option zenv.ZSymbolTable).view declId: ztypes.declid} out u64 is {
-    return (declRowField :o :declId typeId: false)
+declNodeOf: function {o: (Option zenv.ZSymbolTable).view declId: ztypes.declid} out zast.nodeid is {
+    # the row field reads as a number, either field alike
+    return (zast.nodeid.create from: (declRowField :o :declId typeId: false).u32.orPanic)
 }
 
 # declRowField -- one field of a declaration's row: its minted type id when
@@ -2057,16 +2058,16 @@ literalNote: function {
 }
 
 # varDefNode -- the binding node that declared variable `vid`.
-varDefNode: function {o: (Option zenv.ZSymbolTable).view vid: ztypes.vid} out u64 is {
+varDefNode: function {o: (Option zenv.ZSymbolTable).view vid: ztypes.vid} out zast.nodeid is {
     match (
         o
     ) case some then {
         for each e: o.typing.defVariableId.iterateItems loop {
-            if e.value == vid then return e.key.u64
+            if e.value == vid then return e.key
         }
-        return 0
+        return zast.nodeid
     } case none then {
-        return 0
+        return zast.nodeid
     }
 }
 
@@ -2186,8 +2187,8 @@ defaultDisplay: function {
     dtextOwn: String
     dl: dv
     if dl.literal then {
-        if dl == 0 then return ""
-        dtextOwn = ztypecheck.rootNameOf :ast n: (ast.nodes.get i: (zast.nodeid.create from: dl))
+        if dl.isZero then return ""
+        dtextOwn = ztypecheck.rootNameOf :ast n: (ast.nodes.get i: dl)
     }
     dk: dv
     if dk.constant then {
@@ -2227,10 +2228,10 @@ paramDocs: function {
 } out (Map String V: String) is {
     result: Map String V: String
     defNid: defNodeInfo :o :prog :tid member: ""
-    if defNid == 0 then return result
+    if defNid.isZero then return result
     fnNid: zast.nodeid
     {
-        wn: prog.nodes.get i: (zast.nodeid.create from: defNid.u32.orPanic)
+        wn: prog.nodes.get i: defNid
         if wn.namedoperation then fnNid = wn.operation
     }
     if fnNid.isZero then return result
@@ -2241,7 +2242,7 @@ paramDocs: function {
         }
     }
     if fsno.u64 == 0 then return result
-    paramIds: ListVal u32
+    paramIds: ListVal zast.nodeid
     {
         {
             fd: prog.nodes.get i: fnNid
@@ -2263,7 +2264,7 @@ paramDocs: function {
         nameRef: u32
         ln: u32
         {
-            pnode: prog.nodes.get i: (zast.nodeid.create from: pid)
+            pnode: prog.nodes.get i: pid
             if pnode.namedoperation then {
                 nameRef = pnode.name
                 ln = pnode.lineno
@@ -2329,10 +2330,10 @@ paramLeadDocs: function {
 } out (Map String V: String) is {
     result: Map String V: String
     defNid: defNodeInfo :o :prog :tid member: ""
-    if defNid == 0 then return result
+    if defNid.isZero then return result
     fnNid: zast.nodeid
     {
-        wn: prog.nodes.get i: (zast.nodeid.create from: defNid.u32.orPanic)
+        wn: prog.nodes.get i: defNid
         if wn.namedoperation then fnNid = wn.operation
     }
     if fnNid.isZero then return result
@@ -2343,7 +2344,7 @@ paramLeadDocs: function {
         }
     }
     if fsno.u64 == 0 then return result
-    paramIds: ListVal u32
+    paramIds: ListVal zast.nodeid
     {
         {
             fd: prog.nodes.get i: fnNid
@@ -2365,7 +2366,7 @@ paramLeadDocs: function {
         nameRef: u32
         ln: u32
         {
-            pnode: prog.nodes.get i: (zast.nodeid.create from: pid)
+            pnode: prog.nodes.get i: pid
             if pnode.namedoperation then {
                 nameRef = pnode.name
                 ln = pnode.lineno
@@ -2743,18 +2744,18 @@ defNodeInfo: function {
     prog: Ast.view
     tid: ztypes.tid
     member: StringView
-} out u64 is {
+} out zast.nodeid is {
     did: ztypes.declid
     match (
         o
     ) case some then {
         did = ztypecheck.declOfTypeId st: o tid: (ztypes.tid.create from: tid.u64)
     } case none then null
-    if did.isZero then return 0
+    if did.isZero then return zast.nodeid
     if member.length == 0 then return (declNodeOf :o declId: did)
     {
         mnid: zast.poolFind pool: prog.names text: member
-        if mnid.isZero then return 0
+        if mnid.isZero then return zast.nodeid
         mdid: ztypes.declid
         match (
             o
@@ -2763,7 +2764,7 @@ defNodeInfo: function {
         } case none then null
         return (declNodeOf :o declId: mdid)
     }
-    return 0
+    return zast.nodeid
 }
 
 # locationValue -- an LSP Location for a target node ({} miss -> nul).
@@ -2844,7 +2845,7 @@ defNodeOf: function {
     refTid: u64
     refOwner: u64
     member: StringView
-} out u64 is {
+} out zast.nodeid is {
     if refVid.isZero.not then return (varDefNode :o vid: refVid)
     if refTid > 0 then return (defNodeInfo
         :o
@@ -2858,7 +2859,7 @@ defNodeOf: function {
         tid: (ztypes.tid.create from: refOwner.u64)
         :member
     )
-    return 0
+    return zast.nodeid
 }
 
 # trailingDocOf -- the text of a trailing `#` comment on `line1` (1-based) of
@@ -2969,9 +2970,9 @@ unitFsnoByName: function {snap: zcheck.CheckResult.view name: StringView} out zv
 # none, so the body answers. 0 when it has no member to place it.
 unitFsnoOfDecl: function {snap: zcheck.CheckResult.view declId: ztypes.declid} out zvfs.fsno is {
     dn: declNodeOf o: snap.st :declId
-    if dn == 0 then return zvfs.fsno
-    op: zast.nodeid.create from: dn.u32.orPanic
-    n: snap.prog.nodes.get i: (zast.nodeid.create from: dn.u32.orPanic)
+    if dn.isZero then return zvfs.fsno
+    op: dn
+    n: snap.prog.nodes.get i: dn
     if n.namedoperation then op = n.operation
     if (snap.prog.nodes.get i: op).unitdef.not then return zvfs.fsno
     return (zsource.unitAnchorFsno prog: snap.prog mainOp: op)
@@ -3681,10 +3682,10 @@ navHoverAnswer: function {
         member: hname.stringView
     )
     dnd: declNodeOf o: snap.st declId: hit.declId
-    if dnd == 0 then dnd = legacyDnd
+    if dnd.isZero then dnd = legacyDnd
     if dnd > 0 then {
-        docBody = hoverDoc :snap :sp nid: dnd
-        if hit.owner > 0 then appendTrailingDoc :snap :sp nid: dnd :body
+        docBody = hoverDoc :snap :sp nid: dnd.u64
+        if hit.owner > 0 then appendTrailingDoc :snap :sp nid: dnd.u64 :body
     }
     # a constant with no doc of its own takes none: the fallback is its
     # value's TYPE, whose doc describes something else
@@ -3693,7 +3694,7 @@ navHoverAnswer: function {
         :hit
         name: hname.stringView
     ).not then {
-        docBody = hoverDoc :snap :sp nid: legacyDnd
+        docBody = hoverDoc :snap :sp nid: legacyDnd.u64
     }
     hoverCallNotes :snap :sp :hit :body :docBody
     ln9: (literalNote
@@ -3785,7 +3786,7 @@ navDefinitionAnswer: function {
         return (locationAtFileTop :snap fsno: hit.unitFsno :docRel :docUri :srcDir :systemDir)
     }
     dn: declNodeOf o: snap.st declId: hit.declId
-    if dn == 0 then {
+    if dn.isZero then {
         dn = (defNodeOf
             o: snap.st
             prog: snap.prog
@@ -3795,11 +3796,11 @@ navDefinitionAnswer: function {
             member: hname.stringView
         )
     }
-    if dn == 0 then return Value.nul
+    if dn.isZero then return Value.nul
     return (locationValue
         :snap
         :sp
-        nid: dn
+        nid: dn.u64
         width: hit.width
         :docRel
         :docUri
@@ -5139,24 +5140,26 @@ caseWordBefore: function {ltv: StringView ps: u64} out bool is {
 
 # caseClauseIds -- a match's subject node index, with its clause ids appended
 # to `dst`; 0 when the node is not a caseexpr.
-caseClauseIds: function {prog: Ast.view caseId: zast.nodeid dst: ListVal u64} out u32 is {
+caseClauseIds: function {
+    prog: Ast.view caseId: zast.nodeid dst: ListVal zast.nodeid
+} out zast.nodeid is {
     cnode: prog.nodes.get i: caseId
-    if cnode.caseexpr.not then return 0
+    if cnode.caseexpr.not then return zast.nodeid
     clx: u64
     for clx < cnode.clauses.count loop {
         cl: zast.kidAt kids: prog.kids span: cnode.clauses i: clx
         clx = clx + 1
-        dst.append cl.u64
+        dst.append cl
     }
     return cnode.subject
 }
 
 # usedArmNames -- the arm names the clauses already cover, by the arm each
 # clause matches: a bare name or a label.
-usedArmNames: function {prog: Ast.view clauseIds: (ListVal u64).view dst: List String} is {
+usedArmNames: function {prog: Ast.view clauseIds: (ListVal zast.nodeid).view dst: List String} is {
     for each clId: clauseIds loop {
         maIdx: zast.nodeid
-        clNode: prog.nodes.get i: (zast.nodeid.create from: clId.u32.orPanic)
+        clNode: prog.nodes.get i: clId
         if clNode.caseclause then maIdx = clNode.matcharm
         if maIdx.isZero then continue
         maRef: u32
@@ -5214,11 +5217,11 @@ caseArmComplete: function {
         wantFsno: zvfs.fsno
     )
     if caseId.isZero then return false
-    clauseIds: ListVal u64
+    clauseIds: ListVal zast.nodeid
     subjIdx: caseClauseIds :prog :caseId dst: clauseIds
-    if subjIdx == 0 then return false
+    if subjIdx.isZero then return false
     subjNid: zast.nodeid
-    subjNode: prog.nodes.get i: (zast.nodeid.create from: subjIdx)
+    subjNode: prog.nodes.get i: subjIdx
     subjNid = ztypecheck.nodeId n: subjNode
     subjTid: nodeTypeAt :o nid: subjNid
     if subjTid == 0 then return false
@@ -5497,7 +5500,7 @@ argLabelComplete: function {
     if callId.isZero then return false
     # callable index + supplied argument node ids (scoped: one node view)
     callableIdx: zast.nodeid
-    argIds: ListVal u64
+    argIds: ListVal zast.nodeid
     okCall: false
     {
         cnode: prog.nodes.get i: callId
@@ -5507,7 +5510,7 @@ argLabelComplete: function {
             for arx639 < cnode.arguments.count loop {
                 aid: zast.kidAt kids: prog.kids span: cnode.arguments i: arx639
                 arx639 = arx639 + 1
-                argIds.append aid.u64
+                argIds.append aid
             }
             okCall = true
         }
@@ -5525,7 +5528,7 @@ argLabelComplete: function {
     for si < argIds.length loop {
         aid: argIds.get i: si
         nameRef: u32
-        anode: prog.nodes.get i: (zast.nodeid.create from: aid.u32.orPanic)
+        anode: prog.nodes.get i: aid
         if anode.namedoperation then nameRef = anode.name
         if nameRef > 0 then {
             lbl: zast.nameTextCopy ast: prog ref: (zast.nameid.create from: nameRef.u32)

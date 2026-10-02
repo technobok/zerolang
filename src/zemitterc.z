@@ -7972,10 +7972,10 @@ emitOperatorCallForm: function {
         owner: (ztypes.tid.create from: owner.u64)
         mn: mnO
     ).not then return ""
-    lhsNid: u64
+    lhsNid: zast.nodeid
     cb: ast.nodes.get i: call.callable
-    if cb.dottedpath then lhsNid = cb.parent.u64
-    if lhsNid == 0 then return ""
+    if cb.dottedpath then lhsNid = cb.parent
+    if lhsNid.isZero then return ""
     rhsNid: zast.nodeid
     a0: ast.nodes.get i: (zast.kidAt kids: ast.kids span: call.arguments i: 0)
     if a0.namedoperation then rhsNid = a0.operation
@@ -10159,7 +10159,9 @@ emitOrderedPair: function {
 } out String is {
     na: labelArgNode :ast :call label: a form: aForm
     nb: labelArgNode :ast :call label: b form: bForm
-    bFirst: (writtenArgPosition :ast :call nid: nb) < (writtenArgPosition :ast :call nid: na)
+    bFirst: (
+        (writtenArgPosition :ast :call nid: nb.u64) < (writtenArgPosition :ast :call nid: na.u64)
+    )
     ord: orderBegin :ctx slots: 2
     if bFirst then orderLabelArg :ast :symtab :ctx :call label: b form: bForm nid: nb slot: 1 :ord
     orderLabelArg :ast :symtab :ctx :call label: a form: aForm nid: na slot: 0 :ord
@@ -10201,7 +10203,7 @@ orderLabelArg: function {
     label: StringView
     form: argform
     # the argument's value node, 0 when the call writes none
-    nid: u64
+    nid: zast.nodeid
     slot: u64
     ord: orderstate.borrow
 } is {
@@ -10214,7 +10216,7 @@ orderLabelArg: function {
         st: ord
         mark: mk
         :text
-        nid: (zast.nodeid.create from: nid.u32.orPanic)
+        :nid
         byPtr: false
         :slot
     )
@@ -10250,13 +10252,13 @@ labelArgText: function {
 # the call writes none.
 labelArgNode: function {
     ast: Ast.view call: zast.callrow.view label: StringView form: argform
-} out u64 is {
+} out zast.nodeid is {
     byLabel: ctorArgNodeByLabel :ast :call :label
-    if byLabel.isZero.not then return byLabel.u64
+    if byLabel.isZero.not then return byLabel
     match (
         form
-    ) case labelled then return 0 case addressed then return 0 case value then null case moved then null case read then null
-    return (ctorArgNodeByPosition :ast :call idx: 0).u64
+    ) case labelled then return zast.nodeid case addressed then return zast.nodeid case value then null case moved then null case read then null
+    return (ctorArgNodeByPosition :ast :call idx: 0)
 }
 
 # listTakeArgBaseNid -- listTakeArgBase as an interned name id, for a caller
@@ -10697,8 +10699,8 @@ renderDefault: function {
 } out String is {
     dl: dv
     if dl.literal then {
-        if dl == 0 then return ""
-        lt: ztypecheck.rootNameOf :ast n: (ast.nodes.get i: (zast.nodeid.create from: dl))
+        if dl.isZero then return ""
+        lt: ztypecheck.rootNameOf :ast n: (ast.nodes.get i: dl)
         return (literalDefaultC lex: lt.stringView)
     }
     {
@@ -12922,7 +12924,7 @@ orderFnptrArg: function {
             :symtab
             :ctx
             fid: fnTid
-            pinId: (argIds.get i: slot)
+            pinId: (argIds.get i: slot).u64
             pinNm: pnt.stringView
             pname: pnm
             argOpNode: op
@@ -15024,7 +15026,7 @@ emitDottedNestedBase: function {
             :ast
             :symtab
             :ctx
-            baseNid: n.parent.u64
+            baseNid: n.parent
             :mn2
             bn2: baseAtom.stringView
             bn2v: bs9vid
@@ -15209,7 +15211,7 @@ emitResolvedMemberRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    baseNid: u64
+    baseNid: zast.nodeid
     mn2: StringView
     bn2: StringView
     bn2v: ztypes.vid
@@ -15234,7 +15236,7 @@ emitResolvedMemberRead: function {
         :ast
         :symtab
         :ctx
-        baseNid: (zast.nodeid.create from: baseNid.u32.orPanic)
+        :baseNid
         :mn2
         :bn2
         :bn2v
@@ -15280,7 +15282,7 @@ sumMemberMethodRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    baseNid: u64
+    baseNid: zast.nodeid
     mn2: StringView
     bn2: StringView
     bn2v: ztypes.vid
@@ -15326,7 +15328,7 @@ emitUserTypeMemberRead: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    baseNid: u64
+    baseNid: zast.nodeid
     mn2: StringView
     bn2: StringView
     bn2v: ztypes.vid
@@ -15831,7 +15833,7 @@ dottedAtomRecClsBase: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    baseNid: u64
+    baseNid: zast.nodeid
     bn2: StringView
     mn2: StringView
     bn2v: ztypes.vid
@@ -15975,7 +15977,7 @@ emitDottedAtomBase: function {
         :ast
         :symtab
         :ctx
-        baseNid: n.parent.u64
+        baseNid: n.parent
         :bn2
         :mn2
         :bn2v
@@ -15987,11 +15989,11 @@ emitDottedAtomBase: function {
     # a UNION reads its payload through legs further down, but the question of
     # whether the member is a METHOD at all is the same one the variant leg asks
     if rtt == ztypes.ztypetype.unionType then {
-        eSmU: sumMemberMethodRead :ast :symtab :ctx baseNid: n.parent.u64 :mn2 :bn2 :bn2v :bstamp
+        eSmU: sumMemberMethodRead :ast :symtab :ctx baseNid: n.parent :mn2 :bn2 :bn2v :bstamp
         if eSmU.length > 0 then return eSmU
     }
     if rtt == ztypes.ztypetype.variantType then {
-        eSm: sumMemberMethodRead :ast :symtab :ctx baseNid: n.parent.u64 :mn2 :bn2 :bn2v :bstamp
+        eSm: sumMemberMethodRead :ast :symtab :ctx baseNid: n.parent :mn2 :bn2 :bn2v :bstamp
         if eSm.length > 0 then return eSm
         armDaP: memberCPrefix name: mn2
         e: "\{bn2}.data.\{armDaP}\{mn2}"
@@ -17479,7 +17481,7 @@ emitOperatorAt: function {
     opId: zast.nameid
     owner: ztypes.tid
     method: ztypes.tid
-    lhsNid: u64
+    lhsNid: zast.nodeid
     rhsNid: zast.nodeid
     op: StringView
 } out String is {
@@ -17535,7 +17537,7 @@ emitOperatorAt: function {
             :ctx
             :owner
             :lhsNid
-            rhsNid: rhsNid.u64
+            :rhsNid
             neg: opId == zast.names.wkOpNe
         )
     }
@@ -17547,8 +17549,8 @@ emitOperatorAt: function {
             :owner
             :call
             :callName
-            lhsNid: (zast.nodeid.create from: lhsNid.u32.orPanic)
-            rhsNid: rhsNid.u64
+            :lhsNid
+            :rhsNid
             :neg
         )
     }
@@ -17563,7 +17565,7 @@ emitOperatorAt: function {
             :symtab
             :ctx
             :owner
-            lhsNid: (zast.nodeid.create from: lhsNid.u32.orPanic)
+            :lhsNid
             :rhsNid
             :op
         )
@@ -17599,7 +17601,7 @@ emitOperatorAt: function {
         :ctx
         :owner
         key: key.stringView
-        nid: (zast.nodeid.create from: lhsNid.u32.orPanic)
+        nid: lhsNid
         slot: 0
         :ord
     )
@@ -17791,7 +17793,7 @@ emitDeclaredOperator: function {
     call: ztypes.tid
     callName: zast.nameid
     lhsNid: zast.nodeid
-    rhsNid: u64
+    rhsNid: zast.nodeid
     neg: bool
 } out String is {
     ord: orderBegin :ctx slots: 2
@@ -17822,7 +17824,7 @@ emitDeclaredOperator: function {
         st: ord
         mark: mkR
         text: rv
-        nid: (zast.nodeid.create from: rhsNid.u32.orPanic)
+        nid: rhsNid
         byPtr: ctx.lastArgByPtr
         slot: 1
     )
@@ -17861,9 +17863,9 @@ operatorOperandText: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: ztypes.tid
-    rhsNid: u64
+    rhsNid: zast.nodeid
 } out String is {
-    av: operandValueC :ast :symtab :ctx nid: (zast.nodeid.create from: rhsNid.u32.orPanic)
+    av: operandValueC :ast :symtab :ctx nid: rhsNid
     ctx.lastArgByPtr = false
     # the receiver by its name id, `this` for the `:this` shorthand; every other
     # row of a function type is a parameter
@@ -17885,7 +17887,7 @@ operatorOperandText: function {
             posParamId: rw.tid
             usedInterp: false
             av: av.stringView
-            avNd: (zast.nodeid.create from: rhsNid.u32.orPanic)
+            avNd: rhsNid
         )
         txt: String
         (passMethodArg
@@ -17893,7 +17895,7 @@ operatorOperandText: function {
             :symtab
             :ctx
             :ptr
-            avNd: (zast.nodeid.create from: rhsNid.u32.orPanic)
+            avNd: rhsNid
             usedInterp: false
             posParamId: rw.tid
             :av
@@ -17924,8 +17926,8 @@ emitListEqOperator: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     owner: ztypes.tid
-    lhsNid: u64
-    rhsNid: u64
+    lhsNid: zast.nodeid
+    rhsNid: zast.nodeid
     neg: bool
 } out String is {
     ord: orderBegin :ctx slots: 2
@@ -17934,7 +17936,7 @@ emitListEqOperator: function {
         :ast
         :symtab
         :ctx
-        nid: (zast.nodeid.create from: lhsNid.u32.orPanic)
+        nid: lhsNid
         tid: owner
     )
     (orderArgAt
@@ -17944,7 +17946,7 @@ emitListEqOperator: function {
         st: ord
         mark: mk
         text: la
-        nid: (zast.nodeid.create from: lhsNid.u32.orPanic)
+        nid: lhsNid
         byPtr: true
         slot: 0
     )
@@ -17953,7 +17955,7 @@ emitListEqOperator: function {
         :ast
         :symtab
         :ctx
-        nid: (zast.nodeid.create from: rhsNid.u32.orPanic)
+        nid: rhsNid
         tid: owner
     )
     (orderArgAt
@@ -17963,7 +17965,7 @@ emitListEqOperator: function {
         st: ord
         mark: mkR
         text: ra
-        nid: (zast.nodeid.create from: rhsNid.u32.orPanic)
+        nid: rhsNid
         byPtr: true
         slot: 1
     )
@@ -26172,7 +26174,7 @@ seedAndLayerCond: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
-    condId: u32
+    condId: zast.nodeid
     names: List String
     svids: ListVal ztypes.vid
     vals: List String
@@ -26185,14 +26187,14 @@ seedAndLayerCond: function {
         :ast
         :symtab
         :ctx
-        condId: (zast.nodeid.create from: condId)
+        :condId
         :names
         :svids
         :vals
         :tids
     )
     installNarrowSeeds :ctx :svids :vals :tids :prevV :prevT from: had
-    layerCondExclusion :ast :symtab :ctx condId: (zast.nodeid.create from: condId)
+    layerCondExclusion :ast :symtab :ctx :condId
 }
 
 # layerCondExclusion -- record that a conjunct's NEGATED arm predicate excludes
@@ -30069,7 +30071,7 @@ fillDataElemsIn: function {
             )
             # a unit declared inside this one -- inline, a hidden subunit --
             # declares data blocks of its own
-            if (zast.unitOpDeclaresUnit :ast opId: bmNode.operation.u32) then (fillDataElemsIn
+            if (zast.unitOpDeclaresUnit :ast opId: bmNode.operation) then (fillDataElemsIn
                 :symtab
                 :ctx
                 :ast
@@ -30791,16 +30793,16 @@ emitUnitMonoInstances: function {
     symtab: zenv.ZSymbolTable
     ctx: Ctx
     templateName: StringView
-    templateUnitOpId: u32
+    templateUnitOpId: zast.nodeid
     declOnly: bool
     buf: String.borrow
 } is {
-    bodyIds: zast.unitBodyIdsAt :ast unitId: (zast.nodeid.create from: templateUnitOpId)
+    bodyIds: zast.unitBodyIdsAt :ast unitId: templateUnitOpId
     tplId: (unitTemplateTid
         :ast
         :symtab
         :templateName
-        templateUnitOpId: (zast.nodeid.create from: templateUnitOpId)
+        :templateUnitOpId
     )
     if tplId == 0 then return
     last: symtab.reg.nextTypeId

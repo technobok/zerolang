@@ -256,10 +256,11 @@ fileUnitReads: function {root: Ast.view uname: StringView into: Set String} is {
     {
         uid: zast.poolFind pool: root.names text: uname
         if uid.isZero then return
-        ni: 1.u64
+        ni: zast.nodeid
+        ni = ni.next
         nn: root.nodes.length
-        for ni < nn loop {
-            nd: root.nodes.get i: (zast.nodeid.create from: ni.u32.orPanic)
+        for ni.u64 < nn loop {
+            nd: root.nodes.get i: ni
             if nd.dottedpath then {
                 pn: root.nodes.get i: nd.parent
                 if pn.atomid when pn.name == uid then {
@@ -269,7 +270,7 @@ fileUnitReads: function {root: Ast.view uname: StringView into: Set String} is {
                     }
                 }
             }
-            ni = ni + 1
+            ni = ni.next
         }
     }
 }
@@ -278,25 +279,27 @@ fileUnitReads: function {root: Ast.view uname: StringView into: Set String} is {
 fileReadNames: function {root: Ast.view into: Set String} is {
     {
         topaths: IdSet u64
-        ni: 1.u64
+        ni: zast.nodeid
+        ni = ni.next
         nn: root.nodes.length
-        for ni < nn loop {
-            nd: root.nodes.get i: (zast.nodeid.create from: ni.u32.orPanic)
+        for ni.u64 < nn loop {
+            nd: root.nodes.get i: ni
             if nd.reassignment then {
                 topaths.add item: nd.topath.u64
             }
-            ni = ni + 1
+            ni = ni.next
         }
-        nj: 1.u64
-        for nj < nn loop {
-            nd2: root.nodes.get i: (zast.nodeid.create from: nj.u32.orPanic)
-            if nd2.dottedpath when (topaths.has item: nj).not then {
+        nj: zast.nodeid
+        nj = nj.next
+        for nj.u64 < nn loop {
+            nd2: root.nodes.get i: nj
+            if nd2.dottedpath when (topaths.has item: nj.u64).not then {
                 cn: root.nodes.get i: nd2.child
                 if cn.atomid then {
                     into.add item: (zast.poolTextCopy pool: root.names ref: cn.name)
                 }
             }
-            nj = nj + 1
+            nj = nj.next
         }
     }
 }
@@ -323,17 +326,17 @@ plainLiteralText: function {ast: Ast.view n: astnode.view} out Option String is 
 
 # lineLeavesBlock -- statement line `id` is a `return`, `break` or `continue`
 # (bare, or a call of one), which leaves the block: nothing after it runs.
-lineLeavesBlock: function {ast: Ast.view id: u32} out bool is {
+lineLeavesBlock: function {ast: Ast.view id: zast.nodeid} out bool is {
     cur: id
     depth: 0
     for depth < 4 loop {
-        n: ast.nodes.get i: (zast.nodeid.create from: cur)
+        n: ast.nodes.get i: cur
         match (
             n
         ) case statementline then {
-            cur = n.statementline.u32
+            cur = n.statementline
         } case call then {
-            cur = n.callable.u32
+            cur = n.callable
         } case atomid then {
             if n.name == zast.names.wkReturn then return true
             if n.name == zast.names.wkBreak then return true
@@ -1734,10 +1737,10 @@ Analysis: class {
     # those carriers would pass the rest in silence.
     walkGenericParamCasingProgram: function {:this prog: Ast.view} is {
         {
-            gi: u64
+            gi: zast.nodeid
             gn: prog.nodes.length
-            for gi < gn loop {
-                gm: prog.nodes.get i: (zast.nodeid.create from: gi.u32.orPanic)
+            for gi.u64 < gn loop {
+                gm: prog.nodes.get i: gi
                 if gm.namedoperation when (zast.isGenericParamOp ast: prog opId: gm.operation
                 ) then {
                     (this.checkGenericParamCasing
@@ -1748,7 +1751,7 @@ Analysis: class {
                         col: gm.colno
                     )
                 }
-                gi = gi + 1
+                gi = gi.next
             }
         }
     }
@@ -1758,9 +1761,9 @@ Analysis: class {
     # than guessed at: answering for a shape the reader could not read would be
     # reporting a check that never ran.
     checkGenericParamCasing: function {
-        :this ast: Ast.view nameRef: zast.nameid opId: u32 line: u32 col: u32
+        :this ast: Ast.view nameRef: zast.nameid opId: zast.nodeid line: u32 col: u32
     } is {
-        bnd: genericBoundBase :ast opId: (zast.nodeid.create from: opId)
+        bnd: genericBoundBase :ast :opId
         if bnd.length == 0 then return
         nm: zast.nameTextAt :ast ref: nameRef
         if nm.length == 0 then return
@@ -2208,8 +2211,8 @@ Analysis: class {
 
     # flagBindingAt -- the flag binding a statement line holds (`name: true` /
     # `name: false`), or zeros for any other line.
-    flagBindingAt: function {this: this.view ast: Ast.view sid: u32} out flagbind is {
-        n: ast.nodes.get i: (innerNodeIdOf :ast id: (zast.nodeid.create from: sid))
+    flagBindingAt: function {this: this.view ast: Ast.view sid: zast.nodeid} out flagbind is {
+        n: ast.nodes.get i: (innerNodeIdOf :ast id: sid)
         match (
             n
         ) case assignment then {
@@ -2234,9 +2237,9 @@ Analysis: class {
     # flagSetAt -- statement line `sid` is `if <cond> then <name> = <lit>`: one
     # clause, no else, a body of exactly that reassignment.
     flagSetAt: function {
-        this: this.view ast: Ast.view sid: u32 name: zast.nameid lit: zast.nameid
+        this: this.view ast: Ast.view sid: zast.nodeid name: zast.nameid lit: zast.nameid
     } out bool is {
-        n: ast.nodes.get i: (innerNodeIdOf :ast id: (zast.nodeid.create from: sid))
+        n: ast.nodes.get i: (innerNodeIdOf :ast id: sid)
         match (
             n
         ) case ifexpr then {
@@ -4763,31 +4766,32 @@ Analysis: class {
         for each av: st.typing.atomVariableId.iterateItems loop (used.add
             item: av.value
         )
-        # the (node, variable) pairs are collected first: the conversion
-        # probes below lend st
-        dvPairs: ListVal u64
+        # the (node, variable) pairs are collected first, side by side: the
+        # conversion probes below lend st
+        dvNodes: ListVal zast.nodeid
+        dvVars: ListVal ztypes.vid
         # a generic instance's copy of a body reports from its template's line,
         # so only the template's own bindings are judged
         for each dv: st.typing.defVariableId.iterateItems loop {
             if (inInstanceCopy ranges: st.typing.instanceBodyRanges nid: dv.key.u64).not then {
-                dvPairs.append from: dv.key.u64
-                dvPairs.append from: dv.value.u64
+                dvNodes.append from: dv.key
+                dvVars.append from: dv.value
             }
         }
         dpi: u64
-        for dpi < dvPairs.length loop {
-            nid: dvPairs.get i: dpi
-            vid: ztypes.vid.create from: (dvPairs.get i: dpi + 1)
-            dpi = dpi + 2
+        for dpi < dvNodes.length loop {
+            nid: dvNodes.get i: dpi
+            vid: dvVars.get i: dpi
+            dpi = dpi + 1
             kind: (this.viewableLocalKind
                 :prog
                 :st
                 :used
-                nid: (zast.nodeid.create from: nid.u32.orPanic)
+                :nid
                 :vid
                 :mainFsno
             )
-            nodeL: prog.nodes.get i: (zast.nodeid.create from: nid.u32.orPanic)
+            nodeL: prog.nodes.get i: nid
             if kind.length > 0 when nodeL.assignment then {
                 nm: zast.poolTextAt pool: prog.names ref: nodeL.name
                 (this.info
@@ -4841,9 +4845,9 @@ Analysis: class {
     # reportIfUnusedDef -- L012 for one unit-level member: private, reached by
     # no recorded reference, and named by no atom in the unit's own segment
     reportIfUnusedDef: function {
-        :this prog: Ast.view st: zenv.ZSymbolTable.view ev: UnusedEvidence.view mid: u32
+        :this prog: Ast.view st: zenv.ZSymbolTable.view ev: UnusedEvidence.view mid: zast.nodeid
     } is {
-        m: zast.namedSiteAt ast: prog nid: (zast.nodeid.create from: mid)
+        m: zast.namedSiteAt ast: prog nid: mid
         if m.name.isZero then return
         dmD: (st.typing.declTypedMemberIdOf
             parentTypeId: (ztypes.tid.create from: ev.mainTid.u64)
@@ -4999,17 +5003,17 @@ unitMemberIsWalkable: function {
 # nothing.
 writeTargetAtoms: function {prog: Ast.view} out IdSet u64 is {
     wtgt: IdSet u64
-    ni: u64
+    ni: zast.nodeid
     nn: prog.nodes.length
-    for ni < nn loop {
+    for ni.u64 < nn loop {
         tp: zast.nodeid
-        wn: prog.nodes.get i: (zast.nodeid.create from: ni.u32.orPanic)
+        wn: prog.nodes.get i: ni
         match wn case reassignment then tp = wn.topath else null
         if tp.isZero.not then {
             tn: prog.nodes.get i: tp
             match tn case atomid then wtgt.add item: tp.u64 else null
         }
-        ni = ni + 1
+        ni = ni.next
     }
     return wtgt
 }
@@ -5425,8 +5429,9 @@ unitFileSegment: function {prog: Ast.view probe: u32} out segrange is {
 atomNamesOutsideSegments: function {prog: Ast.view into: IdSet u64} is {
     sgN: prog.fileSegs.length
     totN: prog.nodes.length
-    ndJ: 1.u64
-    for ndJ < totN loop {
+    ndJ: zast.nodeid
+    ndJ = ndJ.next
+    for ndJ.u64 < totN loop {
         covered: false
         sgJ: u64
         for sgJ < sgN loop {
@@ -5435,10 +5440,10 @@ atomNamesOutsideSegments: function {prog: Ast.view into: IdSet u64} is {
             if ndJ >= sgB.startId when ndJ < sgB.endId then covered = true
         }
         if covered.not then {
-            ndB0: prog.nodes.get i: (zast.nodeid.create from: ndJ.u32.orPanic)
+            ndB0: prog.nodes.get i: ndJ
             if ndB0.atomid then into.add item: ndB0.name.u64
         }
-        ndJ = ndJ + 1
+        ndJ = ndJ.next
     }
 }
 
@@ -5463,10 +5468,11 @@ unitAtomNames: function {prog: Ast.view seg: segrange um: UnitMembers.view} out 
 atomNamesOutsideSelf: function {
     prog: Ast.view seg: segrange um: UnitMembers.view into: IdSet u64
 } is {
-    ndI: seg.start.u64
-    for ndI < seg.end loop {
-        nd0: prog.nodes.get i: (zast.nodeid.create from: ndI.u32.orPanic)
-        ndI = ndI + 1
+    # the segment's bounds are the node table's length when it was loaded
+    ndI: zast.nodeid.create from: seg.start
+    for ndI.u64 < seg.end loop {
+        nd0: prog.nodes.get i: ndI
+        ndI = ndI.next
         if nd0.atomid then {
             k: memberIndexAtLine :um line: nd0.lineno
             isSelf: false

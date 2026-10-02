@@ -36,10 +36,10 @@ NameCtr: class {
 } as {
     # take the next number and reserve a table slot for the node that will use
     # it
-    bump: function {:this} out zast.nodeid is {
+    bump: function {:this} out u32 is {
         id: this.next
         this.next = this.next + 1
-        return (zast.nodeid.create from: id)
+        return id
     }
 }
 
@@ -564,8 +564,8 @@ spillCallParts: function {
 }
 
 # partHoldsYield -- a yield is written somewhere inside `part`.
-partHoldsYield: function {ast: Ast.view part: u32} out bool is {
-    return (zast.yieldCountIn :ast nid: (zast.nodeid.create from: part)) > 0
+partHoldsYield: function {ast: Ast.view part: zast.nodeid} out bool is {
+    return (zast.yieldCountIn :ast nid: part) > 0
 }
 
 # spillStaysPut -- a part that reads the same after the resume as before the
@@ -639,8 +639,8 @@ promoteIterablesIdAt: function {
     ast: Ast
     ctr: NameCtr
     oId: zast.nodeid
-} out u32 is {
-    if oId.isZero then return 0
+} out zast.nodeid is {
+    if oId.isZero then return zast.nodeid
     r: promoteIterables :ast :ctr nid: oId
     return (zast.tableAdd :ast n: r)
 }
@@ -674,7 +674,7 @@ promoteLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid dst: ListVal zast.
             nodeid: (zast.tableReserve :ast)
             lineno: lnQ
             colno: coQ
-            statementline: (zast.nodeid.create from: pr)
+            statementline: pr
         )
         dst.append (zast.tableAdd :ast n: nl)
     } else {
@@ -701,8 +701,8 @@ lineIsWith: function {n: astnode.view} out bool is {
 # else whole, so a `do` is opened first and closed again after. A `with` body
 # may also be a bare `for` or `with` LINE with no block at all (`with it: E
 # do for each e: it loop { .. }`); that line is promoted as the one line it is.
-promoteWrappedBody: function {ast: Ast ctr: NameCtr oId: zast.nodeid} out u32 is {
-    if oId.isZero then return 0
+promoteWrappedBody: function {ast: Ast ctr: NameCtr oId: zast.nodeid} out zast.nodeid is {
+    if oId.isZero then return zast.nodeid
     isDo: false
     innerId: zast.nodeid
     lnY: u32
@@ -725,12 +725,12 @@ promoteWrappedBody: function {ast: Ast ctr: NameCtr oId: zast.nodeid} out u32 is
         return (promoteIterablesIdAt :ast :ctr :oId)
     }
     innerNew: promoteWrappedBody :ast :ctr oId: innerId
-    if innerNew == 0 then return 0
+    if innerNew.isZero then return zast.nodeid
     redo: astnode.doexpr (zast.dorow
         nodeid: (zast.tableReserve :ast)
         lineno: lnY
         colno: coY
-        statement: (zast.nodeid.create from: innerNew)
+        statement: innerNew
     )
     return (zast.tableAdd :ast n: redo)
 }
@@ -741,7 +741,7 @@ promoteWrappedBody: function {ast: Ast ctr: NameCtr oId: zast.nodeid} out u32 is
 # line then becomes the `do { .. }` block the author could have written -- the
 # line a statement of its own, the block under a `doexpr`, exactly the shape a
 # braced body has. With nothing hoisted the promoted node stands alone.
-promoteBareLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out u32 is {
+promoteBareLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out zast.nodeid is {
     hoisted: ListVal zast.nodeid
     ni: promoteInExpr :ast :ctr :nid dst: hoisted
     if hoisted.length == 0 then return (zast.tableAdd :ast n: ni)
@@ -812,7 +812,7 @@ promoteWith: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out astnode is {
         colno: coW
         name: nameW
         value: nvalId
-        body: (zast.nodeid.create from: nbodyId)
+        body: nbodyId
     )
     )
 }
@@ -968,7 +968,7 @@ promoteFor: function {
     nbodyId: promoteIterablesIdAt :ast :ctr oId: bodyId
     suspends: false
     if nbodyId > 0 then {
-        nb: ast.nodes.get i: (zast.nodeid.create from: nbodyId)
+        nb: ast.nodes.get i: nbodyId
         suspends = (zast.yieldCountOf :ast n: nb) > 0
     }
     nconds: ListVal zast.nodeid
@@ -1001,7 +1001,7 @@ promoteFor: function {
         colno: coS
         conditions: (zast.kidsAdd kids: ast.kids xs: nconds)
         :isEach
-        body: (zast.nodeid.create from: nbodyId)
+        body: nbodyId
         postconditions: (zast.kidsAdd kids: ast.kids xs: nposts)
     )
     )
@@ -1111,7 +1111,7 @@ wrapDeclaredCallReturn: function {
         wrapper: buildWrapper :ast :line :col base: gb leaf: gp.leaf
         wid: zast.tableAdd :ast n: wrapper
         cfm: ast.nodes.getMut i: callFnId
-        if cfm.functiondef then cfm.returntype = zast.nodeid.create from: wid
+        if cfm.functiondef then cfm.returntype = wid
         return wid
     } case none then null
     return zast.nodeid
@@ -1165,7 +1165,7 @@ buildDeclaredCreate: function {
     # the author's `is` field names, in declaration order
     authorNames: (List String).view
     # their type nodes, in the same order
-    authorTypes: (ListVal u64).view
+    authorTypes: (ListVal zast.nodeid).view
 } is {
     createParams: ListVal zast.nodeid
     anyRef: false
@@ -1177,9 +1177,9 @@ buildDeclaredCreate: function {
         at0: authorTypes.get i: api
         if (typePathIsReference
             :ast
-            nid: (zast.nodeid.create from: at0.u32.orPanic)
+            nid: at0
         ) then anyRef = true
-        ap0: createParamPath :ast nid: (zast.nodeid.create from: at0.u32.orPanic)
+        ap0: createParamPath :ast nid: at0
         np0: mkNamedOp :ast :line :col name: a0v op: ap0
         createParams.append (zast.tableAdd :ast n: np0)
         api = api + 1
@@ -1332,7 +1332,7 @@ DeclParts: class {
     # the author's `is` field names, in declaration order
     names: List String
     # their type nodes, in the same order
-    types: ListVal u64
+    types: ListVal zast.nodeid
     # the per-call input parameter's type node, 0 when `call` declares none.
     # Read before the receiver is injected, so it is the FIRST parameter here.
     inputTypeId: zast.nodeid
@@ -1372,7 +1372,7 @@ readDeclaredParts: function {
             if im.namedoperation then {
                 inm: zast.nameTextAt :ast ref: im.name
                 dst.names.append inm.copy
-                dst.types.append im.operation.u64
+                dst.types.append im.operation
             }
         }
     }
@@ -1537,7 +1537,7 @@ lowerDeclared: function {
         line: 0
         colno: 0
         names: List String
-        types: ListVal u64
+        types: ListVal zast.nodeid
         inputTypeId: zast.nodeid
     )
     readDeclaredParts :ast :objId dst: parts
@@ -1556,7 +1556,7 @@ lowerDeclared: function {
     newBodyId: promoteIterablesIdAt :ast :ctr oId: bodyId
     if newBodyId > 0 then {
         cfm3: ast.nodes.getMut i: callFnId
-        if cfm3.functiondef then cfm3.body = zast.nodeid.create from: newBodyId
+        if cfm3.functiondef then cfm3.body = newBodyId
     }
     bodyId2: callBodyIdOf :ast :callFnId
     # one resume SLOT per suspension point and one counter per suspending loop,

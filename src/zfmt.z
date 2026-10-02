@@ -809,22 +809,22 @@ Builder: class {
     # chain would group the same without them (ztypes.operatorKindOf; the
     # linter's L032 asks for them)
     visitBinop: function {:this id: zast.nodeid wrapped: bool} out u32 is {
-        operands: ListVal u32
-        operators: ListVal u32
+        operands: ListVal zast.nodeid
+        operators: ListVal zast.nodeid
         cur: id
         mixed: false
         for true loop {
             n: this.node id: cur
             ip: zast.infixPartsOf ast: this.ast :n
             if ip.found.not then {
-                operands.append cur.u32
+                operands.append cur
                 break
             }
-            operands.append ip.rhs.u32
-            operators.append ip.operator.u32
+            operands.append ip.rhs
+            operators.append ip.operator
             cur = ip.lhs
             if (this.kindChangesAt outerOp: ip.operator lhs: cur) then {
-                operands.append cur.u32
+                operands.append cur
                 mixed = true
                 break
             }
@@ -837,8 +837,8 @@ Builder: class {
     # (`mixed`) keeps its parentheses
     printChain: function {
         :this
-        operands: (ListVal u32).view
-        operators: (ListVal u32).view
+        operands: (ListVal zast.nodeid).view
+        operators: (ListVal zast.nodeid).view
         mixed: bool
         wrapped: bool
     } out u32 is {
@@ -847,7 +847,7 @@ Builder: class {
         first: true
         for idx > 0 loop {
             idx = idx - 1
-            oid: zast.nodeid.create from: (operands.get i: idx)
+            oid: operands.get i: idx
             if first then {
                 # a left operand of another kind is printed in its parentheses
                 fslot: slotkind.juxta
@@ -856,7 +856,7 @@ Builder: class {
             } else {
                 xs.append this.idSpace
                 xs.append (this.visitValue
-                    id: (zast.nodeid.create from: (operators.get i: idx))
+                    id: (operators.get i: idx)
                     slot: slotkind.tight
                     wrapped: false
                 )
@@ -2045,12 +2045,13 @@ capped: function {n: u32 cap: u32} out u32 is {
 # firstError -- the first parse error node in the tree, as its id; zero when
 # the tree is clean
 firstError: function {ast: zast.Ast.view} out zast.nodeid is {
-    i: 1.u64
+    i: zast.nodeid
+    i = i.next
     n: ast.nodes.length
-    for i < n loop {
-        node: ast.nodes.get i: (zast.nodeid.create from: i.u32.orPanic)
-        if node.error then return (zast.nodeid.create from: i.u32.orPanic)
-        i = i + 1
+    for i.u64 < n loop {
+        node: ast.nodes.get :i
+        if node.error then return i
+        i = i.next
     }
     return zast.nodeid
 }
