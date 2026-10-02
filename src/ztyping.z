@@ -869,13 +869,13 @@ ZTyping: class {
     pendingCustomTagNode: (IdMapV u64 v: zast.nodeid
     # the type owning a default not yet resolvable
     )
-    pendingDefaultOwner: (IdMapV u64 v: u64
+    pendingDefaultOwner: (IdMapV zast.nodeid v: u64
     # that default's declaration
     )
-    pendingDefaultId: (IdMapV u64 v: u64
+    pendingDefaultId: (IdMapV zast.nodeid v: u64
     # its name, interned
     )
-    pendingDefaultName: (IdMapV u64 v: zast.nameid
+    pendingDefaultName: (IdMapV zast.nodeid v: zast.nameid
     # types some site actually constructs, which is what makes construction a
     # DEMAND the emitter must satisfy
     )
@@ -1034,7 +1034,7 @@ ZTyping: class {
     # per-node single-valued stamps, indexed by nodeid - 1 (node ids are
     # minted dense 1..N, so the stamp IS the slot); 0 means unstamped
     )
-    nodeType: ListVal ztypes.tid
+    nodeType: (ListVal ztypes.tid i: zast.nodeid)
     # what each call actually is -- a construction, a reference, a control
     # transfer -- classified once so the emitter branches on an arm rather than
     # re-deciding
@@ -2563,7 +2563,7 @@ ZTyping: class {
                 return mg
             } case none then null
         }
-        return (nodeTypeAt tbl: t.nodeType nid: nid.u64)
+        return (nodeTypeAt tbl: t.nodeType :nid)
     }
 
     # nodeConstIn -- a use site's value as the walk of `mono` sees it: the
@@ -3056,18 +3056,22 @@ armSuffixSideOf: function {
 # there (nodeTypeSet records neither a 0 node id nor a 0 type id). A node id
 # indexes the table directly; the length test is not an index adjustment but
 # the sparse tail -- the table grows only as far as the highest stamped id.
-nodeTypeAt: function {tbl: (ListVal ztypes.tid).view nid: u64} out ztypes.tid is {
-    if nid >= tbl.length then return (ztypes.tid.create from: 0)
+nodeTypeAt: function {
+    tbl: (ListVal ztypes.tid i: zast.nodeid).view nid: zast.nodeid
+} out ztypes.tid is {
+    if nid.u64 >= tbl.length then return (ztypes.tid.create from: 0)
     return (tbl.get i: nid)
 }
 
 # nodeTypeSet -- stamp node `nid` with type id `tid`. astnode id 0 means "no node"
 # and type id 0 is the unresolved sentinel, so neither is recorded: an absent
 # stamp and a 0 stamp are the same answer to every reader.
-nodeTypeSet: function {tbl: ListVal ztypes.tid nid: u64 tid: ztypes.tid} is {
-    if nid == 0 then return
+nodeTypeSet: function {
+    tbl: (ListVal ztypes.tid i: zast.nodeid) nid: zast.nodeid tid: ztypes.tid
+} is {
+    if nid.isZero then return
     if tid.isZero then return
-    for tbl.length <= nid loop tbl.append ztypes.tid
+    for tbl.length <= nid.u64 loop tbl.append ztypes.tid
     v: tid
     tbl.set i: nid val: v
 }
@@ -3171,9 +3175,9 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         postGuardArm: (IdMapV zast.nodeid v: zast.nameid)
         pendingCustomTag: (IdMapV u64 v: zast.nameid)
         pendingCustomTagNode: (IdMapV u64 v: zast.nodeid)
-        pendingDefaultOwner: (IdMapV u64 v: u64)
-        pendingDefaultId: (IdMapV u64 v: u64)
-        pendingDefaultName: (IdMapV u64 v: zast.nameid)
+        pendingDefaultOwner: (IdMapV zast.nodeid v: u64)
+        pendingDefaultId: (IdMapV zast.nodeid v: u64)
+        pendingDefaultName: (IdMapV zast.nodeid v: zast.nameid)
         constructedTypes: (IdMapV u64 v: bool)
         bareTyperefNodes: IdSet zast.nodeid
         typerefHead: false
@@ -3216,7 +3220,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         # measured self-compile: ~0.6 stamps/node -- capacity nodeEst
         # holds 2/3*nodeEst entries before the first grow
         )
-        nodeType: (ListVal ztypes.tid capacity: nodeEst + (nodeEst / 4) + 1)
+        nodeType: (ListVal ztypes.tid i: zast.nodeid capacity: nodeEst + (nodeEst / 4) + 1)
         callKind: (IdMapV zast.nodeid v: zast.callkind)
         atomVariableId: (IdMapV zast.nodeid v: ztypes.vid capacity: nodeEst / 4)
         variableMutated: IdSet ztypes.vid
