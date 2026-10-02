@@ -12877,6 +12877,12 @@ pathNamesTypeConstant: function {
     if rootId.isZero or leafId.isZero then return false
     ownerDecl: declOfTypeId :st tid: (ztypes.tid.create from: ownerTid.u64)
     td: st.typing.declFindChild parentDeclId: (unitRootOfDecl :st declId: ownerDecl) nameId: rootId
+    # a UNIT is a type too: `n: cfg.LIMIT` reads a constant of a unit the owner's
+    # unit declares, or of a file unit (`n: zast.noNode`)
+    if td.isZero then td = unitDeclOfName :st nameId: rootId
+    if td.isZero.not when (st.typing.decls.get i: td).kind.unitDecl then {
+        return (unitMemberHoldsValue :st :ast unitDecl: td nameId: leafId)
+    }
     if (declIsType :st declId: td).not then return false
     md: st.typing.declFindChild parentDeclId: td nameId: leafId
     if md.isZero then return false
@@ -54761,6 +54767,29 @@ declIsType: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out bool
     if declId.isZero then return false
     d: st.typing.decls.get i: declId
     return d.kind.typeDecl
+}
+
+# unitMemberHoldsValue -- the unit `unitDecl` defines `nameId` as a value rather
+# than a function, a type, a unit or a data block: a constant, which the fold then
+# evaluates. Read off the definition, so nothing resolves to answer.
+unitMemberHoldsValue: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    unitDecl: ztypes.declid
+    nameId: zast.nameid
+} out bool is {
+    md: st.typing.declFindChild parentDeclId: unitDecl :nameId
+    if md.isZero then return false
+    dn: (st.typing.decls.get i: md).node
+    if dn.isZero then return false
+    opId: zast.nodeid
+    {
+        n: ast.nodes.get i: dn
+        if n.namedoperation then opId = n.operation
+    }
+    if opId.isZero then return false
+    op: ast.nodes.get i: opId
+    return (op.functiondef or op.objectdef or op.unitdef or op.datablock).not
 }
 
 # typeMemberHoldsConstant -- the member written at `defNode` is one of the type's
