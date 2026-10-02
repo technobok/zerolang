@@ -2117,18 +2117,18 @@ ZSymbolTable: class {
     # C-level unwrap. shadow=false (assignment): the type id stays the outer
     # union; only the subtype name is recorded.
     narrow: function {
-        :this nameId: zast.nameid toTypeId: u64 subtypeName: zast.nameid shadow: bool
+        :this nameId: zast.nameid toTypeId: ztypes.tid subtypeName: zast.nameid shadow: bool
     } is {
         d: this.findLocal :nameId
         if d.isZero then return
         curT: this.currentTypeOf declId: d
-        originalTypeId: curT.u64
+        originalTypeId: curT
         entryZtype: originalTypeId
         hasSubtype: subtypeName.isZero.not
         if shadow when hasSubtype then {
             if toTypeId == originalTypeId then {
                 payloadOpt: (this.typing.declChildOfId
-                    parentTypeId: (ztypes.tid.create from: originalTypeId.u64)
+                    parentTypeId: originalTypeId
                     nameId: subtypeName
                 )
                 match (
@@ -2141,7 +2141,7 @@ ZSymbolTable: class {
                 # the caller passed a resolved payload (the typecheck
                 # re-resolves arm-child reference shells to real types);
                 # null payloads still keep the outer type.
-                pt2: this.reg.typetypeOf typeId: (ztypes.tid.create from: toTypeId.u64)
+                pt2: this.reg.typetypeOf typeId: toTypeId
                 if pt2 != ztypes.ztypetype.nullType then entryZtype = toTypeId
             }
         }
@@ -2154,7 +2154,7 @@ ZSymbolTable: class {
             origOpt = optionval.some oc
         }
 
-        e: this.reg.newEntry ztypeId: (ztypes.tid.create from: entryZtype.u64)
+        e: this.reg.newEntry ztypeId: entryZtype
         e.narrowedSubtype = nsName
         e.originalZtypeId = origOpt
         this.appendRow row: e declId: d
@@ -2163,14 +2163,16 @@ ZSymbolTable: class {
     # Exclude `subtypeName` from `name`'s type. Collapses to a narrowing
     # when one excludable subtype remains; marks the scope unreachable when
     # none remain.
-    exclude: function {:this nameId: zast.nameid subtypeName: zast.nameid fullTypeId: u64} is {
+    exclude: function {
+        :this nameId: zast.nameid subtypeName: zast.nameid fullTypeId: ztypes.tid
+    } is {
         d: this.findLocal :nameId
         if d.isZero then return
         allSubs: ListVal u64
         (sumArmNameIds
             ty: this.typing
             reg: this.reg
-            tid: (ztypes.tid.create from: fullTypeId.u64)
+            tid: fullTypeId
             ids: allSubs
         )
         newExcl: IdSet zast.nameid
@@ -2199,7 +2201,7 @@ ZSymbolTable: class {
                 sole: allSubs.get i: soleIx
                 narrowedSub = zast.nameid.create from: sole.u32.orPanic
             }
-            e: this.reg.newEntry ztypeId: (ztypes.tid.create from: fullTypeId.u64)
+            e: this.reg.newEntry ztypeId: fullTypeId
             e.narrowedSubtype = narrowedSub
             for each s: newExcl loop {
                 e.excludedSubtypes.add item: s

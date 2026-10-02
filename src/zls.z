@@ -1995,9 +1995,9 @@ nodeTypeAt: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} out z
 surfaceDeclOfType: function {
     o: (Option zenv.ZSymbolTable).view
     prog: Ast.view
-    tid: u64
+    tid: ztypes.tid
 } out ztypes.declid is {
-    if tid == 0 then return (ztypes.declid.create from: 0)
+    if tid.isZero then return (ztypes.declid.create from: 0)
     match (
         o
     ) case some then {
@@ -2005,7 +2005,7 @@ surfaceDeclOfType: function {
             return (ztypecheck.surfaceDeclOfTypeId
                 st: o
                 ast: prog
-                tid: (ztypes.tid.create from: tid)
+                :tid
             )
         }
     } case none then null
@@ -2031,7 +2031,7 @@ literalNote: function {
     o: (Option zenv.ZSymbolTable).view
     name: StringView
     refTid: u64
-    nodeTid: u64
+    nodeTid: ztypes.tid
 } out String is {
     if (ztypecheck.isNumericLiteralName :name).not then return ""
     match (
@@ -2040,7 +2040,7 @@ literalNote: function {
         if refTid == o.reg.literalIntTid then return "falls to `i64` here"
         if refTid == o.reg.literalFloatTid then return "falls to `f64` here"
         if nodeTid > 0 then {
-            tn: displayTypeNameSt st: o tid: (ztypes.tid.create from: nodeTid.u64)
+            tn: displayTypeNameSt st: o tid: nodeTid
             if tn.length > 0 then {
                 kind: "an integer literal"
                 if (ztypecheck.isFloatLiteralName :name) then kind = "a float literal"
@@ -2433,13 +2433,13 @@ paramDisplayOf: function {
     st: zenv.ZSymbolTable.view
     tid: ztypes.tid
     pname: StringView
-    ptid: u64
+    ptid: ztypes.tid
     pnid: u64
 } out String is {
     owner: ztypes.tid.create from: tid.u64
     pid: zast.nameid.create from: pnid.u32.orPanic
     dv: st.typing.declDefaultOfId parentTypeId: owner nameId: pid
-    ptn: displayTypeNameSt :st tid: (ztypes.tid.create from: ptid)
+    ptn: displayTypeNameSt :st tid: ptid
     ps: pname.string
     ps.append ": "
     if dv.none then {
@@ -2644,7 +2644,7 @@ fnSigTextOpt: function {
                 st: o
                 :tid
                 pname: pn.stringView
-                ptid: (ptids.get i: pi)
+                ptid: (ztypes.tid.create from: (ptids.get i: pi))
                 pnid: (pnids.get i: pi)
             )
             pi = pi + 1
@@ -2690,7 +2690,7 @@ fnParamDisplays: function {
                 st: o
                 :tid
                 pname: pn.stringView
-                ptid: (ptids.get i: pi)
+                ptid: (ztypes.tid.create from: (ptids.get i: pi))
                 pnid: (pnids.get i: pi)
             )
             pi = pi + 1
@@ -2834,21 +2834,21 @@ defNodeOf: function {
     o: (Option zenv.ZSymbolTable).view
     prog: Ast.view
     refVid: ztypes.vid
-    refTid: u64
-    refOwner: u64
+    refTid: ztypes.tid
+    refOwner: ztypes.tid
     member: StringView
 } out zast.nodeid is {
     if refVid.isZero.not then return (varDefNode :o vid: refVid)
     if refTid > 0 then return (defNodeInfo
         :o
         :prog
-        tid: (ztypes.tid.create from: refTid.u64)
+        tid: refTid
         member: ""
     )
     if refOwner > 0 then return (defNodeInfo
         :o
         :prog
-        tid: (ztypes.tid.create from: refOwner.u64)
+        tid: refOwner
         :member
     )
     return zast.nodeid
@@ -3171,13 +3171,15 @@ inferredGenericLines: function {
 }
 
 # isInstanceOfOpt -- `tid` is a monomorphised instance of the template `tpl`.
-isInstanceOfOpt: function {o: (Option zenv.ZSymbolTable).view tid: u64 tpl: u64} out bool is {
-    if tid == 0 then return false
+isInstanceOfOpt: function {
+    o: (Option zenv.ZSymbolTable).view tid: ztypes.tid tpl: ztypes.tid
+} out bool is {
+    if tid.isZero then return false
     if tid == tpl then return false
     match (
         o
     ) case some then {
-        return (o.reg.genericOriginOf tid: (ztypes.tid.create from: tid.u64)).u64 == tpl
+        return (o.reg.genericOriginOf :tid).u64 == tpl
     } case none then {
         return false
     }
@@ -3348,14 +3350,11 @@ navTargetByKind: function {snap: zcheck.CheckResult hnid: zast.nodeid kind: u8} 
 }
 
 # isUnitTidOpt -- `tid` is a unit's type, over the LSP's optional snapshot.
-isUnitTidOpt: function {o: (Option zenv.ZSymbolTable).view tid: u64} out bool is {
+isUnitTidOpt: function {o: (Option zenv.ZSymbolTable).view tid: ztypes.tid} out bool is {
     match (
         o
     ) case some then {
-        return (
-            (o.reg.typetypeOf typeId: (ztypes.tid.create from: tid.u64)) ==
-            ztypes.ztypetype.unitType
-        )
+        return (o.reg.typetypeOf typeId: tid) == ztypes.ztypetype.unitType
     } case none then {
         return false
     }
@@ -3364,10 +3363,12 @@ isUnitTidOpt: function {o: (Option zenv.ZSymbolTable).view tid: u64} out bool is
 # typeNamedAs -- type `tid`'s own name is `name`, its unit qualifier aside: the
 # name in a construction names the type, where a value of the type would not.
 # A unit is not asked.
-typeNamedAs: function {o: (Option zenv.ZSymbolTable).view tid: u64 name: StringView} out bool is {
+typeNamedAs: function {
+    o: (Option zenv.ZSymbolTable).view tid: ztypes.tid name: StringView
+} out bool is {
     # a unit's name resolves through the unit lookup, which knows its file
     if (isUnitTidOpt :o :tid) then return false
-    full: displayTypeNameOfOpt :o tid: (ztypes.tid.create from: tid.u64)
+    full: displayTypeNameOfOpt :o :tid
     if full.stringView == name then return true
     dotted: ".\{name}"
     return (full.stringView.endsWith suffix: dotted)
@@ -3551,7 +3552,7 @@ hoverTypeFence: function {
     hit: navhit
     hname: String
     # the node's own stamped type, which the kind fallback does not use
-    t: u64
+    t: ztypes.tid
 } out String is {
     # a CONSTANT's hit carries its value's type: the card names the constant,
     # its type and its value, not the type
@@ -3564,8 +3565,8 @@ hoverTypeFence: function {
         kindFence.append tk
         return kindFence
     }
-    if t == 0 then return ""
-    tn: displayTypeNameOfOpt o: snap.st tid: (ztypes.tid.create from: t.u64)
+    if t.isZero then return ""
+    tn: displayTypeNameOfOpt o: snap.st tid: t
     if tn.length == 0 then return ""
     fence: String
     if hit.owner > 0 then {
@@ -4661,8 +4662,8 @@ baseTypeInScope: function {
     defStart: u32
     l1u: u32
     base: StringView
-} out u64 is {
-    result: u64
+} out ztypes.tid is {
+    result: ztypes.tid
     sp: (Spans
         rows: ListVal spanrow
         names: List String
@@ -4808,15 +4809,15 @@ literalTidOf: function {o: (Option zenv.ZSymbolTable).view name: StringView} out
 literalConvTid: function {
     prog: Ast.view
     o: (Option zenv.ZSymbolTable).view
-    litTid: u64
+    litTid: ztypes.tid
     name: StringView
 } out u64 is {
     m: childOfIn :prog :o parent: litTid :name
-    if m == 0 then return 0
+    if m.isZero then return 0
     match (
         o
     ) case some then {
-        r: ztypecheck.methodReturnOf st: o mid: (ztypes.tid.create from: m.u64)
+        r: ztypecheck.methodReturnOf st: o mid: m
         match (
             r
         ) case some then {
@@ -4831,7 +4832,7 @@ literalConvTid: function {
 literalDefaultTid: function {
     prog: Ast.view
     o: (Option zenv.ZSymbolTable).view
-    litTid: u64
+    litTid: ztypes.tid
 } out u64 is {
     isF: false
     match (
@@ -4852,10 +4853,10 @@ literalDefaultTid: function {
 addLiteralMembers: function {
     prog: Ast.view
     o: (Option zenv.ZSymbolTable).view
-    litTid: u64
+    litTid: ztypes.tid
     sink: (MapRV String v: u8)
 } is {
-    addTypeMembers :prog :o tid: (ztypes.tid.create from: litTid.u64) :sink skipNumeric: false
+    addTypeMembers :prog :o tid: litTid :sink skipNumeric: false
     dflt: literalDefaultTid :prog :o :litTid
     if dflt == 0 then return
     addTypeMembers :prog :o tid: (ztypes.tid.create from: dflt.u64) :sink skipNumeric: true
@@ -4886,8 +4887,8 @@ descendUnitType: function {
     unitName: StringView
     name: StringView
     o: Option zenv.ZSymbolTable
-} out u64 is {
-    result: u64
+} out ztypes.tid is {
+    result: ztypes.tid
     match (
         o
     ) case some then {
@@ -4913,17 +4914,17 @@ descendUnitType: function {
 childOfIn: function {
     prog: Ast.view
     o: (Option zenv.ZSymbolTable).view
-    parent: u64
+    parent: ztypes.tid
     name: StringView
-} out u64 is {
-    result: u64
+} out ztypes.tid is {
+    result: ztypes.tid
     match (
         o
     ) case some then {
         {
             co: (o.typing.declChildOf
                 pool: prog.names
-                parentTypeId: (ztypes.tid.create from: parent.u64)
+                parentTypeId: parent
                 :name
             )
             match (
@@ -4942,8 +4943,8 @@ descendSegments: function {
     snap: zcheck.CheckResult
     base: StringView
     start: u64
-    tid0: u64
-} out u64 is {
+    tid0: ztypes.tid
+} out ztypes.tid is {
     n: base.length
     cur: tid0
     pos: start
@@ -4952,7 +4953,7 @@ descendSegments: function {
         seg: base.substring from: pos to: de
         if seg.length > 0 then {
             cur = childOfIn prog: snap.prog o: snap.st parent: cur name: seg
-            if cur == 0 then return 0
+            if cur.isZero then return ztypes.noTid
         }
         pos = de + 1
     }
@@ -4976,23 +4977,33 @@ addLiteralHead: function {
     if ltid == 0 then return
     n: base.length
     if numEnd >= n then {
-        addLiteralMembers prog: snap.prog o: snap.st litTid: ltid :sink
+        addLiteralMembers prog: snap.prog o: snap.st litTid: (ztypes.tid.create from: ltid) :sink
         return
     }
     s0: numEnd + 1
     de: dotFrom :base start: s0
     seg: (base.substring from: s0 to: de).string
-    cur: literalConvTid prog: snap.prog o: snap.st litTid: ltid name: seg.stringView
+    cur: (literalConvTid
+        prog: snap.prog
+        o: snap.st
+        litTid: (ztypes.tid.create from: ltid)
+        name: seg.stringView
+    )
     if cur == 0 then {
         # a NON-numeric child falls through to the materialised receiver, the
         # rule that keeps `5.times` and `1.0.scaleB` working
-        dflt: literalDefaultTid prog: snap.prog o: snap.st litTid: ltid
+        dflt: literalDefaultTid prog: snap.prog o: snap.st litTid: (ztypes.tid.create from: ltid)
         if dflt == 0 then return
-        cur = childOfIn prog: snap.prog o: snap.st parent: dflt name: seg.stringView
+        cur = (childOfIn
+            prog: snap.prog
+            o: snap.st
+            parent: (ztypes.tid.create from: dflt)
+            name: seg.stringView
+        )
     }
     if cur == 0 then return
     s1: de + 1
-    cur = descendSegments :snap :base start: s1 tid0: cur
+    cur = descendSegments :snap :base start: s1 tid0: (ztypes.tid.create from: cur)
     if cur == 0 then return
     (addTypeMembers
         prog: snap.prog
@@ -5050,7 +5061,7 @@ addMemberCompletions: function {
     }
     # an owned copy: the scans below lend the base
     firstSeg: (base.substring from: 0 to: dotPos).string
-    cur: u64
+    cur: ztypes.tid
     startSeg: dotPos + 1
     if (unitFsnoByName :snap name: firstSeg.stringView) > 0 then {
         nextDot: dotFrom :base start: dotPos + 1
@@ -5072,13 +5083,13 @@ addMemberCompletions: function {
         )
         cur = baseTypeInScope :snap :docRel :srcDir defStart: ds :l1u base: firstSeg.stringView
     }
-    if cur == 0 then return
+    if cur.isZero then return
     cur = descendSegments :snap :base start: startSeg tid0: cur
-    if cur == 0 then return
+    if cur.isZero then return
     (addTypeMembers
         prog: snap.prog
         o: snap.st
-        tid: (ztypes.tid.create from: cur.u64)
+        tid: cur
         :sink
         skipNumeric: false
     )
@@ -5365,7 +5376,7 @@ emitLabels: function {
     arr: Arr
     o: (Option zenv.ZSymbolTable).view
     prog: Ast.view
-    funcId: u64
+    funcId: ztypes.tid
     supplied: List String
     prefix: StringView
 } out bool is {
@@ -5380,7 +5391,7 @@ emitLabels: function {
             (userParams
                 :prog
                 :o
-                tid: (ztypes.tid.create from: funcId.u64)
+                tid: funcId
                 names: pnames
                 tids: pptids
                 nameIds: pnids
@@ -5484,7 +5495,14 @@ argLabelComplete: function {
         bfid: bareCalleeFuncId :o :ltv :ws :cursorPos :sp
         if bfid > 0 then {
             empty: List String
-            return (emitLabels :arr :o :prog funcId: bfid supplied: empty :prefix)
+            return (emitLabels
+                :arr
+                :o
+                :prog
+                funcId: (ztypes.tid.create from: bfid)
+                supplied: empty
+                :prefix
+            )
         }
     }
     if callId.isZero then return false
@@ -5526,7 +5544,7 @@ argLabelComplete: function {
         }
         si = si + 1
     }
-    return (emitLabels :arr :o :prog :funcId :supplied :prefix)
+    return (emitLabels :arr :o :prog funcId: (ztypes.tid.create from: funcId) :supplied :prefix)
 }
 
 # HeadScan -- the running state of the backward scan for the head of the call
