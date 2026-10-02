@@ -920,7 +920,7 @@ indexUnitDefs: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast
                     )
                 }
             }
-            cu = ztypes.tid.create from: cu + 1
+            cu = cu.next
         }
     }
 }
@@ -2970,7 +2970,7 @@ ownsTypeParams: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool i
 }
 
 # selfApplicationTid -- `type` inside a generic type's own declaration: the type
-# applied to its own parameters, as `(GB t: t)` spells it, each parameter the
+# applied to its own parameters, as `(GB :t)` spells it, each parameter the
 # GENERIC_PARAM the explicit spelling resolves it to there. A signature's partial
 # is completed per instance and a body's walk per instance, so `type` is the
 # instance being checked wherever it stands. 0 when the type owns no parameters.
@@ -4073,7 +4073,7 @@ mintMonoRefParts: function {
             :ast
             unitDecl: mainName
             sfx: sfx.stringView
-            templateId: (ztypes.tid.create from: tplId.u64)
+            templateId: tplId
             subs: typeSubs
             valSubs: valSubsR
             fallbackArg: firstA
@@ -5035,7 +5035,7 @@ qualifierValueIsCall: function {
 }
 
 # qualifierSettledNotInstance -- the name a dotted type-ref is qualified by is
-# known not to bind a unit instance without resolving it: it declares a type, a
+# known not to bind a unit instance without resolving :it declares a type, a
 # function, a data block or a unit (a nested unit or subunit), or its declaration
 # is typed as anything but a unit.
 qualifierSettledNotInstance: function {
@@ -6464,7 +6464,7 @@ registerValueParam: function {
         )
         if isref then {
             (st.typing.setChildOwnershipId
-                parentTypeId: (ztypes.tid.create from: fid.u64)
+                parentTypeId: fid
                 nameId: pm.name
                 ownership: ztypes.zparamownership.borrowMode
             )
@@ -6736,7 +6736,7 @@ recordFunctionReturn: function {
     }
     if rpt4 == 0 then {
         # a composite parameterized return whose argument names a generic
-        # parameter -- `(ListIter of: of).borrow`, `(Cell :t)` -- resolves to a
+        # parameter -- `(ListIter :of).borrow`, `(Cell :t)` -- resolves to a
         # partial spec, which the clone heals through respecialize. Concrete
         # composites answer 0 here and keep the caller's eager-path behaviour,
         # so this asks every unit: collection templates were only ever the
@@ -9580,11 +9580,10 @@ materializeCreateParams: function {
     # parameter, and forcing one only to drop it resolved every signature in
     # the member block: `StringView` reached `parseF16`/`parseF128` that way,
     # and through them f16 and f128, in every program ever compiled.
-    forceAllFields :st :ast tid: (ztypes.tid.create from: typeTid.u64
+    forceAllFields :st :ast tid: typeTid
     # every field edge is written by now -- only the synthesized borrow / == /
     # != follow this call -- so settle the type here rather than waiting for
     # resolveDef's settle, which lands after the parameter order is decided
-    )
     mkIds8: ListVal u64
     conformanceMarkerIds :st tid: typeTid ids: mkIds8
     fnameIds: ListVal u64
@@ -11378,7 +11377,7 @@ resolveVariant: function {
                 :fm
             )
             if armBadV then continue
-            # an arm over the variant's own parameter (`(Cell t: t)`) is a
+            # an arm over the variant's own parameter (`(Cell :t)`) is a
             # partial, as a field's is
             cid: (fieldSlotTid
                 :st
@@ -15516,11 +15515,10 @@ resolveDottedDef: function {
         (ztyping.nodeTypeSet
             tbl: st.typing.nodeType
             nid: defn.nid
-            tid: (ztypes.tid.create from: sda.u64
-            # a cross-unit `unit.Type` alias records its target's declaration
-            # for go-to-definition (dotted node; see the type-position stamp)
-            )
+            tid: (ztypes.tid.create from: sda.u64)
         )
+        # a cross-unit `unit.Type` alias records its target's declaration
+        # for go-to-definition (dotted node; see the type-position stamp)
         declId9: declOfTypeId :st tid: (ztypes.tid.create from: sda.u64)
         (stampRefDecl
             :st
@@ -17990,12 +17988,11 @@ resolveInlineGenericUnit: function {
                     (ztyping.nodeTypeSet
                         tbl: st.typing.nodeType
                         nid: gpnid
-                        tid: (ztypes.tid.create from: gtid5.u64
+                        tid: gtid5
                         # the parameter's own declaration carries the
                         # GENERIC_PARAM id, as a generic file unit's does: the
                         # template's rf answers `t` with the parameter, not
                         # with the constraint its definition names
-                        )
                     )
                     gpd5: st.typing.declFindChild parentDeclId: tdl5 nameId: gm.name
                     if gpd5.isZero.not then {
@@ -19986,7 +19983,7 @@ stampPendingTyperefs: function {
     }
     st.typing.typerefsStamped = seen
     gpNames: IdSet zast.nameid
-    gpiN: 1.u64
+    gpiN: ztypes.tid 1
     gpLast: st.reg.typeCount
     for gpiN < gpLast loop {
         # A PARTIAL and a trie NODE wear GENERIC_PARAM too, and neither label
@@ -19997,7 +19994,7 @@ stampPendingTyperefs: function {
         # decides this, which is the whole reason the flags exist. Measured --
         # a node reaches this sweep in 559 of 602 corpus programs, and reaches
         # no other GENERIC_PARAM consumer at all.
-        gpTid9: ztypes.tid.create from: gpiN.u64
+        gpTid9: gpiN
         if (
             (st.reg.typetypeOf typeId: gpTid9) == ztypes.ztypetype.genericParam
         ) when (st.reg.isPartialOf tid: gpTid9).not when (st.reg.isTrieNodeOf tid: gpTid9
@@ -20006,7 +20003,7 @@ stampPendingTyperefs: function {
             gnmId: nameIdOf :ast name: gnm.stringView
             if gnmId.isZero.not then gpNames.add item: gnmId
         }
-        gpiN = gpiN + 1
+        gpiN = gpiN.next
     }
     pi: u64
     pcnt: pkeys.length
@@ -21247,7 +21244,7 @@ mintMono: function {
     subs: (IdMapV zast.nameid v: ztypes.tid)
     idSubs: (IdMapV u64 v: ztypes.genericarg)
     fallbackArg: ztypes.tid
-    monoTid: u64
+    monoTid: ztypes.tid
 } is {
     # a specialisation's members resolve in the TEMPLATE's scope, with the
     # argument substitution -- lexical scoping; the instantiating unit is
@@ -21268,28 +21265,28 @@ mintMono: function {
     match (
         vto
     ) case some then {
-        st.reg.setValtype typeId: (ztypes.tid.create from: mid.u64) value: vto
+        st.reg.setValtype typeId: mid value: vto
     } case none then null
-    st.reg.setGenericOrigin typeId: (ztypes.tid.create from: mid.u64) value: templateId
-    declMonoType :st monoTid: (ztypes.tid.create from: mid) :templateId
+    st.reg.setGenericOrigin typeId: mid value: templateId
+    declMonoType :st monoTid: mid :templateId
     (mintMonoTypedefBase
         :ast
         :st
         :unitDecl
         :rf
         :templateId
-        mid: (ztypes.tid.create from: mid)
+        :mid
         :subs
         :idSubs
     )
     # a function's instance returns what its template says it returns, a
     # reference or not, as a method's clone does
     if tt == ztypes.ztypetype.functionType then {
-        copyReturnMarkers :st fromFn: templateId toFn: (ztypes.tid.create from: mid.u64)
+        copyReturnMarkers :st fromFn: templateId toFn: mid
     }
-    st.reg.setNative typeId: (ztypes.tid.create from: mid.u64) value: tplNative
+    st.reg.setNative typeId: mid value: tplNative
     if tt == ztypes.ztypetype.classType then (st.reg.setIsHeapAllocated
-        typeId: (ztypes.tid.create from: mid.u64
+        typeId: mid
         # A heap-owning generic instance carries a destructor (so a holder/local
         # frees it; the emitter builds the cname). Collections own native heap;
         # Option/Result own a heap box. A user generic whose template already has a
@@ -21297,11 +21294,10 @@ mintMono: function {
         # heap-pointer destroy), and IdMap/IdSet own their two arrays but not their
         # header, so they free like a List does. Views (ListView/OptionView) own no
         # heap -- excluded.
-        )
     )
     needsDtorM: templateNeedsMonoDtor :ast :st :rf :templateId
     if needsDtorM or (unionMonoNeedsDtor :ast :st :rf :templateId :tt) then {
-        st.reg.setNeedsDestructor typeId: (ztypes.tid.create from: mid.u64)
+        st.reg.setNeedsDestructor typeId: mid
     }
     # An elided leading type argument stages under the empty name; rebind it
     # to the template's primary generic parameter so the substituted children
@@ -21322,7 +21318,7 @@ mintMono: function {
         :unitDecl
         :rf
         :templateId
-        mid: (ztypes.tid.create from: mid)
+        :mid
         :tt
         :fallbackArg
         :subs
@@ -21333,16 +21329,16 @@ mintMono: function {
     # builtin-template list above cannot see through substitution; without
     # this, `class { val: t }` with t=String leaks its payload).
     if tt == ztypes.ztypetype.classType when monoNeedsDtor when (st.reg.needsDestructor
-        typeId: (ztypes.tid.create from: mid.u64)
+        typeId: mid
     ).not then {
-        st.reg.setNeedsDestructor typeId: (ztypes.tid.create from: mid.u64)
+        st.reg.setNeedsDestructor typeId: mid
     }
     # RECORD instances: the meta-create requalifies to the instance -- except
     # str/array, whose branches own their members.
-    mintMonoRecordShape :ast :st :rf :templateId mid: (ztypes.tid.create from: mid) :tt
-    mintMonoTagShape :st mid: (ztypes.tid.create from: mid) :tt :name
-    synthInstanceValueMembers :ast :st :rf :templateId mid: (ztypes.tid.create from: mid) :tt
-    mintSpecInstanceShape :st mid: (ztypes.tid.create from: mid) :tt
+    mintMonoRecordShape :ast :st :rf :templateId :mid :tt
+    mintMonoTagShape :st :mid :tt :name
+    synthInstanceValueMembers :ast :st :rf :templateId :mid :tt
+    mintSpecInstanceShape :st :mid :tt
 }
 
 # mintSpecInstanceShape -- an instance of a generic protocol or facet is the
@@ -22624,10 +22620,10 @@ checkUnionArmSlots: function {ast: Ast st: zenv.ZSymbolTable} is {
     wideNodes: ListVal zast.nodeid
     wideKeys: ListVal ztyping.armkey
     last: st.reg.typeCount
-    t: 1.u64
+    t: ztypes.tid 1
     for t < last loop {
-        uid: ztypes.tid.create from: t.u64
-        t = t + 1
+        uid: t
+        t = t.next
         if (st.reg.typetypeOf typeId: uid) != ztypes.ztypetype.unionType then continue
         if (st.reg.isGenericOf tid: uid) then continue
         if (st.reg.isPartialOf tid: uid) then continue
@@ -24784,7 +24780,7 @@ instanceTypeOf: function {
 
 # bindMonoValueParams -- the value half of bindMonoParams, into `subs`: each
 # numeric parameter's GENERIC_PARAM to the instance's value, so a partial over
-# one (`(Bx t: t cap: cap)`) respecializes to the instance. Kept out of
+# one (`(Bx :t :cap)`) respecializes to the instance. Kept out of
 # monoParamSubst, which maps types to types.
 bindMonoValueParams: function {
     st: zenv.ZSymbolTable
@@ -24954,7 +24950,7 @@ bindValueArgSub: function {
 }
 
 # bindPartialRowArg -- a label naming a row typed OVER the template's params
-# (`v: (ListVal t: t)`, a field `c: (slot t: t)`) infers them from the value's
+# (`v: (ListVal :t)`, a field `c: (slot :t)`) infers them from the value's
 # own arguments, as a generic function's parameter of that shape does
 # (bindPartialParamSubs); each newly bound param joins the instance's name.
 bindPartialRowArg: function {
@@ -25151,7 +25147,7 @@ appendRowNames: function {
 
 # classifyInferenceRows -- which of a template's rows infer its params: one
 # typed as a bare param binds it by name (`fNames`/`fParams`), and one typed as
-# a type application over the params (`(ListVal t: t)`, `(slot t: t)`) binds
+# a type application over the params (`(ListVal :t)`, `(slot :t)`) binds
 # them from the argument's own arguments (`ptNames`/`ptTids`).
 classifyInferenceRows: function {
     st: zenv.ZSymbolTable.view
@@ -26054,7 +26050,7 @@ genericTypeConstruction: function {
         templateId: tplId
         :subs
         valSubs: valueSubs
-        fallbackArg: (ztypes.tid.create from: firstA)
+        fallbackArg: firstA
     )
     if mid.isZero then return ztypes.noTid
     noteMonoSite :st mono: mid :call :unitDecl
@@ -28911,10 +28907,9 @@ checkUnitMemberValue: function {
         }
     }
     setu: result
-    stampGate :st nid: dp.nid tid: (ztypes.tid.create from: setu.u64
+    stampGate :st nid: dp.nid tid: setu
     # record the resolved declaration so go-to-definition on a
     # unit-qualified `unit.member` can locate its defining unit.
-    )
     udD: ztypes.declid
     udR: (st.typing.declFindChild
         parentDeclId: st.typing.programRoot
@@ -32931,12 +32926,11 @@ materialiseLiteral: function {
     if t == st.reg.literalFloatTid then base = "f64"
     if base.length == 0 then return t
     got: (walkLookupTyperef :st scope: st.curScope :ast :unitDecl :base).or d: ztypes.noTid
-    if got > 0 then return (ztypes.tid.create from: got
+    if got > 0 then return got
     # a bare literal in a value context with no expected type IS `42.i64`: it
     # demands its own default scalar, the way the suffixed form and the
     # literal-NAME form (resolveNamedType) already do. Without this nothing
     # demands i64 for `x: 42` -- a literal names nothing.
-    )
     dn: (descendNamed
         :st
         scope: st.curScope
@@ -36361,12 +36355,11 @@ checkFor: function {
     ct: st.reg.ctlPlaceholder
     (st.define
         nameId: zast.names.wkContinue
-        ztypeId: (ztypes.tid.create from: ct.u64
+        ztypeId: ct
         # inside a generator body, a loop whose body suspends keeps what its
         # header binds in the instance: the loop's C locals die at the return.
         # Asked in two steps: `and` does not short-circuit, and the count walks
         # the body
-        )
     )
     spillFor: false
     if st.typing.currentGenTid.isZero.not then {
@@ -42364,7 +42357,7 @@ refuseValueTypeArg: function {
 }
 
 # ctorTypeArgParamTid -- the type of a construction's type argument when it
-# names a type PARAMETER of the template being walked (`(Cell t: t val: v)`),
+# names a type PARAMETER of the template being walked (`(Cell :t val: v)`),
 # as the instance being walked sees it. 0 for a type argument naming anything
 # else, which walks as a value that constructs nothing: a type name resolves
 # there, and a parameter does not -- the walk reported it as unresolvable.
@@ -44336,7 +44329,7 @@ armBaseIsApplication: function {ast: Ast.view call: callref} out bool is {
 }
 
 # writtenPartialBase -- the partial of template `dtp` that an arm construction's
-# base application names (`(resultval t: t e: bool)` in a generic body); 0 when
+# base application names (`(resultval :t e: bool)` in a generic body); 0 when
 # the base is no application or its type is no such partial.
 writtenPartialBase: function {
     st: zenv.ZSymbolTable.view
@@ -44461,7 +44454,7 @@ checkGenericTypeCall: function {
             }
         }
         # the type written with its arguments, one still a parameter
-        # (`(resultval t: t e: bool).ok v`), is the partial its application built
+        # (`(resultval :t e: bool).ok v`), is the partial its application built
         appT: writtenPartialBase :st :ast :call :dtp
         if appT > 0 then {
             stampGate :st nid: call.nid tid: appT
@@ -45024,7 +45017,7 @@ fieldBoundGenericConstruction: function {
 # calleeOwnInstance -- the instance a bare generic callee names by itself: a
 # type a generic unit declares is the unit instance's copy (unitNestedSelf),
 # and `type` in a generic type's own members the instance being checked, as
-# `(GB t: t) x: ..` builds it; zero for any other callee.
+# `(GB :t) x: ..` builds it; zero for any other callee.
 calleeOwnInstance: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -45980,7 +45973,7 @@ checkDottedCallableCall: function {
         return (callleg handled: true tid: ztypes.noTid)
     } else {
         # A non-generic FUNCTION member dispatches as a user method
-        # call: call scope, arg walk, the callee's return, and the
+        # :call scope, arg walk, the callee's return, and the
         # borrow-return report.
         isMethodFn: false
         if dro < st.reg.typeById.length then {
@@ -46288,7 +46281,7 @@ callParamIdSubs: function {
 }
 
 # healGenericReturn -- a generic-instance return (`out (optionval t: u64)`,
-# `out (ListVal t: t)`) has no bare pendingTyperef name, so the substitution
+# `out (ListVal :t)`) has no bare pendingTyperef name, so the substitution
 # path leaves the mono's return unset, and a native template has no body walk to
 # heal it later. Heal from the template's resolved return type, respecialized
 # with the call's own substitutions (keyed by the function's parameter ids) --
@@ -51192,12 +51185,11 @@ checkFunctionBodyIn: function {
             ykp: st.reg.ctlPlaceholder
             (st.define
                 nameId: zast.names.wkYield
-                ztypeId: (ztypes.tid.create from: ykp.u64
+                ztypeId: ykp
                 # what `yield` evaluates to: the per-call input, which is the
                 # SECOND parameter -- the receiver is first. Stashed rather than
                 # read off a name at the yield, because the input is not a body
                 # binding and the label it carries is the CALL SITE's.
-                )
             )
             st.typing.currentYieldInputTid = (yieldInputTidOf
                 :st
@@ -51819,14 +51811,11 @@ stampMonoTemplateFn: function {
     templateFnId: u64
 } is {
     last: st.reg.typeCount
-    t: 1.u64
+    t: ztypes.tid 1
     for t < last loop {
         isMono: false
-        if (
-            (st.reg.typetypeOf typeId: (ztypes.tid.create from: t.u64)) ==
-            ztypes.ztypetype.functionType
-        ) then {
-            go: st.reg.genericOriginOf tid: (ztypes.tid.create from: t.u64)
+        if (st.reg.typetypeOf typeId: t) == ztypes.ztypetype.functionType then {
+            go: st.reg.genericOriginOf tid: t
             if go.u64 == templateFnId when go > 0 then isMono = true
         }
         if isMono then {
@@ -51836,10 +51825,10 @@ stampMonoTemplateFn: function {
                 :ast
                 :unitDecl
                 :fnOpId
-                monoId: (ztypes.tid.create from: t.u64)
+                monoId: t
             )
         }
-        t = t + 1
+        t = t.next
     }
 }
 
@@ -51930,17 +51919,17 @@ stampMonoTemplateClass: function {
     )
     if templateTid.isZero then return
     last: st.reg.typeCount
-    t: 1.u64
+    t: ztypes.tid 1
     for t < last loop {
         isMono: false
-        go: st.reg.genericOriginOf tid: (ztypes.tid.create from: t.u64)
+        go: st.reg.genericOriginOf tid: t
         if go.u64 == templateTid when go > 0 then isMono = true
         # a PARTIAL names this template too -- it records the template as its
         # origin -- but it is trie bookkeeping with no members, and walking the
         # body against it would bind the template's parameter names to generic
         # parameters rather than to types. The function and unit enumerators
         # exclude it by asking for their own typetype; this one has to say so.
-        if isMono when (st.reg.isPartialOf tid: (ztypes.tid.create from: t.u64)) then {
+        if isMono when (st.reg.isPartialOf tid: t) then {
             isMono = false
         }
         if isMono then {
@@ -51950,10 +51939,10 @@ stampMonoTemplateClass: function {
                 :ast
                 :unitDecl
                 :clsOpId
-                monoId: (ztypes.tid.create from: t.u64)
+                monoId: t
             )
         }
-        t = t + 1
+        t = t.next
     }
 }
 
@@ -52232,7 +52221,7 @@ stampUnitMonoTemplates: function {
 # it records: walking one twice would re-bind its names. An instance minted by
 # a chain of walks that already passed through its template
 # instanceRepeatLimit times is a template instantiating itself at ever larger
-# type arguments -- `f t: (wrap t: t)` inside `f` -- which no number of rounds
+# type arguments -- `f t: (wrap :t)` inside `f` -- which no number of rounds
 # ends: it is refused once, at the template's definition, and not walked.
 firstInstanceWalk: function {
     st: zenv.ZSymbolTable
@@ -52515,13 +52504,11 @@ stampMonoTemplateUnit: function {
     }
     if tplId == 0 then return
     last: st.reg.typeCount
-    t: 1.u64
+    t: ztypes.tid 1
     for t < last loop {
         isMono: false
-        if (
-            (st.reg.typetypeOf typeId: (ztypes.tid.create from: t.u64)) == ztypes.ztypetype.unitType
-        ) then {
-            go: st.reg.genericOriginOf tid: (ztypes.tid.create from: t.u64)
+        if (st.reg.typetypeOf typeId: t) == ztypes.ztypetype.unitType then {
+            go: st.reg.genericOriginOf tid: t
             if go.u64 == tplId when go > 0 then isMono = true
         }
         if isMono then {
@@ -52531,10 +52518,10 @@ stampMonoTemplateUnit: function {
                 :ast
                 :unitDecl
                 :unitOpId
-                monoId: (ztypes.tid.create from: t.u64)
+                monoId: t
             )
         }
-        t = t + 1
+        t = t.next
     }
 }
 

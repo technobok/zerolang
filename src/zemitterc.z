@@ -463,10 +463,9 @@ tagStorageCType: function {
         if tb.isZero then return ""
         # BIND the name: regNameOf hands back an OWNED copy, and taking a
         # view of it inline leaves the copy with no owner to free it.
-        tn: regNameOf :symtab tid: (ztypes.tid.create from: tb.u64
+        tn: regNameOf :symtab tid: tb
         # scalarCTypeFor, not cTypeOf: the tid is in hand, so a user type
         # shadowing a numeric name must not pick up that numeric's C spelling
-        )
         return (scalarCTypeFor
             :symtab
             name: tn.stringView
@@ -6432,7 +6431,7 @@ orderSettle: function {
     ctx.orderCtr = ctx.orderCtr + 1
     tn: "_o\{tnum}"
     # an evaluation-order temp holds the part's value for the call, which owns
-    # it: it is no address hoist and owes no destroy
+    # :it is no address hoist and owes no destroy
     ctx.orderPieceNames.append String
     ctx.orderPieceTemps.append tnum + 1
     ctx.orderPieceVals.append text
@@ -6848,7 +6847,7 @@ methodOwnerId: function {
                 return t
             } case none then null
         }
-        t = ztypes.tid.create from: t + 1
+        t = t.next
     }
     return rtid
 }
@@ -9152,11 +9151,10 @@ emitCollectionMethodCall: function {
     )
     mnId: aliasChildNameId :ast :symtab n: (ast.nodes.get i: call.callable)
     brid: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: call.callable)
-    bt: chaseAggregateTypedef :symtab :ctx tid: (ztypes.tid.create from: brid
+    bt: chaseAggregateTypedef :symtab :ctx tid: brid
     # classify by the mono's ORIGIN NAME (the graph-independent identity):
     # a by-name-resolved origin tid can diverge from the mono's captured
     # genericOriginId when extra units register their own List/Map shells
-    )
     # every leg below passes the receiver BY ADDRESS (colRecvRef), and a
     # receiver that is itself a call has no address: `&f(x)` is not C. Bind it
     # once here, where the mono's type is in hand, so each leg addresses a place.
@@ -10516,7 +10514,7 @@ userCreateCallC: function {
                     :ctx
                     cco: fid
                     nameId: (pidsNm.get i: pi)
-                    pid: (ztypes.tid.create from: (pids.get i: pi))
+                    pid: (pids.get i: pi)
                 )
             )
         }
@@ -10998,7 +10996,7 @@ emitCtorDefaultsFill: function {
             :ctx
             :tid
             nameId: (fidsNm.get i: fi)
-            fid: (ztypes.tid.create from: (fids.get i: fi))
+            fid: (fids.get i: fi)
         )
         fi = fi + 1
         if args.length > 0 then args.append ", "
@@ -12031,7 +12029,7 @@ emitMetaCreateCall: function {
                         :ast
                         :symtab
                         :ctx
-                        tid: (ztypes.tid.create from: (fids.get i: fi))
+                        tid: (fids.get i: fi)
                         thisTid: ztypes.tid
                     )
                     heapM: (isHeapPtrCollection
@@ -12282,7 +12280,7 @@ emitFnCallWithFid: function {
             :ord
             slot: pp9g
             nameId: (fpIds9Nm.get i: pp9g)
-            pid: (ztypes.tid.create from: (fpIds.get i: pp9g))
+            pid: (fpIds.get i: pp9g)
             args: argTids
         )
         pp9g = pp9g + 1
@@ -12959,7 +12957,7 @@ orderWrap: function {prefix: String.take call: String.take} out String is {
 }
 
 # emitFnptrLocalCall -- a call through a bare local/param of FUNCTION type
-# (`cb a: 5 b: 7` -> `cb(5, 7)`, `f a: a b: b` -> `f(a, b)`). "" unless the
+# (`cb a: 5 b: 7` -> `cb(5, 7)`, `f :a b: b` -> `f(a, b)`). "" unless the
 # callee is a bare atom whose stamped type is a FUNCTION (and not a top-level fn).
 emitFnptrLocalCall: function {
     ast: Ast.view
@@ -14783,10 +14781,9 @@ emitNestedMonoMethodBase: function {
                         :symtab
                         :ctx
                         owner: nlidM
-                        method: (ztypes.tid.create from: nmco.u64
+                        method: nmco
                         # a receiver-taking method takes it by pointer in both
                         # families, so address it unless it already is one
-                        )
                     )
                     nmrecv: "\{baseAtom}"
                     if (calleeTakesReceiverByPtr
@@ -16922,7 +16919,7 @@ emitDottedRead: function {
     if (baseAtomReadsAsValue :symtab n: (ast.nodes.get i: n.parent)) then bn2 = ""
     # a base with no atom NAME still has a stamped type. Every native leg
     # below sits behind `bn2.length > 0`, so a projection ((zast.poolTextAt pool: ast.names ref: h.text).stringView)
-    # or a call (s.trim, (mk s: s)) skipped the lot and fell through to the
+    # or a call (s.trim, (mk :s)) skipped the lot and fell through to the
     # user-method path, which renders the callee as the method's
     # function-type id -- a symbol nothing defines. emitDottedCall already
     # carries this leg for the CALL form; the READ form never got it.
@@ -24564,13 +24561,12 @@ emitObjIterPayload: function {
             :symtab
             :ctx
             name: payElemName.stringView
-            tid: (ztypes.tid.create from: payElemTid.u64
+            tid: payElemTid
             # A REFTYPE payload must alias. Copying its struct duplicates
             # a pointer the container still owns, so a write through the
             # copy reallocs and frees under the container -- silently for a
             # valtype field, as a use-after-free for a reftype one. A
             # valtype or scalar payload is self-contained and copies safely.
-            )
         )
         payRef: false
         if payElemTid > 0 then payRef = (symtab.reg.isReftypeOf
@@ -30986,7 +30982,7 @@ emitFnMonoInstances: function {
             }
             symtab.typing.emitMono = ztypes.noTid
         }
-        t = ztypes.tid.create from: t + 1
+        t = t.next
     }
 }
 
@@ -32004,7 +32000,7 @@ buildTypeCnames: function {
             }
         }
         typeCnames.append cn
-        ctb = ztypes.tid.create from: ctb + 1
+        ctb = ctb.next
     }
 }
 
@@ -33185,7 +33181,7 @@ emitListIter: function {
         :ect
         :buf
     )
-    li: cbaseNoPrefix :ctx tid: (ztypes.tid.create from: liId.u64
+    li: cbaseNoPrefix :ctx tid: liId
     # `iterate` is the READONLY walk, so its receiver is const and view-guard
     # checks it. No cast is needed to read the window out of it -- a const
     # struct makes its members `T* const` and the top-level const drops on read
@@ -33195,7 +33191,6 @@ emitListIter: function {
     # field. That the ELEMENTS are readonly is a typecheck-level guarantee --
     # the element inherits the strength of the lock its holder has on the
     # container.
-    )
     s8: "static z_\{li}_t z_\{nm}_iterate(const z_\{nm}_t* _this);\n"
     if (monoMemberUsed :symtab :monoId nameId: zast.names.wkIterate) then {
         buf.append s8
@@ -34885,10 +34880,9 @@ ioCanonTidAny: function {
     canon: StringView
 } out ztypes.tid is {
     st: ioCanonTid :ast :symtab :canon
-    if st > 0 then return (ztypes.tid.create from: st.u64
+    if st > 0 then return st
     # a plain source-name stem (File, IoError, Reader): the system unit first,
     # then the registry scan below for the io/cli units it does not cover.
-    )
     nameId94: zast.poolFind pool: ast.names text: canon
     mo: (ztypecheck.resolveUnitChildRo
         :ast
@@ -34903,15 +34897,15 @@ ioCanonTidAny: function {
     } case none then null
     last: symtab.reg.typeCount
     found: ztypes.tid
-    ti: 1.u64
+    ti: ztypes.tid 1
     for ti < last loop {
         if found.isZero then {
-            t9: ztypes.tid.create from: ti.u64
+            t9: ti
             okc: (definedInNonMain :symtab :ctx tid: t9) or (definedInFragmentUnit :ctx tid: t9)
             if okc.not when (originTidOf :symtab tid: t9) > 0 then okc = true
             if okc when (regNameIs :symtab tid: t9 name: canon) then found = t9
         }
-        ti = ti + 1
+        ti = ti.next
     }
     return found
 }
@@ -35122,17 +35116,17 @@ bindFragTypeTids: function {symtab: zenv.ZSymbolTable.view ctx: Ctx ast: Ast.vie
             unitNameText: ctx.fragUnits.get :i
             uid: unitDeclByName :symtab :ast name: unitNameText.stringView
             if uid > 0 then {
-                ti: 1.u64
+                ti: ztypes.tid 1
                 for ti < last loop {
                     if found.isZero when (regNameIs
                         :symtab
-                        tid: (ztypes.tid.create from: ti.u64)
+                        tid: ti
                         name: tn.stringView
                     ) then {
-                        du: defUnitIdOf :ctx tid: (ztypes.tid.create from: ti.u64)
-                        if du == uid then found = ztypes.tid.create from: ti.u64
+                        du: defUnitIdOf :ctx tid: ti
+                        if du == uid then found = ti
                     }
-                    ti = ti + 1
+                    ti = ti.next
                 }
             }
         }
@@ -35272,10 +35266,10 @@ emitIoFileConformance: function {
     buf: String.borrow
 } is {
     last: symtab.reg.typeCount
-    ti: 1.u64
+    ti: ztypes.tid 1
     for ti < last loop {
-        tid: ztypes.tid.create from: ti.u64
-        ti = ti + 1
+        tid: ti
+        ti = ti.next
         if (isIoUnitClass :symtab :ctx :tid) when (ioClassIsLive :ast :symtab :ctx :tid) then {
             emitConformanceImplsForType :ast :symtab :ctx implTid: tid isFacet: false :buf
         }
@@ -35610,7 +35604,7 @@ emitMainFwdDecls: function {symtab: zenv.ZSymbolTable.view ctx: Ctx buf: String.
         if (isStructTypetype tt: (symtab.reg.typetypeOf typeId: t)) then {
             emitTypeFwdDecl :symtab :ctx tid: t :buf
         }
-        t = ztypes.tid.create from: t + 1
+        t = t.next
     }
 }
 
@@ -35744,7 +35738,7 @@ buildUserTypeList: function {
                 ) then acc.append t
             }
         }
-        t = ztypes.tid.create from: t + 1
+        t = t.next
     }
 }
 
@@ -36067,7 +36061,7 @@ collectLateMonosKind: function {
             monoId: tm
             :userList
         ) then acc.append tm
-        tm = ztypes.tid.create from: tm + 1
+        tm = tm.next
     }
 }
 
@@ -36544,7 +36538,7 @@ emitFnptrTypedefs: function {
                 :buf
             )
         }
-        t0 = ztypes.tid.create from: t0 + 1
+        t0 = t0.next
     }
     ctx.fnptrPassDone = true
 }
@@ -36593,7 +36587,7 @@ seedFnptrValues: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx
                 typeRefC :ast :symtab :ctx tid: rt thisTid: ztypes.tid
             }
         }
-        ft = ztypes.tid.create from: ft + 1
+        ft = ft.next
     }
 }
 
@@ -36641,7 +36635,7 @@ emitUserProtocols: function {
                 )
             }
         }
-        tp = ztypes.tid.create from: tp + 1
+        tp = tp.next
     }
 }
 
@@ -36703,7 +36697,7 @@ collectLateInstances: function {
     tm: ztypes.tid
     for tm < last loop {
         if (isLateUserInstance :ast :symtab :ctx tcl: tm :userList) then acc.append tm
-        tm = ztypes.tid.create from: tm + 1
+        tm = tm.next
     }
 }
 
@@ -37298,7 +37292,7 @@ classifyMonos: function {
     tcl: ztypes.tid
     for tcl < last loop {
         classifyMonoAt :ast :symtab :ctx :userListM :tcl :work
-        tcl = ztypes.tid.create from: tcl + 1
+        tcl = tcl.next
     }
 }
 
@@ -37341,7 +37335,7 @@ emitCollectionMonos: function {
             monoId: lvId
             :buf
         )
-        tid = ztypes.tid.create from: tid + 1
+        tid = tid.next
     }
     tid2: u64
     for tid2 < work.wList.length loop {
@@ -37413,7 +37407,7 @@ emitCollectionMonos: function {
 # emitUserGenericInstances -- user generic VARIANT monos (e.g. slot_i64, through
 # emitOneVariant as the system variant monos are) and RECORD/CLASS monos (e.g.
 # Box_i64, through emitOneRecord), each after the instances it embeds by value:
-# `Box: record { inner: (Cell t: t) }` holds a Cell_i64, which the type-id order
+# `Box: record { inner: (Cell :t) }` holds a Cell_i64, which the type-id order
 # can put second. A cycle -- which only a boxed member could close -- falls back
 # to the listed order.
 emitUserGenericInstances: function {
@@ -38279,7 +38273,7 @@ emitProtocolImpl: function {
         (recFieldLists
             :ast
             :symtab
-            tid: (ztypes.tid.create from: smid.u64)
+            tid: smid
             names: pnames
             ids: pids
             nameIds: pidsNm
@@ -38449,7 +38443,7 @@ emitFacetImpl: function {
         (recFieldLists
             :ast
             :symtab
-            tid: (ztypes.tid.create from: smid.u64)
+            tid: smid
             names: pnames
             ids: pids
             nameIds: pidsNm
@@ -39063,7 +39057,7 @@ emitIoWrapperCreate: function {
             :ctx
             :call
             label: pnm.stringView
-            ptid: (ztypes.tid.create from: (pids.get i: pi))
+            ptid: (pids.get i: pi)
         )
         anid: ctorArgNodeByLabel :ast :call label: pnm.stringView
         (orderArgAt
@@ -40378,8 +40372,7 @@ unitMemberTid: function {
     ownerTid: ztypes.tid
     nameId: zast.nameid
 } out ztypes.tid is {
-    if ownerTid.isZero then return (ztypes.tid.create from: (userFnIdById :ast :symtab :ctx :nameId)
-    )
+    if ownerTid.isZero then return (userFnIdById :ast :symtab :ctx :nameId)
     co: (symtab.typing.declChildOfId parentTypeId: ownerTid :nameId).or d: ztypes.noTid
     return co
 }

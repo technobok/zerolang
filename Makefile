@@ -2002,7 +2002,7 @@ perf: $(PERFBIN)
 #
 # +681 a data element may not take the name of one of the block's own members:
 # 0 behaviour, +681 source.
-ALLOC_BASELINE := 2020043
+ALLOC_BASELINE := 2018890
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
