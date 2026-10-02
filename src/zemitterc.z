@@ -225,7 +225,7 @@ atomVidIfPlain: function {
         dbn: ast.nodes.get i: n.parent
         db: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: dbn)
         if db.length == 0 then return (ztypes.vid.create from: 0)
-        dbv: atomVid :symtab nid: (atomNodeId n: dbn)
+        dbv: atomVid :symtab nid: (atomNodeId n: dbn).u64
         dbn9: (atomNodeId n: dbn).u64
         if (localAtomNameIsAt :symtab :ctx nid: dbn9 name: db.stringView vid: dbv :text
         ) then return dbv
@@ -252,7 +252,7 @@ paramVidIn: function {
         pm: ast.nodes.get i: pmId
         if pm.namedoperation when pm.name == nameId when pm.operation > 0 then {
             opNid: interpPartNodeId n: (ast.nodes.get i: pm.operation)
-            return (defVid :symtab nid: opNid)
+            return (defVid :symtab nid: opNid.u64)
         }
     }
     return (ztypes.vid.create from: 0)
@@ -2271,13 +2271,13 @@ atomTextOf: function {ast: Ast.view n: astnode} outx StringView is {
 }
 
 # atomNodeId -- an atomid node's id (0 for any other shape).
-atomNodeId: function {n: astnode.view} out u64 is {
+atomNodeId: function {n: astnode.view} out zast.nodeid is {
     match (
         n
     ) case atomid then {
-        return n.nodeid.u64
+        return n.nodeid
     } else {
-        return 0
+        return zast.nodeid
     }
 }
 
@@ -3577,10 +3577,10 @@ ptrHeldValtype: function {
     n: astnode.view
 } out bool is {
     nid: valueAtomNid :n
-    if nid == 0 then return false
+    if nid.isZero then return false
     # the variable first: most atoms are not pointers, and the pointer table is
     # the one short scan; the alias walk pathIsPointer adds runs only for one
-    vid: atomVid :symtab :nid
+    vid: atomVid :symtab nid: nid.u64
     if (isPtrVid :ctx :vid).not then return false
     if (pathIsPointer :ast :symtab :ctx :n).not then return false
     vt: chaseAggregateTypedef :symtab :ctx tid: (symtab.reg.variableTypeOf id: vid)
@@ -3606,15 +3606,15 @@ passesByValue: function {
 # valueAtomNid -- the node id of a bare local read, through any parentheses:
 # an atom, or the `:name` argument shorthand, which is the same read spelled
 # as a label. 0 for anything else.
-valueAtomNid: function {n: astnode.view} out u64 is {
+valueAtomNid: function {n: astnode.view} out zast.nodeid is {
     match (
         n
     ) case atomid then {
-        return n.nodeid.u64
+        return n.nodeid
     } case labelvalue then {
-        return n.nodeid.u64
+        return n.nodeid
     } else {
-        return 0
+        return zast.nodeid
     }
 }
 
@@ -3719,7 +3719,7 @@ refValtypeResult: function {
     n: astnode.view
 } out bool is {
     if (nodeIsRefBorrowResult :ast :symtab :ctx :n).not then return false
-    return (symtab.reg.isValtypeOf tid: (stampIdOf :symtab nid: (interpPartNodeId :n)))
+    return (symtab.reg.isValtypeOf tid: (stampIdOf :symtab nid: (interpPartNodeId :n).u64))
 }
 
 # nodeIsRefBorrowResult -- the node evaluates to a reference-returning call's
@@ -3733,7 +3733,7 @@ nodeIsRefBorrowResult: function {
 } out bool is {
     f: refBorrowCalleeFid :ast :symtab :ctx :n
     if f == 0 then return false
-    r: stampIdOf :symtab nid: (interpPartNodeId :n)
+    r: stampIdOf :symtab nid: (interpPartNodeId :n).u64
     ft: ztypes.tid.create from: f.u64
     if (fnReturnsRefBorrow :ast :symtab :ctx fid: ft retTid: r).not then return false
     if (symtab.reg.isNativeOf tid: ft) then return true
@@ -4025,17 +4025,17 @@ takeAliasBaseNid: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     n: astnode.view
-} out u64 is {
+} out zast.nodeid is {
     match (
         n
     ) case statementline then {
         return (takeAliasBaseNid :ast :symtab n: (ast.nodes.get i: n.statementline))
     } case dottedpath then {
-        if (leafMoves :ast leaf: n.child).not then return 0
+        if (leafMoves :ast leaf: n.child).not then return zast.nodeid
         bnid: atomNodeId n: (ast.nodes.get i: n.parent)
-        bt: stampIdOf :symtab nid: bnid
+        bt: stampIdOf :symtab nid: bnid.u64
         bo: originTidOf :symtab tid: bt
-        if bo > 0 then return 0
+        if bo > 0 then return zast.nodeid
         btt: symtab.reg.typetypeOf typeId: bt
         isUC: (
             (btt == ztypes.ztypetype.recordType) or
@@ -4044,9 +4044,9 @@ takeAliasBaseNid: function {
             (btt == ztypes.ztypetype.protocolType)
         )
         if isUC then return bnid
-        return 0
+        return zast.nodeid
     } else {
-        return 0
+        return zast.nodeid
     }
 }
 
@@ -4066,8 +4066,8 @@ takeAliasBase: function {
     n: astnode.view
 } outx StringView is {
     tbn: takeAliasBaseNid :ast :symtab :n
-    if tbn == 0 then return ""
-    return (atomTextOf :ast n: (ast.nodes.get i: (zast.nodeid.create from: tbn.u32.orPanic)))
+    if tbn.isZero then return ""
+    return (atomTextOf :ast n: (ast.nodes.get i: tbn))
 }
 
 # takeStringSource -- if `n` is a `<atom>.take` that moves a heap value
@@ -4089,10 +4089,10 @@ takeStringSource: function {
         if (leafMoves :ast leaf: n.child).not then return ""
         if (moveMarkerMovesBase :ast :symtab :ctx pnid: n.parent).not then return ""
         bnid: atomNodeId n: (ast.nodes.get i: n.parent)
-        bt: stampIdOf :symtab nid: bnid
+        bt: stampIdOf :symtab nid: bnid.u64
         if (symtab.reg.typetypeOf typeId: bt) == ztypes.ztypetype.functionType then return ""
         bn9r: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent))
-        return (takeSourceResolve :ctx name: bn9r.stringView vid: (atomVid :symtab nid: bnid))
+        return (takeSourceResolve :ctx name: bn9r.stringView vid: (atomVid :symtab nid: bnid.u64))
     } else {
         return ""
     }
@@ -4151,7 +4151,9 @@ isLocalTake: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.v
 # its source: an explicit take of a local or of a field, or a bare local the
 # value's destination takes; looking through a one-line block and a statement
 # line; 0 for any other value.
-armTakeLeaf: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.view} out u64 is {
+armTakeLeaf: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.view
+} out zast.nodeid is {
     match (
         n
     ) case statement then {
@@ -4159,15 +4161,15 @@ armTakeLeaf: function {ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.v
             s0Id: zast.kidAt kids: ast.kids span: n.statements i: 0
             return (armTakeLeaf :ast :symtab n: (ast.nodes.get i: s0Id))
         }
-        return 0
+        return zast.nodeid
     } case statementline then {
         return (armTakeLeaf :ast :symtab n: (ast.nodes.get i: n.statementline))
     } else {
-        leaf: (zast.nodeIdOf :n).u64
+        leaf: zast.nodeIdOf :n
         if (isFieldTake :ast :n) or (isLocalTake :ast :symtab :n) then return leaf
         # a bare local the checker moved into where the value lands
-        if (symtab.typing.armLeafMoves.has item: leaf) then return leaf
-        return 0
+        if (symtab.typing.armLeafMoves.has item: leaf.u64) then return leaf
+        return zast.nodeid
     }
 }
 
@@ -4183,13 +4185,13 @@ armValueExpr: function {
 } out String is {
     vx: emitExpr :ast :symtab :ctx :n
     tn: armTakeLeaf :ast :symtab :n
-    if tn == 0 then return vx
+    if tn.isZero then return vx
     if (movedSourceNeedsZero
         :ast
         :symtab
-        n: (ast.nodes.get i: (zast.nodeid.create from: tn.u32.orPanic))
+        n: (ast.nodes.get i: tn)
     ).not then return vx
-    tt: stampIdOf :symtab nid: tn
+    tt: stampIdOf :symtab nid: tn.u64
     tz: movedZeroC :symtab :ctx tid: tt
     if tz.length == 0 then return vx
     tc: typeRefC :ast :symtab :ctx tid: tt thisTid: ztypes.tid
@@ -4211,13 +4213,13 @@ emitArmTakeZero: function {
     buf: String.borrow
 } is {
     tn: armTakeLeaf :ast :symtab :n
-    if tn == 0 then return
+    if tn.isZero then return
     if (movedSourceNeedsZero
         :ast
         :symtab
-        n: (ast.nodes.get i: (zast.nodeid.create from: tn.u32.orPanic))
+        n: (ast.nodes.get i: tn)
     ).not then return
-    tz: movedZeroC :symtab :ctx tid: (stampIdOf :symtab nid: tn)
+    tz: movedZeroC :symtab :ctx tid: (stampIdOf :symtab nid: tn.u64)
     if tz.length == 0 then return
     zl: "\{ind}\{rv} = \{tz};\n"
     buf.append zl
@@ -4244,7 +4246,7 @@ emitNarrowedTakeZero: function {
         emitNarrowedTakeZero :ast :symtab :ctx n: sln :ind :buf
     } case dottedpath then {
         if (leafMoves :ast leaf: n.child) then {
-            bn9v: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent))
+            bn9v: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent)).u64
             if (vvHas xs: ctx.narrowBox vid: bn9v) then {
                 bn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent))
                 box: takeSourceResolve :ctx name: bn.stringView vid: bn9v
@@ -4306,14 +4308,14 @@ implicitTakeSourceAtom: function {
 
 # moveMarkerBase -- the base node id of an explicit `<x>.take` / `<x>.hold`; 0
 # when the node is not a move marker.
-moveMarkerBase: function {ast: Ast.view n: astnode.view} out u64 is {
+moveMarkerBase: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
     match (
         n
     ) case dottedpath then {
-        if (leafMoves :ast leaf: n.child).not then return 0
-        return n.parent.u64
+        if (leafMoves :ast leaf: n.child).not then return zast.nodeid
+        return n.parent
     } else {
-        return 0
+        return zast.nodeid
     }
 }
 
@@ -4371,15 +4373,15 @@ moveNeedsZero: function {symtab: zenv.ZSymbolTable.view vid: ztypes.vid} out boo
 movedSourceNeedsZero: function {
     ast: Ast.view symtab: zenv.ZSymbolTable.view n: astnode.view
 } out bool is {
-    src: u64
+    src: zast.nodeid
     mb: moveMarkerBase :ast :n
-    if mb > 0 then {
-        src = atomNodeId n: (ast.nodes.get i: (zast.nodeid.create from: mb.u32.orPanic))
+    if mb.isZero.not then {
+        src = atomNodeId n: (ast.nodes.get i: mb)
     } else if (isBareNameValue :n) then {
         src = interpPartNodeId :n
     }
-    if src == 0 then return true
-    return (moveNeedsZero :symtab vid: (atomVid :symtab nid: src))
+    if src.isZero then return true
+    return (moveNeedsZero :symtab vid: (atomVid :symtab nid: src.u64))
 }
 
 # emitExplicitTakeZero -- an explicit `<atom>.take` argument: the source is
@@ -4397,7 +4399,7 @@ emitExplicitTakeZero: function {
     if (movedSourceNeedsZero :ast :symtab n: (ast.nodes.get i: a.operation)).not then return
     etid: (stampIdOf
         :symtab
-        nid: (interpPartNodeId n: (ast.nodes.get i: a.operation))
+        nid: (interpPartNodeId n: (ast.nodes.get i: a.operation)).u64
     )
     ez: movedZeroC :symtab :ctx tid: etid
     if ez.length > 0 then buf.append "\{ind}\{ts} = \{ez};\n"
@@ -4421,7 +4423,7 @@ emitMovedSourceZero: function {
     if (movedSourceNeedsZero :ast :symtab :n).not then return
     isrc: implicitTakeSource :ast :symtab :ctx :n
     if isrc.length == 0 then return
-    iz: movedZeroC :symtab :ctx tid: (stampIdOf :symtab nid: (interpPartNodeId :n))
+    iz: movedZeroC :symtab :ctx tid: (stampIdOf :symtab nid: (interpPartNodeId :n).u64)
     if iz.length > 0 then buf.append "\{ind}\{isrc} = \{iz};\n"
 }
 
@@ -4911,13 +4913,13 @@ aliasOrChildId: function {
 
 # dottedParentNodeId -- the node a dotted path `n` reads its member of, 0 when
 # `n` is not a dotted path.
-dottedParentNodeId: function {n: astnode.view} out u64 is {
+dottedParentNodeId: function {n: astnode.view} out zast.nodeid is {
     match (
         n
     ) case dottedpath then {
-        return n.parent.u64
+        return n.parent
     } else {
-        return 0
+        return zast.nodeid
     }
 }
 
@@ -4939,7 +4941,7 @@ dottedBaseNodeId: function {ast: Ast.view n: astnode.view} out u64 is {
     match (
         n
     ) case dottedpath then {
-        return (atomNodeId n: (ast.nodes.get i: n.parent))
+        return (atomNodeId n: (ast.nodes.get i: n.parent)).u64
     } else {
         return 0
     }
@@ -5104,7 +5106,7 @@ svArgAddr: function {
             pIsStr: (stampIsStr
                 :symtab
                 :ctx
-                nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
+                nid: (interpPartNodeId n: (ast.nodes.get i: n.parent)).u64
             )
             pev: (atomVidIfPlain
                 :ast
@@ -5259,7 +5261,7 @@ svNativeArgFrag: function {
     sav: svArgAddr :ast :symtab :ctx :n
     if sav.length > 0 then return sav
     sx: emitExpr :ast :symtab :ctx :n
-    stampTid: stampIdOf :symtab nid: (interpPartNodeId :n)
+    stampTid: stampIdOf :symtab nid: (interpPartNodeId :n).u64
     if stampTid == ctx.strTid then {
         sxh: (hoistBorrowValArg
             :ast
@@ -5712,7 +5714,7 @@ emitDataIndexCall: function {
     {
         cn: ast.nodes.get i: call.callable
         if cn.dottedpath.not then return ""
-        dtid = dataBlockTid :symtab nid: (atomNodeId n: (ast.nodes.get i: cn.parent))
+        dtid = dataBlockTid :symtab nid: (atomNodeId n: (ast.nodes.get i: cn.parent)).u64
         if dtid.isZero then {
             bst: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: cn.parent)).u64
             if bst > 0 when (
@@ -5825,7 +5827,7 @@ dottedReceiverStampId: function {
     match (
         callable
     ) case dottedpath then {
-        return (stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: callable.parent)))
+        return (stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: callable.parent)).u64)
     } else {
         return (ztypes.tid.create from: 0)
     }
@@ -5856,7 +5858,8 @@ receiverNodeIsPtr: function {
     ctx: Ctx
     n: astnode.view
 } out bool is {
-    return (argAlreadyPointer :ast :symtab :ctx :n vid: (atomVid :symtab nid: (valueAtomNid :n)))
+    return (argAlreadyPointer :ast :symtab :ctx :n vid: (atomVid :symtab nid: (valueAtomNid :n).u64)
+    )
 }
 
 # emitNativeArgMethod -- a native method that takes ARGUMENTS, emitted from its
@@ -5939,7 +5942,7 @@ emitNativeArgMethod: function {
         st: ord
         mark: mk
         text: recv
-        nid: (zast.nodeid.create from: recvNid.u32.orPanic)
+        nid: recvNid
         byPtr: true
         slot: 0
     )
@@ -6083,7 +6086,7 @@ emitStringArgMethod: function {
                 argval = av.take
                 argNode = a.operation.u64
                 argOpNode: ast.nodes.get i: a.operation
-                argTid = stampIdOf :symtab nid: (interpPartNodeId n: argOpNode)
+                argTid = stampIdOf :symtab nid: (interpPartNodeId n: argOpNode).u64
                 argPtr = pathIsPointer :ast :symtab :ctx n: argOpNode
             }
         }
@@ -6528,7 +6531,7 @@ orderConstant: function {
     # the parameter takes the part by pointer
     byPtr: bool
 } out bool is {
-    cv: symtab.typing.nodeConstIn mono: ctx.curThisTid.u64 nid: (interpPartNodeId :n)
+    cv: symtab.typing.nodeConstIn mono: ctx.curThisTid.u64 nid: (interpPartNodeId :n).u64
     if cv.kind.none.not then return true
     # a constant a unit or a data block names reaches the C as its literal
     if (isCNumberLiteral s: text) then return true
@@ -7168,7 +7171,7 @@ instanceMethodArgValue: function {
     # about the variable rather than the emitted text. An
     # interpolated argument is a statement expression, never a
     # variable, so it leaves this 0.
-    avNd: u64
+    avNd: zast.nodeid
     if iiVal.length > 0 then {
         atomVarId = iiVal.take
         usedInterp = true
@@ -7195,7 +7198,7 @@ instanceMethodArgValue: function {
     return (instargval
         :usedInterp
         posIdx: positionalIdx
-        :avNd
+        avNd: avNd.u64
     )
 }
 
@@ -7618,9 +7621,7 @@ orderMethodParam: function {
                 :symtab
                 :ctx
                 n: (ast.nodes.get
-                    i: (zast.nodeid.create
-                        from: (writtenArgNode :ast :call pos: written - 1).u32.orPanic
-                    )
+                    i: (writtenArgNode :ast :call pos: written - 1)
                 )
                 text: one.stringView
                 byPtr: ctx.lastArgByPtr
@@ -7662,7 +7663,7 @@ writtenArgPosition: function {ast: Ast.view call: zast.callrow.view nid: u64} ou
 }
 
 # writtenArgNode -- the value node of the argument written at `pos` (from 0).
-writtenArgNode: function {ast: Ast.view call: zast.callrow.view pos: u64} out u64 is {
+writtenArgNode: function {ast: Ast.view call: zast.callrow.view pos: u64} out zast.nodeid is {
     w: u64
     ax: u64
     for ax < call.arguments.count loop {
@@ -7670,11 +7671,11 @@ writtenArgNode: function {ast: Ast.view call: zast.callrow.view pos: u64} out u6
         ax = ax + 1
         a: ast.nodes.get i: aId
         if a.namedoperation then {
-            if w == pos then return a.operation.u64
+            if w == pos then return a.operation
             w = w + 1
         }
     }
-    return 0
+    return zast.nodeid
 }
 
 # nextWrittenParam -- the parameter not yet built whose argument is written
@@ -7786,7 +7787,7 @@ operatorReceiverTid: function {
             rms9: (monoStampIdOf
                 :symtab
                 :ctx
-                nid: (interpPartNodeId n: (ast.nodes.get i: cbm9.parent))
+                nid: (interpPartNodeId n: (ast.nodes.get i: cbm9.parent)).u64
             )
             if rms9.isZero.not then rt0 = rms9
         }
@@ -8329,7 +8330,7 @@ callRhsIsBorrow: function {
     ctx: Ctx.view
     call: zast.callrow.view
 } out bool is {
-    cstid: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: call.callable))
+    cstid: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: call.callable)).u64
     if (funcBorrowFlag :symtab tid: cstid) then return true
     cnmId: atomNameIdOf :ast n: (ast.nodes.get i: call.callable)
     if cnmId.isZero.not then {
@@ -8367,7 +8368,7 @@ isSvAsStringNode: function {
         cn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
         if cn.stringView != "asString" then return false
         bnidA: interpPartNodeId n: (ast.nodes.get i: n.parent)
-        btA: chaseStrTypedef :symtab :ctx tid: (stampIdOf :symtab nid: bnidA)
+        btA: chaseStrTypedef :symtab :ctx tid: (stampIdOf :symtab nid: bnidA.u64)
         return btA == ctx.svTid
     } else {
         return false
@@ -8439,7 +8440,7 @@ refBorrowCalleeFid: function {
             n: (ast.nodes.get i: n.statementline)
         )
     } case call then {
-        cid: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.callable))
+        cid: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.callable)).u64
         if (funcBorrowFlag :symtab tid: cid) then return cid
         ch8: aliasChildName :ast :symtab n: (ast.nodes.get i: n.callable)
         if ch8.length == 0 then return 0
@@ -8457,7 +8458,7 @@ refBorrowCalleeFid: function {
     } case dottedpath then {
         # a zero-arg method auto-call reads as a dotted path
         ch7: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
-        pt7: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
+        pt7: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent)).u64
         cc7: symtab.typing.declChildOf pool: ast.names parentTypeId: pt7 name: ch7.stringView
         match (
             cc7
@@ -8514,7 +8515,7 @@ bindingRhsIsBorrow: function {
         )
         if chId == zast.names.wkBorrow then return true
         ch: zast.nameTextAt :ast ref: chId
-        bnmV: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent))
+        bnmV: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent)).u64
         if (vvHas xs: ctx.narrowBox vid: bnmV) then {
             # a field read off a narrowed subject is a shallow-copy borrow (it aliases
             # the subject's heap); an ownership builtin yields an owned value, and so
@@ -8542,7 +8543,7 @@ bindingRhsIsBorrow: function {
             } case none then null
             return true
         }
-        ptid: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
+        ptid: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent)).u64
         cco: symtab.typing.declChildOf pool: ast.names parentTypeId: ptid name: ch.stringView
         match (
             cco
@@ -8581,19 +8582,21 @@ rhsBorrowMarkerBase: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     n: astnode.view
-} out u64 is {
+} out zast.nodeid is {
     match (
         n
     ) case dottedpath then {
-        if (atomNameIdOf :ast n: (ast.nodes.get i: n.child)) != zast.names.wkBorrow then return 0
+        if (
+            (atomNameIdOf :ast n: (ast.nodes.get i: n.child)) != zast.names.wkBorrow
+        ) then return zast.nodeid
         pidB: interpPartNodeId n: (ast.nodes.get i: n.parent)
-        bst: stampIdOf :symtab nid: pidB
-        if bst.isZero then return 0
-        if (symtab.reg.isReftypeOf tid: bst).not then return 0
-        if (stampIdOf :symtab nid: n.nodeid.u64) != bst then return 0
-        return n.parent.u64
+        bst: stampIdOf :symtab nid: pidB.u64
+        if bst.isZero then return zast.nodeid
+        if (symtab.reg.isReftypeOf tid: bst).not then return zast.nodeid
+        if (stampIdOf :symtab nid: n.nodeid.u64) != bst then return zast.nodeid
+        return n.parent
     } else {
-        return 0
+        return zast.nodeid
     }
 }
 
@@ -8620,7 +8623,7 @@ aliasBaseOf: function {
     avn: astnode.view
 } out aliasbase is {
     bmb: rhsBorrowMarkerBase :ast :symtab n: avn
-    if bmb > 0 then return (aliasbase node: bmb place: false)
+    if bmb.isZero.not then return (aliasbase node: bmb.u64 place: false)
     tbs: typedefBorrowSource :ast :symtab n: avn
     if tbs > 0 then return (aliasbase node: tbs place: true)
     if (rhsIsBorrowGet :ast :symtab :ctx n: avn) then {
@@ -8656,8 +8659,8 @@ typedefBorrowSource: function {
         if ck != zast.callkind.typedefBorrow then return 0
         return (underBorrowMarker
             :ast
-            nid: (zast.nodeid.create from: (castSourceArg :ast call: n).u32.orPanic)
-        )
+            nid: (castSourceArg :ast call: n)
+        ).u64
     } else {
         return 0
     }
@@ -8665,7 +8668,7 @@ typedefBorrowSource: function {
 
 # castSourceArg -- the value a cast is built from: its `from:` argument, or its
 # one unlabelled argument; 0 when it has neither.
-castSourceArg: function {ast: Ast.view call: zast.callrow.view} out u64 is {
+castSourceArg: function {ast: Ast.view call: zast.callrow.view} out zast.nodeid is {
     k: u64
     for k < call.arguments.count loop {
         aId: zast.kidAt kids: ast.kids span: call.arguments i: k
@@ -8673,22 +8676,20 @@ castSourceArg: function {ast: Ast.view call: zast.callrow.view} out u64 is {
         a: ast.nodes.get i: aId
         if a.namedoperation then {
             an: zast.nameTextAt :ast ref: a.name
-            if (an.length == 0) or (an.stringView == "from") then return a.operation.u64
+            if (an.length == 0) or (an.stringView == "from") then return a.operation
         }
     }
-    return 0
+    return zast.nodeid
 }
 
 # underBorrowMarker -- the path a `.borrow` marker is written on (`xs` of
 # `xs.borrow`), else the node itself.
-underBorrowMarker: function {ast: Ast.view nid: zast.nodeid} out u64 is {
-    if nid.isZero then return 0
+underBorrowMarker: function {ast: Ast.view nid: zast.nodeid} out zast.nodeid is {
+    if nid.isZero then return zast.nodeid
     src: ast.nodes.get i: nid
-    if src.dottedpath.not then return nid.u64
-    if (
-        (atomNameIdOf :ast n: (ast.nodes.get i: src.child)) != zast.names.wkBorrow
-    ) then return nid.u64
-    return src.parent.u64
+    if src.dottedpath.not then return nid
+    if (atomNameIdOf :ast n: (ast.nodes.get i: src.child)) != zast.names.wkBorrow then return nid
+    return src.parent
 }
 
 # valueStructRefNode -- the node of a value that calls a user function
@@ -8711,7 +8712,7 @@ valueStructRefNode: function {
         return 0
     }
     # the result's type first: it is one stamp read, and most calls fail it
-    rt: stampIdOf :symtab nid: (interpPartNodeId :n)
+    rt: stampIdOf :symtab nid: (interpPartNodeId :n).u64
     if (isValueStructTid :symtab :ctx tid: rt).not then return 0
     fid: ztypes.tid.create from: (refBorrowCalleeFid :ast :symtab :ctx :n).u64
     if fid.isZero then return 0
@@ -8853,7 +8854,7 @@ bindChasedTid: function {
     avn: astnode.view
 } out ztypes.tid is {
     bt: stampIdOf :symtab nid: n.nodeid.u64
-    if bt.isZero then bt = stampIdOf :symtab nid: (interpPartNodeId n: avn)
+    if bt.isZero then bt = stampIdOf :symtab nid: (interpPartNodeId n: avn).u64
     return (ztypes.tid.create from: (chaseAggregateTypedef :symtab :ctx tid: bt))
 }
 
@@ -8943,7 +8944,7 @@ rhsIsBorrowedFieldRead: function {
         fpid: interpPartNodeId n: (ast.nodes.get i: n.parent)
         fco: (symtab.typing.declChildOf
             pool: ast.names
-            parentTypeId: (stampIdOf :symtab nid: fpid)
+            parentTypeId: (stampIdOf :symtab nid: fpid.u64)
             name: fch
         )
         match (
@@ -9079,7 +9080,7 @@ emitEmptyColCreate: function {
         amid0: (bindingStampOf
             :symtab
             :ctx
-            nid: (interpPartNodeId n: (ast.nodes.get i: call.callable))
+            nid: (interpPartNodeId n: (ast.nodes.get i: call.callable)).u64
         )
         amid: chaseAggregateTypedef :symtab :ctx tid: amid0
         if (originIsTid
@@ -9095,7 +9096,7 @@ emitEmptyColCreate: function {
         smid0: (bindingStampOf
             :symtab
             :ctx
-            nid: (interpPartNodeId n: (ast.nodes.get i: call.callable))
+            nid: (interpPartNodeId n: (ast.nodes.get i: call.callable)).u64
         )
         smid: chaseAggregateTypedef :symtab :ctx tid: smid0
         if (originIsTid
@@ -9179,7 +9180,7 @@ emitCollectionMethodCall: function {
     {
         rck9: symtab.typing.callKind.get key: (dottedParentNodeId
             n: (ast.nodes.get i: call.callable)
-        )
+        ).u64
         match (
             rck9
         ) case some then {
@@ -9191,9 +9192,7 @@ emitCollectionMethodCall: function {
     # receiver, so it still runs before the arguments, and addressed through
     # its deref
     recvNode: (ast.nodes.get
-        i: (zast.nodeid.create
-            from: (dottedParentNodeId n: (ast.nodes.get i: call.callable)).u32.orPanic
-        )
+        i: (dottedParentNodeId n: (ast.nodes.get i: call.callable))
     )
     if (nodeIsRefBorrowResult :ast :symtab :ctx n: recvNode) then {
         bp9: (hoistForAddress
@@ -9349,7 +9348,7 @@ emitListMethodCall: function {
     }
     if (dispatchIs :ctx id: mnId at: dispatch.extend) then {
         eaa: listTakeArgBase :ast :call label: "from"
-        eaV: atomVid :symtab nid: (listTakeArgBaseNid :ast :call label: "from")
+        eaV: atomVid :symtab nid: (listTakeArgBaseNid :ast :call label: "from").u64
         ea: emitLocalAtomName :ctx name: eaa vid: eaV
         e5: "\{cb}_extend(\{recvR}, &\{ea})"
         return e5
@@ -9495,7 +9494,7 @@ stringKeyArgPointer: function {
             :ctx
             av: expr
             tid: ctx.strTid
-            argNid: (ctorArgNodeByLabel :ast :call :label)
+            argNid: (ctorArgNodeByLabel :ast :call :label).u64
         )
         return "&\{nmK}"
     }
@@ -9518,7 +9517,7 @@ ownedReceiverHoist: function {
     n: astnode.view
 } out String is {
     if (isNonLvalueArg s: expr).not then return ""
-    rtid: stampIdOf :symtab nid: (interpPartNodeId :n)
+    rtid: stampIdOf :symtab nid: (interpPartNodeId :n).u64
     if rtid.isZero then return ""
     if (symtab.reg.needsDestructor typeId: rtid).not then return ""
     rnid: (zast.nodeIdOf :n).u64
@@ -10231,11 +10230,11 @@ labelArgNode: function {
     ast: Ast.view call: zast.callrow.view label: StringView form: argform
 } out u64 is {
     byLabel: ctorArgNodeByLabel :ast :call :label
-    if byLabel > 0 then return byLabel
+    if byLabel.isZero.not then return byLabel.u64
     match (
         form
     ) case labelled then return 0 case addressed then return 0 case value then null case moved then null case read then null
-    return (ctorArgNodeByPosition :ast :call idx: 0)
+    return (ctorArgNodeByPosition :ast :call idx: 0).u64
 }
 
 # listTakeArgBaseNid -- listTakeArgBase as an interned name id, for a caller
@@ -10244,7 +10243,7 @@ listTakeArgBaseNid: function {
     ast: Ast.view
     call: zast.callrow.view
     label: StringView
-} out u64 is {
+} out zast.nodeid is {
     arx319: u64
     for arx319 < call.arguments.count loop {
         aId: zast.kidAt kids: ast.kids span: call.arguments i: arx319
@@ -10258,7 +10257,7 @@ listTakeArgBaseNid: function {
             )
         }
     }
-    return 0
+    return zast.nodeid
 }
 
 # listTakeArgBase -- the base atom of a `x.take` list argument (the
@@ -10269,20 +10268,20 @@ listTakeArgBase: function {
     label: StringView
 } outx StringView is {
     lid: listTakeArgBaseNid :ast :call :label
-    if lid == 0 then return "0"
-    return (atomTextOf :ast n: (ast.nodes.get i: (zast.nodeid.create from: lid.u32.orPanic)))
+    if lid.isZero then return "0"
+    return (atomTextOf :ast n: (ast.nodes.get i: lid))
 }
 
 # the base path of a `.take` argument `n`.
-takeArgBaseNid: function {ast: Ast.view n: astnode.view} out u64 is {
+takeArgBaseNid: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
     match (
         n
     ) case dottedpath then {
         return (atomNodeId n: (ast.nodes.get i: n.parent))
     } case atomid then {
-        return n.nodeid.u64
+        return n.nodeid
     } else {
-        return 0
+        return zast.nodeid
     }
 }
 
@@ -10473,7 +10472,7 @@ userCreateCallC: function {
         k = k + 1
         pname: pnames.get i: pi
         aNid: ctorArgNodeByLabel :ast :call label: pname.stringView
-        if aNid > 0 then {
+        if aNid.isZero.not then {
             (orderUserFnArg
                 :ast
                 :symtab
@@ -10482,7 +10481,7 @@ userCreateCallC: function {
                 pinId: (pids.get i: pi)
                 pinNm: pname.stringView
                 pname: (zast.nameid.create from: (pidsNm.get i: pi).u32.orPanic)
-                argOpNode: (ast.nodes.get i: (zast.nodeid.create from: aNid.u32.orPanic))
+                argOpNode: (ast.nodes.get i: aNid)
                 slot: pi
                 :ord
             )
@@ -10545,12 +10544,10 @@ emitQualRecvMethodCall: function {
         recvNdQ: zast.nodeid
         if (ctorHasLabel :ast :call label: recvNmQ.stringView) then {
             recvExQ = ctorArgByLabel :ast :symtab :ctx :call label: recvNmQ.stringView
-            recvNdQ = (zast.nodeid.create
-                from: (ctorArgNodeByLabel :ast :call label: recvNmQ.stringView).u32.orPanic
-            )
+            recvNdQ = ctorArgNodeByLabel :ast :call label: recvNmQ.stringView
         } else {
             recvExQ = ctorArgByPosition :ast :symtab :ctx :call idx: 0
-            recvNdQ = zast.nodeid.create from: (ctorArgNodeByPosition :ast :call idx: 0).u32.orPanic
+            recvNdQ = ctorArgNodeByPosition :ast :call idx: 0
             posStartQ = 1
         }
         # a receiver already held as a pointer passes as it stands -- as
@@ -10611,7 +10608,7 @@ emitTypeQualCall: function {
         cq: ast.nodes.get i: call.callable
         if cq.dottedpath then btid = (stampIdOf
             :symtab
-            nid: (interpPartNodeId n: (ast.nodes.get i: cq.parent))
+            nid: (interpPartNodeId n: (ast.nodes.get i: cq.parent)).u64
         )
     }
     # a type written as an application (`(Pair t: u64).create`) has no bare
@@ -11096,8 +11093,7 @@ userCreateCtor: function {
                 :symtab
                 :ctx
                 n: (ast.nodes.get
-                    i: (zast.nodeid.create from: (writtenArgNode :ast :call pos: wr - 1).u32.orPanic
-                    )
+                    i: (writtenArgNode :ast :call pos: wr - 1)
                 )
                 text: cav.stringView
                 byPtr: cav.stringView.startsWith "&"
@@ -11221,9 +11217,7 @@ orderRecordField: function {
             :symtab
             :ctx
             n: (ast.nodes.get
-                i: (zast.nodeid.create
-                    from: (writtenArgNode :ast :call pos: written - 1).u32.orPanic
-                )
+                i: (writtenArgNode :ast :call pos: written - 1)
             )
             text: av.stringView
             byPtr: byref
@@ -11288,7 +11282,7 @@ ctorArgPositions: function {
             writ.append (writtenArgPosition
                 :ast
                 :call
-                nid: (ctorArgNodeByLabel :ast :call label: nm.stringView)
+                nid: (ctorArgNodeByLabel :ast :call label: nm.stringView).u64
             )
         } else {
             ca: ctorArgFor :ast :call label: nm.stringView posIdx: positionalIdx
@@ -11411,13 +11405,15 @@ ctorArgFor: function {
     posIdx: u64
 } out ctorarg is {
     if (ctorHasLabel :ast :call :label) then {
-        return (ctorarg nid: (ctorArgNodeByLabel :ast :call :label) labelled: true)
+        return (ctorarg nid: (ctorArgNodeByLabel :ast :call :label).u64 labelled: true)
     }
-    return (ctorarg nid: (ctorArgNodeByPosition :ast :call idx: posIdx) labelled: false)
+    return (ctorarg nid: (ctorArgNodeByPosition :ast :call idx: posIdx).u64 labelled: false)
 }
 
 # the constructor-argument node matching a field label.
-ctorArgNodeByLabel: function {ast: Ast.view call: zast.callrow.view label: StringView} out u64 is {
+ctorArgNodeByLabel: function {
+    ast: Ast.view call: zast.callrow.view label: StringView
+} out zast.nodeid is {
     arx389: u64
     for arx389 < call.arguments.count loop {
         aId: zast.kidAt kids: ast.kids span: call.arguments i: arx389
@@ -11425,10 +11421,10 @@ ctorArgNodeByLabel: function {ast: Ast.view call: zast.callrow.view label: Strin
         a: ast.nodes.get i: aId
         if a.namedoperation then {
             an: zast.nameTextAt :ast ref: a.name
-            if an.stringView == label then return a.operation.u64
+            if an.stringView == label then return a.operation
         }
     }
-    return 0
+    return zast.nodeid
 }
 
 # ctorArgByLabel -- that argument's emitted text. Selected through the node
@@ -11441,8 +11437,8 @@ ctorArgByLabel: function {
     label: StringView
 } out String is {
     aid: ctorArgNodeByLabel :ast :call :label
-    if aid == 0 then return "0"
-    return (ctorArgTextAt :ast :symtab :ctx aid: (zast.nodeid.create from: aid.u32.orPanic))
+    if aid.isZero then return "0"
+    return (ctorArgTextAt :ast :symtab :ctx :aid)
 }
 
 # ctorArgTextAt -- one argument node's emitted text. An interpolated argument
@@ -11477,7 +11473,7 @@ argAlreadyPointer: function {
     vid: ztypes.vid
 } out bool is {
     if (isPtrVid :ctx :vid) then return true
-    if (isHeapPtrCollection :symtab :ctx tid: (stampIdOf :symtab nid: (interpPartNodeId :n))
+    if (isHeapPtrCollection :symtab :ctx tid: (stampIdOf :symtab nid: (interpPartNodeId :n).u64)
     ) then return true
     return (pathIsPointer :ast :symtab :ctx :n)
 }
@@ -11513,7 +11509,9 @@ argIsPointerByLabel: function {
 # ctorArgNodeByPosition -- ctorArgByPosition's node id rather than its C text,
 # for a caller that must look the argument up again instead of printing it.
 # 0 when there is no positional argument at that index.
-ctorArgNodeByPosition: function {ast: Ast.view call: zast.callrow.view idx: u64} out u64 is {
+ctorArgNodeByPosition: function {
+    ast: Ast.view call: zast.callrow.view idx: u64
+} out zast.nodeid is {
     seen: u64
     arx409: u64
     for arx409 < call.arguments.count loop {
@@ -11523,12 +11521,12 @@ ctorArgNodeByPosition: function {ast: Ast.view call: zast.callrow.view idx: u64}
         if a.namedoperation then {
             an: zast.nameTextAt :ast ref: a.name
             if an.length == 0 then {
-                if seen == idx then return a.operation.u64
+                if seen == idx then return a.operation
                 seen = seen + 1
             }
         }
     }
-    return 0
+    return zast.nodeid
 }
 
 # ctorArgByPosition -- the idx-th POSITIONAL (unlabeled) argument's C text, for a
@@ -11544,8 +11542,8 @@ ctorArgByPosition: function {
     idx: u64
 } out String is {
     posParamId: ctorArgNodeByPosition :ast :call :idx
-    if posParamId == 0 then return ""
-    return (ctorArgTextAt :ast :symtab :ctx aid: (zast.nodeid.create from: posParamId.u32.orPanic))
+    if posParamId.isZero then return ""
+    return (ctorArgTextAt :ast :symtab :ctx aid: posParamId)
 }
 
 # ctorInterpArgAt -- the interp-arg form (emitInterpArgForParam) for one
@@ -11997,9 +11995,7 @@ emitMetaCreateCall: function {
                     :symtab
                     :ctx
                     n: (ast.nodes.get
-                        i: (zast.nodeid.create
-                            from: (writtenArgNode :ast :call pos: wr - 1).u32.orPanic
-                        )
+                        i: (writtenArgNode :ast :call pos: wr - 1)
                     )
                     text: av.stringView
                     byPtr: ptrField
@@ -12083,7 +12079,7 @@ metaCreateFieldText: function {
                 :ctx
                 av: av.stringView
                 pid: (ztypes.tid.create from: ffidL.u64)
-                argNid: (ctorArgNodeByLabel :ast :call label: fname)
+                argNid: (ctorArgNodeByLabel :ast :call label: fname).u64
             )
             av = avM.take
         }
@@ -12286,7 +12282,7 @@ emitGenericFnCall: function {
 } out String is {
     gdc: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable)
     if gdc.length > 0 then return ""
-    gmf: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: call.callable))
+    gmf: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: call.callable)).u64
     if gmf.isZero then return ""
     if (symtab.reg.typetypeOf typeId: gmf) != ztypes.ztypetype.functionType then return ""
     gmo: originTidOf :symtab tid: gmf
@@ -12351,10 +12347,10 @@ dottedMemberTidOf: function {
         } case none then null
         return ztypes.tid
     }
-    pb: u32
+    pb: zast.nodeid
     cln: ast.nodes.get i: callableId
     if cln.dottedpath then pb = cln.parent
-    nst: pathUnitTidOf :ast :symtab :ctx baseId: (zast.nodeid.create from: pb)
+    nst: pathUnitTidOf :ast :symtab :ctx baseId: pb
     if nst.isZero then return ztypes.tid
     co: symtab.typing.declChildOfId parentTypeId: nst nameId: childId
     match (
@@ -12375,7 +12371,7 @@ calledInstanceOf: function {
     call: zast.callrow.view
     fid: ztypes.tid
 } out ztypes.tid is {
-    sf: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: call.callable))
+    sf: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: call.callable)).u64
     if (originIsTid :symtab tid: sf originTid: fid).not then return fid
     if (fnIsNativeId :symtab fid: sf) then return fid
     return sf
@@ -12958,7 +12954,7 @@ emitFnptrLocalCall: function {
     dct: aliasChildName :ast :symtab n: (ast.nodes.get i: call.callable)
     if dct.length > 0 then return ""
     cnid: interpPartNodeId n: (ast.nodes.get i: call.callable)
-    cTid: stampIdOf :symtab nid: cnid
+    cTid: stampIdOf :symtab nid: cnid.u64
     if cTid.isZero then return ""
     if (symtab.reg.typetypeOf typeId: cTid) != ztypes.ztypetype.functionType then return ""
     stn: regNameOf :symtab tid: cTid
@@ -13394,19 +13390,19 @@ namedCalleeFnId: function {
 } out ztypes.tid is {
     cbn0: atomNodeId n: (ast.nodes.get i: call.callable)
     calleeIsLocal: (
-        (cbn0 > 0) and
-        (symtab.typing.atomVariableId.get key: cbn0).none.not or
+        cbn0.isZero.not and
+        (symtab.typing.atomVariableId.get key: cbn0.u64).none.not or
         (symtab.typing.atomVariableId.get key: call.callable.u64).none.not
     )
     fid: ztypes.tid
     if calleeIsLocal.not then fid = userFnId :ast :symtab :ctx name: cn0
-    if fid.isZero when cbn0 > 0 then {
-        clv: symtab.typing.atomVariableId.get key: cbn0
+    if fid.isZero when cbn0.isZero.not then {
+        clv: symtab.typing.atomVariableId.get key: cbn0.u64
         match (
             clv
         ) case some then null case none then {
-            cst: monoStampIdOf :symtab :ctx nid: cbn0
-            if cst.isZero then cst = stampIdOf :symtab nid: cbn0
+            cst: monoStampIdOf :symtab :ctx nid: cbn0.u64
+            if cst.isZero then cst = stampIdOf :symtab nid: cbn0.u64
             if cst > 0 when (
                 (symtab.reg.typetypeOf typeId: cst) == ztypes.ztypetype.functionType
             ) then fid = cst
@@ -13436,7 +13432,7 @@ namedCalleeCtorTid: function {
     }
     cstid: (stampIdOf
         :symtab
-        nid: (interpPartNodeId n: (ast.nodes.get i: call.callable))
+        nid: (interpPartNodeId n: (ast.nodes.get i: call.callable)).u64
     )
     if cstid.isZero then return fid
     if (originTidOf :symtab tid: cstid).isZero then return fid
@@ -13472,7 +13468,7 @@ emitStringJoinCall: function {
         if sji > 0 when (
             (stampIdOf
                 :symtab
-                nid: (interpPartNodeId n: (ast.nodes.get i: sja.operation))
+                nid: (interpPartNodeId n: (ast.nodes.get i: sja.operation)).u64
             ) ==
             ctx.strTid
         ) then sjIsStr = true
@@ -13517,7 +13513,7 @@ emitNamedCalleeChain: function {
     if cn0.stringView == "stringJoin" then {
         return (emitStringJoinCall :ast :symtab :ctx :call)
     }
-    cnV: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: call.callable))
+    cnV: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: call.callable)).u64
     fplc: (emitFnptrLocalCall
         :ast
         :symtab
@@ -14516,7 +14512,7 @@ emitNestedStringViewBase: function {
 } out String is {
     if (ztypecheck.isStringViewMember name: mn2) then {
         ppid: interpPartNodeId n: (ast.nodes.get i: n.parent)
-        parentStampTid: stampIdOf :symtab nid: ppid
+        parentStampTid: stampIdOf :symtab nid: ppid.u64
         if parentStampTid == ctx.strTid then {
             pbv: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent)
             pbq: (atomVidIfPlain
@@ -14814,7 +14810,7 @@ unitInstanceMemberRead: function {
     ctx: Ctx
     n: zast.dottedpathrow.view
 } out String is {
-    bst: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
+    bst: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent)).u64
     if (symtab.reg.typetypeOf typeId: bst) != ztypes.ztypetype.unitType then return ""
     if (originTidOf :symtab tid: bst).isZero then return ""
     cid: aliasOrChildId :ast :symtab aliasId: n.nodeid childId: n.child
@@ -14926,7 +14922,7 @@ emitDottedNestedBase: function {
     # stamp is the TEMPLATE, whose members name functions that are never emitted
     nnid9: interpPartNodeId n: (ast.nodes.get i: n.parent)
     nlid: monoStampIdOf :symtab :ctx nid: nnid9.u64
-    if nlid.isZero then nlid = stampIdOf :symtab nid: nnid9
+    if nlid.isZero then nlid = stampIdOf :symtab nid: nnid9.u64
     nlid = typedefMethodOwner :ast :symtab :ctx tid: nlid mn: mn2
     # a Map/Set-typed base is a heap pointer regardless of how it was
     # reached (a field path fails pathIsPointer's lock-field test)
@@ -15485,7 +15481,7 @@ emitIdCollectionMemberRead: function {
     }
     dbt: (dataBlockTid
         :symtab
-        nid: (atomNodeId n: (ast.nodes.get i: n.parent))
+        nid: (atomNodeId n: (ast.nodes.get i: n.parent)).u64
     )
     if dbt.isZero.not then {
         dres: emitDataMember :ast :symtab :ctx :n :dbt mn2: mn2.string
@@ -15663,7 +15659,7 @@ dottedTypeConstRead: function {
     ctx: Ctx
     n: zast.dottedpathrow.view
 } out String is {
-    bt: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
+    bt: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent)).u64
     if bt.isZero then return ""
     cid: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
     if (symtab.typing.isAsConstDecl
@@ -15879,7 +15875,7 @@ emitDottedAtomBase: function {
     eNum: dottedAtomNumericBase :bn2 :mn2
     if eNum.length > 0 then return eNum
     bnid2: interpPartNodeId n: (ast.nodes.get i: n.parent)
-    bareTid: chaseStrTypedef :symtab :ctx tid: (stampIdOf :symtab nid: bnid2)
+    bareTid: chaseStrTypedef :symtab :ctx tid: (stampIdOf :symtab nid: bnid2.u64)
     bareSv: bareTid == ctx.svTid
     bareStr: bareTid == ctx.strTid
     if bareStr when (isSvNoArgNative name: mn2) then {
@@ -15912,7 +15908,7 @@ emitDottedAtomBase: function {
     # arrives HERE, through the
     # member-read path, not through emitInstanceMethodCall.
     bstamp0: monoStampIdOf :symtab :ctx nid: bnid2.u64
-    if bstamp0.isZero then bstamp0 = stampIdOf :symtab nid: bnid2
+    if bstamp0.isZero then bstamp0 = stampIdOf :symtab nid: bnid2.u64
     if boxElem > 0 then bstamp0 = ztypes.tid.create from: boxElem.u64
     bstamp: bstamp0
     bsn0: regNameView :symtab tid: bstamp0
@@ -16230,7 +16226,7 @@ emitResolvedCopy: function {
         if (isNonLvalueArg s: cvpv.stringView).not then {
             cvpn: ast.nodes.get i: n.parent
             cvan2: atomTextOf :ast n: cvpn
-            cvav: atomVid :symtab nid: (atomNodeId n: cvpn)
+            cvav: atomVid :symtab nid: (atomNodeId n: cvpn).u64
             if cvan2.length > 0 when (isPtrVid :ctx vid: cvav) then {
                 return "\{ctx.strC}_copy(\{cvpv})"
             }
@@ -16273,7 +16269,7 @@ colCopyCall: function {
     if fam9 == 0 then return ""
     cpv9: emitExpr :ast :symtab :ctx n: (ast.nodes.get i: n.parent)
     cpn9: ast.nodes.get i: n.parent
-    cpvid9: atomVid :symtab nid: (atomNodeId n: cpn9)
+    cpvid9: atomVid :symtab nid: (atomNodeId n: cpn9).u64
     cpa9: "&\{cpv9}"
     if (isPtrVid :ctx vid: cpvid9) then cpa9 = cpv9.copy
     return (containerCopyText
@@ -16328,7 +16324,7 @@ emitCopyConversion: function {
     ctx: Ctx
     n: zast.dottedpathrow.view
 } out String is {
-    cvp: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
+    cvp: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent)).u64
     # `.copy` of a function is another reference to it: the base, which the
     # checker stamped as the function and not as a call of it
     if cvp > 0 when (symtab.reg.typetypeOf typeId: cvp) == ztypes.ztypetype.functionType then {
@@ -16343,7 +16339,7 @@ emitCopyConversion: function {
     cvms: (monoStampIdOf
         :symtab
         :ctx
-        nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
+        nid: (interpPartNodeId n: (ast.nodes.get i: n.parent)).u64
     )
     if cvms > 0 then {
         return (emitResolvedCopy :ast :symtab :ctx :n tid: cvms inGeneric: true)
@@ -16577,14 +16573,14 @@ moveMarkerMovesBase: function {
     pnid: zast.nodeid
 } out bool is {
     tknid: atomNodeId n: (ast.nodes.get i: pnid)
-    if tknid == 0 then tknid = pnid.u64
-    tkt: stampIdOf :symtab nid: tknid
+    if tknid.isZero then tknid = pnid
+    tkt: stampIdOf :symtab nid: tknid.u64
     if tkt == ctx.strTid then return true
     tt: symtab.reg.typetypeOf typeId: tkt
     if (tt == ztypes.ztypetype.unionType) or (tt == ztypes.ztypetype.protocolType) then return true
     if tt == ztypes.ztypetype.functionType then return true
     if tt == ztypes.ztypetype.classType then {
-        return (isPtrVid :ctx vid: (atomVid :symtab nid: tknid)).not
+        return (isPtrVid :ctx vid: (atomVid :symtab nid: tknid.u64)).not
     }
     return false
 }
@@ -16690,7 +16686,7 @@ emitDottedNativeMarker: function {
     # a data block's element read (`codes.ht`, `consts.codes.ht`, `primes.0`):
     # the block is the base's stamped type, whatever shape the base takes;
     # no base is emitted
-    dpbT: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
+    dpbT: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent)).u64
     if dpbT > 0 when (symtab.reg.typetypeOf typeId: dpbT) == ztypes.ztypetype.dataType then {
         mn2d: zast.nameTextAt :ast ref: mn2Id
         dres0: emitDataMember :ast :symtab :ctx :n dbt: dpbT mn2: mn2d
@@ -16759,14 +16755,14 @@ emitDottedNativeMarker: function {
 # resolves to a FUNCTION definition: in value position it is a call.
 baseAtomNamesFunction: function {symtab: zenv.ZSymbolTable.view n: astnode.view} out bool is {
     anid: atomNodeId :n
-    if anid == 0 then return false
-    avo: symtab.typing.atomVariableId.get key: anid
+    if anid.isZero then return false
+    avo: symtab.typing.atomVariableId.get key: anid.u64
     match (
         avo
     ) case some then {
         return false
     } case none then null
-    rdo: symtab.typing.refDecl.get key: anid
+    rdo: symtab.typing.refDecl.get key: anid.u64
     match (
         rdo
     ) case some then {
@@ -16785,9 +16781,9 @@ baseAtomNamesFunction: function {symtab: zenv.ZSymbolTable.view n: astnode.view}
 # program declares.
 baseAtomIsFoldedString: function {symtab: zenv.ZSymbolTable.view n: astnode.view} out bool is {
     anid: atomNodeId :n
-    if anid == 0 then return false
-    if (symtab.typing.atomVariableId.get key: anid).none.not then return false
-    g: symtab.typing.nodeConst.get key: anid
+    if anid.isZero then return false
+    if (symtab.typing.atomVariableId.get key: anid.u64).none.not then return false
+    g: symtab.typing.nodeConst.get key: anid.u64
     match (
         g
     ) case some then {
@@ -16819,7 +16815,7 @@ boxMemberElem: function {
     if (ztypecheck.boxMemberDelegates :ast nameId: mnId).not then return 0
     bnid: interpPartNodeId n: (ast.nodes.get i: n.parent)
     bt: monoStampIdOf :symtab :ctx nid: bnid.u64
-    if bt.isZero then bt = stampIdOf :symtab nid: bnid
+    if bt.isZero then bt = stampIdOf :symtab nid: bnid.u64
     if bt.isZero then return 0
     if (isBoxTid :symtab tid: bt).not then {
         bxn: regNameView :symtab tid: bt
@@ -16849,7 +16845,7 @@ emitDottedRead: function {
     # the member is asked by ID: the legs below lend ast, and an id is a scalar
     dcMnId: atomNameIdOf :ast n: (ast.nodes.get i: n.child)
     if (dispatchIs :ctx id: dcMnId at: dispatch.orPanic) then {
-        pStamp: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent))
+        pStamp: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.parent)).u64
         pMono: chaseAggregateTypedef :symtab :ctx tid: pStamp
         pOrig: monoOriginName :symtab tid: (ztypes.tid.create from: pMono.u64)
         isRcc: false
@@ -16884,7 +16880,7 @@ emitDottedRead: function {
     # vid stays 0 and bn2 becomes the substituted text.
     bn2v: ztypes.vid
     if bn2a.stringView == bn2r then {
-        bn2v = atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent))
+        bn2v = atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent)).u64
     }
     bn2: emitLocalAtomNameAt :symtab :ctx nid: baseAtomNid name: bn2r.stringView vid: baseAtomVid
     # a base atom that names a FUNCTION auto-calls, so the receiver is what the
@@ -16900,7 +16896,7 @@ emitDottedRead: function {
     # carries this leg for the CALL form; the READ form never got it.
     if bn2.length == 0 then {
         nbId: interpPartNodeId n: (ast.nodes.get i: n.parent)
-        nbT: chaseStrTypedef :symtab :ctx tid: (stampIdOf :symtab nid: nbId
+        nbT: chaseStrTypedef :symtab :ctx tid: (stampIdOf :symtab nid: nbId.u64
         # StringView only: svValueForm reads a String receiver's expression
         # twice, once for .data and once for .size, and twice is a second
         # evaluation when the expression is a call.
@@ -16973,7 +16969,7 @@ loadValueStructRef: function {
     e: String.take
 } out String is {
     if (valueStructRefNode :ast :symtab :ctx :n) == 0 then return e
-    rt: stampIdOf :symtab nid: (interpPartNodeId :n)
+    rt: stampIdOf :symtab nid: (interpPartNodeId :n).u64
     ph: hoistForAddress :ast :symtab :ctx av: e.stringView tid: rt argNid: 0 ptr: true
     return "(*\{ph})"
 }
@@ -17003,7 +16999,7 @@ emitExpr: function {
         :ast
         :symtab
         :ctx
-        nid: (zast.nodeid.create from: (interpPartNodeId :n).u32.orPanic)
+        nid: (interpPartNodeId :n)
     )
     if cv.length > 0 then return cv
     match (
@@ -17126,16 +17122,16 @@ controlValueIsReference: function {
     if owns.not then owns = isHeapPtrCollection :symtab :ctx tid: vt
     if owns.not then owns = symtab.reg.needsDestructor typeId: vt
     if owns.not then return false
-    blocks: ListVal u32
+    blocks: ListVal zast.nodeid
     ztypecheck.controlArmBlocks :ast :nid into: blocks
     place: false
     for each blk: blocks loop {
-        lf: armLeafNode :ast :symtab blockId: (zast.nodeid.create from: blk)
-        if lf > 0 when (armLeafIsPlace
+        lf: armLeafNode :ast :symtab blockId: blk
+        if lf.isZero.not when (armLeafIsPlace
             :ast
             :symtab
             :ctx
-            n: (ast.nodes.get i: (zast.nodeid.create from: lf.u32.orPanic))
+            n: (ast.nodes.get i: lf)
         ) then place = true
     }
     return place
@@ -17148,14 +17144,14 @@ armLeafNode: function {
     symtab: zenv.ZSymbolTable.view
     # the arm body
     blockId: zast.nodeid
-} out u64 is {
+} out zast.nodeid is {
     isBlock: false
     bn: ast.nodes.get i: blockId
     isBlock = bn.statement
-    if isBlock.not then return blockId.u64
+    if isBlock.not then return blockId
     lineId: ztypecheck.lastStmtLineIdAt :ast oId: blockId
-    if lineId.isZero then return 0
-    return (ztypecheck.implicitReturnValue st: symtab :ast :lineId).u64
+    if lineId.isZero then return zast.nodeid
+    return (ztypecheck.implicitReturnValue st: symtab :ast :lineId)
 }
 
 # armLeafIsPlace -- an arm's value reads storage something else owns: a local or a
@@ -17192,17 +17188,17 @@ armLeafIsPlace: function {
 
 # armValueNode -- the value node an arm written as a one-line block or a statement
 # line holds; the node itself otherwise.
-armValueNode: function {ast: Ast.view n: astnode.view} out u64 is {
+armValueNode: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
     match (
         n
     ) case statementline then {
         return (armValueNode :ast n: (ast.nodes.get i: n.statementline))
     } case statement then {
-        if n.statements.count.u64 != 1 then return n.nodeid.u64
+        if n.statements.count.u64 != 1 then return n.nodeid
         s0Id: zast.kidAt kids: ast.kids span: n.statements i: 0
         return (armValueNode :ast n: (ast.nodes.get i: s0Id))
     } else {
-        return (zast.nodeIdOf :n).u64
+        return (zast.nodeIdOf :n)
     }
 }
 
@@ -17248,7 +17244,7 @@ armRefLeaf: function {
     lt: (bindingStampOf
         :symtab
         :ctx
-        nid: (interpPartNodeId n: (ast.nodes.get i: (zast.nodeid.create from: lf.u32.orPanic)))
+        nid: (interpPartNodeId n: (ast.nodes.get i: lf)).u64
     )
     ct: typeRefC :ast :symtab :ctx tid: lt thisTid: ztypes.tid
     # a Set or Map value is its own reference: a place arm yields the pointer, an
@@ -17258,7 +17254,7 @@ armRefLeaf: function {
     if (armLeafIsPlace :ast :symtab :ctx :n) then {
         pv: (atomVid
             :symtab
-            nid: (atomNodeId n: (ast.nodes.get i: (zast.nodeid.create from: lf.u32.orPanic)))
+            nid: (atomNodeId n: (ast.nodes.get i: lf)).u64
         )
         if pv.isZero.not when (isPtrVid :ctx vid: pv) then {
             pa: "((\{ct}*)(\{text}))"
@@ -17268,9 +17264,9 @@ armRefLeaf: function {
         return ra
     }
     # declared zero by the statement and assigned where the arm runs
-    nm: argHoistName :symtab :ctx argNid: lf fallback: "_ah"
+    nm: argHoistName :symtab :ctx argNid: lf.u64 fallback: "_ah"
     dt: String
-    if (hoistOwes :symtab argNid: lf ptr: false) then dt = (hoistDestroyLine
+    if (hoistOwes :symtab argNid: lf.u64 ptr: false) then dt = (hoistDestroyLine
         :symtab
         :ctx
         tid: lt
@@ -18153,7 +18149,7 @@ interpBaseIsMapEntry: function {
         return (interpBaseIsMapEntry :ast :symtab n: (ast.nodes.get i: n.statementline))
     } case dottedpath then {
         bnid: atomNodeId n: (ast.nodes.get i: n.parent)
-        bt: stampIdOf :symtab nid: bnid
+        bt: stampIdOf :symtab nid: bnid.u64
         meT: builtinTid :ast :symtab base: "MapEntry"
         if (originIsTid
             :symtab
@@ -18217,8 +18213,8 @@ interpBaseIsOwnedStructField: function {
         # well. Without this the read falls
         # through to the owned-call-result leg, which FREES the field's String
         # out from under its owner.
-        if bnid == 0 then bnid = interpPartNodeId n: pnd
-        bt: stampIdOf :symtab nid: bnid
+        if bnid.isZero then bnid = interpPartNodeId n: pnd
+        bt: stampIdOf :symtab nid: bnid.u64
         bo: originTidOf :symtab tid: bt
         # a user-generic mono owns its fields once it carries a destructor;
         # other monos (views, collections) keep the owned-call-result legs
@@ -18261,7 +18257,7 @@ interpPartTypeName: function {
     if di0.length > 0 then return di0
     tn0: stampNameDeep :symtab :n
     if tn0.length == 0 when ctx.curThisTid > 0 then {
-        msid: monoStampIdOf :symtab :ctx nid: (interpPartNodeId :n)
+        msid: monoStampIdOf :symtab :ctx nid: (interpPartNodeId :n).u64
         if msid > 0 then tn0 = regNameOf :symtab tid: msid
     }
     tnTd0: typedefChaseBaseName :ast :symtab tid: (stampIdDeep :symtab :n)
@@ -18336,7 +18332,8 @@ appendStringPart: function {
     )
     if isAtomP then {
         sAcc: ".".string
-        if an0.length > 0 when (isPtrVid :ctx vid: (atomVid :symtab nid: (atomNodeId :n))) then {
+        if an0.length > 0 when (isPtrVid :ctx vid: (atomVid :symtab nid: (atomNodeId :n).u64)
+        ) then {
             sAcc = "->"
         }
         # a String read through a borrowed field is a pointer with no variable
@@ -18347,10 +18344,10 @@ appendStringPart: function {
     }
     # a fallback here may NOT be spelled `_h<n>`: that prefix is the TmpCtr's,
     # and this name comes from `ctx.argHoistCtr`, so two counters would collide
-    hNm: argHoistName :symtab :ctx argNid: (interpPartNodeId :n) fallback: "_hp"
+    hNm: argHoistName :symtab :ctx argNid: (interpPartNodeId :n).u64 fallback: "_hp"
     buf.append "\{ind}\{ctx.strC}_t \{hNm} = \{val};\n"
     buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, \{hNm}.data, \{hNm}.size);\n"
-    if (scopeOwnsTemp :symtab argNid: (interpPartNodeId :n)) then {
+    if (scopeOwnsTemp :symtab argNid: (interpPartNodeId :n).u64) then {
         buf.append "\{ind}\{ctx.strC}_free(&\{hNm});\n"
     }
 }
@@ -18446,7 +18443,7 @@ emitInterpPart: function {
         appendStringPart :ast :symtab :ctx :n val: val.stringView :sNm :ind :buf
     } else if (originIsTid
         :symtab
-        tid: (stampIdOf :symtab nid: (interpPartNodeId :n))
+        tid: (stampIdOf :symtab nid: (interpPartNodeId :n).u64)
         originTid: (ctx.origins.get i: family.str)
     ) then {
         buf.append "\{ind}\{ctx.strC}_append(&\{sNm}, \{val}.data, \{val}.len);\n"
@@ -18464,19 +18461,19 @@ emitInterpPart: function {
 # interpPartNodeId -- the nodeid of a value shape, the id its stamp is keyed on:
 # a path, a call, a literal, or a control-flow value held in place (an `if`
 # written as an interpolation hole). 0 for a node that is not a value.
-interpPartNodeId: function {n: astnode.view} out u64 is {
+interpPartNodeId: function {n: astnode.view} out zast.nodeid is {
     match (
         n
     ) case atomid then {
-        return n.nodeid.u64
+        return n.nodeid
     } case labelvalue then {
-        return n.nodeid.u64
+        return n.nodeid
     } case call then {
-        return n.nodeid.u64
+        return n.nodeid
     } case dottedpath then {
-        return n.nodeid.u64
+        return n.nodeid
     } case atomstring then {
-        return n.nodeid.u64
+        return n.nodeid
     } else {
         return (controlValueNodeId :n)
     }
@@ -18486,23 +18483,23 @@ interpPartNodeId: function {n: astnode.view} out u64 is {
 # for, with, a bare block, a data block), 0 for any other shape. These are
 # values wherever an operand may be parenthesised, and a parenthesis leaves no
 # row of its own to carry the stamp.
-controlValueNodeId: function {n: astnode.view} out u64 is {
+controlValueNodeId: function {n: astnode.view} out zast.nodeid is {
     match (
         n
     ) case ifexpr then {
-        return n.nodeid.u64
+        return n.nodeid
     } case caseexpr then {
-        return n.nodeid.u64
+        return n.nodeid
     } case forexpr then {
-        return n.nodeid.u64
+        return n.nodeid
     } case withexpr then {
-        return n.nodeid.u64
+        return n.nodeid
     } case statement then {
-        return n.nodeid.u64
+        return n.nodeid
     } case datablock then {
-        return n.nodeid.u64
+        return n.nodeid
     } else {
-        return 0
+        return zast.nodeid
     }
 }
 
@@ -18515,7 +18512,7 @@ stampIdDeep: function {
     n: astnode.view
 } out ztypes.tid is {
     nid: interpPartNodeId :n
-    sid: stampIdOf :symtab :nid
+    sid: stampIdOf :symtab nid: nid.u64
     if sid > 0 then {
         if (symtab.reg.typetypeOf typeId: sid) == ztypes.ztypetype.functionType then {
             rto: fnReturnTidOf :symtab tid: sid
@@ -18565,7 +18562,7 @@ stampTidDeep: function {
     symtab: zenv.ZSymbolTable.view
     n: astnode.view
 } out ztypes.tid is {
-    return (tidDeep :symtab sid: (stampIdOf :symtab nid: (interpPartNodeId :n)))
+    return (tidDeep :symtab sid: (stampIdOf :symtab nid: (interpPartNodeId :n).u64))
 }
 
 # stampNameDeep -- a node's stamped type name, unwrapping a value-position
@@ -18878,14 +18875,14 @@ emitPrintValueExpr: function {
     buf: String.borrow
 } is {
     eid: interpPartNodeId :n
-    if (stampIsSv :symtab :ctx nid: eid) then {
+    if (stampIsSv :symtab :ctx nid: eid.u64) then {
         ev: emitExpr :ast :symtab :ctx :n
         flushArgHoists :ctx :ind :tmp :buf
         lpe: "\{ind}\{ctx.svC}_print(\{ev});\n"
         buf.append lpe
         return
     }
-    if ctx.strTid != (stampIdOf :symtab nid: eid) then {
+    if ctx.strTid != (stampIdOf :symtab nid: eid.u64) then {
         emitFail :ctx what: "unhandled print argument" line: (ztypecheck.nodeLine :n)
         buf.append "    /* zemitterc: unhandled print argument */\n"
         return
@@ -19002,21 +18999,22 @@ stringviewOfBaseNid: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     n: astnode.view
-} out u64 is {
+} out zast.nodeid is {
     match (
         n
     ) case dottedpath then {
         mn: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
         if (ztypecheck.isStringViewMember name: mn.stringView) then {
             # a base atom naming a FUNCTION is a call, whose String has no name
-            if (baseAtomNamesFunction :symtab n: (ast.nodes.get i: n.parent)) then return 0
+            if (baseAtomNamesFunction :symtab n: (ast.nodes.get i: n.parent)
+            ) then return zast.nodeid
             bnid: atomNodeId n: (ast.nodes.get i: n.parent)
-            sid: stampIdOf :symtab nid: bnid
+            sid: stampIdOf :symtab nid: bnid.u64
             if sid.u64 == (builtinTid :ast :symtab base: "String") then return bnid
         }
-        return 0
+        return zast.nodeid
     } else {
-        return 0
+        return zast.nodeid
     }
 }
 
@@ -19030,8 +19028,8 @@ stringviewOfBase: function {
     n: astnode.view
 } outx StringView is {
     sbn: stringviewOfBaseNid :ast :symtab :n
-    if sbn == 0 then return ""
-    return (atomTextOf :ast n: (ast.nodes.get i: (zast.nodeid.create from: sbn.u32.orPanic)))
+    if sbn.isZero then return ""
+    return (atomTextOf :ast n: (ast.nodes.get i: sbn))
 }
 
 # stringCopyLitIndex -- the pool index of `\"lit\".string` (0 otherwise).
@@ -19559,11 +19557,11 @@ controlValueOwnsArms: function {
     } case ifexpr then null case caseexpr then null else {
         return false
     }
-    blocks: ListVal u32
+    blocks: ListVal zast.nodeid
     ztypecheck.controlArmBlocks :ast nid: (zast.nodeIdOf :n) into: blocks
     owned: true
     for each blk: blocks loop {
-        armOwned: armValueOwned :ast :symtab :ctx blockId: (zast.nodeid.create from: blk)
+        armOwned: armValueOwned :ast :symtab :ctx blockId: blk
         if armOwned.not then owned = false
     }
     return owned
@@ -19823,7 +19821,7 @@ emitStringBind: function {
         svb: stringviewOfBase :ast :symtab n: avn
         if svb.length > 0 then {
             svacc4: ".".string
-            svbV: atomVid :symtab nid: (stringviewOfBaseNid :ast :symtab n: avn)
+            svbV: atomVid :symtab nid: (stringviewOfBaseNid :ast :symtab n: avn).u64
             if (isPtrVid :ctx vid: svbV) then svacc4 = "->"
             svbR4: emitLocalAtomName :ctx name: svb vid: svbV
             lsv4: "\{ind}\{ctx.svC}_t \{nm} = (\{ctx.svC}_t){ .data = \{svbR4}\{svacc4}data, .size = \{svbR4}\{svacc4}size };\n"
@@ -19950,7 +19948,7 @@ emitBindSourceZero: function {
     buf: String.borrow
 } is {
     if (movedSourceNeedsZero :ast :symtab n: avn).not then return
-    bzt: stampIdOf :symtab nid: (interpPartNodeId n: avn)
+    bzt: stampIdOf :symtab nid: (interpPartNodeId n: avn).u64
     # a reftype field that moves owns nothing, and reads as empty once moved
     # out; a valtype's take copies its bytes and leaves the field as it is
     if (fieldMoveEmpties :ast :symtab n: avn tid: bzt) then {
@@ -20058,7 +20056,7 @@ emitNarrowedTakeBind: function {
 } out bool is {
     avn: ast.nodes.get i: n.value
     tabA: takeAliasBase :ast :symtab n: avn
-    tabAV: atomVid :symtab nid: (takeAliasBaseNid :ast :symtab n: avn)
+    tabAV: atomVid :symtab nid: (takeAliasBaseNid :ast :symtab n: avn).u64
     # a narrowed-subject `.take` binding MOVES the payload out of
     # the match arm's box: real storage from the narrowed cast plus
     # payload zeroing, so the subject's destroy frees only the box
@@ -20153,7 +20151,7 @@ bindDeclaredCType: function {
                 thisTid: ztypes.tid
             )
         } else {
-            vgo: symtab.typing.nodeTypeFor nid: (interpPartNodeId n: avn)
+            vgo: symtab.typing.nodeTypeFor nid: (interpPartNodeId n: avn).u64
             if vgo > 0 then {
                 ct = (typeRefC
                     :ast
@@ -20479,7 +20477,7 @@ emitDottedAutoCallStmt: function {
         lud: "\{ind}/* zemitterc: unhandled statement */\n"
         buf.append lud
     } else {
-        drtid: stampIdOf :symtab nid: (interpPartNodeId :n)
+        drtid: stampIdOf :symtab nid: (interpPartNodeId :n).u64
         (emitDiscardedResult
             :ast
             :symtab
@@ -20593,7 +20591,7 @@ emitContinueStmt: function {
             lu: "\{ind}/* zemitterc: unhandled statement */\n"
             buf.append lu
         } else {
-            urtid: stampIdOf :symtab nid: (interpPartNodeId :n)
+            urtid: stampIdOf :symtab nid: (interpPartNodeId :n).u64
             (emitDiscardedResult
                 :ast
                 :symtab
@@ -20634,7 +20632,7 @@ emitReturnStmt: function {
         fce: emitExpr :ast :symtab :ctx :n
         flushArgHoists :ctx :ind :tmp :buf
         if (fce.stringView.startsWith prefix: "/*").not then {
-            artid: stampIdOf :symtab nid: (interpPartNodeId :n)
+            artid: stampIdOf :symtab nid: (interpPartNodeId :n).u64
             (emitDiscardedResult
                 :ast
                 :symtab
@@ -20652,7 +20650,7 @@ emitReturnStmt: function {
     # no-value `return` (goto L_done inside a generator), `break`, `continue`.
     bkw: atomTextOf :ast :n
     outerExit: ctx.exitNode
-    ctx.exitNode = interpPartNodeId :n
+    ctx.exitNode = (interpPartNodeId :n).u64
     if bkw == "return" then {
         if ctx.genActive then {
             emitExitDestroy :symtab :ctx :tmp retExpr: "" keepRefd: false :ind :buf
@@ -20775,12 +20773,12 @@ reassignMoveSource: function {
     zsrc: implicitTakeSource :ast :symtab :ctx n: valueNode
     if zsrc.length > 0 then return zsrc
     mmb: moveMarkerBase :ast n: valueNode
-    if mmb == 0 then return zsrc
+    if mmb.isZero then return zsrc
     return (implicitTakeSource
         :ast
         :symtab
         :ctx
-        n: (ast.nodes.get i: (zast.nodeid.create from: mmb.u32.orPanic))
+        n: (ast.nodes.get i: mmb)
     )
 }
 
@@ -20824,14 +20822,14 @@ emitReassignStmt: function {
     rtsid: ztypes.tid.create from: (chaseAggregateTypedef
         :symtab
         :ctx
-        tid: (reassignDestroyTid :ast :symtab n: topathNode nid: rtnid)
+        tid: (reassignDestroyTid :ast :symtab n: topathNode nid: rtnid.u64)
     )
     # a local's old value dies as the checker recorded it: not when it was
     # moved away, nor when the local owns nothing; a field's always does, and
     # so does that of a name a loop's header binds, which is no variable of
     # the checker's
     destroyOld: true
-    if topathNode.atomid when (atomVid :symtab nid: rtnid).isZero.not then {
+    if topathNode.atomid when (atomVid :symtab nid: rtnid.u64).isZero.not then {
         destroyOld = namedDestroyOwes :symtab nid: n.nodeid.u64
     }
     (emitStoreTo
@@ -20839,7 +20837,7 @@ emitReassignStmt: function {
         :symtab
         :ctx
         nm2: nm2.stringView
-        :rtnid
+        rtnid: rtnid.u64
         :rtsid
         valueNode: (ast.nodes.get i: n.value)
         :destroyOld
@@ -20913,7 +20911,7 @@ emitRepointStmt: function {
 } is {
     topathNode: ast.nodes.get i: n.topath
     tgt: emitReassignLvalue :ast :symtab :ctx n: topathNode
-    xv: atomVid :symtab nid: (atomNodeId n: topathNode)
+    xv: atomVid :symtab nid: (atomNodeId n: topathNode).u64
     ptr: String
     tv: tgt.stringView
     if (tv.startsWith prefix: "(*") when (tv.endsWith suffix: ")") then {
@@ -20937,7 +20935,7 @@ emitRepointStmt: function {
         return
     }
     base: (ast.nodes.get
-        i: (zast.nodeid.create from: (underBorrowMarker :ast nid: n.value).u32.orPanic)
+        i: (underBorrowMarker :ast nid: n.value)
     )
     rvm: emitExpr :ast :symtab :ctx n: base
     flushArgHoists :ctx :ind :tmp :buf
@@ -21067,7 +21065,7 @@ emitStoreTo: function {
     # no destructor and are left untouched.
     zsrc: reassignMoveSource :ast :symtab :ctx :valueNode
     if zsrc.length > 0 when (movedSourceNeedsZero :ast :symtab n: valueNode) then {
-        zid: stampIdOf :symtab nid: rftnid
+        zid: stampIdOf :symtab nid: rftnid.u64
         zt: movedZeroC :symtab :ctx tid: zid
         if zt.length > 0 then buf.append "\{ind}\{zsrc} = \{zt};\n"
     }
@@ -21612,13 +21610,13 @@ emitWithLocal: function {
     wc: wct.string
     # `with v: src.borrow`: the alias is a pointer to its source
     bmbW: rhsBorrowMarkerBase :ast :symtab n: (ast.nodes.get i: n.value)
-    if bmbW > 0 then {
+    if bmbW.isZero.not then {
         addrW: "&"
         if (pathIsPointer
             :ast
             :symtab
             :ctx
-            n: (ast.nodes.get i: (zast.nodeid.create from: bmbW.u32.orPanic))
+            n: (ast.nodes.get i: bmbW)
         ) then addrW = ""
         lw0: "\{ind}\{wc}* __borrow_\{wnm} = \{addrW}\{wv};\n"
         buf.append lw0
@@ -22060,7 +22058,7 @@ emitSwapStmt: function {
     lx: emitExpr :ast :symtab :ctx n: lhn
     rx: emitExpr :ast :symtab :ctx n: rhn
     lnid: interpPartNodeId n: lhn
-    lsid: stampIdOf :symtab nid: lnid
+    lsid: stampIdOf :symtab nid: lnid.u64
     # the temporary holds what either slot holds: a heap collection is its pointer
     lct: slotCType :ast :symtab :ctx tid: lsid
     if lct.length == 0 then {
@@ -22520,7 +22518,7 @@ reassignDestroyTid: function {
     stamped: stampIdOf :symtab :nid
     rbn: atomTextOf :ast :n
     if rbn.length == 0 then return stamped
-    rbv: atomVid :symtab nid: (atomNodeId :n)
+    rbv: atomVid :symtab nid: (atomNodeId :n).u64
     if rbv.isZero then return stamped
     declared: symtab.reg.variableTypeOf id: rbv
     if declared.isZero then return stamped
@@ -22545,7 +22543,7 @@ emitReassignLvalue: function {
     {
         rbNm: atomTextOf :ast :n
         if rbNm.length > 0 then {
-            rbVid: atomVid :symtab nid: (atomNodeId :n)
+            rbVid: atomVid :symtab nid: (atomNodeId :n).u64
             if rbVid.isZero.not when (vvGet xs: ctx.narrowBox vid: rbVid).length > 0 then {
                 return (wholeLocalName :ctx vid: rbVid name: rbNm)
             }
@@ -22554,7 +22552,7 @@ emitReassignLvalue: function {
     if n.dottedpath then {
         ba: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.parent))
         if ba.length > 0 then {
-            ba9V: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent))
+            ba9V: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent)).u64
             nbo: vvGet xs: ctx.narrowBox vid: ba9V
             if nbo.length > 0 then {
                 mem: atomTextOf :ast n: (ast.nodes.get i: n.child)
@@ -22565,7 +22563,7 @@ emitReassignLvalue: function {
         }
         memFp: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
         rpnid: interpPartNodeId n: (ast.nodes.get i: n.parent)
-        stampTid: stampIdOf :symtab nid: rpnid
+        stampTid: stampIdOf :symtab nid: rpnid.u64
         rsn: regNameOf :symtab tid: stampTid
         rsc: canonFnId :ast :symtab :ctx tid: stampTid name: rsn.stringView
         rsFp: stampTid
@@ -22628,7 +22626,7 @@ emitGenericDissect: function {
 } is {
     darg: ztypecheck.dissectedArgOf st: symtab :ownerTid :paramName
     win: ztypecheck.dissectedArmOf st: symtab :ast :m :darg
-    if win > 0 then {
+    if win.isZero.not then {
         buf.append ind
         buf.append "{\n"
         if assignTo.length > 0 then {
@@ -22636,9 +22634,9 @@ emitGenericDissect: function {
                 :ast
                 :symtab
                 :ctx
-                n: (ast.nodes.get i: (zast.nodeid.create from: win))
+                n: (ast.nodes.get i: win)
                 target: assignTo
-                scope: win
+                scope: win.u64
                 :ind
                 :tmp
                 :buf
@@ -22648,10 +22646,10 @@ emitGenericDissect: function {
             # still in C scope
             fL: tmp.frees.length
             lL: tmp.listFrees.length
-            wst: ast.nodes.get i: (zast.nodeid.create from: win)
+            wst: ast.nodes.get i: win
             emitBodyNode :ast :symtab :ctx n: wst :ind :tmp :buf
             dv: blockDiverges :ast :symtab :ctx n: wst
-            closeScopeBlock :symtab :ctx :tmp :fL :lL diverged: dv node: win :buf
+            closeScopeBlock :symtab :ctx :tmp :fL :lL diverged: dv node: win.u64 :buf
         }
         buf.append ind
         buf.append "}\n"
@@ -22761,7 +22759,7 @@ matchGenericRoute: function {
     # own stamp is the type it was bound to, which is what dissection selects on
     subjSid: (ztyping.nodeTypeAt
         tbl: symtab.typing.nodeType
-        nid: (interpPartNodeId n: (ast.nodes.get i: m.subject))
+        nid: (interpPartNodeId n: (ast.nodes.get i: m.subject)).u64
     )
     if subjSid > 0 when (symtab.reg.isTypeParamOf tid: subjSid) then {
         paramName9: zast.poolFind pool: ast.names text: (regNameView :symtab tid: subjSid)
@@ -22999,7 +22997,7 @@ emitMatchStmt: function {
     # narrowed, so its declaration must carry the same identifier the body's
     # references resolve to
     )
-    snameV: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: m.subject))
+    snameV: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: m.subject)).u64
     # the subject's storage, as the receiver its tag and payload are read off:
     # the `_mN` temporary, or -- for a union subject that is a variable -- the
     # variable itself, as an `if` narrowing reads it. A payload write in an arm
@@ -24844,7 +24842,7 @@ objIterForNamed: function {
     # an `each` binding the checker walked through an implied `.iterate` is
     # emitted from the `E.iterate` node it minted, as the written call would be
     cOp = (symtab.typing.forImplicitIterate.get key: cNid.u64).or d: cOp
-    lblV: defVid :symtab nid: (interpPartNodeId n: (ast.nodes.get i: cOp))
+    lblV: defVid :symtab nid: (interpPartNodeId n: (ast.nodes.get i: cOp)).u64
     lbl: varCName :ctx vid: lblV name: lblR.stringView
     tids: objIterIterableTid :ast :symtab :ctx :cOp
     if tids.itid.isZero then return false
@@ -24898,7 +24896,7 @@ emitPlainBindingFor: function {
     lblR: zast.nameTextAt :ast ref: c0.name
     if lblR.length == 0 then return false
     opN: ast.nodes.get i: c0.operation
-    lblV: defVid :symtab nid: (interpPartNodeId n: opN)
+    lblV: defVid :symtab nid: (interpPartNodeId n: opN).u64
     lbl: varCName :ctx vid: lblV name: lblR.stringView
     ovid: stampTidDeep :symtab n: opN
     if ovid.isZero then return false
@@ -24997,7 +24995,7 @@ emitIntRangeFor: function {
     ) case namedoperation then {
         lblR8: zast.nameTextAt :ast ref: c0.name
         if lblR8.length == 0 then return false
-        lblV8: defVid :symtab nid: (interpPartNodeId n: (ast.nodes.get i: c0.operation))
+        lblV8: defVid :symtab nid: (interpPartNodeId n: (ast.nodes.get i: c0.operation)).u64
         lbl: varCName :ctx vid: lblV8 name: lblR8.stringView
         # THE CLOSED FAMILY FIRST, because rangeBoundExpr answers "" for it: a
         # closed range's receiver is its start, not its bound, so it has no
@@ -25514,7 +25512,7 @@ emitForCond: function {
 # exprNodeId -- the node id of value `n`, whatever its shape: the id its stamp
 # is keyed on. 0 for a node that is not a value.
 exprNodeId: function {n: astnode.view} out u64 is {
-    return (interpPartNodeId :n)
+    return (interpPartNodeId :n).u64
 }
 
 # sumArmNamesInto -- the arm names of a sum type, in declaration order (the
@@ -25825,7 +25823,7 @@ seedPositiveCore: function {
     accessOp: ".".string
     if (isPtrVid
         :ctx
-        vid: (atomVid :symtab nid: (atomNodeId n: parent))
+        vid: (atomVid :symtab nid: (atomNodeId n: parent).u64)
     ) then accessOp = "->"
     aliasText: (armAliasText
         :ast
@@ -25838,7 +25836,7 @@ seedPositiveCore: function {
     )
     if aliasText.length == 0 then return
     names.append subj.string
-    svids.append (atomVid :symtab nid: (atomNodeId n: parent))
+    svids.append (atomVid :symtab nid: (atomNodeId n: parent).u64)
     vals.append aliasText
     pt: ((symtab.typing.declChildOf
         pool: ast.names
@@ -25871,7 +25869,7 @@ seedNegatedFromPredicate: function {
         if (isOrdinalVariant :symtab tid: (ztypes.tid.create from: dap.u64)) then return
         subj: atomTextOf :ast n: (ast.nodes.get i: n.parent)
         if subj.length == 0 then return
-        snv: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent))
+        snv: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: n.parent)).u64
         ctorArmName: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
         rem: (remainingArm
             :ast
@@ -25954,9 +25952,9 @@ truthyCondText: function {
     n: astnode.view
     raw: StringView
 } out String is {
-    fa: (symtab.typing.truthyCondArm.get key: (interpPartNodeId :n)).or d: 0
+    fa: (symtab.typing.truthyCondArm.get key: (interpPartNodeId :n).u64).or d: 0
     if fa == 0 then return ""
-    tid: symtab.typing.nodeTypeFor nid: (interpPartNodeId :n)
+    tid: symtab.typing.nodeTypeFor nid: (interpPartNodeId :n).u64
     if tid.isZero then return ""
     if (isOrdinalPair :symtab :tid) then return ""
     an: zast.nameTextAt :ast ref: (zast.nameid.create from: fa.u32.orPanic)
@@ -25964,7 +25962,7 @@ truthyCondText: function {
     if tg.length == 0 then return ""
     accessOp: ".".string
     rn: atomNodeId :n
-    if rn > 0 when (isPtrVid :ctx vid: (atomVid :symtab nid: rn)) then accessOp = "->"
+    if rn.isZero.not when (isPtrVid :ctx vid: (atomVid :symtab nid: rn.u64)) then accessOp = "->"
     return "((\{raw})\{accessOp}tag == \{tg})"
 }
 
@@ -26031,10 +26029,10 @@ seedCondOp: function {
     # a bare 2-arm sum condition IS `x.<arm>` with the arm left implicit, so
     # it seeds the alias that form seeds.
     {
-        ta0: ztypecheck.truthyCondArmOf st: symtab nid: (interpPartNodeId :n)
+        ta0: ztypecheck.truthyCondArmOf st: symtab nid: (interpPartNodeId :n).u64
         if ta0 > 0 then {
             an0: zast.nameTextAt :ast ref: (zast.nameid.create from: ta0.u32.orPanic)
-            tid93: symtab.typing.nodeTypeFor nid: (interpPartNodeId :n)
+            tid93: symtab.typing.nodeTypeFor nid: (interpPartNodeId :n).u64
             (seedPositiveCore
                 :ast
                 :symtab
@@ -26394,7 +26392,7 @@ classifyFactCore: function {
         ok: true
         :owner
         :parentNid
-        svid: (atomVid :symtab nid: (atomNodeId n: parent))
+        svid: (atomVid :symtab nid: (atomNodeId n: parent).u64)
         :armRef
         :neg
     )
@@ -26483,17 +26481,17 @@ classifyCondFact: function {
 } out condarmfact is {
     none9: noArmFact
     {
-        ta1: ztypecheck.truthyCondArmOf st: symtab nid: (interpPartNodeId :n)
+        ta1: ztypecheck.truthyCondArmOf st: symtab nid: (interpPartNodeId :n).u64
         if ta1 > 0 then {
             return (classifyFactCore
                 :ast
                 :symtab
-                owner: (symtab.typing.nodeTypeFor nid: (interpPartNodeId :n)).u64
+                owner: (symtab.typing.nodeTypeFor nid: (interpPartNodeId :n).u64).u64
                 # the subject here is `n` itself. classifyFactCore answers ok
                 # only when that node is an atomid (atomTextOf names nothing
                 # else), and interpPartNodeId of an atomid IS its own id, so
                 # carrying the id is exactly carrying the node.
-                parentNid: (zast.nodeid.create from: (interpPartNodeId :n).u32.orPanic)
+                parentNid: (interpPartNodeId :n)
                 armRef: (zast.nameid.create from: ta1.u32.orPanic)
                 neg: false
             )
@@ -26792,14 +26790,14 @@ hoistCondYields: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     # the condition node
-    kId: u32
+    kId: zast.nodeid
     # the indent of the condition's nesting level
     ind: StringView
     # the hoisted statements append here
     buf: String.borrow
 } is {
     if ctx.genActive.not then return
-    hoistExprYields :ast :symtab :ctx nid: (zast.nodeid.create from: kId) :ind :buf
+    hoistExprYields :ast :symtab :ctx nid: kId :ind :buf
 }
 
 # emitSteppedCond -- conditions as statements computing into a declared guard.
@@ -27377,7 +27375,7 @@ emitPlainReturn: function {
     clFull: String
     emitReturnCleanup :symtab :ctx :tmp retExpr: rv.stringView keepRefd: false :ind buf: clFull
     leakFix: clFull.length > clProbe.length
-    rtid: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: vid))
+    rtid: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: vid)).u64
     # a conformer returned as the spec is its box, of the spec's type
     so: symtab.typing.standInOf.get key: vid.u64
     match (
@@ -28219,7 +28217,7 @@ fnReturnTypeId: function {
         rtId: op.returntype
         if rtId > 0 then {
             rt: ast.nodes.get i: rtId
-            return (stampIdOf :symtab nid: (interpPartNodeId n: rt))
+            return (stampIdOf :symtab nid: (interpPartNodeId n: rt).u64)
         } else {
             return 0
         }
@@ -30594,8 +30592,8 @@ stdFnUndemanded: function {
 # bare `t: anyval.generic` member). Its raw functions reference the unbound type
 # param, so they are not emitted directly; emitUnitMonoInstances emits one
 # concrete C function per (instantiation, method) instead.
-isGenericTemplateUnitOp: function {ast: Ast.view opId: u32} out bool is {
-    bodyIds: zast.unitBodyIdsAt :ast unitId: (zast.nodeid.create from: opId)
+isGenericTemplateUnitOp: function {ast: Ast.view opId: zast.nodeid} out bool is {
+    bodyIds: zast.unitBodyIdsAt :ast unitId: opId
     vx269: u64
     for vx269 < bodyIds.count loop {
         m: zast.kidAt kids: ast.kids span: bodyIds i: vx269
@@ -30651,9 +30649,7 @@ emitUnitMonoFn: function {
     # its own copy
     symtab.typing.emitMono = t
     iop: (ast.nodes.get
-        i: (zast.nodeid.create
-            from: (instanceOpAt :symtab mono: t op: (zast.nodeIdOf n: op).u64).u32.orPanic
-        )
+        i: (instanceOpAt :symtab mono: t op: (zast.nodeIdOf n: op).u64)
     )
     if declOnly then {
         appendFnSignature :ast :symtab :ctx name: fnm.stringView fid: cfid op: iop :buf tail: ";\n"
@@ -30859,8 +30855,11 @@ emitFns: function {
 # instanceOpAt -- the function node instance `mono` is emitted from: its own
 # copy of the template function `op`, which its instance walk checked
 # (instanceBody); `op` itself when the instance has none.
-instanceOpAt: function {symtab: zenv.ZSymbolTable.view mono: u64 op: u64} out u64 is {
-    return ((symtab.typing.instanceBody.get key: (ztyping.monostamp :mono node: op)).or d: op)
+instanceOpAt: function {symtab: zenv.ZSymbolTable.view mono: u64 op: u64} out zast.nodeid is {
+    return (zast.nodeid.create
+        from: ((symtab.typing.instanceBody.get key: (ztyping.monostamp :mono node: op)).or d: op
+        ).u32.orPanic
+    )
 }
 
 # emitFnMonoInstances -- emit the monomorphized instances of a generic free
@@ -30892,10 +30891,7 @@ emitFnMonoInstances: function {
             # the body it is emitted from
             symtab.typing.emitMono = t.u64
             iop: (ast.nodes.get
-                i: (zast.nodeid.create
-                    from: (instanceOpAt :symtab mono: t.u64 op: (zast.nodeIdOf n: templateFnOp).u64
-                    ).u32.orPanic
-                )
+                i: (instanceOpAt :symtab mono: t.u64 op: (zast.nodeIdOf n: templateFnOp).u64)
             )
             if declOnly then {
                 (appendFnSignature
@@ -31191,8 +31187,8 @@ emitFnsIn: function {
 
 # unitOpHasBodiedFn -- does the unit body at `opId` define a function with a
 # body among its own entries?
-unitOpHasBodiedFn: function {ast: Ast.view opId: u32} out bool is {
-    ids: zast.unitBodyIdsAt :ast unitId: (zast.nodeid.create from: opId)
+unitOpHasBodiedFn: function {ast: Ast.view opId: zast.nodeid} out bool is {
+    ids: zast.unitBodyIdsAt :ast unitId: opId
     uox9: u64
     for uox9 < ids.count loop {
         mId: zast.kidAt kids: ast.kids span: ids i: uox9
@@ -38715,7 +38711,7 @@ fileFromArgAddr: function {
     fnid: ctorArgNodeByLabel :ast :call label: "from"
     vt: (stampIdOf
         :symtab
-        nid: (interpPartNodeId n: (ast.nodes.get i: (zast.nodeid.create from: fnid.u32.orPanic)))
+        nid: (interpPartNodeId n: (ast.nodes.get i: fnid)).u64
     )
     if vt == ctx.strTid then vt = ctx.svTid
     return (emitByrefArg :ast :symtab :ctx av: fvc.stringView pid: vt argNid: 0)
@@ -38743,7 +38739,7 @@ fileFromArgCoerce: function {
             if fl.stringView == "from" then {
                 stampTid: (stampIdOf
                     :symtab
-                    nid: (interpPartNodeId n: (ast.nodes.get i: fa.operation))
+                    nid: (interpPartNodeId n: (ast.nodes.get i: fa.operation)).u64
                 )
                 if stampTid == ctx.strTid then {
                     fh: (hoistBorrowValArg
@@ -38900,7 +38896,7 @@ argBaseAtom: function {ast: Ast.view n: astnode.view} outx StringView is {
 argBaseNodeId: function {ast: Ast.view n: astnode.view} out u32 is {
     i: dottedBaseNodeId :ast :n
     if i > 0 then return i.u32.orPanic
-    a: (atomNodeId :n).u32.orPanic
+    a: (atomNodeId :n).u32
     if a > 0 then return a
     # the `:name` shorthand carries its own stamp on its own row
     if n.labelvalue then return n.nodeid.u32
@@ -39036,7 +39032,7 @@ emitIoWrapperCreate: function {
             st: ord
             mark: mk
             text: astr
-            nid: (zast.nodeid.create from: anid.u32.orPanic)
+            nid: anid
             byPtr: false
             slot: pi
         )
@@ -39174,7 +39170,7 @@ lowerNativeArg: function {
             vid: (ztypes.vid.create from: 0)
         )
         av0: emitExpr :ast :symtab :ctx n: op
-        if (stampIsStr :symtab :ctx nid: (interpPartNodeId n: op)) then {
+        if (stampIsStr :symtab :ctx nid: (interpPartNodeId n: op).u64) then {
             hb: (hoistBorrowValArg
                 :ast
                 :symtab
@@ -39371,7 +39367,7 @@ emitNativeFreeFnCall: function {
             posIdx: (ctx.orderPosAt.get i: wbase + j)
         )
         wr: ctx.orderWrit.get i: wbase + j
-        anid: u64
+        anid: zast.nodeid
         if wr > 0 then anid = writtenArgNode :ast :call pos: wr - 1
         (orderArgAt
             :ast
@@ -39380,7 +39376,7 @@ emitNativeFreeFnCall: function {
             st: ord
             mark: mk
             text: av
-            nid: (zast.nodeid.create from: anid.u32.orPanic)
+            nid: anid
             byPtr: false
             slot: j
         )
@@ -39467,7 +39463,7 @@ emitCliSpecCreate: function {
             st: ord
             mark: mk
             text: astr
-            nid: (zast.nodeid.create from: anid.u32.orPanic)
+            nid: anid
             byPtr: false
             slot: pi
         )
@@ -39506,7 +39502,7 @@ emitResultCombinator: function {
     cnDp: ast.nodes.get i: call.callable
     if cnDp.dottedpath then bnid = cnDp.parent
     if bnid.isZero then return ""
-    rtid0: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: bnid))
+    rtid0: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: bnid)).u64
     rtid: chaseAggregateTypedef :symtab :ctx tid: rtid0
     if rtid.isZero then return ""
     isRes: originIsTid :symtab tid: rtid originTid: (ctx.origins.get i: family.resultval)
@@ -39814,7 +39810,7 @@ dispatchArgText: function {
     if (symtab.typing.standInOf.has key: (zast.nodeIdOf :n).u64) then {
         return (standInText :ast :symtab :ctx :n text: av.take)
     }
-    atid: stampIdOf :symtab nid: (interpPartNodeId :n)
+    atid: stampIdOf :symtab nid: (interpPartNodeId :n).u64
     apfx: String
     chasedColTid: chaseAggregateTypedef :symtab :ctx tid: atid
     if (chasedColTid == atid).not then apfx = "&"
@@ -40066,7 +40062,7 @@ emitProtocolCreateCall: function {
                 label: boxLabelFor :symtab :ctx implTid: fromTid protoTid: protoTid.u64
                 if label.length == 0 then return ""
                 valueVid: atomVid :symtab nid: (dottedBaseNodeId :ast n: fop)
-                if valueVid.isZero then valueVid = atomVid :symtab nid: (atomNodeId n: fop)
+                if valueVid.isZero then valueVid = atomVid :symtab nid: (atomNodeId n: fop).u64
                 valVar: aliasResolve :ctx name: fromBase vid: valueVid
                 vvv: ztypes.vid
                 if valVar.stringView == fromBase then vvv = valueVid
@@ -41615,12 +41611,12 @@ emitMonoMethodAt: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable
     ctx: Ctx
-    nid: u32
+    nid: zast.nodeid
     monoId: u64
     declOnly: bool
     buf: String.borrow
 } is {
-    site: zast.namedSiteAt :ast nid: (zast.nodeid.create from: nid)
+    site: zast.namedSiteAt :ast :nid
     if site.operation.isZero then return
     if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: site.operation)).not then return
     # the instance's own copy of the method
@@ -41648,7 +41644,7 @@ emitMonoMethodAt: function {
             :ctx
             name: fn.stringView
             :fid
-            op: (ast.nodes.get i: (zast.nodeid.create from: opId.u32.orPanic))
+            op: (ast.nodes.get i: opId)
             :buf
             tail: ";\n"
         )
@@ -41661,7 +41657,7 @@ emitMonoMethodAt: function {
         :ctx
         name: fn.stringView
         :fid
-        op: (ast.nodes.get i: (zast.nodeid.create from: opId.u32.orPanic))
+        op: (ast.nodes.get i: opId)
         :buf
         tail: " {\n"
     )
@@ -41671,14 +41667,14 @@ emitMonoMethodAt: function {
         :symtab
         :ctx
         :fid
-        op: (ast.nodes.get i: (zast.nodeid.create from: opId.u32.orPanic))
+        op: (ast.nodes.get i: opId)
     )
     ctx.curThisTid = ztypes.tid.create from: monoId
     (emitFnBody
         :ast
         :symtab
         :ctx
-        op: (ast.nodes.get i: (zast.nodeid.create from: opId.u32.orPanic))
+        op: (ast.nodes.get i: opId)
         :fid
         :buf
     )
@@ -42280,7 +42276,7 @@ emitYieldStmt: function {
     # a boxed yield MOVES an lvalue operand (a local the instance keeps):
     # zero the source so the instance destructor does not double-free it
     if ctx.genPayC.length > 0 when (isNonLvalueArg s: ve.stringView).not then {
-        lzv: movedZeroC :symtab :ctx tid: (stampIdOf :symtab nid: (interpPartNodeId n: yx))
+        lzv: movedZeroC :symtab :ctx tid: (stampIdOf :symtab nid: (interpPartNodeId n: yx).u64)
         if lzv.length > 0 then buf.append "\{ind}\{ve} = \{lzv};\n"
     }
     # a loop keeps its counter in the C for-header and its payload in a local
@@ -42593,14 +42589,14 @@ emitOneMethod: function {
     if (symtab.reg.genericOriginOf tid: (ztypes.tid.create from: thisTid)).isZero.not then {
         symtab.typing.emitMono = thisTid
         iopId: instanceOpAt :symtab mono: thisTid.u64 op: (zast.nodeIdOf n: op).u64
-        if iopId != (zast.nodeIdOf n: op).u64 then {
+        if iopId != (zast.nodeIdOf n: op) then {
             (emitOneMethod
                 :ast
                 :symtab
                 :ctx
                 :mid
                 :thisTid
-                op: (ast.nodes.get i: (zast.nodeid.create from: iopId.u32.orPanic))
+                op: (ast.nodes.get i: iopId)
                 :declOnly
                 :buf
             )
