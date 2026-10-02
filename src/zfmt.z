@@ -559,34 +559,65 @@ Builder: class {
         h: emptyGap
         if takeH then h = this.gapDocs cap: 0
         this.closeParens
+        v: this.pairDoc :body :needed :onBreak :isCall before: g after: h
+        return (this.withComments body: v before: emptyGap after: (this.closerTail :entry))
+    }
+
+    # closerTail -- the comments in front of a closer closeParens left standing,
+    # when the pairs still open are exactly the ones the value sat inside
+    # (`entry`): the value ends there and the comment follows it, inside the
+    # enclosing pair, where it lands when the value carries no parentheses of
+    # its own. An empty gap otherwise
+    closerTail: function {:this entry: u32} out gapdocs is {
+        if this.c.openParens == entry when entry > 0 when this.c.gapHasComment when (this.peekIs
+            tt: zlexer.toktype.parenCloseTok
+        ) then return (this.gapDocs cap: 0)
+        return emptyGap
+    }
+
+    # pairDoc -- a value's body inside the pair its position calls for: the
+    # grammar's (`needed`), the pair a breaking binary operation takes
+    # (`onBreak`), or none, with the comments of the gaps on either side
+    pairDoc: function {
+        :this
+        body: u32
+        needed: bool
+        onBreak: bool
+        isCall: bool
+        before: gapdocs
+        after: gapdocs
+    } out u32 is {
         if needed then {
             return (this.parenGroup
                 :body
                 open: this.idOpen
                 close: this.idClose
-                marker: g.marker
-                before: g
-                after: h
+                marker: before.marker
+                :before
+                :after
                 callShape: isCall
             )
         }
-        if onBreak.not then return (this.withComments :body before: g after: h)
+        if onBreak.not then return (this.withComments :body :before :after)
         return (this.parenGroup
             :body
             open: (this.d.ifBreak brk: this.idOpen flat: 0)
             close: (this.d.ifBreak brk: this.idClose flat: 0)
-            marker: g.marker
-            before: g
-            after: h
+            marker: before.marker
+            :before
+            :after
             callShape: false
         )
     }
 
     # closeParens -- consume the closers belonging to openers already skipped,
-    # as many as sit at the cursor
+    # as many as sit at the cursor. One with a comment in front of it is left
+    # standing: taking it would step over the comment, which no gap request
+    # then covers. The value that ends before it places the comment
     closeParens: function {:this} is {
         for (this.peekIs tt: zlexer.toktype.parenCloseTok) loop {
             if this.c.openParens == 0 then break
+            if this.c.gapHasComment then break
             this.skipTok tt: zlexer.toktype.parenCloseTok
             this.c.openParens = this.c.openParens - 1
         }
