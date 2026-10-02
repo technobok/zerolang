@@ -3359,7 +3359,7 @@ collectMonoRefArgs: function {
     sfx: String
     typeSubs: (IdMapV zast.nameid v: ztypes.tid)
     valSubsR: (IdMapV zast.nameid v: u64)
-    firstOut: ListVal u64
+    firstOut: ListVal ztypes.tid
 } out bool is {
     allOk: true
     firstA: ztypes.tid
@@ -3414,7 +3414,7 @@ collectMonoRefArgs: function {
             }
         }
     }
-    firstOut.append firstA.u64
+    firstOut.append firstA
     return allOk
 }
 
@@ -3973,7 +3973,7 @@ mintMonoRefParts: function {
         sfx: String
         typeSubs: IdMapV zast.nameid v: ztypes.tid
         valSubsR: IdMapV zast.nameid v: u64
-        firstOut: ListVal u64
+        firstOut: ListVal ztypes.tid
         allOk: (collectMonoRefArgs
             :st
             :ast
@@ -3988,7 +3988,7 @@ mintMonoRefParts: function {
             :valSubsR
             :firstOut
         )
-        firstA: ztypes.tid.create from: (firstOut.get i: 0)
+        firstA: firstOut.get i: 0
         if allOk.not then return ztypes.noTid
         if sfx.length == 0 then return ztypes.noTid
         if tplId.isZero then tplId = typeApplicationTemplate :st :scope :ast :unitDecl :callableNid
@@ -4529,10 +4529,10 @@ partialParamTid: function {
     receiverEnclDecl: ztypes.declid
     isgen: bool
     oId: zast.nodeid
-} out u64 is {
-    ppt: u64
+} out ztypes.tid is {
+    ppt: ztypes.tid
     if isgen then ppt = partialUnderDecl :st :ast :unitDecl :scope enclDecl: fnDecl :oId
-    if ppt == 0 then ppt = (partialUnderDecl
+    if ppt.isZero then ppt = (partialUnderDecl
         :st
         :ast
         :unitDecl
@@ -6414,7 +6414,7 @@ registerValueParam: function {
             :ast
             :unitDecl
             :rf
-            cid: (ztypes.tid.create from: cid)
+            :cid
             :ptn
             pnameId: pm.name
             :fid
@@ -6697,7 +6697,7 @@ resolveFunctionParam: function {
                 :fid
                 :thisName
                 :ptn
-                partialTid: (ztypes.tid.create from: ppt9)
+                partialTid: ppt9
                 :pm
             )
         }
@@ -8382,10 +8382,10 @@ checkInstanceConformances: function {
     isFacet = crow.isFacet
     crow.drop
     last: st.reg.typeCount
-    t: 1.u64
+    t: ztypes.tid 1
     for t < last loop {
-        mono: ztypes.tid.create from: t
-        t = t + 1
+        mono: t
+        t = t.next
         if (st.reg.genericOriginOf tid: mono).u64 != tpl then continue
         # a partial is trie bookkeeping with no methods of its own
         if (st.reg.isPartialOf tid: mono) then continue
@@ -8513,7 +8513,7 @@ conformanceReceiverOwn: function {
 conformanceParams: function {
     st: zenv.ZSymbolTable.view
     mid: ztypes.tid
-    ids: ListVal u64
+    ids: ListVal ztypes.tid
     nameIds: ListVal u64
 } is {
     aids: ListVal ztypes.tid
@@ -8562,10 +8562,10 @@ conformanceSpecIsSelfTyped: function {
     specTid: ztypes.tid
     smid: ztypes.tid
 } out bool is {
-    sids: ListVal u64
+    sids: ListVal ztypes.tid
     snms: ListVal u64
     conformanceParams :st mid: smid ids: sids nameIds: snms
-    return (sids.contains item: specTid.u64)
+    return (sids.contains item: specTid)
 }
 
 # checkConformanceSignature -- an explicit conformer implements each method its
@@ -8682,10 +8682,10 @@ checkConformanceMethod: function {
         )
         return
     }
-    sids: ListVal u64
+    sids: ListVal ztypes.tid
     snms: ListVal u64
     conformanceParams :st mid: smid ids: sids nameIds: snms
-    iids: ListVal u64
+    iids: ListVal ztypes.tid
     inms: ListVal u64
     conformanceParams :st mid: imid ids: iids nameIds: inms
     if sids.length != iids.length then {
@@ -8719,8 +8719,8 @@ checkConformanceMethod: function {
             :ast
             :smid
             :imid
-            spT: (ztypes.tid.create from: (sids.get i: pi))
-            ipT: (ztypes.tid.create from: (iids.get i: pi))
+            spT: (sids.get i: pi)
+            ipT: (iids.get i: pi)
             spN: (zast.nameid.create from: (snms.get i: pi).u32.orPanic)
             ipN: (zast.nameid.create from: (inms.get i: pi).u32.orPanic)
             :implName
@@ -9587,7 +9587,7 @@ materializeCreateParams: function {
     mkIds8: ListVal u64
     conformanceMarkerIds :st tid: typeTid ids: mkIds8
     fnameIds: ListVal u64
-    ftypeIds: ListVal u64
+    ftypeIds: ListVal ztypes.tid
     ot_ri: typeTid
     {
         {
@@ -9642,7 +9642,7 @@ materializeCreateParams: function {
         (st.typing.setMemberType
             parentTypeId: createId
             nameId: pnId
-            childTypeId: (ztypes.tid.create from: (ftypeIds.get :i))
+            childTypeId: (ftypeIds.get :i)
         )
         # the parameter carries the FIELD's disposition, so a call site reads
         # one answer whether it names the type or its create
@@ -9653,7 +9653,7 @@ materializeCreateParams: function {
                 :st
                 ownerTid: ot_ri
                 fieldId: pnId
-                fieldTid: (ztypes.tid.create from: (ftypeIds.get :i))
+                fieldTid: (ftypeIds.get :i)
             )
         )
         i = i + 1
@@ -11183,7 +11183,7 @@ recordTagBase: function {
 # tagAccessorOwner -- the type whose tag accessor `tid` answers with: its own,
 # else, for an instance, its template's.
 tagAccessorOwner: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.tid is {
-    if (st.typing.tagAccessorName.has key: tid.u64) then return tid
+    if (st.typing.tagAccessorName.has key: tid) then return tid
     og: st.reg.genericOriginOf :tid
     if og.isZero then return tid
     return og
@@ -11702,7 +11702,7 @@ unionCustomTagOfArm: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    uid: u64
+    uid: ztypes.tid
     am: argref
 } out optionval ztypes.tid is {
     nm: zast.nameTextCopy :ast ref: am.name
@@ -11772,7 +11772,7 @@ unionCustomTagId: function {
     st: zenv.ZSymbolTable
     unitDecl: ztypes.declid
     scope: ztypes.declid
-    uid: u64
+    uid: ztypes.tid
     objId: zast.nodeid
 } out optionval ztypes.tid is {
     orf: objRefAt :ast nid: objId
@@ -16336,7 +16336,7 @@ fixupCustomTags: function {
     pnames: ListVal zast.nameid
     for each ce: st.typing.pendingCustomTag.iterateItems loop {
         ck: ce.key
-        pend.append (ztypes.tid.create from: ck)
+        pend.append ck
         pnames.append ce.value
     }
     ci: u64
@@ -16355,7 +16355,7 @@ fixupCustomTags: function {
                     kind: ztyping.declkind.fieldDecl
                 )
                 (st.typing.setMemberType
-                    parentTypeId: (ztypes.tid.create from: cuidc.u64)
+                    parentTypeId: cuidc
                     nameId: zast.names.wkTag
                     childTypeId: ctid
                 )
@@ -19047,7 +19047,7 @@ completeOneInstance: function {
     (recordInstanceGenericArgs
         :st
         :tplDecl
-        memberIdAt: (ztypes.tid.create from: memberIdAt)
+        :memberIdAt
         :subs
         :valSubs
     )
@@ -19068,7 +19068,7 @@ completeOneInstance: function {
         (ztyping.nodeTypeSet
             tbl: st.typing.nodeType
             nid: rc
-            tid: (ztypes.tid.create from: cv.u64)
+            tid: cv
         )
     }
     if rl > 0 when tplId > 0 then {
@@ -21169,7 +21169,7 @@ mintMonoMembers: function {
     idSubs: (IdMapV u64 v: ztypes.genericarg)
 } out bool is {
     cNames: List String
-    cIds: ListVal u64
+    cIds: ListVal ztypes.tid
     forceAllMembers :st :ast tid: templateId
     {
         mmq: u64
@@ -21202,7 +21202,7 @@ mintMonoMembers: function {
             :subs
             :idSubs
             chName: chNameC.stringView
-            chId: (ztypes.tid.create from: (cIds.get i: ci))
+            chId: (cIds.get i: ci)
         ) then monoNeedsDtor = true
         ci = ci + 1
     }
@@ -21734,13 +21734,13 @@ constraintHolds: function {
         if (typeIsValtype :st tid: argTid).not then return false
         forceValParts :st :ast tid: argTid depth: 0
         if (typeIsHashable :st :ast tid: argTid).not then return false
-        st.typing.hashUsed.add item: argTid.u64
-        st.typing.hashKeys.add item: argTid.u64
+        st.typing.hashUsed.add item: argTid
+        st.typing.hashKeys.add item: argTid
         return true
     } case refHashable then {
         if (st.reg.isReftypeOf tid: argTid).not then return false
         if (typeIsHashable :st :ast tid: argTid).not then return false
-        st.typing.hashKeys.add item: argTid.u64
+        st.typing.hashKeys.add item: argTid
         return true
     } case idKey then {
         # an id key is not merely hashable: the container indexes on its BITS,
@@ -22266,10 +22266,10 @@ conformanceMethodMatches: function {
     st: zenv.ZSymbolTable.view smid: ztypes.tid imid: ztypes.tid
 } out bool is {
     if imid.isZero or (st.reg.isGenericOf tid: imid) then return false
-    sids: ListVal u64
+    sids: ListVal ztypes.tid
     snms: ListVal u64
     conformanceParams :st mid: smid ids: sids nameIds: snms
-    iids: ListVal u64
+    iids: ListVal ztypes.tid
     inms: ListVal u64
     conformanceParams :st mid: imid ids: iids nameIds: inms
     if sids.length != iids.length then return false
@@ -23022,7 +23022,7 @@ ownEqWithoutOwnHash: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out b
 # no source node, so a finding is reported at the member.
 checkHashKeys: function {ast: Ast st: zenv.ZSymbolTable} is {
     keys: ListVal ztypes.tid
-    for each k: st.typing.hashKeys loop keys.append from: (ztypes.tid.create from: k)
+    for each k: st.typing.hashKeys loop keys.append from: k
     seen: IdSet u64
     for each k: keys loop {
         checkHashKey :ast :st tid: k :seen depth: 0
@@ -23117,7 +23117,7 @@ keyMemberMismatch: function {
 } out String is {
     isHash: nameId == zast.names.wkHash
     mname: zast.nameTextCopy :ast ref: nameId
-    ids: ListVal u64
+    ids: ListVal ztypes.tid
     nms: ListVal u64
     conformanceParams :st :mid :ids nameIds: nms
     want: 1.u64
@@ -23132,7 +23132,7 @@ keyMemberMismatch: function {
         :st
         :owner
         :mid
-        pT: (ztypes.tid.create from: (ids.get i: 0))
+        pT: (ids.get i: 0)
         pnId: (zast.nameid.create from: (nms.get i: 0).u32.orPanic)
     )
     if why.length == 0 then why = keyReturnMismatch :ast :st :mid mname: mname.stringView :isHash
@@ -23643,7 +23643,7 @@ refuseHashWithoutPartHash: function {
     forceValParts :st :ast tid: bt depth: 0
     miss: valHashMissingPart :ast :st tid: bt depth: 0
     if miss.isZero then {
-        st.typing.hashUsed.add item: bt.u64
+        st.typing.hashUsed.add item: bt
         (st.reg.setReturnType
             typeId: mo
             value: (builtinTidT :st scope: st.curScope :ast base: "u64").u64
@@ -24911,7 +24911,7 @@ bindValueArgSub: function {
     fNames: (ListVal zast.nameid).view
     fParams: (ListVal zast.nameid).view
     ptNames: (ListVal zast.nameid).view
-    ptTids: (ListVal u64).view
+    ptTids: (ListVal ztypes.tid).view
     sfx: String
     subs: (IdMapV zast.nameid v: ztypes.tid)
     boundParams: IdSet zast.nameid
@@ -24960,7 +24960,7 @@ bindPartialRowArg: function {
     ast: Ast
     pk: zast.nameid
     ptNames: (ListVal zast.nameid).view
-    ptTids: (ListVal u64).view
+    ptTids: (ListVal ztypes.tid).view
     argTid: ztypes.tid
     sfx: String
     subs: (IdMapV zast.nameid v: ztypes.tid)
@@ -24974,7 +24974,7 @@ bindPartialRowArg: function {
         :st
         :ast
         :gparams
-        paramTid: (ztypes.tid.create from: (ptTids.get i: pio))
+        paramTid: (ptTids.get i: pio)
         :argTid
         :subs
     )
@@ -25005,7 +25005,7 @@ inferConstructionArg: function {
     fNames: (ListVal zast.nameid).view
     fParams: (ListVal zast.nameid).view
     ptNames: (ListVal zast.nameid).view
-    ptTids: (ListVal u64).view
+    ptTids: (ListVal ztypes.tid).view
     sfx: String
     subs: (IdMapV zast.nameid v: ztypes.tid)
     valueSubs: (IdMapV zast.nameid v: u64)
@@ -25065,7 +25065,7 @@ inferConstructionSubs: function {
     fParams: (ListVal zast.nameid).view
     # the rows typed over the params, and their types
     ptNames: (ListVal zast.nameid).view
-    ptTids: (ListVal u64).view
+    ptTids: (ListVal ztypes.tid).view
     sfx: String
     subs: (IdMapV zast.nameid v: ztypes.tid)
     valueSubs: (IdMapV zast.nameid v: u64)
@@ -25160,7 +25160,7 @@ classifyInferenceRows: function {
     fNames: ListVal zast.nameid
     fParams: ListVal zast.nameid
     ptNames: ListVal zast.nameid
-    ptTids: ListVal u64
+    ptTids: ListVal ztypes.tid
 } is {
     ci3: u64
     for ci3 < rowTids.length loop {
@@ -25258,7 +25258,7 @@ inferGenericConstruction: function {
     fNames: ListVal zast.nameid
     fParams: ListVal zast.nameid
     ptNames: ListVal zast.nameid
-    ptTids: ListVal u64
+    ptTids: ListVal ztypes.tid
     (classifyInferenceRows
         :st
         :ast
@@ -41065,9 +41065,9 @@ functionSignaturesMatch: function {
     if a == b then return true
     if (st.reg.typetypeOf typeId: a) != ztypes.ztypetype.functionType then return false
     an: ListVal u64
-    at: ListVal u64
+    at: ListVal ztypes.tid
     bn: ListVal u64
-    bt: ListVal u64
+    bt: ListVal ztypes.tid
     collectParamRows :st fnTid: a names: an tids: at
     collectParamRows :st fnTid: b names: bn tids: bt
     if an.length != bn.length then return false
@@ -41077,8 +41077,8 @@ functionSignaturesMatch: function {
         if (paramTypesMatch
             :ast
             :st
-            a: (ztypes.tid.create from: (at.get :i))
-            b: (ztypes.tid.create from: (bt.get :i))
+            a: (at.get :i)
+            b: (bt.get :i)
         ).not then {
             return false
         }
@@ -41109,7 +41109,7 @@ collectParamRows: function {
     st: zenv.ZSymbolTable
     fnTid: ztypes.tid
     names: ListVal u64
-    tids: ListVal u64
+    tids: ListVal ztypes.tid
 } is {
     ns: st.typing.declRowSlots ownerTid: fnTid
     k: u64
@@ -41560,7 +41560,7 @@ argownership: record {
     # the parameter is `.hold`: passed by pointer and never freed by the callee
     isHold: bool
     # the parameter's type, which the argument is coerced to
-    pt: u64
+    pt: ztypes.tid
 }
 
 # argOwnershipOf -- what the call does to this argument's source, read off the
@@ -41579,7 +41579,7 @@ argOwnershipOf: function {
     isLockish: false
     isViewArg: false
     isHold: false
-    pt: u64
+    pt: ztypes.tid
     if funcId > 0 when pnId.isZero.not then {
         if (isLiteralTypeId :st tid: vt) then {
             po: st.typing.declChildOfId parentTypeId: funcId nameId: pnId
@@ -41811,7 +41811,7 @@ checkTypedCallArg: function {
         :ast
         :call
         :vt
-        pt: (ztypes.tid.create from: pt)
+        :pt
         :isTake
         :isLockish
         :isViewArg
@@ -41853,7 +41853,7 @@ ctorEffectiveTid: function {
         )
         if crEff > 0 when (
             (st.reg.typetypeOf typeId: crEff) == ztypes.ztypetype.functionType
-        ) then effId = ztypes.tid.create from: crEff.u64
+        ) then effId = crEff
     }
     return effId
 }
@@ -46731,7 +46731,7 @@ lockGenericValueArg: function {
         :ast
         :call
         :vt
-        pt: (ztypes.tid.create from: aow.pt)
+        pt: aow.pt
         isTake: aow.isTake
         isLockish: aow.isLockish
         isViewArg: aow.isViewArg
@@ -51148,7 +51148,7 @@ checkFunctionBodyIn: function {
         prevRb: st.typing.currentReturnsBorrow
         st.typing.currentReturnsBorrow = (walkedFnFlag
             tbl: st.typing.funcReturnsBorrow
-            fitid: (ztypes.tid.create from: fitid)
+            :fitid
             :mono
         )
         prevRv: st.typing.currentReturnsView
@@ -51160,7 +51160,7 @@ checkFunctionBodyIn: function {
         prevFp: st.typing.currentFnPins
         st.typing.currentFnPins = (walkedFnFlag
             tbl: st.typing.funcPins
-            fitid: (ztypes.tid.create from: fitid)
+            :fitid
             :mono
         )
         # `yield` enters scope for a generator's synth `.call` body and
@@ -60151,7 +60151,7 @@ canonicalizeShellNodeStamps: function {
         ci = ci.next
     }
     dKeys: ListVal zast.nodeid
-    dIns: ListVal u64
+    dIns: ListVal ztypes.tid
     for each edKeys: st.typing.dpTaggedParent.iterateItems loop {
         dKeys.append edKeys.key
         dIns.append edKeys.value
@@ -60161,12 +60161,12 @@ canonicalizeShellNodeStamps: function {
     for di < dKeys.length loop {
         (st.typing.dpTaggedParent.set
             key: (dKeys.get i: di)
-            value: (ztypes.tid.create from: (dIns.get i: di))
+            value: (dIns.get i: di)
         )
         di = di + 1
     }
     pKeys: ListVal zast.nodeid
-    pIns: ListVal u64
+    pIns: ListVal ztypes.tid
     for each epKeys: st.typing.dpArmPredicate.iterateItems loop {
         pKeys.append epKeys.key
         pIns.append epKeys.value
@@ -60176,12 +60176,12 @@ canonicalizeShellNodeStamps: function {
     for pi < pKeys.length loop {
         (st.typing.dpArmPredicate.set
             key: (pKeys.get i: pi)
-            value: (ztypes.tid.create from: (pIns.get i: pi))
+            value: (pIns.get i: pi)
         )
         pi = pi + 1
     }
     tKeys: ListVal zast.nodeid
-    tIns: ListVal u64
+    tIns: ListVal ztypes.tid
     for each etKeys: st.typing.dpTagRead.iterateItems loop {
         tKeys.append etKeys.key
         tIns.append etKeys.value
@@ -60191,12 +60191,12 @@ canonicalizeShellNodeStamps: function {
     for ti < tKeys.length loop {
         (st.typing.dpTagRead.set
             key: (tKeys.get i: ti)
-            value: (ztypes.tid.create from: (tIns.get i: ti))
+            value: (tIns.get i: ti)
         )
         ti = ti + 1
     }
     gKeys: ListVal zast.nodeid
-    gIns: ListVal u64
+    gIns: ListVal ztypes.tid
     for each egKeys: st.typing.postGuardTid.iterateItems loop {
         gKeys.append egKeys.key
         gIns.append egKeys.value
@@ -60206,14 +60206,14 @@ canonicalizeShellNodeStamps: function {
     for gi < gKeys.length loop {
         (st.typing.postGuardTid.set
             key: (gKeys.get i: gi)
-            value: (ztypes.tid.create from: (gIns.get i: gi))
+            value: (gIns.get i: gi)
         )
         gi = gi + 1
     }
     anids: ListVal ztypes.tid
     avals: ListVal ztypes.tid
     aKeys: ListVal ztypes.tid
-    aIns: ListVal u64
+    aIns: ListVal ztypes.tid
     for each a: st.typing.tagAccessorTid.iterateItems loop {
         aKeys.append a.key
         aIns.append a.value
@@ -60225,7 +60225,7 @@ canonicalizeShellNodeStamps: function {
             :st
             :scope
             :cache
-            tid: (ztypes.tid.create from: (aIns.get i: ai))
+            tid: (aIns.get i: ai)
             :unitDecl
         )
         if rid6 > 0 then {
@@ -60257,7 +60257,7 @@ canonShellRows: function {
     unitDecl: ztypes.declid
     scope: ztypes.declid
     cache: (IdMapV ztypes.tid v: ztypes.tid)
-    rows: ListVal u64
+    rows: ListVal ztypes.tid
 } is {
     i: u64
     for i < rows.length loop {
@@ -60266,7 +60266,7 @@ canonShellRows: function {
             :st
             :scope
             :cache
-            tid: (ztypes.tid.create from: (rows.get :i))
+            tid: (rows.get :i)
             :unitDecl
         )
         if rid > 0 then rows.set :i val: rid
