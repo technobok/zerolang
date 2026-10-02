@@ -9,8 +9,7 @@ public: unit {
     :nameid
     :nodeid
     :noNode
-    :firstNode
-    :nextRowId
+    :tableReserveIn
     :markerkind
     :markerKindOf
     :markerKindOfLeaf
@@ -32,7 +31,6 @@ public: unit {
     :ErrorData
     :errorrow
     :errorDataOf
-    :FileSeg
     :forrow
     :functionrow
     :ifclauserow
@@ -703,19 +701,6 @@ labelvaluerow: record {
 # every occurrence of an identifier shares one String (position = first
 # sight). The parser interns; synthesized atoms move into their
 # reserved slots via tableAdd.
-# FileSeg -- one parsed file's contiguous nodeid range [startId, endId) and
-# its VFS fsno. Subunit loads nest child ranges inside the parent's; the
-# innermost containing range wins (fsnoForNode).
-FileSeg: class {
-    # the first node id belonging to this file
-    startId: nodeid
-    # one past the last node id of this file, so a segment is the half-open
-    # [startId, endId)
-    endId: nodeid
-    # the file the segment covers
-    fsno: zvfs.fsno
-}
-
 # Well-known interned names: Ast.create interns these first, in this
 # exact order, so their pool ids are fixed across every carrier.
 # APPEND-ONLY, and never renumber: pool ids minted from this order are
@@ -824,9 +809,13 @@ Ast: class {
     # every node's child ids, end to end. A carrier names its own children as a
     # `kidspan` window into this, so no node owns a list
     kids: ListVal nodeid
-    # Per-file nodeid segments: diagnostics map an erroring node back to
-    # the file whose parse allocated it.
-    fileSegs: List FileSeg
+    # the file each row reports from, beside `nodes` row for row: the file a
+    # parsed row was read from, the source's file for a row made from another
+    # (a rewrite, an instance's copy). 0 for a row of the root parse and for one
+    # made from no node
+    rowFile: (ListVal zvfs.fsno i: nodeid)
+    # the unit files the parse loaded, in the order it finished them
+    files: ListVal zvfs.fsno
     # the program row's own id. The root is a row like any other, so a reader
     # holding the tree can reach it without being handed the node separately
     root: nodeid
@@ -842,13 +831,15 @@ Ast: class {
             names: StringPool.create
             units: ListVal nodeid
             kids: ListVal nodeid
-            fileSegs: List FileSeg
+            rowFile: (ListVal zvfs.fsno i: nodeid)
+            files: ListVal zvfs.fsno
             root: nodeid
             mainUnitName: String
         )
         # row 0 is the sentinel a node id of 0 addresses: the placeholder arm,
         # which every reader already treats as "nothing here"
         a.nodes.append from: astnode.placeholder
+        a.rowFile.append from: zvfs.fsno
         # and row 0 of the child arena, so that no real span starts at 0
         a.kids.append from: nodeid
         a.names.set s: "this"
@@ -933,31 +924,9 @@ Ast: class {
         return (poolSet pool: this.names :text)
     }
 
-    # fsnoForNode -- the fsno of the file whose parse allocated `nodeid`:
-    # the innermost containing segment (subunit ranges nest inside their
-    # parent's, so the largest containing startId wins). 0 when no segment
-    # contains it (synthesized nodes minted after parsing).
+    # fsnoForNode -- the file the row `nodeid` reports from (rowFile).
     fsnoForNode: function {this: this.view nodeid: nodeid} out zvfs.fsno is {
-        best: zvfs.fsno
-        bestStart: nodeid
-        n: this.fileSegs.length
-        i: u64
-        for i < n loop {
-            sg: this.fileSegs.get :i
-            i = i + 1
-            if sg.startId <= nodeid when nodeid < sg.endId then {
-                if best.u64 == 0 then {
-                    best = sg.fsno
-                    bestStart = sg.startId
-                } else {
-                    if sg.startId >= bestStart then {
-                        best = sg.fsno
-                        bestStart = sg.startId
-                    }
-                }
-            }
-        }
-        return best
+        return (this.rowFile.get i: nodeid)
     }
 }
 
@@ -1028,9 +997,6 @@ nodeid: typedef u32 as {
 # noNode -- the zero node id: no node at all. Row 0 of the table is reserved,
 # so it names nothing; a parameter that may be handed no node defaults to it
 noNode: nodeid 0
-
-# firstNode -- the first real row's id, where a parse starts counting
-firstNode: nodeid 1
 
 # StringPool -- deduplicating intern table for identifier text. A pool id
 # indexes its row; row 0 is a sentinel holding the empty text, which is the
@@ -2078,20 +2044,19 @@ printProgramCanonicalRoot: function {ast: Ast.view} is {
 # the real child into it. A nodeid IS its row's index; row 0 is the
 # sentinel a node id of 0 addresses.
 
-# tableReserve -- reserve a table slot for a node not yet built; the
-# slot holds the placeholder arm until tableAdd moves the finished
-# node in.
-tableReserve: function {ast: Ast} out nodeid is {
-    id: nextRowId :ast
-    ast.nodes.append from: astnode.placeholder
-    return id
+# tableReserve -- reserve a table slot for a node not yet built, made from the
+# node `from`: it reports from that node's file (noNode: from none). The slot
+# holds the placeholder arm until tableAdd moves the finished node in.
+tableReserve: function {ast: Ast from: nodeid} out nodeid is {
+    return (tableReserveIn :ast file: (ast.fsnoForNode nodeid: from))
 }
 
-# nextRowId -- the id the next row appended to the table gets. A node id IS its
-# row's index, and the table's length is a count, so this is where an id is
-# made from a number.
-nextRowId: function {ast: Ast.view} out nodeid is {
-    return (nodeid.create from: ast.nodes.length.u32.orPanic)
+# tableReserveIn -- tableReserve for a row read from `file`: the parser's form,
+# which knows the file it is reading. The only place a row is added, so
+# `nodes` and `rowFile` stay row for row.
+tableReserveIn: function {ast: Ast file: zvfs.fsno} out nodeid is {
+    ast.rowFile.append from: file
+    return (ast.nodes.append from: astnode.placeholder)
 }
 
 # tableSet -- move a converted parent's child into its reserved slot
@@ -2199,7 +2164,7 @@ cloneTreeAt: function {ast: Ast nid: nodeid} out astnode is {
         cloned.append (tableAdd :ast n: c)
         ki = ki + 1
     }
-    myId: tableReserve :ast
+    myId: tableReserve :ast from: nid
     built: astnode.placeholder
     {
         n: ast.nodes.get i: nid

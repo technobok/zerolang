@@ -262,8 +262,10 @@ isValidUnitName: function {name: StringView} out bool is {
 
 # the recursive-descent parser: consumes a token stream and builds the AST.
 Parser: class {
-    # Monotonic source-node id, assigned in parse order.
-    nextNodeId: zast.nodeid
+    # the unit file whose body is being read: the file every row minted now
+    # reports from. 0 outside a unit file's body (the root parse, a unit's
+    # wrapper rows)
+    curFile: zvfs.fsno
     # Master node table: one slot per minted id (a reserved slot holds
     # the payload-less placeholder arm until a converted parent moves
     # the real child in).
@@ -286,7 +288,7 @@ Parser: class {
     # and the name pool only the empty text
     create: function {} out this is {
         return (meta.create
-            nextNodeId: zast.firstNode
+            curFile: zvfs.fsno
             ast: Ast.create
             opStack: ListVal zast.nodeid
             argStack: ListVal zast.nodeid
@@ -296,10 +298,7 @@ Parser: class {
 
     # Allocate the next node id and reserve its master-table slot.
     nextId: function {:this} out zast.nodeid is {
-        id: this.nextNodeId
-        this.nextNodeId = id.next
-        this.ast.nodes.append from: zast.astnode.placeholder
-        return id
+        return (zast.tableReserveIn ast: this.ast file: this.curFile)
     }
 
     # errorTree -- hand the tree back with `e` as its root row. A failed parse
@@ -4147,12 +4146,14 @@ Parser: class {
             lx: zlexer.Lexer.create lexer: tk
             lx.advance pool: this.ast.names
             firstPos: lx.peekPos
-            segStart: this.nextNodeId
+            outerFile: this.curFile
+            this.curFile = fsid
             body: this.acceptUnitBody lex: lx
             bn: body.length
             if bn > 0 then {
                 lastId: body.pop
                 if (zast.isErrorAt ast: this.ast id: lastId) then {
+                    this.curFile = outerFile
                     return (zast.tableTake ast: this.ast id: lastId)
                 }
                 body.append lastId
@@ -4165,10 +4166,12 @@ Parser: class {
                 # which
                 if lx.peekType == zlexer.toktype.errTok then {
                     bad: lx.acceptAny pool: this.ast.names
+                    this.curFile = outerFile
                     return (this.mkError tok: bad code: zast.err.badUnit msg: "")
                 }
                 badPos: lx.peekPos
                 rwTxt: this.peekReservedWord lex: lx
+                this.curFile = outerFile
                 if rwTxt.length > 0 then return (this.mkErrorAt
                     pos: badPos
                     code: zast.err.reservedName
@@ -4180,11 +4183,8 @@ Parser: class {
                     msg: "Expected EOF at end of unit file"
                 )
             } case some then null
-            this.ast.fileSegs.append (zast.FileSeg
-                startId: segStart
-                endId: this.nextNodeId
-                fsno: fsid
-            )
+            this.curFile = outerFile
+            this.ast.files.append from: fsid
             ewBindNameList ast: this.ast scope: outNames items: body
             raw: collectExterns ast: this.ast :body
             dirid: vfs.siblingDir fileid: fsid name: unitname.stringView

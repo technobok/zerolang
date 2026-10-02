@@ -3948,10 +3948,10 @@ Analysis: class {
     # agree. 0 when the parse did not load it.
     selfFsnoOf: function {this: this.view vfs: zvfs.ZVfs.view prog: Ast.view} out zvfs.fsno is {
         found: zvfs.fsno
-        for each sg: prog.fileSegs loop {
+        for each f: prog.files loop {
             if found.u32 == 0 then {
-                fp: vfs.pathfromproviderNative dentryid: sg.fsno.u32
-                if (sameFile a: fp.stringView b: this.path.stringView) then found = sg.fsno
+                fp: vfs.pathfromproviderNative dentryid: f.u32
+                if (sameFile a: fp.stringView b: this.path.stringView) then found = f
             }
         }
         return found
@@ -4808,12 +4808,14 @@ Analysis: class {
         if mainTid == 0 then return
         mainOp: lu.op
         memIds: unitMemberIds :prog unitOp: mainOp
-        probe: u32
+        probe: zast.nodeid
         if memIds.length > 0 then probe = memIds.get i: 0
-        seg: unitFileSegment :prog :probe
+        # the unit's file is its first body member's: the unit's wrapper rows
+        # are minted after its body is read, and report from no file
+        file: prog.fsnoForNode nodeid: probe
         um: unitMembersOf :prog :st :mainTid :memIds
-        usedE: usedDeclSet :prog :st :mainTid :seg :um
-        refNames: unitAtomNames :prog :seg :um
+        usedE: usedDeclSet :prog :st :mainTid :file :um
+        refNames: unitAtomNames :prog :file :um
         ev: UnusedEvidence :mainTid :usedE :refNames :memIds
         this.reportUnusedUnitDefs :prog :st :ev
         this.reportUnusedTypeMembers :prog :st :ev
@@ -5154,16 +5156,15 @@ memberIndexAtLine: function {um: UnitMembers.view line: u32} out u64 is {
 }
 
 # selfReferenceAt -- the reference at `siteNid` names the very member it sits
-# inside. The site must be in this unit's own file segment: a use from another
-# file shares no line numbering with these extents, and dropping one would
-# report a member that IS used.
+# inside. The site must be in this unit's own file: a use from another file
+# shares no line numbering with these extents, and dropping one would report a
+# member that IS used.
 selfReferenceAt: function {
-    prog: Ast.view seg: segrange um: UnitMembers.view siteNid: zast.nodeid declId: u64
+    prog: Ast.view file: zvfs.fsno um: UnitMembers.view siteNid: zast.nodeid declId: u64
 } out bool is {
     if declId == 0 then return false
-    if seg.end <= seg.start then return false
-    if siteNid < seg.start then return false
-    if siteNid >= seg.end then return false
+    if file.u32 == 0 then return false
+    if ((prog.fsnoForNode nodeid: siteNid) == file).not then return false
     ln: u32
     {
         ln = (zast.posOf n: (prog.nodes.get i: siteNid)).line
@@ -5303,7 +5304,7 @@ usedDeclSet: function {
     prog: Ast.view
     st: zenv.ZSymbolTable.view
     mainTid: u64
-    seg: segrange
+    file: zvfs.fsno
     um: UnitMembers.view
 } out IdSet u64 is {
     usedE: IdSet u64
@@ -5317,7 +5318,7 @@ usedDeclSet: function {
         dPar = dlo.parent
         if (selfReferenceAt
             :prog
-            :seg
+            :file
             :um
             siteNid: e.key
             declId: e.value.u64
@@ -5381,54 +5382,14 @@ addPublicAliasTargets: function {
     }
 }
 
-# segrange -- a range of node ids: a file segment, or empty when none covers
-segrange: record {
-    # the first node id of the range
-    start: zast.nodeid
-    # one past the last node id of the range
-    end: zast.nodeid
-}
-
-# unitFileSegment -- the narrowest file segment holding `probe`, the unit's
-# first body member: the unit's wrapper nodes are minted after its file segment
-# closes, so the first member, not the unitdef, probes for it. Empty when no
-# segment covers it, which is the root parse.
-unitFileSegment: function {prog: Ast.view probe: u32} out segrange is {
-    r: segrange start: zast.nodeid end: zast.nodeid
-    sgN: prog.fileSegs.length
-    sgI: u64
-    for sgI < sgN loop {
-        sg: prog.fileSegs.get i: sgI
-        sgI = sgI + 1
-        if probe >= sg.startId when probe < sg.endId then {
-            narrower: r.end == r.start
-            if (sg.endId - sg.startId) < (r.end - r.start) then narrower = true
-            if narrower then {
-                r.start = sg.startId
-                r.end = sg.endId
-            }
-        }
-    }
-    return r
-}
-
-
-# atomNamesOutsideSegments -- every atom name among the nodes no file segment
-# covers: the root parse's own, since only subunit loads append segments
-atomNamesOutsideSegments: function {prog: Ast.view into: IdSet u64} is {
-    sgN: prog.fileSegs.length
+# rootAtomNames -- every atom name among the rows that report from no file:
+# the root parse's own, since only a unit file's body reports from its file
+rootAtomNames: function {prog: Ast.view into: IdSet u64} is {
     totN: prog.nodes.length
     ndJ: zast.nodeid
     ndJ = ndJ.next
     for ndJ.u64 < totN loop {
-        covered: false
-        sgJ: u64
-        for sgJ < sgN loop {
-            sgB: prog.fileSegs.get i: sgJ
-            sgJ = sgJ + 1
-            if ndJ >= sgB.startId when ndJ < sgB.endId then covered = true
-        }
-        if covered.not then {
+        if (prog.fsnoForNode nodeid: ndJ).u32 == 0 then {
             ndB0: prog.nodes.get i: ndJ
             if ndB0.atomid then into.add item: ndB0.name.u64
         }
@@ -5436,32 +5397,35 @@ atomNamesOutsideSegments: function {prog: Ast.view into: IdSet u64} is {
     }
 }
 
-# unitAtomNames -- the syntactic fallback evidence: every atom name in the
-# unit's own file segment. Stamps exist only for the bodies the demand walk
+# unitAtomNames -- the syntactic fallback evidence: every atom name the
+# unit's own file holds. Stamps exist only for the bodies the demand walk
 # checked, so a private def used only inside an unchecked body (a construction
 # in a never-demanded factory) would otherwise read as dead.
-unitAtomNames: function {prog: Ast.view seg: segrange um: UnitMembers.view} out IdSet u64 is {
+unitAtomNames: function {prog: Ast.view file: zvfs.fsno um: UnitMembers.view} out IdSet u64 is {
     names: IdSet u64
-    if seg.end > seg.start then {
-        atomNamesOutsideSelf :prog :seg :um into: names
+    if file.u32 > 0 then {
+        atomNamesOutsideSelf :prog :file :um into: names
     } else {
-        atomNamesOutsideSegments :prog into: names
+        rootAtomNames :prog into: names
     }
     return names
 }
 
-# atomNamesOutsideSelf -- every atom name in `[seg.start, seg.end)` except
-# where the atom names the member it sits inside. A self-recursive definition
+# atomNamesOutsideSelf -- every atom name in the file `file` except where the
+# atom names the member it sits inside. A self-recursive definition
 # spells its own name, and counting that as a use is what kept L012 silent
 # about two dead emitter helpers for three months.
 atomNamesOutsideSelf: function {
-    prog: Ast.view seg: segrange um: UnitMembers.view into: IdSet u64
+    prog: Ast.view file: zvfs.fsno um: UnitMembers.view into: IdSet u64
 } is {
-    ndI: seg.start
-    for ndI < seg.end loop {
+    totN: prog.nodes.length
+    ndI: zast.nodeid
+    ndI = ndI.next
+    for ndI.u64 < totN loop {
         nd0: prog.nodes.get i: ndI
+        inFile: prog.fsnoForNode nodeid: ndI
         ndI = ndI.next
-        if nd0.atomid then {
+        if nd0.atomid when inFile == file then {
             k: memberIndexAtLine :um line: nd0.lineno
             isSelf: false
             if k < um.names.length when (um.names.get i: k) == nd0.name.u64 then isSelf = true

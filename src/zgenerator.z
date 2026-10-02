@@ -121,12 +121,14 @@ internSynthName: function {ast: Ast text: StringView} out zast.nameid is {
 # build an atomid node for a name and return its node id.
 mkAtom: function {
     ast: Ast
+    # the node the made rows stand for: they report from its file
+    from: zast.nodeid
     line: u32
     col: u32
     name: StringView
 } out astnode is {
     return (astnode.atomid (zast.atomidrow
-        nodeid: (zast.tableReserve :ast)
+        nodeid: (zast.tableReserve :ast from: from)
         lineno: line
         colno: col
         name: (internSynthName :ast text: name)
@@ -138,13 +140,15 @@ mkAtom: function {
 # and return its node id.
 mkNamedOp: function {
     ast: Ast
+    # the node the made rows stand for: they report from its file
+    from: zast.nodeid
     line: u32
     col: u32
     name: StringView
     op: astnode
 } out astnode is {
     return (astnode.namedoperation (zast.namedoperationrow
-        nodeid: (zast.tableReserve :ast)
+        nodeid: (zast.tableReserve :ast from: from)
         lineno: line
         colno: col
         name: (ast.names.set s: name)
@@ -156,12 +160,14 @@ mkNamedOp: function {
 # build a bare namedoperation node and return its node id.
 mkBareOp: function {
     ast: Ast
+    # the node the made rows stand for: they report from its file
+    from: zast.nodeid
     line: u32
     col: u32
     op: astnode
 } out astnode is {
     return (astnode.namedoperation (zast.namedoperationrow
-        nodeid: (zast.tableReserve :ast)
+        nodeid: (zast.tableReserve :ast from: from)
         lineno: line
         colno: col
         name: zast.nameid
@@ -174,16 +180,18 @@ mkBareOp: function {
 # the create method and the factory share.
 mkReturnBody: function {
     ast: Ast
+    # the node the made rows stand for: they report from its file
+    from: zast.nodeid
     line: u32
     col: u32
     inner: astnode
 } out astnode is {
-    retCal: mkAtom :ast :line :col name: "return"
-    retArg: mkBareOp :ast :line :col op: inner
+    retCal: mkAtom :ast :from :line :col name: "return"
+    retArg: mkBareOp :ast :from :line :col op: inner
     retArgs: ListVal zast.nodeid
     retArgs.append (zast.tableAdd :ast n: retArg)
     retCall: astnode.call (zast.callrow
-        nodeid: (zast.tableReserve :ast)
+        nodeid: (zast.tableReserve :ast from: from)
         lineno: line
         colno: col
         callable: (zast.tableAdd :ast n: retCal)
@@ -191,7 +199,7 @@ mkReturnBody: function {
         infix: false
     )
     sline: astnode.statementline (zast.statementlinerow
-        nodeid: (zast.tableReserve :ast)
+        nodeid: (zast.tableReserve :ast from: from)
         lineno: line
         colno: col
         statementline: (zast.tableAdd :ast n: retCall)
@@ -199,7 +207,7 @@ mkReturnBody: function {
     slist: ListVal zast.nodeid
     slist.append (zast.tableAdd :ast n: sline)
     return (astnode.statement (zast.statementrow
-        nodeid: (zast.tableReserve :ast)
+        nodeid: (zast.tableReserve :ast from: from)
         lineno: line
         colno: col
         statements: (zast.kidsAdd kids: ast.kids xs: slist)
@@ -230,6 +238,8 @@ typePathIsReference: function {ast: Ast.view nid: zast.nodeid} out bool is {
 # every other field starts zero, until the body writes it.
 buildCreateMethod: function {
     ast: Ast
+    # the node the made rows stand for: they report from its file
+    from: zast.nodeid
     line: u32
     col: u32
     params: (ListVal zast.nodeid).take
@@ -237,17 +247,17 @@ buildCreateMethod: function {
     # a captured field is a reference, so the create is `outx this`
     pins: bool
 } out astnode is {
-    metaAtom: mkAtom :ast :line :col name: "meta"
-    createAtom: mkAtom :ast :line :col name: "create"
+    metaAtom: mkAtom :ast :from :line :col name: "meta"
+    createAtom: mkAtom :ast :from :line :col name: "create"
     metaCreate: astnode.dottedpath (zast.dottedpathrow
-        nodeid: (zast.tableReserve :ast)
+        nodeid: (zast.tableReserve :ast from: from)
         lineno: line
         colno: col
         parent: (zast.tableAdd :ast n: metaAtom)
         child: (zast.tableAdd :ast n: createAtom)
     )
-    zeroAtom: mkAtom :ast :line :col name: "0"
-    stArg: mkNamedOp :ast :line :col name: "state" op: zeroAtom
+    zeroAtom: mkAtom :ast :from :line :col name: "0"
+    stArg: mkNamedOp :ast :from :line :col name: "state" op: zeroAtom
     cargs: ListVal zast.nodeid
     cargs.append (zast.tableAdd :ast n: stArg)
     fi: u64
@@ -256,33 +266,33 @@ buildCreateMethod: function {
         f0: fwdNames.get i: fi
         f0v: f0.stringView
         lv0: astnode.labelvalue (zast.labelvaluerow
-            nodeid: (zast.tableReserve :ast)
+            nodeid: (zast.tableReserve :ast from: from)
             lineno: line
             colno: col
             name: (internSynthName :ast text: f0v)
             forwards: true
         )
-        fa0: mkNamedOp :ast :line :col name: f0v op: lv0
+        fa0: mkNamedOp :ast :from :line :col name: f0v op: lv0
         cargs.append (zast.tableAdd :ast n: fa0)
         fi = fi + 1
     }
     icall: astnode.call (zast.callrow
-        nodeid: (zast.tableReserve :ast)
+        nodeid: (zast.tableReserve :ast from: from)
         lineno: line
         colno: col
         callable: (zast.tableAdd :ast n: metaCreate)
         arguments: (zast.kidsAdd kids: ast.kids xs: cargs)
         infix: false
     )
-    body: mkReturnBody :ast :line :col inner: icall
+    body: mkReturnBody :ast :from :line :col inner: icall
     # `outx this` when the synth class captures a NON-OWNED parameter -- a
     # reference into the caller that has to stay pinned for the iterator's
     # lifetime; a plain `out this` when it captures nothing non-owned, since
     # an `outx` with nothing to pin is refused.
-    thisRet: mkAtom :ast :line :col name: "this"
+    thisRet: mkAtom :ast :from :line :col name: "this"
     thisRetId: zast.tableAdd :ast n: thisRet
     return (astnode.functiondef (zast.functionrow
-        nodeid: (zast.tableReserve :ast)
+        nodeid: (zast.tableReserve :ast from: from)
         lineno: line
         colno: col
         returntype: thisRetId
@@ -304,6 +314,8 @@ buildCreateMethod: function {
 # take exactly one parameter, which is what makes eliding it safe.
 buildWrapper: function {
     ast: Ast
+    # the node the made rows stand for: they report from its file
+    from: zast.nodeid
     line: u32
     col: u32
     base: astnode
@@ -315,12 +327,12 @@ buildWrapper: function {
     # collapses the owned wrapper further (a valtype element to optionval).
     wn: "Option"
     if leaf.borrowMarker then wn = "OptionView"
-    wAtom: mkAtom :ast :line :col name: wn
-    tArg: mkBareOp :ast :line :col op: base
+    wAtom: mkAtom :ast :from :line :col name: wn
+    tArg: mkBareOp :ast :from :line :col op: base
     wargs: ListVal zast.nodeid
     wargs.append (zast.tableAdd :ast n: tArg)
     return (astnode.call (zast.callrow
-        nodeid: (zast.tableReserve :ast)
+        nodeid: (zast.tableReserve :ast from: from)
         lineno: line
         colno: col
         callable: (zast.tableAdd :ast n: wAtom)
@@ -399,7 +411,7 @@ promoteIterables: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out astnode 
         promoteLine :ast :ctr nid: s0Id dst: newLines
     }
     return (astnode.statement (zast.statementrow
-        nodeid: (zast.tableReserve :ast)
+        nodeid: (zast.tableReserve :ast from: nid)
         lineno: lnP
         colno: coP
         statements: (zast.kidsAdd kids: ast.kids xs: newLines)
@@ -611,20 +623,20 @@ spillPart: function {
     synthN: "_part\{ctr.bump}"
     snid: zast.poolSet pool: ast.names text: synthN.stringView
     sa: astnode.assignment (zast.assignmentrow
-        nodeid: (zast.tableReserve :ast)
+        nodeid: (zast.tableReserve :ast from: part)
         lineno: ln
         colno: co
         name: snid
         value: part
     )
     sl: astnode.statementline (zast.statementlinerow
-        nodeid: (zast.tableReserve :ast)
+        nodeid: (zast.tableReserve :ast from: part)
         lineno: ln
         colno: co
         statementline: (zast.tableAdd :ast n: sa)
     )
     dst.append (zast.tableAdd :ast n: sl)
-    at: mkAtom :ast line: ln col: co name: synthN.stringView
+    at: mkAtom :ast from: part line: ln col: co name: synthN.stringView
     atId: zast.tableAdd :ast n: at
     hm: ast.nodes.getMut i: holder
     if hm.namedoperation then {
@@ -671,7 +683,7 @@ promoteLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid dst: ListVal zast.
         # one block may bind the same name
         pr: promoteBareLine :ast :ctr nid: innerId
         nl: astnode.statementline (zast.statementlinerow
-            nodeid: (zast.tableReserve :ast)
+            nodeid: (zast.tableReserve :ast from: nid)
             lineno: lnQ
             colno: coQ
             statementline: pr
@@ -727,7 +739,7 @@ promoteWrappedBody: function {ast: Ast ctr: NameCtr oId: zast.nodeid} out zast.n
     innerNew: promoteWrappedBody :ast :ctr oId: innerId
     if innerNew.isZero then return zast.nodeid
     redo: astnode.doexpr (zast.dorow
-        nodeid: (zast.tableReserve :ast)
+        nodeid: (zast.tableReserve :ast from: oId)
         lineno: lnY
         colno: coY
         statement: innerNew
@@ -752,20 +764,20 @@ promoteBareLine: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out zast.node
     lnB = pB.line
     coB = pB.col
     sl: astnode.statementline (zast.statementlinerow
-        nodeid: (zast.tableReserve :ast)
+        nodeid: (zast.tableReserve :ast from: nid)
         lineno: lnB
         colno: coB
         statementline: (zast.tableAdd :ast n: ni)
     )
     hoisted.append (zast.tableAdd :ast n: sl)
     blk: astnode.statement (zast.statementrow
-        nodeid: (zast.tableReserve :ast)
+        nodeid: (zast.tableReserve :ast from: nid)
         lineno: lnB
         colno: coB
         statements: (zast.kidsAdd kids: ast.kids xs: hoisted)
     )
     redo: astnode.doexpr (zast.dorow
-        nodeid: (zast.tableReserve :ast)
+        nodeid: (zast.tableReserve :ast from: nid)
         lineno: lnB
         colno: coB
         statement: (zast.tableAdd :ast n: blk)
@@ -807,7 +819,7 @@ promoteWith: function {ast: Ast ctr: NameCtr nid: zast.nodeid} out astnode is {
     nval: zast.cloneTreeAt :ast nid: valW
     nvalId: zast.tableAdd :ast n: nval
     return (astnode.withexpr (zast.withrow
-        nodeid: (zast.tableReserve :ast)
+        nodeid: (zast.tableReserve :ast from: nid)
         lineno: lnW
         colno: coW
         name: nameW
@@ -887,14 +899,14 @@ promoteForCond: function {
         snv0: synthN.stringView
         snid0: zast.poolSet pool: ast.names text: snv0
         sa0: astnode.assignment (zast.assignmentrow
-            nodeid: (zast.tableReserve :ast)
+            nodeid: (zast.tableReserve :ast from: c0Id)
             lineno: hl0
             colno: hc0
             name: snid0
             value: (zast.tableAdd :ast n: rhs0)
         )
         sl0: astnode.statementline (zast.statementlinerow
-            nodeid: (zast.tableReserve :ast)
+            nodeid: (zast.tableReserve :ast from: c0Id)
             lineno: hl0
             colno: hc0
             statementline: (zast.tableAdd :ast n: sa0)
@@ -906,16 +918,16 @@ promoteForCond: function {
         # the loop walks the object `_iterN` holds -- an iterator, or a
         # container through its `iterate` -- and does not call it: a bare
         # callable is called (D1), so the walk names it with a marker
-        na0: mkAtom :ast line: hl0 col: hc0 name: snv0
-        nb0: mkAtom :ast line: hl0 col: hc0 name: "borrow"
+        na0: mkAtom :ast from: c0Id line: hl0 col: hc0 name: snv0
+        nb0: mkAtom :ast from: c0Id line: hl0 col: hc0 name: "borrow"
         nd0: astnode.dottedpath (zast.dottedpathrow
-            nodeid: (zast.tableReserve :ast)
+            nodeid: (zast.tableReserve :ast from: c0Id)
             lineno: hl0
             colno: hc0
             parent: (zast.tableAdd :ast n: na0)
             child: (zast.tableAdd :ast n: nb0)
         )
-        nc0: mkNamedOp :ast line: hl0 col: hc0 name: cn1.stringView op: nd0
+        nc0: mkNamedOp :ast from: c0Id line: hl0 col: hc0 name: cn1.stringView op: nd0
         nconds.append (zast.tableAdd :ast n: nc0)
     } else {
         cc0: zast.cloneTreeAt :ast nid: c0Id
@@ -996,7 +1008,7 @@ promoteFor: function {
         nposts.append (zast.tableAdd :ast n: pp0)
     }
     return (astnode.forexpr (zast.forrow
-        nodeid: (zast.tableReserve :ast)
+        nodeid: (zast.tableReserve :ast from: nid)
         lineno: lnS
         colno: coS
         conditions: (zast.kidsAdd kids: ast.kids xs: nconds)
@@ -1062,6 +1074,8 @@ condIsTrivial: function {ast: Ast.view n: astnode.view} out bool is {
 scalarTypePath: function {
     # the tree the path is minted into
     ast: Ast
+    # the node the made rows stand for: they report from its file
+    from: zast.nodeid
     # the line the field is attributed to
     line: u32
     # the column likewise
@@ -1069,10 +1083,10 @@ scalarTypePath: function {
     # the system scalar the field takes
     name: StringView
 } out astnode is {
-    sysAtom: mkAtom :ast :line :col name: "system"
-    i64Leaf: mkAtom :ast :line :col :name
+    sysAtom: mkAtom :ast :from :line :col name: "system"
+    i64Leaf: mkAtom :ast :from :line :col :name
     return (astnode.dottedpath (zast.dottedpathrow
-        nodeid: (zast.tableReserve :ast)
+        nodeid: (zast.tableReserve :ast from: from)
         lineno: line
         colno: col
         parent: (zast.tableAdd :ast n: sysAtom)
@@ -1108,7 +1122,7 @@ wrapDeclaredCallReturn: function {
     match (
         gb
     ) case some then {
-        wrapper: buildWrapper :ast :line :col base: gb leaf: gp.leaf
+        wrapper: buildWrapper :ast from: callFnId :line :col base: gb leaf: gp.leaf
         wid: zast.tableAdd :ast n: wrapper
         cfm: ast.nodes.getMut i: callFnId
         if cfm.functiondef then cfm.returntype = wid
@@ -1131,8 +1145,8 @@ injectCallReceiver: function {
     # the column likewise
     col: u32
 } is {
-    thisP: mkAtom :ast :line :col name: "this"
-    thisParam: mkNamedOp :ast :line :col name: "this" op: thisP
+    thisP: mkAtom :ast from: callFnId :line :col name: "this"
+    thisParam: mkNamedOp :ast from: callFnId :line :col name: "this" op: thisP
     tpId: zast.tableAdd :ast n: thisParam
     cfm2: ast.nodes.getMut i: callFnId
     if cfm2.functiondef then {
@@ -1180,19 +1194,20 @@ buildDeclaredCreate: function {
             nid: at0
         ) then anyRef = true
         ap0: createParamPath :ast nid: at0
-        np0: mkNamedOp :ast :line :col name: a0v op: ap0
+        np0: mkNamedOp :ast from: objId :line :col name: a0v op: ap0
         createParams.append (zast.tableAdd :ast n: np0)
         api = api + 1
     }
     createM: (buildCreateMethod
         :ast
+        from: objId
         :line
         :col
         params: createParams
         fwdNames: authorNames
         pins: anyRef
     )
-    cmN: mkNamedOp :ast :line :col name: "create" op: createM
+    cmN: mkNamedOp :ast from: objId :line :col name: "create" op: createM
     cmId: zast.tableAdd :ast n: cmN
     objc: ast.nodes.getMut i: objId
     if objc.objectdef then {
@@ -1307,9 +1322,9 @@ resumeFieldPath: function {
         return (zast.cloneTreeAt :ast :nid)
     }
     base: zast.cloneTreeAt :ast :nid
-    bl: mkAtom :ast :line :col name: "borrow"
+    bl: mkAtom :ast from: nid :line :col name: "borrow"
     return (astnode.dottedpath (zast.dottedpathrow
-        nodeid: (zast.tableReserve :ast)
+        nodeid: (zast.tableReserve :ast from: nid)
         lineno: line
         colno: col
         parent: (zast.tableAdd :ast n: base)
@@ -1403,11 +1418,11 @@ appendResumeFields: function {
         yvi = yvi + 1
         yvT: resumeFieldPath :ast nid: inputTypeId
         yvNm: "_yv_\{yvi}"
-        yvF: mkNamedOp :ast :line :col name: yvNm.stringView op: yvT
+        yvF: mkNamedOp :ast from: inputTypeId :line :col name: yvNm.stringView op: yvT
         addFields.append (zast.tableAdd :ast n: yvF)
     }
     riT: resumeFieldPath :ast nid: inputTypeId
-    riF: mkNamedOp :ast :line :col name: "_resume_input" op: riT
+    riF: mkNamedOp :ast from: inputTypeId :line :col name: "_resume_input" op: riT
     addFields.append (zast.tableAdd :ast n: riF)
 }
 
@@ -1421,6 +1436,8 @@ appendResumeFields: function {
 appendForCounterFields: function {
     # the tree the resume fields are minted into
     ast: Ast
+    # the node the made rows stand for: they report from its file
+    from: zast.nodeid
     # the line a resume field is attributed to
     line: u32
     # the column likewise
@@ -1433,9 +1450,9 @@ appendForCounterFields: function {
     fci: u64
     for fci < forSlots loop {
         fci = fci + 1
-        fcTy: scalarTypePath :ast :line :col name: "i64"
+        fcTy: scalarTypePath :ast :from :line :col name: "i64"
         fcNm: "_fc_\{fci}"
-        fcF: mkNamedOp :ast :line :col name: fcNm.stringView op: fcTy
+        fcF: mkNamedOp :ast :from :line :col name: fcNm.stringView op: fcTy
         addFields.append (zast.tableAdd :ast n: fcF)
         # and its TRIP COUNT, for the loops that turn out to be a CLOSED range:
         # those spill two values where a half-open one spills the counter alone,
@@ -1444,9 +1461,9 @@ appendForCounterFields: function {
         # `suspendingForCountOf` over-counts in the first place -- telling the
         # families apart needs the checker's stamps, which this pass does not
         # have, and a spare scalar field costs nothing.
-        fnTy: scalarTypePath :ast :line :col name: "u64"
+        fnTy: scalarTypePath :ast :from :line :col name: "u64"
         fnNm: "_fn_\{fci}"
-        fnF: mkNamedOp :ast :line :col name: fnNm.stringView op: fnTy
+        fnF: mkNamedOp :ast :from :line :col name: fnNm.stringView op: fnTy
         addFields.append (zast.tableAdd :ast n: fnF)
     }
 }
@@ -1493,9 +1510,9 @@ createParamPath: function {
     if isNonOwned then return (zast.cloneTreeAt :ast :nid)
     base: zast.cloneTreeAt :ast :nid
     if parentId.isZero.not then base = zast.cloneTreeAt :ast nid: parentId
-    takeLeaf: mkAtom :ast line: 0 col: 0 name: "take"
+    takeLeaf: mkAtom :ast from: nid line: 0 col: 0 name: "take"
     return (astnode.dottedpath (zast.dottedpathrow
-        nodeid: (zast.tableReserve :ast)
+        nodeid: (zast.tableReserve :ast from: nid)
         lineno: 0
         colno: 0
         parent: (zast.tableAdd :ast n: base)
@@ -1579,10 +1596,10 @@ lowerDeclared: function {
     # the fields the transform needs, appended to the ones the author declared.
     # The body's locals are the checker's: it keeps each in a field of its own.
     addFields: ListVal zast.nodeid
-    stTy: scalarTypePath :ast :line :col name: "i64"
-    stField: mkNamedOp :ast :line :col name: "state" op: stTy
+    stTy: scalarTypePath :ast from: objId :line :col name: "i64"
+    stField: mkNamedOp :ast from: objId :line :col name: "state" op: stTy
     addFields.append (zast.tableAdd :ast n: stField)
-    appendForCounterFields :ast :line :col :forSlots :addFields
+    appendForCounterFields :ast from: objId :line :col :forSlots :addFields
     if parts.inputTypeId.isZero.not then (appendResumeFields
         :ast
         :line
