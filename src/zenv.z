@@ -458,11 +458,11 @@ ZSymbolTable: class {
     tailBlock: zast.nodeid
     # the generic-parameter answers a TEMPLATE walk keeps out of the shared stamp
     # table, by node, so that walk can still read what it just checked
-    templateStamps: (IdMapV u64 v: ztypes.tid)
+    templateStamps: (IdMapV zast.nodeid v: ztypes.tid)
     # the arm predicates a TEMPLATE walk found on a partial (`o.some` on an
     # `optionval_t`), by node: the if-narrowing reads them there, and the shared
     # dpArmPredicate the emitter reads keeps each instance's own
-    templateArmPreds: (IdMapV u64 v: ztypes.tid)
+    templateArmPreds: (IdMapV zast.nodeid v: ztypes.tid)
     # dump scaffolding: the root scopes of a walk the dump leaves out (a
     # diagnostics-only template walk, an instance walk, a dry run) -- every
     # scope under one is left out with it -- and the rows snapshotted when a
@@ -574,12 +574,15 @@ ZSymbolTable: class {
             downTo: this.exitLog.get i: i + 1
             vc: this.exitLog.get i: i + 2
             i = i + 3
-            if vc > since.u64 when downTo <= index then this.addToExit :nid :vid
+            if vc > since.u64 when downTo <= index then (this.addToExit
+                nid: (zast.nodeid.create from: nid.u32.orPanic)
+                :vid
+            )
         }
     }
 
     # addToExit -- the exit at `nid` destroys `vid` too, after what it listed.
-    addToExit: function {:this nid: u64 vid: ztypes.vid} is {
+    addToExit: function {:this nid: zast.nodeid vid: ztypes.vid} is {
         start: this.typing.destroyItems.length
         rg: this.typing.exitDestroy.get key: nid
         match (
@@ -1096,9 +1099,9 @@ ZSymbolTable: class {
     # recordExitDestroy -- what the exit at `nid` destroys: the owned locals of
     # every open scope from the innermost down to the one at `downTo` in `open`,
     # innermost first, but `except` -- the local a `return` hands back.
-    recordExitDestroy: function {:this nid: u64 downTo: u64 except: ztypes.vid} is {
+    recordExitDestroy: function {:this nid: zast.nodeid downTo: u64 except: ztypes.vid} is {
         if this.recording.not then return
-        this.exitLog.append nid
+        this.exitLog.append nid.u64
         this.exitLog.append downTo
         this.exitLog.append this.reg.variableCount
         start: this.typing.destroyItems.length
@@ -1113,7 +1116,7 @@ ZSymbolTable: class {
 
     # recordReturnDestroy -- what the `return` at `nid` destroys: every scope of
     # the function it leaves, but the local `except` it returns.
-    recordReturnDestroy: function {:this nid: u64 except: ztypes.vid} is {
+    recordReturnDestroy: function {:this nid: zast.nodeid except: ztypes.vid} is {
         n: this.fnScopeDepths.length
         if n == 0 then return
         this.recordExitDestroy :nid downTo: (this.fnScopeDepths.get i: n - 1) :except
@@ -1121,7 +1124,7 @@ ZSymbolTable: class {
 
     # recordLoopExitDestroy -- what the `continue` at `nid` destroys: every scope
     # inside its loop, the loop's own among them.
-    recordLoopExitDestroy: function {:this nid: u64} is {
+    recordLoopExitDestroy: function {:this nid: zast.nodeid} is {
         n: this.loopRuns.length
         if n == 0 then return
         (this.recordExitDestroy
@@ -1134,7 +1137,7 @@ ZSymbolTable: class {
     # recordBreakDestroy -- what the `break` at `nid` destroys: every scope inside
     # what it leaves -- its loop, or the `do` block that binds `break` -- that
     # scope's own among them.
-    recordBreakDestroy: function {:this nid: u64} is {
+    recordBreakDestroy: function {:this nid: zast.nodeid} is {
         n: this.breakScopes.length
         if n == 0 then return
         this.recordExitDestroy :nid downTo: (this.breakScopes.get i: n - 1) except: ztypes.vid
@@ -1180,7 +1183,7 @@ ZSymbolTable: class {
 
     # recordNamedDestroy -- what the `.drop` or the reassignment at `nid`
     # destroys: the value the local `nameId` holds there.
-    recordNamedDestroy: function {:this nid: u64 nameId: zast.nameid} is {
+    recordNamedDestroy: function {:this nid: zast.nodeid nameId: zast.nameid} is {
         if this.recording.not then return
         d: this.findLocal :nameId
         if d.isZero then return
@@ -1195,7 +1198,7 @@ ZSymbolTable: class {
 
     # closeExitRange -- the items from `start` are what the exit at `nid`
     # destroys; nothing is recorded for an exit that destroys nothing.
-    closeExitRange: function {:this nid: u64 start: u64} is {
+    closeExitRange: function {:this nid: zast.nodeid start: u64} is {
         n: this.typing.destroyItems.length - start
         if n == 0 then return
         (this.typing.exitDestroy.set
@@ -1221,7 +1224,7 @@ ZSymbolTable: class {
             this.appendOwnedOf scope: fr.id except: ztypes.vid
             n: this.typing.destroyItems.length - start
             if n > 0 then (this.typing.scopeDestroy.set
-                key: fr.node.u64
+                key: fr.node
                 value: (ztyping.destroyrange start: start.u32.orPanic len: n.u32.orPanic)
             )
         }
@@ -1230,7 +1233,7 @@ ZSymbolTable: class {
         tn: this.typing.destroyItems.length - tstart
         if tn == 0 then return
         (this.typing.scopeTempDestroy.set
-            key: fr.node.u64
+            key: fr.node
             value: (ztyping.destroyrange start: tstart.u32.orPanic len: tn.u32.orPanic)
         )
     }
@@ -2771,8 +2774,8 @@ newSymbolTable: function {reg: ztypes.ZTypeRegistry.take typing: ZTyping.take} o
         breakSeen: ListVal bool
         tailBody: zast.nodeid
         tailBlock: zast.nodeid
-        templateStamps: (IdMapV u64 v: ztypes.tid)
-        templateArmPreds: (IdMapV u64 v: ztypes.tid)
+        templateStamps: (IdMapV zast.nodeid v: ztypes.tid)
+        templateArmPreds: (IdMapV zast.nodeid v: ztypes.tid)
         scopeHidden: IdSet u64
         entryDump: List ZEntryDumpRow
         :reg
