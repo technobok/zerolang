@@ -9273,6 +9273,36 @@ emitCollectionMethodCall: function {
     return ""
 }
 
+# narrowListIndex -- a list answers an index as its u64 position; a list
+# indexed by a narrower id space (`ListVal astnode i: nodeid`) gets it in that
+# type, and a position past the type's range panics rather than wraps. The
+# bound is the integer conversion's (convRangeCond).
+narrowListIndex: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    call: zast.callrow.view
+    pos: String.take
+} out String is {
+    idx: stampIdOf :symtab nid: call.nodeid
+    bn: regNameView :symtab tid: (typedefChaseTid :symtab tid: idx)
+    dbits: numBits name: bn
+    dsig: numSigned name: bn
+    if dbits == 0 then return pos
+    if (convNeedsHi ssig: false :dsig sbits: 64 :dbits).not then return pos
+    ct: typeRefC :ast :symtab :ctx tid: idx thisTid: ztypes.tid
+    cond: convRangeCond dstName: bn needsLo: false needsHi: true
+    r: String
+    r.append "({ uint64_t _v = "
+    r.append pos
+    r.append "; if ("
+    r.append cond
+    r.append ") z_panic(\"List append: index past the range of the list's index type\"); ("
+    r.append ct
+    r.append ")_v; })"
+    return r
+}
+
 # emitListMethodCall -- a method call on a List-mono receiver. Maps the
 # labeled arguments to the runtime method's positional C signature.
 emitListMethodCall: function {
@@ -9290,7 +9320,7 @@ emitListMethodCall: function {
     if (dispatchIs :ctx id: mnId at: dispatch.append) then {
         v: colArg :ast :symtab :ctx :call label: "from" consumes: true
         e0: "\{cb}_append(\{recvR}, \{v})"
-        return e0
+        return (narrowListIndex :ast :symtab :ctx :call pos: e0)
     }
     if mnId == zast.names.wkGet then {
         v: listArg :ast :symtab :ctx :call label: "i"
