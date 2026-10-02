@@ -1021,14 +1021,14 @@ nodeid: typedef u32 as {
 # -- dump text, never hashes.
 StringPool: class {
     # the interned strings, indexed by name id. Id 0 is the sentinel empty text
-    texts: List String
+    texts: (List String i: nameid)
     # each text's hash, indexed by name id like `texts`: a probe compares it
     # before the bytes, and a rebuild re-slots every text without re-hashing
-    hashes: ListVal u64
+    hashes: (ListVal u64 i: nameid)
     # a byte per text that its first reader stores, so a classification made
     # once per distinct text -- the lexer's keyword lookup -- is not redone
     # per occurrence. 0 means not classified yet.
-    wordClass: ListVal u8
+    wordClass: (ListVal u8 i: nameid)
     # the hash index over `texts`, which is what makes interning a lookup rather
     # than a scan
     slots: ListVal u32
@@ -1039,9 +1039,9 @@ StringPool: class {
     # text before anything has been interned
     create: function {} out this is {
         p: (meta.create
-            texts: List String
-            hashes: ListVal u64
-            wordClass: ListVal u8
+            texts: (List String i: nameid)
+            hashes: (ListVal u64 i: nameid)
+            wordClass: (ListVal u8 i: nameid)
             slots: ListVal u32
             used: 0
         )
@@ -1076,7 +1076,7 @@ StringPool: class {
         mask: ncap - 1
         k: 1.u64
         for k < this.texts.length loop {
-            idx: (this.hashes.get i: k) & mask
+            idx: (this.hashes.get i: (nameid.create from: k.u32.orPanic)) & mask
             for (ns.get i: idx) != 0 loop idx = (idx + 1) & mask
             ns.set i: idx val: k.u32.orPanic
             k = k + 1
@@ -1093,8 +1093,8 @@ StringPool: class {
         for true loop {
             sid: t.slots.get i: idx
             if sid == 0 then return idx
-            if (t.hashes.get i: sid) == h then {
-                text: t.texts.get i: sid
+            if (t.hashes.get i: (nameid.create from: sid)) == h then {
+                text: t.texts.get i: (nameid.create from: sid)
                 if text.stringView == s then return idx
             }
             idx = (idx + 1) & mask
@@ -1137,12 +1137,12 @@ StringPool: class {
 
     # classOf -- the byte stored for id's text by setClass; 0 until then.
     classOf: function {t: this.view id: nameid} out u8 is {
-        return (t.wordClass.get i: id.u64)
+        return (t.wordClass.get i: id)
     }
 
     # setClass -- store id's classification byte.
     setClass: function {:this id: nameid c: u8} is {
-        this.wordClass.set i: id.u64 val: c
+        this.wordClass.set i: id val: c
     }
 
     # find -- the id of an already-interned text (0 when absent).
@@ -1155,14 +1155,14 @@ StringPool: class {
 
     # get -- an owned copy of id's text; panics on an out-of-range id.
     get: function {t: this.view id: nameid} out String is {
-        text: t.texts.get i: id.u64
+        text: t.texts.get i: id
         return text.copy
     }
 
     # eq -- does id's text equal s? Zero-allocation compare; id 0 (absent)
     # reads the sentinel, so it equals only the empty view.
     eq: function {t: this.view id: nameid s: StringView} out bool is {
-        text: t.texts.get i: id.u64
+        text: t.texts.get i: id
         return text.stringView == s
     }
 
@@ -1849,12 +1849,12 @@ nameTextCopy: function {ast: Ast.view ref: nameid} out String is {
 # view lends is a view. A zero ref reads the sentinel row, which holds the
 # empty text.
 poolTextAt: function {pool: StringPool.view ref: nameid} outx String.view is {
-    return (pool.texts.get i: ref.u64)
+    return (pool.texts.get i: ref)
 }
 
 # nameTextAt -- carrier-taking counterpart of poolTextAt.
 nameTextAt: function {ast: Ast.view ref: nameid} outx String.view is {
-    return (ast.names.texts.get i: ref.u64)
+    return (ast.names.texts.get i: ref)
 }
 
 # printKidsWith -- print every child a span names, in order. An arm that
