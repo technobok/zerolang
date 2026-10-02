@@ -1931,7 +1931,9 @@ wholeText: function {ast: Ast.view parts: zast.kidspan} out String is {
 # collectLiterals -- pool every PLAIN string-literal atom in walk order:
 # parallel lists of (nodeid, text). Interpolated literals build at the
 # use site instead.
-collectLiterals: function {ast: Ast.view n: astnode.view ids: ListVal u64 texts: List String} is {
+collectLiterals: function {
+    ast: Ast.view n: astnode.view ids: ListVal zast.nodeid texts: List String
+} is {
     match (
         n
     ) case statement then {
@@ -2011,8 +2013,7 @@ collectLiterals: function {ast: Ast.view n: astnode.view ids: ListVal u64 texts:
     } case atomstring then {
         if (isInterp :ast parts: n.stringparts).not then {
             t: wholeText :ast parts: n.stringparts
-            nid: n.nodeid.u64
-            ids.append nid
+            ids.append n.nodeid
             texts.append t
         } else {
             stx49: u64
@@ -2034,12 +2035,12 @@ litIndexOf: function {ctx: Ctx nid: u64} out u64 is {
 
 # literalIndex -- each literal's node id -> its 1-based place in `ids`, the
 # first place when a node is pooled twice
-literalIndex: function {ids: (ListVal u64).view} out (IdMapV u64 v: u64) is {
+literalIndex: function {ids: (ListVal zast.nodeid).view} out (IdMapV u64 v: u64) is {
     m: IdMapV u64 v: u64 capacity: ids.length
     i: u64
     for each nid: ids loop {
         i = i + 1
-        if (m.has key: nid).not then m.set key: nid value: i
+        if (m.has key: nid.u64).not then m.set key: nid.u64 value: i
     }
     return m
 }
@@ -3005,7 +3006,7 @@ Ctx: class {
     # type id -> C name base, composed once at emit start; "" for a hole
     cnames: List String
     # the literal pool's ids in emission order
-    litIds: ListVal u64
+    litIds: ListVal zast.nodeid
     # a literal's node id -> its 1-based place in litIds
     litIndex: (IdMapV u64 v: u64)
     # which literals were actually referenced, so the unused ones are not
@@ -3076,7 +3077,7 @@ Ctx: class {
     # the `return`, `break` or `continue` statement being emitted, whose
     # destroys the checker recorded (exitDestroy); 0 at a tail value, which
     # records none
-    exitNode: u64
+    exitNode: zast.nodeid
     # the emitted C name of the generator receiver, for the state-machine
     # prologue: it is a renamed parameter, not the literal `this`
     genRecvC: String
@@ -3332,7 +3333,7 @@ Ctx: class {
     orderPendPid: ListVal u64
     orderPendName: ListVal u64
     # the value node a waiting scalar part's temp is typed from, 0 for none
-    orderPendNid: ListVal u64
+    orderPendNid: ListVal zast.nodeid
     # whether a waiting part only reads (isPureCText)
     orderPendPure: ListVal bool
     # the next `_o` number, the function's own
@@ -6311,7 +6312,7 @@ orderPart: function {
     ctx.orderPendFid.append fid.u64
     ctx.orderPendPid.append pid
     ctx.orderPendName.append pname.u64
-    ctx.orderPendNid.append valueNid
+    ctx.orderPendNid.append (zast.nodeid.create from: valueNid.u32.orPanic)
     ctx.orderPendPure.append pure
 }
 
@@ -6431,7 +6432,7 @@ orderSettle: function {
     ct: String
     if vnid > 0 then ct = (operandScalarC
         :symtab
-        n: (ast.nodes.get i: (zast.nodeid.create from: vnid.u32.orPanic))
+        n: (ast.nodes.get i: vnid)
     )
     if ct.length == 0 then ct = "__typeof__(((void)0, \{text}))"
     if fid.isZero.not then ct = paramCType :ast :symtab :ctx :fid pname: pn.stringView :pid
@@ -7119,7 +7120,7 @@ instargval: record {
     posIdx: u64
     # the argument's value node, 0 for an interpolated argument -- what a
     # pointer parameter re-reads when the value text loaded a pointer
-    avNd: u64
+    avNd: zast.nodeid
 }
 
 # instargptr -- how a declared parameter takes its argument: by pointer, as a
@@ -7160,7 +7161,7 @@ instanceMethodArgValue: function {
         :ast
         :symtab
         :ctx
-        aid: (zast.nodeid.create from: ca.nid.u32.orPanic)
+        aid: ca.nid
         fid: (ztypes.tid.create from: mco.u64)
         pname: pnameL
         pid: posParamId
@@ -7198,7 +7199,7 @@ instanceMethodArgValue: function {
     return (instargval
         :usedInterp
         posIdx: positionalIdx
-        avNd: avNd.u64
+        :avNd
     )
 }
 
@@ -7276,14 +7277,14 @@ instanceMethodArg: function {
         :posParamId
         usedInterp: avr.usedInterp
         av: atomVarId.stringView
-        avNd: (zast.nodeid.create from: avr.avNd.u32.orPanic)
+        avNd: avr.avNd
     )
     (passMethodArg
         :ast
         :symtab
         :ctx
         :ptr
-        avNd: (zast.nodeid.create from: avr.avNd.u32.orPanic)
+        avNd: avr.avNd
         usedInterp: avr.usedInterp
         :posParamId
         av: atomVarId
@@ -7551,7 +7552,7 @@ methodArgPositions: function {
             writ.append 0
         } else {
             ca: ctorArgFor :ast :call label: pnB.stringView posIdx: positionalIdx
-            writ.append (writtenArgPosition :ast :call nid: ca.nid)
+            writ.append (writtenArgPosition :ast :call nid: ca.nid.u64)
             if ca.labelled.not then positionalIdx = positionalIdx + 1
         }
         pi = pi + 1
@@ -8603,7 +8604,7 @@ rhsBorrowMarkerBase: function {
 # aliasbase -- the node a borrowing binding is a second name for, and whether
 # that node names a PLACE (storage whose own pointer type the alias must take).
 aliasbase: record {
-    node: u64
+    node: zast.nodeid
     place: bool
 }
 
@@ -8623,21 +8624,21 @@ aliasBaseOf: function {
     avn: astnode.view
 } out aliasbase is {
     bmb: rhsBorrowMarkerBase :ast :symtab n: avn
-    if bmb.isZero.not then return (aliasbase node: bmb.u64 place: false)
+    if bmb.isZero.not then return (aliasbase node: bmb place: false)
     tbs: typedefBorrowSource :ast :symtab n: avn
-    if tbs > 0 then return (aliasbase node: tbs place: true)
+    if tbs.isZero.not then return (aliasbase node: tbs place: true)
     if (rhsIsBorrowGet :ast :symtab :ctx n: avn) then {
-        return (aliasbase node: n.value.u64 place: false)
+        return (aliasbase node: n.value place: false)
     }
     if (rhsIsBorrowedFieldRead :ast :symtab :ctx abind: n n: avn) then {
-        return (aliasbase node: n.value.u64 place: true)
+        return (aliasbase node: n.value place: true)
     }
     vsr: valueStructRefNode :ast :symtab :ctx n: avn
-    if vsr > 0 then return (aliasbase node: vsr place: false)
+    if vsr.isZero.not then return (aliasbase node: vsr place: false)
     if (nodeIsBareAtom n: avn) when (bindingVarIsBorrowed :symtab :n) then {
-        return (aliasbase node: n.value.u64 place: true)
+        return (aliasbase node: n.value place: true)
     }
-    return (aliasbase node: 0 place: false)
+    return (aliasbase node: zast.nodeid place: false)
 }
 
 # typedefBorrowSource -- the source node of a borrowed typedef (`Bytes xs.borrow`,
@@ -8648,21 +8649,21 @@ typedefBorrowSource: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     n: astnode.view
-} out u64 is {
+} out zast.nodeid is {
     match (
         n
     ) case statementline then {
         return (typedefBorrowSource :ast :symtab n: (ast.nodes.get i: n.statementline))
     } case call then {
         ck: symtab.typing.callKind.get key: n.nodeid.u64
-        if ck.none then return 0
-        if ck != zast.callkind.typedefBorrow then return 0
+        if ck.none then return zast.nodeid
+        if ck != zast.callkind.typedefBorrow then return zast.nodeid
         return (underBorrowMarker
             :ast
             nid: (castSourceArg :ast call: n)
-        ).u64
+        )
     } else {
-        return 0
+        return zast.nodeid
     }
 }
 
@@ -8703,23 +8704,23 @@ valueStructRefNode: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     n: astnode.view
-} out u64 is {
+} out zast.nodeid is {
     match (
         n
     ) case statementline then {
         return (valueStructRefNode :ast :symtab :ctx n: (ast.nodes.get i: n.statementline))
     } case call then null case dottedpath then null else {
-        return 0
+        return zast.nodeid
     }
     # the result's type first: it is one stamp read, and most calls fail it
     rt: stampIdOf :symtab nid: (interpPartNodeId :n).u64
-    if (isValueStructTid :symtab :ctx tid: rt).not then return 0
+    if (isValueStructTid :symtab :ctx tid: rt).not then return zast.nodeid
     fid: ztypes.tid.create from: (refBorrowCalleeFid :ast :symtab :ctx :n).u64
-    if fid.isZero then return 0
+    if fid.isZero then return zast.nodeid
     # a native reference (`getMut`) keeps its own pointer spelling
-    if (symtab.reg.isNativeOf tid: fid) then return 0
-    if (fnReturnsRefBorrow :ast :symtab :ctx :fid retTid: rt).not then return 0
-    return (zast.nodeIdOf :n).u64
+    if (symtab.reg.isNativeOf tid: fid) then return zast.nodeid
+    if (fnReturnsRefBorrow :ast :symtab :ctx :fid retTid: rt).not then return zast.nodeid
+    return (zast.nodeIdOf :n)
 }
 
 # emitBorrowAliasBind -- a borrowing binding of a BY-VALUE reftype -- a
@@ -8750,7 +8751,7 @@ emitBorrowAliasBind: function {
     ab: aliasBaseOf :ast :symtab :ctx :n :avn
     # the type questions come AFTER the shape one: a binding that borrows
     # nothing is the common case, and it leaves here without paying for them
-    if ab.node == 0 then return false
+    if ab.node.isZero then return false
     placeLeg: ab.place
     btid: bindChasedTid :symtab :ctx :n :avn
     # a Set and a Map live on the heap and their local IS the pointer, so the
@@ -8760,7 +8761,7 @@ emitBorrowAliasBind: function {
     # a VALTYPE place read is a real copy -- the binding is its own value, and
     # aliasing it would make a write through it reach the source
     if placeLeg when (symtab.reg.isReftypeOf tid: btid).not then return false
-    base: ast.nodes.get i: (zast.nodeid.create from: ab.node.u32.orPanic)
+    base: ast.nodes.get i: ab.node
     hmk: pendingHoistMark :ctx
     rvm: emitExpr :ast :symtab :ctx n: base
     # a member read that lowers to a CALL names no storage: a protocol or facet
@@ -9898,7 +9899,7 @@ scopeOwnsTemp: function {symtab: zenv.ZSymbolTable.view argNid: u64} out bool is
     if tv.none then return false
     so: symtab.typing.tempScopeOf.get key: tv.u64
     if so.none then return false
-    rg: symtab.typing.scopeTempDestroy.get key: so
+    rg: symtab.typing.scopeTempDestroy.get key: so.u64
     if rg.none then return false
     k: u64
     for k < rg.len loop {
@@ -11003,7 +11004,7 @@ createArgText: function {
     pid: u64
     pname: StringView
 } out String is {
-    if ca.nid == 0 then return (paramDefaultText :ast :symtab :ctx :cco :nameId :pid)
+    if ca.nid.isZero then return (paramDefaultText :ast :symtab :ctx :cco :nameId :pid)
     return (userFnArgText
         :ast
         :symtab
@@ -11011,7 +11012,7 @@ createArgText: function {
         fid: cco
         pinId: pid
         pinNm: pname
-        argOpNode: (ast.nodes.get i: (zast.nodeid.create from: ca.nid.u32.orPanic))
+        argOpNode: (ast.nodes.get i: ca.nid)
     )
 }
 
@@ -11032,13 +11033,13 @@ fieldArgText: function {
     fid: u64
 } out String is {
     if ca.nid > 0 then {
-        t: ctorArgTextAt :ast :symtab :ctx aid: (zast.nodeid.create from: ca.nid.u32.orPanic)
+        t: ctorArgTextAt :ast :symtab :ctx aid: ca.nid
         if ca.labelled or (t.length > 0) then {
             return (standInText
                 :ast
                 :symtab
                 :ctx
-                n: (ast.nodes.get i: (zast.nodeid.create from: ca.nid.u32.orPanic))
+                n: (ast.nodes.get i: ca.nid)
                 text: t.take
             )
         }
@@ -11207,7 +11208,7 @@ orderRecordField: function {
             :ctx
             av: av.stringView
             pid: (ztypes.tid.create from: ffid.u64)
-            argNid: ca.nid
+            argNid: ca.nid.u64
         )
     }
     constant: true
@@ -11286,7 +11287,7 @@ ctorArgPositions: function {
             )
         } else {
             ca: ctorArgFor :ast :call label: nm.stringView posIdx: positionalIdx
-            writ.append (writtenArgPosition :ast :call nid: ca.nid)
+            writ.append (writtenArgPosition :ast :call nid: ca.nid.u64)
             if ca.labelled.not then positionalIdx = positionalIdx + 1
         }
         i = i + 1
@@ -11389,7 +11390,7 @@ orderDropPositions: function {ctx: Ctx base: u64} is {
 # ctorarg -- the argument node a constructor parameter binds.
 ctorarg: record {
     # the argument node; 0 when the call supplies none
-    nid: u64
+    nid: zast.nodeid
     # whether the call spelled the parameter's label; otherwise the node came
     # from the positional cursor, which the caller then advances
     labelled: bool
@@ -11405,9 +11406,9 @@ ctorArgFor: function {
     posIdx: u64
 } out ctorarg is {
     if (ctorHasLabel :ast :call :label) then {
-        return (ctorarg nid: (ctorArgNodeByLabel :ast :call :label).u64 labelled: true)
+        return (ctorarg nid: (ctorArgNodeByLabel :ast :call :label) labelled: true)
     }
-    return (ctorarg nid: (ctorArgNodeByPosition :ast :call idx: posIdx).u64 labelled: false)
+    return (ctorarg nid: (ctorArgNodeByPosition :ast :call idx: posIdx) labelled: false)
 }
 
 # the constructor-argument node matching a field label.
@@ -16968,7 +16969,7 @@ loadValueStructRef: function {
     n: astnode.view
     e: String.take
 } out String is {
-    if (valueStructRefNode :ast :symtab :ctx :n) == 0 then return e
+    if (valueStructRefNode :ast :symtab :ctx :n).isZero then return e
     rt: stampIdOf :symtab nid: (interpPartNodeId :n).u64
     ph: hoistForAddress :ast :symtab :ctx av: e.stringView tid: rt argNid: 0 ptr: true
     return "(*\{ph})"
@@ -16983,7 +16984,7 @@ unloadValueStructRef: function {
     n: astnode.view
     e: StringView
 } out String is {
-    if (valueStructRefNode :ast :symtab :ctx :n) == 0 then return e.string
+    if (valueStructRefNode :ast :symtab :ctx :n).isZero then return e.string
     return "&\{e}"
 }
 
@@ -17180,7 +17181,7 @@ armLeafIsPlace: function {
     } case caseexpr then {
         return (controlValueIsReference :ast :symtab :ctx n: (ast.nodes.get i: n.nodeid))
     } else {
-        if (armTakeLeaf :ast :symtab :n) > 0 then return false
+        if (armTakeLeaf :ast :symtab :n).isZero.not then return false
         if (symtab.typing.armLeafMoves.has item: (zast.nodeIdOf :n).u64) then return false
         return (symtab.typing.armLeafPlaces.has item: (zast.nodeIdOf :n).u64)
     }
@@ -18521,7 +18522,7 @@ stampIdDeep: function {
             match (
                 rno
             ) case some then {
-                rrt: stampIdOf :symtab nid: rno
+                rrt: stampIdOf :symtab nid: rno.u64
                 if rrt > 0 then return rrt
             } case none then null
             return (ztypes.tid.create from: 0)
@@ -18550,7 +18551,7 @@ tidDeep: function {
         match (
             rno
         ) case some then {
-            rrt: stampIdOf :symtab nid: rno
+            rrt: stampIdOf :symtab nid: rno.u64
             if rrt > 0 then return rrt
         } case none then null
     }
@@ -19371,7 +19372,7 @@ emitCallStmt: function {
     }
     if sfnId == zast.names.wkReturn then {
         outerExit: ctx.exitNode
-        ctx.exitNode = call.nodeid.u64
+        ctx.exitNode = call.nodeid
         hasArg: false
         arx539: u64
         for arx539 < call.arguments.count loop {
@@ -20445,8 +20446,8 @@ emitDottedAutoCallStmt: function {
         # owns -- ends with its drop, and what it named is left to its owner:
         # the checker recorded no destroy there. A `.take` nothing receives
         # ends an owned local, which the checker let it move.
-        dropNid: (zast.nodeIdOf :n).u64
-        if isDrop when (namedDestroyOwes :symtab nid: dropNid).not then {
+        dropNid: zast.nodeIdOf :n
+        if isDrop when (namedDestroyOwes :symtab nid: dropNid.u64).not then {
             # read once, so a name whose only use is its drop is still used
             # in the C
             drv: emitDottedReceiver :ast :symtab :ctx callable: n
@@ -20650,7 +20651,7 @@ emitReturnStmt: function {
     # no-value `return` (goto L_done inside a generator), `break`, `continue`.
     bkw: atomTextOf :ast :n
     outerExit: ctx.exitNode
-    ctx.exitNode = (interpPartNodeId :n).u64
+    ctx.exitNode = interpPartNodeId :n
     if bkw == "return" then {
         if ctx.genActive then {
             emitExitDestroy :symtab :ctx :tmp retExpr: "" keepRefd: false :ind :buf
@@ -22217,7 +22218,7 @@ releaseUnheldTemps: function {
 emitDropReleasedTemps: function {
     symtab: zenv.ZSymbolTable.view
     tmp: TmpCtr
-    dropNid: u64
+    dropNid: zast.nodeid
     ind: StringView
     buf: String.borrow
 } is {
@@ -23518,7 +23519,7 @@ emitContinueFrees: function {
     ind: StringView
     buf: String.borrow
 } is {
-    allRows: ctx.exitNode == 0
+    allRows: ctx.exitNode.isZero
     if allRows then (emitFail
         :ctx
         what: "an exit whose destroys the checker did not record"
@@ -23559,7 +23560,7 @@ emitExitDestroy: function {
     ind: StringView
     buf: String.borrow
 } is {
-    rg: symtab.typing.exitDestroy.get key: ctx.exitNode
+    rg: symtab.typing.exitDestroy.get key: ctx.exitNode.u64
     if rg.none then return
     k: u64
     for k < rg.len loop {
@@ -27609,8 +27610,8 @@ emitTailStmt: function {
         # a tail the checker recorded is an exit: its return frees what the
         # checker listed for the line (exitDestroy)
         outerExit: ctx.exitNode
-        ctx.exitNode = 0
-        if (symtab.typing.tailExits.has item: n.nodeid.u64) then ctx.exitNode = n.nodeid.u64
+        ctx.exitNode = zast.nodeid
+        if (symtab.typing.tailExits.has item: n.nodeid.u64) then ctx.exitNode = n.nodeid
         done: (emitTailStmt
             :ast
             :symtab
@@ -30649,7 +30650,7 @@ emitUnitMonoFn: function {
     # its own copy
     symtab.typing.emitMono = t
     iop: (ast.nodes.get
-        i: (instanceOpAt :symtab mono: t op: (zast.nodeIdOf n: op).u64)
+        i: (instanceOpAt :symtab mono: t op: (zast.nodeIdOf n: op))
     )
     if declOnly then {
         appendFnSignature :ast :symtab :ctx name: fnm.stringView fid: cfid op: iop :buf tail: ";\n"
@@ -30855,11 +30856,10 @@ emitFns: function {
 # instanceOpAt -- the function node instance `mono` is emitted from: its own
 # copy of the template function `op`, which its instance walk checked
 # (instanceBody); `op` itself when the instance has none.
-instanceOpAt: function {symtab: zenv.ZSymbolTable.view mono: u64 op: u64} out zast.nodeid is {
-    return (zast.nodeid.create
-        from: ((symtab.typing.instanceBody.get key: (ztyping.monostamp :mono node: op)).or d: op
-        ).u32.orPanic
-    )
+instanceOpAt: function {
+    symtab: zenv.ZSymbolTable.view mono: u64 op: zast.nodeid
+} out zast.nodeid is {
+    return ((symtab.typing.instanceBody.get key: (ztyping.monostamp :mono node: op.u64)).or d: op)
 }
 
 # emitFnMonoInstances -- emit the monomorphized instances of a generic free
@@ -30891,7 +30891,7 @@ emitFnMonoInstances: function {
             # the body it is emitted from
             symtab.typing.emitMono = t.u64
             iop: (ast.nodes.get
-                i: (instanceOpAt :symtab mono: t.u64 op: (zast.nodeIdOf n: templateFnOp).u64)
+                i: (instanceOpAt :symtab mono: t.u64 op: (zast.nodeIdOf n: templateFnOp))
             )
             if declOnly then {
                 (appendFnSignature
@@ -31353,7 +31353,7 @@ emitReturnCleanup: function {
     ind: StringView
     buf: String.borrow
 } is {
-    allRows: ctx.exitNode == 0
+    allRows: ctx.exitNode.isZero
     if allRows then (emitFail
         :ctx
         what: "a return whose destroys the checker did not record"
@@ -31569,7 +31569,7 @@ emitOwedRows: function {ctx: Ctx.view tmp: TmpCtr.view temps: bool buf: String.b
 collectUnitLiterals: function {
     program: Ast.view
     symtab: zenv.ZSymbolTable.view
-    ids: ListVal u64
+    ids: ListVal zast.nodeid
     texts: List String
 } is {
     {
@@ -31620,7 +31620,7 @@ collectUnitLiteralsIn: function {
     mainOpId: zast.nodeid
     symtab: zenv.ZSymbolTable.view
     unitName: StringView
-    ids: ListVal u64
+    ids: ListVal zast.nodeid
     texts: List String
 } is {
     bodyIds: zast.unitBodyIdsAt :ast unitId: mainOpId
@@ -31653,7 +31653,7 @@ collectUnitLiteralsIn: function {
 collectFnLiterals: function {
     ast: Ast.view
     n: astnode.view
-    ids: ListVal u64
+    ids: ListVal zast.nodeid
     texts: List String
 } is {
     match (
@@ -31705,7 +31705,7 @@ emitLiteralPools: function {
     pn: ctx.litIds.length
     for pi < pn loop {
         plid: ctx.litIds.get i: pi
-        if (ctx.usedLits.has item: plid) then {
+        if (ctx.usedLits.has item: plid.u64) then {
             pt: litTexts.get i: pi
             ptv: pt.stringView
             pesc: cEscape text: ptv
@@ -32105,7 +32105,7 @@ emitC: function {
         svC: svC.stringView
     )
     mn: mainCName :program
-    litIds: ListVal u64
+    litIds: ListVal zast.nodeid
     litTexts: List String
     collectUnitLiterals :program :symtab ids: litIds texts: litTexts
     litIndex: literalIndex ids: litIds
@@ -32165,7 +32165,7 @@ emitC: function {
         exSaveV: List String
         exSaveT: ListVal u64
         genActive: false
-        exitNode: 0
+        exitNode: zast.nodeid
         genRecvC: "this"
         genValC: "value"
         genYieldCount: 0
@@ -32236,7 +32236,7 @@ emitC: function {
         orderPendFid: ListVal u64
         orderPendPid: ListVal u64
         orderPendName: ListVal u64
-        orderPendNid: ListVal u64
+        orderPendNid: ListVal zast.nodeid
         orderPendPure: ListVal bool
         orderCtr: 0
         lastArgByPtr: false
@@ -36089,7 +36089,7 @@ signatureNamesTemplate: function {symtab: zenv.ZSymbolTable.view tid: ztypes.tid
         match (
             rno
         ) case some then {
-            rs: stampIdOf :symtab nid: rno
+            rs: stampIdOf :symtab nid: rno.u64
             if rs.isZero.not then rt = rs
         } case none then null
     }
@@ -36124,7 +36124,7 @@ fnptrRetTypeC: function {
     match (
         rno
     ) case some then {
-        rtid = stampIdOf :symtab nid: rno
+        rtid = stampIdOf :symtab nid: rno.u64
     } case none then null
     if rtid.isZero then rtid = fnRegReturnId :symtab :tid
     if rtid.isZero then return "void"
@@ -36356,7 +36356,7 @@ emitOneFnptrTypedef: function {
         match (
             srno
         ) case some then {
-            srt = stampIdOf :symtab nid: srno
+            srt = stampIdOf :symtab nid: srno.u64
         } case none then null
     }
     # a spec or a variant in the signature is declared by its tag before the
@@ -41620,7 +41620,7 @@ emitMonoMethodAt: function {
     if site.operation.isZero then return
     if (ztypecheck.isFunctionDefWithBody o: (ast.nodes.get i: site.operation)).not then return
     # the instance's own copy of the method
-    opId: instanceOpAt :symtab mono: monoId op: site.operation.u64
+    opId: instanceOpAt :symtab mono: monoId op: site.operation
     mid: u64
     {
         mn: zast.nameTextAt :ast ref: site.name
@@ -42588,7 +42588,7 @@ emitOneMethod: function {
     # is emitted from the instance's own copy
     if (symtab.reg.genericOriginOf tid: (ztypes.tid.create from: thisTid)).isZero.not then {
         symtab.typing.emitMono = thisTid
-        iopId: instanceOpAt :symtab mono: thisTid.u64 op: (zast.nodeIdOf n: op).u64
+        iopId: instanceOpAt :symtab mono: thisTid.u64 op: (zast.nodeIdOf n: op)
         if iopId != (zast.nodeIdOf n: op) then {
             (emitOneMethod
                 :ast

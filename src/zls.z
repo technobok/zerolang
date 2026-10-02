@@ -1442,7 +1442,7 @@ codeOf: function {n: u32} out String is {
 # one hit-testable span: a source range mapped to a resolvable reference.
 spanrow: record {
     # the node this span belongs to
-    nodeid: u32
+    nodeid: zast.nodeid
     # the source line the span sits on, in the compiler's own numbering. The
     # conversion to what LSP wants happens at the protocol boundary, not here
     line: u32
@@ -1473,7 +1473,7 @@ spanKindRank: function {kind: u8} out u8 is {
 # extent good enough to find the node enclosing a cursor).
 rangerow: record {
     # the node this range belongs to
-    nodeid: u32
+    nodeid: zast.nodeid
     # the byte offset it starts at
     startPos: u64
     # one past the byte it ends at
@@ -1509,7 +1509,7 @@ Spans: class {
     }
 
     # record a node's span and the name to show for it
-    addRow: function {:this id: u32 line: u32 col: u32 name: StringView kind: u8} is {
+    addRow: function {:this id: zast.nodeid line: u32 col: u32 name: StringView kind: u8} is {
         w: name.count
         this.rows.append (spanrow nodeid: id :line colLo: col colHi: col + w.u32.orPanic :kind)
         this.names.append name.string
@@ -1517,7 +1517,7 @@ Spans: class {
 
     # record the span of a dotted path's MEMBER half, so hovering `a.b` answers
     # about `b` and not about `a`
-    memberRow: function {:this ast: Ast.view dpid: u32 c: zast.astnode.view} is {
+    memberRow: function {:this ast: Ast.view dpid: zast.nodeid c: zast.astnode.view} is {
         if c.atomid then {
             cAr: zast.nameTextAt :ast ref: c.name
             this.addRow id: dpid line: c.lineno col: c.colno name: cAr.stringView kind: 2
@@ -3262,7 +3262,7 @@ navhit: record {
     # the hit span's width in columns, which a Location needs
     width: u32
     # the node the row belongs to
-    nodeid: u64
+    nodeid: zast.nodeid
     # the variable the reference resolved to, zero when it is not one
     vid: ztypes.vid
     # the type the reference resolved to, zero when it is not one
@@ -3458,7 +3458,7 @@ navResolve: function {
         idx: bi
         kind: hit.kind
         width: w
-        nodeid: hnid
+        nodeid: hit.nodeid
         vid: t.vid
         tid: t.tid
         owner: t.owner
@@ -3476,10 +3476,10 @@ navResolve: function {
 # parameter.
 genericParamHoverCard: function {snap: zcheck.CheckResult hit: navhit} out Value is {
     if hit.kind == 2 then return Value.nul
-    gcard: genericParamCard o: snap.st prog: snap.prog nid: hit.nodeid
+    gcard: genericParamCard o: snap.st prog: snap.prog nid: hit.nodeid.u64
     if gcard.length == 0 then return Value.nul
     gdoc: String
-    gown: genericParamOwner o: snap.st prog: snap.prog nid: hit.nodeid
+    gown: genericParamOwner o: snap.st prog: snap.prog nid: hit.nodeid.u64
     if gown.length > 0 then {
         gdoc.append "generic parameter of `"
         gdoc.append gown
@@ -3506,7 +3506,7 @@ hitReadsConstOpt: function {
     match (
         o
     ) case some then {
-        return (o.typing.nodeConst.has key: hit.nodeid)
+        return (o.typing.nodeConst.has key: hit.nodeid.u64)
     } case none then {
         return false
     }
@@ -3585,13 +3585,13 @@ hoverTypeFence: function {
     fence.append ": "
     fence.append tn
     if isConst then {
-        cv: constHoverText o: snap.st prog: snap.prog nid: hit.nodeid
+        cv: constHoverText o: snap.st prog: snap.prog nid: hit.nodeid.u64
         if cv.length > 0 then {
             fence.append " = "
             fence.append cv
         }
     }
-    annot: refAnnotation prog: snap.prog o: snap.st vid: hit.vid nid: hit.nodeid
+    annot: refAnnotation prog: snap.prog o: snap.st vid: hit.vid nid: hit.nodeid.u64
     if annot.length > 0 then {
         fence.append "  # "
         fence.append annot
@@ -3623,8 +3623,8 @@ hoverDoc: function {snap: zcheck.CheckResult sp: Spans.view nid: u64} out String
 # signature, not its return value), the instance when a generic call
 # resolved to one, and the Decl's type when only the Decl layer resolved the hit.
 hoverSigTid: function {snap: zcheck.CheckResult hit: navhit} out u64 is {
-    t: nodeTypeAt o: snap.st nid: hit.nodeid
-    ud: useUnitDef o: snap.st nid: hit.nodeid
+    t: nodeTypeAt o: snap.st nid: hit.nodeid.u64
+    ud: useUnitDef o: snap.st nid: hit.nodeid.u64
     sigTid: t
     if ud > 0 then sigTid = ud
     if (isInstanceOfOpt o: snap.st tid: t tpl: ud) then sigTid = t
@@ -3648,7 +3648,7 @@ navHoverAnswer: function {
         udoc: unitDocComment :snap fsno: hit.unitFsno
         return (hoverMarkdown code: ub.stringView doc: udoc.stringView)
     }
-    t: nodeTypeAt o: snap.st nid: hit.nodeid
+    t: nodeTypeAt o: snap.st nid: hit.nodeid.u64
     sigTid: hoverSigTid :snap :hit
     body: (fnSigTextOpt
         vfs: snap.vfs
@@ -3696,7 +3696,7 @@ navHoverAnswer: function {
         o: snap.st
         name: hname.stringView
         refTid: hit.tid
-        nodeTid: (nodeTypeAt o: snap.st nid: hit.nodeid)
+        nodeTid: (nodeTypeAt o: snap.st nid: hit.nodeid.u64)
     )
     appendNote :docBody note: ln9.stringView
     return (hoverMarkdown code: body.stringView doc: docBody.stringView)
@@ -3741,7 +3741,7 @@ hoverCallNotes: function {
     body: String.borrow
     docBody: String.borrow
 } is {
-    hpos: (sp.pos.get key: hit.nodeid).or d: 0
+    hpos: (sp.pos.get key: hit.nodeid.u64).or d: 0
     callId: (sp.innerRangeOfKind
         curPos: hpos
         kind: 4
@@ -3759,7 +3759,7 @@ hoverCallNotes: function {
         }
         return
     }
-    dn9x: dispositionNote o: snap.st nid: hit.nodeid
+    dn9x: dispositionNote o: snap.st nid: hit.nodeid.u64
     appendNote :docBody note: dn9x.stringView
 }
 
@@ -4687,7 +4687,7 @@ baseTypeInScope: function {
                 fs: zcheck.fsnoFor r: snap nodeid: row.nodeid
                 pp: snap.vfs.pathfromprovider dentryid: fs
                 if (pathMatches pv: pp.stringView rel: docRel :srcDir) then {
-                    tt: nodeTypeAt o: snap.st nid: row.nodeid
+                    tt: nodeTypeAt o: snap.st nid: row.nodeid.u64
                     if tt > 0 then result = tt
                 }
             }

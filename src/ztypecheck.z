@@ -2441,7 +2441,7 @@ recordGenericParamRef: function {
 
 # genericDefaultNode -- the node a generic parameter's `default:` names, in
 # the call form `(anyval.generic default: i64)`; 0 when it has none.
-genericDefaultNode: function {ast: Ast.view n: astnode.view} out u32 is {
+genericDefaultNode: function {ast: Ast.view n: astnode.view} out zast.nodeid is {
     match (
         n
     ) case call then {
@@ -2451,12 +2451,12 @@ genericDefaultNode: function {ast: Ast.view n: astnode.view} out u32 is {
             ai = ai + 1
             arg: argRefAt :ast nid: aId
             if arg.nid.isZero.not when (zast.nameTextEq :ast ref: arg.name s: "default") then {
-                return arg.operation.u32
+                return arg.operation
             }
         }
-        return 0
+        return zast.nodeid
     } else {
-        return 0
+        return zast.nodeid
     }
 }
 
@@ -3841,7 +3841,8 @@ templateHasDefaults: function {st: zenv.ZSymbolTable.view tdecl: ztypes.declid} 
     for pi < (st.reg.genericParamCountOf :tdecl) loop {
         pn: st.reg.genericParamNameAt :tdecl i: pi
         pi = pi + 1
-        if (st.reg.genericParamConstraintOf :tdecl paramName: pn).defaultNode > 0 then return true
+        if (st.reg.genericParamConstraintOf :tdecl paramName: pn
+        ).defaultNode.isZero.not then return true
     }
     return false
 }
@@ -4660,7 +4661,7 @@ recordFuncReturnNode: function {
     o: ast.nodes.get i: oId
     rn: nodeId n: o
     fidc: fid
-    st.typing.funcReturnNode.set key: fidc value: rn.u64
+    st.typing.funcReturnNode.set key: fidc value: rn
 }
 
 # recordReturnType -- record a function's `out T` return type-ref (mirrors
@@ -7184,8 +7185,8 @@ stampMemberSignature: function {
     rf: scope
     od: declOfTypeId :st tid: (ztypes.tid.create from: ownerTid.u64)
     if od.isZero.not then rf = od
-    rn: (st.typing.funcReturnNode.get key: (ztypes.tid.create from: mid.u64)).or d: 0
-    stampForcedTyperef :st scope: rf :ast :unitDecl :thisName nid: rn
+    rn: (st.typing.funcReturnNode.get key: (ztypes.tid.create from: mid.u64)).or d: zast.nodeid
+    stampForcedTyperef :st scope: rf :ast :unitDecl :thisName nid: rn.u64
     if fnNodeId.isZero then return
     fr: fnRefAt :ast nid: fnNodeId
     if fr.nid.isZero.not then {
@@ -9718,7 +9719,7 @@ aliasentry: record {
     # the source column of the entry
     col: u32
     # the entry's own node
-    node: u32
+    node: zast.nodeid
 }
 
 # refuseNestedVisibility -- a visibility block describes the unit or type it
@@ -9768,7 +9769,7 @@ scanPublicEntry: function {
             internal: bop.name
             line: bn.lineno
             col: bn.colno
-            node: bn.nodeid.u32
+            node: bn.nodeid
         )
     } else {
         if badMsg.length > 0 then (addResolveErrorH
@@ -9909,7 +9910,7 @@ checkRenameAlias: function {
         iTxt: zast.nameTextAt :ast ref: al.internal
         (addResolveErrorH
             :st
-            nodeid: (zast.nodeid.create from: al.node)
+            nodeid: al.node
             lineno: al.line
             colno: al.col
             e: zast.err.typeError
@@ -9922,7 +9923,7 @@ checkRenameAlias: function {
         pTxt: zast.nameTextAt :ast ref: al.pub
         (addResolveErrorH
             :st
-            nodeid: (zast.nodeid.create from: al.node)
+            nodeid: al.node
             lineno: al.line
             colno: al.col
             e: zast.err.typeError
@@ -10103,7 +10104,7 @@ scanUnitVisibility: function {
             pTxtU: zast.nameTextAt :ast ref: alU.pub
             (addResolveErrorH
                 :st
-                nodeid: (zast.nodeid.create from: alU.node)
+                nodeid: alU.node
                 lineno: alU.line
                 colno: alU.col
                 e: zast.err.typeError
@@ -11778,8 +11779,7 @@ unionCustomTagOfArm: function {
                 st.typing.pendingCustomTag.set key: uk value: pnId
                 uk2: uid
                 pnid: nodeId n: (ast.nodes.get i: am.operation)
-                pnv: pnid.u64
-                st.typing.pendingCustomTagNode.set key: uk2 value: pnv
+                st.typing.pendingCustomTagNode.set key: uk2 value: pnid
             }
         }
     }
@@ -16349,7 +16349,7 @@ fixupCustomTags: function {
             } else {
                 cuidn: cuid
                 cngo: st.typing.pendingCustomTagNode.get key: cuidn
-                cnid: cngo.or d: 0
+                cnid: cngo.or d: zast.nodeid
                 if cnid > 0 then {
                     unitDecl98: unitDeclOfName :st nameId: (nameIdOf :ast name: "system")
                     tgo2: (resolvedByIds
@@ -16363,7 +16363,7 @@ fixupCustomTags: function {
                     ) case some then {
                         (ztyping.nodeTypeSet
                             tbl: st.typing.nodeType
-                            nid: cnid
+                            nid: cnid.u64
                             tid: (ztypes.tid.create from: tgo2.u64)
                         )
                     } case none then null
@@ -17430,7 +17430,7 @@ InstReq: class {
     # the template's declaration
     tmplDeclId: ztypes.declid
     # the template's operation node
-    tmplOpId: u64
+    tmplOpId: zast.nodeid
     # the unit the template was declared in, which is the scope its body
     # resolves in and NOT the caller's
     tmplUnit: ztypes.declid
@@ -17446,11 +17446,11 @@ InstReq: class {
     # every argument's operation node, whatever its shape: a bare atom names
     # its type (argNames); a call-shaped argument -- itself a specialisation,
     # `(Box t: i64)` -- has no name and resolves from this node
-    argNodeIds: ListVal u64
+    argNodeIds: ListVal zast.nodeid
     # the call node that requested the instantiation
-    callId: u64
+    callId: zast.nodeid
     # that call's callable, which is the template being named
-    calId: u64
+    calId: zast.nodeid
 }
 
 # instFillIds -- record the instantiation's expression/call/callable/arg node
@@ -17459,7 +17459,7 @@ instFillIds: function {ast: Ast.view r: InstReq op: astnode.view} is {
     match (
         op
     ) case call then {
-        r.callId = op.nodeid.u64
+        r.callId = op.nodeid
         instFillCallable :r op: (ast.nodes.get i: op.callable)
     } else null
 }
@@ -17469,9 +17469,9 @@ instFillCallable: function {r: InstReq op: astnode.view} is {
     match (
         op
     ) case atomid then {
-        r.calId = op.nodeid.u64
+        r.calId = op.nodeid
     } case dottedpath then {
-        r.calId = op.nodeid.u64
+        r.calId = op.nodeid
     } else null
 }
 
@@ -17504,7 +17504,7 @@ fillUnitArgs: function {ast: Ast.view r: InstReq op: astnode.view} is {
                 r.argLabels.append a.name
                 r.argNames.append anm
                 r.argAtomIds.append aid
-                r.argNodeIds.append a.operation.u64
+                r.argNodeIds.append a.operation
             }
         }
     } else null
@@ -17562,15 +17562,15 @@ collectMainInstantiations: function {
                             tmplId: tnId
                             tmplTid: (declTypeIdOf :st declId: tdecl)
                             tmplDeclId: tdecl
-                            tmplOpId: topId.u64
+                            tmplOpId: topId
                             tmplUnit: tuN
                             :scopeDeclId
                             argLabels: ListVal zast.nameid
                             argNames: List String
                             argAtomIds: ListVal u64
-                            argNodeIds: ListVal u64
-                            callId: 0
-                            calId: 0
+                            argNodeIds: ListVal zast.nodeid
+                            callId: zast.nodeid
+                            calId: zast.nodeid
                         )
                         fillUnitArgs :ast :r op: mop
                         instFillIds :ast :r op: mop
@@ -19090,7 +19090,7 @@ completeOneInstance: function {
         :rtId
         :rtu
         :ru
-        :rtop
+        rtop: rtop.u64
         tplId0: tplId
         :memberIdAt
         :subs
@@ -19099,14 +19099,14 @@ completeOneInstance: function {
         cv: memberIdAt
         (ztyping.nodeTypeSet
             tbl: st.typing.nodeType
-            nid: rc
+            nid: rc.u64
             tid: (ztypes.tid.create from: cv.u64)
         )
     }
     if rl > 0 when tplId > 0 then {
         (ztyping.nodeTypeSet
             tbl: st.typing.nodeType
-            nid: rl
+            nid: rl.u64
             tid: (ztypes.tid.create from: tplId.u64)
         )
     }
@@ -19133,7 +19133,7 @@ completeUnitInstantiations: function {
         # pass decides (resolveMainUnitInstantiations). Resolving another's
         # arguments here demanded them eagerly -- `foo: bar foo`, `foo: 1 + foo`
         # (the infix form is a call) -- whether anything used the definition
-        if rtdecl.isZero or (r.tmplOpId == 0) then {
+        if rtdecl.isZero or r.tmplOpId.isZero then {
             i = i + 1
             continue
         }
@@ -19203,7 +19203,7 @@ demandInstArgs: function {
                 :st
                 scope: rf
                 :ast
-                node: (ast.nodes.get i: (zast.nodeid.create from: nid.u32.orPanic))
+                node: (ast.nodes.get i: nid)
             )
         }
         i = i + 1
@@ -19368,7 +19368,7 @@ instArgTypeOf: function {
                 scope: rf
                 :ast
                 unitDecl: r.declUnit
-                nid: (zast.nodeid.create from: nid.u32.orPanic)
+                :nid
                 thisName: ""
             )
         }
@@ -19476,7 +19476,7 @@ resolveMainUnitInstantiations: function {
                         defName: rtT.stringView
                         parentTid: parentTid94
                         parentDeclId: tpd
-                        unitOpId: (zast.nodeid.create from: r.tmplOpId.u32.orPanic)
+                        unitOpId: r.tmplOpId
                     )
                 }
             }
@@ -19494,7 +19494,7 @@ resolveMainUnitInstantiations: function {
                     :scope
                     ast: program
                     tmplDeclId: r.tmplDeclId
-                    templateOpId: (zast.nodeid.create from: r.tmplOpId.u32.orPanic)
+                    templateOpId: r.tmplOpId
                 )
             }
         }
@@ -19536,7 +19536,7 @@ mintUnitMonoOf: function {
         monoName: label.stringView
         tmplDeclId: r.tmplDeclId
         tplTid: templateTid
-        templateOpId: (zast.nodeid.create from: r.tmplOpId.u32.orPanic)
+        templateOpId: r.tmplOpId
     )
     tplT9: zast.poolTextAt pool: ast.names ref: r.tmplId
     unitMonoJoinTrie :st tplTid: templateTid tplName: tplT9.stringView :keys monoId: mono
@@ -19582,7 +19582,7 @@ instNumericArg: function {
         :scope
         tdecl: r.tmplDeclId
         param: (r.argLabels.get :i)
-        argOp: (zast.nodeid.create from: (r.argNodeIds.get :i).u32.orPanic)
+        argOp: (r.argNodeIds.get :i)
         inBody: false
     )
 }
@@ -19604,7 +19604,7 @@ reportUnresolvedInstArgs: function {
         # a numeric argument is read, and refused, by its own reader
         if (instNumericParam :st :r label: (r.argLabels.get i: i - 1)) then continue
         if (isNumericLiteralName name: an.stringView) then continue
-        if nid == 0 then continue
+        if nid.isZero then continue
         rt: u64
         {
             rf: scope
@@ -19621,7 +19621,7 @@ reportUnresolvedInstArgs: function {
         if rt > 0 then continue
         an8: an.copy
         if an8.length == 0 then an8 = "the argument"
-        n8: ast.nodes.get i: (zast.nodeid.create from: nid.u32.orPanic)
+        n8: ast.nodes.get i: nid
         (addResolveErrorH
             :st
             nodeid: (nodeId n: n8)
@@ -20014,7 +20014,7 @@ stampPendingTyperefs: function {
     for ri < rn loop {
         rk: st.typing.typerefRetry.get i: ri
         ri = ri + 1
-        rv: st.typing.pendingTyperef.get key: rk
+        rv: st.typing.pendingTyperef.get key: rk.u64
         match (
             rv
         ) case some then {
@@ -20470,16 +20470,16 @@ cloneMethodReturn: function {
         # clone, which is why the clone answered the TEMPLATE's own type rather
         # than nothing. Registry first: it is the half that carries a parameter
         # tid for the substitution, and the stamp is the unsubstituted one.
-        rn5: (st.typing.funcReturnNode.get key: tplFnId).or d: 0
+        rn5: (st.typing.funcReturnNode.get key: tplFnId).or d: zast.nodeid
         if rn5 > 0 then {
-            nt5: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rn5
+            nt5: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rn5.u64
             if nt5 > 0 then rto5 = ztypes.tid.create from: nt5
         }
         # an instance minted before the template's returns resolved (through
         # an alias) still knows a return that names the type itself
         if rto5.isZero when rn5 > 0 when (returnNamesSelf
             :ast
-            nid: (zast.nodeid.create from: rn5.u32.orPanic)
+            nid: rn5
             :templateName
         ) then {
             st.reg.setReturnType typeId: fid5 value: specId
@@ -20492,7 +20492,7 @@ cloneMethodReturn: function {
             :st
             :ast
             :tplClassId
-            rn: (zast.nodeid.create from: rn5.u32.orPanic)
+            rn: rn5
         )
     }
     if rto5 > 0 then {
@@ -20613,7 +20613,7 @@ cloneMethodInto: function {
     )
     tpn0: zast.nameTextCopy :ast ref: (zast.nameid.create from: tpn0id.u32)
     copyReturnMarkers :st fromFn: (ztypes.tid.create from: tplFnId) toFn: fid5
-    frn0: (st.typing.funcReturnNode.get key: tplFnId).or d: 0
+    frn0: (st.typing.funcReturnNode.get key: tplFnId).or d: zast.nodeid
     if frn0 > 0 then st.typing.funcReturnNode.set key: fid5 value: frn0
     cN5: List String
     cI5: ListVal u64
@@ -23907,9 +23907,9 @@ bindSpecDefaults: function {
 } is {
     if fallbackArg > 0 then {
         for each pn: pnames8 loop {
-            if (subs.has key: pn).not when (valSubs.has key: pn).not when (
-                (st.reg.genericParamConstraintOf tdecl: tk8 paramName: pn).defaultNode == 0
-            ) then {
+            if (subs.has key: pn).not when (valSubs.has key: pn
+            ).not when (st.reg.genericParamConstraintOf tdecl: tk8 paramName: pn
+            ).defaultNode.isZero then {
                 subs.set key: pn value: fallbackArg
                 break
             }
@@ -26404,7 +26404,7 @@ methodReturnOf: function {st: zenv.ZSymbolTable.view mid: ztypes.tid} out option
     match (
         rn
     ) case some then {
-        nt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rn
+        nt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rn.u64
         if nt > 0 then return (optionval.some (ztypes.tid.create from: nt))
     } case none then null
     return (optionval.none ztypes.tid)
@@ -26843,7 +26843,7 @@ projectionSourceBorrows: function {
     mk: zast.markerKindOf :ast n: sn
     if mk.borrowMarker then return true
     if mk.unmarked.not then return false
-    if call.nid.u64 == st.typing.owningValueNid then return false
+    if call.nid == st.typing.owningValueNid then return false
     if (typeIsReftype :st tid: vt).not then return false
     bn: bareAtomNameId n: sn
     if bn.isZero.not then return (st.lookupVarId nameId: bn).none.not
@@ -26868,7 +26868,7 @@ checkOwnedValueAt: function {
 
 # valueCoreNid -- the node a value is, under the lines and one-statement
 # blocks its parentheses wrap it in.
-valueCoreNid: function {ast: Ast.view nid: zast.nodeid} out u64 is {
+valueCoreNid: function {ast: Ast.view nid: zast.nodeid} out zast.nodeid is {
     cur: nid
     for cur.isZero.not loop {
         n: ast.nodes.get i: cur
@@ -26877,10 +26877,10 @@ valueCoreNid: function {ast: Ast.view nid: zast.nodeid} out u64 is {
         } else if n.statement when n.statements.count == 1 then {
             cur = zast.kidAt kids: ast.kids span: n.statements i: 0
         } else {
-            return cur.u64
+            return cur
         }
     }
-    return cur.u64
+    return cur
 }
 
 # checkProjectionCreate -- `P src` / `P.create from: src` on a
@@ -28516,7 +28516,7 @@ refuseBareArmPayload: function {
     # the arm the read named
     cnId: zast.nameid
 } out bool is {
-    if st.typing.calleeDottedNid == dp.nid.u64 then return false
+    if st.typing.calleeDottedNid == dp.nid then return false
     anId: cnId
     if anId.isZero then return false
     if (armCarriesPayload :st armTid: bt armName: anId).not then return false
@@ -28554,7 +28554,7 @@ templateArmBase: function {
     bt: ztypes.tid
     cnId: zast.nameid
 } out ztypes.tid is {
-    if st.typing.calleeDottedNid == dp.nid.u64 then return bt
+    if st.typing.calleeDottedNid == dp.nid then return bt
     if (st.reg.isGenericOf tid: bt).not then return bt
     if (ast.nodes.get i: dp.parent).call then return bt
     tdecl: declOfTypeId :st tid: bt
@@ -30062,7 +30062,7 @@ checkResolvedMember: function {
         ztypes.ztypetype.functionType
     ) then {
         argVal: false
-        if dp.nid.u64 == st.typing.callArgNode when (typeIsReftype
+        if dp.nid == st.typing.callArgNode when (typeIsReftype
             :st
             tid: (ztypes.tid.create from: rm.u64)
         ) then argVal = true
@@ -30327,7 +30327,7 @@ checkMarkerMember: function {
         # what it names: the alias pins the source SHARED and may write through
         # itself. An ARGUMENT position locks through the call's own leg
         # instead, so the pin is left to it.
-        if dp.nid.u64 != st.typing.callArgNode when (typeIsReftype :st tid: bt) then {
+        if dp.nid != st.typing.callArgNode when (typeIsReftype :st tid: bt) then {
             btup: ListVal zast.nameid
             appendValueTuple :ast n: (ast.nodes.get i: dp.parent) dst: btup
             if btup.length > 0 when (st.lookupVarId nameId: (btup.get i: 0)).none.not then {
@@ -30506,7 +30506,7 @@ checkTransferMarker: function {
     # take from it. Legal only on the node that IS the statement.
     # a line whose value is used -- a block's value line, a function's implied
     # return -- is no statement for this purpose: `x.drop` there yields nothing
-    dropIsValue: (dp.nid.u64 != st.typing.stmtExprNid) or st.typing.stmtDiscarded.not
+    dropIsValue: (dp.nid != st.typing.stmtExprNid) or st.typing.stmtDiscarded.not
     if (isDropMarkerId nameId: cnId) when dropIsValue then {
         mvs: "'.drop' is a statement, not a value -- it ends a lifetime and produces nothing; use '.take' to move the value into a new name".string
         (addError
@@ -31405,9 +31405,9 @@ rewriteReadAsCall: function {ast: Ast node: atomref} is {
 # eachSubjectNidOf -- the value node of a `for each` header (eachSubjectNid); 0
 # for a plain header, whose value is evaluated -- and a callable one called -- at
 # every iteration.
-eachSubjectNidOf: function {isEach: bool nid: zast.nodeid} out u64 is {
-    if isEach then return nid.u64
-    return 0
+eachSubjectNidOf: function {isEach: bool nid: zast.nodeid} out zast.nodeid is {
+    if isEach then return nid
+    return zast.nodeid
 }
 
 # declaresIterate -- values of type `t` have a zero-argument `iterate`, the walk
@@ -31455,7 +31455,7 @@ readsObjectAsCall: function {
 } out ztypes.tid is {
     if st.typing.suppressFnAutoCall or st.typing.suppressBareCtor then return ztypes.tid
     if st.typing.inAssignTarget then return ztypes.tid
-    if nid == st.typing.eachSubjectNid when (declaresIterate :st :ast :t) then return ztypes.tid
+    if nid == st.typing.eachSubjectNid.u64 when (declaresIterate :st :ast :t) then return ztypes.tid
     return (objectCallOf :st :ast :t)
 }
 
@@ -32267,7 +32267,7 @@ noteWideLiteral: function {st: zenv.ZSymbolTable node: atomref lex: StringView} 
     }
     if (isDecimalLexeme :lex).not then return
     if (ztypes.literalBeyondI64 numstr: lex).not then return
-    st.typing.wideLiteralNodes.append from: node.nid.u64
+    st.typing.wideLiteralNodes.append from: node.nid
     st.typing.wideLiteralMonos.append from: st.typing.curMonoStamp
 }
 
@@ -32289,11 +32289,11 @@ checkWideLiterals: function {ast: Ast.view st: zenv.ZSymbolTable} is {
     i: u64
     for i < st.typing.wideLiteralNodes.length loop {
         nid: st.typing.wideLiteralNodes.get :i
-        t: st.typing.nodeTypeIn mono: (st.typing.wideLiteralMonos.get :i) :nid
+        t: st.typing.nodeTypeIn mono: (st.typing.wideLiteralMonos.get :i) nid: nid.u64
         i = i + 1
         if (st.reg.typetypeOf typeId: t) != ztypes.ztypetype.genericParam then {
             tn: wideLiteralTarget :st :t
-            ln: ast.nodes.get i: (zast.nodeid.create from: nid.u32.orPanic)
+            ln: ast.nodes.get i: nid
             reportWideLiteral :st :ast n: ln target: tn.stringView
         }
     }
@@ -33610,7 +33610,7 @@ checkAssignment: function {
     # an `if` or a `match` that is the whole value runs as statements, so its
     # arms may leave
     outerForm: st.typing.formValueNid
-    st.typing.formValueNid = asgn.value.u64
+    st.typing.formValueNid = asgn.value
     vt: checkMovedValueAt :st :unitDecl :ast nid: asgn.value
     st.typing.formValueNid = outerForm
     mvt: materialiseLiteral :ast :st :unitDecl t: vt
@@ -35413,8 +35413,8 @@ refuseLeavingArm: function {
     form: StringView
     width: u32
 } is {
-    if st.typing.stmtExprNid == nid.u64 then return
-    if st.typing.formValueNid == nid.u64 then return
+    if st.typing.stmtExprNid == nid then return
+    if st.typing.formValueNid == nid then return
     if (armLeaves :ast n: (ast.nodes.get i: nid) inLoop: false).not then return
     (addErrorH
         :st
@@ -37451,7 +37451,7 @@ consumedIfTid: function {
         width: 2
     )
     if allDiverge or anyEmpty then return result
-    if st.typing.stmtExprNid == ifnode.nid.u64 then return result
+    if st.typing.stmtExprNid == ifnode.nid then return result
     if hasElse then return (valueArmsTid :st :ast nid: ifnode.nid first: result)
     reportValueIfWithoutElse :st :ifnode
     return result
@@ -40912,27 +40912,27 @@ holdStandIn: function {ast: Ast st: zenv.ZSymbolTable su: ztyping.specstandin} i
 checkBareGenericReturns: function {ast: Ast st: zenv.ZSymbolTable} is {
     ri: u64
     for ri < st.typing.funcReturnNode.length loop {
-        rn: (st.typing.funcReturnNode.valueAt i: ri).or d: 0
+        rn: (st.typing.funcReturnNode.valueAt i: ri).or d: zast.nodeid
         ri = ri + 1
-        if rn == 0 then continue
-        n: ast.nodes.get i: (zast.nodeid.create from: rn.u32.orPanic)
+        if rn.isZero then continue
+        n: ast.nodes.get i: rn
         if n.call then continue
         root: rootNameIdOf :ast :n
         if (root == zast.names.wkThis) or (zast.nameTextEq :ast ref: root s: "type") then continue
-        rsc: (st.typing.pendingTyperefScope.get key: rn).or d: ztypes.declid
-        rtd: ztypes.tid.create from: (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rn)
+        rsc: (st.typing.pendingTyperefScope.get key: rn.u64).or d: ztypes.declid
+        rtd: ztypes.tid.create from: (ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rn.u64)
         rtb: (bareGenericType
             :st
             :ast
             unitDecl: ztypes.declid
             tid: rtd
-            nid: rn
+            nid: rn.u64
             scope: rsc
             thisName: ""
         )
         # a generic type's name, stamped with its defaults' instance: that
         # instance is what the function returns
-        if rtb != rtd then ztyping.nodeTypeSet tbl: st.typing.nodeType nid: rn tid: rtb
+        if rtb != rtd then ztyping.nodeTypeSet tbl: st.typing.nodeType nid: rn.u64 tid: rtb
         nameT: (walkLookupTyperefFrom :st :ast scope: rsc baseId: root).or d: 0
         if nameT > 0 when (st.reg.genericOriginOf tid: rtb).u64 == nameT then {
             fk: st.typing.funcReturnNode.keyAt i: ri - 1
@@ -42029,7 +42029,7 @@ walkOneCallArg: function {
             sbPrev: st.typing.suppressBareCtor
             st.typing.callArgNode = (nodeId
                 n: (ast.nodes.get i: arg.operation)
-            ).u64
+            )
             st.typing.suppressBareCtor = isTypeArg
             if (argSlotOwns :st :effId :funcId :isCtor :recvImplicit :argIdx :arg) then {
                 vt = checkOwnedValueAt :st :unitDecl :ast nid: arg.operation
@@ -42818,7 +42818,7 @@ callableDottedResultAt: function {
         # `Type.arm` is one path whether an argument follows or not, so the
         # arm read is told it is a CALLABLE here -- the only place that knows
         cdPrev: st.typing.calleeDottedNid
-        st.typing.calleeDottedNid = dr.nid.u64
+        st.typing.calleeDottedNid = dr.nid
         r: checkDotted :st :unitDecl :ast dp: dr coerce: false
         st.typing.calleeDottedNid = cdPrev
         return (optionval.some r)
@@ -42938,7 +42938,7 @@ boundMayBeReftype: function {
     if pd.isZero then return true
     fm: (argRefAt
         :ast
-        nid: (zast.nodeid.create from: (st.typing.decls.get i: pd).node)
+        nid: (st.typing.decls.get i: pd).node
     )
     if fm.nid.isZero then return true
     return (boundAdmitsReftype :st :ast scope: tdecl :tdecl :fm)
@@ -44130,8 +44130,8 @@ fillOneDefault: function {
 } out bool is {
     if (subs.has key: pn) or (valSubs.has key: pn) then return true
     cd: st.reg.genericParamConstraintOf :tdecl paramName: pn
-    if cd.defaultNode == 0 then return true
-    dn: zast.nodeid.create from: cd.defaultNode
+    if cd.defaultNode.isZero then return true
+    dn: cd.defaultNode
     if (grey.has item: pn) then {
         (reportDefaultRefused
             :st
@@ -45429,7 +45429,7 @@ checkUserFnCall: function {
     match (
         rnOpt
     ) case some then {
-        rtOpt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rnOpt
+        rtOpt: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rnOpt.u64
         if rtOpt > 0 then {
             result = ztypes.tid.create from: rtOpt.u64
             setr: result
@@ -46433,7 +46433,7 @@ healGenericReturn: function {
             match (
                 rns
             ) case some then {
-                rst: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rns
+                rst: ztyping.nodeTypeAt tbl: st.typing.nodeType nid: rns.u64
                 if rst > 0 then rto = rst
             } case none then null
         }
@@ -47108,7 +47108,7 @@ substituteGenericReturn: function {
         rno
     ) case some then {
         rk2: zast.nameid
-        rko: st.typing.pendingTyperef.get key: rno
+        rko: st.typing.pendingTyperef.get key: rno.u64
         match (
             rko
         ) case some then {
@@ -48508,7 +48508,7 @@ checkDissectedArm: function {
     checkStatement :st :unitDecl :ast blockId: armBlock
     at: ztypes.tid.create from: (lastStmtType :st :ast block: (ast.nodes.get i: win))
     st.popTo marker: armMarker
-    if st.typing.stmtExprNid == casenode.nid.u64 then return at
+    if st.typing.stmtExprNid == casenode.nid then return at
     if at.isZero or (at.u64 == st.typing.nullTypeId) then return at
     if (st.reg.typetypeOf typeId: at) == ztypes.ztypetype.neverType then return at
     av: armValueOf :st :ast blockId: armBlock
@@ -48719,7 +48719,7 @@ consumedCaseTid: function {
         form: "a `match`"
         width: 5
     )
-    if st.typing.stmtExprNid == casenode.nid.u64 then return arms
+    if st.typing.stmtExprNid == casenode.nid then return arms
     if arms.isZero or (arms.u64 == st.typing.nullTypeId) then return arms
     if (st.reg.typetypeOf typeId: arms) == ztypes.ztypetype.neverType then return arms
     return (valueArmsTid :st :ast nid: casenode.nid first: arms)
@@ -49659,7 +49659,7 @@ checkStmtExpression: function {
     # a `.drop` is legal on this node and nowhere else; saved and restored
     # because a statement's expression can contain nested statement blocks
     outerStmt0: st.typing.stmtExprNid
-    st.typing.stmtExprNid = valueId.u64
+    st.typing.stmtExprNid = valueId
     et0: checkValueAt :st :unitDecl :ast nid: valueId
     st.typing.stmtExprNid = outerStmt0
     refuseNonValue :st :ast vt: et0 nid: valueId
@@ -49802,7 +49802,7 @@ checkStmtLine: function {
     if sline.statementline then innerId = sline.statementline
     dk: zenv.divkind.none
     ul0: st.typing.lineUnnamedLocals.length
-    tailLine: last and (st.tailBlock == blockId.u64) and blockId.isZero.not
+    tailLine: last and (st.tailBlock == blockId) and blockId.isZero.not
     if tailLine then forwardTail :st :ast :innerId
     # only a block's last line can be its value: a statement block's is not
     discarded: tailLine.not and (last.not or (st.typing.stmtBlocks.has item: blockId.u64))
@@ -49828,7 +49828,7 @@ checkStmtLine: function {
     }
     # the body's own tail is recorded once its value is judged
     # (checkImplicitReturn); a `with` or `do` block's, here
-    if tailLine when blockId.u64 != st.tailBody then (recordTailExit
+    if tailLine when blockId != st.tailBody then (recordTailExit
         :st
         :ast
         lineId: slnId
@@ -49880,7 +49880,7 @@ noteStatementBlocks: function {st: zenv.ZSymbolTable ast: Ast.view innerId: zast
 # argument list is called there, and `nid` is a statement's own value: a
 # result the statement may discard (recordDiscard).
 noteStatementAutoCall: function {st: zenv.ZSymbolTable nid: u64} is {
-    if nid == st.typing.stmtExprNid then st.typing.autoCallNodes.add item: nid
+    if nid == st.typing.stmtExprNid.u64 then st.typing.autoCallNodes.add item: nid
 }
 
 # doStatementOf -- the statement block a `do` node holds, 0 for any other node.
@@ -49982,11 +49982,11 @@ forwardTail: function {st: zenv.ZSymbolTable ast: Ast.view innerId: zast.nodeid}
     ) case withexpr then {
         # its body is a `do` block, whose own block holds the lines
         if (withForwardsTail :ast n: (ast.nodes.get i: innerId)) then {
-            st.tailBlock = (doStatementOf n: (ast.nodes.get i: n.body)).u64
+            st.tailBlock = doStatementOf n: (ast.nodes.get i: n.body)
         }
     } case doexpr then {
         if (blockHasBreak :ast n: (ast.nodes.get i: n.statement)
-        ).not then st.tailBlock = n.statement.u64
+        ).not then st.tailBlock = n.statement
     } else null
 }
 
@@ -50002,7 +50002,7 @@ noteDropReleasedTemps: function {st: zenv.ZSymbolTable dropNid: zast.nodeid} is 
         if (st.isPathLocked path: p) then {
             kept.append nm
         } else {
-            st.typing.dropTempNodes.append dropNid.u64
+            st.typing.dropTempNodes.append dropNid
             st.typing.dropTempNames.append nm
         }
     }
@@ -51090,8 +51090,8 @@ checkFunctionBody: function {
     st.typing.suppressFnAutoCall = false
     st.typing.inAssignTarget = false
     st.typing.allowBareFnRef = false
-    st.typing.calleeDottedNid = 0
-    st.typing.callArgNode = 0
+    st.typing.calleeDottedNid = zast.nodeid
+    st.typing.callArgNode = zast.nodeid
     (checkFunctionBodyIn
         :st
         :unitDecl
@@ -51315,13 +51315,13 @@ checkFunctionBodyIn: function {
         bodyErrs: st.typing.errors.length
         prevTailBody: st.tailBody
         prevTailBlock: st.tailBlock
-        st.tailBody = 0
-        st.tailBlock = 0
+        st.tailBody = zast.nodeid
+        st.tailBlock = zast.nodeid
         if st.typing.currentReturnTypeId > 0 when (st.typing.generatorCallBodies.has
             item: fn.nid.u64
         ).not then {
-            st.tailBody = fn.body.u64
-            st.tailBlock = fn.body.u64
+            st.tailBody = fn.body
+            st.tailBlock = fn.body
         }
         # a body's last line returns its value when it declares one (a tail,
         # never a discard), and is a statement otherwise
@@ -52388,7 +52388,7 @@ instanceBodyAt: function {
     match (
         have
     ) case some then {
-        return (zast.nodeid.create from: have.u32.orPanic)
+        return have
     } case none then null
     bodyId: zast.nodeid
     {
@@ -52427,7 +52427,7 @@ instanceBodyAt: function {
         endId: ast.nodes.length.u32.orPanic
         fsno: fs
     )
-    st.typing.instanceBody.set key: k value: cid.u64
+    st.typing.instanceBody.set key: k value: cid
     return cid
 }
 
@@ -58849,8 +58849,8 @@ lowerDeclaredGeneratorsInUnit: function {
         if opId.isZero.not then {
             validateGeneratorDef :st :ast defName: gnm.stringView objId: opId
             gd: (zgenerator.GenDeclared
-                callFnId: 0
-                wrapperNodeId: 0
+                callFnId: zast.nodeid
+                wrapperNodeId: zast.nodeid
                 readsAbsentInput: false
             )
             zgenerator.lowerDeclared :ast objId: opId dst: gd
