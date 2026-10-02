@@ -6179,6 +6179,9 @@ checkParamTypeShape: function {
                 )
             )
             if (isNumericLiteralName name: prn.stringView) then {
+                # a refused default keeps its place, so the member is not
+                # reported as required as well
+                refuseLiteralMember :st :ast nid: pm.operation
                 (st.typing.declSetDefaultId
                     parentTypeId: (ztypes.tid.create from: fid.u64)
                     nameId: pnameId
@@ -10536,6 +10539,7 @@ attachDeclaredField: function {
     )
     if (isNumericLiteralName name: rdnr.stringView) then {
         refuseWideDefault :st :ast nid: fm.operation
+        refuseLiteralMember :st :ast nid: fm.operation
         (st.typing.declSetDefault
             parentTypeId: (ztypes.tid.create from: rid.u64)
             pool: ast.names
@@ -12431,6 +12435,40 @@ resolveClassMethodDecl: function {
     }
 }
 
+# refuseLiteralMember -- a default written over a numeric literal: `0.u64` names
+# the literal's width, and that is the only member a literal has, so `0.rid` is
+# refused the way a body refuses the same read -- the literal's own type has no
+# member of that name. The default keeps its place either way, so the member is
+# not reported as required as well.
+refuseLiteralMember: function {st: zenv.ZSymbolTable ast: Ast.view nid: zast.nodeid} is {
+    parentId: zast.nodeid
+    childId: zast.nodeid
+    {
+        n: ast.nodes.get i: nid
+        if n.dottedpath.not then return
+        parentId = n.parent
+        childId = n.child
+    }
+    cn: atomNameId :ast n: (ast.nodes.get i: childId)
+    if cn.isZero then return
+    ct: zast.nameTextAt :ast ref: cn
+    if (ztypes.numkindByName name: ct.stringView).has then return
+    # the literal's own type: a decimal integer reads as an i64, any other
+    # spelling as a u64
+    lex: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: parentId))
+    ltn: "u64"
+    if (isDecimalLexeme lex: lex.stringView) then ltn = "i64"
+    cnode: ast.nodes.get i: childId
+    (addError
+        :st
+        nodeid: childId
+        lineno: (nodeLine n: cnode)
+        colno: (nodeCol n: cnode)
+        e: zast.err.typeError
+        msg: "type '\{ltn}' has no member '\{ct}'"
+    )
+}
+
 # refuseWideDefault -- a default written as a bare integer literal is an i64, as
 # the declaration's own type is, so one outside i64 is refused where it is
 # written: past u64 no type can take it, and a decimal past i64 needs its
@@ -12485,6 +12523,7 @@ recordFieldDefault: function {
     )
     if (isNumericLiteralName name: rdnc.stringView) then {
         refuseWideDefault :st :ast nid: fm.operation
+        refuseLiteralMember :st :ast nid: fm.operation
         (st.typing.declSetDefault
             parentTypeId: (ztypes.tid.create from: cid.u64)
             pool: ast.names
@@ -55877,6 +55916,139 @@ constOfStringMethodCall: function {
     )
 }
 
+# typedefOverNumericDecl -- the callee `callableId` names a declaration written
+# `X: typedef <numeric type>`, read off the DECLARATION: a shape question asked
+# before the typedef's own type may have resolved (a signature naming a constant
+# reaches it early), which the parse already answers.
+typedefOverNumericDecl: function {
+    st: zenv.ZSymbolTable.view
+    ast: Ast.view
+    unitDecl: ztypes.declid
+    scope: ztypes.declid
+    callableId: zast.nodeid
+} out bool is {
+    cnId: atomNameId :ast n: (ast.nodes.get i: callableId)
+    if cnId.isZero then return false
+    d: declOfUnitDef :st :unitDecl :scope nameId: cnId
+    if d.isZero then return false
+    dn: (st.typing.decls.get i: d).node
+    if dn.isZero then return false
+    opId: zast.nodeid
+    {
+        n: ast.nodes.get i: dn
+        if n.namedoperation then opId = n.operation
+    }
+    if opId.isZero then return false
+    o: objRefAt :ast nid: opId
+    if o.nid.isZero then return false
+    b: objectTypedefBaseId :ast onode: o
+    if b.isZero then return false
+    bt: zast.nameTextAt :ast ref: b
+    return (ztypes.numkindByName name: bt.stringView).has
+}
+
+# numericTypedefNamed -- the typedef over a numeric type the callee `callableId`
+# names, 0 when it names anything else.
+numericTypedefNamed: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    callableId: zast.nodeid
+} out ztypes.tid is {
+    # the declaration answers first, so nothing is minted for a callee that
+    # is no typedef; the type then resolves on demand, as a reference's would
+    if (typedefOverNumericDecl :st :ast :unitDecl :scope :callableId).not then return ztypes.tid
+    cnId: atomNameId :ast n: (ast.nodes.get i: callableId)
+    tdTid: (ztypes.tid.create
+        from: (resolveNamedTypeId :st :ast :unitDecl :scope nameId: cnId thisName: "")
+    )
+    base: typedefBaseTidOf :st tid: tdTid
+    if base.isZero then return ztypes.tid
+    if (isNumericTid :ast :st :scope tid: base).not then return ztypes.tid
+    return tdTid
+}
+
+# constOfNumericTypedef -- a typedef over a numeric type applied to one value
+# (`NONE: rid 0`, `rid from: 0`): that value, carrying the typedef as its type.
+# A typedef costs nothing at run time, so its constant is its base's. The value
+# fits the base as a literal written there would, and a typed value must be the
+# base itself -- a typedef constructs from exactly its base. noConst when the
+# callee is no numeric typedef.
+constOfNumericTypedef: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    callableId: zast.nodeid
+    args: (ListVal zast.nodeid).view
+} out ztypes.cval is {
+    if args.length != 1 then return ztypes.noConst
+    tdTid: numericTypedefNamed :st :scope :ast :unitDecl :callableId
+    if tdTid.isZero then return ztypes.noConst
+    base: typedefBaseTidOf :st tid: tdTid
+    # the one argument: written bare, or labelled `from`
+    valueId: args.get i: 0
+    {
+        an: ast.nodes.get i: valueId
+        if an.namedoperation then {
+            # a positional argument is a named operation with no name
+            if an.name.isZero.not when (zast.nameTextEq :ast ref: an.name s: "from").not then {
+                return ztypes.noConst
+            }
+            valueId = an.operation
+        }
+    }
+    v: evalConstNode :st :scope :ast :unitDecl nid: valueId
+    if (v.kind.ivalKind or v.kind.fvalKind).not then return ztypes.noConst
+    vl: nodeLine n: (ast.nodes.get i: valueId)
+    vc: nodeCol n: (ast.nodes.get i: valueId)
+    if v.numTid.isZero.not when (v.numTid == base).not then {
+        # the refusal a construction in a body gives
+        en: specWrittenName :st :ast tid: base
+        an: specWrittenName :st :ast tid: v.numTid
+        (addErrorH
+            :st
+            nodeid: valueId
+            lineno: vl
+            colno: vc
+            e: zast.err.callError
+            msg: "argument 'from' type mismatch: expected \{en}, got \{an}"
+            note: "a typedef is constructed from exactly its base type"
+            hint: "convert the value to \{en} first"
+            width: 1
+        )
+        return ztypes.noConst
+    }
+    fm: untypedFitsMessage :st :v target: base
+    if fm.length > 0 then {
+        addError :st nodeid: valueId lineno: vl colno: vc e: zast.err.typeError msg: fm
+        return ztypes.noConst
+    }
+    r: v
+    r.numTid = tdTid
+    return r
+}
+
+# constOfValueCall -- the calls in constant position that ARE values: a static
+# method on a string constant, and a numeric typedef applied to one value.
+# noConst for every other call.
+constOfValueCall: function {
+    st: zenv.ZSymbolTable
+    scope: ztypes.declid
+    ast: Ast
+    unitDecl: ztypes.declid
+    nid: zast.nodeid
+    callableId: zast.nodeid
+    args: (ListVal zast.nodeid).view
+    ln: u32
+    co: u32
+} out ztypes.cval is {
+    sm: constOfStringMethodCall :st :scope :ast :unitDecl :nid :callableId :args :ln :co
+    if sm.kind.none.not then return sm
+    return (constOfNumericTypedef :st :scope :ast :unitDecl :callableId :args)
+}
+
 # constOfCall -- a call in constant position. `error "..."` is the program
 # asserting: only the WINNING branch of a fold is ever evaluated, so an `error`
 # in a dead one is never visited, which is why it lives here and not in a tree
@@ -55919,7 +56091,7 @@ constOfCall: function {
     # A static method on a string constant is a CALL whose callable is a
     # dotted path, so atomName is "" for it and the `error` test below would
     # bail before ever looking at the receiver. Intercept first.
-    sm: constOfStringMethodCall :st :scope :ast :unitDecl :nid :callableId args: argIds :ln :co
+    sm: constOfValueCall :st :scope :ast :unitDecl :nid :callableId args: argIds :ln :co
     if sm.kind.none.not then return sm
     isError: false
     cnode: ast.nodes.get i: callableId
@@ -57074,6 +57246,15 @@ resolveCalledConstantDef: function {
                 cbu = true
             }
         }
+        # a numeric typedef applied to one value (`NONE: rid 0`) is a constant of
+        # that typedef: the value channel folds it and checks it fits
+        if cbu.not when defn.nargs == 1 when (typedefOverNumericDecl
+            :st
+            :ast
+            :unitDecl
+            :scope
+            callableId: defn.callable
+        ) then cbu = true
         if cbu.not then {
             cm: "a unit-level constant takes a literal value, not a construction".string
             ch: "construct it inside a function, or make '\{defName}' a function that returns the value"
@@ -57269,6 +57450,16 @@ instantiatedAliasFold: function {
     if unm.isZero then return false
     dnm: zast.nameTextCopy :ast ref: (declNameIdOf :st :declId)
     if dnm.length == 0 then return false
+    # a numeric typedef applied to one value (`NONE: rid 0`) constructs a
+    # constant and instantiates nothing: the constant channel folds it
+    tdc: callRefAt :ast nid: opId
+    if tdc.nargs == 1 when (typedefOverNumericDecl
+        :st
+        :ast
+        unitDecl: unm
+        scope: own
+        callableId: tdc.callable
+    ) then return false
     # a value that names its own definition, directly or through another
     # (`foo: bar foo`, `Strs: (List Strs)`), re-enters here while its
     # arguments resolve: that is a cycle, reported once, and the re-entry is
