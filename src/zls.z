@@ -3620,7 +3620,7 @@ hoverDoc: function {snap: zcheck.CheckResult sp: Spans.view nid: zast.nodeid} ou
 # tid when the hit is a callable or unit member (a function hovers as its
 # signature, not its return value), the instance when a generic call
 # resolved to one, and the Decl's type when only the Decl layer resolved the hit.
-hoverSigTid: function {snap: zcheck.CheckResult hit: navhit} out u64 is {
+hoverSigTid: function {snap: zcheck.CheckResult hit: navhit} out ztypes.tid is {
     t: nodeTypeAt o: snap.st nid: hit.nodeid
     ud: useUnitDef o: snap.st nid: hit.nodeid
     sigTid: t
@@ -4792,14 +4792,14 @@ numberEnd: function {base: StringView} out u64 is {
 
 # literalTidOf -- the literal type a numeric lexeme wears: floatliteral when it
 # carries a decimal point, intliteral otherwise.
-literalTidOf: function {o: (Option zenv.ZSymbolTable).view name: StringView} out u64 is {
+literalTidOf: function {o: (Option zenv.ZSymbolTable).view name: StringView} out ztypes.tid is {
     match (
         o
     ) case some then {
-        if (ztypecheck.isFloatLiteralName :name) then return o.reg.literalFloatTid.u64
-        return o.reg.literalIntTid.u64
+        if (ztypecheck.isFloatLiteralName :name) then return o.reg.literalFloatTid
+        return o.reg.literalIntTid
     } case none then null
-    return 0
+    return ztypes.noTid
 }
 
 # literalConvTid -- the type a literal's declared conversion `name` produces.
@@ -4811,9 +4811,9 @@ literalConvTid: function {
     o: (Option zenv.ZSymbolTable).view
     litTid: ztypes.tid
     name: StringView
-} out u64 is {
+} out ztypes.tid is {
     m: childOfIn :prog :o parent: litTid :name
-    if m.isZero then return 0
+    if m.isZero then return ztypes.noTid
     match (
         o
     ) case some then {
@@ -4821,10 +4821,10 @@ literalConvTid: function {
         match (
             r
         ) case some then {
-            return r.u64
+            return r
         } case none then null
     } case none then null
-    return 0
+    return ztypes.noTid
 }
 
 # literalDefaultTid -- the concrete type an unpinned literal falls to, asked of
@@ -4833,7 +4833,7 @@ literalDefaultTid: function {
     prog: Ast.view
     o: (Option zenv.ZSymbolTable).view
     litTid: ztypes.tid
-} out u64 is {
+} out ztypes.tid is {
     isF: false
     match (
         o
@@ -4858,8 +4858,8 @@ addLiteralMembers: function {
 } is {
     addTypeMembers :prog :o tid: litTid :sink skipNumeric: false
     dflt: literalDefaultTid :prog :o :litTid
-    if dflt == 0 then return
-    addTypeMembers :prog :o tid: (ztypes.tid.create from: dflt.u64) :sink skipNumeric: true
+    if dflt.isZero then return
+    addTypeMembers :prog :o tid: dflt :sink skipNumeric: true
 }
 
 # dotFrom -- index of the first `.` at or after `start` in base, or
@@ -4974,10 +4974,10 @@ addLiteralHead: function {
     # source conflict
     lit: (base.substring from: 0 to: numEnd).string
     ltid: literalTidOf o: snap.st name: lit.stringView
-    if ltid == 0 then return
+    if ltid.isZero then return
     n: base.length
     if numEnd >= n then {
-        addLiteralMembers prog: snap.prog o: snap.st litTid: (ztypes.tid.create from: ltid) :sink
+        addLiteralMembers prog: snap.prog o: snap.st litTid: ltid :sink
         return
     }
     s0: numEnd + 1
@@ -4989,11 +4989,11 @@ addLiteralHead: function {
         litTid: (ztypes.tid.create from: ltid)
         name: seg.stringView
     )
-    if cur == 0 then {
+    if cur.isZero then {
         # a NON-numeric child falls through to the materialised receiver, the
         # rule that keeps `5.times` and `1.0.scaleB` working
-        dflt: literalDefaultTid prog: snap.prog o: snap.st litTid: (ztypes.tid.create from: ltid)
-        if dflt == 0 then return
+        dflt: literalDefaultTid prog: snap.prog o: snap.st litTid: ltid
+        if dflt.isZero then return
         cur = (childOfIn
             prog: snap.prog
             o: snap.st
@@ -5001,10 +5001,10 @@ addLiteralHead: function {
             name: seg.stringView
         )
     }
-    if cur == 0 then return
+    if cur.isZero then return
     s1: de + 1
-    cur = descendSegments :snap :base start: s1 tid0: (ztypes.tid.create from: cur)
-    if cur == 0 then return
+    cur = descendSegments :snap :base start: s1 tid0: cur
+    if cur.isZero then return
     (addTypeMembers
         prog: snap.prog
         o: snap.st
@@ -5241,12 +5241,14 @@ caseArmComplete: function {
 # resolveCalleeFuncId -- a callable/leaf node id -> its function tid: nodeType
 # carries a method callable's fn tid, useUnitDef a free function's; anything that
 # does not name a function type yields 0.
-resolveCalleeFuncId: function {o: (Option zenv.ZSymbolTable).view nid: zast.nodeid} out u64 is {
+resolveCalleeFuncId: function {
+    o: (Option zenv.ZSymbolTable).view nid: zast.nodeid
+} out ztypes.tid is {
     ftid: nodeTypeAt :o :nid
     udx: useUnitDef :o :nid
     if udx > 0 then ftid = udx
-    if ftid.isZero then return 0
-    result: u64
+    if ftid.isZero then return ztypes.noTid
+    result: ztypes.tid
     match (
         o
     ) case some then {
@@ -5267,7 +5269,7 @@ leafFuncIdAt: function {
     srcDir: StringView
     line1u: u32
     idCol: u32
-} out u64 is {
+} out ztypes.tid is {
     o: snap.st
     leafNid: zast.nodeid
     bk: u8
@@ -5290,7 +5292,7 @@ leafFuncIdAt: function {
         }
         rix = rix + 1
     }
-    if found.not then return 0
+    if found.not then return ztypes.noTid
     return (resolveCalleeFuncId :o nid: leafNid)
 }
 
@@ -5305,9 +5307,9 @@ bareCalleeFuncId: function {
     ws: u64
     cursorPos: u64
     sp: Spans.view
-} out u64 is {
+} out ztypes.tid is {
     leaf9: cursorLeafNid :ltv :ws :cursorPos :sp
-    if leaf9.isZero then return 0
+    if leaf9.isZero then return ztypes.noTid
     return (resolveCalleeFuncId :o nid: leaf9)
 }
 
@@ -5530,7 +5532,7 @@ argLabelComplete: function {
     caln: prog.nodes.get i: callableIdx
     calNid = ztypecheck.nodeId n: caln
     funcId: resolveCalleeFuncId :o nid: calNid
-    if funcId == 0 then return false
+    if funcId.isZero then return false
     # supplied labels (each arg -> namedoperation.name ref -> text)
     si: u64
     for si < argIds.length loop {
@@ -5544,7 +5546,7 @@ argLabelComplete: function {
         }
         si = si + 1
     }
-    return (emitLabels :arr :o :prog funcId: (ztypes.tid.create from: funcId) :supplied :prefix)
+    return (emitLabels :arr :o :prog :funcId :supplied :prefix)
 }
 
 # HeadScan -- the running state of the backward scan for the head of the call
@@ -5805,7 +5807,7 @@ signatureHelpAnswer: function {
     )
     sp.walkProgram prog: snap.prog
     funcId: leafFuncIdAt :snap :sp :docRel :srcDir line1u: head.line :idCol
-    if funcId == 0 then return Value.nul
+    if funcId.isZero then return Value.nul
     label: (fnSigTextOpt
         vfs: snap.vfs
         prog: snap.prog
@@ -5814,7 +5816,7 @@ signatureHelpAnswer: function {
         name: nmS
     )
     if label.length == 0 then return Value.nul
-    pdisps: fnParamDisplays prog: snap.prog o: snap.st tid: (ztypes.tid.create from: funcId.u64)
+    pdisps: fnParamDisplays prog: snap.prog o: snap.st tid: funcId
     activeIdx: activeParamIndex :pdisps label: activeLabel.stringView
     params: signatureParams :pdisps
     siginfo: newObj

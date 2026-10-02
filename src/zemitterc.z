@@ -2397,15 +2397,8 @@ binopKeyOf: function {
 # dottedTaggedTid -- the tagged-construction stamp for a dotted node: the
 # variant/union type id when the path names a subtype member on the TYPE
 # (`Type.arm`); 0 otherwise.
-dottedTaggedTid: function {symtab: zenv.ZSymbolTable.view nid: zast.nodeid} out u64 is {
-    go: symtab.typing.dpTaggedParent.get key: nid
-    match (
-        go
-    ) case some then {
-        return go
-    } case none then {
-        return 0
-    }
+dottedTaggedTid: function {symtab: zenv.ZSymbolTable.view nid: zast.nodeid} out ztypes.tid is {
+    return ((symtab.typing.dpTaggedParent.get key: nid).or d: ztypes.noTid)
 }
 
 # dottedArmPredicateTid -- the arm-predicate stamp for a dotted node: the
@@ -2413,27 +2406,13 @@ dottedTaggedTid: function {symtab: zenv.ZSymbolTable.view nid: zast.nodeid} out 
 dottedArmPredicateTid: function {
     symtab: zenv.ZSymbolTable.view nid: zast.nodeid
 } out ztypes.tid is {
-    go: symtab.typing.dpArmPredicate.get key: nid
-    match (
-        go
-    ) case some then {
-        return go
-    } case none then {
-        return ztypes.noTid
-    }
+    return ((symtab.typing.dpArmPredicate.get key: nid).or d: ztypes.noTid)
 }
 
 # dottedTagReadTid -- the tag-accessor stamp for a dotted node: the variant/
 # union type id when `value.<accessor>` reads the discriminator; 0 otherwise.
-dottedTagReadTid: function {symtab: zenv.ZSymbolTable.view nid: zast.nodeid} out u64 is {
-    go: symtab.typing.dpTagRead.get key: nid
-    match (
-        go
-    ) case some then {
-        return go
-    } case none then {
-        return 0
-    }
+dottedTagReadTid: function {symtab: zenv.ZSymbolTable.view nid: zast.nodeid} out ztypes.tid is {
+    return ((symtab.typing.dpTagRead.get key: nid).or d: ztypes.noTid)
 }
 
 # dataBlockTid -- the DATA type a data-block reference resolved to, read off
@@ -3420,7 +3399,7 @@ canonFnId: function {
     ctx: Ctx.view
     tid: ztypes.tid
     name: StringView
-} out u64 is {
+} out ztypes.tid is {
     if (originTidOf :symtab :tid) > 0 then return tid
     if (ztypecheck.declOfTypeId st: symtab :tid).isZero.not then return tid
     return (userFnId :ast :symtab :ctx :name)
@@ -3730,7 +3709,7 @@ nodeIsRefBorrowResult: function {
     n: astnode.view
 } out bool is {
     f: refBorrowCalleeFid :ast :symtab :ctx :n
-    if f == 0 then return false
+    if f.isZero then return false
     r: stampIdOf :symtab nid: (interpPartNodeId :n)
     ft: ztypes.tid.create from: f.u64
     if (fnReturnsRefBorrow :ast :symtab :ctx fid: ft retTid: r).not then return false
@@ -8449,7 +8428,7 @@ refBorrowCalleeFid: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     n: astnode.view
-} out u64 is {
+} out ztypes.tid is {
     match (
         n
     ) case statementline then {
@@ -8463,7 +8442,7 @@ refBorrowCalleeFid: function {
         cid: stampIdOf :symtab nid: (interpPartNodeId n: (ast.nodes.get i: n.callable))
         if (funcBorrowFlag :symtab tid: cid) then return cid
         ch8: aliasChildName :ast :symtab n: (ast.nodes.get i: n.callable)
-        if ch8.length == 0 then return 0
+        if ch8.length == 0 then return ztypes.noTid
         rid8: dottedReceiverStampId :ast :symtab callable: (ast.nodes.get i: n.callable)
         rid8 = typedefMethodOwner :ast :symtab :ctx tid: rid8 mn: ch8
         mf8: ((symtab.typing.declChildOf
@@ -8474,7 +8453,7 @@ refBorrowCalleeFid: function {
             d: ztypes.noTid
         )
         if (funcBorrowFlag :symtab tid: mf8) then return mf8
-        return 0
+        return ztypes.noTid
     } case dottedpath then {
         # a zero-arg method auto-call reads as a dotted path
         ch7: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.child))
@@ -8486,12 +8465,12 @@ refBorrowCalleeFid: function {
             if (
                 (symtab.reg.typetypeOf typeId: cc7) == ztypes.ztypetype.functionType
             ) when (funcBorrowFlag :symtab tid: cc7) then return cc7
-            return 0
+            return ztypes.noTid
         } case none then {
-            return 0
+            return ztypes.noTid
         }
     } else {
-        return 0
+        return ztypes.noTid
     }
 }
 
@@ -8867,7 +8846,7 @@ bindChasedTid: function {
 } out ztypes.tid is {
     bt: stampIdOf :symtab nid: n.nodeid
     if bt.isZero then bt = stampIdOf :symtab nid: (interpPartNodeId n: avn)
-    return (ztypes.tid.create from: (chaseAggregateTypedef :symtab :ctx tid: bt))
+    return (chaseAggregateTypedef :symtab :ctx tid: bt)
 }
 
 # pathRootsAtVariable -- the dotted path bottoms out in a name that resolves to
@@ -9496,7 +9475,7 @@ mapKeyIsString: function {
     monoId: ztypes.tid
 } out bool is {
     kt: mapKeyType :symtab :monoId
-    return (keyHashKind :symtab :ctx tid: (ztypes.tid.create from: kt.u64)) == 1
+    return (keyHashKind :symtab :ctx tid: kt) == 1
 }
 
 # whether a set's element is a String, which decides the hash and the
@@ -9507,7 +9486,7 @@ setElemIsString: function {
     monoId: ztypes.tid
 } out bool is {
     et: setElemType :symtab :monoId
-    return (keyHashKind :symtab :ctx tid: (ztypes.tid.create from: et.u64)) == 1
+    return (keyHashKind :symtab :ctx tid: et) == 1
 }
 
 # stringKeyArgPointer -- a String-keyed mono's view-mode key/item argument as a C
@@ -10749,7 +10728,7 @@ renderDefault: function {
                 tid: (ztypes.tid.create from: targetTid.u64)
                 name: tn.stringView
             )
-            if cf > 0 then return (ctxCname :ctx tid: (ztypes.tid.create from: cf.u64))
+            if cf > 0 then return (ctxCname :ctx tid: cf)
             return (ctxCname :ctx tid: targetTid)
         }
     }
@@ -16586,7 +16565,7 @@ emitDottedTagRead: function {
     # below (io/os bases, ownership markers, numeric casts)
     dtp: dottedTaggedTid :symtab nid: n.nodeid
     if dtp > 0 then {
-        r: taggedArmValueC :ast :symtab :ctx dtp: (ztypes.tid.create from: dtp.u64) :mnc0Id
+        r: taggedArmValueC :ast :symtab :ctx :dtp :mnc0Id
         if r.length > 0 then return r
     }
     dap: dottedArmPredicateTid :symtab nid: n.nodeid
@@ -19974,7 +19953,7 @@ bindAliasCType: function {
         fid: (ztypes.tid.create from: rbf8.u64)
         retTid: ltid
     ) then {
-        ctB8 = refPtrC :symtab tid: (ztypes.tid.create from: rbf8.u64) base: ct
+        ctB8 = refPtrC :symtab tid: rbf8 base: ct
         ctx.ptrVids.append nameVid
     }
     if (isSvAsStringNode :ast :symtab :ctx n: avn) then {
@@ -21710,7 +21689,7 @@ emitWithLocal: function {
         fid: (ztypes.tid.create from: wrb.u64)
         retTid: wsid
     ) then {
-        wctP: refPtrC :symtab tid: (ztypes.tid.create from: wrb.u64) base: wc.stringView
+        wctP: refPtrC :symtab tid: wrb base: wc.stringView
         wc = wctP.take
         ctx.ptrVids.append (defVid :symtab nid: n.nodeid)
         wvC = (unloadValueStructRef
@@ -29637,8 +29616,7 @@ emitArmPayloadDestroy: function {
     pdtr: payloadDestructor :ast :symtab :ctx :tid :arm
     if pdtr.length == 0 then return
     co: symtab.typing.declChildOf pool: ast.names parentTypeId: tid name: arm
-    if (isHeapPtrCollection :symtab :ctx tid: (ztypes.tid.create from: (co.or d: ztypes.noTid))
-    ) then {
+    if (isHeapPtrCollection :symtab :ctx tid: (co.or d: ztypes.noTid)) then {
         dh: armCellDeref :pc slot: "u->data"
         buf.append "            \{pdtr}(\{dh});\n"
     } else {
@@ -32898,7 +32876,7 @@ emitListContains: function {
             nameId: zast.names.wkOpEq
         )
         body.append "        { \{ect} _e = _this->data[i]; if ("
-        body.append (ctxCname :ctx tid: (ztypes.tid.create from: (fo.or d: ztypes.noTid)))
+        body.append (ctxCname :ctx tid: (fo.or d: ztypes.noTid))
         body.append "(&_e, "
         if (elemBorrowsByPtr :ast :symtab :ctx tid: elem) then body.append "&"
         body.append "_needle)) return true; }\n"
@@ -32987,7 +32965,7 @@ sortLessC: function {
         rhs = "&_b"
     }
     fo: symtab.typing.declChildOfId parentTypeId: owner nameId: zast.names.wkCompare
-    fc: ctxCname :ctx tid: (ztypes.tid.create from: (fo.or d: ztypes.noTid))
+    fc: ctxCname :ctx tid: (fo.or d: ztypes.noTid)
     return "\{fc}(&_a, \{rhs}) < 0"
 }
 
@@ -33925,7 +33903,7 @@ emitSetMono: function {
     nm: cbaseNoPrefix :ctx tid: monoId
     mcr: cUpperOf text: nm.stringView
     elemTid: setElemType :symtab :monoId
-    elemName: regNameOf :symtab tid: (ztypes.tid.create from: elemTid.u64)
+    elemName: regNameOf :symtab tid: elemTid
     itemT: (cTypeForNameTid
         :ast
         :symtab
@@ -33933,7 +33911,7 @@ emitSetMono: function {
         name: elemName.stringView
         tid: (ztypes.tid.create from: elemTid.u64)
     )
-    ekind: keyHashKind :symtab :ctx tid: (ztypes.tid.create from: elemTid.u64)
+    ekind: keyHashKind :symtab :ctx tid: elemTid
     isStr: ekind == 1
     siId: monoMethodReturn :symtab :monoId nameId: zast.names.wkIterate
     if siId.isZero then return
@@ -33977,7 +33955,7 @@ emitSetMono: function {
         if dh.length > 0 when de.length > 0 then {
             hb: "\{dh}(&_key)"
             hashBody = hb.take
-            rhsPs: elemBorrowsByPtr :ast :symtab :ctx tid: (ztypes.tid.create from: elemTid.u64)
+            rhsPs: elemBorrowsByPtr :ast :symtab :ctx tid: elemTid
             rhsAs: "_b".string
             rhsTs: itemT.copy
             if rhsPs then {
@@ -34187,12 +34165,12 @@ emitMapIters: function {
 # mapKeyType -- a Map mono's KEY type, read off its `set` member's `key`
 # parameter rather than off the mono's name: the name is composed text, the
 # parameter is the declaration.
-mapKeyType: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid} out u64 is {
+mapKeyType: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid} out ztypes.tid is {
     return (memberOfMemberType :symtab :monoId outer: zast.names.wkSet inner: zast.names.wkKey)
 }
 
 # the element type id of Set instantiation `monoId`.
-setElemType: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid} out u64 is {
+setElemType: function {symtab: zenv.ZSymbolTable.view monoId: ztypes.tid} out ztypes.tid is {
     return (memberOfMemberType :symtab :monoId outer: zast.names.wkAdd inner: zast.names.wkItem)
 }
 
@@ -34204,9 +34182,9 @@ memberOfMemberType: function {
     monoId: ztypes.tid
     outer: zast.nameid
     inner: zast.nameid
-} out u64 is {
+} out ztypes.tid is {
     oo: symtab.typing.declChildOfId parentTypeId: monoId nameId: outer
-    if oo.some.not then return 0
+    if oo.some.not then return ztypes.noTid
     io: (symtab.typing.declChildOfId
         parentTypeId: (ztypes.tid.create from: oo.u64)
         nameId: inner
@@ -34263,7 +34241,7 @@ emitMapMono: function {
     ov: cbaseNoPrefix :ctx tid: ovId
     ovu: cUpperOf text: ovName.stringView
     keyTid: mapKeyType :symtab :monoId
-    keyName: regNameOf :symtab tid: (ztypes.tid.create from: keyTid.u64)
+    keyName: regNameOf :symtab tid: keyTid
     keyT: (cTypeForNameTid
         :ast
         :symtab
@@ -34271,7 +34249,7 @@ emitMapMono: function {
         name: keyName.stringView
         tid: (ztypes.tid.create from: keyTid.u64)
     )
-    kkind: keyHashKind :symtab :ctx tid: (ztypes.tid.create from: keyTid.u64)
+    kkind: keyHashKind :symtab :ctx tid: keyTid
     keyIsStr: kkind == 1
     hashKeyBody: setHashBody kind: kkind fast: ctx.fastHash
     keysEqBody: setEqBody kind: kkind
@@ -34310,7 +34288,7 @@ emitMapMono: function {
             # the receiver is a pointer either way; the `rhs` PARAMETER follows
             # the key's own calling convention, which is a pointer for a class
             # and a value for a record
-            rhsP: elemBorrowsByPtr :ast :symtab :ctx tid: (ztypes.tid.create from: keyTid.u64)
+            rhsP: elemBorrowsByPtr :ast :symtab :ctx tid: keyTid
             rhsA: "_b".string
             rhsT: keyT.copy
             if rhsP then {
@@ -34503,7 +34481,7 @@ emitIdMapMono: function {
     valName: regNameOf :symtab tid: valTid
     valT: cTypeForNameTid :ast :symtab :ctx name: valName.stringView tid: valTid
     keyTid: mapKeyType :symtab :monoId
-    keyName: regNameOf :symtab tid: (ztypes.tid.create from: keyTid.u64)
+    keyName: regNameOf :symtab tid: keyTid
     keyT: (cTypeForNameTid
         :ast
         :symtab
@@ -34686,7 +34664,7 @@ emitIdSetMono: function {
     nm: cbaseNoPrefix :ctx tid: monoId
     mcr: cUpperOf text: nm.stringView
     elemTid: setElemType :symtab :monoId
-    elemName: regNameOf :symtab tid: (ztypes.tid.create from: elemTid.u64)
+    elemName: regNameOf :symtab tid: elemTid
     itemT: (cTypeForNameTid
         :ast
         :symtab
@@ -34737,7 +34715,9 @@ emitIdSetMono: function {
 # SOURCE-named parts (Result over filestat and IoError), never by the mangled
 # spelling. 0 for a plain source-name stem (File, IoError, Reader), which keeps
 # the by-name path, and 0 when the instance was never demanded.
-ioCanonTid: function {ast: Ast.view symtab: zenv.ZSymbolTable.view canon: StringView} out u64 is {
+ioCanonTid: function {
+    ast: Ast.view symtab: zenv.ZSymbolTable.view canon: StringView
+} out ztypes.tid is {
     if canon == "Option_StringView" then {
         return (specStemTid :ast :symtab base: "Option" arg1: "StringView" arg2: "")
     }
@@ -34867,7 +34847,7 @@ ioCanonTid: function {ast: Ast.view symtab: zenv.ZSymbolTable.view canon: String
     if canon == "resultval_f128_parseerror" then {
         return (specStemTid :ast :symtab base: "resultval" arg1: "f128" arg2: "parseerror")
     }
-    return 0
+    return ztypes.noTid
 }
 
 # ioCanonCname -- memoized wrapper: the canon->cname map is emit-stable and io
@@ -35035,19 +35015,18 @@ loadIoFragment: function {
 # ioFileId -- the io File class type id (0 when File is not reachable).
 # Keyed on io's own unit rather than on "not the main unit": the two agree
 # for every program that OPENS io, and disagree for the one that IS io.
-ioFileId: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out u64 is {
+ioFileId: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out ztypes.tid is {
     last: symtab.reg.typeCount
-    ti: 1.u64
+    ti: ztypes.tid 1
     for ti < last loop {
-        if (
-            (symtab.reg.typetypeOf typeId: (ztypes.tid.create from: ti.u64)) ==
-            ztypes.ztypetype.classType
-        ) when (regNameIs :symtab tid: (ztypes.tid.create from: ti.u64) name: "File") when (
-            (defUnitIdOf :ctx tid: (ztypes.tid.create from: ti.u64)) == ctx.ioUnitDecl
-        ) then return ti
-        ti = ti + 1
+        if (symtab.reg.typetypeOf typeId: ti) == ztypes.ztypetype.classType when (regNameIs
+            :symtab
+            tid: ti
+            name: "File"
+        ) when (defUnitIdOf :ctx tid: ti) == ctx.ioUnitDecl then return ti
+        ti = ti.next
     }
-    return 0
+    return ztypes.noTid
 }
 
 # ioFileLive -- the File class is present AND its read/write param monos (the
@@ -35058,7 +35037,7 @@ ioFileId: function {symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out u64 is {
 # always compiles.
 ioFileLive: function {ast: Ast.view symtab: zenv.ZSymbolTable.view ctx: Ctx.view} out bool is {
     calleeTid: ioFileId :symtab :ctx
-    if calleeTid == 0 then return false
+    if calleeTid.isZero then return false
     listValU8Tid: specStemTid :ast :symtab base: "ListVal" arg1: "u8" arg2: ""
     if listValU8Tid.isZero then return false
     listViewValU8Tid: specStemTid :ast :symtab base: "ListViewVal" arg1: "u8" arg2: ""
@@ -35103,8 +35082,8 @@ cliClassTypeId: function {
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx.view
     nameId: zast.nameid
-} out u64 is {
-    return (unitClassTid :symtab unitDecl: ctx.cliUnitDecl :nameId).u64
+} out ztypes.tid is {
+    return (unitClassTid :symtab unitDecl: ctx.cliUnitDecl :nameId)
 }
 
 # isHeapPtrCollection -- a Map/Set mono is stored as a heap pointer (List is
@@ -35316,8 +35295,8 @@ emitIoStdStreams: function {
     )
     if needAny.not then return
     fid: ioFileId :symtab :ctx
-    if fid == 0 then return
-    fbase: ctxCname :ctx tid: (ztypes.tid.create from: fid.u64)
+    if fid.isZero then return
+    fbase: ctxCname :ctx tid: fid
     wcn: ioCanonCname :ast :symtab :ctx canon: "Writer"
     rcn: ioCanonCname :ast :symtab :ctx canon: "Reader"
     if (needsHasM :ctx uname: "io" memb: "stdout") then {
@@ -38740,12 +38719,12 @@ fileTypeIdOf: function {
     symtab: zenv.ZSymbolTable.view
     nid: zast.nodeid
     mname: StringView
-} out u64 is {
+} out ztypes.tid is {
     tid: stampIdOf :symtab :nid
-    if tid.isZero then return 0
-    if (symtab.reg.typetypeOf typeId: tid) != ztypes.ztypetype.classType then return 0
+    if tid.isZero then return ztypes.noTid
+    if (symtab.reg.typetypeOf typeId: tid) != ztypes.ztypetype.classType then return ztypes.noTid
     fileOrig: originTidOf :symtab :tid
-    if fileOrig > 0 then return 0
+    if fileOrig > 0 then return ztypes.noTid
     mo: (symtab.typing.declChildOf
         pool: ast.names
         parentTypeId: tid
@@ -38759,7 +38738,7 @@ fileTypeIdOf: function {
             fid: (ztypes.tid.create from: mo.u64)
         ) then return tid
     } case none then null
-    return 0
+    return ztypes.noTid
 }
 
 # fileFromArgAddr -- the address of a file write's `from:` view, coerced from a
@@ -38856,9 +38835,9 @@ emitFileMethodCall: function {
     if isFM.not then return ""
     bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: call.callable)
     fid: fileTypeIdOf :ast :symtab nid: bnid mname: mn
-    if fid == 0 then return ""
-    fc: ctxCname :ctx tid: (ztypes.tid.create from: fid.u64)
-    fcn: regNameOf :symtab tid: (ztypes.tid.create from: fid.u64)
+    if fid.isZero then return ""
+    fc: ctxCname :ctx tid: fid
+    fcn: regNameOf :symtab tid: fid
     fcc: ioCanonCname :ast :symtab :ctx canon: fcn.stringView
     if fcc.length > 0 then fc = fcc.take
     recvV0: atomVid :symtab nid: bnid
@@ -39477,7 +39456,7 @@ emitCliSpecCreate: function {
         :ctx
         nameId: (zast.poolFind pool: ast.names text: cn)
     )
-    if cid == 0 then return ""
+    if cid.isZero then return ""
     cco: (symtab.typing.declChildOfId
         parentTypeId: (ztypes.tid.create from: cid.u64)
         nameId: zast.names.wkCreate
@@ -39535,7 +39514,7 @@ emitCliSpecCreate: function {
     orderEnd :ctx st: ord
     needsAddM :ctx uname: "cli" memb: "@unit"
     needsAddM :ctx uname: "cli" memb: "spec_create"
-    ccb: ctxCname :ctx tid: (ztypes.tid.create from: cid.u64)
+    ccb: ctxCname :ctx tid: cid
     ccb.append "_create"
     return (orderClose prefix: oprefix callee: ccb.stringView args: args.stringView)
 }
@@ -39610,10 +39589,10 @@ emitParsedMethodCall: function {
     if isPM.not then return ""
     bnid: dottedBaseNodeId :ast n: (ast.nodes.get i: call.callable)
     pid: fileTypeIdOf :ast :symtab nid: bnid mname: mn
-    if pid == 0 then return ""
-    pcn: regNameOf :symtab tid: (ztypes.tid.create from: pid.u64)
+    if pid.isZero then return ""
+    pcn: regNameOf :symtab tid: pid
     if pcn.stringView != "Parsed" then return ""
-    pc: ctxCname :ctx tid: (ztypes.tid.create from: pid.u64)
+    pc: ctxCname :ctx tid: pid
     recvV0: atomVid :symtab nid: bnid
     recv: aliasResolveAt :symtab :ctx nid: bnid name: bn vid: recvV0
     recvV: ztypes.vid
@@ -40777,10 +40756,10 @@ structDestroyNontrivial: function {
 
 # fieldIsBox -- a field's type is a builtin Box: its mono id, else 0. A field's
 # type is the mono its declaration minted, flagged as a box where it was minted.
-fieldIsBox: function {symtab: zenv.ZSymbolTable.view fid: ztypes.tid} out u64 is {
-    if fid.isZero then return 0
+fieldIsBox: function {symtab: zenv.ZSymbolTable.view fid: ztypes.tid} out ztypes.tid is {
+    if fid.isZero then return ztypes.noTid
     if (isBoxTid :symtab tid: fid) then return fid
-    return 0
+    return ztypes.noTid
 }
 
 # emitStructDestructor -- a record/class destructor freeing each heap-owning
@@ -40820,7 +40799,7 @@ emitStructDestructor: function {
                 buf.append ds
             } else if bxF > 0 then {
                 # a Box field IS the cell's pointer: its destroy takes the value
-                bxC: ctxCname :ctx tid: (ztypes.tid.create from: bxF.u64)
+                bxC: ctxCname :ctx tid: bxF
                 bxP: memberCPrefix name: fname.stringView
                 dbx: "    \{bxC}_destroy(p->\{bxP}\{fname});\n"
                 buf.append dbx
@@ -41049,7 +41028,7 @@ partEqC: function {
         }
         owner: ztypecheck.valOpOwner st: symtab :tid nameId: zast.names.wkOpEq
         fo: symtab.typing.declChildOfId parentTypeId: owner nameId: opId
-        dest.append (ctxCname :ctx tid: (ztypes.tid.create from: (fo.or d: ztypes.noTid)))
+        dest.append (ctxCname :ctx tid: (fo.or d: ztypes.noTid))
         dest.append "(&"
         dest.append lhs
         dest.append sel
@@ -41094,7 +41073,7 @@ partHashWords: function {
     if src.written then {
         owner: ztypecheck.valOpOwner st: symtab :tid nameId: zast.names.wkHash
         fo: symtab.typing.declChildOfId parentTypeId: owner nameId: zast.names.wkHash
-        fc: ctxCname :ctx tid: (ztypes.tid.create from: (fo.or d: ztypes.noTid))
+        fc: ctxCname :ctx tid: (fo.or d: ztypes.noTid)
         wr: String
         wr.append fc
         wr.append "(&"
@@ -41430,7 +41409,7 @@ emitHashPrototypes: function {
     }
     oi: u64
     for oi < ctx.hashOrder.length loop {
-        cn: ctxCname :ctx tid: (ztypes.tid.create from: (ctx.hashOrder.get i: oi))
+        cn: ctxCname :ctx tid: (ctx.hashOrder.get i: oi)
         buf.append "static uint64_t \{cn}_hash(\{cn}_t a);\n"
         oi = oi + 1
     }

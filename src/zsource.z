@@ -4809,7 +4809,7 @@ Analysis: class {
         :this prog: Ast.view lu: LintedUnit.view st: zenv.ZSymbolTable.view
     } is {
         mainTid: unitTidOf :prog names: lu.names :st
-        if mainTid == 0 then return
+        if mainTid.isZero then return
         mainOp: lu.op
         memIds: unitMemberIds :prog unitOp: mainOp
         probe: zast.nodeid
@@ -4817,10 +4817,10 @@ Analysis: class {
         # the unit's file is its first body member's: the unit's wrapper rows
         # are minted after its body is read, and report from no file
         file: prog.fsnoForNode nodeid: probe
-        um: unitMembersOf :prog :st mainTid: (ztypes.tid.create from: mainTid) :memIds
-        usedE: usedDeclSet :prog :st mainTid: (ztypes.tid.create from: mainTid) :file :um
+        um: unitMembersOf :prog :st :mainTid :memIds
+        usedE: usedDeclSet :prog :st :mainTid :file :um
         refNames: unitAtomNames :prog :file :um
-        ev: UnusedEvidence mainTid: (ztypes.tid.create from: mainTid) :usedE :refNames :memIds
+        ev: UnusedEvidence :mainTid :usedE :refNames :memIds
         this.reportUnusedUnitDefs :prog :st :ev
         this.reportUnusedTypeMembers :prog :st :ev
     }
@@ -4892,7 +4892,7 @@ Analysis: class {
         :this prog: Ast.view st: zenv.ZSymbolTable.view ev: UnusedEvidence.view site: zast.namedsite
     } is {
         typeTid: definedTypeTidOf :prog :st mainTid: ev.mainTid :site
-        if typeTid == 0 then return
+        if typeTid.isZero then return
         tnm: zast.poolTextAt pool: prog.names ref: site.name
         items: zast.objItemIds ast: prog nid: site.operation
         j: u64
@@ -5183,7 +5183,7 @@ selfReferenceAt: function {
 # unit
 unitTidOf: function {
     prog: Ast.view names: (List String).view st: zenv.ZSymbolTable.view
-} out u64 is {
+} out ztypes.tid is {
     decl: st.typing.programRoot
     for each nm: names loop {
         decl = (st.typing.declFindChild
@@ -5192,8 +5192,8 @@ unitTidOf: function {
         )
     }
     uo: ztypecheck.declTypeIdOf :st declId: decl
-    if uo.isZero then return 0
-    return uo.u64
+    if uo.isZero then return ztypes.noTid
+    return uo
 }
 
 # LintedUnit -- the unit a linted FILE is: its unitdef node (0 when the parse
@@ -5442,11 +5442,11 @@ atomNamesOutsideSelf: function {
 # not an object definition or resolves to no type under the unit
 definedTypeTidOf: function {
     prog: Ast.view st: zenv.ZSymbolTable.view mainTid: ztypes.tid site: zast.namedsite
-} out u64 is {
-    if site.name.isZero then return 0
-    if site.operation.isZero then return 0
+} out ztypes.tid is {
+    if site.name.isZero then return ztypes.noTid
+    if site.operation.isZero then return ztypes.noTid
     to: prog.nodes.get i: site.operation
-    if to.objectdef.not then return 0
+    if to.objectdef.not then return ztypes.noTid
     cto: (st.typing.declChildOfId
         parentTypeId: mainTid
         nameId: site.name
@@ -5456,7 +5456,7 @@ definedTypeTidOf: function {
     ) case some then {
         return cto
     } case none then null
-    return 0
+    return ztypes.noTid
 }
 
 # ---- L005 redundant-suffix helpers (typecheck tier; run only under --full) ----
