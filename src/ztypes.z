@@ -10,7 +10,6 @@ public: unit {
     :tid
     :noTid
     :genericarg
-    :genericArgOf
     :declid
     :vid
     :constraintdesc
@@ -584,6 +583,11 @@ tid: typedef u64 as {
     isZero: function {this: this.view} out bool is {
         return this.u64 == 0
     }
+    # the id's hash, agreeing with `==`: both read the id alone, so a type id
+    # keys a map or a set
+    hash: function {this: this.view} out u64 is {
+        return this.u64
+    }
     # the next id in sequence, which is how a caller mints without keeping a
     # counter of its own
     next: function {this: this.view} out tid is {
@@ -606,12 +610,6 @@ genericarg: variant {
     valueArg: u64
 }
 
-# genericArgOf -- the argument a key list holds at one position: a value when
-# `isValue`, else a type id.
-genericArgOf: function {isValue: bool key: u64} out genericarg is {
-    if isValue then return (genericarg.valueArg key)
-    return (genericarg.typeArg (tid.create from: key))
-}
 
 # declid -- a Decl-tree row id (minted dense 1..N by declNew); 0 is "no
 # decl". A typedef so a decl id cannot cross with the other numeric id
@@ -820,15 +818,14 @@ ZType: class {
     genericOriginId: optionval tid
     # whether it is the origin of a tag generic, which the emitter treats apart
     isTagGenericOrigin: bool
-    # id-keyed specialization tree: one level per generic parameter in
-    # definition order -- argument type-id (or numeric value at a numeric
-    # parameter level) -> the child specialization's type-id. Specs record
-    # their ordered argument ids in genericArgs for backward substitution.
-    # An IdMap rather than a pair of parallel lists: the key IS an id, an edge
-    # is only ever added, and an empty one allocates nothing.
-    genericChildren: (IdMapV u64 v: tid
-    # the type arguments this instance was minted with, in order
-    )
+    # the specialization tree, one level per generic parameter in declaration
+    # order: a type argument -> the child specialization. A level is keyed by
+    # one kind, the one its parameter takes, so a type parameter's level is
+    # here and a numeric one's in valueChildren
+    typeChildren: (IdMapV tid v: tid)
+    # a numeric value argument -> the child specialization
+    valueChildren: (IdMapV u64 v: tid)
+    # the arguments this instance was minted with, in order
     genericArgs: ListVal genericarg
     # whether a value of this type must be destroyed, which decides whether a
     # scope exit emits anything
@@ -1044,7 +1041,8 @@ holeType: function {} out ZType is {
         isValtype: optionval.none bool
         genericOriginId: optionval.none tid
         isTagGenericOrigin: false
-        genericChildren: (IdMapV u64 v: tid)
+        typeChildren: (IdMapV tid v: tid)
+        valueChildren: (IdMapV u64 v: tid)
         genericArgs: ListVal genericarg
         needsDestructor: false
         isHeapAllocated: false
@@ -1127,7 +1125,8 @@ ZTypeRegistry: class {
             isValtype: optionval.none bool
             genericOriginId: optionval.none tid
             isTagGenericOrigin: false
-            genericChildren: (IdMapV u64 v: tid)
+            typeChildren: (IdMapV tid v: tid)
+            valueChildren: (IdMapV u64 v: tid)
             genericArgs: ListVal genericarg
             needsDestructor: false
             isHeapAllocated: false
@@ -1402,17 +1401,29 @@ ZTypeRegistry: class {
     # file an instantiation under its template, keyed by its argument trie --
     # which is what makes the same arguments find the same mono instead of
     # minting a twin
-    setGenericChild: function {:this parentId: u64 key: u64 child: u64} is {
+    setGenericChild: function {:this parentId: u64 key: genericarg child: u64} is {
         if parentId >= this.typeById.length then return
         got: this.typeById.getMut i: (tid from: parentId)
-        got.genericChildren.set :key value: (tid from: child)
+        match (
+            key
+        ) case typeArg then {
+            got.typeChildren.set :key value: (tid from: child)
+        } case valueArg then {
+            got.valueChildren.set :key value: (tid from: child)
+        }
     }
 
     # the instantiation already minted for these arguments, if there is one
-    getGenericChild: function {this: this.view parentId: u64 key: u64} out optionval tid is {
+    getGenericChild: function {this: this.view parentId: u64 key: genericarg} out optionval tid is {
         if parentId >= this.typeById.length then return (optionval.none tid)
         got: this.typeById.get i: (tid from: parentId)
-        return (got.genericChildren.get :key)
+        match (
+            key
+        ) case typeArg then {
+            return (got.typeChildren.get :key)
+        } case valueArg then {
+            return (got.valueChildren.get :key)
+        }
     }
 
     # appendGenericArg -- one argument of an instance, in declaration order

@@ -5188,38 +5188,46 @@ unitAppliedTypeRef: function {
     return ium.u64
 }
 
-# unitInstanceKeys -- an instance's trie keys in the template's parameter order,
-# a type id or a numeric value each; false when an argument is missing or is a
-# generic parameter (a template walk).
+# paramArgOf -- the argument `subs` / `valSubs` give the parameter `pnm` of
+# `tdecl`, of the kind its declaration takes: a numeric parameter its value --
+# or, in a reference over the template's own numeric parameter, that generic
+# parameter's type -- and any other parameter a type. None when neither gives it
+# one.
+paramArgOf: function {
+    st: zenv.ZSymbolTable.view
+    tdecl: ztypes.declid
+    pnm: zast.nameid
+    subs: (IdMapV zast.nameid v: u64).view
+    valSubs: (IdMapV zast.nameid v: u64).view
+} out optionval ztypes.genericarg is {
+    if (st.reg.genericParamConstraintOf :tdecl paramName: pnm).numKind.has then {
+        vv: valSubs.get key: pnm
+        if vv.some then return (optionval.some (ztypes.genericarg.valueArg vv))
+    }
+    tv: subs.get key: pnm
+    if tv.some then return (optionval.some (ztypes.genericarg.typeArg (ztypes.tid.create from: tv)))
+    return (optionval.none ztypes.genericarg)
+}
+
+# unitInstanceKeys -- an instance's arguments in the template's parameter order;
+# false when one is missing or is a generic parameter (a template walk).
 unitInstanceKeys: function {
     st: zenv.ZSymbolTable.view
     tdecl: ztypes.declid
     subs: (IdMapV zast.nameid v: u64).view
     valSubs: (IdMapV zast.nameid v: u64).view
-    keys: ListVal u64
-    isVal: ListVal bool
+    args: ListVal ztypes.genericarg
 } out bool is {
-    pn: st.reg.genericParamNamesOf :tdecl
-    pj: u64
-    for pj < pn.length loop {
-        pnm: pn.get i: pj
-        pj = pj + 1
-        vv: valSubs.get key: pnm
-        if vv.some then {
-            keys.append vv
-            isVal.append true
-            continue
-        }
-        tv: (subs.get key: pnm).or d: 0
-        if tv == 0 then return false
-        if (
-            (st.reg.typetypeOf typeId: (ztypes.tid.create from: tv)) ==
-            ztypes.ztypetype.genericParam
-        ) then {
-            return false
-        }
-        keys.append tv
-        isVal.append false
+    for each pnm: (st.reg.genericParamNamesOf :tdecl) loop {
+        a: paramArgOf :st :tdecl :pnm :subs :valSubs
+        if a.none then return false
+        match (
+            a
+        ) case typeArg then {
+            if a.isZero then return false
+            if (st.reg.typetypeOf typeId: a) == ztypes.ztypetype.genericParam then return false
+        } case valueArg then null
+        args.append a
     }
     return true
 }
@@ -5240,11 +5248,10 @@ ensureUnitInstanceMono: function {
     label: String
 } out ztypes.tid is {
     if tdecl.isZero then return ztypes.tid
-    keys: ListVal u64
-    isVal: ListVal bool
-    if (unitInstanceKeys :st :tdecl :subs :valSubs :keys :isVal).not then return ztypes.tid
+    args: ListVal ztypes.genericarg
+    if (unitInstanceKeys :st :tdecl :subs :valSubs :args).not then return ztypes.tid
     mono: ztypes.tid
-    got: unitMonoOnTrie :st tplTid: tplId :keys
+    got: unitMonoOnTrie :st tplTid: tplId :args
     match (
         got
     ) case some then {
@@ -5269,17 +5276,10 @@ ensureUnitInstanceMono: function {
             :st
             tplTid: tplId
             tplName: tplNm.stringView
-            :keys
+            :args
             monoId: mono
         )
-        ki: u64
-        for ki < keys.length loop {
-            (st.reg.appendGenericArg
-                specId: mono
-                arg: (ztypes.genericArgOf isValue: (isVal.get i: ki) key: (keys.get i: ki))
-            )
-            ki = ki + 1
-        }
+        for each a: args loop st.reg.appendGenericArg specId: mono arg: a
         recordNumericArgConsts :ast :st :scope monoId: mono :tdecl
     }
     ensureUnitMonoBuilt :st :scope :ast monoId: mono
@@ -18999,48 +18999,11 @@ recordInstanceGenericArgs: function {
     subs: (IdMapV zast.nameid v: u64).view
     valSubs: (IdMapV zast.nameid v: u64).view
 } is {
-    # the mono's arguments in DECLARATION order: what the generic_arg
-    # rows record, and what keys its level of the id trie.
-    mkeys: ListVal u64
-    mkval: ListVal bool
-    {
-        pnR: st.reg.genericParamNamesOf tdecl: tplDecl
-        pnN: pnR.length
-        pnI: u64
-        for pnI < pnN loop {
-            pnmR: pnR.get i: pnI
-            tgoR: subs.get key: pnmR
-            match (
-                tgoR
-            ) case some then {
-                mkeys.append tgoR
-                mkval.append false
-            } case none then {
-                vgoR: valSubs.get key: pnmR
-                match (
-                    vgoR
-                ) case some then {
-                    mkeys.append vgoR
-                    mkval.append true
-                } case none then {
-                    mkeys.append 0
-                    mkval.append false
-                }
-            }
-            pnI = pnI + 1
-        }
-    }
-    if (st.reg.genericArgCount specId: (ztypes.tid.create from: memberIdAt.u64)) == 0 then {
-        aiM: u64
-        anM: mkeys.length
-        for aiM < anM loop {
-            kM: mkeys.get i: aiM
-            (st.reg.appendGenericArg
-                specId: (ztypes.tid.create from: memberIdAt.u64)
-                arg: (ztypes.genericArgOf isValue: (mkval.get i: aiM) key: kM)
-            )
-            aiM = aiM + 1
-        }
+    mono: ztypes.tid.create from: memberIdAt.u64
+    if (st.reg.genericArgCount specId: mono) > 0 then return
+    for each pnm: (st.reg.genericParamNamesOf tdecl: tplDecl) loop {
+        a: paramArgOf :st tdecl: tplDecl :pnm :subs :valSubs
+        st.reg.appendGenericArg specId: mono arg: (a.or d: ztypes.genericarg.typeArg ztypes.noTid)
     }
 }
 
@@ -19213,18 +19176,9 @@ completeUnitInstantiations: function {
         tnId: u32
         {
             if rtdecl.isZero.not when r.tmplOpId > 0 then {
-                keysC: ListVal u64
-                isValC: ListVal bool
-                if (instMonoKeys
-                    :st
-                    :scope
-                    ast: program
-                    :r
-                    tdecl: rtdecl
-                    keys: keysC
-                    isVal: isValC
-                ) then {
-                    mgo = unitMonoOnTrie :st tplTid: (declTypeIdOf :st declId: rtdecl) keys: keysC
+                argsC: ListVal ztypes.genericarg
+                if (instMonoKeys :st :scope ast: program :r tdecl: rtdecl args: argsC) then {
+                    mgo = unitMonoOnTrie :st tplTid: (declTypeIdOf :st declId: rtdecl) args: argsC
                 }
             }
             tnId = rtId.u32
@@ -19276,17 +19230,16 @@ demandInstArgs: function {
     }
 }
 
-# instMonoKeys -- an instantiation's trie keys in the template's PARAMETER
-# order: the argument's type id, or its numeric value (isVal). False when a
-# parameter has no resolvable argument (its key stays 0).
+# instMonoKeys -- an instantiation's arguments in the template's PARAMETER
+# order. False when a parameter has no resolvable argument (it stays a type
+# argument of no type).
 instMonoKeys: function {
     st: zenv.ZSymbolTable
     scope: ztypes.declid
     ast: Ast
     r: InstReq.view
     tdecl: ztypes.declid
-    keys: ListVal u64
-    isVal: ListVal bool
+    args: ListVal ztypes.genericarg
 } out bool is {
     ok: true
     pn: st.reg.genericParamNamesOf :tdecl
@@ -19320,25 +19273,27 @@ instMonoKeys: function {
             ai = ai + 1
         }
         if found.not then ok = false
-        keys.append k
-        isVal.append valFound
+        if valFound then {
+            args.append (ztypes.genericarg.valueArg k)
+        } else {
+            args.append (ztypes.genericarg.typeArg (ztypes.tid.create from: k))
+        }
     }
     return ok
 }
 
-# unitMonoOnTrie -- the unit mono already minted for `keys` under the
+# unitMonoOnTrie -- the unit mono already minted for `args` under the
 # template, walking one trie level per parameter; none when any level is
 # missing. A probe: it lays nothing.
 unitMonoOnTrie: function {
     st: zenv.ZSymbolTable.view
     tplTid: ztypes.tid
-    keys: (ListVal u64).view
+    args: (ListVal ztypes.genericarg).view
 } out optionval u64 is {
     if tplTid.isZero then return (optionval.none u64)
     cur: tplTid.u64
-    i: u64
-    for i < keys.length loop {
-        n: st.reg.getGenericChild parentId: cur key: (keys.get :i)
+    for each a: args loop {
+        n: st.reg.getGenericChild parentId: cur key: a
         match (
             n
         ) case some then {
@@ -19346,7 +19301,6 @@ unitMonoOnTrie: function {
         } case none then {
             return (optionval.none u64)
         }
-        i = i + 1
     }
     return (optionval.some cur)
 }
@@ -19361,15 +19315,15 @@ unitMonoJoinTrie: function {
     st: zenv.ZSymbolTable
     tplTid: ztypes.tid
     tplName: StringView
-    keys: (ListVal u64).view
+    args: (ListVal ztypes.genericarg).view
     monoId: ztypes.tid
 } is {
     if tplTid.isZero then return
     cur: tplTid.u64
-    n: keys.length
+    n: args.length
     i: u64
     for i < n loop {
-        k: keys.get :i
+        k: args.get :i
         last: false
         if (i + 1) == n then last = true
         step: u64
@@ -19450,8 +19404,9 @@ instMonoLabel: function {
     scope: ztypes.declid
     ast: Ast
     r: InstReq.view
-    # the mono's keys in parameter order, where a numeric argument's value is
-    keys: (ListVal u64).view
+    # the mono's arguments in parameter order, where a numeric argument's value
+    # is read
+    args: (ListVal ztypes.genericarg).view
 } out String is {
     mn: zast.poolTextCopy pool: ast.names ref: r.tmplId
     na: r.argNames.length
@@ -19462,7 +19417,7 @@ instMonoLabel: function {
         an: r.argNames.get :i
         lbl: r.argLabels.get :i
         if (instNumericParam :st :r label: lbl) then {
-            appendInstNumericLabel :st :r :keys :pn :lbl :mn
+            appendInstNumericLabel :st :r :args :pn :lbl :mn
         } else if an.length > 0 then {
             mn.append an
         } else {
@@ -19484,7 +19439,7 @@ instMonoLabel: function {
 appendInstNumericLabel: function {
     st: zenv.ZSymbolTable.view
     r: InstReq.view
-    keys: (ListVal u64).view
+    args: (ListVal ztypes.genericarg).view
     pn: (ListVal zast.nameid).view
     lbl: zast.nameid
     mn: String
@@ -19493,8 +19448,13 @@ appendInstNumericLabel: function {
     signed: ztypes.isSignedIntKind k: cd.numKind.kind
     pi: u64
     for pi < pn.length loop {
-        if (pn.get i: pi) == lbl when pi < keys.length then {
-            mn.append (numericArgText bits: (keys.get i: pi) :signed)
+        if (pn.get i: pi) == lbl when pi < args.length then {
+            a: args.get i: pi
+            match (
+                a
+            ) case valueArg then {
+                mn.append (numericArgText bits: a :signed)
+            } case typeArg then null
         }
         pi = pi + 1
     }
@@ -19582,20 +19542,19 @@ mintUnitMonoOf: function {
     demandInstArgs :st :scope :ast :r
     resolveDemandedDefs :st :scope :ast
     templateTid: declTypeIdOf :st declId: r.tmplDeclId
-    keys: ListVal u64
-    isVal: ListVal bool
-    ok: instMonoKeys :st :scope :ast :r tdecl: r.tmplDeclId :keys :isVal
+    args: ListVal ztypes.genericarg
+    ok: instMonoKeys :st :scope :ast :r tdecl: r.tmplDeclId :args
     if ok.not then {
         reportUnresolvedInstArgs :st :scope :ast :r
         return
     }
-    got: unitMonoOnTrie :st tplTid: templateTid :keys
+    got: unitMonoOnTrie :st tplTid: templateTid :args
     match (
         got
     ) case some then {
         return
     } case none then null
-    label: instMonoLabel :st :scope :ast :r :keys
+    label: instMonoLabel :st :scope :ast :r :args
     mono: (createUnitMono
         :st
         :ast
@@ -19605,18 +19564,11 @@ mintUnitMonoOf: function {
         templateOpId: r.tmplOpId
     )
     tplT9: zast.poolTextAt pool: ast.names ref: r.tmplId
-    unitMonoJoinTrie :st tplTid: templateTid tplName: tplT9.stringView :keys monoId: mono
+    unitMonoJoinTrie :st tplTid: templateTid tplName: tplT9.stringView :args monoId: mono
     tplT9.drop
     # the numeric arguments are recorded where they are keyed: a constant of the
     # instance may be read before its completion pass records the rest
-    ki: u64
-    for ki < keys.length loop {
-        (st.reg.appendGenericArg
-            specId: mono
-            arg: (ztypes.genericArgOf isValue: (isVal.get i: ki) key: (keys.get i: ki))
-        )
-        ki = ki + 1
-    }
+    for each a: args loop st.reg.appendGenericArg specId: mono arg: a
     recordNumericArgConsts :ast :st :scope monoId: mono tdecl: r.tmplDeclId
 }
 
@@ -21686,7 +21638,10 @@ specLookup: function {
             if a == 0 then {
                 ok = false
             } else {
-                n: st.reg.getGenericChild parentId: cur key: a.u64
+                n: (st.reg.getGenericChild
+                    parentId: cur
+                    key: ztypes.genericarg.typeArg (ztypes.tid.create from: a)
+                )
                 match (
                     n
                 ) case some then {
@@ -21719,7 +21674,7 @@ specLookupDefaults: function {
     for pi < (st.reg.genericParamCountOf :tdecl) loop {
         d: st.reg.genericParamDefaultTidAt :tdecl i: pi
         if d.isZero then return ztypes.tid
-        n: st.reg.getGenericChild parentId: cur key: d.u64
+        n: st.reg.getGenericChild parentId: cur key: ztypes.genericarg.typeArg d
         match (
             n
         ) case some then {
@@ -23918,17 +23873,16 @@ defaultsTailLength: function {
     ast: Ast
     scope: ztypes.declid
     tk8: ztypes.declid
-    keys8: (ListVal u64).view
-    keyIsVal8: (ListVal bool).view
+    args8: (ListVal ztypes.genericarg).view
     label: StringView
 } out u64 is {
     end: label.length
-    ki: keys8.length
+    ki: args8.length
     for ki > 1 loop {
         ki = ki - 1
-        if (keyIsVal8.get i: ki) then break
         d: st.reg.genericParamDefaultTidAt tdecl: tk8 i: ki
-        if d.isZero or ((keys8.get i: ki) != d.u64) then break
+        if d.isZero then break
+        if ((args8.get i: ki) == (ztypes.genericarg.typeArg d)).not then break
         cut: defaultComponentLength :st :ast :scope :tk8 :d head: (label.substring from: 0 to: end)
         if cut == 0 then break
         end = end - cut
@@ -23983,8 +23937,8 @@ bindSpecDefaults: function {
     fillGenericDefaults :st :ast tdecl: tk8 :subs :valSubs :sfx
 }
 
-# buildSpecTrieKeys -- the arguments that key this spec's level of the id trie, in
-# the template's DECLARATION order. Answers false when a key cannot be settled, in
+# buildSpecTrieKeys -- the arguments that key this spec's levels of the id trie, in
+# the template's DECLARATION order. Answers false when one cannot be settled, in
 # which case the trie is not consulted at all.
 buildSpecTrieKeys: function {
     ast: Ast
@@ -23993,8 +23947,7 @@ buildSpecTrieKeys: function {
     subs: (IdMapV zast.nameid v: u64).view
     valSubs: (IdMapV zast.nameid v: u64).view
     fallbackArg: u64
-    keys8: ListVal u64
-    keyIsVal8: ListVal bool
+    args8: ListVal ztypes.genericarg
     scope: ztypes.declid
     tk8: ztypes.declid
 } out bool is {
@@ -24010,56 +23963,37 @@ buildSpecTrieKeys: function {
         # instead: that at worst duplicates, which `checkTagStem` reports.
         argc8: subs.length + valSubs.length
         if fallbackArg > 0 when argc8 <= 1 then {
-            fb0: fallbackArg
-            keys8.append fb0
-            keyIsVal8.append false
+            args8.append (ztypes.genericarg.typeArg (ztypes.tid.create from: fallbackArg))
         } else {
             trieOk8 = false
         }
     }
     for each pn8: pnames8 loop {
-        pgot8: subs.get key: pn8
+        a8: paramArgOf :st tdecl: tk8 pnm: pn8 :subs :valSubs
         match (
-            pgot8
+            a8
         ) case some then {
-            (checkConstraintSat
-                :st
-                :scope
-                :ast
-                tdecl: tk8
-                paramName: pn8
-                argTid: (ztypes.tid.create from: pgot8.u64)
-                at: zast.nodeid
-                lineno: 0
-                colno: 0
-            )
-            keys8.append pgot8
-            keyIsVal8.append false
-        } case none then {
-            vgot8: valSubs.get key: pn8
             match (
-                vgot8
-            ) case some then {
-                # a numeric literal keys its trie level by VALUE; per-level
-                # kind is fixed by the parameter, so values and type ids
-                # cannot collide
-                # the value was read and range-checked where it is written
-                # (numericGenericArg)
-                cd8: st.reg.genericParamConstraintOf tdecl: tk8 paramName: pn8
-                if cd8.numKind.has then {
-                    keys8.append vgot8
-                    keyIsVal8.append true
-                } else {
-                    trieOk8 = false
-                }
-            } case none then {
-                if fallbackArg > 0 when pnames8.length == 1 then {
-                    fb8: fallbackArg
-                    keys8.append fb8
-                    keyIsVal8.append false
-                } else {
-                    trieOk8 = false
-                }
+                a8
+            ) case typeArg then {
+                (checkConstraintSat
+                    :st
+                    :scope
+                    :ast
+                    tdecl: tk8
+                    paramName: pn8
+                    argTid: a8
+                    at: zast.nodeid
+                    lineno: 0
+                    colno: 0
+                )
+            } case valueArg then null
+            args8.append a8
+        } case none then {
+            if fallbackArg > 0 when pnames8.length == 1 then {
+                args8.append (ztypes.genericarg.typeArg (ztypes.tid.create from: fallbackArg))
+            } else {
+                trieOk8 = false
             }
         }
     }
@@ -24086,14 +24020,13 @@ registerSpecOnTrie: function {
     name: StringView
     templateId: ztypes.tid
     mid8: ztypes.tid
-    keys8: (ListVal u64).view
-    keyIsVal8: (ListVal bool).view
+    args8: (ListVal ztypes.genericarg).view
 } is {
     cur: templateId
     ki: u64
-    kn: keys8.length
+    kn: args8.length
     for ki < kn loop {
-        k: keys8.get i: ki
+        k: args8.get i: ki
         last: false
         if (ki + 1) == kn then last = true
         n: st.reg.getGenericChild parentId: cur key: k
@@ -24119,10 +24052,9 @@ registerSpecOnTrie: function {
                 st.reg.setTrieNode typeId: (ztypes.tid.create from: step.u64) value: true
                 kj: u64
                 for kj <= ki loop {
-                    pk: keys8.get i: kj
                     (st.reg.appendGenericArg
                         specId: (ztypes.tid.create from: step.u64)
-                        arg: (ztypes.genericArgOf isValue: (keyIsVal8.get i: kj) key: pk)
+                        arg: (args8.get i: kj)
                     )
                     kj = kj + 1
                 }
@@ -24132,15 +24064,7 @@ registerSpecOnTrie: function {
         cur = ztypes.tid.create from: step
         ki = ki + 1
     }
-    ka: u64
-    for ka < kn loop {
-        av: keys8.get i: ka
-        (st.reg.appendGenericArg
-            specId: mid8
-            arg: (ztypes.genericArgOf isValue: (keyIsVal8.get i: ka) key: av)
-        )
-        ka = ka + 1
-    }
+    for each a: args8 loop st.reg.appendGenericArg specId: mid8 arg: a
 }
 
 # recordNumericArgConsts -- each numeric generic argument of a mono recorded as
@@ -24193,12 +24117,11 @@ numericLevelKeyedByParam: function {
     st: zenv.ZSymbolTable.view
     tk8: ztypes.declid
     pnames8: (ListVal zast.nameid).view
-    keyIsVal8: (ListVal bool).view
+    args8: (ListVal ztypes.genericarg).view
 } out bool is {
     pi: u64
     for pi < pnames8.length loop {
-        if pi < keyIsVal8.length when (keyIsVal8.get i: pi
-        ).not when (st.reg.genericParamConstraintOf
+        if pi < args8.length when (args8.get i: pi).typeArg when (st.reg.genericParamConstraintOf
             tdecl: tk8
             paramName: (pnames8.get i: pi)
         ).numKind.has then return true
@@ -24213,21 +24136,13 @@ mintValuePartialSpec: function {
     st: zenv.ZSymbolTable
     templateId: ztypes.tid
     sfx: StringView
-    keys8: (ListVal u64).view
-    keyIsVal8: (ListVal bool).view
+    args8: (ListVal ztypes.genericarg).view
 } out ztypes.tid is {
     mn: "\{st.reg.nameOf tid: templateId}\{sfx}"
     mid: st.reg.newType name: mn.stringView typetype: ztypes.ztypetype.genericParam
     st.reg.setGenericOrigin typeId: mid value: templateId.u64
     st.reg.setPartial typeId: mid value: true
-    ki: u64
-    for ki < keys8.length loop {
-        (st.reg.appendGenericArg
-            specId: mid
-            arg: (ztypes.genericArgOf isValue: (keyIsVal8.get i: ki) key: (keys8.get i: ki))
-        )
-        ki = ki + 1
-    }
+    for each a: args8 loop st.reg.appendGenericArg specId: mid arg: a
     return mid
 }
 
@@ -24236,7 +24151,7 @@ mintValuePartialSpec: function {
 buildSpecIdSubs: function {
     st: zenv.ZSymbolTable.view
     pnames8: (ListVal zast.nameid).view
-    keys8: (ListVal u64).view
+    args8: (ListVal ztypes.genericarg).view
     idSubs8: (IdMapV u64 v: u64)
     tk8: ztypes.declid
 } is {
@@ -24250,9 +24165,15 @@ buildSpecIdSubs: function {
         ) case some then {
             # a numeric parameter's value substitutes too: a reference over the
             # parameter inside the template completes with it
-            kv8: keys8.get i: pi8
+            a8: args8.get i: pi8
             pk8: pto8
-            idSubs8.set key: pk8 value: kv8
+            match (
+                a8
+            ) case typeArg then {
+                idSubs8.set key: pk8 value: a8.u64
+            } case valueArg then {
+                idSubs8.set key: pk8 value: a8
+            }
         } case none then null
         pi8 = pi8 + 1
     }
@@ -24316,8 +24237,7 @@ getOrMintSpec: function {
     if (templateHasDefaults :st tdecl: tk8) then {
         bindSpecDefaults :st :ast :tk8 :pnames8 :subs :valSubs :fallbackArg sfx: dsfx8
     }
-    keys8: ListVal u64
-    keyIsVal8: ListVal bool
+    args8: ListVal ztypes.genericarg
     trieOk8: (buildSpecTrieKeys
         :ast
         :st
@@ -24327,21 +24247,20 @@ getOrMintSpec: function {
         :subs
         :valSubs
         :fallbackArg
-        :keys8
-        :keyIsVal8
+        :args8
     )
     # a numeric level keyed by a generic parameter is a partial that stays off
     # the trie, where a value and a type id could coincide
-    if trieOk8 when (numericLevelKeyedByParam :st :tk8 :pnames8 :keyIsVal8) then {
-        return (mintValuePartialSpec :st :templateId :sfx :keys8 :keyIsVal8)
+    if trieOk8 when (numericLevelKeyedByParam :st :tk8 :pnames8 :args8) then {
+        return (mintValuePartialSpec :st :templateId :sfx :args8)
     }
     if trieOk8 then {
         cur8: templateId
         ki8: u64
-        kn8: keys8.length
+        kn8: args8.length
         hit8: true
         for ki8 < kn8 loop {
-            k8: keys8.get i: ki8
+            k8: args8.get i: ki8
             n8: st.reg.getGenericChild parentId: cur8 key: k8
             match (
                 n8
@@ -24361,11 +24280,11 @@ getOrMintSpec: function {
     # decided once, where the spec is minted
     mn8: "\{st.reg.nameOf tid: templateId}\{sfx}\{dsfx8}"
     if trieOk8 then {
-        cut8: defaultsTailLength :st :ast :scope :tk8 :keys8 :keyIsVal8 label: mn8.stringView
+        cut8: defaultsTailLength :st :ast :scope :tk8 :args8 label: mn8.stringView
         if cut8 > 0 then mn8 = "\{mn8.substring from: 0 to: mn8.length - cut8}"
     }
     idSubs8: IdMapV u64 v: u64
-    if trieOk8 then buildSpecIdSubs :st :pnames8 :keys8 :idSubs8 :tk8
+    if trieOk8 then buildSpecIdSubs :st :pnames8 :args8 :idSubs8 :tk8
     # A generic-parameter argument makes the spec partial -- and so does a
     # nested PARTIAL argument, which wears the same tag. Both readings are
     # wanted here and the tag is what carries both: narrowing this to
@@ -24373,19 +24292,14 @@ getOrMintSpec: function {
     # bare-parameter test would stop `(A (B :t))` being partial one level up.
     hasParamKey8: false
     if trieOk8 then {
-        hk8: u64
-        hn8: keys8.length
-        for hk8 < hn8 loop {
-            if (keyIsVal8.get i: hk8).not then {
-                hv8: keys8.get i: hk8
+        for each a: args8 loop {
+            match (
+                a
+            ) case typeArg then {
                 if (
-                    (st.reg.typetypeOf typeId: (ztypes.tid.create from: hv8.u64)) ==
-                    ztypes.ztypetype.genericParam
-                ) then {
-                    hasParamKey8 = true
-                }
-            }
-            hk8 = hk8 + 1
+                    (st.reg.typetypeOf typeId: a) == ztypes.ztypetype.genericParam
+                ) then hasParamKey8 = true
+            } case valueArg then null
         }
     }
     mid8: ztypes.tid
@@ -24407,8 +24321,7 @@ getOrMintSpec: function {
             name: mn8.stringView
             :templateId
             :mid8
-            :keys8
-            :keyIsVal8
+            :args8
         )
         recordNumericArgConsts :ast :st :scope monoId: mid8 tdecl: tk8
     }

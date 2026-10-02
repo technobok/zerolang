@@ -240,28 +240,21 @@ typeInUnit: function {st: zenv.ZSymbolTable.view tid: ztypes.tid unm: StringView
 }
 
 # genericChildRow -- one `generic_child` row: the template, the edge key and
-# the child. The edge key's kind comes from the CHILD's last ordinal, so a
-# numeric value key prints its literal rather than a type name.
+# the child. A numeric value key prints its literal rather than a type name.
 genericChildRow: function {
     st: zenv.ZSymbolTable.view
     tid: ztypes.tid
-    ekey: u64
+    ekey: ztypes.genericarg
     eval: u64
 } out String is {
     pn: canonTypeName reg: st.reg :tid
-    kc: st.reg.genericArgCount specId: (ztypes.tid.create from: eval.u64)
-    last: ztypes.genericarg.typeArg ztypes.noTid
-    if kc > 0 then last = (st.reg.genericArgAt
-        specId: (ztypes.tid.create from: eval.u64)
-        ordinal: kc - 1
-    )
     kn: String
     match (
-        last
+        ekey
     ) case valueArg then {
         kn = "\{ekey}"
     } case typeArg then {
-        kn = canonTypeName reg: st.reg tid: (ztypes.tid.create from: ekey.u64)
+        kn = canonTypeName reg: st.reg tid: ekey
     }
     cn: canonTypeName reg: st.reg tid: (ztypes.tid.create from: eval.u64)
     return "generic_child \{pn} \{kn} \{cn}"
@@ -1122,8 +1115,12 @@ ZDumper: class {
         for tid < n loop {
             if tid >= st.reg.typeById.length then return
             zt: st.reg.typeById.get i: tid
-            for each ge: zt.genericChildren.iterateItems loop {
+            for each ge: zt.typeChildren.iterateItems loop {
                 row: "INSERT OR IGNORE INTO generic_child VALUES (\{tid}, \{ge.key}, \{ge.value});\n"
+                this.acc.append s: row
+            }
+            for each gv: zt.valueChildren.iterateItems loop {
+                row: "INSERT OR IGNORE INTO generic_child VALUES (\{tid}, \{gv.key}, \{gv.value});\n"
                 this.acc.append s: row
             }
             tid = tid.next
@@ -1177,13 +1174,17 @@ ZDumper: class {
         for tid < n loop {
             # the edges are collected before any row is built: the iteration
             # holds the registry, and canonTypeName reads it
-            gkeys: ListVal u64
+            gkeys: ListVal ztypes.genericarg
             gtids: ListVal u64
             if (typeInUnit :st :tid :unm) then {
                 zt: st.reg.typeById.get i: tid
-                for each ze8: zt.genericChildren.iterateItems loop {
-                    gkeys.append ze8.key
+                for each ze8: zt.typeChildren.iterateItems loop {
+                    gkeys.append (ztypes.genericarg.typeArg ze8.key)
                     gtids.append ze8.value
+                }
+                for each zv8: zt.valueChildren.iterateItems loop {
+                    gkeys.append (ztypes.genericarg.valueArg zv8.key)
+                    gtids.append zv8.value
                 }
             }
             idx: u64
