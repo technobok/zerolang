@@ -947,6 +947,12 @@ nameid: typedef u32 as {
     isZero: function {this: this.view} out bool is {
         return this.u32 == 0
     }
+    # the next id in sequence, which is how a walk over every row of a
+    # name-indexed table steps without a counter of its own
+    next: function {this: this.view} out nameid is {
+        n: this.u32 + 1
+        return (nameid from: n)
+    }
 }
 
 # kidspan -- a node's child ids as a window into `Ast.kids`, so a carrier
@@ -1018,7 +1024,7 @@ StringPool: class {
     wordClass: (ListVal u8 i: nameid)
     # the hash index over `texts`, which is what makes interning a lookup rather
     # than a scan
-    slots: ListVal u32
+    slots: ListVal nameid
     # how many slots are occupied, so the index can be grown before it degrades
     used: u64
 } as {
@@ -1029,7 +1035,7 @@ StringPool: class {
             texts: (List String i: nameid)
             hashes: (ListVal u64 i: nameid)
             wordClass: (ListVal u8 i: nameid)
-            slots: ListVal u32
+            slots: ListVal nameid
             used: 0
         )
         # the sentinel row an absent ref reads. It is deliberately given no
@@ -1054,19 +1060,20 @@ StringPool: class {
     # rebuild -- swap in a slot table of ncap (a power of two), re-probing
     # every interned text.
     rebuild: function {:this ncap: u64} is {
-        ns: ListVal u32 capacity: ncap
+        ns: ListVal nameid capacity: ncap
         i: u64
         for i < ncap loop {
-            ns.append 0
+            ns.append nameid
             i = i + 1
         }
         mask: ncap - 1
-        k: 1.u64
-        for k < this.texts.length loop {
-            idx: (this.hashes.get i: (nameid.create from: k.u32.orPanic)) & mask
-            for (ns.get i: idx) != 0 loop idx = (idx + 1) & mask
-            ns.set i: idx val: k.u32.orPanic
-            k = k + 1
+        k: nameid
+        k = k.next
+        for k.u64 < this.texts.length loop {
+            idx: (this.hashes.get i: k) & mask
+            for (ns.get i: idx).isZero.not loop idx = (idx + 1) & mask
+            ns.set i: idx val: k
+            k = k.next
         }
         this.slots = ns.take
     }
@@ -1079,9 +1086,9 @@ StringPool: class {
         idx: h & mask
         for true loop {
             sid: t.slots.get i: idx
-            if sid == 0 then return idx
-            if (t.hashes.get i: (nameid.create from: sid)) == h then {
-                text: t.texts.get i: (nameid.create from: sid)
+            if sid.isZero then return idx
+            if (t.hashes.get i: sid) == h then {
+                text: t.texts.get i: sid
                 if text.stringView == s then return idx
             }
             idx = (idx + 1) & mask
@@ -1095,14 +1102,13 @@ StringPool: class {
         h: s.fastHash
         si: this.probeSlot :s :h
         sid: this.slots.get i: si
-        if sid > 0 then return (nameid.create from: sid.u32)
-        nid: this.texts.length.u32.orPanic
-        this.texts.append s.string
+        if sid.isZero.not then return sid
+        nid: this.texts.append s.string
         this.hashes.append h
         this.wordClass.append 0
         this.slots.set i: si val: nid
         this.used = this.used + 1
-        return (nameid.create from: nid.u32)
+        return nid
     }
 
     # setOwned -- intern a donated owned string: moved in on first sight,
@@ -1112,14 +1118,13 @@ StringPool: class {
         h: s.stringView.fastHash
         si: this.probeSlot s: s.stringView :h
         sid: this.slots.get i: si
-        if sid > 0 then return (nameid.create from: sid.u32)
-        nid: this.texts.length.u32.orPanic
-        this.texts.append s
+        if sid.isZero.not then return sid
+        nid: this.texts.append s
         this.hashes.append h
         this.wordClass.append 0
         this.slots.set i: si val: nid
         this.used = this.used + 1
-        return (nameid.create from: nid.u32)
+        return nid
     }
 
     # classOf -- the byte stored for id's text by setClass; 0 until then.
@@ -1135,9 +1140,9 @@ StringPool: class {
     # find -- the id of an already-interned text (0 when absent).
     # Read-only: never interns, never grows the slot table.
     find: function {t: this.view s: StringView} out nameid is {
-        if t.slots.length == 0 then return (nameid.create from: 0)
+        if t.slots.length == 0 then return nameid
         si: t.probeSlot :s h: s.fastHash
-        return (nameid.create from: (t.slots.get i: si))
+        return (t.slots.get i: si)
     }
 
     # get -- an owned copy of id's text; panics on an out-of-range id.

@@ -1043,8 +1043,6 @@ holeType: function {} out ZType is {
 # template's generic parameters. Ids are dense and never reused, so an id IS
 # an index and every lookup here is one
 ZTypeRegistry: class {
-    # the next type id to mint; ids are dense and never reused
-    nextTypeId: u64
     # the next entry id to mint
     nextEntryId: u64
     # the next conformance id to mint
@@ -1063,7 +1061,7 @@ ZTypeRegistry: class {
     # every type, indexed by tid. A tid IS the index
     typeById: (List ZType i: tid)
     # every runtime variable, by vid (row 0 is the sentinel)
-    variableById: List ZVariable
+    variableById: (List ZVariable i: vid)
     # the main unit's name
     regMainUnit: String
     # its id, so the hot checks compare integers
@@ -1075,10 +1073,20 @@ ZTypeRegistry: class {
     # no type: the result of auto-calling a method declared without `out`.
     # Staying unregistered is what keeps the stamp out of the dump's type join.
     allocType: function {:this} out u64 is {
-        r: this.nextTypeId
-        this.nextTypeId = this.nextTypeId + 1
-        this.typeById.append holeType
-        return r
+        return (this.typeById.append holeType).u64
+    }
+
+    # typeCount -- how many type ids have been minted, registered or not.
+    typeCount: function {this: this.view} out u64 is {
+        return this.typeById.length
+    }
+
+    # nextTid -- the id the next type minted takes: a ZType carries its own id,
+    # so its row is built before it is appended. A tid IS its row's index, and
+    # the table's length is a count, so this is where an id is made from a
+    # number.
+    nextTid: function {this: this.view} out tid is {
+        return (tid.create from: this.typeById.length)
     }
 
     # ctlPlaceholder -- the one unregistered id every `break` / `continue`
@@ -1095,15 +1103,13 @@ ZTypeRegistry: class {
     # --- carrier factories: the single construction site for each
     # carrier, filling sensible field defaults. Callers mutate specific
     # fields afterward. They are registry methods (not free functions)
-    # so the id-counter bump persists through the `:this` receiver -- a
-    # bump through a plain borrowed param does not propagate back.
+    # so the row they append persists through the `:this` receiver.
     # ownerTid stays a bare u64 here: a parameter DEFAULT cannot be a typedef
     # value -- `(tid from: 0)` in that position reads as a generic instantiation
     # (tid_0), not a zero -- and 41 callers rely on the default. It converts on
     # the way into the field.
     newType: function {:this name: StringView typetype: ztypetype ownerTid: 0.u64} out tid is {
-        id: tid from: this.nextTypeId
-        this.nextTypeId = this.nextTypeId + 1
+        id: this.nextTid
         ow: tid from: ownerTid
         t: (ZType
             typeId: id
@@ -1149,8 +1155,7 @@ ZTypeRegistry: class {
     # newVariable -- mint a runtime variable: its row is appended to
     # variableById and its id returned.
     newVariable: function {:this ztypeId: tid ownership: zownership} out vid is {
-        id: this.nextVid
-        this.variableById.append (ZVariable
+        return (this.variableById.append (ZVariable
             :ztypeId
             :ownership
             isPrivateAccess: false
@@ -1158,7 +1163,7 @@ ZTypeRegistry: class {
             synthOrigin: Option.none String
             origin: zvarorigin.synth
         )
-        return id
+        )
     }
 
     # whether `id` names a variable at all, which the accessors below assume
@@ -2043,14 +2048,13 @@ ZTypeRegistry: class {
 # construct an empty type registry seeded with the builtin/native types.
 newRegistry: function {} out ZTypeRegistry is {
     r: (ZTypeRegistry
-        nextTypeId: 0
         nextEntryId: 0
         nextConformanceId: 0
         ctlPlaceholderTid: 0
         literalIntTid: tid
         literalFloatTid: tid
         typeById: (List ZType i: tid capacity: 512)
-        variableById: List ZVariable
+        variableById: (List ZVariable i: vid)
         regMainUnit: ""
         regMainUnitId: 0
         genericParams: (IdMapR declid V: ParamList)
