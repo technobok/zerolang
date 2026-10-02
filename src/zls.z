@@ -1490,9 +1490,8 @@ Spans: class {
     # size value
     names: List String
     # node id to its position, for the lookups that go the other way
-    pos: (IdMapV u64 v: u64
+    pos: (IdMapV zast.nodeid v: u64)
     # the byte-offset ranges, which a formatting or a rename edit needs
-    )
     ranges: ListVal rangerow
     # the last position recorded, so an append can tell whether it is moving
     # forward
@@ -1500,10 +1499,10 @@ Spans: class {
 } as {
     # record a node's position without a name, for the nodes a lookup finds but
     # never renders
-    note: function {:this id: u32 line: u32 col: u32} is {
-        if id > 0 then {
+    note: function {:this id: zast.nodeid line: u32 col: u32} is {
+        if id.isZero.not then {
             v: line.u64 * 1048576 + col
-            this.pos.set key: id.u64 value: v
+            this.pos.set key: id value: v
             if v > this.lastPos then this.lastPos = v
         }
     }
@@ -2771,7 +2770,7 @@ defNodeInfo: function {
 locationValue: function {
     snap: zcheck.CheckResult
     sp: Spans.view
-    nid: u64
+    nid: zast.nodeid
     width: u32
     docRel: StringView
     docUri: StringView
@@ -2787,7 +2786,7 @@ locationValue: function {
         line: (pg / 1048576).u32.orPanic
         col: (pg % 1048576).u32.orPanic
         if line == 0 then return Value.nul
-        fs: zcheck.fsnoFor r: snap nodeid: nid.u32.orPanic
+        fs: zcheck.fsnoFor r: snap nodeid: nid
         if fs.u64 == 0 then return Value.nul
         pp: snap.vfs.pathfromprovider dentryid: fs
         own: pathMatches pv: pp.stringView rel: docRel :srcDir
@@ -3607,15 +3606,15 @@ hoverTypeFence: function {
 # posLine -- the 1-based line a node sits on, from the span table; 0 when the
 # node has no recorded position. The table packs line and column into one
 # u64, line in the high bits.
-posLine: function {sp: Spans.view nid: u64} out u32 is {
+posLine: function {sp: Spans.view nid: zast.nodeid} out u32 is {
     packed: (sp.pos.get key: nid).or d: 0
     return (packed / 1048576).u32.orPanic
 }
 
 # hoverDoc -- the `#` doc block above a definition node, "" when the node has
 # no position, sits on the first line, or carries none.
-hoverDoc: function {snap: zcheck.CheckResult sp: Spans.view nid: u64} out String is {
-    fs: zcheck.fsnoFor r: snap nodeid: nid.u32.orPanic
+hoverDoc: function {snap: zcheck.CheckResult sp: Spans.view nid: zast.nodeid} out String is {
+    fs: zcheck.fsnoFor r: snap nodeid: nid
     ln: posLine :sp :nid
     none: String
     if fs.u32 == 0 then return none
@@ -3684,8 +3683,8 @@ navHoverAnswer: function {
     dnd: declNodeOf o: snap.st declId: hit.declId
     if dnd.isZero then dnd = legacyDnd
     if dnd > 0 then {
-        docBody = hoverDoc :snap :sp nid: dnd.u64
-        if hit.owner > 0 then appendTrailingDoc :snap :sp nid: dnd.u64 :body
+        docBody = hoverDoc :snap :sp nid: dnd
+        if hit.owner > 0 then appendTrailingDoc :snap :sp nid: dnd :body
     }
     # a constant with no doc of its own takes none: the fallback is its
     # value's TYPE, whose doc describes something else
@@ -3694,7 +3693,7 @@ navHoverAnswer: function {
         :hit
         name: hname.stringView
     ).not then {
-        docBody = hoverDoc :snap :sp nid: legacyDnd.u64
+        docBody = hoverDoc :snap :sp nid: legacyDnd
     }
     hoverCallNotes :snap :sp :hit :body :docBody
     ln9: (literalNote
@@ -3723,10 +3722,10 @@ appendNote: function {docBody: String.borrow note: StringView} is {
 appendTrailingDoc: function {
     snap: zcheck.CheckResult
     sp: Spans.view
-    nid: u64
+    nid: zast.nodeid
     body: String.borrow
 } is {
-    dfs: zcheck.fsnoFor r: snap nodeid: nid.u32.orPanic
+    dfs: zcheck.fsnoFor r: snap nodeid: nid
     dln: posLine :sp :nid
     if dfs.u32 == 0 then return
     if dln < 2 then return
@@ -3746,7 +3745,7 @@ hoverCallNotes: function {
     body: String.borrow
     docBody: String.borrow
 } is {
-    hpos: (sp.pos.get key: hit.nodeid.u64).or d: 0
+    hpos: (sp.pos.get key: hit.nodeid).or d: 0
     callId: (sp.innerRangeOfKind
         curPos: hpos
         kind: 4
@@ -3755,7 +3754,7 @@ hoverCallNotes: function {
         wantFsno: zvfs.fsno
     )
     if callId.isZero then return
-    callPos: (sp.pos.get key: callId.u64).or d: 0
+    callPos: (sp.pos.get key: callId).or d: 0
     if callPos == hpos then {
         gl: inferredGenericLines o: snap.st prog: snap.prog :callId
         if gl.length > 0 then {
@@ -3800,7 +3799,7 @@ navDefinitionAnswer: function {
     return (locationValue
         :snap
         :sp
-        nid: dn.u64
+        nid: dn
         width: hit.width
         :docRel
         :docUri
@@ -3855,7 +3854,7 @@ navReferencesAnswer: function {
             lv2: (locationValue
                 :snap
                 :sp
-                nid: n2.u64
+                nid: n2
                 width: row2.colHi - row2.colLo
                 :docRel
                 :docUri
@@ -3892,7 +3891,7 @@ navAnswer: function {
     sp: (Spans
         rows: ListVal spanrow
         names: List String
-        pos: (IdMapV u64 v: u64)
+        pos: (IdMapV zast.nodeid v: u64)
         ranges: ListVal rangerow
         lastPos: 0
     )
@@ -4519,7 +4518,7 @@ addScopeCompletions: function {
         sp: (Spans
             rows: ListVal spanrow
             names: List String
-            pos: (IdMapV u64 v: u64)
+            pos: (IdMapV zast.nodeid v: u64)
             ranges: ListVal rangerow
             lastPos: 0
         )
@@ -4676,7 +4675,7 @@ baseTypeInScope: function {
     sp: (Spans
         rows: ListVal spanrow
         names: List String
-        pos: (IdMapV u64 v: u64)
+        pos: (IdMapV zast.nodeid v: u64)
         ranges: ListVal rangerow
         lastPos: 0
     )
@@ -5204,7 +5203,7 @@ caseArmComplete: function {
     sp: (Spans
         rows: ListVal spanrow
         names: List String
-        pos: (IdMapV u64 v: u64)
+        pos: (IdMapV zast.nodeid v: u64)
         ranges: ListVal rangerow
         lastPos: 0
     )
@@ -5467,7 +5466,7 @@ argLabelComplete: function {
     sp: (Spans
         rows: ListVal spanrow
         names: List String
-        pos: (IdMapV u64 v: u64)
+        pos: (IdMapV zast.nodeid v: u64)
         ranges: ListVal rangerow
         lastPos: 0
     )
@@ -5791,7 +5790,7 @@ signatureHelpAnswer: function {
     sp: (Spans
         rows: ListVal spanrow
         names: List String
-        pos: (IdMapV u64 v: u64)
+        pos: (IdMapV zast.nodeid v: u64)
         ranges: ListVal rangerow
         lastPos: 0
     )

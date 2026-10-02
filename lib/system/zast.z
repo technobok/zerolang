@@ -9,6 +9,8 @@ public: unit {
     :nameid
     :nodeid
     :noNode
+    :firstNode
+    :nextRowId
     :markerkind
     :markerKindOf
     :markerKindOfLeaf
@@ -706,10 +708,10 @@ labelvaluerow: record {
 # innermost containing range wins (fsnoForNode).
 FileSeg: class {
     # the first node id belonging to this file
-    startId: u32
+    startId: nodeid
     # one past the last node id of this file, so a segment is the half-open
     # [startId, endId)
-    endId: u32
+    endId: nodeid
     # the file the segment covers
     fsno: zvfs.fsno
 }
@@ -935,9 +937,9 @@ Ast: class {
     # the innermost containing segment (subunit ranges nest inside their
     # parent's, so the largest containing startId wins). 0 when no segment
     # contains it (synthesized nodes minted after parsing).
-    fsnoForNode: function {this: this.view nodeid: u32} out zvfs.fsno is {
+    fsnoForNode: function {this: this.view nodeid: nodeid} out zvfs.fsno is {
         best: zvfs.fsno
-        bestStart: u32
+        bestStart: nodeid
         n: this.fileSegs.length
         i: u64
         for i < n loop {
@@ -1026,6 +1028,9 @@ nodeid: typedef u32 as {
 # noNode -- the zero node id: no node at all. Row 0 of the table is reserved,
 # so it names nothing; a parameter that may be handed no node defaults to it
 noNode: nodeid 0
+
+# firstNode -- the first real row's id, where a parse starts counting
+firstNode: nodeid 1
 
 # StringPool -- deduplicating intern table for identifier text. A pool id
 # indexes its row; row 0 is a sentinel holding the empty text, which is the
@@ -2077,9 +2082,16 @@ printProgramCanonicalRoot: function {ast: Ast.view} is {
 # slot holds the placeholder arm until tableAdd moves the finished
 # node in.
 tableReserve: function {ast: Ast} out nodeid is {
-    id: nodeid.create from: ast.nodes.length.u32.orPanic
+    id: nextRowId :ast
     ast.nodes.append from: astnode.placeholder
     return id
+}
+
+# nextRowId -- the id the next row appended to the table gets. A node id IS its
+# row's index, and the table's length is a count, so this is where an id is
+# made from a number.
+nextRowId: function {ast: Ast.view} out nodeid is {
+    return (nodeid.create from: ast.nodes.length.u32.orPanic)
 }
 
 # tableSet -- move a converted parent's child into its reserved slot

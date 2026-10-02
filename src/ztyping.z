@@ -26,6 +26,7 @@ public: unit {
     :monosite
     :callslot
     :monostamp
+    :bodycopy
     :destroyitem
     :destroyrange
     :pinspan
@@ -44,6 +45,7 @@ public: unit {
     :nodeTypeAt
     :nodeTypeSet
     :setFirstOrPerMono
+    :nodeInCopies
 }
 
 ZType: ztypes.ZType
@@ -336,15 +338,19 @@ monoVariableIn: function {
     return (shared.get key: nid)
 }
 
-# nodeInRanges -- `nid` lies inside one of the [start, end) node ranges listed
-# pairwise in `ranges`: an instance's own copy of a template function
-# (instanceBodyRanges).
-nodeInRanges: function {ranges: (ListVal u64).view nid: u64} out bool is {
-    i: u64
-    n: ranges.length
-    for (i + 1) < n loop {
-        if nid >= (ranges.get :i) when nid < (ranges.get i: i + 1) then return true
-        i = i + 2
+# bodycopy -- a generic instance's own copy of a template function: the node
+# rows [start, end) the copy took, and the copied function's row among them
+bodycopy: record {
+    start: zast.nodeid
+    end: zast.nodeid
+    functionRow: zast.nodeid
+}
+
+# nodeInCopies -- `nid` lies inside one of the instances' own copies of a
+# template function (instanceCopies).
+nodeInCopies: function {copies: (ListVal bodycopy).view nid: zast.nodeid} out bool is {
+    for each c: copies loop {
+        if nid >= c.start when nid < c.end then return true
     }
     return false
 }
@@ -352,17 +358,17 @@ nodeInRanges: function {ranges: (ListVal u64).view nid: u64} out bool is {
 # setFirstOrPerMono -- record `value` for node `nid` as the walk of `mono` (0
 # for a walk of no mono) found it. A template body is walked once per mono: the
 # first value any walk finds is the shared one, and a walk that finds another
-# keeps it per mono. A node of an instance's own copy of the body (`ranges`)
+# keeps it per mono. A node of an instance's own copy of the body (`copies`)
 # is the instance's alone, so its value is the shared one.
 setFirstOrPerMono: function as { t: anyval.generic } in {
     perMono: (MapVV monostamp v: t)
     shared: (IdMapV zast.nodeid v: t)
-    ranges: (ListVal u64).view
+    copies: (ListVal bodycopy).view
     mono: u64
     nid: zast.nodeid
     value: t
 } is {
-    if mono > 0 when (nodeInRanges :ranges nid: nid.u64).not then {
+    if mono > 0 when (nodeInCopies :copies :nid).not then {
         got: shared.get key: nid
         match (
             got
@@ -637,11 +643,11 @@ ZTyping: class {
     # emitted from the copy, so no node carries another instance's answer
     )
     instanceBody: (MapVV monostamp v: zast.nodeid
-    # the node id ranges those copies occupy, start and end (exclusive) in
-    # turn: what an instance walk records on a node inside one is that
-    # instance's alone, so it goes to the plain tables
+    # the rows those copies occupy, in the order they were made: what an
+    # instance walk records on a node inside one is that instance's alone, so
+    # it goes to the plain tables
     )
-    instanceBodyRanges: ListVal u64
+    instanceCopies: ListVal bodycopy
     # namespace / subunit bodies the demand path owes a walk, and the unit
     # ops already walked -- a subunit of the MAIN unit is walked by the main
     # tree walk and must not be walked twice.
@@ -2492,7 +2498,7 @@ ZTyping: class {
         (setFirstOrPerMono
             perMono: this.monoNodeConst
             shared: this.nodeConst
-            ranges: this.instanceBodyRanges
+            copies: this.instanceCopies
             :mono
             :nid
             :value
@@ -2516,7 +2522,7 @@ ZTyping: class {
         (setMonoVariable
             perMono: this.monoDefVariableId
             shared: this.defVariableId
-            mono: (this.walkMonoOf nid: nid.u64)
+            mono: (this.walkMonoOf :nid)
             :nid
             :vid
         )
@@ -2537,15 +2543,15 @@ ZTyping: class {
 
     # nodeInInstanceBody -- `nid` lies inside an instance's own copy of a
     # template function (instanceBody).
-    nodeInInstanceBody: function {t: this.view nid: u64} out bool is {
-        return (nodeInRanges ranges: t.instanceBodyRanges :nid)
+    nodeInInstanceBody: function {t: this.view nid: zast.nodeid} out bool is {
+        return (nodeInCopies copies: t.instanceCopies :nid)
     }
 
     # walkMonoOf -- the instance whose own table an answer the walk records on
     # `nid` goes to: the instance being walked, unless the node lies in its own
     # copy of the body, whose answers are the plain tables'. 0 outside an
     # instance walk.
-    walkMonoOf: function {t: this.view nid: u64} out u64 is {
+    walkMonoOf: function {t: this.view nid: zast.nodeid} out u64 is {
         if t.curMonoStamp == 0 then return 0
         if (t.nodeInInstanceBody :nid) then return 0
         return t.curMonoStamp
@@ -3106,7 +3112,7 @@ newTyping: function {nodeEst: 0.u64} out ZTyping is {
         pendingBorrowFrozen: false
         monoNodeType: (MapVV monostamp v: ztypes.tid)
         instanceBody: (MapVV monostamp v: zast.nodeid)
-        instanceBodyRanges: ListVal u64
+        instanceCopies: ListVal bodycopy
         nsBodiesOwed: ListVal nsbody
         nsBodiesWalked: IdSet zast.nodeid
         nsConstsWalked: IdSet zast.nodeid

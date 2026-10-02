@@ -158,17 +158,6 @@ pathKindIs: function {path: StringView want: io.filekind} out bool is {
     return false
 }
 
-# inInstanceCopy -- whether `nid` lies in a generic instance's own copy of a
-# template body; `ranges` holds each copy's start and end (exclusive) in turn.
-inInstanceCopy: function {ranges: (ListVal u64).view nid: u64} out bool is {
-    i: u64
-    for (i + 1) < ranges.length loop {
-        if nid >= (ranges.get :i) when nid < (ranges.get i: i + 1) then return true
-        i = i + 2
-    }
-    return false
-}
-
 # sameFile -- whether two paths name one filesystem object: the same device
 # and inode, whatever the spelling. False when either cannot be read.
 sameFile: function {a: StringView b: StringView} out bool is {
@@ -4538,13 +4527,13 @@ Analysis: class {
         used: (IdSet u64).view
         mainFsno: zvfs.fsno
         # the node ranges of every instance's copy of a body, start and end in turn
-        copies: (ListVal u64).view
+        copies: (ListVal ztyping.bodycopy).view
         nid: zast.nodeid
         vid: u64
     } is {
         if (used.has item: vid) then return
-        if (prog.fsnoForNode nodeid: nid.u32) != mainFsno then return
-        if (inInstanceCopy ranges: copies nid: nid.u64) then return
+        if (prog.fsnoForNode nodeid: nid) != mainFsno then return
+        if (ztyping.nodeInCopies :copies :nid) then return
         nm: String
         ln: u32
         cl: u32
@@ -4589,7 +4578,7 @@ Analysis: class {
                 :prog
                 :used
                 :mainFsno
-                copies: st.typing.instanceBodyRanges
+                copies: st.typing.instanceCopies
                 nid: dv.key
                 vid: dv.value
             )
@@ -4741,7 +4730,7 @@ Analysis: class {
         if (used.has item: vid).not then return String
         if (st.typing.variableMutated.has item: vid) then return String
         if (st.typing.variableMoved.has item: vid) then return String
-        fs: prog.fsnoForNode nodeid: nid.u32
+        fs: prog.fsnoForNode nodeid: nid
         if (fs == mainFsno).not then return String
         nodeL: prog.nodes.get i: nid
         if nodeL.assignment.not then return String
@@ -4773,7 +4762,7 @@ Analysis: class {
         # a generic instance's copy of a body reports from its template's line,
         # so only the template's own bindings are judged
         for each dv: st.typing.defVariableId.iterateItems loop {
-            if (inInstanceCopy ranges: st.typing.instanceBodyRanges nid: dv.key.u64).not then {
+            if (st.typing.nodeInInstanceBody nid: dv.key).not then {
                 dvNodes.append from: dv.key
                 dvVars.append from: dv.value
             }
@@ -5395,9 +5384,9 @@ addPublicAliasTargets: function {
 # segrange -- a range of node ids: a file segment, or empty when none covers
 segrange: record {
     # the first node id of the range
-    start: u32
+    start: zast.nodeid
     # one past the last node id of the range
-    end: u32
+    end: zast.nodeid
 }
 
 # unitFileSegment -- the narrowest file segment holding `probe`, the unit's
@@ -5405,7 +5394,7 @@ segrange: record {
 # closes, so the first member, not the unitdef, probes for it. Empty when no
 # segment covers it, which is the root parse.
 unitFileSegment: function {prog: Ast.view probe: u32} out segrange is {
-    r: segrange start: 0 end: 0
+    r: segrange start: zast.nodeid end: zast.nodeid
     sgN: prog.fileSegs.length
     sgI: u64
     for sgI < sgN loop {
@@ -5468,9 +5457,8 @@ unitAtomNames: function {prog: Ast.view seg: segrange um: UnitMembers.view} out 
 atomNamesOutsideSelf: function {
     prog: Ast.view seg: segrange um: UnitMembers.view into: IdSet u64
 } is {
-    # the segment's bounds are the node table's length when it was loaded
-    ndI: zast.nodeid.create from: seg.start
-    for ndI.u64 < seg.end loop {
+    ndI: seg.start
+    for ndI < seg.end loop {
         nd0: prog.nodes.get i: ndI
         ndI = ndI.next
         if nd0.atomid then {
