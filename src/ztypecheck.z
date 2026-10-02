@@ -5274,11 +5274,10 @@ ensureUnitInstanceMono: function {
         )
         ki: u64
         for ki < keys.length loop {
-            if (isVal.get i: ki) then {
-                st.reg.appendGenericArgValue specId: mono value: (keys.get i: ki)
-            } else {
-                st.reg.appendGenericArg specId: mono arg: (keys.get i: ki)
-            }
+            (st.reg.appendGenericArg
+                specId: mono
+                arg: (ztypes.genericArgOf isValue: (isVal.get i: ki) key: (keys.get i: ki))
+            )
             ki = ki + 1
         }
         recordNumericArgConsts :ast :st :scope monoId: mono :tdecl
@@ -5316,10 +5315,8 @@ ensureUnitMonoBuilt: function {
     pn: st.reg.genericParamNamesOf :tdecl
     pj: u64
     for pj < pn.length loop {
-        if (st.reg.genericArgIsValueAt specId: monoId ordinal: pj).not then {
-            av: st.reg.genericArgAt specId: monoId ordinal: pj
-            if av > 0 then subs.set key: (pn.get i: pj) value: av
-        }
+        av: st.reg.genericTypeArgAt specId: monoId ordinal: pj
+        if av.isZero.not then subs.set key: (pn.get i: pj) value: av.u64
         pj = pj + 1
     }
     (buildUnitMono
@@ -18265,8 +18262,9 @@ unitMonoIdSubs: function {
         match (
             po
         ) case some then {
-            if (st.reg.genericArgIsValueAt specId: monoId ordinal: pi) then {
-                idSubs.set key: po value: (st.reg.genericArgAt specId: monoId ordinal: pi)
+            vg: st.reg.genericValueArgAt specId: monoId ordinal: pi
+            if vg.some then {
+                idSubs.set key: po value: vg
             } else {
                 sg: subs.get key: pnm
                 match (
@@ -19037,17 +19035,10 @@ recordInstanceGenericArgs: function {
         anM: mkeys.length
         for aiM < anM loop {
             kM: mkeys.get i: aiM
-            if (mkval.get i: aiM) then {
-                (st.reg.appendGenericArgValue
-                    specId: (ztypes.tid.create from: memberIdAt.u64)
-                    value: kM
-                )
-            } else {
-                (st.reg.appendGenericArg
-                    specId: (ztypes.tid.create from: memberIdAt.u64)
-                    arg: kM
-                )
-            }
+            (st.reg.appendGenericArg
+                specId: (ztypes.tid.create from: memberIdAt.u64)
+                arg: (ztypes.genericArgOf isValue: (mkval.get i: aiM) key: kM)
+            )
             aiM = aiM + 1
         }
     }
@@ -19620,11 +19611,10 @@ mintUnitMonoOf: function {
     # instance may be read before its completion pass records the rest
     ki: u64
     for ki < keys.length loop {
-        if (isVal.get i: ki) then {
-            st.reg.appendGenericArgValue specId: mono value: (keys.get i: ki)
-        } else {
-            st.reg.appendGenericArg specId: mono arg: (keys.get i: ki)
-        }
+        (st.reg.appendGenericArg
+            specId: mono
+            arg: (ztypes.genericArgOf isValue: (isVal.get i: ki) key: (keys.get i: ki))
+        )
         ki = ki + 1
     }
     recordNumericArgConsts :ast :st :scope monoId: mono tdecl: r.tmplDeclId
@@ -20789,13 +20779,11 @@ respecialize: function {
     mapped: ListVal u64
     ai: u64
     for ai < an loop {
-        av: st.reg.genericArgAt specId: (ztypes.tid.create from: specTid.u64) ordinal: ai
-        if (st.reg.genericArgIsValueAt
-            specId: (ztypes.tid.create from: specTid.u64)
-            ordinal: ai
-        ) then {
+        avv: st.reg.genericValueArgAt specId: (ztypes.tid.create from: specTid.u64) ordinal: ai
+        av: (st.reg.genericTypeArgAt specId: (ztypes.tid.create from: specTid.u64) ordinal: ai).u64
+        if avv.some then {
             # a numeric VALUE ordinal has nothing to substitute
-            av9v: av
+            av9v: avv
             mapped.append av9v
         } else {
             memberDecl: idSubs.get key: av
@@ -20987,10 +20975,10 @@ collapseBoxArm: function {
         if isBoxed when (
             (st.reg.genericArgCount specId: (ztypes.tid.create from: target.u64)) == 1
         ) then {
-            target = (st.reg.genericArgAt
+            target = (st.reg.genericTypeArgAt
                 specId: (ztypes.tid.create from: target.u64)
                 ordinal: 0
-            )
+            ).u64
         }
     }
     return target
@@ -21539,8 +21527,9 @@ typedefBaseClash: function {
     if pn.length < n then n = pn.length
     i: u64
     for i < n loop {
-        if (st.reg.genericArgIsValueAt specId: base ordinal: i).not then {
-            a: st.reg.genericArgAt specId: base ordinal: i
+        ta: st.reg.genericTypeArgAt specId: base ordinal: i
+        if ta.isZero.not then {
+            a: ta.u64
             sa: (idSubs.get key: a).or d: a
             p: pn.get :i
             at: ztypes.tid.create from: sa.u64
@@ -23526,9 +23515,8 @@ arrayElemTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out ztypes.t
     n: st.reg.genericArgCount specId: tid
     i: u64
     for i < n loop {
-        if (st.reg.genericArgIsValueAt specId: tid ordinal: i).not then {
-            return (ztypes.tid.create from: (st.reg.genericArgAt specId: tid ordinal: i))
-        }
+        ta: st.reg.genericTypeArgAt specId: tid ordinal: i
+        if ta.isZero.not then return ta
         i = i + 1
     }
     return ztypes.tid
@@ -24132,17 +24120,10 @@ registerSpecOnTrie: function {
                 kj: u64
                 for kj <= ki loop {
                     pk: keys8.get i: kj
-                    if (keyIsVal8.get i: kj) then {
-                        (st.reg.appendGenericArgValue
-                            specId: (ztypes.tid.create from: step.u64)
-                            value: pk
-                        )
-                    } else {
-                        (st.reg.appendGenericArg
-                            specId: (ztypes.tid.create from: step.u64)
-                            arg: pk
-                        )
-                    }
+                    (st.reg.appendGenericArg
+                        specId: (ztypes.tid.create from: step.u64)
+                        arg: (ztypes.genericArgOf isValue: (keyIsVal8.get i: kj) key: pk)
+                    )
                     kj = kj + 1
                 }
             }
@@ -24154,11 +24135,10 @@ registerSpecOnTrie: function {
     ka: u64
     for ka < kn loop {
         av: keys8.get i: ka
-        if (keyIsVal8.get i: ka) then {
-            st.reg.appendGenericArgValue specId: mid8 value: av
-        } else {
-            st.reg.appendGenericArg specId: mid8 arg: av
-        }
+        (st.reg.appendGenericArg
+            specId: mid8
+            arg: (ztypes.genericArgOf isValue: (keyIsVal8.get i: ka) key: av)
+        )
         ka = ka + 1
     }
 }
@@ -24178,19 +24158,20 @@ recordNumericArgConsts: function {
     ac: st.reg.genericArgCount specId: monoId
     ai: u64
     for ai < ac loop {
-        if (st.reg.genericArgIsValueAt specId: monoId ordinal: ai) then hasValue = true
+        if (st.reg.genericValueArgAt specId: monoId ordinal: ai).some then hasValue = true
         ai = ai + 1
     }
     if hasValue.not then return
     pn: st.reg.genericParamNamesOf :tdecl
     pi: u64
     for pi < pn.length loop {
-        if (st.reg.genericArgIsValueAt specId: monoId ordinal: pi) then {
+        vg: st.reg.genericValueArgAt specId: monoId ordinal: pi
+        if vg.some then {
             pnm: pn.get i: pi
             cd: st.reg.genericParamConstraintOf :tdecl paramName: pnm
             bt: numericBoundTid :ast :st :scope :cd
             if bt.isZero.not then {
-                bits: st.reg.genericArgAt specId: monoId ordinal: pi
+                bits: vg
                 (st.typing.setMemberConst
                     parentTypeId: monoId
                     nameId: pnm
@@ -24241,11 +24222,10 @@ mintValuePartialSpec: function {
     st.reg.setPartial typeId: mid value: true
     ki: u64
     for ki < keys8.length loop {
-        if (keyIsVal8.get i: ki) then {
-            st.reg.appendGenericArgValue specId: mid value: (keys8.get i: ki)
-        } else {
-            st.reg.appendGenericArg specId: mid arg: (keys8.get i: ki)
-        }
+        (st.reg.appendGenericArg
+            specId: mid
+            arg: (ztypes.genericArgOf isValue: (keyIsVal8.get i: ki) key: (keys8.get i: ki))
+        )
         ki = ki + 1
     }
     return mid
@@ -24929,12 +24909,13 @@ bindMonoValueParams: function {
     pn: st.reg.genericParamNamesOf :tdecl
     pj: u64
     for pj < pn.length loop {
-        if (st.reg.genericArgIsValueAt specId: monoId ordinal: pj) then {
+        vg: st.reg.genericValueArgAt specId: monoId ordinal: pj
+        if vg.some then {
             pto: st.reg.genericParamTidOf :tdecl paramName: (pn.get i: pj)
             match (
                 pto
             ) case some then {
-                subs.set key: pto.u64 value: (st.reg.genericArgAt specId: monoId ordinal: pj)
+                subs.set key: pto.u64 value: vg
             } case none then null
         }
         pj = pj + 1
@@ -27479,7 +27460,8 @@ bindTypedefOwnArgs: function {
     if gparams.length < n then n = gparams.length
     i: u64
     for i < n loop {
-        subs.set key: (gparams.get :i) value: (st.reg.genericArgAt specId: inst ordinal: i)
+        ta: st.reg.genericTypeArgAt specId: inst ordinal: i
+        if ta.isZero.not then subs.set key: (gparams.get :i) value: ta.u64
         i = i + 1
     }
 }
@@ -30976,8 +30958,8 @@ dottedBaseTid: function {
     holdT: bt
     isOpB: boxMemberDelegates :ast nameId: (atomNameId :ast n: (ast.nodes.get i: dp.child))
     if isOpB when (st.reg.isBoxOf tid: bt) when (st.reg.genericArgCount specId: bt) == 1 then {
-        bxE: st.reg.genericArgAt specId: bt ordinal: 0
-        if bxE > 0 then bt = ztypes.tid.create from: bxE.u64
+        bxE: st.reg.genericTypeArgAt specId: bt ordinal: 0
+        if bxE.isZero.not then bt = bxE
     }
     # A VALUE READ THROUGH IS HELD WHILE IT IS READ. `(mkBox).label` reads a
     # field out of a value no name binds; the emitter hoists it so the read can
@@ -35839,14 +35821,14 @@ partialForElement: function {
     if c1 == 0 then return fe
     rv: (methodReturnOf :st mid: (ztypes.tid.create from: c1.u64)).or d: ztypes.tid
     if rv.isZero or ((st.reg.genericArgCount specId: rv) == 0) then return fe
-    et: ztypes.tid.create from: (st.reg.genericArgAt specId: rv ordinal: 0)
+    et: st.reg.genericTypeArgAt specId: rv ordinal: 0
     if (st.reg.typetypeOf typeId: et) != ztypes.ztypetype.genericParam then return fe
     pn: nameIdOf :ast name: (st.reg.nameOf tid: et).stringView
     ordo: st.reg.paramOrdinalOf tdecl: (declOfTypeId :st tid: og) paramName: pn
     match (
         ordo
     ) case some then {
-        fe.elem = st.reg.genericArgAt specId: vt ordinal: ordo
+        fe.elem = (st.reg.genericTypeArgAt specId: vt ordinal: ordo).u64
         fe.wrapper = rv
         fe.isView = isOptionViewMono :ast :st :unitDecl wid: rv
     } case none then null
@@ -41133,8 +41115,14 @@ specWrittenName: function {st: zenv.ZSymbolTable.view ast: Ast.view tid: ztypes.
     i: u64
     for i < n loop {
         a: st.reg.genericArgAt specId: tid ordinal: i
-        at: specWrittenName :st :ast tid: (ztypes.tid.create from: a.u64)
-        if (st.reg.genericArgIsValueAt specId: tid ordinal: i) then at = "\{a}"
+        at: String
+        match (
+            a
+        ) case valueArg then {
+            at = "\{a}"
+        } case typeArg then {
+            at = specWrittenName :st :ast tid: a
+        }
         if i < pns.length then {
             pt: zast.nameTextAt :ast ref: (pns.get :i)
             r.append " \{pt}: \{at}"
@@ -41155,10 +41143,9 @@ argIsItsDefault: function {
     spec: ztypes.tid
     ordinal: u64
 } out bool is {
-    if (st.reg.genericArgIsValueAt specId: spec :ordinal) then return false
     d: st.reg.genericParamDefaultTidAt :tdecl i: ordinal
     if d.isZero then return false
-    return (st.reg.genericArgAt specId: spec :ordinal) == d.u64
+    return (st.reg.genericTypeArgAt specId: spec :ordinal) == d
 }
 
 # reportOwnedStandIn -- a conformer written where the value is owned. The
@@ -46523,12 +46510,13 @@ bindPartialParamSubs: function {
     if (st.reg.genericArgCount specId: (ztypes.tid.create from: argTid.u64)) != n9 then return
     i9: u64
     for i9 < n9 loop {
-        pa9: st.reg.genericArgAt specId: (ztypes.tid.create from: paramTid.u64) ordinal: i9
-        aa9: st.reg.genericArgAt specId: (ztypes.tid.create from: argTid.u64) ordinal: i9
+        pa9: (st.reg.genericTypeArgAt specId: (ztypes.tid.create from: paramTid.u64) ordinal: i9
+        ).u64
+        aa9: (st.reg.genericTypeArgAt specId: (ztypes.tid.create from: argTid.u64) ordinal: i9).u64
         # a numeric argument binds no parameter: a numeric parameter is written,
         # never inferred
-        if (st.reg.genericArgIsValueAt specId: (ztypes.tid.create from: argTid.u64) ordinal: i9
-        ) then {
+        if (st.reg.genericValueArgAt specId: (ztypes.tid.create from: argTid.u64) ordinal: i9
+        ).some then {
             i9 = i9 + 1
             continue
         }
@@ -47243,10 +47231,9 @@ typeMentionsParam: function {
     if (st.reg.isPartialOf :tid).not then return false
     ai: u64
     for ai < (st.reg.genericArgCount specId: tid) loop {
-        at: st.reg.genericArgAt specId: tid ordinal: ai
+        at: st.reg.genericTypeArgAt specId: tid ordinal: ai
         ai = ai + 1
-        if (typeMentionsParam :st :tdecl tid: (ztypes.tid.create from: at.u64) :param
-        ) then return true
+        if at.isZero.not when (typeMentionsParam :st :tdecl tid: at :param) then return true
     }
     return false
 }
@@ -47772,7 +47759,9 @@ sumArmTid: function {
     pn: st.reg.genericParamNameOfTid :tdecl ptid: (ztypes.tid.create from: arm)
     if pn.isZero then return (optionval.some arm)
     ord: st.reg.paramOrdinalOf :tdecl paramName: pn
-    if ord.some then return (optionval.some (st.reg.genericArgAt specId: sumTid ordinal: ord))
+    if ord.some then return (optionval.some (st.reg.genericTypeArgAt specId: sumTid ordinal: ord
+    ).u64
+    )
     return (optionval.some arm)
 }
 
@@ -48420,8 +48409,15 @@ dissectedArgOf: function {
     if tk.isZero then return (dissectarg :concrete :isVal)
     ord: st.reg.paramOrdinalOf tdecl: tk :paramName
     if ord.some then {
-        concrete = st.reg.genericArgAt specId: ownerTid ordinal: ord
-        isVal = st.reg.genericArgIsValueAt specId: ownerTid ordinal: ord
+        a: st.reg.genericArgAt specId: ownerTid ordinal: ord
+        match (
+            a
+        ) case valueArg then {
+            concrete = a
+            isVal = true
+        } case typeArg then {
+            concrete = a.u64
+        }
     }
     return (dissectarg :concrete :isVal)
 }
@@ -51930,21 +51926,18 @@ bindMonoParams: function {
     pc: pn.length
     pj: u64
     for pj < pc loop {
-        if (st.reg.genericArgIsValueAt specId: monoId ordinal: pj).not then {
-            av: st.reg.genericArgAt specId: monoId ordinal: pj
-            if av > 0 then {
-                pnm: pn.get i: pj
-                pto: st.reg.genericParamTidOf :tdecl paramName: pnm
-                match (
-                    pto
-                ) case some then {
-                    sv: av
-                    (st.typing.monoParamSubst.set
-                        key: (ztypes.tid.create from: pto.u64)
-                        value: (ztypes.tid.create from: sv.u64)
-                    )
-                } case none then null
-            }
+        av: st.reg.genericTypeArgAt specId: monoId ordinal: pj
+        if av.isZero.not then {
+            pnm: pn.get i: pj
+            pto: st.reg.genericParamTidOf :tdecl paramName: pnm
+            match (
+                pto
+            ) case some then {
+                (st.typing.monoParamSubst.set
+                    key: (ztypes.tid.create from: pto.u64)
+                    value: av
+                )
+            } case none then null
         }
         pj = pj + 1
     }
@@ -52539,9 +52532,9 @@ instanceNote: function {st: zenv.ZSymbolTable.view ast: Ast.view mono: ztypes.ti
     i: u64
     sep: " with ".string
     for i < n loop {
-        if (st.reg.genericArgIsValueAt specId: mono ordinal: i).not when i < pnames.length then {
+        at: st.reg.genericTypeArgAt specId: mono ordinal: i
+        if at.isZero.not when i < pnames.length then {
             pn: zast.nameTextAt :ast ref: (pnames.get :i)
-            at: ztypes.tid.create from: (st.reg.genericArgAt specId: mono ordinal: i)
             an: st.reg.nameOf tid: at
             r.append sep
             r.append pn
@@ -59283,7 +59276,7 @@ qualifiedTypePair: function {
     return (QualifiedPair expected: eq.copy got: aq.copy ok: good)
 }
 
-# qualifiedTypeName -- `name` prefixed with the unit that declares the type,# qualifiedTypeName -- `name` prefixed with the unit that declares the type,
+# qualifiedTypeName -- `name` prefixed with the unit that declares the type,
 # for a report where the bare name would appear twice and name two types.
 qualifiedTypeName: function {
     st: zenv.ZSymbolTable.view
@@ -59300,7 +59293,7 @@ qualifiedTypeName: function {
     # an instance is minted in no unit: what tells two of them apart is the
     # argument each was minted with
     if (st.reg.genericArgCount specId: tid) > 0 then {
-        a0: ztypes.tid.create from: (st.reg.genericArgAt specId: tid ordinal: 0).u64
+        a0: st.reg.genericTypeArgAt specId: tid ordinal: 0
         au: nearestUnitNameOfTid :st tid: a0
         if au.length > 0 then {
             r2: name.string

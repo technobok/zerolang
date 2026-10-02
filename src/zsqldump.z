@@ -250,17 +250,17 @@ genericChildRow: function {
 } out String is {
     pn: canonTypeName reg: st.reg :tid
     kc: st.reg.genericArgCount specId: (ztypes.tid.create from: eval.u64)
-    kIsVal: false
-    if kc > 0 then {
-        kIsVal = (st.reg.genericArgIsValueAt
-            specId: (ztypes.tid.create from: eval.u64)
-            ordinal: kc - 1
-        )
-    }
+    last: ztypes.genericarg.typeArg ztypes.noTid
+    if kc > 0 then last = (st.reg.genericArgAt
+        specId: (ztypes.tid.create from: eval.u64)
+        ordinal: kc - 1
+    )
     kn: String
-    if kIsVal then {
+    match (
+        last
+    ) case valueArg then {
         kn = "\{ekey}"
-    } else {
+    } case typeArg then {
         kn = canonTypeName reg: st.reg tid: (ztypes.tid.create from: ekey.u64)
     }
     cn: canonTypeName reg: st.reg tid: (ztypes.tid.create from: eval.u64)
@@ -273,19 +273,18 @@ genericArgRow: function {
     st: zenv.ZSymbolTable.view
     tid: ztypes.tid
     ai: u64
-    av: u64
+    av: ztypes.genericarg
 } out String is {
     sn: canonTypeName reg: st.reg :tid
     iv: u64
     vn: String
-    if (st.reg.genericArgIsValueAt
-        specId: (ztypes.tid.create from: tid.u64)
-        ordinal: ai
-    ) then {
+    match (
+        av
+    ) case valueArg then {
         iv = 1
         vn = "\{av}"
-    } else {
-        vn = canonTypeName reg: st.reg tid: (ztypes.tid.create from: av.u64)
+    } case typeArg then {
+        vn = canonTypeName reg: st.reg tid: av
     }
     return "generic_arg \{sn} \{ai} \{vn} \{iv}"
 }
@@ -1137,7 +1136,7 @@ ZDumper: class {
         n: st.reg.typeCount
         tid: ztypes.tid
         for tid < n loop {
-            gargs: ListVal u64
+            gargs: ListVal ztypes.genericarg
             if tid < st.reg.typeById.length then {
                 zt: st.reg.typeById.get i: tid
                 zn: zt.genericArgs.length
@@ -1151,12 +1150,17 @@ ZDumper: class {
             an: gargs.length
             ai: u64
             for ai < an loop {
-                av: gargs.get i: ai
+                ga: gargs.get i: ai
+                av: u64
                 iv: u64
-                if (st.reg.genericArgIsValueAt
-                    specId: (ztypes.tid.create from: tid.u64)
-                    ordinal: ai
-                ) then iv = 1
+                match (
+                    ga
+                ) case valueArg then {
+                    av = ga
+                    iv = 1
+                } case typeArg then {
+                    av = ga.u64
+                }
                 row: "INSERT OR IGNORE INTO generic_arg VALUES (\{tid}, \{ai}, \{av}, \{iv});\n"
                 this.acc.append s: row
                 ai = ai + 1
@@ -1202,7 +1206,7 @@ ZDumper: class {
         tid: ztypes.tid
         for tid < n loop {
             # collected before any row is built, as in appendGenericChildrenCanon
-            cargs: ListVal u64
+            cargs: ListVal ztypes.genericarg
             if (typeInUnit :st :tid :unm) then {
                 zt: st.reg.typeById.get i: tid
                 cz: zt.genericArgs.length
