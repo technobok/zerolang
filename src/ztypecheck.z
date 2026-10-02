@@ -1659,7 +1659,7 @@ declareCanonicalTypeId: function {
     # the mint spells the name, read through a borrow
     id: ztypes.tid
     nT: zast.nameTextAt :ast ref: nameId
-    id = st.reg.newType name: nT.stringView ownerTid: qowner :typetype
+    id = st.reg.newType name: nT.stringView ownerTid: (ztypes.tid.create from: qowner) :typetype
     # valtype-ness is a property of the definition's KIND -- a record or a
     # variant is a valtype, a class or a union is not -- and is known here,
     # at declaration; a reference that reaches the declared id before its
@@ -10614,7 +10614,11 @@ synthRecordHash: function {
 # real member of `rid`. A hash READS its receiver, like the synthesised comparison:
 # the receiver is recorded `.view` so `k.hash` on a view-held key locks shared.
 synthHashMember: function {st: zenv.ZSymbolTable rid: u64} is {
-    hshR: st.reg.newType name: "hash" ownerTid: rid typetype: ztypes.ztypetype.functionType
+    hshR: (st.reg.newType
+        name: "hash"
+        ownerTid: (ztypes.tid.create from: rid)
+        typetype: ztypes.ztypetype.functionType
+    )
     (st.typing.declSynthMemberTyped
         parentTypeId: (ztypes.tid.create from: rid.u64)
         nameId: zast.names.wkHash
@@ -10668,7 +10672,7 @@ synthComparisonMember: function {
     if have.some then return
     fid: (st.reg.newType
         name: opName
-        :ownerTid
+        ownerTid: (ztypes.tid.create from: ownerTid)
         typetype: ztypes.ztypetype.functionType
     )
     (st.typing.declSynthMemberTyped
@@ -10997,7 +11001,7 @@ resolveRecord: function {
     if isDecls.create.not when hasCreateAs.not then {
         createId: (st.reg.newType
             name: "create"
-            ownerTid: rid
+            ownerTid: (ztypes.tid.create from: rid)
             typetype: ztypes.ztypetype.functionType
         )
         (st.typing.declSynthMemberTyped
@@ -13553,7 +13557,7 @@ resolveClassCreate: function {
     if hasCreate.not when isgen.not then {
         createId: (st.reg.newType
             name: "create"
-            ownerTid: cid
+            ownerTid: (ztypes.tid.create from: cid)
             typetype: ztypes.ztypetype.functionType
         )
         (st.typing.declSynthMemberTyped
@@ -13865,7 +13869,7 @@ resolveFacet: function {
     if isgen.not then {
         createId: (st.reg.newType
             name: "create"
-            ownerTid: fid
+            ownerTid: (ztypes.tid.create from: fid)
             typetype: ztypes.ztypetype.functionType
         )
         (st.typing.declSynthMemberTyped
@@ -13961,7 +13965,7 @@ resolveProtocol: function {
     if isgen.not then {
         createId: (st.reg.newType
             name: "create"
-            ownerTid: pid
+            ownerTid: (ztypes.tid.create from: pid)
             typetype: ztypes.ztypetype.functionType
         )
         (st.typing.declSynthMemberTyped
@@ -13997,7 +14001,11 @@ registerEmptyType: function {
         ex0
     ) case some then {
         st.reg.setValtype typeId: (ztypes.tid.create from: ex0.u64) value: true
-        cci0: st.reg.newType name: "create" ownerTid: ex0 typetype: ztypes.ztypetype.functionType
+        cci0: (st.reg.newType
+            name: "create"
+            ownerTid: (ztypes.tid.create from: ex0)
+            typetype: ztypes.ztypetype.functionType
+        )
         (st.typing.declSynthMemberTyped
             parentTypeId: (ztypes.tid.create from: ex0.u64)
             nameId: zast.names.wkCreate
@@ -21175,7 +21183,7 @@ mintMonoRecordShape: function {
         if isSized.not when written.not when optOut.not then {
             crId: (st.reg.newType
                 name: "create"
-                ownerTid: mid
+                ownerTid: (ztypes.tid.create from: mid)
                 typetype: ztypes.ztypetype.functionType
             )
             (st.typing.declSynthMember
@@ -21454,7 +21462,7 @@ mintSpecInstanceShape: function {st: zenv.ZSymbolTable mid: u64 tt: ztypes.ztype
     if (st.typing.declHasMemberId parentTypeId: mt nameId: zast.names.wkCreate).not then {
         createId: (st.reg.newType
             name: "create"
-            ownerTid: mid
+            ownerTid: (ztypes.tid.create from: mid)
             typetype: ztypes.ztypetype.functionType
         )
         (st.typing.declSynthMemberTyped
@@ -50354,8 +50362,8 @@ walkOwnerMethods: function {
     # the owner type's name, interned
     nameId: zast.nameid
     # the owner's type when the caller already holds it -- a type a namespace
-    # declares, which the file unit's definitions do not reach; 0 resolves it
-    knownTid: 0.u64
+    # declares, which the file unit's definitions do not reach; noTid resolves it
+    knownTid: ztypes.noTid
 } is {
     mem: argRefAt :ast nid: memId
     if mem.nid.isZero.not then {
@@ -50371,7 +50379,7 @@ walkOwnerMethods: function {
         # hangs off the receiver -- member reads, the declared return type --
         # silently stops asking.
         owTid: knownTid
-        if owTid == 0 then owTid = (forceUnitDef
+        if owTid.isZero then owTid = ztypes.tid.create from: (forceUnitDef
             :st
             :scope
             :ast
@@ -50390,7 +50398,7 @@ walkOwnerMethods: function {
         # resolution reports its own error, while a body walk on notype only
         # cascades that failure into every line of every method.
         )
-        if canWalk when owTid == 0 then canWalk = false
+        if canWalk when owTid.isZero then canWalk = false
         if canWalk then {
             prev: st.typing.synthLabel.copy
             prevU: st.typing.synthOwnerUnit
@@ -50402,7 +50410,7 @@ walkOwnerMethods: function {
                 :unitDecl
                 :ast
                 typeNameId: nameId
-                typeTid: (ztypes.tid.create from: owTid)
+                typeTid: owTid
                 opId: mem.operation
             )
             st.typing.synthLabel = prev.take
@@ -51605,7 +51613,7 @@ walkNamespaceOwner: function {
         :ast
         :memId
         :nameId
-        knownTid: otid.u64
+        knownTid: otid
     )
     st.typing.curMonoStamp = prevMono
 }
