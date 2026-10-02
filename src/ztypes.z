@@ -776,8 +776,9 @@ ZConformance: class {
 # fields and methods, are the type's declaration children (the Decl tree);
 # per-member metadata lives on the member's own Decl.
 ZType: class {
-    # the type's own id, which is its index in typeById
-    typeId: tid
+    # whether the row is a hole: the stand-in allocType appends for an
+    # expression with no type, which no lookup treats as a type
+    isHole: bool
     # its written name, for diagnostics and for the emitted C
     name: String
     # which family it belongs to
@@ -1010,11 +1011,10 @@ optStringCopy: function {o: (Option String).view} out Option String is {
 }
 
 # holeType -- the row standing in for an id minted by allocType, which names an
-# expression with no type. typeId 0 marks it: a real row carries its own index,
-# and index 0 is `notype`, which is always registered.
+# expression with no type.
 holeType: function {} out ZType is {
     return (ZType
-        typeId: tid
+        isHole: true
         name: ""
         typetype: ztypetype.nullType
         returnTypeId: optionval.none tid
@@ -1081,14 +1081,6 @@ ZTypeRegistry: class {
         return this.typeById.length
     }
 
-    # nextTid -- the id the next type minted takes: a ZType carries its own id,
-    # so its row is built before it is appended. A tid IS its row's index, and
-    # the table's length is a count, so this is where an id is made from a
-    # number.
-    nextTid: function {this: this.view} out tid is {
-        return (tid.create from: this.typeById.length)
-    }
-
     # ctlPlaceholder -- the one unregistered id every `break` / `continue`
     # entry wears. Those names carry no type; the id exists only so the entry
     # has a slot, and every reader dispatches on the name instead. One id
@@ -1109,10 +1101,9 @@ ZTypeRegistry: class {
     # (tid_0), not a zero -- and 41 callers rely on the default. It converts on
     # the way into the field.
     newType: function {:this name: StringView typetype: ztypetype ownerTid: 0.u64} out tid is {
-        id: this.nextTid
         ow: tid from: ownerTid
         t: (ZType
-            typeId: id
+            isHole: false
             name: name.string
             :typetype
             returnTypeId: optionval.none tid
@@ -1135,8 +1126,7 @@ ZTypeRegistry: class {
             def: declid
             ownerTid: ow
         )
-        this.typeById.append t
-        return id
+        return (this.typeById.append t)
     }
 
     # variableCount -- how many variables have been minted.
@@ -1466,14 +1456,11 @@ ZTypeRegistry: class {
         return 0
     }
 
-    # typeValid -- `tid` addresses a registered row rather than a hole. A hole
-    # (an id minted by allocType) carries typeId 0; a real row carries its own
-    # index, and index 0 is `notype`, which is always registered.
+    # typeValid -- `tid` addresses a registered row rather than a hole (an id
+    # minted by allocType).
     typeValid: function {this: this.view tid: tid} out bool is {
         if tid >= this.typeById.length then return false
-        if tid.isZero then return true
-        got: this.typeById.get i: tid
-        return got.typeId.u64 == tid
+        return (this.typeById.get i: tid).isHole.not
     }
 
     # nameOf -- a type's registered name, or "" when the id has none.
