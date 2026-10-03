@@ -1,9 +1,9 @@
-/* string_join -- borrow `parts` (read-only) and return a new
-   owned string. `parts` is pointer-passed (Phase A default for
-   stack-reftype params); caller retains ownership. */
-static z_@String@_t z_stringJoin(
+/* collections.stringJoin -- borrow `parts` (read-only) and return a new
+   owned string. `parts` arrives by pointer, as a stack reftype parameter
+   does; the caller keeps it. */
+static z_@String@_t z_collections_stringJoin(
     z_@List_String@_t* parts, z_@StringView@_t sep);
-static z_@String@_t z_stringJoin(
+static z_@String@_t z_collections_stringJoin(
     z_@List_String@_t* parts, z_@StringView@_t sep) {
     z_@String@_t out = {0};
     uint64_t n = parts->length;

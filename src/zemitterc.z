@@ -1804,10 +1804,22 @@ nativeNeedOf: function {ctx: Ctx.view path: StringView} out String is {
 }
 
 # rowNeedAdd -- register the runtime a row's body calls (its `needs=`) as a
-# demand of the unit its path names, wherever the row is emitted from.
+# demand of the unit its path names, wherever the row is emitted from. A need
+# spelled `<unit>.<member>` is a demand of that unit instead.
 rowNeedAdd: function {ctx: Ctx key: StringView} is {
     nd: nativeNeedOf :ctx path: key
     if nd.length == 0 then return
+    qd: nd.stringView.indexOf needle: "."
+    match (
+        qd
+    ) case some then {
+        (needsAddM
+            :ctx
+            uname: (nd.stringView.substring from: 0 to: qd)
+            memb: (nd.stringView.substring from: qd + 1 to: nd.length)
+        )
+        return
+    } case none then null
     dot: key.indexOf needle: "."
     match (
         dot
@@ -12624,8 +12636,8 @@ emitFnCallWithFid: function {
 # emitGenericFnCall -- a generic free-function call (identity 42): the callable
 # atom is stamped to the mono FUNCTION id by checkGenericCall. Emit that mono's
 # cname applied to the args. "" when the callable does not resolve to a mono fn,
-# or when the mono's template is NATIVE (no emitted body -- its C comes from a
-# name interception like z_stringJoin).
+# or when the mono's template is NATIVE (no emitted body -- its C is the
+# runtime's, as collections.stringJoin's is).
 emitGenericFnCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -13793,49 +13805,6 @@ namedCalleeCtorTid: function {
     return fid
 }
 
-# emitStringJoinCall -- `stringJoin` is the one native whose call the emitter
-# writes out itself: the joined container comes first, addressed unless it is
-# already held as a pointer, and each separator after it passes as a
-# StringView value.
-emitStringJoinCall: function {
-    ast: Ast.view
-    symtab: zenv.ZSymbolTable.view
-    ctx: Ctx
-    call: zast.callrow.view
-} out String is {
-    needsAddM :ctx uname: "collections" memb: "coll_join"
-    sjargs: String
-    sji: u64
-    arx489: u64
-    for arx489 < call.arguments.count loop {
-        sja9Id: zast.kidAt kids: ast.kids span: call.arguments i: arx489
-        arx489 = arx489 + 1
-        sja: ast.nodes.get i: sja9Id
-        if sja.namedoperation.not then continue
-        if sji > 0 then sjargs.append ", "
-        sjn: ast.nodes.get i: sja.operation
-        sjv: emitExpr :ast :symtab :ctx n: sjn
-        sjq: atomVidIfPlain :ast :symtab :ctx n: sjn text: sjv.stringView
-        if sji == 0 when (isPtrVid :ctx vid: sjq).not then sjargs.append "&"
-        sjIsStr: false
-        if sji > 0 when (
-            (stampIdOf
-                :symtab
-                nid: (interpPartNodeId n: (ast.nodes.get i: sja.operation))
-            ) ==
-            ctx.strTid
-        ) then sjIsStr = true
-        if sjIsStr then {
-            sjsv: svValueForm :ctx expr: sjv.stringView isStr: true vid: sjq
-            sjargs.append sjsv
-        } else {
-            sjargs.append sjv
-        }
-        sji = sji + 1
-    }
-    return "z_stringJoin(\{sjargs})"
-}
-
 # emitNamedCalleeChain -- the probe legs that need the callee's NAME or its resolved
 # function id: the constructor shapes, the user function call, and the fn-pointer
 # local. The name is consulted only after the checker's stamps have declined, and
@@ -13863,9 +13832,6 @@ emitNamedCalleeChain: function {
     fpfc: emitFnptrFieldCall :ast :symtab :ctx :call
     if fpfc.length > 0 then return fpfc
     if fid > 0 then return (emitUserFnCall :ast :symtab :ctx :call :fid)
-    if cn0.stringView == "stringJoin" then {
-        return (emitStringJoinCall :ast :symtab :ctx :call)
-    }
     cnV: atomVid :symtab nid: (atomNodeId n: (ast.nodes.get i: call.callable))
     fplc: (emitFnptrLocalCall
         :ast
@@ -14109,7 +14075,7 @@ emitFuncDeclCall: function {
     rtid: ztypes.tid
 } out String is {
     if rtid > 0 when (symtab.reg.isNativeOf tid: rtid) then {
-        return (emitNativeFreeFnCall :ast :symtab :ctx :call)
+        return (emitNativeFreeFnCall :ast :symtab :ctx :call fid: rtid)
     }
     if rtid > 0 when (isGenericType :symtab tid: rtid) then {
         rgf: emitGenericFnCall :ast :symtab :ctx :call
@@ -30740,6 +30706,8 @@ scanNativeNeed: function {
         membT: zast.nameTextAt :ast ref: membId
         needsAddM :ctx uname: duo memb: "@unit"
         needsAddM :ctx uname: duo memb: membT.stringView
+        rk: "\{duo}.\{membT}"
+        rowNeedAdd :ctx key: rk.stringView
     }
 }
 
@@ -30774,12 +30742,6 @@ scanNeedsCall: function {
     if (svReceiverOf :symtab :ctx path: (ast.nodes.get i: n.callable)) then {
         scanSvMemberNeed :ctx m: mn0
     }
-    cjn0: zast.nameTextAt :ast ref: (atomNameIdOf :ast n: (ast.nodes.get i: n.callable))
-    if cjn0.stringView == "stringJoin" then (needsAddM
-        :ctx
-        uname: "collections"
-        memb: "coll_join"
-    )
     arx559: u64
     for arx559 < n.arguments.count loop {
         a: zast.kidAt kids: ast.kids span: n.arguments i: arx559
@@ -39835,71 +39797,42 @@ emitNativeArg: function {
     return "0"
 }
 
-# emitNativeFreeFnCall -- ANY call (dotted `io.remove ...` or a bare sibling
-# `remove ...` inside the unit) that resolves to an `is native` FREE function
-# of a runtime-convention unit emits `z_<unit>_<name>(<args>)`, each argument
-# lowered from the declared parameter (emitNativeArg). "" for anything else:
-# bodied siblings fall through to the id-cname route, methods to their own
-# legs, non-convention natives (stringJoin/print/panic) to theirs.
+# emitNativeFreeFnCall -- ANY call (dotted `io.remove ...`, a bare sibling
+# `remove ...` inside the unit, or a call through a hidden subunit's name
+# `arith.addVV ...`) whose callee `fid` RESOLVED to an `is native` FREE function
+# that a fragment implements emits `z_<unit>_<name>(<args>)`, each argument
+# lowered from the declared parameter (emitNativeArg). The unit is the one that
+# DECLARES the callee, never the spelled base: a hidden subunit's members belong
+# to their parent, which is the key natives.tbl and checkNativesResolve use.
+# A generic native (collections.stringJoin) arrives as its instance and is
+# called by the template's name. "" for anything else: bodied siblings fall
+# through to the id-cname route, methods to their own legs, natives with no
+# fragment (print, panic) to theirs.
 emitNativeFreeFnCall: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
     ctx: Ctx
     call: zast.callrow.view
+    fid: ztypes.tid
 } out String is {
-    un: String
+    calr: ast.nodes.get i: call.callable
     mn: ""
-    fidHint: ztypes.tid
-    bn: dottedBaseAtom :ast n: (ast.nodes.get i: call.callable)
-    if bn.length > 0 then {
-        calr: ast.nodes.get i: call.callable
+    if (dottedBaseAtom :ast n: calr).length > 0 then {
         mn = dottedChildText :ast n: calr
-        dp: "\{bn}.\{mn}"
-        if (nativeIsFragBacked :ctx path: dp.stringView).not then return ""
-        un = bn.string
     } else {
-        mn = atomTextOf :ast n: (ast.nodes.get i: call.callable)
-        if mn.length == 0 then return ""
-        fid0: userFnId :ast :symtab :ctx name: mn
-        if fid0.isZero then return ""
-        if (fnIsNativeId
-            :symtab
-            fid: fid0
-        ).not then return ""
-        duo0: definedInUnitName :symtab tid: fid0
-        if duo0.length == 0 then return ""
-        bp: "\{duo0}.\{mn}"
-        if (nativeIsFragBacked :ctx path: bp.stringView).not then return ""
-        un = duo0.string
-        fidHint = fid0
+        mn = atomTextOf :ast n: calr
     }
     if mn.length == 0 then return ""
-    fid: ztypes.tid
-    if fidHint > 0 then {
-        fid = fidHint
-    } else {
-        ud15x: (ztypecheck.unitDeclOfName
-            st: symtab
-            nameId: (zast.poolFind pool: ast.names text: un.stringView)
-        )
-        fo: (ztypecheck.resolvedByIdsRo
-            :ast
-            st: symtab
-            unitDecl: ud15x
-            name: (zast.poolFind pool: ast.names text: mn)
-        )
-        match (
-            fo
-        ) case some then {
-            fid = fo
-        } case none then {
-            return ""
-        }
-    }
     if (symtab.reg.typetypeOf typeId: fid) != ztypes.ztypetype.functionType then return ""
     if (fnIsNativeId :symtab :fid).not then return ""
+    duo: definedInUnitName :symtab tid: fid
+    if duo.length == 0 then return ""
+    un: duo.string
+    key: "\{un}.\{mn}"
+    if (nativeIsFragBacked :ctx path: key.stringView).not then return ""
     needsAddM :ctx uname: un.stringView memb: "@unit"
     needsAddM :ctx uname: un.stringView memb: mn
+    rowNeedAdd :ctx key: key.stringView
     pn: List String
     pidl: ListVal ztypes.tid
     pidlNm: ListVal u64

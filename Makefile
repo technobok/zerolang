@@ -2084,7 +2084,11 @@ perf: $(PERFBIN)
 #
 # +35 math's divBasic returns at once on a dividend shorter than its divisor:
 # 0 behaviour, +35 source.
-ALLOC_BASELINE := 2221764
+#
+# -1,422 a native free function is keyed by the unit that declares it, and
+# collections.stringJoin is called like any other fragment native: +202
+# behaviour, -1,624 source.
+ALLOC_BASELINE := 2220342
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2315,16 +2319,19 @@ lifetime-guard:
 # `never` stamp and nothing else.
 #
 # user-native-guard -- a unit OUTSIDE src/runtime, shipping its own natives.tbl
-# row and its own fragment, compiles AND LINKS AND RUNS (a fragment a hardcoded
+# rows and its own fragments, compiles AND LINKS AND RUNS (a fragment a hardcoded
 # per-unit loader would miss emits its call correctly and fails at link with an
-# implicit declaration). The runtime dir is BUILT here rather than committed -- src/runtime
+# implicit declaration). One native lives in a hidden subunit and is called
+# through the subunit's name, so its row must be found under the parent unit
+# that declares it; its fragment needs system's word primitives, which only the
+# row's qualified `needs=` demands. The runtime dir is BUILT here rather than committed -- src/runtime
 # plus the fixture's one row and one fragment -- so it cannot drift from the real
 # one, and the guard fails if the fragment stops loading.
 user-native-guard: bin/zc
 	@d=$$(mktemp -d); fail=0; \
 	mkdir -p $$d/rt; cp -r src/runtime/. $$d/rt/; \
 	cat tests/fixtures/user_native/mystery.tbl >> $$d/rt/natives.tbl; \
-	cp tests/fixtures/user_native/_Z_MYSTERY_CONJURE.inc $$d/rt/natives/; \
+	cp tests/fixtures/user_native/_Z_MYSTERY_*.inc $$d/rt/natives/; \
 	bin/zc mystery --src tests/fixtures/user_native --system lib/system \
 	  --runtime $$d/rt --emit-c $$d/mystery.c > $$d/emit.log 2>&1 \
 	  || { echo "user-native-guard FAIL: emit"; sed -n 1,5p $$d/emit.log; fail=1; }; \
@@ -2334,13 +2341,13 @@ user-native-guard: bin/zc
 	         grep -m1 error $$d/cc.log; fail=1; }; \
 	fi; \
 	if [ $$fail -eq 0 ]; then \
-	  got=$$($$d/mystery); \
-	  if [ "$$got" != "42" ]; then \
-	    echo "user-native-guard FAIL: ran but printed '$$got', want 42"; fail=1; fi; \
+	  got=$$($$d/mystery | tr '\n' ' '); \
+	  if [ "$$got" != "42 42 " ]; then \
+	    echo "user-native-guard FAIL: ran but printed '$$got', want '42 42 '"; fail=1; fi; \
 	fi; \
 	rm -rf $$d; \
 	if [ $$fail -ne 0 ]; then exit 1; fi; \
-	echo "user-native-guard OK: a unit outside src/runtime links and runs its own native"
+	echo "user-native-guard OK: a unit outside src/runtime links and runs its own natives, a hidden subunit's among them"
 
 # case-guard: a program declaring `main` is an entry point, so some case list has to
 # compile it -- run_cases (build + compare a golden), smoke_cases (build, output not
