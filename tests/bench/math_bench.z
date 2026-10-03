@@ -1,0 +1,143 @@
+# math_bench.z -- math's arithmetic timed through BigInt, one row per operation
+# and operand size: the word-vector kernels (add, sub, a word add, the shifts, a
+# word multiply), then multiplication, squaring, division and the conversions
+# they feed. Sizes follow Go's BenchmarkAddVV words=N series. Each row repeats
+# its operation until 100 ms have passed and prints the time per operation; a
+# result is kept live by folding its bit length into a checksum printed last.
+# The kernels are reached through BigInt's operators, so a row also pays for
+# the result's allocation -- which dominates at one word.
+
+# what a row times
+op: variant {
+    # x + y, both n words
+    add: null
+    # x - y, both n words
+    sub: null
+    # x + 1: the carry dies at once
+    addw: null
+    # x << 3
+    shl: null
+    # x >> 3
+    shr: null
+    # x * w for a one-word w
+    mulw: null
+    # x * y, both n words
+    mul: null
+    # x * x
+    sqr: null
+    # a 2n-word x divided by an n-word y
+    div: null
+    # x as decimal text
+    text: null
+    # decimal text of n words parsed
+    parse: null
+}
+
+# Bench -- the operands of one size and the checksum every result feeds
+Bench: class {
+    x: math.BigInt
+    y: math.BigInt
+    wide: math.BigInt
+    w: math.BigInt
+    digits: String
+    sum: u64
+}
+
+# operand -- an n-word BigInt of pseudo-random words with the top bit set, from
+# the 64-bit LCG Knuth's MMIX uses
+operand: function {n: u64 seed: u64} out math.BigInt is {
+    r: math.BigInt from: 0
+    s: seed
+    i: u64
+    for i < n loop {
+        s = s * 6364136223846793005 + 1442695040888963407
+        r = (r << 64) + (math.BigInt.fromU64 from: s)
+        i = i + 1
+    }
+    if n > 0 then r = r.setBit i: n * 64 - 1 b: 1
+    return r
+}
+
+# once -- one run of the operation, its result's bit length into the checksum
+once: function {b: Bench.borrow o: op} is {
+    match (
+        o
+    ) case add then {
+        b.sum = b.sum + (b.x + b.y).bitLength
+    } case sub then {
+        b.sum = b.sum + (b.x - b.y).bitLength
+    } case addw then {
+        b.sum = b.sum + (b.x + (math.BigInt from: 1)).bitLength
+    } case shl then {
+        b.sum = b.sum + (b.x << 3).bitLength
+    } case shr then {
+        b.sum = b.sum + (b.x >> 3).bitLength
+    } case mulw then {
+        b.sum = b.sum + (b.x * b.w).bitLength
+    } case mul then {
+        b.sum = b.sum + (b.x * b.y).bitLength
+    } case sqr then {
+        b.sum = b.sum + (b.x * b.x).bitLength
+    } case div then {
+        b.sum = b.sum + (b.wide / b.y).bitLength
+    } case text then {
+        b.sum = b.sum + b.x.string.length
+    } case parse then {
+        p: math.BigInt.parse text: b.digits.stringView base: 10
+        match p case ok then b.sum = b.sum + p.bitLength case err then panic msg: "parse"
+    }
+}
+
+# row -- time one operation at the bench's size and print it
+row: function {b: Bench.borrow o: op name: StringView n: u64} is {
+    start: os.monotonicMillis
+    iters: i64
+    elapsed: i64
+    for elapsed < 100 loop {
+        once :b :o
+        iters = iters + 1
+        elapsed = os.monotonicMillis - start
+    }
+    ns: elapsed * 1000000 / iters
+    print "\{name} words=\{n} \{ns} ns/op (\{iters} runs)"
+}
+
+# size -- every row at n words, returning the checksum; the text rows stop at 10^4 words, past which
+# one conversion runs for seconds
+size: function {n: u64} out u64 is {
+    b: (Bench
+        x: (operand :n seed: 1)
+        y: (operand :n seed: 2)
+        wide: (operand n: n * 2 seed: 3)
+        w: (operand n: 1 seed: 4)
+        digits: ""
+        sum: 0
+    )
+    b.digits = b.x.string
+    row :b o: op.add name: "add" :n
+    row :b o: op.sub name: "sub" :n
+    row :b o: op.addw name: "addw" :n
+    row :b o: op.shl name: "shl" :n
+    row :b o: op.shr name: "shr" :n
+    row :b o: op.mulw name: "mulw" :n
+    row :b o: op.mul name: "mul" :n
+    row :b o: op.sqr name: "sqr" :n
+    row :b o: op.div name: "div" :n
+    if n <= 10000 then {
+        row :b o: op.text name: "text" :n
+        row :b o: op.parse name: "parse" :n
+    }
+    return b.sum
+}
+
+main: function is {
+    sum: u64
+    sum = sum + (size n: 1)
+    sum = sum + (size n: 10)
+    sum = sum + (size n: 16)
+    sum = sum + (size n: 100)
+    sum = sum + (size n: 1000)
+    sum = sum + (size n: 10000)
+    sum = sum + (size n: 100000)
+    print "checksum \{sum}"
+}

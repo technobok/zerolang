@@ -90,7 +90,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard zl-full-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens regen-matrix bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard lifetime-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard fmt-raw-guard test-tcc test-tcc-heavy test-clang mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
+.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard zl-full-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens regen-matrix bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard lifetime-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard fmt-raw-guard test-tcc test-tcc-heavy test-clang test-math-arm64 bench-math mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -169,12 +169,55 @@ test: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint zl-full-guard complexity-report warn-check shadow-guard emitter-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check perf-strict test-tcc-heavy test-clang mode-parity ci-corpus
+ci: style-lint zl-full-guard complexity-report warn-check shadow-guard emitter-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check perf-strict test-tcc-heavy test-clang test-math-arm64 mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
 ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
+
+# test-math-arm64 -- the math corpus cross-built for aarch64 by `zc --target
+# aarch64-linux-gnu` and run under qemu against the SAME goldens: the word
+# primitives' builtin tier on a second instruction set, where __int128 and the
+# carry builtins lower to umulh and adcs. A program in MATH_ARM64_REFUSED uses
+# f128, which quadfloat refuses for aarch64; it must fail with that refusal and
+# nothing else. Skipped, with a message, when the cross compiler or qemu is
+# absent; ci runs it when they are present.
+MATH_ARM64_DIR := $(BUILDDIR)/math-arm64
+MATH_ARM64_REFUSED := math_constants_wide
+test-math-arm64: bin/zc
+	@if ! command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 || ! command -v qemu-aarch64 >/dev/null 2>&1; then \
+	  echo "test-math-arm64: skipped (needs aarch64-linux-gnu-gcc and qemu-aarch64)"; exit 0; fi; \
+	mkdir -p $(MATH_ARM64_DIR); fail=0; n=0; \
+	for f in tests/fixtures/emitc_corpus/math/*.z; do \
+	  b=$$(basename $$f .z); n=$$((n + 1)); \
+	  bin/zc build $$f --target aarch64-linux-gnu -o $(MATH_ARM64_DIR)/$$b > $(MATH_ARM64_DIR)/$$b.build 2>&1; rc=$$?; \
+	  case " $(MATH_ARM64_REFUSED) " in *" $$b "*) \
+	    grep -q "x86-64's" $(MATH_ARM64_DIR)/$$b.build && [ $$rc -eq 1 ] \
+	      || { echo "test-math-arm64 FAIL: $$b must be refused by quadfloat (exit $$rc)"; fail=1; }; \
+	    continue;; \
+	  esac; \
+	  if [ $$rc -ne 0 ]; then \
+	    echo "test-math-arm64 FAIL: $$b does not build"; sed -n 1,3p $(MATH_ARM64_DIR)/$$b.build; fail=1; continue; fi; \
+	  qemu-aarch64 -L /usr/aarch64-linux-gnu $(MATH_ARM64_DIR)/$$b > $(MATH_ARM64_DIR)/$$b.out 2>&1; \
+	  cmp -s $(MATH_ARM64_DIR)/$$b.out tests/fixtures/run_golden/$$b.out \
+	    || { echo "test-math-arm64 FAIL: $$b differs from its golden"; fail=1; }; \
+	done; \
+	if [ $$fail -ne 0 ]; then exit 1; fi; \
+	echo "test-math-arm64 OK: $$n math programs on aarch64, golden or refused as f128"
+
+# bench-math -- math's arithmetic timed per operation and size
+# (tests/bench/math_bench.z). NOT in ci: wall time is not a ratchet. One program,
+# three builds: gcc -O2 with the word primitives' builtins, gcc -O2 with
+# -DZ_WORD_PORTABLE forcing their portable forms, and tcc, which always takes
+# those.
+BENCH_MATH_DIR := $(BUILDDIR)/bench-math
+bench-math: bin/zc $(BUILDDIR)/tcc
+	@mkdir -p $(BENCH_MATH_DIR)
+	@bin/zc build tests/bench/math_bench.z --release -o $(BENCH_MATH_DIR)/builtins
+	@bin/zc build tests/bench/math_bench.z --release --cflags -DZ_WORD_PORTABLE -o $(BENCH_MATH_DIR)/portable
+	@bin/zc build tests/bench/math_bench.z --cc $(BUILDDIR)/tcc --tcc-lib $(TCCLIB) -o $(BENCH_MATH_DIR)/tcc
+	@for v in builtins portable tcc; do echo "== $$v"; $(BENCH_MATH_DIR)/$$v; done
 
 # test-clang -- the corpus under clang, the fast tier. gcc reaches __float128's
 # library through quadmath.h; clang has no such header on its path, so the
@@ -2093,7 +2136,10 @@ perf: $(PERFBIN)
 # 0 behaviour, -5,046 source.
 #
 # +8 f128 is refused for a target other than x86-64: 0 behaviour, +8 source.
-ALLOC_BASELINE := 2215304
+#
+# +1 the Z_WORD_PORTABLE switch in z_hash.inc, a runtime file every compile
+# reads: 0 behaviour, +1 source.
+ALLOC_BASELINE := 2215305
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

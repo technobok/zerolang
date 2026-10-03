@@ -1,8 +1,10 @@
 /* The word primitives with no one-expression C form: a carry chain's step, in
    both directions, and the division of a two-word number by a word. Each takes
    the builtin a C compiler offers -- gcc and clang lower these to adc, sbb and
-   div -- and otherwise a portable form, which is what tcc runs. */
-#if defined(__has_builtin)
+   div -- and otherwise a portable form, which is what tcc runs. Defining
+   Z_WORD_PORTABLE (-DZ_WORD_PORTABLE) takes the portable forms under any
+   compiler, which is how make bench-math sets the two tiers side by side. */
+#if defined(__has_builtin) && !defined(Z_WORD_PORTABLE)
 #if __has_builtin(__builtin_addcll) && __has_builtin(__builtin_subcll)
 #define Z_WORD_CARRY_BUILTINS 1
 #endif
@@ -46,7 +48,7 @@ static inline uint64_t z_word_subb(uint64_t a, uint64_t b, uint64_t bin, uint64_
 static uint64_t z_word_divwide(uint64_t hi, uint64_t lo, uint64_t d, uint64_t* rem) {
     if (d == 0) z_panic("divWide: division by zero");
     if (hi >= d) z_panic("divWide: the quotient does not fit a word (hi >= by)");
-#if defined(__SIZEOF_INT128__)
+#if defined(__SIZEOF_INT128__) && !defined(Z_WORD_PORTABLE)
     unsigned __int128 n = ((unsigned __int128)hi << 64) | lo;
     *rem = (uint64_t)(n % d);
     return (uint64_t)(n / d);

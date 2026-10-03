@@ -100,8 +100,9 @@ static uint64_t z_siphash_stringview(z_@StringView@_t v) {
 
 /* 64x64 -> 128 multiply, both halves. The __uint128_t form is one mulq on
    gcc/clang; the fallback is the same product in four 32-bit partial
-   products, for a C compiler with no 128-bit integer type. */
-#if defined(__SIZEOF_INT128__)
+   products, for a C compiler with no 128-bit integer type or a build that
+   defines Z_WORD_PORTABLE (see _Z_SYSTEM_WORD.inc). */
+#if defined(__SIZEOF_INT128__) && !defined(Z_WORD_PORTABLE)
 static inline void z_fh_mul128(uint64_t a, uint64_t b, uint64_t* lo, uint64_t* hi) {
     __uint128_t m = (__uint128_t)a * b;
     *lo = (uint64_t)m;

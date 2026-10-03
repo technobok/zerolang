@@ -519,3 +519,28 @@ How #~"BigFloat.text" spells a value, Go's format letters by name:
 #~"exponent" #~"'e'", #~"exponentUpper" #~"'E'", #~"fixed" #~"'f'",
 #~"general" #~"'g'", #~"generalUpper" #~"'G'", #~"hex" #~"'x'",
 #~"hexFraction" #~"'p'" and #~"binary" #~"'b'".
+
+
+#--: Performance and toolchains
+
+The loops every operation rests on -- add, subtract, shift and
+multiply-and-add over runs of 64-bit words -- are C, in
+#~"src/runtime/natives/_Z_MATH_ARITH.inc", a port of Go's portable loops;
+the rest of #~"math" is zerolang. The loops step through the #~"system"
+word primitives, and those take a C compiler's fast forms where it has
+them: #~"unsigned __int128" for the two-word product and
+#~"__builtin_addcll" / #~"__builtin_subcll" for a carry chain, which gcc
+and clang lower to mul, adc and sbb on x86-64 and to umulh and adcs on
+aarch64. Elsewhere the primitives are portable C -- the product in four
+32-bit pieces, the carry by comparison. Both give the same words, and the
+corpus holds both to the same goldens.
+
+tcc always takes the portable forms: it has no #~"__int128" and no carry
+builtins, and its assembler knows no MULX, ADCX or ADOX. #~"math" is as
+correct under tcc and slower; build with gcc or clang, #~"--release", for
+speed.
+
+#~"make bench-math" times each operation at sizes from 1 to 100,000 words
+in three builds: gcc with the fast forms, gcc with #~"-DZ_WORD_PORTABLE"
+forcing the portable ones, and tcc. #~"make test-math-arm64" builds the
+math corpus with #~"--target aarch64-linux-gnu" and runs it under qemu.

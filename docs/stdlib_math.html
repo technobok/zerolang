@@ -105,6 +105,8 @@ Table of Contents</div>
 </li>
 <li><a href="#floatformat">floatformat</a>
 </li>
+<li><a href="#performance-and-toolchains">Performance and toolchains</a>
+</li>
 </ul>
 </li>
 </ul>
@@ -479,6 +481,26 @@ or <code>above</code>, as a <code>BigFloat</code>'s <code>acc</code> reports it.
 <code>exponent</code> <code>'e'</code>, <code>exponentUpper</code> <code>'E'</code>, <code>fixed</code> <code>'f'</code>,
 <code>general</code> <code>'g'</code>, <code>generalUpper</code> <code>'G'</code>, <code>hex</code> <code>'x'</code>,
 <code>hexFraction</code> <code>'p'</code> and <code>binary</code> <code>'b'</code>.</p>
+<h2 id="performance-and-toolchains"><a href="#performance-and-toolchains">13. Performance and toolchains</a></h2>
+<p>The loops every operation rests on -- add, subtract, shift and
+multiply-and-add over runs of 64-bit words -- are C, in
+<code>src/runtime/natives/_Z_MATH_ARITH.inc</code>, a port of Go's portable loops;
+the rest of <code>math</code> is zerolang. The loops step through the <code>system</code>
+word primitives, and those take a C compiler's fast forms where it has
+them: <code>unsigned __int128</code> for the two-word product and
+<code>__builtin_addcll</code> / <code>__builtin_subcll</code> for a carry chain, which gcc
+and clang lower to mul, adc and sbb on x86-64 and to umulh and adcs on
+aarch64. Elsewhere the primitives are portable C -- the product in four
+32-bit pieces, the carry by comparison. Both give the same words, and the
+corpus holds both to the same goldens.</p>
+<p>tcc always takes the portable forms: it has no <code>__int128</code> and no carry
+builtins, and its assembler knows no MULX, ADCX or ADOX. <code>math</code> is as
+correct under tcc and slower; build with gcc or clang, <code>--release</code>, for
+speed.</p>
+<p><code>make bench-math</code> times each operation at sizes from 1 to 100,000 words
+in three builds: gcc with the fast forms, gcc with <code>-DZ_WORD_PORTABLE</code>
+forcing the portable ones, and tcc. <code>make test-math-arm64</code> builds the
+math corpus with <code>--target aarch64-linux-gnu</code> and runs it under qemu.</p>
 </main>
 </body>
 </html>
