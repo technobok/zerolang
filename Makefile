@@ -2074,7 +2074,10 @@ perf: $(PERFBIN)
 #
 # +265 another unit's constant converts as written there: +32 behaviour,
 # +233 source.
-ALLOC_BASELINE := 2220828
+#
+# +789 math's constants (pi, e, ln2 ...) and the float conversion docs: 0
+# behaviour, +789 source.
+ALLOC_BASELINE := 2221617
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

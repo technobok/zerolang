@@ -85,8 +85,6 @@ Table of Contents</div>
 </li>
 <li><a href="#compile-time-numeric-constant-types">compile-time numeric constant types</a>
 </li>
-<li><a href="#arbitrary-precision-constant-arithmetic">arbitrary-precision constant arithmetic</a>
-</li>
 <li><a href="#single-constructor-for-unions">single  constructor for unions</a>
 </li>
 <li><a href="#meta-namespace">meta namespace</a>
@@ -201,48 +199,7 @@ it may not fit. Default (result of 'call') is c8</li>
 (supported methods: u8 i8 u16 i16 u32 i32 u64 i64 u128 i128 c8 c32). Default
 (result of 'call') is c32</li>
 </ul>
-<h2 id="arbitrary-precision-constant-arithmetic"><a href="#arbitrary-precision-constant-arithmetic">3. arbitrary-precision constant arithmetic</a></h2>
-<p>The section above asks what TYPE a constant has. This asks what VALUE the
-compiler can hold while it works one out.</p>
-<p>Decided 2026-10-03, and being built as the <code>math</code> arc: the compiler's
-constants are computed with a standard-library <code>math</code> unit -- a port of Go's
-<code>math/big</code> -- which the compiler uses as any other program would. The
-standard library is not special, so a <code>BigInt</code> good enough for the
-evaluator is good enough to ship.</p>
-<ul>
-<li>integer constants are exact up to 512 bits of magnitude; past that is a
-    constant overflow, as in Go.</li>
-<li>untyped float constants are exact fractions. Once a numerator or a
-    denominator passes 4096 bits they fall back to a binary float with a
-    512-bit mantissa (go/constant's model, wide enough for <code>f128</code>'s
-    exponent range).</li>
-<li>a literal landing in a float slot -- an integer literal included --
-    rounds to nearest-even; only an overflow to an infinity and a nonzero
-    value that underflows to zero are refused.</li>
-<li>a hex, octal or binary literal defaults to <code>u64</code>, and <code>1e3</code> is a
-    float literal.</li>
-<li>untyped shifts are exact like every other untyped operator:
-    <code>1 &lt;&lt; 64</code> is <code>2^64</code>, range-checked where it lands. A typed shift keeps
-    its width.</li>
-<li>a typed constant keeps folding in its own type.</li>
-</ul>
-<p>The digits live beside the string pool. <code>cval</code> stays a valtype -- it copies
-out of a stamp table instead of handing back a borrow -- and carries an id
-into an id-keyed table in <code>ZTyping</code> with the sentinel at row 0, as
-<code>strId</code> indexes <code>constStrings</code>. The range check moves to ONE place, the
-coercion boundary where a value meets a concrete type, so
-<code>constant integer operation overflows</code> names the DESTINATION rather than
-the evaluator's limit.</p>
-<h5 id="until-then">until then</h5>
-<p>The integer half is built: an integer constant is exact to 512 bits, each
-untyped value is checked where it lands, naming that type, and a typed one
-folds in its own -- <code>u64</code> and the 128-bit types included. An untyped
-shift is exact (<code>1 &lt;&lt; 64</code> is 2^64), and a hex, octal or binary literal is a
-<code>u64</code> where nothing gives it a type. What waits is the float half: the
-evaluator holds a float as an <code>f64</code>, so an <code>f128</code> constant carries its
-literal's exact spelling, which is what the C is given, and no comparison of
-<code>f128</code> constants folds.</p>
-<h2 id="single-constructor-for-unions"><a href="#single-constructor-for-unions">4. single <code>create</code> constructor for unions</a></h2>
+<h2 id="single-constructor-for-unions"><a href="#single-constructor-for-unions">3. single <code>create</code> constructor for unions</a></h2>
 <p>Could a union have a single <code>create</code> constructor that takes one argument of
 any valid subtype? It would match the first subtype whose type matches the
 argument. Would fail at compile time if more than one subtype matches the
@@ -260,7 +217,7 @@ c: Result.create "hello"  # matches err (string)
 <p>Open questions: how to handle null subtypes (no argument)? How to handle
 generic subtypes where the type may not be known? Is the convenience worth
 the potential ambiguity?</p>
-<h2 id="meta-namespace"><a href="#meta-namespace">5. meta namespace</a></h2>
+<h2 id="meta-namespace"><a href="#meta-namespace">4. meta namespace</a></h2>
 <p><code>meta.create</code> is the only part of this implemented today -- the canonical
 constructor for every object type (the one raw allocator; user constructors
 route through it). The remaining <code>meta.*</code> surfaces below are open proposals,
@@ -344,7 +301,7 @@ use defines?)</p>
 </ul>
 <p>meta.error: force a compile time error?</p>
 <p>TODO: move 'type' to 'meta.type'?</p>
-<h2 id="finalizers-or-user-named-destructors"><a href="#finalizers-or-user-named-destructors">6. finalizers, or user-named destructors?</a></h2>
+<h2 id="finalizers-or-user-named-destructors"><a href="#finalizers-or-user-named-destructors">5. finalizers, or user-named destructors?</a></h2>
 <p>Moved out of <code>spec.pdoc</code>, where it sat as a section describing one model with
 a <code>TODO</code> at the top saying the other was intended. Neither is implemented as a
 surface feature: the compiler generates and calls a destructor for any type
@@ -370,7 +327,7 @@ whose fields need cleaning up, and nothing in the language names it.</p>
         s.subreftype
     }
 }</code></pre>
-<h2 id="higher-kinded-types"><a href="#higher-kinded-types">7. higher-kinded types?</a></h2>
+<h2 id="higher-kinded-types"><a href="#higher-kinded-types">6. higher-kinded types?</a></h2>
 <p>How would this even look? A generic field that takes a generic field as an
 argument?...</p>
 <pre><code class="language-zerolang">R: class {
@@ -378,7 +335,7 @@ argument?...</p>
   j: generic # ...
 
 }</code></pre>
-<h2 id="deep-copy-for-user-defined-reftypes"><a href="#deep-copy-for-user-defined-reftypes">8. deep copy for user-defined reftypes</a></h2>
+<h2 id="deep-copy-for-user-defined-reftypes"><a href="#deep-copy-for-user-defined-reftypes">7. deep copy for user-defined reftypes</a></h2>
 <p><code>.copy</code> is declared on <code>String</code> and on the six all-valtype containers
 (<code>ListVal</code> and <code>Bytes</code>, <code>SetVal</code>, <code>MapVV</code>, <code>IdMapV</code>,
 <code>IdSet</code>), and it is the compiler-provided default on a valtype. A
@@ -397,7 +354,7 @@ knows destroy but not copy today). Until then the idioms are
 <code>.take</code> for transfer and field-by-field construction for real
 duplication; the json unit's scalar-only accessors are an example of
 designing around the gap.</p>
-<h2 id="bare-option-result-names-as-their-falsy-arms"><a href="#bare-option-result-names-as-their-falsy-arms">9. bare Option/Result names as their falsy arms</a></h2>
+<h2 id="bare-option-result-names-as-their-falsy-arms"><a href="#bare-option-result-names-as-their-falsy-arms">8. bare Option/Result names as their falsy arms</a></h2>
 <p>The zero-value rule (spec: Implicit Construction, Zero Values) gives
 bare type names in runtime value position a zero-argument
 construction. Unions deliberately stay excluded: a bare
@@ -412,7 +369,7 @@ error currently teaches the arm-construction form. Open: whether
 payload-less-falsy-arm unions (Option-shaped) should default at all,
 and if so whether only in binding position. Until decided, every
 union/variant keeps the arm-selection error.</p>
-<h2 id="reference-yields-from-generators"><a href="#reference-yields-from-generators">10. reference yields from generators</a></h2>
+<h2 id="reference-yields-from-generators"><a href="#reference-yields-from-generators">9. reference yields from generators</a></h2>
 <p>A generator's <code>call</code> is declared <code>out T</code> and the lowering wraps <code>T</code>
 in an <code>Option</code>; a <code>.borrow</code> or <code>.view</code> leaf on that type
 (<code>call: function out Bag.borrow is { yield this.bag }</code>) is refused
@@ -434,7 +391,7 @@ copies; and whether a valtype leaf may be yielded by reference at all.
 Until decided, a generator yields owned values only, and a reference
 into its captured state is exposed through an ordinary <code>outx</code> method
 instead.</p>
-<h2 id="short-circuit-disjunction"><a href="#short-circuit-disjunction">11. short-circuit disjunction</a></h2>
+<h2 id="short-circuit-disjunction"><a href="#short-circuit-disjunction">10. short-circuit disjunction</a></h2>
 <p><code>if a when b then</code> is the short-circuit conjunction: <code>b</code> runs only
 when <code>a</code> held. <code>bool</code>'s <code>or</code> is a call and evaluates both
 operands, so a guarded disjunction -- "empty, or its first byte is a
@@ -457,7 +414,7 @@ if ((s.byteAt 0).or d: 0) == 32 then return true
 # the clause, if it is built
 if s.isEmpty else when ((s.byteAt 0).or d: 0) == 32 then return true</code></pre>
 <p>Still open: whether it is built at all.</p>
-<h2 id="a-view-pins-its-owner"><a href="#a-view-pins-its-owner">12. a view pins its owner</a></h2>
+<h2 id="a-view-pins-its-owner"><a href="#a-view-pins-its-owner">11. a view pins its owner</a></h2>
 <p>A view (<code>.view</code>, or the <code>outx</code> result of a <code>get</code>) locks the place it
 was read from for as long as it lives, and a call that lends the whole
 owner -- <code>ctx</code>, <code>ast</code>, <code>st</code> -- is then refused while it does. Code
