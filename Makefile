@@ -2024,7 +2024,10 @@ perf: $(PERFBIN)
 # +99,147 source -- the compiler compiles math now (+90,931 for BigInt alone, measured
 # before: its methods are demanded by owner, so all of it), and the exact
 # reading, folding and landing checks.
-ALLOC_BASELINE := 2140204
+#
+# +178 a refused constant's conversion types its stand-in: 0 behaviour, +178
+# source.
+ALLOC_BASELINE := 2140382
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
