@@ -1,0 +1,296 @@
+# Copyright 2016 The Go Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE-GO file.
+#
+# Ported from Go's src/math/big/prime.go at 577b91f341 (2026-09-30) on
+# 2026-10-03: probable primes, by Miller-Rabin and the almost extra strong
+# Lucas test -- together a Baillie-PSW test. Go draws its Miller-Rabin bases
+# from math/rand seeded by the number's low word; this draws them from
+# SplitMix64 seeded the same way, so the bases differ from Go's but are as
+# fixed for a given number.
+
+# Rng -- a SplitMix64 generator: one word of state, advanced by a constant
+Rng: class {
+    # the generator's state
+    state: u64
+} as {
+    # next -- the next pseudorandom word
+    next: function {:this} out u64 is {
+        this.state = this.state + 11400714819323198485
+        z: this.state
+        z = ((z ^ (z >> 30)).mulWide rhs: 13787848793156543929).lo
+        z = ((z ^ (z >> 27)).mulWide rhs: 10723151780598845931).lo
+        return z ^ (z >> 31)
+    }
+}
+
+# natRandom -- z = a pseudorandom number below limit, of at most n bits
+# (limit's length): words of the generator, the top one masked, drawn again
+# until below the limit
+natRandom: function {
+    z: (ListVal u64).borrow rng: Rng.borrow limit: (ListViewVal u64).view n: u64
+} is {
+    bits: n % 64
+    if bits == 0 then bits = 64
+    mask: 18446744073709551615.u64
+    if bits < 64 then mask = (1.u64 << bits) - 1
+    for true loop {
+        z.resize to: limit.length
+        i: u64
+        for i < limit.length loop {
+            z.set :i val: rng.next
+            i = i + 1
+        }
+        z.set i: limit.length - 1 val: (z.get i: limit.length - 1) & mask
+        nat.natNorm :z
+        if (nat.natCmp x: z.listView y: limit) < 0 then return
+    }
+}
+
+# probablyPrimeMillerRabin -- whether n passes reps rounds of Miller-Rabin
+# (Handbook of Applied Cryptography, Algorithm 4.24), the last with base 2
+# when force2; n is not zero
+probablyPrimeMillerRabin: function {n: (ListViewVal u64).view reps: u64 force2: bool} out bool is {
+    nm1: ListVal u64
+    nat.natSubWord z: nm1 x: n w: 1
+    # nm1 = q << k
+    k: nat.natTrailingZeroBits x: nm1.listView
+    q: ListVal u64
+    nat.natRsh z: q x: nm1.listView s: k
+    nm3: ListVal u64
+    nat.natSubWord z: nm3 x: nm1.listView w: 2
+    rng: Rng state: (n.get i: 0)
+    nm3Len: nat.natBitLen x: nm3.listView
+    i: u64
+    for i < reps loop {
+        x: ListVal u64
+        if (i == (reps - 1)) and force2 then {
+            nat.natSetWord z: x x: 2
+        } else {
+            r: ListVal u64
+            natRandom z: r :rng limit: nm3.listView n: nm3Len
+            nat.natAddWord z: x x: r.listView w: 2
+        }
+        y: ListVal u64
+        natexp.natExp z: y x: x.listView y: q.listView m: n
+        if (
+            (isWord x: y.listView w: 1).not and ((nat.natCmp x: y.listView y: nm1.listView) != 0)
+        ) then {
+            witnessed: true
+            j: 1.u64
+            for j < k loop {
+                sq: ListVal u64
+                natmul.natSqr z: sq x: y.listView
+                qq: ListVal u64
+                rr: ListVal u64
+                natdiv.natDiv q: qq r: rr u: sq.listView v: n
+                y swap rr
+                if (nat.natCmp x: y.listView y: nm1.listView) == 0 then {
+                    witnessed = false
+                    break
+                }
+                if (isWord x: y.listView w: 1) then return false
+                j = j + 1
+            }
+            if witnessed then return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+# isWord -- x == w for a nonzero word w
+isWord: function {x: (ListViewVal u64).view w: u64} out bool is {
+    if x.length != 1 then return false
+    return (x.get i: 0) == w
+}
+
+# probablyPrimeLucas -- whether n passes the almost extra strong Lucas test,
+# with Baillie-OEIS method C for the parameters: the first P >= 3 for which
+# D = P^2 - 4 has Jacobi symbol (D/n) = -1, and Q = 1
+probablyPrimeLucas: function {n: (ListViewVal u64).view} out bool is {
+    if (n.length == 0) or (isWord x: n w: 1) then return false
+    if ((n.get i: 0) & 1) == 0 then return (isWord x: n w: 2)
+    p: 3.u64
+    for true loop {
+        if p > 10000 then panic msg: "math: internal error: cannot find (D/n) = -1"
+        j: jacobiWords x: p * p - 4 :n
+        if j == -1 then break
+        # d = (p-2)(p+2) shares a factor with n, and it must be p+2: n is prime
+        # only when it is p+2 itself
+        if j == 0 then return (isWord x: n w: p + 2)
+        # after 40 tries, an n that is a square never gives -1
+        if p == 40 then {
+            rt: ListVal u64
+            natexp.natSqrt z: rt x: n
+            sq: ListVal u64
+            natmul.natSqr z: sq x: rt.listView
+            if (nat.natCmp x: sq.listView y: n) == 0 then return false
+        }
+        p = p + 1
+    }
+    # s = (n + 1) / 2^r
+    s: ListVal u64
+    nat.natAddWord z: s x: n w: 1
+    r: nat.natTrailingZeroBits x: s.listView
+    {
+        s1: ListVal u64
+        nat.natRsh z: s1 x: s.listView s: r
+        s swap s1
+    }
+    nm2: ListVal u64
+    nat.natSubWord z: nm2 x: n w: 2
+    # V(s) by doubling: V(2k) = V(k)^2 - 2, V(2k+1) = V(k)V(k+1) - P
+    vk: ListVal u64
+    nat.natSetWord z: vk x: 2
+    vk1: ListVal u64
+    nat.natSetWord z: vk1 x: p
+    i: (nat.natBitLen x: s.listView) + 1
+    for i > 0 loop {
+        i = i - 1
+        mid: ListVal u64
+        lucasProduct z: mid a: vk.listView b: vk1.listView :p :n
+        if (nat.natBit x: s.listView :i) != 0 then {
+            vk swap mid
+            dbl: ListVal u64
+            lucasSquare z: dbl a: vk1.listView nm2: nm2.listView :n
+            vk1 swap dbl
+        } else {
+            vk1 swap mid
+            dbl: ListVal u64
+            lucasSquare z: dbl a: vk.listView nm2: nm2.listView :n
+            vk swap dbl
+        }
+    }
+    # V(s) == +-2: then U(s) == 0 iff P V(s) == 2 V(s+1) mod n
+    if (isWord x: vk.listView w: 2) or ((nat.natCmp x: vk.listView y: nm2.listView) == 0) then {
+        t1: ListVal u64
+        natmul.natMulAddWW z: t1 x: vk.listView y: p r: 0
+        t2: ListVal u64
+        nat.natLsh z: t2 x: vk1.listView s: 1
+        d: ListVal u64
+        if (nat.natCmp x: t1.listView y: t2.listView) >= 0 then {
+            nat.natSub z: d x: t1.listView y: t2.listView
+        } else {
+            nat.natSub z: d x: t2.listView y: t1.listView
+        }
+        qq: ListVal u64
+        rr: ListVal u64
+        natdiv.natDiv q: qq r: rr u: d.listView v: n
+        if rr.length == 0 then return true
+    }
+    # V(2^t s) == 0 mod n for some 0 <= t < r - 1
+    t: u64
+    for (t + 1) < r loop {
+        if vk.length == 0 then return true
+        # 2 is a fixed point of V(2k) = V(k)^2 - 2: no later V can be 0
+        if (isWord x: vk.listView w: 2) then return false
+        sq: ListVal u64
+        natmul.natSqr z: sq x: vk.listView
+        two: ListVal u64
+        nat.natSetWord z: two x: 2
+        sm: ListVal u64
+        nat.natSub z: sm x: sq.listView y: two.listView
+        qq: ListVal u64
+        rr: ListVal u64
+        natdiv.natDiv q: qq r: rr u: sm.listView v: n
+        vk swap rr
+        t = t + 1
+    }
+    return false
+}
+
+# lucasProduct -- z = (a*b + n - p) mod n: V(k)V(k+1) - P
+lucasProduct: function {
+    z: (ListVal u64).borrow
+    a: (ListViewVal u64).view
+    b: (ListViewVal u64).view
+    p: u64
+    n: (ListViewVal u64).view
+} is {
+    t: ListVal u64
+    natmul.natMul z: t x: a y: b
+    u: ListVal u64
+    nat.natAdd z: u x: t.listView y: n
+    w: ListVal u64
+    nat.natSubWord z: w x: u.listView w: p
+    q: ListVal u64
+    natdiv.natDiv :q r: z u: w.listView v: n
+}
+
+# lucasSquare -- z = (a^2 + n - 2) mod n: V(k)^2 - 2
+lucasSquare: function {
+    z: (ListVal u64).borrow
+    a: (ListViewVal u64).view
+    nm2: (ListViewVal u64).view
+    n: (ListViewVal u64).view
+} is {
+    t: ListVal u64
+    natmul.natSqr z: t x: a
+    u: ListVal u64
+    nat.natAdd z: u x: t.listView y: nm2
+    q: ListVal u64
+    natdiv.natDiv :q r: z u: u.listView v: n
+}
+
+# jacobiWords -- the Jacobi symbol (x/n) for a word x and an odd n > 0, as Go's
+# Jacobi (the Yacas formulation): -1, 0 or 1
+jacobiWords: function {x: u64 n: (ListViewVal u64).view} out i32 is {
+    a: ListVal u64
+    nat.natSetWord z: a :x
+    b: ListVal u64
+    nat.natSet z: b x: n
+    j: 1.i32
+    for true loop {
+        if (isWord x: b.listView w: 1) then return j
+        if a.length == 0 then return 0
+        {
+            qq: ListVal u64
+            rr: ListVal u64
+            natdiv.natDiv q: qq r: rr u: a.listView v: b.listView
+            a swap rr
+        }
+        if a.length == 0 then return 0
+        # the factors of 2 in a
+        s: nat.natTrailingZeroBits x: a.listView
+        if (s & 1) != 0 then {
+            bmod8: (b.get i: 0) & 7
+            if (bmod8 == 3) or (bmod8 == 5) then j = 0 - j
+        }
+        c: ListVal u64
+        nat.natRsh z: c x: a.listView :s
+        # swap numerator and denominator
+        if ((b.get i: 0) & 3) == 3 when ((c.get i: 0) & 3) == 3 then j = 0 - j
+        a swap b
+        b swap c
+    }
+}
+
+# natProbablyPrime -- Go's ProbablyPrime on a natural number: the primes
+# below 64 by a mask, small factors by two word remainders, then n + 1 rounds
+# of Miller-Rabin and the Lucas test
+natProbablyPrime: function {x: (ListViewVal u64).view n: u64} out bool is {
+    if x.length == 0 then return false
+    w: x.get i: 0
+    if x.length == 1 when w < 64 then {
+        mask: 2891462833508853932.u64
+        return ((mask >> w) & 1) == 1
+    }
+    if (w & 1) == 0 then return false
+    # primesA = 3*5*7*11*13*17*19*23*37, primesB = 29*31*41*43*47*53
+    primesA: 4127218095.u64
+    primesB: 3948078067.u64
+    q: ListVal u64
+    rw: natdiv.natDivW z: q :x y: (primesA.mulWide rhs: primesB).lo
+    ra: rw % primesA
+    rb: rw % primesB
+    if ((ra % 3) == 0) or ((ra % 5) == 0) or ((ra % 7) == 0) or ((ra % 11) == 0) then return false
+    if (
+        ((ra % 13) == 0) or ((ra % 17) == 0) or ((ra % 19) == 0) or ((ra % 23) == 0)
+    ) then return false
+    if (
+        ((ra % 37) == 0) or ((rb % 29) == 0) or ((rb % 31) == 0) or ((rb % 41) == 0)
+    ) then return false
+    if ((rb % 43) == 0) or ((rb % 47) == 0) or ((rb % 53) == 0) then return false
+    return (probablyPrimeMillerRabin n: x reps: n + 1 force2: true) and (probablyPrimeLucas n: x)
+}

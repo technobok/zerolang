@@ -330,6 +330,118 @@ BigInt: class {
         return (nat.natTrailingZeroBits x: t.words.listView)
     }
 
+    # this^y mod |m|, or this^y when m is zero, as Go's Exp: the plain power is
+    # 1 for y <= 0. A negative y with a modulus raises this's inverse mod m to
+    # |y|, and panics when there is none. With a modulus the result lies in
+    # [0, |m|)
+    exp: function {t: this.view y: BigInt.view m: BigInt.view} out BigInt is {
+        if y.negative and (m.words.length == 0) then return (BigInt from: 1)
+        base: t.copy
+        if y.negative then {
+            inv: t.modInverse n: m
+            match (
+                inv
+            ) case some then {
+                base = inv.take
+            } case none then {
+                panic msg: "math: exp with a negative exponent of a value with no inverse"
+            }
+        }
+        r: ListVal u64
+        natexp.natExp z: r x: base.words.listView y: y.words.listView m: m.words.listView
+        odd: false
+        if y.words.length > 0 then odd = ((y.words.get i: 0) & 1) == 1
+        neg: base.negative and odd and (r.length > 0)
+        if neg when m.words.length > 0 then {
+            # into [0, |m|)
+            r1: ListVal u64
+            nat.natSub z: r1 x: m.words.listView y: r.listView
+            return (BigInt.fromParts neg: false abs: r1.take)
+        }
+        return (BigInt.fromParts :neg abs: r.take)
+    }
+
+    # the greatest common divisor of the two, never negative: |this| when y is
+    # zero, |y| when this is
+    gcd: function {t: this.view y: BigInt.view} out BigInt is {
+        g: gcdOf a: t b: y extended: false
+        return g.gcd.copy
+    }
+
+    # the greatest common divisor and the cofactors x, y with
+    # gcd == this*x + other*y, as Go's GCD answers them
+    gcdExtended: function {t: this.view y: BigInt.view} out BigGCD is {
+        return (gcdOf a: t b: y extended: true)
+    }
+
+    # the inverse of this mod |n|, in [0, |n|), when the two are coprime; none
+    # when they are not. Panics on a zero n
+    modInverse: function {t: this.view n: BigInt.view} out Option BigInt is {
+        if n.words.length == 0 then panic msg: "division by zero"
+        nn: n.abs
+        g: t.copy
+        if g.negative then g = g.mod by: nn
+        r: gcdOf a: g b: nn extended: true
+        # `or` reads both sides, so the word is read only once there is one
+        if r.gcd.words.length != 1 then return (Option BigInt).none
+        if (r.gcd.words.get i: 0) != 1 then return (Option BigInt).none
+        inv: r.x.copy
+        if inv.negative then inv.add nn
+        return ((Option BigInt).some inv)
+    }
+
+    # floor(sqrt(this)), the largest integer whose square is at most this.
+    # Panics on a negative value
+    sqrt: function {t: this.view} out BigInt is {
+        if t.negative then panic msg: "square root of negative number"
+        r: ListVal u64
+        natexp.natSqrt z: r x: t.words.listView
+        return (BigInt.fromParts neg: false abs: r.take)
+    }
+
+    # the Jacobi symbol (this/y), -1, 0 or 1, for an odd y -- as Go's Jacobi.
+    # Panics on an even y
+    jacobi: function {t: this.view y: BigInt.view} out i32 is {
+        even: true
+        if y.words.length > 0 then even = ((y.words.get i: 0) & 1) == 0
+        if even then panic msg: "big: invalid 2nd argument to jacobi: need odd integer"
+        a: t.copy
+        b: y.copy
+        j: 1.i32
+        if b.negative then {
+            if a.negative then j = -1
+            b.negative = false
+        }
+        one: BigInt from: 1
+        for true loop {
+            if b == one then return j
+            if a.words.length == 0 then return 0
+            a = a.mod by: b
+            if a.words.length == 0 then return 0
+            # the factors of 2 in a
+            s: a.trailingZeros
+            if (s & 1) != 0 then {
+                bmod8: (b.words.get i: 0) & 7
+                if (bmod8 == 3) or (bmod8 == 5) then j = 0 - j
+            }
+            c: a >> s
+            # swap numerator and denominator
+            if ((b.words.get i: 0) & 3) == 3 when ((c.words.get i: 0) & 3) == 3 then j = 0 - j
+            a = b.copy
+            b = c.copy
+        }
+    }
+
+    # whether this is probably prime, as Go's ProbablyPrime: n rounds of
+    # Miller-Rabin with pseudorandom bases and a Baillie-PSW test. A prime always
+    # answers true; a composite chosen at random answers true with probability at
+    # most 4^-n, and none below 2^64 ever does. Not for a number an adversary
+    # chose
+    probablyPrime: function {t: this.view n: u64} out bool is {
+        if t.negative then return false
+        return (prime.natProbablyPrime x: t.words.listView :n)
+    }
+
     # add -- this += x, in place: the accumulator form for a loop
     add: function {:this x: BigInt.view} is {
         r: ListVal u64
@@ -522,9 +634,9 @@ divideInto: function {
 signedSum: function {
     z: (ListVal u64).borrow
     xNeg: bool
-    x: ListViewVal u64
+    x: (ListViewVal u64).view
     yNeg: bool
-    y: ListViewVal u64
+    y: (ListViewVal u64).view
 } out bool is {
     if xNeg == yNeg then {
         nat.natAdd :z :x :y
@@ -616,4 +728,204 @@ bitwise: function {x: BigInt.view y: BigInt.view op: nat.bitop} out BigInt is {
         return (BigInt.fromParts :neg abs: r1.take)
     }
     return (BigInt.fromParts :neg abs: r.take)
+}
+
+# BigGCD -- a greatest common divisor and its cofactors: gcd == a*x + b*y
+BigGCD: class {
+    # the greatest common divisor, never negative
+    gcd: BigInt
+    # a's cofactor
+    x: BigInt
+    # b's cofactor
+    y: BigInt
+}
+
+# the cosequence words lehmerSimulate answers
+cosequence: record {
+    # the words A's update takes
+    u0: u64
+    # the words B's update takes
+    u1: u64
+    # the words A's update takes from B
+    v0: u64
+    # the words B's update takes from B
+    v1: u64
+    # the signs: u0, v1 >= 0 and u1, v0 <= 0 when even, the other way round
+    # when not
+    even: bool
+}
+
+# gcdOf -- gcd(a, b) and, when extended, its cofactors, as Go's GCD: |b| for
+# a zero a and |a| for a zero b, else Lehmer's algorithm (Knuth 4.5.2,
+# Algorithm L, with Collins' condition after Jebelean, and the cosequences of
+# Cohen et al., Algorithm 10.45)
+gcdOf: function {a: BigInt.view b: BigInt.view extended: bool} out BigGCD is {
+    if (a.words.length == 0) or (b.words.length == 0) then {
+        g: a.abs
+        if a.words.length == 0 then g = b.abs
+        x: BigInt from: 0
+        if a.words.length > 0 then {
+            x = BigInt from: 1
+            if a.negative then x = x.neg
+        }
+        y: BigInt from: 0
+        if b.words.length > 0 then {
+            y = BigInt from: 1
+            if b.negative then y = y.neg
+        }
+        return (BigGCD gcd: g :x :y)
+    }
+    aa: a.abs
+    bb: b.abs
+    ua: BigInt from: 0
+    ub: BigInt from: 0
+    if extended then ua = BigInt from: 1
+    # A >= B
+    if (aa.compare rhs: bb) < 0 then {
+        aa swap bb
+        ua swap ub
+    }
+    for bb.words.length > 1 loop {
+        cs: lehmerSimulate a: aa b: bb
+        if cs.v0 != 0 then {
+            # A = u0*A + v0*B, B = u1*A + v1*B, the cosequences too
+            lehmerUpdate a: aa b: bb :cs
+            if extended then lehmerUpdate a: ua b: ub :cs
+        } else {
+            # no quotient simulated: one plain Euclidean step
+            euclidUpdate a: aa b: bb :ua :ub :extended
+        }
+    }
+    if bb.words.length > 0 then {
+        if aa.words.length > 1 then euclidUpdate a: aa b: bb :ua :ub :extended
+        if bb.words.length > 0 then {
+            # A and B both single words
+            aw: aa.words.get i: 0
+            bw: bb.words.get i: 0
+            if extended then {
+                cua: 1.u64
+                cub: u64
+                cva: u64
+                cvb: 1.u64
+                even: true
+                for bw != 0 loop {
+                    q: aw / bw
+                    r: aw % bw
+                    aw = bw
+                    bw = r
+                    nub: cua + (q * cub)
+                    cua = cub
+                    cub = nub
+                    nvb: cva + (q * cvb)
+                    cva = cvb
+                    cvb = nvb
+                    even = even.not
+                }
+                na: mulW x: ua neg: even.not w: cua
+                nb: mulW x: ub neg: even w: cva
+                ua = na + nb
+            } else {
+                for bw != 0 loop {
+                    r: aw % bw
+                    aw = bw
+                    bw = r
+                }
+            }
+            aa = BigInt from: aw
+        }
+    }
+    x: ua.copy
+    if a.negative then x = x.neg
+    y: BigInt from: 0
+    if extended then {
+        # y = (gcd - a*x) / b
+        y = aa - (a * x) / b
+    }
+    return (BigGCD gcd: aa :x :y)
+}
+
+# mulW -- x * w with the sign flipped when neg: Go's mulW
+mulW: function {x: BigInt.view neg: bool w: u64} out BigInt is {
+    r: ListVal u64
+    natmul.natMulAddWW z: r x: x.words.listView y: w r: 0
+    return (BigInt.fromParts neg: (x.negative != neg) and (r.length > 0) abs: r.take)
+}
+
+# lehmerSimulate -- several Euclidean steps simulated on the leading word of A
+# and B (A >= B, B at least two words), as the cosequence that updates them:
+# Collins' stopping condition keeps every word in range
+lehmerSimulate: function {a: BigInt.view b: BigInt.view} out cosequence is {
+    m: b.words.length
+    n: a.words.length
+    h: (a.words.get i: n - 1).leadingZeros
+    a1: (a.words.get i: n - 1) << h
+    if h > 0 then a1 = a1 | ((a.words.get i: n - 2) >> (64.u64 - h))
+    a2: u64
+    if n == m then {
+        a2 = (b.words.get i: n - 1) << h
+        if h > 0 then a2 = a2 | ((b.words.get i: n - 2) >> (64.u64 - h))
+    } else if n == (m + 1) then {
+        if h > 0 then a2 = (b.words.get i: n - 2) >> (64.u64 - h)
+    }
+    even: false
+    u0: u64
+    u1: 1.u64
+    u2: u64
+    v0: u64
+    v1: u64
+    v2: 1.u64
+    for (a2 >= v2) and ((a1 - a2) >= (v1 + v2)) loop {
+        q: a1 / a2
+        r: a1 % a2
+        a1 = a2
+        a2 = r
+        nu: u1 + (q * u2)
+        u0 = u1
+        u1 = u2
+        u2 = nu
+        nv: v1 + (q * v2)
+        v0 = v1
+        v1 = v2
+        v2 = nv
+        even = even.not
+    }
+    return (cosequence :u0 :u1 :v0 :v1 :even)
+}
+
+# lehmerUpdate -- A = u0*A + v0*B and B = u1*A + v1*B at once, the signs from
+# the cosequence's parity
+lehmerUpdate: function {a: BigInt.borrow b: BigInt.borrow cs: cosequence} is {
+    q: mulW x: b neg: cs.even w: cs.v0
+    r: mulW x: a neg: cs.even w: cs.u1
+    na: mulW x: a neg: cs.even.not w: cs.u0
+    nb: mulW x: b neg: cs.even.not w: cs.v1
+    na.add q
+    nb.add r
+    setTo dst: a src: na
+    setTo dst: b src: nb
+}
+
+# setTo -- dst = src: a borrowed BigInt takes another's value, the words copied
+setTo: function {dst: BigInt.borrow src: BigInt.view} is {
+    dst.negative = src.negative
+    nat.natSet z: dst.words x: src.words.listView
+}
+
+# euclidUpdate -- one Euclidean step: A, B = B, A mod B, and when extended the
+# cosequence Ua, Ub = Ub, Ua - q*Ub
+euclidUpdate: function {
+    a: BigInt.borrow
+    b: BigInt.borrow
+    ua: BigInt.borrow
+    ub: BigInt.borrow
+    extended: bool
+} is {
+    d: a.divide by: b mode: rounding.roundingmode.toZero
+    if extended then {
+        nub: ua - (d.quo * ub)
+        setTo dst: ua src: ub
+        setTo dst: ub src: nub
+    }
+    setTo dst: a src: b
+    setTo dst: b src: d.rem
 }

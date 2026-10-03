@@ -1,0 +1,461 @@
+# Copyright 2009 The Go Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE-GO file.
+#
+# Ported from Go's src/math/big/nat.go at 577b91f341 (2026-09-30) on
+# 2026-10-03: exponentiation, x^y and x^y mod m -- square-and-multiply, a
+# 4-bit window for a power-of-two modulus, Montgomery multiplication for an
+# odd one, and the two joined by the Chinese Remainder Theorem for any other.
+
+# the window's width in bits: 16 powers of x are tabulated
+windowBits: 4.u64
+
+# natExp -- z = x^y, or x^y mod m when m is not empty. z must be none of the
+# operands
+natExp: function {
+    z: (ListVal u64).borrow
+    x: (ListViewVal u64).view
+    y: (ListViewVal u64).view
+    m: (ListViewVal u64).view
+} is {
+    # x^y mod 1 == 0, x^0 == 1, 0^y == 0, 1^y == 1
+    if m.length == 1 when (m.get i: 0) == 1 then {
+        z.resize to: 0
+        return
+    }
+    if y.length == 0 then {
+        nat.natSetWord :z x: 1
+        return
+    }
+    if x.length == 0 then {
+        z.resize to: 0
+        return
+    }
+    if x.length == 1 when (x.get i: 0) == 1 then {
+        nat.natSetWord :z x: 1
+        return
+    }
+    # x^1 == x, reduced mod m when there is one
+    if y.length == 1 when (y.get i: 0) == 1 then {
+        if m.length == 0 then {
+            nat.natSet :z :x
+            return
+        }
+        q: ListVal u64
+        natdiv.natDiv :q r: z u: x v: m
+        return
+    }
+    # a long exponent against a modulus: Montgomery for an odd one, the window
+    # for a power of two, the two through the CRT otherwise
+    if m.length != 0 when y.length > 1 then {
+        if ((m.get i: 0) & 1) == 1 then {
+            expMontgomery :z :x :y :m
+            return
+        }
+        logM: powerOfTwoLog x: m
+        if logM.some then {
+            expWindowed :z :x :y :logM
+            return
+        }
+        expMontgomeryEven :z :x :y :m
+        return
+    }
+    # square and multiply, from the bit below y's top bit down: each bit
+    # doubles the power, and a 1 adds x to it
+    cur: ListVal u64
+    nat.natSet z: cur :x
+    i: nat.natBitLen x: y
+    i = i - 1
+    for i > 0 loop {
+        i = i - 1
+        sq: ListVal u64
+        natmul.natSqr z: sq x: cur.listView
+        if (nat.natBit x: y :i) == 1 then {
+            p: ListVal u64
+            natmul.natMul z: p x: sq.listView y: x
+            sq swap p
+        }
+        if m.length != 0 then {
+            q: ListVal u64
+            r: ListVal u64
+            natdiv.natDiv :q :r u: sq.listView v: m
+            sq swap r
+        }
+        cur swap sq
+    }
+    nat.natSet :z x: cur.listView
+}
+
+# powerOfTwoLog -- n when x is 2^n, none otherwise
+powerOfTwoLog: function {x: (ListViewVal u64).view} out optionval u64 is {
+    if x.length == 0 then return (optionval.none u64)
+    i: x.length - 1
+    top: x.get :i
+    if top.popCount != 1 then return (optionval.none u64)
+    j: u64
+    for j < i loop {
+        if (x.get i: j) != 0 then return (optionval.none u64)
+        j = j + 1
+    }
+    return (optionval.some i * 64 + top.trailingZeros)
+}
+
+# truncInPlace -- z mod 2^n: z cut to its low n bits
+truncInPlace: function {z: (ListVal u64).borrow n: u64} is {
+    words: n + 63 / 64
+    if z.length > words then z.resize to: words
+    if z.length == words when (n % 64) != 0 then {
+        z.set i: words - 1 val: (z.get i: words - 1) & ((1.u64 << (n % 64)) - 1)
+    }
+    nat.natNorm :z
+}
+
+# expWindowed -- z = x^y mod 2^logM, a 4-bit window at a time: x's first 16
+# powers tabulated, and per window four squarings and one product. Since
+# x^(2^(logM-1)) == 1 mod 2^logM, only y's low logM - 1 bits matter
+expWindowed: function {
+    z: (ListVal u64).borrow
+    x: (ListViewVal u64).view
+    y: (ListViewVal u64).view
+    logM: u64
+} is {
+    if y.length <= 1 then panic msg: "big: misuse of expWindowed"
+    # an even x: x^y is a multiple of 2^y, and so of 2^logM
+    if ((x.get i: 0) & 1) == 0 then {
+        z.resize to: 0
+        return
+    }
+    if logM == 1 then {
+        nat.natSetWord :z x: 1
+        return
+    }
+    powers: List (ListVal u64)
+    {
+        p0: ListVal u64
+        nat.natSetWord z: p0 x: 1
+        powers.append p0.take
+        p1: ListVal u64
+        nat.natSet z: p1 :x
+        truncInPlace z: p1 n: logM
+        powers.append p1.take
+    }
+    k: 2.u64
+    for k < 16 loop {
+        pk: ListVal u64
+        natmul.natSqr z: pk x: (powers.get i: k / 2).listView
+        truncInPlace z: pk n: logM
+        pk1: ListVal u64
+        natmul.natMul z: pk1 x: pk.listView y: x
+        truncInPlace z: pk1 n: logM
+        powers.append pk.take
+        powers.append pk1.take
+        k = k + 2
+    }
+    # y's low logM - 1 bits: start at the word holding the top one, masked
+    i: y.length - 1
+    mtop: logM - 2 / 64
+    mmask: 18446744073709551615.u64
+    mbits: (logM - 1) & 63
+    if mbits != 0 then mmask = (1.u64 << mbits) - 1
+    if i > mtop then i = mtop
+    advance: false
+    cur: ListVal u64
+    nat.natSetWord z: cur x: 1
+    w: i + 1
+    for w > 0 loop {
+        w = w - 1
+        yi: y.get i: w
+        if w == mtop then yi = yi & mmask
+        j: u64
+        for j < 64 loop {
+            if advance then {
+                for each s: 4.u64.times loop {
+                    t: ListVal u64
+                    natmul.natSqr z: t x: cur.listView
+                    truncInPlace z: t n: logM
+                    cur swap t
+                }
+            }
+            t: ListVal u64
+            natmul.natMul z: t x: cur.listView y: (powers.get i: yi >> 60).listView
+            truncInPlace z: t n: logM
+            cur swap t
+            yi = yi << windowBits
+            advance = true
+            j = j + windowBits
+        }
+    }
+    nat.natSet :z x: cur.listView
+}
+
+# montgomery -- z = x*y*2^(-64n) mod m, an "almost Montgomery
+# multiplication" (Gueron): for x, y < 2^(64n) the result is too, but may not
+# be below m. x, y and m are exactly n words, x and y reduced mod m, and k is
+# -1/m mod 2^64. z, n words long afterwards, must be none of them
+montgomery: function {
+    z: (ListVal u64).borrow
+    x: (ListViewVal u64).view
+    y: (ListViewVal u64).view
+    m: (ListViewVal u64).view
+    k: u64
+    n: u64
+} is {
+    if (x.length != n) or (y.length != n) or (m.length != n) then {
+        panic msg: "math: mismatched montgomery number lengths"
+    }
+    z.resize to: n * 2
+    {
+        all: z.mutView
+        all.clear
+    }
+    c: u64
+    i: u64
+    for i < n loop {
+        d: y.get :i
+        c2: u64
+        {
+            w: z.mutSlice from: i to: n + i
+            c2 = arith.addMulVVW z: w :x y: d
+        }
+        t: ((z.get :i).mulWide rhs: k).lo
+        c3: u64
+        {
+            w: z.mutSlice from: i to: n + i
+            c3 = arith.addMulVVW z: w x: m y: t
+        }
+        cx: c + c2
+        cy: cx + c3
+        z.set i: n + i val: cy
+        c = 0
+        if (cx < c2) or (cy < c3) then c = 1
+        i = i + 1
+    }
+    {
+        all: z.mutView
+        pair: all.split at: n
+        if c != 0 then {
+            arith.subVV z: pair.lo x: pair.hi.listView y: m
+        } else {
+            pair.lo.copyFrom from: pair.hi.listView
+        }
+    }
+    z.resize to: n
+}
+
+# expMontgomery -- z = x^y mod m for an odd m, the 4-bit window over
+# Montgomery products: x and 1 move into Montgomery form through RR =
+# 2^(128n) mod m, every multiplication stays in it, and one last product by 1
+# brings the result out
+expMontgomery: function {
+    z: (ListVal u64).borrow
+    x: (ListViewVal u64).view
+    y: (ListViewVal u64).view
+    m: (ListViewVal u64).view
+} is {
+    n: m.length
+    # x, reduced when longer than m, and as long as m
+    xr: ListVal u64
+    if x.length > n then {
+        q: ListVal u64
+        natdiv.natDiv :q r: xr u: x v: m
+    } else {
+        nat.natSet z: xr :x
+    }
+    for xr.length < n loop xr.append from: 0
+    # k0 = -1/m mod 2^64 by Newton's iteration (Dumas), wrapping throughout
+    m0: m.get i: 0
+    k0: 2.u64 - m0
+    t: m0 - 1
+    b: 1.u64
+    for b < 64 loop {
+        t = (t.mulWide rhs: t).lo
+        k0 = (k0.mulWide rhs: t + 1).lo
+        b = b << 1
+    }
+    k0 = 0.u64 - k0
+    # RR = 2^(128n) mod m, as long as m
+    rr: ListVal u64
+    {
+        one1: ListVal u64
+        nat.natSetWord z: one1 x: 1
+        big: ListVal u64
+        nat.natLsh z: big x: one1.listView s: n * 128
+        q: ListVal u64
+        natdiv.natDiv :q r: rr u: big.listView v: m
+    }
+    for rr.length < n loop rr.append from: 0
+    # 1, as long as m
+    one: ListVal u64
+    one.resize to: n
+    one.set i: 0 val: 1
+    powers: List (ListVal u64)
+    {
+        p0: ListVal u64
+        montgomery z: p0 x: one.listView y: rr.listView :m k: k0 :n
+        powers.append p0.take
+        p1: ListVal u64
+        montgomery z: p1 x: xr.listView y: rr.listView :m k: k0 :n
+        powers.append p1.take
+    }
+    k: 2.u64
+    for k < 16 loop {
+        pk: ListVal u64
+        montgomery z: pk x: (powers.get i: k - 1).listView y: (powers.get i: 1).listView :m k: k0 :n
+        powers.append pk.take
+        k = k + 1
+    }
+    cur: ListVal u64
+    nat.natSet z: cur x: (powers.get i: 0).listView
+    for cur.length < n loop cur.append from: 0
+    zz: ListVal u64
+    w: y.length
+    for w > 0 loop {
+        w = w - 1
+        yi: y.get i: w
+        j: u64
+        for j < 64 loop {
+            if (w != (y.length - 1)) or (j != 0) then {
+                montgomery z: zz x: cur.listView y: cur.listView :m k: k0 :n
+                montgomery z: cur x: zz.listView y: zz.listView :m k: k0 :n
+                montgomery z: zz x: cur.listView y: cur.listView :m k: k0 :n
+                montgomery z: cur x: zz.listView y: zz.listView :m k: k0 :n
+            }
+            montgomery z: zz x: cur.listView y: (powers.get i: yi >> 60).listView :m k: k0 :n
+            cur swap zz
+            yi = yi << windowBits
+            j = j + windowBits
+        }
+    }
+    # out of Montgomery form, then one last reduction in case it is due
+    montgomery z: zz x: cur.listView y: one.listView :m k: k0 :n
+    nat.natNorm z: zz
+    if (nat.natCmp x: zz.listView y: m) >= 0 then {
+        d: ListVal u64
+        nat.natSub z: d x: zz.listView y: m
+        zz swap d
+        if (nat.natCmp x: zz.listView y: m) >= 0 then {
+            q: ListVal u64
+            r: ListVal u64
+            natdiv.natDiv :q :r u: zz.listView v: m
+            zz swap r
+        }
+    }
+    nat.natSet :z x: zz.listView
+}
+
+# expMontgomeryEven -- z = x^y mod m for m = 2^n * m2 with m2 odd, both
+# halves by the paths above and joined by the CRT (Koc): with z1 = x^y mod 2^n
+# and z2 = x^y mod m2, z = z2 + ((z1 - z2) * m2^-1 mod 2^n) * m2
+expMontgomeryEven: function {
+    z: (ListVal u64).borrow
+    x: (ListViewVal u64).view
+    y: (ListViewVal u64).view
+    m: (ListViewVal u64).view
+} is {
+    n: nat.natTrailingZeroBits x: m
+    m1: ListVal u64
+    {
+        one1: ListVal u64
+        nat.natSetWord z: one1 x: 1
+        nat.natLsh z: m1 x: one1.listView s: n
+    }
+    m2: ListVal u64
+    nat.natRsh z: m2 x: m s: n
+    z1: ListVal u64
+    natExp z: z1 :x :y m: m1.listView
+    z2: ListVal u64
+    natExp z: z2 :x :y m: m2.listView
+    # p = (z1 - z2) * m2^-1 mod 2^n
+    d: ListVal u64
+    subMod2N z: d x: z1.listView y: z2.listView :n
+    inv: ListVal u64
+    inverseMod2N z: inv a: m2.listView :n
+    p: ListVal u64
+    natmul.natMul z: p x: d.listView y: inv.listView
+    truncInPlace z: p :n
+    pm: ListVal u64
+    natmul.natMul z: pm x: p.listView y: m2.listView
+    nat.natAdd :z x: z2.listView y: pm.listView
+}
+
+# subMod2N -- z = (x - y) mod 2^n
+subMod2N: function {
+    z: (ListVal u64).borrow
+    x: (ListViewVal u64).view
+    y: (ListViewVal u64).view
+    n: u64
+} is {
+    xt: ListVal u64
+    nat.natSet z: xt :x
+    truncInPlace z: xt :n
+    yt: ListVal u64
+    nat.natSet z: yt x: y
+    truncInPlace z: yt :n
+    if (nat.natCmp x: xt.listView y: yt.listView) >= 0 then {
+        nat.natSub :z x: xt.listView y: yt.listView
+        return
+    }
+    # x - y + 2^n
+    two: ListVal u64
+    {
+        one1: ListVal u64
+        nat.natSetWord z: one1 x: 1
+        nat.natLsh z: two x: one1.listView s: n
+    }
+    s: ListVal u64
+    nat.natAdd z: s x: xt.listView y: two.listView
+    nat.natSub :z x: s.listView y: yt.listView
+}
+
+# inverseMod2N -- z = a^-1 mod 2^n for an odd a, by Newton's iteration: a is
+# its own inverse mod 8, and z*(2 - a*z) doubles the bits that are right.
+# Go finds this inverse with its general ModInverse; this one is the same
+# number, without a GCD
+inverseMod2N: function {z: (ListVal u64).borrow a: (ListViewVal u64).view n: u64} is {
+    nat.natSet :z x: a
+    truncInPlace :z :n
+    bits: 3.u64
+    two: ListVal u64
+    nat.natSetWord z: two x: 2
+    for bits < n loop {
+        az: ListVal u64
+        natmul.natMul z: az x: a y: z.listView
+        truncInPlace z: az :n
+        f: ListVal u64
+        subMod2N z: f x: two.listView y: az.listView :n
+        next: ListVal u64
+        natmul.natMul z: next x: z.listView y: f.listView
+        truncInPlace z: next :n
+        nat.natSet :z x: next.listView
+        bits = bits * 2
+    }
+}
+
+# natSqrt -- z = floor(sqrt(x)), by Newton's iteration from above (Brent and
+# Zimmermann, SqrtInt): z = (z + x/z) / 2 until it stops getting smaller. For
+# x one below a square the sequence oscillates between the answer and one
+# more; it is the smaller that is kept
+natSqrt: function {z: (ListVal u64).borrow x: (ListViewVal u64).view} is {
+    one: ListVal u64
+    nat.natSetWord z: one x: 1
+    if (nat.natCmp :x y: one.listView) <= 0 then {
+        nat.natSet :z :x
+        return
+    }
+    z1: ListVal u64
+    nat.natLsh z: z1 x: one.listView s: (nat.natBitLen :x) + 1 / 2
+    for true loop {
+        q: ListVal u64
+        r: ListVal u64
+        natdiv.natDiv :q :r u: x v: z1.listView
+        s: ListVal u64
+        nat.natAdd z: s x: q.listView y: z1.listView
+        z2: ListVal u64
+        nat.natRsh z: z2 x: s.listView s: 1
+        if (nat.natCmp x: z2.listView y: z1.listView) >= 0 then {
+            nat.natSet :z x: z1.listView
+            return
+        }
+        z1 swap z2
+    }
+}
