@@ -2158,7 +2158,10 @@ perf: $(PERFBIN)
 # +1,788 a name in a type's own body that names nothing is refused there --
 # `meta`'s other members, a bare field or method, a method through a generic's
 # bare name: 0 behaviour, +1,788 source.
-ALLOC_BASELINE := 2217573
+#
+# +51 a numeric generic argument written as a pun reads its name: 0
+# behaviour, +51 source.
+ALLOC_BASELINE := 2217624
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
