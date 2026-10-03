@@ -30838,26 +30838,9 @@ checkNumericSuffixCast: function {
         litTid: st.reg.literalIntTid
         if (isFloatLiteralName name: castBase.stringView) then litTid = st.reg.literalFloatTid
         castOpt: literalConvTarget :ast :st tid: litTid nameId: castChildId
-        if castOpt.none then {
-            missChild: zast.nameTextAt :ast ref: castChildId
-            if (isNumericTypeName name: missChild.stringView) then {
-                ltn: specWrittenName :st :ast tid: litTid
-                cm9: "'\{ltn}' has no conversion to '\{missChild}'"
-                ch9: "a literal with a decimal point or an exponent is a float: convert it to a float type, or write the integer's digits".string
-                cn9: String
-                (addErrorH
-                    :st
-                    nodeid: dp.nid
-                    lineno: dp.lineno
-                    colno: dp.colno
-                    e: zast.err.typeError
-                    msg: cm9
-                    note: cn9
-                    hint: ch9
-                    width: missChild.length.u32.orPanic
-                )
-                return (callleg handled: true tid: ztypes.noTid)
-            }
+        if castOpt.none when (refuseLiteralConversion :st :ast :dp :litTid childId: castChildId
+        ) then {
+            return (callleg handled: true tid: ztypes.noTid)
         }
         match (
             castOpt
@@ -30888,10 +30871,41 @@ checkNumericSuffixCast: function {
     return (callleg handled: false tid: ztypes.noTid)
 }
 
+# refuseLiteralConversion -- a numeric conversion the literal type `litTid`
+# does not declare (`3.5.u8`): reported, true. false for a child that names no
+# numeric type, which reaches its member on the materialised receiver.
+refuseLiteralConversion: function {
+    st: zenv.ZSymbolTable
+    ast: Ast
+    dp: dpref
+    litTid: ztypes.tid
+    childId: zast.nameid
+} out bool is {
+    missChild: zast.nameTextAt :ast ref: childId
+    if (isNumericTypeName name: missChild.stringView).not then return false
+    ltn: specWrittenName :st :ast tid: litTid
+    cm9: "'\{ltn}' has no conversion to '\{missChild}'"
+    ch9: "a literal with a decimal point or an exponent is a float: convert it to a float type, or write the integer's digits".string
+    cn9: String
+    (addErrorH
+        :st
+        nodeid: dp.nid
+        lineno: dp.lineno
+        colno: dp.colno
+        e: zast.err.typeError
+        msg: cm9
+        note: cn9
+        hint: ch9
+        width: missChild.length.u32.orPanic
+    )
+    return true
+}
+
 # checkUntypedConstantCast -- `N.u8` where N is a constant built only from bare
-# integer literals: the conversion is the literal's own (`5.u8`), so the path
-# carries the target type and the value must fit it. A typed constant converts
-# through its type's surface like any value of that type.
+# literals: the conversion is the literal's own (`5.u8`, `0.5.f32`), so the
+# path carries the target type and the value must fit it, and one the literal
+# type does not declare is refused as the literal's is. A typed constant
+# converts through its type's surface like any value of that type.
 checkUntypedConstantCast: function {
     st: zenv.ZSymbolTable
     ast: Ast
@@ -30899,10 +30913,15 @@ checkUntypedConstantCast: function {
 } out callleg is {
     notCast: callleg handled: false tid: ztypes.noTid
     v: st.typing.nodeConstIn mono: st.typing.curMonoStamp nid: dp.parent
-    if v.kind.ivalKind.not or v.numTid.isZero.not then return notCast
+    if (v.kind.ivalKind or v.kind.fvalKind).not or v.numTid.isZero.not then return notCast
     childId: atomNameId :ast n: (ast.nodes.get i: dp.child)
     if (isNumericTypeNameAt :ast ref: childId).not then return notCast
-    castOpt: literalConvTarget :ast :st tid: st.reg.literalIntTid nameId: childId
+    litTid: st.reg.literalIntTid
+    if v.kind.fvalKind then litTid = st.reg.literalFloatTid
+    castOpt: literalConvTarget :ast :st tid: litTid nameId: childId
+    if castOpt.none when (refuseLiteralConversion :st :ast :dp :litTid :childId) then {
+        return (callleg handled: true tid: ztypes.noTid)
+    }
     if castOpt.none then return notCast
     target: castOpt
     fm: constFitsType :st :v :target
@@ -57274,11 +57293,11 @@ atomFoldedToString: function {
     return g.kind.svalKind
 }
 
-# foldedToInteger -- the node already carries a folded integer: a conversion
-# of it (`N.u8`, `L.u32`) folds too.
-foldedToInteger: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out bool is {
+# foldedToNumber -- the node already carries a folded number: a conversion of
+# it (`N.u8`, `L.u32`, `TENTH.f32`) folds too.
+foldedToNumber: function {st: zenv.ZSymbolTable.view nid: zast.nodeid} out bool is {
     v: st.typing.nodeConstIn mono: st.typing.curMonoStamp :nid
-    return v.kind.ivalKind
+    return v.kind.ivalKind or v.kind.fvalKind
 }
 
 # callOnFoldedString -- the call at `nid` is a method called on such an atom.
@@ -57425,7 +57444,7 @@ useSiteAsks: function {
     if plan.arm == 3 then return plan.parts < 2
     if plan.arm != 4 then return true
     if (atomFoldedToString :st :ast nid: plan.parentId) then return true
-    if (foldedToInteger :st nid: plan.parentId) then return true
+    if (foldedToNumber :st nid: plan.parentId) then return true
     pv: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: plan.parentId))
     return (isNumericLiteralName name: pv.stringView)
 }

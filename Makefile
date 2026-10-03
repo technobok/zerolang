@@ -2057,7 +2057,11 @@ perf: $(PERFBIN)
 # +24 BigRat.ieeeBits: 0 behaviour, +24 source.
 #
 # +254 `1e3` is a float literal: 0 behaviour, +254 source.
-ALLOC_BASELINE := 2152496
+#
+# +300 a named untyped float converts as its literal does: ab.sh reads -903
+# behaviour and +306 source, this ratchet's build +300 overall; the two
+# measurements disagree on this change, and the gap is not yet explained.
+ALLOC_BASELINE := 2152796
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
