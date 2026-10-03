@@ -1,0 +1,47 @@
+# generic_array_window_arg.z -- a record over a value parameter holds
+# `(array t: u64 to: n)` for its own `n` and lends that array's windows to
+# functions typed over concrete ones. The template walk sees the array, and so
+# each window, as a partial its `n` leaves open; the call is judged in every
+# instance's walk, where the window is a (SpanVal u64) or a (ListViewVal u64).
+
+# fillOnes -- every word of z set to 1
+fillOnes: function {z: (SpanVal u64).borrow} is {
+    z.fill item: 1
+}
+
+# sumAll -- the words of x added up
+sumAll: function {x: (ListViewVal u64).view} out u64 is {
+    s: u64
+    for each w: x loop s = s + w
+    return s
+}
+
+# a run of n words
+vec: record {
+    words: (array t: u64 to: n)
+} as {
+    n: u64.generic
+    # n ones, the window passed straight to the call
+    ones: function {} out type is {
+        r: meta.create words: (array t: u64 to: n)
+        fillOnes z: r.words.mutView
+        return r
+    }
+    # n ones, the window bound to a name first
+    named: function {} out type is {
+        r: meta.create words: (array t: u64 to: n)
+        {
+            w: r.words.mutView
+            fillOnes z: w
+        }
+        return r
+    }
+    # the words added up
+    total: function {s: this.view} out u64 is {
+        return (sumAll x: s.words.listView)
+    }
+}
+
+main: function is {
+    print "\{(vec n: 3).ones.total} \{(vec n: 5).named.total}"
+}
