@@ -1109,11 +1109,17 @@ indexDeclDef: function {
         }
     } case dottedpath then {
         # a cross-unit re-export alias: its own Decl and node; shares the
-        # target's type id once minting routes through the Decl layer
+        # target's type id once minting routes through the Decl layer. A
+        # numeric literal at its root is a typed constant (`Q: 0.25.f64`),
+        # which keeps its constDecl as the bare literal does
+        dkind: ztyping.declkind.reexportDecl
+        if (isNumericLiteralNameAt :ast ref: (rootNameIdOf :ast n: (ast.nodes.get i: opNid))) then {
+            dkind = ztyping.declkind.constDecl
+        }
         did0 = (st.typing.declNew
             name: nameRef
             parent: parentDeclId
-            kind: ztyping.declkind.reexportDecl
+            kind: dkind
             node: nopNodeId
         )
     } case atomid then {
@@ -29104,7 +29110,9 @@ checkUnitMemberValue: function {
     )
     if udR.isZero.not then {
         cnRef: cnId
-        udD = st.typing.declFindChild parentDeclId: udR nameId: cnRef
+        # the unit's root, or its public block when the block defines it
+        udO: qualifiedMemberScope :st unitRoot: udR memberId: cnRef
+        udD = st.typing.declFindChild parentDeclId: udO nameId: cnRef
     }
     if udD.isZero then udD = (declOfTypeId
         :st
@@ -56998,11 +57006,14 @@ constOfNamedBase: function {
                 co: atCol
             )
         }
-        # `unit.CONST` reads a constant out of another unit.
+        # `unit.CONST` reads a constant out of another unit, found where its
+        # type-refs are: the unit's root, or its public block when the block
+        # defines it
         if (nameDenotesUnit :st :scope nameId: ptId) then {
             nameId98: ptId
             unitDecl98: unitDeclOfNameOrOwn :st :scope nameId: nameId98
-            return (constValueOfMemberId :st :scope :ast unitDecl: unitDecl98 nameId: ncId)
+            owner98: qualifiedMemberScope :st unitRoot: unitDecl98 memberId: ncId
+            return (constValueOfMemberId :st scope: owner98 :ast unitDecl: unitDecl98 nameId: ncId)
         }
         # A nested namespace (`m: unit { NUM: 7 }`) is a definition of THIS
         # unit whose type is a unit; it is deliberately absent from the
@@ -57032,6 +57043,9 @@ constOfNamedBase: function {
         # its first hop, since a subunit's subunit is no child of the file.
         {
             sro: unitScopeOf :st declId: scope
+            # a public block's definitions read the unit's own names
+            # (`seven: inner.seven`), its subunits among them
+            if (declIsPublicBlock :st declId: sro) then sro = declParentIdOf :st declId: sro
             nestedNameId9: ptId
             sst: (nestedUnitTidOf
                 :st
@@ -57673,7 +57687,11 @@ useSiteAsks: function {
     if plan.arm != 4 then return true
     if (atomFoldedToString :st :ast nid: plan.parentId) then return true
     if (foldedToNumber :st nid: plan.parentId) then return true
-    pv: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: plan.parentId))
+    pn: atomNameId :ast n: (ast.nodes.get i: plan.parentId)
+    # `unit.CONST` reads another unit's constant, which a conversion after it
+    # (`unit.CONST.u8`) folds
+    if (rootNamesAnyUnit :st scope: st.curScope nameId: pn) then return true
+    pv: zast.nameTextAt :ast ref: pn
     return (isNumericLiteralName name: pv.stringView)
 }
 

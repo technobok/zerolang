@@ -2071,7 +2071,10 @@ perf: $(PERFBIN)
 #
 # +1,260 the dump's const_rat and const_bigfloat tables, exact float text:
 # 0 behaviour, +1,260 source.
-ALLOC_BASELINE := 2220563
+#
+# +265 another unit's constant converts as written there: +32 behaviour,
+# +233 source.
+ALLOC_BASELINE := 2220828
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
