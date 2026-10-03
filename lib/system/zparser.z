@@ -4195,10 +4195,31 @@ Parser: class {
             ) case dir then {
                 hasSubdir = true
             } case file then null case notfound then null
+            # a name is resolved once per unit. A subunit's references fold
+            # back into this loop, and one naming a sibling the loop already
+            # loaded -- `arith.addVV` in a nat.z loaded after a public block
+            # listed arith -- must not parse the sibling's file a second time,
+            # nor one naming a definition of this unit go looking for a file.
+            # The second copy was never walked, and the emitter met it bare.
+            # Only a unit with a subunit folder loads anything here.
+            tried: IdSet zast.nameid
+            if hasSubdir then {
+                for each bid: body loop {
+                    item: this.ast.nodes.get i: bid
+                    if item.namedoperation then tried.add item.name
+                }
+            }
             # the subunit folder answers first, for every name -- a core name
             # included -- and only what it does not hold goes on up
             for raw.length > 0 loop {
                 rname: raw.pop
+                if hasSubdir then {
+                    rid: zast.poolFind pool: this.ast.names text: rname.stringView
+                    if rid.isZero.not then {
+                        if (tried.has item: rid) then continue
+                        tried.add rid
+                    }
+                }
                 handled: false
                 if hasSubdir then {
                     subNames: ListVal u32
