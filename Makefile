@@ -90,7 +90,7 @@ SKIP     := mathutil genmath dissectlib
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard zl-full-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens regen-matrix bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard lifetime-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard fmt-raw-guard test-tcc test-tcc-heavy mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
+.PHONY: emit-set ident-set natives-tbl-guard generic-param-guard zl-full-guard const-row-guard all check test ci ci-corpus build clean style-lint style-lint-fast zc zl zls tcc install regen-goldens regen-matrix bump-seed test-bootstrap docs warn-check perf shadow-guard emitter-guard lifetime-guard native-guard fallback-guard member-guard highlight-guard deadcode-guard require-guard static-tcc-guard refusal-guard zlink-rules-guard fmt-raw-guard test-tcc test-tcc-heavy test-clang mode-parity readable-check user-native-guard perf-strict perf-elision pre-push
 
 # Keep pattern-chain intermediates (the per-example .c files) for debugging.
 .SECONDARY:
@@ -169,12 +169,21 @@ test: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 # the Python-free seed bootstrap. The lint + guard + corpus phases are plain
 # prerequisites so -j overlaps them; test-bootstrap stays last (and is
 # internally serial -- b1 -> b2 -> b3 is a chain by nature).
-ci: style-lint zl-full-guard complexity-report warn-check shadow-guard emitter-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check perf-strict test-tcc-heavy mode-parity ci-corpus
+ci: style-lint zl-full-guard complexity-report warn-check shadow-guard emitter-guard lifetime-guard native-guard alias-label-guard fwd-shape-guard generic-param-guard natives-tbl-guard const-row-guard view-guard fallback-guard member-guard highlight-guard any-guard deadcode-guard eager-guard eager-lib-guard case-guard user-native-guard zlink-guard zlink-rules-guard require-guard static-tcc-guard refusal-guard fmt-raw-guard readable-check perf-strict test-tcc-heavy test-clang mode-parity ci-corpus
 	$(MAKE) --no-print-directory test-bootstrap BOOTSTRAP_CCS="$(CI_BOOTSTRAP_CCS)"
 	@echo "CI GATE GREEN: style-lint + corpus(--heavy: +selfhost-asan +fixpoint) + bootstrap"
 
 ci-corpus: bin/zc bin/zl $(BUILDDIR)/ztestrunner
 	$(BUILDDIR)/ztestrunner --zc bin/zc --cc $(CC) --root . --heavy --jobs $(NPROC)
+
+# test-clang -- the corpus under clang, the fast tier. gcc reaches __float128's
+# library through quadmath.h; clang has no such header on its path, so the
+# prelude declares each libquadmath function by hand, and only a clang build
+# shows a function the f128 rows call with no declaration. --cc-forward folds
+# `platform.cc` to clang as a clang build would. The heavy kinds -- self-host
+# and fixpoint -- are the bootstrap's to judge under clang.
+test-clang: bin/zc bin/zl $(BUILDDIR)/ztestrunner
+	$(BUILDDIR)/ztestrunner --zc bin/zc --cc clang --cc-forward --root . --jobs $(NPROC)
 
 # what a corpus run under the vendored tcc needs built before it starts.
 TCC_RUN_DEPS := bin/zc bin/zl $(BUILDDIR)/tcc $(BUILDDIR)/ztestrunner
@@ -2292,7 +2301,7 @@ case-guard:
 # reports E0601 there. A rise means a unit now rejects programs that never
 # touch it (which is what made `--cc tcc` reject the entire corpus); a fall
 # means a guard stopped firing for a program that does touch it.
-REQUIRE_TCC_BASELINE := 6
+REQUIRE_TCC_BASELINE := 7
 
 require-guard: bin/zc
 	@n=0; rep=""; \
@@ -2553,7 +2562,7 @@ static-tcc-guard: bin/zc bin/zl bin/zls
 # returned "quadmath" unconditionally would link fine and pass every other
 # gate. A rise means something now reaches a unit it did not; a fall means a
 # program lost a need it had.
-ZLINK_BASELINE := 4
+ZLINK_BASELINE := 5
 
 zlink-guard: bin/zc
 	@n=0; rep=""; \
