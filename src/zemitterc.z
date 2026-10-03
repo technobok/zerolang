@@ -1445,6 +1445,9 @@ NativeHead: class {
     # `const=`: the argument position a constant-operand variant of the row
     # applies to
     cst: String
+    # `spec=`: on a canonical-stem row, the template and type arguments of the
+    # generic instance the stem names
+    spec: String
     # `args=ptr`: the arguments arrive as pointers
     ptr: bool
     # `fold`: the row folds at compile time
@@ -1460,6 +1463,7 @@ NativeHead: class {
             dem: String
             ord: String
             cst: String
+            spec: String
             ptr: false
             isFold: false
         )
@@ -1517,7 +1521,28 @@ NativeHead: class {
         ) case some then {
             this.cst = co.string
         } case none then null
+        spo: f.stripPrefix p: "spec="
+        match (
+            spo
+        ) case some then {
+            this.spec = spo.string
+        } case none then null
     }
+}
+
+# recordCanonRow -- a canonical-stem row, `[@canon.<stem> spec=...]`: the
+# generic instance a runtime fragment spells as the hole <stem>, kept by stem
+# for ioCanonTid. Not a native path: nothing declares it.
+recordCanonRow: function {ctx: Ctx key: StringView spec: StringView} is {
+    ld: key.lastIndexOf needle: "."
+    match (
+        ld
+    ) case some then {
+        (ctx.canonSpecs.set
+            key: (key.substring from: ld + 1 to: key.length).string
+            value: spec.string
+        )
+    } case none then null
 }
 
 # recordUnitOrder -- the `@units` pseudo-row: not a row but the order the
@@ -1656,6 +1681,10 @@ recordRowBodies: function {ctx: Ctx h: NativeHead.view body: StringView} is {
 # recordNativeRow -- one row: its key, then the member filter it may feed,
 # the fragment halves when it is fragment-backed, and its tables
 recordNativeRow: function {ctx: Ctx h: NativeHead.view body: StringView} is {
+    if h.spec.length > 0 then {
+        recordCanonRow :ctx key: h.key.stringView spec: h.spec.stringView
+        return
+    }
     kk: h.key.copy
     ctx.nativeKeys.set key: kk value: true
     if body.length > 0 when h.cst.length == 0 then {
@@ -3201,6 +3230,9 @@ Ctx: class {
     tmplCache: (Map String V: String)
     # each io canonical stem's C name
     ioCanonC: (Map String V: String)
+    # natives.tbl's canonical-stem rows: stem -> the instance's template and
+    # type arguments, comma-separated
+    canonSpecs: (Map String V: String)
     # natives.tbl, read once at emit start: qualified path -> the C body, plus
     # the two row attributes. Parsed eagerly rather than on first lookup
     # because the lookup site is inside emitExpr, which holds a Ctx but not the
@@ -32296,6 +32328,7 @@ emitC: function {
         nativeBoxProtos: ListVal ztypes.tid
         tmplCache: (Map String V: String)
         ioCanonC: (Map String V: String)
+        canonSpecs: (Map String V: String)
         nativeTbl: (Map String V: String)
         nativeConstBody: (Map String V: String)
         nativeConstPos: (Map String V: String)
@@ -34775,144 +34808,70 @@ emitIdSetMono: function {
     )
 }
 
-# ioCanonTid -- the type id behind an io/cli runtime fragment's canonical stem,
-# for the GENERIC INSTANCES only: resolved through the spec trie from
-# SOURCE-named parts (Result over filestat and IoError), never by the mangled
-# spelling. 0 for a plain source-name stem (File, IoError, Reader), which keeps
-# the by-name path, and 0 when the instance was never demanded.
+# ioCanonTid -- the type id behind a runtime fragment's canonical stem, for the
+# GENERIC INSTANCES only: the stem's natives.tbl row names the template and its
+# type arguments, resolved through the spec trie from SOURCE-named parts (Result
+# over filestat and IoError), never from the mangled spelling. 0 for a plain
+# source-name stem (File, IoError, Reader), which keeps the by-name path, and 0
+# when the instance was never demanded.
 ioCanonTid: function {
-    ast: Ast.view symtab: zenv.ZSymbolTable.view canon: StringView
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    canon: StringView
 } out ztypes.tid is {
-    if canon == "Option_StringView" then {
-        return (specStemTid :ast :symtab base: "Option" arg1: "StringView" arg2: "")
+    spec: String
+    {
+        g: ctx.canonSpecs.get key: canon.asString
+        match (
+            g
+        ) case some then {
+            spec = g.copy
+        } case none then null
     }
-    if canon == "Option_String" then {
-        return (specStemTid :ast :symtab base: "Option" arg1: "String" arg2: "")
+    if spec.length == 0 then return ztypes.noTid
+    parts: ListVal ztypes.tid
+    for each pt: (spec.stringView.split sep: ",") loop {
+        parts.append (canonPartTid :ast :symtab :ctx part: pt)
     }
-    if canon == "OptionView_String" then {
-        return (specStemTid :ast :symtab base: "OptionView" arg1: "String" arg2: "")
-    }
-    if canon == "ListViewVal_u8" then {
-        return (specStemTid :ast :symtab base: "ListViewVal" arg1: "u8" arg2: "")
-    }
-    if canon == "ListVal_u8" then {
-        return (specStemTid :ast :symtab base: "ListVal" arg1: "u8" arg2: "")
-    }
-    if canon == "List_String" then {
-        return (specStemTid :ast :symtab base: "ListRef" arg1: "String" arg2: "")
-    }
-    # the cli argument types are declared in `cli`, which the unqualified
-    # builtinTid does not reach: naming the unit is what builtinTidInU is for.
-    # These three resolved 0 and rode the by-name registry scan instead, which
-    # agreed only while a mono's label happened to be spelled like the hole key.
-    if canon == "List_PositionalDef" then {
-        return (specTidArgs
+    if parts.length < 2 then return ztypes.noTid
+    a2: ztypes.noTid
+    if parts.length > 2 then a2 = parts.get i: 2
+    return (specTidArgs
+        :symtab
+        templateTid: (parts.get i: 0)
+        a1: (parts.get i: 1)
+        :a2
+    )
+}
+
+# canonPartTid -- one part of a canonical-stem row: `@stem` is another row's
+# instance, `unit.name` a type that unit declares (the unqualified lookup does
+# not reach the cli or io units), and anything else a builtin type name.
+canonPartTid: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx.view
+    part: StringView
+} out ztypes.tid is {
+    nested: part.stripPrefix p: "@"
+    match (
+        nested
+    ) case some then {
+        return (ioCanonTid :ast :symtab :ctx canon: nested)
+    } case none then null
+    dot: part.indexOf needle: "."
+    match (
+        dot
+    ) case some then {
+        return (builtinTidInU
+            :ast
             :symtab
-            templateTid: (builtinTid :ast :symtab base: "ListRef")
-            a1: (builtinTidInU :ast :symtab unitName: "cli" base: "PositionalDef")
-            a2: ztypes.noTid
+            unitName: (part.substring from: 0 to: dot)
+            base: (part.substring from: dot + 1 to: part.length)
         )
-    }
-    if canon == "List_OptionDef" then {
-        return (specTidArgs
-            :symtab
-            templateTid: (builtinTid :ast :symtab base: "ListRef")
-            a1: (builtinTidInU :ast :symtab unitName: "cli" base: "OptionDef")
-            a2: ztypes.noTid
-        )
-    }
-    if canon == "List_FlagDef" then {
-        return (specTidArgs
-            :symtab
-            templateTid: (builtinTid :ast :symtab base: "ListRef")
-            a1: (builtinTidInU :ast :symtab unitName: "cli" base: "FlagDef")
-            a2: ztypes.noTid
-        )
-    }
-    if canon == "Map_String_String" then {
-        return (specStemTid :ast :symtab base: "MapRR" arg1: "String" arg2: "String")
-    }
-    if canon == "Result_filestat_IoError" then {
-        templateTid92: builtinTid :ast :symtab base: "Result"
-        templateTid93: builtinTid :ast :symtab base: "Box"
-        a192: builtinTidInU :ast :symtab unitName: "io" base: "filestat"
-        a29: builtinTid :ast :symtab base: "IoError"
-        rbf: (specTidArgs
-            :symtab
-            templateTid: templateTid92
-            a1: (specTidArgs
-                :symtab
-                templateTid: templateTid93
-                a1: a192
-                a2: ztypes.noTid
-            )
-            a2: a29
-        )
-        if rbf > 0 then return rbf
-        return (specStemTid :ast :symtab base: "Result" arg1: "filestat" arg2: "IoError")
-    }
-    if canon == "Result_String_IoError" then {
-        return (specStemTid :ast :symtab base: "Result" arg1: "String" arg2: "IoError")
-    }
-    if canon == "Result_File_IoError" then {
-        return (specStemTid :ast :symtab base: "Result" arg1: "File" arg2: "IoError")
-    }
-    if canon == "Result_null_IoError" then {
-        return (specStemTid :ast :symtab base: "Result" arg1: "null" arg2: "IoError")
-    }
-    if canon == "Result_Listener_IoError" then {
-        return (specStemTid :ast :symtab base: "Result" arg1: "Listener" arg2: "IoError")
-    }
-    if canon == "Result_Conn_IoError" then {
-        return (specStemTid :ast :symtab base: "Result" arg1: "Conn" arg2: "IoError")
-    }
-    if canon == "ResultVR_u64_IoError" then {
-        return (specStemTid :ast :symtab base: "ResultVR" arg1: "u64" arg2: "IoError")
-    }
-    if canon == "ResultVR_bool_IoError" then {
-        return (specStemTid :ast :symtab base: "ResultVR" arg1: "bool" arg2: "IoError")
-    }
-    if canon == "Result_Parsed_CliError" then {
-        return (specStemTid :ast :symtab base: "Result" arg1: "Parsed" arg2: "CliError")
-    }
-    if canon == "Result_List_String_IoError" then {
-        templateTid98: builtinTid :ast :symtab base: "Result"
-        a195: specStemTid :ast :symtab base: "ListRef" arg1: "String" arg2: ""
-        a294: builtinTid :ast :symtab base: "IoError"
-        return (specTidArgs
-            :symtab
-            templateTid: templateTid98
-            a1: a195
-            a2: a294
-        )
-    }
-    # the value-side monos the StringView natives return: stated here, the
-    # hole resolves like every other name in a fragment.
-    if canon == "optionval_u64" then {
-        return (specStemTid :ast :symtab base: "optionval" arg1: "u64" arg2: "")
-    }
-    if canon == "optionval_u32" then {
-        return (specStemTid :ast :symtab base: "optionval" arg1: "u32" arg2: "")
-    }
-    if canon == "optionval_u8" then {
-        return (specStemTid :ast :symtab base: "optionval" arg1: "u8" arg2: "")
-    }
-    if canon == "resultval_i64_parseerror" then {
-        return (specStemTid :ast :symtab base: "resultval" arg1: "i64" arg2: "parseerror")
-    }
-    if canon == "resultval_u64_parseerror" then {
-        return (specStemTid :ast :symtab base: "resultval" arg1: "u64" arg2: "parseerror")
-    }
-    if canon == "resultval_f64_parseerror" then {
-        return (specStemTid :ast :symtab base: "resultval" arg1: "f64" arg2: "parseerror")
-    }
-    if canon == "resultval_f16_parseerror" then {
-        return (specStemTid :ast :symtab base: "resultval" arg1: "f16" arg2: "parseerror")
-    }
-    if canon == "resultval_f128_parseerror" then {
-        return (specStemTid :ast :symtab base: "resultval" arg1: "f128" arg2: "parseerror")
-    }
-    return ztypes.noTid
+    } case none then null
+    return (builtinTid :ast :symtab base: part)
 }
 
 # ioCanonCname -- memoized wrapper: the canon->cname map is emit-stable and io
@@ -34949,7 +34908,7 @@ ioCanonTidAny: function {
     ctx: Ctx.view
     canon: StringView
 } out ztypes.tid is {
-    st: ioCanonTid :ast :symtab :canon
+    st: ioCanonTid :ast :symtab :ctx :canon
     if st > 0 then return st
     # a plain source-name stem (File, IoError, Reader): the system unit first,
     # then the registry scan below for the io/cli units it does not cover.

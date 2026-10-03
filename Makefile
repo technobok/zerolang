@@ -2013,7 +2013,7 @@ perf: $(PERFBIN)
 #
 # +681 a data element may not take the name of one of the block's own members:
 # 0 behaviour, +681 source.
-ALLOC_BASELINE := 2016644
+ALLOC_BASELINE := 2015447
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -3624,7 +3624,7 @@ native-guard:
 	  done; \
 	  [ "$$ref" = 1 ] || { echo "native-guard: $$stem.inc on disk but nothing references it (orphan -- delete it or load it)"; fail=1; }; \
 	done; \
-	known=$$({ grep -oE 'if canon == "[A-Za-z_][A-Za-z0-9_]*"' src/zemitterc.z; \
+	known=$$({ sed -nE 's/^\[@canon\.([A-Za-z_][A-Za-z0-9_]*) .*/"\1"/p' src/runtime/natives.tbl; \
 	    grep -oE 'mono: "[A-Za-z_][A-Za-z0-9_]*"' src/zemitterc.z; \
 	    grep -ohE 'bn\.append from: "[A-Za-z_][A-Za-z0-9_]*"' src/zemitterc.z; \
 	  } | sed 's/.*"\(.*\)"/\1/'; \
@@ -3638,7 +3638,7 @@ native-guard:
 	  for h in $$(grep -ohE 'z_@[A-Za-z_][A-Za-z0-9_]*@' $$f | sed -e 's/^z_@//' -e 's/@$$//' | sort -u); do \
 	    nh=$$((nh + 1)); \
 	    case "$$known" in *" $$h "*) ;; \
-	      *) echo "native-guard: $$f spells hole @$$h@, which names no known canon (declare the type, add its ioCanonTid arm, or bind it at the loader)"; fail=1;; \
+	      *) echo "native-guard: $$f spells hole @$$h@, which names no known canon (declare the type, add its natives.tbl canon row, or bind it at the loader)"; fail=1;; \
 	    esac; \
 	  done; \
 	done; \
