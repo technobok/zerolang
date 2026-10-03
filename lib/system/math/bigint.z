@@ -13,18 +13,26 @@ BigInt: class {
     # no leading zero word, and zero the empty list
     words: ListVal u64
 } as {
-    # the value of any integer of up to 128 bits: a narrower one, signed or
-    # not, widens to i128 by itself, and a u128 past i128's range is read
-    # with parse
-    create: function {from: i128} out this is {
-        neg: from < 0
-        mag: from.bits
-        if neg then mag = mag.not + 1
+    # the value of an i64, and of every narrower integer, which widens to one
+    # by itself. Not i128: a program that never writes a 128-bit integer must
+    # not need one, since tcc has none -- a u64 is fromU64's, and a 128-bit
+    # value is read with parse
+    create: function {from: i64} out this is {
         a: ListVal u64
-        a.append from: (mag & 18446744073709551615.u128).u64.orPanic
-        a.append from: (mag >> 64).u64.orPanic
-        nat.natNorm z: a
-        return (meta.create negative: neg words: a.take)
+        if from < 0 then {
+            # the magnitude of i64's minimum is one past its maximum
+            a.append from: (0 - (from + 1)).u64.orPanic + 1
+        } else if from > 0 then {
+            a.append from: from.u64.orPanic
+        }
+        return (meta.create negative: from < 0 words: a.take)
+    }
+
+    # fromU64 -- the value of a u64, the one integer create cannot take
+    fromU64: function {from: u64} out this is {
+        a: ListVal u64
+        if from > 0 then a.append :from
+        return (BigInt.fromParts neg: false abs: a.take)
     }
 
     # fromParts -- the BigInt with this sign and magnitude
@@ -204,7 +212,7 @@ BigInt: class {
             }
             if t.negative when w <= 9223372036854775808 then {
                 fits = true
-                v = (0.i128 - w).i64.orPanic
+                v = 0 - (w - 1).i64.orPanic - 1
             }
         }
         if fits.not then return ((resultval t: i64 e: converror).err converror.outOfRange)
@@ -831,7 +839,7 @@ gcdOf: function {a: BigInt.view b: BigInt.view extended: bool} out BigGCD is {
                     bw = r
                 }
             }
-            aa = BigInt from: aw
+            aa = BigInt.fromU64 from: aw
         }
     }
     x: ua.copy
