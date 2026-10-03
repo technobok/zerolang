@@ -2145,7 +2145,10 @@ perf: $(PERFBIN)
 #
 # +49 a method returning `type` returns the instance when the instance was
 # minted through an alias: 0 behaviour, +49 source.
-ALLOC_BASELINE := 2215435
+#
+# +152 an array's window read through a view drops the const of its inline
+# storage: 0 behaviour, +152 source.
+ALLOC_BASELINE := 2215587
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

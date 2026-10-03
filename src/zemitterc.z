@@ -9321,6 +9321,7 @@ emitListValLendCall: function {
         recvT: recvT.stringView
         len: "_zw->length"
         what: "ListVal mutSlice"
+        inline: false
     )
 }
 
@@ -9552,7 +9553,7 @@ emitArrayMethodCall: function {
     isSlice: (mnId == zast.names.wkSlice) or (dispatchIs :ctx id: mnId at: dispatch.mutSlice)
     if isSlice then {
         recvA: colRecvRef :ctx bn: bn.stringView vid: bvid
-        recvTa: "\{cb}_t*"
+        recvTa: "const \{cb}_t*"
         lenA: "\{cb}_length"
         whatA: "array slice"
         if mnId == zast.names.wkSlice then whatA = "array slice" else whatA = "array mutSlice"
@@ -9565,6 +9566,7 @@ emitArrayMethodCall: function {
             recvT: recvTa.stringView
             len: lenA.stringView
             what: whatA
+            inline: true
         )
     }
     return ""
@@ -9665,7 +9667,10 @@ emitSpanMethodCall: function {
 # emitWindowSlice -- a window over [from, to) of a list's or an array's storage,
 # written at the call: the receiver's address `recvR` held as `_zw` of C type
 # `recvT`, its length as `len` spells it -- `_zw->length`, or an array's
-# constant -- and the bounds check that names `what` in its panic.
+# constant -- and the bounds check that names `what` in its panic. An array's
+# storage is inline, so a receiver read through a view holds it const; `inline`
+# says so, and the window takes the address without the qualifier, its own type
+# deciding whether it writes.
 emitWindowSlice: function {
     ast: Ast.view
     symtab: zenv.ZSymbolTable.view
@@ -9675,6 +9680,7 @@ emitWindowSlice: function {
     recvT: StringView
     len: StringView
     what: StringView
+    inline: bool
 } out String is {
     needsAddM :ctx uname: "collections" memb: "window"
     wc: (ctxCname
@@ -9688,7 +9694,11 @@ emitWindowSlice: function {
     tmpl.append ", \""
     tmpl.append what
     tmpl.append "\"); "
-    tmpl.append "(\{wc}_t){ .length = _zt - _zf, .data = _zw->data + _zf }; })"
+    if inline then {
+        tmpl.append "(\{wc}_t){ .length = _zt - _zf, .data = (void*)(_zw->data + _zf) }; })"
+    } else {
+        tmpl.append "(\{wc}_t){ .length = _zt - _zf, .data = _zw->data + _zf }; })"
+    }
     return (emitOrderedPairInto
         :ast
         :symtab
@@ -15913,6 +15923,9 @@ windowMemberRead: function {
     rc: ctxCname :ctx :tid
     len: "\{base}\{acc}length"
     if isArr then len = "\{rc}_length"
+    # an array's storage is inline, const through a view receiver: the window
+    # takes it without the qualifier, as emitWindowSlice says
+    if isArr then return "((\{wc}_t){ .length = \{len}, .data = (void*)\{base}\{acc}data })"
     return "((\{wc}_t){ .length = \{len}, .data = \{base}\{acc}data })"
 }
 
