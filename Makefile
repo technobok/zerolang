@@ -2142,7 +2142,10 @@ perf: $(PERFBIN)
 #
 # +81 natMul squares equal operands: zc's own constant folding demands math,
 # so the self-compile checks the new branch: 0 behaviour, +81 source.
-ALLOC_BASELINE := 2215386
+#
+# +49 a method returning `type` returns the instance when the instance was
+# minted through an alias: 0 behaviour, +49 source.
+ALLOC_BASELINE := 2215435
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
