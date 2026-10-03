@@ -6,16 +6,12 @@
 # 2026-10-03: the elementary operations on word vectors. Go's `z == x` alias
 # is spelled here as an in-place twin -- a window and a view of one list cannot
 # be held at once -- and every vector is a window (written) or a view (read).
+# The vector kernels are native: their C is src/runtime/natives/_Z_MATH_ARITH.inc,
+# Go's portable loops over the system word primitives, and each kernel's own
+# fragment beside it checks the lengths the way Go's kernels panic on them.
 
 # the word size in bits
 wordBits: 64
-
-# mulAddWWW -- x*y + c as a two-word number, high word first
-mulAddWWW: function {x: u64 y: u64 c: u64} out system.wide is {
-    p: x.mulWide rhs: y
-    s: p.lo.addCarry rhs: c carry: 0
-    return (system.wide hi: p.hi + s.carry lo: s.value)
-}
 
 # nlz -- the number of leading zeros in x
 nlz: function {x: u64} out u64 is {
@@ -25,224 +21,57 @@ nlz: function {x: u64} out u64 is {
 # addVV -- z = x + y over equal lengths, returning the final carry, 0 or 1
 addVV: function {
     z: (SpanVal u64).borrow x: (ListViewVal u64).view y: (ListViewVal u64).view
-} out u64 is {
-    if (x.length != z.length) or (y.length != z.length) then panic msg: "addVV len"
-    c: u64
-    i: u64
-    for i < z.length loop {
-        s: (x.get :i).addCarry rhs: (y.get :i) carry: c
-        z.set :i item: s.value
-        c = s.carry
-        i = i + 1
-    }
-    return c
-}
+} out u64 is native
 
 # addVVInPlace -- z += y over equal lengths: addVV with z as its own x
-addVVInPlace: function {z: (SpanVal u64).borrow y: (ListViewVal u64).view} out u64 is {
-    if y.length != z.length then panic msg: "addVV len"
-    c: u64
-    i: u64
-    for i < z.length loop {
-        s: (z.get :i).addCarry rhs: (y.get :i) carry: c
-        z.set :i item: s.value
-        c = s.carry
-        i = i + 1
-    }
-    return c
-}
+addVVInPlace: function {z: (SpanVal u64).borrow y: (ListViewVal u64).view} out u64 is native
 
 # subVV -- z = x - y over equal lengths, returning the final borrow, 0 or 1
 subVV: function {
     z: (SpanVal u64).borrow x: (ListViewVal u64).view y: (ListViewVal u64).view
-} out u64 is {
-    if (x.length != z.length) or (y.length != z.length) then panic msg: "subVV len"
-    c: u64
-    i: u64
-    for i < z.length loop {
-        s: (x.get :i).subBorrow rhs: (y.get :i) carry: c
-        z.set :i item: s.value
-        c = s.carry
-        i = i + 1
-    }
-    return c
-}
+} out u64 is native
 
 # subVVInPlace -- z -= y over equal lengths: subVV with z as its own x
-subVVInPlace: function {z: (SpanVal u64).borrow y: (ListViewVal u64).view} out u64 is {
-    if y.length != z.length then panic msg: "subVV len"
-    c: u64
-    i: u64
-    for i < z.length loop {
-        s: (z.get :i).subBorrow rhs: (y.get :i) carry: c
-        z.set :i item: s.value
-        c = s.carry
-        i = i + 1
-    }
-    return c
-}
+subVVInPlace: function {z: (SpanVal u64).borrow y: (ListViewVal u64).view} out u64 is native
 
 # addVW -- z = x + y for a word y, returning the final carry: y itself when z is
 # empty, else 0 or 1
-addVW: function {z: (SpanVal u64).borrow x: (ListViewVal u64).view y: u64} out u64 is {
-    if x.length != z.length then panic msg: "addVW len"
-    c: y
-    i: u64
-    for i < z.length loop {
-        s: (x.get :i).addCarry rhs: c carry: 0
-        z.set :i item: s.value
-        c = s.carry
-        i = i + 1
-    }
-    return c
-}
+addVW: function {z: (SpanVal u64).borrow x: (ListViewVal u64).view y: u64} out u64 is native
 
 # addVWInPlace -- z += y for a word y; stops as soon as the carry dies, which is
 # what Go's addVW does when z and x are one vector
-addVWInPlace: function {z: (SpanVal u64).borrow y: u64} out u64 is {
-    c: y
-    i: u64
-    for i < z.length while c != 0 loop {
-        s: (z.get :i).addCarry rhs: c carry: 0
-        z.set :i item: s.value
-        c = s.carry
-        i = i + 1
-    }
-    return c
-}
+addVWInPlace: function {z: (SpanVal u64).borrow y: u64} out u64 is native
 
 # subVW -- z = x - y for a word y, returning the final borrow: y itself when z is
 # empty, else 0 or 1
-subVW: function {z: (SpanVal u64).borrow x: (ListViewVal u64).view y: u64} out u64 is {
-    if x.length != z.length then panic msg: "subVW len"
-    c: y
-    i: u64
-    for i < z.length loop {
-        s: (x.get :i).subBorrow rhs: c carry: 0
-        z.set :i item: s.value
-        c = s.carry
-        i = i + 1
-    }
-    return c
-}
+subVW: function {z: (SpanVal u64).borrow x: (ListViewVal u64).view y: u64} out u64 is native
 
 # subVWInPlace -- z -= y for a word y, stopping once the borrow dies
-subVWInPlace: function {z: (SpanVal u64).borrow y: u64} out u64 is {
-    c: y
-    i: u64
-    for i < z.length while c != 0 loop {
-        s: (z.get :i).subBorrow rhs: c carry: 0
-        z.set :i item: s.value
-        c = s.carry
-        i = i + 1
-    }
-    return c
-}
+subVWInPlace: function {z: (SpanVal u64).borrow y: u64} out u64 is native
 
 # lshVU -- z = x << s for 0 <= s < 64, returning the bits shifted out of the top
-lshVU: function {z: (SpanVal u64).borrow x: (ListViewVal u64).view s: u64} out u64 is {
-    if x.length != z.length then panic msg: "lshVU len"
-    if s == 0 then {
-        z.copyFrom from: x
-        return 0
-    }
-    n: z.length
-    if n == 0 then return 0
-    sh: s & 63
-    back: (64.u64 - sh) & 63
-    c: (x.get i: n - 1) >> back
-    i: n - 1
-    for i > 0 loop {
-        z.set :i item: ((x.get :i) << sh) | ((x.get i: i - 1) >> back)
-        i = i - 1
-    }
-    z.set i: 0 item: (x.get i: 0) << sh
-    return c
-}
+lshVU: function {z: (SpanVal u64).borrow x: (ListViewVal u64).view s: u64} out u64 is native
 
 # lshVUInPlace -- z <<= s for 0 <= s < 64. The words are read from the top
 # down, each before it is overwritten, so one vector serves as both
-lshVUInPlace: function {z: (SpanVal u64).borrow s: u64} out u64 is {
-    n: z.length
-    if (s == 0) or (n == 0) then return 0
-    sh: s & 63
-    back: (64.u64 - sh) & 63
-    c: (z.get i: n - 1) >> back
-    i: n - 1
-    for i > 0 loop {
-        z.set :i item: ((z.get :i) << sh) | ((z.get i: i - 1) >> back)
-        i = i - 1
-    }
-    z.set i: 0 item: (z.get i: 0) << sh
-    return c
-}
+lshVUInPlace: function {z: (SpanVal u64).borrow s: u64} out u64 is native
 
 # rshVU -- z = x >> s for 0 <= s < 64, returning the bits shifted out of the
 # bottom, left-aligned in a word
-rshVU: function {z: (SpanVal u64).borrow x: (ListViewVal u64).view s: u64} out u64 is {
-    if x.length != z.length then panic msg: "rshVU len"
-    if s == 0 then {
-        z.copyFrom from: x
-        return 0
-    }
-    n: z.length
-    if n == 0 then return 0
-    sh: s & 63
-    back: (64.u64 - sh) & 63
-    c: (x.get i: 0) << back
-    i: 1.u64
-    for i < n loop {
-        z.set i: i - 1 item: ((x.get i: i - 1) >> sh) | ((x.get :i) << back)
-        i = i + 1
-    }
-    z.set i: n - 1 item: (x.get i: n - 1) >> sh
-    return c
-}
+rshVU: function {z: (SpanVal u64).borrow x: (ListViewVal u64).view s: u64} out u64 is native
 
 # rshVUInPlace -- z >>= s for 0 <= s < 64. The words are read from the bottom
 # up, each before it is overwritten
-rshVUInPlace: function {z: (SpanVal u64).borrow s: u64} out u64 is {
-    n: z.length
-    if (s == 0) or (n == 0) then return 0
-    sh: s & 63
-    back: (64.u64 - sh) & 63
-    c: (z.get i: 0) << back
-    i: 1.u64
-    for i < n loop {
-        z.set i: i - 1 item: ((z.get i: i - 1) >> sh) | ((z.get :i) << back)
-        i = i + 1
-    }
-    z.set i: n - 1 item: (z.get i: n - 1) >> sh
-    return c
-}
+rshVUInPlace: function {z: (SpanVal u64).borrow s: u64} out u64 is native
 
 # mulAddVWW -- z = x*y + r for a word y and a word r, returning the high word
 # that spills past z
-mulAddVWW: function {z: (SpanVal u64).borrow x: (ListViewVal u64).view y: u64 r: u64} out u64 is {
-    if x.length != z.length then panic msg: "mulAddVWW len"
-    c: r
-    i: u64
-    for i < z.length loop {
-        w: mulAddWWW x: (x.get :i) :y :c
-        z.set :i item: w.lo
-        c = w.hi
-        i = i + 1
-    }
-    return c
-}
+mulAddVWW: function {
+    z: (SpanVal u64).borrow x: (ListViewVal u64).view y: u64 r: u64
+} out u64 is native
 
 # mulAddVWWInPlace -- z = z*y + r for a word y and a word r
-mulAddVWWInPlace: function {z: (SpanVal u64).borrow y: u64 r: u64} out u64 is {
-    c: r
-    i: u64
-    for i < z.length loop {
-        w: mulAddWWW x: (z.get :i) :y :c
-        z.set :i item: w.lo
-        c = w.hi
-        i = i + 1
-    }
-    return c
-}
+mulAddVWWInPlace: function {z: (SpanVal u64).borrow y: u64 r: u64} out u64 is native
 
 # addMulVVWW -- z = x + y*m + a over equal lengths, for words m and a, returning
 # the high word that spills past z
@@ -252,35 +81,11 @@ addMulVVWW: function {
     y: (ListViewVal u64).view
     m: u64
     a: u64
-} out u64 is {
-    if (x.length != z.length) or (y.length != z.length) then panic msg: "addMulVVWW len"
-    c: a
-    i: u64
-    for i < z.length loop {
-        w: mulAddWWW x: (y.get :i) y: m c: (x.get :i)
-        s: w.lo.addCarry rhs: c carry: 0
-        z.set :i item: s.value
-        c = s.carry + w.hi
-        i = i + 1
-    }
-    return c
-}
+} out u64 is native
 
 # addMulVVW -- z += x*y for a word y over equal lengths: addMulVVWW with z as its
 # own x and no addend
-addMulVVW: function {z: (SpanVal u64).borrow x: (ListViewVal u64).view y: u64} out u64 is {
-    if x.length != z.length then panic msg: "addMulVVW len"
-    c: u64
-    i: u64
-    for i < z.length loop {
-        w: mulAddWWW x: (x.get :i) :y c: (z.get :i)
-        s: w.lo.addCarry rhs: c carry: 0
-        z.set :i item: s.value
-        c = s.carry + w.hi
-        i = i + 1
-    }
-    return c
-}
+addMulVVW: function {z: (SpanVal u64).borrow x: (ListViewVal u64).view y: u64} out u64 is native
 
 # divWW -- (x1<<64 + x0) / y, given m = reciprocalWord y and x1 < y: the
 # quotient and the remainder. Improved Division by Invariant Integers (IEEE

@@ -2088,7 +2088,10 @@ perf: $(PERFBIN)
 # -1,422 a native free function is keyed by the unit that declares it, and
 # collections.stringJoin is called like any other fragment native: +202
 # behaviour, -1,624 source.
-ALLOC_BASELINE := 2220342
+#
+# -5,046 math's word-vector kernels are C natives, their zerolang bodies gone:
+# 0 behaviour, -5,046 source.
+ALLOC_BASELINE := 2215296
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -3660,12 +3663,13 @@ fallback-guard: $(EXCS) bin/zc bin/zl bin/zls
 clean:
 	rm -rf $(BUILDDIR) bin
 
-# native-guard -- the io/os/cli/net natives are declaration-driven: the
-# unified emitter derives the C symbol z_<unit>_<name> from the resolved
+# native-guard -- the io/os/cli/net/tcc/math natives are declaration-driven:
+# the unified emitter derives the C symbol z_<unit>_<name> from the resolved
 # declaration, and the C implementation lives in a conventionally-named
 # fragment _Z_<UNIT>_<UPPER_SNAKE(name)>.inc under src/runtime/natives.
-# Leg 1: every top-level 'is native' free function in the four convention
-# units has its fragment on disk, or is a known exception (print is the
+# Leg 1: every top-level 'is native' free function in the convention units,
+# their hidden subunits (lib/system/<unit>/*.z) included, has its fragment on
+# disk, or is a known exception (print is the
 # statement-special; stdin/stdout/stderr live in the stream fragments;
 # env->GET_ENV and pollReadable->POLL are renamed). Bodied free functions
 # emit generically and are exempt. Leg 2: every _Z_* fragment name the
@@ -3690,8 +3694,8 @@ CONVENTION_EXCEPTIONS := io.print io.stdin io.stdout io.stderr os.args
 
 native-guard:
 	@fail=0; conv=""; \
-	for u in io os cli net tcc; do \
-	  for n in $$(awk '/^[a-zA-Z][a-zA-Z0-9]*: function/ {name=$$1; sub(/:.*/,"",name); pending=1} pending && /is native/ {print name; pending=0} pending && /is \{/ {pending=0}' lib/system/$$u.z); do \
+	for u in io os cli net tcc math; do \
+	  for n in $$(awk '/^[a-zA-Z][a-zA-Z0-9]*: function/ {name=$$1; sub(/:.*/,"",name); pending=1} pending && /is native/ {print name; pending=0} pending && /is \{/ {pending=0}' lib/system/$$u.z $$(ls lib/system/$$u/*.z 2>/dev/null)); do \
 	    case " $(NATIVE_GUARD_EXCEPTIONS) " in *" $$u.$$n "*) continue;; esac; \
 	    snake=$$(echo "$$n" | sed 's/\([A-Z]\)/_\1/g' | tr 'a-z' 'A-Z'); \
 	    frag="_Z_$$(echo $$u | tr 'a-z' 'A-Z')_$$snake"; \
@@ -3710,7 +3714,7 @@ native-guard:
 	  grep -qF "\"$$stem\"" src/zemitterc.z && ref=1; \
 	  grep -qF "\"$$need\"" src/zemitterc.z && ref=1; \
 	  grep -qE "frag=([A-Z0-9_]+,)*$$stem(,|\]| )" src/runtime/natives.tbl && ref=1; \
-	  for u in io os cli net tcc; do \
+	  for u in io os cli net tcc math; do \
 	    case "$$need" in "$$u"_*) \
 	      grep -qF "memb: \"$${need#$$u\_}\"" src/zemitterc.z && ref=1;; \
 	    esac; \
