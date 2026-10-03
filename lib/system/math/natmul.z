@@ -22,29 +22,224 @@ natMulAddWW: function {z: (ListVal u64).borrow x: ListViewVal u64 y: u64 r: u64}
     nat.natNorm :z
 }
 
+# operands at least this many words long multiply by Karatsuba, shorter ones
+# grade-school (Go's calibrated value)
+karatsubaThreshold: 40
+
 # natMul -- z = x*y. z must be neither operand: the product is written into it
-# while both are still read
+# while both are still read. The scratch Go takes from its stack is one list,
+# sized for the deepest recursion before it starts and carved by split
 natMul: function {z: (ListVal u64).borrow x: ListViewVal u64 y: ListViewVal u64} is {
     m: x.length
     n: y.length
-    if m < n then {
-        natMul :z x: y y: x
-        return
-    }
     if (m == 0) or (n == 0) then {
         z.resize to: 0
         return
     }
-    if n == 1 then {
-        natMulAddWW :z :x y: (y.get i: 0) r: 0
+    if (m == 1) or (n == 1) then {
+        if m == 1 then natMulAddWW :z x: y y: (x.get i: 0) r: 0 else (natMulAddWW
+            :z
+            :x
+            y: (y.get i: 0)
+            r: 0
+        )
         return
     }
     z.resize to: m + n
+    stk: ListVal u64
+    stk.resize to: (mulArenaWords :m :n)
     {
         w: z.mutView
-        basicMul z: w :x :y
+        s: stk.mutView
+        mulWindow stk: s z: w :x :y
     }
     nat.natNorm :z
+}
+
+# mulArenaWords -- the scratch words mulWindow takes for an m-word by n-word
+# product: the walk below, taken without the arithmetic
+mulArenaWords: function {m: u64 n: u64} out u64 is {
+    if m < n then return (mulArenaWords m: n n: m)
+    if n < karatsubaThreshold then return 0
+    k: karatsubaArenaWords :n
+    if m == n then return k
+    # the chunks above the first: a 2n-word product held while the next chunk
+    # multiplies; only the last, short one can need a different walk
+    last: m % n
+    chunk: mulArenaWords m: n :n
+    if last > 0 then chunk = larger a: chunk b: (mulArenaWords m: n n: last)
+    return (larger a: k b: n * 2 + chunk)
+}
+
+# karatsubaArenaWords -- the scratch words karatsuba takes for n-word operands:
+# z1's 2*n2 + 1 words, live while the three half-size products run beneath it
+karatsubaArenaWords: function {n: u64} out u64 is {
+    if n < karatsubaThreshold then return 0
+    n2: n + 1 / 2
+    return n2 * 2 + 1 + (mulArenaWords m: n2 n: n2)
+}
+
+# mulWindow -- z = x*y in a window of exactly len(x) + len(y) words, NOT
+# normalized; stk is the scratch, at least mulArenaWords words
+mulWindow: function {
+    stk: (SpanVal u64).borrow
+    z: (SpanVal u64).borrow
+    x: ListViewVal u64
+    y: ListViewVal u64
+} is {
+    m: x.length
+    n: y.length
+    if m < n then {
+        mulWindow :stk :z x: y y: x
+        return
+    }
+    if n == 0 then {
+        z.clear
+        return
+    }
+    if n < karatsubaThreshold then {
+        basicMul :z :x :y
+        return
+    }
+    # x = x1:x0 with x0 as long as y: z = x0*y, then each n-word chunk of x1
+    # times y added in at its place
+    {
+        lo: z.slice from: 0 to: n * 2
+        karatsuba :stk z: lo x: (x.slice from: 0 to: n) :y
+    }
+    if n == m then return
+    {
+        hi: z.slice from: n * 2 to: z.length
+        hi.clear
+    }
+    pair: stk.split at: n * 2
+    i: n
+    for i < m loop {
+        e: i + n
+        if e > m then e = m
+        t: pair.lo.slice from: 0 to: e - i + n
+        mulWindow stk: pair.hi z: t x: (x.slice from: i to: e) :y
+        zi: z.slice from: i to: z.length
+        nat.addTo z: zi x: t.listView
+        i = e
+    }
+}
+
+# karatsuba -- z = x*y for n-word x and y, z 2n words, NOT normalized. With
+# x = x1:x0 and y = y1:y0 split at n2 words,
+#
+#   x*y = x1*y1 : (x0-x1)*(y1-y0) + x1*y1 + x0*y0 : x0*y0
+#
+# three half-size products where the schoolbook form takes four. The halves
+# keep their full widths, leading zero words and all, where Go normalizes them:
+# every product below is then square, which is what lets karatsubaArenaWords
+# size the scratch before the first word is multiplied. The two differences are
+# built in z's low half, which the products overwrite once they are taken
+karatsuba: function {
+    stk: (SpanVal u64).borrow
+    z: (SpanVal u64).borrow
+    x: ListViewVal u64
+    y: ListViewVal u64
+} is {
+    n: y.length
+    if (x.length != n) or (z.length != (n * 2)) then panic msg: "bad karatsuba length"
+    if n < karatsubaThreshold then {
+        basicMul :z :x :y
+        return
+    }
+    n2: n + 1 / 2
+    x0: x.slice from: 0 to: n2
+    x1: x.slice from: n2 to: n
+    y0: y.slice from: 0 to: n2
+    y1: y.slice from: n2 to: n
+    pair: stk.split at: n2 * 2 + 1
+    # tx = x0 - x1 in z[0:n2], ty = y1 - y0 in z[n2:2*n2], magnitudes with signs
+    txNeg: absDiff dst: (z.slice from: 0 to: n2) a: x0 b: x1
+    tyNeg: absDiff dst: (z.slice from: n2 to: n2 * 2) a: y1 b: y0
+    # z1 = |tx*ty| in the scratch's low 2*n2 words, its top word clear
+    pair.lo.clear
+    {
+        zv: z.listView
+        p: pair.lo.slice from: 0 to: n2 * 2
+        mulWindow stk: pair.hi z: p x: (zv.slice from: 0 to: n2) y: (zv.slice from: n2 to: n2 * 2)
+    }
+    {
+        z0: z.slice from: 0 to: n2 * 2
+        mulWindow stk: pair.hi z: z0 x: x0 y: y0
+    }
+    {
+        z2: z.slice from: n2 * 2 to: n * 2
+        mulWindow stk: pair.hi z: z2 x: x1 y: y1
+    }
+    # z1 = z0 + z2 + tx*ty, which is x0*y1 + x1*y0 and so never negative: with
+    # tx*ty negative, z0 - |tx*ty| may borrow out of the window, and adding z2
+    # carries the borrow back -- the sum is exact modulo the window
+    {
+        zv: z.listView
+        z0v: zv.slice from: 0 to: n2 * 2
+        z2v: zv.slice from: n2 * 2 to: n * 2
+        if txNeg == tyNeg then {
+            nat.addTo z: pair.lo x: z0v
+        } else {
+            subFromInPlace z: pair.lo x: z0v
+        }
+        nat.addTo z: pair.lo x: z2v
+    }
+    z1: normalized x: pair.lo.listView
+    zn: z.slice from: n2 to: z.length
+    nat.addTo z: zn x: z1
+}
+
+# larger -- the larger of two word counts
+larger: function {a: u64 b: u64} out u64 is {
+    if a > b then return a
+    return b
+}
+
+# normalized -- x without its leading zero words
+normalized: function {x: ListViewVal u64} outx ListViewVal u64 is {
+    n: x.length
+    for n > 0 while (x.get i: n - 1) == 0 loop n = n - 1
+    return (x.slice from: 0 to: n)
+}
+
+# absDiff -- |a - b| filling dst, which is at least as long as either operand,
+# and whether a - b is negative. The operands may carry leading zero words; the
+# comparison looks past them
+absDiff: function {dst: (SpanVal u64).borrow a: ListViewVal u64 b: ListViewVal u64} out bool is {
+    an: normalized x: a
+    bn: normalized x: b
+    neg: (nat.natCmp x: an y: bn) < 0
+    dst.clear
+    if neg then {
+        diffInto :dst hi: bn lo: an
+    } else {
+        diffInto :dst hi: an lo: bn
+    }
+    return neg
+}
+
+# diffInto -- hi - lo in dst's low words, for normalized hi >= lo
+diffInto: function {dst: (SpanVal u64).borrow hi: ListViewVal u64 lo: ListViewVal u64} is {
+    top: dst.slice from: 0 to: hi.length
+    top.copyFrom from: hi
+    c: arith.subVVInPlace z: (top.slice from: 0 to: lo.length) y: lo
+    if c != 0 then arith.subVWInPlace z: (top.slice from: lo.length to: hi.length) y: c
+}
+
+# subFromInPlace -- z = x - z modulo the window, x zero-extended to z's length:
+# the reversed subtraction an in-place kernel cannot express
+subFromInPlace: function {z: (SpanVal u64).borrow x: ListViewVal u64} is {
+    c: u64
+    i: u64
+    for i < z.length loop {
+        xi: u64
+        if i < x.length then xi = x.get :i
+        s: xi.subBorrow rhs: (z.get :i) carry: c
+        z.set :i item: s.value
+        c = s.carry
+        i = i + 1
+    }
 }
 
 # basicMul -- z = x*y, grade-school, z exactly len(x) + len(y) words and not

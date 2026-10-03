@@ -78,3 +78,281 @@ natDivWInPlace: function {z: (ListVal u64).borrow y: u64} out u64 is {
     nat.natNorm :z
     return r
 }
+
+# divisors at least this many words long divide recursively, shorter ones by
+# schoolbook long division (Go's calibrated value)
+divRecursiveThreshold: 40
+
+# natDiv -- q = u / v and r = u % v, truncated; q and r are two lists, neither
+# an operand. Panics on a zero divisor
+natDiv: function {
+    q: (ListVal u64).borrow
+    r: (ListVal u64).borrow
+    u: ListViewVal u64
+    v: ListViewVal u64
+} is {
+    if v.length == 0 then panic msg: "division by zero"
+    if v.length == 1 then {
+        rw: natDivW z: q x: u y: (v.get i: 0)
+        nat.natSetWord z: r x: rw
+        return
+    }
+    if (nat.natCmp x: u y: v) < 0 then {
+        q.resize to: 0
+        nat.natSet z: r x: u
+        return
+    }
+    divLarge :q :r :u :v
+}
+
+# divArenaWords -- the scratch words divLarge takes for an n-word divisor: the
+# scaled divisor, then the division's own
+divArenaWords: function {n: u64} out u64 is {
+    return n + (divStepArenaWords :n)
+}
+
+# divStepArenaWords -- the scratch words divRecursiveStep takes for an n-word
+# divisor: q-hat, live across the half-size division beneath it and the
+# q-hat*v product beside it. Below the threshold, divBasic's q-hat*v
+divStepArenaWords: function {n: u64} out u64 is {
+    if n < divRecursiveThreshold then return n + 1
+    b: n / 2
+    inner: divStepArenaWords n: n - b + 1
+    prod: b * 2 + (natmul.mulArenaWords m: b + 1 n: b - 1)
+    return b + 1 + (natmul.larger a: inner b: prod)
+}
+
+# divLarge -- q = u / v, r = u % v for len(v) >= 2 and u >= v. The divisor is
+# scaled until its top bit is set, which bounds every quotient-digit guess
+# below, and the remainder unscaled at the end
+divLarge: function {
+    q: (ListVal u64).borrow
+    r: (ListVal u64).borrow
+    u: ListViewVal u64
+    v: ListViewVal u64
+} is {
+    n: v.length
+    m: u.length - n
+    shift: (v.get i: n - 1).leadingZeros
+    stk: ListVal u64
+    stk.resize to: (divArenaWords :n)
+    # r holds the scaled dividend, one word longer, and becomes the remainder
+    r.resize to: u.length + 1
+    q.resize to: m + 1
+    {
+        sp: stk.mutView
+        pair: sp.split at: n
+        {
+            rw: r.mutView
+            top: u64
+            if shift == 0 then {
+                pair.lo.copyFrom from: v
+                {
+                    low: rw.slice from: 0 to: u.length
+                    low.copyFrom from: u
+                }
+            } else {
+                arith.lshVU z: pair.lo x: v s: shift
+                top = arith.lshVU z: (rw.slice from: 0 to: u.length) x: u s: shift
+            }
+            rw.set i: u.length item: top
+            qw: q.mutView
+            if n < divRecursiveThreshold then {
+                divBasic stk: pair.hi q: qw u: rw v: pair.lo.listView
+            } else {
+                divRecursive stk: pair.hi z: qw u: rw v: pair.lo.listView
+            }
+        }
+    }
+    nat.natNorm z: q
+    if shift != 0 then {
+        rw: r.mutView
+        arith.rshVUInPlace z: rw s: shift
+    }
+    nat.natNorm z: r
+}
+
+# divBasic -- schoolbook long division: q = u / v with u overwritten by the
+# remainder, one quotient digit per step from a 2-by-1 guess refined to a
+# 3-by-2 one, which is off by at most one and fixed by adding v back
+divBasic: function {
+    stk: (SpanVal u64).borrow
+    q: (SpanVal u64).borrow
+    u: (SpanVal u64).borrow
+    v: ListViewVal u64
+} is {
+    n: v.length
+    m: u.length - n
+    qhatv: stk.slice from: 0 to: n + 1
+    vn1: v.get i: n - 1
+    vn2: v.get i: n - 2
+    rec: arith.reciprocalWord d1: vn1
+    # the invented leading 0 of u, for the first step: ujn == u[j+n] after it
+    ujn: u64
+    j: m + 1
+    for j > 0 loop {
+        j = j - 1
+        # the 2-by-1 guess, the top digit itself when ujn == vn1
+        qhat: 18446744073709551615.u64
+        if ujn != vn1 then {
+            d: arith.divWW x1: ujn x0: (u.get i: j + n - 1) y: vn1 m: rec
+            qhat = d.quo
+            rhat: d.rem
+            # refined to 3-by-2: while qhat*vn2 > rhat:u[j+n-2], qhat is one too big
+            x: qhat.mulWide rhs: vn2
+            ujn2: u.get i: j + n - 2
+            for (greaterThan x1: x.hi x2: x.lo y1: rhat y2: ujn2) loop {
+                qhat = qhat - 1
+                prev: rhat
+                rhat = rhat + vn1
+                # rhat overflowed, so rhat:u[j+n-2] now outweighs x1:x2
+                if rhat < prev then break
+                # keep x1:x2 == qhat*vn2 after the decrement
+                xh: x.hi
+                if vn2 > x.lo then xh = xh - 1
+                x = system.wide hi: xh lo: x.lo - vn2
+            }
+        }
+        # u[j:j+qhl] -= qhat*v, adding v back when that underflows
+        qhatv.set i: n item: (arith.mulAddVWW z: (qhatv.slice from: 0 to: n) x: v y: qhat r: 0)
+        qhl: n + 1
+        if (j + qhl) > u.length when (qhatv.get i: n) == 0 then qhl = qhl - 1
+        c: (arith.subVVInPlace
+            z: (u.slice from: j to: j + qhl)
+            y: (qhatv.listView.slice from: 0 to: qhl)
+        )
+        if c != 0 then {
+            c2: arith.addVVInPlace z: (u.slice from: j to: j + n) y: v
+            if n < qhl then u.set i: j + n item: (u.get i: j + n) + c2
+            qhat = qhat - 1
+        }
+        ujn = u.get i: j + n - 1
+        if (j == m) and (m == q.length) and (qhat == 0) then continue
+        q.set i: j item: qhat
+    }
+}
+
+# greaterThan -- whether the two-word x1:x2 exceeds y1:y2, high words first
+greaterThan: function {x1: u64 x2: u64 y1: u64 y2: u64} out bool is {
+    return (x1 > y1) or ((x1 == y1) and (x2 > y2))
+}
+
+# divRecursive -- z = u / v with u overwritten by the remainder, by
+# Burnikel-Ziegler recursion: wide digits of half v's length, each found by a
+# half-size division
+divRecursive: function {
+    stk: (SpanVal u64).borrow
+    z: (SpanVal u64).borrow
+    u: (SpanVal u64).borrow
+    v: ListViewVal u64
+} is {
+    z.clear
+    divRecursiveStep :stk :z :u :v
+}
+
+# normLength -- the length of a window's words without its leading zero words
+normLength: function {x: ListViewVal u64} out u64 is {
+    n: x.length
+    for n > 0 while (x.get i: n - 1) == 0 loop n = n - 1
+    return n
+}
+
+# divRecursiveStep -- z += u / v, with u overwritten by the remainder; z is
+# long enough to hold the quotient
+divRecursiveStep: function {
+    stk: (SpanVal u64).borrow
+    z: (SpanVal u64).borrow
+    u: (SpanVal u64).borrow
+    v: ListViewVal u64
+} is {
+    un: normLength x: u.listView
+    if un == 0 then {
+        z.clear
+        return
+    }
+    n: v.length
+    if n < divRecursiveThreshold then {
+        divBasic :stk q: z u: (u.slice from: 0 to: un) :v
+        return
+    }
+    if un < n then return
+    m: un - n
+    # B words in a row make one wide digit
+    b: n / 2
+    pair: stk.split at: b + 1
+    # s digits are dropped from the 3B- and 2B-digit chunks, leaving 2B+1 and B+1
+    s: b - 1
+    j: m
+    for j > b loop {
+        # divide u[j-B:j+n] (3 wide digits) by v (2): the 2-by-1 guess by
+        # recursion, then extended to 3-by-2
+        pair.lo.clear
+        {
+            uu: u.slice from: j - b to: un
+            (divRecursiveStep
+                stk: pair.hi
+                z: pair.lo
+                u: (uu.slice from: s to: b + n)
+                v: (v.slice from: s to: n)
+            )
+            refineWideDigit stk: pair.hi qhat: pair.lo u: uu :v :s
+        }
+        {
+            zj: z.slice from: j - b to: z.length
+            nat.addTo z: zj x: (natmul.normalized x: pair.lo.listView)
+        }
+        j = j - b
+    }
+    # u < v << B now: the low digits the same way
+    pair.lo.clear
+    {
+        uw: u.slice from: 0 to: un
+        {
+            us: uw.slice from: s to: un
+            divRecursiveStep stk: pair.hi z: pair.lo u: us v: (v.slice from: s to: n)
+        }
+        refineWideDigit stk: pair.hi qhat: pair.lo u: uw :v :s
+    }
+    nat.addTo :z x: (natmul.normalized x: pair.lo.listView)
+}
+
+# refineWideDigit -- extend a 2-by-1-wide-digit guess q-hat to the 3-by-2 one:
+# u -= q-hat*v[:s] on top of the remainder the guess left, decrementing q-hat
+# and adding v[s:] back while q-hat*v[:s] exceeds u -- at most twice
+refineWideDigit: function {
+    stk: (SpanVal u64).borrow
+    qhat: (SpanVal u64).borrow
+    u: (SpanVal u64).borrow
+    v: ListViewVal u64
+    s: u64
+} is {
+    pair: stk.split at: qhat.length + s
+    natmul.mulWindow stk: pair.hi z: pair.lo x: qhat.listView y: (v.slice from: 0 to: s)
+    l: normLength x: pair.lo.listView
+    i: u64
+    for i < 2 loop {
+        if (
+            (nat.natCmp
+                x: (pair.lo.listView.slice from: 0 to: l)
+                y: (natmul.normalized x: u.listView)
+            ) <=
+            0
+        ) then break
+        arith.subVWInPlace z: qhat y: 1
+        c: arith.subVVInPlace z: (pair.lo.slice from: 0 to: s) y: (v.slice from: 0 to: s)
+        if l > s then arith.subVWInPlace z: (pair.lo.slice from: s to: l) y: c
+        {
+            us: u.slice from: s to: u.length
+            nat.addTo z: us x: (v.slice from: s to: v.length)
+        }
+        i = i + 1
+    }
+    if (
+        (nat.natCmp x: (pair.lo.listView.slice from: 0 to: l) y: (natmul.normalized x: u.listView)
+        ) >
+        0
+    ) then panic msg: "impossible"
+    c: arith.subVVInPlace z: (u.slice from: 0 to: l) y: (pair.lo.listView.slice from: 0 to: l)
+    if c > 0 then c = arith.subVWInPlace z: (u.slice from: l to: u.length) y: c
+    if c > 0 then panic msg: "impossible"
+}
