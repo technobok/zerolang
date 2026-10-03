@@ -16784,6 +16784,20 @@ resolveDemandedNamespace: function {
         )
     }
     st.typing.declSetDefined :declId
+    # its constants, as the enclosing unit's walk resolves a namespace that
+    # was already built when it ran: a unit materialised on demand -- a hidden
+    # subunit, first named from a body -- came after that walk, and its
+    # members were marked defined with no constant ever resolved. A use then
+    # met a value that typed to nothing, and the definition's own failure (a
+    # literal beyond i64) read as an unknown reference at the use.
+    (resolveConstantDefsIn
+        :st
+        scope: dParent
+        :ast
+        unitDecl: puDecl
+        unitdefId: opId
+        ownerDeclId: declId
+    )
     # Signatures are resolved; the member bodies are owed a walk, which the
     # top-level drain does.
     st.typing.nsBodiesOwed.append (ztyping.nsbody
@@ -42899,6 +42913,15 @@ unresolvedBareName: function {
     # it was consumed, so the local's declaration itself is the authority.
     if (st.isLocalName :nameId) then return ""
     if (nameClaimedByScopeId :st scope: st.curScope :ast :unitDecl :nameId) then return ""
+    # a VALUE a scope on the way out declares -- a namespace's, a hidden
+    # subunit's -- is claimed as the unit's own is: a failed declaration is
+    # reported once, at the declaration, not again as an unknown reference at
+    # each use. A subunit's constant beyond i64 read both ways.
+    cur: st.curScope
+    for (cur > 0) and (cur != st.typing.programRoot) loop {
+        if (st.typing.declFindChild parentDeclId: cur :nameId).isZero.not then return ""
+        cur = declParentIdOf :st declId: cur
+    }
     ubw: walkLookupTyperefById :st scope: st.curScope :ast :unitDecl baseId: nameId
     match (
         ubw
