@@ -25,6 +25,7 @@ public: unit {
     :constBigOf
     :constIntText
     :constLiteralBig
+    :isBitsLexeme
     :boxMemberDelegates
     :isFunctionDefWithBody
     :truthyCondArmOf
@@ -1801,6 +1802,7 @@ literalNameTypeId: function {
     # the pool
     isnum: false
     hasDot: false
+    isBits: false
     {
         nT: zast.nameTextAt :ast ref: nameId
         b0: nT.stringView.byteAt 0.u64
@@ -1810,10 +1812,13 @@ literalNameTypeId: function {
             if b0 >= 48 when b0 <= 57 then isnum = true
         } case none then null
         if nT.stringView.contains "." then hasDot = true
+        isBits = isBitsLexeme lex: nT.stringView
     }
     if isnum.not then return ztypes.noTid
     dn7: "i64"
     if hasDot then dn7 = "f64"
+    # a hex, octal or binary literal spells bits, and is a u64
+    if isBits then dn7 = "u64"
     sid7: (descendNamed
         :st
         :scope
@@ -5603,8 +5608,7 @@ refuseLiteralTyperef: function {
     wt9: zast.nameTextAt :ast ref: wn9
     written9 = wt9.stringView == ltn
     if written9.not then return
-    dflt: "i64"
-    if tid == st.reg.literalFloatTid then dflt = "f64"
+    dflt: literalDefaultName :st :tid
     lm9: "'\{ltn}' is a compile-time type and cannot be written as a declared type"
     ln9: "a numeric literal wears it until context pins one; it never reaches emission".string
     lh9: "name the type the value should have, such as `\{dflt}`"
@@ -9265,6 +9269,7 @@ dataElemTypeName: function {
     pick: zast.nameid
     if outName.length > 0 then pick = ast.internString text: outName
     allFloat: true
+    allBits: true
     kU: u64
     for kU < dnode.nelems loop {
         elId: zast.dataElemAt :ast nid: dnode.nid i: kU
@@ -9278,6 +9283,7 @@ dataElemTypeName: function {
             lx: zast.nameTextAt :ast ref: (atomNameId :ast n: (ast.nodes.get i: de.litId))
             cv: constLiteralValue :st name: lx.stringView
             if cv.kind.fvalKind.not then allFloat = false
+            if cv.bits.not then allBits = false
             if de.tagId.isZero.not then {
                 tgId: atomNameId :ast n: (ast.nodes.get i: de.tagId)
                 if pick.isZero then pick = tgId
@@ -9304,6 +9310,8 @@ dataElemTypeName: function {
     }
     if pick.isZero.not then return pick
     if allFloat when dnode.nelems > 0 then return (ast.internString text: "f64")
+    # every element written in hex, octal or binary: the bits they spell, a u64
+    if allBits when dnode.nelems > 0 then return (ast.internString text: "u64")
     return (ast.internString text: "i64")
 }
 
@@ -20231,8 +20239,7 @@ printableInterpTid: function {
     tid: ztypes.tid
 } out bool is {
     if tid.isZero then return true
-    if tid == st.reg.literalIntTid then return true
-    if tid == st.reg.literalFloatTid then return true
+    if (isLiteralTypeId :st :tid) then return true
     t: tid
     for true loop {
         b: typedefBaseTidOf :st tid: t
@@ -32235,13 +32242,8 @@ checkLiteralAtom: function {st: zenv.ZSymbolTable ast: Ast.view node: atomref} o
         )
         return ztypes.noTid
     }
-    result: ztypes.tid
-    if (isFloatLiteralName name: ndNm.stringView) then {
-        result = st.reg.literalFloatTid
-    } else {
-        result = st.reg.literalIntTid
-        noteWideLiteral :st :node lex: ndNm.stringView
-    }
+    result: literalTidOfLexeme :st lex: ndNm.stringView
+    if result != st.reg.literalFloatTid then noteWideLiteral :st :node lex: ndNm.stringView
     setl: result
     stampGate :st nid: node.nid tid: setl
     return result
@@ -32329,7 +32331,8 @@ wideConstSpelling: function {ast: Ast.view nid: zast.nodeid} out String is {
 # wideConstTarget -- the numeric type a constant stamped `t` lands in: its
 # typedef's base, or i64 for one nothing typed.
 wideConstTarget: function {st: zenv.ZSymbolTable.view t: ztypes.tid} out String is {
-    if t.isZero or (t == st.reg.literalIntTid) then return "i64"
+    if t.isZero then return "i64"
+    if (isLiteralTypeId :st tid: t) then return (literalDefaultName :st tid: t).string
     b: t
     for (typedefBaseTidOf :st tid: b).isZero.not loop {
         b = typedefBaseTidOf :st tid: b
@@ -33010,9 +33013,7 @@ materialiseLiteral: function {
     unitDecl: ztypes.declid
     t: ztypes.tid
 } out ztypes.tid is {
-    base: ""
-    if t == st.reg.literalIntTid then base = "i64"
-    if t == st.reg.literalFloatTid then base = "f64"
+    base: literalDefaultName :st tid: t
     if base.length == 0 then return t
     got: (walkLookupTyperef :st scope: st.curScope :ast :unitDecl :base).or d: ztypes.noTid
     if got > 0 then return got
@@ -39711,15 +39712,49 @@ literalTidOfLiteralOperand: function {
     if n.atomid.not then return 0
     txt: zast.nameTextAt :ast ref: n.name
     if (isNumericLiteralName name: txt.stringView).not then return 0
-    if (isFloatLiteralName name: txt.stringView) then return st.reg.literalFloatTid.u64
-    return st.reg.literalIntTid.u64
+    return (literalTidOfLexeme :st lex: txt.stringView).u64
 }
 
-# isLiteralTypeId -- a literal-typed value: one of the registry's two reserved
+# isLiteralTypeId -- a literal-typed value: one of the registry's reserved
 # literal rows. Bare numeric literals and data-block elements wear them.
 isLiteralTypeId: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
-    if tid == st.reg.literalIntTid then return true
+    if (isIntLiteralTid :st :tid) then return true
     return tid == st.reg.literalFloatTid
+}
+
+# isIntLiteralTid -- an integer literal's pseudo-type: a decimal one's, or a
+# hex, octal or binary one's.
+isIntLiteralTid: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out bool is {
+    return (tid == st.reg.literalIntTid) or (tid == st.reg.literalBitsTid)
+}
+
+# literalDefaultName -- the type a literal pseudo-type takes where nothing gives
+# it one: i64, u64 for a hex, octal or binary integer, which spells bits, and
+# f64. "" for any other type.
+literalDefaultName: function {st: zenv.ZSymbolTable.view tid: ztypes.tid} out StringView is {
+    if tid == st.reg.literalIntTid then return "i64"
+    if tid == st.reg.literalBitsTid then return "u64"
+    if tid == st.reg.literalFloatTid then return "f64"
+    return ""
+}
+
+# literalTidOfLexeme -- the pseudo-type a numeric literal wears: a float's, a
+# hex, octal or binary integer's, or a decimal (or character) one's.
+literalTidOfLexeme: function {st: zenv.ZSymbolTable.view lex: StringView} out ztypes.tid is {
+    if (isFloatLiteralName name: lex) then return st.reg.literalFloatTid
+    if (isBitsLexeme :lex) then return st.reg.literalBitsTid
+    return st.reg.literalIntTid
+}
+
+# isBitsLexeme -- the integer lexeme is written in hex, octal or binary: a `0x`,
+# `0o` or `0b` prefix after its sign.
+isBitsLexeme: function {lex: StringView} out bool is {
+    b: u64
+    if lex.startsWith "-" then b = 1
+    if ((lex.byteAt i: b).or d: 0) != 48 then return false
+    # 120 x, 111 o, 98 b
+    c: (lex.byteAt i: b + 1).or d: 0
+    return (c == 120) or (c == 111) or (c == 98)
 }
 
 # hoistArg -- hoist a non-trivial call argument into a fresh `_tN` synth temp:
@@ -52935,69 +52970,49 @@ recordSuffixDecl: function {
 }
 
 # foldLiteralStamps -- replace literal-typed node stamps with their concrete
-# defaults (i64 / f64) after the body walk: the unregistered pseudo ids and the
-# data blocks' registered intliteral/floatliteral element shells. Symbol-table
-# entries keep their literal ids.
+# defaults (i64 / f64 / u64) after the body walk: the unregistered pseudo ids
+# and the data blocks' registered intliteral/floatliteral element shells.
+# Symbol-table entries keep their literal ids.
 foldLiteralStamps: function {st: zenv.ZSymbolTable scope: ztypes.declid program: Ast} is {
-    {
-        unitDecl: (unitDeclOfNameOrOwn
-            :st
-            :scope
-            nameId: (nameIdOf ast: program name: program.mainUnitName.stringView)
-        )
-        intId: ztypes.tid
-        li: (walkLookupTyperef
-            :st
-            :scope
-            ast: program
-            :unitDecl
-            base: "i64"
-        )
-        match (
-            li
-        ) case some then {
-            intId = li
-        } case none then null
-        floatId: ztypes.tid
-        lf: (walkLookupTyperef
-            :st
-            :scope
-            ast: program
-            :unitDecl
-            base: "f64"
-        )
-        match (
-            lf
-        ) case some then {
-            floatId = lf
-        } case none then null
-        nn: st.typing.nodeType.length
-        ni: zast.nodeid
-        for ni.u64 < nn loop {
-            fv: st.typing.nodeType.get i: ni
-            if fv > 0 then {
-                isInt: fv == st.reg.literalIntTid
-                isFloat: fv == st.reg.literalFloatTid
-                if isInt when intId > 0 then {
-                    recordLiteralDecl :st ast: program nid: ni tid: fv
-                    (ztyping.nodeTypeSet
-                        tbl: st.typing.nodeType
-                        nid: ni
-                        tid: intId
-                    )
-                }
-                if isFloat when floatId > 0 then {
-                    recordLiteralDecl :st ast: program nid: ni tid: fv
-                    (ztyping.nodeTypeSet
-                        tbl: st.typing.nodeType
-                        nid: ni
-                        tid: floatId
-                    )
-                }
-            }
-            ni = ni.next
+    unitDecl: (unitDeclOfNameOrOwn
+        :st
+        :scope
+        nameId: (nameIdOf ast: program name: program.mainUnitName.stringView)
+    )
+    intId: (walkLookupTyperef :st :scope ast: program :unitDecl base: "i64").or d: ztypes.noTid
+    floatId: (walkLookupTyperef :st :scope ast: program :unitDecl base: "f64").or d: ztypes.noTid
+    bitsId: (walkLookupTyperef :st :scope ast: program :unitDecl base: "u64").or d: ztypes.noTid
+    nn: st.typing.nodeType.length
+    ni: zast.nodeid
+    for ni.u64 < nn loop {
+        fv: st.typing.nodeType.get i: ni
+        to: literalStampFold :st :fv :intId :floatId :bitsId
+        if to > 0 then {
+            # the declaration a tool reads is the literal type's own; a hex,
+            # octal or binary literal's conversions are the integer literal's
+            dl: fv
+            if fv == st.reg.literalBitsTid then dl = st.reg.literalIntTid
+            recordLiteralDecl :st ast: program nid: ni tid: dl
+            ztyping.nodeTypeSet tbl: st.typing.nodeType nid: ni tid: to
         }
+        ni = ni.next
     }
+}
+
+# literalStampFold -- the concrete type a literal stamp folds to: i64 for an
+# integer literal, f64 for a float one, u64 for a hex, octal or binary one;
+# noTid for any other stamp, or a default the program does not reach.
+literalStampFold: function {
+    st: zenv.ZSymbolTable.view
+    fv: ztypes.tid
+    intId: ztypes.tid
+    floatId: ztypes.tid
+    bitsId: ztypes.tid
+} out ztypes.tid is {
+    if fv == st.reg.literalIntTid then return intId
+    if fv == st.reg.literalFloatTid then return floatId
+    if fv == st.reg.literalBitsTid then return bitsId
+    return ztypes.noTid
 }
 
 
@@ -53073,11 +53088,7 @@ constantAtomType: function {
     result: ztypes.tid
     trN: zast.nameTextCopy :ast ref: nameId
     if (isNumericLiteralName name: trN.stringView) then {
-        if (isFloatLiteralName name: trN.stringView) then {
-            result = st.reg.literalFloatTid
-        } else {
-            result = st.reg.literalIntTid
-        }
+        result = literalTidOfLexeme :st lex: trN.stringView
     } else {
         # a template's numeric generic parameter types by its bound, where a
         # lookup would find its declaration as a name
@@ -53125,12 +53136,10 @@ constantBinopType: function {
     }
     result: lt
     if lt.isZero then result = rt
-    if lt == st.reg.literalIntTid when rt > 0 when rt != st.reg.literalIntTid when (
-        rt != st.reg.literalFloatTid
-    ) then result = rt
-    if lt == st.reg.literalFloatTid when rt > 0 when rt != st.reg.literalIntTid when (
-        rt != st.reg.literalFloatTid
-    ) then result = rt
+    # a literal on the left takes a typed right operand's type; between two
+    # literals the left one's default governs
+    if (isLiteralTypeId :st tid: lt) when rt > 0 when (isLiteralTypeId :st tid: rt
+    ).not then result = rt
     if result > 0 then {
         (ztyping.nodeTypeSet
             tbl: st.typing.nodeType
@@ -53154,8 +53163,8 @@ constantCompareType: function {
     lt: ztypes.tid
     rt: ztypes.tid
 } out ztypes.tid is {
-    lLit: (lt == st.reg.literalIntTid) or (lt == st.reg.literalFloatTid)
-    rLit: (rt == st.reg.literalIntTid) or (rt == st.reg.literalFloatTid)
+    lLit: isLiteralTypeId :st tid: lt
+    rLit: isLiteralTypeId :st tid: rt
     conc: ztypes.tid
     if lLit.not when lt > 0 then conc = lt
     if conc.isZero when rLit.not when rt > 0 then conc = rt
@@ -53209,11 +53218,9 @@ constantLineType: function {
 } out ztypes.tid is {
     bt0: constantOperandType :st :scope :ast :unitDecl nid: innerId
     mt0: ztypes.tid
-    if bt0 == st.reg.literalIntTid then {
-        mt0 = (walkLookupTyperef :st :scope :ast :unitDecl base: "i64").or d: ztypes.noTid
-    }
-    if bt0 == st.reg.literalFloatTid then {
-        mt0 = (walkLookupTyperef :st :scope :ast :unitDecl base: "f64").or d: ztypes.noTid
+    dflt0: literalDefaultName :st tid: bt0
+    if dflt0.length > 0 then {
+        mt0 = (walkLookupTyperef :st :scope :ast :unitDecl base: dflt0).or d: ztypes.noTid
     }
     if mt0 > 0 then {
         (ztyping.nodeTypeSet
@@ -53653,7 +53660,11 @@ constLiteralValue: function {st: zenv.ZSymbolTable name: StringView} out ztypes.
     # read to the UNBOUNDED magnitude: the range that matters here is i64's,
     # and the most negative i64 has a magnitude one past it
     pv: ztypes.parseLiteralValue numstr: mag
-    if pv.ok.not then return (constOfWideLiteral :st lex: name)
+    if pv.ok.not then {
+        w: constOfWideLiteral :st lex: name
+        if w.kind.ivalKind then w.bits = isBitsLexeme lex: name
+        return w
+    }
     if pv.isFloat then {
         fv: pv.fval
         # a product keeps the sign of `-0.0`, which `0.0 - fv` drops
@@ -53670,14 +53681,19 @@ constLiteralValue: function {st: zenv.ZSymbolTable name: StringView} out ztypes.
         return (ztypes.makeIntConst mn)
     }
     ivr: pv.ival.i64
+    c: ztypes.noConst
     match (
         ivr
     ) case ok then {
         iv: ivr
         if neg then iv = 0 - iv
-        return (ztypes.makeIntConst iv)
-    } case err then null
-    return (constOfWideLiteral :st lex: name)
+        c = ztypes.makeIntConst iv
+    } case err then {
+        c = constOfWideLiteral :st lex: name
+    }
+    # a hex, octal or binary literal spells bits, and defaults to u64
+    if c.kind.ivalKind then c.bits = isBitsLexeme lex: name
+    return c
 }
 
 # constOfWideLiteral -- an integer literal outside i64, exactly, in any radix,
@@ -54106,8 +54122,12 @@ wrapBig: function {b: math.BigInt.view bits: u64 signed: bool} out math.BigInt i
 # constIntNot -- `not` on an integer constant: its bits inverted, in its own
 # width when it has a type, and -v - 1 exactly when it has none.
 constIntNot: function {st: zenv.ZSymbolTable v: ztypes.cval} out ztypes.cval is {
-    if v.numTid.isZero when v.bigId == 0 then return (ztypes.makeIntConst v.ival.not)
-    if v.numTid.isZero then return (constOfBig :st b: (constBigOf :st :v).not)
+    if v.numTid.isZero then {
+        u: ztypes.makeIntConst v.ival.not
+        if v.bigId != 0 then u = constOfBig :st b: (constBigOf :st :v).not
+        u.bits = v.bits
+        return u
+    }
     k: numKindOfTid :st tid: v.numTid
     if k.has.not then return ztypes.noConst
     bits: ztypes.intKindBits k: k.kind
@@ -54404,6 +54424,7 @@ literalDefaultTid: function {
     v: ztypes.cval
 } out ztypes.tid is {
     dflt: zast.poolFind pool: ast.names text: "i64"
+    if v.bits then dflt = zast.poolFind pool: ast.names text: "u64"
     if v.kind.fvalKind then dflt = zast.poolFind pool: ast.names text: "f64"
     return (scalarTidOf :st :scope :ast nameId: dflt)
 }
@@ -56051,6 +56072,7 @@ reportConstantConstraintArg: function {
 } is {
     at: ztypes.tid
     if av.kind.ivalKind then at = builtinTidT :ast :st :scope base: "i64"
+    if av.bits then at = builtinTidT :ast :st :scope base: "u64"
     if av.kind.fvalKind then at = builtinTidT :ast :st :scope base: "f64"
     if av.kind.armKind then at = av.armTid
     if at.isZero then return
@@ -56217,7 +56239,7 @@ constOfBinopFold: function {
     }
     if lv.kind.ivalKind when rv.kind.ivalKind then {
         if (isComparisonOp name: op) then return (constCompareInt :st :scope :ast :op :lv :rv)
-        return (constArithInt
+        r: (constArithInt
             :st
             nodeid: nid
             lineno: ln
@@ -56226,6 +56248,9 @@ constOfBinopFold: function {
             :lv
             :rv
         )
+        # the left operand's default governs an untyped result
+        if r.kind.ivalKind then r.bits = lv.bits
+        return r
     }
     lf: constFloatOf :st v: lv
     rf: constFloatOf :st v: rv
@@ -57836,6 +57861,7 @@ constValueTid: function {
     if v.numTid.isZero.not then return v.numTid
     recvBaseTid: ""
     if v.kind.ivalKind then recvBaseTid = "i64"
+    if v.bits then recvBaseTid = "u64"
     if v.kind.fvalKind then recvBaseTid = "f64"
     if v.kind.svalKind then recvBaseTid = "StringView"
     if recvBaseTid.length == 0 then return ztypes.noTid
@@ -58215,9 +58241,7 @@ operandConstantType: function {
     nid: zast.nodeid
 } out ztypes.tid is {
     t: constantOperandType :st :scope :ast :unitDecl :nid
-    litBase: ""
-    if t == st.reg.literalIntTid then litBase = "i64"
-    if t == st.reg.literalFloatTid then litBase = "f64"
+    litBase: literalDefaultName :st tid: t
     if litBase.length == 0 then return t
     lt: (walkLookupTyperef :st :scope :ast :unitDecl base: litBase).or d: ztypes.noTid
     return lt
@@ -58559,6 +58583,7 @@ unfoldedNameWhy: function {
 # constKindName -- the type a folded value carries, named for a diagnostic.
 constKindName: function {st: zenv.ZSymbolTable.view v: ztypes.cval} out String is {
     if v.numTid.isZero.not then return (st.reg.nameOf tid: v.numTid)
+    if v.bits then return "u64"
     if v.kind.ivalKind then return "i64"
     if v.kind.fvalKind then return "f64"
     if v.kind.svalKind then return "StringView"

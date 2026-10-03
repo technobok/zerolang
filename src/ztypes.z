@@ -712,6 +712,9 @@ cval: record {
     # the value is `ival`. A value inside i64 is ALWAYS inline, so two integers
     # are equal exactly when their ival and bigId both are
     bigId: u32
+    # an untyped integer whose left-most literal was hex, octal or binary: it
+    # defaults to u64 rather than i64 where nothing gives it a type
+    bits: bool
     # the float value
     fval: f64
     # the string, as a 1-based index into the constant pool so 0 means none
@@ -1073,14 +1076,17 @@ ZTypeRegistry: class {
     # the shared unregistered id worn by every `break` / `continue` entry
     # (see ctlPlaceholder); 0 until first use
     ctlPlaceholderTid: tid
-    # The two literal pseudo-types, reserved by newRegistry so a literal
+    # The literal pseudo-types, reserved by newRegistry so a literal
     # stamp is an ordinary registered id rather than a magic constant.
     # A bare numeric literal wears one of these until a coercion boundary
     # pins a concrete type; foldLiteralStamps rewrites the survivors to
-    # i64 / f64. Data-block elements wear literalIntTid too.
+    # i64 / f64 / u64. Data-block elements wear literalIntTid too.
     literalIntTid: tid
     # the type an unsuffixed float literal starts as
     literalFloatTid: tid
+    # the type a hex, octal or binary literal starts as: it spells bits, and
+    # defaults to u64
+    literalBitsTid: tid
     # every type, indexed by tid. A tid IS the index
     typeById: (List ZType i: tid)
     # every runtime variable, by vid (row 0 is the sentinel)
@@ -2054,6 +2060,7 @@ newRegistry: function {} out ZTypeRegistry is {
         ctlPlaceholderTid: noTid
         literalIntTid: tid
         literalFloatTid: tid
+        literalBitsTid: tid
         typeById: (List ZType i: tid capacity: 512)
         variableById: (List ZVariable i: vid)
         regMainUnit: ""
@@ -2076,6 +2083,9 @@ newRegistry: function {} out ZTypeRegistry is {
     r.literalFloatTid = r.newType name: "floatliteral" typetype: ztypetype.recordType
     r.setValtype typeId: r.literalFloatTid value: true
     r.setNative typeId: r.literalFloatTid value: true
+    r.literalBitsTid = r.newType name: "bitsliteral" typetype: ztypetype.recordType
+    r.setValtype typeId: r.literalBitsTid value: true
+    r.setNative typeId: r.literalBitsTid value: true
     return r
 }
 
@@ -2100,6 +2110,7 @@ noConst: function out cval is {
         kind: zconstkind.none
         ival: 0
         bigId: 0
+        bits: false
         fval: 0.0
         strId: 0
         armTid: noTid

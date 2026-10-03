@@ -2010,13 +2010,14 @@ surfaceDeclOfType: function {
     return (ztypes.declid.create from: 0)
 }
 
-# isLiteralTid -- one of the registry's two reserved literal rows.
+# isLiteralTid -- one of the registry's reserved literal rows.
 isLiteralTid: function {o: (Option zenv.ZSymbolTable).view tid: u64} out bool is {
     if tid == 0 then return false
     match (
         o
     ) case some then {
         if tid == o.reg.literalIntTid then return true
+        if tid == o.reg.literalBitsTid then return true
         return tid == o.reg.literalFloatTid
     } case none then null
     return false
@@ -2035,8 +2036,8 @@ literalNote: function {
     match (
         o
     ) case some then {
-        if refTid == o.reg.literalIntTid then return "falls to `i64` here"
-        if refTid == o.reg.literalFloatTid then return "falls to `f64` here"
+        falls: literalFallNote st: o :name :refTid
+        if falls.length > 0 then return falls
         if nodeTid > 0 then {
             tn: displayTypeNameSt st: o tid: nodeTid
             if tn.length > 0 then {
@@ -2048,6 +2049,16 @@ literalNote: function {
         }
     } case none then null
     return ""
+}
+
+# literalFallNote -- the default an unpinned literal falls to, by the literal
+# type it wears: i64, u64 for a hex, octal or binary integer, which spells
+# bits, or f64. "" when the literal is pinned.
+literalFallNote: function {st: zenv.ZSymbolTable.view name: StringView refTid: u64} out String is {
+    if refTid == st.reg.literalFloatTid then return "falls to `f64` here"
+    if refTid != st.reg.literalIntTid then return ""
+    if (ztypecheck.isBitsLexeme lex: name) then return "falls to `u64` here"
+    return "falls to `i64` here"
 }
 
 # varDefNode -- the binding node that declared variable `vid`.
@@ -4829,6 +4840,8 @@ literalDefaultTid: function {
     prog: Ast.view
     o: (Option zenv.ZSymbolTable).view
     litTid: ztypes.tid
+    # the literal is written in hex, octal or binary, which falls to u64
+    bits: bool
 } out ztypes.tid is {
     isF: false
     match (
@@ -4837,6 +4850,7 @@ literalDefaultTid: function {
         if litTid == o.reg.literalFloatTid then isF = true
     } case none then null
     if isF then return (literalConvTid :prog :o :litTid name: "f64")
+    if bits then return (literalConvTid :prog :o :litTid name: "u64")
     return (literalConvTid :prog :o :litTid name: "i64")
 }
 
@@ -4850,10 +4864,12 @@ addLiteralMembers: function {
     prog: Ast.view
     o: (Option zenv.ZSymbolTable).view
     litTid: ztypes.tid
+    # the literal is written in hex, octal or binary
+    bits: bool
     sink: (MapRV String v: u8)
 } is {
     addTypeMembers :prog :o tid: litTid :sink skipNumeric: false
-    dflt: literalDefaultTid :prog :o :litTid
+    dflt: literalDefaultTid :prog :o :litTid :bits
     if dflt.isZero then return
     addTypeMembers :prog :o tid: dflt :sink skipNumeric: true
 }
@@ -4971,9 +4987,10 @@ addLiteralHead: function {
     lit: (base.substring from: 0 to: numEnd).string
     ltid: literalTidOf o: snap.st name: lit.stringView
     if ltid.isZero then return
+    bits: ztypecheck.isBitsLexeme lex: lit.stringView
     n: base.length
     if numEnd >= n then {
-        addLiteralMembers prog: snap.prog o: snap.st litTid: ltid :sink
+        addLiteralMembers prog: snap.prog o: snap.st litTid: ltid :bits :sink
         return
     }
     s0: numEnd + 1
@@ -4988,7 +5005,7 @@ addLiteralHead: function {
     if cur.isZero then {
         # a NON-numeric child falls through to the materialised receiver, the
         # rule that keeps `5.times` and `1.0.scaleB` working
-        dflt: literalDefaultTid prog: snap.prog o: snap.st litTid: ltid
+        dflt: literalDefaultTid prog: snap.prog o: snap.st litTid: ltid :bits
         if dflt.isZero then return
         cur = (childOfIn
             prog: snap.prog

@@ -2029,7 +2029,9 @@ perf: $(PERFBIN)
 # source.
 #
 # +748 an untyped shift is exact: 0 behaviour, +748 source.
-ALLOC_BASELINE := 2141130
+#
+# +758 a hex, octal or binary literal is a u64: +3 behaviour, +755 source.
+ALLOC_BASELINE := 2141888
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
