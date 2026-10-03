@@ -3133,7 +3133,8 @@ resolveDottedArgTid: function {
     cq: zast.nameTextCopy :ast ref: (atomNameId :ast n: (ast.nodes.get i: dr.child))
     if pq.length > 0 when cq.length > 0 then {
         pqId: atomNameId :ast n: (ast.nodes.get i: dr.parent)
-        if (nameDenotesUnit :scope :st nameId: pqId) then {
+        cqId0: atomNameId :ast n: (ast.nodes.get i: dr.child)
+        if (qualifierNamesUnit :st :scope qualId: pqId memberId: cqId0) then {
             ud: unitDeclOfNameOrOwn :st :scope nameId: pqId
             return (descendNamed :st :scope :ast unitDecl: ud name: cq.stringView)
         }
@@ -4145,7 +4146,7 @@ recordDottedTyperef: function {
     cnId = atomNameId :ast n: cNode
     pNode: ast.nodes.get i: parentId
     pnId = atomNameId :ast n: pNode
-    if (nameDenotesUnit :st :scope nameId: pnId) then {
+    if (qualifierNamesUnit :st :scope qualId: pnId memberId: cnId) then {
         # a unit INSTANCE's member type names the instance's own copy, which
         # the instance's scope does not hold by name: stamped here
         if (stampInstanceTyperef :st :scope :ast :unitDecl :nid qualId: pnId memberId: cnId
@@ -4842,13 +4843,11 @@ typeArgSuffixName: function {
     match (
         op
     ) case dottedpath then {
-        if (nameDenotesUnit
-            :scope
+        if (qualifierNamesUnit
             :st
-            nameId: (atomNameId
-                :ast
-                n: (ast.nodes.get i: op.parent)
-            )
+            :scope
+            qualId: (atomNameId :ast n: (ast.nodes.get i: op.parent))
+            memberId: (atomNameId :ast n: (ast.nodes.get i: op.child))
         ) then {
             return (atomName :ast n: (ast.nodes.get i: op.child))
         } else {
@@ -4891,7 +4890,7 @@ dottedTyperefShell: function {
     # that instance's own copy
     uim: instanceTyperefMember :st :scope :ast :unitDecl :nid :pId :cId
     if uim.isZero.not then return uim
-    if (nameDenotesUnit :scope :st nameId: pId) then {
+    if (qualifierNamesUnit :st :scope qualId: pId memberId: cId) then {
         demandUnitMember :st unitNameId: pId nameId: cId
         ud8: unitDeclOfNameOrOwn :st :scope nameId: pId
         did8: (descendNamedId
@@ -11657,7 +11656,7 @@ dottedTyperefId: function {ast: Ast st: zenv.ZSymbolTable op: astnode.view} out 
     ) case dottedpath then {
         pnId: atomNameId :ast n: (ast.nodes.get i: op.parent)
         cnId: atomNameId :ast n: (ast.nodes.get i: op.child)
-        if (nameDenotesUnit :st scope: st.curScope nameId: pnId) then {
+        if (qualifierNamesUnit :st scope: st.curScope qualId: pnId memberId: cnId) then {
             uq0z: unitDeclOfName :st nameId: pnId
             ro: (resolvedByIds
                 :st
@@ -59617,6 +59616,21 @@ programUnitDecls: function {st: zenv.ZSymbolTable.view} out ListVal u64 is {
     ro: st.typing.decls.get i: st.typing.programRoot
     for each c: ro.children.iterateItems loop result.append c.value.u64
     return result
+}
+
+# qualifierNamesUnit -- the dotted type-ref `qual.member` is qualified by a
+# unit: `member` is no marker -- a marker is a reserved word and so no unit's
+# member, which makes `X.borrow` the marker form whatever X names -- and `qual`
+# names a unit here. A program in `t.z` is a unit `t`, and OptionViewVal's
+# `some: t.borrow` still names its own parameter, borrowed.
+qualifierNamesUnit: function {
+    st: zenv.ZSymbolTable.view
+    scope: ztypes.declid
+    qualId: zast.nameid
+    memberId: zast.nameid
+} out bool is {
+    if (isStripMarkerId nameId: memberId) then return false
+    return (nameDenotesUnit :st :scope nameId: qualId)
 }
 
 # nameDenotesUnit -- does `nameId` name a unit HERE: a FILE unit, or a
