@@ -34468,17 +34468,14 @@ checkRepoint: function {
     bpins: List ztyping.PinPath
     takePendingPins :st dst: bpins
     # an `outx` result is pinned and owned, unless it is a view -- the
-    # reference itself, as its binding would be
+    # reference itself, as its binding would be. A view a call hands back is a
+    # value with no storage of its own, which `x` cannot refer to: it is kept
+    # in the companion as an owned value is
+    isView: isViewFamilyTid :ast :st tid: rvt
     owned: (
         (bpins.length == 0) or
-        (
-            st.typing.pendingBorrowOwned and
-            (isViewFamilyTid
-                :ast
-                :st
-                tid: rvt
-            ).not
-        )
+        (st.typing.pendingBorrowOwned and isView.not) or
+        (isView and (isAddressableTarget :ast :st nid: rasgn.value).not)
     )
     roV: st.typing.pendingBorrowReadonly
     st.typing.pendingBorrowOwned = false
@@ -34536,7 +34533,8 @@ refuseRepointReadonly: function {
 }
 
 # repointOwned -- `x = v` with `v` an owned value -- a call's result, a
-# construction -- into the borrowed `x`: the value is stored in `x`'s companion
+# construction -- or a view a call hands back, into the borrowed `x`: the
+# value is stored in `x`'s companion
 # (mintRepointCompanion), whose old value, and the locks it held, go first, and
 # `x` refers to it. A lock the value holds is its companion's, so what it locks
 # must live as long as `x`. Refused where `x` can have no companion.

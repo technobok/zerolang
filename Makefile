@@ -2050,7 +2050,10 @@ perf: $(PERFBIN)
 #
 # +2,693 BigFloat: 0 behaviour, +2,693 source (the compiler parses math's
 # subunits, bigfloat among them, and resolves none of it).
-ALLOC_BASELINE := 2152103
+#
+# +115 a view a call hands back, re-pointing a borrow, is kept in its
+# companion: +18 behaviour (zc's own such re-points mint one), +97 source.
+ALLOC_BASELINE := 2152218
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
