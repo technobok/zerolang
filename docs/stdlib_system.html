@@ -174,6 +174,7 @@ operation can fail for reasons the caller needs to handle
 <li><a href="#numeric-types"><strong>u8</strong> / <strong>u16</strong> / <strong>u32</strong> / <strong>u64</strong> / <strong>u128</strong> -- unsigned integer records</a></li>
 <li><a href="#numeric-types"><strong>f16</strong> / <strong>f32</strong> / <strong>f64</strong> / <strong>f128</strong> -- IEEE 754 floating-point records</a></li>
 <li><a href="#numeric-types"><strong>c8</strong> / <strong>c32</strong> -- character code-unit records (UTF-8 byte / Unicode scalar)</a></li>
+<li><a href="#numeric-types"><strong>wide</strong> / <strong>carried</strong> / <strong>divmod</strong> -- the records <code>u64</code>'s word primitives answer</a></li>
 </ul>
 <p><strong>Primitive types</strong></p>
 <ul>
@@ -388,6 +389,35 @@ two without one either.</p>
   e: x.logB                 # 1 -- 3.0 lies in [2, 4)
   m: x.scaleB n: (0.i32 - x.logB)   # 1.5 -- normalised to [1, 2)
   p: 1.0.scaleB n: (0 - 24) # 2^-24, with no rounding to reason about</code></pre>
+<p><strong>Word primitives.</strong> <code>u64</code> carries the operations a number wider
+than a word is built from, one word at a time -- what an arbitrary-precision
+integer's loops are made of. Each answers whatever C does not: the high half
+of a product, the carry out of a sum, a quotient of a two-word number.</p>
+<ul>
+<li><code>a.mulWide rhs: b</code> -- the whole 128-bit product as a <code>wide</code>
+<code>{hi lo}</code>; <code>*</code> keeps only <code>lo</code>.</li>
+<li><code>a.addCarry rhs: b carry: c</code> -- <code>a + b + c</code> as a <code>carried</code>
+<code>{value carry}</code>, the carry out 0 or 1. A nonzero carry in counts as 1.</li>
+<li><code>a.subBorrow rhs: b carry: c</code> -- <code>a - b - c</code> the same way; the
+carry in and out is the borrow, as the carry flag that holds it is.</li>
+<li><code>hi.divWide lo: l by: d</code> -- the two-word number <code>(hi, l)</code> divided
+by <code>d</code>, as a <code>divmod</code> <code>{quo rem}</code>. It panics when <code>d</code> is 0, and
+when <code>hi &gt;= d</code>, where the quotient would not fit a word.</li>
+<li><code>leadingZeros</code>, <code>trailingZeros</code> -- the zero bits above the highest
+set bit, below the lowest; 64 for 0.</li>
+<li><code>bitLength</code> -- one past the highest set bit, 0 for 0;
+<code>popCount</code> -- how many bits are set.</li>
+</ul>
+<p>gcc and clang compile the product and the carry steps to single
+instructions (<code>mul</code>, <code>adc</code>, <code>sbb</code>) through <code>__int128</code> and their carry
+builtins, and the bit counts to their count instructions; the two-word
+division goes through <code>__int128</code>'s division. tcc has neither, and runs a
+portable C form of each that gives the same answers.</p>
+<pre><code class="language-zerolang">  m: 18446744073709551615.u64
+  w: m.mulWide rhs: m                 # hi 18446744073709551614, lo 1
+  s: m.addCarry rhs: 1 carry: 0       # value 0, carry 1
+  q: 1.u64.divWide lo: 0 by: 3        # 2^64 / 3: quo 6148914691236517205, rem 1
+  n: 4294967296.u64.bitLength         # 33</code></pre>
 <p><strong>Ranges:</strong></p>
 <ul>
 <li><code>i8</code>: -128 .. 127</li>

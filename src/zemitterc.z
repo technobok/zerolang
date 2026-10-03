@@ -996,6 +996,7 @@ emitNumericCast: function {
         emitFail :ctx what: "no native implementation for '\{key}'" line: 0
         return "/* zemitterc: no native implementation */0"
     }
+    rowNeedAdd :ctx :key
     # a lossy conversion builds a `resultval`; the row spells the tags and the
     # mono's name, and the DECLARATION is what decided which shape it is
     resOrig: monoOriginName :symtab tid: retTid
@@ -1025,6 +1026,11 @@ emitNumericCast: function {
         sval: castLitVal :val :dstName
         rn.append from: "V".string
         rv.append from: sval.copy
+        # a row that builds a record spells the record's C type as @RT@
+        if (body.stringView.contains needle: "@RT@") then {
+            bn.append from: "RT".string
+            bv.append from: (ctxCname :ctx tid: retTid)
+        }
     }
     return (fillHolesForCtx
         :ctx
@@ -1814,6 +1820,19 @@ nativeNeedOf: function {ctx: Ctx.view path: StringView} out String is {
         result = g.copy
     } case none then null
     return result
+}
+
+# rowNeedAdd -- register the runtime a row's body calls (its `needs=`) as a
+# demand of the unit its path names, wherever the row is emitted from.
+rowNeedAdd: function {ctx: Ctx key: StringView} is {
+    nd: nativeNeedOf :ctx path: key
+    if nd.length == 0 then return
+    dot: key.indexOf needle: "."
+    match (
+        dot
+    ) case some then {
+        needsAddM :ctx uname: (key.substring from: 0 to: dot) memb: nd.stringView
+    } case none then null
 }
 
 # nativePtrArgsOf -- true when a row's body takes its operands by pointer, so
@@ -5872,6 +5891,7 @@ emitNativeArgMethod: function {
     body: nativeImplOf :ctx path: key.stringView
     if body.length == 0 then return ""
     if (body.stringView.contains needle: "@A1@").not then return ""
+    rowNeedAdd :ctx key: key.stringView
     mk: pendingHoistMark :ctx
     recv: emitDottedReceiver :ast :symtab :ctx callable: (ast.nodes.get i: call.callable)
     if recv.length == 0 then return ""
@@ -5920,8 +5940,16 @@ emitNativeArgMethod: function {
     # a slot no argument fills leaves the caller on its ordinary path rather than
     # emitting a body with a hole still in it
     if filledAll.not then return ""
+    # a row that builds a record spells the record's C type as @RT@
     bn: List String
     bv: List String
+    if (body.stringView.contains needle: "@RT@") then {
+        bn.append from: "RT".string
+        bv.append from: (ctxCname
+            :ctx
+            tid: (chaseAggregateTypedef :symtab :ctx tid: (stampIdOf :symtab nid: call.nodeid))
+        )
+    }
     filled: (fillHolesForCtx
         :ctx
         text: body
@@ -17581,8 +17609,7 @@ emitOperatorAt: function {
             if (constPosIsFirstOnly pos: cpos.stringView) then body = cbody.copy
         }
     }
-    nd: nativeNeedOf :ctx path: key.stringView
-    if nd.length > 0 then needsAddM :ctx uname: "system" memb: nd.stringView
+    rowNeedAdd :ctx key: key.stringView
     ord: orderBegin :ctx slots: 2
     (orderRowOperand
         :ast

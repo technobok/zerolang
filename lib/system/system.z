@@ -982,6 +982,29 @@ u64: record is native as {
     # the ascending u64 order, 0 through 18446744073709551615, answered as -1,
     # 0 or 1 -- the key `sort` puts a list of u64 in
     compare: function {t: this.view rhs: type} out i32 is native
+    # the whole 128-bit product, as its high and low words: nothing is
+    # discarded, where `*` keeps only the low word
+    mulWide: function {t: this.view rhs: type} out wide is native
+    # this + rhs + carry as a word, and the carry out of the sum: one step of a
+    # multi-word addition. A nonzero carry in counts as 1
+    addCarry: function {t: this.view rhs: type carry: type} out carried is native
+    # this - rhs - carry as a word, and the borrow out of the difference: one
+    # step of a multi-word subtraction. The borrow in is spelled `carry`, as the
+    # carry flag that holds it is; a nonzero one counts as 1
+    subBorrow: function {t: this.view rhs: type carry: type} out carried is native
+    # the two-word number whose high word is this and whose low word is `lo`,
+    # divided by `by`: the quotient and the remainder. Panics when `by` is 0, and
+    # when this is not below `by`, where the quotient would not fit a word
+    divWide: function {t: this.view lo: type by: type} out divmod is native
+    # how many zero bits lead this, counted from the top: 64 for 0
+    leadingZeros: function {t: this.view} out u64 is native
+    # how many zero bits trail this, counted from the bottom: 64 for 0
+    trailingZeros: function {t: this.view} out u64 is native
+    # how many bits it takes to write this: one past its highest set bit, and 0
+    # for 0
+    bitLength: function {t: this.view} out u64 is native
+    # how many of this one's bits are set
+    popCount: function {t: this.view} out u64 is native
     # u64 to u8: fails above 255
     u8: function {t: this.view} out (resultval t: u8 e: converror) is native
     # u64 to i8: fails above 127
@@ -1877,6 +1900,34 @@ parseerror: variant {
     invalidDigit: null
     # the digits are a number, but not one the target type can hold
     overflow: null
+}
+
+# wide -- a two-word unsigned number, high word first: the product
+# `u64.mulWide` answers, with nothing discarded. Its value is hi * 2^64 + lo.
+wide: record {
+    # the word that counts in units of 2^64
+    hi: u64
+    # the word below it
+    lo: u64
+}
+
+# carried -- one word of a multi-word sum or difference, and the carry out of
+# it, which the next word's step takes in: what `u64.addCarry` and
+# `u64.subBorrow` answer. For a difference the carry is the borrow.
+carried: record {
+    # the word the step produced
+    value: u64
+    # 1 when the step carried (or borrowed) out of the word, else 0
+    carry: u64
+}
+
+# divmod -- a quotient and its remainder, which is below the divisor: what
+# `u64.divWide` answers.
+divmod: record {
+    # how many times the divisor goes in, rounded down
+    quo: u64
+    # what is left over
+    rem: u64
 }
 
 # converror -- error variants for lossy numeric conversions (valtype

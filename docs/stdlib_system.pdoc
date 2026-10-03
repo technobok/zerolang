@@ -72,6 +72,7 @@ operation can fail for reasons the caller needs to handle
   [#*: #> to=numeric-types: #b:"u8" / #b:"u16" / #b:"u32" / #b:"u64" / #b:"u128" -- unsigned integer records]
   [#*: #> to=numeric-types: #b:"f16" / #b:"f32" / #b:"f64" / #b:"f128" -- IEEE 754 floating-point records]
   [#*: #> to=numeric-types: #b:"c8" / #b:"c32" -- character code-unit records (UTF-8 byte / Unicode scalar)]
+  [#*: #> to=numeric-types: #b:"wide" / #b:"carried" / #b:"divmod" -- the records #~"u64"'s word primitives answer]
 
 #p: #b:"Primitive types"
 
@@ -329,6 +330,40 @@ two without one either.
   e: x.logB                 # 1 -- 3.0 lies in [2, 4)
   m: x.scaleB n: (0.i32 - x.logB)   # 1.5 -- normalised to [1, 2)
   p: 1.0.scaleB n: (0 - 24) # 2^-24, with no rounding to reason about
+"""
+
+#b:"Word primitives." #~"u64" carries the operations a number wider
+than a word is built from, one word at a time -- what an arbitrary-precision
+integer's loops are made of. Each answers whatever C does not: the high half
+of a product, the carry out of a sum, a quotient of a two-word number.
+
+#ul:
+  [#*: #~"a.mulWide rhs: b" -- the whole 128-bit product as a #~"wide"
+    #~"{hi lo}"; #~"*" keeps only #~"lo".]
+  [#*: #~"a.addCarry rhs: b carry: c" -- #~"a + b + c" as a #~"carried"
+    #~"{value carry}", the carry out 0 or 1. A nonzero carry in counts as 1.]
+  [#*: #~"a.subBorrow rhs: b carry: c" -- #~"a - b - c" the same way; the
+    carry in and out is the borrow, as the carry flag that holds it is.]
+  [#*: #~"hi.divWide lo: l by: d" -- the two-word number #~"(hi, l)" divided
+    by #~"d", as a #~"divmod" #~"{quo rem}". It panics when #~"d" is 0, and
+    when #~"hi >= d", where the quotient would not fit a word.]
+  [#*: #~"leadingZeros", #~"trailingZeros" -- the zero bits above the highest
+    set bit, below the lowest; 64 for 0.]
+  [#*: #~"bitLength" -- one past the highest set bit, 0 for 0;
+    #~"popCount" -- how many bits are set.]
+
+gcc and clang compile the product and the carry steps to single
+instructions (#~"mul", #~"adc", #~"sbb") through #~"__int128" and their carry
+builtins, and the bit counts to their count instructions; the two-word
+division goes through #~"__int128"'s division. tcc has neither, and runs a
+portable C form of each that gives the same answers.
+
+#code language=zerolang: """
+  m: 18446744073709551615.u64
+  w: m.mulWide rhs: m                 # hi 18446744073709551614, lo 1
+  s: m.addCarry rhs: 1 carry: 0       # value 0, carry 1
+  q: 1.u64.divWide lo: 0 by: 3        # 2^64 / 3: quo 6148914691236517205, rem 1
+  n: 4294967296.u64.bitLength         # 33
 """
 
 #b:"Ranges:"

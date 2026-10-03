@@ -1,0 +1,132 @@
+# word_primitives.z -- the u64 word primitives a multi-word number is built
+# from: the full product, the carry and borrow steps, the two-word division,
+# and the bit counts. The same golden is checked under every C compiler, so the
+# builtin forms gcc and clang take and the portable forms tcc takes must agree.
+# Exact values pin the edges; identities over seeded words cover the rest: a
+# product divided back gives its factor, a sum with its carry subtracted back
+# gives its operand, and every quotient and remainder recombine.
+
+# the words every table is built from: 0, 1, the 32-bit seams, the sign bit,
+# and the top of the range
+edges: data {
+    0
+    1
+    2
+    4294967295
+    4294967296
+    9223372036854775807
+    9223372036854775808
+    18446744073709551614
+    18446744073709551615
+} out u64
+
+# a SplitMix64 stream: the same words on every run and every compiler
+Mixer: class {
+    # the stream's position
+    state: u64
+} as {
+    # the next word of the stream
+    next: function {:this} out u64 is {
+        this.state = this.state + 11400714819323198485
+        z: this.state
+        z = (z ^ (z >> 30)) * 13787848793156543929
+        z = (z ^ (z >> 27)) * 10723151780598845931
+        return z ^ (z >> 31)
+    }
+
+    # a sum carried through two words, from inside a method: the step's
+    # runtime must load for a method body as for a free function
+    addPair: function {t: this.view a: u64 b: u64} out u64 is {
+        s: a.addCarry rhs: b carry: 0
+        return s.carry
+    }
+}
+
+# a word as edges[i]
+edge: function {i: i64} out u64 is {
+    return (edges.index :i)
+}
+
+# the exact products, sums, differences and quotients of the edge pairs
+exactTables: function is {
+    m: 18446744073709551615.u64
+    w: m.mulWide rhs: m
+    print "max*max \{w.hi} \{w.lo}"
+    w2: 4294967296.u64.mulWide rhs: 4294967296
+    print "2^32*2^32 \{w2.hi} \{w2.lo}"
+    w3: 9223372036854775808.u64.mulWide rhs: 2
+    print "2^63*2 \{w3.hi} \{w3.lo}"
+    a: m.addCarry rhs: 1 carry: 1
+    print "max+1+1 \{a.value} \{a.carry}"
+    a2: m.addCarry rhs: 0 carry: 1
+    print "max+0+1 \{a2.value} \{a2.carry}"
+    a3: m.addCarry rhs: m carry: 7
+    print "max+max+7 \{a3.value} \{a3.carry}"
+    s: 0.u64.subBorrow rhs: 1 carry: 0
+    print "0-1-0 \{s.value} \{s.carry}"
+    s2: 0.u64.subBorrow rhs: 0 carry: 1
+    print "0-0-1 \{s2.value} \{s2.carry}"
+    s3: 5.u64.subBorrow rhs: 3 carry: 1
+    print "5-3-1 \{s3.value} \{s3.carry}"
+    d: 1.u64.divWide lo: 0 by: 3
+    print "2^64/3 \{d.quo} \{d.rem}"
+    d2: 18446744073709551614.u64.divWide lo: m by: m
+    print "(max-1,max)/max \{d2.quo} \{d2.rem}"
+    d3: 0.u64.divWide lo: 12345 by: 1
+    print "12345/1 \{d3.quo} \{d3.rem}"
+    d4: 4294967295.u64.divWide lo: 0 by: 4294967296
+    print "(2^32-1,0)/2^32 \{d4.quo} \{d4.rem}"
+}
+
+# the bit counts of every edge word
+bitTables: function is {
+    for each i: edges.length.times loop {
+        v: edge :i
+        print "\{v} lz \{v.leadingZeros} tz \{v.trailingZeros} bl \{v.bitLength} pc \{v.popCount}"
+    }
+}
+
+# the identities, over every edge pair and a stream of seeded words
+identities: function is {
+    bad: 0.u64
+    checked: 0.u64
+    mx: Mixer state: 42
+    n: edges.length
+    i: 0
+    for i < ((n * n) + 20000) loop {
+        a: 0.u64
+        b: 0.u64
+        if i < (n * n) then {
+            a = edge i: i / n
+            b = edge i: i % n
+        } else {
+            a = mx.next
+            b = mx.next >> (mx.next & 63)
+        }
+        i = i + 1
+        cin: a & 1
+        sm: a.addCarry rhs: b carry: cin
+        back: sm.value.subBorrow rhs: b carry: cin
+        if (back.value == a).not or (back.carry == sm.carry).not then bad = bad + 1
+        if b > 0 then {
+            p: a.mulWide rhs: b
+            q: p.hi.divWide lo: p.lo by: b
+            if (q.quo == a).not or (q.rem == 0).not then bad = bad + 1
+            r: (a % b).divWide lo: a by: b
+            rp: r.quo.mulWide rhs: b
+            sum: rp.lo.addCarry rhs: r.rem carry: 0
+            if (sum.value == a).not then bad = bad + 1
+            if r.rem >= b then bad = bad + 1
+        }
+        checked = checked + 1
+    }
+    print "identities \{checked} checked, \{bad} bad"
+}
+
+main: function is {
+    exactTables
+    bitTables
+    identities
+    mx: Mixer state: 0
+    print "method carry \{mx.addPair a: 18446744073709551615 b: 1}"
+}
