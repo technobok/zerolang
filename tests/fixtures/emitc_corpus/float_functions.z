@@ -1,0 +1,302 @@
+# float_functions.z -- the everyday float functions, methods on f32 and f64,
+# against values computed exactly and rounded once to each width. An exact
+# operation -- sqrt, fma, the roundings, abs, copySign, min, max -- must match
+# to the bit; a transcendental one may be off by the ulp the platform's libm
+# allows, and no more. The same golden is checked under every C compiler.
+
+# a bit pattern turned into a position on the number line, so the distance
+# between two positions is how many values lie between: the negatives count
+# down from the middle, the positives up, and -0 and 0 meet there
+ordered64: function {b: u64} out u64 is {
+    mag: b & 9223372036854775807
+    if (b >> 63) == 1 then return 9223372036854775808.u64 - mag
+    return mag + 9223372036854775808
+}
+
+# the f32 positions, as ordered64 gives f64's
+ordered32: function {b: u32} out u32 is {
+    mag: b & 2147483647
+    if (b >> 31) == 1 then return 2147483648.u32 - mag
+    return mag + 2147483648
+}
+
+# `ok`, or the bits got and wanted and how many values apart they are
+check64: function {name: StringView got: f64 want: u64 tol: u64} is {
+    x: ordered64 b: got.bits
+    y: ordered64 b: want
+    gap: 0.u64
+    if x >= y then gap = x - y else gap = y - x
+    if gap <= tol then {
+        print "\{name} ok"
+    } else {
+        print "\{name} MISMATCH \{got.bits} \{want} \{gap} ulps"
+    }
+}
+
+# check64 at f32
+check32: function {name: StringView got: f32 want: u32 tol: u32} is {
+    x: ordered32 b: got.bits
+    y: ordered32 b: want
+    gap: 0.u32
+    if x >= y then gap = x - y else gap = y - x
+    if gap <= tol then {
+        print "\{name} ok"
+    } else {
+        print "\{name} MISMATCH \{got.bits} \{want} \{gap} ulps"
+    }
+}
+
+# the values no table row can be: the NaN, the infinities and the two zeros,
+# through every predicate, and the functions that must answer them exactly
+specials64: function is {
+    nan: (0.0 - 1.0).sqrt
+    inf: 1.0.scaleB n: 2000
+    ninf: 0.0 - inf
+    nz: -0.0
+    print "f64 isNaN \{nan.isNaN} \{inf.isNaN} \{nz.isNaN} \{1.0.isNaN}"
+    print "f64 isInf \{nan.isInf} \{inf.isInf} \{ninf.isInf} \{1.0.isInf}"
+    print "f64 isFinite \{nan.isFinite} \{inf.isFinite} \{nz.isFinite} \{1.0.isFinite}"
+    print "f64 signBit \{nz.signBit} \{0.0.signBit} \{ninf.signBit} \{(0.0 - 2.0).signBit}"
+    print "f64 log 0 \{0.0.log.isInf} \{0.0.log.signBit}, log -1 \{(0.0 - 1.0).log.isNaN}"
+    print "f64 sqrt -0 \{nz.sqrt.signBit}, abs -0 \{nz.abs.signBit}, copySign \{(1.0.copySign y: nz).signBit}"
+    print "f64 min nan \{(nan.min y: 1.0) == 1.0} max nan \{(1.0.max y: nan) == 1.0}"
+    print "f64 exp -inf \{ninf.exp == 0.0}, atan inf \{(inf.atan * 2.0) == (1.0.atan * 4.0)}"
+    # the product rounds to 1, where fma keeps the -2^-104 it was below 1 by
+    e: 1.0.scaleB n: (0 - 52)
+    a: 1.0 + e
+    b: 1.0 - e
+    print "f64 fma \{(a.fma y: b z: (0.0 - 1.0)) == (0.0 - (1.0.scaleB n: (0 - 104)))} product \{((a * b) - 1.0) == 0.0}"
+}
+
+# specials64 at f32
+specials32: function is {
+    nan: (0.0.f32 - 1.0.f32).sqrt
+    inf: 1.0.f32.scaleB n: 200
+    ninf: 0.0.f32 - inf
+    nz: -0.0.f32
+    print "f32 isNaN \{nan.isNaN} \{inf.isNaN} \{nz.isNaN} \{1.0.f32.isNaN}"
+    print "f32 isInf \{nan.isInf} \{inf.isInf} \{ninf.isInf} \{1.0.f32.isInf}"
+    print "f32 isFinite \{nan.isFinite} \{inf.isFinite} \{nz.isFinite} \{1.0.f32.isFinite}"
+    print "f32 signBit \{nz.signBit} \{0.0.f32.signBit} \{ninf.signBit} \{(0.0.f32 - 2.0.f32).signBit}"
+    print "f32 min nan \{(nan.min y: 1.0.f32) == 1.0.f32} max nan \{(1.0.f32.max y: nan) == 1.0.f32}"
+    e: 1.0.f32.scaleB n: (0 - 23)
+    a: 1.0.f32 + e
+    b: 1.0.f32 - e
+    print "f32 fma \{(a.fma y: b z: (0.0.f32 - 1.0.f32)) == (0.0.f32 - (1.0.f32.scaleB n: (0 - 46)))} product \{((a * b) - 1.0.f32) == 0.0.f32}"
+}
+
+# every table row at f32, then at f64
+tables: function is {
+    check32 name: "sqrt 2" got: 2.0.f32.sqrt want: 1068827891 tol: 0
+    check32 name: "sqrt 0.5" got: 0.5.f32.sqrt want: 1060439283 tol: 0
+    check32 name: "sqrt 9" got: 9.0.f32.sqrt want: 1077936128 tol: 0
+    check32 name: "sqrt 0.75" got: 0.75.f32.sqrt want: 1063105495 tol: 0
+    check32 name: "cbrt 2" got: 2.0.f32.cbrt want: 1067533592 tol: 1
+    check32 name: "cbrt -8" got: (-8.0.f32).cbrt want: 3221225472 tol: 1
+    check32 name: "cbrt 0.75" got: 0.75.f32.cbrt want: 1063819112 tol: 1
+    check32 name: "exp 1" got: 1.0.f32.exp want: 1076754516 tol: 1
+    check32 name: "exp -0.5" got: (-0.5.f32).exp want: 1058751896 tol: 1
+    check32 name: "exp 3" got: 3.0.f32.exp want: 1101049646 tol: 1
+    check32 name: "exp2 0.5" got: 0.5.f32.exp2 want: 1068827891 tol: 1
+    check32 name: "exp2 10" got: 10.0.f32.exp2 want: 1149239296 tol: 1
+    check32 name: "exp2 -3.25" got: (-3.25.f32).exp2 want: 1037518077 tol: 1
+    check32 name: "expm1 0.0009765625" got: 0.0009765625.f32.expm1 want: 981471233 tol: 1
+    check32 name: "expm1 1" got: 1.0.f32.expm1 want: 1071378601 tol: 1
+    check32 name: "expm1 -0.25" got: (-0.25.f32).expm1 want: 3194126860 tol: 1
+    check32 name: "log 2" got: 2.0.f32.log want: 1060205080 tol: 1
+    check32 name: "log 0.75" got: 0.75.f32.log want: 3197324049 tol: 1
+    check32 name: "log 10" got: 10.0.f32.log want: 1075010958 tol: 1
+    check32 name: "log2 3" got: 3.0.f32.log2 want: 1070260237 tol: 1
+    check32 name: "log2 1024" got: 1024.0.f32.log2 want: 1092616192 tol: 1
+    check32 name: "log2 0.75" got: 0.75.f32.log2 want: 3201597388 tol: 1
+    check32 name: "log10 2" got: 2.0.f32.log10 want: 1050288283 tol: 1
+    check32 name: "log10 1000" got: 1000.0.f32.log10 want: 1077936128 tol: 1
+    check32 name: "log10 0.75" got: 0.75.f32.log10 want: 3187662817 tol: 1
+    check32 name: "log1p 0.0009765625" got: 0.0009765625.f32.log1p want: 981458949 tol: 1
+    check32 name: "log1p 1" got: 1.0.f32.log1p want: 1060205080 tol: 1
+    check32 name: "log1p -0.25" got: (-0.25.f32).log1p want: 3197324049 tol: 1
+    check32 name: "sin 1" got: 1.0.f32.sin want: 1062693540 tol: 1
+    check32 name: "sin 0.5" got: 0.5.f32.sin want: 1056274244 tol: 1
+    check32 name: "sin 3" got: 3.0.f32.sin want: 1041269187 tol: 1
+    check32 name: "cos 1" got: 1.0.f32.cos want: 1057640768 tol: 1
+    check32 name: "cos 0.5" got: 0.5.f32.cos want: 1063299392 tol: 1
+    check32 name: "cos 3" got: 3.0.f32.cos want: 3212668966 tol: 1
+    check32 name: "tan 1" got: 1.0.f32.tan want: 1070029091 tol: 1
+    check32 name: "tan 0.5" got: 0.5.f32.tan want: 1057741435 tol: 1
+    check32 name: "tan -0.25" got: (-0.25.f32).tan want: 3196238893 tol: 1
+    check32 name: "asin 0.5" got: 0.5.f32.asin want: 1057360530 tol: 1
+    check32 name: "asin -0.75" got: (-0.75.f32).asin want: 3210287769 tol: 1
+    check32 name: "acos 0.5" got: 0.5.f32.acos want: 1065749138 tol: 1
+    check32 name: "acos -0.75" got: (-0.75.f32).acos want: 1075498643 tol: 1
+    check32 name: "atan 1" got: 1.0.f32.atan want: 1061752795 tol: 1
+    check32 name: "atan 0.5" got: 0.5.f32.atan want: 1055744824 tol: 1
+    check32 name: "atan -3" got: (-3.0.f32).atan want: 3214926011 tol: 1
+    check32 name: "sinh 1" got: 1.0.f32.sinh want: 1066822910 tol: 1
+    check32 name: "sinh -0.5" got: (-0.5.f32).sinh want: 3204802176 tol: 1
+    check32 name: "cosh 1" got: 1.0.f32.cosh want: 1069908907 tol: 1
+    check32 name: "cosh -0.5" got: (-0.5.f32).cosh want: 1066423820 tol: 1
+    check32 name: "tanh 1" got: 1.0.f32.tanh want: 1061353430 tol: 1
+    check32 name: "tanh -0.5" got: (-0.5.f32).tanh want: 3203177119 tol: 1
+    check32 name: "asinh 1" got: 1.0.f32.asinh want: 1063362995 tol: 1
+    check32 name: "asinh -0.5" got: (-0.5.f32).asinh want: 3203817829 tol: 1
+    check32 name: "acosh 2" got: 2.0.f32.acosh want: 1068012052 tol: 1
+    check32 name: "acosh 1.5" got: 1.5.f32.acosh want: 1064722789 tol: 1
+    check32 name: "atanh 0.5" got: 0.5.f32.atanh want: 1057791828 tol: 1
+    check32 name: "atanh -0.75" got: (-0.75.f32).atanh want: 3212383125 tol: 1
+    check32 name: "erf 0.5" got: 0.5.f32.erf want: 1057308539 tol: 1
+    check32 name: "erf 1" got: 1.0.f32.erf want: 1062714173 tol: 1
+    check32 name: "erf -1.5" got: (-1.5.f32).erf want: 3212268203 tol: 1
+    check32 name: "erfc 0.5" got: 0.5.f32.erfc want: 1056276746 tol: 1
+    check32 name: "erfc 1" got: 1.0.f32.erfc want: 1042354955 tol: 1
+    check32 name: "erfc -1.5" got: (-1.5.f32).erfc want: 1073457493 tol: 1
+    check32 name: "gamma 5" got: 5.0.f32.gamma want: 1103101952 tol: 2
+    check32 name: "gamma 0.5" got: 0.5.f32.gamma want: 1071833029 tol: 2
+    check32 name: "gamma 3.5" got: 3.5.f32.gamma want: 1079292360 tol: 2
+    check32 name: "logGamma 0.5" got: 0.5.f32.logGamma want: 1058178690 tol: 2
+    check32 name: "logGamma 10" got: 10.0.f32.logGamma want: 1095554121 tol: 2
+    check32 name: "logGamma 3.5" got: 3.5.f32.logGamma want: 1067039105 tol: 2
+    check32 name: "floor 2.5" got: 2.5.f32.floor want: 1073741824 tol: 0
+    check32 name: "floor -2.5" got: (-2.5.f32).floor want: 3225419776 tol: 0
+    check32 name: "floor -0.75" got: (-0.75.f32).floor want: 3212836864 tol: 0
+    check32 name: "ceil 2.5" got: 2.5.f32.ceil want: 1077936128 tol: 0
+    check32 name: "ceil -2.5" got: (-2.5.f32).ceil want: 3221225472 tol: 0
+    check32 name: "ceil -0.75" got: (-0.75.f32).ceil want: 0 tol: 0
+    check32 name: "trunc 2.5" got: 2.5.f32.trunc want: 1073741824 tol: 0
+    check32 name: "trunc -2.5" got: (-2.5.f32).trunc want: 3221225472 tol: 0
+    check32 name: "trunc -0.75" got: (-0.75.f32).trunc want: 0 tol: 0
+    check32 name: "round 2.5" got: 2.5.f32.round want: 1077936128 tol: 0
+    check32 name: "round -2.5" got: (-2.5.f32).round want: 3225419776 tol: 0
+    check32 name: "round 3.5" got: 3.5.f32.round want: 1082130432 tol: 0
+    check32 name: "round -0.75" got: (-0.75.f32).round want: 3212836864 tol: 0
+    check32 name: "roundEven 2.5" got: 2.5.f32.roundEven want: 1073741824 tol: 0
+    check32 name: "roundEven -2.5" got: (-2.5.f32).roundEven want: 3221225472 tol: 0
+    check32 name: "roundEven 3.5" got: 3.5.f32.roundEven want: 1082130432 tol: 0
+    check32 name: "roundEven -0.75" got: (-0.75.f32).roundEven want: 3212836864 tol: 0
+    check32 name: "abs -3" got: (-3.0.f32).abs want: 1077936128 tol: 0
+    check32 name: "abs 0.5" got: 0.5.f32.abs want: 1056964608 tol: 0
+    check32 name: "hypot 3 4" got: (3.0.f32.hypot y: 4.0.f32) want: 1084227584 tol: 1
+    check32 name: "hypot 1 1" got: (1.0.f32.hypot y: 1.0.f32) want: 1068827891 tol: 1
+    check32 name: "pow 2 10" got: (2.0.f32.pow y: 10.0.f32) want: 1149239296 tol: 1
+    check32 name: "pow 2 0.5" got: (2.0.f32.pow y: 0.5.f32) want: 1068827891 tol: 1
+    check32 name: "pow 1.5 3" got: (1.5.f32.pow y: 3.0.f32) want: 1079508992 tol: 1
+    check32 name: "atan2 1 1" got: (1.0.f32.atan2 x: 1.0.f32) want: 1061752795 tol: 1
+    check32 name: "atan2 0.5 -1" got: (0.5.f32.atan2 x: (-1.0.f32)) want: 1076585332 tol: 1
+    check32 name: "copySign 3 -1" got: (3.0.f32.copySign y: (-1.0.f32)) want: 3225419776 tol: 0
+    check32 name: "copySign -2 1" got: ((-2.0.f32).copySign y: 1.0.f32) want: 1073741824 tol: 0
+    check32 name: "min 1 2" got: (1.0.f32.min y: 2.0.f32) want: 1065353216 tol: 0
+    check32 name: "min -0.5 0.25" got: ((-0.5.f32).min y: 0.25.f32) want: 3204448256 tol: 0
+    check32 name: "max 1 2" got: (1.0.f32.max y: 2.0.f32) want: 1073741824 tol: 0
+    check32 name: "max -0.5 0.25" got: ((-0.5.f32).max y: 0.25.f32) want: 1048576000 tol: 0
+    check32 name: "fma 2 3 4" got: (2.0.f32.fma y: 3.0.f32 z: 4.0.f32) want: 1092616192 tol: 0
+    check32 name: "fma 1.5 1.5 -2.25" got: (1.5.f32.fma y: 1.5.f32 z: (-2.25.f32)) want: 0 tol: 0
+    check32 name: "fma 0.75 3 0.5" got: (0.75.f32.fma y: 3.0.f32 z: 0.5.f32) want: 1076887552 tol: 0
+    check64 name: "sqrt 2" got: 2.0.f64.sqrt want: 4609047870845172685 tol: 0
+    check64 name: "sqrt 0.5" got: 0.5.f64.sqrt want: 4604544271217802189 tol: 0
+    check64 name: "sqrt 9" got: 9.0.f64.sqrt want: 4613937818241073152 tol: 0
+    check64 name: "sqrt 0.75" got: 0.75.f64.sqrt want: 4605975682916830378 tol: 0
+    check64 name: "cbrt 2" got: 2.0.f64.cbrt want: 4608352999143469707 tol: 1
+    check64 name: "cbrt -8" got: (-8.0.f64).cbrt want: 13835058055282163712 tol: 1
+    check64 name: "cbrt 0.75" got: 0.75.f64.cbrt want: 4606358803170042495 tol: 1
+    check64 name: "exp 1" got: 1.0.f64.exp want: 4613303445314885481 tol: 1
+    check64 name: "exp -0.5" got: (-0.5.f64).exp want: 4603638362051417610 tol: 1
+    check64 name: "exp 3" got: 3.0.f64.exp want: 4626346793719804166 tol: 1
+    check64 name: "exp2 0.5" got: 0.5.f64.exp2 want: 4609047870845172685 tol: 1
+    check64 name: "exp2 10" got: 10.0.f64.exp2 want: 4652218415073722368 tol: 1
+    check64 name: "exp2 -3.25" got: (-3.25.f64).exp2 want: 4592238542227952557 tol: 1
+    check64 name: "expm1 0.0009765625" got: 0.0009765625.f64.expm1 want: 4562148622265570679 tol: 1
+    check64 name: "expm1 1" got: 1.0.f64.expm1 want: 4610417272575012563 tol: 1
+    check64 name: "expm1 -0.25" got: (-0.25.f64).expm1 want: 13820509598832785364 tol: 1
+    check64 name: "log 2" got: 2.0.f64.log want: 4604418534313441775 tol: 1
+    check64 name: "log 0.75" got: 0.75.f64.log want: 13822226076269861778 tol: 1
+    check64 name: "log 10" got: 10.0.f64.log want: 4612367379483415830 tol: 1
+    check64 name: "log2 3" got: 3.0.f64.log2 want: 4609816855700290920 tol: 1
+    check64 name: "log2 1024" got: 1024.0.f64.log2 want: 4621819117588971520 tol: 1
+    check64 name: "log2 0.75" got: 0.75.f64.log2 want: 13824520307681069662 tol: 1
+    check64 name: "log10 2" got: 2.0.f64.log10 want: 4599094494223104511 tol: 1
+    check64 name: "log10 1000" got: 1000.0.f64.log10 want: 4613937818241073152 tol: 1
+    check64 name: "log10 0.75" got: 0.75.f64.log10 want: 13817039242280073219 tol: 1
+    check64 name: "log1p 0.0009765625" got: 0.0009765625.f64.log1p want: 4562142027341017360 tol: 1
+    check64 name: "log1p 1" got: 1.0.f64.log1p want: 4604418534313441775 tol: 1
+    check64 name: "log1p -0.25" got: (-0.25.f64).log1p want: 13822226076269861778 tol: 1
+    check64 name: "sin 1" got: 1.0.f64.sin want: 4605754516372524270 tol: 1
+    check64 name: "sin 0.5" got: 0.5.f64.sin want: 4602308182625945072 tol: 1
+    check64 name: "sin 3" got: 3.0.f64.sin want: 4594252404416238939 tol: 1
+    check64 name: "cos 1" got: 1.0.f64.cos want: 4603041830072026764 tol: 1
+    check64 name: "cos 0.5" got: 0.5.f64.cos want: 4606079780542709072 tol: 1
+    check64 name: "cos 3" got: 3.0.f64.cos want: 13830464316077630930 tol: 1
+    check64 name: "tan 1" got: 1.0.f64.tan want: 4609692760021066662 tol: 1
+    check64 name: "tan 0.5" got: 0.5.f64.tan want: 4603095874924660554 tol: 1
+    check64 name: "tan -0.25" got: (-0.25.f64).tan want: 13821643487897734230 tol: 1
+    check64 name: "asin 0.5" got: 0.5.f64.asin want: 4602891378046628710 tol: 1
+    check64 name: "asin -0.75" got: (-0.75.f64).asin want: 13829185920525828316 tol: 1
+    check64 name: "acos 0.5" got: 0.5.f64.acos want: 4607394977673999206 tol: 1
+    check64 name: "acos -0.75" got: (-0.75.f64).acos want: 4612629203707475651 tol: 1
+    check64 name: "atan 1" got: 1.0.f64.atan want: 4605249457297304856 tol: 1
+    check64 name: "atan 0.5" got: 0.5.f64.atan want: 4602023952714414927 tol: 1
+    check64 name: "atan -3" got: (-3.0.f64).atan want: 13831676058102564192 tol: 1
+    check64 name: "sinh 1" got: 1.0.f64.sinh want: 4607971454830426498 tol: 1
+    check64 name: "sinh -0.5" got: (-0.5.f64).sinh want: 13826240865647344535 tol: 1
+    check64 name: "cosh 1" got: 1.0.f64.cosh want: 4609628236544603472 tol: 1
+    check64 name: "cosh -0.5" got: (-0.5.f64).cosh want: 4607757195049363664 tol: 1
+    check64 name: "tanh 1" got: 1.0.f64.tanh want: 4605035049859216276 tol: 1
+    check64 name: "tanh -0.5" got: (-0.5.f64).tanh want: 13825368419401632499 tol: 1
+    check64 name: "asinh 1" got: 1.0.f64.asinh want: 4606113927061427239 tol: 1
+    check64 name: "asinh -0.5" got: (-0.5.f64).asinh want: 13825712398356780554 tol: 1
+    check64 name: "acosh 2" got: 2.0.f64.acosh want: 4608609870266500149 tol: 1
+    check64 name: "acosh 1.5" got: 1.5.f64.acosh want: 4606843961129375242 tol: 1
+    check64 name: "atanh 0.5" got: 0.5.f64.atanh want: 4603122929439146763 tol: 1
+    check64 name: "atanh -0.75" got: (-0.75.f64).atanh want: 13830310856622234199 tol: 1
+    check64 name: "erf 0.5" got: 0.5.f64.erf want: 4602863465656806866 tol: 1
+    check64 name: "erf 1" got: 1.0.f64.erf want: 4605765593499502731 tol: 1
+    check64 name: "erf -1.5" got: (-1.5.f64).erf want: 13830249157955386080 tol: 1
+    check64 name: "erfc 0.5" got: 0.5.f64.erfc want: 4602309526204327004 tol: 1
+    check64 name: "erfc 1" got: 1.0.f64.erfc want: 4594835321492594133 tol: 1
+    check64 name: "erfc -1.5" got: (-1.5.f64).erfc want: 4611533369577684336 tol: 1
+    check64 name: "gamma 5" got: 5.0.f64.gamma want: 4627448617123184640 tol: 2
+    check64 name: "gamma 0.5" got: 0.5.f64.gamma want: 4610661241675116395 tol: 2
+    check64 name: "gamma 3.5" got: 3.5.f64.gamma want: 4614665939896082548 tol: 2
+    check64 name: "logGamma 0.5" got: 0.5.f64.logGamma want: 4603330624632627645 tol: 2
+    check64 name: "logGamma 10" got: 10.0.f64.logGamma want: 4623396406238377935 tol: 2
+    check64 name: "logGamma 3.5" got: 3.5.f64.logGamma want: 4608087523440658998 tol: 2
+    check64 name: "floor 2.5" got: 2.5.f64.floor want: 4611686018427387904 tol: 0
+    check64 name: "floor -2.5" got: (-2.5.f64).floor want: 13837309855095848960 tol: 0
+    check64 name: "floor -0.75" got: (-0.75.f64).floor want: 13830554455654793216 tol: 0
+    check64 name: "ceil 2.5" got: 2.5.f64.ceil want: 4613937818241073152 tol: 0
+    check64 name: "ceil -2.5" got: (-2.5.f64).ceil want: 13835058055282163712 tol: 0
+    check64 name: "ceil -0.75" got: (-0.75.f64).ceil want: 0 tol: 0
+    check64 name: "trunc 2.5" got: 2.5.f64.trunc want: 4611686018427387904 tol: 0
+    check64 name: "trunc -2.5" got: (-2.5.f64).trunc want: 13835058055282163712 tol: 0
+    check64 name: "trunc -0.75" got: (-0.75.f64).trunc want: 0 tol: 0
+    check64 name: "round 2.5" got: 2.5.f64.round want: 4613937818241073152 tol: 0
+    check64 name: "round -2.5" got: (-2.5.f64).round want: 13837309855095848960 tol: 0
+    check64 name: "round 3.5" got: 3.5.f64.round want: 4616189618054758400 tol: 0
+    check64 name: "round -0.75" got: (-0.75.f64).round want: 13830554455654793216 tol: 0
+    check64 name: "roundEven 2.5" got: 2.5.f64.roundEven want: 4611686018427387904 tol: 0
+    check64 name: "roundEven -2.5" got: (-2.5.f64).roundEven want: 13835058055282163712 tol: 0
+    check64 name: "roundEven 3.5" got: 3.5.f64.roundEven want: 4616189618054758400 tol: 0
+    check64 name: "roundEven -0.75" got: (-0.75.f64).roundEven want: 13830554455654793216 tol: 0
+    check64 name: "abs -3" got: (-3.0.f64).abs want: 4613937818241073152 tol: 0
+    check64 name: "abs 0.5" got: 0.5.f64.abs want: 4602678819172646912 tol: 0
+    check64 name: "hypot 3 4" got: (3.0.f64.hypot y: 4.0.f64) want: 4617315517961601024 tol: 1
+    check64 name: "hypot 1 1" got: (1.0.f64.hypot y: 1.0.f64) want: 4609047870845172685 tol: 1
+    check64 name: "pow 2 10" got: (2.0.f64.pow y: 10.0.f64) want: 4652218415073722368 tol: 1
+    check64 name: "pow 2 0.5" got: (2.0.f64.pow y: 0.5.f64) want: 4609047870845172685 tol: 1
+    check64 name: "pow 1.5 3" got: (1.5.f64.pow y: 3.0.f64) want: 4614782243171205120 tol: 1
+    check64 name: "atan2 1 1" got: (1.0.f64.atan2 x: 1.0.f64) want: 4605249457297304856 tol: 1
+    check64 name: "atan2 0.5 -1" got: (0.5.f64.atan2 x: (-1.0.f64)) want: 4613212614952482222 tol: 1
+    check64 name: "copySign 3 -1" got: (3.0.f64.copySign y: (-1.0.f64)) want: 13837309855095848960 tol: 0
+    check64 name: "copySign -2 1" got: ((-2.0.f64).copySign y: 1.0.f64) want: 4611686018427387904 tol: 0
+    check64 name: "min 1 2" got: (1.0.f64.min y: 2.0.f64) want: 4607182418800017408 tol: 0
+    check64 name: "min -0.5 0.25" got: ((-0.5.f64).min y: 0.25.f64) want: 13826050856027422720 tol: 0
+    check64 name: "max 1 2" got: (1.0.f64.max y: 2.0.f64) want: 4611686018427387904 tol: 0
+    check64 name: "max -0.5 0.25" got: ((-0.5.f64).max y: 0.25.f64) want: 4598175219545276416 tol: 0
+    check64 name: "fma 2 3 4" got: (2.0.f64.fma y: 3.0.f64 z: 4.0.f64) want: 4621819117588971520 tol: 0
+    check64 name: "fma 1.5 1.5 -2.25" got: (1.5.f64.fma y: 1.5.f64 z: (-2.25.f64)) want: 0 tol: 0
+    check64 name: "fma 0.75 3 0.5" got: (0.75.f64.fma y: 3.0.f64 z: 0.5.f64) want: 4613374868287651840 tol: 0
+}
+
+main: function is {
+    specials32
+    specials64
+    tables
+}

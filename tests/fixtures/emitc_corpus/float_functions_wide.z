@@ -1,0 +1,290 @@
+# float_functions_wide.z -- the everyday float functions at f16 and f128, the
+# two widths only gcc and clang build. An f16 function is computed in f32 and
+# rounded once to f16; an f128 one is libquadmath's. Each is checked against the
+# exact value rounded once to its width: an exact operation to the bit, a
+# transcendental one within the ulps the library allows.
+
+# a bit pattern turned into a position on the number line, so the distance
+# between two positions is how many values lie between: the negatives count
+# down from the middle, the positives up, and -0 and 0 meet there
+ordered16: function {b: u16} out u16 is {
+    mag: b & 32767
+    if (b >> 15) == 1 then return 32768.u16 - mag
+    return mag + 32768
+}
+
+# the f128 positions, as ordered16 gives f16's
+ordered128: function {b: u128} out u128 is {
+    top: 1.u128 << 127
+    mag: b & (top - 1)
+    if (b >> 127) == 1 then return top - mag
+    return mag + top
+}
+
+# an f128 bit pattern written as its two words, high first: an integer literal
+# is read in 64 bits
+wide128: function {hi: u64 lo: u64} out u128 is {
+    return (hi.u128 << 64) | lo.u128
+}
+
+# `ok`, or the bits got and wanted and how many values apart they are
+check16: function {name: StringView got: f16 want: u16 tol: u16} is {
+    x: ordered16 b: got.bits
+    y: ordered16 b: want
+    gap: 0.u16
+    if x >= y then gap = x - y else gap = y - x
+    if gap <= tol then {
+        print "\{name} ok"
+    } else {
+        print "\{name} MISMATCH \{got.bits} \{want} \{gap} ulps"
+    }
+}
+
+# check16 at f128
+check128: function {name: StringView got: f128 want: u128 tol: u128} is {
+    x: ordered128 b: got.bits
+    y: ordered128 b: want
+    gap: 0.u128
+    if x >= y then gap = x - y else gap = y - x
+    if gap <= tol then {
+        print "\{name} ok"
+    } else {
+        print "\{name} MISMATCH \{got.bits} \{want} \{gap} ulps"
+    }
+}
+
+# the NaN, the infinities and the two zeros through every predicate, at both
+# widths
+specials: function is {
+    hn: (0.0.f16 - 1.0.f16).sqrt
+    hi: 1.0.f16.scaleB n: 100
+    hz: -0.0.f16
+    print "f16 isNaN \{hn.isNaN} isInf \{hi.isInf} isFinite \{hi.isFinite} \{hz.isFinite} signBit \{hz.signBit}"
+    print "f16 min nan \{(hn.min y: 1.0.f16) == 1.0.f16} roundEven \{2.5.f16.roundEven == 2.0.f16}"
+    qn: (0.0.f128 - 1.0.f128).sqrt
+    qi: 1.0.f128.scaleB n: 20000
+    qz: -0.0.f128
+    print "f128 isNaN \{qn.isNaN} isInf \{qi.isInf} isFinite \{qi.isFinite} \{qz.isFinite} signBit \{qz.signBit}"
+    print "f128 min nan \{(qn.min y: 1.0.f128) == 1.0.f128} roundEven \{2.5.f128.roundEven == 2.0.f128}"
+    # the product rounds to 1, where fma keeps the -2^-224 it was below 1 by
+    e: 1.0.f128.scaleB n: (0 - 112)
+    a: 1.0.f128 + e
+    b: 1.0.f128 - e
+    m1: 0.0.f128 - 1.0.f128
+    print "f128 fma \{(a.fma y: b z: m1) == (0.0.f128 - (1.0.f128.scaleB n: (0 - 224)))} product \{((a * b) - 1.0.f128) == 0.0.f128}"
+}
+
+# every table row at f16, then at f128
+tables: function is {
+    check16 name: "sqrt 2" got: 2.0.f16.sqrt want: 15784 tol: 0
+    check16 name: "sqrt 0.5" got: 0.5.f16.sqrt want: 14760 tol: 0
+    check16 name: "sqrt 9" got: 9.0.f16.sqrt want: 16896 tol: 0
+    check16 name: "sqrt 0.75" got: 0.75.f16.sqrt want: 15086 tol: 0
+    check16 name: "cbrt 2" got: 2.0.f16.cbrt want: 15626 tol: 1
+    check16 name: "cbrt -8" got: (-8.0.f16).cbrt want: 49152 tol: 1
+    check16 name: "cbrt 0.75" got: 0.75.f16.cbrt want: 15173 tol: 1
+    check16 name: "exp 1" got: 1.0.f16.exp want: 16752 tol: 1
+    check16 name: "exp -0.5" got: (-0.5.f16).exp want: 14554 tol: 1
+    check16 name: "exp 3" got: 3.0.f16.exp want: 19717 tol: 1
+    check16 name: "exp2 0.5" got: 0.5.f16.exp2 want: 15784 tol: 1
+    check16 name: "exp2 10" got: 10.0.f16.exp2 want: 25600 tol: 1
+    check16 name: "exp2 -3.25" got: (-3.25.f16).exp2 want: 11962 tol: 1
+    check16 name: "expm1 0.0009765625" got: 0.0009765625.f16.expm1 want: 5121 tol: 1
+    check16 name: "expm1 1" got: 1.0.f16.expm1 want: 16096 tol: 1
+    check16 name: "expm1 -0.25" got: (-0.25.f16).expm1 want: 45844 tol: 1
+    check16 name: "log 2" got: 2.0.f16.log want: 14732 tol: 1
+    check16 name: "log 0.75" got: 0.75.f16.log want: 46234 tol: 1
+    check16 name: "log 10" got: 10.0.f16.log want: 16539 tol: 1
+    check16 name: "log2 3" got: 3.0.f16.log2 want: 15959 tol: 1
+    check16 name: "log2 1024" got: 1024.0.f16.log2 want: 18688 tol: 1
+    check16 name: "log2 0.75" got: 0.75.f16.log2 want: 46756 tol: 1
+    check16 name: "log10 2" got: 2.0.f16.log10 want: 13521 tol: 1
+    check16 name: "log10 1000" got: 1000.0.f16.log10 want: 16896 tol: 1
+    check16 name: "log10 0.75" got: 0.75.f16.log10 want: 45055 tol: 1
+    check16 name: "log1p 0.0009765625" got: 0.0009765625.f16.log1p want: 5119 tol: 1
+    check16 name: "log1p 1" got: 1.0.f16.log1p want: 14732 tol: 1
+    check16 name: "log1p -0.25" got: (-0.25.f16).log1p want: 46234 tol: 1
+    check16 name: "sin 1" got: 1.0.f16.sin want: 15035 tol: 1
+    check16 name: "sin 0.5" got: 0.5.f16.sin want: 14252 tol: 1
+    check16 name: "sin 3" got: 3.0.f16.sin want: 12420 tol: 1
+    check16 name: "cos 1" got: 1.0.f16.cos want: 14419 tol: 1
+    check16 name: "cos 0.5" got: 0.5.f16.cos want: 15109 tol: 1
+    check16 name: "cos 3" got: 3.0.f16.cos want: 48108 tol: 1
+    check16 name: "tan 1" got: 1.0.f16.tan want: 15931 tol: 1
+    check16 name: "tan 0.5" got: 0.5.f16.tan want: 14431 tol: 1
+    check16 name: "tan -0.25" got: (-0.25.f16).tan want: 46102 tol: 1
+    check16 name: "asin 0.5" got: 0.5.f16.asin want: 14384 tol: 1
+    check16 name: "asin -0.75" got: (-0.75.f16).asin want: 47817 tol: 1
+    check16 name: "acos 0.5" got: 0.5.f16.acos want: 15408 tol: 1
+    check16 name: "acos -0.75" got: (-0.75.f16).acos want: 16598 tol: 1
+    check16 name: "atan 1" got: 1.0.f16.atan want: 14920 tol: 1
+    check16 name: "atan 0.5" got: 0.5.f16.atan want: 14187 tol: 1
+    check16 name: "atan -3" got: (-3.0.f16).atan want: 48383 tol: 1
+    check16 name: "sinh 1" got: 1.0.f16.sinh want: 15539 tol: 1
+    check16 name: "sinh -0.5" got: (-0.5.f16).sinh want: 47147 tol: 1
+    check16 name: "cosh 1" got: 1.0.f16.cosh want: 15916 tol: 1
+    check16 name: "cosh -0.5" got: (-0.5.f16).cosh want: 15491 tol: 1
+    check16 name: "tanh 1" got: 1.0.f16.tanh want: 14872 tol: 1
+    check16 name: "tanh -0.5" got: (-0.5.f16).tanh want: 46949 tol: 1
+    check16 name: "asinh 1" got: 1.0.f16.asinh want: 15117 tol: 1
+    check16 name: "asinh -0.5" got: (-0.5.f16).asinh want: 47027 tol: 1
+    check16 name: "acosh 2" got: 2.0.f16.acosh want: 15685 tol: 1
+    check16 name: "acosh 1.5" got: 1.5.f16.acosh want: 15283 tol: 1
+    check16 name: "atanh 0.5" got: 0.5.f16.atanh want: 14437 tol: 1
+    check16 name: "atanh -0.75" got: (-0.75.f16).atanh want: 48073 tol: 1
+    check16 name: "erf 0.5" got: 0.5.f16.erf want: 14378 tol: 1
+    check16 name: "erf 1" got: 1.0.f16.erf want: 15038 tol: 1
+    check16 name: "erf -1.5" got: (-1.5.f16).erf want: 48059 tol: 1
+    check16 name: "erfc 0.5" got: 0.5.f16.erfc want: 14252 tol: 1
+    check16 name: "erfc 1" got: 1.0.f16.erfc want: 12553 tol: 1
+    check16 name: "erfc -1.5" got: (-1.5.f16).erfc want: 16349 tol: 1
+    check16 name: "gamma 5" got: 5.0.f16.gamma want: 19968 tol: 2
+    check16 name: "gamma 0.5" got: 0.5.f16.gamma want: 16151 tol: 2
+    check16 name: "gamma 3.5" got: 3.5.f16.gamma want: 17062 tol: 2
+    check16 name: "logGamma 0.5" got: 0.5.f16.logGamma want: 14484 tol: 2
+    check16 name: "logGamma 10" got: 10.0.f16.logGamma want: 19047 tol: 2
+    check16 name: "logGamma 3.5" got: 3.5.f16.logGamma want: 15566 tol: 2
+    check16 name: "floor 2.5" got: 2.5.f16.floor want: 16384 tol: 0
+    check16 name: "floor -2.5" got: (-2.5.f16).floor want: 49664 tol: 0
+    check16 name: "floor -0.75" got: (-0.75.f16).floor want: 48128 tol: 0
+    check16 name: "ceil 2.5" got: 2.5.f16.ceil want: 16896 tol: 0
+    check16 name: "ceil -2.5" got: (-2.5.f16).ceil want: 49152 tol: 0
+    check16 name: "ceil -0.75" got: (-0.75.f16).ceil want: 0 tol: 0
+    check16 name: "trunc 2.5" got: 2.5.f16.trunc want: 16384 tol: 0
+    check16 name: "trunc -2.5" got: (-2.5.f16).trunc want: 49152 tol: 0
+    check16 name: "trunc -0.75" got: (-0.75.f16).trunc want: 0 tol: 0
+    check16 name: "round 2.5" got: 2.5.f16.round want: 16896 tol: 0
+    check16 name: "round -2.5" got: (-2.5.f16).round want: 49664 tol: 0
+    check16 name: "round 3.5" got: 3.5.f16.round want: 17408 tol: 0
+    check16 name: "round -0.75" got: (-0.75.f16).round want: 48128 tol: 0
+    check16 name: "roundEven 2.5" got: 2.5.f16.roundEven want: 16384 tol: 0
+    check16 name: "roundEven -2.5" got: (-2.5.f16).roundEven want: 49152 tol: 0
+    check16 name: "roundEven 3.5" got: 3.5.f16.roundEven want: 17408 tol: 0
+    check16 name: "roundEven -0.75" got: (-0.75.f16).roundEven want: 48128 tol: 0
+    check16 name: "abs -3" got: (-3.0.f16).abs want: 16896 tol: 0
+    check16 name: "abs 0.5" got: 0.5.f16.abs want: 14336 tol: 0
+    check16 name: "hypot 3 4" got: (3.0.f16.hypot y: 4.0.f16) want: 17664 tol: 1
+    check16 name: "hypot 1 1" got: (1.0.f16.hypot y: 1.0.f16) want: 15784 tol: 1
+    check16 name: "pow 2 10" got: (2.0.f16.pow y: 10.0.f16) want: 25600 tol: 1
+    check16 name: "pow 2 0.5" got: (2.0.f16.pow y: 0.5.f16) want: 15784 tol: 1
+    check16 name: "pow 1.5 3" got: (1.5.f16.pow y: 3.0.f16) want: 17088 tol: 1
+    check16 name: "atan2 1 1" got: (1.0.f16.atan2 x: 1.0.f16) want: 14920 tol: 1
+    check16 name: "atan2 0.5 -1" got: (0.5.f16.atan2 x: (-1.0.f16)) want: 16731 tol: 1
+    check16 name: "copySign 3 -1" got: (3.0.f16.copySign y: (-1.0.f16)) want: 49664 tol: 0
+    check16 name: "copySign -2 1" got: ((-2.0.f16).copySign y: 1.0.f16) want: 16384 tol: 0
+    check16 name: "min 1 2" got: (1.0.f16.min y: 2.0.f16) want: 15360 tol: 0
+    check16 name: "min -0.5 0.25" got: ((-0.5.f16).min y: 0.25.f16) want: 47104 tol: 0
+    check16 name: "max 1 2" got: (1.0.f16.max y: 2.0.f16) want: 16384 tol: 0
+    check16 name: "max -0.5 0.25" got: ((-0.5.f16).max y: 0.25.f16) want: 13312 tol: 0
+    check16 name: "fma 2 3 4" got: (2.0.f16.fma y: 3.0.f16 z: 4.0.f16) want: 18688 tol: 0
+    check16 name: "fma 1.5 1.5 -2.25" got: (1.5.f16.fma y: 1.5.f16 z: (-2.25.f16)) want: 0 tol: 0
+    check16 name: "fma 0.75 3 0.5" got: (0.75.f16.fma y: 3.0.f16 z: 0.5.f16) want: 16768 tol: 0
+    check128 name: "sqrt 2" got: 2.0.f128.sqrt want: (wide128 hi: 4611521134203499452 lo: 14486024992869247637) tol: 0
+    check128 name: "sqrt 0.5" got: 0.5.f128.sqrt want: (wide128 hi: 4611239659226788796 lo: 14486024992869247637) tol: 0
+    check128 name: "sqrt 9" got: 9.0.f128.sqrt want: (wide128 hi: 4611826755915743232 lo: 0) tol: 0
+    check128 name: "sqrt 0.75" got: 0.75.f128.sqrt want: (wide128 hi: 4611329122457978058 lo: 12050266408868673720) tol: 0
+    check128 name: "cbrt 2" got: 2.0.f128.cbrt want: (wide128 hi: 4611477704722143016 lo: 12547659521391443493) tol: 1
+    check128 name: "cbrt -8" got: (-8.0.f128).cbrt want: (wide128 hi: 13835058055282163712 lo: 0) tol: 1
+    check128 name: "cbrt 0.75" got: 0.75.f128.cbrt want: (wide128 hi: 4611353067473803815 lo: 17239123712780545443) tol: 1
+    check128 name: "exp 1" got: 1.0.f128.exp want: (wide128 hi: 4611787107607856502 lo: 10751604932185443962) tol: 1
+    check128 name: "exp -0.5" got: (-0.5.f128).exp want: (wide128 hi: 4611183039903889760 lo: 11522368298153566620) tol: 1
+    check128 name: "exp 3" got: 3.0.f128.exp want: (wide128 hi: 4612602316883163920 lo: 6858221232013657284) tol: 1
+    check128 name: "exp2 0.5" got: 0.5.f128.exp2 want: (wide128 hi: 4611521134203499452 lo: 14486024992869247637) tol: 1
+    check128 name: "exp2 10" got: 10.0.f128.exp2 want: (wide128 hi: 4614219293217783808 lo: 0) tol: 1
+    check128 name: "exp2 -3.25" got: (-3.25.f128).exp2 want: (wide128 hi: 4610470551164923194 lo: 15413696499618619482) tol: 1
+    check128 name: "expm1 0.0009765625" got: 0.0009765625.f128.expm1 want: (wide128 hi: 4608589931167274327 lo: 8614886580881607135) tol: 1
+    check128 name: "expm1 1" got: 1.0.f128.expm1 want: (wide128 hi: 4611606721811614445 lo: 3056465790661336309) tol: 1
+    check128 name: "expm1 -0.25" got: (-0.25.f128).expm1 want: (wide128 hi: 13834148776754077565 lo: 5036701250756076728) tol: 1
+    check128 name: "log 2" got: 2.0.f128.log want: (wide128 hi: 4611231800670266270 lo: 17534646158829291494) tol: 1
+    check128 name: "log 0.75" got: 0.75.f128.log want: (wide128 hi: 13834256056593894841 lo: 2847329084351711914) tol: 1
+    check128 name: "log 10" got: 10.0.f128.log want: (wide128 hi: 4611728603493389649 lo: 6353968491675452838) tol: 1
+    check128 name: "log2 3" got: 3.0.f128.log2 want: (wide128 hi: 4611569195756944342 lo: 9772705685824997004) tol: 1
+    check128 name: "log2 1024" got: 1024.0.f128.log2 want: (wide128 hi: 4612319337124986880 lo: 0) tol: 1
+    check128 name: "log2 0.75" got: 0.75.f128.log2 want: (wide128 hi: 13834399446057095333 lo: 16249409477828666833) tol: 1
+    check128 name: "log10 2" got: 2.0.f128.log10 want: (wide128 hi: 4610899048164620191 lo: 17235591414102365945) tol: 1
+    check128 name: "log10 1000" got: 1000.0.f128.log10 want: (wide128 hi: 4611826755915743232 lo: 0) tol: 1
+    check128 name: "log10 0.75" got: 0.75.f128.log10 want: (wide128 hi: 13833931879469533056 lo: 3987998787954560825) tol: 1
+    check128 name: "log1p 0.0009765625" got: 0.0009765625.f128.log1p want: (wide128 hi: 4608589518984489744 lo: 18140583983340374324) tol: 1
+    check128 name: "log1p 1" got: 1.0.f128.log1p want: (wide128 hi: 4611231800670266270 lo: 17534646158829291494) tol: 1
+    check128 name: "log1p -0.25" got: (-0.25.f128).log1p want: (wide128 hi: 13834256056593894841 lo: 2847329084351711914) tol: 1
+    check128 name: "sin 1" got: 1.0.f128.sin want: (wide128 hi: 4611315299548958926 lo: 16159352878884162078) tol: 1
+    check128 name: "sin 0.5" got: 0.5.f128.sin want: (wide128 hi: 4611099903689797726 lo: 18340738767017465912) tol: 1
+    check128 name: "sin 3" got: 3.0.f128.sin want: (wide128 hi: 4610596417551691093 lo: 13038422398434810024) tol: 1
+    check128 name: "cos 1" got: 1.0.f128.cos want: (wide128 hi: 4611145756655177832 lo: 13340652261709107427) tol: 1
+    check128 name: "cos 0.5" got: 0.5.f128.cos want: (wide128 hi: 4611335628559595476 lo: 18004119979427231222) tol: 1
+    check128 name: "cos 3" got: 3.0.f128.cos want: (wide128 hi: 13834770946581880413 lo: 2742621737211319521) tol: 1
+    check128 name: "tan 1" got: 1.0.f128.tan want: (wide128 hi: 4611561439776992826 lo: 6596309442574299457) tol: 1
+    check128 name: "tan 0.5" got: 0.5.f128.tan want: (wide128 hi: 4611149134458467444 lo: 11831371168638075460) tol: 1
+    check128 name: "tan -0.25" got: (-0.25.f128).tan want: (wide128 hi: 13834219644820636869 lo: 6801442596567014441) tol: 1
+    check128 name: "asin 0.5" got: 0.5.f128.asin want: (wide128 hi: 4611136353403590454 lo: 6360872348837435003) tol: 1
+    check128 name: "asin -0.75" got: (-0.75.f128).asin want: (wide128 hi: 13834691046859892749 lo: 13871465349303555554) tol: 1
+    check128 name: "acos 0.5" got: 0.5.f128.acos want: (wide128 hi: 4611417828380301110 lo: 6360872348837435003) tol: 1
+    check128 name: "acos -0.75" got: (-0.75.f128).acos want: (wide128 hi: 4611744967507393388 lo: 3626834580526577237) tol: 1
+    check128 name: "atan 1" got: 1.0.f128.atan want: (wide128 hi: 4611283733356757713 lo: 9541308523256152504) tol: 1
+    check128 name: "atan 0.5" got: 0.5.f128.atan want: (wide128 hi: 4611082139320327092 lo: 17765257732549081205) tol: 1
+    check128 name: "atan -3" got: (-3.0.f128).atan want: (wide128 hi: 13834846680458438741 lo: 18435340731620122361) tol: 1
+    check128 name: "sinh 1" got: 1.0.f128.sinh want: (wide128 hi: 4611453858202577816 lo: 2713421289262876240) tol: 1
+    check128 name: "sinh -0.5" got: (-0.5.f128).sinh want: (wide128 hi: 13834506980929987513 lo: 7828196824688209510) tol: 1
+    check128 name: "cosh 1" got: 1.0.f128.cosh want: (wide128 hi: 4611557407059713877 lo: 343044501398460069) tol: 1
+    check128 name: "cosh -0.5" got: (-0.5.f128).cosh want: (wide128 hi: 4611440466966261389 lo: 451910524566112257) tol: 1
+    check128 name: "tanh 1" got: 1.0.f128.tanh want: (wide128 hi: 4611270332891877177 lo: 4996852826703643687) tol: 1
+    check128 name: "tanh -0.5" got: (-0.5.f128).tanh want: (wide128 hi: 13834452453039630511 lo: 3913954554395646729) tol: 1
+    check128 name: "asinh 1" got: 1.0.f128.asinh want: (wide128 hi: 4611337762717015362 lo: 7836740484861764771) tol: 1
+    check128 name: "asinh -0.5" got: (-0.5.f128).asinh want: (wide128 hi: 13834473951724327264 lo: 11046169085206948039) tol: 1
+    check128 name: "acosh 2" got: 2.0.f128.acosh want: (wide128 hi: 4611493759167332419 lo: 5313799285166869843) tol: 1
+    check128 name: "acosh 1.5" got: 1.5.f128.acosh want: (wide128 hi: 4611383389846262112 lo: 11046169085206948039) tol: 1
+    check128 name: "atanh 0.5" got: 0.5.f128.atanh want: (wide128 hi: 4611150825365622832 lo: 12211127869313975611) tol: 1
+    check128 name: "atanh -0.75" got: (-0.75.f128).atanh want: (wide128 hi: 13834761355365918117 lo: 8450712868853065244) tol: 1
+    check128 name: "erf 0.5" got: 0.5.f128.erf want: (wide128 hi: 4611134608879226589 lo: 2503158334566384885) tol: 1
+    check128 name: "erf 1" got: 1.0.f128.erf want: (wide128 hi: 4611315991869395080 lo: 12424588119473065255) tol: 1
+    check128 name: "erf -1.5" got: (-1.5.f128).erf want: (wide128 hi: 13834757499199240109 lo: 18095048711784473806) tol: 1
+    check128 name: "erfc 0.5" got: 0.5.f128.erfc want: (wide128 hi: 4611099987663446597 lo: 13440427404576781846) tol: 1
+    check128 name: "erfc 1" got: 1.0.f128.erfc want: (wide128 hi: 4610632849868963293 lo: 5641879743236393828) tol: 1
+    check128 name: "erfc -1.5" got: (-1.5.f128).erfc want: (wide128 hi: 4611676477874281430 lo: 18270896392747012711) tol: 1
+    check128 name: "gamma 5" got: 5.0.f128.gamma want: (wide128 hi: 4612671180845875200 lo: 0) tol: 2
+    check128 name: "gamma 0.5" got: 0.5.f128.gamma want: (wide128 hi: 4611621969880370934 lo: 12284064620688006585) tol: 2
+    check128 name: "gamma 3.5" got: 3.5.f128.gamma want: (wide128 hi: 4611872263519181319 lo: 4598781554253924318) tol: 2
+    check128 name: "logGamma 0.5" got: 0.5.f128.logGamma want: (wide128 hi: 4611163806315215387 lo: 15041283425861010495) tol: 2
+    check128 name: "logGamma 10" got: 10.0.f128.logGamma want: (wide128 hi: 4612417917665574780 lo: 17631730484957162433) tol: 2
+    check128 name: "logGamma 3.5" got: 3.5.f128.logGamma want: (wide128 hi: 4611461112490717347 lo: 6593786284791579355) tol: 2
+    check128 name: "floor 2.5" got: 2.5.f128.floor want: (wide128 hi: 4611686018427387904 lo: 0) tol: 0
+    check128 name: "floor -2.5" got: (-2.5.f128).floor want: (wide128 hi: 13835198792770519040 lo: 0) tol: 0
+    check128 name: "floor -0.75" got: (-0.75.f128).floor want: (wide128 hi: 13834776580305453056 lo: 0) tol: 0
+    check128 name: "ceil 2.5" got: 2.5.f128.ceil want: (wide128 hi: 4611826755915743232 lo: 0) tol: 0
+    check128 name: "ceil -2.5" got: (-2.5.f128).ceil want: (wide128 hi: 13835058055282163712 lo: 0) tol: 0
+    check128 name: "ceil -0.75" got: (-0.75.f128).ceil want: (wide128 hi: 0 lo: 0) tol: 0
+    check128 name: "trunc 2.5" got: 2.5.f128.trunc want: (wide128 hi: 4611686018427387904 lo: 0) tol: 0
+    check128 name: "trunc -2.5" got: (-2.5.f128).trunc want: (wide128 hi: 13835058055282163712 lo: 0) tol: 0
+    check128 name: "trunc -0.75" got: (-0.75.f128).trunc want: (wide128 hi: 0 lo: 0) tol: 0
+    check128 name: "round 2.5" got: 2.5.f128.round want: (wide128 hi: 4611826755915743232 lo: 0) tol: 0
+    check128 name: "round -2.5" got: (-2.5.f128).round want: (wide128 hi: 13835198792770519040 lo: 0) tol: 0
+    check128 name: "round 3.5" got: 3.5.f128.round want: (wide128 hi: 4611967493404098560 lo: 0) tol: 0
+    check128 name: "round -0.75" got: (-0.75.f128).round want: (wide128 hi: 13834776580305453056 lo: 0) tol: 0
+    check128 name: "roundEven 2.5" got: 2.5.f128.roundEven want: (wide128 hi: 4611686018427387904 lo: 0) tol: 0
+    check128 name: "roundEven -2.5" got: (-2.5.f128).roundEven want: (wide128 hi: 13835058055282163712 lo: 0) tol: 0
+    check128 name: "roundEven 3.5" got: 3.5.f128.roundEven want: (wide128 hi: 4611967493404098560 lo: 0) tol: 0
+    check128 name: "roundEven -0.75" got: (-0.75.f128).roundEven want: (wide128 hi: 13834776580305453056 lo: 0) tol: 0
+    check128 name: "abs -3" got: (-3.0.f128).abs want: (wide128 hi: 4611826755915743232 lo: 0) tol: 0
+    check128 name: "abs 0.5" got: 0.5.f128.abs want: (wide128 hi: 4611123068473966592 lo: 0) tol: 0
+    check128 name: "hypot 3 4" got: (3.0.f128.hypot y: 4.0.f128) want: (wide128 hi: 4612037862148276224 lo: 0) tol: 1
+    check128 name: "hypot 1 1" got: (1.0.f128.hypot y: 1.0.f128) want: (wide128 hi: 4611521134203499452 lo: 14486024992869247637) tol: 1
+    check128 name: "pow 2 10" got: (2.0.f128.pow y: 10.0.f128) want: (wide128 hi: 4614219293217783808 lo: 0) tol: 1
+    check128 name: "pow 2 0.5" got: (2.0.f128.pow y: 0.5.f128) want: (wide128 hi: 4611521134203499452 lo: 14486024992869247637) tol: 1
+    check128 name: "pow 1.5 3" got: (1.5.f128.pow y: 3.0.f128) want: (wide128 hi: 4611879532473876480 lo: 0) tol: 1
+    check128 name: "atan2 1 1" got: (1.0.f128.atan2 x: 1.0.f128) want: (wide128 hi: 4611283733356757713 lo: 9541308523256152504) tol: 1
+    check128 name: "atan2 0.5 -1" got: (0.5.f128.atan2 x: (-1.0.f128)) want: (wide128 hi: 4611781430710206298 lo: 16544023343542293162) tol: 1
+    check128 name: "copySign 3 -1" got: (3.0.f128.copySign y: (-1.0.f128)) want: (wide128 hi: 13835198792770519040 lo: 0) tol: 0
+    check128 name: "copySign -2 1" got: ((-2.0.f128).copySign y: 1.0.f128) want: (wide128 hi: 4611686018427387904 lo: 0) tol: 0
+    check128 name: "min 1 2" got: (1.0.f128.min y: 2.0.f128) want: (wide128 hi: 4611404543450677248 lo: 0) tol: 0
+    check128 name: "min -0.5 0.25" got: ((-0.5.f128).min y: 0.25.f128) want: (wide128 hi: 13834495105328742400 lo: 0) tol: 0
+    check128 name: "max 1 2" got: (1.0.f128.max y: 2.0.f128) want: (wide128 hi: 4611686018427387904 lo: 0) tol: 0
+    check128 name: "max -0.5 0.25" got: ((-0.5.f128).max y: 0.25.f128) want: (wide128 hi: 4610841593497255936 lo: 0) tol: 0
+    check128 name: "fma 2 3 4" got: (2.0.f128.fma y: 3.0.f128 z: 4.0.f128) want: (wide128 hi: 4612319337124986880 lo: 0) tol: 0
+    check128 name: "fma 1.5 1.5 -2.25" got: (1.5.f128.fma y: 1.5.f128 z: (-2.25.f128)) want: (wide128 hi: 0 lo: 0) tol: 0
+    check128 name: "fma 0.75 3 0.5" got: (0.75.f128.fma y: 3.0.f128 z: 0.5.f128) want: (wide128 hi: 4611791571543654400 lo: 0) tol: 0
+}
+
+main: function is {
+    specials
+    tables
+}

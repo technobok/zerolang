@@ -2013,7 +2013,7 @@ perf: $(PERFBIN)
 #
 # +681 a data element may not take the name of one of the block's own members:
 # 0 behaviour, +681 source.
-ALLOC_BASELINE := 2020043
+ALLOC_BASELINE := 2022211
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
@@ -2301,7 +2301,7 @@ case-guard:
 # reports E0601 there. A rise means a unit now rejects programs that never
 # touch it (which is what made `--cc tcc` reject the entire corpus); a fall
 # means a guard stopped firing for a program that does touch it.
-REQUIRE_TCC_BASELINE := 7
+REQUIRE_TCC_BASELINE := 8
 
 require-guard: bin/zc
 	@n=0; rep=""; \
@@ -2562,7 +2562,7 @@ static-tcc-guard: bin/zc bin/zl bin/zls
 # returned "quadmath" unconditionally would link fine and pass every other
 # gate. A rise means something now reaches a unit it did not; a fall means a
 # program lost a need it had.
-ZLINK_BASELINE := 5
+ZLINK_BASELINE := 6
 
 zlink-guard: bin/zc
 	@n=0; rep=""; \
