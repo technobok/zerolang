@@ -32041,34 +32041,35 @@ emitCodeBody: function {
         # directions (a user struct inside a mono, a mono inside a user struct)
         emitFnptrTypedefs ast: program :symtab :ctx buf: codeBuf
         emitUserStructsOrdered ast: program :symtab :ctx :runtimeDir buf: codeBuf
-        # every unit's runtime, in the order the table gives. The two io
-        # emitters between io and cli generate C rather than load fragments, so
-        # they stay named here -- they are the one seam the rows cannot state.
-        # the unit order is copied first: the runtime emitters below lend ctx
-        uos: List String
-        for each uo0: ctx.unitOrder loop uos.append uo0.copy
-        for each uo: uos loop {
-            (emitRuntimeUnit
-                ast: program
-                :symtab
-                :ctx
-                :runtimeDir
-                uname: uo.stringView
-                buf: codeBuf
-            )
-            if uo.stringView == "io" then {
-                emitIoFileConformance ast: program :symtab :ctx buf: codeBuf
-                emitIoStdStreams ast: program :symtab :ctx buf: codeBuf
-            }
-        }
-        (emitUnorderedUnits
-            ast: program
-            :symtab
-            :ctx
-            :runtimeDir
-            buf: codeBuf
-        )
+        emitRuntimeUnits ast: program :symtab :ctx :runtimeDir buf: codeBuf late: false
     }
+}
+
+# emitRuntimeUnits -- every unit's runtime, in the order the table gives, then
+# the units it does not name. The two io emitters between io and cli generate C
+# rather than load fragments, so they stay named here -- they are the one seam
+# the rows cannot state. A LATE walk loads the rows whose demand fired while a
+# type method's body was written, after the first walk: a row already written is
+# skipped, and the io emitters, which write unconditionally, are not run again.
+emitRuntimeUnits: function {
+    ast: Ast.view
+    symtab: zenv.ZSymbolTable.view
+    ctx: Ctx
+    runtimeDir: StringView
+    buf: String.borrow
+    late: bool
+} is {
+    # the unit order is copied first: the runtime emitters below lend ctx
+    uos: List String
+    for each uo0: ctx.unitOrder loop uos.append uo0.copy
+    for each uo: uos loop {
+        emitRuntimeUnit :ast :symtab :ctx :runtimeDir uname: uo.stringView :buf
+        if late.not when uo.stringView == "io" then {
+            emitIoFileConformance :ast :symtab :ctx :buf
+            emitIoStdStreams :ast :symtab :ctx :buf
+        }
+    }
+    emitUnorderedUnits :ast :symtab :ctx :runtimeDir :buf
 }
 
 
@@ -32307,15 +32308,25 @@ emitC: function {
     }
     codeBuf: String
     emitCodeBody :program :symtab :ctx :runtimeDir :nodeEstE :codeBuf
-    # a native conformer's helpers follow every struct and runtime unit they
-    # read, and precede every method body that boxes one; a body asks for them
-    # while it is written, so they go in once the last one is out
+    # what a type method's body asks for while it is written comes after the
+    # runtime pass has run, and goes in where that pass ended: ahead of every
+    # method body, behind every struct and runtime unit it reads. That is a
+    # native conformer's helpers, and the fragment rows whose demand fired
+    # only inside a method -- an operator or a native method's `needs=`
     natAt: codeBuf.length
+    needsAt: ctx.needUnits.length
     emitRecordDefs :program :symtab :ctx buf: codeBuf
+    lateBuf: String
+    if ctx.needUnits.length > needsAt then {
+        emitRuntimeUnits ast: program :symtab :ctx :runtimeDir buf: lateBuf late: true
+    }
     if ctx.nativeBoxImpls.length > 0 then {
+        emitNativeConformanceImpls ast: program :symtab :ctx buf: lateBuf
+    }
+    if lateBuf.length > 0 then {
         spliced: String
         spliced.append (codeBuf.substring from: 0 to: natAt)
-        emitNativeConformanceImpls ast: program :symtab :ctx buf: spliced
+        spliced.append lateBuf
         spliced.append (codeBuf.substring from: natAt to: codeBuf.length)
         codeBuf = spliced.take
     }
@@ -35141,7 +35152,7 @@ emitRuntimeUnit: function {
         u: ctx.fragUnits.get :i
         isU = u.stringView == uname
         u.drop
-        if isU when (rowDemandFired :ctx :i) when (ctx.rowsWritten.has item: i).not then {
+        if isU when (ctx.rowsWritten.has item: i).not when (rowDemandFired :ctx :i) then {
             ctx.rowsWritten.add item: i
             fl: (ctx.fragNames.get :i).copy
             for each fr: (fl.stringView.split sep: ",") loop {
