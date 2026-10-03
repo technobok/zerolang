@@ -2034,7 +2034,10 @@ perf: $(PERFBIN)
 #
 # +2,042 a constant closed range of 2^64 values is refused: 0 behaviour,
 # +2,042 source (the recorded calls and the span check).
-ALLOC_BASELINE := 2143930
+#
+# +459 a public block's re-export is followed when a use reaches it: -12
+# behaviour, +471 source.
+ALLOC_BASELINE := 2144389
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

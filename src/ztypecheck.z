@@ -17815,6 +17815,11 @@ resolveOrdinaryMember: function {
     if mdo.kind.reexportDecl then isRx = true
     if mdo.defined then isDone = true
     mdo.drop
+    # A `public:` block's re-export (`Circle: impl.Circle`) is followed when a
+    # use reaches it, and not before: following every one when the block
+    # resolved demanded each unit a re-export names and minted every type in
+    # it, for a program that names one of them
+    if isRx when st.typing.eagerAll.not when (declIsPublicBlock :st declId: ownerDeclId) then return
     # A re-export whose target is a DOTTED path is resolved by following it,
     # which is resolveAliasKey's job -- resolveDef has no leg for a dotted target
     # naming a NESTED unit, and marking the alias DEFINED after it did nothing is
@@ -17847,6 +17852,13 @@ resolveOrdinaryMember: function {
     if md.isZero.not when speculative.not then {
         st.typing.declSetDefined declId: md
     }
+}
+
+# declIsPublicBlock -- the declaration is a unit's `public:` block.
+declIsPublicBlock: function {st: zenv.ZSymbolTable.view declId: ztypes.declid} out bool is {
+    if declId.isZero then return false
+    d: st.typing.decls.get i: declId
+    return d.kind.publicNs
 }
 
 # resolveUnitMemberAt -- one member of a unit body, dispatched by KIND. A unit
@@ -58823,6 +58835,13 @@ resolveConstantDefsIn: function {
                     ed: st.typing.declFindChild parentDeclId: ownerDeclId nameId: bmNode.name
                     edp: declParentIdOf :st declId: ed
                     if ed.isZero.not when edp != ownerDeclId then isEdge = true
+                    # a `public:` block's re-export (`Circle: impl.Circle`) is
+                    # followed when a use reaches it: resolved here it demanded
+                    # each unit the block names and minted every type in them
+                    if (declIsPublicBlock :st declId: ownerDeclId) when (isReexportShaped
+                        :ast
+                        opId: bmNode.operation
+                    ) then isEdge = true
                     if isEdge.not when (isGenericParam
                         :ast
                         op: (ast.nodes.get i: bmNode.operation)
@@ -58840,6 +58859,17 @@ resolveConstantDefsIn: function {
             }
         }
     }
+}
+
+# isReexportShaped -- the definition only names another one: a dotted path or a
+# bare name, but not a numeric literal or a conversion of one (`5`, `5.u8`),
+# which are constants of their own
+isReexportShaped: function {ast: Ast.view opId: zast.nodeid} out bool is {
+    root: rootNameIdOf :ast n: (ast.nodes.get i: opId)
+    if root.isZero then return false
+    if (isNumericLiteralNameAt :ast ref: root) then return false
+    n: ast.nodes.get i: opId
+    return n.dottedpath or n.atomid
 }
 
 # ccKindOf -- the `cckind` a resolved compiler PATH names, by basename. By
