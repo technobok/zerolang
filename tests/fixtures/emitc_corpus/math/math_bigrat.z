@@ -1,0 +1,500 @@
+# math_bigrat.z -- Go's rat_test.go and ratconv_test.go for BigRat, generated
+# by work/zerolang/tools/rattables.py from the Go sources: parse and text
+# (setStringTests, floatStringTests, Issue31184, Issue45910), decimalPrecision
+# (TestFloatPrec, f and -f), compare, the four operators both ways (ratBinTests),
+# construction from two i64s (setFrac64Tests), and float64inputs at both
+# widths against an exact rounding oracle, with the f64 round trip. Then Go's
+# Hilbert test: the Hilbert matrix of order 10 times its inverse is the unit.
+
+# the failures, and the checks run
+Tally: class {
+    checks: u64
+    bad: u64
+}
+
+# same -- one check: the two texts agree
+same: function {t: Tally.borrow what: StringView got: String.view want: StringView} is {
+    t.checks = t.checks + 1
+    if got != want then {
+        t.bad = t.bad + 1
+        print "FAIL \{what}: \{got}, want \{want}"
+    }
+}
+
+# truth -- one check of a fact
+truth: function {t: Tally.borrow what: StringView ok: bool} is {
+    t.checks = t.checks + 1
+    if ok.not then {
+        t.bad = t.bad + 1
+        print "FAIL \{what}"
+    }
+}
+
+# rat -- a BigRat from text the test spells correctly
+rat: function {text: StringView} out math.BigRat is {
+    r: math.BigRat.parse :text
+    match r case ok then return r.take case err then panic msg: "bad test text"
+}
+
+# setText -- parse: refused, or read back as `want`
+setText: function {t: Tally.borrow text: StringView ok: bool want: StringView} is {
+    r: math.BigRat.parse :text
+    match r case ok then {
+        truth :t what: text ok: ok
+        if ok then same :t what: text got: r.string :want
+        # isInt agrees with the denominator
+        truth :t what: text ok: r.isInt == (r.den == (math.BigInt from: 1))
+    } case err then {
+        truth :t what: text ok: ok.not
+    }
+}
+
+# parses -- whether parse accepts the text
+parses: function {t: Tally.borrow text: StringView ok: bool} is {
+    r: math.BigRat.parse :text
+    got: false
+    match r case ok then got = true case err then null
+    truth :t what: text ok: got == ok
+}
+
+# decimalOf -- the value with `digits` digits after the point
+decimalOf: function {t: Tally.borrow text: StringView digits: u64 want: StringView} is {
+    same :t what: text got: ((rat :text).decimal :digits) :want
+}
+
+# precision -- decimalPrecision of the value and of its negation, and the
+# decimal text at that many digits
+precision: function {t: Tally.borrow text: StringView digits: u64 exact: bool shown: StringView} is {
+    x: rat :text
+    for each k: 2.u64.times loop {
+        p: x.decimalPrecision
+        truth :t what: text ok: (p.digits == digits) and (p.exact == exact)
+        want: shown.string
+        if x.sign < 0 then {
+            w: "-".string
+            w.append shown
+            want = w.take
+        }
+        same :t what: text got: (x.decimal :digits) want: want.stringView
+        if k == 0 when x.sign > 0 then x = x.neg
+    }
+}
+
+# compares -- x.compare y
+compares: function {t: Tally.borrow x: StringView y: StringView want: i32} is {
+    truth :t what: x ok: ((rat text: x).compare rhs: (rat text: y)) == want
+}
+
+# binary -- x + y == sum both ways, sum - x == y and sum - y == x, x * y == prod
+# both ways, and prod / x == y and prod / y == x where they divide
+binary: function {t: Tally.borrow x: StringView y: StringView sum: StringView prod: StringView} is {
+    a: rat text: x
+    b: rat text: y
+    s: rat text: sum
+    p: rat text: prod
+    same :t what: "x+y" got: (a + b).string want: s.string.stringView
+    same :t what: "y+x" got: (b + a).string want: s.string.stringView
+    same :t what: "s-x" got: (s - a).string want: b.string.stringView
+    same :t what: "s-y" got: (s - b).string want: a.string.stringView
+    same :t what: "x*y" got: (a * b).string want: p.string.stringView
+    same :t what: "y*x" got: (b * a).string want: p.string.stringView
+    if a.sign != 0 then same :t what: "p/x" got: (p / a).string want: b.string.stringView
+    if b.sign != 0 then same :t what: "p/y" got: (p / b).string want: a.string.stringView
+}
+
+# fraction64 -- fromFraction over two i64s
+fraction64: function {t: Tally.borrow a: i64 b: i64 want: StringView} is {
+    r: math.BigRat.fromFraction num: (math.BigInt from: a) den: (math.BigInt from: b)
+    same :t what: "fromFraction" got: r.string :want
+}
+
+# floats -- the value at both widths, against the oracle's bits and
+# exactness, and an f64 read back as itself
+floats: function {
+    t: Tally.borrow
+    text: StringView
+    bits64: u64
+    exact64: bool
+    bits32: u32
+    exact32: bool
+} is {
+    x: rat :text
+    d: x.roundF64
+    truth :t what: text ok: d.bits == bits64
+    e64: false
+    match x.f64 case ok then e64 = true case err then null
+    truth :t what: text ok: e64 == exact64
+    f: x.roundF32
+    truth :t what: text ok: f.bits == bits32
+    e32: false
+    match x.f32 case ok then e32 = true case err then null
+    truth :t what: text ok: e32 == exact32
+    if d.isFinite then {
+        back: math.BigRat.fromF64 from: d
+        # compared as values, as Go compares them: a negative value too small
+        # for an f64 is -0, which a rational reads back as 0
+        match back case some then {
+            truth :t what: text ok: back.roundF64 == d
+        } case none then {
+            truth :t what: text ok: false
+        }
+    }
+}
+
+# hilbert -- the Hilbert matrix of order n, a[i][j] = 1 / (i + j + 1)
+hilbert: function {n: i64} out (List math.BigRat) is {
+    a: List math.BigRat
+    i: 0
+    for i < n loop {
+        j: 0
+        for j < n loop {
+            a.append (math.BigRat.fromFraction num: (math.BigInt from: 1) den: (math.BigInt from: i + j + 1))
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return a
+}
+
+# inverseHilbert -- its inverse, by Go's closed form of binomials
+inverseHilbert: function {n: i64} out (List math.BigRat) is {
+    a: List math.BigRat
+    i: 0
+    for i < n loop {
+        j: 0
+        for j < n loop {
+            x: math.BigInt from: i + j + 1
+            x = x * (math.BigInt.binomial n: n + i k: n - j - 1)
+            x = x * (math.BigInt.binomial n: n + j k: n - i - 1)
+            c: math.BigInt.binomial n: i + j k: i
+            x = x * c * c
+            if ((i + j) & 1) != 0 then x = x.neg
+            a.append (math.BigRat.fromInt from: x)
+            j = j + 1
+        }
+        i = i + 1
+    }
+    return a
+}
+
+# hilbertTest -- Go's TestHilbert: H * H^-1 is the unit matrix
+hilbertTest: function {t: Tally.borrow n: i64} is {
+    h: hilbert :n
+    v: inverseHilbert :n
+    i: 0
+    for i < n loop {
+        j: 0
+        for j < n loop {
+            x: math.BigRat from: 0
+            k: 0
+            for k < n loop {
+                x = x + ((h.get i: (i * n + k).u64.orPanic) * (v.get i: (k * n + j).u64.orPanic))
+                k = k + 1
+            }
+            want: math.BigRat from: 0
+            if i == j then want = math.BigRat from: 1
+            truth :t what: "hilbert" ok: x == want
+            j = j + 1
+        }
+        i = i + 1
+    }
+}
+
+main: function is {
+    t: Tally checks: 0 bad: 0
+    setText :t text: "1e" ok: false want: ""
+    setText :t text: "1.e" ok: false want: ""
+    setText :t text: "1e+14e-5" ok: false want: ""
+    setText :t text: "1e4.5" ok: false want: ""
+    setText :t text: "r" ok: false want: ""
+    setText :t text: "a/b" ok: false want: ""
+    setText :t text: "a.b" ok: false want: ""
+    setText :t text: "1/0" ok: false want: ""
+    setText :t text: "4/3/2" ok: false want: ""
+    setText :t text: "4/3/" ok: false want: ""
+    setText :t text: "4/3." ok: false want: ""
+    setText :t text: "4/" ok: false want: ""
+    setText :t text: "13e-9223372036854775808" ok: false want: ""
+    setText :t text: "0" ok: true want: "0"
+    setText :t text: "-0" ok: true want: "0"
+    setText :t text: "1" ok: true want: "1"
+    setText :t text: "-1" ok: true want: "-1"
+    setText :t text: "1." ok: true want: "1"
+    setText :t text: "1e0" ok: true want: "1"
+    setText :t text: "1.e1" ok: true want: "10"
+    setText :t text: "-0.1" ok: true want: "-1/10"
+    setText :t text: "-.1" ok: true want: "-1/10"
+    setText :t text: "2/4" ok: true want: "1/2"
+    setText :t text: ".25" ok: true want: "1/4"
+    setText :t text: "-1/5" ok: true want: "-1/5"
+    setText :t text: "8129567.7690E14" ok: true want: "812956776900000000000"
+    setText :t text: "78189e+4" ok: true want: "781890000"
+    setText :t text: "553019.8935e+8" ok: true want: "55301989350000"
+    setText :t text: "98765432109876543210987654321e-10" ok: true want: "98765432109876543210987654321/10000000000"
+    setText :t text: "9877861857500000E-7" ok: true want: "3951144743/4"
+    setText :t text: "2169378.417e-3" ok: true want: "2169378417/1000000"
+    setText :t text: "884243222337379604041632732738665534" ok: true want: "884243222337379604041632732738665534"
+    setText :t text: "53/70893980658822810696" ok: true want: "53/70893980658822810696"
+    setText :t text: "106/141787961317645621392" ok: true want: "53/70893980658822810696"
+    setText :t text: "204211327800791583.81095" ok: true want: "4084226556015831676219/20000"
+    setText :t text: "0e9999999999" ok: true want: "0"
+    setText :t text: "4/3x" ok: false want: ""
+    setText :t text: "0/-1" ok: false want: ""
+    setText :t text: "-1/-1" ok: false want: ""
+    setText :t text: "10_/1" ok: false want: ""
+    setText :t text: "_10/1" ok: false want: ""
+    setText :t text: "1/1__0" ok: false want: ""
+    setText :t text: "0b1000/3" ok: true want: "8/3"
+    setText :t text: "0B1000/0x8" ok: true want: "1"
+    setText :t text: "-010/1" ok: true want: "-8"
+    setText :t text: "-010.0" ok: true want: "-10"
+    setText :t text: "-0o10/1" ok: true want: "-8"
+    setText :t text: "0x10/1" ok: true want: "16"
+    setText :t text: "0x10/0x20" ok: true want: "1/2"
+    setText :t text: "0010" ok: true want: "10"
+    setText :t text: "0x10.0" ok: true want: "16"
+    setText :t text: "0x1.8" ok: true want: "3/2"
+    setText :t text: "0X1.8p4" ok: true want: "24"
+    setText :t text: "0x1.1E2" ok: true want: "2289/2048"
+    setText :t text: "0b1.1E2" ok: true want: "150"
+    setText :t text: "0B1.1P3" ok: true want: "12"
+    setText :t text: "0o10e-2" ok: true want: "2/25"
+    setText :t text: "0O10p-3" ok: true want: "1"
+    setText :t text: "0b_1000/3" ok: true want: "8/3"
+    setText :t text: "0B_10_00/0x8" ok: true want: "1"
+    setText :t text: "0xdead/0B1101_1110_1010_1101" ok: true want: "1"
+    setText :t text: "0B1101_1110_1010_1101/0XD_E_A_D" ok: true want: "1"
+    setText :t text: "1_000.0" ok: true want: "1000"
+    setText :t text: "0x_10.0" ok: true want: "16"
+    setText :t text: "0x1_0.0" ok: true want: "16"
+    setText :t text: "0x1.8_0" ok: true want: "3/2"
+    setText :t text: "0X1.8p0_4" ok: true want: "24"
+    setText :t text: "0b1.1_0E2" ok: true want: "150"
+    setText :t text: "0o1_0e-2" ok: true want: "2/25"
+    setText :t text: "0O_10p-3" ok: true want: "1"
+    decimalOf :t text: "0" digits: 0 want: "0"
+    decimalOf :t text: "0" digits: 4 want: "0.0000"
+    decimalOf :t text: "1" digits: 0 want: "1"
+    decimalOf :t text: "1" digits: 2 want: "1.00"
+    decimalOf :t text: "-1" digits: 0 want: "-1"
+    decimalOf :t text: "0.05" digits: 1 want: "0.1"
+    decimalOf :t text: "-0.05" digits: 1 want: "-0.1"
+    decimalOf :t text: ".25" digits: 2 want: "0.25"
+    decimalOf :t text: ".25" digits: 1 want: "0.3"
+    decimalOf :t text: ".25" digits: 3 want: "0.250"
+    decimalOf :t text: "-1/3" digits: 3 want: "-0.333"
+    decimalOf :t text: "-2/3" digits: 4 want: "-0.6667"
+    decimalOf :t text: "0.96" digits: 1 want: "1.0"
+    decimalOf :t text: "0.999" digits: 2 want: "1.00"
+    decimalOf :t text: "0.9" digits: 0 want: "1"
+    decimalOf :t text: ".25" digits: 0 want: "0"
+    decimalOf :t text: ".55" digits: 0 want: "1"
+    decimalOf :t text: "-213.090" digits: 3 want: "-213.090"
+    decimalOf :t text: "8.192" digits: 3 want: "8.192"
+    decimalOf :t text: "16.000" digits: 3 want: "16.000"
+    parses :t text: "1e-1000001" ok: false
+    parses :t text: "1e-1000000" ok: true
+    parses :t text: "1e+1000000" ok: true
+    parses :t text: "1e+1000001" ok: false
+    parses :t text: "0p1000000000000" ok: true
+    parses :t text: "1p-10000001" ok: false
+    parses :t text: "1p-10000000" ok: true
+    parses :t text: "1p+10000000" ok: true
+    parses :t text: "1p+10000001" ok: false
+    parses :t text: "1.770p02041010010011001001" ok: false
+    precision :t text: "10/100" digits: 1 exact: true shown: "0.1"
+    precision :t text: "3/100" digits: 2 exact: true shown: "0.03"
+    precision :t text: "10" digits: 0 exact: true shown: "10"
+    precision :t text: "0" digits: 0 exact: true shown: "0"
+    precision :t text: "0" digits: 0 exact: true shown: "0"
+    precision :t text: "1" digits: 0 exact: true shown: "1"
+    precision :t text: "1/2" digits: 1 exact: true shown: "0.5"
+    precision :t text: "1/3" digits: 0 exact: false shown: "0"
+    precision :t text: "1/4" digits: 2 exact: true shown: "0.25"
+    precision :t text: "1/5" digits: 1 exact: true shown: "0.2"
+    precision :t text: "1/6" digits: 1 exact: false shown: "0.2"
+    precision :t text: "1/7" digits: 0 exact: false shown: "0"
+    precision :t text: "1/8" digits: 3 exact: true shown: "0.125"
+    precision :t text: "1/9" digits: 0 exact: false shown: "0"
+    precision :t text: "1/10" digits: 1 exact: true shown: "0.1"
+    precision :t text: "1/11" digits: 0 exact: false shown: "0"
+    precision :t text: "1/12" digits: 2 exact: false shown: "0.08"
+    precision :t text: "1/13" digits: 0 exact: false shown: "0"
+    precision :t text: "1/14" digits: 1 exact: false shown: "0.1"
+    precision :t text: "1/15" digits: 1 exact: false shown: "0.1"
+    precision :t text: "1/16" digits: 4 exact: true shown: "0.0625"
+    precision :t text: "10/2" digits: 0 exact: true shown: "5"
+    precision :t text: "10/3" digits: 0 exact: false shown: "3"
+    precision :t text: "10/6" digits: 0 exact: false shown: "2"
+    precision :t text: "1/10000000" digits: 7 exact: true shown: "0.0000001"
+    precision :t text: "1/3125" digits: 5 exact: true shown: "0.00032"
+    precision :t text: "1/1024" digits: 10 exact: true shown: "0.0009765625"
+    precision :t text: "1/304000" digits: 7 exact: false shown: "0.0000033"
+    precision :t text: "1/48828125" digits: 11 exact: true shown: "0.00000002048"
+    compares :t x: "0" y: "0/1" want: 0
+    compares :t x: "1/1" y: "1" want: 0
+    compares :t x: "-1" y: "-2/2" want: 0
+    compares :t x: "1" y: "0" want: 1
+    compares :t x: "0/1" y: "1/1" want: -1
+    compares :t x: "-5/1434770811533343057144" y: "-5/1434770811533343057145" want: -1
+    compares :t x: "49832350382626108453/8964749413" y: "49832350382626108454/8964749413" want: -1
+    compares :t x: "-37414950961700930/7204075375675961" y: "37414950961700930/7204075375675961" want: -1
+    compares :t x: "37414950961700930/7204075375675961" y: "74829901923401860/14408150751351922" want: 0
+    binary :t x: "0" y: "0" sum: "0" prod: "0"
+    binary :t x: "0" y: "1" sum: "1" prod: "0"
+    binary :t x: "-1" y: "0" sum: "-1" prod: "0"
+    binary :t x: "-1" y: "1" sum: "0" prod: "-1"
+    binary :t x: "1" y: "1" sum: "2" prod: "1"
+    binary :t x: "1/2" y: "1/2" sum: "1" prod: "1/4"
+    binary :t x: "1/4" y: "1/3" sum: "7/12" prod: "1/12"
+    binary :t x: "2/5" y: "-14/3" sum: "-64/15" prod: "-28/15"
+    binary :t x: "4707/49292519774798173060" y: "-3367/70976135186689855734" sum: "84058377121001851123459/1749296273614329067191168098769082663020" prod: "-1760941/388732505247628681598037355282018369560"
+    binary :t x: "-61204110018146728334/3" y: "-31052192278051565633/2" sum: "-215564796870448153567/6" prod: "950260896245257153059642991192710872711/3"
+    binary :t x: "-854857841473707320655/4237645934602118692642972629634714039" y: "-18/31750379913563777419" sum: "-27/133467566250814981" prod: "15387441146526731771790/134546868362786310073779084329032722548987800600710485341"
+    binary :t x: "618575745270541348005638912139/19198433543745179392300736" y: "-19948846211000086/637313996471" sum: "27674141753240653/30123979153216" prod: "-6169936206128396568797607742807090270137721977/6117715203873571641674006593837351328"
+    binary :t x: "-3/26206484091896184128" y: "5/2848423294177090248" sum: "15310893822118706237/9330894968229805033368778458685147968" prod: "-5/24882386581946146755650075889827061248"
+    binary :t x: "26946729/330400702820" y: "41563965/225583428284" sum: "1238218672302860271/4658307703098666660055" prod: "224002580204097/14906584649915733312176"
+    binary :t x: "-8259900599013409474/7" y: "-84829337473700364773/56707961321161574960" sum: "-468402123685491748914621885145127724451/396955729248131024720" prod: "350340947706464153265156004876107029701/198477864624065512360"
+    binary :t x: "575775209696864/1320203974639986246357" y: "29/712593081308" sum: "410331716733912717985762465/940768218243776489278275419794956" prod: "808/45524274987585732633"
+    binary :t x: "1786597389946320496771/2066653520653241" y: "6269770/1992362624741777" sum: "3559549865190272133656109052308126637/4117523232840525481453983149257" prod: "8967230/3296219033"
+    binary :t x: "-36459180403360509753/32150500941194292113930" y: "9381566963714/9633539" sum: "301622077145533298008420642898530153/309723104686531919656937098270" prod: "-3784609207827/3426986245"
+    fraction64 :t a: 0 b: 1 want: "0"
+    fraction64 :t a: 0 b: -1 want: "0"
+    fraction64 :t a: 1 b: 1 want: "1"
+    fraction64 :t a: -1 b: 1 want: "-1"
+    fraction64 :t a: 1 b: -1 want: "-1"
+    fraction64 :t a: -1 b: -1 want: "1"
+    fraction64 :t a: (0 - 9223372036854775807 - 1) b: (0 - 9223372036854775807 - 1) want: "1"
+    floats :t text: "5e+125" bits64: 6487332926036156479 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "69e+267" bits64: 8629098970171938010 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "999e-026" bits64: 4262700489556199070 exact64: false bits32: 423705621 exact32: false
+    floats :t text: "7861e-034" bits64: 4156790932098116056 exact64: false bits32: 226433698 exact32: false
+    floats :t text: "75569e-254" bits64: 879790046677068467 exact64: false bits32: 0 exact32: false
+    floats :t text: "928609e-261" bits64: 791475600062680047 exact64: false bits32: 0 exact32: false
+    floats :t text: "9210917e+080" bits64: 5908056622692720690 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "84863171e+114" bits64: 6431261871125073719 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "653777767e+273" bits64: 8823116973391194241 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "5232604057e-298" bits64: 293971719163626784 exact64: false bits32: 0 exact32: false
+    floats :t text: "27235667517e-109" bits64: 3132205266021797810 exact64: false bits32: 0 exact32: false
+    floats :t text: "653532977297e-123" bits64: 2943425203452828776 exact64: false bits32: 0 exact32: false
+    floats :t text: "3142213164987e-294" bits64: 395529559291503215 exact64: false bits32: 0 exact32: false
+    floats :t text: "46202199371337e-072" bits64: 3734204953564886047 exact64: false bits32: 0 exact32: false
+    floats :t text: "231010996856685e-073" bits64: 3729701353937515551 exact64: false bits32: 0 exact32: false
+    floats :t text: "9324754620109615e+212" bits64: 8017443490956506826 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "78459735791271921e+049" bits64: 5592851714458857806 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "272104041512242479e+200" bits64: 7859832159664992391 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "6802601037806061975e+198" bits64: 7850824960410251399 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "20505426358836677347e-221" bits64: 1589791100886494138 exact64: false bits32: 0 exact32: false
+    floats :t text: "836168422905420598437e-234" bits64: 1419201246294223306 exact64: false bits32: 0 exact32: false
+    floats :t text: "4891559871276714924261e+222" bits64: 8252543605555897287 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "9e-265" bits64: 656686774183331434 exact64: false bits32: 0 exact32: false
+    floats :t text: "85e-037" bits64: 4082118117895962970 exact64: false bits32: 87344743 exact32: false
+    floats :t text: "623e+100" bits64: 6144669824094733279 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "3571e+263" bits64: 8594599015706608042 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "81661e+153" bits64: 6969261660643547022 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "920657e-023" bits64: 4351949045973638764 exact64: false bits32: 589944012 exact32: false
+    floats :t text: "4603285e-024" bits64: 4347445446346268268 exact64: false bits32: 581555404 exact32: false
+    floats :t text: "87575437e-309" bits64: 103027752906655084 exact64: false bits32: 0 exact32: false
+    floats :t text: "245540327e+122" bits64: 6557722794373203403 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "6138508175e+120" bits64: 6548715595118462411 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "83356057653e+193" bits64: 7657602499719604760 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "619534293513e+124" bits64: 6638600658108801265 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "2335141086879e+218" bits64: 8053351622278037998 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "36167929443327e-159" bits64: 2431072419359959292 exact64: false bits32: 0 exact32: false
+    floats :t text: "609610927149051e-255" bits64: 1013382980825585841 exact64: false bits32: 0 exact32: false
+    floats :t text: "3743626360493413e-165" bits64: 2371288390901284601 exact64: false bits32: 0 exact32: false
+    floats :t text: "94080055902682397e-242" bits64: 1240259569605568202 exact64: false bits32: 0 exact32: false
+    floats :t text: "899810892172646163e+283" bits64: 9109338739490250243 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "7120190517612959703e+120" bits64: 6684223714623003133 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "25188282901709339043e-252" bits64: 1127031969823795844 exact64: false bits32: 0 exact32: false
+    floats :t text: "308984926168550152811e-052" bits64: 4135445632992568635 exact64: false bits32: 186674980 exact32: false
+    floats :t text: "6372891218502368041059e+064" bits64: 5890821581587560702 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "5e-20" bits64: 4318252518367220396 exact64: false bits32: 527179338 exact32: false
+    floats :t text: "67e+14" bits64: 4843565999795912704 exact64: true bits32: 1505651946 exact32: false
+    floats :t text: "985e+15" bits64: 4876086509687506176 exact64: true bits32: 1566226116 exact32: false
+    floats :t text: "7693e-42" bits64: 4036616410594534561 exact64: false bits32: 5489908 exact32: false
+    floats :t text: "55895e-16" bits64: 4438461499182153697 exact64: false bits32: 751086013 exact32: false
+    floats :t text: "996622e-44" bits64: 4038358260351238139 exact64: false bits32: 7112132 exact32: false
+    floats :t text: "7038531e-32" bits64: 4230507875723640832 exact64: false bits32: 363742205 exact32: false
+    floats :t text: "60419369e-46" bits64: 4035351287175315456 exact64: false bits32: 4311670 exact32: false
+    floats :t text: "702990899e-20" bits64: 4440244639143821312 exact64: false bits32: 754407370 exact32: false
+    floats :t text: "6930161142e-48" bits64: 4036031887020392448 exact64: false bits32: 4945528 exact32: false
+    floats :t text: "25933168707e+13" bits64: 4957184677023580160 exact64: false bits32: 1717283224 exact32: false
+    floats :t text: "596428896559e+20" bits64: 5082178470981664768 exact64: false bits32: 1950102308 exact32: false
+    floats :t text: "3e-23" bits64: 4270013082623673789 exact64: false bits32: 437326388 exact32: false
+    floats :t text: "57e+18" bits64: 4902370802764229152 exact64: true bits32: 1615184428 exact32: false
+    floats :t text: "789e-35" bits64: 4126559283003274252 exact64: false bits32: 170122864 exact32: false
+    floats :t text: "2539e-18" bits64: 4388439567179451557 exact64: false bits32: 657912905 exact32: false
+    floats :t text: "76173e+28" bits64: 5098856742209454229 exact64: false bits32: 1981168010 exact32: false
+    floats :t text: "887745e-11" bits64: 4531357947049017371 exact64: false bits32: 924119132 exact32: false
+    floats :t text: "5382571e-37" bits64: 4153961066440687625 exact64: false bits32: 221162663 exact32: false
+    floats :t text: "82381273e-35" bits64: 4201947762155061248 exact64: false bits32: 310544849 exact32: false
+    floats :t text: "750486563e-38" bits64: 4171185306394951680 exact64: false bits32: 253245310 exact32: false
+    floats :t text: "3752432815e-39" bits64: 4166681706767581184 exact64: false bits32: 244856702 exact32: false
+    floats :t text: "75224575729e-45" bits64: 4096304675450519552 exact64: false bits32: 113769266 exact32: false
+    floats :t text: "459926601011e+15" bits64: 5005688399290433536 exact64: false bits32: 1807628448 exact32: false
+    floats :t text: "0" bits64: 0 exact64: true bits32: 0 exact32: true
+    floats :t text: "1" bits64: 4607182418800017408 exact64: true bits32: 1065353216 exact32: true
+    floats :t text: "+1" bits64: 4607182418800017408 exact64: true bits32: 1065353216 exact32: true
+    floats :t text: "1e23" bits64: 4950912855330343670 exact64: false bits32: 1705601046 exact32: false
+    floats :t text: "1E23" bits64: 4950912855330343670 exact64: false bits32: 1705601046 exact32: false
+    floats :t text: "100000000000000000000000" bits64: 4950912855330343670 exact64: false bits32: 1705601046 exact32: false
+    floats :t text: "1e-100" bits64: 3110860544497550640 exact64: false bits32: 0 exact32: false
+    floats :t text: "123456700" bits64: 4728057448374468608 exact64: true bits32: 1290500504 exact32: false
+    floats :t text: "99999999999999974834176" bits64: 4950912855330343669 exact64: true bits32: 1705601046 exact32: false
+    floats :t text: "100000000000000000000001" bits64: 4950912855330343671 exact64: false bits32: 1705601046 exact32: false
+    floats :t text: "100000000000000008388608" bits64: 4950912855330343671 exact64: true bits32: 1705601046 exact32: false
+    floats :t text: "100000000000000016777215" bits64: 4950912855330343671 exact64: false bits32: 1705601046 exact32: false
+    floats :t text: "100000000000000016777216" bits64: 4950912855330343672 exact64: false bits32: 1705601046 exact32: false
+    floats :t text: "-1" bits64: 13830554455654793216 exact64: true bits32: 3212836864 exact32: true
+    floats :t text: "-0.1" bits64: 13815242216921733530 exact64: false bits32: 3184315597 exact32: false
+    floats :t text: "-0" bits64: 0 exact64: true bits32: 0 exact32: true
+    floats :t text: "1e-20" bits64: 4307583784117748259 exact64: false bits32: 507307272 exact32: false
+    floats :t text: "625e-3" bits64: 4603804719079489536 exact64: true bits32: 1059061760 exact32: true
+    floats :t text: "1.7976931348623157e308" bits64: 9218868437227405311 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "-1.7976931348623157e308" bits64: 18442240474082181119 exact64: false bits32: 4286578688 exact32: false
+    floats :t text: "1.7976931348623159e308" bits64: 9218868437227405312 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "-1.7976931348623159e308" bits64: 18442240474082181120 exact64: false bits32: 4286578688 exact32: false
+    floats :t text: "1.7976931348623158e308" bits64: 9218868437227405311 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "-1.7976931348623158e308" bits64: 18442240474082181119 exact64: false bits32: 4286578688 exact32: false
+    floats :t text: "1.797693134862315808e308" bits64: 9218868437227405312 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "-1.797693134862315808e308" bits64: 18442240474082181120 exact64: false bits32: 4286578688 exact32: false
+    floats :t text: "1e308" bits64: 9214871658872686752 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "2e308" bits64: 9218868437227405312 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "1e309" bits64: 9218868437227405312 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "1e310" bits64: 9218868437227405312 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "-1e310" bits64: 18442240474082181120 exact64: false bits32: 4286578688 exact32: false
+    floats :t text: "1e400" bits64: 9218868437227405312 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "-1e400" bits64: 18442240474082181120 exact64: false bits32: 4286578688 exact32: false
+    floats :t text: "1e-305" bits64: 43935135038780789 exact64: false bits32: 0 exact32: false
+    floats :t text: "1e-306" bits64: 28843068552705937 exact64: false bits32: 0 exact32: false
+    floats :t text: "1e-307" bits64: 14067255587423757 exact64: false bits32: 0 exact32: false
+    floats :t text: "1e-308" bits64: 2024022533073106 exact64: false bits32: 0 exact32: false
+    floats :t text: "1e-309" bits64: 202402253307311 exact64: false bits32: 0 exact32: false
+    floats :t text: "1e-310" bits64: 20240225330731 exact64: false bits32: 0 exact32: false
+    floats :t text: "1e-322" bits64: 20 exact64: false bits32: 0 exact32: false
+    floats :t text: "5e-324" bits64: 1 exact64: false bits32: 0 exact32: false
+    floats :t text: "4e-324" bits64: 1 exact64: false bits32: 0 exact32: false
+    floats :t text: "3e-324" bits64: 1 exact64: false bits32: 0 exact32: false
+    floats :t text: "2e-324" bits64: 0 exact64: false bits32: 0 exact32: false
+    floats :t text: "1e-350" bits64: 0 exact64: false bits32: 0 exact32: false
+    floats :t text: "-1e-350" bits64: 9223372036854775808 exact64: false bits32: 2147483648 exact32: false
+    floats :t text: "2.2250738585072012e-308" bits64: 4503599627370496 exact64: false bits32: 0 exact32: false
+    floats :t text: "2.2250738585072011e-308" bits64: 4503599627370495 exact64: false bits32: 0 exact32: false
+    floats :t text: "4.630813248087435e+307" bits64: 9209998103041757433 exact64: false bits32: 2139095040 exact32: false
+    floats :t text: "22.222222222222222" bits64: 4626948217164587918 exact64: false bits32: 1102169884 exact32: false
+    floats :t text: "1.00000000000000011102230246251565404236316680908203125" bits64: 4607182418800017408 exact64: false bits32: 1065353216 exact32: false
+    floats :t text: "1.00000000000000011102230246251565404236316680908203124" bits64: 4607182418800017408 exact64: false bits32: 1065353216 exact32: false
+    floats :t text: "1.00000000000000011102230246251565404236316680908203126" bits64: 4607182418800017409 exact64: false bits32: 1065353216 exact32: false
+    floats :t text: "4.940656458412465441765687928682213723651e-324" bits64: 1 exact64: false bits32: 0 exact32: false
+    floats :t text: "2.470328229206232720882843964341106861825e-324" bits64: 0 exact64: false bits32: 0 exact32: false
+    floats :t text: "2.470328302827751011111470718709768633275e-324" bits64: 1 exact64: false bits32: 0 exact32: false
+    floats :t text: "2.225073858507201136057409796709131975935e-308" bits64: 4503599627370496 exact64: false bits32: 0 exact32: false
+    floats :t text: "1152921504606846975" bits64: 4877398396442247168 exact64: false bits32: 1568669696 exact32: false
+    floats :t text: "-1152921504606846975" bits64: 14100770433297022976 exact64: false bits32: 3716153344 exact32: false
+    floats :t text: "1152921504606846977" bits64: 4877398396442247168 exact64: false bits32: 1568669696 exact32: false
+    floats :t text: "-1152921504606846977" bits64: 14100770433297022976 exact64: false bits32: 3716153344 exact32: false
+    floats :t text: "1/3" bits64: 4599676419421066581 exact64: false bits32: 1051372203 exact32: false
+    hilbertTest :t n: 10
+    if t.bad == 0 then print "ok \{t.checks} checks" else print "\{t.bad} of \{t.checks} checks failed"
+}

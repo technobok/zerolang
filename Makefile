@@ -2037,7 +2037,11 @@ perf: $(PERFBIN)
 #
 # +459 a public block's re-export is followed when a use reaches it: -12
 # behaviour, +471 source.
-ALLOC_BASELINE := 2144389
+#
+# +3,245 BigRat, and BigInt's product and binomial: 0 behaviour, +3,245 source
+# (the compiler compiles math's bigint subunit, which gains the two and the
+# radix-point scan; BigRat is not compiled into it).
+ALLOC_BASELINE := 2147634
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 

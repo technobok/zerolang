@@ -1,0 +1,629 @@
+# Copyright 2010 The Go Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style
+# license that can be found in the LICENSE-GO file.
+#
+# Ported from Go's src/math/big/rat.go and ratconv.go at 577b91f341
+# (2026-09-30) on 2026-10-04: rational numbers of any size.
+
+# BigRat -- a quotient num / den of integers of any size, kept in lowest
+# terms: den is positive and shares no factor with num, and an integer has
+# den 1. Zero is 0/1
+BigRat: class {
+    # the numerator, which carries the sign
+    num: bigint.BigInt
+    # the denominator: positive, and 1 for an integer
+    den: bigint.BigInt
+} as {
+    # the value of an i64, and of every narrower integer, which widens to one
+    # by itself
+    create: function {from: i64} out this is {
+        return (meta.create num: (bigint.BigInt :from) den: (bigint.BigInt from: 1))
+    }
+
+    # fromParts -- the BigRat num / den exactly as given, which the caller has
+    # already put in lowest terms
+    fromParts: function {num: bigint.BigInt.take den: bigint.BigInt.take} out this is {
+        return (meta.create :num :den)
+    }
+
+    # fromFraction -- num / den in lowest terms. Panics when den is zero
+    fromFraction: function {num: bigint.BigInt.view den: bigint.BigInt.view} out BigRat is {
+        if den.sign == 0 then panic msg: "division by zero"
+        return (normalized num: num.copy den: den.copy)
+    }
+
+    # fromInt -- the value of a BigInt
+    fromInt: function {from: bigint.BigInt.view} out BigRat is {
+        return (BigRat.fromParts num: from.copy den: (bigint.BigInt from: 1))
+    }
+
+    # fromF64 -- the value of an f64 exactly, which every finite f64 has; none
+    # for an infinity or a NaN
+    fromF64: function {from: f64} out Option BigRat is {
+        bits: from.bits
+        mantissa: bits & 4503599627370495
+        e: ((bits >> 52) & 2047).i64.orPanic
+        if e == 2047 then return (Option BigRat).none
+        if e == 0 then {
+            # subnormal
+            e = 0 - 1022
+        } else {
+            mantissa = mantissa | 4503599627370496
+            e = e - 1023
+        }
+        shift: 52 - e
+        # partly normalised already: trailing zeros need no division later
+        for ((mantissa & 1) == 0) and (shift > 0) and (mantissa != 0) loop {
+            mantissa = mantissa >> 1
+            shift = shift - 1
+        }
+        a: bigint.BigInt.fromU64 from: mantissa
+        if from < 0.0 then a = a.neg
+        b: bigint.BigInt from: 1
+        if shift > 0 then b = b << shift.u64.orPanic else a = a << (0 - shift).u64.orPanic
+        return ((Option BigRat).some (normalized num: a.take den: b.take))
+    }
+
+    # a copy, owning its own parts
+    copy: function {t: this.view} out BigRat is {
+        return (BigRat.fromParts num: t.num.copy den: t.den.copy)
+    }
+
+    # the sum, in lowest terms
+    +: function {t: this.view rhs: BigRat.view} out BigRat is {
+        a: t.num * rhs.den + (rhs.num * t.den)
+        return (normalized num: a.take den: t.den * rhs.den)
+    }
+
+    # the difference, in lowest terms
+    -: function {t: this.view rhs: BigRat.view} out BigRat is {
+        a: t.num * rhs.den - (rhs.num * t.den)
+        return (normalized num: a.take den: t.den * rhs.den)
+    }
+
+    # the product, in lowest terms
+    *: function {t: this.view rhs: BigRat.view} out BigRat is {
+        return (normalized num: t.num * rhs.num den: t.den * rhs.den)
+    }
+
+    # the exact quotient. Panics when rhs is zero
+    /: function {t: this.view rhs: BigRat.view} out BigRat is {
+        if rhs.num.sign == 0 then panic msg: "division by zero"
+        return (normalized num: t.num * rhs.den den: t.den * rhs.num)
+    }
+
+    # the value with its sign flipped; zero stays zero
+    neg: function {t: this.view} out BigRat is {
+        return (BigRat.fromParts num: t.num.neg den: t.den.copy)
+    }
+
+    # the value without its sign
+    abs: function {t: this.view} out BigRat is {
+        return (BigRat.fromParts num: t.num.abs den: t.den.copy)
+    }
+
+    # 1 / this. Panics when this is zero
+    inverse: function {t: this.view} out BigRat is {
+        if t.num.sign == 0 then panic msg: "division by zero"
+        return (normalized num: t.den.copy den: t.num.copy)
+    }
+
+    # -1, 0 or +1 as this is below, at or above zero
+    sign: function {t: this.view} out i32 is {
+        return t.num.sign
+    }
+
+    # whether the value is an integer: its denominator is 1
+    isInt: function {t: this.view} out bool is {
+        return (t.den.words.length == 1) and ((t.den.words.get i: 0) == 1)
+    }
+
+    # -1, 0 or +1 as this is below, equal to or above rhs
+    compare: function {t: this.view rhs: BigRat.view} out i32 is {
+        return ((t.num * rhs.den).compare rhs: rhs.num * t.den)
+    }
+
+    # equal values have the same lowest terms, so the parts compare
+    ==: function {t: this.view rhs: BigRat.view} out bool is {
+        return (t.num == rhs.num) and (t.den == rhs.den)
+    }
+
+    # whether the two differ
+    !=: function {t: this.view rhs: BigRat.view} out bool is {
+        return (t == rhs).not
+    }
+
+    # whether this is below rhs
+    <: function {t: this.view rhs: BigRat.view} out bool is {
+        return (t.compare :rhs) < 0
+    }
+
+    # whether this is at most rhs
+    <=: function {t: this.view rhs: BigRat.view} out bool is {
+        return (t.compare :rhs) <= 0
+    }
+
+    # whether this is above rhs
+    >: function {t: this.view rhs: BigRat.view} out bool is {
+        return (t.compare :rhs) > 0
+    }
+
+    # whether this is at least rhs
+    >=: function {t: this.view rhs: BigRat.view} out bool is {
+        return (t.compare :rhs) >= 0
+    }
+
+    # an FNV-1a mix of the two parts' hashes: equal values hash alike
+    hash: function {t: this.view} out u64 is {
+        h: t.num.hash
+        return ((h ^ t.den.hash).mulWide rhs: 1099511628211).lo
+    }
+
+    # the value as an f64 when it is one exactly -- precisionLoss when it lies
+    # between two f64s, outOfRange past the largest
+    f64: function {t: this.view} out (resultval t: f64 e: converror) is {
+        q: quotToFloat a: t.num.words.listView b: t.den.words.listView msize: 52 esize: 11
+        v: floatOfQuot :q
+        if v.isInf then return ((resultval t: f64 e: converror).err converror.outOfRange)
+        if q.exact.not then return ((resultval t: f64 e: converror).err converror.precisionLoss)
+        return ((resultval t: f64 e: converror).ok (signed :v negative: t.num.negative))
+    }
+
+    # roundF64 -- the f64 nearest the value, a tie to the even one, and an
+    # infinity past the largest. Its sign is the value's, a zero's included
+    roundF64: function {t: this.view} out f64 is {
+        q: quotToFloat a: t.num.words.listView b: t.den.words.listView msize: 52 esize: 11
+        return (signed v: (floatOfQuot :q) negative: t.num.negative)
+    }
+
+    # the value as an f32 when it is one exactly -- precisionLoss when it lies
+    # between two f32s, outOfRange past the largest
+    f32: function {t: this.view} out (resultval t: f32 e: converror) is {
+        q: quotToFloat a: t.num.words.listView b: t.den.words.listView msize: 23 esize: 8
+        v: float32OfQuot :q
+        if v.isInf then return ((resultval t: f32 e: converror).err converror.outOfRange)
+        if q.exact.not then return ((resultval t: f32 e: converror).err converror.precisionLoss)
+        if t.num.negative then v = v * -1.0
+        return ((resultval t: f32 e: converror).ok v)
+    }
+
+    # roundF32 -- the f32 nearest the value, a tie to the even one, and an
+    # infinity past the largest. Its sign is the value's, a zero's included
+    roundF32: function {t: this.view} out f32 is {
+        q: quotToFloat a: t.num.words.listView b: t.den.words.listView msize: 23 esize: 8
+        v: float32OfQuot :q
+        if t.num.negative then v = v * -1.0
+        return v
+    }
+
+    # the value as "a/b", or as "a" when it is an integer
+    string: function {t: this.view} out String is {
+        if t.isInt then return t.num.string
+        return t.fraction
+    }
+
+    # the value as "a/b" always, "a/1" for an integer
+    fraction: function {t: this.view} out String is {
+        r: t.num.string
+        r.append "/"
+        r.append t.den.string
+        return r
+    }
+
+    # decimal -- the value in decimal with `digits` digits after the point, the
+    # last rounded to nearest and a half away from zero (Go's FloatString)
+    decimal: function {t: this.view digits: u64} out String is {
+        return (decimalText :t :digits)
+    }
+
+    # decimalPrecision -- how many digits follow the point before the value's
+    # decimal expansion repeats, and whether that many are exact: 1/4 has 2,
+    # exactly, and 1/3 none, inexactly (Go's FloatPrec)
+    decimalPrecision: function {t: this.view} out decimalprec is {
+        return (precisionOf den: t.den.words.listView)
+    }
+
+    # parse -- read a fraction "a/b", each part a decimal integer or prefixed
+    # 0b, 0o or 0x and the divisor unsigned; or a number "1.5", "-2.5e-3",
+    # "0x1.8p4" -- decimal or prefixed, with a base-10 `e` or base-2 `p`
+    # exponent (a hex mantissa takes `p` alone). The whole text must be the
+    # number: `empty` when it holds no digit, `overflow` for an exponent past
+    # what is computed, `invalidDigit` for anything else
+    parse: function {text: StringView} out (ResultRV BigRat e: parseerror) is {
+        return (parseRat :text)
+    }
+}
+
+# decimalprec -- the digits a value's decimal expansion has before it repeats,
+# and whether that many spell it exactly
+decimalprec: record {
+    # the digits after the point
+    digits: u64
+    # they spell the value exactly, rather than rounded
+    exact: bool
+}
+
+# normalized -- num / den in lowest terms: the sign on num, den positive, and
+# their common factor divided out (Go's norm)
+normalized: function {num: bigint.BigInt.take den: bigint.BigInt.take} out BigRat is {
+    if num.sign == 0 then return (BigRat.fromParts :num den: (bigint.BigInt from: 1))
+    if den.sign < 0 then return (normalized num: num.neg den: den.neg)
+    g: num.gcd y: den
+    if (g.words.length == 1) and ((g.words.get i: 0) == 1) then return (BigRat.fromParts :num :den)
+    return (BigRat.fromParts num: num / g den: den / g)
+}
+
+# floatquot -- a quotient rounded to a binary float's precision: the value is
+# mantissa * 2^exp, and exact says no bit was rounded away
+floatquot: record {
+    # the significand, its implicit leading bit included
+    mantissa: u64
+    # the power of two it is scaled by
+    exp: i64
+    # the quotient is that value exactly
+    exact: bool
+}
+
+# quotToFloat -- the non-negative float of `msize` stored mantissa bits and an
+# `esize`-bit exponent nearest the quotient a / b, a tie to the even one (Go's
+# quotToFloat32 and quotToFloat64, one body for both). b is nonzero and the
+# two share no factor
+quotToFloat: function {
+    a: (ListViewVal u64).view
+    b: (ListViewVal u64).view
+    msize: u64
+    esize: u64
+} out floatquot is {
+    msize1: msize + 1
+    msize2: msize1 + 1
+    ebias: (1.i64 << (esize - 1).i64.orPanic) - 1
+    emin: 1 - ebias
+    alen: nat.natBitLen x: a
+    if alen == 0 then return (floatquot mantissa: 0 exp: 0 exact: true)
+    blen: nat.natBitLen x: b
+    if blen == 0 then panic msg: "division by zero"
+    # 1. shift a or b so the quotient has msize2 or msize2 + 1 bits: one more
+    # than the mantissa holds for rounding, and one that step 3 may drop
+    exp: alen.i64.orPanic - blen.i64.orPanic
+    a2: ListVal u64
+    b2: ListVal u64
+    shift: msize2.i64.orPanic - exp
+    if shift > 0 then {
+        nat.natLsh z: a2 x: a s: shift.u64.orPanic
+        nat.natSet z: b2 x: b
+    } else {
+        nat.natSet z: a2 x: a
+        nat.natLsh z: b2 x: b s: (0 - shift).u64.orPanic
+    }
+    # 2. the quotient and remainder; the quotient's low bit is logically the
+    # remainder's high one
+    q: ListVal u64
+    r: ListVal u64
+    natdiv.natDiv :q :r u: a2.listView v: b2.listView
+    mantissa: u64
+    if q.length > 0 then mantissa = q.get i: 0
+    haveRem: r.length > 0
+    # 3. a quotient of msize2 + 1 bits drops its low bit into the remainder
+    if (mantissa >> msize2) == 1 then {
+        if (mantissa & 1) == 1 then haveRem = true
+        mantissa = mantissa >> 1
+        exp = exp + 1
+    }
+    if (mantissa >> msize1) != 1 then panic msg: "math: expected exactly msize2 bits of quotient"
+    # 4. a subnormal loses the bits below the smallest exponent
+    if (emin - msize.i64.orPanic) <= exp when exp <= emin then {
+        lose: (emin - (exp - 1)).u64.orPanic
+        if (mantissa & ((1.u64 << lose) - 1)) != 0 then haveRem = true
+        mantissa = mantissa >> lose
+        exp = 2 - ebias
+    }
+    # round half to even
+    exact: haveRem.not
+    if (mantissa & 1) != 0 then {
+        exact = false
+        if haveRem or ((mantissa & 2) != 0) then {
+            mantissa = mantissa + 1
+            if mantissa >= (1.u64 << msize2) then {
+                # a carry out of 11...1 to 100...0
+                mantissa = mantissa >> 1
+                exp = exp + 1
+            }
+        }
+    }
+    # the rounding bit goes
+    mantissa = mantissa >> 1
+    return (floatquot :mantissa exp: exp - msize1.i64.orPanic :exact)
+}
+
+# floatOfQuot -- the non-negative f64 a quotient rounded to its precision
+# spells: an infinity past the largest, zero below the smallest
+floatOfQuot: function {q: floatquot} out f64 is {
+    if q.mantissa == 0 then return 0.0
+    # scaleB takes an i32; anything past these is an infinity or a zero anyway
+    e: q.exp
+    if e > 4096 then e = 4096
+    if e < -4096 then e = -4096
+    m: q.mantissa.f64.orPanic
+    return (m.scaleB n: e.i32.orPanic)
+}
+
+# float32OfQuot -- floatOfQuot for an f32: a value that fits is exactly an
+# f32, and one past the largest is an f32 infinity
+float32OfQuot: function {q: floatquot} out f32 is {
+    v: floatOfQuot :q
+    big: 340282346638528859811704183484516925440.0
+    if v > big then {
+        z: f32
+        return 1.0.f32 / z
+    }
+    return (v.f32.or d: 0.0)
+}
+
+# signed -- v with the sign of a negative value, a zero's included
+signed: function {v: f64 negative: bool} out f64 is {
+    if negative then return v * -1.0
+    return v
+}
+
+# decimalText -- the value with `digits` digits after the point, the last
+# rounded to nearest with a half away from zero
+decimalText: function {t: BigRat.view digits: u64} out String is {
+    if t.isInt then {
+        r: t.num.string
+        if digits > 0 then {
+            r.append "."
+            for each k: digits.times loop {
+                k.drop
+                r.append "0"
+            }
+        }
+        return r
+    }
+    q: ListVal u64
+    rem: ListVal u64
+    natdiv.natDiv :q r: rem u: t.num.words.listView v: t.den.words.listView
+    p: ListVal u64
+    nat.natSetWord z: p x: 1
+    if digits > 0 then {
+        ten: ListVal u64
+        nat.natSetWord z: ten x: 10
+        e: ListVal u64
+        nat.natSetWord z: e x: digits
+        noModulus: ListVal u64
+        natexp.natExp z: p x: ten.listView y: e.listView m: noModulus.listView
+    }
+    scaled: ListVal u64
+    natmul.natMul z: scaled x: rem.listView y: p.listView
+    frac: ListVal u64
+    r2: ListVal u64
+    natdiv.natDiv q: frac r: r2 u: scaled.listView v: t.den.words.listView
+    # round: twice the remainder against the denominator, a half up
+    twice: ListVal u64
+    nat.natAdd z: twice x: r2.listView y: r2.listView
+    if (nat.natCmp x: t.den.words.listView y: twice.listView) <= 0 then {
+        one: ListVal u64
+        nat.natSetWord z: one x: 1
+        up: ListVal u64
+        nat.natAdd z: up x: frac.listView y: one.listView
+        frac swap up
+        if (nat.natCmp x: frac.listView y: p.listView) >= 0 then {
+            q2: ListVal u64
+            nat.natAdd z: q2 x: q.listView y: one.listView
+            q swap q2
+            f2: ListVal u64
+            nat.natSub z: f2 x: frac.listView y: p.listView
+            frac swap f2
+        }
+    }
+    s: String
+    if t.num.negative then s.append "-"
+    s.append (natconv.natText x: q.listView base: 10)
+    if digits > 0 then {
+        s.append "."
+        fs: natconv.natText x: frac.listView base: 10
+        pad: digits - fs.length
+        for each k: pad.times loop {
+            k.drop
+            s.append "0"
+        }
+        s.append fs
+    }
+    return s
+}
+
+# precisionOf -- decimalPrecision of a value with denominator d: d is
+# q * 2^p2 * 5^p5, the digits are max(p2, p5), and they are exact when q is 1
+precisionOf: function {den: (ListViewVal u64).view} out decimalprec is {
+    p2: nat.natTrailingZeroBits x: den
+    q: ListVal u64
+    nat.natRsh z: q x: den s: p2
+    # factors of 5 by repeated squaring of 5^13: tab[i] is 5^(13 * 2^i)
+    tab: List (ListVal u64)
+    f: ListVal u64
+    nat.natSetWord z: f x: 1220703125
+    for true loop {
+        t: ListVal u64
+        r: ListVal u64
+        natdiv.natDiv q: t :r u: q.listView v: f.listView
+        if r.length != 0 then break
+        tab.append f.copy
+        sq: ListVal u64
+        natmul.natSqr z: sq x: f.listView
+        f swap sq
+    }
+    p5: u64
+    i: tab.length
+    for i > 0 loop {
+        i = i - 1
+        t: ListVal u64
+        r: ListVal u64
+        natdiv.natDiv q: t :r u: q.listView v: (tab.get :i).listView
+        if r.length == 0 then {
+            p5 = p5 + (13.u64 << i)
+            q swap t
+        }
+    }
+    five: ListVal u64
+    nat.natSetWord z: five x: 5
+    for true loop {
+        t: ListVal u64
+        r: ListVal u64
+        natdiv.natDiv q: t :r u: q.listView v: five.listView
+        if r.length != 0 then break
+        p5 = p5 + 1
+        q swap t
+    }
+    n: p2
+    if p5 > n then n = p5
+    one: (q.length == 1) and ((q.get i: 0) == 1)
+    return (decimalprec digits: n exact: one)
+}
+
+# expscan -- what scanExponent read: the exponent and its base, or a fault
+expscan: record {
+    # the exponent's value, 0 when there is none
+    exp: i64
+    # 10 for `e`, 2 for `p`
+    base: u64
+    # the index just past it
+    end: u64
+    # no digit after the letter, a misplaced `_`, or digits past i64
+    bad: bool
+    # the digits ran past i64
+    over: bool
+}
+
+# scanExponent -- an exponent at `from`, if one starts there: `e` or `E` for
+# base 10, and `p` or `P` for base 2 when base2Ok, then an optional sign and
+# digits that `_` may separate. No exponent letter is no exponent: 0, base 10
+scanExponent: function {text: StringView from: u64 base2Ok: bool} out expscan is {
+    none: expscan exp: 0 base: 10 end: from bad: false over: false
+    if from >= text.length then return none
+    ch: natconv.byteAt :text i: from
+    base: 10.u64
+    if (ch == 112) or (ch == 80) then {
+        if base2Ok.not then return none
+        base = 2
+    } else if (ch != 101) and (ch != 69) then {
+        return none
+    }
+    pos: from + 1
+    neg: false
+    if pos < text.length then {
+        s: natconv.byteAt :text i: pos
+        if (s == 43) or (s == 45) then {
+            neg = s == 45
+            pos = pos + 1
+        }
+    }
+    # the previous byte's kind: '_', '0' for a digit, '.' for anything else
+    prev: 46.u8
+    invalSep: false
+    hasDigits: false
+    over: false
+    v: i64
+    for pos < text.length loop {
+        c: natconv.byteAt :text i: pos
+        if (c >= 48) and (c <= 57) then {
+            d: (c - 48).i64
+            if v > (9223372036854775807 - d / 10) then over = true else v = v * 10 + d
+            prev = 48
+            hasDigits = true
+        } else if c == 95 then {
+            if prev != 48 then invalSep = true
+            prev = 95
+        } else {
+            break
+        }
+        pos = pos + 1
+    }
+    bad: hasDigits.not or invalSep or (prev == 95) or over
+    if neg then v = 0 - v
+    return (expscan exp: v :base end: pos :bad :over)
+}
+
+# parseRat -- BigRat.parse: a fraction "a/b", or a number with a radix point
+# and an exponent (Go's SetString)
+parseRat: function {text: StringView} out (ResultRV BigRat e: parseerror) is {
+    if text.length == 0 then return ((ResultRV BigRat e: parseerror).err parseerror.empty)
+    sep: text.indexOf "/"
+    match sep case some then return (parseFraction :text :sep) case none then null
+    return (parseFloatRat :text)
+}
+
+# parseFraction -- "a/b": a signed integer in base 0 over an unsigned one, not
+# zero
+parseFraction: function {text: StringView sep: u64} out (ResultRV BigRat e: parseerror) is {
+    a: bigint.BigInt.parse text: (text.substring from: 0 to: sep) base: 0
+    match a case err then return ((ResultRV BigRat e: parseerror).err a) case ok then null
+    b: ListVal u64
+    sc: natconv.natScan z: b :text from: sep + 1 base: 0 fracOk: false
+    good: sc.fault.none and (sc.end == text.length) and (b.length > 0)
+    if good.not then return ((ResultRV BigRat e: parseerror).err parseerror.invalidDigit)
+    den: bigint.BigInt.fromParts neg: false abs: b.take
+    return ((ResultRV BigRat e: parseerror).ok (normalized num: a.take den: den.take))
+}
+
+# parseFloatRat -- a signed mantissa with a radix point, decimal or prefixed,
+# and an exponent: the radix point divides by a power of the base, and the
+# exponent multiplies by a power of 10 or of 2, each split into powers of 2 and
+# 5 so the factors stay small
+parseFloatRat: function {text: StringView} out (ResultRV BigRat e: parseerror) is {
+    pos: u64
+    neg: false
+    c0: natconv.byteAt :text i: 0
+    if (c0 == 43) or (c0 == 45) then {
+        neg = c0 == 45
+        pos = 1
+    }
+    m: ListVal u64
+    sc: natconv.natScan z: m :text from: pos base: 0 fracOk: true
+    match (
+        sc.fault
+    ) case noDigits then {
+        return ((ResultRV BigRat e: parseerror).err parseerror.empty)
+    } case badSeparator then {
+        return ((ResultRV BigRat e: parseerror).err parseerror.invalidDigit)
+    } case none then null
+    ex: scanExponent :text from: sc.end base2Ok: true
+    if ex.over then return ((ResultRV BigRat e: parseerror).err parseerror.overflow)
+    if ex.bad or (ex.end != text.length) then {
+        return ((ResultRV BigRat e: parseerror).err parseerror.invalidDigit)
+    }
+    if m.length == 0 then return ((ResultRV BigRat e: parseerror).ok (BigRat from: 0))
+    # the radix point's contribution: frac digits of the mantissa's base
+    exp2: i64
+    exp5: i64
+    d: sc.frac.i64.orPanic
+    if sc.base == 10 then {
+        exp5 = 0 - d
+        exp2 = 0 - d
+    } else if sc.base == 2 then {
+        exp2 = 0 - d
+    } else if sc.base == 8 then {
+        exp2 = 0 - (d * 3)
+    } else {
+        exp2 = 0 - (d * 4)
+    }
+    if ex.base == 10 then exp5 = exp5 + ex.exp
+    exp2 = exp2 + ex.exp
+    # beyond these the factors are too large to compute, as Go refuses them
+    if (exp5 > 1000000) or (exp5 < -1000000) then {
+        return ((ResultRV BigRat e: parseerror).err parseerror.overflow)
+    }
+    if (exp2 > 10000000) or (exp2 < -10000000) then {
+        return ((ResultRV BigRat e: parseerror).err parseerror.overflow)
+    }
+    num: bigint.BigInt.fromParts neg: false abs: m.take
+    den: bigint.BigInt from: 1
+    if exp5 != 0 then {
+        n: exp5
+        if n < 0 then n = 0 - n
+        p5: (bigint.BigInt from: 5).exp y: (bigint.BigInt from: n) m: (bigint.BigInt from: 0)
+        if exp5 > 0 then num = num * p5 else den = p5.take
+    }
+    if exp2 > 0 then num = num << exp2.u64.orPanic
+    if exp2 < 0 then den = den << (0 - exp2).u64.orPanic
+    if neg then num = num.neg
+    return ((ResultRV BigRat e: parseerror).ok (normalized num: num.take den: den.take))
+}

@@ -44,6 +44,8 @@ scanned: record {
     base: u64
     # the digits read, a prefix not counted
     count: u64
+    # how many of them follow a radix point, when one was read (fracOk)
+    frac: u64
     # what was wrong, if anything
     fault: scanfault
 }
@@ -52,9 +54,19 @@ scanned: record {
 # long as bytes are digits of the base. Base 0 reads a prefix -- 0b, 0o, 0x,
 # or a bare 0 for octal -- and is 10 without one, and only base 0 lets `_`
 # separate digits. Base 2 to 62 otherwise; above 36 the upper case letters
-# are digits 36 to 61. Panics on any other base, as Go does
-natScan: function {z: (ListVal u64).borrow text: StringView from: u64 base: u64} out scanned is {
-    if base != 0 when (base < 2) or (base > maxBase) then panic msg: "invalid number base"
+# are digits 36 to 61. Panics on any other base, as Go does.
+#
+# With fracOk one radix point may appear among the digits, which then spell
+# a mantissa: the digits after it are counted in `frac`, and a bare leading 0
+# is a decimal 0, not the octal prefix. Only bases 0, 2, 8, 10 and 16 read one.
+natScan: function {
+    z: (ListVal u64).borrow
+    text: StringView
+    from: u64
+    base: u64
+    fracOk: bool
+} out scanned is {
+    if (scanBaseOk :base :fracOk).not then panic msg: "invalid number base"
     z.resize to: 0
     pos: from
     # the previous byte's kind: '_', '0' for a digit, '.' for anything else
@@ -80,12 +92,12 @@ natScan: function {z: (ListVal u64).borrow text: StringView from: u64 base: u64}
                 } else if (ch == 120) or (ch == 88) then {
                     b = 16
                     prefix = 120
-                } else {
+                } else if fracOk.not then {
                     b = 8
                     prefix = 48
                 }
-                count = 0
-                if prefix != 48 then pos = pos + 1
+                if prefix != 0 then count = 0
+                if prefix != 0 when prefix != 48 then pos = pos + 1
             }
         }
     }
@@ -105,9 +117,19 @@ natScan: function {z: (ListVal u64).borrow text: StringView from: u64 base: u64}
     }
     di: u64
     i: u64
+    # where the radix point fell, in digits, once one was read
+    point: false
+    dp: u64
+    pointOk: fracOk
     for pos < text.length loop {
         ch: byteAt :text i: pos
-        if (ch == 95) and (base == 0) then {
+        if ch == 46 when pointOk then {
+            pointOk = false
+            if prev == 95 then invalSep = true
+            prev = 46
+            point = true
+            dp = count
+        } else if (ch == 95) and (base == 0) then {
             if prev != 48 then invalSep = true
             prev = 95
         } else {
@@ -129,7 +151,7 @@ natScan: function {z: (ListVal u64).borrow text: StringView from: u64 base: u64}
     if invalSep or (prev == 95) then fault = scanfault.badSeparator
     if count == 0 then {
         # only the octal prefix 0, maybe followed by digits past 7: decimal 0
-        if prefix == 48 then return (scanned end: pos base: 10 count: 1 :fault)
+        if prefix == 48 then return (scanned end: pos base: 10 count: 1 frac: 0 :fault)
         fault = scanfault.noDigits
     }
     if bn == 0 then {
@@ -144,7 +166,17 @@ natScan: function {z: (ListVal u64).borrow text: StringView from: u64 base: u64}
     } else if i > 0 then {
         mulAddInPlace :z y: (pow x: b n: i) r: di
     }
-    return (scanned end: pos base: b :count :fault)
+    frac: u64
+    if point then frac = count - dp
+    return (scanned end: pos base: b :count :frac :fault)
+}
+
+# scanBaseOk -- whether natScan reads base `base`: 0 or 2 to 62, and with a
+# radix point 0, 2, 8, 10 or 16 alone, as Go's scan does
+scanBaseOk: function {base: u64 fracOk: bool} out bool is {
+    if base == 0 then return true
+    if fracOk then return (base == 2) or (base == 8) or (base == 10) or (base == 16)
+    return (base >= 2) and (base <= maxBase)
 }
 
 # byteAt -- the byte at i, which the caller has checked is inside text

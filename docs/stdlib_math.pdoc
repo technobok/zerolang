@@ -39,9 +39,9 @@ written; every definition carries its own doc comment, and #~"zls"
 surfaces each on hover. This page is the prose and the worked examples.
 
 The #~"math" unit holds numbers past the machine's own. Today that is
-#b:"BigInt", a signed integer of any size; the arbitrary-precision
-rationals and floats, the fixed-width integers and the fixed decimals
-follow on the same core.
+#b:"BigInt", a signed integer of any size, and #b:"BigRat", a rational of
+any size; the arbitrary-precision floats, the fixed-width integers and the
+fixed decimals follow on the same core.
 
 The core is a port of Go's #~"math/big" at commit #~"577b91f341"
 (BSD-3-Clause, the license beside it in #~"math/LICENSE-GO"); each ported
@@ -73,6 +73,8 @@ one list sized before the work starts and carved into windows.
   [#*: #> to=bigint: #b:"BigInt" -- #~"class { negative: bool  words: ListVal u64 }": a sign and a magnitude]
   [#*: #> to=bigdivision: #b:"BigDivision" -- #~"class { quo: BigInt  rem: BigInt }"]
   [#*: #> to=biggcd: #b:"BigGCD" -- #~"class { gcd: BigInt  x: BigInt  y: BigInt }"]
+  [#*: #> to=bigrat: #b:"BigRat" -- #~"class { num: BigInt  den: BigInt }": a quotient in lowest terms]
+  [#*: #> to=decimalprec: #b:"decimalprec" -- #~"record { digits: u64  exact: bool }"]
   [#*: #> to=roundingmode: #b:"roundingmode" -- #~"variant { toNearestEven  toNearestAway  toZero  awayFromZero  toNegativeInf  toPositiveInf }"]
 
 #p: #b:"BigInt"
@@ -87,8 +89,17 @@ one list sized before the work starts and carved into windows.
   [#*: #> to=comparison: #~"== != < <= > >=", #~"compare", #~"hash", #~"copy"]
   [#*: #> to=conversions: #~"i64", #~"u64", #~"f64" -- #~"resultval" with #~"converror"]
   [#*: #> to=bits: #~"& | ^ andNot not << >>", #~"bit", #~"setBit", #~"bitLength", #~"trailingZeros"]
-  [#*: #> to=number-theory: #~"exp y: m:", #~"gcd y:", #~"gcdExtended y:", #~"modInverse n:", #~"sqrt", #~"jacobi y:", #~"probablyPrime n:"]
+  [#*: #> to=number-theory: #~"exp y: m:", #~"gcd y:", #~"gcdExtended y:", #~"modInverse n:", #~"sqrt", #~"jacobi y:", #~"probablyPrime n:", #~"product from: to:", #~"binomial n: k:"]
   [#*: #> to=accumulators: #~"add", #~"sub", #~"mul", #~"quo", #~"rem" -- in place]
+
+#p: #b:"BigRat"
+
+#ul:
+  [#*: #> to=rational-construction: #~"create from: i64", #~"fromFraction num: den:", #~"fromInt from:", #~"fromF64 from:", #~"parse text:"]
+  [#*: #> to=rational-arithmetic: #~"+ - * /", #~"neg", #~"abs", #~"inverse", #~"sign", #~"isInt"]
+  [#*: #> to=rational-comparison: #~"== != < <= > >=", #~"compare", #~"hash", #~"copy"]
+  [#*: #> to=rational-floats: #~"f64", #~"f32" -- exact, as #~"resultval"; #~"roundF64", #~"roundF32" -- nearest]
+  [#*: #> to=rational-text: #~"string", #~"fraction", #~"decimal digits:", #~"decimalPrecision"]
 
 
 #--: BigInt
@@ -202,6 +213,10 @@ the magnitude.
     generator seeded by the value's low word, where Go uses #~"math/rand":
     as fixed for a given number, but not Go's. Not for a number an
     adversary chose]
+  [#*: #~"BigInt.product from: to:" -- every integer from #~"from" to
+    #~"to" multiplied: 1 for an empty range, 0 for one that holds 0]
+  [#*: #~"BigInt.binomial n: k:" -- the binomial coefficient
+    #~"C(n, k)", 0 when #~"k" is negative or past #~"n"]
 
 
 #----: Accumulators
@@ -229,6 +244,88 @@ A quotient and its remainder, as #~"BigInt.divide" answers them:
 
 A greatest common divisor and its cofactors, as #~"BigInt.gcdExtended"
 answers them: #~"gcd == a*x + b*y", the #~"gcd" never negative.
+
+
+#--: BigRat
+
+A #~"BigRat" is a quotient #~"num / den" of two #~"BigInt"s, always in
+lowest terms: #~"den" is positive and shares no factor with #~"num", which
+carries the sign, and an integer has #~"den" 1. Equal values therefore
+have equal parts, and every result is reduced before it is returned. Like
+#~"BigInt" it is a class, and its operators return new values.
+
+#code language=zerolang: """
+  main: function is {
+      third: math.BigRat.fromFraction num: (math.BigInt from: 1) den: (math.BigInt from: 3)
+      sum: third + third + third
+      print "\{sum.string} \{third.decimal digits: 5} \{third.roundF64}"
+      r: math.BigRat.parse text: "0.1"
+      match (r) case ok then print "\{r.string} \{r.roundF64}" case err then print "bad"
+  }
+  """
+
+This prints #~"1 0.33333 0.333333" and #~"1/10 0.1".
+
+
+#----: Rational construction
+
+#~"math.BigRat from: n" takes an #~"i64", as #~"BigInt" does;
+#~"fromFraction num: den:" reduces any two #~"BigInt"s, and panics on a
+zero #~"den"; #~"fromInt from:" takes a #~"BigInt" whole.
+#~"fromF64 from:" answers #~"(Option BigRat)": every finite #~"f64" is a
+rational exactly (#~"0.1" is #~"3602879701896397/36028797018963968"), and
+an infinity or a NaN is none.
+
+#~"math.BigRat.parse text:" reads a fraction #~"\"a/b\"" -- each part
+decimal or prefixed #~"0b", #~"0o" or #~"0x", the divisor unsigned and not
+zero -- or a number with a radix point and an exponent: #~"\"1.5\"",
+#~"\"-2.5e-3\"", #~"\"0x1.8p4\"". A decimal mantissa takes a base-10
+#~"e" or a base-2 #~"p" exponent, a hex one #~"p" alone (an #~"e" is a hex
+digit), and a leading #~"0" is decimal, not octal. The whole text must
+be the number: #~"parseerror.empty" when it holds no digit,
+#~"overflow" for an exponent past what is computed, #~"invalidDigit" for
+anything else.
+
+
+#----: Rational arithmetic
+
+#~"+ - * /" are exact; #~"/" and #~"inverse" panic on a zero divisor.
+#~"neg", #~"abs" and #~"sign" mean what they do on #~"BigInt", and
+#~"isInt" answers whether #~"den" is 1.
+
+
+#----: Rational comparison
+
+#~"compare" and the six comparisons order by value; #~"==" compares the
+parts, which lowest terms makes the same thing, and #~"hash" agrees
+with it.
+
+
+#----: Rational floats
+
+#~"roundF64" and #~"roundF32" answer the nearest float, a tie to the even
+one, and an infinity past the largest; the sign is the value's, a
+zero's included. #~"f64" and #~"f32" answer that float only when it is the
+value exactly -- #~"precisionLoss" when it lies between two, and
+#~"outOfRange" past the largest -- as #~"BigInt"'s conversions do.
+
+
+#----: Rational text
+
+#~".string" is #~"\"a/b\"", or #~"\"a\"" for an integer;
+#~".fraction" is #~"\"a/b\"" always. #~"decimal digits:" writes the value
+with that many digits after the point, the last rounded to nearest with a
+half away from zero (#~"-2/3" to 4 digits is #~"-0.6667").
+#~"decimalPrecision" answers a #> to=decimalprec: #~"decimalprec": how
+many digits follow the point before the expansion repeats, and whether
+that many are exact -- #~"1/4" has 2, exactly, #~"1/6" has 1, rounded.
+
+
+#--: decimalprec
+
+The digits a rational's decimal expansion has before it repeats, and
+whether that many spell it exactly, as #~"BigRat.decimalPrecision"
+answers them.
 
 
 #--: roundingmode

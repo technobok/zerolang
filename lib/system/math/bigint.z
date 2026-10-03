@@ -40,6 +40,48 @@ BigInt: class {
         return (meta.create negative: neg words: abs)
     }
 
+    # product -- every integer from `from` to `to` multiplied: 1 for an empty
+    # range, 0 for one that holds 0 (Go's MulRange)
+    product: function {from: i64 to: i64} out BigInt is {
+        if from > to then return (BigInt from: 1)
+        if from <= 0 when to >= 0 then return (BigInt from: 0)
+        a: magnitude v: from
+        b: magnitude v: to
+        neg: false
+        if from < 0 then {
+            # a range below zero: its magnitudes run the other way, and an odd
+            # count of factors is negative
+            neg = ((to - from) & 1) == 0
+            lo: b
+            b = a
+            a = lo
+        }
+        z: ListVal u64
+        natmul.natMulRange :z :a :b
+        return (BigInt.fromParts neg: neg and (z.length > 0) abs: z.take)
+    }
+
+    # binomial -- the binomial coefficient C(n, k): 0 when k is negative or
+    # past n (Go's Binomial)
+    binomial: function {n: i64 k: i64} out BigInt is {
+        if (k > n) or (k < 0) then return (BigInt from: 0)
+        kk: k
+        if kk > (n - kk) then kk = n - kk
+        # n * (n-1) * ... over 1 * 2 * ..., divided as it goes so the values
+        # stay small
+        bn: BigInt from: n
+        z: BigInt from: 1
+        i: BigInt from: 0
+        kb: BigInt from: kk
+        one: BigInt from: 1
+        for i < kb loop {
+            z = z * (bn - i)
+            i = i + one
+            z = z / i
+        }
+        return z
+    }
+
     # a copy, owning its own words
     copy: function {t: this.view} out BigInt is {
         a: ListVal u64
@@ -524,7 +566,7 @@ BigInt: class {
             }
         }
         a: ListVal u64
-        sc: natconv.natScan z: a :text from: pos :base
+        sc: natconv.natScan z: a :text from: pos :base fracOk: false
         match (
             sc.fault
         ) case noDigits then {
@@ -554,6 +596,12 @@ BigInt: class {
         r.append d
         return r
     }
+}
+
+# magnitude -- |v| as a u64, i64's most negative included
+magnitude: function {v: i64} out u64 is {
+    if v >= 0 then return v.u64.orPanic
+    return (0 - (v + 1)).u64.orPanic + 1
 }
 
 # BigDivision -- a quotient and its remainder, as divide answers them
