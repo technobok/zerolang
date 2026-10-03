@@ -2292,7 +2292,7 @@ case-guard:
 # reports E0601 there. A rise means a unit now rejects programs that never
 # touch it (which is what made `--cc tcc` reject the entire corpus); a fall
 # means a guard stopped firing for a program that does touch it.
-REQUIRE_TCC_BASELINE := 5
+REQUIRE_TCC_BASELINE := 6
 
 require-guard: bin/zc
 	@n=0; rep=""; \
@@ -2553,7 +2553,7 @@ static-tcc-guard: bin/zc bin/zl bin/zls
 # returned "quadmath" unconditionally would link fine and pass every other
 # gate. A rise means something now reaches a unit it did not; a fall means a
 # program lost a need it had.
-ZLINK_BASELINE := 3
+ZLINK_BASELINE := 4
 
 zlink-guard: bin/zc
 	@n=0; rep=""; \
