@@ -15475,8 +15475,15 @@ descendNamedId: function {
         dcC: false
         ddo: st.typing.decls.get i: ddec
         if ddo.kind.constDecl when ddo.typeId.isZero then dcC = true
+        isConst: ddo.kind.constDecl
         ddo.drop
         if dcC then constFoldDecl :st :ast declId: ddec
+        # a definition that instantiates a generic (`F2: (fx n: 2)`) names that
+        # instance, a type, once folded -- reached through its unit's path as
+        # through its bare name
+        if isConst when (declNamesInstantiation :st :ast declId: ddec) then {
+            return (declTypeIdOf :st declId: ddec)
+        }
     }
     tto: optionval.none ztypes.ztypetype
     if ddec > 0 then tto = declDefTypetype :st :ast declId: ddec
@@ -26701,8 +26708,10 @@ nodeNamesType: function {
 }
 
 # pathNamesType -- a path names a type when its member resolved to a type
-# declaration, or to a re-export of something that is not a function. A path
-# rooted at a local is a value however it continues.
+# declaration, to a definition that instantiates a generic (`lib.F2` for
+# `F2: (fx n: 2)`), or to a re-export of something that is not a function --
+# the answers nameNamesType gives a bare name. A path rooted at a local is a
+# value however it continues.
 pathNamesType: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} out bool is {
     rr: rootNameIdOf :ast n: (ast.nodes.get i: nid)
     if rr.isZero.not when (st.isLocalName nameId: rr) then return false
@@ -26710,9 +26719,15 @@ pathNamesType: function {st: zenv.ZSymbolTable ast: Ast nid: zast.nodeid} out bo
     if rd.isZero then return false
     isType: false
     isReexport: false
+    isConst: false
     rdd: st.typing.decls.get i: rd
     isType = rdd.kind.typeDecl
     isReexport = rdd.kind.reexportDecl
+    isConst = rdd.kind.constDecl
+    rdd.drop
+    # only a unit-level definition is an alias: a field declared
+    # `(optionval t: tid)` is call-shaped too, and its path is a value
+    if isConst when (declNamesInstantiation :st :ast declId: rd) then return true
     if isReexport.not then return isType
     pst: walkTypeOf :st :nid
     if pst.isZero then return false

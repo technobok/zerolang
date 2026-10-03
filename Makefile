@@ -2151,7 +2151,10 @@ perf: $(PERFBIN)
 #
 # +47 a template walk defers an argument whose type a generic parameter
 # leaves partial to the instance's walk: 0 behaviour, +47 source.
-ALLOC_BASELINE := 2215634
+#
+# +151 a generic instance's alias reached through its unit's path names the
+# instance: 0 behaviour, +151 source.
+ALLOC_BASELINE := 2215785
 # ALLOC_LINE -- the one measurement every allocation number comes from.
 ALLOC_LINE = valgrind --tool=memcheck $(PERFRUN) 2>&1 | grep 'total heap usage' | sed 's/.*usage: //'
 
